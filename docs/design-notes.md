@@ -118,10 +118,24 @@
 
 ### 技术候选
 
-- Electron + TypeScript；pi 会话与服务进程管理运行在独立于页面界面的进程中。
+- Electron + TypeScript 桌面壳；pi 会话与服务进程管理运行在独立于页面界面的 Bun Host 进程中。
 - Electron 内置页面结合浏览器自动化协议；具体 Playwright/CDP 接入方式需原型验证。
 - 应用管理工作区、配置与进程，通过工具暴露给 pi；AgentSession 本身不承担这些资源的持久化管理。
 - 现有 devtask 的任务/worktree 生命周期设计可参考；是否复用 Go 实现尚未决定。
+
+### 运行时与界面栈（2026-09-21 已确认）
+
+用户要求以 Bun 作为运行时，并使用 React、Tailwind CSS、TanStack 这类社区繁荣的组件。核对结果：
+
+- pi 0.86.1 在 Bun 1.4.0 下可直接运行：`bun ~/.bun/bin/pi --version` 返回 0.86.1；SDK 导入成功，包含 `createAgentSession`（151 个导出）。
+- pi 提供 Bun 专用入口 `dist/bun/cli.js`，在加载 CLI 前恢复沙箱环境、注册 Bun 下的 OAuth 流程并替换 Bedrock Provider 模块；npm 包的 bin 仍是 `#!/usr/bin/env node` 包装，因此 Bun 路径依赖其 Node 兼容层。
+- pi 自身以 `bun build --compile --no-compile-autoload-bunfig ./src/bun/cli.ts ./src/utils/image-resize-worker.ts --outfile dist/pi` 构建独立二进制，并发布 Bun 独立二进制版本。CHANGELOG 记录了 Bun 专项修复：独立二进制的 OAuth 适配器、macOS 剪贴板侧载、`bunfig.toml` 预加载导致的启动崩溃、基线 CPU 指令集兼容。
+- 但 pi 的 `engines` 仍声明 `node >= 22.19.0`，Bun 属于可用但未被包元数据承诺的运行时；升级 pi 后必须重新验证，不能假定持续成立。
+- Bun 1.4.0 下 `playwright-core` 可正常导入；它是否能稳定控制 WebContentsView 未验证，归入 01。
+- Electron 主进程运行内置 Node，Bun 无法替换该位置，因此 Bun 只覆盖 Host 与工具链，不覆盖桌面壳。
+- `bun build --compile` 生成独立可执行文件，是 Host 随安装包分发、目标机免装运行时的依据。
+
+来源：pi 包内 `dist/bun/`、`package.json`、`CHANGELOG.md`；Bun `bun build` 帮助与 `--compile` 说明。
 
 ### 浏览器可行性核对
 
