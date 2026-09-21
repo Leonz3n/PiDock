@@ -4,6 +4,8 @@
 
 本文支持 [首版规格](../.scratch/pidock-mvp/spec.md) 与 [01 可见浏览器控制原型](../.scratch/pidock-mvp/issues/01-visible-browser.md)。**Electrobun 作为优先验证候选，Electron + Bun Host 作为失败后的回退；不是已经通过技术验收。** Bun Host 与 React 界面可以沿用相同业务边界，不应随桌面壳切换而重写领域逻辑。
 
+**2026-09-21 更新（实测结果）：** 工单 01 已在 macOS arm64 实测 Electrobun 2.0.1：可见 CEF 页面的直接 CDP 控制成立，但新持久 partition 的首个 CEF view 返回 null，且移除一个 CEF `BrowserView` 会清理同窗全部 CEF view 并使 CDP 不可达，因此触发本文与规格的决策关卡。后续实现按既定规则改用 **Electron + Bun Host**；本文关于 Electrobun 的官方资料核对保留为历史背景，下方「Electron + Bun Host 回退方案」成为当前路线。Electron 自身的浏览器生命周期、分区与调试接入仍须用同一场景实测，见 [可见页面控制与桌面壳验证](browser-automation-validation.md)。
+
 ## 项目身份与版本
 
 用户提及的「ElectronBun」按 [blackboardsh/electrobun 官方仓库](https://github.com/blackboardsh/electrobun) 理解，正式名称是 **Electrobun**；它是独立桌面框架，不是把 Electron 内置 Node 替换成 Bun 的插件。

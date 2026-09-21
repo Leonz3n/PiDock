@@ -35,7 +35,7 @@
 
 ### 内置浏览器控制
 
-优先使用固定版本的 Electrobun，显式选择 Bun 主进程、自有界面系统 webview 与任务页面 CEF，验证同一可见页面的控制能力。只有 01 的决策关卡确认该路线无法满足要求并记录证据后，才评估 Electron + WebContentsView 与 Bun Host 回退方案；回退仍需通过同一组验收。不能以“可打开网页”代替 Agent 控制通过。
+工单 01 已实测：Electrobun 2.0.1 可见 CEF 页面的直接 CDP 控制成立，但新持久 partition 首建与单视图移除生命周期失败，因此按既定规则回退 Electron（主进程运行其内置 Node）加 Bun Host。结论与证据见[可见页面控制与桌面壳验证](browser-automation-validation.md)。Electron 侧须用同一组验收重新验证，未通过前不得进入产品集成：不能以“可打开网页”代替 Agent 控制通过。
 
 验收：
 
@@ -84,11 +84,11 @@
 
 1. 确认 Host 在 Bun 下启动：会话创建、工具调用、流式输出、取消与重开恢复与 Node 下行为一致，并记录实际 pi 版本与 Bun 版本。
 2. 用版本匹配的 `bun build --compile` 产出 Host 单文件二进制，在未安装 Node 与 Bun 的干净目标系统上启动并完成一次完整任务操作。
-3. 确认桌面壳以 Bun 执行主进程，并能在同一窗口中同时呈现自有界面（系统 webview）与任务页面（CEF 渲染器）；两个任务使用不同 `partition` 时登录状态互不覆盖。
-4. 用 CEF 调试协议接入完成真实定位、等待、截图、控制台错误与失败请求捕获；不能假设 Electrobun 提供完整的自动化证据 API，若接入不可用则触发回退决策，不得用另一个隐藏浏览器代替。
+3. 确认 Electron 主进程运行其内置 Node，并能在同一窗口中同时呈现自有界面与任务页面；两个任务使用不同 `session.fromPartition('persist:…')` 时登录状态互不覆盖，单视图关闭／重开不影响其他任务。
+4. 用 `webContents.debugger`（或受控 CDP 接入）完成真实定位、等待、截图、控制台错误与失败请求捕获；不能假设 Electron 提供完整的自动化证据 API，接入不可用或 debugger detach 后无法重绑则不得进入产品集成。
 5. 验证渲染层由 React、Tailwind CSS 与 TanStack 构建后能被桌面壳正确加载，且与 Host 的接口在同一任务上返回一致结果；不以静态草稿或内存模拟代替。
-6. 记录 CEF 与系统 webview 两种方案的安装包体积、启动时间差异，以及 CEF 调试端口开启后的本机监听面。
-7. 升级 pi 后重测运行时兼容性，因为 pi 的 `engines` 只声明 Node；升级 Electrobun 后重测分区与调试接入。
+6. 记录 Electron 应用的安装包体积、启动时间，以及调试接入点是否需要开放本机 TCP 监听及其边界。
+7. 升级 pi 后重测运行时兼容性，因为 pi 的 `engines` 只声明 Node；升级 Electron 后重测分区、视图生命周期与调试接入。
 
 ### 安装包与发布
 
@@ -105,7 +105,7 @@
 
 | 步骤 | 可使用的结果 | 关键验收 |
 | --- | --- | --- |
-| 运行时与骨架 | Electrobun 桌面壳（Bun 主进程）、Host 与 React／Tailwind／TanStack 渲染层跑通 | 干净系统不预装 Node／Bun 也能启动；pi 在 Bun 下会话行为一致；静态草稿未被提升为实现代码 |
+| 运行时与骨架 | Electron 桌面壳（内置 Node 主进程）＋ Bun Host 与 React／Tailwind／TanStack 渲染层跑通 | 干净系统不预装 Node／Bun 也能启动；pi 在 Bun 下会话行为一致；静态草稿未被提升为实现代码 |
 | 项目与任务 | 配置任务根目录，注册仓库，从最新远程基线创建任务，恢复与追加仓库 | 中文名称与英文数字目录分离；默认根目录／单次覆盖与原路径恢复；两任务 worktree/分支独立；从本次 fetch 的提交创建，获取失败不回退，部分创建失败可恢复 |
 | 环境与服务 | 图形化维护共享模板/私有配置，解析任务覆盖并启动服务 | UI 与 Agent 使用同一结果；默认配置文件保持由业务仓库维护；依赖指向正确 |
 | Agent 执行 | pi 会话管理，文件浏览、内置终端及服务工具 | 同任务写操作串行，同项目及跨项目的不同任务并行；切换项目不暂停隐藏任务的 Agent／服务；任务锁覆盖整个有副作用的执行过程 |
@@ -152,10 +152,10 @@
 - 浏览器适配结果：已安排为工单 01 的抛弃式原型，跨平台待验证项在该工单内保留。
 - 环境变量层级、变量引用与系统环境继承规则。
 - 任务后台进程及异常退出的恢复策略。
-- 运行时与界面栈已确认（Bun、Electrobun、React／Tailwind／TanStack，见规格）；剩余为 CEF 调试接入能否提供必需证据、Electrobun 的回归风险，以及 devtask 代码复用边界。PiDock 仍为工作名称。
+- 运行时与界面栈已确认（Host 用 Bun，界面用 React／Tailwind／TanStack，见规格）；01 已否决 Electrobun 并回退 Electron + Bun Host，剩余为 Electron 视图生命周期与调试接入能否提供必需证据、Electron 的发行风险，以及 devtask 代码复用边界。PiDock 仍为工作名称。
 
 上述细节继续依据现有授权推进设计；涉及用户工作流取舍时再收集偏好。Telepresence 和自动创建隔离数据设施维持既定后续范围。
 
 ### 技术栈续议的补充验证
 
-以最新规格和[运行时调研](desktop-runtime-research.md)为准：01 记录固定 Electrobun 版本、显式 Bun 模式、安装版 CEF 调试入口、目标映射和双任务分区实测结果；提前核对 Windows 默认 Setup ZIP 转为单一 EXE 的完整 payload 与签名路径。开发模式连通不代表安装版可控。20 按[技术栈设计](implementation-stack-design.md)完成 React／Tailwind／TanStack 的逐页复原和状态归属检查，02 接入真实 Host 后复验，15 完成双平台发布验收。vanilla JS 草稿保留为对照，不作为运行时证据。
+以最新规格和[运行时调研](desktop-runtime-research.md)为准：01 已记录 Electrobun 2.0.1 的失败证据与回退结论（见[验证报告](browser-automation-validation.md)）；工单 21 在 Electron 上重跑同一场景，记录版本、分区、视图生命周期、调试入口与目标映射实测结果，并提前核对 Windows 单一 EXE 的完整 payload 与签名路径。开发模式连通不代表安装版可控。20 按[技术栈设计](implementation-stack-design.md)完成 React／Tailwind／TanStack 的逐页复原和状态归属检查，02 接入真实 Host 后复验，15 完成双平台发布验收。vanilla JS 草稿保留为对照，不作为运行时证据。

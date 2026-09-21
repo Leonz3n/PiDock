@@ -4,7 +4,7 @@
 
 **Status:** ready-for-agent
 
-产品工作流与本地工单设置已确认；19 个实现工单已完成终审并发布为 `ready-for-agent`，尚未执行实现或业务验收。PiDock 为工作名称。运行时与界面技术栈已确认，见「技术栈与运行时」；浏览器自动化实现路线仍须通过 01 原型验收后再冻结。
+产品工作流与本地工单设置已确认；19 个实现工单已完成终审并发布为 `ready-for-agent`。PiDock 为工作名称。运行时与界面技术栈已确认，见「技术栈与运行时」；工单 01 已完成可见浏览器与桌面壳验证，结论为回退 Electron + Bun Host，Electron 侧仍须以同一场景验证后再进入 02。
 
 实现入口见 [19 项本地工单](breakdown.md)，已覆盖能力管理、Host、定时任务、远程访问和双平台安装发布；工单已发布但尚未开始生产实现。最终产品行为以本规格及 [产品设计收口](../../docs/product-design-closure.md) 为准。
 
@@ -296,29 +296,31 @@
 
 ### 技术栈与运行时
 
-2026-09-21 用户确认首版运行时、桌面壳与界面技术栈：以 Bun 作为运行时，界面使用 React、Tailwind CSS 与 TanStack 这类社区活跃的方案。Electron 的主进程运行其内置 Node，Bun 不能替换，因此桌面壳改用 Bun 生态中以 Bun 执行主进程的 Electrobun。
+2026-09-21 用户确认首版运行时、桌面壳与界面技术栈：以 Bun 作为运行时，界面使用 React、Tailwind CSS 与 TanStack 这类社区活跃的方案。Electron 的主进程运行其内置 Node，Bun 不能替换，因此桌面壳曾改用 Bun 生态中以 Bun 执行主进程的 Electrobun。
 
-- **桌面壳首选 Electrobun，显式配置 Bun 主进程模式并固定版本，须经 01 验证。** 不依赖框架的默认主进程模式；主进程 TypeScript 由 Bun 执行，原生层持有 GUI 主线程事件循环；macOS 为 WKWebView／CEF，Windows x64 为 WebView2／CEF，与规格既有的目标平台矩阵一致（Windows ARM 仅以 x64 模拟运行，不作为目标）。
-- **PiDock 自身界面与任务浏览器视图分用不同渲染器。** 自有界面使用系统 webview，体积小且随系统更新；Agent 操作的任务页面使用按视图选择的 CEF 渲染器，以获得固定的 Chromium 版本、按任务持久化分区与调试协议接入点。
-- 持久化 `partition` 归属于任务，同任务标签页及登录弹窗复用该分区；页面控制句柄归属于具体视图并绑定任务身份。新建或重开视图不新建任务分区；关闭视图不删除分区。01 在两个平台验证同任务共享 Cookie／同源 localStorage、登录弹窗继承、跨任务隔离及重启恢复；sessionStorage 等页面级状态遵循浏览器语义，不承诺跨标签共享。不能从参数名称推断与 Electron session partition 完全等价。
-- CEF 渲染器保留远程调试端口作为接入点，用于定位、等待、截图、控制台与失败请求证据。**不能假设 Electrobun 提供完整的自动化证据 API**，这些证据必须来自该接入点，并由 01 用真实运行证据确认，不能从框架文档直接推断。
-- **Windows 发布需要自建一步：** Electrobun 产出的是含安装可执行文件的 Setup zip，且当前不覆盖 Windows 代码签名。首版仍按规格要求交付可安装的 x64 `.exe`：用构建钩子从该产物生成单一 `.exe` 安装器并完成 Authenticode 签名，不把 zip 当作交付物。
-- macOS 的签名、公证与装订由 Electrobun 构建流程直接支持；首版仅验证安装包覆盖升级与卸载路径，不接入框架内置在线更新器及回滚能力。真实安装、升级和卸载仍需在目标系统实测。
+**2026-09-21 工单 01 实测结论：Electrobun 2.0.1 未通过桌面集成关卡，桌面壳回退 Electron + Bun Host。** 可见 CEF 页面的直接 CDP 控制成立，但新持久 partition 的首个 CEF view 稳定返回 null，且移除一个 CEF `BrowserView` 会清理同窗全部 CEF view 并使 CDP 不可达，导致标签关闭与任务切换的核心路径失败。证据与受影响设计见 [可见页面控制与桌面壳验证](../../docs/browser-automation-validation.md)。Bun 运行时、Host、React／Tailwind／TanStack、任务分区与页面句柄模型保持不变。
+
+- **桌面壳为 Electron，主进程运行其内置 Node；Bun 作为 PiDock Host 的运行时独立运行。** Electron 版本需固定并随发布锁定；应用窗口与原生集成由 Electron 负责，Host 由 Bun 承载 pi 运行时、受管执行与调度（Windows ARM 仅以 x64 模拟运行，不作为目标）。
+- **PiDock 自身界面与任务浏览器视图使用不同的 Electron `WebContentsView`／`BrowserWindow`，并分属不同信任范围。** 任务页面使用按任务选择的持久 `session.fromPartition('persist:…')`，并通过该 `webContents` 的 `debugger` 接入点获得定位、等待、截图、控制台与失败请求证据；自有界面不向任务页面暴露本机能力桥接，也不复用任务页面的调试作用域。
+- 持久化 `partition` 归属于任务，同任务标签页及登录弹窗复用该分区；页面控制句柄归属于具体视图并绑定任务身份。新建或重开视图不新建任务分区；关闭视图不删除分区。Electron 侧仍须用同一场景验证同任务共享 Cookie／同源 localStorage、登录弹窗继承、跨任务隔离及重启恢复；sessionStorage 等页面级状态遵循浏览器语义，不承诺跨标签共享。不能从参数名称推断与旧框架的 session partition 完全等价。
+- 任务页面证据通过 Electron `webContents.debugger` 接入点获得，用于定位、等待、截图、控制台与失败请求。**不能假设桌面壳提供完整的自动化证据 API**，这些证据必须由真实运行确认，不能从框架文档直接推断。Electron 官方指出开启 DevTools 或关闭 `webContents` 会触发 debugger detach，控制句柄必须能失效并重新绑定。
+- **Windows 发布：** 首版按规格交付可安装的 x64 单一 `.exe`，候选打包路线为 electron-builder NSIS，并将 Bun Host 单文件可执行产物作为资源一并打包；在 Windows runner 上完成 Authenticode 签名，不把便携目录、Setup zip 或其他架构产物当作交付物。
+- macOS 使用 Electron DMG，对 app 内嵌套的 Bun Host 可执行文件一并 codesign，并完成公证与 staple；首版仅验证安装包覆盖升级与卸载路径，不接入框架内置在线更新器及回滚能力。真实安装、升级和卸载仍需在目标系统实测。
 - 渲染层采用 React、Tailwind CSS 与 TanStack。TanStack 优先覆盖能减少自研的部分：路由与搜索参数、数据获取与缓存、表格、虚拟滚动、表单与校验、低频客户端状态。仅在其确实不适用时才自研，并记录理由。
-- Bun 承担 Host 运行时、包管理与项目脚本；构建和测试工具按兼容性选用，Electrobun v2 的构建工具及 hooks 不承诺只使用 Bun（见运行时调研）。业务仓库沿用自身工具链。Host 以 `bun build --compile` 产出单文件二进制随安装包分发，并随主程序一同签名。目标机器不需要预装 Node 或 Bun。
+- Bun 承担 Host 运行时、包管理与项目脚本；Electron 主进程、原生集成与界面渲染使用 Electron 内置 Node／Chromium。业务仓库沿用自身工具链。Host 以 `bun build --compile` 产出单文件二进制随安装包分发，并随主程序一同签名。目标机器不需要预装 Node 或 Bun。
 - pi 可在 Bun 运行时下正常使用（实测见下）；pi 的 `engines` 仍只声明 Node，升级 pi 后必须重测该兼容性。
 - `prototypes/pidock-ui/` 的静态草稿只作为行为与视觉基线，不作为实现代码；按工单 20 用 React、Tailwind 与 TanStack 复原为渲染层基线，再由 02 接入桌面壳与 Host。
 - 快速 UI 草稿允许继续使用 vanilla JS；需要验证正式组件行为时再采用 React／Tailwind／TanStack，不要求改写既有草稿。TanStack 各组件职责、状态归属与迁移方式见 [前端技术栈设计](../../docs/implementation-stack-design.md)。桌面壳的版本与分发限制见 [运行时调研](../../docs/desktop-runtime-research.md)。
 
-已实测的基础事实（不代表已将框架能力当成可用）：Bun 1.4.0 下 pi 0.86.1 可运行且 SDK 可导入并包含 `createAgentSession`；pi 自身以 `bun build --compile` 发布独立二进制；`playwright-core` 在 Bun 下可导入但控制行为未验证。
+已实测的基础事实（不代表已将框架能力当成可用）：Bun 1.4.0 下 pi 0.86.1 可运行且 SDK 可导入并包含 `createAgentSession`；pi 自身以 `bun build --compile` 发布独立二进制；`playwright-core` 在 Bun 下可导入但控制行为未验证。01 实测 Electrobun 2.0.1（macOS arm64）可见 CEF 页面的 CDP 定位、等待、截图、隔离与重启持久化成立，但持久 partition 首建与单个视图移除的生命周期失败；Electron 侧尚未实测。
 
-**决策关卡：** 01 必须用真实运行证据确认 Electrobun 能同时满足可见页面、按任务持久化隔离、人工接管与错误证据捕获。若 CEF 调试接入无法提供所需证据，或 Electrobun 在目标平台不可用，则回退到 Electron 桌面壳（主进程运行其内置 Node）加 Bun Host 的方案；回退必须作为明确结论写入工单并重审受影响设计，不得静默替换。
+**决策关卡（已触发）：** 01 用真实运行证据判定 Electrobun 2.0.1 不满足可见页面、按任务持久化隔离与视图生命周期要求，因此按既定规则回退 Electron + Bun Host；结论、失败证据与受影响设计见 [可见页面控制与桌面壳验证](../../docs/browser-automation-validation.md)。Electron 侧的可见浏览器、持久分区、弹窗、接管与调试证据必须用同一验收场景重新验证，不能把框架文档能力当作通过。
 
 ### 建议实现边界
 
 以下为实现建议，关键平台能力需要原型确认；不视为已经运行验证的事实。
 
-- 采用 Electrobun 与 TypeScript 作为桌面壳，主进程运行 Bun；应用窗口承载产品界面，Host 承载 pi 运行时和受管理执行（见上方「技术栈与运行时」）。前端网页与本机能力通过受控接口连接。
+- 采用 Electron 与 TypeScript 作为桌面壳，主进程运行 Electron 内置 Node；应用窗口承载产品界面，Bun Host 承载 pi 运行时和受管理执行（见上方「技术栈与运行时」）。前端网页与本机能力通过受控接口连接。
 - 桌面界面与 Agent 工具调用同一任务操作入口。任务标识由应用绑定，工具不能通过省略任务参数回退到另一个任务。
 - 工作区管理负责 Git 对象及文件身份、跨仓库准备、局部失败和恢复；配置解析负责模板版本、变量绑定及可解释的生效结果；运行管理负责进程、端口、准备步骤和健康状态；浏览器管理负责任务页面及自动化；会话管理连接 pi 与这些能力。
 - devtask 的工作区与恢复设计作为参考，是否直接复用其 Go 实现取决于跨平台和进程集成成本。首版接口不依赖其当前 symlink 布局。
@@ -334,7 +336,7 @@
 - 会话写锁覆盖整个有副作用的执行过程和派生工具；只读会话不能通过终端或浏览器变更操作绕过该限制。
 - 退出时根据已记录的进程身份停止所属进程树，不通过端口或过期 PID 猜测归属。异常恢复先核验现存资源，再提供恢复/重启入口。
 - 浏览器使用每任务独立持久会话，按任务和标签页绑定控制句柄。优先语义快照与定位操作，失败时按需补充截图、控制台和网络证据。
-- 浏览器自动化在选定桌面壳上评估：CEF 渲染器加调试协议接入是最优先候选，但多页面发现、目标映射、弹窗、下载、接管和重连必须实测，不能从普通桌面壳的自动化支持直接推断可用。
+- 浏览器自动化在 Electron 上评估：`WebContentsView` 加 `session.fromPartition` 加 `webContents.debugger` 是首选候选，但多页面发现、目标映射、弹窗、下载、接管、DevTools detach 和重连必须实测，不能从普通桌面壳的自动化支持直接推断可用。
 - 保留浏览器登录时检查试点前端已知的 BFF 地址覆盖项，避免陈旧 localStorage 将请求引向旧实例；不通过清空全部站点数据解决该问题。
 
 ## Testing Decisions
