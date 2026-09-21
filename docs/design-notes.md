@@ -118,8 +118,8 @@
 
 ### 技术候选
 
-- Electron + TypeScript 桌面壳；pi 会话与服务进程管理运行在独立于页面界面的 Bun Host 进程中。
-- Electron 内置页面结合浏览器自动化协议；具体 Playwright/CDP 接入方式需原型验证。
+- Electrobun ＋ Bun 主进程桌面壳；pi 会话与服务进程管理运行在独立于页面界面的 Host 进程中。
+- 任务页面使用 CEF 渲染器加调试协议接入；具体客户端与证据捕获方式需原型验证。
 - 应用管理工作区、配置与进程，通过工具暴露给 pi；AgentSession 本身不承担这些资源的持久化管理。
 - 现有 devtask 的任务/worktree 生命周期设计可参考；是否复用 Go 实现尚未决定。
 
@@ -136,6 +136,37 @@
 - `bun build --compile` 生成独立可执行文件，是 Host 随安装包分发、目标机免装运行时的依据。
 
 来源：pi 包内 `dist/bun/`、`package.json`、`CHANGELOG.md`；Bun `bun build` 帮助与 `--compile` 说明。
+
+### 桌面壳选型（2026-09-21 已确认）
+
+用户要求桌面壳也能用 Bun。Electron 的主进程与 preload 运行其内置 Node，Bun 无法替换这个位置，因此需要桌面壳本身支持 Bun，而不只是把 Bun 当旁路进程。
+
+已核对的候选：
+
+| 候选 | 主进程运行时 | 结论 |
+| --- | --- | --- |
+| Electron | 内置 Node（不可换） | 能力最全，但不满足 Bun 主进程；降为回退方案 |
+| **Electrobun** | **Bun（可选）或 Cottontail** | **选用**：Bun 主进程、原生 webview、按视图 `partition`、按视图 `renderer`、构建时签名/公证、内置更新器与卸载器 |
+| Tauri / Wails | Rust / Go | 壳不是 Bun，Bun 只能做旁路，不满足本次要求 |
+| `webview-bun`、`@webviewjs/webview` | Bun 绑定 | 单窗口轻量绑定，无分区、无多视图、无调试协议，不满足任务页面要求 |
+| Bun 内置 `Bun.WebView` | Bun | **只能 headless**（`headless: false` 直接抛错），无法提供“用户看得见的页面”，不能单独承担任务浏览器 |
+
+Electrobun 与本规格契合的能力（依据官方文档 `framework.blackboard.sh/electrobun`）：
+
+- 支持目标与规格一致：macOS arm64（WKWebView／CEF）、Windows x64（WebView2／CEF）；Windows ARM 只以 x64 模拟运行。
+- `<electrobun-webview renderer="cef" partition="account-a">`：**按视图选 CEF、按视图持久化分区**，并能与原生 GPU 表面一起合成到同一窗口内；这正是“内嵌可见页面 ＋ 按任务隔离”所需的形状。
+- `bundleCEF: true` 加 `chromiumFlags` 可配置 `remote-debugging-port`，因此 CEF 视图存在调试协议接入点；打包后的稳定版默认关闭，需显式开启，涉及本机监听端口的安全取舍。
+- macOS：Hutch 默认产出 DMG，支持 `codesign`、`notarize`、装订，并对嵌套 Mach-O 先签名；需 Apple Developer ID 与公证凭据。
+- 内置更新器（Zstandard 全量包加 BSDIFF 增量与回滚保护）与独立卸载器，可用于覆盖升级／卸载验收。
+- 存在 `postPackage` 等构建钩子，可用于补做 Windows 安装器与签名。
+
+必须在工单 01 用运行证据确认的缺口：
+
+- **Electrobun 没有截图、控制台捕获与网络捕获 API**，只能通过 CEF 调试协议接入；这是放弃 Electron 所付出的主要代价，不能在验证前当成已解决。
+- `view.executeJavascript()` **不返回求值结果**（原生层名为 `evaluateJavaScriptWithNoCompletion`），语义定位与等待必须走调试协议或注入脚本加 RPC，不能照搬 `page.evaluate()` 写法。
+- **Windows 发布是 Setup zip 且框架不做 Windows 签名**，规格要求的单 `.exe` 安装器与 Authenticode 签名需自建。
+- CEF 会显著增大安装包体积，与系统 webview 的小体积取舍必须记录实际数值。
+- 项目 2024 年创建、约 1.28 万 star、MIT、2.0.1 稳定版，活跃度与生态远小于 Electron；升级路径与回归风险高于 Electron。
 
 ### 浏览器可行性核对
 
