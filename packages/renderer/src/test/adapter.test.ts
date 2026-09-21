@@ -1,0 +1,92 @@
+import { createMemoryHost } from "../data/memoryHost";
+
+describe("memory Host adapter", () => {
+  it("does not execute rejected or expired approvals", async () => {
+    const host = createMemoryHost();
+    const rejected = await host.resolveApproval("approval-deploy", "rejected");
+    expect(rejected.status).toBe("rejected");
+    expect(rejected.executed).toBe(false);
+    const expired = await host.resolveApproval("approval-migrate", "expired");
+    expect(expired.status).toBe("expired");
+    expect(expired.executed).toBe(false);
+  });
+
+  it("only executes an explicitly approved request", async () => {
+    const host = createMemoryHost();
+    const approved = await host.resolveApproval("approval-deploy", "approved");
+    expect(approved.status).toBe("approved");
+    expect(approved.executed).toBe(true);
+    const session = await host.getSession("release", "deploy");
+    expect(session?.runState).toBe("running");
+  });
+
+  it("only previews cleanup for archived tasks and retains code conservatively", async () => {
+    const host = createMemoryHost();
+    await expect(host.previewCleanup("release")).rejects.toThrow("只有已归档任务可清理");
+    const preview = await host.previewCleanup("legacy-auth");
+    expect(preview.find((item) => item.resource === "代码")?.action).toContain("保留");
+    expect(preview).toHaveLength(7);
+  });
+
+  it("expires pending approvals and stops services when a task is archived", async () => {
+    const host = createMemoryHost();
+    await host.archiveTask("release");
+    const task = await host.getTask("release");
+    expect(task?.archived).toBe(true);
+    expect(task?.services.every((service) => !service.running)).toBe(true);
+    const approvals = await host.listApprovals("release");
+    expect(approvals.every((approval) => approval.status !== "pending")).toBe(true);
+    const schedules = await host.getSchedules();
+    expect(schedules.find((schedule) => schedule.taskId === "release")?.enabled).toBe(false);
+  });
+
+  it("blocks scheduling and immediate runs for archived tasks until restored", async () => {
+    const host = createMemoryHost();
+    await host.archiveTask("release");
+    await expect(host.runScheduleNow("schedule-1")).rejects.toThrow("已归档任务不能通过「立即运行」绕过恢复");
+    await host.restoreTask("release");
+    const run = await host.runScheduleNow("schedule-1");
+    expect(run.result).toBe("completed");
+    const task = await host.getTask("release");
+    expect(task?.sessions.length).toBe(5);
+  });
+
+  it("keeps cross-project attention items pointing at their task and session", async () => {
+    const host = createMemoryHost();
+    const attention = await host.getAttention();
+    expect(attention.some((item) => item.kind === "approval" && item.taskId === "release")).toBe(true);
+    expect(attention.some((item) => item.kind === "failed" && item.sessionId === "failed")).toBe(true);
+  });
+
+  it("streams agent output as ordered deltas before the run settles", async () => {
+    const host = createMemoryHost();
+    const deltas: string[] = [];
+    host.subscribe((event) => {
+      if (event.type === "message-delta") deltas.push(event.delta);
+    });
+    const result = await host.sendMessage("release", "main", "检查构建", []);
+    expect(result.state).toBe("completed");
+    expect(deltas.join("")).toContain("正在准备环境");
+    const session = await host.getSession("release", "main");
+    expect(session?.runState).toBe("completed");
+    expect(session?.messages.at(-1)?.text).toContain("检查构建");
+  });
+
+  it("reports the failed scope and keeps the session able to continue", async () => {
+    const host = createMemoryHost();
+    const result = await host.sendMessage("release", "failed", "修复构建并重试", []);
+    expect(result.state).toBe("failed");
+    expect(result.run.failedScope).toContain("front-monorepo");
+    const session = await host.getSession("release", "failed");
+    expect(session?.runState).toBe("failed");
+  });
+
+  it("keeps scheduled runs isolated per trigger session", async () => {
+    const host = createMemoryHost();
+    const first = await host.runScheduleNow("schedule-1");
+    const second = await host.runScheduleNow("schedule-1");
+    expect(first.sessionId).not.toBe(second.sessionId);
+    const task = await host.getTask("release");
+    expect(task?.sessions.filter((session) => session.id === first.sessionId)).toHaveLength(1);
+  });
+});
