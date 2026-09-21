@@ -1,9 +1,25 @@
-# 本地工单
+# GitHub Issues
 
-规格存放在 .scratch/<feature>/spec.md，每个实现工单独立存放在 .scratch/<feature>/issues/<NN>-<slug>.md。
+仓库：[`Leonz3n/PiDock`](https://github.com/Leonz3n/PiDock)。首版父规格与工单索引：[#1](https://github.com/Leonz3n/PiDock/issues/1)。GitHub Issue 是规格、工单验收、依赖和执行记录的权威来源；仓库设计文档提供补充说明。
 
-工单使用 Status 标记状态，Blocked by 标明真正阻塞其开始的工单编号；按依赖顺序执行。
+## 读取与执行
 
-在发布前完成规格和工单拆分的审阅。已从规格拆出的工单可直接标为 ready-for-agent，无需再次 triage。
+1. 读取目标 issue 的完整正文、评论、父规格，以及 GitHub 原生 blocked-by 关系；不能只读列表标题或本地旧副本。
+2. 核对执行控制和阻塞项。当前首版所有未完成工单暂停；`ready-for-agent` 仅表示规格就绪，迁移、无阻塞项或标签存在均不构成开工授权。
+3. 恢复执行后按依赖前沿领取工单；仍遵守用户一次一个实现工单、串行委派的安排。开始前检查原 worktree 和未提交内容，避免覆盖已有工作。
+4. 将验收勾选、未测/失败项、实际运行证据及提交/PR 链接更新到该 issue。全部交付后关闭 issue；技术实验以实验已完成和结论已记录为关闭依据，保留未通过能力的边界，不伪造勾选。
 
-其他流程要求向 tracker 发布、读取或更新工单时，操作这些本地文件。
+## 创建与关系
+
+- 在本仓库创建独立 issue，包含可交付行为、验收项、父规格、直接阻塞项和执行控制。发布前完成规格与拆分审阅；已审阅的拆分不重复 triage。
+- 同时维护父 issue 的原生 sub-issue 关系和阻塞 issue 的原生 blocked-by 关系。正文列出真实 GitHub issue 链接供阅读；原生关系不支持时明确记录失败并暂以正文为准，不声称已建成。
+- GitHub issue 号码与旧 01–21 逻辑编号不同，不靠同名数字猜测。映射见 [迁移索引](../github-issues-migration.md)。
+- 用 `gh issue view/create/edit/close` 和 GitHub API 操作；长正文通过文件或结构化参数提交，保留真实换行。发布前检查已有 issue 和迁移标识，避免重复创建。
+
+## 仓库文件
+
+已迁移的工单正文、草稿和旧拆分索引从仓库删除，不保留本地工单副本；历史内容可通过 Git 历史和 GitHub 迁移快照追溯。编号映射与校验记录保存在迁移索引中。
+
+`.scratch/pidock-mvp/spec.md` 保留为迁移时的规格快照，技术设计文档继续保留；后续规格与工单验收、依赖及执行记录以 GitHub 为准。
+
+01 的实验源码仍在原实验分支；20 的未完成 worktree 内容继续保留。迁移未推送这些分支，也未启动后续实现。父 issue 已保存此次尚未推送的规格和设计快照。

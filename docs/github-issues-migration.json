@@ -1,0 +1,307 @@
+{
+  "date": "2026-09-22",
+  "repo": "Leonz3n/PiDock",
+  "parent": {
+    "number": 1,
+    "id": 5530096780,
+    "html_url": "https://github.com/Leonz3n/PiDock/issues/1"
+  },
+  "tickets": [
+    {
+      "logicalId": "01",
+      "sourceSha256": "778c9cabc251caaee49a2afd7a35834118013f63970f10f78780eb97d3988443",
+      "number": 2,
+      "id": 5530100415,
+      "html_url": "https://github.com/Leonz3n/PiDock/issues/2",
+      "blockedBy": [],
+      "formerSource": ".scratch/pidock-mvp/issues/01-visible-browser.md"
+    },
+    {
+      "logicalId": "02",
+      "sourceSha256": "2a4fadd509f87f490cad3ed13104a9fc49ea7d822be3bab43b03a86e3cbf83c0",
+      "number": 5,
+      "id": 5530101013,
+      "html_url": "https://github.com/Leonz3n/PiDock/issues/5",
+      "blockedBy": [
+        3,
+        4
+      ],
+      "formerSource": ".scratch/pidock-mvp/issues/02-task-agent-session.md"
+    },
+    {
+      "logicalId": "03",
+      "sourceSha256": "661b06a7ad6f7a80e7c1ccdfbec7b331961f6f861b68aefc9e7bea7c5221a45a",
+      "number": 6,
+      "id": 5530101193,
+      "html_url": "https://github.com/Leonz3n/PiDock/issues/6",
+      "blockedBy": [
+        5
+      ],
+      "formerSource": ".scratch/pidock-mvp/issues/03-multi-repository-tasks.md"
+    },
+    {
+      "logicalId": "04",
+      "sourceSha256": "755b0374949c887d854836102f1c8dfa6d80d00225a18b0fc4a6be5835b18f62",
+      "number": 7,
+      "id": 5530101398,
+      "html_url": "https://github.com/Leonz3n/PiDock/issues/7",
+      "blockedBy": [
+        5
+      ],
+      "formerSource": ".scratch/pidock-mvp/issues/04-environment-and-service.md"
+    },
+    {
+      "logicalId": "05",
+      "sourceSha256": "d560def64265b31ded0dd70abcdcd694bd3347ab7495cc52a66b5d05095a92dc",
+      "number": 10,
+      "id": 5530102532,
+      "html_url": "https://github.com/Leonz3n/PiDock/issues/10",
+      "blockedBy": [
+        6,
+        7
+      ],
+      "formerSource": ".scratch/pidock-mvp/issues/05-service-dependencies.md"
+    },
+    {
+      "logicalId": "06",
+      "sourceSha256": "97e213e2cb3a61798dab147729fa191c643201b50efbbb599451dcb403030000",
+      "number": 8,
+      "id": 5530101846,
+      "html_url": "https://github.com/Leonz3n/PiDock/issues/8",
+      "blockedBy": [
+        5
+      ],
+      "formerSource": ".scratch/pidock-mvp/issues/06-agent-browser.md"
+    },
+    {
+      "logicalId": "07",
+      "sourceSha256": "7c6937fb1e6af384d7dc6c3665681b5074b861df8698fb1a7948c1b9e4c49a71",
+      "number": 13,
+      "id": 5530103348,
+      "html_url": "https://github.com/Leonz3n/PiDock/issues/13",
+      "blockedBy": [
+        10,
+        11
+      ],
+      "formerSource": ".scratch/pidock-mvp/issues/07-real-synchronous-query.md"
+    },
+    {
+      "logicalId": "08",
+      "sourceSha256": "8d7e7c2a190024a99467fcbc7db4d8d45b617aa75a8728ff2029e516866d9577",
+      "number": 14,
+      "id": 5530103522,
+      "html_url": "https://github.com/Leonz3n/PiDock/issues/14",
+      "blockedBy": [
+        10
+      ],
+      "formerSource": ".scratch/pidock-mvp/issues/08-local-protocol-binding.md"
+    },
+    {
+      "logicalId": "09",
+      "sourceSha256": "0df1e2af18c0bc01b2da77d8296ca49c84aea42432bf90e6aa7ee71a5d8872b3",
+      "number": 11,
+      "id": 5530102691,
+      "html_url": "https://github.com/Leonz3n/PiDock/issues/11",
+      "blockedBy": [
+        7,
+        8
+      ],
+      "formerSource": ".scratch/pidock-mvp/issues/09-session-coordination.md"
+    },
+    {
+      "logicalId": "10",
+      "sourceSha256": "1b2d43791d6bfa62827cbf873cf2aa9d8c2540e6d0c7fb4d4253d387047b684f",
+      "number": 15,
+      "id": 5530103909,
+      "html_url": "https://github.com/Leonz3n/PiDock/issues/15",
+      "blockedBy": [
+        11
+      ],
+      "formerSource": ".scratch/pidock-mvp/issues/10-files-and-terminal.md"
+    },
+    {
+      "logicalId": "11",
+      "sourceSha256": "9ceb866cc37140bd5b55bedbbc26e71a55de0a48d5a48ac3e57eb3f8bbe116d1",
+      "number": 9,
+      "id": 5530102324,
+      "html_url": "https://github.com/Leonz3n/PiDock/issues/9",
+      "blockedBy": [
+        5
+      ],
+      "formerSource": ".scratch/pidock-mvp/issues/11-providers-and-context.md"
+    },
+    {
+      "logicalId": "12",
+      "sourceSha256": "f8e995658a074bb3d864a3de3b8468b9dc9e1576e6b8178c0ad6a9dbc9fe90fa",
+      "number": 12,
+      "id": 5530103108,
+      "html_url": "https://github.com/Leonz3n/PiDock/issues/12",
+      "blockedBy": [
+        9
+      ],
+      "formerSource": ".scratch/pidock-mvp/issues/12-token-usage.md"
+    },
+    {
+      "logicalId": "13",
+      "sourceSha256": "4306f9ba7bfe7625481f86d844b42d35b66351eb73208b57dbbc8947a5e51428",
+      "number": 16,
+      "id": 5530104167,
+      "html_url": "https://github.com/Leonz3n/PiDock/issues/16",
+      "blockedBy": [
+        6,
+        15,
+        12
+      ],
+      "formerSource": ".scratch/pidock-mvp/issues/13-composer-commands.md"
+    },
+    {
+      "logicalId": "14",
+      "sourceSha256": "0623ef5aff781f32cbb33f008688d6a482b4c7382eb12229254c23259009c70b",
+      "number": 17,
+      "id": 5530104339,
+      "html_url": "https://github.com/Leonz3n/PiDock/issues/17",
+      "blockedBy": [
+        14,
+        16
+      ],
+      "formerSource": ".scratch/pidock-mvp/issues/14-task-lifecycle.md"
+    },
+    {
+      "logicalId": "15",
+      "sourceSha256": "fad9b51ddbbb1b0ed075198c14a7cd17875bda7743a30bd1ff1c5284718ef139",
+      "number": 22,
+      "id": 5530105852,
+      "html_url": "https://github.com/Leonz3n/PiDock/issues/22",
+      "blockedBy": [
+        13,
+        17,
+        18,
+        20,
+        21
+      ],
+      "formerSource": ".scratch/pidock-mvp/issues/15-desktop-delivery.md"
+    },
+    {
+      "logicalId": "16",
+      "sourceSha256": "07bc0c9199c7a76afb68375b93d53256d2476a61ae9f22c1cef44098d0834489",
+      "number": 18,
+      "id": 5530104692,
+      "html_url": "https://github.com/Leonz3n/PiDock/issues/18",
+      "blockedBy": [
+        11,
+        16
+      ],
+      "formerSource": ".scratch/pidock-mvp/issues/16-capability-management.md"
+    },
+    {
+      "logicalId": "17",
+      "sourceSha256": "858ccfc8a26fc9207b41936ac73b9ff2e006908aa4b91b288fc5b6829a12bc77",
+      "number": 19,
+      "id": 5530105039,
+      "html_url": "https://github.com/Leonz3n/PiDock/issues/19",
+      "blockedBy": [
+        11,
+        12,
+        17
+      ],
+      "formerSource": ".scratch/pidock-mvp/issues/17-host-execution-events.md"
+    },
+    {
+      "logicalId": "18",
+      "sourceSha256": "c7b0cd344ad69de68f5999675ccefda49855037a37d6bdb74c04a7717594d1b9",
+      "number": 20,
+      "id": 5530105427,
+      "html_url": "https://github.com/Leonz3n/PiDock/issues/20",
+      "blockedBy": [
+        6,
+        9,
+        19
+      ],
+      "formerSource": ".scratch/pidock-mvp/issues/18-scheduled-tasks.md"
+    },
+    {
+      "logicalId": "19",
+      "sourceSha256": "460eb9e0ade13a37eb40edb86faa9bf16970ea00380ff1202ced01ede159644a",
+      "number": 21,
+      "id": 5530105627,
+      "html_url": "https://github.com/Leonz3n/PiDock/issues/21",
+      "blockedBy": [
+        19
+      ],
+      "formerSource": ".scratch/pidock-mvp/issues/19-remote-access.md"
+    },
+    {
+      "logicalId": "20",
+      "sourceSha256": "ae39bbee7eb1f90b9c3ad0a807ef82db892348c22ae76e25d905f718b8ba7270",
+      "number": 3,
+      "id": 5530100626,
+      "html_url": "https://github.com/Leonz3n/PiDock/issues/3",
+      "blockedBy": [],
+      "formerSource": ".scratch/pidock-mvp/issues/20-renderer-baseline.md"
+    },
+    {
+      "logicalId": "21",
+      "sourceSha256": "67758b8dfc91da0db19f128879b2bbbbd0212f8543ed24b0751f5e30ce511c67",
+      "number": 4,
+      "id": 5530100847,
+      "html_url": "https://github.com/Leonz3n/PiDock/issues/4",
+      "blockedBy": [],
+      "formerSource": ".scratch/pidock-mvp/issues/21-electron-shell-validation.md"
+    }
+  ],
+  "verification": {
+    "verified": true,
+    "issues": 22,
+    "implementationIssues": 21,
+    "subIssues": 21,
+    "blockingEdges": 34,
+    "closedExperiment": 2,
+    "openImplementationIssues": 20,
+    "allOpenImplementationPaused": true,
+    "relativeIssueLinks": 0
+  },
+  "localTicketFilesRemoved": true,
+  "removedFiles": [
+    ".scratch/pidock-mvp/issues/13-composer-commands.md",
+    ".scratch/pidock-mvp/issues/15-desktop-delivery.md",
+    ".scratch/pidock-mvp/issues/11-providers-and-context.md",
+    ".scratch/pidock-mvp/issues/06-agent-browser.md",
+    ".scratch/pidock-mvp/issues/14-task-lifecycle.md",
+    ".scratch/pidock-mvp/issues/08-local-protocol-binding.md",
+    ".scratch/pidock-mvp/issues/04-environment-and-service.md",
+    ".scratch/pidock-mvp/issues/07-real-synchronous-query.md",
+    ".scratch/pidock-mvp/issues/12-token-usage.md",
+    ".scratch/pidock-mvp/issues/16-capability-management.md",
+    ".scratch/pidock-mvp/issues/20-renderer-baseline.md",
+    ".scratch/pidock-mvp/issues/18-scheduled-tasks.md",
+    ".scratch/pidock-mvp/issues/19-remote-access.md",
+    ".scratch/pidock-mvp/issues/17-host-execution-events.md",
+    ".scratch/pidock-mvp/issues/02-task-agent-session.md",
+    ".scratch/pidock-mvp/issues/09-session-coordination.md",
+    ".scratch/pidock-mvp/issues/01-visible-browser.md",
+    ".scratch/pidock-mvp/issues/03-multi-repository-tasks.md",
+    ".scratch/pidock-mvp/issues/10-files-and-terminal.md",
+    ".scratch/pidock-mvp/issues/05-service-dependencies.md",
+    ".scratch/pidock-mvp/issues/21-electron-shell-validation.md",
+    ".scratch/pidock-mvp/drafts/13-composer-commands.md",
+    ".scratch/pidock-mvp/drafts/15-desktop-delivery.md",
+    ".scratch/pidock-mvp/drafts/11-providers-and-context.md",
+    ".scratch/pidock-mvp/drafts/06-agent-browser.md",
+    ".scratch/pidock-mvp/drafts/14-task-lifecycle.md",
+    ".scratch/pidock-mvp/drafts/08-local-protocol-binding.md",
+    ".scratch/pidock-mvp/drafts/04-environment-and-service.md",
+    ".scratch/pidock-mvp/drafts/07-real-synchronous-query.md",
+    ".scratch/pidock-mvp/drafts/12-token-usage.md",
+    ".scratch/pidock-mvp/drafts/16-capability-management.md",
+    ".scratch/pidock-mvp/drafts/18-scheduled-tasks.md",
+    ".scratch/pidock-mvp/drafts/19-remote-access.md",
+    ".scratch/pidock-mvp/drafts/17-host-execution-events.md",
+    ".scratch/pidock-mvp/drafts/02-task-agent-session.md",
+    ".scratch/pidock-mvp/drafts/09-session-coordination.md",
+    ".scratch/pidock-mvp/drafts/01-visible-browser.md",
+    ".scratch/pidock-mvp/drafts/03-multi-repository-tasks.md",
+    ".scratch/pidock-mvp/drafts/10-files-and-terminal.md",
+    ".scratch/pidock-mvp/drafts/05-service-dependencies.md",
+    ".scratch/pidock-mvp/breakdown.md"
+  ]
+}

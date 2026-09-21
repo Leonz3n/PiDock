@@ -1,0 +1,814 @@
+{
+  "recheck-no-user-exit.json": {
+    "label": "no-user-exit",
+    "before": [
+      {
+        "description": "",
+        "devtoolsFrontendUrl": "https://chrome-devtools-frontend.appspot.com/serve_rev/@e46e70b7112e24cb0501b746c09f8228ff88850a/inspector.html?ws=127.0.0.1:9222/devtools/page/725965BA397597DDF1A25E8F0E1239AA",
+        "id": "725965BA397597DDF1A25E8F0E1239AA",
+        "title": "Task B - secondary",
+        "type": "page",
+        "url": "http://127.0.0.1:4319/?task=B&view=secondary",
+        "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/725965BA397597DDF1A25E8F0E1239AA"
+      },
+      {
+        "description": "",
+        "devtoolsFrontendUrl": "https://chrome-devtools-frontend.appspot.com/serve_rev/@e46e70b7112e24cb0501b746c09f8228ff88850a/inspector.html?ws=127.0.0.1:9222/devtools/page/7CE1D99650148EDB720EB4B407E6A315",
+        "id": "7CE1D99650148EDB720EB4B407E6A315",
+        "title": "Task A - secondary",
+        "type": "page",
+        "url": "http://127.0.0.1:4319/?task=A&view=secondary",
+        "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/7CE1D99650148EDB720EB4B407E6A315"
+      },
+      {
+        "description": "",
+        "devtoolsFrontendUrl": "https://chrome-devtools-frontend.appspot.com/serve_rev/@e46e70b7112e24cb0501b746c09f8228ff88850a/inspector.html?ws=127.0.0.1:9222/devtools/page/48399C561C2D95FB28748B50B6EF3264",
+        "id": "48399C561C2D95FB28748B50B6EF3264",
+        "title": "Task B - primary",
+        "type": "page",
+        "url": "http://127.0.0.1:4319/?task=B&view=primary",
+        "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/48399C561C2D95FB28748B50B6EF3264"
+      },
+      {
+        "description": "",
+        "devtoolsFrontendUrl": "https://chrome-devtools-frontend.appspot.com/serve_rev/@e46e70b7112e24cb0501b746c09f8228ff88850a/inspector.html?ws=127.0.0.1:9222/devtools/page/89B689475B85F263CF474D9E5AC9822D",
+        "id": "89B689475B85F263CF474D9E5AC9822D",
+        "title": "Task A - primary",
+        "type": "page",
+        "url": "http://127.0.0.1:4319/?task=A&view=primary",
+        "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/89B689475B85F263CF474D9E5AC9822D"
+      }
+    ],
+    "closeResponse": "{\"task\":\"A\",\"action\":\"close\"}",
+    "afterClose": null,
+    "reopenResponse": "<urlopen error [Errno 61] Connection refused>",
+    "afterReopen": null,
+    "launcherExit": 0
+  },
+  "recheck-block-window-close.json": {
+    "label": "block-window-close",
+    "before": [
+      {
+        "description": "",
+        "devtoolsFrontendUrl": "https://chrome-devtools-frontend.appspot.com/serve_rev/@e46e70b7112e24cb0501b746c09f8228ff88850a/inspector.html?ws=127.0.0.1:9222/devtools/page/912785151D7F2900351C5A95A9433DCA",
+        "id": "912785151D7F2900351C5A95A9433DCA",
+        "title": "Task B - secondary",
+        "type": "page",
+        "url": "http://127.0.0.1:4319/?task=B&view=secondary",
+        "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/912785151D7F2900351C5A95A9433DCA"
+      },
+      {
+        "description": "",
+        "devtoolsFrontendUrl": "https://chrome-devtools-frontend.appspot.com/serve_rev/@e46e70b7112e24cb0501b746c09f8228ff88850a/inspector.html?ws=127.0.0.1:9222/devtools/page/8951E89950B4A8C47090CBB9138B4CD9",
+        "id": "8951E89950B4A8C47090CBB9138B4CD9",
+        "title": "Task A - secondary",
+        "type": "page",
+        "url": "http://127.0.0.1:4319/?task=A&view=secondary",
+        "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/8951E89950B4A8C47090CBB9138B4CD9"
+      },
+      {
+        "description": "",
+        "devtoolsFrontendUrl": "https://chrome-devtools-frontend.appspot.com/serve_rev/@e46e70b7112e24cb0501b746c09f8228ff88850a/inspector.html?ws=127.0.0.1:9222/devtools/page/6E6C1A58B6D1ACBACB6228720063AD42",
+        "id": "6E6C1A58B6D1ACBACB6228720063AD42",
+        "title": "Task B - primary",
+        "type": "page",
+        "url": "http://127.0.0.1:4319/?task=B&view=primary",
+        "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/6E6C1A58B6D1ACBACB6228720063AD42"
+      },
+      {
+        "description": "",
+        "devtoolsFrontendUrl": "https://chrome-devtools-frontend.appspot.com/serve_rev/@e46e70b7112e24cb0501b746c09f8228ff88850a/inspector.html?ws=127.0.0.1:9222/devtools/page/DB80DEBAA8DF627BF2A13925008F3B67",
+        "id": "DB80DEBAA8DF627BF2A13925008F3B67",
+        "title": "Task A - primary",
+        "type": "page",
+        "url": "http://127.0.0.1:4319/?task=A&view=primary",
+        "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/DB80DEBAA8DF627BF2A13925008F3B67"
+      }
+    ],
+    "closeResponse": "{\"task\":\"A\",\"action\":\"close\"}",
+    "afterClose": [
+      {
+        "description": "",
+        "devtoolsFrontendUrl": "https://chrome-devtools-frontend.appspot.com/serve_rev/@e46e70b7112e24cb0501b746c09f8228ff88850a/inspector.html?ws=127.0.0.1:9222/devtools/page/912785151D7F2900351C5A95A9433DCA",
+        "id": "912785151D7F2900351C5A95A9433DCA",
+        "title": "Task B - secondary",
+        "type": "page",
+        "url": "http://127.0.0.1:4319/?task=B&view=secondary",
+        "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/912785151D7F2900351C5A95A9433DCA"
+      },
+      {
+        "description": "",
+        "devtoolsFrontendUrl": "https://chrome-devtools-frontend.appspot.com/serve_rev/@e46e70b7112e24cb0501b746c09f8228ff88850a/inspector.html?ws=127.0.0.1:9222/devtools/page/8951E89950B4A8C47090CBB9138B4CD9",
+        "id": "8951E89950B4A8C47090CBB9138B4CD9",
+        "title": "Task A - secondary",
+        "type": "page",
+        "url": "http://127.0.0.1:4319/?task=A&view=secondary",
+        "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/8951E89950B4A8C47090CBB9138B4CD9"
+      },
+      {
+        "description": "",
+        "devtoolsFrontendUrl": "https://chrome-devtools-frontend.appspot.com/serve_rev/@e46e70b7112e24cb0501b746c09f8228ff88850a/inspector.html?ws=127.0.0.1:9222/devtools/page/6E6C1A58B6D1ACBACB6228720063AD42",
+        "id": "6E6C1A58B6D1ACBACB6228720063AD42",
+        "title": "Task B - primary",
+        "type": "page",
+        "url": "http://127.0.0.1:4319/?task=B&view=primary",
+        "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/6E6C1A58B6D1ACBACB6228720063AD42"
+      }
+    ],
+    "reopenResponse": "{\"task\":\"A\",\"action\":\"reopen\"}",
+    "afterReopen": [
+      {
+        "description": "",
+        "devtoolsFrontendUrl": "https://chrome-devtools-frontend.appspot.com/serve_rev/@e46e70b7112e24cb0501b746c09f8228ff88850a/inspector.html?ws=127.0.0.1:9222/devtools/page/EA9B36AD6CDEADCA73E1CC54741E3FDD",
+        "id": "EA9B36AD6CDEADCA73E1CC54741E3FDD",
+        "title": "Task A - primary",
+        "type": "page",
+        "url": "http://127.0.0.1:4319/?task=A&view=primary",
+        "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/EA9B36AD6CDEADCA73E1CC54741E3FDD"
+      },
+      {
+        "description": "",
+        "devtoolsFrontendUrl": "https://chrome-devtools-frontend.appspot.com/serve_rev/@e46e70b7112e24cb0501b746c09f8228ff88850a/inspector.html?ws=127.0.0.1:9222/devtools/page/912785151D7F2900351C5A95A9433DCA",
+        "id": "912785151D7F2900351C5A95A9433DCA",
+        "title": "Task B - secondary",
+        "type": "page",
+        "url": "http://127.0.0.1:4319/?task=B&view=secondary",
+        "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/912785151D7F2900351C5A95A9433DCA"
+      },
+      {
+        "description": "",
+        "devtoolsFrontendUrl": "https://chrome-devtools-frontend.appspot.com/serve_rev/@e46e70b7112e24cb0501b746c09f8228ff88850a/inspector.html?ws=127.0.0.1:9222/devtools/page/8951E89950B4A8C47090CBB9138B4CD9",
+        "id": "8951E89950B4A8C47090CBB9138B4CD9",
+        "title": "Task A - secondary",
+        "type": "page",
+        "url": "http://127.0.0.1:4319/?task=A&view=secondary",
+        "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/8951E89950B4A8C47090CBB9138B4CD9"
+      },
+      {
+        "description": "",
+        "devtoolsFrontendUrl": "https://chrome-devtools-frontend.appspot.com/serve_rev/@e46e70b7112e24cb0501b746c09f8228ff88850a/inspector.html?ws=127.0.0.1:9222/devtools/page/6E6C1A58B6D1ACBACB6228720063AD42",
+        "id": "6E6C1A58B6D1ACBACB6228720063AD42",
+        "title": "Task B - primary",
+        "type": "page",
+        "url": "http://127.0.0.1:4319/?task=B&view=primary",
+        "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/6E6C1A58B6D1ACBACB6228720063AD42"
+      }
+    ],
+    "launcherExit": null
+  },
+  "recheck-transparent-osr.json": {
+    "label": "transparent-osr",
+    "before": [
+      {
+        "description": "",
+        "devtoolsFrontendUrl": "https://chrome-devtools-frontend.appspot.com/serve_rev/@e46e70b7112e24cb0501b746c09f8228ff88850a/inspector.html?ws=127.0.0.1:9222/devtools/page/CF4B7B9807348CE1EDC445401129FB6B",
+        "id": "CF4B7B9807348CE1EDC445401129FB6B",
+        "title": "Task B - secondary",
+        "type": "page",
+        "url": "http://127.0.0.1:4319/?task=B&view=secondary",
+        "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/CF4B7B9807348CE1EDC445401129FB6B"
+      },
+      {
+        "description": "",
+        "devtoolsFrontendUrl": "https://chrome-devtools-frontend.appspot.com/serve_rev/@e46e70b7112e24cb0501b746c09f8228ff88850a/inspector.html?ws=127.0.0.1:9222/devtools/page/D5AFE8FBA6D68FE54C59BDABBE356C95",
+        "id": "D5AFE8FBA6D68FE54C59BDABBE356C95",
+        "title": "Task A - secondary",
+        "type": "page",
+        "url": "http://127.0.0.1:4319/?task=A&view=secondary",
+        "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/D5AFE8FBA6D68FE54C59BDABBE356C95"
+      },
+      {
+        "description": "",
+        "devtoolsFrontendUrl": "https://chrome-devtools-frontend.appspot.com/serve_rev/@e46e70b7112e24cb0501b746c09f8228ff88850a/inspector.html?ws=127.0.0.1:9222/devtools/page/C26AC2DE5B9F6885BC1B0828AF028EF1",
+        "id": "C26AC2DE5B9F6885BC1B0828AF028EF1",
+        "title": "Task B - primary",
+        "type": "page",
+        "url": "http://127.0.0.1:4319/?task=B&view=primary",
+        "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/C26AC2DE5B9F6885BC1B0828AF028EF1"
+      },
+      {
+        "description": "",
+        "devtoolsFrontendUrl": "https://chrome-devtools-frontend.appspot.com/serve_rev/@e46e70b7112e24cb0501b746c09f8228ff88850a/inspector.html?ws=127.0.0.1:9222/devtools/page/FDDE2490810C44E40DFBF2839C0F6CAB",
+        "id": "FDDE2490810C44E40DFBF2839C0F6CAB",
+        "title": "Task A - primary",
+        "type": "page",
+        "url": "http://127.0.0.1:4319/?task=A&view=primary",
+        "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/FDDE2490810C44E40DFBF2839C0F6CAB"
+      }
+    ],
+    "closeResponse": "{\"task\":\"A\",\"action\":\"close\"}",
+    "afterClose": [
+      {
+        "description": "",
+        "devtoolsFrontendUrl": "https://chrome-devtools-frontend.appspot.com/serve_rev/@e46e70b7112e24cb0501b746c09f8228ff88850a/inspector.html?ws=127.0.0.1:9222/devtools/page/CF4B7B9807348CE1EDC445401129FB6B",
+        "id": "CF4B7B9807348CE1EDC445401129FB6B",
+        "title": "Task B - secondary",
+        "type": "page",
+        "url": "http://127.0.0.1:4319/?task=B&view=secondary",
+        "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/CF4B7B9807348CE1EDC445401129FB6B"
+      },
+      {
+        "description": "",
+        "devtoolsFrontendUrl": "https://chrome-devtools-frontend.appspot.com/serve_rev/@e46e70b7112e24cb0501b746c09f8228ff88850a/inspector.html?ws=127.0.0.1:9222/devtools/page/D5AFE8FBA6D68FE54C59BDABBE356C95",
+        "id": "D5AFE8FBA6D68FE54C59BDABBE356C95",
+        "title": "Task A - secondary",
+        "type": "page",
+        "url": "http://127.0.0.1:4319/?task=A&view=secondary",
+        "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/D5AFE8FBA6D68FE54C59BDABBE356C95"
+      },
+      {
+        "description": "",
+        "devtoolsFrontendUrl": "https://chrome-devtools-frontend.appspot.com/serve_rev/@e46e70b7112e24cb0501b746c09f8228ff88850a/inspector.html?ws=127.0.0.1:9222/devtools/page/C26AC2DE5B9F6885BC1B0828AF028EF1",
+        "id": "C26AC2DE5B9F6885BC1B0828AF028EF1",
+        "title": "Task B - primary",
+        "type": "page",
+        "url": "http://127.0.0.1:4319/?task=B&view=primary",
+        "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/C26AC2DE5B9F6885BC1B0828AF028EF1"
+      }
+    ],
+    "reopenResponse": "{\"task\":\"A\",\"action\":\"reopen\"}",
+    "afterReopen": [
+      {
+        "description": "",
+        "devtoolsFrontendUrl": "https://chrome-devtools-frontend.appspot.com/serve_rev/@e46e70b7112e24cb0501b746c09f8228ff88850a/inspector.html?ws=127.0.0.1:9222/devtools/page/F89AC7B7159829D79CF51C6CA0AD299D",
+        "id": "F89AC7B7159829D79CF51C6CA0AD299D",
+        "title": "Task A - primary",
+        "type": "page",
+        "url": "http://127.0.0.1:4319/?task=A&view=primary",
+        "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/F89AC7B7159829D79CF51C6CA0AD299D"
+      },
+      {
+        "description": "",
+        "devtoolsFrontendUrl": "https://chrome-devtools-frontend.appspot.com/serve_rev/@e46e70b7112e24cb0501b746c09f8228ff88850a/inspector.html?ws=127.0.0.1:9222/devtools/page/CF4B7B9807348CE1EDC445401129FB6B",
+        "id": "CF4B7B9807348CE1EDC445401129FB6B",
+        "title": "Task B - secondary",
+        "type": "page",
+        "url": "http://127.0.0.1:4319/?task=B&view=secondary",
+        "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/CF4B7B9807348CE1EDC445401129FB6B"
+      },
+      {
+        "description": "",
+        "devtoolsFrontendUrl": "https://chrome-devtools-frontend.appspot.com/serve_rev/@e46e70b7112e24cb0501b746c09f8228ff88850a/inspector.html?ws=127.0.0.1:9222/devtools/page/D5AFE8FBA6D68FE54C59BDABBE356C95",
+        "id": "D5AFE8FBA6D68FE54C59BDABBE356C95",
+        "title": "Task A - secondary",
+        "type": "page",
+        "url": "http://127.0.0.1:4319/?task=A&view=secondary",
+        "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/D5AFE8FBA6D68FE54C59BDABBE356C95"
+      },
+      {
+        "description": "",
+        "devtoolsFrontendUrl": "https://chrome-devtools-frontend.appspot.com/serve_rev/@e46e70b7112e24cb0501b746c09f8228ff88850a/inspector.html?ws=127.0.0.1:9222/devtools/page/C26AC2DE5B9F6885BC1B0828AF028EF1",
+        "id": "C26AC2DE5B9F6885BC1B0828AF028EF1",
+        "title": "Task B - primary",
+        "type": "page",
+        "url": "http://127.0.0.1:4319/?task=B&view=primary",
+        "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/C26AC2DE5B9F6885BC1B0828AF028EF1"
+      }
+    ],
+    "launcherExit": null
+  },
+  "cdp-validation.json": {
+    "mode": "initial",
+    "cdp": "http://127.0.0.1:9222",
+    "targetCount": 4,
+    "targets": [
+      {
+        "id": "29D0044040085A21EDB6B41557C562EA",
+        "type": "page",
+        "title": "Task B - secondary",
+        "url": "http://127.0.0.1:4319/?task=B&view=secondary"
+      },
+      {
+        "id": "DB1FF08DF3DFC37E5C6ED9DC413E5CD6",
+        "type": "page",
+        "title": "Task A - secondary",
+        "url": "http://127.0.0.1:4319/?task=A&view=secondary"
+      },
+      {
+        "id": "FBD9D73C2E4D9D3B9EB8F778D93B06E0",
+        "type": "page",
+        "title": "Task B - primary",
+        "url": "http://127.0.0.1:4319/?task=B&view=primary"
+      },
+      {
+        "id": "5AE8DB678BE1E301897496E440C99E39",
+        "type": "page",
+        "title": "Task A - primary",
+        "url": "http://127.0.0.1:4319/?task=A&view=primary"
+      }
+    ],
+    "assertions": {
+      "semanticLogin": true,
+      "asyncText": "Asynchronous content for task A",
+      "sameTaskStorage": true,
+      "crossTaskIsolation": true,
+      "popupReturn": true,
+      "pauseBlocked": true,
+      "rereadAfterResume": "manual-user-edit",
+      "iframe": "iframe action complete",
+      "downloadStarted": true,
+      "downloadCDPEvent": false,
+      "devToolsRecovery": true
+    },
+    "storage": {
+      "isolated": {
+        "a": {
+          "local": "task-a",
+          "cookie": "pidock_account=task-a",
+          "account": "task-a"
+        },
+        "b": {
+          "local": "task-b",
+          "cookie": "pidock_account=task-b",
+          "account": "task-b"
+        }
+      },
+      "taskA": {
+        "local": "task-a-popup",
+        "cookie": "pidock_account=task-a-popup",
+        "account": "task-a-popup"
+      },
+      "taskB": {
+        "local": "task-b",
+        "cookie": "pidock_account=task-b",
+        "account": "task-b"
+      }
+    },
+    "consoleErrors": [
+      "PIDOCK_EXPECTED_CONSOLE_ERROR task=A view=primary"
+    ],
+    "failedResponses": [
+      {
+        "url": "http://127.0.0.1:4319/api/failure",
+        "status": 503
+      }
+    ],
+    "downloadResponses": [],
+    "popupTarget": {
+      "id": "46051A83D61D607DF027272D3AB74100",
+      "type": "page",
+      "url": "http://127.0.0.1:4319/popup?task=A"
+    }
+  },
+  "restart-validation.json": {
+    "mode": "restart",
+    "cdp": "http://127.0.0.1:9222",
+    "targetCount": 4,
+    "targets": [
+      {
+        "id": "CE6CF594FA169B9EDEA1D5CD60E05F96",
+        "type": "page",
+        "title": "Task B - secondary",
+        "url": "http://127.0.0.1:4319/?task=B&view=secondary"
+      },
+      {
+        "id": "36634AF9F3DFEC05CBB8ABF0F145C36E",
+        "type": "page",
+        "title": "Task A - secondary",
+        "url": "http://127.0.0.1:4319/?task=A&view=secondary"
+      },
+      {
+        "id": "7B8DED77BCB4910A54F20B06667D9DF1",
+        "type": "page",
+        "title": "Task B - primary",
+        "url": "http://127.0.0.1:4319/?task=B&view=primary"
+      },
+      {
+        "id": "A9420002C1C6517418A6F4EE154F8B4E",
+        "type": "page",
+        "title": "Task A - primary",
+        "url": "http://127.0.0.1:4319/?task=A&view=primary"
+      }
+    ],
+    "restartStorage": {
+      "aPrimary": {
+        "local": "task-a-popup",
+        "cookie": "pidock_account=task-a-popup",
+        "account": "task-a-popup"
+      },
+      "aSecondary": {
+        "local": "task-a-popup",
+        "cookie": "pidock_account=task-a-popup",
+        "account": "task-a-popup"
+      },
+      "bPrimary": {
+        "local": "task-b",
+        "cookie": "pidock_account=task-b",
+        "account": "task-b"
+      },
+      "bSecondary": {
+        "local": "task-b",
+        "cookie": "pidock_account=task-b",
+        "account": "task-b"
+      }
+    }
+  },
+  "osr-close-reopen-cycles.json": {
+    "ok": true,
+    "rounds": [
+      {
+        "round": 1,
+        "closedTarget": "1D9FF5BDE6CBF522275A6A555E853A34",
+        "remaining": [
+          "CE6CF594FA169B9EDEA1D5CD60E05F96",
+          "36634AF9F3DFEC05CBB8ABF0F145C36E",
+          "7B8DED77BCB4910A54F20B06667D9DF1"
+        ],
+        "states": [
+          {
+            "id": "1D9FF5BDE6CBF522275A6A555E853A34",
+            "url": "http://127.0.0.1:4319/?task=A&view=primary",
+            "local": "task-a-popup",
+            "cookie": "pidock_account=task-a-popup",
+            "title": "Task A - primary"
+          },
+          {
+            "id": "CE6CF594FA169B9EDEA1D5CD60E05F96",
+            "url": "http://127.0.0.1:4319/?task=B&view=secondary",
+            "local": "task-b",
+            "cookie": "pidock_account=task-b",
+            "title": "Task B - secondary"
+          },
+          {
+            "id": "36634AF9F3DFEC05CBB8ABF0F145C36E",
+            "url": "http://127.0.0.1:4319/?task=A&view=secondary",
+            "local": "task-a-popup",
+            "cookie": "pidock_account=task-a-popup",
+            "title": "Task A - secondary"
+          },
+          {
+            "id": "7B8DED77BCB4910A54F20B06667D9DF1",
+            "url": "http://127.0.0.1:4319/?task=B&view=primary",
+            "local": "task-b",
+            "cookie": "pidock_account=task-b",
+            "title": "Task B - primary"
+          }
+        ]
+      },
+      {
+        "round": 2,
+        "closedTarget": "7F0146F97CDAB1B8CF0D09634DE8FF61",
+        "remaining": [
+          "CE6CF594FA169B9EDEA1D5CD60E05F96",
+          "36634AF9F3DFEC05CBB8ABF0F145C36E",
+          "7B8DED77BCB4910A54F20B06667D9DF1"
+        ],
+        "states": [
+          {
+            "id": "7F0146F97CDAB1B8CF0D09634DE8FF61",
+            "url": "http://127.0.0.1:4319/?task=A&view=primary",
+            "local": "task-a-popup",
+            "cookie": "pidock_account=task-a-popup",
+            "title": "Task A - primary"
+          },
+          {
+            "id": "CE6CF594FA169B9EDEA1D5CD60E05F96",
+            "url": "http://127.0.0.1:4319/?task=B&view=secondary",
+            "local": "task-b",
+            "cookie": "pidock_account=task-b",
+            "title": "Task B - secondary"
+          },
+          {
+            "id": "36634AF9F3DFEC05CBB8ABF0F145C36E",
+            "url": "http://127.0.0.1:4319/?task=A&view=secondary",
+            "local": "task-a-popup",
+            "cookie": "pidock_account=task-a-popup",
+            "title": "Task A - secondary"
+          },
+          {
+            "id": "7B8DED77BCB4910A54F20B06667D9DF1",
+            "url": "http://127.0.0.1:4319/?task=B&view=primary",
+            "local": "task-b",
+            "cookie": "pidock_account=task-b",
+            "title": "Task B - primary"
+          }
+        ]
+      },
+      {
+        "round": 3,
+        "closedTarget": "0C2DF6A023E321E0C9100BFED97EB71C",
+        "remaining": [
+          "CE6CF594FA169B9EDEA1D5CD60E05F96",
+          "36634AF9F3DFEC05CBB8ABF0F145C36E",
+          "7B8DED77BCB4910A54F20B06667D9DF1"
+        ],
+        "states": [
+          {
+            "id": "0C2DF6A023E321E0C9100BFED97EB71C",
+            "url": "http://127.0.0.1:4319/?task=A&view=primary",
+            "local": "task-a-popup",
+            "cookie": "pidock_account=task-a-popup",
+            "title": "Task A - primary"
+          },
+          {
+            "id": "CE6CF594FA169B9EDEA1D5CD60E05F96",
+            "url": "http://127.0.0.1:4319/?task=B&view=secondary",
+            "local": "task-b",
+            "cookie": "pidock_account=task-b",
+            "title": "Task B - secondary"
+          },
+          {
+            "id": "36634AF9F3DFEC05CBB8ABF0F145C36E",
+            "url": "http://127.0.0.1:4319/?task=A&view=secondary",
+            "local": "task-a-popup",
+            "cookie": "pidock_account=task-a-popup",
+            "title": "Task A - secondary"
+          },
+          {
+            "id": "7B8DED77BCB4910A54F20B06667D9DF1",
+            "url": "http://127.0.0.1:4319/?task=B&view=primary",
+            "local": "task-b",
+            "cookie": "pidock_account=task-b",
+            "title": "Task B - primary"
+          }
+        ]
+      },
+      {
+        "round": 4,
+        "closedTarget": "57D61BC5C74E8EE00519958152B52627",
+        "remaining": [
+          "CE6CF594FA169B9EDEA1D5CD60E05F96",
+          "36634AF9F3DFEC05CBB8ABF0F145C36E",
+          "7B8DED77BCB4910A54F20B06667D9DF1"
+        ],
+        "states": [
+          {
+            "id": "57D61BC5C74E8EE00519958152B52627",
+            "url": "http://127.0.0.1:4319/?task=A&view=primary",
+            "local": "task-a-popup",
+            "cookie": "pidock_account=task-a-popup",
+            "title": "Task A - primary"
+          },
+          {
+            "id": "CE6CF594FA169B9EDEA1D5CD60E05F96",
+            "url": "http://127.0.0.1:4319/?task=B&view=secondary",
+            "local": "task-b",
+            "cookie": "pidock_account=task-b",
+            "title": "Task B - secondary"
+          },
+          {
+            "id": "36634AF9F3DFEC05CBB8ABF0F145C36E",
+            "url": "http://127.0.0.1:4319/?task=A&view=secondary",
+            "local": "task-a-popup",
+            "cookie": "pidock_account=task-a-popup",
+            "title": "Task A - secondary"
+          },
+          {
+            "id": "7B8DED77BCB4910A54F20B06667D9DF1",
+            "url": "http://127.0.0.1:4319/?task=B&view=primary",
+            "local": "task-b",
+            "cookie": "pidock_account=task-b",
+            "title": "Task B - primary"
+          }
+        ]
+      },
+      {
+        "round": 5,
+        "closedTarget": "2EB4120FAAF94175037F4356F2324BB6",
+        "remaining": [
+          "CE6CF594FA169B9EDEA1D5CD60E05F96",
+          "36634AF9F3DFEC05CBB8ABF0F145C36E",
+          "7B8DED77BCB4910A54F20B06667D9DF1"
+        ],
+        "states": [
+          {
+            "id": "2EB4120FAAF94175037F4356F2324BB6",
+            "url": "http://127.0.0.1:4319/?task=A&view=primary",
+            "local": "task-a-popup",
+            "cookie": "pidock_account=task-a-popup",
+            "title": "Task A - primary"
+          },
+          {
+            "id": "CE6CF594FA169B9EDEA1D5CD60E05F96",
+            "url": "http://127.0.0.1:4319/?task=B&view=secondary",
+            "local": "task-b",
+            "cookie": "pidock_account=task-b",
+            "title": "Task B - secondary"
+          },
+          {
+            "id": "36634AF9F3DFEC05CBB8ABF0F145C36E",
+            "url": "http://127.0.0.1:4319/?task=A&view=secondary",
+            "local": "task-a-popup",
+            "cookie": "pidock_account=task-a-popup",
+            "title": "Task A - secondary"
+          },
+          {
+            "id": "7B8DED77BCB4910A54F20B06667D9DF1",
+            "url": "http://127.0.0.1:4319/?task=B&view=primary",
+            "local": "task-b",
+            "cookie": "pidock_account=task-b",
+            "title": "Task B - primary"
+          }
+        ]
+      },
+      {
+        "round": 6,
+        "closedTarget": "C39388768BC59009BC6FE7857D858F23",
+        "remaining": [
+          "CE6CF594FA169B9EDEA1D5CD60E05F96",
+          "36634AF9F3DFEC05CBB8ABF0F145C36E",
+          "7B8DED77BCB4910A54F20B06667D9DF1"
+        ],
+        "states": [
+          {
+            "id": "C39388768BC59009BC6FE7857D858F23",
+            "url": "http://127.0.0.1:4319/?task=A&view=primary",
+            "local": "task-a-popup",
+            "cookie": "pidock_account=task-a-popup",
+            "title": "Task A - primary"
+          },
+          {
+            "id": "CE6CF594FA169B9EDEA1D5CD60E05F96",
+            "url": "http://127.0.0.1:4319/?task=B&view=secondary",
+            "local": "task-b",
+            "cookie": "pidock_account=task-b",
+            "title": "Task B - secondary"
+          },
+          {
+            "id": "36634AF9F3DFEC05CBB8ABF0F145C36E",
+            "url": "http://127.0.0.1:4319/?task=A&view=secondary",
+            "local": "task-a-popup",
+            "cookie": "pidock_account=task-a-popup",
+            "title": "Task A - secondary"
+          },
+          {
+            "id": "7B8DED77BCB4910A54F20B06667D9DF1",
+            "url": "http://127.0.0.1:4319/?task=B&view=primary",
+            "local": "task-b",
+            "cookie": "pidock_account=task-b",
+            "title": "Task B - primary"
+          }
+        ]
+      },
+      {
+        "round": 7,
+        "closedTarget": "FE3FD33093B6364D06BA527006241359",
+        "remaining": [
+          "CE6CF594FA169B9EDEA1D5CD60E05F96",
+          "36634AF9F3DFEC05CBB8ABF0F145C36E",
+          "7B8DED77BCB4910A54F20B06667D9DF1"
+        ],
+        "states": [
+          {
+            "id": "FE3FD33093B6364D06BA527006241359",
+            "url": "http://127.0.0.1:4319/?task=A&view=primary",
+            "local": "task-a-popup",
+            "cookie": "pidock_account=task-a-popup",
+            "title": "Task A - primary"
+          },
+          {
+            "id": "CE6CF594FA169B9EDEA1D5CD60E05F96",
+            "url": "http://127.0.0.1:4319/?task=B&view=secondary",
+            "local": "task-b",
+            "cookie": "pidock_account=task-b",
+            "title": "Task B - secondary"
+          },
+          {
+            "id": "36634AF9F3DFEC05CBB8ABF0F145C36E",
+            "url": "http://127.0.0.1:4319/?task=A&view=secondary",
+            "local": "task-a-popup",
+            "cookie": "pidock_account=task-a-popup",
+            "title": "Task A - secondary"
+          },
+          {
+            "id": "7B8DED77BCB4910A54F20B06667D9DF1",
+            "url": "http://127.0.0.1:4319/?task=B&view=primary",
+            "local": "task-b",
+            "cookie": "pidock_account=task-b",
+            "title": "Task B - primary"
+          }
+        ]
+      },
+      {
+        "round": 8,
+        "closedTarget": "D5FB0702D9518E13D9D10B7966453152",
+        "remaining": [
+          "CE6CF594FA169B9EDEA1D5CD60E05F96",
+          "36634AF9F3DFEC05CBB8ABF0F145C36E",
+          "7B8DED77BCB4910A54F20B06667D9DF1"
+        ],
+        "states": [
+          {
+            "id": "D5FB0702D9518E13D9D10B7966453152",
+            "url": "http://127.0.0.1:4319/?task=A&view=primary",
+            "local": "task-a-popup",
+            "cookie": "pidock_account=task-a-popup",
+            "title": "Task A - primary"
+          },
+          {
+            "id": "CE6CF594FA169B9EDEA1D5CD60E05F96",
+            "url": "http://127.0.0.1:4319/?task=B&view=secondary",
+            "local": "task-b",
+            "cookie": "pidock_account=task-b",
+            "title": "Task B - secondary"
+          },
+          {
+            "id": "36634AF9F3DFEC05CBB8ABF0F145C36E",
+            "url": "http://127.0.0.1:4319/?task=A&view=secondary",
+            "local": "task-a-popup",
+            "cookie": "pidock_account=task-a-popup",
+            "title": "Task A - secondary"
+          },
+          {
+            "id": "7B8DED77BCB4910A54F20B06667D9DF1",
+            "url": "http://127.0.0.1:4319/?task=B&view=primary",
+            "local": "task-b",
+            "cookie": "pidock_account=task-b",
+            "title": "Task B - primary"
+          }
+        ]
+      },
+      {
+        "round": 9,
+        "closedTarget": "8807E79DBD9BA3351287566B4424A927",
+        "remaining": [
+          "CE6CF594FA169B9EDEA1D5CD60E05F96",
+          "36634AF9F3DFEC05CBB8ABF0F145C36E",
+          "7B8DED77BCB4910A54F20B06667D9DF1"
+        ],
+        "states": [
+          {
+            "id": "8807E79DBD9BA3351287566B4424A927",
+            "url": "http://127.0.0.1:4319/?task=A&view=primary",
+            "local": "task-a-popup",
+            "cookie": "pidock_account=task-a-popup",
+            "title": "Task A - primary"
+          },
+          {
+            "id": "CE6CF594FA169B9EDEA1D5CD60E05F96",
+            "url": "http://127.0.0.1:4319/?task=B&view=secondary",
+            "local": "task-b",
+            "cookie": "pidock_account=task-b",
+            "title": "Task B - secondary"
+          },
+          {
+            "id": "36634AF9F3DFEC05CBB8ABF0F145C36E",
+            "url": "http://127.0.0.1:4319/?task=A&view=secondary",
+            "local": "task-a-popup",
+            "cookie": "pidock_account=task-a-popup",
+            "title": "Task A - secondary"
+          },
+          {
+            "id": "7B8DED77BCB4910A54F20B06667D9DF1",
+            "url": "http://127.0.0.1:4319/?task=B&view=primary",
+            "local": "task-b",
+            "cookie": "pidock_account=task-b",
+            "title": "Task B - primary"
+          }
+        ]
+      },
+      {
+        "round": 10,
+        "closedTarget": "F3C8018BFF57730D985A8D2FC2F5B633",
+        "remaining": [
+          "CE6CF594FA169B9EDEA1D5CD60E05F96",
+          "36634AF9F3DFEC05CBB8ABF0F145C36E",
+          "7B8DED77BCB4910A54F20B06667D9DF1"
+        ],
+        "states": [
+          {
+            "id": "F3C8018BFF57730D985A8D2FC2F5B633",
+            "url": "http://127.0.0.1:4319/?task=A&view=primary",
+            "local": "task-a-popup",
+            "cookie": "pidock_account=task-a-popup",
+            "title": "Task A - primary"
+          },
+          {
+            "id": "CE6CF594FA169B9EDEA1D5CD60E05F96",
+            "url": "http://127.0.0.1:4319/?task=B&view=secondary",
+            "local": "task-b",
+            "cookie": "pidock_account=task-b",
+            "title": "Task B - secondary"
+          },
+          {
+            "id": "36634AF9F3DFEC05CBB8ABF0F145C36E",
+            "url": "http://127.0.0.1:4319/?task=A&view=secondary",
+            "local": "task-a-popup",
+            "cookie": "pidock_account=task-a-popup",
+            "title": "Task A - secondary"
+          },
+          {
+            "id": "7B8DED77BCB4910A54F20B06667D9DF1",
+            "url": "http://127.0.0.1:4319/?task=B&view=primary",
+            "local": "task-b",
+            "cookie": "pidock_account=task-b",
+            "title": "Task B - primary"
+          }
+        ]
+      }
+    ]
+  },
+  "partition-init-probe.json": {
+    "observed": true,
+    "createBrowserSyncNullCount": 2,
+    "expectedPartitions": 2
+  },
+  "popup-close-probe.json": {
+    "action": "close-login-window",
+    "httpStatus": "200",
+    "taskTargetsAfter": 4,
+    "popupTargetsAfter": 0,
+    "cefViewsClosed": 1,
+    "observedPass": true
+  }
+}

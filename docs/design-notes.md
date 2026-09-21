@@ -1,5 +1,7 @@
 # 桌面 Agent 设计记录
 
+> **2026-09-22 最终选型已确认：** Electron 44+ / Node 24；AgentSession 在 utilityProcess，Chromium 视图与 CDP 管理在 main，React renderer 完全 sandbox。当前权威约束见[技术栈设计](implementation-stack-design.md)。本文保留调研/取舍过程，其中旧候选、回退或待确认文字不再作为执行指令；后续工单仍暂停。
+
 2026-09-21 最终产品审查后，用户要求按建议收口。当前 A 工作台作为实现基线；状态、审批、重试、定时确认过期、关注入口、导航及清理规则统一见 [产品设计收口](product-design-closure.md)。下文早期审阅状态保留作历史，以本次收口为准。
 
 状态：核心工作流及首个同步查询方向已确认，真实业务仓库和具体页面链路已完成只读核对；实现规格见 [首版规格](../.scratch/pidock-mvp/spec.md)，技术原型尚未验证。
@@ -148,7 +150,7 @@
 | Electron | 内置 Node（不可换） | 能力最全，但不满足 Bun 主进程；降为回退方案 |
 | **Electrobun** | **Bun（可选）或 Cottontail** | **选用**：Bun 主进程、原生 webview、按视图 `partition`、按视图 `renderer`、构建时签名/公证、内置更新器与卸载器 |
 | Tauri / Wails | Rust / Go | 壳不是 Bun，Bun 只能做旁路，不满足本次要求 |
-| `webview-bun`、`@webviewjs/webview` | Bun 绑定 | 单窗口轻量绑定，无分区、无多视图、无调试协议，不满足任务页面要求 |
+| `webview-bun`、`@webviewjs/webview` | Bun 绑定 | **2026-09-22 更正：两者不能合并判断。** WebviewJS 0.4.6 已有子视图、WebContext、脚本求值回调与 DevTools；原「单窗口、无多视图」断言撤回。macOS 持久隔离与任务页面自动化仍有接口缺口，见[最新源码复核](webviewjs-runtime-review.md)。`webview-bun` 本轮未重新核对。 |
 | Bun 内置 `Bun.WebView` | Bun | **只能 headless**（`headless: false` 直接抛错），无法提供“用户看得见的页面”，不能单独承担任务浏览器 |
 
 Electrobun 与本规格契合的能力（依据官方文档 `framework.blackboard.sh/electrobun`）：
@@ -211,7 +213,7 @@ Gateway 负责登录、一次性配对交换、设备凭据、在线主机路由
 
 - UI 终审已完成，A 对话优先布局作为实现基线；原型、收口规则与未验证边界见 [UI 审阅记录](ui-prototype-review.md) 和 [产品设计收口](product-design-closure.md)。
 - 真实运行前选择非生产环境和可访问的已有对账单；登录由用户完成。动态菜单的实际页面 URL 在登录后记录。
-- 本地规格/工单跟踪及 AGENTS.md 入口已确认并设置，见 [设置记录](setup-draft.md)。[19 项实现工单](../.scratch/pidock-mvp/breakdown.md)已完成终审并发布为 `ready-for-agent`，尚未开始实现。
+- 本地规格/工单跟踪及 AGENTS.md 入口已确认并设置，见 [设置记录](setup-draft.md)。[19 项实现工单](https://github.com/Leonz3n/PiDock/issues/1)已完成终审并发布为 `ready-for-agent`，尚未开始实现。
 
 ## 待后续展开
 

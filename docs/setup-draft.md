@@ -3,7 +3,7 @@
 状态：用户已确认采用，设置已完成。
 
 - [Agent 入口](../AGENTS.md)
-- [本地工单约定](agents/issue-tracker.md)
+- [GitHub 工单约定](agents/issue-tracker.md)
 - [默认五种状态](agents/triage-labels.md)
 - [领域文档约定](agents/domain.md)
 - [首版规格](../.scratch/pidock-mvp/spec.md)

@@ -1,0 +1,43 @@
+--- a/src/bun/index.ts
++++ b/src/bun/index.ts
+@@ -74,6 +74,7 @@
+ 
+ window = new BrowserWindow({
+   title: "PiDock Visible Browser Probe",
++  transparent: true,
+   url: "views://control/index.html",
+   renderer: "native",
+   frame: { width: 1200, height: 840 },
+--- a/scripts/demo.sh
++++ b/scripts/demo.sh
+@@ -78,6 +78,7 @@
+ jq -n --arg httpStatus "$close_http" --argjson cdpReachable "$close_cdp_reachable" --argjson cleanupCount "$close_cleanup_count" \
+   '{action: "remove-task-a-primary", httpStatus: $httpStatus, cdpReachableAfter: $cdpReachable, cefViewsClosed: $cleanupCount, observedFailure: ($cdpReachable == false and $cleanupCount >= 4)}' \
+   >"$EVIDENCE/close-probe.json"
+-[[ "$close_cdp_reachable" == false ]] || { echo "Close failure probe unexpectedly left CDP available" >&2; exit 1; }
++[[ "$close_cdp_reachable" == true ]] || { echo "OSR close failed" >&2; exit 1; }
++bun src/recheck-cycles.ts
+ 
+ echo "Validation complete. Evidence: $ROOT/evidence"
+--- /dev/null
++++ b/src/recheck-cycles.ts
+@@ -0,0 +1,19 @@
++import { writeFile } from "node:fs/promises";
++const base="http://127.0.0.1:4319";
++const targets=async()=>await fetch("http://127.0.0.1:9222/json/list").then(r=>r.json()) as any[];
++const action=async(action:string)=>fetch(base+"/api/task-view",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({task:"A",action})});
++const wait=async(n:number)=>{for(let i=0;i<50;i++){const t=await targets();if(t.length===n)return t;await Bun.sleep(100);}throw Error("target count expected "+n);};
++const read=async(t:any)=>{const ws=new WebSocket(t.webSocketDebuggerUrl);await new Promise((res,rej)=>{ws.onopen=res;ws.onerror=rej;});const value=await new Promise<any>((res,rej)=>{const timer=setTimeout(()=>rej(Error("CDP timeout")),3000);ws.onmessage=e=>{clearTimeout(timer);res(JSON.parse(String(e.data)));};ws.send(JSON.stringify({id:1,method:"Runtime.evaluate",params:{expression:"JSON.stringify({local:localStorage.getItem('pidock-account'),cookie:document.cookie,title:document.title})",returnByValue:true}}));});ws.close();return JSON.parse(value.result.result.value);};
++const original=await wait(3);const stable=original.map(t=>t.id).sort();const rounds=[];
++for(let i=0;i<10;i++){
++ await action("reopen");const all=await wait(4);await Bun.sleep(150);
++ const a=all.find(t=>t.url.includes("task=A")&&t.url.includes("view=primary"));
++ const states=await Promise.all(all.map(async t=>({id:t.id,url:t.url,...await read(t)})));
++ if(!states.every(s=>s.local===(s.url.includes("task=A")?"task-a-popup":"task-b")))throw Error("storage mismatch");
++ await action("close");const remaining=await wait(3);
++ if(JSON.stringify(remaining.map(t=>t.id).sort())!==JSON.stringify(stable))throw Error("other targets changed");
++ rounds.push({round:i+1,closedTarget:a.id,remaining:remaining.map(t=>t.id),states});
++}
++await action("reopen");await wait(4);
++await writeFile("evidence/logs/osr-close-reopen-cycles.json",JSON.stringify({ok:true,rounds},null,2));
++console.log("OSR: 10 close/reopen cycles passed, other targets unchanged, storage preserved");

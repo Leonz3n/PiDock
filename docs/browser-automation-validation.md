@@ -1,10 +1,12 @@
 # 可见页面控制与桌面壳验证
 
-验证日期：2026-09-21。工单：[01 可见页面控制与桌面壳技术验证](../.scratch/pidock-mvp/issues/01-visible-browser.md)。
+验证日期：2026-09-21。工单：[01 可见页面控制与桌面壳技术验证](https://github.com/Leonz3n/PiDock/issues/2)。
 
 抛弃式原型、原始证据与可重复脚本**未合入产品基线**，保留在分支 `codex/01-visible-browser` 的 `prototypes/visible-browser/` 下。下文中的证据与脚本路径都指该分支；本文只把验证结论和受影响设计带回主线。
 
-## 决策
+> **2026-09-22 复核更正：** 原始失败已复现，但「Electrobun + Bun 不可行并自动回退 Electron + Bun」的推论撤回。相同版本的 OSR 配置已通过 10 次关闭/重开及原有自动化场景；分区初始化仍待可靠修复。后续工单暂停，架构待确认；详见[运行时复核](electrobun-runtime-recheck.md)。下文保留首次实验及其历史决策，不作为继续执行的选型指令。
+
+## 原始决策（已被上方复核收窄）
 
 **Electrobun 2.0.1 + Bun 主进程 + CEF 不通过 PiDock 的桌面集成关卡；后续产品实现回退到 Electron + Bun Host，并复用本原型的同一验收场景。**
 
