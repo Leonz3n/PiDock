@@ -1,0 +1,32 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "ui": "stream",
+  "globalEnv": ["CI"],
+  "globalDependencies": ["tsconfig.base.json"],
+  "tasks": {
+    "dev": {
+      "cache": false,
+      "persistent": true
+    },
+    "build": {
+      "dependsOn": ["^build"],
+      "inputs": ["src/**", "index.html", "vite.config.ts", "tsconfig.json", "package.json"],
+      "outputs": ["dist/**"],
+      "env": ["NODE_ENV"]
+    },
+    "typecheck": {
+      "dependsOn": ["^typecheck"],
+      "inputs": ["src/**", "vite.config.ts", "tsconfig.json", "package.json"],
+      "outputs": []
+    },
+    "test": {
+      "dependsOn": ["^build"],
+      "inputs": ["src/**", "vite.config.ts", "tsconfig.json", "package.json"],
+      "outputs": []
+    },
+    "lint": {
+      "inputs": ["src/**", "eslint.config.js", "package.json", "$TURBO_ROOT$/tsconfig.base.json"],
+      "outputs": []
+    }
+  }
+}
