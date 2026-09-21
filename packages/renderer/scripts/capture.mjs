@@ -2,55 +2,41 @@ import { mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 
-const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-const RENDERER = "http://127.0.0.1:4335";
-const PROTOTYPE = "http://127.0.0.1:4319/?variant=A";
-const OUT = fileURLToPath(new URL("../../../docs/evidence/renderer-baseline-2026-09-22/", import.meta.url));
+const CHROME = process.env.CHROME_PATH ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+const RENDERER = process.env.RENDERER_BASE ?? "http://127.0.0.1:4335";
+const PROTOTYPE = process.env.PROTOTYPE_BASE ?? "http://127.0.0.1:4319/?variant=A";
+const OUT = process.env.EVIDENCE_DIR ?? fileURLToPath(new URL("../../../docs/evidence/renderer-baseline-2026-09-22/", import.meta.url));
 
 const rendererPages = [
-  ["attention", "/attention"],
-  ["project", "/projects/atlas"],
-  ["task-main", "/projects/atlas/tasks/release?session=main"],
-  ["task-deploy", "/projects/atlas/tasks/release?session=deploy"],
-  ["task-failed", "/projects/atlas/tasks/release?session=failed"],
-  ["env", "/env"],
-  ["providers", "/providers"],
-  ["usage", "/usage"],
-  ["schedules", "/schedules"],
-  ["capabilities", "/capabilities"],
-  ["remote", "/remote"],
-  ["archive", "/archive"],
+  { name: "attention", path: "/attention" },
+  { name: "project", path: "/projects/atlas" },
+  { name: "task-main", path: "/projects/atlas/tasks/release?session=main" },
+  { name: "task-deploy", path: "/projects/atlas/tasks/release?session=deploy" },
+  { name: "task-failed", path: "/projects/atlas/tasks/release?session=failed" },
+  { name: "env", path: "/env" },
+  { name: "providers", path: "/providers" },
+  { name: "usage", path: "/usage" },
+  { name: "schedules", path: "/schedules" },
+  { name: "capabilities", path: "/capabilities" },
+  { name: "remote", path: "/remote" },
+  { name: "archive", path: "/archive" },
+  { name: "settings", path: "/settings" },
 ];
 
 const prototypePages = [
-  ["project", null],
-  ["task-main", '[data-action="task:0"]'],
-  ["env", 'button[data-action="view:env"]'],
-  ["providers", 'button[data-action="view:providers"]'],
-  ["usage", 'button[data-action="view:usage"]'],
-  ["schedules", 'button[data-action="view:schedules"]'],
-  ["capabilities", 'button[data-action="view:capabilities"]'],
-  ["remote", 'button[data-action="view:remote"]'],
-  ["archive", 'button[data-action="view:archive"]'],
+  { name: "project" },
+  { name: "task-main", click: '[data-action="task:0"]' },
+  { name: "env", click: 'button[data-action="view:env"]' },
+  { name: "providers", click: 'button[data-action="view:providers"]' },
+  { name: "usage", click: 'button[data-action="view:usage"]' },
+  { name: "schedules", click: 'button[data-action="view:schedules"]' },
+  { name: "capabilities", click: 'button[data-action="view:capabilities"]' },
+  { name: "remote", click: 'button[data-action="view:remote"]' },
+  { name: "archive", click: 'button[data-action="view:archive"]' },
 ];
 
-async function captureRoutes(browser, base, pages, dir) {
-  const target = `${OUT}${dir}/`;
-  await mkdir(target, { recursive: true });
-  const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
-  const page = await context.newPage();
-  const errors = [];
-  page.on("pageerror", (error) => errors.push(String(error)));
-  for (const [name, path] of pages) {
-    await page.goto(`${base}${path}`, { waitUntil: "networkidle" });
-    await page.screenshot({ path: `${target}${name}.png` });
-    console.log(`${dir}/${name}.png`);
-  }
-  await context.close();
-  return errors;
-}
-
-async function capture(browser, base, pages, dir) {
+/** One capture routine for both route-driven renderer pages and click-driven prototype pages. */
+async function captureScreens(browser, { base, dir, pages }) {
   const target = `${OUT}${dir}/`;
   await mkdir(target, { recursive: true });
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
@@ -58,9 +44,10 @@ async function capture(browser, base, pages, dir) {
   const errors = [];
   page.on("pageerror", (error) => errors.push(String(error)));
   await page.goto(base, { waitUntil: "networkidle" });
-  for (const [name, selector] of pages) {
-    if (selector) {
-      await page.click(selector);
+  for (const { name, path, click } of pages) {
+    if (path) await page.goto(`${base}${path}`, { waitUntil: "networkidle" });
+    if (click) {
+      await page.click(click);
       await page.waitForTimeout(180);
     }
     await page.screenshot({ path: `${target}${name}.png` });
@@ -72,8 +59,8 @@ async function capture(browser, base, pages, dir) {
 
 const browser = await chromium.launch({ executablePath: CHROME, headless: true });
 try {
-  const rendererErrors = await captureRoutes(browser, RENDERER, rendererPages, "renderer");
-  const prototypeErrors = await capture(browser, PROTOTYPE, prototypePages, "prototype");
+  const rendererErrors = await captureScreens(browser, { base: RENDERER, dir: "renderer", pages: rendererPages });
+  const prototypeErrors = await captureScreens(browser, { base: PROTOTYPE, dir: "prototype", pages: prototypePages });
   console.log(JSON.stringify({ rendererErrors, prototypeErrors }, null, 2));
 } finally {
   await browser.close();

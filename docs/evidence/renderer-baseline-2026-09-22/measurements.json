@@ -1,0 +1,34 @@
+{
+  "tokens": {
+    "accent": "#233c78",
+    "bg": "#f6f7f8",
+    "ink": "#252b30",
+    "radiusPanel": "10px",
+    "bodyBackground": "rgba(0, 0, 0, 0)",
+    "shellBackground": "rgb(246, 247, 248)",
+    "headingText": "需要处理",
+    "headingColor": "rgb(37, 43, 48)"
+  },
+  "usage": {
+    "total": 240,
+    "virtualized": "true",
+    "rendered": 17
+  },
+  "sessions": {
+    "total": 43,
+    "virtualized": "true",
+    "rendered": 11
+  },
+  "sessionTabs": 4,
+  "runHistory": {
+    "total": 47,
+    "virtualized": "true",
+    "rendered": 13
+  },
+  "settings": {
+    "heading": "本机设置",
+    "workspaceRoot": "~/PiDockTasks",
+    "showsConfigDir": true
+  },
+  "errors": []
+}

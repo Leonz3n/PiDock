@@ -1,0 +1,64 @@
+{
+  "checks": {
+    "log-overflows": {
+      "pass": true,
+      "detail": {
+        "scrollTop": 1883,
+        "scrollHeight": 2471,
+        "clientHeight": 588,
+        "distance": 0
+      }
+    },
+    "pinned-to-bottom-on-load": {
+      "pass": true,
+      "detail": {
+        "scrollTop": 1883,
+        "scrollHeight": 2471,
+        "clientHeight": 588,
+        "distance": 0
+      }
+    },
+    "detached-after-scroll-up": {
+      "pass": true,
+      "detail": {
+        "scrollTop": 0,
+        "scrollHeight": 2471,
+        "clientHeight": 588,
+        "distance": 1883
+      }
+    },
+    "stays-detached-while-scrolled-up": {
+      "pass": true,
+      "detail": {
+        "scrollTop": 0,
+        "scrollHeight": 2620,
+        "clientHeight": 428,
+        "distance": 2192
+      }
+    },
+    "repins-at-bottom": {
+      "pass": true,
+      "detail": {
+        "scrollTop": 2192,
+        "scrollHeight": 2620,
+        "clientHeight": 428,
+        "distance": 0
+      }
+    },
+    "follows-streaming-while-pinned": {
+      "pass": true,
+      "detail": {
+        "scrollTop": 2341,
+        "scrollHeight": 2769,
+        "clientHeight": 428,
+        "distance": 0
+      }
+    },
+    "pageErrors": [],
+    "no-page-errors": {
+      "pass": true,
+      "detail": []
+    }
+  },
+  "failed": false
+}
