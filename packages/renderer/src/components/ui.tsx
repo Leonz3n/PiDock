@@ -45,7 +45,7 @@ export function Panel({
   className?: string;
 }) {
   return (
-    <section className={`rounded-[10px] border border-line bg-paper ${className}`}>
+    <section className={`rounded-panel border border-line bg-paper ${className}`}>
       {title ? (
         <header className="flex items-center justify-between gap-3 border-b border-line px-4 py-2.5">
           <h2 className="text-sm font-medium text-ink">{title}</h2>
@@ -115,7 +115,7 @@ export function Modal({
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className="w-full max-w-xl rounded-[10px] border border-line bg-paper shadow-xl"
+        className="w-full max-w-xl rounded-panel border border-line bg-paper shadow-xl"
         onClick={(event) => event.stopPropagation()}
       >
         <header className="flex items-center justify-between border-b border-line px-5 py-3">

@@ -5,6 +5,7 @@ import type {
   Capability,
   CleanupItem,
   HostEvent,
+  LocalSettings,
   Project,
   RemoteDevice,
   Reference,
@@ -36,8 +37,6 @@ export type SendMessageResult = {
  * implementation with the real Host transport; nothing here may assume a transport.
  */
 export interface HostAdapter {
-  readonly kind: string;
-
   getWorkspace(): Promise<Workspace>;
   getProject(projectId: string): Promise<Project | undefined>;
   getTask(taskId: string): Promise<Task | undefined>;
@@ -75,6 +74,14 @@ export interface HostAdapter {
   getRemoteDevices(): Promise<RemoteDevice[]>;
   revokeRemoteDevice(deviceId: string): Promise<void>;
   previewCleanup(taskId: string): Promise<CleanupItem[]>;
+
+  getLocalSettings(): Promise<LocalSettings>;
+  setWorkspaceRoot(workspaceRoot: string): Promise<LocalSettings>;
+
+  /** Builds a file reference from the task workspace instead of a hardcoded label. */
+  createFileReference(taskId: string): Promise<Reference>;
+  /** Simulated terminal execution; the renderer only displays what comes back. */
+  runTerminalCommand(taskId: string, command: string): Promise<string[]>;
 
   subscribe(listener: (event: HostEvent) => void): () => void;
 }

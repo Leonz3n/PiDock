@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { Reference } from "../data/types";
+import { sessionKeyOf } from "../data/sessionKey";
 
 export type Draft = { text: string; references: Reference[] };
 
@@ -15,10 +16,8 @@ type DraftState = {
   clear: (taskId: string, sessionId: string) => void;
 };
 
-const keyOf = (taskId: string, sessionId: string) => `${taskId}:${sessionId}`;
-
 export const seedDrafts: Record<string, Draft> = {
-  "release:failed": {
+  [sessionKeyOf("release", "failed")]: {
     text: "",
     references: [{ id: "ref-build-log", kind: "file", label: "build.log:48", detail: "front-monorepo 构建日志" }],
   },
@@ -26,20 +25,20 @@ export const seedDrafts: Record<string, Draft> = {
 
 export const useDraftStore = create<DraftState>((set, get) => ({
   drafts: { ...seedDrafts },
-  getDraft: (taskId, sessionId) => get().drafts[keyOf(taskId, sessionId)] ?? emptyDraft,
+  getDraft: (taskId, sessionId) => get().drafts[sessionKeyOf(taskId, sessionId)] ?? emptyDraft,
   setText: (taskId, sessionId, text) => {
-    const key = keyOf(taskId, sessionId);
+    const key = sessionKeyOf(taskId, sessionId);
     const draft = get().drafts[key] ?? emptyDraft;
     set({ drafts: { ...get().drafts, [key]: { ...draft, text } } });
   },
   addReference: (taskId, sessionId, reference) => {
-    const key = keyOf(taskId, sessionId);
+    const key = sessionKeyOf(taskId, sessionId);
     const draft = get().drafts[key] ?? emptyDraft;
     if (draft.references.some((item) => item.id === reference.id)) return;
     set({ drafts: { ...get().drafts, [key]: { ...draft, references: [...draft.references, reference] } } });
   },
   removeReference: (taskId, sessionId, referenceId) => {
-    const key = keyOf(taskId, sessionId);
+    const key = sessionKeyOf(taskId, sessionId);
     const draft = get().drafts[key] ?? emptyDraft;
     set({
       drafts: {
@@ -49,9 +48,9 @@ export const useDraftStore = create<DraftState>((set, get) => ({
     });
   },
   restore: (taskId, sessionId, draft) => {
-    set({ drafts: { ...get().drafts, [keyOf(taskId, sessionId)]: draft } });
+    set({ drafts: { ...get().drafts, [sessionKeyOf(taskId, sessionId)]: draft } });
   },
   clear: (taskId, sessionId) => {
-    set({ drafts: { ...get().drafts, [keyOf(taskId, sessionId)]: emptyDraft } });
+    set({ drafts: { ...get().drafts, [sessionKeyOf(taskId, sessionId)]: emptyDraft } });
   },
 }));

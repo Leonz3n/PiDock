@@ -7,6 +7,7 @@ import { ProjectPage } from "../pages/ProjectPage";
 import { ProvidersPage } from "../pages/ProvidersPage";
 import { RemotePage } from "../pages/RemotePage";
 import { SchedulesPage } from "../pages/SchedulesPage";
+import { SettingsPage } from "../pages/SettingsPage";
 import { TaskPage } from "../pages/TaskPage";
 import { UsagePage } from "../pages/UsagePage";
 import { useHostStore } from "../stores/host";
@@ -22,6 +23,7 @@ const navItems: { label: string; route: Route }[] = [
   { label: "能力管理", route: { view: "capabilities" } },
   { label: "远程访问", route: { view: "remote" } },
   { label: "归档与清理", route: { view: "archive" } },
+  { label: "本机设置", route: { view: "settings" } },
 ];
 
 export function Shell() {
@@ -120,10 +122,6 @@ export function Shell() {
             ))}
           </div>
         </div>
-
-        <p className="rounded-md border border-line bg-paper px-2.5 py-2 text-[11px] leading-5 text-muted">
-          本机设置存储在 ~/.pi/dock/config.json；任务根目录单独配置，凭据不写入共享模板。
-        </p>
       </aside>
 
       <main className="flex min-h-0 min-w-0 flex-1 flex-col gap-4 px-6 py-5">
@@ -139,6 +137,7 @@ export function Shell() {
           {route.view === "capabilities" ? <CapabilitiesPage /> : null}
           {route.view === "remote" ? <RemotePage /> : null}
           {route.view === "archive" ? <ArchivePage /> : null}
+          {route.view === "settings" ? <SettingsPage /> : null}
           {route.view === "task" && !activeTask ? <p className="text-xs text-muted">任务不存在或已被移除。</p> : null}
         </div>
       </main>
@@ -162,6 +161,7 @@ function Breadcrumbs() {
     capabilities: "能力管理",
     remote: "远程访问",
     archive: "归档与清理",
+    settings: "本机设置",
   }[route.view];
   return (
     <div className="flex items-center justify-between gap-3 text-xs text-muted">

@@ -91,6 +91,23 @@ export type Service = {
 
 export type Repository = { id: string; name: string; baseBranch: string };
 
+/** Files surfaced by the task file panel; the preview travels with the mock data. */
+export type WorkspaceFile = {
+  path: string;
+  status: "modified" | "added" | "deleted";
+  preview?: { language: string; source: string };
+};
+
+/** Pages the built-in browser panel can show for a task. */
+export type BrowserPage = { id: string; title: string; url: string };
+
+/** Local application settings; never part of a project shared template. */
+export type LocalSettings = {
+  configDir: string;
+  configFile: string;
+  workspaceRoot: string;
+};
+
 export type Task = {
   id: string;
   projectId: string;
@@ -106,6 +123,9 @@ export type Task = {
   sessions: Session[];
   activeSessionId: string;
   unread: number;
+  files: WorkspaceFile[];
+  browserPages: BrowserPage[];
+  terminalSeed: string[];
   cleanupAvailableAt?: string;
 };
 

@@ -2,15 +2,16 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Badge, Button, EmptyState, Panel } from "../components/ui";
 import { CodeBlock } from "../components/CodeBlock";
 import { BrowserPanel, FilesPanel, RuntimePanel, TerminalPanel } from "../components/ToolPanels";
-import type { Approval, Message, Reference, Task, ToolPanelName } from "./taskTypes";
+import type { Approval, Message, Reference, Task } from "../data/types";
 import { approvalStatusLabel, runStateLabel } from "./runState";
+import { sessionKeyOf } from "../data/sessionKey";
 import { useDraftStore } from "../stores/drafts";
-import { useEventsStore, sessionKeyOf } from "../stores/events";
+import { useEventsStore } from "../stores/events";
 import { useHostStore } from "../stores/host";
-import { useUiStore } from "../stores/ui";
+import { TOOL_PANELS, useUiStore, type ToolPanel } from "../stores/ui";
 import { useNavigationStore } from "../stores/navigation";
 
-const EMPTY_PANELS: ToolPanelName[] = [];
+const EMPTY_PANELS: ToolPanel[] = [];
 const EMPTY_LIVE: Message[] = [];
 const EMPTY_DRAFT: { text: string; references: Reference[] } = { text: "", references: [] };
 
@@ -34,7 +35,7 @@ export function TaskPage({ task, sessionId }: { task: Task; sessionId: string })
             {task.archived ? <Badge tone="warn">已归档</Badge> : null}
           </div>
           <div className="flex items-center gap-2">
-            {(["runtime", "browser", "files", "terminal"] as ToolPanelName[]).map((panel) => (
+            {TOOL_PANELS.map((panel) => (
               <Button
                 key={panel}
                 size="sm"
@@ -79,9 +80,9 @@ export function TaskPage({ task, sessionId }: { task: Task; sessionId: string })
                   }}
                 />
               ) : null}
-              {panel === "browser" ? <BrowserPanel /> : null}
-              {panel === "files" ? <FilesPanel /> : null}
-              {panel === "terminal" ? <TerminalPanel /> : null}
+              {panel === "browser" ? <BrowserPanel pages={task.browserPages} /> : null}
+              {panel === "files" ? <FilesPanel files={task.files} /> : null}
+              {panel === "terminal" ? <TerminalPanel taskId={task.id} seed={task.terminalSeed} /> : null}
             </Panel>
           ))}
         </aside>
@@ -90,7 +91,7 @@ export function TaskPage({ task, sessionId }: { task: Task; sessionId: string })
   );
 }
 
-function panelName(panel: ToolPanelName) {
+function panelName(panel: ToolPanel) {
   return { runtime: "运行", browser: "浏览器", files: "文件", terminal: "终端" }[panel];
 }
 
@@ -299,7 +300,7 @@ function Conversation({ taskId, sessionId, archived }: { taskId: string; session
       ref={refs}
       role="log"
       aria-label="会话消息"
-      className="min-h-0 flex-1 overflow-auto rounded-[10px] border border-line bg-paper px-4 py-3"
+      className="min-h-0 flex-1 overflow-auto rounded-panel border border-line bg-paper px-4 py-3"
       onScroll={(event) => {
         const element = event.currentTarget;
         pinned.current = element.scrollHeight - element.scrollTop - element.clientHeight < 48;
@@ -336,12 +337,13 @@ function Conversation({ taskId, sessionId, archived }: { taskId: string; session
 
 function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
   const session = useHostStore((state) => state.session(task.id, sessionId));
-  const draft = useDraftStore((state) => state.drafts[`${task.id}:${sessionId}`] ?? EMPTY_DRAFT);
+  const draft = useDraftStore((state) => state.drafts[sessionKeyOf(task.id, sessionId)] ?? EMPTY_DRAFT);
   const setText = useDraftStore((state) => state.setText);
   const addReference = useDraftStore((state) => state.addReference);
   const removeReference = useDraftStore((state) => state.removeReference);
   const clear = useDraftStore((state) => state.clear);
   const sendMessage = useHostStore((state) => state.sendMessage);
+  const createFileReference = useHostStore((state) => state.createFileReference);
   const pushToast = useUiStore((state) => state.pushToast);
   const approvals = useHostStore((state) => state.approvals);
   const [sending, setSending] = useState(false);
@@ -353,7 +355,7 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
     <div className="flex flex-col gap-2">
       {approval ? <ApprovalCard approval={approval} /> : null}
       <form
-        className="rounded-[10px] border border-line bg-paper px-3 py-2.5"
+        className="rounded-panel border border-line bg-paper px-3 py-2.5"
         onSubmit={async (event) => {
           event.preventDefault();
           const text = draft.text.trim();
@@ -397,14 +399,7 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
             <Button
               size="sm"
               variant="ghost"
-              onClick={() =>
-                addReference(task.id, sessionId, {
-                  id: `ref-${Date.now()}`,
-                  kind: "file",
-                  label: "front-monorepo/src/checkout/summary.tsx",
-                  detail: "当前任务工作区文件",
-                })
-              }
+              onClick={async () => addReference(task.id, sessionId, await createFileReference(task.id))}
             >
               + 引用文件
             </Button>

@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { Badge, Button, EmptyState, Panel } from "./ui";
 import { CodeBlock } from "./CodeBlock";
-import type { Service, Task } from "../data/types";
+import { ConfigTable } from "./ConfigTable";
+import type { BrowserPage, Service, Task, WorkspaceFile } from "../data/types";
+import { useHostStore } from "../stores/host";
 
 export function RuntimePanel({
   task,
@@ -37,24 +39,7 @@ export function RuntimePanel({
       </ul>
       {service ? (
         <Panel title={`生效配置 · ${service.name}`}>
-          <table className="w-full text-xs">
-            <thead className="text-muted">
-              <tr className="text-left">
-                <th className="pb-1.5">KEY</th>
-                <th className="pb-1.5">VALUE</th>
-                <th className="pb-1.5">来源</th>
-              </tr>
-            </thead>
-            <tbody>
-              {service.resolved.map((row) => (
-                <tr key={row.key} className="border-t border-line">
-                  <td className="py-1.5 pr-2 font-mono text-[11px]">{row.key}</td>
-                  <td className="py-1.5 pr-2">{row.secret ? "••••••••" : row.value}</td>
-                  <td className="py-1.5 text-muted">{row.source}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <ConfigTable rows={service.resolved} />
           <p className="mt-2 text-[11px] text-muted">
             敏感值遮蔽；未保存草稿不参与解析。共享模板版本 {service.templateVersion}。
           </p>
@@ -64,12 +49,8 @@ export function RuntimePanel({
   );
 }
 
-export function BrowserPanel() {
+export function BrowserPanel({ pages }: { pages: BrowserPage[] }) {
   const [takenOver, setTakenOver] = useState(false);
-  const [pages] = useState([
-    { id: "page-1", title: "结账页 · staging", url: "https://staging.atlas.example.com/checkout" },
-    { id: "page-2", title: "对账单详情", url: "https://staging.atlas.example.com/invoices/9f2c" },
-  ]);
   const [marks, setMarks] = useState<{ id: string; label: string }[]>([]);
   return (
     <div className="flex flex-col gap-3">
@@ -81,7 +62,7 @@ export function BrowserPanel() {
           <li key={page.id} className="rounded-md border border-line px-2.5 py-2 text-xs">
             <div className="flex items-center justify-between gap-2">
               <span className="text-ink">{page.title}</span>
-              <Badge>{page.id === "page-1" ? "当前页面" : "标签页"}</Badge>
+              <Badge>{page.id === pages[0]?.id ? "当前页面" : "标签页"}</Badge>
             </div>
             <p className="mt-1 font-mono text-[11px] text-muted">{page.url}</p>
           </li>
@@ -114,39 +95,29 @@ export function BrowserPanel() {
   );
 }
 
-export function FilesPanel() {
-  const files = [
-    { path: "front-monorepo/src/checkout/summary.tsx", status: "modified" },
-    { path: "front-monorepo/src/checkout/api.ts", status: "modified" },
-    { path: "invoice-service/src/invoice/detail.py", status: "added" },
-  ];
+export function FilesPanel({ files }: { files: WorkspaceFile[] }) {
+  const preview = files.find((file) => file.preview)?.preview;
+  const previewPath = files.find((file) => file.preview)?.path;
   return (
     <div className="flex flex-col gap-3">
       <ul className="flex flex-col gap-1 text-xs">
         {files.map((file) => (
           <li key={file.path} className="flex items-center justify-between gap-2 rounded border border-line px-2.5 py-1.5">
             <span className="font-mono text-[11px] text-ink">{file.path}</span>
-            <Badge tone={file.status === "added" ? "accent" : "warn"}>{file.status === "added" ? "新增" : "已修改"}</Badge>
+            <Badge tone={file.status === "added" ? "accent" : "warn"}>
+              {file.status === "added" ? "新增" : file.status === "deleted" ? "已删除" : "已修改"}
+            </Badge>
           </li>
         ))}
       </ul>
-      <CodeBlock
-        label="front-monorepo/src/checkout/summary.tsx"
-        language="tsx"
-        code={`export function CheckoutSummary({ total }: { total: number }) {
-  return <strong data-testid="checkout-total">合计 {total.toFixed(2)}</strong>;
-}`}
-      />
+      {preview ? <CodeBlock label={previewPath} language={preview.language} code={preview.source} /> : null}
     </div>
   );
 }
 
-export function TerminalPanel() {
-  const [lines, setLines] = useState([
-    "$ pnpm --filter saas-web dev",
-    "VITE v7.3.6  ready in 412 ms",
-    "➜  Local:   http://127.0.0.1:5173/",
-  ]);
+export function TerminalPanel({ taskId, seed }: { taskId: string; seed: string[] }) {
+  const runTerminalCommand = useHostStore((state) => state.runTerminalCommand);
+  const [lines, setLines] = useState<string[]>(seed);
   const [value, setValue] = useState("");
   return (
     <div className="flex flex-col gap-2">
@@ -158,11 +129,13 @@ export function TerminalPanel() {
       </div>
       <form
         className="flex gap-2"
-        onSubmit={(event) => {
+        onSubmit={async (event) => {
           event.preventDefault();
-          if (!value.trim()) return;
-          setLines((items) => [...items, `$ ${value}`, "命令已加入模拟队列"]);
+          const command = value.trim();
+          if (!command) return;
           setValue("");
+          const output = await runTerminalCommand(taskId, command);
+          setLines((items) => [...items, ...output]);
         }}
       >
         <input

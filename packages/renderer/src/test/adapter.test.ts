@@ -42,13 +42,14 @@ describe("memory Host adapter", () => {
 
   it("blocks scheduling and immediate runs for archived tasks until restored", async () => {
     const host = createMemoryHost();
+    const before = (await host.getTask("release"))?.sessions.length ?? 0;
     await host.archiveTask("release");
     await expect(host.runScheduleNow("schedule-1")).rejects.toThrow("已归档任务不能通过「立即运行」绕过恢复");
     await host.restoreTask("release");
     const run = await host.runScheduleNow("schedule-1");
     expect(run.result).toBe("completed");
     const task = await host.getTask("release");
-    expect(task?.sessions.length).toBe(5);
+    expect(task?.sessions.length).toBe(before + 1);
   });
 
   it("keeps cross-project attention items pointing at their task and session", async () => {
@@ -88,5 +89,35 @@ describe("memory Host adapter", () => {
     expect(first.sessionId).not.toBe(second.sessionId);
     const task = await host.getTask("release");
     expect(task?.sessions.filter((session) => session.id === first.sessionId)).toHaveLength(1);
+  });
+
+  it("seeds a dense session history and execution log for the virtualized scenarios", async () => {
+    const host = createMemoryHost();
+    const task = await host.getTask("release");
+    expect(task?.sessions.length).toBeGreaterThan(40);
+    const workspace = await host.getWorkspace();
+    expect(workspace.scheduledRuns.length).toBeGreaterThan(30);
+    expect(workspace.scheduledRuns.some((run) => run.result === "failed")).toBe(true);
+  });
+
+  it("stores the local workspace root as a machine setting", async () => {
+    const host = createMemoryHost();
+    const initial = await host.getLocalSettings();
+    expect(initial.configFile).toBe("~/.pi/dock/config.json");
+    const updated = await host.setWorkspaceRoot("  /tmp/pidock-tasks  ");
+    expect(updated.workspaceRoot).toBe("/tmp/pidock-tasks");
+    expect((await host.getLocalSettings()).workspaceRoot).toBe("/tmp/pidock-tasks");
+    await expect(host.setWorkspaceRoot("   ")).rejects.toThrow("请填写完整的任务根目录");
+  });
+
+  it("exposes task files and simulated terminal execution behind the adapter", async () => {
+    const host = createMemoryHost();
+    const task = await host.getTask("release");
+    expect(task?.files.length).toBeGreaterThan(0);
+    expect(task?.browserPages.length).toBeGreaterThan(0);
+    const reference = await host.createFileReference("release");
+    expect(reference.label).toBe(task?.files[0]?.path);
+    const output = await host.runTerminalCommand("release", "pnpm test");
+    expect(output.join("\n")).toContain("pnpm test");
   });
 });
