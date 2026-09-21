@@ -1,0 +1,16 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg: #f6f7f8;
+  --color-paper: #ffffff;
+  --color-ink: #252b30;
+  --color-muted: #858d94;
+  --color-line: #e9ecee;
+  --color-accent: #233c78;
+  --color-soft: #eaedf3;
+  --color-sidebar: #f4f5f5;
+  --color-orange: #b88032;
+
+  --font-sans: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
+  --radius-panel: 10px;
+}
