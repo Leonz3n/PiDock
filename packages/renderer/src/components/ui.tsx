@@ -1,0 +1,167 @@
+import type { ButtonHTMLAttributes, ReactNode } from "react";
+
+type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
+  variant?: "default" | "primary" | "ghost";
+  size?: "md" | "sm";
+};
+
+export function Button({ variant = "default", size = "md", className = "", ...rest }: ButtonProps) {
+  const classes = [
+    "inline-flex items-center gap-1.5 rounded-md border transition-colors",
+    size === "sm" ? "px-2.5 py-1 text-xs" : "px-3.5 py-1.5 text-sm",
+    variant === "primary"
+      ? "border-accent bg-accent text-white hover:bg-accent/90"
+      : variant === "ghost"
+        ? "border-transparent text-muted hover:bg-soft hover:text-ink"
+        : "border-line bg-paper text-ink hover:border-accent/40 hover:bg-soft",
+    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
+    className,
+  ].join(" ");
+  return <button type="button" className={classes} {...rest} />;
+}
+
+export function Badge({ children, tone = "neutral" }: { children: ReactNode; tone?: "neutral" | "accent" | "warn" }) {
+  const tones = {
+    neutral: "border-line bg-soft text-muted",
+    accent: "border-accent/25 bg-accent/10 text-accent",
+    warn: "border-orange/35 bg-orange/10 text-orange",
+  } as const;
+  return (
+    <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] leading-4 ${tones[tone]}`}>
+      {children}
+    </span>
+  );
+}
+
+export function Panel({
+  title,
+  actions,
+  children,
+  className = "",
+}: {
+  title?: string;
+  actions?: ReactNode;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <section className={`rounded-[10px] border border-line bg-paper ${className}`}>
+      {title ? (
+        <header className="flex items-center justify-between gap-3 border-b border-line px-4 py-2.5">
+          <h2 className="text-sm font-medium text-ink">{title}</h2>
+          {actions}
+        </header>
+      ) : null}
+      <div className="px-4 py-3.5">{children}</div>
+    </section>
+  );
+}
+
+export function Field({ label, children, hint }: { label: string; children: ReactNode; hint?: string }) {
+  return (
+    <label className="flex flex-col gap-1.5 text-xs text-muted">
+      <span>{label}</span>
+      {children}
+      {hint ? <span className="text-[11px] text-muted/80">{hint}</span> : null}
+    </label>
+  );
+}
+
+export function Segmented<T extends string>({
+  options,
+  value,
+  onChange,
+  ariaLabel,
+}: {
+  options: { value: T; label: string }[];
+  value: T;
+  onChange: (value: T) => void;
+  ariaLabel: string;
+}) {
+  return (
+    <div role="tablist" aria-label={ariaLabel} className="inline-flex rounded-md border border-line bg-soft p-0.5">
+      {options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          role="tab"
+          aria-selected={value === option.value}
+          onClick={() => onChange(option.value)}
+          className={`rounded px-2.5 py-1 text-xs ${
+            value === option.value ? "bg-paper text-ink shadow-sm" : "text-muted hover:text-ink"
+          }`}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+export function Modal({
+  title,
+  children,
+  footer,
+  onClose,
+}: {
+  title: string;
+  children: ReactNode;
+  footer?: ReactNode;
+  onClose: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-30 flex items-center justify-center bg-ink/25 p-4" role="presentation" onClick={onClose}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        className="w-full max-w-xl rounded-[10px] border border-line bg-paper shadow-xl"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <header className="flex items-center justify-between border-b border-line px-5 py-3">
+          <h2 className="text-sm font-medium">{title}</h2>
+          <Button variant="ghost" size="sm" onClick={onClose} aria-label="关闭">
+            关闭
+          </Button>
+        </header>
+        <div className="max-h-[70vh] overflow-auto px-5 py-4 text-sm">{children}</div>
+        {footer ? <footer className="flex justify-end gap-2 border-t border-line px-5 py-3">{footer}</footer> : null}
+      </div>
+    </div>
+  );
+}
+
+export function ToastStack({ toasts, onDismiss }: { toasts: { id: string; text: string }[]; onDismiss: (id: string) => void }) {
+  if (toasts.length === 0) return null;
+  return (
+    <div className="fixed bottom-5 left-1/2 z-40 flex -translate-x-1/2 flex-col gap-2" role="status">
+      {toasts.map((toast) => (
+        <button
+          key={toast.id}
+          type="button"
+          onClick={() => onDismiss(toast.id)}
+          className="rounded-md border border-line bg-paper px-4 py-2 text-xs text-ink shadow-lg"
+        >
+          {toast.text}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+export function EmptyState({ children }: { children: ReactNode }) {
+  return <p className="rounded-md border border-dashed border-line px-4 py-6 text-center text-xs text-muted">{children}</p>;
+}
+
+export function KeyValue({ rows }: { rows: [string, ReactNode][] }) {
+  return (
+    <dl className="grid grid-cols-[minmax(90px,auto)_1fr] gap-x-4 gap-y-2 text-xs">
+      {rows.map(([key, value]) => (
+        <div key={key} className="contents">
+          <dt className="text-muted">{key}</dt>
+          <dd className="text-ink">{value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
