@@ -44,7 +44,7 @@ export function Shell() {
       : undefined;
 
   return (
-    <div className="flex min-h-screen bg-bg text-ink">
+    <div className="flex h-screen overflow-hidden bg-bg text-ink">
       <aside className="flex w-[248px] shrink-0 flex-col gap-4 border-r border-line bg-sidebar px-3 py-4">
         <div className="flex flex-col items-center gap-1">
           <span aria-hidden className="grid h-9 w-9 place-items-center rounded-full border border-line bg-paper text-base text-accent">
@@ -126,7 +126,7 @@ export function Shell() {
 
       <main className="flex min-h-0 min-w-0 flex-1 flex-col gap-4 px-6 py-5">
         <Breadcrumbs />
-        <div className="flex min-h-0 flex-1 flex-col">
+        <div className="flex min-h-0 flex-1 flex-col overflow-auto">
           {route.view === "task" && activeTask ? <TaskPage task={activeTask} sessionId={sessionId ?? activeTask.activeSessionId} /> : null}
           {route.view === "attention" ? <AttentionPage /> : null}
           {route.view === "project" ? <ProjectPage projectId={route.projectId} /> : null}

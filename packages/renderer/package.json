@@ -10,7 +10,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint . --max-warnings 0",
-    "evidence": "node scripts/capture.mjs"
+    "evidence": "node scripts/capture.mjs",
+    "measure": "node scripts/measure-baseline.mjs",
+    "verify:anchor": "node scripts/verify-anchor.mjs"
   },
   "dependencies": {
     "@tanstack/react-virtual": "3.14.13",
