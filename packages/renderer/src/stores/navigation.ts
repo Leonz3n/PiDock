@@ -10,9 +10,10 @@ export type Route =
   | { view: "schedules" }
   | { view: "capabilities" }
   | { view: "remote" }
-  | { view: "archive" };
+  | { view: "archive" }
+  | { view: "settings" };
 
-const simpleViews = ["env", "providers", "usage", "schedules", "capabilities", "remote", "archive", "attention"] as const;
+const simpleViews = ["env", "providers", "usage", "schedules", "capabilities", "remote", "archive", "attention", "settings"] as const;
 
 type SimpleView = (typeof simpleViews)[number];
 
@@ -41,10 +42,9 @@ type NavigationState = {
   route: Route;
   syncFromLocation: () => void;
   navigate: (route: Route, options?: { replace?: boolean }) => void;
-  openTask: (projectId: string, taskId: string, sessionId?: string) => void;
 };
 
-export const useNavigationStore = create<NavigationState>((set, get) => ({
+export const useNavigationStore = create<NavigationState>((set) => ({
   route:
     typeof window === "undefined"
       ? { view: "attention" }
@@ -60,10 +60,5 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
       else window.history.pushState({}, "", path);
     }
     set({ route });
-  },
-  openTask: (projectId, taskId, sessionId) => {
-    const current = get().route;
-    const fallback = current.view === "task" ? current.sessionId : "";
-    get().navigate({ view: "task", projectId, taskId, sessionId: sessionId ?? fallback });
   },
 }));

@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { Badge, Button, EmptyState, Field, Modal, Segmented } from "./ui";
 import { VirtualList } from "./VirtualList";
+import { runStateLabel } from "../pages/runState";
 import { useHostStore } from "../stores/host";
 import { useNavigationStore } from "../stores/navigation";
 import { useUiStore } from "../stores/ui";
@@ -13,7 +14,6 @@ export function Modals() {
   const tasks = workspace?.tasks ?? [];
   const [sessionFilter, setSessionFilter] = useState<"active" | "archived">("active");
   const [sessionSearch, setSessionSearch] = useState("");
-  const [draftValue, setDraftValue] = useState("");
   const [cleanup, setCleanup] = useState<{ resource: string; action: string; detail: string }[] | null>(null);
   const [cleanupError, setCleanupError] = useState<string | null>(null);
 
@@ -93,7 +93,7 @@ export function Modals() {
                   </small>
                 </button>
                 <div className="flex items-center gap-1.5">
-                  <Badge>{session.runState === "idle" ? "空闲" : session.runState}</Badge>
+                  <Badge>{runStateLabel(session.runState)}</Badge>
                   <Button
                     size="sm"
                     onClick={async () => {
@@ -120,68 +120,11 @@ export function Modals() {
   }
 
   if (modal.type === "rename-task" && task) {
-    return (
-      <Modal
-        title="重命名任务"
-        onClose={closeModal}
-        footer={
-          <Button
-            size="sm"
-            variant="primary"
-            onClick={async () => {
-              const value = draftValue || modal.value;
-              if (!value.trim()) return pushToast("请输入名称");
-              await useHostStore.getState().renameTask(task.id, value.trim());
-              closeModal();
-            }}
-          >
-            保存
-          </Button>
-        }
-      >
-        <Field label="名称">
-          <input
-            aria-label="任务名称"
-            defaultValue={modal.value}
-            onChange={(event) => setDraftValue(event.target.value)}
-            className="rounded-md border border-line px-2 py-1.5 text-sm"
-          />
-        </Field>
-        <p className="mt-3 text-[11px] text-muted">重命名不影响任务工作区目录、分支与工作副本。</p>
-      </Modal>
-    );
+    return <RenameTaskModal taskId={task.id} initialValue={modal.value} onClose={closeModal} />;
   }
 
   if (modal.type === "rename-session" && task) {
-    return (
-      <Modal
-        title="重命名会话"
-        onClose={closeModal}
-        footer={
-          <Button
-            size="sm"
-            variant="primary"
-            onClick={async () => {
-              const value = draftValue || modal.value;
-              if (!value.trim()) return pushToast("请输入名称");
-              await useHostStore.getState().renameSession(task.id, modal.sessionId, value.trim());
-              closeModal();
-            }}
-          >
-            保存
-          </Button>
-        }
-      >
-        <Field label="名称">
-          <input
-            aria-label="会话名称"
-            defaultValue={modal.value}
-            onChange={(event) => setDraftValue(event.target.value)}
-            className="rounded-md border border-line px-2 py-1.5 text-sm"
-          />
-        </Field>
-      </Modal>
-    );
+    return <RenameSessionModal taskId={task.id} sessionId={modal.sessionId} initialValue={modal.value} onClose={closeModal} />;
   }
 
   if (modal.type === "archive-task" && task) {
@@ -277,9 +220,7 @@ export function Modals() {
           <Button
             size="sm"
             variant="primary"
-            onClick={async () => {
-              const device = await useHostStore.getState().adapter.getRemoteDevices();
-              void device;
+            onClick={() => {
               closeModal();
               pushToast("已生成一次性配对凭据（模拟）；成功配对后换取独立设备凭据");
             }}
@@ -358,4 +299,85 @@ export function Modals() {
   }
 
   return null;
+}
+
+function RenameTaskModal({ taskId, initialValue, onClose }: { taskId: string; initialValue: string; onClose: () => void }) {
+  const renameTask = useHostStore((state) => state.renameTask);
+  const pushToast = useUiStore((state) => state.pushToast);
+  const [value, setValue] = useState(initialValue);
+  return (
+    <Modal
+      title="重命名任务"
+      onClose={onClose}
+      footer={
+        <Button
+          size="sm"
+          variant="primary"
+          onClick={async () => {
+            const next = value.trim();
+            if (!next) return pushToast("请输入名称");
+            await renameTask(taskId, next);
+            onClose();
+          }}
+        >
+          保存
+        </Button>
+      }
+    >
+      <Field label="名称">
+        <input
+          aria-label="任务名称"
+          value={value}
+          onChange={(event) => setValue(event.target.value)}
+          className="rounded-md border border-line px-2 py-1.5 text-sm"
+        />
+      </Field>
+      <p className="mt-3 text-[11px] text-muted">重命名不影响任务工作区目录、分支与工作副本。</p>
+    </Modal>
+  );
+}
+
+function RenameSessionModal({
+  taskId,
+  sessionId,
+  initialValue,
+  onClose,
+}: {
+  taskId: string;
+  sessionId: string;
+  initialValue: string;
+  onClose: () => void;
+}) {
+  const renameSession = useHostStore((state) => state.renameSession);
+  const pushToast = useUiStore((state) => state.pushToast);
+  const [value, setValue] = useState(initialValue);
+  return (
+    <Modal
+      title="重命名会话"
+      onClose={onClose}
+      footer={
+        <Button
+          size="sm"
+          variant="primary"
+          onClick={async () => {
+            const next = value.trim();
+            if (!next) return pushToast("请输入名称");
+            await renameSession(taskId, sessionId, next);
+            onClose();
+          }}
+        >
+          保存
+        </Button>
+      }
+    >
+      <Field label="名称">
+        <input
+          aria-label="会话名称"
+          value={value}
+          onChange={(event) => setValue(event.target.value)}
+          className="rounded-md border border-line px-2 py-1.5 text-sm"
+        />
+      </Field>
+    </Modal>
+  );
 }

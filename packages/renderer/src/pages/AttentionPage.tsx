@@ -1,14 +1,15 @@
 import { Badge, Button, EmptyState, Panel, Segmented } from "../components/ui";
+import { attentionKindLabel } from "./runState";
 import { useHostStore } from "../stores/host";
 import { useNavigationStore } from "../stores/navigation";
 import { useUiStore } from "../stores/ui";
 
 const filters = [
   { value: "all", label: "全部" },
-  { value: "approval", label: "待确认" },
-  { value: "failed", label: "失败" },
-  { value: "expired", label: "过期" },
-  { value: "completed-unread", label: "完成未读" },
+  { value: "approval", label: attentionKindLabel("approval") },
+  { value: "failed", label: attentionKindLabel("failed") },
+  { value: "expired", label: attentionKindLabel("expired") },
+  { value: "completed-unread", label: attentionKindLabel("completed-unread") },
 ] as const;
 
 export function AttentionPage() {
@@ -40,7 +41,7 @@ export function AttentionPage() {
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <div className="flex items-center gap-2">
-                      <Badge tone={item.kind === "approval" ? "warn" : item.kind === "failed" ? "warn" : "accent"}>{kindLabel(item.kind)}</Badge>
+                      <Badge tone={item.kind === "approval" ? "warn" : item.kind === "failed" ? "warn" : "accent"}>{attentionKindLabel(item.kind)}</Badge>
                       <span className="text-sm text-ink">{item.label}</span>
                     </div>
                     <p className="mt-1 text-xs text-muted">{item.detail}</p>
@@ -59,8 +60,4 @@ export function AttentionPage() {
       )}
     </div>
   );
-}
-
-function kindLabel(kind: string) {
-  return { approval: "待确认", failed: "失败", expired: "过期", "completed-unread": "完成未读" }[kind] ?? kind;
 }

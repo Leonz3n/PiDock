@@ -83,3 +83,49 @@ describe("design tokens carry no green", () => {
     expect(css).not.toMatch(/\b(green|lime|emerald|jade|mint|teal|chartreuse)\b/i);
   });
 });
+
+/** TSX and store sources shipped to the renderer, excluding tests and fixtures. */
+const componentSources = import.meta.glob(
+  ["../components/**/*.{ts,tsx}", "../pages/**/*.{ts,tsx}", "../stores/**/*.ts", "../data/**/*.ts", "../*.tsx"],
+  { query: "?raw", import: "default", eager: true },
+) as Record<string, string>;
+
+/** Tailwind palette utilities (text-green-500, bg-green-50 …). */
+const GREEN_UTILITY = /\b(?:text|bg|border|from|via|to|ring|outline|divide|fill|stroke|accent|caret|decoration|placeholder|shadow)-green-\d{2,3}\b/;
+const GREEN_KEYWORD = /\b(green|lime|emerald|jade|mint|chartreuse)\b/i;
+
+function hexOffenders(source: string): string[] {
+  return [...source.matchAll(/#[0-9a-fA-F]{6}\b|#[0-9a-fA-F]{3}\b/g)]
+    .map((match) => match[0])
+    .filter((hex) => isChromaticGreen(hex));
+}
+
+describe("component sources carry no green either", () => {
+  it("flags a Tailwind green utility (self-check)", () => {
+    expect(GREEN_UTILITY.test('className="text-green-500"')).toBe(true);
+    expect(GREEN_UTILITY.test('className="bg-green-50 border-green-200"')).toBe(true);
+    expect(GREEN_UTILITY.test('className="text-accent bg-soft"')).toBe(false);
+  });
+
+  it("collected the renderer sources to scan", () => {
+    expect(Object.keys(componentSources).length).toBeGreaterThan(10);
+    expect(Object.keys(componentSources).some((file) => file.endsWith("TaskPage.tsx"))).toBe(true);
+  });
+
+  it("uses no Tailwind green utility in components", () => {
+    const offenders = Object.entries(componentSources).filter(([, source]) => GREEN_UTILITY.test(source));
+    expect(offenders.map(([file]) => file)).toEqual([]);
+  });
+
+  it("uses no green keyword in component sources", () => {
+    const offenders = Object.entries(componentSources).filter(([, source]) => GREEN_KEYWORD.test(source));
+    expect(offenders.map(([file]) => file)).toEqual([]);
+  });
+
+  it("uses no chromatic green hex literal in component sources", () => {
+    const offenders = Object.entries(componentSources)
+      .map(([file, source]) => ({ file, greens: hexOffenders(source) }))
+      .filter((entry) => entry.greens.length > 0);
+    expect(offenders).toEqual([]);
+  });
+});

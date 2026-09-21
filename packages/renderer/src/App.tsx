@@ -17,7 +17,7 @@ export function App() {
   useEffect(() => {
     syncFromLocation();
     void refresh();
-    const unsubscribe = attach(useHostStore.getState().adapter);
+    const unsubscribe = attach();
     const onPopState = () => syncFromLocation();
     window.addEventListener("popstate", onPopState);
     return () => {

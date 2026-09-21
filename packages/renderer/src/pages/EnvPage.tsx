@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { Badge, Button, Panel } from "../components/ui";
+import { ConfigTable } from "../components/ConfigTable";
 import { useHostStore } from "../stores/host";
 import { useUiStore } from "../stores/ui";
 
@@ -64,24 +65,7 @@ export function EnvPage() {
               </div>
             }
           >
-            <table className="w-full text-xs">
-              <thead className="text-left text-muted">
-                <tr>
-                  <th className="pb-1.5">KEY</th>
-                  <th className="pb-1.5">VALUE</th>
-                  <th className="pb-1.5">来源</th>
-                </tr>
-              </thead>
-              <tbody>
-                {environment.variables.map((variable) => (
-                  <tr key={variable.key} className="border-t border-line">
-                    <td className="py-1.5 pr-2 font-mono text-[11px]">{variable.key}</td>
-                    <td className="py-1.5 pr-2">{variable.secret ? "••••••••" : variable.value}</td>
-                    <td className="py-1.5 text-muted">{variable.source}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <ConfigTable rows={environment.variables} />
             <div className="mt-3 text-[11px] text-muted">
               <p>与另一个环境的差异需要确认后写入新版本：{otherEnvironments.map((item) => item.name).join("、") || "无同项目环境"}。</p>
               <p className="mt-1">Agent 修改共享模板前必须展示差异并等待确认；任务覆盖只作用于当前任务。</p>
@@ -116,24 +100,9 @@ export function EnvPage() {
               </select>
             </div>
             {service ? (
-              <table className="mt-3 w-full text-xs">
-                <thead className="text-left text-muted">
-                  <tr>
-                    <th className="pb-1.5">KEY</th>
-                    <th className="pb-1.5">最终值</th>
-                    <th className="pb-1.5">来源</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {service.resolved.map((row) => (
-                    <tr key={row.key} className="border-t border-line">
-                      <td className="py-1.5 pr-2 font-mono text-[11px]">{row.key}</td>
-                      <td className="py-1.5 pr-2">{row.secret ? "••••••••" : row.value}</td>
-                      <td className="py-1.5 text-muted">{row.source}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <div className="mt-3">
+                <ConfigTable rows={service.resolved} valueHeader="最终值" />
+              </div>
             ) : null}
             <p className="mt-2 text-[11px] text-muted">
               只读视图：敏感值遮蔽，未保存草稿不参与；应用解析与业务框架内部配置优先级不混用。

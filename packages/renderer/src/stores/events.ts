@@ -1,26 +1,22 @@
 import { create } from "zustand";
-import type { HostAdapter } from "../data/hostAdapter";
 import type { HostEvent, Message, RunRecord } from "../data/types";
+import { sessionKeyOf } from "../data/sessionKey";
 import { useHostStore } from "./host";
 import { useUiStore } from "./ui";
 
 type EventsState = {
   liveMessages: Record<string, Message[]>;
   runs: Record<string, RunRecord>;
-  attach: (adapter: HostAdapter) => () => void;
-  sessionKey: (taskId: string, sessionId: string) => string;
+  attach: () => () => void;
 };
-
-export const sessionKeyOf = (taskId: string, sessionId: string) => `${taskId}:${sessionId}`;
 
 const terminalStates = new Set(["completed", "failed", "stopped", "rejected", "expired"]);
 
 export const useEventsStore = create<EventsState>((set, get) => ({
   liveMessages: {},
   runs: {},
-  sessionKey: sessionKeyOf,
-  attach: (adapter) => {
-    const unsubscribe = adapter.subscribe((event: HostEvent) => {
+  attach: () => {
+    const unsubscribe = useHostStore.getState().adapter.subscribe((event: HostEvent) => {
       if (event.type === "message-delta") {
         const key = sessionKeyOf(event.taskId, event.sessionId);
         const current = get().liveMessages[key] ?? [];

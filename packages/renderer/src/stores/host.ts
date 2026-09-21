@@ -5,14 +5,10 @@ import type {
   Approval,
   ApprovalStatus,
   AttentionItem,
-  Capability,
   CleanupItem,
+  LocalSettings,
   Project,
-  RemoteDevice,
   Reference,
-  RunRecord,
-  Schedule,
-  ScheduleTemplate,
   ScheduledRun,
   Session,
   Task,
@@ -25,15 +21,18 @@ type HostState = {
   status: "loading" | "ready" | "error";
   error?: string;
   workspace?: Workspace;
+  localSettings?: LocalSettings;
   attention: AttentionItem[];
   approvals: Approval[];
   usage: UsageRecord[];
-  cleanupPreview?: CleanupItem[];
   refresh: () => Promise<void>;
   loadUsage: (taskId?: string) => Promise<void>;
+  setWorkspaceRoot: (workspaceRoot: string) => Promise<LocalSettings>;
   task: (taskId: string) => Task | undefined;
   session: (taskId: string, sessionId: string) => Session | undefined;
   project: (projectId: string) => Project | undefined;
+  createFileReference: (taskId: string) => Promise<Reference>;
+  runTerminalCommand: (taskId: string, command: string) => Promise<string[]>;
   sendMessage: (
     taskId: string,
     sessionId: string,
@@ -68,8 +67,9 @@ export const useHostStore = create<HostState>((set, get) => ({
     try {
       const workspace = await get().adapter.getWorkspace();
       const attention = await get().adapter.getAttention();
+      const localSettings = await get().adapter.getLocalSettings();
       const approvals = (await Promise.all(workspace.tasks.map((task) => get().adapter.listApprovals(task.id)))).flat();
-      set({ workspace, attention, approvals, status: "ready", error: undefined });
+      set({ workspace, attention, approvals, localSettings, status: "ready", error: undefined });
     } catch (error) {
       set({ status: "error", error: error instanceof Error ? error.message : String(error) });
     }
@@ -80,12 +80,20 @@ export const useHostStore = create<HostState>((set, get) => ({
     set({ usage });
   },
 
+  setWorkspaceRoot: async (workspaceRoot) => {
+    const localSettings = await get().adapter.setWorkspaceRoot(workspaceRoot);
+    set({ localSettings });
+    return localSettings;
+  },
+
   task: (taskId) => get().workspace?.tasks.find((item) => item.id === taskId),
   session: (taskId, sessionId) =>
     get()
       .workspace?.tasks.find((item) => item.id === taskId)
       ?.sessions.find((item) => item.id === sessionId),
   project: (projectId) => get().workspace?.projects.find((item) => item.id === projectId),
+  createFileReference: (taskId) => get().adapter.createFileReference(taskId),
+  runTerminalCommand: (taskId, command) => get().adapter.runTerminalCommand(taskId, command),
 
   sendMessage: async (taskId, sessionId, text, references) => {
     const result = await get().adapter.sendMessage(taskId, sessionId, text, references);
@@ -168,34 +176,6 @@ export const useHostStore = create<HostState>((set, get) => ({
   },
 
   loadCleanupPreview: async (taskId) => {
-    const cleanupPreview = await get().adapter.previewCleanup(taskId);
-    set({ cleanupPreview });
-    return cleanupPreview;
+    return get().adapter.previewCleanup(taskId);
   },
 }));
-
-export type HostSelectors = {
-  tasks: Task[];
-  projects: Project[];
-  schedules: Schedule[];
-  templates: ScheduleTemplate[];
-  capabilities: Capability[];
-  devices: RemoteDevice[];
-  runs: ScheduledRun[];
-};
-
-export function selectWorkspace(state: HostState): HostSelectors {
-  return {
-    tasks: state.workspace?.tasks ?? [],
-    projects: state.workspace?.projects ?? [],
-    schedules: state.workspace?.schedules ?? [],
-    templates: state.workspace?.templates ?? [],
-    capabilities: state.workspace?.capabilities ?? [],
-    devices: state.workspace?.devices ?? [],
-    runs: state.workspace?.scheduledRuns ?? [],
-  };
-}
-
-export function runRecordFor(sessionId: string, taskId: string, runs: Record<string, RunRecord>) {
-  return runs[`${taskId}:${sessionId}`];
-}

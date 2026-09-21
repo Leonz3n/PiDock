@@ -1,5 +1,7 @@
 import { useState } from "react";
 import { Badge, Button, EmptyState, Panel } from "../components/ui";
+import { VirtualList } from "../components/VirtualList";
+import { scheduledRunResultLabel } from "./runState";
 import { useHostStore } from "../stores/host";
 import { useNavigationStore } from "../stores/navigation";
 import { useUiStore } from "../stores/ui";
@@ -79,12 +81,21 @@ export function SchedulesPage() {
           </Panel>
 
           <Panel title="执行记录">
-            <ul className="flex flex-col gap-1.5 text-xs">
-              {runs.map((run) => (
-                <li key={run.id} className="flex flex-wrap items-center justify-between gap-2 border-b border-line pb-1.5">
+            <VirtualList
+              testId="run-history"
+              items={runs}
+              rowHeight={40}
+              height={280}
+              getRowKey={(run) => run.id}
+              renderRow={(run) => (
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line py-1.5 pr-1 text-xs">
                   <span className="text-muted">{run.at.slice(0, 16).replace("T", " ")}</span>
-                  <span>{run.taskId} · {run.sessionId}</span>
-                  <Badge tone={run.result === "completed" ? "accent" : "neutral"}>{run.result === "completed" ? "完成" : "跳过"}</Badge>
+                  <span>
+                    {run.taskId} · {run.sessionId}
+                  </span>
+                  <Badge tone={run.result === "completed" ? "accent" : run.result === "failed" ? "warn" : "neutral"}>
+                    {scheduledRunResultLabel(run.result)}
+                  </Badge>
                   <Button
                     size="sm"
                     variant="ghost"
@@ -95,9 +106,9 @@ export function SchedulesPage() {
                   >
                     打开会话
                   </Button>
-                </li>
-              ))}
-            </ul>
+                </div>
+              )}
+            />
           </Panel>
         </div>
 

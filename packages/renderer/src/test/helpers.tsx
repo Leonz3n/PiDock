@@ -10,16 +10,16 @@ export function resetRenderer(path = "/") {
   useHostStore.setState({
     adapter: createMemoryHost(),
     workspace: undefined,
+    localSettings: undefined,
     attention: [],
     approvals: [],
     usage: [],
-    cleanupPreview: undefined,
     status: "loading",
     error: undefined,
   });
   useEventsStore.setState({ liveMessages: {}, runs: {} });
   useDraftStore.setState({ drafts: { ...seedDrafts } });
-  useUiStore.setState({ panels: {}, activeTab: {}, modal: null, toasts: [], attentionFilter: "all", sessionSearch: "" });
+  useUiStore.setState({ panels: {}, modal: null, toasts: [], attentionFilter: "all" });
   window.history.replaceState({}, "", path);
 }
 

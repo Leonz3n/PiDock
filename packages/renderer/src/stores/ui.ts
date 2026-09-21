@@ -1,6 +1,8 @@
 import { create } from "zustand";
 
-export type ToolPanel = "runtime" | "browser" | "files" | "terminal";
+export const TOOL_PANELS = ["runtime", "browser", "files", "terminal"] as const;
+
+export type ToolPanel = (typeof TOOL_PANELS)[number];
 
 export type ModalState =
   | { type: "sessions"; taskId: string; filter: "active" | "archived" }
@@ -17,42 +19,26 @@ type Toast = { id: string; text: string };
 
 type UiState = {
   panels: Record<string, ToolPanel[]>;
-  activeTab: Record<string, ToolPanel | undefined>;
   modal: ModalState;
   toasts: Toast[];
   attentionFilter: "all" | "approval" | "failed" | "expired" | "completed-unread";
-  sessionSearch: string;
   togglePanel: (taskId: string, panel: ToolPanel) => void;
-  closePanel: (taskId: string, panel: ToolPanel) => void;
   openModal: (modal: ModalState) => void;
   closeModal: () => void;
   pushToast: (text: string) => void;
   dismissToast: (id: string) => void;
   setAttentionFilter: (filter: UiState["attentionFilter"]) => void;
-  setSessionSearch: (value: string) => void;
 };
 
 export const useUiStore = create<UiState>((set, get) => ({
   panels: {},
-  activeTab: {},
   modal: null,
   toasts: [],
   attentionFilter: "all",
-  sessionSearch: "",
   togglePanel: (taskId, panel) => {
     const panels = get().panels[taskId] ?? [];
     const next = panels.includes(panel) ? panels.filter((item) => item !== panel) : [...panels, panel];
-    set({
-      panels: { ...get().panels, [taskId]: next },
-      activeTab: { ...get().activeTab, [taskId]: next[next.length - 1] },
-    });
-  },
-  closePanel: (taskId, panel) => {
-    const panels = (get().panels[taskId] ?? []).filter((item) => item !== panel);
-    set({
-      panels: { ...get().panels, [taskId]: panels },
-      activeTab: { ...get().activeTab, [taskId]: panels[panels.length - 1] },
-    });
+    set({ panels: { ...get().panels, [taskId]: next } });
   },
   openModal: (modal) => set({ modal }),
   closeModal: () => set({ modal: null }),
@@ -62,5 +48,4 @@ export const useUiStore = create<UiState>((set, get) => ({
   },
   dismissToast: (id) => set({ toasts: get().toasts.filter((item) => item.id !== id) }),
   setAttentionFilter: (attentionFilter) => set({ attentionFilter }),
-  setSessionSearch: (sessionSearch) => set({ sessionSearch }),
 }));

@@ -2,9 +2,12 @@ import type {
   Approval,
   ApprovalStatus,
   AttentionItem,
+  BrowserPage,
   Capability,
   CleanupItem,
   HostEvent,
+  LocalSettings,
+  Message,
   Project,
   Reference,
   RemoteDevice,
@@ -17,10 +20,49 @@ import type {
   Task,
   UsageRecord,
   Workspace,
+  WorkspaceFile,
 } from "./types";
 import type { HostAdapter, SendMessageResult, UsageFilter } from "./hostAdapter";
+import { sessionKeyOf } from "./sessionKey";
 
 const APPROVAL_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** Local application settings live on the machine, not in a project shared template. */
+export const defaultWorkspaceRoot = "~/PiDockTasks";
+
+const defaultLocalSettings: LocalSettings = {
+  configDir: "~/.pi/dock",
+  configFile: "~/.pi/dock/config.json",
+  workspaceRoot: defaultWorkspaceRoot,
+};
+
+const HISTORY_SESSION_COUNT = 52;
+
+export const taskFileSeeds: WorkspaceFile[] = [
+  {
+    path: "front-monorepo/src/checkout/summary.tsx",
+    status: "modified",
+    preview: {
+      language: "tsx",
+      source: `export function CheckoutSummary({ total }: { total: number }) {
+  return <strong data-testid="checkout-total">合计 {total.toFixed(2)}</strong>;
+}`,
+    },
+  },
+  { path: "front-monorepo/src/checkout/api.ts", status: "modified" },
+  { path: "invoice-service/src/invoice/detail.py", status: "added" },
+];
+
+export const taskBrowserPageSeeds: BrowserPage[] = [
+  { id: "page-1", title: "结账页 · staging", url: "https://staging.atlas.example.com/checkout" },
+  { id: "page-2", title: "对账单详情", url: "https://staging.atlas.example.com/invoices/9f2c" },
+];
+
+export const taskTerminalSeed = [
+  "$ pnpm --filter saas-web dev",
+  "VITE v7.3.6  ready in 412 ms",
+  "➜  Local:   http://127.0.0.1:5173/",
+];
 
 export const scheduleTemplates: ScheduleTemplate[] = [
   {
@@ -153,8 +195,8 @@ function seedProjects(): Project[] {
 
 const agentGreeting = "任务工作区已就绪，我可以开始检查构建与配置。";
 
-function seedSessions(): Record<string, Session[]> {
-  const base = (id: string, name: string, overrides: Partial<Session> = {}): Session => ({
+function baseSession(id: string, name: string, overrides: Partial<Session> = {}): Session {
+  return {
     id,
     name,
     archived: false,
@@ -169,11 +211,36 @@ function seedSessions(): Record<string, Session[]> {
     lastActivity: "2026-09-22T09:40:00+08:00",
     messages: [],
     ...overrides,
-  });
+  };
+}
 
+/**
+ * A long, deterministic session history so the "all sessions" list is a real
+ * dense scenario instead of a four-row fixture. Only the list is virtualized;
+ * the four session tabs stay a small, un-virtualized collection.
+ */
+function historySessions(count: number, archivedFrom: number): Session[] {
+  return Array.from({ length: count }, (_, index) =>
+    baseSession(`history-${index + 1}`, `历史会话 ${String(index + 1).padStart(2, "0")}`, {
+      archived: index >= archivedFrom,
+      permission: index % 3 === 0 ? "read" : "write",
+      lastActivity: `2026-09-${String(20 - (index % 20)).padStart(2, "0")}T${String(9 + (index % 9)).padStart(2, "0")}:00:00+08:00`,
+    }),
+  );
+}
+
+function taskAssets() {
+  return {
+    files: taskFileSeeds.map((file) => ({ ...file, preview: file.preview ? { ...file.preview } : undefined })),
+    browserPages: taskBrowserPageSeeds.map((page) => ({ ...page })),
+    terminalSeed: [...taskTerminalSeed],
+  };
+}
+
+function seedSessions(): Record<string, Session[]> {
   return {
     release: [
-      base("main", "实现与验证", {
+      baseSession("main", "实现与验证", {
         unread: 2,
         messages: [
           { id: "m-1", role: "agent", text: agentGreeting },
@@ -187,24 +254,35 @@ function seedSessions(): Record<string, Session[]> {
               source: "pnpm --filter saas-web dev\npnpm --filter saas-bff dev",
             },
           },
+          ...conversationHistory(),
         ],
       }),
-      base("deploy", "部署审查", {
+      baseSession("deploy", "部署审查", {
         runState: "approval",
         messages: [
           { id: "m-3", role: "user", text: "把这次改动部署到 staging 检查一次。" },
           { id: "m-4", role: "agent", text: "部署会更新共享环境，需要你确认下面这条命令。" },
         ],
       }),
-      base("failed", "失败排查", {
+      baseSession("failed", "失败排查", {
         messages: [{ id: "m-5", role: "agent", text: "构建失败，我先保留现场。" }],
       }),
-      base("archived-1", "历史排查", { archived: true, permission: "read" }),
+      baseSession("archived-1", "历史排查", { archived: true, permission: "read" }),
+      ...historySessions(HISTORY_SESSION_COUNT, 40),
     ],
-    checkout: [base("main", "实现与验证")],
-    "legacy-auth": [base("main", "实现与验证", { archived: true })],
-    latency: [base("main", "实现与验证", { unread: 1 })],
+    checkout: [baseSession("main", "实现与验证")],
+    "legacy-auth": [baseSession("main", "实现与验证", { archived: true })],
+    latency: [baseSession("main", "实现与验证", { unread: 1 })],
   };
+}
+
+/** Long enough to overflow the conversation viewport for the anchor-follow check. */
+function conversationHistory(): Message[] {
+  return Array.from({ length: 30 }, (_, index) => ({
+    id: `m-history-${index + 1}`,
+    role: index % 2 === 0 ? ("user" as const) : ("agent" as const),
+    text: `历史消息 ${index + 1}：确认构建、配置与运行状态的第 ${index + 1} 步结果。`,
+  }));
 }
 
 function seedTasks(): Task[] {
@@ -225,6 +303,7 @@ function seedTasks(): Task[] {
       sessions: sessions.release,
       activeSessionId: "main",
       unread: 2,
+      ...taskAssets(),
     },
     {
       id: "checkout",
@@ -241,6 +320,7 @@ function seedTasks(): Task[] {
       sessions: sessions.checkout,
       activeSessionId: "main",
       unread: 0,
+      ...taskAssets(),
     },
     {
       id: "legacy-auth",
@@ -257,6 +337,7 @@ function seedTasks(): Task[] {
       sessions: sessions["legacy-auth"],
       activeSessionId: "main",
       unread: 0,
+      ...taskAssets(),
       cleanupAvailableAt: "2026-09-18T10:00:00+08:00",
     },
     {
@@ -274,9 +355,32 @@ function seedTasks(): Task[] {
       sessions: sessions.latency,
       activeSessionId: "main",
       unread: 1,
+      ...taskAssets(),
     },
   ];
   return tasks;
+}
+
+/** Dense scheduled-run history so the execution log is a real long-list scenario. */
+function seedScheduledRuns(): ScheduledRun[] {
+  const results: ScheduledRun["result"][] = ["completed", "skipped", "failed"];
+  const base: ScheduledRun[] = [
+    { id: "run-1", scheduleId: "schedule-1", taskId: "release", sessionId: "scheduled-1", at: "2026-09-19T15:00:00+08:00", result: "completed" },
+    { id: "run-2", scheduleId: "schedule-1", taskId: "release", sessionId: "scheduled-2", at: "2026-09-12T15:00:00+08:00", result: "completed" },
+    { id: "run-3", scheduleId: "schedule-2", taskId: "latency", sessionId: "scheduled-3", at: "2026-09-18T09:15:00+08:00", result: "skipped" },
+  ];
+  const generated = Array.from({ length: 44 }, (_, index) => {
+    const day = 19 - Math.floor(index / 3);
+    return {
+      id: `run-history-${index + 1}`,
+      scheduleId: index % 4 === 0 ? "schedule-2" : "schedule-1",
+      taskId: index % 4 === 0 ? "latency" : "release",
+      sessionId: `scheduled-history-${index + 1}`,
+      at: `2026-09-${String(Math.max(day, 1)).padStart(2, "0")}T09:15:00+08:00`,
+      result: results[index % results.length],
+    } satisfies ScheduledRun;
+  });
+  return [...base, ...generated];
 }
 
 const cleanupByTask: Record<string, CleanupItem[]> = {
@@ -292,8 +396,6 @@ const cleanupByTask: Record<string, CleanupItem[]> = {
 };
 
 class MemoryHost implements HostAdapter {
-  readonly kind = "memory";
-
   private projects = seedProjects();
   private tasks = seedTasks();
   private environments = [
@@ -383,11 +485,7 @@ class MemoryHost implements HostAdapter {
     },
   ];
 
-  private scheduledRuns: ScheduledRun[] = [
-    { id: "run-1", scheduleId: "schedule-1", taskId: "release", sessionId: "scheduled-1", at: "2026-09-19T15:00:00+08:00", result: "completed" },
-    { id: "run-2", scheduleId: "schedule-1", taskId: "release", sessionId: "scheduled-2", at: "2026-09-12T15:00:00+08:00", result: "completed" },
-    { id: "run-3", scheduleId: "schedule-2", taskId: "latency", sessionId: "scheduled-3", at: "2026-09-18T09:15:00+08:00", result: "skipped" },
-  ];
+  private scheduledRuns: ScheduledRun[] = seedScheduledRuns();
 
   private capabilities: Capability[] = [
     { id: "cap-1", kind: "skill", name: "code-review", source: "项目 · .pi/skills", scope: "本任务工作区", status: "enabled" },
@@ -449,7 +547,7 @@ class MemoryHost implements HostAdapter {
   };
 
   private runs: Record<string, RunRecord> = {
-    "release:failed": {
+    [sessionKeyOf("release", "failed")]: {
       id: "run-failed-1",
       taskId: "release",
       sessionId: "failed",
@@ -469,21 +567,19 @@ class MemoryHost implements HostAdapter {
   private listeners = new Set<(event: HostEvent) => void>();
 
   private scripted: Record<string, "completed" | "failed" | "approval"> = {
-    "release:failed": "failed",
-    "release:deploy": "approval",
+    [sessionKeyOf("release", "failed")]: "failed",
+    [sessionKeyOf("release", "deploy")]: "approval",
   };
 
   private tickMs = 6;
 
   private sequence = 0;
 
+  private localSettings: LocalSettings = { ...defaultLocalSettings };
+
   private nextId(prefix: string) {
     this.sequence += 1;
     return `${prefix}-${Date.now().toString(36)}-${this.sequence}`;
-  }
-
-  getTickMs() {
-    return this.tickMs;
   }
 
   private emit(event: HostEvent) {
@@ -525,29 +621,31 @@ class MemoryHost implements HostAdapter {
   }
 
   async getRun(taskId: string, sessionId: string) {
-    return this.runs[`${taskId}:${sessionId}`];
+    return this.runs[sessionKeyOf(taskId, sessionId)];
   }
 
   async getAttention(): Promise<AttentionItem[]> {
     const items: AttentionItem[] = [];
+    // One item per pending approval, not one per session of its task.
+    for (const approval of Object.values(this.approvals)) {
+      if (approval.status !== "pending") continue;
+      const task = this.task(approval.taskId);
+      if (!task) continue;
+      const project = this.projects.find((item) => item.id === task.projectId);
+      items.push({
+        id: `attention-approval-${approval.id}`,
+        kind: "approval",
+        projectId: task.projectId,
+        taskId: task.id,
+        sessionId: approval.sessionId,
+        label: `${project?.name ?? task.projectId} · ${task.name}`,
+        detail: `待确认：${approval.title}`,
+      });
+    }
     for (const task of this.tasks) {
+      const project = this.projects.find((item) => item.id === task.projectId);
       for (const session of task.sessions) {
-        const project = this.projects.find((item) => item.id === task.projectId);
-        const pending = Object.values(this.approvals).find(
-          (approval) => approval.taskId === task.id && approval.status === "pending",
-        );
-        if (pending) {
-          items.push({
-            id: `attention-approval-${pending.id}`,
-            kind: "approval",
-            projectId: task.projectId,
-            taskId: task.id,
-            sessionId: pending.sessionId,
-            label: `${project?.name ?? task.projectId} · ${task.name}`,
-            detail: `待确认：${pending.title}`,
-          });
-        }
-        const failed = this.runs[`${task.id}:${session.id}`];
+        const failed = this.runs[sessionKeyOf(task.id, session.id)];
         if (failed?.state === "failed") {
           items.push({
             id: `attention-failed-${failed.id}`,
@@ -618,7 +716,7 @@ class MemoryHost implements HostAdapter {
         { label: "运行工具", state: "pending" },
       ],
     };
-    this.runs[`${taskId}:${sessionId}`] = record;
+    this.runs[sessionKeyOf(taskId, sessionId)] = record;
     this.emit({ type: "run-state", taskId, sessionId, state: "running", record });
 
     const agentMessageId = this.nextId("msg-agent");
@@ -628,7 +726,7 @@ class MemoryHost implements HostAdapter {
       this.emit({ type: "message-delta", taskId, sessionId, messageId: agentMessageId, delta });
     }
 
-    const outcome = this.scripted[`${taskId}:${sessionId}`] ?? "completed";
+    const outcome = this.scripted[sessionKeyOf(taskId, sessionId)] ?? "completed";
     let finalState: RunState = "completed";
     if (outcome === "failed") {
       finalState = "failed";
@@ -691,7 +789,7 @@ class MemoryHost implements HostAdapter {
     const session = this.session(taskId, sessionId);
     if (!session) return;
     session.runState = "stopped";
-    const record = this.runs[`${taskId}:${sessionId}`];
+    const record = this.runs[sessionKeyOf(taskId, sessionId)];
     if (record) record.state = "stopped";
     this.emit({ type: "run-state", taskId, sessionId, state: "stopped", record });
   }
@@ -786,7 +884,7 @@ class MemoryHost implements HostAdapter {
       session.runState =
         status === "approved" ? "running" : status === "expired" ? "expired" : "rejected";
     }
-    const record = this.runs[`${next.taskId}:${next.sessionId}`];
+    const record = this.runs[sessionKeyOf(next.taskId, next.sessionId)];
     if (record) {
       record.state = status === "approved" ? "running" : status === "expired" ? "expired" : "rejected";
     }
@@ -863,6 +961,32 @@ class MemoryHost implements HostAdapter {
     return items.map((item) => ({ ...item }));
   }
 
+  async getLocalSettings(): Promise<LocalSettings> {
+    return { ...this.localSettings };
+  }
+
+  async setWorkspaceRoot(workspaceRoot: string): Promise<LocalSettings> {
+    const value = workspaceRoot.trim();
+    if (!value) throw new Error("请填写完整的任务根目录");
+    this.localSettings = { ...this.localSettings, workspaceRoot: value };
+    return { ...this.localSettings };
+  }
+
+  async createFileReference(taskId: string): Promise<Reference> {
+    const file = this.task(taskId)?.files[0];
+    return {
+      id: this.nextId("ref"),
+      kind: "file",
+      label: file?.path ?? "工作区文件",
+      detail: "当前任务工作区文件",
+    };
+  }
+
+  async runTerminalCommand(taskId: string, command: string): Promise<string[]> {
+    if (!this.task(taskId)) throw new Error("任务不存在");
+    return [`$ ${command}`, "命令已加入模拟队列"];
+  }
+
   subscribe(listener: (event: HostEvent) => void) {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
@@ -874,4 +998,3 @@ export function createMemoryHost(): HostAdapter {
 }
 
 export const memoryHost = createMemoryHost();
-export type { RunState };
