@@ -154,10 +154,10 @@
 Electrobun 与本规格契合的能力（依据官方文档 `framework.blackboard.sh/electrobun`）：
 
 - 支持目标与规格一致：macOS arm64（WKWebView／CEF）、Windows x64（WebView2／CEF）；Windows ARM 只以 x64 模拟运行。
-- `<electrobun-webview renderer="cef" partition="account-a">`：**按视图选 CEF、按视图持久化分区**，并能与原生 GPU 表面一起合成到同一窗口内；这正是“内嵌可见页面 ＋ 按任务隔离”所需的形状。
+- `<electrobun-webview renderer="cef" partition="account-a">`：**按视图选 CEF、为视图指定任务所属的持久化分区**，并能与原生 GPU 表面一起合成到同一窗口内；这正是“内嵌可见页面 ＋ 按任务隔离”所需的形状。
 - `bundleCEF: true` 加 `chromiumFlags` 可配置 `remote-debugging-port`，因此 CEF 视图存在调试协议接入点；打包后的稳定版默认关闭，需显式开启，涉及本机监听端口的安全取舍。
 - macOS：Hutch 默认产出 DMG，支持 `codesign`、`notarize`、装订，并对嵌套 Mach-O 先签名；需 Apple Developer ID 与公证凭据。
-- 内置更新器（Zstandard 全量包加 BSDIFF 增量与回滚保护）与独立卸载器，可用于覆盖升级／卸载验收。
+- 框架具有内置更新器与卸载器，但首版不接入在线更新或版本回滚。首版仅验收用户下载安装包、退出应用后覆盖安装升级，以及卸载时保留用户数据。
 - 存在 `postPackage` 等构建钩子，可用于补做 Windows 安装器与签名。
 
 必须在工单 01 用运行证据确认的缺口：
@@ -230,3 +230,11 @@ Gateway 负责登录、一次性配对交换、设备凭据、在线主机路由
 - [Electron webContents](https://www.electronjs.org/docs/latest/api/web-contents)、[Debugger](https://www.electronjs.org/docs/latest/api/debugger)：截图、控制台、CDP 及连接生命周期。
 - [Playwright locators](https://playwright.dev/docs/locators)、[connectOverCDP](https://playwright.dev/docs/api/class-browsertype#browser-type-connect-over-cdp)、[Electron 支持](https://playwright.dev/docs/api/class-electron)：自动化能力与集成限制。
 - [Electron 安全建议](https://www.electronjs.org/docs/latest/tutorial/security)：加载远程内容的进程边界。
+
+## 技术栈续议（2026-09-21）
+
+上文 Electron 技术候选与早期运行记录保留为历史。当前规格首选 Electrobun 显式 Bun 模式，01 验证失败时评估 Electron + Bun Host；不能依据框架名称假设默认运行时，也不能把 Windows Setup ZIP 当作所需单一 EXE。React／Tailwind／TanStack 的职责和工单 20 的复原方式见[技术栈设计](implementation-stack-design.md)，一手资料见[运行时调研](desktop-runtime-research.md)。现有草稿可以保留 vanilla JS，复杂组件草稿按验证需要采用正式栈；尚未开始实现。
+
+## 六项审查修订（2026-09-21）
+
+已将基础权限门禁前移至 02，04／06 复用，09 完成集成验收后 07 才进入真实业务；依赖索引补齐 02 → 01、20，07 → 05、09。浏览器统一为任务拥有持久分区、视图拥有页面句柄，同任务标签／登录弹窗共享、跨任务隔离。发布前验收暂存候选安装包，通过后发布同哈希资产并做下载复验；首版升级仅为退出应用后的覆盖安装，内置更新及版本回滚另行设计。验收正文已改为 Electrobun 优先、Electron 条件回退。修订只涉及文档，不表示实现或技术验收已经开始。
