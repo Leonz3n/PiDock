@@ -6,7 +6,7 @@
 
 **Blocked by:** 02 — 单仓库任务与 pi 会话。
 
-**Draft:** 待拆分审阅，未发布。
+**Status:** ready-for-agent
 
 **Parent:** [首版规格](../spec.md)。
 

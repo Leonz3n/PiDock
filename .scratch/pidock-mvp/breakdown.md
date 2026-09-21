@@ -1,28 +1,32 @@
-# PiDock 首版实现拆分
+# PiDock 首版实现工单
 
-状态：拆分草案，尚未发布为实现工单。每项的完整验收内容位于 drafts 中；确认粒度和依赖后，将各项发布到 issues 并标记 ready-for-agent。
+状态：终审完成。01–19 已发布到 `issues/` 并标记 `ready-for-agent`；按依赖顺序执行，当前尚未开始实现。
 
 父规格：[首版规格](spec.md)。所有编号表示依赖关系，不表示任务已开始或完成。
 
-当前先进行 [UI 草稿审阅](../../docs/ui-prototype-review.md)，据反馈补充规格与拆分；该界面探索不替代 01 对真实内置浏览器控制能力的验证。现有表格尚未覆盖能力管理、PiDock Host、远程访问、移动 Web、设备配对和定时任务，不能直接按这 15 项发布。
+最终 UI 审查已形成 [收口基线](../../docs/product-design-closure.md)。16–19 已补齐并保留既有编号；不替代 01 的真实浏览器验证。下表链接均为正式本地工单，`drafts/` 保留终审前草案作为历史材料。
 
-| 编号 | 交付 | 直接阻塞项 | 完整草案 |
+| 编号 | 交付 | 直接阻塞项 | 正式工单 |
 | --- | --- | --- | --- |
-| 01 | 同一个可见页面的自动化原型，验证双任务浏览器隔离 | 无 | [浏览器原型](drafts/01-visible-browser.md) |
-| 02 | 创建一个任务并与 pi 对话、修改任务代码、恢复会话 | 01 | [单仓库任务](drafts/02-task-agent-session.md) |
-| 03 | 混合／纯目录任务、普通目录软链接及 Git 工作副本隔离 | 02 | [混合目录任务](drafts/03-multi-repository-tasks.md) |
-| 04 | 图形化配置环境并启动一个任务服务 | 02 | [配置与单服务](drafts/04-environment-and-service.md) |
-| 05 | 多服务本地联动、远程依赖和运行状态 | 03、04 | [服务联动](drafts/05-service-dependencies.md) |
-| 06 | pi 控制任务内浏览器，用户可接管 | 02 | [Agent 浏览器](drafts/06-agent-browser.md) |
-| 07 | 在真实仓库完成 SaaS 对账单详情同步验证 | 05、06 | [真实同步查询](drafts/07-real-synchronous-query.md) |
-| 08 | 当前任务的协议生成与消费者本地绑定 | 05 | [协议联调](drafts/08-local-protocol-binding.md) |
-| 09 | 会话权限选择、工具审批与同任务写操作协调 | 04、06 | [会话协调](drafts/09-session-coordination.md) |
-| 10 | 文件、差异与可接管的内置终端 | 09 | [文件与终端](drafts/10-files-and-terminal.md) |
-| 11 | 配置多个 Provider，在会话中切换并显示上下文状态 | 02 | [Provider 与上下文](drafts/11-providers-and-context.md) |
-| 12 | 单次/会话 Token 明细及跨项目、Provider、时间范围统计 | 11 | [Token 用量](drafts/12-token-usage.md) |
-| 13 | 对话中用 @ 引用、$ 调用技能、/ 执行命令并恢复草稿 | 03、10、12 | [对话输入](drafts/13-composer-commands.md) |
-| 14 | 后台运行、退出、恢复、归档与清理 | 08、13 | [生命周期](drafts/14-task-lifecycle.md) |
-| 15 | macOS/Windows 安装包与完整首版验收 | 07、14 | [跨平台交付](drafts/15-desktop-delivery.md) |
+| 01 | 同一个可见页面的自动化原型，验证双任务浏览器隔离 | 无 | [浏览器原型](issues/01-visible-browser.md) |
+| 02 | 创建一个任务并与 pi 对话、修改任务代码、恢复会话 | 01 | [单仓库任务](issues/02-task-agent-session.md) |
+| 03 | 混合／纯目录任务、普通目录软链接及 Git 工作副本隔离 | 02 | [混合目录任务](issues/03-multi-repository-tasks.md) |
+| 04 | 图形化配置环境并启动一个任务服务 | 02 | [配置与单服务](issues/04-environment-and-service.md) |
+| 05 | 多服务本地联动、远程依赖和运行状态 | 03、04 | [服务联动](issues/05-service-dependencies.md) |
+| 06 | pi 控制任务内浏览器，用户可接管 | 02 | [Agent 浏览器](issues/06-agent-browser.md) |
+| 07 | 在真实仓库完成 SaaS 对账单详情同步验证 | 05、06 | [真实同步查询](issues/07-real-synchronous-query.md) |
+| 08 | 当前任务的协议生成与消费者本地绑定 | 05 | [协议联调](issues/08-local-protocol-binding.md) |
+| 09 | 会话权限选择、工具审批与同任务写操作协调 | 04、06 | [会话协调](issues/09-session-coordination.md) |
+| 10 | 文件、差异与可接管的内置终端 | 09 | [文件与终端](issues/10-files-and-terminal.md) |
+| 11 | 配置多个 Provider，在会话中切换并显示上下文状态 | 02 | [Provider 与上下文](issues/11-providers-and-context.md) |
+| 12 | 单次/会话 Token 明细及跨项目、Provider、时间范围统计 | 11 | [Token 用量](issues/12-token-usage.md) |
+| 13 | 对话中用 @ 引用、$ 调用技能、/ 执行命令并恢复草稿 | 03、10、12 | [对话输入](issues/13-composer-commands.md) |
+| 14 | 后台运行、退出、恢复、归档与清理 | 08、13 | [生命周期](issues/14-task-lifecycle.md) |
+| 15 | macOS/Windows 完整验收 | 07、14、16、18、19 | [跨平台交付](issues/15-desktop-delivery.md) |
+| 16 | 能力管理与来源 | 09、13 | [能力管理](issues/16-capability-management.md) |
+| 17 | Host 执行事件、审批与关注 | 09、12、14 | [执行事件](issues/17-host-execution-events.md) |
+| 18 | 定时任务、模板与历史 | 03、11、17 | [定时任务](issues/18-scheduled-tasks.md) |
+| 19 | 远程入口、配对与移动端 | 17 | [远程访问](issues/19-remote-access.md) |
 
 ## 依赖理由
 
@@ -38,11 +42,9 @@
 - 14 覆盖已存在的代码、生成物、浏览器、终端、进程、用量及结构化草稿；13 已包含 10 和 12，无需重复依赖，也无需等待真实业务查询通过才开始。
 - 15 汇总真实业务验收和完整资源生命周期；跨平台检查贯穿前面各项，并非到此才第一次验证 Windows。
 
-## 审阅点
+## 执行顺序
 
-每项是否足够独立演示并适合一次实现会话？是否有不必要的阻塞项？是否需要合并或进一步拆分？
-
-建议按本稿发布，先完成 01；浏览器原型若改变技术路线，更新其影响到的草案后再实施。
+先完成 01，再按依赖推进。16–19 已补齐，19 可与 18 并行，最终由 15 联合验收。工单发布不代表实现已开始。
 
 ## 规格覆盖
 
@@ -62,4 +64,8 @@
 | 12 | 47、48、49、50 |
 | 13 | 51、52、53、54、55、56、57、58 |
 | 14 | 37、38、39、40 |
-| 15 | 42 |
+| 15 | 42、70、71 |
+| 16 | 能力管理补充需求 |
+| 17 | 执行／审批／恢复及跨项目关注 |
+| 18 | 65–69 |
+| 19 | 61–64 |

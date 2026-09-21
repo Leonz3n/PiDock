@@ -6,7 +6,7 @@
 
 **Blocked by:** 08 — 任务内协议生成与消费者绑定；13 — 对话引用、技能与符号命令。
 
-**Draft:** 待拆分审阅，未发布。
+**Status:** ready-for-agent
 
 **Parent:** [首版规格](../spec.md)。
 
