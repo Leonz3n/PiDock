@@ -21,7 +21,7 @@ function initializeSchedules(){
     const t=prepareSessions(makeTask(s.name,'schedule-'+s.id,false,project?.repos||[]));
     Object.assign(t,{taskType:'scheduled',scheduleId:s.id,projectId:s.projectId,isNew:true,sessions:labels,session:0,archivedSessions:[],messages:[],permissionsBySession:{}});
     t.sessionData=Object.fromEntries(labels.map((_,i)=>[i,{draft:'',refs:[],provider:s.provider,model:s.model,context:i===0?4.2:2.8,tokens:i===0?12.6:8.4}]));
-    labels.forEach((label,i)=>{if(label==='等待首次执行')return;t.permissionsBySession[i]=s.permission;t.messages.push({role:'user',text:s.prompt,permission:s.permission,session:i},{role:'agent',text:i===0?'已完成本次定时执行。这里保留模拟结果，可以继续追问或要求调整。':'本次执行已结束；工具步骤和失败原因保留在该会话中。',session:i})});
+    labels.forEach((label,i)=>{if(label==='等待首次执行')return;t.permissionsBySession[i]=s.permission;t.messages.push({role:'user',text:s.prompt,permission:s.permission,session:i},{role:'agent',text:s.id==='weekly-changes'?(i===0?'摘要已生成，发送前等待本次确认。':'摘要已生成，通知步骤失败，请核对送达情况后处理。'):'本次执行完成，结果保留在会话中。',session:i})});
     state.tasks.push(t);s.taskIndex=state.tasks.length-1;
   }
   for(const run of state.scheduleRuns)run.taskIndex=state.schedules.find(s=>s.id===run.scheduleId)?.taskIndex??null;
@@ -30,9 +30,9 @@ function initializeSchedules(){
 const scheduleKinds={once:'仅一次',daily:'每天',weekly:'每周',cron:'自定义周期'};
 const scheduleTemplates=[
   {id:'weekly-summary',name:'每周仓库改动摘要',label:'周日 18:00',kind:'weekly',weekday:'0',time:'18:00',prompt:'汇总当前项目各 Git 仓库截至本次执行时间过去 7 天的改动。按功能、修复、重构和风险整理，附提交或合并请求依据，生成面向全体研发的周报。先将完整结果保留在本次会话；如需群发，请在此补充渠道与接收人，并遵循可用工具和会话权限。'},
-  {id:'standup',name:'站会主题准备',label:'工作日 09:15',kind:'cron',cron:'15 9 * * 1-5',prompt:'为今天的研发站会准备主题。检查当前项目自上一个工作日 09:15 至本次执行时间的 Git 变更，以及可访问的任务记录，整理进展、明确记录的阻塞、待协调事项和建议讨论顺序。周一覆盖周末；工作日按周一至周五解释。不要仅凭提交记录推断任务已完成或成员受阻。将结果保留在本次会话。'},
+  {id:'standup',name:'站会主题准备',label:'工作日 09:15',kind:'cron',cron:'15 9 * * 1-5',prompt:'为今天的研发站会准备主题。检查当前项目自上一个工作日同一计划时刻至本次执行时间的 Git 变更，以及可访问的任务记录，整理进展、明确记录的阻塞、待协调事项和建议讨论顺序。周一覆盖周末；工作日按周一至周五解释。不要仅凭提交记录推断任务已完成或成员受阻。将结果保留在本次会话。'},
   {id:'contribution',name:'每周代码贡献统计',label:'周日 19:00',kind:'weekly',weekday:'0',time:'19:00',prompt:'统计当前项目各 Git 仓库截至本次执行时间过去 7 天的代码贡献。按作者列出提交、主要改动范围和可获取的评审记录，说明分支范围、作者合并、合并提交与机器人过滤口径，附依据。代码行数仅作参考，不等同绩效，不生成简单绩效排名。将完整统计保留在本次会话。'},
-  {id:'risk-review',name:'每日代码风险巡检',label:'工作日 17:00',kind:'cron',cron:'0 17 * * 1-5',prompt:'检查当前项目自上一个工作日 17:00 至本次执行时间的代码变更，周一覆盖周末。关注正确性、权限校验、数据兼容和测试缺口；按影响程度整理可证实的问题，附文件位置、触发条件和建议。只提出建议，不自动修改代码或提交。没有确认的问题时明确说明。将结果保留在本次会话。'},
+  {id:'risk-review',name:'每日代码风险巡检',label:'工作日 17:00',kind:'cron',cron:'0 17 * * 1-5',prompt:'检查当前项目自上一个工作日同一计划时刻至本次执行时间的代码变更，周一覆盖周末。关注正确性、权限校验、数据兼容和测试缺口；按影响程度整理可证实的问题，附文件位置、触发条件和建议。只提出建议，不自动修改代码或提交。没有确认的问题时明确说明。将结果保留在本次会话。'},
   {id:'release-check',name:'每周发布准备检查',label:'周五 15:00',kind:'weekly',weekday:'5',time:'15:00',prompt:'检查当前项目下一次发布的准备情况。优先读取项目已记录的发布计划、目标版本和基线；缺失时明确列为待确认，不自行假定发布范围。结合可访问的变更、测试结果和文档，列出候选发布说明、阻塞项、迁移与回滚检查清单。不要执行发布。将检查报告保留在本次会话。'}
 ];
 function scheduleTemplatePicker(){return `<div class="formfield schedule-template-picker"><label for="task-schedule-template">常用模板 · 可选</label><div class="between rowgap"><select id="task-schedule-template"><option value="">自定义 · 从空白开始</option>${scheduleTemplates.map(t=>`<option value="${t.id}">${t.name} · ${t.label}</option>`).join('')}</select>${button('使用模板','apply-schedule-template','sm')}</div><small>应用会替换周期和提示词；保留项目、模型、权限和时区。所有内容均可继续修改。</small></div>`}
@@ -43,7 +43,7 @@ function applyScheduleTemplate(){
   if(!name.value.trim()||name.value===name.dataset.templateName){name.value=template.name;name.dataset.templateName=template.name}
   document.querySelector('#task-schedule-kind').value=template.kind;
   document.querySelector('#task-schedule-rule-fields').innerHTML=taskScheduleRuleFields(template);
-  document.querySelector('#task-schedule-prompt').value=template.prompt+'\n以所选时区解释时间范围；仅使用当前项目可访问的数据，注明缺失数据与统计限制，不编造结果。';
+  document.querySelector('#task-schedule-prompt').value=template.prompt+'\n仓库分析先获取任务所选远程分支的最新提交记录，记录统计起止时间、分支、提交依据和获取时间；获取失败明确报告，不把旧数据当作最新。只更新远程记录，不自动合并或覆盖任务工作区。\n以所选时区解释时间范围；仅使用当前项目可访问的数据，注明缺失数据与统计限制，不编造结果。';
   toast('已填入模板，可修改后再创建任务');
 }
 document.addEventListener('click',event=>{if(event.target.closest('[data-action="apply-schedule-template"]')){event.preventDefault();applyScheduleTemplate()}});

@@ -2,12 +2,12 @@
 function sessionNavigation(){
   const t=task(),active=t.sessions.map((_,i)=>i).filter(i=>!t.archivedSessions.includes(i));
   let visible=active.slice(0,4);
-  if(!visible.includes(t.session))visible=[t.session,...visible].slice(0,4);
+  if(!visible.includes(t.session))visible=[...visible.slice(0,3),t.session].sort((a,b)=>a-b);
   return `<div class="sessions compact-sessions"><button class="btn sm" data-action="nav-sessions">全部会话 ${t.sessions.length} ${icon('down')}</button><div class="session-tabs">${visible.map(i=>`<button class="session-tab ${t.session===i?'active':''}" data-action="session:${i}" title="${esc(t.sessions[i])} · 右键操作">${esc(t.sessions[i])}${t.archivedSessions.includes(i)?'<span class="badge">已归档</span>':sessionReadonly(t,i)?'<span class="badge">只读</span>':''}</button>`).join('')}</div><button class="iconbtn" data-action="newsession" aria-label="新建会话">${icon('plus')}</button></div>`;
 }
 function sessionListDialog(filter='active'){
   const t=task();
-  modal('全部会话',`<div class="formfield"><label for="session-search">搜索会话</label><input id="session-search" placeholder="按会话名称查找"></div><div class="segmented"><button data-action="nav-filter:active" class="${filter==='active'?'active':''}">未归档 ${t.sessions.length-t.archivedSessions.length}</button><button data-action="nav-filter:archived" class="${filter==='archived'?'active':''}">已归档 ${t.archivedSessions.length}</button></div><p class="page-intro">归档保留历史和草稿。打开可继续对话，恢复后重新加入未归档列表。</p><div class="session-results">${t.sessions.map((name,i)=>t.archivedSessions.includes(i)===(filter==='archived')?`<div class="session-result" data-session-search="${esc(name.toLowerCase())}"><button data-action="nav-open:${i}"><strong>${esc(name)}</strong><small>${i===t.session?'当前会话 · ':''}${t.archivedSessions.includes(i)?'已归档':'未归档'} · ${sessionPermission(t,i)==='read'?'只读':'可对话'}</small></button><button class="iconbtn" data-action="nav-session-menu:${i}" aria-label="会话操作：${esc(name)}">${icon('more')}</button></div>`:'').join('')}<div class="empty session-no-results" hidden>没有匹配的会话</div></div>`);
+  modal('全部会话',`<div class="formfield"><label for="session-search">搜索会话</label><input id="session-search" placeholder="按会话名称查找"></div><div class="segmented"><button data-action="nav-filter:active" class="${filter==='active'?'active':''}">未归档 ${t.sessions.length-t.archivedSessions.length}</button><button data-action="nav-filter:archived" class="${filter==='archived'?'active':''}">已归档 ${t.archivedSessions.length}</button></div><p class="page-intro">归档保留历史和草稿。打开可继续对话，恢复后重新加入未归档列表。</p><div class="session-results">${t.sessions.map((name,i)=>t.archivedSessions.includes(i)===(filter==='archived')?`<div class="session-result" data-session-search="${esc(name.toLowerCase())}"><button data-action="nav-open:${i}"><strong>${esc(name)}</strong><small>${i===t.session?'当前会话 · ':''}${t.archivedSessions.includes(i)?'已归档':'未归档'} · ${sessionPermission(t,i)==='read'?'只读':'可对话'} · ${executionMeta(t,i)}</small></button><button class="iconbtn" data-action="nav-session-menu:${i}" aria-label="会话操作：${esc(name)}">${icon('more')}</button></div>`:'').join('')}<div class="empty session-no-results" hidden>没有匹配的会话</div></div>`);
   updateSessionSearch();document.querySelector('#session-search').focus();
 }
 function updateSessionSearch(){const query=document.querySelector('#session-search')?.value.trim().toLowerCase()||'';let count=0;document.querySelectorAll('[data-session-search]').forEach(row=>{row.hidden=!row.dataset.sessionSearch.includes(query);if(!row.hidden)count++});const empty=document.querySelector('.session-no-results');if(empty)empty.hidden=count>0}
@@ -29,7 +29,7 @@ function navigationAction(action,arg,origin){
   if(action==='nav-open'){task().session=i;closeModal();render()}
   if(action==='nav-new'){closeModal();dispatch('newsession')}
   if(action==='nav-archive'){
-    const t=task();if(t.busySession===i){toast('请先停止会话执行，再归档');return}
+    const t=task();if(['running','waiting'].includes(execution(t,i).status)){toast('请先停止会话执行，再归档');return}
     if(!t.archivedSessions.includes(i))t.archivedSessions.push(i);
     if(t.session===i){const next=t.sessions.findIndex((_,n)=>!t.archivedSessions.includes(n));if(next>=0)t.session=next}
     closeModal();render();toast('会话已归档，可在全部会话中查看或恢复');
