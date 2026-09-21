@@ -1,10 +1,11 @@
 import { mkdir } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 
 const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-const RENDERER = "http://127.0.0.1:4318";
+const RENDERER = "http://127.0.0.1:4335";
 const PROTOTYPE = "http://127.0.0.1:4319/?variant=A";
-const OUT = new URL("../../../../docs/evidence/renderer-baseline-2026-09-22/", import.meta.url);
+const OUT = fileURLToPath(new URL("../../../docs/evidence/renderer-baseline-2026-09-22/", import.meta.url));
 
 const rendererPages = [
   ["attention", "/attention"],
@@ -23,7 +24,7 @@ const rendererPages = [
 
 const prototypePages = [
   ["project", null],
-  ["task-main", 'button[data-action="task:0"]'],
+  ["task-main", '[data-action="task:0"]'],
   ["env", 'button[data-action="view:env"]'],
   ["providers", 'button[data-action="view:providers"]'],
   ["usage", 'button[data-action="view:usage"]'],
@@ -33,8 +34,24 @@ const prototypePages = [
   ["archive", 'button[data-action="view:archive"]'],
 ];
 
+async function captureRoutes(browser, base, pages, dir) {
+  const target = `${OUT}${dir}/`;
+  await mkdir(target, { recursive: true });
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
+  const page = await context.newPage();
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(String(error)));
+  for (const [name, path] of pages) {
+    await page.goto(`${base}${path}`, { waitUntil: "networkidle" });
+    await page.screenshot({ path: `${target}${name}.png` });
+    console.log(`${dir}/${name}.png`);
+  }
+  await context.close();
+  return errors;
+}
+
 async function capture(browser, base, pages, dir) {
-  const target = new URL(`${dir}/`, OUT);
+  const target = `${OUT}${dir}/`;
   await mkdir(target, { recursive: true });
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
   const page = await context.newPage();
@@ -46,7 +63,7 @@ async function capture(browser, base, pages, dir) {
       await page.click(selector);
       await page.waitForTimeout(180);
     }
-    await page.screenshot({ path: new URL(`${name}.png`, target) });
+    await page.screenshot({ path: `${target}${name}.png` });
     console.log(`${dir}/${name}.png`);
   }
   await context.close();
@@ -55,7 +72,7 @@ async function capture(browser, base, pages, dir) {
 
 const browser = await chromium.launch({ executablePath: CHROME, headless: true });
 try {
-  const rendererErrors = await capture(browser, RENDERER, rendererPages, "renderer");
+  const rendererErrors = await captureRoutes(browser, RENDERER, rendererPages, "renderer");
   const prototypeErrors = await capture(browser, PROTOTYPE, prototypePages, "prototype");
   console.log(JSON.stringify({ rendererErrors, prototypeErrors }, null, 2));
 } finally {
