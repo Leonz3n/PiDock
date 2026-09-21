@@ -4,11 +4,11 @@
 
 ### Issue tracker
 
-规格和实现工单使用本地 Markdown。见 docs/agents/issue-tracker.md。
+读取、创建、更新或执行规格与工单时使用 GitHub Issues。见 docs/agents/issue-tracker.md。
 
 ### Triage labels
 
-采用默认五种状态。见 docs/agents/triage-labels.md。
+采用默认五种 GitHub triage labels。见 docs/agents/triage-labels.md。
 
 ### Domain docs
 

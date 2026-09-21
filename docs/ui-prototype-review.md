@@ -89,11 +89,11 @@
 
 | 调整 | 当前结论 | 规格与实现草案 |
 | --- | --- | --- |
-| 不使用绿色、π 居中 | 已确认；中性灰白与蓝色强调为当前设计基线 | [规格：界面视觉与布局审阅状态](../.scratch/pidock-mvp/spec.md#界面视觉与布局审阅状态)、[02 基础界面](../.scratch/pidock-mvp/drafts/02-task-agent-session.md)、[15 两平台验收](../.scratch/pidock-mvp/drafts/15-desktop-delivery.md) |
-| 运行、浏览器、文件、终端、日志按需打开；标签关闭与收起 | 已确认；关闭面板与终止运行资源分开 | [规格：工作台工具面板](../.scratch/pidock-mvp/spec.md#工作台工具面板)、[10 工具面板](../.scratch/pidock-mvp/drafts/10-files-and-terminal.md) |
-| 输入框左下角真实文件「+」，多选、取消、名称展示与移除 | 已确认；原型仅保留文件对象和名称 | [规格：对话输入、引用与命令](../.scratch/pidock-mvp/spec.md#对话输入引用与命令)、[13 输入框](../.scratch/pidock-mvp/drafts/13-composer-commands.md) |
+| 不使用绿色、π 居中 | 已确认；中性灰白与蓝色强调为当前设计基线 | [规格：界面视觉与布局审阅状态](../.scratch/pidock-mvp/spec.md#界面视觉与布局审阅状态)、[02 基础界面](https://github.com/Leonz3n/PiDock/issues/5)、[15 两平台验收](https://github.com/Leonz3n/PiDock/issues/22) |
+| 运行、浏览器、文件、终端、日志按需打开；标签关闭与收起 | 已确认；关闭面板与终止运行资源分开 | [规格：工作台工具面板](../.scratch/pidock-mvp/spec.md#工作台工具面板)、[10 工具面板](https://github.com/Leonz3n/PiDock/issues/15) |
+| 输入框左下角真实文件「+」，多选、取消、名称展示与移除 | 已确认；原型仅保留文件对象和名称 | [规格：对话输入、引用与命令](../.scratch/pidock-mvp/spec.md#对话输入引用与命令)、[13 输入框](https://github.com/Leonz3n/PiDock/issues/16) |
 | 模型选择靠右；移除常驻符号按钮，保留键入补全 | 已确认 | 同上规格与 13 号草案 |
-| 三种 Provider 协议、多个模型及会话独立选择 | 需求已确认，配置界面本轮收敛 | [规格：Provider、上下文与用量行为](../.scratch/pidock-mvp/spec.md#provider上下文与用量行为)、[11 Provider](../.scratch/pidock-mvp/drafts/11-providers-and-context.md) |
+| 三种 Provider 协议、多个模型及会话独立选择 | 需求已确认，配置界面本轮收敛 | [规格：Provider、上下文与用量行为](../.scratch/pidock-mvp/spec.md#provider上下文与用量行为)、[11 Provider](https://github.com/Leonz3n/PiDock/issues/9) |
 | 可展开模型卡片；上下文长度、最大输出与图片输入能力 | 配置界面已确认；真实运行能力另验 | 同上规格与 11 号草案；[pi 能力核对](pi-provider-usage.md) |
 | 模型推理子集、默认档位及高级映射 | 配置侧与对话浮层均已确认；真实映射另验 | [规格：推理能力配置与会话档位](../.scratch/pidock-mvp/spec.md#推理能力配置与会话档位)、11 号草案 |
 | 同步模型候选、ID 可输入或下拉选择、显示名称默认跟随且可修改 | 本轮已确认 | Provider 规格与 11 号草案 |

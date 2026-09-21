@@ -1,12 +1,14 @@
+> **已迁移至 GitHub：** [首版父规格与工单索引](https://github.com/Leonz3n/PiDock/issues/1)。本文件为迁移时快照，不再作为活跃 tracker；后续规格/依赖/执行记录以 GitHub 为准。未完成实现继续暂停。
+
 # PiDock 首版规格
 
 定时任务支持可选常用模板：每周仓库改动摘要（周日 18:00）、站会主题准备（周一至周五 09:15）、每周代码贡献统计（周日 19:00）、每日代码风险巡检（周一至周五 17:00）、每周发布准备检查（周五 15:00）。模板仅在新建定时任务时作为起点，选择后点击「使用模板」预填周期与提示词，名称仅为空或仍为上次模板名称时填入。保留项目、模型、权限、时区和工作区设置；结果处理写在可编辑提示词中，不新增发送配置。模板不会自行启用或运行；须完成任务创建。当前仅为内存交互原型。
 
 **Status:** ready-for-agent
 
-产品工作流与本地工单设置已确认；19 个实现工单已完成终审并发布为 `ready-for-agent`。PiDock 为工作名称。运行时与界面技术栈已确认，见「技术栈与运行时」；工单 01 已完成可见浏览器与桌面壳验证，结论为回退 Electron + Bun Host，Electron 侧仍须以同一场景验证后再进入 02。
+产品工作流已确认，现有工单已迁移至 GitHub；本文件保留迁移时的规格内容。PiDock 为工作名称。2026-09-22 已确认 Electron + Node 技术栈与 main／utilityProcess／sandbox renderer 边界，见「技术栈与运行时」。01 原型及复核已完成；21 仍须验证 Electron，后续工单继续暂停。
 
-实现入口见 [19 项本地工单](breakdown.md)，已覆盖能力管理、Host、定时任务、远程访问和双平台安装发布；工单已发布但尚未开始生产实现。最终产品行为以本规格及 [产品设计收口](../../docs/product-design-closure.md) 为准。
+实现入口见 [GitHub 工单索引](https://github.com/Leonz3n/PiDock/issues/1)，已覆盖能力管理、Host、定时任务、远程访问和双平台安装发布；工单已发布但尚未开始生产实现。最终产品行为以本规格及 [产品设计收口](../../docs/product-design-closure.md) 为准。
 
 [交互式 UI 草稿](../../docs/ui-prototype-review.md) 已完成终审，A 对话优先布局作为实现基线，最终规则见 [产品设计收口](../../docs/product-design-closure.md)。草稿仍仅代表界面验证，不代表产品功能或浏览器技术原型已通过验收。
 
@@ -163,6 +165,18 @@
 - 顶部工具入口与对话中的相关操作可以打开面板；仅显示已打开的工具标签，支持逐个关闭及收起工具区。关闭最后一个工具后对话恢复可用宽度。
 - 关闭面板属于界面操作，不隐式停止任务服务、销毁浏览器登录状态或结束终端进程；终止执行与清理仍使用明确操作。
 
+### 内置浏览器：Agent 主导，人工查看与标记
+
+2026-09-22 用户澄清：交互定位参考 Codex Desktop 的使用方式，主要由 Agent 控制页面；人主要查看验证过程与结果，并在前端开发时标记有问题的位置、补充说明交给 Agent。此处只定义期望体验，不推断 Codex Desktop 的内部实现。
+
+- 主流程为 Agent 打开任务页面并交互验证 → 用户查看并点选元素或框选区域、填写问题说明 → 将页面标记作为上下文发送到当前任务会话 → Agent 定位、修改并重新验证。
+- 标记应携带任务与页面身份、URL、当时的页面截图/选区及用户说明；能取得元素定位与语义信息时一并携带。标记对应 Agent 正在控制的同一页面实例，不能把另一浏览器的相似页面当成来源。
+- 标记期间应保持选区对应的页面状态稳定；Agent 后续操作与人工标记需要协调。页面已经导航、刷新或布局变化时，保留原始标记证据并让 Agent 重新定位，不能把旧坐标直接当作当前点击目标。具体采用暂停页面操作或固定快照的方式在技术验证时确定。
+- 人工交互围绕查看、标记、反馈，以及必要的首次登录或异常处理；不以通用浏览器的完整日常操作体验作为首版目标。已有任务登录隔离、重启保留状态及暂停/恢复要求仍适用于这些必要路径。
+- 技术选型优先验证同页控制、观察取证、标记回传与修复后复验闭环。桌面壳承载工作台界面与任务浏览器的渲染/自动化能力分别评估，不能仅凭壳的 WebView API 宣布闭环通过。
+
+本次仅澄清产品范围；桌面栈仍在复核，后续工单继续暂停。
+
 ### 会话权限选择
 
 2026-09-21 用户确认输入框旁的权限选择设计。以下为产品要求；前端选择与只读模拟不代表真实权限执行、审批或系统隔离已经实现。
@@ -296,31 +310,31 @@
 
 ### 技术栈与运行时
 
-2026-09-21 用户确认首版运行时、桌面壳与界面技术栈：以 Bun 作为运行时，界面使用 React、Tailwind CSS 与 TanStack 这类社区活跃的方案。Electron 的主进程运行其内置 Node，Bun 不能替换，因此桌面壳曾改用 Bun 生态中以 Bun 执行主进程的 Electrobun。
+2026-09-22 用户最终确认：**Electron 44+、Node 24、React 19、TypeScript、Pi AgentSession、Electron utilityProcess、WebContentsView、Chrome DevTools Protocol、Zustand、TanStack Virtual、SQLite、xterm.js、Shiki**。优先保障 Agent 浏览器控制、设计验证、Bug 排查和人工标记反馈的完整性与可靠性，再优化性能和体积。此决定替代之前的 Electrobun/WebviewJS 候选与 Electron + Bun Host 回退方案；01 的运行证据保留，不再将选型理由简化为 Electrobun 在技术上无解。
 
-**2026-09-21 工单 01 实测结论：Electrobun 2.0.1 未通过桌面集成关卡，桌面壳回退 Electron + Bun Host。** 可见 CEF 页面的直接 CDP 控制成立，但新持久 partition 的首个 CEF view 稳定返回 null，且移除一个 CEF `BrowserView` 会清理同窗全部 CEF view 并使 CDP 不可达，导致标签关闭与任务切换的核心路径失败。证据与受影响设计见 [可见页面控制与桌面壳验证](../../docs/browser-automation-validation.md)。Bun 运行时、Host、React／Tailwind／TanStack、任务分区与页面句柄模型保持不变。
+- **版本基线：** Electron 44 系列起步，应用主进程和 utilityProcess 都使用 Electron 随包 Node 24。2026-09-22 核对官方 `v44.4.3/DEPS` 为 Node `v24.21.0`；实际实现锁定具体 Electron 补丁版本并记录 `process.versions`。`44+` 是最低主版本方向，不是无限制升级范围；未来主版本的 Node 变化需重新核对，不能独立替换 Electron 内置 Node。
+- **进程边界：AgentSession 放 Node utility process，Chromium 视图管理与 CDP 适配留 Electron main，React renderer 完全 sandbox。** Chromium 网页实际在其渲染子进程执行；这里的「留 main」指视图生命周期、session 与调试接口由 main 持有，不能让 UI 或 Agent Host 直接持有 webContents。
+- Electron main 管理窗口、WebContentsView、持久 session、CDP 附着与生命周期及 Agent Host 的启动/退出；按任务工作区使用独立 utilityProcess 承载 pi AgentSession 和受管执行。同一工作区可含多个仓库。Agent Host 经受控 typed RPC 请求浏览器操作；权限和任务执行协调有统一权威，不能让 renderer、main 与 Host 各自复制一套规则。
+- React 19 + TypeScript 的自有 renderer 显式设置 `sandbox: true`、`contextIsolation: true`、`nodeIntegration: false`。仅通过最小 preload/contextBridge 暴露按用途限定的类型化请求与事件，不向页面暴露原始 ipcRenderer、任意 IPC channel、文件系统、shell 或通用 CDP 命令。任务网页同样关闭 Node 集成并启用沙箱，但不加载自有界面的本机能力桥。
+- Main 内部按 WindowManager、BrowserManager、CDP Controller、IPC Router 分工。每个任务工作区的 Agent Process 可容纳多个 Pi AgentSession，并统一提供 Git、rg、filesystem、terminal/PTY；会话身份和权限独立，有副作用操作遵循任务级执行协调。xterm.js 只在 renderer 显示和传递输入。本机开发环境已核对 nvm Node 24.21.0，产品运行不依赖 nvm。
+- IPC 使用自定义 typed RPC；运行时校验 payload、发送方及任务/页面归属，定义错误、取消和事件订阅，处理 Host 退出/重启后旧请求失效。TypeScript 类型不替代运行时边界。
+- 任务页使用 WebContentsView，按任务分配 `session.fromPartition('persist:…')`，同任务标签页/登录弹窗共享、跨任务隔离；页面句柄绑定任务和具体 webContents。关闭页面不清除分区，重开保留登录；共享、隔离、重启和弹窗继承必须双平台实测。
+- Agent 通过 main 的 `webContents.debugger` / CDP 适配控制用户看见的同一页面，并管理打开、导航、重载、关闭及恢复。提供语义定位、等待、布局信息、截图、console/异常与网络失败证据，支持设计对照和 Bug 排查；标记反馈按「内置浏览器：Agent 主导，人工查看与标记」执行。DevTools detach、页面销毁、重连及旧句柄失效必须有明确处理。
+- Zustand 负责 UI 状态和 Host 数据的展示投影；任务执行、审批、权限与调度不在 renderer 决策。TanStack Virtual 用于长会话/长列表。撤销此前「TanStack 全家桶优先覆盖」要求，不默认引入其 Router、Query、Table、Form 或 Store。
+- SQLite 保存产品元数据、任务与会话索引等可恢复状态；pi 会话正文先沿用 SDK 的原生持久化，不建立两个独立可写的会话事实来源。SQLite 驱动与写入归属在实现时固定，并验证随包 Node 兼容性。
+- xterm.js 承担终端显示与输入，PTY 在受管执行侧实现；Shiki 负责代码/片段高亮展示，不作为可编辑代码组件。文件编辑范围继续按产品需求评估，不因 Shiki 的选择宣称已有完整编辑器。
+- 构建沿用 Vite 与 TypeScript；开发运行时 Node 24，产品不额外打包 Bun Host。此前已确定的视觉规则与 Tailwind 样式方案延续，但不恢复被撤销的 TanStack 全家桶要求。依赖精确版本与锁文件在实现时固定。
+- macOS arm64 DMG 与 Windows x64 单一安装 EXE 的产品要求保持。打包 Electron、utilityProcess 入口、pi/SQLite/PTY 所需依赖及资源；用户机器不需预装 Node/Bun。macOS 完整签名、公证与 staple，Windows 验证安装器与 Authenticode；不能把编译或便携 EXE 当安装验收。
+- 原型草稿仅作视觉与行为参照。20 建立正式渲染层，21 验证已选 Electron + Node 路线与沙箱/浏览器边界，02 在两者完成后接入真实 pi。**本次仅冻结设计并同步验收约束，所有后续工单继续暂停，未授权启动实现。**
 
-- **桌面壳为 Electron，主进程运行其内置 Node；Bun 作为 PiDock Host 的运行时独立运行。** Electron 版本需固定并随发布锁定；应用窗口与原生集成由 Electron 负责，Host 由 Bun 承载 pi 运行时、受管执行与调度（Windows ARM 仅以 x64 模拟运行，不作为目标）。
-- **PiDock 自身界面与任务浏览器视图使用不同的 Electron `WebContentsView`／`BrowserWindow`，并分属不同信任范围。** 任务页面使用按任务选择的持久 `session.fromPartition('persist:…')`，并通过该 `webContents` 的 `debugger` 接入点获得定位、等待、截图、控制台与失败请求证据；自有界面不向任务页面暴露本机能力桥接，也不复用任务页面的调试作用域。
-- 持久化 `partition` 归属于任务，同任务标签页及登录弹窗复用该分区；页面控制句柄归属于具体视图并绑定任务身份。新建或重开视图不新建任务分区；关闭视图不删除分区。Electron 侧仍须用同一场景验证同任务共享 Cookie／同源 localStorage、登录弹窗继承、跨任务隔离及重启恢复；sessionStorage 等页面级状态遵循浏览器语义，不承诺跨标签共享。不能从参数名称推断与旧框架的 session partition 完全等价。
-- 任务页面证据通过 Electron `webContents.debugger` 接入点获得，用于定位、等待、截图、控制台与失败请求。**不能假设桌面壳提供完整的自动化证据 API**，这些证据必须由真实运行确认，不能从框架文档直接推断。Electron 官方指出开启 DevTools 或关闭 `webContents` 会触发 debugger detach，控制句柄必须能失效并重新绑定。
-- **Windows 发布：** 首版按规格交付可安装的 x64 单一 `.exe`，候选打包路线为 electron-builder NSIS，并将 Bun Host 单文件可执行产物作为资源一并打包；在 Windows runner 上完成 Authenticode 签名，不把便携目录、Setup zip 或其他架构产物当作交付物。
-- macOS 使用 Electron DMG，对 app 内嵌套的 Bun Host 可执行文件一并 codesign，并完成公证与 staple；首版仅验证安装包覆盖升级与卸载路径，不接入框架内置在线更新器及回滚能力。真实安装、升级和卸载仍需在目标系统实测。
-- 渲染层采用 React、Tailwind CSS 与 TanStack。TanStack 优先覆盖能减少自研的部分：路由与搜索参数、数据获取与缓存、表格、虚拟滚动、表单与校验、低频客户端状态。仅在其确实不适用时才自研，并记录理由。
-- Bun 承担 Host 运行时、包管理与项目脚本；Electron 主进程、原生集成与界面渲染使用 Electron 内置 Node／Chromium。业务仓库沿用自身工具链。Host 以 `bun build --compile` 产出单文件二进制随安装包分发，并随主程序一同签名。目标机器不需要预装 Node 或 Bun。
-- pi 可在 Bun 运行时下正常使用（实测见下）；pi 的 `engines` 仍只声明 Node，升级 pi 后必须重测该兼容性。
-- `prototypes/pidock-ui/` 的静态草稿只作为行为与视觉基线，不作为实现代码；按工单 20 用 React、Tailwind 与 TanStack 复原为渲染层基线，再由 02 接入桌面壳与 Host。
-- 快速 UI 草稿允许继续使用 vanilla JS；需要验证正式组件行为时再采用 React／Tailwind／TanStack，不要求改写既有草稿。TanStack 各组件职责、状态归属与迁移方式见 [前端技术栈设计](../../docs/implementation-stack-design.md)。桌面壳的版本与分发限制见 [运行时调研](../../docs/desktop-runtime-research.md)。
+详细职责、版本来源和验证要求见[技术栈设计](../../docs/implementation-stack-design.md)。
 
-已实测的基础事实（不代表已将框架能力当成可用）：Bun 1.4.0 下 pi 0.86.1 可运行且 SDK 可导入并包含 `createAgentSession`；pi 自身以 `bun build --compile` 发布独立二进制；`playwright-core` 在 Bun 下可导入但控制行为未验证。01 实测 Electrobun 2.0.1（macOS arm64）可见 CEF 页面的 CDP 定位、等待、截图、隔离与重启持久化成立，但持久 partition 首建与单个视图移除的生命周期失败；Electron 侧尚未实测。
-
-**决策关卡（已触发）：** 01 用真实运行证据判定 Electrobun 2.0.1 不满足可见页面、按任务持久化隔离与视图生命周期要求，因此按既定规则回退 Electron + Bun Host；结论、失败证据与受影响设计见 [可见页面控制与桌面壳验证](../../docs/browser-automation-validation.md)。Electron 侧的可见浏览器、持久分区、弹窗、接管与调试证据必须用同一验收场景重新验证，不能把框架文档能力当作通过。
 
 ### 建议实现边界
 
 以下为实现建议，关键平台能力需要原型确认；不视为已经运行验证的事实。
 
-- 采用 Electron 与 TypeScript 作为桌面壳，主进程运行 Electron 内置 Node；应用窗口承载产品界面，Bun Host 承载 pi 运行时和受管理执行（见上方「技术栈与运行时」）。前端网页与本机能力通过受控接口连接。
+- 采用 Electron 44+ 与 TypeScript 作为桌面壳，主进程运行 Electron 内置 Node 24；沙箱 renderer 承载产品界面，Node utilityProcess 承载 pi AgentSession 和受管理执行（见上方「技术栈与运行时」）。前端网页与本机能力通过受控接口连接。
 - 桌面界面与 Agent 工具调用同一任务操作入口。任务标识由应用绑定，工具不能通过省略任务参数回退到另一个任务。
 - 工作区管理负责 Git 对象及文件身份、跨仓库准备、局部失败和恢复；配置解析负责模板版本、变量绑定及可解释的生效结果；运行管理负责进程、端口、准备步骤和健康状态；浏览器管理负责任务页面及自动化；会话管理连接 pi 与这些能力。
 - devtask 的工作区与恢复设计作为参考，是否直接复用其 Go 实现取决于跨平台和进程集成成本。首版接口不依赖其当前 symlink 布局。
@@ -381,7 +395,7 @@
 | 二维码配对 | 扫码自动打开正确入口；凭据短时、单次且不含长期令牌／项目名／本机路径，使用、过期或刷新后拒绝复用，最终设备仍需本机确认 |
 | 远程设备授权 | 每台设备独立签发、轮换和撤销；撤销后现有连接与后续请求均失效，默认权限不包含文件、终端及高风险配置 |
 | 公网入口防护 | Funnel 与自建 Gateway 均执行登录、授权、限流、审计和错误脱敏；网络可达不等于通过认证 |
-| 浏览器控制 | Agent 操作用户可见页面、等待异步结果并读取失败证据 |
+| 浏览器控制 | Agent 操作用户可见页面、等待异步结果并读取失败证据；用户点选/框选并附说明发送到当前任务会话，Agent 能关联原页面证据并在修改后复验；页面变化不误用旧坐标 |
 | 浏览器隔离与恢复 | 同任务标签页／登录弹窗共享分区与登录状态，跨任务同站点不同账号互不覆盖；重开视图及任务保留自身状态；恢复后请求目标正确 |
 | 后台与退出 | 关闭窗口继续工作；明确退出停止所属资源，不误停其他任务或外部进程 |
 | 安装包构建与发布 | 版本标签通过 GitHub Actions 生成同版本的 macOS arm64 DMG 与 Windows x64 EXE；文件名、内部版本和实际二进制架构一致，任一缺失或失败则不发布完整 Release |
