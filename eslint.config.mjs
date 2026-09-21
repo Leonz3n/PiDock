@@ -5,12 +5,12 @@ import tseslint from "typescript-eslint";
 
 export default tseslint.config(
   {
-    ignores: ["dist/**", "node_modules/**", ".turbo/**", "src/**/*.gen.ts"],
+    ignores: ["**/dist/**", "**/node_modules/**", "**/.turbo/**", "**/*.gen.ts"],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    files: ["src/**/*.{ts,tsx}"],
+    files: ["packages/*/src/**/*.{ts,tsx}"],
     languageOptions: {
       globals: { ...globals.browser },
       parserOptions: { ecmaFeatures: { jsx: true } },
@@ -23,7 +23,12 @@ export default tseslint.config(
     },
   },
   {
-    files: ["scripts/**/*.mjs", "*.ts"],
+    // Node scripts that also embed `page.evaluate` callbacks running in the browser.
+    files: ["packages/*/scripts/**/*.mjs"],
+    languageOptions: { globals: { ...globals.node, ...globals.browser } },
+  },
+  {
+    files: ["*.mjs"],
     languageOptions: { globals: { ...globals.node } },
   },
 );

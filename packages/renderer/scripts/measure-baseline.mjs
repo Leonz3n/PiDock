@@ -1,0 +1,50 @@
+import { chromium } from "playwright-core";
+
+const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+const BASE = process.env.RENDERER_BASE ?? "http://127.0.0.1:4335";
+
+function rowCounts(element) {
+  return {
+    total: Number(element.getAttribute("data-total-rows")),
+    virtualized: element.getAttribute("data-virtualized"),
+    rendered: element.querySelectorAll('[style*="translateY"]').length,
+  };
+}
+
+const browser = await chromium.launch({ executablePath: CHROME, headless: true });
+try {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
+  const page = await context.newPage();
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(String(error)));
+
+  await page.goto(`${BASE}/attention`, { waitUntil: "networkidle" });
+  const tokens = await page.evaluate(() => {
+    const root = getComputedStyle(document.documentElement);
+    const heading = document.querySelector("h1");
+    const shell = document.querySelector("#root > div");
+    return {
+      accent: root.getPropertyValue("--color-accent").trim(),
+      bg: root.getPropertyValue("--color-bg").trim(),
+      ink: root.getPropertyValue("--color-ink").trim(),
+      bodyBackground: getComputedStyle(document.body).backgroundColor,
+      shellBackground: shell ? getComputedStyle(shell).backgroundColor : null,
+      headingText: heading?.textContent?.trim() ?? null,
+      headingColor: heading ? getComputedStyle(heading).color : null,
+    };
+  });
+
+  await page.goto(`${BASE}/usage`, { waitUntil: "networkidle" });
+  await page.waitForSelector('[data-testid="usage-table"]');
+  const usage = await page.$eval('[data-testid="usage-table"]', rowCounts);
+
+  await page.goto(`${BASE}/projects/atlas/tasks/release?session=main`, { waitUntil: "networkidle" });
+  await page.getByRole("button", { name: /全部会话/ }).click();
+  await page.waitForSelector('[data-testid="session-list"]');
+  const sessions = await page.$eval('[data-testid="session-list"]', rowCounts);
+
+  console.log(JSON.stringify({ tokens, usage, sessions, errors }, null, 2));
+  await context.close();
+} finally {
+  await browser.close();
+}
