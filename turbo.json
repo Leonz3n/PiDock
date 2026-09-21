@@ -25,7 +25,7 @@
       "outputs": []
     },
     "lint": {
-      "inputs": ["src/**", "eslint.config.js", "package.json", "$TURBO_ROOT$/tsconfig.base.json"],
+      "inputs": ["src/**", "$TURBO_ROOT$/eslint.config.mjs", "package.json", "$TURBO_ROOT$/tsconfig.base.json"],
       "outputs": []
     }
   }
