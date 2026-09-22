@@ -134,6 +134,10 @@ function asHostApprovalRecord(value: unknown): HostApprovalRecord | undefined {
   };
 }
 
+// Host records carry no `requestedAt`: the renderer mints a 15m-from-view
+// window per view. A day-old pending Host approval therefore renders as
+// fresh until Host-side reopen-expiry marks it expired (fail-safe: expiry
+// only ever shortens, never extends, the true age).
 function toApprovalFromHostRecord(taskId: string, record: HostApprovalRecord): Approval {
   const title = `${record.tool} ${record.target}`;
   const requestedAt = new Date().toISOString();
@@ -164,6 +168,11 @@ export function createShellHostAdapter(fallback: HostAdapter): HostAdapter {
   // `getApproval(approvalId)` names no task, so Host probing fans out
   // over these ids; unknown ids fall back to memory, else fail closed.
   const knownShellTaskIds = new Set<string>();
+  // Host-only approvals seen via `task/listApprovals` / `task/getApproval`
+  // (other session, restart, another tab): tracked so `resolveApproval`
+  // can route `task/approve|reject` with the listed (taskId, sessionId)
+  // without a prior `sendMessage` in this page session.
+  const listedShellApprovals = new Map<string, { taskId: string; sessionId: string }>();
   return new Proxy(fallback, {
     get(target, property, receiver) {
       if (property === "sendMessage") {
@@ -224,7 +233,41 @@ export function createShellHostAdapter(fallback: HostAdapter): HostAdapter {
             const result = await shellTaskOp(pending.taskId, op, { sessionId: pending.sessionId, approvalId });
             if (!result.ok) throw shellResultError(result, "确认操作失败，请重试");
             pendingShellApprovals.delete(approvalId);
+            listedShellApprovals.delete(approvalId);
             return { ...toShellApproval(pending), status, executed: status === "approved" };
+          }
+          // Host-only approval seen via listing (other session, restart,
+          // another tab): resolve directly via task/approve|reject.
+          const listed = listedShellApprovals.get(approvalId);
+          if (listed) {
+            const op = status === "approved" ? "task/approve" : "task/reject";
+            const result = await shellTaskOp(listed.taskId, op, { sessionId: listed.sessionId, approvalId });
+            if (!result.ok) throw shellResultError(result, "确认操作失败，请重试");
+            pendingShellApprovals.delete(approvalId);
+            listedShellApprovals.delete(approvalId);
+            const read = await (target as HostAdapter).getApproval(approvalId).catch(() => undefined);
+            return { ...(read ?? { id: approvalId, taskId: listed.taskId, sessionId: listed.sessionId } as Approval), status, executed: status === "approved" };
+          }
+          // Probe the Host (task/getApproval over known tasks) before the
+          // memory fallback: covers Host approvals never listed in this tab.
+          for (const trackedTask of [...knownShellTaskIds].sort()) {
+            let probed: ShellTaskOpResult;
+            try {
+              probed = await shellTaskOp(trackedTask, "task/getApproval", { approvalId });
+            } catch {
+              continue;
+            }
+            if (probed.ok) {
+              const record = asHostApprovalRecord(asRecord(probed.payload)["approval"]);
+              if (record) {
+                const op = status === "approved" ? "task/approve" : "task/reject";
+                const result = await shellTaskOp(trackedTask, op, { sessionId: record.sessionId, approvalId });
+                if (!result.ok) throw shellResultError(result, "确认操作失败，请重试");
+                pendingShellApprovals.delete(approvalId);
+                listedShellApprovals.delete(approvalId);
+                return { ...toApprovalFromHostRecord(trackedTask, record), status, executed: status === "approved" };
+              }
+            }
           }
           // No shell approval with this id: fall back to memory (local-only
           // approvals such as the dev/demo fixtures), else fail closed.
@@ -245,13 +288,22 @@ export function createShellHostAdapter(fallback: HostAdapter): HostAdapter {
           // adapter has seen (`knownShellTaskIds`); only a `found`
           // record counts — `{ok:false}` / malformed records never
           // resolve (fall through to memory, never throw).
+          // Bridged detail never throws: a rejected bridge (transport
+          // failure) falls through to the memory fallback below, matching
+          // the never-throw read contract.
           if (isShellConnected()) {
             for (const trackedTask of [...knownShellTaskIds].sort()) {
-              const result = await shellTaskOp(trackedTask, "task/getApproval", { approvalId });
+              let result: ShellTaskOpResult;
+              try {
+                result = await shellTaskOp(trackedTask, "task/getApproval", { approvalId });
+              } catch {
+                continue;
+              }
               if (result.ok) {
                 const record = asHostApprovalRecord(asRecord(result.payload)["approval"]);
                 if (record) {
                   knownShellTaskIds.add(trackedTask);
+                  listedShellApprovals.set(approvalId, { taskId: trackedTask, sessionId: record.sessionId });
                   return toApprovalFromHostRecord(trackedTask, record);
                 }
               }
@@ -264,18 +316,27 @@ export function createShellHostAdapter(fallback: HostAdapter): HostAdapter {
         return async (taskId: string) => {
           const local = await (target as HostAdapter).listApprovals(taskId);
           // Bridged listing first: real Host approvals (`task/listApprovals`)
-          // replace the synthetic merge; a failed RPC keeps the local
-          // synthetics + memory fixture merge (fail-open read, never throw).
+          // replace the synthetic merge; a failed or rejected RPC keeps the
+          // local synthetics + memory fixture merge (fail-open read,
+          // never throw).
           if (isShellConnected()) {
-            const result = await shellTaskOp(taskId, "task/listApprovals", {});
+            let result: ShellTaskOpResult;
+            try {
+              result = await shellTaskOp(taskId, "task/listApprovals", {});
+            } catch {
+              result = { ok: false };
+            }
             if (result.ok) {
               knownShellTaskIds.add(taskId);
               const raw = asRecord(result.payload)["approvals"];
               if (Array.isArray(raw)) {
-                const listed = raw
+                const records = raw
                   .map(asHostApprovalRecord)
-                  .filter((record): record is HostApprovalRecord => record !== undefined)
-                  .map((record) => toApprovalFromHostRecord(taskId, record));
+                  .filter((record): record is HostApprovalRecord => record !== undefined);
+                for (const record of records) {
+                  listedShellApprovals.set(record.id, { taskId, sessionId: record.sessionId });
+                }
+                const listed = records.map((record) => toApprovalFromHostRecord(taskId, record));
                 const listedIds = new Set(listed.map((approval) => approval.id));
                 // Merge local synthetics the Host does not (yet) know:
                 // the stub above returns `[]`, but a fresh `sendMessage`
@@ -294,8 +355,8 @@ export function createShellHostAdapter(fallback: HostAdapter): HostAdapter {
         };
       }
       if (property === "simulateExpiry") {
-        // Approval reads stay local until the Host exposes an approval
-        // listing RPC (S6 batch 3 scope: turns + resolve only).
+        // Expiry simulation stays local; approval listing/detail now
+        // bridge the Host (`task/listApprovals`/`task/getApproval`).
         const value = Reflect.get(target, property, receiver);
         return typeof value === "function" ? value.bind(target) : value;
       }
