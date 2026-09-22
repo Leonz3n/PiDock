@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
+import { CHROME, EVIDENCE_DIR, RENDERER_BASE, VIEWPORT } from "./evidence.mjs";
 
 /**
  * π 标记居中检查。jsdom 没有布局，因此对真实 dev server 运行：测量品牌圆形
@@ -11,9 +11,6 @@ import { chromium } from "playwright-core";
  * Requires the renderer dev server on RENDERER_BASE (default 4335).
  */
 
-const CHROME = process.env.CHROME_PATH ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-const BASE = process.env.RENDERER_BASE ?? "http://127.0.0.1:4335";
-const OUT = process.env.EVIDENCE_DIR ?? fileURLToPath(new URL("../../../docs/evidence/renderer-baseline-2026-09-22/", import.meta.url));
 const TOLERANCE_PX = 1.5;
 
 const browser = await chromium.launch({ executablePath: CHROME, headless: true });
@@ -25,12 +22,12 @@ const assert = (name, condition, detail) => {
 };
 
 try {
-  const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2 });
+  const context = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor: 2 });
   const page = await context.newPage();
   const errors = [];
   page.on("pageerror", (error) => errors.push(String(error)));
 
-  await page.goto(`${BASE}/attention`, { waitUntil: "networkidle" });
+  await page.goto(`${RENDERER_BASE}/attention`, { waitUntil: "networkidle" });
   await page.waitForSelector('[data-testid="brand-mark"]');
 
   const metrics = await page.$eval('[data-testid="brand-mark"]', (element) => {
@@ -63,17 +60,17 @@ try {
   assert("glyph-centered-vertically", Math.abs(metrics.offsetY) <= TOLERANCE_PX, { offsetY: metrics.offsetY, tolerance: TOLERANCE_PX });
   assert("glyph-uses-accent-blue", metrics.color === "rgb(35, 60, 120)", { color: metrics.color });
 
-  await mkdir(OUT, { recursive: true });
+  await mkdir(EVIDENCE_DIR, { recursive: true });
   const target = page.locator('[data-testid="brand-mark"]');
-  await target.screenshot({ path: `${OUT}renderer/brand-mark.png` });
+  await target.screenshot({ path: `${EVIDENCE_DIR}renderer/brand-mark.png` });
 
   checks.pageErrors = errors;
   assert("no-page-errors", errors.length === 0, errors);
 
   const report = { metrics, checks, failed };
   console.log(JSON.stringify(report, null, 2));
-  await writeFile(`${OUT}brand-mark-verification.json`, `${JSON.stringify(report, null, 2)}\n`);
-  console.log(`\nwrote ${OUT}brand-mark-verification.json`);
+  await writeFile(`${EVIDENCE_DIR}brand-mark-verification.json`, `${JSON.stringify(report, null, 2)}\n`);
+  console.log(`\nwrote ${EVIDENCE_DIR}brand-mark-verification.json`);
   await context.close();
 } finally {
   await browser.close();

@@ -56,9 +56,11 @@ export function viewportWindowSize(options: { itemCount: number; rowHeight: numb
  * fallback used before layout exists (for example under jsdom), so callers
  * always get a bounded window of rows instead of the whole collection.
  *
- * `data-viewport-height` / `data-row-height` / `data-overscan` /
- * `data-expected-rows` expose the window derivation so evidence scripts can
- * compare the rendered row count against `ceil(viewportHeight / rowHeight) + overscan`.
+ * `data-declared-height` / `data-viewport-height` / `data-row-height` /
+ * `data-overscan` / `data-expected-rows` expose the window derivation so evidence
+ * scripts can assert `viewportHeight === declared` (guarding against the height
+ * collapsing) and `rendered === ceil(viewportHeight / rowHeight) + overscan`
+ * (guarding against a wrong window).
  */
 export function VirtualList<T>({
   items,
@@ -113,6 +115,7 @@ export function VirtualList<T>({
       data-testid={testId}
       data-virtualized="true"
       data-total-rows={items.length}
+      data-declared-height={height}
       data-viewport-height={viewportHeight}
       data-row-height={rowHeight}
       data-overscan={overscan}
