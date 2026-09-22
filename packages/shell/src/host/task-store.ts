@@ -19,6 +19,28 @@ import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { PiSessionSnapshot } from "../main/pi-session.js";
 
+export interface RepoSourceRecord {
+  /** In-task folder name (single safe component). */
+  repoDir: string;
+  /** Remote fetched for this repo (e.g. `origin`, `upstream`). */
+  remote: string;
+  /** Baseline branch on that remote (e.g. `main`, `release/v2`). */
+  remoteBranch: string;
+  /** Pinned full commit fixed at fetch time (never a stale ref). */
+  baseCommit: string;
+}
+
+export interface PlainDirLinkRecord {
+  /** Stable in-task link name (`dir-` + 8 chars, ASCII only). */
+  linkName: string;
+  /** Identity of the linked entry (project directory id). */
+  directoryId: string;
+  /** Absolute original target captured at link time. */
+  sourcePath: string;
+  /** ISO time the snapshot was taken. */
+  snapshotAt: string;
+}
+
 export interface TaskDiskRecord {
   taskId: string;
   name: string;
@@ -29,6 +51,19 @@ export interface TaskDiskRecord {
   remoteBranch: string;
   baseCommit: string;
   repos: string[];
+  /**
+   * Per-repo sources for [PiDock 03] (#6). Absent on pre-#6 records
+   * (single-repo shape); present once a #6 provision/append writes them.
+   * The single-repo `remoteBranch`/`baseCommit` above stay as the task's
+   * primary baseline for backward compatibility.
+   */
+  repoSources?: RepoSourceRecord[];
+  /**
+   * Plain-directory link snapshots for [PiDock 03] (#6). Each entry is a
+   * shared view of its original target, NOT an independent copy: writes
+   * through the link modify the original. Absent on pre-#6 records.
+   */
+  dirLinks?: PlainDirLinkRecord[];
   createdAt: string;
   updatedAt: string;
 }
@@ -68,9 +103,11 @@ export function buildTaskDiskRecord(input: {
   remoteBranch: string;
   baseCommit: string;
   repos: readonly string[];
+  repoSources?: RepoSourceRecord[];
+  dirLinks?: PlainDirLinkRecord[];
   now: string;
 }): TaskDiskRecord {
-  return {
+  const record: TaskDiskRecord = {
     taskId: input.taskId,
     name: input.name,
     dirId: input.dirId,
@@ -83,6 +120,9 @@ export function buildTaskDiskRecord(input: {
     createdAt: input.now,
     updatedAt: input.now,
   };
+  if (input.repoSources !== undefined) record.repoSources = input.repoSources.map((source) => ({ ...source }));
+  if (input.dirLinks !== undefined) record.dirLinks = input.dirLinks.map((link) => ({ ...link }));
+  return record;
 }
 
 export function serializeTaskRecord(record: TaskDiskRecord): string {
@@ -102,6 +142,42 @@ export function parseTaskRecord(raw: string): TaskDiskRecord {
   }
   if (!Array.isArray(record["repos"]) || !(record["repos"] as unknown[]).every((item) => typeof item === "string")) {
     throw new Error("invalid-payload: task record.repos must be a string array");
+  }
+  // #6 per-repo sources: optional for pre-#6 records, fully validated
+  // when present (each source names its own remote + pinned commit).
+  if (record["repoSources"] !== undefined) {
+    if (!Array.isArray(record["repoSources"])) {
+      throw new Error("invalid-payload: task record.repoSources must be an array");
+    }
+    for (const source of record["repoSources"] as unknown[]) {
+      if (typeof source !== "object" || source === null || Array.isArray(source)) {
+        throw new Error("invalid-payload: task record.repoSources entries must be objects");
+      }
+      const entry = source as Record<string, unknown>;
+      for (const key of ["repoDir", "remote", "remoteBranch", "baseCommit"] as const) {
+        if (typeof entry[key] !== "string" || (entry[key] as string).length === 0) {
+          throw new Error(`invalid-payload: task record.repoSources.${key} must be a non-empty string`);
+        }
+      }
+    }
+  }
+  // #6 plain-dir link snapshots: optional for pre-#6 records, shape-checked
+  // when present. Link targets are shared originals (not copies).
+  if (record["dirLinks"] !== undefined) {
+    if (!Array.isArray(record["dirLinks"])) {
+      throw new Error("invalid-payload: task record.dirLinks must be an array");
+    }
+    for (const link of record["dirLinks"] as unknown[]) {
+      if (typeof link !== "object" || link === null || Array.isArray(link)) {
+        throw new Error("invalid-payload: task record.dirLinks entries must be objects");
+      }
+      const entry = link as Record<string, unknown>;
+      for (const key of ["linkName", "directoryId", "sourcePath", "snapshotAt"] as const) {
+        if (typeof entry[key] !== "string" || (entry[key] as string).length === 0) {
+          throw new Error(`invalid-payload: task record.dirLinks.${key} must be a non-empty string`);
+        }
+      }
+    }
   }
   // Timestamps are required: a corrupt/partial record must not restore
   // with `createdAt/updatedAt` silently `undefined`.

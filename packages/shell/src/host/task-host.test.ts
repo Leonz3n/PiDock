@@ -566,3 +566,99 @@ describe("S6 batch 3: exec.run approval end-to-end through Host sendMessage", ()
     expect(taskHost.openSession("main").pendingApproval()).toBeUndefined();
   });
 });
+
+describe("#6 multi-repo provision + append (S2)", () => {
+  const selections = [
+    { repoDir: "frontend", remote: "origin", remoteBranch: "main", mainCheckoutDir: "/src/frontend" },
+    { repoDir: "invoice", remote: "upstream", remoteBranch: "release/v2", mainCheckoutDir: "/src/invoice" },
+  ];
+
+  function multiProvisionInput() {
+    return {
+      name: "多仓任务",
+      dirId: "task-abcdef12",
+      remoteBranch: "main",
+      fetchedCommit: "a5a4a0d1234",
+      repoSelections: selections,
+      fetchedCommits: { frontend: "a5a4a0d1234", invoice: "beef001234" },
+      plainDirs: [{ directoryId: "notes-1", sourcePath: "/data/notes" }],
+    };
+  }
+
+  it("persists per-repo sources with pinned commits and link snapshots", () => {
+    const taskHost = host();
+    const { record, plan } = taskHost.provision(multiProvisionInput());
+    expect(record.repoSources).toEqual([
+      { repoDir: "frontend", remote: "origin", remoteBranch: "main", baseCommit: "a5a4a0d1234" },
+      { repoDir: "invoice", remote: "upstream", remoteBranch: "release/v2", baseCommit: "beef001234" },
+    ]);
+    expect(record.repos).toEqual(["frontend", "invoice"]);
+    expect(record.dirLinks).toHaveLength(1);
+    expect(record.dirLinks?.[0]).toMatchObject({
+      directoryId: "notes-1",
+      sourcePath: "/data/notes",
+      linkName: "dir-notes1",
+    });
+    // Per-repo commits ride per-repo plans (no cross-use of one commit):
+    // assert on the pinned branch ops (branch <name> <commit>) since the
+    // worktree add itself names the worktree dir + branch, not the commit.
+    expect(plan.ops).toHaveLength(6);
+    const branchArgs = plan.ops.filter((op) => op.kind === "branch").map((op) => op.args.join(" "));
+    expect(branchArgs[0]).toContain("a5a4a0d1234");
+    expect(branchArgs[0]).not.toContain("beef001234");
+    expect(branchArgs[1]).toContain("beef001234");
+    // Round-trip through the typed parser (pre-#6 records stay valid:
+    // no new required keys).
+    expect(parseTaskRecord(JSON.stringify(record)).repoSources).toHaveLength(2);
+  });
+
+  it("fails the whole batch on one fetch failure with the form kept", () => {
+    const taskHost = host();
+    expect(() =>
+      taskHost.provision({ ...multiProvisionInput(), fetchedCommits: { frontend: "a5a4a0d1234" } }),
+    ).toThrow("fetch-failed");
+    expect(taskHost.taskRecord()).toBeNull();
+  });
+
+  it("appends only new repos, keeping baselines, root and lock state", () => {
+    const taskHost = host();
+    taskHost.provision(multiProvisionInput());
+    taskHost.openSession("busy");
+    const appended = taskHost.appendRepos({
+      repoSelections: [
+        ...selections,
+        { repoDir: "shipment", remote: "origin", remoteBranch: "main", mainCheckoutDir: "/src/shipment" },
+      ],
+      fetchedCommits: { shipment: "c0ffee1234" },
+    });
+    expect(appended.appended).toEqual(["shipment"]);
+    expect(appended.skipped).toEqual(["frontend", "invoice"]);
+    expect(appended.record.repos).toEqual(["frontend", "invoice", "shipment"]);
+    expect(appended.record.repoSources?.find((source) => source.repoDir === "frontend")?.baseCommit).toBe("a5a4a0d1234");
+    expect(appended.record.taskDir).toBe(TASK_DIR);
+    expect(appended.plan.ops).toHaveLength(3);
+    // Busy sessions are not rebound: their channels survive the append.
+    expect(taskHost.openSession("busy").taskId).toBe(TASK_ID);
+  });
+
+  it("reports append conflicts without touching stored baselines", () => {
+    const taskHost = host();
+    taskHost.provision(multiProvisionInput());
+    expect(() =>
+      taskHost.appendRepos({
+        repoSelections: [
+          { repoDir: "shipment", remote: "origin", remoteBranch: "main", mainCheckoutDir: "/src/shipment" },
+        ],
+        fetchedCommits: { shipment: "c0ffee1234" },
+        takenPaths: [`${TASK_DIR}/shipment`],
+      }),
+    ).toThrow("path-taken");
+    expect(taskHost.taskRecord()?.repos).toEqual(["frontend", "invoice"]);
+  });
+
+  it("probes link targets Host-side (dead vs ok)", () => {
+    const taskHost = host();
+    expect(taskHost.probeLinkTarget("/definitely/missing/pidock-notes").shape).toBe("dead");
+    expect(taskHost.probeLinkTarget("/tmp").shape).toBe("ok");
+  });
+});

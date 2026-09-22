@@ -159,6 +159,59 @@ function dispatchTaskOp(
         if (checkouts === null) {
           return { ok: false, error: "invalid-payload: task/provision.mainCheckouts must map repo names to path strings" };
         }
+        // #6 multi-repo + plain-dir fields (all optional, all fail-closed
+        // inside `host.provision`): `repoSelections` (per-repo remote +
+        // baseline), `fetchedCommits` (per-repo pinned commits), and
+        // `plainDirs` ({directoryId, sourcePath} link snapshots — shared
+        // views of the originals, never copies).
+        const repoSelections = record["repoSelections"];
+        const selections =
+          repoSelections === undefined
+            ? undefined
+            : Array.isArray(repoSelections) &&
+                repoSelections.every(
+                  (entry) =>
+                    typeof entry === "object" &&
+                    entry !== null &&
+                    !Array.isArray(entry) &&
+                    typeof (entry as Record<string, unknown>)["repoDir"] === "string" &&
+                    typeof (entry as Record<string, unknown>)["remote"] === "string" &&
+                    typeof (entry as Record<string, unknown>)["remoteBranch"] === "string" &&
+                    typeof (entry as Record<string, unknown>)["mainCheckoutDir"] === "string",
+                )
+              ? (repoSelections as { repoDir: string; remote: string; remoteBranch: string; mainCheckoutDir: string }[])
+              : null;
+        if (selections === null) {
+          return { ok: false, error: "invalid-payload: task/provision.repoSelections must be an array of {repoDir, remote, remoteBranch, mainCheckoutDir}" };
+        }
+        const fetchedCommits = record["fetchedCommits"];
+        const commits =
+          fetchedCommits === undefined
+            ? undefined
+            : isMainCheckouts(fetchedCommits)
+              ? (fetchedCommits as Record<string, string>)
+              : null;
+        if (commits === null) {
+          return { ok: false, error: "invalid-payload: task/provision.fetchedCommits must map repo names to commit strings" };
+        }
+        const plainDirs = record["plainDirs"];
+        const dirs =
+          plainDirs === undefined
+            ? undefined
+            : Array.isArray(plainDirs) &&
+                plainDirs.every(
+                  (entry) =>
+                    typeof entry === "object" &&
+                    entry !== null &&
+                    !Array.isArray(entry) &&
+                    typeof (entry as Record<string, unknown>)["directoryId"] === "string" &&
+                    typeof (entry as Record<string, unknown>)["sourcePath"] === "string",
+                )
+              ? (plainDirs as { directoryId: string; sourcePath: string }[])
+              : null;
+        if (dirs === null) {
+          return { ok: false, error: "invalid-payload: task/provision.plainDirs must be an array of {directoryId, sourcePath}" };
+        }
         // `host.provision` returns the persisted record AND the executable
         // plan (real cwds; empty only in the sense of zero ops). Both ride
         // the `host/task` result payload so a caller can persist-then-execute
@@ -172,8 +225,61 @@ function dispatchTaskOp(
           fetchedCommit,
           repos,
           mainCheckouts: checkouts,
+          repoSelections: selections,
+          fetchedCommits: commits,
+          plainDirs: dirs,
         });
         return { ok: true, payload: { ...saved, plan } };
+      }
+      // #6 append: only repos not already in the task are fetched/planned
+      // (existing baselines + running state untouched; busy sessions are
+      // NOT silently rebound — the caller refreshes them at an explicit
+      // boundary from the returned `appended` list).
+      case "task/appendRepos": {
+        const appendSelections = record["repoSelections"];
+        if (!Array.isArray(appendSelections)) {
+          return { ok: false, error: "invalid-payload: task/appendRepos requires repoSelections" };
+        }
+        const fetched = record["fetchedCommits"];
+        if (typeof fetched !== "object" || fetched === null || Array.isArray(fetched)) {
+          return { ok: false, error: "invalid-payload: task/appendRepos requires fetchedCommits" };
+        }
+        const appendBranch = typeof record["branch"] === "string" ? (record["branch"] as string) : undefined;
+        const appendCheckouts = record["mainCheckouts"];
+        const appendCheckoutMap =
+          appendCheckouts === undefined
+            ? undefined
+            : isMainCheckouts(appendCheckouts)
+              ? (appendCheckouts as Record<string, string>)
+              : null;
+        if (appendCheckoutMap === null) {
+          return { ok: false, error: "invalid-payload: task/appendRepos.mainCheckouts must map repo names to path strings" };
+        }
+        const taken = Array.isArray(record["takenPaths"]) ? (record["takenPaths"] as string[]) : undefined;
+        const inUse = Array.isArray(record["branchesInUse"]) ? (record["branchesInUse"] as string[]) : undefined;
+        try {
+          const appended = host.appendRepos({
+            repoSelections: appendSelections as { repoDir: string; remote: string; remoteBranch: string; mainCheckoutDir: string }[],
+            fetchedCommits: fetched as Record<string, string>,
+            branch: appendBranch,
+            mainCheckouts: appendCheckoutMap,
+            takenPaths: taken,
+            branchesInUse: inUse,
+          });
+          return { ok: true, payload: { ...appended.record, plan: appended.plan, appended: appended.appended, skipped: appended.skipped } };
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : String(error) };
+        }
+      }
+      // #6 link probe: Host-side fs check whether a plain-dir source still
+      // exists (report only — never creates, follows, or takes over).
+      case "task/probeLink": {
+        const sourcePath = record["sourcePath"];
+        if (typeof sourcePath !== "string" || sourcePath.length === 0) {
+          return { ok: false, error: "invalid-payload: task/probeLink requires sourcePath" };
+        }
+        const probed = host.probeLinkTarget(sourcePath);
+        return { ok: true, payload: { ...probed } };
       }
       case "task/sendMessage": {
         const sessionId = record["sessionId"];

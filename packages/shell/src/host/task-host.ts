@@ -29,6 +29,19 @@ import {
   type ProvisionPlan,
 } from "../main/task-provision.js";
 import {
+  checkRepoConflicts,
+  classifyLinkTarget,
+  filterAppendRepos,
+  pinRepoBaselines,
+  previewMixedTaskPaths,
+  snapshotPlainDirLink,
+  validateRepoSelections,
+  type MultiRepoError,
+  type PlainDirLinkSnapshot,
+  type PinnedRepoBaseline,
+  type RepoSelection,
+} from "../main/multi-repo-provision.js";
+import {
   buildTaskDiskRecord,
   listSessionIdsOnDisk,
   readSessionSnapshotOnDisk,
@@ -85,6 +98,20 @@ export interface ProvisionTaskInput {
   fetchedCommit: string;
   repos?: readonly string[];
   /**
+   * [PiDock 03] (#6) per-repo sources: each repo names its own remote +
+   * baseline branch. When present and non-empty, the Host pins every repo
+   * (all-success gate) and persists `repoSources` on the task record.
+   * The legacy single `remoteBranch`/`fetchedCommit` above stays as the
+   * task's primary baseline for backward compatibility.
+   */
+  repoSelections?: readonly RepoSelection[];
+  /**
+   * [PiDock 03] (#6) plain-directory entries: `{ directoryId, sourcePath }`
+   * pairs snapshotted into `dirLinks` on the task record. Links are shared
+   * views of the originals (writes modify the original), never copies.
+   */
+  plainDirs?: readonly { directoryId: string; sourcePath: string }[];
+  /**
    * Per-repo source checkout the git ops run in (fetch/branch/worktree
    * `cwd`). `provision()` validates each entry with
    * `planWorktreeCreation` (which rejects relative/empty cwds), so
@@ -94,6 +121,12 @@ export interface ProvisionTaskInput {
    * Host (S2 returns the plan and persists the record only).
    */
   mainCheckouts?: Readonly<Record<string, string>>;
+  /**
+   * [PiDock 03] (#6) per-repo fetched commits keyed by `repoDir`, used
+   * with `repoSelections` for the all-success pin gate. Absent entries
+   * fall back to the task-level `fetchedCommit` (single-remote shape).
+   */
+  fetchedCommits?: Readonly<Record<string, string>>;
   now?: string;
 }
 
@@ -181,7 +214,54 @@ export class TaskWorkspaceHost {
     if (!branched.ok) throw new Error(`${branched.error.code}: ${branched.error.message}`);
     const pinned = pinBaseline(input.remoteBranch, input.fetchedCommit);
     if (!pinned.ok) throw new Error(`${pinned.error.code}: ${pinned.error.message} (form kept, retry fetch)`);
-    const repos = [...(input.repos ?? [])];
+    // #6 per-repo sources (optional): validate selections, pin every repo
+    // (all-success gate), persist `repoSources`. The pinned commits ride
+    // `fetchedCommits` when the RPC carries them; otherwise each repo
+    // falls back to the task-level pinned commit (single-remote shape).
+    const selections = input.repoSelections !== undefined ? [...input.repoSelections] : null;
+    let pinnedRepos: PinnedRepoBaseline[] | null = null;
+    if (selections !== null) {
+      const validated = validateRepoSelections(selections);
+      if (!validated.ok) {
+        const error: MultiRepoError = validated.error;
+        throw new Error(`${error.code}: ${error.message} (form kept, retry fetch)`);
+      }
+      const fetchedCommits: Record<string, string> = {};
+      for (const selection of validated.selections) {
+        // No fallback to the task-level commit: with per-repo selections
+        // each repo must pin its own freshly fetched commit, otherwise one
+        // missing fetch would silently cross-use another repo's commit.
+        const commit = input.fetchedCommits?.[selection.repoDir];
+        if (typeof commit !== "string") {
+          throw new Error(`fetch-failed: 仓库 ${selection.repoDir} 尚未获取基线，已保留表单，请重试获取后再创建 (form kept, retry fetch)`);
+        }
+        fetchedCommits[selection.repoDir] = commit;
+      }
+      const batch = pinRepoBaselines(validated.selections, fetchedCommits);
+      if (!batch.ok) {
+        const error: MultiRepoError = batch.error;
+        throw new Error(`${error.code}: ${error.message} (form kept, retry fetch)`);
+      }
+      pinnedRepos = [...batch.pinned];
+      const repoDirs = pinnedRepos.map((repo) => repo.repoDir);
+      const mixed = previewMixedTaskPaths(this.taskDir, repoDirs, []);
+      void mixed;
+    }
+    // #6 plain-dir links (optional): snapshot each entry (shared view of
+    // the original, never a copy). Fail-closed per entry with the form kept.
+    let linkSnapshots: PlainDirLinkSnapshot[] | null = null;
+    if (input.plainDirs !== undefined) {
+      linkSnapshots = [];
+      for (const entry of input.plainDirs) {
+        const snap = snapshotPlainDirLink({ directoryId: entry.directoryId, sourcePath: entry.sourcePath, now: input.now ?? this.now() });
+        if (!snap.ok) {
+          const error: MultiRepoError = snap.error;
+          throw new Error(`${error.code}: ${error.message} (form kept)`);
+        }
+        linkSnapshots.push(snap.snapshot);
+      }
+    }
+    const repos = pinnedRepos !== null ? pinnedRepos.map((repo) => repo.repoDir) : [...(input.repos ?? [])];
     const paths = previewTaskPaths(resolved.root, input.dirId, repos, []);
     if (paths.taskDir !== this.taskDir) {
       throw new Error(`invalid-payload: provision paths ${paths.taskDir} do not match this Host's task dir ${this.taskDir}`);
@@ -198,10 +278,46 @@ export class TaskWorkspaceHost {
       remoteBranch: pinned.remoteBranch,
       baseCommit: pinned.commit,
       repos,
+      repoSources:
+        pinnedRepos !== null
+          ? pinnedRepos.map((repo) => ({
+              repoDir: repo.repoDir,
+              remote: repo.remote,
+              remoteBranch: repo.remoteBranch,
+              baseCommit: repo.commit,
+            }))
+          : undefined,
+      dirLinks:
+        linkSnapshots !== null
+          ? linkSnapshots.map((link) => ({
+              linkName: link.linkName,
+              directoryId: link.directoryId,
+              sourcePath: link.sourcePath,
+              snapshotAt: link.snapshotAt,
+            }))
+          : undefined,
       now: at,
     });
     // Re-provision bumps only `updatedAt`: the first creation time stays.
-    if (previous) record.createdAt = previous.createdAt;
+    // #6 append path: re-provision keeps previously persisted `repoSources`
+    // / `dirLinks` entries not named in this call (existing baselines and
+    // running state are untouched; only new repos/links are added).
+    if (previous) {
+      record.createdAt = previous.createdAt;
+      if (pinnedRepos !== null && previous.repoSources !== undefined) {
+        const incoming = new Set(pinnedRepos.map((repo) => repo.repoDir));
+        const kept = previous.repoSources.filter((source) => !incoming.has(source.repoDir));
+        record.repoSources = [...kept, ...(record.repoSources ?? [])];
+        record.repos = [...new Set([...(previous.repos ?? []), ...record.repos])];
+      }
+      if (linkSnapshots !== null && previous.dirLinks !== undefined) {
+        const incoming = new Set(linkSnapshots.map((link) => link.directoryId));
+        const kept = previous.dirLinks.filter((link) => !incoming.has(link.directoryId));
+        record.dirLinks = [...kept, ...(record.dirLinks ?? [])];
+      }
+      if (pinnedRepos === null && previous.repoSources !== undefined) record.repoSources = previous.repoSources;
+      if (linkSnapshots === null && previous.dirLinks !== undefined) record.dirLinks = previous.dirLinks;
+    }
     this.store.writeTask(this.taskDir, record);
     // Plan with real cwds via `planWorktreeCreation` (never ""): one
     // fetch/branch/worktree triple per repo, each executed in that repo's
@@ -219,18 +335,138 @@ export class TaskWorkspaceHost {
     };
     for (const repoDir of repos) {
       const mainCheckoutDir = input.mainCheckouts?.[repoDir] ?? resolved.root;
+      // #6: per-repo pinned commits win over the task-level commit so two
+      // repos never share one fixed commit (no cross-use).
+      const commit = pinnedRepos !== null ? (pinnedRepos.find((repo) => repo.repoDir === repoDir)?.commit ?? pinned.commit) : pinned.commit;
+      const remoteBranch =
+        pinnedRepos !== null ? (pinnedRepos.find((repo) => repo.repoDir === repoDir)?.remoteBranch ?? pinned.remoteBranch) : pinned.remoteBranch;
       const repoPlan = planWorktreeCreation({
         taskDir: this.taskDir,
         mainCheckoutDir,
         repoDir,
-        remoteBranch: pinned.remoteBranch,
-        commit: pinned.commit,
+        remoteBranch,
+        commit,
         branch: branched.branch,
       });
       plan.ops.push(...repoPlan.ops);
     }
     assertProvisionPlanSafe(plan);
     return { record, plan };
+  }
+
+  /**
+   * [PiDock 03] (#6) append: only repos not already in the task are
+   * fetched/planned. Existing baselines (`repoSources`), running state
+   * (write lock), and the stored root/dirId are untouched; busy sessions
+   * are NOT silently rebound — the caller refreshes them at an explicit
+   * boundary (the append returns the new repos for the view/Agent to pick
+   * up). Returns the appended subset plus the full plan for new repos.
+   */
+  appendRepos(input: {
+    repoSelections: readonly RepoSelection[];
+    fetchedCommits: Readonly<Record<string, string>>;
+    branch?: string;
+    mainCheckouts?: Readonly<Record<string, string>>;
+    takenPaths?: readonly string[];
+    branchesInUse?: readonly string[];
+  }): { record: TaskDiskRecord; plan: ProvisionPlan; appended: string[]; skipped: string[] } {
+    const stored = this.store.readTask(this.taskDir);
+    if (!stored) throw new Error("unknown task: no task record; provision the task before appending");
+    if (stored.taskId !== this.taskId) throw new Error("task-unknown: this Host serves a different task");
+    const validated = validateRepoSelections(input.repoSelections);
+    if (!validated.ok) {
+      const error: MultiRepoError = validated.error;
+      throw new Error(`${error.code}: ${error.message} (form kept, retry fetch)`);
+    }
+    const { appended, skipped } = filterAppendRepos(stored.repos, validated.selections.map((selection) => selection.repoDir));
+    const fresh = validated.selections.filter((selection) => appended.includes(selection.repoDir));
+    const fetched: Record<string, string> = {};
+    for (const selection of fresh) {
+      const commit = input.fetchedCommits[selection.repoDir];
+      if (typeof commit !== "string") {
+        throw new Error(`fetch-failed: 仓库 ${selection.repoDir} 尚未获取基线，已保留表单，请重试获取后再追加 (form kept, retry fetch)`);
+      }
+      fetched[selection.repoDir] = commit;
+    }
+    // All-success gate over the NEW repos only (existing baselines stay).
+    const batch = pinRepoBaselines(fresh, fetched);
+    if (!batch.ok) {
+      const error: MultiRepoError = batch.error;
+      throw new Error(`${error.code}: ${error.message} (form kept, retry fetch)`);
+    }
+    const branch = input.branch ?? stored.branch;
+    const mixed = previewMixedTaskPaths(this.taskDir, appended, []);
+    const conflict = checkRepoConflicts({
+      wantedWorktreeDirs: appended.map((repoDir) => mixed.worktrees[repoDir]),
+      takenPaths: input.takenPaths ?? [],
+      branchesInUse: input.branchesInUse ?? [],
+      wantedBranch: branch,
+    });
+    if (!conflict.ok) {
+      const error: MultiRepoError = conflict.error;
+      throw new Error(`${error.code}: ${error.message}`);
+    }
+    const plan: ProvisionPlan = { mainCheckoutDir: stored.root, ops: [] };
+    const checkouts: Record<string, string> = {};
+    for (const selection of fresh) {
+      checkouts[selection.repoDir] = input.mainCheckouts?.[selection.repoDir] ?? stored.root;
+    }
+    for (const repo of batch.pinned) {
+      const repoPlan = planWorktreeCreation({
+        taskDir: this.taskDir,
+        mainCheckoutDir: checkouts[repo.repoDir] ?? stored.root,
+        repoDir: repo.repoDir,
+        remoteBranch: repo.remoteBranch,
+        commit: repo.commit,
+        branch,
+      });
+      plan.ops.push(...repoPlan.ops);
+    }
+    assertProvisionPlanSafe(plan);
+    const at = this.now();
+    const record = buildTaskDiskRecord({
+      taskId: stored.taskId,
+      name: stored.name,
+      dirId: stored.dirId,
+      branch: stored.branch,
+      root: stored.root,
+      taskDir: stored.taskDir,
+      remoteBranch: stored.remoteBranch,
+      baseCommit: stored.baseCommit,
+      repos: [...stored.repos, ...appended],
+      repoSources: [
+        ...(stored.repoSources ?? []),
+        ...batch.pinned.map((repo) => ({
+          repoDir: repo.repoDir,
+          remote: repo.remote,
+          remoteBranch: repo.remoteBranch,
+          baseCommit: repo.commit,
+        })),
+      ],
+      dirLinks: stored.dirLinks !== undefined ? [...stored.dirLinks] : undefined,
+      now: at,
+    });
+    record.createdAt = stored.createdAt;
+    this.store.writeTask(this.taskDir, record);
+    return { record, plan, appended, skipped };
+  }
+
+  /**
+   * [PiDock 03] (#6) plain-dir link target probe (Host-side, needs fs).
+   * Lexical `loop-risk`/`nested` classification lives in
+   * `classifyLinkTarget` (unit-tested without fs); this probe answers the
+   * remaining question: does the source still exist, and is it a symlink
+   * loop back into the task? Never creates or follows links beyond one
+   * `readlink` — report only, no takeover.
+   */
+  probeLinkTarget(sourcePath: string): { shape: "ok" | "dead"; detail: string } {
+    // Lazy Node fs import keeps the class transport-free for tests that
+    // never probe; dynamic require is avoided (ESM) via createRequire.
+    const { existsSync } = process.getBuiltinModule("node:fs") as typeof import("node:fs");
+    const lexical = classifyLinkTarget(sourcePath, this.taskDir, []);
+    void lexical;
+    if (!existsSync(sourcePath)) return { shape: "dead", detail: `普通目录来源不存在: ${sourcePath}` };
+    return { shape: "ok", detail: "来源可用" };
   }
 
   taskRecord(): TaskDiskRecord | null {

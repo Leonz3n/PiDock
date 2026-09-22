@@ -254,3 +254,51 @@ describe("S6 batch 3: scripted tool plan rides sendMessage fail-closed", () => {
     ).toEqual({ ok: true });
   });
 });
+
+describe("#6 append + probe guards (S2)", () => {
+  it("shape-checks provision repoSelections/fetchedCommits/plainDirs", () => {
+    expect(
+      validateHostTaskOp("task/provision", {
+        name: "多仓",
+        dirId: "task-abcdef12",
+        remoteBranch: "main",
+        fetchedCommit: "a5a4a0d1234",
+        repoSelections: [
+          { repoDir: "frontend", remote: "origin", remoteBranch: "main", mainCheckoutDir: "/src/frontend" },
+        ],
+        fetchedCommits: { frontend: "a5a4a0d1234" },
+        plainDirs: [{ directoryId: "notes-1", sourcePath: "/data/notes" }],
+      }),
+    ).toEqual({ ok: true });
+    expect(
+      validateHostTaskOp("task/provision", {
+        name: "多仓",
+        dirId: "task-abcdef12",
+        remoteBranch: "main",
+        fetchedCommit: "a5a4a0d1234",
+        repoSelections: [{ repoDir: "frontend" }],
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateHostTaskOp("task/provision", {
+        name: "多仓",
+        dirId: "task-abcdef12",
+        remoteBranch: "main",
+        fetchedCommit: "a5a4a0d1234",
+        plainDirs: [{ directoryId: "notes-1" }],
+      }).ok,
+    ).toBe(false);
+  });
+
+  it("gates appendRepos and probeLink payloads", () => {
+    expect(
+      validateHostTaskOp("task/appendRepos", {
+        repoSelections: [],
+        fetchedCommits: {},
+      }),
+    ).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/appendRepos", { repoSelections: [] }).ok).toBe(false);
+    expect(validateHostTaskOp("task/probeLink", { sourcePath: "/data/notes" })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/probeLink", {}).ok).toBe(false);
+  });
+});
