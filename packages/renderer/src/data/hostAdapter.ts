@@ -129,7 +129,25 @@ export type SaveServiceRecipeInput = {
  * persisted task record: the actual root saved on the task, the pinned
  * remote branch + commit, the editable branch, and the last failure (kept
  * with a retry entry, never silently replaced by a stale reference).
+ *
+ * [PiDock 03] (#6): `repoSources` carries per-repo remote+branch+pinned
+ * commit for multi-repo tasks (absent on single-repo records); `dirLinks`
+ * carries plain-dir link snapshots (shared views of the originals).
  */
+export type RepoSourceState = {
+  repoDir: string;
+  remote: string;
+  remoteBranch: string;
+  baseCommit: string;
+};
+
+export type DirLinkState = {
+  linkName: string;
+  directoryId: string;
+  sourcePath: string;
+  snapshotAt: string;
+};
+
 export type TaskProvisionState = {
   taskId: string;
   name: string;
@@ -139,6 +157,8 @@ export type TaskProvisionState = {
   taskDir: string;
   remoteBranch: string;
   baseCommit: string;
+  repoSources?: RepoSourceState[];
+  dirLinks?: DirLinkState[];
   ready: boolean;
   lastError?: { code: string; message: string };
 };
@@ -172,6 +192,15 @@ export type ProvisionTaskInput = {
   fetchedCommit: string;
   repos?: string[];
   mainCheckouts?: Record<string, string>;
+  /**
+   * [PiDock 03] (#6) per-repo sources: each repo names its own remote +
+   * baseline branch; `fetchedCommits` pins each repo's fresh commit
+   * (all-success gate Host-side). `plainDirs` snapshots plain-directory
+   * links (shared views of the originals, never copies).
+   */
+  repoSelections?: { repoDir: string; remote: string; remoteBranch: string; mainCheckoutDir: string }[];
+  fetchedCommits?: Record<string, string>;
+  plainDirs?: { directoryId: string; sourcePath: string }[];
 };
 
 /** In-memory task creation for the draft UI; real worktree preparation belongs to ticket 03. */

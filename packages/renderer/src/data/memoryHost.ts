@@ -57,6 +57,7 @@ import { isSensitiveKey, nextTemplateVersion } from "./configRows";
 import {
   buildTaskFormBranch,
   checkTaskFormDirIdConflict,
+  directoryLinkName,
   directoryLinkPath,
   isTaskDirId,
   normalizeDirectoryPath,
@@ -822,6 +823,9 @@ class MemoryHost implements HostAdapter {
       baseCommit: string;
       ready: boolean;
       lastError?: { code: string; message: string };
+      /** [PiDock 03] (#6) per-repo sources + plain-dir links (memory mirror). */
+      repoSources?: { repoDir: string; remote: string; remoteBranch: string; baseCommit: string }[];
+      dirLinks?: { linkName: string; directoryId: string; sourcePath: string; snapshotAt: string }[];
     }
   >();
 
@@ -1873,6 +1877,11 @@ class MemoryHost implements HostAdapter {
       taskDir: `${task.workspaceRoot.replace(/[\\/]+$/, "")}/${dirId}`,
       remoteBranch: provision?.remoteBranch ?? "",
       baseCommit: provision?.baseCommit ?? "",
+      // #6: per-repo sources + link snapshots ride the same state so the
+      // task view and the Agent see the same repos/links (shared view of
+      // the originals, never isolated copies).
+      repoSources: provision?.repoSources !== undefined ? [...provision.repoSources] : undefined,
+      dirLinks: provision?.dirLinks !== undefined ? [...provision.dirLinks] : undefined,
       ready: provision?.ready ?? (task.repos.length > 0 || task.directories.length > 0),
       lastError: provision?.lastError,
     };
@@ -1949,12 +1958,29 @@ class MemoryHost implements HostAdapter {
     const repoNames = [...(input.repos ?? [])];
     const paths = previewTaskFormPaths(resolved.root, input.dirId, repoNames, []);
     void paths;
+    // #6: per-repo sources persist alongside the task-level baseline;
+    // plain-dir links snapshot as shared views of the originals.
+    const now = new Date().toISOString();
+    const repoSources = input.repoSelections?.map((selection) => ({
+      repoDir: selection.repoDir,
+      remote: selection.remote,
+      remoteBranch: selection.remoteBranch,
+      baseCommit: input.fetchedCommits?.[selection.repoDir] ?? pinned.commit,
+    }));
+    const dirLinks = input.plainDirs?.map((entry) => ({
+      linkName: directoryLinkName({ id: entry.directoryId }),
+      directoryId: entry.directoryId,
+      sourcePath: entry.sourcePath,
+      snapshotAt: now,
+    }));
     const entry = {
       branch: branched.branch,
       remoteBranch: pinned.remoteBranch,
       baseCommit: pinned.commit,
       ready: true,
       lastError: undefined as { code: string; message: string } | undefined,
+      repoSources,
+      dirLinks,
     };
     this.provisions.set(input.taskId, entry);
     const task = this.task(input.taskId);
