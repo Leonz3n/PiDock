@@ -302,6 +302,46 @@ export function registerIpc(
     }
   });
 
+  // Task-scoped op from the sandboxed renderer: main binds the workspace
+  // from the trusted sender (never from the payload) and forwards the
+  // validated op to the per-workspace utilityProcess Host.
+  ipcMain.handle("shell/taskOp", async (event, payload?: unknown) => {
+    try {
+      const sender = registry.requireShellSender(event);
+      const { workspaceId } = validateShellInvocationPayload(
+        "shell/taskOp",
+        payload,
+        sender.workspaceId,
+      );
+      const record =
+        typeof payload === "object" && payload !== null
+          ? (payload as Record<string, unknown>)
+          : {};
+      const taskId = record["taskId"];
+      const op = record["op"];
+      if (typeof taskId !== "string" || taskId.length === 0) {
+        throw new Error("shell/taskOp requires a taskId");
+      }
+      if (
+        op !== "task/provision" &&
+        op !== "task/sendMessage" &&
+        op !== "task/cancel" &&
+        op !== "task/approve" &&
+        op !== "task/reject"
+      ) {
+        throw new Error(`unknown task op: ${String(op)}`);
+      }
+      const opPayload =
+        typeof record["payload"] === "object" && record["payload"] !== null
+          ? (record["payload"] as Record<string, unknown>)
+          : {};
+      const result = await client.task({ workspaceId, taskId, op, payload: opPayload });
+      return { ok: true as const, payload: result };
+    } catch (error) {
+      return trustFailureEnvelope(error);
+    }
+  });
+
   for (const channel of ipcMain.eventNames()) {
     if (
       typeof channel === "string" &&

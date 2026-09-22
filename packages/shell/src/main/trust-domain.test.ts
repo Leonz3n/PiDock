@@ -133,6 +133,37 @@ describe("validateShellInvocationPayload", () => {
     ).toThrow("payload workspace does not match sender binding");
   });
 
+  it("routes a task op by task id while binding the workspace to the sender", () => {
+    expect(
+      validateShellInvocationPayload(
+        "shell/taskOp",
+        { taskId: "task-a", op: "task/sendMessage", payload: {} },
+        "workspace-a",
+      ),
+    ).toEqual({ workspaceId: "workspace-a" });
+    expect(() =>
+      validateShellInvocationPayload(
+        "shell/taskOp",
+        { taskId: "task-a", op: "task/exec", payload: {} },
+        "workspace-a",
+      ),
+    ).toThrow("unknown task op");
+    expect(() =>
+      validateShellInvocationPayload(
+        "shell/taskOp",
+        { taskId: "", op: "task/cancel", payload: {} },
+        "workspace-a",
+      ),
+    ).toThrow("requires a taskId");
+    expect(() =>
+      validateShellInvocationPayload(
+        "shell/taskOp",
+        { taskId: "task-a", op: "task/cancel", workspaceId: "workspace-b" },
+        "workspace-a",
+      ),
+    ).toThrow("payload workspace does not match sender binding");
+  });
+
   it("rejects unexpected payload keys", () => {
     expect(() =>
       validateShellInvocationPayload(

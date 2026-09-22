@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { isRpcRequest, isRpcResponse } from "./protocol.js";
+import {
+  isHostTaskParams,
+  isRpcRequest,
+  isRpcResponse,
+} from "./protocol.js";
 
 // Seam: main<->utilityProcess typed RPC message boundary.
 // Only these shapes may cross the MessagePort; everything else is rejected.
@@ -31,6 +35,43 @@ describe("isRpcRequest", () => {
         params: { blob: "x".repeat(1024 * 1024 + 1) },
       }),
     ).toBe(false);
+  });
+});
+
+describe("host/task routing", () => {
+  it("accepts a task-routed request with workspace, task and op", () => {
+    expect(
+      isRpcRequest({
+        kind: "request",
+        id: "9",
+        method: "host/task",
+        params: { workspaceId: "workspace-a", taskId: "task-a", op: "task/sendMessage" },
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects a task route missing the task binding", () => {
+    expect(
+      isRpcRequest({
+        kind: "request",
+        id: "9",
+        method: "host/task",
+        params: { workspaceId: "workspace-a", op: "task/sendMessage" },
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects an unknown task op fail-closed", () => {
+    expect(
+      isRpcRequest({
+        kind: "request",
+        id: "9",
+        method: "host/task",
+        params: { workspaceId: "workspace-a", taskId: "task-a", op: "task/exec" },
+      }),
+    ).toBe(false);
+    expect(isHostTaskParams({ workspaceId: "w", taskId: "t", op: "task/exec" })).toBe(false);
+    expect(isHostTaskParams({ workspaceId: "w", taskId: "t", op: "task/cancel" })).toBe(true);
   });
 });
 

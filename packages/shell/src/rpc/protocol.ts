@@ -1,13 +1,19 @@
 /**
- * Typed RPC protocol for main <-> utilityProcess (Node Host stub).
+ * Typed RPC protocol for main <-> utilityProcess (Node Host).
  *
- * S1 scope: only the `host/*` namespace exists. No CDP, no arbitrary IPC,
- * no shell/exec surface. New methods must be added to REQUEST_METHODS and
- * given an explicit Params/Result pair below.
+ * Only the `host/*` namespace exists. No CDP, no arbitrary IPC, no
+ * shell/exec surface. New methods must be added to REQUEST_METHODS and
+ * given an explicit Params/Result pair below. S3 slice adds the task-scoped
+ * `host/task` routing used by [PiDock 02] (#5): every params object carries
+ * the sender-bound workspaceId/taskId, validated at runtime on both sides.
  */
 
 /** Whitelisted request methods (fail-closed: unknown methods are rejected). */
-export const REQUEST_METHODS = ["host/ping", "host/getVersions"] as const;
+export const REQUEST_METHODS = [
+  "host/ping",
+  "host/getVersions",
+  "host/task",
+] as const;
 
 export type RequestMethod = (typeof REQUEST_METHODS)[number];
 
@@ -36,7 +42,30 @@ export interface HostVersionsResult {
   workspaceId: string;
 }
 
-export type RequestParams = HostPingParams | HostGetVersionsParams;
+/** Task-scoped operation routed to one task workspace Host. */
+export type HostTaskOp =
+  | "task/provision"
+  | "task/sendMessage"
+  | "task/cancel"
+  | "task/approve"
+  | "task/reject";
+
+export interface HostTaskParams {
+  workspaceId: string;
+  taskId: string;
+  op: HostTaskOp;
+  /** Opaque per-op payload; validated per op by the Host. */
+  payload?: Record<string, unknown>;
+}
+
+export interface HostTaskResult {
+  workspaceId: string;
+  taskId: string;
+  op: HostTaskOp;
+  payload: Record<string, unknown>;
+}
+
+export type RequestParams = HostPingParams | HostGetVersionsParams | HostTaskParams;
 
 export interface RpcRequest {
   kind: "request";
@@ -49,7 +78,7 @@ export interface RpcOkResponse {
   kind: "response";
   id: string;
   ok: true;
-  payload: HostPingResult | HostVersionsResult;
+  payload: HostPingResult | HostVersionsResult | HostTaskResult;
 }
 
 export interface RpcErrorResponse {
@@ -80,6 +109,18 @@ export function isRequestMethod(value: unknown): value is RequestMethod {
   );
 }
 
+const HOST_TASK_OPS: readonly string[] = [
+  "task/provision",
+  "task/sendMessage",
+  "task/cancel",
+  "task/approve",
+  "task/reject",
+];
+
+export function isHostTaskOp(value: unknown): value is HostTaskOp {
+  return typeof value === "string" && HOST_TASK_OPS.includes(value);
+}
+
 /** Fail-closed guard: only whitelisted methods with a params object pass. */
 export function isRpcRequest(value: unknown): value is RpcRequest {
   if (!isRecord(value)) return false;
@@ -87,7 +128,26 @@ export function isRpcRequest(value: unknown): value is RpcRequest {
   if (typeof value["id"] !== "string" || value["id"].length === 0) return false;
   if (!isRequestMethod(value["method"])) return false;
   if (!isRecord(value["params"])) return false;
+  if (value["method"] === "host/task" && !isHostTaskParams(value["params"])) return false;
   if (approxBytes(value) > MAX_MESSAGE_BYTES) return false;
+  return true;
+}
+
+/**
+ * Runtime payload validation for task routing: the Host only accepts
+ * requests that name both the workspace and the task, plus a known op.
+ * The sender binding (workspace/task from main) must match these ids;
+ * main enforces that comparison before forwarding.
+ */
+export function isHostTaskParams(value: unknown): value is HostTaskParams {
+  if (!isRecord(value)) return false;
+  const workspaceId = value["workspaceId"];
+  const taskId = value["taskId"];
+  if (typeof workspaceId !== "string" || workspaceId.length === 0) return false;
+  if (typeof taskId !== "string" || taskId.length === 0) return false;
+  if (!isHostTaskOp(value["op"])) return false;
+  const payload = value["payload"];
+  if (payload !== undefined && !isRecord(payload)) return false;
   return true;
 }
 

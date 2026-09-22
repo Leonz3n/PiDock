@@ -298,6 +298,7 @@ function validateShellProbe(
         "getVersions",
         "hostPing",
         "onHostStatus",
+        "taskOp",
       ])
   ) {
     throw new Error(`shell bridge surface mismatch: ${JSON.stringify(bridgeKeys)}`);

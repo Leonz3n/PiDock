@@ -103,6 +103,13 @@ export const taskTerminalSeed = [
   "➜  Local:   http://127.0.0.1:5173/",
 ];
 
+/** Deterministic output length for the [PiDock 02] per-call usage record. */
+function replyLength(state: string, text: string): number {
+  if (state === "failed") return 64;
+  if (state === "approval") return 48;
+  return text.length * 3;
+}
+
 export const scheduleTemplates: ScheduleTemplate[] = [
   {
     id: "tl-weekly-repo",
@@ -565,7 +572,7 @@ class MemoryHost implements HostAdapter {
       description: "本地联调使用的远程测试依赖",
       templateVersion: "v12",
       variables: [{ key: "LOG_LEVEL", value: "debug", secret: false }],
-      privateVariables: [{ key: "INVOICE_ACCESS_TOKEN", value: "iv_live_9f2c8ba7d41e", secret: true }],
+      privateVariables: [{ key: "INVOICE_ACCESS_TOKEN", value: "__local_testing_token__", secret: true }],
       recipes: atlasRecipes("testing"),
     },
     {
@@ -953,6 +960,12 @@ class MemoryHost implements HostAdapter {
     if (!task || !session) throw new Error("会话不存在");
     if (session.runState === "running") throw new Error("当前会话正在执行，请先停止");
 
+    // [PiDock 02]: read-only sessions refuse side-effecting turns at the tool
+    // layer, not just by hiding the composer (the composer stays disabled as
+    // the first line, this is the enforced second line).
+    if (session.permission === "read") {
+      throw new Error("只读会话仅允许阅读分析，请先调整会话权限");
+    }
     const userMessage = {
       id: this.nextId("msg-user"),
       role: "user" as const,
@@ -1023,6 +1036,21 @@ class MemoryHost implements HostAdapter {
     }
 
     session.runState = finalState;
+    // [PiDock 02]: from the first model call, record the stable call identity
+    // (provider + model + usage source + events) so later Provider/usage work
+    // can recover it instead of re-reading rendered text.
+    this.usage.push({
+      id: record.id,
+      taskId,
+      projectId: task.projectId,
+      sessionId,
+      providerId: session.providerId,
+      model: session.model,
+      input: 3200 + text.length * 7,
+      output: 480 + replyLength(finalState, text),
+      cacheRead: 0,
+      at: record.startedAt,
+    });
     const reply =
       finalState === "failed"
         ? "构建失败，我先保留现场和你的输入，修复后可以继续。"

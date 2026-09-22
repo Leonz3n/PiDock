@@ -18,6 +18,10 @@ describe("preload invoke whitelist", () => {
     expect(isAllowedInvokeChannel("shell/hostPing")).toBe(true);
   });
 
+  it("allows the task-scoped op channel (workspace still sender-bound)", () => {
+    expect(isAllowedInvokeChannel("shell/taskOp")).toBe(true);
+  });
+
   it("rejects arbitrary IPC channels", () => {
     expect(isAllowedInvokeChannel("arbitrary-channel")).toBe(false);
   });

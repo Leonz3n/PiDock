@@ -145,6 +145,38 @@ describe("memory Host adapter", () => {
     expect(output.join("\n")).toContain("pnpm test");
   });
 
+  it("[PiDock 02] records a stable per-call provider/model/usage entry from the first call", async () => {
+    const host = createMemoryHost();
+    const before = (await host.getUsage({ taskId: "release", sessionId: "main" })).length;
+    const session = await host.getSession("release", "main");
+    const result = await host.sendMessage("release", "main", "检查构建", []);
+    expect(result.state).toBe("completed");
+    const after = await host.getUsage({ taskId: "release", sessionId: "main" });
+    expect(after.length).toBe(before + 1);
+    const latest = after[after.length - 1];
+    expect(latest).toMatchObject({
+      id: result.run.id,
+      taskId: "release",
+      projectId: "atlas",
+      sessionId: "main",
+      providerId: session?.providerId,
+      model: session?.model,
+    });
+    expect(latest.at).toBe(result.run.startedAt);
+  });
+
+  it("[PiDock 02] refuses a side-effecting turn in a read-only session at the tool layer", async () => {
+    const host = createMemoryHost();
+    const usageBefore = (await host.getUsage({ taskId: "release", sessionId: "main" })).length;
+    const messagesBefore = (await host.getSession("release", "main"))?.messages.length ?? 0;
+    await host.setSessionPermission("release", "main", "read");
+    await expect(host.sendMessage("release", "main", "删除文件", [])).rejects.toThrow("只读会话");
+    // Nothing executes: no new message, no usage record, no run started.
+    expect((await host.getSession("release", "main"))?.runState).toBe("idle");
+    expect((await host.getSession("release", "main"))?.messages).toHaveLength(messagesBefore);
+    expect(await host.getUsage({ taskId: "release", sessionId: "main" })).toHaveLength(usageBefore);
+  });
+
   it("saves config layers, versioning only the shared template", async () => {
     const host = createMemoryHost();
     await host.saveEnvironmentConfig({
