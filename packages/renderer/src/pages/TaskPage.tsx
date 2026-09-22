@@ -1,8 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Badge, Button, EmptyState, Panel } from "../components/ui";
 import { CodeBlock } from "../components/CodeBlock";
-import { BrowserPanel, FilesPanel, RuntimePanel, TerminalPanel } from "../components/ToolPanels";
+import {
+  BrowserPanel,
+  DirectoryFilesPanel,
+  DirectoryTerminalPanel,
+  FilesPanel,
+  RuntimePanel,
+  TerminalPanel,
+} from "../components/ToolPanels";
 import type { Approval, Message, Reference, Task } from "../data/types";
+import { isDirectoryOnlyTask } from "../data/directories";
 import { approvalStatusLabel, runStateLabel } from "./runState";
 import { sessionKeyOf } from "../data/sessionKey";
 import { useDraftStore } from "../stores/drafts";
@@ -24,18 +32,33 @@ export function TaskPage({ task, sessionId }: { task: Task; sessionId: string })
   if (!session) return <EmptyState>当前任务还没有会话。</EmptyState>;
 
   const visibleSessions = sessionTabs(task, session.id);
+  const directoryOnly = isDirectoryOnlyTask(task);
+  const availablePanels = directoryOnly ? (["files", "terminal"] as ToolPanel[]) : TOOL_PANELS;
 
   return (
     <div className="flex min-h-0 flex-1 gap-4">
       <section className="flex min-h-0 flex-1 flex-col gap-3">
         <header className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <h1 className="text-base font-medium text-ink">{task.name}</h1>
-            <Badge>{task.workspaceKey}</Badge>
-            {task.archived ? <Badge tone="warn">已归档</Badge> : null}
+          <div>
+            {directoryOnly ? <div className="text-[11px] tracking-wide text-muted">TASK · 普通目录</div> : null}
+            <div className="flex items-center gap-3">
+              <h1 className="text-base font-medium text-ink">{task.name}</h1>
+              <Badge>{task.workspaceKey}</Badge>
+              {task.archived ? <Badge tone="warn">已归档</Badge> : null}
+            </div>
+            {directoryOnly ? (
+              <p className="mt-1 text-[11px] text-muted">
+                {task.directories.length} 个普通目录 · 通过软链接加入 · 修改影响原目录，不提供 Git 分支／差异／提交
+              </p>
+            ) : null}
           </div>
           <div className="flex items-center gap-2">
-            {TOOL_PANELS.map((panel) => (
+            {directoryOnly ? (
+              <Button size="sm" onClick={() => openModal({ type: "task-directories", taskId: task.id })}>
+                添加目录
+              </Button>
+            ) : null}
+            {availablePanels.map((panel) => (
               <Button
                 key={panel}
                 size="sm"
@@ -72,7 +95,7 @@ export function TaskPage({ task, sessionId }: { task: Task; sessionId: string })
                 </Button>
               }
             >
-              {panel === "runtime" ? (
+              {panel === "runtime" && !directoryOnly ? (
                 <RuntimePanel
                   task={task}
                   onToggleService={(serviceId, running) => {
@@ -80,9 +103,11 @@ export function TaskPage({ task, sessionId }: { task: Task; sessionId: string })
                   }}
                 />
               ) : null}
-              {panel === "browser" ? <BrowserPanel pages={task.browserPages} /> : null}
-              {panel === "files" ? <FilesPanel files={task.files} /> : null}
-              {panel === "terminal" ? <TerminalPanel taskId={task.id} seed={task.terminalSeed} /> : null}
+              {panel === "browser" && !directoryOnly ? <BrowserPanel pages={task.browserPages} /> : null}
+              {panel === "files" ? directoryOnly ? <DirectoryFilesPanel task={task} /> : <FilesPanel files={task.files} /> : null}
+              {panel === "terminal" ? (
+                directoryOnly ? <DirectoryTerminalPanel task={task} /> : <TerminalPanel taskId={task.id} seed={task.terminalSeed} />
+              ) : null}
             </Panel>
           ))}
         </aside>

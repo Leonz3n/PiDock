@@ -39,18 +39,32 @@ export function ProjectPage({ projectId }: { projectId: string }) {
           <p className="mt-2 text-[11px] text-muted">任务使用仓库时创建独立 worktree；同一仓库参与不同任务拥有独立分支与目录。</p>
         </Panel>
 
-        <Panel title="普通目录">
+        <Panel
+          title="普通目录"
+          actions={
+            <Button size="sm" onClick={() => openModal({ type: "project-directories", projectId: project.id })}>
+              管理目录
+            </Button>
+          }
+        >
           {project.directories.length === 0 ? (
             <p className="text-xs text-muted">该项目没有普通目录。普通目录的原始文件在任务之间共享，不承诺隔离。</p>
           ) : (
             <ul className="flex flex-col gap-1.5 text-xs">
               {project.directories.map((directory) => (
-                <li key={directory} className="font-mono text-[11px] text-muted">
-                  {directory}
+                <li key={directory.id} className="flex flex-wrap items-center justify-between gap-2 border-b border-line pb-1.5">
+                  <div>
+                    <span className="block text-ink">{directory.name}</span>
+                    <span className="font-mono text-[11px] text-muted">{directory.path}</span>
+                  </div>
+                  <Badge>普通目录 · 软链接接入</Badge>
                 </li>
               ))}
             </ul>
           )}
+          <p className="mt-2 text-[11px] text-muted">
+            Git 仓库创建独立 worktree；普通目录通过软链接加入任务目录，修改会影响原目录。
+          </p>
         </Panel>
 
         <Panel title={`任务 · ${tasks.length}`}>
@@ -64,7 +78,7 @@ export function ProjectPage({ projectId }: { projectId: string }) {
                     {task.unread > 0 ? <Badge tone="accent">{task.unread} 条未读</Badge> : null}
                   </div>
                   <p className="mt-1 text-[11px] text-muted">
-                    {task.workspaceKey} · {task.repos.length} 个仓库 · {task.sessions.length} 个会话
+                    {task.workspaceKey} · {task.repos.length} 个 Git 仓库 · {task.directories.length} 个普通目录 · {task.sessions.length} 个会话
                   </p>
                 </div>
                 <Button

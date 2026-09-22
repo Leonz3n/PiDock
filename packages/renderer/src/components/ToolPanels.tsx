@@ -2,7 +2,9 @@ import { useState } from "react";
 import { Badge, Button, EmptyState, Panel } from "./ui";
 import { CodeBlock } from "./CodeBlock";
 import { ConfigTable } from "./ConfigTable";
-import type { BrowserPage, Service, Task, WorkspaceFile } from "../data/types";
+import type { BrowserPage, Service, Task, TaskDirectory, WorkspaceFile } from "../data/types";
+import { directoryLinkPath } from "../data/directories";
+import { useDraftStore } from "../stores/drafts";
 import { useHostStore } from "../stores/host";
 
 export function RuntimePanel({
@@ -144,6 +146,118 @@ export function TerminalPanel({ taskId, seed }: { taskId: string; seed: string[]
           onChange={(event) => setValue(event.target.value)}
           className="flex-1 rounded-md border border-line bg-paper px-2.5 py-1.5 font-mono text-xs"
           placeholder="输入命令"
+        />
+        <Button size="sm" type="submit">
+          执行
+        </Button>
+      </form>
+    </div>
+  );
+}
+
+/** Directory picker shared by the ordinary-directory file and terminal panels. */
+function DirectoryRootChoices({ task, selected, onSelect }: { task: Task; selected?: TaskDirectory; onSelect: (id: string) => void }) {
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {task.directories.map((directory) => (
+        <Button
+          key={directory.id}
+          size="sm"
+          variant={selected?.id === directory.id ? "primary" : "default"}
+          onClick={() => onSelect(directory.id)}
+        >
+          {directory.name}
+        </Button>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * File panel for an ordinary-directory task. It shows the in-task symlink path
+ * and the original path, and deliberately offers no Git diff / branch / commit
+ * entry points. Editing through the link affects the original directory.
+ */
+export function DirectoryFilesPanel({ task }: { task: Task }) {
+  const [selectedId, setSelectedId] = useState(task.directories[0]?.id ?? "");
+  const directory = task.directories.find((item) => item.id === selectedId) ?? task.directories[0];
+  const createDirectoryFileReference = useHostStore((state) => state.createDirectoryFileReference);
+  const addReference = useDraftStore((state) => state.addReference);
+  if (!directory) return <EmptyState>这个任务还没有普通目录。</EmptyState>;
+  const linkPath = directoryLinkPath(task.workspaceRoot, task.workspaceKey, directory);
+  return (
+    <div className="flex flex-col gap-3">
+      <DirectoryRootChoices task={task} selected={directory} onSelect={setSelectedId} />
+      <div className="rounded-md border border-line bg-soft/40 px-3 py-2 text-xs">
+        <div className="flex items-center gap-2">
+          <strong className="text-ink">{directory.name}</strong>
+          <Badge>软链接</Badge>
+        </div>
+        <p className="mt-1 text-[11px] text-muted">任务内软链接</p>
+        <p className="font-mono text-[11px] text-ink" data-testid="directory-link-path">
+          {linkPath}
+        </p>
+        <p className="mt-1 font-mono text-[11px] text-muted" data-testid="directory-original-path">
+          指向原目录：{directory.path}
+        </p>
+        <p className="mt-1 text-[11px] text-muted">修改会影响原目录 · 文件未隔离</p>
+      </div>
+      <div className="rounded-md border border-line px-2.5 py-2 text-xs">
+        <p className="font-mono text-[11px] text-ink">▾ {directory.linkName} → {directory.name}</p>
+        <p className="mt-1 font-mono text-[11px] text-muted">{"  README.md（示例）"}</p>
+      </div>
+      <CodeBlock label={`${directory.linkName}/README.md`} language="markdown" code={"# 项目资料\n\n在这里整理说明与待办。"} />
+      <Button
+        size="sm"
+        onClick={async () => addReference(task.id, task.activeSessionId, await createDirectoryFileReference(task.id, directory.id))}
+      >
+        引用示例文件
+      </Button>
+      <p className="text-[11px] text-muted">未读取真实目录。此目录不提供 Git 差异、分支或提交操作。</p>
+    </div>
+  );
+}
+
+/** Terminal panel that opens in the in-task symlink directory and shows the intended cwd. */
+export function DirectoryTerminalPanel({ task }: { task: Task }) {
+  const [selectedId, setSelectedId] = useState(task.directories[0]?.id ?? "");
+  const directory = task.directories.find((item) => item.id === selectedId) ?? task.directories[0];
+  const runTerminalCommand = useHostStore((state) => state.runTerminalCommand);
+  const [lines, setLines] = useState<string[]>([]);
+  const [value, setValue] = useState("");
+  if (!directory) return <EmptyState>这个任务还没有普通目录。</EmptyState>;
+  const cwd = directoryLinkPath(task.workspaceRoot, task.workspaceKey, directory);
+  return (
+    <div className="flex flex-col gap-2">
+      <DirectoryRootChoices task={task} selected={directory} onSelect={setSelectedId} />
+      <p className="text-[11px] text-muted">拟用工作目录</p>
+      <p className="font-mono text-[11px] text-ink" data-testid="directory-terminal-cwd">
+        {cwd}
+      </p>
+      <p className="font-mono text-[11px] text-muted">指向原目录：{directory.path}</p>
+      <p className="text-[11px] text-muted">原型终端：拟从以上链接位置打开，仅回显，不执行命令。</p>
+      <div className="h-48 overflow-auto rounded-md border border-line bg-ink/95 p-3 font-mono text-[11px] leading-5 text-white/90">
+        {lines.map((line, index) => (
+          <div key={`${line}-${index}`}>{line}</div>
+        ))}
+      </div>
+      <form
+        className="flex gap-2"
+        onSubmit={async (event) => {
+          event.preventDefault();
+          const command = value.trim();
+          if (!command) return;
+          setValue("");
+          const output = await runTerminalCommand(task.id, command);
+          setLines((items) => [...items, ...output]);
+        }}
+      >
+        <input
+          aria-label="终端输入"
+          value={value}
+          onChange={(event) => setValue(event.target.value)}
+          className="flex-1 rounded-md border border-line bg-paper px-2.5 py-1.5 font-mono text-xs"
+          placeholder="输入示例命令"
         />
         <Button size="sm" type="submit">
           执行

@@ -1,5 +1,11 @@
 import { create } from "zustand";
-import type { HostAdapter, SendMessageResult } from "../data/hostAdapter";
+import type {
+  CreateTaskInput,
+  HostAdapter,
+  ProjectDirectoryInput,
+  SaveEnvironmentConfigInput,
+  SendMessageResult,
+} from "../data/hostAdapter";
 import { memoryHost } from "../data/memoryHost";
 import type {
   Approval,
@@ -8,6 +14,7 @@ import type {
   CleanupItem,
   LocalSettings,
   Project,
+  ProjectDirectory,
   Reference,
   ScheduledRun,
   Session,
@@ -32,6 +39,7 @@ type HostState = {
   session: (taskId: string, sessionId: string) => Session | undefined;
   project: (projectId: string) => Project | undefined;
   createFileReference: (taskId: string) => Promise<Reference>;
+  createDirectoryFileReference: (taskId: string, directoryId: string) => Promise<Reference>;
   runTerminalCommand: (taskId: string, command: string) => Promise<string[]>;
   sendMessage: (
     taskId: string,
@@ -54,6 +62,11 @@ type HostState = {
   setCapabilityEnabled: (capabilityId: string, enabled: boolean) => Promise<void>;
   revokeDevice: (deviceId: string) => Promise<void>;
   loadCleanupPreview: (taskId: string) => Promise<CleanupItem[]>;
+  saveEnvironmentConfig: (input: SaveEnvironmentConfigInput) => Promise<void>;
+  adoptLatestTemplate: (taskId: string) => Promise<void>;
+  setProjectDirectories: (projectId: string, rows: ProjectDirectoryInput[]) => Promise<ProjectDirectory[]>;
+  setTaskDirectories: (taskId: string, directoryIds: string[]) => Promise<void>;
+  createTask: (input: CreateTaskInput) => Promise<Task>;
 };
 
 export const useHostStore = create<HostState>((set, get) => ({
@@ -93,6 +106,7 @@ export const useHostStore = create<HostState>((set, get) => ({
       ?.sessions.find((item) => item.id === sessionId),
   project: (projectId) => get().workspace?.projects.find((item) => item.id === projectId),
   createFileReference: (taskId) => get().adapter.createFileReference(taskId),
+  createDirectoryFileReference: (taskId, directoryId) => get().adapter.createDirectoryFileReference(taskId, directoryId),
   runTerminalCommand: (taskId, command) => get().adapter.runTerminalCommand(taskId, command),
 
   sendMessage: async (taskId, sessionId, text, references) => {
@@ -177,5 +191,32 @@ export const useHostStore = create<HostState>((set, get) => ({
 
   loadCleanupPreview: async (taskId) => {
     return get().adapter.previewCleanup(taskId);
+  },
+
+  saveEnvironmentConfig: async (input) => {
+    await get().adapter.saveEnvironmentConfig(input);
+    await get().refresh();
+  },
+
+  adoptLatestTemplate: async (taskId) => {
+    await get().adapter.adoptLatestTemplate(taskId);
+    await get().refresh();
+  },
+
+  setProjectDirectories: async (projectId, rows) => {
+    const directories = await get().adapter.setProjectDirectories(projectId, rows);
+    await get().refresh();
+    return directories;
+  },
+
+  setTaskDirectories: async (taskId, directoryIds) => {
+    await get().adapter.setTaskDirectories(taskId, directoryIds);
+    await get().refresh();
+  },
+
+  createTask: async (input) => {
+    const task = await get().adapter.createTask(input);
+    await get().refresh();
+    return task;
   },
 }));

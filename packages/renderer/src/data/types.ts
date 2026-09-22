@@ -12,6 +12,21 @@ export type Permission = "write" | "read";
 
 export type ServiceMode = "local" | "remote";
 
+/** Configuration scope, mirroring the prototype's `task` / `shared` / `private` tabs. */
+export type ConfigScope = "shared" | "private" | "task";
+
+/** A KEY/VALUE pair. Sensitive values are marked `secret` and masked when displayed. */
+export type ConfigEntry = { key: string; value: string; secret: boolean };
+
+/** A resolved config row that still reports which layer it came from. */
+export type ResolvedConfigEntry = ConfigEntry & { source: string };
+
+/** A project-level ordinary directory. Stable `id`, display `name`, absolute `path`. */
+export type ProjectDirectory = { id: string; name: string; path: string };
+
+/** A directory snapshot captured in a task; `linkName` is the in-task symlink name. */
+export type TaskDirectory = ProjectDirectory & { linkName: string };
+
 export type ApprovalStatus = "pending" | "approved" | "rejected" | "expired";
 
 export type TaskType = "normal" | "scheduled";
@@ -86,7 +101,7 @@ export type Service = {
   running: boolean;
   configSource: string;
   templateVersion: string;
-  resolved: { key: string; value: string; source: string; secret: boolean }[];
+  resolved: ResolvedConfigEntry[];
 };
 
 export type Repository = { id: string; name: string; baseBranch: string };
@@ -113,10 +128,16 @@ export type Task = {
   projectId: string;
   name: string;
   workspaceKey: string;
+  /** Task root the task was created under; used to derive in-task symlink paths. */
+  workspaceRoot: string;
   type: TaskType;
   environmentId: string;
+  /** Environment template version this task adopted; new shared versions do not migrate it. */
+  templateVersion: string;
   repos: string[];
-  directories: string[];
+  directories: TaskDirectory[];
+  /** Task-scope config overrides (the third config layer). */
+  configOverrides: ConfigEntry[];
   archived: boolean;
   permission: Permission;
   services: Service[];
@@ -133,7 +154,7 @@ export type Project = {
   id: string;
   name: string;
   repositories: Repository[];
-  directories: string[];
+  directories: ProjectDirectory[];
   taskIds: string[];
 };
 
@@ -142,7 +163,10 @@ export type Environment = {
   projectId: string;
   name: string;
   templateVersion: string;
-  variables: { key: string; value: string; secret: boolean; source: string }[];
+  /** Shared template layer (`shared`). */
+  variables: ConfigEntry[];
+  /** Machine-private layer (`private`); credentials and paths that never enter the shared template. */
+  privateVariables: ConfigEntry[];
 };
 
 export type ProviderProfile = {
