@@ -498,3 +498,38 @@ describe("S6 batch 2: Host send-record, draft persistence, approval one-shot", (
     expect(reopened.openSession("other").pendingApproval()).toBeUndefined();
   });
 });
+
+describe("S6 batch 3: exec.run approval end-to-end through Host sendMessage", () => {
+  it("reaches approval then executes once on approve (default permission)", () => {
+    const taskHost = host();
+    taskHost.openSession("main", { permission: "default" });
+    const turn = taskHost.sendMessage("main", "跑命令", {
+      tool: "exec.run",
+      target: `${TASK_DIR}/run.sh`,
+      contentVersion: "v3",
+      // Scripted in-Host planner (mirrors the `toolPlan: "echo"` selector
+      // `host.ts` applies to RPC payloads): replays the planned gated tool
+      // so the real approval path is exercised, not `gate()` directly.
+      execute: (call) => ({ tool: call.tool, kind: call.kind, target: call.target, contentVersion: call.contentVersion, output: "planned" }),
+    });
+    expect(turn.state).toBe("approval");
+    expect(turn.approvalId).toBeDefined();
+    const approval = taskHost.openSession("main").pendingApproval();
+    expect(approval?.tool).toBe("exec.run");
+    expect(approval?.target).toBe(`${TASK_DIR}/run.sh`);
+    expect(taskHost.approve("main", turn.approvalId ?? "")).toBe(turn.callId);
+    expect(() => taskHost.approve("main", turn.approvalId ?? "")).toThrow("不可重放");
+  });
+
+  it("denies an out-of-task exec target at the Host layer without executing", () => {
+    const taskHost = host();
+    taskHost.openSession("main", { permission: "auto" });
+    const turn = taskHost.sendMessage("main", "越界命令", {
+      tool: "exec.run",
+      target: "/etc/passwd",
+      execute: (call) => ({ tool: call.tool, kind: call.kind, target: call.target, contentVersion: call.contentVersion, output: "x" }),
+    });
+    expect(turn.state).toBe("failed");
+    expect(taskHost.openSession("main").pendingApproval()).toBeUndefined();
+  });
+});

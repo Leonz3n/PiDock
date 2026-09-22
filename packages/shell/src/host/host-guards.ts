@@ -225,6 +225,28 @@ export function validateHostTaskOp(
     if (references !== undefined && !Array.isArray(references)) {
       return { ok: false, error: "invalid-payload: task/sendMessage.references must be an array" };
     }
+    // S6 batch 3: scripted tool plan rides the same payload (all optional,
+    // all fail-closed). `tool` must name a gated tool, `target` a non-empty
+    // string (the task-dir containment check stays Host-side in
+    // `previewGate`), `contentVersion` a non-empty string. No executable
+    // function ever crosses the RPC boundary: the planner is selected by
+    // the Host from `toolPlan` (echo/deny only), never deserialized.
+    const tool = payload["tool"];
+    if (tool !== undefined && (typeof tool !== "string" || tool.trim().length === 0)) {
+      return { ok: false, error: "invalid-payload: task/sendMessage.tool must be a non-empty string" };
+    }
+    const target = payload["target"];
+    if (target !== undefined && (typeof target !== "string" || target.trim().length === 0)) {
+      return { ok: false, error: "invalid-payload: task/sendMessage.target must be a non-empty string" };
+    }
+    const contentVersion = payload["contentVersion"];
+    if (contentVersion !== undefined && (typeof contentVersion !== "string" || contentVersion.trim().length === 0)) {
+      return { ok: false, error: "invalid-payload: task/sendMessage.contentVersion must be a non-empty string" };
+    }
+    const toolPlan = payload["toolPlan"];
+    if (toolPlan !== undefined && toolPlan !== "echo" && toolPlan !== "deny") {
+      return { ok: false, error: 'invalid-payload: task/sendMessage.toolPlan must be echo/deny' };
+    }
     return { ok: true };
   }
   // S6 batch 2 follow-up: draft/permission ops are Host-reachable (P1).
