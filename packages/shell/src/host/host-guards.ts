@@ -7,6 +7,7 @@
  * `validateHostTaskOp` for backward-compatible imports.
  */
 import { isHostTaskOp } from "../rpc/protocol.js";
+import { isAbsoluteTaskRoot } from "../main/task-provision.js";
 
 export const DEFAULT_WORKSPACE_ID = "s1-default-workspace";
 
@@ -38,6 +39,67 @@ export function routeHostTask(params: unknown, boundWorkspaceId: string): HostTa
 
 export function boundWorkspaceId(): string {
   return process.env["PIDOCK_WORKSPACE_ID"] ?? DEFAULT_WORKSPACE_ID;
+}
+
+/** Fork-time task binding: one utilityProcess serves one task folder. */
+export interface HostTaskBinding {
+  taskId: string;
+  taskDir: string;
+}
+
+export type TaskBindingRoute = "routable" | "task-unbound" | "task-unknown";
+
+/**
+ * Pure form of the per-task binding rule `host.ts` enforces before
+ * dispatching: the Host must be bound at fork time (`PIDOCK_TASK_ID` +
+ * `PIDOCK_TASK_DIR`), and the op must name the bound task. A routed call
+ * naming any other task is rejected even though the envelope itself is
+ * well-formed. Tested directly because `host.ts` needs a utilityProcess
+ * parent port.
+ */
+export function routeTaskBinding(
+  taskId: unknown,
+  boundTaskId: unknown,
+  boundTaskDir: unknown,
+): TaskBindingRoute {
+  if (typeof boundTaskId !== "string" || boundTaskId.length === 0) return "task-unbound";
+  if (typeof boundTaskDir !== "string" || boundTaskDir.length === 0) return "task-unbound";
+  if (typeof taskId !== "string" || taskId.length === 0) return "task-unknown";
+  if (taskId !== boundTaskId) return "task-unknown";
+  return "routable";
+}
+
+/**
+ * Fork-time env for `utilityProcess.fork`: binds the workspace and,
+ * when given, the single task folder this Host serves. Partial bindings
+ * fail closed here so main never forks a Host that silently serves the
+ * wrong task. Pure (base env injected) so unit tests cover it without
+ * Electron; `runtime.ts createHost` is the only production caller.
+ */
+export function buildHostEnv(
+  baseEnv: Record<string, string | undefined>,
+  workspaceId: string,
+  task?: HostTaskBinding,
+): Record<string, string> {
+  if (typeof workspaceId !== "string" || workspaceId.length === 0) {
+    throw new Error("invalid-payload: workspaceId must be a non-empty string");
+  }
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(baseEnv)) {
+    if (typeof value === "string") env[key] = value;
+  }
+  env["PIDOCK_WORKSPACE_ID"] = workspaceId;
+  if (task !== undefined) {
+    if (typeof task.taskId !== "string" || task.taskId.length === 0) {
+      throw new Error("invalid-payload: taskId must be a non-empty string");
+    }
+    if (typeof task.taskDir !== "string" || !isAbsoluteTaskRoot(task.taskDir)) {
+      throw new Error("invalid-payload: taskDir must be an absolute task root");
+    }
+    env["PIDOCK_TASK_ID"] = task.taskId;
+    env["PIDOCK_TASK_DIR"] = task.taskDir;
+  }
+  return env;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

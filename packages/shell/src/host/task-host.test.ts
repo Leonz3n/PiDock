@@ -16,6 +16,7 @@ import {
   buildTaskDiskRecord,
 } from "./task-store.js";
 import { PiSessionChannel, resetPiSequencesForTests } from "../main/pi-session.js";
+import { assertProvisionPlanSafe } from "../main/task-provision.js";
 
 const TASK_ID = "task-a";
 const TASK_DIR = join(mkdtempSync(join(tmpdir(), "pidock-s2-")), "task-abcdef12");
@@ -42,7 +43,7 @@ beforeEach(() => {
 // lock, exact-session restore) + disk store shape.
 
 describe("task-store record shape", () => {
-  it("round-trips a task record and rejects malformed JSON", () => {
+  it("round-trips a task record through disk", () => {
     const record = buildTaskDiskRecord({
       taskId: TASK_ID,
       name: "发布前检查",
@@ -60,7 +61,45 @@ describe("task-store record shape", () => {
     expect(taskFilePath(dir)).toBe(join(dir, "task.json"));
     expect(readTaskRecordOnDisk(dir)).toEqual(record);
     expect(readTaskRecordOnDisk(join(tmpdir(), "pidock-missing-dir-xyz"))).toBeNull();
+  });
+
+  it("rejects malformed task records and session snapshots", () => {
     expect(() => parseTaskRecord(JSON.stringify({ taskId: "" }))).toThrow("invalid-payload");
+    const record = buildTaskDiskRecord({
+      taskId: TASK_ID,
+      name: "发布前检查",
+      dirId: "task-abcdef12",
+      branch: "task/task-abcdef12",
+      root: "/tmp/pidock-s2",
+      taskDir: TASK_DIR,
+      remoteBranch: "main",
+      baseCommit: "a5a4a0d1234",
+      repos: ["front-monorepo"],
+      now: "2026-09-22T10:00:00+08:00",
+    });
+    const { createdAt: _droppedTaskTs, ...noTaskTs } = record;
+    expect(() => parseTaskRecord(JSON.stringify(noTaskTs))).toThrow("createdAt");
+    expect(() => parseSessionSnapshot(JSON.stringify({ taskId: TASK_ID }))).toThrow("invalid-payload");
+    const channel = new PiSessionChannel({
+      taskId: TASK_ID,
+      sessionId: "main",
+      taskDir: TASK_DIR,
+      providerId: "provider-local",
+      model: "m",
+      now: () => "2026-09-22T10:00:00+08:00",
+    });
+    const { createdAt: _droppedSessionTs, ...noSessionTs } = JSON.parse(
+      JSON.stringify(channel.snapshot()),
+    ) as Record<string, unknown>;
+    expect(() => parseSessionSnapshot(JSON.stringify(noSessionTs))).toThrow("createdAt");
+    expect(() =>
+      parseSessionSnapshot(JSON.stringify({ ...channel.snapshot(), permission: "owner" })),
+    ).toThrow("permission");
+    expect(() =>
+      parseSessionSnapshot(JSON.stringify({ ...channel.snapshot(), runState: "flying" })),
+    ).toThrow("runState");
+    void _droppedTaskTs;
+    void _droppedSessionTs;
   });
 
   it("round-trips a session snapshot and lists persisted session ids", () => {
@@ -115,6 +154,32 @@ describe("TaskWorkspaceHost provision", () => {
     expect(record.baseCommit).toBe("a5a4a0d1234");
     expect(record.taskDir).toBe(TASK_DIR);
     expect(taskHost.taskRecord()).toEqual(record);
+  });
+
+  it("returns an executable plan with real cwds (never empty) via planWorktreeCreation", () => {
+    const { plan } = host().provision({
+      ...provisionInput(),
+      mainCheckouts: { "front-monorepo": "/Users/name/Workspace/repo" },
+    });
+    expect(plan.ops).toHaveLength(3);
+    expect(plan.ops.map((op) => op.kind)).toEqual(["fetch", "branch", "worktree"]);
+    for (const op of plan.ops) {
+      expect(op.cwd, op.kind).toBe("/Users/name/Workspace/repo");
+    }
+    expect(plan.mainCheckoutDir).toBe("/Users/name/Workspace/repo");
+    const worktree = plan.ops.find((op) => op.kind === "worktree");
+    expect(worktree?.args).toContain(`${TASK_DIR}/front-monorepo`);
+    expect(() => assertProvisionPlanSafe(plan)).not.toThrow();
+  });
+
+  it("preserves createdAt on re-provision and bumps only updatedAt", () => {
+    const store = memoryTaskStore();
+    const first = new TaskWorkspaceHost(TASK_ID, TASK_DIR, store, () => "2026-09-22T10:00:00+08:00");
+    const before = first.provision(provisionInput()).record;
+    const second = new TaskWorkspaceHost(TASK_ID, TASK_DIR, store, () => "2026-09-22T11:00:00+08:00");
+    const after = second.provision({ ...provisionInput(), now: "2026-09-22T11:00:00+08:00" }).record;
+    expect(after.createdAt).toBe(before.createdAt);
+    expect(after.updatedAt).toBe("2026-09-22T11:00:00+08:00");
   });
 
   it("keeps the form on fetch failure instead of creating from a stale ref", () => {
