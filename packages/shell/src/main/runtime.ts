@@ -14,6 +14,7 @@ import type {
 } from "electron";
 import { isAllowedInvokeChannel } from "../preload/allowlist.js";
 import { HostClient } from "../rpc/host-client.js";
+import { TaskBrowser } from "./task-browser.js";
 import {
   TrustDomainRegistry,
   TrustDomainViolation,
@@ -64,6 +65,7 @@ export interface TrustedWindowViews {
   window: BrowserWindow;
   shellView: WebContentsView;
   taskView: WebContentsView;
+  taskBrowser: TaskBrowser;
   registry: TrustDomainRegistry;
 }
 
@@ -156,53 +158,70 @@ export async function createHost(
   return { client, child };
 }
 
+function taskBounds(width: number, height: number): Rectangle {
+  const shellWidth = Math.min(380, Math.max(280, Math.floor(width * 0.36)));
+  return {
+    x: shellWidth,
+    y: 0,
+    width: Math.max(1, width - shellWidth),
+    height,
+  };
+}
+
 function layoutTrustedViews(
   window: BrowserWindow,
   shellView: WebContentsView,
-  taskView: WebContentsView,
+  taskBrowser: TaskBrowser,
 ): void {
   const { width, height } = window.getContentBounds();
-  const shellWidth = Math.min(380, Math.max(280, Math.floor(width * 0.36)));
-  const taskWidth = Math.max(1, width - shellWidth);
-  shellView.setBounds({ x: 0, y: 0, width: shellWidth, height });
-  taskView.setBounds({ x: shellWidth, y: 0, width: taskWidth, height });
+  const bounds = taskBounds(width, height);
+  shellView.setBounds({ x: 0, y: 0, width: bounds.x, height });
   shellView.setVisible(true);
-  taskView.setVisible(true);
+  taskBrowser.setBounds(bounds);
 }
 
-export function createTrustedWindow(workspaceId: string): TrustedWindowViews {
+export async function createTrustedWindow(
+  workspaceId: string,
+): Promise<TrustedWindowViews> {
   const window = new BrowserWindow({ ...WINDOW_OPTIONS, show: true });
   const shellView = new WebContentsView({
     webPreferences: SHELL_WEB_PREFERENCES,
   });
-  const taskView = new WebContentsView({
-    webPreferences: TASK_WEB_PREFERENCES,
-  });
   const registry = new TrustDomainRegistry();
-
   registry.registerShell({
     webContentsId: shellView.webContents.id,
     viewId: SHELL_VIEW_ID,
     workspaceId,
   });
-  registry.registerTask({
-    webContentsId: taskView.webContents.id,
-    viewId: TASK_VIEW_ID,
-    workspaceId,
-    taskId: TASK_ID,
-    pageId: PAGE_ID,
-  });
 
   window.contentView.addChildView(shellView);
-  window.contentView.addChildView(taskView);
-  layoutTrustedViews(window, shellView, taskView);
-  window.on("resize", () => layoutTrustedViews(window, shellView, taskView));
-  window.on("closed", () => {
-    registry.unregister(shellView.webContents.id);
-    registry.unregister(taskView.webContents.id);
-  });
+  const contentBounds = window.getContentBounds();
+  const bounds = taskBounds(contentBounds.width, contentBounds.height);
+  shellView.setBounds({ x: 0, y: 0, width: bounds.x, height: bounds.height });
+  shellView.setVisible(true);
 
-  return { window, shellView, taskView, registry };
+  const taskBrowser = new TaskBrowser({
+    window,
+    workspaceId,
+    taskId: TASK_ID,
+    bounds,
+    registry,
+  });
+  const taskTab = await taskBrowser.openTab("about:blank", PAGE_ID);
+  if (taskTab.taskId !== TASK_ID) {
+    throw new Error(`unexpected task binding for ${TASK_ID}`);
+  }
+
+  window.on("resize", () => layoutTrustedViews(window, shellView, taskBrowser));
+  window.on("closed", () => registry.unregister(shellView.webContents.id));
+
+  return {
+    window,
+    shellView,
+    taskView: taskTab.view,
+    taskBrowser,
+    registry,
+  };
 }
 
 async function loadView(
@@ -228,7 +247,11 @@ export async function loadTrustedViews(
       process.env["PIDOCK_RENDERER_URL"],
       "index.html",
     ),
-    loadView(views.taskView, process.env["PIDOCK_TASK_URL"], "task.html"),
+    loadView(
+      views.taskView,
+      process.env["PIDOCK_TASK_URL"],
+      "task.html",
+    ),
   ]);
   return { shellUrl, taskUrl };
 }

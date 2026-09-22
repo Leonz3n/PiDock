@@ -15,13 +15,22 @@ import {
   webPreferencesEvidence,
 } from "./runtime.js";
 import { runSmoke } from "./smoke.js";
+import {
+  runTaskBrowserSmoke,
+  type TaskBrowserSmokePhase,
+} from "./task-browser-smoke.js";
 
 /**
  * PiDock Electron shell entry point.
  *
  * Runtime boundaries live in `runtime.ts`; smoke-only probing and evidence
- * live in `smoke.ts`. This module only dispatches the requested shell mode.
+ * live in `smoke.ts` and `task-browser-smoke.ts`.
  */
+
+function taskBrowserSmokePhase(value: string | undefined): TaskBrowserSmokePhase {
+  if (value === "prepare" || value === "verify") return value;
+  throw new Error(`PIDOCK_S3_PHASE must be prepare or verify, got ${String(value)}`);
+}
 
 async function runVersions(workspaceId: string): Promise<void> {
   const { client, child } = await createHost(workspaceId);
@@ -38,6 +47,8 @@ async function run(): Promise<void> {
   const workspaceId =
     process.env["PIDOCK_WORKSPACE_ID"] ?? DEFAULT_WORKSPACE_ID;
   const command = resolveShellCommand(process.argv, process.env);
+  const profile = process.env["PIDOCK_S3_PROFILE"];
+  if (profile) app.setPath("userData", profile);
 
   await app.whenReady();
 
@@ -54,8 +65,18 @@ async function run(): Promise<void> {
     return;
   }
 
+  if (command.kind === "task-browser-smoke") {
+    const report = await runTaskBrowserSmoke(
+      workspaceId,
+      taskBrowserSmokePhase(process.env["PIDOCK_S3_PHASE"]),
+    );
+    process.stdout.write(`PIDOCK_S3_RESULT=${JSON.stringify(report)}\n`);
+    app.exit(report.ok ? 0 : 1);
+    return;
+  }
+
   const { client, child } = await createHost(workspaceId);
-  const views = createTrustedWindow(workspaceId);
+  const views = await createTrustedWindow(workspaceId);
   registerIpc(client, views.registry);
   const loaded = await loadTrustedViews(views);
   assertTrustedWindowEvidence(trustedWindowEvidence(views));

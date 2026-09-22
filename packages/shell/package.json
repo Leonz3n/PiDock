@@ -12,7 +12,8 @@
     "test": "vitest run",
     "lint": "eslint . --max-warnings 0",
     "versions": "electron . -- --print-versions",
-    "smoke": "electron . -- --smoke"
+    "smoke": "electron . -- --smoke",
+    "smoke:s3": "node scripts/smoke-s3.mjs"
   },
   "dependencies": {
     "electron": "44.4.3"
