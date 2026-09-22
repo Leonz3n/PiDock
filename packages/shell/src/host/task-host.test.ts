@@ -428,3 +428,60 @@ describe("TaskWorkspaceHost sessions and Host-owned lock", () => {
     expect(taskHost.writeLockOwner).toBeNull();
   });
 });
+
+describe("S6 batch 2: Host send-record, draft persistence, approval one-shot", () => {
+  it("returns send-record ids and persists refs/skill source with origin labels", () => {
+    const taskHost = host();
+    const turn = taskHost.sendMessage("main", "检查构建", {
+      execute: () => ({ target: `${TASK_DIR}/notes.md`, contentVersion: "v1", output: "x" }),
+    });
+    expect(turn.state).toBe("done");
+    expect(turn.userMessageId).toBe("msg-1");
+    expect(turn.agentMessageId).toBe("msg-2");
+    const snapshot = taskHost.openSession("main").snapshot();
+    expect(snapshot.messages.find((message) => message.id === turn.userMessageId)?.origin).toBe("human");
+    expect(snapshot.messages.find((message) => message.id === turn.userMessageId)?.callId).toBe(turn.callId);
+    expect(snapshot.messages.find((message) => message.id === turn.agentMessageId)?.origin).toBe("agent");
+  });
+
+  it("persists an unsent draft through the store without auto-sending", () => {
+    const store = memoryTaskStore();
+    const taskHost = new TaskWorkspaceHost(TASK_ID, TASK_DIR, store, () => "2026-09-22T10:00:00+08:00");
+    taskHost.saveDraft("main", { text: "未发送草稿", references: [{ kind: "file", path: "a.ts" }] });
+    const snapshot = taskHost.openSession("main").snapshot();
+    expect(snapshot.draft?.text).toBe("未发送草稿");
+    expect(snapshot.messages).toHaveLength(0);
+    taskHost.dispose();
+    const reopened = new TaskWorkspaceHost(TASK_ID, TASK_DIR, store, () => "2026-09-22T10:01:00+08:00");
+    expect(reopened.openSession("main").snapshot().draft?.text).toBe("未发送草稿");
+    expect(reopened.openSession("main").snapshot().messages).toHaveLength(0);
+    reopened.clearDraft("main");
+    expect(reopened.openSession("main").snapshot().draft).toBeUndefined();
+  });
+
+  it("approve consumes exactly one pending and never replays; reopen expires pending", () => {
+    const store = memoryTaskStore();
+    const taskHost = new TaskWorkspaceHost(TASK_ID, TASK_DIR, store, () => "2026-09-22T10:00:00+08:00");
+    taskHost.openSession("main", { permission: "default" } as never);
+    const turn = taskHost.sendMessage("main", "跑命令", {
+      tool: "exec.run",
+      target: `${TASK_DIR}/run.sh`,
+      execute: (call) => ({ tool: call.tool, kind: call.kind, target: call.target, contentVersion: call.contentVersion, output: "x" }),
+    });
+    expect(turn.state).toBe("approval");
+    expect(taskHost.approve("main", turn.approvalId ?? "")).toBe(turn.callId);
+    expect(() => taskHost.approve("main", turn.approvalId ?? "")).toThrow("不可重放");
+    // Pending never replays on reopen: a second host sees expired, not pending.
+    const pending = new TaskWorkspaceHost(TASK_ID, TASK_DIR, memoryTaskStore(), () => "2026-09-22T10:00:00+08:00");
+    pending.openSession("other", { permission: "default" } as never);
+    const awaiting = pending.sendMessage("other", "跑命令", {
+      tool: "exec.run",
+      target: `${TASK_DIR}/run.sh`,
+      execute: (call) => ({ tool: call.tool, kind: call.kind, target: call.target, contentVersion: call.contentVersion, output: "x" }),
+    });
+    expect(awaiting.state).toBe("approval");
+    pending.dispose();
+    const reopened = new TaskWorkspaceHost(TASK_ID, pending.taskDir, pending["store"] as never, () => "2026-09-22T10:01:00+08:00");
+    expect(reopened.openSession("other").pendingApproval()).toBeUndefined();
+  });
+});

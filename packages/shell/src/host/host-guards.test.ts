@@ -131,3 +131,22 @@ describe("validateHostTaskOp", () => {
     expect(validateHostTaskOp("task/approve", {})).toEqual({ ok: true });
   });
 });
+
+describe("S6 batch 2: send-record refs and draft-tolerant store", () => {
+  it("accepts verbatim references/skillSource and rejects malformed shapes", () => {
+    expect(
+      validateHostTaskOp("task/sendMessage", {
+        sessionId: "main",
+        text: "hi",
+        references: [{ kind: "file", path: "a.ts" }],
+        skillSource: "review",
+      }),
+    ).toEqual({ ok: true });
+    expect(
+      validateHostTaskOp("task/sendMessage", { sessionId: "main", text: "hi", references: "nope" }).ok,
+    ).toBe(false);
+    expect(
+      validateHostTaskOp("task/sendMessage", { sessionId: "main", text: "hi", skillSource: " " }).ok,
+    ).toBe(false);
+  });
+});

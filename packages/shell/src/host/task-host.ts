@@ -106,6 +106,9 @@ export interface HostTurnResult {
   state: string;
   callId: string;
   approvalId?: string;
+  /** Send-record association: user input + agent reply message ids. */
+  userMessageId: string;
+  agentMessageId: string;
 }
 
 function parentDirOf(taskDir: string): string {
@@ -226,6 +229,19 @@ export class TaskWorkspaceHost {
    * exists. A snapshot naming a different task is rejected: reopen never
    * continues with another task's latest session.
    */
+  /** Save/refresh the unsent composer draft for a session (never auto-sent). */
+  saveDraft(sessionId: string, draft: { text: string; references?: unknown[]; skillSource?: string }): void {
+    const channel = this.openSession(sessionId);
+    channel.saveDraft(draft);
+    this.store.writeSession(this.taskDir, channel.snapshot());
+  }
+
+  clearDraft(sessionId: string): void {
+    const channel = this.openSession(sessionId);
+    channel.clearDraft();
+    this.store.writeSession(this.taskDir, channel.snapshot());
+  }
+
   openSession(
     sessionId: string,
     options?: { providerId?: string; model?: string; credentialRef?: string },
@@ -274,6 +290,8 @@ export class TaskWorkspaceHost {
       state: result.state,
       callId: result.call.callId,
       approvalId: result.approval?.id,
+      userMessageId: result.userMessageId,
+      agentMessageId: result.agentMessageId,
     };
   }
 

@@ -163,6 +163,19 @@ export function parseSessionSnapshot(raw: string): PiSessionSnapshot {
       throw new Error("invalid-payload: session snapshot.credentialRef must be a non-empty reference");
     }
   }
+  // Draft-tolerant persistence: an absent draft is fine (empty composer);
+  // a present draft must be an object with string text so a corrupt
+  // snapshot cannot restore a half-shaped draft. Structured refs/skill
+  // sources ride as unknown fields and are never interpreted here.
+  if (snapshot["draft"] !== undefined) {
+    const draft = snapshot["draft"];
+    if (typeof draft !== "object" || draft === null || Array.isArray(draft)) {
+      throw new Error("invalid-payload: session snapshot.draft must be an object");
+    }
+    if (typeof (draft as Record<string, unknown>)["text"] !== "string") {
+      throw new Error("invalid-payload: session snapshot.draft.text must be a string");
+    }
+  }
   return value as PiSessionSnapshot;
 }
 

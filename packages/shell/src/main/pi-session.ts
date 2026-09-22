@@ -63,6 +63,24 @@ export interface PiMessage {
   role: "user" | "agent";
   text: string;
   callId?: string;
+  /** Human-explicit input vs agent-autonomous output (spec: 分别标识). */
+  origin: "human" | "agent";
+  /**
+   * Structured input refs (`@` file/context picks) ride here. Kept as
+   * unknown fields so future ref shapes round-trip without a migration;
+   * the channel never interprets them (S6 batch 2 persists, #16 refines).
+   */
+  references?: unknown[];
+  /** Skill source (`$` invocation) that produced this message, if any. */
+  skillSource?: string;
+}
+
+/** Unsent composer draft persisted with the session (never auto-sent). */
+export interface PiSessionDraft {
+  text: string;
+  updatedAt: string;
+  references?: unknown[];
+  skillSource?: string;
 }
 
 export interface PiSessionSnapshot {
@@ -78,6 +96,8 @@ export interface PiSessionSnapshot {
   runState: PiRunState;
   createdAt: string;
   updatedAt: string;
+  /** Unsent draft; absent when the composer is empty. Never auto-sent. */
+  draft?: PiSessionDraft;
 }
 
 /** Gated tools: the only tools the Agent may call. Everything else is closed. */
@@ -161,6 +181,10 @@ export function listKnownPiProviders(): PiProviderProfile[] {
 
 export interface PiTurnInput {
   text: string;
+  /** Structured input refs (`@` picks); persisted verbatim, never interpreted. */
+  references?: unknown[];
+  /** Skill source (`$` invocation) for this turn, persisted verbatim. */
+  skillSource?: string;
   usageSource?: PiUsageSource;
   usage?: Partial<PiCallUsage>;
   providerId?: string;
@@ -177,6 +201,10 @@ export interface PiTurnResult {
   state: PiRunState;
   call: PiCallRecord;
   approval?: PiApproval;
+  /** Send-record association: the user input message minted by this turn. */
+  userMessageId: string;
+  /** Send-record association: the agent reply (or awaiting-approval stub). */
+  agentMessageId: string;
 }
 
 /**
@@ -218,8 +246,28 @@ function isGatedTool(name: string): PiToolDefinition | undefined {
   return PI_GATED_TOOLS.find((tool) => tool.name === name);
 }
 
+/** Lexical path normalization (no fs access): unify `\`, drop `.`, resolve `..`. */
+function normalizeToolTarget(target: string): string {
+  const unified = target.replace(/\\/g, "/");
+  const absolute = unified.startsWith("/");
+  const parts: string[] = [];
+  for (const segment of unified.split("/")) {
+    if (segment === "" || segment === ".") continue;
+    if (segment === "..") {
+      if (parts.length > 0) parts.pop();
+      continue;
+    }
+    parts.push(segment);
+  }
+  return `${absolute ? "/" : ""}${parts.join("/")}`;
+}
+
 function targetInTask(taskDir: string, target: string): boolean {
-  return target === taskDir || target.startsWith(`${taskDir}/`);
+  // Compare normalized forms so `taskDir/../sibling` cannot pass the
+  // prefix check and silently fall back to the original checkout dir.
+  const dir = normalizeToolTarget(taskDir);
+  const normalized = normalizeToolTarget(target);
+  return normalized === dir || normalized.startsWith(`${dir}/`);
 }
 
 let piCallSequence = 0;
@@ -253,6 +301,7 @@ export class PiSessionChannel {
   private approvals: PiApproval[] = [];
   private writeLock: { ownerCallId: string; held: boolean } | null = null;
   private messageSequence = 0;
+  private draft?: PiSessionDraft;
 
   constructor(options: PiSessionOptions) {
     if (options.taskId.trim().length === 0) throw new Error("taskId must be non-empty");
@@ -444,7 +493,18 @@ export class PiSessionChannel {
     };
     this.calls.push(call);
     this.messageSequence += 1;
-    this.messages.push({ id: `msg-${this.messageSequence}`, role: "user", text: input.text, callId });
+    const userMessageId = `msg-${this.messageSequence}`;
+    this.messages.push({
+      id: userMessageId,
+      role: "user",
+      text: input.text,
+      callId,
+      // Human-explicit input (typed/sent by the user); agent output is
+      // labelled below. Persisted so reopen shows who said what.
+      origin: "human",
+      ...(input.references !== undefined ? { references: input.references } : {}),
+      ...(input.skillSource !== undefined ? { skillSource: input.skillSource } : {}),
+    });
     this.state = "running";
     this.writeLock = { ownerCallId: callId, held: true };
     events.push("write-lock:acquired");
@@ -464,19 +524,24 @@ export class PiSessionChannel {
         const decision = this.previewGate(gatedTool, toolCall.target);
         events.push(`gate:${gatedTool}:${decision.verdict}`);
         if (decision.verdict === "deny") {
-          return this.finishTurn(call, "failed", `已拒绝${gatedTool === "fs.write" ? "写入" : "调用"} ${toolCall.target}，已有消息与代码保留。`, input.stream);
+          return this.finishTurn(call, "failed", `已拒绝${gatedTool === "fs.write" ? "写入" : "调用"} ${toolCall.target}，已有消息与代码保留。`, input.stream, userMessageId);
         }
         if (decision.verdict === "ask") {
           this.state = "approval";
           const approval = this.requestApproval(gatedTool, toolCall.target, toolCall.contentVersion, callId);
           events.push("turn:awaiting-approval");
-          return { state: "approval", call, approval };
+          // Awaiting-approval turns mint the agent stub now so the
+          // user-input -> turn/call linkage exists before approval.
+          this.messageSequence += 1;
+          const agentMessageId = `msg-${this.messageSequence}`;
+          this.messages.push({ id: agentMessageId, role: "agent", text: `等待确认：${gatedTool} ${toolCall.target}。`, callId, origin: "agent" });
+          return { state: "approval", call, approval, userMessageId, agentMessageId };
         }
         events.push(`tool:${gatedTool}:${toolCall.target}`);
       }
-      return this.finishTurn(call, "done", `已按「${input.text}」完成检查。`, input.stream);
+      return this.finishTurn(call, "done", `已按「${input.text}」完成检查。`, input.stream, userMessageId);
     } catch {
-      return this.finishTurn(call, "failed", "执行失败，已保留已有消息与代码。", input.stream);
+      return this.finishTurn(call, "failed", "执行失败，已保留已有消息与代码。", input.stream, userMessageId);
     }
   }
 
@@ -485,15 +550,31 @@ export class PiSessionChannel {
     const approval = this.approvals.find((item) => item.id === approvalId);
     if (!approval) throw new Error("确认请求不存在");
     if (approval.status !== "pending") throw new Error("确认请求已处理，不可重放");
+    // One-shot: consume exactly this pending request. Re-approving the
+    // same id fails above; approving a different pending id consumes that
+    // one instead, so one approval can never execute twice or spill over.
     approval.status = "approved";
     approval.executed = true;
     const call = this.calls.find((item) => item.callId === approval.callId);
     call?.events.push(`approval:${approvalId}:approved:executed-once`);
     this.messageSequence += 1;
-    this.messages.push({ id: `msg-${this.messageSequence}`, role: "agent", text: `已批准并执行 ${approval.tool} ${approval.target}。` });
+    this.messages.push({ id: `msg-${this.messageSequence}`, role: "agent", text: `已批准并执行 ${approval.tool} ${approval.target}。`, callId: approval.callId, origin: "human" });
     this.releaseWriteLock(call?.callId ?? approval.callId);
     this.state = "done";
     return call ?? { callId: approval.callId, providerId: this.providerId, model: this.model, usageSource: "approval", events: [] };
+  }
+
+  /** Save/refresh the unsent composer draft. Never auto-sends; survives restore. */
+  saveDraft(draft: { text: string; references?: unknown[]; skillSource?: string }): void {
+    this.draft = { text: draft.text, updatedAt: this.now(), ...(draft.references !== undefined ? { references: draft.references } : {}), ...(draft.skillSource !== undefined ? { skillSource: draft.skillSource } : {}) };
+  }
+
+  get currentDraft(): { text: string; updatedAt: string; references?: unknown[]; skillSource?: string } | undefined {
+    return this.draft ? { ...this.draft } : undefined;
+  }
+
+  clearDraft(): void {
+    this.draft = undefined;
   }
 
   /** Reject/cancel: nothing executes, history is kept, no replay on reopen. */
@@ -536,6 +617,10 @@ export class PiSessionChannel {
       runState: this.state,
       createdAt: this.createdAt,
       updatedAt: this.now(),
+      // Draft-tolerant persistence: the unsent composer text (+ structured
+      // refs/skill source) round-trips with the session and is never
+      // auto-sent on restore.
+      ...(this.draft !== undefined ? { draft: { ...this.draft } } : {}),
     };
     if (this.credentialRef !== undefined) {
       snapshot.credentialRef = this.credentialRef;
@@ -558,7 +643,14 @@ export class PiSessionChannel {
       permission: snapshot.permission,
       credentialRef: snapshot.credentialRef,
     });
-    channel.messages = snapshot.messages.map((message) => ({ ...message }));
+    // S6 batch 2 adds `origin`/structured refs to messages and a `draft`:
+    // older snapshots without them restore with a derived origin (user =
+    // human, agent = agent) so the human/agent split never reads undefined.
+    channel.messages = snapshot.messages.map((message) => ({
+      ...message,
+      origin: message.origin ?? (message.role === "user" ? ("human" as const) : ("agent" as const)),
+    }));
+    channel.draft = snapshot.draft ? { ...snapshot.draft } : undefined;
     channel.calls = snapshot.calls.map((call) => {
       // S6 batch 1 adds structured `usage`; older snapshots without it
       // restore as `unreported` so usage summaries never read garbage.
@@ -584,10 +676,12 @@ export class PiSessionChannel {
     call: PiCallRecord,
     state: "done" | "failed",
     reply: string,
-    stream?: (chunk: { callId: string; text: string; done: boolean }) => void,
+    stream: ((chunk: { callId: string; text: string; done: boolean }) => void) | undefined,
+    userMessageId: string,
   ): PiTurnResult {
     this.messageSequence += 1;
-    this.messages.push({ id: `msg-${this.messageSequence}`, role: "agent", text: reply, callId: call.callId });
+    const agentMessageId = `msg-${this.messageSequence}`;
+    this.messages.push({ id: agentMessageId, role: "agent", text: reply, callId: call.callId, origin: "agent" });
     call.events.push(`turn:${state}`);
     this.releaseWriteLock(call.callId);
     this.state = state;
@@ -595,7 +689,7 @@ export class PiSessionChannel {
     // live token flow in S6 batch 1) and always end with a done frame so
     // the renderer stop button cannot leave a half-open stream.
     streamText(stream, call.callId, reply);
-    return { state, call };
+    return { state, call, userMessageId, agentMessageId };
   }
 
   private releaseWriteLock(ownerCallId: string): void {

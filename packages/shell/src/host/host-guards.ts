@@ -178,6 +178,9 @@ export function validateHostTaskOp(
     // fail-closed): provider/model override for per-turn selection,
     // usage counters + source for the persisted call record. `stream` is
     // a local Host-side callback and never crosses the RPC boundary.
+    // S6 batch 2: structured input refs (`references`) + skill source
+    // (`skillSource`) ride verbatim for send-record association; the Host
+    // persists them but never interprets them.
     for (const key of ["providerId", "model"] as const) {
       const value = payload[key];
       if (value !== undefined && (typeof value !== "string" || value.trim().length === 0)) {
@@ -209,6 +212,14 @@ export function validateHostTaskOp(
     const credentialRef = payload["credentialRef"];
     if (credentialRef !== undefined && (typeof credentialRef !== "string" || credentialRef.trim().length === 0)) {
       return { ok: false, error: "invalid-payload: task/sendMessage.credentialRef must be a non-empty reference" };
+    }
+    const skillSource = payload["skillSource"];
+    if (skillSource !== undefined && (typeof skillSource !== "string" || skillSource.trim().length === 0)) {
+      return { ok: false, error: "invalid-payload: task/sendMessage.skillSource must be a non-empty string" };
+    }
+    const references = payload["references"];
+    if (references !== undefined && !Array.isArray(references)) {
+      return { ok: false, error: "invalid-payload: task/sendMessage.references must be an array" };
     }
     return { ok: true };
   }

@@ -335,3 +335,100 @@ describe("PiSessionChannel turns and approvals", () => {
     expect(session.writeLockOwner).toBeNull();
   });
 });
+
+describe("S6 batch 2: cwd guard, approval one-shot, origin labels, send-record, drafts", () => {
+  it("rejects tool targets that escape the task dir via .. (no fallback to the original checkout)", () => {
+    const session = channel();
+    session.setPermission("auto");
+    expect(session.previewGate("fs.write", `${TASK_DIR}/../sibling/notes.md`).verdict).toBe("deny");
+    expect(session.previewGate("fs.write", `${TASK_DIR}/sub/../../sibling/x`).verdict).toBe("deny");
+    expect(session.previewGate("fs.write", "/Users/name/Workspace/repo/notes.md").verdict).toBe("deny");
+    expect(session.previewGate("fs.write", `${TASK_DIR}/notes.md`).verdict).toBe("allow");
+    const turn = session.runTurn({
+      text: "越界写入",
+      tool: "fs.write",
+      target: `${TASK_DIR}/../sibling/notes.md`,
+      execute: (call) => ({ tool: call.tool, kind: call.kind, target: call.target, contentVersion: call.contentVersion, output: "x" }),
+    });
+    expect(turn.state).toBe("failed");
+    expect(session.snapshot().messages.some((message) => message.text.includes("已拒绝"))).toBe(true);
+  });
+
+  it("consumes exactly one pending approval; re-approve fails and permission change is forward-only", () => {
+    const session = channel();
+    session.setPermission("default");
+    const first = session.runTurn({
+      text: "跑命令一",
+      tool: "exec.run",
+      target: `${TASK_DIR}/a.sh`,
+      execute: (call) => ({ tool: call.tool, kind: call.kind, target: call.target, contentVersion: call.contentVersion, output: "x" }),
+    });
+    expect(first.state).toBe("approval");
+    expect(first.approval?.permissionAtRequest).toBe("default");
+    // Permission change lands after the request: the pending approval keeps `default`.
+    session.setPermission("auto");
+    const decided = session.approve(first.approval?.id ?? "");
+    expect(decided.callId).toBe(first.call.callId);
+    expect(() => session.approve(first.approval?.id ?? "")).toThrow("不可重放");
+    // Forward-only: the same command tier now runs without asking under
+    // `auto` (no second approval mints), proving the change applied to
+    // later calls while the consumed approval kept `default`.
+    const second = session.runTurn({
+      text: "跑命令二",
+      tool: "exec.run",
+      target: `${TASK_DIR}/b.sh`,
+      execute: (call) => ({ tool: call.tool, kind: call.kind, target: call.target, contentVersion: call.contentVersion, output: "x" }),
+    });
+    expect(second.state).toBe("done");
+    expect(second.approval).toBeUndefined();
+    // Back to `default`: a later command asks again with a distinct approval.
+    session.setPermission("default");
+    const third = session.runTurn({
+      text: "跑命令三",
+      tool: "exec.run",
+      target: `${TASK_DIR}/c.sh`,
+      execute: (call) => ({ tool: call.tool, kind: call.kind, target: call.target, contentVersion: call.contentVersion, output: "x" }),
+    });
+    expect(third.state).toBe("approval");
+    expect(third.approval?.id).not.toBe(first.approval?.id);
+    expect(third.approval?.permissionAtRequest).toBe("default");
+  });
+
+  it("links user input to turn/call ids and labels human vs agent origins", () => {
+    const session = channel();
+    const turn = session.runTurn({ text: "检查构建", references: [{ kind: "file", path: "notes.md" }], skillSource: "review" });
+    expect(turn.userMessageId).toBe("msg-1");
+    expect(turn.agentMessageId).toBe("msg-2");
+    const snapshot = session.snapshot();
+    const user = snapshot.messages.find((message) => message.id === turn.userMessageId);
+    const agent = snapshot.messages.find((message) => message.id === turn.agentMessageId);
+    expect(user?.origin).toBe("human");
+    expect(user?.callId).toBe(turn.call.callId);
+    expect(agent?.origin).toBe("agent");
+    expect(agent?.callId).toBe(turn.call.callId);
+    expect(user?.skillSource).toBe("review");
+    expect(Array.isArray(user?.references)).toBe(true);
+    // Restore keeps the linkage and origins (legacy messages derive them).
+    const restored = PiSessionChannel.restore(snapshot, TASK_DIR);
+    expect(restored.snapshot().messages.find((message) => message.id === turn.userMessageId)?.origin).toBe("human");
+    const legacy = { ...snapshot, messages: snapshot.messages.map(({ origin: _dropped, ...rest }) => rest) };
+    const legacyRestored = PiSessionChannel.restore(legacy as never, TASK_DIR);
+    expect(legacyRestored.snapshot().messages.find((message) => message.role === "user")?.origin).toBe("human");
+    expect(legacyRestored.snapshot().messages.find((message) => message.role === "agent")?.origin).toBe("agent");
+  });
+
+  it("persists an unsent draft with structured refs and never auto-sends it on restore", () => {
+    const session = channel();
+    session.saveDraft({ text: "草稿想法", references: [{ kind: "file", path: "a.ts" }], skillSource: "review" });
+    const snapshot = session.snapshot();
+    expect(snapshot.draft?.text).toBe("草稿想法");
+    expect(snapshot.messages).toHaveLength(0);
+    const restored = PiSessionChannel.restore(snapshot, TASK_DIR);
+    expect(restored.currentDraft?.text).toBe("草稿想法");
+    expect(Array.isArray(restored.currentDraft?.references)).toBe(true);
+    expect(restored.snapshot().messages).toHaveLength(0);
+    expect(restored.runState).toBe("idle");
+    restored.clearDraft();
+    expect(restored.currentDraft).toBeUndefined();
+  });
+});
