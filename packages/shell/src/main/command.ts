@@ -4,7 +4,8 @@ export type ShellCommand =
   | { kind: "task-browser-smoke" }
   | { kind: "task-automation-smoke" }
   | { kind: "task-browser-s5-smoke" }
-  | { kind: "versions" };
+  | { kind: "versions" }
+  | { kind: "startup" };
 
 type Environment = Readonly<Record<string, string | undefined>>;
 
@@ -32,6 +33,9 @@ export function resolveShellCommand(
   const versions =
     isEnabled(env["PIDOCK_PRINT_VERSIONS"]) ||
     appArgs.includes("--print-versions");
+  const startup =
+    isEnabled(env["PIDOCK_PRINT_STARTUP"]) ||
+    appArgs.includes("--print-startup");
 
   if (
     [
@@ -40,6 +44,7 @@ export function resolveShellCommand(
       taskAutomationSmoke,
       taskBrowserS5Smoke,
       versions,
+      startup,
     ].filter(Boolean).length > 1
   ) {
     throw new Error("conflicting shell command flags");
@@ -49,5 +54,6 @@ export function resolveShellCommand(
   if (taskAutomationSmoke) return { kind: "task-automation-smoke" };
   if (taskBrowserS5Smoke) return { kind: "task-browser-s5-smoke" };
   if (versions) return { kind: "versions" };
+  if (startup) return { kind: "startup" };
   return { kind: "window" };
 }

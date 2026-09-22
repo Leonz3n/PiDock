@@ -132,3 +132,19 @@ describe("resolveShellCommand S5 smoke", () => {
     ).toThrow("conflicting shell command flags");
   });
 });
+
+describe("resolveShellCommand startup measurement", () => {
+  it("recognizes the startup flag", () => {
+    expect(
+      resolveShellCommand(["/path/to/Electron", ".", "--", "--print-startup"], {}),
+    ).toEqual({ kind: "startup" });
+  });
+
+  it("recognizes the startup env flag", () => {
+    expect(
+      resolveShellCommand(["/path/to/Electron", "."], {
+        PIDOCK_PRINT_STARTUP: "1",
+      }),
+    ).toEqual({ kind: "startup" });
+  });
+});
