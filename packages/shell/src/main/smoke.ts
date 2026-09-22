@@ -581,6 +581,8 @@ export async function runSmoke(workspaceId: string): Promise<SmokeReport> {
     await app.whenReady();
 
     stage = "utility-process";
+    // Smoke path: workspace-only Host (ping/versions/trust probes only;
+    // no task ops run here, so no per-task binding is forked).
     const host = await createHost(workspaceId, false);
     client = host.client;
     child = host.child;

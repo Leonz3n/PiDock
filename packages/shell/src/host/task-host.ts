@@ -87,12 +87,11 @@ export interface ProvisionTaskInput {
   /**
    * Per-repo source checkout the git ops run in (fetch/branch/worktree
    * `cwd`). `provision()` validates each entry with
-   * `planWorktreeCreation`, so unknown keys and empty cwds fail closed
-   * instead of executing in the Host cwd. When absent, `provision()`
-   * defaults the cwd to the source checkout placeholder recorded on the
-   * task (or the task dir as a last resort); the returned plan is still
-   * validated by `assertProvisionPlanSafe` but MUST NOT be executed
-   * without pinning each repo to its real main checkout directory.
+   * `planWorktreeCreation` (which rejects relative/empty cwds), so
+   * unknown keys and unchecked cwds fail closed instead of executing in
+   * the Host cwd. When absent, `provision()` defaults the cwd to the
+   * validated task root; the returned plan is still not executed by the
+   * Host (S2 returns the plan and persists the record only).
    */
   mainCheckouts?: Readonly<Record<string, string>>;
   now?: string;
@@ -186,11 +185,16 @@ export class TaskWorkspaceHost {
     this.store.writeTask(this.taskDir, record);
     // Plan with real cwds via `planWorktreeCreation` (never ""): one
     // fetch/branch/worktree triple per repo, each executed in that repo's
-    // main checkout directory. The Host does NOT execute git here (S2
-    // returns the plan and persists the record only); real cwds mean no
-    // future caller can git-run in the Host cwd by accident.
+    // main checkout directory. `planWorktreeCreation` rejects
+    // relative/empty `mainCheckoutDir` values, so unchecked `mainCheckouts`
+    // entries fail closed here instead of entering an executable plan.
+    // The Host does NOT execute git (S2 returns the plan and persists the
+    // record only); the caller executes the returned plan via
+    // `assertProvisionPlanSafe` + real git. With zero repos the plan
+    // carries no ops; `mainCheckoutDir` is the validated task root so the
+    // plan shape never carries an empty checkout dir.
     const plan: ProvisionPlan = {
-      mainCheckoutDir: "",
+      mainCheckoutDir: resolved.root,
       ops: [],
     };
     for (const repoDir of repos) {
@@ -203,7 +207,6 @@ export class TaskWorkspaceHost {
         commit: pinned.commit,
         branch: branched.branch,
       });
-      if (plan.mainCheckoutDir === "") plan.mainCheckoutDir = repoPlan.mainCheckoutDir;
       plan.ops.push(...repoPlan.ops);
     }
     assertProvisionPlanSafe(plan);

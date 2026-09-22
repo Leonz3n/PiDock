@@ -15,6 +15,8 @@ import type {
 import { isAllowedInvokeChannel } from "../preload/allowlist.js";
 import { HostClient } from "../rpc/host-client.js";
 import { buildHostEnv, validateHostTaskOp } from "../host/host-guards.js";
+import { isAbsoluteTaskRoot } from "./task-provision.js";
+import type { HostTaskOp, HostTaskResult } from "../rpc/protocol.js";
 import { TaskBrowser } from "./task-browser.js";
 import {
   TrustDomainRegistry,
@@ -264,9 +266,106 @@ function trustFailureEnvelope(
   throw error;
 }
 
+/**
+ * Per-task Host registry for main ([PiDock 02] #5, S3a slice).
+ *
+ * One utilityProcess serves one task folder: the first `shell/taskOp` for
+ * a task forks a bound Host (`buildHostEnv(..., { taskId, taskDir })`) and
+ * later ops for the same task reuse it; ops for another task fork their own
+ * Host. The registry is keyed by `taskDir` (not taskId) so two tasks that
+ * reuse a task id under different roots never share a process. The task dir
+ * is resolved from the task record on first spawn and never taken from a
+ * renderer payload beyond the task id selector.
+ *
+ * S2 note: `registerIpc` currently takes one workspace-only client (used by
+ * `getVersions`/`hostPing` smoke paths). Per-task `shell/taskOp` routing
+ * through this registry lands with the caller below; until that caller
+ * migrates, per-task Hosts are reachable via `routeTaskOp` (covered below)
+ * and workspace-only call sites stay limited to ping/versions.
+ */
+export interface PerTaskHostEntry {
+  taskId: string;
+  taskDir: string;
+  client: HostClient;
+  child: UtilityProcess;
+}
+
+export class PerTaskHostRegistry {
+  private readonly byTaskDir = new Map<string, PerTaskHostEntry>();
+  private readonly byTaskId = new Map<string, Set<string>>();
+
+  constructor(
+    private readonly workspaceId: string,
+    private readonly spawn: (
+      workspaceId: string,
+      task: { taskId: string; taskDir: string },
+    ) => Promise<{ client: HostClient; child: UtilityProcess }> = (ws, task) =>
+      createHost(ws, true, task),
+    private readonly resolveTaskDir: (taskId: string) => string | null = () => null,
+  ) {}
+
+  /** Hosts currently forked (test seam: no Electron needed). */
+  get size(): number {
+    return this.byTaskDir.size;
+  }
+
+  hasTaskDir(taskDir: string): boolean {
+    return this.byTaskDir.has(taskDir);
+  }
+
+  entryForTaskId(taskId: string): PerTaskHostEntry | undefined {
+    const dirs = this.byTaskId.get(taskId);
+    if (!dirs) return undefined;
+    const [first] = [...dirs];
+    if (first === undefined) return undefined;
+    return this.byTaskDir.get(first);
+  }
+
+  /** Route one op to the bound per-task Host, forking it on first use. */
+  async routeTaskOp(params: {
+    taskId: string;
+    op: HostTaskOp;
+    payload?: Record<string, unknown>;
+  }): Promise<HostTaskResult> {
+    const { taskId, op, payload } = params;
+    const perOp = validateHostTaskOp(op, payload ?? {});
+    if (!perOp.ok) {
+      throw new TrustDomainViolation("invalid-payload", perOp.error);
+    }
+    const existing = this.entryForTaskId(taskId);
+    if (existing) {
+      return existing.client.task({ workspaceId: this.workspaceId, taskId, op, payload });
+    }
+    const taskDir = this.resolveTaskDir(taskId);
+    if (taskDir === null || !isAbsoluteTaskRoot(taskDir)) {
+      throw new TrustDomainViolation(
+        "invalid-payload",
+        `unknown task: ${taskId} (no task record; provision the task before sending ops)`,
+      );
+    }
+    const { client, child } = await this.spawn(this.workspaceId, { taskId, taskDir });
+    this.byTaskDir.set(taskDir, { taskId, taskDir, client, child });
+    const dirs = this.byTaskId.get(taskId) ?? new Set<string>();
+    dirs.add(taskDir);
+    this.byTaskId.set(taskId, dirs);
+    return client.task({ workspaceId: this.workspaceId, taskId, op, payload });
+  }
+
+  /** Dispose every forked Host (app exit / window-all-closed). */
+  disposeAll(): void {
+    for (const entry of this.byTaskDir.values()) {
+      entry.client.dispose();
+      entry.child.kill();
+    }
+    this.byTaskDir.clear();
+    this.byTaskId.clear();
+  }
+}
+
 export function registerIpc(
   client: HostClient,
   registry: TrustDomainRegistry,
+  tasks?: PerTaskHostRegistry,
 ): void {
   ipcMain.handle("shell/getVersions", async (event) => {
     try {
@@ -303,7 +402,11 @@ export function registerIpc(
 
   // Task-scoped op from the sandboxed renderer: main binds the workspace
   // from the trusted sender (never from the payload) and forwards the
-  // validated op to the per-workspace utilityProcess Host.
+  // validated op to the per-task utilityProcess Host bound to that task's
+  // folder. When a per-task registry is wired, the op routes through it
+  // (fork-on-first-use with PIDOCK_TASK_ID/PIDOCK_TASK_DIR); otherwise it
+  // falls back to the single workspace-only client (ping/versions smoke
+  // paths), which stays task-unbound fail-closed in the Host.
   ipcMain.handle("shell/taskOp", async (event, payload?: unknown) => {
     try {
       const sender = registry.requireShellSender(event);
@@ -337,6 +440,10 @@ export function registerIpc(
       const perOp = validateHostTaskOp(op, opPayload);
       if (!perOp.ok) {
         throw new TrustDomainViolation("invalid-payload", perOp.error);
+      }
+      if (tasks) {
+        const result = await tasks.routeTaskOp({ taskId, op, payload: opPayload });
+        return { ok: true as const, payload: result };
       }
       const result = await client.task({ workspaceId, taskId, op, payload: opPayload });
       return { ok: true as const, payload: result };
