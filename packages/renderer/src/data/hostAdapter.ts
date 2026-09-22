@@ -150,6 +150,8 @@ export type TaskHeaderState = {
   name: string;
   repos: string[];
   branch: string;
+  /** Stored actual root (`task.json` through the shell, task record in dev/memory). */
+  root: string;
   ready: boolean;
   changedFiles: { path: string; status: string }[];
   error?: string;

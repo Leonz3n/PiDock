@@ -287,6 +287,9 @@ describe("scheduled task creation", () => {
     await user.type(name, "每日巡检");
     await user.type(within(dialog).getByLabelText("执行周期"), "每日 08:00");
     await user.type(within(dialog).getByLabelText("定时任务提示词"), "检查昨日错误");
+    // [PiDock 02] P1-1/P1-3: creation pins the remote baseline first.
+    await user.type(within(dialog).getByLabelText("远程基线分支"), "origin/main");
+    await user.type(within(dialog).getByLabelText("基线提交"), "9acb5b6");
     await user.click(within(dialog).getByRole("button", { name: "创建任务" }));
 
     expect(await screen.findByText("已创建定时任务；每次触发新建独立会话")).toBeInTheDocument();

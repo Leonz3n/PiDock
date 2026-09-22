@@ -83,9 +83,35 @@ describe("new-task workspace preview", () => {
 
     await user.type(within(dialog).getByLabelText("任务名称"), "预览键校验");
     await user.click(within(dialog).getByLabelText("仓库 front-monorepo"));
+    // [PiDock 02] P1-1/P1-3: the form pins the remote baseline before
+    // creation (fail-fast with the form kept), so the test provisions a
+    // baseline like a real creation.
+    await user.type(within(dialog).getByLabelText("远程基线分支"), "origin/main");
+    await user.type(within(dialog).getByLabelText("基线提交"), "9acb5b6");
     await user.click(within(dialog).getByRole("button", { name: "创建任务" }));
 
     expect(await screen.findByRole("heading", { name: "预览键校验" })).toBeInTheDocument();
     expect(screen.getByText(key)).toBeInTheDocument();
+  });
+
+  it("keeps the form on blank baseline: no orphan task", async () => {
+    // P1-1/P1-3 UI regression: a blank baseline pins `fetch-failed`
+    // fail-fast with the dialog kept (alert + no navigation), never an
+    // orphan memory task. (Duplicate-id fail-fast shares the same
+    // pre-create path and is locked at the adapter seam in
+    // `task-provision-state.test.ts`.)
+    const user = userEvent.setup();
+    renderApp("/projects/atlas");
+    await screen.findByRole("heading", { name: "Atlas Web" });
+    const { useHostStore } = await import("../stores/host");
+    const before = useHostStore.getState().workspace?.tasks.length ?? 0;
+    await user.click(screen.getByRole("button", { name: "新建任务" }));
+    const dialog = await screen.findByRole("dialog", { name: "新建任务" });
+    await user.type(within(dialog).getByLabelText("任务名称"), "空白基线任务");
+    await user.type(within(dialog).getByLabelText("远程基线分支"), "origin/main");
+    await user.click(within(dialog).getByRole("button", { name: "创建任务" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("获取远程基线失败");
+    expect(screen.queryByRole("heading", { name: "空白基线任务" })).not.toBeInTheDocument();
+    expect(useHostStore.getState().workspace?.tasks.length ?? before).toBe(before);
   });
 });

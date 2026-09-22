@@ -5,9 +5,11 @@ import { runStateLabel } from "../pages/runState";
 import { diffConfigRows, isSensitiveKey, nextTemplateVersion } from "../data/configRows";
 import {
   buildTaskFormBranch,
+  checkTaskFormDirIdConflict,
   directoryLinkName,
   isTaskDirId,
   newWorkspaceKey,
+  pinTaskFormBaseline,
   previewTaskFormPaths,
   resolveTaskFormRoot,
   validateTaskFormName,
@@ -823,6 +825,9 @@ function NewTaskModal({ projectId, onClose }: { projectId: string; onClose: () =
   const navigate = useNavigationStore((state) => state.navigate);
   const pushToast = useUiStore((state) => state.pushToast);
   const project = workspace?.projects.find((item) => item.id === projectId);
+  // [PiDock 02] P1-1 fail-fast needs the used dir ids; `tasks` here is the
+  // sibling-modal name in this file, so the form uses its own binding.
+  const existingDirIds = (workspace?.tasks ?? []).map((item) => item.workspaceKey);
   const environments = (workspace?.environments ?? []).filter((item) => item.projectId === projectId);
   const providers = workspace?.providers ?? [];
   const templates = workspace?.templates ?? [];
@@ -921,6 +926,32 @@ function NewTaskModal({ projectId, onClose }: { projectId: string; onClose: () =
                 pushToast(branchResult.error.message);
                 return;
               }
+              // [PiDock 02] P1-1: run the same pure rules the Host
+              // enforces before the task exists, so a duplicate
+              // directory id, a malformed id, or a missing baseline
+              // fails fast locally with the form kept — never an orphan
+              // memory task followed by a late shell-provision error.
+              if (!isTaskDirId(workspaceKey)) {
+                const message = "任务目录标识格式不正确，请重新生成";
+                setFormError(message);
+                pushToast(message);
+                return;
+              }
+              const dirIdConflict = checkTaskFormDirIdConflict(
+                workspaceKey,
+                existingDirIds,
+              );
+              if (dirIdConflict) {
+                setFormError(dirIdConflict.message);
+                pushToast(dirIdConflict.message);
+                return;
+              }
+              const pinned = pinTaskFormBaseline(remoteBranch, fetchedCommit);
+              if (!pinned.ok) {
+                setFormError(pinned.error.message);
+                pushToast(pinned.error.message);
+                return;
+              }
               setFormError("");
               setProvisioning(true);
               try {
@@ -943,19 +974,24 @@ function NewTaskModal({ projectId, onClose }: { projectId: string; onClose: () =
                         }
                       : undefined,
                 });
-                // Provision through the shell when bridged (typed
-                // `host/task` + `task/provision`, `{ok:false}` keeps the
-                // form); in Vite dev / tests the memory adapter already
-                // stored the actual root, so provision is a no-op success.
-                if (isShellConnected() && remoteBranch.trim()) {
+                // [PiDock 02] P1-2: the renderer creates the memory id and
+                // the `task-oooooooo` dir id together and uses the dir id
+                // as the shell-side task id (exact `taskId === dirId`
+                // match the bootstrap accepts), so bridged provision never
+                // fails closed with `unknown task` on memory-style ids.
+                // P1-3: baseline is pinned locally above, so provision
+                // always runs when bridged — a fetch failure already kept
+                // the form instead of skipping to a no-op success that
+                // leaves the shell `unknown task`.
+                if (isShellConnected()) {
                   const provisioned = await provisionTaskThroughShell({
-                    taskId: created.id,
+                    taskId: workspaceKey,
                     name: named.name,
                     dirId: workspaceKey,
                     branch: branchInput.trim() || undefined,
                     rootOverride: overrideEnabled && rootOverride.trim() ? rootOverride.trim() : undefined,
-                    remoteBranch: remoteBranch.trim(),
-                    fetchedCommit: fetchedCommit.trim(),
+                    remoteBranch: pinned.remoteBranch,
+                    fetchedCommit: pinned.commit,
                     repos: project.repositories.filter((r) => repos.includes(r.id)).map((r) => r.name),
                   });
                   if (!provisioned.ok) {

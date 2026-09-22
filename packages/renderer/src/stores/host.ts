@@ -12,6 +12,7 @@ import type {
   SaveScheduleInput,
   SaveServiceRecipeInput,
   SendMessageResult,
+  TaskHeaderState,
   TaskProvisionState,
 } from "../data/hostAdapter";
 import { memoryHost } from "../data/memoryHost";
@@ -100,6 +101,7 @@ type HostState = {
   setTaskDirectories: (taskId: string, directoryIds: string[]) => Promise<void>;
   createTask: (input: CreateTaskInput) => Promise<Task>;
   getTaskProvision: (taskId: string) => Promise<TaskProvisionState | undefined>;
+  getTaskHeader: (taskId: string) => Promise<TaskHeaderState>;
 };
 
 export const useHostStore = create<HostState>((set, get) => ({
@@ -345,4 +347,6 @@ export const useHostStore = create<HostState>((set, get) => ({
   },
 
   getTaskProvision: (taskId) => get().adapter.getTaskProvision(taskId),
+
+  getTaskHeader: (taskId) => get().adapter.getTaskHeader(taskId),
 }));
