@@ -98,6 +98,28 @@ describe("PiSessionChannel turns and approvals", () => {
     expect(() => session.reject(decision.approvalId)).toThrow("不可重放");
   });
 
+  it("binds a default-permission approval to the running turn's call id", () => {
+    const session = channel();
+    session.setPermission("default");
+    const turn = session.runTurn({
+      text: "运行命令",
+      execute: (call) => {
+        const decision = session.gate("exec.run", `${TASK_DIR}/run.sh`, "v1", call.callId);
+        expect(decision.verdict).toBe("ask");
+        if (decision.verdict !== "ask") throw new Error("expected an approval");
+        return { target: `${TASK_DIR}/notes.md`, contentVersion: "v1", output: decision.approvalId };
+      },
+    });
+    // The scripted turn only exercises fs.write (allowed), so it completes;
+    // the direct gate call above proves the approval carries the turn's call.
+    expect(turn.state).toBe("done");
+    const pending = session.pendingApproval();
+    expect(pending?.callId).toBe(turn.call.callId);
+    const approved = session.approve(pending?.id ?? "");
+    expect(approved.callId).toBe(turn.call.callId);
+    expect(() => session.approve(pending?.id ?? "")).toThrow("不可重放");
+  });
+
   it("restores the exact session, not another task's latest", () => {
     const session = channel();
     session.runTurn({ text: "检查构建" });

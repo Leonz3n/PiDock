@@ -200,7 +200,7 @@ export class PiSessionChannel {
    * tools are never offered (deny). Permission changes apply to later calls
    * only: the approval stores the requesting tier.
    */
-  gate(toolName: string, target: string, contentVersion: string): PiGateDecision {
+  gate(toolName: string, target: string, contentVersion: string, currentCallId?: string): PiGateDecision {
     const tool = isGatedTool(toolName);
     if (!tool) return { verdict: "deny", reason: `工具未接入门禁：${toolName}` };
     if (!targetInTask(this.taskDir, target)) {
@@ -213,7 +213,9 @@ export class PiSessionChannel {
       piApprovalSequence += 1;
       const approval: PiApproval = {
         id: `approval-${piApprovalSequence}`,
-        callId: `call-${piCallSequence + 1}`,
+        // Inside a turn the caller passes the minted call id; standalone
+        // gate checks (form preview) anticipate the next turn's id.
+        callId: currentCallId ?? `call-${piCallSequence + 1}`,
         taskId: this.taskId,
         sessionId: this.sessionId,
         tool: toolName,
@@ -258,14 +260,14 @@ export class PiSessionChannel {
     try {
       const toolCall = input.execute?.({ callId, tool: "fs.write", kind: "write", target: `${this.taskDir}/notes.md`, contentVersion: "v1" }) ?? null;
       if (toolCall) {
-        const decision = this.gate("fs.write", toolCall.target, toolCall.contentVersion);
+        const decision = this.gate("fs.write", toolCall.target, toolCall.contentVersion, callId);
         events.push(`gate:fs.write:${decision.verdict}`);
         if (decision.verdict === "deny") {
           return this.finishTurn(call, "failed", `已拒绝写入 ${toolCall.target}，已有消息与代码保留。`);
         }
         if (decision.verdict === "ask") {
           this.state = "approval";
-          const approval = this.approvals.find((item) => item.callId === `call-${piCallSequence}` || item.status === "pending");
+          const approval = this.approvals.find((item) => item.callId === callId && item.status === "pending");
           events.push("turn:awaiting-approval");
           return { state: "approval", call, approval };
         }
