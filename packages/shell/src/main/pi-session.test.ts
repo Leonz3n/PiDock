@@ -273,6 +273,23 @@ describe("PiSessionChannel turns and approvals", () => {
     expect(() => session.runTurn({ text: "坏来源", usageSource: "live" as never })).toThrow("usageSource");
   });
 
+  it("leaves no call-id gap and no provider mutation on a rejected turn", () => {
+    const session = channel();
+    const before = session.snapshot();
+    expect(() => session.runTurn({ text: "坏凭据", credentialRef: "  " })).toThrow("credentialRef");
+    expect(() => session.runTurn({ text: "坏来源", usageSource: "live" as never })).toThrow("usageSource");
+    expect(() =>
+      session.runTurn({ text: "坏模型", providerId: "provider-local", model: "no-such-model" }),
+    ).toThrow("unknown model");
+    // No call minted, no state drift: provider/model unchanged, no calls/messages added.
+    expect(session.snapshot().providerId).toBe(before.providerId);
+    expect(session.snapshot().model).toBe(before.model);
+    expect(session.snapshot().calls).toHaveLength(0);
+    expect(session.snapshot().messages).toHaveLength(0);
+    const next = session.runTurn({ text: "检查构建" });
+    expect(next.call.callId).toBe("call-1");
+  });
+
   it("keeps usageSource twin in sync when backfilling legacy snapshots", () => {
     const session = channel();
     const turn = session.runTurn({ text: "检查构建" });

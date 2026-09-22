@@ -401,6 +401,20 @@ export class PiSessionChannel {
     if (this.state === "running" || this.state === "approval") {
       throw new Error("当前执行尚未结束，请先停止或确认");
     }
+    // Pre-mint fail-closed validation: a rejected turn mints no call id
+    // and mutates no session state (no call-id gap, no provider drift).
+    const pendingCredentialRef = input.credentialRef?.trim();
+    if (input.credentialRef !== undefined && (pendingCredentialRef?.length ?? 0) === 0) {
+      throw new Error("credentialRef must be a non-empty reference when provided");
+    }
+    const pendingUsage = normalizeCallUsage(input.usageSource, input.usage);
+    const pendingSelection =
+      input.providerId !== undefined || input.model !== undefined
+        ? {
+            requested: input.providerId ?? this.providerId,
+            selected: resolveProviderSelection(input.providerId ?? this.providerId, input.model ?? this.model),
+          }
+        : null;
     piCallSequence += 1;
     const callId = `call-${piCallSequence}`;
     const events: string[] = [`turn:start:${callId}`];
@@ -408,27 +422,18 @@ export class PiSessionChannel {
     // intentional: the session always keeps a routable selection. Emit a
     // `turn:provider-fallback` event so consumers can distinguish fallback
     // from an explicit selection instead of silently rerouting.
-    if (input.providerId !== undefined || input.model !== undefined) {
-      const requestedProviderId = input.providerId ?? this.providerId;
-      const selected = resolveProviderSelection(
-        requestedProviderId,
-        input.model ?? this.model,
-      );
-      if (requestedProviderId !== selected.providerId) {
-        events.push(`turn:provider-fallback:${requestedProviderId}->${selected.providerId}`);
+    if (pendingSelection) {
+      if (pendingSelection.requested !== pendingSelection.selected.providerId) {
+        events.push(`turn:provider-fallback:${pendingSelection.requested}->${pendingSelection.selected.providerId}`);
       }
-      this.providerId = selected.providerId;
-      this.model = selected.model;
+      this.providerId = pendingSelection.selected.providerId;
+      this.model = pendingSelection.selected.model;
     }
-    const credentialRef = input.credentialRef?.trim();
     if (input.credentialRef !== undefined) {
-      if ((credentialRef?.length ?? 0) === 0) {
-        throw new Error("credentialRef must be a non-empty reference when provided");
-      }
-      this.credentialRef = credentialRef;
+      this.credentialRef = pendingCredentialRef;
       events.push("turn:credential-rotated");
     }
-    const usage = normalizeCallUsage(input.usageSource, input.usage);
+    const usage = pendingUsage;
     const call: PiCallRecord = {
       callId,
       providerId: this.providerId,
