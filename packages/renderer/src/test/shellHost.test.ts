@@ -139,6 +139,13 @@ describe("shell host adapter selection", () => {
     expect(listed.some((approval) => approval.id === "approval-9")).toBe(true);
     const resolved = await adapter.resolveApproval("approval-9", "approved");
     expect(resolved).toMatchObject({ id: "approval-9", taskId: "task-a", sessionId: "other", status: "approved", executed: true });
+    // P1: listed resolve must return a full `Approval`, not a 3-field stub.
+    expect(resolved.title).toBe("exec.run /tmp/task-abcdef12/other.sh");
+    expect(resolved.command).toBe("exec.run /tmp/task-abcdef12/other.sh");
+    expect(resolved.payloadVersion).toBe("v1");
+    expect(typeof resolved.requestedAt).toBe("string");
+    expect(typeof resolved.expiresAt).toBe("string");
+    expect(Date.parse(resolved.expiresAt)).toBeGreaterThan(Date.parse(resolved.requestedAt));
     expect(seen.map((entry) => entry.op)).toContain("task/approve");
     expect(seen.find((entry) => entry.op === "task/approve")?.payload).toMatchObject({ sessionId: "other", approvalId: "approval-9" });
     vi.unstubAllGlobals();
