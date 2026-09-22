@@ -3,33 +3,48 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>PiDock Shell (S1)</title>
+    <title>PiDock Shell UI (S2)</title>
     <style>
-      body { font-family: system-ui, sans-serif; margin: 2rem; color: #1a1a1a; }
-      code { background: #f0f0f0; padding: 0.1em 0.4em; border-radius: 4px; }
-      #out { white-space: pre-wrap; background: #fafafa; border: 1px solid #ddd; padding: 1rem; margin-top: 1rem; }
+      :root { color-scheme: light; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        border-right: 1px solid #dbe3ee;
+        background: #eef3f9;
+        color: #172033;
+        font: 14px/1.55 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      main { padding: 24px 22px; }
+      .eyebrow { color: #64748b; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
+      h1 { margin: 6px 0 18px; font-size: 21px; }
+      #out { white-space: pre-wrap; overflow-wrap: anywhere; padding: 14px; border: 1px solid #ced9e8; border-radius: 10px; background: #fff; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
+      .note { color: #52657f; }
     </style>
   </head>
   <body>
-    <h1>PiDock Shell S1 占位页</h1>
-    <p>沙箱 renderer 占位页（S2 双信任域前仅此一页）。桥状态与版本三元组：</p>
-    <div id="out">loading…</div>
+    <main>
+      <div class="eyebrow">PiDock trusted shell</div>
+      <h1>自有界面</h1>
+      <p class="note">仅此 view 使用最小 preload；任务页面位于右侧独立 WebContentsView。</p>
+      <div id="out">loading…</div>
+    </main>
     <script>
       (async () => {
         const out = document.getElementById("out");
         const lines = [];
         lines.push("bridge present: " + (typeof window.pidock !== "undefined"));
         try {
-          const v = await window.pidock.getVersions();
-          lines.push("getVersions: " + JSON.stringify(v));
-        } catch (e) {
-          lines.push("getVersions error: " + (e && e.message ? e.message : String(e)));
+          const versions = await window.pidock.getVersions();
+          lines.push("getVersions: " + JSON.stringify(versions));
+        } catch (error) {
+          lines.push("getVersions error: " + (error && error.message ? error.message : String(error)));
         }
         try {
-          const p = await window.pidock.hostPing("s1-default-workspace");
-          lines.push("hostPing: " + JSON.stringify(p));
-        } catch (e) {
-          lines.push("hostPing error: " + (e && e.message ? e.message : String(e)));
+          const ping = await window.pidock.hostPing();
+          lines.push("hostPing: " + JSON.stringify(ping));
+        } catch (error) {
+          lines.push("hostPing error: " + (error && error.message ? error.message : String(error)));
         }
         out.textContent = lines.join("\n");
       })();

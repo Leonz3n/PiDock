@@ -46,7 +46,10 @@ const bridge = {
     return invoke("shell/getVersions");
   },
   hostPing: function (workspaceId) {
-    return invoke("shell/hostPing", { workspaceId: workspaceId });
+    return invoke(
+      "shell/hostPing",
+      workspaceId === undefined ? undefined : { workspaceId: workspaceId }
+    );
   },
   onHostStatus: function (listener) {
     var channel = EVENT_CHANNELS[0];
