@@ -2,6 +2,7 @@ import { render } from "@testing-library/react";
 import { App } from "../App";
 import { createMemoryHost } from "../data/memoryHost";
 import { seedDrafts, useDraftStore } from "../stores/drafts";
+import { useEnvDraftStore } from "../stores/envDrafts";
 import { useEventsStore } from "../stores/events";
 import { useHostStore } from "../stores/host";
 import { useUiStore } from "../stores/ui";
@@ -19,6 +20,7 @@ export function resetRenderer(path = "/") {
   });
   useEventsStore.setState({ liveMessages: {}, runs: {} });
   useDraftStore.setState({ drafts: { ...seedDrafts } });
+  useEnvDraftStore.setState({ drafts: {} });
   useUiStore.setState({ panels: {}, modal: null, toasts: [], attentionFilter: "all" });
   window.history.replaceState({}, "", path);
 }

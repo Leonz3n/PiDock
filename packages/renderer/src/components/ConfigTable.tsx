@@ -1,12 +1,18 @@
 import type { ReactNode } from "react";
-
-export type ConfigRow = { key: string; value: string; source: string; secret: boolean };
+import type { ResolvedConfigEntry } from "../data/types";
 
 /**
- * Shared KEY / VALUE / 来源 table used by the environment page and the runtime
- * tool panel, so both read-only views of effective config stay identical.
+ * Shared read-only KEY / VALUE / 来源 table used by the environment page and
+ * the runtime tool panel, so both views of the effective config stay identical.
+ * The 来源 column is what makes each row report which layer it came from.
  */
-export function ConfigTable({ rows, valueHeader = "VALUE" }: { rows: ConfigRow[]; valueHeader?: ReactNode }) {
+export function ConfigTable({
+  rows,
+  valueHeader = "VALUE",
+}: {
+  rows: ResolvedConfigEntry[];
+  valueHeader?: ReactNode;
+}) {
   return (
     <table className="w-full text-xs">
       <thead className="text-left text-muted">

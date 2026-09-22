@@ -2,6 +2,10 @@ import { useMemo, useState } from "react";
 import { Badge, Button, EmptyState, Field, Modal, Segmented } from "./ui";
 import { VirtualList } from "./VirtualList";
 import { runStateLabel } from "../pages/runState";
+import { diffConfigRows, isSensitiveKey, nextTemplateVersion } from "../data/configRows";
+import { directoryLinkName } from "../data/directories";
+import type { ConfigEntry, ProjectDirectory } from "../data/types";
+import { useEnvDraftStore } from "../stores/envDrafts";
 import { useHostStore } from "../stores/host";
 import { useNavigationStore } from "../stores/navigation";
 import { useUiStore } from "../stores/ui";
@@ -272,30 +276,87 @@ export function Modals() {
     );
   }
 
-  if (modal.type === "new-task") {
+  if (modal.type === "config-diff") {
+    const environment = (workspace?.environments ?? []).find((item) => item.id === modal.environmentId);
+    if (!environment) return null;
+    const diff = diffConfigRows(environment.variables, modal.rows);
+    const entries: ConfigEntry[] = modal.rows.map((row) => ({
+      key: row.key.trim(),
+      value: row.value,
+      secret: isSensitiveKey(row.key.trim()),
+    }));
+    const nextVersion = nextTemplateVersion(environment.templateVersion);
+    const show = (key: string, value: string | undefined) =>
+      value === undefined ? "（无）" : isSensitiveKey(key) ? "[敏感值引用]" : value || "（空值）";
+    const empty = diff.added.length === 0 && diff.changed.length === 0 && diff.removed.length === 0;
     return (
       <Modal
-        title="新建任务"
+        title="审阅共享模板变更"
         onClose={closeModal}
         footer={
           <Button
             size="sm"
             variant="primary"
-            onClick={() => {
+            onClick={async () => {
+              await useHostStore
+                .getState()
+                .saveEnvironmentConfig({ environmentId: environment.id, scope: "shared", rows: entries });
+              useEnvDraftStore.getState().commit(modal.draftKey, entries);
               closeModal();
-              pushToast("新建任务需要真实 worktree 准备，将在 03 工单接入；当前为界面演示");
+              pushToast(`共享模板已保存为 ${nextVersion}（内存模拟）；已有任务保留采用的版本`);
             }}
           >
-            创建任务
+            确认保存新版本
           </Button>
         }
       >
-        <Field label="任务名称" hint="显示名称可为中文；任务目录使用独立自动生成的英文数字标识">
-          <input aria-label="任务名称" className="rounded-md border border-line px-2 py-1.5 text-sm" placeholder="例如 发布前检查" />
-        </Field>
-        <p className="mt-3 text-[11px] text-muted">任务目录预览：task-&lt;8 位标识&gt;，默认分支 task/&lt;同一标识&gt; 且可独立编辑。</p>
+        <p className="text-xs text-muted">
+          {environment.name}：{environment.templateVersion} → {nextVersion}。已有任务保留采用的版本。
+        </p>
+        <div className="mt-3 flex flex-col gap-2 text-xs">
+          {empty ? <p className="text-muted">没有字段差异，当前仅预览保存流程。</p> : null}
+          {diff.added.map((key) => (
+            <div key={`add-${key}`}>
+              <strong>{key}</strong>
+              <br />
+              新增：{show(key, modal.rows.find((row) => row.key.trim() === key)?.value)}
+            </div>
+          ))}
+          {diff.changed.map((change) => (
+            <div key={`changed-${change.key}`}>
+              <strong>{change.key}</strong>
+              <br />
+              {show(change.key, change.before)} → {show(change.key, change.after)}
+            </div>
+          ))}
+          {diff.removed.map((key) => (
+            <div key={`removed-${key}`}>
+              <strong>{key}</strong>
+              <br />
+              删除：{show(key, environment.variables.find((entry) => entry.key === key)?.value)}
+            </div>
+          ))}
+        </div>
+        <p className="mt-3 text-[11px] text-muted">KEY 改名会同时显示为一行移除与一行新增。</p>
       </Modal>
     );
+  }
+
+  if (modal.type === "project-directories") {
+    const project = (workspace?.projects ?? []).find((item) => item.id === modal.projectId);
+    if (!project) return null;
+    return <ProjectDirectoriesModal projectId={project.id} onClose={closeModal} />;
+  }
+
+  if (modal.type === "task-directories") {
+    if (!task) return null;
+    return <TaskDirectoriesModal taskId={task.id} onClose={closeModal} />;
+  }
+
+  if (modal.type === "new-task") {
+    const project = (workspace?.projects ?? []).find((item) => item.id === modal.projectId);
+    if (!project) return null;
+    return <NewTaskModal projectId={project.id} onClose={closeModal} />;
   }
 
   return null;
@@ -378,6 +439,263 @@ function RenameSessionModal({
           className="rounded-md border border-line px-2 py-1.5 text-sm"
         />
       </Field>
+    </Modal>
+  );
+}
+
+function ProjectDirectoriesModal({ projectId, onClose }: { projectId: string; onClose: () => void }) {
+  const workspace = useHostStore((state) => state.workspace);
+  const setProjectDirectories = useHostStore((state) => state.setProjectDirectories);
+  const pushToast = useUiStore((state) => state.pushToast);
+  const project = workspace?.projects.find((item) => item.id === projectId);
+  // A directory referenced by any task is locked: its name/path must not change
+  // silently underneath an in-flight task.
+  const lockedIds = new Set(
+    (workspace?.tasks ?? []).filter((item) => item.projectId === projectId).flatMap((item) => item.directories.map((directory) => directory.id)),
+  );
+  const [rows, setRows] = useState<ProjectDirectory[]>(() => (project?.directories ?? []).map((directory) => ({ ...directory })));
+  if (!project) return null;
+  const update = (id: string, field: "name" | "path", value: string) =>
+    setRows((items) => items.map((item) => (item.id === id ? { ...item, [field]: value } : item)));
+  return (
+    <Modal
+      title="管理普通目录"
+      onClose={onClose}
+      footer={
+        <Button
+          size="sm"
+          variant="primary"
+          onClick={async () => {
+            try {
+              await setProjectDirectories(projectId, rows);
+              onClose();
+              pushToast("项目普通目录已保存到内存");
+            } catch (error) {
+              pushToast(error instanceof Error ? error.message : String(error));
+            }
+          }}
+        >
+          保存目录
+        </Button>
+      }
+    >
+      <p className="text-xs text-muted">普通目录可与 Git 仓库同时加入项目，任务中按需选择；路径仅作原型展示。</p>
+      <div className="mt-3 flex flex-col gap-2">
+        {rows.map((row, index) => {
+          const locked = lockedIds.has(row.id);
+          return (
+            <div key={row.id} className="flex flex-wrap items-center gap-2">
+              <input
+                aria-label={`目录名称 第 ${index + 1} 行`}
+                value={row.name}
+                readOnly={locked}
+                placeholder="例如：设计资料"
+                onChange={(event) => update(row.id, "name", event.target.value)}
+                className="w-40 rounded-md border border-line px-2 py-1.5 text-xs read-only:bg-soft"
+              />
+              <input
+                aria-label={`目录路径 第 ${index + 1} 行`}
+                value={row.path}
+                readOnly={locked}
+                placeholder="/Users/name/Documents/design"
+                onChange={(event) => update(row.id, "path", event.target.value)}
+                className="flex-1 rounded-md border border-line px-2 py-1.5 font-mono text-[11px] read-only:bg-soft"
+              />
+              <Badge>普通目录</Badge>
+              {locked ? <Badge tone="warn">任务使用中</Badge> : null}
+              <Button
+                size="sm"
+                variant="ghost"
+                aria-label={`移除目录 第 ${index + 1} 行`}
+                disabled={locked}
+                onClick={() => setRows((items) => items.filter((item) => item.id !== row.id))}
+              >
+                移除
+              </Button>
+            </div>
+          );
+        })}
+        <div>
+          <Button size="sm" onClick={() => setRows((items) => [...items, { id: `dir-new-${items.length + 1}`, name: "", path: "" }])}>
+            添加目录
+          </Button>
+        </div>
+      </div>
+      <p className="mt-3 text-[11px] text-muted">名称与完整路径必填；同一路径不能重复。被任务引用的目录在任务处理前不能改动或移除。</p>
+    </Modal>
+  );
+}
+
+function TaskDirectoriesModal({ taskId, onClose }: { taskId: string; onClose: () => void }) {
+  const workspace = useHostStore((state) => state.workspace);
+  const setTaskDirectories = useHostStore((state) => state.setTaskDirectories);
+  const pushToast = useUiStore((state) => state.pushToast);
+  const task = workspace?.tasks.find((item) => item.id === taskId);
+  const project = workspace?.projects.find((item) => item.id === task?.projectId);
+  const [selected, setSelected] = useState<string[]>(() => (task?.directories ?? []).map((directory) => directory.id));
+  if (!task || !project) return null;
+  const existing = new Set(task.directories.map((directory) => directory.id));
+  return (
+    <Modal
+      title="添加普通目录"
+      onClose={onClose}
+      footer={
+        <Button
+          size="sm"
+          variant="primary"
+          onClick={async () => {
+            try {
+              await setTaskDirectories(taskId, selected);
+              onClose();
+              pushToast("任务普通目录已更新；已有链接与 worktree 保留（内存模拟）");
+            } catch (error) {
+              pushToast(error instanceof Error ? error.message : String(error));
+            }
+          }}
+        >
+          保存目录
+        </Button>
+      }
+    >
+      <p className="text-xs text-muted">普通目录通过软链接加入任务目录，不复制文件、不初始化 Git；修改会影响原目录。</p>
+      <div className="mt-3 flex flex-col gap-2">
+        {project.directories.length === 0 ? <EmptyState>该项目还没有登记普通目录。</EmptyState> : null}
+        {project.directories.map((directory) => {
+          const added = existing.has(directory.id);
+          return (
+            <label key={directory.id} className="flex items-start gap-2 rounded-md border border-line px-2.5 py-2 text-xs">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                aria-label={`任务目录 ${directory.name}`}
+                checked={selected.includes(directory.id)}
+                disabled={added}
+                onChange={(event) =>
+                  setSelected((items) =>
+                    event.target.checked ? [...items, directory.id] : items.filter((id) => id !== directory.id),
+                  )
+                }
+              />
+              <span>
+                <strong className="block text-ink">{directory.name}</strong>
+                <small className="font-mono text-[11px] text-muted">
+                  {directory.path}
+                  {added ? " · 已加入" : ""}
+                </small>
+                <small className="mt-0.5 block text-[11px] text-muted">
+                  软链接 {directoryLinkName(directory)}/ · 修改影响原目录
+                </small>
+              </span>
+            </label>
+          );
+        })}
+      </div>
+      <p className="mt-3 text-[11px] text-muted">
+        任务中自动生成英文数字链接名，中文名称只用于显示。同一目录被多个任务引用时共享文件，不承诺隔离。
+      </p>
+    </Modal>
+  );
+}
+
+function NewTaskModal({ projectId, onClose }: { projectId: string; onClose: () => void }) {
+  const workspace = useHostStore((state) => state.workspace);
+  const createTask = useHostStore((state) => state.createTask);
+  const navigate = useNavigationStore((state) => state.navigate);
+  const pushToast = useUiStore((state) => state.pushToast);
+  const project = workspace?.projects.find((item) => item.id === projectId);
+  const environments = (workspace?.environments ?? []).filter((item) => item.projectId === projectId);
+  const [name, setName] = useState("");
+  const [repos, setRepos] = useState<string[]>([]);
+  const [directories, setDirectories] = useState<string[]>([]);
+  const [environmentId, setEnvironmentId] = useState(environments[0]?.id ?? "");
+  if (!project) return null;
+  return (
+    <Modal
+      title="新建任务"
+      onClose={onClose}
+      footer={
+        <Button
+          size="sm"
+          variant="primary"
+          onClick={async () => {
+            try {
+              const created = await createTask({ projectId, name, repoIds: repos, directoryIds: directories, environmentId });
+              onClose();
+              navigate({ view: "task", projectId, taskId: created.id, sessionId: created.activeSessionId });
+              pushToast("已在内存中创建任务；真实 worktree 准备属 03 工单");
+            } catch (error) {
+              pushToast(error instanceof Error ? error.message : String(error));
+            }
+          }}
+        >
+          创建任务
+        </Button>
+      }
+    >
+      <Field label="任务名称" hint="显示名称可为中文；任务目录使用独立自动生成的英文数字标识">
+        <input
+          aria-label="任务名称"
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+          className="rounded-md border border-line px-2 py-1.5 text-sm"
+          placeholder="例如 发布前检查"
+        />
+      </Field>
+      <fieldset className="mt-3">
+        <legend className="text-xs text-muted">Git 仓库</legend>
+        <div className="mt-1.5 flex flex-col gap-1.5">
+          {project.repositories.map((repository) => (
+            <label key={repository.id} className="flex items-center gap-2 text-xs">
+              <input
+                type="checkbox"
+                aria-label={`仓库 ${repository.name}`}
+                checked={repos.includes(repository.id)}
+                onChange={(event) => setRepos((items) => (event.target.checked ? [...items, repository.id] : items.filter((id) => id !== repository.id)))}
+              />
+              <span>{repository.name}</span>
+              <span className="text-muted">基线 {repository.baseBranch}</span>
+            </label>
+          ))}
+        </div>
+      </fieldset>
+      <fieldset className="mt-3">
+        <legend className="text-xs text-muted">普通目录 · 通过软链接加入</legend>
+        <div className="mt-1.5 flex flex-col gap-1.5">
+          {project.directories.length === 0 ? <p className="text-[11px] text-muted">该项目还没有登记普通目录。</p> : null}
+          {project.directories.map((directory) => (
+            <label key={directory.id} className="flex items-start gap-2 text-xs">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                aria-label={`任务目录 ${directory.name}`}
+                checked={directories.includes(directory.id)}
+                onChange={(event) =>
+                  setDirectories((items) => (event.target.checked ? [...items, directory.id] : items.filter((id) => id !== directory.id)))
+                }
+              />
+              <span>
+                <strong className="block text-ink">{directory.name}</strong>
+                <small className="font-mono text-[11px] text-muted">{directory.path}</small>
+              </span>
+            </label>
+          ))}
+        </div>
+      </fieldset>
+      <Field label="环境">
+        <select
+          aria-label="任务环境"
+          value={environmentId}
+          onChange={(event) => setEnvironmentId(event.target.value)}
+          className="rounded-md border border-line px-2 py-1.5 text-xs"
+        >
+          {environments.map((environment) => (
+            <option key={environment.id} value={environment.id}>
+              {environment.name}
+            </option>
+          ))}
+        </select>
+      </Field>
+      <p className="mt-3 text-[11px] text-muted">任务目录预览：task-&lt;8 位标识&gt;（创建时生成）；仅选普通目录时保留任务根目录、隐藏 Git 获取流程。</p>
     </Modal>
   );
 }

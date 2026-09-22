@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { ConfigRowDraft } from "../data/configRows";
 
 export const TOOL_PANELS = ["runtime", "browser", "files", "terminal"] as const;
 
@@ -11,6 +12,9 @@ export type ModalState =
   | { type: "archive-task"; taskId: string }
   | { type: "cleanup"; taskId: string }
   | { type: "new-task"; projectId: string }
+  | { type: "config-diff"; environmentId: string; draftKey: string; rows: ConfigRowDraft[]; taskId?: string }
+  | { type: "project-directories"; projectId: string }
+  | { type: "task-directories"; taskId: string }
   | { type: "pair-device" }
   | { type: "new-provider" }
   | null;

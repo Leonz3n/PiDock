@@ -5,25 +5,39 @@ import type {
   BrowserPage,
   Capability,
   CleanupItem,
+  ConfigEntry,
+  ConfigScope,
   HostEvent,
   LocalSettings,
   Message,
   Project,
+  ProjectDirectory,
   Reference,
   RemoteDevice,
+  ResolvedConfigEntry,
   RunRecord,
   RunState,
   Schedule,
   ScheduleTemplate,
   ScheduledRun,
+  Service,
   Session,
   Task,
   UsageRecord,
   Workspace,
   WorkspaceFile,
 } from "./types";
-import type { HostAdapter, SendMessageResult, UsageFilter } from "./hostAdapter";
+import type {
+  CreateTaskInput,
+  HostAdapter,
+  ProjectDirectoryInput,
+  SaveEnvironmentConfigInput,
+  SendMessageResult,
+  UsageFilter,
+} from "./hostAdapter";
 import { sessionKeyOf } from "./sessionKey";
+import { isSensitiveKey, nextTemplateVersion } from "./configRows";
+import { directoryLinkPath, normalizeDirectoryPath, toTaskDirectory } from "./directories";
 
 const APPROVAL_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -139,25 +153,6 @@ function makeUsage(total: number): UsageRecord[] {
   return records;
 }
 
-function resolvedConfig(service: string, environment: string) {
-  return [
-    {
-      key: "API_BASE_URL",
-      value: `https://${service}.${environment}.atlas.example.com`,
-      source: `共享模板 · ${environment} · v12`,
-      secret: false,
-    },
-    { key: "FEATURE_CHECKOUT_V2", value: "false", source: "仓库默认配置 · .env", secret: false },
-    { key: "LOCAL_PORT", value: "5173", source: "任务覆盖", secret: false },
-    {
-      key: "INVOICE_ACCESS_TOKEN",
-      value: "iv_live_9f2c8ba7d41e",
-      source: "本机私有配置 · ~/.pi/dock/config.json",
-      secret: true,
-    },
-  ];
-}
-
 function makeServices(taskId: string, environment: string, running: boolean) {
   const seeds: [string, string | undefined, number | undefined, "local" | "remote"][] = [
     ["saas-web", "front-monorepo", 5173, "local"],
@@ -174,9 +169,11 @@ function makeServices(taskId: string, environment: string, running: boolean) {
     port,
     mode,
     running: mode === "local" && running,
-    configSource: `共享模板 · ${environment} · v12`,
-    templateVersion: "v12",
-    resolved: resolvedConfig(name, environment),
+    configSource: `共享模板 · ${environment}`,
+    templateVersion: "",
+    // Recomputed from the environment layers on every projection so an edited
+    // layer (shared / private / task) is what the service table reports.
+    resolved: [] as ResolvedConfigEntry[],
   }));
 }
 
@@ -191,8 +188,8 @@ function seedProjects(): Project[] {
         { id: "shipment-service", name: "shipment-service", baseBranch: "release/2026.09" },
         { id: "apis", name: "apis", baseBranch: "main" },
       ],
-      directories: ["/Users/leonz3n/Workspace/atlas-docs"],
-      taskIds: ["release", "checkout", "legacy-auth"],
+      directories: [{ id: "atlas-docs", name: "Atlas 设计资料", path: "/Users/leonz3n/Workspace/atlas-docs" }],
+      taskIds: ["release", "checkout", "legacy-auth", "design-docs"],
     },
     {
       id: "orbit",
@@ -298,16 +295,20 @@ function conversationHistory(): Message[] {
 
 function seedTasks(): Task[] {
   const sessions = seedSessions();
+  const atlasDocs = toTaskDirectory({ id: "atlas-docs", name: "Atlas 设计资料", path: "/Users/leonz3n/Workspace/atlas-docs" });
   const tasks: Task[] = [
     {
       id: "release",
       projectId: "atlas",
       name: "发布前检查",
       workspaceKey: "task-a1f92c3d",
+      workspaceRoot: defaultWorkspaceRoot,
       type: "normal",
       environmentId: "testing",
+      templateVersion: "v12",
       repos: ["front-monorepo", "invoice-service", "shipment-service", "apis"],
-      directories: ["/Users/leonz3n/Workspace/atlas-docs"],
+      directories: [atlasDocs],
+      configOverrides: [{ key: "LOCAL_PORT", value: "5173", secret: false }],
       archived: false,
       permission: "write",
       services: makeServices("release", "testing", true),
@@ -321,10 +322,13 @@ function seedTasks(): Task[] {
       projectId: "atlas",
       name: "结账页无障碍",
       workspaceKey: "task-b77e10aa",
+      workspaceRoot: defaultWorkspaceRoot,
       type: "normal",
       environmentId: "testing",
+      templateVersion: "v12",
       repos: ["front-monorepo"],
       directories: [],
+      configOverrides: [],
       archived: false,
       permission: "write",
       services: makeServices("checkout", "testing", false),
@@ -338,10 +342,13 @@ function seedTasks(): Task[] {
       projectId: "atlas",
       name: "旧登录重构",
       workspaceKey: "task-90cc41de",
+      workspaceRoot: defaultWorkspaceRoot,
       type: "normal",
       environmentId: "dev",
+      templateVersion: "v11",
       repos: ["front-monorepo", "apis"],
       directories: [],
+      configOverrides: [],
       archived: true,
       permission: "read",
       services: makeServices("legacy-auth", "dev", false),
@@ -356,10 +363,13 @@ function seedTasks(): Task[] {
       projectId: "orbit",
       name: "排查延迟峰值",
       workspaceKey: "task-54ab77c1",
+      workspaceRoot: defaultWorkspaceRoot,
       type: "normal",
       environmentId: "orbit-testing",
+      templateVersion: "v4",
       repos: ["orbit-api"],
       directories: [],
+      configOverrides: [],
       archived: false,
       permission: "write",
       services: makeServices("latency", "orbit-testing", false),
@@ -367,6 +377,30 @@ function seedTasks(): Task[] {
       activeSessionId: "main",
       unread: 1,
       ...taskAssets(),
+    },
+    {
+      // Ordinary-directory-only task: no Git worktree, so the task page has no
+      // branch / remote / worktree / diff / commit entry points.
+      id: "design-docs",
+      projectId: "atlas",
+      name: "设计资料整理",
+      workspaceKey: "task-c4e21b90",
+      workspaceRoot: defaultWorkspaceRoot,
+      type: "normal",
+      environmentId: "testing",
+      templateVersion: "v12",
+      repos: [],
+      directories: [atlasDocs],
+      configOverrides: [],
+      archived: false,
+      permission: "write",
+      services: [],
+      sessions: [baseSession("main", "实现与验证")],
+      activeSessionId: "main",
+      unread: 0,
+      files: [],
+      browserPages: [],
+      terminalSeed: [],
     },
   ];
   return tasks;
@@ -394,16 +428,19 @@ function seedScheduledRuns(): ScheduledRun[] {
   return [...base, ...generated];
 }
 
+/** Default cleanup checklist for an archived task; a task's own list overrides it. */
+const baseCleanupItems: CleanupItem[] = [
+  { resource: "代码", action: "保留到手动确认", detail: "worktree 含 2 个未推送提交" },
+  { resource: "会话与草稿", action: "导出后删除", detail: "12 个会话，3 份草稿" },
+  { resource: "用量", action: "保留汇总", detail: "明细保留 30 天" },
+  { resource: "浏览器状态", action: "删除", detail: "Cookies 与页面快照" },
+  { resource: "终端", action: "停止并删除", detail: "1 个已休眠终端" },
+  { resource: "worktree", action: "暂不删除", detail: "等待代码处理确认" },
+  { resource: "链接", action: "解除关联", detail: "保留外部资源本身" },
+];
+
 const cleanupByTask: Record<string, CleanupItem[]> = {
-  "legacy-auth": [
-    { resource: "代码", action: "保留到手动确认", detail: "worktree 含 2 个未推送提交" },
-    { resource: "会话与草稿", action: "导出后删除", detail: "12 个会话，3 份草稿" },
-    { resource: "用量", action: "保留汇总", detail: "明细保留 30 天" },
-    { resource: "浏览器状态", action: "删除", detail: "Cookies 与页面快照" },
-    { resource: "终端", action: "停止并删除", detail: "1 个已休眠终端" },
-    { resource: "worktree", action: "暂不删除", detail: "等待代码处理确认" },
-    { resource: "链接", action: "解除关联", detail: "保留外部资源本身" },
-  ],
+  "legacy-auth": baseCleanupItems,
 };
 
 class MemoryHost implements HostAdapter {
@@ -415,28 +452,24 @@ class MemoryHost implements HostAdapter {
       projectId: "atlas",
       name: "测试环境",
       templateVersion: "v12",
-      variables: [
-        { key: "API_BASE_URL", value: "https://api.testing.atlas.example.com", secret: false, source: "共享模板 v12" },
-        { key: "LOG_LEVEL", value: "debug", secret: false, source: "共享模板 v12" },
-        { key: "INVOICE_ACCESS_TOKEN", value: "iv_live_9f2c8ba7d41e", secret: true, source: "本机私有配置" },
-      ],
+      variables: [{ key: "LOG_LEVEL", value: "debug", secret: false }],
+      privateVariables: [{ key: "INVOICE_ACCESS_TOKEN", value: "iv_live_9f2c8ba7d41e", secret: true }],
     },
     {
       id: "dev",
       projectId: "atlas",
       name: "开发环境",
       templateVersion: "v11",
-      variables: [
-        { key: "API_BASE_URL", value: "https://api.dev.atlas.example.com", secret: false, source: "共享模板 v11" },
-        { key: "LOG_LEVEL", value: "info", secret: false, source: "仓库默认配置" },
-      ],
+      variables: [{ key: "LOG_LEVEL", value: "info", secret: false }],
+      privateVariables: [],
     },
     {
       id: "orbit-testing",
       projectId: "orbit",
       name: "测试环境",
       templateVersion: "v4",
-      variables: [{ key: "API_BASE_URL", value: "https://api.testing.orbit.example.com", secret: false, source: "共享模板 v4" }],
+      variables: [{ key: "LOG_LEVEL", value: "warn", secret: false }],
+      privateVariables: [],
     },
   ];
 
@@ -586,6 +619,8 @@ class MemoryHost implements HostAdapter {
 
   private sequence = 0;
 
+  private workspaceSequence = 0;
+
   private localSettings: LocalSettings = { ...defaultLocalSettings };
 
   private nextId(prefix: string) {
@@ -605,10 +640,65 @@ class MemoryHost implements HostAdapter {
     return this.task(taskId)?.sessions.find((item) => item.id === sessionId);
   }
 
+  /** Stable, ASCII-only task workspace key (the prototype's `task-<8 位标识>`). */
+  private nextWorkspaceKey(): string {
+    this.workspaceSequence += 1;
+    return `task-${(0x10000000 + this.workspaceSequence).toString(16).slice(0, 8)}`;
+  }
+
+  /**
+   * Resolve a service's effective config from the layers (repository default,
+   * shared template, machine private, task override, runtime port), keeping the
+   * source of each row so the read-only view can report where it came from.
+   */
+  private resolveServiceConfig(task: Task, service: Service): ResolvedConfigEntry[] {
+    const environment = this.environments.find((item) => item.id === task.environmentId);
+    const rows = new Map<string, ResolvedConfigEntry>();
+    const put = (key: string, value: string, source: string) =>
+      rows.set(key, { key, value, source, secret: isSensitiveKey(key) });
+    put(
+      "API_BASE_URL",
+      `https://${service.name}.${environment?.name ?? task.projectId}.atlas.example.com`,
+      "仓库默认配置 · .env",
+    );
+    const layers: [ConfigScope, ConfigEntry[]][] = [
+      ["shared", environment?.variables ?? []],
+      ["private", environment?.privateVariables ?? []],
+      ["task", task.configOverrides],
+    ];
+    for (const [scope, entries] of layers) {
+      const source =
+        scope === "shared"
+          ? `共享模板 · ${environment?.name ?? "?"} · ${task.templateVersion}`
+          : scope === "private"
+            ? `本机私有配置 · ${this.localSettings.configFile}`
+            : "任务覆盖";
+      for (const entry of entries) {
+        rows.set(entry.key, { ...entry, source, secret: entry.secret || isSensitiveKey(entry.key) });
+      }
+    }
+    if (service.port) put("PORT", String(service.port), `运行时端口绑定 · ${service.mode === "local" ? "本地" : "远程"}`);
+    return [...rows.values()];
+  }
+
+  /** Project a task with its current template version and freshly resolved config. */
+  private projectTask(task: Task): Task {
+    return {
+      ...task,
+      directories: task.directories.map((directory) => ({ ...directory })),
+      configOverrides: task.configOverrides.map((entry) => ({ ...entry })),
+      services: task.services.map((service) => ({
+        ...service,
+        templateVersion: task.templateVersion,
+        resolved: this.resolveServiceConfig(task, service),
+      })),
+    };
+  }
+
   async getWorkspace(): Promise<Workspace> {
     return {
-      projects: this.projects.map((item) => ({ ...item })),
-      tasks: this.tasks.map((item) => ({ ...item })),
+      projects: this.projects.map((item) => ({ ...item, directories: item.directories.map((directory) => ({ ...directory })) })),
+      tasks: this.tasks.map((item) => this.projectTask(item)),
       environments: this.environments.map((item) => ({ ...item })),
       providers: this.providers.map((item) => ({ ...item })),
       schedules: this.schedules.map((item) => ({ ...item })),
@@ -620,11 +710,13 @@ class MemoryHost implements HostAdapter {
   }
 
   async getProject(projectId: string) {
-    return this.projects.find((item) => item.id === projectId);
+    const project = this.projects.find((item) => item.id === projectId);
+    return project ? { ...project, directories: project.directories.map((directory) => ({ ...directory })) } : undefined;
   }
 
   async getTask(taskId: string) {
-    return this.task(taskId);
+    const task = this.task(taskId);
+    return task ? this.projectTask(task) : undefined;
   }
 
   async getSession(taskId: string, sessionId: string) {
@@ -967,9 +1059,17 @@ class MemoryHost implements HostAdapter {
     const task = this.task(taskId);
     if (!task) throw new Error("任务不存在");
     if (!task.archived) throw new Error("只有已归档任务可清理");
-    const items = cleanupByTask[taskId];
-    if (!items) throw new Error("清理清单尚未生成");
-    return items.map((item) => ({ ...item }));
+    const items = (cleanupByTask[taskId] ?? baseCleanupItems).map((item) => ({ ...item }));
+    // Ordinary directories: cleanup only removes the in-task symlink and keeps
+    // the original directory and every file in it.
+    for (const directory of task.directories) {
+      items.push({
+        resource: `普通目录 · ${directory.name}`,
+        action: "移除任务内软链接",
+        detail: `保留原目录 ${directory.path} 及其全部文件`,
+      });
+    }
+    return items;
   }
 
   async getLocalSettings(): Promise<LocalSettings> {
@@ -994,6 +1094,134 @@ class MemoryHost implements HostAdapter {
       label: file?.path ?? "工作区文件",
       detail: "当前任务工作区文件",
     };
+  }
+
+  async createDirectoryFileReference(taskId: string, directoryId: string): Promise<Reference> {
+    const task = this.task(taskId);
+    const directory = task?.directories.find((item) => item.id === directoryId);
+    if (!task || !directory) throw new Error("目录不存在");
+    return {
+      id: this.nextId("ref"),
+      kind: "directory",
+      label: `${directory.linkName}/README.md`,
+      detail: `${directoryLinkPath(task.workspaceRoot, task.workspaceKey, directory)} → ${directory.path} · 示例引用，尚未读取`,
+    };
+  }
+
+  async saveEnvironmentConfig({ environmentId, scope, rows, taskId }: SaveEnvironmentConfigInput): Promise<void> {
+    const entries: ConfigEntry[] = rows.map((row) => ({
+      key: row.key.trim(),
+      value: row.value,
+      secret: isSensitiveKey(row.key.trim()),
+    }));
+    if (scope === "task") {
+      const task = taskId ? this.task(taskId) : undefined;
+      if (!task) throw new Error("任务不存在");
+      task.configOverrides = entries;
+      return;
+    }
+    const environment = this.environments.find((item) => item.id === environmentId);
+    if (!environment) throw new Error("环境不存在");
+    if (scope === "shared") {
+      // A shared-template save always produces a new version; tasks keep their
+      // recorded version until they explicitly adopt the new one.
+      environment.variables = entries;
+      environment.templateVersion = nextTemplateVersion(environment.templateVersion);
+      return;
+    }
+    environment.privateVariables = entries;
+  }
+
+  async adoptLatestTemplate(taskId: string): Promise<void> {
+    const task = this.task(taskId);
+    if (!task) throw new Error("任务不存在");
+    const environment = this.environments.find((item) => item.id === task.environmentId);
+    if (environment) task.templateVersion = environment.templateVersion;
+  }
+
+  async setProjectDirectories(projectId: string, rows: ProjectDirectoryInput[]): Promise<ProjectDirectory[]> {
+    const project = this.projects.find((item) => item.id === projectId);
+    if (!project) throw new Error("项目不存在");
+    const seen = new Set<string>();
+    const next: ProjectDirectory[] = [];
+    for (const row of rows) {
+      const name = row.name.trim();
+      const path = row.path.trim();
+      if (!name || !validWorkspaceRoot(path)) throw new Error("请填写每个普通目录的名称和完整路径");
+      const normalized = normalizeDirectoryPath(path);
+      if (seen.has(normalized)) throw new Error("请勿重复添加同一路径");
+      seen.add(normalized);
+      next.push({ id: row.id ?? this.nextId("dir"), name, path });
+    }
+    // A directory referenced by any task is locked: its name and path must not
+    // change silently underneath an in-flight task.
+    for (const task of this.tasks) {
+      if (task.projectId !== projectId) continue;
+      for (const directory of task.directories) {
+        const updated = next.find((item) => item.id === directory.id);
+        if (!updated || updated.name !== directory.name || updated.path !== directory.path) {
+          throw new Error("任务使用中的普通目录不能修改名称或路径");
+        }
+      }
+    }
+    project.directories = next;
+    return next.map((item) => ({ ...item }));
+  }
+
+  async setTaskDirectories(taskId: string, directoryIds: string[]): Promise<void> {
+    const task = this.task(taskId);
+    if (!task) throw new Error("任务不存在");
+    const project = this.projects.find((item) => item.id === task.projectId);
+    const existing = new Map(task.directories.map((directory) => [directory.id, directory]));
+    task.directories = directoryIds.map((id) => {
+      const prior = existing.get(id);
+      if (prior) return prior;
+      const registered = project?.directories.find((item) => item.id === id);
+      if (!registered) throw new Error("目录不存在");
+      return toTaskDirectory(registered);
+    });
+  }
+
+  async createTask({ projectId, name, repoIds, directoryIds, environmentId }: CreateTaskInput): Promise<Task> {
+    const project = this.projects.find((item) => item.id === projectId);
+    if (!project) throw new Error("项目不存在");
+    const taskName = name.trim();
+    if (!taskName) throw new Error("请填写任务名称");
+    const repos = repoIds.filter((id) => project.repositories.some((repository) => repository.id === id));
+    const directories = directoryIds.map((id) => {
+      const registered = project.directories.find((directory) => directory.id === id);
+      if (!registered) throw new Error("目录不存在");
+      return toTaskDirectory(registered);
+    });
+    const targetEnvironmentId = environmentId ?? this.environments.find((item) => item.projectId === projectId)?.id ?? "";
+    const environment = this.environments.find((item) => item.id === targetEnvironmentId);
+    const id = this.nextId("task");
+    const assets = taskAssets();
+    const task: Task = {
+      id,
+      projectId,
+      name: taskName,
+      workspaceKey: this.nextWorkspaceKey(),
+      workspaceRoot: this.localSettings.workspaceRoot,
+      type: "normal",
+      environmentId: targetEnvironmentId,
+      templateVersion: environment?.templateVersion ?? "",
+      repos,
+      directories,
+      configOverrides: [],
+      archived: false,
+      permission: "write",
+      services: repos.length > 0 ? makeServices(id, environment?.name ?? "", false) : [],
+      sessions: [baseSession("main", "实现与验证")],
+      activeSessionId: "main",
+      unread: 0,
+      files: repos.length > 0 ? assets.files : [],
+      browserPages: repos.length > 0 ? assets.browserPages : [],
+      terminalSeed: repos.length > 0 ? assets.terminalSeed : [],
+    };
+    this.tasks.push(task);
+    project.taskIds = [...project.taskIds, id];
+    return this.projectTask(task);
   }
 
   async runTerminalCommand(taskId: string, command: string): Promise<string[]> {

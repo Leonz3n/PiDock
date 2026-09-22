@@ -135,4 +135,44 @@ describe("memory Host adapter", () => {
     const output = await host.runTerminalCommand("release", "pnpm test");
     expect(output.join("\n")).toContain("pnpm test");
   });
+
+  it("saves config layers, versioning only the shared template", async () => {
+    const host = createMemoryHost();
+    await host.saveEnvironmentConfig({
+      environmentId: "testing",
+      scope: "private",
+      rows: [{ key: "EXTRA_FLAG", value: "", secret: false }],
+    });
+    let workspace = await host.getWorkspace();
+    expect(workspace.environments.find((item) => item.id === "testing")?.templateVersion).toBe("v12");
+    expect(workspace.environments.find((item) => item.id === "testing")?.privateVariables).toEqual([
+      { key: "EXTRA_FLAG", value: "", secret: false },
+    ]);
+
+    await host.saveEnvironmentConfig({
+      environmentId: "testing",
+      scope: "shared",
+      rows: [{ key: "LOG_LEVEL", value: "trace", secret: false }],
+    });
+    workspace = await host.getWorkspace();
+    expect(workspace.environments.find((item) => item.id === "testing")?.templateVersion).toBe("v13");
+    // Existing tasks keep the version they adopted until they opt in.
+    expect(workspace.tasks.find((item) => item.id === "release")?.templateVersion).toBe("v12");
+
+    await host.adoptLatestTemplate("release");
+    expect((await host.getTask("release"))?.templateVersion).toBe("v13");
+  });
+
+  it("stores task-scope overrides per task", async () => {
+    const host = createMemoryHost();
+    await host.saveEnvironmentConfig({
+      environmentId: "testing",
+      scope: "task",
+      taskId: "release",
+      rows: [{ key: "LOCAL_PORT", value: "6000", secret: false }],
+    });
+    expect((await host.getTask("release"))?.configOverrides).toEqual([{ key: "LOCAL_PORT", value: "6000", secret: false }]);
+    expect((await host.getTask("checkout"))?.configOverrides).toEqual([]);
+    expect((await host.getTask("release"))?.services[0]?.resolved.find((row) => row.key === "LOCAL_PORT")?.value).toBe("6000");
+  });
 });
