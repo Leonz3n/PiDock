@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildLinkName,
+  checkLinkNameCollisions,
   checkRepoConflicts,
   classifyLinkTarget,
   filterAppendRepos,
@@ -93,6 +94,16 @@ describe("fetch-then-pin gating", () => {
     expect(plans[0].ops[0].cwd).toBe("/src/frontend");
     expect(plans[1].ops[0].cwd).toBe("/src/invoice");
     expect(plans[0].ops[2].args).toContain("/tasks/task-abcdef12/frontend");
+    // #6 P0: per-repo remotes ride the fetch op (never hardcoded origin).
+    expect(plans[0].ops[0].args).toEqual(["fetch", "origin", "main"]);
+    expect(plans[1].ops[0].args).toEqual(["fetch", "upstream", "release/v2"]);
+  });
+
+  it("rejects link-name collisions instead of silently sharing one link", () => {
+    expect(checkLinkNameCollisions(["notes-1", "notes-2"])).toMatchObject({ ok: true });
+    const collided = checkLinkNameCollisions(["notes-1", "notes--1"]);
+    expect(collided).toMatchObject({ ok: false });
+    if (!collided.ok) expect(collided.error.code).toBe("duplicate-repo");
   });
 });
 

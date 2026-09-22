@@ -61,6 +61,8 @@ describe("#6 append + probe bridge (S3)", () => {
           { repoDir: "shipment", remote: "origin", remoteBranch: "main", mainCheckoutDir: "/src/shipment" },
         ],
         fetchedCommits: { shipment: "c0ffee1234" },
+        takenPaths: [],
+        branchesInUse: [],
       });
       expect(appended.ok).toBe(true);
       expect(taskOp).toHaveBeenCalledWith(

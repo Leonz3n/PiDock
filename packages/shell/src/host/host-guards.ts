@@ -281,6 +281,12 @@ export function validateHostTaskOp(
     if (typeof fetched !== "object" || fetched === null || Array.isArray(fetched)) {
       return { ok: false, error: "invalid-payload: task/appendRepos requires fetchedCommits" };
     }
+    // Caller-scanned conflict inputs are REQUIRED (never silently `[]`):
+    // `appendRepos` fails closed without them so the path/branch gate
+    // cannot be skipped by omitting the scan.
+    if (!Array.isArray(payload["takenPaths"]) || !Array.isArray(payload["branchesInUse"])) {
+      return { ok: false, error: "invalid-payload: task/appendRepos requires caller-scanned takenPaths + branchesInUse" };
+    }
     return { ok: true };
   }
   if (op === "task/probeLink") {

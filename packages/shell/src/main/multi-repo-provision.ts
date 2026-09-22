@@ -193,9 +193,9 @@ export function planMultiRepoWorktrees(input: {
       taskDir: input.taskDir,
       mainCheckoutDir,
       repoDir: repo.repoDir,
-      // The fetch runs against this repo's own remote; `planWorktreeCreation`
-      // spells `fetch origin <branch>` for the single-repo shape, so the
-      // per-repo remote is threaded through as the branch's remote qualifier.
+      // The fetch runs against this repo's own remote (#6 per-repo
+      // remote box): `repo.remote` rides every executable fetch op.
+      remote: repo.remote,
       remoteBranch: repo.remoteBranch,
       commit: repo.commit,
       branch: input.branch,
@@ -284,6 +284,14 @@ export interface RepoPrepareOutcome {
  * restart mid-prepare): created vs pending/failed repos stay
  * distinguishable so recovery resumes only the unfinished ones and keeps
  * user edits in the finished worktrees.
+ *
+ * DEFERRED wiring (S6 scope, documented not silent): no Host recovery
+ * flow consumes this yet — `appendRepos` resumes by filtering against
+ * the stored `repos` list (`filterAppendRepos`), which keeps finished
+ * worktrees untouched but cannot distinguish `pending` vs `failed`
+ * within the unfinished set. A resume-partial-prepare entry point
+ * should call this to pick the retry set; until then the form retries
+ * the whole unfinished set per repo with `fetch-failed` kept per repo.
  */
 export function segmentPrepareOutcomes(
   outcomes: readonly RepoPrepareOutcome[],
@@ -306,9 +314,41 @@ export function segmentPrepareOutcomes(
   return { created, pending, failed };
 }
 
-/** Stable ASCII link name for a plain directory: `dir-` + 8 alphanumerics. */
+/** Stable ASCII link name for a plain directory: `dir-` + up to 8
+ * alphanumerics of the directory id (lowercased). The spelling is locked
+ * by renderer parity (`directoryLinkName`); callers adding several links
+ * must reject duplicate `linkName`s via `checkLinkNameCollisions`
+ * (fail-closed, never auto-rename, never silently share one link).
+ */
 export function buildLinkName(directoryId: string): string {
   return `dir-${directoryId.replace(/[^a-zA-Z0-9]/g, "").slice(0, 8).toLowerCase()}`;
+}
+
+/**
+ * Fail-closed collision check for link names: two directory ids mapping
+ * to the same `dir-oooooooo` name must be rejected, never auto-renamed
+ * (auto-renaming would break the name <-> snapshot identity).
+ */
+export function checkLinkNameCollisions(
+  directoryIds: readonly string[],
+): { ok: true } | { ok: false; error: MultiRepoError } {
+  const seen = new Map<string, string>();
+  for (const directoryId of directoryIds) {
+    const linkName = buildLinkName(directoryId);
+    const first = seen.get(linkName);
+    if (first !== undefined && first !== directoryId) {
+      return {
+        ok: false,
+        error: {
+          code: "duplicate-repo",
+          repoDir: directoryId,
+          message: `普通目录链接名冲突: ${directoryId} 与 ${first} 均映射到 ${linkName}，请更换目录标识`,
+        },
+      };
+    }
+    seen.set(linkName, directoryId);
+  }
+  return { ok: true };
 }
 
 export interface PlainDirLinkSnapshot {

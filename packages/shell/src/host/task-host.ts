@@ -29,6 +29,7 @@ import {
   type ProvisionPlan,
 } from "../main/task-provision.js";
 import {
+  checkLinkNameCollisions,
   checkRepoConflicts,
   classifyLinkTarget,
   filterAppendRepos,
@@ -124,7 +125,8 @@ export interface ProvisionTaskInput {
   /**
    * [PiDock 03] (#6) per-repo fetched commits keyed by `repoDir`, used
    * with `repoSelections` for the all-success pin gate. Absent entries
-   * fall back to the task-level `fetchedCommit` (single-remote shape).
+   * are `fetch-failed`: one missing fetch must never silently cross-use
+   * another repo's commit or the task-level `fetchedCommit`.
    */
   fetchedCommits?: Readonly<Record<string, string>>;
   now?: string;
@@ -216,8 +218,8 @@ export class TaskWorkspaceHost {
     if (!pinned.ok) throw new Error(`${pinned.error.code}: ${pinned.error.message} (form kept, retry fetch)`);
     // #6 per-repo sources (optional): validate selections, pin every repo
     // (all-success gate), persist `repoSources`. The pinned commits ride
-    // `fetchedCommits` when the RPC carries them; otherwise each repo
-    // falls back to the task-level pinned commit (single-remote shape).
+    // `fetchedCommits` only; a missing per-repo entry is `fetch-failed`
+    // (no fallback to the task-level commit, no cross-use).
     const selections = input.repoSelections !== undefined ? [...input.repoSelections] : null;
     let pinnedRepos: PinnedRepoBaseline[] | null = null;
     if (selections !== null) {
@@ -251,6 +253,12 @@ export class TaskWorkspaceHost {
     // the original, never a copy). Fail-closed per entry with the form kept.
     let linkSnapshots: PlainDirLinkSnapshot[] | null = null;
     if (input.plainDirs !== undefined) {
+      // Two directory ids mapping to one link name would silently share a
+      // link: fail closed instead (never auto-rename).
+      const collision = checkLinkNameCollisions(input.plainDirs.map((entry) => entry.directoryId));
+      if (!collision.ok) {
+        throw new Error(`${collision.error.code}: ${collision.error.message} (form kept)`);
+      }
       linkSnapshots = [];
       for (const entry of input.plainDirs) {
         const snap = snapshotPlainDirLink({ directoryId: entry.directoryId, sourcePath: entry.sourcePath, now: input.now ?? this.now() });
@@ -336,14 +344,17 @@ export class TaskWorkspaceHost {
     for (const repoDir of repos) {
       const mainCheckoutDir = input.mainCheckouts?.[repoDir] ?? resolved.root;
       // #6: per-repo pinned commits win over the task-level commit so two
-      // repos never share one fixed commit (no cross-use).
-      const commit = pinnedRepos !== null ? (pinnedRepos.find((repo) => repo.repoDir === repoDir)?.commit ?? pinned.commit) : pinned.commit;
-      const remoteBranch =
-        pinnedRepos !== null ? (pinnedRepos.find((repo) => repo.repoDir === repoDir)?.remoteBranch ?? pinned.remoteBranch) : pinned.remoteBranch;
+      // repos never share one fixed commit (no cross-use); per-repo remote
+      // rides the fetch op (never hardcoded to `origin`).
+      const pinnedRepo = pinnedRepos !== null ? pinnedRepos.find((repo) => repo.repoDir === repoDir) : undefined;
+      const commit = pinnedRepo?.commit ?? pinned.commit;
+      const remoteBranch = pinnedRepo?.remoteBranch ?? pinned.remoteBranch;
+      const remote = pinnedRepo?.remote;
       const repoPlan = planWorktreeCreation({
         taskDir: this.taskDir,
         mainCheckoutDir,
         repoDir,
+        remote,
         remoteBranch,
         commit,
         branch: branched.branch,
@@ -367,6 +378,12 @@ export class TaskWorkspaceHost {
     fetchedCommits: Readonly<Record<string, string>>;
     branch?: string;
     mainCheckouts?: Readonly<Record<string, string>>;
+    /**
+     * Caller-scanned conflict inputs (REQUIRED, never defaulted): the
+     * task-dir listing + `git worktree list` scan runs caller-side;
+     * omitting them would silently disable `checkRepoConflicts`, so an
+     * omitted list fails closed here instead of planning against `[]`.
+     */
     takenPaths?: readonly string[];
     branchesInUse?: readonly string[];
   }): { record: TaskDiskRecord; plan: ProvisionPlan; appended: string[]; skipped: string[] } {
@@ -395,11 +412,19 @@ export class TaskWorkspaceHost {
       throw new Error(`${error.code}: ${error.message} (form kept, retry fetch)`);
     }
     const branch = input.branch ?? stored.branch;
+    // Fail closed when the caller omits the conflict scan: defaulting to
+    // `[]` here would plan worktrees without any path/branch check.
+    if (input.takenPaths === undefined || input.branchesInUse === undefined) {
+      throw new Error(
+        "invalid-payload: appendRepos requires caller-scanned takenPaths + branchesInUse " +
+          "(task-dir listing + `git worktree list`); refusing to plan without the conflict gate",
+      );
+    }
     const mixed = previewMixedTaskPaths(this.taskDir, appended, []);
     const conflict = checkRepoConflicts({
       wantedWorktreeDirs: appended.map((repoDir) => mixed.worktrees[repoDir]),
-      takenPaths: input.takenPaths ?? [],
-      branchesInUse: input.branchesInUse ?? [],
+      takenPaths: input.takenPaths,
+      branchesInUse: input.branchesInUse,
       wantedBranch: branch,
     });
     if (!conflict.ok) {
@@ -416,6 +441,8 @@ export class TaskWorkspaceHost {
         taskDir: this.taskDir,
         mainCheckoutDir: checkouts[repo.repoDir] ?? stored.root,
         repoDir: repo.repoDir,
+        // #6 per-repo remote rides the fetch op (never hardcoded).
+        remote: repo.remote,
         remoteBranch: repo.remoteBranch,
         commit: repo.commit,
         branch,
@@ -459,14 +486,30 @@ export class TaskWorkspaceHost {
    * loop back into the task? Never creates or follows links beyond one
    * `readlink` — report only, no takeover.
    */
-  probeLinkTarget(sourcePath: string): { shape: "ok" | "dead"; detail: string } {
+  probeLinkTarget(sourcePath: string): {
+    shape: "ok" | "dead";
+    detail: string;
+    /** Lexical classification (no fs): `ok`/`nested`/`loop-risk`. */
+    lexical: "ok" | "nested" | "loop-risk";
+    /** One-hop readlink target when `sourcePath` itself is a symlink (null otherwise). */
+    linkTarget: string | null;
+  } {
     // Lazy Node fs import keeps the class transport-free for tests that
     // never probe; dynamic require is avoided (ESM) via createRequire.
-    const { existsSync } = process.getBuiltinModule("node:fs") as typeof import("node:fs");
+    const { existsSync, lstatSync, readlinkSync } = process.getBuiltinModule("node:fs") as typeof import("node:fs");
+    // Report-only: lexical shape rides the payload alongside the fs
+    // answer (one `readlink` hop max, never followed beyond it).
     const lexical = classifyLinkTarget(sourcePath, this.taskDir, []);
-    void lexical;
-    if (!existsSync(sourcePath)) return { shape: "dead", detail: `普通目录来源不存在: ${sourcePath}` };
-    return { shape: "ok", detail: "来源可用" };
+    let linkTarget: string | null = null;
+    try {
+      if (lstatSync(sourcePath).isSymbolicLink()) {
+        linkTarget = readlinkSync(sourcePath);
+      }
+    } catch {
+      linkTarget = null;
+    }
+    if (!existsSync(sourcePath)) return { shape: "dead", detail: `普通目录来源不存在: ${sourcePath}`, lexical, linkTarget };
+    return { shape: "ok", detail: "来源可用", lexical, linkTarget };
   }
 
   taskRecord(): TaskDiskRecord | null {

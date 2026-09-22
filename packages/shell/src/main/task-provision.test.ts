@@ -123,6 +123,28 @@ describe("task provisioning rules", () => {
     ).toThrow("forbidden-main-op");
   });
 
+  it("fetches the named remote (never hardcoded origin)", () => {
+    const plan = planWorktreeCreation({
+      taskDir: "/tasks/task-abcdef12",
+      mainCheckoutDir: "/src/invoice",
+      repoDir: "invoice",
+      remote: "upstream",
+      remoteBranch: "release/v2",
+      commit: "beef001234",
+      branch: "task/task-abcdef12",
+    });
+    expect(plan.ops[0]).toMatchObject({ kind: "fetch", cwd: "/src/invoice", args: ["fetch", "upstream", "release/v2"] });
+    const legacy = planWorktreeCreation({
+      taskDir: "~/PiDockTasks/task-abcdef12",
+      mainCheckoutDir: "/Users/name/Workspace/repo",
+      repoDir: "front-monorepo",
+      remoteBranch: "main",
+      commit: "a5a4a0d1234",
+      branch: "task/task-abcdef12",
+    });
+    expect(legacy.ops[0].args).toEqual(["fetch", "origin", "main"]);
+  });
+
   it("forbids pull/merge/reset against the main checkout directory", () => {
     const plan = planWorktreeCreation({
       taskDir: "~/PiDockTasks/task-abcdef12",

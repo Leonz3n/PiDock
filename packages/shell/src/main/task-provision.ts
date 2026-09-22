@@ -236,6 +236,8 @@ export interface WorktreePlanInput {
   taskDir: string;
   mainCheckoutDir: string;
   repoDir: string;
+  /** Git remote to fetch (e.g. `origin`, `upstream`); never hardcoded. */
+  remote?: string;
   remoteBranch: string;
   commit: string;
   branch: string;
@@ -255,11 +257,15 @@ export function planWorktreeCreation(input: WorktreePlanInput): ProvisionPlan {
   if (!isAbsoluteTaskRoot(input.mainCheckoutDir)) {
     throw new Error(`invalid-payload: mainCheckoutDir must be an absolute task root: ${input.mainCheckoutDir}`);
   }
+  const remote = input.remote ?? "origin";
+  if (typeof remote !== "string" || remote.trim().length === 0 || /[\s]/.test(remote)) {
+    throw new Error(`invalid-payload: remote must be a non-blank git remote name: ${String(remote)}`);
+  }
   const worktreeDir = `${stripTrailingSeparators(input.taskDir)}/${input.repoDir}`;
   const plan: ProvisionPlan = {
     mainCheckoutDir: input.mainCheckoutDir,
     ops: [
-      { kind: "fetch", cwd: input.mainCheckoutDir, args: ["fetch", "origin", input.remoteBranch] },
+      { kind: "fetch", cwd: input.mainCheckoutDir, args: ["fetch", remote.trim(), input.remoteBranch] },
       {
         kind: "branch",
         cwd: input.mainCheckoutDir,
