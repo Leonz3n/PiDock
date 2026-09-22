@@ -12,7 +12,7 @@ export const CONFIG_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
  * `sensitiveEnvKey`. This is a display heuristic, not a security boundary.
  */
 export function isSensitiveKey(key: string): boolean {
-  return /PASSWORD|SECRET|TOKEN|API_KEY/i.test(key);
+  return /PASSWORD|SECRET|TOKEN|API_KEY|PRIVATE_KEY/i.test(key);
 }
 
 /**
@@ -59,7 +59,7 @@ export function diffConfigRows(before: ConfigEntry[], after: ConfigRowDraft[]): 
   return { added, changed, removed: missingKeys(before, after) };
 }
 
-/** `v12` → `v13`. A shared-template save always produces a new version. */
+/** `v12` → `v13`. A shared-template save always produces a new version. Versions are opaque: any non-empty string is accepted and compared by exact equality; only `nextTemplateVersion` minting and the restart-needed equality check are contract. */
 export function nextTemplateVersion(version: string): string {
   const parsed = Number.parseInt(version.replace(/^v/i, ""), 10);
   return `v${Number.isFinite(parsed) ? parsed + 1 : 1}`;

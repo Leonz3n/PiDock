@@ -1266,7 +1266,7 @@ class MemoryHost implements HostAdapter {
   async setServiceRunning(taskId: string, serviceId: string, running: boolean) {
     // [PiDock 04] (#7) memory mirror of the Host service lifecycle: the
     // shell adapter (shellHost.ts) routes this through `task/controlService`
-    // with actor human; dev/test callers land here. Read-only sessions
+    // with no sessionId; dev/test callers land here. Read-only sessions
     // refuse at this tool layer (the RuntimePanel hides the buttons first;
     // this is the enforced second line). Liveness only — dependency
     // reachability never flips `running` (see `resolveServiceConfig` note
@@ -1410,6 +1410,14 @@ class MemoryHost implements HostAdapter {
     const environment = this.environments.find((item) => item.id === environmentId);
     if (!environment) throw new Error("环境不存在");
     if (scope === "shared") {
+      // Shared templates must never carry secrets (fail-closed, same rule
+      // as the Host `validateNoSecretsInShared`): a shared entry whose key
+      // looks like a credential is rejected instead of saved+versioned.
+      for (const entry of entries) {
+        if (entry.secret) {
+          throw new Error(`secret-in-shared: 共享模板不能包含凭据「${entry.key}」；请移入本机私有配置`);
+        }
+      }
       // A shared-template save always produces a new version; tasks keep their
       // recorded version until they explicitly adopt the new one.
       environment.variables = entries;

@@ -178,10 +178,12 @@ const REF_PATTERN = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g
  * Resolve the effective env for one service. Precedence (low → high):
  * repoDefaults → shared → private → task → runtime. Each row keeps its
  * source label for the read-only effective-value view. `${VAR}` / `$VAR`
- * references resolve against lower-precedence rows already resolved; a
- * reference to an unknown name fails closed with `missing-ref` (never
- * silently empty). Duplicate keys *within* one layer fail closed with
- * `duplicate-key`; overrides *across* layers are the documented mechanism.
+ * references resolve against earlier-resolved rows only (lower precedence
+ * first; single pass, so a ref to a same/higher-layer key or a transitive
+ * `A→B→C` chain resolves one level and an unknown name fails closed with
+ * `missing-ref`, never silently empty). Duplicate keys *within* one layer
+ * fail closed with `duplicate-key`; overrides *across* layers are the
+ * documented mechanism. Secret flags propagate from the referenced row.
  */
 export function resolveServiceEnv(layers: ServiceEnvLayers): { ok: true; rows: ResolvedServiceRow[] } | { ok: false; error: ServiceConfigError } {
   const labeled: [ServiceConfigSource, ServiceConfigEntry[]][] = [
@@ -198,31 +200,58 @@ export function resolveServiceEnv(layers: ServiceEnvLayers): { ok: true; rows: R
   const secretShared = validateNoSecretsInShared(layers.shared);
   if (secretShared) return { ok: false, error: secretShared };
 
-  const merged = new Map<string, { value: string; secret: boolean; source: ServiceConfigSource }>();
+  // Layer order matters: rows resolve in precedence order against the
+  // already-resolved lower-precedence map, so a `${REF}` always names an
+  // earlier row and can never see a higher-precedence override.
+  const resolvedByKey = new Map<string, ResolvedServiceRow>();
+  const order: string[] = [];
   for (const [source, entries] of labeled) {
     for (const entry of entries) {
       const key = entry.key.trim();
-      merged.set(key, { value: entry.value, secret: entry.secret || isServiceSecretKey(key), source });
-    }
-  }
-  const rows: ResolvedServiceRow[] = [];
-  for (const [key, cell] of merged) {
-    const missing: string[] = [];
-    const resolved = cell.value.replace(REF_PATTERN, (_match, braced: string | undefined, plain: string | undefined) => {
-      const name = braced ?? plain ?? "";
-      const target = merged.get(name);
-      if (!target) {
-        missing.push(name);
-        return _match;
+      const secret = entry.secret || isServiceSecretKey(key);
+      const missing: string[] = [];
+      const resolved = entry.value.replace(REF_PATTERN, (_match, braced: string | undefined, plain: string | undefined) => {
+        const name = braced ?? plain ?? "";
+        const target = resolvedByKey.get(name);
+        if (!target) {
+          missing.push(name);
+          return _match;
+        }
+        return target.value;
+      });
+      if (missing.length > 0) {
+        return { ok: false, error: { code: "missing-ref", message: `变量「${key}」引用的 ${missing.map((name) => `「${name}」`).join("、")} 未定义` } };
       }
-      return target.value;
-    });
-    if (missing.length > 0) {
-      return { ok: false, error: { code: "missing-ref", message: `变量「${key}」引用的 ${missing.map((name) => `「${name}」`).join("、")} 未定义` } };
+      // A higher-precedence override replaces the row but keeps source
+      // label of the overriding layer; refs resolved below never see it.
+      const rerendered: ResolvedServiceRow = { key, value: resolved, secret, source };
+      if (!resolvedByKey.has(key)) order.push(key);
+      resolvedByKey.set(key, rerendered);
     }
-    rows.push({ key, value: resolved, secret: cell.secret, source: cell.source });
   }
-  return { ok: true, rows };
+  // Secret flags follow resolved values: a row referencing a secret
+  // source inherits the secret bit so masking cannot be shed via `${REF}`.
+  for (const [key, row] of resolvedByKey) {
+    const raw = findRawValue(layers, key);
+    if (raw === undefined) continue;
+    const names = new Set<string>();
+    for (const match of raw.matchAll(REF_PATTERN)) names.add(match[1] ?? match[2] ?? "");
+    for (const name of names) {
+      if (resolvedByKey.get(name)?.secret) {
+        resolvedByKey.set(key, { ...row, secret: true });
+        break;
+      }
+    }
+  }
+  return { ok: true, rows: order.map((key) => resolvedByKey.get(key) as ResolvedServiceRow) };
+}
+
+function findRawValue(layers: ServiceEnvLayers, key: string): string | undefined {
+  for (const entries of [layers.runtime ?? [], layers.task, layers.privateEntries, layers.shared, layers.repoDefaults]) {
+    const hit = entries.find((entry) => entry.key.trim() === key);
+    if (hit) return hit.value;
+  }
+  return undefined;
 }
 
 /**
@@ -239,9 +268,11 @@ export function buildChildEnv(rows: ResolvedServiceRow[]): Record<string, string
 /**
  * Auto-adjust PORT-like bindings already taken: for each resolved row whose
  * key ends with `PORT` and whose numeric value is in `taken`, bump upward
- * until free (bounded: at most 100 steps, then the original value stays and
- * the caller reports the conflict). Returns the adjusted rows plus the list
- * of keys that moved. Pure: the input rows are never mutated.
+ * until free (bounded: at most 100 steps). When still taken after the cap,
+ * the original value stays and the key is NOT reported as moved — only
+ * real moves land in `adjusted`, so the caller never reports a move to a
+ * still-taken port. Returns the rows plus the moved keys. Pure: the input
+ * rows are never mutated.
  */
 export function autoAdjustPorts(
   rows: ResolvedServiceRow[],
@@ -263,9 +294,10 @@ export function autoAdjustPorts(
       candidate += 1;
       steps += 1;
     }
+    if (candidate === value || used.has(candidate)) return row;
     used.add(candidate);
-    if (candidate !== value) adjusted.push({ key: row.key, before: value, after: candidate });
-    return candidate === value ? row : { ...row, value: String(candidate) };
+    adjusted.push({ key: row.key, before: value, after: candidate });
+    return { ...row, value: String(candidate) };
   });
   return { rows: next, adjusted };
 }
@@ -364,7 +396,7 @@ export interface TemplateDiff {
   removed: string[];
 }
 
-/** Before/after diff for an Agent template edit (rename = remove + add). */
+/** Before/after diff for an Agent template edit (rename = remove + add). Keys compare trimmed on both sides so `" A"`↔`"A"` is not a phantom add/remove. */
 export function diffServiceTemplate(before: ServiceConfigEntry[], after: ServiceConfigEntry[]): TemplateDiff {
   const beforeByKey = new Map(before.map((entry) => [entry.key.trim(), entry.value]));
   return {
@@ -372,11 +404,11 @@ export function diffServiceTemplate(before: ServiceConfigEntry[], after: Service
     changed: after
       .filter((row) => beforeByKey.has(row.key.trim()) && beforeByKey.get(row.key.trim()) !== row.value)
       .map((row) => ({ key: row.key.trim(), before: beforeByKey.get(row.key.trim()) ?? "", after: row.value })),
-    removed: before.filter((entry) => !after.some((row) => row.key.trim() === entry.key)).map((entry) => entry.key),
+    removed: before.filter((entry) => !after.some((row) => row.key.trim() === entry.key.trim())).map((entry) => entry.key.trim()),
   };
 }
 
-/** `v12` → `v13`; a shared-template save always produces a new version. */
+/** `v12` → `v13`; a shared-template save always produces a new version. Versions are opaque: any non-empty string is accepted and compared by exact equality (`register`/`restartNeeded` never parse); only `nextServiceTemplateVersion` minting and the restart-needed equality check are contract. */
 export function nextServiceTemplateVersion(version: string): string {
   const parsed = Number.parseInt(version.replace(/^v/i, ""), 10);
   return `v${Number.isFinite(parsed) ? parsed + 1 : 1}`;

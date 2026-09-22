@@ -99,6 +99,32 @@ describe("resolveServiceEnv", () => {
       ],
     });
   });
+  it("resolves ${REF} in precedence order: a ref never sees a higher-precedence override", () => {
+    // `BASE` is overridden in private, but `DSN` (shared) resolves against
+    // the earlier repoDefaults value only — documented S1 semantics.
+    const result = resolveServiceEnv({
+      repoDefaults: [{ key: "BASE", value: "low", secret: false }],
+      shared: [{ key: "DSN", value: "${BASE}/db", secret: false }],
+      privateEntries: [{ key: "BASE", value: "high", secret: false }],
+      task: [],
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const byKey = new Map(result.rows.map((entry) => [entry.key, entry]));
+    expect(byKey.get("DSN")?.value).toBe("low/db");
+    expect(byKey.get("BASE")).toMatchObject({ value: "high", source: "本机私有配置" });
+  });
+  it("marks a row secret when it references a secret source (no masking shed via ${REF})", () => {
+    const result = resolveServiceEnv({
+      repoDefaults: [{ key: "DB_PASS", value: "s3cr3t", secret: true }],
+      shared: [{ key: "LABEL", value: "svc-${DB_PASS}", secret: false }],
+      privateEntries: [],
+      task: [],
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.rows.find((entry) => entry.key === "LABEL")?.secret).toBe(true);
+  });
   it("fails closed on duplicate keys within one layer and secrets in shared", () => {
     const dup = resolveServiceEnv({
       repoDefaults: [],
@@ -146,6 +172,15 @@ describe("masking + child env isolation", () => {
     );
     expect(rows.find((entry) => entry.key === "PORT")?.value).toBe("5174");
     expect(adjusted).toEqual([{ key: "PORT", before: 5173, after: 5174 }]);
+  });
+  it("autoAdjustPorts never reports a move to a still-taken port (cap keeps the original)", () => {
+    const taken = new Set(Array.from({ length: 200 }, (_, index) => 5173 + index));
+    const { rows, adjusted } = autoAdjustPorts([row("PORT", "5173", "运行时绑定")], taken);
+    expect(rows.find((entry) => entry.key === "PORT")?.value).toBe("5173");
+    expect(adjusted).toEqual([]);
+  });
+  it("diffServiceTemplate trims both sides for removed keys", () => {
+    expect(diffServiceTemplate([{ key: " A ", value: "1", secret: false }], [])).toEqual({ added: [], changed: [], removed: ["A"] });
   });
 });
 
