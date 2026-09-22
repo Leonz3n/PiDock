@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 
@@ -35,14 +35,22 @@ const prototypePages = [
   { name: "archive", click: 'button[data-action="view:archive"]' },
 ];
 
-/** One capture routine for both route-driven renderer pages and click-driven prototype pages. */
+/**
+ * One capture routine for both route-driven renderer pages and click-driven
+ * prototype pages. Page errors and console errors are collected per page and
+ * returned so the caller can persist them next to the screenshots; the claim
+ * "the pages rendered without errors" is only checkable if the errors are kept.
+ */
 async function captureScreens(browser, { base, dir, pages }) {
   const target = `${OUT}${dir}/`;
   await mkdir(target, { recursive: true });
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
   const page = await context.newPage();
   const errors = [];
-  page.on("pageerror", (error) => errors.push(String(error)));
+  page.on("pageerror", (error) => errors.push({ page: page.url(), kind: "pageerror", message: String(error) }));
+  page.on("console", (message) => {
+    if (message.type() === "error") errors.push({ page: page.url(), kind: "console", message: message.text() });
+  });
   await page.goto(base, { waitUntil: "networkidle" });
   for (const { name, path, click } of pages) {
     if (path) await page.goto(`${base}${path}`, { waitUntil: "networkidle" });
@@ -61,7 +69,12 @@ const browser = await chromium.launch({ executablePath: CHROME, headless: true }
 try {
   const rendererErrors = await captureScreens(browser, { base: RENDERER, dir: "renderer", pages: rendererPages });
   const prototypeErrors = await captureScreens(browser, { base: PROTOTYPE, dir: "prototype", pages: prototypePages });
-  console.log(JSON.stringify({ rendererErrors, prototypeErrors }, null, 2));
+  const report = { rendererErrors, prototypeErrors };
+  await mkdir(OUT, { recursive: true });
+  await writeFile(`${OUT}capture-errors.json`, `${JSON.stringify(report, null, 2)}\n`);
+  console.log(JSON.stringify(report, null, 2));
+  console.log(`\nwrote ${OUT}capture-errors.json`);
+  if (rendererErrors.length > 0) process.exitCode = 1;
 } finally {
   await browser.close();
 }

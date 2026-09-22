@@ -1,3 +1,5 @@
+import { mkdir, writeFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 
 /**
@@ -12,6 +14,7 @@ import { chromium } from "playwright-core";
 
 const CHROME = process.env.CHROME_PATH ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const BASE = process.env.RENDERER_BASE ?? "http://127.0.0.1:4335";
+const OUT = process.env.EVIDENCE_DIR ?? fileURLToPath(new URL("../../../docs/evidence/renderer-baseline-2026-09-22/", import.meta.url));
 const LOG = '[role="log"][aria-label="会话消息"]';
 
 const metrics = (el) => ({
@@ -53,7 +56,16 @@ try {
   assert("log-overflows", initial.scrollHeight > initial.clientHeight, initial);
   assert("pinned-to-bottom-on-load", initial.distance <= 48, initial);
 
-  // User scrolls up: the anchor must detach.
+  // Real wheel gesture over the conversation: detaches the anchor, unlike a
+  // programmatic `scrollTop = 0` which only proves the handler reads scrollTop.
+  const box = await page.locator(LOG).boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.wheel(0, -800);
+  await page.waitForTimeout(250);
+  const wheelDetached = await readLog(page);
+  assert("detached-after-wheel-gesture", wheelDetached.distance > 48, wheelDetached);
+
+  // Programmatic detach, kept as the second path.
   await page.$eval(LOG, (el) => {
     el.scrollTop = 0;
   });
@@ -88,4 +100,7 @@ try {
 }
 
 console.log(JSON.stringify({ checks, failed }, null, 2));
+await mkdir(OUT, { recursive: true });
+await writeFile(`${OUT}anchor-follow-verification.json`, `${JSON.stringify({ checks, failed }, null, 2)}\n`);
+console.log(`\nwrote ${OUT}anchor-follow-verification.json`);
 process.exit(failed ? 1 : 0);

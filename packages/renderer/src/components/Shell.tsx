@@ -47,7 +47,11 @@ export function Shell() {
     <div className="flex h-screen overflow-hidden bg-bg text-ink">
       <aside className="flex w-[248px] shrink-0 flex-col gap-4 border-r border-line bg-sidebar px-3 py-4">
         <div className="flex flex-col items-center gap-1">
-          <span aria-hidden className="grid h-9 w-9 place-items-center rounded-full border border-line bg-paper text-base text-accent">
+          <span
+            aria-hidden
+            data-testid="brand-mark"
+            className="grid h-9 w-9 place-items-center rounded-full border border-line bg-paper text-base text-accent"
+          >
             π
           </span>
           <span className="text-xs tracking-[0.3em] text-muted">PIDOCK</span>
