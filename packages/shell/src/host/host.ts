@@ -35,6 +35,7 @@ const hostPort = getParentPort();
 
 import { boundWorkspaceId, routeHostTask, toolPlannerSpecForHostDispatch, validateHostTaskOp } from "./host-guards.js";
 import { TaskWorkspaceHost, diskTaskStore } from "./task-host.js";
+import { TaskServiceRuntime } from "./service-runtime.js";
 import {
   isHostTaskParams,
   isRpcRequest,
@@ -67,6 +68,20 @@ function reply(response: RpcResponse): void {
 // Lazily created on first dispatch so `host/ping` smoke paths that never
 // touch tasks do not require the task env.
 let workspaceHost: TaskWorkspaceHost | null = null;
+
+// [PiDock 04] (#7) per-task service runtime, sibling to the workspace
+// Host above: same fork binding (PIDOCK_TASK_ID/PIDOCK_TASK_DIR), no new
+// process, no renderer trust change. Lazily created with the same guard.
+let serviceRuntime: TaskServiceRuntime | null = null;
+
+function serviceRuntimeFor(taskId: string): TaskServiceRuntime | { error: string } {
+  const host = taskHostFor(taskId);
+  if ("error" in host) return host;
+  if (!serviceRuntime || serviceRuntime.taskDir !== host.taskDir) {
+    serviceRuntime = new TaskServiceRuntime(host.taskDir);
+  }
+  return serviceRuntime;
+}
 
 function taskHostFor(taskId: string): TaskWorkspaceHost | { error: string } {
   const boundTaskId = process.env["PIDOCK_TASK_ID"];
@@ -393,6 +408,147 @@ function dispatchTaskOp(
         const approval = host.getApproval(approvalId);
         if (!approval) return { ok: false, error: "确认请求不存在" };
         return { ok: true, payload: { approval } };
+      }
+      // [PiDock 04] (#7) service ops: same fork binding as the task ops
+      // above (via `serviceRuntimeFor`, which reuses the `taskHostFor`
+      // guard, so unbound/foreign tasks fail closed identically).
+      // Agent `service/start|service/stop` control goes through the #5
+      // permission gate on the task's session channel: readonly denies,
+      // default requires a granted approval, auto allows. Human-explicit
+      // control is labelled, never a gate bypass.
+      case "task/registerService": {
+        const services = serviceRuntimeFor(taskId);
+        if ("error" in services) return { ok: false, error: services.error };
+        const serviceId = record["serviceId"];
+        const descriptor = record["descriptor"];
+        const serviceLayers = record["layers"];
+        const templateVersion = record["templateVersion"];
+        if (typeof serviceId !== "string" || serviceId.trim().length === 0) {
+          return { ok: false, error: "invalid-payload: task/registerService requires serviceId" };
+        }
+        if (typeof descriptor !== "object" || descriptor === null || Array.isArray(descriptor)) {
+          return { ok: false, error: "invalid-payload: task/registerService requires descriptor" };
+        }
+        if (typeof serviceLayers !== "object" || serviceLayers === null || Array.isArray(serviceLayers)) {
+          return { ok: false, error: "invalid-payload: task/registerService requires layers" };
+        }
+        if (typeof templateVersion !== "string" || templateVersion.trim().length === 0) {
+          return { ok: false, error: "invalid-payload: task/registerService requires templateVersion" };
+        }
+        try {
+          const saved = services.register({
+            serviceId,
+            descriptor: descriptor as never,
+            layers: serviceLayers as never,
+            templateVersion,
+          });
+          return { ok: true, payload: { service: saved } };
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : String(error) };
+        }
+      }
+      case "task/planServiceStart": {
+        const services = serviceRuntimeFor(taskId);
+        if ("error" in services) return { ok: false, error: services.error };
+        const serviceId = record["serviceId"];
+        const cwd = record["cwd"];
+        if (typeof serviceId !== "string" || typeof cwd !== "string") {
+          return { ok: false, error: "invalid-payload: task/planServiceStart requires serviceId/cwd" };
+        }
+        try {
+          const plan = services.planStart(serviceId, cwd);
+          return { ok: true, payload: { plan } };
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : String(error) };
+        }
+      }
+      case "task/controlService": {
+        const services = serviceRuntimeFor(taskId);
+        if ("error" in services) return { ok: false, error: services.error };
+        const serviceId = record["serviceId"];
+        const action = record["action"];
+        const sessionId = record["sessionId"];
+        const actor = record["actor"];
+        if (typeof serviceId !== "string" || (action !== "start" && action !== "stop")) {
+          return { ok: false, error: "invalid-payload: task/controlService requires serviceId/action" };
+        }
+        // Human-explicit control: labelled, auditable, no gate.
+        if (actor === "human") {
+          const label = typeof record["label"] === "string" ? (record["label"] as string) : "用户显式操作";
+          try {
+            if (action === "start") services.markStarted(serviceId, { kind: "human", label });
+            else services.markStopped(serviceId, { kind: "human", label }, "user-request");
+            return { ok: true, payload: { serviceId, action, actor: "human" } };
+          } catch (error) {
+            return { ok: false, error: error instanceof Error ? error.message : String(error) };
+          }
+        }
+        // Agent control: tier comes from the session channel's live
+        // permission (never caller-claimed), then the runtime maps it.
+        if (typeof sessionId !== "string" || sessionId.length === 0) {
+          return { ok: false, error: "invalid-payload: task/controlService agent control requires sessionId" };
+        }
+        const approvalGranted = record["approvalGranted"] === true;
+        const channel = host.openSession(sessionId);
+        const tier = channel.currentPermission;
+        const decision = services.decideAgentControl({ serviceId, action, tier, approvalGranted });
+        if (!decision.ok) {
+          // `default` without a granted approval needs one: mint it via
+          // the channel gate (`exec.run` on the service cwd) so the
+          // approval carries tool/target/permissionAtRequest, then report
+          // the approval id (zero start/stop until approved).
+          if (tier === "default" && !approvalGranted) {
+            const preview = channel.previewGate("exec.run", `${host.taskDir}/services/${serviceId}`);
+            if (preview.verdict === "ask") {
+              const gate = channel.gate("exec.run", `${host.taskDir}/services/${serviceId}`, services.get(serviceId)?.templateVersion ?? "v1");
+              if (gate.verdict === "ask") {
+                host.store.writeSession(host.taskDir, channel.snapshot());
+                return { ok: false, error: `approval-required: ${gate.approvalId}` };
+              }
+            }
+          }
+          return { ok: false, error: decision.reason };
+        }
+        if (action === "start") {
+          services.markStarted(serviceId, { kind: "agent", sessionId, permissionAtRequest: tier });
+        } else {
+          services.markStopped(serviceId, { kind: "agent", sessionId, permissionAtRequest: tier }, "agent-request");
+        }
+        return { ok: true, payload: { serviceId, action, actor: "agent", tier } };
+      }
+      case "task/serviceStatus": {
+        const services = serviceRuntimeFor(taskId);
+        if ("error" in services) return { ok: false, error: services.error };
+        const serviceId = record["serviceId"];
+        if (typeof serviceId !== "string") {
+          return { ok: false, error: "invalid-payload: task/serviceStatus requires serviceId" };
+        }
+        const status = services.get(serviceId);
+        if (!status) return { ok: false, error: `unknown-service: ${serviceId} is not registered on this task` };
+        // Secrets cross the Host boundary only as masked display values;
+        // the resolved snapshot keeps real values Host-side.
+        const masked = {
+          ...status,
+          resolved: status.resolved.map((entry) => ({
+            ...entry,
+            value: entry.secret ? "••••••••" : entry.value,
+          })),
+        };
+        return { ok: true, payload: { service: masked } };
+      }
+      case "task/serviceLog": {
+        const services = serviceRuntimeFor(taskId);
+        if ("error" in services) return { ok: false, error: services.error };
+        const serviceId = record["serviceId"];
+        if (typeof serviceId !== "string") {
+          return { ok: false, error: "invalid-payload: task/serviceLog requires serviceId" };
+        }
+        const limit = typeof record["limit"] === "number" ? (record["limit"] as number) : 50;
+        try {
+          return { ok: true, payload: { log: services.serviceLog(serviceId, limit) } };
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : String(error) };
+        }
       }
       default:
         return { ok: false, error: `unknown-op: ${op}` };

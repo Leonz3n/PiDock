@@ -217,7 +217,7 @@ export class TaskWorkspaceHost {
   constructor(
     readonly taskId: string,
     readonly taskDir: string,
-    private readonly store: TaskStore = diskTaskStore,
+    readonly store: TaskStore = diskTaskStore,
     private readonly now: () => string = () => new Date().toISOString(),
   ) {
     if (taskId.trim().length === 0) throw new Error("taskId must be non-empty");
