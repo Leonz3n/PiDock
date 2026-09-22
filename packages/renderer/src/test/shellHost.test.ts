@@ -109,6 +109,52 @@ describe("shell host adapter selection", () => {
     vi.unstubAllGlobals();
   });
 
+  it("resolves a Host-only approval listed without a prior sendMessage", async () => {
+    const seen: Array<{ taskId: string; op: string; payload?: Record<string, unknown> }> = [];
+    stubBridge(async (taskId, op, payload) => {
+      seen.push({ taskId, op, payload });
+      if (op === "task/listApprovals") {
+        return {
+          ok: true,
+          payload: {
+            approvals: [
+              { id: "approval-9", sessionId: "other", tool: "exec.run", target: "/tmp/task-abcdef12/other.sh", status: "pending", executed: false },
+            ],
+          },
+        };
+      }
+      if (op === "task/getApproval") {
+        return {
+          ok: true,
+          payload: {
+            approval: { id: "approval-9", sessionId: "other", tool: "exec.run", target: "/tmp/task-abcdef12/other.sh", status: "pending", executed: false },
+          },
+        };
+      }
+      return { ok: true, payload: {} };
+    });
+    const adapter = resolveHostAdapter(createMemoryHost());
+    // No sendMessage in this tab: the approval is Host-only (other tab).
+    const listed = await adapter.listApprovals("task-a");
+    expect(listed.some((approval) => approval.id === "approval-9")).toBe(true);
+    const resolved = await adapter.resolveApproval("approval-9", "approved");
+    expect(resolved).toMatchObject({ id: "approval-9", taskId: "task-a", sessionId: "other", status: "approved", executed: true });
+    expect(seen.map((entry) => entry.op)).toContain("task/approve");
+    expect(seen.find((entry) => entry.op === "task/approve")?.payload).toMatchObject({ sessionId: "other", approvalId: "approval-9" });
+    vi.unstubAllGlobals();
+  });
+
+  it("falls through to memory when the bridge rejects (never-throw reads)", async () => {
+    stubBridge(async (_taskId, op) => {
+      if (op === "task/listApprovals" || op === "task/getApproval") throw new Error("transport down");
+      return { ok: true, payload: {} };
+    });
+    const adapter = resolveHostAdapter(createMemoryHost());
+    await expect(adapter.listApprovals("task-a")).resolves.toBeDefined();
+    await expect(adapter.getApproval("missing-id")).resolves.toBeUndefined();
+    vi.unstubAllGlobals();
+  });
+
   it("lists bridged approvals through task/listApprovals (Host round-trip)", async () => {
     const seen: Array<{ taskId: string; op: string; payload?: Record<string, unknown> }> = [];
     stubBridge(async (taskId, op, payload) => {
