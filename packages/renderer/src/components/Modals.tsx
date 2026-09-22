@@ -825,9 +825,18 @@ function NewTaskModal({ projectId, onClose }: { projectId: string; onClose: () =
   const navigate = useNavigationStore((state) => state.navigate);
   const pushToast = useUiStore((state) => state.pushToast);
   const project = workspace?.projects.find((item) => item.id === projectId);
+  const [failedTaskId, setFailedTaskId] = useState<string | null>(null);
   // [PiDock 02] P1-1 fail-fast needs the used dir ids; `tasks` here is the
   // sibling-modal name in this file, so the form uses its own binding.
-  const existingDirIds = (workspace?.tasks ?? []).map((item) => item.workspaceKey);
+  // S5 P2-2: exclude the just-failed task so retry does not self-conflict.
+  // (state is declared above because `existingDirIds` reads it.)
+  // [PiDock 02] S5 P2-2: the id of a memory task whose bridged provision
+  // just failed. Its own `workspaceKey` is excluded from the dir-id
+  // conflict check so a second submit retries instead of failing
+  // `identifier-conflict` against itself.
+  const existingDirIds = (workspace?.tasks ?? [])
+    .filter((item) => item.id !== failedTaskId)
+    .map((item) => item.workspaceKey);
   const environments = (workspace?.environments ?? []).filter((item) => item.projectId === projectId);
   const providers = workspace?.providers ?? [];
   const templates = workspace?.templates ?? [];
@@ -955,25 +964,37 @@ function NewTaskModal({ projectId, onClose }: { projectId: string; onClose: () =
               setFormError("");
               setProvisioning(true);
               try {
-                const created = await createTask({
-                  projectId,
-                  name: named.name,
-                  repoIds: repos,
-                  directoryIds: directories,
-                  environmentId,
-                  workspaceKey,
-                  schedule:
-                    taskType === "scheduled"
-                      ? {
-                          rule: scheduleRule,
-                          timezone: "Asia/Shanghai",
-                          prompt: schedulePrompt,
-                          providerId: scheduleProviderId,
-                          model: scheduleModel,
-                          permission: schedulePermission,
-                        }
-                      : undefined,
-                });
+                // S5 P2-2: a retry after a bridged provision failure reuses
+                // the just-created memory task when the key is unchanged,
+                // so the second submit provisions instead of creating a
+                // duplicate task (or self-conflicting on its own key). A
+                // changed key (after 换标识) creates fresh as usual.
+                const retryTask = failedTaskId
+                  ? useHostStore.getState().workspace?.tasks.find((item) => item.id === failedTaskId)
+                  : undefined;
+                const created =
+                  retryTask && retryTask.workspaceKey === workspaceKey
+                    ? retryTask
+                    : await createTask({
+                        projectId,
+                        name: named.name,
+                        repoIds: repos,
+                        directoryIds: directories,
+                        environmentId,
+                        workspaceKey,
+                        schedule:
+                          taskType === "scheduled"
+                            ? {
+                                rule: scheduleRule,
+                                timezone: "Asia/Shanghai",
+                                prompt: schedulePrompt,
+                                providerId: scheduleProviderId,
+                                model: scheduleModel,
+                                permission: schedulePermission,
+                              }
+                            : undefined,
+                      });
+                if (!retryTask) setFailedTaskId(null);
                 // [PiDock 02] P1-2: the renderer creates the memory id and
                 // the `task-oooooooo` dir id together and uses the dir id
                 // as the shell-side task id (exact `taskId === dirId`
@@ -998,6 +1019,9 @@ function NewTaskModal({ projectId, onClose }: { projectId: string; onClose: () =
                     // Fetch/provision failure keeps the form + retry entry:
                     // the created task stays (with its stored actual root),
                     // the dialog stays open, and the error binds to the form.
+                    // S5 P2-2: remember it so the retry submit excludes its
+                    // own key from the conflict check instead of blocking.
+                    setFailedTaskId(created.id);
                     setFormError(provisioned.error ?? "任务准备失败，已保留表单，请重试");
                     pushToast(provisioned.error ?? "任务准备失败，已保留表单，请重试");
                     return;
