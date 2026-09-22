@@ -107,6 +107,19 @@ function asStrictStringArray(value: unknown): string[] | null {
   return value as string[];
 }
 
+/**
+ * `mainCheckouts` is fail-closed: when present it must be a plain object
+ * mapping repo names to path strings; anything else (arrays, strings,
+ * nested objects) is rejected before it can enter an executable plan.
+ */
+function isMainCheckouts(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  for (const entry of Object.values(value as Record<string, unknown>)) {
+    if (typeof entry !== "string") return false;
+  }
+  return true;
+}
+
 function dispatchTaskOp(
   taskId: string,
   op: string,
@@ -136,7 +149,21 @@ function dispatchTaskOp(
         if (repos === null) {
           return { ok: false, error: "invalid-payload: task/provision.repos must be a string array" };
         }
-        const { record: saved } = host.provision({
+        const mainCheckouts = record["mainCheckouts"];
+        const checkouts =
+          mainCheckouts === undefined
+            ? undefined
+            : isMainCheckouts(mainCheckouts)
+              ? (mainCheckouts as Record<string, string>)
+              : null;
+        if (checkouts === null) {
+          return { ok: false, error: "invalid-payload: task/provision.mainCheckouts must map repo names to path strings" };
+        }
+        // `host.provision` returns the persisted record AND the executable
+        // plan (real cwds; empty only in the sense of zero ops). Both ride
+        // the `host/task` result payload so a caller can persist-then-execute
+        // without re-deriving git ops from the record.
+        const { record: saved, plan } = host.provision({
           name,
           dirId,
           branch,
@@ -144,8 +171,9 @@ function dispatchTaskOp(
           remoteBranch,
           fetchedCommit,
           repos,
+          mainCheckouts: checkouts,
         });
-        return { ok: true, payload: { ...saved } };
+        return { ok: true, payload: { ...saved, plan } };
       }
       case "task/sendMessage": {
         const sessionId = record["sessionId"];

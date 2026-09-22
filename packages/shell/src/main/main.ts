@@ -2,6 +2,7 @@ import { app } from "electron";
 import { resolveShellCommand } from "./command.js";
 import {
   DEFAULT_WORKSPACE_ID,
+  PerTaskHostRegistry,
   SHELL_WEB_PREFERENCES,
   TASK_WEB_PREFERENCES,
   assertTrustedWindowEvidence,
@@ -35,6 +36,8 @@ function taskBrowserSmokePhase(value: string | undefined): TaskBrowserSmokePhase
 }
 
 async function runVersions(workspaceId: string): Promise<void> {
+  // Versions path: workspace-only Host (getVersions only; no task ops,
+  // so no per-task binding is forked).
   const { client, child } = await createHost(workspaceId);
   try {
     const hostVersions = await client.getVersions({ workspaceId });
@@ -62,6 +65,8 @@ async function run(): Promise<void> {
 
   if (command.kind === "startup") {
     const startedAt = Date.now();
+    // Startup timing path: workspace-only Host (no task ops run here,
+    // so no per-task binding is forked).
     const { client, child } = await createHost(workspaceId);
     const views = await createTrustedWindow(workspaceId);
     const loaded = await loadTrustedViews(views);
@@ -110,9 +115,18 @@ async function run(): Promise<void> {
     return;
   }
 
+  // Production shell: workspace-only Host serves getVersions/hostPing;
+  // task-scoped `shell/taskOp` routes through the per-task registry so
+  // every production task op dispatches to a utilityProcess bound with
+  // PIDOCK_TASK_ID/PIDOCK_TASK_DIR (fork-on-first-use, resolved from the
+  // task record — the renderer only selects the task id). The registry owns
+  // the forked Hosts; the workspace-only client stays for ping/versions.
+  // (`runVersions`/startup/smoke above intentionally keep workspace-only
+  // Hosts: those paths run no task ops.)
   const { client, child } = await createHost(workspaceId);
   const views = await createTrustedWindow(workspaceId);
-  registerIpc(client, views.registry);
+  const tasks = new PerTaskHostRegistry(workspaceId);
+  registerIpc(client, views.registry, tasks);
   const loaded = await loadTrustedViews(views);
   assertTrustedWindowEvidence(trustedWindowEvidence(views));
   console.log(
@@ -131,6 +145,7 @@ async function run(): Promise<void> {
   app.on("window-all-closed", () => {
     client.dispose();
     child.kill();
+    tasks.disposeAll();
     if (process.platform !== "darwin") app.quit();
   });
 }

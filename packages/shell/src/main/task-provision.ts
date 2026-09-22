@@ -244,11 +244,16 @@ export interface WorktreePlanInput {
 /**
  * Plan the git operations for one repo: fetch the remote branch, pin the
  * fetched commit, then create an independent branch + worktree under the task
- * folder. Never touches the main checkout directory.
+ * folder. Never touches the main checkout directory. The cwd for every op
+ * is `mainCheckoutDir`, which MUST be an absolute task root so a relative
+ * or empty cwd can never enter an executable plan.
  */
 export function planWorktreeCreation(input: WorktreePlanInput): ProvisionPlan {
   if (!isSafeTaskChildName(input.repoDir)) {
     throw new Error(`invalid-path: repoDir must be a single safe component: ${input.repoDir}`);
+  }
+  if (!isAbsoluteTaskRoot(input.mainCheckoutDir)) {
+    throw new Error(`invalid-payload: mainCheckoutDir must be an absolute task root: ${input.mainCheckoutDir}`);
   }
   const worktreeDir = `${stripTrailingSeparators(input.taskDir)}/${input.repoDir}`;
   const plan: ProvisionPlan = {

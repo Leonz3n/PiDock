@@ -16,7 +16,7 @@ import {
   buildTaskDiskRecord,
 } from "./task-store.js";
 import { PiSessionChannel, resetPiSequencesForTests } from "../main/pi-session.js";
-import { assertProvisionPlanSafe } from "../main/task-provision.js";
+import { assertProvisionPlanSafe, planWorktreeCreation } from "../main/task-provision.js";
 
 const TASK_ID = "task-a";
 const TASK_DIR = join(mkdtempSync(join(tmpdir(), "pidock-s2-")), "task-abcdef12");
@@ -157,7 +157,7 @@ describe("TaskWorkspaceHost provision", () => {
   });
 
   it("returns an executable plan with real cwds (never empty) via planWorktreeCreation", () => {
-    const { plan } = host().provision({
+    const { plan, record } = host().provision({
       ...provisionInput(),
       mainCheckouts: { "front-monorepo": "/Users/name/Workspace/repo" },
     });
@@ -166,10 +166,54 @@ describe("TaskWorkspaceHost provision", () => {
     for (const op of plan.ops) {
       expect(op.cwd, op.kind).toBe("/Users/name/Workspace/repo");
     }
-    expect(plan.mainCheckoutDir).toBe("/Users/name/Workspace/repo");
+    // `mainCheckoutDir` is the validated task root (never ""); per-repo
+    // cwds carry the real main checkout dirs.
+    expect(plan.mainCheckoutDir).toBe(record.root);
     const worktree = plan.ops.find((op) => op.kind === "worktree");
     expect(worktree?.args).toContain(`${TASK_DIR}/front-monorepo`);
     expect(() => assertProvisionPlanSafe(plan)).not.toThrow();
+  });
+
+  it("keeps the validated task root on an empty-repos plan (never an empty checkout dir)", () => {
+    const { plan, record } = host().provision({ ...provisionInput(), repos: [] });
+    expect(plan.ops).toHaveLength(0);
+    expect(plan.mainCheckoutDir).toBe(record.root);
+    expect(plan.mainCheckoutDir.length).toBeGreaterThan(0);
+  });
+
+  it("rejects relative/empty mainCheckouts values before they enter an executable plan", () => {
+    for (const bad of ["relative/dir", "", "  "]) {
+      expect(
+        () => host().provision({ ...provisionInput(), mainCheckouts: { "front-monorepo": bad } }),
+        bad,
+      ).toThrow(/invalid-payload|invalid-root|invalid-path/);
+    }
+    // "~/tasks" and "." are accepted roots/plans only when they pass
+    // `isAbsoluteTaskRoot` + `previewTaskPaths` matching; covered by the
+    // `planWorktreeCreation` unit tests below, not the Host path-match.
+  });
+
+  it("rejects a mainCheckoutDir that is not an absolute task root", () => {
+    expect(() =>
+      planWorktreeCreation({
+        taskDir: "~/PiDockTasks/task-abcdef12",
+        mainCheckoutDir: "relative/dir",
+        repoDir: "front-monorepo",
+        remoteBranch: "main",
+        commit: "a5a4a0d1234",
+        branch: "task/task-abcdef12",
+      }),
+    ).toThrow("mainCheckoutDir");
+    expect(() =>
+      planWorktreeCreation({
+        taskDir: "~/PiDockTasks/task-abcdef12",
+        mainCheckoutDir: "",
+        repoDir: "front-monorepo",
+        remoteBranch: "main",
+        commit: "a5a4a0d1234",
+        branch: "task/task-abcdef12",
+      }),
+    ).toThrow("mainCheckoutDir");
   });
 
   it("preserves createdAt on re-provision and bumps only updatedAt", () => {
