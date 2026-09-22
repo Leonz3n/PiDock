@@ -4,6 +4,7 @@ import { CodeBlock } from "../components/CodeBlock";
 import {
   BrowserPanel,
   DirectoryFilesPanel,
+  DirectoryRootChoices,
   DirectoryTerminalPanel,
   FilesPanel,
   RuntimePanel,
@@ -29,11 +30,19 @@ export function TaskPage({ task, sessionId }: { task: Task; sessionId: string })
   const togglePanel = useUiStore((state) => state.togglePanel);
   const openModal = useUiStore((state) => state.openModal);
 
+  const directoryOnly = isDirectoryOnlyTask(task);
+  // Ordinary directories belong to every task that has them, mixed included;
+  // only the Git branch / remote-baseline / worktree / diff surfaces stay
+  // directory-only-exclusive (the prototype keeps them and adds the badge).
+  const hasDirectories = task.directories.length > 0;
+  const [activeDirectoryId, setActiveDirectoryId] = useState("");
+  useEffect(() => setActiveDirectoryId(""), [task.id]);
+  const activeDirectory = task.directories.find((directory) => directory.id === activeDirectoryId);
+  const availablePanels = directoryOnly ? (["files", "terminal"] as ToolPanel[]) : TOOL_PANELS;
+
   if (!session) return <EmptyState>当前任务还没有会话。</EmptyState>;
 
   const visibleSessions = sessionTabs(task, session.id);
-  const directoryOnly = isDirectoryOnlyTask(task);
-  const availablePanels = directoryOnly ? (["files", "terminal"] as ToolPanel[]) : TOOL_PANELS;
 
   return (
     <div className="flex min-h-0 flex-1 gap-4">
@@ -44,6 +53,7 @@ export function TaskPage({ task, sessionId }: { task: Task; sessionId: string })
             <div className="flex items-center gap-3">
               <h1 className="text-base font-medium text-ink">{task.name}</h1>
               <Badge>{task.workspaceKey}</Badge>
+              {hasDirectories && !directoryOnly ? <Badge>{task.directories.length} 个普通目录</Badge> : null}
               {task.archived ? <Badge tone="warn">已归档</Badge> : null}
             </div>
             {directoryOnly ? (
@@ -53,11 +63,9 @@ export function TaskPage({ task, sessionId }: { task: Task; sessionId: string })
             ) : null}
           </div>
           <div className="flex items-center gap-2">
-            {directoryOnly ? (
-              <Button size="sm" onClick={() => openModal({ type: "task-directories", taskId: task.id })}>
-                添加目录
-              </Button>
-            ) : null}
+            <Button size="sm" onClick={() => openModal({ type: "task-directories", taskId: task.id })}>
+              添加目录
+            </Button>
             {availablePanels.map((panel) => (
               <Button
                 key={panel}
@@ -104,9 +112,29 @@ export function TaskPage({ task, sessionId }: { task: Task; sessionId: string })
                 />
               ) : null}
               {panel === "browser" && !directoryOnly ? <BrowserPanel pages={task.browserPages} /> : null}
-              {panel === "files" ? directoryOnly ? <DirectoryFilesPanel task={task} /> : <FilesPanel files={task.files} /> : null}
+              {panel === "files" ? (
+                directoryOnly ? (
+                  <DirectoryFilesPanel task={task} />
+                ) : activeDirectory ? (
+                  <DirectoryFilesPanel task={task} selectedId={activeDirectory.id} onSelect={setActiveDirectoryId} />
+                ) : (
+                  <div className="flex flex-col gap-3">
+                    {hasDirectories ? <DirectoryRootChoices task={task} selected={undefined} onSelect={setActiveDirectoryId} /> : null}
+                    <FilesPanel files={task.files} />
+                  </div>
+                )
+              ) : null}
               {panel === "terminal" ? (
-                directoryOnly ? <DirectoryTerminalPanel task={task} /> : <TerminalPanel taskId={task.id} seed={task.terminalSeed} />
+                directoryOnly ? (
+                  <DirectoryTerminalPanel task={task} />
+                ) : activeDirectory ? (
+                  <DirectoryTerminalPanel task={task} selectedId={activeDirectory.id} onSelect={setActiveDirectoryId} />
+                ) : (
+                  <div className="flex flex-col gap-3">
+                    {hasDirectories ? <DirectoryRootChoices task={task} selected={undefined} onSelect={setActiveDirectoryId} /> : null}
+                    <TerminalPanel taskId={task.id} seed={task.terminalSeed} />
+                  </div>
+                )
               ) : null}
             </Panel>
           ))}
