@@ -3,6 +3,7 @@ export type ShellCommand =
   | { kind: "smoke" }
   | { kind: "task-browser-smoke" }
   | { kind: "task-automation-smoke" }
+  | { kind: "task-browser-s5-smoke" }
   | { kind: "versions" };
 
 type Environment = Readonly<Record<string, string | undefined>>;
@@ -26,19 +27,27 @@ export function resolveShellCommand(
     isEnabled(env["PIDOCK_S3_SMOKE"]) || appArgs.includes("--smoke-s3");
   const taskAutomationSmoke =
     isEnabled(env["PIDOCK_S4_SMOKE"]) || appArgs.includes("--smoke-s4");
+  const taskBrowserS5Smoke =
+    isEnabled(env["PIDOCK_S5_SMOKE"]) || appArgs.includes("--smoke-s5");
   const versions =
     isEnabled(env["PIDOCK_PRINT_VERSIONS"]) ||
     appArgs.includes("--print-versions");
 
   if (
-    [smoke, taskBrowserSmoke, taskAutomationSmoke, versions].filter(Boolean)
-      .length > 1
+    [
+      smoke,
+      taskBrowserSmoke,
+      taskAutomationSmoke,
+      taskBrowserS5Smoke,
+      versions,
+    ].filter(Boolean).length > 1
   ) {
     throw new Error("conflicting shell command flags");
   }
   if (smoke) return { kind: "smoke" };
   if (taskBrowserSmoke) return { kind: "task-browser-smoke" };
   if (taskAutomationSmoke) return { kind: "task-automation-smoke" };
+  if (taskBrowserS5Smoke) return { kind: "task-browser-s5-smoke" };
   if (versions) return { kind: "versions" };
   return { kind: "window" };
 }

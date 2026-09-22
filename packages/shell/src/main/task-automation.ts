@@ -201,7 +201,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function elementDetails(
+export function elementDetails(
   value: unknown,
   maxTextLength: number,
 ): ElementDetails | null {
@@ -247,7 +247,9 @@ export class TaskAutomation {
   private readonly consoleErrors: ConsoleErrorEvidence[] = [];
   private readonly failedRequests: FailedRequestEvidence[] = [];
   private readonly requestUrls = new Map<string, string>();
-  private readonly detachOnDispose: boolean;
+  private detachOnDispose: boolean;
+  private listenersBound = false;
+  private readonly detachReasons: string[] = [];
   private disposed = false;
 
   private constructor(
@@ -282,6 +284,36 @@ export class TaskAutomation {
 
   async run(expression: string): Promise<unknown> {
     return this.evaluate(expression);
+  }
+
+  isDebuggerAttached(): boolean {
+    return this.debuggerApi.isAttached();
+  }
+
+  /**
+   * Reason strings recorded when the CDP session detached, e.g. when the
+   * target WebContents closes or another client takes over the debugger.
+   * Bounded like every other evidence stream.
+   */
+  get detachEvents(): readonly string[] {
+    return [...this.detachReasons];
+  }
+
+  /**
+   * Re-binds the control handle after an external detach (DevTools, target
+   * swap). Re-enables the domains on the same WebContents so the Agent can
+   * keep using the handle it already holds.
+   */
+  async reattach(): Promise<void> {
+    if (this.disposed) throw new Error("TaskAutomation is disposed");
+    if (this.webContents.isDestroyed()) {
+      throw new Error(`WebContents ${this.webContentsId} is destroyed`);
+    }
+    if (!this.debuggerApi.isAttached()) {
+      this.debuggerApi.attach("1.3");
+      this.detachOnDispose = true;
+    }
+    await this.enableDomains();
   }
 
   async locate(locator: Locator): Promise<ElementDetails | null> {
@@ -426,18 +458,35 @@ export class TaskAutomation {
     if (this.disposed) return;
     this.disposed = true;
     this.debuggerApi.removeListener("message", this.onDebuggerMessage);
+    this.debuggerApi.removeListener("detach", this.onDebuggerDetach);
+    this.listenersBound = false;
     if (this.detachOnDispose && this.debuggerApi.isAttached()) {
       this.debuggerApi.detach();
     }
   }
 
   private async enableDomains(): Promise<void> {
-    this.debuggerApi.on("message", this.onDebuggerMessage);
+    if (!this.listenersBound) {
+      this.debuggerApi.on("message", this.onDebuggerMessage);
+      this.debuggerApi.on("detach", this.onDebuggerDetach);
+      this.listenersBound = true;
+    }
     await this.debuggerApi.sendCommand("Runtime.enable");
     await this.debuggerApi.sendCommand("Page.enable");
     await this.debuggerApi.sendCommand("Network.enable");
     await this.debuggerApi.sendCommand("Log.enable");
   }
+
+  private readonly onDebuggerDetach = (
+    _event: unknown,
+    reason: string,
+  ): void => {
+    appendBounded(
+      this.detachReasons,
+      truncateText(String(reason), this.maxTextLength),
+      this.maxEvents,
+    );
+  };
 
   private readonly onDebuggerMessage = (
     _event: unknown,
@@ -458,6 +507,10 @@ export class TaskAutomation {
     }
     if (method === "Network.loadingFinished") {
       this.finishRequest(params);
+      return;
+    }
+    if (method === "Network.responseReceived") {
+      this.recordHttpError(params);
       return;
     }
     if (method === "Network.loadingFailed") {
@@ -547,6 +600,28 @@ export class TaskAutomation {
       this.maxEvents,
     );
     this.requestUrls.delete(rawRequestId);
+  }
+
+  private recordHttpError(params: unknown): void {
+    if (!isRecord(params)) return;
+    const response = isRecord(params["response"]) ? params["response"] : {};
+    const status = asNumber(response["status"]) ?? 0;
+    if (status < 400) return;
+    const requestId = asString(params["requestId"]);
+    const url =
+      asString(response["url"]) ??
+      (requestId ? this.requestUrls.get(requestId) : undefined);
+    appendBounded(
+      this.failedRequests,
+      {
+        requestId: truncateText(requestId ?? "unknown", this.maxTextLength),
+        url: truncateText(url ?? "unknown", this.maxTextLength),
+        errorText: `HTTP ${status}`,
+        resourceType: asString(params["type"]) ?? "unknown",
+        canceled: false,
+      },
+      this.maxEvents,
+    );
   }
 
   private recordLogEntry(params: unknown): void {
