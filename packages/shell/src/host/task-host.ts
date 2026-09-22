@@ -21,7 +21,9 @@ import {
   buildTaskBranch,
   isTaskDirId,
   pinBaseline,
+  planWorktreeCreation,
   previewTaskPaths,
+  assertProvisionPlanSafe,
   resolveTaskRoot,
   validateTaskName,
   type ProvisionPlan,
@@ -82,6 +84,17 @@ export interface ProvisionTaskInput {
   remoteBranch: string;
   fetchedCommit: string;
   repos?: readonly string[];
+  /**
+   * Per-repo source checkout the git ops run in (fetch/branch/worktree
+   * `cwd`). `provision()` validates each entry with
+   * `planWorktreeCreation`, so unknown keys and empty cwds fail closed
+   * instead of executing in the Host cwd. When absent, `provision()`
+   * defaults the cwd to the source checkout placeholder recorded on the
+   * task (or the task dir as a last resort); the returned plan is still
+   * validated by `assertProvisionPlanSafe` but MUST NOT be executed
+   * without pinning each repo to its real main checkout directory.
+   */
+  mainCheckouts?: Readonly<Record<string, string>>;
   now?: string;
 }
 
@@ -114,7 +127,8 @@ function maxMessageSequence(messages: { id: string }[]): number {
 /**
  * One Host instance serves one task folder. `taskId` is fixed at
  * construction (main binds it from the trusted sender); ops naming any
- * other task are rejected with `task-unknown` instead of接续 that task.
+ * other task are rejected with `task-unknown` instead of continuing with
+ * that task.
  */
 export class TaskWorkspaceHost {
   private readonly channels = new Map<string, PiSessionChannel>();
@@ -154,6 +168,7 @@ export class TaskWorkspaceHost {
       throw new Error(`invalid-payload: provision paths ${paths.taskDir} do not match this Host's task dir ${this.taskDir}`);
     }
     const at = input.now ?? this.now();
+    const previous = this.store.readTask(this.taskDir);
     const record = buildTaskDiskRecord({
       taskId: this.taskId,
       name: named.name,
@@ -166,15 +181,32 @@ export class TaskWorkspaceHost {
       repos,
       now: at,
     });
+    // Re-provision bumps only `updatedAt`: the first creation time stays.
+    if (previous) record.createdAt = previous.createdAt;
     this.store.writeTask(this.taskDir, record);
+    // Plan with real cwds via `planWorktreeCreation` (never ""): one
+    // fetch/branch/worktree triple per repo, each executed in that repo's
+    // main checkout directory. The Host does NOT execute git here (S2
+    // returns the plan and persists the record only); real cwds mean no
+    // future caller can git-run in the Host cwd by accident.
     const plan: ProvisionPlan = {
       mainCheckoutDir: "",
-      ops: [
-        { kind: "fetch", cwd: "", args: ["fetch", "origin", pinned.remoteBranch] },
-        { kind: "branch", cwd: "", args: ["branch", branched.branch, pinned.commit] },
-        { kind: "worktree", cwd: "", args: ["worktree", "add", paths.taskDir, branched.branch] },
-      ],
+      ops: [],
     };
+    for (const repoDir of repos) {
+      const mainCheckoutDir = input.mainCheckouts?.[repoDir] ?? resolved.root;
+      const repoPlan = planWorktreeCreation({
+        taskDir: this.taskDir,
+        mainCheckoutDir,
+        repoDir,
+        remoteBranch: pinned.remoteBranch,
+        commit: pinned.commit,
+        branch: branched.branch,
+      });
+      if (plan.mainCheckoutDir === "") plan.mainCheckoutDir = repoPlan.mainCheckoutDir;
+      plan.ops.push(...repoPlan.ops);
+    }
+    assertProvisionPlanSafe(plan);
     return { record, plan };
   }
 
@@ -189,7 +221,7 @@ export class TaskWorkspaceHost {
   /**
    * Open the designated session, restoring its persisted snapshot when one
    * exists. A snapshot naming a different task is rejected: reopen never
-   *接续 another task's latest session.
+   * continues with another task's latest session.
    */
   openSession(sessionId: string, options?: { providerId?: string; model?: string }): PiSessionChannel {
     const existing = this.channels.get(sessionId);
@@ -197,7 +229,7 @@ export class TaskWorkspaceHost {
     const saved = this.store.readSession(this.taskDir, sessionId);
     if (saved) {
       if (saved.taskId !== this.taskId) {
-        throw new Error("task-unknown: snapshot names a different task; refusing to接续");
+        throw new Error("task-unknown: snapshot names a different task; refusing to continue with it");
       }
       const restored = PiSessionChannel.restore(saved, this.taskDir);
       this.channels.set(sessionId, restored);
@@ -256,6 +288,12 @@ export class TaskWorkspaceHost {
     this.store.writeSession(this.taskDir, channel.snapshot());
   }
 
+  /**
+   * `maxSeq` is an in-memory diagnostic over open channels only: after
+   * `dispose()` (or a fresh Host with sessions only on disk) it reports 0
+   * even though persisted messages exist. Callers needing the persisted
+   * count must read the snapshots via `store`/`sessionIds()`.
+   */
   /** Drop in-memory channels (e.g. on Host dispose); disk state is already saved. */
   dispose(): void {
     this.channels.clear();

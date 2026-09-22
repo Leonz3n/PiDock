@@ -103,12 +103,22 @@ export function parseTaskRecord(raw: string): TaskDiskRecord {
   if (!Array.isArray(record["repos"]) || !(record["repos"] as unknown[]).every((item) => typeof item === "string")) {
     throw new Error("invalid-payload: task record.repos must be a string array");
   }
+  // Timestamps are required: a corrupt/partial record must not restore
+  // with `createdAt/updatedAt` silently `undefined`.
+  for (const key of ["createdAt", "updatedAt"] as const) {
+    if (typeof record[key] !== "string" || (record[key] as string).length === 0) {
+      throw new Error(`invalid-payload: task record.${key} must be a non-empty string`);
+    }
+  }
   return value as TaskDiskRecord;
 }
 
 export function serializeSessionSnapshot(snapshot: PiSessionSnapshot): string {
   return JSON.stringify(snapshot, null, 2);
 }
+
+const SESSION_PERMISSIONS = ["read", "default", "auto"] as const;
+const SESSION_RUN_STATES = ["idle", "running", "approval", "done", "cancelled", "failed"] as const;
 
 export function parseSessionSnapshot(raw: string): PiSessionSnapshot {
   const value: unknown = JSON.parse(raw);
@@ -123,6 +133,28 @@ export function parseSessionSnapshot(raw: string): PiSessionSnapshot {
   }
   if (!Array.isArray(snapshot["messages"]) || !Array.isArray(snapshot["calls"])) {
     throw new Error("invalid-payload: session snapshot.messages/calls must be arrays");
+  }
+  // Required session envelope: without these a corrupt snapshot would
+  // restore with `createdAt: undefined` or an unknown permission/state.
+  if (!Array.isArray(snapshot["approvals"])) {
+    throw new Error("invalid-payload: session snapshot.approvals must be an array");
+  }
+  if (
+    typeof snapshot["permission"] !== "string" ||
+    !(SESSION_PERMISSIONS as readonly string[]).includes(snapshot["permission"] as string)
+  ) {
+    throw new Error("invalid-payload: session snapshot.permission must be read/default/auto");
+  }
+  if (
+    typeof snapshot["runState"] !== "string" ||
+    !(SESSION_RUN_STATES as readonly string[]).includes(snapshot["runState"] as string)
+  ) {
+    throw new Error("invalid-payload: session snapshot.runState must be a known state");
+  }
+  for (const key of ["providerId", "model", "createdAt", "updatedAt"] as const) {
+    if (typeof snapshot[key] !== "string" || (snapshot[key] as string).length === 0) {
+      throw new Error(`invalid-payload: session snapshot.${key} must be a non-empty string`);
+    }
   }
   return value as PiSessionSnapshot;
 }

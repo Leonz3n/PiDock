@@ -33,7 +33,6 @@ function getParentPort(): UtilityParentPort {
 
 const hostPort = getParentPort();
 
-export { boundWorkspaceId, routeHostTask, validateHostTaskOp } from "./host-guards.js";
 import { boundWorkspaceId, routeHostTask, validateHostTaskOp } from "./host-guards.js";
 import { TaskWorkspaceHost, diskTaskStore } from "./task-host.js";
 import {
@@ -64,7 +63,7 @@ function reply(response: RpcResponse): void {
 
 // Single-task Host binding: one utilityProcess serves one task folder.
 // `PIDOCK_TASK_ID` selects the task, `PIDOCK_TASK_DIR` its folder; both
-// are fixed at fork time so an op naming another task can never接续 it.
+// are fixed at fork time so an op naming another task can never continue with it.
 // Lazily created on first dispatch so `host/ping` smoke paths that never
 // touch tasks do not require the task env.
 let workspaceHost: TaskWorkspaceHost | null = null;
@@ -72,7 +71,12 @@ let workspaceHost: TaskWorkspaceHost | null = null;
 function taskHostFor(taskId: string): TaskWorkspaceHost | { error: string } {
   const boundTaskId = process.env["PIDOCK_TASK_ID"];
   const taskDir = process.env["PIDOCK_TASK_DIR"];
-  if (!boundTaskId || !taskDir) {
+  // Pure, unit-tested form of this rule is `routeTaskBinding` in
+  // `host-guards.ts` (this file needs a utilityProcess parent port).
+  if (typeof boundTaskId !== "string" || boundTaskId.length === 0) {
+    return { error: "task-unbound: Host has no PIDOCK_TASK_ID/PIDOCK_TASK_DIR binding" };
+  }
+  if (typeof taskDir !== "string" || taskDir.length === 0) {
     return { error: "task-unbound: Host has no PIDOCK_TASK_ID/PIDOCK_TASK_DIR binding" };
   }
   if (taskId !== boundTaskId) {
@@ -90,8 +94,17 @@ function asRecord(payload: unknown): Record<string, unknown> {
     : {};
 }
 
-function asStringArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+/**
+ * `repos` is fail-closed: present-but-not-a-string-array (e.g. `[123]`)
+ * is an invalid payload, not silently coerced to `[]`.
+ */
+function asStrictStringArray(value: unknown): string[] | null {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) return null;
+  for (const item of value) {
+    if (typeof item !== "string") return null;
+  }
+  return value as string[];
 }
 
 function dispatchTaskOp(
@@ -119,6 +132,10 @@ function dispatchTaskOp(
         }
         const branch = typeof record["branch"] === "string" ? (record["branch"] as string) : undefined;
         const rootOverride = typeof record["rootOverride"] === "string" ? (record["rootOverride"] as string) : undefined;
+        const repos = asStrictStringArray(record["repos"]);
+        if (repos === null) {
+          return { ok: false, error: "invalid-payload: task/provision.repos must be a string array" };
+        }
         const { record: saved } = host.provision({
           name,
           dirId,
@@ -126,7 +143,7 @@ function dispatchTaskOp(
           rootOverride,
           remoteBranch,
           fetchedCommit,
-          repos: asStringArray(record["repos"]),
+          repos,
         });
         return { ok: true, payload: { ...saved } };
       }

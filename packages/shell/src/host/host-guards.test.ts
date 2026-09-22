@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { boundWorkspaceId, DEFAULT_WORKSPACE_ID, routeHostTask, validateHostTaskOp } from "./host-guards.js";
+import { boundWorkspaceId, buildHostEnv, DEFAULT_WORKSPACE_ID, routeHostTask, routeTaskBinding, validateHostTaskOp } from "./host-guards.js";
 
 // Seam: Host process-boundary guards (workspace binding + per-op payloads).
 // host.ts itself requires a utilityProcess parent port, so the pure guards
@@ -39,6 +39,37 @@ describe("task-workspace binding rule", () => {
     expect(routeHostTask({ workspaceId: "workspace-a", taskId: "task-a", op: "task/exec" }, "workspace-a")).toBe(
       "invalid-params",
     );
+  });
+});
+
+describe("task binding rule", () => {
+  it("routes only the fork-bound task and fails closed when unbound", () => {
+    expect(routeTaskBinding("task-a", "task-a", "/tmp/task-a")).toBe("routable");
+    expect(routeTaskBinding("task-b", "task-a", "/tmp/task-a")).toBe("task-unknown");
+    expect(routeTaskBinding("", "task-a", "/tmp/task-a")).toBe("task-unknown");
+    expect(routeTaskBinding("task-a", undefined, "/tmp/task-a")).toBe("task-unbound");
+    expect(routeTaskBinding("task-a", "task-a", undefined)).toBe("task-unbound");
+    expect(routeTaskBinding("task-a", "", "/tmp/task-a")).toBe("task-unbound");
+  });
+});
+
+describe("buildHostEnv", () => {
+  it("binds workspace plus the fork-time task folder, failing closed on partial bindings", () => {
+    const env = buildHostEnv({ PATH: "/bin", EMPTY: undefined, PIDOCK_WORKSPACE_ID: "old" }, "workspace-a", {
+      taskId: "task-a",
+      taskDir: "/tmp/task-a",
+    });
+    expect(env["PIDOCK_WORKSPACE_ID"]).toBe("workspace-a");
+    expect(env["PIDOCK_TASK_ID"]).toBe("task-a");
+    expect(env["PIDOCK_TASK_DIR"]).toBe("/tmp/task-a");
+    expect(env["PATH"]).toBe("/bin");
+    // Unbound (workspace-only) Host stays valid for ping/versions smoke paths.
+    const unbound = buildHostEnv({}, "workspace-a");
+    expect(unbound["PIDOCK_WORKSPACE_ID"]).toBe("workspace-a");
+    expect(unbound["PIDOCK_TASK_ID"]).toBeUndefined();
+    expect(() => buildHostEnv({}, "")).toThrow("workspaceId");
+    expect(() => buildHostEnv({}, "workspace-a", { taskId: "", taskDir: "/tmp/task-a" })).toThrow("taskId");
+    expect(() => buildHostEnv({}, "workspace-a", { taskId: "task-a", taskDir: "relative/dir" })).toThrow("taskDir");
   });
 });
 

@@ -14,7 +14,7 @@ import type {
 } from "electron";
 import { isAllowedInvokeChannel } from "../preload/allowlist.js";
 import { HostClient } from "../rpc/host-client.js";
-import { validateHostTaskOp } from "../host/host-guards.js";
+import { buildHostEnv, validateHostTaskOp } from "../host/host-guards.js";
 import { TaskBrowser } from "./task-browser.js";
 import {
   TrustDomainRegistry,
@@ -139,14 +139,12 @@ export function versionsTriple(hostNode?: string): Record<string, string> {
 export async function createHost(
   workspaceId: string,
   logExit = true,
+  task?: { taskId: string; taskDir: string },
 ): Promise<{ client: HostClient; child: UtilityProcess }> {
   const entry = path.join(here, "..", "host", "host.js");
   const child = utilityProcess.fork(entry, [], {
-    serviceName: "pidock-node-host",
-    env: { ...process.env, PIDOCK_WORKSPACE_ID: workspaceId } as Record<
-      string,
-      string
-    >,
+    serviceName: task ? `pidock-node-host-${task.taskId}` : "pidock-node-host",
+    env: buildHostEnv(process.env, workspaceId, task),
     stdio: "pipe",
   });
   const client = new HostClient(child);
