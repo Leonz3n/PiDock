@@ -11,7 +11,8 @@
 | `@pidock/renderer` | `packages/renderer` | `vite --host 127.0.0.1 --port 4335 --strictPort` | `vite build`（`dist/`） |
 
 根 `pnpm dev/build/typecheck/test/lint` 经 `turbo run` 调度两个包的同名任务；
-`turbo.json` 的 `build`/`typecheck` 声明 `dependsOn: ["^build"]`，共享协议与
+`turbo.json` 的 `build`/`typecheck`/`test` 声明 `dependsOn: ["^build"]`（`test`
+在 workspace 构建产物之后运行），共享协议与
 构建先后关系正确：`shell` 的静态页拷贝不依赖 renderer 构建产物（壳内
 `dist/renderer/*.html` 为 shell 自带占位页），renderer 构建产物由 Vite 独立产出。
 

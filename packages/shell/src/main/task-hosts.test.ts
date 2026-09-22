@@ -154,6 +154,27 @@ describe("PerTaskHostRegistry", () => {
     ).rejects.toThrow("unknown task");
   });
 
+  it("bootstraps the shell-side id from the form's dirId (renderer shell path)", async () => {
+    // P1-2 regression: the renderer passes the previewed `task-oooooooo`
+    // key as BOTH the memory `workspaceKey` and the shell-side task id
+    // (`taskId === dirId`), so the bootstrap's exact-match coupling holds
+    // and bridged provision forks instead of failing `unknown task`.
+    const home = process.env["HOME"] ?? "/tmp";
+    const defaultRoot = `${home}/PiDockTasks`;
+    const spawns: Array<{ taskId: string; taskDir: string }> = [];
+    const { registry, spawn } = registryWith(() => null, spawns, TASK_RESULT);
+    const payload = {
+      name: "表单任务",
+      dirId: "task-a1f92c3d",
+      remoteBranch: "origin/main",
+      fetchedCommit: "9acb5b6",
+    };
+    const routed = await registry.routeTaskOp({ taskId: "task-a1f92c3d", op: "task/provision", payload });
+    expect(routed).toEqual(TASK_RESULT);
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(spawns[0]).toEqual({ taskId: "task-a1f92c3d", taskDir: `${defaultRoot}/task-a1f92c3d` });
+  });
+
   it("provisions at a rootOverride root and reuses the fork on a second op", async () => {
     // Override-aware reuse (S3d): the default-root resolver never covers
     // override folders, so reuse accepts the forked folder while its own

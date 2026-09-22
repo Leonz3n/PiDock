@@ -62,6 +62,52 @@ describe("memory Host provision state", () => {
     expect(header.error).toContain("fetch-failed");
   });
 
+  it("fails fast on duplicate, malformed, and blank-baseline inputs (no orphan)", async () => {
+    // P1-1 form parity: the submit path runs these pure rules before the
+    // task exists, so the adapter contract must fail closed the same way.
+    // (P1-3: a blank baseline pins `fetch-failed` locally and never
+    // reaches the shell as a skipped no-op provision.)
+    const host = createMemoryHost();
+    const seeded = await host.createTask({
+      projectId: "atlas",
+      name: "已有任务",
+      repoIds: [],
+      directoryIds: [],
+      environmentId: "testing",
+      workspaceKey: "task-a1f92c3d",
+    });
+    void seeded;
+    const duplicate = await host.provisionTaskThroughForm({
+      taskId: "not-created",
+      name: "重复标识",
+      dirId: "task-a1f92c3d",
+      remoteBranch: "origin/main",
+      fetchedCommit: "9acb5b6",
+    });
+    expect(duplicate.ok).toBe(false);
+    if (!duplicate.ok) expect(duplicate.error.code).toBe("identifier-conflict");
+    const malformed = await host.provisionTaskThroughForm({
+      taskId: "not-created",
+      name: "畸形标识",
+      dirId: "task-XYZ",
+      remoteBranch: "origin/main",
+      fetchedCommit: "9acb5b6",
+    });
+    expect(malformed.ok).toBe(false);
+    if (!malformed.ok) expect(malformed.error.code).toBe("invalid-path");
+    const blankBaseline = await host.provisionTaskThroughForm({
+      taskId: "not-created",
+      name: "空白基线",
+      dirId: "task-d00dfeed",
+      remoteBranch: "origin/main",
+      fetchedCommit: "",
+    });
+    expect(blankBaseline.ok).toBe(false);
+    if (!blankBaseline.ok) expect(blankBaseline.error.code).toBe("fetch-failed");
+    // Neither failure may leave an orphan task behind.
+    expect(await host.getTask("not-created")).toBeUndefined();
+  });
+
   it("rejects identifier conflicts without touching the task", async () => {
     const host = createMemoryHost();
     const first = await host.createTask({
@@ -124,6 +170,7 @@ describe("memory Host provision state", () => {
     expect(header.name).toBe("发布前检查");
     expect(header.repos).toContain("front-monorepo");
     expect(header.branch).toBe("task/task-a1f92c3d");
+    expect(header.root).toBe("~/PiDockTasks");
     expect(header.ready).toBe(true);
     expect(header.changedFiles.length).toBeGreaterThan(0);
     await expect(host.getTaskHeader("missing-task")).rejects.toThrow("missing-task");

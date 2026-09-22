@@ -217,12 +217,34 @@ function panelName(panel: ToolPanel) {
  */
 function TaskHeader({ task }: { task: Task }) {
   const adapter = useHostStore((state) => state.adapter);
+  // [PiDock 02] the header reads the same `getTaskHeader` contract the
+  // provision tests lock (name/repo/branch/ready/code-change + task-bound
+  // error); `getTaskProvision` is not a second header source — the header
+  // falls back to the task record only when the adapter predates the seam.
   const [branch, setBranch] = useState(`task/${task.workspaceKey}`);
   const [root, setRoot] = useState(task.workspaceRoot);
   const [ready, setReady] = useState(task.repos.length > 0 || task.directories.length > 0);
   const [headerError, setHeaderError] = useState<string | undefined>(undefined);
   useEffect(() => {
     let cancelled = false;
+    const header = adapter.getTaskHeader;
+    if (typeof header === "function") {
+      void header
+        .call(adapter, task.id)
+        .then((state) => {
+          if (cancelled) return;
+          setBranch(state.branch);
+          setRoot(state.root);
+          setReady(state.ready);
+          setHeaderError(state.error);
+        })
+        .catch((error: unknown) => {
+          if (!cancelled) setHeaderError(error instanceof Error ? error.message : String(error));
+        });
+      return () => {
+        cancelled = true;
+      };
+    }
     void adapter
       .getTaskProvision?.(task.id)
       .then((provision) => {

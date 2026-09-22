@@ -1896,6 +1896,7 @@ class MemoryHost implements HostAdapter {
       name: task.name,
       repos: repoNames,
       branch: provision?.branch ?? `task/${task.workspaceKey}`,
+      root: provision?.root ?? task.workspaceRoot,
       ready: provision?.ready ?? false,
       changedFiles: task.files.map((file) => ({ path: file.path, status: file.status })),
       error: provision?.lastError ? `${provision.lastError.code}: ${provision.lastError.message}` : undefined,
