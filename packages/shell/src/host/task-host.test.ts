@@ -1,0 +1,248 @@
+import { beforeEach, describe, expect, it } from "vitest";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { TaskWorkspaceHost, memoryTaskStore } from "./task-host.js";
+import {
+  listSessionIdsOnDisk,
+  parseSessionSnapshot,
+  parseTaskRecord,
+  readSessionSnapshotOnDisk,
+  readTaskRecordOnDisk,
+  sessionFilePath,
+  taskFilePath,
+  writeSessionSnapshotOnDisk,
+  writeTaskRecordOnDisk,
+  buildTaskDiskRecord,
+} from "./task-store.js";
+import { PiSessionChannel, resetPiSequencesForTests } from "../main/pi-session.js";
+
+const TASK_ID = "task-a";
+const TASK_DIR = join(mkdtempSync(join(tmpdir(), "pidock-s2-")), "task-abcdef12");
+
+function host() {
+  return new TaskWorkspaceHost(TASK_ID, TASK_DIR, memoryTaskStore(), () => "2026-09-22T10:00:00+08:00");
+}
+
+function provisionInput() {
+  return {
+    name: "发布前检查",
+    dirId: "task-abcdef12",
+    remoteBranch: "main",
+    fetchedCommit: "a5a4a0d1234",
+    repos: ["front-monorepo"],
+  };
+}
+
+beforeEach(() => {
+  resetPiSequencesForTests();
+});
+
+// Seam: S2 Host wiring (provision persistence, Host-owned cross-session
+// lock, exact-session restore) + disk store shape.
+
+describe("task-store record shape", () => {
+  it("round-trips a task record and rejects malformed JSON", () => {
+    const record = buildTaskDiskRecord({
+      taskId: TASK_ID,
+      name: "发布前检查",
+      dirId: "task-abcdef12",
+      branch: "task/task-abcdef12",
+      root: "/tmp/pidock-s2",
+      taskDir: TASK_DIR,
+      remoteBranch: "main",
+      baseCommit: "a5a4a0d1234",
+      repos: ["front-monorepo"],
+      now: "2026-09-22T10:00:00+08:00",
+    });
+    const dir = mkdtempSync(join(tmpdir(), "pidock-store-"));
+    writeTaskRecordOnDisk(dir, record);
+    expect(taskFilePath(dir)).toBe(join(dir, "task.json"));
+    expect(readTaskRecordOnDisk(dir)).toEqual(record);
+    expect(readTaskRecordOnDisk(join(tmpdir(), "pidock-missing-dir-xyz"))).toBeNull();
+    expect(() => parseTaskRecord(JSON.stringify({ taskId: "" }))).toThrow("invalid-payload");
+  });
+
+  it("round-trips a session snapshot and lists persisted session ids", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pidock-sess-"));
+    const channel = new PiSessionChannel({
+      taskId: TASK_ID,
+      sessionId: "main",
+      taskDir: dir,
+      providerId: "provider-local",
+      model: "m",
+      now: () => "2026-09-22T10:00:00+08:00",
+    });
+    channel.runTurn({ text: "hi" });
+    writeSessionSnapshotOnDisk(dir, channel.snapshot());
+    expect(sessionFilePath(dir, "main")).toBe(join(dir, "sessions", "main.json"));
+    expect(readSessionSnapshotOnDisk(dir, "main")?.sessionId).toBe("main");
+    expect(readSessionSnapshotOnDisk(dir, "other")).toBeNull();
+    expect(listSessionIdsOnDisk(dir)).toEqual(["main"]);
+    expect(listSessionIdsOnDisk(join(tmpdir(), "pidock-missing-dir-xyz"))).toEqual([]);
+    expect(() => parseSessionSnapshot(JSON.stringify({ taskId: TASK_ID }))).toThrow("invalid-payload");
+    expect(() => sessionFilePath(dir, "../evil")).toThrow("invalid-path");
+  });
+
+  it("writes real JSON files to disk", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pidock-disk-"));
+    const record = buildTaskDiskRecord({
+      taskId: TASK_ID,
+      name: "发布前检查",
+      dirId: "task-abcdef12",
+      branch: "task/task-abcdef12",
+      root: dir,
+      taskDir: join(dir, "task-abcdef12"),
+      remoteBranch: "main",
+      baseCommit: "a5a4a0d1234",
+      repos: [],
+      now: "2026-09-22T10:00:00+08:00",
+    });
+    writeTaskRecordOnDisk(record.taskDir, record);
+    const raw = readFileSync(join(record.taskDir, "task.json"), "utf8");
+    expect(JSON.parse(raw).baseCommit).toBe("a5a4a0d1234");
+  });
+});
+
+describe("TaskWorkspaceHost provision", () => {
+  it("persists the task record with branch, baseline and pinned commit", () => {
+    const taskHost = host();
+    const { record } = taskHost.provision(provisionInput());
+    expect(record.name).toBe("发布前检查");
+    expect(record.dirId).toBe("task-abcdef12");
+    expect(record.branch).toBe("task/task-abcdef12");
+    expect(record.remoteBranch).toBe("main");
+    expect(record.baseCommit).toBe("a5a4a0d1234");
+    expect(record.taskDir).toBe(TASK_DIR);
+    expect(taskHost.taskRecord()).toEqual(record);
+  });
+
+  it("keeps the form on fetch failure instead of creating from a stale ref", () => {
+    expect(() => host().provision({ ...provisionInput(), fetchedCommit: "" })).toThrow("fetch-failed");
+    expect(host().taskRecord()).toBeNull();
+  });
+
+  it("rejects a blank name, a bad dir id and a bad branch", () => {
+    expect(() => host().provision({ ...provisionInput(), name: "  " })).toThrow("empty-name");
+    expect(() => host().provision({ ...provisionInput(), dirId: "nope" })).toThrow("invalid-path");
+    expect(() => host().provision({ ...provisionInput(), branch: "bad branch" })).toThrow("invalid-branch");
+  });
+
+  it("rejects provision paths that do not match this Host's task dir", () => {
+    expect(() =>
+      host().provision({ ...provisionInput(), rootOverride: "/elsewhere/root" }),
+    ).toThrow("do not match this Host's task dir");
+  });
+});
+
+describe("TaskWorkspaceHost sessions and Host-owned lock", () => {
+  it("holds the Host lock across an approval turn and rejects a second session", () => {
+    const taskHost = host();
+    const first = taskHost.sendMessage("main", "运行命令", {
+      tool: "exec.run",
+      target: `${TASK_DIR}/run.sh`,
+      execute: (call) => ({
+        tool: call.tool,
+        kind: call.kind,
+        target: call.target,
+        contentVersion: call.contentVersion,
+        output: "pending",
+      }),
+    });
+    expect(first.state).toBe("approval");
+    expect(taskHost.writeLockOwner).toBe("main");
+    expect(() => taskHost.sendMessage("second", "后来者")).toThrow("task-locked");
+    taskHost.reject("main", first.approvalId ?? "");
+    expect(taskHost.writeLockOwner).toBeNull();
+    const second = taskHost.sendMessage("second", "后来者");
+    expect(second.state).toBe("done");
+  });
+
+  it("restores the designated session from disk, never another task's latest", () => {
+    const store = memoryTaskStore();
+    const first = new TaskWorkspaceHost(TASK_ID, TASK_DIR, store, () => "2026-09-22T10:00:00+08:00");
+    first.sendMessage("main", "第一轮");
+    const ids = first.sessionIds();
+    expect(ids).toEqual(["main"]);
+    first.dispose();
+
+    const second = new TaskWorkspaceHost(TASK_ID, TASK_DIR, store, () => "2026-09-22T10:00:00+08:00");
+    const reopened = second.openSession("main");
+    expect(reopened.snapshot().sessionId).toBe("main");
+    expect(reopened.snapshot().messages).toHaveLength(2);
+    expect(reopened.snapshot().calls[0].callId).toBe("call-1");
+
+    const foreign = new PiSessionChannel({
+      taskId: "task-other",
+      sessionId: "main",
+      taskDir: TASK_DIR,
+      providerId: "p",
+      model: "m",
+      now: () => "2026-09-22T10:00:00+08:00",
+    });
+    store.writeSession(TASK_DIR, { ...foreign.snapshot(), taskId: "task-other" });
+    const third = new TaskWorkspaceHost(TASK_ID, TASK_DIR, store, () => "2026-09-22T10:00:00+08:00");
+    expect(() => third.openSession("main")).toThrow("task-unknown");
+  });
+
+  it("expires pending approvals on reopen and preserves createdAt", () => {
+    const store = memoryTaskStore();
+    const first = new TaskWorkspaceHost(TASK_ID, TASK_DIR, store, () => "2026-09-22T10:00:00+08:00");
+    const turn = first.sendMessage("main", "运行命令", {
+      tool: "exec.run",
+      target: `${TASK_DIR}/run.sh`,
+      execute: (call) => ({
+        tool: call.tool,
+        kind: call.kind,
+        target: call.target,
+        contentVersion: call.contentVersion,
+        output: "pending",
+      }),
+    });
+    expect(turn.state).toBe("approval");
+    const before = first.openSession("main").snapshot();
+    first.dispose();
+
+    const second = new TaskWorkspaceHost(TASK_ID, TASK_DIR, store, () => "2026-09-22T10:01:00+08:00");
+    const reopened = second.openSession("main");
+    expect(reopened.runState).toBe("cancelled");
+    expect(reopened.pendingApproval()).toBeUndefined();
+    expect(reopened.snapshot().approvals[0].status).toBe("expired");
+    expect(reopened.snapshot().createdAt).toBe(before.createdAt);
+  });
+
+  it("denies out-of-task tool targets at the Host layer", () => {
+    const taskHost = host();
+    const result = taskHost.sendMessage("main", "越界", {
+      tool: "fs.write",
+      target: "/Users/name/Workspace/repo/notes.md",
+      execute: (call) => ({
+        tool: call.tool,
+        kind: call.kind,
+        target: call.target,
+        contentVersion: call.contentVersion,
+        output: "x",
+      }),
+    });
+    expect(result.state).toBe("failed");
+  });
+
+  it("approve settles the Host lock and persists the result", () => {
+    const taskHost = host();
+    const turn = taskHost.sendMessage("main", "运行命令", {
+      tool: "exec.run",
+      target: `${TASK_DIR}/run.sh`,
+      execute: (call) => ({
+        tool: call.tool,
+        kind: call.kind,
+        target: call.target,
+        contentVersion: call.contentVersion,
+        output: "pending",
+      }),
+    });
+    const callId = taskHost.approve("main", turn.approvalId ?? "");
+    expect(callId).toBe(turn.callId);
+    expect(taskHost.writeLockOwner).toBeNull();
+    expect(taskHost.openSession("main").runState).toBe("done");
+  });
+});

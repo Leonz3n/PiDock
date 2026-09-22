@@ -10,6 +10,32 @@ import { isHostTaskOp } from "../rpc/protocol.js";
 
 export const DEFAULT_WORKSPACE_ID = "s1-default-workspace";
 
+export type HostTaskRouteResult = "routable" | "task-workspace-mismatch" | "invalid-params";
+
+/**
+ * Pure routing rule shared by the Host handler and unit tests: the routed
+ * workspace must equal the Host's own binding, and the envelope must name
+ * a task, a known op and an object payload. `host.ts` enforces this before
+ * dispatching; the string-compare test below exercises this function
+ * directly because `host.ts` requires a utilityProcess parent port.
+ */
+export function routeHostTask(params: unknown, boundWorkspaceId: string): HostTaskRouteResult {
+  if (typeof params !== "object" || params === null || Array.isArray(params)) return "invalid-params";
+  const record = params as Record<string, unknown>;
+  const workspaceId = record["workspaceId"];
+  const taskId = record["taskId"];
+  const op = record["op"];
+  if (typeof workspaceId !== "string" || workspaceId.length === 0) return "invalid-params";
+  if (typeof taskId !== "string" || taskId.length === 0) return "invalid-params";
+  if (!isHostTaskOp(op)) return "invalid-params";
+  const payload = record["payload"];
+  if (payload !== undefined && (typeof payload !== "object" || payload === null || Array.isArray(payload))) {
+    return "invalid-params";
+  }
+  if (workspaceId !== boundWorkspaceId) return "task-workspace-mismatch";
+  return "routable";
+}
+
 export function boundWorkspaceId(): string {
   return process.env["PIDOCK_WORKSPACE_ID"] ?? DEFAULT_WORKSPACE_ID;
 }
@@ -34,19 +60,34 @@ export function validateHostTaskOp(
         ok: false,
         error: "invalid-payload: task/provision requires a payload object",
       };
-    const root = payload["root"];
+    // S2 dispatch shape: Host-owned provision fields (name/dirId/baseline).
+    // The S1 transport shape (root/dirId) stays accepted for sender-side
+    // compatibility until the renderer form migrates to the S2 fields.
     const dirId = payload["dirId"];
-    if (typeof root !== "string" || root.trim().length === 0) {
-      return {
-        ok: false,
-        error: "invalid-payload: task/provision.root must be a non-empty string",
-      };
-    }
     if (typeof dirId !== "string" || !/^task-[0-9a-f]{8}$/.test(dirId)) {
       return {
         ok: false,
         error: "invalid-payload: task/provision.dirId must match task-oooooooo",
       };
+    }
+    if ("root" in payload) {
+      const root = payload["root"];
+      if (typeof root !== "string" || root.trim().length === 0) {
+        return {
+          ok: false,
+          error: "invalid-payload: task/provision.root must be a non-empty string",
+        };
+      }
+      return { ok: true };
+    }
+    for (const key of ["name", "remoteBranch", "fetchedCommit"] as const) {
+      const value = payload[key];
+      if (typeof value !== "string" || value.trim().length === 0) {
+        return {
+          ok: false,
+          error: `invalid-payload: task/provision.${key} must be a non-empty string`,
+        };
+      }
     }
     return { ok: true };
   }
