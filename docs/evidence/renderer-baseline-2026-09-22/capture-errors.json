@@ -1,0 +1,10 @@
+{
+  "rendererErrors": [],
+  "prototypeErrors": [
+    {
+      "page": "http://127.0.0.1:4319/?variant=A",
+      "kind": "console",
+      "message": "Failed to load resource: the server responded with a status of 404 (File not found)"
+    }
+  ]
+}

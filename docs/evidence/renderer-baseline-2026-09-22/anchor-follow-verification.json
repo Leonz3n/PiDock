@@ -18,6 +18,15 @@
         "distance": 0
       }
     },
+    "detached-after-wheel-gesture": {
+      "pass": true,
+      "detail": {
+        "scrollTop": 1083,
+        "scrollHeight": 2471,
+        "clientHeight": 588,
+        "distance": 800
+      }
+    },
     "detached-after-scroll-up": {
       "pass": true,
       "detail": {

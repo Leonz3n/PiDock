@@ -12,17 +12,32 @@
   "usage": {
     "total": 240,
     "virtualized": "true",
-    "rendered": 17
+    "viewportHeight": 420,
+    "rowHeight": 34,
+    "overscan": 6,
+    "expected": 19,
+    "expectedAttribute": 19,
+    "rendered": 19
   },
   "sessions": {
     "total": 43,
     "virtualized": "true",
+    "viewportHeight": 280,
+    "rowHeight": 56,
+    "overscan": 6,
+    "expected": 11,
+    "expectedAttribute": 11,
     "rendered": 11
   },
   "sessionTabs": 4,
   "runHistory": {
     "total": 47,
     "virtualized": "true",
+    "viewportHeight": 280,
+    "rowHeight": 40,
+    "overscan": 6,
+    "expected": 13,
+    "expectedAttribute": 13,
     "rendered": 13
   },
   "settings": {
@@ -30,5 +45,6 @@
     "workspaceRoot": "~/PiDockTasks",
     "showsConfigDir": true
   },
-  "errors": []
+  "errors": [],
+  "expectationMismatches": []
 }

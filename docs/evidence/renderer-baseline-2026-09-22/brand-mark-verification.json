@@ -1,0 +1,93 @@
+{
+  "metrics": {
+    "text": "π",
+    "box": {
+      "width": 36,
+      "height": 36,
+      "left": 105.5,
+      "top": 16
+    },
+    "glyph": {
+      "width": 10.375,
+      "height": 22
+    },
+    "offsetX": 0,
+    "offsetY": 0,
+    "color": "rgb(35, 60, 120)",
+    "display": "grid",
+    "placeItems": "center",
+    "borderRadius": "3.35544e+07px"
+  },
+  "checks": {
+    "glyph-is-pi": {
+      "pass": true,
+      "detail": {
+        "text": "π",
+        "box": {
+          "width": 36,
+          "height": 36,
+          "left": 105.5,
+          "top": 16
+        },
+        "glyph": {
+          "width": 10.375,
+          "height": 22
+        },
+        "offsetX": 0,
+        "offsetY": 0,
+        "color": "rgb(35, 60, 120)",
+        "display": "grid",
+        "placeItems": "center",
+        "borderRadius": "3.35544e+07px"
+      }
+    },
+    "badge-is-square": {
+      "pass": true,
+      "detail": {
+        "width": 36,
+        "height": 36,
+        "left": 105.5,
+        "top": 16
+      }
+    },
+    "badge-is-circular": {
+      "pass": true,
+      "detail": {
+        "borderRadius": "3.35544e+07px"
+      }
+    },
+    "uses-grid-centering": {
+      "pass": true,
+      "detail": {
+        "display": "grid",
+        "placeItems": "center"
+      }
+    },
+    "glyph-centered-horizontally": {
+      "pass": true,
+      "detail": {
+        "offsetX": 0,
+        "tolerance": 1.5
+      }
+    },
+    "glyph-centered-vertically": {
+      "pass": true,
+      "detail": {
+        "offsetY": 0,
+        "tolerance": 1.5
+      }
+    },
+    "glyph-uses-accent-blue": {
+      "pass": true,
+      "detail": {
+        "color": "rgb(35, 60, 120)"
+      }
+    },
+    "pageErrors": [],
+    "no-page-errors": {
+      "pass": true,
+      "detail": []
+    }
+  },
+  "failed": false
+}
