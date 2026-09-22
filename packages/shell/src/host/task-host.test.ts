@@ -459,10 +459,23 @@ describe("S6 batch 2: Host send-record, draft persistence, approval one-shot", (
     expect(reopened.openSession("main").snapshot().draft).toBeUndefined();
   });
 
+  it("routes draft/permission ops through setPermission + saveDraft/clearDraft (Host-reachable)", () => {
+    const store = memoryTaskStore();
+    const taskHost = new TaskWorkspaceHost(TASK_ID, TASK_DIR, store, () => "2026-09-22T10:00:00+08:00");
+    taskHost.setPermission("main", "read");
+    expect(taskHost.openSession("main").currentPermission).toBe("read");
+    taskHost.setPermission("main", "auto");
+    expect(taskHost.openSession("main").currentPermission).toBe("auto");
+    taskHost.saveDraft("main", { text: "rpc 草稿" });
+    expect(taskHost.openSession("main").snapshot().draft?.text).toBe("rpc 草稿");
+    taskHost.clearDraft("main");
+    expect(taskHost.openSession("main").snapshot().draft).toBeUndefined();
+  });
+
   it("approve consumes exactly one pending and never replays; reopen expires pending", () => {
     const store = memoryTaskStore();
     const taskHost = new TaskWorkspaceHost(TASK_ID, TASK_DIR, store, () => "2026-09-22T10:00:00+08:00");
-    taskHost.openSession("main", { permission: "default" } as never);
+    taskHost.openSession("main", { permission: "default" });
     const turn = taskHost.sendMessage("main", "跑命令", {
       tool: "exec.run",
       target: `${TASK_DIR}/run.sh`,
@@ -473,7 +486,7 @@ describe("S6 batch 2: Host send-record, draft persistence, approval one-shot", (
     expect(() => taskHost.approve("main", turn.approvalId ?? "")).toThrow("不可重放");
     // Pending never replays on reopen: a second host sees expired, not pending.
     const pending = new TaskWorkspaceHost(TASK_ID, TASK_DIR, memoryTaskStore(), () => "2026-09-22T10:00:00+08:00");
-    pending.openSession("other", { permission: "default" } as never);
+    pending.openSession("other", { permission: "default" });
     const awaiting = pending.sendMessage("other", "跑命令", {
       tool: "exec.run",
       target: `${TASK_DIR}/run.sh`,

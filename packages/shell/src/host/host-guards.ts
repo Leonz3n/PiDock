@@ -188,6 +188,10 @@ export function validateHostTaskOp(
       }
     }
     const usageSource = payload["usageSource"];
+    // Intentional asymmetry with `normalizeCallUsage` (pi-session.ts): the
+    // internal `approve()` path mints `usageSource:"approval"` for the
+    // executed call, but clients can never mint it — a client-supplied
+    // `"approval"` is fail-closed here so usage provenance stays honest.
     if (
       usageSource !== undefined &&
       usageSource !== "actual" &&
@@ -220,6 +224,53 @@ export function validateHostTaskOp(
     const references = payload["references"];
     if (references !== undefined && !Array.isArray(references)) {
       return { ok: false, error: "invalid-payload: task/sendMessage.references must be an array" };
+    }
+    return { ok: true };
+  }
+  // S6 batch 2 follow-up: draft/permission ops are Host-reachable (P1).
+  // `task/saveDraft` stores an unsent composer draft (never auto-sends);
+  // `task/clearDraft` drops it; `task/setPermission` mutates future turns
+  // only (forward-only, never rewrites the in-flight approval).
+  if (op === "task/saveDraft") {
+    if (!isRecord(payload))
+      return { ok: false, error: "invalid-payload: task/saveDraft requires a payload object" };
+    const sessionId = payload["sessionId"];
+    const text = payload["text"];
+    if (typeof sessionId !== "string" || sessionId.trim().length === 0) {
+      return { ok: false, error: "invalid-payload: task/saveDraft.sessionId must be a non-empty string" };
+    }
+    if (typeof text !== "string") {
+      return { ok: false, error: "invalid-payload: task/saveDraft.text must be a string" };
+    }
+    const references = payload["references"];
+    if (references !== undefined && !Array.isArray(references)) {
+      return { ok: false, error: "invalid-payload: task/saveDraft.references must be an array" };
+    }
+    const skillSource = payload["skillSource"];
+    if (skillSource !== undefined && (typeof skillSource !== "string" || skillSource.trim().length === 0)) {
+      return { ok: false, error: "invalid-payload: task/saveDraft.skillSource must be a non-empty string" };
+    }
+    return { ok: true };
+  }
+  if (op === "task/clearDraft") {
+    if (!isRecord(payload))
+      return { ok: false, error: "invalid-payload: task/clearDraft requires a payload object" };
+    const sessionId = payload["sessionId"];
+    if (typeof sessionId !== "string" || sessionId.trim().length === 0) {
+      return { ok: false, error: "invalid-payload: task/clearDraft.sessionId must be a non-empty string" };
+    }
+    return { ok: true };
+  }
+  if (op === "task/setPermission") {
+    if (!isRecord(payload))
+      return { ok: false, error: "invalid-payload: task/setPermission requires a payload object" };
+    const sessionId = payload["sessionId"];
+    const permission = payload["permission"];
+    if (typeof sessionId !== "string" || sessionId.trim().length === 0) {
+      return { ok: false, error: "invalid-payload: task/setPermission.sessionId must be a non-empty string" };
+    }
+    if (permission !== "read" && permission !== "default" && permission !== "auto") {
+      return { ok: false, error: "invalid-payload: task/setPermission.permission must be read/default/auto" };
     }
     return { ok: true };
   }

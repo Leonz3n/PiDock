@@ -16,7 +16,7 @@
  * unit tests inject an in-memory store instead of the filesystem.
  */
 
-import { PiSessionChannel, type PiSessionSnapshot, type PiTurnInput } from "../main/pi-session.js";
+import { PiSessionChannel, type PiPermission, type PiSessionSnapshot, type PiTurnInput } from "../main/pi-session.js";
 import {
   buildTaskBranch,
   isTaskDirId,
@@ -244,7 +244,7 @@ export class TaskWorkspaceHost {
 
   openSession(
     sessionId: string,
-    options?: { providerId?: string; model?: string; credentialRef?: string },
+    options?: { providerId?: string; model?: string; credentialRef?: string; permission?: PiPermission },
   ): PiSessionChannel {
     const existing = this.channels.get(sessionId);
     if (existing) return existing;
@@ -264,6 +264,7 @@ export class TaskWorkspaceHost {
       providerId: options?.providerId ?? "provider-local",
       model: options?.model ?? "pidock-default",
       credentialRef: options?.credentialRef,
+      permission: options?.permission,
     });
     this.channels.set(sessionId, channel);
     this.store.writeSession(this.taskDir, channel.snapshot());
@@ -307,6 +308,13 @@ export class TaskWorkspaceHost {
     const channel = this.openSession(sessionId);
     channel.reject(approvalId);
     if (this.lockOwner === sessionId) this.lockOwner = null;
+    this.store.writeSession(this.taskDir, channel.snapshot());
+  }
+
+  /** Forward-only permission change for future turns (never rewrites in-flight approval). */
+  setPermission(sessionId: string, permission: PiPermission): void {
+    const channel = this.openSession(sessionId);
+    channel.setPermission(permission);
     this.store.writeSession(this.taskDir, channel.snapshot());
   }
 

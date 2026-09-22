@@ -97,6 +97,9 @@ describe("PiSessionChannel turns and approvals", () => {
     const decided = session.approve(turn.approval?.id ?? "");
     expect(decided.callId).toBe(turn.call.callId);
     expect(() => session.approve(turn.approval?.id ?? "")).toThrow("不可重放");
+    // P1: the approve system note is an agent message, never a human one.
+    const note = session.snapshot().messages.find((message) => message.callId === turn.call.callId && message.role === "agent" && message.text.startsWith("已批准并执行"));
+    expect(note?.origin).toBe("agent");
   });
 
   it("keeps history on approval, approval, and reopen without replay", () => {
