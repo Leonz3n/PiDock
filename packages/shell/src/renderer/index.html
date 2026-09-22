@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>PiDock Shell (S1)</title>
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 2rem; color: #1a1a1a; }
+      code { background: #f0f0f0; padding: 0.1em 0.4em; border-radius: 4px; }
+      #out { white-space: pre-wrap; background: #fafafa; border: 1px solid #ddd; padding: 1rem; margin-top: 1rem; }
+    </style>
+  </head>
+  <body>
+    <h1>PiDock Shell S1 占位页</h1>
+    <p>沙箱 renderer 占位页（S2 双信任域前仅此一页）。桥状态与版本三元组：</p>
+    <div id="out">loading…</div>
+    <script>
+      (async () => {
+        const out = document.getElementById("out");
+        const lines = [];
+        lines.push("bridge present: " + (typeof window.pidock !== "undefined"));
+        try {
+          const v = await window.pidock.getVersions();
+          lines.push("getVersions: " + JSON.stringify(v));
+        } catch (e) {
+          lines.push("getVersions error: " + (e && e.message ? e.message : String(e)));
+        }
+        try {
+          const p = await window.pidock.hostPing("s1-default-workspace");
+          lines.push("hostPing: " + JSON.stringify(p));
+        } catch (e) {
+          lines.push("hostPing error: " + (e && e.message ? e.message : String(e)));
+        }
+        out.textContent = lines.join("\n");
+      })();
+    </script>
+  </body>
+</html>
