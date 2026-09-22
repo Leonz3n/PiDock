@@ -78,3 +78,42 @@ describe("#6 append + probe bridge (S3)", () => {
     }
   });
 });
+
+describe("#7 service bridge (S4)", () => {
+  it("forwards register/control/status/log payloads without Node access", async () => {
+    const { registerServiceThroughShell, controlServiceThroughShell, serviceStatusThroughShell, serviceLogThroughShell } =
+      await import("../data/shellBridge");
+    const { vi: vitestVi } = await import("vitest");
+    const taskOp = vitestVi.fn(async () => ({ ok: true, payload: {} }));
+    vitestVi.stubGlobal("window", { pidock: { taskOp } });
+    try {
+      const registered = await registerServiceThroughShell({
+        taskId: "task-abcdef12",
+        serviceId: "saas-web",
+        descriptor: { name: "saas-web", program: "pnpm" },
+        layers: { shared: [] },
+        templateVersion: "v12",
+      });
+      expect(registered.ok).toBe(true);
+      expect(taskOp).toHaveBeenCalledWith(
+        "task-abcdef12",
+        "task/registerService",
+        expect.objectContaining({ serviceId: "saas-web", templateVersion: "v12" }),
+      );
+      const started = await controlServiceThroughShell({ taskId: "task-abcdef12", serviceId: "saas-web", action: "start", label: "用户点击启动" });
+      expect(started.ok).toBe(true);
+      expect(taskOp).toHaveBeenCalledWith(
+        "task-abcdef12",
+        "task/controlService",
+        expect.objectContaining({ serviceId: "saas-web", action: "start", actor: "human" }),
+      );
+      const status = await serviceStatusThroughShell({ taskId: "task-abcdef12", serviceId: "saas-web" });
+      expect(status.ok).toBe(true);
+      const log = await serviceLogThroughShell({ taskId: "task-abcdef12", serviceId: "saas-web", limit: 10 });
+      expect(log.ok).toBe(true);
+      expect(taskOp).toHaveBeenCalledWith("task-abcdef12", "task/serviceLog", { serviceId: "saas-web", limit: 10 });
+    } finally {
+      vitestVi.unstubAllGlobals();
+    }
+  });
+});

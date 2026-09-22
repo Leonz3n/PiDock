@@ -53,7 +53,12 @@ export type ShellTaskOp =
   | "task/clearDraft"
   | "task/setPermission"
   | "task/listApprovals"
-  | "task/getApproval";
+  | "task/getApproval"
+  | "task/registerService"
+  | "task/planServiceStart"
+  | "task/controlService"
+  | "task/serviceStatus"
+  | "task/serviceLog";
 
 /**
  * Task-scoped op through main into the per-workspace Host. Rejects outside
@@ -212,6 +217,80 @@ export async function probeLinkThroughShell(input: {
 }): Promise<ShellTaskOpResult> {
   try {
     return await shellTaskOp(input.taskId, "task/probeLink", { sourcePath: input.sourcePath });
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * [PiDock 04] (#7) service ops through the shell (`host/task` +
+ * `task/registerService|planServiceStart|controlService|serviceStatus|
+ * serviceLog`). `{ok:false,error}` envelopes are returned, never thrown,
+ * so forms keep their input and offer retry. Resolved snapshots arrive
+ * with secrets masked (`••••••••`); the real values stay Host-side.
+ */
+export async function registerServiceThroughShell(input: {
+  taskId: string;
+  serviceId: string;
+  descriptor: Record<string, unknown>;
+  layers: Record<string, unknown>;
+  templateVersion: string;
+}): Promise<ShellTaskOpResult> {
+  try {
+    return await shellTaskOp(input.taskId, "task/registerService", {
+      serviceId: input.serviceId,
+      descriptor: input.descriptor,
+      layers: input.layers,
+      templateVersion: input.templateVersion,
+    });
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+export async function controlServiceThroughShell(input: {
+  taskId: string;
+  serviceId: string;
+  action: "start" | "stop";
+  /** Absent = human-explicit (labelled); present = agent control via the session gate. */
+  sessionId?: string;
+  label?: string;
+  approvalGranted?: boolean;
+}): Promise<ShellTaskOpResult> {
+  const payload: Record<string, unknown> = { serviceId: input.serviceId, action: input.action };
+  if (input.sessionId !== undefined) payload["sessionId"] = input.sessionId;
+  else {
+    payload["actor"] = "human";
+    if (input.label !== undefined) payload["label"] = input.label;
+  }
+  if (input.approvalGranted !== undefined) payload["approvalGranted"] = input.approvalGranted;
+  try {
+    return await shellTaskOp(input.taskId, "task/controlService", payload);
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+export async function serviceStatusThroughShell(input: {
+  taskId: string;
+  serviceId: string;
+}): Promise<ShellTaskOpResult> {
+  try {
+    return await shellTaskOp(input.taskId, "task/serviceStatus", { serviceId: input.serviceId });
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+export async function serviceLogThroughShell(input: {
+  taskId: string;
+  serviceId: string;
+  limit?: number;
+}): Promise<ShellTaskOpResult> {
+  const payload: Record<string, unknown> = { serviceId: input.serviceId };
+  if (input.limit !== undefined) payload["limit"] = input.limit;
+  try {
+    return await shellTaskOp(input.taskId, "task/serviceLog", payload);
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
