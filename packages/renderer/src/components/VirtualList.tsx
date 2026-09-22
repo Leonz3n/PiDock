@@ -13,10 +13,52 @@ type VirtualListProps<T> = {
   dataAttributes?: Record<string, string>;
 };
 
+type ObservedHeight = {
+  /** Content-box height, the only box `ResizeObserver.contentRect` reports. */
+  contentBox: number;
+  /** Border-box height from `ResizeObserverEntry.borderBoxSize`, when available. */
+  borderBox?: number;
+  /** Border-box height from `getBoundingClientRect()`, when available. */
+  rect?: number;
+};
+
 /**
- * Virtualised list. The measured viewport height wins; `height` is the fallback
- * used before layout exists (for example under jsdom), so callers always get a
- * bounded window of rows instead of the whole collection.
+ * The height to store for the scroll element.
+ *
+ * Under Tailwind's preflight (`box-sizing: border-box`) `style.height` is the
+ * **border-box** height, so the element must be measured by its border box.
+ * Measuring `contentRect.height` instead made any caller with a border shrink
+ * by the border width on every observer callback (420 → 418 → 416 …), which
+ * silently collapsed the windowed row count. `borderBoxSize` is preferred
+ * because it is the value the observer itself reports; `getBoundingClientRect`
+ * covers engines (and test doubles) without it, and the content box is the
+ * last resort so an element without borders still works.
+ */
+export function resolveViewportHeight(observed: ObservedHeight): number {
+  const candidate = [observed.borderBox, observed.rect, observed.contentBox].find(
+    (value): value is number => typeof value === "number" && Number.isFinite(value) && value > 0,
+  );
+  return candidate === undefined ? 0 : Math.round(candidate);
+}
+
+/**
+ * How many rows a window of `viewportHeight` covers: the visible rows plus the
+ * overscan buffer, capped at the collection size. Shared with the fallback
+ * renderer and with the measurement script's expectation.
+ */
+export function viewportWindowSize(options: { itemCount: number; rowHeight: number; viewportHeight: number; overscan: number }): number {
+  const { itemCount, rowHeight, viewportHeight, overscan } = options;
+  return Math.min(itemCount, Math.ceil(viewportHeight / rowHeight) + overscan);
+}
+
+/**
+ * Virtualised list. The measured border-box height wins; `height` is the
+ * fallback used before layout exists (for example under jsdom), so callers
+ * always get a bounded window of rows instead of the whole collection.
+ *
+ * `data-viewport-height` / `data-row-height` / `data-overscan` /
+ * `data-expected-rows` expose the window derivation so evidence scripts can
+ * compare the rendered row count against `ceil(viewportHeight / rowHeight) + overscan`.
  */
 export function VirtualList<T>({
   items,
@@ -37,7 +79,13 @@ export function VirtualList<T>({
     if (!element || typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver((entries) => {
       for (const entry of entries) {
-        setMeasured(Math.round(entry.contentRect.height));
+        const target = entry.target ?? element;
+        const next = resolveViewportHeight({
+          contentBox: entry.contentRect.height,
+          borderBox: entry.borderBoxSize?.[0]?.blockSize,
+          rect: target.getBoundingClientRect().height,
+        });
+        if (next > 0) setMeasured(next);
       }
     });
     observer.observe(element);
@@ -45,6 +93,7 @@ export function VirtualList<T>({
   }, []);
 
   const viewportHeight = measured > 0 ? measured : height;
+  const expectedRows = viewportWindowSize({ itemCount: items.length, rowHeight, viewportHeight, overscan });
   const virtualizer = useVirtualizer({
     count: items.length,
     getScrollElement: () => scrollRef.current,
@@ -53,7 +102,10 @@ export function VirtualList<T>({
   });
 
   const virtualRows = virtualizer.getVirtualItems();
-  const rows = virtualRows.length > 0 || items.length === 0 ? virtualRows : fallbackRows(items.length, rowHeight, viewportHeight, overscan);
+  const rows =
+    virtualRows.length > 0 || items.length === 0
+      ? virtualRows
+      : Array.from({ length: expectedRows }, (_, index) => ({ index, start: index * rowHeight, size: rowHeight }));
 
   return (
     <div
@@ -61,9 +113,15 @@ export function VirtualList<T>({
       data-testid={testId}
       data-virtualized="true"
       data-total-rows={items.length}
+      data-viewport-height={viewportHeight}
+      data-row-height={rowHeight}
+      data-overscan={overscan}
+      data-expected-rows={expectedRows}
       {...dataAttributes}
       className={`relative overflow-auto ${className}`}
-      style={{ height: viewportHeight }}
+      // `box-sizing: border-box` makes the styled height and the measured
+      // border box the same quantity, independent of the host's preflight.
+      style={{ height: viewportHeight, boxSizing: "border-box" }}
     >
       <div style={{ height: virtualizer.getTotalSize(), position: "relative", width: "100%" }}>
         {rows.map((row) => (
@@ -77,13 +135,4 @@ export function VirtualList<T>({
       </div>
     </div>
   );
-}
-
-function fallbackRows(count: number, rowHeight: number, viewportHeight: number, overscan: number) {
-  const visible = Math.ceil(viewportHeight / rowHeight) + overscan;
-  return Array.from({ length: Math.min(count, visible) }, (_, index) => ({
-    index,
-    start: index * rowHeight,
-    size: rowHeight,
-  }));
 }
