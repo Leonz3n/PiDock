@@ -2,15 +2,17 @@
 
 2026-09-22（复核修订：2026-09-22）。本记录覆盖渲染层基线（`packages/renderer`，`@pidock/renderer`）与静态草稿 `prototypes/pidock-ui/`（variant A 对话优先）的逐页对照、组件与许可证、状态职责边界、密集列表实测、锚点跟随验证与未测边界。
 
-对照截图证据：[`docs/evidence/renderer-baseline-2026-09-22/`](evidence/renderer-baseline-2026-09-22/)（renderer 14 张（含品牌标记裁剪图）+ prototype 9 张 + `measurements.json` + `anchor-follow-verification.json` + `brand-mark-verification.json` + `capture-errors.json`）。原型只读保留，未修改。
+对照截图证据：[`docs/evidence/renderer-baseline-2026-09-22/`](evidence/renderer-baseline-2026-09-22/)（renderer 15 张 = 14 个页面 + 品牌标记裁剪图；prototype 9 张；`measurements.json` + `anchor-follow-verification.json` + `brand-mark-verification.json` + `capture-errors.json` + [`verification-log.md`](evidence/renderer-baseline-2026-09-22/verification-log.md)）。原型只读保留，未修改。
 
 > **本轮（第二轮整改）勘误。** 上一版把 `/usage` 的 `rendered: 17` 当成容量证据发布，并声称「视觉与交互逐页对齐」。实测 17 行是 **`VirtualList` 高度反馈环**造成的收缩结果（border-box 被测成 content-box，420→418→416…），已按根因修复，`/usage` 实测回到 19 行并加入可回归的单元/组件测试（见「虚拟列表高度反馈环（本轮根因修复）」）。同时更正两处**过度陈述**（环境与服务页面、两条收口规则的证据）并把未复原项单列为**明确取舍**。
+
+> **第三轮整改更正（两条被错误记为取舍的项已复原）。** 上一版把「环境与服务的作用域标签页＋可编辑 KEY/VALUE 表＋真实保存」与「普通目录任务布局」列为**明确取舍**，理由是「需要 Host 契约」。该理由经复核被否决：验收项 8 只要求数据留在内存，`docs/implementation-stack-design.md` 只禁止预设传输协议；原型两项均**完全在内存实现**，`memoryHost.ts` 本就在内存中变更分层数据，且 `docs/ui-prototype-review.md` 记录普通目录为用户确认决定。本轮已在适配层内存中复原两项（见「规格复原（第三轮）」），并从「未复原项（明确取舍）」表中删除。
 
 > **上一版勘误。** 上一版把「本机设置」页面写成**有意收敛**（「渲染层去掉原型用于布局探索的重复/临时入口（如「本机设置」…）」）。这是**错误**：原型「本机设置」是 2026-09-20 经用户确认的页面，渲染层此前用一段静态 `<p>` 取代它属于**回退**，不是取舍。已按原型草稿复原该页面并接回导航，本节与下方对照表均已更正。
 
 ## 与草稿的逐页对照
 
-渲染层 13 个可截图页面 vs 原型 9 张页面截图。下表逐一给出映射关系；原型侧没有独立页面的渲染层页面，均记明「有意新增」及理由，不存在把疏漏当作取舍的情况。
+渲染层 14 个可截图页面 vs 原型 9 张页面截图。下表逐一给出映射关系；原型侧没有独立页面的渲染层页面，均记明「有意新增」及理由，不存在把疏漏当作取舍的情况。
 
 | # | 渲染层页面（路由） | 原型对照 | 结论与差异理由 |
 | --- | --- | --- | --- |
@@ -19,7 +21,7 @@
 | 3 | 任务页·主会话 `/projects/atlas/tasks/release?session=main` | `prototype/task-main.png` | **逐页对齐**。A 对话优先布局：任务导航常驻、对话占主区、工具面板按需打开。 |
 | 4 | 任务页·部署审批会话（`?session=deploy`） | 原型同一任务页的会话切换态（草稿固定数量演示，未单独截图） | **有意拆为可截图状态**。用 `session` 查询参数把「执行状态与审批」收口规则固化为可复现路由，便于验收；属于证据粒度细化，不是新增产品行为。 |
 | 5 | 任务页·失败现场（`?session=failed`） | 原型同一任务页的失败态 | **有意拆为可截图状态**。理由同上：把「失败保留草稿」收口规则做成可深链、可重复截图的证据。 |
-| 6 | 环境与服务 `/env` | `prototype/env.png` | **部分对齐（明确取舍，本轮更正）**。生效来源分层与「按服务查看生效配置」只读视图一致，KEY/VALUE/来源表已抽成共享 `ConfigTable`。**未复原**：原型的 任务覆盖／共享模板／本机私有 **作用域标签页**、可编辑 KEY/VALUE 表（新增／删除行）、`保存` 真实写入，以及「服务启动配方／从 .vscode 导入」流程；渲染层 `保存` 仅提示。上一版把此页写成「逐页对齐…分层一致」属**过度陈述**，已改正。理由见「未复原项（明确取舍）」。 |
+| 6 | 环境与服务 `/env` | `prototype/env.png` | **逐页对齐（第三轮复原）**。共享模板／本机私有配置／任务覆盖三个作用域标签页、可编辑 KEY/VALUE 表（新增／修改／删除）、KEY 非空＋格式＋重复校验、VALUE 可为空、草稿按 项目／环境／作用域／任务 隔离、共享模板保存前差异预览（新增／改值／改名＝移除＋新增／删除）与版本递增均已复原，写入经适配层留在内存；`保存` 不再只 toast。生效来源分层与「按服务查看生效配置」只读视图一致，KEY/VALUE/来源表仍共用 `ConfigTable`。仍**未复原** 服务启动配方与从 `.vscode` 导入（见「未复原项」）。 |
 | 7 | Provider 与上下文 `/providers` | `prototype/providers.png` | **逐页对齐**。同一供应商多配置、模型与上下文占用分开记录保持一致。 |
 | 8 | Token 用量 `/usage` | `prototype/usage.png` | **逐页对齐并有意加强**。筛选与明细列对齐草稿；明细改用虚拟滚动（见下「密集场景实测」），理由是把原型的固定条数改为可扩展实现。**本轮修复虚拟列表高度反馈环后，明细视口恢复 420px、实测渲染 19 行**（上一版误记为 17 行）。 |
 | 9 | 定时任务 `/schedules` | `prototype/schedules.png` | **逐页对齐并有意加强**。「执行记录」由普通 `<ul>` 改为虚拟滚动，并把固定 3 条改为 47 条密集数据（见下），理由同 Token 明细；结果标签修复为「完成/跳过/失败」。 |
@@ -27,6 +29,7 @@
 | 11 | 远程访问 `/remote` | `prototype/remote.png` | **逐页对齐**。主机主动连接、每设备独立撤销保持一致。 |
 | 12 | 归档与清理 `/archive` | `prototype/archive.png` | **逐页对齐**。归档停止执行、恢复不自动启动、清理仅面向归档任务保持一致。 |
 | 13 | 本机设置 `/settings` | 原型 `app.js` 的 `workspaceSettingsDialog()`（「本机设置」模态，经侧栏 folder 图标打开，2026-09-20 用户确认） | **逐页对齐（本轮复原）**。展示默认应用配置目录 `~/.pi/dock` 与配置文件 `~/.pi/dock/config.json`；可编辑默认任务根目录 `workspaceRoot`，保存提示「已有任务不迁移」。数据经 `HostAdapter.getLocalSettings/setWorkspaceRoot` 提供，属本机设置、不进入共享模板。原型为模态，渲染层为可深链页面——粒度细化，内容与决策点一致。 |
+| 14 | 任务页·普通目录 `/projects/atlas/tasks/design-docs` | 原型 `directories.js` 的 `directoryWorkspace()` / `directoryHeader()`（草稿未单独截图） | **逐页对齐（第三轮复原）**。`TASK · 普通目录` 标题与目录数；无 Git 分支／远程基线／worktree／差异／提交入口。文件面板显示任务内软链接路径＋原始路径、示例文件与引用入口；终端面板显示拟用 cwd；目录面板说明修改影响原目录、不提供 Git 差异／分支／提交。截图见 `evidence/renderer-baseline-2026-09-22/renderer/task-directory.png`。 |
 
 ### 全局导航差异（更正）
 
@@ -36,15 +39,15 @@
 
 ## 未复原项（明确取舍）
 
-原型中以下已确认流程在渲染层**尚未复原**。它们是**明确取舍**，不是未注意到的回退；已按规格要求单独列出，并说明取舍理由。
+> **第三轮整改。** 上一版此处有三行，其中两行（环境与服务作用域编辑、普通目录任务布局）是**错误记为取舍的回退**，经复核否决后已在本轮内存复原，见「规格复原（第三轮）」。
 
-| 原型能力 | 渲染层现状 | 为何本轮不复原（取舍理由） |
+原型中仍以下列已确认能力在渲染层**尚未复原**，属**明确取舍**：
+
+| 原型能力 | 渲染层现状 | 为何不复原（取舍理由） |
 | --- | --- | --- |
-| 环境与服务：作用域标签页（任务覆盖／共享模板／本机私有）＋可编辑 KEY/VALUE 表（新增／删除行）＋`保存` 真实写入 | `EnvPage.tsx` 只有只读 `ConfigTable`，`保存` 仅 toast | 作用域写入需要 Host 契约（按作用域持久化、共享模板版本递增、差异审阅、受影响服务显式重启）。现在是内存模拟，若在 `Environment` 里加一个作用域开关，会把「界面局部状态」当成 Host 语义，反而误导 02 的真实接口设计。生效来源分层与「按服务查看」已对齐，可先满足 收口规则 #6。 |
-| 服务启动配方编辑／从 `.vscode` 导入 | 无入口 | 配方转换、仓库默认配置读取依赖真实仓库扫描；原型自身也标注「仅预览，尚未形成真实可运行配方」。属 02/03 范围。 |
-| 普通目录任务布局（`directoryWorkspace`：无 Git 工作副本；文件面板显示软链接路径＋原始目标；终端使用链接路径；不出现分支／差异／提交入口） | `Task.directories` 字段存在、项目页列出目录，但**不存在仅普通目录的任务**，任务页与工具面板也不区分 worktree 与软链接 | 软链接创建、任务工作区入口枚举与「清理只移除受管理链接、永不递归删除目标」都需要 Host／工作区层实现。原型明确记录「链接创建、pi 遍历、系统权限、真实并发和清理删除均未执行或验证」，属 02/03 范围；现在只做界面分支会把未实现的链接语义伪装成已对齐。 |
+| 服务启动配方编辑／从 `.vscode` 导入 | 无入口；`EnvPage.tsx` 明确标注不在本页范围 | 配方转换与仓库默认配置读取依赖真实仓库扫描；原型自身也标注「真实配置快照、服务配方保存与运行解析尚未接入」（`ui-prototype-review.md:148`），属后续工单范围。 |
 
-> 这两项都以 `docs/ui-prototype-review.md` 的已确认要求为准，渲染层基线不做半成品实现；它们与「未测边界」一起构成当前与草稿的真实差异清单。
+> 该项以 `docs/ui-prototype-review.md` 的已确认要求为准，渲染层基线不做半成品实现；其余与「未测边界」一起构成当前与草稿的真实差异清单。
 
 ## 组件与库选择（含许可证）
 
@@ -122,10 +125,10 @@
     "headingText": "需要处理",
     "headingColor": "rgb(37, 43, 48)"
   },
-  "usage": { "total": 240, "virtualized": "true", "viewportHeight": 420, "rowHeight": 34, "overscan": 6, "expected": 19, "rendered": 19 },
-  "sessions": { "total": 43, "virtualized": "true", "viewportHeight": 280, "rowHeight": 56, "overscan": 6, "expected": 11, "rendered": 11 },
+  "usage": { "total": 240, "virtualized": "true", "declaredHeight": 420, "viewportHeight": 420, "rowHeight": 34, "overscan": 6, "expected": 19, "expectedAttribute": 19, "rendered": 19, "heightMatchesDeclared": true, "rowsMatchExpected": true },
+  "sessions": { "total": 43, "virtualized": "true", "declaredHeight": 280, "viewportHeight": 280, "rowHeight": 56, "overscan": 6, "expected": 11, "expectedAttribute": 11, "rendered": 11, "heightMatchesDeclared": true, "rowsMatchExpected": true },
   "sessionTabs": 4,
-  "runHistory": { "total": 47, "virtualized": "true", "viewportHeight": 280, "rowHeight": 40, "overscan": 6, "expected": 13, "rendered": 13 },
+  "runHistory": { "total": 47, "virtualized": "true", "declaredHeight": 280, "viewportHeight": 280, "rowHeight": 40, "overscan": 6, "expected": 13, "expectedAttribute": 13, "rendered": 13, "heightMatchesDeclared": true, "rowsMatchExpected": true },
   "settings": { "heading": "本机设置", "workspaceRoot": "~/PiDockTasks", "showsConfigDir": true },
   "errors": [],
   "expectationMismatches": []
@@ -140,7 +143,7 @@
 
 **根因。** `VirtualList.tsx` 把 `style={{ height: viewportHeight }}` 写在滚动元素上，而 `ResizeObserver` 回调又把 `entry.contentRect.height` 写回同一个 state。`contentRect` 是 **content box**，而 Tailwind preflight 的 `box-sizing: border-box` 下 `style.height` 是 **border-box**。因此任何带边框的调用方（`UsagePage.tsx` 传入 `className="rounded-md border border-line"`）每次回调都比上次少 2px：测 418 → 写 418 → content 变 416 → …. 无边框的两个调用方（`SchedulesPage` 执行记录 13/13、`Modals` 会话列表 11/11）因为 content == border 而恰好稳定，正好解释了为什么只有 `/usage` 塌陷。
 
-**修复。** 改为**测 border box**：新增纯函数 `resolveViewportHeight()`，按 `borderBoxSize?.[0]?.blockSize` → `getBoundingClientRect().height` → `contentRect.height` 取第一个正值并取整；同时在滚动元素上显式写 `boxSizing: "border-box"`，使「所写即所测」不依赖宿主 preflight。导出 `viewportWindowSize()` 作为 `ceil(h/r)+overscan` 的单一来源（备用行渲染与实测脚本共用）。组件另暴露 `data-viewport-height/data-row-height/data-overscan/data-expected-rows` 供脚本核对。**未**采取丢边框、硬编码声明高度或改用无边框内层包装——前两者掩盖问题，后者仍需与内容盒语义对齐且会增加一层 DOM。
+**修复。** 改为**测 border box**：新增纯函数 `resolveViewportHeight()`，按 `borderBoxSize?.[0]?.blockSize` → `getBoundingClientRect().height` → `contentRect.height` 取第一个正值并取整；同时在滚动元素上显式写 `boxSizing: "border-box"`，使「所写即所测」不依赖宿主 preflight。导出 `viewportWindowSize()` 作为组件内部 `ceil(h/r)+overscan` 的单一来源（备用行渲染与虚拟窗口共用）。**实测脚本并未 import 该函数**，而是在 Node 侧独立重算同一公式，并通过脚本断言 `data-expected-rows === 脚本计算的 expected` 与单元测试钉住 19/13/11 这两个已知期望值来保持两处一致；上一版「与实测脚本共用」的说法不准确，已更正。组件另暴露 `data-declared-height/data-viewport-height/data-row-height/data-overscan/data-expected-rows`，实测脚本断言 `viewportHeight === declaredHeight`（防收缩）且 `rendered === ceil(viewportHeight/rowHeight)+overscan`（防窗口错误）。**未**采取丢边框、硬编码声明高度或改用无边框内层包装——前两者掩盖问题，后者仍需与内容盒语义对齐且会增加一层 DOM。
 
 **为何可测。** 以前 `src/test/setup.ts` 把 `ResizeObserver` no-op，反馈环在 CI 不可能发生。本轮改为 `src/test/resizeObserver.ts` 的可控 stub：保留观察者契约，按元素当前 `style.height` 推导 border box，并由 `simulateVerticalBorder(el, px)` 声明边框宽度，因此 `notifyResize(el)` 可以重现真实的「写回 → 再通知」循环。
 
@@ -245,7 +248,37 @@
 | 11 | 锚点离底仅程序化 | 增加真实滚轮手势离底用例 | `scripts/verify-anchor.mjs`、`anchor-follow-verification.json` |
 | 12 | 上轮提交类型与内容不符 | 本轮按实际内容拆分为 `fix/test/docs/build` 等诚实 scope | 见下方「本轮提交」 |
 
-> **证据可复现性。** `measurements.json`、`anchor-follow-verification.json`、`brand-mark-verification.json`、`capture-errors.json` 在修好的代码上重跑可逐字节复现（本机已验证）；唯一不稳定项是 `renderer/task-deploy.png`：审批面板把 `expiresAt`（`Date.now() + 24h`）渲染为 `toLocaleString` 文本，截图内容随运行时刻变化。这是渲染层的刻意行为，不是随机证据。
+> **证据可复现性（第三轮更正）。** 上一版声称上述 JSON「可逐字节复现」，实际当时只核对了键值，并未逐字节比对。现更正为：这些 JSON 在**本机**重跑可复现到键值一致，但不声称跨主机逐字节一致，也未做逐字节比对。已知时间相关字段：`renderer/task-deploy.png` 的审批面板把 `expiresAt`（`Date.now() + 24h` 经 `toLocaleString`）渲染为文本，截图随运行时刻变化；`approvals[].expiresAt/requestedAt`、`runs[].startedAt`、`sessions[].lastActivity`、`usage[].at`、`scheduledRuns[].at` 等由 `Date.now()`/`new Date()` 产生的 ISO 时间同理。四道 `--force` 检查、证据脚本与三处变异验证的实际输出见 [`verification-log.md`](evidence/renderer-baseline-2026-09-22/verification-log.md)。
+
+## 第三次整改（两轴复核第三轮）：规格复原与证据严谨性
+
+第三轮无未决缺陷；本轮处置（A）两条被错误记为取舍的复原项与（B）证据严谨性修复，均有测试或可重跑证据。
+
+### A 规格复原（第三轮）
+
+两条上一版记为「明确取舍」的流程已在**适配层内存**中复原，未新增传输/协议；实现与测试：
+
+| 复原项 | 实现位置 | 对应原型 | 测试/证据 |
+| --- | --- | --- | --- |
+| A1 环境作用域编辑与保存 | `pages/EnvPage.tsx`（三个作用域标签页＋可编辑表＋差异预览入口）、`stores/envDrafts.ts`（按 项目/环境/作用域/任务 的草稿）、`data/configRows.ts`（KEY 校验、差异分类、版本递增纯函数）、`data/memoryHost.ts`（`saveEnvironmentConfig`/`adoptLatestTemplate`，共享模板保存递增版本、任务保留采用版本）、`components/Modals.tsx`（`config-diff` 模态） | `closure.js:32`、`README.md:27,49`、`ui-prototype-review.md:148` | `test/configRows.test.ts`（9）、`test/env.test.tsx`（5）、`test/adapter.test.ts`（层写入与版本递增）。截图 `renderer/env.png` |
+| A2 普通目录项目与任务 | `data/directories.ts`（链接名/路径/仅目录判定纯函数）、`data/memoryHost.ts`（`setProjectDirectories`/`setTaskDirectories`/`createTask`/`createDirectoryFileReference`、清理预览追加软链接行）、`pages/ProjectPage.tsx`＋`components/Modals.tsx`（目录登记、任务目录选择、新建任务）、`pages/TaskPage.tsx`＋`components/ToolPanels.tsx`（`TASK · 普通目录` 头部与目录面板） | `directories.js:10,12,13,14,15,16,19,21,29`、`ui-prototype-review.md:207-225` | `test/directories.test.ts`（7）、`test/directoriesFlow.test.tsx`（7）。截图 `renderer/task-directory.png` |
+
+- 生效配置解析改为**按层组合**：`memoryHost.ts` 的 `resolveServiceConfig()` 依 仓库默认配置 → 共享模板 → 本机私有 → 任务覆盖 → 运行时端口 依次覆盖，每行保留 `source`，因此编辑并保存共享模板后只读视图随之变化。
+- 明确排除（属后续工单）：服务启动配方写入与从 `.vscode` 导入（见「未复原项（明确取舍）」）。
+- 内存复原**不代表** 已验磁盘目录存在性、读写权限、真实软链接创建与大小写别名（见未测边界 #12）。
+
+### B 证据严谨性
+
+| # | 修复 | 位置 |
+| --- | --- | --- |
+| B1 | 单独发布 `data-declared-height`，实测断言 `viewportHeight === declaredHeight` 且 `rendered === ceil(h/r)+overscan`，任一不满足非零退出 | `components/VirtualList.tsx`、`scripts/measure-baseline.mjs` |
+| B2 | 运行日志落盘（四道 `--force`、证据脚本、三处变异验证） | `docs/evidence/renderer-baseline-2026-09-22/verification-log.md` |
+| B3 | 「可逐字节复现」软化为「本机键值可复现」并列出时间相关字段 | 本文「证据可复现性（第三轮更正）」及上节 |
+| B4 | 「这两项」改为与表行数一致的「该项」 | 「未复原项（明确取舍）」 |
+| B5 | 更正 `viewportWindowSize()` 「与实测脚本共用」的不实说法：两处独立重算，用 `data-expected-rows` 交叉断言与单元测试钉住期望值 | 本文「虚拟列表高度反馈环」、`test/virtualList.test.tsx` |
+| B6 | `capture.mjs` 记录意图路由而不是 `page.url()` | `scripts/capture.mjs` |
+| B7 | `CHROME`/`BASE`/`OUT`/`VIEWPORT` 抽到 `scripts/evidence.mjs`；原型侧错误显式告警 | `scripts/evidence.mjs` 与四个脚本 |
+| B8 | 记录 `getBoundingClientRect()` 为 transform 后测量的残余风险 | 未测边界 #13 |
 
 ## 未测边界（诚实清单）
 
@@ -260,8 +293,10 @@
 7. **π 居中**：已断言 1440×900、本机 Chrome 下字形中心与徽标中心对齐（偏移 0）；未在其他字体栈、DPI、操作系统的像素级渲染下验证，也未做基准图对比。
 8. **并发 / 断线 / 时钟**：未验证多会话并发、断线重连、定时时钟补跑；适配层为内存单实例。
 9. **代码高亮**：Shiki 在 jsdom 与 dev server 验证，未在 Electron 沙箱渲染进程中验证。
-10. **未复原的原型流程**：环境与服务的 作用域标签页／可编辑配置表／真实保存、服务启动配方／导入、普通目录任务布局——**未实现也未验证**，属上面「未复原项（明确取舍）」列出的有意差异，不得当成已对齐。
-11. **错误留存范围**：`capture-errors.json` 显示渲染层 13 页无 page/console 错误（已补内联 favicon 消除唯一的 `/favicon.ico` 404）；原型侧静态服务器仍有一条同样的 favicon 404，因为 `prototypes/` 只读未修，不计入渲染层结论。
+10. **已复原的原型流程的运行时部分**：环境作用域编辑、普通目录任务布局已在**内存**复原并验证；但落盘/权限/符号链接仍**未实现也未验证**（见下）。服务启动配方与 `.vscode` 导入仍属上面「未复原项（明确取舍）」。
+11. **错误留存范围**：`capture-errors.json` 显示渲染层 14 页无 page/console 错误（已补内联 favicon 消除唯一的 `/favicon.ico` 404）；原型侧静态服务器仍有一条同样的 favicon 404，因为 `prototypes/` 只读未修，不计入渲染层结论；`capture.mjs` 已对该原型侧错误显式告警（`prototypeErrorsAnnounced: true`）。
+12. **普通目录的磁盘语义**：本轮只在内存复原布局与数据，**未验证** 目录真实存在性、读写权限、真实软链接创建、大小写别名（case alias）行为与原生目录选择；原型同样未验证这些（`ui-prototype-review.md:215`），原生目录选择属后续工单。
+13. **`getBoundingClientRect()` 是 transform 之后的测量（残余风险）**：`resolveViewportHeight()` 的 rect 回退值是 `getBoundingClientRect().height`，会包含外层 `transform`（如 `scaleY()`）的效果。若未来调用方对虚拟列表施加 `scaleY()` 类变换，回写的会是变换后的高度。当前四个调用方都没有对列表施加变换，因此这是**待记录的风险而非缺陷**；若出现此类调用方，应改用 `borderBoxSize`/`contentBoxSize` 或 `offsetHeight`。
 
 ## 工具链
 
@@ -303,7 +338,7 @@ node packages/renderer/scripts/verify-brand.mjs
 python3 -m http.server 4319 --bind 127.0.0.1   # URL: http://127.0.0.1:4319/?variant=A
 ```
 
-浏览器自动化一律使用 `playwright-core` + 本机 `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`（脚本内可用 `CHROME_PATH` 覆盖），未下载任何浏览器。
+浏览器自动化一律使用 `playwright-core` + 本机 `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`（脚本内可用 `CHROME_PATH` 覆盖），未下载任何浏览器。第三轮整改又用 `--force` 重跑了上述四道检查与四个证据脚本，并把完整输出（含三处变异验证）写入 [`docs/evidence/renderer-baseline-2026-09-22/verification-log.md`](evidence/renderer-baseline-2026-09-22/verification-log.md)。
 
 ## 本轮提交（第二轮整改）
 
@@ -318,5 +353,18 @@ python3 -m http.server 4319 --bind 127.0.0.1   # URL: http://127.0.0.1:4319/?var
 | `9e8e3c7` | `test(renderer)` | π 居中与真实滚轮验证、证据错误与期望值留存 |
 | `e2c00fe` | `build(workspace)` | lint 缓存输入纳入证据脚本 |
 | `521c68c` | `test(renderer)` | 重新生成实测、锚点与品牌证据 |
+
+均提交在 `main`，未 push；未勾选 issue #3 验收项，未关闭 issue #3。
+
+## 本轮提交（第三轮整改）
+
+第三轮整改按内容拆分提交：
+
+| 提交 | 类型 | 内容 |
+| --- | --- | --- |
+| `67b2357` | `fix(renderer)` | 单独发布 `data-declared-height` 并让实测断言高度不收缩；`capture.mjs` 记录意图路由、原型侧错误告警；证据脚本常量抽到 `scripts/evidence.mjs` |
+| `b91be46` | `feat(renderer)` | 在内存适配层复原环境作用域编辑（作用域标签页/可编辑表/差异预览/版本递增）与普通目录项目与任务布局（登记校验与锁定、软链接快照、仅目录任务页、清理只保留目标） |
+| `70e4f7a` | `test(renderer)` | 重新生成密集场景/锚点/品牌/截图证据，并写入 `verification-log.md` |
+| （本次 docs 提交） | `docs(renderer)` | 删除两条错误的「明确取舍」并记录复原项；更正可复现性、共享函数与「这两项」措辞；记录 `getBoundingClientRect()` 残余风险 |
 
 均提交在 `main`，未 push；未勾选 issue #3 验收项，未关闭 issue #3。
