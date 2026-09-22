@@ -8,7 +8,24 @@ export type RunState =
   | "rejected"
   | "expired";
 
-export type Permission = "write" | "read";
+/**
+ * Session permission tier, mirroring the prototype's `permissionModes`
+ * (`permissions.js`): 只读 / 默认权限 / 自动执行. `read` is the read-only tier
+ * that gates edits, commands and browsers; `default` asks before side effects;
+ * `auto` runs task-scoped reads/writes/commands without per-action prompts.
+ */
+export type Permission = "read" | "default" | "auto";
+
+/** How a model exposes reasoning levels (prototype's thinking mode). */
+export type ThinkingMode = "auto" | "none" | "custom";
+
+export type ModelThinking = {
+  mode: ThinkingMode;
+  /** Selectable levels when `mode === "custom"`; empty means follow the catalog. */
+  levels: string[];
+  /** Default level; the session may override it. */
+  default: string;
+};
 
 export type ServiceMode = "local" | "remote";
 
@@ -33,9 +50,11 @@ export type TaskType = "normal" | "scheduled";
 
 export type Reference = {
   id: string;
-  kind: "file" | "directory" | "snippet";
+  kind: "file" | "directory" | "snippet" | "attachment" | "skill";
   label: string;
   detail: string;
+  /** In-memory preview URL for a pasted/selected image attachment; never uploaded. */
+  previewUrl?: string;
 };
 
 export type MessageRole = "user" | "agent" | "system";
@@ -90,6 +109,8 @@ export type Session = {
   unread: number;
   lastActivity: string;
   messages: Message[];
+  /** Session-scoped reasoning level override; falls back to the model default. */
+  thinking?: string;
 };
 
 export type Service = {
@@ -104,7 +125,13 @@ export type Service = {
   resolved: ResolvedConfigEntry[];
 };
 
-export type Repository = { id: string; name: string; baseBranch: string };
+export type Repository = {
+  id: string;
+  name: string;
+  baseBranch: string;
+  /** Machine-local checkout path; the prototype keeps this in local settings. */
+  localPath?: string;
+};
 
 /** Files surfaced by the task file panel; the preview travels with the mock data. */
 export type WorkspaceFile = {
@@ -148,11 +175,14 @@ export type Task = {
   browserPages: BrowserPage[];
   terminalSeed: string[];
   cleanupAvailableAt?: string;
+  /** Illustrative child-agent records keyed by session id; view-only. */
+  subagentsBySession?: Record<string, Subagent[]>;
 };
 
 export type Project = {
   id: string;
   name: string;
+  description: string;
   repositories: Repository[];
   directories: ProjectDirectory[];
   taskIds: string[];
@@ -162,6 +192,7 @@ export type Environment = {
   id: string;
   projectId: string;
   name: string;
+  description: string;
   templateVersion: string;
   /** Shared template layer (`shared`). */
   variables: ConfigEntry[];
@@ -185,6 +216,23 @@ export type ServiceRecipe = {
   runtime: string;
   /** e.g. `使用项目脚本启动` / `读取仓库默认 config.yaml`. */
   startNote: string;
+  /** 运行类型: 常驻服务 / 准备步骤 / 一次性命令 (prototype `recipeDialog`). */
+  runType: string;
+  /** 健康检查: gRPC health / HTTP / TCP (prototype `recipeDialog`). */
+  healthCheck: string;
+  /** 依赖地址绑定说明, e.g. `INVOICE_SERVICE_ENDPOINT → invoice-service`. */
+  dependencyBinding: string;
+};
+
+export type ProviderModel = {
+  id: string;
+  /** Display name; absent means the model ID is shown (prototype's default-follow behaviour). */
+  name?: string;
+  contextWindow: number;
+  /** Declares image input support; the composer refuses image sends otherwise. */
+  supportsImages?: boolean;
+  /** Optional reasoning configuration; absent means the catalog is unknown. */
+  thinking?: ModelThinking;
 };
 
 export type ProviderProfile = {
@@ -192,7 +240,8 @@ export type ProviderProfile = {
   name: string;
   protocol: string;
   baseUrl: string;
-  models: { id: string; contextWindow: number }[];
+  enabled: boolean;
+  models: ProviderModel[];
 };
 
 export type UsageRecord = {
@@ -244,7 +293,27 @@ export type Capability = {
   name: string;
   source: string;
   scope: string;
-  status: "enabled" | "disabled" | "update-available";
+  /** `pending-review` mirrors the prototype's 待审阅: added but not yet enabled. */
+  status: "enabled" | "disabled" | "update-available" | "pending-review";
+};
+
+export type SubagentEvent =
+  | { kind: "message"; role: string; time: string; text: string }
+  | { kind: "tool"; name: string; time: string; command: string; output: string };
+
+/** Read-only illustrative child-agent record (the prototype never launches real agents). */
+export type Subagent = {
+  id: string;
+  name: string;
+  status: "running" | "completed" | "waiting" | "failed" | "stopped";
+  summary: string;
+  assignment: string;
+  model: string;
+  provider: string;
+  started: string;
+  mode: string;
+  events: SubagentEvent[];
+  result?: string;
 };
 
 export type RemoteDevice = {
@@ -273,6 +342,8 @@ export type AttentionItem = {
 };
 
 export type Workspace = {
+  /** Machine-registered repositories; a project links a subset of these. */
+  repositories: Repository[];
   projects: Project[];
   tasks: Task[];
   environments: Environment[];

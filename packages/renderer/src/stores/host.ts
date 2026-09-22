@@ -1,9 +1,15 @@
 import { create } from "zustand";
 import type {
+  AddCapabilityInput,
+  AddTaskSourcesInput,
   CreateTaskInput,
   HostAdapter,
   ProjectDirectoryInput,
   SaveEnvironmentConfigInput,
+  SaveEnvironmentInput,
+  SaveProjectInput,
+  SaveProviderInput,
+  SaveScheduleInput,
   SaveServiceRecipeInput,
   SendMessageResult,
 } from "../data/hostAdapter";
@@ -12,11 +18,17 @@ import type {
   Approval,
   ApprovalStatus,
   AttentionItem,
+  Capability,
   CleanupItem,
+  Environment,
   LocalSettings,
+  Permission,
   Project,
   ProjectDirectory,
+  ProviderProfile,
   Reference,
+  Schedule,
+  ServiceMode,
   ScheduledRun,
   ServiceRecipe,
   Session,
@@ -41,6 +53,7 @@ type HostState = {
   session: (taskId: string, sessionId: string) => Session | undefined;
   project: (projectId: string) => Project | undefined;
   createFileReference: (taskId: string) => Promise<Reference>;
+  setRepositoryPath: (repositoryId: string, localPath: string) => Promise<void>;
   createDirectoryFileReference: (taskId: string, directoryId: string) => Promise<Reference>;
   runTerminalCommand: (taskId: string, command: string) => Promise<string[]>;
   sendMessage: (
@@ -59,6 +72,7 @@ type HostState = {
   renameSession: (taskId: string, sessionId: string, name: string) => Promise<void>;
   createSession: (taskId: string) => Promise<Session>;
   setServiceRunning: (taskId: string, serviceId: string, running: boolean) => Promise<void>;
+  setServiceMode: (taskId: string, serviceId: string, mode: ServiceMode) => Promise<void>;
   setScheduleEnabled: (scheduleId: string, enabled: boolean) => Promise<void>;
   runScheduleNow: (scheduleId: string) => Promise<ScheduledRun>;
   setCapabilityEnabled: (capabilityId: string, enabled: boolean) => Promise<void>;
@@ -66,6 +80,19 @@ type HostState = {
   loadCleanupPreview: (taskId: string) => Promise<CleanupItem[]>;
   saveEnvironmentConfig: (input: SaveEnvironmentConfigInput) => Promise<void>;
   adoptLatestTemplate: (taskId: string) => Promise<void>;
+  saveProject: (input: SaveProjectInput) => Promise<Project>;
+  deleteProject: (projectId: string) => Promise<void>;
+  saveEnvironment: (input: SaveEnvironmentInput) => Promise<Environment>;
+  deleteEnvironment: (environmentId: string) => Promise<void>;
+  addCapability: (input: AddCapabilityInput) => Promise<Capability>;
+  saveProvider: (input: SaveProviderInput) => Promise<ProviderProfile>;
+  removeProvider: (providerId: string) => Promise<void>;
+  setSessionPermission: (taskId: string, sessionId: string, permission: Permission) => Promise<void>;
+  setSessionModel: (taskId: string, sessionId: string, providerId: string, model: string) => Promise<void>;
+  setSessionThinking: (taskId: string, sessionId: string, level: string) => Promise<void>;
+  compactSessionContext: (taskId: string, sessionId: string) => Promise<void>;
+  saveSchedule: (input: SaveScheduleInput) => Promise<Schedule>;
+  addTaskSources: (taskId: string, input: AddTaskSourcesInput) => Promise<void>;
   saveServiceRecipe: (input: SaveServiceRecipeInput) => Promise<ServiceRecipe>;
   importVscodeConfig: (environmentId: string) => Promise<ServiceRecipe[]>;
   setProjectDirectories: (projectId: string, rows: ProjectDirectoryInput[]) => Promise<ProjectDirectory[]>;
@@ -110,6 +137,10 @@ export const useHostStore = create<HostState>((set, get) => ({
       ?.sessions.find((item) => item.id === sessionId),
   project: (projectId) => get().workspace?.projects.find((item) => item.id === projectId),
   createFileReference: (taskId) => get().adapter.createFileReference(taskId),
+  setRepositoryPath: async (repositoryId, localPath) => {
+    await get().adapter.setRepositoryPath(repositoryId, localPath);
+    await get().refresh();
+  },
   createDirectoryFileReference: (taskId, directoryId) => get().adapter.createDirectoryFileReference(taskId, directoryId),
   runTerminalCommand: (taskId, command) => get().adapter.runTerminalCommand(taskId, command),
 
@@ -172,6 +203,11 @@ export const useHostStore = create<HostState>((set, get) => ({
     await get().refresh();
   },
 
+  setServiceMode: async (taskId, serviceId, mode) => {
+    await get().adapter.setServiceMode(taskId, serviceId, mode);
+    await get().refresh();
+  },
+
   setScheduleEnabled: async (scheduleId, enabled) => {
     await get().adapter.setScheduleEnabled(scheduleId, enabled);
     await get().refresh();
@@ -204,6 +240,76 @@ export const useHostStore = create<HostState>((set, get) => ({
 
   adoptLatestTemplate: async (taskId) => {
     await get().adapter.adoptLatestTemplate(taskId);
+    await get().refresh();
+  },
+
+  saveProject: async (input) => {
+    const project = await get().adapter.saveProject(input);
+    await get().refresh();
+    return project;
+  },
+
+  deleteProject: async (projectId) => {
+    await get().adapter.deleteProject(projectId);
+    await get().refresh();
+  },
+
+  saveEnvironment: async (input) => {
+    const environment = await get().adapter.saveEnvironment(input);
+    await get().refresh();
+    return environment;
+  },
+
+  deleteEnvironment: async (environmentId) => {
+    await get().adapter.deleteEnvironment(environmentId);
+    await get().refresh();
+  },
+
+  addCapability: async (input) => {
+    const capability = await get().adapter.addCapability(input);
+    await get().refresh();
+    return capability;
+  },
+
+  saveProvider: async (input) => {
+    const provider = await get().adapter.saveProvider(input);
+    await get().refresh();
+    return provider;
+  },
+
+  removeProvider: async (providerId) => {
+    await get().adapter.removeProvider(providerId);
+    await get().refresh();
+  },
+
+  setSessionPermission: async (taskId, sessionId, permission) => {
+    await get().adapter.setSessionPermission(taskId, sessionId, permission);
+    await get().refresh();
+  },
+
+  setSessionModel: async (taskId, sessionId, providerId, model) => {
+    await get().adapter.setSessionModel(taskId, sessionId, providerId, model);
+    await get().refresh();
+  },
+
+  setSessionThinking: async (taskId, sessionId, level) => {
+    await get().adapter.setSessionThinking(taskId, sessionId, level);
+    await get().refresh();
+  },
+
+  compactSessionContext: async (taskId, sessionId) => {
+    await get().adapter.compactSessionContext(taskId, sessionId);
+    await get().refresh();
+  },
+
+  saveSchedule: async (input) => {
+    const schedule = await get().adapter.saveSchedule(input);
+    await get().refresh();
+    return schedule;
+  },
+
+  addTaskSources: async (taskId, input) => {
+    await get().adapter.addTaskSources(taskId, input);
     await get().refresh();
   },
 

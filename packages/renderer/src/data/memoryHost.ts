@@ -7,13 +7,18 @@ import type {
   CleanupItem,
   ConfigEntry,
   ConfigScope,
+  Environment,
   HostEvent,
   LocalSettings,
   Message,
+  Permission,
+  ServiceMode,
   Project,
   ProjectDirectory,
+  ProviderProfile,
   Reference,
   RemoteDevice,
+  Repository,
   ResolvedConfigEntry,
   RunRecord,
   RunState,
@@ -23,16 +28,23 @@ import type {
   Service,
   ServiceRecipe,
   Session,
+  Subagent,
   Task,
   UsageRecord,
   Workspace,
   WorkspaceFile,
 } from "./types";
 import type {
+  AddCapabilityInput,
+  AddTaskSourcesInput,
   CreateTaskInput,
   HostAdapter,
   ProjectDirectoryInput,
   SaveEnvironmentConfigInput,
+  SaveEnvironmentInput,
+  SaveProjectInput,
+  SaveProviderInput,
+  SaveScheduleInput,
   SaveServiceRecipeInput,
   SendMessageResult,
   UsageFilter,
@@ -184,6 +196,7 @@ function seedProjects(): Project[] {
     {
       id: "atlas",
       name: "Atlas Web",
+      description: "微服务开发工作台",
       repositories: [
         { id: "front-monorepo", name: "front-monorepo", baseBranch: "main" },
         { id: "invoice-service", name: "invoice-service", baseBranch: "main" },
@@ -196,10 +209,28 @@ function seedProjects(): Project[] {
     {
       id: "orbit",
       name: "Orbit API",
+      description: "延迟与用量排查",
       repositories: [{ id: "orbit-api", name: "orbit-api", baseBranch: "main" }],
       directories: [],
       taskIds: ["latency"],
     },
+  ];
+}
+
+/**
+ * Machine-registered repositories, mirroring the prototype's global `repos`
+ * list. Projects link a subset; the edit dialog disables repos a task uses so a
+ * live task's worktree is never unlinked silently.
+ */
+function seedRepositories(): Repository[] {
+  // Machine-local checkout paths, mirroring the prototype's 「本机仓库绑定」
+  // sample values (`app.js` `project-bind`). Display-only, never read from disk.
+  return [
+    { id: "front-monorepo", name: "front-monorepo", baseBranch: "main", localPath: "/Users/leonz3n/Workspace/adber/front-monorepo" },
+    { id: "invoice-service", name: "invoice-service", baseBranch: "main", localPath: "/Users/leonz3n/Workspace/adber/invoice-service" },
+    { id: "shipment-service", name: "shipment-service", baseBranch: "release/2026.09", localPath: "/Users/leonz3n/Workspace/adber/shipment-service" },
+    { id: "apis", name: "apis", baseBranch: "main" },
+    { id: "orbit-api", name: "orbit-api", baseBranch: "main" },
   ];
 }
 
@@ -223,6 +254,9 @@ function atlasRecipes(prefix: string): ServiceRecipe[] {
     repo,
     runtime,
     startNote,
+    runType: "常驻服务",
+    healthCheck: runtime === "Go" ? "gRPC health" : "HTTP",
+    dependencyBinding: index < 2 ? "本地依赖指向当前任务" : "共享测试环境",
   }));
 }
 
@@ -231,7 +265,7 @@ function baseSession(id: string, name: string, overrides: Partial<Session> = {})
     id,
     name,
     archived: false,
-    permission: "write",
+    permission: "default",
     providerId: "provider-anthropic",
     model: "Claude Sonnet",
     contextUsed: 24.8,
@@ -254,7 +288,7 @@ function historySessions(count: number, archivedFrom: number): Session[] {
   return Array.from({ length: count }, (_, index) =>
     baseSession(`history-${index + 1}`, `历史会话 ${String(index + 1).padStart(2, "0")}`, {
       archived: index >= archivedFrom,
-      permission: index % 3 === 0 ? "read" : "write",
+      permission: index % 3 === 0 ? "read" : "default",
       lastActivity: `2026-09-${String(20 - (index % 20)).padStart(2, "0")}T${String(9 + (index % 9)).padStart(2, "0")}:00:00+08:00`,
     }),
   );
@@ -316,6 +350,58 @@ function conversationHistory(): Message[] {
   }));
 }
 
+/** Illustrative child-agent records for the release task's main session (view-only). */
+function releaseSubagents(): Record<string, Subagent[]> {
+  return {
+    main: [
+      {
+        id: "query-chain",
+        name: "查询链路分析",
+        status: "running",
+        summary: "正在核对 BFF 到 invoice、shipment 的调用关系",
+        assignment: "梳理对账单详情查询链路，确认运单账号字段来源。只读检查，不修改文件；将关键文件和结论交回主 Agent。",
+        model: "Claude Sonnet",
+        provider: "Anthropic 官方",
+        started: "10:25",
+        mode: "只读分析",
+        events: [
+          { kind: "message", role: "主 Agent", time: "10:25", text: "请检查 invoice-service 与 shipment-service 中对账单详情的同步查询，列出运单账号的数据来源和相关文件。" },
+          { kind: "message", role: "Subagent", time: "10:25", text: "已接收任务，将从详情接口和 shipment 查询入口检查字段传递。" },
+          {
+            kind: "tool",
+            name: "搜索调用入口",
+            time: "10:26",
+            command: "search · invoice-service / shipment-service",
+            output: "示例匹配：\ninvoice-service/internal/service/detail.go\nshipment-service/internal/service/shipment.go",
+          },
+        ],
+      },
+      {
+        id: "ui-field",
+        name: "前端字段检查",
+        status: "completed",
+        summary: "已完成：确认详情页字段映射与空值展示",
+        assignment: "检查前端对账单详情中运单账号的展示与空值处理。只读分析，将发现回传主 Agent。",
+        model: "Claude Sonnet",
+        provider: "Anthropic 官方",
+        started: "10:25",
+        mode: "只读分析",
+        events: [
+          { kind: "message", role: "主 Agent", time: "10:25", text: "请检查 front-monorepo 的详情字段映射和空值展示，不修改代码。" },
+          {
+            kind: "tool",
+            name: "读取详情组件",
+            time: "10:26",
+            command: "read · front-monorepo/src/detail.ts",
+            output: "示例片段：\naccount: response.account\n展示层在字段为空时显示占位符。",
+          },
+        ],
+        result: "已向主 Agent 返回：前端直接读取 account；需要结合后端响应确认空值处理。",
+      },
+    ],
+  };
+}
+
 function seedTasks(): Task[] {
   const sessions = seedSessions();
   const atlasDocs = toTaskDirectory({ id: "atlas-docs", name: "Atlas 设计资料", path: "/Users/leonz3n/Workspace/atlas-docs" });
@@ -333,11 +419,12 @@ function seedTasks(): Task[] {
       directories: [atlasDocs],
       configOverrides: [{ key: "LOCAL_PORT", value: "5173", secret: false }],
       archived: false,
-      permission: "write",
+      permission: "default",
       services: makeServices("release", "testing", true),
       sessions: sessions.release,
       activeSessionId: "main",
       unread: 2,
+      subagentsBySession: releaseSubagents(),
       ...taskAssets(),
     },
     {
@@ -353,7 +440,7 @@ function seedTasks(): Task[] {
       directories: [],
       configOverrides: [],
       archived: false,
-      permission: "write",
+      permission: "default",
       services: makeServices("checkout", "testing", false),
       sessions: sessions.checkout,
       activeSessionId: "main",
@@ -394,7 +481,7 @@ function seedTasks(): Task[] {
       directories: [],
       configOverrides: [],
       archived: false,
-      permission: "write",
+      permission: "default",
       services: makeServices("latency", "orbit-testing", false),
       sessions: sessions.latency,
       activeSessionId: "main",
@@ -416,7 +503,7 @@ function seedTasks(): Task[] {
       directories: [atlasDocs],
       configOverrides: [],
       archived: false,
-      permission: "write",
+      permission: "default",
       services: [],
       sessions: [baseSession("main", "实现与验证")],
       activeSessionId: "main",
@@ -467,6 +554,7 @@ const cleanupByTask: Record<string, CleanupItem[]> = {
 };
 
 class MemoryHost implements HostAdapter {
+  private repositories: Repository[] = seedRepositories();
   private projects = seedProjects();
   private tasks = seedTasks();
   private environments = [
@@ -474,6 +562,7 @@ class MemoryHost implements HostAdapter {
       id: "testing",
       projectId: "atlas",
       name: "测试环境",
+      description: "本地联调使用的远程测试依赖",
       templateVersion: "v12",
       variables: [{ key: "LOG_LEVEL", value: "debug", secret: false }],
       privateVariables: [{ key: "INVOICE_ACCESS_TOKEN", value: "iv_live_9f2c8ba7d41e", secret: true }],
@@ -483,6 +572,7 @@ class MemoryHost implements HostAdapter {
       id: "dev",
       projectId: "atlas",
       name: "开发环境",
+      description: "日常开发与远程开发依赖",
       templateVersion: "v11",
       variables: [{ key: "LOG_LEVEL", value: "info", secret: false }],
       privateVariables: [],
@@ -492,20 +582,31 @@ class MemoryHost implements HostAdapter {
       id: "orbit-testing",
       projectId: "orbit",
       name: "测试环境",
+      description: "默认环境",
       templateVersion: "v4",
       variables: [{ key: "LOG_LEVEL", value: "warn", secret: false }],
       privateVariables: [],
       recipes: [
-        { id: "orbit-testing-recipe-1", name: "orbit-api", repo: "orbit-api", runtime: "Go", startNote: "读取仓库默认 config.yaml" },
+        {
+          id: "orbit-testing-recipe-1",
+          name: "orbit-api",
+          repo: "orbit-api",
+          runtime: "Go",
+          startNote: "读取仓库默认 config.yaml",
+          runType: "常驻服务",
+          healthCheck: "gRPC health",
+          dependencyBinding: "共享测试环境",
+        },
       ],
     },
     {
       // Deliberately unreferenced: no task adopts it, which is the case that
       // hides 任务覆盖 (a task override cannot target another environment) and
-      // the case the environment-delete rule is about.
+      // the case that environment deletion is allowed for.
       id: "staging-preview",
       projectId: "atlas",
       name: "预发布环境",
+      description: "预发布演练",
       templateVersion: "v3",
       variables: [{ key: "RELEASE_CHANNEL", value: "canary", secret: false }],
       privateVariables: [],
@@ -513,14 +614,15 @@ class MemoryHost implements HostAdapter {
     },
   ];
 
-  private providers = [
+  private providers: ProviderProfile[] = [
     {
       id: "provider-anthropic",
       name: "Anthropic 官方",
       protocol: "anthropic-messages",
       baseUrl: "https://api.anthropic.com",
+      enabled: true,
       models: [
-        { id: "Claude Sonnet", contextWindow: 200 },
+        { id: "Claude Sonnet", contextWindow: 200, supportsImages: true },
         { id: "Claude Haiku", contextWindow: 200 },
       ],
     },
@@ -529,6 +631,7 @@ class MemoryHost implements HostAdapter {
       name: "OpenAI 兼容网关",
       protocol: "openai-responses",
       baseUrl: "https://gateway.example.com/v1",
+      enabled: true,
       models: [{ id: "团队轻量模型", contextWindow: 16 }],
     },
     {
@@ -536,7 +639,14 @@ class MemoryHost implements HostAdapter {
       name: "本地推理",
       protocol: "openai-chat-completions",
       baseUrl: "http://127.0.0.1:11434/v1",
-      models: [{ id: "本地 Qwen", contextWindow: 32 }],
+      enabled: true,
+      models: [
+        {
+          id: "本地 Qwen",
+          contextWindow: 32,
+          thinking: { mode: "custom", levels: ["off", "low", "medium", "high"], default: "medium" },
+        },
+      ],
     },
   ];
 
@@ -550,7 +660,7 @@ class MemoryHost implements HostAdapter {
       prompt: "核对发布前检查清单：构建、测试、配置差异和待合并分支。",
       providerId: "provider-anthropic",
       model: "Claude Sonnet",
-      permission: "write",
+      permission: "default",
       enabled: true,
       nextRun: "2026-09-25T15:00:00+08:00",
     },
@@ -737,10 +847,14 @@ class MemoryHost implements HostAdapter {
 
   async getWorkspace(): Promise<Workspace> {
     return {
+      repositories: this.repositories.map((item) => ({ ...item })),
       projects: this.projects.map((item) => ({ ...item, directories: item.directories.map((directory) => ({ ...directory })) })),
       tasks: this.tasks.map((item) => this.projectTask(item)),
-      environments: this.environments.map((item) => ({ ...item, recipes: item.recipes.map((recipe) => ({ ...recipe })) })),
-      providers: this.providers.map((item) => ({ ...item })),
+      environments: this.environments.map((item) => ({
+        ...item,
+        recipes: item.recipes.map((recipe) => ({ ...recipe })),
+      })),
+      providers: this.providers.map((item) => ({ ...item, models: item.models.map((model) => ({ ...model })) })),
       schedules: this.schedules.map((item) => ({ ...item })),
       scheduledRuns: this.scheduledRuns.map((item) => ({ ...item })),
       capabilities: this.capabilities.map((item) => ({ ...item })),
@@ -944,7 +1058,9 @@ class MemoryHost implements HostAdapter {
       id: this.nextId("session"),
       name: "新会话",
       archived: false,
-      permission: task.permission,
+      // New sessions always start at 默认权限 (the prototype's `sessionPermission`
+      // fallback for a non-read-only session), not the task's last tier.
+      permission: "default",
       providerId: this.providers[0].id,
       model: this.providers[0].models[0].id,
       contextUsed: 0,
@@ -1043,6 +1159,17 @@ class MemoryHost implements HostAdapter {
     const task = this.task(taskId);
     const service = task?.services.find((item) => item.id === serviceId);
     if (service) service.running = running;
+  }
+
+  async setServiceMode(taskId: string, serviceId: string, mode: ServiceMode) {
+    const task = this.task(taskId);
+    const service = task?.services.find((item) => item.id === serviceId);
+    if (!service) return;
+    // Switching the dependency target stops the instance and invalidates the
+    // simulated page verification (prototype `data-action="service-mode"`).
+    service.mode = mode;
+    service.running = false;
+    service.configSource = mode === "local" ? service.configSource : "远程依赖 · 未在本任务启动";
   }
 
   async getSchedules() {
@@ -1193,6 +1320,9 @@ class MemoryHost implements HostAdapter {
       repo: recipe.repo?.trim() || undefined,
       runtime: recipe.runtime.trim() || "Node.js",
       startNote: recipe.startNote.trim(),
+      runType: recipe.runType.trim() || "常驻服务",
+      healthCheck: recipe.healthCheck.trim() || "HTTP",
+      dependencyBinding: recipe.dependencyBinding.trim(),
     };
     environment.recipes = existing
       ? environment.recipes.map((item) => (item.id === next.id ? next : item))
@@ -1221,6 +1351,9 @@ class MemoryHost implements HostAdapter {
         repo: repository.name,
         runtime: index % 2 === 0 ? "Node.js" : "Go",
         startNote: "从 .vscode 导入 · 读取仓库默认 config.yaml",
+        runType: "常驻服务",
+        healthCheck: "HTTP",
+        dependencyBinding: "",
       });
     });
     environment.recipes = [...environment.recipes, ...added];
@@ -1270,7 +1403,278 @@ class MemoryHost implements HostAdapter {
     });
   }
 
-  async createTask({ projectId, name, repoIds, directoryIds, environmentId, workspaceKey }: CreateTaskInput): Promise<Task> {
+  /** Validate ordinary-directory rows the same way for project create and edit. */
+  private normalizeDirectories(rows: ProjectDirectoryInput[]): ProjectDirectory[] {
+    const seen = new Set<string>();
+    const next: ProjectDirectory[] = [];
+    for (const row of rows) {
+      const name = row.name.trim();
+      const path = row.path.trim();
+      if (!name || !validWorkspaceRoot(path)) throw new Error("请填写每个普通目录的名称和完整路径");
+      const normalized = normalizeDirectoryPath(path);
+      if (seen.has(normalized)) throw new Error("请勿重复添加同一路径");
+      seen.add(normalized);
+      next.push({ id: row.id ?? this.nextId("dir"), name, path });
+    }
+    return next;
+  }
+
+  async saveProject({ id, name, description, repositoryIds, directories }: SaveProjectInput): Promise<Project> {
+    const projectName = name.trim();
+    if (!projectName) throw new Error("请填写项目名称");
+    if (this.projects.some((item) => item.id !== id && item.name === projectName)) {
+      throw new Error("已有同名项目，请使用其他名称");
+    }
+    const nextDirectories = this.normalizeDirectories(directories);
+    const repositories = repositoryIds
+      .map((repoId) => this.repositories.find((item) => item.id === repoId))
+      .filter((item): item is Repository => Boolean(item));
+    if (id) {
+      const project = this.projects.find((item) => item.id === id);
+      if (!project) throw new Error("项目不存在");
+      // A repository or directory a task uses cannot be unlinked under it (the
+      // prototype disables those checkboxes / removes); keep tasks consistent.
+      for (const task of this.tasks) {
+        if (task.projectId !== id) continue;
+        for (const repoId of task.repos) {
+          if (!repositories.some((item) => item.id === repoId)) {
+            throw new Error("任务使用中的仓库不能解除关联");
+          }
+        }
+        for (const directory of task.directories) {
+          const updated = nextDirectories.find((item) => item.id === directory.id);
+          if (!updated || updated.name !== directory.name || updated.path !== directory.path) {
+            throw new Error("任务使用中的普通目录不能修改名称或路径");
+          }
+        }
+      }
+      project.name = projectName;
+      project.description = description.trim();
+      project.repositories = repositories;
+      project.directories = nextDirectories;
+      return { ...project, directories: project.directories.map((item) => ({ ...item })) };
+    }
+    const project: Project = {
+      id: this.nextId("project"),
+      name: projectName,
+      description: description.trim(),
+      repositories,
+      directories: nextDirectories,
+      taskIds: [],
+    };
+    this.projects.push(project);
+    return { ...project, directories: project.directories.map((item) => ({ ...item })) };
+  }
+
+  async deleteProject(projectId: string): Promise<void> {
+    const project = this.projects.find((item) => item.id === projectId);
+    if (!project) throw new Error("项目不存在");
+    // Archived tasks still block deletion (the prototype counts them too).
+    const bound = this.tasks.filter((item) => item.projectId === projectId);
+    if (bound.length > 0) {
+      throw new Error(`还有 ${bound.length} 个关联任务（包含已归档任务），暂不能删除项目`);
+    }
+    this.projects = this.projects.filter((item) => item.id !== projectId);
+    this.environments = this.environments.filter((item) => item.projectId !== projectId);
+  }
+
+  async saveEnvironment({ id, projectId, name, description }: SaveEnvironmentInput): Promise<Environment> {
+    if (!this.projects.some((item) => item.id === projectId)) throw new Error("项目不存在");
+    const environmentName = name.trim();
+    if (!environmentName) throw new Error("请填写环境名称");
+    const siblings = this.environments.filter((item) => item.projectId === projectId);
+    if (siblings.some((item) => item.id !== id && item.name === environmentName)) {
+      throw new Error("当前项目已有同名环境");
+    }
+    if (id) {
+      const environment = this.environments.find((item) => item.id === id);
+      if (!environment) throw new Error("环境不存在");
+      // Renaming keeps every task's adopted template version and does not
+      // restart services (the prototype's `saveEnvironment` copies name/description only).
+      environment.name = environmentName;
+      environment.description = description.trim();
+      return { ...environment, recipes: environment.recipes.map((item) => ({ ...item })) };
+    }
+    const environment: Environment = {
+      id: this.nextId("env"),
+      projectId,
+      name: environmentName,
+      description: description.trim(),
+      templateVersion: "v1",
+      variables: [],
+      privateVariables: [],
+      recipes: [],
+    };
+    this.environments.push(environment);
+    return { ...environment };
+  }
+
+  async deleteEnvironment(environmentId: string): Promise<void> {
+    const environment = this.environments.find((item) => item.id === environmentId);
+    if (!environment) throw new Error("环境不存在");
+    const referencing = this.tasks.filter((item) => item.environmentId === environmentId);
+    if (referencing.length > 0) {
+      throw new Error(`${referencing.length} 个任务正在引用此环境（包含已归档任务），暂不能删除`);
+    }
+    this.environments = this.environments.filter((item) => item.id !== environmentId);
+  }
+
+  async addCapability({ kind, name, source, scope }: AddCapabilityInput): Promise<Capability> {
+    const capabilityName = name.trim();
+    const capabilitySource = source.trim();
+    if (!capabilityName || !capabilitySource) throw new Error("请填写名称和来源");
+    const capability: Capability = {
+      id: this.nextId("cap"),
+      kind,
+      name: capabilityName,
+      source: capabilitySource,
+      scope,
+      // Added disabled / pending review and never auto-loaded.
+      status: "pending-review",
+    };
+    this.capabilities = [...this.capabilities, capability];
+    return { ...capability };
+  }
+
+  async saveProvider({ id, name, protocol, baseUrl, enabled, models }: SaveProviderInput): Promise<ProviderProfile> {
+    const providerName = name.trim();
+    if (!providerName) throw new Error("请填写 Provider 名称");
+    if (models.length === 0) throw new Error("请至少填写一个模型");
+    if (models.some((model) => !model.id.trim())) throw new Error("模型 ID 不能为空");
+    if (models.some((model) => !Number.isSafeInteger(model.contextWindow) || model.contextWindow <= 0)) {
+      throw new Error("上下文窗口必须为正整数 Tokens");
+    }
+    if (new Set(models.map((model) => model.id.trim())).size !== models.length) {
+      throw new Error("同一 Provider 中的模型 ID 不可重复");
+    }
+    const existing = id ? this.providers.find((item) => item.id === id) : undefined;
+    if (id && !existing) throw new Error("Provider 不存在");
+    const next: ProviderProfile = {
+      id: existing?.id ?? this.nextId("provider"),
+      name: providerName,
+      protocol,
+      baseUrl: baseUrl.trim(),
+      enabled,
+      models: models.map((model) => {
+        const prior = existing?.models.find((item) => item.id === model.id.trim());
+        return {
+          id: model.id.trim(),
+          name: model.name?.trim() || undefined,
+          contextWindow: model.contextWindow,
+          supportsImages: model.supportsImages ?? prior?.supportsImages,
+          thinking: model.thinking ?? prior?.thinking,
+        };
+      }),
+    };
+    this.providers = existing
+      ? this.providers.map((item) => (item.id === next.id ? next : item))
+      : [...this.providers, next];
+    return { ...next, models: next.models.map((model) => ({ ...model })) };
+  }
+
+  async removeProvider(providerId: string): Promise<void> {
+    if (!this.providers.some((item) => item.id === providerId)) throw new Error("Provider 不存在");
+    this.providers = this.providers.filter((item) => item.id !== providerId);
+    // Sessions pointing at the removed provider fall back to the first one so
+    // they never reference a provider that no longer exists.
+    const fallback = this.providers[0];
+    for (const task of this.tasks) {
+      for (const session of task.sessions) {
+        if (session.providerId !== providerId) continue;
+        session.providerId = fallback?.id ?? "";
+        session.model = fallback?.models[0]?.id ?? "";
+        session.thinking = undefined;
+      }
+    }
+  }
+
+  async setSessionPermission(taskId: string, sessionId: string, permission: Permission): Promise<void> {
+    const session = this.session(taskId, sessionId);
+    if (!session) throw new Error("会话不存在");
+    session.permission = permission;
+  }
+
+  async setSessionModel(taskId: string, sessionId: string, providerId: string, model: string): Promise<void> {
+    const session = this.session(taskId, sessionId);
+    if (!session) throw new Error("会话不存在");
+    const provider = this.providers.find((item) => item.id === providerId);
+    if (!provider?.models.some((item) => item.id === model)) throw new Error("模型不可用");
+    session.providerId = providerId;
+    session.model = model;
+    session.thinking = undefined;
+  }
+
+  async setSessionThinking(taskId: string, sessionId: string, level: string): Promise<void> {
+    const session = this.session(taskId, sessionId);
+    if (!session) throw new Error("会话不存在");
+    session.thinking = level;
+  }
+
+  async compactSessionContext(taskId: string, sessionId: string): Promise<void> {
+    const session = this.session(taskId, sessionId);
+    if (!session) throw new Error("会话不存在");
+    // Simulated compaction (the prototype's `/compact` sets 9.2k); cumulative
+    // token consumption is deliberately preserved.
+    session.contextUsed = Math.min(session.contextUsed, 9.2);
+  }
+
+  async saveSchedule({ id, name, rule, timezone, prompt, providerId, model, permission }: SaveScheduleInput): Promise<Schedule> {
+    const schedule = this.schedules.find((item) => item.id === id);
+    if (!schedule) throw new Error("定时任务不存在");
+    const nextRule = rule.trim();
+    const nextPrompt = prompt.trim();
+    if (!nextRule) throw new Error("请填写执行周期");
+    if (!nextPrompt) throw new Error("请填写提示词");
+    schedule.rule = nextRule;
+    schedule.timezone = timezone;
+    schedule.prompt = nextPrompt;
+    schedule.providerId = providerId;
+    schedule.model = model;
+    schedule.permission = permission;
+    const nextName = name?.trim();
+    if (nextName) {
+      schedule.name = nextName;
+      const task = this.task(schedule.taskId);
+      if (task) task.name = nextName;
+    }
+    return { ...schedule };
+  }
+
+  async setRepositoryPath(repositoryId: string, localPath: string): Promise<void> {
+    const repository = this.repositories.find((item) => item.id === repositoryId);
+    if (!repository) throw new Error("仓库未登记");
+    const value = localPath.trim();
+    // The prototype only checks the path shape (directories.js `validWorkspaceRoot`).
+    if (value && !validWorkspaceRoot(value)) throw new Error("请填写完整的本机路径");
+    repository.localPath = value || undefined;
+  }
+
+  async addTaskSources(taskId: string, { repoIds, directoryIds }: AddTaskSourcesInput): Promise<void> {
+    const task = this.task(taskId);
+    if (!task) throw new Error("任务不存在");
+    const project = this.projects.find((item) => item.id === task.projectId);
+    if (!project) throw new Error("项目不存在");
+    const addedSources = repoIds.filter((id) => project.repositories.some((repository) => repository.id === id));
+    if (repoIds.length > 0 && addedSources.length === 0 && directoryIds.length === 0) {
+      throw new Error("请选择要追加的仓库或目录");
+    }
+    task.repos = [...new Set([...task.repos, ...addedSources])];
+    const existing = new Map(task.directories.map((directory) => [directory.id, directory]));
+    task.directories = directoryIds.map((id) => {
+      const prior = existing.get(id);
+      if (prior) return prior;
+      const registered = project.directories.find((item) => item.id === id);
+      if (!registered) throw new Error("目录不存在");
+      return toTaskDirectory(registered);
+    });
+    // A task that only had directories gains services when a repository is added.
+    if (task.repos.length > 0 && task.services.length === 0) {
+      const environment = this.environments.find((item) => item.id === task.environmentId);
+      task.services = makeServices(task.id, environment?.name ?? "", false);
+    }
+  }
+
+  async createTask({ projectId, name, repoIds, directoryIds, environmentId, workspaceKey, schedule }: CreateTaskInput): Promise<Task> {
     const project = this.projects.find((item) => item.id === projectId);
     if (!project) throw new Error("项目不存在");
     const taskName = name.trim();
@@ -1285,22 +1689,30 @@ class MemoryHost implements HostAdapter {
     const environment = this.environments.find((item) => item.id === targetEnvironmentId);
     const id = this.nextId("task");
     const assets = taskAssets();
+    const scheduled = Boolean(schedule);
+    if (schedule) {
+      if (!schedule.prompt.trim()) throw new Error("定时任务需要填写提示词");
+      if (!schedule.rule.trim()) throw new Error("请填写执行周期");
+      if (!schedule.providerId || !schedule.model) throw new Error("定时任务需要选择模型");
+    }
     const task: Task = {
       id,
       projectId,
       name: taskName,
       workspaceKey: workspaceKey ?? this.nextWorkspaceKey(),
       workspaceRoot: this.localSettings.workspaceRoot,
-      type: "normal",
+      type: scheduled ? "scheduled" : "normal",
       environmentId: targetEnvironmentId,
       templateVersion: environment?.templateVersion ?? "",
       repos,
       directories,
       configOverrides: [],
       archived: false,
-      permission: "write",
+      permission: schedule?.permission ?? "default",
       services: repos.length > 0 ? makeServices(id, environment?.name ?? "", false) : [],
-      sessions: [baseSession("main", "实现与验证")],
+      // A scheduled task starts with one placeholder session (the prototype's
+      // 「等待首次执行」); each trigger later creates its own session.
+      sessions: [baseSession("main", scheduled ? "等待首次执行" : "实现与验证")],
       activeSessionId: "main",
       unread: 0,
       files: repos.length > 0 ? assets.files : [],
@@ -1309,6 +1721,24 @@ class MemoryHost implements HostAdapter {
     };
     this.tasks.push(task);
     project.taskIds = [...project.taskIds, id];
+    if (schedule) {
+      this.schedules = [
+        {
+          id: this.nextId("schedule"),
+          taskId: id,
+          name: taskName,
+          rule: schedule.rule.trim(),
+          timezone: schedule.timezone || "Asia/Shanghai",
+          prompt: schedule.prompt.trim(),
+          providerId: schedule.providerId,
+          model: schedule.model,
+          permission: schedule.permission,
+          enabled: true,
+          nextRun: schedule.rule.trim(),
+        },
+        ...this.schedules,
+      ];
+    }
     return this.projectTask(task);
   }
 
