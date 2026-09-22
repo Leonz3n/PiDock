@@ -11,8 +11,8 @@
     "typecheck": "tsc -p tsconfig.build.json --noEmit",
     "test": "vitest run",
     "lint": "eslint . --max-warnings 0",
-    "versions": "electron . --print-versions",
-    "smoke": "electron . --smoke"
+    "versions": "electron . -- --print-versions",
+    "smoke": "electron . -- --smoke"
   },
   "dependencies": {
     "electron": "44.4.3"

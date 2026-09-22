@@ -1,3 +1,4 @@
+/* global require, process */
 /**
  * Minimal preload bridge (plain script, no imports).
  *
@@ -12,13 +13,16 @@
  * src/preload/allowlist.ts (unit-tested there).
  */
 
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- sandboxed preloads receive Electron through the built-in require.
+const { contextBridge, ipcRenderer } = require("electron");
+
 const BRIDGE_NAME = "pidock";
 const INVOKE_CHANNELS = ["shell/getVersions", "shell/hostPing"];
 const EVENT_CHANNELS = ["shell/hostStatus"];
 
-// Preload-only globals (NOT visible to the page itself). `contextBridge`
-// and `ipcRenderer` are injected by Electron into the isolated preload
-// world; only `window.pidock` is ever exposed to the page.
+// Preload-only capabilities (NOT visible to the page itself). Sandboxed
+// preloads receive Electron through the limited built-in `require`; only
+// `window.pidock` is exposed to the page.
 
 function isAllowedInvoke(channel) {
   return INVOKE_CHANNELS.indexOf(channel) !== -1;
@@ -32,6 +36,12 @@ function invoke(channel, args) {
 }
 
 const bridge = {
+  getSecurityState: function () {
+    return {
+      sandboxed: process.sandboxed === true,
+      contextIsolated: process.contextIsolated === true,
+    };
+  },
   getVersions: function () {
     return invoke("shell/getVersions");
   },
@@ -50,8 +60,6 @@ const bridge = {
   },
 };
 
-// `contextBridge` / `ipcRenderer` are preload globals injected by Electron;
-// they do not exist in a plain node typecheck context.
 // The sandboxed page cannot reach them; only this isolated script can.
 // NOTE: only `window.pidock` is exposed to the page. Do NOT add a second
 // exposeInMainWorld (e.g. raw ipcRenderer): the page must never gain an
