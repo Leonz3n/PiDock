@@ -1,5 +1,5 @@
 /**
- * Pi session channel for [PiDock 02] (#5), S2 slice.
+ * Pi session channel for [PiDock 02] (#5), S1 slice.
  *
  * Pure state machine for one task's single AgentSession in the utilityProcess
  * Host. It covers the spec boxes that do not need a real model:
@@ -63,6 +63,8 @@ export interface PiSessionSnapshot {
   permission: PiPermission;
   messages: PiMessage[];
   calls: PiCallRecord[];
+  approvals: PiApproval[];
+  runState: PiRunState;
   createdAt: string;
   updatedAt: string;
 }
@@ -106,7 +108,10 @@ export interface PiSessionOptions {
 export interface PiTurnInput {
   text: string;
   usageSource?: string;
-  execute?: (call: PiToolCall) => { target: string; contentVersion: string; output: string } | null;
+  tool?: string;
+  target?: string;
+  contentVersion?: string;
+  execute?: (call: PiToolCall) => { tool?: string; kind?: PiToolKind; target: string; contentVersion: string; output: string } | null;
 }
 
 export interface PiTurnResult {
@@ -195,12 +200,12 @@ export class PiSessionChannel {
   }
 
   /**
-   * Permission gate. Read-only denies writes/commands/browser; default asks
-   * for commands/browser; auto still refuses out-of-task targets. Unknown
-   * tools are never offered (deny). Permission changes apply to later calls
-   * only: the approval stores the requesting tier.
+   * Permission gate, side-effect free. Previews whether a tool call would be
+   * allowed/denied/asked; the `ask` case never creates the approval — the
+   * turn owns approval creation via `requestApproval` so previews cannot
+   * collide on anticipated call ids.
    */
-  gate(toolName: string, target: string, contentVersion: string, currentCallId?: string): PiGateDecision {
+  previewGate(toolName: string, target: string): PiGateDecision {
     const tool = isGatedTool(toolName);
     if (!tool) return { verdict: "deny", reason: `工具未接入门禁：${toolName}` };
     if (!targetInTask(this.taskDir, target)) {
@@ -210,25 +215,58 @@ export class PiSessionChannel {
       return { verdict: "deny", reason: `只读会话禁止${tool.kind === "write" ? "写入" : tool.kind === "command" ? "命令" : "浏览器操作"}` };
     }
     if (this.permission === "default" && (tool.kind === "command" || tool.kind === "browser")) {
-      piApprovalSequence += 1;
-      const approval: PiApproval = {
-        id: `approval-${piApprovalSequence}`,
-        // Inside a turn the caller passes the minted call id; standalone
-        // gate checks (form preview) anticipate the next turn's id.
-        callId: currentCallId ?? `call-${piCallSequence + 1}`,
-        taskId: this.taskId,
-        sessionId: this.sessionId,
-        tool: toolName,
-        target,
-        permissionAtRequest: this.permission,
-        contentVersion,
-        status: "pending",
-        executed: false,
-      };
-      this.approvals.push(approval);
-      return { verdict: "ask", approvalId: approval.id };
+      return { verdict: "ask", approvalId: "preview" };
     }
     return { verdict: "allow" };
+  }
+
+  /**
+   * Permission gate with approval creation. Read-only denies
+   * writes/commands/browser; default asks for commands/browser; auto still
+   * refuses out-of-task targets. Unknown tools are never offered (deny).
+   * Permission changes apply to later calls only: the approval stores the
+   * requesting tier.
+   */
+  gate(toolName: string, target: string, contentVersion: string, currentCallId?: string): PiGateDecision {
+    const preview = this.previewGate(toolName, target);
+    if (preview.verdict !== "ask") return preview;
+    const tool = isGatedTool(toolName);
+    if (!tool) return { verdict: "deny", reason: `\u5de5\u5177\u672a\u63a5\u5165\u95e8\u7981\uff1a${toolName}` };
+    piApprovalSequence += 1;
+    const approval: PiApproval = {
+      id: `approval-${piApprovalSequence}`,
+      // Inside a turn the caller passes the minted call id; standalone
+      // gate checks (form preview) anticipate the next turn's id.
+      callId: currentCallId ?? `call-${piCallSequence + 1}`,
+      taskId: this.taskId,
+      sessionId: this.sessionId,
+      tool: toolName,
+      target,
+      permissionAtRequest: this.permission,
+      contentVersion,
+      status: "pending",
+      executed: false,
+    };
+    this.approvals.push(approval);
+    return { verdict: "ask", approvalId: approval.id };
+  }
+
+  private requestApproval(toolName: string, target: string, contentVersion: string, callId: string): PiApproval {
+    piApprovalSequence += 1;
+    const approval: PiApproval = {
+      id: `approval-${piApprovalSequence}`,
+      callId,
+      taskId: this.taskId,
+      sessionId: this.sessionId,
+      tool: toolName,
+      target,
+      permissionAtRequest: this.permission,
+      contentVersion,
+      status: "pending",
+      executed: false,
+    };
+    this.approvals.push(approval);
+    return approval;
   }
 
   /**
@@ -258,20 +296,29 @@ export class PiSessionChannel {
     events.push("write-lock:acquired");
 
     try {
-      const toolCall = input.execute?.({ callId, tool: "fs.write", kind: "write", target: `${this.taskDir}/notes.md`, contentVersion: "v1" }) ?? null;
+      const plannedTool = input.tool ?? "fs.write";
+      const plannedKind: PiToolKind =
+        plannedTool === "exec.run" ? "command" : plannedTool === "browser.act" ? "browser" : plannedTool === "fs.read" ? "read" : "write";
+      const plannedTarget = input.target ?? `${this.taskDir}/notes.md`;
+      const plannedVersion = input.contentVersion ?? "v1";
+      const toolCall =
+        input.execute?.({ callId, tool: plannedTool, kind: plannedKind, target: plannedTarget, contentVersion: plannedVersion }) ?? null;
       if (toolCall) {
-        const decision = this.gate("fs.write", toolCall.target, toolCall.contentVersion, callId);
-        events.push(`gate:fs.write:${decision.verdict}`);
+        // The tool under gate is the executed tool: the script's return
+        // wins when it names one, otherwise the planned input tool.
+        const gatedTool = typeof (toolCall as { tool?: unknown }).tool === "string" ? (toolCall as { tool: string }).tool : plannedTool;
+        const decision = this.previewGate(gatedTool, toolCall.target);
+        events.push(`gate:${gatedTool}:${decision.verdict}`);
         if (decision.verdict === "deny") {
-          return this.finishTurn(call, "failed", `已拒绝写入 ${toolCall.target}，已有消息与代码保留。`);
+          return this.finishTurn(call, "failed", `已拒绝${gatedTool === "fs.write" ? "写入" : "调用"} ${toolCall.target}，已有消息与代码保留。`);
         }
         if (decision.verdict === "ask") {
           this.state = "approval";
-          const approval = this.approvals.find((item) => item.callId === callId && item.status === "pending");
+          const approval = this.requestApproval(gatedTool, toolCall.target, toolCall.contentVersion, callId);
           events.push("turn:awaiting-approval");
           return { state: "approval", call, approval };
         }
-        events.push(`tool:fs.write:${toolCall.target}`);
+        events.push(`tool:${gatedTool}:${toolCall.target}`);
       }
       return this.finishTurn(call, "done", `已按「${input.text}」完成检查。`);
     } catch {
@@ -331,12 +378,18 @@ export class PiSessionChannel {
       permission: this.permission,
       messages: this.messages.map((message) => ({ ...message })),
       calls: this.calls.map((call) => ({ ...call, events: [...call.events] })),
+      approvals: this.approvals.map((approval) => ({ ...approval })),
+      runState: this.state,
       createdAt: this.createdAt,
       updatedAt: this.now(),
     };
   }
 
-  /** Tasks and sessions persist separately; resume restores the exact session. */
+  /**
+   * Tasks and sessions persist separately; resume restores the exact session.
+   * Pending approvals never auto-replay: reopening expires them so the user
+   * must confirm again. `createdAt` is preserved from the saved snapshot.
+   */
   static restore(snapshot: PiSessionSnapshot, taskDir: string): PiSessionChannel {
     const channel = new PiSessionChannel({
       taskId: snapshot.taskId,
@@ -348,6 +401,15 @@ export class PiSessionChannel {
     });
     channel.messages = snapshot.messages.map((message) => ({ ...message }));
     channel.calls = snapshot.calls.map((call) => ({ ...call, events: [...call.events] }));
+    channel.approvals = (snapshot.approvals ?? []).map((approval) => ({
+      ...approval,
+      status: approval.status === "pending" ? "expired" : approval.status,
+      executed: approval.status === "approved" ? approval.executed : false,
+    }));
+    // A restored session never resumes mid-turn: approval turns settle to
+    // cancelled so history is kept but nothing replays.
+    channel.state = snapshot.runState === "approval" || snapshot.runState === "running" ? "cancelled" : snapshot.runState;
+    (channel as unknown as { createdAt: string }).createdAt = snapshot.createdAt;
     channel.messageSequence = snapshot.messages.length;
     return channel;
   }

@@ -55,6 +55,22 @@ import { directoryLinkPath, normalizeDirectoryPath, toTaskDirectory } from "./di
 
 const APPROVAL_TTL_MS = 24 * 60 * 60 * 1000;
 
+interface TaskLocks {
+  /** taskId -> owner sessionId currently holding the task write right. */
+  locks: Map<string, string>;
+}
+
+const taskLocks: TaskLocks = { locks: new Map() };
+
+/** Test seam: reset cross-session task locks. */
+export function resetTaskLocksForTests(): void {
+  taskLocks.locks.clear();
+}
+
+export function taskLockOwner(taskId: string): string | undefined {
+  return taskLocks.locks.get(taskId);
+}
+
 /** Local application settings live on the machine, not in a project shared template. */
 export const defaultWorkspaceRoot = "~/PiDockTasks";
 
@@ -958,6 +974,13 @@ class MemoryHost implements HostAdapter {
     const task = this.task(taskId);
     const session = this.session(taskId, sessionId);
     if (!task || !session) throw new Error("会话不存在");
+    // [PiDock 02] task-scoped write right: at most one running session per
+    // task. Same-session reruns still throw the single-session message;
+    // a different session of the same task gets the task-lock message.
+    const owner = taskLocks.locks.get(taskId);
+    if (owner !== undefined && owner !== sessionId) {
+      throw new Error("同一任务同时只能有一个会话执行，请先停止或等待当前会话");
+    }
     if (session.runState === "running") throw new Error("当前会话正在执行，请先停止");
 
     // [PiDock 02]: read-only sessions refuse side-effecting turns at the tool
@@ -974,6 +997,7 @@ class MemoryHost implements HostAdapter {
     };
     session.messages = [...session.messages, userMessage];
     session.runState = "running";
+    taskLocks.locks.set(taskId, sessionId);
     const record: RunRecord = {
       id: this.nextId("run"),
       taskId,
@@ -1036,6 +1060,15 @@ class MemoryHost implements HostAdapter {
     }
 
     session.runState = finalState;
+    // The task write right lasts until the turn settles (completed/failed
+    // keep it released immediately; approval keeps the session as owner
+    // until resolve/stop/archive). Awaiting approval is not a detached lock:
+    // stop/resolve/archive always clear it (see stopRun/resolveApproval).
+    if (finalState === "approval") {
+      taskLocks.locks.set(taskId, sessionId);
+    } else {
+      if (taskLocks.locks.get(taskId) === sessionId) taskLocks.locks.delete(taskId);
+    }
     // [PiDock 02]: from the first model call, record the stable call identity
     // (provider + model + usage source + events) so later Provider/usage work
     // can recover it instead of re-reading rendered text.
@@ -1074,6 +1107,7 @@ class MemoryHost implements HostAdapter {
     const session = this.session(taskId, sessionId);
     if (!session) return;
     session.runState = "stopped";
+    if (taskLocks.locks.get(taskId) === sessionId) taskLocks.locks.delete(taskId);
     const record = this.runs[sessionKeyOf(taskId, sessionId)];
     if (record) record.state = "stopped";
     this.emit({ type: "run-state", taskId, sessionId, state: "stopped", record });
@@ -1140,6 +1174,8 @@ class MemoryHost implements HostAdapter {
         this.emit({ type: "approval", taskId, sessionId: approval.sessionId, approval });
       }
     }
+    // Archiving releases the whole task's write right regardless of owner.
+    taskLocks.locks.delete(taskId);
     const schedule = this.schedules.find((item) => item.taskId === taskId);
     if (schedule) {
       schedule.enabled = false;
@@ -1174,6 +1210,14 @@ class MemoryHost implements HostAdapter {
     const record = this.runs[sessionKeyOf(next.taskId, next.sessionId)];
     if (record) {
       record.state = status === "approved" ? "running" : status === "expired" ? "expired" : "rejected";
+    }
+    // Approval settles the waiting turn: keep the lock only while the
+    // approved turn re-runs; rejected/expired release it so another session
+    // of the same task may run.
+    if (status === "approved") {
+      taskLocks.locks.set(next.taskId, next.sessionId);
+    } else if (taskLocks.locks.get(next.taskId) === next.sessionId) {
+      taskLocks.locks.delete(next.taskId);
     }
     this.emit({ type: "approval", taskId: next.taskId, sessionId: next.sessionId, approval: next });
     return next;
@@ -1782,6 +1826,9 @@ class MemoryHost implements HostAdapter {
 }
 
 export function createMemoryHost(): HostAdapter {
+  // Fresh adapter instances must not inherit a stale cross-session task
+  // lock from an earlier test/host (locks are module-scoped by design).
+  resetTaskLocksForTests();
   return new MemoryHost();
 }
 

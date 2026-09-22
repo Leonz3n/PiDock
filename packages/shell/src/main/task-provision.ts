@@ -102,6 +102,15 @@ function stripTrailingSeparators(root: string): string {
   return stripped.length > 0 ? stripped : root.trim();
 }
 
+/** Normalize `.\/` / trailing slashes / Windows case before comparing paths. */
+function normalizeWinPath(value: string): string {
+  const noDot = value.trim().replace(/\.([\\/])/g, "$1");
+  const stripped = noDot.replace(/[\\/]+$/, "");
+  const unified = stripped.replace(/\\/g, "/");
+  const withDrive = /^[A-Za-z]:\//.test(unified) ? unified[0].toUpperCase() + unified.slice(1) : unified;
+  return withDrive.length > 0 ? withDrive : value.trim();
+}
+
 /**
  * Resolve the effective task root. The default persists on the machine; a
  * per-creation override wins for this task only and never migrates tasks
@@ -130,6 +139,15 @@ export function checkDirIdConflict(dirId: string, usedDirIds: readonly string[])
   return null;
 }
 
+/** Single safe path component: no separators, no traversal, non-empty. */
+export function isSafeTaskChildName(name: string): boolean {
+  if (typeof name !== "string" || name.length === 0) return false;
+  if (name === "." || name === "..") return false;
+  if (name.includes("/") || name.includes("\\") || name.includes("\0")) return false;
+  if (name.trim() !== name) return false;
+  return true;
+}
+
 /** Preview the real paths before creation (what the form shows is what is stored). */
 export function previewTaskPaths(
   root: string,
@@ -137,6 +155,11 @@ export function previewTaskPaths(
   repoNames: readonly string[],
   linkNames: readonly string[],
 ): ProvisionPaths {
+  for (const name of [...repoNames, ...linkNames]) {
+    if (!isSafeTaskChildName(name)) {
+      throw new Error(`invalid-path: task child name must be a single safe component: ${name}`);
+    }
+  }
   const base = `${stripTrailingSeparators(root)}/${dirId}`;
   const worktrees: Record<string, string> = {};
   for (const name of repoNames) worktrees[name] = `${base}/${name}`;
@@ -158,7 +181,18 @@ export function buildTaskBranch(
     return { ok: true, branch: `${TASK_BRANCH_PREFIX}${dirId}` };
   }
   const branch = custom.trim();
-  if (/[\s~^:?*[\]\\]/.test(branch) || branch.startsWith("/") || branch.endsWith("/") || branch.includes("//")) {
+  // eslint-disable-next-line no-control-regex -- git ref rules forbid control chars; the class is the check.
+  const hasControlChar = /[\0-\x1f\x7f]/.test(branch);
+  if (
+    /[\s~^:?*[\]\\]/.test(branch) ||
+    branch.includes("..") ||
+    hasControlChar ||
+    branch.includes("@{") ||
+    branch.endsWith(".lock") ||
+    branch.startsWith("/") ||
+    branch.endsWith("/") ||
+    branch.includes("//")
+  ) {
     return { ok: false, error: { code: "invalid-branch", message: "任务分支格式不正确，请使用不含空格的分支名" } };
   }
   return { ok: true, branch };
@@ -183,9 +217,10 @@ export function pinBaseline(
 
 /** Guard: no plan may pull/merge/reset the main checkout directory. */
 export function assertProvisionPlanSafe(plan: ProvisionPlan): void {
+  const main = normalizeWinPath(plan.mainCheckoutDir);
   for (const op of plan.ops) {
     if (
-      op.cwd === plan.mainCheckoutDir &&
+      normalizeWinPath(op.cwd) === main &&
       (FORBIDDEN_MAIN_OPS as readonly string[]).includes(op.kind)
     ) {
       const error: ProvisionError = {
@@ -212,6 +247,9 @@ export interface WorktreePlanInput {
  * folder. Never touches the main checkout directory.
  */
 export function planWorktreeCreation(input: WorktreePlanInput): ProvisionPlan {
+  if (!isSafeTaskChildName(input.repoDir)) {
+    throw new Error(`invalid-path: repoDir must be a single safe component: ${input.repoDir}`);
+  }
   const worktreeDir = `${stripTrailingSeparators(input.taskDir)}/${input.repoDir}`;
   const plan: ProvisionPlan = {
     mainCheckoutDir: input.mainCheckoutDir,
