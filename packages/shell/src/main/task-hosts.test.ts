@@ -372,3 +372,34 @@ describe("PerTaskHostRegistry", () => {
     expect(registry.size).toBe(1);
   });
 });
+
+describe("#6 append routing (S4)", () => {
+  it("routes task/appendRepos to the resolved task folder without a new fork", async () => {
+    const spawns: Array<{ taskId: string; taskDir: string }> = [];
+    const { registry, spawn } = registryWith(() => "/tasks/task-abcdef12", spawns, TASK_RESULT);
+    const routed = await registry.routeTaskOp({
+      taskId: "task-abcdef12",
+      op: "task/appendRepos",
+      payload: {
+        repoSelections: [
+          { repoDir: "shipment", remote: "origin", remoteBranch: "main", mainCheckoutDir: "/src/shipment" },
+        ],
+        fetchedCommits: { shipment: "c0ffee1234" },
+      },
+    });
+    expect(routed).toEqual(TASK_RESULT);
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(spawns[0]).toEqual({ taskId: "task-abcdef12", taskDir: "/tasks/task-abcdef12" });
+  });
+
+  it("fails closed on unrecorded ids for append (no bootstrap except provision)", async () => {
+    const { registry } = registryWith(() => null, [], TASK_RESULT);
+    await expect(
+      registry.routeTaskOp({
+        taskId: "task-ghost",
+        op: "task/appendRepos",
+        payload: { repoSelections: [], fetchedCommits: {} },
+      }),
+    ).rejects.toThrow("unknown task");
+  });
+});
