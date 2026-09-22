@@ -21,17 +21,12 @@ import { readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { readTaskRecordOnDisk, type TaskDiskRecord } from "../host/task-store.js";
-import { isAbsoluteTaskRoot } from "./task-provision.js";
+import { isAbsoluteTaskRoot, normalizeTaskPath } from "./task-provision.js";
 
 /** Expand a leading `~/` against the home directory for filesystem use. */
 export function expandTaskRoot(root: string, home: string = homedir()): string {
   if (root.startsWith("~/")) return join(home, root.slice(2));
   return root;
-}
-
-function stripTrailingSeparators(value: string): string {
-  const stripped = value.replace(/[\\/]+$/, "");
-  return stripped.length > 0 ? stripped : value;
 }
 
 /**
@@ -67,6 +62,12 @@ export interface DiskTaskDirResolverDeps {
  * `taskDir` equals the scanned folder. Anything else (missing root,
  * unreadable/corrupt records, `taskDir` mismatch, non-absolute `taskDir`)
  * resolves to `null` so the caller fails closed with `unknown task`.
+ *
+ * Path equality uses `normalizeTaskPath` so POSIX/Windows spellings of the
+ * same folder (`/`, `\`, drive-letter case, trailing separators) match.
+ * The scan is a synchronous per-op directory read on the main thread
+ * (O(children) reads); acceptable for S2 task counts, revisit with an
+ * index/cache if task or session volume grows.
  */
 export function createDiskTaskDirResolver(
   rootDir: string,
@@ -93,7 +94,7 @@ export function createDiskTaskDirResolver(
       }
       if (!record || record.taskId !== taskId) continue;
       if (!isAbsoluteTaskRoot(record.taskDir)) continue;
-      if (stripTrailingSeparators(record.taskDir) !== stripTrailingSeparators(candidate)) continue;
+      if (normalizeTaskPath(record.taskDir) !== normalizeTaskPath(candidate)) continue;
       return candidate;
     }
     return null;
