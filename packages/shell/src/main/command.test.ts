@@ -48,3 +48,31 @@ describe("resolveShellCommand", () => {
     ).toThrow("conflicting shell command flags");
   });
 });
+
+describe("resolveShellCommand S3 smoke", () => {
+  it("recognizes the two-phase task browser smoke flag", () => {
+    expect(
+      resolveShellCommand(
+        ["/path/to/Electron", ".", "--", "--smoke-s3"],
+        {},
+      ),
+    ).toEqual({ kind: "task-browser-smoke" });
+  });
+
+  it("recognizes S3 smoke from the environment", () => {
+    expect(
+      resolveShellCommand(["/path/to/Electron", "."], {
+        PIDOCK_S3_SMOKE: "1",
+      }),
+    ).toEqual({ kind: "task-browser-smoke" });
+  });
+
+  it("rejects S3 smoke combined with another explicit mode", () => {
+    expect(() =>
+      resolveShellCommand(
+        ["/path/to/Electron", ".", "--", "--smoke-s3", "--smoke"],
+        {},
+      ),
+    ).toThrow("conflicting shell command flags");
+  });
+});

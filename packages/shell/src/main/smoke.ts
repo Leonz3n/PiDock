@@ -585,7 +585,7 @@ export async function runSmoke(workspaceId: string): Promise<SmokeReport> {
     child = host.child;
 
     stage = "trusted-window";
-    views = createTrustedWindow(workspaceId);
+    views = await createTrustedWindow(workspaceId);
     registerIpc(client, views.registry);
 
     stage = "window-load";
