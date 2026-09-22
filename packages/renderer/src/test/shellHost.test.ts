@@ -71,6 +71,11 @@ describe("shell host adapter selection", () => {
           },
         };
       }
+      // Host listing read (empty here — the synthetic pending approval
+      // merges underneath); resolve still rides `task/approve` by id.
+      if (op === "task/listApprovals") {
+        return { ok: true, payload: { approvals: [] } };
+      }
       return { ok: true, payload: {} };
     });
     const fallback = createMemoryHost();
@@ -89,8 +94,11 @@ describe("shell host adapter selection", () => {
     expect(await adapter.listApprovals("task-a")).toHaveLength(1);
     const resolved = await adapter.resolveApproval("approval-7", "approved");
     expect(resolved.status).toBe("approved");
-    expect(seen.map((entry) => entry.op)).toEqual(["task/sendMessage", "task/approve"]);
-    expect((seen[1].payload as Record<string, unknown>)).toMatchObject({ sessionId: "main", approvalId: "approval-7" });
+    // `listApprovals` rides the Host (`task/listApprovals`) before resolve,
+    // so the stub sees it ahead of `task/approve`; the resolve payload
+    // itself stays (taskId,sessionId,approvalId).
+    expect(seen.map((entry) => entry.op)).toEqual(["task/sendMessage", "task/listApprovals", "task/approve"]);
+    expect((seen[2].payload as Record<string, unknown>)).toMatchObject({ sessionId: "main", approvalId: "approval-7" });
     vi.unstubAllGlobals();
   });
 
@@ -98,6 +106,39 @@ describe("shell host adapter selection", () => {
     vi.stubGlobal("window", { pidock: { getVersions: async () => ({}) } });
     const fallback = createMemoryHost();
     expect(resolveHostAdapter(fallback)).toBe(fallback);
+    vi.unstubAllGlobals();
+  });
+
+  it("lists bridged approvals through task/listApprovals (Host round-trip)", async () => {
+    const seen: Array<{ taskId: string; op: string; payload?: Record<string, unknown> }> = [];
+    stubBridge(async (taskId, op, payload) => {
+      seen.push({ taskId, op, payload });
+      if (op === "task/listApprovals") {
+        return {
+          ok: true,
+          payload: {
+            approvals: [
+              { id: "approval-7", sessionId: "main", tool: "exec.run", target: "/tmp/task-abcdef12/run.sh", status: "pending", executed: false },
+            ],
+          },
+        };
+      }
+      if (op === "task/getApproval") {
+        return {
+          ok: true,
+          payload: {
+            approval: { id: "approval-7", sessionId: "main", tool: "exec.run", target: "/tmp/task-abcdef12/run.sh", status: "pending", executed: false },
+          },
+        };
+      }
+      return { ok: true, payload: {} };
+    });
+    const adapter = resolveHostAdapter(createMemoryHost());
+    const listed = await adapter.listApprovals("task-a");
+    expect(listed).toHaveLength(1);
+    expect(listed[0]).toMatchObject({ id: "approval-7", taskId: "task-a", sessionId: "main", title: "exec.run /tmp/task-abcdef12/run.sh" });
+    expect(await adapter.getApproval("approval-7")).toMatchObject({ id: "approval-7", taskId: "task-a" });
+    expect(seen.map((entry) => entry.op)).toEqual(["task/listApprovals", "task/getApproval"]);
     vi.unstubAllGlobals();
   });
 

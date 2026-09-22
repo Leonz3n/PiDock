@@ -39,6 +39,35 @@ beforeEach(() => {
   resetPiSequencesForTests();
 });
 
+describe("S6 final wiring: Host approval listing", () => {
+  it("lists persisted approvals across sessions and resolves one by id", () => {
+    const taskHost = host();
+    taskHost.provision(provisionInput());
+    // Session "main" mints a pending approval via an in-task exec target.
+    const turn = taskHost.sendMessage("main", "运行命令", {
+      tool: "exec.run",
+      target: `${TASK_DIR}/run.sh`,
+      execute: (call) => ({
+        tool: call.tool,
+        kind: call.kind,
+        target: call.target,
+        contentVersion: call.contentVersion,
+        output: "pending",
+      }),
+    });
+    expect(turn.state).toBe("approval");
+    const listed = taskHost.listApprovals();
+    expect(listed).toHaveLength(1);
+    expect(listed[0]).toMatchObject({ tool: "exec.run", target: `${TASK_DIR}/run.sh`, status: "pending", sessionId: "main" });
+    expect(taskHost.listApprovals("main")).toHaveLength(1);
+    expect(taskHost.listApprovals("other")).toHaveLength(0);
+    const found = taskHost.getApproval(turn.approvalId ?? "");
+    expect(found?.id).toBe(turn.approvalId);
+    expect(taskHost.getApproval("approval-404")).toBeUndefined();
+    expect(() => taskHost.getApproval(" ")).toThrow("invalid-payload");
+  });
+});
+
 // Seam: S2 Host wiring (provision persistence, Host-owned cross-session
 // lock, exact-session restore) + disk store shape.
 

@@ -1,6 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { boundWorkspaceId, buildHostEnv, buildToolPlannerSpec, DEFAULT_WORKSPACE_ID, routeHostTask, routeTaskBinding, toolPlannerSpecForHostDispatch, toolPlannerSpecForOp, validateHostTaskOp } from "./host-guards.js";
 
+// S6 final wiring: approval-listing reads ride `task/listApprovals` +
+// `task/getApproval` (fail-closed payloads; host.ts needs a parent port).
+describe("approval listing ops", () => {
+  it("accepts listApprovals with empty/absent filter and getApproval with an id", () => {
+    expect(validateHostTaskOp("task/listApprovals", {})).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/listApprovals", { sessionId: "main" })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/listApprovals", { sessionId: " " }).ok).toBe(false);
+    expect(validateHostTaskOp("task/listApprovals", "nope").ok).toBe(false);
+    expect(validateHostTaskOp("task/getApproval", { approvalId: "approval-1" })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/getApproval", { approvalId: " " }).ok).toBe(false);
+    expect(validateHostTaskOp("task/getApproval", {}).ok).toBe(false);
+  });
+});
+
 // Seam: Host process-boundary guards (workspace binding + per-op payloads).
 // host.ts itself requires a utilityProcess parent port, so the pure guards
 // live in host-guards.ts and are unit-tested here.

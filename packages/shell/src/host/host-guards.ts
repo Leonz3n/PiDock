@@ -376,6 +376,31 @@ export function validateHostTaskOp(
     }
     return { ok: true };
   }
+  // S6 final wiring: approval listing reads (`task/listApprovals` +
+  // `task/getApproval`) are Host-reachable so the renderer shell adapter
+  // lists real Host approvals instead of merging local synthetics. Both
+  // carry an optional `sessionId` filter (empty/absent = all sessions);
+  // anything else is fail-closed.
+  if (op === "task/listApprovals") {
+    if (payload !== undefined && !isRecord(payload)) {
+      return { ok: false, error: "invalid-payload: task/listApprovals payload must be an object" };
+    }
+    const record = isRecord(payload) ? payload : {};
+    const sessionId = record["sessionId"];
+    if (sessionId !== undefined && (typeof sessionId !== "string" || sessionId.trim().length === 0)) {
+      return { ok: false, error: "invalid-payload: task/listApprovals.sessionId must be a non-empty string" };
+    }
+    return { ok: true };
+  }
+  if (op === "task/getApproval") {
+    if (!isRecord(payload))
+      return { ok: false, error: "invalid-payload: task/getApproval requires a payload object" };
+    const approvalId = payload["approvalId"];
+    if (typeof approvalId !== "string" || approvalId.trim().length === 0) {
+      return { ok: false, error: "invalid-payload: task/getApproval.approvalId must be a non-empty string" };
+    }
+    return { ok: true };
+  }
   if (payload !== undefined && !isRecord(payload)) {
     return { ok: false, error: `invalid-payload: ${op} payload must be an object` };
   }

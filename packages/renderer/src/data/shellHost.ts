@@ -110,6 +110,49 @@ function toShellApproval(entry: PendingShellApproval): Approval {
   };
 }
 
+type HostApprovalRecord = {
+  id: string;
+  sessionId: string;
+  tool: string;
+  target: string;
+  status: string;
+  executed: boolean;
+};
+
+function asHostApprovalRecord(value: unknown): HostApprovalRecord | undefined {
+  const record = asRecord(value);
+  if (typeof record["id"] !== "string" || typeof record["sessionId"] !== "string") return undefined;
+  if (typeof record["tool"] !== "string" || typeof record["target"] !== "string") return undefined;
+  if (typeof record["status"] !== "string") return undefined;
+  return {
+    id: record["id"] as string,
+    sessionId: record["sessionId"] as string,
+    tool: record["tool"] as string,
+    target: record["target"] as string,
+    status: record["status"] as string,
+    executed: record["executed"] === true,
+  };
+}
+
+function toApprovalFromHostRecord(taskId: string, record: HostApprovalRecord): Approval {
+  const title = `${record.tool} ${record.target}`;
+  const requestedAt = new Date().toISOString();
+  return {
+    id: record.id,
+    taskId,
+    sessionId: record.sessionId,
+    title,
+    command: title,
+    cwd: "",
+    impact: "桌面壳 Host 审批",
+    payloadVersion: "v1",
+    status: record.status as Approval["status"],
+    executed: record.executed,
+    requestedAt,
+    expiresAt: new Date(Date.parse(requestedAt) + 15 * 60 * 1000).toISOString(),
+  };
+}
+
 export function createShellHostAdapter(fallback: HostAdapter): HostAdapter {
   // Shell turns never populate the memory fallback, so bridged approvals
   // are tracked here by (taskId, sessionId, approvalId) and resolved
@@ -117,6 +160,10 @@ export function createShellHostAdapter(fallback: HostAdapter): HostAdapter {
   // `listApprovals`/`getApproval` merge these synthetics so the UI can
   // render and resolve a shell approval without an approval-listing RPC.
   const pendingShellApprovals = new Map<string, PendingShellApproval>();
+  // Tasks known to have a shell Host (seen via sendMessage/listApprovals).
+  // `getApproval(approvalId)` names no task, so Host probing fans out
+  // over these ids; unknown ids fall back to memory, else fail closed.
+  const knownShellTaskIds = new Set<string>();
   return new Proxy(fallback, {
     get(target, property, receiver) {
       if (property === "sendMessage") {
@@ -156,6 +203,7 @@ export function createShellHostAdapter(fallback: HostAdapter): HostAdapter {
               ...(target ? { target } : {}),
               requestedAt: new Date().toISOString(),
             });
+            knownShellTaskIds.add(taskId);
           }
           return sent;
         };
@@ -189,12 +237,56 @@ export function createShellHostAdapter(fallback: HostAdapter): HostAdapter {
         return async (approvalId: string) => {
           const pending = pendingShellApprovals.get(approvalId);
           if (pending) return toShellApproval(pending);
+          // Bridged read first: the Host owns persisted approvals
+          // (`task/getApproval`); the memory fallback covers local-only
+          // fixtures, else fail closed with `undefined` (matches the
+          // `HostAdapter.getApproval` absent contract). `getApproval`
+          // names no task, so Host probing fans out over tasks this
+          // adapter has seen (`knownShellTaskIds`); only a `found`
+          // record counts — `{ok:false}` / malformed records never
+          // resolve (fall through to memory, never throw).
+          if (isShellConnected()) {
+            for (const trackedTask of [...knownShellTaskIds].sort()) {
+              const result = await shellTaskOp(trackedTask, "task/getApproval", { approvalId });
+              if (result.ok) {
+                const record = asHostApprovalRecord(asRecord(result.payload)["approval"]);
+                if (record) {
+                  knownShellTaskIds.add(trackedTask);
+                  return toApprovalFromHostRecord(trackedTask, record);
+                }
+              }
+            }
+          }
           return (target as HostAdapter).getApproval(approvalId);
         };
       }
       if (property === "listApprovals") {
         return async (taskId: string) => {
           const local = await (target as HostAdapter).listApprovals(taskId);
+          // Bridged listing first: real Host approvals (`task/listApprovals`)
+          // replace the synthetic merge; a failed RPC keeps the local
+          // synthetics + memory fixture merge (fail-open read, never throw).
+          if (isShellConnected()) {
+            const result = await shellTaskOp(taskId, "task/listApprovals", {});
+            if (result.ok) {
+              knownShellTaskIds.add(taskId);
+              const raw = asRecord(result.payload)["approvals"];
+              if (Array.isArray(raw)) {
+                const listed = raw
+                  .map(asHostApprovalRecord)
+                  .filter((record): record is HostApprovalRecord => record !== undefined)
+                  .map((record) => toApprovalFromHostRecord(taskId, record));
+                const listedIds = new Set(listed.map((approval) => approval.id));
+                // Merge local synthetics the Host does not (yet) know:
+                // the stub above returns `[]`, but a fresh `sendMessage`
+                // approval is tracked locally before the Host persists it.
+                const pending = [...pendingShellApprovals.values()]
+                  .filter((entry) => entry.taskId === taskId && !listedIds.has(entry.approvalId))
+                  .map(toShellApproval);
+                return [...listed, ...pending, ...local.filter((approval) => !listedIds.has(approval.id))];
+              }
+            }
+          }
           const shell = [...pendingShellApprovals.values()]
             .filter((entry) => entry.taskId === taskId)
             .map(toShellApproval);
