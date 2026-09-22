@@ -190,6 +190,55 @@ export function validateHostTaskOp(
         ok: false,
         error: "invalid-payload: task/provision requires a payload object",
       };
+    // #6 multi-repo + plain-dir fields (all optional, shape-checked here;
+    // semantic validation — per-repo pin gates, link snapshots — runs in
+    // `TaskWorkspaceHost.provision`). Unknown shapes fail closed.
+    for (const key of ["repoSelections", "fetchedCommits", "mainCheckouts", "plainDirs"] as const) {
+      const value = payload[key];
+      if (value === undefined) continue;
+      if (key === "repoSelections") {
+        if (
+          !Array.isArray(value) ||
+          !value.every(
+            (entry) =>
+              typeof entry === "object" &&
+              entry !== null &&
+              !Array.isArray(entry) &&
+              typeof (entry as Record<string, unknown>)["repoDir"] === "string" &&
+              typeof (entry as Record<string, unknown>)["remote"] === "string" &&
+              typeof (entry as Record<string, unknown>)["remoteBranch"] === "string" &&
+              typeof (entry as Record<string, unknown>)["mainCheckoutDir"] === "string",
+          )
+        ) {
+          return { ok: false, error: "invalid-payload: task/provision.repoSelections must be an array of {repoDir, remote, remoteBranch, mainCheckoutDir}" };
+        }
+        continue;
+      }
+      if (key === "plainDirs") {
+        if (
+          !Array.isArray(value) ||
+          !value.every(
+            (entry) =>
+              typeof entry === "object" &&
+              entry !== null &&
+              !Array.isArray(entry) &&
+              typeof (entry as Record<string, unknown>)["directoryId"] === "string" &&
+              typeof (entry as Record<string, unknown>)["sourcePath"] === "string",
+          )
+        ) {
+          return { ok: false, error: "invalid-payload: task/provision.plainDirs must be an array of {directoryId, sourcePath}" };
+        }
+        continue;
+      }
+      if (typeof value !== "object" || value === null || Array.isArray(value)) {
+        return { ok: false, error: `invalid-payload: task/provision.${key} must be a string->string map` };
+      }
+      for (const entry of Object.values(value as Record<string, unknown>)) {
+        if (typeof entry !== "string") {
+          return { ok: false, error: `invalid-payload: task/provision.${key} must be a string->string map` };
+        }
+      }
+    }
     // S2 dispatch shape: Host-owned provision fields (name/dirId/baseline).
     // The S1 transport shape (root/dirId) stays accepted for sender-side
     // compatibility until the renderer form migrates to the S2 fields.
@@ -218,6 +267,28 @@ export function validateHostTaskOp(
           error: `invalid-payload: task/provision.${key} must be a non-empty string`,
         };
       }
+    }
+    return { ok: true };
+  }
+  // #6 append + link probe (shape-checked here; semantic gates run Host-side).
+  if (op === "task/appendRepos") {
+    if (!isRecord(payload))
+      return { ok: false, error: "invalid-payload: task/appendRepos requires a payload object" };
+    if (!Array.isArray(payload["repoSelections"])) {
+      return { ok: false, error: "invalid-payload: task/appendRepos requires repoSelections" };
+    }
+    const fetched = payload["fetchedCommits"];
+    if (typeof fetched !== "object" || fetched === null || Array.isArray(fetched)) {
+      return { ok: false, error: "invalid-payload: task/appendRepos requires fetchedCommits" };
+    }
+    return { ok: true };
+  }
+  if (op === "task/probeLink") {
+    if (!isRecord(payload))
+      return { ok: false, error: "invalid-payload: task/probeLink requires a payload object" };
+    const sourcePath = payload["sourcePath"];
+    if (typeof sourcePath !== "string" || sourcePath.length === 0) {
+      return { ok: false, error: "invalid-payload: task/probeLink requires sourcePath" };
     }
     return { ok: true };
   }

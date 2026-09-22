@@ -567,6 +567,8 @@ export function registerIpc(
       }
       if (
         op !== "task/provision" &&
+        op !== "task/appendRepos" &&
+        op !== "task/probeLink" &&
         op !== "task/sendMessage" &&
         op !== "task/cancel" &&
         op !== "task/approve" &&

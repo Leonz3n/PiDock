@@ -45,6 +45,8 @@ export interface HostVersionsResult {
 /** Task-scoped operation routed to one task workspace Host. */
 export type HostTaskOp =
   | "task/provision"
+  | "task/appendRepos"
+  | "task/probeLink"
   | "task/sendMessage"
   | "task/cancel"
   | "task/approve"
@@ -116,6 +118,8 @@ export function isRequestMethod(value: unknown): value is RequestMethod {
 
 const HOST_TASK_OPS: readonly string[] = [
   "task/provision",
+  "task/appendRepos",
+  "task/probeLink",
   "task/sendMessage",
   "task/cancel",
   "task/approve",
