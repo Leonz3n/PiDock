@@ -181,7 +181,15 @@ function dispatchTaskOp(
         if (typeof sessionId !== "string" || typeof text !== "string") {
           return { ok: false, error: "invalid-payload: task/sendMessage requires sessionId/text" };
         }
-        const result = host.sendMessage(sessionId, text);
+        // S6 batch 1 turn options (all optional, validated by
+        // `validateHostTaskOp` above): per-turn provider/model selection
+        // plus structured usage for the persisted call record.
+        const turn: Record<string, unknown> = {};
+        for (const key of ["providerId", "model", "usageSource", "usage", "credentialRef"] as const) {
+          const value = record[key];
+          if (value !== undefined) turn[key] = value;
+        }
+        const result = host.sendMessage(sessionId, text, turn as never);
         return { ok: true, payload: { ...result } };
       }
       case "task/cancel": {

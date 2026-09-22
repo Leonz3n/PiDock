@@ -211,4 +211,75 @@ describe("PiSessionChannel turns and approvals", () => {
     expect(ownerDuringTurn).toBe("call-1");
     expect(session.writeLockOwner).toBeNull();
   });
+
+  it("records structured usage with a source and persists it across restore", () => {
+    const session = channel();
+    const turn = session.runTurn({
+      text: "检查构建",
+      usageSource: "actual",
+      usage: { input: 120, output: 45, cacheRead: 10 },
+    });
+    expect(turn.call.usage).toEqual({ input: 120, output: 45, cacheRead: 10, source: "actual" });
+    expect(turn.call.usageSource).toBe("actual");
+    const restored = PiSessionChannel.restore(session.snapshot(), TASK_DIR);
+    expect(restored.snapshot().calls[0].usage).toEqual({ input: 120, output: 45, cacheRead: 10, source: "actual" });
+  });
+
+  it("defaults unreported usage to zeroed counters and backfills legacy snapshots", () => {
+    const session = channel();
+    const turn = session.runTurn({ text: "检查构建" });
+    expect(turn.call.usage).toEqual({ input: 0, output: 0, cacheRead: 0, source: "test-double" });
+    const legacy = { ...session.snapshot(), calls: [{ ...session.snapshot().calls[0], usage: undefined }] };
+    const restored = PiSessionChannel.restore(legacy, TASK_DIR);
+    expect(restored.snapshot().calls[0].usage).toEqual({ input: 0, output: 0, cacheRead: 0, source: "unreported" });
+  });
+
+  it("streams the settled reply in chunks and always ends with a done frame", () => {
+    const session = channel();
+    const frames: { callId: string; text: string; done: boolean }[] = [];
+    const turn = session.runTurn({ text: "检查构建", stream: (chunk) => frames.push(chunk) });
+    expect(frames.length).toBeGreaterThan(1);
+    expect(frames[frames.length - 1]).toEqual({ callId: turn.call.callId, text: "", done: true });
+    expect(frames.slice(0, -1).every((frame) => frame.callId === turn.call.callId && !frame.done)).toBe(true);
+    expect(frames.slice(0, -1).map((frame) => frame.text).join("")).toBe(
+      session.snapshot().messages.find((message) => message.role === "agent")?.text ?? "",
+    );
+  });
+
+  it("applies a per-turn provider/model override to the minted call", () => {
+    const session = channel();
+    const turn = session.runTurn({ text: "检查构建", providerId: "provider-local", model: "pidock-default" });
+    expect(turn.call.providerId).toBe("provider-local");
+    expect(turn.call.model).toBe("pidock-default");
+    expect(session.snapshot().providerId).toBe("provider-local");
+  });
+
+  it("configures the provider with a credential reference and rejects unknown models", () => {
+    const session = channel();
+    session.configureProvider("provider-local", "pidock-default", "PIDOCK_PI_TOKEN");
+    expect(session.configuredCredentialRef).toBe("PIDOCK_PI_TOKEN");
+    expect(() => session.configureProvider("provider-local", "no-such-model")).toThrow("unknown model");
+    expect(() => session.configureProvider("provider-local", "pidock-default", "  ")).toThrow("credentialRef");
+    // Unknown providers fall back to the local default instead of stranding the session.
+    session.configureProvider("provider-future", "whatever");
+    expect(session.snapshot().providerId).toBe("provider-local");
+  });
+
+  it("keeps prior messages when an approval turn is cancelled", () => {
+    const session = channel();
+    session.setPermission("default");
+    const turn = session.runTurn({
+      text: "运行命令",
+      tool: "exec.run",
+      target: `${TASK_DIR}/run.sh`,
+      execute: (call) => ({ tool: call.tool, kind: call.kind, target: call.target, contentVersion: call.contentVersion, output: "x" }),
+    });
+    expect(turn.state).toBe("approval");
+    const before = session.snapshot().messages.length;
+    session.cancel();
+    expect(session.runState).toBe("cancelled");
+    expect(session.snapshot().messages.length).toBe(before);
+    expect(session.snapshot().messages.every((message) => typeof message.text === "string")).toBe(true);
+    expect(session.writeLockOwner).toBeNull();
+  });
 });

@@ -40,11 +40,21 @@ export interface PiToolCall {
   contentVersion: string;
 }
 
+export type PiUsageSource = "actual" | "estimated" | "unreported" | "test-double" | "approval";
+
+export interface PiCallUsage {
+  input: number;
+  output: number;
+  cacheRead: number;
+  source: PiUsageSource;
+}
+
 export interface PiCallRecord {
   callId: string;
   providerId: string;
   model: string;
   usageSource: string;
+  usage?: PiCallUsage;
   events: string[];
 }
 
@@ -103,11 +113,58 @@ export interface PiSessionOptions {
   model: string;
   permission?: PiPermission;
   now?: () => string;
+  /**
+   * Local credential reference for [PiDock 02] (#5), S6 batch 1.
+   *
+   * The Host stores only a reference (env key / keychain label), never the
+   * secret itself. Real-model wiring is out of scope: no live calls here.
+   */
+  credentialRef?: string;
+}
+
+export interface PiProviderProfile {
+  id: string;
+  name: string;
+  endpoint: string;
+  models: string[];
+}
+
+const KNOWN_PI_PROVIDERS: readonly PiProviderProfile[] = [
+  // `test-model` is the historical unit-test double; it stays listed so
+  // existing channel/task-host tests keep constructing sessions with it.
+  // Real-model wiring is out of scope for S6 batch 1 (test doubles only).
+  { id: "provider-local", name: "本地", endpoint: "local", models: ["pidock-default", "test-model"] },
+];
+
+/**
+ * Validate a provider/model selection for one session. Provider and model
+ * ids are non-empty; unknown providers fall back to the local default so
+ * a session always has a routable selection. Unknown models on a known
+ * provider are rejected (fail-closed) instead of silently coerced.
+ */
+export function resolveProviderSelection(
+  providerId: string,
+  model: string,
+): { providerId: string; model: string } {
+  const provider = KNOWN_PI_PROVIDERS.find((item) => item.id === providerId);
+  if (!provider) return { providerId: "provider-local", model: "pidock-default" };
+  if (!provider.models.includes(model)) {
+    throw new Error(`unknown model: ${model} for provider ${providerId}`);
+  }
+  return { providerId, model };
+}
+
+export function listKnownPiProviders(): PiProviderProfile[] {
+  return KNOWN_PI_PROVIDERS.map((item) => ({ ...item, models: [...item.models] }));
 }
 
 export interface PiTurnInput {
   text: string;
   usageSource?: string;
+  usage?: Partial<PiCallUsage>;
+  providerId?: string;
+  model?: string;
+  stream?: (chunk: { callId: string; text: string; done: boolean }) => void;
   tool?: string;
   target?: string;
   contentVersion?: string;
@@ -118,6 +175,33 @@ export interface PiTurnResult {
   state: PiRunState;
   call: PiCallRecord;
   approval?: PiApproval;
+}
+
+function normalizeCallUsage(source: string | undefined, usage: Partial<PiCallUsage> | undefined): PiCallUsage {
+  const normalized: PiUsageSource =
+    source === "actual" || source === "estimated" || source === "unreported" || source === "approval" ? source : "test-double";
+  const nonNegative = (value: unknown): number =>
+    typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0;
+  return {
+    input: nonNegative(usage?.input),
+    output: nonNegative(usage?.output),
+    cacheRead: nonNegative(usage?.cacheRead),
+    source: normalized,
+  };
+}
+
+/** Bounded settled-reply chunking (64 chars); terminal frame always sent. */
+function streamText(
+  stream: ((chunk: { callId: string; text: string; done: boolean }) => void) | undefined,
+  callId: string,
+  reply: string,
+): void {
+  if (!stream) return;
+  const CHUNK = 64;
+  for (let index = 0; index < reply.length; index += CHUNK) {
+    stream({ callId, text: reply.slice(index, index + CHUNK), done: false });
+  }
+  stream({ callId, text: "", done: true });
 }
 
 function isGatedTool(name: string): PiToolDefinition | undefined {
@@ -149,6 +233,7 @@ export class PiSessionChannel {
   private providerId: string;
   private model: string;
   private permission: PiPermission;
+  private credentialRef?: string;
   private readonly now: () => string;
   private readonly createdAt: string;
 
@@ -166,8 +251,16 @@ export class PiSessionChannel {
     this.taskId = options.taskId;
     this.sessionId = options.sessionId;
     this.taskDir = options.taskDir;
-    this.providerId = options.providerId;
-    this.model = options.model;
+    if (options.providerId.trim().length === 0) throw new Error("providerId must be non-empty");
+    if (options.model.trim().length === 0) throw new Error("model must be non-empty");
+    const selected = resolveProviderSelection(options.providerId, options.model);
+    const credentialRef = options.credentialRef?.trim();
+    if (options.credentialRef !== undefined && (credentialRef?.length ?? 0) === 0) {
+      throw new Error("credentialRef must be a non-empty reference when provided");
+    }
+    this.providerId = selected.providerId;
+    this.model = selected.model;
+    this.credentialRef = credentialRef === undefined || credentialRef.length === 0 ? undefined : credentialRef;
     this.permission = options.permission ?? "default";
     this.now = options.now ?? (() => new Date().toISOString());
     this.createdAt = this.now();
@@ -185,9 +278,21 @@ export class PiSessionChannel {
     this.permission = permission;
   }
 
-  configureProvider(providerId: string, model: string): void {
-    this.providerId = providerId;
-    this.model = model;
+  configureProvider(providerId: string, model: string, credentialRef?: string): void {
+    const selected = resolveProviderSelection(providerId, model);
+    const ref = credentialRef?.trim();
+    if (credentialRef !== undefined && (ref?.length ?? 0) === 0) {
+      throw new Error("credentialRef must be a non-empty reference when provided");
+    }
+    this.providerId = selected.providerId;
+    this.model = selected.model;
+    if (credentialRef !== undefined) {
+      this.credentialRef = (ref as string).length === 0 ? undefined : (ref as string);
+    }
+  }
+
+  get configuredCredentialRef(): string | undefined {
+    return this.credentialRef;
   }
 
   /** Shared task write lock: held by at most one call until its tools settle. */
@@ -273,19 +378,37 @@ export class PiSessionChannel {
    * Run one user turn with a scripted tool plan. The first model call mints
    * the stable call identity; every turn records provider/model/usage source
    * and its event trail. Cancellation and tool failure keep prior messages.
+   *
+   * Per-turn provider/model overrides apply before the call is minted, so
+   * the recorded call identity always names the model that actually ran.
+   * `usage` rides the call record as structured counters plus a source
+   * (`actual` vs `estimated` vs `unreported`; doubles use `test-double`),
+   * persisted with the session for later Provider/usage summaries.
+   * `stream`, when provided, receives the final agent reply in bounded
+   * chunks (plus a terminal `{ done: true }` frame) once the turn settles.
    */
   runTurn(input: PiTurnInput): PiTurnResult {
     if (this.state === "running" || this.state === "approval") {
       throw new Error("当前执行尚未结束，请先停止或确认");
     }
+    if (input.providerId !== undefined || input.model !== undefined) {
+      const selected = resolveProviderSelection(
+        input.providerId ?? this.providerId,
+        input.model ?? this.model,
+      );
+      this.providerId = selected.providerId;
+      this.model = selected.model;
+    }
     piCallSequence += 1;
     const callId = `call-${piCallSequence}`;
     const events: string[] = [`turn:start:${callId}`];
+    const usage = normalizeCallUsage(input.usageSource, input.usage);
     const call: PiCallRecord = {
       callId,
       providerId: this.providerId,
       model: this.model,
-      usageSource: input.usageSource ?? "test-double",
+      usageSource: usage.source,
+      usage,
       events,
     };
     this.calls.push(call);
@@ -310,7 +433,7 @@ export class PiSessionChannel {
         const decision = this.previewGate(gatedTool, toolCall.target);
         events.push(`gate:${gatedTool}:${decision.verdict}`);
         if (decision.verdict === "deny") {
-          return this.finishTurn(call, "failed", `已拒绝${gatedTool === "fs.write" ? "写入" : "调用"} ${toolCall.target}，已有消息与代码保留。`);
+          return this.finishTurn(call, "failed", `已拒绝${gatedTool === "fs.write" ? "写入" : "调用"} ${toolCall.target}，已有消息与代码保留。`, input.stream);
         }
         if (decision.verdict === "ask") {
           this.state = "approval";
@@ -320,9 +443,9 @@ export class PiSessionChannel {
         }
         events.push(`tool:${gatedTool}:${toolCall.target}`);
       }
-      return this.finishTurn(call, "done", `已按「${input.text}」完成检查。`);
+      return this.finishTurn(call, "done", `已按「${input.text}」完成检查。`, input.stream);
     } catch {
-      return this.finishTurn(call, "failed", "执行失败，已保留已有消息与代码。");
+      return this.finishTurn(call, "failed", "执行失败，已保留已有消息与代码。", input.stream);
     }
   }
 
@@ -377,7 +500,7 @@ export class PiSessionChannel {
       model: this.model,
       permission: this.permission,
       messages: this.messages.map((message) => ({ ...message })),
-      calls: this.calls.map((call) => ({ ...call, events: [...call.events] })),
+      calls: this.calls.map((call) => ({ ...call, usage: call.usage ? { ...call.usage } : undefined, events: [...call.events] })),
       approvals: this.approvals.map((approval) => ({ ...approval })),
       runState: this.state,
       createdAt: this.createdAt,
@@ -400,7 +523,13 @@ export class PiSessionChannel {
       permission: snapshot.permission,
     });
     channel.messages = snapshot.messages.map((message) => ({ ...message }));
-    channel.calls = snapshot.calls.map((call) => ({ ...call, events: [...call.events] }));
+    channel.calls = snapshot.calls.map((call) => ({
+      ...call,
+      // S6 batch 1 adds structured `usage`; older snapshots without it
+      // restore as `unreported` so usage summaries never read garbage.
+      usage: call.usage ?? { input: 0, output: 0, cacheRead: 0, source: "unreported" as const },
+      events: [...call.events],
+    }));
     channel.approvals = (snapshot.approvals ?? []).map((approval) => ({
       ...approval,
       status: approval.status === "pending" ? "expired" : approval.status,
@@ -414,12 +543,21 @@ export class PiSessionChannel {
     return channel;
   }
 
-  private finishTurn(call: PiCallRecord, state: "done" | "failed", reply: string): PiTurnResult {
+  private finishTurn(
+    call: PiCallRecord,
+    state: "done" | "failed",
+    reply: string,
+    stream?: (chunk: { callId: string; text: string; done: boolean }) => void,
+  ): PiTurnResult {
     this.messageSequence += 1;
     this.messages.push({ id: `msg-${this.messageSequence}`, role: "agent", text: reply, callId: call.callId });
     call.events.push(`turn:${state}`);
     this.releaseWriteLock(call.callId);
     this.state = state;
+    // Settled-only streaming: chunk the final persisted reply (never a
+    // live token flow in S6 batch 1) and always end with a done frame so
+    // the renderer stop button cannot leave a half-open stream.
+    streamText(stream, call.callId, reply);
     return { state, call };
   }
 

@@ -85,7 +85,7 @@ describe("task-store record shape", () => {
       sessionId: "main",
       taskDir: TASK_DIR,
       providerId: "provider-local",
-      model: "m",
+      model: "test-model",
       now: () => "2026-09-22T10:00:00+08:00",
     });
     const { createdAt: _droppedSessionTs, ...noSessionTs } = JSON.parse(
@@ -109,7 +109,7 @@ describe("task-store record shape", () => {
       sessionId: "main",
       taskDir: dir,
       providerId: "provider-local",
-      model: "m",
+      model: "test-model",
       now: () => "2026-09-22T10:00:00+08:00",
     });
     channel.runTurn({ text: "hi" });
@@ -285,8 +285,8 @@ describe("TaskWorkspaceHost sessions and Host-owned lock", () => {
       taskId: "task-other",
       sessionId: "main",
       taskDir: TASK_DIR,
-      providerId: "p",
-      model: "m",
+      providerId: "provider-local",
+      model: "test-model",
       now: () => "2026-09-22T10:00:00+08:00",
     });
     store.writeSession(TASK_DIR, { ...foreign.snapshot(), taskId: "task-other" });
@@ -353,5 +353,59 @@ describe("TaskWorkspaceHost sessions and Host-owned lock", () => {
     expect(callId).toBe(turn.callId);
     expect(taskHost.writeLockOwner).toBeNull();
     expect(taskHost.openSession("main").runState).toBe("done");
+  });
+
+  it("persists per-turn provider selection and structured usage with the call", () => {
+    const store = memoryTaskStore();
+    const taskHost = new TaskWorkspaceHost(TASK_ID, TASK_DIR, store, () => "2026-09-22T10:00:00+08:00");
+    const turn = taskHost.sendMessage("main", "检查构建", {
+      providerId: "provider-local",
+      model: "pidock-default",
+      usageSource: "actual",
+      usage: { input: 120, output: 45, cacheRead: 10 },
+    });
+    expect(turn.state).toBe("done");
+    expect(turn.callId).toBe("call-1");
+    const snapshot = taskHost.openSession("main").snapshot();
+    expect(snapshot.providerId).toBe("provider-local");
+    expect(snapshot.calls[0]).toMatchObject({
+      callId: "call-1",
+      providerId: "provider-local",
+      model: "pidock-default",
+      usageSource: "actual",
+      usage: { input: 120, output: 45, cacheRead: 10, source: "actual" },
+    });
+    // Reopen restores the same usage record (never another task's latest).
+    taskHost.dispose();
+    const reopened = new TaskWorkspaceHost(TASK_ID, TASK_DIR, store, () => "2026-09-22T10:01:00+08:00");
+    expect(reopened.openSession("main").snapshot().calls[0].usage).toEqual({
+      input: 120,
+      output: 45,
+      cacheRead: 10,
+      source: "actual",
+    });
+  });
+
+  it("cancels a pending turn without losing prior messages", () => {
+    const taskHost = host();
+    taskHost.sendMessage("main", "第一轮");
+    const turn = taskHost.sendMessage("main", "运行命令", {
+      tool: "exec.run",
+      target: `${TASK_DIR}/run.sh`,
+      execute: (call) => ({
+        tool: call.tool,
+        kind: call.kind,
+        target: call.target,
+        contentVersion: call.contentVersion,
+        output: "pending",
+      }),
+    });
+    expect(turn.state).toBe("approval");
+    const before = taskHost.openSession("main").snapshot().messages.length;
+    taskHost.cancel("main");
+    const after = taskHost.openSession("main").snapshot();
+    expect(after.runState).toBe("cancelled");
+    expect(after.messages.length).toBe(before);
+    expect(taskHost.writeLockOwner).toBeNull();
   });
 });

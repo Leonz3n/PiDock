@@ -226,7 +226,10 @@ export class TaskWorkspaceHost {
    * exists. A snapshot naming a different task is rejected: reopen never
    * continues with another task's latest session.
    */
-  openSession(sessionId: string, options?: { providerId?: string; model?: string }): PiSessionChannel {
+  openSession(
+    sessionId: string,
+    options?: { providerId?: string; model?: string; credentialRef?: string },
+  ): PiSessionChannel {
     const existing = this.channels.get(sessionId);
     if (existing) return existing;
     const saved = this.store.readSession(this.taskDir, sessionId);
@@ -244,13 +247,18 @@ export class TaskWorkspaceHost {
       taskDir: this.taskDir,
       providerId: options?.providerId ?? "provider-local",
       model: options?.model ?? "pidock-default",
+      credentialRef: options?.credentialRef,
     });
     this.channels.set(sessionId, channel);
     this.store.writeSession(this.taskDir, channel.snapshot());
     return channel;
   }
 
-  sendMessage(sessionId: string, text: string, turn?: Omit<PiTurnInput, "text">): HostTurnResult {
+  sendMessage(
+    sessionId: string,
+    text: string,
+    turn?: Omit<PiTurnInput, "text" | "stream">,
+  ): HostTurnResult {
     if (this.lockOwner !== null && this.lockOwner !== sessionId) {
       throw new Error("task-locked: 同一任务同时只能有一个会话执行，请先停止或等待当前会话");
     }
