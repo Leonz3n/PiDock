@@ -177,6 +177,22 @@ describe("memory Host adapter", () => {
     expect(await host.getUsage({ taskId: "release", sessionId: "main" })).toHaveLength(usageBefore);
   });
 
+  it("[PiDock 02] holds the task write right in one session until it settles", async () => {
+    const host = createMemoryHost();
+    const extra = await host.createSession("release");
+    // Seed a lingering approval run on the seeded deploy session (its
+    // scripted outcome is "approval" and keeps the task write right).
+    const waiting = await host.sendMessage("release", "deploy", "部署到 staging", []);
+    expect(waiting.state).toBe("approval");
+    await expect(host.sendMessage("release", extra.id, "并行改动", [])).rejects.toThrow(
+      "同一任务同时只能有一个会话执行",
+    );
+    // Releasing via stop lets the other session run (completes + frees).
+    await host.stopRun("release", "deploy");
+    const ok = await host.sendMessage("release", extra.id, "并行改动", []);
+    expect(ok.state).toBe("completed");
+  });
+
   it("saves config layers, versioning only the shared template", async () => {
     const host = createMemoryHost();
     await host.saveEnvironmentConfig({

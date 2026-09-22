@@ -32,6 +32,9 @@ function getParentPort(): UtilityParentPort {
 }
 
 const hostPort = getParentPort();
+
+export { boundWorkspaceId, validateHostTaskOp } from "./host-guards.js";
+import { boundWorkspaceId, validateHostTaskOp } from "./host-guards.js";
 import {
   isHostTaskParams,
   isRpcRequest,
@@ -40,8 +43,6 @@ import {
   type HostVersionsResult,
   type RpcResponse,
 } from "../rpc/protocol.js";
-
-const DEFAULT_WORKSPACE_ID = "s1-default-workspace";
 
 function workspaceOf(params: unknown): string {
   if (
@@ -53,7 +54,7 @@ function workspaceOf(params: unknown): string {
   ) {
     return (params as { workspaceId: string }).workspaceId;
   }
-  return process.env["PIDOCK_WORKSPACE_ID"] ?? DEFAULT_WORKSPACE_ID;
+  return boundWorkspaceId();
 }
 
 function reply(response: RpcResponse): void {
@@ -86,12 +87,18 @@ hostPort.on("message", (event: { data: unknown }) => {
     // naming any other workspace is rejected even though the envelope
     // itself is well-formed — main already compared sender vs payload.
     const taskParams: unknown = message.params;
-    if (!isHostTaskParams(taskParams) || taskParams.workspaceId !== workspaceId) {
+    const bound = boundWorkspaceId();
+    if (!isHostTaskParams(taskParams) || taskParams.workspaceId !== bound) {
       reply({ kind: "response", id: message.id, ok: false, error: "task-workspace-mismatch" });
       return;
     }
+    const perOp = validateHostTaskOp(taskParams.op, taskParams.payload);
+    if (!perOp.ok) {
+      reply({ kind: "response", id: message.id, ok: false, error: perOp.error });
+      return;
+    }
     const payload: HostTaskResult = {
-      workspaceId,
+      workspaceId: bound,
       taskId: taskParams.taskId,
       op: taskParams.op,
       payload: { ...(taskParams.payload ?? {}), hostTime: Date.now() },

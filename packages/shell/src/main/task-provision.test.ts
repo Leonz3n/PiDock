@@ -5,6 +5,7 @@ import {
   checkDirIdConflict,
   generateTaskDirId,
   isAbsoluteTaskRoot,
+  isSafeTaskChildName,
   isTaskDirId,
   pinBaseline,
   planWorktreeCreation,
@@ -80,6 +81,46 @@ describe("task provisioning rules", () => {
     expect(pinBaseline("main", "")).toMatchObject({ ok: false });
     const failed = pinBaseline("main", "");
     if (!failed.ok) expect(failed.error.code).toBe("fetch-failed");
+  });
+
+  it("rejects unsafe repo/link child names that would escape the task dir", () => {
+    for (const bad of ["", ".", "..", "a/b", "a\\b", "../evil", "..\\evil", " spaced ", "a\0b"]) {
+      expect(isSafeTaskChildName(bad), bad).toBe(false);
+    }
+    expect(isSafeTaskChildName("front-monorepo")).toBe(true);
+    expect(() => previewTaskPaths("~/PiDockTasks", "task-abcdef12", ["../../evil"], [])).toThrow("invalid-path");
+    expect(() =>
+      planWorktreeCreation({
+        taskDir: "~/PiDockTasks/task-abcdef12",
+        mainCheckoutDir: "/Users/name/Workspace/repo",
+        repoDir: "../evil",
+        remoteBranch: "main",
+        commit: "a5a4a0d1234",
+        branch: "task/task-abcdef12",
+      }),
+    ).toThrow("invalid-path");
+  });
+
+  it("rejects branch fragments with traversal, control chars, or lock suffix", () => {
+    expect(buildTaskBranch("task-abcdef12", "feature/../evil")).toMatchObject({ ok: false });
+    expect(buildTaskBranch("task-abcdef12", "feature@{1}")).toMatchObject({ ok: false });
+    expect(buildTaskBranch("task-abcdef12", "feature.lock")).toMatchObject({ ok: false });
+    expect(buildTaskBranch("task-abcdef12", "bad\u0001branch")).toMatchObject({ ok: false });
+  });
+
+  it("normalizes the main-checkout comparison before enforcing the guard", () => {
+    expect(() =>
+      assertProvisionPlanSafe({
+        mainCheckoutDir: "/Users/name/Workspace/repo",
+        ops: [{ kind: "pull", cwd: "/Users/name/Workspace/repo/./", args: ["pull"] }],
+      }),
+    ).toThrow("forbidden-main-op");
+    expect(() =>
+      assertProvisionPlanSafe({
+        mainCheckoutDir: "D:\\Tasks\\repo",
+        ops: [{ kind: "reset", cwd: "d:/Tasks/repo/", args: ["reset"] }],
+      }),
+    ).toThrow("forbidden-main-op");
   });
 
   it("forbids pull/merge/reset against the main checkout directory", () => {

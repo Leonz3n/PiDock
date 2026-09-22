@@ -76,6 +76,74 @@ describe("PiSessionChannel turns and approvals", () => {
     expect(session.writeLockOwner).toBeNull();
   });
 
+  it("asks inside the turn for command/browser tools under default permission", () => {
+    const session = channel();
+    session.setPermission("default");
+    const turn = session.runTurn({
+      text: "运行命令",
+      tool: "exec.run",
+      target: `${TASK_DIR}/run.sh`,
+      execute: (call) => ({
+        tool: call.tool,
+        kind: call.kind,
+        target: call.target,
+        contentVersion: call.contentVersion,
+        output: "pending",
+      }),
+    });
+    expect(turn.state).toBe("approval");
+    expect(turn.approval?.tool).toBe("exec.run");
+    expect(turn.approval?.callId).toBe(turn.call.callId);
+    const decided = session.approve(turn.approval?.id ?? "");
+    expect(decided.callId).toBe(turn.call.callId);
+    expect(() => session.approve(turn.approval?.id ?? "")).toThrow("不可重放");
+  });
+
+  it("keeps history on approval, approval, and reopen without replay", () => {
+    const session = channel();
+    session.setPermission("default");
+    const turn = session.runTurn({
+      text: "运行命令",
+      tool: "exec.run",
+      target: `${TASK_DIR}/run.sh`,
+      execute: (call) => ({
+        tool: call.tool,
+        kind: call.kind,
+        target: call.target,
+        contentVersion: call.contentVersion,
+        output: "pending",
+      }),
+    });
+    expect(turn.state).toBe("approval");
+    const snapshot = session.snapshot();
+    expect(snapshot.approvals).toHaveLength(1);
+    const restored = PiSessionChannel.restore(snapshot, TASK_DIR);
+    expect(restored.runState).toBe("cancelled");
+    expect(restored.pendingApproval()).toBeUndefined();
+    expect(restored.snapshot().approvals[0].status).toBe("expired");
+    expect(restored.snapshot().messages).toHaveLength(snapshot.messages.length);
+  });
+
+  it("preserves the saved createdAt across restore", () => {
+    const session = channel();
+    const snapshot = session.snapshot();
+    const restored = PiSessionChannel.restore(snapshot, TASK_DIR);
+    expect(restored.snapshot().createdAt).toBe(snapshot.createdAt);
+  });
+
+  it("previews the gate without creating a pending approval", () => {
+    const session = channel();
+    session.setPermission("default");
+    expect(session.previewGate("exec.run", `${TASK_DIR}/run.sh`)).toEqual({ verdict: "ask", approvalId: "preview" });
+    expect(session.pendingApproval()).toBeUndefined();
+    const first = session.gate("exec.run", `${TASK_DIR}/run.sh`, "v1");
+    const second = session.gate("exec.run", `${TASK_DIR}/run.sh`, "v1");
+    expect(first.verdict).toBe("ask");
+    expect(second.verdict).toBe("ask");
+    if (first.verdict !== "ask" || second.verdict !== "ask") throw new Error("expected approvals");
+    expect(first.approvalId).not.toBe(second.approvalId);
+  });
+
   it("keeps history on cancel without losing messages", () => {
     const session = channel();
     session.runTurn({ text: "第一轮" });

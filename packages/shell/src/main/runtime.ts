@@ -14,6 +14,7 @@ import type {
 } from "electron";
 import { isAllowedInvokeChannel } from "../preload/allowlist.js";
 import { HostClient } from "../rpc/host-client.js";
+import { validateHostTaskOp } from "../host/host-guards.js";
 import { TaskBrowser } from "./task-browser.js";
 import {
   TrustDomainRegistry,
@@ -320,7 +321,7 @@ export function registerIpc(
       const taskId = record["taskId"];
       const op = record["op"];
       if (typeof taskId !== "string" || taskId.length === 0) {
-        throw new Error("shell/taskOp requires a taskId");
+        throw new TrustDomainViolation("invalid-payload", "shell/taskOp requires a taskId");
       }
       if (
         op !== "task/provision" &&
@@ -329,12 +330,16 @@ export function registerIpc(
         op !== "task/approve" &&
         op !== "task/reject"
       ) {
-        throw new Error(`unknown task op: ${String(op)}`);
+        throw new TrustDomainViolation("invalid-payload", `unknown task op: ${String(op)}`);
       }
       const opPayload =
         typeof record["payload"] === "object" && record["payload"] !== null
           ? (record["payload"] as Record<string, unknown>)
           : {};
+      const perOp = validateHostTaskOp(op, opPayload);
+      if (!perOp.ok) {
+        throw new TrustDomainViolation("invalid-payload", perOp.error);
+      }
       const result = await client.task({ workspaceId, taskId, op, payload: opPayload });
       return { ok: true as const, payload: result };
     } catch (error) {
