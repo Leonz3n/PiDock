@@ -1,0 +1,25 @@
+{
+  "name": "@pidock/shell",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "PiDock Electron shell skeleton (S1): main window, utilityProcess Node host stub, typed RPC, minimal preload bridge",
+  "main": "dist/main/main.js",
+  "scripts": {
+    "dev": "electron .",
+    "build": "node scripts/copy-static.mjs && tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.build.json --noEmit",
+    "test": "vitest run",
+    "lint": "eslint . --max-warnings 0",
+    "versions": "electron . --print-versions",
+    "smoke": "electron . --smoke"
+  },
+  "dependencies": {
+    "electron": "44.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.6",
+    "typescript": "5.9.3",
+    "vitest": "3.2.7"
+  }
+}
