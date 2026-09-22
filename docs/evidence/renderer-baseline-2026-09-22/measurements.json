@@ -12,33 +12,42 @@
   "usage": {
     "total": 240,
     "virtualized": "true",
+    "declaredHeight": 420,
     "viewportHeight": 420,
     "rowHeight": 34,
     "overscan": 6,
     "expected": 19,
     "expectedAttribute": 19,
-    "rendered": 19
+    "rendered": 19,
+    "heightMatchesDeclared": true,
+    "rowsMatchExpected": true
   },
   "sessions": {
     "total": 43,
     "virtualized": "true",
+    "declaredHeight": 280,
     "viewportHeight": 280,
     "rowHeight": 56,
     "overscan": 6,
     "expected": 11,
     "expectedAttribute": 11,
-    "rendered": 11
+    "rendered": 11,
+    "heightMatchesDeclared": true,
+    "rowsMatchExpected": true
   },
   "sessionTabs": 4,
   "runHistory": {
     "total": 47,
     "virtualized": "true",
+    "declaredHeight": 280,
     "viewportHeight": 280,
     "rowHeight": 40,
     "overscan": 6,
     "expected": 13,
     "expectedAttribute": 13,
-    "rendered": 13
+    "rendered": 13,
+    "heightMatchesDeclared": true,
+    "rowsMatchExpected": true
   },
   "settings": {
     "heading": "本机设置",
