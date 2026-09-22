@@ -44,7 +44,9 @@ export function isShellConnected(): boolean {
 /**
  * Task-scoped op through main into the per-workspace Host. Rejects outside
  * the shell so dev/test callers must opt into the in-memory adapter instead
- * of silently assuming a Host round-trip.
+ * of silently assuming a Host round-trip. `{ok:false,error}` envelopes are
+ * returned (never thrown as rejected invokes): callers branch on `ok` and
+ * keep the form with a retry entry instead of crashing.
  */
 export async function shellTaskOp(
   taskId: string,
@@ -53,5 +55,49 @@ export async function shellTaskOp(
 ): Promise<ShellTaskOpResult> {
   const bridge = shellBridge();
   if (!bridge?.taskOp) throw new Error("当前不在桌面壳内，任务操作走内存模拟数据");
-  return bridge.taskOp(taskId, op, payload);
+  const result = await bridge.taskOp(taskId, op, payload);
+  // Fail-closed envelope guard: a malformed bridge result (or a rejected
+  // invoke that a preload shim rethrows) surfaces as `{ok:false}` so the
+  // task form can keep its input and offer retry.
+  if (!result || typeof result !== "object" || typeof (result as ShellTaskOpResult).ok !== "boolean") {
+    return { ok: false, error: "invalid-payload: 任务操作返回异常，请重试" };
+  }
+  return result;
+}
+
+/**
+ * [PiDock 02] provision one task through the shell (`host/task` +
+ * `task/provision`), with `{ok:false,error}` envelope handling. The caller
+ * keeps the form on failure and offers retry; stale references never
+ * create. `null` outside the shell so dev/test callers fall back to the
+ * in-memory adapter explicitly.
+ */
+export async function provisionTaskThroughShell(input: {
+  taskId: string;
+  name: string;
+  dirId: string;
+  branch?: string;
+  rootOverride?: string;
+  remoteBranch: string;
+  fetchedCommit: string;
+  repos?: string[];
+  mainCheckouts?: Record<string, string>;
+}): Promise<ShellTaskOpResult> {
+  const payload: Record<string, unknown> = {
+    name: input.name,
+    dirId: input.dirId,
+    remoteBranch: input.remoteBranch,
+    fetchedCommit: input.fetchedCommit,
+  };
+  if (input.branch !== undefined) payload["branch"] = input.branch;
+  if (input.rootOverride !== undefined) payload["rootOverride"] = input.rootOverride;
+  if (input.repos !== undefined) payload["repos"] = input.repos;
+  if (input.mainCheckouts !== undefined) payload["mainCheckouts"] = input.mainCheckouts;
+  try {
+    return await shellTaskOp(input.taskId, "task/provision", payload);
+  } catch (error) {
+    // A rejected invoke (bridge/transport failure) still arrives as an
+    // envelope so the form can keep its input and offer retry.
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
 }

@@ -40,6 +40,7 @@ import type {
   CreateTaskInput,
   HostAdapter,
   ProjectDirectoryInput,
+  ProvisionTaskInput,
   SaveEnvironmentConfigInput,
   SaveEnvironmentInput,
   SaveProjectInput,
@@ -47,11 +48,24 @@ import type {
   SaveScheduleInput,
   SaveServiceRecipeInput,
   SendMessageResult,
+  TaskHeaderState,
+  TaskProvisionState,
   UsageFilter,
 } from "./hostAdapter";
 import { sessionKeyOf } from "./sessionKey";
 import { isSensitiveKey, nextTemplateVersion } from "./configRows";
-import { directoryLinkPath, normalizeDirectoryPath, toTaskDirectory } from "./directories";
+import {
+  buildTaskFormBranch,
+  checkTaskFormDirIdConflict,
+  directoryLinkPath,
+  isTaskDirId,
+  normalizeDirectoryPath,
+  pinTaskFormBaseline,
+  previewTaskFormPaths,
+  resolveTaskFormRoot,
+  toTaskDirectory,
+  validateTaskFormName,
+} from "./directories";
 
 const APPROVAL_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -793,6 +807,23 @@ class MemoryHost implements HostAdapter {
   private sequence = 0;
 
   private workspaceSequence = 0;
+
+  /**
+   * [PiDock 02] per-task provision entries backing `getTaskProvision` /
+   * `provisionTaskThroughForm`: branch + pinned baseline + readiness +
+   * last failure. Failures keep the form (with retry) instead of creating
+   * from a stale reference.
+   */
+  private provisions = new Map<
+    string,
+    {
+      branch: string;
+      remoteBranch: string;
+      baseCommit: string;
+      ready: boolean;
+      lastError?: { code: string; message: string };
+    }
+  >();
 
   private localSettings: LocalSettings = { ...defaultLocalSettings };
 
@@ -1817,6 +1848,119 @@ class MemoryHost implements HostAdapter {
   async runTerminalCommand(taskId: string, command: string): Promise<string[]> {
     if (!this.task(taskId)) throw new Error("任务不存在");
     return [`$ ${command}`, "命令已加入模拟队列"];
+  }
+
+  /**
+   * [PiDock 02] provision state for the task form, derived from the stored
+   * task record: the actual root saved at creation, the pinned remote
+   * branch + commit, the editable branch, and readiness. The memory Host
+   * has no separate `task.json`, so the record fields live on the task
+   * itself (`workspaceRoot` is the stored actual root — a later default
+   * change never migrates it).
+   */
+  async getTaskProvision(taskId: string): Promise<TaskProvisionState | undefined> {
+    const task = this.task(taskId);
+    if (!task) return undefined;
+    const provision = this.provisions.get(taskId);
+    const dirId = isTaskDirId(task.workspaceKey) ? task.workspaceKey : "task-00000000";
+    const branch = provision?.branch ?? `task/${dirId}`;
+    return {
+      taskId: task.id,
+      name: task.name,
+      dirId,
+      branch,
+      root: task.workspaceRoot,
+      taskDir: `${task.workspaceRoot.replace(/[\\/]+$/, "")}/${dirId}`,
+      remoteBranch: provision?.remoteBranch ?? "",
+      baseCommit: provision?.baseCommit ?? "",
+      ready: provision?.ready ?? (task.repos.length > 0 || task.directories.length > 0),
+      lastError: provision?.lastError,
+    };
+  }
+
+  /**
+   * [PiDock 02] header state: name/repo/branch/ready/code-change read from
+   * the task record + session state. Errors stay bound to the task id so a
+   * failure in one task never surfaces as another task's header.
+   */
+  async getTaskHeader(taskId: string): Promise<TaskHeaderState> {
+    const task = this.task(taskId);
+    if (!task) throw new Error(`任务不存在: ${taskId}`);
+    const provision = await this.getTaskProvision(taskId);
+    const project = this.projects.find((item) => item.id === task.projectId);
+    const repoNames = task.repos.map(
+      (id) => project?.repositories.find((repository) => repository.id === id)?.name ?? id,
+    );
+    return {
+      taskId: task.id,
+      name: task.name,
+      repos: repoNames,
+      branch: provision?.branch ?? `task/${task.workspaceKey}`,
+      ready: provision?.ready ?? false,
+      changedFiles: task.files.map((file) => ({ path: file.path, status: file.status })),
+      error: provision?.lastError ? `${provision.lastError.code}: ${provision.lastError.message}` : undefined,
+    };
+  }
+
+  /**
+   * [PiDock 02] provision a task through the form fields. Mirrors the
+   * shell-side per-task provision contract:
+   *
+   * - Chinese display name validated, auto `task-oooooooo` dir id
+   *   conflict-checked, editable branch validated separately;
+   * - default root + per-creation override resolved (stored actual root
+   *   never migrates on later default changes);
+   * - remote baseline pinned before creation (`fetch-failed` keeps the
+   *   form with a retry entry instead of creating from a stale ref);
+   * - failures are recorded on the provision entry (`lastError`) so the
+   *   form keeps its input and offers retry; `ok:false` never throws a
+   *   rejected invoke at the caller.
+   */
+  async provisionTaskThroughForm(input: ProvisionTaskInput): Promise<
+    { ok: true; provision: TaskProvisionState } | { ok: false; error: { code: string; message: string } }
+  > {
+    const named = validateTaskFormName(input.name);
+    if (!named.ok) return { ok: false, error: { ...named.error } };
+    if (!isTaskDirId(input.dirId)) {
+      return { ok: false, error: { code: "invalid-path", message: "任务目录标识格式不正确，请重新生成" } };
+    }
+    const usedDirIds = this.tasks
+      .filter((task) => task.id !== input.taskId)
+      .map((task) => task.workspaceKey)
+      .filter((key) => isTaskDirId(key));
+    const conflict = checkTaskFormDirIdConflict(input.dirId, usedDirIds);
+    if (conflict) return { ok: false, error: { ...conflict } };
+    const resolved = resolveTaskFormRoot(this.localSettings.workspaceRoot, input.rootOverride);
+    if (!resolved.ok) return { ok: false, error: { ...resolved.error } };
+    const branched = buildTaskFormBranch(input.dirId, input.branch);
+    if (!branched.ok) return { ok: false, error: { ...branched.error } };
+    const pinned = pinTaskFormBaseline(input.remoteBranch, input.fetchedCommit);
+    if (!pinned.ok) {
+      this.provisions.set(input.taskId, {
+        branch: branched.branch,
+        remoteBranch: input.remoteBranch,
+        baseCommit: "",
+        ready: false,
+        lastError: { ...pinned.error },
+      });
+      return { ok: false, error: { ...pinned.error } };
+    }
+    const repoNames = [...(input.repos ?? [])];
+    const paths = previewTaskFormPaths(resolved.root, input.dirId, repoNames, []);
+    void paths;
+    const entry = {
+      branch: branched.branch,
+      remoteBranch: pinned.remoteBranch,
+      baseCommit: pinned.commit,
+      ready: true,
+      lastError: undefined as { code: string; message: string } | undefined,
+    };
+    this.provisions.set(input.taskId, entry);
+    const task = this.task(input.taskId);
+    if (task) task.workspaceRoot = resolved.root;
+    const provision = await this.getTaskProvision(input.taskId);
+    if (!provision) return { ok: false, error: { code: "unknown-task", message: `任务不存在: ${input.taskId}` } };
+    return { ok: true, provision };
   }
 
   subscribe(listener: (event: HostEvent) => void) {

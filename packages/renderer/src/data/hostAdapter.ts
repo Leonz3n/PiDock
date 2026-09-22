@@ -122,6 +122,54 @@ export type SaveServiceRecipeInput = {
   };
 };
 
+/**
+ * [PiDock 02] provision state for the create-task form, derived from the
+ * persisted task record: the actual root saved on the task, the pinned
+ * remote branch + commit, the editable branch, and the last failure (kept
+ * with a retry entry, never silently replaced by a stale reference).
+ */
+export type TaskProvisionState = {
+  taskId: string;
+  name: string;
+  dirId: string;
+  branch: string;
+  root: string;
+  taskDir: string;
+  remoteBranch: string;
+  baseCommit: string;
+  ready: boolean;
+  lastError?: { code: string; message: string };
+};
+
+/**
+ * [PiDock 02] header state: name/repo/branch/ready/code-change read from
+ * the task record + session state. Errors stay bound to the task id.
+ */
+export type TaskHeaderState = {
+  taskId: string;
+  name: string;
+  repos: string[];
+  branch: string;
+  ready: boolean;
+  changedFiles: { path: string; status: string }[];
+  error?: string;
+};
+
+/** Per-creation provision fields the form hands to the Host. */
+export type ProvisionTaskInput = {
+  taskId: string;
+  name: string;
+  dirId: string;
+  /** Editable branch; defaults to `task/<dirId>` when omitted. */
+  branch?: string;
+  /** Per-creation root override; omitted means the persisted default root. */
+  rootOverride?: string;
+  remoteBranch: string;
+  fetchedCommit: string;
+  repos?: string[];
+  mainCheckouts?: Record<string, string>;
+};
+
 /** In-memory task creation for the draft UI; real worktree preparation belongs to ticket 03. */
 export type CreateTaskInput = {
   projectId: string;
@@ -145,6 +193,14 @@ export type CreateTaskInput = {
 /**
  * Everything the renderer needs from the Host. Ticket 02 replaces the in-memory
  * implementation with the real Host transport; nothing here may assume a transport.
+ *
+ * [PiDock 02] task-record seam: the shell persists `task.json` (+ branch,
+ * baseline, root) per task folder. The renderer mirrors that record through
+ * `TaskProvisionState` (see `directories.ts` + the shell bridge):
+ * the create-task form previews real paths, keeps the form on fetch/provision
+ * failure with a retry entry, and stores the resolved root on the created
+ * task. The per-task header reads from the same record plus session state,
+ * so file panels and errors always bind to the task id.
  */
 export interface HostAdapter {
   getWorkspace(): Promise<Workspace>;
@@ -239,6 +295,26 @@ export interface HostAdapter {
   setTaskDirectories(taskId: string, directoryIds: string[]): Promise<void>;
   /** In-memory task creation; Git worktree preparation stays simulated. */
   createTask(input: CreateTaskInput): Promise<Task>;
+  /**
+   * [PiDock 02] provision state for the task form, derived from persistent
+   * records — the actual root saved on the task, the pinned remote branch
+   * + commit, the editable branch, and the last failure (kept with a retry
+   * entry, never silently replaced by a stale reference).
+   */
+  getTaskProvision(taskId: string): Promise<TaskProvisionState | undefined>;
+  /**
+   * [PiDock 02] header state: name/repo/branch/ready/code-change read from
+   * the task record + session state, errors bound to the task id.
+   */
+  getTaskHeader(taskId: string): Promise<TaskHeaderState>;
+  /**
+   * [PiDock 02] provision a task through the form fields (name/dirId/
+   * branch/rootOverride/baseline). Failures return `{ok:false}` with the
+   * form kept and a retry entry — never a rejected invoke.
+   */
+  provisionTaskThroughForm(input: ProvisionTaskInput): Promise<
+    { ok: true; provision: TaskProvisionState } | { ok: false; error: { code: string; message: string } }
+  >;
   /** Build a file reference from an in-task directory symlink. */
   createDirectoryFileReference(taskId: string, directoryId: string): Promise<Reference>;
 
