@@ -7,7 +7,10 @@ import {
   DirectoryRootChoices,
   DirectoryTerminalPanel,
   FilesPanel,
+  LogsPanel,
   RuntimePanel,
+  SessionSubagentList,
+  SubagentPanel,
   TerminalPanel,
 } from "../components/ToolPanels";
 import type { Approval, Message, Reference, Task } from "../data/types";
@@ -29,6 +32,7 @@ export function TaskPage({ task, sessionId }: { task: Task; sessionId: string })
   const panels = useUiStore((state) => state.panels[task.id] ?? EMPTY_PANELS);
   const togglePanel = useUiStore((state) => state.togglePanel);
   const openModal = useUiStore((state) => state.openModal);
+  const pushToast = useUiStore((state) => state.pushToast);
 
   const directoryOnly = isDirectoryOnlyTask(task);
   // Ordinary directories belong to every task that has them, mixed included;
@@ -39,6 +43,17 @@ export function TaskPage({ task, sessionId }: { task: Task; sessionId: string })
   useEffect(() => setActiveDirectoryId(""), [task.id]);
   const activeDirectory = task.directories.find((directory) => directory.id === activeDirectoryId);
   const availablePanels = directoryOnly ? (["files", "terminal"] as ToolPanel[]) : TOOL_PANELS;
+
+  const subagents = task.subagentsBySession?.[session.id] ?? [];
+  const [subagentOpen, setSubagentOpen] = useState(false);
+  const [selectedSubagentId, setSelectedSubagentId] = useState("");
+  const [subagentSession, setSubagentSession] = useState(session.id);
+  if (subagentSession !== session.id) {
+    // Switching sessions must not leak another session's child-agent selection.
+    setSubagentSession(session.id);
+    setSubagentOpen(false);
+    setSelectedSubagentId("");
+  }
 
   if (!session) return <EmptyState>当前任务还没有会话。</EmptyState>;
 
@@ -63,9 +78,27 @@ export function TaskPage({ task, sessionId }: { task: Task; sessionId: string })
             ) : null}
           </div>
           <div className="flex items-center gap-2">
-            <Button size="sm" onClick={() => openModal({ type: "task-directories", taskId: task.id })}>
+            {subagents.length > 0 ? (
+              <Button
+                size="sm"
+                variant={subagentOpen ? "primary" : "default"}
+                aria-label={`查看 Subagent，共 ${subagents.length} 个`}
+                onClick={() => {
+                  setSubagentOpen((value) => !value);
+                  if (!selectedSubagentId) setSelectedSubagentId(subagents[0]?.id ?? "");
+                }}
+              >
+                Subagent {subagents.length}
+              </Button>
+            ) : null}
+            <Button size="sm" onClick={() => openModal({ type: "task-sources", taskId: task.id })}>
               添加目录
             </Button>
+            {!directoryOnly && !task.archived ? (
+              <Button size="sm" onClick={() => openModal({ type: "delivery", taskId: task.id })}>
+                审阅与交付
+              </Button>
+            ) : null}
             {availablePanels.map((panel) => (
               <Button
                 key={panel}
@@ -83,6 +116,17 @@ export function TaskPage({ task, sessionId }: { task: Task; sessionId: string })
         </header>
 
         <SessionTabs task={task} visibleSessions={visibleSessions} activeSessionId={session.id} />
+
+        {subagents.length > 0 ? (
+          <SessionSubagentList
+            agents={subagents}
+            selectedId={selectedSubagentId}
+            onSelect={(id) => {
+              setSelectedSubagentId(id);
+              setSubagentOpen(true);
+            }}
+          />
+        ) : null}
 
         <RunStateCard taskId={task.id} sessionId={session.id} />
 
@@ -106,12 +150,19 @@ export function TaskPage({ task, sessionId }: { task: Task; sessionId: string })
               {panel === "runtime" && !directoryOnly ? (
                 <RuntimePanel
                   task={task}
+                  readonly={session.permission === "read"}
+                  onReadonlyAttempt={() => pushToast("当前是只读会话，请先调整会话权限")}
                   onToggleService={(serviceId, running) => {
                     void useHostStore.getState().setServiceRunning(task.id, serviceId, running);
+                  }}
+                  onSetServiceMode={(serviceId, mode) => {
+                    void useHostStore.getState().setServiceMode(task.id, serviceId, mode);
+                    pushToast("依赖去向已模拟重新解析");
                   }}
                 />
               ) : null}
               {panel === "browser" && !directoryOnly ? <BrowserPanel pages={task.browserPages} /> : null}
+              {panel === "logs" && !directoryOnly ? <LogsPanel task={task} /> : null}
               {panel === "files" ? (
                 directoryOnly ? (
                   <DirectoryFilesPanel task={task} />
@@ -140,12 +191,34 @@ export function TaskPage({ task, sessionId }: { task: Task; sessionId: string })
           ))}
         </aside>
       ) : null}
+
+      {subagentOpen && subagents.length > 0 ? (
+        <aside className="w-[360px] shrink-0 overflow-auto" data-testid="subagent-sidebar">
+          <SubagentPanel
+            agents={subagents}
+            selectedId={selectedSubagentId}
+            parentLabel={task.name}
+            sessionName={session.name}
+            onSelect={setSelectedSubagentId}
+          />
+        </aside>
+      ) : null}
     </div>
   );
 }
 
+const COMPOSER_COMMANDS = [
+  { name: "/new", detail: "新建会话" },
+  { name: "/model", detail: "切换 Provider / 模型" },
+  { name: "/compact", detail: "压缩当前上下文" },
+  { name: "/skills", detail: "查看可用技能" },
+  { name: "/session", detail: "当前会话信息" },
+  { name: "/usage", detail: "查看 Token 用量" },
+  { name: "/help", detail: "查看命令说明" },
+];
+
 function panelName(panel: ToolPanel) {
-  return { runtime: "运行", browser: "浏览器", files: "文件", terminal: "终端" }[panel];
+  return { runtime: "运行", browser: "浏览器", files: "文件", terminal: "终端", logs: "日志" }[panel];
 }
 
 function sessionTabs(task: Task, activeSessionId: string) {
@@ -210,6 +283,8 @@ function RunStateCard({ taskId, sessionId }: { taskId: string; sessionId: string
   const key = sessionKeyOf(taskId, sessionId);
   const run = useEventsStore((state) => state.runs[key]);
   const stopRun = useHostStore((state) => state.stopRun);
+  const openModal = useUiStore((state) => state.openModal);
+  const pushToast = useUiStore((state) => state.pushToast);
   if (!run || run.state === "idle") return null;
   return (
     <Panel
@@ -222,6 +297,16 @@ function RunStateCard({ taskId, sessionId }: { taskId: string; sessionId: string
           {run.state === "running" ? (
             <Button size="sm" onClick={() => void stopRun(taskId, sessionId)}>
               停止
+            </Button>
+          ) : null}
+          {run.state === "failed" ? (
+            <Button size="sm" onClick={() => openModal({ type: "retry", taskId, sessionId })}>
+              检查并重试
+            </Button>
+          ) : null}
+          {run.state === "expired" ? (
+            <Button size="sm" onClick={() => pushToast("已移出关注列表，执行记录保留")}>
+              标记已处理
             </Button>
           ) : null}
         </div>
@@ -397,12 +482,91 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
   const clear = useDraftStore((state) => state.clear);
   const sendMessage = useHostStore((state) => state.sendMessage);
   const createFileReference = useHostStore((state) => state.createFileReference);
+  const createSession = useHostStore((state) => state.createSession);
+  const compactSessionContext = useHostStore((state) => state.compactSessionContext);
+  const workspace = useHostStore((state) => state.workspace);
+  const navigate = useNavigationStore((state) => state.navigate);
   const pushToast = useUiStore((state) => state.pushToast);
+  const openModal = useUiStore((state) => state.openModal);
   const approvals = useHostStore((state) => state.approvals);
+  const providers = useHostStore((state) => state.workspace?.providers ?? []);
   const [sending, setSending] = useState(false);
-  const [modelOpen, setModelOpen] = useState(false);
 
   const approval = approvals.find((item) => item.taskId === task.id && item.sessionId === sessionId);
+  const provider = providers.find((item) => item.id === session?.providerId);
+  const model = provider?.models.find((item) => item.id === session?.model);
+  const permissionLabel = { read: "只读", default: "默认权限", auto: "自动执行" }[session?.permission ?? "default"];
+  const thinkingLevel = session?.thinking ?? model?.thinking?.default;
+  const thinkingLabel = model?.thinking?.mode === "custom" ? `推理 · ${thinkingLevel ?? "待选择"}` : "推理 · 跟随模型";
+  const attachInput = useRef<HTMLInputElement | null>(null);
+  const attachments = draft.references.filter((reference) => reference.kind === "attachment");
+  const plainReferences = draft.references.filter((reference) => reference.kind !== "attachment");
+  // Images require the selected model to declare image input; the prototype blocks
+  // the send and keeps the draft rather than silently dropping the attachment.
+  const hasUnsupportedImage = attachments.some((reference) => reference.previewUrl) && !model?.supportsImages;
+
+  // Prototype `completions(symbol, query)`: @ lists task files/directories, $
+  // lists enabled skills, / lists the app commands. The candidate list is shown
+  // for a trailing token and inserts or dispatches on click (prototype's
+  // `chooseCompletion` / `command()`).
+  const completion = useMemo(() => {
+    const match = /(?:^|\s)([@$/])([^\s]*)$/.exec(draft.text);
+    if (!match) return null;
+    const symbol = match[1];
+    const query = match[2].toLowerCase();
+    const items =
+      symbol === "@"
+        ? [
+            ...task.files.map((file) => ({ name: file.path, detail: "当前任务文件" })),
+            ...task.directories.map((directory) => ({ name: `${directory.linkName}/`, detail: `${directory.name} → ${directory.path} · 软链接` })),
+          ]
+        : symbol === "$"
+          ? (workspace?.capabilities ?? [])
+              .filter((capability) => capability.kind === "skill" && capability.status === "enabled")
+              .map((capability) => ({ name: capability.name, detail: `${capability.source} · 已启用技能` }))
+          : COMPOSER_COMMANDS;
+    const filtered = items.filter((item) => `${item.name} ${item.detail}`.toLowerCase().includes(query));
+    return filtered.length > 0 ? { symbol, items: filtered } : null;
+  }, [draft.text, task.files, task.directories, workspace?.capabilities]);
+
+  const stripCompletionToken = () => setText(task.id, sessionId, draft.text.replace(/(?:^|\s)[@$/][^\s]*$/, "").trimEnd());
+
+  const runCommand = async (name: string) => {
+    stripCompletionToken();
+    if (name === "/new") {
+      const created = await createSession(task.id);
+      pushToast("当前任务中新建会话，worktree 与原会话保留");
+      navigate({ view: "task", projectId: task.projectId, taskId: task.id, sessionId: created.id });
+    } else if (name === "/model") {
+      openModal({ type: "model-picker", taskId: task.id, sessionId });
+    } else if (name === "/compact") {
+      await compactSessionContext(task.id, sessionId);
+      pushToast("已模拟上下文压缩；累计 Token 保留");
+    } else if (name === "/usage") {
+      navigate({ view: "usage" });
+    } else if (name === "/skills") {
+      openModal({ type: "composer-info", taskId: task.id, topic: "skills" });
+    } else if (name === "/session") {
+      openModal({ type: "composer-info", taskId: task.id, topic: "session" });
+    } else if (name === "/help") {
+      openModal({ type: "composer-info", taskId: task.id, topic: "help" });
+    }
+  };
+
+  const chooseCompletion = (name: string, detail: string) => {
+    if (completion?.symbol === "/") {
+      void runCommand(name);
+      return;
+    }
+    const isSkill = completion?.symbol === "$";
+    addReference(task.id, sessionId, {
+      id: `${isSkill ? "skill" : "file"}-${name}`,
+      kind: isSkill ? "skill" : "file",
+      label: name,
+      detail,
+    });
+    stripCompletionToken();
+  };
 
   return (
     <div className="flex flex-col gap-2">
@@ -413,6 +577,16 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
           event.preventDefault();
           const text = draft.text.trim();
           if (!text || sending) return;
+          // A bare command runs the app command instead of sending a message
+          // (prototype `send()`).
+          if (/^\/\S+$/.test(text) && !draft.references.length) {
+            await runCommand(text);
+            return;
+          }
+          if (hasUnsupportedImage) {
+            pushToast("当前模型未启用图片输入，请移除图片或选择支持图片的模型");
+            return;
+          }
           setSending(true);
           try {
             const result = await sendMessage(task.id, sessionId, text, draft.references);
@@ -426,13 +600,54 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
           }
         }}
       >
-        {draft.references.length > 0 ? (
+        {attachments.length > 0 ? (
+          <ul className="mb-2 flex flex-wrap gap-2" data-testid="composer-attachments">
+            {attachments.map((reference) => (
+              <li key={reference.id} className="flex items-center gap-2 rounded-md border border-line bg-soft px-2 py-1 text-[11px] text-muted">
+                {reference.previewUrl ? (
+                  <img src={reference.previewUrl} alt={reference.label} className="h-8 w-8 rounded object-cover" data-testid={`attachment-image-${reference.id}`} />
+                ) : null}
+                <span>{reference.label}</span>
+                <button type="button" aria-label={`移除附件 ${reference.label}`} onClick={() => removeReference(task.id, sessionId, reference.id)}>
+                  ×
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        {hasUnsupportedImage ? (
+          <p className="mb-2 flex items-center gap-2 text-[11px] text-orange" role="status">
+            当前模型未启用图片输入，请切换模型后发送。
+            <Button size="sm" onClick={() => openModal({ type: "model-picker", taskId: task.id, sessionId })}>
+              选择模型
+            </Button>
+          </p>
+        ) : null}
+        {plainReferences.length > 0 ? (
           <ul className="mb-2 flex flex-wrap gap-1.5">
-            {draft.references.map((reference) => (
+            {plainReferences.map((reference) => (
               <li key={reference.id} className="flex items-center gap-1 rounded-full border border-line bg-soft px-2 py-0.5 text-[11px] text-muted">
                 引用 · {reference.label}
                 <button type="button" aria-label={`移除引用 ${reference.label}`} onClick={() => removeReference(task.id, sessionId, reference.id)}>
                   ×
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        {completion ? (
+          <ul role="listbox" aria-label="输入候选" className="mb-2 max-h-40 overflow-auto rounded-md border border-line bg-paper text-xs">
+            {completion.items.slice(0, 8).map((item) => (
+              <li key={item.name}>
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={false}
+                  className="flex w-full items-center justify-between gap-3 px-2.5 py-1.5 text-left hover:bg-soft"
+                  onClick={() => chooseCompletion(item.name, item.detail)}
+                >
+                  <span className="font-mono text-[11px] text-ink">{item.name}</span>
+                  <small className="text-muted">{item.detail}</small>
                 </button>
               </li>
             ))}
@@ -449,6 +664,34 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
         />
         <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-wrap items-center gap-1.5">
+            <Button size="sm" variant="ghost" aria-label="添加附件" onClick={() => attachInput.current?.click()}>
+              +
+            </Button>
+            <input
+              ref={attachInput}
+              type="file"
+              multiple
+              aria-label="附件选择"
+              className="hidden"
+              onChange={(event) => {
+                const files = Array.from(event.target.files ?? []);
+                files.forEach((file) => {
+                  const isImage = file.type.startsWith("image/");
+                  const previewUrl =
+                    isImage && typeof URL !== "undefined" && typeof URL.createObjectURL === "function"
+                      ? URL.createObjectURL(file)
+                      : undefined;
+                  addReference(task.id, sessionId, {
+                    id: `attach-${Date.now()}-${file.name}`,
+                    kind: "attachment",
+                    label: file.name,
+                    detail: isImage ? "图片附件 · 仅本页预览" : "文件附件 · 仅保留名称",
+                    previewUrl,
+                  });
+                });
+                event.target.value = "";
+              }}
+            />
             <Button
               size="sm"
               variant="ghost"
@@ -461,16 +704,42 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
                 {token}
               </Button>
             ))}
-            <Button size="sm" variant="ghost" onClick={() => setModelOpen((value) => !value)}>
+            <Button
+              size="sm"
+              variant="ghost"
+              aria-label={`选择权限：${permissionLabel}`}
+              onClick={() => openModal({ type: "permission", taskId: task.id, sessionId })}
+            >
+              {permissionLabel}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              aria-label={`选择模型：${session?.model ?? "未选择"}`}
+              onClick={() => openModal({ type: "model-picker", taskId: task.id, sessionId })}
+            >
               {session?.model ?? "模型"} · 上下文 {session?.contextUsed ?? 0}k / {session?.contextWindow ?? 0}k
             </Button>
-            {modelOpen ? (
-              <span className="rounded-md border border-line bg-soft px-2 py-1 text-[11px] text-muted">
-                切换模型会校验上下文窗口；超窗候选置灰并说明原因。当前占用不可压缩到窗口内时禁止切换。
-              </span>
+            {model?.thinking && model.thinking.mode !== "none" ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                aria-label="选择推理档位"
+                onClick={() => openModal({ type: "thinking-picker", taskId: task.id, sessionId })}
+              >
+                {thinkingLabel}
+              </Button>
             ) : null}
+            <Button
+              size="sm"
+              variant="ghost"
+              aria-label="查看上下文占用"
+              onClick={() => openModal({ type: "context", taskId: task.id, sessionId })}
+            >
+              上下文 {session?.contextUsed ?? 0}k / {session?.contextWindow ?? 0}k
+            </Button>
           </div>
-          <Button size="sm" variant="primary" type="submit" disabled={sending || session?.permission === "read"}>
+          <Button size="sm" variant="primary" type="submit" disabled={sending || session?.permission === "read" || hasUnsupportedImage}>
             发送消息
           </Button>
         </div>

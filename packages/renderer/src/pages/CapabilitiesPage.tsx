@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Badge, Button, Panel, Segmented } from "../components/ui";
 import { useHostStore } from "../stores/host";
+import { useUiStore } from "../stores/ui";
 
 const kinds = [
   { value: "all", label: "全部" },
@@ -14,8 +15,11 @@ export function CapabilitiesPage() {
   const workspace = useHostStore((state) => state.workspace);
   const capabilities = workspace?.capabilities ?? [];
   const setCapabilityEnabled = useHostStore((state) => state.setCapabilityEnabled);
+  const openModal = useUiStore((state) => state.openModal);
   const [kind, setKind] = useState<(typeof kinds)[number]["value"]>("all");
   const items = capabilities.filter((item) => kind === "all" || item.kind === kind);
+  const addKind: "skill" | "extension" | "package" | "mcp" = kind === "all" ? "skill" : kind;
+  const addLabel = { skill: "添加技能来源", extension: "添加 Extension", package: "安装扩展包", mcp: "添加 MCP Server" }[addKind];
 
   return (
     <div className="flex flex-col gap-4">
@@ -26,7 +30,12 @@ export function CapabilitiesPage() {
             区分 Pi 原生 Skills、Extensions、Packages，以及 PiDock 通过 bridge Extension 接入的 MCP Servers；Package 负责安装版本，其余视图呈现运行资源与连接。
           </p>
         </div>
-        <Segmented ariaLabel="按类型过滤" value={kind} onChange={setKind} options={[...kinds]} />
+        <div className="flex flex-wrap items-center gap-2">
+          <Segmented ariaLabel="按类型过滤" value={kind} onChange={setKind} options={[...kinds]} />
+          <Button size="sm" variant="primary" onClick={() => openModal({ type: "add-capability", kind: addKind })}>
+            {addLabel}
+          </Button>
+        </div>
       </header>
 
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
@@ -45,6 +54,9 @@ export function CapabilitiesPage() {
               <dd>{capability.scope}</dd>
             </dl>
             <div className="mt-3 flex gap-2">
+              <Button size="sm" variant="ghost" onClick={() => openModal({ type: "capability-detail", capabilityId: capability.id })}>
+                详情
+              </Button>
               <Button size="sm" onClick={() => void setCapabilityEnabled(capability.id, capability.status !== "enabled")}>
                 {capability.status === "enabled" ? "停用" : "启用"}
               </Button>
@@ -72,5 +84,5 @@ function typeLabel(kind: string) {
 }
 
 function statusLabel(status: string) {
-  return { enabled: "已启用", disabled: "已停用", "update-available": "有可用更新" }[status] ?? status;
+  return { enabled: "已启用", disabled: "已停用", "update-available": "有可用更新", "pending-review": "待审阅" }[status] ?? status;
 }
