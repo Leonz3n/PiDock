@@ -76,3 +76,31 @@ describe("resolveShellCommand S3 smoke", () => {
     ).toThrow("conflicting shell command flags");
   });
 });
+
+describe("resolveShellCommand S4 smoke", () => {
+  it("recognizes the CDP automation smoke flag", () => {
+    expect(
+      resolveShellCommand(
+        ["/path/to/Electron", ".", "--", "--smoke-s4"],
+        {},
+      ),
+    ).toEqual({ kind: "task-automation-smoke" });
+  });
+
+  it("recognizes S4 smoke from the environment", () => {
+    expect(
+      resolveShellCommand(["/path/to/Electron", "."], {
+        PIDOCK_S4_SMOKE: "1",
+      }),
+    ).toEqual({ kind: "task-automation-smoke" });
+  });
+
+  it("rejects S4 smoke combined with another explicit mode", () => {
+    expect(() =>
+      resolveShellCommand(
+        ["/path/to/Electron", ".", "--", "--smoke-s4", "--smoke-s3"],
+        {},
+      ),
+    ).toThrow("conflicting shell command flags");
+  });
+});

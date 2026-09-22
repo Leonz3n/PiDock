@@ -13,7 +13,8 @@
     "lint": "eslint . --max-warnings 0",
     "versions": "electron . -- --print-versions",
     "smoke": "electron . -- --smoke",
-    "smoke:s3": "node scripts/smoke-s3.mjs"
+    "smoke:s3": "node scripts/smoke-s3.mjs",
+    "smoke:s4": "electron . -- --smoke-s4"
   },
   "dependencies": {
     "electron": "44.4.3"
