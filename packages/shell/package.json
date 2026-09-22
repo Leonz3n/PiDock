@@ -14,7 +14,8 @@
     "versions": "electron . -- --print-versions",
     "smoke": "electron . -- --smoke",
     "smoke:s3": "node scripts/smoke-s3.mjs",
-    "smoke:s4": "electron . -- --smoke-s4"
+    "smoke:s4": "electron . -- --smoke-s4",
+    "smoke:s5": "electron . -- --smoke-s5"
   },
   "dependencies": {
     "electron": "44.4.3"

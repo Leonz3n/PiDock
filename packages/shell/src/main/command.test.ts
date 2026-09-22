@@ -104,3 +104,31 @@ describe("resolveShellCommand S4 smoke", () => {
     ).toThrow("conflicting shell command flags");
   });
 });
+
+describe("resolveShellCommand S5 smoke", () => {
+  it("recognizes the agent-control smoke flag", () => {
+    expect(
+      resolveShellCommand(
+        ["/path/to/Electron", ".", "--", "--smoke-s5"],
+        {},
+      ),
+    ).toEqual({ kind: "task-browser-s5-smoke" });
+  });
+
+  it("recognizes S5 smoke from the environment", () => {
+    expect(
+      resolveShellCommand(["/path/to/Electron", "."], {
+        PIDOCK_S5_SMOKE: "1",
+      }),
+    ).toEqual({ kind: "task-browser-s5-smoke" });
+  });
+
+  it("rejects S5 smoke combined with another explicit mode", () => {
+    expect(() =>
+      resolveShellCommand(
+        ["/path/to/Electron", ".", "--", "--smoke-s5", "--smoke-s4"],
+        {},
+      ),
+    ).toThrow("conflicting shell command flags");
+  });
+});

@@ -20,6 +20,7 @@ import {
   type TaskBrowserSmokePhase,
 } from "./task-browser-smoke.js";
 import { runTaskBrowserS4Smoke } from "./task-browser-s4-smoke.js";
+import { runTaskBrowserS5Smoke } from "./task-browser-s5-smoke.js";
 
 /**
  * PiDock Electron shell entry point.
@@ -69,6 +70,13 @@ async function run(): Promise<void> {
   if (command.kind === "task-automation-smoke") {
     const report = await runTaskBrowserS4Smoke();
     process.stdout.write(`PIDOCK_S4_RESULT=${JSON.stringify(report)}\n`);
+    app.exit(report.ok ? 0 : 1);
+    return;
+  }
+
+  if (command.kind === "task-browser-s5-smoke") {
+    const report = await runTaskBrowserS5Smoke();
+    process.stdout.write(`PIDOCK_S5_RESULT=${JSON.stringify(report)}\n`);
     app.exit(report.ok ? 0 : 1);
     return;
   }
