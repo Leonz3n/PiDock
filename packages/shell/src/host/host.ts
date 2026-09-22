@@ -414,8 +414,10 @@ function dispatchTaskOp(
       // guard, so unbound/foreign tasks fail closed identically).
       // Agent `service/start|service/stop` control goes through the #5
       // permission gate on the task's session channel: readonly denies,
-      // default requires a granted approval, auto allows. Human-explicit
-      // control is labelled, never a gate bypass.
+      // default requires a verified live approval id, auto allows. A call
+      // carrying a `sessionId` is always agent control; only a
+      // session-less call is human-explicit. Renderer `actor` /
+      // `approvalGranted` claims are never trusted.
       case "task/registerService": {
         const services = serviceRuntimeFor(taskId);
         if ("error" in services) return { ok: false, error: services.error };
@@ -468,53 +470,58 @@ function dispatchTaskOp(
         const serviceId = record["serviceId"];
         const action = record["action"];
         const sessionId = record["sessionId"];
-        const actor = record["actor"];
+        // Renderer-supplied `actor` / `approvalGranted` are claims, never
+        // trust signals. Any call carrying a `sessionId` is agent control
+        // (agents cannot shed their session to claim the human path); only
+        // a call with no `sessionId` is human-explicit UI control,
+        // labelled and auditable in the event trail.
         if (typeof serviceId !== "string" || (action !== "start" && action !== "stop")) {
           return { ok: false, error: "invalid-payload: task/controlService requires serviceId/action" };
         }
-        // Human-explicit control: labelled, auditable, no gate.
-        if (actor === "human") {
-          const label = typeof record["label"] === "string" ? (record["label"] as string) : "用户显式操作";
-          try {
-            if (action === "start") services.markStarted(serviceId, { kind: "human", label });
-            else services.markStopped(serviceId, { kind: "human", label }, "user-request");
-            return { ok: true, payload: { serviceId, action, actor: "human" } };
-          } catch (error) {
-            return { ok: false, error: error instanceof Error ? error.message : String(error) };
-          }
-        }
-        // Agent control: tier comes from the session channel's live
-        // permission (never caller-claimed), then the runtime maps it.
-        if (typeof sessionId !== "string" || sessionId.length === 0) {
-          return { ok: false, error: "invalid-payload: task/controlService agent control requires sessionId" };
-        }
-        const approvalGranted = record["approvalGranted"] === true;
-        const channel = host.openSession(sessionId);
-        const tier = channel.currentPermission;
-        const decision = services.decideAgentControl({ serviceId, action, tier, approvalGranted });
-        if (!decision.ok) {
-          // `default` without a granted approval needs one: mint it via
-          // the channel gate (`exec.run` on the service cwd) so the
-          // approval carries tool/target/permissionAtRequest, then report
-          // the approval id (zero start/stop until approved).
-          if (tier === "default" && !approvalGranted) {
-            const preview = channel.previewGate("exec.run", `${host.taskDir}/services/${serviceId}`);
-            if (preview.verdict === "ask") {
-              const gate = channel.gate("exec.run", `${host.taskDir}/services/${serviceId}`, services.get(serviceId)?.templateVersion ?? "v1");
-              if (gate.verdict === "ask") {
-                host.store.writeSession(host.taskDir, channel.snapshot());
-                return { ok: false, error: `approval-required: ${gate.approvalId}` };
+        if (typeof sessionId === "string" && sessionId.length > 0) {
+          // Agent control: tier comes from the session channel's live
+          // permission (never caller-claimed). `default` requires a live
+          // verified approval id — a caller boolean is not accepted.
+          const approvalId = record["approvalId"];
+          const channel = host.openSession(sessionId);
+          const tier = channel.currentPermission;
+          const liveApproval =
+            typeof approvalId === "string" && approvalId.length > 0 ? channel.snapshot().approvals.find((item) => item.id === approvalId) : undefined;
+          const decision = services.decideAgentControl({ serviceId, action, tier, approval: liveApproval });
+          if (!decision.ok) {
+            // `default` without a verified approval needs one: mint it via
+            // the channel gate (`exec.run` on the service cwd) so the
+            // approval carries tool/target/permissionAtRequest, then report
+            // the approval id (zero start/stop until approved).
+            if (tier === "default" && liveApproval === undefined) {
+              const preview = channel.previewGate("exec.run", `${host.taskDir}/services/${serviceId}`);
+              if (preview.verdict === "ask") {
+                const gate = channel.gate("exec.run", `${host.taskDir}/services/${serviceId}`, services.get(serviceId)?.templateVersion ?? "v1");
+                if (gate.verdict === "ask") {
+                  host.store.writeSession(host.taskDir, channel.snapshot());
+                  return { ok: false, error: `approval-required: ${gate.approvalId}` };
+                }
               }
             }
+            return { ok: false, error: decision.reason };
           }
-          return { ok: false, error: decision.reason };
+          if (action === "start") {
+            services.markStarted(serviceId, { kind: "agent", sessionId, permissionAtRequest: tier });
+          } else {
+            services.markStopped(serviceId, { kind: "agent", sessionId, permissionAtRequest: tier }, "agent-request");
+          }
+          return { ok: true, payload: { serviceId, action, actor: "agent", tier } };
         }
-        if (action === "start") {
-          services.markStarted(serviceId, { kind: "agent", sessionId, permissionAtRequest: tier });
-        } else {
-          services.markStopped(serviceId, { kind: "agent", sessionId, permissionAtRequest: tier }, "agent-request");
+        // Human-explicit control: labelled, auditable, no gate. Reached
+        // only when the caller carries no session (UI-initiated).
+        const label = typeof record["label"] === "string" ? (record["label"] as string) : "用户显式操作";
+        try {
+          if (action === "start") services.markStarted(serviceId, { kind: "human", label });
+          else services.markStopped(serviceId, { kind: "human", label }, "user-request");
+          return { ok: true, payload: { serviceId, action, actor: "human" } };
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : String(error) };
         }
-        return { ok: true, payload: { serviceId, action, actor: "agent", tier } };
       }
       case "task/serviceStatus": {
         const services = serviceRuntimeFor(taskId);

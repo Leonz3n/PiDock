@@ -220,6 +220,20 @@ describe("memory Host adapter", () => {
     expect((await host.getTask("release"))?.templateVersion).toBe("v13");
   });
 
+  it("rejects a shared-template save carrying a secret key (fail-closed, Host parity)", async () => {
+    const host = createMemoryHost();
+    await expect(
+      host.saveEnvironmentConfig({
+        environmentId: "testing",
+        scope: "shared",
+        rows: [{ key: "MY_PRIVATE_KEY", value: "s3cr3t", secret: false }],
+      }),
+    ).rejects.toThrow("secret-in-shared");
+    // Version untouched by the rejected save.
+    const workspace = await host.getWorkspace();
+    expect(workspace.environments.find((item) => item.id === "testing")?.templateVersion).toBe("v12");
+  });
+
   it("stores task-scope overrides per task", async () => {
     const host = createMemoryHost();
     await host.saveEnvironmentConfig({

@@ -56,13 +56,22 @@ describe("register + planStart", () => {
 });
 
 describe("agent control tiers", () => {
-  it("denies read, asks on default, allows auto and post-approval default", () => {
+  it("denies read, asks on default, allows auto and verified-approval default", () => {
     const runtime = registered();
+    const dir = "/Users/name/Tasks/task-a1f92c3d";
+    const live = { status: "approved", executed: false, tool: "exec.run", target: `${dir}/services/saas-web`, permissionAtRequest: "default" };
     expect(runtime.decideAgentControl({ serviceId: "saas-web", action: "start", tier: "read" }).ok).toBe(false);
     const ask = runtime.decideAgentControl({ serviceId: "saas-web", action: "start", tier: "default" });
     expect(ask.ok).toBe(false);
     expect(ask.reason).toContain("确认");
-    expect(runtime.decideAgentControl({ serviceId: "saas-web", action: "start", tier: "default", approvalGranted: true }).ok).toBe(true);
+    // Rejected-then-claimed-true stays denied: the runtime never trusts a
+    // caller boolean, only a live verified approval record.
+    expect(runtime.decideAgentControl({ serviceId: "saas-web", action: "start", tier: "default", approvalGranted: true }).ok).toBe(false);
+    expect(runtime.decideAgentControl({ serviceId: "saas-web", action: "start", tier: "default", approval: { ...live, status: "rejected" } }).ok).toBe(false);
+    expect(runtime.decideAgentControl({ serviceId: "saas-web", action: "start", tier: "default", approval: { ...live, executed: true } }).ok).toBe(false);
+    // Foreign-service approval cannot spill over.
+    expect(runtime.decideAgentControl({ serviceId: "saas-web", action: "start", tier: "default", approval: { ...live, target: `${dir}/services/other` } }).ok).toBe(false);
+    expect(runtime.decideAgentControl({ serviceId: "saas-web", action: "start", tier: "default", approval: live }).ok).toBe(true);
     expect(runtime.decideAgentControl({ serviceId: "saas-web", action: "stop", tier: "auto" }).ok).toBe(true);
   });
   it("rejects unknown services fail-closed", () => {

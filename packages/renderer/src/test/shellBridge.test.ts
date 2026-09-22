@@ -105,7 +105,16 @@ describe("#7 service bridge (S4)", () => {
       expect(taskOp).toHaveBeenCalledWith(
         "task-abcdef12",
         "task/controlService",
-        expect.objectContaining({ serviceId: "saas-web", action: "start", actor: "human" }),
+        // Human-explicit control carries no sessionId and no actor claim:
+        // the Host treats session-less calls as UI-initiated.
+        { serviceId: "saas-web", action: "start", label: "用户点击启动" },
+      );
+      const agentDenied = await controlServiceThroughShell({ taskId: "task-abcdef12", serviceId: "saas-web", action: "start", sessionId: "main", approvalId: undefined });
+      expect(agentDenied.ok).toBe(true);
+      expect(taskOp).toHaveBeenCalledWith(
+        "task-abcdef12",
+        "task/controlService",
+        { serviceId: "saas-web", action: "start", sessionId: "main" },
       );
       const status = await serviceStatusThroughShell({ taskId: "task-abcdef12", serviceId: "saas-web" });
       expect(status.ok).toBe(true);

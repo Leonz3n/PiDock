@@ -252,18 +252,19 @@ export async function controlServiceThroughShell(input: {
   taskId: string;
   serviceId: string;
   action: "start" | "stop";
-  /** Absent = human-explicit (labelled); present = agent control via the session gate. */
+  /** Present = agent control via the session gate (verified `approvalId`); absent = human-explicit (labelled). */
   sessionId?: string;
   label?: string;
-  approvalGranted?: boolean;
+  /** Live approval id for default-tier agent control (verified Host-side; booleans are never trusted). */
+  approvalId?: string;
 }): Promise<ShellTaskOpResult> {
   const payload: Record<string, unknown> = { serviceId: input.serviceId, action: input.action };
-  if (input.sessionId !== undefined) payload["sessionId"] = input.sessionId;
-  else {
-    payload["actor"] = "human";
-    if (input.label !== undefined) payload["label"] = input.label;
+  if (input.sessionId !== undefined) {
+    payload["sessionId"] = input.sessionId;
+    if (input.approvalId !== undefined) payload["approvalId"] = input.approvalId;
+  } else if (input.label !== undefined) {
+    payload["label"] = input.label;
   }
-  if (input.approvalGranted !== undefined) payload["approvalGranted"] = input.approvalGranted;
   try {
     return await shellTaskOp(input.taskId, "task/controlService", payload);
   } catch (error) {

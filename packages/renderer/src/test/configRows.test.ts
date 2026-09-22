@@ -1,6 +1,7 @@
 import {
   configDraftKey,
   diffConfigRows,
+  isSensitiveKey,
   nextTemplateVersion,
   toConfigRows,
   validateConfigRows,
@@ -9,6 +10,14 @@ import {
 import type { ConfigEntry } from "../data/types";
 
 const row = (id: string, key: string, value: string): ConfigRowDraft => ({ id, key, value });
+
+describe("isSensitiveKey", () => {
+  it("masks PRIVATE_KEY like other credential keys", () => {
+    expect(isSensitiveKey("MY_PRIVATE_KEY")).toBe(true);
+    expect(isSensitiveKey("DEPLOY_PRIVATE_KEY_PATH")).toBe(true);
+    expect(isSensitiveKey("LOG_LEVEL")).toBe(false);
+  });
+});
 
 describe("validateConfigRows", () => {
   it("accepts a valid table, including empty values", () => {

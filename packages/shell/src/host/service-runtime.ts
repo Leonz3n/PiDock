@@ -78,6 +78,32 @@ export interface ServiceControlDecision {
   reason: string;
 }
 
+/**
+ * Server-side verification of a service-control approval against the
+ * session channel's live record. A claimed `approvalGranted` is never
+ * trusted: the approval must exist, be `approved`, unconsumed, bound to
+ * this service's tool/target, and requested under the `default` tier.
+ * Rejected/expired/consumed or foreign-service approvals all fail.
+ */
+export function verifyServiceControlApproval(input: {
+  approval: { status: string; executed: boolean; tool: string; target: string; permissionAtRequest: string } | undefined;
+  serviceId: string;
+  taskDir: string;
+}): { ok: true } | { ok: false; reason: string } {
+  const approval = input.approval;
+  if (!approval) return { ok: false, reason: "服务启停需先确认（批准后重试，拒绝/取消不执行）" };
+  if (approval.status !== "approved" || approval.executed) {
+    return { ok: false, reason: "确认请求已处理或未批准，不可重放" };
+  }
+  if (approval.permissionAtRequest !== "default") {
+    return { ok: false, reason: "服务启停需先确认（批准后重试，拒绝/取消不执行）" };
+  }
+  if (approval.tool !== "exec.run") return { ok: false, reason: "确认请求与服务启停不匹配" };
+  const expected = `${input.taskDir}/services/${input.serviceId}`;
+  if (approval.target !== expected) return { ok: false, reason: "确认请求与服务启停不匹配" };
+  return { ok: true };
+}
+
 export class TaskServiceRuntime {
   private readonly services = new Map<string, ServiceRecord>();
 
@@ -94,7 +120,17 @@ export class TaskServiceRuntime {
 
   get(serviceId: string): ServiceRecord | undefined {
     const record = this.services.get(serviceId);
-    return record ? { ...record, log: [...record.log], events: [...record.events], resolved: [...record.resolved], launchVerifications: [...record.launchVerifications] } : undefined;
+    if (!record) return undefined;
+    // Deep copy: descriptor/rows are entry objects, so a shallow array
+    // copy would still let callers mutate Host state through them.
+    return {
+      ...record,
+      descriptor: { ...record.descriptor, args: [...record.descriptor.args], ports: [...record.descriptor.ports], healthCheck: record.descriptor.healthCheck ? { ...record.descriptor.healthCheck } : undefined },
+      log: [...record.log.map((entry) => ({ ...entry }))],
+      events: [...record.events],
+      resolved: [...record.resolved.map((entry) => ({ ...entry }))],
+      launchVerifications: [...record.launchVerifications.map((entry) => ({ ...entry }))],
+    };
   }
 
   /**
@@ -171,16 +207,19 @@ export class TaskServiceRuntime {
    * Agent control decision through the caller's permission tier (the Host
    * passes the tier it read from the session channel's `previewGate` path,
    * so this function never re-implements the gate — it maps tiers to
-   * outcomes): `read` ⇒ deny; `default` ⇒ needs approval (caller mints it
-   * via `requestApproval` and retries with `approvalGranted:true`);
-   * `auto` ⇒ allow. Human-explicit control (`actor.kind === "human"`) is
-   * allowed directly but labelled in the event trail (no gate bypass: the
-   * human path is the UI path, auditable by label, not by skipping).
+   * outcomes): `read` ⇒ deny; `default` ⇒ needs a live, verified approval
+   * (verified server-side via `verifyServiceControlApproval`, never a
+   * caller-claimed `approvalGranted` booleans); `auto` ⇒ allow.
+   * Human-explicit control (session-less Host dispatch) is allowed
+   * directly but labelled in the event trail (no gate bypass: the human
+   * path is the UI path, auditable by label, not by skipping).
    */
   decideAgentControl(input: {
     serviceId: string;
     action: "start" | "stop";
     tier: "read" | "default" | "auto";
+    approval?: { status: string; executed: boolean; tool: string; target: string; permissionAtRequest: string } | undefined;
+    /** @deprecated caller-claimed booleans are not trusted; pass `approval` instead. */
     approvalGranted?: boolean;
   }): ServiceControlDecision {
     if (!this.services.has(input.serviceId)) {
@@ -189,8 +228,9 @@ export class TaskServiceRuntime {
     if (input.tier === "read") {
       return { ok: false, reason: "只读会话禁止服务启停，请先调整会话权限" };
     }
-    if (input.tier === "default" && !input.approvalGranted) {
-      return { ok: false, reason: "默认权限的服务启停需先确认（批准后重试，拒绝/取消不执行）" };
+    if (input.tier === "default") {
+      const verified = verifyServiceControlApproval({ approval: input.approval, serviceId: input.serviceId, taskDir: this.taskDir });
+      if (!verified.ok) return { ok: false, reason: verified.reason };
     }
     return { ok: true, reason: `${input.action}:${input.serviceId}` };
   }
