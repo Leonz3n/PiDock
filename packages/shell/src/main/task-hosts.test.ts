@@ -97,6 +97,27 @@ describe("PerTaskHostRegistry", () => {
     expect(routeTaskBinding("task-a", "task-a", "/tasks/task-a")).toBe("routable");
   });
 
+  it("re-resolves the task dir on reuse and rejects a moved task instead of a stale Host", async () => {
+    const spawns: Array<{ taskId: string; taskDir: string }> = [];
+    let dir: string | null = "/tasks/a";
+    const { registry, spawn } = registryWith(() => dir, spawns, TASK_RESULT);
+    await registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
+    expect(spawn).toHaveBeenCalledTimes(1);
+    // Record moved away: reuse must fail closed, not ride the stale fork.
+    dir = "/tasks/a-moved";
+    await expect(registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} })).rejects.toThrow(
+      "task-moved",
+    );
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(registry.entryForTaskId("task-a")?.taskDir).toBe("/tasks/a");
+    // Record deleted: same fail-closed, still no extra fork.
+    dir = null;
+    await expect(registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} })).rejects.toThrow(
+      "task-moved",
+    );
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
   it("disposeAll kills every forked Host", async () => {
     const spawns: Array<{ taskId: string; taskDir: string }> = [];
     const dirs: Record<string, string> = { "task-a": "/tasks/a", "task-b": "/tasks/b" };

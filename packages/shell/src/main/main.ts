@@ -16,6 +16,7 @@ import {
   webPreferencesEvidence,
 } from "./runtime.js";
 import { runSmoke } from "./smoke.js";
+import { createDiskTaskDirResolver, defaultTasksRoot } from "./task-resolver.js";
 import {
   runTaskBrowserSmoke,
   type TaskBrowserSmokePhase,
@@ -125,7 +126,16 @@ async function run(): Promise<void> {
   // Hosts: those paths run no task ops.)
   const { client, child } = await createHost(workspaceId);
   const views = await createTrustedWindow(workspaceId);
-  const tasks = new PerTaskHostRegistry(workspaceId);
+  // Production resolver: scan the machine tasks root for a `task.json`
+  // matching the routed task id. First-use of a provisioned task forks
+  // its bound Host; unprovisioned ids still fail closed (`unknown task`).
+  // Task ids are globally unique, so at most one folder wins per id; the
+  // registry revalidates the resolved dir on every reuse (`task-moved`).
+  const tasks = new PerTaskHostRegistry(
+    workspaceId,
+    (ws, task) => createHost(ws, true, task),
+    createDiskTaskDirResolver(defaultTasksRoot()),
+  );
   registerIpc(client, views.registry, tasks);
   const loaded = await loadTrustedViews(views);
   assertTrustedWindowEvidence(trustedWindowEvidence(views));
