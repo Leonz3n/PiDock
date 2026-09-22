@@ -218,6 +218,38 @@ function dispatchTaskOp(
         host.reject(sessionId, approvalId);
         return { ok: true, payload: { sessionId, approvalId } };
       }
+      case "task/saveDraft": {
+        const sessionId = record["sessionId"];
+        const text = record["text"];
+        if (typeof sessionId !== "string" || typeof text !== "string") {
+          return { ok: false, error: "invalid-payload: task/saveDraft requires sessionId/text" };
+        }
+        const draft: { text: string; references?: unknown[]; skillSource?: string } = { text };
+        if (record["references"] !== undefined) draft.references = record["references"] as unknown[];
+        if (typeof record["skillSource"] === "string") draft.skillSource = record["skillSource"] as string;
+        host.saveDraft(sessionId, draft);
+        return { ok: true, payload: { sessionId } };
+      }
+      case "task/clearDraft": {
+        const sessionId = record["sessionId"];
+        if (typeof sessionId !== "string") {
+          return { ok: false, error: "invalid-payload: task/clearDraft requires sessionId" };
+        }
+        host.clearDraft(sessionId);
+        return { ok: true, payload: { sessionId } };
+      }
+      case "task/setPermission": {
+        const sessionId = record["sessionId"];
+        const permission = record["permission"];
+        if (typeof sessionId !== "string") {
+          return { ok: false, error: "invalid-payload: task/setPermission requires sessionId" };
+        }
+        if (permission !== "read" && permission !== "default" && permission !== "auto") {
+          return { ok: false, error: "invalid-payload: task/setPermission.permission must be read/default/auto" };
+        }
+        host.setPermission(sessionId, permission);
+        return { ok: true, payload: { sessionId, permission } };
+      }
       default:
         return { ok: false, error: `unknown-op: ${op}` };
     }

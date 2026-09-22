@@ -130,6 +130,19 @@ describe("validateHostTaskOp", () => {
     expect(validateHostTaskOp("task/cancel", "nope").ok).toBe(false);
     expect(validateHostTaskOp("task/approve", {})).toEqual({ ok: true });
   });
+
+  it("validates draft/permission ops fail-closed (S6 batch 2 follow-up P1)", () => {
+    expect(validateHostTaskOp("task/saveDraft", { sessionId: "main", text: "草稿" })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/saveDraft", { sessionId: "main", text: "草稿", references: [{ kind: "file", path: "a.ts" }], skillSource: "review" })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/saveDraft", { sessionId: "", text: "草稿" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/saveDraft", { sessionId: "main" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/saveDraft", { sessionId: "main", text: "x", references: "nope" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/clearDraft", { sessionId: "main" })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/clearDraft", { sessionId: "" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/setPermission", { sessionId: "main", permission: "read" })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/setPermission", { sessionId: "main", permission: "owner" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/setPermission", { sessionId: "main" }).ok).toBe(false);
+  });
 });
 
 describe("S6 batch 2: send-record refs and draft-tolerant store", () => {

@@ -558,7 +558,7 @@ export class PiSessionChannel {
     const call = this.calls.find((item) => item.callId === approval.callId);
     call?.events.push(`approval:${approvalId}:approved:executed-once`);
     this.messageSequence += 1;
-    this.messages.push({ id: `msg-${this.messageSequence}`, role: "agent", text: `已批准并执行 ${approval.tool} ${approval.target}。`, callId: approval.callId, origin: "human" });
+    this.messages.push({ id: `msg-${this.messageSequence}`, role: "agent", text: `已批准并执行 ${approval.tool} ${approval.target}。`, callId: approval.callId, origin: "agent" });
     this.releaseWriteLock(call?.callId ?? approval.callId);
     this.state = "done";
     return call ?? { callId: approval.callId, providerId: this.providerId, model: this.model, usageSource: "approval", events: [] };
