@@ -30,6 +30,17 @@ const APPROVAL_TTL_MS = 24 * 60 * 60 * 1000;
 /** Local application settings live on the machine, not in a project shared template. */
 export const defaultWorkspaceRoot = "~/PiDockTasks";
 
+/**
+ * A task root must be absolute so task folders are never created relative to the
+ * process working directory: POSIX (`/Users/name/Tasks`), Windows drive
+ * (`D:\Tasks` or `D:/Tasks`) or UNC (`\\host\share`). A leading `~/` is also
+ * accepted because the renderer's own default is home-relative; the prototype
+ * rejected it, so this is a deliberate, documented extension.
+ */
+export function validWorkspaceRoot(root: string): boolean {
+  return root.startsWith("/") || root.startsWith("~/") || /^[A-Za-z]:[\\/]/.test(root) || /^\\\\[^\\]+\\[^\\]+/.test(root);
+}
+
 const defaultLocalSettings: LocalSettings = {
   configDir: "~/.pi/dock",
   configFile: "~/.pi/dock/config.json",
@@ -968,6 +979,9 @@ class MemoryHost implements HostAdapter {
   async setWorkspaceRoot(workspaceRoot: string): Promise<LocalSettings> {
     const value = workspaceRoot.trim();
     if (!value) throw new Error("请填写完整的任务根目录");
+    // Restored from the prototype's `validWorkspaceRoot`: a non-absolute root
+    // would create task folders relative to the process working directory.
+    if (!validWorkspaceRoot(value)) throw new Error("请填写完整的任务根目录，例如 /Users/name/Tasks 或 D:\\Tasks");
     this.localSettings = { ...this.localSettings, workspaceRoot: value };
     return { ...this.localSettings };
   }

@@ -1,4 +1,4 @@
-import { createMemoryHost } from "../data/memoryHost";
+import { createMemoryHost, defaultWorkspaceRoot } from "../data/memoryHost";
 
 describe("memory Host adapter", () => {
   it("does not execute rejected or expired approvals", async () => {
@@ -108,6 +108,21 @@ describe("memory Host adapter", () => {
     expect(updated.workspaceRoot).toBe("/tmp/pidock-tasks");
     expect((await host.getLocalSettings()).workspaceRoot).toBe("/tmp/pidock-tasks");
     await expect(host.setWorkspaceRoot("   ")).rejects.toThrow("请填写完整的任务根目录");
+  });
+
+  it("rejects a non-absolute task root and accepts posix, drive, UNC and home paths", async () => {
+    const host = createMemoryHost();
+    // The prototype's `validWorkspaceRoot` check: a root that is not absolute
+    // would create task folders relative to the process working directory.
+    for (const invalid of ["Tasks", "../Tasks", "./Tasks", "C:Tasks"]) {
+      await expect(host.setWorkspaceRoot(invalid)).rejects.toThrow("完整的任务根目录");
+    }
+    // Nothing invalid was written.
+    expect((await host.getLocalSettings()).workspaceRoot).toBe(defaultWorkspaceRoot);
+
+    for (const root of ["/Users/name/Tasks", "/tmp/pidock-tasks", "D:/Tasks", "D:\\Tasks", "\\\\host\\share", "~/PiDockTasks"]) {
+      expect((await host.setWorkspaceRoot(root)).workspaceRoot).toBe(root);
+    }
   });
 
   it("exposes task files and simulated terminal execution behind the adapter", async () => {
