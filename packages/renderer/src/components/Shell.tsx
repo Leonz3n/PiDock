@@ -167,10 +167,11 @@ function Breadcrumbs() {
     archive: "归档与清理",
     settings: "本机设置",
   }[route.view];
+  const connected = typeof window !== "undefined" && typeof window.pidock === "object" && window.pidock !== null;
   return (
     <div className="flex items-center justify-between gap-3 text-xs text-muted">
       <span>{label}</span>
-      <span>内存模拟数据 · 未连接 Host</span>
+      <span>{connected ? "已连接桌面壳 Host" : "内存模拟数据 · 未连接 Host"}</span>
     </div>
   );
 }

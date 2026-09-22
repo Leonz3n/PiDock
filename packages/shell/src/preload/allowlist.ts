@@ -10,7 +10,11 @@
 export const PRELOAD_BRIDGE_NAME = "pidock" as const;
 
 /** Renderer->main request channels exposed through the bridge. */
-export const ALLOWED_INVOKE_CHANNELS = ["shell/getVersions", "shell/hostPing"] as const;
+export const ALLOWED_INVOKE_CHANNELS = [
+  "shell/getVersions",
+  "shell/hostPing",
+  "shell/taskOp",
+] as const;
 
 export type AllowedInvokeChannel = (typeof ALLOWED_INVOKE_CHANNELS)[number];
 

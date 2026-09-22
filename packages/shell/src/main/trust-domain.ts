@@ -50,7 +50,10 @@ export interface ExpectedTaskIdentity {
   pageId: string;
 }
 
-export type ShellInvokeMethod = "shell/getVersions" | "shell/hostPing";
+export type ShellInvokeMethod =
+  | "shell/getVersions"
+  | "shell/hostPing"
+  | "shell/taskOp";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -182,6 +185,10 @@ export function validateShellInvocationPayload(
     return { workspaceId: senderWorkspaceId };
   }
 
+  if (method === "shell/taskOp") {
+    return validateTaskOpPayload(payload, senderWorkspaceId);
+  }
+
   if (payload === undefined) {
     return { workspaceId: senderWorkspaceId };
   }
@@ -198,6 +205,39 @@ export function validateShellInvocationPayload(
     );
   }
   if (payload["workspaceId"] !== senderWorkspaceId) {
+    throw new TrustDomainViolation(
+      "payload-workspace-mismatch",
+      "payload workspace does not match sender binding",
+    );
+  }
+  return { workspaceId: senderWorkspaceId };
+}
+
+/**
+ * Renderer task-op payload: the task id selects the task, but the workspace
+ * still binds to the sender — a renderer can name its own task, never
+ * another workspace's. Unknown ops are rejected fail-closed.
+ */
+function validateTaskOpPayload(
+  payload: unknown,
+  senderWorkspaceId: string,
+): { workspaceId: string } {
+  if (!isRecord(payload)) {
+    throw new TrustDomainViolation("invalid-payload", "invalid shell/taskOp payload");
+  }
+  const taskId = payload["taskId"];
+  const op = payload["op"];
+  if (typeof taskId !== "string" || taskId.length === 0) {
+    throw new TrustDomainViolation("invalid-payload", "shell/taskOp requires a taskId");
+  }
+  if (
+    typeof op !== "string" ||
+    !["task/provision", "task/sendMessage", "task/cancel", "task/approve", "task/reject"].includes(op)
+  ) {
+    throw new TrustDomainViolation("invalid-payload", `unknown task op: ${String(op)}`);
+  }
+  const workspaceId = payload["workspaceId"];
+  if (workspaceId !== undefined && workspaceId !== senderWorkspaceId) {
     throw new TrustDomainViolation(
       "payload-workspace-mismatch",
       "payload workspace does not match sender binding",

@@ -1,10 +1,13 @@
 /**
- * utilityProcess entry: Node Host stub (S1).
+ * utilityProcess entry: per-task-workspace Node Host ([PiDock 02] #5).
  *
- * Runs in a per-task-workspace utilityProcess as plain Node (no Chromium,
- * no renderer, no CDP). Speaks the typed `host/*` RPC protocol over the
- * parent port and nothing else. Real Pi AgentSession wiring is S5+;
- * this stub proves the process boundary and the round-trip.
+ * Runs as plain Node (no Chromium, no renderer, no CDP). Speaks the typed
+ * `host/*` RPC protocol over the parent port and nothing else. `host/ping`
+ * and `host/getVersions` prove the process boundary; `host/task` routes
+ * task-scoped ops (provision/sendMessage/cancel/approve/reject) with the
+ * same runtime payload validation main enforces. The Host never trusts a
+ * renderer-chosen workspace: the routed ids must equal the Host's own
+ * workspace binding.
  */
 
 // Runs only inside utilityProcess: `process.parentPort` exists there and
@@ -30,8 +33,10 @@ function getParentPort(): UtilityParentPort {
 
 const hostPort = getParentPort();
 import {
+  isHostTaskParams,
   isRpcRequest,
   type HostPingResult,
+  type HostTaskResult,
   type HostVersionsResult,
   type RpcResponse,
 } from "../rpc/protocol.js";
@@ -72,6 +77,24 @@ hostPort.on("message", (event: { data: unknown }) => {
       node: process.versions["node"] ?? "unknown",
       v8: process.versions["v8"] ?? "unknown",
       workspaceId,
+    };
+    reply({ kind: "response", id: message.id, ok: true, payload });
+    return;
+  }
+  if (message.method === "host/task") {
+    // The Host is bound to one workspace (env at fork time). A routed call
+    // naming any other workspace is rejected even though the envelope
+    // itself is well-formed — main already compared sender vs payload.
+    const taskParams: unknown = message.params;
+    if (!isHostTaskParams(taskParams) || taskParams.workspaceId !== workspaceId) {
+      reply({ kind: "response", id: message.id, ok: false, error: "task-workspace-mismatch" });
+      return;
+    }
+    const payload: HostTaskResult = {
+      workspaceId,
+      taskId: taskParams.taskId,
+      op: taskParams.op,
+      payload: { ...(taskParams.payload ?? {}), hostTime: Date.now() },
     };
     reply({ kind: "response", id: message.id, ok: true, payload });
     return;

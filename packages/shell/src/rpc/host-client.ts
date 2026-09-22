@@ -2,6 +2,8 @@ import type { UtilityProcess } from "electron";
 import {
   isRpcResponse,
   type HostPingResult,
+  type HostTaskParams,
+  type HostTaskResult,
   type HostVersionsResult,
   type RequestMethod,
   type RequestParams,
@@ -34,7 +36,7 @@ export class HostClient {
   private readonly pending = new Map<
     string,
     {
-      resolve: (value: HostPingResult | HostVersionsResult) => void;
+      resolve: (value: HostPingResult | HostVersionsResult | HostTaskResult) => void;
       reject: (err: Error) => void;
       timer: NodeJS.Timeout;
     }
@@ -64,7 +66,7 @@ export class HostClient {
     method: M,
     params: RequestParams,
     options?: HostClientOptions,
-  ): Promise<HostPingResult | HostVersionsResult> {
+  ): Promise<HostPingResult | HostVersionsResult | HostTaskResult> {
     const id = `rpc-${nextId++}`;
     const request: RpcRequest = { kind: "request", id, method, params };
     return new Promise((resolve, reject) => {
@@ -89,6 +91,17 @@ export class HostClient {
     options?: HostClientOptions,
   ): Promise<HostVersionsResult> {
     return this.call("host/getVersions", params, options) as Promise<HostVersionsResult>;
+  }
+
+  /**
+   * Task-routed call into one task workspace Host. Main binds workspaceId
+   * and taskId from the trusted sender; the renderer never chooses them.
+   */
+  task(
+    params: HostTaskParams,
+    options?: HostClientOptions,
+  ): Promise<HostTaskResult> {
+    return this.call("host/task", params, options) as Promise<HostTaskResult>;
   }
 
   dispose(): void {
