@@ -71,7 +71,7 @@ function toSendMessageResult(taskId: string, sessionId: string, result: ShellTas
       },
     ],
   };
-  return { state: state as SendMessageResult["state"], run, ...(approvalId ? { approvalId } : {}) } as SendMessageResult;
+  return { state: state as SendMessageResult["state"], run, ...(approvalId ? { approvalId } : {}) };
 }
 
 /**
@@ -84,17 +84,22 @@ type PendingShellApproval = {
   taskId: string;
   sessionId: string;
   title: string;
+  tool?: string;
+  target?: string;
   requestedAt: string;
 };
 
 function toShellApproval(entry: PendingShellApproval): Approval {
   const expiresAt = new Date(Date.parse(entry.requestedAt) + 15 * 60 * 1000).toISOString();
+  const tool = entry.tool ?? "";
+  const target = entry.target ?? "";
+  const title = tool.length > 0 && target.length > 0 ? `${tool} ${target}` : entry.title;
   return {
     id: entry.approvalId,
     taskId: entry.taskId,
     sessionId: entry.sessionId,
-    title: entry.title,
-    command: entry.title,
+    title,
+    command: title,
     cwd: "",
     impact: "桌面壳 Host 审批",
     payloadVersion: "v1",
@@ -134,14 +139,21 @@ export function createShellHostAdapter(fallback: HostAdapter): HostAdapter {
           // Track the Host's approval id (never the fallback's) so
           // `resolveApproval`/`getApproval`/`listApprovals` can render it
           // without an approval-listing RPC. `approvalId` rides the
-          // `task/sendMessage` result payload (see `HostTurnResult`).
-          const approvalId = (sent as { approvalId?: unknown }).approvalId;
+          // `task/sendMessage` result payload (see `HostTurnResult`);
+          // `tool`/`target` ride the same payload so the synthetic
+          // approval shows what awaits approval, not just "等待确认".
+          const approvalId = sent.approvalId;
           if (sent.state === "approval" && typeof approvalId === "string" && approvalId.length > 0) {
+            const payloadRecord = asRecord(result.payload);
+            const tool = typeof payloadRecord["tool"] === "string" ? (payloadRecord["tool"] as string) : undefined;
+            const target = typeof payloadRecord["target"] === "string" ? (payloadRecord["target"] as string) : undefined;
             pendingShellApprovals.set(approvalId, {
               approvalId,
               taskId,
               sessionId,
               title: "等待确认",
+              ...(tool ? { tool } : {}),
+              ...(target ? { target } : {}),
               requestedAt: new Date().toISOString(),
             });
           }

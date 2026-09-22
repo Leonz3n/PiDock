@@ -39,6 +39,8 @@ export type UsageFilter = {
 export type SendMessageResult = {
   state: "completed" | "failed" | "approval" | "stopped";
   run: RunRecord;
+  /** Host approval id, present only when `state` is `approval` (shell path). */
+  approvalId?: string;
 };
 
 /** One layer of an environment's config, saved through the adapter. */

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { boundWorkspaceId, buildHostEnv, buildToolPlannerSpec, DEFAULT_WORKSPACE_ID, routeHostTask, routeTaskBinding, toolPlannerSpecForOp, validateHostTaskOp } from "./host-guards.js";
+import { boundWorkspaceId, buildHostEnv, buildToolPlannerSpec, DEFAULT_WORKSPACE_ID, routeHostTask, routeTaskBinding, toolPlannerSpecForHostDispatch, toolPlannerSpecForOp, validateHostTaskOp } from "./host-guards.js";
 
 // Seam: Host process-boundary guards (workspace binding + per-op payloads).
 // host.ts itself requires a utilityProcess parent port, so the pure guards
@@ -185,6 +185,9 @@ describe("S6 BLOCK fix: buildToolPlannerSpec pure dispatch (host.ts mirror)", ()
     expect(buildToolPlannerSpec({ tool: "rm.all", target: "/tmp/t", toolPlan: "echo" }).ok).toBe(false);
     expect(buildToolPlannerSpec({ tool: "exec.run", target: "/tmp/t", toolPlan: "run" }).ok).toBe(false);
     expect(toolPlannerSpecForOp("task/cancel", {} as never)).toBeNull();
+    // `host.ts` dispatch goes through the shared entry (not `buildToolPlannerSpec` directly).
+    expect(toolPlannerSpecForHostDispatch({})).toEqual({ ok: true, mode: "none" });
+    expect(toolPlannerSpecForHostDispatch({ toolPlan: "echo" }).ok).toBe(false);
   });
 });
 
@@ -212,5 +215,28 @@ describe("S6 batch 3: scripted tool plan rides sendMessage fail-closed", () => {
     expect(
       validateHostTaskOp("task/sendMessage", { sessionId: "main", text: "hi", toolPlan: "run" }).ok,
     ).toBe(false);
+    // Dual-layer parity: sender-side `validateHostTaskOp` enforces the same
+    // `toolPlan -> tool/target` rule Host dispatch runs, so a combo the Host
+    // would reject fails closed early instead of forwarding-then-rejecting.
+    expect(
+      validateHostTaskOp("task/sendMessage", { sessionId: "main", text: "hi", toolPlan: "echo" }).ok,
+    ).toBe(false);
+    expect(
+      validateHostTaskOp("task/sendMessage", {
+        sessionId: "main",
+        text: "hi",
+        tool: "exec.run",
+        toolPlan: "echo",
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateHostTaskOp("task/sendMessage", {
+        sessionId: "main",
+        text: "hi",
+        tool: "exec.run",
+        target: "/tmp/t/run.sh",
+        toolPlan: "echo",
+      }),
+    ).toEqual({ ok: true });
   });
 });

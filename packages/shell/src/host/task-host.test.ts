@@ -514,6 +514,10 @@ describe("S6 batch 3: exec.run approval end-to-end through Host sendMessage", ()
     });
     expect(turn.state).toBe("approval");
     expect(turn.approvalId).toBeDefined();
+    // The approval payload threads `tool`/`target` so the renderer can
+    // show what awaits approval (not just a generic waiting label).
+    expect(turn.tool).toBe("exec.run");
+    expect(turn.target).toBe(`${TASK_DIR}/run.sh`);
     const approval = taskHost.openSession("main").pendingApproval();
     expect(approval?.tool).toBe("exec.run");
     expect(approval?.target).toBe(`${TASK_DIR}/run.sh`);
