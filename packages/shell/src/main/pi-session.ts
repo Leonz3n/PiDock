@@ -53,7 +53,7 @@ export interface PiCallRecord {
   callId: string;
   providerId: string;
   model: string;
-  usageSource: string;
+  usageSource: PiUsageSource;
   usage?: PiCallUsage;
   events: string[];
 }
@@ -70,6 +70,7 @@ export interface PiSessionSnapshot {
   sessionId: string;
   providerId: string;
   model: string;
+  credentialRef?: string;
   permission: PiPermission;
   messages: PiMessage[];
   calls: PiCallRecord[];
@@ -160,10 +161,11 @@ export function listKnownPiProviders(): PiProviderProfile[] {
 
 export interface PiTurnInput {
   text: string;
-  usageSource?: string;
+  usageSource?: PiUsageSource;
   usage?: Partial<PiCallUsage>;
   providerId?: string;
   model?: string;
+  credentialRef?: string;
   stream?: (chunk: { callId: string; text: string; done: boolean }) => void;
   tool?: string;
   target?: string;
@@ -177,9 +179,17 @@ export interface PiTurnResult {
   approval?: PiApproval;
 }
 
-function normalizeCallUsage(source: string | undefined, usage: Partial<PiCallUsage> | undefined): PiCallUsage {
-  const normalized: PiUsageSource =
-    source === "actual" || source === "estimated" || source === "unreported" || source === "approval" ? source : "test-double";
+/**
+ * Normalize a usage source. `undefined` (no caller claim) stays the
+ * historical test-double default; an explicit but unknown value is
+ * rejected fail-closed so direct channel callers cannot silently relabel
+ * usage the RPC layer would refuse.
+ */
+function normalizeCallUsage(source: PiUsageSource | undefined, usage: Partial<PiCallUsage> | undefined): PiCallUsage {
+  if (source !== undefined && source !== "actual" && source !== "estimated" && source !== "unreported" && source !== "approval" && source !== "test-double") {
+    throw new Error(`invalid-payload: usageSource must be actual/estimated/unreported/test-double/approval, got ${source}`);
+  }
+  const normalized: PiUsageSource = source ?? "test-double";
   const nonNegative = (value: unknown): number =>
     typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0;
   return {
@@ -391,17 +401,33 @@ export class PiSessionChannel {
     if (this.state === "running" || this.state === "approval") {
       throw new Error("当前执行尚未结束，请先停止或确认");
     }
-    if (input.providerId !== undefined || input.model !== undefined) {
-      const selected = resolveProviderSelection(
-        input.providerId ?? this.providerId,
-        input.model ?? this.model,
-      );
-      this.providerId = selected.providerId;
-      this.model = selected.model;
-    }
     piCallSequence += 1;
     const callId = `call-${piCallSequence}`;
     const events: string[] = [`turn:start:${callId}`];
+    // Provider fallback (unknown per-turn/full-turn provider id) is
+    // intentional: the session always keeps a routable selection. Emit a
+    // `turn:provider-fallback` event so consumers can distinguish fallback
+    // from an explicit selection instead of silently rerouting.
+    if (input.providerId !== undefined || input.model !== undefined) {
+      const requestedProviderId = input.providerId ?? this.providerId;
+      const selected = resolveProviderSelection(
+        requestedProviderId,
+        input.model ?? this.model,
+      );
+      if (requestedProviderId !== selected.providerId) {
+        events.push(`turn:provider-fallback:${requestedProviderId}->${selected.providerId}`);
+      }
+      this.providerId = selected.providerId;
+      this.model = selected.model;
+    }
+    const credentialRef = input.credentialRef?.trim();
+    if (input.credentialRef !== undefined) {
+      if ((credentialRef?.length ?? 0) === 0) {
+        throw new Error("credentialRef must be a non-empty reference when provided");
+      }
+      this.credentialRef = credentialRef;
+      events.push("turn:credential-rotated");
+    }
     const usage = normalizeCallUsage(input.usageSource, input.usage);
     const call: PiCallRecord = {
       callId,
@@ -493,7 +519,7 @@ export class PiSessionChannel {
   }
 
   snapshot(): PiSessionSnapshot {
-    return {
+    const snapshot: PiSessionSnapshot = {
       taskId: this.taskId,
       sessionId: this.sessionId,
       providerId: this.providerId,
@@ -506,6 +532,10 @@ export class PiSessionChannel {
       createdAt: this.createdAt,
       updatedAt: this.now(),
     };
+    if (this.credentialRef !== undefined) {
+      snapshot.credentialRef = this.credentialRef;
+    }
+    return snapshot;
   }
 
   /**
@@ -521,15 +551,17 @@ export class PiSessionChannel {
       providerId: snapshot.providerId,
       model: snapshot.model,
       permission: snapshot.permission,
+      credentialRef: snapshot.credentialRef,
     });
     channel.messages = snapshot.messages.map((message) => ({ ...message }));
-    channel.calls = snapshot.calls.map((call) => ({
-      ...call,
+    channel.calls = snapshot.calls.map((call) => {
       // S6 batch 1 adds structured `usage`; older snapshots without it
       // restore as `unreported` so usage summaries never read garbage.
-      usage: call.usage ?? { input: 0, output: 0, cacheRead: 0, source: "unreported" as const },
-      events: [...call.events],
-    }));
+      // Backfill the legacy `usageSource` twin alongside `usage.source`
+      // so the two never diverge after a restore.
+      const usage = call.usage ?? { input: 0, output: 0, cacheRead: 0, source: "unreported" as const };
+      return { ...call, usage, usageSource: usage.source, events: [...call.events] };
+    });
     channel.approvals = (snapshot.approvals ?? []).map((approval) => ({
       ...approval,
       status: approval.status === "pending" ? "expired" : approval.status,

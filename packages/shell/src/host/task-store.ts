@@ -156,6 +156,13 @@ export function parseSessionSnapshot(raw: string): PiSessionSnapshot {
       throw new Error(`invalid-payload: session snapshot.${key} must be a non-empty string`);
     }
   }
+  // credentialRef is reference-only (never a secret): optional on disk,
+  // non-empty when present so a corrupt snapshot cannot restore a blank ref.
+  if (snapshot["credentialRef"] !== undefined) {
+    if (typeof snapshot["credentialRef"] !== "string" || (snapshot["credentialRef"] as string).trim().length === 0) {
+      throw new Error("invalid-payload: session snapshot.credentialRef must be a non-empty reference");
+    }
+  }
   return value as PiSessionSnapshot;
 }
 

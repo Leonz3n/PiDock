@@ -254,6 +254,41 @@ describe("PiSessionChannel turns and approvals", () => {
     expect(session.snapshot().providerId).toBe("provider-local");
   });
 
+  it("applies a per-turn credentialRef rotation and persists it across restore", () => {
+    const session = channel();
+    const turn = session.runTurn({ text: "检查构建", credentialRef: "PIDOCK_PI_TOKEN_V2" });
+    expect(turn.call.events).toContain("turn:credential-rotated");
+    expect(session.configuredCredentialRef).toBe("PIDOCK_PI_TOKEN_V2");
+    const restored = PiSessionChannel.restore(session.snapshot(), TASK_DIR);
+    expect(restored.configuredCredentialRef).toBe("PIDOCK_PI_TOKEN_V2");
+    expect(restored.snapshot().credentialRef).toBe("PIDOCK_PI_TOKEN_V2");
+    expect(() => session.runTurn({ text: "再来", credentialRef: "  " })).toThrow("credentialRef");
+  });
+
+  it("emits turn:provider-fallback on unknown provider and rejects unknown usageSource", () => {
+    const session = channel();
+    const turn = session.runTurn({ text: "检查构建", providerId: "provider-future" });
+    expect(turn.call.providerId).toBe("provider-local");
+    expect(turn.call.events.some((event) => event.startsWith("turn:provider-fallback:provider-future->"))).toBe(true);
+    expect(() => session.runTurn({ text: "坏来源", usageSource: "live" as never })).toThrow("usageSource");
+  });
+
+  it("keeps usageSource twin in sync when backfilling legacy snapshots", () => {
+    const session = channel();
+    const turn = session.runTurn({ text: "检查构建" });
+    expect(turn.call.usageSource).toBe("test-double");
+    const legacyCalls = session.snapshot().calls.map((call) => ({
+      ...call,
+      usageSource: "test-double" as const,
+      usage: undefined,
+    }));
+    const legacy = { ...session.snapshot(), calls: legacyCalls };
+    const restored = PiSessionChannel.restore(legacy, TASK_DIR);
+    const restoredCall = restored.snapshot().calls[0];
+    expect(restoredCall.usage).toEqual({ input: 0, output: 0, cacheRead: 0, source: "unreported" });
+    expect(restoredCall.usageSource).toBe("unreported");
+  });
+
   it("configures the provider with a credential reference and rejects unknown models", () => {
     const session = channel();
     session.configureProvider("provider-local", "pidock-default", "PIDOCK_PI_TOKEN");
