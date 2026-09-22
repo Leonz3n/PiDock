@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { boundWorkspaceId, DEFAULT_WORKSPACE_ID, validateHostTaskOp } from "./host-guards.js";
+import { boundWorkspaceId, DEFAULT_WORKSPACE_ID, routeHostTask, validateHostTaskOp } from "./host-guards.js";
 
 // Seam: Host process-boundary guards (workspace binding + per-op payloads).
 // host.ts itself requires a utilityProcess parent port, so the pure guards
@@ -19,28 +19,48 @@ describe("boundWorkspaceId", () => {
 
 describe("task-workspace binding rule", () => {
   it("rejects a routed workspace that differs from the bound workspace", () => {
-    const saved = process.env["PIDOCK_WORKSPACE_ID"];
-    process.env["PIDOCK_WORKSPACE_ID"] = "workspace-a";
-    try {
-      // Rule mirrored in host.ts: mismatch -> task-workspace-mismatch.
-      const routed = "workspace-b";
-      expect(routed === boundWorkspaceId()).toBe(false);
-      expect("workspace-a" === boundWorkspaceId()).toBe(true);
-    } finally {
-      if (saved === undefined) delete process.env["PIDOCK_WORKSPACE_ID"];
-      else process.env["PIDOCK_WORKSPACE_ID"] = saved;
-    }
+    // Exercises the exact rule host.ts enforces before dispatching
+    // (host.ts itself needs a utilityProcess parent port).
+    expect(
+      routeHostTask(
+        { workspaceId: "workspace-b", taskId: "task-a", op: "task/cancel" },
+        "workspace-a",
+      ),
+    ).toBe("task-workspace-mismatch");
+    expect(
+      routeHostTask(
+        { workspaceId: "workspace-a", taskId: "task-a", op: "task/cancel" },
+        "workspace-a",
+      ),
+    ).toBe("routable");
+    expect(routeHostTask({ workspaceId: "workspace-a", taskId: "", op: "task/cancel" }, "workspace-a")).toBe(
+      "invalid-params",
+    );
+    expect(routeHostTask({ workspaceId: "workspace-a", taskId: "task-a", op: "task/exec" }, "workspace-a")).toBe(
+      "invalid-params",
+    );
   });
 });
 
 describe("validateHostTaskOp", () => {
-  it("requires a provision root and a task-<hex> dir id", () => {
+  it("requires a provision dir id plus root (S1) or name/baseline (S2)", () => {
     expect(validateHostTaskOp("task/provision", { root: "~/T", dirId: "task-abcdef12" })).toEqual({
       ok: true,
     });
+    expect(
+      validateHostTaskOp("task/provision", {
+        name: "\u53d1\u5e03\u524d\u68c0\u67e5",
+        dirId: "task-abcdef12",
+        remoteBranch: "main",
+        fetchedCommit: "a5a4a0d1234",
+      }),
+    ).toEqual({ ok: true });
     expect(validateHostTaskOp("task/provision", { root: "", dirId: "task-abcdef12" }).ok).toBe(false);
     expect(validateHostTaskOp("task/provision", { root: "~/T", dirId: "nope" }).ok).toBe(false);
     expect(validateHostTaskOp("task/provision", {}).ok).toBe(false);
+    expect(
+      validateHostTaskOp("task/provision", { name: "x", dirId: "task-abcdef12", remoteBranch: "main" }).ok,
+    ).toBe(false);
   });
 
   it("requires a sendMessage session id and non-blank text", () => {

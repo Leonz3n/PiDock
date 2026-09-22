@@ -33,8 +33,9 @@ function getParentPort(): UtilityParentPort {
 
 const hostPort = getParentPort();
 
-export { boundWorkspaceId, validateHostTaskOp } from "./host-guards.js";
-import { boundWorkspaceId, validateHostTaskOp } from "./host-guards.js";
+export { boundWorkspaceId, routeHostTask, validateHostTaskOp } from "./host-guards.js";
+import { boundWorkspaceId, routeHostTask, validateHostTaskOp } from "./host-guards.js";
+import { TaskWorkspaceHost, diskTaskStore } from "./task-host.js";
 import {
   isHostTaskParams,
   isRpcRequest,
@@ -59,6 +60,117 @@ function workspaceOf(params: unknown): string {
 
 function reply(response: RpcResponse): void {
   hostPort.postMessage(response);
+}
+
+// Single-task Host binding: one utilityProcess serves one task folder.
+// `PIDOCK_TASK_ID` selects the task, `PIDOCK_TASK_DIR` its folder; both
+// are fixed at fork time so an op naming another task can never接续 it.
+// Lazily created on first dispatch so `host/ping` smoke paths that never
+// touch tasks do not require the task env.
+let workspaceHost: TaskWorkspaceHost | null = null;
+
+function taskHostFor(taskId: string): TaskWorkspaceHost | { error: string } {
+  const boundTaskId = process.env["PIDOCK_TASK_ID"];
+  const taskDir = process.env["PIDOCK_TASK_DIR"];
+  if (!boundTaskId || !taskDir) {
+    return { error: "task-unbound: Host has no PIDOCK_TASK_ID/PIDOCK_TASK_DIR binding" };
+  }
+  if (taskId !== boundTaskId) {
+    return { error: "task-unknown: this Host serves a different task" };
+  }
+  if (!workspaceHost || workspaceHost.taskId !== boundTaskId || workspaceHost.taskDir !== taskDir) {
+    workspaceHost = new TaskWorkspaceHost(boundTaskId, taskDir, diskTaskStore);
+  }
+  return workspaceHost;
+}
+
+function asRecord(payload: unknown): Record<string, unknown> {
+  return typeof payload === "object" && payload !== null && !Array.isArray(payload)
+    ? (payload as Record<string, unknown>)
+    : {};
+}
+
+function asStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function dispatchTaskOp(
+  taskId: string,
+  op: string,
+  payload: unknown,
+): { ok: true; payload: Record<string, unknown> } | { ok: false; error: string } {
+  const host = taskHostFor(taskId);
+  if ("error" in host) return { ok: false, error: host.error };
+  const record = asRecord(payload);
+  try {
+    switch (op) {
+      case "task/provision": {
+        const name = record["name"];
+        const dirId = record["dirId"];
+        const remoteBranch = record["remoteBranch"];
+        const fetchedCommit = record["fetchedCommit"];
+        if (
+          typeof name !== "string" ||
+          typeof dirId !== "string" ||
+          typeof remoteBranch !== "string" ||
+          typeof fetchedCommit !== "string"
+        ) {
+          return { ok: false, error: "invalid-payload: task/provision requires name/dirId/remoteBranch/fetchedCommit" };
+        }
+        const branch = typeof record["branch"] === "string" ? (record["branch"] as string) : undefined;
+        const rootOverride = typeof record["rootOverride"] === "string" ? (record["rootOverride"] as string) : undefined;
+        const { record: saved } = host.provision({
+          name,
+          dirId,
+          branch,
+          rootOverride,
+          remoteBranch,
+          fetchedCommit,
+          repos: asStringArray(record["repos"]),
+        });
+        return { ok: true, payload: { ...saved } };
+      }
+      case "task/sendMessage": {
+        const sessionId = record["sessionId"];
+        const text = record["text"];
+        if (typeof sessionId !== "string" || typeof text !== "string") {
+          return { ok: false, error: "invalid-payload: task/sendMessage requires sessionId/text" };
+        }
+        const result = host.sendMessage(sessionId, text);
+        return { ok: true, payload: { ...result } };
+      }
+      case "task/cancel": {
+        const sessionId = record["sessionId"];
+        if (typeof sessionId !== "string") {
+          return { ok: false, error: "invalid-payload: task/cancel requires sessionId" };
+        }
+        host.cancel(sessionId);
+        return { ok: true, payload: { sessionId } };
+      }
+      case "task/approve": {
+        const sessionId = record["sessionId"];
+        const approvalId = record["approvalId"];
+        if (typeof sessionId !== "string" || typeof approvalId !== "string") {
+          return { ok: false, error: "invalid-payload: task/approve requires sessionId/approvalId" };
+        }
+        const callId = host.approve(sessionId, approvalId);
+        return { ok: true, payload: { sessionId, approvalId, callId } };
+      }
+      case "task/reject": {
+        const sessionId = record["sessionId"];
+        const approvalId = record["approvalId"];
+        if (typeof sessionId !== "string" || typeof approvalId !== "string") {
+          return { ok: false, error: "invalid-payload: task/reject requires sessionId/approvalId" };
+        }
+        host.reject(sessionId, approvalId);
+        return { ok: true, payload: { sessionId, approvalId } };
+      }
+      default:
+        return { ok: false, error: `unknown-op: ${op}` };
+    }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 hostPort.on("message", (event: { data: unknown }) => {
@@ -86,10 +198,16 @@ hostPort.on("message", (event: { data: unknown }) => {
     // The Host is bound to one workspace (env at fork time). A routed call
     // naming any other workspace is rejected even though the envelope
     // itself is well-formed — main already compared sender vs payload.
+    // `routeHostTask` is the pure, unit-tested form of this rule.
     const taskParams: unknown = message.params;
     const bound = boundWorkspaceId();
-    if (!isHostTaskParams(taskParams) || taskParams.workspaceId !== bound) {
+    const route = routeHostTask(taskParams, bound);
+    if (route === "task-workspace-mismatch") {
       reply({ kind: "response", id: message.id, ok: false, error: "task-workspace-mismatch" });
+      return;
+    }
+    if (route === "invalid-params" || !isHostTaskParams(taskParams)) {
+      reply({ kind: "response", id: message.id, ok: false, error: "invalid-params" });
       return;
     }
     const perOp = validateHostTaskOp(taskParams.op, taskParams.payload);
@@ -97,11 +215,16 @@ hostPort.on("message", (event: { data: unknown }) => {
       reply({ kind: "response", id: message.id, ok: false, error: perOp.error });
       return;
     }
+    const result = dispatchTaskOp(taskParams.taskId, taskParams.op, taskParams.payload ?? {});
+    if (!result.ok) {
+      reply({ kind: "response", id: message.id, ok: false, error: result.error });
+      return;
+    }
     const payload: HostTaskResult = {
       workspaceId: bound,
       taskId: taskParams.taskId,
       op: taskParams.op,
-      payload: { ...(taskParams.payload ?? {}), hostTime: Date.now() },
+      payload: { ...result.payload, hostTime: Date.now() },
     };
     reply({ kind: "response", id: message.id, ok: true, payload });
     return;
