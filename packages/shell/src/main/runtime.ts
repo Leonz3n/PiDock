@@ -15,7 +15,8 @@ import type {
 import { isAllowedInvokeChannel } from "../preload/allowlist.js";
 import { HostClient } from "../rpc/host-client.js";
 import { buildHostEnv, validateHostTaskOp } from "../host/host-guards.js";
-import { isAbsoluteTaskRoot } from "./task-provision.js";
+import { isAbsoluteTaskRoot, isTaskDirId, previewTaskPaths, resolveTaskRoot } from "./task-provision.js";
+import { defaultTasksRoot } from "./task-resolver.js";
 import type { HostTaskOp, HostTaskResult } from "../rpc/protocol.js";
 import { TaskBrowser } from "./task-browser.js";
 import {
@@ -325,7 +326,17 @@ export class PerTaskHostRegistry {
     return this.byTaskDir.get(first);
   }
 
-  /** Route one op to the bound per-task Host, forking it on first use. */
+  /** Route one op to the bound per-task Host, forking it on first use.
+   *
+   * `task/provision` is the bootstrap exception: a never-recorded id has
+   * no `task.json` yet, so the resolver returns `null` by design. The
+   * bootstrap derives the task folder from the validated `dirId` (plus an
+   * optional `rootOverride`) via `previewTaskPaths`, forks the bound Host
+   * there, and lets the Host itself write the record (`host.provision`).
+   * `rootOverride` tasks provision at the override root and are
+   * re-resolved there on reuse (see `resolveProvisionTaskDir`), so
+   * override folders are first-class tasks, not `unknown task` forever.
+   */
   async routeTaskOp(params: {
     taskId: string;
     op: HostTaskOp;
@@ -351,6 +362,19 @@ export class PerTaskHostRegistry {
       return existing.client.task({ workspaceId: this.workspaceId, taskId, op, payload });
     }
     const taskDir = this.resolveTaskDir(taskId);
+    if (
+      op === "task/provision" &&
+      taskDir === null &&
+      this.resolveProvisionTaskDir(taskId, payload ?? {}) !== null
+    ) {
+      const bootstrapDir = this.resolveProvisionTaskDir(taskId, payload ?? {}) as string;
+      const { client, child } = await this.spawn(this.workspaceId, { taskId, taskDir: bootstrapDir });
+      this.byTaskDir.set(bootstrapDir, { taskId, taskDir: bootstrapDir, client, child });
+      const dirs = this.byTaskId.get(taskId) ?? new Set<string>();
+      dirs.add(bootstrapDir);
+      this.byTaskId.set(taskId, dirs);
+      return client.task({ workspaceId: this.workspaceId, taskId, op, payload });
+    }
     if (taskDir === null || !isAbsoluteTaskRoot(taskDir)) {
       throw new TrustDomainViolation(
         "invalid-payload",
@@ -363,6 +387,42 @@ export class PerTaskHostRegistry {
     dirs.add(taskDir);
     this.byTaskId.set(taskId, dirs);
     return client.task({ workspaceId: this.workspaceId, taskId, op, payload });
+  }
+
+  /**
+   * Bootstrap folder for `task/provision` on a never-recorded id: derive
+   * the task dir from the validated S2 `dirId` (+ optional `rootOverride`)
+   * via `previewTaskPaths`. Non-provision ops never reach here.
+   *
+   * `rootOverride` is NOT unsupported: an override provisions at the
+   * override root and the returned folder is where the Host writes the
+   * record, so the task is re-resolvable on reuse through the same
+   * derivation (per-task `TaskWorkspaceHost.provision` enforces
+   * `paths.taskDir === this.taskDir`, closing substitution).
+   */
+  private resolveProvisionTaskDir(taskId: string, payload: Record<string, unknown>): string | null {
+    const dirId = payload["dirId"];
+    if (typeof dirId !== "string" || !isTaskDirId(dirId) || !dirId.endsWith(taskId.slice(-8))) {
+      // `taskId` (opaque selector) and `dirId` (`task-oooooooo` folder
+      // name) are different identifiers; the bootstrap requires the
+      // payload dirId to match the trailing id segment so one task
+      // cannot bootstrap another task's folder.
+      return null;
+    }
+    const override = payload["rootOverride"];
+    if (override !== undefined && (typeof override !== "string" || override.trim().length === 0)) {
+      return null;
+    }
+    const resolved = resolveTaskRoot(
+      defaultTasksRoot(),
+      typeof override === "string" ? override : undefined,
+    );
+    if (!resolved.ok) return null;
+    try {
+      return previewTaskPaths(resolved.root, dirId, [], []).taskDir;
+    } catch {
+      return null;
+    }
   }
 
   /** Dispose every forked Host (app exit / window-all-closed). */

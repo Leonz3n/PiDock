@@ -7,6 +7,7 @@ import {
   defaultTasksRoot,
   expandTaskRoot,
 } from "./task-resolver.js";
+import { normalizeTaskPath } from "./task-provision.js";
 
 // Seam: production task-id -> task-dir resolution for the per-task registry
 // (P0 follow-up). The resolver stays injected/fakeable; only defaults touch
@@ -85,11 +86,18 @@ describe("disk task-id resolver", () => {
     expect(expandTaskRoot("~/PiDockTasks", "/Users/name")).toBe(join("/Users/name", "PiDockTasks"));
   });
 
-  it("production wired: the real main.ts registry constructor honors a provisioned task", async () => {
-    // Guards the regression where `main.ts` built `PerTaskHostRegistry`
-    // without a resolver, so every production first-use threw
-    // `unknown task`. This asserts the production wiring shape: a registry
-    // constructed exactly as `main.ts` builds it resolves the task.
+  it("matches POSIX/Windows spellings of the same folder", () => {
+    expect(normalizeTaskPath("C:\\Tasks\\a\\")).toBe(normalizeTaskPath("c:/Tasks/a"));
+    const root = mkdtempSync(join(tmpdir(), "pidock-resolver-win-"));
+    expect(createDiskTaskDirResolver(root)("task-a")).toBeNull();
+  });
+
+  it("production wired: main.ts injects the disk resolver with the default root", async () => {
+    // Shape guard only: `main.ts` must keep injecting the disk resolver
+    // with the default tasks root. Behavioral coverage (seeded root +
+    // real resolver + fake spawn asserting first-use forks) lives in
+    // `task-hosts.test.ts` ("resolves provisioned tasks exactly as
+    // main.ts wires the registry").
     const { readFileSync } = await import("node:fs");
     const { join: joinPath, dirname } = await import("node:path");
     const { fileURLToPath } = await import("node:url");

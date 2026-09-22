@@ -102,8 +102,8 @@ function stripTrailingSeparators(root: string): string {
   return stripped.length > 0 ? stripped : root.trim();
 }
 
-/** Normalize `.\/` / trailing slashes / Windows case before comparing paths. */
-function normalizeWinPath(value: string): string {
+/** Canonical form for comparing task folders across POSIX/Windows spellings. */
+export function normalizeTaskPath(value: string): string {
   const noDot = value.trim().replace(/\.([\\/])/g, "$1");
   const stripped = noDot.replace(/[\\/]+$/, "");
   const unified = stripped.replace(/\\/g, "/");
@@ -217,10 +217,10 @@ export function pinBaseline(
 
 /** Guard: no plan may pull/merge/reset the main checkout directory. */
 export function assertProvisionPlanSafe(plan: ProvisionPlan): void {
-  const main = normalizeWinPath(plan.mainCheckoutDir);
+  const main = normalizeTaskPath(plan.mainCheckoutDir);
   for (const op of plan.ops) {
     if (
-      normalizeWinPath(op.cwd) === main &&
+      normalizeTaskPath(op.cwd) === main &&
       (FORBIDDEN_MAIN_OPS as readonly string[]).includes(op.kind)
     ) {
       const error: ProvisionError = {
