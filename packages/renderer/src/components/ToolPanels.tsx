@@ -155,10 +155,21 @@ export function TerminalPanel({ taskId, seed }: { taskId: string; seed: string[]
   );
 }
 
-/** Directory picker shared by the ordinary-directory file and terminal panels. */
-function DirectoryRootChoices({ task, selected, onSelect }: { task: Task; selected?: TaskDirectory; onSelect: (id: string) => void }) {
+/**
+ * Directory root chooser shared by the ordinary-directory file and terminal
+ * panels. The prototype's `directoryRootChoices()` lists the Git worktrees and
+ * the ordinary directories so a mixed task can switch back to its worktree
+ * view; the renderer shows one combined worktree entry because its file panel
+ * already merges the task's repositories.
+ */
+export function DirectoryRootChoices({ task, selected, onSelect }: { task: Task; selected?: TaskDirectory; onSelect: (id: string) => void }) {
   return (
     <div className="flex flex-wrap gap-1.5">
+      {task.repos.length > 0 ? (
+        <Button size="sm" variant={selected ? "default" : "primary"} onClick={() => onSelect("")}>
+          仓库工作副本
+        </Button>
+      ) : null}
       {task.directories.map((directory) => (
         <Button
           key={directory.id}
@@ -174,12 +185,28 @@ function DirectoryRootChoices({ task, selected, onSelect }: { task: Task; select
 }
 
 /**
- * File panel for an ordinary-directory task. It shows the in-task symlink path
- * and the original path, and deliberately offers no Git diff / branch / commit
+ * File panel for an ordinary directory. It shows the in-task symlink path and
+ * the original path, and deliberately offers no Git diff / branch / commit
  * entry points. Editing through the link affects the original directory.
+ *
+ * Selection is controlled when a mixed task shares one active directory across
+ * its file and terminal panels; the directory-only task keeps local state.
  */
-export function DirectoryFilesPanel({ task }: { task: Task }) {
-  const [selectedId, setSelectedId] = useState(task.directories[0]?.id ?? "");
+export function DirectoryFilesPanel({
+  task,
+  selectedId: controlledId,
+  onSelect,
+}: {
+  task: Task;
+  selectedId?: string;
+  onSelect?: (id: string) => void;
+}) {
+  const [localId, setLocalId] = useState(task.directories[0]?.id ?? "");
+  const selectedId = controlledId ?? localId;
+  const select = (id: string) => {
+    setLocalId(id);
+    onSelect?.(id);
+  };
   const directory = task.directories.find((item) => item.id === selectedId) ?? task.directories[0];
   const createDirectoryFileReference = useHostStore((state) => state.createDirectoryFileReference);
   const addReference = useDraftStore((state) => state.addReference);
@@ -187,7 +214,7 @@ export function DirectoryFilesPanel({ task }: { task: Task }) {
   const linkPath = directoryLinkPath(task.workspaceRoot, task.workspaceKey, directory);
   return (
     <div className="flex flex-col gap-3">
-      <DirectoryRootChoices task={task} selected={directory} onSelect={setSelectedId} />
+      <DirectoryRootChoices task={task} selected={directory} onSelect={select} />
       <div className="rounded-md border border-line bg-soft/40 px-3 py-2 text-xs">
         <div className="flex items-center gap-2">
           <strong className="text-ink">{directory.name}</strong>
@@ -219,8 +246,21 @@ export function DirectoryFilesPanel({ task }: { task: Task }) {
 }
 
 /** Terminal panel that opens in the in-task symlink directory and shows the intended cwd. */
-export function DirectoryTerminalPanel({ task }: { task: Task }) {
-  const [selectedId, setSelectedId] = useState(task.directories[0]?.id ?? "");
+export function DirectoryTerminalPanel({
+  task,
+  selectedId: controlledId,
+  onSelect,
+}: {
+  task: Task;
+  selectedId?: string;
+  onSelect?: (id: string) => void;
+}) {
+  const [localId, setLocalId] = useState(task.directories[0]?.id ?? "");
+  const selectedId = controlledId ?? localId;
+  const select = (id: string) => {
+    setLocalId(id);
+    onSelect?.(id);
+  };
   const directory = task.directories.find((item) => item.id === selectedId) ?? task.directories[0];
   const runTerminalCommand = useHostStore((state) => state.runTerminalCommand);
   const [lines, setLines] = useState<string[]>([]);
@@ -229,7 +269,7 @@ export function DirectoryTerminalPanel({ task }: { task: Task }) {
   const cwd = directoryLinkPath(task.workspaceRoot, task.workspaceKey, directory);
   return (
     <div className="flex flex-col gap-2">
-      <DirectoryRootChoices task={task} selected={directory} onSelect={setSelectedId} />
+      <DirectoryRootChoices task={task} selected={directory} onSelect={select} />
       <p className="text-[11px] text-muted">拟用工作目录</p>
       <p className="font-mono text-[11px] text-ink" data-testid="directory-terminal-cwd">
         {cwd}

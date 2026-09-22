@@ -1,6 +1,6 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { createMemoryHost, defaultWorkspaceRoot } from "../data/memoryHost";
+import { createMemoryHost, defaultWorkspaceRoot, taskFileSeeds } from "../data/memoryHost";
 import { renderApp } from "./helpers";
 
 describe("ordinary directories in the memory adapter", () => {
@@ -111,6 +111,43 @@ describe("ordinary-directory task page", () => {
     expect(existing).toBeChecked();
     expect(existing).toBeDisabled();
     expect(within(dialog).getByText(/已加入/)).toBeInTheDocument();
+  });
+});
+
+describe("mixed Git + ordinary-directory task page", () => {
+  it("keeps Git surfaces, shows the directory count/entry, and offers the directory chooser", async () => {
+    const user = userEvent.setup();
+    renderApp("/projects/atlas/tasks/release?session=main");
+    await screen.findByRole("heading", { name: "发布前检查" });
+
+    // Header count and the directory-management entry are present for a mixed task.
+    expect(screen.getByText("1 个普通目录")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "添加目录" })).toBeInTheDocument();
+    // Git-specific panels stay for a mixed task.
+    expect(screen.getByRole("button", { name: "运行" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "浏览器" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "文件" }));
+    await user.click(await screen.findByRole("button", { name: "Atlas 设计资料" }));
+    expect(await screen.findByTestId("directory-link-path")).toHaveTextContent("dir-atlasdoc");
+    expect(screen.getByTestId("directory-original-path")).toHaveTextContent("/Users/leonz3n/Workspace/atlas-docs");
+    expect(screen.getByText(/不提供 Git 差异、分支或提交操作/)).toBeInTheDocument();
+
+    // The chooser takes the mixed task back to its Git worktree file view.
+    await user.click(screen.getByRole("button", { name: "仓库工作副本" }));
+    await waitFor(() => expect(screen.queryByTestId("directory-link-path")).not.toBeInTheDocument());
+    expect((await screen.findAllByText(taskFileSeeds[0].path)).length).toBeGreaterThan(0);
+  });
+
+  it("offers the same directory chooser in the terminal panel", async () => {
+    const user = userEvent.setup();
+    renderApp("/projects/atlas/tasks/release?session=main");
+    await screen.findByRole("heading", { name: "发布前检查" });
+
+    await user.click(screen.getByRole("button", { name: "终端" }));
+    await user.click(await screen.findByRole("button", { name: "Atlas 设计资料" }));
+    expect(await screen.findByTestId("directory-terminal-cwd")).toHaveTextContent("dir-atlasdoc");
+    expect(screen.getByTestId("directory-terminal-cwd")).toHaveTextContent("task-a1f92c3d");
   });
 });
 
