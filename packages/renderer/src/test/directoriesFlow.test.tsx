@@ -106,11 +106,14 @@ describe("ordinary-directory task page", () => {
     await screen.findByText("TASK · 普通目录");
 
     await user.click(screen.getByRole("button", { name: "添加目录" }));
-    const dialog = await screen.findByRole("dialog", { name: "添加普通目录" });
+    const dialog = await screen.findByRole("dialog", { name: "添加仓库或目录" });
     const existing = within(dialog).getByLabelText("任务目录 Atlas 设计资料");
     expect(existing).toBeChecked();
     expect(existing).toBeDisabled();
     expect(within(dialog).getByText(/已加入/)).toBeInTheDocument();
+    // The prototype's `addrepo` also lets a task gain a Git repository, not only
+    // ordinary directories, so the dialog keeps the repo multi-select.
+    expect(within(dialog).getByLabelText("任务仓库 front-monorepo")).toBeInTheDocument();
   });
 });
 
