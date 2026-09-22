@@ -12,7 +12,8 @@
     "lint": "eslint . --max-warnings 0",
     "evidence": "node scripts/capture.mjs",
     "measure": "node scripts/measure-baseline.mjs",
-    "verify:anchor": "node scripts/verify-anchor.mjs"
+    "verify:anchor": "node scripts/verify-anchor.mjs",
+    "verify:brand": "node scripts/verify-brand.mjs"
   },
   "dependencies": {
     "@tanstack/react-virtual": "3.14.13",
