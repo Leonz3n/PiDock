@@ -51,7 +51,9 @@ export type HostTaskOp =
   | "task/reject"
   | "task/saveDraft"
   | "task/clearDraft"
-  | "task/setPermission";
+  | "task/setPermission"
+  | "task/listApprovals"
+  | "task/getApproval";
 
 export interface HostTaskParams {
   workspaceId: string;
@@ -121,6 +123,8 @@ const HOST_TASK_OPS: readonly string[] = [
   "task/saveDraft",
   "task/clearDraft",
   "task/setPermission",
+  "task/listApprovals",
+  "task/getApproval",
 ];
 
 export function isHostTaskOp(value: unknown): value is HostTaskOp {

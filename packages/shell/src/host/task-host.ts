@@ -136,6 +136,19 @@ function maxMessageSequence(messages: { id: string }[]): number {
  * other task are rejected with `task-unknown` instead of continuing with
  * that task.
  */
+export interface HostApprovalListing {
+  id: string;
+  callId: string;
+  taskId: string;
+  sessionId: string;
+  tool: string;
+  target: string;
+  permissionAtRequest: string;
+  contentVersion: string;
+  status: string;
+  executed: boolean;
+}
+
 export class TaskWorkspaceHost {
   private readonly channels = new Map<string, PiSessionChannel>();
   private lockOwner: string | null = null;
@@ -323,6 +336,30 @@ export class TaskWorkspaceHost {
     const channel = this.openSession(sessionId);
     channel.setPermission(permission);
     this.store.writeSession(this.taskDir, channel.snapshot());
+  }
+
+  /**
+   * Host-owned approval listing: real persisted approvals across sessions
+   * of this task (open on-disk sessions on demand so a reopen lists them
+   * without a live channel). `sessionId` narrows; absent = all sessions.
+   * Used by the `task/listApprovals` / `task/getApproval` RPC reads.
+   */
+  listApprovals(sessionId?: string): HostApprovalListing[] {
+    const ids = new Set<string>([...this.channels.keys(), ...this.sessionIds()]);
+    const out: HostApprovalListing[] = [];
+    for (const id of [...ids].sort()) {
+      if (sessionId !== undefined && id !== sessionId) continue;
+      const channel = this.openSession(id);
+      for (const approval of channel.snapshot().approvals) {
+        out.push({ ...approval });
+      }
+    }
+    return out.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  }
+
+  getApproval(approvalId: string): HostApprovalListing | undefined {
+    if (approvalId.trim().length === 0) throw new Error("invalid-payload: approvalId must be a non-empty string");
+    return this.listApprovals().find((approval) => approval.id === approvalId);
   }
 
   cancel(sessionId: string): void {

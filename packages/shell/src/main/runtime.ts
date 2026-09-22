@@ -573,7 +573,9 @@ export function registerIpc(
         op !== "task/reject" &&
         op !== "task/saveDraft" &&
         op !== "task/clearDraft" &&
-        op !== "task/setPermission"
+        op !== "task/setPermission" &&
+        op !== "task/listApprovals" &&
+        op !== "task/getApproval"
       ) {
         throw new TrustDomainViolation("invalid-payload", `unknown task op: ${String(op)}`);
       }

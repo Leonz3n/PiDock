@@ -50,7 +50,7 @@ export function isShellConnected(): boolean {
  */
 export async function shellTaskOp(
   taskId: string,
-  op: "task/provision" | "task/sendMessage" | "task/cancel" | "task/approve" | "task/reject" | "task/saveDraft" | "task/clearDraft" | "task/setPermission",
+  op: "task/provision" | "task/sendMessage" | "task/cancel" | "task/approve" | "task/reject" | "task/saveDraft" | "task/clearDraft" | "task/setPermission" | "task/listApprovals" | "task/getApproval",
   payload: Record<string, unknown> = {},
 ): Promise<ShellTaskOpResult> {
   const bridge = shellBridge();

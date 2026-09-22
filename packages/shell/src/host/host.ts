@@ -271,6 +271,23 @@ function dispatchTaskOp(
         host.setPermission(sessionId, permission);
         return { ok: true, payload: { sessionId, permission } };
       }
+      case "task/listApprovals": {
+        const sessionId = record["sessionId"];
+        if (sessionId !== undefined && (typeof sessionId !== "string" || sessionId.trim().length === 0)) {
+          return { ok: false, error: "invalid-payload: task/listApprovals.sessionId must be a non-empty string" };
+        }
+        const approvals = host.listApprovals(typeof sessionId === "string" ? sessionId : undefined);
+        return { ok: true, payload: { approvals } };
+      }
+      case "task/getApproval": {
+        const approvalId = record["approvalId"];
+        if (typeof approvalId !== "string" || approvalId.trim().length === 0) {
+          return { ok: false, error: "invalid-payload: task/getApproval requires approvalId" };
+        }
+        const approval = host.getApproval(approvalId);
+        if (!approval) return { ok: false, error: "确认请求不存在" };
+        return { ok: true, payload: { approval } };
+      }
       default:
         return { ok: false, error: `unknown-op: ${op}` };
     }
