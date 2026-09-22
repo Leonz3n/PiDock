@@ -102,6 +102,29 @@ describe("validateHostTaskOp", () => {
     expect(validateHostTaskOp("task/sendMessage", { sessionId: "main", text: "  " }).ok).toBe(false);
   });
 
+  it("accepts S6 turn options and rejects malformed usage", () => {
+    expect(
+      validateHostTaskOp("task/sendMessage", {
+        sessionId: "main",
+        text: "hi",
+        providerId: "provider-local",
+        model: "pidock-default",
+        usageSource: "actual",
+        usage: { input: 10, output: 5, cacheRead: 0 },
+        credentialRef: "PIDOCK_PI_TOKEN",
+      }),
+    ).toEqual({ ok: true });
+    expect(
+      validateHostTaskOp("task/sendMessage", { sessionId: "main", text: "hi", usageSource: "live" }).ok,
+    ).toBe(false);
+    expect(
+      validateHostTaskOp("task/sendMessage", { sessionId: "main", text: "hi", usage: { input: -1 } }).ok,
+    ).toBe(false);
+    expect(
+      validateHostTaskOp("task/sendMessage", { sessionId: "main", text: "hi", credentialRef: " " }).ok,
+    ).toBe(false);
+  });
+
   it("rejects unknown ops and non-object payloads", () => {
     expect(validateHostTaskOp("task/exec", {})).toEqual({ ok: false, error: "unknown-op" });
     expect(validateHostTaskOp("task/cancel", "nope").ok).toBe(false);

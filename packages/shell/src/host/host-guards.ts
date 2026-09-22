@@ -174,6 +174,42 @@ export function validateHostTaskOp(
         error: "invalid-payload: task/sendMessage.text must be a non-empty string",
       };
     }
+    // S6 batch 1 turn options ride the same payload (all optional, all
+    // fail-closed): provider/model override for per-turn selection,
+    // usage counters + source for the persisted call record. `stream` is
+    // a local Host-side callback and never crosses the RPC boundary.
+    for (const key of ["providerId", "model"] as const) {
+      const value = payload[key];
+      if (value !== undefined && (typeof value !== "string" || value.trim().length === 0)) {
+        return { ok: false, error: `invalid-payload: task/sendMessage.${key} must be a non-empty string` };
+      }
+    }
+    const usageSource = payload["usageSource"];
+    if (
+      usageSource !== undefined &&
+      usageSource !== "actual" &&
+      usageSource !== "estimated" &&
+      usageSource !== "unreported" &&
+      usageSource !== "test-double"
+    ) {
+      return { ok: false, error: "invalid-payload: task/sendMessage.usageSource must be actual/estimated/unreported/test-double" };
+    }
+    const usage = payload["usage"];
+    if (usage !== undefined) {
+      if (typeof usage !== "object" || usage === null || Array.isArray(usage)) {
+        return { ok: false, error: "invalid-payload: task/sendMessage.usage must be an object" };
+      }
+      for (const key of ["input", "output", "cacheRead"] as const) {
+        const value = (usage as Record<string, unknown>)[key];
+        if (value !== undefined && (typeof value !== "number" || !Number.isFinite(value) || value < 0)) {
+          return { ok: false, error: `invalid-payload: task/sendMessage.usage.${key} must be a non-negative number` };
+        }
+      }
+    }
+    const credentialRef = payload["credentialRef"];
+    if (credentialRef !== undefined && (typeof credentialRef !== "string" || credentialRef.trim().length === 0)) {
+      return { ok: false, error: "invalid-payload: task/sendMessage.credentialRef must be a non-empty reference" };
+    }
     return { ok: true };
   }
   if (payload !== undefined && !isRecord(payload)) {
