@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { shellBridge, shellTaskOp } from "../data/shellBridge";
+import { provisionTaskThroughShell, shellBridge, shellTaskOp } from "../data/shellBridge";
 
 describe("shell bridge boundary", () => {
   it("returns null outside the shell and rejects task ops explicitly", async () => {
@@ -17,6 +17,34 @@ describe("shell bridge boundary", () => {
     const result = await shellTaskOp("task-a", "task/cancel", {});
     expect(taskOp).toHaveBeenCalledWith("task-a", "task/cancel", {});
     expect(result).toEqual({ ok: true, payload: { op: "task/cancel" } });
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps malformed bridge results and rejected invokes as {ok:false} envelopes", async () => {
+    const malformed = vi.fn(async () => null);
+    vi.stubGlobal("window", { pidock: { taskOp: malformed } });
+    const guarded = await shellTaskOp("task-a", "task/cancel", {});
+    expect(guarded.ok).toBe(false);
+    vi.unstubAllGlobals();
+
+    const rejecting = vi.fn(async () => {
+      throw new Error("invoke failed");
+    });
+    vi.stubGlobal("window", { pidock: { taskOp: rejecting } });
+    const provisioned = await provisionTaskThroughShell({
+      taskId: "task-a",
+      name: "表单任务",
+      dirId: "task-a1f92c3d",
+      remoteBranch: "origin/main",
+      fetchedCommit: "9acb5b6",
+    });
+    expect(provisioned.ok).toBe(false);
+    expect(provisioned.error).toContain("invoke failed");
+    expect(rejecting).toHaveBeenCalledWith(
+      "task-a",
+      "task/provision",
+      expect.objectContaining({ name: "表单任务", dirId: "task-a1f92c3d" }),
+    );
     vi.unstubAllGlobals();
   });
 });

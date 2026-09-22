@@ -361,8 +361,9 @@ export class PerTaskHostRegistry {
       // ride a stale Host binding. The default-root resolver never
       // covers `rootOverride` tasks, so reuse is override-aware: the
       // forked folder stays valid while its own record still names this
-      // task (`readTask(existing.taskDir)?.taskId === taskId`, normalized
-      // compare); anything else is `task-moved`.
+      // task (exact taskId match via `overrideTaskDirStillOurs`; the
+      // path compare below is the normalized one); anything else is
+      // `task-moved`.
       const current = this.resolveTaskDir(taskId);
       const overrideStillOurs = this.overrideTaskDirStillOurs(taskId, existing.taskDir);
       const resolvedDir = current ?? (overrideStillOurs ? existing.taskDir : null);
@@ -473,9 +474,11 @@ export class PerTaskHostRegistry {
       // Folder-collision guard: never bootstrap into a folder already
       // claimed by a different task's record. (S2 has no taskId
       // generator yet; claimants are `task.json` files written by
-      // `TaskWorkspaceHost.provision`. An absent/unreadable/corrupt
-      // record is treated as unclaimed here — the Host's own
-      // `paths.taskDir === this.taskDir` check still binds the fork.)
+      // `TaskWorkspaceHost.provision`. Only an absent record (ENOENT)
+      // is unclaimed here — an unreadable/corrupt record fails closed
+      // (`null`) so the bootstrap never rides a folder it cannot verify.
+      // The Host's own `paths.taskDir === this.taskDir` check still
+      // binds the fork.)
       let claimant: { taskId: string } | null = null;
       try {
         claimant = readTaskRecordOnDisk(bootstrapDir);

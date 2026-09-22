@@ -62,21 +62,8 @@ export function TaskPage({ task, sessionId }: { task: Task; sessionId: string })
   return (
     <div className="flex min-h-0 flex-1 gap-4">
       <section className="flex min-h-0 flex-1 flex-col gap-3">
+        <TaskHeader task={task} />
         <header className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            {directoryOnly ? <div className="text-[11px] tracking-wide text-muted">TASK · 普通目录</div> : null}
-            <div className="flex items-center gap-3">
-              <h1 className="text-base font-medium text-ink">{task.name}</h1>
-              <Badge>{task.workspaceKey}</Badge>
-              {hasDirectories && !directoryOnly ? <Badge>{task.directories.length} 个普通目录</Badge> : null}
-              {task.archived ? <Badge tone="warn">已归档</Badge> : null}
-            </div>
-            {directoryOnly ? (
-              <p className="mt-1 text-[11px] text-muted">
-                {task.directories.length} 个普通目录 · 通过软链接加入 · 修改影响原目录，不提供 Git 分支／差异／提交
-              </p>
-            ) : null}
-          </div>
           <div className="flex items-center gap-2">
             {subagents.length > 0 ? (
               <Button
@@ -219,6 +206,73 @@ const COMPOSER_COMMANDS = [
 
 function panelName(panel: ToolPanel) {
   return { runtime: "运行", browser: "浏览器", files: "文件", terminal: "终端", logs: "日志" }[panel];
+}
+
+/**
+ * [PiDock 02] task header: name / repos / branch / ready-state /
+ * code-change, read from the task record + session state. The branch and
+ * root shown here are the values stored at creation (local settings in
+ * dev/memory, `task.json` through the shell); errors stay bound to this
+ * task id so a failure never surfaces as another task's header.
+ */
+function TaskHeader({ task }: { task: Task }) {
+  const adapter = useHostStore((state) => state.adapter);
+  const [branch, setBranch] = useState(`task/${task.workspaceKey}`);
+  const [root, setRoot] = useState(task.workspaceRoot);
+  const [ready, setReady] = useState(task.repos.length > 0 || task.directories.length > 0);
+  const [headerError, setHeaderError] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    let cancelled = false;
+    void adapter
+      .getTaskProvision?.(task.id)
+      .then((provision) => {
+        if (cancelled || !provision) return;
+        setBranch(provision.branch);
+        setRoot(provision.root);
+        setReady(provision.ready);
+        setHeaderError(provision.lastError ? `${provision.lastError.code}: ${provision.lastError.message}` : undefined);
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) setHeaderError(error instanceof Error ? error.message : String(error));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [adapter, task.id]);
+  const project = useHostStore((state) => state.project(task.projectId));
+  const repoNames = task.repos.map((id) => project?.repositories.find((r) => r.id === id)?.name ?? id);
+  const changedCount = task.files.length;
+  const directoryOnly = task.repos.length === 0 && task.directories.length > 0;
+  return (
+    <header className="flex flex-wrap items-center justify-between gap-3" data-testid={`task-header-${task.id}`}>
+      <div>
+        {directoryOnly ? <div className="text-[11px] tracking-wide text-muted">TASK · 普通目录</div> : null}
+        <div className="flex items-center gap-3">
+          <h1 className="text-base font-medium text-ink">{task.name}</h1>
+          <Badge>{task.workspaceKey}</Badge>
+          {task.directories.length > 0 && !directoryOnly ? <Badge>{task.directories.length} 个普通目录</Badge> : null}
+          {task.archived ? <Badge tone="warn">已归档</Badge> : null}
+          <Badge tone={ready ? "accent" : "neutral"}>{ready ? "已就绪" : "准备中"}</Badge>
+        </div>
+        <p className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted">
+          <span>仓库：{repoNames.length > 0 ? repoNames.join("、") : "—"}</span>
+          <span className="font-mono">分支：{branch}</span>
+          <span className="font-mono">目录：{root}/{task.workspaceKey}</span>
+          <span>代码变化：{changedCount > 0 ? `${changedCount} 个文件` : "无"}</span>
+        </p>
+        {directoryOnly ? (
+          <p className="mt-1 text-[11px] text-muted">
+            {task.directories.length} 个普通目录 · 通过软链接加入 · 修改影响原目录，不提供 Git 分支／差异／提交
+          </p>
+        ) : null}
+        {headerError ? (
+          <p role="alert" className="mt-1 text-[11px] text-orange">
+            本任务异常：{headerError}
+          </p>
+        ) : null}
+      </div>
+    </header>
+  );
 }
 
 function sessionTabs(task: Task, activeSessionId: string) {

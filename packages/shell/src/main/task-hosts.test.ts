@@ -328,4 +328,26 @@ describe("PerTaskHostRegistry", () => {
     registry.disposeAll();
     expect(registry.size).toBe(0);
   });
+
+  it("never forks two Hosts for one task folder: restarts reuse the single registry entry", async () => {
+    // Toolchain supplement: `root pnpm dev` starts main + Host + renderer
+    // once; exit/restart disposes only this registry's Hosts and never
+    // leaves a duplicate behind. The registry is the single fork point —
+    // a second op for the same task reuses the entry, and `disposeAll`
+    // clears it so a restart forks exactly one replacement.
+    const spawns: Array<{ taskId: string; taskDir: string }> = [];
+    const { registry, spawn } = registryWith(() => "/tasks/task-a", spawns, TASK_RESULT);
+    await registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
+    await registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
+    await registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(registry.size).toBe(1);
+    // Restart: dispose clears only this registry's Hosts, then the next op
+    // forks exactly one replacement (no duplicate, no leak).
+    registry.disposeAll();
+    expect(registry.size).toBe(0);
+    await registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
+    expect(spawn).toHaveBeenCalledTimes(2);
+    expect(registry.size).toBe(1);
+  });
 });

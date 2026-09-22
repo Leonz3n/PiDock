@@ -3,7 +3,17 @@ import { Badge, Button, EmptyState, Field, Modal, Segmented } from "./ui";
 import { VirtualList } from "./VirtualList";
 import { runStateLabel } from "../pages/runState";
 import { diffConfigRows, isSensitiveKey, nextTemplateVersion } from "../data/configRows";
-import { directoryLinkName, newWorkspaceKey, workspacePath } from "../data/directories";
+import {
+  buildTaskFormBranch,
+  directoryLinkName,
+  isTaskDirId,
+  newWorkspaceKey,
+  previewTaskFormPaths,
+  resolveTaskFormRoot,
+  validateTaskFormName,
+  workspacePath,
+} from "../data/directories";
+import { isShellConnected, provisionTaskThroughShell } from "../data/shellBridge";
 import type { ConfigEntry, ModelThinking, Permission, ProjectDirectory, Task } from "../data/types";
 import { useDraftStore } from "../stores/drafts";
 import { useEnvDraftStore } from "../stores/envDrafts";
@@ -828,11 +838,42 @@ function NewTaskModal({ projectId, onClose }: { projectId: string; onClose: () =
   const [schedulePermission, setSchedulePermission] = useState<Permission>("default");
   // The previewed key is handed to the adapter, so the shown pi working
   // directory is the one the created task actually gets (prototype's
-  // `pendingWorkspaceKey`).
-  const [workspaceKey] = useState(() => newWorkspaceKey());
+  // `pendingWorkspaceKey`). [PiDock 02]: the same key doubles as the
+  // shell-side `dirId` (`task-oooooooo`), and the editable branch defaults
+  // to `task/<dirId>` via `buildTaskFormBranch` (same rule as the Host).
+  const [workspaceKey, setWorkspaceKey] = useState(() => newWorkspaceKey());
+  const [branchInput, setBranchInput] = useState("");
+  const [rootOverride, setRootOverride] = useState("");
+  const [overrideEnabled, setOverrideEnabled] = useState(false);
+  const [remoteBranch, setRemoteBranch] = useState("");
+  const [fetchedCommit, setFetchedCommit] = useState("");
+  const [formError, setFormError] = useState("");
+  const [provisioning, setProvisioning] = useState(false);
   if (!project) return null;
-  const root = localSettings?.workspaceRoot ?? "~/PiDockTasks";
-  const workspacePreview = workspacePath(root, workspaceKey);
+  const defaultRoot = localSettings?.workspaceRoot ?? "~/PiDockTasks";
+  // Per-creation override wins for this task only; the stored task keeps
+  // the resolved root so a later default change never migrates it.
+  const effectiveRootInput = overrideEnabled && rootOverride.trim() ? rootOverride : defaultRoot;
+  const resolvedRoot = resolveTaskFormRoot(defaultRoot, overrideEnabled ? rootOverride || defaultRoot : undefined);
+  const branchResult = buildTaskFormBranch(workspaceKey, branchInput);
+  const branchPreview = branchResult.ok ? branchResult.branch : `task/${workspaceKey}`;
+  // Live path preview: what the form shows is what the task stores. Repo
+  // names come from the selected project repos; directory link names use
+  // the same stable `dir-xxxxxxxx` rule as the created task.
+  let pathPreview: { taskDir: string; worktrees: Record<string, string>; links: Record<string, string> } | null = null;
+  let pathPreviewError = "";
+  if (resolvedRoot.ok && isTaskDirId(workspaceKey)) {
+    try {
+      const repoNames = project.repositories.filter((r) => repos.includes(r.id)).map((r) => r.name);
+      const linkNames = project.directories
+        .filter((d) => directories.includes(d.id))
+        .map((d) => directoryLinkName(d));
+      pathPreview = previewTaskFormPaths(resolvedRoot.root, workspaceKey, repoNames, linkNames);
+    } catch (error) {
+      pathPreviewError = error instanceof Error ? error.message : String(error);
+    }
+  }
+  const workspacePreview = pathPreview?.taskDir ?? workspacePath(effectiveRootInput, workspaceKey);
   const [scheduleProviderId, scheduleModel] = scheduleModelKey.split(":");
   const applyTemplate = () => {
     const template = templates.find((item) => item.id === scheduleTemplateId);
@@ -849,44 +890,102 @@ function NewTaskModal({ projectId, onClose }: { projectId: string; onClose: () =
       title="新建任务"
       onClose={onClose}
       footer={
-        <Button
-          size="sm"
-          variant="primary"
-          onClick={async () => {
-            try {
-              const created = await createTask({
-                projectId,
-                name,
-                repoIds: repos,
-                directoryIds: directories,
-                environmentId,
-                workspaceKey,
-                schedule:
+        <div className="flex items-center gap-2">
+          {formError ? (
+            <span role="alert" className="text-[11px] text-orange">
+              {formError}
+            </span>
+          ) : null}
+          <Button
+            size="sm"
+            variant="primary"
+            disabled={provisioning}
+            aria-label={provisioning ? "正在创建任务" : "创建任务"}
+            onClick={async () => {
+              // [PiDock 02]: validate locally first (same rules as the Host),
+              // then create + provision. Any failure keeps the form with a
+              // retry entry — never a crash, never a create from stale ref.
+              const named = validateTaskFormName(name);
+              if (!named.ok) {
+                setFormError(named.error.message);
+                pushToast(named.error.message);
+                return;
+              }
+              if (!resolvedRoot.ok) {
+                setFormError(resolvedRoot.error.message);
+                pushToast(resolvedRoot.error.message);
+                return;
+              }
+              if (!branchResult.ok) {
+                setFormError(branchResult.error.message);
+                pushToast(branchResult.error.message);
+                return;
+              }
+              setFormError("");
+              setProvisioning(true);
+              try {
+                const created = await createTask({
+                  projectId,
+                  name: named.name,
+                  repoIds: repos,
+                  directoryIds: directories,
+                  environmentId,
+                  workspaceKey,
+                  schedule:
+                    taskType === "scheduled"
+                      ? {
+                          rule: scheduleRule,
+                          timezone: "Asia/Shanghai",
+                          prompt: schedulePrompt,
+                          providerId: scheduleProviderId,
+                          model: scheduleModel,
+                          permission: schedulePermission,
+                        }
+                      : undefined,
+                });
+                // Provision through the shell when bridged (typed
+                // `host/task` + `task/provision`, `{ok:false}` keeps the
+                // form); in Vite dev / tests the memory adapter already
+                // stored the actual root, so provision is a no-op success.
+                if (isShellConnected() && remoteBranch.trim()) {
+                  const provisioned = await provisionTaskThroughShell({
+                    taskId: created.id,
+                    name: named.name,
+                    dirId: workspaceKey,
+                    branch: branchInput.trim() || undefined,
+                    rootOverride: overrideEnabled && rootOverride.trim() ? rootOverride.trim() : undefined,
+                    remoteBranch: remoteBranch.trim(),
+                    fetchedCommit: fetchedCommit.trim(),
+                    repos: project.repositories.filter((r) => repos.includes(r.id)).map((r) => r.name),
+                  });
+                  if (!provisioned.ok) {
+                    // Fetch/provision failure keeps the form + retry entry:
+                    // the created task stays (with its stored actual root),
+                    // the dialog stays open, and the error binds to the form.
+                    setFormError(provisioned.error ?? "任务准备失败，已保留表单，请重试");
+                    pushToast(provisioned.error ?? "任务准备失败，已保留表单，请重试");
+                    return;
+                  }
+                }
+                onClose();
+                navigate({ view: "task", projectId, taskId: created.id, sessionId: created.activeSessionId });
+                pushToast(
                   taskType === "scheduled"
-                    ? {
-                        rule: scheduleRule,
-                        timezone: "Asia/Shanghai",
-                        prompt: schedulePrompt,
-                        providerId: scheduleProviderId,
-                        model: scheduleModel,
-                        permission: schedulePermission,
-                      }
-                    : undefined,
-              });
-              onClose();
-              navigate({ view: "task", projectId, taskId: created.id, sessionId: created.activeSessionId });
-              pushToast(
-                taskType === "scheduled"
-                  ? "已创建定时任务；每次触发新建独立会话"
-                  : "已在内存中创建任务；真实 worktree 准备属 03 工单",
-              );
-            } catch (error) {
-              pushToast(error instanceof Error ? error.message : String(error));
-            }
-          }}
-        >
-          创建任务
-        </Button>
+                    ? "已创建定时任务；每次触发新建独立会话"
+                    : "已在内存中创建任务；真实 worktree 准备属 03 工单",
+                );
+              } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                setFormError(message);
+                pushToast(message);
+              } finally {
+                setProvisioning(false);
+              }
+            }}
+          >
+            {provisioning ? "创建中…" : "创建任务"}
+          </Button>
+        </div>
       }
     >
       <fieldset>
@@ -1050,6 +1149,84 @@ function NewTaskModal({ projectId, onClose }: { projectId: string; onClose: () =
           <p className="mt-2 text-[11px] text-muted">每次触发在当前任务中创建新的独立会话；历史会话可查看并继续对话。</p>
         </fieldset>
       ) : null}
+      <Field label="任务分支" hint="独立于显示名称与目录标识保存；默认 task/<目录标识>，可按需修改">
+        <div className="flex gap-2">
+          <input
+            aria-label="任务分支"
+            value={branchInput}
+            onChange={(event) => setBranchInput(event.target.value)}
+            className="flex-1 rounded-md border border-line px-2 py-1.5 font-mono text-xs"
+            placeholder={branchPreview}
+          />
+          <Button
+            size="sm"
+            variant="ghost"
+            aria-label="重新生成目录标识"
+            title="重新生成目录标识（分支默认随之更新）"
+            onClick={() => {
+              setWorkspaceKey(newWorkspaceKey());
+              setBranchInput("");
+            }}
+          >
+            换标识
+          </Button>
+        </div>
+        {!branchResult.ok ? (
+          <span role="alert" className="text-[11px] text-orange">{branchResult.error.message}</span>
+        ) : (
+          <span className="text-[11px] text-muted">实际分支：<code className="font-mono">{branchPreview}</code></span>
+        )}
+      </Field>
+      <Field label="任务根目录" hint="默认取本机设置；勾选覆盖仅作用于本次新建，已有任务不迁移">
+        <div className="flex flex-col gap-1.5">
+          <label className="flex items-center gap-1.5 text-xs">
+            <input
+              type="checkbox"
+              aria-label="单次覆盖默认根目录"
+              checked={overrideEnabled}
+              onChange={(event) => setOverrideEnabled(event.target.checked)}
+            />
+            单次覆盖默认根目录
+          </label>
+          {overrideEnabled ? (
+            <input
+              aria-label="单次任务根目录"
+              value={rootOverride}
+              onChange={(event) => setRootOverride(event.target.value)}
+              className="rounded-md border border-line px-2 py-1.5 font-mono text-xs"
+              placeholder={defaultRoot}
+            />
+          ) : null}
+          {!resolvedRoot.ok ? (
+            <span role="alert" className="text-[11px] text-orange">{resolvedRoot.error.message}</span>
+          ) : (
+            <span className="text-[11px] text-muted">
+              实际根目录：<code className="font-mono">{resolvedRoot.root}</code>
+              {resolvedRoot.overridden ? " · 本次覆盖" : " · 默认"}
+            </span>
+          )}
+        </div>
+      </Field>
+      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        <Field label="远程基线分支" hint="创建前获取并固定提交；失败保留表单">
+          <input
+            aria-label="远程基线分支"
+            value={remoteBranch}
+            onChange={(event) => setRemoteBranch(event.target.value)}
+            className="rounded-md border border-line px-2 py-1.5 font-mono text-xs"
+            placeholder="例如 origin/main"
+          />
+        </Field>
+        <Field label="基线提交" hint="留空表示尚未获取；提交后固定此次提交">
+          <input
+            aria-label="基线提交"
+            value={fetchedCommit}
+            onChange={(event) => setFetchedCommit(event.target.value)}
+            className="rounded-md border border-line px-2 py-1.5 font-mono text-xs"
+            placeholder="例如 9acb5b6（7–40 位十六进制）"
+          />
+        </Field>
+      </div>
       <div className="mt-3 rounded-md border border-line bg-soft/40 px-3 py-2 text-xs" data-testid="workspace-preview">
         <div className="flex items-center justify-between gap-2">
           <strong className="text-ink">任务文件夹 · pi 工作目录</strong>
@@ -1058,6 +1235,9 @@ function NewTaskModal({ projectId, onClose }: { projectId: string; onClose: () =
         <code className="mt-1 block break-all font-mono text-[11px] text-ink" data-testid="workspace-preview-path">
           {workspacePreview}
         </code>
+        {pathPreviewError ? (
+          <p role="alert" className="mt-1 text-[11px] text-orange">{pathPreviewError}</p>
+        ) : null}
         <ul className="mt-2 flex flex-col gap-1 text-[11px] text-muted">
           {repos.map((repoId) => {
             const repository = project.repositories.find((item) => item.id === repoId);
@@ -1065,7 +1245,7 @@ function NewTaskModal({ projectId, onClose }: { projectId: string; onClose: () =
             return (
               <li key={repoId}>
                 <span className="text-ink">{repository.name}</span> · worktree
-                <code className="ml-2 break-all font-mono">{workspacePath(root, workspaceKey, repository.name)}</code>
+                <code className="ml-2 break-all font-mono">{pathPreview?.worktrees[repository.name] ?? workspacePath(effectiveRootInput, workspaceKey, repository.name)}</code>
               </li>
             );
           })}
@@ -1076,7 +1256,7 @@ function NewTaskModal({ projectId, onClose }: { projectId: string; onClose: () =
               <li key={directoryId}>
                 <span className="text-ink">{directory.name}</span> · 软链接 · 修改影响原目录
                 <code className="ml-2 break-all font-mono" data-testid={`preview-link-${directory.id}`}>
-                  {workspacePath(root, workspaceKey, directoryLinkName(directory))}
+                  {pathPreview?.links[directoryLinkName(directory)] ?? workspacePath(effectiveRootInput, workspaceKey, directoryLinkName(directory))}
                 </code>
                 <span className="ml-1 break-all">→ {directory.path}</span>
               </li>
