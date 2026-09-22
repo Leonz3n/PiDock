@@ -98,6 +98,12 @@ describe("task-store record shape", () => {
     expect(() =>
       parseSessionSnapshot(JSON.stringify({ ...channel.snapshot(), runState: "flying" })),
     ).toThrow("runState");
+    // credentialRef is optional on disk but non-empty when present.
+    const withRef = { ...channel.snapshot(), credentialRef: "PIDOCK_PI_TOKEN" };
+    expect(parseSessionSnapshot(JSON.stringify(withRef)).credentialRef).toBe("PIDOCK_PI_TOKEN");
+    expect(() =>
+      parseSessionSnapshot(JSON.stringify({ ...channel.snapshot(), credentialRef: "  " })),
+    ).toThrow("credentialRef");
     void _droppedTaskTs;
     void _droppedSessionTs;
   });
@@ -318,6 +324,19 @@ describe("TaskWorkspaceHost sessions and Host-owned lock", () => {
     expect(reopened.pendingApproval()).toBeUndefined();
     expect(reopened.snapshot().approvals[0].status).toBe("expired");
     expect(reopened.snapshot().createdAt).toBe(before.createdAt);
+  });
+
+  it("keeps the credentialRef across dispose/reopen (per-turn rotation)", () => {
+    const store = memoryTaskStore();
+    const first = new TaskWorkspaceHost(TASK_ID, TASK_DIR, store, () => "2026-09-22T10:00:00+08:00");
+    const turn = first.sendMessage("main", "检查构建", { credentialRef: "PIDOCK_PI_TOKEN_V2" });
+    expect(turn.state).toBe("done");
+    expect(first.openSession("main").snapshot().credentialRef).toBe("PIDOCK_PI_TOKEN_V2");
+    first.dispose();
+    const second = new TaskWorkspaceHost(TASK_ID, TASK_DIR, store, () => "2026-09-22T10:01:00+08:00");
+    const reopened = second.openSession("main");
+    expect(reopened.configuredCredentialRef).toBe("PIDOCK_PI_TOKEN_V2");
+    expect(reopened.snapshot().credentialRef).toBe("PIDOCK_PI_TOKEN_V2");
   });
 
   it("denies out-of-task tool targets at the Host layer", () => {
