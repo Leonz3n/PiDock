@@ -511,3 +511,123 @@ node packages/renderer/scripts/capture.mjs
 ```
 
 生成时间：2026-09-22T10:17:59+0800
+
+# 第五轮整改验证（2026-09-22）
+
+本轮验证对象：`docs/renderer-baseline-review.md` 的「第五次整改」与「覆盖表（枚举式）」。生成时间：2026-09-22T10:51:33+0800。
+
+## 1. 四道检查（`--force`，绕开 turbo 缓存）
+
+```bash
+export PATH="$HOME/.nvm/versions/node/v24.21.0/bin:$PATH"
+pnpm typecheck --force
+pnpm test --force
+pnpm build --force
+pnpm lint --force
+```
+
+关键输出：
+
+```
+ Tasks:    1 successful, 1 total
+@pidock/renderer:test:  Test Files  14 passed (14)
+@pidock/renderer:test:       Tests  127 passed (127)
+ Tasks:    1 successful, 1 total
+@pidock/renderer:build: ✓ built in 728ms
+ Tasks:    1 successful, 1 total
+@pidock/renderer:lint: $ eslint . --max-warnings 0
+ Tasks:    1 successful, 1 total
+```
+
+结论：四道全部通过。测试文件 14 个、用例 **127** 个全部通过；`tsc --noEmit` 无输出；`vite build` 成功；`eslint . --max-warnings 0` 无告警。
+
+## 2. 证据脚本（dev server 4335 + 原型只读服务 4319）
+
+```bash
+node packages/renderer/scripts/capture.mjs
+node packages/renderer/scripts/measure-baseline.mjs
+node packages/renderer/scripts/verify-anchor.mjs
+node packages/renderer/scripts/verify-brand.mjs
+```
+
+### 2.1 截图（`capture-errors.json`）
+
+- 渲染层截图 **32 张**（含本轮新增：`task-logs`、`task-subagent`、`task-permission`、`task-model`、`task-thinking`、`task-context`、`new-task-scheduled`、`project-management`、`project-edit`、`environment-management`、`provider-edit`、`capability-detail`、`capability-add`、`schedule-edit`、`delivery`、`composer-candidates`、`remote-preview`、`repo-binding`），另有品牌标记裁剪图 1 张。
+- `rendererErrors`: `[]` —— 渲染层 32 个状态**无 page／console 错误**。
+- `prototypeErrors`: 1 条（`prototypes/` 只读，未修改；脚本按设计只告警不失败），`prototypeErrorsAnnounced: true`。
+
+### 2.2 密集列表与令牌（`measurements.json`）
+
+| 列表 | declaredHeight | viewportHeight | rowHeight | overscan | expected | rendered | heightMatchesDeclared | rowsMatchExpected |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `/usage` 明细 | 420 | 420 | 34 | 6 | 19 | 19 | true | true |
+| `/attention` 会话列表 | 280 | 280 | 56 | 6 | 11 | 11 | true | true |
+| `/schedules` 执行记录 | 280 | 280 | 40 | 6 | 13 | 13 | true | true |
+
+`expectationMismatches`: `[]`；`errors`: `[]`。令牌：accent `#233c78`、shell 背景 `rgb(246, 247, 248)`、面板圆角 `10px`。
+
+### 2.3 锚点跟随与 π 居中
+
+- `anchor-follow-verification.json`：`failed: false`，四场景（贴底跟随、离底不跟随、回贴、流式期间贴底）全部 `pass`，`pageErrors: []`。
+- `brand-mark-verification.json`：`failed: false`，字形中心与徽标中心偏移 0，字形色 `rgb(35, 60, 120)`，`pageErrors: []`。
+
+## 3. 变异验证（临时改动后运行、随即按备份还原并复跑）
+
+| # | 变异 | 期望命中的用例 | 实测 |
+| --- | --- | --- | --- |
+| M1 | `memoryHost.deleteEnvironment` 去掉「被任务引用」检查 | 环境删除拦截 | 1 例失败（`adapter.test.ts`「creates and edits an environment…」） |
+| M2 | 新增能力状态由 `pending-review` 改为 `available`（即自动可用） | 「添加为待审阅、不自动加载」 | 2 例失败（适配层 + 组件） |
+| M3 | `createTask` 的定时分支写回 `type: "normal"` | 定时任务类型与调度条目 | 1 例失败（`adapter.test.ts`「creates a scheduled task from the new-task input」） |
+| M4 | 去掉 `setRepositoryPath` 的路径格式校验 | 本机仓库绑定校验 | 1 例失败（`restoredFlows.test.tsx`「machine-local repository binding」） |
+| M5 | `RetryModal` 去掉「尚未核对」拦截 | 重试前置检查 | 1 例失败（`restoredFlows.test.tsx`「failed-run retry dialog」） |
+| M6 | 关闭 `hasUnsupportedImage` 图片门控 | 图片输入能力校验 | 1 例失败（`restoredFlows.test.tsx`「blocks sending an image…」） |
+
+六处变异全部命中预期用例；还原后 `vitest run` 全绿（14 文件 / 127 用例）。
+
+## 4. 本轮实际运行过的确切命令
+
+```bash
+export PATH="$HOME/.nvm/versions/node/v24.21.0/bin:$PATH"
+
+pnpm typecheck --force
+pnpm test --force
+pnpm build --force
+pnpm lint --force
+
+pnpm --filter @pidock/renderer dev                       # 4335
+python3 -m http.server 4319 --bind 127.0.0.1             # prototypes/pidock-ui 只读
+
+node packages/renderer/scripts/capture.mjs
+node packages/renderer/scripts/measure-baseline.mjs
+node packages/renderer/scripts/verify-anchor.mjs
+node packages/renderer/scripts/verify-brand.mjs
+
+pnpm --filter @pidock/renderer exec vitest run src/test/restoredFlows.test.tsx
+pnpm --filter @pidock/renderer exec vitest run src/test/adapter.test.ts
+```
+
+## 5. 覆盖表复算
+
+`docs/renderer-baseline-review.md` 的「覆盖表（枚举式）」共 **105 行**（已复原 95 / 明确取舍 9 / 未复原 1），每行给出原型入口、渲染层 `文件:行`（或「无」）、状态与证据；枚举来源为 `grep -n "^function " prototypes/pidock-ui/*.js` 的页面／对话框函数加 `modal(` 调用点与 `data-action` 分支交叉核对。另一节「运行期未复原」8 行，逐条带 `docs/ui-prototype-review.md` 或 `app.js` 的行号引用。
+
+## 6. 未勾选项
+
+未勾选 issue #3 的任何验收项，未关闭 issue #3，未 push。
+
+## 7. 最终冻结后的复核重跑（第五轮收口）
+
+在加入 A17（只读档位拦截服务启停与依赖去向切换、逐服务依赖去向切换）与对应测试**之后**，为避免证据快于代码，四道检查与四个证据脚本在本节重跑一遍；结论与第 1、2 节一致，测试数由 127 增至 **129**。
+
+```
+@pidock/renderer:typecheck: cache miss, executing
+ Tasks:    1 successful, 1 total
+@pidock/renderer:test:  Test Files  14 passed (14)
+@pidock/renderer:test:       Tests  129 passed (129)
+@pidock/renderer:build: ✓ built in 723ms
+@pidock/renderer:lint: $ eslint . --max-warnings 0
+ Tasks:    1 successful, 1 total
+```
+
+- `capture-errors.json`：`rendererErrors: []`；原型侧仍为 1 条只读资源 404（未修改 `prototypes/`）。
+- `measurements.json`：`/usage` 420/420/19、`/attention` 会话列表 280/280/11、`/schedules` 执行记录 280/280/13；`expectationMismatches: []`、`errors: []`。
+- `anchor-follow-verification.json`：`failed: false`；`brand-mark-verification.json`：`failed: false`。

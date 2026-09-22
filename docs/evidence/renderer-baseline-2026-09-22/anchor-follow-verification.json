@@ -3,27 +3,27 @@
     "log-overflows": {
       "pass": true,
       "detail": {
-        "scrollTop": 1883,
+        "scrollTop": 2017,
         "scrollHeight": 2471,
-        "clientHeight": 588,
+        "clientHeight": 454,
         "distance": 0
       }
     },
     "pinned-to-bottom-on-load": {
       "pass": true,
       "detail": {
-        "scrollTop": 1883,
+        "scrollTop": 2017,
         "scrollHeight": 2471,
-        "clientHeight": 588,
+        "clientHeight": 454,
         "distance": 0
       }
     },
     "detached-after-wheel-gesture": {
       "pass": true,
       "detail": {
-        "scrollTop": 1083,
+        "scrollTop": 1217,
         "scrollHeight": 2471,
-        "clientHeight": 588,
+        "clientHeight": 454,
         "distance": 800
       }
     },
@@ -32,8 +32,8 @@
       "detail": {
         "scrollTop": 0,
         "scrollHeight": 2471,
-        "clientHeight": 588,
-        "distance": 1883
+        "clientHeight": 454,
+        "distance": 2017
       }
     },
     "stays-detached-while-scrolled-up": {
@@ -41,25 +41,25 @@
       "detail": {
         "scrollTop": 0,
         "scrollHeight": 2620,
-        "clientHeight": 428,
-        "distance": 2192
+        "clientHeight": 294,
+        "distance": 2326
       }
     },
     "repins-at-bottom": {
       "pass": true,
       "detail": {
-        "scrollTop": 2192,
+        "scrollTop": 2326,
         "scrollHeight": 2620,
-        "clientHeight": 428,
+        "clientHeight": 294,
         "distance": 0
       }
     },
     "follows-streaming-while-pinned": {
       "pass": true,
       "detail": {
-        "scrollTop": 2341,
+        "scrollTop": 2475,
         "scrollHeight": 2769,
-        "clientHeight": 428,
+        "clientHeight": 294,
         "distance": 0
       }
     },
