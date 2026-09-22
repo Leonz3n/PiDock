@@ -185,7 +185,7 @@ function dispatchTaskOp(
         // `validateHostTaskOp` above): per-turn provider/model selection
         // plus structured usage for the persisted call record.
         const turn: Record<string, unknown> = {};
-        for (const key of ["providerId", "model", "usageSource", "usage", "credentialRef"] as const) {
+        for (const key of ["providerId", "model", "usageSource", "usage", "credentialRef", "references", "skillSource"] as const) {
           const value = record[key];
           if (value !== undefined) turn[key] = value;
         }
