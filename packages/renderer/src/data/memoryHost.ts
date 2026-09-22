@@ -59,6 +59,7 @@ import {
   checkTaskFormDirIdConflict,
   directoryLinkName,
   directoryLinkPath,
+  isAbsoluteTaskFormRoot,
   isTaskDirId,
   normalizeDirectoryPath,
   pinTaskFormBaseline,
@@ -1963,20 +1964,84 @@ class MemoryHost implements HostAdapter {
     // No cross-use: every selection must pin its own freshly fetched
     // commit (mirrors the Host fail-closed gate in `TaskWorkspaceHost`).
     const now = new Date().toISOString();
+    // #6 residual: mirror the Host fail-closed gates locally (memory is the
+    // offline test double, so it must reject what the Host would reject:
+    // selection shape via the same rules as `validateRepoSelections`,
+    // per-repo commit shape via `pinTaskFormBaseline`, link-name
+    // collisions, and plain-dir source shape).
+    const failProvision = (code: string, message: string) => {
+      const error = { code, message };
+      this.provisions.set(input.taskId, {
+        branch: branched.branch,
+        remoteBranch: input.remoteBranch,
+        baseCommit: "",
+        ready: false,
+        lastError: { ...error },
+      });
+      return { ok: false as const, error: { ...error } };
+    };
     if (input.repoSelections !== undefined) {
+      const seenRepoDirs = new Set<string>();
       for (const selection of input.repoSelections) {
+        if (
+          typeof selection.repoDir !== "string" ||
+          selection.repoDir.length === 0 ||
+          selection.repoDir === "." ||
+          selection.repoDir === ".." ||
+          selection.repoDir.includes("/") ||
+          selection.repoDir.includes("\\") ||
+          selection.repoDir.includes("\0") ||
+          selection.repoDir.trim() !== selection.repoDir
+        ) {
+          return failProvision("invalid-repo", `仓库目录名不合法: ${String(selection.repoDir)}`);
+        }
+        if (seenRepoDirs.has(selection.repoDir)) {
+          return failProvision("duplicate-repo", `仓库 ${selection.repoDir} 被选择了两次，请只保留一个来源`);
+        }
+        seenRepoDirs.add(selection.repoDir);
+        if (typeof selection.remote !== "string" || selection.remote.trim().length === 0) {
+          return failProvision("invalid-repo", `仓库 ${selection.repoDir} 缺少远程名称，请选择本次获取的远程`);
+        }
+        if (typeof selection.remoteBranch !== "string" || selection.remoteBranch.trim().length === 0) {
+          return failProvision("invalid-repo", `仓库 ${selection.repoDir} 缺少基线分支，请选择本次获取的远程分支`);
+        }
+        if (typeof selection.mainCheckoutDir !== "string" || !isAbsoluteTaskFormRoot(selection.mainCheckoutDir)) {
+          return failProvision("repo-unusable", `仓库 ${selection.repoDir} 的来源检出不可用: ${String(selection.mainCheckoutDir)}`);
+        }
         const commit = input.fetchedCommits?.[selection.repoDir];
         if (typeof commit !== "string" || commit.trim().length === 0) {
-          const error = { code: "fetch-failed", message: `仓库 ${selection.repoDir} 尚未获取基线，已保留表单，请重试获取后再创建` };
-          this.provisions.set(input.taskId, {
-            branch: branched.branch,
-            remoteBranch: input.remoteBranch,
-            baseCommit: "",
-            ready: false,
-            lastError: { ...error },
-          });
-          return { ok: false, error: { ...error } };
+          return failProvision(
+            "fetch-failed",
+            `仓库 ${selection.repoDir} 尚未获取基线，已保留表单，请重试获取后再创建`,
+          );
         }
+        const pinnedRepo = pinTaskFormBaseline(selection.remoteBranch, commit);
+        if (!pinnedRepo.ok) {
+          return failProvision(
+            "fetch-failed",
+            `仓库 ${selection.repoDir} 获取远程基线失败，已保留表单，请重试获取后再创建`,
+          );
+        }
+      }
+    }
+    if (input.plainDirs !== undefined) {
+      const seenLinkNames = new Map<string, string>();
+      for (const entry of input.plainDirs) {
+        if (typeof entry.directoryId !== "string" || entry.directoryId.trim().length === 0) {
+          return failProvision("invalid-repo", "普通目录缺少标识");
+        }
+        if (typeof entry.sourcePath !== "string" || !isAbsoluteTaskFormRoot(entry.sourcePath)) {
+          return failProvision("repo-unusable", `普通目录来源不可用: ${String(entry.sourcePath)}`);
+        }
+        const linkName = directoryLinkName({ id: entry.directoryId });
+        const first = seenLinkNames.get(linkName);
+        if (first !== undefined && first !== entry.directoryId) {
+          return failProvision(
+            "duplicate-repo",
+            `普通目录链接名冲突: ${entry.directoryId} 与 ${first} 均映射到 ${linkName}，请更换目录标识`,
+          );
+        }
+        seenLinkNames.set(linkName, entry.directoryId);
       }
     }
     const repoSources = input.repoSelections?.map((selection) => ({
