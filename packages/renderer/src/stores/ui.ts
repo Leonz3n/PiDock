@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import type { ConfigRowDraft } from "../data/configRows";
 
-export const TOOL_PANELS = ["runtime", "browser", "files", "terminal"] as const;
+export const TOOL_PANELS = ["runtime", "browser", "files", "terminal", "logs"] as const;
 
 export type ToolPanel = (typeof TOOL_PANELS)[number];
 
@@ -14,10 +14,28 @@ export type ModalState =
   | { type: "new-task"; projectId: string }
   | { type: "config-diff"; environmentId: string; draftKey: string; rows: ConfigRowDraft[]; taskId?: string }
   | { type: "project-directories"; projectId: string }
-  | { type: "task-directories"; taskId: string }
+  | { type: "task-sources"; taskId: string }
   | { type: "service-recipe"; environmentId: string; recipeId?: string }
   | { type: "pair-device" }
-  | { type: "new-provider" }
+  | { type: "provider-edit"; providerId?: string }
+  | { type: "project-list" }
+  | { type: "project-edit"; projectId?: string }
+  | { type: "project-delete"; projectId: string }
+  | { type: "environment-list"; projectId: string }
+  | { type: "environment-edit"; projectId: string; environmentId?: string }
+  | { type: "environment-delete"; environmentId: string }
+  | { type: "add-capability"; kind: "skill" | "extension" | "package" | "mcp" }
+  | { type: "schedule-edit"; scheduleId: string }
+  | { type: "permission"; taskId: string; sessionId: string }
+  | { type: "model-picker"; taskId: string; sessionId: string }
+  | { type: "thinking-picker"; taskId: string; sessionId: string }
+  | { type: "context"; taskId: string; sessionId: string }
+  | { type: "capability-detail"; capabilityId: string }
+  | { type: "retry"; taskId: string; sessionId: string }
+  | { type: "remote-preview" }
+  | { type: "repo-binding" }
+  | { type: "delivery"; taskId: string }
+  | { type: "composer-info"; taskId: string; topic: "skills" | "session" | "help" }
   | null;
 
 type Toast = { id: string; text: string };
