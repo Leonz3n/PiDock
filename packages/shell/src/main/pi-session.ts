@@ -242,6 +242,9 @@ function streamText(
   stream({ callId, text: "", done: true });
 }
 
+/** Gated tool names, shared by the Host planner selector (`host.ts`). */
+export const PI_GATED_TOOL_NAMES: readonly string[] = PI_GATED_TOOLS.map((tool) => tool.name);
+
 function isGatedTool(name: string): PiToolDefinition | undefined {
   return PI_GATED_TOOLS.find((tool) => tool.name === name);
 }

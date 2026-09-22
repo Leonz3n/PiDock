@@ -163,3 +163,30 @@ describe("S6 batch 2: send-record refs and draft-tolerant store", () => {
     ).toBe(false);
   });
 });
+
+describe("S6 batch 3: scripted tool plan rides sendMessage fail-closed", () => {
+  it("accepts a gated tool plan and rejects malformed shapes", () => {
+    expect(
+      validateHostTaskOp("task/sendMessage", {
+        sessionId: "main",
+        text: "hi",
+        tool: "exec.run",
+        target: "/tmp/t/task-abcdef12/run.sh",
+        contentVersion: "v3",
+        toolPlan: "echo",
+      }),
+    ).toEqual({ ok: true });
+    expect(
+      validateHostTaskOp("task/sendMessage", { sessionId: "main", text: "hi", tool: " " }).ok,
+    ).toBe(false);
+    expect(
+      validateHostTaskOp("task/sendMessage", { sessionId: "main", text: "hi", target: " " }).ok,
+    ).toBe(false);
+    expect(
+      validateHostTaskOp("task/sendMessage", { sessionId: "main", text: "hi", contentVersion: " " }).ok,
+    ).toBe(false);
+    expect(
+      validateHostTaskOp("task/sendMessage", { sessionId: "main", text: "hi", toolPlan: "run" }).ok,
+    ).toBe(false);
+  });
+});

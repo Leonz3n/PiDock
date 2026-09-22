@@ -50,7 +50,7 @@ export function isShellConnected(): boolean {
  */
 export async function shellTaskOp(
   taskId: string,
-  op: "task/provision" | "task/sendMessage" | "task/cancel" | "task/approve" | "task/reject",
+  op: "task/provision" | "task/sendMessage" | "task/cancel" | "task/approve" | "task/reject" | "task/saveDraft" | "task/clearDraft" | "task/setPermission",
   payload: Record<string, unknown> = {},
 ): Promise<ShellTaskOpResult> {
   const bridge = shellBridge();
@@ -63,6 +63,41 @@ export async function shellTaskOp(
     return { ok: false, error: "invalid-payload: 任务操作返回异常，请重试" };
   }
   return result;
+}
+
+export type ShellTurnPayload = {
+  text: string;
+  tool?: string;
+  target?: string;
+  contentVersion?: string;
+  /** Planner selector the Host maps to an in-Host script (never a function). */
+  toolPlan?: "echo" | "deny";
+  providerId?: string;
+  model?: string;
+};
+
+/**
+ * [PiDock 02] send one chat turn through the shell (`host/task` +
+ * `task/sendMessage`). Carries the scripted tool plan as plain data
+ * (`tool`/`target`/`contentVersion` + `toolPlan` selector); the Host maps
+ * it to an in-Host planner so the real `exec.run` approval path is
+ * reachable end-to-end. `{ok:false,error}` envelopes are returned, never
+ * thrown, so the composer keeps its input and offers retry.
+ */
+export async function sendMessageThroughShell(input: {
+  taskId: string;
+  sessionId: string;
+} & ShellTurnPayload): Promise<ShellTaskOpResult> {
+  const payload: Record<string, unknown> = { sessionId: input.sessionId, text: input.text };
+  for (const key of ["tool", "target", "contentVersion", "toolPlan", "providerId", "model"] as const) {
+    const value = input[key];
+    if (value !== undefined) payload[key] = value;
+  }
+  try {
+    return await shellTaskOp(input.taskId, "task/sendMessage", payload);
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 /**

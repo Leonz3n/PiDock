@@ -34,6 +34,7 @@ function getParentPort(): UtilityParentPort {
 const hostPort = getParentPort();
 
 import { boundWorkspaceId, routeHostTask, validateHostTaskOp } from "./host-guards.js";
+import { PI_GATED_TOOL_NAMES } from "../main/pi-session.js";
 import { TaskWorkspaceHost, diskTaskStore } from "./task-host.js";
 import {
   isHostTaskParams,
@@ -184,10 +185,33 @@ function dispatchTaskOp(
         // S6 batch 1 turn options (all optional, validated by
         // `validateHostTaskOp` above): per-turn provider/model selection
         // plus structured usage for the persisted call record.
+        // S6 batch 3: scripted tool plan rides the same payload. Only
+        // `tool`/`target`/`contentVersion` (plain data) cross the RPC
+        // boundary; the planner is selected here by name (`toolPlan`):
+        // `echo` replays the planned call so the real `exec.run` approval
+        // path (`default` -> ask) is reachable end-to-end, `deny` forces
+        // a denied-target call (fail-closed coverage). No executable
+        // function is ever deserialized from the payload.
         const turn: Record<string, unknown> = {};
-        for (const key of ["providerId", "model", "usageSource", "usage", "credentialRef", "references", "skillSource"] as const) {
+        for (const key of ["providerId", "model", "usageSource", "usage", "credentialRef", "references", "skillSource", "tool", "target", "contentVersion"] as const) {
           const value = record[key];
           if (value !== undefined) turn[key] = value;
+        }
+        const gatedToolName = typeof record["tool"] === "string" ? (record["tool"] as string) : undefined;
+        const toolPlan = record["toolPlan"];
+        if ((toolPlan === "echo" || toolPlan === "deny") && gatedToolName !== undefined) {
+          if (!PI_GATED_TOOL_NAMES.includes(gatedToolName)) {
+            return { ok: false, error: `invalid-payload: task/sendMessage.tool is not a gated tool: ${gatedToolName}` };
+          }
+          const plannedTarget = toolPlan === "deny" ? "/etc/passwd" : (turn["target"] as string | undefined);
+          const plannedVersion = typeof turn["contentVersion"] === "string" ? (turn["contentVersion"] as string) : "v1";
+          const plannedTool = turn["tool"] as string;
+          (turn as Record<string, unknown>)["execute"] = (_call: unknown) => ({
+            tool: plannedTool,
+            target: plannedTarget,
+            contentVersion: plannedVersion,
+            output: toolPlan === "deny" ? "denied" : "planned",
+          });
         }
         const result = host.sendMessage(sessionId, text, turn as never);
         return { ok: true, payload: { ...result } };
