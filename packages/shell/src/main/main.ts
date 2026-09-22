@@ -60,6 +60,25 @@ async function run(): Promise<void> {
     return;
   }
 
+  if (command.kind === "startup") {
+    const startedAt = Date.now();
+    const { client, child } = await createHost(workspaceId);
+    const views = await createTrustedWindow(workspaceId);
+    const loaded = await loadTrustedViews(views);
+    process.stdout.write(
+      `PIDOCK_STARTUP_RESULT=${JSON.stringify({
+        electron: process.versions["electron"] ?? "unknown",
+        processUptimeMs: Math.round(process.uptime() * 1000),
+        readyToLoadedMs: Date.now() - startedAt,
+        shellUrl: loaded.shellUrl,
+      })}\n`,
+    );
+    client.dispose();
+    child.kill();
+    app.exit(0);
+    return;
+  }
+
   if (command.kind === "smoke") {
     const report = await runSmoke(workspaceId);
     process.stdout.write(`PIDOCK_SMOKE_RESULT=${JSON.stringify(report)}\n`);

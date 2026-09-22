@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "description": "PiDock Electron shell skeleton (S1): main window, utilityProcess Node host stub, typed RPC, minimal preload bridge",
+  "author": "PiDock",
   "main": "dist/main/main.js",
   "scripts": {
     "dev": "electron .",
@@ -15,13 +16,16 @@
     "smoke": "electron . -- --smoke",
     "smoke:s3": "node scripts/smoke-s3.mjs",
     "smoke:s4": "electron . -- --smoke-s4",
-    "smoke:s5": "electron . -- --smoke-s5"
-  },
-  "dependencies": {
-    "electron": "44.4.3"
+    "smoke:s5": "electron . -- --smoke-s5",
+    "startup": "electron . -- --print-startup",
+    "package:dir": "electron-builder --config electron-builder.config.cjs --dir",
+    "package:mac": "electron-builder --config electron-builder.config.cjs --mac dmg --arm64",
+    "package:win": "electron-builder --config electron-builder.config.cjs --win nsis --x64"
   },
   "devDependencies": {
     "@types/node": "24.13.6",
+    "electron": "44.4.3",
+    "electron-builder": "26.15.3",
     "typescript": "5.9.3",
     "vitest": "3.2.7"
   }

@@ -31,4 +31,11 @@ export default tseslint.config(
     files: ["*.mjs"],
     languageOptions: { globals: { ...globals.node } },
   },
+  {
+    // CommonJS tooling: electron-builder config and the afterSign hook.
+    files: ["**/*.cjs"],
+    ignores: ["**/src/**"],
+    languageOptions: { globals: { ...globals.node } },
+    rules: { "@typescript-eslint/no-require-imports": "off" },
+  },
 );
