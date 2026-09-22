@@ -295,9 +295,16 @@ describe("#6 append + probe guards (S2)", () => {
       validateHostTaskOp("task/appendRepos", {
         repoSelections: [],
         fetchedCommits: {},
+        takenPaths: [],
+        branchesInUse: [],
       }),
     ).toEqual({ ok: true });
     expect(validateHostTaskOp("task/appendRepos", { repoSelections: [] }).ok).toBe(false);
+    // Caller-scanned conflict inputs are required (never silently `[]`):
+    // omitting them fails closed so the conflict gate cannot be skipped.
+    expect(
+      validateHostTaskOp("task/appendRepos", { repoSelections: [], fetchedCommits: {} }).ok,
+    ).toBe(false);
     expect(validateHostTaskOp("task/probeLink", { sourcePath: "/data/notes" })).toEqual({ ok: true });
     expect(validateHostTaskOp("task/probeLink", {}).ok).toBe(false);
   });

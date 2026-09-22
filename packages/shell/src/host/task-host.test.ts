@@ -581,6 +581,7 @@ describe("#6 multi-repo provision + append (S2)", () => {
       fetchedCommit: "a5a4a0d1234",
       repoSelections: selections,
       fetchedCommits: { frontend: "a5a4a0d1234", invoice: "beef001234" },
+      mainCheckouts: { frontend: "/src/frontend", invoice: "/src/invoice" },
       plainDirs: [{ directoryId: "notes-1", sourcePath: "/data/notes" }],
     };
   }
@@ -630,7 +631,12 @@ describe("#6 multi-repo provision + append (S2)", () => {
         { repoDir: "shipment", remote: "origin", remoteBranch: "main", mainCheckoutDir: "/src/shipment" },
       ],
       fetchedCommits: { shipment: "c0ffee1234" },
+      takenPaths: [],
+      branchesInUse: [],
     });
+    // #6 P0: the append fetch rides the selection remote (never origin).
+    const appendFetch = appended.plan.ops.find((op) => op.kind === "fetch");
+    expect(appendFetch?.args).toEqual(["fetch", "origin", "main"]);
     expect(appended.appended).toEqual(["shipment"]);
     expect(appended.skipped).toEqual(["frontend", "invoice"]);
     expect(appended.record.repos).toEqual(["frontend", "invoice", "shipment"]);
@@ -639,6 +645,20 @@ describe("#6 multi-repo provision + append (S2)", () => {
     expect(appended.plan.ops).toHaveLength(3);
     // Busy sessions are not rebound: their channels survive the append.
     expect(taskHost.openSession("busy").taskId).toBe(TASK_ID);
+  });
+
+  it("fails closed when the caller omits the conflict scan", () => {
+    const taskHost = host();
+    taskHost.provision(multiProvisionInput());
+    expect(() =>
+      taskHost.appendRepos({
+        repoSelections: [
+          { repoDir: "shipment", remote: "origin", remoteBranch: "main", mainCheckoutDir: "/src/shipment" },
+        ],
+        fetchedCommits: { shipment: "c0ffee1234" },
+      }),
+    ).toThrow("invalid-payload");
+    expect(taskHost.taskRecord()?.repos).toEqual(["frontend", "invoice"]);
   });
 
   it("reports append conflicts without touching stored baselines", () => {
@@ -651,14 +671,47 @@ describe("#6 multi-repo provision + append (S2)", () => {
         ],
         fetchedCommits: { shipment: "c0ffee1234" },
         takenPaths: [`${TASK_DIR}/shipment`],
+        branchesInUse: [],
       }),
     ).toThrow("path-taken");
     expect(taskHost.taskRecord()?.repos).toEqual(["frontend", "invoice"]);
   });
 
-  it("probes link targets Host-side (dead vs ok)", () => {
+  it("fetches per-repo remotes in provision plans (never hardcoded origin)", () => {
     const taskHost = host();
-    expect(taskHost.probeLinkTarget("/definitely/missing/pidock-notes").shape).toBe("dead");
-    expect(taskHost.probeLinkTarget("/tmp").shape).toBe("ok");
+    const { plan } = taskHost.provision(multiProvisionInput());
+    const fetches = plan.ops.filter((op) => op.kind === "fetch");
+    expect(fetches).toHaveLength(2);
+    expect(fetches[0].args).toEqual(["fetch", "origin", "main"]);
+    expect(fetches[1].args).toEqual(["fetch", "upstream", "release/v2"]);
+    // cwds ride the per-repo source checkouts passed via `mainCheckouts`
+    // (relative/empty cwds are rejected before entering a plan).
+    expect(fetches[0].cwd).toBe("/src/frontend");
+    expect(fetches[1].cwd).toBe("/src/invoice");
+  });
+
+  it("rejects colliding link names instead of sharing one link", () => {
+    const taskHost = host();
+    expect(() =>
+      taskHost.provision({
+        ...multiProvisionInput(),
+        plainDirs: [
+          { directoryId: "notes-1", sourcePath: "/data/a" },
+          { directoryId: "notes--1", sourcePath: "/data/b" },
+        ],
+      }),
+    ).toThrow("duplicate-repo");
+    expect(taskHost.taskRecord()).toBeNull();
+  });
+
+  it("probes link targets Host-side (dead vs ok, lexical + one-hop link)", () => {
+    const taskHost = host();
+    const dead = taskHost.probeLinkTarget("/definitely/missing/pidock-notes");
+    expect(dead.shape).toBe("dead");
+    expect(dead.lexical).toBe("ok");
+    expect(dead.linkTarget).toBeNull();
+    const ok = taskHost.probeLinkTarget("/tmp");
+    expect(ok.shape).toBe("ok");
+    expect(ok.lexical).toBe("ok");
   });
 });

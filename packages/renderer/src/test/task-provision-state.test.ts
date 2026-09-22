@@ -220,4 +220,33 @@ describe("#6 provision state (S5)", () => {
     const header = await host.getTaskHeader(task.id);
     expect(header.branch).toBe(result.provision.branch);
   });
+
+  it("fails closed when one repo misses its fetched commit (no cross-use)", async () => {
+    const host = createMemoryHost();
+    const task = await host.createTask({
+      projectId: "atlas",
+      name: "多仓任务",
+      repoIds: [],
+      directoryIds: [],
+      workspaceKey: "task-abcdef12",
+    });
+    const result = await host.provisionTaskThroughForm({
+      taskId: task.id,
+      name: "多仓任务",
+      dirId: "task-abcdef12",
+      remoteBranch: "main",
+      fetchedCommit: "a5a4a0d1234",
+      repoSelections: [
+        { repoDir: "frontend", remote: "origin", remoteBranch: "main", mainCheckoutDir: "/src/frontend" },
+        { repoDir: "invoice", remote: "upstream", remoteBranch: "release/v2", mainCheckoutDir: "/src/invoice" },
+      ],
+      fetchedCommits: { frontend: "a5a4a0d1234" },
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("must fail");
+    expect(result.error.code).toBe("fetch-failed");
+    expect(result.error.message).toContain("invoice");
+    const provision = await host.getTaskProvision(task.id);
+    expect(provision?.ready).toBe(false);
+  });
 });

@@ -178,17 +178,22 @@ export async function appendReposThroughShell(input: {
   fetchedCommits: Record<string, string>;
   branch?: string;
   mainCheckouts?: Record<string, string>;
-  takenPaths?: string[];
-  branchesInUse?: string[];
+  /**
+   * Caller-scanned conflict inputs (REQUIRED, never defaulted): the
+   * renderer scans the task folder + `git worktree list` first; the
+   * Host and the RPC guard fail closed without them.
+   */
+  takenPaths: string[];
+  branchesInUse: string[];
 }): Promise<ShellTaskOpResult> {
   const payload: Record<string, unknown> = {
     repoSelections: input.repoSelections,
     fetchedCommits: input.fetchedCommits,
+    takenPaths: input.takenPaths,
+    branchesInUse: input.branchesInUse,
   };
   if (input.branch !== undefined) payload["branch"] = input.branch;
   if (input.mainCheckouts !== undefined) payload["mainCheckouts"] = input.mainCheckouts;
-  if (input.takenPaths !== undefined) payload["takenPaths"] = input.takenPaths;
-  if (input.branchesInUse !== undefined) payload["branchesInUse"] = input.branchesInUse;
   try {
     return await shellTaskOp(input.taskId, "task/appendRepos", payload);
   } catch (error) {

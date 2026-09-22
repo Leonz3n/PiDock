@@ -1960,12 +1960,30 @@ class MemoryHost implements HostAdapter {
     void paths;
     // #6: per-repo sources persist alongside the task-level baseline;
     // plain-dir links snapshot as shared views of the originals.
+    // No cross-use: every selection must pin its own freshly fetched
+    // commit (mirrors the Host fail-closed gate in `TaskWorkspaceHost`).
     const now = new Date().toISOString();
+    if (input.repoSelections !== undefined) {
+      for (const selection of input.repoSelections) {
+        const commit = input.fetchedCommits?.[selection.repoDir];
+        if (typeof commit !== "string" || commit.trim().length === 0) {
+          const error = { code: "fetch-failed", message: `仓库 ${selection.repoDir} 尚未获取基线，已保留表单，请重试获取后再创建` };
+          this.provisions.set(input.taskId, {
+            branch: branched.branch,
+            remoteBranch: input.remoteBranch,
+            baseCommit: "",
+            ready: false,
+            lastError: { ...error },
+          });
+          return { ok: false, error: { ...error } };
+        }
+      }
+    }
     const repoSources = input.repoSelections?.map((selection) => ({
       repoDir: selection.repoDir,
       remote: selection.remote,
       remoteBranch: selection.remoteBranch,
-      baseCommit: input.fetchedCommits?.[selection.repoDir] ?? pinned.commit,
+      baseCommit: (input.fetchedCommits?.[selection.repoDir] as string).trim().toLowerCase(),
     }));
     const dirLinks = input.plainDirs?.map((entry) => ({
       linkName: directoryLinkName({ id: entry.directoryId }),

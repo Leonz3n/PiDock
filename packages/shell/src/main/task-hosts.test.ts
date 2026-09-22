@@ -385,6 +385,8 @@ describe("#6 append routing (S4)", () => {
           { repoDir: "shipment", remote: "origin", remoteBranch: "main", mainCheckoutDir: "/src/shipment" },
         ],
         fetchedCommits: { shipment: "c0ffee1234" },
+        takenPaths: [],
+        branchesInUse: [],
       },
     });
     expect(routed).toEqual(TASK_RESULT);
@@ -398,7 +400,7 @@ describe("#6 append routing (S4)", () => {
       registry.routeTaskOp({
         taskId: "task-ghost",
         op: "task/appendRepos",
-        payload: { repoSelections: [], fetchedCommits: {} },
+        payload: { repoSelections: [], fetchedCommits: {}, takenPaths: [], branchesInUse: [] },
       }),
     ).rejects.toThrow("unknown task");
   });
