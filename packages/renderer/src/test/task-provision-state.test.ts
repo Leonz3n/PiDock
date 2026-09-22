@@ -182,3 +182,42 @@ describe("memory Host provision state", () => {
     expect(typeof previewTaskFormPaths).toBe("function");
   });
 });
+
+describe("#6 provision state (S5)", () => {
+  it("carries per-repo sources and link snapshots on the provision state", async () => {
+    const host = createMemoryHost();
+    const task = await host.createTask({
+      projectId: "atlas",
+      name: "多仓任务",
+      repoIds: [],
+      directoryIds: [],
+      workspaceKey: "task-abcdef12",
+    });
+    const result = await host.provisionTaskThroughForm({
+      taskId: task.id,
+      name: "多仓任务",
+      dirId: "task-abcdef12",
+      remoteBranch: "main",
+      fetchedCommit: "a5a4a0d1234",
+      repoSelections: [
+        { repoDir: "frontend", remote: "origin", remoteBranch: "main", mainCheckoutDir: "/src/frontend" },
+        { repoDir: "invoice", remote: "upstream", remoteBranch: "release/v2", mainCheckoutDir: "/src/invoice" },
+      ],
+      fetchedCommits: { frontend: "a5a4a0d1234", invoice: "beef001234" },
+      plainDirs: [{ directoryId: "notes-1", sourcePath: "/data/notes" }],
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("must provision");
+    expect(result.provision.repoSources).toEqual([
+      { repoDir: "frontend", remote: "origin", remoteBranch: "main", baseCommit: "a5a4a0d1234" },
+      { repoDir: "invoice", remote: "upstream", remoteBranch: "release/v2", baseCommit: "beef001234" },
+    ]);
+    expect(result.provision.dirLinks).toHaveLength(1);
+    expect(result.provision.dirLinks?.[0]).toMatchObject({
+      directoryId: "notes-1",
+      sourcePath: "/data/notes",
+    });
+    const header = await host.getTaskHeader(task.id);
+    expect(header.branch).toBe(result.provision.branch);
+  });
+});
