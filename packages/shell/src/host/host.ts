@@ -33,7 +33,7 @@ function getParentPort(): UtilityParentPort {
 
 const hostPort = getParentPort();
 
-import { boundWorkspaceId, buildToolPlannerSpec, routeHostTask, validateHostTaskOp } from "./host-guards.js";
+import { boundWorkspaceId, routeHostTask, toolPlannerSpecForHostDispatch, validateHostTaskOp } from "./host-guards.js";
 import { TaskWorkspaceHost, diskTaskStore } from "./task-host.js";
 import {
   isHostTaskParams,
@@ -196,12 +196,7 @@ function dispatchTaskOp(
           const value = record[key];
           if (value !== undefined) turn[key] = value;
         }
-        const planner = buildToolPlannerSpec({
-          tool: record["tool"],
-          target: record["target"],
-          contentVersion: record["contentVersion"],
-          toolPlan: record["toolPlan"],
-        });
+        const planner = toolPlannerSpecForHostDispatch(record);
         if (!planner.ok) return { ok: false, error: planner.error };
         if (planner.mode === "echo" || planner.mode === "deny") {
           const plannedTool = planner.tool;

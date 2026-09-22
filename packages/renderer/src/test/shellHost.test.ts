@@ -60,7 +60,15 @@ describe("shell host adapter selection", () => {
       if (op === "task/sendMessage") {
         return {
           ok: true,
-          payload: { state: "approval", callId: "call-2", approvalId: "approval-7", userMessageId: "msg-1", agentMessageId: "msg-2" },
+          payload: {
+            state: "approval",
+            callId: "call-2",
+            approvalId: "approval-7",
+            tool: "exec.run",
+            target: "/tmp/task-abcdef12/run.sh",
+            userMessageId: "msg-1",
+            agentMessageId: "msg-2",
+          },
         };
       }
       return { ok: true, payload: {} };
@@ -69,8 +77,15 @@ describe("shell host adapter selection", () => {
     const adapter: HostAdapter = createShellHostAdapter(fallback);
     const turned = await adapter.sendMessage("task-a", "main", "跑命令", []);
     expect(turned.state).toBe("approval");
-    // The Host approval is listable/renderable without an approval-listing RPC.
-    expect(await adapter.getApproval("approval-7")).toMatchObject({ id: "approval-7", taskId: "task-a", sessionId: "main" });
+    expect(turned.approvalId).toBe("approval-7");
+    // The synthetic approval shows what awaits approval (`tool target`),
+    // threaded from the Host turn payload rather than a generic label.
+    expect(await adapter.getApproval("approval-7")).toMatchObject({
+      id: "approval-7",
+      taskId: "task-a",
+      sessionId: "main",
+      title: "exec.run /tmp/task-abcdef12/run.sh",
+    });
     expect(await adapter.listApprovals("task-a")).toHaveLength(1);
     const resolved = await adapter.resolveApproval("approval-7", "approved");
     expect(resolved.status).toBe("approved");

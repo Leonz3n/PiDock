@@ -106,6 +106,10 @@ export interface HostTurnResult {
   state: string;
   callId: string;
   approvalId?: string;
+  /** Gated tool awaiting approval (present only when `state` is `approval`). */
+  tool?: string;
+  /** Approval target (present only when `state` is `approval`). */
+  target?: string;
   /** Send-record association: user input + agent reply message ids. */
   userMessageId: string;
   agentMessageId: string;
@@ -287,10 +291,13 @@ export class TaskWorkspaceHost {
       this.lockOwner = null;
     }
     this.store.writeSession(this.taskDir, channel.snapshot());
+    const pending = channel.pendingApproval();
     return {
       state: result.state,
       callId: result.call.callId,
       approvalId: result.approval?.id,
+      tool: result.state === "approval" ? pending?.tool : undefined,
+      target: result.state === "approval" ? pending?.target : undefined,
       userMessageId: result.userMessageId,
       agentMessageId: result.agentMessageId,
     };

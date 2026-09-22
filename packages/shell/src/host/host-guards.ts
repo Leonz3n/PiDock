@@ -88,13 +88,25 @@ export function toolPlannerSpecForOp(op: string, payload: unknown): ToolPlannerS
     return { ok: false, error: "invalid-payload: task/sendMessage requires a payload object" };
   }
   const record = payload as Record<string, unknown>;
-  if (record["toolPlan"] === undefined) return { ok: true, mode: "none" };
+  if (record["toolPlan"] === undefined && record["tool"] === undefined) return { ok: true, mode: "none" };
   return buildToolPlannerSpec({
     tool: record["tool"],
     target: record["target"],
     contentVersion: record["contentVersion"],
     toolPlan: record["toolPlan"],
   });
+}
+
+/**
+ * `host.ts` uses `toolPlannerSpecForOp` as the single entry for the
+ * scripted tool-plan decision: `validateHostTaskOp` already ran it for
+ * the sender side, and Host dispatch re-runs it before injecting the
+ * `execute` closure. Keeps both layers on one pure rule instead of
+ * drifting (a late `host.ts`-only check would accept-then-reject).
+ */
+export function toolPlannerSpecForHostDispatch(record: Record<string, unknown>): ToolPlannerSpec {
+  const spec = toolPlannerSpecForOp("task/sendMessage", record);
+  return spec ?? { ok: true, mode: "none" };
 }
 
 /** Fork-time task binding: one utilityProcess serves one task folder. */
@@ -303,6 +315,18 @@ export function validateHostTaskOp(
     if (toolPlan !== undefined && toolPlan !== "echo" && toolPlan !== "deny") {
       return { ok: false, error: 'invalid-payload: task/sendMessage.toolPlan must be echo/deny' };
     }
+    // Dual-layer parity with Host dispatch (`host.ts` enforces
+    // `buildToolPlannerSpec` before injecting the `execute` closure):
+    // `toolPlan` requires a gated `tool` (`echo` additionally requires
+    // `target`), so the sender side fails closed early instead of
+    // forwarding a combo the Host later rejects.
+    const planner = buildToolPlannerSpec({
+      tool: payload["tool"],
+      target: payload["target"],
+      contentVersion: payload["contentVersion"],
+      toolPlan: payload["toolPlan"],
+    });
+    if (!planner.ok) return { ok: false, error: planner.error };
     return { ok: true };
   }
   // S6 batch 2 follow-up: draft/permission ops are Host-reachable (P1).
