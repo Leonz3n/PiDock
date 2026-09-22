@@ -154,7 +154,13 @@ describe("PerTaskHostRegistry", () => {
     ).rejects.toThrow("unknown task");
   });
 
-  it("provisions at a rootOverride root and re-resolves there on reuse", async () => {
+  it("provisions at a rootOverride root and reuses the fork on a second op", async () => {
+    // Override-aware reuse (S3d): the default-root resolver never covers
+    // override folders, so reuse accepts the forked folder while its own
+    // record still names this task. The provisioned record is written to
+    // disk here (as `TaskWorkspaceHost.provision` would) so the second op
+    // exercises the real on-disk guard, not a stubbed re-resolution.
+    const { mkdirSync, writeFileSync } = await import("node:fs");
     const override = mkdtempSync(join(tmpdir(), "pidock-override-"));
     const spawns: Array<{ taskId: string; taskDir: string }> = [];
     const { registry, spawn } = registryWith(() => null, spawns, TASK_RESULT);
@@ -167,7 +173,114 @@ describe("PerTaskHostRegistry", () => {
     };
     await registry.routeTaskOp({ taskId: "task-abcdef12", op: "task/provision", payload });
     expect(spawn).toHaveBeenCalledTimes(1);
-    expect(spawns[0]).toEqual({ taskId: "task-abcdef12", taskDir: `${override}/task-abcdef12` });
+    const overrideTaskDir = join(override, "task-abcdef12");
+    expect(spawns[0]).toEqual({ taskId: "task-abcdef12", taskDir: overrideTaskDir });
+    // Host writes the task record on provision; reuse must ride the same
+    // fork, not throw `task-moved` and not fork again.
+    mkdirSync(overrideTaskDir, { recursive: true });
+    writeFileSync(
+      join(overrideTaskDir, "task.json"),
+      JSON.stringify({
+        taskId: "task-abcdef12",
+        name: "发布前检查",
+        dirId: "task-abcdef12",
+        branch: "task/task-abcdef12",
+        root: override,
+        taskDir: overrideTaskDir,
+        remoteBranch: "main",
+        baseCommit: "a5a4a0d1234",
+        repos: [],
+        createdAt: "2026-09-22T10:00:00+08:00",
+        updatedAt: "2026-09-22T10:00:00+08:00",
+      }),
+      "utf8",
+    );
+    const second = await registry.routeTaskOp({ taskId: "task-abcdef12", op: "task/cancel", payload: {} });
+    expect(second).toEqual(TASK_RESULT);
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects reuse at an override folder whose record names another task", async () => {
+    // Same override shape, but the folder's record was claimed by a
+    // different task: reuse must fail closed with `task-moved`.
+    const { mkdirSync, writeFileSync } = await import("node:fs");
+    const override = mkdtempSync(join(tmpdir(), "pidock-override-evil-"));
+    const spawns: Array<{ taskId: string; taskDir: string }> = [];
+    const { registry, spawn } = registryWith(() => null, spawns, TASK_RESULT);
+    const payload = {
+      name: "发布前检查",
+      dirId: "task-abcdef12",
+      remoteBranch: "main",
+      fetchedCommit: "a5a4a0d1234",
+      rootOverride: override,
+    };
+    await registry.routeTaskOp({ taskId: "task-abcdef12", op: "task/provision", payload });
+    expect(spawn).toHaveBeenCalledTimes(1);
+    const overrideTaskDir = join(override, "task-abcdef12");
+    mkdirSync(overrideTaskDir, { recursive: true });
+    writeFileSync(
+      join(overrideTaskDir, "task.json"),
+      JSON.stringify({
+        taskId: "task-evil0000",
+        name: "冒名任务",
+        dirId: "task-abcdef12",
+        branch: "task/task-abcdef12",
+        root: override,
+        taskDir: overrideTaskDir,
+        remoteBranch: "main",
+        baseCommit: "a5a4a0d1234",
+        repos: [],
+        createdAt: "2026-09-22T10:00:00+08:00",
+        updatedAt: "2026-09-22T10:00:00+08:00",
+      }),
+      "utf8",
+    );
+    await expect(
+      registry.routeTaskOp({ taskId: "task-abcdef12", op: "task/cancel", payload: {} }),
+    ).rejects.toThrow("task-moved");
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses to bootstrap into a folder already claimed by another task", async () => {
+    // Folder-collision guard: a never-recorded id whose derived folder
+    // already holds a different task's `task.json` cannot bootstrap it.
+    const { mkdirSync, writeFileSync } = await import("node:fs");
+    const override = mkdtempSync(join(tmpdir(), "pidock-override-taken-"));
+    const spawns: Array<{ taskId: string; taskDir: string }> = [];
+    const { registry, spawn } = registryWith(() => null, spawns, TASK_RESULT);
+    const takenDir = join(override, "task-abcdef12");
+    mkdirSync(takenDir, { recursive: true });
+    writeFileSync(
+      join(takenDir, "task.json"),
+      JSON.stringify({
+        taskId: "task-taken000",
+        name: "已占任务",
+        dirId: "task-abcdef12",
+        branch: "task/task-abcdef12",
+        root: override,
+        taskDir: takenDir,
+        remoteBranch: "main",
+        baseCommit: "a5a4a0d1234",
+        repos: [],
+        createdAt: "2026-09-22T10:00:00+08:00",
+        updatedAt: "2026-09-22T10:00:00+08:00",
+      }),
+      "utf8",
+    );
+    await expect(
+      registry.routeTaskOp({
+        taskId: "task-abcdef12",
+        op: "task/provision",
+        payload: {
+          name: "发布前检查",
+          dirId: "task-abcdef12",
+          remoteBranch: "main",
+          fetchedCommit: "a5a4a0d1234",
+          rootOverride: override,
+        },
+      }),
+    ).rejects.toThrow("unknown task");
+    expect(spawn).not.toHaveBeenCalled();
   });
 
   it("resolves provisioned tasks exactly as main.ts wires the registry (real resolver + fake spawn)", async () => {

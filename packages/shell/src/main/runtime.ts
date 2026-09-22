@@ -15,7 +15,14 @@ import type {
 import { isAllowedInvokeChannel } from "../preload/allowlist.js";
 import { HostClient } from "../rpc/host-client.js";
 import { buildHostEnv, validateHostTaskOp } from "../host/host-guards.js";
-import { isAbsoluteTaskRoot, isTaskDirId, previewTaskPaths, resolveTaskRoot } from "./task-provision.js";
+import {
+  isAbsoluteTaskRoot,
+  isTaskDirId,
+  normalizeTaskPath,
+  previewTaskPaths,
+  resolveTaskRoot,
+} from "./task-provision.js";
+import { readTaskRecordOnDisk } from "../host/task-store.js";
 import { defaultTasksRoot } from "./task-resolver.js";
 import type { HostTaskOp, HostTaskResult } from "../rpc/protocol.js";
 import { TaskBrowser } from "./task-browser.js";
@@ -349,11 +356,20 @@ export class PerTaskHostRegistry {
     }
     const existing = this.entryForTaskId(taskId);
     if (existing) {
-      // Same-taskId ids are globally unique, but re-resolve every reuse so
-      // a task whose record moved/changed since the fork cannot silently
-      // ride a stale Host binding.
+      // Task ids are globally unique, but re-resolve every reuse so a
+      // task whose record moved/changed since the fork cannot silently
+      // ride a stale Host binding. The default-root resolver never
+      // covers `rootOverride` tasks, so reuse is override-aware: the
+      // forked folder stays valid while its own record still names this
+      // task (`readTask(existing.taskDir)?.taskId === taskId`, normalized
+      // compare); anything else is `task-moved`.
       const current = this.resolveTaskDir(taskId);
-      if (current === null || current !== existing.taskDir) {
+      const overrideStillOurs = this.overrideTaskDirStillOurs(taskId, existing.taskDir);
+      const resolvedDir = current ?? (overrideStillOurs ? existing.taskDir : null);
+      if (
+        resolvedDir === null ||
+        normalizeTaskPath(resolvedDir) !== normalizeTaskPath(existing.taskDir)
+      ) {
         throw new TrustDomainViolation(
           "invalid-payload",
           `task-moved: ${taskId} no longer resolves to the forked task folder; re-provision or restart before sending ops`,
@@ -362,12 +378,12 @@ export class PerTaskHostRegistry {
       return existing.client.task({ workspaceId: this.workspaceId, taskId, op, payload });
     }
     const taskDir = this.resolveTaskDir(taskId);
-    if (
-      op === "task/provision" &&
-      taskDir === null &&
-      this.resolveProvisionTaskDir(taskId, payload ?? {}) !== null
-    ) {
-      const bootstrapDir = this.resolveProvisionTaskDir(taskId, payload ?? {}) as string;
+    const provisionDir =
+      op === "task/provision" && taskDir === null
+        ? this.resolveProvisionTaskDir(taskId, payload ?? {})
+        : null;
+    if (op === "task/provision" && taskDir === null && provisionDir !== null) {
+      const bootstrapDir = provisionDir;
       const { client, child } = await this.spawn(this.workspaceId, { taskId, taskDir: bootstrapDir });
       this.byTaskDir.set(bootstrapDir, { taskId, taskDir: bootstrapDir, client, child });
       const dirs = this.byTaskId.get(taskId) ?? new Set<string>();
@@ -400,13 +416,47 @@ export class PerTaskHostRegistry {
    * derivation (per-task `TaskWorkspaceHost.provision` enforces
    * `paths.taskDir === this.taskDir`, closing substitution).
    */
+  /**
+   * S2 taskId/dirId coupling, documented until a taskId generator
+   * exists: today the renderer creates both together and uses
+   * `taskId === dirId` (e.g. `task-abcdef12`), so the bootstrap accepts
+   * an exact match or the legacy `taskId`-suffix shape. Two taskIds that
+   * merely share a trailing 8 (`evil-abcdef12`) must NOT bootstrap the
+   * same folder — the folder-collision guard below makes that explicit:
+   * a folder already claimed by a different task's `task.json` never
+   * bootstraps. Remove this coupling once a real generator assigns
+   * taskIds and dirIds together.
+   */
+  private dirIdMatchesTaskId(taskId: string, dirId: string): boolean {
+    if (taskId === dirId) return true;
+    return dirId.endsWith(taskId.slice(-8));
+  }
+
+  /**
+   * `rootOverride` reuse guard: the forked folder stays valid while its
+   * own on-disk record still names this task. Read failures (missing /
+   * corrupt / unreadable records) resolve to `false` so reuse fails
+   * closed with `task-moved` instead of trusting a folder with no record.
+   */
+  private overrideTaskDirStillOurs(taskId: string, taskDir: string): boolean {
+    if (!isAbsoluteTaskRoot(taskDir)) return false;
+    let record: { taskId: string } | null;
+    try {
+      record = readTaskRecordOnDisk(taskDir);
+    } catch {
+      return false;
+    }
+    return record?.taskId === taskId;
+  }
+
   private resolveProvisionTaskDir(taskId: string, payload: Record<string, unknown>): string | null {
     const dirId = payload["dirId"];
-    if (typeof dirId !== "string" || !isTaskDirId(dirId) || !dirId.endsWith(taskId.slice(-8))) {
+    if (typeof dirId !== "string" || !isTaskDirId(dirId) || !this.dirIdMatchesTaskId(taskId, dirId)) {
       // `taskId` (opaque selector) and `dirId` (`task-oooooooo` folder
       // name) are different identifiers; the bootstrap requires the
-      // payload dirId to match the trailing id segment so one task
-      // cannot bootstrap another task's folder.
+      // payload dirId to match the task id segment so one task cannot
+      // bootstrap another task's folder. See `dirIdMatchesTaskId` for
+      // the accepted shapes.
       return null;
     }
     const override = payload["rootOverride"];
@@ -419,7 +469,21 @@ export class PerTaskHostRegistry {
     );
     if (!resolved.ok) return null;
     try {
-      return previewTaskPaths(resolved.root, dirId, [], []).taskDir;
+      const bootstrapDir = previewTaskPaths(resolved.root, dirId, [], []).taskDir;
+      // Folder-collision guard: never bootstrap into a folder already
+      // claimed by a different task's record. (S2 has no taskId
+      // generator yet; claimants are `task.json` files written by
+      // `TaskWorkspaceHost.provision`. An absent/unreadable/corrupt
+      // record is treated as unclaimed here — the Host's own
+      // `paths.taskDir === this.taskDir` check still binds the fork.)
+      let claimant: { taskId: string } | null = null;
+      try {
+        claimant = readTaskRecordOnDisk(bootstrapDir);
+      } catch {
+        return null;
+      }
+      if (claimant !== null && claimant.taskId !== taskId) return null;
+      return bootstrapDir;
     } catch {
       return null;
     }
