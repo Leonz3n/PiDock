@@ -9,6 +9,9 @@ const rendererPages = [
   { name: "task-deploy", path: "/projects/atlas/tasks/release?session=deploy" },
   { name: "task-failed", path: "/projects/atlas/tasks/release?session=failed" },
   { name: "task-directory", path: "/projects/atlas/tasks/design-docs?session=main" },
+  // Mixed Git + ordinary-directory task with the files panel open, so the
+  // directory badge/entry and the directory root chooser are captured.
+  { name: "task-mixed", path: "/projects/atlas/tasks/release?session=main", click: 'button:text-is("文件")' },
   { name: "env", path: "/env" },
   { name: "providers", path: "/providers" },
   { name: "usage", path: "/usage" },
