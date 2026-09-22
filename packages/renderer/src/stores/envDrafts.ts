@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { toConfigRows, type ConfigRowDraft } from "../data/configRows";
+import { nextConfigRowId, toConfigRows, type ConfigRowDraft } from "../data/configRows";
 import type { ConfigEntry } from "../data/types";
 
 export type ConfigDraft = {
@@ -19,12 +19,6 @@ type EnvDraftState = {
   /** Record a successful save so the draft's baseline becomes the saved rows. */
   commit: (key: string, entries: ConfigEntry[]) => void;
 };
-
-let rowSequence = 0;
-function nextRowId() {
-  rowSequence += 1;
-  return `row-${rowSequence}`;
-}
 
 const emptyDraft = (original: ConfigEntry[]): ConfigDraft => ({
   rows: toConfigRows(original),
@@ -69,7 +63,7 @@ export const useEnvDraftStore = create<EnvDraftState>((set, get) => ({
     set({
       drafts: {
         ...get().drafts,
-        [key]: { ...draft, rows: [...draft.rows, { id: nextRowId(), key: "", value: "" }], dirty: true, error: null },
+        [key]: { ...draft, rows: [...draft.rows, { id: nextConfigRowId(), key: "", value: "" }], dirty: true, error: null },
       },
     });
   },

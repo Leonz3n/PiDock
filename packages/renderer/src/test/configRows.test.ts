@@ -2,6 +2,7 @@ import {
   configDraftKey,
   diffConfigRows,
   nextTemplateVersion,
+  toConfigRows,
   validateConfigRows,
   type ConfigRowDraft,
 } from "../data/configRows";
@@ -58,6 +59,24 @@ describe("nextTemplateVersion", () => {
 
   it("falls back to v1 when the version is unparseable", () => {
     expect(nextTemplateVersion("draft")).toBe("v1");
+  });
+});
+
+describe("toConfigRows", () => {
+  it("assigns a stable sequence id so key-derived ids cannot collide across rows or calls", () => {
+    // Under the old `${key}-${index}` scheme a KEY named `row` produced ids that
+    // overlapped the manual `row-<n>` ids and were reused on a second call.
+    const entries: ConfigEntry[] = [
+      { key: "row", value: "1", secret: false },
+      { key: "row", value: "2", secret: false },
+    ];
+    const first = toConfigRows(entries);
+    expect(new Set(first.map((item) => item.id)).size).toBe(2);
+    const second = toConfigRows([{ key: "row", value: "3", secret: false }]);
+    const all = [...first, ...second].map((item) => item.id);
+    expect(new Set(all).size).toBe(all.length);
+    // Ids are independent of the KEY, so two calls never reuse one.
+    expect(first.map((item) => item.id)).not.toEqual(["row-0", "row-1"]);
   });
 });
 

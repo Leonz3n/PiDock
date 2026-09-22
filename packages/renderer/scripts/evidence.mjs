@@ -23,8 +23,3 @@ export const EVIDENCE_DIR =
 
 /** Fixed capture viewport, so screenshots and measurements are comparable. */
 export const VIEWPORT = { width: 1440, height: 900 };
-
-/** Absolute-ish path helper for a file inside the evidence directory. */
-export function evidencePath(name) {
-  return `${EVIDENCE_DIR}${name}`;
-}
