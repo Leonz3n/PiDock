@@ -1,5 +1,6 @@
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { describe, expect, it, vi } from "vitest";
 import { defaultWorkspaceRoot } from "../data/memoryHost";
 import { renderApp } from "./helpers";
 
@@ -113,5 +114,47 @@ describe("new-task workspace preview", () => {
     expect(await within(dialog).findByRole("alert")).toHaveTextContent("获取远程基线失败");
     expect(screen.queryByRole("heading", { name: "空白基线任务" })).not.toBeInTheDocument();
     expect(useHostStore.getState().workspace?.tasks.length ?? before).toBe(before);
+  });
+
+  it("retries after a bridged provision failure without self-conflict (S5 P2-2)", async () => {
+    // First submit creates the memory task, then shell provision fails and
+    // keeps the form; the second submit must retry the same key instead of
+    // failing `identifier-conflict` against its own just-created task.
+    // NOTE: no window unstub here — helpers' replaceState needs the real
+    // window, and `vi.stubGlobal("window", …)` replaces it wholesale.
+    // Scope the bridge to the pidock property only so renderApp keeps
+    // working, then delete it at the end of the test.
+    const user = userEvent.setup();
+    const taskOp = vi
+      .fn(async (): Promise<{ ok: boolean; error?: string; payload?: unknown }> => ({ ok: false, error: "fetch-failed: 远程基线不可用" }))
+      .mockImplementationOnce(async () => ({ ok: false, error: "fetch-failed: 远程基线不可用" }))
+      .mockImplementationOnce(async () => ({ ok: true, payload: {} }));
+    const pidockDescriptor = Object.getOwnPropertyDescriptor(window, "pidock");
+    Object.defineProperty(window, "pidock", { value: { taskOp }, configurable: true, writable: true });
+    try {
+    renderApp("/projects/atlas");
+    await screen.findByRole("heading", { name: "Atlas Web" });
+    const { useHostStore } = await import("../stores/host");
+    const before = useHostStore.getState().workspace?.tasks.length ?? 0;
+    await user.click(screen.getByRole("button", { name: "新建任务" }));
+    const dialog = await screen.findByRole("dialog", { name: "新建任务" });
+    const key = (within(dialog).getByTestId("workspace-preview-path").textContent ?? "").split("/").pop() ?? "";
+    expect(key).toMatch(/^task-[0-9a-f]{8}$/);
+    await user.type(within(dialog).getByLabelText("任务名称"), "重试任务");
+    await user.type(within(dialog).getByLabelText("远程基线分支"), "origin/main");
+    await user.type(within(dialog).getByLabelText("基线提交"), "9acb5b6");
+    await user.click(within(dialog).getByRole("button", { name: "创建任务" }));
+    // First attempt: provision fails, form kept with the shell error.
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("远程基线不可用");
+    expect(screen.queryByRole("heading", { name: "重试任务" })).not.toBeInTheDocument();
+    // Second submit reuses the same key: no self-conflict, retry succeeds.
+    await user.click(within(dialog).getByRole("button", { name: "创建任务" }));
+    expect(await screen.findByRole("heading", { name: "重试任务" })).toBeInTheDocument();
+    expect(taskOp).toHaveBeenCalledTimes(2);
+    expect(useHostStore.getState().workspace?.tasks.length ?? before).toBe(before + 1);
+    } finally {
+      if (pidockDescriptor) Object.defineProperty(window, "pidock", pidockDescriptor);
+      else delete (window as unknown as Record<string, unknown>)["pidock"];
+    }
   });
 });
