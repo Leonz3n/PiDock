@@ -41,6 +41,20 @@ export function isShellConnected(): boolean {
   return shellBridge()?.taskOp !== undefined && typeof shellBridge()?.taskOp === "function";
 }
 
+export type ShellTaskOp =
+  | "task/provision"
+  | "task/appendRepos"
+  | "task/probeLink"
+  | "task/sendMessage"
+  | "task/cancel"
+  | "task/approve"
+  | "task/reject"
+  | "task/saveDraft"
+  | "task/clearDraft"
+  | "task/setPermission"
+  | "task/listApprovals"
+  | "task/getApproval";
+
 /**
  * Task-scoped op through main into the per-workspace Host. Rejects outside
  * the shell so dev/test callers must opt into the in-memory adapter instead
@@ -50,7 +64,7 @@ export function isShellConnected(): boolean {
  */
 export async function shellTaskOp(
   taskId: string,
-  op: "task/provision" | "task/sendMessage" | "task/cancel" | "task/approve" | "task/reject" | "task/saveDraft" | "task/clearDraft" | "task/setPermission" | "task/listApprovals" | "task/getApproval",
+  op: ShellTaskOp,
   payload: Record<string, unknown> = {},
 ): Promise<ShellTaskOpResult> {
   const bridge = shellBridge();
@@ -121,6 +135,15 @@ export async function provisionTaskThroughShell(input: {
   fetchedCommit: string;
   repos?: string[];
   mainCheckouts?: Record<string, string>;
+  /**
+   * [PiDock 03] (#6) per-repo sources: each entry names its own remote +
+   * baseline branch; `fetchedCommits` pins each repo's fresh commit
+   * (all-success gate Host-side). `plainDirs` snapshots plain-directory
+   * links (shared views of the originals, never copies).
+   */
+  repoSelections?: { repoDir: string; remote: string; remoteBranch: string; mainCheckoutDir: string }[];
+  fetchedCommits?: Record<string, string>;
+  plainDirs?: { directoryId: string; sourcePath: string }[];
 }): Promise<ShellTaskOpResult> {
   const payload: Record<string, unknown> = {
     name: input.name,
@@ -132,11 +155,59 @@ export async function provisionTaskThroughShell(input: {
   if (input.rootOverride !== undefined) payload["rootOverride"] = input.rootOverride;
   if (input.repos !== undefined) payload["repos"] = input.repos;
   if (input.mainCheckouts !== undefined) payload["mainCheckouts"] = input.mainCheckouts;
+  if (input.repoSelections !== undefined) payload["repoSelections"] = input.repoSelections;
+  if (input.fetchedCommits !== undefined) payload["fetchedCommits"] = input.fetchedCommits;
+  if (input.plainDirs !== undefined) payload["plainDirs"] = input.plainDirs;
   try {
     return await shellTaskOp(input.taskId, "task/provision", payload);
   } catch (error) {
     // A rejected invoke (bridge/transport failure) still arrives as an
     // envelope so the form can keep its input and offer retry.
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * [PiDock 03] (#6) append repos to a task through the shell (`host/task` +
+ * `task/appendRepos`). Only repos not already in the task are
+ * fetched/planned; the form stays on failure with a per-repo retry entry.
+ */
+export async function appendReposThroughShell(input: {
+  taskId: string;
+  repoSelections: { repoDir: string; remote: string; remoteBranch: string; mainCheckoutDir: string }[];
+  fetchedCommits: Record<string, string>;
+  branch?: string;
+  mainCheckouts?: Record<string, string>;
+  takenPaths?: string[];
+  branchesInUse?: string[];
+}): Promise<ShellTaskOpResult> {
+  const payload: Record<string, unknown> = {
+    repoSelections: input.repoSelections,
+    fetchedCommits: input.fetchedCommits,
+  };
+  if (input.branch !== undefined) payload["branch"] = input.branch;
+  if (input.mainCheckouts !== undefined) payload["mainCheckouts"] = input.mainCheckouts;
+  if (input.takenPaths !== undefined) payload["takenPaths"] = input.takenPaths;
+  if (input.branchesInUse !== undefined) payload["branchesInUse"] = input.branchesInUse;
+  try {
+    return await shellTaskOp(input.taskId, "task/appendRepos", payload);
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * [PiDock 03] (#6) probe a plain-dir link source through the shell
+ * (`host/task` + `task/probeLink`). Report only: `{shape: ok/dead}` —
+ * never creates, follows, or takes over the target.
+ */
+export async function probeLinkThroughShell(input: {
+  taskId: string;
+  sourcePath: string;
+}): Promise<ShellTaskOpResult> {
+  try {
+    return await shellTaskOp(input.taskId, "task/probeLink", { sourcePath: input.sourcePath });
+  } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
 }

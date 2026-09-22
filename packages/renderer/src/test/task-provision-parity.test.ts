@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildTaskFormBranch,
+  directoryLinkName,
   checkTaskFormDirIdConflict,
   isTaskDirId,
   pinTaskFormBaseline,
@@ -71,5 +72,41 @@ describe("renderer/shell provision-rule parity", () => {
     const failed = pinTaskFormBaseline("origin/main", "");
     expect(failed.ok).toBe(false);
     if (!failed.ok) expect(failed.error.code).toBe("fetch-failed");
+  });
+});
+
+describe("#6 multi-repo parity (S3)", () => {
+  it("mirrors the shell all-success pin gate per repo (fail-closed, no cross-use)", () => {
+    // Renderer reuses pinTaskFormBaseline per repo: each repo pins its own
+    // fresh commit; one failure keeps the form with per-repo retry.
+    const repos = [
+      { repoDir: "frontend", commit: "a5a4a0d1234" },
+      { repoDir: "invoice", commit: "" },
+    ];
+    const pinned: Record<string, string> = {};
+    let failedRepo = "";
+    for (const repo of repos) {
+      const pin = pinTaskFormBaseline("origin/main", repo.commit);
+      if (!pin.ok) {
+        failedRepo = repo.repoDir;
+        break;
+      }
+      pinned[repo.repoDir] = pin.commit;
+    }
+    expect(failedRepo).toBe("invoice");
+    expect(pinned).toEqual({ frontend: "a5a4a0d1234" });
+    // No partial plan: the shell gate (pinRepoBaselines) rejects the batch.
+    expect(Object.keys(pinned)).not.toContain("invoice");
+  });
+
+  it("keeps mixed worktree/link previews truthful (same rule as shell previewMixedTaskPaths)", () => {
+    const preview = previewTaskFormPaths("/tasks", "task-abcdef12", ["frontend", "invoice"], ["dir-notes12"]);
+    expect(preview.worktrees).toEqual({
+      frontend: "/tasks/task-abcdef12/frontend",
+      invoice: "/tasks/task-abcdef12/invoice",
+    });
+    expect(preview.links).toEqual({ "dir-notes12": "/tasks/task-abcdef12/dir-notes12" });
+    // Link writes modify the original (documented, never an isolated copy).
+    expect(directoryLinkName({ id: "notes-1" })).toBe("dir-notes1");
   });
 });
