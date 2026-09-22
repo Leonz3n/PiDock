@@ -4,6 +4,7 @@ import type {
   HostAdapter,
   ProjectDirectoryInput,
   SaveEnvironmentConfigInput,
+  SaveServiceRecipeInput,
   SendMessageResult,
 } from "../data/hostAdapter";
 import { memoryHost } from "../data/memoryHost";
@@ -17,6 +18,7 @@ import type {
   ProjectDirectory,
   Reference,
   ScheduledRun,
+  ServiceRecipe,
   Session,
   Task,
   UsageRecord,
@@ -64,6 +66,8 @@ type HostState = {
   loadCleanupPreview: (taskId: string) => Promise<CleanupItem[]>;
   saveEnvironmentConfig: (input: SaveEnvironmentConfigInput) => Promise<void>;
   adoptLatestTemplate: (taskId: string) => Promise<void>;
+  saveServiceRecipe: (input: SaveServiceRecipeInput) => Promise<ServiceRecipe>;
+  importVscodeConfig: (environmentId: string) => Promise<ServiceRecipe[]>;
   setProjectDirectories: (projectId: string, rows: ProjectDirectoryInput[]) => Promise<ProjectDirectory[]>;
   setTaskDirectories: (taskId: string, directoryIds: string[]) => Promise<void>;
   createTask: (input: CreateTaskInput) => Promise<Task>;
@@ -201,6 +205,18 @@ export const useHostStore = create<HostState>((set, get) => ({
   adoptLatestTemplate: async (taskId) => {
     await get().adapter.adoptLatestTemplate(taskId);
     await get().refresh();
+  },
+
+  saveServiceRecipe: async (input) => {
+    const recipe = await get().adapter.saveServiceRecipe(input);
+    await get().refresh();
+    return recipe;
+  },
+
+  importVscodeConfig: async (environmentId) => {
+    const added = await get().adapter.importVscodeConfig(environmentId);
+    await get().refresh();
+    return added;
   },
 
   setProjectDirectories: async (projectId, rows) => {

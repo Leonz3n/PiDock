@@ -3,7 +3,7 @@ import { Badge, Button, EmptyState, Field, Modal, Segmented } from "./ui";
 import { VirtualList } from "./VirtualList";
 import { runStateLabel } from "../pages/runState";
 import { diffConfigRows, isSensitiveKey, nextTemplateVersion } from "../data/configRows";
-import { directoryLinkName } from "../data/directories";
+import { directoryLinkName, newWorkspaceKey, workspacePath } from "../data/directories";
 import type { ConfigEntry, ProjectDirectory } from "../data/types";
 import { useEnvDraftStore } from "../stores/envDrafts";
 import { useHostStore } from "../stores/host";
@@ -353,6 +353,12 @@ export function Modals() {
     return <TaskDirectoriesModal taskId={task.id} onClose={closeModal} />;
   }
 
+  if (modal.type === "service-recipe") {
+    return (
+      <ServiceRecipeModal environmentId={modal.environmentId} recipeId={modal.recipeId} onClose={closeModal} />
+    );
+  }
+
   if (modal.type === "new-task") {
     const project = (workspace?.projects ?? []).find((item) => item.id === modal.projectId);
     if (!project) return null;
@@ -597,8 +603,97 @@ function TaskDirectoriesModal({ taskId, onClose }: { taskId: string; onClose: ()
   );
 }
 
+function ServiceRecipeModal({
+  environmentId,
+  recipeId,
+  onClose,
+}: {
+  environmentId: string;
+  recipeId?: string;
+  onClose: () => void;
+}) {
+  const workspace = useHostStore((state) => state.workspace);
+  const saveServiceRecipe = useHostStore((state) => state.saveServiceRecipe);
+  const pushToast = useUiStore((state) => state.pushToast);
+  const environment = workspace?.environments.find((item) => item.id === environmentId);
+  const existing = environment?.recipes.find((item) => item.id === recipeId);
+  const [name, setName] = useState(existing?.name ?? "");
+  const [repo, setRepo] = useState(existing?.repo ?? "");
+  const [runtime, setRuntime] = useState(existing?.runtime ?? "Node.js");
+  const [startNote, setStartNote] = useState(existing?.startNote ?? "使用项目脚本启动");
+  if (!environment) return null;
+  return (
+    <Modal
+      title={existing ? "编辑服务配方" : "添加服务"}
+      onClose={onClose}
+      footer={
+        <Button
+          size="sm"
+          variant="primary"
+          onClick={async () => {
+            try {
+              await saveServiceRecipe({ environmentId, recipe: { id: recipeId, name, repo, runtime, startNote } });
+              onClose();
+              pushToast(existing ? "服务配方已更新（内存模拟）" : "服务配方已添加（内存模拟）");
+            } catch (error) {
+              pushToast(error instanceof Error ? error.message : String(error));
+            }
+          }}
+        >
+          保存配方
+        </Button>
+      }
+    >
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label="服务名称">
+          <input
+            aria-label="服务名称"
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            className="rounded-md border border-line px-2 py-1.5 text-sm"
+            placeholder="例如 saas-web"
+          />
+        </Field>
+        <Field label="仓库（可空）">
+          <input
+            aria-label="配方仓库"
+            value={repo}
+            onChange={(event) => setRepo(event.target.value)}
+            className="rounded-md border border-line px-2 py-1.5 text-sm"
+            placeholder="例如 front-monorepo"
+          />
+        </Field>
+        <Field label="运行时">
+          <select
+            aria-label="配方运行时"
+            value={runtime}
+            onChange={(event) => setRuntime(event.target.value)}
+            className="rounded-md border border-line px-2 py-1.5 text-sm"
+          >
+            <option>Node.js</option>
+            <option>Go</option>
+          </select>
+        </Field>
+        <Field label="启动方式说明">
+          <input
+            aria-label="启动方式"
+            value={startNote}
+            onChange={(event) => setStartNote(event.target.value)}
+            className="rounded-md border border-line px-2 py-1.5 text-sm"
+            placeholder="使用项目脚本启动"
+          />
+        </Field>
+      </div>
+      <p className="mt-3 text-[11px] text-muted">
+        保存只写入内存模拟数据，不写入仓库默认配置也不启动进程；真实仓库扫描与配方转换属后续工单。
+      </p>
+    </Modal>
+  );
+}
+
 function NewTaskModal({ projectId, onClose }: { projectId: string; onClose: () => void }) {
   const workspace = useHostStore((state) => state.workspace);
+  const localSettings = useHostStore((state) => state.localSettings);
   const createTask = useHostStore((state) => state.createTask);
   const navigate = useNavigationStore((state) => state.navigate);
   const pushToast = useUiStore((state) => state.pushToast);
@@ -608,7 +703,13 @@ function NewTaskModal({ projectId, onClose }: { projectId: string; onClose: () =
   const [repos, setRepos] = useState<string[]>([]);
   const [directories, setDirectories] = useState<string[]>([]);
   const [environmentId, setEnvironmentId] = useState(environments[0]?.id ?? "");
+  // The previewed key is handed to the adapter, so the shown pi working
+  // directory is the one the created task actually gets (prototype's
+  // `pendingWorkspaceKey`).
+  const [workspaceKey] = useState(() => newWorkspaceKey());
   if (!project) return null;
+  const root = localSettings?.workspaceRoot ?? "~/PiDockTasks";
+  const workspacePreview = workspacePath(root, workspaceKey);
   return (
     <Modal
       title="新建任务"
@@ -619,7 +720,7 @@ function NewTaskModal({ projectId, onClose }: { projectId: string; onClose: () =
           variant="primary"
           onClick={async () => {
             try {
-              const created = await createTask({ projectId, name, repoIds: repos, directoryIds: directories, environmentId });
+              const created = await createTask({ projectId, name, repoIds: repos, directoryIds: directories, environmentId, workspaceKey });
               onClose();
               navigate({ view: "task", projectId, taskId: created.id, sessionId: created.activeSessionId });
               pushToast("已在内存中创建任务；真实 worktree 准备属 03 工单");
@@ -695,7 +796,46 @@ function NewTaskModal({ projectId, onClose }: { projectId: string; onClose: () =
           ))}
         </select>
       </Field>
-      <p className="mt-3 text-[11px] text-muted">任务目录预览：task-&lt;8 位标识&gt;（创建时生成）；仅选普通目录时保留任务根目录、隐藏 Git 获取流程。</p>
+      <div className="mt-3 rounded-md border border-line bg-soft/40 px-3 py-2 text-xs" data-testid="workspace-preview">
+        <div className="flex items-center justify-between gap-2">
+          <strong className="text-ink">任务文件夹 · pi 工作目录</strong>
+          <span className="text-[11px] text-muted">自动生成 · 英文与数字</span>
+        </div>
+        <code className="mt-1 block break-all font-mono text-[11px] text-ink" data-testid="workspace-preview-path">
+          {workspacePreview}
+        </code>
+        <ul className="mt-2 flex flex-col gap-1 text-[11px] text-muted">
+          {repos.map((repoId) => {
+            const repository = project.repositories.find((item) => item.id === repoId);
+            if (!repository) return null;
+            return (
+              <li key={repoId}>
+                <span className="text-ink">{repository.name}</span> · worktree
+                <code className="ml-2 break-all font-mono">{workspacePath(root, workspaceKey, repository.name)}</code>
+              </li>
+            );
+          })}
+          {directories.map((directoryId) => {
+            const directory = project.directories.find((item) => item.id === directoryId);
+            if (!directory) return null;
+            return (
+              <li key={directoryId}>
+                <span className="text-ink">{directory.name}</span> · 软链接 · 修改影响原目录
+                <code className="ml-2 break-all font-mono" data-testid={`preview-link-${directory.id}`}>
+                  {workspacePath(root, workspaceKey, directoryLinkName(directory))}
+                </code>
+                <span className="ml-1 break-all">→ {directory.path}</span>
+              </li>
+            );
+          })}
+        </ul>
+        {repos.length === 0 && directories.length === 0 ? (
+          <p className="mt-1 text-[11px] text-muted">请选择本次需要的仓库或普通目录。</p>
+        ) : null}
+        <p className="mt-2 text-[11px] text-muted">
+          pi 从此目录启动，通过子目录访问 worktree 和普通目录。名称仅作显示，不影响路径。
+        </p>
+      </div>
     </Modal>
   );
 }

@@ -167,6 +167,24 @@ export type Environment = {
   variables: ConfigEntry[];
   /** Machine-private layer (`private`); credentials and paths that never enter the shared template. */
   privateVariables: ConfigEntry[];
+  /** In-memory service startup recipes shown on the environment page. */
+  recipes: ServiceRecipe[];
+};
+
+/**
+ * A service startup recipe maintained on an environment. The prototype's
+ * `environmentEditor()` card (name, repo, runtime, start note) is editable in
+ * memory; the real repository scan / config write / process start stay out of
+ * scope and are labelled so on the page.
+ */
+export type ServiceRecipe = {
+  id: string;
+  name: string;
+  repo?: string;
+  /** e.g. `Node.js` / `Go`, matching the prototype's card metadata. */
+  runtime: string;
+  /** e.g. `使用项目脚本启动` / `读取仓库默认 config.yaml`. */
+  startNote: string;
 };
 
 export type ProviderProfile = {

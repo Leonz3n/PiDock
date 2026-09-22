@@ -28,6 +28,15 @@ describe("memory Host adapter", () => {
     expect(preview).toHaveLength(7);
   });
 
+  it("prints the in-task symlink path alongside the retained original in a directory cleanup preview", async () => {
+    const host = createMemoryHost();
+    await host.archiveTask("release");
+    const preview = await host.previewCleanup("release");
+    const symlink = preview.find((item) => item.action === "移除任务内软链接");
+    expect(symlink?.detail).toContain("~/PiDockTasks/task-a1f92c3d/dir-atlasdoc");
+    expect(symlink?.detail).toContain("保留原目录 /Users/leonz3n/Workspace/atlas-docs");
+  });
+
   it("expires pending approvals and stops services when a task is archived", async () => {
     const host = createMemoryHost();
     await host.archiveTask("release");
@@ -174,5 +183,40 @@ describe("memory Host adapter", () => {
     expect((await host.getTask("release"))?.configOverrides).toEqual([{ key: "LOCAL_PORT", value: "6000", secret: false }]);
     expect((await host.getTask("checkout"))?.configOverrides).toEqual([]);
     expect((await host.getTask("release"))?.services[0]?.resolved.find((row) => row.key === "LOCAL_PORT")?.value).toBe("6000");
+  });
+
+  it("upserts in-memory service startup recipes and rejects an empty name", async () => {
+    const host = createMemoryHost();
+    const before = (await host.getWorkspace()).environments.find((item) => item.id === "testing")?.recipes.length ?? 0;
+    const created = await host.saveServiceRecipe({
+      environmentId: "testing",
+      recipe: { name: "  saas-web-worker  ", repo: "front-monorepo", runtime: "Node.js", startNote: "使用项目脚本启动" },
+    });
+    expect(created.name).toBe("saas-web-worker");
+    let environment = (await host.getWorkspace()).environments.find((item) => item.id === "testing");
+    expect(environment?.recipes).toHaveLength(before + 1);
+
+    await host.saveServiceRecipe({
+      environmentId: "testing",
+      recipe: { id: created.id, name: "saas-web-worker-2", runtime: "Go", startNote: "读取仓库默认 config.yaml" },
+    });
+    environment = (await host.getWorkspace()).environments.find((item) => item.id === "testing");
+    expect(environment?.recipes.find((recipe) => recipe.id === created.id)?.name).toBe("saas-web-worker-2");
+    expect(environment?.recipes).toHaveLength(before + 1);
+
+    await expect(
+      host.saveServiceRecipe({ environmentId: "testing", recipe: { name: "   ", runtime: "Go", startNote: "x" } }),
+    ).rejects.toThrow("请填写服务名称");
+  });
+
+  it("simulates a .vscode import from registered repos without scanning them", async () => {
+    const host = createMemoryHost();
+    const added = await host.importVscodeConfig("staging-preview");
+    expect(added.length).toBeGreaterThan(0);
+    expect(added.every((recipe) => recipe.startNote.includes(".vscode"))).toBe(true);
+    const environment = (await host.getWorkspace()).environments.find((item) => item.id === "staging-preview");
+    expect(environment?.recipes.map((recipe) => recipe.name)).toEqual(added.map((recipe) => recipe.name));
+    // A second import adds nothing new (names already present).
+    expect(await host.importVscodeConfig("staging-preview")).toHaveLength(0);
   });
 });

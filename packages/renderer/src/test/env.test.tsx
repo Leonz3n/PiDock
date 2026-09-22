@@ -83,6 +83,59 @@ describe("environment scope editing", () => {
     await waitFor(() => expect(screen.getByLabelText("第 1 行 VALUE")).toHaveValue("shared-draft"));
   });
 
+  it("only offers the task-override tab and tasks for the selected environment", async () => {
+    const user = userEvent.setup();
+    renderApp("/env");
+    await screen.findByRole("heading", { name: "环境与服务" });
+
+    // 测试环境 is used by atlas tasks, so 任务覆盖 is offered and its selector
+    // lists only tasks of that environment (the prototype's envId filter).
+    await user.click(screen.getByRole("tab", { name: "任务覆盖" }));
+    const selector = await screen.findByLabelText("选择覆盖的任务");
+    const options = within(selector).getAllByRole("option").map((option) => option.textContent);
+    expect(options).toContain("发布前检查");
+    expect(options).not.toContain("旧登录重构");
+
+    // An environment no task uses hides 任务覆盖 entirely (no mismatched save).
+    await user.click(screen.getByRole("button", { name: /预发布环境/ }));
+    expect(screen.queryByRole("tab", { name: "任务覆盖" })).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "共享模板" })).toBeInTheDocument();
+  });
+
+  it("lists service startup recipes and adds one in memory", async () => {
+    const user = userEvent.setup();
+    renderApp("/env");
+    await screen.findByRole("heading", { name: "环境与服务" });
+
+    expect(await screen.findByRole("heading", { name: "服务启动配方", level: 2 })).toBeInTheDocument();
+    expect(screen.getAllByText("使用项目脚本启动").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("读取仓库默认 config.yaml").length).toBeGreaterThan(0);
+
+    await user.click(screen.getByRole("button", { name: "添加服务" }));
+    const dialog = await screen.findByRole("dialog", { name: "添加服务" });
+    await user.type(within(dialog).getByLabelText("服务名称"), "saas-worker");
+    await user.clear(within(dialog).getByLabelText("启动方式"));
+    await user.type(within(dialog).getByLabelText("启动方式"), "使用项目脚本启动");
+    await user.click(within(dialog).getByRole("button", { name: "保存配方" }));
+
+    expect(await screen.findByText("服务配方已添加（内存模拟）")).toBeInTheDocument();
+    expect(screen.getByText("saas-worker")).toBeInTheDocument();
+  });
+
+  it("imports .vscode recipes into the selected environment in memory", async () => {
+    const user = userEvent.setup();
+    renderApp("/env");
+    await screen.findByRole("heading", { name: "环境与服务" });
+
+    await user.click(screen.getByRole("button", { name: /预发布环境/ }));
+    expect(await screen.findByText("这个环境还没有服务启动配方。")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "从 .vscode 导入" }));
+    expect(await screen.findByText(/已从 .vscode 导入 \d+ 条示例配方/)).toBeInTheDocument();
+    expect(screen.queryByText("这个环境还没有服务启动配方。")).not.toBeInTheDocument();
+    expect(screen.getByText("front-monorepo")).toBeInTheDocument();
+  });
+
   it("marks each resolved config row with the layer it came from", async () => {
     renderApp("/env");
     await screen.findByRole("heading", { name: "环境与服务" });

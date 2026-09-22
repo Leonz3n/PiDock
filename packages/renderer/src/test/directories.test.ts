@@ -2,6 +2,7 @@ import {
   directoryLinkName,
   directoryLinkPath,
   isDirectoryOnlyTask,
+  newWorkspaceKey,
   normalizeDirectoryPath,
   toTaskDirectory,
   workspacePath,
@@ -32,6 +33,14 @@ describe("workspacePath", () => {
     expect(directoryLinkPath("/Users/name/Tasks", "task-a1f92c3d", { linkName: "dir-atlasdoc" })).toBe(
       "/Users/name/Tasks/task-a1f92c3d/dir-atlasdoc",
     );
+  });
+});
+
+describe("newWorkspaceKey", () => {
+  it("returns a distinct task-<8 hex> key for the create-task preview", () => {
+    const first = newWorkspaceKey();
+    expect(first).toMatch(/^task-[0-9a-f]{8}$/);
+    expect(newWorkspaceKey()).not.toBe(first);
   });
 });
 

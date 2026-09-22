@@ -26,17 +26,24 @@ const SCOPE_NOTICE: Record<ConfigScope, string> = {
 export function EnvPage() {
   const workspace = useHostStore((state) => state.workspace);
   const environments = useMemo(() => workspace?.environments ?? [], [workspace]);
-  const tasks = workspace?.tasks ?? [];
+  const tasks = useMemo(() => workspace?.tasks ?? [], [workspace]);
   const saveEnvironmentConfig = useHostStore((state) => state.saveEnvironmentConfig);
   const adoptLatestTemplate = useHostStore((state) => state.adoptLatestTemplate);
+  const importVscodeConfig = useHostStore((state) => state.importVscodeConfig);
   const pushToast = useUiStore((state) => state.pushToast);
   const openModal = useUiStore((state) => state.openModal);
 
   const [selectedId, setSelectedId] = useState(environments[0]?.id ?? "");
   const environment = environments.find((item) => item.id === selectedId) ?? environments[0];
   const [scope, setScope] = useState<ConfigScope>("shared");
+  // 任务覆盖 only ever applies to a task that uses the selected environment; the
+  // prototype filters the tab (and the task selector) with `task().envId === state.envId`.
+  const environmentTasks = useMemo(
+    () => tasks.filter((item) => item.environmentId === environment?.id),
+    [tasks, environment?.id],
+  );
   const [selectedTaskId, setSelectedTaskId] = useState(tasks[0]?.id ?? "");
-  const task = tasks.find((item) => item.id === selectedTaskId) ?? tasks[0];
+  const task = environmentTasks.find((item) => item.id === selectedTaskId) ?? environmentTasks[0];
   const [selectedServiceId, setSelectedServiceId] = useState("");
   const service = task?.services.find((item) => item.id === selectedServiceId) ?? task?.services[0];
 
@@ -57,7 +64,16 @@ export function EnvPage() {
     ensure(draftKey, original);
   }, [draftKey, ensure, original]);
 
+  // Mirrors the prototype's `managedEnvironmentPage()`: a task scope that no
+  // longer matches the selected environment falls back to the shared template.
+  useEffect(() => {
+    if (scope === "task" && environmentTasks.length === 0) setScope("shared");
+  }, [scope, environmentTasks.length]);
+
   if (!environment) return <p className="text-xs text-muted">还没有环境配置。</p>;
+
+  const scopeTabs =
+    environmentTasks.length > 0 ? SCOPE_TABS : SCOPE_TABS.filter((item) => item.value !== "task");
 
   const save = async () => {
     const validationError = validateConfigRows(draft.rows);
@@ -86,13 +102,31 @@ export function EnvPage() {
     pushToast(scope === "private" ? "已保存本机私有配置（内存模拟）" : "已保存任务覆盖（内存模拟）；受影响服务需要重启后生效");
   };
 
+  const importFromVscode = async () => {
+    try {
+      const added = await importVscodeConfig(environment.id);
+      pushToast(
+        added.length > 0
+          ? `已从 .vscode 导入 ${added.length} 条示例配方（内存模拟，未扫描仓库）`
+          : "没有新的可导入配方",
+      );
+    } catch (error) {
+      pushToast(error instanceof Error ? error.message : String(error));
+    }
+  };
+
   return (
     <div className="flex flex-col gap-4">
-      <header>
-        <h1 className="text-base font-medium text-ink">环境与服务</h1>
-        <p className="mt-1 text-xs text-muted">
-          图形界面维护共享模板、本机私有配置与任务覆盖；业务服务继续读取仓库默认配置，生效来源按服务只读核对。
-        </p>
+      <header className="flex flex-wrap items-end justify-between gap-2">
+        <div>
+          <h1 className="text-base font-medium text-ink">环境与服务</h1>
+          <p className="mt-1 text-xs text-muted">
+            图形界面维护共享模板、本机私有配置与任务覆盖；业务服务继续读取仓库默认配置，生效来源按服务只读核对。
+          </p>
+        </div>
+        <Button size="sm" onClick={() => void importFromVscode()}>
+          从 .vscode 导入
+        </Button>
       </header>
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[260px_1fr]">
@@ -129,7 +163,7 @@ export function EnvPage() {
             }
           >
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-              <Segmented ariaLabel="配置作用范围" value={scope} onChange={setScope} options={SCOPE_TABS} />
+              <Segmented ariaLabel="配置作用范围" value={scope} onChange={setScope} options={scopeTabs} />
               {scope === "task" ? (
                 <select
                   aria-label="选择覆盖的任务"
@@ -137,7 +171,7 @@ export function EnvPage() {
                   onChange={(event) => setSelectedTaskId(event.target.value)}
                   className="rounded-md border border-line bg-paper px-2 py-1 text-xs"
                 >
-                  {tasks.map((item) => (
+                  {environmentTasks.map((item) => (
                     <option key={item.id} value={item.id}>
                       {item.name}
                     </option>
@@ -208,6 +242,43 @@ export function EnvPage() {
             </div>
           </Panel>
 
+          <Panel
+            title="服务启动配方"
+            actions={
+              <Button size="sm" onClick={() => openModal({ type: "service-recipe", environmentId: environment.id })}>
+                添加服务
+              </Button>
+            }
+          >
+            {environment.recipes.length === 0 ? (
+              <p className="text-xs text-muted">这个环境还没有服务启动配方。</p>
+            ) : (
+              <div className="grid gap-2 sm:grid-cols-2">
+                {environment.recipes.map((recipe) => (
+                  <div key={recipe.id} className="rounded-md border border-line px-3 py-2 text-xs">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-ink">{recipe.name}</span>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => openModal({ type: "service-recipe", environmentId: environment.id, recipeId: recipe.id })}
+                      >
+                        编辑 {recipe.name}
+                      </Button>
+                    </div>
+                    <p className="mt-1 text-[11px] text-muted">
+                      {[recipe.repo, recipe.runtime].filter(Boolean).join(" · ")}
+                    </p>
+                    <p className="mt-1 font-mono text-[11px] text-muted">{recipe.startNote}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+            <p className="mt-3 text-[11px] text-muted">
+              配方只在内存中维护表单与列表；真实仓库扫描、写入仓库默认配置与进程启动不在本页范围。
+            </p>
+          </Panel>
+
           <Panel title="任务模板版本">
             <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
               <span className="text-muted">
@@ -237,7 +308,7 @@ export function EnvPage() {
                 onChange={(event) => setSelectedTaskId(event.target.value)}
                 className="rounded-md border border-line bg-paper px-2 py-1 text-xs"
               >
-                {tasks.map((item) => (
+                {environmentTasks.map((item) => (
                   <option key={item.id} value={item.id}>
                     {item.name}
                   </option>
@@ -269,7 +340,7 @@ export function EnvPage() {
           </Panel>
 
           <p className="text-[11px] text-muted">
-            明确不在本页范围：服务启动配方写入与从 .vscode 导入。原型两者仅作预览，真实实现需要仓库扫描，属后续工单。
+            明确不在本页范围：真实仓库扫描、向仓库默认配置写入配方与进程启动。页面仅在内存中维护配方表单与列表，并模拟从 `.vscode` 导入，真实实现属后续工单。
           </p>
         </div>
       </div>

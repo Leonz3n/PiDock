@@ -15,6 +15,7 @@ export type ModalState =
   | { type: "config-diff"; environmentId: string; draftKey: string; rows: ConfigRowDraft[]; taskId?: string }
   | { type: "project-directories"; projectId: string }
   | { type: "task-directories"; taskId: string }
+  | { type: "service-recipe"; environmentId: string; recipeId?: string }
   | { type: "pair-device" }
   | { type: "new-provider" }
   | null;
