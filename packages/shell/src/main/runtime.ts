@@ -272,9 +272,13 @@ function trustFailureEnvelope(
  * One utilityProcess serves one task folder: the first `shell/taskOp` for
  * a task forks a bound Host (`buildHostEnv(..., { taskId, taskDir })`) and
  * later ops for the same task reuse it; ops for another task fork their own
- * Host. The registry is keyed by `taskDir` (not taskId) so two tasks that
- * reuse a task id under different roots never share a process. The task dir
- * is resolved from the task record on first spawn and never taken from a
+ * Host. Task ids are globally unique under the single machine tasks root,
+ * so at most one folder can win per id; the registry is still keyed by
+ * `taskDir` internally and revalidates the resolved dir on every reuse: a
+ * task whose record moved/changed since the fork is rejected with
+ * `task-moved` instead of silently reusing a stale Host. The task dir is
+ * resolved from the task record on first spawn (production injects the
+ * disk-backed resolver from `task-resolver.ts`) and never taken from a
  * renderer payload beyond the task id selector.
  *
  * S2 note: `registerIpc` currently takes one workspace-only client (used by
@@ -334,6 +338,16 @@ export class PerTaskHostRegistry {
     }
     const existing = this.entryForTaskId(taskId);
     if (existing) {
+      // Same-taskId ids are globally unique, but re-resolve every reuse so
+      // a task whose record moved/changed since the fork cannot silently
+      // ride a stale Host binding.
+      const current = this.resolveTaskDir(taskId);
+      if (current === null || current !== existing.taskDir) {
+        throw new TrustDomainViolation(
+          "invalid-payload",
+          `task-moved: ${taskId} no longer resolves to the forked task folder; re-provision or restart before sending ops`,
+        );
+      }
       return existing.client.task({ workspaceId: this.workspaceId, taskId, op, payload });
     }
     const taskDir = this.resolveTaskDir(taskId);
