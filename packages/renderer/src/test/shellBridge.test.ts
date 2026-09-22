@@ -48,3 +48,31 @@ describe("shell bridge boundary", () => {
     vi.unstubAllGlobals();
   });
 });
+
+describe("#6 append + probe bridge (S3)", () => {
+  it("forwards appendRepos and probeLink payloads without Node access", async () => {
+    const { appendReposThroughShell, probeLinkThroughShell } = await import("../data/shellBridge");
+    const taskOp = vi.fn(async () => ({ ok: true, payload: {} }));
+    vi.stubGlobal("window", { pidock: { taskOp } });
+    try {
+      const appended = await appendReposThroughShell({
+        taskId: "task-abcdef12",
+        repoSelections: [
+          { repoDir: "shipment", remote: "origin", remoteBranch: "main", mainCheckoutDir: "/src/shipment" },
+        ],
+        fetchedCommits: { shipment: "c0ffee1234" },
+      });
+      expect(appended.ok).toBe(true);
+      expect(taskOp).toHaveBeenCalledWith(
+        "task-abcdef12",
+        "task/appendRepos",
+        expect.objectContaining({ fetchedCommits: { shipment: "c0ffee1234" } }),
+      );
+      const probed = await probeLinkThroughShell({ taskId: "task-abcdef12", sourcePath: "/data/notes" });
+      expect(probed.ok).toBe(true);
+      expect(taskOp).toHaveBeenCalledWith("task-abcdef12", "task/probeLink", { sourcePath: "/data/notes" });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
