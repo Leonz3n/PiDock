@@ -2046,14 +2046,14 @@ class MemoryHost implements HostAdapter {
     }
     const repoSources = input.repoSelections?.map((selection) => ({
       repoDir: selection.repoDir,
-      remote: selection.remote,
-      remoteBranch: selection.remoteBranch,
+      remote: selection.remote.trim(),
+      remoteBranch: selection.remoteBranch.trim(),
       baseCommit: (input.fetchedCommits?.[selection.repoDir] as string).trim().toLowerCase(),
     }));
     const dirLinks = input.plainDirs?.map((entry) => ({
       linkName: directoryLinkName({ id: entry.directoryId }),
       directoryId: entry.directoryId,
-      sourcePath: entry.sourcePath,
+      sourcePath: entry.sourcePath.trim(),
       snapshotAt: now,
     }));
     const entry = {
