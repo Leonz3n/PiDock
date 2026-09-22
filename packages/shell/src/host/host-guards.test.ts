@@ -15,6 +15,30 @@ describe("approval listing ops", () => {
   });
 });
 
+// [PiDock 04] (#7) service ops ride the same `host/task` envelope with
+// envelope-shape guards (semantic validation runs Host-side in
+// service-runtime.ts via host.ts dispatch).
+describe("service ops", () => {
+  it("accepts well-formed service envelopes and rejects missing ids", () => {
+    expect(
+      validateHostTaskOp("task/registerService", {
+        serviceId: "saas-web",
+        descriptor: { name: "saas-web" },
+        layers: {},
+        templateVersion: "v12",
+      }),
+    ).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/registerService", { serviceId: " " }).ok).toBe(false);
+    expect(validateHostTaskOp("task/planServiceStart", { serviceId: "saas-web" }).ok).toBe(true);
+    expect(validateHostTaskOp("task/planServiceStart", {}).ok).toBe(false);
+    expect(validateHostTaskOp("task/controlService", { serviceId: "saas-web", action: "start" }).ok).toBe(true);
+    expect(validateHostTaskOp("task/controlService", { serviceId: "saas-web", action: "launch" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/serviceStatus", { serviceId: "saas-web" }).ok).toBe(true);
+    expect(validateHostTaskOp("task/serviceLog", { serviceId: "saas-web" }).ok).toBe(true);
+    expect(validateHostTaskOp("task/serviceStatus", {}).ok).toBe(false);
+  });
+});
+
 // Seam: Host process-boundary guards (workspace binding + per-op payloads).
 // host.ts itself requires a utilityProcess parent port, so the pure guards
 // live in host-guards.ts and are unit-tested here.

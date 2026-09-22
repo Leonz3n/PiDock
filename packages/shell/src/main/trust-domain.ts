@@ -232,7 +232,7 @@ function validateTaskOpPayload(
   }
   if (
     typeof op !== "string" ||
-    !["task/provision", "task/appendRepos", "task/probeLink", "task/sendMessage", "task/cancel", "task/approve", "task/reject", "task/saveDraft", "task/clearDraft", "task/setPermission", "task/listApprovals", "task/getApproval"].includes(op)
+    !["task/provision", "task/appendRepos", "task/probeLink", "task/sendMessage", "task/cancel", "task/approve", "task/reject", "task/saveDraft", "task/clearDraft", "task/setPermission", "task/listApprovals", "task/getApproval", "task/registerService", "task/planServiceStart", "task/controlService", "task/serviceStatus", "task/serviceLog"].includes(op)
   ) {
     throw new TrustDomainViolation("invalid-payload", `unknown task op: ${String(op)}`);
   }

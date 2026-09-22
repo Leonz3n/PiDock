@@ -478,6 +478,53 @@ export function validateHostTaskOp(
     }
     return { ok: true };
   }
+  // [PiDock 04] (#7) service ops: envelope shape only here (fail-closed
+  // on missing ids); semantic validation (descriptor guard, env
+  // resolution, gate tiers) runs Host-side in `service-runtime.ts` via
+  // `host.ts` dispatch so unit tests cover both layers.
+  if (op === "task/registerService") {
+    if (!isRecord(payload))
+      return { ok: false, error: "invalid-payload: task/registerService requires a payload object" };
+    const serviceId = payload["serviceId"];
+    const descriptor = payload["descriptor"];
+    const serviceLayers = payload["layers"];
+    const templateVersion = payload["templateVersion"];
+    if (typeof serviceId !== "string" || serviceId.trim().length === 0) {
+      return { ok: false, error: "invalid-payload: task/registerService.serviceId must be a non-empty string" };
+    }
+    if (typeof descriptor !== "object" || descriptor === null || Array.isArray(descriptor)) {
+      return { ok: false, error: "invalid-payload: task/registerService.descriptor must be an object" };
+    }
+    if (typeof serviceLayers !== "object" || serviceLayers === null || Array.isArray(serviceLayers)) {
+      return { ok: false, error: "invalid-payload: task/registerService.layers must be an object" };
+    }
+    if (typeof templateVersion !== "string" || templateVersion.trim().length === 0) {
+      return { ok: false, error: "invalid-payload: task/registerService.templateVersion must be a non-empty string" };
+    }
+    return { ok: true };
+  }
+  if (op === "task/planServiceStart" || op === "task/serviceStatus" || op === "task/serviceLog") {
+    if (!isRecord(payload))
+      return { ok: false, error: `invalid-payload: ${op} requires a payload object` };
+    const serviceId = payload["serviceId"];
+    if (typeof serviceId !== "string" || serviceId.trim().length === 0) {
+      return { ok: false, error: `invalid-payload: ${op}.serviceId must be a non-empty string` };
+    }
+    return { ok: true };
+  }
+  if (op === "task/controlService") {
+    if (!isRecord(payload))
+      return { ok: false, error: "invalid-payload: task/controlService requires a payload object" };
+    const serviceId = payload["serviceId"];
+    const action = payload["action"];
+    if (typeof serviceId !== "string" || serviceId.trim().length === 0) {
+      return { ok: false, error: "invalid-payload: task/controlService.serviceId must be a non-empty string" };
+    }
+    if (action !== "start" && action !== "stop") {
+      return { ok: false, error: "invalid-payload: task/controlService.action must be start/stop" };
+    }
+    return { ok: true };
+  }
   if (payload !== undefined && !isRecord(payload)) {
     return { ok: false, error: `invalid-payload: ${op} payload must be an object` };
   }
