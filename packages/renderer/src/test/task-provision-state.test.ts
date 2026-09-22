@@ -345,4 +345,33 @@ describe("#6 provision state (S5)", () => {
     if (r3.ok) throw new Error("must fail");
     expect(r3.error.code).toBe("repo-unusable");
   });
+
+  it("persists padded per-repo strings trimmed (Host parity)", async () => {
+    const host = createMemoryHost();
+    const task = await host.createTask({
+      projectId: "atlas",
+      name: "留白裁剪",
+      repoIds: [],
+      directoryIds: [],
+      workspaceKey: "task-abcdef12",
+    });
+    const result = await host.provisionTaskThroughForm({
+      taskId: task.id,
+      name: "留白裁剪",
+      dirId: "task-abcdef12",
+      remoteBranch: "main",
+      fetchedCommit: "a5a4a0d1234",
+      repoSelections: [
+        { repoDir: "frontend", remote: " origin ", remoteBranch: " main ", mainCheckoutDir: "/src/frontend" },
+      ],
+      plainDirs: [{ directoryId: "notes-1", sourcePath: "/data/notes " }],
+      fetchedCommits: { frontend: "A5A4A0D1234 " },
+    });
+    expect(result.ok).toBe(true);
+    const provision = await host.getTaskProvision(task.id);
+    expect(provision?.repoSources?.[0]?.remote).toBe("origin");
+    expect(provision?.repoSources?.[0]?.remoteBranch).toBe("main");
+    expect(provision?.repoSources?.[0]?.baseCommit).toBe("a5a4a0d1234");
+    expect(provision?.dirLinks?.[0]?.sourcePath).toBe("/data/notes");
+  });
 });
