@@ -33,8 +33,7 @@ function getParentPort(): UtilityParentPort {
 
 const hostPort = getParentPort();
 
-import { boundWorkspaceId, routeHostTask, validateHostTaskOp } from "./host-guards.js";
-import { PI_GATED_TOOL_NAMES } from "../main/pi-session.js";
+import { boundWorkspaceId, buildToolPlannerSpec, routeHostTask, validateHostTaskOp } from "./host-guards.js";
 import { TaskWorkspaceHost, diskTaskStore } from "./task-host.js";
 import {
   isHostTaskParams,
@@ -197,20 +196,23 @@ function dispatchTaskOp(
           const value = record[key];
           if (value !== undefined) turn[key] = value;
         }
-        const gatedToolName = typeof record["tool"] === "string" ? (record["tool"] as string) : undefined;
-        const toolPlan = record["toolPlan"];
-        if ((toolPlan === "echo" || toolPlan === "deny") && gatedToolName !== undefined) {
-          if (!PI_GATED_TOOL_NAMES.includes(gatedToolName)) {
-            return { ok: false, error: `invalid-payload: task/sendMessage.tool is not a gated tool: ${gatedToolName}` };
-          }
-          const plannedTarget = toolPlan === "deny" ? "/etc/passwd" : (turn["target"] as string | undefined);
-          const plannedVersion = typeof turn["contentVersion"] === "string" ? (turn["contentVersion"] as string) : "v1";
-          const plannedTool = turn["tool"] as string;
+        const planner = buildToolPlannerSpec({
+          tool: record["tool"],
+          target: record["target"],
+          contentVersion: record["contentVersion"],
+          toolPlan: record["toolPlan"],
+        });
+        if (!planner.ok) return { ok: false, error: planner.error };
+        if (planner.mode === "echo" || planner.mode === "deny") {
+          const plannedTool = planner.tool;
+          const plannedTarget = planner.target;
+          const plannedVersion = planner.contentVersion;
+          const plannedMode = planner.mode;
           (turn as Record<string, unknown>)["execute"] = (_call: unknown) => ({
             tool: plannedTool,
             target: plannedTarget,
             contentVersion: plannedVersion,
-            output: toolPlan === "deny" ? "denied" : "planned",
+            output: plannedMode === "deny" ? "denied" : "planned",
           });
         }
         const result = host.sendMessage(sessionId, text, turn as never);

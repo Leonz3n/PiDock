@@ -36,9 +36,9 @@ export function shellBridge(): PidockBridge | null {
   return bridge;
 }
 
-/** True when the page runs inside the sandboxed shell view. */
+/** True when the page runs inside the sandboxed shell view with task routing. */
 export function isShellConnected(): boolean {
-  return shellBridge() !== null;
+  return shellBridge()?.taskOp !== undefined && typeof shellBridge()?.taskOp === "function";
 }
 
 /**
@@ -74,6 +74,10 @@ export type ShellTurnPayload = {
   toolPlan?: "echo" | "deny";
   providerId?: string;
   model?: string;
+  /** Structured input refs (`@` picks) persisted by the Host; never interpreted. */
+  references?: Array<Record<string, unknown>>;
+  /** Skill source (`$` pick) persisted by the Host; never interpreted. */
+  skillSource?: string;
 };
 
 /**
@@ -89,7 +93,7 @@ export async function sendMessageThroughShell(input: {
   sessionId: string;
 } & ShellTurnPayload): Promise<ShellTaskOpResult> {
   const payload: Record<string, unknown> = { sessionId: input.sessionId, text: input.text };
-  for (const key of ["tool", "target", "contentVersion", "toolPlan", "providerId", "model"] as const) {
+  for (const key of ["tool", "target", "contentVersion", "toolPlan", "providerId", "model", "references", "skillSource"] as const) {
     const value = input[key];
     if (value !== undefined) payload[key] = value;
   }

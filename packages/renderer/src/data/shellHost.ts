@@ -17,7 +17,7 @@ import type {
   HostAdapter,
   SendMessageResult,
 } from "./hostAdapter";
-import type { ApprovalStatus, Reference, RunRecord, RunState } from "./types";
+import type { Approval, ApprovalStatus, Reference, RunRecord, RunState } from "./types";
 import {
   isShellConnected,
   shellTaskOp,
@@ -36,14 +36,27 @@ function asRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
-/** `task/sendMessage` result envelope -> renderer `SendMessageResult`. */
+/**
+ * `task/sendMessage` result envelope -> renderer `SendMessageResult`.
+ *
+ * The Host speaks `PiRunState` (`done`/`approval`/`failed`/`cancelled`;
+ * transport-only `idle`/`running` must never arrive here). Map to the
+ * renderer vocabulary: `done->completed`, `cancelled->stopped`.
+ */
 function toSendMessageResult(taskId: string, sessionId: string, result: ShellTaskOpResult): SendMessageResult {
   if (!result.ok) throw shellResultError(result, "任务操作失败，已保留输入，请重试");
   const payload = asRecord(result.payload);
-  const state = payload["state"];
+  const hostState = payload["state"];
+  const state =
+    hostState === "done"
+      ? "completed"
+      : hostState === "cancelled"
+        ? "stopped"
+        : hostState;
   if (state !== "completed" && state !== "failed" && state !== "approval" && state !== "stopped") {
     throw new Error("invalid-payload: 任务操作返回异常，请重试");
   }
+  const approvalId = typeof payload["approvalId"] === "string" ? (payload["approvalId"] as string) : undefined;
   const run: RunRecord = {
     id: typeof payload["callId"] === "string" ? (payload["callId"] as string) : `run-${Date.now()}`,
     taskId,
@@ -51,9 +64,14 @@ function toSendMessageResult(taskId: string, sessionId: string, result: ShellTas
     state: state as RunState,
     startedAt: new Date().toISOString(),
     summary: state === "approval" ? "等待确认" : state === "failed" ? "执行失败，已保留现场" : "已完成",
-    steps: [{ label: state === "approval" ? "等待确认" : "运行工具", state: state === "failed" ? "failed" : "done" }],
+    steps: [
+      {
+        label: state === "approval" ? (approvalId ? `等待确认 ${approvalId}` : "等待确认") : "运行工具",
+        state: state === "failed" ? "failed" : "done",
+      },
+    ],
   };
-  return { state: state as SendMessageResult["state"], run };
+  return { state: state as SendMessageResult["state"], run, ...(approvalId ? { approvalId } : {}) } as SendMessageResult;
 }
 
 /**
@@ -61,7 +79,39 @@ function toSendMessageResult(taskId: string, sessionId: string, result: ShellTas
  * local-only ops delegate to the fallback; `sendMessage`/`stopRun`/
  * approvals/provision ride `window.pidock` when connected.
  */
+type PendingShellApproval = {
+  approvalId: string;
+  taskId: string;
+  sessionId: string;
+  title: string;
+  requestedAt: string;
+};
+
+function toShellApproval(entry: PendingShellApproval): Approval {
+  const expiresAt = new Date(Date.parse(entry.requestedAt) + 15 * 60 * 1000).toISOString();
+  return {
+    id: entry.approvalId,
+    taskId: entry.taskId,
+    sessionId: entry.sessionId,
+    title: entry.title,
+    command: entry.title,
+    cwd: "",
+    impact: "桌面壳 Host 审批",
+    payloadVersion: "v1",
+    status: "pending",
+    executed: false,
+    requestedAt: entry.requestedAt,
+    expiresAt,
+  };
+}
+
 export function createShellHostAdapter(fallback: HostAdapter): HostAdapter {
+  // Shell turns never populate the memory fallback, so bridged approvals
+  // are tracked here by (taskId, sessionId, approvalId) and resolved
+  // directly via `task/approve|reject` — never via fallback lookup.
+  // `listApprovals`/`getApproval` merge these synthetics so the UI can
+  // render and resolve a shell approval without an approval-listing RPC.
+  const pendingShellApprovals = new Map<string, PendingShellApproval>();
   return new Proxy(fallback, {
     get(target, property, receiver) {
       if (property === "sendMessage") {
@@ -69,9 +119,33 @@ export function createShellHostAdapter(fallback: HostAdapter): HostAdapter {
           if (!isShellConnected()) return (target as HostAdapter).sendMessage(taskId, sessionId, text, references);
           // Plain chat turn: no scripted tool plan, so the Host runs its
           // default plan (fs.write note under the task dir, gated allow).
-          const result = await sendMessageThroughShell({ taskId, sessionId, text });
-          void references;
-          return toSendMessageResult(taskId, sessionId, result);
+          // Structured refs ride as plain data (`references` verbatim +
+          // the single `$` skill pick as `skillSource`); the Host persists
+          // them without interpreting them.
+          const skill = references.find((reference) => reference.kind === "skill");
+          const result = await sendMessageThroughShell({
+            taskId,
+            sessionId,
+            text,
+            references: references.map((reference) => ({ ...reference })),
+            ...(skill ? { skillSource: skill.id } : {}),
+          });
+          const sent = toSendMessageResult(taskId, sessionId, result);
+          // Track the Host's approval id (never the fallback's) so
+          // `resolveApproval`/`getApproval`/`listApprovals` can render it
+          // without an approval-listing RPC. `approvalId` rides the
+          // `task/sendMessage` result payload (see `HostTurnResult`).
+          const approvalId = (sent as { approvalId?: unknown }).approvalId;
+          if (sent.state === "approval" && typeof approvalId === "string" && approvalId.length > 0) {
+            pendingShellApprovals.set(approvalId, {
+              approvalId,
+              taskId,
+              sessionId,
+              title: "等待确认",
+              requestedAt: new Date().toISOString(),
+            });
+          }
+          return sent;
         };
       }
       if (property === "stopRun") {
@@ -83,16 +157,39 @@ export function createShellHostAdapter(fallback: HostAdapter): HostAdapter {
       }
       if (property === "resolveApproval") {
         return async (approvalId: string, status: ApprovalStatus) => {
-          const found = await (target as HostAdapter).getApproval(approvalId);
           if (!isShellConnected()) return (target as HostAdapter).resolveApproval(approvalId, status);
-          if (!found) throw new Error("确认请求不存在");
-          const op = status === "approved" ? "task/approve" : "task/reject";
-          const result = await shellTaskOp(found.taskId, op, { sessionId: found.sessionId, approvalId });
-          if (!result.ok) throw shellResultError(result, "确认操作失败，请重试");
-          return (target as HostAdapter).resolveApproval(approvalId, status);
+          const pending = pendingShellApprovals.get(approvalId);
+          if (pending) {
+            const op = status === "approved" ? "task/approve" : "task/reject";
+            const result = await shellTaskOp(pending.taskId, op, { sessionId: pending.sessionId, approvalId });
+            if (!result.ok) throw shellResultError(result, "确认操作失败，请重试");
+            pendingShellApprovals.delete(approvalId);
+            return { ...toShellApproval(pending), status, executed: status === "approved" };
+          }
+          // No shell approval with this id: fall back to memory (local-only
+          // approvals such as the dev/demo fixtures), else fail closed.
+          const found = await (target as HostAdapter).getApproval(approvalId);
+          if (found) return (target as HostAdapter).resolveApproval(approvalId, status);
+          throw new Error("确认请求不存在");
         };
       }
-      if (property === "listApprovals" || property === "getApproval" || property === "simulateExpiry") {
+      if (property === "getApproval") {
+        return async (approvalId: string) => {
+          const pending = pendingShellApprovals.get(approvalId);
+          if (pending) return toShellApproval(pending);
+          return (target as HostAdapter).getApproval(approvalId);
+        };
+      }
+      if (property === "listApprovals") {
+        return async (taskId: string) => {
+          const local = await (target as HostAdapter).listApprovals(taskId);
+          const shell = [...pendingShellApprovals.values()]
+            .filter((entry) => entry.taskId === taskId)
+            .map(toShellApproval);
+          return [...shell, ...local];
+        };
+      }
+      if (property === "simulateExpiry") {
         // Approval reads stay local until the Host exposes an approval
         // listing RPC (S6 batch 3 scope: turns + resolve only).
         const value = Reflect.get(target, property, receiver);
