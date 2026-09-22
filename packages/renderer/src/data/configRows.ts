@@ -78,7 +78,20 @@ export function configDraftKey(
   return [projectId, environmentId, scope, scope === "task" ? (taskId ?? "") : ""].join(":");
 }
 
+let configRowSequence = 0;
+
+/**
+ * Stable, collision-free row id for the config tables. A monotonic sequence is
+ * used instead of `${key}-${index}` because a KEY rename (or a KEY that itself
+ * looks like `row-1`) could otherwise produce ids that collide with another row
+ * or get reused on a later call.
+ */
+export function nextConfigRowId(): string {
+  configRowSequence += 1;
+  return `row-${configRowSequence}`;
+}
+
 /** Map a stored layer into editable rows. */
 export function toConfigRows(entries: ConfigEntry[]): ConfigRowDraft[] {
-  return entries.map((entry, index) => ({ id: `${entry.key}-${index}`, key: entry.key, value: entry.value }));
+  return entries.map((entry) => ({ id: nextConfigRowId(), key: entry.key, value: entry.value }));
 }
