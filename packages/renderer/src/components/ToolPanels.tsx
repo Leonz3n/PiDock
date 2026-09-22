@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Badge, Button, EmptyState, Panel } from "./ui";
 import { CodeBlock } from "./CodeBlock";
 import { ConfigTable } from "./ConfigTable";
-import type { BrowserPage, Service, Task, TaskDirectory, WorkspaceFile } from "../data/types";
+import type { BrowserPage, Service, Subagent, Task, TaskDirectory, WorkspaceFile } from "../data/types";
 import { directoryLinkPath } from "../data/directories";
 import { useDraftStore } from "../stores/drafts";
 import { useHostStore } from "../stores/host";
@@ -10,9 +10,16 @@ import { useHostStore } from "../stores/host";
 export function RuntimePanel({
   task,
   onToggleService,
+  onSetServiceMode,
+  readonly = false,
+  onReadonlyAttempt,
 }: {
   task: Task;
   onToggleService: (serviceId: string, running: boolean) => void;
+  onSetServiceMode?: (serviceId: string, mode: Service["mode"]) => void;
+  /** Read-only sessions cannot change run state (prototype `sessionReadonly()`). */
+  readonly?: boolean;
+  onReadonlyAttempt?: () => void;
 }) {
   const [selected, setSelected] = useState<string | undefined>(task.services[0]?.id);
   const service: Service | undefined = task.services.find((item) => item.id === selected) ?? task.services[0];
@@ -31,8 +38,32 @@ export function RuntimePanel({
             <div className="flex items-center gap-2">
               <Badge tone={item.running ? "accent" : "neutral"}>{item.running ? "运行中" : item.mode === "remote" ? "远程" : "已停止"}</Badge>
               {item.mode === "local" ? (
-                <Button size="sm" onClick={() => onToggleService(item.id, !item.running)}>
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    if (readonly) {
+                      onReadonlyAttempt?.();
+                      return;
+                    }
+                    onToggleService(item.id, !item.running);
+                  }}
+                >
                   {item.running ? "停止" : "启动"}
+                </Button>
+              ) : null}
+              {onSetServiceMode ? (
+                <Button
+                  size="sm"
+                  aria-label={`切换 ${item.name} 依赖去向`}
+                  onClick={() => {
+                    if (readonly) {
+                      onReadonlyAttempt?.();
+                      return;
+                    }
+                    onSetServiceMode(item.id, item.mode === "local" ? "remote" : "local");
+                  }}
+                >
+                  {item.mode === "local" ? "改为远程" : "改为本地"}
                 </Button>
               ) : null}
             </div>
@@ -151,6 +182,165 @@ export function TerminalPanel({ taskId, seed }: { taskId: string; seed: string[]
           执行
         </Button>
       </form>
+    </div>
+  );
+}
+
+const SUBAGENT_STATUS_LABEL: Record<Subagent["status"], string> = {
+  running: "运行中",
+  completed: "已完成",
+  waiting: "等待中",
+  failed: "失败",
+  stopped: "已停止",
+};
+
+/** Card list of a session's child agents; selecting one opens the read-only sidebar. */
+export function SessionSubagentList({
+  agents,
+  selectedId,
+  onSelect,
+}: {
+  agents: Subagent[];
+  selectedId: string;
+  onSelect: (id: string) => void;
+}) {
+  if (agents.length === 0) return null;
+  const running = agents.filter((agent) => agent.status === "running").length;
+  return (
+    <div className="rounded-panel border border-line bg-paper px-3 py-2.5" aria-label="当前会话启动的 Subagent">
+      <div className="flex items-center justify-between gap-2 text-xs">
+        <span className="text-ink">Subagent <Badge>{agents.length}</Badge></span>
+        <small className="text-muted">{running > 0 ? `${running} 个运行中` : "全部已结束"} · 示例</small>
+      </div>
+      <div className="mt-2 flex flex-wrap gap-2">
+        {agents.map((agent) => (
+          <button
+            key={agent.id}
+            type="button"
+            aria-pressed={agent.id === selectedId}
+            onClick={() => onSelect(agent.id)}
+            className={`w-56 rounded-md border px-2.5 py-2 text-left text-xs ${
+              agent.id === selectedId ? "border-accent/40 bg-accent/10 text-accent" : "border-line text-ink hover:bg-soft"
+            }`}
+          >
+            <span className="flex items-center justify-between gap-2">
+              <strong>{agent.name}</strong>
+              <Badge tone={agent.status === "running" ? "accent" : agent.status === "failed" ? "warn" : "neutral"}>
+                {SUBAGENT_STATUS_LABEL[agent.status]}
+              </Badge>
+            </span>
+            <small className="mt-1 block text-muted">{agent.summary}</small>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Read-only child-agent detail; the main composer keeps sending to the parent session. */
+export function SubagentPanel({
+  agents,
+  selectedId,
+  parentLabel,
+  sessionName,
+  onSelect,
+}: {
+  agents: Subagent[];
+  selectedId: string;
+  parentLabel: string;
+  sessionName: string;
+  onSelect: (id: string) => void;
+}) {
+  const agent = agents.find((item) => item.id === selectedId) ?? agents[0];
+  if (!agent) return <EmptyState>本会话尚未启动 Subagent</EmptyState>;
+  return (
+    <Panel title="Subagent" actions={<Badge>示例记录</Badge>}>
+      <div className="text-[11px] text-muted">
+        <div>{parentLabel}</div>
+        <div>所属会话：{sessionName}</div>
+      </div>
+      <label className="mt-3 flex flex-col gap-1 text-[11px] text-muted">
+        选择 Subagent
+        <select
+          aria-label="选择 Subagent"
+          value={agent.id}
+          onChange={(event) => onSelect(event.target.value)}
+          className="rounded-md border border-line bg-paper px-2 py-1 text-xs"
+        >
+          {agents.map((item) => (
+            <option key={item.id} value={item.id}>
+              {item.name} · {SUBAGENT_STATUS_LABEL[item.status]}
+            </option>
+          ))}
+        </select>
+      </label>
+      <div className="mt-3 flex items-center justify-between text-xs">
+        <Badge tone={agent.status === "running" ? "accent" : "neutral"}>{SUBAGENT_STATUS_LABEL[agent.status]}</Badge>
+        <small className="text-muted">{agent.started} 启动 · {agent.mode}</small>
+      </div>
+      <p className="mt-1 text-[11px] text-muted">{agent.provider} / {agent.model}</p>
+      <details className="mt-3 rounded-md border border-line px-2.5 py-2 text-xs">
+        <summary className="text-ink">分配的任务</summary>
+        <p className="mt-1 text-muted">{agent.assignment}</p>
+      </details>
+      <ul className="mt-3 flex flex-col gap-2">
+        {agent.events.map((event, index) => (
+          <li key={index} className="rounded-md border border-line px-2.5 py-2 text-xs">
+            {event.kind === "tool" ? (
+              <details>
+                <summary className="text-ink">
+                  {event.name} <small className="text-muted">{event.time}</small>
+                </summary>
+                <code className="mt-1 block font-mono text-[11px] text-muted">{event.command}</code>
+                <pre className="mt-1 whitespace-pre-wrap font-mono text-[11px] text-ink">{event.output}</pre>
+              </details>
+            ) : (
+              <>
+                <div className="flex items-center justify-between text-ink">
+                  <strong>{event.role === "主 Agent" ? "主 Agent" : agent.name}</strong>
+                  <small className="text-muted">{event.time}</small>
+                </div>
+                <p className="mt-1 text-muted">{event.text}</p>
+              </>
+            )}
+          </li>
+        ))}
+      </ul>
+      {agent.result ? (
+        <div className="mt-3 rounded-md border border-accent/25 bg-accent/10 px-2.5 py-2 text-xs text-accent">
+          已返回主会话：{agent.result}
+        </div>
+      ) : null}
+      <p className="mt-3 text-[11px] text-muted">仅查看 · 左侧输入框仍发送给主会话；不启动真实子代理。</p>
+    </Panel>
+  );
+}
+
+export function LogsPanel({ task }: { task: Task }) {
+  // Mirrors the prototype's `logsView()`: per-service lifecycle lines plus the
+  // shared routing/dependency lines. Timestamps and messages are in-memory samples.
+  const localServices = task.services.filter((service) => service.mode === "local");
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs text-ink">运行日志</span>
+        <Badge>示例记录</Badge>
+      </div>
+      <div className="h-56 overflow-auto rounded-md border border-line bg-ink/95 p-3 font-mono text-[11px] leading-5 text-white/90" data-testid="runtime-logs">
+        {localServices.length === 0 ? (
+          <div>尚未配置本地服务。可在环境与服务中按需添加。</div>
+        ) : (
+          localServices.map((service) => (
+            <div key={service.id}>
+              <span className="text-accent">10:25:01</span> [{service.name}]{' '}
+              {service.running ? `listening at :${service.port}` : "process stopped"}
+            </div>
+          ))
+        )}
+        <div>10:25:02 [routes] local task bindings resolved</div>
+        <div>10:25:03 [account-service] remote test environment</div>
+      </div>
+      <p className="text-[11px] text-muted">日志中会显示服务、所属运行实例和错误；这里仅展示信息布局，未接入真实日志流。</p>
     </div>
   );
 }

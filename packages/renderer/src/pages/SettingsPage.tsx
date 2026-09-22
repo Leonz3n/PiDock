@@ -11,6 +11,7 @@ export function SettingsPage() {
   const settings = useHostStore((state) => state.localSettings);
   const setWorkspaceRoot = useHostStore((state) => state.setWorkspaceRoot);
   const pushToast = useUiStore((state) => state.pushToast);
+  const openModal = useUiStore((state) => state.openModal);
   const workspaceRoot = settings?.workspaceRoot;
   const [root, setRoot] = useState(workspaceRoot ?? "");
 
@@ -67,6 +68,12 @@ export function SettingsPage() {
           </div>
         </Panel>
       </div>
+
+      <Panel title="本机仓库绑定" actions={<Button size="sm" onClick={() => openModal({ type: "repo-binding" })}>编辑绑定</Button>}>
+        <p className="text-xs text-muted">
+          已登记仓库在这台机器上的实际检出路径；任务创建独立工作副本，不直接写入原仓库。路径仅保存在本机，不读取磁盘。
+        </p>
+      </Panel>
     </div>
   );
 }

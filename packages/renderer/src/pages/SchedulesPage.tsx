@@ -2,9 +2,12 @@ import { useState } from "react";
 import { Badge, Button, EmptyState, Panel } from "../components/ui";
 import { VirtualList } from "../components/VirtualList";
 import { scheduledRunResultLabel } from "./runState";
+import type { Permission } from "../data/types";
 import { useHostStore } from "../stores/host";
 import { useNavigationStore } from "../stores/navigation";
 import { useUiStore } from "../stores/ui";
+
+const PERMISSION_LABEL: Record<Permission, string> = { read: "只读", default: "默认权限", auto: "自动执行" };
 
 export function SchedulesPage() {
   const workspace = useHostStore((state) => state.workspace);
@@ -15,15 +18,27 @@ export function SchedulesPage() {
   const runScheduleNow = useHostStore((state) => state.runScheduleNow);
   const navigate = useNavigationStore((state) => state.navigate);
   const pushToast = useUiStore((state) => state.pushToast);
+  const openModal = useUiStore((state) => state.openModal);
   const [templateId, setTemplateId] = useState(templates[0]?.id ?? "");
 
   return (
     <div className="flex flex-col gap-4">
-      <header>
-        <h1 className="text-base font-medium text-ink">定时任务</h1>
-        <p className="mt-1 text-xs text-muted">
-          定时任务拥有固定任务工作区，按规则新建独立会话；每次执行不继承上一次对话上下文，历史会话可查看并继续。
-        </p>
+      <header className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="text-base font-medium text-ink">定时任务</h1>
+          <p className="mt-1 text-xs text-muted">
+            定时任务拥有固定任务工作区，按规则新建独立会话；每次执行不继承上一次对话上下文，历史会话可查看并继续。
+          </p>
+        </div>
+        {workspace?.projects[0] ? (
+          <Button
+            size="sm"
+            variant="primary"
+            onClick={() => openModal({ type: "new-task", projectId: workspace.projects[0].id })}
+          >
+            新建定时任务
+          </Button>
+        ) : null}
       </header>
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_340px]">
@@ -40,7 +55,7 @@ export function SchedulesPage() {
                         <div className="flex items-center gap-2">
                           <span className="text-sm text-ink">{schedule.name}</span>
                           <Badge tone={schedule.enabled ? "accent" : "neutral"}>{schedule.enabled ? "已启用" : "已暂停"}</Badge>
-                          <Badge>{schedule.permission === "write" ? "可写" : "只读"}</Badge>
+                          <Badge>{PERMISSION_LABEL[schedule.permission]}</Badge>
                         </div>
                         <p className="mt-1 text-xs text-muted">
                           {schedule.rule} · 时区 {schedule.timezone} · 下次执行 {schedule.nextRun} · {schedule.model}
@@ -48,6 +63,9 @@ export function SchedulesPage() {
                         <p className="mt-1 text-[11px] text-muted">结果处理写在提示词中：{schedule.prompt}</p>
                       </div>
                       <div className="flex flex-wrap gap-2">
+                        <Button size="sm" onClick={() => openModal({ type: "schedule-edit", scheduleId: schedule.id })}>
+                          编辑
+                        </Button>
                         <Button size="sm" onClick={() => void setScheduleEnabled(schedule.id, !schedule.enabled)}>
                           {schedule.enabled ? "暂停" : "启用"}
                         </Button>

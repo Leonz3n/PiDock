@@ -6,6 +6,7 @@ export function ProvidersPage() {
   const workspace = useHostStore((state) => state.workspace);
   const providers = workspace?.providers ?? [];
   const openModal = useUiStore((state) => state.openModal);
+  const removeProvider = useHostStore((state) => state.removeProvider);
   const pushToast = useUiStore((state) => state.pushToast);
 
   return (
@@ -17,7 +18,7 @@ export function ProvidersPage() {
             同一供应商可以保存多个独立配置；会话选择其中一个配置及其模型，上下文占用与 Token 消耗分开记录。
           </p>
         </div>
-        <Button size="sm" variant="primary" onClick={() => openModal({ type: "new-provider" })}>
+        <Button size="sm" variant="primary" onClick={() => openModal({ type: "provider-edit" })}>
           添加 Provider
         </Button>
       </header>
@@ -27,7 +28,12 @@ export function ProvidersPage() {
           <Panel
             key={provider.id}
             title={provider.name}
-            actions={<Badge>{provider.protocol}</Badge>}
+            actions={
+              <div className="flex items-center gap-1.5">
+                <Badge tone={provider.enabled ? "accent" : "neutral"}>{provider.enabled ? "已启用" : "已停用"}</Badge>
+                <Badge>{provider.protocol}</Badge>
+              </div>
+            }
           >
             <p className="font-mono text-[11px] text-muted">{provider.baseUrl}</p>
             <table className="mt-3 w-full text-xs">
@@ -41,7 +47,10 @@ export function ProvidersPage() {
               <tbody>
                 {provider.models.map((model) => (
                   <tr key={model.id} className="border-t border-line">
-                    <td className="py-1.5">{model.id}</td>
+                    <td className="py-1.5">
+                      {model.name ?? model.id}
+                      {model.name ? <small className="ml-1.5 text-muted">{model.id}</small> : null}
+                    </td>
                     <td className="py-1.5">{model.contextWindow}k</td>
                     <td className="py-1.5 text-muted">{model.contextWindow >= 100 ? "可切换" : "上下文不足时置灰"}</td>
                   </tr>
@@ -49,8 +58,21 @@ export function ProvidersPage() {
               </tbody>
             </table>
             <div className="mt-3 flex flex-wrap gap-2">
+              <Button size="sm" onClick={() => openModal({ type: "provider-edit", providerId: provider.id })}>
+                编辑
+              </Button>
               <Button size="sm" onClick={() => pushToast("已同步模型列表（示例候选，未调用真实发现接口）")}>
                 同步模型列表
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  void removeProvider(provider.id);
+                  pushToast("已移除 Provider（内存模拟）；引用它的会话回退到其他 Provider");
+                }}
+              >
+                删除
               </Button>
               <Button size="sm" variant="ghost" onClick={() => pushToast("凭据引用保存在本机私有配置，不写入共享模板")}>
                 查看凭据引用

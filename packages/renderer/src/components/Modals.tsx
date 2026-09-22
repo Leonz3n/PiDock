@@ -4,7 +4,8 @@ import { VirtualList } from "./VirtualList";
 import { runStateLabel } from "../pages/runState";
 import { diffConfigRows, isSensitiveKey, nextTemplateVersion } from "../data/configRows";
 import { directoryLinkName, newWorkspaceKey, workspacePath } from "../data/directories";
-import type { ConfigEntry, ProjectDirectory } from "../data/types";
+import type { ConfigEntry, ModelThinking, Permission, ProjectDirectory, Task } from "../data/types";
+import { useDraftStore } from "../stores/drafts";
 import { useEnvDraftStore } from "../stores/envDrafts";
 import { useHostStore } from "../stores/host";
 import { useNavigationStore } from "../stores/navigation";
@@ -240,40 +241,80 @@ export function Modals() {
     );
   }
 
-  if (modal.type === "new-provider") {
-    return (
-      <Modal
-        title="添加 Provider"
-        onClose={closeModal}
-        footer={
-          <Button size="sm" variant="primary" onClick={() => {
-            closeModal();
-            pushToast("已保存到内存；同步模型列表为示例候选，未调用真实发现接口");
-          }}>
-            保存
-          </Button>
-        }
-      >
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="显示名称">
-            <input aria-label="显示名称" className="rounded-md border border-line px-2 py-1.5 text-sm" placeholder="例如 团队网关" />
-          </Field>
-          <Field label="协议">
-            <select aria-label="协议" className="rounded-md border border-line px-2 py-1.5 text-sm">
-              <option>anthropic-messages</option>
-              <option>openai-responses</option>
-              <option>openai-chat-completions</option>
-            </select>
-          </Field>
-          <Field label="服务地址" hint="凭据通过本机私有配置引用，不写入共享模板">
-            <input aria-label="服务地址" className="rounded-md border border-line px-2 py-1.5 text-sm" placeholder="https://" />
-          </Field>
-          <Field label="模型 ID">
-            <input aria-label="模型 ID" className="rounded-md border border-line px-2 py-1.5 text-sm" placeholder="支持直接填写或从候选选择" />
-          </Field>
-        </div>
-      </Modal>
-    );
+  if (modal.type === "provider-edit") {
+    return <ProviderEditModal providerId={modal.providerId} onClose={closeModal} />;
+  }
+
+  if (modal.type === "project-list") {
+    return <ProjectListModal onClose={closeModal} />;
+  }
+
+  if (modal.type === "project-edit") {
+    return <ProjectEditModal projectId={modal.projectId} onClose={closeModal} />;
+  }
+
+  if (modal.type === "project-delete") {
+    return <ProjectDeleteModal projectId={modal.projectId} onClose={closeModal} />;
+  }
+
+  if (modal.type === "environment-list") {
+    return <EnvironmentListModal projectId={modal.projectId} onClose={closeModal} />;
+  }
+
+  if (modal.type === "environment-edit") {
+    return <EnvironmentEditModal projectId={modal.projectId} environmentId={modal.environmentId} onClose={closeModal} />;
+  }
+
+  if (modal.type === "environment-delete") {
+    return <EnvironmentDeleteModal environmentId={modal.environmentId} onClose={closeModal} />;
+  }
+
+  if (modal.type === "add-capability") {
+    return <AddCapabilityModal kind={modal.kind} onClose={closeModal} />;
+  }
+
+  if (modal.type === "schedule-edit") {
+    return <ScheduleEditModal scheduleId={modal.scheduleId} onClose={closeModal} />;
+  }
+
+  if (modal.type === "permission") {
+    return <PermissionModal taskId={modal.taskId} sessionId={modal.sessionId} onClose={closeModal} />;
+  }
+
+  if (modal.type === "model-picker") {
+    return <ModelPickerModal taskId={modal.taskId} sessionId={modal.sessionId} onClose={closeModal} />;
+  }
+
+  if (modal.type === "thinking-picker") {
+    return <ThinkingPickerModal taskId={modal.taskId} sessionId={modal.sessionId} onClose={closeModal} />;
+  }
+
+  if (modal.type === "context") {
+    return <ContextModal taskId={modal.taskId} sessionId={modal.sessionId} onClose={closeModal} />;
+  }
+
+  if (modal.type === "capability-detail") {
+    return <CapabilityDetailModal capabilityId={modal.capabilityId} onClose={closeModal} />;
+  }
+
+  if (modal.type === "retry") {
+    return <RetryModal taskId={modal.taskId} sessionId={modal.sessionId} onClose={closeModal} />;
+  }
+
+  if (modal.type === "remote-preview") {
+    return <RemotePreviewModal onClose={closeModal} />;
+  }
+
+  if (modal.type === "repo-binding") {
+    return <RepoBindingModal onClose={closeModal} />;
+  }
+
+  if (modal.type === "delivery" && task) {
+    return <DeliveryModal task={task} onClose={closeModal} />;
+  }
+
+  if (modal.type === "composer-info" && task) {
+    return <ComposerInfoModal task={task} topic={modal.topic} onClose={closeModal} />;
   }
 
   if (modal.type === "config-diff") {
@@ -348,9 +389,9 @@ export function Modals() {
     return <ProjectDirectoriesModal projectId={project.id} onClose={closeModal} />;
   }
 
-  if (modal.type === "task-directories") {
+  if (modal.type === "task-sources") {
     if (!task) return null;
-    return <TaskDirectoriesModal taskId={task.id} onClose={closeModal} />;
+    return <TaskSourcesModal taskId={task.id} onClose={closeModal} />;
   }
 
   if (modal.type === "service-recipe") {
@@ -532,70 +573,105 @@ function ProjectDirectoriesModal({ projectId, onClose }: { projectId: string; on
   );
 }
 
-function TaskDirectoriesModal({ taskId, onClose }: { taskId: string; onClose: () => void }) {
+function TaskSourcesModal({ taskId, onClose }: { taskId: string; onClose: () => void }) {
   const workspace = useHostStore((state) => state.workspace);
-  const setTaskDirectories = useHostStore((state) => state.setTaskDirectories);
+  const addTaskSources = useHostStore((state) => state.addTaskSources);
   const pushToast = useUiStore((state) => state.pushToast);
   const task = workspace?.tasks.find((item) => item.id === taskId);
   const project = workspace?.projects.find((item) => item.id === task?.projectId);
-  const [selected, setSelected] = useState<string[]>(() => (task?.directories ?? []).map((directory) => directory.id));
+  const [repos, setRepos] = useState<string[]>([]);
+  const [directories, setDirectories] = useState<string[]>(() => (task?.directories ?? []).map((directory) => directory.id));
   if (!task || !project) return null;
-  const existing = new Set(task.directories.map((directory) => directory.id));
+  const existingRepos = new Set(task.repos);
+  const existingDirectories = new Set(task.directories.map((directory) => directory.id));
   return (
     <Modal
-      title="添加普通目录"
+      title="添加仓库或目录"
       onClose={onClose}
       footer={
         <Button
           size="sm"
           variant="primary"
           onClick={async () => {
+            if (repos.length === 0 && directories.length === (task.directories?.length ?? 0)) {
+              pushToast("请选择要追加的仓库或目录");
+              return;
+            }
             try {
-              await setTaskDirectories(taskId, selected);
+              await addTaskSources(taskId, { repoIds: repos, directoryIds: directories });
               onClose();
-              pushToast("任务普通目录已更新；已有链接与 worktree 保留（内存模拟）");
+              pushToast("任务来源已更新；已有链接与 worktree 保留（内存模拟）");
             } catch (error) {
               pushToast(error instanceof Error ? error.message : String(error));
             }
           }}
         >
-          保存目录
+          获取最新基线并添加
         </Button>
       }
     >
-      <p className="text-xs text-muted">普通目录通过软链接加入任务目录，不复制文件、不初始化 Git；修改会影响原目录。</p>
-      <div className="mt-3 flex flex-col gap-2">
-        {project.directories.length === 0 ? <EmptyState>该项目还没有登记普通目录。</EmptyState> : null}
-        {project.directories.map((directory) => {
-          const added = existing.has(directory.id);
-          return (
-            <label key={directory.id} className="flex items-start gap-2 rounded-md border border-line px-2.5 py-2 text-xs">
-              <input
-                type="checkbox"
-                className="mt-0.5"
-                aria-label={`任务目录 ${directory.name}`}
-                checked={selected.includes(directory.id)}
-                disabled={added}
-                onChange={(event) =>
-                  setSelected((items) =>
-                    event.target.checked ? [...items, directory.id] : items.filter((id) => id !== directory.id),
-                  )
-                }
-              />
-              <span>
-                <strong className="block text-ink">{directory.name}</strong>
-                <small className="font-mono text-[11px] text-muted">
-                  {directory.path}
-                  {added ? " · 已加入" : ""}
-                </small>
-                <small className="mt-0.5 block text-[11px] text-muted">
-                  软链接 {directoryLinkName(directory)}/ · 修改影响原目录
-                </small>
-              </span>
-            </label>
-          );
-        })}
-      </div>
+      <p className="text-xs text-muted">
+        Git 仓库建立独立工作副本，普通目录通过软链接加入任务目录；沿用当前任务文件夹。
+      </p>
+      <fieldset className="mt-3">
+        <legend className="text-xs text-muted">选择代码仓库 · 远程基线分支</legend>
+        <div className="mt-1.5 flex flex-col gap-1.5">
+          {project.repositories.length === 0 ? <p className="text-[11px] text-muted">该项目还没有关联仓库。</p> : null}
+          {project.repositories.map((repository) => {
+            const added = existingRepos.has(repository.id);
+            return (
+              <label key={repository.id} className="flex items-center gap-2 text-xs">
+                <input
+                  type="checkbox"
+                  aria-label={`任务仓库 ${repository.name}`}
+                  checked={added || repos.includes(repository.id)}
+                  disabled={added}
+                  onChange={(event) =>
+                    setRepos((items) => (event.target.checked ? [...items, repository.id] : items.filter((id) => id !== repository.id)))
+                  }
+                />
+                <span>{repository.name}</span>
+                <span className="text-muted">基线 {repository.baseBranch}{added ? " · 已加入" : ""}</span>
+              </label>
+            );
+          })}
+        </div>
+      </fieldset>
+      <fieldset className="mt-3">
+        <legend className="text-xs text-muted">普通目录 · 通过软链接加入</legend>
+        <div className="mt-1.5 flex flex-col gap-2">
+          {project.directories.length === 0 ? <EmptyState>该项目还没有登记普通目录。</EmptyState> : null}
+          {project.directories.map((directory) => {
+            const added = existingDirectories.has(directory.id);
+            return (
+              <label key={directory.id} className="flex items-start gap-2 rounded-md border border-line px-2.5 py-2 text-xs">
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  aria-label={`任务目录 ${directory.name}`}
+                  checked={directories.includes(directory.id)}
+                  disabled={added}
+                  onChange={(event) =>
+                    setDirectories((items) =>
+                      event.target.checked ? [...items, directory.id] : items.filter((id) => id !== directory.id),
+                    )
+                  }
+                />
+                <span>
+                  <strong className="block text-ink">{directory.name}</strong>
+                  <small className="font-mono text-[11px] text-muted">
+                    {directory.path}
+                    {added ? " · 已加入" : ""}
+                  </small>
+                  <small className="mt-0.5 block text-[11px] text-muted">
+                    软链接 {directoryLinkName(directory)}/ · 修改影响原目录
+                  </small>
+                </span>
+              </label>
+            );
+          })}
+        </div>
+      </fieldset>
       <p className="mt-3 text-[11px] text-muted">
         任务中自动生成英文数字链接名，中文名称只用于显示。同一目录被多个任务引用时共享文件，不承诺隔离。
       </p>
@@ -621,6 +697,9 @@ function ServiceRecipeModal({
   const [repo, setRepo] = useState(existing?.repo ?? "");
   const [runtime, setRuntime] = useState(existing?.runtime ?? "Node.js");
   const [startNote, setStartNote] = useState(existing?.startNote ?? "使用项目脚本启动");
+  const [runType, setRunType] = useState(existing?.runType ?? "常驻服务");
+  const [healthCheck, setHealthCheck] = useState(existing?.healthCheck ?? "HTTP");
+  const [dependencyBinding, setDependencyBinding] = useState(existing?.dependencyBinding ?? "");
   if (!environment) return null;
   return (
     <Modal
@@ -632,7 +711,10 @@ function ServiceRecipeModal({
           variant="primary"
           onClick={async () => {
             try {
-              await saveServiceRecipe({ environmentId, recipe: { id: recipeId, name, repo, runtime, startNote } });
+              await saveServiceRecipe({
+                environmentId,
+                recipe: { id: recipeId, name, repo, runtime, startNote, runType, healthCheck, dependencyBinding },
+              });
               onClose();
               pushToast(existing ? "服务配方已更新（内存模拟）" : "服务配方已添加（内存模拟）");
             } catch (error) {
@@ -674,6 +756,39 @@ function ServiceRecipeModal({
             <option>Go</option>
           </select>
         </Field>
+        <Field label="运行类型">
+          <select
+            aria-label="运行类型"
+            value={runType}
+            onChange={(event) => setRunType(event.target.value)}
+            className="rounded-md border border-line px-2 py-1.5 text-sm"
+          >
+            <option>常驻服务</option>
+            <option>准备步骤</option>
+            <option>一次性命令</option>
+          </select>
+        </Field>
+        <Field label="健康检查">
+          <select
+            aria-label="健康检查"
+            value={healthCheck}
+            onChange={(event) => setHealthCheck(event.target.value)}
+            className="rounded-md border border-line px-2 py-1.5 text-sm"
+          >
+            <option>gRPC health</option>
+            <option>HTTP</option>
+            <option>TCP</option>
+          </select>
+        </Field>
+        <Field label="依赖地址绑定">
+          <input
+            aria-label="依赖地址绑定"
+            value={dependencyBinding}
+            onChange={(event) => setDependencyBinding(event.target.value)}
+            className="rounded-md border border-line px-2 py-1.5 text-sm"
+            placeholder="选择依赖服务与环境变量"
+          />
+        </Field>
         <Field label="启动方式说明">
           <input
             aria-label="启动方式"
@@ -699,10 +814,18 @@ function NewTaskModal({ projectId, onClose }: { projectId: string; onClose: () =
   const pushToast = useUiStore((state) => state.pushToast);
   const project = workspace?.projects.find((item) => item.id === projectId);
   const environments = (workspace?.environments ?? []).filter((item) => item.projectId === projectId);
+  const providers = workspace?.providers ?? [];
+  const templates = workspace?.templates ?? [];
   const [name, setName] = useState("");
   const [repos, setRepos] = useState<string[]>([]);
   const [directories, setDirectories] = useState<string[]>([]);
   const [environmentId, setEnvironmentId] = useState(environments[0]?.id ?? "");
+  const [taskType, setTaskType] = useState<"normal" | "scheduled">("normal");
+  const [scheduleRule, setScheduleRule] = useState("");
+  const [schedulePrompt, setSchedulePrompt] = useState("");
+  const [scheduleTemplateId, setScheduleTemplateId] = useState("");
+  const [scheduleModelKey, setScheduleModelKey] = useState(`${providers[0]?.id ?? ""}:${providers[0]?.models[0]?.id ?? ""}`);
+  const [schedulePermission, setSchedulePermission] = useState<Permission>("default");
   // The previewed key is handed to the adapter, so the shown pi working
   // directory is the one the created task actually gets (prototype's
   // `pendingWorkspaceKey`).
@@ -710,6 +833,17 @@ function NewTaskModal({ projectId, onClose }: { projectId: string; onClose: () =
   if (!project) return null;
   const root = localSettings?.workspaceRoot ?? "~/PiDockTasks";
   const workspacePreview = workspacePath(root, workspaceKey);
+  const [scheduleProviderId, scheduleModel] = scheduleModelKey.split(":");
+  const applyTemplate = () => {
+    const template = templates.find((item) => item.id === scheduleTemplateId);
+    if (!template) {
+      pushToast("请选择一个常用模板");
+      return;
+    }
+    if (!name.trim()) setName(template.name);
+    setScheduleRule(template.rule);
+    setSchedulePrompt(template.prompt);
+  };
   return (
     <Modal
       title="新建任务"
@@ -720,10 +854,32 @@ function NewTaskModal({ projectId, onClose }: { projectId: string; onClose: () =
           variant="primary"
           onClick={async () => {
             try {
-              const created = await createTask({ projectId, name, repoIds: repos, directoryIds: directories, environmentId, workspaceKey });
+              const created = await createTask({
+                projectId,
+                name,
+                repoIds: repos,
+                directoryIds: directories,
+                environmentId,
+                workspaceKey,
+                schedule:
+                  taskType === "scheduled"
+                    ? {
+                        rule: scheduleRule,
+                        timezone: "Asia/Shanghai",
+                        prompt: schedulePrompt,
+                        providerId: scheduleProviderId,
+                        model: scheduleModel,
+                        permission: schedulePermission,
+                      }
+                    : undefined,
+              });
               onClose();
               navigate({ view: "task", projectId, taskId: created.id, sessionId: created.activeSessionId });
-              pushToast("已在内存中创建任务；真实 worktree 准备属 03 工单");
+              pushToast(
+                taskType === "scheduled"
+                  ? "已创建定时任务；每次触发新建独立会话"
+                  : "已在内存中创建任务；真实 worktree 准备属 03 工单",
+              );
             } catch (error) {
               pushToast(error instanceof Error ? error.message : String(error));
             }
@@ -733,6 +889,26 @@ function NewTaskModal({ projectId, onClose }: { projectId: string; onClose: () =
         </Button>
       }
     >
+      <fieldset>
+        <legend className="text-xs text-muted">任务类型</legend>
+        <div className="mt-1.5 flex gap-3 text-xs">
+          {([
+            ["normal", "普通任务"],
+            ["scheduled", "定时任务"],
+          ] as const).map(([value, label]) => (
+            <label key={value} className="flex items-center gap-1.5">
+              <input
+                type="radio"
+                name="task-type"
+                aria-label={label}
+                checked={taskType === value}
+                onChange={() => setTaskType(value)}
+              />
+              {label}
+            </label>
+          ))}
+        </div>
+      </fieldset>
       <Field label="任务名称" hint="显示名称可为中文；任务目录使用独立自动生成的英文数字标识">
         <input
           aria-label="任务名称"
@@ -796,6 +972,84 @@ function NewTaskModal({ projectId, onClose }: { projectId: string; onClose: () =
           ))}
         </select>
       </Field>
+      {taskType === "scheduled" ? (
+        <fieldset className="mt-3 rounded-md border border-line px-3 py-3">
+          <legend className="text-xs text-muted">定时设置</legend>
+          <div className="flex flex-wrap items-end gap-2">
+            <label className="flex flex-1 flex-col gap-1 text-xs text-muted">
+              常用模板 · 可选
+              <select
+                aria-label="常用模板"
+                value={scheduleTemplateId}
+                onChange={(event) => setScheduleTemplateId(event.target.value)}
+                className="rounded-md border border-line px-2 py-1.5 text-xs"
+              >
+                <option value="">自定义 · 从空白开始</option>
+                {templates.map((template) => (
+                  <option key={template.id} value={template.id}>
+                    {template.name} · {template.rule}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <Button size="sm" onClick={applyTemplate}>
+              使用模板
+            </Button>
+          </div>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <Field label="执行周期">
+              <input
+                aria-label="执行周期"
+                value={scheduleRule}
+                onChange={(event) => setScheduleRule(event.target.value)}
+                className="rounded-md border border-line px-2 py-1.5 text-sm"
+                placeholder="例如：每周五 15:00"
+              />
+            </Field>
+            <Field label="Provider / 模型">
+              <select
+                aria-label="定时任务模型"
+                value={scheduleModelKey}
+                onChange={(event) => setScheduleModelKey(event.target.value)}
+                className="rounded-md border border-line px-2 py-1.5 text-sm"
+              >
+                {providers.flatMap((provider) =>
+                  provider.models.map((item) => (
+                    <option key={`${provider.id}:${item.id}`} value={`${provider.id}:${item.id}`} disabled={!provider.enabled}>
+                      {provider.name} / {item.name ?? item.id}
+                    </option>
+                  )),
+                )}
+              </select>
+            </Field>
+            <Field label="新会话权限">
+              <select
+                aria-label="定时任务权限"
+                value={schedulePermission}
+                onChange={(event) => setSchedulePermission(event.target.value as Permission)}
+                className="rounded-md border border-line px-2 py-1.5 text-sm"
+              >
+                <option value="read">只读</option>
+                <option value="default">默认权限 · 需要时等待确认</option>
+                <option value="auto">自动执行</option>
+              </select>
+            </Field>
+          </div>
+          <div className="mt-3">
+            <Field label="提示词">
+              <textarea
+                aria-label="定时任务提示词"
+                rows={4}
+                value={schedulePrompt}
+                onChange={(event) => setSchedulePrompt(event.target.value)}
+                className="w-full rounded-md border border-line px-2 py-1.5 text-xs"
+                placeholder="包括要处理的内容，以及如何保存、发送或使用结果"
+              />
+            </Field>
+          </div>
+          <p className="mt-2 text-[11px] text-muted">每次触发在当前任务中创建新的独立会话；历史会话可查看并继续对话。</p>
+        </fieldset>
+      ) : null}
       <div className="mt-3 rounded-md border border-line bg-soft/40 px-3 py-2 text-xs" data-testid="workspace-preview">
         <div className="flex items-center justify-between gap-2">
           <strong className="text-ink">任务文件夹 · pi 工作目录</strong>
@@ -836,6 +1090,1453 @@ function NewTaskModal({ projectId, onClose }: { projectId: string; onClose: () =
           pi 从此目录启动，通过子目录访问 worktree 和普通目录。名称仅作显示，不影响路径。
         </p>
       </div>
+    </Modal>
+  );
+}
+
+const PERMISSION_TIERS: { id: Permission; name: string; description: string }[] = [
+  { id: "read", name: "只读", description: "阅读任务文件、分析和回答问题；不修改文件，不执行命令或浏览器操作。" },
+  { id: "default", name: "默认权限", description: "允许任务内文件读写；执行命令或操作浏览器前询问。" },
+  { id: "auto", name: "自动执行", description: "允许任务内文件读写、命令和浏览器操作，无需逐次询问。" },
+];
+
+function PermissionModal({ taskId, sessionId, onClose }: { taskId: string; sessionId: string; onClose: () => void }) {
+  const session = useHostStore((state) => state.session(taskId, sessionId));
+  const setSessionPermission = useHostStore((state) => state.setSessionPermission);
+  const pushToast = useUiStore((state) => state.pushToast);
+  if (!session) return null;
+  return (
+    <Modal title="会话权限" onClose={onClose}>
+      <p className="text-xs text-muted">
+        {session.name} · 仅当前会话。所有档位均遵循任务范围与共享模板变更确认规则；选择用于后续请求，已启动的 Subagent 保留启动时权限。
+      </p>
+      <div className="mt-3 flex flex-col gap-2">
+        {PERMISSION_TIERS.map((tier) => (
+          <button
+            key={tier.id}
+            type="button"
+            aria-pressed={session.permission === tier.id}
+            data-testid={`permission-${tier.id}`}
+            onClick={async () => {
+              await setSessionPermission(taskId, sessionId, tier.id);
+              onClose();
+              pushToast(`当前会话已选择${tier.name}，用于后续请求`);
+            }}
+            className={`rounded-md border px-3 py-2 text-left text-xs ${
+              session.permission === tier.id ? "border-accent/40 bg-accent/10 text-accent" : "border-line text-ink hover:bg-soft"
+            }`}
+          >
+            <strong className="block">{tier.name}</strong>
+            <small className="text-muted">{tier.description}</small>
+          </button>
+        ))}
+      </div>
+    </Modal>
+  );
+}
+
+function ModelPickerModal({ taskId, sessionId, onClose }: { taskId: string; sessionId: string; onClose: () => void }) {
+  const workspace = useHostStore((state) => state.workspace);
+  const session = useHostStore((state) => state.session(taskId, sessionId));
+  const setSessionModel = useHostStore((state) => state.setSessionModel);
+  const pushToast = useUiStore((state) => state.pushToast);
+  const providers = workspace?.providers ?? [];
+  if (!session) return null;
+  const current = providers.find((provider) => provider.id === session.providerId);
+  return (
+    <Modal title="选择 Provider 与模型" onClose={onClose}>
+      <p className="text-xs text-muted">在同一 Provider 下切换模型，或选择其他 Provider。当前会话保留历史与累计 Token。</p>
+      <div className="mt-3 flex flex-col gap-3">
+        {providers.map((provider) => (
+          <div key={provider.id}>
+            <div className="flex items-center justify-between text-xs">
+              <strong className="text-ink">{provider.name}</strong>
+              <span className="text-muted">{provider.protocol}{provider.enabled ? "" : " · 已停用"}</span>
+            </div>
+            <div className="mt-1.5 flex flex-col gap-1.5">
+              {provider.models.map((model) => {
+                const blocked = !provider.enabled
+                  ? "Provider 已停用"
+                  : model.contextWindow * 1000 <= session.contextUsed * 1000
+                    ? `当前上下文 ${session.contextUsed.toFixed(1)}k，超过该模型 ${model.contextWindow}k 上限`
+                    : "";
+                const selected = session.providerId === provider.id && session.model === model.id;
+                return (
+                  <button
+                    key={model.id}
+                    type="button"
+                    disabled={Boolean(blocked)}
+                    aria-label={`模型 ${model.id}`}
+                    title={blocked}
+                    onClick={async () => {
+                      await setSessionModel(taskId, sessionId, provider.id, model.id);
+                      onClose();
+                      pushToast(`当前会话已选择 ${model.id}，历史保留`);
+                    }}
+                    className={`flex items-center justify-between rounded-md border px-3 py-2 text-left text-xs disabled:opacity-50 ${
+                      selected ? "border-accent/40 bg-accent/10 text-accent" : "border-line text-ink hover:bg-soft"
+                    }`}
+                  >
+                    <span>
+                      {model.name ?? model.id}
+                      {model.name ? <small className="ml-1.5 text-muted">{model.id}</small> : null}
+                      <small className="ml-2 text-muted">{model.contextWindow}k 上下文</small>
+                    </span>
+                    {blocked ? <small className="text-orange">{blocked}</small> : selected ? <span className="badge">当前</span> : null}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+      {current && !current.enabled ? <p className="mt-3 text-[11px] text-orange">当前 Provider 已停用，请选择其他 Provider。</p> : null}
+    </Modal>
+  );
+}
+
+const REASONING_LABELS: Record<string, string> = {
+  off: "关闭",
+  minimal: "极低",
+  low: "低",
+  medium: "中",
+  high: "高",
+  xhigh: "极高",
+  max: "最高",
+};
+
+function ThinkingPickerModal({ taskId, sessionId, onClose }: { taskId: string; sessionId: string; onClose: () => void }) {
+  const workspace = useHostStore((state) => state.workspace);
+  const session = useHostStore((state) => state.session(taskId, sessionId));
+  const setSessionThinking = useHostStore((state) => state.setSessionThinking);
+  const pushToast = useUiStore((state) => state.pushToast);
+  if (!session) return null;
+  const provider = workspace?.providers.find((item) => item.id === session.providerId);
+  const model = provider?.models.find((item) => item.id === session.model);
+  const thinking = model?.thinking;
+  return (
+    <Modal title="推理档位" onClose={onClose}>
+      <p className="text-xs text-muted">
+        {model?.id ?? session.model} · 仅用于当前会话。
+      </p>
+      {!thinking || thinking.mode === "auto" ? (
+        <p className="mt-3 text-xs text-muted">当前模型跟随模型目录，尚未获取可用档位。可到「Provider 与上下文」配置可用档位。</p>
+      ) : thinking.mode === "none" ? (
+        <p className="mt-3 text-xs text-muted">该模型不支持推理档位。</p>
+      ) : (
+        <div className="mt-3 flex flex-col gap-1.5">
+          {thinking.levels.map((level) => {
+            const selected = (session.thinking ?? thinking.default) === level;
+            return (
+              <button
+                key={level}
+                type="button"
+                aria-pressed={selected}
+                onClick={async () => {
+                  await setSessionThinking(taskId, sessionId, level);
+                  onClose();
+                  pushToast(`当前会话推理档位已选择${REASONING_LABELS[level] ?? level}`);
+                }}
+                className={`flex items-center justify-between rounded-md border px-3 py-2 text-left text-xs ${
+                  selected ? "border-accent/40 bg-accent/10 text-accent" : "border-line text-ink hover:bg-soft"
+                }`}
+              >
+                <span>{REASONING_LABELS[level] ?? level} <small className="text-muted">{level}</small></span>
+                {level === thinking.default ? <small className="text-muted">模型默认</small> : null}
+              </button>
+            );
+          })}
+        </div>
+      )}
+      <p className="mt-3 text-[11px] text-muted">切换档位只影响后续请求；上下文压缩不会减少累计 Token。</p>
+    </Modal>
+  );
+}
+
+function ContextModal({ taskId, sessionId, onClose }: { taskId: string; sessionId: string; onClose: () => void }) {
+  const workspace = useHostStore((state) => state.workspace);
+  const session = useHostStore((state) => state.session(taskId, sessionId));
+  const compactSessionContext = useHostStore((state) => state.compactSessionContext);
+  const pushToast = useUiStore((state) => state.pushToast);
+  if (!session) return null;
+  const provider = workspace?.providers.find((item) => item.id === session.providerId);
+  const model = provider?.models.find((item) => item.id === session.model);
+  const capacity = session.contextWindow;
+  const percent = capacity > 0 ? (session.contextUsed * 100) / capacity : null;
+  return (
+    <Modal title="上下文占用" onClose={onClose}>
+      <div className="flex items-baseline gap-2">
+        <strong className="text-lg text-ink">{percent === null ? "未知" : `${percent.toFixed(1)}%`}</strong>
+        <span className="text-xs text-muted">
+          {session.contextUsed.toFixed(1)}k / {capacity}k Tokens · 估算
+        </span>
+      </div>
+      <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-soft">
+        <div className="h-full rounded-full bg-accent" style={{ width: `${Math.min(100, percent ?? 0)}%` }} />
+      </div>
+      <p className="mt-3 text-xs text-ink">
+        {model?.id ?? session.model} · {provider?.name ?? "Provider"}
+      </p>
+      <p className="mt-2 text-[11px] text-muted">
+        包含消息、指令和工具结果。压缩可以释放上下文空间，累计 Token 消耗会保留。
+      </p>
+      <p className="mt-3 flex items-center justify-between text-xs">
+        <span className="text-muted">本会话累计消耗</span>
+        <strong className="text-ink">{session.tokens.toFixed(1)}k Tokens</strong>
+      </p>
+      <div className="mt-3 flex justify-end">
+        <Button
+          size="sm"
+          onClick={async () => {
+            await compactSessionContext(taskId, sessionId);
+            onClose();
+            pushToast("已模拟上下文压缩；累计 Token 保留");
+          }}
+        >
+          模拟压缩
+        </Button>
+      </div>
+    </Modal>
+  );
+}
+
+const CAPABILITY_BOUNDARY: Record<string, string> = {
+  skill: "技能提供按需加载的指引；其中脚本和实际工具调用继续遵循会话权限。",
+  mcp: "MCP Server 由 PiDock 管理，并通过桥接 Extension 提供工具；连接凭据与项目共享配置分开保存。",
+  package: "Package 是安装与更新单元；启用前需要审阅固定版本、所含资源及可执行代码。",
+  extension: "Extension 与 Pi 进程拥有相同系统权限，可注册工具、命令和事件处理器；启用前需要审阅来源。",
+};
+
+function RetryModal({ onClose }: { taskId: string; sessionId: string; onClose: () => void }) {
+  const pushToast = useUiStore((state) => state.pushToast);
+  const [outcome, setOutcome] = useState("unknown");
+  return (
+    <Modal
+      title="检查重试范围"
+      onClose={onClose}
+      footer={
+        <Button
+          size="sm"
+          variant="primary"
+          onClick={() => {
+            if (outcome === "unknown") {
+              pushToast("请先核对上一次操作结果");
+              return;
+            }
+            if (outcome === "sent") {
+              onClose();
+              pushToast("已核对上次操作成功，不重复执行");
+              return;
+            }
+            onClose();
+            pushToast("仅重试失败步骤；已完成步骤保留，不重放");
+          }}
+        >
+          继续
+        </Button>
+      }
+    >
+      <p className="text-xs text-muted">保留已经完成的摘要与工具结果，仅重试失败步骤。</p>
+      <div className="mt-3">
+        <Field label="上一次外部操作的结果">
+          <select
+            aria-label="上一次外部操作的结果"
+            value={outcome}
+            onChange={(event) => setOutcome(event.target.value)}
+            className="rounded-md border border-line px-2 py-1.5 text-sm"
+          >
+            <option value="unknown">尚未核对</option>
+            <option value="not-sent">已核对：没有送达 / 请求未发出</option>
+            <option value="sent">已核对：已经成功，不应重复</option>
+          </select>
+        </Field>
+      </div>
+      <p className="mt-3 text-[11px] text-muted">不确定时先核对工具记录或接收方，不直接重发。</p>
+    </Modal>
+  );
+}
+
+function CapabilityDetailModal({ capabilityId, onClose }: { capabilityId: string; onClose: () => void }) {
+  const workspace = useHostStore((state) => state.workspace);
+  const setCapabilityEnabled = useHostStore((state) => state.setCapabilityEnabled);
+  const pushToast = useUiStore((state) => state.pushToast);
+  const capability = (workspace?.capabilities ?? []).find((item) => item.id === capabilityId);
+  if (!capability) return null;
+  const typeLabel = { skill: "Pi Skill", extension: "Extension", package: "Package", mcp: "MCP Server（bridge）" }[capability.kind];
+  const statusLabel = { enabled: "已启用", disabled: "已停用", "update-available": "有可用更新", "pending-review": "待审阅" }[
+    capability.status
+  ];
+  const enabled = capability.status === "enabled" || capability.status === "update-available";
+  return (
+    <Modal
+      title={capability.name}
+      onClose={onClose}
+      footer={
+        <Button
+          size="sm"
+          variant={enabled ? "ghost" : "primary"}
+          onClick={async () => {
+            await setCapabilityEnabled(capability.id, !enabled);
+            onClose();
+            pushToast(`${capability.name} 已模拟${enabled ? "停用" : "启用"}`);
+          }}
+        >
+          {enabled ? "停用" : "启用"}
+        </Button>
+      }
+    >
+      <dl className="grid grid-cols-[80px_1fr] gap-x-4 gap-y-2 text-xs">
+        <dt className="text-muted">类型</dt>
+        <dd>{typeLabel}</dd>
+        <dt className="text-muted">来源</dt>
+        <dd className="font-mono text-[11px]">{capability.source}</dd>
+        <dt className="text-muted">作用域</dt>
+        <dd>{capability.scope}</dd>
+        <dt className="text-muted">状态</dt>
+        <dd>{statusLabel}</dd>
+      </dl>
+      <div className="mt-3 rounded-md border border-line bg-soft/40 px-3 py-2 text-xs text-muted">
+        {CAPABILITY_BOUNDARY[capability.kind]}
+      </div>
+      <h3 className="mt-3 text-xs text-ink">声明的能力</h3>
+      <p className="mt-1 text-xs text-muted">{capability.scope} · 来源内容、配置和权限均为原型示例，尚未读取、安装或执行真实资源。</p>
+    </Modal>
+  );
+}
+
+function ProviderEditModal({ providerId, onClose }: { providerId?: string; onClose: () => void }) {
+  const workspace = useHostStore((state) => state.workspace);
+  const saveProvider = useHostStore((state) => state.saveProvider);
+  const removeProvider = useHostStore((state) => state.removeProvider);
+  const pushToast = useUiStore((state) => state.pushToast);
+  const existing = workspace?.providers.find((item) => item.id === providerId);
+  const [name, setName] = useState(existing?.name ?? "");
+  const [protocol, setProtocol] = useState(existing?.protocol ?? "anthropic-messages");
+  const [baseUrl, setBaseUrl] = useState(existing?.baseUrl ?? "");
+  const [enabled, setEnabled] = useState(existing?.enabled ?? true);
+  const [models, setModels] = useState<{ id: string; name: string; nameAuto: boolean; contextWindow: number; supportsImages?: boolean; thinking?: ModelThinking }[]>(
+    existing?.models.map((model) => ({
+      id: model.id,
+      name: model.name ?? model.id,
+      nameAuto: !model.name || model.name === model.id,
+      contextWindow: model.contextWindow,
+      supportsImages: model.supportsImages,
+      thinking: model.thinking,
+    })) ?? [{ id: "", name: "", nameAuto: true, contextWindow: 128 }],
+  );
+  // The prototype's 「同步模型列表」 only refreshes selectable candidates; it
+  // never overwrites configured models or bulk-adds rows (ui-prototype-review.md:77).
+  const [catalog, setCatalog] = useState<string[]>([]);
+  const update = (
+    index: number,
+    patch: Partial<{ id: string; name: string; nameAuto: boolean; contextWindow: number; supportsImages?: boolean; thinking?: ModelThinking }>,
+  ) => setModels((items) => items.map((item, i) => (i === index ? { ...item, ...patch } : item)));
+  const syncCatalog = () => {
+    const sample = protocol === "anthropic-messages"
+      ? ["claude-sonnet-4-5", "claude-haiku-4-5", "claude-opus-4-1"]
+      : protocol === "openai-responses"
+        ? ["gpt-5", "gpt-5-mini", "o5"]
+        : ["qwen3-coder", "llama3.3-70b"];
+    setCatalog(sample);
+    pushToast(`已同步 ${sample.length} 个示例候选（未发送 Provider 请求）`);
+  };
+  return (
+    <Modal
+      title={existing ? "编辑 Provider" : "添加 Provider"}
+      onClose={onClose}
+      footer={
+        <>
+          {existing ? (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={async () => {
+                await removeProvider(existing.id);
+                onClose();
+                pushToast("已移除 Provider（内存模拟）；引用它的会话回退到其他 Provider");
+              }}
+            >
+              删除 Provider
+            </Button>
+          ) : null}
+          <Button
+            size="sm"
+            variant="primary"
+            onClick={async () => {
+              try {
+                await saveProvider({
+                  id: providerId,
+                  name,
+                  protocol,
+                  baseUrl,
+                  enabled,
+                  models: models.map((model) => ({
+                    id: model.id,
+                    name: model.name.trim() && model.name.trim() !== model.id ? model.name.trim() : undefined,
+                    contextWindow: model.contextWindow,
+                    supportsImages: model.supportsImages,
+                    thinking: model.thinking,
+                  })),
+                });
+                onClose();
+                pushToast("已保存模拟 Provider，不会连接服务");
+              } catch (error) {
+                pushToast(error instanceof Error ? error.message : String(error));
+              }
+            }}
+          >
+            保存
+          </Button>
+        </>
+      }
+    >
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label="显示名称">
+          <input
+            aria-label="显示名称"
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            className="rounded-md border border-line px-2 py-1.5 text-sm"
+            placeholder="例如 团队网关"
+          />
+        </Field>
+        <Field label="协议">
+          <select
+            aria-label="协议"
+            value={protocol}
+            onChange={(event) => setProtocol(event.target.value)}
+            className="rounded-md border border-line px-2 py-1.5 text-sm"
+          >
+            <option value="anthropic-messages">anthropic-messages</option>
+            <option value="openai-responses">openai-responses</option>
+            <option value="openai-chat-completions">openai-chat-completions</option>
+          </select>
+        </Field>
+        <Field label="服务地址" hint="凭据通过本机私有配置引用，不写入共享模板">
+          <input
+            aria-label="服务地址"
+            value={baseUrl}
+            onChange={(event) => setBaseUrl(event.target.value)}
+            className="rounded-md border border-line px-2 py-1.5 text-sm"
+            placeholder="https://"
+          />
+        </Field>
+        <Field label="启用">
+          <label className="flex items-center gap-2 text-xs text-ink">
+            <input type="checkbox" aria-label="启用 Provider" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />
+            启用此 Provider
+          </label>
+        </Field>
+      </div>
+      <fieldset className="mt-3">
+        <legend className="text-xs text-muted">模型列表</legend>
+        <div className="mt-1.5 flex flex-wrap items-center gap-2">
+          <Button size="sm" onClick={syncCatalog}>
+            同步模型列表
+          </Button>
+          <small role="status" className="text-[11px] text-muted">
+            {catalog.length > 0
+              ? `已同步 ${catalog.length} 个模型（示例候选，未发送 Provider 请求）`
+              : "可直接填写模型 ID，或同步后从下拉列表选择。"}
+          </small>
+        </div>
+        <datalist id="provider-model-candidates">
+          {catalog.map((candidate) => (
+            <option key={candidate} value={candidate} />
+          ))}
+        </datalist>
+        <div className="mt-2 flex flex-col gap-2">
+          {models.map((model, index) => {
+            const thinking = model.thinking;
+            const mode = thinking?.mode ?? "auto";
+            const levels = thinking?.levels ?? [];
+            const setThinking = (next: ModelThinking) => update(index, { thinking: next });
+            return (
+              <div key={index} className="flex flex-wrap items-center gap-2">
+                <input
+                  aria-label={`模型 ID 第 ${index + 1} 行`}
+                  list="provider-model-candidates"
+                  value={model.id}
+                  onChange={(event) => {
+                    const id = event.target.value;
+                    // The display name follows the ID until the user customises it.
+                    update(index, model.nameAuto ? { id, name: id } : { id });
+                  }}
+                  className="w-48 rounded-md border border-line px-2 py-1.5 text-xs"
+                  placeholder="模型 ID"
+                />
+                <input
+                  aria-label={`模型显示名称 第 ${index + 1} 行`}
+                  value={model.name}
+                  onChange={(event) => update(index, { name: event.target.value, nameAuto: false })}
+                  className="w-40 rounded-md border border-line px-2 py-1.5 text-xs"
+                  placeholder="默认使用模型 ID"
+                />
+                <input
+                  aria-label={`模型上下文 第 ${index + 1} 行`}
+                  type="number"
+                  min="1"
+                  value={model.contextWindow}
+                  onChange={(event) => update(index, { contextWindow: Number(event.target.value) })}
+                  className="w-32 rounded-md border border-line px-2 py-1.5 text-xs"
+                />
+                <span className="text-[11px] text-muted">k Tokens</span>
+                <label className="flex items-center gap-1 text-[11px] text-muted">
+                  <input
+                    type="checkbox"
+                    aria-label={`支持图片输入 第 ${index + 1} 行`}
+                    checked={Boolean(model.supportsImages)}
+                    onChange={(event) => update(index, { supportsImages: event.target.checked })}
+                  />
+                  支持图片
+                </label>
+                <select
+                  aria-label={`推理能力 第 ${index + 1} 行`}
+                  value={mode}
+                  onChange={(event) => setThinking({ mode: event.target.value as ModelThinking["mode"], levels, default: thinking?.default ?? "" })}
+                  className="rounded-md border border-line px-2 py-1.5 text-xs"
+                >
+                  <option value="auto">跟随模型目录</option>
+                  <option value="none">不支持推理</option>
+                  <option value="custom">自定义可用档位</option>
+                </select>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  aria-label={`移除模型 第 ${index + 1} 行`}
+                  disabled={models.length === 1}
+                  onClick={() => setModels((items) => items.filter((_, i) => i !== index))}
+                >
+                  移除
+                </Button>
+                {mode === "custom" ? (
+                  <div className="flex w-full flex-wrap items-center gap-2 rounded-md border border-line px-2 py-1.5">
+                    {Object.entries(REASONING_LABELS).map(([key, label]) => {
+                      const checked = levels.includes(key);
+                      return (
+                        <label key={key} className="flex items-center gap-1 text-[11px] text-muted">
+                          <input
+                            type="checkbox"
+                            aria-label={`推理档位 ${index + 1} ${key}`}
+                            checked={checked}
+                            onChange={(event) => {
+                              const nextLevels = event.target.checked ? [...levels, key] : levels.filter((item) => item !== key);
+                              const fallback = nextLevels.includes(thinking?.default ?? "") ? (thinking?.default ?? "") : (nextLevels[0] ?? "");
+                              setThinking({ mode: "custom", levels: nextLevels, default: fallback });
+                            }}
+                          />
+                          {label}
+                        </label>
+                      );
+                    })}
+                    <label className="flex items-center gap-1 text-[11px] text-muted">
+                      默认档位
+                      <select
+                        aria-label={`默认推理档位 第 ${index + 1} 行`}
+                        value={thinking?.default ?? ""}
+                        onChange={(event) => setThinking({ mode: "custom", levels, default: event.target.value })}
+                        className="rounded border border-line px-1.5 py-1 text-[11px]"
+                      >
+                        {levels.map((key) => (
+                          <option key={key} value={key}>
+                            {REASONING_LABELS[key] ?? key}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
+          <div>
+            <Button size="sm" onClick={() => setModels((items) => [...items, { id: "", name: "", nameAuto: true, contextWindow: 128 }])}>
+              添加模型
+            </Button>
+          </div>
+        </div>
+      </fieldset>
+      <p className="mt-3 text-[11px] text-muted">
+        同一 Provider 中的模型 ID 不可重复；上下文窗口必须为正整数。显示名称默认跟随模型 ID，可单独修改；同步候选不覆盖已配置模型，也不批量新增。
+      </p>
+    </Modal>
+  );
+}
+
+function ProjectListModal({ onClose }: { onClose: () => void }) {
+  const workspace = useHostStore((state) => state.workspace);
+  const tasks = workspace?.tasks ?? [];
+  const navigate = useNavigationStore((state) => state.navigate);
+  const openModal = useUiStore((state) => state.openModal);
+  const projects = workspace?.projects ?? [];
+  return (
+    <Modal
+      title="项目管理"
+      onClose={onClose}
+      footer={
+        <Button size="sm" variant="primary" onClick={() => openModal({ type: "project-edit" })}>
+          新建项目
+        </Button>
+      }
+    >
+      <p className="text-xs text-muted">切换项目，或管理项目的目录、仓库与名称。</p>
+      <div className="mt-3 flex flex-col gap-2">
+        {projects.length === 0 ? <EmptyState>还没有项目</EmptyState> : null}
+        {projects.map((project) => {
+          const count = tasks.filter((task) => task.projectId === project.id).length;
+          return (
+            <div key={project.id} className="flex items-center justify-between gap-2 rounded-md border border-line px-3 py-2 text-xs">
+              <div>
+                <strong className="block text-ink">{project.name}</strong>
+                <small className="text-muted">{project.description || "未填写说明"} · {count} 个任务</small>
+              </div>
+              <div className="flex gap-1.5">
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    onClose();
+                    navigate({ view: "project", projectId: project.id });
+                  }}
+                >
+                  切换
+                </Button>
+                <Button size="sm" onClick={() => openModal({ type: "project-edit", projectId: project.id })}>
+                  编辑
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => openModal({ type: "project-delete", projectId: project.id })}>
+                  删除
+                </Button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </Modal>
+  );
+}
+
+function ProjectEditModal({ projectId, onClose }: { projectId?: string; onClose: () => void }) {
+  const workspace = useHostStore((state) => state.workspace);
+  const saveProject = useHostStore((state) => state.saveProject);
+  const navigate = useNavigationStore((state) => state.navigate);
+  const pushToast = useUiStore((state) => state.pushToast);
+  const project = (workspace?.projects ?? []).find((item) => item.id === projectId);
+  const registered = workspace?.repositories ?? [];
+  const tasks = (workspace?.tasks ?? []).filter((item) => item.projectId === projectId);
+  const usedRepoIds = new Set(tasks.flatMap((task) => task.repos));
+  const [name, setName] = useState(project?.name ?? "");
+  const [description, setDescription] = useState(project?.description ?? "");
+  const [repoIds, setRepoIds] = useState<string[]>(() => (project?.repositories ?? []).map((repository) => repository.id));
+  const [directories, setDirectories] = useState<ProjectDirectory[]>(() => (project?.directories ?? []).map((item) => ({ ...item })));
+  const updateDirectory = (id: string, field: "name" | "path", value: string) =>
+    setDirectories((items) => items.map((item) => (item.id === id ? { ...item, [field]: value } : item)));
+  return (
+    <Modal
+      title={project ? "编辑项目" : "新建项目"}
+      onClose={onClose}
+      footer={
+        <Button
+          size="sm"
+          variant="primary"
+          onClick={async () => {
+            try {
+              const saved = await saveProject({ id: projectId, name, description, repositoryIds: repoIds, directories });
+              onClose();
+              if (!projectId) {
+                navigate({ view: "project", projectId: saved.id });
+                pushToast("项目已保存到原型内存");
+              } else {
+                pushToast("项目已保存到原型内存");
+              }
+            } catch (error) {
+              pushToast(error instanceof Error ? error.message : String(error));
+            }
+          }}
+        >
+          {project ? "保存项目" : "创建项目"}
+        </Button>
+      }
+    >
+      <Field label="项目名称">
+        <input
+          aria-label="项目名称"
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+          className="rounded-md border border-line px-2 py-1.5 text-sm"
+          placeholder="例如：订单系统"
+        />
+      </Field>
+      <div className="mt-3">
+        <Field label="说明">
+          <input
+            aria-label="项目说明"
+            value={description}
+            onChange={(event) => setDescription(event.target.value)}
+            className="rounded-md border border-line px-2 py-1.5 text-sm"
+          />
+        </Field>
+      </div>
+      <fieldset className="mt-3">
+        <legend className="text-xs text-muted">关联已注册仓库</legend>
+        <small className="text-[11px] text-muted">任务使用中的仓库不能解除关联。</small>
+        <div className="mt-1.5 flex flex-col gap-1.5">
+          {registered.map((repository) => {
+            const used = usedRepoIds.has(repository.id);
+            return (
+              <label key={repository.id} className="flex items-center gap-2 text-xs">
+                <input
+                  type="checkbox"
+                  aria-label={`仓库 ${repository.name}`}
+                  checked={used || repoIds.includes(repository.id)}
+                  disabled={used}
+                  onChange={(event) =>
+                    setRepoIds((items) =>
+                      event.target.checked ? [...items, repository.id] : items.filter((id) => id !== repository.id),
+                    )
+                  }
+                />
+                <span>{repository.name}</span>
+                {used ? <small className="text-muted">任务使用中</small> : null}
+              </label>
+            );
+          })}
+        </div>
+      </fieldset>
+      <fieldset className="mt-3">
+        <legend className="text-xs text-muted">普通目录</legend>
+        <div className="mt-1.5 flex flex-col gap-2">
+          {directories.map((directory, index) => {
+            const locked = tasks.some((task) => task.directories.some((item) => item.id === directory.id));
+            return (
+              <div key={directory.id} className="flex flex-wrap items-center gap-2">
+                <input
+                  aria-label={`项目目录名称 第 ${index + 1} 行`}
+                  value={directory.name}
+                  readOnly={locked}
+                  onChange={(event) => updateDirectory(directory.id, "name", event.target.value)}
+                  className="w-40 rounded-md border border-line px-2 py-1.5 text-xs read-only:bg-soft"
+                  placeholder="例如：设计资料"
+                />
+                <input
+                  aria-label={`项目目录路径 第 ${index + 1} 行`}
+                  value={directory.path}
+                  readOnly={locked}
+                  onChange={(event) => updateDirectory(directory.id, "path", event.target.value)}
+                  className="flex-1 rounded-md border border-line px-2 py-1.5 font-mono text-[11px] read-only:bg-soft"
+                  placeholder="/Users/name/Documents/design"
+                />
+                {locked ? <Badge tone="warn">任务使用中</Badge> : null}
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  aria-label={`移除项目目录 第 ${index + 1} 行`}
+                  disabled={locked}
+                  onClick={() => setDirectories((items) => items.filter((item) => item.id !== directory.id))}
+                >
+                  移除
+                </Button>
+              </div>
+            );
+          })}
+          <div>
+            <Button
+              size="sm"
+              onClick={() => setDirectories((items) => [...items, { id: `dir-new-${items.length + 1}`, name: "", path: "" }])}
+            >
+              添加目录
+            </Button>
+          </div>
+        </div>
+      </fieldset>
+    </Modal>
+  );
+}
+
+function ProjectDeleteModal({ projectId, onClose }: { projectId: string; onClose: () => void }) {
+  const workspace = useHostStore((state) => state.workspace);
+  const deleteProject = useHostStore((state) => state.deleteProject);
+  const navigate = useNavigationStore((state) => state.navigate);
+  const pushToast = useUiStore((state) => state.pushToast);
+  const project = (workspace?.projects ?? []).find((item) => item.id === projectId);
+  const boundTasks = (workspace?.tasks ?? []).filter((item) => item.projectId === projectId);
+  if (!project) return null;
+  const environmentCount = (workspace?.environments ?? []).filter((item) => item.projectId === projectId).length;
+  return (
+    <Modal
+      title="删除项目"
+      onClose={onClose}
+      footer={
+        boundTasks.length === 0 ? (
+          <Button
+            size="sm"
+            variant="primary"
+            onClick={async () => {
+              try {
+                await deleteProject(projectId);
+                onClose();
+                const next = (workspace?.projects ?? []).find((item) => item.id !== projectId);
+                navigate(next ? { view: "project", projectId: next.id } : { view: "attention" });
+                pushToast("已移除模拟项目登记，未删除磁盘文件");
+              } catch (error) {
+                pushToast(error instanceof Error ? error.message : String(error));
+              }
+            }}
+          >
+            删除项目
+          </Button>
+        ) : undefined
+      }
+    >
+      <h3 className="text-sm font-medium text-ink">{project.name}</h3>
+      {boundTasks.length > 0 ? (
+        <>
+          <div className="mt-3 rounded-md border border-orange/35 bg-orange/10 px-3 py-2 text-xs text-orange">
+            还有 {boundTasks.length} 个关联任务（包含已归档任务），暂不能删除项目。
+          </div>
+          <p className="mt-2 text-xs text-muted">请先在任务清理流程中处理这些任务；归档不会解除关联。</p>
+          <ul className="mt-2 flex flex-col gap-1 text-xs">
+            {boundTasks.map((task) => (
+              <li key={task.id} className="flex items-center justify-between border-b border-line pb-1">
+                <span className="text-ink">{task.name}</span>
+                <small className="text-muted">{task.archived ? "已归档" : "进行中"}</small>
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : (
+        <>
+          <p className="mt-2 text-xs text-muted">
+            将移除该项目的登记、仓库绑定和 {environmentCount} 个环境配置。原始仓库和磁盘上的共享模板文件保留。
+          </p>
+          <p className="mt-2 text-[11px] text-muted">此操作仅演示删除范围，原型中刷新页面可重置。</p>
+        </>
+      )}
+    </Modal>
+  );
+}
+
+function EnvironmentListModal({ projectId, onClose }: { projectId: string; onClose: () => void }) {
+  const workspace = useHostStore((state) => state.workspace);
+  const navigate = useNavigationStore((state) => state.navigate);
+  const openModal = useUiStore((state) => state.openModal);
+  const project = (workspace?.projects ?? []).find((item) => item.id === projectId);
+  const environments = (workspace?.environments ?? []).filter((item) => item.projectId === projectId);
+  const tasks = (workspace?.tasks ?? []).filter((item) => item.projectId === projectId);
+  if (!project) return null;
+  return (
+    <Modal
+      title="环境管理"
+      onClose={onClose}
+      footer={
+        <Button
+          size="sm"
+          variant="primary"
+          onClick={() => {
+            onClose();
+            navigate({ view: "env" });
+          }}
+        >
+          环境与服务页面
+        </Button>
+      }
+    >
+      <p className="text-xs text-muted">{project.name} · 环境的名称和说明在这里管理，变量与启动方式在环境页面编辑。</p>
+      <div className="mt-3 flex flex-col gap-2">
+        {environments.length === 0 ? <EmptyState>还没有环境</EmptyState> : null}
+        {environments.map((environment) => (
+          <div key={environment.id} className="flex items-center justify-between gap-2 rounded-md border border-line px-3 py-2 text-xs">
+            <div>
+              <strong className="block text-ink">{environment.name}</strong>
+              <small className="text-muted">
+                {environment.description || "未填写说明"} · {environment.templateVersion} ·{" "}
+                {tasks.filter((task) => task.environmentId === environment.id).length} 个任务
+              </small>
+            </div>
+            <div className="flex gap-1.5">
+              <Button size="sm" onClick={() => openModal({ type: "environment-edit", projectId, environmentId: environment.id })}>
+                编辑
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => openModal({ type: "environment-delete", environmentId: environment.id })}>
+                删除
+              </Button>
+            </div>
+          </div>
+        ))}
+        <div>
+          <Button size="sm" variant="primary" onClick={() => openModal({ type: "environment-edit", projectId })}>
+            新增环境
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function EnvironmentEditModal({
+  projectId,
+  environmentId,
+  onClose,
+}: {
+  projectId: string;
+  environmentId?: string;
+  onClose: () => void;
+}) {
+  const workspace = useHostStore((state) => state.workspace);
+  const saveEnvironment = useHostStore((state) => state.saveEnvironment);
+  const navigate = useNavigationStore((state) => state.navigate);
+  const pushToast = useUiStore((state) => state.pushToast);
+  const existing = (workspace?.environments ?? []).find((item) => item.id === environmentId);
+  const [name, setName] = useState(existing?.name ?? "");
+  const [description, setDescription] = useState(existing?.description ?? "");
+  return (
+    <Modal
+      title={existing ? "编辑环境" : "新增环境"}
+      onClose={onClose}
+      footer={
+        <Button
+          size="sm"
+          variant="primary"
+          onClick={async () => {
+            try {
+              await saveEnvironment({ id: environmentId, projectId, name, description });
+              onClose();
+              if (!existing) {
+                navigate({ view: "env" });
+                pushToast("环境已保存；任务的模板版本与运行状态保留");
+              } else {
+                pushToast("环境已保存；任务的模板版本与运行状态保留");
+              }
+            } catch (error) {
+              pushToast(error instanceof Error ? error.message : String(error));
+            }
+          }}
+        >
+          {existing ? "保存环境" : "创建环境"}
+        </Button>
+      }
+    >
+      <Field label="环境名称">
+        <input
+          aria-label="环境名称"
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+          className="rounded-md border border-line px-2 py-1.5 text-sm"
+          placeholder="例如：集成测试"
+        />
+      </Field>
+      <div className="mt-3">
+        <Field label="说明">
+          <input
+            aria-label="环境说明"
+            value={description}
+            onChange={(event) => setDescription(event.target.value)}
+            className="rounded-md border border-line px-2 py-1.5 text-sm"
+            placeholder="说明远程依赖和使用场景"
+          />
+        </Field>
+      </div>
+      <p className="mt-3 text-[11px] text-muted">
+        {existing
+          ? "修改名称和说明不改变任务采用的模板版本，也不重启服务。"
+          : "创建空环境后，前往共享模板添加变量与服务配置；新环境作用域从共享模板开始。"}
+      </p>
+    </Modal>
+  );
+}
+
+function EnvironmentDeleteModal({ environmentId, onClose }: { environmentId: string; onClose: () => void }) {
+  const workspace = useHostStore((state) => state.workspace);
+  const deleteEnvironment = useHostStore((state) => state.deleteEnvironment);
+  const pushToast = useUiStore((state) => state.pushToast);
+  const environment = (workspace?.environments ?? []).find((item) => item.id === environmentId);
+  const referencing = (workspace?.tasks ?? []).filter((item) => item.environmentId === environmentId);
+  if (!environment) return null;
+  return (
+    <Modal
+      title="删除环境"
+      onClose={onClose}
+      footer={
+        referencing.length === 0 ? (
+          <Button
+            size="sm"
+            variant="primary"
+            onClick={async () => {
+              try {
+                await deleteEnvironment(environmentId);
+                onClose();
+                pushToast("已删除模拟环境");
+              } catch (error) {
+                pushToast(error instanceof Error ? error.message : String(error));
+              }
+            }}
+          >
+            删除环境
+          </Button>
+        ) : undefined
+      }
+    >
+      <h3 className="text-sm font-medium text-ink">{environment.name}</h3>
+      {referencing.length > 0 ? (
+        <>
+          <div className="mt-3 rounded-md border border-orange/35 bg-orange/10 px-3 py-2 text-xs text-orange">
+            {referencing.length} 个任务正在引用此环境（包含已归档任务），暂不能删除。
+          </div>
+          <ul className="mt-2 flex flex-col gap-1 text-xs">
+            {referencing.map((task) => (
+              <li key={task.id} className="flex items-center justify-between border-b border-line pb-1">
+                <span className="text-ink">{task.name}</span>
+                <small className="text-muted">{task.templateVersion}</small>
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : (
+        <p className="mt-2 text-xs text-muted">将移除此环境及其配置。其他环境和远程服务不受影响。</p>
+      )}
+    </Modal>
+  );
+}
+
+const CAPABILITY_KINDS = {
+  skill: { title: "添加技能来源", sourceLabel: "目录路径", placeholder: "例如 ~/.agents/skills" },
+  mcp: { title: "添加 MCP Server", sourceLabel: "启动命令或远程地址", placeholder: "例如 npx @example/mcp-server" },
+  extension: { title: "添加 Extension", sourceLabel: "文件路径", placeholder: "例如 ~/.pi/agent/extensions/team.ts" },
+  package: { title: "安装扩展包", sourceLabel: "npm、git 或本地来源", placeholder: "例如 npm:@team/pi-toolkit@2.4.1" },
+} as const;
+
+function AddCapabilityModal({ kind, onClose }: { kind: "skill" | "extension" | "package" | "mcp"; onClose: () => void }) {
+  const addCapability = useHostStore((state) => state.addCapability);
+  const pushToast = useUiStore((state) => state.pushToast);
+  const labels = CAPABILITY_KINDS[kind];
+  const [name, setName] = useState("");
+  const [source, setSource] = useState("");
+  const [scope, setScope] = useState("仅当前项目");
+  return (
+    <Modal
+      title={labels.title}
+      onClose={onClose}
+      footer={
+        <Button
+          size="sm"
+          variant="primary"
+          onClick={async () => {
+            try {
+              await addCapability({ kind, name, source, scope });
+              onClose();
+              pushToast("已添加为停用，不会加载或连接");
+            } catch (error) {
+              pushToast(error instanceof Error ? error.message : String(error));
+            }
+          }}
+        >
+          {kind === "package" ? "添加到待安装" : "添加为停用"}
+        </Button>
+      }
+    >
+      <Field label="名称">
+        <input
+          aria-label="能力名称"
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+          className="rounded-md border border-line px-2 py-1.5 text-sm"
+          placeholder="便于识别的名称"
+        />
+      </Field>
+      <div className="mt-3">
+        <Field label={labels.sourceLabel}>
+          <input
+            aria-label="能力来源"
+            value={source}
+            onChange={(event) => setSource(event.target.value)}
+            className="rounded-md border border-line px-2 py-1.5 text-sm"
+            placeholder={labels.placeholder}
+          />
+        </Field>
+      </div>
+      <div className="mt-3">
+        <Field label="作用域">
+          <select
+            aria-label="能力作用域"
+            value={scope}
+            onChange={(event) => setScope(event.target.value)}
+            className="rounded-md border border-line px-2 py-1.5 text-sm"
+          >
+            <option>仅当前项目</option>
+            <option>所有项目</option>
+          </select>
+        </Field>
+      </div>
+      <p className="mt-3 text-[11px] text-muted">
+        {kind === "package"
+          ? "先解析固定版本和资源清单，等待本机确认后才安装。"
+          : "添加后先保持停用，审阅来源与权限后再显式启用。"}
+      </p>
+    </Modal>
+  );
+}
+
+function ScheduleEditModal({ scheduleId, onClose }: { scheduleId: string; onClose: () => void }) {
+  const workspace = useHostStore((state) => state.workspace);
+  const saveSchedule = useHostStore((state) => state.saveSchedule);
+  const pushToast = useUiStore((state) => state.pushToast);
+  const schedule = (workspace?.schedules ?? []).find((item) => item.id === scheduleId);
+  const providers = workspace?.providers ?? [];
+  const [name, setName] = useState(schedule?.name ?? "");
+  const [rule, setRule] = useState(schedule?.rule ?? "");
+  const [timezone, setTimezone] = useState(schedule?.timezone ?? "Asia/Shanghai");
+  const [prompt, setPrompt] = useState(schedule?.prompt ?? "");
+  const [modelKey, setModelKey] = useState(`${schedule?.providerId ?? ""}:${schedule?.model ?? ""}`);
+  const [permission, setPermission] = useState<Permission>(schedule?.permission ?? "default");
+  if (!schedule) return null;
+  const [providerId, model] = modelKey.split(":");
+  return (
+    <Modal
+      title="编辑定时任务"
+      onClose={onClose}
+      footer={
+        <Button
+          size="sm"
+          variant="primary"
+          onClick={async () => {
+            try {
+              await saveSchedule({ id: scheduleId, name, rule, timezone, prompt, providerId, model, permission });
+              onClose();
+              pushToast("已保存模拟定时任务");
+            } catch (error) {
+              pushToast(error instanceof Error ? error.message : String(error));
+            }
+          }}
+        >
+          保存更改
+        </Button>
+      }
+    >
+      <Field label="任务名称">
+        <input
+          aria-label="定时任务名称"
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+          className="rounded-md border border-line px-2 py-1.5 text-sm"
+        />
+      </Field>
+      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        <Field label="执行周期">
+          <input
+            aria-label="执行周期"
+            value={rule}
+            onChange={(event) => setRule(event.target.value)}
+            className="rounded-md border border-line px-2 py-1.5 text-sm"
+            placeholder="例如：每周五 15:00"
+          />
+        </Field>
+        <Field label="时区">
+          <select
+            aria-label="时区"
+            value={timezone}
+            onChange={(event) => setTimezone(event.target.value)}
+            className="rounded-md border border-line px-2 py-1.5 text-sm"
+          >
+            <option>Asia/Shanghai</option>
+            <option>UTC</option>
+            <option>America/Los_Angeles</option>
+          </select>
+        </Field>
+      </div>
+      <div className="mt-3">
+        <Field label="Provider / 模型">
+          <select
+            aria-label="调度模型"
+            value={modelKey}
+            onChange={(event) => setModelKey(event.target.value)}
+            className="rounded-md border border-line px-2 py-1.5 text-sm"
+          >
+            {providers.flatMap((provider) =>
+              provider.models.map((item) => (
+                <option key={`${provider.id}:${item.id}`} value={`${provider.id}:${item.id}`} disabled={!provider.enabled}>
+                  {provider.name} / {item.name ?? item.id}
+                </option>
+              )),
+            )}
+          </select>
+        </Field>
+      </div>
+      <div className="mt-3">
+        <Field label="新会话权限">
+          <select
+            aria-label="调度权限"
+            value={permission}
+            onChange={(event) => setPermission(event.target.value as Permission)}
+            className="rounded-md border border-line px-2 py-1.5 text-sm"
+          >
+            <option value="read">只读</option>
+            <option value="default">默认权限 · 需要时等待确认</option>
+            <option value="auto">自动执行 · 仍受任务边界约束</option>
+          </select>
+        </Field>
+      </div>
+      <div className="mt-3">
+        <Field label="提示词">
+          <textarea
+            aria-label="定时任务提示词"
+            rows={5}
+            value={prompt}
+            onChange={(event) => setPrompt(event.target.value)}
+            className="w-full rounded-md border border-line px-2 py-1.5 text-xs"
+          />
+        </Field>
+      </div>
+      <p className="mt-2 text-[11px] text-muted">每次触发在当前任务中创建新的独立会话；历史会话可查看并继续对话。</p>
+    </Modal>
+  );
+}
+
+/** Prototype `remotePreview()`: a static mobile information-architecture mockup. */
+function RemotePreviewModal({ onClose }: { onClose: () => void }) {
+  const workspace = useHostStore((state) => state.workspace);
+  const tasks = workspace?.tasks ?? [];
+  const project = workspace?.projects[0];
+  const first = tasks.find((item) => !item.archived);
+  return (
+    <Modal
+      title="手机视图预览"
+      onClose={onClose}
+      footer={
+        <Button size="sm" variant="primary" onClick={onClose}>
+          关闭预览
+        </Button>
+      }
+    >
+      <div className="mx-auto w-64 rounded-2xl border border-line bg-soft/40 p-3 text-[11px]">
+        <div className="flex justify-between text-muted">
+          <span>9:41</span>
+          <span>{workspace?.devices.some((device) => device.status === "active") ? "已连接" : "离线"}</span>
+        </div>
+        <div className="mt-2 flex items-center gap-2">
+          <span className="grid h-7 w-7 place-items-center rounded-full bg-accent text-paper">π</span>
+          <div>
+            <strong className="block text-ink">PiDock</strong>
+            <small className="text-muted">本机任务</small>
+          </div>
+        </div>
+        <div className="mt-2 text-muted">项目</div>
+        <div className="mt-1 rounded-md border border-line bg-paper px-2 py-1.5">
+          <strong className="block text-ink">{project?.name ?? "还没有项目"}</strong>
+          <small className="text-muted">
+            {project ? `${(workspace?.tasks ?? []).filter((item) => item.projectId === project.id).length} 个任务` : "—"}
+          </small>
+        </div>
+        <div className="mt-2 text-muted">最近任务</div>
+        {first ? (
+          <div className="mt-1 rounded-md border border-line bg-paper px-2 py-1.5">
+            <strong className="block text-ink">{first.name}</strong>
+            <small className="text-muted">{first.activeSessionId} · 示例状态</small>
+          </div>
+        ) : null}
+        <div className="mt-2 rounded-md border border-line bg-paper px-2 py-1.5">
+          <strong className="block text-ink">对话</strong>
+          <p className="mt-1 text-muted">发送消息…</p>
+        </div>
+        <nav className="mt-2 flex justify-between text-muted">
+          {["项目", "任务", "对话", "设置"].map((item) => (
+            <span key={item}>{item}</span>
+          ))}
+        </nav>
+      </div>
+      <p className="mt-3 text-[11px] text-muted">
+        移动端优先覆盖查看状态、进入对话和少量管理；文件编辑、终端和浏览器控制不作为默认入口。此处仅为静态预览，不实现移动布局。
+      </p>
+    </Modal>
+  );
+}
+
+/** Prototype `project-bind`: machine-local checkout paths for registered repositories. */
+function RepoBindingModal({ onClose }: { onClose: () => void }) {
+  const workspace = useHostStore((state) => state.workspace);
+  const setRepositoryPath = useHostStore((state) => state.setRepositoryPath);
+  const pushToast = useUiStore((state) => state.pushToast);
+  const repositories = workspace?.repositories ?? [];
+  const [paths, setPaths] = useState<Record<string, string>>(() =>
+    Object.fromEntries(repositories.map((repository) => [repository.id, repository.localPath ?? ""])),
+  );
+  return (
+    <Modal
+      title="本机仓库绑定"
+      onClose={onClose}
+      footer={
+        <Button
+          size="sm"
+          variant="primary"
+          onClick={async () => {
+            try {
+              for (const repository of repositories) {
+                await setRepositoryPath(repository.id, paths[repository.id] ?? "");
+              }
+              onClose();
+              pushToast("已保存本机仓库路径（内存模拟）；不读取磁盘也不初始化仓库");
+            } catch (error) {
+              pushToast(error instanceof Error ? error.message : String(error));
+            }
+          }}
+        >
+          保存绑定
+        </Button>
+      }
+    >
+      <p className="text-xs text-muted">路径属于本机设置，不进入项目共享模板；仅校验路径格式，不读取磁盘或初始化 Git。</p>
+      <div className="mt-3 flex flex-col gap-2">
+        {repositories.map((repository) => (
+          <Field key={repository.id} label={repository.name}>
+            <input
+              aria-label={`${repository.name} 本机路径`}
+              value={paths[repository.id] ?? ""}
+              onChange={(event) => setPaths((items) => ({ ...items, [repository.id]: event.target.value }))}
+              className="w-full rounded-md border border-line px-2 py-1.5 text-xs font-mono"
+              placeholder="例如 /Users/name/Workspace/repo"
+            />
+          </Field>
+        ))}
+      </div>
+    </Modal>
+  );
+}
+
+/** Prototype `delivery` + `delivery-preview`: per-repository review and commit draft. */
+function DeliveryModal({ task, onClose }: { task: Task; onClose: () => void }) {
+  const workspace = useHostStore((state) => state.workspace);
+  const pushToast = useUiStore((state) => state.pushToast);
+  const repositories = (workspace?.repositories ?? []).filter((repository) => task.repos.includes(repository.id));
+  const [message, setMessage] = useState("");
+  const [preview, setPreview] = useState(false);
+  return (
+    <Modal
+      title={preview ? "提交变更" : "审阅与交付"}
+      onClose={onClose}
+      footer={
+        <Button
+          size="sm"
+          variant="primary"
+          onClick={() => {
+            if (!preview) {
+              if (!message.trim()) {
+                pushToast("请填写提交说明");
+                return;
+              }
+              setPreview(true);
+              return;
+            }
+            onClose();
+            pushToast("已模拟提交草稿；此原型不连接 Git，未提交任何变更");
+          }}
+        >
+          {preview ? "确认提交草稿" : "查看提交面板示意"}
+        </Button>
+      }
+    >
+      {preview ? (
+        <>
+          <p className="text-xs text-muted">仓库、目标分支、变更文件和验证记录会在此呈现。跨仓库交付失败需保留逐仓库结果。</p>
+          <p className="mt-2 text-xs text-ink">
+            提交说明：{message} · 目标分支 task/{task.workspaceKey} · {repositories.length} 个仓库
+          </p>
+        </>
+      ) : (
+        <>
+          <p className="text-xs text-muted">各仓库分别审阅。提交、推送和合并需要明确触发。此原型不连接 Git。</p>
+          <div className="mt-2 flex flex-col gap-2">
+            {repositories.map((repository) => (
+              <div key={repository.id} className="rounded-md border border-line px-3 py-2 text-xs">
+                <strong className="block font-mono text-[11px] text-ink">{repository.name}</strong>
+                <small className="text-muted">本地路径 {repository.localPath ?? "未绑定"} · 待审阅变更</small>
+              </div>
+            ))}
+            {repositories.length === 0 ? <EmptyState>本任务没有 Git 仓库，交付不适用。</EmptyState> : null}
+          </div>
+          {repositories.length > 0 ? (
+            <Field label="提交说明">
+              <input
+                aria-label="提交说明"
+                value={message}
+                onChange={(event) => setMessage(event.target.value)}
+                className="w-full rounded-md border border-line px-2 py-1.5 text-xs"
+                placeholder="描述当前任务的代码变更"
+              />
+            </Field>
+          ) : null}
+        </>
+      )}
+    </Modal>
+  );
+}
+
+/** Prototype `command('/skills' | '/session' | '/help')` composer info modals. */
+function ComposerInfoModal({ task, topic, onClose }: { task: Task; topic: "skills" | "session" | "help"; onClose: () => void }) {
+  const workspace = useHostStore((state) => state.workspace);
+  const addReference = useDraftStore((state) => state.addReference);
+  const pushToast = useUiStore((state) => state.pushToast);
+  const closeModal = useUiStore((state) => state.closeModal);
+  const session = task.sessions.find((item) => item.id === task.activeSessionId);
+  const skills = (workspace?.capabilities ?? []).filter((capability) => capability.kind === "skill" && capability.status === "enabled");
+  const titles = { skills: "可用技能", session: "当前会话", help: "对话输入" };
+  return (
+    <Modal title={titles[topic]} onClose={onClose}>
+      {topic === "skills" ? (
+        skills.length === 0 ? (
+          <EmptyState>还没有已启用的技能。</EmptyState>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {skills.map((skill) => (
+              <div key={skill.id} className="flex items-center justify-between gap-2 rounded-md border border-line px-3 py-2 text-xs">
+                <span>
+                  <strong className="block text-ink">{skill.name}</strong>
+                  <small className="text-muted">{skill.source}</small>
+                </span>
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    addReference(task.id, session?.id ?? "main", {
+                      id: `skill-${skill.id}`,
+                      kind: "skill",
+                      label: skill.name,
+                      detail: "已启用技能",
+                    });
+                    closeModal();
+                    pushToast(`已把技能 ${skill.name} 插入当前会话`);
+                  }}
+                >
+                  插入对话
+                </Button>
+              </div>
+            ))}
+          </div>
+        )
+      ) : null}
+      {topic === "session" ? (
+        <dl className="flex flex-col gap-1.5 text-xs">
+          <div>任务：{task.name}</div>
+          <div>会话：{session?.name ?? "—"}</div>
+          <div>Provider：{workspace?.providers.find((item) => item.id === session?.providerId)?.name ?? "—"}</div>
+          <div>模型：{session?.model ?? "—"}</div>
+          <div>
+            上下文：{session?.contextUsed ?? 0}k / {session?.contextWindow ?? 0}k（估算）
+          </div>
+          <div>累计消耗：{session?.tokens ?? 0}k tokens</div>
+        </dl>
+      ) : null}
+      {topic === "help" ? (
+        <div className="flex flex-col gap-1.5 text-xs">
+          <p>
+            <code>@</code> 当前任务文件、目录与所选代码
+          </p>
+          <p>
+            <code>$</code> 已启用技能及来源
+          </p>
+          <p>
+            <code>/</code> 应用命令菜单
+          </p>
+          <p>↑ ↓ 选择候选，Tab / Enter 确认，Esc 关闭。</p>
+          <p>Enter 发送，Shift + Enter 换行，中文组合输入不提交。</p>
+        </div>
+      ) : null}
     </Modal>
   );
 }

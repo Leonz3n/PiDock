@@ -19,15 +19,22 @@ export function ProjectPage({ projectId }: { projectId: string }) {
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-base font-medium text-ink">{project.name}</h1>
-          <p className="mt-1 text-xs text-muted">项目保存仓库、普通目录、服务与按环境组织的共享模板；任务按需选择其中一部分。</p>
+          <p className="mt-1 text-xs text-muted">
+            {project.description || "项目保存仓库、普通目录、服务与按环境组织的共享模板；任务按需选择其中一部分。"}
+          </p>
         </div>
-        <Button size="sm" variant="primary" onClick={() => openModal({ type: "new-task", projectId: project.id })}>
-          新建任务
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button size="sm" onClick={() => openModal({ type: "project-list" })}>
+            项目管理
+          </Button>
+          <Button size="sm" variant="primary" onClick={() => openModal({ type: "new-task", projectId: project.id })}>
+            新建任务
+          </Button>
+        </div>
       </header>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <Panel title="仓库">
+        <Panel title="仓库" actions={<Button size="sm" onClick={() => openModal({ type: "project-edit", projectId: project.id })}>编辑项目</Button>}>
           <ul className="flex flex-col gap-1.5 text-xs">
             {project.repositories.map((repository) => (
               <li key={repository.id} className="flex items-center justify-between gap-2 border-b border-line pb-1.5">
@@ -92,7 +99,14 @@ export function ProjectPage({ projectId }: { projectId: string }) {
           </ul>
         </Panel>
 
-        <Panel title="环境">
+        <Panel
+          title="环境"
+          actions={
+            <Button size="sm" onClick={() => openModal({ type: "environment-list", projectId: project.id })}>
+              管理环境
+            </Button>
+          }
+        >
           <ul className="flex flex-col gap-1.5 text-xs">
             {environments.map((environment) => (
               <li key={environment.id} className="flex items-center justify-between gap-2">

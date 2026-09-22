@@ -130,7 +130,14 @@ export function EnvPage() {
       </header>
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[260px_1fr]">
-        <Panel title="环境">
+        <Panel
+          title="环境"
+          actions={
+            <Button size="sm" onClick={() => openModal({ type: "environment-list", projectId: environment.projectId })}>
+              环境管理
+            </Button>
+          }
+        >
           <ul className="flex flex-col gap-1.5">
             {environments.map((item) => (
               <li key={item.id}>
