@@ -76,6 +76,58 @@ describe("PiDock renderer flows", () => {
     expect(within(log).getAllByText("跳过").length).toBeGreaterThan(0);
   });
 
+  it("searches and archives sessions inside the all-sessions list", async () => {
+    const user = userEvent.setup();
+    renderApp("/projects/atlas/tasks/release?session=main");
+    await screen.findByRole("heading", { name: "发布前检查" });
+    await user.click(screen.getByRole("button", { name: /全部会话/ }));
+    const list = await screen.findByTestId("session-list");
+
+    expect(await screen.findByRole("tab", { name: "未归档 43" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "已归档 13" })).toBeInTheDocument();
+
+    // Search narrows the dense list to matching sessions only (the task page
+    // session tabs behind the modal also show these names, so scope to the list).
+    await user.type(screen.getByLabelText("搜索会话"), "部署");
+    await waitFor(() => expect(Number(list.getAttribute("data-total-rows"))).toBe(1));
+    expect(await within(list).findByText("部署审查")).toBeInTheDocument();
+    expect(within(list).queryByText("实现与验证")).not.toBeInTheDocument();
+    await user.clear(screen.getByLabelText("搜索会话"));
+
+    // Archiving moves a session out of the active group and into 已归档.
+    await user.click(screen.getAllByRole("button", { name: "归档" })[0]);
+    expect(await screen.findByRole("tab", { name: "已归档 14" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "未归档 42" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: "已归档 14" }));
+    await waitFor(() => expect(Number(list.getAttribute("data-total-rows"))).toBe(14));
+    expect(await within(list).findByText("历史排查")).toBeInTheDocument();
+  });
+
+  it("shows the effective config source per service on the environment page", async () => {
+    const user = userEvent.setup();
+    renderApp("/env");
+    expect(await screen.findByRole("heading", { name: "环境与服务" })).toBeInTheDocument();
+
+    const panel = screen.getByRole("heading", { name: "按服务查看生效配置", level: 2 }).closest("section");
+    expect(panel).not.toBeNull();
+    const table = within(panel as HTMLElement).getByRole("table");
+
+    // The 来源 column distinguishes all four configuration layers.
+    expect(within(table).getByText(/^共享模板 · .* · v\d+/)).toBeInTheDocument();
+    expect(within(table).getByText("仓库默认配置 · .env")).toBeInTheDocument();
+    expect(within(table).getByText("任务覆盖")).toBeInTheDocument();
+    expect(within(table).getByText(/^本机私有配置 · ~\/.pi\/dock/)).toBeInTheDocument();
+
+    // Sensitive values stay masked, and the resolved value follows the service.
+    expect(within(table).getByText("••••••••")).toBeInTheDocument();
+    expect(within(table).queryByText("iv_live_9f2c8ba7d41e")).not.toBeInTheDocument();
+    expect(within(table).getByText(/^https:\/\/saas-web\./)).toBeInTheDocument();
+
+    await user.selectOptions(screen.getByLabelText("选择服务"), "release-service-3");
+    expect(await within(table).findByText(/^https:\/\/invoice-service\./)).toBeInTheDocument();
+  });
+
   it("renders tool panels from adapter data instead of hardcoded fixtures", async () => {
     const user = userEvent.setup();
     renderApp("/projects/atlas/tasks/release?session=main");
