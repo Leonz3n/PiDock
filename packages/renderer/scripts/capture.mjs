@@ -12,6 +12,99 @@ const rendererPages = [
   // Mixed Git + ordinary-directory task with the files panel open, so the
   // directory badge/entry and the directory root chooser are captured.
   { name: "task-mixed", path: "/projects/atlas/tasks/release?session=main", click: 'button:text-is("文件")' },
+  // Newly restored runtime panels and dialogs (round 5).
+  { name: "task-logs", path: "/projects/atlas/tasks/release?session=main", click: 'button:text-is("日志")' },
+  {
+    name: "task-subagent",
+    path: "/projects/atlas/tasks/release?session=main",
+    click: ['button[aria-label^="查看 Subagent"]'],
+  },
+  {
+    name: "task-permission",
+    path: "/projects/atlas/tasks/release?session=main",
+    click: ['button[aria-label^="选择权限"]'],
+  },
+  {
+    name: "task-model",
+    path: "/projects/atlas/tasks/release?session=main",
+    click: ['button[aria-label^="选择模型"]'],
+  },
+  {
+    name: "task-thinking",
+    path: "/projects/atlas/tasks/release?session=main",
+    // Only models declaring reasoning levels show the picker (prototype's
+    // `thinkingControl()`), so switch to the local reasoning model first.
+    click: [
+      'button[aria-label^="选择模型"]',
+      'button[aria-label="模型 本地 Qwen"]',
+      'button[aria-label="选择推理档位"]',
+    ],
+  },
+  {
+    name: "task-context",
+    path: "/projects/atlas/tasks/release?session=main",
+    click: ['button[aria-label="查看上下文占用"]'],
+  },
+  {
+    name: "new-task-scheduled",
+    path: "/schedules",
+    click: ['button:text-is("新建定时任务")', 'input[aria-label="定时任务"]'],
+  },
+  {
+    name: "project-management",
+    path: "/projects/atlas",
+    click: ['button:text-is("项目管理")'],
+  },
+  {
+    name: "project-edit",
+    path: "/projects/atlas",
+    click: ['button:text-is("编辑项目")'],
+  },
+  {
+    name: "environment-management",
+    path: "/projects/atlas",
+    click: ['button:text-is("管理环境")'],
+  },
+  {
+    name: "provider-edit",
+    path: "/providers",
+    click: ['button:text-is("编辑")'],
+  },
+  {
+    name: "capability-detail",
+    path: "/capabilities",
+    click: ['button:text-is("详情")'],
+  },
+  {
+    name: "capability-add",
+    path: "/capabilities",
+    click: ['button:text-is("添加技能来源")'],
+  },
+  {
+    name: "schedule-edit",
+    path: "/schedules",
+    click: ['button:text-is("编辑")'],
+  },
+  {
+    name: "delivery",
+    path: "/projects/atlas/tasks/release?session=main",
+    click: ['button:text-is("审阅与交付")'],
+  },
+  {
+    name: "composer-candidates",
+    path: "/projects/atlas/tasks/release?session=main",
+    fill: [['[aria-label="消息输入"]', "/"]],
+  },
+  {
+    name: "remote-preview",
+    path: "/remote",
+    click: ['button:text-is("手机视图")'],
+  },
+  {
+    name: "repo-binding",
+    path: "/settings",
+    click: ['button:text-is("编辑绑定")'],
+  },
   { name: "env", path: "/env" },
   { name: "providers", path: "/providers" },
   { name: "usage", path: "/usage" },
@@ -56,12 +149,23 @@ async function captureScreens(browser, { base, dir, pages }) {
     if (message.type() === "error") errors.push({ page: intendedTarget, kind: "console", message: message.text() });
   });
   await page.goto(base, { waitUntil: "networkidle" });
-  for (const { name, path, click } of pages) {
+  for (const { name, path, click, fill } of pages) {
     intendedTarget = path ? `${base}${path}` : base;
     if (path) await page.goto(intendedTarget, { waitUntil: "networkidle" });
+    if (fill) {
+      for (const [selector, value] of fill) {
+        await page.fill(selector, value);
+        await page.waitForTimeout(180);
+      }
+    }
     if (click) {
-      await page.click(click);
-      await page.waitForTimeout(180);
+      // A single selector or an ordered click sequence (dialogs need the opener
+      // first). The sequence is recorded so a screenshot is reproducible.
+      const steps = Array.isArray(click) ? click : [click];
+      for (const selector of steps) {
+        await page.click(selector);
+        await page.waitForTimeout(180);
+      }
     }
     await page.screenshot({ path: `${target}${name}.png` });
     console.log(`${dir}/${name}.png`);

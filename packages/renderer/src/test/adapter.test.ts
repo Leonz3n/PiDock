@@ -190,7 +190,7 @@ describe("memory Host adapter", () => {
     const before = (await host.getWorkspace()).environments.find((item) => item.id === "testing")?.recipes.length ?? 0;
     const created = await host.saveServiceRecipe({
       environmentId: "testing",
-      recipe: { name: "  saas-web-worker  ", repo: "front-monorepo", runtime: "Node.js", startNote: "使用项目脚本启动" },
+      recipe: { name: "  saas-web-worker  ", repo: "front-monorepo", runtime: "Node.js", startNote: "使用项目脚本启动", runType: "常驻服务", healthCheck: "HTTP", dependencyBinding: "" },
     });
     expect(created.name).toBe("saas-web-worker");
     let environment = (await host.getWorkspace()).environments.find((item) => item.id === "testing");
@@ -198,14 +198,14 @@ describe("memory Host adapter", () => {
 
     await host.saveServiceRecipe({
       environmentId: "testing",
-      recipe: { id: created.id, name: "saas-web-worker-2", runtime: "Go", startNote: "读取仓库默认 config.yaml" },
+      recipe: { id: created.id, name: "saas-web-worker-2", runtime: "Go", startNote: "读取仓库默认 config.yaml", runType: "准备步骤", healthCheck: "gRPC health", dependencyBinding: "INVOICE → invoice-service" },
     });
     environment = (await host.getWorkspace()).environments.find((item) => item.id === "testing");
     expect(environment?.recipes.find((recipe) => recipe.id === created.id)?.name).toBe("saas-web-worker-2");
     expect(environment?.recipes).toHaveLength(before + 1);
 
     await expect(
-      host.saveServiceRecipe({ environmentId: "testing", recipe: { name: "   ", runtime: "Go", startNote: "x" } }),
+      host.saveServiceRecipe({ environmentId: "testing", recipe: { name: "   ", runtime: "Go", startNote: "x", runType: "常驻服务", healthCheck: "HTTP", dependencyBinding: "" } }),
     ).rejects.toThrow("请填写服务名称");
   });
 
@@ -218,5 +218,198 @@ describe("memory Host adapter", () => {
     expect(environment?.recipes.map((recipe) => recipe.name)).toEqual(added.map((recipe) => recipe.name));
     // A second import adds nothing new (names already present).
     expect(await host.importVscodeConfig("staging-preview")).toHaveLength(0);
+  });
+
+  it("creates, edits and deletes a project, blocking deletion while tasks remain", async () => {
+    const host = createMemoryHost();
+    const created = await host.saveProject({
+      name: "新项目",
+      description: "说明",
+      repositoryIds: ["apis"],
+      directories: [{ name: "资料", path: "/Users/leonz3n/Workspace/资料" }],
+    });
+    expect(created.name).toBe("新项目");
+    expect(created.repositories.map((item) => item.id)).toEqual(["apis"]);
+    expect(created.directories).toHaveLength(1);
+
+    await expect(host.saveProject({ name: "Atlas Web", description: "", repositoryIds: [], directories: [] })).rejects.toThrow(
+      "已有同名项目",
+    );
+
+    const edited = await host.saveProject({ id: created.id, name: "新项目 2", description: "改后", repositoryIds: [], directories: [] });
+    expect(edited.name).toBe("新项目 2");
+    expect(edited.repositories).toHaveLength(0);
+
+    // The seeded atlas project still has tasks, so it cannot be removed.
+    await expect(host.deleteProject("atlas")).rejects.toThrow("个关联任务");
+    await host.deleteProject(created.id);
+    expect((await host.getWorkspace()).projects.some((item) => item.id === created.id)).toBe(false);
+  });
+
+  it("keeps a repository used by a task linked when editing a project", async () => {
+    const host = createMemoryHost();
+    await expect(
+      host.saveProject({
+        id: "atlas",
+        name: "Atlas Web",
+        description: "微服务开发工作台",
+        repositoryIds: ["front-monorepo", "invoice-service", "shipment-service"],
+        directories: [{ id: "atlas-docs", name: "Atlas 设计资料", path: "/Users/leonz3n/Workspace/atlas-docs" }],
+      }),
+    ).rejects.toThrow("任务使用中的仓库不能解除关联");
+  });
+
+  it("creates and edits an environment while keeping task template versions", async () => {
+    const host = createMemoryHost();
+    const created = await host.saveEnvironment({ projectId: "atlas", name: "集成环境", description: "集成" });
+    expect(created.templateVersion).toBe("v1");
+    await expect(host.saveEnvironment({ projectId: "atlas", name: "集成环境", description: "dup" })).rejects.toThrow("同名环境");
+    const before = await host.getTask("release");
+    const edited = await host.saveEnvironment({ id: "testing", projectId: "atlas", name: "测试环境 2", description: "说明" });
+    expect(edited.name).toBe("测试环境 2");
+    expect((await host.getTask("release"))?.templateVersion).toBe(before?.templateVersion);
+
+    // A referenced environment cannot be deleted; the unreferenced one can.
+    await expect(host.deleteEnvironment("testing")).rejects.toThrow("个任务正在引用此环境");
+    await host.deleteEnvironment("staging-preview");
+    expect((await host.getWorkspace()).environments.some((item) => item.id === "staging-preview")).toBe(false);
+  });
+
+  it("adds a capability as pending review, never auto-loaded", async () => {
+    const host = createMemoryHost();
+    const added = await host.addCapability({ kind: "mcp", name: "Linear", source: "npx @linear/mcp", scope: "仅当前项目" });
+    expect(added.status).toBe("pending-review");
+    expect(added.kind).toBe("mcp");
+    await expect(host.addCapability({ kind: "skill", name: "  ", source: "x", scope: "所有项目" })).rejects.toThrow("名称和来源");
+    const workspace = await host.getWorkspace();
+    expect(workspace.capabilities.find((item) => item.id === added.id)?.status).toBe("pending-review");
+  });
+
+  it("creates, edits and removes a provider", async () => {
+    const host = createMemoryHost();
+    const created = await host.saveProvider({
+      name: "团队网关",
+      protocol: "openai-responses",
+      baseUrl: "https://gateway.example.com/v1",
+      enabled: true,
+      models: [{ id: "团队模型", contextWindow: 128 }],
+    });
+    expect(created.enabled).toBe(true);
+    expect(created.models[0].id).toBe("团队模型");
+
+    const edited = await host.saveProvider({
+      id: created.id,
+      name: "团队网关 2",
+      protocol: "openai-responses",
+      baseUrl: "https://gateway.example.com/v2",
+      enabled: false,
+      models: [{ id: "团队模型", contextWindow: 64 }],
+    });
+    expect(edited.enabled).toBe(false);
+    expect(edited.models[0].contextWindow).toBe(64);
+
+    await expect(
+      host.saveProvider({ name: "x", protocol: "p", baseUrl: "", enabled: true, models: [{ id: "a", contextWindow: 0 }] }),
+    ).rejects.toThrow("上下文窗口必须为正整数");
+
+    await host.removeProvider(created.id);
+    expect((await host.getWorkspace()).providers.some((item) => item.id === created.id)).toBe(false);
+  });
+
+  it("removes a provider and repoints its sessions", async () => {
+    const host = createMemoryHost();
+    await host.removeProvider("provider-anthropic");
+    const session = await host.getSession("release", "main");
+    expect(session?.providerId).not.toBe("provider-anthropic");
+    expect((await host.getWorkspace()).providers.some((item) => item.id === "provider-anthropic")).toBe(false);
+  });
+
+  it("sets session permission, model and thinking in memory", async () => {
+    const host = createMemoryHost();
+    await host.setSessionPermission("release", "main", "read");
+    expect((await host.getSession("release", "main"))?.permission).toBe("read");
+    await host.setSessionPermission("release", "main", "auto");
+    expect((await host.getSession("release", "main"))?.permission).toBe("auto");
+
+    await host.setSessionModel("release", "main", "provider-openai", "团队轻量模型");
+    const session = await host.getSession("release", "main");
+    expect(session?.model).toBe("团队轻量模型");
+
+    await host.setSessionThinking("release", "main", "high");
+    expect((await host.getSession("release", "main"))?.thinking).toBe("high");
+    await expect(host.setSessionModel("release", "main", "provider-openai", "不存在")).rejects.toThrow("模型不可用");
+  });
+
+  it("creates a new session at the default permission tier", async () => {
+    const host = createMemoryHost();
+    await host.setSessionPermission("release", "main", "auto");
+    const created = await host.createSession("release");
+    expect(created.permission).toBe("default");
+  });
+
+  it("edits a scheduled task in memory and syncs the task name", async () => {
+    const host = createMemoryHost();
+    const saved = await host.saveSchedule({
+      id: "schedule-1",
+      name: "发布前检查 2",
+      rule: "每周五 16:00",
+      timezone: "UTC",
+      prompt: "新的提示词",
+      providerId: "provider-openai",
+      model: "团队轻量模型",
+      permission: "read",
+    });
+    expect(saved.rule).toBe("每周五 16:00");
+    expect(saved.timezone).toBe("UTC");
+    expect(saved.permission).toBe("read");
+    expect((await host.getTask("release"))?.name).toBe("发布前检查 2");
+    await expect(host.saveSchedule({ id: "schedule-1", rule: "", timezone: "UTC", prompt: "p", providerId: "provider-openai", model: "团队轻量模型", permission: "read" })).rejects.toThrow(
+      "执行周期",
+    );
+  });
+
+  it("creates a scheduled task from the new-task input", async () => {
+    const host = createMemoryHost();
+    const task = await host.createTask({
+      projectId: "atlas",
+      name: "每日巡检",
+      repoIds: [],
+      directoryIds: [],
+      environmentId: "testing",
+      schedule: {
+        rule: "每日 08:00",
+        timezone: "Asia/Shanghai",
+        prompt: "检查昨日错误",
+        providerId: "provider-anthropic",
+        model: "Claude Sonnet",
+        permission: "read",
+      },
+    });
+    expect(task.type).toBe("scheduled");
+    expect(task.permission).toBe("read");
+    // The prototype's scheduled task starts with one placeholder session.
+    expect(task.sessions.map((session) => session.name)).toEqual(["等待首次执行"]);
+    const schedule = (await host.getWorkspace()).schedules.find((item) => item.taskId === task.id);
+    expect(schedule).toMatchObject({ rule: "每日 08:00", prompt: "检查昨日错误", permission: "read", enabled: true });
+    await expect(
+      host.createTask({
+        projectId: "atlas",
+        name: "缺周期",
+        repoIds: [],
+        directoryIds: [],
+        environmentId: "testing",
+        schedule: { rule: "", timezone: "Asia/Shanghai", prompt: "p", providerId: "provider-anthropic", model: "Claude Sonnet", permission: "default" },
+      }),
+    ).rejects.toThrow("执行周期");
+  });
+
+  it("adds repositories and directories to an existing task", async () => {
+    const host = createMemoryHost();
+    const task = await host.createTask({ projectId: "atlas", name: "仅目录", repoIds: [], directoryIds: ["atlas-docs"], environmentId: "testing" });
+    expect(task.services).toHaveLength(0);
+    await host.addTaskSources(task.id, { repoIds: ["apis"], directoryIds: ["atlas-docs"] });
+    const updated = await host.getTask(task.id);
+    expect(updated?.repos).toEqual(["apis"]);
+    expect(updated?.services.length).toBeGreaterThan(0);
   });
 });
