@@ -1,5 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { vi } from "vitest";
+import { installResizeObserverStub } from "./resizeObserver";
 
 Object.defineProperty(window, "matchMedia", {
   writable: true,
@@ -15,9 +16,8 @@ Object.defineProperty(window, "matchMedia", {
   })),
 });
 
-class ResizeObserverMock {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-}
-window.ResizeObserver = ResizeObserverMock;
+// jsdom ships no ResizeObserver. Instead of a silent no-op (which hid the
+// VirtualList height feedback loop) install a controllable stub: it keeps the
+// observer contract and lets tests drive resize notifications with real box
+// sizes via `test/resizeObserver.ts`.
+installResizeObserverStub();
