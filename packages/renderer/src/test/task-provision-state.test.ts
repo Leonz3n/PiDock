@@ -249,4 +249,100 @@ describe("#6 provision state (S5)", () => {
     const provision = await host.getTaskProvision(task.id);
     expect(provision?.ready).toBe(false);
   });
+
+  it("fails closed on a malformed per-repo commit (Host parity, no ready:true)", async () => {
+    const host = createMemoryHost();
+    const task = await host.createTask({
+      projectId: "atlas",
+      name: "多仓任务",
+      repoIds: [],
+      directoryIds: [],
+      workspaceKey: "task-abcdef12",
+    });
+    const result = await host.provisionTaskThroughForm({
+      taskId: task.id,
+      name: "多仓任务",
+      dirId: "task-abcdef12",
+      remoteBranch: "main",
+      fetchedCommit: "a5a4a0d1234",
+      repoSelections: [
+        { repoDir: "frontend", remote: "origin", remoteBranch: "main", mainCheckoutDir: "/src/frontend" },
+        { repoDir: "invoice", remote: "upstream", remoteBranch: "release/v2", mainCheckoutDir: "/src/invoice" },
+      ],
+      fetchedCommits: { frontend: "a5a4a0d1234", invoice: "zzz" },
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("must fail");
+    expect(result.error.code).toBe("fetch-failed");
+    expect(result.error.message).toContain("invoice");
+    const provision = await host.getTaskProvision(task.id);
+    expect(provision?.ready).toBe(false);
+    expect(provision?.lastError?.code).toBe("fetch-failed");
+  });
+
+  it("fails closed on invalid selection shape / colliding links / relative source", async () => {
+    const badRemote = createMemoryHost();
+    const t1 = await badRemote.createTask({
+      projectId: "atlas",
+      name: "坏远程",
+      repoIds: [],
+      directoryIds: [],
+      workspaceKey: "task-abcdef12",
+    });
+    const r1 = await badRemote.provisionTaskThroughForm({
+      taskId: t1.id,
+      name: "坏远程",
+      dirId: "task-abcdef12",
+      remoteBranch: "main",
+      fetchedCommit: "a5a4a0d1234",
+      repoSelections: [{ repoDir: "frontend", remote: "  ", remoteBranch: "main", mainCheckoutDir: "/src/frontend" }],
+      fetchedCommits: { frontend: "a5a4a0d1234" },
+    });
+    expect(r1.ok).toBe(false);
+    if (r1.ok) throw new Error("must fail");
+    expect(r1.error.code).toBe("invalid-repo");
+
+    const colliding = createMemoryHost();
+    const t2 = await colliding.createTask({
+      projectId: "atlas",
+      name: "冲突链接",
+      repoIds: [],
+      directoryIds: [],
+      workspaceKey: "task-abcdef12",
+    });
+    const r2 = await colliding.provisionTaskThroughForm({
+      taskId: t2.id,
+      name: "冲突链接",
+      dirId: "task-abcdef12",
+      remoteBranch: "main",
+      fetchedCommit: "a5a4a0d1234",
+      plainDirs: [
+        { directoryId: "notes-1", sourcePath: "/data/a" },
+        { directoryId: "notes--1", sourcePath: "/data/b" },
+      ],
+    });
+    expect(r2.ok).toBe(false);
+    if (r2.ok) throw new Error("must fail");
+    expect(r2.error.code).toBe("duplicate-repo");
+
+    const relative = createMemoryHost();
+    const t3 = await relative.createTask({
+      projectId: "atlas",
+      name: "相对来源",
+      repoIds: [],
+      directoryIds: [],
+      workspaceKey: "task-abcdef12",
+    });
+    const r3 = await relative.provisionTaskThroughForm({
+      taskId: t3.id,
+      name: "相对来源",
+      dirId: "task-abcdef12",
+      remoteBranch: "main",
+      fetchedCommit: "a5a4a0d1234",
+      plainDirs: [{ directoryId: "notes-1", sourcePath: "relative/notes" }],
+    });
+    expect(r3.ok).toBe(false);
+    if (r3.ok) throw new Error("must fail");
+    expect(r3.error.code).toBe("repo-unusable");
+  });
 });

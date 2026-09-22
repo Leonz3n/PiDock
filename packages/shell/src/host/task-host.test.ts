@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { TaskWorkspaceHost, memoryTaskStore } from "./task-host.js";
+import { TaskWorkspaceHost, isPathInsideTask, memoryTaskStore } from "./task-host.js";
 import {
   listSessionIdsOnDisk,
   parseSessionSnapshot,
@@ -710,8 +710,21 @@ describe("#6 multi-repo provision + append (S2)", () => {
     expect(dead.shape).toBe("dead");
     expect(dead.lexical).toBe("ok");
     expect(dead.linkTarget).toBeNull();
+    expect(dead.linkTargetInTask).toBe(false);
     const ok = taskHost.probeLinkTarget("/tmp");
     expect(ok.shape).toBe("ok");
     expect(ok.lexical).toBe("ok");
+    expect(ok.linkTargetInTask).toBe(false);
+  });
+
+  it("flags a one-hop readlink target inside the task as loop-risk", () => {
+    // Pure helper (no fs): callers MUST treat `linkTargetInTask === true`
+    // as loop-risk before creating the link (report-only, never followed).
+    expect(isPathInsideTask(`${TASK_DIR}/evil`, TASK_DIR)).toBe(true);
+    expect(isPathInsideTask(TASK_DIR, TASK_DIR)).toBe(true);
+    expect(isPathInsideTask("task-abcdef12/evil", TASK_DIR)).toBe(true);
+    expect(isPathInsideTask("/data/notes", TASK_DIR)).toBe(false);
+    expect(isPathInsideTask(null, TASK_DIR)).toBe(false);
+    expect(isPathInsideTask("", TASK_DIR)).toBe(false);
   });
 });

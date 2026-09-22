@@ -60,6 +60,32 @@ export interface TaskStore {
   listSessions(taskDir: string): string[];
 }
 
+/**
+ * True when `target` (absolute or task-relative one-hop readlink result)
+ * resolves to the task folder itself or a path under it. Callers MUST
+ * treat a `true` result as loop-risk: creating a link whose target lives
+ * inside the task folder would recurse. Pure string comparison on
+ * slash-normalized, trailing-separator-stripped paths (same normalization
+ * as `classifyLinkTarget`), so a relative readlink result like
+ * `../task-abcdef12/evil` resolves against the task's parent first.
+ */
+export function isPathInsideTask(target: string | null, taskDir: string): boolean {
+  if (typeof target !== "string" || target.trim().length === 0) return false;
+  const normalize = (value: string): string => value.trim().replace(/\\/g, "/").replace(/\/+$/, "");
+  const raw = target.trim().replace(/\\/g, "/");
+  const parent = taskDir.trim().replace(/\\/g, "/").replace(/\/+$/, "").split("/").slice(0, -1).join("/");
+  const absolute = raw.startsWith("/") || /^[A-Za-z]:\//.test(raw) ? raw : `${parent}/${raw}`;
+  const parts: string[] = [];
+  for (const segment of absolute.split("/")) {
+    if (segment === "" || segment === ".") continue;
+    if (segment === "..") parts.pop();
+    else parts.push(segment);
+  }
+  const resolved = (absolute.startsWith("/") ? "/" : "") + parts.join("/");
+  const task = normalize(taskDir);
+  return resolved === task || resolved.startsWith(`${task}/`);
+}
+
 export const diskTaskStore: TaskStore = {
   readTask: (taskDir) => readTaskRecordOnDisk(taskDir),
   writeTask: (taskDir, record) => writeTaskRecordOnDisk(taskDir, record),
@@ -493,6 +519,13 @@ export class TaskWorkspaceHost {
     lexical: "ok" | "nested" | "loop-risk";
     /** One-hop readlink target when `sourcePath` itself is a symlink (null otherwise). */
     linkTarget: string | null;
+    /**
+     * True when the one-hop readlink target resolves inside this task
+     * folder: callers MUST treat it as loop-risk (a link pointing back
+     * into the task would recurse on creation). Report-only, never
+     * followed beyond the single `readlink` hop above.
+     */
+    linkTargetInTask: boolean;
   } {
     // Lazy Node fs import keeps the class transport-free for tests that
     // never probe; dynamic require is avoided (ESM) via createRequire.
@@ -508,8 +541,10 @@ export class TaskWorkspaceHost {
     } catch {
       linkTarget = null;
     }
-    if (!existsSync(sourcePath)) return { shape: "dead", detail: `普通目录来源不存在: ${sourcePath}`, lexical, linkTarget };
-    return { shape: "ok", detail: "来源可用", lexical, linkTarget };
+    const linkTargetInTask = isPathInsideTask(linkTarget, this.taskDir);
+    if (!existsSync(sourcePath))
+      return { shape: "dead", detail: `普通目录来源不存在: ${sourcePath}`, lexical, linkTarget, linkTargetInTask };
+    return { shape: "ok", detail: "来源可用", lexical, linkTarget, linkTargetInTask };
   }
 
   taskRecord(): TaskDiskRecord | null {
