@@ -21,6 +21,7 @@ import type {
   ScheduleTemplate,
   ScheduledRun,
   Service,
+  ServiceRecipe,
   Session,
   Task,
   UsageRecord,
@@ -32,6 +33,7 @@ import type {
   HostAdapter,
   ProjectDirectoryInput,
   SaveEnvironmentConfigInput,
+  SaveServiceRecipeInput,
   SendMessageResult,
   UsageFilter,
 } from "./hostAdapter";
@@ -202,6 +204,27 @@ function seedProjects(): Project[] {
 }
 
 const agentGreeting = "任务工作区已就绪，我可以开始检查构建与配置。";
+
+/**
+ * Seeded service startup recipes, mirroring the prototype's `environmentEditor()`
+ * cards for an atlas environment (first two Node.js project scripts, the rest Go
+ * reading the repository's default config). These are in-memory display data.
+ */
+function atlasRecipes(prefix: string): ServiceRecipe[] {
+  const seeds: [string, string, string, string][] = [
+    ["saas-web", "front-monorepo", "Node.js", "使用项目脚本启动"],
+    ["saas-bff", "front-monorepo", "Node.js", "使用项目脚本启动"],
+    ["invoice-service", "invoice-service", "Go", "读取仓库默认 config.yaml"],
+    ["shipment-service", "shipment-service", "Go", "读取仓库默认 config.yaml"],
+  ];
+  return seeds.map(([name, repo, runtime, startNote], index) => ({
+    id: `${prefix}-recipe-${index + 1}`,
+    name,
+    repo,
+    runtime,
+    startNote,
+  }));
+}
 
 function baseSession(id: string, name: string, overrides: Partial<Session> = {}): Session {
   return {
@@ -454,6 +477,7 @@ class MemoryHost implements HostAdapter {
       templateVersion: "v12",
       variables: [{ key: "LOG_LEVEL", value: "debug", secret: false }],
       privateVariables: [{ key: "INVOICE_ACCESS_TOKEN", value: "iv_live_9f2c8ba7d41e", secret: true }],
+      recipes: atlasRecipes("testing"),
     },
     {
       id: "dev",
@@ -462,6 +486,7 @@ class MemoryHost implements HostAdapter {
       templateVersion: "v11",
       variables: [{ key: "LOG_LEVEL", value: "info", secret: false }],
       privateVariables: [],
+      recipes: atlasRecipes("dev"),
     },
     {
       id: "orbit-testing",
@@ -470,6 +495,21 @@ class MemoryHost implements HostAdapter {
       templateVersion: "v4",
       variables: [{ key: "LOG_LEVEL", value: "warn", secret: false }],
       privateVariables: [],
+      recipes: [
+        { id: "orbit-testing-recipe-1", name: "orbit-api", repo: "orbit-api", runtime: "Go", startNote: "读取仓库默认 config.yaml" },
+      ],
+    },
+    {
+      // Deliberately unreferenced: no task adopts it, which is the case that
+      // hides 任务覆盖 (a task override cannot target another environment) and
+      // the case the environment-delete rule is about.
+      id: "staging-preview",
+      projectId: "atlas",
+      name: "预发布环境",
+      templateVersion: "v3",
+      variables: [{ key: "RELEASE_CHANNEL", value: "canary", secret: false }],
+      privateVariables: [],
+      recipes: [],
     },
   ];
 
@@ -699,7 +739,7 @@ class MemoryHost implements HostAdapter {
     return {
       projects: this.projects.map((item) => ({ ...item, directories: item.directories.map((directory) => ({ ...directory })) })),
       tasks: this.tasks.map((item) => this.projectTask(item)),
-      environments: this.environments.map((item) => ({ ...item })),
+      environments: this.environments.map((item) => ({ ...item, recipes: item.recipes.map((recipe) => ({ ...recipe })) })),
       providers: this.providers.map((item) => ({ ...item })),
       schedules: this.schedules.map((item) => ({ ...item })),
       scheduledRuns: this.scheduledRuns.map((item) => ({ ...item })),
@@ -1063,10 +1103,11 @@ class MemoryHost implements HostAdapter {
     // Ordinary directories: cleanup only removes the in-task symlink and keeps
     // the original directory and every file in it.
     for (const directory of task.directories) {
+      const linkPath = directoryLinkPath(task.workspaceRoot, task.workspaceKey, directory);
       items.push({
         resource: `普通目录 · ${directory.name}`,
         action: "移除任务内软链接",
-        detail: `保留原目录 ${directory.path} 及其全部文件`,
+        detail: `移除任务内软链接 ${linkPath}；保留原目录 ${directory.path} 及其全部文件`,
       });
     }
     return items;
@@ -1139,6 +1180,53 @@ class MemoryHost implements HostAdapter {
     if (environment) task.templateVersion = environment.templateVersion;
   }
 
+  async saveServiceRecipe({ environmentId, recipe }: SaveServiceRecipeInput): Promise<ServiceRecipe> {
+    const environment = this.environments.find((item) => item.id === environmentId);
+    if (!environment) throw new Error("环境不存在");
+    const name = recipe.name.trim();
+    if (!name) throw new Error("请填写服务名称");
+    const existing = recipe.id ? environment.recipes.find((item) => item.id === recipe.id) : undefined;
+    if (recipe.id && !existing) throw new Error("服务配方不存在");
+    const next: ServiceRecipe = {
+      id: existing?.id ?? this.nextId("recipe"),
+      name,
+      repo: recipe.repo?.trim() || undefined,
+      runtime: recipe.runtime.trim() || "Node.js",
+      startNote: recipe.startNote.trim(),
+    };
+    environment.recipes = existing
+      ? environment.recipes.map((item) => (item.id === next.id ? next : item))
+      : [...environment.recipes, next];
+    return { ...next };
+  }
+
+  /**
+   * Simulated `.vscode` import. It never reads a repository: it derives example
+   * recipes from the project's registered repos so the prototype's import entry
+   * has an in-memory result, and skips names already present.
+   */
+  async importVscodeConfig(environmentId: string): Promise<ServiceRecipe[]> {
+    const environment = this.environments.find((item) => item.id === environmentId);
+    if (!environment) throw new Error("环境不存在");
+    const project = this.projects.find((item) => item.id === environment.projectId);
+    const repositories = project?.repositories ?? [];
+    if (repositories.length === 0) throw new Error("当前项目还没有可扫描的仓库");
+    const existingNames = new Set(environment.recipes.map((item) => item.name));
+    const added: ServiceRecipe[] = [];
+    repositories.forEach((repository, index) => {
+      if (existingNames.has(repository.name)) return;
+      added.push({
+        id: this.nextId("recipe"),
+        name: repository.name,
+        repo: repository.name,
+        runtime: index % 2 === 0 ? "Node.js" : "Go",
+        startNote: "从 .vscode 导入 · 读取仓库默认 config.yaml",
+      });
+    });
+    environment.recipes = [...environment.recipes, ...added];
+    return added.map((item) => ({ ...item }));
+  }
+
   async setProjectDirectories(projectId: string, rows: ProjectDirectoryInput[]): Promise<ProjectDirectory[]> {
     const project = this.projects.find((item) => item.id === projectId);
     if (!project) throw new Error("项目不存在");
@@ -1182,7 +1270,7 @@ class MemoryHost implements HostAdapter {
     });
   }
 
-  async createTask({ projectId, name, repoIds, directoryIds, environmentId }: CreateTaskInput): Promise<Task> {
+  async createTask({ projectId, name, repoIds, directoryIds, environmentId, workspaceKey }: CreateTaskInput): Promise<Task> {
     const project = this.projects.find((item) => item.id === projectId);
     if (!project) throw new Error("项目不存在");
     const taskName = name.trim();
@@ -1201,7 +1289,7 @@ class MemoryHost implements HostAdapter {
       id,
       projectId,
       name: taskName,
-      workspaceKey: this.nextWorkspaceKey(),
+      workspaceKey: workspaceKey ?? this.nextWorkspaceKey(),
       workspaceRoot: this.localSettings.workspaceRoot,
       type: "normal",
       environmentId: targetEnvironmentId,

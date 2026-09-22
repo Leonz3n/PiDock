@@ -1,5 +1,6 @@
-import { screen } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { defaultWorkspaceRoot } from "../data/memoryHost";
 import { renderApp } from "./helpers";
 
 describe("rename modals", () => {
@@ -45,5 +46,46 @@ describe("rename modals", () => {
     await user.click(screen.getByRole("button", { name: "保存" }));
 
     expect(await screen.findByRole("button", { name: /重命名后的会话/ })).toBeInTheDocument();
+  });
+});
+
+describe("new-task workspace preview", () => {
+  it("previews the pi workspace and symlink paths live in the new-task form", async () => {
+    const user = userEvent.setup();
+    renderApp("/projects/atlas");
+    await screen.findByRole("heading", { name: "Atlas Web" });
+    await user.click(screen.getByRole("button", { name: "新建任务" }));
+    const dialog = await screen.findByRole("dialog", { name: "新建任务" });
+
+    const preview = within(dialog).getByTestId("workspace-preview");
+    expect(within(dialog).getByTestId("workspace-preview-path")).toHaveTextContent(defaultWorkspaceRoot);
+    expect(within(dialog).getByTestId("workspace-preview-path").textContent).toMatch(/task-[0-9a-f]{8}/);
+
+    // Selecting a directory adds its in-task symlink path and original target.
+    await user.click(within(dialog).getByLabelText("任务目录 Atlas 设计资料"));
+    expect(within(dialog).getByTestId("preview-link-atlas-docs")).toHaveTextContent("dir-atlasdoc");
+    expect(preview).toHaveTextContent("/Users/leonz3n/Workspace/atlas-docs");
+
+    // Selecting a repo adds its worktree path under the same task folder.
+    await user.click(within(dialog).getByLabelText("仓库 front-monorepo"));
+    expect(preview).toHaveTextContent("/front-monorepo");
+  });
+
+  it("keeps the previewed workspace key when the task is created", async () => {
+    const user = userEvent.setup();
+    renderApp("/projects/atlas");
+    await screen.findByRole("heading", { name: "Atlas Web" });
+    await user.click(screen.getByRole("button", { name: "新建任务" }));
+    const dialog = await screen.findByRole("dialog", { name: "新建任务" });
+    const previewPath = within(dialog).getByTestId("workspace-preview-path").textContent ?? "";
+    const key = previewPath.split("/").pop() ?? "";
+    expect(key).toMatch(/^task-[0-9a-f]{8}$/);
+
+    await user.type(within(dialog).getByLabelText("任务名称"), "预览键校验");
+    await user.click(within(dialog).getByLabelText("仓库 front-monorepo"));
+    await user.click(within(dialog).getByRole("button", { name: "创建任务" }));
+
+    expect(await screen.findByRole("heading", { name: "预览键校验" })).toBeInTheDocument();
+    expect(screen.getByText(key)).toBeInTheDocument();
   });
 });

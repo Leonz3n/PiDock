@@ -15,6 +15,7 @@ import type {
   RunRecord,
   Schedule,
   ScheduledRun,
+  ServiceRecipe,
   Session,
   Task,
   UsageRecord,
@@ -47,6 +48,12 @@ export type SaveEnvironmentConfigInput = {
 /** A project-level ordinary directory entry, as edited in the project dialog. */
 export type ProjectDirectoryInput = { id?: string; name: string; path: string };
 
+/** Upsert one in-memory service startup recipe on an environment. */
+export type SaveServiceRecipeInput = {
+  environmentId: string;
+  recipe: { id?: string; name: string; repo?: string; runtime: string; startNote: string };
+};
+
 /** In-memory task creation for the draft UI; real worktree preparation belongs to ticket 03. */
 export type CreateTaskInput = {
   projectId: string;
@@ -54,6 +61,8 @@ export type CreateTaskInput = {
   repoIds: string[];
   directoryIds: string[];
   environmentId?: string;
+  /** Workspace key previewed in the create-task form; generated when omitted. */
+  workspaceKey?: string;
 };
 
 /**
@@ -106,6 +115,11 @@ export interface HostAdapter {
   saveEnvironmentConfig(input: SaveEnvironmentConfigInput): Promise<void>;
   /** Adopt the environment's current shared-template version on a task that kept an older one. */
   adoptLatestTemplate(taskId: string): Promise<void>;
+
+  /** Upsert an in-memory service startup recipe; no repository scan or file write. */
+  saveServiceRecipe(input: SaveServiceRecipeInput): Promise<ServiceRecipe>;
+  /** Simulated `.vscode` import: adds example recipes from the project's registered repos. */
+  importVscodeConfig(environmentId: string): Promise<ServiceRecipe[]>;
 
   /** Replace the project's ordinary-directory registrations; locked entries must be unchanged. */
   setProjectDirectories(projectId: string, rows: ProjectDirectoryInput[]): Promise<ProjectDirectory[]>;
