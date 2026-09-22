@@ -136,6 +136,21 @@ describe("environment scope editing", () => {
     expect(screen.getByText("front-monorepo")).toBeInTheDocument();
   });
 
+  it("refuses service start/stop from a read-only session at the tool layer", async () => {
+    const { createMemoryHost } = await import("../data/memoryHost");
+    const host = createMemoryHost();
+    const workspace = await host.getWorkspace();
+    const task = workspace.tasks.find((item) => item.id === "release") as { id: string; services: { id: string }[] };
+    // Flip the active session to read-only, then attempt a start: the
+    // RuntimePanel hides the buttons first, this is the enforced second line.
+    const full = await host.getTask(task.id);
+    const active = (full as unknown as { sessions: { id: string; permission: string }[]; activeSessionId: string }).sessions.find(
+      (item) => item.id === (full as unknown as { activeSessionId: string }).activeSessionId,
+    ) as { permission: string };
+    active.permission = "read";
+    await expect(host.setServiceRunning(task.id, task.services[0].id, true)).rejects.toThrow("只读会话禁止服务启停");
+  });
+
   it("marks each resolved config row with the layer it came from", async () => {
     renderApp("/env");
     await screen.findByRole("heading", { name: "环境与服务" });

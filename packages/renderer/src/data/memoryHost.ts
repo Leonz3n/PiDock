@@ -1264,7 +1264,18 @@ class MemoryHost implements HostAdapter {
   }
 
   async setServiceRunning(taskId: string, serviceId: string, running: boolean) {
+    // [PiDock 04] (#7) memory mirror of the Host service lifecycle: the
+    // shell adapter (shellHost.ts) routes this through `task/controlService`
+    // with actor human; dev/test callers land here. Read-only sessions
+    // refuse at this tool layer (the RuntimePanel hides the buttons first;
+    // this is the enforced second line). Liveness only — dependency
+    // reachability never flips `running` (see `resolveServiceConfig` note
+    // on the simulated page verification).
     const task = this.task(taskId);
+    const session = task?.sessions.find((item) => item.id === task.activeSessionId);
+    if (session?.permission === "read") {
+      throw new Error("只读会话禁止服务启停，请先调整会话权限");
+    }
     const service = task?.services.find((item) => item.id === serviceId);
     if (service) service.running = running;
   }
