@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { boundWorkspaceId, buildHostEnv, DEFAULT_WORKSPACE_ID, routeHostTask, routeTaskBinding, validateHostTaskOp } from "./host-guards.js";
+import { boundWorkspaceId, buildHostEnv, buildToolPlannerSpec, DEFAULT_WORKSPACE_ID, routeHostTask, routeTaskBinding, toolPlannerSpecForOp, validateHostTaskOp } from "./host-guards.js";
 
 // Seam: Host process-boundary guards (workspace binding + per-op payloads).
 // host.ts itself requires a utilityProcess parent port, so the pure guards
@@ -161,6 +161,30 @@ describe("S6 batch 2: send-record refs and draft-tolerant store", () => {
     expect(
       validateHostTaskOp("task/sendMessage", { sessionId: "main", text: "hi", skillSource: " " }).ok,
     ).toBe(false);
+  });
+});
+
+describe("S6 BLOCK fix: buildToolPlannerSpec pure dispatch (host.ts mirror)", () => {
+  it("echo maps the gated tool/target/version; deny forces /etc/passwd", () => {
+    expect(
+      buildToolPlannerSpec({ tool: "exec.run", target: "/tmp/t/run.sh", contentVersion: "v3", toolPlan: "echo" }),
+    ).toEqual({ ok: true, mode: "echo", tool: "exec.run", target: "/tmp/t/run.sh", contentVersion: "v3" });
+    expect(buildToolPlannerSpec({ tool: "exec.run", toolPlan: "deny" })).toEqual({
+      ok: true,
+      mode: "deny",
+      tool: "exec.run",
+      target: "/etc/passwd",
+      contentVersion: "v1",
+    });
+    expect(buildToolPlannerSpec({})).toEqual({ ok: true, mode: "none" });
+  });
+
+  it("fail-closes toolPlan without tool, echo without target, and ungated tools", () => {
+    expect(buildToolPlannerSpec({ toolPlan: "echo", target: "/tmp/t/run.sh" }).ok).toBe(false);
+    expect(buildToolPlannerSpec({ tool: "exec.run", toolPlan: "echo" }).ok).toBe(false);
+    expect(buildToolPlannerSpec({ tool: "rm.all", target: "/tmp/t", toolPlan: "echo" }).ok).toBe(false);
+    expect(buildToolPlannerSpec({ tool: "exec.run", target: "/tmp/t", toolPlan: "run" }).ok).toBe(false);
+    expect(toolPlannerSpecForOp("task/cancel", {} as never)).toBeNull();
   });
 });
 

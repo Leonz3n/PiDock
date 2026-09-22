@@ -25,30 +25,43 @@ describe("shell host adapter selection", () => {
     vi.unstubAllGlobals();
   });
 
-  it("routes sendMessage through task/sendMessage when bridged", async () => {
+  it("maps the real Host vocab (done->completed, cancelled->stopped) and forwards refs", async () => {
     const seen: Array<{ taskId: string; op: string; payload?: Record<string, unknown> }> = [];
     stubBridge(async (taskId, op, payload) => {
       seen.push({ taskId, op, payload });
-      return { ok: true, payload: { state: "completed", callId: "call-1", userMessageId: "msg-1", agentMessageId: "msg-2" } };
+      return { ok: true, payload: { state: "done", callId: "call-1", userMessageId: "msg-1", agentMessageId: "msg-2" } };
     });
     const fallback = createMemoryHost();
     const adapter = resolveHostAdapter(fallback);
     expect(adapter).not.toBe(fallback);
-    const result = await adapter.sendMessage("task-a", "main", "检查构建", []);
+    const result = await adapter.sendMessage("task-a", "main", "检查构建", [
+      { id: "ref-1", kind: "file", label: "a.ts", detail: "task" },
+      { id: "skill-review", kind: "skill", label: "review", detail: "skill" },
+    ]);
     expect(seen).toHaveLength(1);
     expect(seen[0]).toMatchObject({ taskId: "task-a", op: "task/sendMessage" });
     expect((seen[0].payload as Record<string, unknown>)["text"]).toBe("检查构建");
+    expect((seen[0].payload as Record<string, unknown>)["skillSource"]).toBe("skill-review");
+    expect(((seen[0].payload as Record<string, unknown>)["references"] as unknown[])).toHaveLength(2);
     expect(result.state).toBe("completed");
     expect(result.run.taskId).toBe("task-a");
     vi.unstubAllGlobals();
+
+    stubBridge(async () => ({ ok: true, payload: { state: "cancelled", callId: "call-9" } }));
+    const stopped = await resolveHostAdapter(createMemoryHost()).sendMessage("task-a", "main", "停", []);
+    expect(stopped.state).toBe("stopped");
+    vi.unstubAllGlobals();
   });
 
-  it("surfaces a shell approval turn and resolves it through task/approve", async () => {
-    const calls: string[] = [];
-    stubBridge(async (_taskId, op) => {
-      calls.push(op as string);
+  it("surfaces a shell approval turn and resolves it by (taskId,sessionId,approvalId)", async () => {
+    const seen: Array<{ taskId: string; op: string; payload?: Record<string, unknown> }> = [];
+    stubBridge(async (taskId, op, payload) => {
+      seen.push({ taskId, op, payload });
       if (op === "task/sendMessage") {
-        return { ok: true, payload: { state: "approval", callId: "call-2", userMessageId: "msg-1", agentMessageId: "msg-2" } };
+        return {
+          ok: true,
+          payload: { state: "approval", callId: "call-2", approvalId: "approval-7", userMessageId: "msg-1", agentMessageId: "msg-2" },
+        };
       }
       return { ok: true, payload: {} };
     });
@@ -56,7 +69,20 @@ describe("shell host adapter selection", () => {
     const adapter: HostAdapter = createShellHostAdapter(fallback);
     const turned = await adapter.sendMessage("task-a", "main", "跑命令", []);
     expect(turned.state).toBe("approval");
-    expect(calls).toEqual(["task/sendMessage"]);
+    // The Host approval is listable/renderable without an approval-listing RPC.
+    expect(await adapter.getApproval("approval-7")).toMatchObject({ id: "approval-7", taskId: "task-a", sessionId: "main" });
+    expect(await adapter.listApprovals("task-a")).toHaveLength(1);
+    const resolved = await adapter.resolveApproval("approval-7", "approved");
+    expect(resolved.status).toBe("approved");
+    expect(seen.map((entry) => entry.op)).toEqual(["task/sendMessage", "task/approve"]);
+    expect((seen[1].payload as Record<string, unknown>)).toMatchObject({ sessionId: "main", approvalId: "approval-7" });
+    vi.unstubAllGlobals();
+  });
+
+  it("uses a partial bridge (no taskOp) as memory, not shell", async () => {
+    vi.stubGlobal("window", { pidock: { getVersions: async () => ({}) } });
+    const fallback = createMemoryHost();
+    expect(resolveHostAdapter(fallback)).toBe(fallback);
     vi.unstubAllGlobals();
   });
 

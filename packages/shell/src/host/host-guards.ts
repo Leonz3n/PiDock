@@ -6,8 +6,9 @@
  * importing an Electron entry point into unit tests. `host.ts` re-exports
  * `validateHostTaskOp` for backward-compatible imports.
  */
-import { isHostTaskOp } from "../rpc/protocol.js";
+import { isHostTaskOp, type HostTaskOp } from "../rpc/protocol.js";
 import { isAbsoluteTaskRoot } from "../main/task-provision.js";
+import { PI_GATED_TOOL_NAMES } from "../main/pi-session.js";
 
 export const DEFAULT_WORKSPACE_ID = "s1-default-workspace";
 
@@ -39,6 +40,61 @@ export function routeHostTask(params: unknown, boundWorkspaceId: string): HostTa
 
 export function boundWorkspaceId(): string {
   return process.env["PIDOCK_WORKSPACE_ID"] ?? DEFAULT_WORKSPACE_ID;
+}
+
+export type ToolPlannerSpec =
+  | { ok: true; mode: "none" }
+  | { ok: true; mode: "deny"; tool: string; target: string; contentVersion: string }
+  | { ok: true; mode: "echo"; tool: string; target: string; contentVersion: string }
+  | { ok: false; error: string };
+
+/**
+ * Pure form of the `toolPlan` dispatch `host.ts` enforces before calling
+ * `TaskWorkspaceHost.sendMessage`: `toolPlan` requires a gated `tool`
+ * (`echo` additionally requires `target`); `deny` forces the
+ * out-of-task `/etc/passwd` target so the denial path is coverable.
+ * Tested directly because `host.ts` needs a utilityProcess parent port.
+ */
+export function buildToolPlannerSpec(input: {
+  tool?: unknown;
+  target?: unknown;
+  contentVersion?: unknown;
+  toolPlan?: unknown;
+}): ToolPlannerSpec {
+  const { tool, target, toolPlan } = input;
+  const contentVersion = typeof input.contentVersion === "string" && input.contentVersion.length > 0 ? input.contentVersion : "v1";
+  if (toolPlan === undefined) return { ok: true, mode: "none" };
+  if (toolPlan !== "echo" && toolPlan !== "deny") {
+    return { ok: false, error: "invalid-payload: task/sendMessage.toolPlan must be echo/deny" };
+  }
+  if (typeof tool !== "string" || tool.length === 0) {
+    return { ok: false, error: "invalid-payload: task/sendMessage.tool is required when toolPlan is present" };
+  }
+  if (!PI_GATED_TOOL_NAMES.includes(tool)) {
+    return { ok: false, error: `invalid-payload: task/sendMessage.tool is not a gated tool: ${tool}` };
+  }
+  if (toolPlan === "deny") {
+    return { ok: true, mode: "deny", tool, target: "/etc/passwd", contentVersion };
+  }
+  if (typeof target !== "string" || target.length === 0) {
+    return { ok: false, error: "invalid-payload: task/sendMessage.target is required when toolPlan is echo" };
+  }
+  return { ok: true, mode: "echo", tool, target, contentVersion };
+}
+
+export function toolPlannerSpecForOp(op: string, payload: unknown): ToolPlannerSpec | null {
+  if ((op as HostTaskOp) !== "task/sendMessage") return null;
+  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
+    return { ok: false, error: "invalid-payload: task/sendMessage requires a payload object" };
+  }
+  const record = payload as Record<string, unknown>;
+  if (record["toolPlan"] === undefined) return { ok: true, mode: "none" };
+  return buildToolPlannerSpec({
+    tool: record["tool"],
+    target: record["target"],
+    contentVersion: record["contentVersion"],
+    toolPlan: record["toolPlan"],
+  });
 }
 
 /** Fork-time task binding: one utilityProcess serves one task folder. */
