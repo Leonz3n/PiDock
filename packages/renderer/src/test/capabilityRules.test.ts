@@ -74,6 +74,8 @@ describe("capability mirror rules", () => {
   it("requires an enabled bridge Extension for MCP", () => {
     const mcp = capability({ id: "mcp", kind: "mcp", name: "figma", source: "项目", bridge: { extensionId: "cap-bridge", command: "npx x" } });
     expect(mcpBridgeStatus([bridge, mcp], mcp)).toMatchObject({ ok: true });
+    // An installed bridge with a pending update is still an enabled bridge.
+    expect(mcpBridgeStatus([{ ...bridge, status: "update-available" }, mcp], mcp)).toMatchObject({ ok: true });
     expect(mcpBridgeStatus([{ ...bridge, status: "disabled" }, mcp], mcp)).toMatchObject({ ok: false, code: "bridge-missing" });
     const direct = capability({ id: "mcp2", kind: "mcp", name: "direct", source: "项目" });
     expect(mcpBridgeStatus([bridge, direct], direct)).toMatchObject({ ok: false, code: "bridge-missing" });
