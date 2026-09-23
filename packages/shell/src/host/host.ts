@@ -42,6 +42,7 @@ import {
   validateHostTaskOp,
 } from "./host-guards.js";
 import { TaskWorkspaceHost, diskTaskStore } from "./task-host.js";
+import type { ServiceRunObservation } from "../main/execution-ledger.js";
 import { SharedPathCoordinator } from "./path-coordination.js";
 import { TaskServiceRuntime } from "./service-runtime.js";
 import { TaskServiceTopology } from "./service-topology.js";
@@ -314,6 +315,28 @@ function asRecord(payload: unknown): Record<string, unknown> {
   return typeof payload === "object" && payload !== null && !Array.isArray(payload)
     ? (payload as Record<string, unknown>)
     : {};
+}
+
+/**
+ * Service-side states this Host observed ([PiDock 17] #19 box 2): read from the
+ * service runtime of this task (never from a caller claim), so the session state
+ * and the service states are reported as two separate families. A task with no
+ * runtime yet reports none — that is "no service observed", not "all stopped".
+ */
+function serviceObservationsFor(taskId: string): ServiceRunObservation[] {
+  const runtime = serviceRuntimeFor(taskId);
+  if ("error" in runtime) return [];
+  return runtime.ids().flatMap((serviceId) => {
+    const service = runtime.get(serviceId);
+    if (!service) return [];
+    return [
+      {
+        serviceId,
+        running: service.lifecycle === "running",
+        ...(service.lifecycle !== "running" && service.stoppedAt !== undefined ? { stopped: true } : {}),
+      },
+    ];
+  });
 }
 
 /**
@@ -1325,6 +1348,29 @@ async function dispatchTaskOp(
         } catch (error) {
           return { ok: false, error: error instanceof Error ? error.message : String(error) };
         }
+      }
+      // [PiDock 17] (#19) execution state + cross-project attention reads.
+      // These are pure reads of this task's ledger (plus the service states the
+      // caller supplies), so no write right, no session and no approval is
+      // involved; the reader never re-executes anything.
+      case "task/executionState": {
+        const host = taskHostFor(taskId);
+        if ("error" in host) return { ok: false, error: host.error };
+        const sessionId = record["sessionId"] as string;
+        const services = serviceObservationsFor(taskId);
+        return { ok: true, payload: { state: host.executionState(sessionId, services) } };
+      }
+      case "task/attention": {
+        const host = taskHostFor(taskId);
+        if ("error" in host) return { ok: false, error: host.error };
+        const { taskName, items } = host.attention();
+        return { ok: true, payload: { taskName, items } };
+      }
+      case "task/markAttentionRead": {
+        const host = taskHostFor(taskId);
+        if ("error" in host) return { ok: false, error: host.error };
+        const itemIds = record["itemIds"] as string[];
+        return { ok: true, payload: { ...host.markAttentionRead(itemIds) } };
       }
       default:
         return { ok: false, error: `unknown-op: ${op}` };

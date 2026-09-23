@@ -1200,6 +1200,41 @@ export function validateHostTaskOp(
     }
     return { ok: true };
   }
+  // [PiDock 17] (#19) execution state + attention reads.
+  if (op === "task/executionState") {
+    if (!isRecord(payload)) return { ok: false, error: "invalid-payload: task/executionState requires a payload object" };
+    const sessionId = payload["sessionId"];
+    if (typeof sessionId !== "string" || sessionId.trim().length === 0) {
+      return { ok: false, error: "invalid-payload: task/executionState.sessionId must be a non-empty string" };
+    }
+    const services = payload["services"];
+    if (services !== undefined) {
+      if (!Array.isArray(services)) return { ok: false, error: "invalid-payload: task/executionState.services must be an array" };
+      for (const entry of services) {
+        if (!isRecord(entry)) return { ok: false, error: "invalid-payload: task/executionState.services entries must be objects" };
+        const serviceId = entry["serviceId"];
+        if (typeof serviceId !== "string" || serviceId.trim().length === 0) {
+          return { ok: false, error: "invalid-payload: task/executionState.services.serviceId must be a non-empty string" };
+        }
+        if (typeof entry["running"] !== "boolean") {
+          return { ok: false, error: "invalid-payload: task/executionState.services.running must be a boolean" };
+        }
+      }
+    }
+    return { ok: true };
+  }
+  if (op === "task/attention") {
+    if (!isRecord(payload)) return { ok: false, error: "invalid-payload: task/attention requires a payload object" };
+    return { ok: true };
+  }
+  if (op === "task/markAttentionRead") {
+    if (!isRecord(payload)) return { ok: false, error: "invalid-payload: task/markAttentionRead requires a payload object" };
+    const itemIds = payload["itemIds"];
+    if (!Array.isArray(itemIds) || itemIds.length === 0 || itemIds.some((id) => typeof id !== "string" || id.length === 0)) {
+      return { ok: false, error: "invalid-payload: task/markAttentionRead.itemIds must be a non-empty string array" };
+    }
+    return { ok: true };
+  }
   if (payload !== undefined && !isRecord(payload)) {
     return { ok: false, error: `invalid-payload: ${op} payload must be an object` };
   }

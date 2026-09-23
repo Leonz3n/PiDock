@@ -520,6 +520,8 @@ export interface ServiceRunObservation {
   lastExit?: { ok: boolean; reason?: string };
   starting?: boolean;
   stopping?: boolean;
+  /** The runtime observed the process end (a clean stop, not a failure). */
+  stopped?: boolean;
 }
 
 /** Service state of one observation (its own family; never the session's). */
@@ -528,6 +530,7 @@ export function serviceExecutionStateOf(observation: ServiceRunObservation): Ser
   if (observation.stopping === true) return "stopping";
   if (observation.running) return "running";
   if (observation.lastExit !== undefined) return observation.lastExit.ok ? "stopped" : "failed";
+  if (observation.stopped === true) return "stopped";
   return "unknown";
 }
 
