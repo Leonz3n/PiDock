@@ -271,7 +271,7 @@ export interface PairingCredential {
 }
 
 /** A rejected pairing exchange says which invalidation applies (旧码失效). */
-export type PairingRefusalCode = "credential-used" | "credential-expired" | "credential-refreshed" | "credential-cancelled";
+export type PairingRefusalCode = "credential-used" | "credential-expired" | "credential-refreshed" | "credential-cancelled" | "credential-mismatch";
 
 export type PairingCredentialVerdict = { ok: true } | { ok: false; code: PairingRefusalCode; message: string };
 
@@ -280,6 +280,9 @@ const PAIRING_REFUSAL_MESSAGES: Readonly<Record<PairingRefusalCode, string>> = {
   "credential-expired": "配对凭据已过期，请在桌面重新生成",
   "credential-refreshed": "配对凭据已被新的二维码替换，旧码失效",
   "credential-cancelled": "配对凭据已取消",
+  // The credential id travels in the QR URL, so the exchange must prove it also
+  // holds the secret: an id alone never pairs a device.
+  "credential-mismatch": "配对凭据不匹配，请重新扫码",
 };
 
 export function mintPairingCredential(input: { credentialId: string; secret: string; at: string; ttlMs?: number }): PairingCredential {
@@ -296,10 +299,15 @@ export function mintPairingCredential(input: { credentialId: string; secret: str
   };
 }
 
-/** Refreshing the desktop code invalidates the previous one immediately. */
-export function refreshPairingCredential(previous: PairingCredential, input: { credentialId: string; secret: string; at: string; ttlMs?: number }): PairingCredential {
-  if (previous.state === "pending") throw new Error("invalid-payload: 只有在旧凭据失效后才能刷新");
-  return mintPairingCredential(input);
+/**
+ * Invalidate a live credential: refreshing the desktop QR code and closing the
+ * pairing dialog both end here, so the old code cannot be scanned afterwards.
+ * Only a `pending` credential can be invalidated — a used or expired one already
+ * has its own state and must not be rewritten into a different refusal.
+ */
+export function invalidatePairingCredential(credential: PairingCredential, reason: "refreshed" | "cancelled"): PairingCredential {
+  if (credential.state !== "pending") throw new Error(`invalid-payload: 只有待使用的配对凭据可以失效（当前 ${credential.state}）`);
+  return { ...credential, state: reason };
 }
 
 /** Single-use, short-lived: all four invalidations are refusals on exchange. */
@@ -735,4 +743,62 @@ export function remoteAuditEvent(input: {
     ...(input.deviceId === undefined ? {} : { deviceId: input.deviceId }),
     ...(input.entryMode === undefined ? {} : { entryMode: input.entryMode }),
   };
+}
+
+// ---------------------------------------------------------------------------
+// 持久化形状（纯数据；解析与写入由 Host 侧的 TaskStore 负责）
+// ---------------------------------------------------------------------------
+
+/**
+ * A persisted pairing credential: everything except the short-lived secret. The
+ * secret lives in memory only, so a restarted Host invalidates a live QR code
+ * instead of keeping a bearer value on disk.
+ */
+export interface PairingCredentialDiskRecord {
+  credentialId: string;
+  issuedAt: string;
+  expiresAt: string;
+  state: PairingCredentialState;
+  usedAt?: string;
+}
+
+/** How many pairing credentials and audit lines one task keeps. */
+export const REMOTE_PAIRING_HISTORY_LIMIT = 20;
+export const REMOTE_AUDIT_HISTORY_LIMIT = 200;
+
+export interface RemoteDeviceDiskRecord {
+  version: number;
+  entryMode: RemoteEntryMode;
+  /** Gateway the Host dials: configuration, not a live connection. */
+  gateway: { endpoint: string; hostId: string };
+  /** Base address the QR code points at (the entry main told this Host about). */
+  entryBaseUrl: string;
+  devices: RemoteDeviceRecord[];
+  /** Pairing history (newest last); never contains the secret. */
+  pairing: PairingCredentialDiskRecord[];
+  /** Redacted audit trail, newest last. */
+  audits: RemoteAuditEvent[];
+}
+
+export function emptyRemoteDeviceRecord(): RemoteDeviceDiskRecord {
+  return {
+    version: 1,
+    entryMode: "tailscale",
+    gateway: { endpoint: "", hostId: "" },
+    entryBaseUrl: "http://127.0.0.1:4318",
+    devices: [],
+    pairing: [],
+    audits: [],
+  };
+}
+
+/** Minted sequence (`device-<n>` / `pair-<n>` / `audit-<n>`) for restart-safe ids. */
+export function highestSequence(ids: readonly string[], prefix: string): number {
+  let highest = 0;
+  const pattern = new RegExp(`^${prefix}-(\\d+)$`);
+  for (const id of ids) {
+    const match = pattern.exec(id);
+    if (match !== null) highest = Math.max(highest, Number(match[1]));
+  }
+  return highest;
 }

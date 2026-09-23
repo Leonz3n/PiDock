@@ -807,4 +807,39 @@ describe("file and terminal ops", () => {
     expect(validateHostTaskOp("task/scheduleRuns", { scheduleId: "schedule-1" })).toEqual({ ok: true });
     expect(validateHostTaskOp("task/scheduleRuns", { scheduleId: 7 }).ok).toBe(false);
   });
+
+  // [PiDock 19] (#21) remote access: every op is shape-checked before dispatch,
+  // including the ones a remote caller may reach (an unknown entry mode, a
+  // missing secret or an unknown gateway action never reaches the Host rules).
+  it("validates the remote-access payloads", () => {
+    expect(validateHostTaskOp("task/remoteState", {})).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/remoteState", "now")).toMatchObject({ ok: false });
+    expect(validateHostTaskOp("task/remoteAudit", {})).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/remoteEntryMode", { mode: "gateway", endpoint: "wss://gw.example.com", hostId: "host-1", baseUrl: "https://gw.example.com" })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/remoteEntryMode", { mode: "carrier-pigeon" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/remoteEntryMode", {}).ok).toBe(false);
+    expect(validateHostTaskOp("task/remoteEntryMode", { mode: "gateway", baseUrl: "" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/remotePairMint", { ttlMs: 600_000 })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/remotePairMint", { ttlMs: -1 }).ok).toBe(false);
+    expect(validateHostTaskOp("task/remotePairMint", { ttlMs: "10m" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/remotePairCancel", {})).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/remotePairExchange", { credentialId: "pair-1", secret: "p_x", deviceName: "Pixel 9", permissions: ["overview"] })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/remotePairExchange", { credentialId: "pair-1", deviceName: "Pixel 9" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/remotePairExchange", { credentialId: "pair-1", secret: "p_x", deviceName: "Pixel 9", permissions: "overview" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/remoteDeviceConfirm", { deviceId: "device-1", permissions: ["overview"] })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/remoteDeviceConfirm", {}).ok).toBe(false);
+    for (const op of ["task/remoteDeviceReject", "task/remoteDeviceRevoke", "task/remoteDeviceRotate"] as const) {
+      expect(validateHostTaskOp(op, { deviceId: "device-1" })).toEqual({ ok: true });
+      expect(validateHostTaskOp(op, { deviceId: "" }).ok).toBe(false);
+      expect(validateHostTaskOp(op, {}).ok).toBe(false);
+    }
+    expect(validateHostTaskOp("task/remoteAuthorize", { deviceId: "device-1", op: "task/sessionStates" })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/remoteAuthorize", { deviceId: "device-1" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/remoteReconnectPlan", { deviceId: "device-1", pending: [], deliveredKeys: ["k1"] })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/remoteReconnectPlan", { deviceId: "device-1", pending: {} }).ok).toBe(false);
+    expect(validateHostTaskOp("task/remoteGatewayEvent", { action: "connected" })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/remoteGatewayEvent", { action: "disconnected", error: "TLS failed" })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/remoteGatewayEvent", { action: "maybe" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/remoteGatewayEvent", {}).ok).toBe(false);
+  });
 });

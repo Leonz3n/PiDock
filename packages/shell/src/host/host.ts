@@ -56,6 +56,7 @@ import { writeClaimError } from "./write-coordination.js";
 import { runAgentServiceControl } from "./service-control.js";
 import { runAgentBrowserAction, runHumanBrowserAction, type BrowserGatewayPort } from "./browser-control.js";import { HostBrowserClient } from "../rpc/browser-client.js";
 import { isBrowserAction } from "../main/browser-rules.js";
+import type { RemoteEntryMode, RemotePendingRequest } from "../main/remote-rules.js";
 import {
   isHostTaskParams,
   isRpcRequest,
@@ -1487,6 +1488,127 @@ async function dispatchTaskOp(
         } catch (error) {
           return { ok: false, error: error instanceof Error ? error.message : String(error) };
         }
+      }
+      // [PiDock 19] (#21) remote access. The entry read, the pairing exchange and
+      // the request decision are what a remote caller may reach; minting the QR
+      // code, confirming/rejecting a device and rotating or revoking a credential
+      // are desktop-only, so they refuse an agent session and require the
+      // sender-attested `shell-ui` origin (the same rule as 立即运行).
+      case "task/remoteState": {
+        const host = taskHostFor(taskId);
+        if ("error" in host) return { ok: false, error: host.error };
+        return { ok: true, payload: { ...host.remoteState() } };
+      }
+      case "task/remoteAudit": {
+        const host = taskHostFor(taskId);
+        if ("error" in host) return { ok: false, error: host.error };
+        return { ok: true, payload: { audits: host.remoteAudits() } };
+      }
+      case "task/remoteEntryMode": {
+        const caller = classifyControlCaller({ label: record["label"], origin });
+        if (!caller.ok) return { ok: false, error: caller.error };
+        const host = taskHostFor(taskId);
+        if ("error" in host) return { ok: false, error: host.error };
+        return {
+          ok: true,
+          payload: {
+            ...host.setRemoteEntryMode(record["mode"] as RemoteEntryMode, {
+              ...(typeof record["endpoint"] === "string" ? { endpoint: record["endpoint"] as string } : {}),
+              ...(typeof record["hostId"] === "string" ? { hostId: record["hostId"] as string } : {}),
+              ...(typeof record["baseUrl"] === "string" ? { baseUrl: record["baseUrl"] as string } : {}),
+            }),
+          },
+        };
+      }
+      case "task/remotePairMint": {
+        if (record["sessionId"] !== undefined) {
+          return { ok: false, error: "permission-denied: 配对凭据只允许桌面显式生成，不能由 Agent 会话发起" };
+        }
+        const caller = classifyControlCaller({ label: record["label"], origin });
+        if (!caller.ok) return { ok: false, error: caller.error };
+        const host = taskHostFor(taskId);
+        if ("error" in host) return { ok: false, error: host.error };
+        const minted = host.mintPairing(typeof record["ttlMs"] === "number" ? { ttlMs: record["ttlMs"] as number } : {});
+        return minted.ok ? { ok: true, payload: { ...minted.payload } } : { ok: false, error: `${minted.code}: ${minted.message}` };
+      }
+      case "task/remotePairCancel": {
+        const caller = classifyControlCaller({ label: record["label"], origin });
+        if (!caller.ok) return { ok: false, error: caller.error };
+        const host = taskHostFor(taskId);
+        if ("error" in host) return { ok: false, error: host.error };
+        const cancelled = host.cancelPairing();
+        return cancelled.ok ? { ok: true, payload: { ...cancelled.payload } } : { ok: false, error: `${cancelled.code}: ${cancelled.message}` };
+      }
+      case "task/remotePairExchange": {
+        // The phone's exchange: it never names a session and gets no right until
+        // the desktop confirmed the device.
+        const host = taskHostFor(taskId);
+        if ("error" in host) return { ok: false, error: host.error };
+        const exchanged = host.exchangePairing({
+          credentialId: record["credentialId"] as string,
+          secret: record["secret"] as string,
+          deviceName: record["deviceName"] as string,
+          permissions: Array.isArray(record["permissions"]) ? (record["permissions"] as unknown[]) : [],
+        });
+        return exchanged.ok ? { ok: true, payload: { ...exchanged.payload } } : { ok: false, error: `${exchanged.code}: ${exchanged.message}` };
+      }
+      case "task/remoteDeviceConfirm": {
+        if (record["sessionId"] !== undefined) {
+          return { ok: false, error: "permission-denied: 设备确认只允许桌面显式操作，不能由 Agent 会话发起" };
+        }
+        const caller = classifyControlCaller({ label: record["label"], origin });
+        if (!caller.ok) return { ok: false, error: caller.error };
+        const host = taskHostFor(taskId);
+        if ("error" in host) return { ok: false, error: host.error };
+        const confirmed = host.confirmRemoteDevice(
+          record["deviceId"] as string,
+          Array.isArray(record["permissions"]) ? (record["permissions"] as unknown[]) : undefined,
+        );
+        return confirmed.ok ? { ok: true, payload: { ...confirmed.payload } } : { ok: false, error: `${confirmed.code}: ${confirmed.message}` };
+      }
+      case "task/remoteDeviceReject":
+      case "task/remoteDeviceRevoke":
+      case "task/remoteDeviceRotate": {
+        if (record["sessionId"] !== undefined) {
+          return { ok: false, error: "permission-denied: 设备管理只允许桌面显式操作，不能由 Agent 会话发起" };
+        }
+        const caller = classifyControlCaller({ label: record["label"], origin });
+        if (!caller.ok) return { ok: false, error: caller.error };
+        const host = taskHostFor(taskId);
+        if ("error" in host) return { ok: false, error: host.error };
+        const deviceId = record["deviceId"] as string;
+        const result =
+          op === "task/remoteDeviceReject"
+            ? host.rejectRemoteDevice(deviceId)
+            : op === "task/remoteDeviceRevoke"
+              ? host.revokeRemoteDevice(deviceId)
+              : host.rotateRemoteDevice(deviceId);
+        return result.ok ? { ok: true, payload: { ...result.payload } } : { ok: false, error: `${result.code}: ${result.message}` };
+      }
+      case "task/remoteAuthorize": {
+        const host = taskHostFor(taskId);
+        if ("error" in host) return { ok: false, error: host.error };
+        const authorized = host.authorizeRemote({ deviceId: record["deviceId"] as string, op: record["op"] as string });
+        return authorized.ok ? { ok: true, payload: { ...authorized.payload } } : { ok: false, error: `${authorized.code}: ${authorized.message}` };
+      }
+      case "task/remoteReconnectPlan": {
+        const host = taskHostFor(taskId);
+        if ("error" in host) return { ok: false, error: host.error };
+        const plan = host.remoteReconnectPlan(
+          record["deviceId"] as string,
+          Array.isArray(record["pending"]) ? (record["pending"] as RemotePendingRequest[]) : [],
+          Array.isArray(record["deliveredKeys"]) ? (record["deliveredKeys"] as string[]) : [],
+        );
+        return plan.ok ? { ok: true, payload: { ...plan.payload } } : { ok: false, error: `${plan.code}: ${plan.message}` };
+      }
+      case "task/remoteGatewayEvent": {
+        const host = taskHostFor(taskId);
+        if ("error" in host) return { ok: false, error: host.error };
+        const event = host.remoteGatewayEvent({
+          action: record["action"] as "connected" | "disconnected",
+          ...(typeof record["error"] === "string" ? { error: record["error"] as string } : {}),
+        });
+        return event.ok ? { ok: true, payload: { ...event.payload } } : { ok: false, error: `${event.code}: ${event.message}` };
       }
       default:
         return { ok: false, error: `unknown-op: ${op}` };

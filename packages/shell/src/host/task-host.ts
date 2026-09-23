@@ -71,18 +71,22 @@ import {
   deleteSessionOnDisk,
   listSessionIdsOnDisk,
   parseExecutionLedger,
+  parseRemoteDeviceRecord,
   parseScheduleRecord,
   readExecutionLedgerOnDisk,
   readLifecycleOnDisk,
+  readRemoteDeviceRecordOnDisk,
   readScheduleRecordOnDisk,
   readSessionSnapshotOnDisk,
   readTaskRecordOnDisk,
   readUsageOnDisk,
   serializeExecutionLedger,
+  serializeRemoteDeviceRecord,
   serializeScheduleRecord,
   serializeUsageLedger,
   writeExecutionLedgerOnDisk,
   writeLifecycleOnDisk,
+  writeRemoteDeviceRecordOnDisk,
   writeScheduleRecordOnDisk,
   writeSessionSnapshotOnDisk,
   writeTaskRecordOnDisk,
@@ -91,6 +95,14 @@ import {
   type TaskDiskRecord,
 } from "./task-store.js";
 import { emptyExecutionLedger, type ExecutionLedgerRecord } from "../main/execution-ledger.js";
+import {
+  emptyRemoteDeviceRecord,
+  type RemoteAuditEvent,
+  type RemoteDeviceDiskRecord,
+  type RemoteEntryMode,
+  type RemotePendingRequest,
+} from "../main/remote-rules.js";
+import { TaskRemoteDevices, type RemoteState } from "./remote-devices.js";
 import {
   emptyScheduleRecord,
   type ScheduleDiskRecord,
@@ -142,6 +154,9 @@ export interface TaskStore {
   /** [PiDock 18] #20: scheduled tasks plus one record per trigger. */
   readSchedules(taskDir: string): ScheduleDiskRecord;
   writeSchedules(taskDir: string, record: ScheduleDiskRecord): void;
+  /** [PiDock 19] #21: remote entry, devices, pairing history and audit trail. */
+  readRemoteDevices(taskDir: string): RemoteDeviceDiskRecord;
+  writeRemoteDevices(taskDir: string, record: RemoteDeviceDiskRecord): void;
 }
 
 /**
@@ -168,6 +183,17 @@ export function isPathInsideTask(target: string | null, taskDir: string): boolea
   const resolved = (absolute.startsWith("/") ? "/" : "") + parts.join("/");
   const task = normalize(taskDir);
   return resolved === task || resolved.startsWith(`${task}/`);
+}
+
+/**
+ * Entropy for a pairing or device credential ([PiDock 19] #21): 32 random bytes
+ * in URL-safe base64, lazily imported so the Host stays transport-free for tests
+ * that inject their own minter. The value never leaves the Host except inside
+ * the QR code; the persisted record keeps only the credential id.
+ */
+function defaultSecretMinter(kind: "pairing" | "device"): string {
+  const { randomBytes } = process.getBuiltinModule("node:crypto") as typeof import("node:crypto");
+  return `${kind === "pairing" ? "p" : "d"}_${randomBytes(32).toString("base64url")}`;
 }
 
 /**
@@ -220,6 +246,8 @@ export const diskTaskStore: TaskStore = {
   writeExecutions: (taskDir, ledger) => writeExecutionLedgerOnDisk(taskDir, ledger),
   readSchedules: (taskDir) => readScheduleRecordOnDisk(taskDir),
   writeSchedules: (taskDir, record) => writeScheduleRecordOnDisk(taskDir, record),
+  readRemoteDevices: (taskDir) => readRemoteDeviceRecordOnDisk(taskDir),
+  writeRemoteDevices: (taskDir, record) => writeRemoteDeviceRecordOnDisk(taskDir, record),
 };
 
 export function memoryTaskStore(): TaskStore & {
@@ -229,6 +257,7 @@ export function memoryTaskStore(): TaskStore & {
   lifecycle: Map<string, LifecycleRecord>;
   executions: Map<string, ExecutionLedgerRecord>;
   schedules: Map<string, ScheduleDiskRecord>;
+  remoteDevices: Map<string, RemoteDeviceDiskRecord>;
 } {
   const tasks = new Map<string, TaskDiskRecord>();
   const sessions = new Map<string, PiSessionSnapshot>();
@@ -236,6 +265,7 @@ export function memoryTaskStore(): TaskStore & {
   const lifecycle = new Map<string, LifecycleRecord>();
   const executions = new Map<string, ExecutionLedgerRecord>();
   const schedules = new Map<string, ScheduleDiskRecord>();
+  const remoteDevices = new Map<string, RemoteDeviceDiskRecord>();
   return {
     tasks,
     sessions,
@@ -243,6 +273,7 @@ export function memoryTaskStore(): TaskStore & {
     lifecycle,
     executions,
     schedules,
+    remoteDevices,
     readTask: (taskDir) => tasks.get(taskDir) ?? null,
     writeTask: (taskDir, record) => {
       tasks.set(taskDir, record);
@@ -292,6 +323,15 @@ export function memoryTaskStore(): TaskStore & {
     },
     writeSchedules: (taskDir, record) => {
       schedules.set(taskDir, parseScheduleRecord(serializeScheduleRecord(record)));
+    },
+    // A persisted pairing record must never carry the live secret, and the disk
+    // store refuses one — the mirror applies the same rule.
+    readRemoteDevices: (taskDir) => {
+      const record = remoteDevices.get(taskDir);
+      return record === undefined ? emptyRemoteDeviceRecord() : parseRemoteDeviceRecord(serializeRemoteDeviceRecord(record));
+    },
+    writeRemoteDevices: (taskDir, record) => {
+      remoteDevices.set(taskDir, parseRemoteDeviceRecord(serializeRemoteDeviceRecord(record)));
     },
   };
 }
@@ -463,6 +503,13 @@ export class TaskWorkspaceHost {
    */
   private readonly schedules: TaskSchedules;
   /**
+   * [PiDock 19] (#21) remote access of this task: entry mode, the Gateway it
+   * dials, one record per paired device with its credential generation, the
+   * pairing history (no secret) and the redacted audit trail. Loaded once per
+   * Host instance, which invalidates a pairing code the previous process minted.
+   */
+  private readonly remote: TaskRemoteDevices;
+  /**
    * Redacted provider catalog ([PiDock 11] #9): ids/names/protocols/model
    * declarations pushed by main. Never carries an auth reference: the Host
    * validates selections against it while credentials stay in the app layer.
@@ -487,6 +534,12 @@ export class TaskWorkspaceHost {
      * filesystem and so "link retargeted" is expressed as a probe result.
      */
     private readonly resolveRealPath: (path: string) => string = defaultRealPath,
+    /**
+     * [PiDock 19] (#21) entropy for pairing/device credentials. Injectable so a
+     * test never depends on `crypto` output; the Host default is a 32-byte
+     * random value, and the value never leaves the Host except as the QR code.
+     */
+    mintSecret: (kind: "pairing" | "device") => string = defaultSecretMinter,
   ) {
     if (taskId.trim().length === 0) throw new Error("taskId must be non-empty");
     if (taskDir.trim().length === 0) throw new Error("taskDir must be non-empty");
@@ -504,6 +557,7 @@ export class TaskWorkspaceHost {
         })),
       now: this.now,
     });
+    this.remote = new TaskRemoteDevices(taskDir, store, { now, mintSecret });
   }
 
   /**
@@ -632,6 +686,77 @@ export class TaskWorkspaceHost {
       if (result.ok) paused.push(result.schedule);
     }
     return paused;
+  }
+
+  // ---- [PiDock 19] (#21) remote access ----
+
+  /**
+   * Entry mode, live Gateway state and every device with its online reading.
+   * A pure read: it never mints a credential and never authorizes anything.
+   */
+  remoteState(): RemoteState {
+    return this.remote.state();
+  }
+
+  /** Desktop switches the entry route; the devices and the audit trail stay. */
+  setRemoteEntryMode(mode: RemoteEntryMode, input: { endpoint?: string; hostId?: string; baseUrl?: string } = {}): RemoteState {
+    return this.remote.setEntryMode(mode, input);
+  }
+
+  /** Desktop generates the QR code; the previous pending code dies immediately. */
+  mintPairing(input: { ttlMs?: number } = {}) {
+    return this.remote.mintPairing(input);
+  }
+
+  cancelPairing() {
+    return this.remote.cancelPairing();
+  }
+
+  /**
+   * The phone exchanges the scanned code. The device it creates still waits for
+   * the desktop: an exchange alone never authorizes a request (盒子 1/5).
+   */
+  exchangePairing(input: { credentialId: string; secret: string; deviceName: string; permissions: readonly unknown[] }) {
+    return this.remote.exchange(input);
+  }
+
+  confirmRemoteDevice(deviceId: string, confirmedPermissions?: readonly unknown[]) {
+    return this.remote.confirm(deviceId, confirmedPermissions);
+  }
+
+  rejectRemoteDevice(deviceId: string) {
+    return this.remote.reject(deviceId);
+  }
+
+  revokeRemoteDevice(deviceId: string) {
+    return this.remote.revoke(deviceId);
+  }
+
+  rotateRemoteDevice(deviceId: string) {
+    return this.remote.rotate(deviceId);
+  }
+
+  /**
+   * Decide one remote request (盒子 2/4/5). The remote caller is never a session
+   * of this task: it gets the declared op allow-list, the device permission, the
+   * Gateway state and the rate limit — nothing else, and never a widened
+   * desktop session permission.
+   */
+  authorizeRemote(input: { deviceId: string; op: string }) {
+    return this.remote.authorize(input);
+  }
+
+  remoteReconnectPlan(deviceId: string, pending: readonly RemotePendingRequest[], deliveredKeys: readonly string[]) {
+    return this.remote.reconnectPlan(deviceId, pending, deliveredKeys);
+  }
+
+  /** Main reports what the outbound Gateway connection did. */
+  remoteGatewayEvent(input: { action: "connected" | "disconnected"; error?: string }) {
+    return this.remote.gatewayEvent(input);
+  }
+
+  remoteAudits(): RemoteAuditEvent[] {
+    return this.remote.audits();
   }
 
   private isArchived(): boolean {
