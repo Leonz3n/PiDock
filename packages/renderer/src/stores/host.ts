@@ -63,6 +63,8 @@ type HostState = {
   workspace?: Workspace;
   localSettings?: LocalSettings;
   attention: AttentionItem[];
+  /** [PiDock 17] (#19 box 5) 读取完成清除未读: clears unread items, then reloads the list. */
+  markAttentionRead: (taskId: string, itemIds: string[]) => Promise<{ cleared: string[]; kept: string[] }>;
   approvals: Approval[];
   usage: UsageRecord[];
   refresh: () => Promise<void>;
@@ -168,6 +170,12 @@ export const useHostStore = create<HostState>((set, get) => ({
     } catch (error) {
       set({ status: "error", error: error instanceof Error ? error.message : String(error) });
     }
+  },
+
+  markAttentionRead: async (taskId, itemIds) => {
+    const result = await get().adapter.markAttentionRead(taskId, itemIds);
+    set({ attention: await get().adapter.getAttention() });
+    return result;
   },
 
   loadUsage: async (taskId) => {

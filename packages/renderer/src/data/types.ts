@@ -649,6 +649,10 @@ export type AttentionItem = {
   sessionId: string;
   label: string;
   detail: string;
+  /** Ordering key of the source execution ([PiDock 17] #19); absent on fixture rows. */
+  at?: string;
+  /** Read state of a 完成未读 item; absent = unread. */
+  read?: boolean;
 };
 
 export type Workspace = {

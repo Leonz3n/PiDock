@@ -64,6 +64,7 @@ import type {
   UsageFilter,
 } from "./hostAdapter";
 import { sessionKeyOf } from "./sessionKey";
+import { attentionClearsOnRead } from "./attentionRules";
 import { describeUsageCleanupScope, filterUsageRecords, usageWindow } from "./usageState";
 import { cleanupSelectionLabels } from "./taskLifecycle";
 import { sessionWriteStates, type SessionWriteState } from "./writeCoordination";
@@ -1268,6 +1269,29 @@ class MemoryHost implements HostAdapter {
       }
     }
     return items;
+  }
+
+  /**
+   * [PiDock 17] (#19 box 5) 读取完成清除未读 on the memory projection. The item the
+   * user read is derived from `session.unread`, so clearing it is what makes the
+   * row disappear; 待处理 items (待确认/失败/过期) are returned in `kept` because a
+   * read never resolves them.
+   */
+  async markAttentionRead(taskId: string, itemIds: string[]): Promise<{ cleared: string[]; kept: string[] }> {
+    const byId = new Map((await this.getAttention()).filter((item) => item.taskId === taskId).map((item) => [item.id, item] as const));
+    const cleared: string[] = [];
+    const kept: string[] = [];
+    for (const itemId of itemIds) {
+      const item = byId.get(itemId);
+      if (item === undefined || !attentionClearsOnRead(item.kind)) {
+        kept.push(itemId);
+        continue;
+      }
+      const session = this.session(taskId, item.sessionId);
+      if (session) session.unread = 0;
+      cleared.push(itemId);
+    }
+    return { cleared, kept };
   }
 
   async getUsage(filter: UsageFilter = {}) {
