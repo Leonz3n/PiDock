@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes, ReactNode } from "react";
+import { useEffect, type ButtonHTMLAttributes, type ReactNode } from "react";
 
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: "default" | "primary" | "ghost";
@@ -109,6 +109,15 @@ export function Modal({
   footer?: ReactNode;
   onClose: () => void;
 }) {
+  // Esc closes the dialog (the backdrop click already does); the handler lives
+  // on the document so it also works while a picker input has focus.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
   return (
     <div className="fixed inset-0 z-30 flex items-center justify-center bg-ink/25 p-4" role="presentation" onClick={onClose}>
       <div

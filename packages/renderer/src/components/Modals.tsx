@@ -16,6 +16,23 @@ import {
   workspacePath,
 } from "../data/directories";
 import { isShellConnected, provisionTaskThroughShell } from "../data/shellBridge";
+import {
+  REASONING_LEVELS,
+  buildModelPickerGroups,
+  connectionFingerprint,
+  describeContextDisplay,
+  describeHistoryAttribution,
+  evaluateThinkingSelection,
+  firstSelectablePickerIndex,
+  flattenPickerGroups,
+  followModelName,
+  followModelNameOnIdChange,
+  formatTokens,
+  modelDisplayName,
+  movePickerCursor,
+  resolveSessionThinking,
+  validateProviderDraft,
+} from "../data/providerState";
 import type { ConfigEntry, ModelThinking, Permission, ProjectDirectory, Task } from "../data/types";
 import { useDraftStore } from "../stores/drafts";
 import { useEnvDraftStore } from "../stores/envDrafts";
@@ -1380,49 +1397,114 @@ function ModelPickerModal({ taskId, sessionId, onClose }: { taskId: string; sess
   const session = useHostStore((state) => state.session(taskId, sessionId));
   const setSessionModel = useHostStore((state) => state.setSessionModel);
   const pushToast = useUiStore((state) => state.pushToast);
-  const providers = workspace?.providers ?? [];
+  const navigate = useNavigationStore((state) => state.navigate);
+  const [query, setQuery] = useState("");
+  const [cursor, setCursor] = useState(0);
+  const providers = useMemo(() => workspace?.providers ?? [], [workspace]);
+  const busyLabel = session?.runState === "approval" ? "等待确认中" : session?.runState === "running" ? "回合或工具执行中" : null;
+  const groups = useMemo(
+    () =>
+      buildModelPickerGroups({
+        providers,
+        query,
+        ...(session ? { currentProviderId: session.providerId, currentModelId: session.model } : {}),
+        contextUsed: session?.contextUsed ?? 0,
+        contextSource: session?.contextSource ?? "actual",
+      }),
+    [providers, query, session],
+  );
+  const rows = useMemo(() => flattenPickerGroups(groups), [groups]);
   if (!session) return null;
-  const current = providers.find((provider) => provider.id === session.providerId);
+  const currentProvider = providers.find((provider) => provider.id === session.providerId);
+  const currentModel = currentProvider?.models.find((model) => model.id === session.model);
+  const attribution = describeHistoryAttribution(providers, { providerId: session.providerId, model: session.model });
+  const display = describeContextDisplay({ used: session.contextUsed, window: session.contextWindow, source: session.contextSource ?? "actual" });
+  const select = async (providerId: string, modelId: string) => {
+    try {
+      await setSessionModel(taskId, sessionId, providerId, modelId);
+      onClose();
+      pushToast(`当前会话已选择 ${modelId}；历史与累累计 Token 保留，并记录本次切换事件`);
+    } catch (error) {
+      // Refusals (busy round / over-limit / stale occupancy) leave the model,
+      // history and draft untouched; the popover stays open to pick another.
+      pushToast(error instanceof Error ? error.message : String(error));
+    }
+  };
   return (
     <Modal title="选择 Provider 与模型" onClose={onClose}>
-      <p className="text-xs text-muted">在同一 Provider 下切换模型，或选择其他 Provider。当前会话保留历史与累计 Token。</p>
-      <div className="mt-3 flex flex-col gap-3">
-        {providers.map((provider) => (
-          <div key={provider.id}>
+      <p className="text-xs text-muted">
+        按 Provider 分组切换；搜索支持 Provider 名称/ID 与模型 ID/显示名称。只改当前会话对后续请求的归属。
+      </p>
+      {busyLabel ? <p className="mt-2 text-[11px] text-orange" role="status">当前{busyLabel}，请先等待完成或停止执行后再切换。</p> : null}
+      <input
+        aria-label="搜索模型"
+        value={query}
+        onChange={(event) => {
+          setQuery(event.target.value);
+          setCursor(0);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowDown") {
+            event.preventDefault();
+            setCursor((index) => movePickerCursor(rows.length, index, 1));
+          } else if (event.key === "ArrowUp") {
+            event.preventDefault();
+            setCursor((index) => movePickerCursor(rows.length, index, -1));
+          } else if (event.key === "Home") {
+            event.preventDefault();
+            setCursor(firstSelectablePickerIndex(rows));
+          } else if (event.key === "End") {
+            event.preventDefault();
+            setCursor(rows.length - 1);
+          } else if (event.key === "Enter") {
+            event.preventDefault();
+            const row = rows[cursor];
+            if (row && row.model.disabledReason === undefined) void select(row.group.providerId, row.model.id);
+          }
+        }}
+        placeholder="搜索 Provider 或模型"
+        className="mt-3 w-full rounded-md border border-line px-2 py-1.5 text-xs"
+      />
+      <div aria-label="可选模型" className="mt-2 flex max-h-72 flex-col gap-3 overflow-auto">
+        {groups.length === 0 ? <p className="text-xs text-muted">没有匹配的 Provider 或模型。</p> : null}
+        {groups.map((group) => (
+          <div key={group.providerId} data-testid={`picker-group-${group.providerId}`}>
             <div className="flex items-center justify-between text-xs">
-              <strong className="text-ink">{provider.name}</strong>
-              <span className="text-muted">{provider.protocol}{provider.enabled ? "" : " · 已停用"}</span>
+              <strong className="text-ink">{group.providerName}</strong>
+              <span className="text-muted">
+                {group.protocol}
+                {group.enabled ? "" : " · 已停用"}
+                {group.availability === "model-unavailable" ? " · 模型不可用" : ""}
+              </span>
             </div>
             <div className="mt-1.5 flex flex-col gap-1.5">
-              {provider.models.map((model) => {
-                const blocked = !provider.enabled
-                  ? "Provider 已停用"
-                  : model.contextWindow * 1000 <= session.contextUsed * 1000
-                    ? `当前上下文 ${session.contextUsed.toFixed(1)}k，超过该模型 ${model.contextWindow}k 上限`
-                    : "";
-                const selected = session.providerId === provider.id && session.model === model.id;
+              {group.models.map((model) => {
+                const index = rows.findIndex((row) => row.group.providerId === group.providerId && row.model.id === model.id);
                 return (
                   <button
                     key={model.id}
                     type="button"
-                    disabled={Boolean(blocked)}
+                    aria-pressed={model.selected}
                     aria-label={`模型 ${model.id}`}
-                    title={blocked}
+                    disabled={model.disabledReason !== undefined}
+                    title={model.disabledReason}
+                    onMouseEnter={() => setCursor(index)}
                     onClick={async () => {
-                      await setSessionModel(taskId, sessionId, provider.id, model.id);
-                      onClose();
-                      pushToast(`当前会话已选择 ${model.id}，历史保留`);
+                      if (model.disabledReason !== undefined) return;
+                      await select(group.providerId, model.id);
                     }}
                     className={`flex items-center justify-between rounded-md border px-3 py-2 text-left text-xs disabled:opacity-50 ${
-                      selected ? "border-accent/40 bg-accent/10 text-accent" : "border-line text-ink hover:bg-soft"
+                      model.selected ? "border-accent/40 bg-accent/10 text-accent" : index === cursor ? "border-accent/30 bg-soft text-ink" : "border-line text-ink hover:bg-soft"
                     }`}
                   >
                     <span>
-                      {model.name ?? model.id}
-                      {model.name ? <small className="ml-1.5 text-muted">{model.id}</small> : null}
-                      <small className="ml-2 text-muted">{model.contextWindow}k 上下文</small>
+                      {model.label}
+                      {model.label !== model.id ? <small className="ml-1.5 text-muted">{model.id}</small> : null}
+                      <small className="ml-2 text-muted">{formatTokens(model.contextWindow * 1000)} Tokens 上下文</small>
+                      {model.maxOutput !== undefined ? <small className="ml-2 text-muted">最大输出 {formatTokens(model.maxOutput * 1000)}</small> : null}
+                      <small className="ml-2 text-muted">{model.supportsImages ? "支持图片" : "不支持图片"}</small>
                     </span>
-                    {blocked ? <small className="text-orange">{blocked}</small> : selected ? <span className="badge">当前</span> : null}
+                    {model.disabledReason ? <small className="text-orange">{model.disabledReason}</small> : model.selected ? <span className="badge">当前</span> : null}
                   </button>
                 );
               })}
@@ -1430,7 +1512,28 @@ function ModelPickerModal({ taskId, sessionId, onClose }: { taskId: string; sess
           </div>
         ))}
       </div>
-      {current && !current.enabled ? <p className="mt-3 text-[11px] text-orange">当前 Provider 已停用，请选择其他 Provider。</p> : null}
+      <p className="mt-3 text-[11px] text-muted" data-testid="picker-current">
+        当前 {attribution.providerName ?? "配置已不存在"} / {currentModel ? modelDisplayName(currentModel) : session.model} · {display.occupancyLabel}
+      </p>
+      {attribution.availability !== "available" ? (
+        <p className="mt-1 text-[11px] text-orange" role="status" data-testid="picker-availability">
+          {attribution.message ?? "当前配置不可用"}
+        </p>
+      ) : null}
+      {currentProvider && !currentProvider.enabled ? (
+        <p className="mt-1 text-[11px] text-orange">当前 Provider 已停用，请选择其他 Provider。</p>
+      ) : null}
+      <div className="mt-3 flex justify-end">
+        <Button
+          size="sm"
+          onClick={() => {
+            onClose();
+            navigate({ view: "providers" });
+          }}
+        >
+          管理 Provider
+        </Button>
+      </div>
     </Modal>
   );
 }
@@ -1450,45 +1553,75 @@ function ThinkingPickerModal({ taskId, sessionId, onClose }: { taskId: string; s
   const session = useHostStore((state) => state.session(taskId, sessionId));
   const setSessionThinking = useHostStore((state) => state.setSessionThinking);
   const pushToast = useUiStore((state) => state.pushToast);
+  const navigate = useNavigationStore((state) => state.navigate);
   if (!session) return null;
   const provider = workspace?.providers.find((item) => item.id === session.providerId);
   const model = provider?.models.find((item) => item.id === session.model);
   const thinking = model?.thinking;
+  const resolved = resolveSessionThinking(model, session.thinking);
+  const levels = thinking?.mode === "custom" ? thinking.levels : [];
   return (
     <Modal title="推理档位" onClose={onClose}>
-      <p className="text-xs text-muted">
-        {model?.id ?? session.model} · 仅用于当前会话。
+      <p className="text-xs text-muted" data-testid="thinking-current">
+        {model ? modelDisplayName(model) : session.model} · 当前 {resolved.level.length > 0 ? `${REASONING_LABELS[resolved.level] ?? resolved.level}（${resolved.level}）` : "跟随模型目录"} · 仅用于当前会话。
       </p>
-      {!thinking || thinking.mode === "auto" ? (
-        <p className="mt-3 text-xs text-muted">当前模型跟随模型目录，尚未获取可用档位。可到「Provider 与上下文」配置可用档位。</p>
-      ) : thinking.mode === "none" ? (
+      {resolved.stale !== undefined ? (
+        <p className="mt-2 text-[11px] text-orange" role="status">
+          原偏好 {resolved.stale} 已失效（模型未声明该档位），已回退到模型默认。
+        </p>
+      ) : null}
+      {resolved.catalog === "catalog-unknown" ? (
+        <p className="mt-3 text-xs text-muted">当前模型跟随模型目录，尚未获取可用档位；不能声明已关闭推理。可到「Provider 与上下文」配置可用档位。</p>
+      ) : resolved.catalog === "unsupported" ? (
         <p className="mt-3 text-xs text-muted">该模型不支持推理档位。</p>
       ) : (
         <div className="mt-3 flex flex-col gap-1.5">
-          {thinking.levels.map((level) => {
-            const selected = (session.thinking ?? thinking.default) === level;
+          {levels.map((level) => {
+            const selected = resolved.level === level;
+            const decision = evaluateThinkingSelection({ thinking, level });
             return (
               <button
                 key={level}
                 type="button"
                 aria-pressed={selected}
+                disabled={!decision.ok}
+                title={decision.ok ? undefined : decision.error.message}
                 onClick={async () => {
-                  await setSessionThinking(taskId, sessionId, level);
-                  onClose();
-                  pushToast(`当前会话推理档位已选择${REASONING_LABELS[level] ?? level}`);
+                  try {
+                    await setSessionThinking(taskId, sessionId, level);
+                    onClose();
+                    pushToast(`当前会话推理档位已选择${REASONING_LABELS[level] ?? level}`);
+                  } catch (error) {
+                    pushToast(error instanceof Error ? error.message : String(error));
+                  }
                 }}
-                className={`flex items-center justify-between rounded-md border px-3 py-2 text-left text-xs ${
+                className={`flex items-center justify-between rounded-md border px-3 py-2 text-left text-xs disabled:opacity-50 ${
                   selected ? "border-accent/40 bg-accent/10 text-accent" : "border-line text-ink hover:bg-soft"
                 }`}
               >
-                <span>{REASONING_LABELS[level] ?? level} <small className="text-muted">{level}</small></span>
-                {level === thinking.default ? <small className="text-muted">模型默认</small> : null}
+                <span>
+                  {REASONING_LABELS[level] ?? level} <small className="text-muted">{level}</small>
+                </span>
+                {level === thinking?.default ? <small className="text-muted">模型默认</small> : (level === resolved.level ? <small className="text-muted">会话选择</small> : null)}
               </button>
             );
           })}
+          {levels.includes("off") ? null : <p className="text-[11px] text-muted">该模型未声明「关闭」档位，推理不可关闭。</p>}
         </div>
       )}
-      <p className="mt-3 text-[11px] text-muted">切换档位只影响后续请求；上下文压缩不会减少累计 Token。</p>
+      <div className="mt-3 flex justify-between">
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => {
+            onClose();
+            navigate({ view: "providers" });
+          }}
+        >
+          模型设置
+        </Button>
+        <span className="text-[11px] text-muted">切换档位只影响后续请求；上下文压缩不会减少累计 Token。</span>
+      </div>
     </Modal>
   );
 }
@@ -1499,30 +1632,43 @@ function ContextModal({ taskId, sessionId, onClose }: { taskId: string; sessionI
   const compactSessionContext = useHostStore((state) => state.compactSessionContext);
   const pushToast = useUiStore((state) => state.pushToast);
   if (!session) return null;
-  const provider = workspace?.providers.find((item) => item.id === session.providerId);
+  const providers = workspace?.providers ?? [];
+  const provider = providers.find((item) => item.id === session.providerId);
   const model = provider?.models.find((item) => item.id === session.model);
-  const capacity = session.contextWindow;
-  const percent = capacity > 0 ? (session.contextUsed * 100) / capacity : null;
+  const attribution = describeHistoryAttribution(providers, { providerId: session.providerId, model: session.model });
+  const display = describeContextDisplay({ used: session.contextUsed, window: session.contextWindow, source: session.contextSource ?? "actual" });
   return (
     <Modal title="上下文占用" onClose={onClose}>
       <div className="flex items-baseline gap-2">
-        <strong className="text-lg text-ink">{percent === null ? "未知" : `${percent.toFixed(1)}%`}</strong>
-        <span className="text-xs text-muted">
-          {session.contextUsed.toFixed(1)}k / {capacity}k Tokens · 估算
+        <strong className="text-lg text-ink">{display.percent === null ? "未知" : `${display.percent.toFixed(1)}%`}</strong>
+        <span className="text-xs text-muted" data-testid="context-numbers">
+          {display.occupancyLabel}
         </span>
       </div>
       <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-soft">
-        <div className="h-full rounded-full bg-accent" style={{ width: `${Math.min(100, percent ?? 0)}%` }} />
+        <div className="h-full rounded-full bg-accent" style={{ width: `${Math.min(100, display.percent ?? 0)}%` }} />
       </div>
-      <p className="mt-3 text-xs text-ink">
-        {model?.id ?? session.model} · {provider?.name ?? "Provider"}
+      <p className="mt-3 text-xs text-ink" data-testid="context-attribution">
+        模型归属：{attribution.providerName ?? "配置已不存在"} / {attribution.modelName ?? session.model}
+        {model ? ` · 窗口 ${formatTokens(model.contextWindow * 1000)} Tokens` : ""}
       </p>
+      {attribution.availability !== "available" ? (
+        <p className="mt-1 text-[11px] text-orange" role="status" data-testid="context-availability">
+          {attribution.message ?? "当前配置不可用"}
+        </p>
+      ) : null}
       <p className="mt-2 text-[11px] text-muted">
-        包含消息、指令和工具结果。压缩可以释放上下文空间，累计 Token 消耗会保留。
+        包含消息、指令和工具结果；估算或待更新的数值会明确标记，压缩后不继续展示失效精确值。窗口与预估剩余量随当前模型变化。
       </p>
       <p className="mt-3 flex items-center justify-between text-xs">
+        <span className="text-muted">预估剩余</span>
+        <strong className="text-ink">{display.remainingTokens === null ? "窗口未知" : `${formatTokens(display.remainingTokens)} Tokens`}</strong>
+      </p>
+      <p className="mt-2 flex items-center justify-between text-xs">
         <span className="text-muted">本会话累计消耗</span>
-        <strong className="text-ink">{session.tokens.toFixed(1)}k Tokens</strong>
+        <strong className="text-ink" data-testid="context-tokens">
+          {session.tokens.toFixed(1)}k Tokens
+        </strong>
       </p>
       <div className="mt-3 flex justify-end">
         <Button
@@ -1530,7 +1676,7 @@ function ContextModal({ taskId, sessionId, onClose }: { taskId: string; sessionI
           onClick={async () => {
             await compactSessionContext(taskId, sessionId);
             onClose();
-            pushToast("已模拟上下文压缩；累计 Token 保留");
+            pushToast("已压缩上下文；占用标记为待更新，累计 Token 保留");
           }}
         >
           模拟压缩
@@ -1644,41 +1790,58 @@ function CapabilityDetailModal({ capabilityId, onClose }: { capabilityId: string
   );
 }
 
+type ProviderModelDraft = {
+  id: string;
+  name: string;
+  followsId: boolean;
+  contextWindow: number;
+  maxOutput?: number;
+  supportsImages?: boolean;
+  thinking?: ModelThinking;
+};
+
 function ProviderEditModal({ providerId, onClose }: { providerId?: string; onClose: () => void }) {
   const workspace = useHostStore((state) => state.workspace);
   const saveProvider = useHostStore((state) => state.saveProvider);
   const removeProvider = useHostStore((state) => state.removeProvider);
+  const syncProviderModels = useHostStore((state) => state.syncProviderModels);
   const pushToast = useUiStore((state) => state.pushToast);
   const existing = workspace?.providers.find((item) => item.id === providerId);
   const [name, setName] = useState(existing?.name ?? "");
   const [protocol, setProtocol] = useState(existing?.protocol ?? "anthropic-messages");
   const [baseUrl, setBaseUrl] = useState(existing?.baseUrl ?? "");
+  const [authRef, setAuthRef] = useState(existing?.authRef ?? "");
   const [enabled, setEnabled] = useState(existing?.enabled ?? true);
-  const [models, setModels] = useState<{ id: string; name: string; nameAuto: boolean; contextWindow: number; supportsImages?: boolean; thinking?: ModelThinking }[]>(
+  const [models, setModels] = useState<ProviderModelDraft[]>(
     existing?.models.map((model) => ({
       id: model.id,
-      name: model.name ?? model.id,
-      nameAuto: !model.name || model.name === model.id,
+      name: model.name ?? "",
+      followsId: !model.name || model.name === model.id,
       contextWindow: model.contextWindow,
+      ...(model.maxOutput !== undefined ? { maxOutput: model.maxOutput } : {}),
       supportsImages: model.supportsImages,
       thinking: model.thinking,
-    })) ?? [{ id: "", name: "", nameAuto: true, contextWindow: 128 }],
+    })) ?? [{ id: "", name: "", followsId: true, contextWindow: 128 }],
   );
-  // The prototype's 「同步模型列表」 only refreshes selectable candidates; it
-  // never overwrites configured models or bulk-adds rows (ui-prototype-review.md:77).
-  const [catalog, setCatalog] = useState<string[]>([]);
-  const update = (
-    index: number,
-    patch: Partial<{ id: string; name: string; nameAuto: boolean; contextWindow: number; supportsImages?: boolean; thinking?: ModelThinking }>,
-  ) => setModels((items) => items.map((item, i) => (i === index ? { ...item, ...patch } : item)));
-  const syncCatalog = () => {
-    const sample = protocol === "anthropic-messages"
-      ? ["claude-sonnet-4-5", "claude-haiku-4-5", "claude-opus-4-1"]
-      : protocol === "openai-responses"
-        ? ["gpt-5", "gpt-5-mini", "o5"]
-        : ["qwen3-coder", "llama3.3-70b"];
-    setCatalog(sample);
-    pushToast(`已同步 ${sample.length} 个示例候选（未发送 Provider 请求）`);
+  // 「同步模型列表」 refreshes candidates only: configured rows are never
+  // overwritten, auto-added or removed, and the candidate set is bound to the
+  // connection it came from (a changed address/protocol invalidates it).
+  const [candidates, setCandidates] = useState<string[]>([]);
+  const [candidateFingerprint, setCandidateFingerprint] = useState<string | null>(null);
+  const [catalogStatus, setCatalogStatus] = useState("");
+  const [issues, setIssues] = useState<{ code: string; field: string; message: string }[]>([]);
+  const candidatesStale = candidateFingerprint !== null && candidateFingerprint !== connectionFingerprint({ protocol, baseUrl });
+  const update = (index: number, patch: Partial<ProviderModelDraft>) =>
+    setModels((items) => items.map((item, i) => (i === index ? { ...item, ...patch } : item)));
+  const sync = async () => {
+    if (!existing) {
+      setCatalogStatus("请先保存 Provider，再使用当前连接同步模型列表。");
+      return;
+    }
+    const view = await syncProviderModels(existing.id);
+    setCatalogStatus(view.message);
+    setCandidates(view.candidates);
+    setCandidateFingerprint(view.fingerprint);
   };
   return (
     <Modal
@@ -1693,7 +1856,7 @@ function ProviderEditModal({ providerId, onClose }: { providerId?: string; onClo
               onClick={async () => {
                 await removeProvider(existing.id);
                 onClose();
-                pushToast("已移除 Provider（内存模拟）；引用它的会话回退到其他 Provider");
+                pushToast("已移除 Provider；引用它的会话与历史仍显示原归属并提示配置不可用");
               }}
             >
               删除 Provider
@@ -1703,23 +1866,32 @@ function ProviderEditModal({ providerId, onClose }: { providerId?: string; onClo
             size="sm"
             variant="primary"
             onClick={async () => {
+              const draft = { name, protocol, baseUrl, ...(authRef.trim().length > 0 ? { authRef } : {}), models };
+              const found = validateProviderDraft(draft);
+              setIssues(found);
+              if (found.length > 0) {
+                pushToast(found[0].message);
+                return;
+              }
               try {
                 await saveProvider({
                   id: providerId,
                   name,
                   protocol,
                   baseUrl,
+                  ...(authRef.trim().length > 0 ? { authRef } : {}),
                   enabled,
                   models: models.map((model) => ({
                     id: model.id,
                     name: model.name.trim() && model.name.trim() !== model.id ? model.name.trim() : undefined,
                     contextWindow: model.contextWindow,
+                    ...(model.maxOutput !== undefined ? { maxOutput: model.maxOutput } : {}),
                     supportsImages: model.supportsImages,
                     thinking: model.thinking,
                   })),
                 });
                 onClose();
-                pushToast("已保存模拟 Provider，不会连接服务");
+                pushToast("已保存 Provider 配置；凭据只保存引用，不写入共享模板与日志");
               } catch (error) {
                 pushToast(error instanceof Error ? error.message : String(error));
               }
@@ -1734,15 +1906,17 @@ function ProviderEditModal({ providerId, onClose }: { providerId?: string; onClo
         <Field label="显示名称">
           <input
             aria-label="显示名称"
+            aria-invalid={issues.some((issue) => issue.field === "name")}
             value={name}
             onChange={(event) => setName(event.target.value)}
             className="rounded-md border border-line px-2 py-1.5 text-sm"
             placeholder="例如 团队网关"
           />
         </Field>
-        <Field label="协议">
+        <Field label="协议" hint="必须显式选择，不按供应商名或地址猜测">
           <select
             aria-label="协议"
+            aria-invalid={issues.some((issue) => issue.field === "protocol")}
             value={protocol}
             onChange={(event) => setProtocol(event.target.value)}
             className="rounded-md border border-line px-2 py-1.5 text-sm"
@@ -1755,10 +1929,21 @@ function ProviderEditModal({ providerId, onClose }: { providerId?: string; onClo
         <Field label="服务地址" hint="凭据通过本机私有配置引用，不写入共享模板">
           <input
             aria-label="服务地址"
+            aria-invalid={issues.some((issue) => issue.field === "baseUrl")}
             value={baseUrl}
             onChange={(event) => setBaseUrl(event.target.value)}
             className="rounded-md border border-line px-2 py-1.5 text-sm"
             placeholder="https://"
+          />
+        </Field>
+        <Field label="认证引用" hint="本机私有配置中的引用名，不是凭据明文">
+          <input
+            aria-label="认证引用"
+            aria-invalid={issues.some((issue) => issue.field === "authRef")}
+            value={authRef}
+            onChange={(event) => setAuthRef(event.target.value)}
+            className="rounded-md border border-line px-2 py-1.5 text-sm"
+            placeholder="例如 gateway-key"
           />
         </Field>
         <Field label="启用">
@@ -1771,17 +1956,20 @@ function ProviderEditModal({ providerId, onClose }: { providerId?: string; onClo
       <fieldset className="mt-3">
         <legend className="text-xs text-muted">模型列表</legend>
         <div className="mt-1.5 flex flex-wrap items-center gap-2">
-          <Button size="sm" onClick={syncCatalog}>
+          <Button size="sm" onClick={sync}>
             同步模型列表
           </Button>
-          <small role="status" className="text-[11px] text-muted">
-            {catalog.length > 0
-              ? `已同步 ${catalog.length} 个模型（示例候选，未发送 Provider 请求）`
-              : "可直接填写模型 ID，或同步后从下拉列表选择。"}
+          <small role="status" data-testid="provider-catalog-status" className="text-[11px] text-muted">
+            {catalogStatus.length > 0 ? catalogStatus : "可直接填写模型 ID，或同步后从下拉列表选择。"}
           </small>
+          {candidatesStale ? (
+            <small className="text-[11px] text-orange" data-testid="provider-catalog-stale">
+              连接已变化，候选已失效，请重新同步
+            </small>
+          ) : null}
         </div>
         <datalist id="provider-model-candidates">
-          {catalog.map((candidate) => (
+          {candidates.map((candidate) => (
             <option key={candidate} value={candidate} />
           ))}
         </datalist>
@@ -1790,6 +1978,7 @@ function ProviderEditModal({ providerId, onClose }: { providerId?: string; onClo
             const thinking = model.thinking;
             const mode = thinking?.mode ?? "auto";
             const levels = thinking?.levels ?? [];
+            const rowIssues = issues.filter((issue) => issue.field.startsWith(`models.${model.id}`) || issue.field === "models");
             const setThinking = (next: ModelThinking) => update(index, { thinking: next });
             return (
               <div key={index} className="flex flex-wrap items-center gap-2">
@@ -1800,17 +1989,33 @@ function ProviderEditModal({ providerId, onClose }: { providerId?: string; onClo
                   onChange={(event) => {
                     const id = event.target.value;
                     // The display name follows the ID until the user customises it.
-                    update(index, model.nameAuto ? { id, name: id } : { id });
+                    const next = followModelNameOnIdChange({ name: model.name.trim() || undefined, followsId: model.followsId });
+                    // While following, the name field mirrors the new id; a custom
+                    // name stays as typed.
+                    update(index, { id, name: next.followsId ? id : (next.name ?? ""), followsId: next.followsId });
                   }}
+                  aria-invalid={rowIssues.some((issue) => issue.field === "models" || issue.field === `models.${model.id}`)}
                   className="w-48 rounded-md border border-line px-2 py-1.5 text-xs"
                   placeholder="模型 ID"
                 />
                 <input
                   aria-label={`模型显示名称 第 ${index + 1} 行`}
                   value={model.name}
-                  onChange={(event) => update(index, { name: event.target.value, nameAuto: false })}
+                  onChange={(event) => {
+                    // The raw keystrokes are stored (trimming on every keystroke would
+                    // swallow spaces); only the follow decision is normalized.
+                    const raw = event.target.value;
+                    const next = followModelName(model.id, raw);
+                    // Clearing the field restores the follow: the field empties (the
+                    // placeholder shows the id again) and saving stores no custom name.
+                    update(index, {
+                      name: next.followsId ? (raw.trim().length === 0 ? "" : model.id) : raw,
+                      followsId: next.followsId,
+                    });
+                  }}
                   className="w-40 rounded-md border border-line px-2 py-1.5 text-xs"
                   placeholder="默认使用模型 ID"
+                  title={model.followsId ? `跟随模型 ID：${model.id}` : undefined}
                 />
                 <input
                   aria-label={`模型上下文 第 ${index + 1} 行`}
@@ -1818,6 +2023,19 @@ function ProviderEditModal({ providerId, onClose }: { providerId?: string; onClo
                   min="1"
                   value={model.contextWindow}
                   onChange={(event) => update(index, { contextWindow: Number(event.target.value) })}
+                  className="w-32 rounded-md border border-line px-2 py-1.5 text-xs"
+                />
+                <span className="text-[11px] text-muted">k Tokens</span>
+                <input
+                  aria-label={`模型最大输出 第 ${index + 1} 行`}
+                  type="number"
+                  min="1"
+                  value={model.maxOutput ?? ""}
+                  placeholder="最大输出"
+                  onChange={(event) => {
+                    const raw = event.target.value;
+                    update(index, raw.trim().length === 0 ? { maxOutput: undefined } : { maxOutput: Number(raw) });
+                  }}
                   className="w-32 rounded-md border border-line px-2 py-1.5 text-xs"
                 />
                 <span className="text-[11px] text-muted">k Tokens</span>
@@ -1851,7 +2069,7 @@ function ProviderEditModal({ providerId, onClose }: { providerId?: string; onClo
                 </Button>
                 {mode === "custom" ? (
                   <div className="flex w-full flex-wrap items-center gap-2 rounded-md border border-line px-2 py-1.5">
-                    {Object.entries(REASONING_LABELS).map(([key, label]) => {
+                    {REASONING_LEVELS.map((key) => {
                       const checked = levels.includes(key);
                       return (
                         <label key={key} className="flex items-center gap-1 text-[11px] text-muted">
@@ -1865,7 +2083,7 @@ function ProviderEditModal({ providerId, onClose }: { providerId?: string; onClo
                               setThinking({ mode: "custom", levels: nextLevels, default: fallback });
                             }}
                           />
-                          {label}
+                          {REASONING_LABELS[key] ?? key}
                         </label>
                       );
                     })}
@@ -1890,14 +2108,26 @@ function ProviderEditModal({ providerId, onClose }: { providerId?: string; onClo
             );
           })}
           <div>
-            <Button size="sm" onClick={() => setModels((items) => [...items, { id: "", name: "", nameAuto: true, contextWindow: 128 }])}>
+            <Button
+              size="sm"
+              onClick={() => setModels((items) => [...items, { id: "", name: "", followsId: true, contextWindow: 128 }])}
+            >
               添加模型
             </Button>
           </div>
         </div>
       </fieldset>
+      {issues.length > 0 ? (
+        <ul className="mt-3 list-disc pl-4 text-[11px] text-orange" data-testid="provider-issues">
+          {issues.map((issue) => (
+            <li key={`${issue.code}-${issue.field}`}>
+              {issue.field}：{issue.message}
+            </li>
+          ))}
+        </ul>
+      ) : null}
       <p className="mt-3 text-[11px] text-muted">
-        同一 Provider 中的模型 ID 不可重复；上下文窗口必须为正整数。显示名称默认跟随模型 ID，可单独修改；同步候选不覆盖已配置模型，也不批量新增。
+        同一 Provider 中的模型 ID 不可重复；上下文窗口与最大输出必须为正整数。显示名称默认跟随模型 ID，可单独修改；同步候选不覆盖已配置模型，也不批量新增。
       </p>
     </Modal>
   );
