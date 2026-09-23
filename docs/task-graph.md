@@ -699,7 +699,7 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   真实模型调用、真实子进程与浏览器操作、Electron 走查与跨平台运行未执行；
   「载荷版本」没有真实内容生产者，版本复核因此只在同一版本上通过（规则层的
   不匹配路径由单测锁定）；自动化（定时）入口尚未用它建立执行记录。
-- **全量校验**：`pnpm turbo run typecheck test build lint --force` → 8 successful /
-  8 total，0 cached；shell 49 files / 723 tests（#19 前 47/692，+2 files/+31），
-  renderer 39 files / 344 tests（#19 前 37/333，+2 files/+11）；`tsc` 与
-  `eslint --max-warnings 0` 两包均通过。
+- **全量校验（P1 修复后重跑）**：`pnpm turbo run typecheck test build lint --force`
+  → 8 successful / 8 total，0 cached；shell 49 files / 727 tests（#19 前 47/692，
+  +2 files/+35，含 P1 修复的 4 个回归用例），renderer 39 files / 344 tests
+  （#19 前 37/333，+2 files/+11）；`tsc` 与 `eslint --max-warnings 0` 两包均通过。
