@@ -541,13 +541,36 @@ describe("shell host adapter selection", () => {
         };
       }
       if (op === "task/runCleanup") {
+        // The real Host payload: the removal plan at the top level (with the
+        // persisted receipt the caller keeps: `ranAt` + export labels) plus the
+        // persisted record. The plan's own narrower receipt would lose `ranAt`,
+        // which is why the Host returns the persisted one.
         return {
           ok: true,
           payload: {
             cleanup: {
+              ok: true,
+              steps: [{ phase: "deregister-project", subject: "项目关联", action: "解除项目关联", status: "ready", detail: "清理成功" }],
               items: [{ id: "code", resource: "代码", disposition: "keep-copy", detail: "保留独立副本后解除登记" }],
-              receipt: { ranAt: "2026-09-22T12:01:00+08:00", keptPosition: "/tasks/.pidock-kept/task-a", exports: ["导出用量"], removed: ["usage"], partialFailure: false },
               recovery: [],
+              receipt: { ranAt: "2026-09-22T12:01:00+08:00", keptPosition: "/tasks/.pidock-kept/task-a", exports: ["导出用量"], removed: ["usage"], partialFailure: false },
+              record: {
+                taskId,
+                archived: true,
+                archivedAt: "2026-09-22T12:00:00+08:00",
+                restoredAt: null,
+                schedulePaused: true,
+                projectReleased: true,
+                recovery: [],
+                updatedAt: "2026-09-22T12:01:00+08:00",
+                cleanup: {
+                  ranAt: "2026-09-22T12:01:00+08:00",
+                  keptPosition: "/tasks/.pidock-kept/task-a",
+                  exports: ["导出用量"],
+                  removed: ["usage"],
+                  partialFailure: false,
+                },
+              },
             },
           },
         };
@@ -582,6 +605,7 @@ describe("shell host adapter selection", () => {
       // agent-originated call and attests the human-UI origin itself.
       expect((archiveCall?.payload as Record<string, unknown>)["sessionId"]).toBeUndefined();
       expect(run.receipt).toMatchObject({ keptPosition: "/tasks/.pidock-kept/task-a", exports: ["导出用量"], partialFailure: false });
+      expect(run.receipt?.ranAt).toBe("2026-09-22T12:01:00+08:00");
       expect(run.recovery).toEqual([]);
 
       await adapter.archiveTask("task-a");
@@ -590,6 +614,48 @@ describe("shell host adapter selection", () => {
         "task/archive",
         "task/restore",
       ]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("[PiDock 14] reports a partial cleanup failure from the persisted receipt instead of a success", async () => {
+    stubBridge(async () => ({
+      ok: true,
+      payload: {
+        cleanup: {
+          ok: true,
+          steps: [{ phase: "deregister-project", subject: "项目关联", action: "解除项目关联", status: "blocked", detail: "局部清理失败" }],
+          items: [{ id: "link:dir-51cd20bb", resource: "普通目录链接", disposition: "remove", detail: "任务内链接" }],
+          recovery: [{ item: "link:dir-51cd20bb", reason: "目标已被外部替换，保留登记" }],
+          receipt: { ranAt: "2026-09-22T12:02:00+08:00", keptPosition: "/tasks/.pidock-kept/task-a", exports: [], removed: [], partialFailure: true },
+          record: {
+            taskId: "task-a",
+            archived: true,
+            archivedAt: "2026-09-22T12:00:00+08:00",
+            restoredAt: null,
+            schedulePaused: true,
+            projectReleased: false,
+            recovery: [],
+            updatedAt: "2026-09-22T12:02:00+08:00",
+            cleanup: {
+              ranAt: "2026-09-22T12:02:00+08:00",
+              keptPosition: "/tasks/.pidock-kept/task-a",
+              exports: [],
+              removed: [],
+              partialFailure: true,
+            },
+          },
+        },
+      },
+    }));
+    try {
+      const run = await resolveHostAdapter(createMemoryHost()).runCleanup("task-a", { exportSessions: false, exportDrafts: false, exportUsage: false });
+      // `partialFailure` must reach the modal's toast/rows: a receipt built from
+      // the removal plan alone loses it (no `ranAt` -> receipt `null`).
+      expect(run.receipt?.partialFailure).toBe(true);
+      expect(run.receipt?.ranAt).toBe("2026-09-22T12:02:00+08:00");
+      expect(run.recovery).toEqual([{ item: "link:dir-51cd20bb", reason: "目标已被外部替换，保留登记" }]);
     } finally {
       vi.unstubAllGlobals();
     }

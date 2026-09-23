@@ -205,6 +205,11 @@ describe("cleanup run", () => {
     expect(store.sessions.size).toBe(0);
     expect(store.readUsage(TASK_DIR).details).toHaveLength(0);
     expect(result.receipt).toMatchObject({ keptPosition: KEEP_ROOT, partialFailure: false });
+    // The returned receipt is the persisted one, so a caller can show the run
+    // time and the exports without reading the record.
+    expect(result.receipt).toEqual(result.record.cleanup);
+    expect(result.receipt?.exports).toEqual(["导出会话", "导出草稿", "导出用量"]);
+    expect(result.receipt?.ranAt).toEqual(expect.any(String));
     expect(result.record).toMatchObject({ projectReleased: true });
     expect(result.record.cleanup).toMatchObject({ keptPosition: KEEP_ROOT, exports: ["导出会话", "导出草稿", "导出用量"] });
     expect(result.recovery).toEqual([]);
@@ -225,6 +230,7 @@ describe("cleanup run", () => {
     expect(store.sessions.size).toBe(1);
     expect(result.record.projectReleased).toBe(false);
     expect(result.record.cleanup).toBeNull();
+    expect(result.receipt).toBeNull();
     expect(result.recovery.length).toBe(result.items.length);
   });
 
