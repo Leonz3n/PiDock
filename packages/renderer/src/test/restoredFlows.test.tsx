@@ -45,7 +45,10 @@ describe("capability detail", () => {
     renderApp("/capabilities");
     await screen.findByRole("heading", { name: "能力管理" });
 
-    await user.click(screen.getAllByRole("button", { name: "详情" })[0]!);
+    // Rows are ordered by source kind (global → project → …), so target the
+    // code-review card instead of assuming the first 详情 button is it.
+    const card = screen.getAllByText("code-review")[0]!.closest("section")!;
+    await user.click(within(card).getByRole("button", { name: "详情" }));
     const dialog = await screen.findByRole("dialog", { name: "code-review" });
     expect(within(dialog).getByText(/继续遵循会话权限/)).toBeInTheDocument();
     expect(within(dialog).getByText("项目 · .pi/skills")).toBeInTheDocument();

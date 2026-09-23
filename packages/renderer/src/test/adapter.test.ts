@@ -399,12 +399,75 @@ describe("memory Host adapter", () => {
 
   it("adds a capability as pending review, never auto-loaded", async () => {
     const host = createMemoryHost();
-    const added = await host.addCapability({ kind: "mcp", name: "Linear", source: "npx @linear/mcp", scope: "仅当前项目" });
+    const added = await host.addCapability({
+      kind: "mcp",
+      name: "Linear",
+      source: "npx @linear/mcp",
+      scope: "仅当前项目",
+      sourceKind: "project",
+      bridge: { extensionId: "cap-2", command: "npx @linear/mcp" },
+    });
     expect(added.status).toBe("pending-review");
     expect(added.kind).toBe("mcp");
     await expect(host.addCapability({ kind: "skill", name: "  ", source: "x", scope: "所有项目" })).rejects.toThrow("名称和来源");
     const workspace = await host.getWorkspace();
     expect(workspace.capabilities.find((item) => item.id === added.id)?.status).toBe("pending-review");
+  });
+
+  it("[PiDock 16] (#18) refuses an MCP server without a bridge and a literal credential", async () => {
+    const host = createMemoryHost();
+    await expect(host.addCapability({ kind: "mcp", name: "direct", source: "npx x", scope: "仅当前项目" })).rejects.toThrow("bridge Extension");
+    await expect(
+      host.addCapability({ kind: "mcp", name: "leaky", source: "npx x", scope: "仅当前项目", bridge: { extensionId: "cap-2", command: "npx x" }, authRef: "https://user:pass@example.com" }),
+    ).rejects.toThrow("不保存密钥明文");
+    const ok = await host.addCapability({ kind: "mcp", name: "linear", source: "npx x", scope: "仅当前项目", bridge: { extensionId: "cap-2", command: "npx x" }, authRef: "linear-token" });
+    expect(ok.authRef).toBe("linear-token");
+  });
+
+  it("[PiDock 16] (#18) defers a capability change until no turn is running, then applies it", async () => {
+    const host = createMemoryHost();
+    // release/deploy is seeded waiting for an approval, so the boundary is busy.
+    await host.setCapabilityEnabled("cap-1", false);
+    const busy = (await host.getCapabilities()).find((item) => item.id === "cap-1")!;
+    expect(busy.status).toBe("enabled");
+    expect(busy.pendingChange).toEqual({ kind: "disable", applyAt: "idle" });
+
+    await host.stopRun("release", "deploy");
+    const settled = (await host.getCapabilities()).find((item) => item.id === "cap-1")!;
+    expect(settled.status).toBe("disabled");
+    expect(settled.pendingChange).toBeUndefined();
+  });
+
+  it("[PiDock 16] (#18) installs only a package version and retries MCP through its bridge", async () => {
+    const host = createMemoryHost();
+    await host.stopRun("release", "deploy");
+    await expect(host.installCapability("cap-1")).rejects.toThrow("只有 Package 管理安装版本");
+    const installed = await host.installCapability("cap-6");
+    expect(installed.installedVersion).toBe("2.4.1");
+    // A declared package keeps its review state; only an update turns it enabled.
+    expect(installed.status).toBe("pending-review");
+    const updated = await host.installCapability("cap-3");
+    expect(updated.installedVersion).toBe("1.9.0");
+    expect(updated.status).toBe("enabled");
+
+    const connected = await host.retryMcpConnection("cap-4");
+    expect(connected.connection).toMatchObject({ state: "connected", attempts: 3 });
+    await expect(host.retryMcpConnection("cap-1")).rejects.toThrow("只有 MCP Server");
+  });
+
+  it("[PiDock 16] (#18) re-checks sources, repairs recovered rows and keeps same names apart", async () => {
+    const host = createMemoryHost();
+    await host.addCapability({ kind: "skill", name: "code-review", source: "额外来源 ~/.team/skills", scope: "所有项目", sourceKind: "extra" });
+    const before = await host.getCapabilities();
+    expect(before.filter((item) => item.name === "code-review").length).toBe(2);
+    expect(before.find((item) => item.id === "cap-5")?.present).toBe(false);
+
+    await host.recheckCapabilities();
+    const after = await host.getCapabilities();
+    expect(after.find((item) => item.id === "cap-5")).toMatchObject({ present: true, verified: true });
+    expect(after.find((item) => item.id === "cap-4")?.connection?.state).toBe("connected");
+    // Repairing one source never merges a same-named row from another source.
+    expect(after.filter((item) => item.name === "code-review").length).toBe(2);
   });
 
   it("creates, edits and removes a provider", async () => {

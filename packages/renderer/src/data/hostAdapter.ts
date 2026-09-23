@@ -3,6 +3,7 @@ import type {
   ApprovalStatus,
   AttentionItem,
   Capability,
+  CapabilitySourceKind,
   CleanupItem,
   CleanupRunResult,
   CleanupSelection,
@@ -99,6 +100,14 @@ export type AddCapabilityInput = {
   name: string;
   source: string;
   scope: string;
+  /** Which source list it came from; defaults to `project` when omitted. */
+  sourceKind?: CapabilitySourceKind;
+  /** MCP: private credential reference name; a literal secret is refused. */
+  authRef?: string;
+  /** MCP: the enabled bridge Extension that hosts the server (required for mcp). */
+  bridge?: { extensionId: string; command: string };
+  /** Package: the version the source offers. */
+  availableVersion?: string;
 };
 
 /** Create or edit a provider profile. */
@@ -350,7 +359,17 @@ export interface HostAdapter {
   runScheduleNow(scheduleId: string): Promise<ScheduledRun>;
 
   getCapabilities(): Promise<Capability[]>;
+  /**
+   * [PiDock 16] (#18) enable/disable at the safe session boundary: while a
+   * turn runs the change waits and the running call keeps its version.
+   */
   setCapabilityEnabled(capabilityId: string, enabled: boolean): Promise<void>;
+  /** [PiDock 16] (#18) retry an MCP connection through its bridge Extension. */
+  retryMcpConnection(capabilityId: string): Promise<Capability>;
+  /** [PiDock 16] (#18) install/update a package; only a package is an install entry. */
+  installCapability(capabilityId: string): Promise<Capability>;
+  /** [PiDock 16] (#18) re-check sources and repair recovered rows, never merging same names. */
+  recheckCapabilities(): Promise<Capability[]>;
   getRemoteDevices(): Promise<RemoteDevice[]>;
   revokeRemoteDevice(deviceId: string): Promise<void>;
   /**

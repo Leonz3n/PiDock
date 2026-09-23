@@ -3,6 +3,7 @@ import { Badge, Button, EmptyState, Field, Modal, Segmented } from "./ui";
 import { VirtualList } from "./VirtualList";
 import { runStateLabel } from "../pages/runState";
 import { diffConfigRows, isSensitiveKey, nextTemplateVersion } from "../data/configRows";
+import { capabilityInvalidReason, mcpBridgeStatus, mcpConnectionLabel, packageVersionState, sourceKindLabel } from "../data/capabilityRules";
 import { referenceProvenance, skillCandidate } from "../data/composerRules";
 import {
   buildTaskFormBranch,
@@ -38,7 +39,7 @@ import {
   validateProviderDraft,
 } from "../data/providerState";
 import { cleanupReceiptLines, cleanupRecoveryLines, cleanupRemovesUnselectedRecords, cleanupRows } from "../data/taskLifecycle";
-import type { CleanupItem, CleanupRunResult, CleanupSelection, ConfigEntry, ContextWindowSource, ModelThinking, Permission, ProjectDirectory, Task } from "../data/types";
+import type { CapabilityFailureCode, CapabilitySourceKind, CleanupItem, CleanupRunResult, CleanupSelection, ConfigEntry, ContextWindowSource, ModelThinking, Permission, ProjectDirectory, Task } from "../data/types";
 import { sessionWriteRoleLabel, type SessionWriteState } from "../data/writeCoordination";
 import { useDraftStore } from "../stores/drafts";
 import { useEnvDraftStore } from "../stores/envDrafts";
@@ -1847,6 +1848,8 @@ function RetryModal({ onClose }: { taskId: string; sessionId: string; onClose: (
 function CapabilityDetailModal({ capabilityId, onClose }: { capabilityId: string; onClose: () => void }) {
   const workspace = useHostStore((state) => state.workspace);
   const setCapabilityEnabled = useHostStore((state) => state.setCapabilityEnabled);
+  const retryMcpConnection = useHostStore((state) => state.retryMcpConnection);
+  const installCapability = useHostStore((state) => state.installCapability);
   const pushToast = useUiStore((state) => state.pushToast);
   const capability = (workspace?.capabilities ?? []).find((item) => item.id === capabilityId);
   if (!capability) return null;
@@ -1855,22 +1858,66 @@ function CapabilityDetailModal({ capabilityId, onClose }: { capabilityId: string
     capability.status
   ];
   const enabled = capability.status === "enabled" || capability.status === "update-available";
+  const invalid = capabilityInvalidReason(capability);
+  const version = packageVersionState(capability);
+  const bridge = capability.kind === "mcp" ? mcpBridgeStatus(workspace?.capabilities ?? [], capability) : null;
+  const fail = (error: unknown) => pushToast(error instanceof Error ? error.message : String(error));
   return (
     <Modal
       title={capability.name}
       onClose={onClose}
       footer={
-        <Button
-          size="sm"
-          variant={enabled ? "ghost" : "primary"}
-          onClick={async () => {
-            await setCapabilityEnabled(capability.id, !enabled);
-            onClose();
-            pushToast(`${capability.name} 已模拟${enabled ? "停用" : "启用"}`);
-          }}
-        >
-          {enabled ? "停用" : "启用"}
-        </Button>
+        <div className="flex gap-2">
+          {capability.kind === "mcp" && capability.connection?.state !== "connected" ? (
+            <Button
+              size="sm"
+              onClick={() =>
+                void retryMcpConnection(capability.id)
+                  .then(() => {
+                    onClose();
+                    pushToast(`${capability.name} 已重新连接（内存投影）`);
+                  })
+                  .catch(fail)
+              }
+            >
+              重试连接
+            </Button>
+          ) : null}
+          {version === "not-installed" || version === "update-available" ? (
+            <Button
+              size="sm"
+              variant="primary"
+              onClick={() =>
+                void installCapability(capability.id)
+                  .then((updated) => {
+                    onClose();
+                    pushToast(
+                      updated.pendingChange
+                        ? `${updated.name}：安装将在当前回合结束后生效`
+                        : `${updated.name} 已记录安装 ${updated.installedVersion ?? ""}（内存投影）`,
+                    );
+                  })
+                  .catch(fail)
+              }
+            >
+              {version === "not-installed" ? `安装 ${capability.availableVersion ?? "此版本"}` : `更新到 ${capability.availableVersion}`}
+            </Button>
+          ) : null}
+          <Button
+            size="sm"
+            variant={enabled ? "ghost" : "primary"}
+            onClick={() =>
+              void setCapabilityEnabled(capability.id, !enabled)
+                .then(() => {
+                  onClose();
+                  pushToast(`${capability.name}：变更已提交，如有回合执行中将在结束后生效`);
+                })
+                .catch(fail)
+            }
+          >
+            {enabled ? "停用" : "启用"}
+          </Button>
+        </div>
       }
     >
       <dl className="grid grid-cols-[80px_1fr] gap-x-4 gap-y-2 text-xs">
@@ -1878,18 +1925,69 @@ function CapabilityDetailModal({ capabilityId, onClose }: { capabilityId: string
         <dd>{typeLabel}</dd>
         <dt className="text-muted">来源</dt>
         <dd className="font-mono text-[11px]">{capability.source}</dd>
+        {capability.sourceKind ? (
+          <>
+            <dt className="text-muted">来源类型</dt>
+            <dd>
+              {sourceKindLabel(capability.sourceKind)}
+            </dd>
+          </>
+        ) : null}
         <dt className="text-muted">作用域</dt>
         <dd>{capability.scope}</dd>
         <dt className="text-muted">状态</dt>
         <dd>{statusLabel}</dd>
+        {capability.kind === "package" ? (
+          <>
+            <dt className="text-muted">安装版本</dt>
+            <dd>
+              已安装 {capability.installedVersion ?? "未安装"}
+              {capability.availableVersion ? ` · 可用 ${capability.availableVersion}` : ""}
+            </dd>
+          </>
+        ) : null}
+        {capability.kind === "mcp" ? (
+          <>
+            <dt className="text-muted">连接</dt>
+            <dd>
+              {mcpConnectionLabel(capability.connection?.state ?? "disconnected")}
+              {capability.connection?.attempts ? ` · 尝试 ${capability.connection.attempts} 次` : ""}
+            </dd>
+            <dt className="text-muted">bridge</dt>
+            <dd>{bridge && bridge.ok ? bridge.bridge.extensionId : "未就绪，需要已启用的 bridge Extension"}</dd>
+          </>
+        ) : null}
+        <dt className="text-muted">权限</dt>
+        <dd>
+          声明 {capability.requestedPermission ?? "未声明"} · 调用时以会话权限为准，能力不能扩权
+        </dd>
+        <dt className="text-muted">可用性</dt>
+        <dd>{capability.verified === true ? "已在本机验证" : "仅声明（未验证，不代表 SDK 已支持）"}</dd>
       </dl>
+      {invalid ? (
+        <p className="mt-3 rounded-md border border-orange/35 bg-orange/10 px-3 py-2 text-xs text-orange">
+          {invalidLabel(invalid.code)}：{invalid.message}
+        </p>
+      ) : null}
       <div className="mt-3 rounded-md border border-line bg-soft/40 px-3 py-2 text-xs text-muted">
         {CAPABILITY_BOUNDARY[capability.kind]}
       </div>
       <h3 className="mt-3 text-xs text-ink">声明的能力</h3>
-      <p className="mt-1 text-xs text-muted">{capability.scope} · 来源内容、配置和权限均为原型示例，尚未读取、安装或执行真实资源。</p>
+      <p className="mt-1 text-xs text-muted">{capability.scope} · 来源内容、配置和权限均为内存投影示例，尚未读取、安装或执行真实资源。</p>
     </Modal>
   );
+}
+
+function invalidLabel(code: CapabilityFailureCode) {
+  return {
+    "source-disabled": "来源已停用",
+    "source-missing": "来源已移除",
+    "resource-missing": "资源缺失",
+    "load-failed": "加载失败",
+    "bridge-missing": "缺少 bridge Extension",
+    "connect-failed": "连接失败",
+    "not-installed": "尚未安装",
+  }[code];
 }
 
 type ProviderModelDraft = {
@@ -2704,29 +2802,45 @@ const CAPABILITY_KINDS = {
 
 function AddCapabilityModal({ kind, onClose }: { kind: "skill" | "extension" | "package" | "mcp"; onClose: () => void }) {
   const addCapability = useHostStore((state) => state.addCapability);
+  const capabilities = useHostStore((state) => state.workspace?.capabilities ?? []);
   const pushToast = useUiStore((state) => state.pushToast);
   const labels = CAPABILITY_KINDS[kind];
   const [name, setName] = useState("");
   const [source, setSource] = useState("");
   const [scope, setScope] = useState("仅当前项目");
+  const [sourceKind, setSourceKind] = useState<CapabilitySourceKind>("project");
+  const [bridgeId, setBridgeId] = useState("");
+  const [credentialRef, setCredentialRef] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  // MCP is only reachable through an enabled bridge Extension ([PiDock 16] #18 box 3).
+  const bridges = capabilities.filter((item) => item.kind === "extension" && item.status === "enabled");
+  const selectedBridge = bridgeId || bridges[0]?.id || "";
+  const submit = async () => {
+    setSubmitting(true);
+    try {
+      await addCapability({
+        kind,
+        name,
+        source,
+        scope,
+        sourceKind,
+        ...(kind === "mcp" ? { bridge: { extensionId: selectedBridge, command: source.trim() } } : {}),
+        ...(kind === "mcp" && credentialRef.trim().length > 0 ? { authRef: credentialRef } : {}),
+      });
+      onClose();
+      pushToast("已添加为停用，不会加载或连接");
+    } catch (error) {
+      pushToast(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSubmitting(false);
+    }
+  };
   return (
     <Modal
       title={labels.title}
       onClose={onClose}
       footer={
-        <Button
-          size="sm"
-          variant="primary"
-          onClick={async () => {
-            try {
-              await addCapability({ kind, name, source, scope });
-              onClose();
-              pushToast("已添加为停用，不会加载或连接");
-            } catch (error) {
-              pushToast(error instanceof Error ? error.message : String(error));
-            }
-          }}
-        >
+        <Button size="sm" variant="primary" disabled={submitting} onClick={() => void submit()}>
           {kind === "package" ? "添加到待安装" : "添加为停用"}
         </Button>
       }
@@ -2752,6 +2866,21 @@ function AddCapabilityModal({ kind, onClose }: { kind: "skill" | "extension" | "
         </Field>
       </div>
       <div className="mt-3">
+        <Field label="来源类型" hint="全局 / 项目 / 任务仓库 / 额外来源分开记录，同名能力按来源区分">
+          <select
+            aria-label="来源类型"
+            value={sourceKind}
+            onChange={(event) => setSourceKind(event.target.value as CapabilitySourceKind)}
+            className="rounded-md border border-line px-2 py-1.5 text-sm"
+          >
+            <option value="global">全局</option>
+            <option value="project">项目</option>
+            <option value="task-repo">任务仓库</option>
+            <option value="extra">额外来源</option>
+          </select>
+        </Field>
+      </div>
+      <div className="mt-3">
         <Field label="作用域">
           <select
             aria-label="能力作用域"
@@ -2764,6 +2893,38 @@ function AddCapabilityModal({ kind, onClose }: { kind: "skill" | "extension" | "
           </select>
         </Field>
       </div>
+      {kind === "mcp" ? (
+        <>
+          <div className="mt-3">
+            <Field label="bridge Extension" hint="MCP Server 必须通过已启用的 bridge Extension 接入">
+              <select
+                aria-label="bridge Extension"
+                value={selectedBridge}
+                onChange={(event) => setBridgeId(event.target.value)}
+                className="rounded-md border border-line px-2 py-1.5 text-sm"
+              >
+                {bridges.length === 0 ? <option value="">没有已启用的 Extension</option> : null}
+                {bridges.map((bridge) => (
+                  <option key={bridge.id} value={bridge.id}>
+                    {bridge.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          </div>
+          <div className="mt-3">
+            <Field label="凭据引用（可选）" hint="只保存本机私有配置里的引用名称，不保存密钥明文">
+              <input
+                aria-label="凭据引用"
+                value={credentialRef}
+                onChange={(event) => setCredentialRef(event.target.value)}
+                className="rounded-md border border-line px-2 py-1.5 text-sm"
+                placeholder="例如 figma-token"
+              />
+            </Field>
+          </div>
+        </>
+      ) : null}
       <p className="mt-3 text-[11px] text-muted">
         {kind === "package"
           ? "先解析固定版本和资源清单，等待本机确认后才安装。"

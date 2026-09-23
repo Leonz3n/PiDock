@@ -82,6 +82,7 @@ import {
   type WorkspaceBrowserView,
 } from "./workspaceFiles";
 import { isSensitiveKey, nextTemplateVersion } from "./configRows";
+import { assertCredentialRef, mcpBridgeStatus, reduceMcpConnection } from "./capabilityRules";
 import {
   PROTOCOL_MODEL_FIXTURES,
   evaluateSessionModelSwitch,
@@ -940,10 +941,17 @@ class MemoryHost implements HostAdapter {
   private scheduledRuns: ScheduledRun[] = seedScheduledRuns();
 
   private capabilities: Capability[] = [
-    { id: "cap-1", kind: "skill", name: "code-review", source: "项目 · .pi/skills", scope: "本任务工作区", resourcePath: "skills/code-review/SKILL.md", status: "enabled" },
-    { id: "cap-2", kind: "extension", name: "playwright-bridge", source: "项目 · .pi/extensions", scope: "本任务工作区", status: "enabled" },
-    { id: "cap-3", kind: "package", name: "@pi/tools-git", source: "Pi Package · 1.8.2", scope: "全局", status: "update-available" },
-    { id: "cap-4", kind: "mcp", name: "figma-context", source: "PiDock bridge · MCP Server", scope: "项目 atlas", status: "disabled" },
+    { id: "cap-1", kind: "skill", name: "code-review", source: "项目 · .pi/skills", sourceKind: "project", scope: "本任务工作区", resourcePath: "skills/code-review/SKILL.md", status: "enabled", verified: true, requestedPermission: "read" },
+    { id: "cap-2", kind: "extension", name: "playwright-bridge", source: "项目 · .pi/extensions", sourceKind: "project", scope: "本任务工作区", status: "enabled", verified: true, requestedPermission: "default" },
+    { id: "cap-3", kind: "package", name: "@pi/tools-git", source: "Pi Package · 1.8.2", sourceKind: "global", scope: "全局", version: "1.8.2", activeVersion: "1.8.2", installedVersion: "1.8.2", availableVersion: "1.9.0", status: "update-available", verified: true },
+    // Connected through the bridge Extension above; the credential is a
+    // reference only and the last attempt failed, so the page can offer 重试.
+    { id: "cap-4", kind: "mcp", name: "figma-context", source: "PiDock bridge · MCP Server", sourceKind: "project", scope: "项目 atlas", bridge: { extensionId: "cap-2", command: "npx @example/mcp-figma" }, authRef: "figma-token", connection: { state: "failed", message: "首次连接超时", attempts: 2 }, status: "enabled", verified: true, requestedPermission: "auto" },
+    // Declared by an extra source discovery could not find: the page must show
+    // the reason (失效原因) instead of hiding the row.
+    { id: "cap-5", kind: "skill", name: "invoice-codes", source: "额外来源 ~/.agents/skills", sourceKind: "extra", scope: "所有项目", resourcePath: "skills/invoice-codes/SKILL.md", present: false, status: "disabled" },
+    // A declared package that is not installed yet: a real version state, not a zero one.
+    { id: "cap-6", kind: "package", name: "@pi/pack-protoc", source: "Pi Package · 2.4.1", sourceKind: "global", scope: "全局", availableVersion: "2.4.1", status: "pending-review", verified: true },
   ];
 
   private devices: RemoteDevice[] = [
@@ -1066,6 +1074,42 @@ class MemoryHost implements HostAdapter {
     return this.tasks.find((item) => item.id === taskId);
   }
 
+  private requireCapability(capabilityId: string): Capability {
+    const capability = this.capabilities.find((item) => item.id === capabilityId);
+    if (capability === undefined) throw new Error(`能力 ${capabilityId} 不存在`);
+    return capability;
+  }
+
+  /**
+   * The safe session boundary: a capability change must not land while any
+   * turn is running or waiting for an approval.
+   */
+  private anyTurnBusy(): boolean {
+    return this.tasks.some((task) => task.sessions.some((session) => session.runState === "running" || session.runState === "approval"));
+  }
+
+  /**
+   * Apply deferred capability changes once no turn is running. Called on the
+   * reads the UI refreshes after a turn settles, so a pending enable/disable
+   * or package version lands exactly at the boundary the user was told about.
+   */
+  private settlePendingCapabilityChanges() {
+    if (this.anyTurnBusy()) return;
+    for (const capability of this.capabilities) {
+      const pending = capability.pendingChange;
+      if (pending === undefined) continue;
+      delete capability.pendingChange;
+      if (pending.kind === "enable") capability.status = "enabled";
+      else if (pending.kind === "disable") capability.status = "disabled";
+      else if (pending.version !== undefined) {
+        capability.version = pending.version;
+        capability.activeVersion = pending.version;
+        if (capability.kind === "package") capability.installedVersion = pending.version;
+        if (capability.status === "update-available") capability.status = "enabled";
+      }
+    }
+  }
+
   private session(taskId: string, sessionId: string): Session | undefined {
     return this.task(taskId)?.sessions.find((item) => item.id === sessionId);
   }
@@ -1141,6 +1185,7 @@ class MemoryHost implements HostAdapter {
   }
 
   async getWorkspace(): Promise<Workspace> {
+    this.settlePendingCapabilityChanges();
     return {
       repositories: this.repositories.map((item) => ({ ...item })),
       projects: this.projects.map((item) => ({ ...item, directories: item.directories.map((directory) => ({ ...directory })) })),
@@ -1796,12 +1841,80 @@ class MemoryHost implements HostAdapter {
   }
 
   async getCapabilities() {
+    this.settlePendingCapabilityChanges();
     return this.capabilities.map((item) => ({ ...item }));
   }
 
+  /**
+   * [PiDock 16] (#18) enable/disable one capability at a safe session
+   * boundary: while any turn runs the change waits as `pendingChange` and the
+   * running call keeps the version it started with. A missing capability is
+   * refused instead of silently ignored.
+   */
   async setCapabilityEnabled(capabilityId: string, enabled: boolean) {
-    const capability = this.capabilities.find((item) => item.id === capabilityId);
-    if (capability) capability.status = enabled ? "enabled" : "disabled";
+    const capability = this.requireCapability(capabilityId);
+    if (this.anyTurnBusy()) {
+      capability.pendingChange = { kind: enabled ? "enable" : "disable", applyAt: "idle" };
+      return;
+    }
+    capability.status = enabled ? "enabled" : "disabled";
+  }
+
+  /**
+   * [PiDock 16] (#18) retry an MCP connection through its bridge Extension.
+   * The memory projection simulates the attempt; the connection state and the
+   * attempt count are what the page shows.
+   */
+  async retryMcpConnection(capabilityId: string) {
+    const capability = this.requireCapability(capabilityId);
+    if (capability.kind !== "mcp") throw new Error("只有 MCP Server 需要连接重试");
+    const bridge = mcpBridgeStatus(this.capabilities, capability);
+    if (!bridge.ok) throw new Error(bridge.message);
+    // Simulated attempt: the state machine is the same one the page renders,
+    // so `连接中 → 已连接` and the attempt count stay meaningful.
+    const connecting = reduceMcpConnection(capability.connection, { kind: "connect" });
+    capability.connection = reduceMcpConnection(connecting, { kind: "connected" });
+    return { ...capability };
+  }
+
+  /**
+   * [PiDock 16] (#18) Package install/update. Only a package has an installed
+   * version, and a change waits for the safe boundary like every other one, so
+   * a running call keeps using the version it started with.
+   */
+  async installCapability(capabilityId: string) {
+    const capability = this.requireCapability(capabilityId);
+    if (capability.kind !== "package") throw new Error("只有 Package 管理安装版本，运行资源页不是安装入口");
+    const target = capability.availableVersion ?? capability.version;
+    if (target === undefined) throw new Error("该 Package 没有可安装的版本信息");
+    if (this.anyTurnBusy()) {
+      capability.pendingChange = { kind: "set-version", version: target, applyAt: "idle" };
+      return { ...capability };
+    }
+    capability.installedVersion = target;
+    capability.version = target;
+    capability.activeVersion = target;
+    if (capability.status === "update-available") capability.status = "enabled";
+    return { ...capability };
+  }
+
+  /**
+   * [PiDock 16] (#18) re-check the sources and repair what recovered. Rows stay
+   * distinct: a repaired resource is never merged with a same-named one, and
+   * the reason a row carried is cleared only for the row that actually
+   * answered the re-check. The memory projection simulates the re-check.
+   */
+  async recheckCapabilities() {
+    for (const capability of this.capabilities) {
+      const recovered = capability.present === false || capability.failure !== undefined || capability.connection?.state === "failed";
+      if (capability.present === false) capability.present = true;
+      if (capability.failure !== undefined) delete capability.failure;
+      if (capability.connection?.state === "failed") {
+        capability.connection = reduceMcpConnection(reduceMcpConnection(capability.connection, { kind: "connect" }), { kind: "connected" });
+      }
+      if (recovered) capability.verified = true;
+    }
+    return this.capabilities.map((item) => ({ ...item }));
   }
 
   async getRemoteDevices() {
@@ -2217,16 +2330,27 @@ class MemoryHost implements HostAdapter {
     this.environments = this.environments.filter((item) => item.id !== environmentId);
   }
 
-  async addCapability({ kind, name, source, scope }: AddCapabilityInput): Promise<Capability> {
+  async addCapability({ kind, name, source, scope, sourceKind, authRef, bridge, availableVersion }: AddCapabilityInput): Promise<Capability> {
     const capabilityName = name.trim();
     const capabilitySource = source.trim();
     if (!capabilityName || !capabilitySource) throw new Error("请填写名称和来源");
+    let credentialRef: string | undefined;
+    if (authRef !== undefined && authRef.trim().length > 0) {
+      const checked = assertCredentialRef(authRef);
+      if (!checked.ok) throw new Error(checked.message);
+      credentialRef = checked.ref;
+    }
+    if (kind === "mcp" && bridge === undefined) throw new Error("MCP Server 必须选择一个已启用的 bridge Extension");
     const capability: Capability = {
       id: this.nextId("cap"),
       kind,
       name: capabilityName,
       source: capabilitySource,
       scope,
+      sourceKind: sourceKind ?? "project",
+      ...(credentialRef !== undefined ? { authRef: credentialRef } : {}),
+      ...(bridge !== undefined ? { bridge } : {}),
+      ...(availableVersion !== undefined ? { availableVersion } : {}),
       // Added disabled / pending review and never auto-loaded.
       status: "pending-review",
     };
