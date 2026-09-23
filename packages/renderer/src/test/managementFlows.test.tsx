@@ -336,7 +336,7 @@ describe("scheduled task editing", () => {
     await user.type(rule, "每周五 16:00");
     await user.click(within(dialog).getByRole("button", { name: "保存更改" }));
 
-    expect(await screen.findByText("已保存模拟定时任务")).toBeInTheDocument();
+    expect(await screen.findByText("已保存定时任务；下次触发由 Host 按规则与时区计算")).toBeInTheDocument();
     await waitFor(() => expect(screen.getByText(/每周五 16:00/)).toBeInTheDocument());
   });
 });

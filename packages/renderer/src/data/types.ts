@@ -492,15 +492,26 @@ export type Schedule = {
   permission: Permission;
   enabled: boolean;
   nextRun: string;
+  /** [PiDock 18] (#20) config version; history keeps the version each run used. */
+  configVersion?: number;
+  /** Set when the saved config no longer resolves: the schedule needs repair. */
+  repairIssue?: string;
 };
 
 export type ScheduledRun = {
   id: string;
   scheduleId: string;
   taskId: string;
-  sessionId: string;
+  /** Absent when the trigger was skipped (no session was created). */
+  sessionId?: string;
   at: string;
   result: "completed" | "skipped" | "failed";
+  /** [PiDock 18] (#20) planned trigger vs 立即运行. */
+  trigger?: "due" | "manual";
+  /** Skip/failure reason recorded with the trigger. */
+  reason?: string;
+  endedAt?: string;
+  configVersion?: number;
 };
 
 export type Capability = {

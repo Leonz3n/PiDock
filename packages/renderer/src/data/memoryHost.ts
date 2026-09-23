@@ -65,6 +65,7 @@ import type {
 } from "./hostAdapter";
 import { sessionKeyOf } from "./sessionKey";
 import { attentionClearsOnRead } from "./attentionRules";
+import { validateRuleText } from "./scheduleRules";
 import { describeUsageCleanupScope, filterUsageRecords, usageWindow } from "./usageState";
 import { cleanupSelectionLabels } from "./taskLifecycle";
 import { sessionWriteStates, type SessionWriteState } from "./writeCoordination";
@@ -1836,20 +1837,56 @@ class MemoryHost implements HostAdapter {
     return this.schedules.map((item) => ({ ...item }));
   }
 
+  /**
+   * [PiDock 18] (#20) pause/resume. Enabling on an archived task is refused
+   * (恢复不自动启用调度，也只能由显式操作重新启用), and an enabled schedule with an
+   * unresolved config stays 需要修复 instead of silently running with another
+   * provider or model.
+   */
   async setScheduleEnabled(scheduleId: string, enabled: boolean) {
     const schedule = this.schedules.find((item) => item.id === scheduleId);
-    if (!schedule) return;
-    schedule.enabled = enabled;
-    schedule.nextRun = enabled ? "2026-09-25T15:00:00+08:00" : "已暂停";
+    if (!schedule) throw new Error(`定时任务 ${scheduleId} 不存在`);
     const task = this.task(schedule.taskId);
-    if (task?.archived && enabled) throw new Error("已归档任务不能直接启用调度，请先恢复任务");
+    if (task?.archived) {
+      if (enabled) throw new Error("已归档任务不能直接启用调度，请先恢复任务");
+      schedule.enabled = false;
+      schedule.nextRun = "已暂停";
+      return;
+    }
+    if (enabled && schedule.repairIssue !== undefined) {
+      throw new Error(`配置需要修复后才能启用：${schedule.repairIssue}`);
+    }
+    schedule.enabled = enabled;
+    // The Host computes the real next trigger; the projection never invents one.
+    schedule.nextRun = enabled ? "由 Host 计算下次触发" : "已暂停";
   }
 
+  /**
+   * [PiDock 18] (#20) 立即运行: one independent session in the same task, a manual
+   * trigger record, and no change to the planned time. An archived task refuses
+   * (归档任务不能通过「立即运行」绕过恢复); a config that no longer resolves records a
+   * failed run instead of silently using another provider or model.
+   */
   async runScheduleNow(scheduleId: string) {
     const schedule = this.schedules.find((item) => item.id === scheduleId);
     if (!schedule) throw new Error("定时任务不存在");
     const task = this.task(schedule.taskId);
     if (task?.archived) throw new Error("已归档任务不能通过「立即运行」绕过恢复");
+    const at = new Date().toISOString();
+    if (schedule.repairIssue !== undefined) {
+      const failed: ScheduledRun = {
+        id: this.nextId("run"),
+        scheduleId,
+        taskId: schedule.taskId,
+        at,
+        result: "failed",
+        trigger: "manual",
+        configVersion: schedule.configVersion,
+        reason: `配置需要修复：${schedule.repairIssue}`,
+      };
+      this.scheduledRuns = [failed, ...this.scheduledRuns];
+      return failed;
+    }
     const session = await this.createSession(schedule.taskId);
     session.name = `${schedule.name} · ${new Date().toLocaleDateString("zh-CN")}`;
     const run: ScheduledRun = {
@@ -1857,8 +1894,10 @@ class MemoryHost implements HostAdapter {
       scheduleId,
       taskId: schedule.taskId,
       sessionId: session.id,
-      at: new Date().toISOString(),
+      at,
       result: "completed",
+      trigger: "manual",
+      configVersion: schedule.configVersion,
     };
     this.scheduledRuns = [run, ...this.scheduledRuns];
     return run;
@@ -2577,19 +2616,36 @@ class MemoryHost implements HostAdapter {
     return `${provider.protocol}::${provider.baseUrl.trim()}::${provider.models.map((model) => model.id).join(",")}`;
   }
 
+  /**
+   * [PiDock 18] (#20) save one schedule: the rule/timezone/prompt/provider/model/
+   * permission are validated with the same shape rules the shell uses, the config
+   * version is bumped, and any earlier repair flag is cleared. A failed
+   * validation leaves the record untouched instead of storing a half-valid one.
+   */
   async saveSchedule({ id, name, rule, timezone, prompt, providerId, model, permission }: SaveScheduleInput): Promise<Schedule> {
     const schedule = this.schedules.find((item) => item.id === id);
     if (!schedule) throw new Error("定时任务不存在");
     const nextRule = rule.trim();
     const nextPrompt = prompt.trim();
-    if (!nextRule) throw new Error("请填写执行周期");
-    if (!nextPrompt) throw new Error("请填写提示词");
+    if (!nextPrompt) throw new Error("请填写提示词（结果处理写在提示词中）");
+    const check = validateRuleText(nextRule, timezone);
+    if (!check.ok) throw new Error(check.message);
+    const provider = this.providers.find((item) => item.id === providerId);
+    if (!provider) throw new Error(`Provider 配置 ${providerId} 不存在，不会静默改用其他模型`);
+    if (!provider.enabled) throw new Error(`Provider 配置 ${provider.name} 已停用，不会静默改用其他模型`);
+    if (!provider.models.some((item) => item.id === model)) {
+      throw new Error(`模型 ${model} 不在 ${provider.name} 的可用列表中，不会静默换模型`);
+    }
     schedule.rule = nextRule;
     schedule.timezone = timezone;
     schedule.prompt = nextPrompt;
     schedule.providerId = providerId;
     schedule.model = model;
     schedule.permission = permission;
+    schedule.configVersion = (schedule.configVersion ?? 1) + 1;
+    delete schedule.repairIssue;
+    // The real next trigger is computed by the Host from the saved rule and zone.
+    schedule.nextRun = schedule.enabled ? "保存后由 Host 计算下次触发" : "已暂停";
     const nextName = name?.trim();
     if (nextName) {
       schedule.name = nextName;
