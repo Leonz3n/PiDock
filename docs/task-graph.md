@@ -651,3 +651,52 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   `docs/task-graph.md` 记录的同一接线缺口（应用启动固定内存适配器）仍然存在；
   真实 Electron 走查、跨平台（Windows x64）能力页未运行；同名资源来自两个真实
   磁盘来源的解析未在真实仓库上验收。
+
+## Host 执行状态与关注入口（[PiDock 17] #19）
+
+- **执行台账（盒子 1）**：`main/execution-ledger.ts` 是纯规则层，`host/execution-ledger.ts`
+  是它的持久化与控制外壳，记录写在各任务的 `<taskDir>/execution.json`
+  （`task-store.ts` 读取时逐字段校验；文件缺失=空台账）。一条执行记录自带
+  `version`（每次转换 +1）、`steps`、`attempts`（每条尝试单独的 `usageId`，与
+  #12 的用量台账按呼叫 id 对齐）、`approval`（`payloadVersion`/`requestedAt`/
+  `expiresAt`/`consumedAt`），按 `projectId`/`taskId`/`sessionId` 定位。回合、
+  上下文压缩各是一种执行种类；`exec-<n>` 序号从恢复的台账重新播种，重启不会复用旧 id。
+- **状态转换（盒子 2）**：会话侧 `ExecutionState` = `executing`/`pending-approval`/
+  `failed`/`done`/`stopped`/`rejected`/`expired`，非法转换抛
+  `invalid-execution-transition`；服务侧 `ServiceExecutionState`
+  （`starting`/`running`/`stopping`/`stopped`/`failed`/`unknown`）是**另一族**，
+  `splitExecutionStates` 保证「服务在跑」不会让会话显示为执行中，Host 的服务状态
+  来自自己的 service runtime（`serviceObservationsFor`），不接受调用方声明。
+- **确认（盒子 3）**：`verifyExecutionApproval` 依次复核「已消费 → 状态 → 期限 →
+  会话是否降为只读 → 载荷版本 → 用途 scope」，`consumeExecutionApproval` 是
+  `consumedAt` 的唯一写入点；Host 在 `approve()` 里**先授权再执行**，并在等待确认时
+  写入 24 小时期限（与任务页文案同一值），读取路径把到期确认落为 `expired`。
+  载荷版本变化时 `approve` 直接抛 `version-mismatch`，确认仍是 `pending` 且没有
+  任何执行发生。
+- **失败与重放（盒子 4）**：失败保留 `draftKept` 与已结算步骤，只把未结算步骤标为
+  跳过；`unknown-external` 尝试 `replayable=false`，必须先核对才能重放，核对为失败
+  的尝试禁止自动重放；`sendMessage` 先开记录，回合未启动也落为 `failed` 而不是
+  永远停留在 `executing`。
+- **关注列表（盒子 5）**：`attentionItemsFromLedger` 产出待确认/失败/过期/完成未读四类
+  项，item id 由执行（或确认 id）派生因此跨刷新稳定；`markAttentionRead` 只清除
+  完成未读，`待处理` 项返回 `kept`（须处理后移除）。renderer `data/attentionRules.ts`
+  是同一规则的 Node-free 镜像，`需要处理` 页分「待处理／完成未读」两组展示，点
+  「定位会话」跳回原任务/会话并清除未读；`shellHost` 对已知任务扇出 `task/attention`
+  并记住每个 id 由哪个任务 Host 产生，读取时只把该 Host 的 id 发往 RPC。
+- **重启与停止（盒子 6）**：台账在 Host 加载时结算上一进程的在途状态——`executing`
+  落为 `stopped`（在途尝试降级为 `unknown-external` 不可重放），`pending-approval`
+  落为 `expired` 并花掉未消费的批准，因此重启后的迟到批准必然 `already-consumed`；
+  `cancel()` 先取该会话的派生执行再停止，`stoppedDerived` 记录覆盖到的派生执行，
+  已完成步骤与尝试逐字保留（不回滚）。
+- **盒子状态**：盒子 1–6 的规则层、Host 接线与 renderer 镜像均在单测/流程测试下覆盖；
+  盒子 2 的「服务与会话分开」在 Host 读取路径按自己的 service runtime 观测实现。
+  仍属**未测／未实现**：service-control／browser-action／terminal-control 这三类
+  Host 驱动操作**尚未**各自开设执行记录（当前只有服务侧状态投影与回合/压缩记录）；
+  `task/executionState` 目前没有 renderer 消费方（页面只用 `task/attention`）；
+  真实模型调用、真实子进程与浏览器操作、Electron 走查与跨平台运行未执行；
+  「载荷版本」没有真实内容生产者，版本复核因此只在同一版本上通过（规则层的
+  不匹配路径由单测锁定）；自动化（定时）入口尚未用它建立执行记录。
+- **全量校验**：`pnpm turbo run typecheck test build lint --force` → 8 successful /
+  8 total，0 cached；shell 49 files / 723 tests（#19 前 47/692，+2 files/+31），
+  renderer 39 files / 344 tests（#19 前 37/333，+2 files/+11）；`tsc` 与
+  `eslint --max-warnings 0` 两包均通过。

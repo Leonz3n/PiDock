@@ -380,6 +380,8 @@ type PendingShellApproval = {
   title: string;
   tool?: string;
   target?: string;
+  /** Payload version the Host minted the confirmation for ([PiDock 17] #19). */
+  contentVersion?: string;
   requestedAt: string;
 };
 
@@ -395,8 +397,8 @@ function toShellApproval(entry: PendingShellApproval): Approval {
     title,
     command: title,
     cwd: "",
-    impact: "桌面壳 Host 审批",
-    payloadVersion: "v1",
+    impact: approvalImpact({ tool, target, permission: "" }),
+    payloadVersion: entry.contentVersion ?? "v1",
     status: "pending",
     executed: false,
     requestedAt: entry.requestedAt,
@@ -411,6 +413,9 @@ type HostApprovalRecord = {
   target: string;
   status: string;
   executed: boolean;
+  /** Real payload version the Host minted ([PiDock 17] #19 box 3). */
+  contentVersion?: string;
+  permissionAtRequest?: string;
 };
 
 function asHostApprovalRecord(value: unknown): HostApprovalRecord | undefined {
@@ -425,7 +430,24 @@ function asHostApprovalRecord(value: unknown): HostApprovalRecord | undefined {
     target: record["target"] as string,
     status: record["status"] as string,
     executed: record["executed"] === true,
+    ...(typeof record["contentVersion"] === "string" && record["contentVersion"].length > 0
+      ? { contentVersion: record["contentVersion"] as string }
+      : {}),
+    ...(typeof record["permissionAtRequest"] === "string" && record["permissionAtRequest"].length > 0
+      ? { permissionAtRequest: record["permissionAtRequest"] as string }
+      : {}),
   };
+}
+
+/**
+ * [PiDock 17] (#19 box 3) 影响 shown on the confirmation card, composed from the
+ * real gated tool/target and the tier the request was minted under — never a
+ * fixed string that hides what the approval would do.
+ */
+function approvalImpact(input: { tool: string; target: string; permission: string }): string {
+  const tier = input.permission === "read" ? "只读" : input.permission === "auto" ? "自动执行" : input.permission === "default" ? "默认权限" : undefined;
+  const where = input.target.length > 0 ? `命中 ${input.target}` : "任务范围内";
+  return tier === undefined ? `执行 ${input.tool}，${where}` : `以「${tier}」执行 ${input.tool}，${where}`;
 }
 
 // Host records carry no `requestedAt`: the renderer mints a 15m-from-view
@@ -442,8 +464,8 @@ function toApprovalFromHostRecord(taskId: string, record: HostApprovalRecord): A
     title,
     command: title,
     cwd: "",
-    impact: "桌面壳 Host 审批",
-    payloadVersion: "v1",
+    impact: approvalImpact({ tool: record.tool, target: record.target, permission: record.permissionAtRequest ?? "" }),
+    payloadVersion: record.contentVersion ?? "v1",
     status: record.status as Approval["status"],
     executed: record.executed,
     requestedAt,
@@ -528,6 +550,7 @@ export function createShellHostAdapter(fallback: HostAdapter): HostAdapter {
             const payloadRecord = asRecord(result.payload);
             const tool = typeof payloadRecord["tool"] === "string" ? (payloadRecord["tool"] as string) : undefined;
             const target = typeof payloadRecord["target"] === "string" ? (payloadRecord["target"] as string) : undefined;
+            const contentVersion = typeof payloadRecord["contentVersion"] === "string" ? (payloadRecord["contentVersion"] as string) : undefined;
             pendingShellApprovals.set(approvalId, {
               approvalId,
               taskId,
@@ -535,6 +558,7 @@ export function createShellHostAdapter(fallback: HostAdapter): HostAdapter {
               title: "等待确认",
               ...(tool ? { tool } : {}),
               ...(target ? { target } : {}),
+              ...(contentVersion ? { contentVersion } : {}),
               requestedAt: new Date().toISOString(),
             });
             knownShellTaskIds.add(taskId);

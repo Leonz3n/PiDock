@@ -323,6 +323,8 @@ export interface HostTurnResult {
   tool?: string;
   /** Approval target (present only when `state` is `approval`). */
   target?: string;
+  /** Payload version the confirmation was minted for ([PiDock 17] #19 box 3). */
+  contentVersion?: string;
   /** Send-record association: user input + agent reply message ids. */
   userMessageId: string;
   agentMessageId: string;
@@ -1339,6 +1341,7 @@ export class TaskWorkspaceHost {
       approvalId: result.approval?.id,
       tool: result.state === "approval" ? pending?.tool : undefined,
       target: result.state === "approval" ? pending?.target : undefined,
+      contentVersion: result.state === "approval" ? pending?.contentVersion : undefined,
       userMessageId: result.userMessageId,
       agentMessageId: result.agentMessageId,
     };

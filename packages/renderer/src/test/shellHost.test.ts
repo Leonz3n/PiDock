@@ -66,6 +66,7 @@ describe("shell host adapter selection", () => {
             approvalId: "approval-7",
             tool: "exec.run",
             target: "/tmp/task-abcdef12/run.sh",
+            contentVersion: "v12+task-abcdef12",
             userMessageId: "msg-1",
             agentMessageId: "msg-2",
           },
@@ -90,6 +91,9 @@ describe("shell host adapter selection", () => {
       taskId: "task-a",
       sessionId: "main",
       title: "exec.run /tmp/task-abcdef12/run.sh",
+      // [PiDock 17] (#19 box 3) the card shows the payload version the Host
+      // minted the confirmation for, not a hardcoded one.
+      payloadVersion: "v12+task-abcdef12",
     });
     expect(await adapter.listApprovals("task-a")).toHaveLength(1);
     const resolved = await adapter.resolveApproval("approval-7", "approved");
@@ -99,6 +103,36 @@ describe("shell host adapter selection", () => {
     // itself stays (taskId,sessionId,approvalId).
     expect(seen.map((entry) => entry.op)).toEqual(["task/sendMessage", "task/listApprovals", "task/approve"]);
     expect((seen[2].payload as Record<string, unknown>)).toMatchObject({ sessionId: "main", approvalId: "approval-7" });
+    vi.unstubAllGlobals();
+  });
+
+  it("[PiDock 17] (#19 box 3) shows the Host's real payload version and impact on a listed approval", async () => {
+    stubBridge(async (_taskId, op) => {
+      if (op === "task/listApprovals") {
+        return {
+          ok: true,
+          payload: {
+            approvals: [
+              {
+                id: "approval-9",
+                sessionId: "deploy",
+                tool: "exec.run",
+                target: "/tmp/task-a/run.sh",
+                status: "pending",
+                executed: false,
+                contentVersion: "v12+task-a",
+                permissionAtRequest: "default",
+              },
+            ],
+          },
+        };
+      }
+      return { ok: true, payload: {} };
+    });
+    const adapter = resolveHostAdapter(createMemoryHost());
+    const approval = (await adapter.listApprovals("task-a")).find((item) => item.id === "approval-9");
+    expect(approval?.payloadVersion).toBe("v12+task-a");
+    expect(approval?.impact).toBe("以「默认权限」执行 exec.run，命中 /tmp/task-a/run.sh");
     vi.unstubAllGlobals();
   });
 
