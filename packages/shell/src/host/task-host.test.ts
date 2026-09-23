@@ -1319,6 +1319,19 @@ describe("[PiDock 12] Host usage ledger", () => {
     expect(taskHost.usageReport().details).toHaveLength(0);
   });
 
+  it("keeps usage when the conversation is archived or removed from the store", () => {
+    const store = memoryTaskStore();
+    const taskHost = new TaskWorkspaceHost(TASK_ID, TASK_DIR, store, () => "2026-09-22T10:00:00+08:00");
+    taskHost.provision(provisionInput());
+    taskHost.sendMessage("main", "检查构建", { usageSource: "actual", usage: { input: 100, output: 40, cacheRead: 0, cacheWrite: 0 } });
+    // Archiving/dropping the conversation is not a usage cleanup: the ledger
+    // keeps its own rows (box 8).
+    store.sessions.delete(`${TASK_DIR}::main`);
+    const report = taskHost.usageReport();
+    expect(report.details).toHaveLength(1);
+    expect(report.totals).toMatchObject({ calls: 1, input: 100, output: 40 });
+  });
+
   it("keeps a before-date cleanup on the declared timezone boundary", () => {
     const taskHost = host();
     taskHost.provision(provisionInput());
