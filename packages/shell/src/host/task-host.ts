@@ -363,9 +363,13 @@ export class TaskWorkspaceHost {
    * Claim the shared real-path keys of one side-effecting target, if the target
    * lives in a shared plain directory. Task-private paths claim nothing: two
    * tasks always have distinct worktree paths, so they stay parallel (盒子 6).
+   * Returns the keys **this claim added** (a target already covered by the
+   * session's holder adds nothing), so a failed attempt can release exactly its
+   * own keys and leave the keys an open confirmation still holds.
    */
   private claimPathScope(input: { sessionId: string; label: string; scope: AllowedPathScope }): string[] {
     if (input.scope.kind === "task") return [];
+    const held = this.sessionPathKeys(input.sessionId);
     const claim = this.sharedPaths.claim({
       taskId: this.taskId,
       sessionId: input.sessionId,
@@ -373,13 +377,39 @@ export class TaskWorkspaceHost {
       paths: [input.scope.key],
     });
     if (!claim.ok) throw new Error(sharedPathClaimError(claim));
-    return claim.keys;
+    return claim.keys.filter((key) => !held.includes(key));
+  }
+
+  /** Shared real-path keys one session of this task currently holds. */
+  private sessionPathKeys(sessionId: string): string[] {
+    return this.sharedPaths.snapshot().find((entry) => entry.taskId === this.taskId && entry.sessionId === sessionId)?.keys ?? [];
+  }
+
+  /** Derived executions of one session that still hold the write right. */
+  private liveDerivedExecutionIds(sessionId: string): string[] {
+    return this.write.snapshot().derived.filter((entry) => entry.sessionId === sessionId).map((entry) => entry.resourceId);
   }
 
   /** Release one session's shared path keys, keeping those a live derived execution still writes. */
   private releasePathScope(sessionId: string): void {
-    const derived = this.write.snapshot().derived.filter((entry) => entry.sessionId === sessionId).map((entry) => entry.resourceId);
-    this.sharedPaths.release({ taskId: this.taskId, sessionId, keepDerivedExecutionIds: derived });
+    this.sharedPaths.release({ taskId: this.taskId, sessionId, keepDerivedExecutionIds: this.liveDerivedExecutionIds(sessionId) });
+  }
+
+  /**
+   * Release only the keys one attempt added, keeping the session's other keys
+   * ([PiDock 09] #11): an open confirmation keeps holding its keys, so a later
+   * failed attempt of the same session must not free the same original path
+   * for other tasks.
+   */
+  private releaseClaimedPathScope(sessionId: string, added: readonly string[]): void {
+    if (added.length === 0) return;
+    const keep = this.sessionPathKeys(sessionId).filter((key) => !added.includes(key));
+    this.sharedPaths.release({
+      taskId: this.taskId,
+      sessionId,
+      keepPaths: keep,
+      keepDerivedExecutionIds: this.liveDerivedExecutionIds(sessionId),
+    });
   }
 
   /** Session currently holding the Host-owned task write right, if any. */
@@ -952,6 +982,7 @@ export class TaskWorkspaceHost {
     if (scope?.kind === "outside" && !gateRefuses) throw new Error(`path-out-of-scope: ${scope.reason}`);
     const writesAnything = sideEffecting && !gateRefuses;
     let claimId: string | undefined;
+    let claimedPathKeys: string[] = [];
     if (writesAnything) {
       const claim = this.claimWrite(sessionId, channel.currentPermission, {
         kind: "turn",
@@ -963,7 +994,7 @@ export class TaskWorkspaceHost {
       // one, and a conflict releases the task claim so nothing is half-held.
       if (scope !== undefined && scope.kind !== "outside") {
         try {
-          this.claimPathScope({ sessionId, label: `回合工具 ${plannedTool ?? "fs.write"}`, scope });
+          claimedPathKeys = this.claimPathScope({ sessionId, label: `回合工具 ${plannedTool ?? "fs.write"}`, scope });
         } catch (error) {
           this.releaseWrite(claimId);
           throw error;
@@ -975,8 +1006,12 @@ export class TaskWorkspaceHost {
       result = channel.runTurn({ text, ...turn });
     } catch (error) {
       if (claimId !== undefined) {
-        this.releaseWrite(claimId);
-        this.releasePathScope(sessionId);
+        // A failed attempt releases only what it took: the session's write
+        // right may be retained by an open confirmation's claim, whose shared
+        // real-path keys must stay held ([PiDock 09] #11).
+        const release = this.releaseWrite(claimId);
+        if (release.releasedOwner === sessionId) this.releasePathScope(sessionId);
+        else this.releaseClaimedPathScope(sessionId, claimedPathKeys);
       }
       throw error;
     }
@@ -986,8 +1021,9 @@ export class TaskWorkspaceHost {
     if (claimId !== undefined) {
       if (result.state === "approval") this.approvalClaims.set(sessionId, claimId);
       else {
-        this.releaseWrite(claimId);
-        this.releasePathScope(sessionId);
+        const release = this.releaseWrite(claimId);
+        if (release.releasedOwner === sessionId) this.releasePathScope(sessionId);
+        else this.releaseClaimedPathScope(sessionId, claimedPathKeys);
       }
     }
     this.store.writeSession(this.taskDir, channel.snapshot());

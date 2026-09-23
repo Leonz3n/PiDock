@@ -911,6 +911,53 @@ describe("[PiDock 09] real-path write coordination across tasks", () => {
     expect(b.taskHost.sendMessage("main", "改 spec", writeTurn(`${b.linkPath}/spec.md`)).state).toBe("done");
   });
 
+  it("keeps an open confirmation's shared real-path key when a later turn of the same session fails", () => {
+    const shared = new SharedPathCoordinator();
+    const dirA = "/work/tasks/task-aaaa1111";
+    const dirB = "/work/tasks/task-bbbb2222";
+    const sharedRoot = "/shared/invoice-docs";
+    const linksA: Record<string, string> = {};
+    const a = taskHostWithLink({
+      taskId: "task-a",
+      taskDir: dirA,
+      store: memoryTaskStore(),
+      shared,
+      resolveRealPath: (path) => linkResolver(linksA)(path),
+      dirId: "task-aaaa1111",
+      linkSource: sharedRoot,
+    });
+    linksA[a.linkPath] = sharedRoot;
+    const b = taskHostWithLink({
+      taskId: "task-b",
+      taskDir: dirB,
+      store: memoryTaskStore(),
+      shared,
+      resolveRealPath: (path) => (path === b.linkPath ? sharedRoot : path.startsWith(`${b.linkPath}/`) ? `${sharedRoot}${path.slice(b.linkPath.length)}` : path),
+      dirId: "task-bbbb2222",
+      linkSource: sharedRoot,
+    });
+
+    // The confirmation stays open and holds the shared real-path key (盒子 4).
+    const turn = a.taskHost.sendMessage("main", "改 spec", { ...writeTurn(`${a.linkPath}/spec.md`), tool: "exec.run" });
+    expect(turn.state).toBe("approval");
+    const specKey = `${sharedRoot}/spec.md`;
+    expect(shared.snapshot().map((holder) => holder.keys)).toEqual([[specKey]]);
+
+    // A second planned turn of the same session fails (the round is not
+    // settled) and must release only the key it added itself.
+    expect(() => a.taskHost.sendMessage("main", "改 notes", { ...writeTurn(`${a.linkPath}/notes/rfc.md`), tool: "exec.run" })).toThrow(
+      "当前执行尚未结束",
+    );
+    expect(shared.snapshot().map((holder) => holder.keys)).toEqual([[specKey]]);
+    // The other task still cannot write the same original while the
+    // confirmation is open (盒子 6: shared real path stays serialized).
+    expect(() => b.taskHost.sendMessage("main", "改 spec", writeTurn(`${b.linkPath}/spec.md`))).toThrow("shared-path-locked");
+
+    // Settling the confirmation releases everything.
+    a.taskHost.approve("main", turn.approvalId ?? "");
+    expect(shared.snapshot()).toEqual([]);
+  });
+
   it("keeps task-private worktree paths parallel across tasks", () => {
     const shared = new SharedPathCoordinator();
     const dirA = "/work/tasks/task-aaaa1111";

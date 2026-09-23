@@ -214,7 +214,7 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   规则都是纯函数/纯状态机：Host 派发、renderer 展示与测试共用同一份实现，
   renderer 不重新判定权限。
 - **读不被写阻塞**：写操作权按**声明**计数（回合工具、服务控制、浏览器动作、
-  配置、派生执行各自声明），纯分析回合不声明，因此另一个会话可以安全阅读与分析
+  派生执行各自声明），纯分析回合不声明，因此另一个会话可以安全阅读与分析
   （盒子 3）；`read` 档会话既不能发起回合，也没有任意执行工具。
 - **写操作权比回合活得久**：停在确认的回合保留声明（`approvalClaims`），批准/拒绝
   才结算；派生执行（子进程／子 Agent）单独声明，回合结束也不释放（盒子 4）。
@@ -251,4 +251,8 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   共享路径协调的 fs 探针在测试中注入（`realpath` 生产实现已接线但未在真实多任务
   进程里跑过）；跨任务争用的界面呈现目前是拒绝提示，没有专门的争用面板
   （同任务持有者/排队有协调栏）；`stores/host.ts` 仍把内存适配器固定为默认，
-  因此 Host 的 `task/sessionStates` 与真实路径协调在 UI 里走的是内存投影。
+  因此 Host 的 `task/sessionStates` 与真实路径协调在 UI 里走的是内存投影；
+  派生执行与真实路径键的联动留到真实 `child_process` 派生执行接线时一并完成
+  （`claimPathScope` 尚未传入 `derivedExecutionIds`，`claimDerivedExecution`
+  尚未校验写操作权）；隐藏项目的 Agent／服务仍在后台运行且归属正确（GAP 7）
+  归入 #12。
