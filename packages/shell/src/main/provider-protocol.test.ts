@@ -80,7 +80,7 @@ describe("protocol request shapes", () => {
     expect(body["instructions"]).toBe("你是助手");
     expect(body["input"]).toEqual([
       { role: "user", content: [{ type: "input_text", text: "第一个问题" }] },
-      { role: "agent", content: [{ type: "output_text", text: "第一个回答" }] },
+      { role: "assistant", content: [{ type: "output_text", text: "第一个回答" }] },
     ]);
     expect(body["tools"]).toEqual([{ type: "function", name: "fs.read", description: "读取文件", parameters: { type: "object" } }]);
   });
