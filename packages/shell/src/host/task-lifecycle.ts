@@ -37,7 +37,7 @@ import {
   type QuitProcessClaim,
   type RelaunchPlan,
 } from "../main/task-lifecycle.js";
-import { buildLifecycleRecord, type LifecycleRecord } from "./task-store.js";
+import { buildLifecycleRecord, type CleanupReceiptRecord, type LifecycleRecord } from "./task-store.js";
 import type { TaskStore } from "./task-host.js";
 
 export interface LifecycleSession {
@@ -137,7 +137,13 @@ export interface CleanupPreviewView {
   keepRoot: string;
 }
 
-export interface CleanupRunResult extends CleanupPlan {
+export interface CleanupRunResult extends Omit<CleanupPlan, "receipt"> {
+  /**
+   * The receipt the caller keeps: the persisted one (`ranAt` + exports), not
+   * the removal plan's narrower view of it. `null` when this run removed
+   * nothing, so a refused keep-verification never reports a stale receipt.
+   */
+  receipt: CleanupReceiptRecord | null;
   items: CleanupItemPlan[];
   record: LifecycleRecord;
 }
@@ -284,7 +290,7 @@ export class TaskLifecycleHost {
       recovery: plan.recovery.map((entry) => ({ item: entry.item, reason: entry.reason, at })),
     };
     this.store.writeLifecycle(this.taskDir, record);
-    return { ...plan, items: preview.items, record };
+    return { ...plan, receipt: plan.receipt === null ? null : record.cleanup, items: preview.items, record };
   }
 
   private removeItem(item: CleanupItemPlan): { id: string; ok: boolean; reason?: string } {
