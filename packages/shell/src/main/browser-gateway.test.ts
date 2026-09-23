@@ -27,7 +27,7 @@ function fakeSurface(overrides: Partial<BrowserSurface> = {}) {
     ],
     state: async () => ({ epoch: 3, viewport: { width: 1200, height: 800, scrollX: 0, scrollY: 120 }, title: "对账单", url: "http://localhost:5173/checkout" }),
     takeoverState: () => ({ paused: false }),
-    rawEvidence: () => ({ consoleErrors: [], failedRequests: [] }),
+    rawEvidence: async () => ({ consoleErrors: [], failedRequests: [] }),
     screenshot: async () => ({ bytes: 24, width: 4, height: 2, sha256: "a".repeat(64), data: "iVBORw0KGgo=" }),
     perform: async (request) => {
       performed.push(request);
@@ -127,7 +127,7 @@ describe("browser gateway ownership and tiers", () => {
 describe("browser gateway evidence and markers", () => {
   it("bounds and scrubs evidence before it leaves the surface", async () => {
     const { surface } = fakeSurface({
-      rawEvidence: () => ({
+      rawEvidence: async () => ({
         consoleErrors: Array.from({ length: 30 }, (_, index) => ({ kind: "console" as const, text: `err-${index} token=super-secret-value` })),
         failedRequests: [{ requestId: "r1", url: "http://user:pw@localhost:5173/api", errorText: "net::ERR_FAILED", resourceType: "XHR", canceled: false }],
       }),
@@ -138,6 +138,24 @@ describe("browser gateway evidence and markers", () => {
     expect(evidence.consoleErrors).toHaveLength(20);
     expect(evidence.consoleErrors.at(-1)?.text).not.toContain("super-secret-value");
     expect(evidence.failedRequests[0]?.url).not.toContain("user:pw@");
+  });
+
+  it("answers a surface failure with a refusal envelope instead of a hang", async () => {
+    // [#8] review P1-2: a throwing surface used to reject the Host's
+    // request, which then waited 10 s and reported `browser-timeout`.
+    const { surface } = fakeSurface({
+      state: async () => {
+        throw new Error("debugger detached");
+      },
+      rawEvidence: async () => {
+        throw new Error("evidence unavailable");
+      },
+    });
+    const gateway = gatewayFor(surface);
+    const stateFailure = await gateway.perform({ action: "page/state", page: PAGE as never, params: {}, actor: agent });
+    expect(stateFailure).toMatchObject({ ok: false, error: expect.stringContaining("debugger detached") });
+    const evidenceFailure = await gateway.perform({ action: "evidence", page: PAGE as never, params: {}, actor: agent });
+    expect(evidenceFailure).toMatchObject({ ok: false, error: expect.stringContaining("evidence unavailable") });
   });
 
   it("caps on-demand screenshots", async () => {

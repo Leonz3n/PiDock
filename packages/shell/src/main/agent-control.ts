@@ -28,6 +28,17 @@ export interface LayoutEntry {
   readonly locator: Locator;
 }
 
+/**
+ * Takeover pauses the Agent, not the user: the user's own read/marking
+ * actions pass `allowWhilePaused` so a page they took over (first login,
+ * exception handling) can still be read and marked. `browser-gateway.ts`
+ * refuses agent actors on a paused page, so only the user reaches these
+ * calls in that state.
+ */
+export interface AutomationOptions {
+  readonly allowWhilePaused?: boolean;
+}
+
 export interface LayoutElement {
   readonly name: string;
   readonly found: boolean;
@@ -217,15 +228,15 @@ export class AgentPageController {
     return !canAutomate(this.state);
   }
 
-  async navigate(url: string): Promise<PageIdentity> {
-    this.requireAutomation("navigate");
+  async navigate(url: string, options: AutomationOptions = {}): Promise<PageIdentity> {
+    this.requireAutomation("navigate", options.allowWhilePaused === true);
     this.beginNavigation();
     await this.tab.view.webContents.loadURL(url);
     return this.identity;
   }
 
-  async reload(): Promise<void> {
-    this.requireAutomation("reload");
+  async reload(options: AutomationOptions = {}): Promise<void> {
+    this.requireAutomation("reload", options.allowWhilePaused === true);
     this.beginNavigation();
     const webContents = this.tab.view.webContents;
     await new Promise<void>((resolve, reject) => {
@@ -262,8 +273,8 @@ export class AgentPageController {
     return true;
   }
 
-  async readLayout(entries: readonly LayoutEntry[]): Promise<LayoutSnapshot> {
-    this.requireAutomation("readLayout");
+  async readLayout(entries: readonly LayoutEntry[], options: AutomationOptions = {}): Promise<LayoutSnapshot> {
+    this.requireAutomation("readLayout", options.allowWhilePaused === true);
     const viewport = await this.readViewport();
     const elements: LayoutElement[] = [];
     for (const entry of entries) {
@@ -295,8 +306,8 @@ export class AgentPageController {
     return { identity: this.identity, mode: "box", elements };
   }
 
-  async mark(label: string, locator: Locator): Promise<PageMarker> {
-    this.requireAutomation("mark");
+  async mark(label: string, locator: Locator, options: AutomationOptions = {}): Promise<PageMarker> {
+    this.requireAutomation("mark", options.allowWhilePaused === true);
     const element = await this.automation.locate(locator);
     const result = addMarker(this.state, {
       pageId: this.tab.pageId,
@@ -375,9 +386,9 @@ export class AgentPageController {
     }
   }
 
-  private requireAutomation(action: string): void {
+  private requireAutomation(action: string, allowWhilePaused = false): void {
     if (this.disposed) throw new Error("AgentPageController is disposed");
-    if (!canAutomate(this.state)) {
+    if (!allowWhilePaused && !canAutomate(this.state)) {
       throw new Error(`automation paused for human takeover during ${action}`);
     }
   }

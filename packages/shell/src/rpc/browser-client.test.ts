@@ -61,6 +61,24 @@ describe("host browser transport", () => {
     expect(result).toEqual({ ok: false, error: "takeover-paused: 用户正在接管页面" });
   });
 
+  it("answers a throwing handler with a refusal envelope instead of making the Host wait", async () => {
+    const { main, host } = pair();
+    const client = new HostClient(main);
+    client.onBrowserRequest(async () => {
+      throw new Error("debugger detached");
+    });
+    // A short Host-side timeout would surface as `browser-timeout` if main
+    // let the rejection escape without answering ([#8] review P1-2).
+    const browser = new HostBrowserClient(host, "ws-a", { timeoutMs: 200 });
+    const result = await browser.perform({
+      taskId: "task-a1f92c3d",
+      action: "page/state",
+      page: { pageId: "page-1" },
+      actor: { kind: "agent", sessionId: "main" },
+    });
+    expect(result).toEqual({ ok: false, error: "browser-failed: debugger detached" });
+  });
+
   it("fails closed when main has no browser capability mounted", async () => {
     const { main, host } = pair();
     // HostClient listens (so the port is live) but registers no handler.

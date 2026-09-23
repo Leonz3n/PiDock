@@ -111,8 +111,9 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   `shell-ui` 来源证明），标记以用户消息进入当前会话（结构化 `references`），
   Agent 从同一页面的证据继续。
 - **证据与凭据**：`evidence` 只回传有界的 console/异常与失败请求（各 20 条、
-  文本 240 字符），文本经 `scrubBrowserText` 处理：任务私有值、`Authorization`/
-  `Cookie` 头、`token=/password=` 形式与 URL 里的 `user:pass@` 一律遮蔽；
+  文本 240 字符），文本经 `scrubBrowserText` 处理：`Authorization`/`Cookie` 头、
+  `token=/password=` 形式与 URL 里的 `user:pass@` 一律遮蔽，任务私有值在 main
+  通过 `secretsFor` 供应时同样遮蔽（生产接线尚未接入，见残留）；
   按需截图超出 768KiB base64 上限时拒绝（`screenshot-too-large`），
   避免一次回包超出 RPC 信封上限。
 - **IPC 边界**：renderer 只说 `task/browserAction`（经 preload `shell/taskOp`，
@@ -120,9 +121,13 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   经同一 parent port 请求 main 执行并等待 `browser-response`（`HostBrowserClient`
   ↔ `HostClient.onBrowserRequest`，无处理器即失败关闭）。renderer 不接触
   Chromium/CDP，也不持有页面句柄以外的能力。
-- **残留（未测）**：真实 Electron GUI smoke（点击/填充/键盘表、
+- **残留（未测/未接线）**：真实 Electron GUI smoke（点击/填充/键盘表、
   弹窗登录返回、跨任务分区、重启保留）没有在本机沙箱外运行；真实网络浏览未执行
   （仅受控 fixture 与单元测试）；Host 侧浏览器动作到 main 的真实 round trip
   未在 Electron 内跑过；renderer 仍无服务注册入口，`createTrustedWindow` 里
-  为 #4 验证预建的那个 `TaskBrowser` 与 per-task registry 尚未合并；
-  `targetSessionId` 目前默认任务首个会话（多会话由 #9/#11 补齐）。
+  为 #4 验证预建的那个 `TaskBrowser` 与 per-task registry 尚未合并（面板的
+  页面句柄仍来自 renderer 本地种子，需接 `page/list` 一类来源）；
+  `targetSessionId` 目前默认任务首个会话（多会话由 #9/#11 补齐）；
+  main 未把任务私有值接给 `secretsFor`；`marker/create` 的 URL 只做格式校验、
+  未与活动页面比对；默认档在 main 校验页面归属/白名单之前就已铸确认（被拒的
+  导航会消耗一次确认）；浏览器动作尚未与任务写锁串行（#9 范围）。
