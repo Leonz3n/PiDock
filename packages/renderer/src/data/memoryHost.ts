@@ -189,10 +189,14 @@ const defaultLocalSettings: LocalSettings = {
 
 const HISTORY_SESSION_COUNT = 52;
 
+/** The commit the seeded task worktrees are pinned at (services and code references). */
+export const seededWorktreeCommit = "9acb5b6f";
+
 export const taskFileSeeds: WorkspaceFile[] = [
   {
     path: "front-monorepo/src/checkout/summary.tsx",
     status: "modified",
+    commit: seededWorktreeCommit,
     preview: {
       language: "tsx",
       source: `export function CheckoutSummary({ total }: { total: number }) {
@@ -200,8 +204,8 @@ export const taskFileSeeds: WorkspaceFile[] = [
 }`,
     },
   },
-  { path: "front-monorepo/src/checkout/api.ts", status: "modified" },
-  { path: "invoice-service/src/invoice/detail.py", status: "added" },
+  { path: "front-monorepo/src/checkout/api.ts", status: "modified", commit: seededWorktreeCommit },
+  { path: "invoice-service/src/invoice/detail.py", status: "added", commit: seededWorktreeCommit },
 ];
 
 export const taskBrowserPageSeeds: BrowserPage[] = [
@@ -396,7 +400,7 @@ function withServiceFailure(services: Service[], name: string, failure: ServiceF
 
 /** One simulated run record so the freshness/label rules are visible in the fixture. */
 function simulatedRunRecord(taskId: string, serviceName: string, port: number | undefined, index: number): ServiceRunView {
-  const commit = "9acb5b6f";
+  const commit = seededWorktreeCommit;
   const variants: { codeState: ServiceRunView["codeState"]; buildFreshness: ServiceRunView["buildFreshness"]; codeCommit?: string }[] = [
     { codeState: "committed-clean", buildFreshness: "fresh", codeCommit: commit },
     { codeState: "uncommitted", buildFreshness: "uncommitted-code", codeCommit: commit },
@@ -929,7 +933,7 @@ class MemoryHost implements HostAdapter {
   private scheduledRuns: ScheduledRun[] = seedScheduledRuns();
 
   private capabilities: Capability[] = [
-    { id: "cap-1", kind: "skill", name: "code-review", source: "项目 · .pi/skills", scope: "本任务工作区", status: "enabled" },
+    { id: "cap-1", kind: "skill", name: "code-review", source: "项目 · .pi/skills", scope: "本任务工作区", resourcePath: "skills/code-review/SKILL.md", status: "enabled" },
     { id: "cap-2", kind: "extension", name: "playwright-bridge", source: "项目 · .pi/extensions", scope: "本任务工作区", status: "enabled" },
     { id: "cap-3", kind: "package", name: "@pi/tools-git", source: "Pi Package · 1.8.2", scope: "全局", status: "update-available" },
     { id: "cap-4", kind: "mcp", name: "figma-context", source: "PiDock bridge · MCP Server", scope: "项目 atlas", status: "disabled" },

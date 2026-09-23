@@ -19,6 +19,7 @@ import {
   BUILTIN_COMMANDS,
   activeCompletionToken,
   checkDraftReference,
+  referenceProvenance,
   commandCandidates,
   describeReferenceChip,
   fileCandidates,
@@ -1051,15 +1052,18 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
       return;
     }
     const isSkill = completion?.symbol === "$";
+    // The same provenance the `/skills` modal records; a worktree row pins the
+    // commit it was picked at so a restored draft can be re-checked, and a
+    // skill keeps its resource path plus any args already typed after `$name`.
+    const typedArgs = isSkill ? (draft.text.slice(completion?.token.end ?? 0).trim()) : "";
     addReference(task.id, sessionId, {
       id: `${isSkill ? "skill" : "task"}-${row.key}`,
       kind: isSkill ? "skill" : row.kind === "directory" ? "directory" : "file",
       label: row.value,
       detail: row.detail,
       taskId: task.id,
-      ...(row.sourceId !== undefined ? { sourceId: row.sourceId } : {}),
-      ...(row.sourceKind !== undefined ? { sourceKind: row.sourceKind } : {}),
-      ...(row.relativePath !== undefined ? { relativePath: row.relativePath } : {}),
+      ...referenceProvenance(row),
+      ...(isSkill && typedArgs.length > 0 ? { args: typedArgs } : {}),
     });
     insertCompletionValue(row.value);
     setCompletionDismissed(true);

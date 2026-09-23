@@ -3,6 +3,8 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { renderApp } from "./helpers";
 import { useDraftStore } from "../stores/drafts";
+import { checkDraftReference, describeReferenceChip } from "../data/composerRules";
+import { createMemoryHost, seededWorktreeCommit } from "../data/memoryHost";
 import { sessionKeyOf } from "../data/sessionKey";
 
 /**
@@ -61,12 +63,23 @@ describe("composer references, skills and commands", () => {
     const at = await screen.findByRole("listbox", { name: "输入候选" });
     await user.click(within(at).getAllByRole("option")[0]!);
     expect((await screen.findAllByText(/引用 · /)).length).toBeGreaterThan(0);
+    // The `@` pick pins the worktree commit the candidate carried, so a
+    // restored draft can be re-checked instead of silently re-binding.
+    const fileReference = useDraftStore.getState().drafts[sessionKeyOf("release", "main")]!.references.find((reference) => reference.relativePath !== undefined)!;
+    expect(fileReference).toMatchObject({ sourceId: "front-monorepo", sourceKind: "worktree", version: seededWorktreeCommit });
+    const task = (await createMemoryHost().getTask("release"))!;
+    expect(checkDraftReference(fileReference, task)).toEqual({ state: "ok" });
 
     await user.type(input, "$code");
     const dollar = await screen.findByRole("listbox", { name: "输入候选" });
     await user.click(within(dollar).getAllByRole("option")[0]!);
     expect(screen.getAllByText(/code-review/).length).toBeGreaterThan(0);
     expect((screen.getByLabelText("消息输入") as HTMLTextAreaElement).value).toContain("$code-review");
+    // The `$` pick records the skill's source id and resource path instead of
+    // a bare label, and the scope chip shows the resource path.
+    const skillReference = useDraftStore.getState().drafts[sessionKeyOf("release", "main")]!.references.find((reference) => reference.kind === "skill")!;
+    expect(skillReference).toMatchObject({ sourceId: "cap-1", resourcePath: "skills/code-review/SKILL.md" });
+    expect(describeReferenceChip(skillReference)).toContain("skills/code-review/SKILL.md");
 
     // IME composition confirm must not submit anything. jsdom has no real
     // composition, so the keydown carries `isComposing` directly (the pure
@@ -124,7 +137,7 @@ describe("composer references, skills and commands", () => {
         [sessionKeyOf("release", "main")]: {
           text: "",
           references: [
-            { id: "ref-scope", kind: "file", label: "front-monorepo/src/checkout/api.ts", detail: "front-monorepo · 任务代码引用", taskId: "release", sourceId: "front-monorepo", sourceKind: "worktree", relativePath: "src/checkout/api.ts", version: null },
+            { id: "ref-scope", kind: "file", label: "front-monorepo/src/checkout/api.ts", detail: "front-monorepo · 任务代码引用", taskId: "release", sourceId: "front-monorepo", sourceKind: "worktree", relativePath: "src/checkout/api.ts", version: seededWorktreeCommit },
           ],
         },
       },

@@ -3,6 +3,7 @@ import { Badge, Button, EmptyState, Field, Modal, Segmented } from "./ui";
 import { VirtualList } from "./VirtualList";
 import { runStateLabel } from "../pages/runState";
 import { diffConfigRows, isSensitiveKey, nextTemplateVersion } from "../data/configRows";
+import { referenceProvenance, skillCandidate } from "../data/composerRules";
 import {
   buildTaskFormBranch,
   checkTaskFormDirIdConflict,
@@ -3026,11 +3027,17 @@ function ComposerInfoModal({ task, topic, onClose }: { task: Task; topic: "skill
                 <Button
                   size="sm"
                   onClick={() => {
+                    // The same candidate row the `$` picker uses, so a skill
+                    // inserted here records the same source id and resource
+                    // path instead of a bare label.
+                    const candidate = skillCandidate(skill);
                     addReference(task.id, session?.id ?? "main", {
                       id: `skill-${skill.id}`,
                       kind: "skill",
                       label: skill.name,
-                      detail: "已启用技能",
+                      detail: candidate.detail,
+                      taskId: task.id,
+                      ...referenceProvenance(candidate),
                     });
                     closeModal();
                     pushToast(`已把技能 ${skill.name} 插入当前会话`);

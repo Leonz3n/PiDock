@@ -13,8 +13,10 @@
  *   literal text and never trigger an operation (no shell expansion)
  * - `/` is a command entry only at the very start of the message
  * - a skill is invoked by `$name` (PiDock's shortcut) or `/skill:name`
- *   (pi's own syntax); args follow on the same line, and an unresolved
- *   marker stays text instead of dispatching anything
+ *   (pi's own syntax); args follow on the same line. `$name` becomes an
+ *   invocation only for a skill an enabled source declares, so an unknown
+ *   `$name` stays literal text; `/skill:name` is always reported as an
+ *   invocation and carries `resolved` for the caller to decide
  * - keyboard intent is resolved without touching the DOM so "confirm the
  *   candidate" can never also send, and an IME composition confirm never
  *   submits the message

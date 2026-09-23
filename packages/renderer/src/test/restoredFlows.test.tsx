@@ -2,6 +2,8 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import { renderApp } from "./helpers";
+import { useDraftStore } from "../stores/drafts";
+import { sessionKeyOf } from "../data/sessionKey";
 
 describe("runtime logs panel", () => {
   it("shows per-service lifecycle lines from in-memory data", async () => {
@@ -130,6 +132,10 @@ describe("composer commands and candidates", () => {
     const skills = await screen.findByRole("dialog", { name: "可用技能" });
     await user.click(within(skills).getAllByRole("button", { name: "插入对话" })[0]!);
     expect(await screen.findByText(/已把技能 .* 插入当前会话/)).toBeInTheDocument();
+    // The modal records the same provenance as the `$` picker: the capability
+    // id plus the resource path, not just a bare label.
+    const inserted = useDraftStore.getState().drafts[sessionKeyOf("release", "main")]!.references.find((reference) => reference.kind === "skill")!;
+    expect(inserted).toMatchObject({ sourceId: "cap-1", resourcePath: "skills/code-review/SKILL.md" });
 
     // `@` lists task files and directories; `$` lists enabled skills.
     await user.type(screen.getByLabelText("消息输入"), "@");
