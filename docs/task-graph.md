@@ -703,3 +703,74 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   → 8 successful / 8 total，0 cached；shell 49 files / 727 tests（#19 前 47/692，
   +2 files/+35，含 P1 修复的 4 个回归用例），renderer 39 files / 344 tests
   （#19 前 37/333，+2 files/+11）；`tsc` 与 `eslint --max-warnings 0` 两包均通过。
+
+## 定时任务与可续聊历史（[PiDock 18] #20）
+
+- **规则与计划（盒子 1）**：`main/schedule-rules.ts` 是纯规则层（无 fs／进程／SDK／计时器）：
+  `parseRuleText` 按保存的 IANA 时区真实校验 `每日 HH:MM`、`每周X`／`周一至周五 HH:MM`、
+  `一次性 <本地时刻>` 与五段 Cron（字段区间、`*`、`a-b`、`*/step`、列表；dom／dow 同时
+  受限时按标准「任一匹配」），无法识别时给出具体原因而不是就近取一个规则；
+  `nextTriggerAt`／`occurrencesBetween` 用 `Intl.DateTimeFormat` 把本地墙钟时间换算到
+  绝对时刻，夏令时跳过的本地时间没有对应时刻因此跳过而不是触发两次，秋季重复的墙钟
+  只取一个；`describeRule` 给出可读规则。`scheduleConfigIssue` 依次报出「Provider 已不存在／
+  已停用／模型不在列表／权限非法／时区非法／提示词为空／规则非法」，**不会**静默改用其他
+  Provider、模型或项目（Provider 目录尚未下发时只要求非空身份）。配置保存时 `configVersion`
+  每次 +1，历史执行保留当时实际采用的 Provider／模型／权限／规则文本与版本。
+- **模板与远程记录（盒子 2）**：`SCHEDULE_TEMPLATES` 内置五个可编辑模板（含完整默认提示词），
+  `applyScheduleTemplate` 只填名称／规则／提示词，项目、Provider 身份、模型、权限与时区
+  原样保留；模板不会自行启用或运行（新调度默认暂停）。`templateFetchPlan`／`remoteFetchVerdict`
+  让「统计模板获取远程新记录」只产出可审阅结论：获取失败一律 `latest: false` 并注明依据的
+  快照时间，绝不声称最新；计划恒为 `mergesWorkspace: false`，获取不会合并或写入工作区。
+- **每次执行独立会话（盒子 3/4）**：`host/schedules.ts` 把配置与每次触发记录持久化在
+  `<taskDir>/schedules.json`（`task-store.ts` 读取时逐字段校验；文件缺失＝空记录），
+  `schedule-<n>`／`run-<n>` 序号从恢复的记录重新播种，重启不会复用旧 id。一次触发 =
+  在同一任务工作区新建 `scheduled-<n>` 独立会话并只发送一次提示词（不经恢复路径，
+  不继承上一次对话或草稿），同时开出 `kind: "scheduled"` 的执行记录（带 `scheduleId`
+  与 `scheduleConfigVersion`，与 #19 的台账同一份），因此权限、写锁、工具确认与
+  「每次尝试单独记用量」全部沿用原规则；历史执行可用 `task/scheduleRuns` 查看并跳回该会话继续对话。
+- **期限与竞态（盒子 4/5）**：调度触发的确认期限为「请求后 24 小时」与「下一次计划时刻」
+  的较早者（`scheduledApprovalDeadline`，与任务页文案同一值）；`evaluateSchedules()` 先结算
+  已到期确认并结束对应等待（取消该会话回合并释放它占用的写声明），再判断新周期，因此过期确认
+  既不阻塞下一周期也不长期占着任务写权。每次触发记录一个 occurrence key（`scheduleId@预定时刻`），
+  同一预定时刻不会重复执行；上一次执行仍未结束时跳过本次并记录原因（不并发、不排队）；
+  一次评估窗口内早于最新触发点的多次错过记为「离线不补跑」；时钟回拨期间不触发、回拨恢复后
+  同一 key 仍然只算一次；到期触发与「立即运行」都走同一同步认领，只产生一个结果；
+  「立即运行」不改变下次计划时间。调度本身由 `main/schedule-driver.ts` 承载：main 按固定
+  周期只对**已有 Host** 的任务发送 `task/scheduleEvaluate`（不为看时钟而 fork Host），
+  单次 tick 不自重叠，单任务失败只上报不中断其他任务；Host 停止/退出时同步停止。
+- **归档与失效（盒子 6/7）**：归档会暂停该任务全部已启用调度（`pauseSchedulesForArchive`，
+  归档响应返回 `pausedSchedules`），恢复**不**自动启用；已归档任务的定时候选不再判断、
+  也不产生触发记录，`立即运行` 直接拒绝（不能绕过恢复），重新启用必须显式操作且未归档；
+  配置失效时该次触发记为失败并挂 `repairIssue`（页面显示「需要修复」），不静默换模型或项目；
+  持久记录的解析失败不会半恢复（坏字段直接拒绝）。
+- **renderer（盒子 1–3/6/7）**：`data/scheduleRules.ts` 是 Node-free 镜像——接受与 shell
+  完全相同的规则形态并给出同样的拒绝理由（**不**在页面里计算任意 Cron 的下次触发，
+  计划一律以 Host 的结果为准），`scheduleStateLabel`／`scheduleNextRunText` 展示
+  「已启用／已暂停／需要修复／已归档（暂停）」与下次计划，`scheduleRunTriggerLabel`／
+  `scheduleRunDetail` 展示「计划触发／立即运行」及跳过或失败原因，`canRunScheduleNow`
+  在已归档任务上禁用「立即运行」，`applyTemplateFields`／`templateNameFor` 锁定「模板只填
+  名称／规则／提示词」。定时任务页与编辑弹层按同一规则展示状态、执行记录与规则校验提示，
+  内存投影在保存时校验规则／Provider／模型／权限并递增配置版本，不再写入半有效配置。
+- **盒子状态**：盒子 1（配置与版本、四种规则真实校验＋下次触发预览）、2（五个模板不覆盖
+  项目／模型／权限／时区、远程获取失败不冒称最新且不合并工作区）、3（每次触发独立会话、
+  记录可定位并继续对话）、4（min(24h, 下次计划) 期限、先结束旧确认再判断新周期、编辑不
+  延长旧确认、立即运行不改计划）、5（重叠跳过、离线不补跑、时钟回拨与夏令时与重启不重复、
+  竞态单一结果、Host 承载调度）、6（归档暂停、恢复不自动启用、归档禁止立即运行、配置失效
+  不静默替换）、7（失败获取不冒称最新、结果处理只在提示词、实际发送仍走工具与确认规则）
+  的规则层、Host 接线与 renderer 镜像均在单测／流程测试下覆盖；盒子 4 的「调度会话沿用
+  权限规则」由「只读会话被拒绝并记为该次失败」的 Host 用例锁定，「等待确认」路径由执行台账
+  层（期限、到期结束、过期后不可批准）锁定。
+- **全量校验**：`pnpm turbo run typecheck test build lint --force` → 8 successful / 8 total，
+  0 cached；shell 52 files / 765 tests（#19 后 49/727，+3 files/+38），renderer 40 files /
+  348 tests（#19 后 39/344，+1 file/+4）；两包 `tsc` 与 `eslint --max-warnings 0` 均通过。
+- **残留（未测／未实现）**：真实计时未在 Electron 中跑过——`ScheduleDriver` 只按固定周期让
+  **已 fork 的 Host** 自评到期触发，`main.ts` 的 start/stop 接线与真实系统休眠／唤醒、
+  跨平台唤醒能力均未实测（单测只覆盖「不自重叠、单任务失败不中断、start/stop 释放计时器」）；
+  「立即运行」与「计划触发」目前只由 `task/scheduleRunNow`／`task/scheduleEvaluate` 两个
+  Host op 驱动，renderer 仍固定内存适配器，**没有**调用 `task/schedule*` 任一 op（与
+  #9/#10/#12/#14/#15/#16/#18 记录的同一接线缺口），因此页面上的状态与执行记录仍是内存投影；
+  定时触发的回合不带工具计划（工具由模型决定，尚未接入真实模型），所以「调度会话停在等待
+  确认」这条路径只有在执行台账层被验证，真实「默认权限调度会话等待确认」未跑；
+  真实 Provider 认证、真实子进程与工作区写入未执行；Windows x64 与 macOS 打包应用未运行；
+  「获取远程新记录」没有真实 git／远端读取器，只有纯规则判定；模板「点击使用模板」在新建
+  任务弹层内完成，未接线到 Host 保存。
