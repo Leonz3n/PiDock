@@ -20,8 +20,23 @@ import type {
 } from "./hostAdapter";
 import { instanceAddress, type ServiceTopologyView } from "./serviceTopology";
 import { protocolBindingFromHost, type ProtocolBindingView } from "./protocolBinding";
-import type { Approval, ApprovalStatus, Reference, RunRecord, RunState, TaskWriteLockView, UsageCleanupScope, UsageRecord, WriteOrphanView } from "./types";
+import type {
+  Approval,
+  ApprovalStatus,
+  CleanupItem,
+  CleanupRunResult,
+  CleanupSelection,
+  Reference,
+  RunRecord,
+  RunState,
+  TaskLifecycleState,
+  TaskWriteLockView,
+  UsageCleanupScope,
+  UsageRecord,
+  WriteOrphanView,
+} from "./types";
 import {
+  cleanupPreviewThroughShell,
   clearUsageThroughShell,
   compactSessionThroughShell,
   controlServiceThroughShell,
@@ -32,11 +47,14 @@ import {
   fileRootsThroughShell,
   fileTreeThroughShell,
   isShellConnected,
+  lifecycleStateThroughShell,
   planServiceGroupThroughShell,
   planTerminalThroughShell,
   protocolStateThroughShell,
+  runCleanupThroughShell,
   serviceRunRecordsThroughShell,
   setSessionModelThroughShell,
+  setTaskArchivedThroughShell,
   setSessionThinkingThroughShell,
   shellTaskOp,
   sendMessageThroughShell,
@@ -78,6 +96,120 @@ function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
+}
+
+/**
+ * [PiDock 14] (#17) Host cleanup preview -> the renderer's cleanup rows. The
+ * Host owns the disposition (`remove` / `keep-copy` / `keep`) and the detail;
+ * the renderer only formats them, so no removal decision is made here.
+ */
+function cleanupItemsFromHost(preview: unknown): CleanupItem[] {
+  const items = asRecord(preview)["items"];
+  if (!Array.isArray(items)) return [];
+  const rows: CleanupItem[] = [];
+  for (const entry of items) {
+    const item = asRecord(entry);
+    const resource = typeof item["resource"] === "string" ? item["resource"] : null;
+    const detail = typeof item["detail"] === "string" ? item["detail"] : "";
+    if (resource === null) continue;
+    const disposition =
+      item["disposition"] === "remove" || item["disposition"] === "keep-copy" || item["disposition"] === "keep" ? item["disposition"] : undefined;
+    rows.push({
+      ...(typeof item["id"] === "string" ? { id: item["id"] } : {}),
+      resource,
+      // The disposition label leads the action; `cleanupRows` renders it.
+      action: "",
+      detail,
+      ...(disposition !== undefined ? { disposition } : {}),
+    });
+  }
+  return rows;
+}
+
+/** [PiDock 14] (#17) Host cleanup run -> receipt/recovery/items, or `undefined`. */
+function cleanupResultFromHost(cleanup: unknown): CleanupRunResult {
+  const record = asRecord(cleanup);
+  const receipt = asRecord(record["receipt"]);
+  const recovery = Array.isArray(record["recovery"]) ? record["recovery"] : [];
+  const ranAt = typeof receipt["ranAt"] === "string" ? receipt["ranAt"] : null;
+  return {
+    items: cleanupItemsFromHost(record),
+    receipt:
+      ranAt === null
+        ? null
+        : {
+            ranAt,
+            keptPosition: typeof receipt["keptPosition"] === "string" ? receipt["keptPosition"] : null,
+            exports: Array.isArray(receipt["exports"]) ? receipt["exports"].filter((entry): entry is string => typeof entry === "string") : [],
+            removed: Array.isArray(receipt["removed"]) ? receipt["removed"].filter((entry): entry is string => typeof entry === "string") : [],
+            partialFailure: receipt["partialFailure"] === true,
+          },
+    recovery: recovery
+      .map((entry) => asRecord(entry))
+      .filter((entry) => typeof entry["item"] === "string" && typeof entry["reason"] === "string")
+      .map((entry) => ({ item: entry["item"] as string, reason: entry["reason"] as string })),
+    ...(typeof record["error"] === "string" ? { error: record["error"] as string } : {}),
+  };
+}
+
+/**
+ * [PiDock 14] (#17) Host lifecycle readout -> the archive page's state. The
+ * identity verdicts carry the Host's own reason, so a task whose worktree or
+ * live process no longer matches its record reads as unverified instead of
+ * being trusted because a pid or a port answered.
+ */
+function lifecycleStateFromHost(lifecycle: unknown): TaskLifecycleState | null {
+  const view = asRecord(lifecycle);
+  const taskId = typeof view["taskId"] === "string" ? view["taskId"] : null;
+  if (taskId === null || typeof view["archived"] !== "boolean") return null;
+  const cleanup = asRecord(view["cleanup"]);
+  const ranAt = typeof cleanup["ranAt"] === "string" ? cleanup["ranAt"] : null;
+  const resources = asRecord(view["resources"]);
+  const worktrees = Array.isArray(resources["worktrees"]) ? resources["worktrees"] : [];
+  const processes = Array.isArray(resources["processes"]) ? resources["processes"] : [];
+  return {
+    taskId,
+    archived: view["archived"],
+    archivedAt: typeof view["archivedAt"] === "string" ? view["archivedAt"] : null,
+    restoredAt: typeof view["restoredAt"] === "string" ? view["restoredAt"] : null,
+    schedulePaused: view["schedulePaused"] === true,
+    cleanup:
+      ranAt === null
+        ? null
+        : {
+            ranAt,
+            keptPosition: typeof cleanup["keptPosition"] === "string" ? cleanup["keptPosition"] : null,
+            exports: Array.isArray(cleanup["exports"]) ? cleanup["exports"].filter((entry): entry is string => typeof entry === "string") : [],
+            removed: Array.isArray(cleanup["removed"]) ? cleanup["removed"].filter((entry): entry is string => typeof entry === "string") : [],
+            partialFailure: cleanup["partialFailure"] === true,
+          },
+    recovery: (Array.isArray(view["recovery"]) ? view["recovery"] : [])
+      .map((entry) => asRecord(entry))
+      .filter((entry) => typeof entry["item"] === "string" && typeof entry["reason"] === "string")
+      .map((entry) => ({ item: entry["item"] as string, reason: entry["reason"] as string })),
+    usageDetails: typeof view["usageDetails"] === "number" ? view["usageDetails"] : 0,
+    worktrees: worktrees.map((entry) => {
+      const row = asRecord(entry);
+      const verdict = asRecord(row["verdict"]);
+      return {
+        repoDir: typeof row["repoDir"] === "string" ? row["repoDir"] : "",
+        ok: verdict["ok"] === true,
+        code: typeof verdict["code"] === "string" ? verdict["code"] : "unknown",
+        reason: typeof verdict["reason"] === "string" ? verdict["reason"] : "",
+      };
+    }),
+    processes: processes.map((entry) => {
+      const row = asRecord(entry);
+      const verdict = row["verdict"] === null || row["verdict"] === undefined ? null : asRecord(row["verdict"]);
+      return {
+        kind: typeof row["kind"] === "string" ? row["kind"] : "unknown",
+        id: typeof row["id"] === "string" ? row["id"] : "",
+        running: row["running"] === true,
+        ok: verdict === null ? null : verdict["ok"] === true,
+        reason: verdict !== null && typeof verdict["reason"] === "string" ? verdict["reason"] : "",
+      };
+    }),
+  };
 }
 
 /** Host `write.sessions[]` row ([PiDock 09] #11) -> the navigation's state. */
@@ -932,6 +1064,87 @@ export function createShellHostAdapter(fallback: HostAdapter): HostAdapter {
           const result = await terminalHistoryThroughShell({ taskId, instanceId, ...(limit !== undefined ? { limit } : {}) });
           if (!result.ok) return (target as HostAdapter).terminalHistory(taskId, instanceId, limit);
           return terminalHistoryFromHost(result.payload) ?? (await (target as HostAdapter).terminalHistory(taskId, instanceId, limit));
+        };
+      }
+      // [PiDock 14] (#17) archive / restore / cleanup / lifecycle readout.
+      // Archiving and cleaning are explicit app-level actions: the Host
+      // refuses a payload that carries a `sessionId` and attests the human-UI
+      // origin itself. A task neither the Host nor the fixtures know falls
+      // back to memory and then surfaces the Host error, never a silent no-op.
+      if (property === "archiveTask" || property === "restoreTask") {
+        return async (taskId: string) => {
+          if (!isShellConnected()) return (target as HostAdapter)[property](taskId);
+          const archived = property === "archiveTask";
+          let result: ShellTaskOpResult;
+          try {
+            result = await setTaskArchivedThroughShell({ taskId, archived, label: archived ? "任务归档" : "任务恢复" });
+          } catch {
+            result = { ok: false };
+          }
+          if (result.ok) {
+            await (target as HostAdapter)[property](taskId).catch(() => undefined);
+            return;
+          }
+          const fallback = await (target as HostAdapter)[property](taskId).then(() => null).catch((error: unknown) => error);
+          if (fallback === null) return;
+          throw shellResultError(result, archived ? "归档失败，请重试" : "恢复失败，请重试");
+        };
+      }
+      if (property === "lifecycleState") {
+        return async (taskId: string) => {
+          if (!isShellConnected()) return (target as HostAdapter).lifecycleState(taskId);
+          let result: ShellTaskOpResult;
+          try {
+            result = await lifecycleStateThroughShell(taskId);
+          } catch {
+            result = { ok: false };
+          }
+          if (result.ok) {
+            const view = lifecycleStateFromHost(asRecord(result.payload)["lifecycle"]);
+            if (view !== null) return view;
+          }
+          return (target as HostAdapter).lifecycleState(taskId);
+        };
+      }
+      if (property === "previewCleanup") {
+        return async (taskId: string, selection?: CleanupSelection) => {
+          const chosen = selection ?? { exportSessions: false, exportDrafts: false, exportUsage: false };
+          if (!isShellConnected()) return (target as HostAdapter).previewCleanup(taskId, chosen);
+          let result: ShellTaskOpResult;
+          try {
+            result = await cleanupPreviewThroughShell({ taskId, selection: chosen });
+          } catch {
+            result = { ok: false };
+          }
+          if (result.ok) {
+            const preview = asRecord(result.payload)["preview"];
+            if (asRecord(preview)["items"] !== undefined) return cleanupItemsFromHost(preview);
+          }
+          // The Host does not own this task (fixture) or refused: the memory
+          // projection answers when it can, else the Host error surfaces — it
+          // names the real refusal for a Host-owned task, while the memory
+          // projection would only say "任务不存在".
+          const fallback = await (target as HostAdapter).previewCleanup(taskId, chosen).then((items) => items).catch((error: unknown) => error);
+          if (!(fallback instanceof Error)) return fallback;
+          throw shellResultError(result, "生成清理清单失败，请重试");
+        };
+      }
+      if (property === "runCleanup") {
+        return async (taskId: string, selection: CleanupSelection) => {
+          if (!isShellConnected()) return (target as HostAdapter).runCleanup(taskId, selection);
+          let result: ShellTaskOpResult;
+          try {
+            result = await runCleanupThroughShell({ taskId, selection, label: "清理任务" });
+          } catch {
+            result = { ok: false };
+          }
+          if (result.ok) {
+            const cleanup = asRecord(result.payload)["cleanup"];
+            if (asRecord(cleanup)["items"] !== undefined) return cleanupResultFromHost(cleanup);
+          }
+          const fallback = await (target as HostAdapter).runCleanup(taskId, selection).then((run) => run).catch((error: unknown) => error);
+          if (!(fallback instanceof Error)) return fallback;
+          throw shellResultError(result, "清理失败，请重试");
         };
       }
       if (property === "simulateExpiry") {

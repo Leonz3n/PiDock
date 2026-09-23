@@ -38,6 +38,40 @@ describe("memory Host adapter", () => {
     expect(symlink?.detail).toContain("保留原目录 /Users/leonz3n/Workspace/atlas-docs");
   });
 
+  it("[PiDock 14] (#17) cleanup keeps the code, removes the chosen records and writes a receipt", async () => {
+    const host = createMemoryHost();
+    await host.archiveTask("release");
+    const preview = await host.previewCleanup("release", { exportSessions: false, exportDrafts: false, exportUsage: false });
+    expect(preview.find((item) => item.id === "code")?.disposition).toBe("keep-copy");
+    expect(preview.find((item) => item.id === "usage")?.detail).toContain("未选择导出");
+
+    const result = await host.runCleanup("release", { exportSessions: false, exportDrafts: false, exportUsage: false });
+
+    expect(result.receipt).toMatchObject({ exports: [], partialFailure: true });
+    expect(result.receipt?.keptPosition).toContain(".pidock-kept");
+    // The code worktree is never removed by a cleanup: only the "code" and
+    // "worktree" rows are dispositions other than `remove`.
+    expect(result.receipt?.removed).not.toContain("code");
+    expect(result.recovery.map((entry) => entry.item)).toEqual(["browser"]);
+    const task = await host.getTask("release");
+    expect(task?.sessions).toHaveLength(0);
+    expect((await host.lifecycleState("release")).usageDetails).toBe(0);
+  });
+
+  it("[PiDock 14] (#17) reports the lifecycle readout: archive state, receipts and recovery entries", async () => {
+    const host = createMemoryHost();
+    expect((await host.lifecycleState("release")).archived).toBe(false);
+    await host.archiveTask("release");
+    const archived = await host.lifecycleState("release");
+    expect(archived.archived).toBe(true);
+    expect(archived.schedulePaused).toBe(true);
+    await host.restoreTask("release");
+    const restored = await host.lifecycleState("release");
+    expect(restored.archived).toBe(false);
+    // Restoring never resumes scheduling on its own.
+    expect(restored.schedulePaused).toBe(true);
+  });
+
   it("expires pending approvals and stops services when a task is archived", async () => {
     const host = createMemoryHost();
     await host.archiveTask("release");

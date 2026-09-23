@@ -543,10 +543,61 @@ export type RemoteDevice = {
   status: "active" | "revoked";
 };
 
+/**
+ * [PiDock 14] (#17) one line of a cleanup scope. `disposition` mirrors the
+ * shell rule (`remove` / `keep-copy` / `keep`), so the UI can show what is
+ * removed from the task folder versus what is kept as an independent copy.
+ */
+export type CleanupDisposition = "remove" | "keep-copy" | "keep";
+
 export type CleanupItem = {
+  id?: string;
   resource: string;
   action: string;
   detail: string;
+  disposition?: CleanupDisposition;
+};
+
+/** Which optional records the user asked to export before the cleanup removes them. */
+export type CleanupSelection = {
+  exportSessions: boolean;
+  exportDrafts: boolean;
+  exportUsage: boolean;
+};
+
+/** Result receipt of a cleanup: what was kept where, what was removed, what failed. */
+export type CleanupReceipt = {
+  ranAt: string;
+  keptPosition: string | null;
+  exports: string[];
+  removed: string[];
+  partialFailure: boolean;
+};
+
+/**
+ * [PiDock 14] (#17) lifecycle readout of one task: archive state, the cleanup
+ * receipt/recovery entries, the retained token-usage scope and the resource
+ * identity verdicts (worktrees and live processes are verified by identity,
+ * never by a stale pid or a port).
+ */
+export type TaskLifecycleState = {
+  taskId: string;
+  archived: boolean;
+  archivedAt: string | null;
+  restoredAt: string | null;
+  schedulePaused: boolean;
+  cleanup: CleanupReceipt | null;
+  recovery: { item: string; reason: string }[];
+  usageDetails: number;
+  worktrees: { repoDir: string; ok: boolean; code: string; reason: string }[];
+  processes: { kind: string; id: string; running: boolean; ok: boolean | null; reason: string }[];
+};
+
+export type CleanupRunResult = {
+  items: CleanupItem[];
+  receipt: CleanupReceipt | null;
+  recovery: { item: string; reason: string }[];
+  error?: string;
 };
 
 export type AttentionItem = {
