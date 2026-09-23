@@ -21,6 +21,8 @@
  * unlisted tools are never offered to the Agent (fail-closed gate).
  */
 
+import { BROWSER_TOOL_ACTIONS } from "./browser-rules.js";
+
 export type PiPermission = "read" | "default" | "auto";
 
 export type PiRunState = "idle" | "running" | "approval" | "done" | "cancelled" | "failed";
@@ -100,12 +102,23 @@ export interface PiSessionSnapshot {
   draft?: PiSessionDraft;
 }
 
+/**
+ * Gated browser tools ([PiDock 06] #8). Each name is the approval binding
+ * for exactly one action (`browser-rules.ts` maps name -> action), so the
+ * permission gate and the Host sequence never re-derive which browser
+ * operation a confirmation was minted for. `browser.act` is the legacy
+ * composite name the turn plans already use.
+ */
+const BROWSER_TOOL_DEFINITIONS: readonly PiToolDefinition[] = Object.keys(BROWSER_TOOL_ACTIONS)
+  .sort()
+  .map((name) => ({ name, kind: "browser" satisfies PiToolKind }));
+
 /** Gated tools: the only tools the Agent may call. Everything else is closed. */
 export const PI_GATED_TOOLS: readonly PiToolDefinition[] = [
   { name: "fs.read", kind: "read" },
   { name: "fs.write", kind: "write" },
   { name: "exec.run", kind: "command" },
-  { name: "browser.act", kind: "browser" },
+  ...BROWSER_TOOL_DEFINITIONS,
 ] as const;
 
 export type PiGateDecision =
@@ -115,15 +128,19 @@ export type PiGateDecision =
 
 /**
  * Mint purpose tag on an approval. Absent = the turn flow's own
- * `exec.run`/`browser.act` request (the default). `service-control` is
- * stamped only by the Host when it mints a service start/stop approval
- * ([PiDock 04] #7), so an identically shaped turn approval for the same
- * tool + target can never be spent on service control (and vice versa).
+ * `exec.run`/`browser.*` request (the default). `service-control` and
+ * `browser-control` are stamped only by the Host when it mints a service
+ * start/stop ([PiDock 04] #7) or a task-browser action ([PiDock 06] #8)
+ * approval, so an identically shaped turn approval for the same tool +
+ * target can never be spent on either Host-driven path (and vice versa).
  */
-export type PiApprovalScope = "service-control";
+export type PiApprovalScope = "service-control" | "browser-control";
 
 /** The only scope a Host service-control approval is minted with. */
 export const SERVICE_CONTROL_SCOPE: PiApprovalScope = "service-control";
+
+/** The only scope a Host-minted task-browser approval carries. */
+export const BROWSER_CONTROL_SCOPE: PiApprovalScope = "browser-control";
 
 export interface PiApproval {
   id: string;
@@ -139,17 +156,18 @@ export interface PiApproval {
   /**
    * One-shot spend stamp, written on the Host side (never by the
    * renderer). An approved request is spent exactly once — either by the
-   * Host-driven execution it authorized (service control, [PiDock 04] #7)
-   * or by `restore` (an authorization never survives a reopen). A spent
-   * request can never authorize another action; `executed` alone cannot
-   * carry this because the turn flow sets it in `approve()` before the
-   * gated command runs.
+   * Host-driven execution it authorized (service control / task browser,
+   * [PiDock 04] #7 and [PiDock 06] #8) or by `restore` (an authorization
+   * never survives a reopen). A spent request can never authorize another
+   * action; `executed` alone cannot carry this because the turn flow sets
+   * it in `approve()` before the gated command runs.
    */
   consumedAt?: string;
   /**
-   * Mint purpose ([PiDock 04] #7): absent means the turn flow's own
-   * request; `service-control` marks a Host-minted service start/stop
-   * approval, which only `verifyServiceControlApproval` accepts.
+   * Mint purpose: absent means the turn flow's own request;
+   * `service-control` marks a Host-minted service start/stop approval and
+   * `browser-control` a Host-minted task-browser approval, each accepted
+   * only by its own verifier.
    */
   scope?: PiApprovalScope;
 }
@@ -543,8 +561,12 @@ export class PiSessionChannel {
 
     try {
       const plannedTool = input.tool ?? "fs.write";
+      // The tool's gated definition is the single source for its kind: a
+      // browser tool plans as `browser`, an unknown name keeps the
+      // historical write fallback (and is closed by the gate anyway).
       const plannedKind: PiToolKind =
-        plannedTool === "exec.run" ? "command" : plannedTool === "browser.act" ? "browser" : plannedTool === "fs.read" ? "read" : "write";
+        isGatedTool(plannedTool)?.kind ??
+        (plannedTool === "exec.run" ? "command" : plannedTool === "fs.read" ? "read" : "write");
       const plannedTarget = input.target ?? `${this.taskDir}/notes.md`;
       const plannedVersion = input.contentVersion ?? "v1";
       const toolCall =
