@@ -28,6 +28,7 @@ import {
   confirmDevice,
   deviceOnline,
   exchangePairingCredential,
+  GATEWAY_RATE_LIMIT,
   highestSequence,
   mintPairingCredential,
   invalidatePairingCredential,
@@ -371,7 +372,9 @@ export class TaskRemoteDevices {
       this.audit("request-denied", `拒绝设备 ${input.deviceId} 的 ${input.op}：${verdict.message}`, { deviceId: input.deviceId });
       return { ok: false, code: verdict.code, message: verdict.message };
     }
-    this.attempts.set(input.deviceId, [...(this.attempts.get(input.deviceId) ?? []), at]);
+    // Keep only the live window: the rate limit needs the recent attempts, and a
+    // long-lived Host must not grow one timestamp per allowed request forever.
+    this.attempts.set(input.deviceId, [...(this.attempts.get(input.deviceId) ?? []), at].slice(-GATEWAY_RATE_LIMIT.maxRequests));
     this.replace({ ...device, lastSeenAt: at });
     this.audit("request-allowed", `允许设备 ${input.deviceId} 的 ${input.op}${verdict.requiresConfirmation ? "（需再次确认）" : ""}`, { deviceId: input.deviceId });
     return { ok: true, payload: { verdict, permission: device.permissions.join("/") } };

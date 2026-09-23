@@ -149,11 +149,28 @@ describe("[PiDock 19] device credentials", () => {
     expect(rejectDevice({ device: pending, at: AT })).toMatchObject({ status: "revoked", permissions: [] });
   });
 
+  it("confirming without a list never grants 文件／终端, only the default set", () => {
+    const pending: RemoteDeviceRecord = { deviceId: "device-3", name: "Pixel 9", status: "pending-confirmation", permissions: ["overview", "chat", "manage", "files", "terminal"], requestedAt: AT };
+    const confirmed = confirmDevice({ device: pending, at: AT, credentialId: "c1" });
+    expect(confirmed).toMatchObject({ ok: true });
+    if (!confirmed.ok) return;
+    // The documented default (overview＋chat), not "whatever the phone asked for".
+    expect(confirmed.device.permissions).toEqual(["overview", "chat"]);
+    expect(confirmed.device.permissions).not.toContain("terminal");
+    expect(confirmed.device.permissions).not.toContain("files");
+    // A request narrower than the default is never widened by the fallback.
+    const narrow = confirmDevice({ device: { ...pending, permissions: ["overview"] }, at: AT, credentialId: "c2" });
+    expect(narrow).toMatchObject({ ok: true, device: { permissions: ["overview"] } });
+  });
+
   it("rotates to a new generation and revokes every grant", () => {
     const device = activeDevice();
     const rotated = rotateDeviceCredential({ device, at: LATER, credentialId: "c2" });
-    expect(rotated).toMatchObject({ ok: true, device: { credential: { credentialId: "c2", generation: 2, rotatedAt: LATER, revokedAt: AT } } });
+    // `rotatedAt` marks the new generation; `revokedAt` stays reserved for a
+    // credential that is actually dead, so a rotated device is never read as revoked.
+    expect(rotated).toMatchObject({ ok: true, device: { credential: { credentialId: "c2", generation: 2, rotatedAt: LATER } } });
     if (!rotated.ok) return;
+    expect(rotated.device.credential?.revokedAt).toBeUndefined();
     // The previous generation is gone: nothing keeps the old value usable.
     expect(rotated.device.credential?.credentialId).not.toBe("device-cred-1");
     expect(rotateDeviceCredential({ device: { ...device, status: "revoked" }, at: LATER, credentialId: "c3" })).toMatchObject({ ok: false, code: "not-active" });
@@ -203,12 +220,17 @@ describe("[PiDock 19] remote request surface", () => {
     expect(authorizeRemoteGateway({ state: { ...state, status: "offline" }, hostId: "host-1" })).toMatchObject({ decision: "deny", code: "host-offline" });
   });
 
-  it("shows the desktop approval's real fields and drops the actions when settled", () => {
-    const approval = { id: "approval-1", title: "部署到 Staging", target: "deploy.sh staging", contentVersion: "v3", scope: "service-control", status: "pending" };
+  it("shows the desktop approval's real impact and drops the actions when settled", () => {
+    // The Host record a Host approval is projected from (`task/listApprovals`).
+    const approval = { id: "approval-9", title: "exec.run /tmp/task-a/run.sh", tool: "exec.run", target: "/tmp/task-a/run.sh", contentVersion: "v12+task-a", permissionAtRequest: "default", status: "pending" };
     const view = remoteApprovalView({ approval, device: activeDevice() });
-    expect(view).toMatchObject({ approvalId: "approval-1", title: "部署到 Staging", target: "deploy.sh staging", payloadVersion: "v3", scope: "service-control" });
-    expect(view.impact).toContain("deploy.sh staging");
+    expect(view).toMatchObject({ approvalId: "approval-9", title: "exec.run /tmp/task-a/run.sh", target: "/tmp/task-a/run.sh", payloadVersion: "v12+task-a" });
+    // Same composed line as the desktop card (`renderer/src/data/shellHost.ts`
+    // `approvalImpact`, asserted for these fields in `renderer/src/test/shellHost.test.ts`).
+    expect(view.impact).toBe("以「默认权限」执行 exec.run，命中 /tmp/task-a/run.sh");
     expect(view.actions).toEqual(["approve", "reject"]);
+    // An unknown tier states the tool and target instead of inventing a tier.
+    expect(remoteApprovalView({ approval: { ...approval, permissionAtRequest: undefined }, device: activeDevice() }).impact).toBe("执行 exec.run，命中 /tmp/task-a/run.sh");
     expect(remoteApprovalView({ approval: { ...approval, status: "expired" }, device: activeDevice() }).actions).toEqual([]);
     expect(remoteApprovalView({ approval, device: activeDevice({ permissions: ["overview"] }) }).actions).toEqual([]);
     expect(remoteApprovalView({ approval, device: activeDevice({ status: "revoked", permissions: [] }) }).actions).toEqual([]);

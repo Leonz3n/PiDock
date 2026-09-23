@@ -807,16 +807,20 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   拒绝 query 字符串、`token=` 形态与 `/Users/` `C:\` 本机路径。`exchangePairingCredential` 单次
   交换后只产出 `pending-confirmation` 设备——**交换本身不授予任何权限**。
 - **设备凭据（盒子 1/5，故事 64）**：`confirmDevice` 是唯一签发设备凭据的入口（`generation: 1`），
-  并可收窄请求的权限；`rotateDeviceCredential` 换代并作废旧值；`revokeRemoteDevice` 清空权限并
-  在记录上打 `revokedAt`；`rejectDevice` 只留下拒绝记录。默认权限为 `overview`＋`chat`，
-  `files`／`terminal` 默认关闭。
+  并可收窄请求的权限；`rotateDeviceCredential` 换代并作废旧值（新代只记 `rotatedAt`，`revokedAt`
+  只表示凭据已死，轮换不会被后来的校验误读为「已撤销」）；`revokeRemoteDevice` 清空权限并
+  在记录上打 `revokedAt`；`rejectDevice` 只留下拒绝记录。**省略权限列表时不再等于请求什么就给什么**：
+  回退值是默认集合∩请求集合（`overview`＋`chat`，`manage`／`files`／`terminal` 都需要显式授予），
+  所以请求 `terminal` 的设备不会因为桌面没有给出列表而拿到远程终端。
 - **远程可调用面（盒子 2/4/5，故事 61/64）**：`MOBILE_OP_SURFACES` 是显式的 Host op 白名单
   （查看／对话／待确认／会话／归档／恢复／管理／文件／终端），未列出的 op 对任何设备都返回
   `not-available-remotely`；`authorizeRemoteOp` 依次拒绝 revoked／未确认（`awaiting-desktop-
   confirmation`，「网络可达 ≠ 授权成功」）／缺权限，敏感界面（归档、恢复、启停、文件、终端）
   逐次要求确认；`effectiveRemoteSessionPermission` 只可能把设备权限**收窄**到 `read`／`default`，
   不会放宽桌面会话权限；`remoteApprovalView` 用与桌面卡片相同的字段（标题、真实目标命令、
-  载荷版本、影响）投影待确认内容，已结算或没有 chat 权限时不给任何动作。
+  载荷版本、影响）投影待确认内容，**影响行由 `tool`／`target`／`permissionAtRequest` 按与
+  renderer `approvalImpact` 相同的规则组合**（规则用例与 renderer 用例断言同一字面量），
+  不自造摘要；已结算或没有 chat 权限时不给任何动作。
 - **Host 接线（盒子 1/3/5）**：`host/remote-devices.ts` 把规则落到
   `<taskDir>/remote-devices.json`（`task-store.ts` 逐字段校验；缺失＝空记录）：入口方式、
   Host 要拨号的 Gateway 配置与入口地址、每台设备及其凭据代数、配对历史、脱敏审计。**短时配对
@@ -824,10 +828,12 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   「active 却没有设备凭据」的记录；`device-<n>`／`pair-<n>`／`audit-<n>` 从恢复记录重新播种。
   `exchange` 先看凭据状态、再比对 secret（凭据 id 在 URL 里，只有 id 不能配对），因此
   「扫到 id 但没有 secret」得到 `credential-mismatch`。gateway 模式下每个请求都要求出站连接
-  在线且 host 一致（否则 `host-offline`／`host-mismatch`），每设备 60s/60 次滑动窗口限流，
+  在线且 host 一致（否则 `host-offline`／`host-mismatch`），每设备 60s/60 次滑动窗口限流
+  （只保留窗口内的最近 60 条，长期运行的 Host 不会每请求累积一条），
   `planReconnectDelivery` 让 `uncertain` 请求绝不自动重放、同 idempotency key 只投递一次、
   离线排队过期即丢弃，审计详情脱敏路径／令牌／长随机值。生成二维码、确认／拒绝设备、轮换、
-  撤销与切换入口都拒绝 Agent 会话并要求 main 背书的 `shell-ui` origin（与「立即运行」同规则）。
+  撤销、切换入口与主进程上报的 `task/remoteGatewayEvent`（它决定 gateway 模式后续请求是否放行）
+  都拒绝 Agent 会话并要求 main 背书的 `shell-ui` origin（与「立即运行」同规则）。
 - **renderer（盒子 1–5）**：`data/remoteRules.ts` 是与 shell 同词汇的 Node-free 镜像（入口行、
   权限默认值、设备状态／权限／凭据代数／最近在线文案、`remoteSurfacesFor` 标出该设备可用的
   远程界面、配对倒计时与「已失效」文案、QR URL 只允许 fragment）；内存投影持有入口状态、
@@ -838,20 +844,35 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   与脱敏审计。
 - **盒子状态**：盒子 1（二维码短时单次凭据、登录后桌面确认名称与权限、逐设备签发／轮换／撤销、
   旧码在刷新与使用后失效）、3（Host 只监听回环、Gateway 出站 WSS、TLS/登录/路由/限流/审计
-  与部署边界写在入口计划里、不代理任意 TCP、不暴露 Pi RPC）、5（每台设备独立凭据与最近活动、
-  撤销后请求与连接失效、可达不等于授权）在规则层、Host 持久化与 renderer 镜像下均有单测／
-  流程测试覆盖；盒子 2（手机查看任务会话与对话、待确认展示同一真实内容、不扩大桌面会话权限）
-  的规则层、投影与页面已覆盖；**盒子 4 的「断线显示离线、不盲目重放」在规则层与 Host 已覆盖**
-  （`planReconnectDelivery`＋`deviceOnline`＋离线投影），但**真实断线重连没有跑过**，因此该盒子
-  的端到端部分判为 PARTIAL。
+  与部署边界写在入口计划里、不代理任意 TCP、不暴露 Pi RPC）在规则层、Host 持久化与 renderer
+  镜像下均有单测／流程测试覆盖；**盒子 5 判为 PARTIAL**：每台设备独立凭据与最近活动、撤销后
+  请求与连接失效、可达不等于授权都有用例，但「凭据校验」只有签发／轮换／作废的记录状态，
+  **没有任何代码路径比对持久化的设备凭据值**（也没有带凭据值的裁决参数），撤销靠 `status` 生效；
+  **盒子 2 同样判为 PARTIAL**（此前记为 COVERED，修正）：规则层、投影、页面与白名单已覆盖，
+  但手机端的真实内容展示没有调用方——`remoteApprovalView`／`MOBILE_OP_SURFACES` 只被单测引用，
+  手机视图在 renderer 中是静态预览（`components/Modals.tsx` 写明「此处仅为静态预览，不实现
+  移动布局」），与盒子 4 的「没有真实设备」是同一原因，因此端到端部分不判 COVERED；
+  **盒子 4 的「断线显示离线、不盲目重放」在规则层与 Host 已覆盖**（`planReconnectDelivery`＋
+  `deviceOnline`＋离线投影），但**真实断线重连没有跑过**，因此该盒子的端到端部分判为 PARTIAL。
 - **全量校验**：`pnpm turbo run typecheck test build lint --force` → 8 successful / 8 total，
   0 cached；shell 54 files / 798 tests（#20 后 52/770，+2 files/+28），renderer 42 files /
   361 tests（#20 后 40/348，+2 files/+13）；两包 `tsc` 与 `eslint --max-warnings 0` 均通过。
+  **评审修复（#21 review P1×2 与相邻 P2×2）**：只跑了受影响的 scoped vitest（`main/remote-rules`、
+  `host/remote-devices`）→ 28 passed，本提交在既有两个测试文件内新增 2 个用例，全量 8/8 门禁
+  在 #21 终局门禁重跑；受影响文件的 `tsc`／`eslint` 在终局门禁一并确认。
 - **残留（未测／未实现）**：**没有真实网络**——Tailscale Serve、Funnel、自建 Gateway 的 TLS、
   登录、路由、限流与审计都只到规则层与 Host 状态机，没有拨号实现、没有真实证书、没有部署
   说明文档；**没有真实手机浏览器与二维码扫描**——配对流程由 Host 状态机与 renderer 流程测试
   覆盖，secret 生成、真机扫码与移动布局均未执行；远程请求目前只由 `task/remoteAuthorize` 裁决，
   **没有任何调用方真的把手机请求带进来**（与 #9/#10/#12/#14/#15/#16/#18/#20 记录的同一接线
-  缺口），所以「手机查看会话并发消息」的端到端路径未跑；`task/remoteGatewayEvent` 需要 main
-  在真实拨号后上报，主进程尚未接线；跨主机路由、多设备并发与审计落盘大小限制未实测；
+  缺口），所以「手机查看会话并发消息」的端到端路径未跑；**桌面页面同样没有调用任何
+  `task/remote*` op**（`grep task/remote packages/renderer/src` 无命中，`createShellHostAdapter`
+  的 Proxy 把未覆盖的方法交给内存回退），因此 Electron 中的二维码／确认／轮换／撤销面板跑在
+  内存投影上，`remote-devices.json` 从不被页面读取（与 #20 记录同形）；`device credential`
+  明文存于 `<taskDir>/remote-devices.json` 且无校验路径（见盒子 5 PARTIAL）；
+  `task/remoteGatewayEvent` 需要 main 在真实拨号后上报，主进程尚未接线，且它的
+  「拒绝 Agent 会话＋要求 `shell-ui` origin」只在代码中成立（`host.ts` 的 dispatch 层没有
+  单测，与其余 remote op 处在同一条边界）；renderer 内存投影的「省略列表」默认是「请求中
+  排除文件／终端」，与 Host 的「默认集合∩请求」在 `manage` 上不同（页面总是显式传列表，
+  用户可见路径一致）；跨主机路由、多设备并发与审计落盘大小限制未实测；
   Windows x64 与 macOS 打包应用未运行。

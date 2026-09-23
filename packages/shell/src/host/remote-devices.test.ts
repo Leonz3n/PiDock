@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { TaskRemoteDevices } from "./remote-devices.js";
 import { TaskWorkspaceHost, memoryTaskStore } from "./task-host.js";
 import { parseRemoteDeviceRecord, serializeRemoteDeviceRecord } from "./task-store.js";
-import { emptyRemoteDeviceRecord, type RemoteDeviceDiskRecord } from "../main/remote-rules.js";
+import { emptyRemoteDeviceRecord, GATEWAY_RATE_LIMIT, type RemoteDeviceDiskRecord } from "../main/remote-rules.js";
 
 const TASK_ID = "task-a";
 const TASK_DIR = "/tmp/pidock-s21/task-abcdef12";
@@ -93,7 +93,39 @@ describe("[PiDock 19] remote device manager", () => {
 
     const confirmed = devices.confirm("device-1");
     expect(confirmed.ok && confirmed.payload.device).toMatchObject({ status: "active", confirmedAt: AT, credential: { generation: 1 } });
+    // The device asked for `terminal`; a confirm without a list grants the default
+    // set (overview＋chat) and never a remote terminal.
+    expect(confirmed.ok && confirmed.payload.device.permissions).toEqual(["overview"]);
+    expect(devices.authorize({ deviceId: "device-1", op: "task/terminalControl" })).toMatchObject({ ok: false, code: "permission-not-granted" });
     expect(confirmed.ok && devices.authorize({ deviceId: "device-1", op: "task/sessionStates" })).toMatchObject({ ok: true });
+  });
+
+  it("never grants files or terminal from a bare confirm, and keeps the rate history bounded", () => {
+    let now = new Date(AT);
+    const { devices } = manager({ now: () => now.toISOString() });
+    const minted = devices.mintPairing();
+    if (!minted.ok) throw new Error(minted.message);
+    const exchanged = devices.exchange({
+      credentialId: minted.payload.credentialId,
+      secret: minted.payload.secret,
+      deviceName: "Pixel 9",
+      permissions: ["overview", "chat", "manage", "files", "terminal"],
+    });
+    if (!exchanged.ok) throw new Error(exchanged.message);
+    const confirmed = devices.confirm(exchanged.payload.device.deviceId);
+    expect(confirmed.ok && confirmed.payload.device.permissions).toEqual(["overview", "chat"]);
+    expect(devices.authorize({ deviceId: "device-1", op: "task/terminalControl" })).toMatchObject({ ok: false, code: "permission-not-granted" });
+    expect(devices.record.devices[0]?.permissions).toEqual(["overview", "chat"]);
+    // Three full windows of allowed requests: the live history keeps one window,
+    // so a long-lived Host does not accumulate one timestamp per request forever.
+    for (const offset of [0, 61_000, 122_000]) {
+      now = new Date(Date.parse(AT) + offset);
+      for (let index = 0; index < GATEWAY_RATE_LIMIT.maxRequests; index += 1) {
+        expect(devices.authorize({ deviceId: "device-1", op: "task/sessionStates" })).toMatchObject({ ok: true });
+      }
+    }
+    const history = (devices as unknown as { attempts: Map<string, string[]> }).attempts.get("device-1") ?? [];
+    expect(history).toHaveLength(GATEWAY_RATE_LIMIT.maxRequests);
   });
 
   it("keeps an unconfirmed device out and refuses ops outside the allow-list once paired", () => {

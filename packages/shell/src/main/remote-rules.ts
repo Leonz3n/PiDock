@@ -143,7 +143,12 @@ export type RemoteDevicePermission = "overview" | "chat" | "manage" | "files" | 
 
 export const REMOTE_DEVICE_PERMISSIONS: readonly RemoteDevicePermission[] = ["overview", "chat", "manage", "files", "terminal"];
 
-/** A freshly paired device may only look and talk (文件／终端默认关闭). */
+/**
+ * What a device gets when the desktop confirms it *without* naming permissions:
+ * a freshly paired device may only look and talk (spec: 设备默认只允许查看项目、任务、
+ * 运行状态以及查看／发送对话；文件／差异与远程终端默认关闭). It is intersected with
+ * what the phone asked for, so the fallback never grants more than the request.
+ */
 export const DEFAULT_REMOTE_PERMISSIONS: readonly RemoteDevicePermission[] = ["overview", "chat"];
 
 export interface RemotePermissionDefinition {
@@ -428,7 +433,13 @@ export function confirmDevice(input: {
   if (input.device.status !== "pending-confirmation") {
     return { ok: false, code: "not-pending", message: `设备 ${input.device.deviceId} 不是待确认状态` };
   }
-  const permissions = input.confirmedPermissions === undefined ? input.device.permissions : normalizeRemotePermissions(input.confirmedPermissions);
+  // 文件／终端默认关闭: an omitted list is *not* "grant whatever was requested" —
+  // a phone that asked for `terminal` must not get a remote terminal just because
+  // the desktop left the list out. The fallback is the default set ∩ the request.
+  const permissions =
+    input.confirmedPermissions === undefined
+      ? DEFAULT_REMOTE_PERMISSIONS.filter((permission) => input.device.permissions.includes(permission))
+      : normalizeRemotePermissions(input.confirmedPermissions);
   if (permissions === null) return { ok: false, code: "invalid-permissions", message: "确认了未知的设备权限" };
   if (input.credentialId.trim().length === 0) return { ok: false, code: "invalid-credential", message: "设备凭据不能为空" };
   return {
@@ -456,11 +467,14 @@ export function rotateDeviceCredential(input: { device: RemoteDeviceRecord; at: 
   const previous = input.device.credential;
   if (previous === undefined) return { ok: false, code: "no-credential", message: `设备 ${input.device.deviceId} 还没有设备凭据` };
   if (input.credentialId.trim().length === 0) return { ok: false, code: "invalid-credential", message: "新设备凭据不能为空" };
+  // `rotatedAt` already says "this generation replaced an earlier one"; `revokedAt`
+  // is reserved for a credential that is actually dead, so a rotated device is
+  // never mistaken for a revoked one by a later verifier.
   return {
     ok: true,
     device: {
       ...input.device,
-      credential: { credentialId: input.credentialId, generation: previous.generation + 1, issuedAt: input.at, rotatedAt: input.at, revokedAt: previous.issuedAt },
+      credential: { credentialId: input.credentialId, generation: previous.generation + 1, issuedAt: input.at, rotatedAt: input.at },
     },
   };
 }
@@ -535,6 +549,19 @@ export function effectiveRemoteSessionPermission(input: { device: RemoteDeviceRe
   return PERMISSION_ORDER[Math.min(PERMISSION_ORDER.indexOf(ceiling), PERMISSION_ORDER.indexOf(input.sessionPermission))] as PiPermission;
 }
 
+/**
+ * 影响 line of a confirmation, composed exactly like the desktop's `approvalImpact`
+ * (renderer `data/shellHost.ts`): the tier the request was minted under, the gated
+ * tool and its real target. Mirrored rather than invented — the phone must show the
+ * same line the desktop card shows (盒子 2「待确认展示同一真实内容」).
+ */
+function remoteApprovalImpact(input: { tool: string; target: string; permissionAtRequest?: string }): string {
+  const permission = input.permissionAtRequest ?? "";
+  const tier = permission === "read" ? "只读" : permission === "auto" ? "自动执行" : permission === "default" ? "默认权限" : undefined;
+  const where = input.target.length > 0 ? `命中 ${input.target}` : "任务范围内";
+  return tier === undefined ? `执行 ${input.tool}，${where}` : `以「${tier}」执行 ${input.tool}，${where}`;
+}
+
 /** What the phone shows for one confirmation: the desktop card's real fields. */
 export interface RemoteApprovalView {
   approvalId: string;
@@ -553,7 +580,20 @@ export interface RemoteApprovalView {
  * confirmation has no actions left, and a device without chat rights sees none.
  */
 export function remoteApprovalView(input: {
-  approval: { id: string; title: string; target: string; contentVersion: string; scope?: string; expiresAt?: string; status: string };
+  approval: {
+    id: string;
+    /** The desktop card's title; a Host approval's title is `<tool> <target>`. */
+    title: string;
+    /** The gated tool and its real target — the impact is composed from these. */
+    tool: string;
+    target: string;
+    contentVersion: string;
+    /** The tier the request was minted under (`read`／`default`／`auto`). */
+    permissionAtRequest?: string;
+    scope?: string;
+    expiresAt?: string;
+    status: string;
+  };
   device: RemoteDeviceRecord;
 }): RemoteApprovalView {
   const canAct = input.device.status === "active" && input.device.permissions.includes("chat") && input.approval.status === "pending";
@@ -562,7 +602,11 @@ export function remoteApprovalView(input: {
     title: input.approval.title,
     target: input.approval.target,
     payloadVersion: input.approval.contentVersion,
-    impact: `将执行 ${input.approval.title}（${input.approval.target}）`,
+    impact: remoteApprovalImpact({
+      tool: input.approval.tool,
+      target: input.approval.target,
+      ...(input.approval.permissionAtRequest === undefined ? {} : { permissionAtRequest: input.approval.permissionAtRequest }),
+    }),
     ...(input.approval.scope === undefined ? {} : { scope: input.approval.scope }),
     ...(input.approval.expiresAt === undefined ? {} : { expiresAt: input.approval.expiresAt }),
     actions: canAct ? ["approve", "reject"] : [],

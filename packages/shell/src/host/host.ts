@@ -1491,8 +1491,9 @@ async function dispatchTaskOp(
       }
       // [PiDock 19] (#21) remote access. The entry read, the pairing exchange and
       // the request decision are what a remote caller may reach; minting the QR
-      // code, confirming/rejecting a device and rotating or revoking a credential
-      // are desktop-only, so they refuse an agent session and require the
+      // code, confirming/rejecting a device, rotating or revoking a credential,
+      // switching the entry mode and main's Gateway connection report are
+      // desktop-only, so they refuse an agent session and require the
       // sender-attested `shell-ui` origin (the same rule as 立即运行).
       case "task/remoteState": {
         const host = taskHostFor(taskId);
@@ -1602,6 +1603,14 @@ async function dispatchTaskOp(
         return plan.ok ? { ok: true, payload: { ...plan.payload } } : { ok: false, error: `${plan.code}: ${plan.message}` };
       }
       case "task/remoteGatewayEvent": {
+        // The Gateway connection verdict is a main-reported fact: it decides whether
+        // every later gateway-mode request is allowed, so an agent session cannot
+        // flip it and a caller needs the sender-attested `shell-ui` origin.
+        if (record["sessionId"] !== undefined) {
+          return { ok: false, error: "permission-denied: Gateway 连接状态只由主进程上报，不能由 Agent 会话发起" };
+        }
+        const caller = classifyControlCaller({ label: record["label"], origin });
+        if (!caller.ok) return { ok: false, error: caller.error };
         const host = taskHostFor(taskId);
         if ("error" in host) return { ok: false, error: host.error };
         const event = host.remoteGatewayEvent({
