@@ -58,7 +58,8 @@ export type ShellTaskOp =
   | "task/planServiceStart"
   | "task/controlService"
   | "task/serviceStatus"
-  | "task/serviceLog";
+  | "task/serviceLog"
+  | "task/browserAction";
 
 /**
  * Task-scoped op through main into the per-workspace Host. Rejects outside
@@ -292,6 +293,46 @@ export async function serviceLogThroughShell(input: {
   if (input.limit !== undefined) payload["limit"] = input.limit;
   try {
     return await shellTaskOp(input.taskId, "task/serviceLog", payload);
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * [PiDock 06] (#8) one gated task-browser action through the shell
+ * (`host/task` + `task/browserAction`). The renderer never speaks to
+ * Chromium/CDP: main owns the visible page and validates the page handle,
+ * the task's navigation allowlist and the takeover state; the Host adds the
+ * session permission gate for agent calls. `{ok:false,error}` envelopes are
+ * returned, never thrown, so the panel keeps its state and can show the
+ * refusal (e.g. `approval-required: <id>`, `takeover-paused`, a denied
+ * navigation target).
+ */
+export async function browserActionThroughShell(input: {
+  taskId: string;
+  action: string;
+  /** Page handle of the task page the action addresses (absent for `page/open`). */
+  page?: { taskId?: string; pageId: string; webContentsId?: number };
+  params?: Record<string, unknown>;
+  /** Agent calls name their session; UI calls omit it (attested human path). */
+  sessionId?: string;
+  approvalId?: string;
+  /** Session a user marker is logged into; defaults to the task's session. */
+  targetSessionId?: string;
+  label?: string;
+}): Promise<ShellTaskOpResult> {
+  const payload: Record<string, unknown> = { action: input.action };
+  if (input.page !== undefined) payload["page"] = input.page;
+  if (input.params !== undefined) payload["params"] = input.params;
+  if (input.sessionId !== undefined) {
+    payload["sessionId"] = input.sessionId;
+    if (input.approvalId !== undefined) payload["approvalId"] = input.approvalId;
+  } else {
+    if (input.targetSessionId !== undefined) payload["targetSessionId"] = input.targetSessionId;
+    if (input.label !== undefined) payload["label"] = input.label;
+  }
+  try {
+    return await shellTaskOp(input.taskId, "task/browserAction", payload);
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }

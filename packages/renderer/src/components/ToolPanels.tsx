@@ -6,6 +6,12 @@ import type { BrowserPage, Service, Subagent, Task, TaskDirectory, WorkspaceFile
 import { directoryLinkPath } from "../data/directories";
 import { useDraftStore } from "../stores/drafts";
 import { useHostStore } from "../stores/host";
+import {
+  markBrowserIssue,
+  readBrowserEvidence,
+  readBrowserPageState,
+  setBrowserTakeover,
+} from "../data/browserSurface";
 
 export function RuntimePanel({
   task,
@@ -82,42 +88,132 @@ export function RuntimePanel({
   );
 }
 
-export function BrowserPanel({ pages }: { pages: BrowserPage[] }) {
-  const [takenOver, setTakenOver] = useState(false);
-  const [marks, setMarks] = useState<{ id: string; label: string }[]>([]);
+export function BrowserPanel({
+  pages,
+  taskId,
+  sessionId,
+}: {
+  pages: BrowserPage[];
+  taskId: string;
+  /** Current session a marker is sent into (absent outside a task session). */
+  sessionId?: string;
+}) {
+  const [pageId, setPageId] = useState(pages[0]?.id);
+  const [takeover, setTakeover] = useState<{ paused: boolean; reason?: string }>({ paused: false });
+  const [marks, setMarks] = useState<{ id: string; label: string; needsRelocation: boolean }[]>([]);
+  const [notice, setNotice] = useState<string>();
+  const [annotation, setAnnotation] = useState("");
+  const [evidence, setEvidence] = useState<{ consoleErrors: string[]; failedRequests: { url: string; errorText: string }[] }>({
+    consoleErrors: [],
+    failedRequests: [],
+  });
+  const active = pages.find((page) => page.id === pageId) ?? pages[0];
+  const handle = active ? { pageId: active.id } : undefined;
+
+  const toggleTakeover = async () => {
+    if (!handle) return;
+    const paused = !takeover.paused;
+    const result = await setBrowserTakeover({ taskId, page: handle, paused, reason: "用户接管" });
+    setTakeover(paused ? { paused: true, reason: "用户接管" } : { paused: false });
+    setNotice(result.kind === "idle" ? undefined : result.text);
+  };
+
+  const markIssue = async () => {
+    if (!handle || !active) return;
+    // Read the page state first: a marker is raised against the live epoch,
+    // and the panel refreshes when the page has moved on.
+    const state = await readBrowserPageState({ taskId, page: handle });
+    const marked = await markBrowserIssue({
+      taskId,
+      page: handle,
+      url: state.url.length > 0 ? state.url : active.url,
+      annotation,
+      epoch: state.epoch,
+      mode: "box",
+      locator: { kind: "testId", value: "checkout-total" },
+      ...(sessionId !== undefined ? { sessionId } : {}),
+    });
+    setNotice(marked.notice.kind === "idle" ? undefined : marked.notice.text);
+    const marker = marked.marker;
+    if (marker) {
+      setMarks((items) => [...items, { id: marker.id, label: `${marker.annotation} · ${marker.url}`, needsRelocation: marker.needsRelocation }]);
+      setAnnotation("");
+    }
+  };
+
+  const refreshEvidence = async () => {
+    if (!handle) return;
+    const result = await readBrowserEvidence({ taskId, page: handle });
+    setEvidence(result.evidence);
+    setNotice(result.ok ? "已获取当前页面的控制台与网络失败证据（内容已限幅）" : result.error);
+  };
+
   return (
     <div className="flex flex-col gap-3">
       <p className="text-[11px] text-muted">
-        任务页面与 PiDock 自有界面分属不同信任范围；Agent 与用户操作同一页面实例。
+        任务页面与 PiDock 自有界面分属不同信任范围；Agent 与用户操作同一页面实例，渲染层不直接调用 CDP。
       </p>
       <ul className="flex flex-col gap-1.5">
         {pages.map((page) => (
           <li key={page.id} className="rounded-md border border-line px-2.5 py-2 text-xs">
             <div className="flex items-center justify-between gap-2">
               <span className="text-ink">{page.title}</span>
-              <Badge>{page.id === pages[0]?.id ? "当前页面" : "标签页"}</Badge>
+              <Badge>{page.id === active?.id ? "当前页面" : "标签页"}</Badge>
             </div>
             <p className="mt-1 font-mono text-[11px] text-muted">{page.url}</p>
+            {pages.length > 1 ? (
+              <Button size="sm" variant="ghost" onClick={() => setPageId(page.id)}>
+                切换到此页
+              </Button>
+            ) : null}
           </li>
         ))}
       </ul>
       <div className="flex flex-wrap items-center gap-2">
-        <Button size="sm" onClick={() => setTakenOver((value) => !value)}>
-          {takenOver ? "交还控制" : "人工接管"}
+        <Button size="sm" onClick={() => void toggleTakeover()}>
+          {takeover.paused ? "交还控制" : "人工接管"}
         </Button>
-        <Button
-          size="sm"
-          onClick={() => setMarks((items) => [...items, { id: `mark-${items.length + 1}`, label: `标记 ${items.length + 1} · #checkout-total` }])}
-        >
+        <Button size="sm" variant="ghost" onClick={() => void refreshEvidence()}>
+          获取证据
+        </Button>
+        <Badge tone={takeover.paused ? "warn" : "neutral"}>{takeover.paused ? "人工接管中：自动化已暂停" : "Agent 控制中"}</Badge>
+      </div>
+      <div className="flex flex-col gap-1.5">
+        <label className="text-[11px] text-muted" htmlFor="browser-marker-annotation">
+          标记说明
+        </label>
+        <input
+          id="browser-marker-annotation"
+          className="rounded-md border border-line bg-transparent px-2.5 py-1.5 text-xs text-ink"
+          placeholder="例如：总额与对账单不一致"
+          value={annotation}
+          onChange={(event) => setAnnotation(event.target.value)}
+        />
+        <Button size="sm" onClick={() => void markIssue()} disabled={!handle}>
           框选元素标记
         </Button>
-        <Badge tone={takenOver ? "warn" : "neutral"}>{takenOver ? "人工接管中：自动化已暂停" : "Agent 控制中"}</Badge>
       </div>
+      {notice ? <p className="text-[11px] text-muted">{notice}</p> : null}
+      {evidence.consoleErrors.length > 0 || evidence.failedRequests.length > 0 ? (
+        <ul className="flex flex-col gap-1.5 text-xs">
+          {evidence.consoleErrors.map((text, index) => (
+            <li key={`console-${index}`} className="rounded-md border border-line px-2.5 py-2 font-mono text-[11px] text-muted">
+              控制台：{text}
+            </li>
+          ))}
+          {evidence.failedRequests.map((request, index) => (
+            <li key={`network-${index}`} className="rounded-md border border-line px-2.5 py-2 font-mono text-[11px] text-muted">
+              网络：{request.url} · {request.errorText}
+            </li>
+          ))}
+        </ul>
+      ) : null}
       {marks.length > 0 ? (
         <ul className="flex flex-col gap-1.5 text-xs">
           {marks.map((mark) => (
             <li key={mark.id} className="rounded-md border border-line px-2.5 py-2">
               {mark.label} · 页面快照与元素信息随说明发送
+              {mark.needsRelocation ? " · 页面已变化，Agent 需重新定位" : ""}
             </li>
           ))}
         </ul>
