@@ -196,6 +196,40 @@ describe("TaskWorkspaceFiles", () => {
     expect(files.preview({ rootId: "repo", relative: "api.ts" }).ok).toBe(true);
   });
 
+  it("applies the containment check to Windows-shaped real paths", () => {
+    const taskDir = "C:\\tasks\\task-aaaaaaaa";
+    const disk = memoryTaskStore();
+    disk.writeTask(taskDir, { ...record(), taskDir });
+    // `joinRoot` builds this with a forward slash; the realpath reader answers
+    // with backslashes and a differently cased drive, as Windows does.
+    const files = new TaskWorkspaceFiles(
+      "task-aaaaaaaa",
+      taskDir,
+      disk,
+      readers({
+        listDirectory: () => [
+          { name: "secret.txt", kind: "file" },
+          { name: "api.ts", kind: "file" },
+        ],
+        readTextFile: () => ({ ok: true, text: "export const ok = 1;\n", bytes: 22 }),
+        realPath: (path) => {
+          if (path.endsWith("secret.txt")) return "C:\\Windows\\system32\\drivers\\etc\\hosts";
+          if (path.endsWith("api.ts")) return "c:\\tasks\\task-aaaaaaaa\\front-monorepo\\api.ts";
+          return path;
+        },
+      }),
+    );
+    const listed = files.tree({ rootId: "front-monorepo" });
+    expect(listed.ok).toBe(true);
+    if (!listed.ok) return;
+    expect(listed.tree.entries.map((entry) => entry.path)).toEqual(["api.ts"]);
+    expect(files.preview({ rootId: "front-monorepo", relative: "api.ts" }).ok).toBe(true);
+    const refused = files.preview({ rootId: "front-monorepo", relative: "secret.txt" });
+    expect(refused.ok).toBe(false);
+    if (refused.ok) return;
+    expect(refused.error).toContain("path-out-of-scope");
+  });
+
   it("surfaces a reader refusal (binary/oversized) as an error instead of text", () => {
     const files = new TaskWorkspaceFiles(
       "task-aaaaaaaa",
