@@ -6,7 +6,7 @@
  * importing an Electron entry point into unit tests. `host.ts` re-exports
  * `validateHostTaskOp` for backward-compatible imports.
  */
-import { isHostTaskOp, type HostTaskOp } from "../rpc/protocol.js";
+import { isHostTaskOp, isTaskOpOrigin, type HostTaskOp } from "../rpc/protocol.js";
 import { isAbsoluteTaskRoot } from "../main/task-provision.js";
 import { PI_GATED_TOOL_NAMES } from "../main/pi-session.js";
 
@@ -107,6 +107,45 @@ export function toolPlannerSpecForOp(op: string, payload: unknown): ToolPlannerS
 export function toolPlannerSpecForHostDispatch(record: Record<string, unknown>): ToolPlannerSpec {
   const spec = toolPlannerSpecForOp("task/sendMessage", record);
   return spec ?? { ok: true, mode: "none" };
+}
+
+/**
+ * Pure actor classification for `task/controlService` ([PiDock 04] #7).
+ *
+ * A payload `sessionId` is agent control and always goes through the
+ * session permission gate. A session-less call is human-UI control only
+ * when the trusted main process stamped the `shell-ui` origin on the
+ * envelope (sender-bound attestation, see `TaskOpOrigin`): a raw
+ * session-less call from any other route (agent tool dispatch over the
+ * parent port, in-Host tool calls) is rejected, so a caller cannot shed
+ * its session — or omit it — to claim the ungated human path.
+ * Tested directly because `host.ts` needs a utilityProcess parent port.
+ */
+export type ServiceControlCaller =
+  | { ok: true; kind: "agent"; sessionId: string }
+  | { ok: true; kind: "human"; label: string }
+  | { ok: false; error: string };
+
+export function classifyServiceControlCaller(input: {
+  sessionId?: unknown;
+  label?: unknown;
+  origin?: unknown;
+}): ServiceControlCaller {
+  if (input.sessionId !== undefined) {
+    if (typeof input.sessionId !== "string" || input.sessionId.length === 0) {
+      return { ok: false, error: "invalid-payload: task/controlService.sessionId must be a non-empty string" };
+    }
+    return { ok: true, kind: "agent", sessionId: input.sessionId };
+  }
+  if (!isTaskOpOrigin(input.origin)) {
+    return {
+      ok: false,
+      error: "permission-denied: 无会话的界面操作需要受信任来源，已拒绝",
+    };
+  }
+  const label =
+    typeof input.label === "string" && input.label.trim().length > 0 ? input.label : "用户显式操作";
+  return { ok: true, kind: "human", label };
 }
 
 /** Fork-time task binding: one utilityProcess serves one task folder. */

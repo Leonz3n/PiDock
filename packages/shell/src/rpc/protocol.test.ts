@@ -73,6 +73,18 @@ describe("host/task routing", () => {
     expect(isHostTaskParams({ workspaceId: "w", taskId: "t", op: "task/exec" })).toBe(false);
     expect(isHostTaskParams({ workspaceId: "w", taskId: "t", op: "task/cancel" })).toBe(true);
   });
+
+  // BLOCK P0-2: the sender attestation rides the main-built envelope. A
+  // present-but-malformed attestation is rejected, never ignored; an
+  // absent one stays valid (unattested route) and the Host then refuses
+  // session-less human control.
+  it("accepts only the main-stamped shell-ui origin shape", () => {
+    expect(isHostTaskParams({ workspaceId: "w", taskId: "t", op: "task/cancel", origin: { kind: "shell-ui", senderWebContentsId: 3 } })).toBe(true);
+    expect(isHostTaskParams({ workspaceId: "w", taskId: "t", op: "task/cancel" })).toBe(true);
+    expect(isHostTaskParams({ workspaceId: "w", taskId: "t", op: "task/cancel", origin: { kind: "agent-tool", senderWebContentsId: 3 } })).toBe(false);
+    expect(isHostTaskParams({ workspaceId: "w", taskId: "t", op: "task/cancel", origin: { kind: "shell-ui", senderWebContentsId: 0 } })).toBe(false);
+    expect(isHostTaskParams({ workspaceId: "w", taskId: "t", op: "task/cancel", origin: "shell-ui" })).toBe(false);
+  });
 });
 
 describe("isRpcResponse", () => {

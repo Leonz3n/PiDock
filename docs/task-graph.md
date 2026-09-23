@@ -46,3 +46,19 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   导入、`process.env`、shell 模块导入一律失败。preload 仍为最小桥
   （`window.pidock.taskOp` + `{ok:false,error}` 信封），任务路由 id 由 main
   按可信 sender 绑定，renderer 只能点名自己的任务。
+
+### 来源证明与一次性确认（[PiDock 04] #7）
+
+- main 在转发 `host/task` 时按可信 sender 给信封盖上 `origin:
+  {kind:"shell-ui", senderWebContentsId}`（`protocol.ts` 的
+  `TaskOpOrigin`）。Host 仅在“无 `sessionId` + 该来源证明”同时成立时，
+  才把服务启停当作人工界面操作；无来源证明的无会话调用直接拒绝，
+  因此调用方不能靠省略 `sessionId`（或伪造 `actor`）绕过会话权限门禁。
+- 服务启停的人工/Agent 归属由 `classifyServiceControlCaller`（纯函数，
+  `host-guards.test.ts` 锁定）判定；Agent 分支的权限档位取自会话通道的
+  实时 `currentPermission`，`default` 档必须携带已验证的 `approvalId`。
+- `approvalId` 对应确认请求为一次性：Host 在首次成功启停时调用
+  `PiSessionChannel.consumeApproval` 并写回会话快照，同一 id 不能再次
+  授权（start/stop 共用同一个“服务目录”绑定目标）；`restore` 会把
+  `approved` 但未消费的请求一并消费，重开应用必须重新确认。本切片不设
+  确认有效期（TTL），语义见 `service-runtime.ts` 的 `verifyServiceControlApproval`。
