@@ -48,6 +48,24 @@ describe("multi-session write coordination", () => {
     expect(result.state).toBe("completed");
   });
 
+  it("surfaces a refused write with its reason instead of failing silently", async () => {
+    const user = userEvent.setup();
+    renderApp("/projects/atlas/tasks/release?session=main");
+    await screen.findByRole("heading", { name: "发布前检查" });
+
+    // The deploy session holds the write right while its confirmation is open.
+    const started = await useHostStore.getState().sendMessage("release", "deploy", "部署到 staging", []);
+    expect(started.state).toBe("approval");
+
+    // The current session's composer is refused: the toast names the holder
+    // (the refusal text comes from the coordinator, not the UI).
+    await user.type(await screen.findByLabelText("消息输入"), "先改一处文件");
+    await user.click(screen.getByRole("button", { name: "发送消息" }));
+    expect(await screen.findByText(/同一任务写操作权由会话 deploy 持有/)).toBeInTheDocument();
+    // The draft stays so the user can retry after releasing the holder.
+    expect(await screen.findByLabelText("消息输入")).toHaveValue("先改一处文件");
+  });
+
   it("offers the session context menu and archives without creating a replacement", async () => {
     const user = userEvent.setup();
     renderApp("/projects/atlas/tasks/latency?session=main");

@@ -42,6 +42,7 @@ import {
   validateHostTaskOp,
 } from "./host-guards.js";
 import { TaskWorkspaceHost, diskTaskStore } from "./task-host.js";
+import { SharedPathCoordinator } from "./path-coordination.js";
 import { TaskServiceRuntime } from "./service-runtime.js";
 import { TaskServiceTopology } from "./service-topology.js";
 import { runAgentServiceControl } from "./service-control.js";
@@ -80,6 +81,12 @@ function reply(response: RpcResponse): void {
 // Lazily created on first dispatch so `host/ping` smoke paths that never
 // touch tasks do not require the task env.
 let workspaceHost: TaskWorkspaceHost | null = null;
+
+// [PiDock 09] (#11) cross-task real-path write coordination. One table for the
+// whole Host process: plain-directory links are shared views of the original
+// files, so two task folders writing the same resolved path (or an ancestor of
+// it) must serialize even though each task has its own write right.
+const sharedPaths = new SharedPathCoordinator();
 
 // [PiDock 04] (#7) per-task service runtime, sibling to the workspace
 // Host above: same fork binding (PIDOCK_TASK_ID/PIDOCK_TASK_DIR), no new
@@ -127,16 +134,23 @@ function taskHostFor(taskId: string): TaskWorkspaceHost | { error: string } {
     // [PiDock 09] (#11) write coordination reads the service runtime's
     // still-running agent-owned services lazily (the runtime is created on
     // first service op, after this closure exists).
-    workspaceHost = new TaskWorkspaceHost(boundTaskId, taskDir, diskTaskStore, undefined, () => {
-      const runtime = serviceRuntime;
-      if (!runtime || runtime.taskDir !== taskDir) return [];
-      return runtime.runningAgentOwned().map((service) => ({
-        resourceId: service.serviceId,
-        kind: "service" as const,
-        ownerSessionId: service.ownerSessionId,
-        label: service.serviceId,
-      }));
-    });
+    workspaceHost = new TaskWorkspaceHost(
+      boundTaskId,
+      taskDir,
+      diskTaskStore,
+      undefined,
+      () => {
+        const runtime = serviceRuntime;
+        if (!runtime || runtime.taskDir !== taskDir) return [];
+        return runtime.runningAgentOwned().map((service) => ({
+          resourceId: service.serviceId,
+          kind: "service" as const,
+          ownerSessionId: service.ownerSessionId,
+          label: service.serviceId,
+        }));
+      },
+      sharedPaths,
+    );
   }
   return workspaceHost;
 }
