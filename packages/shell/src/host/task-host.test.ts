@@ -958,6 +958,46 @@ describe("[PiDock 09] real-path write coordination across tasks", () => {
     expect(shared.snapshot()).toEqual([]);
   });
 
+  it("keeps the open confirmation's finer real-path key when a later turn targets an ancestor", () => {
+    const shared = new SharedPathCoordinator();
+    const dirA = "/work/tasks/task-aaaa1111";
+    const dirB = "/work/tasks/task-bbbb2222";
+    const sharedRoot = "/shared/invoice-docs";
+    const linksA: Record<string, string> = {};
+    const a = taskHostWithLink({
+      taskId: "task-a",
+      taskDir: dirA,
+      store: memoryTaskStore(),
+      shared,
+      resolveRealPath: (path) => linkResolver(linksA)(path),
+      dirId: "task-aaaa1111",
+      linkSource: sharedRoot,
+    });
+    linksA[a.linkPath] = sharedRoot;
+    const b = taskHostWithLink({
+      taskId: "task-b",
+      taskDir: dirB,
+      store: memoryTaskStore(),
+      shared,
+      resolveRealPath: (path) => (path === b.linkPath ? sharedRoot : path.startsWith(`${b.linkPath}/`) ? `${sharedRoot}${path.slice(b.linkPath.length)}` : path),
+      dirId: "task-bbbb2222",
+      linkSource: sharedRoot,
+    });
+
+    // The confirmation holds the file's key; the second failing turn claims the
+    // shared root, which `claim` reduces to the outermost key, so releasing a
+    // post-claim read would drop the holder and free the open confirmation.
+    const turn = a.taskHost.sendMessage("main", "改 spec", { ...writeTurn(`${a.linkPath}/spec.md`), tool: "exec.run" });
+    expect(turn.state).toBe("approval");
+    const specKey = `${sharedRoot}/spec.md`;
+    expect(() => a.taskHost.sendMessage("main", "改目录", { ...writeTurn(a.linkPath), tool: "exec.run" })).toThrow("当前执行尚未结束");
+    expect(shared.snapshot().map((holder) => holder.keys)).toEqual([[specKey]]);
+    expect(() => b.taskHost.sendMessage("main", "改 spec", writeTurn(`${b.linkPath}/spec.md`))).toThrow("shared-path-locked");
+
+    a.taskHost.approve("main", turn.approvalId ?? "");
+    expect(shared.snapshot()).toEqual([]);
+  });
+
   it("keeps task-private worktree paths parallel across tasks", () => {
     const shared = new SharedPathCoordinator();
     const dirA = "/work/tasks/task-aaaa1111";

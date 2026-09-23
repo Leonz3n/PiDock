@@ -277,6 +277,20 @@ export interface HostApprovalListing {
   executed: boolean;
 }
 
+/**
+ * Result of one attempt's shared real-path claim: what it added plus the keys
+ * the session already held. A failed attempt releases exactly its addition and
+ * keeps `heldBefore` — the post-claim read is unusable for that, because
+ * `SharedPathCoordinator.claim` reduces overlapping keys to the outermost one
+ * (an ancestor target would replace a finer held key and leave nothing to keep).
+ */
+interface ClaimedPathScope {
+  /** Keys this claim added; empty when the held keys already covered the target. */
+  added: readonly string[];
+  /** Keys the session held before this claim. */
+  heldBefore: readonly string[];
+}
+
 export class TaskWorkspaceHost {
   private readonly channels = new Map<string, PiSessionChannel>();
   /**
@@ -363,13 +377,14 @@ export class TaskWorkspaceHost {
    * Claim the shared real-path keys of one side-effecting target, if the target
    * lives in a shared plain directory. Task-private paths claim nothing: two
    * tasks always have distinct worktree paths, so they stay parallel (盒子 6).
-   * Returns the keys **this claim added** (a target already covered by the
-   * session's holder adds nothing), so a failed attempt can release exactly its
-   * own keys and leave the keys an open confirmation still holds.
+   * Returns the keys **this claim added** plus the keys held before it (a
+   * target already covered by the session's holder adds nothing), so a failed
+   * attempt can release exactly its own keys and leave the keys an open
+   * confirmation still holds.
    */
-  private claimPathScope(input: { sessionId: string; label: string; scope: AllowedPathScope }): string[] {
-    if (input.scope.kind === "task") return [];
-    const held = this.sessionPathKeys(input.sessionId);
+  private claimPathScope(input: { sessionId: string; label: string; scope: AllowedPathScope }): ClaimedPathScope {
+    if (input.scope.kind === "task") return { added: [], heldBefore: [] };
+    const heldBefore = this.sessionPathKeys(input.sessionId);
     const claim = this.sharedPaths.claim({
       taskId: this.taskId,
       sessionId: input.sessionId,
@@ -377,7 +392,7 @@ export class TaskWorkspaceHost {
       paths: [input.scope.key],
     });
     if (!claim.ok) throw new Error(sharedPathClaimError(claim));
-    return claim.keys.filter((key) => !held.includes(key));
+    return { added: claim.keys.filter((key) => !heldBefore.includes(key)), heldBefore };
   }
 
   /** Shared real-path keys one session of this task currently holds. */
@@ -399,15 +414,15 @@ export class TaskWorkspaceHost {
    * Release only the keys one attempt added, keeping the session's other keys
    * ([PiDock 09] #11): an open confirmation keeps holding its keys, so a later
    * failed attempt of the same session must not free the same original path
-   * for other tasks.
+   * for other tasks. The kept keys are the pre-claim ones, so a target that is
+   * an ancestor of a held key still releases to the finer key it replaced.
    */
-  private releaseClaimedPathScope(sessionId: string, added: readonly string[]): void {
-    if (added.length === 0) return;
-    const keep = this.sessionPathKeys(sessionId).filter((key) => !added.includes(key));
+  private releaseClaimedPathScope(sessionId: string, claimed: ClaimedPathScope): void {
+    if (claimed.added.length === 0) return;
     this.sharedPaths.release({
       taskId: this.taskId,
       sessionId,
-      keepPaths: keep,
+      keepPaths: claimed.heldBefore,
       keepDerivedExecutionIds: this.liveDerivedExecutionIds(sessionId),
     });
   }
@@ -982,7 +997,7 @@ export class TaskWorkspaceHost {
     if (scope?.kind === "outside" && !gateRefuses) throw new Error(`path-out-of-scope: ${scope.reason}`);
     const writesAnything = sideEffecting && !gateRefuses;
     let claimId: string | undefined;
-    let claimedPathKeys: string[] = [];
+    let claimedPathScope: ClaimedPathScope = { added: [], heldBefore: [] };
     if (writesAnything) {
       const claim = this.claimWrite(sessionId, channel.currentPermission, {
         kind: "turn",
@@ -994,7 +1009,7 @@ export class TaskWorkspaceHost {
       // one, and a conflict releases the task claim so nothing is half-held.
       if (scope !== undefined && scope.kind !== "outside") {
         try {
-          claimedPathKeys = this.claimPathScope({ sessionId, label: `回合工具 ${plannedTool ?? "fs.write"}`, scope });
+          claimedPathScope = this.claimPathScope({ sessionId, label: `回合工具 ${plannedTool ?? "fs.write"}`, scope });
         } catch (error) {
           this.releaseWrite(claimId);
           throw error;
@@ -1011,7 +1026,7 @@ export class TaskWorkspaceHost {
         // real-path keys must stay held ([PiDock 09] #11).
         const release = this.releaseWrite(claimId);
         if (release.releasedOwner === sessionId) this.releasePathScope(sessionId);
-        else this.releaseClaimedPathScope(sessionId, claimedPathKeys);
+        else this.releaseClaimedPathScope(sessionId, claimedPathScope);
       }
       throw error;
     }
@@ -1023,7 +1038,7 @@ export class TaskWorkspaceHost {
       else {
         const release = this.releaseWrite(claimId);
         if (release.releasedOwner === sessionId) this.releasePathScope(sessionId);
-        else this.releaseClaimedPathScope(sessionId, claimedPathKeys);
+        else this.releaseClaimedPathScope(sessionId, claimedPathScope);
       }
     }
     this.store.writeSession(this.taskDir, channel.snapshot());
