@@ -631,6 +631,38 @@ export class PiSessionChannel {
     return true;
   }
 
+  /**
+   * Append a conversation message without running a turn ([PiDock 06] #8).
+   *
+   * The task browser produces two kinds of session entries that are not
+   * model calls: a user marker (task/page/URL/selection/annotation and the
+   * obtainable locator, persisted in `references`) and the Agent's own
+   * browser action log. Both must be visible in the conversation the user
+   * reads, and neither may trigger a model request or change the run
+   * state, so this is the narrow seam for them. `origin` keeps the
+   * human/agent distinction the rest of the session uses.
+   */
+  appendMessage(input: {
+    role: "user" | "agent";
+    text: string;
+    origin: "human" | "agent";
+    references?: unknown[];
+  }): PiMessage {
+    if (input.text.trim().length === 0 && (input.references?.length ?? 0) === 0) {
+      throw new Error("invalid-payload: 消息需要文本或结构化内容");
+    }
+    this.messageSequence += 1;
+    const message: PiMessage = {
+      id: `msg-${this.messageSequence}`,
+      role: input.role,
+      text: input.text,
+      origin: input.origin,
+      ...(input.references !== undefined ? { references: input.references } : {}),
+    };
+    this.messages.push(message);
+    return message;
+  }
+
   /** Save/refresh the unsent composer draft. Never auto-sends; survives restore. */
   saveDraft(draft: { text: string; references?: unknown[]; skillSource?: string }): void {
     this.draft = { text: draft.text, updatedAt: this.now(), ...(draft.references !== undefined ? { references: draft.references } : {}), ...(draft.skillSource !== undefined ? { skillSource: draft.skillSource } : {}) };
