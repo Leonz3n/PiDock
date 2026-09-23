@@ -2,6 +2,7 @@ import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { createMemoryHost } from "../data/memoryHost";
+import { describeProviderAvailability } from "../data/providerState";
 import { useHostStore } from "../stores/host";
 import { renderApp } from "./helpers";
 
@@ -81,6 +82,67 @@ describe("provider page status and sync", () => {
     const session = await useHostStore.getState().adapter.getSession("release", "main");
     expect(session?.providerId).toBe("provider-anthropic");
     await useHostStore.getState().refresh();
+  });
+});
+
+describe("add-form discovery", () => {
+  it("syncs the draft connection before the first save and invalidates it on a changed connection", async () => {
+    const user = userEvent.setup();
+    renderApp("/providers");
+    await screen.findByRole("heading", { name: "Provider 与上下文" });
+    await user.click(screen.getByRole("button", { name: "添加 Provider" }));
+    const dialog = await screen.findByRole("dialog", { name: "添加 Provider" });
+
+    // No address yet: the sync explains what is missing instead of failing.
+    await user.click(within(dialog).getByRole("button", { name: "同步模型列表" }));
+    expect(await within(dialog).findByText("请先填写服务地址，再同步模型列表。")).toBeInTheDocument();
+
+    await user.type(within(dialog).getByLabelText("显示名称"), "草稿网关");
+    await user.type(within(dialog).getByLabelText("服务地址"), "https://gw.example.com/v1");
+    await user.click(within(dialog).getByRole("button", { name: "同步模型列表" }));
+    expect(await within(dialog).findByTestId("provider-catalog-status")).toHaveTextContent("已同步 3 个候选");
+    // The candidate is offered in the shared datalist, and hand-typed ids stay allowed.
+    expect(document.querySelectorAll("#provider-model-candidates option")).toHaveLength(3);
+
+    // Changing the address invalidates the candidate set.
+    const address = within(dialog).getByLabelText("服务地址");
+    await user.clear(address);
+    await user.type(address, "https://other.example.com/v1");
+    expect(within(dialog).getByTestId("provider-catalog-stale")).toHaveTextContent("连接已变化，候选已失效，请重新同步");
+
+    // A connection without a discovery endpoint reports `unsupported`.
+    await user.clear(address);
+    await user.type(address, "https://gw.example.com/no-discovery");
+    await user.click(within(dialog).getByRole("button", { name: "同步模型列表" }));
+    expect(await within(dialog).findByTestId("provider-catalog-status")).toHaveTextContent("未声明模型发现端点");
+  });
+
+  it("reports a model removed from its configuration without rewriting history", async () => {
+    const adapter = createMemoryHost();
+    await adapter.sendMessage("release", "main", "先留一条历史", []);
+    const attributed = async () =>
+      (await adapter.getSession("release", "main"))?.messages.filter((message) => message.attribution !== undefined) ?? [];
+    const before = (await attributed()).at(-1);
+    expect(before?.attribution).toEqual({ providerId: "provider-anthropic", model: "Claude Sonnet" });
+
+    // The model is dropped from the configuration: the session keeps naming it.
+    await adapter.saveProvider({
+      id: "provider-anthropic",
+      name: "Anthropic 官方",
+      protocol: "anthropic-messages",
+      baseUrl: "https://api.anthropic.com",
+      authRef: "anthropic-key",
+      enabled: true,
+      models: [{ id: "Claude Haiku", contextWindow: 200 }],
+    });
+    const session = await adapter.getSession("release", "main");
+    expect(session?.providerId).toBe("provider-anthropic");
+    expect(session?.model).toBe("Claude Sonnet");
+    const status = describeProviderAvailability({ provider: (await adapter.getWorkspace()).providers.find((item) => item.id === "provider-anthropic")!, modelId: "Claude Sonnet" });
+    expect(status).toMatchObject({ availability: "model-unavailable" });
+    expect(status.message).toContain("已不在该配置中");
+    // The old response still names the model it was produced by.
+    expect((await attributed()).at(-1)?.attribution?.model).toBe("Claude Sonnet");
   });
 });
 

@@ -1746,9 +1746,15 @@ class MemoryHost implements HostAdapter {
    * outcomes so the form can be exercised without a provider. Configured
    * model rows are never touched — only the candidate list changes.
    */
-  async syncProviderModels(providerId: string): Promise<ProviderDiscoveryView> {
-    const provider = this.providers.find((item) => item.id === providerId);
-    if (!provider) throw new Error("Provider 不存在");
+  async syncProviderModels(providerId: string, connection?: { protocol: string; baseUrl: string }): Promise<ProviderDiscoveryView> {
+    const saved = this.providers.find((item) => item.id === providerId);
+    if (!saved && providerId.length > 0) throw new Error("Provider 不存在");
+    // [PiDock 11] #9: the Add form syncs the draft connection before the first
+    // save; the outcome only ever updates candidates.
+    if (!saved && connection !== undefined && connection.baseUrl.trim().length === 0) {
+      throw new Error("请先填写服务地址，再同步模型列表");
+    }
+    const provider = saved ?? { protocol: connection?.protocol ?? "", baseUrl: connection?.baseUrl ?? "" };
     if (provider.baseUrl.trim().endsWith("no-discovery")) {
       return {
         status: "unsupported",
@@ -1764,6 +1770,7 @@ class MemoryHost implements HostAdapter {
       if (key.endsWith("fail")) return { ok: false, message: "401 未授权" };
       if (key.endsWith("timeout")) throw new Error("连接超时");
       return { ok: true, ids: PROTOCOL_MODEL_FIXTURES[protocol] ?? [] };
+
     };
     return syncModelCandidates({ connection: { protocol: provider.protocol, baseUrl: provider.baseUrl }, transport });
   }

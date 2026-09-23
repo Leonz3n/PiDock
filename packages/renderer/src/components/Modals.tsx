@@ -1839,15 +1839,21 @@ function ProviderEditModal({ providerId, onClose }: { providerId?: string; onClo
   const candidatesStale = candidateFingerprint !== null && candidateFingerprint !== connectionFingerprint({ protocol, baseUrl });
   const update = (index: number, patch: Partial<ProviderModelDraft>) =>
     setModels((items) => items.map((item, i) => (i === index ? { ...item, ...patch } : item)));
+  // The Add form syncs the draft connection; the Edit form syncs the saved
+  // configuration. Either way only the candidate list changes.
   const sync = async () => {
-    if (!existing) {
-      setCatalogStatus("请先保存 Provider，再使用当前连接同步模型列表。");
+    if (baseUrl.trim().length === 0) {
+      setCatalogStatus("请先填写服务地址，再同步模型列表。");
       return;
     }
-    const view = await syncProviderModels(existing.id);
-    setCatalogStatus(view.message);
-    setCandidates(view.candidates);
-    setCandidateFingerprint(view.fingerprint);
+    try {
+      const view = await syncProviderModels(existing?.id ?? "", { protocol, baseUrl });
+      setCatalogStatus(view.message);
+      setCandidates(view.candidates);
+      setCandidateFingerprint(view.fingerprint);
+    } catch (error) {
+      setCatalogStatus(error instanceof Error ? error.message : String(error));
+    }
   };
   return (
     <Modal
