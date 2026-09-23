@@ -1207,20 +1207,8 @@ export function validateHostTaskOp(
     if (typeof sessionId !== "string" || sessionId.trim().length === 0) {
       return { ok: false, error: "invalid-payload: task/executionState.sessionId must be a non-empty string" };
     }
-    const services = payload["services"];
-    if (services !== undefined) {
-      if (!Array.isArray(services)) return { ok: false, error: "invalid-payload: task/executionState.services must be an array" };
-      for (const entry of services) {
-        if (!isRecord(entry)) return { ok: false, error: "invalid-payload: task/executionState.services entries must be objects" };
-        const serviceId = entry["serviceId"];
-        if (typeof serviceId !== "string" || serviceId.trim().length === 0) {
-          return { ok: false, error: "invalid-payload: task/executionState.services.serviceId must be a non-empty string" };
-        }
-        if (typeof entry["running"] !== "boolean") {
-          return { ok: false, error: "invalid-payload: task/executionState.services.running must be a boolean" };
-        }
-      }
-    }
+    // No `services` field: the Host reports the service states it observed
+    // itself (盒子 2), never a caller claim, so there is nothing to validate.
     return { ok: true };
   }
   if (op === "task/attention") {

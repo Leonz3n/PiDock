@@ -100,7 +100,12 @@ export class TaskExecutionLedger {
     return this.ledgerState.executions
       .filter((record) => record.sessionId === sessionId)
       .map((record) => cloneRecord(record))
-      .sort((a, b) => (a.updatedAt === b.updatedAt ? (a.executionId < b.executionId ? 1 : -1) : a.updatedAt < b.updatedAt ? 1 : -1));
+      .sort((a, b) => {
+        if (a.updatedAt !== b.updatedAt) return a.updatedAt < b.updatedAt ? 1 : -1;
+        // Tied timestamps order by the minted sequence, never by the id string
+        // (`exec-10` is newer than `exec-9`, not older).
+        return executionSequence(b.executionId) - executionSequence(a.executionId);
+      });
   }
 
   byId(executionId: string): ExecutionRecord | undefined {
@@ -108,12 +113,21 @@ export class TaskExecutionLedger {
     return record === undefined ? undefined : cloneRecord(record);
   }
 
+  /**
+   * The execution of one confirmation whatever its state (盒子 3/6): a record the
+   * ledger already settled still answers, so a late approve can be refused
+   * instead of falling through to the session channel.
+   */
+  byApproval(approvalId: string): ExecutionRecord | undefined {
+    const record = this.ledgerState.executions.find((item) => item.approval?.approvalId === approvalId);
+    return record === undefined ? undefined : cloneRecord(record);
+  }
+
   /** The live execution waiting on one approval (盒子 3 resolves by approval id). */
   waitingOnApproval(approvalId: string): ExecutionRecord | undefined {
-    const record = this.ledgerState.executions.find(
-      (item) => item.approval?.approvalId === approvalId && (item.state === "pending-approval" || item.state === "executing"),
-    );
-    return record === undefined ? undefined : cloneRecord(record);
+    const record = this.byApproval(approvalId);
+    if (record === undefined) return undefined;
+    return record.state === "pending-approval" || record.state === "executing" ? record : undefined;
   }
 
   open(input: { sessionId: string; kind: ExecutionKind; label: string; projectId?: string; callId?: string }): ExecutionRecord {
@@ -191,10 +205,15 @@ export class TaskExecutionLedger {
     return this.update(executionId, (record) => {
       const ref = record.approval;
       if (!ref || ref.approvalId !== input.approvalId) throw new Error(`unknown-approval: ${input.approvalId}`);
-      const approved: ExecutionRecord = { ...record, approval: { ...ref, status: "approved" } };
-      return consumeExecutionApproval(approved, {
+      // Recording the user's decision only turns a *pending* request approved. A
+      // ref the ledger already settled (expired / rejected) keeps its own status,
+      // so the re-check below refuses it as `not-approved` instead of being
+      // re-labelled here and slipping past.
+      const decided: ExecutionRecord =
+        ref.status === "pending" ? { ...record, approval: { ...ref, status: "approved" } } : record;
+      return consumeExecutionApproval(decided, {
         approvalId: input.approvalId,
-        approval: approved.approval as ExecutionApprovalRef,
+        approval: decided.approval as ExecutionApprovalRef,
         permission: input.permission,
         contentVersion: input.contentVersion ?? ref.payloadVersion,
         ...(input.requiredScope !== undefined ? { requiredScope: input.requiredScope } : {}),
@@ -306,6 +325,12 @@ export class TaskExecutionLedger {
   private persist(): void {
     this.store.writeExecutions(this.taskDir, this.ledgerState);
   }
+}
+
+/** Minted execution sequence (`exec-<n>`) for tie-breaking; 0 keeps insertion order. */
+function executionSequence(executionId: string): number {
+  const match = /^exec-(\d+)$/.exec(executionId);
+  return match === null ? 0 : Number(match[1]);
 }
 
 function cloneRecord(record: ExecutionRecord): ExecutionRecord {
