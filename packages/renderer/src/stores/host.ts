@@ -37,6 +37,7 @@ import type {
   ServiceRecipe,
   Session,
   Task,
+  UsageCleanupScope,
   UsageRecord,
   Workspace,
 } from "../data/types";
@@ -53,6 +54,8 @@ type HostState = {
   usage: UsageRecord[];
   refresh: () => Promise<void>;
   loadUsage: (taskId?: string) => Promise<void>;
+  /** [PiDock 12] #12: remove usage in an explicit scope, then reload. */
+  clearUsage: (scope: UsageCleanupScope) => Promise<{ removed: number; remaining: number; description: string }>;
   setWorkspaceRoot: (workspaceRoot: string) => Promise<LocalSettings>;
   task: (taskId: string) => Task | undefined;
   session: (taskId: string, sessionId: string) => Session | undefined;
@@ -133,6 +136,12 @@ export const useHostStore = create<HostState>((set, get) => ({
   loadUsage: async (taskId) => {
     const usage = await get().adapter.getUsage(taskId ? { taskId } : {});
     set({ usage });
+  },
+
+  clearUsage: async (scope) => {
+    const result = await get().adapter.clearUsage(scope);
+    await get().loadUsage();
+    return result;
   },
 
   setWorkspaceRoot: async (workspaceRoot) => {
