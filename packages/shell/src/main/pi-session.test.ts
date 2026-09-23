@@ -5,7 +5,7 @@ import {
   PiSessionChannel,
   resetPiSequencesForTests,
 } from "./pi-session.js";
-import { BROWSER_ACTIONS, BROWSER_TOOL_ACTIONS } from "./browser-rules.js";
+import { BROWSER_TOOL_ACTIONS } from "./browser-rules.js";
 
 const TASK_DIR = "/tmp/pidock-test/task-abcdef12";
 
