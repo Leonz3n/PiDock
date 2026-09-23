@@ -864,7 +864,8 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
               aria-label="查看上下文占用"
               onClick={() => openModal({ type: "context", taskId: task.id, sessionId })}
             >
-              上下文 {contextDisplay.percent === null ? "未知" : `${contextDisplay.percent.toFixed(1)}%`}
+              上下文 {formatTokens(contextDisplay.used * 1000)} / {formatTokens(contextDisplay.window * 1000)} Tokens
+              {contextDisplay.percent === null ? " · 占比未知" : ` · ${contextDisplay.percent.toFixed(1)}%`}
               {contextDisplay.marker.length > 0 ? ` · ${contextDisplay.marker}` : ""}
             </Button>
           </div>
