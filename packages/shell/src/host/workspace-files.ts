@@ -64,6 +64,20 @@ function stripTrailingSeparator(path: string): string {
   return path.replace(/[\\/]+$/, "") || "/";
 }
 
+/**
+ * Comparable form of one real path. `realpathSync` returns platform
+ * separators, so both sides are slash-normalized before the prefix check
+ * (otherwise every `C:\repo\name` looks outside `C:\repo`). A path shaped
+ * like a Windows drive or UNC path is additionally case-folded, because those
+ * filesystems compare case-insensitively; a POSIX absolute path always starts
+ * with `/`, so it is never folded.
+ */
+function comparisonKey(path: string): string {
+  const normalized = stripTrailingSeparator(path).replace(/\\/g, "/");
+  const windowsShaped = /^[A-Za-z]:\//.test(normalized) || normalized.startsWith("//");
+  return windowsShaped ? normalized.toLowerCase() : normalized;
+}
+
 export const realWorkspaceFileReaders: WorkspaceFileReaders = {
   listDirectory(path) {
     return readdirSync(path, { withFileTypes: true }).map((entry) => {
@@ -240,10 +254,11 @@ export class TaskWorkspaceFiles {
    * refused instead of read.
    */
   private rootEscapeError(root: WorkspaceRoot, absolute: string): string | undefined {
-    const rootReal = stripTrailingSeparator(this.readers.realPath(root.path));
-    const targetReal = stripTrailingSeparator(this.readers.realPath(absolute));
+    const rootReal = comparisonKey(this.readers.realPath(root.path));
+    const resolved = this.readers.realPath(absolute);
+    const targetReal = comparisonKey(resolved);
     if (targetReal === rootReal || targetReal.startsWith(`${rootReal}/`)) return undefined;
-    return `path-out-of-scope: ${root.label} 内的链接指向根之外（${targetReal}），已拒绝读取`;
+    return `path-out-of-scope: ${root.label} 内的链接指向根之外（${resolved}），已拒绝读取`;
   }
 
   private resolve(input: { rootId: unknown; relative?: unknown }, allowRoot = true) {
