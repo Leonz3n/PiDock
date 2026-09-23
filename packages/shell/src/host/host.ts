@@ -45,6 +45,7 @@ import { TaskWorkspaceHost, diskTaskStore } from "./task-host.js";
 import { SharedPathCoordinator } from "./path-coordination.js";
 import { TaskServiceRuntime } from "./service-runtime.js";
 import { TaskServiceTopology } from "./service-topology.js";
+import { TaskProtocolBinding } from "./protocol-binding.js";
 import { runAgentServiceControl } from "./service-control.js";
 import { runAgentBrowserAction, runHumanBrowserAction, type BrowserGatewayPort } from "./browser-control.js";import { HostBrowserClient } from "../rpc/browser-client.js";
 import { isBrowserAction } from "../main/browser-rules.js";
@@ -105,6 +106,47 @@ function serviceTopologyFor(taskId: string): TaskServiceTopology | { error: stri
     serviceTopology = new TaskServiceTopology(host.taskId, host.taskDir);
   }
   return serviceTopology;
+}
+
+// [PiDock 08] (#14) per-task protocol generation + consumer binding state.
+// Same fork binding and lifetime as the topology above; the plan paths it
+// yields are checked against this task folder, so no op can act on another
+// task's tree.
+let protocolBinding: TaskProtocolBinding | null = null;
+
+function protocolBindingFor(taskId: string): TaskProtocolBinding | { error: string } {
+  const host = taskHostFor(taskId);
+  if ("error" in host) return host;
+  if (!protocolBinding || protocolBinding.taskDir !== host.taskDir || protocolBinding.taskId !== host.taskId) {
+    protocolBinding = new TaskProtocolBinding(host.taskId, host.taskDir);
+  }
+  return protocolBinding;
+}
+
+/**
+ * [PiDock 08] (#14) box 6: the protocol state needs to know which artifact
+ * version a *running* instance really loaded. #10's run records carry that
+ * observation (`protocolArtifact`); a record without it stays `null`=「未验证」,
+ * so a stale instance is never counted as having loaded the new artifact.
+ * Runs of services that are not protocol consumers are ignored here.
+ */
+function protocolRunsFor(taskId: string, binding: TaskProtocolBinding): Parameters<TaskProtocolBinding["state"]>[0] {
+  const topology = serviceTopologyFor(taskId);
+  if ("error" in topology) return [];
+  const byService = new Map(
+    binding
+      .state()
+      .consumers.filter((consumer): consumer is typeof consumer & { serviceId: string } => consumer.serviceId !== undefined)
+      .map((consumer) => [consumer.serviceId, consumer.consumerId] as const),
+  );
+  return topology
+    .runs()
+    .filter((record) => record.endedAt === undefined)
+    .flatMap((record) => {
+      const consumerId = byService.get(record.serviceId);
+      if (consumerId === undefined) return [];
+      return [{ consumerId, runId: record.runId, loadedVersion: record.protocolArtifact?.version ?? null, running: true }];
+    });
 }
 
 function serviceRuntimeFor(taskId: string): TaskServiceRuntime | { error: string } {
@@ -704,6 +746,77 @@ async function dispatchTaskOp(
         try {
           const scope = topology.stopScope(typeof instanceId === "string" ? instanceId : undefined);
           return { ok: true, payload: { scope } };
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : String(error) };
+        }
+      }
+      // [PiDock 08] (#14) task-local protocol generation + consumer binding.
+      // `task/planProtocol` replaces the plan (release dependencies vs. this
+      // task's artifact) and `task/recordProtocolRun` records what a real
+      // generation/binding run observed; `task/protocolState` is the read.
+      // Both writes use the same caller classification as #7/#10: a
+      // session-less request must carry the main-stamped shell-UI attestation,
+      // an agent request is opened on its own session. Nothing is fabricated —
+      // the generated version, toolchain probe, install state and resolutions
+      // all come from the caller, and a consumer is only marked bound when its
+      // reported resolution really verifies.
+      case "task/planProtocol": {
+        const binding = protocolBindingFor(taskId);
+        if ("error" in binding) return { ok: false, error: binding.error };
+        const caller = classifyControlCaller({ sessionId: record["sessionId"], label: record["label"], origin });
+        if (!caller.ok) return { ok: false, error: caller.error };
+        if (caller.kind === "agent") {
+          const host = taskHostFor(taskId);
+          if ("error" in host) return { ok: false, error: host.error };
+          host.openSession(caller.sessionId);
+        }
+        const actor = caller.kind === "human" ? `human:${caller.label}` : `agent:${caller.sessionId}`;
+        try {
+          const state = binding.setPlan(
+            {
+              protocol: record["protocol"] as never,
+              mode: record["mode"] as never,
+              steps: (record["steps"] ?? []) as never,
+              consumers: record["consumers"] as never,
+              acknowledged: (record["acknowledged"] ?? []) as never,
+            },
+            protocolRunsFor(taskId, binding),
+          );
+          return { ok: true, payload: { state, actor } };
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : String(error) };
+        }
+      }
+      case "task/protocolState": {
+        const binding = protocolBindingFor(taskId);
+        if ("error" in binding) return { ok: false, error: binding.error };
+        return { ok: true, payload: { state: binding.state(protocolRunsFor(taskId, binding)) } };
+      }
+      case "task/recordProtocolRun": {
+        const binding = protocolBindingFor(taskId);
+        if ("error" in binding) return { ok: false, error: binding.error };
+        const caller = classifyControlCaller({ sessionId: record["sessionId"], label: record["label"], origin });
+        if (!caller.ok) return { ok: false, error: caller.error };
+        if (caller.kind === "agent") {
+          const host = taskHostFor(taskId);
+          if ("error" in host) return { ok: false, error: host.error };
+          host.openSession(caller.sessionId);
+        }
+        const actor = caller.kind === "human" ? `human:${caller.label}` : `agent:${caller.sessionId}`;
+        try {
+          const state = binding.recordResult(
+            {
+              generatedVersion: record["generatedVersion"] as never,
+              ok: record["ok"] as never,
+              ...(record["note"] !== undefined ? { note: record["note"] as string } : {}),
+              ...(record["toolchain"] !== undefined ? { toolchain: record["toolchain"] as never } : {}),
+              ...(record["depsInstalled"] !== undefined ? { depsInstalled: record["depsInstalled"] as never } : {}),
+              ...(record["resolutions"] !== undefined ? { resolutions: record["resolutions"] as never } : {}),
+              ...(record["runtimeReachable"] !== undefined ? { runtimeReachable: record["runtimeReachable"] as never } : {}),
+            },
+            protocolRunsFor(taskId, binding),
+          );
+          return { ok: true, payload: { state, actor } };
         } catch (error) {
           return { ok: false, error: error instanceof Error ? error.message : String(error) };
         }
