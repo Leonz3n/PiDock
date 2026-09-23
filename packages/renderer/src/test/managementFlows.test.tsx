@@ -1,5 +1,6 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useHostStore } from "../stores/host";
 import { renderApp } from "./helpers";
 
 describe("project management", () => {
@@ -98,7 +99,124 @@ describe("capability add", () => {
 
     expect(await screen.findByText("已添加为停用，不会加载或连接")).toBeInTheDocument();
     expect(await screen.findByText("release-notes")).toBeInTheDocument();
-    expect(screen.getByText("待审阅")).toBeInTheDocument();
+    // The seeded declared package also carries 待审阅, so the new row is one of them.
+    expect(screen.getAllByText("待审阅").length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("capability sources, versions and MCP ([PiDock 16] #18)", () => {
+  it("shows the source kind, an invalid reason, and repairs the row after a re-check", async () => {
+    const user = userEvent.setup();
+    renderApp("/capabilities");
+    await screen.findByRole("heading", { name: "能力管理" });
+
+    const missing = screen.getByText("invoice-codes").closest("section")!;
+    expect(within(missing).getByText("额外来源")).toBeInTheDocument();
+    expect(within(missing).getByText(/资源缺失/)).toBeInTheDocument();
+    expect(within(missing).getByText(/未找到该资源/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "重新检查来源" }));
+    expect(await screen.findByText(/已重新检查来源/)).toBeInTheDocument();
+    await waitFor(() => expect(within(missing).queryByText(/资源缺失/)).not.toBeInTheDocument());
+    expect(within(missing).getByText("已在本机验证")).toBeInTheDocument();
+  });
+
+  it("offers install/update only on package rows, with the real version state", async () => {
+    const user = userEvent.setup();
+    renderApp("/capabilities");
+    await screen.findByRole("heading", { name: "能力管理" });
+    // Installing writes a new version, so it waits for the same safe boundary
+    // the other capability changes do; free the seeded approval first.
+    await useHostStore.getState().stopRun("release", "deploy");
+    await useHostStore.getState().refresh();
+
+    const skill = screen.getAllByText("code-review")[0]!.closest("section")!;
+    expect(within(skill).queryByRole("button", { name: /安装|更新到/ })).toBeNull();
+
+    const notInstalled = screen.getByText("@pi/pack-protoc").closest("section")!;
+    expect(within(notInstalled).getByText(/已安装 未安装/)).toBeInTheDocument();
+    await user.click(within(notInstalled).getByRole("button", { name: "安装 2.4.1" }));
+    expect(await screen.findByText(/已记录安装 2.4.1/)).toBeInTheDocument();
+    await waitFor(() => expect(within(notInstalled).getByText(/已安装 2.4.1/)).toBeInTheDocument());
+
+    const update = screen.getByText("@pi/tools-git").closest("section")!;
+    expect(within(update).getByText("有可用更新")).toBeInTheDocument();
+    await user.click(within(update).getByRole("button", { name: "更新到 1.9.0" }));
+    expect(await screen.findByText(/已记录安装 1.9.0/)).toBeInTheDocument();
+    await waitFor(() => expect(within(update).queryByText("有可用更新")).not.toBeInTheDocument());
+    expect(within(update).getByText(/已安装 1.9.0/)).toBeInTheDocument();
+  });
+
+  it("reports an MCP connection failure and retries through its bridge", async () => {
+    const user = userEvent.setup();
+    renderApp("/capabilities");
+    await screen.findByRole("heading", { name: "能力管理" });
+
+    const mcp = screen.getByText("figma-context").closest("section")!;
+    expect(within(mcp).getByText(/连接失败 · 尝试 2 次/)).toBeInTheDocument();
+    expect(within(mcp).getByText(/连接失败：首次连接超时/)).toBeInTheDocument();
+    expect(within(mcp).getByText(/实际 auto/)).toBeInTheDocument();
+
+    await user.click(within(mcp).getByRole("button", { name: "重试连接" }));
+    expect(await screen.findByText(/已重新连接（内存投影）/)).toBeInTheDocument();
+    await waitFor(() => expect(within(mcp).getByText(/已连接 · 尝试 3 次/)).toBeInTheDocument());
+    expect(within(mcp).queryByText(/连接失败/)).not.toBeInTheDocument();
+  });
+
+  it("keeps a same-named capability from another source instead of replacing it", async () => {
+    const user = userEvent.setup();
+    renderApp("/capabilities");
+    await screen.findByRole("heading", { name: "能力管理" });
+
+    await user.click(screen.getByRole("button", { name: "添加技能来源" }));
+    const dialog = await screen.findByRole("dialog", { name: "添加技能来源" });
+    await user.type(within(dialog).getByLabelText("能力名称"), "code-review");
+    await user.type(within(dialog).getByLabelText("能力来源"), "额外来源 ~/.team/skills");
+    await user.selectOptions(within(dialog).getByLabelText("来源类型"), "extra");
+    await user.click(within(dialog).getByRole("button", { name: "添加为停用" }));
+
+    expect(await screen.findByText("已添加为停用，不会加载或连接")).toBeInTheDocument();
+    // Both rows survive, each marked so the source disambiguates them.
+    await waitFor(() => expect(screen.getAllByText("重名 · 按来源区分").length).toBe(2));
+  });
+
+  it("refuses a literal secret as an MCP credential and accepts a reference", async () => {
+    const user = userEvent.setup();
+    renderApp("/capabilities");
+    await screen.findByRole("heading", { name: "能力管理" });
+
+    await user.click(screen.getByRole("tab", { name: "MCP Servers" }));
+    await user.click(screen.getByRole("button", { name: "添加 MCP Server" }));
+    const dialog = await screen.findByRole("dialog", { name: "添加 MCP Server" });
+    await user.type(within(dialog).getByLabelText("能力名称"), "linear");
+    await user.type(within(dialog).getByLabelText("能力来源"), "npx @linear/mcp");
+    await user.type(within(dialog).getByLabelText("凭据引用"), "https://user:pass@example.com");
+    await user.click(within(dialog).getByRole("button", { name: "添加为停用" }));
+    expect(await screen.findByText(/请在本机私有配置中保存密钥/)).toBeInTheDocument();
+
+    await user.clear(within(dialog).getByLabelText("凭据引用"));
+    await user.type(within(dialog).getByLabelText("凭据引用"), "linear-token");
+    await user.click(within(dialog).getByRole("button", { name: "添加为停用" }));
+    expect(await screen.findByText("已添加为停用，不会加载或连接")).toBeInTheDocument();
+    expect(await screen.findByText("linear")).toBeInTheDocument();
+  });
+
+  it("applies a capability change only at the safe session boundary", async () => {
+    const user = userEvent.setup();
+    renderApp("/capabilities");
+    await screen.findByRole("heading", { name: "能力管理" });
+
+    // release/deploy is seeded waiting for an approval, so the boundary is busy.
+    const card = screen.getAllByText("code-review")[0]!.closest("section")!;
+    expect(within(card).getByText("已启用")).toBeInTheDocument();
+    await user.click(within(card).getByRole("button", { name: "停用" }));
+    expect(await screen.findByText(/变更已提交/)).toBeInTheDocument();
+    expect(within(card).getByText(/将在当前回合结束后生效/)).toBeInTheDocument();
+    expect(within(card).getByText("已启用")).toBeInTheDocument();
+
+    await useHostStore.getState().stopRun("release", "deploy");
+    await useHostStore.getState().refresh();
+    await waitFor(() => expect(within(card).getByText("已停用")).toBeInTheDocument());
   });
 });
 

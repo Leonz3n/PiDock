@@ -509,11 +509,52 @@ export type Capability = {
   name: string;
   source: string;
   scope: string;
+  /** Which source list the capability came from; keeps same names apart. */
+  sourceKind?: CapabilitySourceKind;
+  description?: string;
   /** Skill resource relative path inside its source root; absent when unknown. */
   resourcePath?: string;
+  /** Version the user asked for; equals `activeVersion` once applied. */
+  version?: string;
+  /** Version actually serving calls; an in-flight call keeps this value. */
+  activeVersion?: string;
+  /** Package: version installed locally; absent means not installed. */
+  installedVersion?: string;
+  /** Package: version the source offers. */
+  availableVersion?: string;
+  /** MCP: the bridge Extension that hosts this server. */
+  bridge?: { extensionId: string; command: string };
+  /** MCP: private credential reference; the literal secret never lands here. */
+  authRef?: string;
+  /** MCP: last observed connection state. */
+  connection?: { state: McpConnectionState; message?: string; attempts?: number };
+  /** Highest tier the capability would like; never widens the session tier. */
+  requestedPermission?: Permission;
+  /** True only when a probe confirmed the resource in this environment. */
+  verified?: boolean;
+  /** False when discovery could not find the declared resource. */
+  present?: boolean;
+  /** Failure recorded by the last load/connect attempt. */
+  failure?: { code: CapabilityFailureCode; message: string };
+  /** A change waiting for the safe (idle) session boundary. */
+  pendingChange?: { kind: "enable" | "disable" | "set-version"; version?: string; applyAt: "idle" };
   /** `pending-review` mirrors the prototype's 待审阅: added but not yet enabled. */
   status: "enabled" | "disabled" | "update-available" | "pending-review";
 };
+
+/** Where a capability comes from: global / project / task repo / extra source. */
+export type CapabilitySourceKind = "global" | "project" | "task-repo" | "extra";
+
+export type McpConnectionState = "connected" | "connecting" | "failed" | "disconnected";
+
+export type CapabilityFailureCode =
+  | "source-disabled"
+  | "source-missing"
+  | "resource-missing"
+  | "load-failed"
+  | "bridge-missing"
+  | "connect-failed"
+  | "not-installed";
 
 export type SubagentEvent =
   | { kind: "message"; role: string; time: string; text: string }

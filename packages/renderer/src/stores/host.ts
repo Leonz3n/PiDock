@@ -117,6 +117,12 @@ type HostState = {
   setScheduleEnabled: (scheduleId: string, enabled: boolean) => Promise<void>;
   runScheduleNow: (scheduleId: string) => Promise<ScheduledRun>;
   setCapabilityEnabled: (capabilityId: string, enabled: boolean) => Promise<void>;
+  /** [PiDock 16] (#18) retry an MCP connection through its bridge Extension. */
+  retryMcpConnection: (capabilityId: string) => Promise<Capability>;
+  /** [PiDock 16] (#18) install/update a package; only a package has a version to install. */
+  installCapability: (capabilityId: string) => Promise<Capability>;
+  /** [PiDock 16] (#18) re-check sources: recovered rows work again, same names stay apart. */
+  recheckCapabilities: () => Promise<Capability[]>;
   revokeDevice: (deviceId: string) => Promise<void>;
   loadCleanupPreview: (taskId: string, selection?: CleanupSelection) => Promise<CleanupItem[]>;
   saveEnvironmentConfig: (input: SaveEnvironmentConfigInput) => Promise<void>;
@@ -301,6 +307,24 @@ export const useHostStore = create<HostState>((set, get) => ({
   setCapabilityEnabled: async (capabilityId, enabled) => {
     await get().adapter.setCapabilityEnabled(capabilityId, enabled);
     await get().refresh();
+  },
+
+  retryMcpConnection: async (capabilityId) => {
+    const capability = await get().adapter.retryMcpConnection(capabilityId);
+    await get().refresh();
+    return capability;
+  },
+
+  installCapability: async (capabilityId) => {
+    const capability = await get().adapter.installCapability(capabilityId);
+    await get().refresh();
+    return capability;
+  },
+
+  recheckCapabilities: async () => {
+    const capabilities = await get().adapter.recheckCapabilities();
+    await get().refresh();
+    return capabilities;
   },
 
   revokeDevice: async (deviceId) => {
