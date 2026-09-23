@@ -783,6 +783,134 @@ export function validateHostTaskOp(
     }
     return { ok: true };
   }
+  // [PiDock 08] (#14) task-local protocol generation + consumer binding:
+  // envelope shape only here; semantic validation (protocol repo is not a
+  // consumer, unique consumer/repo, task-scoped plan paths) runs Host-side in
+  // `TaskProtocolBinding.setPlan`, and generation/binding results are
+  // caller-reported observations, never fabricated.
+  if (op === "task/planProtocol") {
+    if (!isRecord(payload)) return { ok: false, error: "invalid-payload: task/planProtocol requires a payload object" };
+    const protocol = payload["protocol"];
+    if (
+      !isRecord(protocol) ||
+      typeof protocol["repoDir"] !== "string" ||
+      typeof protocol["goGenDir"] !== "string" ||
+      typeof protocol["tsGenDir"] !== "string"
+    ) {
+      return { ok: false, error: "invalid-payload: task/planProtocol.protocol must be {repoDir, goGenDir, tsGenDir}" };
+    }
+    if (payload["mode"] !== "release" && payload["mode"] !== "local") {
+      return { ok: false, error: "invalid-payload: task/planProtocol.mode must be release/local" };
+    }
+    const steps = payload["steps"];
+    if (
+      steps !== undefined &&
+      (!Array.isArray(steps) ||
+        !steps.every(
+          (entry) =>
+            isRecord(entry) &&
+            (entry["kind"] === "generate" || entry["kind"] === "postprocess") &&
+            typeof entry["program"] === "string" &&
+            Array.isArray(entry["args"]) &&
+            entry["args"].every((arg) => typeof arg === "string") &&
+            typeof entry["cwd"] === "string" &&
+            (entry["note"] === undefined || typeof entry["note"] === "string"),
+        ))
+    ) {
+      return { ok: false, error: "invalid-payload: task/planProtocol.steps must be an array of {kind, program, args, cwd}" };
+    }
+    const consumers = payload["consumers"];
+    if (
+      !Array.isArray(consumers) ||
+      !consumers.every(
+        (entry) =>
+          isRecord(entry) &&
+          typeof entry["consumerId"] === "string" &&
+          entry["consumerId"].trim().length > 0 &&
+          typeof entry["name"] === "string" &&
+          typeof entry["repoDir"] === "string" &&
+          (entry["language"] === "go" || entry["language"] === "ts") &&
+          typeof entry["releaseDependency"] === "string" &&
+          (entry["serviceId"] === undefined || typeof entry["serviceId"] === "string") &&
+          (entry["linkScript"] === undefined || typeof entry["linkScript"] === "string") &&
+          (entry["linkTarget"] === undefined || typeof entry["linkTarget"] === "string"),
+      )
+    ) {
+      return { ok: false, error: "invalid-payload: task/planProtocol.consumers must be an array of {consumerId, name, repoDir, language, releaseDependency}" };
+    }
+    const acknowledged = payload["acknowledged"];
+    if (acknowledged !== undefined && (!Array.isArray(acknowledged) || !acknowledged.every((entry) => typeof entry === "string"))) {
+      return { ok: false, error: "invalid-payload: task/planProtocol.acknowledged must be a string array" };
+    }
+    return { ok: true };
+  }
+  if (op === "task/protocolState") {
+    if (payload !== undefined && !isRecord(payload)) {
+      return { ok: false, error: "invalid-payload: task/protocolState payload must be an object" };
+    }
+    return { ok: true };
+  }
+  if (op === "task/recordProtocolRun") {
+    if (!isRecord(payload)) return { ok: false, error: "invalid-payload: task/recordProtocolRun requires a payload object" };
+    if (typeof payload["generatedVersion"] !== "string") {
+      return { ok: false, error: "invalid-payload: task/recordProtocolRun.generatedVersion must be a string" };
+    }
+    if (typeof payload["ok"] !== "boolean") {
+      return { ok: false, error: "invalid-payload: task/recordProtocolRun.ok must be a boolean" };
+    }
+    if (payload["note"] !== undefined && typeof payload["note"] !== "string") {
+      return { ok: false, error: "invalid-payload: task/recordProtocolRun.note must be a string" };
+    }
+    const toolchain = payload["toolchain"];
+    if (toolchain !== undefined) {
+      if (!isRecord(toolchain) || typeof toolchain["platform"] !== "string") {
+        return { ok: false, error: "invalid-payload: task/recordProtocolRun.toolchain must be {platform, probe?}" };
+      }
+      const probe = toolchain["probe"];
+      if (
+        probe !== undefined &&
+        (!isRecord(probe) ||
+          !Object.values(probe).every(
+            (entry) =>
+              isRecord(entry) &&
+              typeof entry["ok"] === "boolean" &&
+              (entry["version"] === undefined || typeof entry["version"] === "string") &&
+              (entry["note"] === undefined || typeof entry["note"] === "string"),
+          ))
+      ) {
+        return { ok: false, error: "invalid-payload: task/recordProtocolRun.toolchain.probe must be {[tool]: {ok, version?}}" };
+      }
+    }
+    const depsInstalled = payload["depsInstalled"];
+    if (
+      depsInstalled !== undefined &&
+      (!Array.isArray(depsInstalled) ||
+        !depsInstalled.every((entry) => isRecord(entry) && typeof entry["consumerId"] === "string" && typeof entry["installed"] === "boolean"))
+    ) {
+      return { ok: false, error: "invalid-payload: task/recordProtocolRun.depsInstalled must be an array of {consumerId, installed}" };
+    }
+    const resolutions = payload["resolutions"];
+    if (
+      resolutions !== undefined &&
+      (!Array.isArray(resolutions) ||
+        !resolutions.every(
+          (entry) =>
+            isRecord(entry) &&
+            typeof entry["consumerId"] === "string" &&
+            typeof entry["path"] === "string" &&
+            (entry["version"] === undefined || entry["version"] === null || typeof entry["version"] === "string"),
+        ))
+    ) {
+      return { ok: false, error: "invalid-payload: task/recordProtocolRun.resolutions must be an array of {consumerId, path, version?}" };
+    }
+    const runtimeReachable = payload["runtimeReachable"];
+    if (runtimeReachable !== undefined) {
+      if (!isRecord(runtimeReachable) || typeof runtimeReachable["ok"] !== "boolean" || typeof runtimeReachable["detail"] !== "string") {
+        return { ok: false, error: "invalid-payload: task/recordProtocolRun.runtimeReachable must be {ok, detail}" };
+      }
+    }
+    return { ok: true };
+  }
   if (op === "task/serviceRunRecords") {
     if (payload !== undefined && !isRecord(payload)) {
       return { ok: false, error: "invalid-payload: task/serviceRunRecords payload must be an object" };

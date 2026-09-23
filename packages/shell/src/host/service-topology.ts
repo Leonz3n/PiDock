@@ -112,6 +112,8 @@ export interface RecordRunInput {
   pid: number;
   owner: "agent" | "human";
   startedAt?: string;
+  /** [PiDock 08] (#14) protocol artifact version this instance loaded, when observed. */
+  protocolArtifact?: { version: string };
 }
 
 const EMPTY_LAYERS: BindingLayers = { repoDefaults: [], shared: [], privateEntries: [], task: [] };
@@ -278,6 +280,7 @@ export class TaskServiceTopology {
       processIdentity: { owner: input.owner, pid: input.pid, startedAt },
       taskDir: this.taskDir,
       startedAt,
+      ...(input.protocolArtifact !== undefined ? { protocolArtifact: { version: input.protocolArtifact.version } } : {}),
     });
     if (unit === undefined) {
       // Repo-less helper or an Agent-declared run: record it, but note the

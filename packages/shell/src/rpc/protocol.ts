@@ -65,6 +65,9 @@ export type HostTaskOp =
   | "task/planServiceGroup"
   | "task/serviceRunRecords"
   | "task/serviceStopScope"
+  | "task/planProtocol"
+  | "task/protocolState"
+  | "task/recordProtocolRun"
   | "task/browserAction"
   | "task/setProviderCatalog"
   | "task/sessionContext"
@@ -178,6 +181,9 @@ const HOST_TASK_OPS: readonly string[] = [
   "task/planServiceGroup",
   "task/serviceRunRecords",
   "task/serviceStopScope",
+  "task/planProtocol",
+  "task/protocolState",
+  "task/recordProtocolRun",
   "task/browserAction",
   "task/setProviderCatalog",
   "task/sessionContext",

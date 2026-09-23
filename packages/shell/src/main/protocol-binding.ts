@@ -466,15 +466,11 @@ export function assessLocalSwitch(input: {
   const notes: string[] = [];
   const artifact = (input.artifactVersion ?? "").trim();
   if (artifact.length === 0) {
-    return {
-      ok: false,
-      blockers: input.consumers.map((consumer) => ({
-        consumerId: consumer.consumerId,
-        code: "artifact-version-mismatch" as const,
-        message: "本任务还没有生成的协议产物版本，请先生成再绑定",
-      })),
-      notes,
-    };
+    // Nothing generated yet: there is no artifact to be incompatible with, so
+    // the flow continues to generation; `verifyResolvedPath`/staleness carry
+    // the not-generated refusal instead of blocking the plan itself.
+    notes.push("本任务还没有生成的协议产物版本，请先生成再绑定");
+    return { ok: true, blockers, notes };
   }
   for (const consumer of input.consumers) {
     const verified = input.verified.find((entry) => entry.consumerId === consumer.consumerId);

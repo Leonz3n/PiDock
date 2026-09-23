@@ -204,10 +204,11 @@ describe("[PiDock 08] switching different release versions onto one local artifa
     expect(assessed.blockers[0]?.message).toContain("gen-3");
   });
 
-  it("blocks when there is no generated artifact yet", () => {
+  it("reports the missing artifact as a note instead of an incompatibility", () => {
     const assessed = assessLocalSwitch({ consumers: [GO_CONSUMER], artifactVersion: null, verified: [] });
-    expect(assessed.ok).toBe(false);
-    expect(assessed.blockers[0]?.code).toBe("artifact-version-mismatch");
+    expect(assessed.ok).toBe(true);
+    expect(assessed.blockers).toEqual([]);
+    expect(assessed.notes).toEqual(["本任务还没有生成的协议产物版本，请先生成再绑定"]);
   });
 
   it("blocks consumers on different release versions until each one is acknowledged", () => {

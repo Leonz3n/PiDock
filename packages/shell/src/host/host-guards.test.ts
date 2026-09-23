@@ -95,6 +95,99 @@ describe("service group ops", () => {
   });
 });
 
+// [PiDock 08] (#14) protocol ops: envelope shape only here; the protocol repo
+// / consumer rules and the task-scoped plan paths run Host-side in
+// `TaskProtocolBinding`, and generation results are caller observations.
+describe("protocol ops", () => {
+  const consumers = [
+    {
+      consumerId: "invoice",
+      name: "invoice-service",
+      repoDir: "/data/tasks/task-a/invoice-service",
+      language: "go",
+      releaseDependency: "github.com/shipber/apis v0.0.69",
+    },
+  ];
+  it("accepts a well-formed plan and rejects malformed protocol/consumer/step shapes", () => {
+    expect(
+      validateHostTaskOp("task/planProtocol", {
+        protocol: { repoDir: "/data/tasks/task-a/apis", goGenDir: "/data/tasks/task-a/apis/gen/go", tsGenDir: "/data/tasks/task-a/apis/gen/ts" },
+        mode: "local",
+        steps: [{ kind: "generate", program: "make", args: ["generate"], cwd: "/data/tasks/task-a/apis", note: "生成" }],
+        consumers,
+        acknowledged: ["invoice"],
+      }),
+    ).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/planProtocol", {}).ok).toBe(false);
+    expect(validateHostTaskOp("task/planProtocol", "nope").ok).toBe(false);
+    expect(validateHostTaskOp("task/planProtocol", { protocol: consumers[0], mode: "local", consumers }).ok).toBe(false);
+    // An empty consumer list passes the envelope check and is refused Host-side
+    // (`empty-consumers` in `TaskProtocolBinding.setPlan`).
+    expect(
+      validateHostTaskOp("task/planProtocol", { protocol: { repoDir: "/a", goGenDir: "/a/go", tsGenDir: "/a/ts" }, mode: "local", consumers: [] }),
+    ).toEqual({ ok: true });
+    expect(
+      validateHostTaskOp("task/planProtocol", {
+        protocol: { repoDir: "/a", goGenDir: "/a/go", tsGenDir: "/a/ts" },
+        mode: "local",
+        consumers: [{ ...consumers[0], language: "rust" }],
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateHostTaskOp("task/planProtocol", {
+        protocol: { repoDir: "/a", goGenDir: "/a/go", tsGenDir: "/a/ts" },
+        mode: "local",
+        steps: [{ kind: "deploy", program: "make", args: [], cwd: "/a" }],
+        consumers,
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateHostTaskOp("task/planProtocol", {
+        protocol: { repoDir: "/a", goGenDir: "/a/go", tsGenDir: "/a/ts" },
+        mode: "local",
+        steps: [{ kind: "generate", program: "make", args: [1], cwd: "/a" }],
+        consumers,
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateHostTaskOp("task/planProtocol", {
+        protocol: { repoDir: "/a", goGenDir: "/a/go", tsGenDir: "/a/ts" },
+        mode: "local",
+        consumers,
+        acknowledged: [1],
+      }).ok,
+    ).toBe(false);
+    expect(validateHostTaskOp("task/planProtocol", { protocol: { repoDir: "/a", goGenDir: "/a/go", tsGenDir: "/a/ts" }, mode: "debug", consumers }).ok).toBe(false);
+  });
+
+  it("accepts the protocol state read and validates recorded observations", () => {
+    expect(validateHostTaskOp("task/protocolState", {})).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/protocolState", undefined)).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/protocolState", "nope").ok).toBe(false);
+    expect(
+      validateHostTaskOp("task/recordProtocolRun", {
+        generatedVersion: "gen-4",
+        ok: true,
+        note: "make generate + postprocess",
+        toolchain: { platform: "darwin-arm64", probe: { buf: { ok: true, version: "1.2.3" } } },
+        depsInstalled: [{ consumerId: "invoice", installed: true }],
+        resolutions: [{ consumerId: "invoice", path: "/data/tasks/task-a/apis/gen/go/pkg", version: "gen-4" }],
+        runtimeReachable: { ok: false, detail: "远程依赖未检查" },
+      }),
+    ).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/recordProtocolRun", { generatedVersion: "gen-4" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/recordProtocolRun", { generatedVersion: "gen-4", ok: "yes" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/recordProtocolRun", { generatedVersion: "gen-4", ok: true, note: 1 }).ok).toBe(false);
+    expect(validateHostTaskOp("task/recordProtocolRun", { generatedVersion: "gen-4", ok: true, toolchain: { platform: 1 } }).ok).toBe(false);
+    expect(
+      validateHostTaskOp("task/recordProtocolRun", { generatedVersion: "gen-4", ok: true, toolchain: { platform: "darwin-arm64", probe: { buf: { ok: "yes" } } } }).ok,
+    ).toBe(false);
+    expect(validateHostTaskOp("task/recordProtocolRun", { generatedVersion: "gen-4", ok: true, depsInstalled: [{ consumerId: "invoice" }] }).ok).toBe(false);
+    expect(validateHostTaskOp("task/recordProtocolRun", { generatedVersion: "gen-4", ok: true, resolutions: [{ consumerId: "invoice" }] }).ok).toBe(false);
+    expect(validateHostTaskOp("task/recordProtocolRun", { generatedVersion: "gen-4", ok: true, runtimeReachable: { ok: true } }).ok).toBe(false);
+  });
+});
+
 // [PiDock 06] (#8) task browser: envelope shape only here; page
 // ownership, the navigation allowlist, takeover state and the agent gate
 // run on the authoritative side (`browser-gateway.ts` / `browser-control.ts`).

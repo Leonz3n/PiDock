@@ -64,6 +64,13 @@ export interface RunRecord {
   processIdentity: { owner: "agent" | "human"; pid: number; startedAt: string };
   /** Log file for this run: `<taskDir>/services/<serviceId>/run-<runId>.log`. */
   logRef: string;
+  /**
+   * [PiDock 08] (#14) protocol artifact version this instance really loaded,
+   * when the caller could observe it. Absent means "not verified", never "the
+   * newest artifact": [PiDock 08] box 6 forbids counting a stale instance as
+   * having loaded a newly generated protocol.
+   */
+  protocolArtifact?: { version: string };
   startedAt: string;
   endedAt?: string;
   exit?: { reason: string };
@@ -93,6 +100,7 @@ export function buildRunRecord(input: {
   processIdentity: { owner: "agent" | "human"; pid: number; startedAt: string };
   taskDir: string;
   startedAt: string;
+  protocolArtifact?: { version: string };
 }): RunRecord {
   const kind = classifyCodeState(input.code);
   const primaryPort = input.ports[0];
@@ -115,6 +123,7 @@ export function buildRunRecord(input: {
     ports: [...input.ports],
     processIdentity: { ...input.processIdentity },
     logRef: `${input.taskDir.replace(/[\\/]+$/, "")}/services/${input.serviceId}/run-${input.runId}.log`,
+    ...(input.protocolArtifact !== undefined ? { protocolArtifact: { version: input.protocolArtifact.version } } : {}),
     startedAt: input.startedAt,
     verifications: [],
   };
