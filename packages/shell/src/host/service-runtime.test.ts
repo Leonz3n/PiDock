@@ -188,3 +188,22 @@ describe("restart-needed + launch verification", () => {
     ]);
   });
 });
+
+// [PiDock 09] (#11) box 5: the write coordination needs the owning session of a
+// still-running service to spot leftovers from another session.
+describe("agent-owned running services (write-coordination probe)", () => {
+  it("reports only running agent-started services with their owner session", () => {
+    const runtime = registered();
+    expect(runtime.runningAgentOwned()).toEqual([]);
+    runtime.markStarted("saas-web", { kind: "human", label: "用户点击启动" });
+    // A human start has no session to coordinate with.
+    expect(runtime.runningAgentOwned()).toEqual([]);
+    runtime.markStarted("saas-web", { kind: "agent", sessionId: "impl", permissionAtRequest: "auto" });
+    expect(runtime.runningAgentOwned()).toEqual([{ serviceId: "saas-web", ownerSessionId: "impl" }]);
+    runtime.markStopped("saas-web", { kind: "agent", sessionId: "impl", permissionAtRequest: "auto" }, "agent-request");
+    expect(runtime.runningAgentOwned()).toEqual([]);
+    // The actor is copied into the record, so the probe never reads live state.
+    runtime.markStarted("saas-web", { kind: "agent", sessionId: "impl", permissionAtRequest: "auto" });
+    expect(runtime.get("saas-web")?.startedBy).toEqual({ kind: "agent", sessionId: "impl", permissionAtRequest: "auto" });
+  });
+});

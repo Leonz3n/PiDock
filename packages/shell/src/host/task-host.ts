@@ -16,7 +16,15 @@
  * unit tests inject an in-memory store instead of the filesystem.
  */
 
-import { PiSessionChannel, type PiPermission, type PiSessionSnapshot, type PiTurnInput, type PiModelSwitchEvent, type PiSessionContextView } from "../main/pi-session.js";
+import { PiSessionChannel, type PiPermission, type PiRunState, type PiSessionSnapshot, type PiTurnInput, type PiModelSwitchEvent, type PiSessionContextView } from "../main/pi-session.js";
+import {
+  TaskWriteCoordinator,
+  writeClaimError,
+  type AgentOwnedResource,
+  type DerivedExecutionClaim,
+  type WriteIntent,
+  type WriteLockView,
+} from "./write-coordination.js";
 import { validateProviderProfile, type ProviderProfileRow } from "../main/provider-config.js";
 import {
   buildTaskBranch,
@@ -193,6 +201,29 @@ function maxMessageSequence(messages: { id: string }[]): number {
 }
 
 /**
+ * One session's coordination readout ([PiDock 09] #11): the state the session
+ * navigation shows (permission tier, run state, pending confirmation, last
+ * activity) without opening the whole conversation.
+ */
+export interface HostSessionState {
+  sessionId: string;
+  permission: PiPermission;
+  runState: PiRunState;
+  updatedAt: string;
+  pendingApproval: boolean;
+  hasDraft: boolean;
+}
+
+export interface HostWriteState {
+  /** Who holds the write right, who queues, who is read-only. */
+  write: WriteLockView;
+  sessions: HostSessionState[];
+  /** Agent-owned resources still running without a live claim. */
+  orphans: AgentOwnedResource[];
+  derived: DerivedExecutionClaim[];
+}
+
+/**
  * One Host instance serves one task folder. `taskId` is fixed at
  * construction (main binds it from the trusted sender); ops naming any
  * other task are rejected with `task-unknown` instead of continuing with
@@ -213,7 +244,15 @@ export interface HostApprovalListing {
 
 export class TaskWorkspaceHost {
   private readonly channels = new Map<string, PiSessionChannel>();
-  private lockOwner: string | null = null;
+  /**
+   * [PiDock 09] (#11) task-scoped write coordination: at most one session holds
+   * the write right, reads are never blocked, and a derived execution keeps the
+   * right after its turn settles. `liveResources` is the probe for agent-owned
+   * resources that outlived their session (wire it to the service runtime).
+   */
+  private readonly write: TaskWriteCoordinator;
+  /** Write claims kept by turns that settled into an approval wait. */
+  private readonly approvalClaims = new Map<string, string>();
   /**
    * Redacted provider catalog ([PiDock 11] #9): ids/names/protocols/model
    * declarations pushed by main. Never carries an auth reference: the Host
@@ -226,14 +265,67 @@ export class TaskWorkspaceHost {
     readonly taskDir: string,
     readonly store: TaskStore = diskTaskStore,
     private readonly now: () => string = () => new Date().toISOString(),
+    liveResources: () => readonly AgentOwnedResource[] = () => [],
   ) {
     if (taskId.trim().length === 0) throw new Error("taskId must be non-empty");
     if (taskDir.trim().length === 0) throw new Error("taskDir must be non-empty");
+    this.write = new TaskWriteCoordinator(liveResources);
   }
 
   /** Session currently holding the Host-owned task write right, if any. */
   get writeLockOwner(): string | null {
-    return this.lockOwner;
+    return this.write.owner;
+  }
+
+  /** Claim the write right for one side-effecting intent (fail-closed). */
+  claimWrite(sessionId: string, permission: PiPermission, intent: WriteIntent) {
+    return this.write.claimWrite(sessionId, permission, intent);
+  }
+
+  releaseWrite(claimId: string) {
+    return this.write.releaseWrite(claimId);
+  }
+
+  /**
+   * Record a derived execution (child process / sub-agent) that must keep the
+   * write right after its turn settles ([PiDock 09] #11 box 4). Real spawning is
+   * a later slice; the rule and its state are what this slice owes.
+   */
+  claimDerivedExecution(input: DerivedExecutionClaim): boolean {
+    const channel = this.channels.get(input.sessionId);
+    if (!channel) throw new Error(`unknown-session: ${input.sessionId} 尚未打开，不能声明派生执行`);
+    if (channel.currentPermission === "read") throw new Error("只读会话不持有写操作权，不能声明派生执行");
+    return this.write.claimDerivedExecution(input);
+  }
+
+  endDerivedExecution(resourceId: string) {
+    if (resourceId.trim().length === 0) throw new Error("invalid-payload: resourceId must be a non-empty string");
+    return this.write.endDerivedExecution(resourceId);
+  }
+
+  /**
+   * Sessions of this task with the coordination readout the navigation shows:
+   * run state, permission tier, pending confirmation, draft and last activity.
+   */
+  writeState(): HostWriteState {
+    const ids = [...new Set([...this.channels.keys(), ...this.sessionIds()])].sort();
+    const sessions: HostSessionState[] = [];
+    for (const sessionId of ids) {
+      const channel = this.openSession(sessionId);
+      const snapshot: PiSessionSnapshot = channel.snapshot();
+      sessions.push({
+        sessionId,
+        permission: snapshot.permission,
+        runState: snapshot.runState,
+        updatedAt: snapshot.updatedAt,
+        pendingApproval: snapshot.approvals.some((approval) => approval.status === "pending"),
+        hasDraft: snapshot.draft !== undefined,
+      });
+    }
+    const view = this.write.view({
+      sessions: sessions.map(({ sessionId, permission, runState }) => ({ sessionId, permission, runState })),
+    });
+    return { write: view, sessions, orphans: view.orphans, derived: view.derived };
   }
 
   provision(input: ProvisionTaskInput): ProvisionTaskResult {
@@ -716,15 +808,44 @@ export class TaskWorkspaceHost {
     text: string,
     turn?: Omit<PiTurnInput, "text" | "stream">,
   ): HostTurnResult {
-    if (this.lockOwner !== null && this.lockOwner !== sessionId) {
-      throw new Error("task-locked: 同一任务同时只能有一个会话执行，请先停止或等待当前会话");
-    }
     const channel = this.openSession(sessionId);
-    const result = channel.runTurn({ text, ...turn });
-    if (result.state === "approval") {
-      this.lockOwner = sessionId;
-    } else if (this.lockOwner === sessionId) {
-      this.lockOwner = null;
+    // [PiDock 09] (#11) box 3: a read-only session never runs an execution
+    // round; the tool gate stays the second line. Matches the shipped renderer
+    // composer (disabled for `read`) and the memory mirror.
+    if (channel.currentPermission === "read") {
+      throw new Error("只读会话仅允许阅读分析，请先调整会话权限");
+    }
+    // The write right is claimed per side-effecting action, not per turn: a
+    // turn with no tool plan (pure analysis) must keep running while another
+    // session writes the task, which is exactly box 3's "safe read" rule.
+    // Fail-closed on an unnamed plan: a turn that can run a tool at all
+    // (`execute`/`target` without a `tool`) defaults to the channel's
+    // `fs.write`, so it claims the right.
+    const plannedTool = typeof turn?.tool === "string" ? turn.tool : undefined;
+    const mayRunTool = plannedTool !== undefined || turn?.execute !== undefined || turn?.target !== undefined;
+    const sideEffecting = mayRunTool && plannedTool !== "fs.read";
+    let claimId: string | undefined;
+    if (sideEffecting) {
+      const claim = this.claimWrite(sessionId, channel.currentPermission, {
+        kind: "turn",
+        label: `回合工具 ${plannedTool ?? "fs.write"}`,
+      });
+      if (!claim.ok) throw new Error(writeClaimError(claim));
+      claimId = claim.claimId;
+    }
+    let result: ReturnType<PiSessionChannel["runTurn"]>;
+    try {
+      result = channel.runTurn({ text, ...turn });
+    } catch (error) {
+      if (claimId !== undefined) this.releaseWrite(claimId);
+      throw error;
+    }
+    // Box 4: the right is kept while the turn waits on a confirmation and is
+    // released only when the turn settles; a live derived execution keeps it
+    // even then (`releaseWrite` retains the owner).
+    if (claimId !== undefined) {
+      if (result.state === "approval") this.approvalClaims.set(sessionId, claimId);
+      else this.releaseWrite(claimId);
     }
     this.store.writeSession(this.taskDir, channel.snapshot());
     const pending = channel.pendingApproval();
@@ -739,10 +860,22 @@ export class TaskWorkspaceHost {
     };
   }
 
+  /**
+   * Resolve a turn that settled into an approval wait ([PiDock 09] #11): the
+   * session's kept write claim ends with approve/reject, so another session of
+   * the task may write afterwards.
+   */
+  private settleApprovalClaim(sessionId: string): void {
+    const claimId = this.approvalClaims.get(sessionId);
+    if (claimId === undefined) return;
+    this.approvalClaims.delete(sessionId);
+    this.releaseWrite(claimId);
+  }
+
   approve(sessionId: string, approvalId: string): string {
     const channel = this.openSession(sessionId);
     const call = channel.approve(approvalId);
-    if (this.lockOwner === sessionId) this.lockOwner = null;
+    this.settleApprovalClaim(sessionId);
     this.store.writeSession(this.taskDir, channel.snapshot());
     return call.callId;
   }
@@ -750,7 +883,7 @@ export class TaskWorkspaceHost {
   reject(sessionId: string, approvalId: string): void {
     const channel = this.openSession(sessionId);
     channel.reject(approvalId);
-    if (this.lockOwner === sessionId) this.lockOwner = null;
+    this.settleApprovalClaim(sessionId);
     this.store.writeSession(this.taskDir, channel.snapshot());
   }
 
@@ -785,11 +918,19 @@ export class TaskWorkspaceHost {
     return this.listApprovals().find((approval) => approval.id === approvalId);
   }
 
-  cancel(sessionId: string): void {
+  /**
+   * Stop one session ([PiDock 09] #11 boxes 2/5): cancel the waiting turn,
+   * expire its pending confirmation, and drop every write claim, derived entry
+   * and queue slot it held — so no leftover process keeps the right and a new
+   * session can write. Returns the coordination view after the release.
+   */
+  cancel(sessionId: string): HostWriteState {
     const channel = this.openSession(sessionId);
     channel.cancel();
-    if (this.lockOwner === sessionId) this.lockOwner = null;
+    this.approvalClaims.delete(sessionId);
+    this.write.forgetSession(sessionId);
     this.store.writeSession(this.taskDir, channel.snapshot());
+    return this.writeState();
   }
 
   /**
@@ -801,7 +942,8 @@ export class TaskWorkspaceHost {
   /** Drop in-memory channels (e.g. on Host dispose); disk state is already saved. */
   dispose(): void {
     this.channels.clear();
-    this.lockOwner = null;
+    this.approvalClaims.clear();
+    this.write.reset();
   }
 
   describe(): { taskId: string; taskDir: string; sessions: string[]; lockOwner: string | null; maxSeq: number } {
@@ -811,6 +953,6 @@ export class TaskWorkspaceHost {
       const channel = this.channels.get(sessionId);
       if (channel) maxSeq = Math.max(maxSeq, maxMessageSequence(channel.snapshot().messages));
     }
-    return { taskId: this.taskId, sessions, lockOwner: this.lockOwner, taskDir: this.taskDir, maxSeq };
+    return { taskId: this.taskId, sessions, lockOwner: this.write.owner, taskDir: this.taskDir, maxSeq };
   }
 }

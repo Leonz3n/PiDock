@@ -280,7 +280,7 @@ describe("TaskWorkspaceHost provision", () => {
 });
 
 describe("TaskWorkspaceHost sessions and Host-owned lock", () => {
-  it("holds the Host lock across an approval turn and rejects a second session", () => {
+  it("holds the write right across an approval turn, refuses a second session's write, and allows its read", () => {
     const taskHost = host();
     const first = taskHost.sendMessage("main", "运行命令", {
       tool: "exec.run",
@@ -295,11 +295,94 @@ describe("TaskWorkspaceHost sessions and Host-owned lock", () => {
     });
     expect(first.state).toBe("approval");
     expect(taskHost.writeLockOwner).toBe("main");
-    expect(() => taskHost.sendMessage("second", "后来者")).toThrow("task-locked");
+    // [PiDock 09] (#11) box 3: the second session may keep reading/analyzing
+    // (a turn without a side-effecting plan claims no write right)…
+    expect(taskHost.sendMessage("second", "先读一下现状").state).toBe("done");
+    expect(taskHost.writeLockOwner).toBe("main");
+    // …but its write is refused with the holder named, and it is queued.
+    expect(() =>
+      taskHost.sendMessage("second", "改文件", {
+        tool: "fs.write",
+        target: `${TASK_DIR}/notes.md`,
+        execute: (call) => ({
+          tool: call.tool,
+          kind: call.kind,
+          target: call.target,
+          contentVersion: call.contentVersion,
+          output: "pending",
+        }),
+      }),
+    ).toThrow(/task-locked: 同一任务写操作权由会话 main 持有/);
+    expect(taskHost.writeState().write.sessions.find((item) => item.sessionId === "second")).toMatchObject({
+      role: "waiting",
+      queuePosition: 1,
+    });
     taskHost.reject("main", first.approvalId ?? "");
     expect(taskHost.writeLockOwner).toBeNull();
     const second = taskHost.sendMessage("second", "后来者");
     expect(second.state).toBe("done");
+  });
+
+  it("refuses a read-only session's execution round and keeps its tool gate as the second line", () => {
+    const taskHost = host();
+    taskHost.setPermission("readonly-session", "read");
+    expect(() => taskHost.sendMessage("readonly-session", "改一下文件")).toThrow("只读会话仅允许阅读分析");
+    expect(taskHost.writeLockOwner).toBeNull();
+    expect(taskHost.writeState().write.readonly).toEqual(["readonly-session"]);
+  });
+
+  it("keeps the right while a derived execution outlives its turn, and releases it on stop", () => {
+    const taskHost = host();
+    const turn = taskHost.sendMessage("main", "构建", {
+      tool: "exec.run",
+      target: `${TASK_DIR}/build.sh`,
+      execute: (call) => ({
+        tool: call.tool,
+        kind: call.kind,
+        target: call.target,
+        contentVersion: call.contentVersion,
+        output: "pending",
+      }),
+    });
+    expect(turn.state).toBe("approval");
+    taskHost.approve("main", turn.approvalId ?? "");
+    // A finished turn still owns the right while a derived child runs (box 4).
+    expect(taskHost.claimDerivedExecution({ resourceId: "child-1", sessionId: "main", label: "构建子进程" })).toBe(true);
+    expect(taskHost.writeLockOwner).toBe("main");
+    expect(() =>
+      taskHost.sendMessage("second", "改文件", {
+        tool: "fs.write",
+        target: `${TASK_DIR}/notes.md`,
+        execute: (call) => ({
+          tool: call.tool,
+          kind: call.kind,
+          target: call.target,
+          contentVersion: call.contentVersion,
+          output: "pending",
+        }),
+      }),
+    ).toThrow("task-locked");
+    // Stop verifies the derived execution and releases the right (box 5).
+    const stopped = taskHost.cancel("main");
+    expect(stopped.write.owner).toBeNull();
+    expect(stopped.derived).toEqual([]);
+    // The settled turn's history is kept: stopping only drops the right.
+    expect(stopped.sessions.find((item) => item.sessionId === "main")?.runState).toBe("done");
+  });
+
+  it("refuses a new session while another session's leftover service is unverified", () => {
+    const resources: { resourceId: string; kind: "service"; ownerSessionId: string | null; label: string }[] = [
+      { resourceId: "saas-web", kind: "service", ownerSessionId: "gone", label: "saas-web" },
+    ];
+    const taskHost = new TaskWorkspaceHost(TASK_ID, TASK_DIR, memoryTaskStore(), () => "2026-09-22T10:00:00+08:00", () => resources);
+    expect(() => taskHost.sendMessage("second", "改文件", { tool: "fs.write", target: `${TASK_DIR}/notes.md` })).toThrow(
+      /遗留执行资源仍在运行（saas-web）/,
+    );
+    const state = taskHost.writeState();
+    expect(state.orphans).toEqual([{ resourceId: "saas-web", kind: "service", ownerSessionId: "gone", label: "saas-web" }]);
+    // Once the leftover is stopped (probe empty) the same session may write.
+    resources.length = 0;
+    expect(taskHost.sendMessage("second", "阅读").state).toBe("done");
   });
 
   it("restores the designated session from disk, never another task's latest", () => {
