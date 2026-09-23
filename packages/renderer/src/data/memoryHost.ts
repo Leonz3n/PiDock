@@ -1150,6 +1150,8 @@ class MemoryHost implements HostAdapter {
         id: agentMessageId,
         role: "agent",
         text: reply,
+        // [PiDock 11] #9: the response keeps the account that produced it.
+        attribution: { providerId: session.providerId, model: session.model },
       },
     ];
     this.emit({ type: "message-done", taskId, sessionId, messageId: agentMessageId });

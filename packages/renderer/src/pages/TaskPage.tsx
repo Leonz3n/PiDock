@@ -497,6 +497,25 @@ export function ApprovalCard({ approval, onResolved }: { approval: Approval; onR
   );
 }
 
+/**
+ * Per-response attribution: the configured display name when it still exists,
+ * an explicit unavailable note when the account was renamed/disabled/removed.
+ */
+function MessageAttribution({ attribution }: { attribution: { providerId: string; model: string } }) {
+  const providers = useHostStore((state) => state.workspace?.providers ?? []);
+  const resolved = describeHistoryAttribution(providers, attribution);
+  const label = `${resolved.providerName ?? resolved.providerId} / ${resolved.modelName ?? resolved.model}`;
+  return (
+    <span
+      className={`rounded-full border px-1.5 py-0.5 text-[10px] ${resolved.availability === "available" ? "border-line text-muted" : "border-orange/35 text-orange"}`}
+      data-testid={`message-attribution-${attribution.providerId}`}
+    >
+      {label}
+      {resolved.availability === "available" ? "" : ` · ${resolved.message ?? "配置不可用"}`}
+    </span>
+  );
+}
+
 function Conversation({ taskId, sessionId, archived }: { taskId: string; sessionId: string; archived: boolean }) {
   const session = useHostStore((state) => state.session(taskId, sessionId));
   const liveKey = sessionKeyOf(taskId, sessionId);
@@ -531,7 +550,10 @@ function Conversation({ taskId, sessionId, archived }: { taskId: string; session
       <ul className="flex flex-col gap-4">
         {messages.map((message) => (
           <li key={message.id} className={message.role === "user" ? "text-right" : ""}>
-            <div className="mb-1 text-[11px] text-muted">{message.role === "user" ? "你" : "Agent"}</div>
+            <div className="mb-1 flex items-center gap-1.5 text-[11px] text-muted">
+              <span>{message.role === "user" ? "你" : "Agent"}</span>
+              {message.attribution !== undefined ? <MessageAttribution attribution={message.attribution} /> : null}
+            </div>
             <div
               className={`inline-block max-w-[92%] rounded-md border px-3 py-2 text-left text-sm ${
                 message.role === "user" ? "border-accent/25 bg-accent/5 text-ink" : "border-line bg-soft/40 text-ink"
@@ -823,6 +845,7 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
               title={switchLocked ? "执行中不可切换模型，请先等待完成或停止" : undefined}
               onClick={() => openModal({ type: "model-picker", taskId: task.id, sessionId })}
             >
+              {provider?.name ? `${provider.name} · ` : ""}
               {session?.model ?? "模型"} · {session?.contextWindow ? `${formatTokens((session?.contextWindow ?? 0) * 1000)} Tokens` : "窗口未知"}
             </Button>
             {model?.thinking && model.thinking.mode !== "none" ? (

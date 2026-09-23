@@ -81,6 +81,12 @@ export type Message = {
   id: string;
   role: MessageRole;
   text: string;
+  /**
+   * Provider/model that produced this response. Stamped when the turn settles
+   * so a later rename/disable/removal still resolves the original account
+   * (or reports it unavailable) instead of re-attributing old text.
+   */
+  attribution?: { providerId: string; model: string };
   streaming?: boolean;
   references?: Reference[];
   code?: { language: string; source: string; label: string };

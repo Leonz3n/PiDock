@@ -194,6 +194,37 @@ describe("model popover", () => {
   });
 });
 
+describe("response attribution", () => {
+  it("keeps each response on the account that produced it and reports an unavailable one", async () => {
+    const user = userEvent.setup();
+    renderApp("/projects/atlas/tasks/release?session=main");
+    await screen.findByRole("heading", { name: "发布前检查" });
+    const adapter = useHostStore.getState().adapter;
+
+    // Two turns on two different accounts: each response keeps its own.
+    await adapter.sendMessage("release", "main", "先按当前模型回答", []);
+    await adapter.setSessionModel("release", "main", "provider-local", "本地 Qwen");
+    await adapter.sendMessage("release", "main", "再换一个模型回答", []);
+    await useHostStore.getState().refresh();
+
+    const first = (await adapter.getSession("release", "main"))?.messages.filter((message) => message.role === "agent" && message.attribution !== undefined);
+    expect(first?.map((message) => message.attribution)).toEqual([
+      { providerId: "provider-anthropic", model: "Claude Sonnet" },
+      { providerId: "provider-local", model: "本地 Qwen" },
+    ]);
+    expect(await screen.findByTestId("message-attribution-provider-anthropic")).toHaveTextContent("Anthropic 官方 / Claude Sonnet");
+    expect(await screen.findByTestId("message-attribution-provider-local")).toHaveTextContent("本地推理 / 本地 Qwen");
+
+    // Renaming keeps the original identification; disabling reports unavailable.
+    void user;
+    await adapter.saveProvider({ id: "provider-anthropic", name: "Anthropic 团队账号", protocol: "anthropic-messages", baseUrl: "https://api.anthropic.com", enabled: false, models: [{ id: "Claude Sonnet", contextWindow: 200 }] });
+    await useHostStore.getState().refresh();
+    const renamed = await screen.findByTestId("message-attribution-provider-anthropic");
+    expect(renamed).toHaveTextContent("Anthropic 团队账号 / Claude Sonnet");
+    expect(renamed).toHaveTextContent("该配置已停用");
+  });
+});
+
 describe("context and reasoning popovers", () => {
   it("shows unformatted occupancy with the estimate marker and preserves tokens after compaction", async () => {
     const user = userEvent.setup();
