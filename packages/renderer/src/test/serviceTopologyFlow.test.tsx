@@ -29,6 +29,9 @@ describe("runtime panel topology", () => {
     expect(routing).toHaveTextContent("release/release-service-1@5173（本任务实例）");
     expect(routing).toHaveTextContent("API_BASE_URL");
     expect(routing).toHaveTextContent("共享环境 测试环境");
+    // Box 2: the binding is audited against the read points it actually has.
+    expect(routing).toHaveTextContent("读取点：仓库默认配置 · .env");
+    expect(routing).toHaveTextContent("读取点：运行时端口绑定 · 本地");
 
     // Box 4: the prepare step runs first, the bidirectional pair listens as
     // one group, and the remote dependency is a reachability check.

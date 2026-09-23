@@ -6,6 +6,7 @@ import {
   endpointKeyCandidates,
   instanceAddress,
   planPortAssignments,
+  planRestartScope,
   planStartGroups,
   reallocatePortAssignments,
   renderBindingValue,
@@ -326,6 +327,33 @@ describe("dependency kinds and start groups", () => {
     });
     expect(contradictory.diagnostics.map((entry) => entry.code)).toEqual(["start-order-conflict"]);
     expect(contradictory.groups[0]?.reason).toBe("listener-group");
+  });
+});
+
+describe("partial restart scope", () => {
+  it("restarts only the affected running units and leaves the others alone", () => {
+    const scope = planRestartScope({
+      running: ["front:saas-web", "front:saas-bff", "invoice:invoice-service"],
+      reallocated: [{ unitId: "invoice:invoice-service" }],
+      changedBindings: [{ unitId: "front:saas-bff" }],
+      staleTemplate: ["front:saas-web", "shared:account-service"],
+    });
+    expect(scope).toEqual([
+      { unitId: "front:saas-bff", reason: "binding-changed" },
+      { unitId: "front:saas-web", reason: "template-version" },
+      { unitId: "invoice:invoice-service", reason: "port-reallocated" },
+    ]);
+    // A stopped unit is never in the restart set (nothing to restart), and a
+    // unit is listed once even when several inputs name it.
+    const stopped = planRestartScope({ running: [], reallocated: [{ unitId: "a" }] });
+    expect(stopped).toEqual([]);
+    const once = planRestartScope({
+      running: ["a"],
+      reallocated: [{ unitId: "a" }],
+      changedBindings: [{ unitId: "a" }],
+      staleTemplate: ["a"],
+    });
+    expect(once).toEqual([{ unitId: "a", reason: "port-reallocated" }]);
   });
 });
 

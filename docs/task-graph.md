@@ -131,3 +131,69 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   main 未把任务私有值接给 `secretsFor`；`marker/create` 的 URL 只做格式校验、
   未与活动页面比对；默认档在 main 校验页面归属/白名单之前就已铸确认（被拒的
   导航会消耗一次确认）；浏览器动作尚未与任务写锁串行（#9 范围）。
+
+## 多服务联动与运行状态（[PiDock 05] #10）
+
+日期：2026-09-22（Asia/Shanghai）。范围：纯规则 + Host 状态 + 任务视图；真实
+`child_process` 启动仍为残留（与 #7 相同）。
+
+- **运行单元**：`RunUnit`（`unitId` + `serviceId` + `repoDir` + `location`）
+  是唯一标识；`validateRunUnitSelection` 拒绝空选择、重复 `unitId`、以及不在
+  任务仓库集合内的单元。`unitsByRepo` / `repoGroups` 让一个仓库携带多个运行
+  单元，任务视图按仓库分组显示去重后的单元（仓库可从环境页的启动配方维护）。
+- **先端口后绑定**：`planPortAssignments`（严格，逐条报错）与
+  `reallocatePortAssignments`（对其他任务/外部占用自动向上重分配，给出
+  `reallocated` 列表）都先于变量绑定运行；`resolveTaskBindings` 只接受最终
+  端口分配，`${port}`/`${host}` 模板生成**完整值**（完整 URL 整体覆盖，不做
+  局部拼接）。分配可见机器级 `PortReservation`（本任务之外还包括其他任务与
+  外部进程），因此两个任务的同名服务得到不同本地端口（renderer 内存夹具同样
+  按既有任务分配，`release` 的 `saas-web` 为 5173、`checkout` 为 5174）。
+- **读取点核对**：每个绑定回传 `readPoints`；`auditBindingReadPoints` 双向核对
+  —— 绑定了却没有读取点记为 `unused-binding`，配置里存在
+  `<SERVICE>_ENDPOINT/_URL/_BASE_URL/_HOST` 读取点却没有任务绑定记为
+  `missing-binding`（消费者会继续用共享环境地址）。任务视图的「依赖去向」显示
+  生效值、去向（本任务实例地址 / 共享环境）与读取点，不编造本机地址。
+- **依赖类型与启动分组**：`ServiceDependency.kind` 区分 `call`（运行时调用，
+  被调方先监听）与 `prestart`（启动前置条件，目标先就绪）；`planStartGroups`
+  先输出 `prestart` 组（`prepare`/`one-shot` 单元，先完成），再按依赖拓扑输出
+  监听组，**调用环（双向调用）折叠为一个 listener 组**：整组先监听再互验，永不
+  互相等待（spec「双向依赖不会造成永远等待启动」）；同一组内出现 `prestart`
+  边时报告 `start-order-conflict` 而不是死等。远程依赖不启动，改为所在组的
+  「远程依赖可达性检查（共享环境，不标记为任务内隔离）」。
+- **可定位失败与部分重启**：`diagnoseStartFailure` 把端口占用映射为
+  `port-taken`（并给出重分配提示），其余保留原始错误为 `start-failed`；
+  `diagnoseDependencyUnreachable` 点名消费者变量与目标实例。重分配后
+  `reallocated` + 绑定重算覆盖**所有**指向该实例的消费者变量。
+  `planRestartScope` 只列出真正受影响的**运行中**单元（端口重分配 / 绑定变化 /
+  模板版本落后），其余实例保持运行——重启一个服务不会重启整个任务。
+- **运行记录**：`buildRunRecord` 把模板版本、代码状态（已提交/未提交/未知）、
+  构建新鲜度（`fresh` / `stale-build` / `uncommitted-code` / `unknown`）、端口、
+  进程身份（pid + 启动时间 + 归属）与日志路径（
+  `<taskDir>/services/<serviceId>/run-<runId>.log`）收在一条记录上；
+  `attachVerification` 记录联通/就绪/远程可达检查结果，本地进程存活不等于功能
+  验证成功。`recordRun` 拒绝非正整数 pid：没有真实进程身份就不写记录。
+- **停止范围**：停止范围只来自 Host 登记的进程身份
+  （`ProcessIdentity` / `verifyRegisteredIdentity` 精确匹配 instance + pid +
+  启动时间），绝不按端口或过期 PID 猜测；`planStopScope` 只返回所属任务的身份，
+  同名实例属于其他任务时进入 `skipped` 并写明原因。`task/serviceStopScope` 是
+  只读计算，真实终止（`child_process` 进程树）属残留下一个切片。
+- **共享外部资源**：`classifyExternalResource` 默认按共享处理，`queue` /
+  `dtm-callback` 明确标为 `not-isolated`（消费端与回调端仍是同一实例），
+  只有拿到独立实例证据（`isolatedByTask`）才标 `isolated`；任务视图显示资源
+  清单与「已知配置限制」，不会把固定异步队列或 DTM 回调自动当作隔离成功。
+- **IPC**：`task/planServiceGroup`（规划，不是执行：会翻转生命周期的仍只有
+  经门禁的 `task/controlService`）、`task/serviceRunRecords`、
+  `task/serviceStopScope`。规划请求走与 #7 相同的人工/Agent 判定
+  （无 `sessionId` 必须带 main 盖的 `shell-ui` 来源证明；有会话则必须是已存在
+  会话），计划里记录 actor 供审计。renderer 经 `shellBridge`
+  （`planServiceGroupThroughShell` / `serviceRunRecordsThroughShell` /
+  `serviceStopScopeThroughShell`）与适配器 `serviceTopology(taskId)` 取视图，
+  Host 不可用时回落内存投影。
+- **残留（未测/未接线）**：真实 `child_process` 启动、日志流、退出与健康检查
+  未实现（因此 `recordRun` / 停止范围没有生产调用方，只有 Host 类与测试）；
+  两个任务同时运行并检查真实请求去向未执行（端口与绑定隔离有单元测试）；
+  「启动失败后重分配」只在规划阶段验证；真实仓库的依赖缺口探测未运行
+  （`missing-binding` 与远程可达检查为规划期证据）；`task/planServiceGroup`
+  的生产调用方目前是 renderer 的面板（`stores/host.ts` 仍把内存适配器固定为
+  默认，与 #9 记录的同一接线缺口）；重新分配地址后的消费者更新已重算绑定值，
+  但还没有运行中的进程需要迁移。

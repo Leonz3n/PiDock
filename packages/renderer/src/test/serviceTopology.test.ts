@@ -156,6 +156,7 @@ describe("task-view projection", () => {
         unitId: "invoice-service:invoice-service",
         key: "API_BASE_URL",
         value: "https://invoice-service.testing.atlas.example.com",
+        readPoints: ["仓库默认配置 · .env"],
         // Never overridden by the task: the read point keeps the shared value.
         target: { kind: "remote", environment: "testing" },
       },
@@ -163,18 +164,21 @@ describe("task-view projection", () => {
         unitId: "invoice-service:invoice-service",
         key: "INVOICE_SERVICE_ENDPOINT",
         value: "http://127.0.0.1:9001",
+        readPoints: ["任务覆盖"],
         target: { kind: "local-instance", serviceId: "release-service-3", address: "release/release-service-3@9001", port: 9001 },
       },
       {
         unitId: "invoice-service:invoice-service",
         key: "PORT",
         value: "9001",
+        readPoints: ["运行时端口绑定 · 本地"],
         target: { kind: "local-instance", serviceId: "release-service-3", address: "release/release-service-3@9001", port: 9001 },
       },
       {
         unitId: "task:account-service",
         key: "API_BASE_URL",
         value: "https://account-service.testing.atlas.example.com",
+        readPoints: ["仓库默认配置 · .env"],
         target: { kind: "remote", environment: "testing" },
       },
       // A remote service never routes to a local instance, even for a
@@ -183,6 +187,7 @@ describe("task-view projection", () => {
         unitId: "task:account-service",
         key: "PORT",
         value: "3001",
+        readPoints: ["运行时端口绑定 · 远程"],
         target: { kind: "remote", environment: "testing" },
       },
     ]);

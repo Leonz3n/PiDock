@@ -47,7 +47,10 @@ export interface ServiceUnitView {
 export interface ServiceRoutingView {
   unitId: string;
   key: string;
+  /** Effective value from the config layers (never a fabricated address). */
   value: string;
+  /** Layers that actually read this key (读取点核对). */
+  readPoints: string[];
   target:
     | { kind: "local-instance"; serviceId: string; address: string; port?: number }
     | { kind: "remote"; environment: string };
@@ -264,6 +267,7 @@ export function serviceRouting(task: Task, environment: string): ServiceRoutingV
         unitId: unit.unitId,
         key: row.key,
         value: row.value,
+        readPoints: [row.source],
         target: local
           ? {
               kind: "local-instance",
