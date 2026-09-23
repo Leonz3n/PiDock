@@ -86,7 +86,7 @@ describe("runtime panel topology", () => {
     await user.click(await screen.findByTestId("service-row-checkout-service-3"));
     const failure = await screen.findByTestId("service-failure");
     expect(failure).toHaveTextContent("端口被占用 · invoice-service");
-    expect(failure).toHaveTextContent("端口 9002 已被任务实例 release/invoice-service@9002 占用");
+    expect(failure).toHaveTextContent("端口 9001 已被任务实例 release/invoice-service@9001 占用");
     expect(failure).toHaveTextContent("运行管理会重新分配端口并更新受影响的消费者");
   });
 

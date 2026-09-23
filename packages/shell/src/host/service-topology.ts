@@ -156,6 +156,9 @@ export class TaskServiceTopology {
       units: selection.units,
       requests: input.requests ?? [],
       reservations: input.reservations ?? [],
+      // Same per-unit override the start groups use, so a unit classified
+      // `prepare`/`one-shot` by override is not also required to own a port.
+      runTypes: input.runTypes,
     });
     const hardPortFailure = ports.diagnostics.find((entry) => entry.code !== "port-taken");
     if (hardPortFailure) throw new Error(`${hardPortFailure.code}: ${hardPortFailure.message}`);

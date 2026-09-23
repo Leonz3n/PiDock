@@ -432,6 +432,9 @@ export function createShellHostAdapter(fallback: HostAdapter): HostAdapter {
               return port !== undefined ? { unitId: unit.unitId, port } : undefined;
             })
             .filter((entry): entry is { unitId: string; port: number } => entry !== undefined);
+          const environmentLabel = local.routing
+            .flatMap((entry) => (entry.target.kind === "remote" ? [entry.target.environment] : []))
+            .find((label) => label.length > 0);
           const plan = await planServiceGroupThroughShell({
             taskId,
             units,
@@ -439,7 +442,11 @@ export function createShellHostAdapter(fallback: HostAdapter): HostAdapter {
               unit.dependencies.map((dependency) => ({ from: unit.unitId, to: dependency.to, kind: dependency.kind })),
             ),
             requests,
-            environment: taskId,
+            // The environment label the memory projection uses
+            // (`environment?.name ?? task.environmentId`) is carried on its
+            // remote routing target; reuse it instead of sending the task id
+            // as the environment, and omit it when the task has no remote unit.
+            ...(environmentLabel !== undefined ? { environment: environmentLabel } : {}),
           });
           const records = await serviceRunRecordsThroughShell(taskId);
           const payload = plan.ok ? asRecord(plan.payload)["plan"] : undefined;
