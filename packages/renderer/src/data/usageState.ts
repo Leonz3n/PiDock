@@ -206,5 +206,6 @@ export const USAGE_DEFINITIONS: readonly { term: string; definition: string }[] 
   { term: "调用类型", definition: "回合、压缩、分支摘要、模型型工具分别统计；上下文占用下降不冲减累计消耗。" },
   { term: "重试与重放", definition: "每次重试是独立尝试并分别计入；流式增量、最终消息和事件重放按调用 id 更新同一条记录。" },
   { term: "恢复与克隆", definition: "恢复/分支/克隆/重新导入保留来源身份；原历史只计一次，继承展示不改变原调用的任务与会话归属。" },
+  { term: "清理范围", definition: "清理只移除操作当时已记录的明细（按调用 id）；之后的新调用照常记录，归档对话不清理用量。" },
   { term: "日期边界", definition: "日期型边界按 UTC+08:00 当日开始／当日结束（含边界）；带偏移的时刻按其自身偏移比较，跨机器口径一致。" },
 ];

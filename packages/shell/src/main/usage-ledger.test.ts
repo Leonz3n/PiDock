@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   USAGE_DEFINITIONS,
+  applyRecordedUsageCleanup,
   applyUsageCleanup,
   dedupeInheritedUsage,
   describeUsageCleanupScope,
@@ -135,6 +136,24 @@ describe("[PiDock 12] replay, retry and inheritance", () => {
     expect(totals.input).toBe(200);
   });
 
+  it("keeps the owning record's attribution when an inherited copy is merged in either order", () => {
+    const owner = detail();
+    const clone = detail({
+      taskId: "release-clone",
+      sessionId: "main-copy",
+      origin: { taskId: owner.taskId, sessionId: owner.sessionId, callId: owner.id },
+    });
+    for (const [existing, incoming] of [
+      [owner, clone],
+      [clone, owner],
+    ] as const) {
+      const [row] = mergeUsageDetails([existing], [incoming]);
+      expect(row.taskId).toBe("release");
+      expect(row.sessionId).toBe("main");
+      expect(row.origin).toBeUndefined();
+    }
+  });
+
   it("counts an inherited clone copy once and keeps the original attribution", () => {
     const original = detail();
     const clone = detail({
@@ -227,6 +246,16 @@ describe("[PiDock 12] cleanup scope", () => {
     expect(applyUsageCleanup(rows, { kind: "session", sessionId: "review" }).map((row) => row.id)).toEqual(["call-1"]);
     expect(applyUsageCleanup(rows, { kind: "before", before: "2026-09-01" }).map((row) => row.id)).toEqual(["call-1"]);
     expect(applyUsageCleanup(rows, { kind: "all" })).toEqual([]);
+  });
+
+  it("applies a recorded cleanup by the keys it removed, so a later call survives", () => {
+    const removed = detail({ id: "call-1", sessionId: "main" });
+    const later = detail({ id: "call-2", sessionId: "main", at: "2026-09-22T11:00:00+08:00" });
+    const record = { kind: "session", sessionId: "main", removedIds: [removed.id] } as const;
+    expect(applyRecordedUsageCleanup([removed, later], record).map((row) => row.id)).toEqual(["call-2"]);
+    // A record without keys keeps the legacy scope semantics (nothing to key on).
+    expect(applyRecordedUsageCleanup([removed, later], { kind: "session", sessionId: "main" })).toEqual([]);
+    expect(applyRecordedUsageCleanup([removed, later], { kind: "all", removedIds: [removed.id] }).map((row) => row.id)).toEqual(["call-2"]);
   });
 
   it("describes each cleanup scope so deleting sessions and deleting usage stay distinct", () => {

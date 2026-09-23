@@ -116,12 +116,16 @@ describe("task-store record shape", () => {
     writeUsageOnDisk(dir, [detail], [{ kind: "session", sessionId: "review" }]);
     expect(usageFilePath(dir)).toBe(join(dir, "usage.json"));
     expect(readUsageOnDisk(dir)).toEqual({ details: [detail], exclusions: [{ kind: "session", sessionId: "review" }] });
+    // A recorded cleanup also round-trips the ledger keys it removed.
+    writeUsageOnDisk(dir, [detail], [{ kind: "session", sessionId: "review", removedIds: ["call-0"] }]);
+    expect(readUsageOnDisk(dir)).toEqual({ details: [detail], exclusions: [{ kind: "session", sessionId: "review", removedIds: ["call-0"] }] });
     expect(readUsageOnDisk(join(tmpdir(), "pidock-missing-usage-xyz"))).toEqual({ details: [], exclusions: [] });
     // A corrupt ledger is refused instead of restoring a half-shaped record.
     expect(() => parseUsageLedger(serializeUsageLedger([{ ...detail, kind: "live" as never }]))).toThrow("kind");
     expect(() => parseUsageLedger(JSON.stringify({ details: [{ ...detail, usage: { ...detail.usage, input: -1 } }] }))).toThrow("input");
     expect(() => parseUsageLedger(JSON.stringify({ details: "nope" }))).toThrow("details");
     expect(() => parseUsageLedger(serializeUsageLedger([detail], [{ kind: "session" } as never]))).toThrow("sessionId");
+    expect(() => parseUsageLedger(JSON.stringify({ details: [], exclusions: [{ kind: "all", removedIds: ["", 7] }] }))).toThrow("removedIds");
     expect(parseUsageLedger(serializeUsageLedger([detail]))).toEqual({ details: [detail], exclusions: [] });
   });
 
@@ -1317,6 +1321,39 @@ describe("[PiDock 12] Host usage ledger", () => {
     const all = taskHost.clearUsage({ kind: "all" });
     expect(all.remaining).toBe(0);
     expect(taskHost.usageReport().details).toHaveLength(0);
+  });
+
+  it("records a call made after a cleanup instead of treating the scope as a permanent filter", () => {
+    const taskHost = host();
+    taskHost.provision(provisionInput());
+    taskHost.sendMessage("main", "检查构建", { usageSource: "actual", usage: { input: 100, output: 40, cacheRead: 0, cacheWrite: 0 } });
+    expect(taskHost.clearUsage({ kind: "session", sessionId: "main" })).toMatchObject({ removed: 1, remaining: 0 });
+    // The session still holds `call-1`; the cleanup removed that key, not the
+    // session's right to record new consumption.
+    taskHost.sendMessage("main", "再检查", { usageSource: "actual", usage: { input: 5, output: 1, cacheRead: 0, cacheWrite: 0 } });
+    const afterSession = taskHost.usageReport();
+    expect(afterSession.details.map((detail) => detail.id)).toEqual(["call-2"]);
+    expect(afterSession.totals).toMatchObject({ calls: 1, input: 5, output: 1 });
+    // "清理全部用量" is one-shot as well.
+    expect(taskHost.clearUsage({ kind: "all" }).remaining).toBe(0);
+    taskHost.sendMessage("main", "第三次", { usageSource: "actual", usage: { input: 3, output: 1, cacheRead: 0, cacheWrite: 0 } });
+    expect(taskHost.usageReport().details.map((detail) => detail.id)).toEqual(["call-3"]);
+  });
+
+  it("keeps a restarted task's new call distinct from the restored one", () => {
+    const store = memoryTaskStore();
+    const first = new TaskWorkspaceHost(TASK_ID, TASK_DIR, store, () => "2026-09-22T10:00:00+08:00");
+    first.provision(provisionInput());
+    first.sendMessage("main", "检查构建", { usageSource: "actual", usage: { input: 100, output: 40, cacheRead: 0, cacheWrite: 0 } });
+    // The app restarts: the process-local id counters reset while the restored
+    // session still holds `call-1`. A re-minted `call-1` would merge the two
+    // calls into one ledger row (one call's consumption disappears).
+    resetPiSequencesForTests();
+    const reopened = new TaskWorkspaceHost(TASK_ID, TASK_DIR, store, () => "2026-09-22T10:05:00+08:00");
+    reopened.sendMessage("main", "再检查", { usageSource: "actual", usage: { input: 5, output: 1, cacheRead: 0, cacheWrite: 0 } });
+    const report = reopened.usageReport();
+    expect(report.details.map((detail) => detail.id).sort()).toEqual(["call-1", "call-2"]);
+    expect(report.totals).toMatchObject({ calls: 2, input: 105, output: 41 });
   });
 
   it("keeps usage when the conversation is archived or removed from the store", () => {

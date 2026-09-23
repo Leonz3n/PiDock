@@ -77,6 +77,7 @@ import {
   PI_USAGE_GROUP_LABELS,
   UNVERSIONED_PROVIDER_CONFIG,
   USAGE_DEFINITIONS,
+  applyRecordedUsageCleanup,
   applyUsageCleanup,
   dedupeInheritedUsage,
   describeUsageCleanupScope,
@@ -156,6 +157,16 @@ function defaultRealPath(path: string): string {
     resolved = current;
   }
   return suffix.length > 0 ? `${resolved.replace(/[\\/]+$/, "")}/${suffix.join("/")}` : resolved;
+}
+
+/**
+ * The same cleanup scope with the ledger keys it removed, rebuilt per variant
+ * so the union stays exact (`PiUsageCleanupScope` is the wire shape).
+ */
+function withRemovedIds(scope: PiUsageCleanupScope, removedIds: readonly string[]): PiUsageCleanupScope {
+  if (scope.kind === "all") return { kind: "all", removedIds };
+  if (scope.kind === "session") return { kind: "session", sessionId: scope.sessionId, removedIds };
+  return { kind: "before", before: scope.before, removedIds };
 }
 
 export const diskTaskStore: TaskStore = {
@@ -1051,15 +1062,16 @@ export class TaskWorkspaceHost {
 
   /**
    * Bring the persisted ledger in line with the sessions and return it.
-   * The merge is replay-safe (keyed by call id) and the recorded cleanup
-   * exclusions are re-applied, so a legacy task backfills once and a cleaned
-   * scope stays cleaned without touching the conversations. The file is only
-   * rewritten when the result actually changed.
+   * The merge is replay-safe (keyed by call id) and every recorded cleanup is
+   * re-applied by the ledger keys it removed, so a legacy task backfills once,
+   * a cleaned scope stays cleaned, and a call made *after* a cleanup is still
+   * recorded (its key was never removed). The file is only rewritten when the
+   * result actually changed.
    */
   private syncUsageLedger(): { details: PiUsageDetail[]; exclusions: PiUsageCleanupScope[] } {
     const stored = this.store.readUsage(this.taskDir);
     const merged = mergeUsageDetails(stored.details, this.usageDetailsFromSessions());
-    const details = stored.exclusions.reduce((current, exclusion) => applyUsageCleanup(current, exclusion), merged);
+    const details = stored.exclusions.reduce((current, exclusion) => applyRecordedUsageCleanup(current, exclusion), merged);
     if (serializeUsageLedger(details, stored.exclusions) !== serializeUsageLedger(stored.details, stored.exclusions)) {
       this.store.writeUsage(this.taskDir, details, stored.exclusions);
     }
@@ -1096,15 +1108,16 @@ export class TaskWorkspaceHost {
   /**
    * Remove usage details in one explicit scope ([PiDock 12] #12 box 8).
    * Archiving a conversation never removes usage; only this op does, and the
-   * scope is recorded so a later sync does not restore what was cleaned.
+   * ledger keys it removed are recorded so a later sync does not restore them
+   * — and so calls made after the cleanup are still recorded.
    */
   clearUsage(scope: PiUsageCleanupScope): { removed: number; remaining: number; description: string } {
-    const stored = this.store.readUsage(this.taskDir);
-    const merged = mergeUsageDetails(stored.details, this.usageDetailsFromSessions());
-    const exclusions = [...stored.exclusions, scope];
-    const details = exclusions.reduce((current, exclusion) => applyUsageCleanup(current, exclusion), merged);
-    this.store.writeUsage(this.taskDir, details, exclusions);
-    return { removed: merged.length - details.length, remaining: details.length, description: describeUsageCleanupScope(scope) };
+    const ledger = this.syncUsageLedger();
+    const details = applyUsageCleanup(ledger.details, scope);
+    const survivorIds = new Set(details.map((detail) => detail.id));
+    const removedIds = ledger.details.filter((detail) => !survivorIds.has(detail.id)).map((detail) => detail.id);
+    this.store.writeUsage(this.taskDir, details, [...ledger.exclusions, withRemovedIds(scope, removedIds)]);
+    return { removed: removedIds.length, remaining: details.length, description: describeUsageCleanupScope(scope) };
   }
 
   /** Grouping dimensions the statistics page offers (labels included). */

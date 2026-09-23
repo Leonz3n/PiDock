@@ -282,22 +282,34 @@ export function sumOwnedUsage(details: readonly PiUsageDetail[]): PiUsageTotals 
 }
 
 /**
+ * Merge one report into the record it re-reports.
+ *
+ * The record is keyed by the call id, so the *owning* copy (the one without
+ * `origin`) always supplies task/session attribution: an inherited copy shown
+ * in another session must never move the call to the session that displays it.
+ * The newest report wins the usage numbers and the earliest `at` is kept (a
+ * call starts once).
+ */
+function mergeDetail(previous: PiUsageDetail, detail: PiUsageDetail): PiUsageDetail {
+  const owner = previous.origin === undefined ? previous : detail;
+  const merged: PiUsageDetail = { ...detail, id: previous.id, taskId: owner.taskId, sessionId: owner.sessionId, at: previous.at };
+  if (owner.origin === undefined) delete merged.origin;
+  else merged.origin = { ...owner.origin };
+  return merged;
+}
+
+/**
  * Replay-safe merge: the same call id updates its record instead of adding a
  * new one, so streamed increments, the final message and a replayed event
- * never inflate a total. The earliest `at` wins (a call starts once) and an
- * inherited copy never overwrites the owning record.
+ * never inflate a total. The earliest `at` wins and an inherited copy never
+ * overwrites the owning record's attribution.
  */
 export function mergeUsageDetails(existing: readonly PiUsageDetail[], incoming: readonly PiUsageDetail[]): PiUsageDetail[] {
   const byId = new Map<string, PiUsageDetail>();
   for (const detail of existing) byId.set(detail.id, detail);
   for (const detail of incoming) {
     const previous = byId.get(detail.id);
-    if (previous === undefined) {
-      byId.set(detail.id, detail);
-      continue;
-    }
-    const owner = previous.origin === undefined || detail.origin !== undefined ? detail : { ...detail, taskId: previous.taskId, sessionId: previous.sessionId };
-    byId.set(detail.id, { ...owner, at: previous.at });
+    byId.set(detail.id, previous === undefined ? detail : mergeDetail(previous, detail));
   }
   return [...byId.values()];
 }
@@ -381,6 +393,12 @@ export function usageDayKey(at: string, offsetMinutes: number = USAGE_TIMEZONE_O
 
 export interface PiUsageFilter extends PiUsageRange {
   taskId?: string;
+  /**
+   * Host-written details never carry a project (the Host knows no task ->
+   * project mapping), so a Host-side filter on this dimension matches nothing
+   * and always has. The statistics layer applies the project join after the
+   * RPC instead of inventing one here.
+   */
   projectId?: string;
   sessionId?: string;
   providerId?: string;
@@ -483,11 +501,17 @@ function groupLabel(key: string, groupBy: PiUsageGroupBy): string {
  * Cleanup scope. Archiving keeps usage records; only an explicit cleanup
  * removes them, and the scope is one of the three expressible shapes below
  * so "delete the session" and "delete the usage" never get conflated.
+ *
+ * A *recorded* scope also carries `removedIds`: the ledger keys the cleanup
+ * actually removed. Applying those keys is what keeps a cleanup from turning
+ * into a permanent filter — a call made after the cleanup has a new key and is
+ * recorded normally, while the sessions' still-present call records for the
+ * cleaned keys are never re-added by a later sync.
  */
 export type PiUsageCleanupScope =
-  | { kind: "all" }
-  | { kind: "session"; sessionId: string }
-  | { kind: "before"; before: string };
+  | { kind: "all"; removedIds?: readonly string[] }
+  | { kind: "session"; sessionId: string; removedIds?: readonly string[] }
+  | { kind: "before"; before: string; removedIds?: readonly string[] };
 
 export function describeUsageCleanupScope(scope: PiUsageCleanupScope, offsetMinutes: number = USAGE_TIMEZONE_OFFSET_MINUTES): string {
   if (scope.kind === "all") return "清理全部用量明细";
@@ -512,6 +536,26 @@ export function applyUsageCleanup(
   });
 }
 
+/**
+ * Survivors of one *recorded* cleanup. A scope that carries `removedIds` is
+ * applied key-by-key, so only the calls that existed at cleanup time are
+ * dropped: a later call of the same session has a new key and is recorded, and
+ * the cleaned keys stay gone even though the sessions still hold them.
+ *
+ * A legacy record (no keys) falls back to its scope predicate; the Host
+ * rewrites such a record into the key form on its next sync, which is what
+ * stops an old "session"/"all" exclusion from eating future calls.
+ */
+export function applyRecordedUsageCleanup(
+  details: readonly PiUsageDetail[],
+  scope: PiUsageCleanupScope,
+  offsetMinutes: number = USAGE_TIMEZONE_OFFSET_MINUTES,
+): PiUsageDetail[] {
+  if (scope.removedIds === undefined) return applyUsageCleanup(details, scope, offsetMinutes);
+  const removed = new Set(scope.removedIds);
+  return details.filter((detail) => !removed.has(detail.id));
+}
+
 /** Statistics definitions shown in the UI (spec: 统计定义在界面可查). */
 export const USAGE_DEFINITIONS: readonly { term: string; definition: string }[] = [
   { term: "统计范围", definition: "仅统计本应用记录的模型调用；不等同账户账单或供应商配额，未观测的外部调用不计入也不伪造。" },
@@ -521,5 +565,6 @@ export const USAGE_DEFINITIONS: readonly { term: string; definition: string }[] 
   { term: "调用类型", definition: "回合、压缩、分支摘要、模型型工具分别统计；上下文占用下降不冲减累计消耗。" },
   { term: "重试与重放", definition: "每次重试是独立尝试并分别计入；流式增量、最终消息和事件重放按调用 id 更新同一条记录。" },
   { term: "恢复与克隆", definition: "恢复/分支/克隆/重新导入保留来源身份；原历史只计一次，继承展示不改变原调用的任务与会话归属。" },
+  { term: "清理范围", definition: "清理只移除操作当时已记录的明细（按调用 id）；之后的新调用照常记录，归档对话不清理用量。" },
   { term: "日期边界", definition: "日期型边界按 UTC+08:00 当日开始／当日结束（含边界）；带偏移的时刻按其自身偏移比较，跨机器口径一致。" },
 ];

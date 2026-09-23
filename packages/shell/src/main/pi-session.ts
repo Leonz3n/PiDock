@@ -483,6 +483,30 @@ export function resetPiSequencesForTests(): void {
 }
 
 /**
+ * Highest `n` in ids shaped `<prefix>-<n>`. The two sequence counters above
+ * live in the process, so a restart resets them while the sessions it restores
+ * still hold `call-1`/`approval-1`; re-seeding from restored ids is what keeps
+ * the next call from re-minting an id the ledger already keyed (which would
+ * collapse two calls into one row) or a fresh approval from reusing an id a
+ * persisted approval still answers to.
+ */
+function highestSequence(ids: readonly string[], prefix: string): number {
+  const pattern = new RegExp(`^${prefix}-(\\d+)$`);
+  let highest = 0;
+  for (const id of ids) {
+    const match = pattern.exec(id);
+    if (match) highest = Math.max(highest, Number.parseInt(match[1], 10));
+  }
+  return highest;
+}
+
+/** Advance the id counters past everything a restored snapshot already holds. */
+function seedSequencesFrom(snapshot: PiSessionSnapshot): void {
+  piCallSequence = Math.max(piCallSequence, highestSequence(snapshot.calls.map((call) => call.callId), "call"));
+  piApprovalSequence = Math.max(piApprovalSequence, highestSequence((snapshot.approvals ?? []).map((approval) => approval.id), "approval"));
+}
+
+/**
  * Single-session Agent channel. One instance serves one task workspace Host;
  * later multi-session work reuses the same Host instead of spawning a process
  * per session (the write lock below is already task-scoped).
@@ -1138,6 +1162,10 @@ export class PiSessionChannel {
    * must confirm again. `createdAt` is preserved from the saved snapshot.
    */
   static restore(snapshot: PiSessionSnapshot, taskDir: string, catalog?: readonly ProviderProfileRow[]): PiSessionChannel {
+    // The restored session's ids were minted by a counter that reset with the
+    // process (or belongs to the persisted snapshot); advance ours past them
+    // before anything new is minted ([PiDock 12] #12 call identity).
+    seedSequencesFrom(snapshot);
     const channel = new PiSessionChannel({
       taskId: snapshot.taskId,
       sessionId: snapshot.sessionId,
