@@ -103,6 +103,37 @@ describe("protocol request shapes", () => {
       { type: "function", function: { name: "fs.read", description: "读取文件", parameters: { type: "object" } } },
     ]);
   });
+  // [PiDock 11] #9: reasoning tiers are mapped per protocol and verified
+  // separately — a tier the mapping does not name is never guessed elsewhere.
+  it("maps the selected reasoning tier per protocol and refuses to invent one", () => {
+    const anthropic = buildProtocolRequest("anthropic-messages", { model: "claude-sonnet-4-5", turns, maxOutput: 16384, reasoning: { tier: "medium" } });
+    expect(anthropic["thinking"]).toEqual({ type: "enabled", budget_tokens: 8192 });
+    // Unknown max output: `max_tokens > budget_tokens` cannot be guaranteed.
+    expect(buildProtocolRequest("anthropic-messages", { model: "claude-sonnet-4-5", turns, reasoning: { tier: "medium" } })["thinking"]).toBeUndefined();
+    // `off` is the absence of the block.
+    expect(buildProtocolRequest("anthropic-messages", { model: "claude-sonnet-4-5", turns, maxOutput: 4096, reasoning: { tier: "off" } })["thinking"]).toBeUndefined();
+    // An explicit budget wins; a budget that cannot fit under max_tokens is not sent.
+    expect(buildProtocolRequest("anthropic-messages", { model: "claude-sonnet-4-5", turns, maxOutput: 4096, reasoning: { tier: "medium", budgetTokens: 2048 } })["thinking"]).toEqual({
+      type: "enabled",
+      budget_tokens: 2048,
+    });
+    expect(
+      buildProtocolRequest("anthropic-messages", { model: "claude-sonnet-4-5", turns, maxOutput: 1024, reasoning: { tier: "medium", budgetTokens: 2048 } })["thinking"],
+    ).toBeUndefined();
+
+    expect(buildProtocolRequest("openai-responses", { model: "gpt-5", turns, reasoning: { tier: "low" } })["reasoning"]).toEqual({ effort: "low" });
+    expect(buildProtocolRequest("openai-chat-completions", { model: "qwen3-coder", turns, reasoning: { tier: "high" } })["reasoning_effort"]).toBe("high");
+    // Undeclared tier: no parameter is written for any protocol.
+    expect(buildProtocolRequest("openai-responses", { model: "gpt-5", turns, reasoning: { tier: "turbo" } })["reasoning"]).toBeUndefined();
+    expect(buildProtocolRequest("openai-chat-completions", { model: "qwen3-coder", turns, reasoning: { tier: "turbo" } })["reasoning_effort"]).toBeUndefined();
+    // No reasoning input -> no reasoning field, for every protocol.
+    for (const protocol of ["anthropic-messages", "openai-responses", "openai-chat-completions"]) {
+      const body = buildProtocolRequest(protocol, { model: "m", turns });
+      expect(body["thinking"]).toBeUndefined();
+      expect(body["reasoning"]).toBeUndefined();
+      expect(body["reasoning_effort"]).toBeUndefined();
+    }
+  });
 });
 
 describe("protocol stream frames", () => {
