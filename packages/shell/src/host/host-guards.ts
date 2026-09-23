@@ -46,6 +46,11 @@ export function boundWorkspaceId(): string {
   return process.env["PIDOCK_WORKSPACE_ID"] ?? DEFAULT_WORKSPACE_ID;
 }
 
+/** Shared root-id shape check for the [PiDock 10] (#15) file/terminal ops. */
+function isNonEmptyRootId(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
 function isUsageGroupBy(value: unknown): value is PiUsageGroupBy {
   return typeof value === "string" && (PI_USAGE_GROUP_BY as readonly string[]).includes(value);
 }
@@ -1013,6 +1018,110 @@ export function validateHostTaskOp(
     const catalog = payload["catalog"];
     if (catalog !== undefined && (!Array.isArray(catalog) || !catalog.every((entry) => isRecord(entry)))) {
       return { ok: false, error: "invalid-payload: task/setSessionThinking.catalog must be an array of provider objects" };
+    }
+    return { ok: true };
+  }
+  // [PiDock 10] (#15) file browsing / diff / delivery: envelope shape only
+  // here. Which roots exist, whether a path escapes them and how much of an
+  // answer may cross the boundary are decided Host-side
+  // (`host/workspace-files.ts` + `main/workspace-files.ts`).
+  if (op === "task/fileRoots" || op === "task/terminalState") {
+    if (payload !== undefined && !isRecord(payload)) {
+      return { ok: false, error: `invalid-payload: ${op} payload must be an object` };
+    }
+    return { ok: true };
+  }
+  if (op === "task/fileTree" || op === "task/filePreview" || op === "task/fileDiff" || op === "task/deliveryInfo") {
+    if (!isRecord(payload)) return { ok: false, error: `invalid-payload: ${op} requires a payload object` };
+    const rootId = payload["rootId"];
+    if (typeof rootId !== "string" || rootId.trim().length === 0) {
+      return { ok: false, error: `invalid-payload: ${op}.rootId must be a non-empty string` };
+    }
+    const relative = payload["relative"];
+    if (relative !== undefined && typeof relative !== "string") {
+      return { ok: false, error: `invalid-payload: ${op}.relative must be a string` };
+    }
+    // A preview reads one file: an explicit relative path is required.
+    if (op === "task/filePreview" && (typeof relative !== "string" || relative.trim().length === 0)) {
+      return { ok: false, error: "invalid-payload: task/filePreview.relative must be a non-empty string" };
+    }
+    return { ok: true };
+  }
+  if (op === "task/terminalHistory") {
+    if (!isRecord(payload)) return { ok: false, error: "invalid-payload: task/terminalHistory requires a payload object" };
+    const instanceId = payload["instanceId"];
+    if (typeof instanceId !== "string" || instanceId.trim().length === 0) {
+      return { ok: false, error: "invalid-payload: task/terminalHistory.instanceId must be a non-empty string" };
+    }
+    const limit = payload["limit"];
+    if (limit !== undefined && (typeof limit !== "number" || !Number.isInteger(limit) || limit <= 0)) {
+      return { ok: false, error: "invalid-payload: task/terminalHistory.limit must be a positive integer" };
+    }
+    return { ok: true };
+  }
+  if (op === "task/planTerminal") {
+    if (!isRecord(payload)) return { ok: false, error: "invalid-payload: task/planTerminal requires a payload object" };
+    const instanceId = payload["instanceId"];
+    if (typeof instanceId !== "string" || instanceId.trim().length === 0) {
+      return { ok: false, error: "invalid-payload: task/planTerminal.instanceId must be a non-empty string" };
+    }
+    if (typeof payload["program"] !== "string") {
+      return { ok: false, error: "invalid-payload: task/planTerminal.program must be a string" };
+    }
+    const terminalLayers = payload["layers"];
+    if (typeof terminalLayers !== "object" || terminalLayers === null || Array.isArray(terminalLayers)) {
+      return { ok: false, error: "invalid-payload: task/planTerminal.layers must be an object" };
+    }
+    if (!isNonEmptyRootId(payload["rootId"])) {
+      return { ok: false, error: "invalid-payload: task/planTerminal.rootId must be a non-empty string" };
+    }
+    const terminalArgs = payload["args"];
+    if (terminalArgs !== undefined && (!Array.isArray(terminalArgs) || !terminalArgs.every((entry) => typeof entry === "string"))) {
+      return { ok: false, error: "invalid-payload: task/planTerminal.args must be an array of strings" };
+    }
+    for (const key of ["cols", "rows"] as const) {
+      const value = payload[key];
+      if (value !== undefined && (typeof value !== "number" || !Number.isInteger(value))) {
+        return { ok: false, error: `invalid-payload: task/planTerminal.${key} must be an integer` };
+      }
+    }
+    return { ok: true };
+  }
+  if (op === "task/terminalControl") {
+    if (!isRecord(payload)) return { ok: false, error: "invalid-payload: task/terminalControl requires a payload object" };
+    const instanceId = payload["instanceId"];
+    const action = payload["action"];
+    if (typeof instanceId !== "string" || instanceId.trim().length === 0) {
+      return { ok: false, error: "invalid-payload: task/terminalControl.instanceId must be a non-empty string" };
+    }
+    if (action !== "start" && action !== "stop") {
+      return { ok: false, error: "invalid-payload: task/terminalControl.action must be start/stop" };
+    }
+    const sessionId = payload["sessionId"];
+    if (sessionId !== undefined && (typeof sessionId !== "string" || sessionId.trim().length === 0)) {
+      return { ok: false, error: "invalid-payload: task/terminalControl.sessionId must be a non-empty string" };
+    }
+    if (action === "start") {
+      if (typeof payload["program"] !== "string") {
+        return { ok: false, error: "invalid-payload: task/terminalControl.program must be a string when starting" };
+      }
+      if (!isNonEmptyRootId(payload["rootId"])) {
+        return { ok: false, error: "invalid-payload: task/terminalControl.rootId must be a non-empty string when starting" };
+      }
+      const startLayers = payload["layers"];
+      if (typeof startLayers !== "object" || startLayers === null || Array.isArray(startLayers)) {
+        return { ok: false, error: "invalid-payload: task/terminalControl.layers must be an object when starting" };
+      }
+      const startArgs = payload["args"];
+      if (startArgs !== undefined && (!Array.isArray(startArgs) || !startArgs.every((entry) => typeof entry === "string"))) {
+        return { ok: false, error: "invalid-payload: task/terminalControl.args must be an array of strings" };
+      }
+      for (const key of ["cols", "rows"] as const) {
+        const value = payload[key];
+        if (value !== undefined && (typeof value !== "number" || !Number.isInteger(value))) {
+          return { ok: false, error: `invalid-payload: task/terminalControl.${key} must be an integer` };
+        }
+      }
     }
     return { ok: true };
   }

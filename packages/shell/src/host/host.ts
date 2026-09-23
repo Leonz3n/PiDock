@@ -46,6 +46,10 @@ import { SharedPathCoordinator } from "./path-coordination.js";
 import { TaskServiceRuntime } from "./service-runtime.js";
 import { TaskServiceTopology } from "./service-topology.js";
 import { TaskProtocolBinding } from "./protocol-binding.js";
+import { TaskWorkspaceFiles } from "./workspace-files.js";
+import { TaskTerminalRegistry, planTerminal, type TerminalPlan } from "../main/terminal-config.js";
+import { runAgentTerminalControl } from "./terminal-control.js";
+import { writeClaimError } from "./write-coordination.js";
 import { runAgentServiceControl } from "./service-control.js";
 import { runAgentBrowserAction, runHumanBrowserAction, type BrowserGatewayPort } from "./browser-control.js";import { HostBrowserClient } from "../rpc/browser-client.js";
 import { isBrowserAction } from "../main/browser-rules.js";
@@ -113,6 +117,82 @@ function serviceTopologyFor(taskId: string): TaskServiceTopology | { error: stri
 // yields are checked against this task folder, so no op can act on another
 // task's tree.
 let protocolBinding: TaskProtocolBinding | null = null;
+
+// [PiDock 10] (#15) per-task file access and terminal registry. Same fork
+// binding and lifetime as the topology above; the file roots come from this
+// task's record and every read is bounded + masked before it crosses back.
+let workspaceFiles: TaskWorkspaceFiles | null = null;
+let terminalRegistry: TaskTerminalRegistry | null = null;
+/**
+ * Task/private values seen in a registered service's private layer: previews
+ * and diffs are scrubbed with them, so a credential stored for a service can
+ * never be echoed back through the file panel.
+ */
+const privateSecretValues = new Set<string>();
+
+function workspaceFilesFor(taskId: string): TaskWorkspaceFiles | { error: string } {
+  const host = taskHostFor(taskId);
+  if ("error" in host) return host;
+  if (!workspaceFiles || workspaceFiles.taskDir !== host.taskDir || workspaceFiles.taskId !== host.taskId) {
+    workspaceFiles = new TaskWorkspaceFiles(host.taskId, host.taskDir, host.store, undefined, () => [...privateSecretValues]);
+  }
+  return workspaceFiles;
+}
+
+function terminalRegistryFor(taskId: string): TaskTerminalRegistry | { error: string } {
+  const host = taskHostFor(taskId);
+  if ("error" in host) return host;
+  if (!terminalRegistry || terminalRegistry.taskId !== host.taskId) {
+    terminalRegistry = new TaskTerminalRegistry(host.taskId);
+  }
+  return terminalRegistry;
+}
+
+/**
+ * [PiDock 10] (#15) plan one built-in terminal for the addressed root: the
+ * caller's kind decides the owner label, a `read` agent session is refused
+ * before anything is planned (box 8), and the returned display plan keeps only
+ * masked env rows — the real child env stays in `raw` for the Host registry.
+ */
+function terminalPlanFor(
+  host: TaskWorkspaceHost,
+  files: TaskWorkspaceFiles,
+  record: Record<string, unknown>,
+  caller: ReturnType<typeof classifyControlCaller>,
+): { ok: true; plan: Omit<TerminalPlan, "env">; raw: TerminalPlan } | { ok: false; error: string } {
+  if (!caller.ok) return { ok: false, error: caller.error };
+  let owner: TerminalPlan["owner"];
+  if (caller.kind === "agent") {
+    const permission = host.permissionOf(caller.sessionId);
+    if (permission === null) return { ok: false, error: `unknown-session: ${caller.sessionId} 不是本任务的会话` };
+    if (permission === "read") {
+      return { ok: false, error: "read 权限不提供终端与命令执行入口；请在会话中提升权限或改用人工操作" };
+    }
+    owner = { taskId: host.taskId, sessionId: caller.sessionId, label: `会话 ${caller.sessionId}` };
+  } else {
+    owner = { taskId: host.taskId, sessionId: null, label: caller.label };
+  }
+  const layers = record["layers"];
+  const planned = planTerminal({
+    roots: files.roots(),
+    taskId: host.taskId,
+    taskDir: host.taskDir,
+    rootId: record["rootId"],
+    relative: record["relative"],
+    program: record["program"],
+    args: record["args"],
+    layers: (layers as never) ?? { repoDefaults: [], shared: [], privateEntries: [], task: [] },
+    cols: record["cols"],
+    rows: record["rows"],
+    owner,
+    instanceId: String(record["instanceId"]),
+    secrets: [...privateSecretValues],
+  });
+  if (!planned.ok) return { ok: false, error: planned.error };
+  const { env, ...display } = planned.plan;
+  void env;
+  return { ok: true, plan: display, raw: planned.plan };
+}
 
 function protocolBindingFor(taskId: string): TaskProtocolBinding | { error: string } {
   const host = taskHostFor(taskId);
@@ -986,6 +1066,156 @@ async function dispatchTaskOp(
         try {
           const result = host.clearUsage(scope as never);
           return { ok: true, payload: { ...result } };
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : String(error) };
+        }
+      }
+      // [PiDock 10] (#15) file browsing, diff and delivery. Reads only: the
+      // roots come from this task's record, every path is validated against
+      // one root, and the answer is bounded + masked before it is returned.
+      // A plain-directory link keeps its shared identity and has no Git view
+      // or delivery entry point (`main/workspace-files.ts` owns those rules).
+      case "task/fileRoots": {
+        const files = workspaceFilesFor(taskId);
+        if ("error" in files) return { ok: false, error: files.error };
+        try {
+          return { ok: true, payload: { roots: files.roots(), taskDir: files.taskDir } };
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : String(error) };
+        }
+      }
+      case "task/fileTree": {
+        const files = workspaceFilesFor(taskId);
+        if ("error" in files) return { ok: false, error: files.error };
+        const result = files.tree({ rootId: record["rootId"], relative: record["relative"] });
+        return result.ok ? { ok: true, payload: { tree: result.tree } } : { ok: false, error: result.error };
+      }
+      case "task/filePreview": {
+        const files = workspaceFilesFor(taskId);
+        if ("error" in files) return { ok: false, error: files.error };
+        const result = files.preview({ rootId: record["rootId"], relative: record["relative"] });
+        return result.ok ? { ok: true, payload: { preview: result.preview } } : { ok: false, error: result.error };
+      }
+      case "task/fileDiff": {
+        const files = workspaceFilesFor(taskId);
+        if ("error" in files) return { ok: false, error: files.error };
+        const result = files.diff({ rootId: record["rootId"], relative: record["relative"] });
+        return result.ok
+          ? { ok: true, payload: { path: result.path, diff: result.diff, truncated: result.truncated, attribution: result.attribution } }
+          : { ok: false, error: result.error };
+      }
+      case "task/deliveryInfo": {
+        const files = workspaceFilesFor(taskId);
+        if ("error" in files) return { ok: false, error: files.error };
+        const result = files.delivery({ rootId: record["rootId"] });
+        return result.ok ? { ok: true, payload: { target: result.target } } : { ok: false, error: result.error };
+      }
+      // [PiDock 10] (#15) built-in terminal. Planning resolves the selected
+      // root's cwd + the #7 environment and returns only masked rows: the real
+      // child env never crosses the boundary, and the plan is not an execution.
+      case "task/planTerminal": {
+        const files = workspaceFilesFor(taskId);
+        if ("error" in files) return { ok: false, error: files.error };
+        const caller = classifyControlCaller({ sessionId: record["sessionId"], label: record["label"], origin });
+        if (!caller.ok) return { ok: false, error: caller.error };
+        const event = terminalPlanFor(host, files, record, caller);
+        return event.ok ? { ok: true, payload: { plan: event.plan } } : { ok: false, error: event.error };
+      }
+      case "task/terminalControl": {
+        const files = workspaceFilesFor(taskId);
+        if ("error" in files) return { ok: false, error: files.error };
+        const terminals = terminalRegistryFor(taskId);
+        if ("error" in terminals) return { ok: false, error: terminals.error };
+        const action = record["action"];
+        const instanceId = String(record["instanceId"]);
+        const caller = classifyControlCaller({ sessionId: record["sessionId"], label: record["label"], origin });
+        if (!caller.ok) return { ok: false, error: caller.error };
+        if (action === "start") {
+          const planned = terminalPlanFor(host, files, record, caller);
+          if (!planned.ok) return { ok: false, error: planned.error };
+          const plan = planned.raw;
+          if (caller.kind === "human") {
+            // Human-explicit start: labelled, still under the task write right
+            // so it cannot run alongside another session's side effect.
+            const claim = host.claimWrite("human-ui", "auto", { kind: "terminal-control", label: `终端启动 ${instanceId}（用户显式操作）` });
+            if (!claim.ok) return { ok: false, error: writeClaimError(claim) };
+            try {
+              const instance = terminals.register(plan);
+              return { ok: true, payload: { instanceId, action, actor: "human", instance } };
+            } catch (error) {
+              return { ok: false, error: error instanceof Error ? error.message : String(error) };
+            } finally {
+              host.releaseWrite(claim.claimId);
+            }
+          }
+          const channel = host.openSession(caller.sessionId);
+          return runAgentTerminalControl({
+            registry: terminals,
+            channel,
+            taskDir: host.taskDir,
+            sessionId: caller.sessionId,
+            instanceId,
+            action: "start",
+            approvalId: record["approvalId"],
+            write: host,
+            persist: () => host.store.writeSession(host.taskDir, channel.snapshot()),
+            act: () => terminals.register(plan),
+          });
+        }
+        // Stop: prove the exact process identity first (never by port), then
+        // flip the state. The real kill belongs to the spawner slice; until it
+        // lands an unspawned terminal has no pid and stop fails closed.
+        if (caller.kind === "human") {
+          const claim = host.claimWrite("human-ui", "auto", { kind: "terminal-control", label: `终端停止 ${instanceId}（用户显式操作）` });
+          if (!claim.ok) return { ok: false, error: writeClaimError(claim) };
+          try {
+            const scope = terminals.stopScope(instanceId);
+            if (!scope.ok) return { ok: false, error: scope.error };
+            const instance = terminals.markExited(instanceId, { reason: "user-request" });
+            return { ok: true, payload: { instanceId, action, actor: "human", scope: scope.scope, instance } };
+          } catch (error) {
+            return { ok: false, error: error instanceof Error ? error.message : String(error) };
+          } finally {
+            host.releaseWrite(claim.claimId);
+          }
+        }
+        const channel = host.openSession(caller.sessionId);
+        return runAgentTerminalControl({
+          registry: terminals,
+          channel,
+          taskDir: host.taskDir,
+          sessionId: caller.sessionId,
+          instanceId,
+          action: "stop",
+          approvalId: record["approvalId"],
+          write: host,
+          persist: () => host.store.writeSession(host.taskDir, channel.snapshot()),
+          act: () => {
+            const scope = terminals.stopScope(instanceId);
+            if (!scope.ok) throw new Error(scope.error);
+            return terminals.markExited(instanceId, { reason: "agent-request" });
+          },
+        });
+      }
+      case "task/terminalState": {
+        const terminals = terminalRegistryFor(taskId);
+        if ("error" in terminals) return { ok: false, error: terminals.error };
+        // `spawnImplemented: false` is the honest disclosure that this slice
+        // plans and tracks terminals but owns no real pty yet.
+        return {
+          ok: true,
+          payload: {
+            spawnImplemented: false,
+            instances: terminals.list().map((instance) => ({ ...instance, processKnown: instance.processId !== undefined })),
+          },
+        };
+      }
+      case "task/terminalHistory": {
+        const terminals = terminalRegistryFor(taskId);
+        if ("error" in terminals) return { ok: false, error: terminals.error };
+        const limit = typeof record["limit"] === "number" ? (record["limit"] as number) : 50;
+        try {
+          return { ok: true, payload: { history: terminals.history(String(record["instanceId"]), limit) } };
         } catch (error) {
           return { ok: false, error: error instanceof Error ? error.message : String(error) };
         }

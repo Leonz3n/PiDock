@@ -17,7 +17,7 @@
 import type { PiPermission } from "../main/pi-session.js";
 
 /** What is asking for the write right. Every kind is side-effecting. */
-export type WriteIntentKind = "turn" | "service-control" | "browser-action" | "derived-execution";
+export type WriteIntentKind = "turn" | "service-control" | "terminal-control" | "browser-action" | "derived-execution";
 
 export interface WriteIntent {
   kind: WriteIntentKind;

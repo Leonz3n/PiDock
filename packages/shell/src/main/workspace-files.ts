@@ -59,6 +59,8 @@ export interface WorkspaceRoot {
   sourcePath?: string;
   /** Worktree only: baseline branch shown by the delivery entry point. */
   branch?: string;
+  /** Worktree only: pinned baseline commit the diff compares against. */
+  baseCommit?: string;
 }
 
 /**
@@ -71,11 +73,13 @@ export interface WorkspaceRootsInput {
   /** Worktree folder names inside the task folder (single-repo tasks: one). */
   repos: readonly string[];
   /** Per-repo baselines ([PiDock 03] #6); absent on pre-#6 records. */
-  repoSources?: readonly { repoDir: string; remoteBranch: string }[];
+  repoSources?: readonly { repoDir: string; remoteBranch: string; baseCommit?: string }[];
   /** Plain-directory links ([PiDock 03] #6). */
   dirLinks?: readonly { linkName: string; directoryId: string; sourcePath: string }[];
   /** Task baseline branch when no per-repo source exists. */
   branch?: string;
+  /** Task baseline commit when no per-repo source exists. */
+  baseCommit?: string;
 }
 
 function joinRoot(taskDir: string, name: string): string {
@@ -92,11 +96,13 @@ function joinRoot(taskDir: string, name: string): string {
 export function workspaceRoots(input: WorkspaceRootsInput): WorkspaceRoot[] {
   const roots: WorkspaceRoot[] = [];
   const branchByRepo = new Map((input.repoSources ?? []).map((source) => [source.repoDir, source.remoteBranch] as const));
+  const baseByRepo = new Map((input.repoSources ?? []).map((source) => [source.repoDir, source.baseCommit] as const));
   const seen = new Set<string>();
   for (const repoDir of input.repos) {
     const id = repoDir.trim();
     if (id.length === 0 || seen.has(id)) continue;
     seen.add(id);
+    const baseCommit = baseByRepo.get(id) ?? input.baseCommit;
     roots.push({
       id,
       kind: "worktree",
@@ -104,6 +110,7 @@ export function workspaceRoots(input: WorkspaceRootsInput): WorkspaceRoot[] {
       path: joinRoot(input.taskDir, id),
       repoDir: id,
       branch: branchByRepo.get(id) ?? input.branch ?? "",
+      ...(baseCommit !== undefined && baseCommit.length > 0 ? { baseCommit } : {}),
     });
   }
   for (const link of input.dirLinks ?? []) {
