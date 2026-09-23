@@ -39,6 +39,51 @@ describe("service ops", () => {
   });
 });
 
+// [PiDock 05] (#10) multi-service topology ops: envelope shape only here;
+// unit/repo rules, port allocation, binding conflicts and start-group
+// derivation run Host-side in `TaskServiceTopology.setPlan`.
+describe("service group ops", () => {
+  const units = [{ unitId: "front:saas-web", serviceId: "saas-web", name: "saas-web", location: "local" }];
+  it("accepts a well-formed plan request and rejects malformed units/ports", () => {
+    expect(validateHostTaskOp("task/planServiceGroup", { units })).toEqual({ ok: true });
+    expect(
+      validateHostTaskOp("task/planServiceGroup", {
+        units,
+        selectedRepoDirs: ["front"],
+        dependencies: [{ from: "a", to: "b", kind: "prestart" }],
+        runTypes: { a: "prepare" },
+        requests: [{ unitId: "a", port: 5173 }],
+        reservations: [{ port: 9001, owner: "task", taskId: "t", unitId: "u", serviceId: "s", note: "n" }],
+        rules: [{ key: "X_URL", unitId: "a", kind: "url", template: "http://127.0.0.1:${port}" }],
+        layers: { repoDefaults: [], shared: [], privateEntries: [], task: [{ key: "X", value: "1", secret: false }] },
+        environment: "testing",
+        externalResources: [{ resourceId: "res-1", name: "queue", kind: "dtm-callback" }],
+      }),
+    ).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/planServiceGroup", {}).ok).toBe(false);
+    expect(validateHostTaskOp("task/planServiceGroup", "nope").ok).toBe(false);
+    expect(validateHostTaskOp("task/planServiceGroup", { units: [{}] }).ok).toBe(false);
+    expect(
+      validateHostTaskOp("task/planServiceGroup", { units: [{ ...units[0], location: "cloud" }] }).ok,
+    ).toBe(false);
+    expect(validateHostTaskOp("task/planServiceGroup", { units, requests: [{ unitId: "a", port: "5173" }] }).ok).toBe(false);
+    expect(validateHostTaskOp("task/planServiceGroup", { units, dependencies: [{ from: "a", to: "b" }] }).ok).toBe(false);
+    expect(validateHostTaskOp("task/planServiceGroup", { units, rules: [{ key: "X", unitId: "a", kind: "udp" }] }).ok).toBe(false);
+    expect(validateHostTaskOp("task/planServiceGroup", { units, reservations: [{ port: 1, owner: "someone" }] }).ok).toBe(false);
+    expect(validateHostTaskOp("task/planServiceGroup", { units, layers: { repoDefaults: [{ key: "A" }] } }).ok).toBe(false);
+    expect(validateHostTaskOp("task/planServiceGroup", { units, runTypes: { a: "whenever" } }).ok).toBe(false);
+    expect(validateHostTaskOp("task/planServiceGroup", { units, externalResources: [{ resourceId: "r", name: "n", kind: "ftp" }] }).ok).toBe(false);
+  });
+  it("accepts the read ops and rejects a blank stop-scope instance", () => {
+    expect(validateHostTaskOp("task/serviceRunRecords", {})).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/serviceRunRecords", undefined)).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/serviceRunRecords", "nope").ok).toBe(false);
+    expect(validateHostTaskOp("task/serviceStopScope", {})).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/serviceStopScope", { instanceId: "task-a/invoice" })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/serviceStopScope", { instanceId: " " }).ok).toBe(false);
+  });
+});
+
 // [PiDock 06] (#8) task browser: envelope shape only here; page
 // ownership, the navigation allowlist, takeover state and the agent gate
 // run on the authoritative side (`browser-gateway.ts` / `browser-control.ts`).

@@ -817,6 +817,7 @@ export interface RoutingEntry {
 export function describeDependencyRouting(input: {
   taskId: string;
   bindings: readonly ResolvedBinding[];
+  assignments: readonly PortAssignment[];
   units: readonly RunUnit[];
   environment: string;
 }): RoutingEntry[] {
@@ -825,6 +826,7 @@ export function describeDependencyRouting(input: {
     const keys = input.bindings
       .filter((binding) => binding.unitId === unit.unitId)
       .map((binding) => ({ key: binding.key, value: binding.value, readPoints: binding.readPoints }));
+    const assignment = input.assignments.find((candidate) => candidate.unitId === unit.unitId);
     const target: RoutingTarget =
       unit.location === "remote"
         ? { kind: "remote", environment: input.environment }
@@ -832,12 +834,8 @@ export function describeDependencyRouting(input: {
             kind: "local-instance",
             instanceId: serviceInstanceId(input.taskId, unit.serviceId),
             serviceId: unit.serviceId,
-            port: keys.length > 0 ? (input.bindings.find((binding) => binding.unitId === unit.unitId)?.port ?? 0) : 0,
-            address: instanceAddress(
-              input.taskId,
-              unit.serviceId,
-              input.bindings.find((binding) => binding.unitId === unit.unitId)?.port,
-            ),
+            port: assignment?.port ?? 0,
+            address: instanceAddress(input.taskId, unit.serviceId, assignment?.port),
           };
     return {
       unitId: unit.unitId,
@@ -849,28 +847,4 @@ export function describeDependencyRouting(input: {
       consumers: localUnitIds.filter((candidate) => candidate !== unit.unitId),
     };
   });
-}
-
-/**
- * Re-point every consumer after a reallocation (box 5: 重分配地址后更新所有
- * 受影响消费者). Returns the rewritten bindings plus the per-key value
- * change, so the UI can show which consumers moved.
- */
-export function applyReallocationToBindings(input: {
-  bindings: readonly ResolvedBinding[];
-  reallocated: readonly { unitId: string; before: number; after: number }[];
-  rules: readonly BindingRule[];
-}): { bindings: ResolvedBinding[]; updated: { key: string; unitId: string; before: string; after: string }[] } {
-  const moved = new Map(input.reallocated.map((entry) => [entry.unitId, entry]));
-  const ruleByKey = new Map(input.rules.map((rule) => [rule.key.trim(), rule]));
-  const updated: { key: string; unitId: string; before: string; after: string }[] = [];
-  const bindings = input.bindings.map((binding) => {
-    const move = moved.get(binding.unitId);
-    if (!move) return binding;
-    const rule = ruleByKey.get(binding.key);
-    const value = renderBindingValue(binding.kind, move.after, rule?.template);
-    updated.push({ key: binding.key, unitId: binding.unitId, before: binding.value, after: value });
-    return { ...binding, value, port: move.after };
-  });
-  return { bindings, updated };
 }

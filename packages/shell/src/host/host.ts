@@ -43,6 +43,7 @@ import {
 } from "./host-guards.js";
 import { TaskWorkspaceHost, diskTaskStore } from "./task-host.js";
 import { TaskServiceRuntime } from "./service-runtime.js";
+import { TaskServiceTopology } from "./service-topology.js";
 import { runAgentServiceControl } from "./service-control.js";
 import { runAgentBrowserAction, runHumanBrowserAction, type BrowserGatewayPort } from "./browser-control.js";
 import { HostBrowserClient } from "../rpc/browser-client.js";
@@ -85,6 +86,20 @@ let workspaceHost: TaskWorkspaceHost | null = null;
 // Host above: same fork binding (PIDOCK_TASK_ID/PIDOCK_TASK_DIR), no new
 // process, no renderer trust change. Lazily created with the same guard.
 let serviceRuntime: TaskServiceRuntime | null = null;
+
+// [PiDock 05] (#10) per-task multi-service topology (units, ports,
+// bindings, start groups, run records, stop scope). Same fork binding and
+// lifetime as the runtime above; no separate process and no new trust.
+let serviceTopology: TaskServiceTopology | null = null;
+
+function serviceTopologyFor(taskId: string): TaskServiceTopology | { error: string } {
+  const host = taskHostFor(taskId);
+  if ("error" in host) return host;
+  if (!serviceTopology || serviceTopology.taskDir !== host.taskDir || serviceTopology.taskId !== host.taskId) {
+    serviceTopology = new TaskServiceTopology(host.taskId, host.taskDir);
+  }
+  return serviceTopology;
+}
 
 function serviceRuntimeFor(taskId: string): TaskServiceRuntime | { error: string } {
   const host = taskHostFor(taskId);
@@ -592,6 +607,62 @@ async function dispatchTaskOp(
         const limit = typeof record["limit"] === "number" ? (record["limit"] as number) : 50;
         try {
           return { ok: true, payload: { log: services.serviceLog(serviceId, limit) } };
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : String(error) };
+        }
+      }
+      // [PiDock 05] (#10) multi-service topology. Planning is not execution:
+      // it decides units, ports, variable bindings and start groups, while
+      // the only path that flips a lifecycle is still the gated
+      // `task/controlService`. A plan request may be human-UI (attested, no
+      // session) or agent (named session that exists) — `classifyControlCaller`
+      // keeps a raw session-less caller from rewriting the task plan, and the
+      // actor is recorded on the plan for audit.
+      case "task/planServiceGroup": {
+        const topology = serviceTopologyFor(taskId);
+        if ("error" in topology) return { ok: false, error: topology.error };
+        const caller = classifyControlCaller({
+          sessionId: record["sessionId"],
+          label: record["label"],
+          origin,
+        });
+        if (!caller.ok) return { ok: false, error: caller.error };
+        if (caller.kind === "agent") {
+          const host = taskHostFor(taskId);
+          if ("error" in host) return { ok: false, error: host.error };
+          host.openSession(caller.sessionId);
+        }
+        const actor = caller.kind === "human" ? `human:${caller.label}` : `agent:${caller.sessionId}`;
+        try {
+          const plan = topology.setPlan({
+            units: record["units"] as never,
+            selectedRepoDirs: asStrictStringArray(record["selectedRepoDirs"]) ?? undefined,
+            dependencies: (record["dependencies"] ?? []) as never,
+            runTypes: (record["runTypes"] ?? {}) as never,
+            requests: (record["requests"] ?? []) as never,
+            reservations: (record["reservations"] ?? []) as never,
+            rules: (record["rules"] ?? []) as never,
+            layers: (record["layers"] ?? { repoDefaults: [], shared: [], privateEntries: [], task: [] }) as never,
+            environment: typeof record["environment"] === "string" ? (record["environment"] as string) : "",
+            externalResources: (record["externalResources"] ?? []) as never,
+          });
+          return { ok: true, payload: { plan, actor } };
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : String(error) };
+        }
+      }
+      case "task/serviceRunRecords": {
+        const topology = serviceTopologyFor(taskId);
+        if ("error" in topology) return { ok: false, error: topology.error };
+        return { ok: true, payload: { records: topology.runs(), registered: topology.registeredIdentities() } };
+      }
+      case "task/serviceStopScope": {
+        const topology = serviceTopologyFor(taskId);
+        if ("error" in topology) return { ok: false, error: topology.error };
+        const instanceId = record["instanceId"];
+        try {
+          const scope = topology.stopScope(typeof instanceId === "string" ? instanceId : undefined);
+          return { ok: true, payload: { scope } };
         } catch (error) {
           return { ok: false, error: error instanceof Error ? error.message : String(error) };
         }
