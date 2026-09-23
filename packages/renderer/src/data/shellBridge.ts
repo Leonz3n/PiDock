@@ -67,6 +67,7 @@ export type ShellTaskOp =
   | "task/sessionContext"
   | "task/setSessionModel"
   | "task/setSessionThinking"
+  | "task/sessionStates"
   | "task/compactSession";
 
 /**

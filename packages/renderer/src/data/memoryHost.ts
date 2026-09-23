@@ -33,6 +33,7 @@ import type {
   Session,
   Subagent,
   Task,
+  TaskWriteLockView,
   UsageRecord,
   Workspace,
   WorkspaceFile,
@@ -56,6 +57,7 @@ import type {
   UsageFilter,
 } from "./hostAdapter";
 import { sessionKeyOf } from "./sessionKey";
+import { sessionWriteStates, type SessionWriteState } from "./writeCoordination";
 import { projectServiceTopology, type ServiceTopologyView } from "./serviceTopology";
 import { isSensitiveKey, nextTemplateVersion } from "./configRows";
 import {
@@ -87,13 +89,20 @@ const APPROVAL_TTL_MS = 24 * 60 * 60 * 1000;
 interface TaskLocks {
   /** taskId -> owner sessionId currently holding the task write right. */
   locks: Map<string, string>;
+  /**
+   * [PiDock 09] (#11) taskId -> sessions queued behind the holder, in queue
+   * order. The queue is display state: the holder's stop/release clears it, and
+   * a queued session writes as soon as it retries.
+   */
+  waiting: Map<string, string[]>;
 }
 
-const taskLocks: TaskLocks = { locks: new Map() };
+const taskLocks: TaskLocks = { locks: new Map(), waiting: new Map() };
 
 /** Test seam: reset cross-session task locks. */
 export function resetTaskLocksForTests(): void {
   taskLocks.locks.clear();
+  taskLocks.waiting.clear();
 }
 
 export function taskLockOwner(taskId: string): string | undefined {
@@ -102,6 +111,47 @@ export function taskLockOwner(taskId: string): string | undefined {
 
 /** Local application settings live on the machine, not in a project shared template. */
 export const defaultWorkspaceRoot = "~/PiDockTasks";
+
+/**
+ * [PiDock 09] (#11) coordination view of one task, computed from the module
+ * lock state: holder + claim label, queue order and read-only sessions. The
+ * memory adapter spawns no agent-owned process, so `orphans`/`derived` stay
+ * empty here (the shell adapter reports the real ones from the Host).
+ */
+export function memoryWriteLockView(task: Task): TaskWriteLockView {
+  // The right is held by a live turn (running or waiting on a confirmation):
+  // the mirror tracks it explicitly in `taskLocks`, it is not inferred from a
+  // persisted session state (a restored task maps a stale approval to a
+  // cancellation, so a session alone never implies a holder).
+  const owner = taskLocks.locks.get(task.id) ?? null;
+  const waiting = owner === null ? [] : [...(taskLocks.waiting.get(task.id) ?? [])].filter((sessionId) => sessionId !== owner);
+  return {
+    owner,
+    waiting,
+    ...(owner !== null ? { ownerLabel: memoryOwnerLabel(task, owner) } : {}),
+    orphans: [],
+    derived: [],
+  };
+}
+
+function memoryOwnerLabel(task: Task, sessionId: string): string {
+  const session = task.sessions.find((item) => item.id === sessionId);
+  if (session?.runState === "approval") return "等待确认";
+  if (session?.runState === "running") return "回合执行中";
+  return "任务写操作";
+}
+
+/** Enqueue a session behind the current holder (bounded, deduplicated, FIFO). */
+function noteWriteWait(taskId: string, sessionId: string): void {
+  const current = taskLocks.waiting.get(taskId) ?? [];
+  if (current.includes(sessionId) || current.length >= 8) return;
+  taskLocks.waiting.set(taskId, [...current, sessionId]);
+}
+
+/** The holder's release frees the queue: nobody waits on a free right. */
+function clearWriteWaits(taskId: string): void {
+  taskLocks.waiting.delete(taskId);
+}
 
 /**
  * A task root must be absolute so task folders are never created relative to the
@@ -1018,7 +1068,22 @@ class MemoryHost implements HostAdapter {
         templateVersion: task.templateVersion,
         resolved: this.resolveServiceConfig(task, service),
       })),
+      // [PiDock 09] (#11) the coordination view travels with the task, so a
+      // workspace refresh (which every settled turn triggers) updates holder,
+      // queue and read-only state without a second fetch path.
+      writeLock: memoryWriteLockView(task),
     };
+  }
+
+  /**
+   * [PiDock 09] (#11) coordination read for one task: the same view `getWorkspace`
+   * attaches, plus the per-session roles the navigation badges use.
+   */
+  async sessionWriteStates(taskId: string): Promise<{ writeLock: TaskWriteLockView; sessions: SessionWriteState[] }> {
+    const task = this.task(taskId);
+    if (!task) throw new Error("任务不存在");
+    const writeLock = memoryWriteLockView(task);
+    return { writeLock, sessions: sessionWriteStates({ sessions: task.sessions, writeLock }) };
   }
 
   async getWorkspace(): Promise<Workspace> {
@@ -1127,12 +1192,15 @@ class MemoryHost implements HostAdapter {
     const task = this.task(taskId);
     const session = this.session(taskId, sessionId);
     if (!task || !session) throw new Error("会话不存在");
-    // [PiDock 02] task-scoped write right: at most one running session per
-    // task. Same-session reruns still throw the single-session message;
-    // a different session of the same task gets the task-lock message.
+    // [PiDock 02] task-scoped write right, extended by [PiDock 09] (#11) box 2:
+    // at most one running session per task. Same-session reruns still throw the
+    // single-session message; a different session of the same task gets the
+    // task-lock message **and is recorded in the coordination queue**, so the
+    // navigation shows 持有者／排队位置 and the abort entry.
     const owner = taskLocks.locks.get(taskId);
     if (owner !== undefined && owner !== sessionId) {
-      throw new Error("同一任务同时只能有一个会话执行，请先停止或等待当前会话");
+      noteWriteWait(taskId, sessionId);
+      throw new Error(`同一任务写操作权由会话 ${owner} 持有，排队等待或先中止该会话`);
     }
     if (session.runState === "running") throw new Error("当前会话正在执行，请先停止");
 
@@ -1213,14 +1281,18 @@ class MemoryHost implements HostAdapter {
     }
 
     session.runState = finalState;
+    session.lastActivity = new Date().toISOString();
     // The task write right lasts until the turn settles (completed/failed
     // keep it released immediately; approval keeps the session as owner
     // until resolve/stop/archive). Awaiting approval is not a detached lock:
     // stop/resolve/archive always clear it (see stopRun/resolveApproval).
+    // [PiDock 09] (#11): a session that got the right leaves the queue; when
+    // the right becomes free the queue is cleared with it.
     if (finalState === "approval") {
       taskLocks.locks.set(taskId, sessionId);
     } else {
       if (taskLocks.locks.get(taskId) === sessionId) taskLocks.locks.delete(taskId);
+      clearWriteWaits(taskId);
     }
     // [PiDock 11] #9: a settled turn reports a measured context reading, so the
     // switch gate judges the next switch on fresh numbers instead of a value
@@ -1267,10 +1339,36 @@ class MemoryHost implements HostAdapter {
     const session = this.session(taskId, sessionId);
     if (!session) return;
     session.runState = "stopped";
-    if (taskLocks.locks.get(taskId) === sessionId) taskLocks.locks.delete(taskId);
+    session.lastActivity = new Date().toISOString();
+    // Stop is the abort entry ([PiDock 09] #11 box 2): it ends this session's
+    // write right and frees the queue, so a waiting session can write.
+    if (taskLocks.locks.get(taskId) === sessionId) {
+      taskLocks.locks.delete(taskId);
+      clearWriteWaits(taskId);
+    } else {
+      const waiting = taskLocks.waiting.get(taskId) ?? [];
+      if (waiting.includes(sessionId)) {
+        const next = waiting.filter((item) => item !== sessionId);
+        if (next.length === 0) taskLocks.waiting.delete(taskId);
+        else taskLocks.waiting.set(taskId, next);
+      }
+    }
     const record = this.runs[sessionKeyOf(taskId, sessionId)];
     if (record) record.state = "stopped";
-    this.emit({ type: "run-state", taskId, sessionId, state: "stopped", record });
+    // A session may be stopped before it ever ran a turn (e.g. a restored
+    // session waiting on a confirmation): emit a complete run record so the
+    // UI never receives a run without its steps array.
+    const emitted: RunRecord = record ?? {
+      id: this.nextId("run"),
+      taskId,
+      sessionId,
+      state: "stopped",
+      startedAt: new Date().toISOString(),
+      summary: "已中止",
+      steps: [],
+    };
+    this.runs[sessionKeyOf(taskId, sessionId)] = emitted;
+    this.emit({ type: "run-state", taskId, sessionId, state: "stopped", record: emitted });
   }
 
   async createSession(taskId: string) {
@@ -1318,6 +1416,12 @@ class MemoryHost implements HostAdapter {
       throw new Error("请先停止会话执行，再归档");
     }
     session.archived = archived;
+    // [PiDock 09] (#11) 收口规则：最后一个会话归档后仍可带归档标记查看，**不自动
+    // 新建空会话**（归档不是任务归档，也不是禁止继续对话）。这里只归档，不建会话。
+    if (archived && taskLocks.locks.get(taskId) === sessionId) {
+      taskLocks.locks.delete(taskId);
+      clearWriteWaits(taskId);
+    }
   }
 
   async archiveTask(taskId: string) {
@@ -1344,6 +1448,7 @@ class MemoryHost implements HostAdapter {
     }
     // Archiving releases the whole task's write right regardless of owner.
     taskLocks.locks.delete(taskId);
+    clearWriteWaits(taskId);
     const schedule = this.schedules.find((item) => item.taskId === taskId);
     if (schedule) {
       schedule.enabled = false;
@@ -1386,7 +1491,9 @@ class MemoryHost implements HostAdapter {
       taskLocks.locks.set(next.taskId, next.sessionId);
     } else if (taskLocks.locks.get(next.taskId) === next.sessionId) {
       taskLocks.locks.delete(next.taskId);
+      clearWriteWaits(next.taskId);
     }
+    if (session) session.lastActivity = new Date().toISOString();
     this.emit({ type: "approval", taskId: next.taskId, sessionId: next.sessionId, approval: next });
     return next;
   }

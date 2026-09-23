@@ -13,8 +13,21 @@ import {
   SubagentPanel,
   TerminalPanel,
 } from "../components/ToolPanels";
-import type { Approval, Message, Reference, Task } from "../data/types";
+import type { Approval, Message, Reference, Session, Task } from "../data/types";
 import { isDirectoryOnlyTask } from "../data/directories";
+import {
+  SESSION_MENU_LABEL,
+  sessionMenuActions,
+  sessionTabLabel,
+  visibleSessionTabs,
+  type SessionMenuAction,
+} from "../data/sessionNav";
+import {
+  sessionWriteRoleLabel,
+  writeCoordinationSummary,
+  writeCoordinationVisible,
+  type SessionWriteState,
+} from "../data/writeCoordination";
 import { approvalStatusLabel, runStateLabel } from "./runState";
 import { sessionKeyOf } from "../data/sessionKey";
 import { describeContextDisplay, describeHistoryAttribution, formatTokens, resolveSessionThinking } from "../data/providerState";
@@ -22,6 +35,7 @@ import type { ServiceTopologyView } from "../data/serviceTopology";
 import { useDraftStore } from "../stores/drafts";
 import { useEventsStore } from "../stores/events";
 import { useHostStore } from "../stores/host";
+import { useWriteLockStore } from "../stores/writeLock";
 import { TOOL_PANELS, useUiStore, type ToolPanel } from "../stores/ui";
 import { useNavigationStore } from "../stores/navigation";
 
@@ -75,7 +89,10 @@ export function TaskPage({ task, sessionId }: { task: Task; sessionId: string })
 
   if (!session) return <EmptyState>当前任务还没有会话。</EmptyState>;
 
-  const visibleSessions = sessionTabs(task, session.id);
+  // [PiDock 09] (#11): tabs keep the creation order (at most four) and the
+  // hidden active session takes the last slot; the coordination bar below the
+  // tabs shows who holds the task write right.
+  const visibleSessions = visibleSessionTabs(task.sessions, session.id);
 
   return (
     <div className="flex min-h-0 flex-1 gap-4">
@@ -121,6 +138,8 @@ export function TaskPage({ task, sessionId }: { task: Task; sessionId: string })
         </header>
 
         <SessionTabs task={task} visibleSessions={visibleSessions} activeSessionId={session.id} />
+
+        <WriteCoordinationBar task={task} />
 
         {subagents.length > 0 ? (
           <SessionSubagentList
@@ -323,50 +342,92 @@ function TaskHeader({ task }: { task: Task }) {
   );
 }
 
-function sessionTabs(task: Task, activeSessionId: string) {
-  const visible = task.sessions.slice(0, 4);
-  if (visible.some((item) => item.id === activeSessionId)) return visible;
-  const active = task.sessions.find((item) => item.id === activeSessionId);
-  if (!active) return visible;
-  return [...visible.slice(0, 3), active];
-}
-
 function SessionTabs({
   task,
   visibleSessions,
   activeSessionId,
 }: {
   task: Task;
-  visibleSessions: ReturnType<typeof sessionTabs>;
+  visibleSessions: ReturnType<typeof visibleSessionTabs>;
   activeSessionId: string;
 }) {
   const openModal = useUiStore((state) => state.openModal);
   const navigate = useNavigationStore((state) => state.navigate);
+  const pushToast = useUiStore((state) => state.pushToast);
+  const stopRun = useHostStore((state) => state.stopRun);
+  const archiveSession = useHostStore((state) => state.archiveSession);
+  const view = useWriteLockStore((state) => state.views[task.id]);
+  const [menu, setMenu] = useState<{ sessionId: string; x: number; y: number } | null>(null);
+  const roles = new Map<string, SessionWriteState>((view?.sessions ?? []).map((state) => [state.sessionId, state]));
+
+  const runAction = async (action: SessionMenuAction, session: Session) => {
+    setMenu(null);
+    if (action === "open") navigate({ view: "task", projectId: task.projectId, taskId: task.id, sessionId: session.id });
+    else if (action === "rename")
+      openModal({ type: "rename-session", taskId: task.id, sessionId: session.id, value: session.name });
+    else if (action === "archive" || action === "restore") {
+      await archiveSession(task.id, session.id, action === "archive");
+      pushToast(action === "archive" ? "会话已归档，可在全部会话中查看或恢复" : "会话已恢复");
+    } else if (action === "stop") {
+      // Abort entry ([PiDock 09] #11 box 2): ends this session's write right
+      // and frees the queue.
+      await stopRun(task.id, session.id);
+      pushToast(`${session.name} 已中止，写操作权已释放`);
+    } else openModal({ type: "sessions", taskId: task.id, filter: session.archived ? "archived" : "active" });
+  };
+
   return (
     <div className="flex items-center gap-2">
       <Button size="sm" onClick={() => openModal({ type: "sessions", taskId: task.id, filter: "active" })}>
         全部会话 {task.sessions.length}
       </Button>
       <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
-        {visibleSessions.map((session) => (
-          <button
-            key={session.id}
-            type="button"
-            onClick={() => navigate({ view: "task", projectId: task.projectId, taskId: task.id, sessionId: session.id })}
-            onContextMenu={(event) => {
-              event.preventDefault();
-              openModal({ type: "rename-session", taskId: task.id, sessionId: session.id, value: session.name });
-            }}
-            title={`${session.name} · 右键操作`}
-            className={`flex items-center gap-1.5 truncate rounded-md border px-2.5 py-1 text-xs ${
-              session.id === activeSessionId ? "border-accent/40 bg-accent/10 text-accent" : "border-line bg-paper text-muted hover:text-ink"
-            }`}
-          >
-            {session.name}
-            {session.archived ? <Badge>已归档</Badge> : session.permission === "read" ? <Badge>只读</Badge> : null}
-          </button>
-        ))}
+        {visibleSessions.map((session) => {
+          const role = roles.get(session.id);
+          const roleLabel = role ? sessionWriteRoleLabel(role) : null;
+          const active = session.id === activeSessionId;
+          return (
+            <button
+              key={session.id}
+              type="button"
+              data-testid={`session-tab-${session.id}`}
+              onClick={() => runAction("open", session)}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                setMenu({ sessionId: session.id, x: event.clientX, y: event.clientY });
+              }}
+              title={`${session.name} · 右键操作`}
+              className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs ${
+                active ? "border-accent/40 bg-accent/10 text-accent" : "border-line bg-paper text-muted hover:text-ink"
+              } ${active ? "" : "hidden md:flex"}`}
+            >
+              {/* Bounded label: a long name never widens the navigation. */}
+              <span className="max-w-[9rem] truncate">{sessionTabLabel(session.name)}</span>
+              {session.archived ? <Badge>已归档</Badge> : session.permission === "read" ? <Badge>只读</Badge> : null}
+              {roleLabel ? <Badge tone={role?.role === "owner" ? "accent" : "warn"}>{roleLabel}</Badge> : null}
+            </button>
+          );
+        })}
       </div>
+      {menu ? (
+        <SessionContextMenu
+          label={task.sessions.find((session) => session.id === menu.sessionId)?.name ?? "会话"}
+          point={{ x: menu.x, y: menu.y }}
+          actions={sessionMenuActions(
+            task.sessions.find((session) => session.id === menu.sessionId) ?? { archived: false, runState: "idle" },
+            {
+              isOwner: roles.get(menu.sessionId)?.role === "owner",
+              isWaiting: roles.get(menu.sessionId)?.role === "waiting",
+            },
+          )}
+          onSelect={(action) => {
+            const session = task.sessions.find((item) => item.id === menu.sessionId);
+            if (session) void runAction(action, session);
+            else setMenu(null);
+          }}
+          onClose={() => setMenu(null)}
+        />
+      ) : null}
       <Button
         size="sm"
         aria-label="新建会话"
@@ -378,6 +439,101 @@ function SessionTabs({
         新建会话
       </Button>
     </div>
+  );
+}
+
+/**
+ * Right-click menu for one session tab ([PiDock 09] #11 收口：搜索归档列表及右键
+ * 菜单). The actions are derived by `sessionMenuActions`, so a session that owns
+ * or waits on the write right always offers the abort entry.
+ */
+function SessionContextMenu({
+  label,
+  point,
+  actions,
+  onSelect,
+  onClose,
+}: {
+  label: string;
+  point: { x: number; y: number };
+  actions: SessionMenuAction[];
+  onSelect: (action: SessionMenuAction) => void;
+  onClose: () => void;
+}) {
+  return (
+    <div
+      data-testid="session-context-menu"
+      className="fixed z-50 w-44 rounded-md border border-line bg-paper p-1 shadow-lg"
+      style={{ left: point.x, top: point.y }}
+    >
+      <p className="px-2 py-1 text-[11px] text-muted">{label}</p>
+      {actions.map((action) => (
+        <button
+          key={action}
+          type="button"
+          role="menuitem"
+          className="block w-full rounded px-2 py-1 text-left text-xs text-ink hover:bg-soft"
+          onClick={() => onSelect(action)}
+        >
+          {SESSION_MENU_LABEL[action]}
+        </button>
+      ))}
+      <button type="button" role="menuitem" className="block w-full rounded px-2 py-1 text-left text-xs text-muted hover:bg-soft" onClick={onClose}>
+        关闭
+      </button>
+    </div>
+  );
+}
+
+/**
+ * Task write-coordination bar ([PiDock 09] #11 box 2): holder (+ what the right
+ * is held for), the queue with positions, derived executions, leftover
+ * resources and the abort entry for the holder. Rendered only when there is
+ * something to coordinate, so an idle task gets no extra chrome.
+ */
+function WriteCoordinationBar({ task }: { task: Task }) {
+  const view = useWriteLockStore((state) => state.views[task.id]);
+  const load = useWriteLockStore((state) => state.load);
+  const stopRun = useHostStore((state) => state.stopRun);
+  const pushToast = useUiStore((state) => state.pushToast);
+  const lock = view?.writeLock ?? task.writeLock;
+  useEffect(() => {
+    void load(task.id);
+  }, [load, task.id, task.sessions]);
+  const state: Pick<Task, "sessions" | "writeLock"> = { sessions: task.sessions, ...(lock !== undefined ? { writeLock: lock } : {}) };
+  if (!writeCoordinationVisible(state)) return null;
+  const queue = (lock?.waiting ?? [])
+    .map((sessionId, index) => `${task.sessions.find((session) => session.id === sessionId)?.name ?? sessionId}（第 ${index + 1} 位）`)
+    .join("、");
+  return (
+    <Panel
+      title="任务写操作权"
+      actions={
+        lock?.owner ? (
+          <Button
+            size="sm"
+            onClick={async () => {
+              const owner = lock.owner as string;
+              await stopRun(task.id, owner);
+              pushToast("已中止持有写操作权的会话");
+            }}
+          >
+            中止持有者
+          </Button>
+        ) : null
+      }
+    >
+      <p className="text-xs text-ink" data-testid="write-coordination">
+        {writeCoordinationSummary(state)}
+      </p>
+      {queue.length > 0 ? <p className="mt-1 text-[11px] text-muted">排队：{queue}（持有者释放后重试即可写入）</p> : null}
+      {(lock?.orphans ?? []).length > 0 ? (
+        <p className="mt-1 text-[11px] text-orange" data-testid="write-orphans">
+          遗留执行资源待核验：{(lock?.orphans ?? []).map((orphan) => orphan.label ?? orphan.resourceId).join("、")}；请先停止后再由新会话写入
+        </p>
+      ) : null}
+      <p className="mt-1 text-[11px] text-muted">同一任务同时只有一个会话持有写操作权；只读会话不持有，读取与分析不受影响。</p>
+    </Panel>
   );
 }
 

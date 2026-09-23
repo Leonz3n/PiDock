@@ -185,13 +185,38 @@ describe("memory Host adapter", () => {
     // scripted outcome is "approval" and keeps the task write right).
     const waiting = await host.sendMessage("release", "deploy", "部署到 staging", []);
     expect(waiting.state).toBe("approval");
+    // [PiDock 09] (#11): the refusal names the holder, and the queued session
+    // is visible in the coordination view with its queue position.
     await expect(host.sendMessage("release", extra.id, "并行改动", [])).rejects.toThrow(
-      "同一任务同时只能有一个会话执行",
+      "同一任务写操作权由会话 deploy 持有",
     );
-    // Releasing via stop lets the other session run (completes + frees).
+    const queued = await host.sessionWriteStates("release");
+    expect(queued.writeLock.owner).toBe("deploy");
+    expect(queued.writeLock.waiting).toEqual([extra.id]);
+    expect(queued.sessions.find((state) => state.sessionId === extra.id)).toMatchObject({ role: "waiting", queuePosition: 1 });
+    // Releasing via stop lets the other session run (completes + frees) and
+    // clears the queue with the right.
     await host.stopRun("release", "deploy");
+    const released = await host.sessionWriteStates("release");
+    expect(released.writeLock).toMatchObject({ owner: null, waiting: [] });
     const ok = await host.sendMessage("release", extra.id, "并行改动", []);
     expect(ok.state).toBe("completed");
+  });
+
+  it("[PiDock 09] (#11) archives the last session without creating a replacement", async () => {
+    const host = createMemoryHost();
+    const task = await host.getTask("release");
+    const sessions = task?.sessions ?? [];
+    expect(sessions.length).toBeGreaterThan(0);
+    for (const session of sessions) {
+      // A running/waiting session must be stopped before it can be archived.
+      if (session.runState === "running" || session.runState === "approval") await host.stopRun("release", session.id);
+      await host.setSessionArchived("release", session.id, true);
+    }
+    const after = await host.getTask("release");
+    // 收口规则：最后一个会话归档后仍可带归档标记查看，不自动新建空会话。
+    expect(after?.sessions).toHaveLength(sessions.length);
+    expect(after?.sessions.every((session) => session.archived)).toBe(true);
   });
 
   it("saves config layers, versioning only the shared template", async () => {

@@ -1,4 +1,32 @@
 /**
+ * A leftover agent-owned resource ([PiDock 09] #11) the next session must
+ * verify/stop before writing; `ownerSessionId` is the session that started it.
+ */
+export type WriteOrphanView = {
+  resourceId: string;
+  kind: "service" | "process" | "other";
+  ownerSessionId: string | null;
+  label?: string;
+};
+
+/**
+ * One task's write coordination as the adapter reported it: holder (+ the
+ * claim label), the queue behind it, leftover agent-owned resources and live
+ * derived executions. The renderer only displays this; the Host owns the
+ * decision (shell `write-coordination.ts`).
+ */
+export type TaskWriteLockView = {
+  owner: string | null;
+  /** Sessions queued behind the holder, in queue order. */
+  waiting: string[];
+  /** Label of the holder's current claim (what the right is held for). */
+  ownerLabel?: string;
+  orphans: WriteOrphanView[];
+  /** Derived executions still running (child process / sub-agent). */
+  derived: { sessionId: string; label: string }[];
+};
+
+/**
  * How current a session's context occupancy is ([PiDock 11] #9). Only
  * `actual`/`estimated` may be compared against a model limit; `pending` means
  * the value is being recomputed (e.g. right after a compaction) and `unknown`
@@ -255,6 +283,13 @@ export type Task = {
   cleanupAvailableAt?: string;
   /** Illustrative child-agent records keyed by session id; view-only. */
   subagentsBySession?: Record<string, Subagent[]>;
+  /**
+   * [PiDock 09] (#11) task write coordination as the adapter reported it:
+   * holder (with the claim label), queue, leftover agent-owned resources and
+   * derived executions. The renderer only displays it; the Host owns the
+   * decision (`write-coordination.ts`).
+   */
+  writeLock?: TaskWriteLockView;
 };
 
 export type Project = {

@@ -19,7 +19,7 @@ import type {
   SendMessageResult,
 } from "./hostAdapter";
 import { instanceAddress, type ServiceTopologyView } from "./serviceTopology";
-import type { Approval, ApprovalStatus, Reference, RunRecord, RunState } from "./types";
+import type { Approval, ApprovalStatus, Reference, RunRecord, RunState, TaskWriteLockView, WriteOrphanView } from "./types";
 import {
   compactSessionThroughShell,
   controlServiceThroughShell,
@@ -33,6 +33,7 @@ import {
   type ShellTaskOpResult,
 } from "./shellBridge";
 import type { ProviderProfile } from "./types";
+import type { SessionWriteState } from "./writeCoordination";
 
 function shellResultError(result: ShellTaskOpResult, fallback: string): Error {
   const message = typeof result.error === "string" && result.error.length > 0 ? result.error : fallback;
@@ -43,6 +44,42 @@ function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
+}
+
+/** Host `write.sessions[]` row ([PiDock 09] #11) -> the navigation's state. */
+type HostWriteSession = SessionWriteState & { label?: string };
+
+function asWriteSessionState(value: unknown): HostWriteSession | undefined {
+  const record = asRecord(value);
+  const sessionId = record["sessionId"];
+  const role = record["role"];
+  if (typeof sessionId !== "string" || sessionId.length === 0) return undefined;
+  if (role !== "owner" && role !== "waiting" && role !== "readonly" && role !== "idle") return undefined;
+  const label = typeof record["label"] === "string" ? record["label"] : undefined;
+  const queuePosition = typeof record["queuePosition"] === "number" ? record["queuePosition"] : undefined;
+  return { sessionId, role, ...(label !== undefined ? { label } : {}), ...(queuePosition !== undefined ? { queuePosition } : {}) };
+}
+
+function asWriteOrphan(value: unknown): WriteOrphanView | undefined {
+  const record = asRecord(value);
+  const resourceId = record["resourceId"];
+  if (typeof resourceId !== "string" || resourceId.length === 0) return undefined;
+  const kind = record["kind"];
+  const ownerSessionId = typeof record["ownerSessionId"] === "string" ? record["ownerSessionId"] : null;
+  const label = typeof record["label"] === "string" ? record["label"] : undefined;
+  return {
+    resourceId,
+    kind: kind === "service" || kind === "process" ? kind : "other",
+    ownerSessionId,
+    ...(label !== undefined ? { label } : {}),
+  };
+}
+
+function asDerivedExecution(value: unknown): { sessionId: string; label: string } | undefined {
+  const record = asRecord(value);
+  const sessionId = record["sessionId"];
+  if (typeof sessionId !== "string" || sessionId.length === 0) return undefined;
+  return { sessionId, label: typeof record["label"] === "string" ? (record["label"] as string) : "派生执行" };
 }
 
 /**
@@ -385,6 +422,39 @@ export function createShellHostAdapter(fallback: HostAdapter): HostAdapter {
             .filter((entry) => entry.taskId === taskId)
             .map(toShellApproval);
           return [...shell, ...local];
+        };
+      }
+      if (property === "sessionWriteStates") {
+        return async (taskId: string) => {
+          if (!isShellConnected()) return (target as HostAdapter).sessionWriteStates(taskId);
+          // [PiDock 09] (#11): the Host owns the write coordination. A Host
+          // that cannot answer (older build, unbound task) falls back to the
+          // memory view instead of inventing a holder.
+          const result = await shellTaskOp(taskId, "task/sessionStates", {});
+          if (!result.ok) return (target as HostAdapter).sessionWriteStates(taskId);
+          const payload = asRecord(result.payload);
+          const write = asRecord(payload["write"]);
+          const owner = typeof write["owner"] === "string" ? (write["owner"] as string) : null;
+          const waiting = Array.isArray(write["waiting"]) ? (write["waiting"] as unknown[]).filter((item): item is string => typeof item === "string") : [];
+          const orphans = Array.isArray(payload["orphans"])
+            ? (payload["orphans"] as unknown[]).map(asWriteOrphan).filter((item): item is WriteOrphanView => item !== undefined)
+            : [];
+          const rawSessions = Array.isArray(write["sessions"]) ? (write["sessions"] as unknown[]) : [];
+          const ownerRole = rawSessions.map(asWriteSessionState).find((state) => state?.sessionId === owner);
+          const derived = Array.isArray(payload["derived"])
+            ? (payload["derived"] as unknown[]).map(asDerivedExecution).filter((item): item is { sessionId: string; label: string } => item !== undefined)
+            : [];
+          const writeLock: TaskWriteLockView = {
+            owner,
+            waiting,
+            ...(ownerRole?.label !== undefined ? { ownerLabel: ownerRole.label } : {}),
+            orphans,
+            derived,
+          };
+          const sessions = rawSessions
+            .map(asWriteSessionState)
+            .filter((state): state is SessionWriteState => state !== undefined);
+          return { writeLock, sessions };
         };
       }
       if (property === "setServiceRunning") {
