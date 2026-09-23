@@ -91,7 +91,7 @@ type HostState = {
   saveProvider: (input: SaveProviderInput) => Promise<ProviderProfile>;
   removeProvider: (providerId: string) => Promise<void>;
   setProviderEnabled: (providerId: string, enabled: boolean) => Promise<void>;
-  syncProviderModels: (providerId: string) => Promise<ProviderDiscoveryView>;
+  syncProviderModels: (providerId: string, connection?: { protocol: string; baseUrl: string }) => Promise<ProviderDiscoveryView>;
   setSessionPermission: (taskId: string, sessionId: string, permission: Permission) => Promise<void>;
   setSessionModel: (taskId: string, sessionId: string, providerId: string, model: string) => Promise<void>;
   setSessionThinking: (taskId: string, sessionId: string, level: string) => Promise<void>;
@@ -294,7 +294,7 @@ export const useHostStore = create<HostState>((set, get) => ({
     await get().refresh();
   },
 
-  syncProviderModels: (providerId) => get().adapter.syncProviderModels(providerId),
+  syncProviderModels: (providerId, connection) => get().adapter.syncProviderModels(providerId, connection),
 
   setSessionPermission: async (taskId, sessionId, permission) => {
     await get().adapter.setSessionPermission(taskId, sessionId, permission);

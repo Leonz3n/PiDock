@@ -319,7 +319,11 @@ export interface HostAdapter {
    * connection. Only the candidate list changes — configured model rows are
    * never overwritten, auto-added or removed.
    */
-  syncProviderModels(providerId: string): Promise<ProviderDiscoveryView>;
+  /**
+   * 「同步模型列表」 for a saved configuration, or — before the first save —
+   * for a draft connection (address + protocol taken from the form).
+   */
+  syncProviderModels(providerId: string, connection?: { protocol: string; baseUrl: string }): Promise<ProviderDiscoveryView>;
 
   /** Set the current session's permission tier (read / default / auto). */
   setSessionPermission(taskId: string, sessionId: string, permission: Permission): Promise<void>;
