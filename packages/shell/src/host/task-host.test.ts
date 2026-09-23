@@ -17,6 +17,7 @@ import {
 } from "./task-store.js";
 import { PiSessionChannel, resetPiSequencesForTests } from "../main/pi-session.js";
 import { assertProvisionPlanSafe, planWorktreeCreation } from "../main/task-provision.js";
+import { SharedPathCoordinator } from "./path-coordination.js";
 
 const TASK_ID = "task-a";
 const TASK_DIR = join(mkdtempSync(join(tmpdir(), "pidock-s2-")), "task-abcdef12");
@@ -809,5 +810,240 @@ describe("#6 multi-repo provision + append (S2)", () => {
     expect(isPathInsideTask("/data/notes", TASK_DIR)).toBe(false);
     expect(isPathInsideTask(null, TASK_DIR)).toBe(false);
     expect(isPathInsideTask("", TASK_DIR)).toBe(false);
+  });
+});
+
+// Seam: [PiDock 09] (#11 S3) real-path coordination across tasks. Plain
+// directories are shared views of the original files (#6), so two tasks
+// writing the same resolved path must serialize while distinct paths under the
+// same shared directory stay parallel. The fs probe is injected: these tests
+// never touch the filesystem, and "link retargeted" is just a probe answer.
+describe("[PiDock 09] real-path write coordination across tasks", () => {
+  const NOW = () => "2026-09-22T10:00:00+08:00";
+
+  function taskHostWithLink(input: {
+    taskId: string;
+    taskDir: string;
+    store: ReturnType<typeof memoryTaskStore>;
+    shared: SharedPathCoordinator;
+    resolveRealPath: (path: string) => string;
+    dirId: string;
+    linkSource: string;
+  }) {
+    const taskHost = new TaskWorkspaceHost(input.taskId, input.taskDir, input.store, NOW, () => [], input.shared, input.resolveRealPath);
+    const provisioned = taskHost.provision({
+      name: `任务 ${input.taskId}`,
+      dirId: input.dirId,
+      remoteBranch: "main",
+      fetchedCommit: "a5a4a0d1234",
+      plainDirs: [{ directoryId: "invoice-docs", sourcePath: input.linkSource }],
+    });
+    const link = provisioned.record.dirLinks?.[0];
+    if (!link) throw new Error("test setup: no dirLink persisted");
+    return { taskHost, linkName: link.linkName, linkPath: `${input.taskDir}/${link.linkName}` };
+  }
+
+  /** A symlink-shaped probe: in-task link paths resolve into the shared root. */
+  function linkResolver(links: Record<string, string>) {
+    return (path: string): string => {
+      for (const [linkPath, realRoot] of Object.entries(links)) {
+        if (path === linkPath) return realRoot;
+        if (path.startsWith(`${linkPath}/`)) return `${realRoot}${path.slice(linkPath.length)}`;
+      }
+      return path;
+    };
+  }
+
+  function writeTurn(target: string, output = "written") {
+    return {
+      tool: "fs.write",
+      target,
+      execute: (call: { tool?: string; kind?: string; target: string; contentVersion: string }) => ({
+        tool: call.tool,
+        kind: call.kind,
+        target: call.target,
+        contentVersion: call.contentVersion,
+        output,
+      }),
+    };
+  }
+
+  it("serializes two tasks writing the same shared real path and runs distinct paths in parallel", () => {
+    const shared = new SharedPathCoordinator();
+    const dirA = "/work/tasks/task-aaaa1111";
+    const dirB = "/work/tasks/task-bbbb2222";
+    const sharedRoot = "/shared/invoice-docs";
+    // The link map is filled once provisioning named the in-task link.
+    const linksA: Record<string, string> = {};
+    const a = taskHostWithLink({
+      taskId: "task-a",
+      taskDir: dirA,
+      store: memoryTaskStore(),
+      shared,
+      resolveRealPath: (path) => linkResolver(linksA)(path),
+      dirId: "task-aaaa1111",
+      linkSource: sharedRoot,
+    });
+    linksA[a.linkPath] = sharedRoot;
+    expect(a.taskHost.sharedRoots()).toEqual([{ directoryId: "invoice-docs", sourcePath: sharedRoot, realPath: sharedRoot }]);
+    const b = taskHostWithLink({
+      taskId: "task-b",
+      taskDir: dirB,
+      store: memoryTaskStore(),
+      shared,
+      resolveRealPath: (path) => (path === b.linkPath ? sharedRoot : path.startsWith(`${b.linkPath}/`) ? `${sharedRoot}${path.slice(b.linkPath.length)}` : path),
+      dirId: "task-bbbb2222",
+      linkSource: sharedRoot,
+    });
+
+    // A shared-directory write in flight (its confirmation still open) holds
+    // the real-path key (盒子 4).
+    const turn = a.taskHost.sendMessage("main", "改 spec", { ...writeTurn(`${a.linkPath}/spec.md`), tool: "exec.run" });
+    expect(turn.state).toBe("approval");
+    // The other task on the same original: the same file is refused with the
+    // holder named, a different file under the same shared root is allowed.
+    expect(() => b.taskHost.sendMessage("main", "改 spec", writeTurn(`${b.linkPath}/spec.md`))).toThrow("shared-path-locked");
+    expect(b.taskHost.sendMessage("main", "改 notes", writeTurn(`${b.linkPath}/notes/rfc.md`)).state).toBe("done");
+    // Settling the confirmation releases the task's real-path key.
+    a.taskHost.approve("main", turn.approvalId ?? "");
+    expect(shared.snapshot()).toEqual([]);
+    // With the key free the other task writes the same shared file.
+    expect(b.taskHost.sendMessage("main", "改 spec", writeTurn(`${b.linkPath}/spec.md`)).state).toBe("done");
+  });
+
+  it("keeps task-private worktree paths parallel across tasks", () => {
+    const shared = new SharedPathCoordinator();
+    const dirA = "/work/tasks/task-aaaa1111";
+    const dirB = "/work/tasks/task-bbbb2222";
+    const a = new TaskWorkspaceHost("task-a", dirA, memoryTaskStore(), NOW, () => [], shared);
+    const b = new TaskWorkspaceHost("task-b", dirB, memoryTaskStore(), NOW, () => [], shared);
+    expect(a.sendMessage("main", "改 A", writeTurn(`${dirA}/src/a.ts`)).state).toBe("done");
+    expect(b.sendMessage("main", "改 B", writeTurn(`${dirB}/src/b.ts`)).state).toBe("done");
+    // No shared plain directory involved: the cross-task table stays empty.
+    expect(shared.snapshot()).toEqual([]);
+  });
+
+  it("refuses a retargeted link that looks in-task but resolves outside", () => {
+    const shared = new SharedPathCoordinator();
+    const dir = "/work/tasks/task-aaaa1111";
+    const store = memoryTaskStore();
+    const setup = taskHostWithLink({
+      taskId: "task-a",
+      taskDir: dir,
+      store,
+      shared,
+      resolveRealPath: linkResolver({}),
+      dirId: "task-aaaa1111",
+      linkSource: "/shared/invoice-docs",
+    });
+    // The recorded link target now resolves to a private directory: the lexical
+    // path is still inside the task folder, the real path is not.
+    const taskHost = new TaskWorkspaceHost("task-a", dir, store, NOW, () => [], shared, linkResolver({ [setup.linkPath]: "/private/other" }));
+    expect(() => taskHost.sendMessage("main", "越界写入", writeTurn(`${setup.linkPath}/spec.md`))).toThrow("path-out-of-scope");
+    expect(taskHost.writeLockOwner).toBeNull();
+    expect(shared.snapshot()).toEqual([]);
+  });
+
+  /** A task record whose only directory source is one plain-directory link. */
+  function linkedRecord(input: { taskId: string; dirId: string; taskDir: string; linkName: string; directoryId: string; sourcePath: string }) {
+    return buildTaskDiskRecord({
+      taskId: input.taskId,
+      name: input.taskId,
+      dirId: input.dirId,
+      branch: `task/${input.dirId}`,
+      root: "/work/tasks",
+      taskDir: input.taskDir,
+      remoteBranch: "main",
+      baseCommit: "a5a4a0d1234",
+      repos: [],
+      dirLinks: [{ linkName: input.linkName, directoryId: input.directoryId, sourcePath: input.sourcePath, snapshotAt: NOW() }],
+      now: NOW(),
+    });
+  }
+
+  it("treats a nested link target as overlapping its outer shared root", () => {
+    const shared = new SharedPathCoordinator();
+    const dirA = "/work/tasks/task-aaaa1111";
+    const dirB = "/work/tasks/task-bbbb2222";
+    const root = "/shared/invoice-docs";
+    const storeA = memoryTaskStore();
+    const storeB = memoryTaskStore();
+    const a = new TaskWorkspaceHost("task-a", dirA, storeA, NOW, () => [], shared, () => root);
+    const b = new TaskWorkspaceHost("task-b", dirB, storeB, NOW, () => [], shared, (path) => (path.startsWith(dirB) ? `${root}/vendor/manual` : path));
+    storeA.writeTask(
+      dirA,
+      linkedRecord({ taskId: "task-a", dirId: "task-aaaa1111", taskDir: dirA, linkName: "dir-shared", directoryId: "invoice-docs", sourcePath: root }),
+    );
+    storeB.writeTask(
+      dirB,
+      linkedRecord({
+        taskId: "task-b",
+        dirId: "task-bbbb2222",
+        taskDir: dirB,
+        linkName: "dir-nested",
+        directoryId: "vendor-manual",
+        sourcePath: `${root}/vendor/manual`,
+      }),
+    );
+    // task-a holds the outer shared directory while its confirmation is open.
+    const turn = a.sendMessage("main", "写共享目录", { ...writeTurn(`${dirA}/dir-shared`), tool: "exec.run" });
+    expect(turn.state).toBe("approval");
+    // task-b's nested link lives below it: overlap through the ancestor.
+    expect(() => b.sendMessage("main", "写嵌套", writeTurn(`${dirB}/dir-nested/spec.md`))).toThrow("shared-path-locked");
+    // Cancelling the holder releases the ancestor key again.
+    a.cancel("main");
+    expect(shared.snapshot()).toEqual([]);
+  });
+
+  it("keeps a derived execution's shared path and releases it with the cancel/approve paths", () => {
+    const shared = new SharedPathCoordinator();
+    const dirA = "/work/tasks/task-aaaa1111";
+    const dirB = "/work/tasks/task-bbbb2222";
+    const root = "/shared/invoice-docs";
+    const linksA: Record<string, string> = {};
+    const linksB: Record<string, string> = {};
+    const a = taskHostWithLink({
+      taskId: "task-a",
+      taskDir: dirA,
+      store: memoryTaskStore(),
+      shared,
+      resolveRealPath: (path) => linkResolver(linksA)(path),
+      dirId: "task-aaaa1111",
+      linkSource: root,
+    });
+    linksA[a.linkPath] = root;
+    const b = taskHostWithLink({
+      taskId: "task-b",
+      taskDir: dirB,
+      store: memoryTaskStore(),
+      shared,
+      resolveRealPath: (path) => linkResolver(linksB)(path),
+      dirId: "task-bbbb2222",
+      linkSource: root,
+    });
+    linksB[b.linkPath] = root;
+    const blocked = () =>
+      expect(() => b.taskHost.sendMessage("main", "改 spec", writeTurn(`${b.linkPath}/spec.md`))).toThrow("shared-path-locked");
+
+    // A turn that stops at a confirmation keeps both the task right and the
+    // shared real-path key (盒子 4).
+    const turn = a.taskHost.sendMessage("main", "部署共享目录", { ...writeTurn(`${a.linkPath}/spec.md`), tool: "exec.run" });
+    expect(turn.state).toBe("approval");
+    blocked();
+    // A live derived execution keeps the key even after the approval settles.
+    expect(a.taskHost.claimDerivedExecution({ resourceId: "child-1", sessionId: "main", label: "构建子进程" })).toBe(true);
+    a.taskHost.approve("main", turn.approvalId ?? "");
+    blocked();
+    // Ending the derived execution releases the shared key.
+    a.taskHost.endDerivedExecution("child-1");
+    expect(shared.snapshot()).toEqual([]);
+    expect(b.taskHost.sendMessage("main", "改 spec", writeTurn(`${b.linkPath}/spec.md`)).state).toBe("done");
+
+    // Cancel releases the key as well (盒子 5: nothing left behind).
+    const second = a.taskHost.sendMessage("main", "部署共享目录", { ...writeTurn(`${a.linkPath}/spec.md`), tool: "exec.run" });
+    expect(second.state).toBe("approval");
+    blocked();
+    a.taskHost.cancel("main");
+    expect(shared.snapshot()).toEqual([]);
   });
 });

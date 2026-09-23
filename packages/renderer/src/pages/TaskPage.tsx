@@ -896,6 +896,11 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
             } else {
               clear(task.id, sessionId);
             }
+          } catch (error) {
+            // A refused write ([PiDock 09] #11) must say why instead of failing
+            // silently: the Host text already names the task-lock holder, the
+            // queue, or the shared real path that conflicts.
+            pushToast(error instanceof Error ? error.message : "写入被拒绝，请稍后重试");
           } finally {
             setSending(false);
           }

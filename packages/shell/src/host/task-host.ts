@@ -25,6 +25,16 @@ import {
   type WriteIntent,
   type WriteLockView,
 } from "./write-coordination.js";
+import {
+  SharedPathCoordinator,
+  classifyRealPath,
+  normalizeScopePath,
+  pathScopeOverlaps,
+  sharedPathClaimError,
+  type AllowedPathScope,
+  type PathScopeVerdict,
+  type SharedRoot,
+} from "./path-coordination.js";
 import { validateProviderProfile, type ProviderProfileRow } from "../main/provider-config.js";
 import {
   buildTaskBranch,
@@ -93,6 +103,31 @@ export function isPathInsideTask(target: string | null, taskDir: string): boolea
   const resolved = (absolute.startsWith("/") ? "/" : "") + parts.join("/");
   const task = normalize(taskDir);
   return resolved === task || resolved.startsWith(`${task}/`);
+}
+
+/**
+ * Real path of a possibly not-yet-existing path: fs `realpath` of the deepest
+ * existing ancestor plus the remaining segments. Lazily imported so the Host
+ * stays transport-free for tests that inject their own resolver.
+ */
+function defaultRealPath(path: string): string {
+  const { existsSync, realpathSync } = process.getBuiltinModule("node:fs") as typeof import("node:fs");
+  const { basename, dirname } = process.getBuiltinModule("node:path") as typeof import("node:path");
+  const suffix: string[] = [];
+  let current = path.trim();
+  while (current.length > 0 && !existsSync(current)) {
+    const parent = dirname(current);
+    if (parent === current) break;
+    suffix.unshift(basename(current));
+    current = parent;
+  }
+  let resolved = current;
+  try {
+    resolved = realpathSync(current);
+  } catch {
+    resolved = current;
+  }
+  return suffix.length > 0 ? `${resolved.replace(/[\\/]+$/, "")}/${suffix.join("/")}` : resolved;
 }
 
 export const diskTaskStore: TaskStore = {
@@ -266,10 +301,85 @@ export class TaskWorkspaceHost {
     readonly store: TaskStore = diskTaskStore,
     private readonly now: () => string = () => new Date().toISOString(),
     liveResources: () => readonly AgentOwnedResource[] = () => [],
+    /**
+     * [PiDock 09] (#11) cross-task real-path coordination. One instance is
+     * shared by every task Host of the app (wired in `host.ts`); a standalone
+     * Host gets its own, which is enough for one task.
+     */
+    private readonly sharedPaths: SharedPathCoordinator = new SharedPathCoordinator(),
+    /**
+     * Resolve a path to its real path (fs `realpath` of the deepest existing
+     * ancestor + the remaining segments). Injectable so tests never touch the
+     * filesystem and so "link retargeted" is expressed as a probe result.
+     */
+    private readonly resolveRealPath: (path: string) => string = defaultRealPath,
   ) {
     if (taskId.trim().length === 0) throw new Error("taskId must be non-empty");
     if (taskDir.trim().length === 0) throw new Error("taskDir must be non-empty");
     this.write = new TaskWriteCoordinator(liveResources);
+  }
+
+  /**
+   * [PiDock 09] (#11) the task's shared plain-directory roots, resolved now.
+   * `sourcePath` is the recorded link target, `realPath` the fs answer: a
+   * retargeted link moves the root, which is exactly what the real-path rule
+   * must see (`#6` plain dirs are shared views, never copies).
+   */
+  sharedRoots(): SharedRoot[] {
+    const record = this.store.readTask(this.taskDir);
+    return (record?.dirLinks ?? []).map((link) => ({
+      directoryId: link.directoryId,
+      sourcePath: link.sourcePath,
+      realPath: this.resolveRealPath(link.sourcePath),
+    }));
+  }
+
+  /**
+   * Validate one requested target on its **real** path: inside the task folder,
+   * inside one of its shared plain-directory roots, or `outside` (refused).
+   * Relative targets resolve against the task folder.
+   */
+  pathScopeOf(target: string): PathScopeVerdict {
+    const requested = target.trim();
+    const absolute = requested.startsWith("/") || /^[A-Za-z]:[\\/]/.test(requested);
+    const real = this.resolveRealPath(absolute ? requested : `${this.taskDir.replace(/[\\/]+$/, "")}/${requested}`);
+    return classifyRealPath({ resolvedPath: real, taskDir: this.resolveRealPath(this.taskDir), roots: this.sharedRoots() });
+  }
+
+  /**
+   * Lexical (no fs) containment in the task folder, the same normalization the
+   * session tool gate uses. Tells the two `outside` cases apart: a target the
+   * gate already refuses (no claim worth taking) versus a target that looks
+   * in-task but resolves elsewhere.
+   */
+  private lexicallyInTask(target: string): boolean {
+    const requested = target.trim();
+    const absolute = requested.startsWith("/") || /^[A-Za-z]:[\\/]/.test(requested);
+    const lexical = normalizeScopePath(absolute ? requested : `${this.taskDir.replace(/[\\/]+$/, "")}/${requested}`);
+    return pathScopeOverlaps(lexical, normalizeScopePath(this.taskDir));
+  }
+
+  /**
+   * Claim the shared real-path keys of one side-effecting target, if the target
+   * lives in a shared plain directory. Task-private paths claim nothing: two
+   * tasks always have distinct worktree paths, so they stay parallel (盒子 6).
+   */
+  private claimPathScope(input: { sessionId: string; label: string; scope: AllowedPathScope }): string[] {
+    if (input.scope.kind === "task") return [];
+    const claim = this.sharedPaths.claim({
+      taskId: this.taskId,
+      sessionId: input.sessionId,
+      label: `${input.label}（共享目录 ${input.scope.directoryId}）`,
+      paths: [input.scope.key],
+    });
+    if (!claim.ok) throw new Error(sharedPathClaimError(claim));
+    return claim.keys;
+  }
+
+  /** Release one session's shared path keys, keeping those a live derived execution still writes. */
+  private releasePathScope(sessionId: string): void {
+    const derived = this.write.snapshot().derived.filter((entry) => entry.sessionId === sessionId).map((entry) => entry.resourceId);
+    this.sharedPaths.release({ taskId: this.taskId, sessionId, keepDerivedExecutionIds: derived });
   }
 
   /** Session currently holding the Host-owned task write right, if any. */
@@ -300,7 +410,11 @@ export class TaskWorkspaceHost {
 
   endDerivedExecution(resourceId: string) {
     if (resourceId.trim().length === 0) throw new Error("invalid-payload: resourceId must be a non-empty string");
-    return this.write.endDerivedExecution(resourceId);
+    const release = this.write.endDerivedExecution(resourceId);
+    // The last derived execution of a session ends the shared real-path keys it
+    // was still holding (nothing is writing those paths any more).
+    if (release.releasedOwner !== null) this.releasePathScope(release.releasedOwner);
+    return release;
   }
 
   /**
@@ -824,20 +938,46 @@ export class TaskWorkspaceHost {
     const plannedTool = typeof turn?.tool === "string" ? turn.tool : undefined;
     const mayRunTool = plannedTool !== undefined || turn?.execute !== undefined || turn?.target !== undefined;
     const sideEffecting = mayRunTool && plannedTool !== "fs.read";
+    // [PiDock 09] (#11) real-path scope: a side-effecting plan naming a target
+    // is validated on the resolved real path before any right is claimed, so a
+    // retargeted link or a path outside the task's allowed roots never writes.
+    const target = typeof turn?.target === "string" && turn.target.trim().length > 0 ? turn.target : undefined;
+    const scope = sideEffecting && target !== undefined ? this.pathScopeOf(target) : undefined;
+    // A lexically out-of-task target is already refused by the session tool gate,
+    // so no side effect can happen: the turn runs, fails and records why, and
+    // nothing claims the task write right. A target that looks in-task but
+    // resolves outside (retargeted link, symlink) is the case the real-path rule
+    // must refuse before any right is claimed.
+    const gateRefuses = scope?.kind === "outside" && !this.lexicallyInTask(target as string);
+    if (scope?.kind === "outside" && !gateRefuses) throw new Error(`path-out-of-scope: ${scope.reason}`);
+    const writesAnything = sideEffecting && !gateRefuses;
     let claimId: string | undefined;
-    if (sideEffecting) {
+    if (writesAnything) {
       const claim = this.claimWrite(sessionId, channel.currentPermission, {
         kind: "turn",
         label: `回合工具 ${plannedTool ?? "fs.write"}`,
       });
       if (!claim.ok) throw new Error(writeClaimError(claim));
       claimId = claim.claimId;
+      // Cross-task real-path claim: only a shared plain-directory target needs
+      // one, and a conflict releases the task claim so nothing is half-held.
+      if (scope !== undefined && scope.kind !== "outside") {
+        try {
+          this.claimPathScope({ sessionId, label: `回合工具 ${plannedTool ?? "fs.write"}`, scope });
+        } catch (error) {
+          this.releaseWrite(claimId);
+          throw error;
+        }
+      }
     }
     let result: ReturnType<PiSessionChannel["runTurn"]>;
     try {
       result = channel.runTurn({ text, ...turn });
     } catch (error) {
-      if (claimId !== undefined) this.releaseWrite(claimId);
+      if (claimId !== undefined) {
+        this.releaseWrite(claimId);
+        this.releasePathScope(sessionId);
+      }
       throw error;
     }
     // Box 4: the right is kept while the turn waits on a confirmation and is
@@ -845,7 +985,10 @@ export class TaskWorkspaceHost {
     // even then (`releaseWrite` retains the owner).
     if (claimId !== undefined) {
       if (result.state === "approval") this.approvalClaims.set(sessionId, claimId);
-      else this.releaseWrite(claimId);
+      else {
+        this.releaseWrite(claimId);
+        this.releasePathScope(sessionId);
+      }
     }
     this.store.writeSession(this.taskDir, channel.snapshot());
     const pending = channel.pendingApproval();
@@ -863,13 +1006,14 @@ export class TaskWorkspaceHost {
   /**
    * Resolve a turn that settled into an approval wait ([PiDock 09] #11): the
    * session's kept write claim ends with approve/reject, so another session of
-   * the task may write afterwards.
+   * the task may write afterwards. Shared real-path keys end with it too.
    */
   private settleApprovalClaim(sessionId: string): void {
     const claimId = this.approvalClaims.get(sessionId);
     if (claimId === undefined) return;
     this.approvalClaims.delete(sessionId);
-    this.releaseWrite(claimId);
+    const release = this.releaseWrite(claimId);
+    if (release.releasedOwner === sessionId) this.releasePathScope(sessionId);
   }
 
   approve(sessionId: string, approvalId: string): string {
@@ -929,6 +1073,8 @@ export class TaskWorkspaceHost {
     channel.cancel();
     this.approvalClaims.delete(sessionId);
     this.write.forgetSession(sessionId);
+    // 盒子 5：中止后不留共享真实路径的旧声明（派生条目已一并丢弃）。
+    this.sharedPaths.release({ taskId: this.taskId, sessionId });
     this.store.writeSession(this.taskDir, channel.snapshot());
     return this.writeState();
   }
@@ -944,6 +1090,9 @@ export class TaskWorkspaceHost {
     this.channels.clear();
     this.approvalClaims.clear();
     this.write.reset();
+    // With no live holder left to release them, this task's shared real-path
+    // keys end here instead of blocking other tasks for the process lifetime.
+    this.sharedPaths.releaseTask(this.taskId);
   }
 
   describe(): { taskId: string; taskDir: string; sessions: string[]; lockOwner: string | null; maxSeq: number } {
