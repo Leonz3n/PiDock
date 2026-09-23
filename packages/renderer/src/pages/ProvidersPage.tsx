@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Badge, Button, Panel } from "../components/ui";
-import { describeProviderStatus, formatTokens } from "../data/providerState";
+import { describeContextWindow, describeProviderStatus, formatTokens } from "../data/providerState";
 import type { ProviderProfile, ProviderStatusView } from "../data/types";
 import { useHostStore } from "../stores/host";
 import { useUiStore } from "../stores/ui";
@@ -93,7 +93,10 @@ export function ProvidersPage() {
                           {model.name ?? model.id}
                           {model.name ? <small className="ml-1.5 text-muted">{model.id}</small> : null}
                         </td>
-                        <td className="py-1.5">{formatTokens(model.contextWindow * 1000)}</td>
+                        <td className="py-1.5">
+                          {formatTokens(model.contextWindow * 1000)}
+                          <small className="ml-1.5 text-muted">{describeContextWindow(model).label}</small>
+                        </td>
                         <td className="py-1.5">{model.maxOutput !== undefined ? formatTokens(model.maxOutput * 1000) : "未声明"}</td>
                         <td className="py-1.5 text-muted">
                           {model.supportsImages ? "支持图片" : "不支持图片"}

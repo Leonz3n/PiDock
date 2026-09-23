@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   buildModelPickerGroups,
+  contextWindowSourceOf,
   describeContextDisplay,
+  describeContextWindow,
   describeHistoryAttribution,
   describeProviderAvailability,
   describeProviderStatus,
@@ -81,6 +83,26 @@ describe("provider draft validation", () => {
     expect(isSecretLike("A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6")).toBe(true);
     expect(isAuthReference("has space")).toBe(false);
     expect(isAuthReference("gw-key")).toBe(true);
+  });
+
+  it("tracks where a context window came from and rejects an unknown source", () => {
+    expect(contextWindowSourceOf({ id: "gpt-5", contextWindow: 8 })).toBe("manual");
+    expect(describeContextWindow({ id: "gpt-5", contextWindow: 8, contextWindowSource: "catalog" })).toEqual({
+      tokens: 8,
+      source: "catalog",
+      label: "模型目录",
+    });
+    expect(describeContextWindow({ id: "gpt-5", contextWindow: 8, contextWindowSource: "default" }).label).toBe("默认值");
+    // Max output stays a separate figure, never folded into the window.
+    expect(validateProviderDraft({ name: "网关", protocol: "openai-responses", baseUrl: "https://gw/v1", models: [{ id: "gpt-5", contextWindow: 8, maxOutput: 4, contextWindowSource: "default" }] })).toEqual([]);
+    const issues = validateProviderDraft({
+      name: "网关",
+      protocol: "openai-responses",
+      baseUrl: "https://gw/v1",
+      models: [{ id: "gpt-5", contextWindow: 8, contextWindowSource: "guessed" as never }],
+    });
+    expect(issues.map((issue) => issue.code)).toEqual(["context-window-source-unknown"]);
+    expect(issues[0]?.field).toBe("models.gpt-5.contextWindowSource");
   });
 
   it("marks thinking problems on the model row", () => {

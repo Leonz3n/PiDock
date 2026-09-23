@@ -1703,6 +1703,11 @@ class MemoryHost implements HostAdapter {
           id: model.id.trim(),
           name: model.name?.trim() || undefined,
           contextWindow: model.contextWindow,
+          ...(model.contextWindowSource !== undefined
+            ? { contextWindowSource: model.contextWindowSource }
+            : prior?.contextWindowSource !== undefined
+              ? { contextWindowSource: prior.contextWindowSource }
+              : {}),
           ...(model.maxOutput !== undefined ? { maxOutput: model.maxOutput } : prior?.maxOutput !== undefined ? { maxOutput: prior.maxOutput } : {}),
           supportsImages: model.supportsImages ?? prior?.supportsImages,
           thinking: model.thinking ?? prior?.thinking,

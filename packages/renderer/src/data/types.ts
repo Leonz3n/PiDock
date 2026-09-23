@@ -246,11 +246,20 @@ export type ServiceRecipe = {
   dependencyBinding: string;
 };
 
+/**
+ * Where a model's context-window number came from: the provider's model
+ * directory, the editor default, or the user's hand-typed value. Absent means
+ * the value was hand-typed (older rows).
+ */
+export type ContextWindowSource = "catalog" | "default" | "manual";
+
 export type ProviderModel = {
   id: string;
   /** Display name; absent means the model ID is shown (prototype's default-follow behaviour). */
   name?: string;
   contextWindow: number;
+  /** Provenance of `contextWindow`; absent means `manual`. */
+  contextWindowSource?: ContextWindowSource;
   /** Max output in the same unit as `contextWindow`; absent means undeclared. */
   maxOutput?: number;
   /** Declares image input support; the composer refuses image sends otherwise. */

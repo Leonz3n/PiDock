@@ -13,6 +13,7 @@
 
 import type {
   ContextSource,
+  ContextWindowSource,
   ModelThinking,
   ProviderAvailability,
   ProviderDiscoveryView,
@@ -97,6 +98,13 @@ export function validateProviderDraft(input: {
     if (!isPositiveInteger(model.contextWindow)) {
       issues.push({ code: "context-window-invalid", field: `models.${id}.contextWindow`, message: "上下文窗口必须为正整数 Tokens" });
     }
+    if (model.contextWindowSource !== undefined && !(CONTEXT_WINDOW_SOURCES as readonly string[]).includes(model.contextWindowSource)) {
+      issues.push({
+        code: "context-window-source-unknown",
+        field: `models.${id}.contextWindowSource`,
+        message: "上下文窗口来源只能是模型目录、默认值或手工值",
+      });
+    }
     if (model.maxOutput !== undefined) {
       if (!isPositiveInteger(model.maxOutput)) {
         issues.push({ code: "max-output-invalid", field: `models.${id}.maxOutput`, message: "最大输出必须为正整数 Tokens" });
@@ -121,6 +129,32 @@ export function validateProviderDraft(input: {
     }
   }
   return issues;
+}
+
+export const CONTEXT_WINDOW_SOURCES = ["catalog", "default", "manual"] as const;
+
+/** Window a fresh editor row starts from; marked as `default` provenance. */
+export const DEFAULT_MODEL_CONTEXT_WINDOW = 128;
+
+export const CONTEXT_WINDOW_SOURCE_LABEL: Record<ContextWindowSource, string> = {
+  catalog: "模型目录",
+  default: "默认值",
+  manual: "手工值",
+};
+
+/** Rows saved before provenance existed count as hand-typed. */
+export function contextWindowSourceOf(model: ProviderModel): ContextWindowSource {
+  return model.contextWindowSource ?? "manual";
+}
+
+/**
+ * Context-window display value: the positive integer (k Tokens) plus its
+ * provenance, so the list does not present a hand-typed guess as a
+ * directory-declared value. Max output stays a separate figure.
+ */
+export function describeContextWindow(model: ProviderModel): { tokens: number; source: ContextWindowSource; label: string } {
+  const source = contextWindowSourceOf(model);
+  return { tokens: model.contextWindow, source, label: CONTEXT_WINDOW_SOURCE_LABEL[source] };
 }
 
 /** Display name: an absent name shows the model id (the follow state). */

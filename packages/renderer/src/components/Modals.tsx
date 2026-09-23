@@ -17,9 +17,12 @@ import {
 } from "../data/directories";
 import { isShellConnected, provisionTaskThroughShell } from "../data/shellBridge";
 import {
+  CONTEXT_WINDOW_SOURCE_LABEL,
+  DEFAULT_MODEL_CONTEXT_WINDOW,
   REASONING_LEVELS,
   buildModelPickerGroups,
   connectionFingerprint,
+  contextWindowSourceOf,
   describeContextDisplay,
   describeHistoryAttribution,
   evaluateThinkingSelection,
@@ -33,7 +36,7 @@ import {
   resolveSessionThinking,
   validateProviderDraft,
 } from "../data/providerState";
-import type { ConfigEntry, ModelThinking, Permission, ProjectDirectory, Task } from "../data/types";
+import type { ConfigEntry, ContextWindowSource, ModelThinking, Permission, ProjectDirectory, Task } from "../data/types";
 import { useDraftStore } from "../stores/drafts";
 import { useEnvDraftStore } from "../stores/envDrafts";
 import { useHostStore } from "../stores/host";
@@ -1795,6 +1798,8 @@ type ProviderModelDraft = {
   name: string;
   followsId: boolean;
   contextWindow: number;
+  /** Provenance of the window value (directory / default / hand-typed). */
+  contextWindowSource: ContextWindowSource;
   maxOutput?: number;
   supportsImages?: boolean;
   thinking?: ModelThinking;
@@ -1818,10 +1823,11 @@ function ProviderEditModal({ providerId, onClose }: { providerId?: string; onClo
       name: model.name ?? "",
       followsId: !model.name || model.name === model.id,
       contextWindow: model.contextWindow,
+      contextWindowSource: contextWindowSourceOf(model),
       ...(model.maxOutput !== undefined ? { maxOutput: model.maxOutput } : {}),
       supportsImages: model.supportsImages,
       thinking: model.thinking,
-    })) ?? [{ id: "", name: "", followsId: true, contextWindow: 128 }],
+    })) ?? [{ id: "", name: "", followsId: true, contextWindow: DEFAULT_MODEL_CONTEXT_WINDOW, contextWindowSource: "default" as const }],
   );
   // 「同步模型列表」 refreshes candidates only: configured rows are never
   // overwritten, auto-added or removed, and the candidate set is bound to the
@@ -1886,6 +1892,7 @@ function ProviderEditModal({ providerId, onClose }: { providerId?: string; onClo
                     name: model.name.trim() && model.name.trim() !== model.id ? model.name.trim() : undefined,
                     contextWindow: model.contextWindow,
                     ...(model.maxOutput !== undefined ? { maxOutput: model.maxOutput } : {}),
+                    contextWindowSource: model.contextWindowSource,
                     supportsImages: model.supportsImages,
                     thinking: model.thinking,
                   })),
@@ -1992,7 +1999,15 @@ function ProviderEditModal({ providerId, onClose }: { providerId?: string; onClo
                     const next = followModelNameOnIdChange({ name: model.name.trim() || undefined, followsId: model.followsId });
                     // While following, the name field mirrors the new id; a custom
                     // name stays as typed.
-                    update(index, { id, name: next.followsId ? id : (next.name ?? ""), followsId: next.followsId });
+                    // Picking a synced candidate records `catalog` provenance; a row
+                    // whose window was edited by hand keeps saying `manual`.
+                    const fromCatalog = candidates.includes(id.trim());
+                    update(index, {
+                      id,
+                      name: next.followsId ? id : (next.name ?? ""),
+                      followsId: next.followsId,
+                      contextWindowSource: fromCatalog && model.contextWindowSource !== "manual" ? "catalog" : model.contextWindowSource,
+                    });
                   }}
                   aria-invalid={rowIssues.some((issue) => issue.field === "models" || issue.field === `models.${model.id}`)}
                   className="w-48 rounded-md border border-line px-2 py-1.5 text-xs"
@@ -2022,10 +2037,13 @@ function ProviderEditModal({ providerId, onClose }: { providerId?: string; onClo
                   type="number"
                   min="1"
                   value={model.contextWindow}
-                  onChange={(event) => update(index, { contextWindow: Number(event.target.value) })}
+                  onChange={(event) => update(index, { contextWindow: Number(event.target.value), contextWindowSource: "manual" })}
                   className="w-32 rounded-md border border-line px-2 py-1.5 text-xs"
                 />
                 <span className="text-[11px] text-muted">k Tokens</span>
+                <span className="text-[11px] text-muted" data-testid={`model-window-source-${index + 1}`}>
+                  {CONTEXT_WINDOW_SOURCE_LABEL[model.contextWindowSource]}
+                </span>
                 <input
                   aria-label={`模型最大输出 第 ${index + 1} 行`}
                   type="number"
@@ -2110,7 +2128,12 @@ function ProviderEditModal({ providerId, onClose }: { providerId?: string; onClo
           <div>
             <Button
               size="sm"
-              onClick={() => setModels((items) => [...items, { id: "", name: "", followsId: true, contextWindow: 128 }])}
+              onClick={() =>
+                setModels((items) => [
+                  ...items,
+                  { id: "", name: "", followsId: true, contextWindow: DEFAULT_MODEL_CONTEXT_WINDOW, contextWindowSource: "default" },
+                ])
+              }
             >
               添加模型
             </Button>

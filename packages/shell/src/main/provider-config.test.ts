@@ -90,6 +90,18 @@ describe("validateProviderProfile", () => {
     expect(validateProviderProfile({ ...base, models: [{ id: "gpt-5", contextWindow: 8, maxOutput: 8 }] }).ok).toBe(true);
   });
 
+  it("keeps the context-window source and rejects an unknown one", () => {
+    for (const source of ["catalog", "default", "manual"] as const) {
+      const result = validateProviderProfile({ ...base, models: [{ id: "gpt-5", contextWindow: 8, contextWindowSource: source }] });
+      expect(result.ok).toBe(true);
+      expect(result.ok && result.profile.models[0]?.contextWindowSource).toBe(source);
+    }
+    // Absent stays absent (older rows are hand-typed by renderer default).
+    const absent = validateProviderProfile({ ...base, models: [{ id: "gpt-5", contextWindow: 8 }] });
+    expect(absent.ok && absent.profile.models[0]?.contextWindowSource).toBeUndefined();
+    expect(errorOf({ ...base, models: [{ id: "gpt-5", contextWindow: 8, contextWindowSource: "guessed" }] }).code).toBe("context-window-source-unknown");
+  });
+
   it("validates reasoning tiers: declared subset, default inside, no invented or repeated level", () => {
     const custom = { mode: "custom", levels: ["off", "low", "medium"], default: "low" };
     expect(validateProviderProfile({ ...base, models: [{ id: "gpt-5", contextWindow: 8, thinking: custom }] }).ok).toBe(true);
