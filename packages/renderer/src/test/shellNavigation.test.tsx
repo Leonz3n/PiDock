@@ -1,4 +1,4 @@
-import { act, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runningServiceCount } from "../data/shellNav";
@@ -56,6 +56,32 @@ describe("shell sidebar groups", () => {
     expect(within(group("workspace")).queryByRole("button", { name: "在当前工作区新建任务" })).toBeNull();
     expect(within(group("system")).queryByRole("button", { name: "在当前工作区新建任务" })).toBeNull();
     expect(within(group("tasks")).getByRole("button", { name: "在当前工作区新建任务" })).toBeInTheDocument();
+  });
+
+  it("opens the task rename from the keyboard and keeps the card free of a ⋯ button", async () => {
+    const user = userEvent.setup();
+    renderApp("/projects/atlas/tasks/release?session=main");
+    await screen.findByRole("heading", { name: "发布前检查" });
+
+    const card = group("tasks").querySelector('[data-task-nav="release"]') as HTMLButtonElement;
+    // Prototype A keeps the task list free of a per-card menu button: the
+    // actions come from the context menu. The card is a real button, so it is
+    // reachable with Tab, and Chromium turns the keyboard context-menu keys
+    // (ContextMenu key, Shift+F10 on platforms that map it) into a `contextmenu`
+    // event on the focused element — the same event a right-click sends, so this
+    // test drives that event after focusing the card by keyboard.
+    card.focus();
+    expect(card).toHaveFocus();
+    expect(card.querySelectorAll("button")).toHaveLength(0);
+    fireEvent.contextMenu(card);
+
+    const input = await screen.findByLabelText("任务名称");
+    await user.clear(input);
+    await user.type(input, "发布前检查（键盘重命名）");
+    await user.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() => expect(card).toHaveTextContent("发布前检查（键盘重命名）"));
+    expect(useHostStore.getState().workspace?.tasks.find((task) => task.id === "release")?.name).toBe("发布前检查（键盘重命名）");
   });
 
   it("disables 项目总览 when the workspace has no project to open", async () => {
