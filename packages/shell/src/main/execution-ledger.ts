@@ -283,6 +283,25 @@ export function awaitApproval(
   return advanced(record, input.at, { state: "pending-approval", approval: { ...input.approval } });
 }
 
+/**
+ * Deadline the Host mints for a confirmation, in ms from its request. The task
+ * page documents the same 24h window (「等待起点后 24 小时」), so the Host-side
+ * expiry rule and the label the user reads are one value, not two.
+ */
+export const APPROVAL_DEADLINE_MS = 24 * 60 * 60 * 1000;
+
+export function approvalDeadline(at: string): string {
+  return new Date(Date.parse(at) + APPROVAL_DEADLINE_MS).toISOString();
+}
+
+/** True when a declared deadline has already passed at `now`. */
+export function approvalDeadlinePassed(approval: { expiresAt?: string }, now: string): boolean {
+  if (approval.expiresAt === undefined) return false;
+  const deadline = Date.parse(approval.expiresAt);
+  const instant = Date.parse(now);
+  return Number.isFinite(deadline) && Number.isFinite(instant) && deadline <= instant;
+}
+
 export type ApprovalCheckCode =
   | "not-approved"
   | "already-consumed"
@@ -318,12 +337,8 @@ export function verifyExecutionApproval(input: ApprovalCheckInput): { ok: true }
   if (approval.status !== "approved") {
     return { ok: false, code: "not-approved", reason: `确认请求状态为 ${approval.status}，不能执行` };
   }
-  if (approval.expiresAt !== undefined) {
-    const deadline = Date.parse(approval.expiresAt);
-    const now = Date.parse(input.now);
-    if (Number.isFinite(deadline) && Number.isFinite(now) && deadline <= now) {
-      return { ok: false, code: "expired", reason: `确认请求已于 ${approval.expiresAt} 过期` };
-    }
+  if (approvalDeadlinePassed(approval, input.now)) {
+    return { ok: false, code: "expired", reason: `确认请求已于 ${approval.expiresAt} 过期` };
   }
   if (input.permission === "read") {
     return { ok: false, code: "permission-changed", reason: "会话已降为只读，不能执行已批准的写操作" };
@@ -539,11 +554,10 @@ export interface ExecutionAttentionItem {
   id: string;
   kind: AttentionKind;
   executionId: string;
-  projectId?: string;
   taskId: string;
   sessionId: string;
-  /** Task/project labelled detail shown in the list. */
-  label: string;
+  /** Task name the Host knows; the caller labels it with the project name. */
+  taskName: string;
   detail: string;
   at: string;
   read: boolean;
@@ -570,19 +584,17 @@ export function attentionLabel(projectName: string | undefined, taskName: string
 
 export function attentionItemsFromLedger(
   ledger: ExecutionLedgerRecord,
-  input: { taskId: string; taskName: string; projectId?: string; projectName?: string },
+  input: { taskId: string; taskName: string },
 ): ExecutionAttentionItem[] {
   const read = new Set(ledger.readItems.map((entry) => entry.itemId));
   const items: ExecutionAttentionItem[] = [];
   for (const record of ledger.executions) {
-    const label = attentionLabel(input.projectName, input.taskName);
     const base = {
       executionId: record.executionId,
       taskId: record.taskId,
       sessionId: record.sessionId,
-      label,
+      taskName: input.taskName,
       at: record.updatedAt,
-      ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
     };
     if (record.state === "pending-approval" && record.approval?.status === "pending") {
       const id = attentionItemId(record, "approval");

@@ -18,6 +18,15 @@
 import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { PiSessionSnapshot } from "../main/pi-session.js";
+import {
+  EXECUTION_KINDS,
+  EXECUTION_STATES,
+  emptyExecutionLedger,
+  type AttemptEndState,
+  type ExecutionLedgerRecord,
+  type ExecutionRecord,
+  type StepState,
+} from "../main/execution-ledger.js";
 import { PI_USAGE_KINDS, type PiUsageCleanupScope, type PiUsageDetail, type PiUsageEndState, type PiUsageKind } from "../main/usage-ledger.js";
 
 export interface RepoSourceRecord {
@@ -72,6 +81,7 @@ export interface TaskDiskRecord {
 const SESSIONS_DIR = "sessions";
 const USAGE_FILE = "usage.json";
 const LIFECYCLE_FILE = "lifecycle.json";
+const EXECUTION_FILE = "execution.json";
 
 function assertSafeFileName(name: string, label: string): void {
   if (
@@ -588,3 +598,181 @@ export function deleteSessionOnDisk(taskDir: string, sessionId: string): void {
   assertSafeFileName(sessionId, "sessionId");
   rmSync(sessionFilePath(taskDir, sessionId), { force: true });
 }
+
+/**
+ * Persisted execution ledger ([PiDock 17] #19).
+ *
+ * `<taskDir>/execution.json` holds the execution/step/attempt/approval records
+ * plus the attention read marks, so a reopen reports the same executions and
+ * the same unread state instead of re-deriving them (and so a late approval
+ * arrives spent, never as a fresh authorization). Every field is validated on
+ * read: a corrupt ledger is refused rather than restored half-shaped.
+ */
+export function executionFilePath(taskDir: string): string {
+  return join(taskDir, EXECUTION_FILE);
+}
+
+function parseExecutionStep(value: unknown): ExecutionRecord["steps"][number] {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("invalid-payload: execution step must be an object");
+  }
+  const step = value as Record<string, unknown>;
+  for (const key of ["stepId", "label"] as const) {
+    if (typeof step[key] !== "string" || (step[key] as string).length === 0) {
+      throw new Error(`invalid-payload: execution step.${key} must be a non-empty string`);
+    }
+  }
+  const state = step["state"];
+  if (state !== "pending" && state !== "done" && state !== "failed" && state !== "skipped") {
+    throw new Error("invalid-payload: execution step.state must be pending/done/failed/skipped");
+  }
+  if (step["at"] !== undefined && (typeof step["at"] !== "string" || (step["at"] as string).length === 0)) {
+    throw new Error("invalid-payload: execution step.at must be a non-empty string");
+  }
+  return value as ExecutionRecord["steps"][number];
+}
+
+const ATTEMPT_END_STATES: readonly AttemptEndState[] = ["completed", "failed", "cancelled", "awaiting-approval", "unknown-external"];
+
+function parseExecutionAttempt(value: unknown): ExecutionRecord["attempts"][number] {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("invalid-payload: execution attempt must be an object");
+  }
+  const attempt = value as Record<string, unknown>;
+  if (typeof attempt["attemptId"] !== "string" || (attempt["attemptId"] as string).length === 0) {
+    throw new Error("invalid-payload: execution attempt.attemptId must be a non-empty string");
+  }
+  if (typeof attempt["at"] !== "string" || (attempt["at"] as string).length === 0) {
+    throw new Error("invalid-payload: execution attempt.at must be a non-empty string");
+  }
+  if (typeof attempt["endState"] !== "string" || !ATTEMPT_END_STATES.includes(attempt["endState"] as AttemptEndState)) {
+    throw new Error(`invalid-payload: execution attempt.endState must be ${ATTEMPT_END_STATES.join("/")}`);
+  }
+  if (typeof attempt["replayable"] !== "boolean") {
+    throw new Error("invalid-payload: execution attempt.replayable must be a boolean");
+  }
+  for (const key of ["usageId", "verifiedAt"] as const) {
+    if (attempt[key] !== undefined && (typeof attempt[key] !== "string" || (attempt[key] as string).length === 0)) {
+      throw new Error(`invalid-payload: execution attempt.${key} must be a non-empty string`);
+    }
+  }
+  return value as ExecutionRecord["attempts"][number];
+}
+
+function parseExecutionApproval(value: unknown): NonNullable<ExecutionRecord["approval"]> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("invalid-payload: execution approval must be an object");
+  }
+  const approval = value as Record<string, unknown>;
+  for (const key of ["approvalId", "payloadVersion", "requestedAt"] as const) {
+    if (typeof approval[key] !== "string" || (approval[key] as string).length === 0) {
+      throw new Error(`invalid-payload: execution approval.${key} must be a non-empty string`);
+    }
+  }
+  const status = approval["status"];
+  if (status !== "pending" && status !== "approved" && status !== "rejected" && status !== "expired") {
+    throw new Error("invalid-payload: execution approval.status must be pending/approved/rejected/expired");
+  }
+  for (const key of ["expiresAt", "consumedAt"] as const) {
+    if (approval[key] !== undefined && (typeof approval[key] !== "string" || (approval[key] as string).length === 0)) {
+      throw new Error(`invalid-payload: execution approval.${key} must be a non-empty string`);
+    }
+  }
+  return value as NonNullable<ExecutionRecord["approval"]>;
+}
+
+function parseExecutionRecord(value: unknown): ExecutionRecord {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("invalid-payload: execution record must be an object");
+  }
+  const record = value as Record<string, unknown>;
+  for (const key of ["executionId", "taskId", "sessionId", "label", "startedAt", "updatedAt"] as const) {
+    if (typeof record[key] !== "string" || (record[key] as string).length === 0) {
+      throw new Error(`invalid-payload: execution record.${key} must be a non-empty string`);
+    }
+  }
+  if (record["projectId"] !== undefined && typeof record["projectId"] !== "string") {
+    throw new Error("invalid-payload: execution record.projectId must be a string");
+  }
+  for (const key of ["kind", "state"] as const) {
+    const known = key === "kind" ? (EXECUTION_KINDS as readonly string[]) : (EXECUTION_STATES as readonly string[]);
+    if (typeof record[key] !== "string" || !known.includes(record[key] as string)) {
+      throw new Error(`invalid-payload: execution record.${key} must be ${known.join("/")}`);
+    }
+  }
+  if (typeof record["version"] !== "number" || !Number.isInteger(record["version"]) || (record["version"] as number) < 1) {
+    throw new Error("invalid-payload: execution record.version must be a positive integer");
+  }
+  if (typeof record["draftKept"] !== "boolean") {
+    throw new Error("invalid-payload: execution record.draftKept must be a boolean");
+  }
+  if (!Array.isArray(record["steps"])) throw new Error("invalid-payload: execution record.steps must be an array");
+  for (const step of record["steps"] as unknown[]) parseExecutionStep(step);
+  if (!Array.isArray(record["attempts"])) throw new Error("invalid-payload: execution record.attempts must be an array");
+  for (const attempt of record["attempts"] as unknown[]) parseExecutionAttempt(attempt);
+  if (record["approval"] !== undefined) parseExecutionApproval(record["approval"]);
+  for (const key of ["failureReason", "callId"] as const) {
+    if (record[key] !== undefined && (typeof record[key] !== "string" || (record[key] as string).length === 0)) {
+      throw new Error(`invalid-payload: execution record.${key} must be a non-empty string`);
+    }
+  }
+  if (record["stoppedDerived"] !== undefined) {
+    if (!Array.isArray(record["stoppedDerived"]) || (record["stoppedDerived"] as unknown[]).some((item) => typeof item !== "string")) {
+      throw new Error("invalid-payload: execution record.stoppedDerived must be a string array");
+    }
+  }
+  return value as ExecutionRecord;
+}
+
+export function serializeExecutionLedger(ledger: ExecutionLedgerRecord): string {
+  return JSON.stringify(ledger, null, 2);
+}
+
+export function parseExecutionLedger(raw: string): ExecutionLedgerRecord {
+  const value: unknown = JSON.parse(raw);
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("invalid-payload: execution ledger must be an object");
+  }
+  const ledger = value as Record<string, unknown>;
+  if (typeof ledger["version"] !== "number" || !Number.isInteger(ledger["version"]) || (ledger["version"] as number) < 1) {
+    throw new Error("invalid-payload: execution ledger.version must be a positive integer");
+  }
+  const executions = ledger["executions"];
+  if (!Array.isArray(executions)) throw new Error("invalid-payload: execution ledger.executions must be an array");
+  const readItems = ledger["readItems"];
+  if (!Array.isArray(readItems)) throw new Error("invalid-payload: execution ledger.readItems must be an array");
+  for (const entry of readItems as unknown[]) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      throw new Error("invalid-payload: execution ledger.readItems entries must be objects");
+    }
+    for (const key of ["itemId", "readAt"] as const) {
+      const item = (entry as Record<string, unknown>)[key];
+      if (typeof item !== "string" || item.length === 0) {
+        throw new Error(`invalid-payload: execution ledger.readItems.${key} must be a non-empty string`);
+      }
+    }
+  }
+  return {
+    version: ledger["version"] as number,
+    executions: (executions as unknown[]).map((record) => parseExecutionRecord(record)),
+    readItems: readItems as ExecutionLedgerRecord["readItems"],
+  };
+}
+
+export function writeExecutionLedgerOnDisk(taskDir: string, ledger: ExecutionLedgerRecord): void {
+  mkdirSync(taskDir, { recursive: true });
+  writeFileSync(executionFilePath(taskDir), serializeExecutionLedger(ledger), "utf8");
+}
+
+/** Absent file = a task that never ran anything (empty ledger, not an error). */
+export function readExecutionLedgerOnDisk(taskDir: string): ExecutionLedgerRecord {
+  try {
+    return parseExecutionLedger(readFileSync(executionFilePath(taskDir), "utf8"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return emptyExecutionLedger();
+    throw error;
+  }
+}
+
+/** Step vocabulary, re-exported so the Host never re-spells it. */
+export type { StepState };
