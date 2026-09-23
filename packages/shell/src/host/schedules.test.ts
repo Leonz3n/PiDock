@@ -240,6 +240,42 @@ describe("[PiDock 18] schedule manager", () => {
     expect(schedules.runs(scheduleId)).toHaveLength(1);
   });
 
+  it("auto-disables a 一次性 schedule after its successful trigger, keeping a failed one enabled", () => {
+    let now = "2026-09-30T00:00:00.000Z";
+    const { store } = memorySchedules();
+    const { ports, results } = fakePorts({ now: () => now });
+    const schedules = new TaskSchedules(TASK_ID, TASK_DIR, store, ports);
+    const once = schedules.save({ ...BASE, ruleText: "一次性 2026-10-01T09:00", enabled: true });
+    const onceId = once.ok ? once.schedule.scheduleId : "";
+    const daily = schedules.save({ ...BASE, name: "每日巡检", enabled: true });
+    const dailyId = daily.ok ? daily.schedule.scheduleId : "";
+    // A trigger that really started its session ends the one-off rule: no next
+    // occurrence exists, so leaving it enabled would show 已启用 with no plan.
+    results.push({ state: "done" });
+    now = "2026-10-01T01:30:00.000Z";
+    const runs = schedules.evaluateDue();
+    expect(runs.map((run) => run.scheduleId)).toEqual([onceId, dailyId]);
+    expect(schedules.find(onceId)?.enabled).toBe(false);
+    expect(schedules.find(dailyId)?.enabled).toBe(true);
+    // The disabled rule is never evaluated again, so nothing is replayed.
+    now = "2026-10-02T01:30:00.000Z";
+    expect(schedules.evaluateDue().map((run) => run.scheduleId)).toEqual([dailyId]);
+    expect(schedules.runs(onceId)).toHaveLength(1);
+    // A failed one-off run keeps the rule enabled so the config can be repaired.
+    const failing = schedules.save({ ...BASE, name: "一次性失败", ruleText: "一次性 2026-10-03T09:00", enabled: true });
+    const failingId = failing.ok ? failing.schedule.scheduleId : "";
+    // Both enabled rules in that window start a turn; whatever order they run in,
+    // the one-off rule sees a failed run.
+    results.push({ state: "failed", failureReason: "没有可用模型" }, { state: "failed", failureReason: "没有可用模型" });
+    now = "2026-10-03T01:30:00.000Z";
+    schedules.evaluateDue();
+    expect(schedules.find(failingId)?.enabled).toBe(true);
+    // 立即运行 does not consume the planned occurrence, so it leaves the rule alone.
+    results.push({ state: "done" });
+    schedules.runNow(onceId);
+    expect(schedules.find(onceId)?.enabled).toBe(false);
+  });
+
   it("records a run parked on a confirmation as awaiting-approval, not completed", () => {
     const { store } = memorySchedules();
     const { ports, results } = fakePorts();

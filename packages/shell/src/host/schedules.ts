@@ -266,9 +266,11 @@ export class TaskSchedules {
   }
 
   /**
-   * Pause / resume (盒子 4/6). 恢复不自动启用调度: this is the only place that sets
-   * `enabled`, an archived task refuses enabling, and re-enabling starts a fresh
-   * evaluation watermark instead of replaying what passed while paused.
+   * Pause / resume (盒子 4/6). 恢复不自动启用调度: this is the only *user* action that
+   * sets `enabled`, an archived task refuses enabling, and re-enabling starts a
+   * fresh evaluation watermark instead of replaying what passed while paused.
+   * The one other writer is the 一次性 auto-disable after a successful trigger
+   * (`disable`), which only ever turns a schedule off.
    */
   setEnabled(scheduleId: string, enabled: boolean): SaveScheduleResult {
     const schedule = this.recordState.schedules.find((item) => item.scheduleId === scheduleId);
@@ -372,7 +374,18 @@ export class TaskSchedules {
         recordedKeys: this.recordState.runs.map((run) => run.occurrenceKey),
       });
       if (decision.decision === "run") {
-        recorded.push(this.performRun(schedule, { trigger: "due", occurrence: decision.occurrence, occurrenceKey: decision.occurrenceKey }));
+        recorded.push(
+          this.performRun(schedule, {
+            trigger: "due",
+            occurrence: decision.occurrence,
+            occurrenceKey: decision.occurrenceKey,
+            // 一次性任务成功触发后自动停用 ([PiDock 18] #20 规格): the rule has no
+            // next occurrence, so leaving it enabled would show 「已启用」 with no
+            // next plan. 立即运行 does not consume the planned occurrence and
+            // therefore keeps the schedule as it is.
+            disableAfterRun: parsed.rule.kind === "once",
+          }),
+        );
       } else if (decision.decision === "skip" && decision.reason !== "already-triggered") {
         recorded.push(
           this.recordSkip(schedule, {
@@ -395,7 +408,7 @@ export class TaskSchedules {
 
   private performRun(
     schedule: StoredSchedule,
-    input: { trigger: ScheduledRunRecord["trigger"]; occurrence: string; occurrenceKey: string },
+    input: { trigger: ScheduledRunRecord["trigger"]; occurrence: string; occurrenceKey: string; disableAfterRun?: boolean },
   ): ScheduledRunRecord {
     const startedAt = this.ports.now();
     const runId = `run-${(this.runSequence += 1)}`;
@@ -433,7 +446,20 @@ export class TaskSchedules {
       ...(result.state === "failed" ? { reason: result.failureReason ?? "执行失败" } : { sessionId }),
     };
     this.appendRun(run);
+    // 一次性任务成功触发后自动停用: only a trigger that really started its session
+    // disables the rule — a failed run keeps the schedule enabled so the user can
+    // repair the config and run the still-planned occurrence.
+    if (input.disableAfterRun === true && result.state !== "failed") this.disable(schedule.scheduleId);
     return { ...run };
+  }
+
+  /** Auto-disable one schedule without moving the evaluation watermark. */
+  private disable(scheduleId: string): void {
+    this.recordState = {
+      ...this.recordState,
+      schedules: this.recordState.schedules.map((item) => (item.scheduleId === scheduleId ? { ...item, enabled: false, updatedAt: this.ports.now() } : item)),
+    };
+    this.persist();
   }
 
   private recordSkip(
