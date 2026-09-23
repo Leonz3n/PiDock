@@ -94,7 +94,17 @@ function setup(tiers: { file: "read" | "default" | "auto"; service: "read" | "de
       persist: () => store.writeSession(DIR, channel.snapshot()),
     });
   };
-  return { taskHost, services, browserCalls, writeTurn, chromeTurn, serviceControl, browserAction, store };
+  return {
+    taskHost,
+    services,
+    gateway,
+    browserCalls,
+    writeTurn,
+    chromeTurn,
+    serviceControl,
+    browserAction,
+    store,
+  };
 }
 
 describe("[PiDock 09] integrated permission acceptance across tool classes", () => {
@@ -198,5 +208,99 @@ describe("[PiDock 09] integrated permission acceptance across tool classes", () 
     env.taskHost.endDerivedExecution("child-1");
     expect(env.taskHost.writeLockOwner).toBeNull();
     expect(env.writeTurn("other", "default", `${DIR}/other.md`)()).toMatchObject({ state: "done" });
+  });
+});
+
+// Seam: [PiDock 07] (#13) box 1. The pilot flow is the first real business path
+// (BFF start command plus a visible-menu navigation in the task browser, shaped
+// from docs/pilot-repository-inspection.md). It must pass the very same
+// default-tier gate the integrated acceptance covers: no confirmation means no
+// run, a rejection means no run, and there is no acceptance-only bypass.
+describe("[PiDock 07] pilot operations keep the default-tier gate", () => {
+  const PILOT_COMMAND = `${DIR}/apps/saas-bff`;
+  const PILOT_PAGE = "http://localhost:3100/sass/ucenter/tenantMgt/subscribe/flowLog";
+
+  const pilotCommand = (
+    env: ReturnType<typeof setup>,
+    sessionId: string,
+    permission: "read" | "default" | "auto" = "default",
+  ) => {
+    env.taskHost.setPermission(sessionId, permission);
+    return env.taskHost.sendMessage(sessionId, "启动本地 BFF", {
+      tool: "exec.run",
+      target: PILOT_COMMAND,
+      execute: (call) => ({
+        tool: call.tool,
+        kind: call.kind,
+        target: call.target,
+        contentVersion: call.contentVersion,
+        output: "pnpm --filter @shipber/saas-bff start:dev",
+      }),
+    });
+  };
+
+  const pilotNavigate = async (
+    env: ReturnType<typeof setup>,
+    sessionId: string,
+    permission: "read" | "default" | "auto" = "default",
+    approvalId?: unknown,
+  ) => {
+    const channel = env.taskHost.openSession(sessionId, { permission });
+    return runAgentBrowserAction({
+      gateway: env.gateway,
+      channel: channel as unknown as Parameters<typeof runAgentBrowserAction>[0]["channel"],
+      sessionId,
+      taskId: TASK_ID,
+      action: "page/navigate",
+      page: PAGE,
+      params: { url: PILOT_PAGE },
+      ...(approvalId !== undefined ? { approvalId } : {}),
+      taskDir: DIR,
+      write: env.taskHost,
+      persist: () => env.store.writeSession(DIR, channel.snapshot()),
+    });
+  };
+
+  it("asks before the pilot command and the pilot navigation, and a rejection runs neither", async () => {
+    const env = setup({ file: "default", service: "default", browser: "default" });
+    expect(env.taskHost.openSession("main").previewGate("exec.run", PILOT_COMMAND)).toMatchObject({
+      verdict: "ask",
+    });
+    const command = pilotCommand(env, "main");
+    expect(command.state).toBe("approval");
+    env.taskHost.reject("main", command.approvalId ?? "");
+    const calls = env.taskHost.openSession("main").snapshot().calls;
+    expect(calls.some((call) => call.status === "approved")).toBe(false);
+    expect(env.taskHost.writeLockOwner).toBeNull();
+
+    const first = await pilotNavigate(env, "main");
+    expect(first.ok).toBe(false);
+    const rejected = String((first as { error: string }).error).replace("approval-required: ", "");
+    expect(env.browserCalls).toHaveLength(0);
+    env.taskHost.reject("main", rejected);
+    expect(env.browserCalls).toHaveLength(0);
+
+    const retry = await pilotNavigate(env, "main");
+    const granted = String((retry as { error: string }).error).replace("approval-required: ", "");
+    expect(granted).not.toBe(rejected);
+    env.taskHost.openSession("main").approve(granted);
+    await expect(pilotNavigate(env, "main", "default", granted)).resolves.toMatchObject({ ok: true });
+    expect(env.browserCalls).toHaveLength(1);
+    // One confirmation authorizes one navigation; the pilot flow cannot replay it.
+    await expect(pilotNavigate(env, "main", "default", granted)).resolves.toMatchObject({
+      ok: false,
+    });
+    expect(env.browserCalls).toHaveLength(1);
+  });
+
+  it("refuses both pilot operations outright in a read-only session", async () => {
+    const env = setup({ file: "read", service: "read", browser: "read" });
+    expect(() => pilotCommand(env, "main", "read")).toThrow("只读会话仅允许阅读分析");
+    expect(env.taskHost.openSession("main").previewGate("exec.run", PILOT_COMMAND)).toMatchObject({
+      verdict: "deny",
+    });
+    await expect(pilotNavigate(env, "main", "read")).resolves.toMatchObject({ ok: false });
+    expect(env.browserCalls).toHaveLength(0);
+    expect(env.taskHost.writeLockOwner).toBeNull();
   });
 });

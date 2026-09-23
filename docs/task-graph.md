@@ -309,3 +309,39 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   时，若先使用 id 较小的会话仍可能铸出别的会话已用的 id（打包界面会先列会话
   并把计数器推到全局最大值，因此不触发）；彻底修法是 Host 构造时遍历该任务
   全部会话推进计数器，或把身份改成 `taskId/sessionId/callId`。
+
+## 真实对账单详情同步验证（[PiDock 07] #13）
+
+该工单的验收是**真实业务运行**：用户指定仓库、选定非生产环境与已有对账单、用户
+本人登录后的 UI 操作，以及本地 BFF/invoice/shipment 同步链路证据。当前执行环境
+没有该环境的登录态、凭据、可写数据与已启动的本地服务，因此本切片只实现不依赖
+这些输入的部分，其余按下表记录为待用户提供的残留，**不伪造业务闭环**。
+
+- **门禁形状（盒子 1）**：`packages/shell/src/host/permission-integration.test.ts`
+  新增 `[PiDock 07] pilot operations keep the default-tier gate`，用真实形状的两类
+  试点操作（本地 BFF 启动命令 `exec.run`、任务浏览器内可见菜单导航
+  `page/navigate`）驱动 09 集成验收的同一套写操作权与一次性确认：默认权限先问、
+  拒绝后不执行且不占用写操作权、只读会话直接拒绝（`previewGate` 为 `deny`）、
+  一次确认只授权一次导航。该文件不引入测试环境或验收专用的跳过标记。
+- **证据关联规则（盒子 5、盒子 6）**：`packages/shell/src/main/pilot-evidence.ts`
+  把「网络目标 ↔ 本任务运行实例 ↔ 该实例的 RPC 日志」的判定做成纯规则：
+  `assessPilotBundle` 逐条请求给出 `proven` / `unproven`，HTTP 成功但响应体带
+  GraphQL `errors` 判为未证明，未抓到响应体、响应体不是 JSON、端口没有本任务实例、
+  目标是远程主机、状态非 2xx 都判为未证明并给出原因；旧 REST 列表路径
+  （`/reconciliation-invoice/list`）显式不能替代本地 RPC 链路；缺少
+  `GetReconciliationInvoices` 请求时在汇总里报告。`docs/pilot-synchronous-query.md`
+  的失败判据因此有可执行的判定入口，而不是只靠人工阅读。
+- **残留（未测/未接线，需要用户或 supervisor 提供输入）**：
+  1. 真实业务闭环整体未验证（盒子 2–9）：需要用户提供非生产环境与已有对账单、
+     该环境登录账号的实际登录、可写的试点仓库工作副本、以及主壳／BFF／invoice／
+     shipment 的本地启动配置和远程依赖可达性；`docs/pilot-repository-inspection.md`
+     里的仓库在本机不位于文档记录的路径（`/Users/leonz3n/...`），启动配方与
+     变量读取点仍需在真实环境核对。
+  2. `pilot-evidence.ts` 目前只有单测与 `docs` 记录，尚无生产调用方：真实运行需要
+     先让任务浏览器保存响应证据（CDP `Network.responseReceived` +
+     `Network.getResponseBody` 的有界捕获，含 operation 与 GraphQL `errors`）和
+     本地服务 RPC 日志，才能把捕获结果喂给这些规则；接线前的判定只对离线证据包
+     有效。
+  3. 双任务并行对照（盒子 7、盒子 8）与「远程前提阻塞时分别报告」（盒子 9）需要
+     真实环境，本轮未运行；不能以单测或直接 GraphQL 调用代替。
+  4. Electron GUI smoke 未运行；真实 SaaS 页面、动态菜单与详情弹层均未实际操作。
