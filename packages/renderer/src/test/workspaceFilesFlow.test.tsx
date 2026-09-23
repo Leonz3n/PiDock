@@ -1,7 +1,9 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderApp } from "./helpers";
+import { FilesPanel } from "../components/ToolPanels";
 import { memoryWorkspaceBrowser, workspaceRootsFromHost, workspaceTreeFromHost, terminalPlanFromHost, terminalStateFromHost } from "../data/workspaceFiles";
+import type { WorkspaceBrowserView } from "../data/workspaceFiles";
 
 // [PiDock 10] (#15) file browsing + built-in terminal. The rule layer (path
 // containment, bounds, masking, gate order) is covered Host-side; these flows
@@ -20,14 +22,14 @@ describe("payload parsers", () => {
         tree: {
           attribution: { taskId: "t", rootId: "r", rootKind: "worktree", rootLabel: "r", piWorkDir: "/t" },
           path: "",
-          entries: [{ name: "a.ts", path: "r/a.ts", kind: "file", size: 3 }],
+          entries: [{ name: "a.ts", path: "a.ts", kind: "file", size: 3 }],
           truncated: false,
         },
       }),
     ).toEqual({
       attribution: { taskId: "t", rootId: "r", rootKind: "worktree", rootLabel: "r", piWorkDir: "/t" },
       path: "",
-      entries: [{ name: "a.ts", path: "r/a.ts", kind: "file", size: 3 }],
+      entries: [{ name: "a.ts", path: "a.ts", kind: "file", size: 3 }],
       truncated: false,
     });
     expect(terminalPlanFromHost({ plan: { instanceId: "term-1" } })).toBeUndefined();
@@ -59,6 +61,31 @@ describe("payload parsers", () => {
     // A shared link has no Git diff or delivery entry point.
     expect(view.selected?.diff).toBeUndefined();
     expect(view.selected?.delivery).toBeUndefined();
+  });
+
+  it("hands a Host-shaped tree entry back as the root-relative path", async () => {
+    const user = userEvent.setup();
+    // The Host emits root-relative entry paths; the panel must pass exactly
+    // that value on, or `task/filePreview` gets an empty relative path.
+    const view: WorkspaceBrowserView = {
+      taskId: "t",
+      taskDir: "/t",
+      roots: [{ id: "r", kind: "worktree", label: "r", path: "/t/r", repo: "r" }],
+      selected: {
+        rootId: "r",
+        relative: "",
+        tree: {
+          attribution: { taskId: "t", rootId: "r", rootKind: "worktree", rootLabel: "r", repo: "r", piWorkDir: "/t" },
+          path: "",
+          entries: [{ name: "a.ts", path: "a.ts", kind: "file" }],
+          truncated: false,
+        },
+      },
+    };
+    const onSelectFile = vi.fn();
+    render(<FilesPanel files={[]} browser={view} onSelectFile={onSelectFile} />);
+    await user.click(within(screen.getByTestId("file-tree")).getByRole("button", { name: "a.ts" }));
+    expect(onSelectFile).toHaveBeenCalledWith("a.ts");
   });
 });
 

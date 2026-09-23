@@ -557,7 +557,7 @@ export function FilesPanel({
                 <button
                   type="button"
                   disabled={entry.kind === "dir"}
-                  onClick={() => onSelectFile?.(entry.path.slice(selected.rootId.length + 1))}
+                  onClick={() => onSelectFile?.(entry.path)}
                   className="w-full truncate text-left font-mono text-[11px] text-ink disabled:text-muted"
                 >
                   {entry.kind === "dir" ? "📁 " : ""}

@@ -1,3 +1,5 @@
+import { isHostTaskOp } from "../rpc/protocol.js";
+
 export type TrustDomain = "shell" | "task";
 
 export type TrustViolationCode =
@@ -232,7 +234,10 @@ function validateTaskOpPayload(
   }
   if (
     typeof op !== "string" ||
-    !["task/provision", "task/appendRepos", "task/probeLink", "task/sendMessage", "task/cancel", "task/approve", "task/reject", "task/saveDraft", "task/clearDraft", "task/setPermission", "task/listApprovals", "task/getApproval", "task/registerService", "task/planServiceStart", "task/controlService", "task/serviceStatus", "task/serviceLog"].includes(op)
+    // One source of truth for the task-op surface: the RPC whitelist the
+    // Host and the renderer bridge share, so a new op cannot pass here and
+    // then be rejected (or the reverse) by a second hand-kept list.
+    !isHostTaskOp(op)
   ) {
     throw new TrustDomainViolation("invalid-payload", `unknown task op: ${String(op)}`);
   }

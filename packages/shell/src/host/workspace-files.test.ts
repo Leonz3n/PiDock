@@ -3,9 +3,17 @@
  * readers (no filesystem, no git) and secret masking at the boundary.
  */
 import { describe, expect, it } from "vitest";
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { type TaskDiskRecord } from "./task-store.js";
 import { memoryTaskStore } from "./task-host.js";
-import { TaskWorkspaceFiles, MAX_PREVIEW_BYTES, type WorkspaceFileReaders } from "./workspace-files.js";
+import {
+  MAX_PREVIEW_BYTES,
+  TaskWorkspaceFiles,
+  realWorkspaceFileReaders,
+  type WorkspaceFileReaders,
+} from "./workspace-files.js";
 
 const TASK_DIR = "/tasks/task-aaaaaaaa";
 
@@ -41,6 +49,8 @@ function readers(overrides: Partial<WorkspaceFileReaders> = {}): WorkspaceFileRe
     listDirectory: () => [],
     readTextFile: () => ({ ok: true, text: "", bytes: 0 }),
     runGit: () => ({ ok: true, stdout: "" }),
+    // Tests that do not care about symlinks: every path is its own real path.
+    realPath: (path) => path,
     ...overrides,
   };
 }
@@ -115,6 +125,75 @@ describe("TaskWorkspaceFiles", () => {
     expect(result.preview.source).not.toContain("sup3r-secret");
     expect(result.preview.lineCount).toBe(2);
     expect(result.preview.path).toBe("config/db.toml");
+  });
+
+  it("refuses a preview whose path is a link out of the root, before reading it", () => {
+    let touched = false;
+    const files = new TaskWorkspaceFiles(
+      "task-aaaaaaaa",
+      TASK_DIR,
+      store(),
+      readers({
+        readTextFile: () => {
+          touched = true;
+          return { ok: true, text: "root:x:0:0", bytes: 11 };
+        },
+        realPath: (path) => (path === `${TASK_DIR}/front-monorepo/secret.txt` ? "/etc/passwd" : path),
+      }),
+    );
+    const result = files.preview({ rootId: "front-monorepo", relative: "secret.txt" });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain("path-out-of-scope");
+    expect(touched).toBe(false);
+  });
+
+  it("does not list a link out of the root and keeps an in-root link", () => {
+    const root = `${TASK_DIR}/front-monorepo`;
+    const files = new TaskWorkspaceFiles(
+      "task-aaaaaaaa",
+      TASK_DIR,
+      store(),
+      readers({
+        listDirectory: () => [
+          { name: "secret.txt", kind: "file" },
+          { name: "same.txt", kind: "file" },
+          { name: "api.ts", kind: "file" },
+        ],
+        realPath: (path) =>
+          path === `${root}/secret.txt`
+            ? `${TASK_DIR}/invoice-service/leaked.txt`
+            : path === `${root}/same.txt`
+              ? `${root}/real.txt`
+              : path,
+      }),
+    );
+    const result = files.tree({ rootId: "front-monorepo" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.tree.entries.map((entry) => entry.path)).toEqual(["api.ts", "same.txt"]);
+  });
+
+  it("refuses a symlinked entry via the real filesystem reader", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pidock-files-"));
+    const outside = join(dir, "outside.txt");
+    writeFileSync(outside, "root:x:0:0\n");
+    const root = join(dir, "repo");
+    mkdirSync(root);
+    writeFileSync(join(root, "api.ts"), "export const ok = 1;\n");
+    symlinkSync(outside, join(root, "secret.txt"));
+    const disk = memoryTaskStore();
+    disk.writeTask(dir, { ...record(), taskDir: dir, root: dir, repos: ["repo"], repoSources: [] });
+    const files = new TaskWorkspaceFiles("task-aaaaaaaa", dir, disk, realWorkspaceFileReaders);
+    const listed = files.tree({ rootId: "repo" });
+    expect(listed.ok).toBe(true);
+    if (!listed.ok) return;
+    expect(listed.tree.entries.map((entry) => entry.path)).toEqual(["api.ts"]);
+    const preview = files.preview({ rootId: "repo", relative: "secret.txt" });
+    expect(preview.ok).toBe(false);
+    if (preview.ok) return;
+    expect(preview.error).toContain("path-out-of-scope");
+    expect(files.preview({ rootId: "repo", relative: "api.ts" }).ok).toBe(true);
   });
 
   it("surfaces a reader refusal (binary/oversized) as an error instead of text", () => {
