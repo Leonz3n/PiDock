@@ -148,7 +148,9 @@ export function TaskPage({ task, sessionId }: { task: Task; sessionId: string })
                   }}
                 />
               ) : null}
-              {panel === "browser" && !directoryOnly ? <BrowserPanel pages={task.browserPages} /> : null}
+              {panel === "browser" && !directoryOnly ? (
+                <BrowserPanel pages={task.browserPages} taskId={task.id} sessionId={session.id} />
+              ) : null}
               {panel === "logs" && !directoryOnly ? <LogsPanel task={task} /> : null}
               {panel === "files" ? (
                 directoryOnly ? (
