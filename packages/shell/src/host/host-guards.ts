@@ -1149,6 +1149,57 @@ export function validateHostTaskOp(
     }
     return { ok: true };
   }
+  // [PiDock 14] (#17) lifecycle: reads carry no caller-chosen target (the
+  // Host reads its own task folder), archive/restore are explicit human-UI
+  // actions refused for an agent session, and cleanup requires the task to be
+  // archived plus an export selection whose shape is checked here.
+  if (op === "task/lifecycleState") {
+    if (payload !== undefined && !isRecord(payload)) {
+      return { ok: false, error: "invalid-payload: task/lifecycleState payload must be an object" };
+    }
+    return { ok: true };
+  }
+  if (op === "task/archive" || op === "task/restore") {
+    if (payload !== undefined && !isRecord(payload)) {
+      return { ok: false, error: `invalid-payload: ${op} payload must be an object` };
+    }
+    const label = payload === undefined ? undefined : payload["label"];
+    if (label !== undefined && typeof label !== "string") {
+      return { ok: false, error: `invalid-payload: ${op}.label must be a string` };
+    }
+    return { ok: true };
+  }
+  if (op === "task/quit") {
+    if (payload !== undefined && !isRecord(payload)) {
+      return { ok: false, error: "invalid-payload: task/quit payload must be an object" };
+    }
+    const label = payload === undefined ? undefined : payload["label"];
+    if (label !== undefined && typeof label !== "string") {
+      return { ok: false, error: "invalid-payload: task/quit.label must be a string" };
+    }
+    return { ok: true };
+  }
+  if (op === "task/cleanupPreview" || op === "task/runCleanup") {
+    if (!isRecord(payload)) return { ok: false, error: `invalid-payload: ${op} requires a payload object` };
+    const selection = payload["selection"];
+    if (typeof selection !== "object" || selection === null || Array.isArray(selection)) {
+      return { ok: false, error: `invalid-payload: ${op}.selection must be an object` };
+    }
+    for (const key of ["exportSessions", "exportDrafts", "exportUsage"] as const) {
+      if (typeof (selection as Record<string, unknown>)[key] !== "boolean") {
+        return { ok: false, error: `invalid-payload: ${op}.selection.${key} must be a boolean` };
+      }
+    }
+    const keepRoot = payload["keepRoot"];
+    if (keepRoot !== undefined && (typeof keepRoot !== "string" || keepRoot.trim().length === 0)) {
+      return { ok: false, error: `invalid-payload: ${op}.keepRoot must be a non-empty string` };
+    }
+    const label = payload["label"];
+    if (label !== undefined && typeof label !== "string") {
+      return { ok: false, error: `invalid-payload: ${op}.label must be a string` };
+    }
+    return { ok: true };
+  }
   if (payload !== undefined && !isRecord(payload)) {
     return { ok: false, error: `invalid-payload: ${op} payload must be an object` };
   }

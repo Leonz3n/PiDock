@@ -56,6 +56,17 @@ describe("verifyProcessIdentity", () => {
       code: "unknown-process",
     });
     expect(verifyProcessIdentity({ pid: 4321 }, [live(4321)])).toMatchObject({ ok: false, code: "incomplete-claim" });
+    expect(verifyProcessIdentity({ startedAt: "2026-09-22T10:00:00+08:00" }, [live(4321)])).toMatchObject({ ok: false, code: "incomplete-claim" });
+  });
+
+  it("accepts the recorded service/terminal identity (pid + start time) and strengthens with command/cwd when known", () => {
+    // A registered service/terminal identity records pid + startedAt only.
+    expect(verifyProcessIdentity({ pid: 11, startedAt: "t1" }, [live(11, { startedAt: "t1", command: "node server.js", cwd: TASK_DIR })])).toMatchObject({ ok: true });
+    // With a recorded command, a mismatch is refused even though the pid and start time match.
+    expect(verifyProcessIdentity({ pid: 11, startedAt: "t1", command: "node server.js" }, [live(11, { startedAt: "t1", command: "node other.js" })])).toMatchObject({
+      ok: false,
+      code: "identity-mismatch",
+    });
   });
 
   it("refuses a pid now running a different command or cwd", () => {

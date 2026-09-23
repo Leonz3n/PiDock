@@ -29,13 +29,18 @@
 /**
  * Identity of a resource this task started. `startedAt` is the OS-reported
  * start time (as reported, compared verbatim) and is what tells a live pid
- * apart from the same pid reused by another process after a crash.
+ * apart from the same pid reused by another process after a crash. `command`
+ * and `cwd` strengthen the check when both sides know them (a recorded
+ * service/terminal identity only carries pid + start time, so they stay
+ * optional rather than making every recorded identity unverifiable).
  */
 export interface TaskProcessIdentity {
   pid: number;
   startedAt: string;
-  command: string;
-  cwd: string;
+  /** Command the process was started with, when recorded. */
+  command?: string;
+  /** Working directory the process was started in, when recorded. */
+  cwd?: string;
 }
 
 /** A process observed on the machine right now (the OS answer). */
@@ -72,22 +77,16 @@ export function verifyProcessIdentity(
   const pid = claim.pid;
   const hasPid = typeof pid === "number" && Number.isInteger(pid) && pid > 0;
   const startedAt = claim.startedAt;
-  const command = typeof claim.command === "string" ? claim.command.trim() : "";
-  const cwd = typeof claim.cwd === "string" ? claim.cwd.trim() : "";
+  const command = typeof claim.command === "string" ? claim.command.trim() : undefined;
+  const cwd = typeof claim.cwd === "string" ? claim.cwd.trim() : undefined;
   if (!hasPid && claim.port !== undefined) {
     return { ok: false, code: "port-only", reason: "端口不是进程身份：不能凭端口认领或停止进程" };
   }
-  if (
-    !hasPid ||
-    typeof startedAt !== "string" ||
-    startedAt.trim().length === 0 ||
-    command.length === 0 ||
-    cwd.length === 0
-  ) {
+  if (!hasPid || typeof startedAt !== "string" || startedAt.trim().length === 0) {
     return {
       ok: false,
       code: "incomplete-claim",
-      reason: "进程身份不完整（需要进程号、启动时间、命令与工作目录），已拒绝",
+      reason: "进程身份不完整（需要进程号与启动时间，可选命令与工作目录），已拒绝",
     };
   }
   const found = live.find((entry) => entry.pid === (pid as number));
@@ -101,10 +100,17 @@ export function verifyProcessIdentity(
       reason: `进程号 ${String(pid)} 已被另一个进程复用（启动时间不同），拒绝按过期进程号操作`,
     };
   }
-  if (found.command.trim() !== command || found.cwd.trim() !== cwd) {
-    return { ok: false, code: "identity-mismatch", reason: `进程 ${String(pid)} 的命令或工作目录与记录不符` };
+  if (command !== undefined && found.command !== undefined && found.command.trim() !== command) {
+    return { ok: false, code: "identity-mismatch", reason: `进程 ${String(pid)} 的命令与记录不符` };
   }
-  return { ok: true, matchedBy: "identity", identity: { pid: pid as number, startedAt, command, cwd } };
+  if (cwd !== undefined && found.cwd !== undefined && found.cwd.trim() !== cwd) {
+    return { ok: false, code: "identity-mismatch", reason: `进程 ${String(pid)} 的工作目录与记录不符` };
+  }
+  return {
+    ok: true,
+    matchedBy: "identity",
+    identity: { pid: pid as number, startedAt, ...(command !== undefined ? { command } : {}), ...(cwd !== undefined ? { cwd } : {}) },
+  };
 }
 
 export interface GitResourceRecord {
@@ -808,7 +814,8 @@ export interface RelaunchSessionInput {
   runState: string;
   draft?: {
     text: string;
-    references?: readonly { id: string; kind: string; label: string; sourceId?: string; resourcePath?: string }[];
+    /** Persisted refs are shape-checked on restore, never trusted as typed. */
+    references?: readonly unknown[];
   };
   approvals: readonly { id: string; status: string; executed?: boolean; consumedAt?: string }[];
 }
@@ -871,10 +878,22 @@ function restoredRunState(runState: string): { runState: string; linkedTo: Resto
 }
 
 function revalidateReferences(
-  references: readonly { id: string; kind: string; label: string; sourceId?: string; resourcePath?: string }[],
+  references: readonly unknown[],
   input: { availableFiles: readonly string[]; availableSkills: readonly string[] },
 ): RestoredReference[] {
-  return references.map((reference) => {
+  return references.flatMap<RestoredReference>((value) => {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) return [];
+    const record = value as Record<string, unknown>;
+    const reference = {
+      id: typeof record["id"] === "string" ? record["id"] : "",
+      kind: typeof record["kind"] === "string" ? record["kind"] : "",
+      label: typeof record["label"] === "string" ? record["label"] : "",
+      sourceId: typeof record["sourceId"] === "string" ? record["sourceId"] : undefined,
+      resourcePath: typeof record["resourcePath"] === "string" ? record["resourcePath"] : undefined,
+    };
+    if (reference.id.length === 0 || reference.label.length === 0) {
+      return [{ id: reference.id || reference.label || "unknown", label: reference.label || "未知引用", state: "missing" as const, detail: "引用记录形状不可识别，恢复后需重新选择" }];
+    }
     if (reference.kind === "skill") {
       if (reference.sourceId === undefined || reference.resourcePath === undefined) {
         return { id: reference.id, label: reference.label, state: "skill-unavailable" as const, detail: "技能来源未记录，恢复后需重新选择具体来源" };

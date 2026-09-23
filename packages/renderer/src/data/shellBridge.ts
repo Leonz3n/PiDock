@@ -82,7 +82,13 @@ export type ShellTaskOp =
   | "task/planTerminal"
   | "task/terminalControl"
   | "task/terminalState"
-  | "task/terminalHistory";
+  | "task/terminalHistory"
+  | "task/lifecycleState"
+  | "task/archive"
+  | "task/restore"
+  | "task/cleanupPreview"
+  | "task/runCleanup"
+  | "task/quit";
 
 /**
  * Task-scoped op through main into the per-workspace Host. Rejects outside
@@ -765,6 +771,81 @@ export async function terminalHistoryThroughShell(input: {
   if (input.limit !== undefined) payload["limit"] = input.limit;
   try {
     return await shellTaskOp(input.taskId, "task/terminalHistory", payload);
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/** [PiDock 14] (#17) task lifecycle readout: archive/cleanup state, resource identities, quit/relaunch plans. */
+export async function lifecycleStateThroughShell(taskId: string): Promise<ShellTaskOpResult> {
+  try {
+    return await shellTaskOp(taskId, "task/lifecycleState", {});
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * [PiDock 14] (#17) archive or restore one task. A human-UI call is attested by
+ * main; an agent call is refused Host-side (archiving/restoring is an explicit
+ * app-level action).
+ */
+export async function setTaskArchivedThroughShell(input: {
+  taskId: string;
+  archived: boolean;
+  label?: string;
+}): Promise<ShellTaskOpResult> {
+  const payload: Record<string, unknown> = {};
+  if (input.label !== undefined) payload["label"] = input.label;
+  try {
+    return await shellTaskOp(input.taskId, input.archived ? "task/archive" : "task/restore", payload);
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/** [PiDock 14] (#17) cleanup scope preview for one archived task. */
+export async function cleanupPreviewThroughShell(input: {
+  taskId: string;
+  selection: { exportSessions: boolean; exportDrafts: boolean; exportUsage: boolean };
+  keepRoot?: string;
+}): Promise<ShellTaskOpResult> {
+  const payload: Record<string, unknown> = { selection: input.selection };
+  if (input.keepRoot !== undefined) payload["keepRoot"] = input.keepRoot;
+  try {
+    return await shellTaskOp(input.taskId, "task/cleanupPreview", payload);
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/** [PiDock 14] (#17) run the cleanup: keep + verify first, then remove managed resources. */
+export async function runCleanupThroughShell(input: {
+  taskId: string;
+  selection: { exportSessions: boolean; exportDrafts: boolean; exportUsage: boolean };
+  keepRoot?: string;
+  label?: string;
+}): Promise<ShellTaskOpResult> {
+  const payload: Record<string, unknown> = { selection: input.selection };
+  if (input.keepRoot !== undefined) payload["keepRoot"] = input.keepRoot;
+  if (input.label !== undefined) payload["label"] = input.label;
+  try {
+    return await shellTaskOp(input.taskId, "task/runCleanup", payload);
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * [PiDock 14] (#17) ordered explicit-quit for one task: abort the Agent, then
+ * stop services/terminals/subprocess trees by verified identity, then save
+ * state. Blocked resources come back as failures and keep the task retained.
+ */
+export async function quitTaskThroughShell(input: { taskId: string; label?: string }): Promise<ShellTaskOpResult> {
+  const payload: Record<string, unknown> = {};
+  if (input.label !== undefined) payload["label"] = input.label;
+  try {
+    return await shellTaskOp(input.taskId, "task/quit", payload);
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }

@@ -517,6 +517,43 @@ export class PerTaskHostRegistry {
     }
   }
 
+  /**
+   * Ordered explicit quit ([PiDock 14] #17 box 2) for every forked task Host:
+   * each Host aborts its Agent, stops its services/terminals/subprocess trees
+   * by verified identity and saves state. Failures are collected and returned
+   * so the caller can surface them instead of losing the task silently; the
+   * forked Hosts stay alive until the caller disposes them.
+   */
+  async quitAll(input: { origin: TaskOpOrigin; label?: string }): Promise<{
+    ok: boolean;
+    tasks: { taskId: string; ok: boolean; applied: string[]; failures: unknown[]; retainedTasks: string[]; error?: string }[];
+  }> {
+    const tasks: { taskId: string; ok: boolean; applied: string[]; failures: unknown[]; retainedTasks: string[]; error?: string }[] = [];
+    const payload: Record<string, unknown> = input.label === undefined ? {} : { label: input.label };
+    for (const entry of this.byTaskDir.values()) {
+      try {
+        const result = await entry.client.task({
+          workspaceId: this.workspaceId,
+          taskId: entry.taskId,
+          op: "task/quit",
+          payload,
+          origin: input.origin,
+        });
+        const quit = (result.payload as { quit?: { applied?: string[]; plan?: { failures?: unknown[]; retainedTasks?: string[] } } }).quit;
+        tasks.push({
+          taskId: entry.taskId,
+          ok: true,
+          applied: quit?.applied ?? [],
+          failures: quit?.plan?.failures ?? [],
+          retainedTasks: quit?.plan?.retainedTasks ?? [],
+        });
+      } catch (error) {
+        tasks.push({ taskId: entry.taskId, ok: false, applied: [], failures: [], retainedTasks: [entry.taskId], error: errorMessage(error) });
+      }
+    }
+    return { ok: tasks.every((task) => task.ok && task.retainedTasks.length === 0), tasks };
+  }
+
   /** Dispose every forked Host (app exit / window-all-closed). */
   disposeAll(): void {
     for (const entry of this.byTaskDir.values()) {
