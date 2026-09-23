@@ -331,12 +331,23 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   （`/reconciliation-invoice/list`）显式不能替代本地 RPC 链路；缺少
   `GetReconciliationInvoices` 请求时在汇总里报告。`docs/pilot-synchronous-query.md`
   的失败判据因此有可执行的判定入口，而不是只靠人工阅读。
-- **残留（未测/未接线，需要用户或 supervisor 提供输入）**：
-  1. 真实业务闭环整体未验证（盒子 2–9）：需要用户提供非生产环境与已有对账单、
-     该环境登录账号的实际登录、可写的试点仓库工作副本、以及主壳／BFF／invoice／
-     shipment 的本地启动配置和远程依赖可达性；`docs/pilot-repository-inspection.md`
-     里的仓库在本机不位于文档记录的路径（`/Users/leonz3n/...`），启动配方与
-     变量读取点仍需在真实环境核对。
+- **试点环境实测（诊断，不是验收）**：supervisor 于 2026-09-23 在用户指定环境完成
+  真实登录与页面探查，结果记入
+  [试点环境实测记录](pilot-env-recon-2026-09-23.md)：登录路由 `/sassLogin`、API 基址
+  `http://api.reconcile.adber.tech:30080` 与页面主机分离（GraphQL 为同一基址下的
+  `POST /graphql`）、动态权限菜单与 64px 图标栏
+  导航模型、账单管理列表操作 `ReconciliationListSummary`、用户指定对账单 `000000K1013A336`
+  真实存在、以及详情链路的源码入口（消费流水 `flowLog/index.vue:301/644` → 详情组件
+  `PreviewReconciliationDetail/index.vue:432` → `GetReconciliationInvoices`）。同时记录本机前置
+  条件（GUI 可用、仓库未装 Electron、本地 Redis 未监听、远端 MySQL/RabbitMQ 可达、go1.27.1）
+  与安全标记（reconcile 配置指向生产还原库与共享 vhost）。该探查走远程 BFF，盒子 2–9 仍未证明；
+  从图标栏到「订阅管理」的可见菜单点击路径 **未定**，不得用直接地址跳转代替。
+
+  1. 真实业务闭环整体未验证（盒子 2–9）：**环境和现有对账单已由用户在 2026-09-23 提供**
+     （环境 `http://srb.reconcile.adber.tech`，对账单 `000000K1013A336`，详见
+     [试点环境实测记录](pilot-env-recon-2026-09-23.md)）；仍未验证的是本地 BFF／invoice／
+     shipment 实例及其关联 RPC 证据，另外本地启动配置指向生产还原库与共享 vhost，需用户
+     先确认非生产隔离方式（实测记录第 7 节）。
   2. `pilot-evidence.ts` 目前只有单测与 `docs` 记录，尚无生产调用方：真实运行需要
      先让任务浏览器保存响应证据（CDP `Network.responseReceived` +
      `Network.getResponseBody` 的有界捕获，含 operation 与 GraphQL `errors`）和
