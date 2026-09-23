@@ -232,6 +232,12 @@ describe("model popover", () => {
     const dialog = await screen.findByRole("dialog", { name: "选择 Provider 与模型" });
     await user.click(dialog.parentElement as HTMLElement);
     expect(screen.queryByRole("dialog", { name: "选择 Provider 与模型" })).toBeNull();
+
+    // The popover offers the management entry.
+    await user.click(screen.getByRole("button", { name: /^选择模型：Claude Sonnet$/ }));
+    await screen.findByRole("dialog", { name: "选择 Provider 与模型" });
+    await user.click(screen.getByRole("button", { name: "管理 Provider" }));
+    expect(await screen.findByRole("heading", { name: "Provider 与上下文" })).toBeInTheDocument();
   });
 
   it("refuses a switch while the round is busy and keeps model, history and draft", async () => {
@@ -292,6 +298,8 @@ describe("context and reasoning popovers", () => {
     const user = userEvent.setup();
     renderApp("/projects/atlas/tasks/release?session=main");
     await screen.findByRole("heading", { name: "发布前检查" });
+    // Below the composer input: raw occupancy/window, the percentage and the marker.
+    expect(screen.getByRole("button", { name: "查看上下文占用" })).toHaveTextContent("上下文 24800 / 200000 Tokens · 12.4%");
     await user.click(screen.getByRole("button", { name: "查看上下文占用" }));
     const dialog = await screen.findByRole("dialog", { name: "上下文占用" });
     expect(within(dialog).getByTestId("context-numbers")).toHaveTextContent("占用 24800 Tokens · 上限 200000 Tokens");
