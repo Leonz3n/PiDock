@@ -30,6 +30,7 @@ import {
   type ServiceRunType,
 } from "../main/service-config.js";
 import { appendBounded, truncateText } from "../main/bounded-buffer.js";
+import { SERVICE_CONTROL_SCOPE } from "../main/pi-session.js";
 
 export type ServiceLifecycle = "stopped" | "running";
 
@@ -92,12 +93,19 @@ export interface ServiceControlDecision {
  * `PiSessionChannel.consumeApproval` (the Host spends the request on the
  * first successful control and persists it), so one approval covers one
  * `start` *or* one `stop` of this service (the target is the service
- * folder; the action is not part of the binding). No TTL in this slice:
+ * folder; the action is not part of the binding).
+ *
+ * Scope binding: only an approval minted with `SERVICE_CONTROL_SCOPE`
+ * qualifies. A turn approval for the same tool + target has no scope and
+ * is denied, so one user confirmation can never cover both the turn's
+ * command and a Host start/stop.
+ *
+ * No TTL in this slice:
  * an unconsumed approval stays valid until spent or dropped by restore
  * (restore spends approved requests).
  */
 export function verifyServiceControlApproval(input: {
-  approval: { status: string; tool: string; target: string; permissionAtRequest: string; consumedAt?: string } | undefined;
+  approval: { status: string; tool: string; target: string; permissionAtRequest: string; consumedAt?: string; scope?: string } | undefined;
   serviceId: string;
   taskDir: string;
 }): { ok: true } | { ok: false; reason: string } {
@@ -109,6 +117,7 @@ export function verifyServiceControlApproval(input: {
   if (approval.permissionAtRequest !== "default") {
     return { ok: false, reason: "服务启停需先确认（批准后重试，拒绝/取消不执行）" };
   }
+  if (approval.scope !== SERVICE_CONTROL_SCOPE) return { ok: false, reason: "确认请求与服务启停不匹配（用途未绑定）" };
   if (approval.tool !== "exec.run") return { ok: false, reason: "确认请求与服务启停不匹配" };
   const expected = `${input.taskDir}/services/${input.serviceId}`;
   if (approval.target !== expected) return { ok: false, reason: "确认请求与服务启停不匹配" };
@@ -220,7 +229,8 @@ export class TaskServiceRuntime {
    * so this function never re-implements the gate — it maps tiers to
    * outcomes): `read` ⇒ deny; `default` ⇒ needs a live, verified approval
    * (verified server-side via `verifyServiceControlApproval`, never a
-   * caller-claimed `approvalGranted` booleans); `auto` ⇒ allow.
+   * caller-claimed `approvalGranted` booleans, and only for approvals
+   * minted with `SERVICE_CONTROL_SCOPE`); `auto` ⇒ allow.
    * Human-UI control is only reachable through the attested human path
    * classified by `classifyServiceControlCaller`; its event label is the
    * audit trail (no gate bypass: the human path is the UI path, auditable
@@ -230,7 +240,7 @@ export class TaskServiceRuntime {
     serviceId: string;
     action: "start" | "stop";
     tier: "read" | "default" | "auto";
-    approval?: { status: string; tool: string; target: string; permissionAtRequest: string; consumedAt?: string } | undefined;
+    approval?: { status: string; tool: string; target: string; permissionAtRequest: string; consumedAt?: string; scope?: string } | undefined;
     /** @deprecated caller-claimed booleans are not trusted; pass `approval` instead. */
     approvalGranted?: boolean;
   }): ServiceControlDecision {

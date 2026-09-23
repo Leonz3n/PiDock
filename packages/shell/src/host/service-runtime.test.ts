@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { TaskServiceRuntime } from "./service-runtime.js";
-import { PiSessionChannel } from "../main/pi-session.js";
+import { SERVICE_CONTROL_SCOPE, PiSessionChannel } from "../main/pi-session.js";
 
 // Seam: #7 S2 Host-side service runtime (no Electron, no child_process).
 
@@ -60,7 +60,13 @@ describe("agent control tiers", () => {
   it("denies read, asks on default, allows auto and verified-approval default", () => {
     const runtime = registered();
     const dir = "/Users/name/Tasks/task-a1f92c3d";
-    const live = { status: "approved", tool: "exec.run", target: `${dir}/services/saas-web`, permissionAtRequest: "default" };
+    const live = {
+      status: "approved",
+      tool: "exec.run",
+      target: `${dir}/services/saas-web`,
+      permissionAtRequest: "default",
+      scope: SERVICE_CONTROL_SCOPE,
+    };
     expect(runtime.decideAgentControl({ serviceId: "saas-web", action: "start", tier: "read" }).ok).toBe(false);
     const ask = runtime.decideAgentControl({ serviceId: "saas-web", action: "start", tier: "default" });
     expect(ask.ok).toBe(false);
@@ -74,11 +80,14 @@ describe("agent control tiers", () => {
     expect(runtime.decideAgentControl({ serviceId: "saas-web", action: "start", tier: "default", approval: { ...live, consumedAt: "2026-09-23T00:00:00.000Z" } }).ok).toBe(false);
     // `executed` is NOT the replay guard: the real approve() sets it before
     // any Host-driven execution runs, so it must not deny here.
-    const approvedByTurn: { status: string; tool: string; target: string; permissionAtRequest: string; executed: boolean } = {
+    const approvedByHost: { status: string; tool: string; target: string; permissionAtRequest: string; executed: boolean } = {
       ...live,
       executed: true,
     };
-    expect(runtime.decideAgentControl({ serviceId: "saas-web", action: "start", tier: "default", approval: approvedByTurn }).ok).toBe(true);
+    expect(runtime.decideAgentControl({ serviceId: "saas-web", action: "start", tier: "default", approval: approvedByHost }).ok).toBe(true);
+    // Purpose binding: a turn approval for the same tool + target has no
+    // `service-control` scope, so it can never be spent on a start/stop.
+    expect(runtime.decideAgentControl({ serviceId: "saas-web", action: "start", tier: "default", approval: { ...live, scope: undefined } }).ok).toBe(false);
     // Foreign-service approval cannot spill over.
     expect(runtime.decideAgentControl({ serviceId: "saas-web", action: "start", tier: "default", approval: { ...live, target: `${dir}/services/other` } }).ok).toBe(false);
     expect(runtime.decideAgentControl({ serviceId: "saas-web", action: "start", tier: "default", approval: live }).ok).toBe(true);
@@ -104,8 +113,9 @@ describe("approval consumption (P0-1)", () => {
       model: "pidock-default",
       permission: "default",
     });
-    const gated = channel.gate("exec.run", `${dir}/services/saas-web`, "v12");
+    const gated = channel.gate("exec.run", `${dir}/services/saas-web`, "v12", undefined, SERVICE_CONTROL_SCOPE);
     if (gated.verdict !== "ask") throw new Error("expected an approval request");
+    expect(channel.snapshot().approvals[0].scope).toBe(SERVICE_CONTROL_SCOPE);
     channel.approve(gated.approvalId);
     return { channel, approvalId: gated.approvalId };
   }
@@ -133,7 +143,7 @@ describe("approval consumption (P0-1)", () => {
       model: "pidock-default",
       permission: "default",
     });
-    const gated = pending.gate("exec.run", `${dir}/services/saas-web`, "v12");
+    const gated = pending.gate("exec.run", `${dir}/services/saas-web`, "v12", undefined, SERVICE_CONTROL_SCOPE);
     if (gated.verdict !== "ask") throw new Error("expected an approval request");
     expect(pending.consumeApproval(gated.approvalId)).toBe(false);
     expect(pending.consumeApproval("approval-missing")).toBe(false);

@@ -113,6 +113,18 @@ export type PiGateDecision =
   | { verdict: "deny"; reason: string }
   | { verdict: "ask"; approvalId: string };
 
+/**
+ * Mint purpose tag on an approval. Absent = the turn flow's own
+ * `exec.run`/`browser.act` request (the default). `service-control` is
+ * stamped only by the Host when it mints a service start/stop approval
+ * ([PiDock 04] #7), so an identically shaped turn approval for the same
+ * tool + target can never be spent on service control (and vice versa).
+ */
+export type PiApprovalScope = "service-control";
+
+/** The only scope a Host service-control approval is minted with. */
+export const SERVICE_CONTROL_SCOPE: PiApprovalScope = "service-control";
+
 export interface PiApproval {
   id: string;
   callId: string;
@@ -134,6 +146,12 @@ export interface PiApproval {
    * gated command runs.
    */
   consumedAt?: string;
+  /**
+   * Mint purpose ([PiDock 04] #7): absent means the turn flow's own
+   * request; `service-control` marks a Host-minted service start/stop
+   * approval, which only `verifyServiceControlApproval` accepts.
+   */
+  scope?: PiApprovalScope;
 }
 
 export interface PiSessionOptions {
@@ -404,7 +422,7 @@ export class PiSessionChannel {
    * Permission changes apply to later calls only: the approval stores the
    * requesting tier.
    */
-  gate(toolName: string, target: string, contentVersion: string, currentCallId?: string): PiGateDecision {
+  gate(toolName: string, target: string, contentVersion: string, currentCallId?: string, scope?: PiApprovalScope): PiGateDecision {
     const preview = this.previewGate(toolName, target);
     if (preview.verdict !== "ask") return preview;
     const tool = isGatedTool(toolName);
@@ -423,6 +441,7 @@ export class PiSessionChannel {
       contentVersion,
       status: "pending",
       executed: false,
+      ...(scope !== undefined ? { scope } : {}),
     };
     this.approvals.push(approval);
     return { verdict: "ask", approvalId: approval.id };
