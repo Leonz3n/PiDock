@@ -270,6 +270,17 @@ export function planStopScope(input: {
 
 export type ExternalResourceKind = "queue" | "dtm-callback" | "database" | "cache" | "object-storage" | "other";
 
+export function isExternalResourceKind(value: unknown): value is ExternalResourceKind {
+  return (
+    value === "queue" ||
+    value === "dtm-callback" ||
+    value === "database" ||
+    value === "cache" ||
+    value === "object-storage" ||
+    value === "other"
+  );
+}
+
 /**
  * A resource used by the task that the app does not own: shared by default,
  * and never labelled "isolated" without proof (`isolatedByTask`). A fixed

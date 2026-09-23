@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  applyReallocationToBindings,
   auditBindingReadPoints,
   bindingsToTaskRows,
   describeDependencyRouting,
@@ -346,6 +345,7 @@ describe("routing and reallocation", () => {
           readPoints: ["仓库默认配置"],
         },
       ],
+      assignments: [{ unitId: "invoice:invoice-service", serviceId: "invoice-service", port: 9001, instanceId: "task-aaaaaaaa/invoice-service" }],
       units,
       environment: "testing",
     });
@@ -367,42 +367,30 @@ describe("routing and reallocation", () => {
     expect(instanceAddress("task-aaaaaaaa", "invoice-service")).toBe("task-aaaaaaaa/invoice-service");
   });
 
-  it("updates every affected consumer after a port reallocation", () => {
-    const bindings = [
-      {
-        key: "INVOICE_SERVICE_ENDPOINT",
-        value: "http://127.0.0.1:9001",
-        kind: "url" as const,
-        unitId: "invoice:invoice-service",
-        serviceId: "invoice-service",
-        instanceId: "task-aaaaaaaa/invoice-service",
-        port: 9001,
-        readPoints: ["仓库默认配置" as const],
-      },
-      {
-        key: "SAAS_BFF_URL",
-        value: "http://127.0.0.1:3001",
-        kind: "url" as const,
-        unitId: "front:saas-bff",
-        serviceId: "saas-bff",
-        instanceId: "task-aaaaaaaa/saas-bff",
-        port: 3001,
-        readPoints: [],
-      },
+  it("reflects a reallocated port in every consumer binding", () => {
+    const reservations = [
+      { port: 9001, owner: "task" as const, taskId: "task-bbbbbbbb", unitId: "invoice:invoice-service", serviceId: "invoice-service" },
     ];
-    const applied = applyReallocationToBindings({
-      bindings,
-      reallocated: [{ unitId: "invoice:invoice-service", before: 9001, after: 9002 }],
+    const ports = reallocatePortAssignments({
+      taskId: "task-aaaaaaaa",
+      units,
+      requests: [{ unitId: "invoice:invoice-service", port: 9001 }],
+      reservations,
+    });
+    expect(ports.reallocated).toEqual([{ unitId: "invoice:invoice-service", before: 9001, after: 9002 }]);
+    const resolved = resolveTaskBindings({
       rules: [
         { key: "INVOICE_SERVICE_ENDPOINT", unitId: "invoice:invoice-service", kind: "url", template: "http://127.0.0.1:${port}/v1" },
-        { key: "SAAS_BFF_URL", unitId: "front:saas-bff", kind: "url" },
+        { key: "INVOICE_SERVICE_URL", unitId: "invoice:invoice-service", kind: "host-port" },
       ],
+      assignments: ports.assignments,
+      units,
+      layers: { ...emptyLayers, repoDefaults: [{ key: "INVOICE_SERVICE_ENDPOINT", value: "https://shared.example", secret: false }] },
     });
-    expect(applied.updated).toEqual([
-      { key: "INVOICE_SERVICE_ENDPOINT", unitId: "invoice:invoice-service", before: "http://127.0.0.1:9001", after: "http://127.0.0.1:9002/v1" },
-    ]);
-    expect(applied.bindings[0]?.value).toBe("http://127.0.0.1:9002/v1");
-    expect(applied.bindings[0]?.port).toBe(9002);
-    expect(applied.bindings[1]?.value).toBe("http://127.0.0.1:3001");
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) return;
+    // Both consumers of the same instance moved together to the new port.
+    expect(resolved.bindings.map((binding) => binding.value)).toEqual(["http://127.0.0.1:9002/v1", "127.0.0.1:9002"]);
   });
+
 });

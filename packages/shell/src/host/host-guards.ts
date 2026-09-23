@@ -10,6 +10,7 @@ import { isHostTaskOp, isTaskOpOrigin, type HostTaskOp } from "../rpc/protocol.j
 import { isAbsoluteTaskRoot } from "../main/task-provision.js";
 import { PI_GATED_TOOL_NAMES } from "../main/pi-session.js";
 import { isBrowserAction, isPageRef } from "../main/browser-rules.js";
+import { isExternalResourceKind } from "../main/service-runs.js";
 
 export const DEFAULT_WORKSPACE_ID = "s1-default-workspace";
 
@@ -582,6 +583,156 @@ export function validateHostTaskOp(
     }
     if (action !== "start" && action !== "stop") {
       return { ok: false, error: "invalid-payload: task/controlService.action must be start/stop" };
+    }
+    return { ok: true };
+  }
+  // [PiDock 05] (#10) multi-service topology: shape-check the plan request
+  // here (semantic validation — unit/repo rules, port allocation, binding
+  // conflicts — runs Host-side in `TaskServiceTopology.setPlan`, which
+  // throws and becomes an `{ok:false}` envelope). The run-record and
+  // stop-scope ops are reads over the Host's registry.
+  if (op === "task/planServiceGroup") {
+    if (!isRecord(payload)) return { ok: false, error: "invalid-payload: task/planServiceGroup requires a payload object" };
+    const units = payload["units"];
+    if (
+      !Array.isArray(units) ||
+      !units.every(
+        (entry) =>
+          isRecord(entry) &&
+          typeof entry["unitId"] === "string" &&
+          entry["unitId"].trim().length > 0 &&
+          typeof entry["serviceId"] === "string" &&
+          typeof entry["name"] === "string" &&
+          (entry["location"] === "local" || entry["location"] === "remote") &&
+          (entry["repoDir"] === undefined || typeof entry["repoDir"] === "string") &&
+          (entry["runType"] === undefined ||
+            entry["runType"] === "long-lived" ||
+            entry["runType"] === "prepare" ||
+            entry["runType"] === "one-shot"),
+      )
+    ) {
+      return { ok: false, error: "invalid-payload: task/planServiceGroup.units must be an array of {unitId, serviceId, name, location}" };
+    }
+    const selectedRepoDirs = payload["selectedRepoDirs"];
+    if (selectedRepoDirs !== undefined && (!Array.isArray(selectedRepoDirs) || !selectedRepoDirs.every((entry) => typeof entry === "string"))) {
+      return { ok: false, error: "invalid-payload: task/planServiceGroup.selectedRepoDirs must be a string array" };
+    }
+    const dependencies = payload["dependencies"];
+    if (
+      dependencies !== undefined &&
+      (!Array.isArray(dependencies) ||
+        !dependencies.every(
+          (entry) =>
+            isRecord(entry) &&
+            typeof entry["from"] === "string" &&
+            entry["from"].trim().length > 0 &&
+            typeof entry["to"] === "string" &&
+            entry["to"].trim().length > 0 &&
+            (entry["kind"] === "call" || entry["kind"] === "prestart"),
+        ))
+    ) {
+      return { ok: false, error: "invalid-payload: task/planServiceGroup.dependencies must be an array of {from, to, kind}" };
+    }
+    const requests = payload["requests"];
+    if (
+      requests !== undefined &&
+      (!Array.isArray(requests) ||
+        !requests.every((entry) => isRecord(entry) && typeof entry["unitId"] === "string" && typeof entry["port"] === "number"))
+    ) {
+      return { ok: false, error: "invalid-payload: task/planServiceGroup.requests must be an array of {unitId, port}" };
+    }
+    const reservations = payload["reservations"];
+    if (
+      reservations !== undefined &&
+      (!Array.isArray(reservations) ||
+        !reservations.every(
+          (entry) =>
+            isRecord(entry) &&
+            typeof entry["port"] === "number" &&
+            (entry["owner"] === "external" || entry["owner"] === "task") &&
+            (entry["taskId"] === undefined || typeof entry["taskId"] === "string") &&
+            (entry["unitId"] === undefined || typeof entry["unitId"] === "string") &&
+            (entry["serviceId"] === undefined || typeof entry["serviceId"] === "string") &&
+            (entry["note"] === undefined || typeof entry["note"] === "string"),
+        ))
+    ) {
+      return { ok: false, error: "invalid-payload: task/planServiceGroup.reservations must be an array of {port, owner}" };
+    }
+    const rules = payload["rules"];
+    if (
+      rules !== undefined &&
+      (!Array.isArray(rules) ||
+        !rules.every(
+          (entry) =>
+            isRecord(entry) &&
+            typeof entry["key"] === "string" &&
+            entry["key"].trim().length > 0 &&
+            typeof entry["unitId"] === "string" &&
+            (entry["kind"] === "url" || entry["kind"] === "host-port") &&
+            (entry["template"] === undefined || typeof entry["template"] === "string"),
+        ))
+    ) {
+      return { ok: false, error: "invalid-payload: task/planServiceGroup.rules must be an array of {key, unitId, kind}" };
+    }
+    const layers = payload["layers"];
+    if (layers !== undefined) {
+      if (!isRecord(layers)) return { ok: false, error: "invalid-payload: task/planServiceGroup.layers must be an object" };
+      for (const layerName of ["repoDefaults", "shared", "privateEntries", "task"] as const) {
+        const rows = layers[layerName];
+        if (
+          !Array.isArray(rows) ||
+          !rows.every(
+            (row) => isRecord(row) && typeof row["key"] === "string" && typeof row["value"] === "string" && typeof row["secret"] === "boolean",
+          )
+        ) {
+          return { ok: false, error: `invalid-payload: task/planServiceGroup.layers.${layerName} must be an array of config rows` };
+        }
+      }
+    }
+    const environment = payload["environment"];
+    if (environment !== undefined && typeof environment !== "string") {
+      return { ok: false, error: "invalid-payload: task/planServiceGroup.environment must be a string" };
+    }
+    const externalResources = payload["externalResources"];
+    if (
+      externalResources !== undefined &&
+      (!Array.isArray(externalResources) ||
+        !externalResources.every(
+          (entry) =>
+            isRecord(entry) &&
+            typeof entry["resourceId"] === "string" &&
+            entry["resourceId"].trim().length > 0 &&
+            typeof entry["name"] === "string" &&
+            isExternalResourceKind(entry["kind"]) &&
+            (entry["isolatedByTask"] === undefined || typeof entry["isolatedByTask"] === "boolean"),
+        ))
+    ) {
+      return { ok: false, error: "invalid-payload: task/planServiceGroup.externalResources must be an array of {resourceId, name, kind}" };
+    }
+    const runTypes = payload["runTypes"];
+    if (runTypes !== undefined) {
+      if (!isRecord(runTypes)) return { ok: false, error: "invalid-payload: task/planServiceGroup.runTypes must be an object" };
+      for (const value of Object.values(runTypes)) {
+        if (value !== "long-lived" && value !== "prepare" && value !== "one-shot") {
+          return { ok: false, error: "invalid-payload: task/planServiceGroup.runTypes values must be long-lived/prepare/one-shot" };
+        }
+      }
+    }
+    return { ok: true };
+  }
+  if (op === "task/serviceRunRecords") {
+    if (payload !== undefined && !isRecord(payload)) {
+      return { ok: false, error: "invalid-payload: task/serviceRunRecords payload must be an object" };
+    }
+    return { ok: true };
+  }
+  if (op === "task/serviceStopScope") {
+    if (payload !== undefined && !isRecord(payload)) {
+      return { ok: false, error: "invalid-payload: task/serviceStopScope payload must be an object" };
+    }
+    const instanceId = isRecord(payload) ? payload["instanceId"] : undefined;
+    if (instanceId !== undefined && (typeof instanceId !== "string" || instanceId.trim().length === 0)) {
+      return { ok: false, error: "invalid-payload: task/serviceStopScope.instanceId must be a non-empty string" };
     }
     return { ok: true };
   }
