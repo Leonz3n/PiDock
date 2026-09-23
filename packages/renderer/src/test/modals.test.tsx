@@ -1,4 +1,4 @@
-import { screen, within } from "@testing-library/react";
+import { fireEvent, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { defaultWorkspaceRoot } from "../data/memoryHost";
@@ -10,8 +10,9 @@ describe("rename modals", () => {
     renderApp("/projects/atlas/tasks/release?session=main");
     await screen.findByRole("heading", { name: "发布前检查" });
 
-    // Leak a draft into the task rename modal, then abandon it.
-    await user.click(screen.getByRole("button", { name: "任务操作：发布前检查" }));
+    // Leak a draft into the task rename modal, then abandon it. The sidebar
+    // task card opens it from its context menu (prototype A has no ⋯ button).
+    fireEvent.contextMenu(screen.getByTestId("shell-sidebar").querySelector('[data-task-nav="release"]')!);
     const taskInput = await screen.findByLabelText("任务名称");
     await user.clear(taskInput);
     await user.type(taskInput, "泄漏的值");
@@ -30,7 +31,7 @@ describe("rename modals", () => {
     // Saved name must be the session's own, never the leaked task draft.
     expect(await screen.findByRole("button", { name: /实现与验证/ })).toBeInTheDocument();
     expect(screen.queryByText("泄漏的值")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "任务操作：发布前检查" })).toBeInTheDocument();
+    expect(screen.getByTestId("shell-sidebar").querySelector('[data-task-nav="release"]')).not.toBeNull();
   });
 
   it("still renames the session it was opened for", async () => {

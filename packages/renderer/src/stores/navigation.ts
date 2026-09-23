@@ -13,6 +13,24 @@ export type Route =
   | { view: "archive" }
   | { view: "settings" };
 
+/**
+ * Sidebar and breadcrumb wording per view ([UI 对齐 01] #25): one spelling per
+ * concept across the shell, the breadcrumb and the page headings.
+ */
+export const ROUTE_LABELS: Record<Route["view"], string> = {
+  attention: "需要处理",
+  project: "项目总览",
+  task: "任务工作区",
+  env: "环境与服务",
+  providers: "模型与 Provider",
+  usage: "Token 用量",
+  schedules: "定时任务",
+  capabilities: "能力管理",
+  remote: "远程访问",
+  archive: "已归档",
+  settings: "本机设置",
+};
+
 const simpleViews = ["env", "providers", "usage", "schedules", "capabilities", "remote", "archive", "attention", "settings"] as const;
 
 type SimpleView = (typeof simpleViews)[number];

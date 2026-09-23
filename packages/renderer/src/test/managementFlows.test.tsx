@@ -21,7 +21,8 @@ describe("project management", () => {
     await user.click(within(editor).getByRole("button", { name: "创建项目" }));
 
     expect(await screen.findByRole("heading", { name: "订单系统" })).toBeInTheDocument();
-    expect(screen.getByText("订单相关")).toBeInTheDocument();
+    // The page header and the sidebar workspace card both name the project.
+    expect(screen.getAllByText("订单相关").length).toBeGreaterThan(0);
 
     // Deleting the seeded project is blocked because it still has tasks.
     await user.click(screen.getByRole("button", { name: "项目管理" }));
@@ -269,7 +270,7 @@ describe("provider editing", () => {
   it("edits and removes a provider profile", async () => {
     const user = userEvent.setup();
     renderApp("/providers");
-    await screen.findByRole("heading", { name: "Provider 与上下文" });
+    await screen.findByRole("heading", { name: "模型与 Provider" });
 
     await user.click(screen.getAllByRole("button", { name: "编辑" })[0]!);
     const dialog = await screen.findByRole("dialog", { name: "编辑 Provider" });

@@ -79,7 +79,7 @@ describe("provider reasoning configuration", () => {
   it("syncs example model candidates and keeps a custom display name", async () => {
     const user = userEvent.setup();
     renderApp("/providers");
-    await screen.findByRole("heading", { name: "Provider 与上下文" });
+    await screen.findByRole("heading", { name: "模型与 Provider" });
 
     await user.click(screen.getAllByRole("button", { name: "编辑" })[0]!);
     const dialog = await screen.findByRole("dialog", { name: "编辑 Provider" });
@@ -106,7 +106,7 @@ describe("provider reasoning configuration", () => {
   it("lets a model declare custom reasoning levels", async () => {
     const user = userEvent.setup();
     renderApp("/providers");
-    await screen.findByRole("heading", { name: "Provider 与上下文" });
+    await screen.findByRole("heading", { name: "模型与 Provider" });
 
     await user.click(screen.getAllByRole("button", { name: "编辑" })[0]!);
     const dialog = await screen.findByRole("dialog", { name: "编辑 Provider" });
@@ -320,7 +320,9 @@ describe("scheduled task creation", () => {
 
     await user.click(screen.getByRole("button", { name: "定时任务" }));
     await screen.findByRole("heading", { name: "定时任务" });
-    expect(await screen.findByText(/每日 08:00/)).toBeInTheDocument();
+    // The schedules page shows it, and so does the task's sidebar card
+    // (a scheduled card's meta line is the next run).
+    expect((await screen.findAllByText(/每日 08:00/)).length).toBeGreaterThan(0);
   });
 });
 

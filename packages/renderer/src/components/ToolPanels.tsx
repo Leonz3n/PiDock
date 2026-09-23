@@ -6,6 +6,7 @@ import type { BrowserPage, Permission, Service, Subagent, Task, TaskDirectory, W
 import { directoryLinkPath } from "../data/directories";
 import { useDraftStore } from "../stores/drafts";
 import { useHostStore } from "../stores/host";
+import { useUiStore } from "../stores/ui";
 import {
   buildFreshnessLabel,
   codeStateLabel,
@@ -380,7 +381,10 @@ export function BrowserPanel({
   permission?: Permission;
 }) {
   const [pageId, setPageId] = useState(pages[0]?.id);
-  const [takeover, setTakeover] = useState<{ paused: boolean; reason?: string }>({ paused: false });
+  // The takeover flag lives in the ui store: the panel and the shell summary
+  // bar must report the same controller after a handover.
+  const takeoverPaused = useUiStore((state) => state.browserTakeover[taskId] ?? false);
+  const setTakeoverPaused = useUiStore((state) => state.setBrowserTakeover);
   const [marks, setMarks] = useState<{ id: string; label: string; needsRelocation: boolean }[]>([]);
   const [notice, setNotice] = useState<string>();
   const [annotation, setAnnotation] = useState("");
@@ -394,9 +398,9 @@ export function BrowserPanel({
 
   const toggleTakeover = async () => {
     if (!handle) return;
-    const paused = !takeover.paused;
+    const paused = !takeoverPaused;
     const result = await setBrowserTakeover({ taskId, page: handle, paused, reason: "用户接管" });
-    setTakeover(paused ? { paused: true, reason: "用户接管" } : { paused: false });
+    setTakeoverPaused(taskId, paused);
     setNotice(result.kind === "idle" ? undefined : result.text);
   };
 
@@ -455,12 +459,12 @@ export function BrowserPanel({
       </ul>
       <div className="flex flex-wrap items-center gap-2">
         <Button size="sm" onClick={() => void toggleTakeover()}>
-          {takeover.paused ? "交还控制" : "人工接管"}
+          {takeoverPaused ? "交还控制" : "人工接管"}
         </Button>
         <Button size="sm" variant="ghost" onClick={() => void refreshEvidence()}>
           获取证据
         </Button>
-        <Badge tone={takeover.paused ? "warn" : "neutral"}>{takeover.paused ? "人工接管中：自动化已暂停" : "Agent 控制中"}</Badge>
+        <Badge tone={takeoverPaused ? "warn" : "neutral"}>{takeoverPaused ? "人工接管中：自动化已暂停" : "Agent 控制中"}</Badge>
       </div>
       <div className="flex flex-col gap-1.5">
         <label className="text-[11px] text-muted" htmlFor="browser-marker-annotation">

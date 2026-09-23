@@ -14,3 +14,12 @@
   --font-sans: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
   --radius-panel: 10px;
 }
+
+@layer base {
+  /* Prototype A focus ring: every keyboard-reachable control shows it. */
+  button:focus-visible,
+  a:focus-visible {
+    outline: 2px solid #334d89;
+    outline-offset: 3px;
+  }
+}

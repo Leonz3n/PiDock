@@ -21,7 +21,7 @@ export function resetRenderer(path = "/") {
   useEventsStore.setState({ liveMessages: {}, runs: {} });
   useDraftStore.setState({ drafts: { ...seedDrafts } });
   useEnvDraftStore.setState({ drafts: {} });
-  useUiStore.setState({ panels: {}, modal: null, toasts: [], attentionFilter: "all" });
+  useUiStore.setState({ panels: {}, browserTakeover: {}, modal: null, toasts: [], attentionFilter: "all" });
   window.history.replaceState({}, "", path);
 }
 

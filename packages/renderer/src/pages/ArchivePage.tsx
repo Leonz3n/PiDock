@@ -42,7 +42,7 @@ export function ArchivePage() {
   return (
     <div className="flex flex-col gap-4">
       <header>
-        <h1 className="text-base font-medium text-ink">归档与清理</h1>
+        <h1 className="text-base font-medium text-ink">已归档</h1>
         <p className="mt-1 text-xs text-muted">
           归档停止执行、使未执行确认失效并暂停调度；恢复任务不自动启动服务或重新启用调度。清理只面向已归档任务，且与归档相互独立。
         </p>
