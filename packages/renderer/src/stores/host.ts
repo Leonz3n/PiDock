@@ -27,6 +27,7 @@ import type {
   Permission,
   Project,
   ProjectDirectory,
+  ProviderDiscoveryView,
   ProviderProfile,
   Reference,
   Schedule,
@@ -89,6 +90,8 @@ type HostState = {
   addCapability: (input: AddCapabilityInput) => Promise<Capability>;
   saveProvider: (input: SaveProviderInput) => Promise<ProviderProfile>;
   removeProvider: (providerId: string) => Promise<void>;
+  setProviderEnabled: (providerId: string, enabled: boolean) => Promise<void>;
+  syncProviderModels: (providerId: string) => Promise<ProviderDiscoveryView>;
   setSessionPermission: (taskId: string, sessionId: string, permission: Permission) => Promise<void>;
   setSessionModel: (taskId: string, sessionId: string, providerId: string, model: string) => Promise<void>;
   setSessionThinking: (taskId: string, sessionId: string, level: string) => Promise<void>;
@@ -285,6 +288,13 @@ export const useHostStore = create<HostState>((set, get) => ({
     await get().adapter.removeProvider(providerId);
     await get().refresh();
   },
+
+  setProviderEnabled: async (providerId, enabled) => {
+    await get().adapter.setProviderEnabled(providerId, enabled);
+    await get().refresh();
+  },
+
+  syncProviderModels: (providerId) => get().adapter.syncProviderModels(providerId),
 
   setSessionPermission: async (taskId, sessionId, permission) => {
     await get().adapter.setSessionPermission(taskId, sessionId, permission);

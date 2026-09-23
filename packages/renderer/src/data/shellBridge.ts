@@ -59,7 +59,12 @@ export type ShellTaskOp =
   | "task/controlService"
   | "task/serviceStatus"
   | "task/serviceLog"
-  | "task/browserAction";
+  | "task/browserAction"
+  | "task/setProviderCatalog"
+  | "task/sessionContext"
+  | "task/setSessionModel"
+  | "task/setSessionThinking"
+  | "task/compactSession";
 
 /**
  * Task-scoped op through main into the per-workspace Host. Rejects outside
@@ -333,6 +338,92 @@ export async function browserActionThroughShell(input: {
   }
   try {
     return await shellTaskOp(input.taskId, "task/browserAction", payload);
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * [PiDock 11] (#9) provider/model/context ops through the shell
+ * (`host/task` + `task/setProviderCatalog|sessionContext|setSessionModel|
+ * setSessionThinking|compactSession`). The redacted provider catalog (ids,
+ * names, protocols and model declarations — never an auth reference value)
+ * rides the switch so the Host validates the selection and enforces the switch
+ * gate itself. `{ok:false,error}` envelopes are returned, never thrown, so the
+ * picker keeps its state and shows the refusal (e.g. `busy-round`,
+ * `context-over-limit`).
+ */
+export async function setProviderCatalogThroughShell(input: {
+  taskId: string;
+  catalog: Record<string, unknown>[];
+}): Promise<ShellTaskOpResult> {
+  try {
+    return await shellTaskOp(input.taskId, "task/setProviderCatalog", { catalog: input.catalog });
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+export async function sessionContextThroughShell(input: {
+  taskId: string;
+  sessionId: string;
+  catalog?: Record<string, unknown>[];
+}): Promise<ShellTaskOpResult> {
+  const payload: Record<string, unknown> = { sessionId: input.sessionId };
+  if (input.catalog !== undefined) payload["catalog"] = input.catalog;
+  try {
+    return await shellTaskOp(input.taskId, "task/sessionContext", payload);
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+export async function setSessionModelThroughShell(input: {
+  taskId: string;
+  sessionId: string;
+  providerId: string;
+  model: string;
+  reason?: "human-switch" | "agent-switch";
+  catalog?: Record<string, unknown>[];
+}): Promise<ShellTaskOpResult> {
+  const payload: Record<string, unknown> = {
+    sessionId: input.sessionId,
+    providerId: input.providerId,
+    model: input.model,
+  };
+  if (input.reason !== undefined) payload["reason"] = input.reason;
+  if (input.catalog !== undefined) payload["catalog"] = input.catalog;
+  try {
+    return await shellTaskOp(input.taskId, "task/setSessionModel", payload);
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+export async function setSessionThinkingThroughShell(input: {
+  taskId: string;
+  sessionId: string;
+  level: string;
+  catalog?: Record<string, unknown>[];
+}): Promise<ShellTaskOpResult> {
+  const payload: Record<string, unknown> = { sessionId: input.sessionId, level: input.level };
+  if (input.catalog !== undefined) payload["catalog"] = input.catalog;
+  try {
+    return await shellTaskOp(input.taskId, "task/setSessionThinking", payload);
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+export async function compactSessionThroughShell(input: {
+  taskId: string;
+  sessionId: string;
+  catalog?: Record<string, unknown>[];
+}): Promise<ShellTaskOpResult> {
+  const payload: Record<string, unknown> = { sessionId: input.sessionId };
+  if (input.catalog !== undefined) payload["catalog"] = input.catalog;
+  try {
+    return await shellTaskOp(input.taskId, "task/compactSession", payload);
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }

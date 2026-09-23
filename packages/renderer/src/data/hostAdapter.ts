@@ -14,6 +14,7 @@ import type {
   ServiceMode,
   Project,
   ProjectDirectory,
+  ProviderDiscoveryView,
   ProviderProfile,
   RemoteDevice,
   Reference,
@@ -84,8 +85,18 @@ export type SaveProviderInput = {
   name: string;
   protocol: string;
   baseUrl: string;
+  /** Reference name in the machine-private configuration; a literal secret is rejected. */
+  authRef?: string;
   enabled: boolean;
-  models: { id: string; name?: string; contextWindow: number; supportsImages?: boolean; thinking?: ModelThinking }[];
+  models: {
+    id: string;
+    name?: string;
+    contextWindow: number;
+    /** Max output tokens for this model (same unit as `contextWindow`). */
+    maxOutput?: number;
+    supportsImages?: boolean;
+    thinking?: ModelThinking;
+  }[];
 };
 
 /** Edit a scheduled task's cadence, prompt, model and permission. */
@@ -298,6 +309,14 @@ export interface HostAdapter {
   /** Create or edit a provider profile; `removeProvider` deletes one. */
   saveProvider(input: SaveProviderInput): Promise<ProviderProfile>;
   removeProvider(providerId: string): Promise<void>;
+  /** Enable/disable one provider without touching its models or any session. */
+  setProviderEnabled(providerId: string, enabled: boolean): Promise<ProviderProfile>;
+  /**
+   * 「同步模型列表」: fetch candidate model ids through the provider's own
+   * connection. Only the candidate list changes — configured model rows are
+   * never overwritten, auto-added or removed.
+   */
+  syncProviderModels(providerId: string): Promise<ProviderDiscoveryView>;
 
   /** Set the current session's permission tier (read / default / auto). */
   setSessionPermission(taskId: string, sessionId: string, permission: Permission): Promise<void>;

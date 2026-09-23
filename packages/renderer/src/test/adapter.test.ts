@@ -1,4 +1,5 @@
 import { createMemoryHost, defaultWorkspaceRoot } from "../data/memoryHost";
+import { describeHistoryAttribution } from "../data/providerState";
 
 describe("memory Host adapter", () => {
   it("does not execute rejected or expired approvals", async () => {
@@ -371,19 +372,48 @@ describe("memory Host adapter", () => {
     expect(edited.models[0].contextWindow).toBe(64);
 
     await expect(
-      host.saveProvider({ name: "x", protocol: "p", baseUrl: "", enabled: true, models: [{ id: "a", contextWindow: 0 }] }),
+      host.saveProvider({
+        name: "x",
+        protocol: "openai-responses",
+        baseUrl: "https://gateway.example.com/v1",
+        enabled: true,
+        models: [{ id: "a", contextWindow: 0 }],
+      }),
     ).rejects.toThrow("上下文窗口必须为正整数");
+    // Missing address is reported with its own locatable message, and a literal
+    // credential is rejected instead of being stored as an auth reference.
+    await expect(host.saveProvider({ name: "x", protocol: "openai-responses", baseUrl: "", enabled: true, models: [{ id: "a", contextWindow: 8 }] })).rejects.toThrow(
+      "请填写服务地址",
+    );
+    await expect(
+      host.saveProvider({
+        name: "x",
+        protocol: "openai-responses",
+        baseUrl: "https://gateway.example.com/v1",
+        authRef: "sk-live-abcdefghijklmnop",
+        enabled: true,
+        models: [{ id: "a", contextWindow: 8 }],
+      }),
+    ).rejects.toThrow("认证引用不能是凭据明文");
 
     await host.removeProvider(created.id);
     expect((await host.getWorkspace()).providers.some((item) => item.id === created.id)).toBe(false);
   });
 
-  it("removes a provider and repoints its sessions", async () => {
+  it("keeps the session's provider id when its configuration is removed (never reroutes)", async () => {
     const host = createMemoryHost();
     await host.removeProvider("provider-anthropic");
     const session = await host.getSession("release", "main");
-    expect(session?.providerId).not.toBe("provider-anthropic");
+    // [PiDock 11] #9: a removed configuration is reported unavailable through
+    // the attribution helper instead of silently switching the session to
+    // another account.
+    expect(session?.providerId).toBe("provider-anthropic");
     expect((await host.getWorkspace()).providers.some((item) => item.id === "provider-anthropic")).toBe(false);
+    const attribution = describeHistoryAttribution((await host.getWorkspace()).providers, {
+      providerId: "provider-anthropic",
+      model: "Claude Sonnet",
+    });
+    expect(attribution).toMatchObject({ providerId: "provider-anthropic", providerName: null, availability: "missing" });
   });
 
   it("sets session permission, model and thinking in memory", async () => {
@@ -393,12 +423,31 @@ describe("memory Host adapter", () => {
     await host.setSessionPermission("release", "main", "auto");
     expect((await host.getSession("release", "main"))?.permission).toBe("auto");
 
-    await host.setSessionModel("release", "main", "provider-openai", "团队轻量模型");
-    const session = await host.getSession("release", "main");
-    expect(session?.model).toBe("团队轻量模型");
+    // [PiDock 11] #9: the seeded session already occupies 24.8k, so the 16k
+    // target is over-limit and the switch is refused without changing anything.
+    await expect(host.setSessionModel("release", "main", "provider-openai", "团队轻量模型")).rejects.toThrow("超过目标模型上限");
+    expect((await host.getSession("release", "main"))?.model).toBe("Claude Sonnet");
 
+    await host.setSessionModel("release", "main", "provider-anthropic", "Claude Haiku");
+    const session = await host.getSession("release", "main");
+    expect(session?.model).toBe("Claude Haiku");
+    expect(session?.switchEvents).toHaveLength(1);
+    expect(session?.switchEvents?.[0]).toMatchObject({
+      from: { providerId: "provider-anthropic", model: "Claude Sonnet" },
+      to: { providerId: "provider-anthropic", model: "Claude Haiku" },
+    });
+
+    // Anthropic models declare no tiers (catalog unknown), so an explicit
+    // level follows the catalog while clearing it is refused.
     await host.setSessionThinking("release", "main", "high");
     expect((await host.getSession("release", "main"))?.thinking).toBe("high");
+    await expect(host.setSessionThinking("release", "main", "")).rejects.toThrow("不能声明已关闭推理");
+    // The local model declares off/low/medium/high, so an undeclared tier is
+    // refused and a declared one is accepted.
+    await host.setSessionModel("release", "main", "provider-local", "本地 Qwen");
+    await expect(host.setSessionThinking("release", "main", "max")).rejects.toThrow("模型未声明该推理档位");
+    await host.setSessionThinking("release", "main", "medium");
+    expect((await host.getSession("release", "main"))?.thinking).toBe("medium");
     await expect(host.setSessionModel("release", "main", "provider-openai", "不存在")).rejects.toThrow("模型不可用");
   });
 

@@ -20,12 +20,16 @@ import type {
 } from "./hostAdapter";
 import type { Approval, ApprovalStatus, Reference, RunRecord, RunState } from "./types";
 import {
+  compactSessionThroughShell,
   controlServiceThroughShell,
   isShellConnected,
+  setSessionModelThroughShell,
+  setSessionThinkingThroughShell,
   shellTaskOp,
   sendMessageThroughShell,
   type ShellTaskOpResult,
 } from "./shellBridge";
+import type { ProviderProfile } from "./types";
 
 function shellResultError(result: ShellTaskOpResult, fallback: string): Error {
   const message = typeof result.error === "string" && result.error.length > 0 ? result.error : fallback;
@@ -157,6 +161,30 @@ function toApprovalFromHostRecord(taskId: string, record: HostApprovalRecord): A
     requestedAt,
     expiresAt: new Date(Date.parse(requestedAt) + 15 * 60 * 1000).toISOString(),
   };
+}
+
+/**
+ * Redacted provider catalog for the Host switch/gate ([PiDock 11] #9): ids,
+ * names, protocols and per-model declarations only. The auth *reference value*
+ * never crosses this boundary — the Host only needs availability/window data.
+ */
+async function shellProviderCatalog(fallback: HostAdapter): Promise<Record<string, unknown>[]> {
+  const workspace = await fallback.getWorkspace();
+  return workspace.providers.map((provider: ProviderProfile) => ({
+    id: provider.id,
+    name: provider.name,
+    protocol: provider.protocol,
+    baseUrl: provider.baseUrl,
+    enabled: provider.enabled,
+    models: provider.models.map((model) => ({
+      id: model.id,
+      ...(model.name !== undefined ? { name: model.name } : {}),
+      contextWindow: model.contextWindow,
+      ...(model.maxOutput !== undefined ? { maxOutput: model.maxOutput } : {}),
+      ...(model.supportsImages !== undefined ? { supportsImages: model.supportsImages } : {}),
+      ...(model.thinking !== undefined ? { thinking: model.thinking } : {}),
+    })),
+  }));
 }
 
 export function createShellHostAdapter(fallback: HostAdapter): HostAdapter {
@@ -375,6 +403,39 @@ export function createShellHostAdapter(fallback: HostAdapter): HostAdapter {
           if (!probe.ok) return (target as HostAdapter).setServiceRunning(taskId, serviceId, running);
           const result = await controlServiceThroughShell({ taskId, serviceId, action: running ? "start" : "stop" });
           if (!result.ok) throw shellResultError(result, "服务启停失败，请重试");
+        };
+      }
+      // [PiDock 11] (#9) provider/model/context ops. The Host owns the switch
+      // gate (busy round/tool -> availability -> strict context bound) and
+      // validates the redacted catalog it receives; the fallback adapter then
+      // mirrors the accepted selection into the visible session state. A Host
+      // refusal throws before the mirror runs, so the visible model, history
+      // and draft stay untouched.
+      if (property === "setSessionModel") {
+        return async (taskId: string, sessionId: string, providerId: string, model: string) => {
+          if (!isShellConnected()) return (target as HostAdapter).setSessionModel(taskId, sessionId, providerId, model);
+          const catalog = await shellProviderCatalog(target as HostAdapter);
+          const result = await setSessionModelThroughShell({ taskId, sessionId, providerId, model, reason: "human-switch", catalog });
+          if (!result.ok) throw shellResultError(result, "切换模型失败，请重试");
+          return (target as HostAdapter).setSessionModel(taskId, sessionId, providerId, model);
+        };
+      }
+      if (property === "setSessionThinking") {
+        return async (taskId: string, sessionId: string, level: string) => {
+          if (!isShellConnected()) return (target as HostAdapter).setSessionThinking(taskId, sessionId, level);
+          const catalog = await shellProviderCatalog(target as HostAdapter);
+          const result = await setSessionThinkingThroughShell({ taskId, sessionId, level, catalog });
+          if (!result.ok) throw shellResultError(result, "设置推理档位失败，请重试");
+          return (target as HostAdapter).setSessionThinking(taskId, sessionId, level);
+        };
+      }
+      if (property === "compactSessionContext") {
+        return async (taskId: string, sessionId: string) => {
+          if (!isShellConnected()) return (target as HostAdapter).compactSessionContext(taskId, sessionId);
+          const catalog = await shellProviderCatalog(target as HostAdapter);
+          const result = await compactSessionThroughShell({ taskId, sessionId, catalog });
+          if (!result.ok) throw shellResultError(result, "上下文压缩失败，请重试");
+          return (target as HostAdapter).compactSessionContext(taskId, sessionId);
         };
       }
       if (property === "simulateExpiry") {
