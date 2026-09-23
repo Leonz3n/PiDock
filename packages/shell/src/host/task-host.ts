@@ -586,9 +586,29 @@ export class TaskWorkspaceHost {
     return this.schedules.runs(scheduleId);
   }
 
-  /** Due-trigger evaluation (read path; no timer exists in the Host). */
+  /**
+   * Due-trigger evaluation (read path; no timer exists in the Host). A
+   * confirmation whose deadline passed is settled first (盒子 4「先结束旧确认再判断
+   * 新周期」), so an expired wait never blocks the next cycle and never keeps a
+   * run looking live.
+   */
   evaluateSchedules(): ScheduledRunRecord[] {
-    return this.isArchived() ? [] : this.schedules.evaluateDue();
+    if (this.isArchived()) return [];
+    for (const expired of this.executions.settleDueApprovals()) this.endExpiredApprovalWait(expired.sessionId);
+    return this.schedules.evaluateDue();
+  }
+
+  /**
+   * 盒子 4「到期先使旧确认失效并结束旧执行」: an expired wait also ends its session
+   * turn and drops the write right that turn kept, so a confirmation nobody can
+   * approve any more never blocks the next cycle or another session.
+   */
+  private endExpiredApprovalWait(sessionId: string): void {
+    const channel = this.channels.get(sessionId);
+    channel?.cancel();
+    if (channel) this.store.writeSession(this.taskDir, channel.snapshot());
+    this.settleApprovalClaim(sessionId);
+    this.sharedPaths.release({ taskId: this.taskId, sessionId });
   }
 
   /**

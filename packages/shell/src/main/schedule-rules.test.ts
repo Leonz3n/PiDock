@@ -12,6 +12,7 @@ import {
   remoteFetchVerdict,
   SCHEDULE_TEMPLATES,
   scheduledApprovalDeadline,
+  templateFetchPlan,
   validateScheduleConfig,
   type ScheduleRule,
 } from "./schedule-rules.js";
@@ -232,5 +233,16 @@ describe("stale remote records", () => {
     expect(remoteFetchVerdict({ attemptedAt: "2026-09-23T09:00:00.000Z", failureReason: "认证失败" }).statement).toContain("不能声称最新");
     expect(remoteFetchVerdict({ attemptedAt: "2026-09-23T09:00:00.000Z" }).latest).toBe(false);
     expect(remoteFetchVerdict({ attemptedAt: "2026-09-23T09:00:00.000Z", fetchedAt: "2026-09-23T08:59:00.000Z" })).toMatchObject({ latest: true });
+  });
+
+  it("fetches remote records for a template without merging the workspace", () => {
+    const plan = templateFetchPlan({ templateId: "tl-weekly-contribution", attemptedAt: "2026-09-23T09:00:00.000Z", failureReason: "网络不可用" });
+    expect(plan).toMatchObject({ templateId: "tl-weekly-contribution", mergesWorkspace: false, writesWorkspace: false, verdict: { latest: false } });
+    expect(plan.verdict.statement).toContain("不能声称最新");
+    expect(templateFetchPlan({ templateId: "tl-release-prep", attemptedAt: "2026-09-23T09:00:00.000Z", fetchedAt: "2026-09-16T09:00:00.000Z", failureReason: "网络不可用" }).verdict.statement).toContain("基于");
+    expect(templateFetchPlan({ templateId: "tl-standup", attemptedAt: "2026-09-23T09:00:00.000Z", fetchedAt: "2026-09-23T08:30:00.000Z" })).toMatchObject({
+      verdict: { latest: true },
+      mergesWorkspace: false,
+    });
   });
 });

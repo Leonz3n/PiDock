@@ -200,6 +200,27 @@ describe("[PiDock 18] schedule manager", () => {
     expect(() => schedules.runNow("schedule-404")).toThrow("unknown-schedule");
   });
 
+  it("never re-triggers an occurrence after a clock rollback and re-advance", () => {
+    let now = "2026-09-23T02:00:00.000Z";
+    const { store } = memorySchedules();
+    const { ports, started } = fakePorts({ now: () => now });
+    const schedules = new TaskSchedules(TASK_ID, TASK_DIR, store, ports);
+    const saved = schedules.save({ ...BASE, enabled: true });
+    const scheduleId = saved.ok ? saved.schedule.scheduleId : "";
+    now = "2026-09-24T01:20:00.000Z";
+    expect(schedules.evaluateDue()).toHaveLength(1);
+    // The clock jumps backwards: nothing is due, and nothing is replayed.
+    now = "2026-09-23T12:00:00.000Z";
+    expect(schedules.evaluateDue()).toEqual([]);
+    // Forward again to the same instant: the occurrence key is already recorded.
+    now = "2026-09-24T01:20:00.000Z";
+    expect(schedules.evaluateDue()).toEqual([]);
+    now = "2026-09-24T23:00:00.000Z";
+    expect(schedules.evaluateDue()).toEqual([]);
+    expect(schedules.runs(scheduleId)).toHaveLength(1);
+    expect(started).toHaveLength(1);
+  });
+
   it("records a failed run when starting the session throws, and keeps the history", () => {
     const { store } = memorySchedules();
     const { ports } = fakePorts({
@@ -331,6 +352,41 @@ describe("[PiDock 18] Host wiring", () => {
     expect(runs[0]?.reason).toContain("只读会话");
     expect(runs[0]?.sessionId).toBeUndefined();
     expect(taskHost.scheduleRuns(scheduleId)[0]?.result).toBe("failed");
+  });
+
+  it("settles an expired scheduled confirmation before judging the next cycle, and an edit never extends it", () => {
+    let now = "2026-09-23T02:00:00.000Z";
+    const taskHost = host(() => now);
+    taskHost.provision({ name: "定时巡检", dirId: "task-abcdef12", remoteBranch: "main", fetchedCommit: "a5a4a0d1234", repos: ["front-monorepo"] });
+    const saved = taskHost.saveSchedule({ name: "每日巡检", ruleText: "每日 09:15", timezone: "Asia/Shanghai", prompt: "检查风险", providerId: "provider-local", model: "pidock-default", permission: "default", enabled: true });
+    const scheduleId = saved.ok ? saved.schedule.scheduleId : "";
+    // A scheduled turn parked on a confirmation whose deadline is min(24h, next plan).
+    const waiting = taskHost.sendMessage(
+      "scheduled-parked-1",
+      "运行命令",
+      {
+        tool: "exec.run",
+        target: `${TASK_DIR}/run.sh`,
+        execute: (call) => ({ tool: call.tool, kind: call.kind, target: call.target, contentVersion: call.contentVersion, output: "pending" }),
+      },
+      { scheduleId, scheduleConfigVersion: 1, approvalExpiresAt: "2026-09-23T12:00:00.000Z" },
+    );
+    expect(waiting.state).toBe("approval");
+    // Editing the rule (a later plan) must not move the already-minted deadline.
+    now = "2026-09-23T06:00:00.000Z";
+    expect(taskHost.saveSchedule({ name: "每日巡检", ruleText: "每周五 15:00", timezone: "Asia/Shanghai", prompt: "检查风险", providerId: "provider-local", model: "pidock-default", permission: "default", scheduleId }).ok).toBe(true);
+    const [still] = taskHost.executionState("scheduled-parked-1").executions;
+    expect(still?.approval?.expiresAt).toBe("2026-09-23T12:00:00.000Z");
+    // Past the deadline the evaluation ends the old confirmation first, then the
+    // new cycle runs (先结束旧确认再判断新周期).
+    now = "2026-09-25T08:00:00.000Z";
+    const runs = taskHost.evaluateSchedules();
+    const [settled] = taskHost.executionState("scheduled-parked-1").executions;
+    expect(settled).toMatchObject({ state: "expired", approval: { status: "expired" } });
+    // The expired confirmation can never authorize the old run afterwards.
+    expect(() => taskHost.approve("scheduled-parked-1", waiting.approvalId ?? "")).toThrow("invalid-execution-transition");
+    expect(runs[0]).toMatchObject({ result: "completed", sessionId: "scheduled-run-1" });
+    expect(taskHost.scheduleRuns(scheduleId).filter((run) => run.result === "completed")).toHaveLength(1);
   });
 
   it("does not run a schedule of an archived task and refuses 立即运行 until restored", () => {

@@ -677,6 +677,25 @@ export function planTrigger(input: TriggerInput): TriggerDecision {
   return { decision: "run", occurrence, occurrenceKey: key };
 }
 
+/**
+ * 盒子 2 后半：模板／统计只能“获取远程新记录”，不得自动合并工作区。The plan
+ * always reports `mergesWorkspace: false` — a fetch is evidence for the prompt,
+ * never a write into the task workspace.
+ */
+export function templateFetchPlan(input: {
+  templateId: string;
+  attemptedAt: string;
+  fetchedAt?: string;
+  failureReason?: string;
+}): { templateId: string; verdict: RemoteFetchVerdict; mergesWorkspace: false; writesWorkspace: false } {
+  return {
+    templateId: input.templateId,
+    verdict: remoteFetchVerdict(input),
+    mergesWorkspace: false,
+    writesWorkspace: false,
+  };
+}
+
 /** Manual 立即运行 has its own result identity and never moves the plan (盒子 4). */
 export function manualRunKey(scheduleId: string, requestedAt: string): string {
   return `${scheduleId}#manual@${requestedAt}`;
