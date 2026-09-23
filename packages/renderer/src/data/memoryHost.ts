@@ -34,6 +34,9 @@ import type {
   Subagent,
   Task,
   TaskWriteLockView,
+  UsageCleanupScope,
+  UsageEndState,
+  UsageKind,
   UsageRecord,
   Workspace,
   WorkspaceFile,
@@ -57,6 +60,7 @@ import type {
   UsageFilter,
 } from "./hostAdapter";
 import { sessionKeyOf } from "./sessionKey";
+import { describeUsageCleanupScope, filterUsageRecords, usageWindow } from "./usageState";
 import { sessionWriteStates, type SessionWriteState } from "./writeCoordination";
 import { projectServiceTopology, type ServiceTopologyView } from "./serviceTopology";
 import { isSensitiveKey, nextTemplateVersion } from "./configRows";
@@ -238,9 +242,24 @@ export const scheduleTemplates: ScheduleTemplate[] = [
   },
 ];
 
+const usageKinds: UsageKind[] = ["turn", "turn", "turn", "compaction", "model-tool", "branch-summary"];
+const usageEndStates: UsageEndState[] = ["completed", "completed", "completed", "failed", "cancelled", "awaiting-approval"];
+
+/**
+ * Deterministic usage fixture for [PiDock 12] #12. Attribution is frozen per
+ * record (provider config fingerprint, requested/actual model), cache write and
+ * reasoning ride along, and every sixth row is a compaction/model-tool/branch
+ * summary instead of a turn. Rows whose upstream never reported usage are
+ * marked `missing` so the page can prove it is not counted as zero.
+ */
 function makeUsage(total: number): UsageRecord[] {
   const providers = ["provider-anthropic", "provider-openai", "provider-local"];
   const models = ["Claude Sonnet", "团队轻量模型", "本地 Qwen"];
+  const versions = [
+    "anthropic-messages::https://api.anthropic.com::claude-sonnet",
+    "openai-responses::https://gateway.example.com::团队轻量模型",
+    "anthropic-messages::local::本地 Qwen",
+  ];
   const targets: [string, string, string][] = [
     ["atlas", "release", "main"],
     ["atlas", "release", "deploy"],
@@ -253,16 +272,25 @@ function makeUsage(total: number): UsageRecord[] {
     const providerIndex = index % providers.length;
     const day = 21 - Math.floor(index / 24);
     const hour = 23 - (index % 24);
+    const output = 480 + ((index * 283) % 2400);
+    const unreported = index % 17 === 0;
     records.push({
       id: `usage-${index + 1}`,
       taskId,
       projectId,
       sessionId,
       providerId: providers[providerIndex],
+      providerVersion: versions[providerIndex],
       model: models[providerIndex],
+      ...(index % 11 === 0 ? { responseModel: `${models[providerIndex]}-2026-08` } : {}),
+      kind: usageKinds[index % usageKinds.length],
+      endState: usageEndStates[index % usageEndStates.length],
+      completeness: unreported ? "missing" : index % 13 === 0 ? "partial" : "reported",
       input: 3200 + ((index * 617) % 9600),
-      output: 480 + ((index * 283) % 2400),
+      output,
       cacheRead: index % 5 === 0 ? 1200 + ((index * 97) % 800) : 0,
+      cacheWrite: index % 7 === 0 ? 320 + ((index * 41) % 480) : 0,
+      ...(index % 4 === 0 ? { reasoning: Math.floor(output / 3) } : {}),
       at: `2026-09-${String(Math.max(day, 1)).padStart(2, "0")}T${String(hour).padStart(2, "0")}:12:00+08:00`,
     });
   }
@@ -1172,15 +1200,22 @@ class MemoryHost implements HostAdapter {
   }
 
   async getUsage(filter: UsageFilter = {}) {
-    return this.usage.filter((record) => {
-      if (filter.taskId && record.taskId !== filter.taskId) return false;
-      if (filter.projectId && record.projectId !== filter.projectId) return false;
-      if (filter.providerId && record.providerId !== filter.providerId) return false;
-      if (filter.sessionId && record.sessionId !== filter.sessionId) return false;
-      if (filter.from && record.at < filter.from) return false;
-      if (filter.to && record.at > filter.to) return false;
-      return true;
+    // [PiDock 12] #12: the memory mirror applies the same ledger reading as the
+    // Host (kind/session/provider/model filters plus the declared timezone for
+    // date-only bounds) so the page behaves identically on both adapters.
+    return filterUsageRecords(this.usage, filter);
+  }
+
+  async clearUsage(scope: UsageCleanupScope): Promise<{ removed: number; remaining: number; description: string }> {
+    const before = this.usage.length;
+    this.usage = this.usage.filter((record) => {
+      if (scope.kind === "all") return false;
+      if (scope.kind === "session") return record.sessionId !== scope.sessionId;
+      const window = usageWindow({ to: scope.before });
+      const instant = Date.parse(record.at);
+      return window.toMs === null || Number.isNaN(instant) || instant > window.toMs;
     });
+    return { removed: before - this.usage.length, remaining: this.usage.length, description: describeUsageCleanupScope(scope) };
   }
 
   async sendMessage(
@@ -1301,17 +1336,25 @@ class MemoryHost implements HostAdapter {
     session.contextSource = "actual";
     // [PiDock 02]: from the first model call, record the stable call identity
     // (provider + model + usage source + events) so later Provider/usage work
-    // can recover it instead of re-reading rendered text.
+    // can recover it instead of re-reading rendered text. [PiDock 12] #12: the
+    // same record carries what produced it, how it ended and how complete the
+    // upstream report was, so the statistics page can separate known from
+    // unknown instead of reading every row as a full report.
     this.usage.push({
       id: record.id,
       taskId,
       projectId: task.projectId,
       sessionId,
       providerId: session.providerId,
+      providerVersion: this.providerVersionOf(session.providerId),
       model: session.model,
+      kind: "turn",
+      endState: finalState === "approval" ? "awaiting-approval" : finalState === "failed" ? "failed" : "completed",
+      completeness: "reported",
       input: 3200 + text.length * 7,
       output: 480 + replyLength(finalState, text),
       cacheRead: 0,
+      cacheWrite: 0,
       at: record.startedAt,
     });
     const reply =
@@ -2101,6 +2144,34 @@ class MemoryHost implements HostAdapter {
     }
     session.contextUsed = Math.min(session.contextUsed, 9.2);
     session.contextSource = "pending";
+    // [PiDock 12] #12: compaction is its own model call. Its consumption is
+    // recorded under kind `compaction` and the occupancy drop never subtracts
+    // from the cumulative total.
+    const task = this.tasks.find((item) => item.id === taskId);
+    this.usage.push({
+      id: `usage-compact-${sessionId}-${this.usage.length + 1}`,
+      taskId,
+      projectId: task?.projectId ?? "",
+      sessionId,
+      providerId: session.providerId,
+      providerVersion: this.providerVersionOf(session.providerId),
+      model: session.model,
+      kind: "compaction",
+      endState: "completed",
+      completeness: "reported",
+      input: 900,
+      output: 180,
+      cacheRead: 0,
+      cacheWrite: 0,
+      at: new Date().toISOString(),
+    });
+  }
+
+  /** Provider-config fingerprint of a configured Provider (never its name). */
+  private providerVersionOf(providerId: string): string {
+    const provider = this.providers.find((item) => item.id === providerId);
+    if (!provider) return "unversioned";
+    return `${provider.protocol}::${provider.baseUrl.trim()}::${provider.models.map((model) => model.id).join(",")}`;
   }
 
   async saveSchedule({ id, name, rule, timezone, prompt, providerId, model, permission }: SaveScheduleInput): Promise<Schedule> {

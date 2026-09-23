@@ -26,6 +26,8 @@ import type {
   Session,
   Task,
   TaskWriteLockView,
+  UsageCleanupScope,
+  UsageKind,
   UsageRecord,
   Workspace,
 } from "./types";
@@ -39,6 +41,8 @@ export type UsageFilter = {
   sessionId?: string;
   from?: string;
   to?: string;
+  /** [PiDock 12] #12: narrow to one call type (turn/compaction/...). */
+  kind?: UsageKind;
 };
 
 export type SendMessageResult = {
@@ -260,6 +264,11 @@ export interface HostAdapter {
   getRun(taskId: string, sessionId: string): Promise<RunRecord | undefined>;
   getAttention(): Promise<AttentionItem[]>;
   getUsage(filter?: UsageFilter): Promise<UsageRecord[]>;
+  /**
+   * [PiDock 12] #12 box 8: remove usage details in one explicit scope. Archiving
+   * a conversation never removes usage; only this call does.
+   */
+  clearUsage(scope: UsageCleanupScope): Promise<{ removed: number; remaining: number; description: string }>;
 
   sendMessage(
     taskId: string,

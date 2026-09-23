@@ -399,16 +399,57 @@ export type ProviderDiscoveryView = {
   ignored: number;
 };
 
+/**
+ * What produced a model call ([PiDock 12] #12). Compaction, branch summaries
+ * and model-typed tool calls are counted under their own kind.
+ */
+export type UsageKind = "turn" | "compaction" | "branch-summary" | "model-tool";
+
+/** How the attempt ended; a retry is a separate record, never a rewrite. */
+export type UsageEndState = "completed" | "failed" | "cancelled" | "awaiting-approval";
+
+/**
+ * How complete the upstream report was. `missing` means the upstream never
+ * reported usage — it is never read as a real zero consumption.
+ */
+export type UsageCompleteness = "reported" | "partial" | "missing";
+
+/**
+ * Cleanup scope for usage details ([PiDock 12] #12 box 8). Archiving keeps
+ * usage; only an explicit scope removes it, and the shape keeps "delete the
+ * session" and "delete the usage" separate.
+ */
+export type UsageCleanupScope = { kind: "all" } | { kind: "session"; sessionId: string } | { kind: "before"; before: string };
+
+/**
+ * One persisted model-call usage detail. Attribution is frozen at call time:
+ * `providerId`/`providerVersion`/`model` name the configuration that actually
+ * ran, so a Provider rename or a later switch never rewrites history.
+ */
 export type UsageRecord = {
   id: string;
   taskId: string;
   projectId: string;
   sessionId: string;
   providerId: string;
+  /** Provider-config fingerprint at call time (never the display name). */
+  providerVersion: string;
+  /** Requested model. */
   model: string;
+  /** Model the response actually reported, when one was named. */
+  responseModel?: string;
+  kind: UsageKind;
+  endState: UsageEndState;
+  completeness: UsageCompleteness;
   input: number;
   output: number;
   cacheRead: number;
+  cacheWrite: number;
+  /**
+   * Reasoning tokens already contained in `output`; displayed nested, never
+   * added to any output total.
+   */
+  reasoning?: number;
   at: string;
 };
 
