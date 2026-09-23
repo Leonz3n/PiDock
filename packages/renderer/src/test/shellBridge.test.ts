@@ -49,6 +49,56 @@ describe("shell bridge boundary", () => {
   });
 });
 
+describe("#10 service group bridge (S3)", () => {
+  it("forwards the topology plan, run records and stop scope as data", async () => {
+    const { planServiceGroupThroughShell, serviceRunRecordsThroughShell, serviceStopScopeThroughShell } = await import(
+      "../data/shellBridge"
+    );
+    const seen: { op: string; payload: Record<string, unknown> | undefined }[] = [];
+    const taskOp = vi.fn(async (_taskId: string, op: string, payload?: Record<string, unknown>) => {
+      seen.push({ op, payload });
+      return { ok: true, payload: {} };
+    });
+    vi.stubGlobal("window", { pidock: { taskOp } });
+    try {
+      const units = [{ unitId: "front:saas-web", serviceId: "saas-web", name: "saas-web", location: "local" }];
+      expect(
+        (
+          await planServiceGroupThroughShell({
+            taskId: "task-a",
+            units,
+            selectedRepoDirs: ["front"],
+            dependencies: [{ from: "front:saas-web", to: "front:saas-bff", kind: "prestart" }],
+            requests: [{ unitId: "front:saas-web", port: 5173 }],
+            reservations: [{ port: 5173, owner: "task", taskId: "task-b" }],
+            rules: [{ key: "SAAS_WEB_URL", unitId: "front:saas-web", kind: "url" }],
+            environment: "testing",
+            externalResources: [{ resourceId: "res-q", name: "events", kind: "queue" }],
+          })
+        ).ok,
+      ).toBe(true);
+      await serviceRunRecordsThroughShell("task-a");
+      await serviceStopScopeThroughShell({ taskId: "task-a", instanceId: "task-a/saas-web" });
+      expect(seen.map((entry) => entry.op)).toEqual([
+        "task/planServiceGroup",
+        "task/serviceRunRecords",
+        "task/serviceStopScope",
+      ]);
+      expect(seen[0].payload).toMatchObject({
+        units,
+        selectedRepoDirs: ["front"],
+        requests: [{ unitId: "front:saas-web", port: 5173 }],
+        environment: "testing",
+      });
+      // Human-UI path: no sessionId is ever sent by the panel plan.
+      expect(seen[0].payload?.["sessionId"]).toBeUndefined();
+      expect(seen[2].payload).toEqual({ instanceId: "task-a/saas-web" });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
 describe("#6 append + probe bridge (S3)", () => {
   it("forwards appendRepos and probeLink payloads without Node access", async () => {
     const { appendReposThroughShell, probeLinkThroughShell } = await import("../data/shellBridge");

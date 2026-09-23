@@ -253,6 +253,78 @@ describe("shell host adapter selection", () => {
     vi.unstubAllGlobals();
   });
 
+  it("prefers the Host plan and run records for the topology view", async () => {
+    const ops: string[] = [];
+    stubBridge(async (_taskId, op) => {
+      ops.push(op as string);
+      if (op === "task/planServiceGroup") {
+        return {
+          ok: true,
+          payload: {
+            plan: {
+              assignments: [{ unitId: "front-monorepo:saas-web", serviceId: "saas-web", port: 6100, instanceId: "task-a/saas-web" }],
+              reallocated: [{ unitId: "front-monorepo:saas-web", before: 5173, after: 6100 }],
+              groups: [{ groupId: "prestart", members: ["task:db-migrate"], reason: "prestart", bidirectional: false, verify: [] }],
+              diagnostics: [{ code: "port-taken", message: "端口 5173 已被占用", hint: "会重分配" }],
+              knownLimits: ["共享队列"],
+            },
+          },
+        };
+      }
+      if (op === "task/serviceRunRecords") {
+        return {
+          ok: true,
+          payload: {
+            records: [
+              {
+                runId: "run-9",
+                // The Host records the id the renderer registered.
+                serviceId: "release-service-1",
+                templateVersion: "v13",
+                codeState: { kind: "uncommitted" },
+                buildFreshness: "uncommitted-code",
+                ports: [6100],
+                processIdentity: { owner: "human", pid: 777, startedAt: "2026-09-22T10:00:00.000Z" },
+                logRef: "/tasks/task-a/services/saas-web/run-run-9.log",
+                startedAt: "2026-09-22T10:00:00.000Z",
+              },
+            ],
+          },
+        };
+      }
+      return { ok: true, payload: {} };
+    });
+    try {
+      const adapter = resolveHostAdapter(createMemoryHost());
+      const view = await adapter.serviceTopology("release");
+      expect(ops).toEqual(["task/planServiceGroup", "task/serviceRunRecords"]);
+      // Host ports and plan structures win over the memory projection.
+      expect(
+        view.routing.find((entry) => entry.unitId === "front-monorepo:saas-web" && entry.key === "PORT")?.target,
+      ).toMatchObject({
+        kind: "local-instance",
+        port: 6100,
+        address: "release/release-service-1@6100",
+      });
+      expect(view.groups[0]).toMatchObject({ groupId: "prestart", members: ["task:db-migrate"] });
+      expect(view.diagnostics[0]).toMatchObject({ code: "port-taken" });
+      expect(view.knownLimits).toEqual(["共享队列"]);
+      expect(view.records.find((entry) => entry.serviceId === "release-service-1")?.run).toMatchObject({
+        runId: "run-9",
+        buildFreshness: "uncommitted-code",
+        processIdentity: { owner: "human", pid: 777 },
+        logRef: "/tasks/task-a/services/saas-web/run-run-9.log",
+      });
+      // A Host refusal keeps the memory view (fail-open read, never throw).
+      stubBridge(async (_taskId, op) => (op === "task/planServiceGroup" ? { ok: false, error: "task-unbound" } : { ok: false, error: "task-unbound" }));
+      const fallbackView = await resolveHostAdapter(createMemoryHost()).serviceTopology("release");
+      expect(fallbackView.groups.length).toBeGreaterThan(0);
+      expect(fallbackView.records.some((entry) => entry.run?.simulated === true)).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("stops through task/cancel when bridged, memory otherwise", async () => {
     const calls: string[] = [];
     stubBridge(async (_taskId, op) => {

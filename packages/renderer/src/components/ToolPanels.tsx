@@ -7,6 +7,14 @@ import { directoryLinkPath } from "../data/directories";
 import { useDraftStore } from "../stores/drafts";
 import { useHostStore } from "../stores/host";
 import {
+  buildFreshnessLabel,
+  codeStateLabel,
+  failureLabel,
+  instanceAddress,
+  projectServiceTopology,
+  type ServiceTopologyView,
+} from "../data/serviceTopology";
+import {
   browserActionRefusal,
   markBrowserIssue,
   readBrowserEvidence,
@@ -16,12 +24,15 @@ import {
 
 export function RuntimePanel({
   task,
+  topology: provided,
   onToggleService,
   onSetServiceMode,
   readonly = false,
   onReadonlyAttempt,
 }: {
   task: Task;
+  /** Adapter view (Host plan in shell mode); falls back to the pure projection. */
+  topology?: ServiceTopologyView;
   onToggleService: (serviceId: string, running: boolean) => void;
   onSetServiceMode?: (serviceId: string, mode: Service["mode"]) => void;
   /** Read-only sessions cannot change run state (prototype `sessionReadonly()`). */
@@ -30,17 +41,38 @@ export function RuntimePanel({
 }) {
   const [selected, setSelected] = useState<string | undefined>(task.services[0]?.id);
   const service: Service | undefined = task.services.find((item) => item.id === selected) ?? task.services[0];
+  // [PiDock 05] (#10) task-view projection: unit identity + location, the
+  // actual dependency destination, the start groups (prestart / bidirectional
+  // listener group), the run record and the shared-resource limits.
+  const topology = provided ?? projectServiceTopology(task, environmentName(task));
+  const selectedUnit = service ? topology.units.find((unit) => unit.serviceId === service.id) : undefined;
+  const selectedRouting = selectedUnit ? topology.routing.filter((entry) => entry.unitId === selectedUnit.unitId) : [];
+  const selectedGroups = selectedUnit
+    ? topology.groups.filter((group) => group.members.includes(selectedUnit.unitId))
+    : [];
+  const locationLabel = (item: Service) => {
+    if (item.runType === "prepare") return item.port !== undefined ? `准备步骤 · 本地 :${item.port}` : "准备步骤 · 本机命令";
+    if (item.mode === "remote") return "远程依赖";
+    return item.port !== undefined ? `本地 :${item.port}` : "本地";
+  };
   return (
     <div className="flex flex-col gap-3">
       <ul className="flex flex-col gap-1.5">
-        {task.services.map((item) => (
+        {task.services.map((item) => {
+          const unit = topology.units.find((candidate) => candidate.serviceId === item.id);
+          return (
           <li key={item.id} className="flex items-center justify-between gap-2 rounded-md border border-line px-2.5 py-2 text-xs">
-            <button type="button" className="text-left" onClick={() => setSelected(item.id)}>
+            <button type="button" className="text-left" data-testid={`service-row-${item.id}`} onClick={() => setSelected(item.id)}>
               <span className="text-ink">{item.name}</span>
               <span className="ml-2 text-muted">
-                {item.mode === "local" ? `本地 :${item.port}` : "远程"}
+                {locationLabel(item)}
                 {item.repo ? ` · ${item.repo}` : ""}
               </span>
+              {unit ? (
+                <span className="ml-2 font-mono text-[10px] text-muted" data-testid={`service-instance-${item.id}`}>
+                  {instanceAddress(task.id, unit.serviceId, item.port)}
+                </span>
+              ) : null}
             </button>
             <div className="flex items-center gap-2">
               <Badge tone={item.running ? "accent" : "neutral"}>{item.running ? "运行中" : item.mode === "remote" ? "远程" : "已停止"}</Badge>
@@ -75,8 +107,18 @@ export function RuntimePanel({
               ) : null}
             </div>
           </li>
-        ))}
+          );
+        })}
       </ul>
+      {service && service.failure ? (
+        <div className="rounded-md border border-warn/60 bg-warn/10 px-2.5 py-2 text-xs" data-testid="service-failure">
+          <div className="text-ink">
+            {failureLabel(service.failure.code).label} · {service.name}
+          </div>
+          <div className="mt-1 text-muted">{service.failure.message}</div>
+          <div className="mt-1 text-[11px] text-muted">{service.failure.hint ?? failureLabel(service.failure.code).hint}</div>
+        </div>
+      ) : null}
       {service ? (
         <Panel title={`生效配置 · ${service.name}`}>
           <ConfigTable rows={service.resolved} />
@@ -85,8 +127,102 @@ export function RuntimePanel({
           </p>
         </Panel>
       ) : null}
+      {selectedRouting.length > 0 ? (
+        <Panel title="依赖去向">
+          <ul className="flex flex-col gap-1 text-xs" data-testid="service-routing">
+            {selectedRouting.map((entry) => (
+              <li key={`${entry.unitId}-${entry.key}`} className="flex items-center justify-between gap-2">
+                <span className="font-mono text-[11px] text-ink">{entry.key}</span>
+                <span className="text-muted">
+                  {entry.target.kind === "local-instance" ? `${entry.target.address}（本任务实例）` : `共享环境 ${entry.target.environment}`}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </Panel>
+      ) : null}
+      {selectedGroups.length > 0 ? (
+        <Panel title="启动顺序">
+          <ul className="flex flex-col gap-1.5 text-xs" data-testid="service-groups">
+            {topology.groups.map((group) => (
+              <li key={group.groupId} className="rounded-md border border-line px-2 py-1.5">
+                <div className="text-ink">
+                  {group.reason === "prestart" ? "准备步骤（先完成）" : group.bidirectional ? "双向调用组（先监听再互验）" : "监听"}
+                  {" · "}
+                  {group.members
+                    .map((member) => topology.units.find((unit) => unit.unitId === member)?.name ?? member)
+                    .join(" + ")}
+                </div>
+                {group.verify.length > 0 ? (
+                  <ul className="mt-1 flex flex-col gap-0.5 text-[11px] text-muted">
+                    {group.verify.map((step) => (
+                      <li key={step}>· {step}</li>
+                    ))}
+                  </ul>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </Panel>
+      ) : null}
+      {service?.runRecord ? (
+        <Panel title="运行记录">
+          <dl className="flex flex-col gap-1 text-[11px] text-muted" data-testid="service-run-record">
+            <Row label="运行标识" value={service.runRecord.runId} mono />
+            <Row label="模板版本" value={service.runRecord.templateVersion} />
+            <Row label="代码状态" value={`${codeStateLabel(service.runRecord.codeState)}${service.runRecord.codeCommit ? ` · ${service.runRecord.codeCommit}` : ""}`} />
+            <Row label="构建状态" value={buildFreshnessLabel(service.runRecord.buildFreshness)} />
+            <Row label="端口" value={service.runRecord.ports.length > 0 ? service.runRecord.ports.join(", ") : "无端口绑定"} />
+            <Row
+              label="进程身份"
+              value={`${service.runRecord.processIdentity.owner === "human" ? "用户操作" : "Agent"} · pid ${service.runRecord.processIdentity.pid} · ${service.runRecord.processIdentity.startedAt}`}
+            />
+            <Row label="日志" value={service.runRecord.logRef} mono />
+            {service.runRecord.exitReason ? <Row label="结束原因" value={service.runRecord.exitReason} /> : null}
+            {service.runRecord.simulated ? <Row label="数据来源" value="内存模拟记录（未接入真实进程）" /> : null}
+          </dl>
+          {service.runRecord.verifications.length > 0 ? (
+            <ul className="mt-2 flex flex-col gap-0.5 text-[11px] text-muted">
+              {service.runRecord.verifications.map((verification) => (
+                <li key={verification.detail}>
+                  · {verification.ok ? "通过" : "未通过"} {verification.detail}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </Panel>
+      ) : null}
+      {topology.resources.length > 0 ? (
+        <Panel title="共享外部资源与已知限制">
+          <ul className="flex flex-col gap-1 text-[11px] text-muted" data-testid="service-known-limits">
+            {topology.resources.map((resource) => (
+              <li key={resource.resourceId}>
+                {resource.name} · {resource.isolation === "isolated" ? "已隔离" : resource.isolation === "not-isolated" ? "共享（未隔离）" : "隔离未验证"}
+              </li>
+            ))}
+            {topology.knownLimits.map((limit) => (
+              <li key={limit}>· {limit}</li>
+            ))}
+          </ul>
+        </Panel>
+      ) : null}
     </div>
   );
+}
+
+/** Small definition row used by the run-record block. */
+function Row({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <div className="flex items-start justify-between gap-3">
+      <dt className="shrink-0">{label}</dt>
+      <dd className={`text-right text-ink ${mono ? "font-mono text-[10px]" : ""}`}>{value}</dd>
+    </div>
+  );
+}
+
+/** Environment display name for the task (remote target label / tests). */
+function environmentName(task: Task): string {
+  return task.environmentId;
 }
 
 export function BrowserPanel({
@@ -435,7 +571,7 @@ export function LogsPanel({ task }: { task: Task }) {
         ) : (
           localServices.map((service) => (
             <div key={service.id}>
-              <span className="text-accent">10:25:01</span> [{service.name}]{' '}
+              <span className="text-accent">{service.runRecord?.startedAt.slice(11, 19) ?? "10:25:01"}</span> [{service.name}]{' '}
               {service.running ? `listening at :${service.port}` : "process stopped"}
             </div>
           ))
@@ -443,7 +579,19 @@ export function LogsPanel({ task }: { task: Task }) {
         <div>10:25:02 [routes] local task bindings resolved</div>
         <div>10:25:03 [account-service] remote test environment</div>
       </div>
-      <p className="text-[11px] text-muted">日志中会显示服务、所属运行实例和错误；这里仅展示信息布局，未接入真实日志流。</p>
+      {/* [PiDock 05] (#10): each log belongs to one run record, so the panel
+          names the instance and the exact log file instead of a shared stream. */}
+      {localServices.length > 0 ? (
+        <ul className="flex flex-col gap-0.5 text-[11px] text-muted" data-testid="log-instances">
+          {localServices.map((service) => (
+            <li key={service.id}>
+              {service.name} · {instanceAddress(task.id, service.id, service.port)}
+              {service.runRecord ? ` · ${service.runRecord.logRef}` : ""}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      <p className="text-[11px] text-muted">日志按运行实例与运行记录归属；这里仅展示信息布局，未接入真实日志流。</p>
     </div>
   );
 }

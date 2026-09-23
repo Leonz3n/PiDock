@@ -59,6 +59,9 @@ export type ShellTaskOp =
   | "task/controlService"
   | "task/serviceStatus"
   | "task/serviceLog"
+  | "task/planServiceGroup"
+  | "task/serviceRunRecords"
+  | "task/serviceStopScope"
   | "task/browserAction"
   | "task/setProviderCatalog"
   | "task/sessionContext"
@@ -249,6 +252,68 @@ export async function registerServiceThroughShell(input: {
       layers: input.layers,
       templateVersion: input.templateVersion,
     });
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * [PiDock 05] (#10) plan the task's multi-service topology on the Host
+ * (`task/planServiceGroup`): units, final ports, variable bindings, routing,
+ * start groups and diagnostics. Sending no `sessionId` keeps the attested
+ * human-UI path (the plan is labelled with the actor). The response carries
+ * no env layers and no secret values — only masked/derived task addresses.
+ */
+export async function planServiceGroupThroughShell(input: {
+  taskId: string;
+  units: Record<string, unknown>[];
+  selectedRepoDirs?: string[];
+  dependencies?: { from: string; to: string; kind: "call" | "prestart" }[];
+  requests?: { unitId: string; port: number }[];
+  reservations?: { port: number; owner: "external" | "task"; taskId?: string; unitId?: string; serviceId?: string; note?: string }[];
+  rules?: { key: string; unitId: string; kind: "url" | "host-port"; template?: string }[];
+  layers?: Record<string, unknown>;
+  environment?: string;
+  externalResources?: { resourceId: string; name: string; kind: string; isolatedByTask?: boolean }[];
+}): Promise<ShellTaskOpResult> {
+  const payload: Record<string, unknown> = { units: input.units };
+  if (input.selectedRepoDirs !== undefined) payload["selectedRepoDirs"] = input.selectedRepoDirs;
+  if (input.dependencies !== undefined) payload["dependencies"] = input.dependencies;
+  if (input.requests !== undefined) payload["requests"] = input.requests;
+  if (input.reservations !== undefined) payload["reservations"] = input.reservations;
+  if (input.rules !== undefined) payload["rules"] = input.rules;
+  if (input.layers !== undefined) payload["layers"] = input.layers;
+  if (input.environment !== undefined) payload["environment"] = input.environment;
+  if (input.externalResources !== undefined) payload["externalResources"] = input.externalResources;
+  try {
+    return await shellTaskOp(input.taskId, "task/planServiceGroup", payload);
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * [PiDock 05] (#10) read the Host's run records + registered process
+ * identities (`task/serviceRunRecords`) and the stop scope for one instance
+ * or the whole task (`task/serviceStopScope`). Read-only: the scope is
+ * computed from registered identities, never from a port or a stale PID.
+ */
+export async function serviceRunRecordsThroughShell(taskId: string): Promise<ShellTaskOpResult> {
+  try {
+    return await shellTaskOp(taskId, "task/serviceRunRecords", {});
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+export async function serviceStopScopeThroughShell(input: {
+  taskId: string;
+  instanceId?: string;
+}): Promise<ShellTaskOpResult> {
+  const payload: Record<string, unknown> = {};
+  if (input.instanceId !== undefined) payload["instanceId"] = input.instanceId;
+  try {
+    return await shellTaskOp(input.taskId, "task/serviceStopScope", payload);
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
