@@ -543,6 +543,37 @@ export function auditBindingReadPoints(input: {
   return { unboundKeys, diagnostics };
 }
 
+/**
+ * Partial restart (box 5 / 验证方式 部分重启): only the running units whose
+ * address, binding or template version actually changed restart; every other
+ * instance keeps running, so restarting one service never restarts the task.
+ * Pure: the caller (Host restart action) applies it once a real spawner
+ * exists; until then the changed set is what the UI offers to restart.
+ */
+export function planRestartScope(input: {
+  /** Unit ids currently running (registered process identities). */
+  running: readonly string[];
+  /** Units whose port moved during reallocation. */
+  reallocated?: readonly { unitId: string }[];
+  /** Units whose bound variables changed value. */
+  changedBindings?: readonly { unitId: string }[];
+  /** Units recorded against a template version other than the adopted one. */
+  staleTemplate?: readonly string[];
+}): { unitId: string; reason: "port-reallocated" | "binding-changed" | "template-version" }[] {
+  const running = new Set(input.running);
+  const out = new Map<string, "port-reallocated" | "binding-changed" | "template-version">();
+  const claim = (unitId: string, reason: "port-reallocated" | "binding-changed" | "template-version") => {
+    if (!running.has(unitId) || out.has(unitId)) return;
+    out.set(unitId, reason);
+  };
+  for (const entry of input.reallocated ?? []) claim(entry.unitId, "port-reallocated");
+  for (const entry of input.changedBindings ?? []) claim(entry.unitId, "binding-changed");
+  for (const unitId of input.staleTemplate ?? []) claim(unitId, "template-version");
+  return [...out.entries()]
+    .map(([unitId, reason]) => ({ unitId, reason }))
+    .sort((a, b) => (a.unitId < b.unitId ? -1 : 1));
+}
+
 export type DependencyKind = "call" | "prestart";
 
 /**

@@ -131,10 +131,14 @@ export function RuntimePanel({
         <Panel title="依赖去向">
           <ul className="flex flex-col gap-1 text-xs" data-testid="service-routing">
             {selectedRouting.map((entry) => (
-              <li key={`${entry.unitId}-${entry.key}`} className="flex items-center justify-between gap-2">
-                <span className="font-mono text-[11px] text-ink">{entry.key}</span>
-                <span className="text-muted">
-                  {entry.target.kind === "local-instance" ? `${entry.target.address}（本任务实例）` : `共享环境 ${entry.target.environment}`}
+              <li key={`${entry.unitId}-${entry.key}`} className="flex items-start justify-between gap-2">
+                <span className="shrink-0 font-mono text-[11px] text-ink">{entry.key}</span>
+                <span className="text-right text-muted">
+                  <span className="block">{entry.value}</span>
+                  <span className="block">
+                    {entry.target.kind === "local-instance" ? `${entry.target.address}（本任务实例）` : `共享环境 ${entry.target.environment}`}
+                  </span>
+                  <span className="block text-[10px]">读取点：{entry.readPoints.join("、")}</span>
                 </span>
               </li>
             ))}
