@@ -2340,7 +2340,9 @@ class MemoryHost implements HostAdapter {
       if (!checked.ok) throw new Error(checked.message);
       credentialRef = checked.ref;
     }
-    if (kind === "mcp" && bridge === undefined) throw new Error("MCP Server 必须选择一个已启用的 bridge Extension");
+    if (kind === "mcp" && (bridge === undefined || bridge.extensionId.trim().length === 0)) {
+      throw new Error("MCP Server 必须选择一个已启用的 bridge Extension");
+    }
     const capability: Capability = {
       id: this.nextId("cap"),
       kind,

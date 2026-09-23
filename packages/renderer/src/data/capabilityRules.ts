@@ -107,6 +107,31 @@ export function capabilityRows(capabilities: readonly Capability[], sessionTier:
     );
 }
 
+/**
+ * Whether a row is switched on from the user's point of view: an installed
+ * capability with a pending update still runs, so it reads as enabled and its
+ * button is 停用 — the toggle, the row label and the MCP bridge rule must all
+ * use this one predicate or they drift apart (box 3/5).
+ */
+export function isCapabilityEnabled(capability: Capability): boolean {
+  return capability.status === "enabled" || capability.status === "update-available";
+}
+
+/**
+ * Whether a re-check changed a row's usability: `present`, the recorded
+ * failure and the connection state are the fields a re-check repairs, so they
+ * decide the "N 项能力已刷新" count (a row that only gained `verified` was
+ * already usable and is not a repair).
+ */
+export function capabilityRepairChanged(previous: Capability, next: Capability): boolean {
+  return (
+    previous.present !== next.present ||
+    previous.failure?.code !== next.failure?.code ||
+    previous.failure?.message !== next.failure?.message ||
+    previous.connection?.state !== next.connection?.state
+  );
+}
+
 /** MCP is only reachable through an enabled bridge Extension (box 3). */
 export function mcpBridgeStatus(
   capabilities: readonly Capability[],
@@ -116,7 +141,7 @@ export function mcpBridgeStatus(
   if (bridgeId === undefined) {
     return { ok: false, code: "bridge-missing", message: "MCP Server 需要 bridge Extension 接入，请先启用对应 Extension" };
   }
-  const bridge = capabilities.find((item) => item.id === bridgeId && item.kind === "extension" && (item.status === "enabled" || item.status === "update-available"));
+  const bridge = capabilities.find((item) => item.id === bridgeId && item.kind === "extension" && isCapabilityEnabled(item));
   if (bridge === undefined) {
     return { ok: false, code: "bridge-missing", message: `bridge Extension ${bridgeId} 未启用，MCP Server 无法连接` };
   }

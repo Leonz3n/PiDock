@@ -3,7 +3,7 @@ import { Badge, Button, EmptyState, Field, Modal, Segmented } from "./ui";
 import { VirtualList } from "./VirtualList";
 import { runStateLabel } from "../pages/runState";
 import { diffConfigRows, isSensitiveKey, nextTemplateVersion } from "../data/configRows";
-import { capabilityInvalidReason, mcpBridgeStatus, mcpConnectionLabel, packageVersionState, sourceKindLabel } from "../data/capabilityRules";
+import { capabilityInvalidReason, isCapabilityEnabled, mcpBridgeStatus, mcpConnectionLabel, packageVersionState, sourceKindLabel } from "../data/capabilityRules";
 import { referenceProvenance, skillCandidate } from "../data/composerRules";
 import {
   buildTaskFormBranch,
@@ -1857,7 +1857,7 @@ function CapabilityDetailModal({ capabilityId, onClose }: { capabilityId: string
   const statusLabel = { enabled: "已启用", disabled: "已停用", "update-available": "有可用更新", "pending-review": "待审阅" }[
     capability.status
   ];
-  const enabled = capability.status === "enabled" || capability.status === "update-available";
+  const enabled = isCapabilityEnabled(capability);
   const invalid = capabilityInvalidReason(capability);
   const version = packageVersionState(capability);
   const bridge = capability.kind === "mcp" ? mcpBridgeStatus(workspace?.capabilities ?? [], capability) : null;
@@ -2813,11 +2813,14 @@ function AddCapabilityModal({ kind, onClose }: { kind: "skill" | "extension" | "
   const [credentialRef, setCredentialRef] = useState("");
   const [submitting, setSubmitting] = useState(false);
   // MCP is only reachable through an enabled bridge Extension ([PiDock 16] #18 box 3).
-  const bridges = capabilities.filter((item) => item.kind === "extension" && item.status === "enabled");
+  // The predicate is the one `mcpBridgeStatus` applies, so an installed bridge
+  // with a pending update is offered here too.
+  const bridges = capabilities.filter((item) => item.kind === "extension" && isCapabilityEnabled(item));
   const selectedBridge = bridgeId || bridges[0]?.id || "";
   const submit = async () => {
     setSubmitting(true);
     try {
+      if (kind === "mcp" && selectedBridge === "") throw new Error("MCP Server 必须选择一个已启用的 bridge Extension");
       await addCapability({
         kind,
         name,

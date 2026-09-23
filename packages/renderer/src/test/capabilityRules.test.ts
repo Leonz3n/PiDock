@@ -6,7 +6,9 @@ import {
   capabilityInvalidReason,
   capabilityKindLabel,
   capabilityRows,
+  capabilityRepairChanged,
   effectivePermission,
+  isCapabilityEnabled,
   isInstallEntry,
   mcpBridgeStatus,
   mcpConnectionLabel,
@@ -69,6 +71,20 @@ describe("capability mirror rules", () => {
     expect(packageVersionState(capability({ id: "p1", kind: "package", name: "p1", source: "全局" }))).toBe("not-installed");
     expect(packageVersionState(capability({ id: "p2", kind: "package", name: "p2", source: "全局", installedVersion: "1.0.0", availableVersion: "1.1.0" }))).toBe("update-available");
     expect(packageVersionState(capability({ id: "p3", kind: "package", name: "p3", source: "全局", installedVersion: "1.0.0", availableVersion: "1.0.0" }))).toBe("up-to-date");
+  });
+
+  it("counts an updatable row as enabled, and only a changed row as refreshed", () => {
+    expect(isCapabilityEnabled(capability({ id: "a", kind: "package", name: "a", source: "全局", status: "update-available" }))).toBe(true);
+    expect(isCapabilityEnabled(capability({ id: "b", kind: "skill", name: "b", source: "全局", status: "disabled" }))).toBe(false);
+    expect(isCapabilityEnabled(capability({ id: "c", kind: "skill", name: "c", source: "全局", status: "pending-review" }))).toBe(false);
+
+    const missing = capability({ id: "d", kind: "skill", name: "d", source: "额外来源", present: false });
+    const repaired = { ...missing, present: true, verified: true };
+    const untouched = capability({ id: "e", kind: "skill", name: "e", source: "项目" });
+    expect(capabilityRepairChanged(missing, repaired)).toBe(true);
+    expect(capabilityRepairChanged(untouched, { ...untouched, verified: true })).toBe(false);
+    const failed = capability({ id: "f", kind: "mcp", name: "f", source: "项目", connection: { state: "failed", message: "超时", attempts: 2 } });
+    expect(capabilityRepairChanged(failed, { ...failed, connection: { state: "connected", attempts: 3 } })).toBe(true);
   });
 
   it("requires an enabled bridge Extension for MCP", () => {

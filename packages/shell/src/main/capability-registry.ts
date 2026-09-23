@@ -149,7 +149,7 @@ export type CapabilityRow = {
   record: CapabilityRecord;
   sourceLabel: string;
   sourceKind: CapabilitySourceKind;
-  /** Two or more enabled capabilities share this name across sources. */
+  /** Two or more capabilities share this name across sources. */
   ambiguous: boolean;
   /** Only a package row may install/update; runtime resources never do. */
   installEntry: boolean;

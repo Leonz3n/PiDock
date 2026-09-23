@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Badge, Button, Panel, Segmented } from "../components/ui";
-import { capabilityChangeLabel, capabilityKindLabel, capabilityRows, mcpConnectionLabel, mcpBridgeStatus, packageVersionState, sourceKindLabel, type CapabilityRow } from "../data/capabilityRules";
+import { capabilityChangeLabel, capabilityKindLabel, capabilityRepairChanged, capabilityRows, isCapabilityEnabled, mcpConnectionLabel, mcpBridgeStatus, packageVersionState, sourceKindLabel, type CapabilityRow } from "../data/capabilityRules";
 import type { Capability, CapabilityFailureCode } from "../data/types";
 import { useHostStore } from "../stores/host";
 import { useUiStore } from "../stores/ui";
@@ -28,12 +28,15 @@ export function CapabilitiesPage() {
   // is visibly capped, and the row says which tier it assumes.
   const rows = capabilityRows(capabilities, "default").filter((row) => kind === "all" || row.capability.kind === kind);
   const addKind: "skill" | "extension" | "package" | "mcp" = kind === "all" ? "skill" : kind;
-  const addLabel = { skill: "添加技能来源", extension: "添加 Extension", package: "查看安装来源", mcp: "添加 MCP Server" }[addKind];
+  const addLabel = { skill: "添加技能来源", extension: "添加 Extension", package: "安装扩展包", mcp: "添加 MCP Server" }[addKind];
 
   const fail = (error: unknown) => pushToast(error instanceof Error ? error.message : String(error));
   const toggle = async (capability: Capability) => {
+    // An updatable row is still running, so its button reads 停用 and the click
+    // must disable it — not read “not enabled” and enable it again.
+    const enabled = isCapabilityEnabled(capability);
     try {
-      await setCapabilityEnabled(capability.id, capability.status !== "enabled");
+      await setCapabilityEnabled(capability.id, !enabled);
       pushToast(`${capability.name}：变更已提交，如有回合执行中将在结束后生效`);
     } catch (error) {
       fail(error);
@@ -59,6 +62,21 @@ export function CapabilitiesPage() {
       fail(error);
     }
   };
+  const recheck = async () => {
+    const before = new Map(capabilities.map((item) => [item.id, item]));
+    try {
+      const updated = await recheckCapabilities();
+      // A repair is a changed row, not the whole list: the toast must not
+      // claim every capability was refreshed when only one recovered.
+      const repaired = updated.filter((item) => {
+        const previous = before.get(item.id);
+        return previous !== undefined && capabilityRepairChanged(previous, item);
+      }).length;
+      pushToast(`已重新检查来源（内存投影），${repaired} 项能力已刷新`);
+    } catch (error) {
+      fail(error);
+    }
+  };
 
   return (
     <div className="flex flex-col gap-4">
@@ -71,7 +89,7 @@ export function CapabilitiesPage() {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Segmented ariaLabel="按类型过滤" value={kind} onChange={setKind} options={[...kinds]} />
-          <Button size="sm" onClick={() => void recheckCapabilities().then((updated) => pushToast(`已重新检查来源（内存投影），${updated.length} 项能力已刷新`)).catch(fail)}>
+          <Button size="sm" onClick={() => void recheck()}>
             重新检查来源
           </Button>
           <Button size="sm" variant="primary" onClick={() => openModal({ type: "add-capability", kind: addKind })}>
@@ -188,7 +206,7 @@ function CapabilityPanel({
           详情
         </Button>
         <Button size="sm" onClick={onToggle}>
-          {capability.status === "enabled" || capability.status === "update-available" ? "停用" : "启用"}
+          {isCapabilityEnabled(capability) ? "停用" : "启用"}
         </Button>
         {version === "not-installed" ? (
           <Button size="sm" variant="primary" onClick={onInstall}>
