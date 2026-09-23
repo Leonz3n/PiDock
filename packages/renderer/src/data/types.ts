@@ -505,7 +505,8 @@ export type ScheduledRun = {
   /** Absent when the trigger was skipped (no session was created). */
   sessionId?: string;
   at: string;
-  result: "completed" | "skipped" | "failed";
+  /** `awaiting-approval` is a run still waiting on its confirmation, not a finished one. */
+  result: "completed" | "awaiting-approval" | "skipped" | "failed";
   /** [PiDock 18] (#20) planned trigger vs 立即运行. */
   trigger?: "due" | "manual";
   /** Skip/failure reason recorded with the trigger. */

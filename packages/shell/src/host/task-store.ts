@@ -802,7 +802,7 @@ export function scheduleFilePath(taskDir: string): string {
 
 const SCHEDULE_PERMISSIONS = ["read", "default", "auto"] as const;
 const RUN_TRIGGERS = ["due", "manual"] as const;
-const RUN_RESULTS = ["completed", "skipped", "failed"] as const;
+const RUN_RESULTS = ["completed", "awaiting-approval", "skipped", "failed"] as const;
 
 function requireString(record: Record<string, unknown>, key: string, label: string): void {
   if (typeof record[key] !== "string" || (record[key] as string).length === 0) {
@@ -851,7 +851,7 @@ function parseScheduledRun(value: unknown): ScheduledRunRecord {
     throw new Error("invalid-payload: scheduled run.trigger must be due/manual");
   }
   if (typeof run["result"] !== "string" || !(RUN_RESULTS as readonly string[]).includes(run["result"] as string)) {
-    throw new Error("invalid-payload: scheduled run.result must be completed/skipped/failed");
+    throw new Error("invalid-payload: scheduled run.result must be completed/awaiting-approval/skipped/failed");
   }
   if (typeof run["permission"] !== "string" || !(SCHEDULE_PERMISSIONS as readonly string[]).includes(run["permission"] as string)) {
     throw new Error("invalid-payload: scheduled run.permission must be read/default/auto");

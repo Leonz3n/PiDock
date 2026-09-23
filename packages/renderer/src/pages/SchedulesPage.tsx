@@ -88,11 +88,13 @@ export function SchedulesPage() {
                                     try {
                                       const run = await runScheduleNow(schedule.id);
                                       const task = workspace?.tasks.find((item) => item.id === schedule.taskId);
-                                      if (run.result !== "completed") {
+                                      // A skipped or failed run did nothing; a run parked on a
+                                      // confirmation is a real run whose session exists.
+                                      if (run.result === "skipped" || run.result === "failed") {
                                         pushToast(run.reason ?? "本次立即运行未执行");
                                         return;
                                       }
-                                      pushToast("已触发一次执行，并在该任务下新建独立会话");
+                                      pushToast(run.result === "awaiting-approval" ? "本次执行已进入待确认，可在任务中处理" : "已触发一次执行，并在该任务下新建独立会话");
                                       if (task && run.sessionId !== undefined) {
                                         navigate({ view: "task", projectId: task.projectId, taskId: task.id, sessionId: run.sessionId });
                                       }
@@ -131,7 +133,7 @@ export function SchedulesPage() {
                   <span>
                     {run.taskId} · {scheduleRunTriggerLabel(run.trigger ?? "due")} · {scheduleRunDetail(run) ?? "无会话"}
                   </span>
-                  <Badge tone={run.result === "completed" ? "accent" : run.result === "failed" ? "warn" : "neutral"}>
+                  <Badge tone={run.result === "failed" ? "warn" : run.result === "skipped" ? "neutral" : "accent"}>
                     {scheduledRunResultLabel(run.result)}
                   </Badge>
                   <Button

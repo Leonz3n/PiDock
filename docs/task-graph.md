@@ -763,6 +763,12 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
 - **全量校验**：`pnpm turbo run typecheck test build lint --force` → 8 successful / 8 total，
   0 cached；shell 52 files / 765 tests（#19 后 49/727，+3 files/+38），renderer 40 files /
   348 tests（#19 后 39/344，+1 file/+4）；两包 `tsc` 与 `eslint --max-warnings 0` 均通过。
+- **评审修复（#20 review P1 与相邻 P2）**：删除定时任务后其执行记录保留，因此 `schedule-<n>`
+  的播种同时扫描 `schedules` 与 `runs`——重启后不再复用被删任务的 id，两条历史不会被合并到
+  同一 id；停在确认上的执行记录改用 `awaiting-approval`（不再冒充「完成」，renderer 徽标显示
+  「待确认」，「立即运行」提示进入待确认而非未执行）；`min(24h, 下次计划)` 的期限不早于请求
+  时刻（规则周期短于评估间隔时不会一生成即过期）；同秒执行记录按铸造序号排序（`run-10` 新于
+  `run-9`）；「立即运行」先结束已到期的旧确认再判断是否重叠。
 - **残留（未测／未实现）**：真实计时未在 Electron 中跑过——`ScheduleDriver` 只按固定周期让
   **已 fork 的 Host** 自评到期触发，`main.ts` 的 start/stop 接线与真实系统休眠／唤醒、
   跨平台唤醒能力均未实测（单测只覆盖「不自重叠、单任务失败不中断、start/stop 释放计时器」）；

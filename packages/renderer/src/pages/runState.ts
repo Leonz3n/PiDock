@@ -18,7 +18,7 @@ export function approvalStatusLabel(status: "pending" | "approved" | "rejected" 
 }
 
 export function scheduledRunResultLabel(result: ScheduledRun["result"]) {
-  return { completed: "完成", skipped: "跳过", failed: "失败" }[result];
+  return { completed: "完成", "awaiting-approval": "待确认", skipped: "跳过", failed: "失败" }[result];
 }
 
 export function attentionKindLabel(kind: AttentionItem["kind"]) {
