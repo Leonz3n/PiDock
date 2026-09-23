@@ -25,17 +25,46 @@ import {
   clearUsageThroughShell,
   compactSessionThroughShell,
   controlServiceThroughShell,
+  controlTerminalThroughShell,
+  deliveryInfoThroughShell,
+  fileDiffThroughShell,
+  filePreviewThroughShell,
+  fileRootsThroughShell,
+  fileTreeThroughShell,
   isShellConnected,
   planServiceGroupThroughShell,
+  planTerminalThroughShell,
   protocolStateThroughShell,
   serviceRunRecordsThroughShell,
   setSessionModelThroughShell,
   setSessionThinkingThroughShell,
   shellTaskOp,
   sendMessageThroughShell,
+  terminalHistoryThroughShell,
+  terminalStateThroughShell,
   usageRecordsThroughShell,
   type ShellTaskOpResult,
 } from "./shellBridge";
+import {
+  terminalHistoryFromHost,
+  terminalPlanFromHost,
+  terminalStateFromHost,
+  workspaceDeliveryFromHost,
+  workspaceDiffFromHost,
+  workspacePreviewFromHost,
+  workspaceRootsFromHost,
+  workspaceTreeFromHost,
+} from "./workspaceFiles";
+import type {
+  TerminalControlRequest,
+  TerminalControlResultView,
+  TerminalHistoryEntryView,
+  TerminalPlanRequest,
+  TerminalPlanView,
+  TerminalStateView,
+  WorkspaceBrowserRequest,
+  WorkspaceBrowserView,
+} from "./workspaceFiles";
 import type { ProviderProfile } from "./types";
 import type { SessionWriteState } from "./writeCoordination";
 import type { UsageFilter } from "./hostAdapter";
@@ -802,6 +831,105 @@ export function createShellHostAdapter(fallback: HostAdapter): HostAdapter {
           const result = await compactSessionThroughShell({ taskId, sessionId, catalog });
           if (!result.ok) throw shellResultError(result, "上下文压缩失败，请重试");
           return (target as HostAdapter).compactSessionContext(taskId, sessionId);
+        };
+      }
+      // [PiDock 10] (#15) file browsing: the Host owns the roots and every
+      // read (bounded + masked). A round-trip that fails or a root the Host
+      // does not know falls back to the in-memory projection instead of an
+      // empty tree that would read like "no files".
+      if (property === "workspaceBrowser") {
+        return async (taskId: string, request: WorkspaceBrowserRequest = {}): Promise<WorkspaceBrowserView> => {
+          const local = await (target as HostAdapter).workspaceBrowser(taskId, request);
+          const rootsResult = await fileRootsThroughShell(taskId);
+          const rootsPayload = rootsResult.ok ? workspaceRootsFromHost(rootsResult.payload) : undefined;
+          if (!rootsPayload || rootsPayload.roots.length === 0) return local;
+          const rootId = request.rootId ?? rootsPayload.roots[0]?.id;
+          if (rootId === undefined) return local;
+          const relative = request.relative ?? "";
+          const treeResult = await fileTreeThroughShell({ taskId, rootId, ...(relative.length > 0 ? { relative } : {}) });
+          const tree = treeResult.ok ? workspaceTreeFromHost(treeResult.payload) : undefined;
+          if (!tree) return local;
+          const selected: NonNullable<WorkspaceBrowserView["selected"]> = { rootId, relative, tree };
+          const previewResult = await filePreviewThroughShell({ taskId, rootId, relative });
+          const preview = previewResult.ok ? workspacePreviewFromHost(previewResult.payload) : undefined;
+          if (preview) selected.preview = preview;
+          const diffResult = await fileDiffThroughShell({ taskId, rootId, ...(relative.length > 0 ? { relative } : {}) });
+          const diff = diffResult.ok ? workspaceDiffFromHost(diffResult.payload) : undefined;
+          if (diff) selected.diff = diff;
+          const deliveryResult = await deliveryInfoThroughShell({ taskId, rootId });
+          const delivery = deliveryResult.ok ? workspaceDeliveryFromHost(deliveryResult.payload) : undefined;
+          if (delivery) selected.delivery = delivery;
+          return { taskId, taskDir: rootsPayload.taskDir, roots: rootsPayload.roots, selected };
+        };
+      }
+      // [PiDock 10] (#15) terminal: the Host owns the cwd/env resolution and
+      // the permission gate. A Host refusal (`read` session, broken env layer)
+      // throws so the panel shows the reason instead of a plan that cannot run.
+      if (property === "planTerminal") {
+        return async (taskId: string, request: TerminalPlanRequest): Promise<TerminalPlanView> => {
+          if (!isShellConnected()) return (target as HostAdapter).planTerminal(taskId, request);
+          const result = await planTerminalThroughShell({
+            taskId,
+            instanceId: request.instanceId,
+            rootId: request.rootId,
+            program: request.program,
+            ...(request.args !== undefined ? { args: request.args } : {}),
+            ...(request.cols !== undefined ? { cols: request.cols } : {}),
+            ...(request.rows !== undefined ? { rows: request.rows } : {}),
+            ...(request.sessionId !== undefined ? { sessionId: request.sessionId } : {}),
+            ...(request.label !== undefined ? { label: request.label } : {}),
+          });
+          if (!result.ok) throw shellResultError(result, "终端计划失败，请重试");
+          const plan = terminalPlanFromHost(result.payload);
+          if (!plan) throw shellResultError(result, "终端计划失败，请重试");
+          return plan;
+        };
+      }
+      if (property === "controlTerminal") {
+        return async (taskId: string, request: TerminalControlRequest): Promise<TerminalControlResultView> => {
+          if (!isShellConnected()) return (target as HostAdapter).controlTerminal(taskId, request);
+          const result = await controlTerminalThroughShell({
+            taskId,
+            instanceId: request.instanceId,
+            action: request.action,
+            ...(request.rootId !== undefined ? { rootId: request.rootId } : {}),
+            ...(request.program !== undefined ? { program: request.program } : {}),
+            ...(request.args !== undefined ? { args: request.args } : {}),
+            ...(request.cols !== undefined ? { cols: request.cols } : {}),
+            ...(request.rows !== undefined ? { rows: request.rows } : {}),
+            ...(request.sessionId !== undefined ? { sessionId: request.sessionId } : {}),
+            ...(request.label !== undefined ? { label: request.label } : {}),
+            ...(request.approvalId !== undefined ? { approvalId: request.approvalId } : {}),
+          });
+          if (!result.ok) throw shellResultError(result, "终端操作失败，请重试");
+          const payload = asRecord(result.payload);
+          const state = await terminalStateThroughShell(taskId);
+          const instances = state.ok ? terminalStateFromHost(state.payload)?.instances : undefined;
+          const instanceId = typeof payload["instanceId"] === "string" ? (payload["instanceId"] as string) : request.instanceId;
+          const instance = instances?.find((entry) => entry.instanceId === instanceId);
+          return {
+            instanceId,
+            action: request.action,
+            actor: payload["actor"] === "agent" ? "agent" : "human",
+            ...(instance !== undefined ? { instance } : {}),
+          };
+        };
+      }
+      if (property === "terminalState") {
+        return async (taskId: string): Promise<TerminalStateView> => {
+          const local = await (target as HostAdapter).terminalState(taskId);
+          if (!isShellConnected()) return local;
+          const result = await terminalStateThroughShell(taskId);
+          if (!result.ok) return local;
+          return terminalStateFromHost(result.payload) ?? local;
+        };
+      }
+      if (property === "terminalHistory") {
+        return async (taskId: string, instanceId: string, limit?: number): Promise<TerminalHistoryEntryView[]> => {
+          if (!isShellConnected()) return (target as HostAdapter).terminalHistory(taskId, instanceId, limit);
+          const result = await terminalHistoryThroughShell({ taskId, instanceId, ...(limit !== undefined ? { limit } : {}) });
+          if (!result.ok) return (target as HostAdapter).terminalHistory(taskId, instanceId, limit);
+          return terminalHistoryFromHost(result.payload) ?? (await (target as HostAdapter).terminalHistory(taskId, instanceId, limit));
         };
       }
       if (property === "simulateExpiry") {

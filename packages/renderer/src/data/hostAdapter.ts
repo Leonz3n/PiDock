@@ -34,6 +34,16 @@ import type {
 import type { SessionWriteState } from "./writeCoordination";
 import type { ProtocolBindingView } from "./protocolBinding";
 import type { ServiceTopologyView } from "./serviceTopology";
+import type {
+  TerminalControlResultView,
+  TerminalHistoryEntryView,
+  TerminalPlanRequest,
+  TerminalPlanView,
+  TerminalStateView,
+  WorkspaceBrowserRequest,
+  WorkspaceBrowserView,
+  TerminalControlRequest,
+} from "./workspaceFiles";
 
 export type UsageFilter = {
   taskId?: string;
@@ -316,6 +326,22 @@ export interface HostAdapter {
    * back to the in-memory projection when the Host cannot answer.
    */
   protocolBinding(taskId: string): Promise<ProtocolBindingView>;
+  /**
+   * [PiDock 10] (#15) task file browser: browsable roots (repo worktrees +
+   * plain-directory links) plus the selected root's tree/preview/diff/delivery
+   * view. The shell adapter asks the Host (`task/fileRoots` + the selected read
+   * ops) and falls back to the in-memory projection when the Host cannot answer.
+   */
+  workspaceBrowser(taskId: string, request?: WorkspaceBrowserRequest): Promise<WorkspaceBrowserView>;
+  /**
+   * [PiDock 10] (#15) built-in terminal: plan one terminal for a task root
+   * (cwd + resolved env rows, masked) and list this task's instances. No real
+   * pty in this slice (`spawnImplemented: false`).
+   */
+  planTerminal(taskId: string, request: TerminalPlanRequest): Promise<TerminalPlanView>;
+  controlTerminal(taskId: string, request: TerminalControlRequest): Promise<TerminalControlResultView>;
+  terminalState(taskId: string): Promise<TerminalStateView>;
+  terminalHistory(taskId: string, instanceId: string, limit?: number): Promise<TerminalHistoryEntryView[]>;
   getSchedules(): Promise<Schedule[]>;
   setScheduleEnabled(scheduleId: string, enabled: boolean): Promise<void>;
   runScheduleNow(scheduleId: string): Promise<ScheduledRun>;

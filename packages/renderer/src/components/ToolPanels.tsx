@@ -27,6 +27,12 @@ import {
   toolchainStatusLabel,
   type ProtocolBindingView,
 } from "../data/protocolBinding";
+import type {
+  TerminalHistoryEntryView,
+  TerminalPlanView,
+  TerminalStateView,
+  WorkspaceBrowserView,
+} from "../data/workspaceFiles";
 
 export function RuntimePanel({
   task,
@@ -502,9 +508,92 @@ export function BrowserPanel({
   );
 }
 
-export function FilesPanel({ files }: { files: WorkspaceFile[] }) {
+export function FilesPanel({
+  files,
+  browser,
+  onSelectRoot,
+  onSelectFile,
+}: {
+  files: WorkspaceFile[];
+  /** [PiDock 10] (#15) Host/memory browser view: roots, tree, preview, diff. */
+  browser?: WorkspaceBrowserView;
+  onSelectRoot?: (rootId: string) => void;
+  onSelectFile?: (relative: string) => void;
+}) {
   const preview = files.find((file) => file.preview)?.preview;
   const previewPath = files.find((file) => file.preview)?.path;
+  if (browser) {
+    const selected = browser.selected;
+    return (
+      <div className="flex flex-col gap-3">
+        <div className="flex flex-wrap gap-1.5" data-testid="file-roots">
+          {browser.roots.map((root) => (
+            <button
+              key={root.id}
+              type="button"
+              onClick={() => onSelectRoot?.(root.id)}
+              className={`rounded border px-2 py-1 text-[11px] ${selected?.rootId === root.id ? "border-accent text-ink" : "border-line text-muted"}`}
+            >
+              {root.label}
+              <span className="ml-1 text-[10px] text-muted">{root.kind === "shared-dir" ? "普通目录" : root.repo ?? root.id}</span>
+            </button>
+          ))}
+        </div>
+        {selected ? (
+          <p className="text-[11px] text-muted">
+            任务 {selected.tree?.attribution.taskId ?? browser.taskId} · 仓库 {selected.tree?.attribution.repo ?? selected.tree?.attribution.directoryId ?? "-"} · 工作目录 {""}
+            <span className="font-mono">{selected.tree?.attribution.piWorkDir ?? browser.taskDir}</span>
+          </p>
+        ) : null}
+        {selected?.tree?.attribution.sharedNote ? (
+          <p className="rounded border border-warn/40 px-2 py-1 text-[11px] text-warn" data-testid="shared-dir-note">
+            {selected.tree.attribution.sharedNote} · 原始目标 <span className="font-mono">{selected.tree.attribution.sourcePath}</span>
+          </p>
+        ) : null}
+        {selected?.tree ? (
+          <ul className="flex max-h-52 flex-col gap-1 overflow-auto text-xs" data-testid="file-tree">
+            {selected.tree.entries.map((entry) => (
+              <li key={entry.path}>
+                <button
+                  type="button"
+                  disabled={entry.kind === "dir"}
+                  onClick={() => onSelectFile?.(entry.path.slice(selected.rootId.length + 1))}
+                  className="w-full truncate text-left font-mono text-[11px] text-ink disabled:text-muted"
+                >
+                  {entry.kind === "dir" ? "📁 " : ""}
+                  {entry.path}
+                </button>
+              </li>
+            ))}
+            {selected.tree.entries.length === 0 ? <li className="text-[11px] text-muted">该目录为空。</li> : null}
+            {selected.tree.truncated ? <li className="text-[11px] text-muted">条目过多，仅显示前 {selected.tree.entries.length} 条。</li> : null}
+          </ul>
+        ) : null}
+        {selected?.preview ? <CodeBlock label={selected.preview.path} language={selected.preview.language} code={selected.preview.source} /> : null}
+        {selected?.diff ? (
+          <div className="flex flex-col gap-1" data-testid="file-diff">
+            <span className="text-[11px] text-muted">Git 差异 · {selected.diff.attribution.repo ?? "-"}</span>
+            <pre className="max-h-52 overflow-auto rounded border border-line p-2 font-mono text-[10px] text-ink">{selected.diff.diff}</pre>
+          </div>
+        ) : null}
+        {selected?.delivery ? (
+          <p className="text-[11px] text-muted" data-testid="delivery-target">
+            交付入口：{selected.delivery.repo} · 分支 {selected.delivery.branch || "未记录"} · 不自动提交/推送/合并
+          </p>
+        ) : null}
+        <ul className="flex flex-col gap-1 text-xs">
+          {files.map((file) => (
+            <li key={file.path} className="flex items-center justify-between gap-2 rounded border border-line px-2.5 py-1.5">
+              <span className="font-mono text-[11px] text-ink">{file.path}</span>
+              <Badge tone={file.status === "added" ? "accent" : "warn"}>
+                {file.status === "added" ? "新增" : file.status === "deleted" ? "已删除" : "已修改"}
+              </Badge>
+            </li>
+          ))}
+        </ul>
+      </div>
+    );
+  }
   return (
     <div className="flex flex-col gap-3">
       <ul className="flex flex-col gap-1 text-xs">
@@ -522,13 +611,82 @@ export function FilesPanel({ files }: { files: WorkspaceFile[] }) {
   );
 }
 
-export function TerminalPanel({ taskId, seed }: { taskId: string; seed: string[] }) {
+export function TerminalPanel({
+  taskId,
+  seed,
+  terminal,
+}: {
+  taskId: string;
+  seed: string[];
+  /**
+   * [PiDock 10] (#15) Host/memory terminal view: the planned cwd + resolved env
+   * rows, this task's instances and their real state. `spawnImplemented: false`
+   * means the plan/tracking exists but no real pty is running yet, and the
+   * panel says so rather than showing a fake pid.
+   */
+  terminal?: {
+    plan?: TerminalPlanView;
+    state?: TerminalStateView;
+    history?: TerminalHistoryEntryView[];
+    onStart?: () => void;
+    onStop?: (instanceId: string) => void;
+    onResize?: (instanceId: string, cols: number, rows: number) => void;
+  };
+}) {
   const runTerminalCommand = useHostStore((state) => state.runTerminalCommand);
   const [lines, setLines] = useState<string[]>(seed);
   const [value, setValue] = useState("");
+  const instance = terminal?.state?.instances[terminal.state.instances.length - 1];
   return (
     <div className="flex flex-col gap-2">
-      <p className="text-[11px] text-muted">终端输出与输入由本面板渲染，PTY 属于受管执行侧；当前为内存模拟。</p>
+      {terminal?.plan ? (
+        <div className="flex flex-col gap-1 text-[11px] text-muted" data-testid="terminal-plan">
+          <span>
+            工作目录 <span className="font-mono text-ink">{terminal.plan.cwd}</span> · 程序 {terminal.plan.program}
+            {" "}
+            {terminal.plan.args.join(" ")}
+          </span>
+          <span>终端归属：{terminal.plan.owner.sessionId === null ? `用户显式操作（${terminal.plan.owner.label}）` : `Agent 会话 ${terminal.plan.owner.sessionId}`}</span>
+          {terminal.plan.attribution.sharedNote ? <span className="text-warn">{terminal.plan.attribution.sharedNote}</span> : null}
+          <ul className="flex flex-col gap-0.5">
+            {terminal.plan.resolved.map((row) => (
+              <li key={row.key} className="font-mono text-[10px]">
+                {row.key}={row.value} <span className="text-muted">（{row.source}）</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {terminal?.state && !terminal.state.spawnImplemented ? (
+        <p className="rounded border border-warn/40 px-2 py-1 text-[11px] text-warn" data-testid="terminal-spawn-residual">
+          终端计划、环境与归属已由 Host 管理；本机 PTY 进程启动属未实现范围，面板不会显示进程号。
+        </p>
+      ) : null}
+      {instance ? (
+        <div className="flex flex-col gap-1 text-[11px] text-muted" data-testid="terminal-instance">
+          <span>
+            {instance.instanceId} · {instance.lifecycle === "running" ? "运行中" : "已退出"}
+            {instance.processKnown ? ` · pid ${instance.processId}` : " · 未报告进程号"}
+            {instance.exitCode !== undefined ? ` · 退出码 ${instance.exitCode}` : ""}
+            {instance.exitReason ? ` · ${instance.exitReason}` : ""}
+          </span>
+          <div className="flex gap-2">
+            {instance.lifecycle === "running" ? (
+              <Button size="sm" onClick={() => terminal?.onStop?.(instance.instanceId)}>
+                停止终端
+              </Button>
+            ) : null}
+            <Button size="sm" variant="ghost" onClick={() => terminal?.onResize?.(instance.instanceId, instance.cols + 20, instance.rows)}>
+              加宽（{instance.cols}×{instance.rows}）
+            </Button>
+          </div>
+        </div>
+      ) : terminal?.onStart ? (
+        <Button size="sm" onClick={() => terminal.onStart?.()}>
+          按计划启动终端
+        </Button>
+      ) : null}
+      <p className="text-[11px] text-muted">终端输出与输入由本面板渲染；当前为模拟输入，真实 PTY 属未实现范围。</p>
       <div className="h-56 overflow-auto rounded-md border border-line bg-ink/95 p-3 font-mono text-[11px] leading-5 text-white/90">
         {lines.map((line, index) => (
           <div key={`${line}-${index}`}>{line}</div>

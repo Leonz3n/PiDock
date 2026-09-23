@@ -64,6 +64,18 @@ import { describeUsageCleanupScope, filterUsageRecords, usageWindow } from "./us
 import { sessionWriteStates, type SessionWriteState } from "./writeCoordination";
 import { projectServiceTopology, type ServiceTopologyView } from "./serviceTopology";
 import { projectProtocolBinding, type ProtocolBindingView } from "./protocolBinding";
+import {
+  memoryWorkspaceBrowser,
+  type TerminalControlRequest,
+  type TerminalControlResultView,
+  type TerminalHistoryEntryView,
+  type TerminalInstanceView,
+  type TerminalPlanRequest,
+  type TerminalPlanView,
+  type TerminalStateView,
+  type WorkspaceBrowserRequest,
+  type WorkspaceBrowserView,
+} from "./workspaceFiles";
 import { isSensitiveKey, nextTemplateVersion } from "./configRows";
 import {
   PROTOCOL_MODEL_FIXTURES,
@@ -1027,6 +1039,8 @@ class MemoryHost implements HostAdapter {
   >();
 
   private localSettings: LocalSettings = { ...defaultLocalSettings };
+  /** [PiDock 10] (#15) memory-mode terminal instances, per task (no real pty). */
+  private terminalInstances = new Map<string, Map<string, TerminalInstanceView>>();
 
   private nextId(prefix: string) {
     this.sequence += 1;
@@ -1620,6 +1634,122 @@ class MemoryHost implements HostAdapter {
     const task = this.task(taskId);
     if (!task) throw new Error("任务不存在");
     return projectProtocolBinding(this.projectTask(task));
+  }
+
+  /**
+   * [PiDock 10] (#15) memory projection of the task file browser: roots from
+   * the task's repos + plain-directory links, tree/preview/diff from the
+   * seeded files, delivery from the repository's base branch. No filesystem
+   * read and no git run — the shell adapter prefers the Host's own answer.
+   */
+  async workspaceBrowser(taskId: string, request: WorkspaceBrowserRequest = {}): Promise<WorkspaceBrowserView> {
+    const task = this.task(taskId);
+    if (!task) throw new Error("任务不存在");
+    return memoryWorkspaceBrowser(task, (repoId) => this.projects.find((item) => item.id === task.projectId)?.repositories.find((repo) => repo.id === repoId)?.baseBranch, request);
+  }
+
+  /**
+   * [PiDock 10] (#15) memory terminal: plans the selected root with the task's
+   * own config overrides as env rows and tracks instances in memory. The real
+   * pty is out of scope ([PiDock 10] residual), so `spawnImplemented` is false
+   * and the panel says so instead of pretending a process runs.
+   */
+  async planTerminal(taskId: string, request: TerminalPlanRequest): Promise<TerminalPlanView> {
+    const task = this.task(taskId);
+    if (!task) throw new Error("任务不存在");
+    const browser = await this.workspaceBrowser(taskId, { rootId: request.rootId });
+    const root = browser.roots.find((entry) => entry.id === request.rootId) ?? browser.roots[0];
+    if (!root) throw new Error("本任务没有可用的文件根");
+    const attributionView = browser.selected?.tree?.attribution ?? {
+      taskId,
+      rootId: root.id,
+      rootKind: root.kind,
+      rootLabel: root.label,
+      piWorkDir: browser.taskDir,
+    };
+    const session = task.sessions.find((item) => item.id === request.sessionId);
+    if (request.sessionId !== undefined && !session) throw new Error("会话不存在");
+    if (session?.permission === "read") throw new Error("read 权限不提供终端与命令执行入口；请在会话中提升权限或改用人工操作");
+    const environment = this.environments.find((item) => item.id === task.environmentId);
+    const resolved = [...(environment?.variables ?? []), ...task.configOverrides].map((entry) => ({
+      key: entry.key,
+      value: entry.secret ? "••••••••" : entry.value,
+      secret: entry.secret,
+      source: entry.secret ? "本机私有配置" : "任务覆盖",
+    }));
+    return {
+      instanceId: request.instanceId,
+      rootId: root.id,
+      attribution: attributionView,
+      program: request.program,
+      args: request.args ?? [],
+      cwd: root.path,
+      cols: request.cols ?? 80,
+      rows: request.rows ?? 24,
+      resolved,
+      historyLimit: 200,
+      owner:
+        request.sessionId !== undefined
+          ? { taskId, sessionId: request.sessionId, label: `会话 ${request.sessionId}` }
+          : { taskId, sessionId: null, label: request.label ?? "用户显式操作" },
+    };
+  }
+
+  async controlTerminal(taskId: string, request: TerminalControlRequest): Promise<TerminalControlResultView> {
+    const task = this.task(taskId);
+    if (!task) throw new Error("任务不存在");
+    const instances = this.terminalInstances.get(taskId) ?? new Map<string, TerminalInstanceView>();
+    this.terminalInstances.set(taskId, instances);
+    if (request.action === "stop") {
+      const existing = instances.get(request.instanceId);
+      if (!existing) throw new Error(`unknown-instance: 本任务没有终端实例 ${request.instanceId}`);
+      const stopped: TerminalInstanceView = { ...existing, lifecycle: "exited", exitReason: "user-request", exitedAt: "内存模拟" };
+      instances.set(request.instanceId, stopped);
+      return { instanceId: request.instanceId, action: "stop", actor: request.sessionId !== undefined ? "agent" : "human", instance: stopped };
+    }
+    const plan = await this.planTerminal(taskId, {
+      instanceId: request.instanceId,
+      rootId: request.rootId ?? (await this.workspaceBrowser(taskId)).roots[0]?.id ?? "",
+      program: request.program ?? "bash",
+      ...(request.args !== undefined ? { args: request.args } : {}),
+      ...(request.cols !== undefined ? { cols: request.cols } : {}),
+      ...(request.rows !== undefined ? { rows: request.rows } : {}),
+      ...(request.sessionId !== undefined ? { sessionId: request.sessionId } : {}),
+      ...(request.label !== undefined ? { label: request.label } : {}),
+    });
+    const instance: TerminalInstanceView = {
+      instanceId: plan.instanceId,
+      rootId: plan.rootId,
+      attribution: plan.attribution,
+      program: plan.program,
+      args: plan.args,
+      cwd: plan.cwd,
+      owner: plan.owner,
+      cols: plan.cols,
+      rows: plan.rows,
+      envKeys: plan.resolved.map((row) => row.key),
+      lifecycle: "running",
+      // The memory adapter owns no process: the panel must not show a pid.
+      processKnown: false,
+      startedAt: "内存模拟",
+    };
+    instances.set(instance.instanceId, instance);
+    return { instanceId: instance.instanceId, action: "start", actor: plan.owner.sessionId === null ? "human" : "agent", instance };
+  }
+
+  async terminalState(taskId: string): Promise<TerminalStateView> {
+    const task = this.task(taskId);
+    if (!task) throw new Error("任务不存在");
+    return { spawnImplemented: false, instances: [...(this.terminalInstances.get(taskId)?.values() ?? [])].map((item) => ({ ...item })) };
+  }
+
+  async terminalHistory(taskId: string, instanceId: string, limit = 50): Promise<TerminalHistoryEntryView[]> {
+    const task = this.task(taskId);
+    if (!task) throw new Error("任务不存在");
+    if (!this.terminalInstances.get(taskId)?.has(instanceId)) {
+      throw new Error(`unknown-instance: 本任务没有终端实例 ${instanceId}`);
+    }
+    return task.terminalSeed.slice(-Math.max(1, limit)).map((line) => ({ at: "内存模拟", line }));
   }
 
   async getSchedules() {

@@ -43,6 +43,15 @@ import type {
 } from "../data/types";
 import type { ServiceTopologyView } from "../data/serviceTopology";
 import type { ProtocolBindingView } from "../data/protocolBinding";
+import type {
+  TerminalControlRequest,
+  TerminalControlResultView,
+  TerminalPlanRequest,
+  TerminalPlanView,
+  TerminalStateView,
+  WorkspaceBrowserRequest,
+  WorkspaceBrowserView,
+} from "../data/workspaceFiles";
 
 type HostState = {
   adapter: HostAdapter;
@@ -86,6 +95,18 @@ type HostState = {
   serviceTopology: (taskId: string) => Promise<ServiceTopologyView>;
   /** [PiDock 08] (#14) protocol plan + consumer binding view (Host state or memory projection). */
   protocolBinding: (taskId: string) => Promise<ProtocolBindingView>;
+  /**
+   * [PiDock 10] (#15) task file browser (roots + selected tree/preview/diff/
+   * delivery). Read-only: the Host validates every path against one root and
+   * bounds/masks the answer; the renderer only displays it.
+   */
+  workspaceBrowser: (taskId: string, request?: WorkspaceBrowserRequest) => Promise<WorkspaceBrowserView>;
+  /** [PiDock 10] (#15) plan one terminal for a task root (masked env rows). */
+  planTerminal: (taskId: string, request: TerminalPlanRequest) => Promise<TerminalPlanView>;
+  /** [PiDock 10] (#15) start/stop one terminal through the Host's gate. */
+  controlTerminal: (taskId: string, request: TerminalControlRequest) => Promise<TerminalControlResultView>;
+  /** [PiDock 10] (#15) this task's terminal instances (no real pty yet). */
+  terminalState: (taskId: string) => Promise<TerminalStateView>;
   setScheduleEnabled: (scheduleId: string, enabled: boolean) => Promise<void>;
   runScheduleNow: (scheduleId: string) => Promise<ScheduledRun>;
   setCapabilityEnabled: (capabilityId: string, enabled: boolean) => Promise<void>;
@@ -244,6 +265,10 @@ export const useHostStore = create<HostState>((set, get) => ({
   },
 
   serviceTopology: async (taskId) => get().adapter.serviceTopology(taskId),
+  workspaceBrowser: async (taskId, request) => get().adapter.workspaceBrowser(taskId, request),
+  planTerminal: async (taskId, request) => get().adapter.planTerminal(taskId, request),
+  controlTerminal: async (taskId, request) => get().adapter.controlTerminal(taskId, request),
+  terminalState: async (taskId) => get().adapter.terminalState(taskId),
 
   protocolBinding: async (taskId) => get().adapter.protocolBinding(taskId),
 
