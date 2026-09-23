@@ -355,6 +355,93 @@ describe("shell host adapter selection", () => {
     }
   });
 
+  it("[PiDock 12] reads usage from the Host ledger and falls back per task when it cannot answer", async () => {
+    const seen: Array<{ taskId: string; op: string; payload?: Record<string, unknown> }> = [];
+    stubBridge(async (taskId, op, payload) => {
+      seen.push({ taskId, op, payload });
+      if (op === "task/usageRecords" && taskId === "release") {
+        return {
+          ok: true,
+          payload: {
+            report: {
+              details: [
+                {
+                  id: "call-1",
+                  taskId: "release",
+                  sessionId: "main",
+                  providerId: "provider-local",
+                  providerVersion: "openai-responses::https://a.example.com::gpt-5",
+                  requestModel: "gpt-5",
+                  responseModel: "gpt-5-2026-08",
+                  kind: "turn",
+                  endState: "completed",
+                  at: "2026-09-22T10:00:00+08:00",
+                  usage: { input: 100, output: 40, cacheRead: 10, cacheWrite: 5, source: "actual", completeness: "reported", reasoning: 12 },
+                },
+                // A half-shaped detail must be dropped, never shown as zeros.
+                { id: "call-broken", taskId: "release", sessionId: "main" },
+              ],
+            },
+          },
+        };
+      }
+      return { ok: true, payload: {} };
+    });
+    try {
+      const adapter = resolveHostAdapter(createMemoryHost());
+      const rows = await adapter.getUsage({ taskId: "release", sessionId: "main" });
+      expect(rows.map((row) => row.id)).toEqual(["call-1"]);
+      expect(rows[0]).toMatchObject({
+        projectId: "atlas",
+        providerVersion: "openai-responses::https://a.example.com::gpt-5",
+        model: "gpt-5",
+        responseModel: "gpt-5-2026-08",
+        kind: "turn",
+        endState: "completed",
+        completeness: "reported",
+        input: 100,
+        cacheWrite: 5,
+        reasoning: 12,
+      });
+      const request = seen.find((entry) => entry.op === "task/usageRecords")?.payload;
+      expect(request).toMatchObject({ sessionId: "main" });
+      // A filter that names no task fans out over the workspace tasks.
+      seen.length = 0;
+      await adapter.getUsage({});
+      expect(seen.filter((entry) => entry.op === "task/usageRecords").length).toBeGreaterThan(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+
+    // Every task refusing to answer keeps the memory rows instead of an empty page.
+    stubBridge(async () => ({ ok: false, error: "unknown-op: task/usageRecords" }));
+    try {
+      const adapter = resolveHostAdapter(createMemoryHost());
+      expect((await adapter.getUsage({ taskId: "release" })).length).toBeGreaterThan(0);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("[PiDock 12] clears usage through the Host per task and reports the scope", async () => {
+    const seen: Array<{ op: string; payload?: Record<string, unknown> }> = [];
+    stubBridge(async (_taskId, op, payload) => {
+      seen.push({ op, payload });
+      if (op === "task/clearUsage") return { ok: true, payload: { removed: 1, remaining: 2, description: "仅清理会话 main 的用量明细（不影响其他会话）" } };
+      return { ok: true, payload: {} };
+    });
+    try {
+      const result = await resolveHostAdapter(createMemoryHost()).clearUsage({ kind: "session", sessionId: "main" });
+      const calls = seen.filter((entry) => entry.op === "task/clearUsage");
+      expect(calls.length).toBeGreaterThan(1);
+      expect(calls[0].payload).toEqual({ scope: { kind: "session", sessionId: "main" } });
+      expect(result.description).toContain("main");
+      expect(result.remaining).toBe(2 * calls.length);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("stops through task/cancel when bridged, memory otherwise", async () => {
     const calls: string[] = [];
     stubBridge(async (_taskId, op) => {

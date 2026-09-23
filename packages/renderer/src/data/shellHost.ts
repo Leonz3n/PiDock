@@ -19,8 +19,9 @@ import type {
   SendMessageResult,
 } from "./hostAdapter";
 import { instanceAddress, type ServiceTopologyView } from "./serviceTopology";
-import type { Approval, ApprovalStatus, Reference, RunRecord, RunState, TaskWriteLockView, WriteOrphanView } from "./types";
+import type { Approval, ApprovalStatus, Reference, RunRecord, RunState, TaskWriteLockView, UsageCleanupScope, UsageRecord, WriteOrphanView } from "./types";
 import {
+  clearUsageThroughShell,
   compactSessionThroughShell,
   controlServiceThroughShell,
   isShellConnected,
@@ -30,10 +31,12 @@ import {
   setSessionThinkingThroughShell,
   shellTaskOp,
   sendMessageThroughShell,
+  usageRecordsThroughShell,
   type ShellTaskOpResult,
 } from "./shellBridge";
 import type { ProviderProfile } from "./types";
 import type { SessionWriteState } from "./writeCoordination";
+import type { UsageFilter } from "./hostAdapter";
 
 function shellResultError(result: ShellTaskOpResult, fallback: string): Error {
   const message = typeof result.error === "string" && result.error.length > 0 ? result.error : fallback;
@@ -48,6 +51,84 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 /** Host `write.sessions[]` row ([PiDock 09] #11) -> the navigation's state. */
 type HostWriteSession = SessionWriteState & { label?: string };
+
+const USAGE_KINDS = ["turn", "compaction", "branch-summary", "model-tool"] as const;
+const USAGE_END_STATES = ["completed", "failed", "cancelled", "awaiting-approval"] as const;
+const USAGE_COMPLETENESS = ["reported", "partial", "missing"] as const;
+
+function asNonNegative(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+/**
+ * Host usage-detail envelope -> the renderer's row shape ([PiDock 12] #12).
+ * A detail missing a required field is dropped rather than rendered as a
+ * half-row with zeroes, so a malformed Host answer cannot under-count usage.
+ */
+function asUsageRecord(value: unknown, projectId: string): UsageRecord | undefined {
+  const detail = asRecord(value);
+  const sessionId = detail["sessionId"];
+  const id = detail["id"];
+  const providerId = detail["providerId"];
+  const taskId = detail["taskId"];
+  const model = detail["requestModel"];
+  const kind = USAGE_KINDS.find((candidate) => candidate === detail["kind"]);
+  const endState = USAGE_END_STATES.find((candidate) => candidate === detail["endState"]);
+  const usage = asRecord(detail["usage"]);
+  const completeness = USAGE_COMPLETENESS.find((candidate) => candidate === usage["completeness"]);
+  const input = asNonNegative(usage["input"]);
+  const output = asNonNegative(usage["output"]);
+  const cacheRead = asNonNegative(usage["cacheRead"]);
+  const cacheWrite = asNonNegative(usage["cacheWrite"]);
+  if (
+    typeof id !== "string" ||
+    typeof taskId !== "string" ||
+    typeof sessionId !== "string" ||
+    typeof providerId !== "string" ||
+    typeof model !== "string" ||
+    typeof detail["at"] !== "string" ||
+    kind === undefined ||
+    endState === undefined ||
+    completeness === undefined ||
+    input === undefined ||
+    output === undefined ||
+    cacheRead === undefined ||
+    cacheWrite === undefined
+  ) {
+    return undefined;
+  }
+  const reasoning = asNonNegative(usage["reasoning"]);
+  const responseModel = typeof detail["responseModel"] === "string" ? (detail["responseModel"] as string) : undefined;
+  return {
+    id,
+    taskId,
+    projectId,
+    sessionId,
+    providerId,
+    providerVersion: typeof detail["providerVersion"] === "string" ? (detail["providerVersion"] as string) : "unversioned",
+    model,
+    ...(responseModel !== undefined ? { responseModel } : {}),
+    kind,
+    endState,
+    completeness,
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    ...(reasoning !== undefined ? { reasoning } : {}),
+    at: detail["at"] as string,
+  };
+}
+
+/** Adapter filter -> the Host filter envelope (project is applied locally). */
+function usageFilterPayload(filter: UsageFilter): Record<string, unknown> {
+  const payload: Record<string, unknown> = {};
+  for (const key of ["sessionId", "providerId", "from", "to", "kind"] as const) {
+    const value = filter[key];
+    if (value !== undefined) payload[key] = value;
+  }
+  return payload;
+}
 
 function asWriteSessionState(value: unknown): HostWriteSession | undefined {
   const record = asRecord(value);
@@ -455,6 +536,74 @@ export function createShellHostAdapter(fallback: HostAdapter): HostAdapter {
             .map(asWriteSessionState)
             .filter((state): state is SessionWriteState => state !== undefined);
           return { writeLock, sessions };
+        };
+      }
+      if (property === "getUsage") {
+        return async (filter: UsageFilter = {}) => {
+          const local = await (target as HostAdapter).getUsage(filter);
+          if (!isShellConnected()) return local;
+          // [PiDock 12] #12: the Host owns the usage ledger, so the report is
+          // read from it per known task and mapped back to the renderer shape.
+          // A Host that cannot answer (older build, unbound task) keeps the
+          // memory rows instead of showing an empty page.
+          const workspace = await (target as HostAdapter).getWorkspace();
+          const taskIds = filter.taskId !== undefined ? [filter.taskId] : workspace.tasks.map((task) => task.id);
+          const projectOfTask = new Map(workspace.tasks.map((task) => [task.id, task.projectId]));
+          const remote: UsageRecord[] = [];
+          let answeredByHost = false;
+          for (const taskId of taskIds) {
+            let result: ShellTaskOpResult;
+            try {
+              result = await usageRecordsThroughShell({ taskId, filter: usageFilterPayload(filter) });
+            } catch {
+              result = { ok: false };
+            }
+            if (!result.ok) continue;
+            const report = asRecord(asRecord(result.payload)["report"]);
+            const details = Array.isArray(report["details"]) ? (report["details"] as unknown[]) : [];
+            for (const detail of details) {
+              const mapped = asUsageRecord(detail, projectOfTask.get(taskId) ?? "");
+              if (mapped !== undefined) remote.push(mapped);
+            }
+            answeredByHost = true;
+          }
+          if (!answeredByHost) return local;
+          const otherTasks = local.filter((record) => !taskIds.includes(record.taskId));
+          const rows = [...remote, ...otherTasks];
+          // The project dimension is not part of the Host envelope, so that
+          // one filter is applied here (the Host already narrowed the rest).
+          return filter.projectId === undefined ? rows : rows.filter((record) => record.projectId === filter.projectId);
+        };
+      }
+      if (property === "clearUsage") {
+        return async (scope: UsageCleanupScope) => {
+          if (!isShellConnected()) return (target as HostAdapter).clearUsage(scope);
+          // The scope names no task, so it fans out over the tasks the app
+          // knows: each Host clears its own ledger and the counts add up.
+          const workspace = await (target as HostAdapter).getWorkspace();
+          let removed = 0;
+          let remaining = 0;
+          let description = "";
+          let answeredByHost = false;
+          for (const task of workspace.tasks) {
+            let result: ShellTaskOpResult;
+            try {
+              result = await clearUsageThroughShell({ taskId: task.id, scope });
+            } catch {
+              result = { ok: false };
+            }
+            if (!result.ok) continue;
+            answeredByHost = true;
+            const payload = asRecord(result.payload);
+            if (typeof payload["removed"] === "number") removed += payload["removed"];
+            if (typeof payload["remaining"] === "number") remaining += payload["remaining"];
+            if (typeof payload["description"] === "string") description = payload["description"];
+          }
+          if (!answeredByHost) return (target as HostAdapter).clearUsage(scope);
+          // The memory fallback mirrors the same call so a mixed workspace
+          // (some tasks Host-backed, some fixture) stays consistent.
+          await (target as HostAdapter).clearUsage(scope);
+          return { removed, remaining, description };
         };
       }
       if (property === "setServiceRunning") {
