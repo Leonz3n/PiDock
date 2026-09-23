@@ -832,8 +832,11 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   （只保留窗口内的最近 60 条，长期运行的 Host 不会每请求累积一条），
   `planReconnectDelivery` 让 `uncertain` 请求绝不自动重放、同 idempotency key 只投递一次、
   离线排队过期即丢弃，审计详情脱敏路径／令牌／长随机值。生成二维码、确认／拒绝设备、轮换、
-  撤销、切换入口与主进程上报的 `task/remoteGatewayEvent`（它决定 gateway 模式后续请求是否放行）
-  都拒绝 Agent 会话并要求 main 背书的 `shell-ui` origin（与「立即运行」同规则）。
+  撤销与主进程上报的 `task/remoteGatewayEvent`（它决定 gateway 模式后续请求是否放行）都拒绝
+  Agent 会话并要求 main 背书的 `shell-ui` origin（与「立即运行」同规则）；`task/remoteEntryMode`
+  与 `task/remotePairCancel` 只走 `classifyControlCaller` 的 `shell-ui` origin 校验，**没有**
+  单独的「拒绝 `sessionId`」分支（origin 由主进程背书，Agent 会话拿不到，因此仍然 fail-closed，
+  但与同批 op 的写法不一致）。
 - **renderer（盒子 1–5）**：`data/remoteRules.ts` 是与 shell 同词汇的 Node-free 镜像（入口行、
   权限默认值、设备状态／权限／凭据代数／最近在线文案、`remoteSurfacesFor` 标出该设备可用的
   远程界面、配对倒计时与「已失效」文案、QR URL 只允许 fragment）；内存投影持有入口状态、
@@ -849,17 +852,22 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   请求与连接失效、可达不等于授权都有用例，但「凭据校验」只有签发／轮换／作废的记录状态，
   **没有任何代码路径比对持久化的设备凭据值**（也没有带凭据值的裁决参数），撤销靠 `status` 生效；
   **盒子 2 同样判为 PARTIAL**（此前记为 COVERED，修正）：规则层、投影、页面与白名单已覆盖，
-  但手机端的真实内容展示没有调用方——`remoteApprovalView`／`MOBILE_OP_SURFACES` 只被单测引用，
-  手机视图在 renderer 中是静态预览（`components/Modals.tsx` 写明「此处仅为静态预览，不实现
+  但手机端的真实内容展示没有调用方——`remoteApprovalView` 只被单测引用（`MOBILE_OP_SURFACES`
+  经 `mobileSurfaceForOp`→`authorizeRemoteOp`→`host/remote-devices.ts`→`host/task-host.ts`
+  →`task/remoteAuthorize` dispatch 被生产代码引用，缺的不是白名单而是「把真实手机请求带进来」
+  的调用方），手机视图在 renderer 中是静态预览（`components/Modals.tsx` 写明「此处仅为静态预览，不实现
   移动布局」），与盒子 4 的「没有真实设备」是同一原因，因此端到端部分不判 COVERED；
   **盒子 4 的「断线显示离线、不盲目重放」在规则层与 Host 已覆盖**（`planReconnectDelivery`＋
   `deviceOnline`＋离线投影），但**真实断线重连没有跑过**，因此该盒子的端到端部分判为 PARTIAL。
-- **全量校验**：`pnpm turbo run typecheck test build lint --force` → 8 successful / 8 total，
-  0 cached；shell 54 files / 798 tests（#20 后 52/770，+2 files/+28），renderer 42 files /
-  361 tests（#20 后 40/348，+2 files/+13）；两包 `tsc` 与 `eslint --max-warnings 0` 均通过。
-  **评审修复（#21 review P1×2 与相邻 P2×2）**：只跑了受影响的 scoped vitest（`main/remote-rules`、
-  `host/remote-devices`）→ 28 passed，本提交在既有两个测试文件内新增 2 个用例，全量 8/8 门禁
-  在 #21 终局门禁重跑；受影响文件的 `tsc`／`eslint` 在终局门禁一并确认。
+- **全量校验（P1 修复后终局门禁，`cb9f830`）**：`pnpm turbo run typecheck test build lint --force`
+  → **8 successful / 8 total，0 cached**；shell **54 files / 801 tests**，renderer
+  **42 files / 361 tests**（`it(`／`test(` 静态计数分别＝801 与 361，与门禁输出一致）；
+  两包 `tsc` 与 `eslint --max-warnings 0` 由同一次门禁确认通过。
+  **评审修复（#21 review P1×2 与相邻 P2×2，`cb9f830`）**：修复提交当时只跑了受影响的
+  scoped vitest（`main/remote-rules`／`host/remote-devices`）→ 28 passed，本提交在既有两个
+  测试文件内新增 2 个用例（`remote-rules.test.ts` 16→17、`remote-devices.test.ts` 10→11）；
+  **修正**：S4 记录的「shell 798 tests」实为 **799**（终局门禁按静态计数与运行输出双重核对），
+  #20 的 770 → 终局 801 为 +31。
 - **残留（未测／未实现）**：**没有真实网络**——Tailscale Serve、Funnel、自建 Gateway 的 TLS、
   登录、路由、限流与审计都只到规则层与 Host 状态机，没有拨号实现、没有真实证书、没有部署
   说明文档；**没有真实手机浏览器与二维码扫描**——配对流程由 Host 状态机与 renderer 流程测试
@@ -875,4 +883,8 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   单测，与其余 remote op 处在同一条边界）；renderer 内存投影的「省略列表」默认是「请求中
   排除文件／终端」，与 Host 的「默认集合∩请求」在 `manage` 上不同（页面总是显式传列表，
   用户可见路径一致）；跨主机路由、多设备并发与审计落盘大小限制未实测；
-  Windows x64 与 macOS 打包应用未运行。
+  Windows x64 与 macOS 打包应用未运行。**修复后仍开的规则级 P2（评审记录，未改代码）**：
+  `remoteApprovalView` 的「影响」行已与桌面同规则，但 `title`／`contentVersion` 仍按调用方
+  传入值原样投影（桌面用 `${tool} ${target}` 推导标题、`?? "v1"` 缺省载荷版本），因此
+  「同一真实内容」要靠调用方传对字段——今天无调用方，故未改；`remoteEntryMode`／
+  `remotePairCancel` 与同批 op 的 `sessionId` 拒绝写法不一致（见上文，fail-closed）。
