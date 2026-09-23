@@ -66,7 +66,7 @@ export interface PiToolCall {
 // [PiDock 12] #12: usage vocabulary lives in `usage-ledger.ts` (counters,
 // source, completeness, reported reasoning/total). Re-exported here because
 // the session channel remains the module the Host and tests import from.
-export type { PiCallUsage, PiUsageSource } from "./usage-ledger.js";
+export type { PiCallUsage, PiReportedUsage, PiUsageSource } from "./usage-ledger.js";
 
 export interface PiCallRecord {
   callId: string;

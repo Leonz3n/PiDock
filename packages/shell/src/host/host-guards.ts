@@ -9,6 +9,8 @@
 import { isHostTaskOp, isTaskOpOrigin, type HostTaskOp } from "../rpc/protocol.js";
 import { isAbsoluteTaskRoot } from "../main/task-provision.js";
 import { PI_GATED_TOOL_NAMES } from "../main/pi-session.js";
+import { PI_USAGE_GROUP_BY, PI_USAGE_KINDS, type PiUsageGroupBy } from "../main/usage-ledger.js";
+import { isUsageKindName } from "./task-store.js";
 import { isBrowserAction, isPageRef } from "../main/browser-rules.js";
 import { isExternalResourceKind } from "../main/service-runs.js";
 
@@ -42,6 +44,10 @@ export function routeHostTask(params: unknown, boundWorkspaceId: string): HostTa
 
 export function boundWorkspaceId(): string {
   return process.env["PIDOCK_WORKSPACE_ID"] ?? DEFAULT_WORKSPACE_ID;
+}
+
+function isUsageGroupBy(value: unknown): value is PiUsageGroupBy {
+  return typeof value === "string" && (PI_USAGE_GROUP_BY as readonly string[]).includes(value);
 }
 
 export type ToolPlannerSpec =
@@ -546,6 +552,55 @@ export function validateHostTaskOp(
       return { ok: false, error: "invalid-payload: task/sessionStates payload must be an object" };
     }
     return { ok: true };
+  }
+  // [PiDock 12] #12 usage reads/cleanup: envelope shape only here, semantics
+  // (time bounds, grouping dimension, cleanup scope) are validated against
+  // the ledger rules in `usage-ledger.ts` and applied by the Host.
+  if (op === "task/usageRecords") {
+    if (payload !== undefined && !isRecord(payload)) {
+      return { ok: false, error: "invalid-payload: task/usageRecords payload must be an object" };
+    }
+    const usagePayload = payload ?? {};
+    for (const key of ["sessionId", "providerId", "model", "from", "to"] as const) {
+      const value = usagePayload[key];
+      if (value !== undefined && (typeof value !== "string" || value.trim().length === 0)) {
+        return { ok: false, error: `invalid-payload: task/usageRecords.${key} must be a non-empty string` };
+      }
+    }
+    const kind = usagePayload["kind"];
+    if (kind !== undefined && !isUsageKindName(kind)) {
+      return { ok: false, error: `invalid-payload: task/usageRecords.kind must be ${PI_USAGE_KINDS.join("/")}` };
+    }
+    const groupBy = usagePayload["groupBy"];
+    if (groupBy !== undefined && !isUsageGroupBy(groupBy)) {
+      return { ok: false, error: `invalid-payload: task/usageRecords.groupBy must be ${PI_USAGE_GROUP_BY.join("/")}` };
+    }
+    return { ok: true };
+  }
+  if (op === "task/clearUsage") {
+    if (!isRecord(payload)) {
+      return { ok: false, error: "invalid-payload: task/clearUsage requires a payload object" };
+    }
+    const scope = payload["scope"];
+    if (!isRecord(scope)) {
+      return { ok: false, error: "invalid-payload: task/clearUsage.scope must be an object" };
+    }
+    if (scope["kind"] === "all") return { ok: true };
+    if (scope["kind"] === "session") {
+      const sessionId = scope["sessionId"];
+      if (typeof sessionId !== "string" || sessionId.trim().length === 0) {
+        return { ok: false, error: "invalid-payload: task/clearUsage.scope.sessionId must be a non-empty string" };
+      }
+      return { ok: true };
+    }
+    if (scope["kind"] === "before") {
+      const before = scope["before"];
+      if (typeof before !== "string" || before.trim().length === 0) {
+        return { ok: false, error: "invalid-payload: task/clearUsage.scope.before must be a non-empty string" };
+      }
+      return { ok: true };
+    }
+    return { ok: false, error: "invalid-payload: task/clearUsage.scope.kind must be all/session/before" };
   }
   // [PiDock 04] (#7) service ops: envelope shape only here (fail-closed
   // on missing ids); semantic validation (descriptor guard, env

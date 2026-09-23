@@ -70,7 +70,9 @@ export type HostTaskOp =
   | "task/sessionContext"
   | "task/setSessionModel"
   | "task/setSessionThinking"
-  | "task/compactSession";
+  | "task/compactSession"
+  | "task/usageRecords"
+  | "task/clearUsage";
 
 /**
  * Sender attestation stamped by the trusted main process on a routed
@@ -183,6 +185,8 @@ const HOST_TASK_OPS: readonly string[] = [
   "task/setSessionThinking",
   "task/compactSession",
   "task/sessionStates",
+  "task/usageRecords",
+  "task/clearUsage",
 ];
 
 export function isHostTaskOp(value: unknown): value is HostTaskOp {

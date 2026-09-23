@@ -18,6 +18,7 @@
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { PiSessionSnapshot } from "../main/pi-session.js";
+import { PI_USAGE_KINDS, type PiUsageCleanupScope, type PiUsageDetail, type PiUsageEndState, type PiUsageKind } from "../main/usage-ledger.js";
 
 export interface RepoSourceRecord {
   /** In-task folder name (single safe component). */
@@ -69,6 +70,7 @@ export interface TaskDiskRecord {
 }
 
 const SESSIONS_DIR = "sessions";
+const USAGE_FILE = "usage.json";
 
 function assertSafeFileName(name: string, label: string): void {
   if (
@@ -305,4 +307,134 @@ export function listSessionIdsOnDisk(taskDir: string): string[] {
       }
     })
     .sort();
+}
+
+/**
+ * Persisted usage ledger ([PiDock 12] #12).
+ *
+ * `<taskDir>/usage.json` holds the per-call details as their own artifact
+ * (not a projection of the live sessions), so replaying a session, archiving
+ * a conversation or restoring after a restart never inflates nor drops a call
+ * and a cleanup scope can remove usage without touching the conversation.
+ */
+export function usageFilePath(taskDir: string): string {
+  return join(taskDir, USAGE_FILE);
+}
+
+const USAGE_SOURCES = ["actual", "estimated", "unreported", "test-double", "approval"] as const;
+const USAGE_END_STATES: readonly PiUsageEndState[] = ["completed", "failed", "cancelled", "awaiting-approval"];
+const USAGE_COMPLETENESS = ["reported", "partial", "missing"] as const;
+
+function parseUsageDetail(value: unknown): PiUsageDetail {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("invalid-payload: usage detail must be an object");
+  }
+  const detail = value as Record<string, unknown>;
+  for (const key of ["id", "taskId", "sessionId", "providerId", "providerVersion", "requestModel", "at"] as const) {
+    if (typeof detail[key] !== "string" || (detail[key] as string).length === 0) {
+      throw new Error(`invalid-payload: usage detail.${key} must be a non-empty string`);
+    }
+  }
+  if (detail["projectId"] !== undefined && typeof detail["projectId"] !== "string") {
+    throw new Error("invalid-payload: usage detail.projectId must be a string");
+  }
+  if (detail["responseModel"] !== undefined && typeof detail["responseModel"] !== "string") {
+    throw new Error("invalid-payload: usage detail.responseModel must be a string");
+  }
+  if (typeof detail["kind"] !== "string" || !(PI_USAGE_KINDS as readonly string[]).includes(detail["kind"] as string)) {
+    throw new Error(`invalid-payload: usage detail.kind must be ${PI_USAGE_KINDS.join("/")}`);
+  }
+  if (typeof detail["endState"] !== "string" || !(USAGE_END_STATES as readonly string[]).includes(detail["endState"] as string)) {
+    throw new Error("invalid-payload: usage detail.endState must be completed/failed/cancelled/awaiting-approval");
+  }
+  const usage = detail["usage"];
+  if (typeof usage !== "object" || usage === null || Array.isArray(usage)) {
+    throw new Error("invalid-payload: usage detail.usage must be an object");
+  }
+  const counters = usage as Record<string, unknown>;
+  for (const key of ["input", "output", "cacheRead", "cacheWrite"] as const) {
+    if (typeof counters[key] !== "number" || !Number.isFinite(counters[key] as number) || (counters[key] as number) < 0) {
+      throw new Error(`invalid-payload: usage detail.usage.${key} must be a non-negative number`);
+    }
+  }
+  if (typeof counters["source"] !== "string" || !(USAGE_SOURCES as readonly string[]).includes(counters["source"] as string)) {
+    throw new Error("invalid-payload: usage detail.usage.source must be a known source");
+  }
+  if (typeof counters["completeness"] !== "string" || !(USAGE_COMPLETENESS as readonly string[]).includes(counters["completeness"] as string)) {
+    throw new Error("invalid-payload: usage detail.usage.completeness must be reported/partial/missing");
+  }
+  if (detail["origin"] !== undefined) {
+    const origin = detail["origin"];
+    if (typeof origin !== "object" || origin === null || Array.isArray(origin)) {
+      throw new Error("invalid-payload: usage detail.origin must be an object");
+    }
+    for (const key of ["taskId", "sessionId", "callId"] as const) {
+      const value2 = (origin as Record<string, unknown>)[key];
+      if (typeof value2 !== "string" || value2.length === 0) {
+        throw new Error(`invalid-payload: usage detail.origin.${key} must be a non-empty string`);
+      }
+    }
+  }
+  return value as PiUsageDetail;
+}
+
+export function serializeUsageLedger(details: readonly PiUsageDetail[], exclusions: readonly PiUsageCleanupScope[] = []): string {
+  return JSON.stringify({ details, exclusions }, null, 2);
+}
+
+function parseUsageExclusion(value: unknown): PiUsageCleanupScope {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("invalid-payload: usage exclusion must be an object");
+  }
+  const scope = value as Record<string, unknown>;
+  if (scope["kind"] === "all") return { kind: "all" };
+  if (scope["kind"] === "session") {
+    if (typeof scope["sessionId"] !== "string" || scope["sessionId"].length === 0) {
+      throw new Error("invalid-payload: usage exclusion.sessionId must be a non-empty string");
+    }
+    return { kind: "session", sessionId: scope["sessionId"] };
+  }
+  if (scope["kind"] === "before") {
+    if (typeof scope["before"] !== "string" || scope["before"].length === 0) {
+      throw new Error("invalid-payload: usage exclusion.before must be a non-empty string");
+    }
+    return { kind: "before", before: scope["before"] };
+  }
+  throw new Error("invalid-payload: usage exclusion.kind must be all/session/before");
+}
+
+export function parseUsageLedger(raw: string): { details: PiUsageDetail[]; exclusions: PiUsageCleanupScope[] } {
+  const value: unknown = JSON.parse(raw);
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("invalid-payload: usage ledger must be an object");
+  }
+  const details = (value as Record<string, unknown>)["details"];
+  if (!Array.isArray(details)) throw new Error("invalid-payload: usage ledger.details must be an array");
+  const exclusions = (value as Record<string, unknown>)["exclusions"];
+  if (exclusions !== undefined && !Array.isArray(exclusions)) {
+    throw new Error("invalid-payload: usage ledger.exclusions must be an array");
+  }
+  return {
+    details: details.map((detail) => parseUsageDetail(detail)),
+    exclusions: (exclusions ?? []).map((scope) => parseUsageExclusion(scope)),
+  };
+}
+
+export function writeUsageOnDisk(taskDir: string, details: readonly PiUsageDetail[], exclusions: readonly PiUsageCleanupScope[] = []): void {
+  mkdirSync(taskDir, { recursive: true });
+  writeFileSync(usageFilePath(taskDir), serializeUsageLedger(details, exclusions), "utf8");
+}
+
+export function readUsageOnDisk(taskDir: string): { details: PiUsageDetail[]; exclusions: PiUsageCleanupScope[] } {
+  try {
+    return parseUsageLedger(readFileSync(usageFilePath(taskDir), "utf8"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return { details: [], exclusions: [] };
+    throw error;
+  }
+}
+
+/** Kind guard shared by the Host's usage ops. */
+export function isUsageKindName(value: unknown): value is PiUsageKind {
+  return typeof value === "string" && (PI_USAGE_KINDS as readonly string[]).includes(value);
 }

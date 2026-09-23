@@ -514,3 +514,34 @@ describe("provider session ops", () => {
     expect(validateHostTaskOp("task/setSessionThinking", { sessionId: "main", level: 3 }).ok).toBe(false);
   });
 });
+
+// [PiDock 12] #12 usage reads/cleanup: the guard checks the filter/scope
+// envelope; the ledger rules themselves are validated in usage-ledger.test.ts
+// and applied Host-side.
+describe("usage ops", () => {
+  it("accepts an absent/empty usage filter and rejects unusable values", () => {
+    expect(validateHostTaskOp("task/usageRecords", undefined)).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/usageRecords", {})).toEqual({ ok: true });
+    for (const payload of [
+      { sessionId: "main", providerId: "provider-openai", model: "gpt-5", from: "2026-09-01", to: "2026-09-30", kind: "compaction", groupBy: "day" },
+    ]) {
+      expect(validateHostTaskOp("task/usageRecords", payload)).toEqual({ ok: true });
+    }
+    expect(validateHostTaskOp("task/usageRecords", "nope").ok).toBe(false);
+    expect(validateHostTaskOp("task/usageRecords", { sessionId: " " }).ok).toBe(false);
+    expect(validateHostTaskOp("task/usageRecords", { from: 7 }).ok).toBe(false);
+    expect(validateHostTaskOp("task/usageRecords", { kind: "live" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/usageRecords", { groupBy: "billing" }).ok).toBe(false);
+  });
+
+  it("accepts each cleanup scope shape and rejects an unknown or half-shaped one", () => {
+    expect(validateHostTaskOp("task/clearUsage", { scope: { kind: "all" } })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/clearUsage", { scope: { kind: "session", sessionId: "review" } })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/clearUsage", { scope: { kind: "before", before: "2026-09-01" } })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/clearUsage", { scope: { kind: "session" } }).ok).toBe(false);
+    expect(validateHostTaskOp("task/clearUsage", { scope: { kind: "before", before: " " } }).ok).toBe(false);
+    expect(validateHostTaskOp("task/clearUsage", { scope: { kind: "everything" } }).ok).toBe(false);
+    expect(validateHostTaskOp("task/clearUsage", { scope: "all" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/clearUsage", {}).ok).toBe(false);
+  });
+});
