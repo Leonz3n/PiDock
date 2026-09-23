@@ -1,3 +1,21 @@
+/**
+ * How current a session's context occupancy is ([PiDock 11] #9). Only
+ * `actual`/`estimated` may be compared against a model limit; `pending` means
+ * the value is being recomputed (e.g. right after a compaction) and `unknown`
+ * that there is no usable value — neither is treated as a zero pass.
+ */
+export type ContextSource = "actual" | "estimated" | "pending" | "unknown";
+
+/** One recorded provider/model switch; history keeps its own per-call attribution. */
+export type ModelSwitchEvent = {
+  at: string;
+  from: { providerId: string; model: string } | null;
+  to: { providerId: string; model: string };
+  reason: "human-switch" | "agent-switch";
+  /** Stale reasoning preference dropped by the switch, when any. */
+  droppedThinking?: string;
+};
+
 export type RunState =
   | "idle"
   | "running"
@@ -111,6 +129,10 @@ export type Session = {
   messages: Message[];
   /** Session-scoped reasoning level override; falls back to the model default. */
   thinking?: string;
+  /** How current `contextUsed` is; absent = `actual` for the seeded demo data. */
+  contextSource?: ContextSource;
+  /** Recorded provider/model switches of this session. */
+  switchEvents?: ModelSwitchEvent[];
 };
 
 export type Service = {
@@ -229,6 +251,8 @@ export type ProviderModel = {
   /** Display name; absent means the model ID is shown (prototype's default-follow behaviour). */
   name?: string;
   contextWindow: number;
+  /** Max output in the same unit as `contextWindow`; absent means undeclared. */
+  maxOutput?: number;
   /** Declares image input support; the composer refuses image sends otherwise. */
   supportsImages?: boolean;
   /** Optional reasoning configuration; absent means the catalog is unknown. */
@@ -240,8 +264,39 @@ export type ProviderProfile = {
   name: string;
   protocol: string;
   baseUrl: string;
+  /**
+   * Name of the entry in the machine-private configuration (env key / keychain
+   * label). A reference only — a literal credential is rejected and never
+   * stored, displayed or logged.
+   */
+  authRef?: string;
   enabled: boolean;
   models: ProviderModel[];
+};
+
+/** Availability of the provider/model a session, schedule or history call names. */
+export type ProviderAvailability = "available" | "disabled" | "missing" | "model-unavailable";
+
+/** A locatable provider problem: code + the field to show it at. */
+export type ProviderIssue = { code: string; field: string; message: string };
+
+/** Renderer-facing status of one provider (availability + auth presence + issues). */
+export type ProviderStatusView = {
+  availability: ProviderAvailability;
+  availabilityMessage?: string;
+  /** Whether an auth reference is configured — never its value. */
+  auth: "reference" | "none";
+  issues: ProviderIssue[];
+};
+
+/** Outcome of one 「同步模型列表」 attempt. */
+export type ProviderDiscoveryView = {
+  status: "success" | "empty" | "failure" | "unsupported";
+  candidates: string[];
+  message: string;
+  /** Connection this attempt ran against; a changed connection invalidates the set. */
+  fingerprint: string;
+  ignored: number;
 };
 
 export type UsageRecord = {

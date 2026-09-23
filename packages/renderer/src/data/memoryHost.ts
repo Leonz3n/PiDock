@@ -15,6 +15,7 @@ import type {
   ServiceMode,
   Project,
   ProjectDirectory,
+  ProviderDiscoveryView,
   ProviderProfile,
   Reference,
   RemoteDevice,
@@ -54,6 +55,15 @@ import type {
 } from "./hostAdapter";
 import { sessionKeyOf } from "./sessionKey";
 import { isSensitiveKey, nextTemplateVersion } from "./configRows";
+import {
+  PROTOCOL_MODEL_FIXTURES,
+  evaluateSessionModelSwitch,
+  evaluateThinkingSelection,
+  resolveSessionThinking,
+  syncModelCandidates,
+  validateProviderDraft,
+  type DiscoveryTransport,
+} from "./providerState";
 import {
   buildTaskFormBranch,
   checkTaskFormDirIdConflict,
@@ -659,10 +669,11 @@ class MemoryHost implements HostAdapter {
       name: "Anthropic 官方",
       protocol: "anthropic-messages",
       baseUrl: "https://api.anthropic.com",
+      authRef: "anthropic-key",
       enabled: true,
       models: [
-        { id: "Claude Sonnet", contextWindow: 200, supportsImages: true },
-        { id: "Claude Haiku", contextWindow: 200 },
+        { id: "Claude Sonnet", contextWindow: 200, maxOutput: 8, supportsImages: true },
+        { id: "Claude Haiku", contextWindow: 200, maxOutput: 4 },
       ],
     },
     {
@@ -670,8 +681,9 @@ class MemoryHost implements HostAdapter {
       name: "OpenAI 兼容网关",
       protocol: "openai-responses",
       baseUrl: "https://gateway.example.com/v1",
+      authRef: "gateway-key",
       enabled: true,
-      models: [{ id: "团队轻量模型", contextWindow: 16 }],
+      models: [{ id: "团队轻量模型", contextWindow: 16, maxOutput: 2, supportsImages: true }],
     },
     {
       id: "provider-local",
@@ -683,6 +695,7 @@ class MemoryHost implements HostAdapter {
         {
           id: "本地 Qwen",
           contextWindow: 32,
+          maxOutput: 4,
           thinking: { mode: "custom", levels: ["off", "low", "medium", "high"], default: "medium" },
         },
       ],
@@ -1105,6 +1118,11 @@ class MemoryHost implements HostAdapter {
     } else {
       if (taskLocks.locks.get(taskId) === sessionId) taskLocks.locks.delete(taskId);
     }
+    // [PiDock 11] #9: a settled turn reports a measured context reading, so the
+    // switch gate judges the next switch on fresh numbers instead of a value
+    // left `pending` by an earlier compaction.
+    session.contextUsed = session.contextUsed + 1.4 + text.length * 0.01;
+    session.contextSource = "actual";
     // [PiDock 02]: from the first model call, record the stable call identity
     // (provider + model + usage source + events) so later Provider/usage work
     // can recover it instead of re-reading rendered text.
@@ -1664,24 +1682,20 @@ class MemoryHost implements HostAdapter {
     return { ...capability };
   }
 
-  async saveProvider({ id, name, protocol, baseUrl, enabled, models }: SaveProviderInput): Promise<ProviderProfile> {
-    const providerName = name.trim();
-    if (!providerName) throw new Error("请填写 Provider 名称");
-    if (models.length === 0) throw new Error("请至少填写一个模型");
-    if (models.some((model) => !model.id.trim())) throw new Error("模型 ID 不能为空");
-    if (models.some((model) => !Number.isSafeInteger(model.contextWindow) || model.contextWindow <= 0)) {
-      throw new Error("上下文窗口必须为正整数 Tokens");
-    }
-    if (new Set(models.map((model) => model.id.trim())).size !== models.length) {
-      throw new Error("同一 Provider 中的模型 ID 不可重复");
-    }
+  async saveProvider({ id, name, protocol, baseUrl, authRef, enabled, models }: SaveProviderInput): Promise<ProviderProfile> {
+    // Locatable validation shared with the shell rules (`providerState.ts`):
+    // the first issue is thrown with the field it belongs to, so the form can
+    // mark that field instead of showing one generic message.
+    const issues = validateProviderDraft({ name, protocol, baseUrl, ...(authRef !== undefined ? { authRef } : {}), models });
+    if (issues.length > 0) throw new Error(issues[0].message);
     const existing = id ? this.providers.find((item) => item.id === id) : undefined;
     if (id && !existing) throw new Error("Provider 不存在");
     const next: ProviderProfile = {
       id: existing?.id ?? this.nextId("provider"),
-      name: providerName,
+      name: name.trim(),
       protocol,
       baseUrl: baseUrl.trim(),
+      ...(authRef !== undefined && authRef.trim().length > 0 ? { authRef: authRef.trim() } : {}),
       enabled,
       models: models.map((model) => {
         const prior = existing?.models.find((item) => item.id === model.id.trim());
@@ -1689,6 +1703,7 @@ class MemoryHost implements HostAdapter {
           id: model.id.trim(),
           name: model.name?.trim() || undefined,
           contextWindow: model.contextWindow,
+          ...(model.maxOutput !== undefined ? { maxOutput: model.maxOutput } : prior?.maxOutput !== undefined ? { maxOutput: prior.maxOutput } : {}),
           supportsImages: model.supportsImages ?? prior?.supportsImages,
           thinking: model.thinking ?? prior?.thinking,
         };
@@ -1702,18 +1717,48 @@ class MemoryHost implements HostAdapter {
 
   async removeProvider(providerId: string): Promise<void> {
     if (!this.providers.some((item) => item.id === providerId)) throw new Error("Provider 不存在");
+    // [PiDock 11] #9: sessions (and history) keep the original provider id. A
+    // deleted configuration is reported as unavailable (`describeHistoryAttribution`)
+    // instead of silently rerouting the session to another account.
     this.providers = this.providers.filter((item) => item.id !== providerId);
-    // Sessions pointing at the removed provider fall back to the first one so
-    // they never reference a provider that no longer exists.
-    const fallback = this.providers[0];
-    for (const task of this.tasks) {
-      for (const session of task.sessions) {
-        if (session.providerId !== providerId) continue;
-        session.providerId = fallback?.id ?? "";
-        session.model = fallback?.models[0]?.id ?? "";
-        session.thinking = undefined;
-      }
+  }
+
+  /** Enable/disable one provider without rewriting its models or any session. */
+  async setProviderEnabled(providerId: string, enabled: boolean): Promise<ProviderProfile> {
+    const provider = this.providers.find((item) => item.id === providerId);
+    if (!provider) throw new Error("Provider 不存在");
+    provider.enabled = enabled;
+    return { ...provider, models: provider.models.map((model) => ({ ...model })) };
+  }
+
+  /**
+   * 「同步模型列表」 in the in-memory model. Candidates come from a recorded
+   * fixture transport (no request leaves the app): the fixture answers per
+   * protocol, and a `baseUrl` ending in `empty` / `fail` / `timeout` /
+   * `no-discovery` reproduces the empty / failure / rejection / unsupported
+   * outcomes so the form can be exercised without a provider. Configured
+   * model rows are never touched — only the candidate list changes.
+   */
+  async syncProviderModels(providerId: string): Promise<ProviderDiscoveryView> {
+    const provider = this.providers.find((item) => item.id === providerId);
+    if (!provider) throw new Error("Provider 不存在");
+    if (provider.baseUrl.trim().endsWith("no-discovery")) {
+      return {
+        status: "unsupported",
+        candidates: [],
+        message: "当前连接未声明模型发现端点；请直接填写模型 ID，已配置模型不受影响",
+        fingerprint: `${provider.protocol}::${provider.baseUrl.trim()}`,
+        ignored: 0,
+      };
     }
+    const transport: DiscoveryTransport = async ({ baseUrl, protocol }) => {
+      const key = baseUrl.trim();
+      if (key.endsWith("empty")) return { ok: true, ids: [] };
+      if (key.endsWith("fail")) return { ok: false, message: "401 未授权" };
+      if (key.endsWith("timeout")) throw new Error("连接超时");
+      return { ok: true, ids: PROTOCOL_MODEL_FIXTURES[protocol] ?? [] };
+    };
+    return syncModelCandidates({ connection: { protocol: provider.protocol, baseUrl: provider.baseUrl }, transport });
   }
 
   async setSessionPermission(taskId: string, sessionId: string, permission: Permission): Promise<void> {
@@ -1722,28 +1767,67 @@ class MemoryHost implements HostAdapter {
     session.permission = permission;
   }
 
+  /**
+   * Switch the session's provider/model with the same fail-closed order as the
+   * Host: a running round/tool/confirmation first, then availability, then the
+   * strict context bound (> refuses, = and < pass; unknown/pending occupancy
+   * never passes). A refusal changes nothing: model, history and draft stay.
+   */
   async setSessionModel(taskId: string, sessionId: string, providerId: string, model: string): Promise<void> {
     const session = this.session(taskId, sessionId);
     if (!session) throw new Error("会话不存在");
     const provider = this.providers.find((item) => item.id === providerId);
-    if (!provider?.models.some((item) => item.id === model)) throw new Error("模型不可用");
+    const target = provider?.models.find((item) => item.id === model);
+    const running = session.runState === "running" || session.runState === "approval";
+    const decision = evaluateSessionModelSwitch({
+      running,
+      ...(running ? { busyLabel: session.runState === "approval" ? "等待确认中" : "回合或工具执行中" } : {}),
+      ...(provider !== undefined ? { provider } : {}),
+      ...(target !== undefined ? { model: target } : {}),
+      contextUsed: session.contextUsed,
+      contextSource: session.contextSource ?? "actual",
+    });
+    if (!decision.ok) throw new Error(decision.refusal.message);
+    if (provider === undefined || target === undefined) throw new Error("模型不可用");
+    const previousThinking = session.thinking;
+    const previousSelection = { providerId: session.providerId, model: session.model };
+    const resolved = resolveSessionThinking(target, previousThinking);
     session.providerId = providerId;
     session.model = model;
-    session.thinking = undefined;
+    session.contextWindow = target.contextWindow;
+    session.thinking = resolved.source === "session" ? resolved.level : undefined;
+    session.switchEvents = [
+      ...(session.switchEvents ?? []),
+      {
+        at: new Date().toISOString(),
+        from: previousSelection,
+        to: { providerId, model },
+        reason: "human-switch",
+        ...(resolved.stale !== undefined ? { droppedThinking: resolved.stale } : {}),
+      },
+    ];
   }
 
+  /** Session reasoning level; an undeclared tier or an impossible "off" fails closed. */
   async setSessionThinking(taskId: string, sessionId: string, level: string): Promise<void> {
     const session = this.session(taskId, sessionId);
     if (!session) throw new Error("会话不存在");
-    session.thinking = level;
+    const model = this.providers.find((item) => item.id === session.providerId)?.models.find((item) => item.id === session.model);
+    const decision = evaluateThinkingSelection({ ...(model?.thinking !== undefined ? { thinking: model.thinking } : {}), level });
+    if (!decision.ok) throw new Error(decision.error.message);
+    session.thinking = decision.level;
   }
 
+  /**
+   * Compaction replaces the current occupancy with a smaller estimate marked
+   * `pending` (the UI must not keep showing a stale exact number) and leaves
+   * cumulative token consumption untouched.
+   */
   async compactSessionContext(taskId: string, sessionId: string): Promise<void> {
     const session = this.session(taskId, sessionId);
     if (!session) throw new Error("会话不存在");
-    // Simulated compaction (the prototype's `/compact` sets 9.2k); cumulative
-    // token consumption is deliberately preserved.
     session.contextUsed = Math.min(session.contextUsed, 9.2);
+    session.contextSource = "pending";
   }
 
   async saveSchedule({ id, name, rule, timezone, prompt, providerId, model, permission }: SaveScheduleInput): Promise<Schedule> {
