@@ -759,10 +759,15 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   不静默替换）、7（失败获取不冒称最新、结果处理只在提示词、实际发送仍走工具与确认规则）
   的规则层、Host 接线与 renderer 镜像均在单测／流程测试下覆盖；盒子 4 的「调度会话沿用
   权限规则」由「只读会话被拒绝并记为该次失败」的 Host 用例锁定，「等待确认」路径由执行台账
-  层（期限、到期结束、过期后不可批准）锁定。
-- **全量校验**：`pnpm turbo run typecheck test build lint --force` → 8 successful / 8 total，
-  0 cached；shell 52 files / 765 tests（#19 后 49/727，+3 files/+38），renderer 40 files /
-  348 tests（#19 后 39/344，+1 file/+4）；两包 `tsc` 与 `eslint --max-warnings 0` 均通过。
+  层（期限、到期结束、过期后不可批准）锁定。**盒子 2 与盒子 7 的「获取远程新记录／失败不冒称
+  最新」只到规则层**：`remoteFetchVerdict`／`templateFetchPlan` 在 shell 与 renderer 都没有
+  调用者（`grep` 只命中其自身与用例），因此这两条盒子的远程获取部分判为 PARTIAL，其余分支
+  （模板只填名称／规则／提示词、结果处理只在提示词、拒绝发送类配置字段、实际发送仍走工具与
+  确认规则）已接线并被用例锁定。
+- **全量校验（P1 修复后重跑）**：`pnpm turbo run typecheck test build lint --force`
+  → 8 successful / 8 total，0 cached；shell 52 files / 770 tests（#19 后 49/727，+3 files/+43，
+  含 P1 与相邻 P2 修复的 5 个回归用例），renderer 40 files / 348 tests（#19 后 39/344，
+  +1 file/+4）；两包 `tsc` 与 `eslint --max-warnings 0` 均通过。
 - **评审修复（#20 review P1 与相邻 P2）**：删除定时任务后其执行记录保留，因此 `schedule-<n>`
   的播种同时扫描 `schedules` 与 `runs`——重启后不再复用被删任务的 id，两条历史不会被合并到
   同一 id；停在确认上的执行记录改用 `awaiting-approval`（不再冒充「完成」，renderer 徽标显示
@@ -779,4 +784,7 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   确认」这条路径只有在执行台账层被验证，真实「默认权限调度会话等待确认」未跑；
   真实 Provider 认证、真实子进程与工作区写入未执行；Windows x64 与 macOS 打包应用未运行；
   「获取远程新记录」没有真实 git／远端读取器，只有纯规则判定；模板「点击使用模板」在新建
-  任务弹层内完成，未接线到 Host 保存。
+  任务弹层内完成，未接线到 Host 保存。两条覆盖边界：重启去重以持久水位与已记录 occurrence
+  key 读取为证（`host/schedules.ts` 构造时从恢复记录播种，用例只直接覆盖序号重播种），
+  没有独立的「重启后同窗口再评估」用例；盒子 3 的「复用会话被拒」守卫（`session-exists`）
+  只有代码证据，无用例直接触发该分支。
