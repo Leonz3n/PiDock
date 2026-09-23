@@ -20,7 +20,7 @@
 | `capture-shell-shots.mjs` | 生成截图的脚本（可重跑） |
 | `verify-shell-facts.mjs` | 生成本目录两份 JSON 的脚本（可重跑） |
 
-两个脚本都要求上述两个服务在 4319/4335 运行；脚本内绝对路径指向本机 `playwright-core` 与 Chromium 缓存，换机器需改路径。
+两个脚本把产物写回本目录（`prototype/`、`renderer/` 子目录与 `shell-facts.json`、`shell-verification.json`），不写 `/tmp`：输出目录由 `import.meta.url` 推导，可从任意 cwd 运行。运行前置：原型服务在 `4319`、渲染层 dev 在 `4335`（`pnpm --filter @pidock/renderer dev`）；脚本内绝对路径指向本机 `playwright-core` 与 Chromium 缓存，换机器需改路径。重跑已核对：两份 JSON 与三张渲染层截图与已提交版本逐字节一致；原型截图是非字节稳定的重渲染（同一页面两次截图字节数不同），重跑后用 `git checkout` 保留已评审版本。
 
 ## 2. 机器可读事实（`shell-verification.json`）
 
@@ -38,6 +38,8 @@ renderer  summary   : background rgb(41,49,66)  border rgb(59,70,92)  color rgb(
 ```
 
 结论：除原型分隔用的 1px `.sep`（本产品底栏不是布局切换器）外，颜色/圆角/内边距/阴影/字号/位置全部与原型**实际生效值**一致。原型文件里 `#262d3e/#384157/#eceef3/#adb4c4` 是 `style.css` 首段的基础规则，同文件后段的评审修订块（`.switcher{background:#293142;border-color:#3b465c}`、`.switcher .state{color:#b5bfd4}`，同优先级、后者生效）已覆盖它们。评审 P2 的该项比对的是被覆盖的旧值，因此**本轮不改配色**（改回旧值反而会引入偏差）。
+
+用色对应关系（避免把两行 `color` 读成同一项）：上表渲染层摘要的 `color rgb(181,191,212)` 对应原型的 `.switcher .state`；原型 `.switcher` 根 `color` 仍为 `rgb(236,238,243)`——首段基础规则未被后段修订覆盖，渲染层底栏不展示该层级的分隔/标题用色。
 
 ### 2.2 运行中任务卡圆点（要点 1）
 

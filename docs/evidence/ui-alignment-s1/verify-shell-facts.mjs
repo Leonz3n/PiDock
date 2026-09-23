@@ -6,10 +6,13 @@
 // Run: node docs/evidence/ui-alignment-s1/verify-shell-facts.mjs
 // Needs the prototype on http://127.0.0.1:4319 and the renderer dev server on
 // http://127.0.0.1:4335 (see verification-log.md §1).
+// The JSON is written next to this script, not to a temp dir.
 import { writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { chromium } from "/Users/adber/workspace/github/PiDock/packages/renderer/node_modules/playwright-core/index.mjs";
 
-const OUT = "/tmp/pidock-uialign";
+const OUT = dirname(fileURLToPath(import.meta.url));
 const CHROME = `${process.env.HOME}/Library/Caches/ms-playwright/chromium-1243/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing`;
 
 const browser = await chromium.launch({ executablePath: CHROME, headless: true });
@@ -103,5 +106,5 @@ async function page(url, waitFor) {
 }
 
 await browser.close();
-await writeFile(`${OUT}/shell-verification.json`, `${JSON.stringify(report, null, 2)}\n`);
+await writeFile(join(OUT, "shell-verification.json"), `${JSON.stringify(report, null, 2)}\n`);
 console.log(JSON.stringify(report, null, 2));
