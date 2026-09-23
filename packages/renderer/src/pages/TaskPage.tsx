@@ -8,6 +8,7 @@ import {
   DirectoryTerminalPanel,
   FilesPanel,
   LogsPanel,
+  ProtocolPanel,
   RuntimePanel,
   SessionSubagentList,
   SubagentPanel,
@@ -32,6 +33,7 @@ import { approvalStatusLabel, runStateLabel } from "./runState";
 import { sessionKeyOf } from "../data/sessionKey";
 import { describeContextDisplay, describeHistoryAttribution, formatTokens, resolveSessionThinking } from "../data/providerState";
 import type { ServiceTopologyView } from "../data/serviceTopology";
+import { projectProtocolBinding, type ProtocolBindingView } from "../data/protocolBinding";
 import { useDraftStore } from "../stores/drafts";
 import { useEventsStore } from "../stores/events";
 import { useHostStore } from "../stores/host";
@@ -74,6 +76,23 @@ export function TaskPage({ task, sessionId }: { task: Task; sessionId: string })
       cancelled = true;
     };
   }, [task.id, task.services]);
+  // [PiDock 08] (#14) protocol plan + consumer binding view for the protocol
+  // panel: the Host state when the shell answers `task/protocolState`, the
+  // in-memory projection otherwise.
+  const [protocolBinding, setProtocolBinding] = useState<ProtocolBindingView | undefined>(undefined);
+  useEffect(() => {
+    let cancelled = false;
+    void useHostStore
+      .getState()
+      .protocolBinding(task.id)
+      .then((view) => {
+        if (!cancelled) setProtocolBinding(view);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [task.id, task.repos]);
   const availablePanels = directoryOnly ? (["files", "terminal"] as ToolPanel[]) : TOOL_PANELS;
 
   const subagents = task.subagentsBySession?.[session.id] ?? [];
@@ -186,6 +205,7 @@ export function TaskPage({ task, sessionId }: { task: Task; sessionId: string })
                   }}
                 />
               ) : null}
+              {panel === "protocol" && !directoryOnly ? <ProtocolPanel view={protocolBinding ?? projectProtocolBinding(task)} /> : null}
               {panel === "browser" && !directoryOnly ? (
                 <BrowserPanel
                   pages={task.browserPages}
@@ -250,7 +270,7 @@ const COMPOSER_COMMANDS = [
 ];
 
 function panelName(panel: ToolPanel) {
-  return { runtime: "运行", browser: "浏览器", files: "文件", terminal: "终端", logs: "日志" }[panel];
+  return { runtime: "运行", protocol: "协议", browser: "浏览器", files: "文件", terminal: "终端", logs: "日志" }[panel];
 }
 
 /**

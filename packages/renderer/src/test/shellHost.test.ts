@@ -355,6 +355,59 @@ describe("shell host adapter selection", () => {
     }
   });
 
+  it("[PiDock 08] prefers the Host protocol state and keeps the memory projection when it cannot answer", async () => {
+    const ops: string[] = [];
+    stubBridge(async (_taskId, op) => {
+      ops.push(op as string);
+      if (op === "task/protocolState") {
+        return {
+          ok: true,
+          payload: {
+            state: {
+              taskId: "release",
+              mode: "local",
+              protocol: { repoDir: "/tasks/task-a/apis", goGenDir: "/tasks/task-a/apis/gen/go", tsGenDir: "/tasks/task-a/apis/gen/ts" },
+              generatedVersion: "gen-7",
+              generation: { runsGeneration: true, reason: "本地联调", steps: [{ kind: "generate", program: "make", args: ["generate"], cwd: "/tasks/task-a/apis" }] },
+              consumers: [
+                {
+                  consumerId: "invoice",
+                  name: "invoice-service",
+                  language: "go",
+                  repoDir: "/tasks/task-a/invoice-service",
+                  releaseDependency: "github.com/shipber/apis v0.0.69",
+                  binding: { kind: "go-workspace", path: "/tasks/task-a/protocol/go-work/invoice/go.work", useDirectories: [], excludedConsumers: [], releaseManifestsUntouched: [] },
+                  staleness: { state: "ready", detail: "已使用本任务产物 gen-7" },
+                },
+              ],
+              prepare: [{ state: "generated", label: "生成物已更新", ok: true, detail: "实际生成版本：gen-7" }],
+              toolchain: { platform: "darwin-arm64", ok: true, note: "生成工具就绪", desktopLaunchImpliesGeneration: false, entries: [] },
+              diagnostics: [],
+              switchAssessment: { ok: true, blockers: [], notes: [] },
+            },
+          },
+        };
+      }
+      return { ok: true, payload: {} };
+    });
+    try {
+      const view = await resolveHostAdapter(createMemoryHost()).protocolBinding("release");
+      expect(ops).toEqual(["task/protocolState"]);
+      expect(view.simulated).toBe(false);
+      expect(view.mode).toBe("local");
+      expect(view.generatedVersion).toBe("gen-7");
+      expect(view.consumers[0]).toMatchObject({ consumerId: "invoice", binding: { kind: "go-workspace" } });
+      // A Host without a plan yet keeps the memory projection (fail-open read).
+      stubBridge(async () => ({ ok: false, error: "invalid-protocol-repo: 尚未设置协议仓库与消费者" }));
+      const fallback = await resolveHostAdapter(createMemoryHost()).protocolBinding("release");
+      expect(fallback.simulated).toBe(true);
+      expect(fallback.generatedVersion).toBeNull();
+      expect(fallback.consumers.length).toBeGreaterThan(0);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("[PiDock 12] reads usage from the Host ledger and falls back per task when it cannot answer", async () => {
     const seen: Array<{ taskId: string; op: string; payload?: Record<string, unknown> }> = [];
     stubBridge(async (taskId, op, payload) => {

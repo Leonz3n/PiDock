@@ -63,6 +63,7 @@ import { sessionKeyOf } from "./sessionKey";
 import { describeUsageCleanupScope, filterUsageRecords, usageWindow } from "./usageState";
 import { sessionWriteStates, type SessionWriteState } from "./writeCoordination";
 import { projectServiceTopology, type ServiceTopologyView } from "./serviceTopology";
+import { projectProtocolBinding, type ProtocolBindingView } from "./protocolBinding";
 import { isSensitiveKey, nextTemplateVersion } from "./configRows";
 import {
   PROTOCOL_MODEL_FIXTURES,
@@ -1607,6 +1608,18 @@ class MemoryHost implements HostAdapter {
     // Project first: the stored service rows carry no resolved config, so the
     // routing read points only exist on the projected task.
     return projectServiceTopology(this.projectTask(task), environment?.name ?? task.environmentId);
+  }
+
+  /**
+   * [PiDock 08] (#14) protocol plan + consumer binding view (memory mode). No
+   * generation or binding is simulated as done: the projection starts on the
+   * release dependencies and labels itself as a projection, so the panel never
+   * shows a made-up generated version.
+   */
+  async protocolBinding(taskId: string): Promise<ProtocolBindingView> {
+    const task = this.task(taskId);
+    if (!task) throw new Error("任务不存在");
+    return projectProtocolBinding(this.projectTask(task));
   }
 
   async getSchedules() {

@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import type { ConfigRowDraft } from "../data/configRows";
 
-export const TOOL_PANELS = ["runtime", "browser", "files", "terminal", "logs"] as const;
+export const TOOL_PANELS = ["runtime", "protocol", "browser", "files", "terminal", "logs"] as const;
 
 export type ToolPanel = (typeof TOOL_PANELS)[number];
 

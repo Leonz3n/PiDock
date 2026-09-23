@@ -21,6 +21,12 @@ import {
   readBrowserPageState,
   setBrowserTakeover,
 } from "../data/browserSurface";
+import {
+  protocolConsumerStateLabel,
+  protocolModeLabel,
+  toolchainStatusLabel,
+  type ProtocolBindingView,
+} from "../data/protocolBinding";
 
 export function RuntimePanel({
   task,
@@ -220,6 +226,131 @@ function Row({ label, value, mono = false }: { label: string; value: string; mon
     <div className="flex items-start justify-between gap-3">
       <dt className="shrink-0">{label}</dt>
       <dd className={`text-right text-ink ${mono ? "font-mono text-[10px]" : ""}`}>{value}</dd>
+    </div>
+  );
+}
+
+/**
+ * [PiDock 08] (#14) protocol preparation panel: the protocol repository, the
+ * generation steps, the *actual* generated version, each consumer's binding
+ * and staleness, the platform toolchain result and the reasons a switch is
+ * stopped. Display only — the Host owns the decisions; the panel never shows a
+ * generated version it was not given.
+ */
+export function ProtocolPanel({ view }: { view: ProtocolBindingView }) {
+  const staleConsumers = view.consumers.filter((consumer) => consumer.state !== "ready");
+  return (
+    <div className="flex flex-col gap-3">
+      <ul className="flex flex-col gap-1.5 text-xs" data-testid="protocol-summary">
+        <li className="rounded-md border border-line px-2 py-1.5">
+          <span className="text-ink">协议仓库 {view.protocol.repoDir || "未配置"}</span>
+          <span className="block text-[10px] text-muted">
+            绑定方式：{protocolModeLabel(view.mode)}
+            {view.simulated ? " · 内存投影（非 Host 结果）" : ""}
+          </span>
+        </li>
+        <li className="rounded-md border border-line px-2 py-1.5" data-testid="protocol-generated-version">
+          <span className="text-ink">实际生成版本：{view.generatedVersion ?? "尚未生成"}</span>
+          {view.generatedAt ? <span className="block text-[10px] text-muted">生成时间：{view.generatedAt}</span> : null}
+          <span className="block text-[10px] text-muted">{view.generationReason}</span>
+        </li>
+        {view.runsGeneration ? (
+          <li className="rounded-md border border-line px-2 py-1.5" data-testid="protocol-steps">
+            <span className="text-ink">生成步骤</span>
+            <ul className="mt-1 flex flex-col gap-0.5 text-[11px] text-muted">
+              {view.generationSteps.map((step) => (
+                <li key={`${step.kind}-${step.program}`}>
+                  · {step.kind === "postprocess" ? "后处理" : "生成"} {step.program} {step.args.join(" ")}
+                </li>
+              ))}
+            </ul>
+          </li>
+        ) : null}
+      </ul>
+
+      <Panel title="准备状态">
+        <ul className="flex flex-col gap-1 text-[11px] text-muted" data-testid="protocol-prepare">
+          {view.prepare.map((entry) => (
+            <li key={entry.state}>
+              {entry.ok ? "✓" : "○"} {entry.label}：{entry.detail}
+            </li>
+          ))}
+        </ul>
+      </Panel>
+
+      {view.consumers.length > 0 ? (
+        <Panel title="消费者绑定">
+          <ul className="flex flex-col gap-1.5 text-xs" data-testid="protocol-consumers">
+            {view.consumers.map((consumer) => (
+              <li key={consumer.consumerId} className="rounded-md border border-line px-2 py-1.5">
+                <div className="text-ink">
+                  {consumer.name} · {consumer.language === "go" ? "Go" : "TS"} · {protocolConsumerStateLabel(consumer.state)}
+                </div>
+                <span className="block text-[10px] text-muted">
+                  {consumer.binding.kind === "release"
+                    ? `发布依赖：${consumer.binding.dependency}`
+                    : consumer.binding.kind === "go-workspace"
+                      ? `任务工作区：${consumer.binding.path}`
+                      : `受管链接：${consumer.binding.linkPath}`}
+                </span>
+                {consumer.binding.kind === "go-workspace" && consumer.binding.excludedConsumers.length > 0 ? (
+                  <span className="block text-[10px] text-muted">
+                    未并入（避免合并依赖选择）：{consumer.binding.excludedConsumers.join("、")}
+                  </span>
+                ) : null}
+                {consumer.binding.kind === "go-workspace" ? (
+                  <span className="block text-[10px] text-muted">不改写发布配置：{consumer.binding.releaseManifestsUntouched.join("、")}</span>
+                ) : null}
+                {consumer.binding.kind === "ts-link" ? (
+                  <span className="block text-[10px] text-muted">
+                    恢复绑定：{consumer.binding.restore.program} {consumer.binding.restore.args.join(" ")}
+                  </span>
+                ) : null}
+                <span className="block text-[10px] text-muted">{consumer.stateDetail}</span>
+                {consumer.resolution ? (
+                  <span className="block text-[10px] text-muted">
+                    解析路径：{consumer.resolution.ok ? "已确认" : "未通过"} {consumer.resolution.message}
+                  </span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+          {staleConsumers.length > 0 ? (
+            <p className="mt-2 text-[10px] text-muted" data-testid="protocol-stale-note">
+              {staleConsumers.length} 个消费者需要重新生成/编译/重启后才算使用新协议
+            </p>
+          ) : null}
+        </Panel>
+      ) : null}
+
+      {view.blockers.length > 0 || view.diagnostics.length > 0 ? (
+        <Panel title="停止原因与诊断">
+          <ul className="flex flex-col gap-1 text-[11px] text-muted" data-testid="protocol-diagnostics">
+            {view.blockers.map((blocker) => (
+              <li key={`${blocker.code}-${blocker.consumerId}`}>· [{blocker.code}] {blocker.message}</li>
+            ))}
+            {view.diagnostics.map((diagnostic) => (
+              <li key={`${diagnostic.code}-${diagnostic.message}`}>· [{diagnostic.code}] {diagnostic.message}</li>
+            ))}
+          </ul>
+        </Panel>
+      ) : null}
+
+      <Panel title="生成工具链">
+        <p className="text-[11px] text-muted">
+          平台：{view.toolchain.platform || "未探测"} · {view.toolchain.ok ? "就绪" : "未就绪"}；桌面可启动不等同于生成支持。
+        </p>
+        <ul className="mt-1 flex flex-col gap-0.5 text-[11px] text-muted" data-testid="protocol-toolchain">
+          {view.toolchain.entries.map((entry) => (
+            <li key={entry.toolId}>
+              · {entry.label}：{toolchainStatusLabel(entry.status)}
+
+              {entry.version ? ` (${entry.version})` : ""}
+            </li>
+          ))}
+          {view.toolchain.entries.length === 0 ? <li>· {view.toolchain.note}</li> : null}
+        </ul>
+      </Panel>
     </div>
   );
 }

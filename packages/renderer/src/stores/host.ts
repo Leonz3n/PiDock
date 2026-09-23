@@ -42,6 +42,7 @@ import type {
   Workspace,
 } from "../data/types";
 import type { ServiceTopologyView } from "../data/serviceTopology";
+import type { ProtocolBindingView } from "../data/protocolBinding";
 
 type HostState = {
   adapter: HostAdapter;
@@ -83,6 +84,8 @@ type HostState = {
   setServiceMode: (taskId: string, serviceId: string, mode: ServiceMode) => Promise<void>;
   /** [PiDock 05] (#10) topology view for the runtime panel (Host plan or memory projection). */
   serviceTopology: (taskId: string) => Promise<ServiceTopologyView>;
+  /** [PiDock 08] (#14) protocol plan + consumer binding view (Host state or memory projection). */
+  protocolBinding: (taskId: string) => Promise<ProtocolBindingView>;
   setScheduleEnabled: (scheduleId: string, enabled: boolean) => Promise<void>;
   runScheduleNow: (scheduleId: string) => Promise<ScheduledRun>;
   setCapabilityEnabled: (capabilityId: string, enabled: boolean) => Promise<void>;
@@ -241,6 +244,8 @@ export const useHostStore = create<HostState>((set, get) => ({
   },
 
   serviceTopology: async (taskId) => get().adapter.serviceTopology(taskId),
+
+  protocolBinding: async (taskId) => get().adapter.protocolBinding(taskId),
 
   setScheduleEnabled: async (scheduleId, enabled) => {
     await get().adapter.setScheduleEnabled(scheduleId, enabled);

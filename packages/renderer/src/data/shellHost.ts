@@ -19,6 +19,7 @@ import type {
   SendMessageResult,
 } from "./hostAdapter";
 import { instanceAddress, type ServiceTopologyView } from "./serviceTopology";
+import { protocolBindingFromHost, type ProtocolBindingView } from "./protocolBinding";
 import type { Approval, ApprovalStatus, Reference, RunRecord, RunState, TaskWriteLockView, UsageCleanupScope, UsageRecord, WriteOrphanView } from "./types";
 import {
   clearUsageThroughShell,
@@ -26,6 +27,7 @@ import {
   controlServiceThroughShell,
   isShellConnected,
   planServiceGroupThroughShell,
+  protocolStateThroughShell,
   serviceRunRecordsThroughShell,
   setSessionModelThroughShell,
   setSessionThinkingThroughShell,
@@ -625,6 +627,19 @@ export function createShellHostAdapter(fallback: HostAdapter): HostAdapter {
           if (!probe.ok) return (target as HostAdapter).setServiceRunning(taskId, serviceId, running);
           const result = await controlServiceThroughShell({ taskId, serviceId, action: running ? "start" : "stop" });
           if (!result.ok) throw shellResultError(result, "服务启停失败，请重试");
+        };
+      }
+      if (property === "protocolBinding") {
+        return async (taskId: string): Promise<ProtocolBindingView> => {
+          const local = await (target as HostAdapter).protocolBinding(taskId);
+          if (!isShellConnected()) return local;
+          // [PiDock 08] (#14) Prefer the Host's own protocol state (actual
+          // generated version, per-consumer binding/staleness, toolchain,
+          // switch blockers). A Host with no plan yet (or a failing
+          // round-trip) keeps the memory projection instead of an empty view.
+          const result = await protocolStateThroughShell(taskId);
+          if (!result.ok) return local;
+          return protocolBindingFromHost(taskId, result.payload) ?? local;
         };
       }
       if (property === "serviceTopology") {
