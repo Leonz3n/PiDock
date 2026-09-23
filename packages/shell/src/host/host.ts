@@ -33,7 +33,14 @@ function getParentPort(): UtilityParentPort {
 
 const hostPort = getParentPort();
 
-import { boundWorkspaceId, classifyControlCaller, routeHostTask, toolPlannerSpecForHostDispatch, validateHostTaskOp } from "./host-guards.js";
+import {
+  boundWorkspaceId,
+  classifyControlCaller,
+  resolveBrowserLogSession,
+  routeHostTask,
+  toolPlannerSpecForHostDispatch,
+  validateHostTaskOp,
+} from "./host-guards.js";
 import { TaskWorkspaceHost, diskTaskStore } from "./task-host.js";
 import { TaskServiceRuntime } from "./service-runtime.js";
 import { runAgentServiceControl } from "./service-control.js";
@@ -171,10 +178,6 @@ function browserGatewayFor(taskId: string): BrowserGatewayPort {
  * first is the current single-session conversation ([PiDock 09] #11 will
  * carry an explicit session id once multiple sessions share a task).
  */
-function browserLogSessionId(host: TaskWorkspaceHost): string {
-  return host.sessionIds()[0] ?? "main";
-}
-
 /**
  * Async since [PiDock 06] (#8): a browser action is decided in the Host but
  * performed by main (which owns the visible page), so dispatch awaits one
@@ -634,7 +637,11 @@ async function dispatchTaskOp(
           return result.ok ? { ok: true, payload: result.payload } : { ok: false, error: result.error };
         }
         const requested = typeof record["targetSessionId"] === "string" ? (record["targetSessionId"] as string).trim() : "";
-        const channel = host.openSession(requested.length > 0 ? requested : browserLogSessionId(host));
+        // A named session must exist: a typo must not silently create a new
+        // conversation for the user's marker.
+        const resolved = resolveBrowserLogSession(requested, host.sessionIds());
+        if (!resolved.ok) return { ok: false, error: resolved.error };
+        const channel = host.openSession(resolved.sessionId);
         const result = await runHumanBrowserAction({
           gateway,
           action,

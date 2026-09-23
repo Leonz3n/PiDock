@@ -74,7 +74,8 @@ export interface BrowserSurface {
   readonly taskId: string;
   pages(): BrowserLivePage[];
   state(page: { pageId: string; webContentsId: number }): Promise<BrowserSurfaceState>;
-  takeoverState(): { paused: boolean; reason?: string };
+  /** Takeover of the addressed page (absent id = the task's active page). */
+  takeoverState(pageId?: string): { paused: boolean; reason?: string };
   /** Raw (unscrubbed) evidence; the gateway bounds and scrubs it. */
   rawEvidence(): { consoleErrors: ConsoleErrorEvidence[]; failedRequests: FailedRequestEvidence[] };
   screenshot(page: { pageId: string; webContentsId: number }): Promise<BrowserScreenshot>;
@@ -149,16 +150,6 @@ export function createBrowserGateway(deps: BrowserGatewayDeps): {
     if (request.actor.kind === "agent" && !isAgentReachableAction(request.action)) {
       return { ok: false, error: `permission-denied: ${request.action} 只能由用户显式操作` };
     }
-    if (request.actor.kind === "agent") {
-      const takeover = deps.surface.takeoverState();
-      if (takeover.paused) {
-        return {
-          ok: false,
-          error: `takeover-paused: 用户正在接管页面${takeover.reason !== undefined ? `（${takeover.reason}）` : ""}，Agent 操作已暂停`,
-        };
-      }
-    }
-
     let page: BoundPage | undefined;
     if (PAGE_REQUIRED_ACTIONS.includes(request.action) || request.page !== undefined) {
       const checked = classifyPageRef({ page: request.page, taskId: deps.taskId, livePages: deps.surface.pages() });
@@ -166,6 +157,19 @@ export function createBrowserGateway(deps: BrowserGatewayDeps): {
       const live = deps.surface.pages().find((candidate) => candidate.pageId === checked.pageId);
       if (!live) return { ok: false, error: `page-stale: 页面 ${checked.pageId} 已关闭，请重新获取页面状态` };
       page = { pageId: live.pageId, webContentsId: live.webContentsId };
+    }
+
+    if (request.actor.kind === "agent") {
+      // Takeover is enforced for the page the action addresses (or the
+      // task's active page for page-creating/task-level actions), so a
+      // paused page is never automated even when another tab is free.
+      const takeover = deps.surface.takeoverState(page?.pageId);
+      if (takeover.paused) {
+        return {
+          ok: false,
+          error: `takeover-paused: 用户正在接管页面${takeover.reason !== undefined ? `（${takeover.reason}）` : ""}，Agent 操作已暂停`,
+        };
+      }
     }
 
     if (request.action === "page/open" || request.action === "page/navigate") {

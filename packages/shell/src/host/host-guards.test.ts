@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { boundWorkspaceId, buildHostEnv, buildToolPlannerSpec, classifyControlCaller, DEFAULT_WORKSPACE_ID, routeHostTask, routeTaskBinding, toolPlannerSpecForHostDispatch, toolPlannerSpecForOp, validateHostTaskOp } from "./host-guards.js";
+import { boundWorkspaceId, resolveBrowserLogSession, buildHostEnv, buildToolPlannerSpec, classifyControlCaller, DEFAULT_WORKSPACE_ID, routeHostTask, routeTaskBinding, toolPlannerSpecForHostDispatch, toolPlannerSpecForOp, validateHostTaskOp } from "./host-guards.js";
 
 // S6 final wiring: approval-listing reads ride `task/listApprovals` +
 // `task/getApproval` (fail-closed payloads; host.ts needs a parent port).
@@ -403,5 +403,21 @@ describe("#6 append + probe guards (S2)", () => {
     ).toBe(false);
     expect(validateHostTaskOp("task/probeLink", { sourcePath: "/data/notes" })).toEqual({ ok: true });
     expect(validateHostTaskOp("task/probeLink", {}).ok).toBe(false);
+  });
+});
+
+// [PiDock 06] (#8): where a user's browser marker is logged.
+describe("browser log session", () => {
+  it("names the requested session only when it exists", () => {
+    expect(resolveBrowserLogSession("main", ["main", "review"])).toEqual({ ok: true, sessionId: "main" });
+    expect(resolveBrowserLogSession("review", ["main", "review"])).toEqual({ ok: true, sessionId: "review" });
+    const missing = resolveBrowserLogSession("typo", ["main"]);
+    expect(missing.ok).toBe(false);
+    expect(missing.ok === false && missing.error).toContain("unknown-session");
+  });
+
+  it("falls back to the task's first session, then `main`", () => {
+    expect(resolveBrowserLogSession("", ["only"])).toEqual({ ok: true, sessionId: "only" });
+    expect(resolveBrowserLogSession("", [])).toEqual({ ok: true, sessionId: "main" });
   });
 });

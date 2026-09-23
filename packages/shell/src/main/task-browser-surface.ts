@@ -54,8 +54,8 @@ export class TaskBrowserSurface implements BrowserSurface {
     }));
   }
 
-  takeoverState(): { paused: boolean; reason?: string } {
-    const binding = this.activeBinding();
+  takeoverState(pageId?: string): { paused: boolean; reason?: string } {
+    const binding = pageId !== undefined ? this.bindings.get(pageId) : this.activeBinding();
     if (!binding) return { paused: false };
     const takeover = binding.controller.session.takeover;
     return takeover.reason !== undefined ? { paused: takeover.paused, reason: takeover.reason } : { paused: takeover.paused };
