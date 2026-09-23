@@ -34,6 +34,7 @@ import { sessionKeyOf } from "../data/sessionKey";
 import { describeContextDisplay, describeHistoryAttribution, formatTokens, resolveSessionThinking } from "../data/providerState";
 import type { ServiceTopologyView } from "../data/serviceTopology";
 import { projectProtocolBinding, type ProtocolBindingView } from "../data/protocolBinding";
+import type { TerminalPlanView, TerminalStateView, WorkspaceBrowserView } from "../data/workspaceFiles";
 import { useDraftStore } from "../stores/drafts";
 import { useEventsStore } from "../stores/events";
 import { useHostStore } from "../stores/host";
@@ -93,6 +94,101 @@ export function TaskPage({ task, sessionId }: { task: Task; sessionId: string })
       cancelled = true;
     };
   }, [task.id, task.repos]);
+  // [PiDock 10] (#15) file browser + terminal views. Both are loaded on demand
+  // (only while their panel is open), so an unopened tool creates no resource:
+  // no Host read, no terminal plan.
+  const [workspaceBrowser, setWorkspaceBrowser] = useState<WorkspaceBrowserView | undefined>(undefined);
+  const [browserRootId, setBrowserRootId] = useState<string | undefined>(undefined);
+  const [browserRelative, setBrowserRelative] = useState<string | undefined>(undefined);
+  const [terminalPlan, setTerminalPlan] = useState<TerminalPlanView | undefined>(undefined);
+  const [terminalState, setTerminalState] = useState<TerminalStateView | undefined>(undefined);
+  const [terminalError, setTerminalError] = useState<string | undefined>(undefined);
+  const panelsOpen = useUiStore((state) => state.panels[task.id] ?? EMPTY_PANELS);
+  const filesPanelOpen = panelsOpen.includes("files");
+  const terminalPanelOpen = panelsOpen.includes("terminal");
+  useEffect(() => {
+    if (!filesPanelOpen) return;
+    let cancelled = false;
+    void useHostStore
+      .getState()
+      .workspaceBrowser(task.id, {
+        ...(browserRootId !== undefined ? { rootId: browserRootId } : {}),
+        ...(browserRelative !== undefined && browserRelative.length > 0 ? { relative: browserRelative } : {}),
+      })
+      .then((view) => {
+        if (!cancelled) setWorkspaceBrowser(view);
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) pushToast(error instanceof Error ? error.message : "文件面板加载失败");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [filesPanelOpen, task.id, task.repos, browserRootId, browserRelative, pushToast]);
+  useEffect(() => {
+    if (!terminalPanelOpen) return;
+    let cancelled = false;
+    void useHostStore
+      .getState()
+      .terminalState(task.id)
+      .then((state) => {
+        if (!cancelled) setTerminalState(state);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [terminalPanelOpen, task.id, task.repos]);
+  // Plan first (cwd + resolved env + owner), then run the same start request:
+  // the Host re-plans at start time, so what the user sees before starting is
+  // exactly what the gated start uses.
+  const startTerminal = () => {
+    const rootId = workspaceBrowser?.roots[0]?.id ?? task.repos[0];
+    if (rootId === undefined) {
+      pushToast("本任务没有可用的文件根，无法打开终端");
+      return;
+    }
+    const instanceId = `term-${task.id}-1`;
+    void useHostStore
+      .getState()
+      .planTerminal(task.id, { instanceId, rootId, program: "bash", args: ["-l"], sessionId: session.id })
+      .then(async (plan) => {
+        setTerminalPlan(plan);
+        await useHostStore.getState().controlTerminal(task.id, {
+          instanceId: plan.instanceId,
+          action: "start",
+          rootId: plan.rootId,
+          program: plan.program,
+          args: plan.args,
+          sessionId: session.id,
+        });
+        setTerminalState(await useHostStore.getState().terminalState(task.id));
+        setTerminalError(undefined);
+      })
+      .catch((error: unknown) => setTerminalError(error instanceof Error ? error.message : "终端计划失败"));
+  };
+  const controlTerminal = (action: "start" | "stop", instanceId?: string) => {
+    const target = instanceId ?? terminalPlan?.instanceId;
+    if (target === undefined) return;
+    const rootId = terminalPlan?.rootId ?? workspaceBrowser?.roots[0]?.id;
+    void useHostStore
+      .getState()
+      .controlTerminal(task.id, {
+        instanceId: target,
+        action,
+        ...(rootId !== undefined ? { rootId } : {}),
+        program: terminalPlan?.program ?? "bash",
+        ...(terminalPlan ? { args: terminalPlan.args } : {}),
+        sessionId: session.id,
+      })
+      .then(() => useHostStore.getState().terminalState(task.id))
+      .then((state) => {
+        setTerminalState(state);
+        setTerminalError(undefined);
+      })
+      .catch((error: unknown) => setTerminalError(error instanceof Error ? error.message : "终端操作失败"));
+  };
+
   const availablePanels = directoryOnly ? (["files", "terminal"] as ToolPanel[]) : TOOL_PANELS;
 
   const subagents = task.subagentsBySession?.[session.id] ?? [];
@@ -223,7 +319,15 @@ export function TaskPage({ task, sessionId }: { task: Task; sessionId: string })
                 ) : (
                   <div className="flex flex-col gap-3">
                     {hasDirectories ? <DirectoryRootChoices task={task} selected={undefined} onSelect={setActiveDirectoryId} /> : null}
-                    <FilesPanel files={task.files} />
+                    <FilesPanel
+                      files={task.files}
+                      {...(workspaceBrowser !== undefined ? { browser: workspaceBrowser } : {})}
+                      onSelectRoot={(rootId) => {
+                        setBrowserRootId(rootId);
+                        setBrowserRelative(undefined);
+                      }}
+                      onSelectFile={(relative) => setBrowserRelative(relative)}
+                    />
                   </div>
                 )
               ) : null}
@@ -235,7 +339,19 @@ export function TaskPage({ task, sessionId }: { task: Task; sessionId: string })
                 ) : (
                   <div className="flex flex-col gap-3">
                     {hasDirectories ? <DirectoryRootChoices task={task} selected={undefined} onSelect={setActiveDirectoryId} /> : null}
-                    <TerminalPanel taskId={task.id} seed={task.terminalSeed} />
+                    <>
+                      {terminalError ? <p className="text-[11px] text-warn">{terminalError}</p> : null}
+                      <TerminalPanel
+                        taskId={task.id}
+                        seed={task.terminalSeed}
+                        terminal={{
+                          ...(terminalPlan !== undefined ? { plan: terminalPlan } : {}),
+                          ...(terminalState !== undefined ? { state: terminalState } : {}),
+                          onStart: startTerminal,
+                          onStop: (instanceId: string) => controlTerminal("stop", instanceId),
+                        }}
+                      />
+                    </>
                   </div>
                 )
               ) : null}

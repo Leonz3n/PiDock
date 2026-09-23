@@ -73,7 +73,16 @@ export type ShellTaskOp =
   | "task/sessionStates"
   | "task/compactSession"
   | "task/usageRecords"
-  | "task/clearUsage";
+  | "task/clearUsage"
+  | "task/fileRoots"
+  | "task/fileTree"
+  | "task/filePreview"
+  | "task/fileDiff"
+  | "task/deliveryInfo"
+  | "task/planTerminal"
+  | "task/terminalControl"
+  | "task/terminalState"
+  | "task/terminalHistory";
 
 /**
  * Task-scoped op through main into the per-workspace Host. Rejects outside
@@ -601,6 +610,161 @@ export async function clearUsageThroughShell(input: {
 }): Promise<ShellTaskOpResult> {
   try {
     return await shellTaskOp(input.taskId, "task/clearUsage", { scope: { ...input.scope } });
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * [PiDock 10] (#15) task file browsing: the Host's own roots for this task
+ * (`task/fileRoots`). Read-only; the roots and their attribution come from the
+ * task record, never from the renderer.
+ */
+export async function fileRootsThroughShell(taskId: string): Promise<ShellTaskOpResult> {
+  try {
+    return await shellTaskOp(taskId, "task/fileRoots", {});
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/** [PiDock 10] (#15) one directory listing inside one root (`task/fileTree`). */
+export async function fileTreeThroughShell(input: {
+  taskId: string;
+  rootId: string;
+  relative?: string;
+}): Promise<ShellTaskOpResult> {
+  const payload: Record<string, unknown> = { rootId: input.rootId };
+  if (input.relative !== undefined) payload["relative"] = input.relative;
+  try {
+    return await shellTaskOp(input.taskId, "task/fileTree", payload);
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/** [PiDock 10] (#15) one bounded, masked file preview (`task/filePreview`). */
+export async function filePreviewThroughShell(input: {
+  taskId: string;
+  rootId: string;
+  relative: string;
+}): Promise<ShellTaskOpResult> {
+  try {
+    return await shellTaskOp(input.taskId, "task/filePreview", { rootId: input.rootId, relative: input.relative });
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/** [PiDock 10] (#15) one bounded, masked Git diff (`task/fileDiff`). */
+export async function fileDiffThroughShell(input: {
+  taskId: string;
+  rootId: string;
+  relative?: string;
+}): Promise<ShellTaskOpResult> {
+  const payload: Record<string, unknown> = { rootId: input.rootId };
+  if (input.relative !== undefined) payload["relative"] = input.relative;
+  try {
+    return await shellTaskOp(input.taskId, "task/fileDiff", payload);
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/** [PiDock 10] (#15) the Git delivery target (repo + branch, nothing automatic). */
+export async function deliveryInfoThroughShell(input: { taskId: string; rootId: string }): Promise<ShellTaskOpResult> {
+  try {
+    return await shellTaskOp(input.taskId, "task/deliveryInfo", { rootId: input.rootId });
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * [PiDock 10] (#15) plan one built-in terminal (`task/planTerminal`). Planning
+ * only: the reply carries masked env rows, and the real child env never leaves
+ * the Host. A `read` agent session is refused Host-side (box 8).
+ */
+export async function planTerminalThroughShell(input: {
+  taskId: string;
+  instanceId: string;
+  rootId: string;
+  program: string;
+  args?: string[];
+  cols?: number;
+  rows?: number;
+  layers?: Record<string, unknown>;
+  sessionId?: string;
+  label?: string;
+}): Promise<ShellTaskOpResult> {
+  const payload: Record<string, unknown> = {
+    instanceId: input.instanceId,
+    rootId: input.rootId,
+    program: input.program,
+    layers: input.layers ?? { repoDefaults: [], shared: [], privateEntries: [], task: [] },
+  };
+  for (const key of ["args", "cols", "rows", "sessionId", "label"] as const) {
+    const value = input[key];
+    if (value !== undefined) payload[key] = value;
+  }
+  try {
+    return await shellTaskOp(input.taskId, "task/planTerminal", payload);
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * [PiDock 10] (#15) start/stop one terminal (`task/terminalControl`). An agent
+ * call names its session and (for the default tier) the live `approvalId`; a
+ * human call is labelled and attested by main. Booleans are never sent: the
+ * Host reads the tier and the approval from the session channel itself.
+ */
+export async function controlTerminalThroughShell(input: {
+  taskId: string;
+  instanceId: string;
+  action: "start" | "stop";
+  rootId?: string;
+  program?: string;
+  args?: string[];
+  cols?: number;
+  rows?: number;
+  layers?: Record<string, unknown>;
+  sessionId?: string;
+  label?: string;
+  approvalId?: string;
+}): Promise<ShellTaskOpResult> {
+  const payload: Record<string, unknown> = { instanceId: input.instanceId, action: input.action };
+  for (const key of ["rootId", "program", "args", "cols", "rows", "layers", "sessionId", "label", "approvalId"] as const) {
+    const value = input[key];
+    if (value !== undefined) payload[key] = value;
+  }
+  try {
+    return await shellTaskOp(input.taskId, "task/terminalControl", payload);
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/** [PiDock 10] (#15) this task's terminal instances (`task/terminalState`). */
+export async function terminalStateThroughShell(taskId: string): Promise<ShellTaskOpResult> {
+  try {
+    return await shellTaskOp(taskId, "task/terminalState", {});
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/** [PiDock 10] (#15) bounded terminal history for one instance. */
+export async function terminalHistoryThroughShell(input: {
+  taskId: string;
+  instanceId: string;
+  limit?: number;
+}): Promise<ShellTaskOpResult> {
+  const payload: Record<string, unknown> = { instanceId: input.instanceId };
+  if (input.limit !== undefined) payload["limit"] = input.limit;
+  try {
+    return await shellTaskOp(input.taskId, "task/terminalHistory", payload);
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
