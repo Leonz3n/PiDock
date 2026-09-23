@@ -25,12 +25,15 @@ describe("context dialog", () => {
 
     await user.click(screen.getByRole("button", { name: "查看上下文占用" }));
     const dialog = await screen.findByRole("dialog", { name: "上下文占用" });
-    expect(within(dialog).getByText(/24\.8k \/ 200k/)).toBeInTheDocument();
-    expect(within(dialog).getByText(/68\.4k Tokens/)).toBeInTheDocument();
+    // [PiDock 11] #9: unformatted token numbers plus the explicit estimate
+    // marker, and the attribution shows the original provider/model.
+    expect(within(dialog).getByTestId("context-numbers")).toHaveTextContent("占用 24800 Tokens · 上限 200000 Tokens · 12.4%");
+    expect(within(dialog).getByTestId("context-attribution")).toHaveTextContent("Anthropic 官方 / Claude Sonnet");
+    expect(within(dialog).getByTestId("context-tokens")).toHaveTextContent("68.4k Tokens");
 
     await user.click(within(dialog).getByRole("button", { name: "模拟压缩" }));
-    expect(await screen.findByText("已模拟上下文压缩；累计 Token 保留")).toBeInTheDocument();
-    expect(await screen.findByRole("button", { name: "查看上下文占用" })).toHaveTextContent("9.2k");
+    expect(await screen.findByText("已压缩上下文；占用标记为待更新，累计 Token 保留")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "查看上下文占用" })).toHaveTextContent("待更新");
   });
 });
 
@@ -77,7 +80,7 @@ describe("provider reasoning configuration", () => {
 
     // Syncing only refreshes candidates; it never overwrites configured models.
     await user.click(within(dialog).getByRole("button", { name: "同步模型列表" }));
-    expect(await within(dialog).findByText(/已同步 3 个模型（示例候选/)).toBeInTheDocument();
+    expect(await within(dialog).findByText("已同步 3 个候选")).toBeInTheDocument();
     const candidates = Array.from(document.querySelectorAll("#provider-model-candidates option")).map((option) => (option as HTMLOptionElement).value);
     expect(candidates).toEqual(["claude-sonnet-4-5", "claude-haiku-4-5", "claude-opus-4-1"]);
 
@@ -90,7 +93,7 @@ describe("provider reasoning configuration", () => {
     await user.type(within(dialog).getByLabelText("模型显示名称 第 1 行"), "Sonnet 4.5");
     await user.click(within(dialog).getByRole("button", { name: "保存" }));
 
-    expect(await screen.findByText("已保存模拟 Provider，不会连接服务")).toBeInTheDocument();
+    expect(await screen.findByText("已保存 Provider 配置；凭据只保存引用，不写入共享模板与日志")).toBeInTheDocument();
     expect(await screen.findByText("Sonnet 4.5")).toBeInTheDocument();
   });
 

@@ -115,7 +115,7 @@ describe("provider editing", () => {
     await user.type(name, "Anthropic 官方 2");
     await user.click(within(dialog).getByRole("button", { name: "保存" }));
 
-    expect(await screen.findByText("已保存模拟 Provider，不会连接服务")).toBeInTheDocument();
+    expect(await screen.findByText("已保存 Provider 配置；凭据只保存引用，不写入共享模板与日志")).toBeInTheDocument();
     expect(await screen.findByText("Anthropic 官方 2")).toBeInTheDocument();
   });
 });

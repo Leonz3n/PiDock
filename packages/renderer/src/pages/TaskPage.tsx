@@ -17,6 +17,7 @@ import type { Approval, Message, Reference, Task } from "../data/types";
 import { isDirectoryOnlyTask } from "../data/directories";
 import { approvalStatusLabel, runStateLabel } from "./runState";
 import { sessionKeyOf } from "../data/sessionKey";
+import { describeContextDisplay, describeHistoryAttribution, formatTokens, resolveSessionThinking } from "../data/providerState";
 import { useDraftStore } from "../stores/drafts";
 import { useEventsStore } from "../stores/events";
 import { useHostStore } from "../stores/host";
@@ -579,8 +580,23 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
   const provider = providers.find((item) => item.id === session?.providerId);
   const model = provider?.models.find((item) => item.id === session?.model);
   const permissionLabel = { read: "只读", default: "默认权限", auto: "自动执行" }[session?.permission ?? "default"];
-  const thinkingLevel = session?.thinking ?? model?.thinking?.default;
-  const thinkingLabel = model?.thinking?.mode === "custom" ? `推理 · ${thinkingLevel ?? "待选择"}` : "推理 · 跟随模型";
+  // [PiDock 11] #9: the composer shows the effective reasoning level
+  // (declared-session pick -> model default -> catalog unknown) and flags a
+  // stale preference instead of pretending it still applies.
+  const thinkingResolved = resolveSessionThinking(model, session?.thinking);
+  const thinkingLabel =
+    thinkingResolved.catalog === "unsupported"
+      ? "推理 · 不支持"
+      : thinkingResolved.level.length > 0
+        ? `推理 · ${thinkingResolved.level}${thinkingResolved.source === "model-default" ? "（模型默认）" : ""}`
+        : "推理 · 跟随模型";
+  const contextDisplay = describeContextDisplay({
+    used: session?.contextUsed ?? 0,
+    window: session?.contextWindow ?? 0,
+    source: session?.contextSource ?? "actual",
+  });
+  const attribution = describeHistoryAttribution(providers, { providerId: session?.providerId ?? "", model: session?.model ?? "" });
+  const switchLocked = session?.runState === "running" || session?.runState === "approval";
   const attachInput = useRef<HTMLInputElement | null>(null);
   const attachments = draft.references.filter((reference) => reference.kind === "attachment");
   const plainReferences = draft.references.filter((reference) => reference.kind !== "attachment");
@@ -698,6 +714,11 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
             ))}
           </ul>
         ) : null}
+        {attribution.availability !== "available" ? (
+          <p className="mb-2 flex items-center gap-2 text-[11px] text-orange" role="status" data-testid="session-provider-unavailable">
+            当前配置不可用：{attribution.message ?? "请到 Provider 页检查配置"}
+          </p>
+        ) : null}
         {hasUnsupportedImage ? (
           <p className="mb-2 flex items-center gap-2 text-[11px] text-orange" role="status">
             当前模型未启用图片输入，请切换模型后发送。
@@ -799,9 +820,10 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
               size="sm"
               variant="ghost"
               aria-label={`选择模型：${session?.model ?? "未选择"}`}
+              title={switchLocked ? "执行中不可切换模型，请先等待完成或停止" : undefined}
               onClick={() => openModal({ type: "model-picker", taskId: task.id, sessionId })}
             >
-              {session?.model ?? "模型"} · 上下文 {session?.contextUsed ?? 0}k / {session?.contextWindow ?? 0}k
+              {session?.model ?? "模型"} · {session?.contextWindow ? `${formatTokens((session?.contextWindow ?? 0) * 1000)} Tokens` : "窗口未知"}
             </Button>
             {model?.thinking && model.thinking.mode !== "none" ? (
               <Button
@@ -819,7 +841,8 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
               aria-label="查看上下文占用"
               onClick={() => openModal({ type: "context", taskId: task.id, sessionId })}
             >
-              上下文 {session?.contextUsed ?? 0}k / {session?.contextWindow ?? 0}k
+              上下文 {contextDisplay.percent === null ? "未知" : `${contextDisplay.percent.toFixed(1)}%`}
+              {contextDisplay.marker.length > 0 ? ` · ${contextDisplay.marker}` : ""}
             </Button>
           </div>
           <Button size="sm" variant="primary" type="submit" disabled={sending || session?.permission === "read" || hasUnsupportedImage}>
