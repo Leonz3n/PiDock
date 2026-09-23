@@ -101,6 +101,21 @@ export type Reference = {
   detail: string;
   /** In-memory preview URL for a pasted/selected image attachment; never uploaded. */
   previewUrl?: string;
+  /**
+   * [PiDock 13] (#16) provenance of a task reference, kept separately from
+   * the display label: the owning task, the source (repo worktree or
+   * plain-directory link), the in-task relative path and the pinned Git
+   * version (`null` for a plain directory, which never fakes one). Draft
+   * restore re-checks these instead of resolving to another same-named file.
+   */
+  taskId?: string;
+  sourceId?: string;
+  sourceKind?: "worktree" | "plain-dir";
+  relativePath?: string;
+  version?: string | null;
+  /** Skill source id plus its resource relative path and args. */
+  resourcePath?: string;
+  args?: string;
 };
 
 export type MessageRole = "user" | "agent" | "system";
