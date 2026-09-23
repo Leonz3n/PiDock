@@ -638,3 +638,57 @@ describe("usage ops", () => {
     expect(validateHostTaskOp("task/clearUsage", {}).ok).toBe(false);
   });
 });
+
+// [PiDock 10] #15 file/terminal ops: the guard checks the envelope shape; the
+// root rules, path containment, bounds and masking are Host-side
+// (`host/workspace-files.ts`, `main/workspace-files.ts`) and the terminal gate
+// order is `host/terminal-control.ts`.
+describe("file and terminal ops", () => {
+  it("requires a root id for every file read and a relative path for a preview", () => {
+    for (const op of ["task/fileTree", "task/fileDiff", "task/deliveryInfo"] as const) {
+      expect(validateHostTaskOp(op, { rootId: "front-monorepo" })).toEqual({ ok: true });
+      expect(validateHostTaskOp(op, { rootId: "front-monorepo", relative: "src/a.ts" })).toEqual({ ok: true });
+      expect(validateHostTaskOp(op, {}).ok).toBe(false);
+      expect(validateHostTaskOp(op, { rootId: " " }).ok).toBe(false);
+      expect(validateHostTaskOp(op, { rootId: "r", relative: 7 }).ok).toBe(false);
+    }
+    expect(validateHostTaskOp("task/filePreview", { rootId: "r", relative: "a.ts" })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/filePreview", { rootId: "r" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/filePreview", { rootId: "r", relative: "" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/fileRoots", undefined)).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/fileRoots", "nope").ok).toBe(false);
+  });
+
+  it("requires an instance id, a program, a root and env layers for a terminal plan", () => {
+    const layers = { repoDefaults: [], shared: [], privateEntries: [], task: [] };
+    expect(validateHostTaskOp("task/planTerminal", { instanceId: "term-1", rootId: "r", program: "bash", layers })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/planTerminal", { instanceId: "term-1", rootId: "r", program: "bash", layers, args: ["-l"], cols: 100, rows: 30 })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/planTerminal", { instanceId: "", rootId: "r", program: "bash", layers }).ok).toBe(false);
+    expect(validateHostTaskOp("task/planTerminal", { instanceId: "term-1", rootId: "r", layers }).ok).toBe(false);
+    expect(validateHostTaskOp("task/planTerminal", { instanceId: "term-1", rootId: "r", program: "bash" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/planTerminal", { instanceId: "term-1", rootId: " ", program: "bash", layers }).ok).toBe(false);
+    expect(validateHostTaskOp("task/planTerminal", { instanceId: "term-1", rootId: "r", program: "bash", layers, args: [1] }).ok).toBe(false);
+    expect(validateHostTaskOp("task/planTerminal", { instanceId: "term-1", rootId: "r", program: "bash", layers, cols: 1.5 }).ok).toBe(false);
+  });
+
+  it("requires an action/instance for terminal control and a start payload when starting", () => {
+    const layers = { repoDefaults: [], shared: [], privateEntries: [], task: [] };
+    expect(validateHostTaskOp("task/terminalControl", { instanceId: "term-1", action: "stop" })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/terminalControl", { instanceId: "term-1", action: "start", rootId: "r", program: "bash", layers })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/terminalControl", { instanceId: "term-1", action: "stop", sessionId: "main" })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/terminalControl", { instanceId: "term-1", action: "kill" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/terminalControl", { action: "stop" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/terminalControl", { instanceId: "term-1", action: "start" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/terminalControl", { instanceId: "term-1", action: "start", rootId: "r", program: "bash" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/terminalControl", { instanceId: "term-1", action: "stop", sessionId: " " }).ok).toBe(false);
+  });
+
+  it("requires an instance id for terminal history and bounds the limit", () => {
+    expect(validateHostTaskOp("task/terminalHistory", { instanceId: "term-1" })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/terminalHistory", { instanceId: "term-1", limit: 20 })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/terminalHistory", {}).ok).toBe(false);
+    expect(validateHostTaskOp("task/terminalHistory", { instanceId: "term-1", limit: 0 }).ok).toBe(false);
+    expect(validateHostTaskOp("task/terminalHistory", { instanceId: "term-1", limit: "20" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/terminalState", undefined)).toEqual({ ok: true });
+  });
+});

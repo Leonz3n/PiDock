@@ -214,19 +214,23 @@ export type PiGateDecision =
 
 /**
  * Mint purpose tag on an approval. Absent = the turn flow's own
- * `exec.run`/`browser.*` request (the default). `service-control` and
- * `browser-control` are stamped only by the Host when it mints a service
- * start/stop ([PiDock 04] #7) or a task-browser action ([PiDock 06] #8)
- * approval, so an identically shaped turn approval for the same tool +
- * target can never be spent on either Host-driven path (and vice versa).
+ * `exec.run`/`browser.*` request (the default). `service-control`,
+ * `browser-control` and `terminal-control` are stamped only by the Host when
+ * it mints a service start/stop ([PiDock 04] #7), a task-browser action
+ * ([PiDock 06] #8) or a built-in terminal start ([PiDock 10] #15) approval,
+ * so an identically shaped turn approval for the same tool + target can never
+ * be spent on any Host-driven path (and vice versa).
  */
-export type PiApprovalScope = "service-control" | "browser-control";
+export type PiApprovalScope = "service-control" | "browser-control" | "terminal-control";
 
 /** The only scope a Host service-control approval is minted with. */
 export const SERVICE_CONTROL_SCOPE: PiApprovalScope = "service-control";
 
 /** The only scope a Host-minted task-browser approval carries. */
 export const BROWSER_CONTROL_SCOPE: PiApprovalScope = "browser-control";
+
+/** The only scope a Host-minted built-in-terminal approval carries. */
+export const TERMINAL_CONTROL_SCOPE: PiApprovalScope = "terminal-control";
 
 export interface PiApproval {
   id: string;

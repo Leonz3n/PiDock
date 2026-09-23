@@ -890,11 +890,23 @@ export class TaskWorkspaceHost {
     this.store.writeSession(this.taskDir, channel.snapshot());
   }
 
+  /**
+   * Current permission tier of one session **without** opening/creating it:
+   * `null` when the session is neither live nor persisted. Read-only callers
+   * (e.g. [PiDock 10] #15 terminal *planning*) need the tier to refuse a
+   * `read` session, but must not materialize a session just to read it.
+   */
+  permissionOf(sessionId: string): PiPermission | null {
+    const live = this.channels.get(sessionId);
+    if (live) return live.currentPermission;
+    const saved = this.store.readSession(this.taskDir, sessionId);
+    return saved?.permission ?? null;
+  }
+
   openSession(
     sessionId: string,
     options?: { providerId?: string; model?: string; credentialRef?: string; permission?: PiPermission },
-  ): PiSessionChannel {
-    const existing = this.channels.get(sessionId);
+  ): PiSessionChannel {    const existing = this.channels.get(sessionId);
     if (existing) {
       existing.setProviderCatalog(this.catalog);
       return existing;
