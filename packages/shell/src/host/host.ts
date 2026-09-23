@@ -33,7 +33,7 @@ function getParentPort(): UtilityParentPort {
 
 const hostPort = getParentPort();
 
-import { boundWorkspaceId, routeHostTask, toolPlannerSpecForHostDispatch, validateHostTaskOp } from "./host-guards.js";
+import { boundWorkspaceId, classifyServiceControlCaller, routeHostTask, toolPlannerSpecForHostDispatch, validateHostTaskOp } from "./host-guards.js";
 import { TaskWorkspaceHost, diskTaskStore } from "./task-host.js";
 import { TaskServiceRuntime } from "./service-runtime.js";
 import {
@@ -43,6 +43,7 @@ import {
   type HostTaskResult,
   type HostVersionsResult,
   type RpcResponse,
+  type TaskOpOrigin,
 } from "../rpc/protocol.js";
 
 function workspaceOf(params: unknown): string {
@@ -139,6 +140,8 @@ function dispatchTaskOp(
   taskId: string,
   op: string,
   payload: unknown,
+  /** Main-stamped sender attestation (absent on unattested routes). */
+  origin?: TaskOpOrigin,
 ): { ok: true; payload: Record<string, unknown> } | { ok: false; error: string } {
   const host = taskHostFor(taskId);
   if ("error" in host) return { ok: false, error: host.error };
@@ -469,16 +472,24 @@ function dispatchTaskOp(
         if ("error" in services) return { ok: false, error: services.error };
         const serviceId = record["serviceId"];
         const action = record["action"];
-        const sessionId = record["sessionId"];
         // Renderer-supplied `actor` / `approvalGranted` are claims, never
-        // trust signals. Any call carrying a `sessionId` is agent control
-        // (agents cannot shed their session to claim the human path); only
-        // a call with no `sessionId` is human-explicit UI control,
-        // labelled and auditable in the event trail.
+        // trust signals. The caller kind comes from the pure
+        // `classifyServiceControlCaller` rule: a payload `sessionId` is
+        // agent control, a session-less call is human UI control only
+        // with main's sender-bound `shell-ui` attestation — so a caller
+        // can neither spoof `actor` nor drop its session to reach the
+        // ungated human path.
         if (typeof serviceId !== "string" || (action !== "start" && action !== "stop")) {
           return { ok: false, error: "invalid-payload: task/controlService requires serviceId/action" };
         }
-        if (typeof sessionId === "string" && sessionId.length > 0) {
+        const caller = classifyServiceControlCaller({
+          sessionId: record["sessionId"],
+          label: record["label"],
+          origin,
+        });
+        if (!caller.ok) return { ok: false, error: caller.error };
+        if (caller.kind === "agent") {
+          const sessionId = caller.sessionId;
           // Agent control: tier comes from the session channel's live
           // permission (never caller-claimed). `default` requires a live
           // verified approval id — a caller boolean is not accepted.
@@ -505,6 +516,15 @@ function dispatchTaskOp(
             }
             return { ok: false, error: decision.reason };
           }
+          // One-shot spend: the verified approval authorizes exactly this
+          // start/stop. Spending it (and persisting) before acting means a
+          // replay fails closed even if the same id is sent again.
+          if (liveApproval !== undefined) {
+            if (!channel.consumeApproval(liveApproval.id)) {
+              return { ok: false, error: "approval-required: 确认请求已被消费，请重新确认" };
+            }
+            host.store.writeSession(host.taskDir, channel.snapshot());
+          }
           if (action === "start") {
             services.markStarted(serviceId, { kind: "agent", sessionId, permissionAtRequest: tier });
           } else {
@@ -512,12 +532,10 @@ function dispatchTaskOp(
           }
           return { ok: true, payload: { serviceId, action, actor: "agent", tier } };
         }
-        // Human-explicit control: labelled, auditable, no gate. Reached
-        // only when the caller carries no session (UI-initiated).
-        const label = typeof record["label"] === "string" ? (record["label"] as string) : "用户显式操作";
+        // Human UI control: attested sender, labelled and auditable.
         try {
-          if (action === "start") services.markStarted(serviceId, { kind: "human", label });
-          else services.markStopped(serviceId, { kind: "human", label }, "user-request");
+          if (action === "start") services.markStarted(serviceId, { kind: "human", label: caller.label });
+          else services.markStopped(serviceId, { kind: "human", label: caller.label }, "user-request");
           return { ok: true, payload: { serviceId, action, actor: "human" } };
         } catch (error) {
           return { ok: false, error: error instanceof Error ? error.message : String(error) };
@@ -607,7 +625,7 @@ hostPort.on("message", (event: { data: unknown }) => {
       reply({ kind: "response", id: message.id, ok: false, error: perOp.error });
       return;
     }
-    const result = dispatchTaskOp(taskParams.taskId, taskParams.op, taskParams.payload ?? {});
+    const result = dispatchTaskOp(taskParams.taskId, taskParams.op, taskParams.payload ?? {}, taskParams.origin);
     if (!result.ok) {
       reply({ kind: "response", id: message.id, ok: false, error: result.error });
       return;

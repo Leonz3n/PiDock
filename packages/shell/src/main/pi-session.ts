@@ -124,6 +124,16 @@ export interface PiApproval {
   contentVersion: string;
   status: "pending" | "approved" | "rejected" | "expired";
   executed: boolean;
+  /**
+   * One-shot spend stamp, written on the Host side (never by the
+   * renderer). An approved request is spent exactly once — either by the
+   * Host-driven execution it authorized (service control, [PiDock 04] #7)
+   * or by `restore` (an authorization never survives a reopen). A spent
+   * request can never authorize another action; `executed` alone cannot
+   * carry this because the turn flow sets it in `approve()` before the
+   * gated command runs.
+   */
+  consumedAt?: string;
 }
 
 export interface PiSessionOptions {
@@ -567,6 +577,19 @@ export class PiSessionChannel {
     return call ?? { callId: approval.callId, providerId: this.providerId, model: this.model, usageSource: "approval", events: [] };
   }
 
+  /**
+   * Spend one approved request for a Host-driven execution ([PiDock 04]
+   * #7, service control): the request becomes single-use and can never
+   * authorize a second start/stop. Fail-closed: unknown, non-approved and
+   * already-spent ids all return `false` so the caller must re-confirm.
+   */
+  consumeApproval(approvalId: string): boolean {
+    const approval = this.approvals.find((item) => item.id === approvalId);
+    if (!approval || approval.status !== "approved" || approval.consumedAt !== undefined) return false;
+    approval.consumedAt = this.now();
+    return true;
+  }
+
   /** Save/refresh the unsent composer draft. Never auto-sends; survives restore. */
   saveDraft(draft: { text: string; references?: unknown[]; skillSource?: string }): void {
     this.draft = { text: draft.text, updatedAt: this.now(), ...(draft.references !== undefined ? { references: draft.references } : {}), ...(draft.skillSource !== undefined ? { skillSource: draft.skillSource } : {}) };
@@ -666,6 +689,12 @@ export class PiSessionChannel {
       ...approval,
       status: approval.status === "pending" ? "expired" : approval.status,
       executed: approval.status === "approved" ? approval.executed : false,
+      // One-shot spend: an approved authorization that was never consumed
+      // is spent at restore, so a reopened session must confirm again
+      // before a Host-driven execution (service control) can run.
+      ...(approval.status === "approved"
+        ? { consumedAt: approval.consumedAt ?? channel.now() }
+        : {}),
     }));
     // A restored session never resumes mid-turn: approval turns settle to
     // cancelled so history is kept but nothing replays.

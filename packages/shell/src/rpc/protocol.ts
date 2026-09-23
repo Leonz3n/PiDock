@@ -62,12 +62,36 @@ export type HostTaskOp =
   | "task/serviceStatus"
   | "task/serviceLog";
 
+/**
+ * Sender attestation stamped by the trusted main process on a routed
+ * `host/task` call ([PiDock 04] #7). It rides the envelope main builds
+ * from the validated sender (`registry.requireShellSender`), never the
+ * renderer payload, so a browser-side caller cannot mint it. The Host
+ * reads it only to decide that a session-less service control came from
+ * the human UI; ops arriving any other way must name their session.
+ */
+export interface TaskOpOrigin {
+  kind: "shell-ui";
+  /** webContents id of the shell trust-domain sender (audit only). */
+  senderWebContentsId: number;
+}
+
+export function isTaskOpOrigin(value: unknown): value is TaskOpOrigin {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  if (record["kind"] !== "shell-ui") return false;
+  const sender = record["senderWebContentsId"];
+  return typeof sender === "number" && Number.isInteger(sender) && sender > 0;
+}
+
 export interface HostTaskParams {
   workspaceId: string;
   taskId: string;
   op: HostTaskOp;
   /** Opaque per-op payload; validated per op by the Host. */
   payload?: Record<string, unknown>;
+  /** Main-stamped sender attestation; see `TaskOpOrigin`. */
+  origin?: TaskOpOrigin;
 }
 
 export interface HostTaskResult {
@@ -172,6 +196,10 @@ export function isHostTaskParams(value: unknown): value is HostTaskParams {
   if (!isHostTaskOp(value["op"])) return false;
   const payload = value["payload"];
   if (payload !== undefined && !isRecord(payload)) return false;
+  // Fail-closed: an absent origin is fine (unattested route), a present
+  // one must be the main-stamped shape — a malformed attestation is
+  // rejected rather than ignored.
+  if (value["origin"] !== undefined && !isTaskOpOrigin(value["origin"])) return false;
   return true;
 }
 

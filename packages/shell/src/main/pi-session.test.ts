@@ -134,6 +134,37 @@ describe("PiSessionChannel turns and approvals", () => {
     expect(restored.snapshot().createdAt).toBe(snapshot.createdAt);
   });
 
+  // BLOCK P0-1/P1: one-shot spend for Host-driven executions. `approve()`
+  // sets `approved + executed:true` before anything runs, so consumption
+  // (not `executed`) is the replay guard, and a reopen spends approved
+  // requests instead of re-arming them.
+  it("spends one-shot approvals: single-use consume, restore spends approved", () => {
+    const session = channel();
+    session.setPermission("default");
+    const gated = session.gate("exec.run", `${TASK_DIR}/services/saas-web`, "v12");
+    if (gated.verdict !== "ask") throw new Error("expected approvals");
+    expect(session.consumeApproval(gated.approvalId)).toBe(false);
+    expect(session.consumeApproval("approval-missing")).toBe(false);
+    session.approve(gated.approvalId);
+    expect(session.consumeApproval(gated.approvalId)).toBe(true);
+    expect(session.consumeApproval(gated.approvalId)).toBe(false);
+    const spent = session.snapshot().approvals[0];
+    expect(spent.consumedAt).toBe("2026-09-22T10:00:00+08:00");
+    // The spend round-trips: reopening never returns the spent request.
+    const restored = PiSessionChannel.restore(session.snapshot(), TASK_DIR);
+    expect(restored.snapshot().approvals[0].consumedAt).toBeDefined();
+    expect(restored.consumeApproval(gated.approvalId)).toBe(false);
+
+    const rearmed = channel();
+    rearmed.setPermission("default");
+    const second = rearmed.gate("exec.run", `${TASK_DIR}/services/saas-web`, "v12");
+    if (second.verdict !== "ask") throw new Error("expected approvals");
+    rearmed.approve(second.approvalId);
+    const reopened = PiSessionChannel.restore(rearmed.snapshot(), TASK_DIR);
+    expect(reopened.snapshot().approvals[0].consumedAt).toBeDefined();
+    expect(reopened.consumeApproval(second.approvalId)).toBe(false);
+  });
+
   it("previews the gate without creating a pending approval", () => {
     const session = channel();
     session.setPermission("default");

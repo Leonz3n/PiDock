@@ -24,7 +24,7 @@ import {
 } from "./task-provision.js";
 import { readTaskRecordOnDisk } from "../host/task-store.js";
 import { defaultTasksRoot } from "./task-resolver.js";
-import type { HostTaskOp, HostTaskResult } from "../rpc/protocol.js";
+import type { HostTaskOp, HostTaskResult, TaskOpOrigin } from "../rpc/protocol.js";
 import { TaskBrowser } from "./task-browser.js";
 import {
   TrustDomainRegistry,
@@ -348,8 +348,10 @@ export class PerTaskHostRegistry {
     taskId: string;
     op: HostTaskOp;
     payload?: Record<string, unknown>;
+    /** Main-stamped sender attestation; forwarded verbatim. */
+    origin?: TaskOpOrigin;
   }): Promise<HostTaskResult> {
-    const { taskId, op, payload } = params;
+    const { taskId, op, payload, origin } = params;
     const perOp = validateHostTaskOp(op, payload ?? {});
     if (!perOp.ok) {
       throw new TrustDomainViolation("invalid-payload", perOp.error);
@@ -376,7 +378,7 @@ export class PerTaskHostRegistry {
           `task-moved: ${taskId} no longer resolves to the forked task folder; re-provision or restart before sending ops`,
         );
       }
-      return existing.client.task({ workspaceId: this.workspaceId, taskId, op, payload });
+      return existing.client.task({ workspaceId: this.workspaceId, taskId, op, payload, origin });
     }
     const taskDir = this.resolveTaskDir(taskId);
     const provisionDir =
@@ -390,7 +392,7 @@ export class PerTaskHostRegistry {
       const dirs = this.byTaskId.get(taskId) ?? new Set<string>();
       dirs.add(bootstrapDir);
       this.byTaskId.set(taskId, dirs);
-      return client.task({ workspaceId: this.workspaceId, taskId, op, payload });
+      return client.task({ workspaceId: this.workspaceId, taskId, op, payload, origin });
     }
     if (taskDir === null || !isAbsoluteTaskRoot(taskDir)) {
       throw new TrustDomainViolation(
@@ -403,7 +405,7 @@ export class PerTaskHostRegistry {
     const dirs = this.byTaskId.get(taskId) ?? new Set<string>();
     dirs.add(taskDir);
     this.byTaskId.set(taskId, dirs);
-    return client.task({ workspaceId: this.workspaceId, taskId, op, payload });
+    return client.task({ workspaceId: this.workspaceId, taskId, op, payload, origin });
   }
 
   /**
@@ -594,11 +596,19 @@ export function registerIpc(
       if (!perOp.ok) {
         throw new TrustDomainViolation("invalid-payload", perOp.error);
       }
+      // Sender attestation ([PiDock 04] #7): only main can mint this from
+      // the validated shell-domain sender, so the Host can tell a
+      // session-less human-UI service control from an unattested
+      // session-less call that is trying to claim the human path.
+      const origin: TaskOpOrigin = {
+        kind: "shell-ui",
+        senderWebContentsId: sender.webContentsId,
+      };
       if (tasks) {
-        const result = await tasks.routeTaskOp({ taskId, op, payload: opPayload });
+        const result = await tasks.routeTaskOp({ taskId, op, payload: opPayload, origin });
         return { ok: true as const, payload: result };
       }
-      const result = await client.task({ workspaceId, taskId, op, payload: opPayload });
+      const result = await client.task({ workspaceId, taskId, op, payload: opPayload, origin });
       return { ok: true as const, payload: result };
     } catch (error) {
       return trustFailureEnvelope(error);

@@ -81,18 +81,29 @@ export interface ServiceControlDecision {
 /**
  * Server-side verification of a service-control approval against the
  * session channel's live record. A claimed `approvalGranted` is never
- * trusted: the approval must exist, be `approved`, unconsumed, bound to
- * this service's tool/target, and requested under the `default` tier.
- * Rejected/expired/consumed or foreign-service approvals all fail.
+ * trusted: the approval must exist, be `approved`, unspent, bound to this
+ * service's tool/target, and requested under the `default` tier.
+ * Rejected/expired/spent or foreign-service approvals all fail.
+ *
+ * `executed` deliberately does not gate this: the real `task/approve`
+ * path (`PiSessionChannel.approve`) sets `approved + executed:true`
+ * before any Host-driven execution runs, so requiring `!executed` would
+ * deny every production approval. Single use is enforced instead by
+ * `PiSessionChannel.consumeApproval` (the Host spends the request on the
+ * first successful control and persists it), so one approval covers one
+ * `start` *or* one `stop` of this service (the target is the service
+ * folder; the action is not part of the binding). No TTL in this slice:
+ * an unconsumed approval stays valid until spent or dropped by restore
+ * (restore spends approved requests).
  */
 export function verifyServiceControlApproval(input: {
-  approval: { status: string; executed: boolean; tool: string; target: string; permissionAtRequest: string } | undefined;
+  approval: { status: string; tool: string; target: string; permissionAtRequest: string; consumedAt?: string } | undefined;
   serviceId: string;
   taskDir: string;
 }): { ok: true } | { ok: false; reason: string } {
   const approval = input.approval;
   if (!approval) return { ok: false, reason: "服务启停需先确认（批准后重试，拒绝/取消不执行）" };
-  if (approval.status !== "approved" || approval.executed) {
+  if (approval.status !== "approved" || approval.consumedAt !== undefined) {
     return { ok: false, reason: "确认请求已处理或未批准，不可重放" };
   }
   if (approval.permissionAtRequest !== "default") {
@@ -210,15 +221,16 @@ export class TaskServiceRuntime {
    * outcomes): `read` ⇒ deny; `default` ⇒ needs a live, verified approval
    * (verified server-side via `verifyServiceControlApproval`, never a
    * caller-claimed `approvalGranted` booleans); `auto` ⇒ allow.
-   * Human-explicit control (session-less Host dispatch) is allowed
-   * directly but labelled in the event trail (no gate bypass: the human
-   * path is the UI path, auditable by label, not by skipping).
+   * Human-UI control is only reachable through the attested human path
+   * classified by `classifyServiceControlCaller`; its event label is the
+   * audit trail (no gate bypass: the human path is the UI path, auditable
+   * by label, not by skipping).
    */
   decideAgentControl(input: {
     serviceId: string;
     action: "start" | "stop";
     tier: "read" | "default" | "auto";
-    approval?: { status: string; executed: boolean; tool: string; target: string; permissionAtRequest: string } | undefined;
+    approval?: { status: string; tool: string; target: string; permissionAtRequest: string; consumedAt?: string } | undefined;
     /** @deprecated caller-claimed booleans are not trusted; pass `approval` instead. */
     approvalGranted?: boolean;
   }): ServiceControlDecision {
