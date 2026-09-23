@@ -15,6 +15,18 @@ import {
   TerminalPanel,
 } from "../components/ToolPanels";
 import type { Approval, Message, Reference, Session, Task } from "../data/types";
+import {
+  BUILTIN_COMMANDS,
+  activeCompletionToken,
+  checkDraftReference,
+  commandCandidates,
+  describeReferenceChip,
+  fileCandidates,
+  resolveComposerKey,
+  skillCandidates,
+  suggestCommand,
+  type CandidateRow,
+} from "../data/composerRules";
 import { isDirectoryOnlyTask } from "../data/directories";
 import {
   SESSION_MENU_LABEL,
@@ -45,6 +57,7 @@ import { useNavigationStore } from "../stores/navigation";
 const EMPTY_PANELS: ToolPanel[] = [];
 const EMPTY_LIVE: Message[] = [];
 const EMPTY_DRAFT: { text: string; references: Reference[] } = { text: "", references: [] };
+const EMPTY_REFERENCE: Reference = { id: "empty", kind: "file", label: "", detail: "" };
 
 export function TaskPage({ task, sessionId }: { task: Task; sessionId: string }) {
   const session = task.sessions.find((item) => item.id === sessionId) ?? task.sessions[0];
@@ -897,7 +910,6 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
   const removeReference = useDraftStore((state) => state.removeReference);
   const clear = useDraftStore((state) => state.clear);
   const sendMessage = useHostStore((state) => state.sendMessage);
-  const createFileReference = useHostStore((state) => state.createFileReference);
   const createSession = useHostStore((state) => state.createSession);
   const compactSessionContext = useHostStore((state) => state.compactSessionContext);
   const workspace = useHostStore((state) => state.workspace);
@@ -930,37 +942,56 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
   const attribution = describeHistoryAttribution(providers, { providerId: session?.providerId ?? "", model: session?.model ?? "" });
   const switchLocked = session?.runState === "running" || session?.runState === "approval";
   const attachInput = useRef<HTMLInputElement | null>(null);
+  // [PiDock 13] (#16): the composer keeps its own candidate list, caret and
+  // dismissal state so the marker rules can be exercised without the DOM.
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const [caret, setCaret] = useState(0);
+  const [completionDismissed, setCompletionDismissed] = useState(false);
+  const [completionIndex, setCompletionIndex] = useState(0);
+  const [expandedReference, setExpandedReference] = useState<string | null>(null);
   const attachments = draft.references.filter((reference) => reference.kind === "attachment");
   const plainReferences = draft.references.filter((reference) => reference.kind !== "attachment");
   // Images require the selected model to declare image input; the prototype blocks
   // the send and keeps the draft rather than silently dropping the attachment.
   const hasUnsupportedImage = attachments.some((reference) => reference.previewUrl) && !model?.supportsImages;
 
-  // Prototype `completions(symbol, query)`: @ lists task files/directories, $
-  // lists enabled skills, / lists the app commands. The candidate list is shown
-  // for a trailing token and inserts or dispatches on click (prototype's
-  // `chooseCompletion` / `command()`).
+  // [PiDock 13] (#16): one candidate source per symbol — `@` searches the
+  // task's worktree files and plain-directory links together, `$` searches
+  // enabled skills with their source kept distinct, `/` lists the app
+  // commands with source/args/availability for the current run state.
   const completion = useMemo(() => {
-    const match = /(?:^|\s)([@$/])([^\s]*)$/.exec(draft.text);
-    if (!match) return null;
-    const symbol = match[1];
-    const query = match[2].toLowerCase();
-    const items =
-      symbol === "@"
-        ? [
-            ...task.files.map((file) => ({ name: file.path, detail: "当前任务文件" })),
-            ...task.directories.map((directory) => ({ name: `${directory.linkName}/`, detail: `${directory.name} → ${directory.path} · 软链接` })),
-          ]
-        : symbol === "$"
-          ? (workspace?.capabilities ?? [])
-              .filter((capability) => capability.kind === "skill" && capability.status === "enabled")
-              .map((capability) => ({ name: capability.name, detail: `${capability.source} · 已启用技能` }))
-          : COMPOSER_COMMANDS;
-    const filtered = items.filter((item) => `${item.name} ${item.detail}`.toLowerCase().includes(query));
-    return filtered.length > 0 ? { symbol, items: filtered } : null;
-  }, [draft.text, task.files, task.directories, workspace?.capabilities]);
+    const token = activeCompletionToken(draft.text, caret);
+    if (!token || completionDismissed) return null;
+    const runContext = {
+      runState: (session?.runState ?? "idle") as "idle" | "running" | "approval" | "stopped" | "failed",
+      permission: session?.permission ?? "default",
+    };
+    const groups =
+      token.symbol === "/"
+        ? commandCandidates(BUILTIN_COMMANDS, token.query, runContext)
+        : [
+            {
+              category: "app" as const,
+              items: token.symbol === "@" ? fileCandidates(task, token.query) : skillCandidates(workspace?.capabilities ?? [], token.query),
+            },
+          ];
+    const items = groups.flatMap((group) => group.items);
+    return items.length > 0 ? { token, symbol: token.symbol, groups, items } : null;
+  }, [draft.text, caret, completionDismissed, task, session?.runState, session?.permission, workspace?.capabilities]);
 
-  const stripCompletionToken = () => setText(task.id, sessionId, draft.text.replace(/(?:^|\s)[@$/][^\s]*$/, "").trimEnd());
+  const stripCompletionToken = () => {
+    const token = completion?.token;
+    if (!token) return;
+    setText(task.id, sessionId, `${draft.text.slice(0, token.start)}${draft.text.slice(token.end)}`);
+  };
+
+  const insertCompletionValue = (value: string) => {
+    const token = completion?.token;
+    if (!token) return;
+    const next = `${draft.text.slice(0, token.start)}${value} ${draft.text.slice(token.end)}`;
+    setText(task.id, sessionId, next);
+    setCaret(token.start + value.length + 1);
+  };
 
   const runCommand = async (name: string) => {
     stripCompletionToken();
@@ -987,22 +1018,51 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
       openModal({ type: "composer-info", taskId: task.id, topic: "session" });
     } else if (name === "/help") {
       openModal({ type: "composer-info", taskId: task.id, topic: "help" });
+    } else {
+      // Box 8: an unknown `/entry` is corrected instead of silently ignored.
+      const known = COMPOSER_COMMANDS.map((command) => command.name);
+      const suggestion = suggestCommand(name, known);
+      pushToast(suggestion === null ? `未知命令 ${name}：请从候选列表选择，普通文字请直接输入` : `未知命令 ${name}，是否想输入 ${suggestion}？`);
     }
   };
 
-  const chooseCompletion = (name: string, detail: string) => {
+  // Invalid draft references are reported per reference id (box 14/15); the
+  // chip shows the reason and asks for a new selection instead of resolving
+  // to another task's same-named file.
+  const referenceIssues = useMemo(() => {
+    const issues: Record<string, string> = {};
+    for (const reference of draft.references) {
+      const check = checkDraftReference(reference, task);
+      if (check.state === "invalid") issues[reference.id] = check.message;
+    }
+    return issues;
+  }, [draft.references, task]);
+
+  const chooseCompletion = (row: CandidateRow) => {
     if (completion?.symbol === "/") {
-      void runCommand(name);
+      // Box 13: only an entry that can never run now is blocked here; a
+      // "waiting" entry still runs and lets the operation itself enforce the
+      // idle boundary (the adapter refuses a live round with its own reason).
+      if (row.availability === "unavailable") {
+        pushToast(row.reason ?? "当前状态下该命令不可用");
+        return;
+      }
+      void runCommand(row.value);
       return;
     }
     const isSkill = completion?.symbol === "$";
     addReference(task.id, sessionId, {
-      id: `${isSkill ? "skill" : "file"}-${name}`,
-      kind: isSkill ? "skill" : "file",
-      label: name,
-      detail,
+      id: `${isSkill ? "skill" : "task"}-${row.key}`,
+      kind: isSkill ? "skill" : row.kind === "directory" ? "directory" : "file",
+      label: row.value,
+      detail: row.detail,
+      taskId: task.id,
+      ...(row.sourceId !== undefined ? { sourceId: row.sourceId } : {}),
+      ...(row.sourceKind !== undefined ? { sourceKind: row.sourceKind } : {}),
+      ...(row.relativePath !== undefined ? { relativePath: row.relativePath } : {}),
     });
-    stripCompletionToken();
+    insertCompletionValue(row.value);
+    setCompletionDismissed(true);
   };
 
   return (
@@ -1072,38 +1132,125 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
         ) : null}
         {plainReferences.length > 0 ? (
           <ul className="mb-2 flex flex-wrap gap-1.5">
-            {plainReferences.map((reference) => (
-              <li key={reference.id} className="flex items-center gap-1 rounded-full border border-line bg-soft px-2 py-0.5 text-[11px] text-muted">
-                引用 · {reference.label}
-                <button type="button" aria-label={`移除引用 ${reference.label}`} onClick={() => removeReference(task.id, sessionId, reference.id)}>
-                  ×
-                </button>
-              </li>
-            ))}
+            {plainReferences.map((reference) => {
+              const issue = referenceIssues[reference.id];
+              return (
+                <li
+                  key={reference.id}
+                  className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] ${issue ? "border-orange text-orange" : "border-line bg-soft text-muted"}`}
+                  data-testid={`composer-reference-${reference.id}`}
+                  title={describeReferenceChip(reference)}
+                >
+                  {issue ? "失效 · " : "引用 · "}{reference.label}
+                  <button
+                    type="button"
+                    aria-label={`${issue ? "重新选择" : "查看范围"} ${reference.label}`}
+                    onClick={() =>
+                      issue
+                        ? (removeReference(task.id, sessionId, reference.id),
+                          pushToast(`${issue}：请重新输入 @ 或 $ 选择来源`))
+                        : setExpandedReference(expandedReference === reference.id ? null : reference.id)
+                    }
+                  >
+                    {issue ? "重新选择" : "范围"}
+                  </button>
+                  <button type="button" aria-label={`移除引用 ${reference.label}`} onClick={() => removeReference(task.id, sessionId, reference.id)}>
+                    ×
+                  </button>
+                </li>
+              );
+            })}
           </ul>
+        ) : null}
+        {expandedReference ? (
+          <p className="mb-2 text-[11px] text-muted" role="status" data-testid="composer-reference-scope">
+            {describeReferenceChip(draft.references.find((reference) => reference.id === expandedReference) ?? EMPTY_REFERENCE)}
+          </p>
         ) : null}
         {completion ? (
           <ul role="listbox" aria-label="输入候选" className="mb-2 max-h-40 overflow-auto rounded-md border border-line bg-paper text-xs">
-            {completion.items.slice(0, 8).map((item) => (
-              <li key={item.name}>
-                <button
-                  type="button"
-                  role="option"
-                  aria-selected={false}
-                  className="flex w-full items-center justify-between gap-3 px-2.5 py-1.5 text-left hover:bg-soft"
-                  onClick={() => chooseCompletion(item.name, item.detail)}
-                >
-                  <span className="font-mono text-[11px] text-ink">{item.name}</span>
-                  <small className="text-muted">{item.detail}</small>
-                </button>
+            {completion.groups.map((group) => (
+              <li key={group.category}>
+                {completion.symbol === "/" ? (
+                  <p className="px-2.5 pt-1.5 text-[10px] uppercase tracking-wide text-muted">
+                    {group.category === "app" ? "应用操作" : group.category === "template" ? "提示模板" : "扩展命令"}
+                  </p>
+                ) : null}
+                <ul>
+                  {group.items.map((item) => {
+                    const index = completion.items.indexOf(item);
+                    return (
+                      <li key={item.key}>
+                        <button
+                          type="button"
+                          role="option"
+                          aria-selected={index === completionIndex}
+                          disabled={item.availability === "unavailable"}
+                          title={item.reason}
+                          className={`flex w-full items-center justify-between gap-3 px-2.5 py-1.5 text-left hover:bg-soft ${index === completionIndex ? "bg-soft" : ""} ${item.availability === "unavailable" ? "opacity-60" : ""}`}
+                          onClick={() => chooseCompletion(item)}
+                        >
+                          <span className="font-mono text-[11px] text-ink">{item.label}</span>
+                          <small className="text-muted">
+                            {item.source !== "PiDock" ? `${item.source} · ` : ""}
+                            {item.detail}
+                            {item.availability === "waiting" ? " · 等待空闲" : item.availability === "unavailable" ? ` · 不可用：${item.reason ?? ""}` : ""}
+                          </small>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
               </li>
             ))}
           </ul>
         ) : null}
         <textarea
+          ref={textareaRef}
           aria-label="消息输入"
           value={draft.text}
-          onChange={(event) => setText(task.id, sessionId, event.target.value)}
+          onChange={(event) => {
+            setText(task.id, sessionId, event.target.value);
+            setCaret(event.target.selectionStart ?? event.target.value.length);
+            setCompletionDismissed(false);
+            setCompletionIndex(0);
+          }}
+          onSelect={(event) => {
+            setCaret(event.currentTarget.selectionStart ?? 0);
+            setCompletionDismissed(false);
+          }}
+          onKeyDown={(event) => {
+            // Box 11: the candidate list owns Tab/Enter/Esc/arrows while it is
+            // open (confirming never sends), a plain Enter sends, Shift+Enter
+            // breaks the line, and an IME composition confirm does nothing.
+            const action = resolveComposerKey({
+              key: event.key,
+              shift: event.shiftKey,
+              composing: event.nativeEvent.isComposing,
+              candidateCount: completion ? completion.items.length : 0,
+            });
+            if (action === "ignore-composition" || action === "none" || action === "newline") return;
+            if (action === "move-candidate-down" || action === "move-candidate-up") {
+              event.preventDefault();
+              const count = completion?.items.length ?? 0;
+              if (count === 0) return;
+              setCompletionIndex((index) => (action === "move-candidate-down" ? (index + 1) % count : (index - 1 + count) % count));
+              return;
+            }
+            if (action === "close-candidate") {
+              event.preventDefault();
+              setCompletionDismissed(true);
+              return;
+            }
+            if (action === "confirm-candidate") {
+              event.preventDefault();
+              const row = completion?.items[completionIndex];
+              if (row) chooseCompletion(row);
+              return;
+            }
+            event.preventDefault();
+            event.currentTarget.form?.requestSubmit();
+          }}
           rows={3}
           placeholder="描述要验证或修改的内容，输入 @ 引用文件、$ 调用技能、/ 打开命令"
           className="w-full resize-none border-0 bg-transparent text-sm text-ink outline-none"
@@ -1142,32 +1289,10 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
             <Button
               size="sm"
               variant="ghost"
-              onClick={async () => addReference(task.id, sessionId, await createFileReference(task.id))}
-            >
-              + 引用文件
-            </Button>
-            {["@", "$", "/"].map((token) => (
-              <Button key={token} size="sm" variant="ghost" onClick={() => setText(task.id, sessionId, `${draft.text}${token}`)}>
-                {token}
-              </Button>
-            ))}
-            <Button
-              size="sm"
-              variant="ghost"
               aria-label={`选择权限：${permissionLabel}`}
               onClick={() => openModal({ type: "permission", taskId: task.id, sessionId })}
             >
               {permissionLabel}
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              aria-label={`选择模型：${session?.model ?? "未选择"}`}
-              title={switchLocked ? "执行中不可切换模型，请先等待完成或停止" : undefined}
-              onClick={() => openModal({ type: "model-picker", taskId: task.id, sessionId })}
-            >
-              {provider?.name ? `${provider.name} · ` : ""}
-              {session?.model ?? "模型"} · {session?.contextWindow ? `${formatTokens((session?.contextWindow ?? 0) * 1000)} Tokens` : "窗口未知"}
             </Button>
             {model?.thinking && model.thinking.mode !== "none" ? (
               <Button
@@ -1190,9 +1315,21 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
               {contextDisplay.marker.length > 0 ? ` · ${contextDisplay.marker}` : ""}
             </Button>
           </div>
-          <Button size="sm" variant="primary" type="submit" disabled={sending || session?.permission === "read" || hasUnsupportedImage}>
-            发送消息
-          </Button>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Button
+              size="sm"
+              variant="ghost"
+              aria-label={`选择模型：${session?.model ?? "未选择"}`}
+              title={switchLocked ? "执行中不可切换模型，请先等待完成或停止" : undefined}
+              onClick={() => openModal({ type: "model-picker", taskId: task.id, sessionId })}
+            >
+              {provider?.name ? `${provider.name} · ` : ""}
+              {session?.model ?? "模型"} · {session?.contextWindow ? `${formatTokens((session?.contextWindow ?? 0) * 1000)} Tokens` : "窗口未知"}
+            </Button>
+            <Button size="sm" variant="primary" type="submit" disabled={sending || session?.permission === "read" || hasUnsupportedImage}>
+              发送消息
+            </Button>
+          </div>
         </div>
         <p className="mt-1.5 text-[11px] text-muted">
           图片与文件仅在本页预览，不写入业务仓库；真实 Host 接入在 02 中定义。
