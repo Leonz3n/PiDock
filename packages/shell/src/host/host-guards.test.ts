@@ -421,3 +421,40 @@ describe("browser log session", () => {
     expect(resolveBrowserLogSession("", [])).toEqual({ ok: true, sessionId: "main" });
   });
 });
+
+// [PiDock 11] (#9): provider/model/context op shapes. Semantics (profile rules,
+// switch gate) run Host-side; the sender side fails closed on a malformed shape
+// so a bad payload never reaches the Host dispatch.
+describe("provider session ops", () => {
+  const catalog = [{ id: "provider-anthropic", name: "Anthropic 官方", protocol: "anthropic-messages", baseUrl: "https://api.anthropic.com", enabled: true, models: [{ id: "claude-sonnet-4-5", contextWindow: 200 }] }];
+
+  it("accepts a provider catalog only as an array of objects", () => {
+    expect(validateHostTaskOp("task/setProviderCatalog", { catalog })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/setProviderCatalog", { catalog: ["provider-anthropic"] }).ok).toBe(false);
+    expect(validateHostTaskOp("task/setProviderCatalog", {}).ok).toBe(false);
+  });
+
+  it("requires a session for the context reads and the switch", () => {
+    expect(validateHostTaskOp("task/sessionContext", { sessionId: "main" })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/sessionContext", { sessionId: "main", catalog })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/sessionContext", {}).ok).toBe(false);
+    expect(validateHostTaskOp("task/sessionContext", { sessionId: "main", catalog: [1] }).ok).toBe(false);
+    expect(validateHostTaskOp("task/compactSession", { sessionId: "main" })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/compactSession", { sessionId: "  " }).ok).toBe(false);
+  });
+
+  it("requires session/provider/model on a switch and rejects an unknown reason", () => {
+    expect(validateHostTaskOp("task/setSessionModel", { sessionId: "main", providerId: "p", model: "m" })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/setSessionModel", { sessionId: "main", providerId: "p", model: "m", reason: "agent-switch" })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/setSessionModel", { sessionId: "main", providerId: "p", model: "m", reason: "auto" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/setSessionModel", { sessionId: "main", model: "m" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/setSessionModel", { sessionId: "main", providerId: "p", model: "" }).ok).toBe(false);
+  });
+
+  it("accepts an empty reasoning level as the clear request, but not a non-string", () => {
+    expect(validateHostTaskOp("task/setSessionThinking", { sessionId: "main", level: "" })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/setSessionThinking", { sessionId: "main", level: "high" })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/setSessionThinking", { sessionId: "main" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/setSessionThinking", { sessionId: "main", level: 3 }).ok).toBe(false);
+  });
+});

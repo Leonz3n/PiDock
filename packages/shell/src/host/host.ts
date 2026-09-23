@@ -654,6 +654,90 @@ async function dispatchTaskOp(
         });
         return result.ok ? { ok: true, payload: result.payload } : { ok: false, error: result.error };
       }
+      // [PiDock 11] (#9) provider/model/context ops. The catalog is redacted
+      // app-level data (ids/names/protocols/model declarations, never an auth
+      // reference); the Host validates it with the same profile rules as the
+      // form and owns the switch gate (busy -> availability -> context bound).
+      case "task/setProviderCatalog": {
+        const catalog = record["catalog"];
+        if (!Array.isArray(catalog)) {
+          return { ok: false, error: "invalid-payload: task/setProviderCatalog.catalog must be an array" };
+        }
+        try {
+          const stored = host.setProviderCatalog(catalog);
+          return { ok: true, payload: { catalog: stored } };
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : String(error) };
+        }
+      }
+      case "task/sessionContext": {
+        const sessionId = record["sessionId"];
+        if (typeof sessionId !== "string") {
+          return { ok: false, error: "invalid-payload: task/sessionContext requires sessionId" };
+        }
+        try {
+          const context = host.sessionContext({
+            sessionId,
+            ...(record["catalog"] !== undefined ? { catalog: record["catalog"] as unknown[] } : {}),
+          });
+          return { ok: true, payload: { context } };
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : String(error) };
+        }
+      }
+      case "task/setSessionModel": {
+        const sessionId = record["sessionId"];
+        const providerId = record["providerId"];
+        const model = record["model"];
+        if (typeof sessionId !== "string" || typeof providerId !== "string" || typeof model !== "string") {
+          return { ok: false, error: "invalid-payload: task/setSessionModel requires sessionId/providerId/model" };
+        }
+        const reason = record["reason"];
+        try {
+          const switched = host.setSessionModel({
+            sessionId,
+            providerId,
+            model,
+            ...(reason === "human-switch" || reason === "agent-switch" ? { reason } : {}),
+            ...(record["catalog"] !== undefined ? { catalog: record["catalog"] as unknown[] } : {}),
+          });
+          return { ok: true, payload: { context: switched.context, switchEvent: switched.switchEvent } };
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : String(error) };
+        }
+      }
+      case "task/setSessionThinking": {
+        const sessionId = record["sessionId"];
+        const level = record["level"];
+        if (typeof sessionId !== "string" || typeof level !== "string") {
+          return { ok: false, error: "invalid-payload: task/setSessionThinking requires sessionId/level" };
+        }
+        try {
+          const context = host.setSessionThinking({
+            sessionId,
+            level,
+            ...(record["catalog"] !== undefined ? { catalog: record["catalog"] as unknown[] } : {}),
+          });
+          return { ok: true, payload: { context } };
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : String(error) };
+        }
+      }
+      case "task/compactSession": {
+        const sessionId = record["sessionId"];
+        if (typeof sessionId !== "string") {
+          return { ok: false, error: "invalid-payload: task/compactSession requires sessionId" };
+        }
+        try {
+          const context = host.compactSession({
+            sessionId,
+            ...(record["catalog"] !== undefined ? { catalog: record["catalog"] as unknown[] } : {}),
+          });
+          return { ok: true, payload: { context } };
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : String(error) };
+        }
+      }
       default:
         return { ok: false, error: `unknown-op: ${op}` };
     }
