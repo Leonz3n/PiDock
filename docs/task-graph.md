@@ -256,3 +256,49 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   （`claimPathScope` 尚未传入 `derivedExecutionIds`，`claimDerivedExecution`
   尚未校验写操作权）；隐藏项目的 Agent／服务仍在后台运行且归属正确（GAP 7）
   归入 #12。
+
+## Token 用量明细与汇总（[PiDock 12] #12）
+
+日期：2026-09-22（Asia/Shanghai）。范围：调用记录 → 持久用量明细 + 统计与
+清理范围；真实模型联通与真实计费口径仍为残留。
+
+- **一条稳定调用记录 = 一条持久明细**：`main/usage-ledger.ts` 把调用记录
+  （`callId`、Provider、请求模型、实际响应模型、时间、类型、结束状态、用量
+  与完整性）整理为可持久化的 `PiUsageDetail`；Host 在 `<taskDir>/usage.json`
+  保存自己的明细（不是每次读会话就现算的投影），因此重开会话、归档对话、
+  重启进程都既不新增也不丢失消耗。
+- **未知不是零**：字段存在性决定完整性（`reported` / `partial` / `missing`）；
+  `usageSource: "unreported"`（SDK 零初始化）一律记为 `missing`，聚合时只计数
+  不累加；Provider 报告的 `totalTokens` 与 reasoning 只作展开与交叉核对：
+  reasoning 已含在 output 内，绝不重复相加（盒子 2、盒子 5、盒子 9）。
+- **重放与重试**：`recordCallUsage(callId, …)` 让流式增量、最终消息、事件重放
+  落在同一条记录上（按调用 id 覆盖，幂等）；重试是新的 `callId`，各自计入；
+  失败、取消、待确认分别标注，重开只恢复已有记录（盒子 4、盒子 5）。
+- **类型与占用**：`runTurn({ kind })` 与 `compactContext()` 记录
+  `turn` / `compaction`，压缩的用量单独计入且占用下降不冲减累计消耗（盒子 6）。
+- **归属冻结**：明细保留调用时的 Provider 配置指纹（`协议::地址::模型列表`，
+  不含显示名）与请求/实际响应模型，Provider 改名或切换不重写历史统计
+  （盒子 1、盒子 8）。
+- **时间与分组**：日期型边界按声明的 UTC+08:00「当日开始／当日结束」且含边界，
+  带偏移的时刻按自身偏移比较，跨机器口径一致；分组维度为项目／任务／会话／
+  Provider／模型／类型／日期（盒子 3）。
+- **统计可查**：`USAGE_DEFINITIONS`（Host 与 renderer 镜像同一份措辞）在页面
+  「统计定义」面板列出统计范围、未知用量、缓存、类型、重放、恢复与日期边界；
+  页面同时声明「仅本应用记录，不等同账户账单或配额」（盒子 3、盒子 9）。
+- **清理范围**：`task/clearUsage` 支持 `all` / `session` / `before` 三种范围，
+  Host 记录排除项，之后的再同步不会把已清理的明细恢复；归档对话不清理用量
+  （盒子 8）。renderer 的「清理范围」面板逐个说明范围并回报条数。
+- **IPC 与适配器**：`task/usageRecords`（过滤 + 分组 + 总计 + 窗口标签 + 定义）
+  与 `task/clearUsage` 走同一条 `shell/taskOp` 白名单；renderer 经
+  `usageRecordsThroughShell` / `clearUsageThroughShell` 读取，Host 不可答时
+  回落内存行，项目维度由 renderer 在映射时补齐（Host 信封不含项目）。
+- **残留（未测/未接线）**：真实 Provider 连通与真实 usage 字段来源未验证
+  （`docs/pi-provider-usage.md` 的字段已建模，但没有真实响应样本）；真实模型
+  调用尚未接线，因此 `responseModel` 只能由调用方上报（通道与明细已支持并有
+  单测，生产路径要等真实传输层），RPC 不暴露该字段以免伪造归属；分支摘要
+  （`branch-summary`）与会话克隆／重新导入的来源身份（`origin` 去重规则已实现
+  并有单测）缺少生产入口——会话分支/克隆功能本身不在 #12 范围内；隐藏项目的
+  Agent／服务仍在后台运行且归属正确（#11 移交的 GAP 7）不在 #12 正文的验收项内，
+  仍需在真实后台运行接线时验收；`stores/host.ts` 仍把内存适配器固定为默认，
+  因此页面目前读的是内存投影（与 #9/#10 记录的同一接线缺口）；Electron GUI
+  smoke 未运行。
