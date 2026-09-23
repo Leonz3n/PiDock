@@ -42,6 +42,50 @@ export interface ProtocolDescriptor {
    * can additionally report `unsupported` at runtime.
    */
   modelListPath: string | null;
+  /**
+   * Where a selected reasoning tier lands in this protocol's body. `null`
+   * means the protocol has no reasoning parameter: a tier is then never
+   * silently folded into another field.
+   */
+  reasoning: ProtocolReasoningMapping | null;
+}
+
+/**
+ * Reasoning tier -> protocol parameter. The mapping is declared per protocol
+ * (not guessed from the vendor), and `buildProtocolRequest` refuses to invent
+ * a level the mapping does not name.
+ */
+export type ProtocolReasoningMapping =
+  | {
+      kind: "budget";
+      /** Body field carrying the block, e.g. `thinking`. */
+      field: string;
+      /** Field inside the block carrying the token budget. */
+      budgetField: string;
+      /** Body field carrying the block type, when the API needs one. */
+      typeField?: string;
+      typeValue?: string;
+      /** Token budget per tier. */
+      budgets: Partial<Record<ReasoningTier, number>>;
+    }
+  | {
+      kind: "effort";
+      /** Body field carrying the effort (flat) or the object holding it (nested). */
+      field: string;
+      /** Field inside the object when `nested`. */
+      effortField?: string;
+      nested: boolean;
+      /** Effort value per tier; an unnamed tier is not sent. */
+      efforts: Partial<Record<ReasoningTier, string>>;
+    };
+
+/** Canonical tier order; mirrors the renderer/shell `REASONING_LEVELS`. */
+export const REASONING_TIERS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+
+export type ReasoningTier = (typeof REASONING_TIERS)[number];
+
+export function isReasoningTier(value: unknown): value is ReasoningTier {
+  return typeof value === "string" && (REASONING_TIERS as readonly string[]).includes(value);
 }
 
 const DESCRIPTORS: Record<ProviderProtocol, ProtocolDescriptor> = {
@@ -56,6 +100,16 @@ const DESCRIPTORS: Record<ProviderProtocol, ProtocolDescriptor> = {
     doneFrame: "message_stop",
     usagePath: ["usage"],
     modelListPath: "/v1/models",
+    // Anthropic takes an explicit thinking block; `off` sends no block at all
+    // (the API has no "disabled" budget value).
+    reasoning: {
+      kind: "budget",
+      field: "thinking",
+      budgetField: "budget_tokens",
+      typeField: "type",
+      typeValue: "enabled",
+      budgets: { minimal: 1024, low: 2048, medium: 8192, high: 16384, xhigh: 32768, max: 65536 },
+    },
   },
   "openai-responses": {
     id: "openai-responses",
@@ -68,6 +122,15 @@ const DESCRIPTORS: Record<ProviderProtocol, ProtocolDescriptor> = {
     doneFrame: "response.completed",
     usagePath: ["response", "usage"],
     modelListPath: "/v1/models",
+    // Responses API nests the effort under `reasoning`; `minimal` is its own
+    // value, `off` is expressed by omitting the block.
+    reasoning: {
+      kind: "effort",
+      field: "reasoning",
+      effortField: "effort",
+      nested: true,
+      efforts: { minimal: "minimal", low: "low", medium: "medium", high: "high", xhigh: "high", max: "high" },
+    },
   },
   "openai-chat-completions": {
     id: "openai-chat-completions",
@@ -81,6 +144,13 @@ const DESCRIPTORS: Record<ProviderProtocol, ProtocolDescriptor> = {
     doneFrame: "choices.0.finish_reason",
     usagePath: ["usage"],
     modelListPath: "/v1/models",
+    // Chat Completions takes the flat `reasoning_effort` string.
+    reasoning: {
+      kind: "effort",
+      field: "reasoning_effort",
+      nested: false,
+      efforts: { minimal: "minimal", low: "low", medium: "medium", high: "high", xhigh: "high", max: "high" },
+    },
   },
 };
 
@@ -142,6 +212,12 @@ export interface ProtocolRequestInput {
   tools?: ProtocolToolDeclaration[];
   /** Max output tokens ([PiDock 11] #9 per-model setting). */
   maxOutput?: number;
+  /**
+   * Session reasoning tier ([PiDock 11] #9). Mapped through the protocol's
+   * declared `reasoning` mapping; an unmapped tier is left out instead of
+   * being guessed into another field.
+   */
+  reasoning?: { tier: string; budgetTokens?: number };
   stream?: boolean;
 }
 
@@ -171,6 +247,30 @@ export function buildProtocolRequest(protocol: string, input: ProtocolRequestInp
   } else {
     body[descriptor.messageField] = messages;
     if (input.system !== undefined) body[descriptor.systemField] = input.system;
+  }
+  if (input.reasoning !== undefined && descriptor.reasoning !== null) {
+    const mapping = descriptor.reasoning;
+    const tier = input.reasoning.tier;
+    if (mapping.kind === "budget") {
+      // `off` is the absence of the block, and Anthropic requires
+      // `max_tokens` to stay above the budget: an impossible pair is not sent.
+      const budget = input.reasoning.budgetTokens ?? (isReasoningTier(tier) ? mapping.budgets[tier] : undefined);
+      // Anthropic needs `max_tokens > budget_tokens`: without a known max
+      // output the pair cannot be formed, so the block is left out (never a
+      // half-written request).
+      const fits = input.maxOutput !== undefined && budget !== undefined && input.maxOutput > budget;
+      if (tier !== "off" && fits) {
+        body[mapping.field] = {
+          ...(mapping.typeField !== undefined ? { [mapping.typeField]: mapping.typeValue } : {}),
+          [mapping.budgetField]: budget,
+        };
+      }
+    } else {
+      const effort = isReasoningTier(tier) ? mapping.efforts[tier] : undefined;
+      if (effort !== undefined) {
+        body[mapping.field] = mapping.nested ? { [mapping.effortField ?? "effort"]: effort } : effort;
+      }
+    }
   }
   if (input.tools !== undefined && input.tools.length > 0) {
     body[descriptor.toolField] =
