@@ -150,6 +150,25 @@ export function classifyControlCaller(input: {
   return { ok: true, kind: "human", label };
 }
 
+/**
+ * Session a user's browser marker is logged into ([PiDock 06] #8): a named
+ * session must already exist, so a typo cannot silently create a new
+ * conversation; without a name the task's first persisted session is the
+ * current one (multi-session routing is #9/#11).
+ */
+export function resolveBrowserLogSession(
+  requested: string,
+  knownSessionIds: readonly string[],
+): { ok: true; sessionId: string } | { ok: false; error: string } {
+  if (requested.length === 0) {
+    return { ok: true, sessionId: knownSessionIds[0] ?? "main" };
+  }
+  if (!knownSessionIds.includes(requested)) {
+    return { ok: false, error: `unknown-session: ${requested} 不存在，标记未发送` };
+  }
+  return { ok: true, sessionId: requested };
+}
+
 /** Fork-time task binding: one utilityProcess serves one task folder. */
 export interface HostTaskBinding {
   taskId: string;

@@ -65,10 +65,18 @@ describe("browser gateway ownership and tiers", () => {
   });
 
   it("refuses agent automation while the user holds the page, and lets the user work", async () => {
-    const { surface, performed } = fakeSurface({ takeoverState: () => ({ paused: true, reason: "人工登录" }) });
+    const states: (string | undefined)[] = [];
+    const { surface, performed } = fakeSurface({
+      takeoverState: (pageId?: string) => {
+        states.push(pageId);
+        return { paused: true, reason: "人工登录" };
+      },
+    });
     const gateway = gatewayFor(surface);
     const denied = await gateway.perform({ action: "page/navigate", page: PAGE as never, params: { url: "http://localhost:5173/checkout" }, actor: agent });
     expect(denied).toMatchObject({ error: expect.stringContaining("takeover-paused") });
+    // The refusal reads the takeover of the addressed page.
+    expect(states).toEqual(["page-1"]);
     expect(performed).toHaveLength(0);
     const user = await gateway.perform({ action: "page/navigate", page: PAGE as never, params: { url: "http://localhost:5173/checkout" }, actor: human });
     expect(user.ok).toBe(true);
