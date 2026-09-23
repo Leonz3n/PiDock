@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PerTaskHostRegistry } from "./runtime.js";
+import { PerTaskHostRegistry, taskBrowserOriginsFromEnv } from "./runtime.js";
 import { createDiskTaskDirResolver, defaultTasksRoot } from "./task-resolver.js";
 import type { HostTaskResult } from "../rpc/protocol.js";
 
@@ -18,6 +18,8 @@ import type { HostTaskResult } from "../rpc/protocol.js";
 function fakeTransport(result: HostTaskResult) {
   return {
     task: vi.fn(async () => result),
+    // The registry binds the per-task browser handler on every spawn.
+    onBrowserRequest: vi.fn(),
     dispose: vi.fn(),
   };
 }
@@ -403,5 +405,68 @@ describe("#6 append routing (S4)", () => {
         payload: { repoSelections: [], fetchedCommits: {}, takenPaths: [], branchesInUse: [] },
       }),
     ).rejects.toThrow("unknown task");
+  });
+});
+
+// [PiDock 06] (#8): every forked Host client gets the per-task browser
+// handler bound at spawn time, so the Host's browser requests route to
+// main's capability; without a capability they fail closed.
+describe("browser request binding", () => {
+  function spawnCapturing(handlers: Array<(params: unknown) => Promise<unknown>>) {
+    return vi.fn(async () => ({
+      client: {
+        task: vi.fn(async () => TASK_RESULT),
+        onBrowserRequest: vi.fn((handler: (params: unknown) => Promise<unknown>) => {
+          handlers.push(handler);
+        }),
+        dispose: vi.fn(),
+      } as never,
+      child: { kill: vi.fn() } as never,
+    }));
+  }
+
+  it("routes a bound Host's browser request to the main capability", async () => {
+    const handlers: Array<(params: unknown) => Promise<unknown>> = [];
+    const browsers = {
+      handleRequest: vi.fn(async () => ({ ok: true as const, payload: { performed: "page/state" } })),
+    };
+    const registry = new PerTaskHostRegistry("workspace-a", spawnCapturing(handlers) as never, () => "/tasks/task-a", browsers);
+    await registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
+    expect(handlers).toHaveLength(1);
+    const result = await handlers[0]?.({ workspaceId: "workspace-a", taskId: "task-a", action: "page/state", actor: { kind: "human", label: "用户" } });
+    expect(browsers.handleRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ taskId: "task-a", action: "page/state" }),
+    );
+    expect(result).toEqual({ ok: true, payload: { performed: "page/state" } });
+  });
+
+  it("fails closed when no browser capability is wired", async () => {
+    const handlers: Array<(params: unknown) => Promise<unknown>> = [];
+    const registry = new PerTaskHostRegistry("workspace-a", spawnCapturing(handlers) as never, () => "/tasks/task-a");
+    await registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
+    const result = await handlers[0]?.({ workspaceId: "workspace-a", taskId: "task-a", action: "page/state", actor: { kind: "human", label: "用户" } });
+    expect(result).toMatchObject({ ok: false, error: expect.stringContaining("browser-unavailable") });
+  });
+});
+
+// [PiDock 06] (#8): the interim per-task navigation allowlist source.
+describe("task browser origins", () => {
+  it("keeps well-formed task entries and drops malformed ones", () => {
+    const parsed = taskBrowserOriginsFromEnv(
+      JSON.stringify({
+        "task-a": ["http://localhost:5173", "https://saas.example.com", ""],
+        "task-b": "http://localhost:8080",
+        " ": ["http://localhost:1"],
+        "task-c": [],
+      }),
+    );
+    expect(parsed).toEqual({ "task-a": ["http://localhost:5173", "https://saas.example.com"] });
+  });
+
+  it("fails closed on missing or malformed values", () => {
+    expect(taskBrowserOriginsFromEnv(undefined)).toEqual({});
+    expect(taskBrowserOriginsFromEnv("")).toEqual({});
+    expect(taskBrowserOriginsFromEnv("not json")).toEqual({});
+    expect(taskBrowserOriginsFromEnv("[\"http://localhost:5173\"]")).toEqual({});
   });
 });

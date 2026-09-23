@@ -5,6 +5,8 @@ import {
   PerTaskHostRegistry,
   SHELL_WEB_PREFERENCES,
   TASK_WEB_PREFERENCES,
+  createTaskBrowserCapability,
+  taskBrowserOriginsFromEnv,
   assertTrustedWindowEvidence,
   createHost,
   createTrustedWindow,
@@ -126,6 +128,17 @@ async function run(): Promise<void> {
   // Hosts: those paths run no task ops.)
   const { client, child } = await createHost(workspaceId);
   const views = await createTrustedWindow(workspaceId);
+  // [PiDock 06] (#8) browser capability: per-task visible pages + gateways.
+  // `PIDOCK_TASK_BROWSER_ORIGINS` holds each task's own frontend addresses
+  // (JSON map taskId -> origins); a task without an entry can navigate
+  // nowhere (fail-closed), and external hosts are refused for every task.
+  const taskOrigins = taskBrowserOriginsFromEnv(process.env["PIDOCK_TASK_BROWSER_ORIGINS"]);
+  const browsers = createTaskBrowserCapability({
+    window: views.window,
+    trust: views.registry,
+    workspaceId,
+    originsFor: (taskId) => taskOrigins[taskId] ?? [],
+  });
   // Production resolver: scan the machine tasks root for a `task.json`
   // matching the routed task id. First-use of a provisioned task forks
   // its bound Host; unprovisioned ids still fail closed (`unknown task`).
@@ -135,6 +148,7 @@ async function run(): Promise<void> {
     workspaceId,
     (ws, task) => createHost(ws, true, task),
     createDiskTaskDirResolver(defaultTasksRoot()),
+    browsers.registry,
   );
   registerIpc(client, views.registry, tasks);
   const loaded = await loadTrustedViews(views);

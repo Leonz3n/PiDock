@@ -201,6 +201,24 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** Keyboard table for the named keys the Agent may press (`pressKey`). */
+const NAMED_KEYS: Record<string, { code: string; keyCode: number }> = {
+  Enter: { code: "Enter", keyCode: 13 },
+  Tab: { code: "Tab", keyCode: 9 },
+  Escape: { code: "Escape", keyCode: 27 },
+  Backspace: { code: "Backspace", keyCode: 8 },
+  Delete: { code: "Delete", keyCode: 46 },
+  ArrowUp: { code: "ArrowUp", keyCode: 38 },
+  ArrowDown: { code: "ArrowDown", keyCode: 40 },
+  ArrowLeft: { code: "ArrowLeft", keyCode: 37 },
+  ArrowRight: { code: "ArrowRight", keyCode: 39 },
+  Home: { code: "Home", keyCode: 36 },
+  End: { code: "End", keyCode: 35 },
+  PageUp: { code: "PageUp", keyCode: 33 },
+  PageDown: { code: "PageDown", keyCode: 34 },
+  " ": { code: "Space", keyCode: 32 },
+};
+
 export function elementDetails(
   value: unknown,
   maxTextLength: number,
@@ -412,6 +430,36 @@ export class TaskAutomation {
     });
     await this.debuggerApi.sendCommand("Input.insertText", { text: value });
     return details;
+  }
+
+  /**
+   * Press one key on the visible page ([PiDock 06] #8). Named keys use the
+   * CDP key table below; any other value is inserted as text
+   * (`Input.insertText`), which is what typing means for a text field. GUI
+   * verification of the named-key table belongs to the #8 residual
+   * (图形界面烟雾测试), not this slice.
+   */
+  async pressKey(key: string): Promise<void> {
+    this.assertActive();
+    const named = NAMED_KEYS[key];
+    if (!named) {
+      await this.debuggerApi.sendCommand("Input.insertText", { text: key });
+      return;
+    }
+    await this.debuggerApi.sendCommand("Input.dispatchKeyEvent", {
+      type: "keyDown",
+      key,
+      code: named.code,
+      windowsVirtualKeyCode: named.keyCode,
+      nativeVirtualKeyCode: named.keyCode,
+    });
+    await this.debuggerApi.sendCommand("Input.dispatchKeyEvent", {
+      type: "keyUp",
+      key,
+      code: named.code,
+      windowsVirtualKeyCode: named.keyCode,
+      nativeVirtualKeyCode: named.keyCode,
+    });
   }
 
   async waitForExpression(

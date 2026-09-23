@@ -105,9 +105,14 @@ export function browserActionForTool(tool: string): BrowserAction | null {
   return BROWSER_TOOL_ACTIONS[tool] ?? null;
 }
 
-/** Page handle crossing the RPC boundary. `taskId` is never caller-chosen. */
+/**
+ * Page handle crossing the RPC boundary. `taskId` is never caller-chosen:
+ * a handle produced inside main (`{pageId, webContentsId}`) is attributed
+ * to the task that owns the surface, while a handle that does name a task
+ * is rejected when it names another one.
+ */
 export interface PageRef {
-  taskId: string;
+  taskId?: string;
   pageId: string;
   webContentsId?: number;
 }
@@ -115,7 +120,8 @@ export interface PageRef {
 export function isPageRef(value: unknown): value is PageRef {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
-  if (typeof record["taskId"] !== "string" || record["taskId"].length === 0) return false;
+  const taskId = record["taskId"];
+  if (taskId !== undefined && (typeof taskId !== "string" || taskId.length === 0)) return false;
   if (typeof record["pageId"] !== "string" || record["pageId"].length === 0) return false;
   const webContentsId = record["webContentsId"];
   return webContentsId === undefined || (typeof webContentsId === "number" && Number.isInteger(webContentsId));
@@ -130,6 +136,8 @@ export type PageRefCheck =
  * malformed handle, a handle naming another task, an unknown page and a
  * handle whose `webContentsId` no longer matches the live page are all
  * rejected, so no action ever runs against a page it was not bound to.
+ * A handle without a `taskId` is attributed to the task that owns the
+ * surface (main-internal handles), never to a caller claim.
  */
 export function classifyPageRef(input: {
   page: unknown;
@@ -139,7 +147,7 @@ export function classifyPageRef(input: {
   if (input.page === undefined || input.page === null) return { ok: false, reason: "page-required: 浏览器操作需要页面句柄" };
   if (!isPageRef(input.page)) return { ok: false, reason: "invalid-payload: page 必须是 {taskId, pageId}" };
   const ref = input.page;
-  if (ref.taskId !== input.taskId) {
+  if (ref.taskId !== undefined && ref.taskId !== input.taskId) {
     return { ok: false, reason: "page-foreign-task: 页面句柄属于其他任务，已拒绝" };
   }
   const live = input.livePages.find((page) => page.pageId === ref.pageId);

@@ -43,6 +43,12 @@ describe("page handles", () => {
     expect(result.ok === false && result.reason).toContain("page-foreign-task");
   });
 
+  it("attributes a handle without a task id to the task that owns the surface", () => {
+    // Main-internal handles carry no task id; they belong to the surface's
+    // task, never to whatever a caller claims.
+    expect(classifyPageRef({ page: { pageId: "page-1", webContentsId: 11 }, taskId: TASK_ID, livePages })).toEqual({ ok: true, pageId: "page-1" });
+  });
+
   it("rejects unknown pages, stale webContents ids and malformed handles", () => {
     const unknown = classifyPageRef({ page: { taskId: TASK_ID, pageId: "page-closed" }, taskId: TASK_ID, livePages });
     expect(unknown.ok === false && unknown.reason).toContain("page-stale");

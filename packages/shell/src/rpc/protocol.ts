@@ -60,7 +60,8 @@ export type HostTaskOp =
   | "task/planServiceStart"
   | "task/controlService"
   | "task/serviceStatus"
-  | "task/serviceLog";
+  | "task/serviceLog"
+  | "task/browserAction";
 
 /**
  * Sender attestation stamped by the trusted main process on a routed
@@ -163,6 +164,7 @@ const HOST_TASK_OPS: readonly string[] = [
   "task/controlService",
   "task/serviceStatus",
   "task/serviceLog",
+  "task/browserAction",
 ];
 
 export function isHostTaskOp(value: unknown): value is HostTaskOp {
@@ -201,6 +203,85 @@ export function isHostTaskParams(value: unknown): value is HostTaskParams {
   // rejected rather than ignored.
   if (value["origin"] !== undefined && !isTaskOpOrigin(value["origin"])) return false;
   return true;
+}
+
+/** Host -> main browser request ([PiDock 06] #8).
+ *
+ * The Agent Host runs in a utilityProcess and never holds a WebContents, so
+ * a browser action it decides to run is a *request* to main: main owns the
+ * visible page, so main validates the page handle, the navigation allowlist
+ * and the takeover state before anything touches the page. The Host names
+ * its own workspace/task (fixed at fork time); main refuses another one.
+ */
+export type BrowserPerformResult =
+  | { ok: true; payload: Record<string, unknown> }
+  | { ok: false; error: string };
+
+export type BrowserRequestActor =
+  | { kind: "agent"; sessionId: string }
+  | { kind: "human"; label: string };
+
+export function isBrowserRequestActor(value: unknown): value is BrowserRequestActor {
+  if (!isRecord(value)) return false;
+  const kind = value["kind"];
+  if (kind === "agent") return typeof value["sessionId"] === "string" && (value["sessionId"] as string).length > 0;
+  if (kind === "human") return typeof value["label"] === "string";
+  return false;
+}
+
+export interface BrowserRequestParams {
+  workspaceId: string;
+  taskId: string;
+  action: string;
+  page?: unknown;
+  params?: Record<string, unknown>;
+  actor: BrowserRequestActor;
+}
+
+export interface BrowserRequest {
+  kind: "browser-request";
+  id: string;
+  params: BrowserRequestParams;
+}
+
+export interface BrowserResponseOk {
+  kind: "browser-response";
+  id: string;
+  ok: true;
+  payload: Record<string, unknown>;
+}
+
+export interface BrowserResponseError {
+  kind: "browser-response";
+  id: string;
+  ok: false;
+  error: string;
+}
+
+export type BrowserResponse = BrowserResponseOk | BrowserResponseError;
+
+/** Fail-closed guard: ids, a task route and an actor shape are required. */
+export function isBrowserRequest(value: unknown): value is BrowserRequest {
+  if (!isRecord(value)) return false;
+  if (value["kind"] !== "browser-request") return false;
+  if (typeof value["id"] !== "string" || value["id"].length === 0) return false;
+  const params = value["params"];
+  if (!isRecord(params)) return false;
+  if (typeof params["workspaceId"] !== "string" || params["workspaceId"].length === 0) return false;
+  if (typeof params["taskId"] !== "string" || params["taskId"].length === 0) return false;
+  if (typeof params["action"] !== "string" || params["action"].length === 0) return false;
+  if (params["params"] !== undefined && !isRecord(params["params"])) return false;
+  if (!isBrowserRequestActor(params["actor"])) return false;
+  return approxBytes(value) <= MAX_MESSAGE_BYTES;
+}
+
+export function isBrowserResponse(value: unknown): value is BrowserResponse {
+  if (!isRecord(value)) return false;
+  if (value["kind"] !== "browser-response") return false;
+  if (typeof value["id"] !== "string" || value["id"].length === 0) return false;
+  if (value["ok"] === true) return isRecord(value["payload"]);
+  if (value["ok"] === false) return typeof value["error"] === "string";
+  return false;
 }
 
 /** Fail-closed guard for the response direction. */

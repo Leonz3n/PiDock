@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  isBrowserRequest,
+  isBrowserResponse,
+  isHostTaskOp,
   isHostTaskParams,
   isRpcRequest,
   isRpcResponse,
@@ -103,5 +106,41 @@ describe("isRpcResponse", () => {
   it("rejects a response carrying an unexpected shape", () => {
     expect(isRpcResponse({ kind: "response", id: "1" })).toBe(false);
     expect(isRpcResponse({ kind: "event", id: "1", ok: true })).toBe(false);
+  });
+});
+
+// [PiDock 06] (#8) adds the task-browser op and the Host -> main browser
+// request/response envelopes on the same port; both are fail-closed.
+describe("browser envelopes", () => {
+  it("accepts the browser task op", () => {
+    expect(isHostTaskOp("task/browserAction")).toBe(true);
+    expect(isHostTaskOp("task/browserTeleport")).toBe(false);
+  });
+
+  it("accepts a well-formed browser request and rejects partial ones", () => {
+    const request = {
+      kind: "browser-request",
+      id: "browser-1",
+      params: {
+        workspaceId: "ws-a",
+        taskId: "task-a1f92c3d",
+        action: "page/state",
+        page: { pageId: "page-1" },
+        actor: { kind: "agent", sessionId: "main" },
+      },
+    };
+    expect(isBrowserRequest(request)).toBe(true);
+    expect(isBrowserRequest({ ...request, params: { ...request.params, actor: { kind: "agent" } } })).toBe(false);
+    expect(isBrowserRequest({ ...request, params: { ...request.params, action: "" } })).toBe(false);
+    expect(isBrowserRequest({ ...request, params: { ...request.params, workspaceId: "" } })).toBe(false);
+    expect(isBrowserRequest({ ...request, id: "" })).toBe(false);
+    expect(isBrowserRequest({ kind: "request", id: "1", method: "host/ping", params: {} })).toBe(false);
+  });
+
+  it("accepts both browser response directions only", () => {
+    expect(isBrowserResponse({ kind: "browser-response", id: "browser-1", ok: true, payload: {} })).toBe(true);
+    expect(isBrowserResponse({ kind: "browser-response", id: "browser-1", ok: false, error: "takeover-paused" })).toBe(true);
+    expect(isBrowserResponse({ kind: "browser-response", id: "browser-1" })).toBe(false);
+    expect(isBrowserResponse({ kind: "response", id: "browser-1", ok: true, payload: {} })).toBe(false);
   });
 });

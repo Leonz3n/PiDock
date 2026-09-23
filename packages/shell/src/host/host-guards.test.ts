@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { boundWorkspaceId, buildHostEnv, buildToolPlannerSpec, classifyServiceControlCaller, DEFAULT_WORKSPACE_ID, routeHostTask, routeTaskBinding, toolPlannerSpecForHostDispatch, toolPlannerSpecForOp, validateHostTaskOp } from "./host-guards.js";
+import { boundWorkspaceId, buildHostEnv, buildToolPlannerSpec, classifyControlCaller, DEFAULT_WORKSPACE_ID, routeHostTask, routeTaskBinding, toolPlannerSpecForHostDispatch, toolPlannerSpecForOp, validateHostTaskOp } from "./host-guards.js";
 
 // S6 final wiring: approval-listing reads ride `task/listApprovals` +
 // `task/getApproval` (fail-closed payloads; host.ts needs a parent port).
@@ -39,41 +39,71 @@ describe("service ops", () => {
   });
 });
 
+// [PiDock 06] (#8) task browser: envelope shape only here; page
+// ownership, the navigation allowlist, takeover state and the agent gate
+// run on the authoritative side (`browser-gateway.ts` / `browser-control.ts`).
+describe("browser op envelopes", () => {
+  it("accepts well-formed browser envelopes", () => {
+    expect(validateHostTaskOp("task/browserAction", { action: "page/state", page: { pageId: "page-1" } })).toEqual({ ok: true });
+    expect(
+      validateHostTaskOp("task/browserAction", {
+        action: "page/navigate",
+        page: { taskId: "task-a1f92c3d", pageId: "page-1", webContentsId: 11 },
+        params: { url: "http://localhost:5173/checkout" },
+        sessionId: "main",
+        approvalId: "approval-1",
+      }),
+    ).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/browserAction", { action: "marker/create", page: { pageId: "page-1" }, targetSessionId: "main" })).toEqual({ ok: true });
+  });
+
+  it("rejects unknown actions and malformed envelopes", () => {
+    expect(validateHostTaskOp("task/browserAction", { action: "page/teleport" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/browserAction", {}).ok).toBe(false);
+    expect(validateHostTaskOp("task/browserAction", "nope").ok).toBe(false);
+    expect(validateHostTaskOp("task/browserAction", { action: "page/state", page: "page-1" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/browserAction", { action: "page/state", page: { pageId: "" } }).ok).toBe(false);
+    expect(validateHostTaskOp("task/browserAction", { action: "page/state", page: { pageId: "page-1" }, sessionId: " " }).ok).toBe(false);
+    expect(validateHostTaskOp("task/browserAction", { action: "page/state", page: { pageId: "page-1" }, targetSessionId: "" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/browserAction", { action: "page/state", page: { pageId: "page-1" }, params: [] }).ok).toBe(false);
+  });
+});
+
 // BLOCK P0-2: a session-less control call is human UI only with main's
 // sender-bound attestation; without it the caller must name its session,
 // so an agent cannot drop `sessionId` to reach the ungated human path.
 describe("service-control caller classification", () => {
   const attested = { kind: "shell-ui", senderWebContentsId: 42 };
   it("routes a payload sessionId to agent control regardless of actor claims", () => {
-    expect(classifyServiceControlCaller({ sessionId: "main", origin: attested })).toEqual({
+    expect(classifyControlCaller({ sessionId: "main", origin: attested })).toEqual({
       ok: true,
       kind: "agent",
       sessionId: "main",
     });
-    const agent = classifyServiceControlCaller({ sessionId: "main", label: "用户显式操作" });
+    const agent = classifyControlCaller({ sessionId: "main", label: "用户显式操作" });
     expect(agent.ok && agent.kind).toBe("agent");
-    expect(classifyServiceControlCaller({ sessionId: "" }).ok).toBe(false);
-    expect(classifyServiceControlCaller({ sessionId: 7 }).ok).toBe(false);
+    expect(classifyControlCaller({ sessionId: "" }).ok).toBe(false);
+    expect(classifyControlCaller({ sessionId: 7 }).ok).toBe(false);
   });
   it("rejects a session-less call without the main-stamped shell-ui origin", () => {
-    const spoof = classifyServiceControlCaller({ label: "用户显式操作" });
+    const spoof = classifyControlCaller({ label: "用户显式操作" });
     expect(spoof.ok).toBe(false);
-    expect(classifyServiceControlCaller({ origin: { kind: "shell-ui", senderWebContentsId: "42" } }).ok).toBe(false);
-    expect(classifyServiceControlCaller({ origin: { kind: "agent-tool", senderWebContentsId: 42 } }).ok).toBe(false);
-    expect(classifyServiceControlCaller({ origin: 42 }).ok).toBe(false);
+    expect(classifyControlCaller({ origin: { kind: "shell-ui", senderWebContentsId: "42" } }).ok).toBe(false);
+    expect(classifyControlCaller({ origin: { kind: "agent-tool", senderWebContentsId: 42 } }).ok).toBe(false);
+    expect(classifyControlCaller({ origin: 42 }).ok).toBe(false);
   });
   it("classifies an attested session-less call as human UI control with a label", () => {
-    expect(classifyServiceControlCaller({ origin: attested })).toEqual({
+    expect(classifyControlCaller({ origin: attested })).toEqual({
       ok: true,
       kind: "human",
       label: "用户显式操作",
     });
-    expect(classifyServiceControlCaller({ origin: attested, label: "RuntimePanel 启动" })).toEqual({
+    expect(classifyControlCaller({ origin: attested, label: "RuntimePanel 启动" })).toEqual({
       ok: true,
       kind: "human",
       label: "RuntimePanel 启动",
     });
-    expect(classifyServiceControlCaller({ origin: attested, label: "  " })).toEqual({
+    expect(classifyControlCaller({ origin: attested, label: "  " })).toEqual({
       ok: true,
       kind: "human",
       label: "用户显式操作",

@@ -9,6 +9,7 @@
 import { isHostTaskOp, isTaskOpOrigin, type HostTaskOp } from "../rpc/protocol.js";
 import { isAbsoluteTaskRoot } from "../main/task-provision.js";
 import { PI_GATED_TOOL_NAMES } from "../main/pi-session.js";
+import { isBrowserAction, isPageRef } from "../main/browser-rules.js";
 
 export const DEFAULT_WORKSPACE_ID = "s1-default-workspace";
 
@@ -110,7 +111,8 @@ export function toolPlannerSpecForHostDispatch(record: Record<string, unknown>):
 }
 
 /**
- * Pure actor classification for `task/controlService` ([PiDock 04] #7).
+ * Pure actor classification for task-scoped control ops ([PiDock 04] #7
+ * service control, [PiDock 06] #8 task browser).
  *
  * A payload `sessionId` is agent control and always goes through the
  * session permission gate. A session-less call is human-UI control only
@@ -126,7 +128,7 @@ export type ServiceControlCaller =
   | { ok: true; kind: "human"; label: string }
   | { ok: false; error: string };
 
-export function classifyServiceControlCaller(input: {
+export function classifyControlCaller(input: {
   sessionId?: unknown;
   label?: unknown;
   origin?: unknown;
@@ -561,6 +563,36 @@ export function validateHostTaskOp(
     }
     if (action !== "start" && action !== "stop") {
       return { ok: false, error: "invalid-payload: task/controlService.action must be start/stop" };
+    }
+    return { ok: true };
+  }
+  // [PiDock 06] (#8) task browser: envelope shape only here (known action,
+  // page handle shape when present, actor ids); page ownership, the
+  // navigation allowlist, takeover state, evidence bounds and the agent
+  // permission gate all run later on the authoritative side
+  // (`browser-gateway.ts` in main, `browser-control.ts` in the Host).
+  if (op === "task/browserAction") {
+    if (!isRecord(payload))
+      return { ok: false, error: "invalid-payload: task/browserAction requires a payload object" };
+    const action = payload["action"];
+    if (!isBrowserAction(action)) {
+      return { ok: false, error: "invalid-payload: task/browserAction.action must be a known browser action" };
+    }
+    const page = payload["page"];
+    if (page !== undefined && !isPageRef(page)) {
+      return { ok: false, error: "invalid-payload: task/browserAction.page must be {taskId?, pageId, webContentsId?}" };
+    }
+    const sessionId = payload["sessionId"];
+    if (sessionId !== undefined && (typeof sessionId !== "string" || sessionId.trim().length === 0)) {
+      return { ok: false, error: "invalid-payload: task/browserAction.sessionId must be a non-empty string" };
+    }
+    const targetSessionId = payload["targetSessionId"];
+    if (targetSessionId !== undefined && (typeof targetSessionId !== "string" || targetSessionId.trim().length === 0)) {
+      return { ok: false, error: "invalid-payload: task/browserAction.targetSessionId must be a non-empty string" };
+    }
+    const params = payload["params"];
+    if (params !== undefined && !isRecord(params)) {
+      return { ok: false, error: "invalid-payload: task/browserAction.params must be an object" };
     }
     return { ok: true };
   }
