@@ -165,6 +165,8 @@ export function UsagePage() {
                 <span className="truncate font-mono text-muted">
                   {row.taskId} · {row.sessionId}
                   <span className="ml-1 text-muted">[{USAGE_KIND_LABELS[row.kind]}]</span>
+                  {row.completeness === "partial" ? <span className="ml-1 text-orange">部分报告</span> : null}
+                  {row.endState !== "completed" ? <span className="ml-1 text-orange">{row.endState === "failed" ? "失败" : row.endState === "cancelled" ? "已取消" : "待确认"}</span> : null}
                 </span>
                 <span className="text-right">{row.completeness === "missing" ? "未报告" : row.input.toLocaleString()}</span>
                 <span className="text-right">
@@ -179,7 +181,7 @@ export function UsagePage() {
             )}
           />
           <p className="mt-2 text-[11px] text-muted">
-            列：时间 / 模型（→ 实际响应模型）/ 任务 · 会话 · 类型 / 输入 / 输出（含 reasoning）/ 缓存读取 / 缓存写入。未报告的行显示「未报告」，不计为 0。
+            列：时间 / 模型（→ 实际响应模型）/ 任务 · 会话 · 类型 / 输入 / 输出（含 reasoning）/ 缓存读取 / 缓存写入。未报告的行显示「未报告」，不计为 0；部分报告与失败／取消调用在类型列标注。
           </p>
         </Panel>
 

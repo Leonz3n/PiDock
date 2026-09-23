@@ -23,6 +23,19 @@ describe("[PiDock 12] usage page", () => {
     expect(screen.getByText(/UTC\+08:00，含边界/)).toBeInTheDocument();
   });
 
+  it("marks unreported, partial and not-completed calls instead of showing zeroes", async () => {
+    renderApp("/usage");
+    await waitFor(() => expect(screen.getByTestId("usage-table")).toHaveAttribute("data-total-rows", "240"));
+    const split = screen.getByText("已报告 / 部分 / 未报告").nextElementSibling?.textContent ?? "";
+    const [reported, partial, missing] = split.split("/").map((part) => Number(part.trim()));
+    expect(reported + partial + missing).toBe(240);
+    expect(partial).toBeGreaterThan(0);
+    // The first fixture row carries no provider report at all.
+    const table = screen.getByTestId("usage-table");
+    expect(table.textContent).toContain("未报告");
+    expect(screen.getByText(/部分报告与失败／取消调用在类型列标注/)).toBeInTheDocument();
+  });
+
   it("narrows the detail rows by call type and regroups on demand", async () => {
     const user = userEvent.setup();
     renderApp("/usage");
