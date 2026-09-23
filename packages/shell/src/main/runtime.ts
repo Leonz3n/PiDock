@@ -24,8 +24,12 @@ import {
 } from "./task-provision.js";
 import { readTaskRecordOnDisk } from "../host/task-store.js";
 import { defaultTasksRoot } from "./task-resolver.js";
-import type { HostTaskOp, HostTaskResult, TaskOpOrigin } from "../rpc/protocol.js";
+import type { BrowserPerformResult, BrowserRequestParams, HostTaskOp, HostTaskResult, TaskOpOrigin } from "../rpc/protocol.js";
+import { isHostTaskOp } from "../rpc/protocol.js";
 import { TaskBrowser } from "./task-browser.js";
+import { TaskBrowserSurface } from "./task-browser-surface.js";
+import { createBrowserGatewayRegistry } from "./browser-gateway.js";
+import { deriveNavigationAllowlist, type NavigationAllowlist } from "./browser-rules.js";
 import {
   TrustDomainRegistry,
   TrustDomainViolation,
@@ -314,7 +318,24 @@ export class PerTaskHostRegistry {
     ) => Promise<{ client: HostClient; child: UtilityProcess }> = (ws, task) =>
       createHost(ws, true, task),
     private readonly resolveTaskDir: (taskId: string) => string | null = () => null,
+    /**
+     * Handles the Host's browser requests ([PiDock 06] #8): main owns the
+     * visible page, so the Host asks main for one already-gated action.
+     * Without it every browser request fails closed.
+     */
+    private readonly browsers?: {
+      handleRequest(request: BrowserRequestParams): Promise<BrowserPerformResult>;
+    },
   ) {}
+
+  private bindHostRequests(client: HostClient): HostClient {
+    client.onBrowserRequest(async (params) =>
+      this.browsers
+        ? this.browsers.handleRequest(params)
+        : { ok: false, error: "browser-unavailable: 主进程未挂载任务浏览器能力" },
+    );
+    return client;
+  }
 
   /** Hosts currently forked (test seam: no Electron needed). */
   get size(): number {
@@ -387,8 +408,9 @@ export class PerTaskHostRegistry {
         : null;
     if (op === "task/provision" && taskDir === null && provisionDir !== null) {
       const bootstrapDir = provisionDir;
-      const { client, child } = await this.spawn(this.workspaceId, { taskId, taskDir: bootstrapDir });
-      this.byTaskDir.set(bootstrapDir, { taskId, taskDir: bootstrapDir, client, child });
+      const spawned = await this.spawn(this.workspaceId, { taskId, taskDir: bootstrapDir });
+      const client = this.bindHostRequests(spawned.client);
+      this.byTaskDir.set(bootstrapDir, { taskId, taskDir: bootstrapDir, client, child: spawned.child });
       const dirs = this.byTaskId.get(taskId) ?? new Set<string>();
       dirs.add(bootstrapDir);
       this.byTaskId.set(taskId, dirs);
@@ -400,8 +422,9 @@ export class PerTaskHostRegistry {
         `unknown task: ${taskId} (no task record; provision the task before sending ops)`,
       );
     }
-    const { client, child } = await this.spawn(this.workspaceId, { taskId, taskDir });
-    this.byTaskDir.set(taskDir, { taskId, taskDir, client, child });
+    const spawned = await this.spawn(this.workspaceId, { taskId, taskDir });
+    const client = this.bindHostRequests(spawned.client);
+    this.byTaskDir.set(taskDir, { taskId, taskDir, client, child: spawned.child });
     const dirs = this.byTaskId.get(taskId) ?? new Set<string>();
     dirs.add(taskDir);
     this.byTaskId.set(taskId, dirs);
@@ -505,6 +528,82 @@ export class PerTaskHostRegistry {
   }
 }
 
+/**
+ * Interim per-task navigation allowlist source for [PiDock 06] (#8).
+ *
+ * `PIDOCK_TASK_BROWSER_ORIGINS` is a JSON map of task id to the task's own
+ * frontend addresses (the addresses the user configures for that task's run
+ * configuration, including any pilot BFF override). The browser gateway
+ * compares every navigation against the entry, so the page's real network
+ * target stays the task's own instance and an external host is refused.
+ * Absent or malformed entries fail closed (that task can open no page)
+ * rather than falling back to "any host". #7/#9 move this source onto the
+ * persisted task run configuration.
+ */
+export function taskBrowserOriginsFromEnv(
+  value: string | undefined,
+): Record<string, string[]> {
+  if (typeof value !== "string" || value.trim().length === 0) return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return {};
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
+  const origins: Record<string, string[]> = {};
+  for (const [taskId, entry] of Object.entries(parsed as Record<string, unknown>)) {
+    if (taskId.trim().length === 0 || !Array.isArray(entry)) continue;
+    const addresses = entry.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+    if (addresses.length > 0) origins[taskId] = addresses;
+  }
+  return origins;
+}
+
+export interface TaskBrowserCapability {
+  surfaces: Map<string, TaskBrowserSurface>;
+  registry: ReturnType<typeof createBrowserGatewayRegistry>;
+}
+
+/**
+ * Main-owned task browser capability ([PiDock 06] #8): one visible
+ * `TaskBrowser` (WebContentsView on the task's persistent partition) and
+ * one gateway per task, created on first use. The gateways validate every
+ * request before it touches a page, and the renderer never speaks to
+ * Chromium/CDP directly — it uses `task/browserAction`.
+ */
+export function createTaskBrowserCapability(input: {
+  window: BrowserWindow;
+  trust: TrustDomainRegistry;
+  workspaceId: string;
+  originsFor: (taskId: string) => readonly string[];
+  secretsFor?: (taskId: string) => readonly string[];
+}): TaskBrowserCapability {
+  const surfaces = new Map<string, TaskBrowserSurface>();
+  const registry = createBrowserGatewayRegistry({
+    workspaceId: input.workspaceId,
+    surfaceFor: (taskId) => {
+      const existing = surfaces.get(taskId);
+      if (existing) return existing;
+      const { width, height } = input.window.getContentBounds();
+      const browser = new TaskBrowser({
+        window: input.window,
+        workspaceId: input.workspaceId,
+        taskId,
+        bounds: taskBounds(width, height),
+        registry: input.trust,
+      });
+      const surface = new TaskBrowserSurface(taskId, browser);
+      surfaces.set(taskId, surface);
+      return surface;
+    },
+    allowlistFor: (taskId): NavigationAllowlist =>
+      deriveNavigationAllowlist({ addresses: [...input.originsFor(taskId)] }),
+    ...(input.secretsFor !== undefined ? { secretsFor: input.secretsFor } : {}),
+  });
+  return { surfaces, registry };
+}
+
 export function registerIpc(
   client: HostClient,
   registry: TrustDomainRegistry,
@@ -567,25 +666,7 @@ export function registerIpc(
       if (typeof taskId !== "string" || taskId.length === 0) {
         throw new TrustDomainViolation("invalid-payload", "shell/taskOp requires a taskId");
       }
-      if (
-        op !== "task/provision" &&
-        op !== "task/appendRepos" &&
-        op !== "task/probeLink" &&
-        op !== "task/sendMessage" &&
-        op !== "task/cancel" &&
-        op !== "task/approve" &&
-        op !== "task/reject" &&
-        op !== "task/saveDraft" &&
-        op !== "task/clearDraft" &&
-        op !== "task/setPermission" &&
-        op !== "task/listApprovals" &&
-        op !== "task/getApproval" &&
-        op !== "task/registerService" &&
-        op !== "task/planServiceStart" &&
-        op !== "task/controlService" &&
-        op !== "task/serviceStatus" &&
-        op !== "task/serviceLog"
-      ) {
+      if (!isHostTaskOp(op)) {
         throw new TrustDomainViolation("invalid-payload", `unknown task op: ${String(op)}`);
       }
       const opPayload =

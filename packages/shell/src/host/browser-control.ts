@@ -20,6 +20,7 @@ import type { PiApproval, PiPermission } from "../main/pi-session.js";
 import { BROWSER_CONTROL_SCOPE } from "../main/pi-session.js";
 import type { BrowserAction } from "../main/browser-rules.js";
 import { browserApprovalTarget, browserToolForAction } from "../main/browser-rules.js";
+import type { BrowserPerformResult } from "../rpc/protocol.js";
 import type { AgentControlChannel } from "./service-control.js";
 
 /** The approval slice the browser verifier reads. */
@@ -45,10 +46,6 @@ export interface BrowserGatewayPort {
     actor: { kind: "agent"; sessionId: string } | { kind: "human"; label: string };
   }): Promise<BrowserPerformResult>;
 }
-
-export type BrowserPerformResult =
-  | { ok: true; payload: Record<string, unknown> }
-  | { ok: false; error: string };
 
 /**
  * The slice of `PiSessionChannel` the browser sequence uses: the shared

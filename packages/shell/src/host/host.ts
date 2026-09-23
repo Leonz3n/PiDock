@@ -33,10 +33,13 @@ function getParentPort(): UtilityParentPort {
 
 const hostPort = getParentPort();
 
-import { boundWorkspaceId, classifyServiceControlCaller, routeHostTask, toolPlannerSpecForHostDispatch, validateHostTaskOp } from "./host-guards.js";
+import { boundWorkspaceId, classifyControlCaller, routeHostTask, toolPlannerSpecForHostDispatch, validateHostTaskOp } from "./host-guards.js";
 import { TaskWorkspaceHost, diskTaskStore } from "./task-host.js";
 import { TaskServiceRuntime } from "./service-runtime.js";
 import { runAgentServiceControl } from "./service-control.js";
+import { runAgentBrowserAction, runHumanBrowserAction, type BrowserGatewayPort } from "./browser-control.js";
+import { HostBrowserClient } from "../rpc/browser-client.js";
+import { isBrowserAction } from "../main/browser-rules.js";
 import {
   isHostTaskParams,
   isRpcRequest,
@@ -137,13 +140,53 @@ function isMainCheckouts(value: unknown): boolean {
   return true;
 }
 
-function dispatchTaskOp(
+// [PiDock 06] (#8) browser capability: the Agent Host holds no WebContents,
+// so a browser action it has gated becomes one request to main over the
+// same parent port `host/*` RPC uses. main owns the visible page and
+// re-validates the handle, the navigation allowlist and the takeover state.
+let browserClient: HostBrowserClient | null = null;
+
+function browserClientFor(): HostBrowserClient {
+  if (!browserClient) browserClient = new HostBrowserClient(hostPort, boundWorkspaceId());
+  return browserClient;
+}
+
+function browserGatewayFor(taskId: string): BrowserGatewayPort {
+  return {
+    taskId,
+    perform: (request) =>
+      browserClientFor().perform({
+        taskId,
+        action: request.action,
+        page: request.page,
+        params: request.params,
+        actor: request.actor,
+      }),
+  };
+}
+
+/**
+ * Session a browser action is logged into when the caller does not name
+ * one: the task's persisted sessions are the only ones that exist, so the
+ * first is the current single-session conversation ([PiDock 09] #11 will
+ * carry an explicit session id once multiple sessions share a task).
+ */
+function browserLogSessionId(host: TaskWorkspaceHost): string {
+  return host.sessionIds()[0] ?? "main";
+}
+
+/**
+ * Async since [PiDock 06] (#8): a browser action is decided in the Host but
+ * performed by main (which owns the visible page), so dispatch awaits one
+ * bounded round trip. Every other op stays synchronous.
+ */
+async function dispatchTaskOp(
   taskId: string,
   op: string,
   payload: unknown,
   /** Main-stamped sender attestation (absent on unattested routes). */
   origin?: TaskOpOrigin,
-): { ok: true; payload: Record<string, unknown> } | { ok: false; error: string } {
+): Promise<{ ok: true; payload: Record<string, unknown> } | { ok: false; error: string }> {
   const host = taskHostFor(taskId);
   if ("error" in host) return { ok: false, error: host.error };
   const record = asRecord(payload);
@@ -476,7 +519,7 @@ function dispatchTaskOp(
         const action = record["action"];
         // Renderer-supplied `actor` / `approvalGranted` are claims, never
         // trust signals. The caller kind comes from the pure
-        // `classifyServiceControlCaller` rule: a payload `sessionId` is
+        // `classifyControlCaller` rule: a payload `sessionId` is
         // agent control, a session-less call is human UI control only
         // with main's sender-bound `shell-ui` attestation — so a caller
         // can neither spoof `actor` nor drop its session to reach the
@@ -484,7 +527,7 @@ function dispatchTaskOp(
         if (typeof serviceId !== "string" || (action !== "start" && action !== "stop")) {
           return { ok: false, error: "invalid-payload: task/controlService requires serviceId/action" };
         }
-        const caller = classifyServiceControlCaller({
+        const caller = classifyControlCaller({
           sessionId: record["sessionId"],
           label: record["label"],
           origin,
@@ -550,6 +593,60 @@ function dispatchTaskOp(
           return { ok: false, error: error instanceof Error ? error.message : String(error) };
         }
       }
+      // [PiDock 06] (#8) task browser: one gated action against the visible
+      // task page. The tier, the approval and the page binding are read
+      // from the session channel (`runAgentBrowserAction`); main validates
+      // the handle, the navigation allowlist and the takeover state before
+      // touching the page. A session-less call is the attested human path,
+      // exactly like service control above; a user marker additionally
+      // enters the session conversation.
+      case "task/browserAction": {
+        const action = record["action"];
+        if (!isBrowserAction(action)) {
+          return { ok: false, error: "invalid-payload: task/browserAction requires a known browser action" };
+        }
+        const caller = classifyControlCaller({
+          sessionId: record["sessionId"],
+          label: record["label"],
+          origin,
+        });
+        if (!caller.ok) return { ok: false, error: caller.error };
+        const gateway = browserGatewayFor(taskId);
+        const params =
+          typeof record["params"] === "object" && record["params"] !== null && !Array.isArray(record["params"])
+            ? (record["params"] as Record<string, unknown>)
+            : {};
+        if (caller.kind === "agent") {
+          const channel = host.openSession(caller.sessionId);
+          const result = await runAgentBrowserAction({
+            gateway,
+            channel,
+            sessionId: caller.sessionId,
+            taskId,
+            action,
+            ...(record["page"] !== undefined ? { page: record["page"] } : {}),
+            params,
+            ...(record["approvalId"] !== undefined ? { approvalId: record["approvalId"] } : {}),
+            ...(typeof record["contentVersion"] === "string" ? { contentVersion: record["contentVersion"] as string } : {}),
+            taskDir: host.taskDir,
+            persist: () => host.store.writeSession(host.taskDir, channel.snapshot()),
+          });
+          return result.ok ? { ok: true, payload: result.payload } : { ok: false, error: result.error };
+        }
+        const requested = typeof record["targetSessionId"] === "string" ? (record["targetSessionId"] as string).trim() : "";
+        const channel = host.openSession(requested.length > 0 ? requested : browserLogSessionId(host));
+        const result = await runHumanBrowserAction({
+          gateway,
+          action,
+          ...(record["page"] !== undefined ? { page: record["page"] } : {}),
+          params,
+          label: caller.label,
+          taskId,
+          channel,
+          persist: () => host.store.writeSession(host.taskDir, channel.snapshot()),
+        });
+        return result.ok ? { ok: true, payload: result.payload } : { ok: false, error: result.error };
+      }
       default:
         return { ok: false, error: `unknown-op: ${op}` };
     }
@@ -558,13 +655,12 @@ function dispatchTaskOp(
   }
 }
 
-hostPort.on("message", (event: { data: unknown }) => {
+hostPort.on("message", async (event: { data: unknown }) => {
   const message: unknown = event.data;
   if (!isRpcRequest(message)) {
     reply({ kind: "response", id: "unknown", ok: false, error: "invalid-request" });
     return;
-  }
-  const workspaceId = workspaceOf(message.params);
+  }  const workspaceId = workspaceOf(message.params);
   if (message.method === "host/ping") {
     const payload: HostPingResult = { pong: true, workspaceId, hostTime: Date.now() };
     reply({ kind: "response", id: message.id, ok: true, payload });
@@ -600,7 +696,7 @@ hostPort.on("message", (event: { data: unknown }) => {
       reply({ kind: "response", id: message.id, ok: false, error: perOp.error });
       return;
     }
-    const result = dispatchTaskOp(taskParams.taskId, taskParams.op, taskParams.payload ?? {}, taskParams.origin);
+    const result = await dispatchTaskOp(taskParams.taskId, taskParams.op, taskParams.payload ?? {}, taskParams.origin);
     if (!result.ok) {
       reply({ kind: "response", id: message.id, ok: false, error: result.error });
       return;

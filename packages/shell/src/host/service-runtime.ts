@@ -232,7 +232,7 @@ export class TaskServiceRuntime {
    * caller-claimed `approvalGranted` booleans, and only for approvals
    * minted with `SERVICE_CONTROL_SCOPE`); `auto` ⇒ allow.
    * Human-UI control is only reachable through the attested human path
-   * classified by `classifyServiceControlCaller`; its event label is the
+   * classified by `classifyControlCaller`; its event label is the
    * audit trail (no gate bypass: the human path is the UI path, auditable
    * by label, not by skipping).
    */

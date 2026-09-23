@@ -1,6 +1,11 @@
 import type { UtilityProcess } from "electron";
 import {
+  isBrowserRequest,
   isRpcResponse,
+  type BrowserPerformResult,
+  type BrowserRequest,
+  type BrowserRequestParams,
+  type BrowserResponse,
   type HostPingResult,
   type HostTaskParams,
   type HostTaskResult,
@@ -44,12 +49,31 @@ export class HostClient {
   private readonly onMessage = (message: unknown): void => {
     this.handleMessage(message);
   };
+  private browserHandler:
+    | ((params: BrowserRequestParams) => Promise<BrowserPerformResult>)
+    | undefined;
 
   constructor(private readonly transport: HostTransport | UtilityProcess) {
     this.transport.on("message", this.onMessage);
   }
 
+  /**
+   * Handles Host -> main browser requests ([PiDock 06] #8). main owns the
+   * visible page, so the Host asks for one already-gated action and main
+   * validates the page handle, allowlist and takeover state before acting.
+   * Without a handler every request fails closed.
+   */
+  onBrowserRequest(
+    handler: (params: BrowserRequestParams) => Promise<BrowserPerformResult>,
+  ): void {
+    this.browserHandler = handler;
+  }
+
   private handleMessage(data: unknown): void {
+    if (isBrowserRequest(data)) {
+      void this.handleBrowserRequest(data);
+      return;
+    }
     if (!isRpcResponse(data)) return;
     const entry = this.pending.get(data.id);
     if (!entry) return;
@@ -59,6 +83,21 @@ export class HostClient {
       entry.resolve(data.payload);
     } else {
       entry.reject(new Error(data.error));
+    }
+  }
+
+  private async handleBrowserRequest(request: BrowserRequest): Promise<void> {
+    const handler = this.browserHandler;
+    const result: BrowserPerformResult = handler
+      ? await handler(request.params)
+      : { ok: false, error: "browser-unavailable: 主进程未挂载任务浏览器能力" };
+    const response: BrowserResponse = result.ok
+      ? { kind: "browser-response", id: request.id, ok: true, payload: result.payload }
+      : { kind: "browser-response", id: request.id, ok: false, error: result.error };
+    try {
+      this.transport.postMessage(response);
+    } catch {
+      // The Host process is gone; nothing left to answer.
     }
   }
 
