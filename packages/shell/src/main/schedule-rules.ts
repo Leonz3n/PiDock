@@ -581,12 +581,18 @@ export function validateScheduleConfig(input: ScheduleConfigInput): { ok: true }
     }
   }
   if (input.providerId.trim().length === 0) return { ok: false, code: "provider-missing", message: "未选择 Provider 配置" };
-  const provider = input.catalog.find((entry) => entry.id === input.providerId);
-  if (!provider) return { ok: false, code: "provider-missing", message: `Provider 配置 ${input.providerId} 已不存在` };
-  if (provider.enabled === false) return { ok: false, code: "provider-disabled", message: `Provider 配置 ${input.providerId} 已停用` };
   if (input.model.trim().length === 0) return { ok: false, code: "model-missing", message: "未选择模型" };
-  if (!provider.models.some((model) => model.id === input.model)) {
-    return { ok: false, code: "model-missing", message: `模型 ${input.model} 不在 Provider ${input.providerId} 的可用列表中` };
+  // An empty catalog means the Host has not been handed one yet (no live
+  // Provider config to check against): only the non-empty identity is required
+  // then. Once a catalog exists, a provider/model missing from it is a real
+  // failure and the run refuses instead of using another target.
+  if (input.catalog.length > 0) {
+    const provider = input.catalog.find((entry) => entry.id === input.providerId);
+    if (!provider) return { ok: false, code: "provider-missing", message: `Provider 配置 ${input.providerId} 已不存在` };
+    if (provider.enabled === false) return { ok: false, code: "provider-disabled", message: `Provider 配置 ${input.providerId} 已停用` };
+    if (!provider.models.some((model) => model.id === input.model)) {
+      return { ok: false, code: "model-missing", message: `模型 ${input.model} 不在 Provider ${input.providerId} 的可用列表中` };
+    }
   }
   if (input.permission !== "read" && input.permission !== "default" && input.permission !== "auto") {
     return { ok: false, code: "permission-invalid", message: `会话权限 ${input.permission} 不是三档之一` };
@@ -709,4 +715,107 @@ export function remoteFetchVerdict(input: {
     return { latest: false, statement: `尚未获取远程记录（请求于 ${input.attemptedAt}），不能声称最新` };
   }
   return { latest: true, statement: `远程记录获取成功（${input.fetchedAt}）` };
+}
+
+/**
+ * One saved scheduled task (盒子 1): a stable schedule id, the fixed task
+ * workspace it belongs to (`taskId`), the Provider identity + model id pair
+ * (never a display name), the session permission of each new session, the
+ * prompt, the rule text and its IANA timezone, plus the config version every
+ * historic run keeps (`configVersion`).
+ */
+export interface StoredSchedule {
+  scheduleId: string;
+  taskId: string;
+  projectId?: string;
+  name: string;
+  ruleText: string;
+  timezone: string;
+  prompt: string;
+  providerId: string;
+  model: string;
+  permission: PiPermission;
+  enabled: boolean;
+  /** Bumped by every config save; historic runs report the version they used. */
+  configVersion: number;
+  /** Evaluation watermark: occurrences after this one are new (盒子 5). */
+  lastEvaluatedAt: string;
+  createdAt: string;
+  updatedAt: string;
+  /** Set when a run refused because the saved config no longer resolves. */
+  repairIssue?: string;
+}
+
+export type ScheduledRunTrigger = "due" | "manual";
+export type ScheduledRunResult = "completed" | "skipped" | "failed";
+
+/**
+ * One trigger result (盒子 4 定时执行是独立记录): the schedule config version it
+ * used, the planned instant (or the manual request time), the created session,
+ * the end state and the error/reason. A skipped trigger keeps the session field
+ * empty — no session is created for a run that never starts.
+ */
+export interface ScheduledRunRecord {
+  runId: string;
+  scheduleId: string;
+  taskId: string;
+  configVersion: number;
+  trigger: ScheduledRunTrigger;
+  /** Dedup key of the planned occurrence (`manualRunKey` for 立即运行). */
+  occurrenceKey: string;
+  scheduledAt: string;
+  startedAt: string;
+  endedAt?: string;
+  sessionId?: string;
+  result: ScheduledRunResult;
+  reason?: string;
+  /** Values actually used by this run, so history does not follow later edits. */
+  providerId: string;
+  model: string;
+  permission: PiPermission;
+  ruleText: string;
+}
+
+/** What must survive a restart: the schedules plus every trigger record. */
+export interface ScheduleDiskRecord {
+  version: number;
+  schedules: StoredSchedule[];
+  runs: ScheduledRunRecord[];
+}
+
+export function emptyScheduleRecord(): ScheduleDiskRecord {
+  return { version: 1, schedules: [], runs: [] };
+}
+
+/** Highest `n` in ids shaped `<prefix>-<n>`, so a restart never re-mints an id. */
+export function highestSequence(ids: readonly string[], prefix: string): number {
+  const pattern = new RegExp(`^${prefix}-(\\d+)$`);
+  let highest = 0;
+  for (const id of ids) {
+    const match = pattern.exec(id);
+    if (match) highest = Math.max(highest, Number.parseInt(match[1] as string, 10));
+  }
+  return highest;
+}
+
+/**
+ * Valid shape of a whole saved schedule config (盒子 6): every field the run
+ * path later relies on is required, and `permission` is one of the three tiers.
+ * The rule text is *not* parsed here — a config that no longer resolves is
+ * reported as `repairIssue` by the run path instead of being dropped on load.
+ */
+export function scheduleConfigIssue(
+  schedule: Pick<StoredSchedule, "providerId" | "model" | "permission" | "timezone" | "prompt" | "ruleText">,
+  catalog: readonly { id: string; enabled?: boolean; models: readonly { id: string }[] }[],
+): string | undefined {
+  const result = validateScheduleConfig({
+    providerId: schedule.providerId,
+    model: schedule.model,
+    permission: schedule.permission,
+    prompt: schedule.prompt,
+    timezone: schedule.timezone,
+    ruleText: schedule.ruleText,
+    catalog,
+  });
+  return result.ok ? undefined : result.message;
 }

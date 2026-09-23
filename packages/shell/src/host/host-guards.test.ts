@@ -771,4 +771,40 @@ describe("file and terminal ops", () => {
     expect(validateHostTaskOp("task/markAttentionRead", {}).ok).toBe(false);
     expect(validateHostTaskOp("task/markAttentionRead", { itemIds: [7] }).ok).toBe(false);
   });
+
+  it("[PiDock 18] (#20) shape-checks the schedule config and its reads", () => {
+    const config = {
+      name: "每日巡检",
+      ruleText: "每日 09:15",
+      timezone: "Asia/Shanghai",
+      prompt: "检查风险",
+      providerId: "provider-anthropic",
+      model: "claude-sonnet",
+      permission: "default",
+    };
+    expect(validateHostTaskOp("task/scheduleList", {})).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/scheduleList", undefined)).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/scheduleList", []).ok).toBe(false);
+    expect(validateHostTaskOp("task/scheduleTemplates", {})).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/scheduleEvaluate", {})).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/schedulePreview", { ruleText: "每日 09:15", timezone: "Asia/Shanghai" })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/schedulePreview", { ruleText: "每日 09:15" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/schedulePreview", { ruleText: "每日 09:15", timezone: 7 }).ok).toBe(false);
+    expect(validateHostTaskOp("task/scheduleSave", config)).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/scheduleSave", { ...config, scheduleId: "schedule-1", enabled: true })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/scheduleSave", { ...config, ruleText: "" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/scheduleSave", { ...config, enabled: "yes" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/scheduleSave", {}).ok).toBe(false);
+    expect(validateHostTaskOp("task/scheduleApplyTemplate", { scheduleId: "schedule-1", templateId: "tl-standup" })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/scheduleApplyTemplate", { scheduleId: "schedule-1" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/scheduleSetEnabled", { scheduleId: "schedule-1", enabled: false })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/scheduleSetEnabled", { scheduleId: "schedule-1" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/scheduleRemove", { scheduleId: "schedule-1" })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/scheduleRemove", {}).ok).toBe(false);
+    expect(validateHostTaskOp("task/scheduleRunNow", { scheduleId: "schedule-1", label: "用户显式操作" })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/scheduleRunNow", { scheduleId: "" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/scheduleRuns", {})).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/scheduleRuns", { scheduleId: "schedule-1" })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/scheduleRuns", { scheduleId: 7 }).ok).toBe(false);
+  });
 });
