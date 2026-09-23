@@ -146,6 +146,34 @@ describe("add-form discovery", () => {
   });
 });
 
+describe("configuration edits vs the live session", () => {
+  it("keeps the session's snapshot when the model window is edited mid-turn", async () => {
+    const adapter = createMemoryHost();
+    const before = await adapter.getSession("release", "main");
+    expect(before?.contextWindow).toBe(200);
+
+    // The configuration row is edited while the session is mid-turn; the
+    // session keeps the window it started the call with, and the switch gate
+    // then reads the new directory value.
+    await adapter.sendMessage("release", "main", "改配置不影响这一次调用", []);
+    await adapter.saveProvider({
+      id: "provider-anthropic",
+      name: "Anthropic 官方",
+      protocol: "anthropic-messages",
+      baseUrl: "https://api.anthropic.com",
+      authRef: "anthropic-key",
+      enabled: true,
+      models: [{ id: "Claude Sonnet", contextWindow: 64 }, { id: "Claude Haiku", contextWindow: 64 }],
+    });
+    const mid = await adapter.getSession("release", "main");
+    expect(mid?.contextWindow).toBe(200);
+    expect(mid?.model).toBe("Claude Sonnet");
+    // Switching now re-reads the edited value for the new call.
+    await adapter.setSessionModel("release", "main", "provider-anthropic", "Claude Haiku");
+    expect((await adapter.getSession("release", "main"))?.contextWindow).toBe(64);
+  });
+});
+
 describe("model row provenance", () => {
   it("distinguishes directory candidates, the editor default and hand-typed values", async () => {
     const user = userEvent.setup();
