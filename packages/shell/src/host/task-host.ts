@@ -63,14 +63,18 @@ import {
 } from "../main/multi-repo-provision.js";
 import {
   buildTaskDiskRecord,
+  deleteSessionOnDisk,
   listSessionIdsOnDisk,
+  readLifecycleOnDisk,
   readSessionSnapshotOnDisk,
   readTaskRecordOnDisk,
   readUsageOnDisk,
   serializeUsageLedger,
+  writeLifecycleOnDisk,
   writeSessionSnapshotOnDisk,
   writeTaskRecordOnDisk,
   writeUsageOnDisk,
+  type LifecycleRecord,
   type TaskDiskRecord,
 } from "./task-store.js";
 import {
@@ -103,9 +107,14 @@ export interface TaskStore {
   readSession(taskDir: string, sessionId: string): PiSessionSnapshot | null;
   writeSession(taskDir: string, snapshot: PiSessionSnapshot): void;
   listSessions(taskDir: string): string[];
+  /** [PiDock 14] #17: cleanup removes one session snapshot (archiving never does). */
+  deleteSession(taskDir: string, sessionId: string): void;
   /** [PiDock 12] #12: persisted usage ledger of this task. */
   readUsage(taskDir: string): { details: PiUsageDetail[]; exclusions: PiUsageCleanupScope[] };
   writeUsage(taskDir: string, details: readonly PiUsageDetail[], exclusions: readonly PiUsageCleanupScope[]): void;
+  /** [PiDock 14] #17: archive/cleanup state and receipts. */
+  readLifecycle(taskDir: string): LifecycleRecord | null;
+  writeLifecycle(taskDir: string, record: LifecycleRecord): void;
 }
 
 /**
@@ -175,22 +184,28 @@ export const diskTaskStore: TaskStore = {
   readSession: (taskDir, sessionId) => readSessionSnapshotOnDisk(taskDir, sessionId),
   writeSession: (taskDir, snapshot) => writeSessionSnapshotOnDisk(taskDir, snapshot),
   listSessions: (taskDir) => listSessionIdsOnDisk(taskDir),
+  deleteSession: (taskDir, sessionId) => deleteSessionOnDisk(taskDir, sessionId),
   readUsage: (taskDir) => readUsageOnDisk(taskDir),
   writeUsage: (taskDir, details) => writeUsageOnDisk(taskDir, details),
+  readLifecycle: (taskDir) => readLifecycleOnDisk(taskDir),
+  writeLifecycle: (taskDir, record) => writeLifecycleOnDisk(taskDir, record),
 };
 
 export function memoryTaskStore(): TaskStore & {
   tasks: Map<string, TaskDiskRecord>;
   sessions: Map<string, PiSessionSnapshot>;
   usage: Map<string, { details: PiUsageDetail[]; exclusions: PiUsageCleanupScope[] }>;
+  lifecycle: Map<string, LifecycleRecord>;
 } {
   const tasks = new Map<string, TaskDiskRecord>();
   const sessions = new Map<string, PiSessionSnapshot>();
   const usage = new Map<string, { details: PiUsageDetail[]; exclusions: PiUsageCleanupScope[] }>();
+  const lifecycle = new Map<string, LifecycleRecord>();
   return {
     tasks,
     sessions,
     usage,
+    lifecycle,
     readTask: (taskDir) => tasks.get(taskDir) ?? null,
     writeTask: (taskDir, record) => {
       tasks.set(taskDir, record);
@@ -198,6 +213,9 @@ export function memoryTaskStore(): TaskStore & {
     readSession: (taskDir, sessionId) => sessions.get(`${taskDir}::${sessionId}`) ?? null,
     writeSession: (taskDir, snapshot) => {
       sessions.set(`${taskDir}::${snapshot.sessionId}`, snapshot);
+    },
+    deleteSession: (taskDir, sessionId) => {
+      sessions.delete(`${taskDir}::${sessionId}`);
     },
     listSessions: (taskDir) =>
       [...sessions.keys()]
@@ -215,6 +233,10 @@ export function memoryTaskStore(): TaskStore & {
         details: details.map((detail) => ({ ...detail, usage: { ...detail.usage } })),
         exclusions: exclusions.map((scope) => ({ ...scope })),
       });
+    },
+    readLifecycle: (taskDir) => lifecycle.get(taskDir) ?? null,
+    writeLifecycle: (taskDir, record) => {
+      lifecycle.set(taskDir, { ...record, recovery: record.recovery.map((entry: LifecycleRecord["recovery"][number]) => ({ ...entry })) });
     },
   };
 }

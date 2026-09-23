@@ -15,7 +15,7 @@
  * touching the filesystem.
  */
 
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { PiSessionSnapshot } from "../main/pi-session.js";
 import { PI_USAGE_KINDS, type PiUsageCleanupScope, type PiUsageDetail, type PiUsageEndState, type PiUsageKind } from "../main/usage-ledger.js";
@@ -71,6 +71,7 @@ export interface TaskDiskRecord {
 
 const SESSIONS_DIR = "sessions";
 const USAGE_FILE = "usage.json";
+const LIFECYCLE_FILE = "lifecycle.json";
 
 function assertSafeFileName(name: string, label: string): void {
   if (
@@ -455,4 +456,135 @@ export function readUsageOnDisk(taskDir: string): { details: PiUsageDetail[]; ex
 /** Kind guard shared by the Host's usage ops. */
 export function isUsageKindName(value: unknown): value is PiUsageKind {
   return typeof value === "string" && (PI_USAGE_KINDS as readonly string[]).includes(value);
+}
+
+/**
+ * Persisted lifecycle state ([PiDock 14] #17).
+ *
+ * `<taskDir>/lifecycle.json` keeps what must survive a restart: the archive
+ * flag (archiving pauses scheduling; restoring never resumes it), who ran a
+ * cleanup and what it kept/removed, and the per-item recovery entries a
+ * partial cleanup leaves so the registration is not wiped to hide leftovers.
+ */
+export interface CleanupReceiptRecord {
+  ranAt: string;
+  /** Where the retained code copy / exports live; the receipt the user keeps. */
+  keptPosition: string | null;
+  exports: string[];
+  removed: string[];
+  partialFailure: boolean;
+}
+
+export interface LifecycleRecord {
+  taskId: string;
+  archived: boolean;
+  archivedAt: string | null;
+  restoredAt: string | null;
+  /** Set by archiving; never cleared by restoring (scheduling stays paused). */
+  schedulePaused: boolean;
+  cleanup: CleanupReceiptRecord | null;
+  recovery: { item: string; reason: string; at: string }[];
+  /** True once a successful cleanup released the project association. */
+  projectReleased: boolean;
+  updatedAt: string;
+}
+
+export function buildLifecycleRecord(input: { taskId: string; now: string }): LifecycleRecord {
+  return {
+    taskId: input.taskId,
+    archived: false,
+    archivedAt: null,
+    restoredAt: null,
+    schedulePaused: false,
+    cleanup: null,
+    recovery: [],
+    projectReleased: false,
+    updatedAt: input.now,
+  };
+}
+
+export function serializeLifecycleRecord(record: LifecycleRecord): string {
+  return JSON.stringify(record, null, 2);
+}
+
+export function parseLifecycleRecord(raw: string): LifecycleRecord {
+  const value: unknown = JSON.parse(raw);
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("invalid-payload: lifecycle record must be an object");
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record["taskId"] !== "string" || (record["taskId"] as string).length === 0) {
+    throw new Error("invalid-payload: lifecycle record.taskId must be a non-empty string");
+  }
+  for (const key of ["archived", "schedulePaused", "projectReleased"] as const) {
+    if (typeof record[key] !== "boolean") throw new Error(`invalid-payload: lifecycle record.${key} must be a boolean`);
+  }
+  for (const key of ["archivedAt", "restoredAt"] as const) {
+    const value2 = record[key];
+    if (value2 !== null && (typeof value2 !== "string" || value2.length === 0)) {
+      throw new Error(`invalid-payload: lifecycle record.${key} must be null or a non-empty string`);
+    }
+  }
+  if (typeof record["updatedAt"] !== "string" || (record["updatedAt"] as string).length === 0) {
+    throw new Error("invalid-payload: lifecycle record.updatedAt must be a non-empty string");
+  }
+  const cleanup = record["cleanup"];
+  if (cleanup !== null && cleanup !== undefined) {
+    if (typeof cleanup !== "object" || Array.isArray(cleanup)) {
+      throw new Error("invalid-payload: lifecycle record.cleanup must be an object or null");
+    }
+    const receipt = cleanup as Record<string, unknown>;
+    if (typeof receipt["ranAt"] !== "string" || (receipt["ranAt"] as string).length === 0) {
+      throw new Error("invalid-payload: lifecycle record.cleanup.ranAt must be a non-empty string");
+    }
+    if (receipt["keptPosition"] !== null && typeof receipt["keptPosition"] !== "string") {
+      throw new Error("invalid-payload: lifecycle record.cleanup.keptPosition must be null or a string");
+    }
+    for (const key of ["exports", "removed"] as const) {
+      if (!Array.isArray(receipt[key]) || (receipt[key] as unknown[]).some((item) => typeof item !== "string")) {
+        throw new Error(`invalid-payload: lifecycle record.cleanup.${key} must be a string array`);
+      }
+    }
+    if (typeof receipt["partialFailure"] !== "boolean") {
+      throw new Error("invalid-payload: lifecycle record.cleanup.partialFailure must be a boolean");
+    }
+  }
+  const recovery = record["recovery"];
+  if (!Array.isArray(recovery)) throw new Error("invalid-payload: lifecycle record.recovery must be an array");
+  for (const entry of recovery as unknown[]) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      throw new Error("invalid-payload: lifecycle record.recovery entries must be objects");
+    }
+    for (const key of ["item", "reason", "at"] as const) {
+      const value2 = (entry as Record<string, unknown>)[key];
+      if (typeof value2 !== "string" || value2.length === 0) {
+        throw new Error(`invalid-payload: lifecycle record.recovery.${key} must be a non-empty string`);
+      }
+    }
+  }
+  return value as LifecycleRecord;
+}
+
+export function lifecycleFilePath(taskDir: string): string {
+  return join(taskDir, LIFECYCLE_FILE);
+}
+
+export function writeLifecycleOnDisk(taskDir: string, record: LifecycleRecord): void {
+  mkdirSync(taskDir, { recursive: true });
+  writeFileSync(lifecycleFilePath(taskDir), serializeLifecycleRecord({ ...record }), "utf8");
+}
+
+export function readLifecycleOnDisk(taskDir: string): LifecycleRecord | null {
+  try {
+    return parseLifecycleRecord(readFileSync(lifecycleFilePath(taskDir), "utf8"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+/** Remove one session snapshot; used by cleanup (archiving never deletes). */
+export function deleteSessionOnDisk(taskDir: string, sessionId: string): void {
+  assertSafeFileName(sessionId, "sessionId");
+  rmSync(sessionFilePath(taskDir, sessionId), { force: true });
 }
