@@ -304,4 +304,8 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   Agent／服务仍在后台运行且归属正确（#11 移交的 GAP 7）不在 #12 正文的验收项内，
   仍需在真实后台运行接线时验收；`stores/host.ts` 仍把内存适配器固定为默认，
   因此页面目前读的是内存投影（与 #9/#10 记录的同一接线缺口）；Electron GUI
-  smoke 未运行。
+  smoke 未运行；账本按调用 id 键控，而 id 计数器只按「当前恢复的那一个快照」
+  推进（`PiSessionChannel.restore`），所以同一任务里多个会话各自持有 `call-N`
+  时，若先使用 id 较小的会话仍可能铸出别的会话已用的 id（打包界面会先列会话
+  并把计数器推到全局最大值，因此不触发）；彻底修法是 Host 构造时遍历该任务
+  全部会话推进计数器，或把身份改成 `taskId/sessionId/callId`。

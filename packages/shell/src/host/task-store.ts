@@ -384,7 +384,8 @@ export function serializeUsageLedger(details: readonly PiUsageDetail[], exclusio
 
 /**
  * Ledger keys a recorded cleanup removed. Absent in a ledger written before
- * #12 recorded them; the Host then upgrades the record on its next sync.
+ * #12 recorded them; such a record keeps its scope predicate (the Host does not
+ * upgrade it), which is only reachable for a pre-#12 file.
  */
 function parseRemovedIds(value: unknown): string[] | undefined {
   if (value === undefined) return undefined;

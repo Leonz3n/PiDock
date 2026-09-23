@@ -542,9 +542,11 @@ export function applyUsageCleanup(
  * dropped: a later call of the same session has a new key and is recorded, and
  * the cleaned keys stay gone even though the sessions still hold them.
  *
- * A legacy record (no keys) falls back to its scope predicate; the Host
- * rewrites such a record into the key form on its next sync, which is what
- * stops an old "session"/"all" exclusion from eating future calls.
+ * A legacy record (no keys) falls back to its scope predicate and keeps that
+ * semantics: the Host never rewrites it into the key form, because a scope-only
+ * exclusion names no calls and so cannot be converted into one. Only pre-#12
+ * ledgers can hold one, and this feature was unreleased, so no such file exists
+ * in practice; the fallback exists so an old file still parses.
  */
 export function applyRecordedUsageCleanup(
   details: readonly PiUsageDetail[],
