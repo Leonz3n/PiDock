@@ -469,4 +469,69 @@ describe("task browser origins", () => {
     expect(taskBrowserOriginsFromEnv("not json")).toEqual({});
     expect(taskBrowserOriginsFromEnv("[\"http://localhost:5173\"]")).toEqual({});
   });
+
+  it("[PiDock 14] (#17) quitAll sends the attested quit op to every forked Host and reports blocked resources", async () => {
+    const spawns: Array<{ taskId: string; taskDir: string }> = [];
+    const dirs: Record<string, string> = { "task-a": "/tasks/a", "task-b": "/tasks/b" };
+    const calls: { taskId: string; op: string; payload: Record<string, unknown>; origin: unknown }[] = [];
+    const spawn = vi.fn(async (_workspaceId: string, task: { taskId: string; taskDir: string }) => {
+      spawns.push(task);
+      const transport = {
+        task: vi.fn(async (params: { taskId: string; op: string; payload?: Record<string, unknown>; origin?: unknown }) => {
+          calls.push({ taskId: params.taskId, op: params.op, payload: params.payload ?? {}, origin: params.origin });
+          return {
+            workspaceId: "workspace-a",
+            taskId: params.taskId,
+            op: params.op,
+            payload:
+              params.taskId === "task-a"
+                ? { quit: { applied: ["abort-agent:main", "save-state:task-a"], plan: { failures: [], retainedTasks: [] } } }
+                : { quit: { applied: ["save-state:task-b"], plan: { failures: [{ code: "port-only" }], retainedTasks: ["task-b"] } } },
+          };
+        }),
+        onBrowserRequest: vi.fn(),
+        dispose: vi.fn(),
+      };
+      return { client: transport as never, child: { kill: vi.fn() } as never };
+    });
+    const registry = new PerTaskHostRegistry("workspace-a", spawn, (id) => dirs[id] ?? null);
+    await registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
+    await registry.routeTaskOp({ taskId: "task-b", op: "task/cancel", payload: {} });
+
+    const origin = { kind: "shell-ui" as const, senderWebContentsId: 7 };
+    const report = await registry.quitAll({ origin, label: "应用明确退出" });
+
+    expect(calls.filter((call) => call.op === "task/quit")).toEqual([
+      { taskId: "task-a", op: "task/quit", payload: { label: "应用明确退出" }, origin },
+      { taskId: "task-b", op: "task/quit", payload: { label: "应用明确退出" }, origin },
+    ]);
+    expect(report.tasks.map((task) => task.taskId)).toEqual(["task-a", "task-b"]);
+    expect(report.ok).toBe(false);
+    expect(report.tasks[1]).toMatchObject({ ok: true, retainedTasks: ["task-b"] });
+    // The Hosts stay forkable until the caller disposes them.
+    expect(registry.size).toBe(2);
+  });
+
+  it("[PiDock 14] (#17) quitAll reports a Host that fails to answer instead of dropping the task", async () => {
+    const spawn = vi.fn(async () => ({
+      client: {
+        task: vi.fn(async (params: { taskId: string; op: string }) => {
+          if (params.op === "task/quit") throw new Error("host-unreachable");
+          return { workspaceId: "workspace-a", taskId: params.taskId, op: params.op, payload: {} };
+        }),
+        onBrowserRequest: vi.fn(),
+        dispose: vi.fn(),
+      } as never,
+      child: { kill: vi.fn() } as never,
+    }));
+    const registry = new PerTaskHostRegistry("workspace-a", spawn, (id) => (id === "task-a" ? "/tasks/a" : null));
+    await registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
+
+    const report = await registry.quitAll({ origin: { kind: "shell-ui", senderWebContentsId: 7 } });
+
+    expect(report.ok).toBe(false);
+    expect(report.tasks).toEqual([
+      { taskId: "task-a", ok: false, applied: [], failures: [], retainedTasks: ["task-a"], error: "host-unreachable" },
+    ]);
+  });
 });

@@ -172,6 +172,36 @@ async function run(): Promise<void> {
     tasks.disposeAll();
     if (process.platform !== "darwin") app.quit();
   });
+
+  // [PiDock 14] (#17) explicit quit: abort the Agent, then stop this task's
+  // services/terminals/subprocess trees (each by verified identity) and save
+  // state before the Hosts go away. The report is printed so a blocked stop is
+  // locatable and a task with unverified resources is never lost silently.
+  let quitting = false;
+  let quitFinished = false;
+  app.on("before-quit", (event) => {
+    if (quitFinished) return;
+    event.preventDefault();
+    if (quitting) return;
+    quitting = true;
+    void tasks
+      // The shell sender is main's own window here: the attested origin the Host
+      // requires for an app-level action (the webContents id is audit-only).
+      .quitAll({ origin: { kind: "shell-ui", senderWebContentsId: views.shellView.webContents.id }, label: "应用明确退出" })
+      .then((report) => {
+        console.log(`[main] quit report: ${JSON.stringify(report)}`);
+      })
+      .catch((error: unknown) => {
+        console.error(`[main] quit report failed: ${errorMessage(error)}`);
+      })
+      .finally(() => {
+        client.dispose();
+        child.kill();
+        tasks.disposeAll();
+        quitFinished = true;
+        app.quit();
+      });
+  });
 }
 
 void run().catch((error: unknown) => {

@@ -726,4 +726,31 @@ describe("file and terminal ops", () => {
     expect(validateHostTaskOp("task/terminalHistory", { instanceId: "term-1", limit: "20" }).ok).toBe(false);
     expect(validateHostTaskOp("task/terminalState", undefined)).toEqual({ ok: true });
   });
+
+  it("[PiDock 14] (#17) accepts the lifecycle reads and the archive/restore shape", () => {
+    expect(validateHostTaskOp("task/lifecycleState", undefined)).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/lifecycleState", {})).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/lifecycleState", [])).toEqual({ ok: false, error: "invalid-payload: task/lifecycleState payload must be an object" });
+    expect(validateHostTaskOp("task/archive", undefined)).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/restore", { label: "用户显式操作" })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/archive", { label: 7 }).ok).toBe(false);
+  });
+
+  it("[PiDock 14] (#17) accepts the explicit-quit shape", () => {
+    expect(validateHostTaskOp("task/quit", undefined)).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/quit", { label: "应用明确退出" })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/quit", { label: 7 }).ok).toBe(false);
+    expect(validateHostTaskOp("task/quit", []).ok).toBe(false);
+  });
+
+  it("[PiDock 14] (#17) requires an export selection for cleanup and a non-empty keep root", () => {
+    const selection = { exportSessions: true, exportDrafts: false, exportUsage: true };
+    expect(validateHostTaskOp("task/cleanupPreview", { selection })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/runCleanup", { selection, keepRoot: "/Users/dev/kept", label: "用户显式操作" })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/cleanupPreview", {}).ok).toBe(false);
+    expect(validateHostTaskOp("task/cleanupPreview", { selection: { exportSessions: true } }).ok).toBe(false);
+    expect(validateHostTaskOp("task/cleanupPreview", { selection: { exportSessions: true, exportDrafts: false, exportUsage: "yes" } }).ok).toBe(false);
+    expect(validateHostTaskOp("task/runCleanup", { selection, keepRoot: "  " }).ok).toBe(false);
+    expect(validateHostTaskOp("task/runCleanup", { selection, label: 7 }).ok).toBe(false);
+  });
 });

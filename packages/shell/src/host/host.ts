@@ -48,6 +48,8 @@ import { TaskServiceTopology } from "./service-topology.js";
 import { TaskProtocolBinding } from "./protocol-binding.js";
 import { TaskWorkspaceFiles } from "./workspace-files.js";
 import { TaskTerminalRegistry, planTerminal, type TerminalPlan } from "../main/terminal-config.js";
+import { TaskLifecycleHost } from "./task-lifecycle.js";
+import { createLifecycleResources } from "./lifecycle-resources.js";
 import { runAgentTerminalControl } from "./terminal-control.js";
 import { writeClaimError } from "./write-coordination.js";
 import { runAgentServiceControl } from "./service-control.js";
@@ -146,6 +148,37 @@ function terminalRegistryFor(taskId: string): TaskTerminalRegistry | { error: st
     terminalRegistry = new TaskTerminalRegistry(host.taskId);
   }
   return terminalRegistry;
+}
+
+// [PiDock 14] (#17) per-task lifecycle state (archive/restore/cleanup records +
+// resource identity verification). Same fork binding and lifetime as the
+// registries above; it reads its own task record, so no op can name another
+// task's folder or a renderer-chosen path.
+let taskLifecycle: TaskLifecycleHost | null = null;
+
+function lifecycleFor(taskId: string): TaskLifecycleHost | { error: string } {
+  const host = taskHostFor(taskId);
+  if ("error" in host) return host;
+  if (!taskLifecycle || taskLifecycle.taskDir !== host.taskDir || taskLifecycle.taskId !== host.taskId) {
+    taskLifecycle = new TaskLifecycleHost(
+      host.taskId,
+      host.taskDir,
+      host.store,
+      createLifecycleResources({
+        host,
+        services: () => {
+          const topology = serviceTopologyFor(host.taskId);
+          return "error" in topology ? null : topology;
+        },
+        terminals: () => {
+          const terminals = terminalRegistryFor(host.taskId);
+          return "error" in terminals ? null : terminals;
+        },
+        sessionIds: () => host.sessionIds(),
+      }),
+    );
+  }
+  return taskLifecycle;
 }
 
 /**
@@ -1216,6 +1249,79 @@ async function dispatchTaskOp(
         const limit = typeof record["limit"] === "number" ? (record["limit"] as number) : 50;
         try {
           return { ok: true, payload: { history: terminals.history(String(record["instanceId"]), limit) } };
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : String(error) };
+        }
+      }
+      // [PiDock 14] (#17) lifecycle: the Host reads its own task folder and
+      // record, so the readout cannot be pointed at another task. Archive /
+      // restore / cleanup are app-level human-UI actions: a call naming an
+      // agent session is refused instead of letting an Agent archive itself.
+      case "task/lifecycleState": {
+        const lifecycle = lifecycleFor(taskId);
+        if ("error" in lifecycle) return { ok: false, error: lifecycle.error };
+        try {
+          return { ok: true, payload: { lifecycle: lifecycle.state() } };
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : String(error) };
+        }
+      }
+      case "task/archive":
+      case "task/restore": {
+        if (record["sessionId"] !== undefined) {
+          return { ok: false, error: "permission-denied: 归档／恢复只允许界面显式操作，不能由 Agent 会话发起" };
+        }
+        const caller = classifyControlCaller({ label: record["label"], origin });
+        if (!caller.ok) return { ok: false, error: caller.error };
+        const lifecycle = lifecycleFor(taskId);
+        if ("error" in lifecycle) return { ok: false, error: lifecycle.error };
+        try {
+          if (op === "task/archive") {
+            const archived = lifecycle.archive();
+            return { ok: true, payload: { lifecycle: archived.record, plan: archived.plan } };
+          }
+          const restored = lifecycle.restore();
+          return { ok: true, payload: { lifecycle: restored.record, scheduleResumed: restored.scheduleResumed, servicesStarted: restored.servicesStarted } };
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : String(error) };
+        }
+      }
+      case "task/quit": {
+        if (record["sessionId"] !== undefined) {
+          return { ok: false, error: "permission-denied: 明确退出只允许界面显式操作，不能由 Agent 会话发起" };
+        }
+        const caller = classifyControlCaller({ label: record["label"], origin });
+        if (!caller.ok) return { ok: false, error: caller.error };
+        const lifecycle = lifecycleFor(taskId);
+        if ("error" in lifecycle) return { ok: false, error: lifecycle.error };
+        try {
+          const quit = lifecycle.quit();
+          return { ok: true, payload: { quit } };
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : String(error) };
+        }
+      }
+      case "task/cleanupPreview": {
+        const lifecycle = lifecycleFor(taskId);
+        if ("error" in lifecycle) return { ok: false, error: lifecycle.error };
+        const selection = record["selection"] as { exportSessions: boolean; exportDrafts: boolean; exportUsage: boolean };
+        try {
+          return { ok: true, payload: { preview: lifecycle.cleanupPreview({ selection, keepRoot: record["keepRoot"] as string | undefined }) } };
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : String(error) };
+        }
+      }
+      case "task/runCleanup": {
+        if (record["sessionId"] !== undefined) {
+          return { ok: false, error: "permission-denied: 清理只允许界面显式操作，不能由 Agent 会话发起" };
+        }
+        const caller = classifyControlCaller({ label: record["label"], origin });
+        if (!caller.ok) return { ok: false, error: caller.error };
+        const lifecycle = lifecycleFor(taskId);
+        if ("error" in lifecycle) return { ok: false, error: lifecycle.error };
+        const selection = record["selection"] as { exportSessions: boolean; exportDrafts: boolean; exportUsage: boolean };
+        try {
+          return { ok: true, payload: { cleanup: lifecycle.runCleanup({ selection, keepRoot: record["keepRoot"] as string | undefined }) } };
         } catch (error) {
           return { ok: false, error: error instanceof Error ? error.message : String(error) };
         }

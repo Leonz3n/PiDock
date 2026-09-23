@@ -68,8 +68,11 @@ function build(state: FakeState, store = memoryTaskStore()) {
           : entry,
       );
     },
+    stopService: (serviceId) => state.calls.push(`stop-service:${serviceId}`),
+    stopTerminal: (instanceId) => state.calls.push(`stop-terminal:${instanceId}`),
+    stopProcessTree: (resourceId) => state.calls.push(`stop-tree:${resourceId}`),
     worktrees: () => state.worktrees,
-    observeRepo: (repoDir) => state.repos[repoDir],
+    observeRepo: (worktree) => state.repos[worktree.repoDir],
     usageCount: () => store.readUsage(TASK_DIR).details.length,
     services: () => state.services,
     terminals: () => state.terminals,
@@ -279,6 +282,42 @@ describe("cleanup run", () => {
     expect(result.recovery.map((entry) => entry.item)).toEqual(["browser"]);
     expect(result.recovery[0]!.reason).toContain("未接线");
     expect(result.record.projectReleased).toBe(false);
+  });
+});
+
+describe("explicit quit", () => {
+  it("aborts the agent, stops services/terminals by identity and saves state", () => {
+    const state = fakeState({
+      sessions: [session({ sessionId: "main", runState: "running" })],
+      services: [{ serviceId: "invoice-service", running: true, process: { pid: 11, startedAt: "t1" } }],
+      terminals: [{ instanceId: "term-1", live: true, process: { pid: 22, startedAt: "t2" } }],
+      processes: [
+        { pid: 11, startedAt: "t1", command: "node server.js", cwd: TASK_DIR },
+        { pid: 22, startedAt: "t2", command: "zsh", cwd: TASK_DIR },
+      ],
+    });
+    const { lifecycle, store } = build(state);
+    const result = lifecycle.quit();
+    expect(result.applied).toEqual([
+      "abort-agent:main",
+      "stop-services:invoice-service",
+      "stop-terminals:term-1",
+      "save-state:task-aaaaaaaa",
+    ]);
+    expect(state.calls).toEqual(["cancel:main", "stop-service:invoice-service", "stop-terminal:term-1"]);
+    expect(result.plan.failures).toEqual([]);
+    expect(result.plan.retainedTasks).toEqual([]);
+    expect(store.readLifecycle(TASK_DIR)).toMatchObject({ updatedAt: "2026-09-22T12:00:00+08:00" });
+  });
+
+  it("never stops a resource whose identity is unverified", () => {
+    const state = fakeState({ services: [{ serviceId: "invoice-service", running: true, process: { port: 9001 } }], processes: [] });
+    const { lifecycle } = build(state);
+    const result = lifecycle.quit();
+    expect(result.applied).toEqual(["save-state:task-aaaaaaaa"]);
+    expect(state.calls).toEqual([]);
+    expect(result.plan.failures.map((failure) => failure.code)).toEqual(["port-only"]);
+    expect(result.plan.retainedTasks).toEqual(["task-aaaaaaaa"]);
   });
 });
 

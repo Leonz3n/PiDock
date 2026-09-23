@@ -84,7 +84,13 @@ export type HostTaskOp =
   | "task/planTerminal"
   | "task/terminalControl"
   | "task/terminalState"
-  | "task/terminalHistory";
+  | "task/terminalHistory"
+  | "task/lifecycleState"
+  | "task/archive"
+  | "task/restore"
+  | "task/cleanupPreview"
+  | "task/runCleanup"
+  | "task/quit";
 
 /**
  * Sender attestation stamped by the trusted main process on a routed
@@ -211,6 +217,12 @@ const HOST_TASK_OPS: readonly string[] = [
   "task/terminalControl",
   "task/terminalState",
   "task/terminalHistory",
+  "task/lifecycleState",
+  "task/archive",
+  "task/restore",
+  "task/cleanupPreview",
+  "task/runCleanup",
+  "task/quit",
 ];
 
 export function isHostTaskOp(value: unknown): value is HostTaskOp {

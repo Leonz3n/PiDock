@@ -46,7 +46,7 @@ export interface LifecycleSession {
   /** Permission the last request actually used (the permission record). */
   actualPermission: string | null;
   runState: string;
-  draft?: { text: string; references?: readonly { id: string; kind: string; label: string; sourceId?: string; resourcePath?: string }[] };
+  draft?: { text: string; references?: readonly unknown[] };
   approvals: readonly { id: string; status: string; executed: boolean; consumedAt?: string }[];
 }
 
@@ -66,8 +66,14 @@ export interface TaskLifecycleResources {
   sessions(): readonly LifecycleSession[];
   /** Stop a running/awaiting turn; expires its pending confirmation. */
   cancelSession(sessionId: string): void;
+  /** End this task's recorded run of one service (no real process kill yet). */
+  stopService(serviceId: string): void;
+  /** Mark one terminal instance exited. */
+  stopTerminal(instanceId: string): void;
+  /** End one recorded derived execution (releases the write right it held). */
+  stopProcessTree(resourceId: string): void;
   worktrees(): readonly LifecycleWorktree[];
-  observeRepo(repoDir: string): GitResourceObservation | undefined;
+  observeRepo(worktree: LifecycleWorktree): GitResourceObservation | undefined;
   usageCount(): number;
   services(): readonly { serviceId: string; running: boolean; process?: QuitProcessClaim }[];
   terminals(): readonly { instanceId: string; live: boolean; process?: QuitProcessClaim }[];
@@ -340,7 +346,7 @@ export class TaskLifecycleHost {
       repoDir: worktree.repoDir,
       verdict: verifyGitResourceIdentity({
         record: { repoDir: worktree.repoDir, branch: worktree.branch, baseCommit: worktree.baseCommit },
-        observed: this.resources.observeRepo(worktree.repoDir),
+        observed: this.resources.observeRepo(worktree),
       }),
     }));
     const processes: LifecycleView["resources"]["processes"] = [];
@@ -383,6 +389,38 @@ export class TaskLifecycleHost {
       quit: this.quitPlan(),
       relaunch: this.relaunchPlan(),
     };
+  }
+
+  /**
+   * Apply the explicit-quit plan ([PiDock 14] #17 box 2): abort the Agent,
+   * stop services/terminals/subprocess trees whose identity was verified, then
+   * save state. Blocked resources are reported, never guessed at, and the task
+   * is retained so the failure is locatable instead of a silent loss. Real OS
+   * process termination is the spawner's job (residual): this stops the
+   * recorded/owned state.
+   */
+  quit(): { plan: QuitPlan; applied: string[]; record: LifecycleRecord } {
+    const plan = this.quitPlan();
+    const applied: string[] = [];
+    for (const step of plan.steps) {
+      if (step.status !== "needed") continue;
+      try {
+        if (step.phase === "abort-agent") this.resources.cancelSession(step.subject);
+        else if (step.phase === "stop-services") this.resources.stopService(step.subject);
+        else if (step.phase === "stop-terminals") this.resources.stopTerminal(step.subject);
+        else if (step.phase === "stop-process-tree") this.resources.stopProcessTree(step.subject);
+        applied.push(`${step.phase}:${step.subject}`);
+      } catch {
+        // A failed step keeps its reason in the plan's failures (identity) or in
+        // the applied list missing that subject; the task stays retained below.
+        plan.failures.push({ taskId: this.taskId, subject: step.subject, code: "identity-mismatch", reason: `退出步骤失败：${step.phase}:${step.subject}` });
+        plan.retainedTasks.push(this.taskId);
+      }
+    }
+    const at = this.now();
+    const record: LifecycleRecord = { ...this.record(), updatedAt: at };
+    this.store.writeLifecycle(this.taskDir, record);
+    return { plan, applied, record };
   }
 
   quitPlan(): QuitPlan {
