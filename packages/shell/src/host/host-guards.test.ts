@@ -753,4 +753,25 @@ describe("file and terminal ops", () => {
     expect(validateHostTaskOp("task/runCleanup", { selection, keepRoot: "  " }).ok).toBe(false);
     expect(validateHostTaskOp("task/runCleanup", { selection, label: 7 }).ok).toBe(false);
   });
+  it("[PiDock 17] (#19) requires a session id for the execution state read", () => {
+    expect(validateHostTaskOp("task/executionState", { sessionId: "main" })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/executionState", undefined).ok).toBe(false);
+    expect(validateHostTaskOp("task/executionState", {}).ok).toBe(false);
+    expect(validateHostTaskOp("task/executionState", { sessionId: " " }).ok).toBe(false);
+    // Service observations ride as plain data and stay fail-closed.
+    expect(
+      validateHostTaskOp("task/executionState", { sessionId: "main", services: [{ serviceId: "api", running: true }] }),
+    ).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/executionState", { sessionId: "main", services: [{ serviceId: "api" }] }).ok).toBe(false);
+    expect(validateHostTaskOp("task/executionState", { sessionId: "main", services: {} }).ok).toBe(false);
+  });
+
+  it("[PiDock 17] (#19) accepts the attention reads and requires the ids to clear", () => {
+    expect(validateHostTaskOp("task/attention", {})).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/attention", undefined).ok).toBe(false);
+    expect(validateHostTaskOp("task/markAttentionRead", { itemIds: ["attention-completed-unread-release-exec-1"] })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/markAttentionRead", { itemIds: [] }).ok).toBe(false);
+    expect(validateHostTaskOp("task/markAttentionRead", {}).ok).toBe(false);
+    expect(validateHostTaskOp("task/markAttentionRead", { itemIds: [7] }).ok).toBe(false);
+  });
 });

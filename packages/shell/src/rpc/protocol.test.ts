@@ -144,3 +144,29 @@ describe("browser envelopes", () => {
     expect(isBrowserResponse({ kind: "response", id: "browser-1", ok: true, payload: {} })).toBe(false);
   });
 });
+
+// [PiDock 17] (#19) adds the execution-state and attention reads to the same
+// task-op whitelist; the guard stays fail-closed (unknown names never pass).
+describe("execution ledger ops", () => {
+  it("accepts the execution state / attention / mark-read ops", () => {
+    expect(isHostTaskOp("task/executionState")).toBe(true);
+    expect(isHostTaskOp("task/attention")).toBe(true);
+    expect(isHostTaskOp("task/markAttentionRead")).toBe(true);
+    expect(isHostTaskOp("task/executions")).toBe(false);
+    expect(isHostTaskOp("task/attentionRead")).toBe(false);
+  });
+
+  it("routes an execution-state call with its session id", () => {
+    expect(
+      isHostTaskParams({
+        workspaceId: "ws-a",
+        taskId: "task-a1f92c3d",
+        op: "task/executionState",
+        payload: { sessionId: "main" },
+      }),
+    ).toBe(true);
+    expect(
+      isHostTaskParams({ workspaceId: "ws-a", taskId: "task-a1f92c3d", op: "task/executionState", payload: {} }),
+    ).toBe(true);
+  });
+});

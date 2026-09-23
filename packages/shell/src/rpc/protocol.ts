@@ -90,7 +90,10 @@ export type HostTaskOp =
   | "task/restore"
   | "task/cleanupPreview"
   | "task/runCleanup"
-  | "task/quit";
+  | "task/quit"
+  | "task/executionState"
+  | "task/attention"
+  | "task/markAttentionRead";
 
 /**
  * Sender attestation stamped by the trusted main process on a routed
@@ -223,6 +226,10 @@ const HOST_TASK_OPS: readonly string[] = [
   "task/cleanupPreview",
   "task/runCleanup",
   "task/quit",
+  // [PiDock 17] (#19) unified execution state + cross-project attention reads.
+  "task/executionState",
+  "task/attention",
+  "task/markAttentionRead",
 ];
 
 export function isHostTaskOp(value: unknown): value is HostTaskOp {
