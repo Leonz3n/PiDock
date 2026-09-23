@@ -417,6 +417,11 @@ describe("memory Host adapter", () => {
   it("[PiDock 16] (#18) refuses an MCP server without a bridge and a literal credential", async () => {
     const host = createMemoryHost();
     await expect(host.addCapability({ kind: "mcp", name: "direct", source: "npx x", scope: "仅当前项目" })).rejects.toThrow("bridge Extension");
+    // An empty bridge id is the shape the picker produces when no Extension is
+    // enabled, so it must be refused here too instead of stored.
+    await expect(
+      host.addCapability({ kind: "mcp", name: "blank", source: "npx x", scope: "仅当前项目", bridge: { extensionId: "", command: "npx x" } }),
+    ).rejects.toThrow("bridge Extension");
     await expect(
       host.addCapability({ kind: "mcp", name: "leaky", source: "npx x", scope: "仅当前项目", bridge: { extensionId: "cap-2", command: "npx x" }, authRef: "https://user:pass@example.com" }),
     ).rejects.toThrow("不保存密钥明文");

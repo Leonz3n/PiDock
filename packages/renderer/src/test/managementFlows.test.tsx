@@ -117,8 +117,47 @@ describe("capability sources, versions and MCP ([PiDock 16] #18)", () => {
 
     await user.click(screen.getByRole("button", { name: "重新检查来源" }));
     expect(await screen.findByText(/已重新检查来源/)).toBeInTheDocument();
+    // Only the rows the re-check repaired are counted: the missing resource
+    // and the failed MCP connection, not every row in the list.
+    expect(screen.getByText(/2 项能力已刷新/)).toBeInTheDocument();
     await waitFor(() => expect(within(missing).queryByText(/资源缺失/)).not.toBeInTheDocument());
     expect(within(missing).getByText("已在本机验证")).toBeInTheDocument();
+  });
+
+  it("disables an updatable capability instead of enabling it again", async () => {
+    const user = userEvent.setup();
+    renderApp("/capabilities");
+    await screen.findByRole("heading", { name: "能力管理" });
+    // Installing/disabling waits for the safe boundary the seeded approval holds.
+    await useHostStore.getState().stopRun("release", "deploy");
+    await useHostStore.getState().refresh();
+
+    const updatable = screen.getByText("@pi/tools-git").closest("section")!;
+    expect(within(updatable).getByText("有可用更新")).toBeInTheDocument();
+    // The row reads 停用 because an updatable capability is still running.
+    await user.click(within(updatable).getByRole("button", { name: "停用" }));
+    await waitFor(() => expect(within(updatable).getByText("已停用")).toBeInTheDocument());
+    expect(within(updatable).getByRole("button", { name: "启用" })).toBeInTheDocument();
+  });
+
+  it("refuses an MCP add when no bridge Extension is enabled", async () => {
+    const user = userEvent.setup();
+    renderApp("/capabilities");
+    await screen.findByRole("heading", { name: "能力管理" });
+    await useHostStore.getState().stopRun("release", "deploy");
+    await useHostStore.getState().setCapabilityEnabled("cap-2", false);
+    await useHostStore.getState().refresh();
+
+    await user.click(screen.getByRole("tab", { name: "MCP Servers" }));
+    await user.click(screen.getByRole("button", { name: "添加 MCP Server" }));
+    const dialog = await screen.findByRole("dialog", { name: "添加 MCP Server" });
+    await user.type(within(dialog).getByLabelText("能力名称"), "linear");
+    await user.type(within(dialog).getByLabelText("能力来源"), "npx @linear/mcp");
+    await user.click(within(dialog).getByRole("button", { name: "添加为停用" }));
+
+    expect(await screen.findByText(/必须选择一个已启用的 bridge Extension/)).toBeInTheDocument();
+    // Nothing is added and the dialog stays open so a bridge can be chosen.
+    expect(screen.getByRole("dialog", { name: "添加 MCP Server" })).toBeInTheDocument();
   });
 
   it("offers install/update only on package rows, with the real version state", async () => {
@@ -145,6 +184,12 @@ describe("capability sources, versions and MCP ([PiDock 16] #18)", () => {
     expect(await screen.findByText(/已记录安装 1.9.0/)).toBeInTheDocument();
     await waitFor(() => expect(within(update).queryByText("有可用更新")).not.toBeInTheDocument());
     expect(within(update).getByText(/已安装 1.9.0/)).toBeInTheDocument();
+
+    // The Packages tab button names the dialog it opens.
+    await user.click(screen.getByRole("tab", { name: "Packages" }));
+    expect(screen.getByRole("button", { name: "安装扩展包" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "安装扩展包" }));
+    expect(await screen.findByRole("dialog", { name: "安装扩展包" })).toBeInTheDocument();
   });
 
   it("reports an MCP connection failure and retries through its bridge", async () => {
