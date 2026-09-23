@@ -600,3 +600,45 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   归档／清理接线已由 `test/shellHost.test.ts` 锁定，但应用启动仍把内存适配器固定为默认
   （与 #9/#10/#12/#14/#15 记录的同一接线缺口）；真实服务／终端进程的按身份停止未在
   本机跑过。
+
+## 能力管理与来源（[PiDock 16] #18）
+
+- **能力规则（盒子 1–5）**：`main/capability-registry.ts` 是纯规则层（无 fs／进程／
+  SDK）：来源按 `global`／`project`／`task-repo`／`extra` 分开并固定发现顺序；同名能力
+  保留为按来源区分的两行（`ambiguous`），不会因为先加载而被静默替换；
+  `capabilityInvalidReason` 依次给出「来源已移除／来源已停用／资源缺失／最后一次
+  加载或连接失败」的原因，失效行仍然展示而不是隐藏；`packageVersionState` 把
+  「未安装」与「已有更新」当成真实状态而不是零版本，`isInstallEntry` 只让 package
+  行成为安装／更新入口（运行资源页不伪装成重复安装入口）；MCP 必须有已启用的
+  bridge Extension（`mcpBridgeStatus`），连接状态机 `reduceMcpConnection` 记录
+  连接／失败／重试次数／断开；`effectivePermission` 只取会话权限与能力声明中更窄的
+  一个，因此能力**不会**扩大会话或任务权限；`assertCredentialRef` 只接受凭据引用
+  名称（URL 内联凭据、`KEY=value`、`ghp_`／`sk-` 前缀与长随机串一律拒绝），
+  `sharedCapabilityProjection` 在写共享模板时**删除** `authRef` 与连接状态。
+- **安全边界（盒子 4）**：`planCapabilityChange` 在回合执行／等待确认期间只记录
+  `pendingChange`（`applyAt: "idle"`），进行中的调用保留 `activeVersion`；
+  `applyPendingCapabilityChanges` 只在边界空闲时落地；`recordCapabilityFailure`
+  在新版本加载失败时把 `version` 退回原 `activeVersion` 并保留失败原因，
+  `clearCapabilityFailure` 在修复后清除原因。
+- **renderer（盒子 1–5）**：`data/capabilityRules.ts` 是同一规则的 renderer 镜像
+  （`test/capabilityRules.test.ts` 锁定），能力页按来源类型排序并展示类型／来源／
+  作用域／安装版本／连接／权限（声明 vs 实际）／可用性（已在本机验证 vs 仅声明，
+  不把静态示例当作 SDK 已支持）；失效原因带标签展示；package 行才有「安装／更新到」
+  按钮，MCP 行显示连接状态与「重试连接」；「重新检查来源」执行一次来源复查。
+- **适配器与边界语义（盒子 2–4）**：`memoryHost` 用同一镜像规则实现
+  `setCapabilityEnabled`／`installCapability`／`retryMcpConnection`／
+  `recheckCapabilities`；启用／停用与安装都在「有回合在执行或等待确认」时改为
+  `pendingChange`，由 UI 刷新读取时的安全边界落地（`settlePendingCapabilityChanges`），
+  添加 MCP 要求已启用的 bridge Extension 且凭据必须是引用。
+- **盒子状态**：盒子 1（来源与失效原因）、2（Package 安装版本、只有 package 是安装
+  入口）、3（MCP bridge／连接／失败／重试、凭据只存引用、不扩权）、4（安全边界生效、
+  失败保留原可用配置）、5（区分已验证与仅声明，不冒充 SDK 支持）的规则与 renderer
+  行为已覆盖；同名消歧与「失效后修复」由规则单测、适配器单测与管理流程测试共同覆盖。
+- **残留（未测／未实现）**：能力管理目前只有 renderer 内存投影与 shell 纯规则两层，
+  **没有** Host RPC：真实磁盘来源发现（读取 pi／agents 技能目录、额外技能目录、
+  扩展与 package 的安装清单）、真实 MCP 连接（bridge Extension 进程、OAuth／凭据
+  读取）、真实 package 安装与版本解析、真实扩展加载与失效探测均未接线，因此
+  「已在本机验证」「重新检查来源」「重试连接」「安装版本」都是内存投影模拟；
+  `docs/task-graph.md` 记录的同一接线缺口（应用启动固定内存适配器）仍然存在；
+  真实 Electron 走查、跨平台（Windows x64）能力页未运行；同名资源来自两个真实
+  磁盘来源的解析未在真实仓库上验收。
