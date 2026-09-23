@@ -587,13 +587,59 @@ export type Subagent = {
   result?: string;
 };
 
+/** [PiDock 19] (#21) the device permissions a pairing can grant. */
+export type RemoteDevicePermission = "overview" | "chat" | "manage" | "files" | "terminal";
+
+/** A device is usable only after the desktop confirmed it (`pending-confirmation`). */
+export type RemoteDeviceStatus = "pending-confirmation" | "active" | "revoked";
+
 export type RemoteDevice = {
   id: string;
   name: string;
-  pairedAt: string;
-  lastSeen: string;
-  permissions: string[];
-  status: "active" | "revoked";
+  status: RemoteDeviceStatus;
+  permissions: RemoteDevicePermission[];
+  /** Set when the desktop confirmed the device name and permissions. */
+  confirmedAt?: string;
+  pairedAt?: string;
+  lastSeen?: string;
+  /** Credential generation issued at confirmation; absent = no credential yet. */
+  credentialGeneration?: number;
+  /** Pairing credential this device came from (audit trail only). */
+  pairingCredentialId?: string;
+};
+
+/** [PiDock 19] (#21) the three entry routes; Funnel is the experimental one. */
+export type RemoteEntryMode = "tailscale" | "gateway" | "funnel";
+
+export type RemoteGatewayStatus = "offline" | "connecting" | "online";
+
+export type RemoteEntryState = {
+  mode: RemoteEntryMode;
+  /** Address the QR code points at; the credential rides in the fragment. */
+  baseUrl: string;
+  listener: string;
+  gateway: { endpoint: string; hostId: string; status: RemoteGatewayStatus };
+  /** Live error main reported for the outbound connection, when any. */
+  lastError?: string;
+};
+
+export type RemotePairingState = "pending" | "used" | "expired" | "refreshed" | "cancelled";
+
+/** The code the desktop shows; the secret itself never reaches the renderer. */
+export type RemotePairing = {
+  credentialId: string;
+  url: string;
+  issuedAt: string;
+  expiresAt: string;
+  state: RemotePairingState;
+};
+
+export type RemoteAuditEntry = {
+  id: string;
+  at: string;
+  kind: string;
+  detail: string;
+  deviceId?: string;
 };
 
 /**
@@ -679,6 +725,10 @@ export type Workspace = {
   capabilities: Capability[];
   devices: RemoteDevice[];
   templates: ScheduleTemplate[];
+  /** [PiDock 19] (#21) remote entry, the live QR code and the audit trail. */
+  remoteEntry: RemoteEntryState;
+  remotePairing: RemotePairing | null;
+  remoteAudits: RemoteAuditEntry[];
 };
 
 export type HostEvent =

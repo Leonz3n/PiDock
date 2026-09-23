@@ -33,6 +33,9 @@ import type {
   ProviderDiscoveryView,
   ProviderProfile,
   Reference,
+  RemoteDevicePermission,
+  RemoteEntryMode,
+  RemotePairing,
   Schedule,
   ServiceMode,
   ScheduledRun,
@@ -125,7 +128,14 @@ type HostState = {
   installCapability: (capabilityId: string) => Promise<Capability>;
   /** [PiDock 16] (#18) re-check sources: recovered rows work again, same names stay apart. */
   recheckCapabilities: () => Promise<Capability[]>;
+  /** [PiDock 19] (#21) desktop pairing + per-device credential management. */
+  mintRemotePairing: () => Promise<RemotePairing>;
+  cancelRemotePairing: () => Promise<void>;
+  confirmRemoteDevice: (deviceId: string, permissions?: RemoteDevicePermission[]) => Promise<void>;
+  rejectRemoteDevice: (deviceId: string) => Promise<void>;
+  rotateRemoteDevice: (deviceId: string) => Promise<void>;
   revokeDevice: (deviceId: string) => Promise<void>;
+  setRemoteEntryMode: (mode: RemoteEntryMode, baseUrl?: string) => Promise<void>;
   loadCleanupPreview: (taskId: string, selection?: CleanupSelection) => Promise<CleanupItem[]>;
   saveEnvironmentConfig: (input: SaveEnvironmentConfigInput) => Promise<void>;
   adoptLatestTemplate: (taskId: string) => Promise<void>;
@@ -335,8 +345,39 @@ export const useHostStore = create<HostState>((set, get) => ({
     return capabilities;
   },
 
+  mintRemotePairing: async () => {
+    const pairing = await get().adapter.mintRemotePairing();
+    await get().refresh();
+    return pairing;
+  },
+
+  cancelRemotePairing: async () => {
+    await get().adapter.cancelRemotePairing();
+    await get().refresh();
+  },
+
+  confirmRemoteDevice: async (deviceId, permissions) => {
+    await get().adapter.confirmRemoteDevice(deviceId, permissions);
+    await get().refresh();
+  },
+
+  rejectRemoteDevice: async (deviceId) => {
+    await get().adapter.rejectRemoteDevice(deviceId);
+    await get().refresh();
+  },
+
+  rotateRemoteDevice: async (deviceId) => {
+    await get().adapter.rotateRemoteDevice(deviceId);
+    await get().refresh();
+  },
+
   revokeDevice: async (deviceId) => {
     await get().adapter.revokeRemoteDevice(deviceId);
+    await get().refresh();
+  },
+
+  setRemoteEntryMode: async (mode, baseUrl) => {
+    await get().adapter.setRemoteEntryMode(mode, baseUrl);
     await get().refresh();
   },
 
