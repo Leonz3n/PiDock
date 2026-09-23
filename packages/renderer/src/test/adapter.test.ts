@@ -621,10 +621,23 @@ describe("memory Host adapter", () => {
     expect(saved.rule).toBe("每周五 16:00");
     expect(saved.timezone).toBe("UTC");
     expect(saved.permission).toBe("read");
+    // [PiDock 18] (#20): a save bumps the config version and never invents the
+    // next trigger (the Host computes it from the saved rule and zone).
+    expect(saved.configVersion).toBe(2);
+    expect(saved.nextRun).toBe("保存后由 Host 计算下次触发");
     expect((await host.getTask("release"))?.name).toBe("发布前检查 2");
     await expect(host.saveSchedule({ id: "schedule-1", rule: "", timezone: "UTC", prompt: "p", providerId: "provider-openai", model: "团队轻量模型", permission: "read" })).rejects.toThrow(
-      "执行周期",
+      "规则不能为空",
     );
+    // A rule the parser cannot recognise is refused, not stored.
+    await expect(host.saveSchedule({ id: "schedule-1", rule: "随便跑一下", timezone: "UTC", prompt: "p", providerId: "provider-openai", model: "团队轻量模型", permission: "read" })).rejects.toThrow(
+      "无法识别的规则",
+    );
+    // A removed model is named instead of silently swapping the target.
+    await expect(host.saveSchedule({ id: "schedule-1", rule: "每日 09:15", timezone: "UTC", prompt: "p", providerId: "provider-openai", model: "不存在的模型", permission: "read" })).rejects.toThrow(
+      "不会静默换模型",
+    );
+    expect((await host.getSchedules()).find((item) => item.id === "schedule-1")?.rule).toBe("每周五 16:00");
   });
 
   it("creates a scheduled task from the new-task input", async () => {

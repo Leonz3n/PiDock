@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Badge, Button, EmptyState, Panel } from "../components/ui";
 import { VirtualList } from "../components/VirtualList";
 import { scheduledRunResultLabel } from "./runState";
+import { canRunScheduleNow, scheduleNextRunText, scheduleRunDetail, scheduleRunTriggerLabel, scheduleStateLabel } from "../data/scheduleRules";
 import type { Permission } from "../data/types";
 import { useHostStore } from "../stores/host";
 import { useNavigationStore } from "../stores/navigation";
@@ -14,6 +15,9 @@ export function SchedulesPage() {
   const schedules = workspace?.schedules ?? [];
   const runs = workspace?.scheduledRuns ?? [];
   const templates = workspace?.templates ?? [];
+  // [PiDock 18] (#20) an archived task keeps its schedules but pauses them, and
+  // 立即运行 must not bypass the restore step.
+  const archivedTasks = new Set((workspace?.tasks ?? []).filter((task) => task.archived).map((task) => task.id));
   const setScheduleEnabled = useHostStore((state) => state.setScheduleEnabled);
   const runScheduleNow = useHostStore((state) => state.runScheduleNow);
   const navigate = useNavigationStore((state) => state.navigate);
@@ -52,41 +56,57 @@ export function SchedulesPage() {
                   <li key={schedule.id} className="rounded-md border border-line px-3 py-2.5">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div>
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm text-ink">{schedule.name}</span>
-                          <Badge tone={schedule.enabled ? "accent" : "neutral"}>{schedule.enabled ? "已启用" : "已暂停"}</Badge>
-                          <Badge>{PERMISSION_LABEL[schedule.permission]}</Badge>
-                        </div>
-                        <p className="mt-1 text-xs text-muted">
-                          {schedule.rule} · 时区 {schedule.timezone} · 下次执行 {schedule.nextRun} · {schedule.model}
-                        </p>
-                        <p className="mt-1 text-[11px] text-muted">结果处理写在提示词中：{schedule.prompt}</p>
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        <Button size="sm" onClick={() => openModal({ type: "schedule-edit", scheduleId: schedule.id })}>
-                          编辑
-                        </Button>
-                        <Button size="sm" onClick={() => void setScheduleEnabled(schedule.id, !schedule.enabled)}>
-                          {schedule.enabled ? "暂停" : "启用"}
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="primary"
-                          onClick={async () => {
-                            try {
-                              const run = await runScheduleNow(schedule.id);
-                              pushToast("已触发一次执行，并在该任务下新建独立会话");
-                              const task = workspace?.tasks.find((item) => item.id === schedule.taskId);
-                              if (task) {
-                                navigate({ view: "task", projectId: task.projectId, taskId: task.id, sessionId: run.sessionId });
-                              }
-                            } catch (error) {
-                              pushToast(error instanceof Error ? error.message : String(error));
-                            }
-                          }}
-                        >
-                          立即运行
-                        </Button>
+                        {(() => {
+                          const archived = archivedTasks.has(schedule.taskId);
+                          const state = scheduleStateLabel(schedule, { archived });
+                          const runNow = canRunScheduleNow({ archived });
+                          return (
+                            <>
+                              <div className="flex items-center gap-2">
+                                <span className="text-sm text-ink">{schedule.name}</span>
+                                <Badge tone={state.tone}>{state.label}</Badge>
+                                <Badge>{PERMISSION_LABEL[schedule.permission]}</Badge>
+                              </div>
+                              <p className="mt-1 text-xs text-muted">
+                                {schedule.rule} · 时区 {schedule.timezone} · 下次执行 {scheduleNextRunText(schedule, { archived })} · {schedule.model}
+                              </p>
+                              {state.detail ? <p className="mt-1 text-[11px] text-warn">{state.detail}</p> : null}
+                              <p className="mt-1 text-[11px] text-muted">结果处理写在提示词中：{schedule.prompt}</p>
+                              {runNow.ok ? null : <p className="mt-1 text-[11px] text-warn">{runNow.reason}</p>}
+                              <div className="mt-2 flex flex-wrap gap-2">
+                                <Button size="sm" onClick={() => openModal({ type: "schedule-edit", scheduleId: schedule.id })}>
+                                  编辑
+                                </Button>
+                                <Button size="sm" onClick={() => void setScheduleEnabled(schedule.id, !schedule.enabled)}>
+                                  {schedule.enabled ? "暂停" : "启用"}
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="primary"
+                                  disabled={!runNow.ok}
+                                  onClick={async () => {
+                                    try {
+                                      const run = await runScheduleNow(schedule.id);
+                                      const task = workspace?.tasks.find((item) => item.id === schedule.taskId);
+                                      if (run.result !== "completed") {
+                                        pushToast(run.reason ?? "本次立即运行未执行");
+                                        return;
+                                      }
+                                      pushToast("已触发一次执行，并在该任务下新建独立会话");
+                                      if (task && run.sessionId !== undefined) {
+                                        navigate({ view: "task", projectId: task.projectId, taskId: task.id, sessionId: run.sessionId });
+                                      }
+                                    } catch (error) {
+                                      pushToast(error instanceof Error ? error.message : String(error));
+                                    }
+                                  }}
+                                >
+                                  立即运行
+                                </Button>
+                              </div>
+                            </>
+                          );
+                        })()}
                       </div>
                     </div>
                   </li>
@@ -109,7 +129,7 @@ export function SchedulesPage() {
                 <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line py-1.5 pr-1 text-xs">
                   <span className="text-muted">{run.at.slice(0, 16).replace("T", " ")}</span>
                   <span>
-                    {run.taskId} · {run.sessionId}
+                    {run.taskId} · {scheduleRunTriggerLabel(run.trigger ?? "due")} · {scheduleRunDetail(run) ?? "无会话"}
                   </span>
                   <Badge tone={run.result === "completed" ? "accent" : run.result === "failed" ? "warn" : "neutral"}>
                     {scheduledRunResultLabel(run.result)}
@@ -117,9 +137,12 @@ export function SchedulesPage() {
                   <Button
                     size="sm"
                     variant="ghost"
+                    disabled={run.sessionId === undefined}
                     onClick={() => {
                       const task = workspace?.tasks.find((item) => item.id === run.taskId);
-                      if (task) navigate({ view: "task", projectId: task.projectId, taskId: task.id, sessionId: run.sessionId });
+                      if (task && run.sessionId !== undefined) {
+                        navigate({ view: "task", projectId: task.projectId, taskId: task.id, sessionId: run.sessionId });
+                      }
                     }}
                   >
                     打开会话

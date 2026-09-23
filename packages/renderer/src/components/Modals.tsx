@@ -5,6 +5,7 @@ import { runStateLabel } from "../pages/runState";
 import { diffConfigRows, isSensitiveKey, nextTemplateVersion } from "../data/configRows";
 import { capabilityInvalidReason, isCapabilityEnabled, mcpBridgeStatus, mcpConnectionLabel, packageVersionState, sourceKindLabel } from "../data/capabilityRules";
 import { referenceProvenance, skillCandidate } from "../data/composerRules";
+import { validateRuleText } from "../data/scheduleRules";
 import {
   buildTaskFormBranch,
   checkTaskFormDirIdConflict,
@@ -2943,6 +2944,8 @@ function ScheduleEditModal({ scheduleId, onClose }: { scheduleId: string; onClos
   const pushToast = useUiStore((state) => state.pushToast);
   const schedule = (workspace?.schedules ?? []).find((item) => item.id === scheduleId);
   const providers = workspace?.providers ?? [];
+  const scheduleTask = (workspace?.tasks ?? []).find((item) => item.id === schedule?.taskId);
+  const archived = scheduleTask?.archived === true;
   const [name, setName] = useState(schedule?.name ?? "");
   const [rule, setRule] = useState(schedule?.rule ?? "");
   const [timezone, setTimezone] = useState(schedule?.timezone ?? "Asia/Shanghai");
@@ -2951,6 +2954,9 @@ function ScheduleEditModal({ scheduleId, onClose }: { scheduleId: string; onClos
   const [permission, setPermission] = useState<Permission>(schedule?.permission ?? "default");
   if (!schedule) return null;
   const [providerId, model] = modelKey.split(":");
+  // [PiDock 18] (#20) the rule is validated with the same accepted forms the
+  // Host enforces, so an invalid schedule is refused before the save.
+  const ruleCheck = validateRuleText(rule, timezone);
   return (
     <Modal
       title="编辑定时任务"
@@ -2959,11 +2965,12 @@ function ScheduleEditModal({ scheduleId, onClose }: { scheduleId: string; onClos
         <Button
           size="sm"
           variant="primary"
+          disabled={!ruleCheck.ok}
           onClick={async () => {
             try {
               await saveSchedule({ id: scheduleId, name, rule, timezone, prompt, providerId, model, permission });
               onClose();
-              pushToast("已保存模拟定时任务");
+              pushToast("已保存定时任务；下次触发由 Host 按规则与时区计算");
             } catch (error) {
               pushToast(error instanceof Error ? error.message : String(error));
             }
@@ -2990,6 +2997,11 @@ function ScheduleEditModal({ scheduleId, onClose }: { scheduleId: string; onClos
             className="rounded-md border border-line px-2 py-1.5 text-sm"
             placeholder="例如：每周五 15:00"
           />
+          <p className={`mt-1 text-[11px] ${ruleCheck.ok ? "text-muted" : "text-warn"}`}>
+            {ruleCheck.ok
+              ? `已识别为${ruleCheck.kind === "once" ? "一次性" : ruleCheck.kind === "daily" ? "每日" : ruleCheck.kind === "weekly" ? "每周" : "五段 Cron"}规则；实际下次触发由 Host 按保存的 IANA 时区计算。`
+              : ruleCheck.message}
+          </p>
         </Field>
         <Field label="时区">
           <select
@@ -3048,6 +3060,7 @@ function ScheduleEditModal({ scheduleId, onClose }: { scheduleId: string; onClos
         </Field>
       </div>
       <p className="mt-2 text-[11px] text-muted">每次触发在当前任务中创建新的独立会话；历史会话可查看并继续对话。</p>
+      {archived ? <p className="mt-1 text-[11px] text-warn">任务已归档：调度保持暂停，恢复任务也不会自动启用。</p> : null}
     </Modal>
   );
 }
