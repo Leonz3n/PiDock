@@ -16,6 +16,7 @@ import type {
   TaskProvisionState,
 } from "../data/hostAdapter";
 import { memoryHost } from "../data/memoryHost";
+import { useWriteLockStore } from "./writeLock";
 import type {
   Approval,
   ApprovalStatus,
@@ -155,14 +156,25 @@ export const useHostStore = create<HostState>((set, get) => ({
   runTerminalCommand: (taskId, command) => get().adapter.runTerminalCommand(taskId, command),
 
   sendMessage: async (taskId, sessionId, text, references) => {
-    const result = await get().adapter.sendMessage(taskId, sessionId, text, references);
-    await get().refresh();
-    return result;
+    try {
+      const result = await get().adapter.sendMessage(taskId, sessionId, text, references);
+      await get().refresh();
+      await useWriteLockStore.getState().load(taskId);
+      return result;
+    } catch (error) {
+      // A refusal (another session holds the write right, or the tier is
+      // read-only) still changes the coordination view: this session is now
+      // queued / shown read-only. Load it before rethrowing so the navigation
+      // shows the holder and the queue instead of an unchanged screen.
+      await useWriteLockStore.getState().load(taskId);
+      throw error;
+    }
   },
 
   stopRun: async (taskId, sessionId) => {
     await get().adapter.stopRun(taskId, sessionId);
     await get().refresh();
+    await useWriteLockStore.getState().load(taskId);
   },
 
   resolveApproval: async (approvalId, status) => {
@@ -180,6 +192,7 @@ export const useHostStore = create<HostState>((set, get) => ({
   archiveSession: async (taskId, sessionId, archived) => {
     await get().adapter.setSessionArchived(taskId, sessionId, archived);
     await get().refresh();
+    await useWriteLockStore.getState().load(taskId);
   },
 
   archiveTask: async (taskId) => {

@@ -3,6 +3,7 @@ import type { HostEvent, Message, RunRecord } from "../data/types";
 import { sessionKeyOf } from "../data/sessionKey";
 import { useHostStore } from "./host";
 import { useUiStore } from "./ui";
+import { useWriteLockStore } from "./writeLock";
 
 type EventsState = {
   liveMessages: Record<string, Message[]>;
@@ -41,7 +42,14 @@ export const useEventsStore = create<EventsState>((set, get) => ({
       if (event.type === "run-state") {
         const key = sessionKeyOf(event.taskId, event.sessionId);
         const record = event.record ?? get().runs[key];
-        set({ runs: { ...get().runs, [key]: { ...(record as RunRecord), state: event.state } } });
+        // Records always carry their steps: a stop event for a session that
+        // never ran a turn must not produce a run the UI cannot render.
+        set({
+          runs: { ...get().runs, [key]: { ...(record as RunRecord), steps: (record as RunRecord)?.steps ?? [], state: event.state } },
+        });
+        // [PiDock 09] (#11): the write coordination of this task may have
+        // changed holder/queue with the run state.
+        void useWriteLockStore.getState().load(event.taskId);
         if (terminalStates.has(event.state)) {
           void useHostStore.getState().refresh().then(() => {
             set({ liveMessages: { ...get().liveMessages, [key]: [] } });
@@ -52,6 +60,7 @@ export const useEventsStore = create<EventsState>((set, get) => ({
         const key = sessionKeyOf(event.taskId, event.sessionId);
         const record = get().runs[key];
         set({ runs: { ...get().runs, [key]: { ...(record ?? emptyRecord(event.taskId, event.sessionId)), state: event.approval.status === "pending" ? "approval" : event.approval.status === "approved" ? "running" : event.approval.status === "rejected" ? "rejected" : "expired" } } });
+        void useWriteLockStore.getState().load(event.taskId);
         void useHostStore.getState().refresh();
       }
       if (event.type === "toast") {

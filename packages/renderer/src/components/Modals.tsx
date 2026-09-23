@@ -37,11 +37,31 @@ import {
   validateProviderDraft,
 } from "../data/providerState";
 import type { ConfigEntry, ContextWindowSource, ModelThinking, Permission, ProjectDirectory, Task } from "../data/types";
+import { sessionWriteRoleLabel, type SessionWriteState } from "../data/writeCoordination";
 import { useDraftStore } from "../stores/drafts";
 import { useEnvDraftStore } from "../stores/envDrafts";
 import { useHostStore } from "../stores/host";
 import { useNavigationStore } from "../stores/navigation";
 import { useUiStore } from "../stores/ui";
+import { useWriteLockStore } from "../stores/writeLock";
+
+/**
+ * Recent-activity readout for the session list ([PiDock 09] #11 收口: 状态与最近活动).
+ * The stored value is an ISO timestamp; the list shows a short local time.
+ */
+function formatSessionActivity(iso: string): string {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return "未知";
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${pad(at.getHours())}:${pad(at.getMinutes())}`;
+}
+
+/** Coordination role of one session in the list ([PiDock 09] #11 box 2). */
+function SessionRoleBadge({ state }: { state?: SessionWriteState }) {
+  const label = state ? sessionWriteRoleLabel(state) : null;
+  if (label === null) return null;
+  return <Badge tone={state?.role === "owner" ? "accent" : "warn"}>{label}</Badge>;
+}
 
 export function Modals() {
   const modal = useUiStore((state) => state.modal);
@@ -55,6 +75,11 @@ export function Modals() {
   const [cleanupError, setCleanupError] = useState<string | null>(null);
 
   const task = modal && "taskId" in modal ? tasks.find((item) => item.id === modal.taskId) : undefined;
+
+  // [PiDock 09] (#11) session navigation readout: the coordination role of each
+  // session (holder / queue position / read-only) next to its run state, last
+  // activity and unread count. `task` may be undefined before the modal opens.
+  const sessionRoles = useWriteLockStore((state) => (task ? state.views[task.id]?.sessions : undefined));
 
   const sessions = useMemo(() => {
     if (!task) return [];
@@ -126,10 +151,13 @@ export function Modals() {
                   <strong className="block text-ink">{session.name}</strong>
                   <small className="text-muted">
                     {session.id === task.activeSessionId ? "当前会话 · " : ""}
-                    {session.archived ? "已归档" : "未归档"} · {session.permission === "read" ? "只读" : "可对话"}
+                    {session.archived ? "已归档" : "未归档"} · {session.permission === "read" ? "只读" : "可对话"} · 最近活动{" "}
+                    {formatSessionActivity(session.lastActivity)}
+                    {session.unread > 0 ? ` · ${session.unread} 条未读` : ""}
                   </small>
                 </button>
                 <div className="flex items-center gap-1.5">
+                  <SessionRoleBadge state={sessionRoles?.find((item) => item.sessionId === session.id)} />
                   <Badge>{runStateLabel(session.runState)}</Badge>
                   <Button
                     size="sm"

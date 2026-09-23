@@ -25,9 +25,11 @@ import type {
   ServiceRecipe,
   Session,
   Task,
+  TaskWriteLockView,
   UsageRecord,
   Workspace,
 } from "./types";
+import type { SessionWriteState } from "./writeCoordination";
 import type { ServiceTopologyView } from "./serviceTopology";
 
 export type UsageFilter = {
@@ -267,6 +269,13 @@ export interface HostAdapter {
   ): Promise<SendMessageResult>;
   stopRun(taskId: string, sessionId: string): Promise<void>;
   createSession(taskId: string): Promise<Session>;
+  /**
+   * [PiDock 09] (#11) write coordination of one task: holder (+ claim label),
+   * queue order, leftover agent-owned resources, derived executions and the
+   * per-session role the navigation badges use. The shell adapter reads the
+   * Host (`task/sessionStates`); the memory adapter computes it from its locks.
+   */
+  sessionWriteStates(taskId: string): Promise<{ writeLock: TaskWriteLockView; sessions: SessionWriteState[] }>;
   renameSession(taskId: string, sessionId: string, name: string): Promise<void>;
   renameTask(taskId: string, name: string): Promise<void>;
   setSessionArchived(taskId: string, sessionId: string, archived: boolean): Promise<void>;
