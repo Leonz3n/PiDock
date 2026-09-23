@@ -70,6 +70,8 @@ describe("schedule display rules", () => {
     );
     expect(scheduleRunCreatedSession({ result: "skipped" })).toBe(false);
     expect(scheduleRunCreatedSession({ result: "completed", sessionId: "scheduled-run-1" })).toBe(true);
+    // A run parked on a confirmation is not a skipped run: its session exists.
+    expect(scheduleRunCreatedSession({ result: "awaiting-approval", sessionId: "scheduled-run-2" })).toBe(true);
     expect(isIndependentRunSession({ sessionId: "scheduled-run-2" }, { sessionId: "scheduled-run-1" })).toBe(true);
   });
 

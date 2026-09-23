@@ -455,14 +455,17 @@ export function occurrenceKey(scheduleId: string, occurrence: string): string {
 /**
  * Deadline of a confirmation a scheduled run is waiting on (盒子 4): the earlier
  * of 24 hours from the request and the next planned time. A once-only schedule
- * has no next plan, so its confirmation lives the full 24 hours.
+ * has no next plan, so its confirmation lives the full 24 hours. A next plan
+ * that already passed when the run started (a rule whose period is shorter than
+ * the evaluation gap) never moves the deadline before the request itself: a
+ * confirmation nobody could ever approve is born expired, not pre-expired.
  */
 export function scheduledApprovalDeadline(input: { requestedAt: string; nextTriggerAt: string | null }): string {
   const requested = Date.parse(input.requestedAt);
   const deadline = requested + APPROVAL_DEADLINE_MS;
   if (input.nextTriggerAt === null) return new Date(deadline).toISOString();
   const nextPlan = Date.parse(input.nextTriggerAt);
-  return new Date(Math.min(deadline, nextPlan)).toISOString();
+  return new Date(Math.max(requested, Math.min(deadline, nextPlan))).toISOString();
 }
 
 export interface ScheduleTemplateDefinition {
@@ -766,7 +769,7 @@ export interface StoredSchedule {
 }
 
 export type ScheduledRunTrigger = "due" | "manual";
-export type ScheduledRunResult = "completed" | "skipped" | "failed";
+export type ScheduledRunResult = "completed" | "awaiting-approval" | "skipped" | "failed";
 
 /**
  * One trigger result (盒子 4 定时执行是独立记录): the schedule config version it

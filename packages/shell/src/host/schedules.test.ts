@@ -240,6 +240,44 @@ describe("[PiDock 18] schedule manager", () => {
     expect(schedules.runs(scheduleId)).toHaveLength(1);
   });
 
+  it("records a run parked on a confirmation as awaiting-approval, not completed", () => {
+    const { store } = memorySchedules();
+    const { ports, results } = fakePorts();
+    const schedules = new TaskSchedules(TASK_ID, TASK_DIR, store, ports);
+    const saved = schedules.save(BASE);
+    const scheduleId = saved.ok ? saved.schedule.scheduleId : "";
+    results.push({ state: "approval", approvalId: "approval-1" });
+    const run = schedules.runNow(scheduleId);
+    expect(run).toMatchObject({ result: "awaiting-approval", sessionId: "scheduled-run-1" });
+    // The history never claims 完成 for a run the ledger still tracks as waiting.
+    expect(schedules.runs(scheduleId)[0]?.result).toBe("awaiting-approval");
+    results.push({ state: "done" });
+    expect(schedules.runNow(scheduleId).result).toBe("completed");
+  });
+
+  it("orders tied run history by the minted sequence, not the id string", () => {
+    const { store } = memorySchedules();
+    const { ports } = fakePorts();
+    const schedules = new TaskSchedules(TASK_ID, TASK_DIR, store, ports);
+    const saved = schedules.save(BASE);
+    const scheduleId = saved.ok ? saved.schedule.scheduleId : "";
+    // The fixed clock gives every run the same `startedAt`, so only the sequence
+    // decides the order (`run-10` is newer than `run-9`).
+    for (let index = 0; index < 10; index += 1) schedules.runNow(scheduleId);
+    expect(schedules.runs().map((run) => run.runId)).toEqual([
+      "run-10",
+      "run-9",
+      "run-8",
+      "run-7",
+      "run-6",
+      "run-5",
+      "run-4",
+      "run-3",
+      "run-2",
+      "run-1",
+    ]);
+  });
+
   it("re-seeds schedule and run id sequences from the restored record", () => {
     const { store } = memorySchedules();
     const { ports } = fakePorts();
@@ -255,6 +293,28 @@ describe("[PiDock 18] schedule manager", () => {
       "schedule-3",
     ]);
     expect(second.runNow(b.ok ? b.schedule.scheduleId : "").runId).toBe("run-2");
+  });
+
+  it("never re-mints the id of a removed schedule whose run history was kept", () => {
+    const { store } = memorySchedules();
+    const { ports } = fakePorts();
+    const first = new TaskSchedules(TASK_ID, TASK_DIR, store, ports);
+    const a = first.save(BASE);
+    const b = first.save({ ...BASE, name: "第二个" });
+    const c = first.save({ ...BASE, name: "第三个" });
+    expect(a.ok && a.schedule.scheduleId).toBe("schedule-1");
+    expect(b.ok && b.schedule.scheduleId).toBe("schedule-2");
+    const third = c.ok ? c.schedule.scheduleId : "";
+    expect(third).toBe("schedule-3");
+    first.runNow(third);
+    expect(first.remove(third)).toEqual({ removed: true });
+    // The removed schedule's run history is kept, so its id must stay reserved:
+    // re-minting it would merge two schedules' histories under one id.
+    const second = new TaskSchedules(TASK_ID, TASK_DIR, store, ports);
+    const d = second.save({ ...BASE, name: "第四个" });
+    expect(d.ok && d.schedule.scheduleId).toBe("schedule-4");
+    expect(second.runs(third)).toHaveLength(1);
+    expect(second.runs("schedule-4")).toEqual([]);
   });
 });
 
@@ -387,6 +447,32 @@ describe("[PiDock 18] Host wiring", () => {
     expect(() => taskHost.approve("scheduled-parked-1", waiting.approvalId ?? "")).toThrow("invalid-execution-transition");
     expect(runs[0]).toMatchObject({ result: "completed", sessionId: "scheduled-run-1" });
     expect(taskHost.scheduleRuns(scheduleId).filter((run) => run.result === "completed")).toHaveLength(1);
+  });
+
+  it("settles an expired confirmation before 立即运行, so a dead wait never blocks it", () => {
+    let now = "2026-09-23T02:00:00.000Z";
+    const taskHost = host(() => now);
+    taskHost.provision({ name: "定时巡检", dirId: "task-abcdef12", remoteBranch: "main", fetchedCommit: "a5a4a0d1234", repos: ["front-monorepo"] });
+    const saved = taskHost.saveSchedule({ name: "每日巡检", ruleText: "每日 09:15", timezone: "Asia/Shanghai", prompt: "检查风险", providerId: "provider-local", model: "pidock-default", permission: "default", enabled: true });
+    const scheduleId = saved.ok ? saved.schedule.scheduleId : "";
+    const waiting = taskHost.sendMessage(
+      "scheduled-parked-1",
+      "运行命令",
+      {
+        tool: "exec.run",
+        target: `${TASK_DIR}/run.sh`,
+        execute: (call) => ({ tool: call.tool, kind: call.kind, target: call.target, contentVersion: call.contentVersion, output: "pending" }),
+      },
+      { scheduleId, scheduleConfigVersion: 1, approvalExpiresAt: "2026-09-23T12:00:00.000Z" },
+    );
+    expect(waiting.state).toBe("approval");
+    // Before the deadline the wait really is in flight and blocks the manual run.
+    expect(taskHost.runScheduleNow(scheduleId)).toMatchObject({ result: "skipped" });
+    // Past it, 立即运行 ends the dead wait first instead of reporting 「上一次执行仍在执行」.
+    now = "2026-09-23T13:00:00.000Z";
+    expect(taskHost.runScheduleNow(scheduleId)).toMatchObject({ result: "completed", sessionId: "scheduled-run-2" });
+    const [settled] = taskHost.executionState("scheduled-parked-1").executions;
+    expect(settled).toMatchObject({ state: "expired", approval: { status: "expired" } });
   });
 
   it("does not run a schedule of an archived task and refuses 立即运行 until restored", () => {

@@ -117,6 +117,14 @@ describe("scheduled confirmation deadline", () => {
       "2026-09-24T09:00:00.000Z",
     );
   });
+
+  it("never puts the deadline before the request when the next plan already passed", () => {
+    // Evaluated late: the occurrence was 09:15, its next plan 09:16 is already
+    // gone by the 09:16:30 request. The confirmation must not be born expired.
+    expect(
+      scheduledApprovalDeadline({ requestedAt: "2026-09-23T09:16:30.000Z", nextTriggerAt: "2026-09-23T09:16:00.000Z" }),
+    ).toBe("2026-09-23T09:16:30.000Z");
+  });
 });
 
 describe("trigger planning", () => {

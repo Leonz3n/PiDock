@@ -579,6 +579,9 @@ export class TaskWorkspaceHost {
 
   /** 立即运行: one independent run now, without moving the next planned time. */
   runScheduleNow(scheduleId: string): ScheduledRunRecord {
+    // A confirmation whose deadline already passed no longer blocks this run: end
+    // it first, exactly like the due evaluation does (盒子 4「先结束旧确认」).
+    if (!this.isArchived()) this.settleDueApprovalWaits();
     return this.schedules.runNow(scheduleId);
   }
 
@@ -594,8 +597,13 @@ export class TaskWorkspaceHost {
    */
   evaluateSchedules(): ScheduledRunRecord[] {
     if (this.isArchived()) return [];
-    for (const expired of this.executions.settleDueApprovals()) this.endExpiredApprovalWait(expired.sessionId);
+    this.settleDueApprovalWaits();
     return this.schedules.evaluateDue();
+  }
+
+  /** 盒子 4: an expired confirmation is ended (ledger + turn) before any run is judged. */
+  private settleDueApprovalWaits(): void {
+    for (const expired of this.executions.settleDueApprovals()) this.endExpiredApprovalWait(expired.sessionId);
   }
 
   /**

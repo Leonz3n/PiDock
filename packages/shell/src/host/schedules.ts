@@ -111,8 +111,13 @@ export class TaskSchedules {
     private readonly ports: SchedulePorts,
   ) {
     this.recordState = store.readSchedules(taskDir);
+    // A removed schedule keeps its run history, so the ids of those runs stay in
+    // the pool: re-minting one would merge two schedules' histories under one id.
     this.scheduleSequence = highestSequence(
-      this.recordState.schedules.map((schedule) => schedule.scheduleId),
+      [
+        ...this.recordState.schedules.map((schedule) => schedule.scheduleId),
+        ...this.recordState.runs.map((run) => run.scheduleId),
+      ],
       "schedule",
     );
     this.runSequence = highestSequence(
@@ -144,7 +149,15 @@ export class TaskSchedules {
     return this.recordState.runs
       .filter((run) => scheduleId === undefined || run.scheduleId === scheduleId)
       .map((run) => ({ ...run }))
-      .sort((a, b) => (a.startedAt === b.startedAt ? (a.runId < b.runId ? 1 : -1) : a.startedAt < b.startedAt ? 1 : -1));
+      .sort((a, b) =>
+        a.startedAt === b.startedAt
+          ? // Tied timestamps order by the minted sequence, never by the id string
+            // (`run-10` is newer than `run-9`, not older).
+            runSequence(b.runId) - runSequence(a.runId)
+          : a.startedAt < b.startedAt
+            ? 1
+            : -1,
+      );
   }
 
   templates(): ScheduleTemplateDefinition[] {
@@ -495,9 +508,17 @@ export class TaskSchedules {
 
 function toRunResult(result: ScheduleStartResult): ScheduledRunResult {
   if (result.state === "failed") return "failed";
-  // A run whose turn parks on a confirmation still created its own session: the
-  // confirmation is tracked by the execution ledger from here on.
+  // A run whose turn parks on a confirmation still created its own session, but
+  // it did not complete: the confirmation is tracked by the execution ledger and
+  // the history must not claim 完成 for a run that is still waiting.
+  if (result.state === "approval") return "awaiting-approval";
   return "completed";
+}
+
+/** Minted run sequence (`run-<n>`) for tie-breaking; 0 keeps insertion order. */
+function runSequence(runId: string): number {
+  const match = /^run-(\d+)$/.exec(runId);
+  return match === null ? 0 : Number(match[1]);
 }
 
 function cloneSchedule(schedule: StoredSchedule): StoredSchedule {
