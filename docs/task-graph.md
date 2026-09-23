@@ -632,8 +632,17 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   添加 MCP 要求已启用的 bridge Extension 且凭据必须是引用。
 - **盒子状态**：盒子 1（来源与失效原因）、2（Package 安装版本、只有 package 是安装
   入口）、3（MCP bridge／连接／失败／重试、凭据只存引用、不扩权）、4（安全边界生效、
-  失败保留原可用配置）、5（区分已验证与仅声明，不冒充 SDK 支持）的规则与 renderer
-  行为已覆盖；同名消歧与「失效后修复」由规则单测、适配器单测与管理流程测试共同覆盖。
+  失败保留原可用配置）的规则与 renderer 行为已覆盖；同名消歧与「失效后修复」由规则
+  单测、适配器单测与管理流程测试共同覆盖。盒子 5 为 PARTIAL：区分「已在本机验证／仅
+  声明」并按此标注、页面明示数据来自内存投影、不把静态示例当作 SDK 已支持，这部分已
+  实现并锁定；但盒子要求的「展示真实可用能力」没有真实来源发现的生产者，`verified`
+  只来自夹具，因此不能按已交付记。
+- **全量校验**：`pnpm turbo run typecheck test build lint --force` → 8 successful / 8 total,
+  0 cached；shell 47 files / 692 tests，renderer 37 files / 333 tests。BLOCK 修复
+  `7d8b54c` 的两处断言做过反向证明（还原后失败）：`CapabilitiesPage` 停用改回
+  `status !== "enabled"` 时「disables an updatable capability instead of enabling it
+  again」报 `Unable to find 已停用`；「重新检查来源」计数改回列表长度时
+  「…repairs the row after a re-check」找不到 `/2 项能力已刷新/`。
 - **残留（未测／未实现）**：能力管理目前只有 renderer 内存投影与 shell 纯规则两层，
   **没有** Host RPC：真实磁盘来源发现（读取 pi／agents 技能目录、额外技能目录、
   扩展与 package 的安装清单）、真实 MCP 连接（bridge Extension 进程、OAuth／凭据
