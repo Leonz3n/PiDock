@@ -426,3 +426,64 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   调用方（面板是只读展示，`stores/host.ts` 仍把内存适配器固定为默认，与 #9/#10/#12
   记录的同一接线缺口）；Electron GUI smoke 未运行；真实生成应当同时声明任务写操作权
   并留下运行记录（当前只记录观测，与 `recordRun` 没有生产调用方一致）。
+
+## 文件浏览、差异与内置终端（[PiDock 10] #15）
+
+- **文件根与归属（盒子 2、9）**：`main/workspace-files.ts` 的 `workspaceRoots`
+  按任务记录生成有界根列表：每个仓库一个 worktree 根（带 baseline 分支与钉住的
+  commit），每个普通目录链接一个 `shared-dir` 根（带 `directoryId` 与链接时记录的
+  `sourcePath`）。根之间从不合并，`workspaceAttribution` 每个视图都带任务 id、
+  仓库（或链接目录）身份、统一 pi 工作目录（任务目录），普通目录额外带
+  「修改影响原文件，不提供 Git 差异与交付」与链接位置／原始目标。`resolveWorkspacePath`
+  只接受相对路径且拒绝 `..` 与绝对路径式的越界改写，未知根返回 `unknown-root`，
+  因此一次文件请求永远出不了所选根。
+- **有界预览与差异（盒子 2）**：`boundTreeEntries`（目录优先、按名排序、上限
+  200 条、`truncated`）与 `boundPreview`（上限 20k 字符、标记截断）／`boundDiff`
+  （400 行 + 40k 字符上限）都先经 `scrubSecretText` 掩码：任务／私有值列表与
+  `password/token/api_key/Bearer/Cookie` 等模式一律遮蔽。`boundDiff` 对普通目录
+  链接直接拒绝（`plain-dir-no-diff`），不会用「空差异」冒充「无修改」。
+  `deliveryTarget` 只给出仓库、分支与 `autoCommit/autoPush/autoMerge: false`，
+  普通目录链接返回 `plain-dir-no-delivery`；交付始终由用户在明确入口触发。
+- **Host 文件读取**：`host/workspace-files.ts` 把上述规则接到可注入的读取器
+  （目录列举、文本读取、`git diff --no-color [<base>] -- <path>`）；git 用固定
+  argv、在根目录 cwd 下执行、不经 shell，输出再经规则层边界与掩码。读取器可注入，
+  因此单测不碰真实仓库；二进制文件与超过 1MB 的文件拒绝读取并报错。
+- **终端计划与环境（盒子 3、9）**：`main/terminal-config.ts` 的 `planTerminal`
+  以所选根（worktree 或普通目录链接）为 cwd，按 #7 的层序
+  （仓库默认配置 → 共享模板 → 本机私有配置 → 任务覆盖 → 运行时绑定）解析环境，
+  返回**每次新建**的子进程 env 对象与掩码后的展示行；从不读写 `process.env`。
+  程序与参数必须显式（复用 #7 的 `validateServiceDescriptor` 规则拒绝内联
+  `FOO=bar` 与 shell 连接符），窗口大小有上下界。`TaskTerminalRegistry` 记录归属
+  （任务／会话／标签）、cwd、env 键名、生命周期与退出状态，历史有界（200 行、
+  单行 2000 字符）并同样掩码。
+- **写操作协调与权限（盒子 4、5、8）**：终端启停是副作用操作，走 #11 的任务写
+  操作权（`WriteIntentKind` 新增 `terminal-control`）：Agent 与控制序列
+  `runAgentTerminalControl`（`host/terminal-control.ts`）先读会话 tier，再决定、
+  只在 `default` 且服务已登记时铸一次带 `TERMINAL_CONTROL_SCOPE` 的一次性确认
+  （target 绑定 `${taskDir}/terminals/<instanceId>`），消费后才执行；
+  `read` 会话在计划阶段就被拒绝（没有终端／命令入口），`auto` 仍不绕过任务归属
+  与写操作权。人工操作必须带 main 盖的 `shell-ui` 来源证明（`classifyControlCaller`），
+  同样先取写操作权，并在结果里标 `actor:"human"`。停止按**实例 + 进程号 +
+  启动时间**证明范围（`stopScope`），未报告进程号时失败关闭（`unknown-process`），
+  另一个任务的实例直接 `task-mismatch`，因此停止不会误杀别的任务。
+- **IPC 与面板（盒子 1）**：`task/fileRoots`、`task/fileTree`、`task/filePreview`、
+  `task/fileDiff`、`task/deliveryInfo`（读）、`task/planTerminal`、`task/terminalControl`、
+  `task/terminalState`、`task/terminalHistory`。renderer 经 `shellBridge`
+  （`fileRootsThroughShell` 等）与适配器 `workspaceBrowser(taskId)` /
+  `planTerminal` / `controlTerminal` / `terminalState` 取视图；Host 不可用时回落
+  内存投影。工具区默认关闭，按需加载（面板打开才发起 Host 读取或终端计划），
+  逐标签关闭、最后一个关闭后释放对话空间，关闭面板不停止服务、不结束终端进程、
+  不删除浏览器持久状态（这些生命周期各自独立）。
+- **盒子状态**：盒子 1／2／3（规则与 Host 计划部分）／5／8 已覆盖；盒子 3 的真实
+  PTY 进程、盒子 4 的「真实命令执行不接受 UI 只读标记」端到端、盒子 6 的外部
+  编辑器入口、盒子 7 的真实 Git 交付执行属残留，因此 #15 保持 OPEN。
+- **残留（未测／未实现）**：真实 PTY 进程未启动（`task/terminalState` 明确返回
+  `spawnImplemented: false`，面板显示「本机 PTY 进程启动属未实现范围」，实例只在
+  有真实 spawner 报告进程号后才能停止）；`git diff` 真实运行（固定 argv、无 shell）
+  只由注入读取器的单测覆盖，未在有真实仓库的环境执行；文件树／预览未在打包应用里
+  做过 GUI 走查（Electron smoke 未运行）；外部编辑器打开入口与断点调试方式未实现
+  （盒子 6 未覆盖）；「人工终端接管」目前只到写操作权与归属标识，真实接管流程
+  （暂停 Agent、用户输入、恢复）依赖真实 PTY；终端输入仍是模拟（`runTerminalCommand`
+  内存队列），未接真实 shell；`task/planTerminal` / `task/terminalControl` 的生产
+  调用方只在 renderer 面板（`stores/host.ts` 仍把内存适配器固定为默认，与 #9/#10/#12/#14
+  记录的同一接线缺口）；多任务并行的真实进程归属只由注册表单测覆盖。
