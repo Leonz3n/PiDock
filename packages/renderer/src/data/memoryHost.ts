@@ -587,7 +587,11 @@ function seedTasks(): Task[] {
       // a generic error.
       services: withServiceFailure(makeServices("checkout", "testing", false, [releaseTask]), "invoice-service", {
         code: "port-taken",
-        message: "端口 9002 已被任务实例 release/invoice-service@9002 占用",
+        // The owning instance is the release task's invoice-service, which
+        // holds 9001 — the port this task's invoice-service asked for. Keep
+        // the message consistent with the fixture's own allocation
+        // (`release/invoice-service` = 9001, `release/shipment-service` = 9002).
+        message: "端口 9001 已被任务实例 release/invoice-service@9001 占用",
         hint: "运行管理会重新分配端口并更新受影响的消费者",
       }),
       externalResources: [{ resourceId: "res-order-events", name: "order-events", kind: "queue" }],

@@ -232,7 +232,9 @@ function portOwnerLabel(reservation: PortReservation): string {
  * Strict port-first planning (box 2: 先确定端口并解析变量绑定，再启动服务).
  * Reports every conflict instead of moving anything:
  *
- * - a local unit without a requested port is a `missing-port` failure;
+ * - a local *listener* (`long-lived`) without a requested port is a
+ *   `missing-port` failure; a `prepare`/`one-shot` step binds no socket, so
+ *   it needs no port and stays in the prestart group (`planStartGroups`);
  * - two units of *this* task asking for the same port is a `port-conflict`
  *   (never silently share one socket);
  * - a port reserved by another task or by an external process is
@@ -246,6 +248,8 @@ export function planPortAssignments(input: {
   units: readonly RunUnit[];
   requests: readonly PortRequest[];
   reservations: readonly PortReservation[];
+  /** Per-unit run type override; same precedence as `planStartGroups`. */
+  runTypes?: Readonly<Record<string, ServiceRunType>>;
 }): PortPlan {
   const diagnostics: RunDiagnostic[] = [];
   const assignments: PortAssignment[] = [];
@@ -253,6 +257,11 @@ export function planPortAssignments(input: {
   const byPort = new Map<number, string[]>();
   for (const unit of input.units) {
     if (unit.location !== "local") continue;
+    // Only a long-lived listener must own a port. A prepare/one-shot step is a
+    // prestart member (see `planStartGroups`), so demanding a port for it made
+    // the whole Host plan fail for any task with such a unit (the seeded
+    // `db-migrate` row is local/prepare with no port).
+    if ((input.runTypes?.[unit.unitId] ?? unit.runType ?? "long-lived") !== "long-lived") continue;
     const port = requestedByUnit.get(unit.unitId);
     if (port === undefined || !Number.isInteger(port) || port < 1 || port > 65535) {
       diagnostics.push(
@@ -315,6 +324,8 @@ export function reallocatePortAssignments(input: {
   requests: readonly PortRequest[];
   reservations: readonly PortReservation[];
   maxSteps?: number;
+  /** Per-unit run type override; same precedence as `planStartGroups`. */
+  runTypes?: Readonly<Record<string, ServiceRunType>>;
 }): PortPlan {
   const strict = planPortAssignments(input);
   const hard = strict.diagnostics.filter((entry) => entry.code !== "port-taken");
@@ -820,7 +831,8 @@ function topologicalComponentOrder(
 }
 
 export type RoutingTarget =
-  | { kind: "local-instance"; instanceId: string; serviceId: string; port: number; address: string }
+  /** `port` is absent for a local step with no assignment (a `prepare`/`one-shot` unit owns no socket). */
+  | { kind: "local-instance"; instanceId: string; serviceId: string; port?: number; address: string }
   | { kind: "remote"; environment: string };
 
 /**
@@ -865,7 +877,9 @@ export function describeDependencyRouting(input: {
             kind: "local-instance",
             instanceId: serviceInstanceId(input.taskId, unit.serviceId),
             serviceId: unit.serviceId,
-            port: assignment?.port ?? 0,
+            // Never fabricate a local address: a unit without a port
+            // assignment reports no port and a portless instance id.
+            ...(assignment !== undefined ? { port: assignment.port } : {}),
             address: instanceAddress(input.taskId, unit.serviceId, assignment?.port),
           };
     return {

@@ -325,6 +325,36 @@ describe("shell host adapter selection", () => {
     }
   });
 
+  it("asks for no port for a prepare step and labels the plan with the environment name", async () => {
+    const seen: Array<{ op: string; payload: Record<string, unknown> }> = [];
+    stubBridge(async (_taskId, op, payload) => {
+      seen.push({ op: op as string, payload: (payload ?? {}) as Record<string, unknown> });
+      if (op === "task/planServiceGroup") {
+        return {
+          ok: true,
+          payload: { plan: { assignments: [], reallocated: [], groups: [{ groupId: "prestart", members: ["task:db-migrate"], reason: "prestart", bidirectional: false, verify: [] }], diagnostics: [], knownLimits: [] } },
+        };
+      }
+      return { ok: true, payload: {} };
+    });
+    try {
+      const view = await resolveHostAdapter(createMemoryHost()).serviceTopology("release");
+      const request = seen.find((entry) => entry.op === "task/planServiceGroup")?.payload;
+      const units = request?.["units"] as Array<Record<string, unknown>>;
+      // The seeded `db-migrate` row is local/prepare without a preferred port;
+      // sending a port for it would make the Host plan fail `missing-port`.
+      expect(units.find((unit) => unit["unitId"] === "invoice-service:db-migrate")).toMatchObject({ location: "local", runType: "prepare" });
+      const requests = request?.["requests"] as Array<{ unitId: string; port: number }>;
+      expect(requests.some((entry) => entry.unitId === "invoice-service:db-migrate")).toBe(false);
+      // The environment label is the display name ("测试环境"), not the task id.
+      expect(request?.["environment"]).toBe("测试环境");
+      // With a successful plan the Host's groups win over the memory projection.
+      expect(view.groups[0]).toMatchObject({ groupId: "prestart", members: ["task:db-migrate"] });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("stops through task/cancel when bridged, memory otherwise", async () => {
     const calls: string[] = [];
     stubBridge(async (_taskId, op) => {

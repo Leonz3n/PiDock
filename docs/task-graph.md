@@ -184,8 +184,9 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
 - **IPC**：`task/planServiceGroup`（规划，不是执行：会翻转生命周期的仍只有
   经门禁的 `task/controlService`）、`task/serviceRunRecords`、
   `task/serviceStopScope`。规划请求走与 #7 相同的人工/Agent 判定
-  （无 `sessionId` 必须带 main 盖的 `shell-ui` 来源证明；有会话则必须是已存在
-  会话），计划里记录 actor 供审计。renderer 经 `shellBridge`
+  （无 `sessionId` 必须带 main 盖的 `shell-ui` 来源证明；有会话则按 #7/#8
+  的同一规则打开该会话，未知 id 会被创建并持久化，不要求事先存在），计划里
+  记录 actor 供审计。renderer 经 `shellBridge`
   （`planServiceGroupThroughShell` / `serviceRunRecordsThroughShell` /
   `serviceStopScopeThroughShell`）与适配器 `serviceTopology(taskId)` 取视图，
   Host 不可用时回落内存投影。
@@ -196,4 +197,8 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   （`missing-binding` 与远程可达检查为规划期证据）；`task/planServiceGroup`
   的生产调用方目前是 renderer 的面板（`stores/host.ts` 仍把内存适配器固定为
   默认，与 #9 记录的同一接线缺口）；重新分配地址后的消费者更新已重算绑定值，
-  但还没有运行中的进程需要迁移。
+  但还没有运行中的进程需要迁移。规划本身的已知限制：端口预留（`reservations`）
+  只有调用方提供，还没有机器级预留的生产来源；renderer 镜像不发诊断，
+  所以 `start-order-conflict` / `unknown-unit` 目前只能来自 Host；
+  `prestart A→B` 叠加 `call B→A` 跨监听组时只按输入顺序发出计划、
+  不报 `start-order-conflict`（同一双向组内会报）。

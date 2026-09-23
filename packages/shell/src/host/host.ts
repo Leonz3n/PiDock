@@ -615,9 +615,10 @@ async function dispatchTaskOp(
       // it decides units, ports, variable bindings and start groups, while
       // the only path that flips a lifecycle is still the gated
       // `task/controlService`. A plan request may be human-UI (attested, no
-      // session) or agent (named session that exists) — `classifyControlCaller`
-      // keeps a raw session-less caller from rewriting the task plan, and the
-      // actor is recorded on the plan for audit.
+      // session) or agent (named session, opened here — an unknown id is
+      // persisted like #7/#8 do) — `classifyControlCaller` keeps a raw
+      // session-less caller from rewriting the task plan, and the actor is
+      // recorded on the plan for audit.
       case "task/planServiceGroup": {
         const topology = serviceTopologyFor(taskId);
         if ("error" in topology) return { ok: false, error: topology.error };

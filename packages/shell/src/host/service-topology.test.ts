@@ -70,6 +70,35 @@ describe("TaskServiceTopology planning", () => {
     expect(plan.diagnostics).toEqual([]);
   });
 
+  it("plans a portless prepare step instead of failing the whole plan (seeded db-migrate)", () => {
+    // Regression lock for the #10 review P1: `db-migrate` is local/`prepare`
+    // with no preferred port, so the Host plan used to throw `missing-port`
+    // and the renderer silently kept the memory projection.
+    const plan = topology().setPlan({
+      ...planInput(),
+      units: [
+        ...units,
+        { unitId: "invoice:db-migrate", serviceId: "db-migrate", name: "db-migrate", repoDir: "invoice", location: "local", runType: "prepare" },
+      ],
+      dependencies: [
+        { from: "front:saas-web", to: "front:saas-bff", kind: "call" as const },
+        { from: "front:saas-bff", to: "invoice:db-migrate", kind: "prestart" as const },
+      ],
+    });
+    expect(plan.diagnostics).toEqual([]);
+    // The step owns no socket, so it is neither assigned nor routed.
+    expect(plan.assignments.map((assignment) => assignment.unitId)).not.toContain("invoice:db-migrate");
+    expect(plan.routing.find((entry) => entry.unitId === "invoice:db-migrate")?.target).toEqual({
+      kind: "local-instance",
+      instanceId: "task-aaaaaaaa/db-migrate",
+      serviceId: "db-migrate",
+      address: "task-aaaaaaaa/db-migrate",
+    });
+    // It runs first, and the listener that needs it comes after.
+    expect(plan.groups[0]).toMatchObject({ groupId: "prestart", members: ["invoice:db-migrate"] });
+    expect(plan.groups.map((group) => group.members).flat().indexOf("invoice:db-migrate")).toBe(0);
+  });
+
   it("allocates a different port for the second task's same-name instance", () => {
     const first = topology().setPlan(planInput());
     const second = new TaskServiceTopology("task-bbbbbbbb", "/tasks/task-bbbbbbbb", () => "2026-09-22T10:00:00.000Z").setPlan({
