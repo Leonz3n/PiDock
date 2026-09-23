@@ -23,6 +23,7 @@ import { protocolBindingFromHost, type ProtocolBindingView } from "./protocolBin
 import type {
   Approval,
   ApprovalStatus,
+  AttentionItem,
   CleanupItem,
   CleanupRunResult,
   CleanupSelection,
@@ -35,7 +36,10 @@ import type {
   UsageRecord,
   WriteOrphanView,
 } from "./types";
+import { attentionItemFromHost, asHostAttentionItem } from "./attentionRules";
 import {
+  attentionThroughShell,
+  markAttentionReadThroughShell,
   cleanupPreviewThroughShell,
   clearUsageThroughShell,
   compactSessionThroughShell,
@@ -488,6 +492,10 @@ export function createShellHostAdapter(fallback: HostAdapter): HostAdapter {
   // can route `task/approve|reject` with the listed (taskId, sessionId)
   // without a prior `sendMessage` in this page session.
   const listedShellApprovals = new Map<string, { taskId: string; record: HostApprovalRecord }>();
+  // [PiDock 17] (#19) which task Host produced each attention item: the id is
+  // opaque (a task id may contain dashes), so the route back for a read is
+  // remembered at listing time instead of parsed back out of the id.
+  const attentionSource = new Map<string, string>();
   return new Proxy(fallback, {
     get(target, property, receiver) {
       if (property === "sendMessage") {
@@ -668,6 +676,77 @@ export function createShellHostAdapter(fallback: HostAdapter): HostAdapter {
             .filter((entry) => entry.taskId === taskId)
             .map(toShellApproval);
           return [...shell, ...local];
+        };
+      }
+      if (property === "getAttention") {
+        return async (): Promise<AttentionItem[]> => {
+          const local = await (target as HostAdapter).getAttention();
+          if (!isShellConnected()) return local;
+          // [PiDock 17] (#19) the Host owns the execution ledger, so its items
+          // (real approvals/failures/unread completions) come from
+          // `task/attention` per known task; the memory projection keeps the
+          // tasks no Host answered for, exactly like the usage fan-out.
+          const workspace = await (target as HostAdapter).getWorkspace();
+          const projectName = new Map(workspace.projects.map((project) => [project.id, project.name]));
+          const remote: AttentionItem[] = [];
+          const answered = new Set<string>();
+          for (const task of workspace.tasks) {
+            let result: ShellTaskOpResult;
+            try {
+              result = await attentionThroughShell(task.id);
+            } catch {
+              result = { ok: false };
+            }
+            if (!result.ok) continue;
+            const items = asRecord(result.payload)["items"];
+            if (!Array.isArray(items)) continue;
+            answered.add(task.id);
+            for (const entry of items) {
+              const item = asHostAttentionItem(entry);
+              // A Host item of another task (or a read one) is not this list's.
+              if (!item || item.taskId !== task.id || item.read) continue;
+              attentionSource.set(item.id, task.id);
+              remote.push(attentionItemFromHost(item, { id: task.projectId, name: projectName.get(task.projectId) ?? task.projectId }));
+            }
+          }
+          if (answered.size === 0) return local;
+          return [...remote, ...local.filter((item) => !answered.has(item.taskId))];
+        };
+      }
+      if (property === "markAttentionRead") {
+        return async (taskId: string, itemIds: string[]) => {
+          if (!isShellConnected()) return (target as HostAdapter).markAttentionRead(taskId, itemIds);
+          // Only the ids this task's Host produced go over RPC; the rest belong
+          // to the memory projection and are cleared there, so one read never
+          // silently marks another adapter's item as read.
+          const hostIds = itemIds.filter((id) => attentionSource.get(id) === taskId);
+          const localIds = itemIds.filter((id) => attentionSource.get(id) !== taskId);
+          const cleared: string[] = [];
+          const kept: string[] = [];
+          if (hostIds.length > 0) {
+            let result: ShellTaskOpResult;
+            try {
+              result = await markAttentionReadThroughShell({ taskId, itemIds: hostIds });
+            } catch {
+              result = { ok: false };
+            }
+            if (result.ok) {
+              const payload = asRecord(result.payload);
+              const hostCleared = Array.isArray(payload["cleared"]) ? (payload["cleared"] as unknown[]).filter((id): id is string => typeof id === "string") : [];
+              const hostKept = Array.isArray(payload["kept"]) ? (payload["kept"] as unknown[]).filter((id): id is string => typeof id === "string") : [];
+              cleared.push(...hostCleared);
+              kept.push(...hostKept);
+              for (const id of hostCleared) attentionSource.delete(id);
+            } else {
+              kept.push(...hostIds);
+            }
+          }
+          if (localIds.length > 0) {
+            const local = await (target as HostAdapter).markAttentionRead(taskId, localIds);
+            cleared.push(...local.cleared);
+            kept.push(...local.kept);
+          }
+          return { cleared, kept };
         };
       }
       if (property === "sessionWriteStates") {

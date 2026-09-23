@@ -103,6 +103,27 @@ describe("memory Host adapter", () => {
     expect(attention.some((item) => item.kind === "failed" && item.sessionId === "failed")).toBe(true);
   });
 
+  it("[PiDock 17] (#19 box 5) clears the unread completion it read and keeps a pending item", async () => {
+    const host = createMemoryHost();
+    // A settled turn leaves the session completed with its unread count, which
+    // is exactly the 完成未读 item the attention list shows.
+    await host.sendMessage("latency", "main", "检查延迟", []);
+    const before = await host.getAttention();
+    const unread = before.find((item) => item.taskId === "latency" && item.kind === "completed-unread");
+    const approval = before.find((item) => item.kind === "approval");
+    expect(unread).toBeDefined();
+    expect(approval).toBeDefined();
+
+    const read = await host.markAttentionRead("latency", [unread?.id as string, approval?.id as string]);
+    // Reading clears only the unread kind; the pending confirmation still needs
+    // handling (待确认须处理后移除).
+    expect(read.cleared).toEqual([unread?.id]);
+    expect(read.kept).toEqual([approval?.id]);
+    const after = await host.getAttention();
+    expect(after.some((item) => item.id === unread?.id)).toBe(false);
+    expect(after.some((item) => item.id === approval?.id)).toBe(true);
+  });
+
   it("streams agent output as ordered deltas before the run settles", async () => {
     const host = createMemoryHost();
     const deltas: string[] = [];

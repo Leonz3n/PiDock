@@ -88,7 +88,10 @@ export type ShellTaskOp =
   | "task/restore"
   | "task/cleanupPreview"
   | "task/runCleanup"
-  | "task/quit";
+  | "task/quit"
+  | "task/executionState"
+  | "task/attention"
+  | "task/markAttentionRead";
 
 /**
  * Task-scoped op through main into the per-workspace Host. Rejects outside
@@ -604,6 +607,33 @@ export async function usageRecordsThroughShell(input: {
 }): Promise<ShellTaskOpResult> {
   try {
     return await shellTaskOp(input.taskId, "task/usageRecords", { ...(input.filter ?? {}) });
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * [PiDock 17] (#19 box 5) this task's attention items (待确认/失败/过期/完成未读) as
+ * the Host's execution ledger projects them.
+ */
+export async function attentionThroughShell(taskId: string): Promise<ShellTaskOpResult> {
+  try {
+    return await shellTaskOp(taskId, "task/attention", {});
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * [PiDock 17] (#19 box 5) 读取完成清除未读: the Host clears only the unread ids and
+ * returns the 待处理 ones it kept.
+ */
+export async function markAttentionReadThroughShell(input: {
+  taskId: string;
+  itemIds: string[];
+}): Promise<ShellTaskOpResult> {
+  try {
+    return await shellTaskOp(input.taskId, "task/markAttentionRead", { itemIds: [...input.itemIds] });
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }

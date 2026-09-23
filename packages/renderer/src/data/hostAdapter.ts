@@ -286,6 +286,12 @@ export interface HostAdapter {
   getSession(taskId: string, sessionId: string): Promise<Session | undefined>;
   getRun(taskId: string, sessionId: string): Promise<RunRecord | undefined>;
   getAttention(): Promise<AttentionItem[]>;
+  /**
+   * [PiDock 17] (#19 box 5) 读取完成清除未读: clear the read items of one task.
+   * Only 完成未读 items clear; a 待处理 id comes back in `kept` so the caller can
+   * say why it is still there (待确认/失败/过期须处理后移除).
+   */
+  markAttentionRead(taskId: string, itemIds: string[]): Promise<{ cleared: string[]; kept: string[] }>;
   getUsage(filter?: UsageFilter): Promise<UsageRecord[]>;
   /**
    * [PiDock 12] #12 box 8: remove usage details in one explicit scope. Archiving

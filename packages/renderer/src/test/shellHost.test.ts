@@ -699,3 +699,97 @@ describe("shell host adapter selection", () => {
     vi.unstubAllGlobals();
   });
 });
+
+/**
+ * [PiDock 17] (#19 box 5) the attention list is a read of each task Host's
+ * execution ledger: the Host items replace the memory rows of the tasks that
+ * answered, the label adds the project name, and a read goes back to the task
+ * Host that produced the id.
+ */
+describe("attention bridging", () => {
+  const hostItem = {
+    id: "attention-approval-release-approval-1",
+    kind: "approval",
+    executionId: "exec-1",
+    taskId: "release",
+    sessionId: "main",
+    taskName: "发布前检查",
+    detail: "待确认：回合工具 exec.run",
+    at: "2026-09-22T10:00:00.000Z",
+    read: false,
+  };
+
+  it("replaces the Host-owned task items with the Host's own and labels them with the project", async () => {
+    const fallback = createMemoryHost();
+    // A completed turn leaves a real 完成未读 item in the memory projection.
+    await fallback.sendMessage("latency", "main", "检查延迟", []);
+    const seen: string[] = [];
+    stubBridge(async (taskId, op) => {
+      if (op !== "task/attention") return { ok: true, payload: {} };
+      seen.push(taskId);
+      // Only `release` has a Host here; the others keep their memory rows.
+      return taskId === "release" ? { ok: true, payload: { taskName: "发布前检查", items: [hostItem] } } : { ok: false, error: "task-unbound" };
+    });
+    const adapter = resolveHostAdapter(fallback);
+    const attention = await adapter.getAttention();
+    expect(seen).toContain("release");
+    // The Host's row replaces this task's memory rows (2 approvals + 1 failed).
+    expect(attention.filter((item) => item.taskId === "release")).toEqual([
+      {
+        id: hostItem.id,
+        kind: "approval",
+        projectId: "atlas",
+        taskId: "release",
+        sessionId: "main",
+        label: "Atlas Web · 发布前检查",
+        detail: "待确认：回合工具 exec.run",
+        read: false,
+      },
+    ]);
+    // A task no Host answered for keeps its memory item.
+    expect(attention.some((item) => item.taskId === "latency" && item.kind === "completed-unread")).toBe(true);
+    vi.unstubAllGlobals();
+  });
+
+  it("routes a read to the task Host that produced the id and clears the memory row locally", async () => {
+    const fallback = createMemoryHost();
+    await fallback.sendMessage("latency", "main", "检查延迟", []);
+    const reads: Array<{ taskId: string; payload?: Record<string, unknown> }> = [];
+    stubBridge(async (taskId, op, payload) => {
+      if (op === "task/attention") {
+        return taskId === "release"
+          ? { ok: true, payload: { taskName: "发布前检查", items: [hostItem] } }
+          : { ok: false, error: "task-unbound" };
+      }
+      if (op === "task/markAttentionRead") {
+        reads.push({ taskId, payload });
+        return { ok: true, payload: { cleared: [], kept: (payload?.["itemIds"] as string[]) ?? [] } };
+      }
+      return { ok: true, payload: {} };
+    });
+    const adapter = resolveHostAdapter(fallback);
+    await adapter.getAttention();
+    const memoryItem = (await fallback.getAttention()).find((item) => item.taskId === "latency" && item.kind === "completed-unread");
+    expect(memoryItem).toBeDefined();
+
+    // The Host-owned id goes over RPC; a Host that keeps it (待处理) reports it kept.
+    const hostRead = await adapter.markAttentionRead("release", [hostItem.id]);
+    expect(reads).toEqual([{ taskId: "release", payload: { itemIds: [hostItem.id] } }]);
+    expect(hostRead.kept).toEqual([hostItem.id]);
+
+    // A memory-owned id never crosses the boundary and clears the unread row.
+    const memoryRead = await adapter.markAttentionRead("latency", [memoryItem?.id as string]);
+    expect(reads).toHaveLength(1);
+    expect(memoryRead.cleared).toEqual([memoryItem?.id]);
+    expect((await fallback.getAttention()).some((item) => item.id === memoryItem?.id)).toBe(false);
+    vi.unstubAllGlobals();
+  });
+
+  it("falls back to the memory list when no Host answers", async () => {
+    stubBridge(async () => ({ ok: false, error: "task-unbound" }));
+    const fallback = createMemoryHost();
+    const adapter = resolveHostAdapter(fallback);
+    expect(await adapter.getAttention()).toEqual(await fallback.getAttention());
+    vi.unstubAllGlobals();
+  });
+});
