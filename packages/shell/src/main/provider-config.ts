@@ -36,6 +36,9 @@ export interface ProviderThinkingRow {
   default: string;
 }
 
+/** Provenance of `contextWindow`; absent means the value was hand-typed. */
+export type ContextWindowSource = "catalog" | "default" | "manual";
+
 export interface ProviderModelRow {
   id: string;
   /**
@@ -45,6 +48,11 @@ export interface ProviderModelRow {
   name?: string;
   /** Context window in k Tokens (positive integer; the renderer shows `N k`). */
   contextWindow: number;
+  /**
+   * Whether `contextWindow` came from the model directory, the editor default
+   * or a hand-typed value. Presentation only — it never changes execution.
+   */
+  contextWindowSource?: ContextWindowSource;
   /** Max output in k Tokens (positive integer, never above the context window). */
   maxOutput?: number;
   /** Image input support. Declared per model — never inferred from the model id. */
@@ -74,6 +82,7 @@ export type ProviderConfigErrorCode =
   | "model-id-required"
   | "model-id-duplicate"
   | "context-window-invalid"
+  | "context-window-source-unknown"
   | "max-output-invalid"
   | "max-output-exceeds-window"
   | "thinking-mode-unknown"
@@ -221,6 +230,17 @@ export function validateProviderProfile(input: unknown): ProviderValidation {
     if (!isPositiveInteger(contextWindow)) {
       return { ok: false, error: { code: "context-window-invalid", field: `models.${id}.contextWindow`, message: "上下文窗口必须为正整数 Tokens" } };
     }
+    const rawSource = row["contextWindowSource"];
+    if (rawSource !== undefined && rawSource !== "catalog" && rawSource !== "default" && rawSource !== "manual") {
+      return {
+        ok: false,
+        error: {
+          code: "context-window-source-unknown",
+          field: `models.${id}.contextWindowSource`,
+          message: "上下文窗口来源只能是模型目录、默认值或手工值",
+        },
+      };
+    }
     const rawMaxOutput = row["maxOutput"];
     let maxOutput: number | undefined;
     if (rawMaxOutput !== undefined && rawMaxOutput !== null) {
@@ -248,6 +268,7 @@ export function validateProviderProfile(input: unknown): ProviderValidation {
       id,
       ...(displayName.length > 0 ? { name: displayName } : {}),
       contextWindow,
+      ...(rawSource !== undefined ? { contextWindowSource: rawSource } : {}),
       ...(maxOutput !== undefined ? { maxOutput } : {}),
       ...(rawImages === true ? { supportsImages: true } : {}),
       ...(row["thinking"] !== undefined ? { thinking: row["thinking"] as ProviderThinkingRow } : {}),

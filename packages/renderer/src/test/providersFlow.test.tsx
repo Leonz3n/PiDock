@@ -84,6 +84,51 @@ describe("provider page status and sync", () => {
   });
 });
 
+describe("model row provenance", () => {
+  it("distinguishes directory candidates, the editor default and hand-typed values", async () => {
+    const user = userEvent.setup();
+    renderApp("/providers");
+    await screen.findByRole("heading", { name: "Provider 与上下文" });
+
+    // A fresh row starts from the default window.
+    await user.click(screen.getByRole("button", { name: "添加 Provider" }));
+    const dialog = await screen.findByRole("dialog", { name: "添加 Provider" });
+    await user.type(within(dialog).getByLabelText("显示名称"), "团队网关");
+    await user.type(within(dialog).getByLabelText("服务地址"), "https://gw.example.com/v1");
+    await user.type(within(dialog).getByLabelText("模型 ID 第 1 行"), "team-large");
+    expect(within(dialog).getByTestId("model-window-source-1")).toHaveTextContent("默认值");
+
+    // Typing a window makes it manual; the max output stays a separate figure.
+    const windowInput = within(dialog).getByLabelText("模型上下文 第 1 行");
+    await user.clear(windowInput);
+    await user.type(windowInput, "64");
+    await user.type(within(dialog).getByLabelText("模型最大输出 第 1 行"), "16");
+    expect(within(dialog).getByTestId("model-window-source-1")).toHaveTextContent("手工值");
+
+    await user.click(within(dialog).getByRole("button", { name: "保存" }));
+    expect(await screen.findByText("已保存 Provider 配置；凭据只保存引用，不写入共享模板与日志")).toBeInTheDocument();
+    const listed = screen.getByText("团队网关").closest("section") as HTMLElement;
+    expect(within(listed).getByText("64000")).toBeInTheDocument();
+    expect(within(listed).getByText("手工值")).toBeInTheDocument();
+    expect(within(listed).getByText("16000")).toBeInTheDocument();
+
+    // Editing again echoes the saved provenance and the max output.
+    await user.click(within(listed).getByRole("button", { name: "编辑" }));
+    const edit = await screen.findByRole("dialog", { name: "编辑 Provider" });
+    expect(within(edit).getByLabelText("模型上下文 第 1 行")).toHaveValue(64);
+    expect(within(edit).getByLabelText("模型最大输出 第 1 行")).toHaveValue(16);
+    expect(within(edit).getByTestId("model-window-source-1")).toHaveTextContent("手工值");
+    // A row that picks a synced candidate records the directory as the source,
+    // while the hand-typed row above keeps saying 手工值.
+    await user.click(within(edit).getByRole("button", { name: "同步模型列表" }));
+    await within(edit).findByText("已同步 3 个候选");
+    await user.click(within(edit).getByRole("button", { name: "添加模型" }));
+    await user.type(within(edit).getByLabelText("模型 ID 第 2 行"), "claude-haiku-4-5");
+    expect(within(edit).getByTestId("model-window-source-2")).toHaveTextContent("模型目录");
+    expect(within(edit).getByTestId("model-window-source-1")).toHaveTextContent("手工值");
+  });
+});
+
 describe("model popover", () => {
   it("searches by provider/model, greys the over-limit target with its numbers and switches with Enter", async () => {
     const user = userEvent.setup();

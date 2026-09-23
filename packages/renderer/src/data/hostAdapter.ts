@@ -6,6 +6,7 @@ import type {
   CleanupItem,
   ConfigEntry,
   ConfigScope,
+  ContextWindowSource,
   Environment,
   HostEvent,
   LocalSettings,
@@ -92,6 +93,8 @@ export type SaveProviderInput = {
     id: string;
     name?: string;
     contextWindow: number;
+    /** Provenance of `contextWindow` (presentation only; absent means `manual`). */
+    contextWindowSource?: ContextWindowSource;
     /** Max output tokens for this model (same unit as `contextWindow`). */
     maxOutput?: number;
     supportsImages?: boolean;
