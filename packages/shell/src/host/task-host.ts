@@ -16,7 +16,8 @@
  * unit tests inject an in-memory store instead of the filesystem.
  */
 
-import { PiSessionChannel, type PiPermission, type PiSessionSnapshot, type PiTurnInput } from "../main/pi-session.js";
+import { PiSessionChannel, type PiPermission, type PiSessionSnapshot, type PiTurnInput, type PiModelSwitchEvent, type PiSessionContextView } from "../main/pi-session.js";
+import { validateProviderProfile, type ProviderProfileRow } from "../main/provider-config.js";
 import {
   buildTaskBranch,
   isTaskDirId,
@@ -213,6 +214,12 @@ export interface HostApprovalListing {
 export class TaskWorkspaceHost {
   private readonly channels = new Map<string, PiSessionChannel>();
   private lockOwner: string | null = null;
+  /**
+   * Redacted provider catalog ([PiDock 11] #9): ids/names/protocols/model
+   * declarations pushed by main. Never carries an auth reference: the Host
+   * validates selections against it while credentials stay in the app layer.
+   */
+  private catalog: ProviderProfileRow[] = [];
 
   constructor(
     readonly taskId: string,
@@ -578,13 +585,18 @@ export class TaskWorkspaceHost {
     options?: { providerId?: string; model?: string; credentialRef?: string; permission?: PiPermission },
   ): PiSessionChannel {
     const existing = this.channels.get(sessionId);
-    if (existing) return existing;
+    if (existing) {
+      existing.setProviderCatalog(this.catalog);
+      return existing;
+    }
     const saved = this.store.readSession(this.taskDir, sessionId);
     if (saved) {
       if (saved.taskId !== this.taskId) {
         throw new Error("task-unknown: snapshot names a different task; refusing to continue with it");
       }
-      const restored = PiSessionChannel.restore(saved, this.taskDir);
+      // Restore with the current catalog: a configuration that is gone reports
+      // unavailable through `contextView()` instead of rerouting the session.
+      const restored = PiSessionChannel.restore(saved, this.taskDir, this.catalog);
       this.channels.set(sessionId, restored);
       return restored;
     }
@@ -592,14 +604,111 @@ export class TaskWorkspaceHost {
       taskId: this.taskId,
       sessionId,
       taskDir: this.taskDir,
-      providerId: options?.providerId ?? "provider-local",
-      model: options?.model ?? "pidock-default",
+      providerId: options?.providerId ?? this.defaultProviderId(),
+      model: options?.model ?? this.defaultModelId(),
       credentialRef: options?.credentialRef,
       permission: options?.permission,
+      catalog: this.catalog,
     });
     this.channels.set(sessionId, channel);
     this.store.writeSession(this.taskDir, channel.snapshot());
     return channel;
+  }
+
+  private defaultProviderId(): string {
+    return this.catalog[0]?.id ?? "provider-local";
+  }
+
+  private defaultModelId(): string {
+    return this.catalog[0]?.models[0]?.id ?? "pidock-default";
+  }
+
+  /**
+   * Replace the redacted provider catalog. Every entry is validated with the
+   * same rules as the profile form, so a malformed catalog (or one carrying an
+   * auth *value* instead of a reference) fails closed instead of entering
+   * session resolution.
+   */
+  setProviderCatalog(profiles: readonly unknown[]): ProviderProfileRow[] {
+    const validated: ProviderProfileRow[] = [];
+    for (const entry of profiles) {
+      const result = validateProviderProfile(entry);
+      if (!result.ok) {
+        throw new Error(`invalid-payload: provider catalog entry rejected (${result.error.code}): ${result.error.message}`);
+      }
+      if (result.profile.id.length === 0) {
+        throw new Error("invalid-payload: provider catalog entry needs an id");
+      }
+      validated.push(result.profile);
+    }
+    this.catalog = validated;
+    for (const channel of this.channels.values()) channel.setProviderCatalog(validated);
+    return validated.map((profile) => ({ ...profile, models: profile.models.map((model) => ({ ...model })) }));
+  }
+
+  providerCatalog(): ProviderProfileRow[] {
+    return this.catalog.map((profile) => ({ ...profile, models: profile.models.map((model) => ({ ...model })) }));
+  }
+
+  /**
+   * Switch one session's provider/model ([PiDock 11] #9). Busy rounds/tools and
+   * an over-limit/unknown occupancy refuse before any state changes, so a
+   * refusal leaves the original model, history and draft untouched; history
+   * keeps each call's own attribution and the switch itself is logged.
+   */
+  setSessionModel(input: {
+    sessionId: string;
+    providerId: string;
+    model: string;
+    reason?: PiModelSwitchEvent["reason"];
+    catalog?: readonly unknown[];
+  }): { context: PiSessionContextView; switchEvent: PiModelSwitchEvent } {
+    if (input.catalog !== undefined) this.setProviderCatalog(input.catalog);
+    const channel = this.openSession(input.sessionId);
+    const allowed = channel.canSwitchModel({ providerId: input.providerId, model: input.model });
+    if (!allowed.ok) {
+      const { code, message } = allowed.refusal;
+      throw new Error(`${code}: ${message}`);
+    }
+    const switchEvent = channel.applyModelSwitch({
+      providerId: input.providerId,
+      model: input.model,
+      reason: input.reason ?? "human-switch",
+    });
+    this.store.writeSession(this.taskDir, channel.snapshot());
+    return { context: channel.contextView(), switchEvent };
+  }
+
+  /** Session reasoning level; an undeclared/cleared tier fails closed. */
+  setSessionThinking(input: { sessionId: string; level: string; catalog?: readonly unknown[] }): PiSessionContextView {
+    if (input.catalog !== undefined) this.setProviderCatalog(input.catalog);
+    const channel = this.openSession(input.sessionId);
+    channel.setThinkingLevel(input.level);
+    this.store.writeSession(this.taskDir, channel.snapshot());
+    return channel.contextView();
+  }
+
+  /** Context compaction: occupancy becomes a pending estimate, cumulative tokens stay. */
+  compactSession(input: { sessionId: string; catalog?: readonly unknown[] }): PiSessionContextView {
+    if (input.catalog !== undefined) this.setProviderCatalog(input.catalog);
+    const channel = this.openSession(input.sessionId);
+    channel.compactContext();
+    this.store.writeSession(this.taskDir, channel.snapshot());
+    return channel.contextView();
+  }
+
+  /** Provider/model identity, occupancy, tokens and reasoning readout for one session. */
+  sessionContext(input: { sessionId: string; catalog?: readonly unknown[] }): PiSessionContextView {
+    if (input.catalog !== undefined) this.setProviderCatalog(input.catalog);
+    return this.openSession(input.sessionId).contextView();
+  }
+
+  /** Record a context reading for the switch gate (tests/turn integration). */
+  recordSessionContext(input: { sessionId: string; used: number; source: "actual" | "estimated" | "pending" | "unknown" }): PiSessionContextView {
+    const channel = this.openSession(input.sessionId);
+    channel.recordContextUsage({ used: input.used, source: input.source });
+    this.store.writeSession(this.taskDir, channel.snapshot());
+    return channel.contextView();
   }
 
   sendMessage(

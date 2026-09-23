@@ -22,6 +22,17 @@
  */
 
 import { BROWSER_TOOL_ACTIONS } from "./browser-rules.js";
+import {
+  evaluateModelSwitch,
+  evaluateThinkingSelection,
+  resolveModelDisplayName,
+  resolveProviderAvailability,
+  resolveSessionThinking,
+  type ProviderAvailability,
+  type ProviderProfileRow,
+  type SwitchRefusal,
+  type ThinkingCatalog,
+} from "./provider-config.js";
 
 export type PiPermission = "read" | "default" | "auto";
 
@@ -85,6 +96,57 @@ export interface PiSessionDraft {
   skillSource?: string;
 }
 
+/**
+ * How current the session's context occupancy is ([PiDock 11] #9). `actual` is
+ * a measured value, `estimated` an estimate, `pending` the window where the
+ * occupancy is being recomputed (a compaction or a running turn) and
+ * `unknown` no usable value. Only `actual`/`estimated` may be compared against
+ * a model limit; `pending`/`unknown` are never treated as a zero pass.
+ */
+export type PiContextSource = "actual" | "estimated" | "pending" | "unknown";
+
+/** Persisted context-usage state of one session. */
+export interface PiSessionContext {
+  /** Window of the currently selected model in k Tokens; `0` = unknown. */
+  window: number;
+  /** Occupancy in k Tokens as last reported. */
+  used: number;
+  source: PiContextSource;
+}
+
+/**
+ * One recorded model switch. History keeps its own per-call attribution; this
+ * event records that the *following* turns use another provider/model, plus any
+ * reasoning preference the switch dropped.
+ */
+export interface PiModelSwitchEvent {
+  at: string;
+  from: { providerId: string; model: string } | null;
+  to: { providerId: string; model: string };
+  /** `human-switch` = the user picked; `agent-switch` = an agent tool request. */
+  reason: "human-switch" | "agent-switch";
+  /** Stale reasoning preference dropped by this switch, when any. */
+  droppedThinking?: string;
+}
+
+/** Identity + context state readout for the conversation header / popover. */
+export interface PiSessionContextView {
+  providerId: string;
+  providerName: string | null;
+  model: string;
+  modelName: string | null;
+  availability: ProviderAvailability;
+  window: number;
+  used: number;
+  source: PiContextSource;
+  /** Cumulative tokens consumed by this session's calls (never reset by a switch/compaction). */
+  tokens: number;
+  /** Occupancy ratio; `null` while the window is unknown. */
+  percent: number | null;
+  thinking: string;
+  thinkingCatalog: ThinkingCatalog;
+}
+
 export interface PiSessionSnapshot {
   taskId: string;
   sessionId: string;
@@ -100,6 +162,12 @@ export interface PiSessionSnapshot {
   updatedAt: string;
   /** Unsent draft; absent when the composer is empty. Never auto-sent. */
   draft?: PiSessionDraft;
+  /** Context occupancy/window of the selected model ([PiDock 11] #9). */
+  context?: PiSessionContext;
+  /** Session reasoning-level preference; invalidated when the model does not declare it. */
+  thinking?: string;
+  /** Recorded model switches (the switch event log). */
+  switches?: PiModelSwitchEvent[];
 }
 
 /**
@@ -187,6 +255,18 @@ export interface PiSessionOptions {
    * secret itself. Real-model wiring is out of scope: no live calls here.
    */
   credentialRef?: string;
+  /**
+   * Redacted provider catalog ([PiDock 11] #9): ids/names/protocols/model
+   * declarations only, never an auth reference. When present, the selection is
+   * resolved against it (existence, enabled state, window) instead of the
+   * legacy `KNOWN_PI_PROVIDERS` fallback, so a restored session whose
+   * configuration is gone reports unavailable instead of rerouting.
+   */
+  catalog?: readonly ProviderProfileRow[];
+  /** Persisted context state (restore path); defaults to unknown/zero. */
+  context?: PiSessionContext;
+  /** Persisted session reasoning level (restore path). */
+  thinking?: string;
 }
 
 export interface PiProviderProfile {
@@ -212,7 +292,19 @@ const KNOWN_PI_PROVIDERS: readonly PiProviderProfile[] = [
 export function resolveProviderSelection(
   providerId: string,
   model: string,
+  catalog?: readonly ProviderProfileRow[],
 ): { providerId: string; model: string } {
+  // [PiDock 11] #9: with a catalog the selection is strict — an id the catalog
+  // does not know is refused instead of silently rerouting to the legacy local
+  // provider (a deleted/renamed configuration must be reported, not replaced).
+  if (catalog !== undefined && catalog.length > 0) {
+    const profile = catalog.find((item) => item.id === providerId);
+    if (!profile) throw new Error(`unknown-provider: ${providerId}`);
+    if (!profile.models.some((item) => item.id === model)) {
+      throw new Error(`unknown model: ${model} for provider ${providerId}`);
+    }
+    return { providerId, model };
+  }
   const provider = KNOWN_PI_PROVIDERS.find((item) => item.id === providerId);
   if (!provider) return { providerId: "provider-local", model: "pidock-default" };
   if (!provider.models.includes(model)) {
@@ -351,6 +443,11 @@ export class PiSessionChannel {
   private writeLock: { ownerCallId: string; held: boolean } | null = null;
   private messageSequence = 0;
   private draft?: PiSessionDraft;
+  /** Redacted provider catalog; empty = legacy fallback behaviour. */
+  private catalog: readonly ProviderProfileRow[];
+  private context: PiSessionContext;
+  private thinkingLevel?: string;
+  private switches: PiModelSwitchEvent[] = [];
 
   constructor(options: PiSessionOptions) {
     if (options.taskId.trim().length === 0) throw new Error("taskId must be non-empty");
@@ -361,13 +458,20 @@ export class PiSessionChannel {
     this.taskDir = options.taskDir;
     if (options.providerId.trim().length === 0) throw new Error("providerId must be non-empty");
     if (options.model.trim().length === 0) throw new Error("model must be non-empty");
-    const selected = resolveProviderSelection(options.providerId, options.model);
+    const hasCatalog = options.catalog !== undefined;
+    const selected = hasCatalog ? { providerId: options.providerId, model: options.model } : resolveProviderSelection(options.providerId, options.model);
     const credentialRef = options.credentialRef?.trim();
     if (options.credentialRef !== undefined && (credentialRef?.length ?? 0) === 0) {
       throw new Error("credentialRef must be a non-empty reference when provided");
     }
     this.providerId = selected.providerId;
     this.model = selected.model;
+    this.catalog = options.catalog ?? [];
+    // A brand-new conversation has a known-empty context (measured zero); a
+    // restored snapshot without a persisted reading is `pending` (待更新), which
+    // the switch gate refuses rather than treating as a zero pass.
+    this.context = options.context ?? { window: this.declaredWindow(), used: 0, source: "actual" };
+    this.thinkingLevel = options.thinking;
     this.credentialRef = credentialRef === undefined || credentialRef.length === 0 ? undefined : credentialRef;
     this.permission = options.permission ?? "default";
     this.now = options.now ?? (() => new Date().toISOString());
@@ -401,6 +505,176 @@ export class PiSessionChannel {
 
   get configuredCredentialRef(): string | undefined {
     return this.credentialRef;
+  }
+
+  /** Model row the current selection names in the catalog, when the catalog knows it. */
+  private currentModelRow(): ProviderProfileRow["models"][number] | undefined {
+    const profile = this.catalog.find((item) => item.id === this.providerId);
+    return profile?.models.find((item) => item.id === this.model);
+  }
+
+  /** Declared window (k Tokens) of the current model; `0` = unknown/fail-closed. */
+  private declaredWindow(): number {
+    return this.currentModelRow()?.contextWindow ?? 0;
+  }
+
+  private availabilityOf(): ProviderAvailability {
+    if (this.catalog.length === 0) return resolveProviderAvailability({ exists: true, enabled: true });
+    const profile = this.catalog.find((item) => item.id === this.providerId);
+    if (!profile) return resolveProviderAvailability({ exists: false });
+    return resolveProviderAvailability({
+      exists: true,
+      enabled: profile.enabled,
+      model: this.model,
+      models: profile.models.map((item) => item.id),
+    });
+  }
+
+  /** Replace the redacted provider catalog this session resolves against. */
+  setProviderCatalog(catalog: readonly ProviderProfileRow[]): void {
+    this.catalog = catalog;
+    // Follow the newly declared window while no turn reported a real one yet.
+    const declared = this.declaredWindow();
+    if (declared > 0 && this.context.window !== declared) {
+      this.context = { ...this.context, window: declared };
+    }
+  }
+
+  get providerCatalog(): readonly ProviderProfileRow[] {
+    return this.catalog;
+  }
+
+  /** Occupancy state used by the switch gate (never coerced to a zero pass). */
+  contextOccupancy(): PiSessionContext {
+    return { ...this.context };
+  }
+
+  /** Record a context reading for the selected model. */
+  recordContextUsage(input: { used: number; source: PiContextSource }): PiSessionContext {
+    if (!Number.isFinite(input.used) || input.used < 0) throw new Error("invalid-payload: context usage must be non-negative");
+    this.context = { window: this.context.window, used: input.used, source: input.source };
+    return { ...this.context };
+  }
+
+  /** Cumulative tokens of this session's calls; never reset by a switch/compaction. */
+  consumedTokens(): number {
+    return this.calls.reduce((sum, call) => sum + (call.usage ? call.usage.input + call.usage.output : 0), 0);
+  }
+
+  /** True while a switch must wait: a turn/tool round or a pending confirmation. */
+  private busyLabel(): string | null {
+    if (this.state === "running") return "回合或工具执行中";
+    if (this.state === "approval") return "等待确认中";
+    return null;
+  }
+
+  /**
+   * Readout for the conversation header / context popover: identity, declared
+   * window, occupancy + source, cumulative tokens and the effective reasoning
+   * level (with the catalog it came from).
+   */
+  contextView(): PiSessionContextView {
+    const model = this.currentModelRow();
+    const resolved = resolveSessionThinking({ thinking: model?.thinking }, this.thinkingLevel);
+    const window = this.context.window;
+    return {
+      providerId: this.providerId,
+      providerName: this.catalog.find((item) => item.id === this.providerId)?.name ?? null,
+      model: this.model,
+      modelName: model ? resolveModelDisplayName(model) : null,
+      availability: this.availabilityOf(),
+      window,
+      used: this.context.used,
+      source: this.context.source,
+      tokens: this.consumedTokens(),
+      percent: window > 0 ? (this.context.used * 100) / window : null,
+      thinking: resolved.level,
+      thinkingCatalog: resolved.catalog,
+    };
+  }
+
+  get modelSwitchEvents(): PiModelSwitchEvent[] {
+    return this.switches.map((event) => ({ ...event, from: event.from ? { ...event.from } : null, to: { ...event.to } }));
+  }
+
+  /**
+   * Gate a model switch before any state changes. Busy rounds/tools/compactions
+   * refuse first, then availability, then the strict context bound: an over-limit
+   * or unknown/pending occupancy refuses, and a refusal leaves the original
+   * model, history and draft untouched (no auto-compaction, no truncation).
+   */
+  canSwitchModel(target: { providerId: string; model: string }): { ok: true } | { ok: false; refusal: SwitchRefusal } {
+    const profile = this.catalog.find((item) => item.id === target.providerId);
+    const model = profile?.models.find((item) => item.id === target.model);
+    const decision = evaluateModelSwitch({
+      running: this.busyLabel() !== null,
+      ...(this.busyLabel() !== null ? { busyLabel: this.busyLabel() as string } : {}),
+      target:
+        profile === undefined || model === undefined
+          ? null
+          : {
+              providerId: profile.id,
+              modelId: model.id,
+              contextWindow: model.contextWindow,
+              enabled: profile.enabled,
+              exists: true,
+            },
+      occupancy: this.context,
+    });
+    return decision.ok ? { ok: true } : { ok: false, refusal: decision.error };
+  }
+
+  /**
+   * Apply a switch that `canSwitchModel` (or the caller's re-check) allowed.
+   * History attribution stays on the calls; this records the switch event and
+   * drops a reasoning preference the target model does not declare.
+   */
+  applyModelSwitch(input: { providerId: string; model: string; reason: PiModelSwitchEvent["reason"] }): PiModelSwitchEvent {
+    const profile = this.catalog.find((item) => item.id === input.providerId);
+    const target = profile?.models.find((item) => item.id === input.model);
+    if (target === undefined) throw new Error(`unknown model: ${input.model} for provider ${input.providerId}`);
+    const from = { providerId: this.providerId, model: this.model };
+    const resolvedThinking = resolveSessionThinking({ thinking: target.thinking }, this.thinkingLevel);
+    this.providerId = input.providerId;
+    this.model = input.model;
+    this.context = { window: target.contextWindow, used: this.context.used, source: this.context.source };
+    this.thinkingLevel = resolvedThinking.source === "session" ? resolvedThinking.level : undefined;
+    const event: PiModelSwitchEvent = {
+      at: this.now(),
+      from,
+      to: { providerId: input.providerId, model: input.model },
+      reason: input.reason,
+      ...(resolvedThinking.stale !== undefined ? { droppedThinking: resolvedThinking.stale } : {}),
+    };
+    this.switches.push(event);
+    return { ...event, from: { ...from }, to: { ...event.to } };
+  }
+
+  /**
+   * Session reasoning level. Fail-closed: an undeclared tier, a cleared picker
+   * for a model that cannot turn reasoning off, an unknown catalog and an
+   * unsupported model are all refused.
+   */
+  setThinkingLevel(level: string): { level: string; catalog: ThinkingCatalog } {
+    const decision = evaluateThinkingSelection({ thinking: this.currentModelRow()?.thinking, level });
+    if (!decision.ok) throw new Error(`${decision.error.code}: ${decision.error.message}`);
+    this.thinkingLevel = decision.level;
+    const resolved = resolveSessionThinking({ thinking: this.currentModelRow()?.thinking }, decision.level);
+    return { level: decision.level, catalog: resolved.catalog };
+  }
+
+  get currentThinkingLevel(): string | undefined {
+    return this.thinkingLevel;
+  }
+
+  /**
+   * Context compaction: the current occupancy is replaced by a smaller estimate
+   * and marked `pending`, cumulative tokens stay untouched, and no history is
+   * dropped. The value is an estimate until the next real reading.
+   */
+  compactContext(): PiSessionContext {
+    this.context = { window: this.context.window, used: Math.min(this.context.used, 9.2), source: "pending" };
+    return { ...this.context };
   }
 
   /** Shared task write lock: held by at most one call until its tools settle. */
@@ -720,6 +994,12 @@ export class PiSessionChannel {
       // refs/skill source) round-trips with the session and is never
       // auto-sent on restore.
       ...(this.draft !== undefined ? { draft: { ...this.draft } } : {}),
+      // [PiDock 11] #9: context state, reasoning preference and the switch
+      // event log persist with the session so a reopen reports the same
+      // identity/occupancy instead of deriving one.
+      context: { ...this.context },
+      ...(this.thinkingLevel !== undefined ? { thinking: this.thinkingLevel } : {}),
+      switches: this.switches.map((event) => ({ ...event, from: event.from ? { ...event.from } : null, to: { ...event.to } })),
     };
     if (this.credentialRef !== undefined) {
       snapshot.credentialRef = this.credentialRef;
@@ -732,7 +1012,7 @@ export class PiSessionChannel {
    * Pending approvals never auto-replay: reopening expires them so the user
    * must confirm again. `createdAt` is preserved from the saved snapshot.
    */
-  static restore(snapshot: PiSessionSnapshot, taskDir: string): PiSessionChannel {
+  static restore(snapshot: PiSessionSnapshot, taskDir: string, catalog?: readonly ProviderProfileRow[]): PiSessionChannel {
     const channel = new PiSessionChannel({
       taskId: snapshot.taskId,
       sessionId: snapshot.sessionId,
@@ -741,6 +1021,11 @@ export class PiSessionChannel {
       model: snapshot.model,
       permission: snapshot.permission,
       credentialRef: snapshot.credentialRef,
+      catalog,
+      // Older snapshots have no context/thinking: restore as `pending`
+      // occupancy (never as a zero pass) and keep the persisted preference.
+      context: snapshot.context ?? { window: 0, used: 0, source: "pending" },
+      ...(snapshot.thinking !== undefined ? { thinking: snapshot.thinking } : {}),
     });
     // S6 batch 2 adds `origin`/structured refs to messages and a `draft`:
     // older snapshots without them restore with a derived origin (user =
@@ -750,6 +1035,11 @@ export class PiSessionChannel {
       origin: message.origin ?? (message.role === "user" ? ("human" as const) : ("agent" as const)),
     }));
     channel.draft = snapshot.draft ? { ...snapshot.draft } : undefined;
+    channel.switches = (snapshot.switches ?? []).map((event) => ({
+      ...event,
+      from: event.from ? { ...event.from } : null,
+      to: { ...event.to },
+    }));
     channel.calls = snapshot.calls.map((call) => {
       // S6 batch 1 adds structured `usage`; older snapshots without it
       // restore as `unreported` so usage summaries never read garbage.
