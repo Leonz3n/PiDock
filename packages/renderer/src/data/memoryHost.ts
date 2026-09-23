@@ -27,7 +27,9 @@ import type {
   ScheduleTemplate,
   ScheduledRun,
   Service,
+  ServiceFailureView,
   ServiceRecipe,
+  ServiceRunView,
   Session,
   Subagent,
   Task,
@@ -216,28 +218,112 @@ function makeUsage(total: number): UsageRecord[] {
   return records;
 }
 
-function makeServices(taskId: string, environment: string, running: boolean) {
-  const seeds: [string, string | undefined, number | undefined, "local" | "remote"][] = [
-    ["saas-web", "front-monorepo", 5173, "local"],
-    ["saas-bff", "front-monorepo", 3001, "local"],
-    ["invoice-service", "invoice-service", 9001, "local"],
-    ["shipment-service", "shipment-service", 9002, "local"],
-    ["account-service", undefined, undefined, "remote"],
-    ["Redis / PostgreSQL", undefined, undefined, "remote"],
+/**
+ * [PiDock 05] (#10) seed services for one task. Ports are allocated against
+ * the tasks that already exist, so two tasks running the same service name
+ * get different local ports (box 3) — the second `saas-web` starts at 5174
+ * instead of silently sharing 5173 with the first task's instance.
+ *
+ * Dependencies are seeded as data: `call` for the invoker → callee edges,
+ * `prestart` for the migration step (a `prepare` unit that must finish
+ * first), and a bidirectional pair (invoice ↔ shipment) that the start-group
+ * projection merges into one listener group. Run records and the failure
+ * fixture are simulated (this whole adapter is fixture data); they carry
+ * `simulated: true` so the panel can label them.
+ */
+function makeServices(taskId: string, environment: string, running: boolean, existing: readonly Task[]) {
+  const seeds: {
+    name: string;
+    repo?: string;
+    preferred?: number;
+    mode: "local" | "remote";
+    runType: "long-lived" | "prepare" | "one-shot";
+    dependencies: { to: string; kind: "call" | "prestart" }[];
+  }[] = [
+    { name: "saas-web", repo: "front-monorepo", preferred: 5173, mode: "local", runType: "long-lived", dependencies: [{ to: "saas-bff", kind: "call" }] },
+    {
+      name: "saas-bff",
+      repo: "front-monorepo",
+      preferred: 3001,
+      mode: "local",
+      runType: "long-lived",
+      dependencies: [
+        { to: "db-migrate", kind: "prestart" },
+        { to: "invoice-service", kind: "call" },
+        { to: "account-service", kind: "call" },
+      ],
+    },
+    { name: "invoice-service", repo: "invoice-service", preferred: 9001, mode: "local", runType: "long-lived", dependencies: [{ to: "shipment-service", kind: "call" }] },
+    { name: "shipment-service", repo: "shipment-service", preferred: 9002, mode: "local", runType: "long-lived", dependencies: [{ to: "invoice-service", kind: "call" }] },
+    { name: "db-migrate", repo: "invoice-service", mode: "local", runType: "prepare", dependencies: [] },
+    { name: "account-service", mode: "remote", runType: "long-lived", dependencies: [] },
+    { name: "Redis / PostgreSQL", mode: "remote", runType: "long-lived", dependencies: [] },
   ];
-  return seeds.map(([name, repo, port, mode], index) => ({
-    id: `${taskId}-service-${index + 1}`,
-    name,
-    repo,
-    port,
-    mode,
-    running: mode === "local" && running,
-    configSource: `共享模板 · ${environment}`,
-    templateVersion: "",
-    // Recomputed from the environment layers on every projection so an edited
-    // layer (shared / private / task) is what the service table reports.
-    resolved: [] as ResolvedConfigEntry[],
-  }));
+  // Dependency seeds name services readably; the stored `to` is the unit id
+  // (`<repo>:<name>`) so it matches `unitId` and the shell's dependency shape.
+  const unitIdByName = new Map(seeds.map((seed) => [seed.name, `${seed.repo ?? "task"}:${seed.name}`]));
+  const used = new Set<number>();
+  for (const task of existing) {
+    for (const service of task.services) if (service.port !== undefined) used.add(service.port);
+  }
+  return seeds.map((seed, index) => {
+    let port = seed.preferred;
+    if (port !== undefined) {
+      while (used.has(port)) port += 1;
+      used.add(port);
+    }
+    const local = seed.mode === "local";
+    const isRunning = local && running && seed.runType === "long-lived";
+    return {
+      id: `${taskId}-service-${index + 1}`,
+      unitId: `${seed.repo ?? "task"}:${seed.name}`,
+      name: seed.name,
+      repo: seed.repo,
+      port,
+      mode: seed.mode,
+      running: isRunning,
+      runType: seed.runType,
+      dependencies: seed.dependencies.map((dependency) => ({
+        to: unitIdByName.get(dependency.to) ?? dependency.to,
+        kind: dependency.kind,
+      })),
+      configSource: `共享模板 · ${environment}`,
+      templateVersion: "",
+      // Recomputed from the environment layers on every projection so an edited
+      // layer (shared / private / task) is what the service table reports.
+      resolved: [] as ResolvedConfigEntry[],
+      ...(isRunning ? { runRecord: simulatedRunRecord(taskId, seed.name, port, index) } : {}),
+    };
+  });
+}
+
+/** Attach a locatable failure fixture to one seeded service (box 5 demo). */
+function withServiceFailure(services: Service[], name: string, failure: ServiceFailureView): Service[] {
+  return services.map((service) => (service.name === name ? { ...service, failure } : service));
+}
+
+/** One simulated run record so the freshness/label rules are visible in the fixture. */
+function simulatedRunRecord(taskId: string, serviceName: string, port: number | undefined, index: number): ServiceRunView {
+  const commit = "9acb5b6f";
+  const variants: { codeState: ServiceRunView["codeState"]; buildFreshness: ServiceRunView["buildFreshness"]; codeCommit?: string }[] = [
+    { codeState: "committed-clean", buildFreshness: "fresh", codeCommit: commit },
+    { codeState: "uncommitted", buildFreshness: "uncommitted-code", codeCommit: commit },
+    { codeState: "committed-clean", buildFreshness: "stale-build", codeCommit: commit },
+  ];
+  const variant = variants[index % variants.length] as (typeof variants)[number];
+  return {
+    runId: `run-${index + 1}`,
+    templateVersion: "v12",
+    codeState: variant.codeState,
+    ...(variant.codeCommit !== undefined ? { codeCommit: variant.codeCommit } : {}),
+    buildFreshness: variant.buildFreshness,
+    ports: port === undefined ? [] : [port],
+    processIdentity: { owner: "human", pid: 4100 + index, startedAt: "2026-09-22T09:30:00+08:00" },
+    logRef: `/tasks/${taskId}/services/${serviceName}/run-${index + 1}.log`,
+    startedAt: "2026-09-22T09:30:00+08:00",
+    verifications: [],
+    simulated: true,
+  };
 }
 
 function seedProjects(): Project[] {
@@ -454,8 +540,9 @@ function releaseSubagents(): Record<string, Subagent[]> {
 function seedTasks(): Task[] {
   const sessions = seedSessions();
   const atlasDocs = toTaskDirectory({ id: "atlas-docs", name: "Atlas 设计资料", path: "/Users/leonz3n/Workspace/atlas-docs" });
-  const tasks: Task[] = [
-    {
+  // Built in order so each task's ports are allocated against the previous
+  // ones: two tasks never share a local port for the same service name.
+  const releaseTask: Task = {
       id: "release",
       projectId: "atlas",
       name: "发布前检查",
@@ -469,14 +556,18 @@ function seedTasks(): Task[] {
       configOverrides: [{ key: "LOCAL_PORT", value: "5173", secret: false }],
       archived: false,
       permission: "default",
-      services: makeServices("release", "testing", true),
+      services: makeServices("release", "testing", true, []),
+      externalResources: [
+        { resourceId: "res-invoice-events", name: "invoice-events", kind: "queue" },
+        { resourceId: "res-dtm-callback", name: "dtm-callback", kind: "dtm-callback" },
+      ],
       sessions: sessions.release,
       activeSessionId: "main",
       unread: 2,
       subagentsBySession: releaseSubagents(),
       ...taskAssets(),
-    },
-    {
+    };
+  const checkoutTask: Task = {
       id: "checkout",
       projectId: "atlas",
       name: "结账页无障碍",
@@ -490,13 +581,21 @@ function seedTasks(): Task[] {
       configOverrides: [],
       archived: false,
       permission: "default",
-      services: makeServices("checkout", "testing", false),
+      // Simulated locatable failure: the second task cannot bind the port its
+      // fixture asked for, so the panel shows the code + retry hint instead of
+      // a generic error.
+      services: withServiceFailure(makeServices("checkout", "testing", false, [releaseTask]), "invoice-service", {
+        code: "port-taken",
+        message: "端口 9002 已被任务实例 release/invoice-service@9002 占用",
+        hint: "运行管理会重新分配端口并更新受影响的消费者",
+      }),
+      externalResources: [{ resourceId: "res-order-events", name: "order-events", kind: "queue" }],
       sessions: sessions.checkout,
       activeSessionId: "main",
       unread: 0,
       ...taskAssets(),
-    },
-    {
+    };
+  const legacyAuthTask: Task = {
       id: "legacy-auth",
       projectId: "atlas",
       name: "旧登录重构",
@@ -510,14 +609,14 @@ function seedTasks(): Task[] {
       configOverrides: [],
       archived: true,
       permission: "read",
-      services: makeServices("legacy-auth", "dev", false),
+      services: makeServices("legacy-auth", "dev", false, [releaseTask, checkoutTask]),
       sessions: sessions["legacy-auth"],
       activeSessionId: "main",
       unread: 0,
       ...taskAssets(),
       cleanupAvailableAt: "2026-09-18T10:00:00+08:00",
-    },
-    {
+    };
+  const latencyTask: Task = {
       id: "latency",
       projectId: "orbit",
       name: "排查延迟峰值",
@@ -531,13 +630,14 @@ function seedTasks(): Task[] {
       configOverrides: [],
       archived: false,
       permission: "default",
-      services: makeServices("latency", "orbit-testing", false),
+      services: makeServices("latency", "orbit-testing", false, [releaseTask, checkoutTask, legacyAuthTask]),
+      externalResources: [{ resourceId: "res-shared-pg", name: "shared-pg", kind: "database" }],
       sessions: sessions.latency,
       activeSessionId: "main",
       unread: 1,
       ...taskAssets(),
-    },
-    {
+    };
+  const designDocsTask: Task = {
       // Ordinary-directory-only task: no Git worktree, so the task page has no
       // branch / remote / worktree / diff / commit entry points.
       id: "design-docs",
@@ -560,9 +660,8 @@ function seedTasks(): Task[] {
       files: [],
       browserPages: [],
       terminalSeed: [],
-    },
-  ];
-  return tasks;
+    };
+  return [releaseTask, checkoutTask, legacyAuthTask, latencyTask, designDocsTask];
 }
 
 /** Dense scheduled-run history so the execution log is a real long-list scenario. */
@@ -1220,7 +1319,15 @@ class MemoryHost implements HostAdapter {
     const task = this.task(taskId);
     if (!task) return;
     task.archived = true;
-    task.services = task.services.map((service) => ({ ...service, running: false }));
+    // Archiving stops this task's own services only; the run record keeps its
+    // code/build state and gets the exit reason ([PiDock 05] #10 box 8).
+    task.services = task.services.map((service) => ({
+      ...service,
+      running: false,
+      ...(service.runRecord && service.runRecord.endedAt === undefined
+        ? { runRecord: { ...service.runRecord, endedAt: new Date().toISOString(), exitReason: "task-archived" } }
+        : {}),
+    }));
     task.sessions = task.sessions.map((session) =>
       session.runState === "approval" ? { ...session, runState: "expired" as const } : session,
     );
@@ -1298,7 +1405,23 @@ class MemoryHost implements HostAdapter {
       throw new Error("只读会话禁止服务启停，请先调整会话权限");
     }
     const service = task?.services.find((item) => item.id === serviceId);
-    if (service) service.running = running;
+    if (!service) return;
+    service.running = running;
+    if (running && service.mode === "local") {
+      // A start clears the previous failure fixture and records a fresh
+      // (simulated) run so the panel shows code/build state, ports and the
+      // per-instance log path together ([PiDock 05] #10 box 6).
+      service.failure = undefined;
+      service.runRecord = {
+        ...simulatedRunRecord(taskId, service.name, service.port, task?.services.indexOf(service) ?? 0),
+        runId: `${service.id}-run-1`,
+        templateVersion: task?.templateVersion ?? "",
+        startedAt: new Date().toISOString(),
+        processIdentity: { owner: "human", pid: 5200 + (task?.services.indexOf(service) ?? 0), startedAt: new Date().toISOString() },
+      };
+    } else if (service.runRecord) {
+      service.runRecord = { ...service.runRecord, endedAt: new Date().toISOString(), exitReason: "user-request" };
+    }
   }
 
   async setServiceMode(taskId: string, serviceId: string, mode: ServiceMode) {
@@ -1310,6 +1433,11 @@ class MemoryHost implements HostAdapter {
     service.mode = mode;
     service.running = false;
     service.configSource = mode === "local" ? service.configSource : "远程依赖 · 未在本任务启动";
+    // Switching the destination ends the run: the record keeps its code/build
+    // state and the exit reason so the moved consumer is traceable.
+    if (service.runRecord) {
+      service.runRecord = { ...service.runRecord, endedAt: new Date().toISOString(), exitReason: "dependency-target-changed" };
+    }
   }
 
   async getSchedules() {
@@ -1901,7 +2029,7 @@ class MemoryHost implements HostAdapter {
     // A task that only had directories gains services when a repository is added.
     if (task.repos.length > 0 && task.services.length === 0) {
       const environment = this.environments.find((item) => item.id === task.environmentId);
-      task.services = makeServices(task.id, environment?.name ?? "", false);
+      task.services = makeServices(task.id, environment?.name ?? "", false, this.tasks);
     }
   }
 
@@ -1940,7 +2068,7 @@ class MemoryHost implements HostAdapter {
       configOverrides: [],
       archived: false,
       permission: schedule?.permission ?? "default",
-      services: repos.length > 0 ? makeServices(id, environment?.name ?? "", false) : [],
+      services: repos.length > 0 ? makeServices(id, environment?.name ?? "", false, this.tasks) : [],
       // A scheduled task starts with one placeholder session (the prototype's
       // 「等待首次执行」); each trigger later creates its own session.
       sessions: [baseSession("main", scheduled ? "等待首次执行" : "实现与验证")],

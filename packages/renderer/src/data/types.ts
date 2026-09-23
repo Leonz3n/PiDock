@@ -141,6 +141,48 @@ export type Session = {
   switchEvents?: ModelSwitchEvent[];
 };
 
+/** [PiDock 05] (#10) run type of a service unit, mirroring the shell's `ServiceRunType`. */
+export type ServiceRunType = "long-lived" | "prepare" | "one-shot";
+
+/** [PiDock 05] (#10) dependency kind: a runtime call vs a start precondition. */
+export type ServiceDependencyKind = "call" | "prestart";
+
+export type ServiceDependency = { to: string; kind: ServiceDependencyKind };
+
+export type ServiceCodeState = "committed-clean" | "uncommitted" | "unknown";
+
+export type ServiceBuildFreshness = "fresh" | "stale-build" | "uncommitted-code" | "unknown";
+
+/** One recorded run of a service instance ([PiDock 05] #10 box 6). */
+export type ServiceRunView = {
+  runId: string;
+  templateVersion: string;
+  codeState: ServiceCodeState;
+  codeCommit?: string;
+  buildFreshness: ServiceBuildFreshness;
+  ports: number[];
+  processIdentity: { owner: "agent" | "human"; pid: number; startedAt: string };
+  logRef: string;
+  startedAt: string;
+  endedAt?: string;
+  exitReason?: string;
+  verifications: { kind: string; detail: string; ok: boolean }[];
+  /** True for the in-memory fixture adapter; never set by a real Host run. */
+  simulated?: boolean;
+};
+
+/** Locatable failure shown against the offending service ([PiDock 05] #10 box 5). */
+export type ServiceFailureView = { code: string; message: string; hint?: string };
+
+/** An external resource the task uses but does not own ([PiDock 05] #10 box 7). */
+export type ExternalResourceView = {
+  resourceId: string;
+  name: string;
+  kind: "queue" | "dtm-callback" | "database" | "cache" | "object-storage" | "other";
+  /** Set only when per-task isolation is proven; never inferred. */
+  isolatedByTask?: boolean;
+};
+
 export type Service = {
   id: string;
   name: string;
@@ -151,6 +193,12 @@ export type Service = {
   configSource: string;
   templateVersion: string;
   resolved: ResolvedConfigEntry[];
+  /** [PiDock 05] (#10) stable run-unit id and run type; absent on older rows. */
+  unitId?: string;
+  runType?: ServiceRunType;
+  dependencies?: ServiceDependency[];
+  runRecord?: ServiceRunView;
+  failure?: ServiceFailureView;
 };
 
 export type Repository = {
@@ -201,6 +249,8 @@ export type Task = {
   unread: number;
   files: WorkspaceFile[];
   browserPages: BrowserPage[];
+  /** [PiDock 05] (#10) shared external resources the task uses but does not own. */
+  externalResources?: ExternalResourceView[];
   terminalSeed: string[];
   cleanupAvailableAt?: string;
   /** Illustrative child-agent records keyed by session id; view-only. */
