@@ -42,6 +42,10 @@ export type WorkspaceAttributionView = {
   sharedNote?: string;
 };
 
+/**
+ * One directory entry. `path` is root-relative — the Host tree contract — and
+ * is handed back unchanged as the `relative` of the next tree/preview call.
+ */
 export type WorkspaceTreeEntryView = { name: string; path: string; kind: "file" | "dir"; size?: number };
 
 export type WorkspaceTreeView = {
@@ -538,19 +542,15 @@ export function memoryWorkspaceBrowser(
   const relative = request.relative ?? "";
   const prefix = relative.length > 0 ? `${relative}/` : "";
   const inRoot = task.files.filter((file) => file.path.startsWith(`${root.id}/`));
-  const entries: WorkspaceTreeEntryView[] = relative.length === 0
-    ? inRoot.map((file) => ({
-        name: file.path.slice(root.id.length + 1),
-        path: file.path,
-        kind: "file" as const,
-      }))
-    : inRoot
-        .filter((file) => file.path.startsWith(`${root.id}/${prefix}`))
-        .map((file) => ({
-          name: file.path.slice(root.id.length + 1 + prefix.length),
-          path: file.path,
-          kind: "file" as const,
-        }));
+  // Entry paths are root-relative, the same contract the Host tree uses and
+  // the same value `task/filePreview`/`fileTree` take back as `relative`.
+  const entries: WorkspaceTreeEntryView[] = inRoot
+    .filter((file) => file.path.startsWith(`${root.id}/${prefix}`))
+    .map((file) => ({
+      name: file.path.slice(root.id.length + 1 + prefix.length),
+      path: file.path.slice(root.id.length + 1),
+      kind: "file" as const,
+    }));
   const tree: WorkspaceTreeView = { attribution: attributionView, path: relative, entries, truncated: false };
   const file: WorkspaceFile | undefined = inRoot.find((candidate) => candidate.path === `${root.id}/${relative}`);
   const preview: WorkspacePreviewView | undefined =

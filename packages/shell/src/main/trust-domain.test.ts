@@ -164,6 +164,24 @@ describe("validateShellInvocationPayload", () => {
     ).toThrow("payload workspace does not match sender binding");
   });
 
+  it("accepts the #15 file/terminal ops through the shared RPC whitelist", () => {
+    for (const op of [
+      "task/fileRoots",
+      "task/fileTree",
+      "task/filePreview",
+      "task/fileDiff",
+      "task/deliveryInfo",
+      "task/planTerminal",
+      "task/terminalControl",
+      "task/terminalState",
+      "task/terminalHistory",
+    ]) {
+      expect(
+        validateShellInvocationPayload("shell/taskOp", { taskId: "task-a", op, payload: {} }, "workspace-a"),
+      ).toEqual({ workspaceId: "workspace-a" });
+    }
+  });
+
   it("rejects unexpected payload keys", () => {
     expect(() =>
       validateShellInvocationPayload(

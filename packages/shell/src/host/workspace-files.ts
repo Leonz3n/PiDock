@@ -12,6 +12,9 @@
  *   its original target). An unknown root id is refused, never guessed.
  * - A preview/listing is bounded before it is returned; a body larger than the
  *   bound is truncated with a flag instead of being read into the session.
+ * - Every read first checks that the path's *real* location (symlinks
+ *   resolved) stays under the root's own real path, so a link inside a
+ *   worktree cannot point the reader at another task or an out-of-task file.
  * - Every body is masked with the task's private values (`secrets`) using the
  *   shared scrubber, so a credential in a diff cannot leak through this path.
  * - Git runs with a fixed argv (`git diff --no-color [<base>] -- <path>`) in
@@ -20,8 +23,9 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import {
+  MAX_PREVIEW_CHARS,
   boundDiff,
   boundPreview,
   boundTreeEntries,
@@ -37,7 +41,6 @@ import {
   type WorkspaceRoot,
   type WorkspaceTree,
 } from "../main/workspace-files.js";
-import { MAX_PREVIEW_CHARS } from "../main/workspace-files.js";
 import type { TaskDiskRecord } from "./task-store.js";
 import type { TaskStore } from "./task-host.js";
 
@@ -46,10 +49,20 @@ export interface WorkspaceFileReaders {
   listDirectory(path: string): { name: string; kind: "file" | "dir"; size?: number }[];
   readTextFile(path: string): { ok: true; text: string; bytes: number } | { ok: false; error: string };
   runGit(args: readonly string[], cwd: string): { ok: true; stdout: string } | { ok: false; error: string };
+  /**
+   * Resolve symlinks in one existing path; an absent path returns the input.
+   * Containment is checked against these real paths so a link inside a root
+   * cannot point the reader at another task's folder or an out-of-task file.
+   */
+  realPath(path: string): string;
 }
 
 /** Read cap: a file bigger than this is refused rather than loaded. */
 export const MAX_PREVIEW_BYTES = 1_000_000;
+
+function stripTrailingSeparator(path: string): string {
+  return path.replace(/[\\/]+$/, "") || "/";
+}
 
 export const realWorkspaceFileReaders: WorkspaceFileReaders = {
   listDirectory(path) {
@@ -86,6 +99,13 @@ export const realWorkspaceFileReaders: WorkspaceFileReaders = {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return { ok: false, error: `git-failed: ${message}` };
+    }
+  },
+  realPath(path) {
+    try {
+      return realpathSync(path);
+    } catch {
+      return path;
     }
   },
 };
@@ -128,6 +148,8 @@ export class TaskWorkspaceFiles {
   tree(input: { rootId: unknown; relative?: unknown }): { ok: true; tree: WorkspaceTree } | { ok: false; error: string } {
     const target = this.resolve(input);
     if (!target.ok) return { ok: false, error: target.error };
+    const escape = this.rootEscapeError(target.root, target.absolute);
+    if (escape !== undefined) return { ok: false, error: escape };
     let entries: { name: string; kind: "file" | "dir"; size?: number }[];
     try {
       entries = this.readers.listDirectory(target.absolute);
@@ -135,13 +157,21 @@ export class TaskWorkspaceFiles {
       return { ok: false, error: `read-failed: ${error instanceof Error ? error.message : String(error)}` };
     }
     const bounded = boundTreeEntries(entries, target.relative);
-    return { ok: true, tree: { attribution: target.attribution, path: target.relative, entries: bounded.entries, truncated: bounded.truncated } };
+    // A listed entry that is a link out of the root is not shown at all: the
+    // panel must not offer a file this task may not read. Checked on the
+    // bounded list so one huge directory cannot turn into unbounded syscalls.
+    const inside = bounded.entries.filter(
+      (entry) => this.rootEscapeError(target.root, `${target.root.path}/${entry.path}`) === undefined,
+    );
+    return { ok: true, tree: { attribution: target.attribution, path: target.relative, entries: inside, truncated: bounded.truncated } };
   }
 
   /** Bounded, masked preview of one text file inside one root. */
   preview(input: { rootId: unknown; relative?: unknown }): { ok: true; preview: WorkspacePreview } | { ok: false; error: string } {
     const target = this.resolve(input, false);
     if (!target.ok) return { ok: false, error: target.error };
+    const escape = this.rootEscapeError(target.root, target.absolute);
+    if (escape !== undefined) return { ok: false, error: escape };
     const read = this.readers.readTextFile(target.absolute);
     if (!read.ok) return { ok: false, error: read.error };
     return {
@@ -173,10 +203,11 @@ export class TaskWorkspaceFiles {
       allowRoot: true,
     });
     if (!target.ok) return { ok: false, error: target.error };
+    const escape = this.rootEscapeError(target.root, target.absolute);
+    if (escape !== undefined) return { ok: false, error: escape };
     if (target.root.kind !== "worktree") {
       // Refuse before running git: the rule layer owns the reason text.
-      const refused = boundDiff({ root: target.root, taskId: this.taskId, taskDir: this.taskDir, path: target.relative, diff: "" });
-      return refused.ok ? refused : refused;
+      return boundDiff({ root: target.root, taskId: this.taskId, taskDir: this.taskDir, path: target.relative, diff: "" });
     }
     const args = ["diff", "--no-color"];
     if (target.root.baseCommit) args.push(target.root.baseCommit);
@@ -199,6 +230,20 @@ export class TaskWorkspaceFiles {
     const root = findWorkspaceRoot(this.roots(), typeof input.rootId === "string" ? input.rootId.trim() : "");
     if (!root) return { ok: false, error: `unknown-root: ${String(input.rootId)} 不是本任务的文件根（仓库或普通目录链接）` };
     return deliveryTarget({ root, taskId: this.taskId, taskDir: this.taskDir });
+  }
+
+  /**
+   * `path-out-of-scope` when one path's real location is outside its root.
+   * A root may itself be a link (a plain-directory link is one), so the check
+   * is "under the root's own real path", not "under the task folder": a
+   * symlink inside a worktree that resolves to another task or to `/etc` is
+   * refused instead of read.
+   */
+  private rootEscapeError(root: WorkspaceRoot, absolute: string): string | undefined {
+    const rootReal = stripTrailingSeparator(this.readers.realPath(root.path));
+    const targetReal = stripTrailingSeparator(this.readers.realPath(absolute));
+    if (targetReal === rootReal || targetReal.startsWith(`${rootReal}/`)) return undefined;
+    return `path-out-of-scope: ${root.label} 内的链接指向根之外（${targetReal}），已拒绝读取`;
   }
 
   private resolve(input: { rootId: unknown; relative?: unknown }, allowRoot = true) {
