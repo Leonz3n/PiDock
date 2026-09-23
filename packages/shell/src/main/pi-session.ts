@@ -23,6 +23,16 @@
 
 import { BROWSER_TOOL_ACTIONS } from "./browser-rules.js";
 import {
+  normalizeReportedUsage,
+  providerConfigVersion,
+  PI_USAGE_KINDS,
+  type PiCallUsage,
+  type PiReportedUsage,
+  type PiUsageEndState,
+  type PiUsageKind,
+  type PiUsageSource,
+} from "./usage-ledger.js";
+import {
   evaluateModelSwitch,
   evaluateThinkingSelection,
   resolveModelDisplayName,
@@ -53,22 +63,29 @@ export interface PiToolCall {
   contentVersion: string;
 }
 
-export type PiUsageSource = "actual" | "estimated" | "unreported" | "test-double" | "approval";
-
-export interface PiCallUsage {
-  input: number;
-  output: number;
-  cacheRead: number;
-  source: PiUsageSource;
-}
+// [PiDock 12] #12: usage vocabulary lives in `usage-ledger.ts` (counters,
+// source, completeness, reported reasoning/total). Re-exported here because
+// the session channel remains the module the Host and tests import from.
+export type { PiCallUsage, PiUsageSource } from "./usage-ledger.js";
 
 export interface PiCallRecord {
   callId: string;
   providerId: string;
+  /** Requested model, frozen when the call was minted (a later switch never rewrites it). */
   model: string;
   usageSource: PiUsageSource;
   usage?: PiCallUsage;
   events: string[];
+  /** What produced this call ([PiDock 12] #12): turn / compaction / branch summary / model tool. */
+  kind: PiUsageKind;
+  /** Call start, ISO. Frozen at mint so a replayed event keeps the start time. */
+  at: string;
+  /** How the attempt ended; set when it settles, never inferred from text. */
+  endState: PiUsageEndState;
+  /** Model the response reported, when the upstream named a different one. */
+  responseModel?: string;
+  /** Provider configuration fingerprint at call time (rename never changes it). */
+  providerVersion?: string;
 }
 
 export interface PiMessage {
@@ -324,7 +341,11 @@ export interface PiTurnInput {
   /** Skill source (`$` invocation) for this turn, persisted verbatim. */
   skillSource?: string;
   usageSource?: PiUsageSource;
-  usage?: Partial<PiCallUsage>;
+  usage?: PiReportedUsage;
+  /** Call type ([PiDock 12] #12); defaults to `turn`. */
+  kind?: PiUsageKind;
+  /** Model the response actually reported, when the upstream names one. */
+  responseModel?: string;
   providerId?: string;
   model?: string;
   credentialRef?: string;
@@ -346,24 +367,39 @@ export interface PiTurnResult {
 }
 
 /**
- * Normalize a usage source. `undefined` (no caller claim) stays the
- * historical test-double default; an explicit but unknown value is
- * rejected fail-closed so direct channel callers cannot silently relabel
- * usage the RPC layer would refuse.
+ * Normalize a usage report through the shared ledger rules. `undefined` (no
+ * caller claim) stays the historical test-double default; an explicit but
+ * unknown source is rejected fail-closed by the ledger so direct channel
+ * callers cannot silently relabel usage the RPC layer would refuse.
  */
-function normalizeCallUsage(source: PiUsageSource | undefined, usage: Partial<PiCallUsage> | undefined): PiCallUsage {
-  if (source !== undefined && source !== "actual" && source !== "estimated" && source !== "unreported" && source !== "approval" && source !== "test-double") {
-    throw new Error(`invalid-payload: usageSource must be actual/estimated/unreported/test-double/approval, got ${source}`);
-  }
-  const normalized: PiUsageSource = source ?? "test-double";
-  const nonNegative = (value: unknown): number =>
-    typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0;
-  return {
-    input: nonNegative(usage?.input),
-    output: nonNegative(usage?.output),
-    cacheRead: nonNegative(usage?.cacheRead),
-    source: normalized,
-  };
+function normalizeCallUsage(source: PiUsageSource | undefined, usage: PiReportedUsage | undefined): PiCallUsage {
+  return normalizeReportedUsage(usage, source ?? "test-double");
+}
+
+const USAGE_END_STATES: readonly PiUsageEndState[] = ["completed", "failed", "cancelled", "awaiting-approval"];
+
+function isUsageKind(value: unknown): value is PiUsageKind {
+  return typeof value === "string" && (PI_USAGE_KINDS as readonly string[]).includes(value);
+}
+
+/**
+ * Provider configuration fingerprint for the call's provider, when the
+ * redacted catalog declares it. An unknown/legacy provider records no
+ * version instead of a fabricated one.
+ */
+function providerVersionFor(catalog: readonly ProviderProfileRow[], providerId: string): string | undefined {
+  const profile = catalog.find((item) => item.id === providerId);
+  if (!profile) return undefined;
+  return providerConfigVersion({ protocol: profile.protocol, baseUrl: profile.baseUrl, models: profile.models });
+}
+
+/** How a restored call ended, derived from its event trail (legacy snapshots). */
+function endStateFromEvents(events: readonly string[], runState: PiRunState): PiUsageEndState {
+  if (events.some((event) => event.startsWith("turn:awaiting-approval"))) return "awaiting-approval";
+  if (events.some((event) => event.startsWith("turn:cancelled"))) return "cancelled";
+  if (events.some((event) => event.startsWith("turn:failed"))) return "failed";
+  if (events.some((event) => event.startsWith("turn:done"))) return "completed";
+  return runState === "failed" ? "failed" : "completed";
 }
 
 /** Bounded settled-reply chunking (64 chars); terminal frame always sent. */
@@ -667,16 +703,6 @@ export class PiSessionChannel {
     return this.thinkingLevel;
   }
 
-  /**
-   * Context compaction: the current occupancy is replaced by a smaller estimate
-   * and marked `pending`, cumulative tokens stay untouched, and no history is
-   * dropped. The value is an estimate until the next real reading.
-   */
-  compactContext(): PiSessionContext {
-    this.context = { window: this.context.window, used: Math.min(this.context.used, 9.2), source: "pending" };
-    return { ...this.context };
-  }
-
   /** Shared task write lock: held by at most one call until its tools settle. */
   get writeLockOwner(): string | null {
     return this.writeLock?.held === true ? (this.writeLock.ownerCallId ?? null) : null;
@@ -781,6 +807,8 @@ export class PiSessionChannel {
       throw new Error("credentialRef must be a non-empty reference when provided");
     }
     const pendingUsage = normalizeCallUsage(input.usageSource, input.usage);
+    const callKind: PiUsageKind = input.kind ?? "turn";
+    if (!isUsageKind(callKind)) throw new Error(`invalid-payload: usage kind must be ${PI_USAGE_KINDS.join("/")}, got ${String(input.kind)}`);
     const pendingSelection =
       input.providerId !== undefined || input.model !== undefined
         ? {
@@ -814,6 +842,13 @@ export class PiSessionChannel {
       usageSource: usage.source,
       usage,
       events,
+      kind: callKind,
+      at: this.now(),
+      endState: "awaiting-approval",
+      ...(input.responseModel !== undefined && input.responseModel.length > 0 ? { responseModel: input.responseModel } : {}),
+      ...(providerVersionFor(this.catalog, this.providerId) !== undefined
+        ? { providerVersion: providerVersionFor(this.catalog, this.providerId) as string }
+        : {}),
     };
     this.calls.push(call);
     this.messageSequence += 1;
@@ -873,6 +908,55 @@ export class PiSessionChannel {
     }
   }
 
+  /**
+   * Update the usage of an already-minted call without adding a new one
+   * ([PiDock 12] #12). Streamed increments, the final message and a replayed
+   * event all land on the same call id, so a total can never inflate by
+   * re-reporting; an unknown call id is refused fail-closed.
+   */
+  recordCallUsage(callId: string, usage: PiReportedUsage, source: PiUsageSource = "actual"): PiCallRecord {
+    const call = this.calls.find((item) => item.callId === callId);
+    if (!call) throw new Error(`unknown-call: ${callId}`);
+    const normalized = normalizeReportedUsage(usage, source);
+    // A later full report replaces a streamed partial for the same call; a
+    // replayed identical event is a no-op because the value is overwritten.
+    call.usage = normalized;
+    call.usageSource = normalized.source;
+    call.events.push(`usage:${normalized.source}:${normalized.completeness}`);
+    return call;
+  }
+
+  /**
+   * Record the model call a context compaction performed ([PiDock 12] #12).
+   * Compaction is its own call type: its report is counted under `compaction`
+   * and the occupancy drop it causes never subtracts from cumulative tokens.
+   * The occupancy state itself keeps the historical estimate behaviour.
+   */
+  compactContext(input: { usageSource?: PiUsageSource; usage?: PiReportedUsage; model?: string; responseModel?: string } = {}): PiSessionContext {
+    const usage = normalizeCallUsage(input.usageSource, input.usage);
+    const kind: PiUsageKind = "compaction";
+    piCallSequence += 1;
+    const callId = `call-${piCallSequence}`;
+    const call: PiCallRecord = {
+      callId,
+      providerId: this.providerId,
+      model: input.model ?? this.model,
+      usageSource: usage.source,
+      usage,
+      events: [`compaction:start:${callId}`, `compaction:done:${callId}`],
+      kind,
+      at: this.now(),
+      endState: "completed",
+      ...(input.responseModel !== undefined && input.responseModel.length > 0 ? { responseModel: input.responseModel } : {}),
+      ...(providerVersionFor(this.catalog, this.providerId) !== undefined
+        ? { providerVersion: providerVersionFor(this.catalog, this.providerId) as string }
+        : {}),
+    };
+    this.calls.push(call);
+    this.context = { window: this.context.window, used: Math.min(this.context.used, 9.2), source: "pending" };
+    return { ...this.context };
+  }
+
   /** Approve exactly one pending request; the approval never replays. */
   approve(approvalId: string): PiCallRecord {
     const approval = this.approvals.find((item) => item.id === approvalId);
@@ -889,7 +973,19 @@ export class PiSessionChannel {
     this.messages.push({ id: `msg-${this.messageSequence}`, role: "agent", text: `已批准并执行 ${approval.tool} ${approval.target}。`, callId: approval.callId, origin: "agent" });
     this.releaseWriteLock(call?.callId ?? approval.callId);
     this.state = "done";
-    return call ?? { callId: approval.callId, providerId: this.providerId, model: this.model, usageSource: "approval", events: [] };
+    if (call) call.endState = "completed";
+    return (
+      call ?? {
+        callId: approval.callId,
+        providerId: this.providerId,
+        model: this.model,
+        usageSource: "approval",
+        events: [],
+        kind: "turn",
+        at: this.now(),
+        endState: "completed",
+      }
+    );
   }
 
   /**
@@ -959,6 +1055,7 @@ export class PiSessionChannel {
     approval.executed = false;
     const call = this.calls.find((item) => item.callId === approval.callId);
     call?.events.push(`approval:${approvalId}:rejected:zero-execution`);
+    if (call) call.endState = "cancelled";
     this.releaseWriteLock(call?.callId ?? approval.callId);
     this.state = "cancelled";
   }
@@ -973,6 +1070,7 @@ export class PiSessionChannel {
     }
     const current = this.calls[this.calls.length - 1];
     current?.events.push("turn:cancelled:history-preserved");
+    if (current) current.endState = "cancelled";
     this.releaseWriteLock(current?.callId ?? "");
     this.state = "cancelled";
   }
@@ -1045,8 +1143,21 @@ export class PiSessionChannel {
       // restore as `unreported` so usage summaries never read garbage.
       // Backfill the legacy `usageSource` twin alongside `usage.source`
       // so the two never diverge after a restore.
-      const usage = call.usage ?? { input: 0, output: 0, cacheRead: 0, source: "unreported" as const };
-      return { ...call, usage, usageSource: usage.source, events: [...call.events] };
+      const usage = call.usage ?? normalizeReportedUsage(undefined, "unreported");
+      // [PiDock 12] #12: older snapshots have no kind/at/endState. Default
+      // the kind to a turn, anchor `at` at the session's creation time (the
+      // earliest honest instant available) and derive the end state from the
+      // recorded event trail, so a reopen never fabricates or drops a call.
+      const endState = call.endState !== undefined && USAGE_END_STATES.includes(call.endState) ? call.endState : endStateFromEvents(call.events, snapshot.runState);
+      return {
+        ...call,
+        usage,
+        usageSource: usage.source,
+        kind: isUsageKind(call.kind) ? call.kind : "turn",
+        at: typeof call.at === "string" && call.at.length > 0 ? call.at : snapshot.createdAt,
+        endState,
+        events: [...call.events],
+      };
     });
     channel.approvals = (snapshot.approvals ?? []).map((approval) => ({
       ...approval,
@@ -1078,6 +1189,7 @@ export class PiSessionChannel {
     const agentMessageId = `msg-${this.messageSequence}`;
     this.messages.push({ id: agentMessageId, role: "agent", text: reply, callId: call.callId, origin: "agent" });
     call.events.push(`turn:${state}`);
+    call.endState = state === "done" ? "completed" : "failed";
     this.releaseWriteLock(call.callId);
     this.state = state;
     // Settled-only streaming: chunk the final persisted reply (never a
