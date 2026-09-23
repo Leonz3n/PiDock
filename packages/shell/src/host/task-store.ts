@@ -382,23 +382,40 @@ export function serializeUsageLedger(details: readonly PiUsageDetail[], exclusio
   return JSON.stringify({ details, exclusions }, null, 2);
 }
 
+/**
+ * Ledger keys a recorded cleanup removed. Absent in a ledger written before
+ * #12 recorded them; the Host then upgrades the record on its next sync.
+ */
+function parseRemovedIds(value: unknown): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.some((id) => typeof id !== "string" || id.length === 0)) {
+    throw new Error("invalid-payload: usage exclusion.removedIds must be an array of non-empty strings");
+  }
+  return [...(value as string[])];
+}
+
 function parseUsageExclusion(value: unknown): PiUsageCleanupScope {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error("invalid-payload: usage exclusion must be an object");
   }
   const scope = value as Record<string, unknown>;
-  if (scope["kind"] === "all") return { kind: "all" };
+  const removedIds = parseRemovedIds(scope["removedIds"]);
+  if (scope["kind"] === "all") return removedIds === undefined ? { kind: "all" } : { kind: "all", removedIds };
   if (scope["kind"] === "session") {
     if (typeof scope["sessionId"] !== "string" || scope["sessionId"].length === 0) {
       throw new Error("invalid-payload: usage exclusion.sessionId must be a non-empty string");
     }
-    return { kind: "session", sessionId: scope["sessionId"] };
+    return removedIds === undefined
+      ? { kind: "session", sessionId: scope["sessionId"] }
+      : { kind: "session", sessionId: scope["sessionId"], removedIds };
   }
   if (scope["kind"] === "before") {
     if (typeof scope["before"] !== "string" || scope["before"].length === 0) {
       throw new Error("invalid-payload: usage exclusion.before must be a non-empty string");
     }
-    return { kind: "before", before: scope["before"] };
+    return removedIds === undefined
+      ? { kind: "before", before: scope["before"] }
+      : { kind: "before", before: scope["before"], removedIds };
   }
   throw new Error("invalid-payload: usage exclusion.kind must be all/session/before");
 }

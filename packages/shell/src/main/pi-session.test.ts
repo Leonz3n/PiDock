@@ -282,6 +282,27 @@ describe("PiSessionChannel turns and approvals", () => {
     expect(restored.snapshot().calls[0].callId).toBe("call-1");
   });
 
+  it("re-mints call and approval ids past a restored snapshot instead of reusing them", () => {
+    const session = channel();
+    const turn = session.runTurn({
+      text: "写文件",
+      execute: (call) => ({ target: `${TASK_DIR}/notes.md`, contentVersion: "v1", output: call.callId }),
+    });
+    expect(turn.call.callId).toBe("call-1");
+    expect(session.gate("exec.run", `${TASK_DIR}/run.sh`, "v1").approvalId).toBe("approval-1");
+    const snapshot = session.snapshot();
+    // A process restart resets the module counters while the snapshot it
+    // restores still holds `call-1`/`approval-1` ([PiDock 12] #12).
+    resetPiSequencesForTests();
+    const restored = PiSessionChannel.restore(snapshot, TASK_DIR);
+    const next = restored.runTurn({ text: "再检查" });
+    // Re-minting `call-1` would key two calls to one ledger row; re-minting
+    // `approval-1` would let a fresh request answer to a spent approval id.
+    expect(next.call.callId).toBe("call-2");
+    expect(restored.snapshot().calls.map((call) => call.callId)).toEqual(["call-1", "call-2"]);
+    expect(restored.gate("exec.run", `${TASK_DIR}/run.sh`, "v1").approvalId).toBe("approval-2");
+  });
+
   it("holds the task write lock during a turn and releases it after", () => {
     const session = channel();
     let ownerDuringTurn: string | null = "missing";

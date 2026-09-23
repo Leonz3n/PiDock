@@ -255,7 +255,7 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   派生执行与真实路径键的联动留到真实 `child_process` 派生执行接线时一并完成
   （`claimPathScope` 尚未传入 `derivedExecutionIds`，`claimDerivedExecution`
   尚未校验写操作权）；隐藏项目的 Agent／服务仍在后台运行且归属正确（GAP 7）
-  归入 #12。
+  不在 #12 的用量验收项内，需要真实后台运行接线时单独验收（见下节残留）。
 
 ## Token 用量明细与汇总（[PiDock 12] #12）
 
@@ -283,11 +283,14 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   带偏移的时刻按自身偏移比较，跨机器口径一致；分组维度为项目／任务／会话／
   Provider／模型／类型／日期（盒子 3）。
 - **统计可查**：`USAGE_DEFINITIONS`（Host 与 renderer 镜像同一份措辞）在页面
-  「统计定义」面板列出统计范围、未知用量、缓存、类型、重放、恢复与日期边界；
+  「统计定义」面板列出统计范围、未知用量、缓存、类型、重放、恢复、清理与日期
+  边界；
   页面同时声明「仅本应用记录，不等同账户账单或配额」（盒子 3、盒子 9）。
 - **清理范围**：`task/clearUsage` 支持 `all` / `session` / `before` 三种范围，
-  Host 记录排除项，之后的再同步不会把已清理的明细恢复；归档对话不清理用量
-  （盒子 8）。renderer 的「清理范围」面板逐个说明范围并回报条数。
+  Host 记录这次清理实际移除的调用 id，之后的再同步不会把已清理的明细恢复，
+  也不会把清理之后的新调用当成已清理（只记范围、没有 id 列表的旧形态仍按范围
+  处理；本功能尚未发布，不存在此形态的持久文件）；归档对话不清理用量（盒子 8）。
+  renderer 的「清理范围」面板逐个说明范围并回报条数。
 - **IPC 与适配器**：`task/usageRecords`（过滤 + 分组 + 总计 + 窗口标签 + 定义）
   与 `task/clearUsage` 走同一条 `shell/taskOp` 白名单；renderer 经
   `usageRecordsThroughShell` / `clearUsageThroughShell` 读取，Host 不可答时
