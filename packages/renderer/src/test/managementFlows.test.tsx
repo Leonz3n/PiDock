@@ -155,7 +155,7 @@ describe("capability sources, versions and MCP ([PiDock 16] #18)", () => {
     const mcp = screen.getByText("figma-context").closest("section")!;
     expect(within(mcp).getByText(/连接失败 · 尝试 2 次/)).toBeInTheDocument();
     expect(within(mcp).getByText(/连接失败：首次连接超时/)).toBeInTheDocument();
-    expect(within(mcp).getByText(/实际 auto/)).toBeInTheDocument();
+    expect(within(mcp).getByText(/实际为 default/)).toBeInTheDocument();
 
     await user.click(within(mcp).getByRole("button", { name: "重试连接" }));
     expect(await screen.findByText(/已重新连接（内存投影）/)).toBeInTheDocument();

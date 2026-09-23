@@ -116,7 +116,7 @@ export function mcpBridgeStatus(
   if (bridgeId === undefined) {
     return { ok: false, code: "bridge-missing", message: "MCP Server 需要 bridge Extension 接入，请先启用对应 Extension" };
   }
-  const bridge = capabilities.find((item) => item.id === bridgeId && item.kind === "extension" && item.status === "enabled");
+  const bridge = capabilities.find((item) => item.id === bridgeId && item.kind === "extension" && (item.status === "enabled" || item.status === "update-available"));
   if (bridge === undefined) {
     return { ok: false, code: "bridge-missing", message: `bridge Extension ${bridgeId} 未启用，MCP Server 无法连接` };
   }

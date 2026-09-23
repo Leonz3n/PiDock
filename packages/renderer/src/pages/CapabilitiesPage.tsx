@@ -23,9 +23,10 @@ export function CapabilitiesPage() {
   const pushToast = useUiStore((state) => state.pushToast);
   const [kind, setKind] = useState<(typeof kinds)[number]["value"]>("all");
   const capabilities = workspace?.capabilities ?? [];
-  // Management view: the tier shown per row is the widest a session can give,
-  // so a capability asking for more is visibly capped instead of silently.
-  const rows = capabilityRows(capabilities, "auto").filter((row) => kind === "all" || row.capability.kind === kind);
+  // No session is attached to this page, so the tier shown is the standard
+  // `default` session tier: it is the tier where a capability asking for more
+  // is visibly capped, and the row says which tier it assumes.
+  const rows = capabilityRows(capabilities, "default").filter((row) => kind === "all" || row.capability.kind === kind);
   const addKind: "skill" | "extension" | "package" | "mcp" = kind === "all" ? "skill" : kind;
   const addLabel = { skill: "添加技能来源", extension: "添加 Extension", package: "查看安装来源", mcp: "添加 MCP Server" }[addKind];
 
@@ -167,7 +168,7 @@ function CapabilityPanel({
         ) : null}
         <dt className="text-muted">权限</dt>
         <dd>
-          声明 {capability.requestedPermission ?? "未声明"} · 实际 {row.permission}
+          声明 {capability.requestedPermission ?? "未声明"} · 在 default 会话中实际为 {row.permission}
           {capability.requestedPermission !== undefined && row.permission !== capability.requestedPermission ? "（能力不能扩大会话权限）" : ""}
         </dd>
         <dt className="text-muted">可用性</dt>
@@ -200,7 +201,7 @@ function CapabilityPanel({
           </Button>
         ) : null}
         {capability.kind === "mcp" && bridge && !bridge.ok ? <span className="self-center text-[11px] text-orange">需要 bridge Extension</span> : null}
-        {capability.kind === "mcp" && capability.connection?.state !== "connected" ? (
+        {capability.kind === "mcp" && capability.connection?.state !== "connected" && (bridge === null || bridge.ok) ? (
           <Button size="sm" onClick={onRetry}>
             重试连接
           </Button>
