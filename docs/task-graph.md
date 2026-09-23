@@ -502,3 +502,45 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   内存队列），未接真实 shell；`task/planTerminal` / `task/terminalControl` 的生产
   调用方只在 renderer 面板（`stores/host.ts` 仍把内存适配器固定为默认，与 #9/#10/#12/#14
   记录的同一接线缺口）；多任务并行的真实进程归属只由注册表单测覆盖。
+
+## 对话引用、技能与符号命令（[PiDock 13] #16）
+
+- **输入规则（盒子 11、12）**：`main/composer-input.ts` 是输入框与发送路径共用的
+  纯规则：标记只在「尾部 token、且不在代码内」时才算入口——邮箱、URL、
+  Unix/Windows 路径、行内代码、围栏代码块、`$HOME`/`${VAR}` 与 `\@`/`\$` 转义一律
+  保持原文，不做 shell 展开；`/` 仅在消息开头打开命令候选。键盘意图由
+  `resolveComposerKey` 判定：候选打开时 `Enter`/`Tab` 只确认候选（绝不同时发送），
+  `Esc` 关闭、方向键移动，普通 `Enter` 发送、`Shift+Enter` 换行，`isComposing`
+  的中文输入法确认不提交消息也不执行命令。renderer 侧镜像
+  （`data/composerRules.ts`）由 `test/composerRules.test.ts` 锁定同一条规则。
+- **引用来源与边界（盒子 2、3、4、5、15）**：`main/composer-references.ts` 把
+  任务代码引用（worktree / 普通目录链接）、文件视图片段与本机附件分开：引用记录
+  所属任务、来源身份、显示名与真实目标、源内相对路径，以及 worktree 的 Git 版本；
+  普通目录链接 `version: null`，从不伪造 Git 版本。默认搜索跳过
+  `node_modules/.git/dist/build/...` 等忽略目录，候选有上限；目录、大文件、
+  二进制与超长片段有明确上限（`MAX_SNIPPET_LINES`/`MAX_SNIPPET_CHARS` 等）。
+  `validateDraftReference` 对移动、来源失效、越界、跨任务与版本不一致分别报错并
+  要求重新选择，绝不回退到主检出目录；附件只授权该文件本身。实际送入范围由
+  `describeReferenceScope` 说明，大小标注为估算且不计入实报 Token。
+- **技能与应用命令（盒子 6、8、9、13）**：`main/composer-registry.ts` 只聚合
+  已启用的全局／项目／任务仓库来源，支持显式添加额外来源；重名技能保留为按来源
+  区分的候选并要求选择具体来源，调用保留技能资源相对路径与参数，并同时支持
+  `$name` 与 pi 的 `/skill:name`。`/` 菜单分应用操作、提示模板、扩展命令三类，
+  显示来源、参数与可用状态，未知命令给出最接近的纠正（`suggestCommand`）。
+  忙碌回合下模型／新会话／压缩标为等待、扩展命令标为不可用；只读会话不执行会改变
+  任务的操作，快捷入口不扩大会话或任务权限。
+- **Host 边界（盒子 14、15）**：`task/sendMessage` 与 `task/saveDraft` 的
+  `references` 在 Host 侧逐条校验来源（`checkReferencePayload`）：形状、kind、
+  源内路径与「普通目录不得声明 Git 版本」失败关闭，草稿恢复沿用同一规则，因此
+  失效草稿不会静默绑定另一个来源。renderer 输入框只显示「+」附件入口与真实的系统
+  文件选择器（多选、可移除），模型选择移到发送按钮之前，`@`/`$`/`/` 不再常驻按钮。
+- **盒子状态**：盒子 1／2／3／4／5／6／8／9（应用命令部分）／11／12／13／14／15 的
+  规则与 renderer 行为已覆盖；`/model` 复用 11 号工单的超限禁止切换浮层（同一
+  `model-picker` 与容量校验）。
+- **残留（未测／未实现）**：技能的真实来源发现（读取 pi/agents 目录、额外技能目录、
+  重名来源解析）目前只由纯规则与内存能力列表覆盖，未接真实磁盘发现；技能调用尚未
+  经 pi SDK 展开（`/skill:name` 语法已生成），因此「SDK 展开不重复」只在结构化
+  段落层验证；提示模板与扩展命令的来源未接真实注册表，菜单只显示应用命令与示例
+  入口；`task/sendMessage` 的引用来源校验已接 Host，但 renderer 仍把内存适配器
+  固定为默认（与 #9/#10/#12/#14/#15 记录的同一接线缺口），真实 Electron 输入法、
+  系统文件选择器与原生产品打包走查未运行；两个多仓库任务的真实混合引用验收未执行。
