@@ -139,6 +139,9 @@ export function capabilityInvalidReason(
     return { code: "resource-missing", message: `${sourceKindLabel(source.kind)}来源 ${source.label} 中未找到该资源，请核对路径` };
   }
   if (record.failure !== undefined) return { code: record.failure.code, message: record.failure.message };
+  if (record.connection?.state === "failed") {
+    return { code: "connect-failed", message: record.connection.message ?? "MCP 连接失败，可重试" };
+  }
   return null;
 }
 

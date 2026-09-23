@@ -129,6 +129,18 @@ describe("MCP bridge, connection and permission", () => {
     expect(reduceMcpConnection(retry, { kind: "disconnect" })).toMatchObject({ state: "disconnected" });
   });
 
+  it("reports a failed connection as the invalid reason so 重试 is actionable (box 1/3)", () => {
+    const mcp = record({
+      id: "mcp-failed",
+      kind: "mcp",
+      name: "figma-context",
+      sourceId: "src-project",
+      bridge: { extensionId: "cap-bridge", command: "npx @example/mcp" },
+      connection: { state: "failed", message: "连接超时", attempts: 2 },
+    });
+    expect(capabilityRows({ sources, capabilities: [mcp] }, "default")[0]?.invalid).toEqual({ code: "connect-failed", message: "连接超时" });
+  });
+
   it("never widens the session tier, whatever the capability asks for", () => {
     expect(effectivePermission("read", "auto")).toBe("read");
     expect(effectivePermission("default", "auto")).toBe("default");
