@@ -62,6 +62,9 @@ export type ShellTaskOp =
   | "task/planServiceGroup"
   | "task/serviceRunRecords"
   | "task/serviceStopScope"
+  | "task/planProtocol"
+  | "task/protocolState"
+  | "task/recordProtocolRun"
   | "task/browserAction"
   | "task/setProviderCatalog"
   | "task/sessionContext"
@@ -317,6 +320,85 @@ export async function serviceStopScopeThroughShell(input: {
   if (input.instanceId !== undefined) payload["instanceId"] = input.instanceId;
   try {
     return await shellTaskOp(input.taskId, "task/serviceStopScope", payload);
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * [PiDock 08] (#14) plan the task's protocol binding on the Host
+ * (`task/planProtocol`): the protocol repository, the mode (release
+ * dependencies vs. this task's artifact), the repository's own generation
+ * steps and the selected consumers. Sending no `sessionId` keeps the
+ * attested human-UI path; `acknowledged` carries the per-consumer
+ * confirmation a cross-version switch requires before the Host marks a
+ * consumer bound.
+ */
+export async function planProtocolThroughShell(input: {
+  taskId: string;
+  protocol: { repoDir: string; goGenDir: string; tsGenDir: string };
+  mode: "release" | "local";
+  steps?: { kind: "generate" | "postprocess"; program: string; args: string[]; cwd: string; note?: string }[];
+  consumers: {
+    consumerId: string;
+    name: string;
+    repoDir: string;
+    language: "go" | "ts";
+    serviceId?: string;
+    releaseDependency: string;
+    linkScript?: string;
+    linkTarget?: string;
+  }[];
+  acknowledged?: string[];
+}): Promise<ShellTaskOpResult> {
+  const payload: Record<string, unknown> = { protocol: input.protocol, mode: input.mode, consumers: input.consumers };
+  if (input.steps !== undefined) payload["steps"] = input.steps;
+  if (input.acknowledged !== undefined) payload["acknowledged"] = input.acknowledged;
+  try {
+    return await shellTaskOp(input.taskId, "task/planProtocol", payload);
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * [PiDock 08] (#14) read the Host's protocol state (`task/protocolState`):
+ * prepare state, actual generated version, per-consumer binding and staleness,
+ * toolchain result and the switch blockers. Read-only.
+ */
+export async function protocolStateThroughShell(taskId: string): Promise<ShellTaskOpResult> {
+  try {
+    return await shellTaskOp(taskId, "task/protocolState", {});
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * [PiDock 08] (#14) record what a real generation/binding run observed
+ * (`task/recordProtocolRun`). Everything here is caller-reported evidence —
+ * the generated version, the toolchain probe, the install state and each
+ * consumer's resolved path — and the Host only marks a consumer bound when
+ * that resolution really verifies.
+ */
+export async function recordProtocolRunThroughShell(input: {
+  taskId: string;
+  generatedVersion: string;
+  ok: boolean;
+  note?: string;
+  toolchain?: { platform: string; probe?: Record<string, { ok: boolean; version?: string; note?: string }> };
+  depsInstalled?: { consumerId: string; installed: boolean }[];
+  resolutions?: { consumerId: string; path: string; version?: string | null }[];
+  runtimeReachable?: { ok: boolean; detail: string };
+}): Promise<ShellTaskOpResult> {
+  const payload: Record<string, unknown> = { generatedVersion: input.generatedVersion, ok: input.ok };
+  if (input.note !== undefined) payload["note"] = input.note;
+  if (input.toolchain !== undefined) payload["toolchain"] = input.toolchain;
+  if (input.depsInstalled !== undefined) payload["depsInstalled"] = input.depsInstalled;
+  if (input.resolutions !== undefined) payload["resolutions"] = input.resolutions;
+  if (input.runtimeReachable !== undefined) payload["runtimeReachable"] = input.runtimeReachable;
+  try {
+    return await shellTaskOp(input.taskId, "task/recordProtocolRun", payload);
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }

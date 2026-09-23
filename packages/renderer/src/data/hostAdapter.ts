@@ -32,6 +32,7 @@ import type {
   Workspace,
 } from "./types";
 import type { SessionWriteState } from "./writeCoordination";
+import type { ProtocolBindingView } from "./protocolBinding";
 import type { ServiceTopologyView } from "./serviceTopology";
 
 export type UsageFilter = {
@@ -307,6 +308,14 @@ export interface HostAdapter {
    * to the in-memory projection when the Host cannot answer.
    */
   serviceTopology(taskId: string): Promise<ServiceTopologyView>;
+  /**
+   * [PiDock 08] (#14) task-local protocol plan and consumer binding state:
+   * the protocol repository, the generation steps, the actual generated
+   * version, the per-consumer binding/staleness and the platform toolchain
+   * result. The shell adapter asks the Host (`task/protocolState`) and falls
+   * back to the in-memory projection when the Host cannot answer.
+   */
+  protocolBinding(taskId: string): Promise<ProtocolBindingView>;
   getSchedules(): Promise<Schedule[]>;
   setScheduleEnabled(scheduleId: string, enabled: boolean): Promise<void>;
   runScheduleNow(scheduleId: string): Promise<ScheduledRun>;

@@ -99,6 +99,77 @@ describe("#10 service group bridge (S3)", () => {
   });
 });
 
+describe("#14 protocol bridge (S3)", () => {
+  it("forwards the protocol plan, the state read and a recorded run as data", async () => {
+    const { planProtocolThroughShell, protocolStateThroughShell, recordProtocolRunThroughShell } = await import(
+      "../data/shellBridge"
+    );
+    const seen: { op: string; payload: Record<string, unknown> | undefined }[] = [];
+    const taskOp = vi.fn(async (_taskId: string, op: string, payload?: Record<string, unknown>) => {
+      seen.push({ op, payload });
+      return { ok: true, payload: {} };
+    });
+    vi.stubGlobal("window", { pidock: { taskOp } });
+    try {
+      const protocol = {
+        repoDir: "/data/tasks/task-a/apis",
+        goGenDir: "/data/tasks/task-a/apis/gen/go",
+        tsGenDir: "/data/tasks/task-a/apis/gen/ts",
+      };
+      const consumers = [
+        {
+          consumerId: "invoice",
+          name: "invoice-service",
+          repoDir: "/data/tasks/task-a/invoice-service",
+          language: "go" as const,
+          serviceId: "invoice-service",
+          releaseDependency: "github.com/shipber/apis v0.0.69",
+        },
+      ];
+      expect(
+        (
+          await planProtocolThroughShell({
+            taskId: "task-a",
+            protocol,
+            mode: "local",
+            steps: [{ kind: "generate", program: "make", args: ["generate"], cwd: protocol.repoDir }],
+            consumers,
+            acknowledged: ["invoice"],
+          })
+        ).ok,
+      ).toBe(true);
+      await protocolStateThroughShell("task-a");
+      await recordProtocolRunThroughShell({
+        taskId: "task-a",
+        generatedVersion: "gen-4",
+        ok: true,
+        note: "make generate + 后处理",
+        toolchain: { platform: "darwin-arm64", probe: { buf: { ok: true, version: "1.2.3" } } },
+        depsInstalled: [{ consumerId: "invoice", installed: true }],
+        resolutions: [{ consumerId: "invoice", path: `${protocol.goGenDir}/pkg`, version: "gen-4" }],
+        runtimeReachable: { ok: false, detail: "未检查远程依赖" },
+      });
+      expect(seen.map((entry) => entry.op)).toEqual([
+        "task/planProtocol",
+        "task/protocolState",
+        "task/recordProtocolRun",
+      ]);
+      expect(seen[0].payload).toMatchObject({ mode: "local", consumers, acknowledged: ["invoice"] });
+      // Human-UI path: the panel plan never sends a sessionId, so the Host
+      // classifies it as the attested human request.
+      expect(seen[0].payload?.["sessionId"]).toBeUndefined();
+      expect(seen[1].payload).toEqual({});
+      expect(seen[2].payload).toMatchObject({
+        generatedVersion: "gen-4",
+        ok: true,
+        depsInstalled: [{ consumerId: "invoice", installed: true }],
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
 describe("#6 append + probe bridge (S3)", () => {
   it("forwards appendRepos and probeLink payloads without Node access", async () => {
     const { appendReposThroughShell, probeLinkThroughShell } = await import("../data/shellBridge");
