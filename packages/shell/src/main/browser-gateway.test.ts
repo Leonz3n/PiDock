@@ -155,8 +155,10 @@ describe("browser gateway evidence and markers", () => {
       actor: human,
     });
     expect(result.ok).toBe(true);
-    const marker = (result as { payload: { marker: { kind: string; needsRelocation: boolean; currentEpoch: number } } }).payload.marker;
-    expect(marker).toMatchObject({ kind: "browser-marker", needsRelocation: true, currentEpoch: 3 });
+    const payload = (result as { payload: { marker: { kind: string; needsRelocation: boolean; currentEpoch: number; screenshotSha256: string }; screenshot: { sha256: string; width: number; height: number } } }).payload;
+    expect(payload.marker).toMatchObject({ kind: "browser-marker", needsRelocation: true, currentEpoch: 3, screenshotSha256: "a".repeat(64) });
+    // The marker carries the page snapshot it was raised on.
+    expect(payload.screenshot).toMatchObject({ sha256: "a".repeat(64), width: 4, height: 2 });
     expect(performed[0]?.params["marker"]).toMatchObject({ taskId: TASK_ID, pageId: "page-1" });
 
     const invalid = await gatewayFor(surface).perform({
