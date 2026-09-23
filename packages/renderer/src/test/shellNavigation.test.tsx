@@ -58,7 +58,7 @@ describe("shell sidebar groups", () => {
     expect(within(group("tasks")).getByRole("button", { name: "在当前工作区新建任务" })).toBeInTheDocument();
   });
 
-  it("opens the task rename from the keyboard and keeps the card free of a ⋯ button", async () => {
+  it("keeps the task card keyboard-focusable and opens the rename from the contextmenu event", async () => {
     const user = userEvent.setup();
     renderApp("/projects/atlas/tasks/release?session=main");
     await screen.findByRole("heading", { name: "发布前检查" });
@@ -68,8 +68,10 @@ describe("shell sidebar groups", () => {
     // actions come from the context menu. The card is a real button, so it is
     // reachable with Tab, and Chromium turns the keyboard context-menu keys
     // (ContextMenu key, Shift+F10 on platforms that map it) into a `contextmenu`
-    // event on the focused element — the same event a right-click sends, so this
-    // test drives that event after focusing the card by keyboard.
+    // event on the focused element — the same event a right-click sends. jsdom
+    // cannot synthesize that key press, so this test focuses the card and
+    // dispatches the event itself; the real key press is covered in the browser
+    // run recorded in docs/evidence/ui-alignment-s1/shell-verification.json.
     card.focus();
     expect(card).toHaveFocus();
     expect(card.querySelectorAll("button")).toHaveLength(0);
