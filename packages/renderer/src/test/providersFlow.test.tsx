@@ -36,8 +36,6 @@ describe("provider page status and sync", () => {
 
     // Empty / failure / unsupported through the fixture connection convention.
     const adapter = useHostStore.getState().adapter;
-    const host = createMemoryHost();
-    void host;
     const created = await adapter.saveProvider({
       name: "空列表网关",
       protocol: "openai-responses",
@@ -292,7 +290,6 @@ describe("model popover", () => {
 
 describe("response attribution", () => {
   it("keeps each response on the account that produced it and reports an unavailable one", async () => {
-    const user = userEvent.setup();
     renderApp("/projects/atlas/tasks/release?session=main");
     await screen.findByRole("heading", { name: "发布前检查" });
     const adapter = useHostStore.getState().adapter;
@@ -312,7 +309,6 @@ describe("response attribution", () => {
     expect(await screen.findByTestId("message-attribution-provider-local")).toHaveTextContent("本地推理 / 本地 Qwen");
 
     // Renaming keeps the original identification; disabling reports unavailable.
-    void user;
     await adapter.saveProvider({ id: "provider-anthropic", name: "Anthropic 团队账号", protocol: "anthropic-messages", baseUrl: "https://api.anthropic.com", enabled: false, models: [{ id: "Claude Sonnet", contextWindow: 200 }] });
     await useHostStore.getState().refresh();
     const renamed = await screen.findByTestId("message-attribution-provider-anthropic");
