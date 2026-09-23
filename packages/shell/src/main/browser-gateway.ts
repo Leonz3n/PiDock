@@ -76,8 +76,14 @@ export interface BrowserSurface {
   state(page: { pageId: string; webContentsId: number }): Promise<BrowserSurfaceState>;
   /** Takeover of the addressed page (absent id = the task's active page). */
   takeoverState(pageId?: string): { paused: boolean; reason?: string };
-  /** Raw (unscrubbed) evidence; the gateway bounds and scrubs it. */
-  rawEvidence(): { consoleErrors: ConsoleErrorEvidence[]; failedRequests: FailedRequestEvidence[] };
+  /**
+   * Raw (unscrubbed) evidence for one page; the gateway bounds and scrubs
+   * it. Like `state`, this attaches on first use, so an open-but-unattached
+   * page reports a real reading instead of a silent empty list.
+   */
+  rawEvidence(
+    pageId?: string,
+  ): Promise<{ consoleErrors: ConsoleErrorEvidence[]; failedRequests: FailedRequestEvidence[] }>;
   screenshot(page: { pageId: string; webContentsId: number }): Promise<BrowserScreenshot>;
   perform(request: BrowserSurfaceRequest): Promise<BrowserPerformResult>;
 }
@@ -143,7 +149,22 @@ export function createBrowserGateway(deps: BrowserGatewayDeps): {
 } {
   const secrets = deps.secrets ?? [];
 
+  /**
+   * The only entry point. Validation comes first, delegation second, and
+   * every surface failure is turned into a refusal envelope: the Host
+   * waits 10 s for a `browser-response` and would otherwise report
+   * `browser-timeout` (or see an unhandled rejection) instead of the
+   * real reason ([#8] review P1-2).
+   */
   async function perform(request: BrowserSurfaceRequest): Promise<BrowserPerformResult> {
+    try {
+      return await performChecked(request);
+    } catch (error) {
+      return { ok: false, error: `page-failed: ${error instanceof Error ? error.message : String(error)}` };
+    }
+  }
+
+  async function performChecked(request: BrowserSurfaceRequest): Promise<BrowserPerformResult> {
     if (deps.surface.taskId !== deps.taskId) {
       return { ok: false, error: "page-foreign-task: 浏览器能力绑定到其他任务，已拒绝" };
     }
@@ -179,7 +200,8 @@ export function createBrowserGateway(deps: BrowserGatewayDeps): {
     }
 
     if (request.action === "evidence") {
-      return { ok: true, payload: { evidence: boundBrowserEvidence(deps.surface.rawEvidence(), secrets) } };
+      const raw = await deps.surface.rawEvidence(page?.pageId);
+      return { ok: true, payload: { evidence: boundBrowserEvidence(raw, secrets) } };
     }
 
     if (request.action === "page/state") {

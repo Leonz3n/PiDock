@@ -71,7 +71,10 @@ export class HostClient {
 
   private handleMessage(data: unknown): void {
     if (isBrowserRequest(data)) {
-      void this.handleBrowserRequest(data);
+      // A browser request must always be answered: the Host blocks on a
+      // `browser-response` for 10 s and then reports `browser-timeout`, so
+      // an escaping error would look like a hang.
+      void this.handleBrowserRequest(data).catch(() => undefined);
       return;
     }
     if (!isRpcResponse(data)) return;
@@ -88,9 +91,14 @@ export class HostClient {
 
   private async handleBrowserRequest(request: BrowserRequest): Promise<void> {
     const handler = this.browserHandler;
-    const result: BrowserPerformResult = handler
-      ? await handler(request.params)
-      : { ok: false, error: "browser-unavailable: 主进程未挂载任务浏览器能力" };
+    let result: BrowserPerformResult;
+    try {
+      result = handler
+        ? await handler(request.params)
+        : { ok: false, error: "browser-unavailable: 主进程未挂载任务浏览器能力" };
+    } catch (error) {
+      result = { ok: false, error: `browser-failed: ${error instanceof Error ? error.message : String(error)}` };
+    }
     const response: BrowserResponse = result.ok
       ? { kind: "browser-response", id: request.id, ok: true, payload: result.payload }
       : { kind: "browser-response", id: request.id, ok: false, error: result.error };

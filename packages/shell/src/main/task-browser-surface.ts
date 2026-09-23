@@ -61,15 +61,19 @@ export class TaskBrowserSurface implements BrowserSurface {
     return takeover.reason !== undefined ? { paused: takeover.paused, reason: takeover.reason } : { paused: takeover.paused };
   }
 
-  rawEvidence(): ReturnType<TaskAutomation["evidence"]> {
-    const binding = this.activeBinding();
-    if (!binding) return { consoleErrors: [], failedRequests: [] };
+  async rawEvidence(pageId?: string): Promise<ReturnType<TaskAutomation["evidence"]>> {
+    // Evidence only exists on an attached debugger session. Attaching here
+    // (instead of returning empty arrays) keeps "no console errors" a real
+    // reading of a freshly opened page rather than a fabricated one.
+    const binding = await this.ensureBinding(pageId);
     return binding.automation.evidence();
   }
 
   async state(page: { pageId: string; webContentsId: number }): Promise<BrowserSurfaceState> {
-    const binding = this.bindingFor(page.pageId);
-    const layout = await binding.controller.readLayout([]);
+    const binding = await this.ensureBinding(page.pageId);
+    // The gateway refuses agent actors on a paused page, so a read that
+    // reaches here is the user's own (`allowWhilePaused`).
+    const layout = await binding.controller.readLayout([], { allowWhilePaused: true });
     return {
       epoch: layout.epoch,
       viewport: layout.viewport,
@@ -79,7 +83,7 @@ export class TaskBrowserSurface implements BrowserSurface {
   }
 
   async screenshot(page: { pageId: string; webContentsId: number }): Promise<BrowserScreenshot> {
-    const binding = this.bindingFor(page.pageId);
+    const binding = await this.ensureBinding(page.pageId);
     const shot = await binding.automation.screenshot();
     return {
       bytes: shot.bytes,
@@ -91,6 +95,9 @@ export class TaskBrowserSurface implements BrowserSurface {
   }
 
   async perform(request: BrowserSurfaceRequest): Promise<BrowserPerformResult> {
+    // The user's own actions are allowed on a page they took over; the
+    // gateway only refuses agent actors while paused.
+    const human = request.actor.kind === "human";
     try {
       switch (request.action) {
         case "page/open": {
@@ -99,13 +106,13 @@ export class TaskBrowserSurface implements BrowserSurface {
           return { ok: true, payload: { pageId: tab.pageId, webContentsId: tab.webContentsId, url } };
         }
         case "page/navigate": {
-          const binding = this.bindingFor(request.page?.pageId);
-          const identity = await binding.controller.navigate(String(request.params["url"] ?? ""));
+          const binding = await this.ensureBinding(request.page?.pageId);
+          const identity = await binding.controller.navigate(String(request.params["url"] ?? ""), { allowWhilePaused: human });
           return { ok: true, payload: { identity } };
         }
         case "page/reload": {
-          const binding = this.bindingFor(request.page?.pageId);
-          await binding.controller.reload();
+          const binding = await this.ensureBinding(request.page?.pageId);
+          await binding.controller.reload({ allowWhilePaused: human });
           return { ok: true, payload: { reloaded: true } };
         }
         case "page/close": {
@@ -171,6 +178,7 @@ export class TaskBrowserSurface implements BrowserSurface {
           const created = await binding.controller.mark(
             label.length > 0 ? label : typeof marker?.annotation === "string" ? marker.annotation : "标记",
             locator,
+            { allowWhilePaused: human },
           );
           return { ok: true, payload: { pageMarker: { id: created.id, label: created.label, epoch: created.epoch } } };
         }
