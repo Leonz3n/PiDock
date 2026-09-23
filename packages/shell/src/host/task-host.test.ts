@@ -505,7 +505,7 @@ describe("TaskWorkspaceHost sessions and Host-owned lock", () => {
       providerId: "provider-local",
       model: "pidock-default",
       usageSource: "actual",
-      usage: { input: 120, output: 45, cacheRead: 10, source: "actual" },
+      usage: { input: 120, output: 45, cacheRead: 10, cacheWrite: 0, source: "actual", completeness: "partial" },
     });
     // Reopen restores the same usage record (never another task's latest).
     taskHost.dispose();
@@ -514,7 +514,9 @@ describe("TaskWorkspaceHost sessions and Host-owned lock", () => {
       input: 120,
       output: 45,
       cacheRead: 10,
+      cacheWrite: 0,
       source: "actual",
+      completeness: "partial",
     });
   });
 

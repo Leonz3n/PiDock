@@ -9,7 +9,7 @@ import { BROWSER_TOOL_ACTIONS } from "./browser-rules.js";
 
 const TASK_DIR = "/tmp/pidock-test/task-abcdef12";
 
-function channel() {
+function channel(extra: Partial<Parameters<typeof PiSessionChannel>[0]> = {}) {
   return new PiSessionChannel({
     taskId: "task-a",
     sessionId: "main",
@@ -17,6 +17,7 @@ function channel() {
     providerId: "provider-local",
     model: "test-model",
     now: () => "2026-09-22T10:00:00+08:00",
+    ...extra,
   });
 }
 
@@ -302,19 +303,95 @@ describe("PiSessionChannel turns and approvals", () => {
       usageSource: "actual",
       usage: { input: 120, output: 45, cacheRead: 10 },
     });
-    expect(turn.call.usage).toEqual({ input: 120, output: 45, cacheRead: 10, source: "actual" });
+    // [PiDock 12] #12: three of the four counters were reported, so the record
+    // says `partial` instead of claiming a full report; cacheWrite stays 0.
+    expect(turn.call.usage).toEqual({ input: 120, output: 45, cacheRead: 10, cacheWrite: 0, source: "actual", completeness: "partial" });
     expect(turn.call.usageSource).toBe("actual");
     const restored = PiSessionChannel.restore(session.snapshot(), TASK_DIR);
-    expect(restored.snapshot().calls[0].usage).toEqual({ input: 120, output: 45, cacheRead: 10, source: "actual" });
+    expect(restored.snapshot().calls[0].usage).toEqual({ input: 120, output: 45, cacheRead: 10, cacheWrite: 0, source: "actual", completeness: "partial" });
   });
 
   it("defaults unreported usage to zeroed counters and backfills legacy snapshots", () => {
     const session = channel();
     const turn = session.runTurn({ text: "检查构建" });
-    expect(turn.call.usage).toEqual({ input: 0, output: 0, cacheRead: 0, source: "test-double" });
+    expect(turn.call.usage).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, source: "test-double", completeness: "missing" });
     const legacy = { ...session.snapshot(), calls: [{ ...session.snapshot().calls[0], usage: undefined }] };
     const restored = PiSessionChannel.restore(legacy, TASK_DIR);
-    expect(restored.snapshot().calls[0].usage).toEqual({ input: 0, output: 0, cacheRead: 0, source: "unreported" });
+    expect(restored.snapshot().calls[0].usage).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, source: "unreported", completeness: "missing" });
+  });
+
+  it("records the call type, time and end state, and how the attempt ended", () => {
+    const session = channel();
+    const turn = session.runTurn({ text: "检查构建" });
+    expect(turn.call.kind).toBe("turn");
+    expect(turn.call.endState).toBe("completed");
+    expect(Number.isNaN(Date.parse(turn.call.at))).toBe(false);
+    session.runTurn({ text: "压缩", kind: "compaction" });
+    expect(session.snapshot().calls[1].kind).toBe("compaction");
+    expect(() => session.runTurn({ text: "坏类型", kind: "live" as never })).toThrow("usage kind");
+  });
+
+  it("records the provider configuration version from the catalog, not the display name", () => {
+    const catalog = [
+      {
+        id: "provider-openai",
+        name: "名字一",
+        protocol: "openai-responses",
+        baseUrl: "https://gateway.example.com",
+        enabled: true,
+        models: [{ id: "gpt-5", contextWindow: 128 }],
+      },
+    ];
+    const first = channel({ providerId: "provider-openai", model: "gpt-5", catalog });
+    const version = first.runTurn({ text: "检查构建" }).call.providerVersion;
+    expect(version).toBe("openai-responses::https://gateway.example.com::gpt-5");
+    const renamed = channel({ providerId: "provider-openai", model: "gpt-5", catalog: [{ ...catalog[0], name: "名字二" }] });
+    expect(renamed.runTurn({ text: "检查构建" }).call.providerVersion).toBe(version);
+  });
+
+  it("counts a compaction as its own call type without reducing cumulative tokens", () => {
+    const session = channel();
+    session.runTurn({ text: "检查构建", usageSource: "actual", usage: { input: 120, output: 45, cacheRead: 0, cacheWrite: 0 } });
+    const before = session.consumedTokens();
+    session.compactContext({ usageSource: "actual", usage: { input: 80, output: 20, cacheRead: 0, cacheWrite: 0 } });
+    expect(session.consumedTokens()).toBe(before + 100);
+    const compaction = session.snapshot().calls[1];
+    expect(compaction.kind).toBe("compaction");
+    expect(compaction.endState).toBe("completed");
+    expect(session.contextOccupancy().source).toBe("pending");
+  });
+
+  it("updates one call for streamed increments, the final report and a replay", () => {
+    const session = channel();
+    const callId = session.runTurn({ text: "检查构建", usageSource: "actual", usage: { input: 100 } }).call.callId;
+    session.recordCallUsage(callId, { input: 100, output: 20 }, "actual");
+    const final = session.recordCallUsage(callId, { input: 100, output: 40, cacheRead: 10, cacheWrite: 5 }, "actual");
+    expect(session.snapshot().calls).toHaveLength(1);
+    expect(final.usage).toMatchObject({ input: 100, output: 40, cacheRead: 10, cacheWrite: 5, completeness: "reported" });
+    session.recordCallUsage(callId, { input: 100, output: 40, cacheRead: 10, cacheWrite: 5 }, "actual");
+    expect(session.snapshot().calls).toHaveLength(1);
+    // Cumulative consumption is input+output; cache counters live on the record
+    // and are never folded into the cumulative number a second time.
+    expect(session.consumedTokens()).toBe(140);
+    expect(() => session.recordCallUsage("call-999", { input: 1 }, "actual")).toThrow("unknown-call");
+  });
+
+  it("keeps the call kind, time and end state across a restore", () => {
+    const session = channel();
+    session.runTurn({ text: "检查构建" });
+    const snapshot = session.snapshot();
+    const legacyCalls = snapshot.calls.map((call) => {
+      const legacy: Record<string, unknown> = { ...call };
+      delete legacy.kind;
+      delete legacy.at;
+      delete legacy.endState;
+      return legacy;
+    });
+    const restored = PiSessionChannel.restore({ ...snapshot, calls: legacyCalls as never }, TASK_DIR);
+    const restoredCall = restored.snapshot().calls[0];
+    expect(restoredCall.kind).toBe("turn");
+    expect(restoredCall.endState).toBe("completed");
+    expect(restoredCall.at).toBe(snapshot.createdAt);
   });
 
   it("streams the settled reply in chunks and always ends with a done frame", () => {
@@ -385,7 +462,7 @@ describe("PiSessionChannel turns and approvals", () => {
     const legacy = { ...session.snapshot(), calls: legacyCalls };
     const restored = PiSessionChannel.restore(legacy, TASK_DIR);
     const restoredCall = restored.snapshot().calls[0];
-    expect(restoredCall.usage).toEqual({ input: 0, output: 0, cacheRead: 0, source: "unreported" });
+    expect(restoredCall.usage).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, source: "unreported", completeness: "missing" });
     expect(restoredCall.usageSource).toBe("unreported");
   });
 
