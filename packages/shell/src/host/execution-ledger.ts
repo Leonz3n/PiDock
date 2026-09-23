@@ -29,6 +29,7 @@ import {
   expireExecution,
   failExecution,
   highestExecutionSequence,
+  liveScheduleExecutions,
   markAttentionRead,
   openExecution,
   planStep,
@@ -130,7 +131,15 @@ export class TaskExecutionLedger {
     return record.state === "pending-approval" || record.state === "executing" ? record : undefined;
   }
 
-  open(input: { sessionId: string; kind: ExecutionKind; label: string; projectId?: string; callId?: string }): ExecutionRecord {
+  open(input: {
+    sessionId: string;
+    kind: ExecutionKind;
+    label: string;
+    projectId?: string;
+    callId?: string;
+    scheduleId?: string;
+    scheduleConfigVersion?: number;
+  }): ExecutionRecord {
     this.sequence += 1;
     const record = openExecution({
       executionId: `exec-${this.sequence}`,
@@ -141,9 +150,19 @@ export class TaskExecutionLedger {
       at: this.now(),
       ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
       ...(input.callId !== undefined ? { callId: input.callId } : {}),
+      ...(input.scheduleId !== undefined ? { scheduleId: input.scheduleId } : {}),
+      ...(input.scheduleConfigVersion !== undefined ? { scheduleConfigVersion: input.scheduleConfigVersion } : {}),
     });
     this.mutate([...this.ledgerState.executions, record]);
     return cloneRecord(record);
+  }
+
+  /**
+   * Live execution of one scheduled task ([PiDock 18] #20 box 5): a previous
+   * trigger still executing or waiting on a confirmation makes the next one skip.
+   */
+  liveSchedule(scheduleId: string): boolean {
+    return liveScheduleExecutions(this.ledgerState, scheduleId).length > 0;
   }
 
   /**

@@ -1223,6 +1223,81 @@ export function validateHostTaskOp(
     }
     return { ok: true };
   }
+  // [PiDock 18] (#20) scheduled tasks. Reads carry no caller-chosen target (the
+  // Host reads its own task folder); a save carries the full editable config
+  // (shape-checked here, validated semantically by the Host rules before it is
+  // persisted), and `立即运行` is refused for an agent session.
+  if (op === "task/scheduleList" || op === "task/scheduleTemplates" || op === "task/scheduleEvaluate") {
+    if (payload !== undefined && !isRecord(payload)) {
+      return { ok: false, error: `invalid-payload: ${op} payload must be an object` };
+    }
+    return { ok: true };
+  }
+  if (op === "task/schedulePreview") {
+    if (!isRecord(payload)) return { ok: false, error: "invalid-payload: task/schedulePreview requires a payload object" };
+    if (typeof payload["ruleText"] !== "string") {
+      return { ok: false, error: "invalid-payload: task/schedulePreview.ruleText must be a string" };
+    }
+    if (typeof payload["timezone"] !== "string") {
+      return { ok: false, error: "invalid-payload: task/schedulePreview.timezone must be a string" };
+    }
+    const after = payload["after"];
+    if (after !== undefined && (typeof after !== "string" || after.length === 0)) {
+      return { ok: false, error: "invalid-payload: task/schedulePreview.after must be a non-empty string" };
+    }
+    return { ok: true };
+  }
+  if (op === "task/scheduleSave") {
+    if (!isRecord(payload)) return { ok: false, error: "invalid-payload: task/scheduleSave requires a payload object" };
+    if (payload["scheduleId"] !== undefined && (typeof payload["scheduleId"] !== "string" || payload["scheduleId"].length === 0)) {
+      return { ok: false, error: "invalid-payload: task/scheduleSave.scheduleId must be a non-empty string" };
+    }
+    for (const key of ["name", "ruleText", "timezone", "prompt", "providerId", "model", "permission"] as const) {
+      if (typeof payload[key] !== "string" || (payload[key] as string).length === 0) {
+        return { ok: false, error: `invalid-payload: task/scheduleSave.${key} must be a non-empty string` };
+      }
+    }
+    if (payload["enabled"] !== undefined && typeof payload["enabled"] !== "boolean") {
+      return { ok: false, error: "invalid-payload: task/scheduleSave.enabled must be a boolean" };
+    }
+    return { ok: true };
+  }
+  if (op === "task/scheduleApplyTemplate") {
+    if (!isRecord(payload)) return { ok: false, error: "invalid-payload: task/scheduleApplyTemplate requires a payload object" };
+    for (const key of ["scheduleId", "templateId"] as const) {
+      if (typeof payload[key] !== "string" || (payload[key] as string).length === 0) {
+        return { ok: false, error: `invalid-payload: task/scheduleApplyTemplate.${key} must be a non-empty string` };
+      }
+    }
+    return { ok: true };
+  }
+  if (op === "task/scheduleSetEnabled") {
+    if (!isRecord(payload)) return { ok: false, error: "invalid-payload: task/scheduleSetEnabled requires a payload object" };
+    if (typeof payload["scheduleId"] !== "string" || payload["scheduleId"].length === 0) {
+      return { ok: false, error: "invalid-payload: task/scheduleSetEnabled.scheduleId must be a non-empty string" };
+    }
+    if (typeof payload["enabled"] !== "boolean") {
+      return { ok: false, error: "invalid-payload: task/scheduleSetEnabled.enabled must be a boolean" };
+    }
+    return { ok: true };
+  }
+  if (op === "task/scheduleRemove" || op === "task/scheduleRunNow") {
+    if (!isRecord(payload)) return { ok: false, error: `invalid-payload: ${op} requires a payload object` };
+    if (typeof payload["scheduleId"] !== "string" || payload["scheduleId"].length === 0) {
+      return { ok: false, error: `invalid-payload: ${op}.scheduleId must be a non-empty string` };
+    }
+    return { ok: true };
+  }
+  if (op === "task/scheduleRuns") {
+    if (payload !== undefined && !isRecord(payload)) {
+      return { ok: false, error: "invalid-payload: task/scheduleRuns payload must be an object" };
+    }
+    const scheduleId = payload === undefined ? undefined : payload["scheduleId"];
+    if (scheduleId !== undefined && (typeof scheduleId !== "string" || scheduleId.length === 0)) {
+      return { ok: false, error: "invalid-payload: task/scheduleRuns.scheduleId must be a non-empty string" };
+    }
+    return { ok: true };
+  }
   if (payload !== undefined && !isRecord(payload)) {
     return { ok: false, error: `invalid-payload: ${op} payload must be an object` };
   }

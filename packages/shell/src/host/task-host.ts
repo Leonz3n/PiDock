@@ -71,15 +71,19 @@ import {
   deleteSessionOnDisk,
   listSessionIdsOnDisk,
   parseExecutionLedger,
+  parseScheduleRecord,
   readExecutionLedgerOnDisk,
   readLifecycleOnDisk,
+  readScheduleRecordOnDisk,
   readSessionSnapshotOnDisk,
   readTaskRecordOnDisk,
   readUsageOnDisk,
   serializeExecutionLedger,
+  serializeScheduleRecord,
   serializeUsageLedger,
   writeExecutionLedgerOnDisk,
   writeLifecycleOnDisk,
+  writeScheduleRecordOnDisk,
   writeSessionSnapshotOnDisk,
   writeTaskRecordOnDisk,
   writeUsageOnDisk,
@@ -87,6 +91,13 @@ import {
   type TaskDiskRecord,
 } from "./task-store.js";
 import { emptyExecutionLedger, type ExecutionLedgerRecord } from "../main/execution-ledger.js";
+import {
+  emptyScheduleRecord,
+  type ScheduleDiskRecord,
+  type ScheduledRunRecord,
+  type StoredSchedule,
+} from "../main/schedule-rules.js";
+import { TaskSchedules, type SaveScheduleInput, type SaveScheduleResult, type SchedulePreview } from "./schedules.js";
 import {
   PI_USAGE_GROUP_LABELS,
   UNVERSIONED_PROVIDER_CONFIG,
@@ -128,6 +139,9 @@ export interface TaskStore {
   /** [PiDock 17] #19: execution/step/attempt/approval records + read marks. */
   readExecutions(taskDir: string): ExecutionLedgerRecord;
   writeExecutions(taskDir: string, ledger: ExecutionLedgerRecord): void;
+  /** [PiDock 18] #20: scheduled tasks plus one record per trigger. */
+  readSchedules(taskDir: string): ScheduleDiskRecord;
+  writeSchedules(taskDir: string, record: ScheduleDiskRecord): void;
 }
 
 /**
@@ -204,6 +218,8 @@ export const diskTaskStore: TaskStore = {
   writeLifecycle: (taskDir, record) => writeLifecycleOnDisk(taskDir, record),
   readExecutions: (taskDir) => readExecutionLedgerOnDisk(taskDir),
   writeExecutions: (taskDir, ledger) => writeExecutionLedgerOnDisk(taskDir, ledger),
+  readSchedules: (taskDir) => readScheduleRecordOnDisk(taskDir),
+  writeSchedules: (taskDir, record) => writeScheduleRecordOnDisk(taskDir, record),
 };
 
 export function memoryTaskStore(): TaskStore & {
@@ -212,18 +228,21 @@ export function memoryTaskStore(): TaskStore & {
   usage: Map<string, { details: PiUsageDetail[]; exclusions: PiUsageCleanupScope[] }>;
   lifecycle: Map<string, LifecycleRecord>;
   executions: Map<string, ExecutionLedgerRecord>;
+  schedules: Map<string, ScheduleDiskRecord>;
 } {
   const tasks = new Map<string, TaskDiskRecord>();
   const sessions = new Map<string, PiSessionSnapshot>();
   const usage = new Map<string, { details: PiUsageDetail[]; exclusions: PiUsageCleanupScope[] }>();
   const lifecycle = new Map<string, LifecycleRecord>();
   const executions = new Map<string, ExecutionLedgerRecord>();
+  const schedules = new Map<string, ScheduleDiskRecord>();
   return {
     tasks,
     sessions,
     usage,
     lifecycle,
     executions,
+    schedules,
     readTask: (taskDir) => tasks.get(taskDir) ?? null,
     writeTask: (taskDir, record) => {
       tasks.set(taskDir, record);
@@ -264,6 +283,15 @@ export function memoryTaskStore(): TaskStore & {
     },
     writeExecutions: (taskDir, ledger) => {
       executions.set(taskDir, parseExecutionLedger(serializeExecutionLedger(ledger)));
+    },
+    // Same parity rule as the ledger mirror: a record the disk store would
+    // refuse never enters the memory store.
+    readSchedules: (taskDir) => {
+      const record = schedules.get(taskDir);
+      return record === undefined ? emptyScheduleRecord() : parseScheduleRecord(serializeScheduleRecord(record));
+    },
+    writeSchedules: (taskDir, record) => {
+      schedules.set(taskDir, parseScheduleRecord(serializeScheduleRecord(record)));
     },
   };
 }
@@ -429,6 +457,12 @@ export class TaskWorkspaceHost {
    */
   private readonly executions: TaskExecutionLedger;
   /**
+   * [PiDock 18] (#20) persistent schedules of this task plus one record per
+   * trigger. Loaded once per Host instance; every trigger creates its own
+   * session in this same task folder and its own execution record.
+   */
+  private readonly schedules: TaskSchedules;
+  /**
    * Redacted provider catalog ([PiDock 11] #9): ids/names/protocols/model
    * declarations pushed by main. Never carries an auth reference: the Host
    * validates selections against it while credentials stay in the app layer.
@@ -458,6 +492,122 @@ export class TaskWorkspaceHost {
     if (taskDir.trim().length === 0) throw new Error("taskDir must be non-empty");
     this.write = new TaskWriteCoordinator(liveResources);
     this.executions = new TaskExecutionLedger(taskId, taskDir, store, now);
+    this.schedules = new TaskSchedules(taskId, taskDir, store, {
+      startRun: (input) => this.startScheduledRun(input),
+      liveExecution: (scheduleId) => this.executions.liveSchedule(scheduleId),
+      archived: () => this.store.readLifecycle(this.taskDir)?.archived === true,
+      catalog: () =>
+        this.catalog.map((profile) => ({
+          id: profile.id,
+          enabled: profile.enabled,
+          models: profile.models.map((model) => ({ id: model.id })),
+        })),
+      now: this.now,
+    });
+  }
+
+  /**
+   * One scheduled trigger = one independent session of this task ([PiDock 18] #20
+   * 盒子 3/4): the session is created for this run only, never restored from a
+   * previous run's conversation, and the prompt is sent exactly once through the
+   * normal turn path, so session permission, write coordination, tool
+   * confirmations and per-attempt usage keep applying unchanged.
+   */
+  private startScheduledRun(input: {
+    runId: string;
+    sessionId: string;
+    schedule: StoredSchedule;
+    approvalExpiresAt: string;
+  }): { state: "done" | "approval" | "failed"; approvalId?: string; failureReason?: string } {
+    const existing = this.store.readSession(this.taskDir, input.sessionId);
+    if (existing !== null) {
+      // Ids are re-seeded from the persisted record, so this can only be a
+      // tampered/copied folder: refuse instead of continuing another run.
+      throw new Error(`session-exists: 定时执行会话 ${input.sessionId} 已存在，不能复用`);
+    }
+    this.openSession(input.sessionId, {
+      providerId: input.schedule.providerId,
+      model: input.schedule.model,
+      permission: input.schedule.permission,
+    });
+    try {
+      const result = this.sendMessage(input.sessionId, input.schedule.prompt, undefined, {
+        scheduleId: input.schedule.scheduleId,
+        scheduleConfigVersion: input.schedule.configVersion,
+        approvalExpiresAt: input.approvalExpiresAt,
+      });
+      if (result.state === "approval") return { state: "approval", approvalId: result.approvalId ?? "" };
+      return { state: result.state === "done" ? "done" : "failed" };
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      // A refused turn still created the run's session; the failed run keeps the
+      // reason and the next occurrence is not blocked by it.
+      return { state: "failed", failureReason: reason };
+    }
+  }
+
+  // ---- [PiDock 18] (#20) scheduled tasks ----
+
+  /** Pure read: listing schedules never triggers one (see `evaluateSchedules`). */
+  listSchedules(): StoredSchedule[] {
+    return this.schedules.list();
+  }
+
+  scheduleTemplates() {
+    return this.schedules.templates();
+  }
+
+  schedulePreview(input: { ruleText: string; timezone: string; after?: string }): SchedulePreview {
+    return this.schedules.preview(input);
+  }
+
+  saveSchedule(input: SaveScheduleInput): SaveScheduleResult {
+    return this.schedules.save(input);
+  }
+
+  applyScheduleTemplate(scheduleId: string, templateId: string): SaveScheduleResult {
+    return this.schedules.applyTemplate(scheduleId, templateId);
+  }
+
+  setScheduleEnabled(scheduleId: string, enabled: boolean): SaveScheduleResult {
+    return this.schedules.setEnabled(scheduleId, enabled);
+  }
+
+  removeSchedule(scheduleId: string): { removed: boolean } {
+    return this.schedules.remove(scheduleId);
+  }
+
+  /** 立即运行: one independent run now, without moving the next planned time. */
+  runScheduleNow(scheduleId: string): ScheduledRunRecord {
+    return this.schedules.runNow(scheduleId);
+  }
+
+  scheduleRuns(scheduleId?: string): ScheduledRunRecord[] {
+    return this.schedules.runs(scheduleId);
+  }
+
+  /** Due-trigger evaluation (read path; no timer exists in the Host). */
+  evaluateSchedules(): ScheduledRunRecord[] {
+    return this.isArchived() ? [] : this.schedules.evaluateDue();
+  }
+
+  /**
+   * Archiving this task pauses every enabled schedule (盒子 6「归档停止并暂停」).
+   * Restoring never re-enables one: only an explicit `setScheduleEnabled(true)`
+   * on a non-archived task does.
+   */
+  pauseSchedulesForArchive(): StoredSchedule[] {
+    const paused: StoredSchedule[] = [];
+    for (const schedule of this.schedules.list()) {
+      if (!schedule.enabled) continue;
+      const result = this.schedules.setEnabled(schedule.scheduleId, false);
+      if (result.ok) paused.push(result.schedule);
+    }
+    return paused;
+  }
+
+  private isArchived(): boolean {
+    return this.store.readLifecycle(this.taskDir)?.archived === true;
   }
 
   /**
@@ -1246,6 +1396,12 @@ export class TaskWorkspaceHost {
     sessionId: string,
     text: string,
     turn?: Omit<PiTurnInput, "text" | "stream">,
+    /**
+     * [PiDock 18] (#20) scheduled origin: the execution record names the schedule
+     * and the config version it ran with, and a confirmation this run waits on
+     * expires at min(24h, next plan) instead of the default 24h.
+     */
+    origin?: { scheduleId: string; scheduleConfigVersion: number; approvalExpiresAt: string },
   ): HostTurnResult {
     const channel = this.openSession(sessionId);
     // [PiDock 09] (#11) box 3: a read-only session never runs an execution
@@ -1301,8 +1457,14 @@ export class TaskWorkspaceHost {
     // a turn that dies midway is still recorded with its step trail and attempt.
     const execution = this.executions.open({
       sessionId,
-      kind: "turn",
-      label: plannedTool !== undefined && target !== undefined ? `回合工具 ${plannedTool} ${target}` : `回合工具 ${plannedTool ?? "fs.write"}`,
+      kind: origin === undefined ? "turn" : "scheduled",
+      label:
+        origin !== undefined
+          ? `定时执行 ${origin.scheduleId}（配置 v${origin.scheduleConfigVersion}）`
+          : plannedTool !== undefined && target !== undefined
+            ? `回合工具 ${plannedTool} ${target}`
+            : `回合工具 ${plannedTool ?? "fs.write"}`,
+      ...(origin !== undefined ? { scheduleId: origin.scheduleId, scheduleConfigVersion: origin.scheduleConfigVersion } : {}),
     });
     const stepId = plannedTool !== undefined ? `tool-${plannedTool}` : "turn";
     this.executions.planStep(execution.executionId, {
@@ -1325,7 +1487,7 @@ export class TaskWorkspaceHost {
       }
       throw error;
     }
-    this.recordTurnOutcome(execution.executionId, stepId, result);
+    this.recordTurnOutcome(execution.executionId, stepId, result, origin);
     // Box 4: the right is kept while the turn waits on a confirmation and is
     // released only when the turn settles; a live derived execution keeps it
     // even then (`releaseWrite` retains the owner).
@@ -1366,6 +1528,8 @@ export class TaskWorkspaceHost {
     executionId: string,
     stepId: string,
     result: ReturnType<PiSessionChannel["runTurn"]>,
+    /** Scheduled origin: binds the run's confirmation deadline (盒子 4). */
+    origin?: { approvalExpiresAt: string },
   ): void {
     this.executions.linkCall(executionId, result.call.callId);
     if (result.state === "approval") {
@@ -1375,6 +1539,7 @@ export class TaskWorkspaceHost {
           approvalId: approval.id,
           payloadVersion: approval.contentVersion,
           ...(approval.scope !== undefined ? { scope: approval.scope } : {}),
+          ...(origin !== undefined ? { expiresAt: origin.approvalExpiresAt } : {}),
         });
       }
       this.executions.attempt(executionId, { endState: "awaiting-approval", usageId: result.call.callId });

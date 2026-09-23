@@ -131,6 +131,10 @@ export interface ExecutionRecord {
   failureReason?: string;
   /** Turn call identity when the execution is one call ([PiDock 12] #12). */
   callId?: string;
+  /** [PiDock 18] #20: the scheduled task that opened this execution. */
+  scheduleId?: string;
+  /** [PiDock 18] #20: the schedule config version this run was started with. */
+  scheduleConfigVersion?: number;
   /** Derived executions a stop covered (盒子 6); completed steps are untouched. */
   stoppedDerived?: string[];
 }
@@ -167,6 +171,8 @@ export function openExecution(input: {
   at: string;
   projectId?: string;
   callId?: string;
+  scheduleId?: string;
+  scheduleConfigVersion?: number;
 }): ExecutionRecord {
   if (input.executionId.trim().length === 0) throw new Error("invalid-payload: executionId must be non-empty");
   if (input.taskId.trim().length === 0) throw new Error("invalid-payload: taskId must be non-empty");
@@ -187,6 +193,8 @@ export function openExecution(input: {
     draftKept: false,
     ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
     ...(input.callId !== undefined ? { callId: input.callId } : {}),
+    ...(input.scheduleId !== undefined ? { scheduleId: input.scheduleId } : {}),
+    ...(input.scheduleConfigVersion !== undefined ? { scheduleConfigVersion: input.scheduleConfigVersion } : {}),
   };
 }
 
@@ -691,7 +699,19 @@ export function highestExecutionSequence(ledger: ExecutionLedgerRecord, prefix: 
   let highest = 0;
   for (const record of ledger.executions) {
     const match = pattern.exec(record.executionId);
-    if (match) highest = Math.max(highest, Number.parseInt(match[1], 10));
+    if (match) highest = Math.max(highest, Number.parseInt(match[1] as string, 10));
   }
   return highest;
+}
+
+/**
+ * Live execution of one scheduled task ([PiDock 18] #20 box 5): a previous trigger
+ * that is still executing or waiting on a confirmation must make the next one
+ * skip instead of queueing.
+ */
+export function liveScheduleExecutions(ledger: ExecutionLedgerRecord, scheduleId: string): ExecutionRecord[] {
+  return ledger.executions.filter(
+    (record) =>
+      record.scheduleId === scheduleId && (record.state === "executing" || record.state === "pending-approval"),
+  );
 }

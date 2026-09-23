@@ -93,7 +93,19 @@ export type HostTaskOp =
   | "task/quit"
   | "task/executionState"
   | "task/attention"
-  | "task/markAttentionRead";
+  | "task/markAttentionRead"
+  // [PiDock 18] (#20) scheduled tasks: config, preview, enable/pause, run now,
+  // history and the explicit due-trigger evaluation (the Host has no timer).
+  | "task/scheduleList"
+  | "task/scheduleTemplates"
+  | "task/schedulePreview"
+  | "task/scheduleSave"
+  | "task/scheduleApplyTemplate"
+  | "task/scheduleSetEnabled"
+  | "task/scheduleRemove"
+  | "task/scheduleRunNow"
+  | "task/scheduleRuns"
+  | "task/scheduleEvaluate";
 
 /**
  * Sender attestation stamped by the trusted main process on a routed
@@ -230,6 +242,17 @@ const HOST_TASK_OPS: readonly string[] = [
   "task/executionState",
   "task/attention",
   "task/markAttentionRead",
+  // [PiDock 18] (#20) scheduled tasks.
+  "task/scheduleList",
+  "task/scheduleTemplates",
+  "task/schedulePreview",
+  "task/scheduleSave",
+  "task/scheduleApplyTemplate",
+  "task/scheduleSetEnabled",
+  "task/scheduleRemove",
+  "task/scheduleRunNow",
+  "task/scheduleRuns",
+  "task/scheduleEvaluate",
 ];
 
 export function isHostTaskOp(value: unknown): value is HostTaskOp {

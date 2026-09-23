@@ -28,6 +28,12 @@ import {
   type StepState,
 } from "../main/execution-ledger.js";
 import { PI_USAGE_KINDS, type PiUsageCleanupScope, type PiUsageDetail, type PiUsageEndState, type PiUsageKind } from "../main/usage-ledger.js";
+import {
+  emptyScheduleRecord,
+  type ScheduleDiskRecord,
+  type ScheduledRunRecord,
+  type StoredSchedule,
+} from "../main/schedule-rules.js";
 
 export interface RepoSourceRecord {
   /** In-task folder name (single safe component). */
@@ -82,6 +88,7 @@ const SESSIONS_DIR = "sessions";
 const USAGE_FILE = "usage.json";
 const LIFECYCLE_FILE = "lifecycle.json";
 const EXECUTION_FILE = "execution.json";
+const SCHEDULE_FILE = "schedules.json";
 
 function assertSafeFileName(name: string, label: string): void {
   if (
@@ -716,6 +723,18 @@ function parseExecutionRecord(value: unknown): ExecutionRecord {
       throw new Error(`invalid-payload: execution record.${key} must be a non-empty string`);
     }
   }
+  // [PiDock 18] #20: a scheduled execution names its schedule + config version.
+  if (record["scheduleId"] !== undefined && (typeof record["scheduleId"] !== "string" || (record["scheduleId"] as string).length === 0)) {
+    throw new Error("invalid-payload: execution record.scheduleId must be a non-empty string");
+  }
+  if (
+    record["scheduleConfigVersion"] !== undefined &&
+    (typeof record["scheduleConfigVersion"] !== "number" ||
+      !Number.isInteger(record["scheduleConfigVersion"]) ||
+      (record["scheduleConfigVersion"] as number) < 1)
+  ) {
+    throw new Error("invalid-payload: execution record.scheduleConfigVersion must be a positive integer");
+  }
   if (record["stoppedDerived"] !== undefined) {
     if (!Array.isArray(record["stoppedDerived"]) || (record["stoppedDerived"] as unknown[]).some((item) => typeof item !== "string")) {
       throw new Error("invalid-payload: execution record.stoppedDerived must be a string array");
@@ -776,3 +795,104 @@ export function readExecutionLedgerOnDisk(taskDir: string): ExecutionLedgerRecor
 
 /** Step vocabulary, re-exported so the Host never re-spells it. */
 export type { StepState };
+
+export function scheduleFilePath(taskDir: string): string {
+  return join(taskDir, SCHEDULE_FILE);
+}
+
+const SCHEDULE_PERMISSIONS = ["read", "default", "auto"] as const;
+const RUN_TRIGGERS = ["due", "manual"] as const;
+const RUN_RESULTS = ["completed", "skipped", "failed"] as const;
+
+function requireString(record: Record<string, unknown>, key: string, label: string): void {
+  if (typeof record[key] !== "string" || (record[key] as string).length === 0) {
+    throw new Error(`invalid-payload: ${label}.${key} must be a non-empty string`);
+  }
+}
+
+function parseStoredSchedule(value: unknown): StoredSchedule {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("invalid-payload: schedule must be an object");
+  }
+  const schedule = value as Record<string, unknown>;
+  for (const key of ["scheduleId", "taskId", "name", "ruleText", "timezone", "prompt", "providerId", "model", "lastEvaluatedAt", "createdAt", "updatedAt"] as const) {
+    requireString(schedule, key, "schedule");
+  }
+  if (schedule["projectId"] !== undefined) requireString(schedule, "projectId", "schedule");
+  if (
+    typeof schedule["permission"] !== "string" ||
+    !(SCHEDULE_PERMISSIONS as readonly string[]).includes(schedule["permission"] as string)
+  ) {
+    throw new Error("invalid-payload: schedule.permission must be read/default/auto");
+  }
+  if (typeof schedule["enabled"] !== "boolean") throw new Error("invalid-payload: schedule.enabled must be a boolean");
+  if (typeof schedule["configVersion"] !== "number" || !Number.isInteger(schedule["configVersion"]) || (schedule["configVersion"] as number) < 1) {
+    throw new Error("invalid-payload: schedule.configVersion must be a positive integer");
+  }
+  if (schedule["repairIssue"] !== undefined) requireString(schedule, "repairIssue", "schedule");
+  return value as StoredSchedule;
+}
+
+function parseScheduledRun(value: unknown): ScheduledRunRecord {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("invalid-payload: scheduled run must be an object");
+  }
+  const run = value as Record<string, unknown>;
+  for (const key of ["runId", "scheduleId", "taskId", "occurrenceKey", "scheduledAt", "startedAt", "providerId", "model", "ruleText"] as const) {
+    requireString(run, key, "scheduled run");
+  }
+  for (const key of ["endedAt", "sessionId", "reason"] as const) {
+    if (run[key] !== undefined) requireString(run, key, "scheduled run");
+  }
+  if (typeof run["configVersion"] !== "number" || !Number.isInteger(run["configVersion"]) || (run["configVersion"] as number) < 1) {
+    throw new Error("invalid-payload: scheduled run.configVersion must be a positive integer");
+  }
+  if (typeof run["trigger"] !== "string" || !(RUN_TRIGGERS as readonly string[]).includes(run["trigger"] as string)) {
+    throw new Error("invalid-payload: scheduled run.trigger must be due/manual");
+  }
+  if (typeof run["result"] !== "string" || !(RUN_RESULTS as readonly string[]).includes(run["result"] as string)) {
+    throw new Error("invalid-payload: scheduled run.result must be completed/skipped/failed");
+  }
+  if (typeof run["permission"] !== "string" || !(SCHEDULE_PERMISSIONS as readonly string[]).includes(run["permission"] as string)) {
+    throw new Error("invalid-payload: scheduled run.permission must be read/default/auto");
+  }
+  return value as ScheduledRunRecord;
+}
+
+export function serializeScheduleRecord(record: ScheduleDiskRecord): string {
+  return JSON.stringify(record, null, 2);
+}
+
+/** Full shape validation on read: a corrupt schedule file must not half-restore. */
+export function parseScheduleRecord(raw: string): ScheduleDiskRecord {
+  const value: unknown = JSON.parse(raw);
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("invalid-payload: schedule record must be an object");
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record["version"] !== "number" || !Number.isInteger(record["version"]) || (record["version"] as number) < 1) {
+    throw new Error("invalid-payload: schedule record.version must be a positive integer");
+  }
+  if (!Array.isArray(record["schedules"])) throw new Error("invalid-payload: schedule record.schedules must be an array");
+  if (!Array.isArray(record["runs"])) throw new Error("invalid-payload: schedule record.runs must be an array");
+  return {
+    version: record["version"] as number,
+    schedules: (record["schedules"] as unknown[]).map((schedule) => parseStoredSchedule(schedule)),
+    runs: (record["runs"] as unknown[]).map((run) => parseScheduledRun(run)),
+  };
+}
+
+export function writeScheduleRecordOnDisk(taskDir: string, record: ScheduleDiskRecord): void {
+  mkdirSync(taskDir, { recursive: true });
+  writeFileSync(scheduleFilePath(taskDir), serializeScheduleRecord(record), "utf8");
+}
+
+/** Absent file = a task with no schedules yet (empty record, not an error). */
+export function readScheduleRecordOnDisk(taskDir: string): ScheduleDiskRecord {
+  try {
+    return parseScheduleRecord(readFileSync(scheduleFilePath(taskDir), "utf8"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return emptyScheduleRecord();
+    throw error;
+  }
+}

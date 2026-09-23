@@ -66,6 +66,22 @@ import {
   type TaskOpOrigin,
 } from "../rpc/protocol.js";
 
+/** Editable schedule fields; anything else in the payload is an extra key. */
+const SCHEDULE_SAVE_KEYS = [
+  "scheduleId",
+  "projectId",
+  "name",
+  "ruleText",
+  "timezone",
+  "prompt",
+  "providerId",
+  "model",
+  "permission",
+  "enabled",
+  "sessionId",
+  "label",
+];
+
 function workspaceOf(params: unknown): string {
   if (
     typeof params === "object" &&
@@ -1301,7 +1317,9 @@ async function dispatchTaskOp(
         try {
           if (op === "task/archive") {
             const archived = lifecycle.archive();
-            return { ok: true, payload: { lifecycle: archived.record, plan: archived.plan } };
+            // [PiDock 18] (#20) box 6: archiving pauses this task's schedules too.
+            const pausedSchedules = host.pauseSchedulesForArchive();
+            return { ok: true, payload: { lifecycle: archived.record, plan: archived.plan, pausedSchedules } };
           }
           const restored = lifecycle.restore();
           return { ok: true, payload: { lifecycle: restored.record, scheduleResumed: restored.scheduleResumed, servicesStarted: restored.servicesStarted } };
@@ -1371,6 +1389,104 @@ async function dispatchTaskOp(
         if ("error" in host) return { ok: false, error: host.error };
         const itemIds = record["itemIds"] as string[];
         return { ok: true, payload: { ...host.markAttentionRead(itemIds) } };
+      }
+      // [PiDock 18] (#20) scheduled tasks. The Host owns the rule validation, the
+      // plan and the trigger records; a trigger creates its own session in this
+      // task folder through the normal turn path (permission + write lock +
+      // confirmations unchanged), and there is no timer: `scheduleEvaluate` is
+      // the explicit due-trigger evaluation.
+      case "task/scheduleList": {
+        const host = taskHostFor(taskId);
+        if ("error" in host) return { ok: false, error: host.error };
+        try {
+          return { ok: true, payload: { schedules: host.listSchedules(), templates: host.scheduleTemplates() } };
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : String(error) };
+        }
+      }
+      case "task/scheduleTemplates": {
+        const host = taskHostFor(taskId);
+        if ("error" in host) return { ok: false, error: host.error };
+        return { ok: true, payload: { templates: host.scheduleTemplates() } };
+      }
+      case "task/schedulePreview": {
+        const host = taskHostFor(taskId);
+        if ("error" in host) return { ok: false, error: host.error };
+        const preview = host.schedulePreview({
+          ruleText: record["ruleText"] as string,
+          timezone: record["timezone"] as string,
+          ...(typeof record["after"] === "string" ? { after: record["after"] as string } : {}),
+        });
+        return { ok: true, payload: { preview } };
+      }
+      case "task/scheduleSave": {
+        if (record["sessionId"] !== undefined) {
+          return { ok: false, error: "permission-denied: 定时配置只允许界面显式操作，不能由 Agent 会话发起" };
+        }
+        const host = taskHostFor(taskId);
+        if ("error" in host) return { ok: false, error: host.error };
+        const result = host.saveSchedule({
+          ...(typeof record["scheduleId"] === "string" ? { scheduleId: record["scheduleId"] as string } : {}),
+          ...(typeof record["projectId"] === "string" ? { projectId: record["projectId"] as string } : {}),
+          name: record["name"] as string,
+          ruleText: record["ruleText"] as string,
+          timezone: record["timezone"] as string,
+          prompt: record["prompt"] as string,
+          providerId: record["providerId"] as string,
+          model: record["model"] as string,
+          permission: record["permission"] as "read" | "default" | "auto",
+          ...(typeof record["enabled"] === "boolean" ? { enabled: record["enabled"] as boolean } : {}),
+          extraKeys: Object.keys(record).filter((key) => !SCHEDULE_SAVE_KEYS.includes(key)),
+        });
+        return result.ok ? { ok: true, payload: { schedule: result.schedule } } : { ok: false, error: `${result.code}: ${result.message}` };
+      }
+      case "task/scheduleApplyTemplate": {
+        const host = taskHostFor(taskId);
+        if ("error" in host) return { ok: false, error: host.error };
+        const result = host.applyScheduleTemplate(record["scheduleId"] as string, record["templateId"] as string);
+        return result.ok ? { ok: true, payload: { schedule: result.schedule } } : { ok: false, error: `${result.code}: ${result.message}` };
+      }
+      case "task/scheduleSetEnabled": {
+        const host = taskHostFor(taskId);
+        if ("error" in host) return { ok: false, error: host.error };
+        const result = host.setScheduleEnabled(record["scheduleId"] as string, record["enabled"] as boolean);
+        return result.ok ? { ok: true, payload: { schedule: result.schedule } } : { ok: false, error: `${result.code}: ${result.message}` };
+      }
+      case "task/scheduleRemove": {
+        const host = taskHostFor(taskId);
+        if ("error" in host) return { ok: false, error: host.error };
+        return { ok: true, payload: { ...host.removeSchedule(record["scheduleId"] as string) } };
+      }
+      case "task/scheduleRunNow": {
+        // 立即运行 creates a real execution and session: an agent session must not
+        // mint one for itself, so this stays a human-UI-only action.
+        if (record["sessionId"] !== undefined) {
+          return { ok: false, error: "permission-denied: 立即运行只允许界面显式操作，不能由 Agent 会话发起" };
+        }
+        const caller = classifyControlCaller({ label: record["label"], origin });
+        if (!caller.ok) return { ok: false, error: caller.error };
+        const host = taskHostFor(taskId);
+        if ("error" in host) return { ok: false, error: host.error };
+        try {
+          return { ok: true, payload: { run: host.runScheduleNow(record["scheduleId"] as string) } };
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : String(error) };
+        }
+      }
+      case "task/scheduleRuns": {
+        const host = taskHostFor(taskId);
+        if ("error" in host) return { ok: false, error: host.error };
+        const scheduleId = typeof record["scheduleId"] === "string" ? (record["scheduleId"] as string) : undefined;
+        return { ok: true, payload: { runs: host.scheduleRuns(scheduleId) } };
+      }
+      case "task/scheduleEvaluate": {
+        const host = taskHostFor(taskId);
+        if ("error" in host) return { ok: false, error: host.error };
+        try {
+          return { ok: true, payload: { runs: host.evaluateSchedules(), schedules: host.listSchedules() } };
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : String(error) };
+        }
       }
       default:
         return { ok: false, error: `unknown-op: ${op}` };
