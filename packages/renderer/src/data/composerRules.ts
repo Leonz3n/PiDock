@@ -149,6 +149,10 @@ export type CandidateRow = {
   /** Task-reference provenance carried into the draft chip (box 4/15). */
   sourceKind?: "worktree" | "plain-dir";
   relativePath?: string;
+  /** Pinned worktree commit for this entry's source; absent when unknown. */
+  version?: string;
+  /** Skill resource relative path inside its source root; absent when unknown. */
+  resourcePath?: string;
   availability: CandidateAvailability;
   reason?: string;
 };
@@ -165,15 +169,31 @@ export type ComposerCommandView = {
 /**
  * Task file/directory entries with their source identity. `task.files`
  * paths are already `<source>/<relative>`; plain-directory links are
- * separate sources that never fake a Git version.
+ * separate sources that never fake a Git version. A worktree source reports
+ * the pinned commit the adapter gave its files, so the reference can record
+ * the version it was picked at (absent when the adapter knows no commit).
  */
-export function taskSourceEntries(task: Pick<Task, "files" | "directories">): { sourceId: string; sourceKind: "worktree" | "plain-dir"; displayName: string; target?: string; relativePath: string; kind: "file" | "directory" }[] {
-  const entries: { sourceId: string; sourceKind: "worktree" | "plain-dir"; displayName: string; target?: string; relativePath: string; kind: "file" | "directory" }[] = [];
+export function taskSourceEntries(task: Pick<Task, "files" | "directories">): { sourceId: string; sourceKind: "worktree" | "plain-dir"; displayName: string; target?: string; relativePath: string; version?: string; kind: "file" | "directory" }[] {
+  const entries: { sourceId: string; sourceKind: "worktree" | "plain-dir"; displayName: string; target?: string; relativePath: string; version?: string; kind: "file" | "directory" }[] = [];
+  const split = (path: string) => {
+    const separator = path.indexOf("/");
+    return separator === -1
+      ? { displayName: "workspace", relativePath: path }
+      : { displayName: path.slice(0, separator), relativePath: path.slice(separator + 1) };
+  };
+  // One worktree version per source: the first commit its files report, so a
+  // candidate row can pin the version instead of guessing one.
+  const commits = new Map<string, string>();
   for (const file of task.files) {
-    const separator = file.path.indexOf("/");
-    const displayName = separator === -1 ? "workspace" : file.path.slice(0, separator);
-    const relativePath = separator === -1 ? file.path : file.path.slice(separator + 1);
-    entries.push({ sourceId: displayName, sourceKind: "worktree", displayName, relativePath, kind: "file" });
+    const { displayName } = split(file.path);
+    const commit = file.commit?.trim();
+    if (commit === undefined || commit.length === 0 || commits.has(displayName)) continue;
+    commits.set(displayName, commit);
+  }
+  for (const file of task.files) {
+    const { displayName, relativePath } = split(file.path);
+    const commit = commits.get(displayName);
+    entries.push({ sourceId: displayName, sourceKind: "worktree", displayName, relativePath, ...(commit !== undefined ? { version: commit } : {}), kind: "file" });
   }
   for (const directory of task.directories) {
     entries.push({ sourceId: directory.id, sourceKind: "plain-dir", displayName: directory.linkName, target: directory.path, relativePath: "", kind: "directory" });
@@ -202,6 +222,7 @@ export function fileCandidates(task: Pick<Task, "files" | "directories">, query:
       sourceId: entry.sourceId,
       sourceKind: entry.sourceKind,
       relativePath: entry.relativePath,
+      ...(entry.version !== undefined ? { version: entry.version } : {}),
       availability: "available",
     });
   }
@@ -215,25 +236,56 @@ export function skillCandidates(capabilities: readonly Capability[], query: stri
   return capabilities
     .filter((capability) => capability.kind === "skill" && capability.status === "enabled")
     .filter((capability) => needle.length === 0 || `${capability.name} ${capability.source}`.toLowerCase().includes(needle))
-    .map((capability) => ({
-      key: `skill:${capability.id}`,
-      kind: "skill" as const,
-      value: `$${capability.name}`,
-      label: `$${capability.name}`,
-      detail: `${capability.source} · ${capability.scope} · 已启用技能`,
-      source: capability.source,
-      sourceId: capability.id,
-      availability: "available" as const,
-    }));
+    .map(skillCandidate);
+}
+
+/**
+ * One skill capability as a candidate row. The `/skills` modal builds its
+ * "insert" reference from the same row, so a skill entered through the menu
+ * carries the same provenance as the `$` picker.
+ */
+export function skillCandidate(capability: Capability): CandidateRow {
+  return {
+    key: `skill:${capability.id}`,
+    kind: "skill" as const,
+    value: `$${capability.name}`,
+    label: `$${capability.name}`,
+    detail: `${capability.source} · ${capability.scope} · 已启用技能`,
+    source: capability.source,
+    sourceId: capability.id,
+    ...(capability.resourcePath !== undefined && capability.resourcePath.trim().length > 0 ? { resourcePath: capability.resourcePath.trim() } : {}),
+    availability: "available" as const,
+  };
+}
+
+/**
+ * The provenance one candidate row contributes to a stored reference. The
+ * composer picker and the `/skills` modal both go through it, so a reference
+ * can never record a different field set depending on the entry point.
+ * A worktree row pins the commit it was picked at; a plain directory pins
+ * `null` and never fakes a Git version.
+ */
+export function referenceProvenance(row: CandidateRow): Partial<Reference> {
+  const provenance: Partial<Reference> = {};
+  if (row.sourceId !== undefined) provenance.sourceId = row.sourceId;
+  if (row.sourceKind !== undefined) {
+    provenance.sourceKind = row.sourceKind;
+    provenance.version = row.sourceKind === "worktree" ? (row.version ?? null) : null;
+  }
+  if (row.relativePath !== undefined && row.relativePath.trim().length > 0) provenance.relativePath = row.relativePath;
+  if (row.resourcePath !== undefined) provenance.resourcePath = row.resourcePath;
+  return provenance;
 }
 
 /** A stored draft reference: its label plus the provenance the check needs. */
-export type DraftReferenceCheck = { state: "ok" } | { state: "invalid"; code: "cross-task" | "stale-source" | "moved" | "out-of-bounds"; message: string };
+export type DraftReferenceCheck = { state: "ok" } | { state: "invalid"; code: "cross-task" | "stale-source" | "moved" | "out-of-bounds" | "no-version"; message: string };
 
 /**
  * Box 4/14/15: a reference whose source vanished, moved, left the task or
  * belongs to another task must be re-selected. Nothing here resolves to the
- * main checkout or to another task's same-named file.
+ * main checkout or to another task's same-named file. A worktree reference
+ * also has to match the commit the task currently reports (`no-version`),
+ * mirroring `validateDraftReference` shell-side.
  */
 export function checkDraftReference(reference: Reference, task: Pick<Task, "id" | "files" | "directories">): DraftReferenceCheck {
   if (reference.kind === "attachment" || reference.kind === "skill") return { state: "ok" };
@@ -251,9 +303,17 @@ export function checkDraftReference(reference: Reference, task: Pick<Task, "id" 
   if (sourceId !== undefined && sameSource.length === 0) {
     return { state: "invalid", code: "stale-source", message: "来源已失效（目录链接或仓库已移除），请重新选择" };
   }
-  const found = sameSource.some((entry) => entry.relativePath === relativePath);
-  if (!found && sameSource.length > 0) {
+  const found = sameSource.find((entry) => entry.relativePath === relativePath);
+  if (found === undefined && sameSource.length > 0) {
     return { state: "invalid", code: "moved", message: "文件已移动，请重新选择，不回退到主检出目录" };
+  }
+  if (found !== undefined && found.sourceKind === "worktree") {
+    if (found.version === undefined || reference.version === null || reference.version === undefined) {
+      return { state: "invalid", code: "no-version", message: "无法确认该 worktree 的版本，请重新选择" };
+    }
+    if (found.version !== reference.version) {
+      return { state: "invalid", code: "no-version", message: `引用版本 ${reference.version} 与当前 ${found.version} 不一致，请重新选择` };
+    }
   }
   return { state: "ok" };
 }

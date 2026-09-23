@@ -7,7 +7,9 @@ import {
   commandCandidates,
   describeReferenceChip,
   fileCandidates,
+  referenceProvenance,
   resolveComposerKey,
+  skillCandidate,
   skillCandidates,
   suggestCommand,
 } from "../data/composerRules";
@@ -104,19 +106,45 @@ describe("composer rule mirror", () => {
   it("marks a moved, stale or cross-task draft reference for re-selection", () => {
     const task = {
       id: "task-release",
-      files: [{ path: "front-monorepo/src/api.ts", status: "modified" as const }],
+      files: [{ path: "front-monorepo/src/api.ts", status: "modified" as const, commit: "9acb5b6f" }],
       directories: [{ id: "dir-docs", name: "文档", path: "/Users/x/docs", linkName: "release-docs" }],
     };
-    const ok: Reference = { id: "r1", kind: "file", label: "front-monorepo/src/api.ts", detail: "x", taskId: "task-release", sourceId: "front-monorepo", sourceKind: "worktree", relativePath: "src/api.ts" };
+    const ok: Reference = { id: "r1", kind: "file", label: "front-monorepo/src/api.ts", detail: "x", taskId: "task-release", sourceId: "front-monorepo", sourceKind: "worktree", relativePath: "src/api.ts", version: "9acb5b6f" };
     expect(checkDraftReference(ok, task)).toEqual({ state: "ok" });
     expect(checkDraftReference({ ...ok, id: "r2", relativePath: "src/gone.ts" }, task)).toMatchObject({ code: "moved" });
     expect(checkDraftReference({ ...ok, id: "r3", sourceId: "bff-service" }, task)).toMatchObject({ code: "stale-source" });
     expect(checkDraftReference({ ...ok, id: "r4", relativePath: "../outside.ts" }, task)).toMatchObject({ code: "out-of-bounds" });
     expect(checkDraftReference({ ...ok, id: "r5", taskId: "task-other" }, task)).toMatchObject({ code: "cross-task" });
+    // A worktree reference has to carry the pinned version: an unknown one and
+    // a drifted one are both re-selection (the shell `validateDraftReference`
+    // rule), so the mirror can never silently bind a moved worktree.
+    expect(checkDraftReference({ ...ok, id: "r7", version: null }, task)).toMatchObject({ code: "no-version" });
+    expect(checkDraftReference({ ...ok, id: "r8", version: "deadbee" }, task)).toMatchObject({ code: "no-version" });
+    expect(checkDraftReference({ ...ok, id: "r9", version: undefined }, task)).toMatchObject({ code: "no-version" });
     // An attachment authorizes only itself and is never a source error.
     expect(checkDraftReference({ id: "r6", kind: "attachment", label: "shot.png", detail: "图片附件" }, task)).toEqual({ state: "ok" });
+    expect(describeReferenceChip(ok)).toContain("worktree @ 9acb5b6f");
     expect(describeReferenceChip(ok)).toContain("估算");
     expect(describeReferenceChip(ok)).toContain("不计入实报 Token");
+  });
+
+  it("carries the pinned worktree commit and the skill resource path into a reference", () => {
+    const task = {
+      id: "task-release",
+      files: [{ path: "front-monorepo/src/api.ts", status: "modified" as const, commit: "9acb5b6f" }],
+      directories: [{ id: "dir-docs", name: "文档", path: "/Users/x/docs", linkName: "release-docs" }],
+    };
+    const [file] = fileCandidates(task, "api");
+    expect(file).toMatchObject({ sourceKind: "worktree", version: "9acb5b6f" });
+    expect(referenceProvenance(file!)).toEqual({ sourceId: "front-monorepo", sourceKind: "worktree", relativePath: "src/api.ts", version: "9acb5b6f" });
+    // A plain-directory link pins `null` and never fakes a Git version.
+    const [link] = fileCandidates(task, "release-docs");
+    expect(referenceProvenance(link!)).toEqual({ sourceId: "dir-docs", sourceKind: "plain-dir", version: null });
+    // The `/skills` modal builds its reference from the same row as the `$` picker.
+    const skill = skillCandidate({ id: "cap-1", kind: "skill", name: "code-review", source: "项目 · .pi/skills", scope: "本任务工作区", resourcePath: "skills/code-review/SKILL.md", status: "enabled" });
+    expect(skill).toMatchObject({ key: "skill:cap-1", value: "$code-review", resourcePath: "skills/code-review/SKILL.md" });
+    expect(referenceProvenance(skill)).toEqual({ sourceId: "cap-1", resourcePath: "skills/code-review/SKILL.md" });
+    expect(skillCandidates([{ id: "cap-2", kind: "skill", name: "unit-tests", source: "全局 pi/skills", scope: "全局", status: "enabled" }], "unit")[0]!.resourcePath).toBeUndefined();
   });
 
   it("mirrors the same @ outcome the memory task produces", async () => {

@@ -256,6 +256,11 @@ export type Repository = {
 export type WorkspaceFile = {
   path: string;
   status: "modified" | "added" | "deleted";
+  /**
+   * Pinned Git commit the adapter reported for this file's worktree source.
+   * Absent when the version is unknown, so a reference never fakes one.
+   */
+  commit?: string;
   preview?: { language: string; source: string };
 };
 
@@ -504,6 +509,8 @@ export type Capability = {
   name: string;
   source: string;
   scope: string;
+  /** Skill resource relative path inside its source root; absent when unknown. */
+  resourcePath?: string;
   /** `pending-review` mirrors the prototype's 待审阅: added but not yet enabled. */
   status: "enabled" | "disabled" | "update-available" | "pending-review";
 };

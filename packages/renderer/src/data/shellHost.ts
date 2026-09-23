@@ -365,14 +365,16 @@ export function createShellHostAdapter(fallback: HostAdapter): HostAdapter {
           // default plan (fs.write note under the task dir, gated allow).
           // Structured refs ride as plain data (`references` verbatim +
           // the single `$` skill pick as `skillSource`); the Host persists
-          // them without interpreting them.
+          // them without interpreting them. The reference's capability id is
+          // the source of record, so the `$` picker and the `/skills` modal
+          // send the same value.
           const skill = references.find((reference) => reference.kind === "skill");
           const result = await sendMessageThroughShell({
             taskId,
             sessionId,
             text,
             references: references.map((reference) => ({ ...reference })),
-            ...(skill ? { skillSource: skill.id } : {}),
+            ...(skill ? { skillSource: skill.sourceId ?? skill.id } : {}),
           });
           const sent = toSendMessageResult(taskId, sessionId, result);
           // Track the Host's approval id (never the fallback's) so
