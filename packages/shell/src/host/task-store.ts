@@ -34,6 +34,16 @@ import {
   type ScheduledRunRecord,
   type StoredSchedule,
 } from "../main/schedule-rules.js";
+import {
+  emptyRemoteDeviceRecord,
+  REMOTE_DEVICE_PERMISSIONS,
+  REMOTE_ENTRY_MODES,
+  type DeviceCredential,
+  type PairingCredentialDiskRecord,
+  type RemoteAuditEvent,
+  type RemoteDeviceDiskRecord,
+  type RemoteDeviceRecord,
+} from "../main/remote-rules.js";
 
 export interface RepoSourceRecord {
   /** In-task folder name (single safe component). */
@@ -89,6 +99,7 @@ const USAGE_FILE = "usage.json";
 const LIFECYCLE_FILE = "lifecycle.json";
 const EXECUTION_FILE = "execution.json";
 const SCHEDULE_FILE = "schedules.json";
+const REMOTE_DEVICE_FILE = "remote-devices.json";
 
 function assertSafeFileName(name: string, label: string): void {
   if (
@@ -893,6 +904,141 @@ export function readScheduleRecordOnDisk(taskDir: string): ScheduleDiskRecord {
     return parseScheduleRecord(readFileSync(scheduleFilePath(taskDir), "utf8"));
   } catch (error) {
     if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return emptyScheduleRecord();
+    throw error;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// [PiDock 19] #21 remote access: devices, pairing history and audit trail
+// ---------------------------------------------------------------------------
+
+export function remoteDeviceFilePath(taskDir: string): string {
+  return join(taskDir, REMOTE_DEVICE_FILE);
+}
+
+function parseDeviceCredential(value: unknown): DeviceCredential {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("invalid-payload: device credential must be an object");
+  }
+  const credential = value as Record<string, unknown>;
+  requireString(credential, "credentialId", "device credential");
+  requireString(credential, "issuedAt", "device credential");
+  if (credential["rotatedAt"] !== undefined) requireString(credential, "rotatedAt", "device credential");
+  if (credential["revokedAt"] !== undefined) requireString(credential, "revokedAt", "device credential");
+  if (typeof credential["generation"] !== "number" || !Number.isInteger(credential["generation"]) || (credential["generation"] as number) < 1) {
+    throw new Error("invalid-payload: device credential.generation must be a positive integer");
+  }
+  return value as DeviceCredential;
+}
+
+function parseRemoteDevice(value: unknown): RemoteDeviceRecord {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("invalid-payload: remote device must be an object");
+  }
+  const device = value as Record<string, unknown>;
+  for (const key of ["deviceId", "name", "requestedAt"] as const) requireString(device, key, "remote device");
+  for (const key of ["confirmedAt", "pairedAt", "lastSeenAt", "pairingCredentialId"] as const) {
+    if (device[key] !== undefined) requireString(device, key, "remote device");
+  }
+  if (typeof device["status"] !== "string" || !["pending-confirmation", "active", "revoked"].includes(device["status"] as string)) {
+    throw new Error("invalid-payload: remote device.status must be pending-confirmation/active/revoked");
+  }
+  if (!Array.isArray(device["permissions"])) throw new Error("invalid-payload: remote device.permissions must be an array");
+  for (const permission of device["permissions"] as unknown[]) {
+    if (typeof permission !== "string" || !(REMOTE_DEVICE_PERMISSIONS as readonly string[]).includes(permission)) {
+      throw new Error(`invalid-payload: remote device.permissions 含未知权限 ${String(permission)}`);
+    }
+  }
+  if (device["credential"] !== undefined) parseDeviceCredential(device["credential"]);
+  // An active device must hold the credential the desktop signed; a record that
+  // claims to be active without one is not restored.
+  if (device["status"] === "active" && device["credential"] === undefined) {
+    throw new Error("invalid-payload: 有效设备必须带设备凭据");
+  }
+  return value as RemoteDeviceRecord;
+}
+
+function parsePairingCredential(value: unknown): PairingCredentialDiskRecord {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("invalid-payload: pairing credential must be an object");
+  }
+  const pairing = value as Record<string, unknown>;
+  for (const key of ["credentialId", "issuedAt", "expiresAt"] as const) requireString(pairing, key, "pairing credential");
+  if (pairing["usedAt"] !== undefined) requireString(pairing, "usedAt", "pairing credential");
+  if (typeof pairing["state"] !== "string" || !["pending", "used", "expired", "refreshed", "cancelled"].includes(pairing["state"] as string)) {
+    throw new Error("invalid-payload: pairing credential.state must be pending/used/expired/refreshed/cancelled");
+  }
+  // The short-lived secret is never persisted, so a restored record can never
+  // smuggle one back in.
+  if (pairing["secret"] !== undefined) throw new Error("invalid-payload: 配对凭据不得持久化 secret");
+  return value as PairingCredentialDiskRecord;
+}
+
+function parseRemoteAudit(value: unknown): RemoteAuditEvent {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("invalid-payload: remote audit event must be an object");
+  }
+  const event = value as Record<string, unknown>;
+  for (const key of ["eventId", "at", "kind", "detail"] as const) requireString(event, key, "remote audit event");
+  if (event["deviceId"] !== undefined) requireString(event, "deviceId", "remote audit event");
+  if (event["entryMode"] !== undefined && !(REMOTE_ENTRY_MODES as readonly string[]).includes(event["entryMode"] as string)) {
+    throw new Error("invalid-payload: remote audit event.entryMode 未定义");
+  }
+  return value as RemoteAuditEvent;
+}
+
+export function serializeRemoteDeviceRecord(record: RemoteDeviceDiskRecord): string {
+  return JSON.stringify(record, null, 2);
+}
+
+/** Full shape validation on read: a corrupt device file must not half-restore. */
+export function parseRemoteDeviceRecord(raw: string): RemoteDeviceDiskRecord {
+  const value: unknown = JSON.parse(raw);
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("invalid-payload: remote device record must be an object");
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record["version"] !== "number" || !Number.isInteger(record["version"]) || (record["version"] as number) < 1) {
+    throw new Error("invalid-payload: remote device record.version must be a positive integer");
+  }
+  if (typeof record["entryMode"] !== "string" || !(REMOTE_ENTRY_MODES as readonly string[]).includes(record["entryMode"] as string)) {
+    throw new Error("invalid-payload: remote device record.entryMode must be tailscale/gateway/funnel");
+  }
+  if (!Array.isArray(record["devices"])) throw new Error("invalid-payload: remote device record.devices must be an array");
+  if (!Array.isArray(record["pairing"])) throw new Error("invalid-payload: remote device record.pairing must be an array");
+  if (!Array.isArray(record["audits"])) throw new Error("invalid-payload: remote device record.audits must be an array");
+  const gateway = record["gateway"];
+  if (typeof gateway !== "object" || gateway === null || Array.isArray(gateway)) {
+    throw new Error("invalid-payload: remote device record.gateway must be an object");
+  }
+  for (const key of ["endpoint", "hostId"] as const) {
+    if (typeof (gateway as Record<string, unknown>)[key] !== "string") {
+      throw new Error(`invalid-payload: remote device record.gateway.${key} must be a string`);
+    }
+  }
+  requireString(record, "entryBaseUrl", "remote device record");
+  return {
+    version: record["version"] as number,
+    entryMode: record["entryMode"] as RemoteDeviceDiskRecord["entryMode"],
+    gateway: { ...(gateway as { endpoint: string; hostId: string }) },
+    entryBaseUrl: record["entryBaseUrl"] as string,
+    devices: (record["devices"] as unknown[]).map((device) => parseRemoteDevice(device)),
+    pairing: (record["pairing"] as unknown[]).map((item) => parsePairingCredential(item)),
+    audits: (record["audits"] as unknown[]).map((item) => parseRemoteAudit(item)),
+  };
+}
+
+export function writeRemoteDeviceRecordOnDisk(taskDir: string, record: RemoteDeviceDiskRecord): void {
+  mkdirSync(taskDir, { recursive: true });
+  writeFileSync(remoteDeviceFilePath(taskDir), serializeRemoteDeviceRecord(record), "utf8");
+}
+
+/** Absent file = a task that never paired a device (empty record, not an error). */
+export function readRemoteDeviceRecordOnDisk(taskDir: string): RemoteDeviceDiskRecord {
+  try {
+    return parseRemoteDeviceRecord(readFileSync(remoteDeviceFilePath(taskDir), "utf8"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return emptyRemoteDeviceRecord();
     throw error;
   }
 }

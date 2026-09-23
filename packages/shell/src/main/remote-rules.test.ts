@@ -10,6 +10,7 @@ import {
   exchangePairingCredential,
   GATEWAY_RATE_LIMIT,
   isHighEntropySecret,
+  invalidatePairingCredential,
   mintPairingCredential,
   mobileSurfaceForOp,
   normalizeRemotePermissions,
@@ -20,7 +21,6 @@ import {
   planReconnectDelivery,
   rateLimitVerdict,
   redactRemoteDetail,
-  refreshPairingCredential,
   rejectDevice,
   remoteApprovalView,
   remoteAuditEvent,
@@ -116,12 +116,13 @@ describe("[PiDock 19] pairing credential", () => {
 
   it("invalidates the old code when the desktop refreshes the QR", () => {
     const first = mintPairingCredential({ credentialId: "pair-1", secret: SECRET, at: AT });
-    expect(() => refreshPairingCredential(first, { credentialId: "pair-2", secret: SECRET, at: AT })).toThrow(/只有在旧凭据失效后/);
-    const spent = { ...first, state: "used" as const, usedAt: AT };
-    const second = refreshPairingCredential(spent, { credentialId: "pair-2", secret: SECRET, at: AT });
-    expect(second).toMatchObject({ credentialId: "pair-2", state: "pending" });
-    expect(pairingCredentialVerdict({ ...first, state: "refreshed" }, AT)).toMatchObject({ ok: false, code: "credential-refreshed" });
-    expect(pairingCredentialVerdict({ ...first, state: "cancelled" }, AT)).toMatchObject({ ok: false, code: "credential-cancelled" });
+    const refreshed = invalidatePairingCredential(first, "refreshed");
+    expect(refreshed).toMatchObject({ credentialId: "pair-1", state: "refreshed" });
+    expect(pairingCredentialVerdict(refreshed, AT)).toMatchObject({ ok: false, code: "credential-refreshed" });
+    // Only a live credential can be invalidated: a spent or already-refused one
+    // keeps its own state instead of being rewritten.
+    expect(() => invalidatePairingCredential(refreshed, "cancelled")).toThrow(/只有待使用/);
+    expect(pairingCredentialVerdict(invalidatePairingCredential(first, "cancelled"), AT)).toMatchObject({ ok: false, code: "credential-cancelled" });
   });
 
   it("keeps the QR payload in the fragment and out of paths or long tokens", () => {

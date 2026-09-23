@@ -14,6 +14,7 @@ import { isUsageKindName } from "./task-store.js";
 import { isBrowserAction, isPageRef } from "../main/browser-rules.js";
 import { isExternalResourceKind } from "../main/service-runs.js";
 import { checkReferencePayload } from "../main/composer-references.js";
+import { REMOTE_ENTRY_MODES } from "../main/remote-rules.js";
 
 export const DEFAULT_WORKSPACE_ID = "s1-default-workspace";
 
@@ -1295,6 +1296,98 @@ export function validateHostTaskOp(
     const scheduleId = payload === undefined ? undefined : payload["scheduleId"];
     if (scheduleId !== undefined && (typeof scheduleId !== "string" || scheduleId.length === 0)) {
       return { ok: false, error: "invalid-payload: task/scheduleRuns.scheduleId must be a non-empty string" };
+    }
+    return { ok: true };
+  }
+  // [PiDock 19] (#21) remote access. Reads carry no caller-chosen target; the
+  // desktop-only actions (mint/confirm/reject/revoke/rotate/entry) are refused
+  // for an agent session in `host.ts`; device and credential ids are opaque
+  // single components, and an exchange carries the scanned secret.
+  if (op === "task/remoteState" || op === "task/remoteAudit" || op === "task/remotePairCancel") {
+    if (payload !== undefined && !isRecord(payload)) {
+      return { ok: false, error: `invalid-payload: ${op} payload must be an object` };
+    }
+    return { ok: true };
+  }
+  if (op === "task/remoteEntryMode") {
+    if (!isRecord(payload)) return { ok: false, error: "invalid-payload: task/remoteEntryMode requires a payload object" };
+    if (!(REMOTE_ENTRY_MODES as readonly string[]).includes(payload["mode"] as string)) {
+      return { ok: false, error: "invalid-payload: task/remoteEntryMode.mode must be tailscale/gateway/funnel" };
+    }
+    for (const key of ["endpoint", "hostId", "baseUrl"] as const) {
+      if (payload[key] !== undefined && (typeof payload[key] !== "string" || payload[key].length === 0)) {
+        return { ok: false, error: `invalid-payload: task/remoteEntryMode.${key} must be a non-empty string` };
+      }
+    }
+    return { ok: true };
+  }
+  if (op === "task/remotePairMint") {
+    if (payload !== undefined && !isRecord(payload)) {
+      return { ok: false, error: "invalid-payload: task/remotePairMint payload must be an object" };
+    }
+    const ttlMs = payload === undefined ? undefined : payload["ttlMs"];
+    if (ttlMs !== undefined && (typeof ttlMs !== "number" || !Number.isFinite(ttlMs) || ttlMs <= 0)) {
+      return { ok: false, error: "invalid-payload: task/remotePairMint.ttlMs must be a positive number" };
+    }
+    return { ok: true };
+  }
+  if (op === "task/remotePairExchange") {
+    if (!isRecord(payload)) return { ok: false, error: "invalid-payload: task/remotePairExchange requires a payload object" };
+    for (const key of ["credentialId", "secret", "deviceName"] as const) {
+      if (typeof payload[key] !== "string" || payload[key].length === 0) {
+        return { ok: false, error: `invalid-payload: task/remotePairExchange.${key} must be a non-empty string` };
+      }
+    }
+    if (payload["permissions"] !== undefined && !Array.isArray(payload["permissions"])) {
+      return { ok: false, error: "invalid-payload: task/remotePairExchange.permissions must be an array" };
+    }
+    return { ok: true };
+  }
+  if (op === "task/remoteDeviceConfirm") {
+    if (!isRecord(payload)) return { ok: false, error: "invalid-payload: task/remoteDeviceConfirm requires a payload object" };
+    if (typeof payload["deviceId"] !== "string" || payload["deviceId"].length === 0) {
+      return { ok: false, error: "invalid-payload: task/remoteDeviceConfirm.deviceId must be a non-empty string" };
+    }
+    if (payload["permissions"] !== undefined && !Array.isArray(payload["permissions"])) {
+      return { ok: false, error: "invalid-payload: task/remoteDeviceConfirm.permissions must be an array" };
+    }
+    return { ok: true };
+  }
+  if (op === "task/remoteDeviceReject" || op === "task/remoteDeviceRevoke" || op === "task/remoteDeviceRotate") {
+    if (!isRecord(payload)) return { ok: false, error: `invalid-payload: ${op} requires a payload object` };
+    if (typeof payload["deviceId"] !== "string" || payload["deviceId"].length === 0) {
+      return { ok: false, error: `invalid-payload: ${op}.deviceId must be a non-empty string` };
+    }
+    return { ok: true };
+  }
+  if (op === "task/remoteAuthorize") {
+    if (!isRecord(payload)) return { ok: false, error: "invalid-payload: task/remoteAuthorize requires a payload object" };
+    for (const key of ["deviceId", "op"] as const) {
+      if (typeof payload[key] !== "string" || payload[key].length === 0) {
+        return { ok: false, error: `invalid-payload: task/remoteAuthorize.${key} must be a non-empty string` };
+      }
+    }
+    return { ok: true };
+  }
+  if (op === "task/remoteReconnectPlan") {
+    if (!isRecord(payload)) return { ok: false, error: "invalid-payload: task/remoteReconnectPlan requires a payload object" };
+    if (typeof payload["deviceId"] !== "string" || payload["deviceId"].length === 0) {
+      return { ok: false, error: "invalid-payload: task/remoteReconnectPlan.deviceId must be a non-empty string" };
+    }
+    for (const key of ["pending", "deliveredKeys"] as const) {
+      if (payload[key] !== undefined && !Array.isArray(payload[key])) {
+        return { ok: false, error: `invalid-payload: task/remoteReconnectPlan.${key} must be an array` };
+      }
+    }
+    return { ok: true };
+  }
+  if (op === "task/remoteGatewayEvent") {
+    if (!isRecord(payload)) return { ok: false, error: "invalid-payload: task/remoteGatewayEvent requires a payload object" };
+    if (payload["action"] !== "connected" && payload["action"] !== "disconnected") {
+      return { ok: false, error: "invalid-payload: task/remoteGatewayEvent.action must be connected/disconnected" };
+    }
+    if (payload["error"] !== undefined && typeof payload["error"] !== "string") {
+      return { ok: false, error: "invalid-payload: task/remoteGatewayEvent.error must be a string" };
     }
     return { ok: true };
   }

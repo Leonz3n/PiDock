@@ -145,6 +145,32 @@ describe("browser envelopes", () => {
   });
 });
 
+// [PiDock 19] (#21) adds the remote-access ops to the same task-op whitelist.
+describe("remote access ops", () => {
+  it("accepts the declared remote ops and nothing else", () => {
+    for (const op of [
+      "task/remoteState",
+      "task/remoteEntryMode",
+      "task/remotePairMint",
+      "task/remotePairCancel",
+      "task/remotePairExchange",
+      "task/remoteDeviceConfirm",
+      "task/remoteDeviceReject",
+      "task/remoteDeviceRevoke",
+      "task/remoteDeviceRotate",
+      "task/remoteAuthorize",
+      "task/remoteReconnectPlan",
+      "task/remoteGatewayEvent",
+      "task/remoteAudit",
+    ] as const) {
+      expect(isHostTaskOp(op)).toBe(true);
+    }
+    expect(isHostTaskOp("task/remotePair")).toBe(false);
+    expect(isHostTaskOp("task/remoteRawTcp")).toBe(false);
+    expect(isHostTaskOp("task/remotePiRpc")).toBe(false);
+  });
+});
+
 // [PiDock 17] (#19) adds the execution-state and attention reads to the same
 // task-op whitelist; the guard stays fail-closed (unknown names never pass).
 describe("execution ledger ops", () => {

@@ -105,7 +105,20 @@ export type HostTaskOp =
   | "task/scheduleRemove"
   | "task/scheduleRunNow"
   | "task/scheduleRuns"
-  | "task/scheduleEvaluate";
+  | "task/scheduleEvaluate"
+  | "task/remoteState"
+  | "task/remoteEntryMode"
+  | "task/remotePairMint"
+  | "task/remotePairCancel"
+  | "task/remotePairExchange"
+  | "task/remoteDeviceConfirm"
+  | "task/remoteDeviceReject"
+  | "task/remoteDeviceRevoke"
+  | "task/remoteDeviceRotate"
+  | "task/remoteAuthorize"
+  | "task/remoteReconnectPlan"
+  | "task/remoteGatewayEvent"
+  | "task/remoteAudit";
 
 /**
  * Sender attestation stamped by the trusted main process on a routed
@@ -253,6 +266,19 @@ const HOST_TASK_OPS: readonly string[] = [
   "task/scheduleRunNow",
   "task/scheduleRuns",
   "task/scheduleEvaluate",
+  "task/remoteState",
+  "task/remoteEntryMode",
+  "task/remotePairMint",
+  "task/remotePairCancel",
+  "task/remotePairExchange",
+  "task/remoteDeviceConfirm",
+  "task/remoteDeviceReject",
+  "task/remoteDeviceRevoke",
+  "task/remoteDeviceRotate",
+  "task/remoteAuthorize",
+  "task/remoteReconnectPlan",
+  "task/remoteGatewayEvent",
+  "task/remoteAudit",
 ];
 
 export function isHostTaskOp(value: unknown): value is HostTaskOp {
