@@ -349,6 +349,17 @@ describe("PiSessionChannel turns and approvals", () => {
     expect(renamed.runTurn({ text: "检查构建" }).call.providerVersion).toBe(version);
   });
 
+  it("records the actual response model when the upstream names a different one", () => {
+    const session = channel();
+    const turn = session.runTurn({ text: "检查构建", responseModel: "claude-sonnet-2026-08" });
+    expect(turn.call.model).toBe("test-model");
+    expect(turn.call.responseModel).toBe("claude-sonnet-2026-08");
+    const restored = PiSessionChannel.restore(session.snapshot(), TASK_DIR);
+    expect(restored.snapshot().calls[0].responseModel).toBe("claude-sonnet-2026-08");
+    // An empty claim is ignored instead of recorded as an actual model.
+    expect(session.runTurn({ text: "再检查", responseModel: "" }).call.responseModel).toBeUndefined();
+  });
+
   it("counts a compaction as its own call type without reducing cumulative tokens", () => {
     const session = channel();
     session.runTurn({ text: "检查构建", usageSource: "actual", usage: { input: 120, output: 45, cacheRead: 0, cacheWrite: 0 } });

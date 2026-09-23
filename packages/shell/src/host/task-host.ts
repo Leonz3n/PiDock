@@ -1191,11 +1191,12 @@ export class TaskWorkspaceHost {
         else this.releaseClaimedPathScope(sessionId, claimedPathScope);
       }
     }
-    // [PiDock 12] #12: the settled turn's usage detail joins the ledger before
-    // the session is persisted, so archiving/cleaning the conversation later
-    // never loses the consumption it already produced.
-    this.syncUsageLedger();
+    // [PiDock 12] #12: the settled turn's usage detail joins the ledger right
+    // after the session snapshot is persisted (sync reads the store), so
+    // archiving/cleaning the conversation later never loses the consumption
+    // it already produced.
     this.store.writeSession(this.taskDir, channel.snapshot());
+    this.syncUsageLedger();
     const pending = channel.pendingApproval();
     return {
       state: result.state,
