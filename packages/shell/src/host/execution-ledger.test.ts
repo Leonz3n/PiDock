@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { TaskExecutionLedger } from "./execution-ledger.js";
 import { TaskWorkspaceHost, memoryTaskStore } from "./task-host.js";
+import { parseExecutionLedger, serializeExecutionLedger } from "./task-store.js";
 
 const TASK_ID = "task-aaaaaaaa";
 const TASK_DIR = "/tasks/task-aaaaaaaa";
@@ -8,6 +9,32 @@ const AT = "2026-09-22T10:00:00.000Z";
 
 function host(store: ReturnType<typeof memoryTaskStore>, now: () => string = () => AT) {
   return new TaskWorkspaceHost(TASK_ID, TASK_DIR, store, now);
+}
+
+/** Smallest persisted ledger the reader accepts, so one field can be tampered with. */
+function persistedLedger(input: { record?: Record<string, unknown>; ledger?: Record<string, unknown> } = {}): string {
+  return JSON.stringify({
+    version: 1,
+    executions: [
+      {
+        executionId: "exec-1",
+        taskId: TASK_ID,
+        sessionId: "main",
+        kind: "turn",
+        label: "回合工具 exec.run",
+        state: "done",
+        startedAt: AT,
+        updatedAt: AT,
+        version: 1,
+        draftKept: false,
+        steps: [],
+        attempts: [{ attemptId: "exec-1-attempt-1", at: AT, endState: "completed", replayable: true }],
+        ...input.record,
+      },
+    ],
+    readItems: [],
+    ...input.ledger,
+  });
 }
 
 /** Scripted `exec.run` plan (the Host injects this closure for a real op). */
@@ -91,6 +118,59 @@ describe("TaskExecutionLedger", () => {
       { serviceId: "worker", state: "failed" },
     ]);
     expect(readout.executions.map((record) => record.executionId)).toEqual([running.executionId]);
+  });
+
+  it("orders a session's executions by sequence when the timestamps tie", () => {
+    const ledger = new TaskExecutionLedger(TASK_ID, TASK_DIR, memoryTaskStore(), () => AT);
+    const ids = Array.from({ length: 10 }, () => ledger.open({ sessionId: "main", kind: "turn", label: "回合" }).executionId);
+    expect(ids.at(-1)).toBe("exec-10");
+    // The readout takes executions[0] as the newest; an id-string compare would
+    // put exec-9 first on a tied updatedAt and report the older state.
+    expect(ledger.forSession("main").map((record) => record.executionId)).toEqual([
+      "exec-10",
+      "exec-9",
+      "exec-8",
+      "exec-7",
+      "exec-6",
+      "exec-5",
+      "exec-4",
+      "exec-3",
+      "exec-2",
+      "exec-1",
+    ]);
+  });
+
+  it("refuses to authorize a confirmation the ledger already settled", () => {
+    const ledger = new TaskExecutionLedger(TASK_ID, TASK_DIR, memoryTaskStore(), () => AT);
+    const waiting = ledger.open({ sessionId: "main", kind: "turn", label: "等待确认" });
+    ledger.awaitApproval(waiting.executionId, { approvalId: "approval-1", payloadVersion: "v1" });
+    ledger.rejectApproval("approval-1");
+    // The user's decision is recorded only on a live request; a settled ref
+    // reaches the re-check with its own status and is refused there.
+    expect(() => ledger.authorize(waiting.executionId, { approvalId: "approval-1", permission: "default", contentVersion: "v1" })).toThrow(
+      /not-approved/,
+    );
+    expect(ledger.byId(waiting.executionId)?.state).toBe("rejected");
+    expect(ledger.byId(waiting.executionId)?.approval?.consumedAt).toBeUndefined();
+  });
+
+  it("refuses a persisted ledger whose record shape is not trustworthy", () => {
+    // A real ledger round-trips and the hand-built baseline below is accepted, so
+    // each rejection is the tampered field and not an unrelated shape error.
+    const real = new TaskExecutionLedger(TASK_ID, TASK_DIR, memoryTaskStore(), () => AT);
+    real.open({ sessionId: "main", kind: "turn", label: "回合" });
+    expect(parseExecutionLedger(serializeExecutionLedger(real.ledger)).executions).toHaveLength(1);
+    expect(parseExecutionLedger(persistedLedger()).executions).toHaveLength(1);
+    expect(() => parseExecutionLedger(persistedLedger({ record: { state: "waiting" } }))).toThrow(/execution record.state/);
+    expect(() =>
+      parseExecutionLedger(
+        persistedLedger({ record: { attempts: [{ attemptId: "exec-1-attempt-1", at: AT, endState: "completed", replayable: "yes" }] } }),
+      ),
+    ).toThrow(/attempt.replayable must be a boolean/);
+    expect(() => parseExecutionLedger(persistedLedger({ ledger: { readItems: [{ itemId: "attention-completed-unread-exec-1" }] } }))).toThrow(
+      /readItems.readAt/,
+    );
+    expect(() => parseExecutionLedger(persistedLedger({ ledger: { version: 0 } }))).toThrow(/ledger.version/);
   });
 });
 
@@ -207,6 +287,25 @@ describe("TaskWorkspaceHost execution wiring", () => {
     expect(() => second.approve("main", approvalId)).toThrow(/已处理|过期|不能执行/);
     // The restarted session kept its history and ran nothing new.
     expect(second.executionState("main").executions[0]?.attempts).toHaveLength(1);
+  });
+
+  it("refuses an approve whose confirmation the read path already expired", () => {
+    const store = memoryTaskStore();
+    let clock = AT;
+    const workspace = new TaskWorkspaceHost(TASK_ID, TASK_DIR, store, () => clock);
+    const result = workspace.sendMessage("main", "运行命令", execPlan());
+    const approvalId = result.approvalId as string;
+
+    // Any app refresh reads the state (the renderer fans `task/attention` out per
+    // task), and that read settles the deadline that passed while the Host lived.
+    clock = "2026-09-23T11:00:00.000Z";
+    expect(workspace.executionState("main").session).toBe("expired");
+    expect(() => workspace.approve("main", approvalId)).toThrow(/invalid-execution-transition/);
+    // Nothing executed: no second attempt, no completion, and the session keeps
+    // the claim the waiting turn held (approved/reject/cancel are what release it).
+    expect(workspace.executionState("main").executions[0]?.attempts).toHaveLength(1);
+    expect(workspace.executionState("main").executions[0]?.state).toBe("expired");
+    expect(workspace.writeLockOwner).toBe("main");
   });
 
   it("clears the unread items on read and keeps pending items for handling", () => {

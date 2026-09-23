@@ -21,7 +21,7 @@ import {
   TaskExecutionLedger,
   type ExecutionStateReadout,
 } from "./execution-ledger.js";
-import type { ExecutionAttentionItem, ServiceRunObservation } from "../main/execution-ledger.js";
+import type { ExecutionAttentionItem, ExecutionState, ServiceRunObservation } from "../main/execution-ledger.js";
 import {
   TaskWriteCoordinator,
   writeClaimError,
@@ -329,6 +329,15 @@ export interface HostTurnResult {
   userMessageId: string;
   agentMessageId: string;
 }
+
+/** What the ledger's terminal states read as in an approve refusal message. */
+const SETTLED_APPROVAL_LABEL: Partial<Record<ExecutionState, string>> = {
+  expired: "过期",
+  rejected: "拒绝",
+  stopped: "停止",
+  failed: "失败",
+  done: "处理",
+};
 
 function parentDirOf(taskDir: string): string {
   const trimmed = taskDir.replace(/[\\/]+$/, "");
@@ -1409,6 +1418,11 @@ export class TaskWorkspaceHost {
         permission: channel.currentPermission,
         ...(contentVersion !== undefined ? { contentVersion } : {}),
       });
+    } else {
+      // A settled confirmation never reaches the session channel: the terminal
+      // record drops out of `waitingOnApproval`, so without this the re-check
+      // (deadline included) would be skipped and a late approve would execute.
+      this.refuseSettledApproval(approvalId);
     }
     const call = channel.approve(approvalId);
     this.settleApprovalClaim(sessionId);
@@ -1419,6 +1433,19 @@ export class TaskWorkspaceHost {
       this.executions.complete(waiting.executionId);
     }
     return call.callId;
+  }
+
+  /**
+   * A confirmation the ledger already settled (过期/拒绝/停止/失败/处理) must refuse
+   * here ([PiDock 17] #19 盒子 3/6). An approval the ledger never recorded (service,
+   * terminal and browser control live on the session channel only) passes through.
+   */
+  private refuseSettledApproval(approvalId: string): void {
+    const settled = this.executions.byApproval(approvalId);
+    if (!settled) return;
+    throw new Error(
+      `invalid-execution-transition: 确认请求已${SETTLED_APPROVAL_LABEL[settled.state] ?? "处理"}，不能执行且不可重放`,
+    );
   }
 
   reject(sessionId: string, approvalId: string): void {

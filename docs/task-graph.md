@@ -671,6 +671,9 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   会话是否降为只读 → 载荷版本 → 用途 scope」，`consumeExecutionApproval` 是
   `consumedAt` 的唯一写入点；Host 在 `approve()` 里**先授权再执行**，并在等待确认时
   写入 24 小时期限（与任务页文案同一值），读取路径把到期确认落为 `expired`。
+  已结算的确认（过期/拒绝/停止/失败/处理）在 `approve()` 里直接以
+  `invalid-execution-transition` 拒绝：终态记录已不在 `waitingOnApproval` 内，
+  不拦住就会顺会话通道执行、跳过期限复核。
   载荷版本变化时 `approve` 直接抛 `version-mismatch`，确认仍是 `pending` 且没有
   任何执行发生。
 - **失败与重放（盒子 4）**：失败保留 `draftKept` 与已结算步骤，只把未结算步骤标为

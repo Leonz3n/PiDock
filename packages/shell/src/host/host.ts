@@ -1350,9 +1350,9 @@ async function dispatchTaskOp(
         }
       }
       // [PiDock 17] (#19) execution state + cross-project attention reads.
-      // These are pure reads of this task's ledger (plus the service states the
-      // caller supplies), so no write right, no session and no approval is
-      // involved; the reader never re-executes anything.
+      // Pure reads of this task's ledger, plus the service states this Host
+      // observed itself (never a caller claim); no write right, no session and no
+      // approval is involved, and the reader never re-executes anything.
       case "task/executionState": {
         const host = taskHostFor(taskId);
         if ("error" in host) return { ok: false, error: host.error };

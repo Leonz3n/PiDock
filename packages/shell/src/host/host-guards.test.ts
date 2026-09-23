@@ -758,12 +758,9 @@ describe("file and terminal ops", () => {
     expect(validateHostTaskOp("task/executionState", undefined).ok).toBe(false);
     expect(validateHostTaskOp("task/executionState", {}).ok).toBe(false);
     expect(validateHostTaskOp("task/executionState", { sessionId: " " }).ok).toBe(false);
-    // Service observations ride as plain data and stay fail-closed.
-    expect(
-      validateHostTaskOp("task/executionState", { sessionId: "main", services: [{ serviceId: "api", running: true }] }),
-    ).toEqual({ ok: true });
-    expect(validateHostTaskOp("task/executionState", { sessionId: "main", services: [{ serviceId: "api" }] }).ok).toBe(false);
-    expect(validateHostTaskOp("task/executionState", { sessionId: "main", services: {} }).ok).toBe(false);
+    // The Host reads its own service observations, so a caller-supplied
+    // `services` field is not part of the contract (nothing validates it).
+    expect(validateHostTaskOp("task/executionState", { sessionId: "main", services: {} })).toEqual({ ok: true });
   });
 
   it("[PiDock 17] (#19) accepts the attention reads and requires the ids to clear", () => {
