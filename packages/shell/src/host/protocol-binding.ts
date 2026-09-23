@@ -158,6 +158,19 @@ export class TaskProtocolBinding {
     if (invalid) throw new Error(`${invalid.code}: ${invalid.message}`);
     const planned = planGeneration({ mode: input.mode, protocol: input.protocol, steps: input.steps ?? [], consumers: input.consumers });
     if (!planned.ok) throw new Error(`${planned.error.code}: ${planned.error.message}`);
+    // The protocol repository and its generation directories are task-scoped
+    // like the consumers: a plan pointing them at another task's tree would
+    // make the "every planned path stays inside this task folder" guarantee
+    // false before any step runs.
+    for (const [label, value] of [
+      ["协议仓库目录", input.protocol.repoDir],
+      ["Go 生成目录", input.protocol.goGenDir],
+      ["TS 生成目录", input.protocol.tsGenDir],
+    ] as const) {
+      if (!isPathInside(this.taskDir, value)) {
+        throw new Error(`invalid-protocol-repo: ${label}不在本任务内：${value}`);
+      }
+    }
     for (const consumer of input.consumers) {
       if (!isPathInside(this.taskDir, consumer.repoDir)) {
         throw new Error(`invalid-consumer: 消费者「${consumer.name}」的仓库目录不在本任务内：${consumer.repoDir}`);
@@ -226,7 +239,9 @@ export class TaskProtocolBinding {
       throw new Error("not-generated: 生成成功必须带回实际生成版本");
     }
     const at = this.now();
-    if (version.length > 0) {
+    // Only a run that really succeeded may advance the displayed version; a
+    // failed attempt is kept in the history but never shown as "已生成".
+    if (input.ok && version.length > 0) {
       this.generatedVersion = version;
       this.generatedAt = at;
     }
@@ -309,6 +324,9 @@ export class TaskProtocolBinding {
   }
 
   private switchAssessment(): LocalSwitchAssessment {
+    // Release mode runs no local switch at all, so there is nothing to block:
+    // reporting blockers here would show a stop reason in a healthy plan.
+    if (this.mode !== "local") return { ok: true, blockers: [], notes: [] };
     return assessLocalSwitch({
       consumers: this.consumers,
       artifactVersion: this.generatedVersion,

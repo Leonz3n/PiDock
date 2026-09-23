@@ -610,14 +610,20 @@ export interface GenerationTool {
   label: string;
   /** What the tool is needed for (shown next to the platform result). */
   purpose: string;
+  /**
+   * Platforms whose install path is known not to provide this tool. The gap
+   * is per tool: the native protoc plugins cannot be installed on Windows
+   * ARM64, while a Node-based runner such as pnpm is not affected by it.
+   */
+  unsupportedPlatforms?: readonly string[];
 }
 
 /** Tools the protocol repository's own generate+postprocess steps need. */
 export const GENERATION_TOOLS: readonly GenerationTool[] = [
-  { id: "buf", label: "buf", purpose: "协议编译" },
-  { id: "protoc-gen-go", label: "protoc-gen-go", purpose: "Go 消息生成" },
-  { id: "protoc-gen-go-grpc", label: "protoc-gen-go-grpc", purpose: "Go gRPC 生成" },
-  { id: "protoc-gen-es", label: "protoc-gen-es", purpose: "TS 生成（仓库本地插件）" },
+  { id: "buf", label: "buf", purpose: "协议编译", unsupportedPlatforms: ["win32-arm64"] },
+  { id: "protoc-gen-go", label: "protoc-gen-go", purpose: "Go 消息生成", unsupportedPlatforms: ["win32-arm64"] },
+  { id: "protoc-gen-go-grpc", label: "protoc-gen-go-grpc", purpose: "Go gRPC 生成", unsupportedPlatforms: ["win32-arm64"] },
+  { id: "protoc-gen-es", label: "protoc-gen-es", purpose: "TS 生成（仓库本地插件）", unsupportedPlatforms: ["win32-arm64"] },
   { id: "pnpm", label: "pnpm", purpose: "后处理脚本" },
 ];
 
@@ -639,11 +645,13 @@ export interface ToolchainReport {
 }
 
 /**
- * Box 8: platform-specific generation-tool results. Windows ARM64 is a known
- * gap (the repository's plugin installer is explicit about it) and is reported
- * as `unsupported-platform` rather than "unverified", while any other platform
- * reports exactly what the caller probed: absent probes stay `unverified`, not
- * `ready`. Desktop launching is never evidence — the report carries
+ * Box 8: platform-specific generation-tool results. A tool whose installer has
+ * no support for the current platform is reported as `unsupported-platform`
+ * rather than "unverified" — the gap is tracked per tool, so a Node-based
+ * runner such as pnpm stays on the probe path while the native protoc plugins
+ * are explicitly unsupported on Windows ARM64. Any other tool reports exactly
+ * what the caller probed: absent probes stay `unverified`, not `ready`.
+ * Desktop launching is never evidence — the report carries
  * `desktopLaunchImpliesGeneration: false` unconditionally.
  */
 export function checkGenerationToolchain(input: {
@@ -656,7 +664,7 @@ export function checkGenerationToolchain(input: {
   const windowsArm64 = platform === "win32-arm64";
   const entries: ToolchainEntry[] = tools.map((tool) => {
     const probed = input.probe?.[tool.id];
-    if (windowsArm64) {
+    if (windowsArm64 && (tool.unsupportedPlatforms ?? []).includes(platform)) {
       return {
         toolId: tool.id,
         label: tool.label,

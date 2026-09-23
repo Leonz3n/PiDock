@@ -70,6 +70,18 @@ describe("[PiDock 08] Host protocol state starts on release dependencies", () =>
     expect(() => host().setPlan({ protocol: PROTOCOL, mode: "release", consumers: [foreign] })).toThrow(/invalid-consumer/);
   });
 
+  it("refuses a protocol repository or generation directory outside this task", () => {
+    const outsideRepo: ProtocolRepoRef = {
+      repoDir: "/data/elsewhere/apis",
+      goGenDir: "/data/elsewhere/apis/gen/go",
+      tsGenDir: "/data/elsewhere/apis/gen/ts",
+    };
+    expect(() => host().setPlan({ protocol: outsideRepo, mode: "release", consumers: [INVOICE] })).toThrow(/invalid-protocol-repo/);
+    expect(() =>
+      host().setPlan({ protocol: { ...PROTOCOL, tsGenDir: "/data/elsewhere/apis/gen/ts" }, mode: "local", steps: STEPS, consumers: [INVOICE] }),
+    ).toThrow(/invalid-protocol-repo/);
+  });
+
   it("refuses the protocol repository as a consumer", () => {
     const self: ProtocolConsumer = { ...INVOICE, consumerId: "apis", name: "apis", repoDir: PROTOCOL.repoDir };
     expect(() => host().setPlan({ protocol: PROTOCOL, mode: "release", consumers: [self] })).toThrow(/protocol-repo-is-not-consumer/);
@@ -182,6 +194,22 @@ describe("[PiDock 08] local debug binds consumers to this task's artifact", () =
     expect(() => host().recordResult({ generatedVersion: "gen-1", ok: true })).toThrow(/invalid-payload/);
   });
 
+  it("keeps a failed run out of the displayed generated version", () => {
+    const binding = host();
+    planLocal(binding, [INVOICE], ["invoice"]);
+    binding.recordResult({
+      generatedVersion: "gen-3",
+      ok: true,
+      resolutions: [{ consumerId: "invoice", path: `${PROTOCOL.goGenDir}/pkg`, version: "gen-3" }],
+    });
+    const failed = binding.recordResult({ generatedVersion: "gen-4", ok: false, note: "后处理失败" });
+    expect(failed.generatedVersion).toBe("gen-3");
+    expect(failed.generationHistory.map((entry) => ({ version: entry.version, ok: entry.ok }))).toEqual([
+      { version: "gen-3", ok: true },
+      { version: "gen-4", ok: false },
+    ]);
+  });
+
   it("refuses a resolution reported for a consumer that is not in the plan", () => {
     const binding = host();
     planLocal(binding, [INVOICE], ["invoice"]);
@@ -212,6 +240,28 @@ describe("[PiDock 08] a stale running instance is never counted as loaded", () =
 });
 
 describe("[PiDock 08] switching back to release dependencies is task-scoped", () => {
+  it("reports no local-switch blocker once the task is back on release dependencies", () => {
+    const binding = host();
+    planLocal(binding, [INVOICE, SHIPMENT], ["invoice", "shipment"]);
+    binding.recordResult({
+      generatedVersion: "gen-4",
+      ok: true,
+      resolutions: [
+        { consumerId: "invoice", path: `${PROTOCOL.goGenDir}/pkg`, version: "gen-4" },
+        { consumerId: "shipment", path: `${PROTOCOL.goGenDir}/pkg`, version: "gen-4" },
+      ],
+    });
+    expect(binding.state().switchAssessment.ok).toBe(true);
+
+    // Back on release dependencies with two different release versions: release
+    // mode performs no local switch, so the cross-version blocker (which only
+    // applies to compiling this task's artifact) must not appear.
+    const backToRelease = binding.setPlan({ protocol: PROTOCOL, mode: "release", consumers: [INVOICE, SHIPMENT] });
+    expect(backToRelease.mode).toBe("release");
+    expect(backToRelease.switchAssessment).toEqual({ ok: true, blockers: [], notes: [] });
+    expect(backToRelease.diagnostics).toEqual([]);
+  });
+
   it("restores the release resolution and leaves another task's binding alone", () => {
     const binding = host();
     planLocal(binding, [INVOICE], ["invoice"]);
@@ -249,7 +299,11 @@ describe("[PiDock 08] toolchain results stay platform-specific", () => {
     expect(state.toolchain.ok).toBe(false);
     expect(state.desktopLaunchImpliesGeneration).toBeUndefined();
     expect(state.toolchain.desktopLaunchImpliesGeneration).toBe(false);
-    expect(state.toolchain.entries.every((entry) => entry.status === "unsupported-platform")).toBe(true);
+    const byTool = new Map(state.toolchain.entries.map((entry) => [entry.toolId, entry]));
+    expect(byTool.get("buf")?.status).toBe("unsupported-platform");
+    expect(byTool.get("protoc-gen-go")?.status).toBe("unsupported-platform");
+    // The gap is per tool: pnpm is Node-based and stays merely unverified.
+    expect(byTool.get("pnpm")?.status).toBe("unverified");
     const prepare = new Map(state.prepare.map((entry) => [entry.state, entry]));
     expect(prepare.get("toolchain-ready")?.ok).toBe(false);
     expect(prepare.get("toolchain-ready")?.detail).toContain("Windows ARM64");

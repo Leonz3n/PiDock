@@ -332,8 +332,14 @@ describe("[PiDock 08] generation tools report per-platform results, never inferr
     expect(report.ok).toBe(false);
     expect(report.desktopLaunchImpliesGeneration).toBe(false);
     expect(report.entries).toHaveLength(GENERATION_TOOLS.length);
-    expect(report.entries.every((entry) => entry.status === "unsupported-platform")).toBe(true);
-    expect(report.entries[0]?.detail).toContain("Windows ARM64");
+    const byTool = new Map(report.entries.map((entry) => [entry.toolId, entry]));
+    // The native protoc plugins have no Windows ARM64 install path.
+    for (const toolId of ["buf", "protoc-gen-go", "protoc-gen-go-grpc", "protoc-gen-es"]) {
+      expect(byTool.get(toolId)?.status).toBe("unsupported-platform");
+      expect(byTool.get(toolId)?.detail).toContain("Windows ARM64");
+    }
+    // pnpm runs on Node, so it is only "unchecked" here, not unsupported.
+    expect(byTool.get("pnpm")?.status).toBe("unverified");
     expect(report.note).toContain("桌面可启动不能推断生成支持");
   });
 
