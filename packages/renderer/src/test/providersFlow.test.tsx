@@ -239,6 +239,18 @@ describe("context and reasoning popovers", () => {
     expect(await useHostStore.getState().adapter.getSession("release", "main")).toMatchObject({ contextSource: "pending", tokens: 68.4 });
   });
 
+  it("refuses compaction while the round is still open and keeps the numbers", async () => {
+    const adapter = createMemoryHost();
+    // The seeded `deploy` session waits for a confirmation.
+    const before = await adapter.getSession("release", "deploy");
+    await expect(adapter.compactSessionContext("release", "deploy")).rejects.toThrow("当前回合尚未结束");
+    const after = await adapter.getSession("release", "deploy");
+    expect(after?.contextUsed).toBe(before?.contextUsed);
+    // The pending estimate marker only appears once a compaction actually ran.
+    await adapter.compactSessionContext("release", "main");
+    expect((await adapter.getSession("release", "main"))?.contextSource).toBe("pending");
+  });
+
   it("degrades the reasoning picker and refuses an undeclared level", async () => {
     const user = userEvent.setup();
     renderApp("/projects/atlas/tasks/release?session=main");

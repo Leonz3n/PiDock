@@ -121,7 +121,7 @@ describe("composer commands and candidates", () => {
     const listbox = await screen.findByRole("listbox", { name: "输入候选" });
     expect(within(listbox).getByText("/compact")).toBeInTheDocument();
     await user.click(within(listbox).getByRole("option", { name: /\/compact/ }));
-    expect(await screen.findByText("已模拟上下文压缩；累计 Token 保留")).toBeInTheDocument();
+    expect(await screen.findByText("已压缩上下文；占用标记为待更新，累计 Token 保留")).toBeInTheDocument();
     expect(screen.getByLabelText("消息输入")).toHaveValue("");
 
     // `/skills` opens the enabled-skill list and inserts the chosen skill.

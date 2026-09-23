@@ -1833,6 +1833,11 @@ class MemoryHost implements HostAdapter {
   async compactSessionContext(taskId: string, sessionId: string): Promise<void> {
     const session = this.session(taskId, sessionId);
     if (!session) throw new Error("会话不存在");
+    // [PiDock 11] #9: compacting is a turn-scoped action like a model switch —
+    // it waits for the current execution instead of rewriting a live call.
+    if (session.runState === "running" || session.runState === "approval") {
+      throw new Error("当前回合尚未结束，请先等待完成或停止后再压缩上下文");
+    }
     session.contextUsed = Math.min(session.contextUsed, 9.2);
     session.contextSource = "pending";
   }

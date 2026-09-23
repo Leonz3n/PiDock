@@ -662,7 +662,7 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
       openModal({ type: "model-picker", taskId: task.id, sessionId });
     } else if (name === "/compact") {
       await compactSessionContext(task.id, sessionId);
-      pushToast("已模拟上下文压缩；累计 Token 保留");
+      pushToast("已压缩上下文；占用标记为待更新，累计 Token 保留");
     } else if (name === "/usage") {
       navigate({ view: "usage" });
     } else if (name === "/skills") {
