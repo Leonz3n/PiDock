@@ -1677,9 +1677,15 @@ function ContextModal({ taskId, sessionId, onClose }: { taskId: string; sessionI
         <Button
           size="sm"
           onClick={async () => {
-            await compactSessionContext(taskId, sessionId);
-            onClose();
-            pushToast("已压缩上下文；占用标记为待更新，累计 Token 保留");
+            try {
+              await compactSessionContext(taskId, sessionId);
+              onClose();
+              pushToast("已压缩上下文；占用标记为待更新，累计 Token 保留");
+            } catch (error) {
+              // A busy round refuses compaction; show the reason and keep the
+              // dialog open so the numbers stay readable.
+              pushToast(error instanceof Error ? error.message : String(error));
+            }
           }}
         >
           模拟压缩

@@ -238,7 +238,11 @@ export function buildProtocolRequest(protocol: string, input: ProtocolRequestInp
       ? input.turns.map((turn) => ({ role: turn.role === "agent" ? "assistant" : "user", content: [{ type: "text", text: turn.text }] }))
       : protocol === "openai-responses"
         ? input.turns.map((turn) => ({
-            role: turn.role,
+            // The internal `agent` role is a PiDock name and must not reach the
+            // wire: Responses expects `assistant`. The assistant part type
+            // `output_text` still needs a live confirmation once this module
+            // gets its runtime caller ([PiDock 11] #9 residual).
+            role: turn.role === "agent" ? "assistant" : "user",
             content: [{ type: turn.role === "agent" ? "output_text" : "input_text", text: turn.text }],
           }))
         : input.turns.map((turn) => ({ role: turn.role === "agent" ? "assistant" : "user", content: turn.text }));

@@ -661,8 +661,14 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
     } else if (name === "/model") {
       openModal({ type: "model-picker", taskId: task.id, sessionId });
     } else if (name === "/compact") {
-      await compactSessionContext(task.id, sessionId);
-      pushToast("已压缩上下文；占用标记为待更新，累计 Token 保留");
+      // [PiDock 11] #9: a busy round refuses compaction. The reason has to
+      // reach the user; `runCommand` is fire-and-forget at the call site.
+      try {
+        await compactSessionContext(task.id, sessionId);
+        pushToast("已压缩上下文；占用标记为待更新，累计 Token 保留");
+      } catch (error) {
+        pushToast(error instanceof Error ? error.message : String(error));
+      }
     } else if (name === "/usage") {
       navigate({ view: "usage" });
     } else if (name === "/skills") {

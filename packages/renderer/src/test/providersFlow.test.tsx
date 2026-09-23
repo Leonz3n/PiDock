@@ -1,4 +1,4 @@
-import { screen, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { createMemoryHost } from "../data/memoryHost";
@@ -343,6 +343,27 @@ describe("context and reasoning popovers", () => {
     // The pending estimate marker only appears once a compaction actually ran.
     await adapter.compactSessionContext("release", "main");
     expect((await adapter.getSession("release", "main"))?.contextSource).toBe("pending");
+  });
+
+  it("surfaces the busy-round compaction refusal from the dialog and the command", async () => {
+    const user = userEvent.setup();
+    // The seeded `deploy` session is waiting for a confirmation, so compaction is refused.
+    renderApp("/projects/atlas/tasks/release?session=deploy");
+    await screen.findByRole("heading", { name: "发布前检查" });
+    const refusal = "当前回合尚未结束，请先等待完成或停止后再压缩上下文";
+
+    await user.click(screen.getByRole("button", { name: "查看上下文占用" }));
+    const dialog = await screen.findByRole("dialog", { name: "上下文占用" });
+    await user.click(within(dialog).getByRole("button", { name: "模拟压缩" }));
+    expect(await screen.findByText(refusal)).toBeInTheDocument();
+    // The refusal keeps the numbers readable instead of closing on a bare rejection.
+    expect(within(dialog).getByTestId("context-numbers")).toBeInTheDocument();
+
+    // `/compact` is the other entry point and reports the same reason.
+    await user.type(screen.getByLabelText("消息输入"), "/comp");
+    const listbox = await screen.findByRole("listbox", { name: "输入候选" });
+    await user.click(within(listbox).getByRole("option", { name: /\/compact/ }));
+    await waitFor(() => expect(screen.getAllByText(refusal)).toHaveLength(2));
   });
 
   it("degrades the reasoning picker and refuses an undeclared level", async () => {
