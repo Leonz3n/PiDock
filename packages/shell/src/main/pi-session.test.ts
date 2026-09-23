@@ -387,6 +387,26 @@ describe("PiSessionChannel turns and approvals", () => {
     expect(() => session.recordCallUsage("call-999", { input: 1 }, "actual")).toThrow("unknown-call");
   });
 
+  it("backfills a pre-#12 usage object to the complete counter shape on restore", () => {
+    const session = channel();
+    session.runTurn({ text: "检查构建", usageSource: "actual", usage: { input: 120, output: 45, cacheRead: 10, cacheWrite: 5 } });
+    const snapshot = session.snapshot();
+    // A pre-#12 snapshot: only input/output/cacheRead/source were persisted.
+    const legacyCalls = snapshot.calls.map((call) => ({ ...call, usage: { input: 120, output: 45, cacheRead: 10, source: "actual" } }));
+    const restored = PiSessionChannel.restore({ ...snapshot, calls: legacyCalls as never }, TASK_DIR);
+    const usage = restored.snapshot().calls[0].usage;
+    expect(usage).toEqual({ input: 120, output: 45, cacheRead: 10, cacheWrite: 0, source: "actual", completeness: "partial" });
+    // A zero-initialised (unreported) record stays missing after a round-trip.
+    const zeroed = PiSessionChannel.restore(
+      { ...snapshot, calls: snapshot.calls.map((call) => ({ ...call, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, source: "unreported" } })) as never },
+      TASK_DIR,
+    );
+    expect(zeroed.snapshot().calls[0].usage.completeness).toBe("missing");
+    // Reopening again is idempotent (no drift, no invented report).
+    const twice = PiSessionChannel.restore(restored.snapshot(), TASK_DIR);
+    expect(twice.snapshot().calls[0].usage).toEqual(usage);
+  });
+
   it("keeps the call kind, time and end state across a restore", () => {
     const session = channel();
     session.runTurn({ text: "检查构建" });
