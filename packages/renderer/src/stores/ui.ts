@@ -42,10 +42,17 @@ type Toast = { id: string; text: string };
 
 type UiState = {
   panels: Record<string, ToolPanel[]>;
+  /**
+   * Per task, whether the user holds the task browser ([UI 对齐 01] #25). The
+   * browser panel writes it from the Host's takeover result so the shell
+   * summary bar can render the same controller the panel shows.
+   */
+  browserTakeover: Record<string, boolean>;
   modal: ModalState;
   toasts: Toast[];
   attentionFilter: "all" | "approval" | "failed" | "expired" | "completed-unread";
   togglePanel: (taskId: string, panel: ToolPanel) => void;
+  setBrowserTakeover: (taskId: string, paused: boolean) => void;
   openModal: (modal: ModalState) => void;
   closeModal: () => void;
   pushToast: (text: string) => void;
@@ -55,6 +62,7 @@ type UiState = {
 
 export const useUiStore = create<UiState>((set, get) => ({
   panels: {},
+  browserTakeover: {},
   modal: null,
   toasts: [],
   attentionFilter: "all",
@@ -63,6 +71,7 @@ export const useUiStore = create<UiState>((set, get) => ({
     const next = panels.includes(panel) ? panels.filter((item) => item !== panel) : [...panels, panel];
     set({ panels: { ...get().panels, [taskId]: next } });
   },
+  setBrowserTakeover: (taskId, paused) => set({ browserTakeover: { ...get().browserTakeover, [taskId]: paused } }),
   openModal: (modal) => set({ modal }),
   closeModal: () => set({ modal: null }),
   pushToast: (text) => {

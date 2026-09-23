@@ -1649,7 +1649,7 @@ function ThinkingPickerModal({ taskId, sessionId, onClose }: { taskId: string; s
         </p>
       ) : null}
       {resolved.catalog === "catalog-unknown" ? (
-        <p className="mt-3 text-xs text-muted">当前模型跟随模型目录，尚未获取可用档位；不能声明已关闭推理。可到「Provider 与上下文」配置可用档位。</p>
+        <p className="mt-3 text-xs text-muted">当前模型跟随模型目录，尚未获取可用档位；不能声明已关闭推理。可到「模型与 Provider」配置可用档位。</p>
       ) : resolved.catalog === "unsupported" ? (
         <p className="mt-3 text-xs text-muted">该模型不支持推理档位。</p>
       ) : (

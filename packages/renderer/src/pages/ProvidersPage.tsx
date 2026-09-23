@@ -35,7 +35,7 @@ export function ProvidersPage() {
     <div className="flex flex-col gap-4">
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-base font-medium text-ink">Provider 与上下文</h1>
+          <h1 className="text-base font-medium text-ink">模型与 Provider</h1>
           <p className="mt-1 text-xs text-muted">
             同一供应商可以保存多个独立配置；会话选择其中一个配置及其模型，上下文占用与 Token 消耗分开记录。
           </p>

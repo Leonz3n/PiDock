@@ -15,7 +15,7 @@ import { renderApp } from "./helpers";
 describe("provider page status and sync", () => {
   it("shows availability, auth presence and per-model capacity without leaking the reference", async () => {
     renderApp("/providers");
-    await screen.findByRole("heading", { name: "Provider 与上下文" });
+    await screen.findByRole("heading", { name: "模型与 Provider" });
     const status = screen.getByTestId("provider-status-provider-anthropic");
     expect(status).toHaveTextContent("可用性：可用");
     expect(status).toHaveTextContent("认证：引用已配置");
@@ -27,7 +27,7 @@ describe("provider page status and sync", () => {
   it("reports each sync outcome and never rewrites configured models", async () => {
     const user = userEvent.setup();
     renderApp("/providers");
-    await screen.findByRole("heading", { name: "Provider 与上下文" });
+    await screen.findByRole("heading", { name: "模型与 Provider" });
 
     // Success: candidates only.
     await user.click(screen.getAllByRole("button", { name: "同步模型列表" })[0]!);
@@ -67,7 +67,7 @@ describe("provider page status and sync", () => {
   it("enables/disables a configuration and keeps session attribution when one is removed", async () => {
     const user = userEvent.setup();
     renderApp("/providers");
-    await screen.findByRole("heading", { name: "Provider 与上下文" });
+    await screen.findByRole("heading", { name: "模型与 Provider" });
     const firstPanel = screen.getByText("Anthropic 官方").closest("section") ?? document.body;
     await user.click(within(firstPanel as HTMLElement).getByRole("button", { name: "停用" }));
     expect(await screen.findByText("已停用该配置；引用它的会话会提示配置不可用")).toBeInTheDocument();
@@ -87,7 +87,7 @@ describe("add-form discovery", () => {
   it("syncs the draft connection before the first save and invalidates it on a changed connection", async () => {
     const user = userEvent.setup();
     renderApp("/providers");
-    await screen.findByRole("heading", { name: "Provider 与上下文" });
+    await screen.findByRole("heading", { name: "模型与 Provider" });
     await user.click(screen.getByRole("button", { name: "添加 Provider" }));
     const dialog = await screen.findByRole("dialog", { name: "添加 Provider" });
 
@@ -176,7 +176,7 @@ describe("model row provenance", () => {
   it("distinguishes directory candidates, the editor default and hand-typed values", async () => {
     const user = userEvent.setup();
     renderApp("/providers");
-    await screen.findByRole("heading", { name: "Provider 与上下文" });
+    await screen.findByRole("heading", { name: "模型与 Provider" });
 
     // A fresh row starts from the default window.
     await user.click(screen.getByRole("button", { name: "添加 Provider" }));
@@ -263,7 +263,7 @@ describe("model popover", () => {
     await user.click(screen.getByRole("button", { name: /^选择模型：Claude Sonnet$/ }));
     await screen.findByRole("dialog", { name: "选择 Provider 与模型" });
     await user.click(screen.getByRole("button", { name: "管理 Provider" }));
-    expect(await screen.findByRole("heading", { name: "Provider 与上下文" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "模型与 Provider" })).toBeInTheDocument();
   });
 
   it("refuses a switch while the round is busy and keeps model, history and draft", async () => {
