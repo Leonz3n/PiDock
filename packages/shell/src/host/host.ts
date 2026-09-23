@@ -852,6 +852,31 @@ async function dispatchTaskOp(
           return { ok: false, error: error instanceof Error ? error.message : String(error) };
         }
       }
+      // [PiDock 12] #12 usage read/cleanup. A read op: it takes no caller
+      // input beyond the filter, writes only the task's own usage ledger, and
+      // never touches a conversation, so no tier/approval is involved.
+      case "task/usageRecords": {
+        const filter: Record<string, unknown> = {};
+        for (const key of ["sessionId", "providerId", "model", "from", "to", "kind", "groupBy"] as const) {
+          const value = record[key];
+          if (value !== undefined) filter[key] = value;
+        }
+        try {
+          const report = host.usageReport(filter as never);
+          return { ok: true, payload: { report, dimensions: host.usageDimensions() } };
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : String(error) };
+        }
+      }
+      case "task/clearUsage": {
+        const scope = record["scope"];
+        try {
+          const result = host.clearUsage(scope as never);
+          return { ok: true, payload: { ...result } };
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : String(error) };
+        }
+      }
       default:
         return { ok: false, error: `unknown-op: ${op}` };
     }

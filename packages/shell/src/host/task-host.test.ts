@@ -7,14 +7,20 @@ import {
   listSessionIdsOnDisk,
   parseSessionSnapshot,
   parseTaskRecord,
+  parseUsageLedger,
   readSessionSnapshotOnDisk,
   readTaskRecordOnDisk,
+  readUsageOnDisk,
+  serializeUsageLedger,
   sessionFilePath,
   taskFilePath,
+  usageFilePath,
   writeSessionSnapshotOnDisk,
   writeTaskRecordOnDisk,
+  writeUsageOnDisk,
   buildTaskDiskRecord,
 } from "./task-store.js";
+import { normalizeReportedUsage, toUsageDetail } from "../main/usage-ledger.js";
 import { PiSessionChannel, resetPiSequencesForTests } from "../main/pi-session.js";
 import { assertProvisionPlanSafe, planWorktreeCreation } from "../main/task-provision.js";
 import { SharedPathCoordinator } from "./path-coordination.js";
@@ -91,6 +97,32 @@ describe("task-store record shape", () => {
     expect(taskFilePath(dir)).toBe(join(dir, "task.json"));
     expect(readTaskRecordOnDisk(dir)).toEqual(record);
     expect(readTaskRecordOnDisk(join(tmpdir(), "pidock-missing-dir-xyz"))).toBeNull();
+  });
+
+  it("[PiDock 12] round-trips the usage ledger with its cleanup exclusions and rejects malformed entries", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pidock-usage-"));
+    const detail = toUsageDetail({
+      callId: "call-1",
+      taskId: TASK_ID,
+      sessionId: "main",
+      providerId: "provider-local",
+      providerVersion: "unversioned",
+      requestModel: "pidock-default",
+      kind: "turn",
+      endState: "completed",
+      at: "2026-09-22T10:00:00+08:00",
+      usage: normalizeReportedUsage({ input: 10, output: 4, cacheRead: 0, cacheWrite: 0 }, "actual"),
+    });
+    writeUsageOnDisk(dir, [detail], [{ kind: "session", sessionId: "review" }]);
+    expect(usageFilePath(dir)).toBe(join(dir, "usage.json"));
+    expect(readUsageOnDisk(dir)).toEqual({ details: [detail], exclusions: [{ kind: "session", sessionId: "review" }] });
+    expect(readUsageOnDisk(join(tmpdir(), "pidock-missing-usage-xyz"))).toEqual({ details: [], exclusions: [] });
+    // A corrupt ledger is refused instead of restoring a half-shaped record.
+    expect(() => parseUsageLedger(serializeUsageLedger([{ ...detail, kind: "live" as never }]))).toThrow("kind");
+    expect(() => parseUsageLedger(JSON.stringify({ details: [{ ...detail, usage: { ...detail.usage, input: -1 } }] }))).toThrow("input");
+    expect(() => parseUsageLedger(JSON.stringify({ details: "nope" }))).toThrow("details");
+    expect(() => parseUsageLedger(serializeUsageLedger([detail], [{ kind: "session" } as never]))).toThrow("sessionId");
+    expect(parseUsageLedger(serializeUsageLedger([detail]))).toEqual({ details: [detail], exclusions: [] });
   });
 
   it("rejects malformed task records and session snapshots", () => {
@@ -1176,5 +1208,125 @@ describe("[PiDock 09] real-path write coordination across tasks", () => {
     blocked();
     a.taskHost.cancel("main");
     expect(shared.snapshot()).toEqual([]);
+  });
+});
+
+// Seam: [PiDock 12] #12 usage ledger (persist, aggregate, dedupe, cleanup).
+describe("[PiDock 12] Host usage ledger", () => {
+  it("persists a detail per call with attribution, type, end state and completeness", () => {
+    const taskHost = host();
+    taskHost.provision(provisionInput());
+    taskHost.sendMessage("main", "检查构建", {
+      usageSource: "actual",
+      usage: { input: 120, output: 45, cacheRead: 10, cacheWrite: 5, reasoning: 8, totalTokens: 180 },
+    });
+    const report = taskHost.usageReport();
+    expect(report.details).toHaveLength(1);
+    expect(report.details[0]).toMatchObject({
+      id: "call-1",
+      taskId: TASK_ID,
+      sessionId: "main",
+      providerId: "provider-local",
+      providerVersion: "unversioned",
+      requestModel: "pidock-default",
+      kind: "turn",
+      endState: "completed",
+      at: "2026-09-22T10:00:00+08:00",
+      usage: { input: 120, output: 45, cacheRead: 10, cacheWrite: 5, source: "actual", completeness: "reported", reasoning: 8, reportedTotal: 180 },
+    });
+    // reasoning stays inside output and the provider total is never re-added.
+    expect(report.totals).toMatchObject({ calls: 1, reported: 1, input: 120, output: 45, cacheRead: 10, cacheWrite: 5, reasoning: 8 });
+    expect(report.window.label).toContain("UTC+08:00");
+    expect(report.definitions.length).toBeGreaterThan(0);
+  });
+
+  it("reads the persisted ledger after a restart instead of re-adding consumption", () => {
+    const store = memoryTaskStore();
+    const first = new TaskWorkspaceHost(TASK_ID, TASK_DIR, store, () => "2026-09-22T10:00:00+08:00");
+    first.provision(provisionInput());
+    first.sendMessage("main", "检查构建", { usageSource: "actual", usage: { input: 100, output: 40, cacheRead: 0, cacheWrite: 0 } });
+    // Reopening the same task (fresh Host over the same store) must report the
+    // same single call, not a second one.
+    const reopened = new TaskWorkspaceHost(TASK_ID, TASK_DIR, store, () => "2026-09-22T10:05:00+08:00");
+    const report = reopened.usageReport();
+    expect(report.details).toHaveLength(1);
+    expect(report.totals).toMatchObject({ calls: 1, input: 100, output: 40 });
+    reopened.usageReport();
+    expect(reopened.usageReport().details).toHaveLength(1);
+  });
+
+  it("groups by the requested dimension and filters by range, provider, session and type", () => {
+    const taskHost = host();
+    taskHost.provision(provisionInput());
+    taskHost.sendMessage("main", "检查构建", { usageSource: "actual", usage: { input: 100, output: 40, cacheRead: 0, cacheWrite: 0 } });
+    taskHost.compactSession({ sessionId: "main", usageSource: "actual", usage: { input: 80, output: 20, cacheRead: 0, cacheWrite: 0 } });
+    const byKind = taskHost.usageReport({ groupBy: "kind" });
+    expect(byKind.groups.map((group) => group.key).sort()).toEqual(["compaction", "turn"]);
+    expect(byKind.totals.calls).toBe(2);
+    expect(taskHost.usageReport({ kind: "compaction" }).details).toHaveLength(1);
+    expect(taskHost.usageReport({ providerId: "provider-local" }).details).toHaveLength(2);
+    expect(taskHost.usageReport({ providerId: "provider-anthropic" }).details).toHaveLength(0);
+    expect(taskHost.usageReport({ sessionId: "main" }).details).toHaveLength(2);
+    expect(taskHost.usageReport({ from: "2026-09-22", to: "2026-09-22" }).details).toHaveLength(2);
+    expect(taskHost.usageReport({ from: "2026-09-23" }).details).toHaveLength(0);
+    expect(taskHost.usageDimensions().map((dimension) => dimension.id)).toContain("provider");
+  });
+
+  it("counts a failed attempt and a cancelled attempt as their own attempts", () => {
+    const taskHost = host();
+    taskHost.provision(provisionInput());
+    // A denied tool call settles the turn as failed (the scripted plan is how
+    // the RPC surface reaches the gate: `toolPlan` carries data, not code).
+    taskHost.sendMessage("main", "越界写入", {
+      usageSource: "actual",
+      usage: { input: 50, output: 5, cacheRead: 0, cacheWrite: 0 },
+      tool: "fs.write",
+      target: "/etc/passwd",
+      execute: (call) => ({ tool: call.tool, kind: call.kind, target: "/etc/passwd", contentVersion: call.contentVersion, output: "denied" }),
+    });
+    const waiting = taskHost.sendMessage("main", "等待确认", {
+      usageSource: "actual",
+      usage: { input: 60, output: 6, cacheRead: 0, cacheWrite: 0 },
+      tool: "exec.run",
+      target: `${TASK_DIR}/run.sh`,
+      execute: (call) => ({ tool: call.tool, kind: call.kind, target: call.target, contentVersion: call.contentVersion, output: "pending" }),
+    });
+    expect(waiting.state).toBe("approval");
+    expect(taskHost.usageReport().details.map((detail) => detail.endState)).toEqual(["failed", "awaiting-approval"]);
+    taskHost.cancel("main");
+    const report = taskHost.usageReport();
+    expect(report.details.map((detail) => detail.endState)).toEqual(["failed", "cancelled"]);
+    expect(report.totals).toMatchObject({ calls: 2, input: 110 });
+  });
+
+  it("clears only the named scope and never restores it on the next sync", () => {
+    const taskHost = host();
+    taskHost.provision(provisionInput());
+    taskHost.sendMessage("main", "检查构建", { usageSource: "actual", usage: { input: 100, output: 40, cacheRead: 0, cacheWrite: 0 } });
+    taskHost.sendMessage("review", "复核构建", { usageSource: "actual", usage: { input: 10, output: 4, cacheRead: 0, cacheWrite: 0 } });
+    expect(taskHost.usageReport().details).toHaveLength(2);
+    // Archiving/reading a conversation keeps usage: only clearUsage removes it.
+    expect(taskHost.usageReport({ sessionId: "main" }).details).toHaveLength(1);
+    const cleared = taskHost.clearUsage({ kind: "session", sessionId: "review" });
+    expect(cleared).toMatchObject({ removed: 1, remaining: 1 });
+    expect(cleared.description).toContain("review");
+    expect(taskHost.usageReport().details.map((detail) => detail.sessionId)).toEqual(["main"]);
+    // A later turn re-syncs from the sessions; the cleaned scope stays clean.
+    taskHost.sendMessage("main", "再检查", { usageSource: "actual", usage: { input: 5, output: 1, cacheRead: 0, cacheWrite: 0 } });
+    expect(taskHost.usageReport().details.map((detail) => detail.sessionId)).toEqual(["main", "main"]);
+    const all = taskHost.clearUsage({ kind: "all" });
+    expect(all.remaining).toBe(0);
+    expect(taskHost.usageReport().details).toHaveLength(0);
+  });
+
+  it("keeps a before-date cleanup on the declared timezone boundary", () => {
+    const taskHost = host();
+    taskHost.provision(provisionInput());
+    taskHost.sendMessage("main", "检查构建", { usageSource: "actual", usage: { input: 100, output: 40, cacheRead: 0, cacheWrite: 0 } });
+    // The call sits at 2026-09-22T10:00:00+08:00: a cutoff on an earlier day
+    // removes nothing, a cutoff at the end of that day removes it.
+    expect(taskHost.clearUsage({ kind: "before", before: "2026-09-01" })).toMatchObject({ removed: 0, remaining: 1 });
+    expect(taskHost.clearUsage({ kind: "before", before: "2026-09-22" })).toMatchObject({ removed: 1, remaining: 0 });
+    expect(taskHost.usageReport().details).toHaveLength(0);
   });
 });

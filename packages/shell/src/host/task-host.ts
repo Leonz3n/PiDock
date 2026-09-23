@@ -16,7 +16,7 @@
  * unit tests inject an in-memory store instead of the filesystem.
  */
 
-import { PiSessionChannel, type PiPermission, type PiRunState, type PiSessionSnapshot, type PiTurnInput, type PiModelSwitchEvent, type PiSessionContextView } from "../main/pi-session.js";
+import { PiSessionChannel, type PiPermission, type PiReportedUsage, type PiRunState, type PiSessionSnapshot, type PiTurnInput, type PiModelSwitchEvent, type PiSessionContextView, type PiUsageSource } from "../main/pi-session.js";
 import {
   TaskWriteCoordinator,
   writeClaimError,
@@ -66,10 +66,35 @@ import {
   listSessionIdsOnDisk,
   readSessionSnapshotOnDisk,
   readTaskRecordOnDisk,
+  readUsageOnDisk,
+  serializeUsageLedger,
   writeSessionSnapshotOnDisk,
   writeTaskRecordOnDisk,
+  writeUsageOnDisk,
   type TaskDiskRecord,
 } from "./task-store.js";
+import {
+  PI_USAGE_GROUP_LABELS,
+  UNVERSIONED_PROVIDER_CONFIG,
+  USAGE_DEFINITIONS,
+  applyUsageCleanup,
+  dedupeInheritedUsage,
+  describeUsageCleanupScope,
+  filterUsageDetails,
+  groupUsageDetails,
+  mergeUsageDetails,
+  normalizeReportedUsage,
+  resolveUsageWindow,
+  sumUsageDetails,
+  toUsageDetail,
+  unparsableUsageTimes,
+  type PiUsageCleanupScope,
+  type PiUsageDetail,
+  type PiUsageFilter,
+  type PiUsageGroup,
+  type PiUsageGroupBy,
+  type PiUsageTotals,
+} from "../main/usage-ledger.js";
 
 export interface TaskStore {
   readTask(taskDir: string): TaskDiskRecord | null;
@@ -77,6 +102,9 @@ export interface TaskStore {
   readSession(taskDir: string, sessionId: string): PiSessionSnapshot | null;
   writeSession(taskDir: string, snapshot: PiSessionSnapshot): void;
   listSessions(taskDir: string): string[];
+  /** [PiDock 12] #12: persisted usage ledger of this task. */
+  readUsage(taskDir: string): { details: PiUsageDetail[]; exclusions: PiUsageCleanupScope[] };
+  writeUsage(taskDir: string, details: readonly PiUsageDetail[], exclusions: readonly PiUsageCleanupScope[]): void;
 }
 
 /**
@@ -136,14 +164,22 @@ export const diskTaskStore: TaskStore = {
   readSession: (taskDir, sessionId) => readSessionSnapshotOnDisk(taskDir, sessionId),
   writeSession: (taskDir, snapshot) => writeSessionSnapshotOnDisk(taskDir, snapshot),
   listSessions: (taskDir) => listSessionIdsOnDisk(taskDir),
+  readUsage: (taskDir) => readUsageOnDisk(taskDir),
+  writeUsage: (taskDir, details) => writeUsageOnDisk(taskDir, details),
 };
 
-export function memoryTaskStore(): TaskStore & { tasks: Map<string, TaskDiskRecord>; sessions: Map<string, PiSessionSnapshot> } {
+export function memoryTaskStore(): TaskStore & {
+  tasks: Map<string, TaskDiskRecord>;
+  sessions: Map<string, PiSessionSnapshot>;
+  usage: Map<string, { details: PiUsageDetail[]; exclusions: PiUsageCleanupScope[] }>;
+} {
   const tasks = new Map<string, TaskDiskRecord>();
   const sessions = new Map<string, PiSessionSnapshot>();
+  const usage = new Map<string, { details: PiUsageDetail[]; exclusions: PiUsageCleanupScope[] }>();
   return {
     tasks,
     sessions,
+    usage,
     readTask: (taskDir) => tasks.get(taskDir) ?? null,
     writeTask: (taskDir, record) => {
       tasks.set(taskDir, record);
@@ -157,6 +193,18 @@ export function memoryTaskStore(): TaskStore & { tasks: Map<string, TaskDiskReco
         .filter((key) => key.startsWith(`${taskDir}::`))
         .map((key) => key.slice(taskDir.length + 2))
         .sort(),
+    readUsage: (taskDir) => {
+      const ledger = usage.get(taskDir);
+      return ledger === undefined
+        ? { details: [], exclusions: [] }
+        : { details: ledger.details.map((detail) => ({ ...detail, usage: { ...detail.usage } })), exclusions: ledger.exclusions.map((scope) => ({ ...scope })) };
+    },
+    writeUsage: (taskDir, details, exclusions) => {
+      usage.set(taskDir, {
+        details: details.map((detail) => ({ ...detail, usage: { ...detail.usage } })),
+        exclusions: exclusions.map((scope) => ({ ...scope })),
+      });
+    },
   };
 }
 
@@ -860,6 +908,9 @@ export class TaskWorkspaceHost {
       credentialRef: options?.credentialRef,
       permission: options?.permission,
       catalog: this.catalog,
+      // One clock per Host: a call's `at` is the same instant the task record,
+      // approvals and drafts use, instead of drifting on a second clock.
+      now: this.now,
     });
     this.channels.set(sessionId, channel);
     this.store.writeSession(this.taskDir, channel.snapshot());
@@ -940,11 +991,15 @@ export class TaskWorkspaceHost {
   }
 
   /** Context compaction: occupancy becomes a pending estimate, cumulative tokens stay. */
-  compactSession(input: { sessionId: string; catalog?: readonly unknown[] }): PiSessionContextView {
+  compactSession(input: { sessionId: string; catalog?: readonly unknown[]; usageSource?: PiUsageSource; usage?: PiReportedUsage }): PiSessionContextView {
     if (input.catalog !== undefined) this.setProviderCatalog(input.catalog);
     const channel = this.openSession(input.sessionId);
-    channel.compactContext();
+    channel.compactContext({
+      ...(input.usageSource !== undefined ? { usageSource: input.usageSource } : {}),
+      ...(input.usage !== undefined ? { usage: input.usage } : {}),
+    });
     this.store.writeSession(this.taskDir, channel.snapshot());
+    this.syncUsageLedger();
     return channel.contextView();
   }
 
@@ -960,6 +1015,101 @@ export class TaskWorkspaceHost {
     channel.recordContextUsage({ used: input.used, source: input.source });
     this.store.writeSession(this.taskDir, channel.snapshot());
     return channel.contextView();
+  }
+
+  /**
+   * Build the usage details this task's persisted sessions currently hold
+   * ([PiDock 12] #12). Every call record becomes its own detail; the call id
+   * is the ledger key, so restoring a session re-derives the same set instead
+   * of adding consumption.
+   */
+  private usageDetailsFromSessions(): PiUsageDetail[] {
+    const details: PiUsageDetail[] = [];
+    for (const sessionId of this.sessionIds()) {
+      const snapshot = this.store.readSession(this.taskDir, sessionId);
+      if (snapshot === null) continue;
+      for (const call of snapshot.calls) {
+        details.push(
+          toUsageDetail({
+            callId: call.callId,
+            taskId: this.taskId,
+            sessionId,
+            providerId: call.providerId,
+            providerVersion: call.providerVersion ?? UNVERSIONED_PROVIDER_CONFIG,
+            requestModel: call.model,
+            ...(call.responseModel !== undefined ? { responseModel: call.responseModel } : {}),
+            kind: call.kind,
+            endState: call.endState,
+            at: call.at,
+            usage: call.usage ?? normalizeReportedUsage(undefined, "unreported"),
+          }),
+        );
+      }
+    }
+    return details;
+  }
+
+  /**
+   * Bring the persisted ledger in line with the sessions and return it.
+   * The merge is replay-safe (keyed by call id) and the recorded cleanup
+   * exclusions are re-applied, so a legacy task backfills once and a cleaned
+   * scope stays cleaned without touching the conversations. The file is only
+   * rewritten when the result actually changed.
+   */
+  private syncUsageLedger(): { details: PiUsageDetail[]; exclusions: PiUsageCleanupScope[] } {
+    const stored = this.store.readUsage(this.taskDir);
+    const merged = mergeUsageDetails(stored.details, this.usageDetailsFromSessions());
+    const details = stored.exclusions.reduce((current, exclusion) => applyUsageCleanup(current, exclusion), merged);
+    if (serializeUsageLedger(details, stored.exclusions) !== serializeUsageLedger(stored.details, stored.exclusions)) {
+      this.store.writeUsage(this.taskDir, details, stored.exclusions);
+    }
+    return { details, exclusions: stored.exclusions };
+  }
+
+  /**
+   * Usage detail + totals + groups for the statistics page. Totals count an
+   * inherited copy once (by origin) and never fold reasoning into output or a
+   * provider total into the cache counters. The window/definition metadata is
+   * returned so the UI can show what it is counting instead of guessing.
+   */
+  usageReport(input: PiUsageFilter & { groupBy?: PiUsageGroupBy } = {}): {
+    details: PiUsageDetail[];
+    totals: PiUsageTotals;
+    groups: PiUsageGroup[];
+    window: { label: string; offsetMinutes: number };
+    unparsable: string[];
+    definitions: typeof USAGE_DEFINITIONS;
+  } {
+    const ledger = this.syncUsageLedger();
+    const details = filterUsageDetails(ledger.details, input);
+    const window = resolveUsageWindow(input);
+    return {
+      details: details.map((detail) => ({ ...detail, usage: { ...detail.usage } })),
+      totals: sumUsageDetails(dedupeInheritedUsage(details)),
+      groups: input.groupBy === undefined ? [] : groupUsageDetails(details, input.groupBy),
+      window: { label: window.label, offsetMinutes: window.offsetMinutes },
+      unparsable: unparsableUsageTimes(details),
+      definitions: USAGE_DEFINITIONS,
+    };
+  }
+
+  /**
+   * Remove usage details in one explicit scope ([PiDock 12] #12 box 8).
+   * Archiving a conversation never removes usage; only this op does, and the
+   * scope is recorded so a later sync does not restore what was cleaned.
+   */
+  clearUsage(scope: PiUsageCleanupScope): { removed: number; remaining: number; description: string } {
+    const stored = this.store.readUsage(this.taskDir);
+    const merged = mergeUsageDetails(stored.details, this.usageDetailsFromSessions());
+    const exclusions = [...stored.exclusions, scope];
+    const details = exclusions.reduce((current, exclusion) => applyUsageCleanup(current, exclusion), merged);
+    this.store.writeUsage(this.taskDir, details, exclusions);
+    return { removed: merged.length - details.length, remaining: details.length, description: describeUsageCleanupScope(scope) };
+  }
+
+  /** Grouping dimensions the statistics page offers (labels included). */
+  usageDimensions(): { id: PiUsageGroupBy; label: string }[] {
+    return (Object.keys(PI_USAGE_GROUP_LABELS) as PiUsageGroupBy[]).map((id) => ({ id, label: PI_USAGE_GROUP_LABELS[id] }));
   }
 
   sendMessage(
@@ -1041,6 +1191,10 @@ export class TaskWorkspaceHost {
         else this.releaseClaimedPathScope(sessionId, claimedPathScope);
       }
     }
+    // [PiDock 12] #12: the settled turn's usage detail joins the ledger before
+    // the session is persisted, so archiving/cleaning the conversation later
+    // never loses the consumption it already produced.
+    this.syncUsageLedger();
     this.store.writeSession(this.taskDir, channel.snapshot());
     const pending = channel.pendingApproval();
     return {
@@ -1072,6 +1226,7 @@ export class TaskWorkspaceHost {
     const call = channel.approve(approvalId);
     this.settleApprovalClaim(sessionId);
     this.store.writeSession(this.taskDir, channel.snapshot());
+    this.syncUsageLedger();
     return call.callId;
   }
 
@@ -1080,6 +1235,7 @@ export class TaskWorkspaceHost {
     channel.reject(approvalId);
     this.settleApprovalClaim(sessionId);
     this.store.writeSession(this.taskDir, channel.snapshot());
+    this.syncUsageLedger();
   }
 
   /** Forward-only permission change for future turns (never rewrites in-flight approval). */

@@ -159,7 +159,12 @@ export interface PiUsageDetail {
   /** Stable call identity — the ledger's primary key. */
   id: string;
   taskId: string;
-  projectId: string;
+  /**
+   * Project the task belongs to. Optional: the Host owns task/session
+   * attribution and knows no project mapping, so the dimension is attached
+   * where that mapping exists (the statistics layer) instead of invented here.
+   */
+  projectId?: string;
   sessionId: string;
   providerId: string;
   /** `providerConfigVersion` at call time; a fingerprint, not an upstream version. */
@@ -190,7 +195,7 @@ export function countedIdentity(detail: PiUsageDetail): PiUsageOrigin {
 export interface PiUsageDetailInput {
   callId: string;
   taskId: string;
-  projectId: string;
+  projectId?: string;
   sessionId: string;
   providerId: string;
   providerVersion: string;
@@ -208,7 +213,7 @@ export function toUsageDetail(input: PiUsageDetailInput): PiUsageDetail {
   return {
     id: input.callId,
     taskId: input.taskId,
-    projectId: input.projectId,
+    ...(input.projectId !== undefined && input.projectId.length > 0 ? { projectId: input.projectId } : {}),
     sessionId: input.sessionId,
     providerId: input.providerId,
     providerVersion: input.providerVersion,
@@ -299,6 +304,13 @@ export function mergeUsageDetails(existing: readonly PiUsageDetail[], incoming: 
 
 /** Declared timezone offset for date-only boundaries (Asia/Shanghai). */
 export const USAGE_TIMEZONE_OFFSET_MINUTES = 8 * 60;
+
+/**
+ * Version tag for a call whose provider configuration fingerprint was never
+ * captured (records written before [PiDock 12] #12). Kept explicit so a
+ * missing fingerprint is never shown as a real configuration version.
+ */
+export const UNVERSIONED_PROVIDER_CONFIG = "unversioned";
 
 export interface PiUsageRange {
   /** Inclusive lower bound as supplied (`YYYY-MM-DD` or ISO instant). */
@@ -400,6 +412,9 @@ export function filterUsageDetails(details: readonly PiUsageDetail[], filter: Pi
   });
 }
 
+/** Grouping key for details whose project dimension is not recorded. */
+export const UNRECORDED_PROJECT = "未记录项目";
+
 /** Details whose `at` cannot be placed on the time axis. */
 export function unparsableUsageTimes(details: readonly PiUsageDetail[]): string[] {
   return details.filter((detail) => parseUsageInstant(detail.at) === null).map((detail) => detail.id);
@@ -440,7 +455,7 @@ export function groupUsageDetails(
     const identity = detail.origin ?? { taskId: detail.taskId, sessionId: detail.sessionId, callId: detail.id };
     const key =
       groupBy === "project"
-        ? detail.projectId
+        ? (detail.projectId ?? UNRECORDED_PROJECT)
         : groupBy === "task"
           ? identity.taskId
           : groupBy === "session"
