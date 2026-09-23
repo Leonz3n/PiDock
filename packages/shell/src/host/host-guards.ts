@@ -13,6 +13,7 @@ import { PI_USAGE_GROUP_BY, PI_USAGE_KINDS, type PiUsageGroupBy } from "../main/
 import { isUsageKindName } from "./task-store.js";
 import { isBrowserAction, isPageRef } from "../main/browser-rules.js";
 import { isExternalResourceKind } from "../main/service-runs.js";
+import { checkReferencePayload } from "../main/composer-references.js";
 
 export const DEFAULT_WORKSPACE_ID = "s1-default-workspace";
 
@@ -442,6 +443,18 @@ export function validateHostTaskOp(
     if (references !== undefined && !Array.isArray(references)) {
       return { ok: false, error: "invalid-payload: task/sendMessage.references must be an array" };
     }
+    // [PiDock 13] (#16) box 15: the Host persists references verbatim, so the
+    // provenance itself is checked fail-closed here — an out-of-source path,
+    // an unknown kind or a plain-directory link claiming a Git version never
+    // reaches the session or a stored draft.
+    if (Array.isArray(references)) {
+      for (let index = 0; index < references.length; index += 1) {
+        const checked = checkReferencePayload(references[index]);
+        if (!checked.ok) {
+          return { ok: false, error: `invalid-payload: task/sendMessage.references[${index}].${checked.error}` };
+        }
+      }
+    }
     // S6 batch 3: scripted tool plan rides the same payload (all optional,
     // all fail-closed). `tool` must name a gated tool, `target` a non-empty
     // string (the task-dir containment check stays Host-side in
@@ -496,6 +509,17 @@ export function validateHostTaskOp(
     const references = payload["references"];
     if (references !== undefined && !Array.isArray(references)) {
       return { ok: false, error: "invalid-payload: task/saveDraft.references must be an array" };
+    }
+    // [PiDock 13] (#16) box 14/15: a stored draft reference carries the same
+    // provenance rules as a live send, so a restored draft cannot bind to a
+    // source the Host would refuse to send.
+    if (Array.isArray(references)) {
+      for (let index = 0; index < references.length; index += 1) {
+        const checked = checkReferencePayload(references[index]);
+        if (!checked.ok) {
+          return { ok: false, error: `invalid-payload: task/saveDraft.references[${index}].${checked.error}` };
+        }
+      }
     }
     const skillSource = payload["skillSource"];
     if (skillSource !== undefined && (typeof skillSource !== "string" || skillSource.trim().length === 0)) {

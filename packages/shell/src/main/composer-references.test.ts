@@ -111,3 +111,21 @@ describe("composer reference rules", () => {
     expect(scope).toContain("不计入实报 Token");
   });
 });
+
+describe("reference payload guard (Host boundary)", () => {
+  const base = { id: "r1", kind: "file", label: "front-monorepo/src/api.ts", detail: "任务代码引用", taskId: "task-a", sourceId: "front-monorepo", sourceKind: "worktree", relativePath: "src/api.ts", version: "abc123" };
+
+  it("accepts a well-formed task reference and rejects forged provenance", async () => {
+    const { checkReferencePayload } = await import("./composer-references.js");
+    expect(checkReferencePayload(base)).toEqual({ ok: true });
+    expect(checkReferencePayload({ ...base, kind: "snippet" })).toEqual({ ok: true });
+    expect(checkReferencePayload({ ...base, relativePath: "../escape.ts" })).toMatchObject({ ok: false });
+    expect(checkReferencePayload({ ...base, relativePath: "/etc/passwd" })).toMatchObject({ ok: false });
+    expect(checkReferencePayload({ ...base, kind: "unknown" })).toMatchObject({ ok: false });
+    expect(checkReferencePayload({ ...base, label: "" })).toMatchObject({ ok: false });
+    expect(checkReferencePayload(null)).toMatchObject({ ok: false });
+    // A plain-directory link must not claim a Git version.
+    expect(checkReferencePayload({ ...base, sourceKind: "plain-dir", version: "abc123" })).toMatchObject({ ok: false });
+    expect(checkReferencePayload({ ...base, sourceKind: "plain-dir", version: null })).toEqual({ ok: true });
+  });
+});

@@ -316,3 +316,50 @@ export function describeReferenceScope(reference: ComposerReference): string {
         : "完整文件内容（有界，超限则拒绝而非截断冒充）";
   return `${where}：提供 ${amount}；大小仅为估算，不计入实报 Token 用量`;
 }
+
+const REFERENCE_KINDS = new Set(["file", "directory", "snippet", "attachment", "skill"]);
+
+/**
+ * Host-boundary check for one structured reference riding `task/sendMessage`
+ * or `task/saveDraft`. The Host persists references verbatim, so this is the
+ * fail-closed line that keeps a forged provenance out: an out-of-source
+ * path, an unknown kind, a bad shape, or a plain-directory link claiming a
+ * Git version is refused before it can be stored or sent.
+ */
+export function checkReferencePayload(value: unknown): { ok: true } | { ok: false; error: string } {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return { ok: false, error: "must be an object" };
+  }
+  const record = value as Record<string, unknown>;
+  for (const key of ["id", "label", "detail"] as const) {
+    const field = record[key];
+    if (typeof field !== "string" || field.trim().length === 0) return { ok: false, error: `${key} must be a non-empty string` };
+  }
+  const kind = record["kind"];
+  if (typeof kind !== "string" || !REFERENCE_KINDS.has(kind)) {
+    return { ok: false, error: "kind must be file/directory/snippet/attachment/skill" };
+  }
+  const sourceKind = record["sourceKind"];
+  if (sourceKind !== undefined && sourceKind !== "worktree" && sourceKind !== "plain-dir") {
+    return { ok: false, error: "sourceKind must be worktree/plain-dir" };
+  }
+  const relativePath = record["relativePath"];
+  if (relativePath !== undefined) {
+    if (typeof relativePath !== "string" || relativePath.trim().length === 0) return { ok: false, error: "relativePath must be a non-empty string" };
+    if (!isInsideSource(relativePath)) return { ok: false, error: "relativePath must stay inside its source" };
+  }
+  const version = record["version"];
+  if (sourceKind === "plain-dir" && typeof version === "string" && version.trim().length > 0) {
+    return { ok: false, error: "a plain-directory reference must not claim a Git version" };
+  }
+  if (version !== undefined && version !== null && typeof version !== "string") {
+    return { ok: false, error: "version must be a string or null" };
+  }
+  const args = record["args"];
+  if (args !== undefined && typeof args !== "string") return { ok: false, error: "args must be a string" };
+  const taskId = record["taskId"];
+  if (taskId !== undefined && (typeof taskId !== "string" || taskId.trim().length === 0)) {
+    return { ok: false, error: "taskId must be a non-empty string" };
+  }
+  return { ok: true };
+}

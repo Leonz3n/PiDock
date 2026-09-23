@@ -392,7 +392,7 @@ describe("validateHostTaskOp", () => {
 
   it("validates draft/permission ops fail-closed (S6 batch 2 follow-up P1)", () => {
     expect(validateHostTaskOp("task/saveDraft", { sessionId: "main", text: "草稿" })).toEqual({ ok: true });
-    expect(validateHostTaskOp("task/saveDraft", { sessionId: "main", text: "草稿", references: [{ kind: "file", path: "a.ts" }], skillSource: "review" })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/saveDraft", { sessionId: "main", text: "草稿", references: [{ id: "ref-1", kind: "file", label: "front-monorepo/src/api.ts", detail: "任务代码引用", sourceId: "front-monorepo", sourceKind: "worktree", relativePath: "src/api.ts", version: "abc123" }], skillSource: "review" })).toEqual({ ok: true });
     expect(validateHostTaskOp("task/saveDraft", { sessionId: "", text: "草稿" }).ok).toBe(false);
     expect(validateHostTaskOp("task/saveDraft", { sessionId: "main" }).ok).toBe(false);
     expect(validateHostTaskOp("task/saveDraft", { sessionId: "main", text: "x", references: "nope" }).ok).toBe(false);
@@ -404,13 +404,25 @@ describe("validateHostTaskOp", () => {
   });
 });
 
-describe("S6 batch 2: send-record refs and draft-tolerant store", () => {
-  it("accepts verbatim references/skillSource and rejects malformed shapes", () => {
+describe("S6 batch 2 + [PiDock 13] (#16): send-record refs and draft-tolerant store", () => {
+  it("accepts a well-formed reference/skillSource and rejects malformed shapes", () => {
     expect(
       validateHostTaskOp("task/sendMessage", {
         sessionId: "main",
         text: "hi",
-        references: [{ kind: "file", path: "a.ts" }],
+        references: [
+          {
+            id: "ref-1",
+            kind: "file",
+            label: "front-monorepo/src/api.ts",
+            detail: "front-monorepo · 任务代码引用",
+            taskId: "task-a",
+            sourceId: "front-monorepo",
+            sourceKind: "worktree",
+            relativePath: "src/api.ts",
+            version: "abc123",
+          },
+        ],
         skillSource: "review",
       }),
     ).toEqual({ ok: true });
@@ -420,6 +432,29 @@ describe("S6 batch 2: send-record refs and draft-tolerant store", () => {
     expect(
       validateHostTaskOp("task/sendMessage", { sessionId: "main", text: "hi", skillSource: " " }).ok,
     ).toBe(false);
+  });
+
+  it("fails closed on forged reference provenance before it can reach the session", () => {
+    const base = {
+      id: "ref-1",
+      kind: "file",
+      label: "front-monorepo/src/api.ts",
+      detail: "任务代码引用",
+      sourceId: "front-monorepo",
+      sourceKind: "worktree",
+      relativePath: "src/api.ts",
+      version: "abc123",
+    };
+    const send = (references: unknown[]) => validateHostTaskOp("task/sendMessage", { sessionId: "main", text: "hi", references });
+    expect(send([{ kind: "file", path: "a.ts" }]).ok).toBe(false);
+    expect(send([{ ...base, relativePath: "../outside.ts" }]).ok).toBe(false);
+    expect(send([{ ...base, kind: "command" }]).ok).toBe(false);
+    expect(send([{ ...base, sourceKind: "plain-dir", version: "abc123" }]).ok).toBe(false);
+    expect(send([{ ...base, sourceKind: "plain-dir", version: null }]).ok).toBe(true);
+    // A restored draft carries the same rules.
+    const draft = (references: unknown[]) => validateHostTaskOp("task/saveDraft", { sessionId: "main", text: "hi", references });
+    expect(draft([{ ...base, relativePath: "/etc/passwd" }]).ok).toBe(false);
+    expect(draft([base]).ok).toBe(true);
   });
 });
 
