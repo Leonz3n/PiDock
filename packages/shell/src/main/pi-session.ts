@@ -28,6 +28,7 @@ import {
   PI_USAGE_KINDS,
   type PiCallUsage,
   type PiReportedUsage,
+  type PiUsageCompleteness,
   type PiUsageEndState,
   type PiUsageKind,
   type PiUsageSource,
@@ -374,6 +375,32 @@ export interface PiTurnResult {
  */
 function normalizeCallUsage(source: PiUsageSource | undefined, usage: PiReportedUsage | undefined): PiCallUsage {
   return normalizeReportedUsage(usage, source ?? "test-double");
+}
+
+const USAGE_SOURCES: readonly PiUsageSource[] = ["actual", "estimated", "unreported", "test-double", "approval"];
+const USAGE_COMPLETENESS: readonly PiUsageCompleteness[] = ["reported", "partial", "missing"];
+
+/**
+ * Backfill a persisted usage object to the complete [PiDock 12] shape. A
+ * pre-#12 snapshot carries only input/output/cacheRead/source; restoring it
+ * verbatim would leave `cacheWrite`/`completeness` undefined, which would
+ * later poison a total with NaN or fail the ledger's own validation.
+ *
+ * A record written by #12 keeps the completeness it was written with (a field
+ * the caller never sent is a fact the stored counters cannot re-derive —
+ * `cacheWrite: 0` is now present and would otherwise read as reported); an
+ * older record derives it from the fields it actually carries. An
+ * `unreported` source always stays `missing`, so SDK zero-initialised numbers
+ * are never promoted to a real report by a round-trip.
+ */
+function backfillCallUsage(usage: Partial<PiCallUsage> | undefined): PiCallUsage {
+  if (usage === undefined) return normalizeReportedUsage(undefined, "unreported");
+  const source: PiUsageSource = USAGE_SOURCES.includes(usage.source as PiUsageSource) ? (usage.source as PiUsageSource) : "unreported";
+  const { completeness: persisted, ...counters } = usage;
+  const derived = normalizeReportedUsage(counters, source);
+  if (source === "unreported") return derived;
+  const completeness = persisted !== undefined && USAGE_COMPLETENESS.includes(persisted) ? persisted : derived.completeness;
+  return { ...derived, completeness };
 }
 
 const USAGE_END_STATES: readonly PiUsageEndState[] = ["completed", "failed", "cancelled", "awaiting-approval"];
@@ -1142,8 +1169,9 @@ export class PiSessionChannel {
       // S6 batch 1 adds structured `usage`; older snapshots without it
       // restore as `unreported` so usage summaries never read garbage.
       // Backfill the legacy `usageSource` twin alongside `usage.source`
-      // so the two never diverge after a restore.
-      const usage = call.usage ?? normalizeReportedUsage(undefined, "unreported");
+      // so the two never diverge after a restore, and fill in the counters /
+      // completeness a pre-#12 record never stored.
+      const usage = backfillCallUsage(call.usage);
       // [PiDock 12] #12: older snapshots have no kind/at/endState. Default
       // the kind to a turn, anchor `at` at the session's creation time (the
       // earliest honest instant available) and derive the end state from the
