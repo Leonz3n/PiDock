@@ -135,7 +135,8 @@ export function BrowserPanel({
       annotation,
       epoch: state.epoch,
       mode: "box",
-      locator: { kind: "testId", value: "checkout-total" },
+      // No fabricated locator: element/semantic info is attached only when
+      // the page-side picker actually produced one (GUI residual).
       ...(sessionId !== undefined ? { sessionId } : {}),
     });
     setNotice(marked.notice.kind === "idle" ? undefined : marked.notice.text);

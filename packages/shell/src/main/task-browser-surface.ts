@@ -160,9 +160,19 @@ export class TaskBrowserSurface implements BrowserSurface {
           const binding = await this.ensureBinding(request.page?.pageId);
           const label = String(request.params["label"] ?? "");
           const locator = request.params["locator"] as Locator | undefined;
-          if (locator === undefined) return { ok: false, error: "invalid-payload: 标记需要可定位信息" };
-          const marker = await binding.controller.mark(label, locator);
-          return { ok: true, payload: { pageMarker: { id: marker.id, label: marker.label, epoch: marker.epoch } } };
+          const marker = request.params["marker"] as { annotation?: unknown } | undefined;
+          // Element/semantic locator info is attached only when the user's
+          // pick actually produced one (spec: 「能取得元素定位与语义信息时
+          // 一并携带」). Without it the marker is stale by construction and
+          // the Agent must locate the described area itself.
+          if (locator === undefined) {
+            return { ok: true, payload: { pageMarker: null } };
+          }
+          const created = await binding.controller.mark(
+            label.length > 0 ? label : typeof marker?.annotation === "string" ? marker.annotation : "标记",
+            locator,
+          );
+          return { ok: true, payload: { pageMarker: { id: created.id, label: created.label, epoch: created.epoch } } };
         }
         case "takeover/pause": {
           const binding = await this.ensureBinding(request.page?.pageId);
