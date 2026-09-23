@@ -551,3 +551,52 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   目前只在夹具与单测上可见；`task/sendMessage` 的引用来源校验已接 Host，但 renderer 仍把
   内存适配器固定为默认（与 #9/#10/#12/#14/#15 记录的同一接线缺口），真实 Electron 输入法、
   系统文件选择器与原生产品打包走查未运行；两个多仓库任务的真实混合引用验收未执行。
+
+## 后台、恢复、归档与清理（[PiDock 14] #17）
+
+- **生命周期规则（盒子 1–12）**：`main/task-lifecycle.ts` 是纯规则层（无 fs／进程／
+  Electron）：`planExplicitQuit` 固定顺序「中止 Agent → 按身份停服务 → 停终端 →
+  结束派生执行 → 保存状态」，身份未验证的步骤只进入 `failures`＋`retainedTasks`，
+  不执行破坏性动作；`planArchive` 保留代码／会话／模板版本／生成绑定／浏览器状态，
+  并把 `scheduleResumedOnRestore` 固定为 `false`；`planRelaunch` 恢复会话的记录权限
+  （未知一律降为只读）、把未执行确认标为过期而不重放、重新校验引用、保留草稿但不
+  自动发送、服务只在按需时启动；`previewCleanup`/`planCleanupRemoval` 先保留副本与
+  所选导出（写后读回核验），核验失败一项都不移除，局部失败保留登记与逐项恢复条目，
+  只有全部成功才记录 `projectReleased`；`verifyCleanupTarget` 拒绝任务目录外、
+  原检出目录、其他任务目录与任务目录本身；`verifyLinkRemoval` 对「已移除／被重定向／
+  不是链接」分别报告且从不跟随链接。
+- **身份判定（盒子 4、5）**：进程身份**只**认「进程号＋启动时间」，命令／工作目录
+  双方都有时作为加强校验，只报端口仍直接拒绝，因此不会凭过期进程号或端口认领／停止；
+  `host/repo-identity.ts` 用注入式 `RepoProbe` 验证工作副本身份（`.git` 是文件才是
+  linked worktree，分支不符／基线提交不可达／git 不可用分别失败关闭），真探测走固定
+  argv、无 shell 的 `execFileSync`。
+- **状态与接线（盒子 2、6–9、12）**：`host/task-lifecycle.ts` 把生命周期状态落在
+  `<taskDir>/lifecycle.json`（归档标记、清理回执、恢复条目），资源全部来自既有接缝
+  （会话通道 → 运行状态／权限／草稿／确认，服务拓扑 → 运行记录＋登记身份，终端注册表，
+  任务目录的链接 `lstat`／删除）。6 个 op（`task/lifecycleState|archive|restore|
+  cleanupPreview|runCleanup|quit`）走统一白名单与双侧 payload 校验；归档／恢复／清理／
+  明确退出都要求 main 盖的 `shell-ui` 来源证明，带 `sessionId` 的调用被直接拒绝，
+  链接移除路径由 Host 自己拼出（不接收 renderer 传入路径）。`task/quit` 由
+  `PerTaskHostRegistry.quitAll()` 对每个任务发出，Host 不应答时把任务列入
+  `retainedTasks` 并带错误，`before-quit` 先 `preventDefault` 跑完再退出并打印报告。
+- **renderer（盒子 2、6–9、10）**：`data/taskLifecycle.ts` 只做显示规则（处置标签、
+  回执／恢复行、资源身份标签、未选导出提醒），归档页显示生命周期读数与身份判定，
+  清理浮层支持导出选择、执行清理并展示回执与恢复条目；`shellHost` 把
+  `archiveTask`/`restoreTask`/`previewCleanup`/`runCleanup`/`lifecycleState`
+  接到 Host op（Host 拒绝时内存投影兜底，两侧都拒绝时暴露 Host 错误）。
+- **盒子状态**：盒子 4（进程身份）、5（Git 身份）、6（归档保留与可恢复）、8（清理与
+  归档相互独立）、9（身份确认后才移除）、10（归档／恢复不清零不重复计数）、12（清理
+  只移除身份确认的任务内链接且不跟随链接）的规则与 Host 状态已覆盖；盒子 2／3／7／11
+  为部分覆盖（真实进程树终止、真实关窗后台常驻、整份工作副本的物理拷贝、未交付判定
+  见残留）。
+- **残留（未测／未实现）**：真实进程树终止未接线（Host 只结束登记的派生执行记录，
+  `stopProcessTree` 经 `host.endDerivedExecution`，无真实 spawner 可供 kill）；真实
+  Electron 关窗后台常驻与退出恢复 E2E 未运行（`window-all-closed` 仍 dispose Host，
+  盒子 1 只到 `backgroundPolicyFor` 规则层，非 darwin 平台标注为不可用）；浏览器持久
+  分区数据的移除由 main 持有，Host 侧 `delegateCleanup("browser")` 未接线时失败关闭
+  并保留恢复入口（清理因此是「局部失败＋保留登记」）；整份工作副本的**物理**拷贝未实现
+  （当前以「保留位置＋导出核验」实现），`undelivered`（未推送／未交付）判定无交付台账
+  恒为 `false`；真实 git 探测只在注入读取器下单测过，未在真实多仓库任务上运行；renderer
+  归档／清理接线已由 `test/shellHost.test.ts` 锁定，但应用启动仍把内存适配器固定为默认
+  （与 #9/#10/#12/#14/#15 记录的同一接线缺口）；真实服务／终端进程的按身份停止未在
+  本机跑过。
