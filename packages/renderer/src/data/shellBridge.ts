@@ -68,7 +68,9 @@ export type ShellTaskOp =
   | "task/setSessionModel"
   | "task/setSessionThinking"
   | "task/sessionStates"
-  | "task/compactSession";
+  | "task/compactSession"
+  | "task/usageRecords"
+  | "task/clearUsage";
 
 /**
  * Task-scoped op through main into the per-workspace Host. Rejects outside
@@ -490,6 +492,33 @@ export async function compactSessionThroughShell(input: {
   if (input.catalog !== undefined) payload["catalog"] = input.catalog;
   try {
     return await shellTaskOp(input.taskId, "task/compactSession", payload);
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * [PiDock 12] #12 usage read: the Host owns the ledger, so the statistics page
+ * asks for the filtered/grouped report instead of re-deriving totals here.
+ */
+export async function usageRecordsThroughShell(input: {
+  taskId: string;
+  filter?: Record<string, unknown>;
+}): Promise<ShellTaskOpResult> {
+  try {
+    return await shellTaskOp(input.taskId, "task/usageRecords", { ...(input.filter ?? {}) });
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/** [PiDock 12] #12 usage cleanup in one explicit scope (never on archive). */
+export async function clearUsageThroughShell(input: {
+  taskId: string;
+  scope: { kind: "all" } | { kind: "session"; sessionId: string } | { kind: "before"; before: string };
+}): Promise<ShellTaskOpResult> {
+  try {
+    return await shellTaskOp(input.taskId, "task/clearUsage", { scope: { ...input.scope } });
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
