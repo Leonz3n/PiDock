@@ -615,6 +615,65 @@ export function validateHostTaskOp(
     }
     return { ok: true };
   }
+  // [PiDock 11] (#9) provider/model/context ops: the catalog and the per-model
+  // declarations are shape-checked here (semantic validation — profile rules,
+  // switch gate — runs Host-side in `provider-config.ts`/`TaskWorkspaceHost`).
+  if (op === "task/setProviderCatalog") {
+    if (!isRecord(payload)) return { ok: false, error: "invalid-payload: task/setProviderCatalog requires a payload object" };
+    const catalog = payload["catalog"];
+    if (!Array.isArray(catalog) || !catalog.every((entry) => isRecord(entry))) {
+      return { ok: false, error: "invalid-payload: task/setProviderCatalog.catalog must be an array of provider objects" };
+    }
+    return { ok: true };
+  }
+  if (op === "task/sessionContext" || op === "task/compactSession") {
+    if (!isRecord(payload)) return { ok: false, error: `invalid-payload: ${op} requires a payload object` };
+    const sessionId = payload["sessionId"];
+    if (typeof sessionId !== "string" || sessionId.trim().length === 0) {
+      return { ok: false, error: `invalid-payload: ${op}.sessionId must be a non-empty string` };
+    }
+    const catalog = payload["catalog"];
+    if (catalog !== undefined && (!Array.isArray(catalog) || !catalog.every((entry) => isRecord(entry)))) {
+      return { ok: false, error: `invalid-payload: ${op}.catalog must be an array of provider objects` };
+    }
+    return { ok: true };
+  }
+  if (op === "task/setSessionModel") {
+    if (!isRecord(payload)) return { ok: false, error: "invalid-payload: task/setSessionModel requires a payload object" };
+    for (const key of ["sessionId", "providerId", "model"] as const) {
+      const value = payload[key];
+      if (typeof value !== "string" || value.trim().length === 0) {
+        return { ok: false, error: `invalid-payload: task/setSessionModel.${key} must be a non-empty string` };
+      }
+    }
+    const reason = payload["reason"];
+    if (reason !== undefined && reason !== "human-switch" && reason !== "agent-switch") {
+      return { ok: false, error: "invalid-payload: task/setSessionModel.reason must be human-switch/agent-switch" };
+    }
+    const catalog = payload["catalog"];
+    if (catalog !== undefined && (!Array.isArray(catalog) || !catalog.every((entry) => isRecord(entry)))) {
+      return { ok: false, error: "invalid-payload: task/setSessionModel.catalog must be an array of provider objects" };
+    }
+    return { ok: true };
+  }
+  if (op === "task/setSessionThinking") {
+    if (!isRecord(payload)) return { ok: false, error: "invalid-payload: task/setSessionThinking requires a payload object" };
+    const sessionId = payload["sessionId"];
+    const level = payload["level"];
+    if (typeof sessionId !== "string" || sessionId.trim().length === 0) {
+      return { ok: false, error: "invalid-payload: task/setSessionThinking.sessionId must be a non-empty string" };
+    }
+    // An empty level is the "clear/skip" request; the Host decides whether the
+    // model may turn reasoning off (fail-closed) instead of rejecting the shape.
+    if (typeof level !== "string") {
+      return { ok: false, error: "invalid-payload: task/setSessionThinking.level must be a string" };
+    }
+    const catalog = payload["catalog"];
+    if (catalog !== undefined && (!Array.isArray(catalog) || !catalog.every((entry) => isRecord(entry)))) {
+      return { ok: false, error: "invalid-payload: task/setSessionThinking.catalog must be an array of provider objects" };
+    }
+    return { ok: true };
+  }
   if (payload !== undefined && !isRecord(payload)) {
     return { ok: false, error: `invalid-payload: ${op} payload must be an object` };
   }
