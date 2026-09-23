@@ -1,4 +1,4 @@
-import { screen } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderApp } from "./helpers";
@@ -90,5 +90,22 @@ describe("task browser panel", () => {
 
     expect(await screen.findByText(/navigation-denied: https:\/\/example.org/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "获取证据" })).toBeInTheDocument();
+  });
+
+  it("states that the Agent will not drive the page in a read-only session", async () => {
+    const user = userEvent.setup();
+    const taskOp = vi.fn(async () => ({ ok: true, payload: {} }));
+    renderApp("/projects/atlas/tasks/release?session=main");
+    await screen.findByRole("heading", { name: "发布前检查" });
+    stubShell(taskOp);
+
+    await user.click(screen.getByRole("button", { name: /^选择权限：默认权限$/ }));
+    const dialog = await screen.findByRole("dialog", { name: "会话权限" });
+    await user.click(within(dialog).getByRole("button", { name: /只读/ }));
+    await user.click(await screen.findByRole("button", { name: "浏览器" }));
+
+    expect(await screen.findByText("当前是只读会话，Agent 不会操作浏览器")).toBeInTheDocument();
+    // The user may still mark the page they are looking at.
+    expect(screen.getByRole("button", { name: "框选元素标记" })).toBeInTheDocument();
   });
 });

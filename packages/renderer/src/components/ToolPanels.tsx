@@ -2,11 +2,12 @@ import { useState } from "react";
 import { Badge, Button, EmptyState, Panel } from "./ui";
 import { CodeBlock } from "./CodeBlock";
 import { ConfigTable } from "./ConfigTable";
-import type { BrowserPage, Service, Subagent, Task, TaskDirectory, WorkspaceFile } from "../data/types";
+import type { BrowserPage, Permission, Service, Subagent, Task, TaskDirectory, WorkspaceFile } from "../data/types";
 import { directoryLinkPath } from "../data/directories";
 import { useDraftStore } from "../stores/drafts";
 import { useHostStore } from "../stores/host";
 import {
+  browserActionRefusal,
   markBrowserIssue,
   readBrowserEvidence,
   readBrowserPageState,
@@ -92,11 +93,14 @@ export function BrowserPanel({
   pages,
   taskId,
   sessionId,
+  permission,
 }: {
   pages: BrowserPage[];
   taskId: string;
   /** Current session a marker is sent into (absent outside a task session). */
   sessionId?: string;
+  /** Session tier: read-only means the Agent will not drive the page. */
+  permission?: Permission;
 }) {
   const [pageId, setPageId] = useState(pages[0]?.id);
   const [takeover, setTakeover] = useState<{ paused: boolean; reason?: string }>({ paused: false });
@@ -109,6 +113,7 @@ export function BrowserPanel({
   });
   const active = pages.find((page) => page.id === pageId) ?? pages[0];
   const handle = active ? { pageId: active.id } : undefined;
+  const agentRefusal = permission !== undefined ? browserActionRefusal(permission) : undefined;
 
   const toggleTakeover = async () => {
     if (!handle) return;
@@ -153,6 +158,7 @@ export function BrowserPanel({
       <p className="text-[11px] text-muted">
         任务页面与 PiDock 自有界面分属不同信任范围；Agent 与用户操作同一页面实例，渲染层不直接调用 CDP。
       </p>
+      {agentRefusal ? <p className="text-[11px] text-muted">{agentRefusal}</p> : null}
       <ul className="flex flex-col gap-1.5">
         {pages.map((page) => (
           <li key={page.id} className="rounded-md border border-line px-2.5 py-2 text-xs">
