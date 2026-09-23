@@ -684,4 +684,58 @@ describe("memory Host adapter", () => {
     expect(updated?.repos).toEqual(["apis"]);
     expect(updated?.services.length).toBeGreaterThan(0);
   });
+  // [PiDock 19] (#21) remote access: the projection mirrors the Host contract —
+  // a scanned device grants nothing until the desktop confirms it, rotation and
+  // revocation end the old credential and the audit trail never carries a secret.
+  it("keeps a scanned device unusable until the desktop confirms it, then rotates and revokes it", async () => {
+    const host = createMemoryHost();
+    const devices = await host.getRemoteDevices();
+    const pending = devices.find((device) => device.id === "device-3");
+    expect(pending?.status).toBe("pending-confirmation");
+    // No credential has been issued for a device the desktop has not confirmed.
+    expect(pending?.credentialGeneration).toBeUndefined();
+    expect(pending?.permissions).toContain("terminal");
+
+    // Confirming narrows the requested permissions: 文件／终端默认关闭.
+    const confirmed = await host.confirmRemoteDevice("device-3");
+    expect(confirmed).toMatchObject({ status: "active", permissions: ["overview", "chat"], credentialGeneration: 1 });
+    await expect(host.confirmRemoteDevice("device-3")).rejects.toThrow("等待本机确认");
+
+    const rotated = await host.rotateRemoteDevice("device-3");
+    expect(rotated.credentialGeneration).toBe(2);
+    await expect(host.rotateRemoteDevice("device-2")).rejects.toThrow("只有有效设备");
+
+    await host.revokeRemoteDevice("device-3");
+    const revoked = (await host.getRemoteDevices()).find((device) => device.id === "device-3");
+    expect(revoked).toMatchObject({ status: "revoked", permissions: [] });
+    // Revoking twice is a no-op, never an error that hides the first revocation.
+    await host.revokeRemoteDevice("device-3");
+  });
+
+  it("mints a fragment-only pairing code, invalidates it on refresh and audits the events", async () => {
+    const host = createMemoryHost();
+    const minted = await host.mintRemotePairing();
+    expect(minted.state).toBe("pending");
+    expect(minted.url).toMatch(/#pairing=/);
+    expect(minted.url).not.toContain("?");
+    const refreshed = await host.mintRemotePairing();
+    expect(refreshed.credentialId).not.toBe(minted.credentialId);
+    await host.cancelRemotePairing();
+    const projection = await host.getWorkspace();
+    expect(projection.remotePairing?.state).toBe("cancelled");
+    const audits = projection.remoteAudits;
+    expect(audits.map((audit) => audit.kind)).toEqual(expect.arrayContaining(["pairing-minted", "pairing-refreshed", "pairing-refused"]));
+    // Audit details are redacted, never a raw credential.
+    expect(JSON.stringify(audits)).not.toMatch(/token=|secret=/);
+  });
+
+  it("switches the entry route and drops the live Gateway connection", async () => {
+    const host = createMemoryHost();
+    const switched = await host.setRemoteEntryMode("gateway", "https://gw.example.com");
+    expect(switched).toMatchObject({ mode: "gateway", baseUrl: "https://gw.example.com", gateway: { status: "offline" } });
+    const projection = await host.getWorkspace();
+    expect(projection.remoteEntry.mode).toBe("gateway");
+    expect(projection.remoteEntry.gateway.status).toBe("offline");
+    expect(projection.remoteAudits.some((audit) => audit.kind === "gateway-disconnected")).toBe(true);
+  });
 });

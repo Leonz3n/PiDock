@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import { renderApp } from "./helpers";
 import { useDraftStore } from "../stores/drafts";
+import { useHostStore } from "../stores/host";
 import { sessionKeyOf } from "../data/sessionKey";
 
 describe("runtime logs panel", () => {
@@ -193,20 +194,29 @@ describe("machine-local repository binding", () => {
 });
 
 describe("remote access settings", () => {
-  it("switches entry modes, toggles device permissions and previews the mobile view", async () => {
+  it("switches entry modes, shows the device permission defaults and previews the mobile view", async () => {
     const user = userEvent.setup();
     renderApp("/remote");
     await screen.findByRole("heading", { name: "远程访问" });
 
-    expect(screen.getByText(/tailscale serve --bg/)).toBeInTheDocument();
+    // The entry the Host reported: a loopback listener, not a public port.
+    expect(screen.getByText("127.0.0.1:4318")).toBeInTheDocument();
+    expect(screen.getByText(/https:\/\/pidock-host.tailnet.ts.net/)).toBeInTheDocument();
     await user.click(screen.getByRole("tab", { name: "Funnel 公网入口" }));
-    expect(screen.getByText(/URL 对互联网公开/)).toBeInTheDocument();
-    expect(screen.getByText(/tailscale funnel --bg/)).toBeInTheDocument();
+    // Both the hint and the standing risk warning mention public reachability;
+    // the warning is the mode specific one.
+    expect(screen.getByText(/网络可达不等于通过认证/)).toBeInTheDocument();
+    expect(screen.getByText("实验入口")).toBeInTheDocument();
+    // Switching the route drops the live Gateway connection instead of reusing it.
+    expect(useHostStore.getState().workspace?.remoteEntry.gateway.status).toBe("offline");
 
-    const terminal = screen.getByLabelText("远程终端") as HTMLInputElement;
-    expect(terminal).not.toBeChecked();
-    await user.click(terminal);
-    expect(terminal).toBeChecked();
+    // File and terminal stay off by default; the toggle lives on the device, not
+    // in the page: the page only states the default.
+    expect(screen.getByText(/查看文件和差异/)).toBeInTheDocument();
+    // Every non-default permission says so; manage, files and terminal all ask
+    // again per action.
+    expect(screen.getAllByText(/默认关闭 · 每次操作再次确认/).length).toBe(3);
+    expect(screen.getByText(/高风险 · 默认关闭/)).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "手机视图" }));
     const preview = await screen.findByRole("dialog", { name: "手机视图预览" });

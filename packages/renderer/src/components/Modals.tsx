@@ -6,6 +6,7 @@ import { diffConfigRows, isSensitiveKey, nextTemplateVersion } from "../data/con
 import { capabilityInvalidReason, isCapabilityEnabled, mcpBridgeStatus, mcpConnectionLabel, packageVersionState, sourceKindLabel } from "../data/capabilityRules";
 import { referenceProvenance, skillCandidate } from "../data/composerRules";
 import { validateRuleText } from "../data/scheduleRules";
+import { remotePairingExpiryText, remotePairingIsLive, remotePairingStateLabel } from "../data/remoteRules";
 import {
   buildTaskFormBranch,
   checkTaskFormDirIdConflict,
@@ -40,7 +41,7 @@ import {
   validateProviderDraft,
 } from "../data/providerState";
 import { cleanupReceiptLines, cleanupRecoveryLines, cleanupRemovesUnselectedRecords, cleanupRows } from "../data/taskLifecycle";
-import type { CapabilityFailureCode, CapabilitySourceKind, CleanupItem, CleanupRunResult, CleanupSelection, ConfigEntry, ContextWindowSource, ModelThinking, Permission, ProjectDirectory, Task } from "../data/types";
+import type { CapabilityFailureCode, CapabilitySourceKind, CleanupItem, CleanupRunResult, CleanupSelection, ConfigEntry, ContextWindowSource, ModelThinking, Permission, ProjectDirectory, RemotePairing, Task } from "../data/types";
 import { sessionWriteRoleLabel, type SessionWriteState } from "../data/writeCoordination";
 import { useDraftStore } from "../stores/drafts";
 import { useEnvDraftStore } from "../stores/envDrafts";
@@ -344,28 +345,7 @@ export function Modals() {
   }
 
   if (modal.type === "pair-device") {
-    return (
-      <Modal
-        title="配对远程设备"
-        onClose={closeModal}
-        footer={
-          <Button
-            size="sm"
-            variant="primary"
-            onClick={() => {
-              closeModal();
-              pushToast("已生成一次性配对凭据（模拟）；成功配对后换取独立设备凭据");
-            }}
-          >
-            生成配对凭据
-          </Button>
-        }
-      >
-        <p className="text-xs text-muted">
-          配对凭据为一次性短时证明，不编码长期令牌、项目名称或本机路径。设备配对后获得独立权限，可单独撤销。
-        </p>
-      </Modal>
-    );
+    return <PairDeviceModal onClose={closeModal} />;
   }
 
   if (modal.type === "provider-edit") {
@@ -3066,6 +3046,66 @@ function ScheduleEditModal({ scheduleId, onClose }: { scheduleId: string; onClos
 }
 
 /** Prototype `remotePreview()`: a static mobile information-architecture mockup. */
+/**
+ * [PiDock 19] (#21) the desktop side of pairing: generate the short-lived QR
+ * code, show where it points, and say plainly that pairing still needs the
+ * desktop confirmation. The code itself (and its secret) lives in the Host.
+ */
+function PairDeviceModal({ onClose }: { onClose: () => void }) {
+  const workspace = useHostStore((state) => state.workspace);
+  const mintRemotePairing = useHostStore((state) => state.mintRemotePairing);
+  const cancelRemotePairing = useHostStore((state) => state.cancelRemotePairing);
+  const pushToast = useUiStore((state) => state.pushToast);
+  const [pairing, setPairing] = useState<RemotePairing | null>(workspace?.remotePairing ?? null);
+  const [now] = useState(() => new Date().toISOString());
+
+  async function generate() {
+    const minted = await mintRemotePairing();
+    setPairing(minted);
+    pushToast(`已生成一次性配对凭据（${minted.credentialId}）；旧码立即失效`);
+  }
+
+  const live = remotePairingIsLive(pairing, now);
+  return (
+    <Modal
+      title="配对远程设备"
+      onClose={onClose}
+      footer={
+        <div className="flex gap-2">
+          <Button size="sm" onClick={() => void generate()}>
+            {pairing === null ? "生成配对凭据" : "重新生成（旧码失效）"}
+          </Button>
+          <Button
+            size="sm"
+            variant="primary"
+            onClick={() => {
+              void cancelRemotePairing();
+              onClose();
+            }}
+          >
+            完成
+          </Button>
+        </div>
+      }
+    >
+      <p className="text-xs text-muted">
+        配对凭据一次性、短时（10 分钟），只放在链接的 fragment 中；不编码长期令牌、项目名称或本机路径。手机扫码后仍需在本机确认设备名称与权限，确认前不能查看或操作任何任务。
+      </p>
+      {pairing === null ? (
+        <p className="mt-3 text-xs text-muted">还没有生成配对凭据。</p>
+      ) : (
+        <div className="mt-3 flex flex-col gap-2">
+          <Badge tone={live ? "accent" : "neutral"}>{live ? "等待手机扫描" : remotePairingStateLabel(pairing.state)}</Badge>
+          <code className="break-all rounded bg-soft px-2 py-1.5 text-[11px] text-ink">{pairing.url}</code>
+          <p className="text-xs text-muted">
+            凭据 {pairing.credentialId} · {remotePairingExpiryText(pairing, now)}
+          </p>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
 function RemotePreviewModal({ onClose }: { onClose: () => void }) {
   const workspace = useHostStore((state) => state.workspace);
   const tasks = workspace?.tasks ?? [];

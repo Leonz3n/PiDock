@@ -21,7 +21,12 @@ import type {
   ProviderDiscoveryView,
   ProviderProfile,
   Reference,
+  RemoteAuditEntry,
   RemoteDevice,
+  RemoteDevicePermission,
+  RemoteEntryMode,
+  RemoteEntryState,
+  RemotePairing,
   Repository,
   ResolvedConfigEntry,
   RunRecord,
@@ -960,19 +965,49 @@ class MemoryHost implements HostAdapter {
     {
       id: "device-1",
       name: "iPhone 16 Pro",
+      status: "active",
+      permissions: ["overview", "chat"],
+      confirmedAt: "2026-09-15T20:00:00+08:00",
       pairedAt: "2026-09-15T20:00:00+08:00",
       lastSeen: "2026-09-22T08:12:00+08:00",
-      permissions: ["查看", "受限对话"],
-      status: "active",
+      credentialGeneration: 1,
+      pairingCredentialId: "pair-1",
     },
     {
       id: "device-2",
       name: "旧 iPad",
+      status: "revoked",
+      permissions: [],
+      confirmedAt: "2026-08-02T11:00:00+08:00",
       pairedAt: "2026-08-02T11:00:00+08:00",
       lastSeen: "2026-08-30T09:00:00+08:00",
-      permissions: ["查看"],
-      status: "revoked",
+      credentialGeneration: 1,
     },
+    // A device that scanned a code and waits for the desktop: it is shown (the
+    // user must decide) but grants nothing until 确认.
+    {
+      id: "device-3",
+      name: "Pixel 9",
+      status: "pending-confirmation",
+      permissions: ["overview", "chat", "terminal"],
+      pairedAt: "2026-09-22T09:30:00+08:00",
+      pairingCredentialId: "pair-2",
+    },
+  ];
+
+  /** [PiDock 19] (#21) entry route, the live QR code and the audit trail. */
+  private remoteEntry: RemoteEntryState = {
+    mode: "tailscale",
+    baseUrl: "https://pidock-host.tailnet.ts.net",
+    listener: "127.0.0.1:4318",
+    gateway: { endpoint: "", hostId: "desktop-host", status: "offline" },
+  };
+
+  private remotePairing: RemotePairing | null = null;
+
+  private remoteAudits: RemoteAuditEntry[] = [
+    { id: "audit-1", at: "2026-09-15T20:00:00+08:00", kind: "device-confirmed", detail: "本机确认设备 device-1（overview/chat）", deviceId: "device-1" },
+    { id: "audit-2", at: "2026-08-30T09:05:00+08:00", kind: "device-revoked", detail: "撤销设备 device-2，现有连接与后续请求均失效", deviceId: "device-2" },
   ];
 
   private usage = makeUsage(240);
@@ -1200,8 +1235,11 @@ class MemoryHost implements HostAdapter {
       schedules: this.schedules.map((item) => ({ ...item })),
       scheduledRuns: this.scheduledRuns.map((item) => ({ ...item })),
       capabilities: this.capabilities.map((item) => ({ ...item })),
-      devices: this.devices.map((item) => ({ ...item })),
+      devices: this.devices.map((item) => ({ ...item, permissions: [...item.permissions] })),
       templates: scheduleTemplates.map((item) => ({ ...item })),
+      remoteEntry: { ...this.remoteEntry, gateway: { ...this.remoteEntry.gateway } },
+      remotePairing: this.remotePairing === null ? null : { ...this.remotePairing },
+      remoteAudits: this.remoteAudits.map((item) => ({ ...item })),
     };
   }
 
@@ -1981,12 +2019,98 @@ class MemoryHost implements HostAdapter {
   }
 
   async getRemoteDevices() {
-    return this.devices.map((item) => ({ ...item }));
+    return this.devices.map((item) => ({ ...item, permissions: [...item.permissions] }));
+  }
+
+  /**
+   * [PiDock 19] (#21) the desktop generates the QR code. It is short-lived,
+   * single-use and carried in the fragment; generating again invalidates the
+   * previous code instead of leaving two usable ones.
+   */
+  async mintRemotePairing() {
+    const now = new Date();
+    if (this.remotePairing?.state === "pending") {
+      this.remotePairing = { ...this.remotePairing, state: "refreshed" };
+      this.remoteAudits.push({ id: this.nextId("audit"), at: now.toISOString(), kind: "pairing-refreshed", detail: `旧配对凭据 ${this.remotePairing.credentialId} 失效` });
+    }
+    const credentialId = `pair-${this.remoteAudits.length + 3}`;
+    this.remotePairing = {
+      credentialId,
+      // The secret itself never reaches the renderer: the Host holds it and the
+      // page only shows the address the phone must reach.
+      url: `${this.remoteEntry.baseUrl}/#pairing=${credentialId}`,
+      issuedAt: now.toISOString(),
+      expiresAt: new Date(now.getTime() + 10 * 60 * 1000).toISOString(),
+      state: "pending",
+    };
+    this.remoteAudits.push({ id: this.nextId("audit"), at: now.toISOString(), kind: "pairing-minted", detail: `生成配对凭据 ${credentialId}，有效期 10 分钟` });
+    return { ...this.remotePairing };
+  }
+
+  async cancelRemotePairing() {
+    if (this.remotePairing?.state !== "pending") return;
+    this.remotePairing = { ...this.remotePairing, state: "cancelled" };
+    this.remoteAudits.push({ id: this.nextId("audit"), at: new Date().toISOString(), kind: "pairing-refused", detail: `取消配对凭据 ${this.remotePairing.credentialId}` });
+  }
+
+  /** Confirming narrows the requested permissions and issues the device credential. */
+  async confirmRemoteDevice(deviceId: string, permissions?: RemoteDevicePermission[]) {
+    const device = this.devices.find((item) => item.id === deviceId);
+    if (device === undefined) throw new Error(`未知设备：${deviceId}`);
+    if (device.status !== "pending-confirmation") throw new Error("只有等待本机确认的设备可以确认");
+    const confirmed = permissions === undefined ? device.permissions.filter((item) => item !== "files" && item !== "terminal") : permissions;
+    const now = new Date().toISOString();
+    device.status = "active";
+    device.permissions = confirmed;
+    device.confirmedAt = now;
+    device.lastSeen = undefined;
+    device.credentialGeneration = 1;
+    this.remoteAudits.push({ id: this.nextId("audit"), at: now, kind: "device-confirmed", detail: `本机确认设备 ${deviceId}（${confirmed.join("/") || "无"}）`, deviceId });
+    return { ...device, permissions: [...device.permissions] };
+  }
+
+  async rejectRemoteDevice(deviceId: string) {
+    const device = this.devices.find((item) => item.id === deviceId);
+    if (device === undefined) throw new Error(`未知设备：${deviceId}`);
+    if (device.status !== "pending-confirmation") throw new Error("只有等待本机确认的设备可以拒绝");
+    device.status = "revoked";
+    device.permissions = [];
+    this.remoteAudits.push({ id: this.nextId("audit"), at: new Date().toISOString(), kind: "device-rejected", detail: `本机拒绝设备 ${deviceId}`, deviceId });
+  }
+
+  /** Rotation replaces the credential; the previous generation is gone. */
+  async rotateRemoteDevice(deviceId: string) {
+    const device = this.devices.find((item) => item.id === deviceId);
+    if (device === undefined) throw new Error(`未知设备：${deviceId}`);
+    if (device.status !== "active") throw new Error("只有有效设备可以轮换凭据");
+    device.credentialGeneration = (device.credentialGeneration ?? 1) + 1;
+    this.remoteAudits.push({ id: this.nextId("audit"), at: new Date().toISOString(), kind: "device-rotated", detail: `轮换设备 ${deviceId} 凭据（第 ${device.credentialGeneration} 代）`, deviceId });
+    return { ...device, permissions: [...device.permissions] };
   }
 
   async revokeRemoteDevice(deviceId: string) {
     const device = this.devices.find((item) => item.id === deviceId);
-    if (device) device.status = "revoked";
+    if (device === undefined) throw new Error(`未知设备：${deviceId}`);
+    if (device.status === "revoked") return;
+    device.status = "revoked";
+    device.permissions = [];
+    this.remoteAudits.push({ id: this.nextId("audit"), at: new Date().toISOString(), kind: "device-revoked", detail: `撤销设备 ${deviceId}，现有连接与后续请求均失效`, deviceId });
+  }
+
+  /**
+   * Switching the entry route keeps the devices and the audit trail but drops the
+   * live connection: a different route is a different connection (the Host dials
+   * again), so the page never shows the old one as still online.
+   */
+  async setRemoteEntryMode(mode: RemoteEntryMode, baseUrl?: string) {
+    this.remoteEntry = {
+      ...this.remoteEntry,
+      mode,
+      ...(baseUrl === undefined ? {} : { baseUrl }),
+      gateway: { ...this.remoteEntry.gateway, status: "offline" },
+    };
+    this.remoteAudits.push({ id: this.nextId("audit"), at: new Date().toISOString(), kind: "gateway-disconnected", detail: `切换到 ${mode}` });
+    return { ...this.remoteEntry, gateway: { ...this.remoteEntry.gateway } };
   }
 
   /**

@@ -1,34 +1,65 @@
 import { useState } from "react";
 import { Badge, Button, Panel, Segmented } from "../components/ui";
+import {
+  REMOTE_ENTRY_ROWS,
+  REMOTE_PERMISSION_ROWS,
+  REMOTE_GATEWAY_STATUS_LABELS,
+  canConfirmDevice,
+  canRejectDevice,
+  canRotateDevice,
+  canRevokeDevice,
+  remoteDeviceCredentialText,
+  remoteDevicePermissionText,
+  remoteDeviceSeenText,
+  remoteDeviceStatusLabel,
+  remoteDeviceStatusTone,
+  remoteEntryRow,
+  remoteEntryWarningText,
+  remotePairingExpiryText,
+  remotePairingIsLive,
+} from "../data/remoteRules";
+import type { RemoteDevice, RemoteDevicePermission, RemoteEntryMode } from "../data/types";
 import { useHostStore } from "../stores/host";
 import { useUiStore } from "../stores/ui";
-
-const REMOTE_MODES = {
-  tailscale: { label: "Tailscale 私有访问", hint: "手机需安装并连接 Tailscale；PiDock Host 仅监听 127.0.0.1。", recommended: true },
-  gateway: { label: "自建 Gateway", hint: "主机主动建立出站 WSS；不开放本机入站端口。", recommended: false },
-  funnel: { label: "Funnel 公网入口", hint: "实验性：URL 对互联网公开，不默认开启。", recommended: false },
-} as const;
-
-const REMOTE_PERMISSIONS = [
-  { key: "overview", title: "查看项目、任务和运行状态", detail: "只读", defaultOn: true },
-  { key: "chat", title: "查看对话并发送消息", detail: "消息会进入原会话", defaultOn: true },
-  { key: "manage", title: "暂停任务、归档与启停服务", detail: "每次敏感操作再次确认", defaultOn: false },
-  { key: "files", title: "查看文件和差异", detail: "默认关闭", defaultOn: false },
-  { key: "terminal", title: "远程终端", detail: "高风险 · 默认关闭", defaultOn: false },
-] as const;
 
 export function RemotePage() {
   const workspace = useHostStore((state) => state.workspace);
   const devices = workspace?.devices ?? [];
+  const entry = workspace?.remoteEntry;
+  const pairing = workspace?.remotePairing ?? null;
+  const audits = workspace?.remoteAudits ?? [];
+  const setRemoteEntryMode = useHostStore((state) => state.setRemoteEntryMode);
+  const mintRemotePairing = useHostStore((state) => state.mintRemotePairing);
+  const cancelRemotePairing = useHostStore((state) => state.cancelRemotePairing);
+  const confirmRemoteDevice = useHostStore((state) => state.confirmRemoteDevice);
+  const rejectRemoteDevice = useHostStore((state) => state.rejectRemoteDevice);
+  const rotateRemoteDevice = useHostStore((state) => state.rotateRemoteDevice);
   const revokeDevice = useHostStore((state) => state.revokeDevice);
   const openModal = useUiStore((state) => state.openModal);
   const pushToast = useUiStore((state) => state.pushToast);
-  // The prototype keeps the selected entry mode and device permissions in page
-  // memory only; no connection is attempted.
-  const [mode, setMode] = useState<keyof typeof REMOTE_MODES>("tailscale");
-  const [permissions, setPermissions] = useState<Record<string, boolean>>(() =>
-    Object.fromEntries(REMOTE_PERMISSIONS.map((item) => [item.key, item.defaultOn])),
-  );
+  const [now] = useState(() => new Date().toISOString());
+
+  const mode = entry?.mode ?? "tailscale";
+  const row = remoteEntryRow(mode);
+  const warning = remoteEntryWarningText(mode);
+  const live = remotePairingIsLive(pairing, now);
+
+  async function switchMode(next: RemoteEntryMode) {
+    await setRemoteEntryMode(next);
+    pushToast(`已切换到「${remoteEntryRow(next).label}」；旧连接不再复用`);
+  }
+
+  async function mintPairing() {
+    const minted = await mintRemotePairing();
+    pushToast(`已生成一次性配对凭据（${minted.credentialId}），10 分钟内有效`);
+  }
+
+  async function approveDevice(device: RemoteDevice) {
+    // Requested permissions are shown first; 文件／终端请求默认不授予（默认关闭）.
+    const narrowed = device.permissions.filter((permission) => permission !== "files" && permission !== "terminal");
+    await confirmRemoteDevice(device.id, narrowed);
+    pushToast(`已确认设备「${device.name}」，权限 ${narrowed.length === 0 ? "无" : narrowed.join(" / ")}`);
+  }
 
   return (
     <div className="flex flex-col gap-4">
@@ -36,7 +67,7 @@ export function RemotePage() {
         <div>
           <h1 className="text-base font-medium text-ink">远程访问</h1>
           <p className="mt-1 text-xs text-muted">
-            主机主动连接远程访问入口，远程设备不直接连接本机监听端口；每台设备拥有可单独撤销的身份与权限。
+            主机主动连接远程访问入口，远程设备不直接连接本机监听端口；每台设备单独确认、轮换与撤销，远程不新增绕过桌面的控制面。
           </p>
         </div>
         <div className="flex gap-2">
@@ -49,92 +80,170 @@ export function RemotePage() {
         </div>
       </header>
 
-      <Panel title="入口方式">
+      <Panel title="入口方式" actions={<Badge tone={row.experimental ? "warn" : "neutral"}>{row.experimental ? "实验入口" : "正式入口"}</Badge>}>
         <Segmented
           ariaLabel="远程入口方式"
           value={mode}
-          onChange={(value) => setMode(value as keyof typeof REMOTE_MODES)}
-          options={Object.entries(REMOTE_MODES).map(([value, item]) => ({ value, label: item.label }))}
+          onChange={(value) => void switchMode(value as RemoteEntryMode)}
+          options={REMOTE_ENTRY_ROWS.map((item) => ({ value: item.mode, label: item.label }))}
         />
-        <p className="mt-2 text-xs text-muted">
-          {REMOTE_MODES[mode].hint}
-          {REMOTE_MODES[mode].recommended ? " 首版推荐方案。" : ""}
-        </p>
-        <div className="mt-2 flex flex-wrap items-center gap-2">
-          <Button
-            size="sm"
-            onClick={() => pushToast(`已重新检测「${REMOTE_MODES[mode].label}」（内存模拟）；未执行真实命令`)}
-          >
-            重新检测
-          </Button>
-          <code className="rounded bg-soft px-2 py-1 text-[11px]">
-            {mode === "tailscale" ? "tailscale serve --bg 127.0.0.1:4318" : mode === "funnel" ? "tailscale funnel --bg 127.0.0.1:4318" : "wss://gateway.example.com"}
-          </code>
-        </div>
+        <p className="mt-2 text-xs text-muted">{row.hint}</p>
+        {warning === undefined ? null : <p className="mt-1 text-xs text-warn">{warning}</p>}
+        <dl className="mt-3 grid grid-cols-1 gap-2 text-xs sm:grid-cols-2">
+          <div>
+            <dt className="text-muted">Host 监听</dt>
+            <dd className="text-ink">{entry?.listener ?? "127.0.0.1:4318"}</dd>
+          </div>
+          <div>
+            <dt className="text-muted">入口地址</dt>
+            <dd className="text-ink">{entry?.baseUrl ?? "未配置"}</dd>
+          </div>
+          <div>
+            <dt className="text-muted">Gateway</dt>
+            <dd className="text-ink">
+              {entry?.gateway.endpoint || "未使用"} · {REMOTE_GATEWAY_STATUS_LABELS[entry?.gateway.status ?? "offline"]}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-muted">主机身份</dt>
+            <dd className="text-ink">{entry?.gateway.hostId || "未配置"}</dd>
+          </div>
+        </dl>
         <ul className="mt-2 flex list-disc flex-col gap-1.5 pl-4 text-xs text-muted">
-          <li>入口不放宽本机权限；不直接暴露 Pi RPC 或本机端口。</li>
-          <li>Funnel 仅作为实验性公网入口，不默认开启。</li>
+          <li>Host 只监听回环地址；不直接暴露 Pi RPC，也不代理任意 TCP。</li>
+          <li>网络可达不等于授权成功：每台设备仍需桌面确认并持有对应权限。</li>
         </ul>
       </Panel>
 
-      <Panel title="移动端允许的操作" actions={<Badge>设备级授权 · 内存模拟</Badge>}>
+      {pairing !== null && pairing.state === "pending" ? (
+        <Panel
+          title="配对二维码"
+          actions={<Badge tone={live ? "accent" : "neutral"}>{live ? "有效" : "已失效"}</Badge>}
+        >
+          <p className="text-xs text-muted">
+            凭据一次性、短时（10 分钟），只放在链接的 fragment 中；不编码长期令牌、项目名称或本机路径。手机扫码后仍需在本机确认设备名称与权限。
+          </p>
+          <code className="mt-2 block break-all rounded bg-soft px-2 py-1.5 text-[11px] text-ink">{pairing.url}</code>
+          <p className="mt-2 text-xs text-muted">
+            凭据 {pairing.credentialId} · {remotePairingExpiryText(pairing, now)}
+          </p>
+          <div className="mt-3 flex gap-2">
+            <Button size="sm" onClick={() => void mintPairing()}>
+              重新生成（旧码立即失效）
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => {
+                void cancelRemotePairing();
+              }}
+            >
+              关闭并作废
+            </Button>
+          </div>
+        </Panel>
+      ) : null}
+
+      <Panel title="移动端允许的操作" actions={<Badge>设备级授权 · 由 Host 裁决</Badge>}>
         <ul className="flex flex-col gap-2">
-          {REMOTE_PERMISSIONS.map((item) => (
-            <li key={item.key}>
-              <label className="flex items-center gap-2 text-xs">
-                <input
-                  type="checkbox"
-                  aria-label={item.title}
-                  checked={Boolean(permissions[item.key])}
-                  onChange={(event) => setPermissions((items) => ({ ...items, [item.key]: event.target.checked }))}
-                />
-                <span>
-                  <strong className="block text-ink">{item.title}</strong>
-                  <small className="text-muted">{item.detail}</small>
-                </span>
-              </label>
+          {REMOTE_PERMISSION_ROWS.map((item) => (
+            <li key={item.permission} className="text-xs">
+              <strong className="block text-ink">{item.label}</strong>
+              <small className="text-muted">
+                {item.detail} · {item.defaultOn ? "默认开启" : "默认关闭"}
+                {item.perActionConfirmation ? " · 每次操作再次确认" : ""}
+              </small>
             </li>
           ))}
         </ul>
         <p className="mt-2 text-[11px] text-muted">
-          会话权限、任务执行权、共享模板确认和浏览器接管规则不因远程访问放宽。
+          会话权限、任务写锁、共享模板确认和浏览器接管规则不因远程访问放宽；远程会话权限只会更窄。
         </p>
       </Panel>
 
-      <Panel title="已配对设备">
+      <Panel title="已配对设备" actions={<Badge>{`${devices.filter((device) => device.status === "active").length} / ${devices.length} 有效`}</Badge>}>
         <ul className="flex flex-col gap-2">
           {devices.map((device) => (
             <li key={device.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line px-3 py-2.5 text-xs">
               <div>
                 <div className="flex items-center gap-2">
                   <span className="text-sm text-ink">{device.name}</span>
-                  <Badge tone={device.status === "active" ? "accent" : "neutral"}>{device.status === "active" ? "有效" : "已撤销"}</Badge>
+                  <Badge tone={remoteDeviceStatusTone(device)}>{remoteDeviceStatusLabel(device)}</Badge>
                 </div>
                 <p className="mt-1 text-muted">
-                  配对 {device.pairedAt.slice(0, 16).replace("T", " ")} · 最近在线 {device.lastSeen.slice(0, 16).replace("T", " ")} · 权限 {device.permissions.join(" / ")}
+                  权限 {remoteDevicePermissionText(device)} · {remoteDeviceCredentialText(device)} · {remoteDeviceSeenText(device)}
                 </p>
+                {device.status === "pending-confirmation" ? (
+                  <p className="mt-1 text-warn">请求权限后等待本机确认；确认前不能查看或操作任何任务。</p>
+                ) : null}
               </div>
-              <Button size="sm" disabled={device.status === "revoked"} onClick={() => void revokeDevice(device.id)}>
-                撤销设备
-              </Button>
+              <div className="flex flex-wrap gap-2">
+                {canConfirmDevice(device) ? (
+                  <Button size="sm" variant="primary" onClick={() => void approveDevice(device)}>
+                    确认并收窄权限
+                  </Button>
+                ) : null}
+                {canRejectDevice(device) ? (
+                  <Button
+                    size="sm"
+                    onClick={() => {
+                      void rejectRemoteDevice(device.id);
+                      pushToast(`已拒绝设备「${device.name}」`);
+                    }}
+                  >
+                    拒绝
+                  </Button>
+                ) : null}
+                {canRotateDevice(device) ? (
+                  <Button
+                    size="sm"
+                    onClick={() => {
+                      void rotateRemoteDevice(device.id);
+                      pushToast(`已轮换「${device.name}」的设备凭据，旧凭据立即失效`);
+                    }}
+                  >
+                    轮换凭据
+                  </Button>
+                ) : null}
+                <Button
+                  size="sm"
+                  disabled={!canRevokeDevice(device)}
+                  onClick={() => {
+                    void revokeDevice(device.id);
+                    pushToast(`已撤销「${device.name}」，现有连接与后续请求均失效`);
+                  }}
+                >
+                  撤销设备
+                </Button>
+              </div>
             </li>
           ))}
         </ul>
       </Panel>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <Panel title="移动端范围">
-          <ul className="flex list-disc flex-col gap-1.5 pl-4 text-xs text-muted">
-            <li>可查看项目、任务、会话与运行状态，并进行受限对话与轻量管理。</li>
-            <li>移动端复用领域类型与适用组件，不携带桌面桥接与本机文件 API。</li>
-            <li>移动布局按手机工作流设计，不直接缩小桌面工具区。</li>
+      <Panel title="安全审计">
+        {audits.length === 0 ? (
+          <p className="text-xs text-muted">还没有远程访问事件。</p>
+        ) : (
+          <ul className="flex flex-col gap-1.5 text-xs">
+            {[...audits].reverse().map((audit) => (
+              <li key={audit.id} className="flex flex-wrap gap-2">
+                <span className="text-muted">{audit.at.slice(0, 16).replace("T", " ")}</span>
+                <span className="text-ink">{audit.detail}</span>
+              </li>
+            ))}
           </ul>
-        </Panel>
-      </div>
+        )}
+        <p className="mt-2 text-[11px] text-muted">审计记录已脱敏：不含令牌、本机路径或原始载荷。</p>
+      </Panel>
 
       <p className="text-[11px] text-muted">
-        配对凭据为一次性短时证明，成功配对后换取独立设备凭据；二维码不编码长期令牌或本机敏感状态。真实配对协议在 19 中实现。
+        手机端只调用已声明的 Host 操作；配对凭据与设备凭据分开签发，撤销或轮换后旧值立即失效。真实 TLS、Tailscale Serve、Gateway 与手机浏览器未在本机运行。
       </p>
     </div>
   );
+}
+
+/** Exported for the pair-device modal: the permission rows it lists. */
+export function remoteRequestedPermissionLabels(permissions: RemoteDevicePermission[]): string[] {
+  return permissions.map((permission) => REMOTE_PERMISSION_ROWS.find((row) => row.permission === permission)?.label ?? permission);
 }

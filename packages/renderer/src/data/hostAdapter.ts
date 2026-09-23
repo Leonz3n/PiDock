@@ -21,6 +21,10 @@ import type {
   ProviderDiscoveryView,
   ProviderProfile,
   RemoteDevice,
+  RemoteDevicePermission,
+  RemoteEntryMode,
+  RemoteEntryState,
+  RemotePairing,
   Reference,
   RunRecord,
   Schedule,
@@ -377,7 +381,20 @@ export interface HostAdapter {
   /** [PiDock 16] (#18) re-check sources and repair recovered rows, never merging same names. */
   recheckCapabilities(): Promise<Capability[]>;
   getRemoteDevices(): Promise<RemoteDevice[]>;
+  /**
+   * [PiDock 19] (#21) the desktop generates a short-lived single-use pairing
+   * code; generating again invalidates the previous one. The Host holds the
+   * secret — the renderer only learns the address and the credential id.
+   */
+  mintRemotePairing(): Promise<RemotePairing>;
+  cancelRemotePairing(): Promise<void>;
+  /** Confirming narrows the requested permissions and issues the device credential. */
+  confirmRemoteDevice(deviceId: string, permissions?: RemoteDevicePermission[]): Promise<RemoteDevice>;
+  rejectRemoteDevice(deviceId: string): Promise<void>;
+  rotateRemoteDevice(deviceId: string): Promise<RemoteDevice>;
   revokeRemoteDevice(deviceId: string): Promise<void>;
+  /** Switching the entry route drops the live connection instead of reusing it. */
+  setRemoteEntryMode(mode: RemoteEntryMode, baseUrl?: string): Promise<RemoteEntryState>;
   /**
    * [PiDock 14] (#17) cleanup scope of one archived task. `selection` decides
    * which records are exported first; unselected records are removed and the
