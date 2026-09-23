@@ -4,6 +4,8 @@ import type {
   AttentionItem,
   Capability,
   CleanupItem,
+  CleanupRunResult,
+  CleanupSelection,
   ConfigEntry,
   ConfigScope,
   ContextWindowSource,
@@ -25,6 +27,7 @@ import type {
   ServiceRecipe,
   Session,
   Task,
+  TaskLifecycleState,
   TaskWriteLockView,
   UsageCleanupScope,
   UsageKind,
@@ -350,7 +353,22 @@ export interface HostAdapter {
   setCapabilityEnabled(capabilityId: string, enabled: boolean): Promise<void>;
   getRemoteDevices(): Promise<RemoteDevice[]>;
   revokeRemoteDevice(deviceId: string): Promise<void>;
-  previewCleanup(taskId: string): Promise<CleanupItem[]>;
+  /**
+   * [PiDock 14] (#17) cleanup scope of one archived task. `selection` decides
+   * which records are exported first; unselected records are removed and the
+   * preview says so. The shell adapter asks the Host
+   * (`task/cleanupPreview`) and falls back to the in-memory projection.
+   */
+  previewCleanup(taskId: string, selection?: CleanupSelection): Promise<CleanupItem[]>;
+  /**
+   * [PiDock 14] (#17) run the cleanup: keep an independent copy of the
+   * undelivered code plus the selected exports, verify them, then remove
+   * identity-confirmed managed resources. Partial failure keeps the task
+   * registration and one recovery entry per failed item.
+   */
+  runCleanup(taskId: string, selection: CleanupSelection): Promise<CleanupRunResult>;
+  /** [PiDock 14] (#17) archive state, cleanup receipt and resource identities. */
+  lifecycleState(taskId: string): Promise<TaskLifecycleState>;
 
   getLocalSettings(): Promise<LocalSettings>;
   setWorkspaceRoot(workspaceRoot: string): Promise<LocalSettings>;

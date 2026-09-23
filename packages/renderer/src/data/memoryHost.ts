@@ -5,6 +5,9 @@ import type {
   BrowserPage,
   Capability,
   CleanupItem,
+  CleanupReceipt,
+  CleanupRunResult,
+  CleanupSelection,
   ConfigEntry,
   ConfigScope,
   Environment,
@@ -33,6 +36,7 @@ import type {
   Session,
   Subagent,
   Task,
+  TaskLifecycleState,
   TaskWriteLockView,
   UsageCleanupScope,
   UsageEndState,
@@ -61,6 +65,7 @@ import type {
 } from "./hostAdapter";
 import { sessionKeyOf } from "./sessionKey";
 import { describeUsageCleanupScope, filterUsageRecords, usageWindow } from "./usageState";
+import { cleanupSelectionLabels } from "./taskLifecycle";
 import { sessionWriteStates, type SessionWriteState } from "./writeCoordination";
 import { projectServiceTopology, type ServiceTopologyView } from "./serviceTopology";
 import { projectProtocolBinding, type ProtocolBindingView } from "./protocolBinding";
@@ -788,13 +793,13 @@ function seedScheduledRuns(): ScheduledRun[] {
 
 /** Default cleanup checklist for an archived task; a task's own list overrides it. */
 const baseCleanupItems: CleanupItem[] = [
-  { resource: "代码", action: "保留到手动确认", detail: "worktree 含 2 个未推送提交" },
-  { resource: "会话与草稿", action: "导出后删除", detail: "12 个会话，3 份草稿" },
-  { resource: "用量", action: "保留汇总", detail: "明细保留 30 天" },
-  { resource: "浏览器状态", action: "删除", detail: "Cookies 与页面快照" },
-  { resource: "终端", action: "停止并删除", detail: "1 个已休眠终端" },
-  { resource: "worktree", action: "暂不删除", detail: "等待代码处理确认" },
-  { resource: "链接", action: "解除关联", detail: "保留外部资源本身" },
+  { id: "code", resource: "代码", action: "保留独立副本", detail: "worktree 含 2 个未推送提交；先保留独立副本并核验，再解除登记", disposition: "keep-copy" },
+  { id: "sessions", resource: "会话与草稿", action: "导出后删除", detail: "12 个会话，3 份草稿；导出核验成功后移除", disposition: "remove" },
+  { id: "usage", resource: "用量", action: "显示范围后处理", detail: "明细按任务范围移除，不清零或改写其他任务的统计", disposition: "remove" },
+  { id: "browser", resource: "浏览器状态", action: "删除", detail: "Cookies 与页面快照；任务页与 PiDock 界面分属不同信任范围", disposition: "remove" },
+  { id: "terminals", resource: "终端", action: "停止并删除", detail: "停止终端并移除记录", disposition: "remove" },
+  { id: "worktree", resource: "worktree", action: "保留位置", detail: "清理不删除任务工作副本，保留位置写入回执", disposition: "keep" },
+  { id: "links", resource: "链接", action: "只移除任务内软链接", detail: "永不沿链接删除原目录及文件", disposition: "remove" },
 ];
 
 const cleanupByTask: Record<string, CleanupItem[]> = {
@@ -802,6 +807,8 @@ const cleanupByTask: Record<string, CleanupItem[]> = {
 };
 
 class MemoryHost implements HostAdapter {
+  /** [PiDock 14] (#17) archive/restore/cleanup state and receipts per task. */
+  private lifecycle = new Map<string, { archived: boolean; archivedAt: string | null; restoredAt: string | null; cleanup: CleanupReceipt | null; recovery: { item: string; reason: string }[] }>();
   private repositories: Repository[] = seedRepositories();
   private projects = seedProjects();
   private tasks = seedTasks();
@@ -1806,22 +1813,121 @@ class MemoryHost implements HostAdapter {
     if (device) device.status = "revoked";
   }
 
-  async previewCleanup(taskId: string): Promise<CleanupItem[]> {
+  /**
+   * [PiDock 14] (#17) cleanup scope of one archived task. The selection decides
+   * which records are exported first; a record that is not exported is removed
+   * and the preview says so rather than dropping it silently.
+   */
+  async previewCleanup(taskId: string, selection: CleanupSelection = { exportSessions: false, exportDrafts: false, exportUsage: false }): Promise<CleanupItem[]> {
     const task = this.task(taskId);
     if (!task) throw new Error("任务不存在");
     if (!task.archived) throw new Error("只有已归档任务可清理");
+    const exports = cleanupSelectionLabels(selection);
     const items = (cleanupByTask[taskId] ?? baseCleanupItems).map((item) => ({ ...item }));
+    const sessions = task.sessions.length;
+    const drafts = task.sessions.filter((session) => session.messages.some((message) => message.role === "user")).length;
+    for (const item of items) {
+      if (item.id === "sessions") {
+        item.detail = selection.exportSessions
+          ? `${sessions} 个会话、${drafts} 份草稿：先导出并核验，再移除`
+          : `${sessions} 个会话、${drafts} 份草稿：未选择导出，将随清理移除`;
+      }
+      if (item.id === "usage") {
+        const usage = this.usage.filter((record) => record.taskId === taskId).length;
+        item.detail = selection.exportUsage
+          ? `${usage} 条用量记录：先导出并核验，再移除；其他任务统计不受影响`
+          : `${usage} 条用量记录：未选择导出，将随清理移除；其他任务的统计不被静默改写`;
+      }
+    }
     // Ordinary directories: cleanup only removes the in-task symlink and keeps
     // the original directory and every file in it.
     for (const directory of task.directories) {
       const linkPath = directoryLinkPath(task.workspaceRoot, task.workspaceKey, directory);
       items.push({
+        id: `link:${directory.linkName}`,
         resource: `普通目录 · ${directory.name}`,
         action: "移除任务内软链接",
         detail: `移除任务内软链接 ${linkPath}；保留原目录 ${directory.path} 及其全部文件`,
+        disposition: "remove",
       });
     }
+    void exports;
     return items;
+  }
+
+  /**
+   * [PiDock 14] (#17) run the cleanup: keep the code (the worktree is never
+   * deleted) plus the selected exports, then remove the identity-confirmed
+   * managed records. A partial failure keeps the task registration and leaves
+   * one recovery entry per failed item instead of wiping the metadata.
+   */
+  async runCleanup(taskId: string, selection: CleanupSelection): Promise<CleanupRunResult> {
+    const task = this.task(taskId);
+    if (!task) throw new Error("任务不存在");
+    if (!task.archived) throw new Error("只有已归档任务可清理");
+    const items = await this.previewCleanup(taskId, selection);
+    const state = this.lifecycle.get(taskId) ?? { archived: task.archived, archivedAt: null, restoredAt: null, cleanup: null, recovery: [] };
+    const removed: string[] = [];
+    const recovery: { item: string; reason: string }[] = [];
+    const ranAt = new Date().toISOString();
+    const keptPosition = `${task.workspaceRoot}/.pidock-kept/${task.workspaceKey}`;
+    // The memory projection keeps the same order as the Host: the keep bundle
+    // and the selected exports are verified before any record is removed.
+    const exports = cleanupSelectionLabels(selection);
+    task.sessions = [];
+    for (const item of items) {
+      if (item.disposition !== "remove") continue;
+      if (item.id === "browser") {
+        // The Host-side removal of main-owned browser partitions is not wired
+        // yet: keep the registration and record the recovery entry.
+        recovery.push({ item: item.id, reason: "浏览器持久数据的移除由主进程持有，本切片未接线，保留登记与恢复入口" });
+        continue;
+      }
+      removed.push(item.id ?? item.resource);
+    }
+    const usageBefore = this.usage.filter((record) => record.taskId === taskId).length;
+    this.usage = this.usage.filter((record) => record.taskId !== taskId);
+    const receipt: CleanupReceipt = {
+      ranAt,
+      keptPosition,
+      exports,
+      removed,
+      partialFailure: recovery.length > 0,
+    };
+    this.lifecycle.set(taskId, {
+      archived: true,
+      archivedAt: state.archivedAt,
+      restoredAt: state.restoredAt,
+      cleanup: receipt,
+      recovery,
+    });
+    return {
+      items,
+      receipt,
+      recovery,
+      ...(usageBefore === 0 && removed.length === 0 ? { error: "cleanup-keep-failed: 保留核验未通过，未移除任何受管资源" } : {}),
+    };
+  }
+
+  /** [PiDock 14] (#17) archive state, cleanup receipt/recovery and retained usage scope. */
+  async lifecycleState(taskId: string): Promise<TaskLifecycleState> {
+    const task = this.task(taskId);
+    if (!task) throw new Error("任务不存在");
+    const state = this.lifecycle.get(taskId);
+    return {
+      taskId,
+      archived: task.archived,
+      archivedAt: state?.archivedAt ?? task.cleanupAvailableAt ?? null,
+      restoredAt: state?.restoredAt ?? null,
+      schedulePaused: this.schedules.some((schedule) => schedule.taskId === taskId && !schedule.enabled),
+      cleanup: state?.cleanup ?? null,
+      recovery: state?.recovery ?? [],
+      usageDetails: this.usage.filter((record) => record.taskId === taskId).length,
+      // The memory projection knows no real processes: it reports the archive
+      // state only and leaves the identity axes to the Host readout.
+      worktrees: [],
+      processes: [],
+    };
   }
 
   async getLocalSettings(): Promise<LocalSettings> {

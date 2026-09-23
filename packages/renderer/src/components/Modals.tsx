@@ -37,7 +37,8 @@ import {
   resolveSessionThinking,
   validateProviderDraft,
 } from "../data/providerState";
-import type { ConfigEntry, ContextWindowSource, ModelThinking, Permission, ProjectDirectory, Task } from "../data/types";
+import { cleanupReceiptLines, cleanupRecoveryLines, cleanupRemovesUnselectedRecords, cleanupRows } from "../data/taskLifecycle";
+import type { CleanupItem, CleanupRunResult, CleanupSelection, ConfigEntry, ContextWindowSource, ModelThinking, Permission, ProjectDirectory, Task } from "../data/types";
 import { sessionWriteRoleLabel, type SessionWriteState } from "../data/writeCoordination";
 import { useDraftStore } from "../stores/drafts";
 import { useEnvDraftStore } from "../stores/envDrafts";
@@ -72,7 +73,10 @@ export function Modals() {
   const tasks = workspace?.tasks ?? [];
   const [sessionFilter, setSessionFilter] = useState<"active" | "archived">("active");
   const [sessionSearch, setSessionSearch] = useState("");
-  const [cleanup, setCleanup] = useState<{ resource: string; action: string; detail: string }[] | null>(null);
+  // [PiDock 14] (#17) cleanup state: the preview rows the Host returned for the
+  // current export selection, and the receipt/recovery of a completed run.
+  const [cleanup, setCleanup] = useState<{ items: CleanupItem[]; selection: CleanupSelection; result: CleanupRunResult | null } | null>(null);
+  const [cleanupSelection, setCleanupSelection] = useState<CleanupSelection>({ exportSessions: false, exportDrafts: false, exportUsage: false });
   const [cleanupError, setCleanupError] = useState<string | null>(null);
 
   const task = modal && "taskId" in modal ? tasks.find((item) => item.id === modal.taskId) : undefined;
@@ -221,6 +225,11 @@ export function Modals() {
   }
 
   if (modal.type === "cleanup" && task) {
+    const counts = {
+      sessions: task.sessions.length,
+      drafts: task.sessions.filter((session) => session.messages.some((message) => message.role === "user")).length,
+    };
+    const removesUnselected = cleanup !== null && cleanupRemovesUnselectedRecords(cleanup.selection, { ...counts, usage: 0 });
     return (
       <Modal
         title="清理清单预览"
@@ -236,22 +245,67 @@ export function Modals() {
               onClick={() => {
                 void useHostStore
                   .getState()
-                  .loadCleanupPreview(task.id)
-                  .then(setCleanup)
+                  .loadCleanupPreview(task.id, cleanupSelection)
+                  .then((items) => setCleanup({ items, selection: cleanupSelection, result: null }))
                   .catch((error: unknown) => setCleanupError(error instanceof Error ? error.message : String(error)));
               }}
             >
               生成清单
             </Button>
-            <Button size="sm" variant="primary" onClick={() => pushToast("真实清理需要完成代码保留与所选导出后才删除；当前为预览")}>
+            <Button
+              size="sm"
+              variant="primary"
+              disabled={cleanup === null}
+              onClick={() => {
+                const current = cleanup;
+                if (current === null) return;
+                void useHostStore
+                  .getState()
+                  .runCleanup(task.id, current.selection)
+                  .then((result) => {
+                    setCleanup({ ...current, result });
+                    if (result.receipt?.partialFailure) {
+                      pushToast("清理局部失败：保留任务登记与逐项恢复入口，可在归档页查看");
+                    } else {
+                      pushToast("清理完成：保留位置与回执已记录");
+                    }
+                  })
+                  .catch((error: unknown) => {
+                    const message = error instanceof Error ? error.message : String(error);
+                    setCleanupError(message);
+                    pushToast(`清理未执行：${message}`);
+                  });
+              }}
+            >
               确认执行清理
             </Button>
           </>
         }
       >
         <p className="text-xs text-muted">
-          首版遇到未交付代码采用保留独立副本的保守路径，普通目录原始文件始终保留。未选择导出时对应记录将移除。
+          选择要导出的记录（先导出并核验，再移除）。未选择的记录会随清理移除；工作副本与原目录始终保留，只解除关联。
         </p>
+        <div className="mt-2 flex flex-wrap gap-3 text-xs">
+          {(
+            [
+              ["exportSessions", "导出会话"],
+              ["exportDrafts", "导出草稿"],
+              ["exportUsage", "导出用量"],
+            ] as const
+          ).map(([key, label]) => (
+            <label key={key} className="flex items-center gap-1.5">
+              <input
+                type="checkbox"
+                checked={cleanupSelection[key]}
+                onChange={(event) => setCleanupSelection({ ...cleanupSelection, [key]: event.target.checked })}
+              />
+              {label}
+            </label>
+          ))}
+        </div>
+        {removesUnselected ? (
+          <p className="mt-2 text-[11px] text-orange">未选择导出的会话／草稿记录将被移除；清理不是归档恢复，移除后不再保留这些记录。</p>
+        ) : null}
         {cleanupError ? <p className="mt-3 text-xs text-orange">{cleanupError}</p> : null}
         {cleanup ? (
           <table className="mt-3 w-full text-xs">
@@ -263,15 +317,25 @@ export function Modals() {
               </tr>
             </thead>
             <tbody>
-              {cleanup.map((item) => (
-                <tr key={item.resource} className="border-t border-line">
-                  <td className="py-1.5 pr-2 text-ink">{item.resource}</td>
-                  <td className="py-1.5 pr-2">{item.action}</td>
-                  <td className="py-1.5 text-muted">{item.detail}</td>
+              {cleanupRows(cleanup.items).map((row) => (
+                <tr key={row.key} className="border-t border-line">
+                  <td className="py-1.5 pr-2 text-ink">{row.resource}</td>
+                  <td className="py-1.5 pr-2">{row.action}</td>
+                  <td className="py-1.5 text-muted">{row.detail}</td>
                 </tr>
               ))}
             </tbody>
           </table>
+        ) : null}
+        {cleanup?.result ? (
+          <div className="mt-3 text-xs">
+            <p className="text-ink">{cleanup.result.error ? `未完成：${cleanup.result.error}` : "清理回执"}</p>
+            <ul className="mt-1 flex flex-col gap-0.5 text-muted">
+              {cleanup.result.receipt ? cleanupReceiptLines(cleanup.result.receipt).map((line) => <li key={line}>{line}</li>) : null}
+              {cleanupRecoveryLines(cleanup.result.recovery).map((line) => <li key={line}>{line}</li>)}
+            </ul>
+            <p className="mt-1 text-[11px] text-muted">未交付代码与未推送提交采用保留独立副本的保守路径；清理永不清零或改写其他任务的 Token 统计。</p>
+          </div>
         ) : null}
       </Modal>
     );

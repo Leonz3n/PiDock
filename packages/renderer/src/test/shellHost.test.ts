@@ -495,6 +495,127 @@ describe("shell host adapter selection", () => {
     }
   });
 
+  it("[PiDock 14] routes archive/restore/cleanup to the Host and reads the lifecycle readout", async () => {
+    const seen: Array<{ taskId: string; op: string; payload?: Record<string, unknown> }> = [];
+    stubBridge(async (taskId, op, payload) => {
+      seen.push({ taskId, op, payload });
+      if (op === "task/lifecycleState") {
+        return {
+          ok: true,
+          payload: {
+            lifecycle: {
+              taskId,
+              archived: true,
+              archivedAt: "2026-09-22T12:00:00+08:00",
+              restoredAt: null,
+              schedulePaused: true,
+              projectReleased: false,
+              usageDetails: 4,
+              cleanup: null,
+              recovery: [],
+              resources: {
+                worktrees: [{ repoDir: "/tasks/task-a/repo", verdict: { ok: false, code: "identity-mismatch", reason: "上游已重写历史" } }],
+                processes: [{ kind: "service", id: "web", running: true, verdict: null }],
+              },
+            },
+          },
+        };
+      }
+      if (op === "task/cleanupPreview") {
+        return {
+          ok: true,
+          payload: {
+            preview: {
+              taskId,
+              archived: true,
+              items: [
+                { id: "code", resource: "代码", disposition: "keep-copy", detail: "保留独立副本后解除登记" },
+                { id: "usage", resource: "用量", disposition: "remove", detail: "4 条明细", exportable: "usage" },
+              ],
+              warnings: [],
+              recordsWillBeRemoved: true,
+              selectionLabels: ["导出用量"],
+              keepRoot: "/tasks/.pidock-kept",
+            },
+          },
+        };
+      }
+      if (op === "task/runCleanup") {
+        return {
+          ok: true,
+          payload: {
+            cleanup: {
+              items: [{ id: "code", resource: "代码", disposition: "keep-copy", detail: "保留独立副本后解除登记" }],
+              receipt: { ranAt: "2026-09-22T12:01:00+08:00", keptPosition: "/tasks/.pidock-kept/task-a", exports: ["导出用量"], removed: ["usage"], partialFailure: false },
+              recovery: [],
+            },
+          },
+        };
+      }
+      return { ok: true, payload: {} };
+    });
+    try {
+      const adapter = resolveHostAdapter(createMemoryHost());
+
+      const readout = await adapter.lifecycleState("task-a");
+      expect(readout).toMatchObject({ archived: true, schedulePaused: true, usageDetails: 4, cleanup: null });
+      // A worktree whose identity no longer matches reads as unverified, and a
+      // running process without a recorded identity is never assumed verified.
+      expect(readout.worktrees).toEqual([{ repoDir: "/tasks/task-a/repo", ok: false, code: "identity-mismatch", reason: "上游已重写历史" }]);
+      expect(readout.processes).toEqual([{ kind: "service", id: "web", running: true, ok: null, reason: "" }]);
+
+      const preview = await adapter.previewCleanup("task-a", { exportSessions: false, exportDrafts: false, exportUsage: true });
+      expect(seen.find((entry) => entry.op === "task/cleanupPreview")?.payload).toEqual({
+        selection: { exportSessions: false, exportDrafts: false, exportUsage: true },
+      });
+      expect(preview.map((item) => [item.id, item.disposition])).toEqual([
+        ["code", "keep-copy"],
+        ["usage", "remove"],
+      ]);
+      expect(preview.every((item) => item.action === "")).toBe(true);
+
+      const run = await adapter.runCleanup("task-a", { exportSessions: false, exportDrafts: false, exportUsage: true });
+      const archiveCall = seen.find((entry) => entry.op === "task/runCleanup");
+      expect(archiveCall?.taskId).toBe("task-a");
+      expect((archiveCall?.payload as Record<string, unknown>)["selection"]).toEqual({ exportSessions: false, exportDrafts: false, exportUsage: true });
+      // No sessionId ever rides an archive/cleanup op: the Host refuses an
+      // agent-originated call and attests the human-UI origin itself.
+      expect((archiveCall?.payload as Record<string, unknown>)["sessionId"]).toBeUndefined();
+      expect(run.receipt).toMatchObject({ keptPosition: "/tasks/.pidock-kept/task-a", exports: ["导出用量"], partialFailure: false });
+      expect(run.recovery).toEqual([]);
+
+      await adapter.archiveTask("task-a");
+      await adapter.restoreTask("task-a");
+      expect(seen.filter((entry) => entry.op === "task/archive" || entry.op === "task/restore").map((entry) => entry.op)).toEqual([
+        "task/archive",
+        "task/restore",
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("[PiDock 14] falls back to the memory projection when the Host refuses an archive/cleanup call", async () => {
+    stubBridge(async () => ({ ok: false, error: "permission-denied: 清理只允许界面显式操作，不能由 Agent 会话发起" }));
+    try {
+      const adapter = resolveHostAdapter(createMemoryHost());
+      // A fixture task the Host does not own stays operable locally.
+      await adapter.archiveTask("release");
+      expect((await adapter.lifecycleState("release")).archived).toBe(true);
+      // When both sides refuse, the Host error surfaces (it names the real
+      // reason for a Host-owned task) instead of a silent no-op or a
+      // misleading "任务不存在".
+      // `release` references one ordinary directory: 7 base rows + its link row.
+      expect(await adapter.previewCleanup("release")).toHaveLength(8);
+      await expect(adapter.previewCleanup("checkout")).rejects.toThrow("permission-denied");
+      await expect(adapter.runCleanup("missing-task", { exportSessions: false, exportDrafts: false, exportUsage: false })).rejects.toThrow(
+        "permission-denied",
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("stops through task/cancel when bridged, memory otherwise", async () => {
     const calls: string[] = [];
     stubBridge(async (_taskId, op) => {

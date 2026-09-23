@@ -23,6 +23,8 @@ import type {
   AttentionItem,
   Capability,
   CleanupItem,
+  CleanupRunResult,
+  CleanupSelection,
   Environment,
   LocalSettings,
   Permission,
@@ -41,6 +43,7 @@ import type {
   UsageRecord,
   Workspace,
 } from "../data/types";
+import type { TaskLifecycleState } from "../data/types";
 import type { ServiceTopologyView } from "../data/serviceTopology";
 import type { ProtocolBindingView } from "../data/protocolBinding";
 import type {
@@ -86,6 +89,10 @@ type HostState = {
   archiveSession: (taskId: string, sessionId: string, archived: boolean) => Promise<void>;
   archiveTask: (taskId: string) => Promise<void>;
   restoreTask: (taskId: string) => Promise<void>;
+  /** [PiDock 14] (#17) archive state, cleanup receipt and resource identities. */
+  loadLifecycleState: (taskId: string) => Promise<TaskLifecycleState>;
+  /** [PiDock 14] (#17) run the cleanup with the chosen exports. */
+  runCleanup: (taskId: string, selection: CleanupSelection) => Promise<CleanupRunResult>;
   renameTask: (taskId: string, name: string) => Promise<void>;
   renameSession: (taskId: string, sessionId: string, name: string) => Promise<void>;
   createSession: (taskId: string) => Promise<Session>;
@@ -111,7 +118,7 @@ type HostState = {
   runScheduleNow: (scheduleId: string) => Promise<ScheduledRun>;
   setCapabilityEnabled: (capabilityId: string, enabled: boolean) => Promise<void>;
   revokeDevice: (deviceId: string) => Promise<void>;
-  loadCleanupPreview: (taskId: string) => Promise<CleanupItem[]>;
+  loadCleanupPreview: (taskId: string, selection?: CleanupSelection) => Promise<CleanupItem[]>;
   saveEnvironmentConfig: (input: SaveEnvironmentConfigInput) => Promise<void>;
   adoptLatestTemplate: (taskId: string) => Promise<void>;
   saveProject: (input: SaveProjectInput) => Promise<Project>;
@@ -238,6 +245,14 @@ export const useHostStore = create<HostState>((set, get) => ({
     await get().refresh();
   },
 
+  loadLifecycleState: async (taskId) => get().adapter.lifecycleState(taskId),
+
+  runCleanup: async (taskId, selection) => {
+    const result = await get().adapter.runCleanup(taskId, selection);
+    await get().refresh();
+    return result;
+  },
+
   renameTask: async (taskId, name) => {
     await get().adapter.renameTask(taskId, name);
     await get().refresh();
@@ -293,8 +308,8 @@ export const useHostStore = create<HostState>((set, get) => ({
     await get().refresh();
   },
 
-  loadCleanupPreview: async (taskId) => {
-    return get().adapter.previewCleanup(taskId);
+  loadCleanupPreview: async (taskId, selection) => {
+    return get().adapter.previewCleanup(taskId, selection);
   },
 
   saveEnvironmentConfig: async (input) => {
