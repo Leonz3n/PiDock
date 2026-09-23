@@ -36,6 +36,7 @@ const hostPort = getParentPort();
 import { boundWorkspaceId, classifyServiceControlCaller, routeHostTask, toolPlannerSpecForHostDispatch, validateHostTaskOp } from "./host-guards.js";
 import { TaskWorkspaceHost, diskTaskStore } from "./task-host.js";
 import { TaskServiceRuntime } from "./service-runtime.js";
+import { runAgentServiceControl } from "./service-control.js";
 import {
   isHostTaskParams,
   isRpcRequest,
@@ -420,7 +421,8 @@ function dispatchTaskOp(
       // default requires a verified live approval id, auto allows. A call
       // carrying a `sessionId` is always agent control; only a
       // session-less call is human-explicit. Renderer `actor` /
-      // `approvalGranted` claims are never trusted.
+      // `approvalGranted` claims are never trusted, and only a Host-minted
+      // `service-control`-scoped approval is accepted (`runAgentServiceControl`).
       case "task/registerService": {
         const services = serviceRuntimeFor(taskId);
         if ("error" in services) return { ok: false, error: services.error };
@@ -490,47 +492,20 @@ function dispatchTaskOp(
         if (!caller.ok) return { ok: false, error: caller.error };
         if (caller.kind === "agent") {
           const sessionId = caller.sessionId;
-          // Agent control: tier comes from the session channel's live
-          // permission (never caller-claimed). `default` requires a live
-          // verified approval id — a caller boolean is not accepted.
-          const approvalId = record["approvalId"];
+          // Agent control: tier, approval lookup, one-shot spend and the
+          // act are one testable sequence (`runAgentServiceControl`),
+          // driven by the session channel's live state — never by
+          // caller-claimed booleans or actors.
           const channel = host.openSession(sessionId);
-          const tier = channel.currentPermission;
-          const liveApproval =
-            typeof approvalId === "string" && approvalId.length > 0 ? channel.snapshot().approvals.find((item) => item.id === approvalId) : undefined;
-          const decision = services.decideAgentControl({ serviceId, action, tier, approval: liveApproval });
-          if (!decision.ok) {
-            // `default` without a verified approval needs one: mint it via
-            // the channel gate (`exec.run` on the service cwd) so the
-            // approval carries tool/target/permissionAtRequest, then report
-            // the approval id (zero start/stop until approved).
-            if (tier === "default" && liveApproval === undefined) {
-              const preview = channel.previewGate("exec.run", `${host.taskDir}/services/${serviceId}`);
-              if (preview.verdict === "ask") {
-                const gate = channel.gate("exec.run", `${host.taskDir}/services/${serviceId}`, services.get(serviceId)?.templateVersion ?? "v1");
-                if (gate.verdict === "ask") {
-                  host.store.writeSession(host.taskDir, channel.snapshot());
-                  return { ok: false, error: `approval-required: ${gate.approvalId}` };
-                }
-              }
-            }
-            return { ok: false, error: decision.reason };
-          }
-          // One-shot spend: the verified approval authorizes exactly this
-          // start/stop. Spending it (and persisting) before acting means a
-          // replay fails closed even if the same id is sent again.
-          if (liveApproval !== undefined) {
-            if (!channel.consumeApproval(liveApproval.id)) {
-              return { ok: false, error: "approval-required: 确认请求已被消费，请重新确认" };
-            }
-            host.store.writeSession(host.taskDir, channel.snapshot());
-          }
-          if (action === "start") {
-            services.markStarted(serviceId, { kind: "agent", sessionId, permissionAtRequest: tier });
-          } else {
-            services.markStopped(serviceId, { kind: "agent", sessionId, permissionAtRequest: tier }, "agent-request");
-          }
-          return { ok: true, payload: { serviceId, action, actor: "agent", tier } };
+          return runAgentServiceControl({
+            services,
+            channel,
+            sessionId,
+            serviceId,
+            action,
+            approvalId: record["approvalId"],
+            persist: () => host.store.writeSession(host.taskDir, channel.snapshot()),
+          });
         }
         // Human UI control: attested sender, labelled and auditable.
         try {

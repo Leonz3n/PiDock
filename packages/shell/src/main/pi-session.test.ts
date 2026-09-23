@@ -165,6 +165,19 @@ describe("PiSessionChannel turns and approvals", () => {
     expect(reopened.consumeApproval(second.approvalId)).toBe(false);
   });
 
+  it("carries a mint scope through snapshot and restore", () => {
+    const session = channel();
+    session.setPermission("default");
+    const hostMinted = session.gate("exec.run", `${TASK_DIR}/services/saas-web`, "v12", undefined, "service-control");
+    if (hostMinted.verdict !== "ask") throw new Error("expected approvals");
+    expect(session.snapshot().approvals[0].scope).toBe("service-control");
+    expect(PiSessionChannel.restore(session.snapshot(), TASK_DIR).snapshot().approvals[0].scope).toBe("service-control");
+    // A turn approval stays scopeless, so it can never be spent on service control.
+    const turn = session.gate("exec.run", `${TASK_DIR}/run.sh`, "v1");
+    if (turn.verdict !== "ask") throw new Error("expected approvals");
+    expect(session.snapshot().approvals[1].scope).toBeUndefined();
+  });
+
   it("previews the gate without creating a pending approval", () => {
     const session = channel();
     session.setPermission("default");
