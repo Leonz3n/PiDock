@@ -217,20 +217,33 @@ export function createBrowserGateway(deps: BrowserGatewayDeps): {
       const validated = validateBrowserMarker({ payload: request.params["marker"], taskId: deps.taskId, livePages: deps.surface.pages() });
       if (!validated.ok) return { ok: false, error: validated.reason };
       const current = await deps.surface.state(page);
+      // The marker travels with the page snapshot the user marked: the
+      // screenshot metadata is captured on this same WebContents, so the
+      // Agent can compare the marked state with the page after a fix.
+      const shot = await deps.surface.screenshot(page);
+      const marker = {
+        kind: "browser-marker" as const,
+        ...validated.marker,
+        screenshotSha256: validated.marker.screenshotSha256 ?? shot.sha256,
+        currentEpoch: current.epoch,
+        needsRelocation: markerNeedsRelocation(validated.marker, current.epoch),
+      };
       const outcome = await deps.surface.perform({
         ...request,
         action: "marker/create",
         page,
-        params: { ...request.params, marker: validated.marker },
+        params: { ...request.params, marker },
       });
       if (!outcome.ok) return outcome;
-      const marker = {
-        kind: "browser-marker" as const,
-        ...validated.marker,
-        currentEpoch: current.epoch,
-        needsRelocation: markerNeedsRelocation(validated.marker, current.epoch),
+      return {
+        ok: true,
+        payload: {
+          ...outcome.payload,
+          marker,
+          screenshot: { sha256: shot.sha256, bytes: shot.bytes, width: shot.width, height: shot.height },
+          pageId: page.pageId,
+        },
       };
-      return { ok: true, payload: { ...outcome.payload, marker, pageId: page.pageId } };
     }
 
     const outcome = await deps.surface.perform({ ...request, page });
