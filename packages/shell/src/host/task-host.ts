@@ -18,6 +18,11 @@
 
 import { PiSessionChannel, type PiPermission, type PiReportedUsage, type PiRunState, type PiSessionSnapshot, type PiTurnInput, type PiModelSwitchEvent, type PiSessionContextView, type PiUsageSource } from "../main/pi-session.js";
 import {
+  TaskExecutionLedger,
+  type ExecutionStateReadout,
+} from "./execution-ledger.js";
+import type { ExecutionAttentionItem, ServiceRunObservation } from "../main/execution-ledger.js";
+import {
   TaskWriteCoordinator,
   writeClaimError,
   type AgentOwnedResource,
@@ -65,11 +70,15 @@ import {
   buildTaskDiskRecord,
   deleteSessionOnDisk,
   listSessionIdsOnDisk,
+  parseExecutionLedger,
+  readExecutionLedgerOnDisk,
   readLifecycleOnDisk,
   readSessionSnapshotOnDisk,
   readTaskRecordOnDisk,
   readUsageOnDisk,
+  serializeExecutionLedger,
   serializeUsageLedger,
+  writeExecutionLedgerOnDisk,
   writeLifecycleOnDisk,
   writeSessionSnapshotOnDisk,
   writeTaskRecordOnDisk,
@@ -77,6 +86,7 @@ import {
   type LifecycleRecord,
   type TaskDiskRecord,
 } from "./task-store.js";
+import { emptyExecutionLedger, type ExecutionLedgerRecord } from "../main/execution-ledger.js";
 import {
   PI_USAGE_GROUP_LABELS,
   UNVERSIONED_PROVIDER_CONFIG,
@@ -115,6 +125,9 @@ export interface TaskStore {
   /** [PiDock 14] #17: archive/cleanup state and receipts. */
   readLifecycle(taskDir: string): LifecycleRecord | null;
   writeLifecycle(taskDir: string, record: LifecycleRecord): void;
+  /** [PiDock 17] #19: execution/step/attempt/approval records + read marks. */
+  readExecutions(taskDir: string): ExecutionLedgerRecord;
+  writeExecutions(taskDir: string, ledger: ExecutionLedgerRecord): void;
 }
 
 /**
@@ -189,6 +202,8 @@ export const diskTaskStore: TaskStore = {
   writeUsage: (taskDir, details) => writeUsageOnDisk(taskDir, details),
   readLifecycle: (taskDir) => readLifecycleOnDisk(taskDir),
   writeLifecycle: (taskDir, record) => writeLifecycleOnDisk(taskDir, record),
+  readExecutions: (taskDir) => readExecutionLedgerOnDisk(taskDir),
+  writeExecutions: (taskDir, ledger) => writeExecutionLedgerOnDisk(taskDir, ledger),
 };
 
 export function memoryTaskStore(): TaskStore & {
@@ -196,16 +211,19 @@ export function memoryTaskStore(): TaskStore & {
   sessions: Map<string, PiSessionSnapshot>;
   usage: Map<string, { details: PiUsageDetail[]; exclusions: PiUsageCleanupScope[] }>;
   lifecycle: Map<string, LifecycleRecord>;
+  executions: Map<string, ExecutionLedgerRecord>;
 } {
   const tasks = new Map<string, TaskDiskRecord>();
   const sessions = new Map<string, PiSessionSnapshot>();
   const usage = new Map<string, { details: PiUsageDetail[]; exclusions: PiUsageCleanupScope[] }>();
   const lifecycle = new Map<string, LifecycleRecord>();
+  const executions = new Map<string, ExecutionLedgerRecord>();
   return {
     tasks,
     sessions,
     usage,
     lifecycle,
+    executions,
     readTask: (taskDir) => tasks.get(taskDir) ?? null,
     writeTask: (taskDir, record) => {
       tasks.set(taskDir, record);
@@ -237,6 +255,15 @@ export function memoryTaskStore(): TaskStore & {
     readLifecycle: (taskDir) => lifecycle.get(taskDir) ?? null,
     writeLifecycle: (taskDir, record) => {
       lifecycle.set(taskDir, { ...record, recovery: record.recovery.map((entry: LifecycleRecord["recovery"][number]) => ({ ...entry })) });
+    },
+    // Round-tripped through the disk shape so the memory store cannot accept a
+    // record the real store would refuse (parity with the other mirrors).
+    readExecutions: (taskDir) => {
+      const ledger = executions.get(taskDir);
+      return ledger === undefined ? emptyExecutionLedger() : parseExecutionLedger(serializeExecutionLedger(ledger));
+    },
+    writeExecutions: (taskDir, ledger) => {
+      executions.set(taskDir, parseExecutionLedger(serializeExecutionLedger(ledger)));
     },
   };
 }
@@ -384,6 +411,13 @@ export class TaskWorkspaceHost {
   /** Write claims kept by turns that settled into an approval wait. */
   private readonly approvalClaims = new Map<string, string>();
   /**
+   * [PiDock 17] (#19) persistent execution ledger of this task: one record per
+   * turn/compaction with its steps, per-attempt usage keys, the confirmation it
+   * waits on and the attention read marks. Loaded once per Host instance, which
+   * settles whatever the previous process left in flight (盒子 6).
+   */
+  private readonly executions: TaskExecutionLedger;
+  /**
    * Redacted provider catalog ([PiDock 11] #9): ids/names/protocols/model
    * declarations pushed by main. Never carries an auth reference: the Host
    * validates selections against it while credentials stay in the app layer.
@@ -412,6 +446,7 @@ export class TaskWorkspaceHost {
     if (taskId.trim().length === 0) throw new Error("taskId must be non-empty");
     if (taskDir.trim().length === 0) throw new Error("taskDir must be non-empty");
     this.write = new TaskWriteCoordinator(liveResources);
+    this.executions = new TaskExecutionLedger(taskId, taskDir, store, now);
   }
 
   /**
@@ -566,6 +601,34 @@ export class TaskWorkspaceHost {
       sessions: sessions.map(({ sessionId, permission, runState }) => ({ sessionId, permission, runState })),
     });
     return { write: view, sessions, orphans: view.orphans, derived: view.derived };
+  }
+
+  /**
+   * [PiDock 17] (#19) execution readout of one session: the session-side state of
+   * its newest execution plus the **separate** service-side states (盒子 2).
+   * `services` is the caller's observation of this task's services (the Host's
+   * service runtime is wired in `host.ts`), so a running service never makes the
+   * session read as `executing`.
+   */
+  executionState(sessionId: string, services: readonly ServiceRunObservation[] = []): ExecutionStateReadout {
+    if (sessionId.trim().length === 0) throw new Error("invalid-payload: sessionId must be a non-empty string");
+    return this.executions.state(sessionId, services);
+  }
+
+  /** Cross-project attention items of this task (盒子 5), newest pending first. */
+  attention(): { taskName: string; items: ExecutionAttentionItem[] } {
+    const taskName = this.store.readTask(this.taskDir)?.name ?? this.taskId;
+    return { taskName, items: this.executions.attention({ taskName }) };
+  }
+
+  /**
+   * Read the completed items of this task (盒子 5「读取完成清除未读」). Only unread
+   * items clear; a pending/failed/expired id comes back in `kept` so the caller
+   * can tell the user it still needs handling.
+   */
+  markAttentionRead(itemIds: readonly string[]): { cleared: string[]; kept: string[] } {
+    if (!Array.isArray(itemIds)) throw new Error("invalid-payload: itemIds must be an array");
+    return this.executions.markRead(itemIds);
   }
 
   provision(input: ProvisionTaskInput): ProvisionTaskResult {
@@ -1043,6 +1106,15 @@ export class TaskWorkspaceHost {
       ...(input.usageSource !== undefined ? { usageSource: input.usageSource } : {}),
       ...(input.usage !== undefined ? { usage: input.usage } : {}),
     });
+    // [PiDock 17] #19 box 1: a compaction is its own execution kind, so its own
+    // consumption is attributed to a compaction row (never to a turn).
+    const compaction = this.executions.open({ sessionId: input.sessionId, kind: "compaction", label: "上下文压缩" });
+    const call = channel.snapshot().calls[channel.snapshot().calls.length - 1];
+    if (call !== undefined) {
+      this.executions.linkCall(compaction.executionId, call.callId);
+      this.executions.attempt(compaction.executionId, { endState: "completed", usageId: call.callId });
+    }
+    this.executions.complete(compaction.executionId);
     this.store.writeSession(this.taskDir, channel.snapshot());
     this.syncUsageLedger();
     return channel.contextView();
@@ -1214,9 +1286,24 @@ export class TaskWorkspaceHost {
       }
     }
     let result: ReturnType<PiSessionChannel["runTurn"]>;
+    // [PiDock 17] #19 box 1: the execution record exists before the turn runs, so
+    // a turn that dies midway is still recorded with its step trail and attempt.
+    const execution = this.executions.open({
+      sessionId,
+      kind: "turn",
+      label: plannedTool !== undefined && target !== undefined ? `回合工具 ${plannedTool} ${target}` : `回合工具 ${plannedTool ?? "fs.write"}`,
+    });
+    const stepId = plannedTool !== undefined ? `tool-${plannedTool}` : "turn";
+    this.executions.planStep(execution.executionId, {
+      stepId,
+      label: plannedTool !== undefined && target !== undefined ? `${plannedTool} ${target}` : "回合检查",
+    });
     try {
       result = channel.runTurn({ text, ...turn });
     } catch (error) {
+      // The turn never started (busy round/approval, fail-closed validation):
+      // the record names the refusal instead of staying `executing` forever.
+      this.executions.fail(execution.executionId, error instanceof Error ? error.message : "回合未能启动");
       if (claimId !== undefined) {
         // A failed attempt releases only what it took: the session's write
         // right may be retained by an open confirmation's claim, whose shared
@@ -1227,6 +1314,7 @@ export class TaskWorkspaceHost {
       }
       throw error;
     }
+    this.recordTurnOutcome(execution.executionId, stepId, result);
     // Box 4: the right is kept while the turn waits on a confirmation and is
     // released only when the turn settles; a live derived execution keeps it
     // even then (`releaseWrite` retains the owner).
@@ -1257,6 +1345,39 @@ export class TaskWorkspaceHost {
   }
 
   /**
+   * Turn outcome → execution record ([PiDock 17] #19): the call id binds the
+   * execution to its usage row, the step settles, and the session-side state
+   * moves to its terminal value (盒子 2). A waiting confirmation binds the request
+   * with the payload version it was minted for (盒子 3).
+   */
+  private recordTurnOutcome(
+    executionId: string,
+    stepId: string,
+    result: ReturnType<PiSessionChannel["runTurn"]>,
+  ): void {
+    this.executions.linkCall(executionId, result.call.callId);
+    if (result.state === "approval") {
+      const approval = result.approval;
+      if (approval) {
+        this.executions.awaitApproval(executionId, {
+          approvalId: approval.id,
+          payloadVersion: approval.contentVersion,
+          ...(approval.scope !== undefined ? { scope: approval.scope } : {}),
+        });
+      }
+      this.executions.attempt(executionId, { endState: "awaiting-approval", usageId: result.call.callId });
+      return;
+    }
+    this.executions.settleStep(executionId, { stepId, state: result.state === "done" ? "done" : "failed" });
+    this.executions.attempt(executionId, {
+      endState: result.state === "done" ? "completed" : "failed",
+      usageId: result.call.callId,
+    });
+    if (result.state === "done") this.executions.complete(executionId);
+    else this.executions.fail(executionId, "工具调用被拒绝或失败，已完成步骤与草稿保留");
+  }
+
+  /**
    * Resolve a turn that settled into an approval wait ([PiDock 09] #11): the
    * session's kept write claim ends with approve/reject, so another session of
    * the task may write afterwards. Shared real-path keys end with it too.
@@ -1269,18 +1390,38 @@ export class TaskWorkspaceHost {
     if (release.releasedOwner === sessionId) this.releasePathScope(sessionId);
   }
 
-  approve(sessionId: string, approvalId: string): string {
+  /**
+   * Approve and execute one request ([PiDock 17] #19 box 3). The execution record
+   * authorizes first — permission / deadline / payload version re-checked, the
+   * confirmation spent exactly once — and only then does the turn flow run the
+   * gated tool. A stale version, an expired deadline or an already-spent request
+   * throws before anything executes.
+   */
+  approve(sessionId: string, approvalId: string, contentVersion?: string): string {
     const channel = this.openSession(sessionId);
+    const waiting = this.executions.waitingOnApproval(approvalId);
+    if (waiting) {
+      this.executions.authorize(waiting.executionId, {
+        approvalId,
+        permission: channel.currentPermission,
+        ...(contentVersion !== undefined ? { contentVersion } : {}),
+      });
+    }
     const call = channel.approve(approvalId);
     this.settleApprovalClaim(sessionId);
     this.store.writeSession(this.taskDir, channel.snapshot());
     this.syncUsageLedger();
+    if (waiting) {
+      this.executions.attempt(waiting.executionId, { endState: "completed", usageId: call.callId });
+      this.executions.complete(waiting.executionId);
+    }
     return call.callId;
   }
 
   reject(sessionId: string, approvalId: string): void {
     const channel = this.openSession(sessionId);
     channel.reject(approvalId);
+    this.executions.rejectApproval(approvalId);
     this.settleApprovalClaim(sessionId);
     this.store.writeSession(this.taskDir, channel.snapshot());
     this.syncUsageLedger();
@@ -1327,7 +1468,10 @@ export class TaskWorkspaceHost {
     const channel = this.openSession(sessionId);
     channel.cancel();
     this.approvalClaims.delete(sessionId);
+    // 盒子 6：停止覆盖派生执行（子进程/子 Agent），但不回滚已完成的步骤与尝试。
+    const derived = this.write.snapshot().derived.filter((entry) => entry.sessionId === sessionId).map((entry) => entry.resourceId);
     this.write.forgetSession(sessionId);
+    this.executions.stopSession(sessionId, { derive: derived });
     // 盒子 5：中止后不留共享真实路径的旧声明（派生条目已一并丢弃）。
     this.sharedPaths.release({ taskId: this.taskId, sessionId });
     this.store.writeSession(this.taskDir, channel.snapshot());

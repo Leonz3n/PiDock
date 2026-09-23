@@ -4,6 +4,7 @@ import {
   attentionItemId,
   attentionItemsFromLedger,
   attentionKindClearsOnRead,
+  attentionLabel,
   awaitApproval,
   completeExecution,
   consumeExecutionApproval,
@@ -283,19 +284,19 @@ describe("attention list", () => {
     const items = attentionItemsFromLedger(ledgerWith([waiting, failed, expired, done]), {
       taskId: "release",
       taskName: "发布",
-      projectId: "atlas",
-      projectName: "Atlas",
     });
     expect(items.map((item) => item.kind)).toEqual(["approval", "failed", "expired", "completed-unread"]);
     expect(items[0]).toMatchObject({
       id: attentionItemId(waiting, "approval"),
       taskId: "release",
-      projectId: "atlas",
       sessionId: "main",
-      label: "Atlas · 发布",
+      taskName: "发布",
       detail: "待确认：回合工具 exec.run",
       read: false,
     });
+    // The caller labels the item once it knows the project name.
+    expect(attentionLabel("Atlas", items[0]?.taskName as string)).toBe("Atlas · 发布");
+    expect(attentionLabel(undefined, "发布")).toBe("发布");
 
     const grouped = groupAttentionItems(items);
     expect(grouped.pending.map((item) => item.kind)).toEqual(["approval", "failed", "expired"]);
