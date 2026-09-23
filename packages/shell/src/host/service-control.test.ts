@@ -3,6 +3,7 @@ import { PiSessionChannel } from "../main/pi-session.js";
 import { memoryTaskStore } from "./task-host.js";
 import { runAgentServiceControl } from "./service-control.js";
 import { TaskServiceRuntime } from "./service-runtime.js";
+import { TaskWriteCoordinator } from "./write-coordination.js";
 
 // Seam: #7 Host agent service-control dispatch (the sequence `host.ts`
 // runs), driven here without a utilityProcess. Reviewer P2: the
@@ -35,6 +36,17 @@ function setup(permission: "read" | "default" | "auto" = "default") {
     permission,
   });
   const persisted = () => store.sessions.get(`${DIR}::main`);
+  // [PiDock 09] (#11): the sequence claims the task write right; the tests
+  // drive the real coordinator (with the service runtime as its leftover
+  // probe, exactly like `host.ts` wires it) so the lock order is exercised.
+  const write = new TaskWriteCoordinator(() =>
+    services.runningAgentOwned().map((service) => ({
+      resourceId: service.serviceId,
+      kind: "service" as const,
+      ownerSessionId: service.ownerSessionId,
+      label: service.serviceId,
+    })),
+  );
   const control = (input: { action?: "start" | "stop"; serviceId?: string; approvalId?: unknown } = {}) =>
     runAgentServiceControl({
       services,
@@ -43,9 +55,10 @@ function setup(permission: "read" | "default" | "auto" = "default") {
       serviceId: input.serviceId ?? SERVICE_ID,
       action: input.action ?? "start",
       ...(input.approvalId !== undefined ? { approvalId: input.approvalId } : {}),
+      write,
       persist: () => store.writeSession(DIR, channel.snapshot()),
     });
-  return { services, store, channel, control, persisted };
+  return { services, store, channel, control, persisted, write };
 }
 
 describe("agent service-control dispatch", () => {
@@ -118,5 +131,45 @@ describe("agent service-control dispatch", () => {
     // guard prevents: nothing pending, nothing registered.
     expect(channel.snapshot().approvals).toHaveLength(0);
     expect(services.ids()).toEqual([SERVICE_ID]);
+  });
+
+  // [PiDock 09] (#11) box 3: even the auto tier follows the task write right,
+  // and a queued session must not spend the user's attention on a confirmation
+  // it cannot use.
+  it("refuses an auto-tier control while another session holds the write right", () => {
+    const { services, control, write } = setup("auto");
+    const held = write.claimWrite("other", "auto", { kind: "turn", label: "回合工具 exec.run" });
+    expect(held.ok).toBe(true);
+    const denied = control();
+    expect(denied).toMatchObject({ ok: false, error: expect.stringContaining("task-locked: 同一任务写操作权由会话 other 持有") });
+    expect(services.get(SERVICE_ID)?.lifecycle).toBe("stopped");
+    expect(write.owner).toBe("other");
+    // The right is released by the other session, then the same call runs.
+    write.releaseWrite((held as { claimId: string }).claimId);
+    expect(control().ok).toBe(true);
+    expect(services.get(SERVICE_ID)?.lifecycle).toBe("running");
+  });
+
+  it("does not mint a default-tier confirmation while another session holds the write right", () => {
+    const { channel, control, services, write } = setup("default");
+    write.claimWrite("other", "auto", { kind: "turn", label: "回合工具 fs.write" });
+    const denied = control();
+    expect(denied).toMatchObject({ ok: false, error: expect.stringContaining("task-locked") });
+    expect(channel.snapshot().approvals).toHaveLength(0);
+    expect(services.get(SERVICE_ID)?.lifecycle).toBe("stopped");
+  });
+
+  it("releases the write right after a one-shot start so the session does not keep it", () => {
+    const { control, write, services } = setup("auto");
+    expect(control().ok).toBe(true);
+    expect(write.owner).toBeNull();
+    // The started service is now a running agent-owned resource: a *new*
+    // session is refused until it is verified/stopped (box 5), while the
+    // owning session may continue its own work.
+    const blocked = write.claimWrite("second", "auto", { kind: "turn", label: "回合工具 fs.write" });
+    expect(blocked).toMatchObject({ ok: false, verdict: "locked", owner: "main" });
+    expect(blocked.ok === false && blocked.reason).toContain("遗留执行资源");
+    expect(write.claimWrite("main", "auto", { kind: "turn", label: "回合工具 fs.write" }).ok).toBe(true);
+    expect(services.runningAgentOwned()).toEqual([{ serviceId: SERVICE_ID, ownerSessionId: "main" }]);
   });
 });

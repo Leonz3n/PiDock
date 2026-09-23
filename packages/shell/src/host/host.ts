@@ -45,8 +45,7 @@ import { TaskWorkspaceHost, diskTaskStore } from "./task-host.js";
 import { TaskServiceRuntime } from "./service-runtime.js";
 import { TaskServiceTopology } from "./service-topology.js";
 import { runAgentServiceControl } from "./service-control.js";
-import { runAgentBrowserAction, runHumanBrowserAction, type BrowserGatewayPort } from "./browser-control.js";
-import { HostBrowserClient } from "../rpc/browser-client.js";
+import { runAgentBrowserAction, runHumanBrowserAction, type BrowserGatewayPort } from "./browser-control.js";import { HostBrowserClient } from "../rpc/browser-client.js";
 import { isBrowserAction } from "../main/browser-rules.js";
 import {
   isHostTaskParams,
@@ -125,7 +124,19 @@ function taskHostFor(taskId: string): TaskWorkspaceHost | { error: string } {
     return { error: "task-unknown: this Host serves a different task" };
   }
   if (!workspaceHost || workspaceHost.taskId !== boundTaskId || workspaceHost.taskDir !== taskDir) {
-    workspaceHost = new TaskWorkspaceHost(boundTaskId, taskDir, diskTaskStore);
+    // [PiDock 09] (#11) write coordination reads the service runtime's
+    // still-running agent-owned services lazily (the runtime is created on
+    // first service op, after this closure exists).
+    workspaceHost = new TaskWorkspaceHost(boundTaskId, taskDir, diskTaskStore, undefined, () => {
+      const runtime = serviceRuntime;
+      if (!runtime || runtime.taskDir !== taskDir) return [];
+      return runtime.runningAgentOwned().map((service) => ({
+        resourceId: service.serviceId,
+        kind: "service" as const,
+        ownerSessionId: service.ownerSessionId,
+        label: service.serviceId,
+      }));
+    });
   }
   return workspaceHost;
 }
@@ -404,8 +415,20 @@ async function dispatchTaskOp(
         if (typeof sessionId !== "string") {
           return { ok: false, error: "invalid-payload: task/cancel requires sessionId" };
         }
-        host.cancel(sessionId);
-        return { ok: true, payload: { sessionId } };
+        // [PiDock 09] (#11) box 2/5: stop cancels the waiting turn, expires
+        // its confirmation and drops the session's write right (claims,
+        // derived executions, queue slot), then reports the coordination
+        // state so the navigation shows the new holder/queue immediately.
+        const state = host.cancel(sessionId);
+        return { ok: true, payload: { sessionId, write: state.write, orphans: state.orphans, derived: state.derived } };
+      }
+      // [PiDock 09] (#11) session states + write coordination read: one
+      // per-session readout (permission, run state, pending confirmation,
+      // last activity) plus who holds the write right, who queues and which
+      // agent-owned resources are still running without a claim.
+      case "task/sessionStates": {
+        const state = host.writeState();
+        return { ok: true, payload: { write: state.write, sessions: state.sessions, orphans: state.orphans, derived: state.derived } };
       }
       case "task/approve": {
         const sessionId = record["sessionId"];
@@ -565,6 +588,9 @@ async function dispatchTaskOp(
             serviceId,
             action,
             approvalId: record["approvalId"],
+            // [PiDock 09] (#11) box 3: the task write right constrains even
+            // the `auto` tier (one task, one writer; reads never claim).
+            write: host,
             persist: () => host.store.writeSession(host.taskDir, channel.snapshot()),
           });
         }
@@ -704,6 +730,8 @@ async function dispatchTaskOp(
             ...(record["approvalId"] !== undefined ? { approvalId: record["approvalId"] } : {}),
             ...(typeof record["contentVersion"] === "string" ? { contentVersion: record["contentVersion"] as string } : {}),
             taskDir: host.taskDir,
+            // [PiDock 09] (#11) box 3: a page change holds the task write right.
+            write: host,
             persist: () => host.store.writeSession(host.taskDir, channel.snapshot()),
           });
           return result.ok ? { ok: true, payload: result.payload } : { ok: false, error: result.error };

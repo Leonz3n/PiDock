@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { PiSessionChannel, resetPiSequencesForTests } from "../main/pi-session.js";
 import { memoryTaskStore } from "./task-host.js";
 import { runAgentBrowserAction, runHumanBrowserAction, type BrowserGatewayPort } from "./browser-control.js";
+import { TaskWriteCoordinator } from "./write-coordination.js";
 
 // Seam: [PiDock 06] (#8) Host browser sequence — the exact order `host.ts`
 // runs, driven here without a utilityProcess or a real page. The gateway
@@ -39,6 +40,9 @@ function setup(permission: "read" | "default" | "auto" = "default") {
     },
   };
   const persisted = () => store.sessions.get(`${DIR}::main`);
+  // [PiDock 09] (#11): the page change claims the task write right; the tests
+  // drive the real coordinator so a held right refuses an `auto` action.
+  const write = new TaskWriteCoordinator();
   const control = (input: { action?: Parameters<typeof runAgentBrowserAction>[0]["action"]; page?: unknown; approvalId?: unknown; params?: Record<string, unknown> } = {}) =>
     runAgentBrowserAction({
       gateway,
@@ -50,6 +54,7 @@ function setup(permission: "read" | "default" | "auto" = "default") {
       ...(input.params !== undefined ? { params: input.params } : {}),
       ...(input.approvalId !== undefined ? { approvalId: input.approvalId } : {}),
       taskDir: DIR,
+      write,
       persist: () => store.writeSession(DIR, channel.snapshot()),
     });
   const human = (input: { action: Parameters<typeof runHumanBrowserAction>[0]["action"]; page?: unknown; params?: Record<string, unknown> }) =>
@@ -70,6 +75,7 @@ function setup(permission: "read" | "default" | "auto" = "default") {
     control,
     human,
     persisted,
+    write,
     setResult: (result: Awaited<ReturnType<BrowserGatewayPort["perform"]>>) => {
       nextResult = result;
     },
@@ -151,6 +157,32 @@ describe("agent browser action dispatch", () => {
     expect(await control()).toMatchObject({ ok: true, payload: { actor: "agent", tier: "auto" } });
     expect(channel.snapshot().approvals).toHaveLength(0);
     expect(calls).toHaveLength(1);
+  });
+
+  // [PiDock 09] (#11) box 3: the auto tier follows the task write right too,
+  // and the refusal happens before the page is touched.
+  it("refuses an auto-tier page change while another session holds the write right", async () => {
+    const { calls, control, write } = setup("auto");
+    const held = write.claimWrite("other", "auto", { kind: "turn", label: "回合工具 fs.write" });
+    expect(held.ok).toBe(true);
+    const denied = await control();
+    expect(denied).toMatchObject({ ok: false, error: expect.stringContaining("task-locked: 同一任务写操作权由会话 other 持有") });
+    expect(calls).toHaveLength(0);
+    // The right is released only by that session; then the same action runs
+    // and the claim ends with it (a page change holds the right, not forever).
+    write.releaseWrite((held as { claimId: string }).claimId);
+    expect((await control()).ok).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(write.owner).toBeNull();
+  });
+
+  it("does not mint a default-tier browser confirmation while another session holds the write right", async () => {
+    const { calls, control, channel, write } = setup("default");
+    write.claimWrite("other", "auto", { kind: "turn", label: "回合工具 fs.write" });
+    const denied = await control();
+    expect(denied).toMatchObject({ ok: false, error: expect.stringContaining("task-locked") });
+    expect(channel.snapshot().approvals).toHaveLength(0);
+    expect(calls).toHaveLength(0);
   });
 
   it("keeps user-only actions off the agent path", async () => {

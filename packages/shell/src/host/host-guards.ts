@@ -539,6 +539,14 @@ export function validateHostTaskOp(
     }
     return { ok: true };
   }
+  // [PiDock 09] (#11) write-coordination read: no caller-chosen input, so only
+  // the envelope shape is checked here (an empty payload is a full read).
+  if (op === "task/sessionStates") {
+    if (payload !== undefined && !isRecord(payload)) {
+      return { ok: false, error: "invalid-payload: task/sessionStates payload must be an object" };
+    }
+    return { ok: true };
+  }
   // [PiDock 04] (#7) service ops: envelope shape only here (fail-closed
   // on missing ids); semantic validation (descriptor guard, env
   // resolution, gate tiers) runs Host-side in `service-runtime.ts` via

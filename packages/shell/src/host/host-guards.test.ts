@@ -15,6 +15,17 @@ describe("approval listing ops", () => {
   });
 });
 
+// [PiDock 09] (#11) write-coordination read: no caller-chosen input, so the
+// guard only rejects a present-but-malformed payload.
+describe("session states op", () => {
+  it("accepts an absent payload and an empty object, rejects anything else", () => {
+    expect(validateHostTaskOp("task/sessionStates", undefined)).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/sessionStates", {})).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/sessionStates", "nope").ok).toBe(false);
+    expect(validateHostTaskOp("task/sessionStates", []).ok).toBe(false);
+  });
+});
+
 // [PiDock 04] (#7) service ops ride the same `host/task` envelope with
 // envelope-shape guards (semantic validation runs Host-side in
 // service-runtime.ts via host.ts dispatch).

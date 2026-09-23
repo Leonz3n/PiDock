@@ -50,6 +50,12 @@ export interface ServiceRecord {
   dependencyNote?: string;
   log: { at: string; line: string }[];
   events: string[];
+  /**
+   * Actor of the last start ([PiDock 09] #11): the write coordination reads
+   * the owning session of a still-running service, so a leftover process from
+   * another session can be detected instead of silently written alongside.
+   */
+  startedBy?: ServiceControlActor;
   /** Per-platform launch verifications (program+args, explicit). */
   launchVerifications: { platform: string; nodeVersion: string; ok: boolean; note: string }[];
 }
@@ -149,8 +155,26 @@ export class TaskServiceRuntime {
       log: [...record.log.map((entry) => ({ ...entry }))],
       events: [...record.events],
       resolved: [...record.resolved.map((entry) => ({ ...entry }))],
+      ...(record.startedBy !== undefined ? { startedBy: { ...record.startedBy } } : {}),
       launchVerifications: [...record.launchVerifications.map((entry) => ({ ...entry }))],
     };
+  }
+
+  /**
+   * Services a still-running Agent session started ([PiDock 09] #11).
+   * `ownerSessionId` is the session that started it; the write coordination
+   * treats a running service whose owner holds no live claim as a leftover
+   * the next session must verify/stop before writing. Human-started services
+   * (no session) are never leftovers for an Agent session.
+   */
+  runningAgentOwned(): { serviceId: string; ownerSessionId: string | null }[] {
+    return [...this.services.entries()]
+      .filter(([, record]) => record.lifecycle === "running" && record.startedBy?.kind === "agent")
+      .map(([serviceId, record]) => ({
+        serviceId,
+        ownerSessionId: record.startedBy?.kind === "agent" ? record.startedBy.sessionId : null,
+      }))
+      .sort((a, b) => (a.serviceId < b.serviceId ? -1 : a.serviceId > b.serviceId ? 1 : 0));
   }
 
   /**
@@ -265,6 +289,7 @@ export class TaskServiceRuntime {
     record.startedAt = this.now();
     record.stoppedAt = undefined;
     record.exitReason = undefined;
+    record.startedBy = { ...actor };
     record.events.push(`start:${actor.kind}:${actor.kind === "human" ? actor.label : `${actor.sessionId}:${actor.permissionAtRequest}`}`);
     this.pushLog(record, detail ?? `listening (process alive; dependencies not probed)`);
   }

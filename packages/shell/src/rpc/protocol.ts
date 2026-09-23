@@ -56,6 +56,7 @@ export type HostTaskOp =
   | "task/setPermission"
   | "task/listApprovals"
   | "task/getApproval"
+  | "task/sessionStates"
   | "task/registerService"
   | "task/planServiceStart"
   | "task/controlService"
@@ -181,6 +182,7 @@ const HOST_TASK_OPS: readonly string[] = [
   "task/setSessionModel",
   "task/setSessionThinking",
   "task/compactSession",
+  "task/sessionStates",
 ];
 
 export function isHostTaskOp(value: unknown): value is HostTaskOp {

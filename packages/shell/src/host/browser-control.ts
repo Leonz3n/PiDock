@@ -21,6 +21,7 @@ import { BROWSER_CONTROL_SCOPE } from "../main/pi-session.js";
 import type { BrowserAction } from "../main/browser-rules.js";
 import { browserApprovalTarget, browserToolForAction } from "../main/browser-rules.js";
 import type { BrowserPerformResult } from "../rpc/protocol.js";
+import { writeClaimError, type WriteCoordinatorPort } from "./write-coordination.js";
 import type { AgentControlChannel } from "./service-control.js";
 
 /** The approval slice the browser verifier reads. */
@@ -166,6 +167,8 @@ export async function runAgentBrowserAction(input: {
   approvalId?: unknown;
   taskDir: string;
   contentVersion?: string;
+  /** Task write right ([PiDock 09] #11): claimed around the page change. */
+  write: WriteCoordinatorPort;
   persist: () => void;
 }): Promise<AgentBrowserResult> {
   // The gateway is wired per task; a mismatch would send this action to
@@ -187,54 +190,71 @@ export async function runAgentBrowserAction(input: {
       : undefined;
   const pageId = pageIdOf(input.page);
   const target = browserApprovalTarget(input.taskDir, pageId);
+  const intent = { kind: "browser-action" as const, label: `页面变更 ${input.action}` };
   const decision = decideAgentBrowserControl({ tier, tool, taskDir: input.taskDir, pageId, approval: liveApproval });
   if (!decision.ok) {
     // `default` without a live approval needs one: mint through the
     // channel gate so it carries tool/target/permission/scope and shows up
-    // in the approval list the user acts on.
+    // in the approval list the user acts on. The write right is checked
+    // first so a queued session does not get an unusable confirmation.
     if (tier === "default" && liveApproval === undefined) {
-      const preview = input.channel.previewGate(tool, target);
-      if (preview.verdict === "ask") {
-        const gate = input.channel.gate(tool, target, input.contentVersion ?? "v1", undefined, BROWSER_CONTROL_SCOPE);
-        if (gate.verdict === "ask") {
-          input.persist();
-          return { ok: false, error: `approval-required: ${gate.approvalId}` };
+      const claim = input.write.claimWrite(input.sessionId, tier, intent);
+      if (!claim.ok) return { ok: false, error: writeClaimError(claim) };
+      try {
+        const preview = input.channel.previewGate(tool, target);
+        if (preview.verdict === "ask") {
+          const gate = input.channel.gate(tool, target, input.contentVersion ?? "v1", undefined, BROWSER_CONTROL_SCOPE);
+          if (gate.verdict === "ask") {
+            input.persist();
+            return { ok: false, error: `approval-required: ${gate.approvalId}` };
+          }
         }
+      } finally {
+        input.write.releaseWrite(claim.claimId);
       }
     }
     return { ok: false, error: decision.reason };
   }
-  if (liveApproval !== undefined) {
-    if (!input.channel.consumeApproval(liveApproval.id)) {
-      return { ok: false, error: "approval-required: 确认请求已被消费，请重新确认" };
+  // Box 3: even the `auto` tier is constrained by the task write right, and
+  // a page change holds it until the action returns (a read/analysis turn of
+  // another session is never blocked because it claims no write right).
+  const claim = input.write.claimWrite(input.sessionId, tier, intent);
+  if (!claim.ok) return { ok: false, error: writeClaimError(claim) };
+  try {
+    if (liveApproval !== undefined) {
+      if (!input.channel.consumeApproval(liveApproval.id)) {
+        return { ok: false, error: "approval-required: 确认请求已被消费，请重新确认" };
+      }
+      input.persist();
     }
-    input.persist();
-  }
-  const performed = await input.gateway.perform({
-    action: input.action,
-    page: input.page,
-    params: input.params ?? {},
-    actor: { kind: "agent", sessionId: input.sessionId },
-  });
-  if (!performed.ok) return { ok: false, error: performed.error };
-  input.channel.appendMessage({
-    role: "agent",
-    text: `浏览器操作：${input.action}${pageId ? ` @ ${pageId}` : ""}（${tier}）`,
-    origin: "agent",
-    references: [{ kind: "browser-action", action: input.action, pageId, approvalId: liveApproval?.id }],
-  });
-  input.persist();
-  return {
-    ok: true,
-    payload: {
-      ...performed.payload,
+    const performed = await input.gateway.perform({
       action: input.action,
-      actor: "agent",
-      tier,
-      ...(pageId !== undefined ? { pageId } : {}),
-      ...(liveApproval !== undefined ? { approvalId: liveApproval.id } : {}),
-    },
-  };
+      page: input.page,
+      params: input.params ?? {},
+      actor: { kind: "agent", sessionId: input.sessionId },
+    });
+    if (!performed.ok) return { ok: false, error: performed.error };
+    input.channel.appendMessage({
+      role: "agent",
+      text: `浏览器操作：${input.action}${pageId ? ` @ ${pageId}` : ""}（${tier}）`,
+      origin: "agent",
+      references: [{ kind: "browser-action", action: input.action, pageId, approvalId: liveApproval?.id }],
+    });
+    input.persist();
+    return {
+      ok: true,
+      payload: {
+        ...performed.payload,
+        action: input.action,
+        actor: "agent",
+        tier,
+        ...(pageId !== undefined ? { pageId } : {}),
+        ...(liveApproval !== undefined ? { approvalId: liveApproval.id } : {}),
+      },
+    };
+  } finally {
+    input.write.releaseWrite(claim.claimId);
+  }
 }
 
 export type HumanBrowserResult =
