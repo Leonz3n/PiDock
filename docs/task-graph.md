@@ -358,7 +358,8 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   （或其生成目录）当作自己的消费者、拒绝重复的消费者标识与重复的消费者仓库
   （同一仓库只能绑定一次，避免合并依赖选择），TS 消费者必须给出仓库自己的链接
   步骤与目标应用。界面（任务视图「协议」面板）显示协议仓库、生成步骤、准备状态
-  与实际生成版本。
+  与实际生成版本；只有 `ok:true` 的运行才会推进「实际生成版本」，失败运行只进
+  `generationHistory`，不会把失败尝试显示成已生成。
 - **准备状态各自独立**：`buildPrepareState` 把试点核对报告要求的六个状态分开
   ——代码就绪、工具链就绪、依赖已安装、生成物已更新、本地绑定有效、运行环境可达；
   「已生成」不蕴含「已绑定」或「可达」，运行环境可达性来自 #10 的拓扑判定而不是
@@ -389,22 +390,31 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   停止并解释：产物版本变过而消费者没有重新核验 → `artifact-version-mismatch`；
   同一任务里不同发布依赖的消费者（跨语言版本号不可直接比较）必须逐个确认
   （`acknowledged`）才算通过。Host 只在解析真的通过且无阻塞时把一个消费者标记为
-  「已绑定」，否则保持未绑定并带上诊断。
+  「已绑定」，否则保持未绑定并带上诊断。本地切换评估只在 `mode:"local"` 生效：
+  切回发布依赖后不再计算 `switchAssessment` 的阻塞，避免在健康状态下显示假的停止
+  原因。
 - **协议再变（盒子 6）**：`assessConsumerStaleness` 依次给出
   `needs-regenerate` → `needs-binding` → `needs-compile` → `needs-restart`，并带回
   该实例实际加载的版本；运行实例加载的不是当前产物时报告「不算已加载新协议，请
   重启后再验证」。#10 的 `RunRecord` 增加可选 `protocolArtifact.version`，
   Host 由 `serviceTopology.runs()` 映射到消费者（`serviceId` 对齐），因此
-  「旧运行实例不算已加载新协议」有真实的判断入口。
+  「旧运行实例不算已加载新协议」有真实的判断入口。注意 `protocolArtifact` 目前
+  没有生产写入方（没有进程启动器），生产路径里 `loadedVersion` 恒为 `null`，按
+  失败关闭报告「未知版本」；「重启后已加载新协议」的 `ready` 分支目前只能由调用方
+  上报的输入到达（见残留）。
 - **切回发布依赖（盒子 7）**：`mode:"release"` 后每个消费者的绑定回到
   `{kind:"release", dependency}`，状态为就绪；计划里的所有 workspace / 链接路径
   都必须在本任务目录内（Host 构造与 `setPlan` 双重校验），另一个任务由自己的
-  `TaskProtocolBinding` 持有状态，互不影响。
+  `TaskProtocolBinding` 持有状态，互不影响。`setPlan` 同时拒绝协议仓库本身或它的
+  Go/TS 生成目录在本任务之外的计划，否则「所有计划路径都在本任务内」的保证在
+  任何步骤运行前就已经不成立。
 - **生成工具链（盒子 8）**：`checkGenerationToolchain` 按平台给出逐工具结果：
-  `win32-arm64` 报 `unsupported-platform`（试点仓库的插件安装脚本明确不支持），
-  未探测的平台报 `unverified`（不是「就绪」），调用方探测过的才报 `missing` /
-  `ready`，并且无论平台都带 `desktopLaunchImpliesGeneration: false`——桌面可启动
-  不能推断生成支持。
+  缺口是逐工具记录的——原生 protoc 插件（`buf`、`protoc-gen-go`、
+  `protoc-gen-go-grpc`、`protoc-gen-es`）在 `win32-arm64` 报
+  `unsupported-platform`（试点仓库的插件安装脚本明确不支持），而基于 Node 的
+  `pnpm` 不受影响、保持 `unverified`；未探测的平台报 `unverified`（不是「就绪」），
+  调用方探测过的才报 `missing` / `ready`，并且无论平台都带
+  `desktopLaunchImpliesGeneration: false`——桌面可启动不能推断生成支持。
 - **IPC**：`task/planProtocol`（替换计划）、`task/protocolState`（读）、
   `task/recordProtocolRun`（记录真实观测：生成版本、工具链探测、依赖安装、
   各消费者解析路径、运行环境可达性）。两个写操作走与 #7/#10 相同的人工／Agent
@@ -413,19 +423,24 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   （`planProtocolThroughShell` / `protocolStateThroughShell` /
   `recordProtocolRunThroughShell`）与适配器 `protocolBinding(taskId)` 取视图，
   Host 不可用时回落内存投影（内存投影标记 `simulated`，从不声称已有生成版本）。
-- **盒子状态**：盒子 1／2／3／4／5／8 已覆盖（纯规则 + Host + 面板 + 单测，
-  2 的真实执行除外）；盒子 6、7 的规则与 Host 状态已覆盖并有单测，但真实
-  `child_process` 生成与真实仓库编译未运行（见残留），因此 #14 保持 OPEN。
+- **盒子状态**：逐盒子判定见 issue 评论矩阵。盒子 8 已覆盖（纯规则 + 单测，
+  真实 Windows 平台安装仍未跑）；盒子 1／2／3／4／5／6／7 的规则、Host 状态与
+  只读面板已覆盖并有单测，但真实生成、真实仓库编译、自动解析读取、真实双任务
+  并行、Host↔renderer 生产接线与真实 GUI smoke 未完成（见残留），因此 #14 保持
+  OPEN。
 - **残留（未测/未接线）**：真实 `make generate` / 后处理步骤未执行（没有进程
   启动器，本机也没有试点仓库，`steps` 只有规划形态与纯规则单测）；真实
   `GOWORK` 编译、真实 `pnpm proto:link-local` 运行与仓库脚本自己写的标记未验证
   （标记语义与复核规则有单测，仓库产物在其控制之外）；解析路径目前由调用方上报
   （`resolutions`），没有自动读取 `go list -m` / `node_modules` 真实解析的生产
-  实现；「另一个任务的依赖不变」只有纯规则与两个 Host 实例的单测，没有真实双任务
-  并行核查；`task/planProtocol` / `task/recordProtocolRun` 还没有 renderer 的生产
-  调用方（面板是只读展示，`stores/host.ts` 仍把内存适配器固定为默认，与 #9/#10/#12
-  记录的同一接线缺口）；Electron GUI smoke 未运行；真实生成应当同时声明任务写操作权
-  并留下运行记录（当前只记录观测，与 `recordRun` 没有生产调用方一致）。
+  实现；`protocolArtifact.version` 没有生产写入方，生产路径里运行实例的
+  `loadedVersion` 恒为 `null`（按失败关闭报「未知版本」），因此盒子 6 的
+  「重启后已加载新协议」只能由调用方上报的输入到达；「另一个任务的依赖不变」只有
+  纯规则与两个 Host 实例的单测，没有真实双任务并行核查；`task/planProtocol` /
+  `task/recordProtocolRun` 还没有 renderer 的生产调用方（面板是只读展示，
+  `stores/host.ts` 仍把内存适配器固定为默认，与 #9/#10/#12 记录的同一接线缺口）；
+  Electron GUI smoke 未运行；真实生成应当同时声明任务写操作权并留下运行记录
+  （当前只记录观测，与 `recordRun` 没有生产调用方一致）。
 
 ## 文件浏览、差异与内置终端（[PiDock 10] #15）
 
