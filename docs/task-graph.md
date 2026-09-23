@@ -345,3 +345,84 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   3. 双任务并行对照（盒子 7、盒子 8）与「远程前提阻塞时分别报告」（盒子 9）需要
      真实环境，本轮未运行；不能以单测或直接 GraphQL 调用代替。
   4. Electron GUI smoke 未运行；真实 SaaS 页面、动态菜单与详情弹层均未实际操作。
+
+## 任务内协议生成与消费者绑定（[PiDock 08] #14）
+
+日期：2026-09-22（Asia/Shanghai）。范围：协议仓库／生成步骤／消费者绑定的
+纯规则 + Host 状态 + 任务视图面板；真实生成与真实仓库编译仍为残留。
+
+- **三者分开（盒子 1）**：`main/protocol-binding.ts` 里协议仓库
+  （`ProtocolRepoRef`：`repoDir` + Go/TS 生成目录）、生成步骤
+  （`GenerationStep`，`generate` / `postprocess`）与消费者绑定
+  （`ProtocolConsumer`）是不同概念。`validateProtocolPlan` 拒绝把协议仓库
+  （或其生成目录）当作自己的消费者、拒绝重复的消费者标识与重复的消费者仓库
+  （同一仓库只能绑定一次，避免合并依赖选择），TS 消费者必须给出仓库自己的链接
+  步骤与目标应用。界面（任务视图「协议」面板）显示协议仓库、生成步骤、准备状态
+  与实际生成版本。
+- **准备状态各自独立**：`buildPrepareState` 把试点核对报告要求的六个状态分开
+  ——代码就绪、工具链就绪、依赖已安装、生成物已更新、本地绑定有效、运行环境可达；
+  「已生成」不蕴含「已绑定」或「可达」，运行环境可达性来自 #10 的拓扑判定而不是
+  这里推断。
+- **未改协议保留发布依赖（盒子 2）**：`planGeneration({mode:"release"})` 不产生
+  任何步骤、`keepsReleaseDependencies: true`，并回传每个消费者的发布依赖
+  （`releaseResolution`），界面显示为「发布依赖：github.com/shipber/apis v0.0.69」
+  这类具体值。`mode:"local"` 则要求至少一个生成步骤**和**仓库自己的后处理步骤
+  （试点核对：只跑 `buf generate` 不是仓库契约），且每个步骤的工作目录必须在本
+  任务的协议仓库内，`validateGenerationStep` 沿用服务启动的同一规则（明确程序 +
+  参数，拒绝内联环境赋值与 shell 连接符）。
+- **Go：任务专属 workspace（盒子 3）**：`planGoWorkspace` 为每个 Go 消费者生成
+  一份 `go.work`（`<taskDir>/protocol/go-work/<consumerId>/go.work`，`GOWORK`
+  指向它），`use` 只有两条：该消费者模块 + 本任务生成的 Go 模块。
+  `excludedConsumers` 明确列出**没有**并入的其他 Go 服务（不合并依赖版本选择），
+  `releaseManifestsUntouched` 列出消费者的 `go.mod`/`go.sum`（不改写发布配置）。
+- **TS：复用受管链接（盒子 4）**：`planTsBinding` 复用仓库自己的
+  `proto:link-local`，`--app` 指定单个消费者（不一次链接全部）；链接路径与标记
+  都在当前任务内，标记为
+  `pidock-local-protocol:<taskId>:<consumerId>:<tsGenDir>`，因此别的任务或别的
+  消费者的标记不会被误认。`checkTsBinding` 在重新安装后复核：标记缺失 →
+  `marker-missing`（附恢复命令）、标记属于别处或链接解析到任务外 →
+  `resolved-elsewhere`，都按失败处理并要求重建绑定。
+- **编译前确认解析路径（盒子 5）**：`verifyResolvedPath` 按模式判定——发布模式下
+  消费者仍解析进本任务产物要报 `resolved-elsewhere`（不能假装已切回发布依赖）；
+  本地模式下必须落在本任务生成目录内，且调用方报告的产物版本与已生成版本不一致
+  时报 `version-mismatch`。`assessLocalSwitch` 在把不同发布版本切到同一本地产物时
+  停止并解释：产物版本变过而消费者没有重新核验 → `artifact-version-mismatch`；
+  同一任务里不同发布依赖的消费者（跨语言版本号不可直接比较）必须逐个确认
+  （`acknowledged`）才算通过。Host 只在解析真的通过且无阻塞时把一个消费者标记为
+  「已绑定」，否则保持未绑定并带上诊断。
+- **协议再变（盒子 6）**：`assessConsumerStaleness` 依次给出
+  `needs-regenerate` → `needs-binding` → `needs-compile` → `needs-restart`，并带回
+  该实例实际加载的版本；运行实例加载的不是当前产物时报告「不算已加载新协议，请
+  重启后再验证」。#10 的 `RunRecord` 增加可选 `protocolArtifact.version`，
+  Host 由 `serviceTopology.runs()` 映射到消费者（`serviceId` 对齐），因此
+  「旧运行实例不算已加载新协议」有真实的判断入口。
+- **切回发布依赖（盒子 7）**：`mode:"release"` 后每个消费者的绑定回到
+  `{kind:"release", dependency}`，状态为就绪；计划里的所有 workspace / 链接路径
+  都必须在本任务目录内（Host 构造与 `setPlan` 双重校验），另一个任务由自己的
+  `TaskProtocolBinding` 持有状态，互不影响。
+- **生成工具链（盒子 8）**：`checkGenerationToolchain` 按平台给出逐工具结果：
+  `win32-arm64` 报 `unsupported-platform`（试点仓库的插件安装脚本明确不支持），
+  未探测的平台报 `unverified`（不是「就绪」），调用方探测过的才报 `missing` /
+  `ready`，并且无论平台都带 `desktopLaunchImpliesGeneration: false`——桌面可启动
+  不能推断生成支持。
+- **IPC**：`task/planProtocol`（替换计划）、`task/protocolState`（读）、
+  `task/recordProtocolRun`（记录真实观测：生成版本、工具链探测、依赖安装、
+  各消费者解析路径、运行环境可达性）。两个写操作走与 #7/#10 相同的人工／Agent
+  判定（无 `sessionId` 必须带 main 盖的 `shell-ui` 来源证明；有会话则打开该会话），
+  计划与结果都记录 actor。renderer 经 `shellBridge`
+  （`planProtocolThroughShell` / `protocolStateThroughShell` /
+  `recordProtocolRunThroughShell`）与适配器 `protocolBinding(taskId)` 取视图，
+  Host 不可用时回落内存投影（内存投影标记 `simulated`，从不声称已有生成版本）。
+- **盒子状态**：盒子 1／2／3／4／5／8 已覆盖（纯规则 + Host + 面板 + 单测，
+  2 的真实执行除外）；盒子 6、7 的规则与 Host 状态已覆盖并有单测，但真实
+  `child_process` 生成与真实仓库编译未运行（见残留），因此 #14 保持 OPEN。
+- **残留（未测/未接线）**：真实 `make generate` / 后处理步骤未执行（没有进程
+  启动器，本机也没有试点仓库，`steps` 只有规划形态与纯规则单测）；真实
+  `GOWORK` 编译、真实 `pnpm proto:link-local` 运行与仓库脚本自己写的标记未验证
+  （标记语义与复核规则有单测，仓库产物在其控制之外）；解析路径目前由调用方上报
+  （`resolutions`），没有自动读取 `go list -m` / `node_modules` 真实解析的生产
+  实现；「另一个任务的依赖不变」只有纯规则与两个 Host 实例的单测，没有真实双任务
+  并行核查；`task/planProtocol` / `task/recordProtocolRun` 还没有 renderer 的生产
+  调用方（面板是只读展示，`stores/host.ts` 仍把内存适配器固定为默认，与 #9/#10/#12
+  记录的同一接线缺口）；Electron GUI smoke 未运行；真实生成应当同时声明任务写操作权
+  并留下运行记录（当前只记录观测，与 `recordRun` 没有生产调用方一致）。
