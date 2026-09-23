@@ -75,6 +75,10 @@ describe("task browser panel", () => {
       epoch: 3,
       mode: "box",
     });
+    // No fabricated element locator: the page-side picker supplies one when
+    // it actually produced one (GUI residual), otherwise the Agent locates
+    // the described area itself.
+    expect(marker["locator"]).toBeUndefined();
     expect(await screen.findByText(/总额与对账单不一致 · http:\/\/localhost:5173\/checkout/)).toBeInTheDocument();
   });
 
