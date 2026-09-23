@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { renderApp } from "./helpers";
@@ -95,31 +95,33 @@ describe("composer references, skills and commands", () => {
     renderApp("/projects/atlas/tasks/release?session=main");
     await screen.findByRole("heading", { name: "发布前检查" });
     // Seed a draft reference whose file no longer exists in the task.
-    useDraftStore.setState({
-      drafts: {
-        [sessionKeyOf("release", "main")]: {
-          text: "继续处理",
-          references: [
-            {
-              id: "ref-moved",
-              kind: "file",
-              label: "front-monorepo/src/gone.ts",
-              detail: "front-monorepo · 任务代码引用",
-              taskId: "release",
-              sourceId: "front-monorepo",
-              sourceKind: "worktree",
-              relativePath: "src/gone.ts",
-            },
-            {
-              id: "ref-attach",
-              kind: "attachment",
-              label: "shot.png",
-              detail: "图片附件 · 仅 shot.png 本身",
-              previewUrl: "blob:demo",
-            },
-          ],
+    await act(async () => {
+      useDraftStore.setState({
+        drafts: {
+          [sessionKeyOf("release", "main")]: {
+            text: "继续处理",
+            references: [
+              {
+                id: "ref-moved",
+                kind: "file",
+                label: "front-monorepo/src/gone.ts",
+                detail: "front-monorepo · 任务代码引用",
+                taskId: "release",
+                sourceId: "front-monorepo",
+                sourceKind: "worktree",
+                relativePath: "src/gone.ts",
+              },
+              {
+                id: "ref-attach",
+                kind: "attachment",
+                label: "shot.png",
+                detail: "图片附件 · 仅 shot.png 本身",
+                previewUrl: "blob:demo",
+              },
+            ],
+          },
         },
-      },
+      });
     });
     await waitFor(() => expect(screen.getByTestId("composer-reference-ref-moved")).toBeInTheDocument());
     expect(screen.getByText(/失效 · front-monorepo\/src\/gone\.ts/)).toBeInTheDocument();
@@ -132,15 +134,17 @@ describe("composer references, skills and commands", () => {
     const user = userEvent.setup();
     renderApp("/projects/atlas/tasks/release?session=main");
     await screen.findByRole("heading", { name: "发布前检查" });
-    useDraftStore.setState({
-      drafts: {
-        [sessionKeyOf("release", "main")]: {
-          text: "",
-          references: [
-            { id: "ref-scope", kind: "file", label: "front-monorepo/src/checkout/api.ts", detail: "front-monorepo · 任务代码引用", taskId: "release", sourceId: "front-monorepo", sourceKind: "worktree", relativePath: "src/checkout/api.ts", version: seededWorktreeCommit },
-          ],
+    await act(async () => {
+      useDraftStore.setState({
+        drafts: {
+          [sessionKeyOf("release", "main")]: {
+            text: "",
+            references: [
+              { id: "ref-scope", kind: "file", label: "front-monorepo/src/checkout/api.ts", detail: "front-monorepo · 任务代码引用", taskId: "release", sourceId: "front-monorepo", sourceKind: "worktree", relativePath: "src/checkout/api.ts", version: seededWorktreeCommit },
+            ],
+          },
         },
-      },
+      });
     });
     await waitFor(() => expect(screen.getByTestId("composer-reference-ref-scope")).toBeInTheDocument());
     await user.click(screen.getByRole("button", { name: "查看范围 front-monorepo/src/checkout/api.ts" }));

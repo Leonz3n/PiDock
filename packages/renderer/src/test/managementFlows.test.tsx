@@ -1,7 +1,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useHostStore } from "../stores/host";
-import { renderApp } from "./helpers";
+import { renderApp, actStore } from "./helpers";
 
 describe("project management", () => {
   it("creates a project, edits it, and blocks deleting a project that still has tasks", async () => {
@@ -130,8 +130,8 @@ describe("capability sources, versions and MCP ([PiDock 16] #18)", () => {
     renderApp("/capabilities");
     await screen.findByRole("heading", { name: "能力管理" });
     // Installing/disabling waits for the safe boundary the seeded approval holds.
-    await useHostStore.getState().stopRun("release", "deploy");
-    await useHostStore.getState().refresh();
+    await actStore(() => useHostStore.getState().stopRun("release", "deploy"));
+    await actStore(() => useHostStore.getState().refresh());
 
     const updatable = screen.getByText("@pi/tools-git").closest("section")!;
     expect(within(updatable).getByText("有可用更新")).toBeInTheDocument();
@@ -145,9 +145,9 @@ describe("capability sources, versions and MCP ([PiDock 16] #18)", () => {
     const user = userEvent.setup();
     renderApp("/capabilities");
     await screen.findByRole("heading", { name: "能力管理" });
-    await useHostStore.getState().stopRun("release", "deploy");
-    await useHostStore.getState().setCapabilityEnabled("cap-2", false);
-    await useHostStore.getState().refresh();
+    await actStore(() => useHostStore.getState().stopRun("release", "deploy"));
+    await actStore(() => useHostStore.getState().setCapabilityEnabled("cap-2", false));
+    await actStore(() => useHostStore.getState().refresh());
 
     await user.click(screen.getByRole("tab", { name: "MCP Servers" }));
     await user.click(screen.getByRole("button", { name: "添加 MCP Server" }));
@@ -167,8 +167,8 @@ describe("capability sources, versions and MCP ([PiDock 16] #18)", () => {
     await screen.findByRole("heading", { name: "能力管理" });
     // Installing writes a new version, so it waits for the same safe boundary
     // the other capability changes do; free the seeded approval first.
-    await useHostStore.getState().stopRun("release", "deploy");
-    await useHostStore.getState().refresh();
+    await actStore(() => useHostStore.getState().stopRun("release", "deploy"));
+    await actStore(() => useHostStore.getState().refresh());
 
     const skill = screen.getAllByText("code-review")[0]!.closest("section")!;
     expect(within(skill).queryByRole("button", { name: /安装|更新到/ })).toBeNull();
@@ -260,8 +260,8 @@ describe("capability sources, versions and MCP ([PiDock 16] #18)", () => {
     expect(within(card).getByText(/将在当前回合结束后生效/)).toBeInTheDocument();
     expect(within(card).getByText("已启用")).toBeInTheDocument();
 
-    await useHostStore.getState().stopRun("release", "deploy");
-    await useHostStore.getState().refresh();
+    await actStore(() => useHostStore.getState().stopRun("release", "deploy"));
+    await actStore(() => useHostStore.getState().refresh());
     await waitFor(() => expect(within(card).getByText("已停用")).toBeInTheDocument());
   });
 });

@@ -1,0 +1,130 @@
+{
+  "prototype-A": {
+    "url": "http://127.0.0.1:4319/?variant=A",
+    "sidebarText": "π | PiDock | PREVIEW | A | Adber | 微服务开发工作台 | 项目总览 | 环境与服务 | Token 用量 | 进行中的任务 | 普通 | 对账单详情 · 本地联调 | 4 仓库 · 测试环境 | 刚刚 | 普通 | 运单地址校验 | 3 仓库 · 测试环境 | 12 分钟前 | 定时 | 每周仓库改动摘要 | 周日 18:00 | 12 分钟前 | 定时 | 站会主题内容 | 明天 09:15 | 12 分钟前 | 定时 | 每周代码贡献度 | 已暂停 | 12 分钟前 | 已归档 | 需要处理 3 | 定时任务 | 能力管理 | 远程访问 | 本机设置 | 模型与 Provider | LZ | Leonz3n | 本机工作区",
+    "breadcrumbText": "工作区 / / / Adber / / / 任务工作区 / 界面草稿 · 所有操作为模拟",
+    "summaryText": "← | 布局探索 | A · 对话优先 | B · 运行优先 | C · 验证优先 | → | invoice-detail · 4 服务 · Agent | 导览",
+    "groups": [],
+    "switcherPresent": true,
+    "pageErrors": [
+      "console: Failed to load resource: the server responded with a status of 404 (File not found)"
+    ]
+  },
+  "renderer-shell-attention": {
+    "url": "http://127.0.0.1:4335/attention",
+    "sidebarText": "π | PiDock | A | Atlas Web | 微服务开发工作台 | 项目总览 | 环境与服务 | Token 用量 | 进行中的任务 | 普通 | 发布前检查 | 4 仓库 · 测试环境 | 1 天前 | 普通 | 结账页无障碍 | 1 仓库 · 测试环境 | 1 天前 | 普通 | 设计资料整理 | 普通目录 · 共享文件 | 1 天前 | 已归档 | 需要处理 | 3 | 定时任务 | 能力管理 | 远程访问 | 本机设置 | 模型与 Provider | 本 | ~/PiDockTasks | 本机工作区",
+    "breadcrumbText": "工作区 / / / Atlas Web / / / 需要处理 / 内存模拟数据 · 未连接 Host",
+    "summaryText": "Atlas Web",
+    "groups": [
+      {
+        "group": "workspace",
+        "items": [
+          "项目总览",
+          "环境与服务",
+          "Token 用量"
+        ]
+      },
+      {
+        "group": "tasks",
+        "items": [
+          "",
+          "普通发布前检查4 仓库 · 测试环境1 天前",
+          "普通结账页无障碍1 仓库 · 测试环境1 天前",
+          "普通设计资料整理普通目录 · 共享文件1 天前",
+          "已归档"
+        ]
+      },
+      {
+        "group": "system",
+        "items": [
+          "需要处理3",
+          "定时任务",
+          "能力管理",
+          "远程访问",
+          "本机设置",
+          "模型与 Provider"
+        ]
+      }
+    ],
+    "switcherPresent": false,
+    "pageErrors": []
+  },
+  "renderer-shell-task": {
+    "url": "http://127.0.0.1:4335/projects/atlas/tasks/release?session=main",
+    "sidebarText": "π | PiDock | A | Atlas Web | 微服务开发工作台 | 项目总览 | 环境与服务 | Token 用量 | 进行中的任务 | 普通 | 发布前检查 | 4 仓库 · 测试环境 | 1 天前 | 普通 | 结账页无障碍 | 1 仓库 · 测试环境 | 1 天前 | 普通 | 设计资料整理 | 普通目录 · 共享文件 | 1 天前 | 已归档 | 需要处理 | 3 | 定时任务 | 能力管理 | 远程访问 | 本机设置 | 模型与 Provider | 本 | ~/PiDockTasks | 本机工作区",
+    "breadcrumbText": "工作区 / / / Atlas Web / / / 发布前检查 / 内存模拟数据 · 未连接 Host",
+    "summaryText": "发布前检查 | · | 4 服务 | · | Agent 控制中",
+    "groups": [
+      {
+        "group": "workspace",
+        "items": [
+          "项目总览",
+          "环境与服务",
+          "Token 用量"
+        ]
+      },
+      {
+        "group": "tasks",
+        "items": [
+          "",
+          "普通发布前检查4 仓库 · 测试环境1 天前",
+          "普通结账页无障碍1 仓库 · 测试环境1 天前",
+          "普通设计资料整理普通目录 · 共享文件1 天前",
+          "已归档"
+        ]
+      },
+      {
+        "group": "system",
+        "items": [
+          "需要处理3",
+          "定时任务",
+          "能力管理",
+          "远程访问",
+          "本机设置",
+          "模型与 Provider"
+        ]
+      }
+    ],
+    "switcherPresent": false,
+    "pageErrors": []
+  },
+  "renderer-shell-env": {
+    "url": "http://127.0.0.1:4335/env",
+    "sidebarText": "π | PiDock | A | Atlas Web | 微服务开发工作台 | 项目总览 | 环境与服务 | Token 用量 | 进行中的任务 | 普通 | 发布前检查 | 4 仓库 · 测试环境 | 1 天前 | 普通 | 结账页无障碍 | 1 仓库 · 测试环境 | 1 天前 | 普通 | 设计资料整理 | 普通目录 · 共享文件 | 1 天前 | 已归档 | 需要处理 | 3 | 定时任务 | 能力管理 | 远程访问 | 本机设置 | 模型与 Provider | 本 | ~/PiDockTasks | 本机工作区",
+    "breadcrumbText": "工作区 / / / Atlas Web / / / 环境与服务 / 内存模拟数据 · 未连接 Host",
+    "summaryText": "Atlas Web",
+    "groups": [
+      {
+        "group": "workspace",
+        "items": [
+          "项目总览",
+          "环境与服务",
+          "Token 用量"
+        ]
+      },
+      {
+        "group": "tasks",
+        "items": [
+          "",
+          "普通发布前检查4 仓库 · 测试环境1 天前",
+          "普通结账页无障碍1 仓库 · 测试环境1 天前",
+          "普通设计资料整理普通目录 · 共享文件1 天前",
+          "已归档"
+        ]
+      },
+      {
+        "group": "system",
+        "items": [
+          "需要处理3",
+          "定时任务",
+          "能力管理",
+          "远程访问",
+          "本机设置",
+          "模型与 Provider"
+        ]
+      }
+    ],
+    "switcherPresent": false,
+    "pageErrors": []
+  }
+}

@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { useHostStore } from "../stores/host";
 import { useUiStore } from "../stores/ui";
-import { renderApp } from "./helpers";
+import { renderApp, actStore } from "./helpers";
 
 /**
  * [PiDock 17] (#19 box 5) 需要处理 page: the list is split into 待处理 and
@@ -15,7 +15,7 @@ import { renderApp } from "./helpers";
 async function seedAttentionRead(adapterWork: () => Promise<void>) {
   renderApp("/attention");
   await adapterWork();
-  await useHostStore.getState().refresh();
+  await actStore(() => useHostStore.getState().refresh());
 }
 
 /** The attention list row whose detail is `text` (the session nav shows the same words). */
@@ -32,7 +32,7 @@ describe("attention page", () => {
     const user = userEvent.setup();
     await seedAttentionRead(async () => {
       // A settled turn produces a real 完成未读 item in the memory projection.
-      await useHostStore.getState().adapter.sendMessage("latency", "main", "检查延迟", []);
+      await actStore(() => useHostStore.getState().adapter.sendMessage("latency", "main", "检查延迟", []));
     });
 
     expect(await screen.findByRole("heading", { name: "待处理" })).toBeInTheDocument();
@@ -49,7 +49,7 @@ describe("attention page", () => {
 
     // A 待确认 item is not cleared by reading: it must be handled.
     renderApp("/attention");
-    await useHostStore.getState().refresh();
+    await actStore(() => useHostStore.getState().refresh());
     await user.click(within(panelOf(approvalItem?.detail as string)).getByRole("button", { name: "定位会话" }));
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(useHostStore.getState().attention.some((item) => item.id === approvalItem?.id)).toBe(true);

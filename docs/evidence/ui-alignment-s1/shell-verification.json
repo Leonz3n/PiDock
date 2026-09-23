@@ -1,0 +1,147 @@
+{
+  "prototypeSwitcher": {
+    "switcher": {
+      "backgroundColor": "rgb(41, 49, 66)",
+      "borderColor": "rgb(59, 70, 92)",
+      "color": "rgb(236, 238, 243)",
+      "borderRadius": "10px",
+      "padding": "6px 10px",
+      "gap": "8px",
+      "boxShadow": "rgba(21, 26, 37, 0.133) 0px 4px 15px 0px",
+      "fontSize": "10px",
+      "bottom": "10px"
+    },
+    "state": {
+      "color": "rgb(181, 191, 212)"
+    },
+    "pageErrors": []
+  },
+  "rendererTask": {
+    "navItems": [
+      {
+        "text": "项目总览",
+        "title": "项目总览",
+        "ariaLabel": null
+      },
+      {
+        "text": "环境与服务",
+        "title": "环境与服务",
+        "ariaLabel": null
+      },
+      {
+        "text": "Token 用量",
+        "title": "Token 用量",
+        "ariaLabel": null
+      },
+      {
+        "text": "",
+        "title": "新建任务",
+        "ariaLabel": "在当前工作区新建任务"
+      },
+      {
+        "text": "普通发布前检查4 仓库 · 测试环境1 天前",
+        "title": null,
+        "ariaLabel": null
+      },
+      {
+        "text": "普通结账页无障碍1 仓库 · 测试环境1 天前",
+        "title": null,
+        "ariaLabel": null
+      },
+      {
+        "text": "普通设计资料整理普通目录 · 共享文件1 天前",
+        "title": null,
+        "ariaLabel": null
+      },
+      {
+        "text": "已归档",
+        "title": "已归档",
+        "ariaLabel": null
+      },
+      {
+        "text": "需要处理3",
+        "title": "需要处理",
+        "ariaLabel": null
+      },
+      {
+        "text": "定时任务",
+        "title": "定时任务",
+        "ariaLabel": null
+      },
+      {
+        "text": "能力管理",
+        "title": "能力管理",
+        "ariaLabel": null
+      },
+      {
+        "text": "远程访问",
+        "title": "远程访问",
+        "ariaLabel": null
+      },
+      {
+        "text": "本机设置",
+        "title": "本机设置",
+        "ariaLabel": null
+      },
+      {
+        "text": "模型与 Provider",
+        "title": "模型与 Provider",
+        "ariaLabel": null
+      }
+    ],
+    "cardDots": [
+      {
+        "task": "release",
+        "running": "true",
+        "accent": "h-1.5 w-1.5 shrink-0 rounded-full bg-[#425a93] shadow-[0_0_0_3px_#425a9312]"
+      },
+      {
+        "task": "checkout",
+        "running": "false",
+        "accent": "h-1.5 w-1.5 shrink-0 rounded-full bg-[#9aa4ab]"
+      },
+      {
+        "task": "design-docs",
+        "running": "false",
+        "accent": "h-1.5 w-1.5 shrink-0 rounded-full bg-[#9aa4ab]"
+      }
+    ],
+    "runningDotStyle": {
+      "backgroundColor": "rgb(66, 90, 147)",
+      "boxShadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(66, 90, 147, 0.07) 0px 0px 0px 3px",
+      "width": "6px",
+      "height": "6px"
+    },
+    "cardButtonsInsideCard": [
+      0,
+      0,
+      0
+    ],
+    "summaryStyle": {
+      "backgroundColor": "rgb(41, 49, 66)",
+      "borderColor": "rgb(59, 70, 92)",
+      "color": "rgb(181, 191, 212)",
+      "borderRadius": "10px",
+      "padding": "6px 10px",
+      "boxShadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(21, 26, 37, 0.133) 0px 4px 15px 0px",
+      "fontSize": "10px",
+      "bottom": "10px"
+    },
+    "summaryText": "发布前检查 | · | 4 服务 | · | Agent 控制中",
+    "switcherPresent": false,
+    "tabbarPresent": false,
+    "keyboard": {
+      "ContextMenuFocus": "release",
+      "ContextMenu": {
+        "dialogLabel": "重命名任务",
+        "dialogText": "重命名任务 | 关闭 | 名称 | 重命名不影响任务工作区目录、分支与工作副本。 | 保存"
+      },
+      "Shift+F10Focus": "release",
+      "Shift+F10": {
+        "dialogLabel": null,
+        "dialogText": ""
+      }
+    },
+    "pageErrors": []
+  }
+}

@@ -12,10 +12,11 @@ import { taskCardActivity, taskCardMeta, runningServiceCount } from "../data/she
 import type { Task, Workspace } from "../data/types";
 import { Icon, type IconName } from "./Icon";
 import { useHostStore } from "../stores/host";
-import { useNavigationStore, type Route } from "../stores/navigation";
+import { ROUTE_LABELS, useNavigationStore, type Route } from "../stores/navigation";
 import { useUiStore } from "../stores/ui";
 
-type NavItem = { label: string; route: Route; icon: IconName };
+/** Sidebar items carry the route only: the wording stays in `ROUTE_LABELS`. */
+type NavItem = { route: Route; icon: IconName };
 
 const NAV_ITEM_CLASS = "flex w-full items-center gap-[10px] rounded-[7px] px-[11px] py-[9px] text-left text-[12px]";
 
@@ -35,9 +36,9 @@ export function ShellSidebar() {
   const tasks = (workspace?.tasks ?? []).filter((task) => task.projectId === activeProjectId && !task.archived);
 
   const workspaceViews: NavItem[] = [
-    { label: "项目总览", route: { view: "project", projectId: activeProjectId ?? "" }, icon: "grid" },
-    { label: "环境与服务", route: { view: "env" }, icon: "settings" },
-    { label: "Token 用量", route: { view: "usage" }, icon: "chart" },
+    { route: { view: "project", projectId: activeProjectId ?? "" }, icon: "grid" },
+    { route: { view: "env" }, icon: "settings" },
+    { route: { view: "usage" }, icon: "chart" },
   ];
 
   return (
@@ -76,7 +77,7 @@ export function ShellSidebar() {
         <div data-nav-group="workspace" role="group" aria-label="工作区" className="flex flex-col">
           {workspaceViews.map((item) => (
             <SidebarNavButton
-              key={item.label}
+              key={item.route.view}
               item={item}
               active={route.view === item.route.view}
               // 项目总览 needs a selected workspace; without one there is no page to open.
@@ -120,7 +121,7 @@ export function ShellSidebar() {
             ))}
           </div>
           <SidebarNavButton
-            item={{ label: "已归档", route: { view: "archive" }, icon: "archive" }}
+            item={{ route: { view: "archive" }, icon: "archive" }}
             active={route.view === "archive"}
             onSelect={() => navigate({ view: "archive" })}
           />
@@ -128,33 +129,33 @@ export function ShellSidebar() {
 
         <div data-nav-group="system" className="mt-auto border-t border-line pt-[11px]">
           <SidebarNavButton
-            item={{ label: "需要处理", route: { view: "attention" }, icon: "clock" }}
+            item={{ route: { view: "attention" }, icon: "clock" }}
             active={route.view === "attention"}
             count={attention.length}
             onSelect={() => navigate({ view: "attention" })}
           />
           <SidebarNavButton
-            item={{ label: "定时任务", route: { view: "schedules" }, icon: "clock" }}
+            item={{ route: { view: "schedules" }, icon: "clock" }}
             active={route.view === "schedules"}
             onSelect={() => navigate({ view: "schedules" })}
           />
           <SidebarNavButton
-            item={{ label: "能力管理", route: { view: "capabilities" }, icon: "book" }}
+            item={{ route: { view: "capabilities" }, icon: "book" }}
             active={route.view === "capabilities"}
             onSelect={() => navigate({ view: "capabilities" })}
           />
           <SidebarNavButton
-            item={{ label: "远程访问", route: { view: "remote" }, icon: "globe" }}
+            item={{ route: { view: "remote" }, icon: "globe" }}
             active={route.view === "remote"}
             onSelect={() => navigate({ view: "remote" })}
           />
           <SidebarNavButton
-            item={{ label: "本机设置", route: { view: "settings" }, icon: "folder" }}
+            item={{ route: { view: "settings" }, icon: "folder" }}
             active={route.view === "settings"}
             onSelect={() => navigate({ view: "settings" })}
           />
           <SidebarNavButton
-            item={{ label: "模型与 Provider", route: { view: "providers" }, icon: "key" }}
+            item={{ route: { view: "providers" }, icon: "key" }}
             active={route.view === "providers"}
             onSelect={() => navigate({ view: "providers" })}
           />
@@ -188,10 +189,11 @@ function SidebarNavButton({
   disabled?: boolean;
   onSelect: () => void;
 }) {
+  const label = ROUTE_LABELS[item.route.view];
   return (
     <button
       type="button"
-      title={item.label}
+      title={label}
       aria-current={active ? "page" : undefined}
       disabled={disabled}
       onClick={onSelect}
@@ -200,7 +202,7 @@ function SidebarNavButton({
       }`}
     >
       <Icon name={item.icon} />
-      <span>{item.label}</span>
+      <span>{label}</span>
       {count !== undefined ? (
         <span className="ml-auto rounded-[5px] bg-[#e7eaea] px-1.5 text-[10px]">
           {count}
@@ -242,7 +244,11 @@ function TaskNavCard({
       }`}
     >
       <span className="flex items-center gap-[9px] text-[12px]">
-        <span aria-hidden className={`h-1.5 w-1.5 shrink-0 rounded-full ${running ? "bg-[#425a93]" : "bg-[#9aa4ab]"}`} />
+        {/* Prototype `.dot.live` keeps a 3px halo on the running card. */}
+        <span
+          aria-hidden
+          className={`h-1.5 w-1.5 shrink-0 rounded-full ${running ? "bg-[#425a93] shadow-[0_0_0_3px_#425a9312]" : "bg-[#9aa4ab]"}`}
+        />
         <span
           className={`shrink-0 rounded-[4px] border px-1 text-[8px] leading-4 ${
             task.type === "scheduled" ? "border-[#cfd8f1] bg-soft text-accent" : "border-[#d9dde6] bg-[#f8f9fb] text-[#858e9d]"

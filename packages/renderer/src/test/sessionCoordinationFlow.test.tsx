@@ -1,6 +1,6 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { renderApp } from "./helpers";
+import { renderApp, actStore } from "./helpers";
 import { useHostStore } from "../stores/host";
 import { useWriteLockStore } from "../stores/writeLock";
 
@@ -19,14 +19,14 @@ describe("multi-session write coordination", () => {
 
     // The deploy session starts a side-effecting turn that stops at the
     // confirmation: it keeps the task write right (盒子 2).
-    const started = await useHostStore.getState().sendMessage("release", "deploy", "部署到 staging", []);
+    const started = await actStore(() => useHostStore.getState().sendMessage("release", "deploy", "部署到 staging", []));
     expect(started.state).toBe("approval");
     const bar = await screen.findByTestId("write-coordination");
     await waitFor(() => expect(bar).toHaveTextContent("部署审查 持有写操作权（等待确认）"));
 
     // A second session cannot run while the right is held: it is refused with
     // the holder named and shown as queued, not silently dropped.
-    await expect(useHostStore.getState().sendMessage("release", "main", "先改一处文件", [])).rejects.toThrow(
+    await expect(actStore(() => useHostStore.getState().sendMessage("release", "main", "先改一处文件", []))).rejects.toThrow(
       "同一任务写操作权由会话 deploy 持有",
     );
     await waitFor(() =>
@@ -44,7 +44,7 @@ describe("multi-session write coordination", () => {
     );
     await waitFor(() => expect(screen.queryByTestId("write-coordination")).toBeNull());
     // With the right free the same session writes again (and completes).
-    const result = await useHostStore.getState().sendMessage("release", "main", "现在可以改了", []);
+    const result = await actStore(() => useHostStore.getState().sendMessage("release", "main", "现在可以改了", []));
     expect(result.state).toBe("completed");
   });
 
@@ -54,7 +54,7 @@ describe("multi-session write coordination", () => {
     await screen.findByRole("heading", { name: "发布前检查" });
 
     // The deploy session holds the write right while its confirmation is open.
-    const started = await useHostStore.getState().sendMessage("release", "deploy", "部署到 staging", []);
+    const started = await actStore(() => useHostStore.getState().sendMessage("release", "deploy", "部署到 staging", []));
     expect(started.state).toBe("approval");
 
     // The current session's composer is refused: the toast names the holder

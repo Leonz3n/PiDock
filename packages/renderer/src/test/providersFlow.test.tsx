@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { createMemoryHost } from "../data/memoryHost";
 import { describeProviderAvailability } from "../data/providerState";
 import { useHostStore } from "../stores/host";
-import { renderApp } from "./helpers";
+import { renderApp, actStore } from "./helpers";
 
 /**
  * [PiDock 11] #9 UI flows: provider status/sync, the model popover (search,
@@ -36,30 +36,36 @@ describe("provider page status and sync", () => {
 
     // Empty / failure / unsupported through the fixture connection convention.
     const adapter = useHostStore.getState().adapter;
-    const created = await adapter.saveProvider({
-      name: "空列表网关",
-      protocol: "openai-responses",
-      baseUrl: "https://gw.example.com/empty",
-      enabled: true,
-      models: [{ id: "gpt-5", contextWindow: 8 }],
-    });
-    expect((await adapter.syncProviderModels(created.id)).status).toBe("empty");
-    const failing = await adapter.saveProvider({
-      name: "失败网关",
-      protocol: "openai-responses",
-      baseUrl: "https://gw.example.com/fail",
-      enabled: true,
-      models: [{ id: "gpt-5", contextWindow: 8 }],
-    });
-    expect((await adapter.syncProviderModels(failing.id)).status).toBe("failure");
-    const unsupported = await adapter.saveProvider({
-      name: "无发现端点",
-      protocol: "custom-proto",
-      baseUrl: "https://gw.example.com/v1",
-      enabled: true,
-      models: [{ id: "custom-1", contextWindow: 8 }],
-    });
-    const view = await adapter.syncProviderModels(unsupported.id);
+    const created = await actStore(() =>
+      adapter.saveProvider({
+        name: "空列表网关",
+        protocol: "openai-responses",
+        baseUrl: "https://gw.example.com/empty",
+        enabled: true,
+        models: [{ id: "gpt-5", contextWindow: 8 }],
+      }),
+    );
+    expect((await actStore(() => adapter.syncProviderModels(created.id))).status).toBe("empty");
+    const failing = await actStore(() =>
+      adapter.saveProvider({
+        name: "失败网关",
+        protocol: "openai-responses",
+        baseUrl: "https://gw.example.com/fail",
+        enabled: true,
+        models: [{ id: "gpt-5", contextWindow: 8 }],
+      }),
+    );
+    expect((await actStore(() => adapter.syncProviderModels(failing.id))).status).toBe("failure");
+    const unsupported = await actStore(() =>
+      adapter.saveProvider({
+        name: "无发现端点",
+        protocol: "custom-proto",
+        baseUrl: "https://gw.example.com/v1",
+        enabled: true,
+        models: [{ id: "custom-1", contextWindow: 8 }],
+      }),
+    );
+    const view = await actStore(() => adapter.syncProviderModels(unsupported.id));
     expect(view.status).toBe("unsupported");
     expect(view.message).toContain("未声明模型发现端点");
   });
@@ -79,7 +85,7 @@ describe("provider page status and sync", () => {
     // The session still names the removed provider and the task page reports it.
     const session = await useHostStore.getState().adapter.getSession("release", "main");
     expect(session?.providerId).toBe("provider-anthropic");
-    await useHostStore.getState().refresh();
+    await actStore(() => useHostStore.getState().refresh());
   });
 });
 
@@ -117,22 +123,24 @@ describe("add-form discovery", () => {
 
   it("reports a model removed from its configuration without rewriting history", async () => {
     const adapter = createMemoryHost();
-    await adapter.sendMessage("release", "main", "先留一条历史", []);
+    await actStore(() => adapter.sendMessage("release", "main", "先留一条历史", []));
     const attributed = async () =>
       (await adapter.getSession("release", "main"))?.messages.filter((message) => message.attribution !== undefined) ?? [];
     const before = (await attributed()).at(-1);
     expect(before?.attribution).toEqual({ providerId: "provider-anthropic", model: "Claude Sonnet" });
 
     // The model is dropped from the configuration: the session keeps naming it.
-    await adapter.saveProvider({
-      id: "provider-anthropic",
-      name: "Anthropic 官方",
-      protocol: "anthropic-messages",
-      baseUrl: "https://api.anthropic.com",
-      authRef: "anthropic-key",
-      enabled: true,
-      models: [{ id: "Claude Haiku", contextWindow: 200 }],
-    });
+    await actStore(() =>
+      adapter.saveProvider({
+        id: "provider-anthropic",
+        name: "Anthropic 官方",
+        protocol: "anthropic-messages",
+        baseUrl: "https://api.anthropic.com",
+        authRef: "anthropic-key",
+        enabled: true,
+        models: [{ id: "Claude Haiku", contextWindow: 200 }],
+      }),
+    );
     const session = await adapter.getSession("release", "main");
     expect(session?.providerId).toBe("provider-anthropic");
     expect(session?.model).toBe("Claude Sonnet");
@@ -153,21 +161,23 @@ describe("configuration edits vs the live session", () => {
     // The configuration row is edited while the session is mid-turn; the
     // session keeps the window it started the call with, and the switch gate
     // then reads the new directory value.
-    await adapter.sendMessage("release", "main", "改配置不影响这一次调用", []);
-    await adapter.saveProvider({
-      id: "provider-anthropic",
-      name: "Anthropic 官方",
-      protocol: "anthropic-messages",
-      baseUrl: "https://api.anthropic.com",
-      authRef: "anthropic-key",
-      enabled: true,
-      models: [{ id: "Claude Sonnet", contextWindow: 64 }, { id: "Claude Haiku", contextWindow: 64 }],
-    });
+    await actStore(() => adapter.sendMessage("release", "main", "改配置不影响这一次调用", []));
+    await actStore(() =>
+      adapter.saveProvider({
+        id: "provider-anthropic",
+        name: "Anthropic 官方",
+        protocol: "anthropic-messages",
+        baseUrl: "https://api.anthropic.com",
+        authRef: "anthropic-key",
+        enabled: true,
+        models: [{ id: "Claude Sonnet", contextWindow: 64 }, { id: "Claude Haiku", contextWindow: 64 }],
+      }),
+    );
     const mid = await adapter.getSession("release", "main");
     expect(mid?.contextWindow).toBe(200);
     expect(mid?.model).toBe("Claude Sonnet");
     // Switching now re-reads the edited value for the new call.
-    await adapter.setSessionModel("release", "main", "provider-anthropic", "Claude Haiku");
+    await actStore(() => adapter.setSessionModel("release", "main", "provider-anthropic", "Claude Haiku"));
     expect((await adapter.getSession("release", "main"))?.contextWindow).toBe(64);
   });
 });
@@ -295,10 +305,10 @@ describe("response attribution", () => {
     const adapter = useHostStore.getState().adapter;
 
     // Two turns on two different accounts: each response keeps its own.
-    await adapter.sendMessage("release", "main", "先按当前模型回答", []);
-    await adapter.setSessionModel("release", "main", "provider-local", "本地 Qwen");
-    await adapter.sendMessage("release", "main", "再换一个模型回答", []);
-    await useHostStore.getState().refresh();
+    await actStore(() => adapter.sendMessage("release", "main", "先按当前模型回答", []));
+    await actStore(() => adapter.setSessionModel("release", "main", "provider-local", "本地 Qwen"));
+    await actStore(() => adapter.sendMessage("release", "main", "再换一个模型回答", []));
+    await actStore(() => useHostStore.getState().refresh());
 
     const first = (await adapter.getSession("release", "main"))?.messages.filter((message) => message.role === "agent" && message.attribution !== undefined);
     expect(first?.map((message) => message.attribution)).toEqual([
@@ -309,8 +319,8 @@ describe("response attribution", () => {
     expect(await screen.findByTestId("message-attribution-provider-local")).toHaveTextContent("本地推理 / 本地 Qwen");
 
     // Renaming keeps the original identification; disabling reports unavailable.
-    await adapter.saveProvider({ id: "provider-anthropic", name: "Anthropic 团队账号", protocol: "anthropic-messages", baseUrl: "https://api.anthropic.com", enabled: false, models: [{ id: "Claude Sonnet", contextWindow: 200 }] });
-    await useHostStore.getState().refresh();
+    await actStore(() => adapter.saveProvider({ id: "provider-anthropic", name: "Anthropic 团队账号", protocol: "anthropic-messages", baseUrl: "https://api.anthropic.com", enabled: false, models: [{ id: "Claude Sonnet", contextWindow: 200 }] }));
+    await actStore(() => useHostStore.getState().refresh());
     const renamed = await screen.findByTestId("message-attribution-provider-anthropic");
     expect(renamed).toHaveTextContent("Anthropic 团队账号 / Claude Sonnet");
     expect(renamed).toHaveTextContent("该配置已停用");
@@ -341,7 +351,7 @@ describe("context and reasoning popovers", () => {
     const after = await adapter.getSession("release", "deploy");
     expect(after?.contextUsed).toBe(before?.contextUsed);
     // The pending estimate marker only appears once a compaction actually ran.
-    await adapter.compactSessionContext("release", "main");
+    await actStore(() => adapter.compactSessionContext("release", "main"));
     expect((await adapter.getSession("release", "main"))?.contextSource).toBe("pending");
   });
 
