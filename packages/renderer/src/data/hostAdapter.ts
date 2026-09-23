@@ -28,6 +28,7 @@ import type {
   UsageRecord,
   Workspace,
 } from "./types";
+import type { ServiceTopologyView } from "./serviceTopology";
 
 export type UsageFilter = {
   taskId?: string;
@@ -280,6 +281,14 @@ export interface HostAdapter {
   setServiceRunning(taskId: string, serviceId: string, running: boolean): Promise<void>;
   /** Switch a service's dependency target between the local instance and the remote one. */
   setServiceMode(taskId: string, serviceId: string, mode: ServiceMode): Promise<void>;
+  /**
+   * [PiDock 05] (#10) multi-service topology view for one task: units and
+   * locations, the actual dependency routing, start groups, run records,
+   * locatable failures and shared-resource limits. The shell adapter asks the
+   * Host (`task/planServiceGroup` + `task/serviceRunRecords`) and falls back
+   * to the in-memory projection when the Host cannot answer.
+   */
+  serviceTopology(taskId: string): Promise<ServiceTopologyView>;
   getSchedules(): Promise<Schedule[]>;
   setScheduleEnabled(scheduleId: string, enabled: boolean): Promise<void>;
   runScheduleNow(scheduleId: string): Promise<ScheduledRun>;

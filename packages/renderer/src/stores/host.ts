@@ -39,6 +39,7 @@ import type {
   UsageRecord,
   Workspace,
 } from "../data/types";
+import type { ServiceTopologyView } from "../data/serviceTopology";
 
 type HostState = {
   adapter: HostAdapter;
@@ -76,6 +77,8 @@ type HostState = {
   createSession: (taskId: string) => Promise<Session>;
   setServiceRunning: (taskId: string, serviceId: string, running: boolean) => Promise<void>;
   setServiceMode: (taskId: string, serviceId: string, mode: ServiceMode) => Promise<void>;
+  /** [PiDock 05] (#10) topology view for the runtime panel (Host plan or memory projection). */
+  serviceTopology: (taskId: string) => Promise<ServiceTopologyView>;
   setScheduleEnabled: (scheduleId: string, enabled: boolean) => Promise<void>;
   runScheduleNow: (scheduleId: string) => Promise<ScheduledRun>;
   setCapabilityEnabled: (capabilityId: string, enabled: boolean) => Promise<void>;
@@ -214,6 +217,8 @@ export const useHostStore = create<HostState>((set, get) => ({
     await get().adapter.setServiceMode(taskId, serviceId, mode);
     await get().refresh();
   },
+
+  serviceTopology: async (taskId) => get().adapter.serviceTopology(taskId),
 
   setScheduleEnabled: async (scheduleId, enabled) => {
     await get().adapter.setScheduleEnabled(scheduleId, enabled);

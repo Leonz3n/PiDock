@@ -112,7 +112,7 @@ describe("start groups", () => {
 });
 
 describe("task-view projection", () => {
-  it("routes local endpoints to the task instance and remote ones to the environment", () => {
+  it("routes task-scoped read points to the instance and unbound ones to the shared environment", () => {
     const view = projectServiceTopology(
       task({
         id: "release",
@@ -127,7 +127,11 @@ describe("task-view projection", () => {
             running: true,
             configSource: "共享模板 · testing",
             templateVersion: "v12",
-            resolved: [{ key: "INVOICE_SERVICE_ENDPOINT", value: "http://127.0.0.1:9001", secret: false, source: "任务覆盖" }],
+            resolved: [
+              { key: "API_BASE_URL", value: "https://invoice-service.testing.atlas.example.com", secret: false, source: "仓库默认配置 · .env" },
+              { key: "INVOICE_SERVICE_ENDPOINT", value: "http://127.0.0.1:9001", secret: false, source: "任务覆盖" },
+              { key: "PORT", value: "9001", secret: false, source: "运行时端口绑定 · 本地" },
+            ],
           },
           {
             id: "release-service-6",
@@ -137,7 +141,10 @@ describe("task-view projection", () => {
             running: false,
             configSource: "远程依赖 · 未在本任务启动",
             templateVersion: "v12",
-            resolved: [],
+            resolved: [
+              { key: "API_BASE_URL", value: "https://account-service.testing.atlas.example.com", secret: false, source: "仓库默认配置 · .env" },
+              { key: "PORT", value: "3001", secret: false, source: "运行时端口绑定 · 远程" },
+            ],
           },
         ],
         externalResources: [{ resourceId: "res-queue", name: "invoice-events", kind: "queue" }],
@@ -147,9 +154,36 @@ describe("task-view projection", () => {
     expect(view.routing).toEqual([
       {
         unitId: "invoice-service:invoice-service",
+        key: "API_BASE_URL",
+        value: "https://invoice-service.testing.atlas.example.com",
+        // Never overridden by the task: the read point keeps the shared value.
+        target: { kind: "remote", environment: "testing" },
+      },
+      {
+        unitId: "invoice-service:invoice-service",
         key: "INVOICE_SERVICE_ENDPOINT",
         value: "http://127.0.0.1:9001",
-        target: { kind: "local-instance", address: "release/release-service-3@9001", port: 9001 },
+        target: { kind: "local-instance", serviceId: "release-service-3", address: "release/release-service-3@9001", port: 9001 },
+      },
+      {
+        unitId: "invoice-service:invoice-service",
+        key: "PORT",
+        value: "9001",
+        target: { kind: "local-instance", serviceId: "release-service-3", address: "release/release-service-3@9001", port: 9001 },
+      },
+      {
+        unitId: "task:account-service",
+        key: "API_BASE_URL",
+        value: "https://account-service.testing.atlas.example.com",
+        target: { kind: "remote", environment: "testing" },
+      },
+      // A remote service never routes to a local instance, even for a
+      // runtime binding.
+      {
+        unitId: "task:account-service",
+        key: "PORT",
+        value: "3001",
+        target: { kind: "remote", environment: "testing" },
       },
     ]);
     expect(view.knownLimits).toEqual([

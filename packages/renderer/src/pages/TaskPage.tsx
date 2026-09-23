@@ -18,6 +18,7 @@ import { isDirectoryOnlyTask } from "../data/directories";
 import { approvalStatusLabel, runStateLabel } from "./runState";
 import { sessionKeyOf } from "../data/sessionKey";
 import { describeContextDisplay, describeHistoryAttribution, formatTokens, resolveSessionThinking } from "../data/providerState";
+import type { ServiceTopologyView } from "../data/serviceTopology";
 import { useDraftStore } from "../stores/drafts";
 import { useEventsStore } from "../stores/events";
 import { useHostStore } from "../stores/host";
@@ -43,6 +44,22 @@ export function TaskPage({ task, sessionId }: { task: Task; sessionId: string })
   const [activeDirectoryId, setActiveDirectoryId] = useState("");
   useEffect(() => setActiveDirectoryId(""), [task.id]);
   const activeDirectory = task.directories.find((directory) => directory.id === activeDirectoryId);
+  // [PiDock 05] (#10) topology view for the runtime panel: the adapter's
+  // projection (the Host plan when the shell answers `task/planServiceGroup`).
+  const [serviceTopology, setServiceTopology] = useState<ServiceTopologyView | undefined>(undefined);
+  useEffect(() => {
+    let cancelled = false;
+    void useHostStore
+      .getState()
+      .serviceTopology(task.id)
+      .then((view) => {
+        if (!cancelled) setServiceTopology(view);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [task.id, task.services]);
   const availablePanels = directoryOnly ? (["files", "terminal"] as ToolPanel[]) : TOOL_PANELS;
 
   const subagents = task.subagentsBySession?.[session.id] ?? [];
@@ -138,6 +155,7 @@ export function TaskPage({ task, sessionId }: { task: Task; sessionId: string })
               {panel === "runtime" && !directoryOnly ? (
                 <RuntimePanel
                   task={task}
+                  {...(serviceTopology !== undefined ? { topology: serviceTopology } : {})}
                   readonly={session.permission === "read"}
                   onReadonlyAttempt={() => pushToast("当前是只读会话，请先调整会话权限")}
                   onToggleService={(serviceId, running) => {

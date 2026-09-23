@@ -56,6 +56,7 @@ import type {
   UsageFilter,
 } from "./hostAdapter";
 import { sessionKeyOf } from "./sessionKey";
+import { projectServiceTopology, type ServiceTopologyView } from "./serviceTopology";
 import { isSensitiveKey, nextTemplateVersion } from "./configRows";
 import {
   PROTOCOL_MODEL_FIXTURES,
@@ -1438,6 +1439,20 @@ class MemoryHost implements HostAdapter {
     if (service.runRecord) {
       service.runRecord = { ...service.runRecord, endedAt: new Date().toISOString(), exitReason: "dependency-target-changed" };
     }
+  }
+
+  /**
+   * [PiDock 05] (#10) task-view topology projection (memory mode). Same shape
+   * as the Host plan, so the runtime panel renders identically when the shell
+   * answers `task/planServiceGroup`.
+   */
+  async serviceTopology(taskId: string): Promise<ServiceTopologyView> {
+    const task = this.task(taskId);
+    if (!task) throw new Error("任务不存在");
+    const environment = this.environments.find((item) => item.id === task.environmentId);
+    // Project first: the stored service rows carry no resolved config, so the
+    // routing read points only exist on the projected task.
+    return projectServiceTopology(this.projectTask(task), environment?.name ?? task.environmentId);
   }
 
   async getSchedules() {

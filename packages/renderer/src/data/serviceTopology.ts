@@ -17,6 +17,7 @@
 
 import type {
   ExternalResourceView,
+  ResolvedConfigEntry,
   Service,
   ServiceBuildFreshness,
   ServiceCodeState,
@@ -47,7 +48,9 @@ export interface ServiceRoutingView {
   unitId: string;
   key: string;
   value: string;
-  target: { kind: "local-instance"; address: string; port?: number } | { kind: "remote"; environment: string };
+  target:
+    | { kind: "local-instance"; serviceId: string; address: string; port?: number }
+    | { kind: "remote"; environment: string };
 }
 
 export interface ServiceStartGroupView {
@@ -241,37 +244,52 @@ function componentOrder(
 }
 
 /**
- * Where each consumer variable actually goes (box 1). A local service with a
- * port resolves to its own instance address; a remote service resolves to
- * the shared environment and never to a local address.
+ * Where each consumer variable actually goes (box 1) and what it is read
+ * from. A row the *task* layer supplied (task override / runtime binding) is
+ * the task's own address and routes to this instance; a repo-default or
+ * shared-template read point was never overridden, so it keeps the shared
+ * environment value — the same conclusion as the shell's read-point audit
+ * (`missing-binding`). Nothing here invents a local address.
  */
 export function serviceRouting(task: Task, environment: string): ServiceRoutingView[] {
   const units = serviceUnits(task);
   const routing: ServiceRoutingView[] = [];
   for (const unit of units) {
     const service = task.services.find((candidate) => candidate.id === unit.serviceId);
-    const keys = serviceDependencyKeys(service);
-    for (const key of keys) {
+    if (!service) continue;
+    for (const row of serviceDependencyRows(service)) {
+      const taskScoped = isTaskScopedSource(row.source);
+      const local = unit.location === "local" && taskScoped;
       routing.push({
         unitId: unit.unitId,
-        key,
-        value: unit.location === "local" ? endpointAddress(task.id, unit, service) : environment,
-        target: unit.location === "local" ? { kind: "local-instance", address: instanceAddress(task.id, unit.serviceId, service?.port), ...(service?.port !== undefined ? { port: service.port } : {}) } : { kind: "remote", environment },
+        key: row.key,
+        value: row.value,
+        target: local
+          ? {
+              kind: "local-instance",
+              serviceId: unit.serviceId,
+              address: instanceAddress(task.id, unit.serviceId, service.port),
+              ...(service.port !== undefined ? { port: service.port } : {}),
+            }
+          : { kind: "remote", environment },
       });
     }
   }
   return routing;
 }
 
-function endpointAddress(taskId: string, unit: ServiceUnitView, service: Service | undefined): string {
-  if (service?.port === undefined) return instanceAddress(taskId, unit.serviceId);
-  return `http://127.0.0.1:${service.port}`;
+/**
+ * A row supplied by the task itself: the task override layer or a runtime
+ * binding (`运行时端口绑定 · 本地|远程`). Only these address this task's own
+ * instance; everything else was resolved from the shared/repo layers.
+ */
+function isTaskScopedSource(source: string): boolean {
+  return source.includes("任务覆盖") || source.includes("运行时");
 }
 
-/** Variables the effective config reads for this service, e.g. `INVOICE_SERVICE_ENDPOINT`. */
-function serviceDependencyKeys(service: Service | undefined): string[] {
-  if (!service) return [];
-  return service.resolved.filter((row) => /(_ENDPOINT|_URL|_BASE_URL|_HOST)$/.test(row.key)).map((row) => row.key);
+/** Read points that name an endpoint or the port binding for this service. */
+function serviceDependencyRows(service: Service): ResolvedConfigEntry[] {
+  return service.resolved.filter((row) => /(_ENDPOINT|_URL|_BASE_URL|_HOST)$/.test(row.key) || row.key === "PORT");
 }
 
 /** Locatable failure entries for the task view (box 5), one per failing unit. */

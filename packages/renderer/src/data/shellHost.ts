@@ -18,11 +18,14 @@ import type {
   HostAdapter,
   SendMessageResult,
 } from "./hostAdapter";
+import { instanceAddress, type ServiceTopologyView } from "./serviceTopology";
 import type { Approval, ApprovalStatus, Reference, RunRecord, RunState } from "./types";
 import {
   compactSessionThroughShell,
   controlServiceThroughShell,
   isShellConnected,
+  planServiceGroupThroughShell,
+  serviceRunRecordsThroughShell,
   setSessionModelThroughShell,
   setSessionThinkingThroughShell,
   shellTaskOp,
@@ -403,6 +406,128 @@ export function createShellHostAdapter(fallback: HostAdapter): HostAdapter {
           if (!probe.ok) return (target as HostAdapter).setServiceRunning(taskId, serviceId, running);
           const result = await controlServiceThroughShell({ taskId, serviceId, action: running ? "start" : "stop" });
           if (!result.ok) throw shellResultError(result, "服务启停失败，请重试");
+        };
+      }
+      if (property === "serviceTopology") {
+        return async (taskId: string): Promise<ServiceTopologyView> => {
+          const local = await (target as HostAdapter).serviceTopology(taskId);
+          if (!isShellConnected()) return local;
+          // [PiDock 05] (#10) Prefer the Host's own plan (final ports, task
+          // bindings, start groups, run records). The request is derived from
+          // the visible projection, so a Host that has no plan yet (or a
+          // failing round-trip) keeps the memory view instead of an empty one.
+          const units = local.units.map((unit) => ({
+            unitId: unit.unitId,
+            serviceId: unit.serviceId,
+            name: unit.name,
+            ...(unit.repoDir !== undefined ? { repoDir: unit.repoDir } : {}),
+            location: unit.location,
+            runType: unit.runType,
+          }));
+          const requests = local.units
+            .filter((unit) => unit.location === "local")
+            .map((unit) => {
+              const address = local.routing.find((entry) => entry.unitId === unit.unitId)?.target;
+              const port = address?.kind === "local-instance" ? address.port : undefined;
+              return port !== undefined ? { unitId: unit.unitId, port } : undefined;
+            })
+            .filter((entry): entry is { unitId: string; port: number } => entry !== undefined);
+          const plan = await planServiceGroupThroughShell({
+            taskId,
+            units,
+            dependencies: local.units.flatMap((unit) =>
+              unit.dependencies.map((dependency) => ({ from: unit.unitId, to: dependency.to, kind: dependency.kind })),
+            ),
+            requests,
+            environment: taskId,
+          });
+          const records = await serviceRunRecordsThroughShell(taskId);
+          const payload = plan.ok ? asRecord(plan.payload)["plan"] : undefined;
+          const planRecord = asRecord(payload);
+          const hostRecords = records.ok ? asRecord(records.payload)["records"] : undefined;
+          const merged: typeof local = { ...local };
+          if (plan.ok && typeof payload === "object" && payload !== null) {
+            const assignments = Array.isArray(planRecord["assignments"]) ? planRecord["assignments"] : [];
+            const reallocated = new Map(
+              (Array.isArray(planRecord["reallocated"]) ? planRecord["reallocated"] : [])
+                .map((entry) => asRecord(entry))
+                .map((entry) => [entry["unitId"], entry["after"]] as const),
+            );
+            merged.routing = local.routing.map((entry) => {
+              const moved = reallocated.get(entry.unitId);
+              if (typeof moved !== "number" || entry.target.kind !== "local-instance") return entry;
+              return {
+                ...entry,
+                target: { ...entry.target, port: moved, address: instanceAddress(taskId, entry.target.serviceId, moved) },
+              };
+            });
+            const hostGroups = planRecord["groups"];
+            if (Array.isArray(hostGroups)) {
+              merged.groups = hostGroups.map((group) => {
+                const record = asRecord(group);
+                return {
+                  groupId: String(record["groupId"] ?? ""),
+                  members: Array.isArray(record["members"]) ? record["members"].map(String) : [],
+                  reason: (record["reason"] ?? "single") as "prestart" | "listener-group" | "single",
+                  bidirectional: record["bidirectional"] === true,
+                  verify: Array.isArray(record["verify"]) ? record["verify"].map(String) : [],
+                };
+              });
+            }
+            const hostDiagnostics = planRecord["diagnostics"];
+            if (Array.isArray(hostDiagnostics) && hostDiagnostics.length > 0) {
+              merged.diagnostics = hostDiagnostics.map((entry) => {
+                const record = asRecord(entry);
+                return {
+                  code: String(record["code"] ?? "unknown"),
+                  message: String(record["message"] ?? ""),
+                  ...(typeof record["hint"] === "string" ? { hint: record["hint"] } : {}),
+                };
+              });
+            }
+            const knownLimits = planRecord["knownLimits"];
+            if (Array.isArray(knownLimits)) merged.knownLimits = knownLimits.map(String);
+            // Assignments the Host decided are authoritative even when a unit
+            // has no endpoint variable yet.
+            for (const assignment of assignments.map(asRecord)) {
+              const unitId = assignment["unitId"];
+              const port = assignment["port"];
+              if (typeof unitId !== "string" || typeof port !== "number") continue;
+              merged.routing = merged.routing.map((entry) =>
+                entry.unitId === unitId && entry.target.kind === "local-instance"
+                  ? { ...entry, target: { ...entry.target, port, address: instanceAddress(taskId, entry.target.serviceId, port) } }
+                  : entry,
+              );
+            }
+          }
+          if (Array.isArray(hostRecords)) {
+            const byService = new Map(
+              hostRecords.map(asRecord).map((record) => [record["serviceId"], record] as const),
+            );
+            merged.records = local.records.map((entry) => {
+              const run = byService.get(entry.serviceId);
+              if (!run) return entry;
+              return {
+                ...entry,
+                run: {
+                  runId: String(run["runId"] ?? ""),
+                  templateVersion: String(run["templateVersion"] ?? ""),
+                  codeState: (asRecord(run["codeState"])["kind"] ?? "unknown") as "committed-clean" | "uncommitted" | "unknown",
+                  buildFreshness: (run["buildFreshness"] ?? "unknown") as "fresh" | "stale-build" | "uncommitted-code" | "unknown",
+                  ports: Array.isArray(run["ports"]) ? run["ports"].map(Number) : [],
+                  processIdentity: {
+                    owner: asRecord(run["processIdentity"])["owner"] === "agent" ? "agent" : "human",
+                    pid: Number(asRecord(run["processIdentity"])["pid"] ?? 0),
+                    startedAt: String(asRecord(run["processIdentity"])["startedAt"] ?? ""),
+                  },
+                  logRef: String(run["logRef"] ?? ""),
+                  startedAt: String(run["startedAt"] ?? ""),
+                  verifications: [],
+                },
+              };
+            });
+          }
+          return merged;
         };
       }
       // [PiDock 11] (#9) provider/model/context ops. The Host owns the switch
