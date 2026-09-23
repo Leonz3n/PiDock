@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TaskWorkspaceHost, isPathInsideTask, memoryTaskStore } from "./task-host.js";
@@ -921,6 +921,48 @@ describe("[PiDock 09] real-path write coordination across tasks", () => {
     expect(b.sendMessage("main", "改 B", writeTurn(`${dirB}/src/b.ts`)).state).toBe("done");
     // No shared plain directory involved: the cross-task table stays empty.
     expect(shared.snapshot()).toEqual([]);
+  });
+
+  it("resolves a real symlink with the filesystem probe (no injected resolver)", () => {
+    // The default probe is the production `realpath` path: a real folder, a real
+    // in-task symlink and a real task folder, so link following and the macOS
+    // `/var` → `/private/var` canonicalization are exercised for real.
+    const root = mkdtempSync(join(tmpdir(), "pidock-realpath-"));
+    const sharedDir = join(root, "shared-original");
+    const otherDir = join(root, "elsewhere");
+    mkdirSync(sharedDir);
+    mkdirSync(otherDir);
+    const taskDir = join(root, "task-abcdef12");
+    mkdirSync(taskDir);
+    const linkPath = join(taskDir, "dir-invoiced");
+    // The link first points at the recorded shared directory.
+    symlinkSync(sharedDir, linkPath);
+    const store = memoryTaskStore();
+    store.writeTask(
+      taskDir,
+      linkedRecord({
+        taskId: "task-a",
+        dirId: "task-abcdef12",
+        taskDir,
+        linkName: "dir-invoiced",
+        directoryId: "invoice-docs",
+        sourcePath: sharedDir,
+      }),
+    );
+    const shared = new SharedPathCoordinator();
+    const host = new TaskWorkspaceHost("task-a", taskDir, store, NOW, () => [], shared);
+    // The shared root is reported canonical (symlinked tmpdirs included).
+    expect(host.sharedRoots()[0]?.realPath).toBe(realpathSync(sharedDir));
+    expect(host.pathScopeOf(`${linkPath}/spec.md`)).toMatchObject({ kind: "shared", directoryId: "invoice-docs" });
+    expect(host.pathScopeOf(`${taskDir}/src/local.ts`)).toMatchObject({ kind: "task" });
+    // A turn targeting the link runs (the scripted `execute` double stands in
+    // for the real tool, so this asserts the scope decision, not file bytes).
+    expect(host.sendMessage("main", "改 spec", writeTurn(`${linkPath}/spec.md`)).state).toBe("done");
+    // Retarget the link outside the recorded root: the lexical path is still
+    // inside the task folder, the real path is not, so the write is refused.
+    symlinkSync(otherDir, `${linkPath}-next`);
+    expect(host.pathScopeOf(`${taskDir}/dir-invoiced-next/spec.md`).kind).toBe("outside");
+    expect(() => host.sendMessage("main", "越界", writeTurn(`${taskDir}/dir-invoiced-next/spec.md`))).toThrow("path-out-of-scope");
   });
 
   it("refuses a retargeted link that looks in-task but resolves outside", () => {
