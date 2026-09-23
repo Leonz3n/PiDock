@@ -260,11 +260,12 @@ function scrubUrlCredentials(url: string): string {
 }
 
 /**
- * Scrub page/log text before it leaves the browser surface: known secret
- * values (task/private config) are replaced, credential-ish header and
- * assignment patterns are masked, and the result is bounded.
+ * Mask credential-shaped text without bounding it: known secret values are
+ * replaced, credential-ish header and assignment patterns are masked. Shared
+ * by the bounded browser evidence path and by file previews/diffs, so the two
+ * cannot drift into different masking rules ([PiDock 10] #15).
  */
-export function scrubBrowserText(text: string, secrets: readonly string[] = []): string {
+export function scrubSecretText(text: string, secrets: readonly string[] = []): string {
   let out = scrubUrlCredentials(text);
   for (const secret of secrets) {
     const value = secret.trim();
@@ -278,7 +279,16 @@ export function scrubBrowserText(text: string, secrets: readonly string[] = []):
     "$1••••••••",
   );
   out = out.replace(/\b(Bearer)\s+[A-Za-z0-9._~+/-]+=*/gi, "$1 ••••••••");
-  return truncateText(out, BROWSER_EVIDENCE_LIMITS.maxTextLength);
+  return out;
+}
+
+/**
+ * Scrub page/log text before it leaves the browser surface: known secret
+ * values (task/private config) are replaced, credential-ish header and
+ * assignment patterns are masked, and the result is bounded.
+ */
+export function scrubBrowserText(text: string, secrets: readonly string[] = []): string {
+  return truncateText(scrubSecretText(text, secrets), BROWSER_EVIDENCE_LIMITS.maxTextLength);
 }
 
 export interface ConsoleErrorEvidence {
