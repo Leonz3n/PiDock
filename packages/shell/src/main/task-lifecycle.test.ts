@@ -31,7 +31,7 @@ const live = (pid: number, overrides: Partial<LiveProcessObservation> = {}): Liv
 });
 
 describe("verifyProcessIdentity", () => {
-  it("claims a process by full identity (pid + start time + command + cwd)", () => {
+  it("claims a process whose full recorded identity (pid + start time + command + cwd) still matches", () => {
     const verdict = verifyProcessIdentity({ pid: 4321, startedAt: "2026-09-22T10:00:00+08:00", command: "node server.js", cwd: TASK_DIR }, [live(4321)]);
     expect(verdict.ok).toBe(true);
     if (verdict.ok) expect(verdict.matchedBy).toBe("identity");
