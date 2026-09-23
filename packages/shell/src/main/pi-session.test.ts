@@ -1,8 +1,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  BROWSER_CONTROL_SCOPE,
+  PI_GATED_TOOLS,
   PiSessionChannel,
   resetPiSequencesForTests,
 } from "./pi-session.js";
+import { BROWSER_ACTIONS, BROWSER_TOOL_ACTIONS } from "./browser-rules.js";
 
 const TASK_DIR = "/tmp/pidock-test/task-abcdef12";
 
@@ -51,6 +54,39 @@ describe("PiSessionChannel permission gate", () => {
 
   it("never offers ungated tools", () => {
     expect(channel().gate("shell.exec", `${TASK_DIR}/x`, "v1").verdict).toBe("deny");
+  });
+
+  // [PiDock 06] (#8): every browser tool rides the same gate — read-only
+  // denies all of them, default asks first, auto still validates the task
+  // scope, so no browser tool can reach a page around the gate.
+  it("gates every browser tool through the same tier rules", () => {
+    const gated = PI_GATED_TOOLS.filter((tool) => tool.kind === "browser").map((tool) => tool.name);
+    expect(gated.length).toBeGreaterThan(0);
+    for (const name of Object.keys(BROWSER_TOOL_ACTIONS)) {
+      expect(gated).toContain(name);
+    }
+    const actionTarget = `${TASK_DIR}/browser/page-1`;
+    for (const name of gated) {
+      const readSession = channel();
+      readSession.setPermission("read");
+      expect(readSession.gate(name, actionTarget, "v1").verdict).toBe("deny");
+      expect(channel().gate(name, actionTarget, "v1").verdict).toBe("ask");
+      const autoSession = channel();
+      autoSession.setPermission("auto");
+      expect(autoSession.gate(name, actionTarget, "v1").verdict).toBe("allow");
+      expect(autoSession.gate(name, "/Users/name/elsewhere/page", "v1").verdict).toBe("deny");
+    }
+  });
+
+  it("stamps the browser-control scope only when the Host asks for it", () => {
+    const session = channel();
+    const plain = session.gate("browser.click", `${TASK_DIR}/browser/page-1`, "v1");
+    expect(plain.verdict).toBe("ask");
+    const scoped = session.gate("browser.click", `${TASK_DIR}/browser/page-1`, "v1", undefined, BROWSER_CONTROL_SCOPE);
+    expect(scoped.verdict).toBe("ask");
+    const approvals = session.snapshot().approvals;
+    expect(approvals[0]?.scope).toBeUndefined();
+    expect(approvals[1]?.scope).toBe("browser-control");
   });
 });
 
