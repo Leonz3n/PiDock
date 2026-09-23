@@ -17,6 +17,7 @@ import {
   versionsTriple,
   webPreferencesEvidence,
 } from "./runtime.js";
+import { ScheduleDriver } from "./schedule-driver.js";
 import { runSmoke } from "./smoke.js";
 import { createDiskTaskDirResolver, defaultTasksRoot } from "./task-resolver.js";
 import {
@@ -151,6 +152,18 @@ async function run(): Promise<void> {
     browsers.registry,
   );
   registerIpc(client, views.registry, tasks);
+  // [PiDock 18] (#20) the Host-borne scheduler: main owns the Host processes, so
+  // the driver asks each *running* Host to evaluate its own due triggers. It
+  // never forks a Host and never overlaps its own ticks; stop it wherever the
+  // Hosts go away.
+  const schedules = new ScheduleDriver({
+    hostTaskIds: () => tasks.activeTaskIds(),
+    evaluate: async (taskId) => {
+      await tasks.routeTaskOp({ taskId, op: "task/scheduleEvaluate" });
+    },
+    onError: (error, taskId) => console.error(`[main] schedule evaluation failed for ${taskId}: ${errorMessage(error)}`),
+  });
+  schedules.start();
   const loaded = await loadTrustedViews(views);
   assertTrustedWindowEvidence(trustedWindowEvidence(views));
   console.log(
@@ -167,6 +180,7 @@ async function run(): Promise<void> {
   );
 
   app.on("window-all-closed", () => {
+    schedules.stop();
     client.dispose();
     child.kill();
     tasks.disposeAll();
@@ -195,6 +209,7 @@ async function run(): Promise<void> {
         console.error(`[main] quit report failed: ${errorMessage(error)}`);
       })
       .finally(() => {
+        schedules.stop();
         client.dispose();
         child.kill();
         tasks.disposeAll();

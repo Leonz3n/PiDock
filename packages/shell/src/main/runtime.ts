@@ -346,6 +346,15 @@ export class PerTaskHostRegistry {
     return this.byTaskDir.has(taskDir);
   }
 
+  /**
+   * [PiDock 18] (#20) task ids whose Host is currently forked. The schedule
+   * driver evaluates only these: forking a Host just to look at a clock would
+   * start a process for a task nobody is using.
+   */
+  activeTaskIds(): string[] {
+    return [...this.byTaskId.keys()].sort();
+  }
+
   entryForTaskId(taskId: string): PerTaskHostEntry | undefined {
     const dirs = this.byTaskId.get(taskId);
     if (!dirs) return undefined;
