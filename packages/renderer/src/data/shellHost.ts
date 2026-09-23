@@ -6,7 +6,8 @@
  * method below goes through `window.pidock` (`shell/*` invoke channels
  * main allowlists). The adapter wraps a full `HostAdapter` fallback
  * (the in-memory model) for every read/local op that has no shell RPC yet;
- * task turns (`sendMessage`/`stopRun`/approvals/provision) ride the real
+ * task turns (`sendMessage`/`stopRun`/approvals/provision) and the service
+ * lifecycle of Host-registered services (`setServiceRunning`) ride the real
  * `task/*` ops when the shell is connected and fail closed otherwise.
  *
  * Selection helper `resolveHostAdapter` picks the shell-backed adapter when
@@ -19,6 +20,7 @@ import type {
 } from "./hostAdapter";
 import type { Approval, ApprovalStatus, Reference, RunRecord, RunState } from "./types";
 import {
+  controlServiceThroughShell,
   isShellConnected,
   shellTaskOp,
   sendMessageThroughShell,
@@ -352,6 +354,27 @@ export function createShellHostAdapter(fallback: HostAdapter): HostAdapter {
             .filter((entry) => entry.taskId === taskId)
             .map(toShellApproval);
           return [...shell, ...local];
+        };
+      }
+      if (property === "setServiceRunning") {
+        return async (taskId: string, serviceId: string, running: boolean) => {
+          if (!isShellConnected()) return (target as HostAdapter).setServiceRunning(taskId, serviceId, running);
+          // Shell Host owns the lifecycle of the services it knows.
+          // Probe registration first (`task/serviceStatus`): a service the
+          // Host has not registered (renderer has no registration path yet)
+          // keeps the memory fallback instead of failing closed on
+          // `unknown-service`. A Host-known service is controlled by the
+          // Host — no `sessionId`, so the Host classifies it as the
+          // attested human-UI path and labels it.
+          let probe: ShellTaskOpResult;
+          try {
+            probe = await shellTaskOp(taskId, "task/serviceStatus", { serviceId });
+          } catch {
+            probe = { ok: false };
+          }
+          if (!probe.ok) return (target as HostAdapter).setServiceRunning(taskId, serviceId, running);
+          const result = await controlServiceThroughShell({ taskId, serviceId, action: running ? "start" : "stop" });
+          if (!result.ok) throw shellResultError(result, "服务启停失败，请重试");
         };
       }
       if (property === "simulateExpiry") {

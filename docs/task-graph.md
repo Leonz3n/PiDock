@@ -53,12 +53,25 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   {kind:"shell-ui", senderWebContentsId}`（`protocol.ts` 的
   `TaskOpOrigin`）。Host 仅在“无 `sessionId` + 该来源证明”同时成立时，
   才把服务启停当作人工界面操作；无来源证明的无会话调用直接拒绝，
-  因此调用方不能靠省略 `sessionId`（或伪造 `actor`）绕过会话权限门禁。
+  因此 renderer 不能靠省略 `sessionId`（或伪造 `actor`）绕过会话权限门禁。
+  界定的范围是**发送方/窗口**而非单次动作：该章盖在壳视图 WebContents
+  发出的每个 `host/task` 上，`senderWebContentsId` 只作审计记录；壳视图页
+  内运行的任何脚本都能拿到无门禁的人工路径，非壳发送方则拿不到。只靠壳
+  页可达的通道（`runtime.ts` 仅注册壳页可调的 `ipcMain.handle`）不构成
+  多租户隔离，真正的隔离在“谁能以该 sender 发消息”。
 - 服务启停的人工/Agent 归属由 `classifyServiceControlCaller`（纯函数，
   `host-guards.test.ts` 锁定）判定；Agent 分支的权限档位取自会话通道的
   实时 `currentPermission`，`default` 档必须携带已验证的 `approvalId`。
+  该确认请求还带**用途绑定**：Host 只能以 `SERVICE_CONTROL_SCOPE` 铸下
+  服务启停确认，`verifyServiceControlApproval` 也只接受这一 scope ——
+  同一 tool + target 的轮内（turn）确认不带 scope，不能用它启停服务。
 - `approvalId` 对应确认请求为一次性：Host 在首次成功启停时调用
   `PiSessionChannel.consumeApproval` 并写回会话快照，同一 id 不能再次
   授权（start/stop 共用同一个“服务目录”绑定目标）；`restore` 会把
   `approved` 但未消费的请求一并消费，重开应用必须重新确认。本切片不设
   确认有效期（TTL），语义见 `service-runtime.ts` 的 `verifyServiceControlApproval`。
+- renderer 的 `shellHost.setServiceRunning` 先探 `task/serviceStatus`：Host 已
+  注册的服务走 `task/controlService`（无 `sessionId`，人工路径）；未注册的服务
+  （当前 renderer 还没有服务注册入口，服务只在 Host/Agent 侧注册）仍回落
+  memory。真实的 `child_process` 启动、日志流与 renderer 注册入口一起落地时
+  才能端到端，仍在 #7 残留内。

@@ -202,6 +202,57 @@ describe("shell host adapter selection", () => {
     vi.unstubAllGlobals();
   });
 
+  it("routes Host-known service start/stop through task/controlService (human path)", async () => {
+    const seen: Array<{ taskId: string; op: string; payload?: Record<string, unknown> }> = [];
+    stubBridge(async (taskId, op, payload) => {
+      seen.push({ taskId, op, payload });
+      if (op === "task/serviceStatus") return { ok: true, payload: { service: { serviceId: "saas-web" } } };
+      return { ok: true, payload: {} };
+    });
+    const adapter = resolveHostAdapter(createMemoryHost());
+    await adapter.setServiceRunning("task-a", "saas-web", true);
+    await adapter.setServiceRunning("task-a", "saas-web", false);
+    expect(seen.map((entry) => entry.op)).toEqual([
+      "task/serviceStatus",
+      "task/controlService",
+      "task/serviceStatus",
+      "task/controlService",
+    ]);
+    // No sessionId: the Host classifies this as the attested human-UI path.
+    expect(seen[1].payload).toMatchObject({ serviceId: "saas-web", action: "start" });
+    expect(seen[1].payload?.["sessionId"]).toBeUndefined();
+    expect(seen[3].payload).toMatchObject({ serviceId: "saas-web", action: "stop" });
+    vi.unstubAllGlobals();
+
+    // A failed Host control surfaces instead of silently succeeding.
+    stubBridge(async (_taskId, op) => {
+      if (op === "task/serviceStatus") return { ok: true, payload: { service: { serviceId: "saas-web" } } };
+      return { ok: false, error: "permission-denied: 无会话的界面操作需要受信任来源，已拒绝" };
+    });
+    await expect(resolveHostAdapter(createMemoryHost()).setServiceRunning("task-a", "saas-web", true)).rejects.toThrow("permission-denied");
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps unregistered services on the memory fallback", async () => {
+    const ops: string[] = [];
+    stubBridge(async (_taskId, op) => {
+      ops.push(op as string);
+      return { ok: false, error: "unknown-service: saas-web is not registered on this task" };
+    });
+    const memoryCalls: string[] = [];
+    const fallback = {
+      setServiceRunning: async (taskId: string, serviceId: string, running: boolean) => {
+        memoryCalls.push(`${taskId}:${serviceId}:${running}`);
+      },
+    } as unknown as HostAdapter;
+    await createShellHostAdapter(fallback).setServiceRunning("task-a", "saas-web", true);
+    // Only the probe ran; the renderer has no service-registration path yet,
+    // so the memory mirror keeps the dev/demo service toggles working.
+    expect(ops).toEqual(["task/serviceStatus"]);
+    expect(memoryCalls).toEqual(["task-a:saas-web:true"]);
+    vi.unstubAllGlobals();
+  });
+
   it("stops through task/cancel when bridged, memory otherwise", async () => {
     const calls: string[] = [];
     stubBridge(async (_taskId, op) => {
