@@ -218,14 +218,28 @@ export function TaskPage({ task, sessionId }: { task: Task; sessionId: string })
 
   if (!session) return <EmptyState>当前任务还没有会话。</EmptyState>;
 
+  // [UI 对齐 02] (#26) the tool panels and the subagent panel share one right
+  // rail. Prototype A never shows the workbench and the subagent sidebar next to
+  // the conversation at the same time, and two free-standing percentage columns
+  // (43% + 40%) would crush the conversation to nothing; stacking both inside
+  // one rail keeps the conversation's share at the prototype's widths and stays
+  // within its bounds: 43%/min 350px while tool panels are open, otherwise the
+  // subagent sidebar's 40%/min 340px/max 520px.
+  const subagentPanelOpen = subagentOpen && subagents.length > 0;
+  const railOpen = panels.length > 0 || subagentPanelOpen;
+  const railClass =
+    panels.length > 0
+      ? "w-[43%] min-w-[350px] below-wide:min-w-[310px] below-wide:w-[40%] below-mid:min-w-[290px]"
+      : "w-[40%] min-w-[340px] max-w-[520px] below-narrow:min-w-[300px] below-narrow:w-[45%]";
+
   // [PiDock 09] (#11): tabs keep the creation order (at most four) and the
   // hidden active session takes the last slot; the coordination bar below the
   // tabs shows who holds the task write right.
   const visibleSessions = visibleSessionTabs(task.sessions, session.id);
 
   return (
-    <div className="flex min-h-0 flex-1 gap-4">
-      <section className="flex min-h-0 flex-1 flex-col gap-3">
+    <div data-testid="task-body" className="flex min-h-0 flex-1 gap-4 below-stack:block below-stack:flex-none below-stack:space-y-3">
+      <section data-testid="task-workspace" className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 below-stack:min-h-[550px]">
         <TaskHeader task={task} />
         <header className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
@@ -288,8 +302,19 @@ export function TaskPage({ task, sessionId }: { task: Task; sessionId: string })
         <Composer task={task} sessionId={session.id} />
       </section>
 
-      {panels.length > 0 ? (
-        <aside className="flex w-[380px] shrink-0 flex-col gap-3 overflow-auto">
+      {railOpen ? (
+        <aside data-testid="task-rail" className={`flex min-h-0 shrink-0 flex-col gap-3 overflow-auto below-stack:min-h-[500px] below-stack:w-full below-stack:min-w-0 below-stack:max-w-none ${railClass}`}>
+          {subagentPanelOpen ? (
+            <div data-testid="subagent-sidebar" className="flex min-h-0 flex-col">
+              <SubagentPanel
+                agents={subagents}
+                selectedId={selectedSubagentId}
+                parentLabel={task.name}
+                sessionName={session.name}
+                onSelect={setSelectedSubagentId}
+              />
+            </div>
+          ) : null}
           {panels.map((panel) => (
             <Panel
               key={panel}
@@ -371,18 +396,6 @@ export function TaskPage({ task, sessionId }: { task: Task; sessionId: string })
               ) : null}
             </Panel>
           ))}
-        </aside>
-      ) : null}
-
-      {subagentOpen && subagents.length > 0 ? (
-        <aside className="w-[360px] shrink-0 overflow-auto" data-testid="subagent-sidebar">
-          <SubagentPanel
-            agents={subagents}
-            selectedId={selectedSubagentId}
-            parentLabel={task.name}
-            sessionName={session.name}
-            onSelect={setSelectedSubagentId}
-          />
         </aside>
       ) : null}
     </div>

@@ -1,5 +1,18 @@
 @import "tailwindcss";
 
+/*
+ * Prototype A writes the wide layout as the baseline and overrides it downwards
+ * with three `@media(max-width: …)` blocks (`prototypes/pidock-ui/style.css`).
+ * These custom variants mirror that shape exactly — same numbers (1180/960/850
+ * /720), inclusive `max-width` — instead of Tailwind's default min-width scale,
+ * which would silently shift the tiers to 640/768/1024/1280. Declaration order
+ * is widest-first so the narrower tier wins when two of them match.
+ */
+@custom-variant below-wide (@media (max-width: 1180px));
+@custom-variant below-mid (@media (max-width: 960px));
+@custom-variant below-narrow (@media (max-width: 850px));
+@custom-variant below-stack (@media (max-width: 720px));
+
 @theme {
   --color-bg: #f6f7f8;
   --color-paper: #ffffff;

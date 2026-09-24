@@ -62,9 +62,16 @@ export const TASK_WEB_PREFERENCES = {
   ...SAFE_WEB_PREFERENCES,
 } satisfies WebPreferences;
 
+// The wide layout of prototype A (sidebar 226px + a 43% tool rail) needs more
+// than the prototype's 1180px tier boundary to look like the design, so the
+// window opens at 1440x900. `minWidth`/`minHeight` stop the window from being
+// dragged below the prototype's narrowest stacked tier (720px), which the
+// renderer does not define a layout for.
 const WINDOW_OPTIONS: BrowserWindowConstructorOptions = {
-  width: 1024,
-  height: 768,
+  width: 1440,
+  height: 900,
+  minWidth: 720,
+  minHeight: 560,
   show: false,
   webPreferences: SAFE_WEB_PREFERENCES,
 };
