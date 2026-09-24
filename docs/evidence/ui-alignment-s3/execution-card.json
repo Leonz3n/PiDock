@@ -1329,7 +1329,7 @@
           "labelClipped": false
         },
         {
-          "id": "session-tab-session-muf4h5v1-1",
+          "id": "session-tab-session-muf5uii5-1",
           "text": "跨仓库发布回归验证会",
           "visible": true,
           "active": true,
@@ -1391,7 +1391,7 @@
           "labelClipped": false
         },
         {
-          "id": "session-tab-session-muf4h5v1-1",
+          "id": "session-tab-session-muf5uii5-1",
           "text": "跨仓库发布回归验证会",
           "visible": true,
           "active": true,
@@ -1453,7 +1453,7 @@
           "labelClipped": false
         },
         {
-          "id": "session-tab-session-muf4h7t5-1",
+          "id": "session-tab-session-muf5ukh3-1",
           "text": "跨仓库发布回归验证会",
           "visible": true,
           "active": true,
@@ -1515,7 +1515,7 @@
           "labelClipped": false
         },
         {
-          "id": "session-tab-session-muf4h7t5-1",
+          "id": "session-tab-session-muf5ukh3-1",
           "text": "跨仓库发布回归验证会",
           "visible": true,
           "active": true,
@@ -1577,7 +1577,7 @@
           "labelClipped": false
         },
         {
-          "id": "session-tab-session-muf4h9sa-1",
+          "id": "session-tab-session-muf5umeg-1",
           "text": "跨仓库发布回归验证会",
           "visible": true,
           "active": true,
@@ -1639,7 +1639,7 @@
           "labelClipped": false
         },
         {
-          "id": "session-tab-session-muf4h9sa-1",
+          "id": "session-tab-session-muf5umeg-1",
           "text": "跨仓库发布回归验证会",
           "visible": true,
           "active": true,
@@ -1701,7 +1701,7 @@
           "labelClipped": false
         },
         {
-          "id": "session-tab-session-muf4hbql-1",
+          "id": "session-tab-session-muf5uod3-1",
           "text": "跨仓库发布回归验证会",
           "visible": true,
           "active": true,
@@ -1763,7 +1763,7 @@
           "labelClipped": false
         },
         {
-          "id": "session-tab-session-muf4hbql-1",
+          "id": "session-tab-session-muf5uod3-1",
           "text": "跨仓库发布回归验证会",
           "visible": true,
           "active": true,
@@ -1825,7 +1825,7 @@
           "labelClipped": false
         },
         {
-          "id": "session-tab-session-muf4hdph-1",
+          "id": "session-tab-session-muf5uqbo-1",
           "text": "跨仓库发布回归验证会",
           "visible": true,
           "active": true,
@@ -1887,7 +1887,7 @@
           "labelClipped": false
         },
         {
-          "id": "session-tab-session-muf4hdph-1",
+          "id": "session-tab-session-muf5uqbo-1",
           "text": "跨仓库发布回归验证会",
           "visible": true,
           "active": true,
@@ -1949,7 +1949,7 @@
           "labelClipped": false
         },
         {
-          "id": "session-tab-session-muf4hfnm-1",
+          "id": "session-tab-session-muf5usae-1",
           "text": "跨仓库发布回归验证会",
           "visible": true,
           "active": true,
@@ -2011,7 +2011,7 @@
           "labelClipped": false
         },
         {
-          "id": "session-tab-session-muf4hfnm-1",
+          "id": "session-tab-session-muf5usae-1",
           "text": "跨仓库发布回归验证会",
           "visible": true,
           "active": true,
@@ -2037,8 +2037,8 @@
         "h": 900
       },
       "noHorizontalOverflow": true,
-      "messagesH": 350,
-      "messagesShare": 0.389,
+      "messagesH": 377,
+      "messagesShare": 0.419,
       "cardPresent": true,
       "cardH": 53,
       "cardScrolls": false,
@@ -2071,8 +2071,8 @@
           "h": 32
         },
         {
-          "label": "divSubagent 21 个运行中 · 示例查询链",
-          "h": 78
+          "label": "session-subagents",
+          "h": 51
         }
       ],
       "draftReferencesH": null,
@@ -2458,8 +2458,8 @@
         "h": 900
       },
       "noHorizontalOverflow": true,
-      "messagesH": 309,
-      "messagesShare": 0.343,
+      "messagesH": 336,
+      "messagesShare": 0.373,
       "cardPresent": true,
       "cardH": 94,
       "cardScrolls": false,
@@ -2491,7 +2491,7 @@
       "approvalOutcome": null,
       "otherSession": 15,
       "steps": 15,
-      "cardText": "已完成 「部署审查」正在执行或等待确认；本会话可编辑草稿，待其结束后再执行。 正在执行 执行步骤（完成 1 / 共 2）",
+      "cardText": "已完成 「部署审查」正在执行或等待确认；本会话可编辑草稿，待其结束后再执行。 执行完成 执行步骤（完成 1 / 共 2）",
       "approvalSurfaces": 0,
       "composerH": 143,
       "extraChrome": [
@@ -2500,8 +2500,8 @@
           "h": 32
         },
         {
-          "label": "divSubagent 21 个运行中 · 示例查询链",
-          "h": 78
+          "label": "session-subagents",
+          "h": 51
         }
       ],
       "draftReferencesH": null,
