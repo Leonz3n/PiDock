@@ -47,6 +47,16 @@ describe("management pages alignment ([UI 对齐 09] #33)", () => {
     expect(labels[0]).toBe(total >= 1_000_000 ? `${(total / 1_000_000).toFixed(2)}M` : `${Math.round(total / 1000)}k`);
     expect(labels[2]).toBe(totals.calls.toLocaleString());
     expect(labels[3]).toBe(`${totals.missing + totals.partial} 次`);
+    // [UI 对齐 09] #33 review P2-1: the prototype's second card is 当前会话, but
+    // this page is a project-wide ledger with no session context, so it reads
+    // 最近一次调用. That rewrite is declared in `verification-log.md` §3.17 and
+    // pinned here — the other three cards are the prototype's own labels.
+    expect([...page.querySelectorAll(".stat")].map((stat) => stat.closest(".card")?.querySelector("small")?.textContent?.trim())).toEqual([
+      "累计 Token",
+      "最近一次调用",
+      "已记录调用",
+      "未完整报告",
+    ]);
     // The six summary columns are the prototype's, and the badge is its wording.
     expect([...page.querySelectorAll(".table th")].map((th) => th.textContent)).toEqual([
       "Provider",

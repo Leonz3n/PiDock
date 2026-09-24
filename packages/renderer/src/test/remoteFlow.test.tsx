@@ -101,4 +101,48 @@ describe("remote access flow", () => {
     expect(useUiStore.getState().toasts.some((toast) => toast.text.includes("旧连接不再复用"))).toBe(true);
     expect(useHostStore.getState().workspace?.remoteAudits.some((audit) => audit.kind === "gateway-disconnected")).toBe(true);
   });
+
+  it("renders the per-mode entry blocks and re-reads the Host on 重新检测", async () => {
+    const user = userEvent.setup();
+    renderApp("/remote");
+    await screen.findByRole("heading", { name: "远程访问" });
+
+    // [UI 对齐 09] #33 review P2-4: the prototype prints the command the user has
+    // to run for the tailscale/funnel entries, and draws the gateway's request
+    // path instead. Both use the listener the Host reported, not a sample value.
+    const listener = useHostStore.getState().workspace?.remoteEntry.listener;
+    expect(listener).toBe("127.0.0.1:4318");
+    expect(document.querySelector(".command-preview code")?.textContent).toBe(`tailscale serve --bg ${listener}`);
+
+    await user.click(screen.getByRole("tab", { name: "自建 PiDock Gateway" }));
+    await waitFor(() => expect(useHostStore.getState().workspace?.remoteEntry.mode).toBe("gateway"));
+    // Gateway mode has no local command; it has the path and its details.
+    expect(document.querySelector(".command-preview")).toBeNull();
+    expect([...document.querySelectorAll(".remote-flow span")].map((node) => node.textContent)).toEqual([
+      "手机浏览器",
+      "自建 Gateway",
+      "本机 PiDock",
+    ]);
+    expect([...document.querySelectorAll(".gateway-details > *")].map((node) => node.textContent)).toEqual([
+      "HTTPS / WSS",
+      "桌面主动连接",
+      "设备凭据可轮换",
+    ]);
+
+    await user.click(screen.getByRole("tab", { name: "Funnel 公网入口" }));
+    await waitFor(() => expect(useHostStore.getState().workspace?.remoteEntry.mode).toBe("funnel"));
+    expect(document.querySelector(".command-preview code")?.textContent).toBe(`tailscale funnel --bg ${listener}`);
+
+    // 重新检测 re-reads what the Host reported; it does not claim to probe the
+    // local Tailscale install (there is no such Host op).
+    useUiStore.setState({ toasts: [] });
+    await user.click(screen.getByRole("tab", { name: "Tailscale 私有访问" }));
+    await user.click(screen.getByRole("button", { name: "重新检测" }));
+    expect(useUiStore.getState().toasts.some((toast) => toast.text.includes("已重新读取 Host 上报"))).toBe(true);
+
+    // Declared absences: the Host owns no machine-name field and no entry
+    // connect/disconnect op, so these controls are deliberately not rendered.
+    expect(document.querySelector('input[aria-label="这台电脑的名称"]')).toBeNull();
+    expect(screen.queryByRole("button", { name: /^(启用此入口|断开连接)$/ })).toBeNull();
+  });
 });

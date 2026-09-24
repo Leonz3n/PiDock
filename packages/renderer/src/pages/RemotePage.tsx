@@ -176,7 +176,6 @@ export function RemotePage() {
                       probes the local Tailscale install. */}
                   {mode === "tailscale" ? (
                     <Button size="sm" onClick={() => void redetect()}>
-                      <Icon name="refresh" />
                       重新检测
                     </Button>
                   ) : null}
