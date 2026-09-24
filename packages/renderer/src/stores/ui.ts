@@ -33,6 +33,10 @@ export type ModalState =
   | { type: "model-picker"; taskId: string; sessionId: string }
   | { type: "thinking-picker"; taskId: string; sessionId: string }
   | { type: "context"; taskId: string; sessionId: string }
+  // Prototype `attachments.js` opens a clicked chip in `modal()` instead of
+  // expanding it inside the composer, so the strip stays one line and the box
+  // keeps its height ([UI 对齐 06] #30 review P2-B).
+  | { type: "attachment-preview"; label: string; detail: string; url?: string }
   | { type: "capability-detail"; capabilityId: string }
   | { type: "retry"; taskId: string; sessionId: string }
   | { type: "remote-preview" }

@@ -25,7 +25,7 @@ const CHROME =
 const RENDERER = process.env.RENDERER_BASE ?? "http://127.0.0.1:4335";
 const PROTOTYPE = process.env.PROTOTYPE_BASE ?? "http://127.0.0.1:4319";
 const task = (id, session) => `${RENDERER}/projects/atlas/tasks/${id}?session=${session}`;
-const ALL_PANELS = ["运行", "协议", "浏览器", "文件", "终端", "日志"];
+const ALL_PANELS = ["runtime", "protocol", "browser", "files", "terminal", "logs"];
 const VIEWPORTS = [
   { name: "1440x900", width: 1440, height: 900 },
   { name: "1280x900", width: 1280, height: 900 },
@@ -151,9 +151,11 @@ const report = { renderer: RENDERER, prototype: PROTOTYPE, tabStrip: {}, tabStri
 await mkdir(`${OUT}/renderer`, { recursive: true });
 await mkdir(`${OUT}/prototype`, { recursive: true });
 
-async function openPanels(page, names) {
-  for (const name of names) {
-    const button = page.getByRole("button", { name, exact: true });
+async function openPanels(page, panels) {
+  // Panel keys, not labels: an evidence script must locate by `data-testid`, so a
+  // copy change cannot stop a capture from re-running ([UI 对齐 06] #30 review).
+  for (const panel of panels) {
+    const button = page.getByTestId(`tool-tab-${panel}`);
     if ((await button.count()) > 0) {
       await button.first().click();
       await page.waitForTimeout(120);
@@ -193,13 +195,13 @@ for (const width of LONG_NAME_VIEWPORTS) {
   const page = await context.newPage();
   await page.goto(task("release", "main"), { waitUntil: "networkidle" });
   await page.waitForTimeout(300);
-  await page.getByRole("button", { name: "新建会话" }).click();
+  await page.getByTestId("session-new").click();
   await page.waitForTimeout(300);
   const newest = page.locator('[data-testid^="session-tab-"]:not([data-testid="session-tab-strip"])').last();
   await newest.click({ button: "right" });
-  await page.getByRole("menuitem", { name: "重命名" }).click();
-  await page.getByLabel("会话名称").fill(LONG_NAME);
-  await page.getByRole("button", { name: "保存" }).click();
+  await page.getByTestId("session-menu-rename").click();
+  await page.getByTestId("session-name-input").fill(LONG_NAME);
+  await page.getByTestId("session-name-save").click();
   await page.waitForTimeout(200);
   await openPanels(page, [ALL_PANELS[3]]);
   const measured = { ...(await measureTabs(page)), sessionName: LONG_NAME, railOpen: true };
@@ -243,14 +245,14 @@ async function capture(name, prepare) {
 }
 
 const sendToComposer = async (page, text) => {
-  const input = page.getByLabel("消息输入");
+  const input = page.getByTestId("task-composer-input");
   await input.click();
   await input.fill(text);
-  await page.getByRole("button", { name: "发送消息" }).click();
+  await page.getByTestId("composer-send").click();
 };
 
 const expirePending = async (page) => {
-  const button = page.getByRole("button", { name: "标记过期" });
+  const button = page.getByTestId("execution-approval-expire");
   await button.first().click();
   await page.waitForTimeout(300);
 };
@@ -272,9 +274,9 @@ await capture("running", async (page) => {
   await page.goto(task("release", "deploy"), { waitUntil: "networkidle" });
   await page.waitForTimeout(400);
   // Reject the first request, then approve the second: the approved turn runs.
-  await page.getByRole("button", { name: "拒绝" }).first().click();
+  await page.getByTestId("execution-action-reject").first().click();
   await page.waitForTimeout(300);
-  await page.getByRole("button", { name: "批准本次操作" }).first().click();
+  await page.getByTestId("execution-action-approve").first().click();
   await page.waitForTimeout(300);
   return "批准第二条待确认请求后进入执行中（会话 runState=running）";
 });
@@ -282,11 +284,11 @@ await capture("running", async (page) => {
 await capture("stopped", async (page) => {
   await page.goto(task("release", "deploy"), { waitUntil: "networkidle" });
   await page.waitForTimeout(400);
-  await page.getByRole("button", { name: "拒绝" }).first().click();
+  await page.getByTestId("execution-action-reject").first().click();
   await page.waitForTimeout(300);
-  await page.getByRole("button", { name: "批准本次操作" }).first().click();
+  await page.getByTestId("execution-action-approve").first().click();
   await page.waitForTimeout(300);
-  await page.getByRole("button", { name: "停止执行" }).first().click();
+  await page.getByTestId("execution-action-stop").first().click();
   await page.waitForTimeout(400);
   return "停止执行走既有 stopRun；卡片回到已停止且不再提供入口";
 });
@@ -294,9 +296,9 @@ await capture("stopped", async (page) => {
 await capture("rejected", async (page) => {
   await page.goto(task("release", "deploy"), { waitUntil: "networkidle" });
   await page.waitForTimeout(400);
-  await page.getByRole("button", { name: "拒绝" }).first().click();
+  await page.getByTestId("execution-action-reject").first().click();
   await page.waitForTimeout(300);
-  await page.getByRole("button", { name: "拒绝" }).first().click();
+  await page.getByTestId("execution-action-reject").first().click();
   await page.waitForTimeout(400);
   return "两条请求都拒绝后会话落到已拒绝";
 });
@@ -318,7 +320,7 @@ await capture("failed", async (page) => {
   await page.goto(task("release", "failed"), { waitUntil: "networkidle" });
   await page.waitForTimeout(400);
   await sendToComposer(page, "修复构建并重试");
-  await page.getByRole("button", { name: "检查并重试" }).first().waitFor({ timeout: 15000 });
+  await page.getByTestId("execution-action-retry").first().waitFor({ timeout: 15000 });
   await page.waitForTimeout(200);
   return "失败排查会话的真实失败回合：失败范围 + 折叠的步骤";
 });
@@ -332,8 +334,8 @@ await capture("failed-readonly", async (page) => {
   await page.goto(task("release", "failed"), { waitUntil: "networkidle" });
   await page.waitForTimeout(400);
   await sendToComposer(page, "修复构建并重试");
-  await page.getByRole("button", { name: "检查并重试" }).first().waitFor({ timeout: 15000 });
-  await page.getByRole("button", { name: "选择权限：默认权限" }).click();
+  await page.getByTestId("execution-action-retry").first().waitFor({ timeout: 15000 });
+  await page.getByTestId("composer-permission").click();
   await page.getByTestId("permission-read").click();
   await page.waitForTimeout(300);
   return "只读会话 + 真实失败记录：入口禁用，可见说明行在状态行内，不改卡片高度";

@@ -116,10 +116,34 @@ pnpm turbo run typecheck test build lint --force
   408px 量级）；卡片一旦出现，#29 的双档下限（340/300）**取代**它。因此「空闲 + 跨会话提示」
   档（卡片 53px）实测 349px < 408px 不是回归，而是卡片按 #29 验收 5 必须出现的结果。
 
+## 3.1 [UI 对齐 06] (#30) 之后的复测（同一脚本，同一档位）
+
+#30 改了输入区结构（内缩 20px、去掉重复的 meta 间距、只读说明行改为「卡片优先」），
+因此本脚本被重跑，而不是沿用旧数值。复测把三处已交付的下限都验证了一遍：
+
+| 档位 | #29 交付时 | #30 之后 | 下限 | 结论 |
+| --- | --- | --- | --- | --- |
+| `approval`（等待确认） | 344 | **346** | 340 | 达标（`composer` 149 → **143**） |
+| `expired`（确认已过期） | 404 | **406** | 340 | 达标 |
+| `running`（执行中，另有 114px 写操作权条） | 303 | **305** | 300 | 达标 |
+| `failed` / `failed-readonly` | 314 | **315 / 315** | 300 | 达标（只读 + 记录不再重复说明行） |
+| `completed` / `stopped` / `rejected` / `idle-other-busy` | 308 / 414 / 433 / 349 | **309 / 434 / 434 / 350** | 300 | 达标 |
+
+`node docs/evidence/ui-alignment-s3/capture-execution.mjs` → `geometry assertions: ok (36 measured states)`；
+卡片护栏仍为 **141px ≤ 145px**，原型等待态自身 `.messages` 仍为 **99px**（对照留证）。
+
+**证据脚本定位规则（本切片引入，两个脚本都遵守）**：捕获脚本一律用 `data-testid`
+定位，不得依赖 `aria-label` 或可见文案。原因是真实事故：#30 把输入框的可访问名称改成
+原型文案「给 Agent 的消息」，本脚本仍按「消息输入」定位，导致整条跨切片证据链
+`locator` 超时、无法复跑（[UI 对齐 06] #30 评审发现）。为此本切片补了
+`task-composer-input` / `composer-send` / `composer-permission` / `composer-attach` /
+`composer-file-input` / `execution-action-*` / `execution-approval-expire` /
+`session-new` / `session-menu-*` / `session-name-input` / `session-name-save` 等 testid。
+
 ## 4. 门禁与仓库状态
 
 - `pnpm turbo run typecheck test build lint --force`：**8/8 成功**。
-- renderer：**51 文件 / 431 例全绿**（第一轮修复后 427，第二轮 +4）；shell：54 文件 / 801 例（未变）。
+- renderer：**52 文件 / 444 例全绿**（#29 交付时 51/431；[UI 对齐 06] #30 修复轮 +13 例）；shell：54 文件 / 801 例（未变）。
 - `not wrapped in act`：0；无 `.skip/.only/.todo`。
 - 改动仅限 `packages/renderer/**` 与 `docs/evidence/ui-alignment-s3/**`，
   `prototypes/**` 0 改动（只读引用），`packages/shell/**` 未触碰。
@@ -150,6 +174,10 @@ pnpm turbo run typecheck test build lint --force
   - 子代理条 **78px**（有子代理的会话）→ 后续切片残项（S6 对话/子代理区域）；
   - 失败态输入框 **175px**（失败草稿带 23px 引用行）→
     [#30](https://github.com/Leonz3n/PiDock/issues/30)（S4 输入区高度已含此项）。
+    **[UI 对齐 06] (#30) 修复轮闭合**：输入区结构回收 6px 后该态实测 **174px**（143 结构 +
+    31 草稿引用行），消息区 **315px ≥ 300**；差额来自用户草稿里的引用行而不是应用 chrome，
+    不再作为缺口（见 `ui-alignment-s4/verification-log.md` §2.4 与 §6-R8）。
+    同一轮复测本切片其余档位：`running` **305**、`approval` **346**、`expired` **406**（见 §3.1）。
 - **R6（几何断言的运行位置）** `pnpm test` 是 jsdom，无布局，因此数值断言放在 Chromium
   采集脚本里（可复跑、违反即退码 1），`pnpm test` 覆盖类契约（tier 类、`shrink-0`、
   `overflow-x-auto`、`whitespace-nowrap`、`+` 按钮、`title`）。

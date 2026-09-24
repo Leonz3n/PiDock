@@ -70,8 +70,8 @@
       },
       "noHorizontalOverflow": true,
       "strip": {
-        "scrollWidth": 505,
-        "clientWidth": 505,
+        "scrollWidth": 1014,
+        "clientWidth": 1014,
         "clipPx": 0,
         "noClip": true,
         "h": 32
@@ -129,8 +129,8 @@
       },
       "noHorizontalOverflow": true,
       "strip": {
-        "scrollWidth": 505,
-        "clientWidth": 505,
+        "scrollWidth": 1014,
+        "clientWidth": 1014,
         "clipPx": 0,
         "noClip": true,
         "h": 32
@@ -247,8 +247,8 @@
       },
       "noHorizontalOverflow": true,
       "strip": {
-        "scrollWidth": 414,
-        "clientWidth": 414,
+        "scrollWidth": 854,
+        "clientWidth": 854,
         "clipPx": 0,
         "noClip": true,
         "h": 32
@@ -306,8 +306,8 @@
       },
       "noHorizontalOverflow": true,
       "strip": {
-        "scrollWidth": 414,
-        "clientWidth": 414,
+        "scrollWidth": 854,
+        "clientWidth": 854,
         "clipPx": 0,
         "noClip": true,
         "h": 32
@@ -424,10 +424,10 @@
       },
       "noHorizontalOverflow": true,
       "strip": {
-        "scrollWidth": 413,
-        "clientWidth": 368,
-        "clipPx": 45,
-        "noClip": false,
+        "scrollWidth": 774,
+        "clientWidth": 774,
+        "clipPx": 0,
+        "noClip": true,
         "h": 32
       },
       "tabs": [
@@ -464,7 +464,7 @@
           "visible": true,
           "active": false,
           "w": 173,
-          "insideStrip": false,
+          "insideStrip": true,
           "labelClipped": false
         }
       ],
@@ -483,10 +483,10 @@
       },
       "noHorizontalOverflow": true,
       "strip": {
-        "scrollWidth": 413,
-        "clientWidth": 368,
-        "clipPx": 45,
-        "noClip": false,
+        "scrollWidth": 774,
+        "clientWidth": 774,
+        "clipPx": 0,
+        "noClip": true,
         "h": 32
       },
       "tabs": [
@@ -523,7 +523,7 @@
           "visible": true,
           "active": false,
           "w": 173,
-          "insideStrip": false,
+          "insideStrip": true,
           "labelClipped": false
         }
       ],
@@ -601,10 +601,10 @@
       },
       "noHorizontalOverflow": true,
       "strip": {
-        "scrollWidth": 413,
-        "clientWidth": 357,
-        "clipPx": 56,
-        "noClip": false,
+        "scrollWidth": 755,
+        "clientWidth": 755,
+        "clipPx": 0,
+        "noClip": true,
         "h": 32
       },
       "tabs": [
@@ -641,7 +641,7 @@
           "visible": true,
           "active": false,
           "w": 173,
-          "insideStrip": false,
+          "insideStrip": true,
           "labelClipped": false
         }
       ],
@@ -660,10 +660,10 @@
       },
       "noHorizontalOverflow": true,
       "strip": {
-        "scrollWidth": 413,
-        "clientWidth": 357,
-        "clipPx": 56,
-        "noClip": false,
+        "scrollWidth": 755,
+        "clientWidth": 755,
+        "clipPx": 0,
+        "noClip": true,
         "h": 32
       },
       "tabs": [
@@ -700,7 +700,7 @@
           "visible": true,
           "active": false,
           "w": 173,
-          "insideStrip": false,
+          "insideStrip": true,
           "labelClipped": false
         }
       ],
@@ -778,8 +778,8 @@
       },
       "noHorizontalOverflow": true,
       "strip": {
-        "scrollWidth": 306,
-        "clientWidth": 306,
+        "scrollWidth": 632,
+        "clientWidth": 632,
         "clipPx": 0,
         "noClip": true,
         "h": 26
@@ -837,8 +837,8 @@
       },
       "noHorizontalOverflow": true,
       "strip": {
-        "scrollWidth": 306,
-        "clientWidth": 306,
+        "scrollWidth": 632,
+        "clientWidth": 632,
         "clipPx": 0,
         "noClip": true,
         "h": 26
@@ -955,8 +955,8 @@
       },
       "noHorizontalOverflow": true,
       "strip": {
-        "scrollWidth": 323,
-        "clientWidth": 323,
+        "scrollWidth": 654,
+        "clientWidth": 654,
         "clipPx": 0,
         "noClip": true,
         "h": 26
@@ -1014,8 +1014,8 @@
       },
       "noHorizontalOverflow": true,
       "strip": {
-        "scrollWidth": 323,
-        "clientWidth": 323,
+        "scrollWidth": 654,
+        "clientWidth": 654,
         "clipPx": 0,
         "noClip": true,
         "h": 26
@@ -1252,10 +1252,10 @@
       },
       "noHorizontalOverflow": true,
       "strip": {
-        "scrollWidth": 382,
-        "clientWidth": 358,
-        "clipPx": 24,
-        "noClip": false,
+        "scrollWidth": 755,
+        "clientWidth": 755,
+        "clipPx": 0,
+        "noClip": true,
         "h": 26
       },
       "tabs": [
@@ -1265,7 +1265,7 @@
           "visible": true,
           "active": false,
           "w": 82,
-          "insideStrip": false,
+          "insideStrip": true,
           "labelClipped": false
         },
         {
@@ -1287,7 +1287,7 @@
           "labelClipped": false
         },
         {
-          "id": "session-tab-session-muf213xt-1",
+          "id": "session-tab-session-muf3k6nj-1",
           "text": "跨仓库发布回归验证会",
           "visible": true,
           "active": true,
@@ -1313,10 +1313,10 @@
       },
       "noHorizontalOverflow": true,
       "strip": {
-        "scrollWidth": 382,
-        "clientWidth": 369,
-        "clipPx": 13,
-        "noClip": false,
+        "scrollWidth": 774,
+        "clientWidth": 774,
+        "clipPx": 0,
+        "noClip": true,
         "h": 26
       },
       "tabs": [
@@ -1326,7 +1326,7 @@
           "visible": true,
           "active": false,
           "w": 82,
-          "insideStrip": false,
+          "insideStrip": true,
           "labelClipped": false
         },
         {
@@ -1348,7 +1348,7 @@
           "labelClipped": false
         },
         {
-          "id": "session-tab-session-muf215qu-1",
+          "id": "session-tab-session-muf3k88p-1",
           "text": "跨仓库发布回归验证会",
           "visible": true,
           "active": true,
@@ -1374,8 +1374,8 @@
       },
       "noHorizontalOverflow": true,
       "strip": {
-        "scrollWidth": 391,
-        "clientWidth": 391,
+        "scrollWidth": 814,
+        "clientWidth": 814,
         "clipPx": 0,
         "noClip": true,
         "h": 26
@@ -1409,7 +1409,7 @@
           "labelClipped": false
         },
         {
-          "id": "session-tab-session-muf217km-1",
+          "id": "session-tab-session-muf3k9u2-1",
           "text": "跨仓库发布回归验证会",
           "visible": true,
           "active": true,
@@ -1435,8 +1435,8 @@
       },
       "noHorizontalOverflow": true,
       "strip": {
-        "scrollWidth": 413,
-        "clientWidth": 413,
+        "scrollWidth": 851,
+        "clientWidth": 851,
         "clipPx": 0,
         "noClip": true,
         "h": 26
@@ -1470,7 +1470,7 @@
           "labelClipped": false
         },
         {
-          "id": "session-tab-session-muf219e1-1",
+          "id": "session-tab-session-muf3kbff-1",
           "text": "跨仓库发布回归验证会",
           "visible": true,
           "active": true,
@@ -1496,8 +1496,8 @@
       },
       "noHorizontalOverflow": true,
       "strip": {
-        "scrollWidth": 414,
-        "clientWidth": 414,
+        "scrollWidth": 854,
+        "clientWidth": 854,
         "clipPx": 0,
         "noClip": true,
         "h": 26
@@ -1531,7 +1531,7 @@
           "labelClipped": false
         },
         {
-          "id": "session-tab-session-muf21b82-1",
+          "id": "session-tab-session-muf3kd1b-1",
           "text": "跨仓库发布回归验证会",
           "visible": true,
           "active": true,
@@ -1557,8 +1557,8 @@
       },
       "noHorizontalOverflow": true,
       "strip": {
-        "scrollWidth": 505,
-        "clientWidth": 505,
+        "scrollWidth": 1014,
+        "clientWidth": 1014,
         "clipPx": 0,
         "noClip": true,
         "h": 26
@@ -1592,7 +1592,7 @@
           "labelClipped": false
         },
         {
-          "id": "session-tab-session-muf21d1f-1",
+          "id": "session-tab-session-muf3kemb-1",
           "text": "跨仓库发布回归验证会",
           "visible": true,
           "active": true,
@@ -1617,8 +1617,8 @@
         "h": 900
       },
       "noHorizontalOverflow": true,
-      "messagesH": 349,
-      "messagesShare": 0.388,
+      "messagesH": 350,
+      "messagesShare": 0.389,
       "cardPresent": true,
       "cardH": 53,
       "cardScrolls": false,
@@ -1644,7 +1644,7 @@
       "steps": null,
       "cardText": "空闲 「部署审查」正在执行或等待确认；本会话可编辑草稿，待其结束后再执行。",
       "approvalSurfaces": 0,
-      "composerH": 145,
+      "composerH": 143,
       "extraChrome": [
         {
           "label": "div全部会话 56实现与验证部署审查失败排查历史排查",
@@ -1664,8 +1664,8 @@
         "h": 900
       },
       "noHorizontalOverflow": true,
-      "messagesH": 344,
-      "messagesShare": 0.382,
+      "messagesH": 346,
+      "messagesShare": 0.384,
       "cardPresent": true,
       "cardH": 141,
       "cardScrolls": false,
@@ -1704,7 +1704,7 @@
       "steps": null,
       "cardText": "等待确认 批准本次操作 拒绝 标记过期 待批准：部署到 Staging 目标：bun run deploy:staging · /workspace/atlas-web 影响：更新 staging.atlas.example.com，预计 2 分钟。批准仅授权这一次操作，不自动授权未来执行。 有效期：2026/9/25",
       "approvalSurfaces": 1,
-      "composerH": 145,
+      "composerH": 143,
       "extraChrome": [
         {
           "label": "div全部会话 56实现与验证部署审查失败排查历史排查",
@@ -1720,8 +1720,8 @@
         "h": 900
       },
       "noHorizontalOverflow": true,
-      "messagesH": 303,
-      "messagesShare": 0.337,
+      "messagesH": 305,
+      "messagesShare": 0.339,
       "cardPresent": true,
       "cardH": 63,
       "cardScrolls": false,
@@ -1752,7 +1752,7 @@
       "steps": null,
       "cardText": "执行中 停止执行 执行数据库迁移 · 正在执行 bun run db:migrate",
       "approvalSurfaces": 0,
-      "composerH": 145,
+      "composerH": 143,
       "extraChrome": [
         {
           "label": "div全部会话 56实现与验证部署审查持有写操作权失败",
@@ -1772,8 +1772,8 @@
         "h": 900
       },
       "noHorizontalOverflow": true,
-      "messagesH": 433,
-      "messagesShare": 0.481,
+      "messagesH": 434,
+      "messagesShare": 0.483,
       "cardPresent": true,
       "cardH": 53,
       "cardScrolls": false,
@@ -1799,7 +1799,7 @@
       "steps": null,
       "cardText": "已停止 已中止",
       "approvalSurfaces": 0,
-      "composerH": 145,
+      "composerH": 143,
       "extraChrome": [
         {
           "label": "div全部会话 56实现与验证部署审查失败排查历史排查",
@@ -1815,8 +1815,8 @@
         "h": 900
       },
       "noHorizontalOverflow": true,
-      "messagesH": 433,
-      "messagesShare": 0.481,
+      "messagesH": 434,
+      "messagesShare": 0.483,
       "cardPresent": true,
       "cardH": 53,
       "cardScrolls": false,
@@ -1842,7 +1842,7 @@
       "steps": null,
       "cardText": "已拒绝 执行数据库迁移 · 已拒绝，未执行。",
       "approvalSurfaces": 0,
-      "composerH": 145,
+      "composerH": 143,
       "extraChrome": [
         {
           "label": "div全部会话 56实现与验证部署审查失败排查历史排查",
@@ -1858,8 +1858,8 @@
         "h": 900
       },
       "noHorizontalOverflow": true,
-      "messagesH": 404,
-      "messagesShare": 0.449,
+      "messagesH": 406,
+      "messagesShare": 0.451,
       "cardPresent": true,
       "cardH": 81,
       "cardScrolls": false,
@@ -1894,7 +1894,7 @@
       "steps": null,
       "cardText": "确认已过期 标记已处理 执行数据库迁移 · 确认已过期，未执行。 旧确认不可继续批准；后续周期可正常触发。需要发送旧结果时重新提出请求。",
       "approvalSurfaces": 0,
-      "composerH": 145,
+      "composerH": 143,
       "extraChrome": [
         {
           "label": "div全部会话 56实现与验证部署审查失败排查历史排查",
@@ -1910,8 +1910,8 @@
         "h": 900
       },
       "noHorizontalOverflow": true,
-      "messagesH": 314,
-      "messagesShare": 0.349,
+      "messagesH": 315,
+      "messagesShare": 0.35,
       "cardPresent": true,
       "cardH": 141,
       "cardScrolls": false,
@@ -1958,7 +1958,7 @@
       "steps": 15,
       "cardText": "失败 检查并重试 「部署审查」正在执行或等待确认；本会话可编辑草稿，待其结束后再执行。 构建失败，已保留现场 失败范围：构建步骤：front-monorepo web 包编译失败 已完成的步骤保留；外部发送结果不确定时须先核对送达情况。 执行步骤（完成 2 / 共 4）",
       "approvalSurfaces": 0,
-      "composerH": 175,
+      "composerH": 174,
       "extraChrome": [
         {
           "label": "div全部会话 56实现与验证部署审查失败排查历史排查",
@@ -1974,8 +1974,8 @@
         "h": 900
       },
       "noHorizontalOverflow": true,
-      "messagesH": 314,
-      "messagesShare": 0.349,
+      "messagesH": 315,
+      "messagesShare": 0.35,
       "cardPresent": true,
       "cardH": 141,
       "cardScrolls": false,
@@ -2022,7 +2022,7 @@
       "steps": 15,
       "cardText": "失败 检查并重试 当前是只读会话，请先调整会话权限；只读会话可以阅读和分析，不能执行这些操作。 「部署审查」正在执行或等待确认；本会话可编辑草稿，待其结束后再执行。 构建失败，已保留现场 失败范围：构建步骤：front-monorepo web 包编译失败 已完成的步骤保留；外部发送结果不确定时须先核对送达情况。 执行",
       "approvalSurfaces": 0,
-      "composerH": 175,
+      "composerH": 174,
       "extraChrome": [
         {
           "label": "div全部会话 56实现与验证部署审查失败排查只读历史",
@@ -2038,8 +2038,8 @@
         "h": 900
       },
       "noHorizontalOverflow": true,
-      "messagesH": 308,
-      "messagesShare": 0.342,
+      "messagesH": 309,
+      "messagesShare": 0.343,
       "cardPresent": true,
       "cardH": 94,
       "cardScrolls": false,
@@ -2073,7 +2073,7 @@
       "steps": 15,
       "cardText": "已完成 「部署审查」正在执行或等待确认；本会话可编辑草稿，待其结束后再执行。 正在执行 执行步骤（完成 1 / 共 2）",
       "approvalSurfaces": 0,
-      "composerH": 145,
+      "composerH": 143,
       "extraChrome": [
         {
           "label": "div全部会话 56实现与验证部署审查失败排查历史排查",

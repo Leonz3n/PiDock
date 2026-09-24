@@ -82,6 +82,22 @@ const EMPTY_REFERENCE: Reference = { id: "empty", kind: "file", label: "", detai
 /** One wording for the read-only rule: button `title` plus a visible card line. */
 const READONLY_ACTION_TITLE = "当前是只读会话，请先调整会话权限";
 
+/**
+ * Four characters for a name a paste cannot supply. The clipboard carries no file
+ * name, so the label needs a per-paste discriminator; a constant prefix made every
+ * pasted image share one name (and one accessible name) — `attach-paste-…`
+ * always sliced to `atta` ([UI 对齐 06] #30 review P1-2).
+ */
+function attachmentKey(): string {
+  const uuid = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function" ? crypto.randomUUID() : "";
+  return uuid.length >= 4 ? uuid.slice(0, 4) : Math.random().toString(36).slice(2, 6).padEnd(4, "0");
+}
+
+/** Blob URLs exist only where the browser provides them; jsdom has no revoke. */
+function revokePreviewUrl(url: string) {
+  if (typeof URL !== "undefined" && typeof URL.revokeObjectURL === "function") URL.revokeObjectURL(url);
+}
+
 export function TaskPage({ task, sessionId }: { task: Task; sessionId: string }) {
   const session = task.sessions.find((item) => item.id === sessionId) ?? task.sessions[0];
   const panels = useUiStore((state) => state.panels[task.id] ?? EMPTY_PANELS);
@@ -836,7 +852,7 @@ function SessionTabs({
           onClose={() => setMenu(null)}
         />
       ) : null}
-      <IconButton icon="plus" label="新建会话" className="shrink-0" onClick={() => void addSession()} />
+      <IconButton icon="plus" label="新建会话" data-testid="session-new" className="shrink-0" onClick={() => void addSession()} />
     </div>
   );
 }
@@ -890,6 +906,7 @@ function SessionContextMenu({
           key={action}
           type="button"
           role="menuitem"
+          data-testid={`session-menu-${action}`}
           className="block w-full rounded px-2 py-1 text-left text-xs text-ink hover:bg-soft"
           onClick={() => onSelect(action)}
         >
@@ -971,19 +988,18 @@ function WriteCoordinationBar({ task }: { task: Task }) {
  * 载荷审阅（操作/命令/目录/影响/接收人/有效期/载荷版本）与批准·拒绝·标记过期都在卡内，
  * 输入框上方不再渲染第二份审阅面板——两份曾把等待确认页的消息区压到 26px。
  */
-function RunStateCard({ taskId, sessionId }: { taskId: string; sessionId: string }) {
+/**
+ * 状态卡与输入框共用同一份执行状态视图（[UI 对齐 06] #30 评审）：只读说明行
+ * 只能出现一次，因此两边必须从同一份 Host 状态推导，而不是各自判断——输入框
+ * 里那一份在只读 + 有记录的档位曾再多占 25px，把消息区推到下限之下。
+ */
+function useExecutionCardView(taskId: string, sessionId: string) {
   const key = sessionKeyOf(taskId, sessionId);
   const session = useHostStore((state) => state.session(taskId, sessionId));
   const sessions = useHostStore((state) => state.task(taskId)?.sessions);
   const runs = useEventsStore((state) => state.runs);
   const approvals = useHostStore((state) => state.approvals);
   const dismissed = useUiStore((state) => state.dismissedExecutions[key]);
-  const dismissExecution = useUiStore((state) => state.dismissExecution);
-  const stopRun = useHostStore((state) => state.stopRun);
-  const resolveApproval = useHostStore((state) => state.resolveApproval);
-  const simulateExpiry = useHostStore((state) => state.simulateExpiry);
-  const openModal = useUiStore((state) => state.openModal);
-  const pushToast = useUiStore((state) => state.pushToast);
   if (!session) return null;
   const record = runs[key];
   const pending = pendingApprovalsFor(approvals, taskId, sessionId);
@@ -993,20 +1009,45 @@ function RunStateCard({ taskId, sessionId }: { taskId: string; sessionId: string
     ...(record !== undefined ? { record } : {}),
     ...(approval !== undefined ? { pendingApproval: approval } : {}),
   });
-  // Only the resolution this state is derived from keeps its outcome on screen
-  // (the retired payload panel used to state it, and “未执行” is what users rely
-  // on after a refusal or an expiry): naming the session's first non-pending
-  // record put another request's outcome next to this state ([UI 对齐 05] #29
-  // review P2-A).
-  const outcome = outcomeApprovalFor(approvals, taskId, sessionId, state);
   const other = otherBusySession(sessions ?? [], sessionId, (item) =>
     executionStateOf({
       sessionRunState: item.runState,
       ...(runs[sessionKeyOf(taskId, item.id)] !== undefined ? { record: runs[sessionKeyOf(taskId, item.id)] } : {}),
     }),
   );
-  if (!executionCardVisible({ state, dismissedState: dismissed, otherBusy: other !== undefined })) return null;
+  const visible = executionCardVisible({ state, dismissedState: dismissed, otherBusy: other !== undefined });
   const readonly = session.permission === "read";
+  return {
+    session,
+    state,
+    approval,
+    pending,
+    record,
+    other,
+    // Only the resolution this state is derived from keeps its outcome on screen
+    // (the retired payload panel used to state it, and “未执行” is what users rely
+    // on after a refusal or an expiry): naming the session's first non-pending
+    // record put another request's outcome next to this state ([UI 对齐 05] #29
+    // review P2-A).
+    outcome: outcomeApprovalFor(approvals, taskId, sessionId, state),
+    visible,
+    readonly,
+    // The card states the rule only while it also has an action to disable; with
+    // no action the line would explain nothing, so the composer keeps it there.
+    readonlyHintInCard: visible && readonly && executionActions(state).length > 0,
+  };
+}
+
+function RunStateCard({ taskId, sessionId }: { taskId: string; sessionId: string }) {
+  const dismissExecution = useUiStore((state) => state.dismissExecution);
+  const stopRun = useHostStore((state) => state.stopRun);
+  const resolveApproval = useHostStore((state) => state.resolveApproval);
+  const simulateExpiry = useHostStore((state) => state.simulateExpiry);
+  const openModal = useUiStore((state) => state.openModal);
+  const pushToast = useUiStore((state) => state.pushToast);
+  const view = useExecutionCardView(taskId, sessionId);
+  if (!view || !view.visible) return null;
+  const { state, approval, pending, outcome, record, other, readonly } = view;
   const run = (action: ExecutionAction) => {
     if (action === "stop") {
       void stopRun(taskId, sessionId);
@@ -1050,6 +1091,7 @@ function RunStateCard({ taskId, sessionId }: { taskId: string; sessionId: string
               key={action}
               size="sm"
               variant={action === "approve" ? "primary" : "default"}
+              data-testid={`execution-action-${action}`}
               disabled={readonly}
               title={readonly ? READONLY_ACTION_TITLE : undefined}
               onClick={() => run(action)}
@@ -1064,6 +1106,7 @@ function RunStateCard({ taskId, sessionId }: { taskId: string; sessionId: string
           {state === "approval" && approval ? (
             <Button
               size="sm"
+              data-testid="execution-approval-expire"
               disabled={readonly}
               title="把有效期推进到截止时刻，用于演示；真实调度由 Host 承担"
               onClick={() => {
@@ -1318,13 +1361,42 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
   // textarea from the store afterwards; the caret is restored from this ref in
   // the effect below so the user keeps typing where the paste happened.
   const pendingSelection = useRef<number | null>(null);
-  const [expandedAttachment, setExpandedAttachment] = useState<string | null>(null);
   const attachments = draft.references.filter((reference) => reference.kind === "attachment");
   const plainReferences = draft.references.filter((reference) => reference.kind !== "attachment");
   // Images require the selected model to declare image input; the prototype blocks
   // the send and keeps the draft rather than silently dropping the attachment.
   const hasUnsupportedImage = attachments.some((reference) => reference.previewUrl) && !model?.supportsImages;
-  const expandedAttachmentView = attachments.find((reference) => reference.id === expandedAttachment) ?? null;
+  // The read-only rule is stated once per screen: the card owns it while it has
+  // an action to disable, the composer keeps the visible reason otherwise.
+  const executionView = useExecutionCardView(task.id, sessionId);
+  const readonlyHintInCard = executionView?.readonlyHintInCard ?? false;
+  // Blob previews are made here and only the URL reaches the draft store, so the
+  // composer keeps the map it created and releases a URL as soon as its
+  // attachment leaves the draft (removal, send, session switch) — the paste route
+  // used to leak one URL per image ([UI 对齐 06] #30 review P2-D; the prototype
+  // revokes in `removeAttachment()`).
+  const previewUrls = useRef<Map<string, string>>(new Map());
+  useEffect(() => {
+    const live = new Set(attachments.map((reference) => reference.id));
+    for (const [id, url] of [...previewUrls.current]) {
+      if (live.has(id)) continue;
+      previewUrls.current.delete(id);
+      revokePreviewUrl(url);
+    }
+  });
+  // Unmount keeps every URL the draft still points at: returning to a task
+  // restores its draft, and a revoked blob would render as a broken thumbnail.
+  useEffect(() => {
+    const urls = previewUrls.current;
+    return () => {
+      const retained = new Set(useDraftStore.getState().getDraft(task.id, sessionId).references.map((reference) => reference.id));
+      for (const [id, url] of [...urls]) {
+        if (retained.has(id)) continue;
+        urls.delete(id);
+        revokePreviewUrl(url);
+      }
+    };
+  }, [task.id, sessionId]);
 
   useEffect(() => {
     const caretTarget = pendingSelection.current;
@@ -1339,10 +1411,15 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
   const addFiles = (files: readonly File[], pasted: boolean) => {
     files.forEach((file, index) => {
       const isImage = file.type.startsWith("image/");
-      const id = `attach-${pasted ? "paste" : "file"}-${Date.now()}-${index}-${file.name}`;
+      // The clipboard carries no file name, so the prototype names the attachment
+      // `粘贴图片-<id4>`; the key leads the id so the rule's `slice(0, 4)` yields a
+      // per-paste name instead of the constant `atta` ([UI 对齐 06] #30 review
+      // P1-2: two pasted images used to share one name and one accessible name).
+      const id = `${attachmentKey()}-attach-${pasted ? "paste" : "file"}-${Date.now()}-${index}-${file.name}`;
       const { label, detail } = attachmentSourceLabel({ file, pasted, id });
       const previewUrl =
         isImage && typeof URL !== "undefined" && typeof URL.createObjectURL === "function" ? URL.createObjectURL(file) : undefined;
+      if (previewUrl !== undefined) previewUrls.current.set(id, previewUrl);
       addReference(task.id, sessionId, {
         id,
         kind: "attachment",
@@ -1470,9 +1547,12 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
   // grows past 65% of the column and does not shrink, so a long attachment
   // list scrolls here instead of eating the conversation ([UI 对齐 06] #30).
   return (
-    <div data-testid="task-composer" className="flex shrink-0 flex-col gap-1.5 below-stack:max-h-none max-h-[65%] overflow-auto">
+    <div data-testid="task-composer" className="flex shrink-0 flex-col gap-1.5 px-5 below-stack:max-h-none max-h-[65%] overflow-auto">
+      {/* Prototype `.composer{border-radius:10px;padding:10px 12px;box-shadow:0 3px 10px #242b3b05}`;
+          `.composer-wrap{padding:9px 20px 15px}` is the 20px inset the box shares
+          with the meta row. */}
       <form
-        className="rounded-panel border border-line bg-paper px-3 py-2.5"
+        className="rounded-panel border border-line bg-paper px-3 py-2.5 shadow-[0_3px_10px_#242b3b05]"
         onSubmit={async (event) => {
           event.preventDefault();
           const text = draft.text.trim();
@@ -1514,37 +1594,37 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
               <li key={reference.id} className="flex items-center gap-2 rounded-md border border-line bg-soft px-2 py-1 text-[11px] text-muted">
                 <button
                   type="button"
+                  data-testid="composer-attachment-open"
                   aria-label={`预览 ${reference.label}`}
-                  aria-pressed={expandedAttachment === reference.id}
+                  aria-haspopup="dialog"
+                  aria-expanded={modal?.type === "attachment-preview"}
                   title={reference.detail}
                   className="flex items-center gap-2"
-                  onClick={() => setExpandedAttachment(expandedAttachment === reference.id ? null : reference.id)}
+                  onClick={() =>
+                    openModal({
+                      type: "attachment-preview",
+                      label: reference.label,
+                      detail: reference.detail,
+                      ...(reference.previewUrl !== undefined ? { url: reference.previewUrl } : {}),
+                    })
+                  }
                 >
                   {reference.previewUrl ? (
                     <img src={reference.previewUrl} alt={reference.label} className="h-8 w-8 rounded object-cover" data-testid={`attachment-image-${reference.id}`} />
                   ) : null}
                   <span>{reference.label}</span>
                 </button>
-                <button type="button" aria-label={`移除附件 ${reference.label}`} onClick={() => removeReference(task.id, sessionId, reference.id)}>
+                <button
+                  type="button"
+                  data-testid="composer-attachment-remove"
+                  aria-label={`移除 ${reference.label}`}
+                  onClick={() => removeReference(task.id, sessionId, reference.id)}
+                >
                   ×
                 </button>
               </li>
             ))}
           </ul>
-        ) : null}
-        {expandedAttachmentView ? (
-          <div className="mb-2" data-testid="composer-attachment-preview">
-            {expandedAttachmentView.previewUrl ? (
-              <img
-                src={expandedAttachmentView.previewUrl}
-                alt={expandedAttachmentView.label}
-                className="max-h-40 rounded-md border border-line bg-soft object-contain"
-              />
-            ) : null}
-            <p className="mt-1 text-[11px] text-muted" role="status">
-              {expandedAttachmentView.label}：{expandedAttachmentView.detail}
-            </p>
-          </div>
         ) : null}
         {attribution.availability !== "available" ? (
           <p className="mb-2 flex items-center gap-2 text-[11px] text-orange" role="status" data-testid="session-provider-unavailable">
@@ -1552,7 +1632,7 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
           </p>
         ) : null}
         {hasUnsupportedImage ? (
-          <p className="mb-2 flex items-center gap-2 text-[11px] text-orange" role="status">
+          <p className="mb-2 flex items-center gap-2 text-[11px] text-orange" role="status" data-testid="composer-image-warning">
             当前模型未启用图片输入，请切换模型后发送。
             <Button size="sm" onClick={() => openModal({ type: "model-picker", taskId: task.id, sessionId })}>
               选择模型
@@ -1634,13 +1714,14 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
             ))}
           </ul>
         ) : null}
-        {readOnly ? (
+        {readOnly && !readonlyHintInCard ? (
           <p className="mb-2 flex items-center gap-2 text-[11px] text-muted" role="status" data-testid="composer-readonly-hint">
             {READONLY_ACTION_TITLE}；只读会话可以阅读与分析，不能发送消息或添加附件。
           </p>
         ) : null}
         <textarea
           ref={textareaRef}
+          data-testid="task-composer-input"
           aria-label="给 Agent 的消息"
           value={draft.text}
           onChange={(event) => {
@@ -1716,6 +1797,7 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
               icon="plus"
               label="添加文件"
               title="添加文件"
+              data-testid="composer-attach"
               className="h-7 w-[22px]"
               disabled={readOnly}
               onClick={() => attachInput.current?.click()}
@@ -1725,6 +1807,7 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
               type="file"
               multiple
               aria-label="附件选择"
+              data-testid="composer-file-input"
               disabled={readOnly}
               className="hidden"
               onChange={(event) => {
@@ -1736,6 +1819,7 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
               size="sm"
               variant="ghost"
               aria-label={`选择权限：${permissionLabel}`}
+              data-testid="composer-permission"
               title="当前会话权限"
               aria-haspopup="dialog"
               aria-expanded={modal?.type === "permission"}
@@ -1743,24 +1827,30 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
             >
               {permissionLabel}
             </Button>
-            {model?.thinking && model.thinking.mode !== "none" ? (
-              <Button
-                size="sm"
-                variant="ghost"
-                aria-label="选择推理档位"
-                aria-haspopup="dialog"
-                aria-expanded={modal?.type === "thinking-picker"}
-                onClick={() => openModal({ type: "thinking-picker", taskId: task.id, sessionId })}
-              >
-                {thinkingLabel}
-              </Button>
-            ) : null}
+            {/* The prototype always renders `thinkingControl()`: a model whose
+                catalog is still unknown shows 「推理 · 跟随模型」 instead of
+                nothing, and a model that declares no reasoning keeps the same
+                trigger, disabled and saying why. */}
+            <Button
+              size="sm"
+              variant="ghost"
+              aria-label="选择推理档位"
+              data-testid="composer-thinking"
+              disabled={thinkingResolved.catalog === "unsupported"}
+              title={thinkingResolved.catalog === "unsupported" ? "当前模型不支持推理档位" : undefined}
+              aria-haspopup="dialog"
+              aria-expanded={modal?.type === "thinking-picker"}
+              onClick={() => openModal({ type: "thinking-picker", taskId: task.id, sessionId })}
+            >
+              {thinkingLabel}
+            </Button>
           </div>
           <div className="flex flex-wrap items-center gap-1.5">
             <Button
               size="sm"
               variant="ghost"
               aria-label={`选择模型：${session?.model ?? "未选择"}`}
+              data-testid="composer-model-trigger"
               aria-haspopup="dialog"
               aria-expanded={modal?.type === "model-picker"}
               title={
@@ -1777,11 +1867,15 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
               className="max-w-[15rem] below-wide:max-w-[9rem]"
               onClick={() => openModal({ type: "model-picker", taskId: task.id, sessionId })}
             >
-              {/* Prototype `.model-trigger`: the model's own name and a chevron.
+              {/* Prototype `.model-trigger`: the model's own name, the 「· 不可用」
+                  suffix when the session's model left the catalog, and a chevron.
                   The provider, the model id and the window stay in the `title`
-                  and the meta row, so the row fits every tier without
-                  truncating the name. */}
-              <span className="truncate">{attribution.modelName ?? session?.model ?? "模型"}</span>
+                  and the meta row, so the row fits every tier without truncating
+                  the name. */}
+              <span className="truncate">
+                {attribution.modelName ?? session?.model ?? "模型"}
+                {attribution.availability === "available" ? "" : " · 不可用"}
+              </span>
               <Icon name="down" className="h-3 w-3" />
             </Button>
             {/* Prototype `.send{height:27px;width:27px;border-radius:7px;background:var(--accent)}`:
@@ -1789,6 +1883,7 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
                 tech instead of by its label. */}
             <button
               type="submit"
+              data-testid="composer-send"
               aria-label="发送消息"
               title={switchLocked ? "执行中不可发送，请先等待完成或停止" : "发送消息"}
               disabled={sending || readOnly || hasUnsupportedImage}
@@ -1807,7 +1902,7 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
         The attachment note the row replaces lives in every attachment's
         `detail` (chip `title` + preview line), as in the prototype.
       */}
-      <div className="mt-1.5 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-[10px] text-muted" data-testid="compose-meta">
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-[10px] text-muted" data-testid="compose-meta">
         <button
           type="button"
           aria-label="查看上下文占用"

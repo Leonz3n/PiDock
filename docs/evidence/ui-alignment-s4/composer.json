@@ -9,7 +9,7 @@
   ],
   "tiers": {
     "1440x900": {
-      "composerH": 149,
+      "composerH": 143,
       "formH": 122,
       "formPadding": "10px 12px",
       "composerMaxH": "65%",
@@ -25,11 +25,15 @@
         "w": 22
       },
       "attachOk": true,
+      "insetLeft": 20,
+      "insetRight": 20,
+      "formShadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(36, 43, 59, 0.02) 0px 3px 10px 0px",
+      "metaGap": 6,
       "strip": null,
       "stripCapped": null,
       "attachmentChips": 0,
       "workspaceH": 680,
-      "messagesH": 344,
+      "messagesH": 350,
       "cardPresent": true,
       "cardH": 53,
       "rows": [
@@ -47,11 +51,11 @@
         },
         {
           "kind": "div",
-          "h": 344
+          "h": 350
         },
         {
           "kind": "task-composer",
-          "h": 149
+          "h": 143
         }
       ],
       "noHorizontalOverflow": true,
@@ -61,7 +65,7 @@
       }
     },
     "1280x900": {
-      "composerH": 149,
+      "composerH": 143,
       "formH": 122,
       "formPadding": "10px 12px",
       "composerMaxH": "65%",
@@ -77,11 +81,15 @@
         "w": 22
       },
       "attachOk": true,
+      "insetLeft": 20,
+      "insetRight": 20,
+      "formShadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(36, 43, 59, 0.02) 0px 3px 10px 0px",
+      "metaGap": 6,
       "strip": null,
       "stripCapped": null,
       "attachmentChips": 0,
       "workspaceH": 680,
-      "messagesH": 344,
+      "messagesH": 350,
       "cardPresent": true,
       "cardH": 53,
       "rows": [
@@ -99,11 +107,11 @@
         },
         {
           "kind": "div",
-          "h": 344
+          "h": 350
         },
         {
           "kind": "task-composer",
-          "h": 149
+          "h": 143
         }
       ],
       "noHorizontalOverflow": true,
@@ -113,7 +121,7 @@
       }
     },
     "1024x800": {
-      "composerH": 149,
+      "composerH": 143,
       "formH": 122,
       "formPadding": "10px 12px",
       "composerMaxH": "65%",
@@ -129,11 +137,15 @@
         "w": 22
       },
       "attachOk": true,
+      "insetLeft": 20,
+      "insetRight": 20,
+      "formShadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(36, 43, 59, 0.02) 0px 3px 10px 0px",
+      "metaGap": 6,
       "strip": null,
       "stripCapped": null,
       "attachmentChips": 0,
       "workspaceH": 580,
-      "messagesH": 248,
+      "messagesH": 254,
       "cardPresent": true,
       "cardH": 53,
       "rows": [
@@ -151,11 +163,11 @@
         },
         {
           "kind": "div",
-          "h": 248
+          "h": 254
         },
         {
           "kind": "task-composer",
-          "h": 149
+          "h": 143
         }
       ],
       "noHorizontalOverflow": true,
@@ -165,7 +177,7 @@
       }
     },
     "900x800": {
-      "composerH": 149,
+      "composerH": 143,
       "formH": 122,
       "formPadding": "10px 12px",
       "composerMaxH": "65%",
@@ -181,11 +193,15 @@
         "w": 22
       },
       "attachOk": true,
+      "insetLeft": 20,
+      "insetRight": 20,
+      "formShadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(36, 43, 59, 0.02) 0px 3px 10px 0px",
+      "metaGap": 6,
       "strip": null,
       "stripCapped": null,
       "attachmentChips": 0,
       "workspaceH": 580,
-      "messagesH": 248,
+      "messagesH": 254,
       "cardPresent": true,
       "cardH": 53,
       "rows": [
@@ -203,11 +219,11 @@
         },
         {
           "kind": "div",
-          "h": 248
+          "h": 254
         },
         {
           "kind": "task-composer",
-          "h": 149
+          "h": 143
         }
       ],
       "noHorizontalOverflow": true,
@@ -217,7 +233,7 @@
       }
     },
     "720x760": {
-      "composerH": 149,
+      "composerH": 143,
       "formH": 122,
       "formPadding": "10px 12px",
       "composerMaxH": "none",
@@ -233,10 +249,14 @@
         "w": 22
       },
       "attachOk": true,
+      "insetLeft": 20,
+      "insetRight": 20,
+      "formShadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(36, 43, 59, 0.02) 0px 3px 10px 0px",
+      "metaGap": 6,
       "strip": null,
       "stripCapped": null,
       "attachmentChips": 0,
-      "workspaceH": 2804,
+      "workspaceH": 2798,
       "messagesH": 2473,
       "cardPresent": true,
       "cardH": 53,
@@ -259,7 +279,7 @@
         },
         {
           "kind": "task-composer",
-          "h": 149
+          "h": 143
         }
       ],
       "noHorizontalOverflow": true,
@@ -282,6 +302,12 @@
         "h": 28,
         "w": 28
       },
+      "inset": {
+        "left": 20,
+        "right": 20
+      },
+      "shadow": "rgba(36, 43, 59, 0.02) 0px 3px 10px 0px",
+      "metaGap": 8,
       "messagesH": 256
     },
     "1280x900": {
@@ -296,6 +322,12 @@
         "h": 28,
         "w": 28
       },
+      "inset": {
+        "left": 20,
+        "right": 20
+      },
+      "shadow": "rgba(36, 43, 59, 0.02) 0px 3px 10px 0px",
+      "metaGap": 8,
       "messagesH": 256
     },
     "1024x800": {
@@ -310,6 +342,12 @@
         "h": 28,
         "w": 28
       },
+      "inset": {
+        "left": 20,
+        "right": 20
+      },
+      "shadow": "rgba(36, 43, 59, 0.02) 0px 3px 10px 0px",
+      "metaGap": 8,
       "messagesH": 167
     },
     "900x800": {
@@ -324,6 +362,12 @@
         "h": 28,
         "w": 28
       },
+      "inset": {
+        "left": 20,
+        "right": 20
+      },
+      "shadow": "rgba(36, 43, 59, 0.02) 0px 3px 10px 0px",
+      "metaGap": 8,
       "messagesH": 167
     },
     "720x760": {
@@ -338,12 +382,18 @@
         "h": 28,
         "w": 28
       },
+      "inset": {
+        "left": 20,
+        "right": 20
+      },
+      "shadow": "rgba(36, 43, 59, 0.02) 0px 3px 10px 0px",
+      "metaGap": 8,
       "messagesH": 614
     }
   },
   "states": {
     "cardFree": {
-      "composerH": 149,
+      "composerH": 143,
       "formH": 122,
       "formPadding": "10px 12px",
       "composerMaxH": "65%",
@@ -359,11 +409,15 @@
         "w": 22
       },
       "attachOk": true,
+      "insetLeft": 20,
+      "insetRight": 20,
+      "formShadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(36, 43, 59, 0.02) 0px 3px 10px 0px",
+      "metaGap": 6,
       "strip": null,
       "stripCapped": null,
       "attachmentChips": 0,
       "workspaceH": 680,
-      "messagesH": 403,
+      "messagesH": 409,
       "cardPresent": false,
       "cardH": null,
       "rows": [
@@ -377,11 +431,11 @@
         },
         {
           "kind": "div",
-          "h": 403
+          "h": 409
         },
         {
           "kind": "task-composer",
-          "h": 149
+          "h": 143
         }
       ],
       "noHorizontalOverflow": true,
@@ -391,7 +445,7 @@
       }
     },
     "readOnly": {
-      "composerH": 174,
+      "composerH": 168,
       "formH": 147,
       "formPadding": "10px 12px",
       "composerMaxH": "65%",
@@ -407,11 +461,15 @@
         "w": 22
       },
       "attachOk": true,
+      "insetLeft": 20,
+      "insetRight": 20,
+      "formShadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(36, 43, 59, 0.02) 0px 3px 10px 0px",
+      "metaGap": 6,
       "strip": null,
       "stripCapped": null,
       "attachmentChips": 0,
       "workspaceH": 680,
-      "messagesH": 320,
+      "messagesH": 326,
       "cardPresent": true,
       "cardH": 53,
       "rows": [
@@ -429,11 +487,11 @@
         },
         {
           "kind": "div",
-          "h": 320
+          "h": 326
         },
         {
           "kind": "task-composer",
-          "h": 174
+          "h": 168
         }
       ],
       "noHorizontalOverflow": true,
@@ -451,15 +509,15 @@
     "paste": {
       "defaultPrevented": true,
       "attachmentLabels": [
-        "粘贴图片-atta.png"
+        "粘贴图片-3304.png"
       ],
       "attachmentDetail": "剪贴板图片 · 1 KB · 仅本页保留",
       "draftText": "看这张截图",
       "toast": "已粘贴 1 张图片，可附上文字后发送",
-      "composerH": 199
+      "composerH": 193
     },
     "unsupportedImage": {
-      "composerH": 233,
+      "composerH": 227,
       "formH": 206,
       "formPadding": "10px 12px",
       "composerMaxH": "65%",
@@ -475,6 +533,10 @@
         "w": 22
       },
       "attachOk": true,
+      "insetLeft": 20,
+      "insetRight": 20,
+      "formShadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(36, 43, 59, 0.02) 0px 3px 10px 0px",
+      "metaGap": 6,
       "strip": {
         "h": 42,
         "scrolls": false
@@ -482,7 +544,7 @@
       "stripCapped": true,
       "attachmentChips": 1,
       "workspaceH": 680,
-      "messagesH": 260,
+      "messagesH": 266,
       "cardPresent": true,
       "cardH": 53,
       "rows": [
@@ -500,11 +562,11 @@
         },
         {
           "kind": "div",
-          "h": 260
+          "h": 266
         },
         {
           "kind": "task-composer",
-          "h": 233
+          "h": 227
         }
       ],
       "noHorizontalOverflow": true,
@@ -519,8 +581,8 @@
       "attachmentsKept": 1
     },
     "heavyAttachments": {
-      "composerH": 184,
-      "formH": 157,
+      "composerH": 212,
+      "formH": 191,
       "formPadding": "10px 12px",
       "composerMaxH": "65%",
       "composerScrolls": false,
@@ -535,14 +597,18 @@
         "w": 22
       },
       "attachOk": true,
+      "insetLeft": 20,
+      "insetRight": 20,
+      "formShadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(36, 43, 59, 0.02) 0px 3px 10px 0px",
+      "metaGap": 6,
       "strip": {
-        "h": 27,
+        "h": 61,
         "scrolls": false
       },
       "stripCapped": true,
       "attachmentChips": 12,
       "workspaceH": 680,
-      "messagesH": 310,
+      "messagesH": 281,
       "cardPresent": true,
       "cardH": 53,
       "rows": [
@@ -560,11 +626,11 @@
         },
         {
           "kind": "div",
-          "h": 310
+          "h": 281
         },
         {
           "kind": "task-composer",
-          "h": 184
+          "h": 212
         }
       ],
       "noHorizontalOverflow": true,
@@ -576,10 +642,174 @@
     "heavyAttachmentsPrototype": {
       "composerH": 213,
       "messagesH": 210
+    },
+    "card-approval": {
+      "composerH": 143,
+      "formH": 122,
+      "formPadding": "10px 12px",
+      "composerMaxH": "65%",
+      "composerScrolls": false,
+      "textareaH": 66,
+      "textareaMinH": "66px",
+      "textareaMinOk": true,
+      "rowH": 28,
+      "rowWrapped": false,
+      "metaH": 15,
+      "attach": {
+        "h": 28,
+        "w": 22
+      },
+      "attachOk": true,
+      "insetLeft": 20,
+      "insetRight": 20,
+      "formShadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(36, 43, 59, 0.02) 0px 3px 10px 0px",
+      "metaGap": 6,
+      "strip": null,
+      "stripCapped": null,
+      "attachmentChips": 0,
+      "workspaceH": 680,
+      "messagesH": 346,
+      "cardPresent": true,
+      "cardH": 141,
+      "rows": [
+        {
+          "kind": "div",
+          "h": 32
+        },
+        {
+          "kind": "execution-card",
+          "h": 141
+        },
+        {
+          "kind": "div",
+          "h": 346
+        },
+        {
+          "kind": "task-composer",
+          "h": 143
+        }
+      ],
+      "noHorizontalOverflow": true,
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "note": "等待确认（卡内唯一审批面）",
+      "floor": 340
+    },
+    "card-failed": {
+      "composerH": 174,
+      "formH": 153,
+      "formPadding": "10px 12px",
+      "composerMaxH": "65%",
+      "composerScrolls": false,
+      "textareaH": 66,
+      "textareaMinH": "66px",
+      "textareaMinOk": true,
+      "rowH": 28,
+      "rowWrapped": false,
+      "metaH": 15,
+      "attach": {
+        "h": 28,
+        "w": 22
+      },
+      "attachOk": true,
+      "insetLeft": 20,
+      "insetRight": 20,
+      "formShadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(36, 43, 59, 0.02) 0px 3px 10px 0px",
+      "metaGap": 6,
+      "strip": null,
+      "stripCapped": null,
+      "attachmentChips": 0,
+      "workspaceH": 680,
+      "messagesH": 315,
+      "cardPresent": true,
+      "cardH": 141,
+      "rows": [
+        {
+          "kind": "div",
+          "h": 32
+        },
+        {
+          "kind": "execution-card",
+          "h": 141
+        },
+        {
+          "kind": "div",
+          "h": 315
+        },
+        {
+          "kind": "task-composer",
+          "h": 174
+        }
+      ],
+      "noHorizontalOverflow": true,
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "note": "失败回合后的记录卡",
+      "floor": 300
+    },
+    "card-failed-readonly": {
+      "composerH": 174,
+      "formH": 153,
+      "formPadding": "10px 12px",
+      "composerMaxH": "65%",
+      "composerScrolls": false,
+      "textareaH": 66,
+      "textareaMinH": "66px",
+      "textareaMinOk": true,
+      "rowH": 28,
+      "rowWrapped": false,
+      "metaH": 15,
+      "attach": {
+        "h": 28,
+        "w": 22
+      },
+      "attachOk": true,
+      "insetLeft": 20,
+      "insetRight": 20,
+      "formShadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(36, 43, 59, 0.02) 0px 3px 10px 0px",
+      "metaGap": 6,
+      "strip": null,
+      "stripCapped": null,
+      "attachmentChips": 0,
+      "workspaceH": 680,
+      "messagesH": 315,
+      "cardPresent": true,
+      "cardH": 141,
+      "rows": [
+        {
+          "kind": "div",
+          "h": 32
+        },
+        {
+          "kind": "execution-card",
+          "h": 141
+        },
+        {
+          "kind": "div",
+          "h": 315
+        },
+        {
+          "kind": "task-composer",
+          "h": 174
+        }
+      ],
+      "noHorizontalOverflow": true,
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "floor": 300,
+      "note": "只读 + 记录：卡片说明行承担规则，输入框不再重复",
+      "cardHintVisible": true,
+      "composerHintVisible": 0
     }
   },
   "assertions": {
-    "checked": 18,
+    "checked": 21,
     "violations": 0
   }
 }

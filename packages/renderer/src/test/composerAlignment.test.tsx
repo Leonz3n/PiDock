@@ -1,7 +1,7 @@
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { renderApp } from "./helpers";
+import { actStore, renderApp } from "./helpers";
 import { useHostStore } from "../stores/host";
 
 /**
@@ -54,9 +54,10 @@ describe("composer alignment", () => {
     expect(screen.getByRole("button", { name: /^选择模型：/ })).toHaveAttribute("aria-haspopup", "dialog");
     expect(screen.getByRole("button", { name: /^选择权限：/ })).toHaveAttribute("aria-haspopup", "dialog");
 
-    // Prototype `.compose-bottom{flex-wrap:wrap}` stays one line because the
-    // context button moved out to `compose-meta`; the context control is no
-    // longer part of the box's button row.
+    // Prototype `.compose-bottom` keeps the row on one line (`display:flex` with
+    // `justify-content:space-between`, no `flex-wrap`); our row keeps `flex-wrap`
+    // only as a narrow-tier fallback and stayed a single line at every measured
+    // tier. The context control is no longer part of the box's button row.
     const form = input.closest("form")!;
     expect(within(form).queryByRole("button", { name: "查看上下文占用" })).not.toBeInTheDocument();
     const meta = screen.getByTestId("compose-meta");
@@ -88,9 +89,10 @@ describe("composer alignment", () => {
       const input = screen.getByLabelText("给 Agent 的消息") as HTMLTextAreaElement;
       await userEvent.setup().click(input);
       const shot = new File(["png"], "shot.png", { type: "image/png" });
-      // The handler cancels the browser's own paste so the image is not dropped.
-      const prevented = await act(async () => pasteImage(input, [shot], "看这张截图"));
-      expect(prevented).toBe(false);
+      // The handler cancels the browser's own paste so the image is not dropped
+      // (`dispatchEvent` reports whether the event was left uncancelled).
+      const notCancelled = await act(async () => pasteImage(input, [shot], "看这张截图"));
+      expect(notCancelled).toBe(false);
 
       const attachments = await screen.findByTestId("composer-attachments");
       // The clipboard carries no file name, so the id names the attachment.
@@ -102,14 +104,82 @@ describe("composer alignment", () => {
       expect(input.value).toBe("看这张截图");
       expect(await screen.findByText("已粘贴 1 张图片，可附上文字后发送")).toBeInTheDocument();
 
-      // Expanding the chip shows the source line; removing it clears the strip.
+      // Clicking a chip opens the prototype's lightbox instead of expanding the
+      // strip: the box keeps its height and the source line moves into the dialog.
       await userEvent.setup().click(chip);
-      expect(await screen.findByTestId("composer-attachment-preview")).toHaveTextContent("仅本页保留");
-      await userEvent.setup().click(within(attachments).getByRole("button", { name: /^移除附件 / }));
+      const lightbox = await screen.findByRole("dialog", { name: /^粘贴图片-/ });
+      expect(within(lightbox).getByTestId("attachment-preview-detail")).toHaveTextContent("仅本页保留");
+      expect(within(lightbox).getByTestId("attachment-preview-image")).toHaveAttribute("src", "blob:mock");
+      await userEvent.setup().keyboard("{Escape}");
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: /^粘贴图片-/ })).not.toBeInTheDocument());
+      expect(chip).toHaveFocus();
+      await userEvent.setup().click(within(attachments).getByTestId("composer-attachment-remove"));
       await waitFor(() => expect(screen.queryByTestId("composer-attachments")).not.toBeInTheDocument());
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it("gives each pasted image its own short name and releases its blob URL", async () => {
+    renderApp("/projects/atlas/tasks/release?session=main");
+    await screen.findByRole("heading", { name: "发布前检查" });
+    // The clipboard carries no name, so the label's four-character key has to be
+    // per paste: a constant one made two images share a name and an accessible
+    // name ([UI 对齐 06] #30 review P1-2).
+    const revokeObjectURL = vi.fn();
+    let created = 0;
+    URL.createObjectURL = () => `blob:mock-${created++}`;
+    URL.revokeObjectURL = revokeObjectURL;
+    try {
+      const input = screen.getByLabelText("给 Agent 的消息") as HTMLTextAreaElement;
+      const user = userEvent.setup();
+      await user.click(input);
+      await act(async () => pasteImage(input, [new File(["png"], "a.png", { type: "image/png" })], "一"));
+      await act(async () => pasteImage(input, [new File(["png"], "b.png", { type: "image/png" })], "二"));
+
+      const attachments = await screen.findByTestId("composer-attachments");
+      const labels = within(attachments)
+        .getAllByTestId("composer-attachment-open")
+        .map((chip) => chip.textContent?.trim() ?? "");
+      expect(labels).toHaveLength(2);
+      for (const label of labels) expect(label).toMatch(/^粘贴图片-\w{4}\.png$/);
+      expect(new Set(labels).size).toBe(2);
+
+      // Removing an attachment releases the URL this composer created for it.
+      await user.click(within(attachments).getAllByTestId("composer-attachment-remove")[0]);
+      await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledTimes(1));
+      expect(revokeObjectURL).toHaveBeenCalledWith("blob:mock-0");
+    } finally {
+      URL.createObjectURL = undefined as unknown as typeof URL.createObjectURL;
+      URL.revokeObjectURL = undefined as unknown as typeof URL.revokeObjectURL;
+    }
+  });
+
+  it("shows the reasoning trigger in the prototype's default wording", async () => {
+    renderApp("/projects/atlas/tasks/release?session=main");
+    await screen.findByRole("heading", { name: "发布前检查" });
+    // Prototype `thinkingControl()` renders for every model; a catalog that has
+    // not declared levels shows 「推理 · 跟随模型」 instead of nothing ([UI 对齐
+    // 06] #30 review P2-C — the seeded Claude Sonnet carries no `thinking`).
+    const thinking = screen.getByTestId("composer-thinking");
+    expect(thinking).toHaveTextContent("推理 · 跟随模型");
+    expect(thinking).toBeEnabled();
+    expect(thinking).toHaveAttribute("aria-haspopup", "dialog");
+  });
+
+  it("marks the model trigger when the session's model left the catalog", async () => {
+    renderApp("/projects/atlas/tasks/release?session=main");
+    await screen.findByRole("heading", { name: "发布前检查" });
+    expect(screen.getByTestId("composer-model-trigger")).toHaveTextContent("Claude Sonnet");
+    expect(screen.getByTestId("composer-model-trigger")).not.toHaveTextContent("不可用");
+
+    // Prototype `.model-trigger` appends 「· 不可用」 when the session's model is no
+    // longer in the provider's list; the trigger keeps the name it was chosen with
+    // and the reason stays in the box ([UI 对齐 06] #30 review P2-C).
+    await actStore(() => useHostStore.getState().removeProvider("provider-anthropic"));
+    await actStore(() => useHostStore.getState().refresh());
+    await waitFor(() => expect(screen.getByTestId("composer-model-trigger")).toHaveTextContent("Claude Sonnet · 不可用"));
+    expect(screen.getByTestId("session-provider-unavailable")).toBeInTheDocument();
   });
 
   it("leaves a paste without an image to the browser", async () => {
@@ -119,8 +189,8 @@ describe("composer alignment", () => {
     await userEvent.setup().click(input);
     const note = new File(["hello"], "notes.txt", { type: "text/plain" });
     // Not cancelled: the normal text paste (and its undo) still works.
-    const prevented = await act(async () => pasteImage(input, [note], "普通文字"));
-    expect(prevented).toBe(true);
+    const notCancelled = await act(async () => pasteImage(input, [note], "普通文字"));
+    expect(notCancelled).toBe(true);
     expect(screen.queryByTestId("composer-attachments")).not.toBeInTheDocument();
     expect(screen.queryByText(/已粘贴/)).not.toBeInTheDocument();
   });
@@ -201,5 +271,24 @@ describe("composer alignment", () => {
     // A disabled control still has to look disabled.
     expect(attach.className).toContain("disabled:opacity-50");
     expect(screen.getByRole("button", { name: "发送消息" })).toBeDisabled();
+  });
+
+  it("states the read-only rule once: the card owns it while the card has an action", async () => {
+    const user = userEvent.setup();
+    // The failure is the end of a scripted turn, so the record has to be produced
+    // first; the card then disables 检查并重试 in a read-only session and its own
+    // line is the visible reason, so the composer must not repeat it (25px of the
+    // read-only column, [UI 对齐 06] #30 review P1-1/P2-E).
+    renderApp("/projects/atlas/tasks/release?session=failed");
+    const input = await screen.findByLabelText("给 Agent 的消息");
+    await user.type(input, "修复构建并重试");
+    await user.click(screen.getByTestId("composer-send"));
+    await screen.findByTestId("execution-action-retry", {}, { timeout: 4000 });
+    await user.click(screen.getByTestId("composer-permission"));
+    await user.click(await screen.findByTestId("permission-read"));
+
+    expect(await screen.findByTestId("execution-readonly-hint")).toBeInTheDocument();
+    expect(screen.getByTestId("execution-action-retry")).toBeDisabled();
+    await waitFor(() => expect(screen.queryByTestId("composer-readonly-hint")).not.toBeInTheDocument());
   });
 });
