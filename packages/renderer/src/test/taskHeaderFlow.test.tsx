@@ -220,6 +220,7 @@ describe("task workspace vertical structure", () => {
     await screen.findByRole("heading", { name: "发布前检查" });
 
     const list = await screen.findByLabelText("当前会话启动的 Subagent");
+    await user.click(within(list).getByRole("button", { name: "展开列表" }));
     await user.click(within(list).getByText("查询链路分析"));
     await screen.findByTestId("subagent-sidebar");
     // Prototype `@media(max-width:720px){.subagent-sidebar{height:620px}}`.

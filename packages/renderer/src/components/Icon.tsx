@@ -35,6 +35,8 @@ export const ICON_PATHS = {
   // The composer's send button ([UI 对齐 06] #30): prototype `.send` is an
   // accent square with this arrow, not a labelled button.
   arrow: "M12 19V5 M5 12l7-7 7 7",
+  // Prototype `paths.check`: the tool rows' completed-step glyph.
+  check: "M5 12l4 4L19 6",
 } as const;
 
 export type IconName = keyof typeof ICON_PATHS;

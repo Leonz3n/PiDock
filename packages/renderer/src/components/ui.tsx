@@ -230,6 +230,42 @@ export function EmptyState({ children }: { children: ReactNode }) {
   return <p className="rounded-md border border-dashed border-line px-4 py-6 text-center text-xs text-muted">{children}</p>;
 }
 
+/**
+ * The product's brand mark. One spelling for the concept: the sidebar and the
+ * conversation's agent row both render it, at the two sizes the prototype uses
+ * (`style.css` `.brand .brandmark` 29px, `.message-head .brandmark` 22px).
+ */
+export function BrandMark({ size = "md" }: { size?: "md" | "sm" }) {
+  const box = size === "sm" ? "h-[22px] w-[22px] rounded-md text-[16px]" : "h-9 w-9 rounded-full text-base";
+  return (
+    <span
+      aria-hidden
+      data-testid={size === "sm" ? "message-brandmark" : "brand-mark"}
+      className={`grid shrink-0 place-items-center border border-line bg-paper text-accent ${box}`}
+    >
+      π
+    </span>
+  );
+}
+
+/**
+ * Local-user avatar (the prototype's `.avatar`). This app has no account name:
+ * the identity it does have is the local workspace, so the mark spells that out
+ * in one character instead of inventing initials.
+ */
+export function LocalUserAvatar() {
+  return (
+    <span
+      aria-hidden
+      data-testid="message-avatar"
+      title="本机工作区"
+      className="grid h-[25px] w-[25px] shrink-0 place-items-center rounded-full bg-[#e3e4e5] text-[10px] text-accent"
+    >
+      本
+    </span>
+  );
+}
+
 export function KeyValue({ rows }: { rows: [string, ReactNode][] }) {
   return (
     <dl className="grid grid-cols-[minmax(90px,auto)_1fr] gap-x-4 gap-y-2 text-xs">

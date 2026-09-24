@@ -278,7 +278,11 @@ describe("composer attachments", () => {
     await user.click(screen.getByRole("button", { name: "发送消息" }));
 
     const conversation = await screen.findByLabelText("会话消息");
-    expect(await within(conversation).findByText("引用 · spec.md")).toBeInTheDocument();
+    // [UI 对齐 07] (#31): a sent message shows its references as the prototype's
+    // `@ <name>` chip inside the bubble, not as a `引用 · ` badge.
+    const chip = await within(conversation).findByText("@ spec.md");
+    expect(chip).toBeInTheDocument();
+    expect(chip.className).toContain("bg-[#edeff3]");
   });
 
   it("blocks sending an image when the selected model declares no image input", async () => {
@@ -338,6 +342,7 @@ describe("subagent sidebar", () => {
     await screen.findByRole("heading", { name: "发布前检查" });
 
     const list = await screen.findByLabelText("当前会话启动的 Subagent");
+    await user.click(within(list).getByRole("button", { name: "展开列表" }));
     expect(within(list).getByText("查询链路分析")).toBeInTheDocument();
     expect(within(list).getByText("前端字段检查")).toBeInTheDocument();
 

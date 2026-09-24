@@ -133,6 +133,12 @@ export type Message = {
   streaming?: boolean;
   references?: Reference[];
   code?: { language: string; source: string; label: string };
+  /**
+   * When the Host created the message. Optional: a Host that does not stamp it
+   * leaves the conversation to fall back to the session's `lastActivity`
+   * ([UI 对齐 07] #31) instead of a guessed time.
+   */
+  createdAt?: string;
 };
 
 export type Approval = {

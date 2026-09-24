@@ -118,6 +118,9 @@ describe("task workspace tiers", () => {
     await screen.findByRole("heading", { name: "发布前检查" });
 
     const list = await screen.findByLabelText("当前会话启动的 Subagent");
+    // [UI 对齐 07] (#31) the card grid sits behind the list's disclosure so a
+    // session's child agents stop charging the conversation 78px permanently.
+    await user.click(within(list).getByRole("button", { name: "展开列表" }));
     await user.click(within(list).getByText("查询链路分析"));
     const panel = await screen.findByTestId("subagent-sidebar");
     // One rail, not two free-standing columns: 43% + 40% would leave nothing.
