@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { Badge, Button, EmptyState, Panel } from "../components/ui";
+import { Badge, Button, EmptyState } from "../components/ui";
+import { Card, PageIntro, PageTitle } from "../components/Management";
 import { cleanupReceiptLines, cleanupRecoveryLines, lifecycleSummary, resourceIdentityLabel } from "../data/taskLifecycle";
 import type { TaskLifecycleState } from "../data/types";
 import { useHostStore } from "../stores/host";
@@ -40,16 +41,18 @@ export function ArchivePage() {
   }, [loadLifecycleState, taskIds]);
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4" data-testid="archive-page">
       <header>
-        <h1 className="text-base font-medium text-ink">已归档</h1>
-        <p className="mt-1 text-xs text-muted">
-          归档停止执行、使未执行确认失效并暂停调度；恢复任务不自动启动服务或重新启用调度。清理只面向已归档任务，且与归档相互独立。
-        </p>
+        <PageTitle>已归档</PageTitle>
       </header>
+      <PageIntro>
+        归档停止运行并保留代码、会话和浏览器状态；清理是另一个操作。恢复任务不自动启动服务或重新启用调度。
+      </PageIntro>
 
       {archived.length === 0 ? (
-        <EmptyState>还没有归档任务。</EmptyState>
+        <Card>
+          <EmptyState>还没有归档任务。可从任务右上角的「···」菜单体验归档。</EmptyState>
+        </Card>
       ) : (
         <ul className="flex flex-col gap-3">
           {archived.map((task) => {
@@ -57,10 +60,29 @@ export function ArchivePage() {
             const error = stateErrors[task.id];
             const summary = state ? lifecycleSummary(state) : null;
             const receipt = state?.cleanup ?? null;
+            const directoryCount = task.directories?.length ?? 0;
+            const shape =
+              task.repos.length > 0 ? `${task.repos.length} 个仓库` : directoryCount > 0 ? `${directoryCount} 个普通目录` : "普通目录";
             return (
               <li key={task.id}>
-                <Panel title={task.name} actions={<Badge tone="warn">已归档</Badge>}>
-                  <p className="text-xs text-muted">
+                <Card>
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <h3 className="text-[13px] font-[650] text-ink">{task.name}</h3>
+                      <small className="text-[11px] text-muted">{shape} · 会话与浏览器状态已保留</small>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge tone="warn">已归档</Badge>
+                      <Button size="sm" onClick={() => void restoreTask(task.id)}>
+                        恢复任务
+                      </Button>
+                      <Button size="sm" variant="primary" onClick={() => openModal({ type: "cleanup", taskId: task.id })}>
+                        预览清理清单
+                      </Button>
+                    </div>
+                  </div>
+
+                  <p className="mt-3 text-xs text-muted">
                     工作区 {task.workspaceKey} · 会话 {task.sessions.length} 个 · 归档时间 {task.cleanupAvailableAt?.slice(0, 10) ?? "—"}
                   </p>
                   {error ? <p className="mt-2 text-xs text-orange">生命周期读取失败：{error}</p> : null}
@@ -103,18 +125,10 @@ export function ArchivePage() {
                       </ul>
                     </div>
                   ) : null}
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <Button size="sm" onClick={() => void restoreTask(task.id)}>
-                      恢复任务
-                    </Button>
-                    <Button size="sm" variant="primary" onClick={() => openModal({ type: "cleanup", taskId: task.id })}>
-                      预览清理清单
-                    </Button>
-                  </div>
-                  <p className="mt-2 text-[11px] text-muted">
+                  <p className="mt-3 text-[11px] text-muted">
                     整理前先确认未交付范围（未提交与未推送提交）并保留独立副本或所选导出，未清理的归档任务仍然阻止所属项目被删除，清理成功后才解除项目关联。
                   </p>
-                </Panel>
+                </Card>
               </li>
             );
           })}
