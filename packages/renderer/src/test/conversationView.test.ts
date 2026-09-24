@@ -101,8 +101,8 @@ describe("tool result card", () => {
   it("takes its rows from the workspace the task already reports", () => {
     const view = toolResultView({ record: base, ...counts });
     expect(view?.rows).toEqual([
-      { id: "workspace", label: "4 个仓库工作副本", right: "查看文件 ↗", panel: "files" },
-      { id: "services", label: "服务依赖与端口", right: "5 本地 · 2 远程" },
+      { id: "workspace", label: "准备 4 个仓库工作副本", right: "查看文件 ↗", panel: "files" },
+      { id: "services", label: "解析服务依赖与端口", right: "5 本地 · 2 远程" },
     ]);
   });
 

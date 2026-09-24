@@ -1027,9 +1027,14 @@ export function SessionSubagentList({
         </span>
       </div>
       {expanded ? (
+        // Prototype `.subagent-cards{grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}`.
+        // The track count is left to `auto-fit`: at 900px the prototype really
+        // renders two columns, so a forced single column would be our own rule
+        // rather than the prototype's (the evidence script compares the count
+        // against the prototype measured in the same run).
         <div
           data-testid="subagent-cards"
-          className="mt-[9px] grid grid-cols-[repeat(auto-fit,minmax(190px,1fr))] gap-2 below-mid:grid-cols-1"
+          className="mt-[9px] grid grid-cols-[repeat(auto-fit,minmax(190px,1fr))] gap-2"
         >
           {agents.map((agent) => (
             <button

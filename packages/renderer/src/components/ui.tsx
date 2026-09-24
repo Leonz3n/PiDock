@@ -236,7 +236,8 @@ export function EmptyState({ children }: { children: ReactNode }) {
  * (`style.css` `.brand .brandmark` 29px, `.message-head .brandmark` 22px).
  */
 export function BrandMark({ size = "md" }: { size?: "md" | "sm" }) {
-  const box = size === "sm" ? "h-[22px] w-[22px] rounded-md text-[16px]" : "h-9 w-9 rounded-full text-base";
+  // Prototype `.message-head .brandmark{width:22px;height:22px;font-size:18px;border-radius:6px}`.
+  const box = size === "sm" ? "h-[22px] w-[22px] rounded-md text-[18px]" : "h-9 w-9 rounded-full text-base";
   return (
     <span
       aria-hidden
