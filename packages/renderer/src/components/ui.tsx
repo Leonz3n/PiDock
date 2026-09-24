@@ -2,7 +2,9 @@ import { useEffect, useRef, type ButtonHTMLAttributes, type ComponentPropsWithRe
 import { Icon, type IconName } from "./Icon";
 
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
-  variant?: "default" | "primary" | "ghost";
+  // `danger` is the prototype's `.btn.danger{color:#ad4545;border-color:#ead0d0}`
+  // — the destructive entry in the management dialogs ([UI 对齐 08] #32).
+  variant?: "default" | "primary" | "ghost" | "danger";
   size?: "md" | "sm";
 };
 
@@ -14,7 +16,9 @@ export function Button({ variant = "default", size = "md", className = "", ...re
       ? "border-accent bg-accent text-white hover:bg-accent/90"
       : variant === "ghost"
         ? "border-transparent text-muted hover:bg-soft hover:text-ink"
-        : "border-line bg-paper text-ink hover:border-accent/40 hover:bg-soft",
+        : variant === "danger"
+          ? "border-[#ead0d0] bg-paper text-[#ad4545] hover:bg-[#fdf3f3]"
+          : "border-line bg-paper text-ink hover:border-accent/40 hover:bg-soft",
     // A disabled button must look disabled: the task header keeps the
     // prototype's `toggle-run` visible when a task has no local service, and a
     // primary-looking button that ignores clicks reads as broken (#27 review
