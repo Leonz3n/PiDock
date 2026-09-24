@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Badge, Button, Panel } from "../components/ui";
 import { Icon } from "../components/Icon";
 import { Card, CardGrid, PageIntro, PageTitle, ViewLabel } from "../components/Management";
-import { describeContextWindow, describeProviderStatus, formatTokens } from "../data/providerState";
+import { describeContextWindow, describeProviderStatus, formatTokens, protocolLabel } from "../data/providerState";
 import type { ProviderProfile, ProviderStatusView } from "../data/types";
 import { useHostStore } from "../stores/host";
 import { useUiStore } from "../stores/ui";
@@ -85,10 +85,10 @@ export function ProvidersPage() {
 
               <h3 className="mt-4 text-[13px] font-[650] text-ink">{provider.name}</h3>
               <div className="mt-[7px]">
-                <Badge>{provider.protocol}</Badge>
+                <Badge>{protocolLabel(provider.protocol)}</Badge>
               </div>
 
-              <p className="mono my-3 text-[11px] text-[#94979c] [overflow-wrap:anywhere]" data-testid={`provider-endpoint-${provider.id}`}>
+              <p className="mono my-3 font-mono text-[11px] text-[#94979c] [overflow-wrap:anywhere]" data-testid={`provider-endpoint-${provider.id}`}>
                 {provider.baseUrl}
               </p>
 

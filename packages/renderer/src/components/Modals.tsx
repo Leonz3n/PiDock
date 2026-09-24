@@ -39,6 +39,7 @@ import {
   formatTokens,
   modelDisplayName,
   movePickerCursor,
+  PROTOCOL_LABELS,
   resolveSessionThinking,
   validateProviderDraft,
 } from "../data/providerState";
@@ -2145,9 +2146,11 @@ function ProviderEditModal({ providerId, onClose }: { providerId?: string; onClo
             onChange={(event) => setProtocol(event.target.value)}
             className="rounded-md border border-line px-2 py-1.5 text-sm"
           >
-            <option value="anthropic-messages">anthropic-messages</option>
-            <option value="openai-responses">openai-responses</option>
-            <option value="openai-chat-completions">openai-chat-completions</option>
+            {Object.entries(PROTOCOL_LABELS).map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
           </select>
         </Field>
         <Field label="服务地址" hint="凭据通过本机私有配置引用，不写入共享模板">
