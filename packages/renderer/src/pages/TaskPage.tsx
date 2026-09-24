@@ -23,11 +23,13 @@ import type { Environment, Message, Reference, Session, Task } from "../data/typ
 import {
   BUILTIN_COMMANDS,
   activeCompletionToken,
+  attachmentSourceLabel,
   checkDraftReference,
   referenceProvenance,
   commandCandidates,
   describeReferenceChip,
   fileCandidates,
+  pastedImageFiles,
   resolveComposerKey,
   skillCandidates,
   suggestCommand,
@@ -1276,8 +1278,13 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
   const navigate = useNavigationStore((state) => state.navigate);
   const pushToast = useUiStore((state) => state.pushToast);
   const openModal = useUiStore((state) => state.openModal);
+  const modal = useUiStore((state) => state.modal);
   const providers = useHostStore((state) => state.workspace?.providers ?? []);
   const [sending, setSending] = useState(false);
+  // A read-only session keeps its draft and its reading tools; sending and
+  // attaching are the two entries it loses ([UI 对齐 06] #30), and the loss has
+  // to be visible, not only a `title` on a disabled control.
+  const readOnly = session?.permission === "read";
 
   const provider = providers.find((item) => item.id === session?.providerId);
   const model = provider?.models.find((item) => item.id === session?.model);
@@ -1307,11 +1314,44 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
   const [completionDismissed, setCompletionDismissed] = useState(false);
   const [completionIndex, setCompletionIndex] = useState(0);
   const [expandedReference, setExpandedReference] = useState<string | null>(null);
+  // Pasting an image inserts its text at the caret, and React re-renders the
+  // textarea from the store afterwards; the caret is restored from this ref in
+  // the effect below so the user keeps typing where the paste happened.
+  const pendingSelection = useRef<number | null>(null);
+  const [expandedAttachment, setExpandedAttachment] = useState<string | null>(null);
   const attachments = draft.references.filter((reference) => reference.kind === "attachment");
   const plainReferences = draft.references.filter((reference) => reference.kind !== "attachment");
   // Images require the selected model to declare image input; the prototype blocks
   // the send and keeps the draft rather than silently dropping the attachment.
   const hasUnsupportedImage = attachments.some((reference) => reference.previewUrl) && !model?.supportsImages;
+  const expandedAttachmentView = attachments.find((reference) => reference.id === expandedAttachment) ?? null;
+
+  useEffect(() => {
+    const caretTarget = pendingSelection.current;
+    if (caretTarget === null) return;
+    pendingSelection.current = null;
+    const element = textareaRef.current;
+    if (!element) return;
+    element.focus();
+    element.setSelectionRange(caretTarget, caretTarget);
+  }, [draft.text]);
+
+  const addFiles = (files: readonly File[], pasted: boolean) => {
+    files.forEach((file, index) => {
+      const isImage = file.type.startsWith("image/");
+      const id = `attach-${pasted ? "paste" : "file"}-${Date.now()}-${index}-${file.name}`;
+      const { label, detail } = attachmentSourceLabel({ file, pasted, id });
+      const previewUrl =
+        isImage && typeof URL !== "undefined" && typeof URL.createObjectURL === "function" ? URL.createObjectURL(file) : undefined;
+      addReference(task.id, sessionId, {
+        id,
+        kind: "attachment",
+        label,
+        detail,
+        ...(previewUrl !== undefined ? { previewUrl } : {}),
+      });
+    });
+  };
 
   // [PiDock 13] (#16): one candidate source per symbol — `@` searches the
   // task's worktree files and plain-directory links together, `$` searches
@@ -1426,8 +1466,11 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
     setCompletionDismissed(true);
   };
 
+  // The prototype's `.composer-wrap` holds the box and the meta row, never
+  // grows past 65% of the column and does not shrink, so a long attachment
+  // list scrolls here instead of eating the conversation ([UI 对齐 06] #30).
   return (
-    <div data-testid="task-composer" className="flex flex-col gap-2">
+    <div data-testid="task-composer" className="flex shrink-0 flex-col gap-1.5 below-stack:max-h-none max-h-[65%] overflow-auto">
       <form
         className="rounded-panel border border-line bg-paper px-3 py-2.5"
         onSubmit={async (event) => {
@@ -1463,19 +1506,45 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
         }}
       >
         {attachments.length > 0 ? (
-          <ul className="mb-2 flex flex-wrap gap-2" data-testid="composer-attachments">
+          // Prototype `.image-attachments{max-height:182px;overflow:auto}`: a
+          // long attachment list scrolls inside the strip instead of pushing the
+          // conversation off the column.
+          <ul className="mb-2 flex max-h-[182px] flex-wrap gap-2 overflow-auto" data-testid="composer-attachments">
             {attachments.map((reference) => (
               <li key={reference.id} className="flex items-center gap-2 rounded-md border border-line bg-soft px-2 py-1 text-[11px] text-muted">
-                {reference.previewUrl ? (
-                  <img src={reference.previewUrl} alt={reference.label} className="h-8 w-8 rounded object-cover" data-testid={`attachment-image-${reference.id}`} />
-                ) : null}
-                <span>{reference.label}</span>
+                <button
+                  type="button"
+                  aria-label={`预览 ${reference.label}`}
+                  aria-pressed={expandedAttachment === reference.id}
+                  title={reference.detail}
+                  className="flex items-center gap-2"
+                  onClick={() => setExpandedAttachment(expandedAttachment === reference.id ? null : reference.id)}
+                >
+                  {reference.previewUrl ? (
+                    <img src={reference.previewUrl} alt={reference.label} className="h-8 w-8 rounded object-cover" data-testid={`attachment-image-${reference.id}`} />
+                  ) : null}
+                  <span>{reference.label}</span>
+                </button>
                 <button type="button" aria-label={`移除附件 ${reference.label}`} onClick={() => removeReference(task.id, sessionId, reference.id)}>
                   ×
                 </button>
               </li>
             ))}
           </ul>
+        ) : null}
+        {expandedAttachmentView ? (
+          <div className="mb-2" data-testid="composer-attachment-preview">
+            {expandedAttachmentView.previewUrl ? (
+              <img
+                src={expandedAttachmentView.previewUrl}
+                alt={expandedAttachmentView.label}
+                className="max-h-40 rounded-md border border-line bg-soft object-contain"
+              />
+            ) : null}
+            <p className="mt-1 text-[11px] text-muted" role="status">
+              {expandedAttachmentView.label}：{expandedAttachmentView.detail}
+            </p>
+          </div>
         ) : null}
         {attribution.availability !== "available" ? (
           <p className="mb-2 flex items-center gap-2 text-[11px] text-orange" role="status" data-testid="session-provider-unavailable">
@@ -1565,9 +1634,14 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
             ))}
           </ul>
         ) : null}
+        {readOnly ? (
+          <p className="mb-2 flex items-center gap-2 text-[11px] text-muted" role="status" data-testid="composer-readonly-hint">
+            {READONLY_ACTION_TITLE}；只读会话可以阅读与分析，不能发送消息或添加附件。
+          </p>
+        ) : null}
         <textarea
           ref={textareaRef}
-          aria-label="消息输入"
+          aria-label="给 Agent 的消息"
           value={draft.text}
           onChange={(event) => {
             setText(task.id, sessionId, event.target.value);
@@ -1578,6 +1652,26 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
           onSelect={(event) => {
             setCaret(event.currentTarget.selectionStart ?? 0);
             setCompletionDismissed(false);
+          }}
+          onPaste={(event) => {
+            // Prototype `paste` handler: an image on the clipboard becomes an
+            // attachment and the clipboard's plain text is inserted at the
+            // caret; a paste without an image is left to the browser so the
+            // normal text paste (and its undo) still works.
+            const images = pastedImageFiles(event.clipboardData?.items ?? [], event.clipboardData?.files ?? []);
+            if (images.length === 0) return;
+            event.preventDefault();
+            const pastedText = event.clipboardData?.getData("text/plain") ?? "";
+            const element = event.currentTarget;
+            const start = element.selectionStart ?? draft.text.length;
+            const end = element.selectionEnd ?? start;
+            const next = `${draft.text.slice(0, start)}${pastedText}${draft.text.slice(end)}`;
+            setText(task.id, sessionId, next);
+            setCaret(start + pastedText.length);
+            pendingSelection.current = start + pastedText.length;
+            addFiles(images, true);
+            setCompletionDismissed(false);
+            pushToast(`已粘贴 ${images.length} 张图片，可附上文字后发送`);
           }}
           onKeyDown={(event) => {
             // Box 11: the candidate list owns Tab/Enter/Esc/arrows while it is
@@ -1612,37 +1706,29 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
             event.currentTarget.form?.requestSubmit();
           }}
           rows={3}
-          placeholder="描述要验证或修改的内容，输入 @ 引用文件、$ 调用技能、/ 打开命令"
-          className="w-full resize-none border-0 bg-transparent text-sm text-ink outline-none"
-          disabled={session?.permission === "read"}
+          placeholder="描述你想做什么，或粘贴图片／截图…"
+          className="block min-h-[66px] w-full resize-none border-0 bg-transparent text-sm text-ink outline-none"
+          disabled={readOnly}
         />
-        <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+        <div className="mt-1.5 flex flex-wrap items-center justify-between gap-x-2 gap-y-1.5">
           <div className="flex flex-wrap items-center gap-1.5">
-            <Button size="sm" variant="ghost" aria-label="添加附件" onClick={() => attachInput.current?.click()}>
-              +
-            </Button>
+            <IconButton
+              icon="plus"
+              label="添加文件"
+              title="添加文件"
+              className="h-7 w-[22px]"
+              disabled={readOnly}
+              onClick={() => attachInput.current?.click()}
+            />
             <input
               ref={attachInput}
               type="file"
               multiple
               aria-label="附件选择"
+              disabled={readOnly}
               className="hidden"
               onChange={(event) => {
-                const files = Array.from(event.target.files ?? []);
-                files.forEach((file) => {
-                  const isImage = file.type.startsWith("image/");
-                  const previewUrl =
-                    isImage && typeof URL !== "undefined" && typeof URL.createObjectURL === "function"
-                      ? URL.createObjectURL(file)
-                      : undefined;
-                  addReference(task.id, sessionId, {
-                    id: `attach-${Date.now()}-${file.name}`,
-                    kind: "attachment",
-                    label: file.name,
-                    detail: isImage ? "图片附件 · 仅本页预览" : "文件附件 · 仅保留名称",
-                    previewUrl,
-                  });
-                });
+                addFiles(Array.from(event.target.files ?? []), false);
                 event.target.value = "";
               }}
             />
@@ -1650,6 +1736,9 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
               size="sm"
               variant="ghost"
               aria-label={`选择权限：${permissionLabel}`}
+              title="当前会话权限"
+              aria-haspopup="dialog"
+              aria-expanded={modal?.type === "permission"}
               onClick={() => openModal({ type: "permission", taskId: task.id, sessionId })}
             >
               {permissionLabel}
@@ -1659,42 +1748,93 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
                 size="sm"
                 variant="ghost"
                 aria-label="选择推理档位"
+                aria-haspopup="dialog"
+                aria-expanded={modal?.type === "thinking-picker"}
                 onClick={() => openModal({ type: "thinking-picker", taskId: task.id, sessionId })}
               >
                 {thinkingLabel}
               </Button>
             ) : null}
-            <Button
-              size="sm"
-              variant="ghost"
-              aria-label="查看上下文占用"
-              onClick={() => openModal({ type: "context", taskId: task.id, sessionId })}
-            >
-              上下文 {formatTokens(contextDisplay.used * 1000)} / {formatTokens(contextDisplay.window * 1000)} Tokens
-              {contextDisplay.percent === null ? " · 占比未知" : ` · ${contextDisplay.percent.toFixed(1)}%`}
-              {contextDisplay.marker.length > 0 ? ` · ${contextDisplay.marker}` : ""}
-            </Button>
           </div>
           <div className="flex flex-wrap items-center gap-1.5">
             <Button
               size="sm"
               variant="ghost"
               aria-label={`选择模型：${session?.model ?? "未选择"}`}
-              title={switchLocked ? "执行中不可切换模型，请先等待完成或停止" : undefined}
+              aria-haspopup="dialog"
+              aria-expanded={modal?.type === "model-picker"}
+              title={
+                switchLocked
+                  ? "执行中不可切换模型，请先等待完成或停止"
+                  : [
+                      provider?.name,
+                      session?.model ?? "模型",
+                      session?.contextWindow ? `${formatTokens((session?.contextWindow ?? 0) * 1000)} Tokens 上下文` : "窗口未知",
+                    ]
+                      .filter((part): part is string => typeof part === "string" && part.length > 0)
+                      .join(" · ")
+              }
+              className="max-w-[15rem] below-wide:max-w-[9rem]"
               onClick={() => openModal({ type: "model-picker", taskId: task.id, sessionId })}
             >
-              {provider?.name ? `${provider.name} · ` : ""}
-              {session?.model ?? "模型"} · {session?.contextWindow ? `${formatTokens((session?.contextWindow ?? 0) * 1000)} Tokens` : "窗口未知"}
+              {/* Prototype `.model-trigger`: the model's own name and a chevron.
+                  The provider, the model id and the window stay in the `title`
+                  and the meta row, so the row fits every tier without
+                  truncating the name. */}
+              <span className="truncate">{attribution.modelName ?? session?.model ?? "模型"}</span>
+              <Icon name="down" className="h-3 w-3" />
             </Button>
-            <Button size="sm" variant="primary" type="submit" disabled={sending || session?.permission === "read" || hasUnsupportedImage}>
-              发送消息
-            </Button>
+            {/* Prototype `.send{height:27px;width:27px;border-radius:7px;background:var(--accent)}`:
+                an accent square with the arrow glyph, named 发送消息 for assistive
+                tech instead of by its label. */}
+            <button
+              type="submit"
+              aria-label="发送消息"
+              title={switchLocked ? "执行中不可发送，请先等待完成或停止" : "发送消息"}
+              disabled={sending || readOnly || hasUnsupportedImage}
+              className="inline-grid h-[27px] w-[27px] shrink-0 place-items-center rounded-[7px] bg-accent text-white transition-colors hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+            >
+              <Icon name="arrow" className="h-[15px] w-[15px]" />
+            </button>
           </div>
         </div>
-        <p className="mt-1.5 text-[11px] text-muted">
-          图片与文件仅在本页预览，不写入业务仓库；真实 Host 接入在 02 中定义。
-        </p>
       </form>
+      {/*
+        Prototype `.compose-meta` ([UI 对齐 06] #30): the context meter and the
+        session's token total sit outside the box. Both numbers come from the
+        session record; `describeContextDisplay` owns the occupancy percentage
+        and the 估算/待更新 marker, so nothing here is estimated locally.
+        The attachment note the row replaces lives in every attachment's
+        `detail` (chip `title` + preview line), as in the prototype.
+      */}
+      <div className="mt-1.5 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-[10px] text-muted" data-testid="compose-meta">
+        <button
+          type="button"
+          aria-label="查看上下文占用"
+          aria-haspopup="dialog"
+          aria-expanded={modal?.type === "context"}
+          className="flex items-center gap-1.5"
+          onClick={() => openModal({ type: "context", taskId: task.id, sessionId })}
+        >
+          <span className="inline-block h-1 w-[43px] overflow-hidden rounded-[3px] bg-line" data-testid="compose-meta-meter">
+            <i
+              className="block h-full bg-accent/60"
+              style={{ width: `${contextDisplay.percent === null ? 0 : Math.min(100, Math.max(0, contextDisplay.percent))}%` }}
+            />
+          </span>
+          {contextDisplay.used.toFixed(1)}k / {contextDisplay.window > 0 ? `${contextDisplay.window}k` : "窗口未知"}
+          {contextDisplay.percent === null ? " · 占比未知" : ` · ${contextDisplay.percent.toFixed(1)}%`}
+          {contextDisplay.marker.length > 0 ? ` · ${contextDisplay.marker}` : ""}
+        </button>
+        <button
+          type="button"
+          aria-label="查看本会话 Token 用量"
+          className="shrink-0"
+          onClick={() => navigate({ view: "usage" })}
+        >
+          本会话 {session?.tokens.toFixed(1) ?? "0.0"}k tokens
+        </button>
+      </div>
     </div>
   );
 }

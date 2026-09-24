@@ -7,7 +7,7 @@ describe("PiDock renderer flows", () => {
   it("opens a task conversation from a route and keeps the main workspace visible", async () => {
     renderApp("/projects/atlas/tasks/release?session=main");
     expect(await screen.findByRole("heading", { name: "发布前检查" })).toBeInTheDocument();
-    expect(screen.getByLabelText("消息输入")).toBeInTheDocument();
+    expect(screen.getByLabelText("给 Agent 的消息")).toBeInTheDocument();
     expect(screen.getAllByText("Atlas Web").length).toBeGreaterThan(0);
   });
 
@@ -34,7 +34,7 @@ describe("PiDock renderer flows", () => {
   it("retains a draft and references when a run fails", async () => {
     const user = userEvent.setup();
     renderApp("/projects/atlas/tasks/release?session=failed");
-    const input = await screen.findByLabelText("消息输入");
+    const input = await screen.findByLabelText("给 Agent 的消息");
     await user.type(input, "修复构建并重试");
     await user.click(screen.getByRole("button", { name: "发送消息" }));
     expect(await screen.findByText(/执行失败/, {}, { timeout: 4000 })).toBeInTheDocument();

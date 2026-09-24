@@ -1,0 +1,585 @@
+{
+  "taskUrl": "http://127.0.0.1:4335/projects/atlas/tasks/release?session=main",
+  "viewports": [
+    "1440x900",
+    "1280x900",
+    "1024x800",
+    "900x800",
+    "720x760"
+  ],
+  "tiers": {
+    "1440x900": {
+      "composerH": 149,
+      "formH": 122,
+      "formPadding": "10px 12px",
+      "composerMaxH": "65%",
+      "composerScrolls": false,
+      "textareaH": 66,
+      "textareaMinH": "66px",
+      "textareaMinOk": true,
+      "rowH": 28,
+      "rowWrapped": false,
+      "metaH": 15,
+      "attach": {
+        "h": 28,
+        "w": 22
+      },
+      "attachOk": true,
+      "strip": null,
+      "stripCapped": null,
+      "attachmentChips": 0,
+      "workspaceH": 680,
+      "messagesH": 344,
+      "cardPresent": true,
+      "cardH": 53,
+      "rows": [
+        {
+          "kind": "div",
+          "h": 32
+        },
+        {
+          "kind": "div",
+          "h": 78
+        },
+        {
+          "kind": "execution-card",
+          "h": 53
+        },
+        {
+          "kind": "div",
+          "h": 344
+        },
+        {
+          "kind": "task-composer",
+          "h": 149
+        }
+      ],
+      "noHorizontalOverflow": true,
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      }
+    },
+    "1280x900": {
+      "composerH": 149,
+      "formH": 122,
+      "formPadding": "10px 12px",
+      "composerMaxH": "65%",
+      "composerScrolls": false,
+      "textareaH": 66,
+      "textareaMinH": "66px",
+      "textareaMinOk": true,
+      "rowH": 28,
+      "rowWrapped": false,
+      "metaH": 15,
+      "attach": {
+        "h": 28,
+        "w": 22
+      },
+      "attachOk": true,
+      "strip": null,
+      "stripCapped": null,
+      "attachmentChips": 0,
+      "workspaceH": 680,
+      "messagesH": 344,
+      "cardPresent": true,
+      "cardH": 53,
+      "rows": [
+        {
+          "kind": "div",
+          "h": 32
+        },
+        {
+          "kind": "div",
+          "h": 78
+        },
+        {
+          "kind": "execution-card",
+          "h": 53
+        },
+        {
+          "kind": "div",
+          "h": 344
+        },
+        {
+          "kind": "task-composer",
+          "h": 149
+        }
+      ],
+      "noHorizontalOverflow": true,
+      "viewport": {
+        "w": 1280,
+        "h": 900
+      }
+    },
+    "1024x800": {
+      "composerH": 149,
+      "formH": 122,
+      "formPadding": "10px 12px",
+      "composerMaxH": "65%",
+      "composerScrolls": false,
+      "textareaH": 66,
+      "textareaMinH": "66px",
+      "textareaMinOk": true,
+      "rowH": 28,
+      "rowWrapped": false,
+      "metaH": 15,
+      "attach": {
+        "h": 28,
+        "w": 22
+      },
+      "attachOk": true,
+      "strip": null,
+      "stripCapped": null,
+      "attachmentChips": 0,
+      "workspaceH": 580,
+      "messagesH": 248,
+      "cardPresent": true,
+      "cardH": 53,
+      "rows": [
+        {
+          "kind": "div",
+          "h": 28
+        },
+        {
+          "kind": "div",
+          "h": 78
+        },
+        {
+          "kind": "execution-card",
+          "h": 53
+        },
+        {
+          "kind": "div",
+          "h": 248
+        },
+        {
+          "kind": "task-composer",
+          "h": 149
+        }
+      ],
+      "noHorizontalOverflow": true,
+      "viewport": {
+        "w": 1024,
+        "h": 800
+      }
+    },
+    "900x800": {
+      "composerH": 149,
+      "formH": 122,
+      "formPadding": "10px 12px",
+      "composerMaxH": "65%",
+      "composerScrolls": false,
+      "textareaH": 66,
+      "textareaMinH": "66px",
+      "textareaMinOk": true,
+      "rowH": 28,
+      "rowWrapped": false,
+      "metaH": 15,
+      "attach": {
+        "h": 28,
+        "w": 22
+      },
+      "attachOk": true,
+      "strip": null,
+      "stripCapped": null,
+      "attachmentChips": 0,
+      "workspaceH": 580,
+      "messagesH": 248,
+      "cardPresent": true,
+      "cardH": 53,
+      "rows": [
+        {
+          "kind": "div",
+          "h": 28
+        },
+        {
+          "kind": "div",
+          "h": 78
+        },
+        {
+          "kind": "execution-card",
+          "h": 53
+        },
+        {
+          "kind": "div",
+          "h": 248
+        },
+        {
+          "kind": "task-composer",
+          "h": 149
+        }
+      ],
+      "noHorizontalOverflow": true,
+      "viewport": {
+        "w": 900,
+        "h": 800
+      }
+    },
+    "720x760": {
+      "composerH": 149,
+      "formH": 122,
+      "formPadding": "10px 12px",
+      "composerMaxH": "none",
+      "composerScrolls": false,
+      "textareaH": 66,
+      "textareaMinH": "66px",
+      "textareaMinOk": true,
+      "rowH": 28,
+      "rowWrapped": false,
+      "metaH": 15,
+      "attach": {
+        "h": 28,
+        "w": 22
+      },
+      "attachOk": true,
+      "strip": null,
+      "stripCapped": null,
+      "attachmentChips": 0,
+      "workspaceH": 2804,
+      "messagesH": 2473,
+      "cardPresent": true,
+      "cardH": 53,
+      "rows": [
+        {
+          "kind": "div",
+          "h": 28
+        },
+        {
+          "kind": "div",
+          "h": 78
+        },
+        {
+          "kind": "execution-card",
+          "h": 53
+        },
+        {
+          "kind": "div",
+          "h": 2473
+        },
+        {
+          "kind": "task-composer",
+          "h": 149
+        }
+      ],
+      "noHorizontalOverflow": true,
+      "viewport": {
+        "w": 720,
+        "h": 760
+      }
+    }
+  },
+  "prototype": {
+    "1440x900": {
+      "composerH": 167,
+      "padding": "9px 20px 15px",
+      "boxH": 116,
+      "textareaH": 66,
+      "textareaMinH": "66px",
+      "metaH": 19,
+      "metaFontSize": "10px",
+      "attach": {
+        "h": 28,
+        "w": 28
+      },
+      "messagesH": 256
+    },
+    "1280x900": {
+      "composerH": 167,
+      "padding": "9px 20px 15px",
+      "boxH": 116,
+      "textareaH": 66,
+      "textareaMinH": "66px",
+      "metaH": 19,
+      "metaFontSize": "10px",
+      "attach": {
+        "h": 28,
+        "w": 28
+      },
+      "messagesH": 256
+    },
+    "1024x800": {
+      "composerH": 167,
+      "padding": "9px 20px 15px",
+      "boxH": 116,
+      "textareaH": 66,
+      "textareaMinH": "66px",
+      "metaH": 19,
+      "metaFontSize": "10px",
+      "attach": {
+        "h": 28,
+        "w": 28
+      },
+      "messagesH": 167
+    },
+    "900x800": {
+      "composerH": 167,
+      "padding": "9px 20px 15px",
+      "boxH": 116,
+      "textareaH": 66,
+      "textareaMinH": "66px",
+      "metaH": 19,
+      "metaFontSize": "10px",
+      "attach": {
+        "h": 28,
+        "w": 28
+      },
+      "messagesH": 167
+    },
+    "720x760": {
+      "composerH": 167,
+      "padding": "9px 20px 15px",
+      "boxH": 116,
+      "textareaH": 66,
+      "textareaMinH": "66px",
+      "metaH": 19,
+      "metaFontSize": "10px",
+      "attach": {
+        "h": 28,
+        "w": 28
+      },
+      "messagesH": 614
+    }
+  },
+  "states": {
+    "cardFree": {
+      "composerH": 149,
+      "formH": 122,
+      "formPadding": "10px 12px",
+      "composerMaxH": "65%",
+      "composerScrolls": false,
+      "textareaH": 66,
+      "textareaMinH": "66px",
+      "textareaMinOk": true,
+      "rowH": 28,
+      "rowWrapped": false,
+      "metaH": 15,
+      "attach": {
+        "h": 28,
+        "w": 22
+      },
+      "attachOk": true,
+      "strip": null,
+      "stripCapped": null,
+      "attachmentChips": 0,
+      "workspaceH": 680,
+      "messagesH": 403,
+      "cardPresent": false,
+      "cardH": null,
+      "rows": [
+        {
+          "kind": "div",
+          "h": 32
+        },
+        {
+          "kind": "div",
+          "h": 78
+        },
+        {
+          "kind": "div",
+          "h": 403
+        },
+        {
+          "kind": "task-composer",
+          "h": 149
+        }
+      ],
+      "noHorizontalOverflow": true,
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      }
+    },
+    "readOnly": {
+      "composerH": 174,
+      "formH": 147,
+      "formPadding": "10px 12px",
+      "composerMaxH": "65%",
+      "composerScrolls": false,
+      "textareaH": 66,
+      "textareaMinH": "66px",
+      "textareaMinOk": true,
+      "rowH": 28,
+      "rowWrapped": false,
+      "metaH": 15,
+      "attach": {
+        "h": 28,
+        "w": 22
+      },
+      "attachOk": true,
+      "strip": null,
+      "stripCapped": null,
+      "attachmentChips": 0,
+      "workspaceH": 680,
+      "messagesH": 320,
+      "cardPresent": true,
+      "cardH": 53,
+      "rows": [
+        {
+          "kind": "div",
+          "h": 32
+        },
+        {
+          "kind": "div",
+          "h": 78
+        },
+        {
+          "kind": "execution-card",
+          "h": 53
+        },
+        {
+          "kind": "div",
+          "h": 320
+        },
+        {
+          "kind": "task-composer",
+          "h": 174
+        }
+      ],
+      "noHorizontalOverflow": true,
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "textareaDisabled": true,
+      "attachDisabled": true,
+      "fileInputDisabled": true,
+      "sendDisabled": true,
+      "hint": "当前是只读会话，请先调整会话权限；只读会话可以阅读与分析，不能发送消息或添加附件。",
+      "hintVisible": true
+    },
+    "paste": {
+      "defaultPrevented": true,
+      "attachmentLabels": [
+        "粘贴图片-atta.png"
+      ],
+      "attachmentDetail": "剪贴板图片 · 1 KB · 仅本页保留",
+      "draftText": "看这张截图",
+      "toast": "已粘贴 1 张图片，可附上文字后发送",
+      "composerH": 199
+    },
+    "unsupportedImage": {
+      "composerH": 233,
+      "formH": 206,
+      "formPadding": "10px 12px",
+      "composerMaxH": "65%",
+      "composerScrolls": false,
+      "textareaH": 66,
+      "textareaMinH": "66px",
+      "textareaMinOk": true,
+      "rowH": 28,
+      "rowWrapped": false,
+      "metaH": 15,
+      "attach": {
+        "h": 28,
+        "w": 22
+      },
+      "attachOk": true,
+      "strip": {
+        "h": 42,
+        "scrolls": false
+      },
+      "stripCapped": true,
+      "attachmentChips": 1,
+      "workspaceH": 680,
+      "messagesH": 260,
+      "cardPresent": true,
+      "cardH": 53,
+      "rows": [
+        {
+          "kind": "div",
+          "h": 32
+        },
+        {
+          "kind": "div",
+          "h": 78
+        },
+        {
+          "kind": "execution-card",
+          "h": 53
+        },
+        {
+          "kind": "div",
+          "h": 260
+        },
+        {
+          "kind": "task-composer",
+          "h": 233
+        }
+      ],
+      "noHorizontalOverflow": true,
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "warning": "当前模型未启用图片输入，请切换模型后发送。选择模型",
+      "warningRole": "status",
+      "inlineModelEntry": 1,
+      "sendDisabled": true,
+      "attachmentsKept": 1
+    },
+    "heavyAttachments": {
+      "composerH": 184,
+      "formH": 157,
+      "formPadding": "10px 12px",
+      "composerMaxH": "65%",
+      "composerScrolls": false,
+      "textareaH": 66,
+      "textareaMinH": "66px",
+      "textareaMinOk": true,
+      "rowH": 28,
+      "rowWrapped": false,
+      "metaH": 15,
+      "attach": {
+        "h": 28,
+        "w": 22
+      },
+      "attachOk": true,
+      "strip": {
+        "h": 27,
+        "scrolls": false
+      },
+      "stripCapped": true,
+      "attachmentChips": 12,
+      "workspaceH": 680,
+      "messagesH": 310,
+      "cardPresent": true,
+      "cardH": 53,
+      "rows": [
+        {
+          "kind": "div",
+          "h": 32
+        },
+        {
+          "kind": "div",
+          "h": 78
+        },
+        {
+          "kind": "execution-card",
+          "h": 53
+        },
+        {
+          "kind": "div",
+          "h": 310
+        },
+        {
+          "kind": "task-composer",
+          "h": 184
+        }
+      ],
+      "noHorizontalOverflow": true,
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      }
+    },
+    "heavyAttachmentsPrototype": {
+      "composerH": 213,
+      "messagesH": 210
+    }
+  },
+  "assertions": {
+    "checked": 18,
+    "violations": 0
+  }
+}

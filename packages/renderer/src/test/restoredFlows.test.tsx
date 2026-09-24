@@ -60,7 +60,7 @@ describe("failed-run retry dialog", () => {
   it("refuses to retry before the prior outcome is checked", async () => {
     const user = userEvent.setup();
     renderApp("/projects/atlas/tasks/release?session=failed");
-    const input = await screen.findByLabelText("消息输入");
+    const input = await screen.findByLabelText("给 Agent 的消息");
     await user.type(input, "修复构建并重试");
     await user.click(screen.getByRole("button", { name: "发送消息" }));
 
@@ -122,16 +122,16 @@ describe("composer commands and candidates", () => {
     renderApp("/projects/atlas/tasks/release?session=main");
     await screen.findByRole("heading", { name: "发布前检查" });
 
-    const input = screen.getByLabelText("消息输入");
+    const input = screen.getByLabelText("给 Agent 的消息");
     await user.type(input, "/comp");
     const listbox = await screen.findByRole("listbox", { name: "输入候选" });
     expect(within(listbox).getByText("/compact")).toBeInTheDocument();
     await user.click(within(listbox).getByRole("option", { name: /\/compact/ }));
     expect(await screen.findByText("已压缩上下文；占用标记为待更新，累计 Token 保留")).toBeInTheDocument();
-    expect(screen.getByLabelText("消息输入")).toHaveValue("");
+    expect(screen.getByLabelText("给 Agent 的消息")).toHaveValue("");
 
     // `/skills` opens the enabled-skill list and inserts the chosen skill.
-    await user.type(screen.getByLabelText("消息输入"), "/skills");
+    await user.type(screen.getByLabelText("给 Agent 的消息"), "/skills");
     await user.click(within(await screen.findByRole("listbox", { name: "输入候选" })).getByRole("option", { name: /\/skills/ }));
     const skills = await screen.findByRole("dialog", { name: "可用技能" });
     await user.click(within(skills).getAllByRole("button", { name: "插入对话" })[0]!);
@@ -142,12 +142,12 @@ describe("composer commands and candidates", () => {
     expect(inserted).toMatchObject({ sourceId: "cap-1", resourcePath: "skills/code-review/SKILL.md" });
 
     // `@` lists task files and directories; `$` lists enabled skills.
-    await user.type(screen.getByLabelText("消息输入"), "@");
+    await user.type(screen.getByLabelText("给 Agent 的消息"), "@");
     const at = await screen.findByRole("listbox", { name: "输入候选" });
     await user.click(within(at).getAllByRole("option")[0]!);
     expect((await screen.findAllByText(/^引用 · /)).length).toBeGreaterThan(0);
 
-    await user.type(screen.getByLabelText("消息输入"), "$");
+    await user.type(screen.getByLabelText("给 Agent 的消息"), "$");
     const dollar = await screen.findByRole("listbox", { name: "输入候选" });
     await user.click(within(dollar).getAllByRole("option")[0]!);
     expect((await screen.findAllByText(/code-review|tdd|diagnosing-bugs/)).length).toBeGreaterThan(0);
@@ -274,7 +274,7 @@ describe("composer attachments", () => {
     await screen.findByRole("heading", { name: "发布前检查" });
 
     await user.upload(screen.getByLabelText("附件选择") as HTMLInputElement, new File(["hello"], "spec.md", { type: "text/markdown" }));
-    await user.type(screen.getByLabelText("消息输入"), "看下附件");
+    await user.type(screen.getByLabelText("给 Agent 的消息"), "看下附件");
     await user.click(screen.getByRole("button", { name: "发送消息" }));
 
     const conversation = await screen.findByLabelText("会话消息");
@@ -294,7 +294,7 @@ describe("composer attachments", () => {
 
     await user.upload(screen.getByLabelText("附件选择") as HTMLInputElement, new File(["x"], "shot.png", { type: "image/png" }));
     expect(await screen.findByText(/当前模型未启用图片输入/)).toBeInTheDocument();
-    await user.type(screen.getByLabelText("消息输入"), "看图");
+    await user.type(screen.getByLabelText("给 Agent 的消息"), "看图");
     expect(screen.getByRole("button", { name: "发送消息" })).toBeDisabled();
     vi.unstubAllGlobals();
   });

@@ -59,11 +59,11 @@ describe("multi-session write coordination", () => {
 
     // The current session's composer is refused: the toast names the holder
     // (the refusal text comes from the coordinator, not the UI).
-    await user.type(await screen.findByLabelText("消息输入"), "先改一处文件");
+    await user.type(await screen.findByLabelText("给 Agent 的消息"), "先改一处文件");
     await user.click(screen.getByRole("button", { name: "发送消息" }));
     expect(await screen.findByText(/同一任务写操作权由会话 deploy 持有/)).toBeInTheDocument();
     // The draft stays so the user can retry after releasing the holder.
-    expect(await screen.findByLabelText("消息输入")).toHaveValue("先改一处文件");
+    expect(await screen.findByLabelText("给 Agent 的消息")).toHaveValue("先改一处文件");
   });
 
   it("offers the session context menu and archives without creating a replacement", async () => {

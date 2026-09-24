@@ -13,13 +13,17 @@ import { sessionKeyOf } from "../data/sessionKey";
  * the send button, keyboard-driven candidates that never send on confirm,
  * IME composition that never submits, a mixed message (text + file
  * reference + skill) and a draft reference that is re-checked on restore.
+ *
+ * [UI 对齐 06] (#30) renamed the entries to the prototype's own wording (the
+ * input is 给 Agent 的消息, the entry is 添加文件) and turned the send control
+ * into the prototype's accent square: its accessible name is still 发送消息.
  */
 describe("composer references, skills and commands", () => {
   it("keeps only the + attachment entry and puts the model picker before send", async () => {
     renderApp("/projects/atlas/tasks/release?session=main");
     await screen.findByRole("heading", { name: "发布前检查" });
-    const composer = screen.getByLabelText("消息输入").closest("form")!;
-    expect(within(composer).getByRole("button", { name: "添加附件" })).toBeInTheDocument();
+    const composer = screen.getByLabelText("给 Agent 的消息").closest("form")!;
+    expect(within(composer).getByRole("button", { name: "添加文件" })).toBeInTheDocument();
     // The prototype's permanent symbol buttons are gone; completion still works.
     expect(within(composer).queryByRole("button", { name: "@" })).not.toBeInTheDocument();
     expect(within(composer).queryByRole("button", { name: "$" })).not.toBeInTheDocument();
@@ -27,7 +31,7 @@ describe("composer references, skills and commands", () => {
     expect(within(composer).queryByRole("button", { name: "+ 引用文件" })).not.toBeInTheDocument();
     const buttons = within(composer).getAllByRole("button");
     const modelIndex = buttons.findIndex((button) => (button.getAttribute("aria-label") ?? "").startsWith("选择模型："));
-    const sendIndex = buttons.findIndex((button) => button.textContent === "发送消息");
+    const sendIndex = buttons.findIndex((button) => button.getAttribute("aria-label") === "发送消息");
     expect(modelIndex).toBeGreaterThan(-1);
     expect(sendIndex).toBeGreaterThan(modelIndex);
   });
@@ -36,7 +40,7 @@ describe("composer references, skills and commands", () => {
     const user = userEvent.setup();
     renderApp("/projects/atlas/tasks/release?session=main");
     await screen.findByRole("heading", { name: "发布前检查" });
-    const input = screen.getByLabelText("消息输入");
+    const input = screen.getByLabelText("给 Agent 的消息");
 
     await user.type(input, "/comp");
     await screen.findByRole("listbox", { name: "输入候选" });
@@ -57,7 +61,7 @@ describe("composer references, skills and commands", () => {
     const user = userEvent.setup();
     renderApp("/projects/atlas/tasks/release?session=main");
     await screen.findByRole("heading", { name: "发布前检查" });
-    const input = screen.getByLabelText("消息输入");
+    const input = screen.getByLabelText("给 Agent 的消息");
 
     await user.type(input, "看下 @api");
     const at = await screen.findByRole("listbox", { name: "输入候选" });
@@ -74,7 +78,7 @@ describe("composer references, skills and commands", () => {
     const dollar = await screen.findByRole("listbox", { name: "输入候选" });
     await user.click(within(dollar).getAllByRole("option")[0]!);
     expect(screen.getAllByText(/code-review/).length).toBeGreaterThan(0);
-    expect((screen.getByLabelText("消息输入") as HTMLTextAreaElement).value).toContain("$code-review");
+    expect((screen.getByLabelText("给 Agent 的消息") as HTMLTextAreaElement).value).toContain("$code-review");
     // The `$` pick records the skill's source id and resource path instead of
     // a bare label, and the scope chip shows the resource path.
     const skillReference = useDraftStore.getState().drafts[sessionKeyOf("release", "main")]!.references.find((reference) => reference.kind === "skill")!;
@@ -86,7 +90,7 @@ describe("composer references, skills and commands", () => {
     // rule is unit-tested above).
     await user.type(input, "中文");
     fireEvent.keyDown(input, { key: "Enter", isComposing: true });
-    expect((screen.getByLabelText("消息输入") as HTMLTextAreaElement).value).toContain("中文");
+    expect((screen.getByLabelText("给 Agent 的消息") as HTMLTextAreaElement).value).toContain("中文");
     expect(screen.queryByText("正在执行")).not.toBeInTheDocument();
   });
 
