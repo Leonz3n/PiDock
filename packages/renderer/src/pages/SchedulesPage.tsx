@@ -201,7 +201,12 @@ export function SchedulesPage() {
       </div>
 
       <div className="table-wrap overflow-auto rounded-[9px] border border-line bg-paper">
-        <div data-testid="run-history-head" className={`table grid ${HISTORY_COLUMNS} below-stack:min-w-[650px]`}>
+        {/* `table` is Tailwind's `display:table` utility, not a harmless marker:
+            carrying it next to `grid` made the five header cells anonymous
+            table-rows stacked in one 66px column ([UI 对齐 09] #33 review P1-1).
+            The run history is virtualised, so its header is a grid row and must
+            share the row body's `HISTORY_COLUMNS` instead. */}
+        <div data-testid="run-history-head" className={`grid ${HISTORY_COLUMNS} below-stack:min-w-[650px]`}>
           <div className="border-b border-line bg-[#fafbfc] px-[13px] py-[11px] text-[10px] font-medium text-[#96999e]">开始时间</div>
           <div className="border-b border-line bg-[#fafbfc] px-[13px] py-[11px] text-[10px] font-medium text-[#96999e]">定时任务</div>
           <div className="border-b border-line bg-[#fafbfc] px-[13px] py-[11px] text-[10px] font-medium text-[#96999e]">结果</div>
@@ -217,17 +222,17 @@ export function SchedulesPage() {
           height={280}
           getRowKey={(run) => run.id}
           renderRow={(run) => (
-            <div className={`grid ${HISTORY_COLUMNS} items-center border-b border-[#f0f0f1] px-[13px] text-[11px] last:border-b-0`}>
-              <span className="text-muted [overflow-wrap:anywhere]">{run.at.slice(0, 16).replace("T", " ")}</span>
-              <span className="text-ink [overflow-wrap:anywhere]">
+            <div className={`grid ${HISTORY_COLUMNS} items-center border-b border-[#f0f0f1] text-[11px] last:border-b-0`}>
+              <span className="px-[13px] text-muted [overflow-wrap:anywhere]">{run.at.slice(0, 16).replace("T", " ")}</span>
+              <span className="px-[13px] text-ink [overflow-wrap:anywhere]">
                 {scheduleName(run.scheduleId)}
                 <small className="ml-1.5 text-muted">{scheduleRunTriggerLabel(run.trigger ?? "due")}</small>
               </span>
-              <span>
+              <span className="px-[13px]">
                 <Badge tone={run.result === "failed" ? "warn" : run.result === "skipped" ? "neutral" : "accent"}>{scheduledRunResultLabel(run.result)}</Badge>
               </span>
-              <span className="text-muted [overflow-wrap:anywhere]">{scheduleRunDetail(run) ?? "无会话"}</span>
-              <span className="flex justify-end">
+              <span className="px-[13px] text-muted [overflow-wrap:anywhere]">{scheduleRunDetail(run) ?? "无会话"}</span>
+              <span className="flex justify-end px-[13px]">
                 <Button size="sm" variant="ghost" disabled={run.sessionId === undefined} onClick={() => openRun(run.taskId, run.sessionId)}>
                   打开会话
                 </Button>

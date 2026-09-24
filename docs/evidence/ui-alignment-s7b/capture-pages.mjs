@@ -149,6 +149,10 @@ const STYLE_HELPER = () => {
       columnGap: computed.columnGap,
       display: computed.display,
       fontSize: computed.fontSize,
+      // [UI 对齐 09] #33 review P2-3: the bare `mono` marker class had no rule
+      // behind it, so the endpoint/URL/usage figures rendered in the sans font.
+      // Nothing collected the family, so no assertion could ever catch it.
+      fontFamily: computed.fontFamily,
       fontWeight: computed.fontWeight,
       letterSpacing: computed.letterSpacing,
       color: computed.color,
@@ -197,6 +201,16 @@ const COLLECT = (selectors) => {
     root?.closest('[data-testid="page"]') ?? (root?.classList?.contains("page") ? root : (root?.closest(".page") ?? root));
   const buttonIcons = [...root.querySelectorAll(".btn")].map((button) => button.querySelectorAll("svg").length);
   const head = root.querySelector('[data-testid="run-history-head"]');
+  // [UI 对齐 09] #33 review P1-1: `table` is Tailwind's `display:table` utility,
+  // so carrying it beside `grid` stacked the header's five cells as anonymous
+  // table-rows while every style-level assertion still passed. The header and
+  // the (virtualised) first row are therefore read cell by cell, by box.
+  const cellBoxes = (row) =>
+    row === null ? null : [...row.children].map((cell) => {
+      const rect = cell.getBoundingClientRect();
+      return { x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.width) };
+    });
+  const bodyRow = root.querySelector('[data-testid="run-history"] > div > div > div');
   return {
     viewport: { w: innerWidth, h: innerHeight },
     noHorizontalOverflow: document.documentElement.scrollWidth <= document.documentElement.clientWidth,
@@ -214,6 +228,13 @@ const COLLECT = (selectors) => {
     // their own hook and compared cell by cell.
     tableHeaders: head ? [...head.children].map((cell) => cell.textContent.trim()) : window.__texts(".table th", root),
     historyHeadCell: window.__styleOf(head?.firstElementChild ?? root.querySelector(".table th")),
+    // The layout claim the style assertions above cannot see: the header is one
+    // row of five cells that line up with the body row underneath it.
+    historyHeadBox: head === null ? null : window.__styleOf(head),
+    historyHeadCells: cellBoxes(head),
+    historyBodyCells: cellBoxes(bodyRow),
+    historyMono: window.__styleOf(root.querySelector('[data-testid="run-history-head"] code, [data-testid="run-history"] code, .mono')),
+    dots: [...root.querySelectorAll(".dot")].map((dot) => window.__styleOf(dot)),
     badges: window.__texts(".badge", root),
     empties: window.__texts(".empty", root),
     notes: window.__texts(".note", root),
@@ -692,6 +713,26 @@ check(
   "schedule history has the prototype's five columns",
   at1440.schedules.tableHeaders.length === 5 && proto.schedules.tableHeaders.length === 5,
   `${at1440.schedules.tableHeaders.length} vs ${proto.schedules.tableHeaders.length}`,
+);
+// [UI 对齐 09] #33 review P1-1: the five cells must sit on **one** line and line
+// up with the body row. `table` beside `grid` stacked them into a 66px column
+// while every style-level assertion above still passed.
+const headCells = at1440.schedules.historyHeadCells ?? [];
+const bodyCells = at1440.schedules.historyBodyCells ?? [];
+check(
+  "schedule history header is one row of five cells",
+  headCells.length === 5 && new Set(headCells.map((cell) => cell.y)).size === 1,
+  JSON.stringify(headCells.map((cell) => ({ x: cell.x, y: cell.y }))),
+);
+check(
+  "schedule history header cell display is not `table-cell`",
+  at1440.schedules.historyHeadCell?.display !== "table-cell" && at1440.schedules.historyHeadBox?.display === "grid",
+  `${at1440.schedules.historyHeadBox?.display} / cell ${at1440.schedules.historyHeadCell?.display}`,
+);
+check(
+  "schedule history header lines up with the body row",
+  bodyCells.length === headCells.length && bodyCells.every((cell, index) => Math.abs(cell.w - headCells[index].w) === 0),
+  `head ${JSON.stringify(headCells.map((cell) => cell.w))} vs body ${JSON.stringify(bodyCells.map((cell) => cell.w))}`,
 );
 // Anti-no-op: the filter really narrows the list.
 check(

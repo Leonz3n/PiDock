@@ -150,7 +150,19 @@ describe("management pages alignment ([UI 对齐 09] #33)", () => {
     expect(page.querySelectorAll(".schedule-row")).toHaveLength(schedules.length);
     // The run history keeps the VirtualList and the prototype's five columns.
     expect(screen.getByTestId("run-history")).toHaveAttribute("data-virtualized", "true");
-    expect(document.querySelectorAll('[data-testid="run-history-head"] > div')).toHaveLength(5);
+    const head = screen.getByTestId("run-history-head");
+    expect(head.children).toHaveLength(5);
+    // `table` is Tailwind's `display:table` utility, not a marker: carried next
+    // to `grid` it wins and stacks the five cells into one column (measured 66px
+    // each, [UI 对齐 09] #33 review P1-1). jsdom has no layout, so the class
+    // list is what is asserted here; the geometry lives in the evidence script.
+    expect(head.className).toContain("grid");
+    expect(head.className.split(/\s+/)).not.toContain("table");
+    // The header insets each cell the way the prototype's `.table th` does, and
+    // the virtualised body row insets each cell the same way, so the columns
+    // line up instead of the two rows deriving their tracks from different
+    // widths.
+    expect([...head.children].every((cell) => cell.className.includes("px-[13px]"))).toBe(true);
   });
 
   it("keeps the archive card head, its two actions and the lifecycle readout", async () => {
