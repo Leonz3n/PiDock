@@ -135,7 +135,7 @@ export function SchedulesPage() {
                   className="schedule-main min-w-0 text-left"
                 >
                   <span className="flex items-center justify-between gap-3">
-                    <strong className="text-[12px] font-[650] text-ink">{schedule.name}</strong>
+                    <strong className="text-[12px] text-ink">{schedule.name}</strong>
                     <Badge tone={state.tone}>{state.label}</Badge>
                   </span>
                   <small className="mt-1 block text-[11px] text-muted">
@@ -201,7 +201,7 @@ export function SchedulesPage() {
       </div>
 
       <div className="table-wrap overflow-auto rounded-[9px] border border-line bg-paper">
-        <div className={`table grid ${HISTORY_COLUMNS} below-stack:min-w-[650px]`}>
+        <div data-testid="run-history-head" className={`table grid ${HISTORY_COLUMNS} below-stack:min-w-[650px]`}>
           <div className="border-b border-line bg-[#fafbfc] px-[13px] py-[11px] text-[10px] font-medium text-[#96999e]">开始时间</div>
           <div className="border-b border-line bg-[#fafbfc] px-[13px] py-[11px] text-[10px] font-medium text-[#96999e]">定时任务</div>
           <div className="border-b border-line bg-[#fafbfc] px-[13px] py-[11px] text-[10px] font-medium text-[#96999e]">结果</div>

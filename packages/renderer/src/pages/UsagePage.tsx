@@ -273,7 +273,7 @@ export function UsagePage() {
                       opacity, so it cannot read as a small consumption. */}
                   <span
                     aria-hidden="true"
-                    className={`w-[65%] max-w-[38px] rounded-t-[3px] ${
+                    className={`bar w-[65%] max-w-[38px] rounded-t-[3px] ${
                       index === chart.days.length - 1 ? "bg-accent" : "bg-[#aeb7cd]"
                     } ${item.value === 0 ? "min-h-[5px] opacity-40" : "min-h-[5px]"}`}
                     style={{ height: `${Math.round((item.value / chart.max) * 100)}%` }}
