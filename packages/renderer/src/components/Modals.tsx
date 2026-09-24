@@ -1568,6 +1568,7 @@ function ModelPickerModal({ taskId, sessionId, onClose }: { taskId: string; sess
                   <button
                     key={model.id}
                     type="button"
+                    data-testid={`model-choice-${model.id}`}
                     aria-pressed={model.selected}
                     aria-label={`模型 ${model.id}`}
                     disabled={model.disabledReason !== undefined}

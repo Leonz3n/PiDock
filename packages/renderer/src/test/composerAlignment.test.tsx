@@ -127,6 +127,8 @@ describe("composer alignment", () => {
     // per paste: a constant one made two images share a name and an accessible
     // name ([UI 对齐 06] #30 review P1-2).
     const revokeObjectURL = vi.fn();
+    const originalCreate = URL.createObjectURL;
+    const originalRevoke = URL.revokeObjectURL;
     let created = 0;
     URL.createObjectURL = () => `blob:mock-${created++}`;
     URL.revokeObjectURL = revokeObjectURL;
@@ -150,8 +152,10 @@ describe("composer alignment", () => {
       await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledTimes(1));
       expect(revokeObjectURL).toHaveBeenCalledWith("blob:mock-0");
     } finally {
-      URL.createObjectURL = undefined as unknown as typeof URL.createObjectURL;
-      URL.revokeObjectURL = undefined as unknown as typeof URL.revokeObjectURL;
+      // Put the globals back instead of leaving them undefined for whatever runs
+      // next in this file ([UI 对齐 06] #30 review P2-7).
+      URL.createObjectURL = originalCreate;
+      URL.revokeObjectURL = originalRevoke;
     }
   });
 
@@ -173,12 +177,28 @@ describe("composer alignment", () => {
     expect(screen.getByTestId("composer-model-trigger")).toHaveTextContent("Claude Sonnet");
     expect(screen.getByTestId("composer-model-trigger")).not.toHaveTextContent("不可用");
 
-    // Prototype `.model-trigger` appends 「· 不可用」 when the session's model is no
-    // longer in the provider's list; the trigger keeps the name it was chosen with
-    // and the reason stays in the box ([UI 对齐 06] #30 review P2-C).
-    await actStore(() => useHostStore.getState().removeProvider("provider-anthropic"));
-    await actStore(() => useHostStore.getState().refresh());
+    // Prototype `.model-trigger` appends 「· 不可用」 exactly when the session's
+    // model is no longer in that provider's list, and only then: a provider that is
+    // disabled or gone keeps its own wording in the box instead ([UI 对齐 06] #30
+    // review P2-D).
+    await actStore(() =>
+      useHostStore.getState().saveProvider({
+        id: "provider-anthropic",
+        name: "Anthropic 官方",
+        protocol: "anthropic-messages",
+        baseUrl: "https://api.anthropic.com",
+        authRef: "anthropic-key",
+        enabled: true,
+        models: [{ id: "Claude Haiku", contextWindow: 200 }],
+      }),
+    );
     await waitFor(() => expect(screen.getByTestId("composer-model-trigger")).toHaveTextContent("Claude Sonnet · 不可用"));
+    expect(screen.getByTestId("session-provider-unavailable")).toBeInTheDocument();
+
+    // Provider dropped altogether: the model list is gone with it, which is not the
+    // prototype's 「· 不可用」 case, so the trigger stays clean and the box explains.
+    await actStore(() => useHostStore.getState().removeProvider("provider-anthropic"));
+    await waitFor(() => expect(screen.getByTestId("composer-model-trigger")).not.toHaveTextContent("不可用"));
     expect(screen.getByTestId("session-provider-unavailable")).toBeInTheDocument();
   });
 
