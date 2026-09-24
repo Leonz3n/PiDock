@@ -58,7 +58,7 @@ export function ProjectPage({ projectId }: { projectId: string }) {
         <PageEmpty
           title="创建第一个项目"
           actions={
-            <Button size="sm" variant="primary" onClick={() => openModal({ type: "project-edit" })}>
+            <Button size="sm" variant="primary" data-testid="project-new" onClick={() => openModal({ type: "project-edit" })}>
               新建项目
             </Button>
           }
@@ -83,10 +83,15 @@ export function ProjectPage({ projectId }: { projectId: string }) {
         <PageTitle>{project.name}</PageTitle>
       </div>
       <div className="flex items-center gap-2">
-        <Button size="sm" onClick={() => openModal({ type: "project-list" })}>
+        <Button size="sm" data-testid="project-manage" onClick={() => openModal({ type: "project-list" })}>
           项目管理
         </Button>
-        <Button size="sm" variant="primary" onClick={() => openModal({ type: "new-task", projectId: project.id })}>
+        <Button
+          size="sm"
+          variant="primary"
+          data-testid="project-new-task"
+          onClick={() => openModal({ type: "new-task", projectId: project.id })}
+        >
           新建任务
         </Button>
       </div>
@@ -118,7 +123,7 @@ export function ProjectPage({ projectId }: { projectId: string }) {
 
   if (project.directories.length > 0) {
     return (
-      <div data-testid="project-overview">
+      <div data-testid="project-overview" data-project-variant="directory">
         {header}
         <PageIntro>{project.description || "在项目中组织代码、资料和任务。"}</PageIntro>
 
@@ -131,7 +136,11 @@ export function ProjectPage({ projectId }: { projectId: string }) {
             // dedicated 管理普通目录 dialog, so the directory entry keeps
             // opening that one and the project editor stays reachable from
             // 项目管理 → 编辑 with the rest of the project fields.
-            <Button size="sm" onClick={() => openModal({ type: "project-directories", projectId: project.id })}>
+            <Button
+              size="sm"
+              data-testid="project-directories-manage"
+              onClick={() => openModal({ type: "project-directories", projectId: project.id })}
+            >
               管理目录
             </Button>
           }
@@ -169,7 +178,7 @@ export function ProjectPage({ projectId }: { projectId: string }) {
   }
 
   return (
-    <div data-testid="project-overview">
+    <div data-testid="project-overview" data-project-variant="repository">
       {header}
 
       <PageIntro>{project.description || "在项目中组织仓库、任务与运行环境。"}</PageIntro>
@@ -201,7 +210,7 @@ export function ProjectPage({ projectId }: { projectId: string }) {
       <SectionHeader
         title="项目仓库"
         actions={
-          <Button size="sm" onClick={() => openModal({ type: "project-edit", projectId: project.id })}>
+          <Button size="sm" data-testid="project-repos-manage" onClick={() => openModal({ type: "project-edit", projectId: project.id })}>
             管理仓库
           </Button>
         }
@@ -223,7 +232,11 @@ export function ProjectPage({ projectId }: { projectId: string }) {
       <SectionHeader
         title="普通目录"
         actions={
-          <Button size="sm" onClick={() => openModal({ type: "project-directories", projectId: project.id })}>
+          <Button
+            size="sm"
+            data-testid="project-directories-manage"
+            onClick={() => openModal({ type: "project-directories", projectId: project.id })}
+          >
             管理目录
           </Button>
         }

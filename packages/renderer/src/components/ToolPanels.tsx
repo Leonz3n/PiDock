@@ -357,6 +357,7 @@ export function RuntimePanel({
             // service of one task; from the task workspace this is that service.
             <Button
               size="sm"
+              data-testid="tool-effective-config"
               onClick={() => useUiStore.getState().openModal({ type: "effective-config", taskId: task.id, serviceId: service.id })}
             >
               查看生效配置

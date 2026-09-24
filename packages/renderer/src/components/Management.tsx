@@ -13,7 +13,7 @@ import { Icon, type IconName } from "./Icon";
  *   `.card` + `.stat` → `StatCard`
  *   `.inline-notice`  → `InlineNotice`
  *   `.empty`          → `PageEmpty`
- *   `.check-row`      → `CheckRow`
+ *   `.check-row`      → `CheckRow` (read-only row) / `CheckField` (checkbox row)
  *   `.tabs`           → `TabRow`
  *   `.table-wrap`/`.table` th/td → `TableWrap` / `Table` / `Th` / `Td`
  *   `.management-list`/`.management-row` + its `strong`/`small` → `ManagementList`
@@ -151,6 +151,45 @@ export function CheckRow({
   );
 }
 
+/**
+ * The prototype's other `.check-row`: a checkbox row, used by the project form's
+ * 关联已注册仓库 group and by the create-task / directory-choice forms. The
+ * checkbox keeps the prototype's `accent-color` and 15px box.
+ */
+export function CheckField({
+  label,
+  checked,
+  disabled,
+  onChange,
+  note,
+  testId,
+  ariaLabel,
+}: {
+  label: ReactNode;
+  checked: boolean;
+  disabled?: boolean;
+  onChange?: (checked: boolean) => void;
+  note?: ReactNode;
+  testId?: string;
+  /** The checkbox's accessible name, when the visible label is not enough. */
+  ariaLabel?: string;
+}) {
+  return (
+    <label data-testid={testId} className="flex items-center gap-2.5 border-b border-line py-[11px] text-xs">
+      <input
+        type="checkbox"
+        aria-label={ariaLabel}
+        checked={checked}
+        disabled={disabled}
+        onChange={(event) => onChange?.(event.target.checked)}
+        className="size-[15px] accent-accent"
+      />
+      <span className="min-w-0 flex-1 truncate text-ink">{label}</span>
+      {note ? <small className="text-[11px] text-muted">{note}</small> : null}
+    </label>
+  );
+}
+
 export function TabRow<T extends string>({
   items,
   value,
@@ -187,7 +226,12 @@ export function TableWrap({ children, className = "" }: { children: ReactNode; c
 }
 
 export function Table({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <table className={`w-full border-collapse text-left text-[11px] ${className}`}>{children}</table>;
+  // Prototype `@media(max-width:720px){.table{min-width:650px}}`: below the
+  // last tier the table scrolls inside its `overflow:auto` parent instead of
+  // squashing three columns into 300px.
+  return (
+    <table className={`w-full border-collapse text-left text-[11px] below-stack:min-w-[650px] ${className}`}>{children}</table>
+  );
 }
 
 export function Th({ children, className = "" }: { children?: ReactNode; className?: string }) {

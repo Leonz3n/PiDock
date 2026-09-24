@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Badge, Button, EmptyState, Field, Modal, Segmented } from "./ui";
 import { VirtualList } from "./VirtualList";
-import { CheckRow, InlineNotice, ManagementList, ManagementRow, ManagementRowText, Note, PageEmpty, PreviewNote } from "./Management";
+import { CheckField, CheckRow, InlineNotice, ManagementList, ManagementRow, ManagementRowText, Note, PageEmpty, PreviewNote } from "./Management";
 import { ConfigTable } from "./ConfigTable";
 import { runStateLabel } from "../pages/runState";
 import { diffConfigRows, isSensitiveKey, nextTemplateVersion } from "../data/configRows";
@@ -2404,7 +2404,7 @@ function EffectiveConfigModal({
   const service = task.services.find((item) => item.id === selectedServiceId) ?? task.services[0];
 
   return (
-    <Modal title="查看生效配置" onClose={onClose}>
+    <Modal title="查看生效配置" testId="effective-config-dialog" onClose={onClose}>
       <p className="text-xs text-ink">
         {task.name} · {environment?.name ?? task.environmentId} · 任务模板 {task.templateVersion}
       </p>
@@ -2426,7 +2426,7 @@ function EffectiveConfigModal({
       </div>
       {service ? (
         <div data-testid="effective-config-rows">
-          <ConfigTable rows={service.resolved} valueHeader="最终值" />
+          <ConfigTable rows={service.resolved} valueHeader="最终值" wrapped={false} />
         </div>
       ) : (
         <p className="text-xs text-muted">该任务没有服务（仅普通目录），没有需要解析的运行配置。</p>
@@ -2455,6 +2455,7 @@ function ProjectListModal({ onClose }: { onClose: () => void }) {
   return (
     <Modal
       title="项目管理"
+      testId="projects-dialog"
       onClose={onClose}
       footer={
         <Button size="sm" variant="primary" onClick={() => openModal({ type: "project-edit" })}>
@@ -2517,6 +2518,7 @@ function ProjectEditModal({ projectId, onClose }: { projectId?: string; onClose:
   return (
     <Modal
       title={project ? "编辑项目" : "新建项目"}
+      testId="project-editor"
       onClose={onClose}
       footer={
         <Button
@@ -2567,21 +2569,20 @@ function ProjectEditModal({ projectId, onClose }: { projectId?: string; onClose:
           {registered.map((repository) => {
             const used = usedRepoIds.has(repository.id);
             return (
-              <label key={repository.id} className="flex items-center gap-2 text-xs">
-                <input
-                  type="checkbox"
-                  aria-label={`仓库 ${repository.name}`}
-                  checked={used || repoIds.includes(repository.id)}
-                  disabled={used}
-                  onChange={(event) =>
-                    setRepoIds((items) =>
-                      event.target.checked ? [...items, repository.id] : items.filter((id) => id !== repository.id),
-                    )
-                  }
-                />
-                <span>{repository.name}</span>
-                {used ? <small className="text-muted">任务使用中</small> : null}
-              </label>
+              <CheckField
+                key={repository.id}
+                testId={`project-repo-choice-${repository.id}`}
+                label={repository.name}
+                ariaLabel={`仓库 ${repository.name}`}
+                checked={used || repoIds.includes(repository.id)}
+                disabled={used}
+                note={used ? "任务使用中" : undefined}
+                onChange={(checked) =>
+                  setRepoIds((items) =>
+                    checked ? [...items, repository.id] : items.filter((id) => id !== repository.id),
+                  )
+                }
+              />
             );
           })}
         </div>
