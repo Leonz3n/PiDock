@@ -14,6 +14,11 @@
       "messagesShare": 0.453,
       "composerH": 145,
       "sectionH": 680,
+      "tabStrip": {
+        "scrollWidth": 972,
+        "clientWidth": 972,
+        "noClip": true
+      },
       "rows": [
         {
           "tag": "div",
@@ -54,6 +59,11 @@
       "messagesShare": 0.415,
       "composerH": 179,
       "sectionH": 680,
+      "tabStrip": {
+        "scrollWidth": 463,
+        "clientWidth": 463,
+        "noClip": true
+      },
       "rows": [
         {
           "tag": "div",
@@ -94,6 +104,11 @@
       "messagesShare": 0.415,
       "composerH": 179,
       "sectionH": 680,
+      "tabStrip": {
+        "scrollWidth": 463,
+        "clientWidth": 463,
+        "noClip": true
+      },
       "rows": [
         {
           "tag": "div",
@@ -134,6 +149,11 @@
       "messagesShare": 0.453,
       "composerH": 145,
       "sectionH": 680,
+      "tabStrip": {
+        "scrollWidth": 812,
+        "clientWidth": 812,
+        "noClip": true
+      },
       "rows": [
         {
           "tag": "div",
@@ -174,6 +194,11 @@
       "messagesShare": 0.415,
       "composerH": 179,
       "sectionH": 680,
+      "tabStrip": {
+        "scrollWidth": 413,
+        "clientWidth": 372,
+        "noClip": false
+      },
       "rows": [
         {
           "tag": "div",
@@ -214,6 +239,11 @@
       "messagesShare": 0.415,
       "composerH": 179,
       "sectionH": 680,
+      "tabStrip": {
+        "scrollWidth": 413,
+        "clientWidth": 372,
+        "noClip": false
+      },
       "rows": [
         {
           "tag": "div",
@@ -254,6 +284,11 @@
       "messagesShare": 0.342,
       "composerH": 179,
       "sectionH": 580,
+      "tabStrip": {
+        "scrollWidth": 590,
+        "clientWidth": 590,
+        "noClip": true
+      },
       "rows": [
         {
           "tag": "div",
@@ -294,6 +329,11 @@
       "messagesShare": 0.292,
       "composerH": 179,
       "sectionH": 580,
+      "tabStrip": {
+        "scrollWidth": 413,
+        "clientWidth": 264,
+        "noClip": false
+      },
       "rows": [
         {
           "tag": "div",
@@ -334,6 +374,11 @@
       "messagesShare": 0.292,
       "composerH": 179,
       "sectionH": 580,
+      "tabStrip": {
+        "scrollWidth": 413,
+        "clientWidth": 264,
+        "noClip": false
+      },
       "rows": [
         {
           "tag": "div",

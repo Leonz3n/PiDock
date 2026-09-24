@@ -35,6 +35,9 @@ const measure = (page) =>
     const messages = document.querySelector('[role="log"][aria-label="会话消息"]');
     const composer = document.querySelector('[data-testid="task-composer"]');
     const header = document.querySelector('[data-testid^="task-header-"]');
+    // The tab strip is `overflow-hidden`, so a clipped tab never shows up in
+    // `documentElement.scrollWidth`; measure the strip itself (#27 review note).
+    const tabStrip = document.querySelector('[data-testid="session-tab-strip"]');
     const rows = [...(section?.children ?? [])].map((element) => ({
       tag: element.tagName.toLowerCase(),
       testid: element.getAttribute("data-testid") ?? null,
@@ -51,6 +54,13 @@ const measure = (page) =>
       messagesShare: messages ? Number((messages.getBoundingClientRect().height / innerHeight).toFixed(3)) : null,
       composerH: box(composer),
       sectionH: box(section),
+      tabStrip: tabStrip
+        ? {
+            scrollWidth: tabStrip.scrollWidth,
+            clientWidth: tabStrip.clientWidth,
+            noClip: tabStrip.scrollWidth <= tabStrip.clientWidth,
+          }
+        : null,
       rows,
     };
   });
@@ -82,7 +92,7 @@ for (const viewport of VIEWPORTS) {
 
   await openPanels(page, [PANELS[0]]);
   report.states[`${viewport.name}-one`] = await measure(page);
-  if (viewport.name === "1440x900") await page.screenshot({ path: `${OUT}/renderer/1440-one-panel.png` });
+  await page.screenshot({ path: `${OUT}/renderer/${viewport.width}-one-panel.png` });
 
   await openPanels(page, PANELS.slice(1));
   report.states[`${viewport.name}-all`] = await measure(page);
@@ -148,7 +158,7 @@ await browser.close();
 await writeFile(`${OUT}/vertical-budget.json`, `${JSON.stringify(report, null, 2)}\n`);
 for (const [key, value] of Object.entries(report.states)) {
   console.log(
-    `${key}: header=${value.headerH} messages=${value.messagesH} (${value.messagesShare}) composer=${value.composerH} overflow=${!value.noHorizontalOverflow}`,
+    `${key}: header=${value.headerH} messages=${value.messagesH} (${value.messagesShare}) composer=${value.composerH} overflow=${!value.noHorizontalOverflow} tabStripClip=${value.tabStrip ? !value.tabStrip.noClip : "n/a"}`,
   );
 }
 console.log(`prototype A 1440x900: ${JSON.stringify(report.prototypeA)}`);
