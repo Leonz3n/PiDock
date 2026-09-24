@@ -84,6 +84,17 @@ describe("project overview", () => {
     expect(await screen.findByRole("heading", { name: "排查延迟峰值", level: 1 })).toBeInTheDocument();
   });
 
+  it("navigates 管理环境 to the 环境与服务 page, as the prototype's `view:env` does", async () => {
+    const user = userEvent.setup();
+    renderApp("/projects/orbit");
+    await screen.findByRole("heading", { name: "Orbit API", level: 1 });
+    // Prototype `management.js`: `button('管理环境','view:env','sm')` — it goes to
+    // the environment page, it does not open the environment-list dialog.
+    await user.click(screen.getByRole("button", { name: "管理环境" }));
+    expect(await screen.findByRole("heading", { name: "环境与服务", level: 1 })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "运行环境" })).not.toBeInTheDocument();
+  });
+
   it("labels the current project in the management dialog and keeps 切换 for the others", async () => {
     const user = userEvent.setup();
     renderApp("/projects/atlas");

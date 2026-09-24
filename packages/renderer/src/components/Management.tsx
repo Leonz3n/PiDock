@@ -46,9 +46,14 @@ export function PageTitle({ children }: { children: ReactNode }) {
   return <h1 className="text-[23px] font-[650] tracking-[-0.7px] text-ink">{children}</h1>;
 }
 
-/** Prototype `h2{font-size:18px;letter-spacing:-.4px;font-weight:650}`. */
+/**
+ * Prototype `h2{font-size:18px;letter-spacing:-.4px}` — it declares no
+ * `font-weight`, so the computed value is the browser's h2 default **700**
+ * (unlike `h1{…font-weight:650}` and `h3{…font-weight:650}`, which declare it).
+ * Measured on the live prototype in this slice's probe.
+ */
 export function SectionTitle({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <h2 className={`text-[18px] font-[650] tracking-[-0.4px] text-ink ${className}`}>{children}</h2>;
+  return <h2 className={`text-[18px] font-bold tracking-[-0.4px] text-ink ${className}`}>{children}</h2>;
 }
 
 /**
@@ -59,21 +64,37 @@ export function SectionHeader({
   title,
   actions,
   className = "",
+  flush = false,
 }: {
   title: string;
   actions?: ReactNode;
   className?: string;
+  /**
+   * The prototype's bare `.between` (no `toolbar-space` / `rowgap`) — the
+   * directory variant's 项目目录 heading. Spelled as a prop because a caller's
+   * `mt-0` would not beat this component's `mt-4`: Tailwind orders utilities by
+   * property, not by class-attribute order, so a second margin utility in
+   * `className` is dead code (measured 16px/15px on the live page).
+   */
+  flush?: boolean;
 }) {
   return (
-    <div className={`mt-4 mb-[15px] flex items-center justify-between gap-3 ${className}`}>
+    <div className={`${flush ? "mt-0 mb-0" : "mt-4 mb-[15px]"} flex items-center justify-between gap-3 ${className}`}>
       <SectionTitle>{title}</SectionTitle>
       {actions}
     </div>
   );
 }
 
-export function PageIntro({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <p className={`page-intro mt-1.5 mb-[26px] text-[12px] text-[#8a8c92] ${className}`}>{children}</p>;
+/**
+ * Prototype `.page-intro{margin:6px 0 26px;color:#8a8c92;font-size:12px}`, plus
+ * `.modal .page-intro{margin-bottom:16px}` for dialogs (`dense`), which is a
+ * prop rather than a caller-supplied `mb-4` for the same reason as
+ * `SectionHeader.flush`: two margin utilities in one class list are a CSS-order
+ * coin flip, so the component emits exactly one.
+ */
+export function PageIntro({ children, className = "", dense = false }: { children: ReactNode; className?: string; dense?: boolean }) {
+  return <p className={`page-intro mt-1.5 ${dense ? "mb-4" : "mb-[26px]"} text-[12px] text-[#8a8c92] ${className}`}>{children}</p>;
 }
 
 export function Note({ children, className = "" }: { children: ReactNode; className?: string }) {
@@ -234,8 +255,17 @@ export function Table({ children, className = "" }: { children: ReactNode; class
   // Prototype `@media(max-width:720px){.table{min-width:650px}}`: below the
   // last tier the table scrolls inside its `overflow:auto` parent instead of
   // squashing three columns into 300px.
+  //
+  // Prototype `.table tr:last-child td{border:0}`: the last row carries no
+  // bottom border. It has to live here — the rule targets the `td` from the
+  // table, and a `last:` variant on `Td` would select the row's last cell
+  // instead of the last row's cells (measured: 1px before this rule).
   return (
-    <table className={`table w-full border-collapse text-left text-[11px] below-stack:min-w-[650px] ${className}`}>{children}</table>
+    <table
+      className={`table w-full border-collapse text-left text-[11px] [&_tr:last-child_td]:border-b-0 below-stack:min-w-[650px] ${className}`}
+    >
+      {children}
+    </table>
   );
 }
 

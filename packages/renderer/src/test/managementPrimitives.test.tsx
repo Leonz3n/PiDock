@@ -12,6 +12,8 @@ import {
   PageEmpty,
   PageIntro,
   PreviewNote,
+  SectionHeader,
+  SectionTitle,
   StatCard,
   Table,
   TableWrap,
@@ -229,5 +231,73 @@ describe("management page primitives", () => {
     const button = screen.getByRole("button", { name: "删除" });
     expect(button.className).toContain("text-[#ad4545]");
     expect(button.className).toContain("border-[#ead0d0]");
+  });
+
+  it("carries the prototype's h2 weight and the bare-between heading margins", () => {
+    render(
+      <>
+        <SectionTitle>项目统计</SectionTitle>
+        <SectionHeader title="项目仓库" actions={<button type="button">管理仓库</button>} />
+        <SectionHeader title="项目目录" flush actions={<button type="button">管理目录</button>} />
+      </>,
+    );
+    // `h2{font-size:18px;letter-spacing:-.4px}` declares **no** font-weight, so the
+    // browser default applies — measured 700 on the live prototype, while h1/h3
+    // declare 650.
+    const heading = screen.getByRole("heading", { name: "项目仓库", level: 2 });
+    expect(heading.className).toContain("text-[18px]");
+    expect(heading.className).toContain("tracking-[-0.4px]");
+    expect(heading.className).toContain("font-bold");
+    expect(heading.className).not.toContain("font-[650]");
+    expect(screen.getByRole("heading", { name: "项目统计", level: 2 }).className).toContain("font-bold");
+    // `.between.toolbar-space.rowgap` → 16px above / 15px below …
+    const spaced = heading.parentElement!;
+    expect(spaced.className).toContain("mt-4");
+    expect(spaced.className).toContain("mb-[15px]");
+    // … and the directory variant's heading is the bare `.between` (0/0). It is a
+    // prop, not a caller `mt-0`: a second margin utility in one class list loses
+    // to this component's own class (measured 16px/15px on the live page).
+    const flush = screen.getByRole("heading", { name: "项目目录", level: 2 }).parentElement!;
+    expect(flush.className).toContain("mt-0");
+    expect(flush.className).toContain("mb-0");
+    expect(flush.className).not.toContain("mt-4");
+    expect(flush.className).not.toContain("mb-[15px]");
+  });
+
+  it("switches the page intro to the prototype's modal bottom margin", () => {
+    render(
+      <>
+        <PageIntro>在项目中组织仓库、任务与运行环境。</PageIntro>
+        <PageIntro dense>切换项目，或管理项目的目录、仓库与名称。</PageIntro>
+      </>,
+    );
+    // `.page-intro{margin:6px 0 26px}` for a page …
+    const page = screen.getByText("在项目中组织仓库、任务与运行环境。");
+    expect(page.className).toContain("mt-1.5");
+    expect(page.className).toContain("mb-[26px]");
+    // … and `.modal .page-intro{margin-bottom:16px}` inside a dialog.
+    const dialog = screen.getByText("切换项目，或管理项目的目录、仓库与名称。");
+    expect(dialog.className).toContain("page-intro");
+    expect(dialog.className).toContain("mb-4");
+    expect(dialog.className).not.toContain("mb-[26px]");
+  });
+
+  it("drops the last data row's bottom border the way `.table tr:last-child td` does", () => {
+    render(
+      <Table>
+        <tbody>
+          <tr>
+            <Td>PORT</Td>
+          </tr>
+          <tr>
+            <Td>NODE_ENV</Td>
+          </tr>
+        </tbody>
+      </Table>,
+    );
+    // `.table tr:last-child td{border:0}` lives on the table: a `last:` variant on
+    // `Td` would target the row's last cell, not the last row's cells.
+    const table = screen.getByText("PORT").closest("table")!;
+    expect(table.className).toContain("[&_tr:last-child_td]:border-b-0");
   });
 });
