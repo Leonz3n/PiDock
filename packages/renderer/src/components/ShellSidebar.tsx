@@ -6,6 +6,12 @@
  * machine/system views above the local workspace chip. The card at the top is
  * the workspace picker; it reuses the existing project list modal, so switching
  * workspaces reuses the existing store and adds no backend call.
+ *
+ * Below 1180px the sidebar narrows to 192px and below 960px it collapses into
+ * the prototype's 64px icon rail: the labels, counts, group headings, task list
+ * and workspace card go away (`below-mid:*`). Unlike the prototype, which hides
+ * the label with `display:none`, the label text stays in the accessibility tree
+ * (`sr-only`) so every rail button keeps its accessible name.
  */
 
 import { taskCardActivity, taskCardMeta, runningServiceCount } from "../data/shellNav";
@@ -18,7 +24,8 @@ import { useUiStore } from "../stores/ui";
 /** Sidebar items carry the route only: the wording stays in `ROUTE_LABELS`. */
 type NavItem = { route: Route; icon: IconName };
 
-const NAV_ITEM_CLASS = "flex w-full items-center gap-[10px] rounded-[7px] px-[11px] py-[9px] text-left text-[12px]";
+const NAV_ITEM_CLASS =
+  "flex w-full items-center gap-[10px] rounded-[7px] px-[11px] py-[9px] text-left text-[12px] below-mid:justify-center";
 
 export function ShellSidebar() {
   const route = useNavigationStore((state) => state.route);
@@ -42,8 +49,11 @@ export function ShellSidebar() {
   ];
 
   return (
-    <aside data-testid="shell-sidebar" className="flex min-h-0 w-[226px] shrink-0 flex-col border-r border-line bg-sidebar px-[13px]">
-      <div className="flex h-16 items-center gap-[9px] px-2">
+    <aside
+      data-testid="shell-sidebar"
+      className="flex min-h-0 w-[226px] shrink-0 flex-col border-r border-line bg-sidebar px-[13px] below-wide:w-[192px] below-mid:w-16 below-mid:px-2"
+    >
+      <div className="flex h-16 items-center gap-[9px] px-2 below-mid:justify-center below-mid:px-0">
         <span
           aria-hidden
           data-testid="brand-mark"
@@ -51,14 +61,14 @@ export function ShellSidebar() {
         >
           π
         </span>
-        <span className="text-[19px] font-[680] tracking-[-0.8px] text-ink">PiDock</span>
+        <span className="text-[19px] font-[680] tracking-[-0.8px] text-ink below-mid:hidden">PiDock</span>
       </div>
 
       <button
         type="button"
         aria-label={`切换工作区：${activeProject?.name ?? "未选择项目"}`}
         onClick={() => openModal({ type: "project-list" })}
-        className="mt-[5px] mb-[18px] flex w-full items-center gap-[9px] rounded-lg border border-line bg-paper p-[10px] text-left hover:border-[#bec0c3]"
+        className="mt-[5px] mb-[18px] flex w-full items-center gap-[9px] rounded-lg border border-line bg-paper p-[10px] text-left hover:border-[#bec0c3] below-mid:hidden"
       >
         <span
           aria-hidden
@@ -88,7 +98,7 @@ export function ShellSidebar() {
         </div>
 
         <div data-nav-group="tasks" role="group" aria-label="进行中的任务" className="flex min-h-0 flex-col">
-          <div className="mt-6 mb-[7px] flex items-center justify-between px-[10px] text-[10px] tracking-[1.4px] text-[#91999f] uppercase">
+          <div className="mt-6 mb-[7px] flex items-center justify-between px-[10px] text-[10px] tracking-[1.4px] text-[#91999f] uppercase below-mid:hidden">
             <span>进行中的任务</span>
             <button
               type="button"
@@ -100,7 +110,7 @@ export function ShellSidebar() {
               <Icon name="plus" />
             </button>
           </div>
-          <div className="flex min-h-0 flex-col overflow-y-auto">
+          <div className="flex min-h-0 flex-col overflow-y-auto below-mid:hidden">
             {tasks.length === 0 ? <p className="px-[10px] pb-2 text-[10px] text-muted">当前工作区没有进行中的任务。</p> : null}
             {tasks.map((task) => (
               <TaskNavCard
@@ -167,8 +177,8 @@ export function ShellSidebar() {
             <span aria-hidden className="grid h-[25px] w-[25px] shrink-0 place-items-center rounded-full bg-[#e3e4e5] text-[10px] text-accent">
               本
             </span>
-            <span className="truncate text-[11px] text-ink">{localSettings?.workspaceRoot ?? "未设置"}</span>
-            <small className="ml-auto shrink-0 text-[10px] text-muted">本机工作区</small>
+            <span className="truncate text-[11px] text-ink below-mid:hidden">{localSettings?.workspaceRoot ?? "未设置"}</span>
+            <small className="ml-auto shrink-0 text-[10px] text-muted below-mid:hidden">本机工作区</small>
           </div>
         </div>
       </nav>
@@ -202,9 +212,12 @@ function SidebarNavButton({
       }`}
     >
       <Icon name={item.icon} />
-      <span>{label}</span>
+      {/* `sr-only` instead of the prototype's `display:none`: the 64px rail keeps
+          an accessible name per button, and the visible label is unchanged above
+          the breakpoint. */}
+      <span className="below-mid:sr-only">{label}</span>
       {count !== undefined ? (
-        <span className="ml-auto rounded-[5px] bg-[#e7eaea] px-1.5 text-[10px]">
+        <span className="ml-auto rounded-[5px] bg-[#e7eaea] px-1.5 text-[10px] below-mid:hidden">
           {count}
         </span>
       ) : null}

@@ -33,7 +33,8 @@ export function Shell() {
 
       <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-paper">
         <Breadcrumbs />
-        <div className="flex min-h-0 flex-1 flex-col overflow-auto bg-[#fbfbfc] px-[34px] py-[30px]">
+        {/* Prototype `.page`: `30px 34px`, `25px` below 960px and `20px` below 720px. */}
+        <div className="flex min-h-0 flex-1 flex-col overflow-auto bg-[#fbfbfc] px-[34px] py-[30px] below-mid:px-[25px] below-stack:p-5">
           {route.view === "task" && activeTask ? <TaskPage task={activeTask} sessionId={sessionId ?? activeTask.activeSessionId} /> : null}
           {route.view === "attention" ? <AttentionPage /> : null}
           {route.view === "project" ? <ProjectPage projectId={route.projectId} /> : null}

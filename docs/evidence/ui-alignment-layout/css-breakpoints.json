@@ -1,0 +1,36 @@
+{
+  "file": "packages/renderer/dist/assets/index-1yBmx69w.css",
+  "mediaQueriesInOrder": [
+    "1180",
+    "960",
+    "850",
+    "720"
+  ],
+  "prototypeBreakpointsPresent": true,
+  "missingUtilities": [],
+  "found": {
+    "720": {
+      "below-stack\\:block": true,
+      "below-stack\\:w-full": true,
+      "below-stack\\:min-h-\\[550px\\]": true,
+      "below-stack\\:min-h-\\[500px\\]": true
+    },
+    "850": {
+      "below-narrow\\:w-\\[45\\%\\]": true,
+      "below-narrow\\:min-w-\\[300px\\]": true
+    },
+    "960": {
+      "below-mid\\:w-16": true,
+      "below-mid\\:sr-only": true,
+      "below-mid\\:hidden": true,
+      "below-mid\\:min-w-\\[290px\\]": true,
+      "below-mid\\:justify-center": true,
+      "below-mid\\:px-2": true
+    },
+    "1180": {
+      "below-wide\\:w-\\[192px\\]": true,
+      "below-wide\\:w-\\[40\\%\\]": true,
+      "below-wide\\:min-w-\\[310px\\]": true
+    }
+  }
+}
