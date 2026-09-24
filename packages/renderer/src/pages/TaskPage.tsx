@@ -352,13 +352,22 @@ export function TaskPage({ task, sessionId }: { task: Task; sessionId: string })
             <Button size="sm" onClick={() => openModal({ type: "task-sources", taskId: task.id })}>
               添加目录
             </Button>
-            {localServices.length > 0 ? (
+            {/* Prototype `toggle-run` (`app.js` header) renders for every Git
+                task; with no local service there is nothing to start, so the
+                button stays visible but disabled and says why. */}
+            {!directoryOnly ? (
               <Button
                 size="sm"
                 variant={allRunning ? "default" : "primary"}
-                title={`${allRunning ? "停止" : "启动"}本任务的全部 ${localServices.length} 个本地服务`}
+                disabled={localServices.length === 0}
+                title={
+                  localServices.length === 0
+                    ? "当前任务没有本地服务"
+                    : `${allRunning ? "停止" : "启动"}本任务的全部 ${localServices.length} 个本地服务`
+                }
                 onClick={toggleLocalServices}
               >
+                <Icon name={allRunning ? "stop" : "play"} className="h-3.5 w-3.5" />
                 {allRunning ? "停止服务" : "启动本地服务"}
               </Button>
             ) : null}
@@ -527,8 +536,10 @@ const PANEL_ICONS: Record<ToolPanel, IconName> = {
  * dev/memory, `task.json` through the shell); errors stay bound to this
  * task id so a failure never surfaces as another task's header.
  *
- * [UI 对齐 03] (#27) the prototype's `.taskheader`: `TASK WORKSPACE #nnn`
- * eyebrow, `h1`, one `actionset` (passed in — the tool launcher, 添加目录, the
+ * [UI 对齐 03] (#27) the prototype's `.taskheader`: `TASK WORKSPACE #<key>`
+ * eyebrow (the prototype's `#001` ordinal does not exist in the product, so the
+ * task key stands in; the full `workspaceKey` stays in the eyebrow's `title`),
+ * `h1`, one `actionset` (passed in — the tool launcher, 添加目录, the
  * local-service run toggle and the `···` menu) and a single `.meta` line
  * (branch / environment·version / running local services / worktree+directory
  * badges). The former second row of text buttons is gone; repository names and
@@ -583,6 +594,10 @@ function TaskHeader({ task, actions }: { task: Task; actions: ReactNode }) {
   }, [adapter, task.id]);
   const changedCount = task.files.length;
   const directoryOnly = task.repos.length === 0 && task.directories.length > 0;
+  // Prototype eyebrow is a `TASK WORKSPACE` label plus a number; the product
+  // has no ordinal, so the task key stands in for it, prefixed with `#` (the
+  // full `task-…` key stays in the eyebrow's `title`).
+  const eyebrowKey = task.workspaceKey.replace(/^task-/, "");
   const workspace = useHostStore((state) => state.workspace);
   const environmentName =
     workspace?.environments.find((item) => item.id === task.environmentId)?.name ?? task.environmentId;
@@ -607,7 +622,10 @@ function TaskHeader({ task, actions }: { task: Task; actions: ReactNode }) {
             ) : (
               <>
                 TASK WORKSPACE
-                <span className="ml-2 font-mono tracking-normal normal-case">{task.workspaceKey}</span>
+                {/* Prototype `TASK WORKSPACE #001`: the product has no task
+                    ordinal, so the eyebrow shows the task key without its
+                    `task-` prefix; the full `workspaceKey` stays in the title. */}
+                <span className="ml-2 font-mono tracking-normal normal-case">#{eyebrowKey}</span>
               </>
             )}
           </div>

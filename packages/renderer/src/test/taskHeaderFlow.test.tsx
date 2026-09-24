@@ -5,8 +5,8 @@ import { useHostStore } from "../stores/host";
 import { actStore, renderApp } from "./helpers";
 
 // Flow: [UI 对齐 03] (#27) the task header follows prototype A
-// (`prototypes/pidock-ui/app.js` `header()`): a `TASK WORKSPACE #nnn` eyebrow, the
-// title, one `actionset` (tool launcher icons, Subagent trigger, 添加目录, the
+// (`prototypes/pidock-ui/app.js` `header()`): a `TASK WORKSPACE #<key>` eyebrow,
+// the title, one `actionset` (tool launcher icons, Subagent trigger, 添加目录, the
 // local-service run toggle and the `···` 任务操作 menu) and a single `.meta` line.
 // The former second row of text buttons is gone, so every secondary action must
 // stay reachable through the menu — the mapping is asserted below.
@@ -74,6 +74,32 @@ describe("task header actionset", () => {
     expect(within(header).getByText("4 个独立 worktree")).toBeInTheDocument();
     expect(within(header).getByText("1 个普通目录")).toBeInTheDocument();
     expect(within(header).getByText("TASK WORKSPACE")).toBeInTheDocument();
+    // Prototype `TASK WORKSPACE #001`: the product has no ordinal, so the task
+    // key stands in (without the `task-` prefix) and the full key stays in the
+    // eyebrow's `title`.
+    expect(within(header).getByText("#a1f92c3d")).toBeInTheDocument();
+    expect(within(header).getByText("TASK WORKSPACE").closest("[title]")).toHaveAttribute(
+      "title",
+      expect.stringContaining("task-a1f92c3d"),
+    );
+  });
+
+  it("keeps the run toggle visible but disabled when the task has no local service", async () => {
+    renderApp("/projects/atlas/tasks/release?session=main");
+    await screen.findByRole("heading", { name: "发布前检查" });
+    // Flip every local service to the remote test environment through the
+    // existing seam; the prototype's `toggle-run` still renders.
+    const before = await useHostStore.getState().task("release");
+    const localIds = (before?.services ?? []).filter((service) => service.mode === "local").map((service) => service.id);
+    expect(localIds.length).toBeGreaterThan(0);
+    for (const id of localIds) {
+      await actStore(async () => {
+        await useHostStore.getState().setServiceMode("release", id, "remote");
+      });
+    }
+    const toggle = await screen.findByRole("button", { name: "启动本地服务" });
+    expect(toggle).toBeDisabled();
+    expect(toggle).toHaveAttribute("title", "当前任务没有本地服务");
   });
 });
 
@@ -103,6 +129,9 @@ describe("task 任务操作 menu", () => {
     await screen.findByRole("heading", { name: "发布前检查" });
 
     const trigger = screen.getByRole("button", { name: "任务操作" });
+    // The trigger is a menu button, not a toggle: it must not carry
+    // `aria-pressed` next to `aria-haspopup` (#27 review note).
+    expect(trigger).not.toHaveAttribute("aria-pressed");
     await user.click(trigger);
     const menu = await screen.findByRole("menu", { name: "任务操作" });
     const items = within(menu).getAllByRole("menuitem");
@@ -114,10 +143,29 @@ describe("task 任务操作 menu", () => {
     expect(items[items.length - 1]).toHaveFocus();
     await user.keyboard("{Home}");
     expect(items[0]).toHaveFocus();
+    await user.keyboard("{End}");
+    expect(items[items.length - 1]).toHaveFocus();
 
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("menu", { name: "任务操作" })).not.toBeInTheDocument();
     await expect(trigger).toHaveFocus();
+  });
+
+  it("opens from the keyboard on the focused trigger and ignores a second Escape", async () => {
+    const user = userEvent.setup();
+    renderApp("/projects/atlas/tasks/release?session=main");
+    await screen.findByRole("heading", { name: "发布前检查" });
+
+    const trigger = screen.getByRole("button", { name: "任务操作" });
+    trigger.focus();
+    await user.keyboard("{Enter}");
+    expect(await screen.findByRole("menu", { name: "任务操作" })).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu", { name: "任务操作" })).not.toBeInTheDocument();
+
+    trigger.focus();
+    await user.keyboard("{ }");
+    expect(await screen.findByRole("menu", { name: "任务操作" })).toBeInTheDocument();
   });
 
   it("closes when a pointer press lands outside the menu", async () => {
