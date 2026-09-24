@@ -30,6 +30,14 @@ const CHROME =
 const RENDERER = process.env.RENDERER_BASE ?? "http://127.0.0.1:4335";
 const PROTOTYPE = process.env.PROTOTYPE_BASE ?? "http://127.0.0.1:4319";
 
+// The usage ledger fixture (`packages/shell/src/host/memoryHost.ts`,
+// `makeUsage`) is dated inside this span. The usage probe drives the page's
+// own 自定义 range with these two dates instead of asking whether the *wall
+// clock* week happens to hold records — the ledger is fixed data, the clock is
+// not ([UI 对齐 09] #33 review P2-8).
+const LEDGER_FROM = "2026-09-15";
+const LEDGER_TO = "2026-09-21";
+
 // The prototype's own page tiers: `@media(max-width:960px){.page{padding:25px}}`
 // and `@media(max-width:720px){.page{padding:20px}}`, so 1024 is still 30/34.
 const VIEWPORTS = [
@@ -312,12 +320,16 @@ const rendererPage = async (route, viewport, testId) => {
 }
 {
   const page = await rendererPage("/usage", { width: 1440, height: 900 }, "usage-page");
-  // The default range is 全部 (this app's ledger spans ten days, so ten bars);
-  // the prototype always draws seven. Both readings are kept, and the geometry
-  // comparisons use the 近 7 天 reading, where the bar count is the same.
+  // Every reading below is taken in a window pinned to explicit ledger dates
+  // rather than to the wall clock: the prototype's sample ledger is fixed and
+  // the page's presets are relative to *today*, so capturing geometry under
+  // 近 7 天 made this whole section a few-days shelf life ([UI 对齐 09] #33
+  // review P2-8). 全部 stays as the unfiltered baseline.
   bucket("1440x900").usageAll = await page.evaluate(COLLECT, SELECTORS);
   bucket("1440x900").usageAll.rows = await page.$eval('[data-testid="usage-table"]', (list) => Number(list.getAttribute("data-total-rows")));
-  await page.selectOption('[data-testid="usage-range"]', "近 7 天");
+  await page.selectOption('[data-testid="usage-range"]', "自定义");
+  await page.fill('[aria-label="起始日期"]', LEDGER_FROM);
+  await page.fill('[aria-label="结束日期"]', LEDGER_TO);
   await page.waitForTimeout(200);
   bucket("1440x900").usage = await page.evaluate(COLLECT, SELECTORS);
   bucket("1440x900").usage.rangeOptions = await page.$$eval('[data-testid="usage-range"] option', (options) =>
@@ -327,10 +339,26 @@ const rendererPage = async (route, viewport, testId) => {
     bars.map((bar) => Math.round(bar.getBoundingClientRect().height)),
   );
   bucket("1440x900").usage.rows = await page.$eval('[data-testid="usage-table"]', (list) => Number(list.getAttribute("data-total-rows")));
+  bucket("1440x900").usage.customWindow = await page.$eval('[data-testid="usage-page"]', (root) => ({
+    bars: root.querySelectorAll(".bar-column").length,
+    rows: Number(root.querySelector('[data-testid="usage-table"]')?.getAttribute("data-total-rows") ?? "-1"),
+  }));
   await page.screenshot({ path: `${OUT}/renderer/1440x900-usage.png`, fullPage: true });
-  // Anti-no-op: 今天 (the fixture has no call on the wall-clock day) must reach
-  // the empty state and drop the 每日消耗/构成 block instead of redrawing it.
-  await page.selectOption('[data-testid="usage-range"]', "今天");
+  // The 近 7 天 preset is asserted by the window it writes into the two date
+  // inputs (six days back from the app's ledger day), not by a row count.
+  await page.selectOption('[data-testid="usage-range"]', "近 7 天");
+  await page.waitForTimeout(200);
+  bucket("1440x900").usage.weeklyWindow = await page.evaluate(() => ({
+    from: document.querySelector('[aria-label="起始日期"]')?.value ?? null,
+    to: document.querySelector('[aria-label="结束日期"]')?.value ?? null,
+    // The app buckets by its own ledger timezone (UTC+8), so "今天" is the
+    // UTC+8 day and the script compares against that same definition.
+    expectedTo: new Date(Date.now() + 8 * 60 * 60_000).toISOString().slice(0, 10),
+  }));
+  // A window with no records at all: the charts must give way to the empty
+  // state instead of drawing seven zero bars as a reading.
+  await page.fill('[aria-label="起始日期"]', "2030-01-01");
+  await page.fill('[aria-label="结束日期"]', "2030-01-07");
   await page.waitForTimeout(200);
   const empty = await page.$eval('[data-testid="usage-page"]', (root) => ({
     barChart: root.querySelectorAll(".bar-chart").length,
@@ -338,14 +366,17 @@ const rendererPage = async (route, viewport, testId) => {
     emptyText: root.querySelector(".empty")?.textContent?.trim() ?? null,
     rows: Number(root.querySelector('[data-testid="usage-table"]')?.getAttribute("data-total-rows") ?? "-1"),
   }));
-  bucket("1440x900").usage.todaySwitch = empty;
-  await page.selectOption('[data-testid="usage-range"]', "近 7 天");
+  bucket("1440x900").usage.emptyWindow = empty;
+  // Whatever the wall clock day holds, the charts and the empty state are
+  // mutually exclusive — the invariant the old 今天 probe was reaching for.
+  await page.selectOption('[data-testid="usage-range"]', "今天");
   await page.waitForTimeout(200);
-  const weekly = await page.$eval('[data-testid="usage-page"]', (root) => ({
-    bars: root.querySelectorAll(".bar-column").length,
+  bucket("1440x900").usage.todaySwitch = await page.$eval('[data-testid="usage-page"]', (root) => ({
+    barChart: root.querySelectorAll(".bar-chart").length,
+    donut: root.querySelectorAll(".usage-donut").length,
+    emptyText: root.querySelector(".empty")?.textContent?.trim() ?? null,
     rows: Number(root.querySelector('[data-testid="usage-table"]')?.getAttribute("data-total-rows") ?? "-1"),
   }));
-  bucket("1440x900").usage.rangeSwitch = weekly;
   await page.close();
 }
 
@@ -613,16 +644,36 @@ check(
   ["近 7 天", "今天", "近 30 天"].every((option) => at1440.usage.rangeOptions.includes(option)),
   JSON.stringify(at1440.usage.rangeOptions),
 );
-// Anti-no-op: 今天 empties the charts, 近 7 天 refills them with 7 bars.
+// Anti-no-op: an explicit window really re-filters the rows, and a window with
+// no records at all reaches the empty state instead of drawing seven zero bars.
+// Both probes drive the page's own dates, so neither depends on the wall clock
+// ([UI 对齐 09] #33 review P2-8: the old probe asked whether the *current week*
+// intersected a ledger fixed to 2026-09-12…21 and stopped passing from
+// 2026-09-28).
 check(
-  "usage range switch really re-renders",
-  at1440.usage.todaySwitch.barChart === 0 && at1440.usage.todaySwitch.donut === 0 && at1440.usage.todaySwitch.emptyText !== null,
-  JSON.stringify(at1440.usage.todaySwitch),
+  "usage 自定义 window re-filters the rows and redraws seven bars",
+  at1440.usage.customWindow.bars === 7 && at1440.usage.customWindow.rows > 0 && at1440.usage.customWindow.rows < at1440.usageAll.rows,
+  JSON.stringify({ custom: at1440.usage.customWindow, all: at1440.usageAll.rows }),
 );
 check(
-  "usage 近 7 天 draws seven bars and narrows the rows",
-  at1440.usage.rangeSwitch.bars === 7 && at1440.usage.rangeSwitch.rows > 0 && at1440.usage.rangeSwitch.rows < at1440.usageAll.rows,
-  JSON.stringify(at1440.usage.rangeSwitch),
+  "usage 近 7 天 writes a seven-day window ending on the ledger's today",
+  at1440.usage.weeklyWindow.to === at1440.usage.weeklyWindow.expectedTo &&
+    Date.parse(`${at1440.usage.weeklyWindow.to}T00:00:00Z`) - Date.parse(`${at1440.usage.weeklyWindow.from}T00:00:00Z`) === 6 * 86400_000,
+  JSON.stringify(at1440.usage.weeklyWindow),
+);
+check(
+  "usage window with no record shows the empty state instead of zero bars",
+  at1440.usage.emptyWindow.rows === 0 &&
+    at1440.usage.emptyWindow.barChart === 0 &&
+    at1440.usage.emptyWindow.donut === 0 &&
+    at1440.usage.emptyWindow.emptyText !== null,
+  JSON.stringify(at1440.usage.emptyWindow),
+);
+check(
+  "usage charts and the empty state are mutually exclusive",
+  (at1440.usage.todaySwitch.barChart === 0) === (at1440.usage.todaySwitch.emptyText !== null) &&
+    (at1440.usage.todaySwitch.donut === 0) === (at1440.usage.todaySwitch.barChart === 0),
+  JSON.stringify(at1440.usage.todaySwitch),
 );
 
 // 9.5 Capabilities: the summary strip, the counted tabs and the rows.
