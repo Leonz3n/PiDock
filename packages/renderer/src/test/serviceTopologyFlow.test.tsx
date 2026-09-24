@@ -27,10 +27,16 @@ describe("runtime panel topology", () => {
     // group at its own size and truncates the name/address instead. jsdom has no
     // layout, so the class contract is asserted here (the rendered result is in
     // `docs/evidence/ui-alignment-s2/renderer/*-one-panel.png`).
+    // [UI 对齐 04] (#28) moved the row to the prototype's shape: the endpoint
+    // (`127.0.0.1:port · 运行中`) owns the second line, the mode toggle and the
+    // run button are icon-sized, and the untruncated identity stays in `title`.
     const firstRow = screen.getByTestId("service-row-release-service-1");
     expect(firstRow.querySelector("span.truncate")).not.toBeNull();
     expect(screen.getByTestId("service-instance-release-service-1").className).toContain("truncate");
-    const stopButton = within(firstRow.closest("li") as HTMLElement).getByRole("button", { name: "停止" });
+    const rowItem = firstRow.closest("li") as HTMLElement;
+    expect(rowItem).toHaveTextContent("127.0.0.1:5173 · 运行中");
+    expect(rowItem).toHaveAttribute("title", expect.stringContaining("release/release-service-1@5173"));
+    const stopButton = within(rowItem).getByRole("button", { name: "停止 saas-web" });
     expect(stopButton.className).toContain("shrink-0");
     expect(stopButton.parentElement?.className).toContain("shrink-0");
     expect(stopButton.parentElement?.className).toContain("whitespace-nowrap");

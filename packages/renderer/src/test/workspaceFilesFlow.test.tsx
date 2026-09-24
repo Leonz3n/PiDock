@@ -106,9 +106,13 @@ describe("task tool area and file panel", () => {
     expect(within(roots).getByRole("button", { name: /普通目录/ })).toBeInTheDocument();
     expect(await screen.findByTestId("delivery-target")).toHaveTextContent("不自动提交/推送/合并");
 
-    // Closing the last panel releases the space again.
-    await user.click(screen.getByRole("button", { name: "收起" }));
+    // Closing the last panel releases the space again ([UI 对齐 04] #28: the
+    // prototype's 收起工具区 closes every open tab at once).
+    await user.click(screen.getByRole("button", { name: "收起工具区" }));
     await waitFor(() => expect(screen.queryByTestId("file-roots")).not.toBeInTheDocument());
+    // The rail itself is gone once no tool is open, so the conversation owns the
+    // width again.
+    expect(screen.queryByTestId("task-rail")).toBeNull();
   });
 
   it("shows the shared-directory warning when the link root is selected", async () => {

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Badge, Button, EmptyState, IconButton, Panel } from "../components/ui";
-import { Icon, type IconName } from "../components/Icon";
+import { Icon } from "../components/Icon";
 import { TaskActionMenu } from "../components/TaskActionMenu";
 import { CodeBlock } from "../components/CodeBlock";
 import {
@@ -10,11 +10,14 @@ import {
   DirectoryTerminalPanel,
   FilesPanel,
   LogsPanel,
+  PANEL_ICONS,
   ProtocolPanel,
   RuntimePanel,
   SessionSubagentList,
   SubagentPanel,
   TerminalPanel,
+  ToolWorkbench,
+  panelName,
 } from "../components/ToolPanels";
 import type { Approval, Message, Reference, Session, Task } from "../data/types";
 import {
@@ -55,6 +58,7 @@ import { useEventsStore } from "../stores/events";
 import { useHostStore } from "../stores/host";
 import { useWriteLockStore } from "../stores/writeLock";
 import { TOOL_PANELS, useUiStore, type ToolPanel } from "../stores/ui";
+import { resolveActivePanel } from "../data/toolRail";
 import { useNavigationStore } from "../stores/navigation";
 
 const EMPTY_PANELS: ToolPanel[] = [];
@@ -65,7 +69,12 @@ const EMPTY_REFERENCE: Reference = { id: "empty", kind: "file", label: "", detai
 export function TaskPage({ task, sessionId }: { task: Task; sessionId: string }) {
   const session = task.sessions.find((item) => item.id === sessionId) ?? task.sessions[0];
   const panels = useUiStore((state) => state.panels[task.id] ?? EMPTY_PANELS);
+  const storedActivePanel = useUiStore((state) => state.activePanel[task.id]);
+  const activePanel = resolveActivePanel(panels, storedActivePanel);
   const togglePanel = useUiStore((state) => state.togglePanel);
+  const setActivePanel = useUiStore((state) => state.setActivePanel);
+  const closePanel = useUiStore((state) => state.closePanel);
+  const closeAllPanels = useUiStore((state) => state.closeAllPanels);
   const openModal = useUiStore((state) => state.openModal);
   const pushToast = useUiStore((state) => state.pushToast);
 
@@ -401,9 +410,12 @@ export function TaskPage({ task, sessionId }: { task: Task; sessionId: string })
       </section>
 
       {railOpen ? (
-        <aside data-testid="task-rail" className={`flex min-h-0 shrink-0 flex-col gap-3 overflow-auto below-stack:w-full below-stack:min-w-0 below-stack:max-w-none ${railClass}`}>
+        <aside
+          data-testid="task-rail"
+          className={`flex min-h-0 shrink-0 flex-col gap-3 overflow-hidden below-stack:w-full below-stack:min-w-0 below-stack:max-w-none ${railClass}`}
+        >
           {subagentPanelOpen ? (
-            <div data-testid="subagent-sidebar" className="flex min-h-0 flex-col">
+            <div data-testid="subagent-sidebar" className="flex min-h-0 shrink-0 flex-col overflow-auto">
               <SubagentPanel
                 agents={subagents}
                 selectedId={selectedSubagentId}
@@ -413,17 +425,18 @@ export function TaskPage({ task, sessionId }: { task: Task; sessionId: string })
               />
             </div>
           ) : null}
-          {panels.map((panel) => (
-            <Panel
-              key={panel}
-              title={panelName(panel)}
-              actions={
-                <Button size="sm" variant="ghost" onClick={() => togglePanel(task.id, panel)}>
-                  收起
-                </Button>
-              }
+          {panels.length > 0 && activePanel !== undefined ? (
+            // [UI 对齐 04] #28: the prototype's `.workbench` — one tab per open
+            // tool with its own close button, and a single content area that
+            // renders only the active panel.
+            <ToolWorkbench
+              panels={panels}
+              activePanel={activePanel}
+              onSelectPanel={(panel) => setActivePanel(task.id, panel)}
+              onClosePanel={(panel) => closePanel(task.id, panel)}
+              onCollapse={() => closeAllPanels(task.id)}
             >
-              {panel === "runtime" && !directoryOnly ? (
+              {activePanel === "runtime" && !directoryOnly ? (
                 <RuntimePanel
                   task={task}
                   {...(serviceTopology !== undefined ? { topology: serviceTopology } : {})}
@@ -438,8 +451,8 @@ export function TaskPage({ task, sessionId }: { task: Task; sessionId: string })
                   }}
                 />
               ) : null}
-              {panel === "protocol" && !directoryOnly ? <ProtocolPanel view={protocolBinding ?? projectProtocolBinding(task)} /> : null}
-              {panel === "browser" && !directoryOnly ? (
+              {activePanel === "protocol" && !directoryOnly ? <ProtocolPanel view={protocolBinding ?? projectProtocolBinding(task)} /> : null}
+              {activePanel === "browser" && !directoryOnly ? (
                 <BrowserPanel
                   pages={task.browserPages}
                   taskId={task.id}
@@ -447,8 +460,8 @@ export function TaskPage({ task, sessionId }: { task: Task; sessionId: string })
                   permission={session.permission}
                 />
               ) : null}
-              {panel === "logs" && !directoryOnly ? <LogsPanel task={task} /> : null}
-              {panel === "files" ? (
+              {activePanel === "logs" && !directoryOnly ? <LogsPanel task={task} /> : null}
+              {activePanel === "files" ? (
                 directoryOnly ? (
                   <DirectoryFilesPanel task={task} />
                 ) : activeDirectory ? (
@@ -468,7 +481,7 @@ export function TaskPage({ task, sessionId }: { task: Task; sessionId: string })
                   </div>
                 )
               ) : null}
-              {panel === "terminal" ? (
+              {activePanel === "terminal" ? (
                 directoryOnly ? (
                   <DirectoryTerminalPanel task={task} />
                 ) : activeDirectory ? (
@@ -492,8 +505,8 @@ export function TaskPage({ task, sessionId }: { task: Task; sessionId: string })
                   </div>
                 )
               ) : null}
-            </Panel>
-          ))}
+            </ToolWorkbench>
+          ) : null}
         </aside>
       ) : null}
       </div>
@@ -510,24 +523,6 @@ const COMPOSER_COMMANDS = [
   { name: "/usage", detail: "查看 Token 用量" },
   { name: "/help", detail: "查看命令说明" },
 ];
-
-function panelName(panel: ToolPanel) {
-  return { runtime: "运行", protocol: "协议", browser: "浏览器", files: "文件", terminal: "终端", logs: "日志" }[panel];
-}
-
-/**
- * Tool launcher glyphs ([UI 对齐 03] #27): the prototype's `toolItems` mapping
- * (`app.js`), plus `link` for 协议 — the prototype has no protocol tool, and the
- * panel is about generated artifacts and their local bindings.
- */
-const PANEL_ICONS: Record<ToolPanel, IconName> = {
-  runtime: "server",
-  protocol: "link",
-  browser: "globe",
-  files: "file",
-  terminal: "terminal",
-  logs: "chart",
-};
 
 /**
  * [PiDock 02] task header: name / repos / branch / ready-state /

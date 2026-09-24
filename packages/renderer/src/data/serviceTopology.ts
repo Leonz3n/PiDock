@@ -388,6 +388,58 @@ export function classifySharedResource(resource: ExternalResourceView): {
   };
 }
 
+/**
+ * Request-route box for the runtime panel ([UI 对齐 04] #28).
+ *
+ * The prototype's `routebox` answers one question — where do this task's
+ * requests go — so the segments follow the declared `call` graph from the entry
+ * unit (the local long-lived unit nothing calls) through its local targets. Two
+ * units that call each other are one bidirectional pair (`⇄`), every other hop
+ * is `→`; prepare steps are not request targets (they stay in 启动顺序) and the
+ * remote units are listed separately because they keep the shared environment.
+ */
+export interface ServiceRouteView {
+  environment: string;
+  local: { name: string; connector: "start" | "call" | "pair" }[];
+  remote: string[];
+}
+
+export function serviceRouteView(topology: ServiceTopologyView, environment: string): ServiceRouteView {
+  const byUnitId = new Map(topology.units.map((unit) => [unit.unitId, unit]));
+  const locals = topology.units.filter((unit) => unit.location === "local" && unit.runType === "long-lived");
+  const isRequestTarget = (unitId: string): boolean => {
+    const target = byUnitId.get(unitId);
+    return target !== undefined && target.location === "local" && target.runType === "long-lived";
+  };
+  const called = new Set<string>();
+  for (const unit of locals) {
+    for (const dependency of unit.dependencies) if (dependency.kind === "call") called.add(dependency.to);
+  }
+  const entry = locals.find((unit) => !called.has(unit.unitId)) ?? locals[0];
+  const ordered: ServiceRouteView["local"] = [];
+  const visited = new Set<string>();
+  const visit = (unit: ServiceUnitView, connector: ServiceRouteView["local"][number]["connector"]): void => {
+    if (visited.has(unit.unitId)) return;
+    visited.add(unit.unitId);
+    ordered.push({ name: unit.name, connector });
+    for (const dependency of unit.dependencies) {
+      if (dependency.kind !== "call" || !isRequestTarget(dependency.to)) continue;
+      const target = byUnitId.get(dependency.to) as ServiceUnitView;
+      const mutual = target.dependencies.some((edge) => edge.kind === "call" && edge.to === unit.unitId);
+      visit(target, mutual ? "pair" : "call");
+    }
+  };
+  if (entry) visit(entry, "start");
+  // A local unit the entry cannot reach still runs in this task, so it stays in
+  // the box instead of silently disappearing.
+  for (const unit of locals) if (!visited.has(unit.unitId)) visit(unit, "call");
+  return {
+    environment,
+    local: ordered,
+    remote: topology.units.filter((unit) => unit.location === "remote").map((unit) => unit.name),
+  };
+}
+
 /** The full task-view projection used by the runtime panel (memory mode). */
 export function projectServiceTopology(task: Task, environment: string): ServiceTopologyView {
   const units = serviceUnits(task);

@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { ConfigRowDraft } from "../data/configRows";
+import { nextActivePanel } from "../data/toolRail";
 
 export const TOOL_PANELS = ["runtime", "protocol", "browser", "files", "terminal", "logs"] as const;
 
@@ -43,6 +44,13 @@ type Toast = { id: string; text: string };
 type UiState = {
   panels: Record<string, ToolPanel[]>;
   /**
+   * Per task, the tool tab the rail shows ([UI 对齐 04] #28). The prototype
+   * renders `.work-tabs` with a single `.work-content`, so opening several
+   * tools no longer stacks every panel: the tab strip keeps the open order and
+   * this holds the active one (absent = derive the last opened).
+   */
+  activePanel: Record<string, ToolPanel | undefined>;
+  /**
    * Per task, whether the user holds the task browser ([UI 对齐 01] #25). The
    * browser panel writes it from the Host's takeover result so the shell
    * summary bar can render the same controller the panel shows.
@@ -52,6 +60,15 @@ type UiState = {
   toasts: Toast[];
   attentionFilter: "all" | "approval" | "failed" | "expired" | "completed-unread";
   togglePanel: (taskId: string, panel: ToolPanel) => void;
+  /** Tab click: show this open tool without closing the others. */
+  setActivePanel: (taskId: string, panel: ToolPanel) => void;
+  /**
+   * Tab close and the rail's 「收起工具区」. Closing a tab only drops the panel
+   * from the rail: it never touches services, browser pages or terminals — the
+   * Host keeps owning those ([UI 对齐 04] #28 hard constraint).
+   */
+  closePanel: (taskId: string, panel: ToolPanel) => void;
+  closeAllPanels: (taskId: string) => void;
   setBrowserTakeover: (taskId: string, paused: boolean) => void;
   openModal: (modal: ModalState) => void;
   closeModal: () => void;
@@ -62,15 +79,35 @@ type UiState = {
 
 export const useUiStore = create<UiState>((set, get) => ({
   panels: {},
+  activePanel: {},
   browserTakeover: {},
   modal: null,
   toasts: [],
   attentionFilter: "all",
   togglePanel: (taskId, panel) => {
     const panels = get().panels[taskId] ?? [];
-    const next = panels.includes(panel) ? panels.filter((item) => item !== panel) : [...panels, panel];
-    set({ panels: { ...get().panels, [taskId]: next } });
+    const opening = !panels.includes(panel);
+    const next = opening ? [...panels, panel] : panels.filter((item) => item !== panel);
+    set({
+      panels: { ...get().panels, [taskId]: next },
+      activePanel: {
+        ...get().activePanel,
+        // Opening a tool activates it; closing the active tab falls back to the
+        // neighbour that is still open (the strip keeps the open order).
+        [taskId]: opening ? panel : nextActivePanel(next, panel, get().activePanel[taskId]),
+      },
+    });
   },
+  setActivePanel: (taskId, panel) => set({ activePanel: { ...get().activePanel, [taskId]: panel } }),
+  closePanel: (taskId, panel) => {
+    const next = (get().panels[taskId] ?? []).filter((item) => item !== panel);
+    set({
+      panels: { ...get().panels, [taskId]: next },
+      activePanel: { ...get().activePanel, [taskId]: nextActivePanel(next, panel, get().activePanel[taskId]) },
+    });
+  },
+  closeAllPanels: (taskId) =>
+    set({ panels: { ...get().panels, [taskId]: [] }, activePanel: { ...get().activePanel, [taskId]: undefined } }),
   setBrowserTakeover: (taskId, paused) => set({ browserTakeover: { ...get().browserTakeover, [taskId]: paused } }),
   openModal: (modal) => set({ modal }),
   closeModal: () => set({ modal: null }),
