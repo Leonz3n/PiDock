@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Badge, Button, EmptyState, IconButton, Panel } from "../components/ui";
+import { Badge, BrandMark, Button, EmptyState, IconButton, LocalUserAvatar, Panel } from "../components/ui";
 import { Icon } from "../components/Icon";
 import { TaskActionMenu } from "../components/TaskActionMenu";
 import { CodeBlock } from "../components/CodeBlock";
@@ -61,6 +61,13 @@ import {
   type ExecutionAction,
 } from "./executionView";
 import { sessionKeyOf } from "../data/sessionKey";
+import {
+  conversationBadge,
+  conversationModeLabel,
+  groupMessagesByDay,
+  messageTimeLabel,
+  toolResultView,
+} from "./conversationView";
 import { describeContextDisplay, describeHistoryAttribution, formatTokens, resolveSessionThinking } from "../data/providerState";
 import type { ServiceTopologyView } from "../data/serviceTopology";
 import { projectProtocolBinding, type ProtocolBindingView } from "../data/protocolBinding";
@@ -1251,6 +1258,9 @@ function Conversation({ taskId, sessionId, archived }: { taskId: string; session
   const live = useEventsStore((state) => state.liveMessages[liveKey] ?? EMPTY_LIVE);
   const refs = useRef<HTMLDivElement | null>(null);
   const pinned = useRef(true);
+  // The day labels are relative to when this conversation opened: a live "今天"
+  // that changed mid-session would rewrite history under the reader.
+  const now = useMemo(() => new Date(), []);
 
   const messages = useMemo<Message[]>(() => {
     const persisted = session?.messages ?? [];
@@ -1263,48 +1273,252 @@ function Conversation({ taskId, sessionId, archived }: { taskId: string; session
     if (element && pinned.current) element.scrollTop = element.scrollHeight;
   }, [messages]);
 
-  if (messages.length === 0) return <EmptyState>这个会话还没有消息。</EmptyState>;
+  const groups = useMemo(
+    () =>
+      groupMessagesByDay(messages, {
+        sessionName: session?.name ?? "",
+        fallbackIso: session?.lastActivity,
+        now,
+      }),
+    [messages, now, session?.lastActivity, session?.name],
+  );
+  const mode = conversationModeLabel(session?.permission ?? "default");
+  const badge = session === undefined ? { label: "空闲", live: true } : conversationBadge(session);
 
   return (
     <div
       ref={refs}
+      data-testid="conversation-log"
       role="log"
       aria-label="会话消息"
-      className="min-h-0 flex-1 overflow-auto rounded-panel border border-line bg-paper px-4 py-3"
+      className="min-h-0 flex-1 overflow-auto rounded-panel border border-line bg-paper px-[28px] pt-[26px] pb-[10px] below-wide:p-5 below-mid:p-4"
       onScroll={(event) => {
         const element = event.currentTarget;
         pinned.current = element.scrollHeight - element.scrollTop - element.clientHeight < 48;
       }}
     >
-      <ul className="flex flex-col gap-4">
-        {messages.map((message) => (
-          <li key={message.id} className={message.role === "user" ? "text-right" : ""}>
-            <div className="mb-1 flex items-center gap-1.5 text-[11px] text-muted">
-              <span>{message.role === "user" ? "你" : "Agent"}</span>
-              {message.attribution !== undefined ? <MessageAttribution attribution={message.attribution} /> : null}
-            </div>
-            <div
-              className={`inline-block max-w-[92%] rounded-md border px-3 py-2 text-left text-sm ${
-                message.role === "user" ? "border-accent/25 bg-accent/5 text-ink" : "border-line bg-soft/40 text-ink"
-              }`}
-            >
-              <p className="whitespace-pre-wrap">{message.text}</p>
-              {message.code ? <CodeBlock code={message.code.source} language={message.code.language} label={message.code.label} /> : null}
-              {message.references && message.references.length > 0 ? (
-                <ul className="mt-1.5 flex flex-wrap gap-1.5">
-                  {message.references.map((reference) => (
-                    <li key={reference.id} className="rounded-full border border-line bg-paper px-2 py-0.5 text-[11px] text-muted">
-                      引用 · {reference.label}
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
-            </div>
-          </li>
-        ))}
-      </ul>
+      {messages.length === 0 ? (
+        // Prototype `conversation()` empty branch (`task().isNew || session>1`),
+        // which is the new/empty session in this app.
+        <div data-testid="conversation-empty" className="px-10 py-10 text-center text-xs text-muted">
+          <span className="mx-auto grid w-fit">
+            <BrandMark size="sm" />
+          </span>
+          <h3 className="mt-2 text-sm font-semibold text-ink">准备好开始了</h3>
+          <p className="mt-1 text-xs text-muted">描述这个任务的目标，或用 @ 引用当前任务代码。</p>
+        </div>
+      ) : (
+        <>
+          {groups.map((group) => (
+            <section key={group.key} data-testid="conversation-group">
+              <p data-testid="conversation-date-label" className="mb-[22px] text-center text-[10px] text-muted">
+                {group.label}
+              </p>
+              <ul className="flex flex-col">
+                {group.messages.map((message) => (
+                  <MessageRow key={message.id} message={message} mode={mode} badge={badge} />
+                ))}
+              </ul>
+            </section>
+          ))}
+          <ToolResultCard taskId={taskId} sessionId={sessionId} />
+        </>
+      )}
       {archived ? <p className="mt-3 text-[11px] text-muted">已归档会话仍可查看与继续对话；归档不是任务归档。</p> : null}
     </div>
+  );
+}
+
+/**
+ * One message row (`style.css` `.message` / `.message-head` / `.userbubble` /
+ * `.agentbody`): the head pairs an avatar or the brand mark with the speaker,
+ * and a 31px indent carries the body — dropped below 960px, as in the prototype.
+ */
+function MessageRow({
+  message,
+  mode,
+  badge,
+}: {
+  message: Message;
+  mode: string;
+  badge: { label: string; live: boolean };
+}) {
+  const openModal = useUiStore((state) => state.openModal);
+  const user = message.role === "user";
+  const time = messageTimeLabel(message.createdAt);
+  const images = (message.references ?? []).filter((reference) => reference.kind === "attachment" && reference.previewUrl);
+  const chips = (message.references ?? []).filter((reference) => !images.includes(reference));
+  return (
+    <li data-testid={`message-${message.id}`} className="mb-[25px] last:mb-0">
+      <div className="mb-[10px] flex items-center gap-[9px] text-[11px]" data-testid="message-head">
+        {user ? <LocalUserAvatar /> : <BrandMark size="sm" />}
+        <strong className="font-semibold text-ink">{user ? "你" : "Pi"}</strong>
+        {time === undefined ? null : (
+          <small className="text-muted" data-testid="message-time">
+            {time}
+          </small>
+        )}
+        {user ? null : (
+          <>
+            <small className="text-muted" data-testid="message-mode">
+              {mode}
+            </small>
+            <span className="ml-auto" data-testid="message-state-badge">
+              <Badge tone={badge.live ? "accent" : "neutral"}>{badge.label}</Badge>
+            </span>
+          </>
+        )}
+      </div>
+      <div
+        data-testid="message-body"
+        className={
+          user
+            ? "ml-[31px] rounded-[2px_10px_10px_10px] bg-[#f5f6f6] px-4 py-[13px] below-mid:ml-0"
+            : "ml-[31px] below-mid:ml-0"
+        }
+      >
+        <p className="whitespace-pre-wrap text-xs leading-[1.95] text-[#525c63]">{message.text}</p>
+        {images.length > 0 ? (
+          <ul className="mt-2 flex flex-wrap gap-2" data-testid="message-images">
+            {images.map((reference) => (
+              <li key={reference.id}>
+                {/* Prototype `attachments.js messageAttachments()`: the thumbnail
+                    is a button that opens the same lightbox the composer uses. */}
+                <button
+                  type="button"
+                  data-testid={`message-image-${reference.id}`}
+                  aria-label={`预览 ${reference.label}`}
+                  aria-haspopup="dialog"
+                  title={reference.detail}
+                  className="max-w-full"
+                  onClick={() =>
+                    openModal({
+                      type: "attachment-preview",
+                      label: reference.label,
+                      detail: reference.detail,
+                      ...(reference.previewUrl !== undefined ? { url: reference.previewUrl } : {}),
+                    })
+                  }
+                >
+                  <img
+                    src={reference.previewUrl}
+                    alt={reference.label}
+                    className="block h-[125px] w-[200px] max-w-full rounded-[7px] border border-line bg-[#edf0f4] object-contain"
+                  />
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        {chips.length > 0 ? (
+          <ul className="mt-2 flex flex-wrap gap-1" data-testid="message-references">
+            {chips.map((reference) => (
+              // Prototype `.refchip`: the text reference sits inside the bubble as
+              // `@ <name>`, not as a badge under it.
+              <li
+                key={reference.id}
+                title={describeReferenceChip(reference)}
+                data-testid={`message-refchip-${reference.id}`}
+                className="inline-flex max-w-full items-center gap-[5px] overflow-hidden rounded-[4px] border border-[#dfe3eb] bg-[#edeff3] px-[5px] py-[1px] text-[10px] text-[#64676c]"
+              >
+                @ {reference.label}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        {message.code ? <CodeBlock code={message.code.source} language={message.code.language} label={message.code.label} /> : null}
+        {message.attribution === undefined ? null : (
+          <p className="mt-3 text-[10px] text-muted" data-testid="message-footer">
+            <MessageAttribution attribution={message.attribution} />
+          </p>
+        )}
+      </div>
+    </li>
+  );
+}
+
+/**
+ * The conversation's run-result card ([UI 对齐 07] #31). Prototype A keeps
+ * `.toolcard` inside the agent body; this app's Host has no per-message tool
+ * call record, so the card describes the session's real `RunRecord` and renders
+ * nothing when there is none — it never states a step the Host did not report.
+ */
+function ToolResultCard({ taskId, sessionId }: { taskId: string; sessionId: string }) {
+  const task = useHostStore((state) => state.task(taskId));
+  const record = useEventsStore((state) => state.runs[sessionKeyOf(taskId, sessionId)]);
+  const panels = useUiStore((state) => state.panels[taskId] ?? EMPTY_PANELS);
+  const togglePanel = useUiStore((state) => state.togglePanel);
+  const setActivePanel = useUiStore((state) => state.setActivePanel);
+  const view = toolResultView({
+    record,
+    repositories: task?.repos.length ?? 0,
+    localServices: (task?.services ?? []).filter((service) => service.mode === "local").length,
+    remoteServices: (task?.services ?? []).filter((service) => service.mode === "remote").length,
+  });
+  if (view === undefined) return null;
+  // The card's actions read the workspace; they open the same panels the tool
+  // launcher does and never toggle an already open one shut.
+  const open = (panel: ToolPanel) => (panels.includes(panel) ? setActivePanel(taskId, panel) : togglePanel(taskId, panel));
+  return (
+    <section
+      data-testid="tool-result-card"
+      aria-label="执行结果"
+      className="ml-[31px] overflow-hidden rounded-lg border border-line bg-paper below-mid:ml-0"
+    >
+      {view.rows.map((row) => (
+        <div
+          key={row.id}
+          data-testid={`tool-result-row-${row.id}`}
+          className="flex items-center gap-[9px] border-b border-line px-3 py-[9px] text-[11px] text-ink"
+        >
+          <Icon name="check" className="h-3.5 w-3.5 text-accent" />
+          <span>{row.label}</span>
+          {row.panel === undefined ? (
+            <span className="ml-auto text-[10px] text-muted">{row.right}</span>
+          ) : (
+            <button
+              type="button"
+              data-testid={`tool-result-row-action-${row.panel}`}
+              onClick={() => open(row.panel as ToolPanel)}
+              className="ml-auto text-[10px] text-muted hover:text-accent"
+            >
+              {row.right}
+            </button>
+          )}
+        </div>
+      ))}
+      {view.steps.length === 0 ? null : (
+        <div data-testid="tool-result-steps" className="grid gap-[7px] border-b border-line px-3 py-[9px] text-[11px] text-[#67696e]">
+          {view.steps.map((step) => (
+            <div key={step.id} data-testid={`tool-result-step-${step.id}`} className="flex items-center gap-2">
+              <span
+                aria-hidden
+                className={`h-1.5 w-1.5 shrink-0 rounded-full ${step.live ? "bg-accent ring-[3px] ring-accent/15" : "bg-muted/70"}`}
+              />
+              <span className={step.state === "failed" ? "text-orange" : undefined}>{step.label}</span>
+              <span className="ml-auto text-muted">{stepStateLabel(step.state)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      <p
+        data-testid="tool-result-summary"
+        className={`border-l-2 border-[#5d719f] bg-[#f4f5f8] px-3 py-[9px] text-[11px] leading-[1.85] ${
+          view.warn ? "text-orange" : "text-ink"
+        }`}
+      >
+        {view.result}
+        {view.detail === undefined ? null : <span className="block text-muted">{view.detail}</span>}
+      </p>
+      <div className="flex flex-wrap gap-2 px-3 py-2">
+        <Button size="sm" data-testid="tool-result-action-browser" onClick={() => open("browser")}>
+          查看浏览器
+        </Button>
+        <Button size="sm" data-testid="tool-result-action-files" onClick={() => open("files")}>
+          查看变更
+        </Button>
+      </div>
+    </section>
   );
 }
 

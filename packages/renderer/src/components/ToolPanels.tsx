@@ -1,4 +1,4 @@
-import { useRef, type KeyboardEvent, type ReactNode } from "react";
+import { useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Badge, Button, EmptyState, IconButton, Panel } from "./ui";
 import { Icon, type IconName } from "./Icon";
 import { CodeBlock } from "./CodeBlock";
@@ -991,39 +991,76 @@ export function SessionSubagentList({
   selectedId: string;
   onSelect: (id: string) => void;
 }) {
+  // [UI 对齐 07] (#31) the card grid is the prototype's `.subagent-cards`, but
+  // it sits one disclosure down: a session that started child agents used to pay
+  // a permanent 78px band above the conversation, which the [UI 对齐 05] (#29)
+  // review listed as squeezing the message area. The label row still reports the
+  // running count, so nothing live is hidden behind the toggle.
+  const [expanded, setExpanded] = useState(false);
   if (agents.length === 0) return null;
   const running = agents.filter((agent) => agent.status === "running").length;
-  // [UI 对齐 03] (#27) vertical budget: the prototype's `.session-subagents` is
-  // a two-line block (`padding:12px 20px` + label + one card row), so the card
-  // keeps a single compact line here instead of wrapping the summary below the
-  // name. Only sessions that actually started Subagents render it (caller).
   return (
-    <div className="rounded-panel border border-line bg-paper px-3 py-2" aria-label="当前会话启动的 Subagent">
-      <div className="flex items-center justify-between gap-2 text-xs">
-        <span className="text-ink">Subagent <Badge>{agents.length}</Badge></span>
-        <small className="text-muted">{running > 0 ? `${running} 个运行中` : "全部已结束"} · 示例</small>
-      </div>
-      <div className="mt-1.5 flex flex-wrap gap-2">
-        {agents.map((agent) => (
-          <button
-            key={agent.id}
-            type="button"
-            aria-pressed={agent.id === selectedId}
-            onClick={() => onSelect(agent.id)}
-            title={agent.summary}
-            className={`flex w-64 items-center gap-2 rounded-md border px-2.5 py-1 text-left text-xs ${
-              agent.id === selectedId ? "border-accent/40 bg-accent/10 text-accent" : "border-line text-ink hover:bg-soft"
-            }`}
+    // Prototype `.session-subagents`: `padding:12px 20px` (≤960 `11px 16px`) with
+    // a bottom border, no card box of its own.
+    <section
+      aria-label="当前会话启动的 Subagent"
+      data-testid="session-subagents"
+      className="border-b border-line bg-[#fcfcfd] px-5 py-3 below-mid:px-4 below-mid:py-[11px]"
+    >
+      <div className="flex items-center justify-between gap-2 text-[11px]">
+        <span className="flex items-center gap-[7px] text-[#616c7d]">
+          <Icon name="branch" className="h-3.5 w-3.5" />
+          Subagent
+          <Badge>{agents.length}</Badge>
+        </span>
+        <span className="flex items-center gap-2">
+          <small className="text-muted">{running > 0 ? `${running} 个运行中` : "全部已结束"}</small>
+          <Button
+            size="sm"
+            variant="ghost"
+            data-testid="session-subagents-toggle"
+            aria-expanded={expanded}
+            onClick={() => setExpanded((value) => !value)}
           >
-            <strong className="shrink-0">{agent.name}</strong>
-            <small className="min-w-0 flex-1 truncate text-muted">{agent.summary}</small>
-            <Badge tone={agent.status === "running" ? "accent" : agent.status === "failed" ? "warn" : "neutral"}>
-              {SUBAGENT_STATUS_LABEL[agent.status]}
-            </Badge>
-          </button>
-        ))}
+            {expanded ? "收起列表" : "展开列表"}
+          </Button>
+        </span>
       </div>
-    </div>
+      {expanded ? (
+        <div
+          data-testid="subagent-cards"
+          className="mt-[9px] grid grid-cols-[repeat(auto-fit,minmax(190px,1fr))] gap-2 below-mid:grid-cols-1"
+        >
+          {agents.map((agent) => (
+            <button
+              key={agent.id}
+              type="button"
+              data-testid={`subagent-card-${agent.id}`}
+              aria-label={`查看 ${agent.name}，${SUBAGENT_STATUS_LABEL[agent.status]}`}
+              aria-pressed={agent.id === selectedId}
+              onClick={() => onSelect(agent.id)}
+              className={`rounded-lg border bg-paper px-3 py-[10px] text-left ${
+                agent.id === selectedId ? "border-accent/40 bg-accent/10" : "border-line hover:border-accent/40"
+              }`}
+            >
+              <span className="flex items-center justify-between gap-2">
+                <strong className="text-[11px] font-semibold text-ink">{agent.name}</strong>
+                <span className="flex items-center gap-1.5 text-[10px] text-muted">
+                  <span
+                    aria-hidden
+                    className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                      agent.status === "running" ? "bg-accent ring-[3px] ring-accent/15" : "bg-muted/70"
+                    }`}
+                  />
+                  {SUBAGENT_STATUS_LABEL[agent.status]}
+                </span>
+              </span>
+              <small className="mt-1.5 block truncate text-[10px] text-muted">{agent.summary}</small>
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </section>
   );
 }
 

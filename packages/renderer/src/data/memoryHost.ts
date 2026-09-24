@@ -546,13 +546,24 @@ function taskAssets() {
   };
 }
 
+/**
+ * Seeded message clock. The fixture sessions all sit on the day their
+ * `lastActivity` names, so their messages carry a real timestamp instead of
+ * being grouped under "now" ([UI 对齐 07] #31).
+ */
+const SEED_DAY = "2026-09-22";
+
+function seedAt(hour: number, minute: number): string {
+  return `${SEED_DAY}T${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:00+08:00`;
+}
+
 function seedSessions(): Record<string, Session[]> {
   return {
     release: [
       baseSession("main", "实现与验证", {
         unread: 2,
         messages: [
-          { id: "m-1", role: "agent", text: agentGreeting },
+          { id: "m-1", role: "agent", text: agentGreeting, createdAt: seedAt(9, 12) },
           {
             id: "m-2",
             role: "agent",
@@ -562,6 +573,7 @@ function seedSessions(): Record<string, Session[]> {
               label: "本地启动",
               source: "pnpm --filter saas-web dev\npnpm --filter saas-bff dev",
             },
+            createdAt: seedAt(9, 15),
           },
           ...conversationHistory(),
         ],
@@ -569,12 +581,12 @@ function seedSessions(): Record<string, Session[]> {
       baseSession("deploy", "部署审查", {
         runState: "approval",
         messages: [
-          { id: "m-3", role: "user", text: "把这次改动部署到 staging 检查一次。" },
-          { id: "m-4", role: "agent", text: "部署会更新共享环境，需要你确认下面这条命令。" },
+          { id: "m-3", role: "user", text: "把这次改动部署到 staging 检查一次。", createdAt: seedAt(9, 30) },
+          { id: "m-4", role: "agent", text: "部署会更新共享环境，需要你确认下面这条命令。", createdAt: seedAt(9, 31) },
         ],
       }),
       baseSession("failed", "失败排查", {
-        messages: [{ id: "m-5", role: "agent", text: "构建失败，我先保留现场。" }],
+        messages: [{ id: "m-5", role: "agent", text: "构建失败，我先保留现场。", createdAt: seedAt(9, 20) }],
       }),
       baseSession("archived-1", "历史排查", { archived: true, permission: "read" }),
       ...historySessions(HISTORY_SESSION_COUNT, 40),
@@ -591,6 +603,7 @@ function conversationHistory(): Message[] {
     id: `m-history-${index + 1}`,
     role: index % 2 === 0 ? ("user" as const) : ("agent" as const),
     text: `历史消息 ${index + 1}：确认构建、配置与运行状态的第 ${index + 1} 步结果。`,
+    createdAt: seedAt(9, 16 + Math.floor(index / 2)),
   }));
 }
 
@@ -1384,6 +1397,9 @@ class MemoryHost implements HostAdapter {
       role: "user" as const,
       text,
       references,
+      // [UI 对齐 07] (#31): the conversation groups by day and shows the head
+      // time from what the Host stamps here, not from a renderer-side guess.
+      createdAt: new Date().toISOString(),
     };
     session.messages = [...session.messages, userMessage];
     session.runState = "running";
@@ -1412,6 +1428,11 @@ class MemoryHost implements HostAdapter {
 
     const outcome = this.scripted[sessionKeyOf(taskId, sessionId)] ?? "completed";
     let finalState: RunState = "completed";
+    // The record describes its own run in every branch (`failed`/`approval` below
+    // already do): a completed turn must not keep the "正在执行" summary it was
+    // created with, or the conversation's result line reads as still running
+    // ([UI 对齐 07] #31).
+    if (outcome === "completed") record.summary = "执行完成";
     if (outcome === "failed") {
       finalState = "failed";
       record.state = "failed";
@@ -1505,6 +1526,7 @@ class MemoryHost implements HostAdapter {
         text: reply,
         // [PiDock 11] #9: the response keeps the account that produced it.
         attribution: { providerId: session.providerId, model: session.model },
+        createdAt: new Date().toISOString(),
       },
     ];
     this.emit({ type: "message-done", taskId, sessionId, messageId: agentMessageId });
