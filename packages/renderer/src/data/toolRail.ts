@@ -61,6 +61,13 @@ export type ToolPanelState = {
   terminalLines?: string[];
   terminalValue?: string;
   runtimeServiceId?: string;
+  /**
+   * The ordinary directory the file/terminal panels show. The mixed task keeps
+   * it in `TaskPage.activeDirectoryId`, but a directory-only task has no such
+   * owner, and its panels would otherwise restart at the first directory on
+   * every tab swap (#28 review P2-3).
+   */
+  directoryId?: string;
 };
 
 /**

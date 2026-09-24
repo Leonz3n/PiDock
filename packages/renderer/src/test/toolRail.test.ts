@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { nextActivePanel, resolveActivePanel } from "../data/toolRail";
+import { mergeToolPanelState, nextActivePanel, resolveActivePanel } from "../data/toolRail";
 
 /**
  * [UI 对齐 04] (#28) rail bookkeeping. The strip keeps the open order, so the
@@ -24,5 +24,37 @@ describe("tool rail active tab", () => {
     expect(resolveActivePanel(["files", "logs"], "files")).toBe("files");
     expect(resolveActivePanel(["files", "logs"], undefined)).toBe("logs");
     expect(resolveActivePanel(["files", "logs"], "runtime")).toBe("logs");
+  });
+});
+
+/**
+ * Every panel writes into one record per task, so a patch must merge instead of
+ * replacing — otherwise the terminal losing its scrollback on the next browser
+ * patch would look like a reset (#28 review P2-C).
+ */
+describe("tool panel state merge", () => {
+  it("keeps the fields the other panels own", () => {
+    const terminal = mergeToolPanelState(undefined, { terminalValue: "pnpm test" });
+    const withBrowser = mergeToolPanelState(terminal, { browserPageId: "page-2" });
+    expect(withBrowser).toEqual({ terminalValue: "pnpm test", browserPageId: "page-2" });
+
+    const withDirectory = mergeToolPanelState(withBrowser, { directoryId: "design-extra" });
+    expect(withDirectory).toEqual({
+      terminalValue: "pnpm test",
+      browserPageId: "page-2",
+      directoryId: "design-extra",
+    });
+  });
+
+  it("lets the newer patch win and can clear a field explicitly", () => {
+    const current = { browserPageId: "page-1", terminalValue: "pnpm test" };
+    expect(mergeToolPanelState(current, { browserPageId: "page-2" })).toEqual({
+      browserPageId: "page-2",
+      terminalValue: "pnpm test",
+    });
+    // Panels clear their own field with an empty value; that must not resurrect
+    // the previous one.
+    expect(mergeToolPanelState(current, { terminalValue: "" })).toEqual({ browserPageId: "page-1", terminalValue: "" });
+    expect(mergeToolPanelState(undefined, {})).toEqual({});
   });
 });

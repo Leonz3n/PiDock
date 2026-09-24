@@ -1,4 +1,4 @@
-import { useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useRef, type KeyboardEvent, type ReactNode } from "react";
 import { Badge, Button, EmptyState, IconButton, Panel } from "./ui";
 import { Icon, type IconName } from "./Icon";
 import { CodeBlock } from "./CodeBlock";
@@ -116,7 +116,7 @@ export function ToolWorkbench({
       aria-label="任务工具面板"
       className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-panel border border-line bg-[#fafbfb]"
     >
-      <div className="flex h-11 min-h-11 items-center gap-1.5 border-b border-line bg-paper px-4">
+      <div data-testid="tool-tabs-row" className="flex h-11 min-h-11 items-center gap-1.5 border-b border-line bg-paper px-4">
         <div
           role="tablist"
           aria-label="已打开的工具"
@@ -1182,7 +1182,10 @@ export function DirectoryRootChoices({ task, selected, onSelect }: { task: Task;
  * entry points. Editing through the link affects the original directory.
  *
  * Selection is controlled when a mixed task shares one active directory across
- * its file and terminal panels; the directory-only task keeps local state.
+ * its file and terminal panels (`TaskPage.activeDirectoryId`); a directory-only
+ * task has no such owner, so the choice lives in the ui store keyed per task —
+ * the rail mounts only the active panel, and `useState` would restart at the
+ * first directory on every tab swap (#28 review P2-3).
  */
 export function DirectoryFilesPanel({
   task,
@@ -1193,10 +1196,11 @@ export function DirectoryFilesPanel({
   selectedId?: string;
   onSelect?: (id: string) => void;
 }) {
-  const [localId, setLocalId] = useState(task.directories[0]?.id ?? "");
-  const selectedId = controlledId ?? localId;
+  const storedId = useUiStore((state) => state.toolPanelState[task.id]?.directoryId);
+  const setPanelState = useUiStore((state) => state.setToolPanelState);
+  const selectedId = controlledId ?? storedId ?? task.directories[0]?.id ?? "";
   const select = (id: string) => {
-    setLocalId(id);
+    setPanelState(task.id, { directoryId: id });
     onSelect?.(id);
   };
   const directory = task.directories.find((item) => item.id === selectedId) ?? task.directories[0];
@@ -1247,10 +1251,10 @@ export function DirectoryTerminalPanel({
   selectedId?: string;
   onSelect?: (id: string) => void;
 }) {
-  const [localId, setLocalId] = useState(task.directories[0]?.id ?? "");
-  const selectedId = controlledId ?? localId;
+  const storedId = useUiStore((state) => state.toolPanelState[task.id]?.directoryId);
+  const selectedId = controlledId ?? storedId ?? task.directories[0]?.id ?? "";
   const select = (id: string) => {
-    setLocalId(id);
+    setPanelState(task.id, { directoryId: id });
     onSelect?.(id);
   };
   const directory = task.directories.find((item) => item.id === selectedId) ?? task.directories[0];
