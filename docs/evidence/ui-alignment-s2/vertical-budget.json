@@ -1,0 +1,397 @@
+{
+  "taskUrl": "http://127.0.0.1:4335/projects/atlas/tasks/release?session=main",
+  "states": {
+    "1440x900-closed": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "noHorizontalOverflow": true,
+      "scrollWidth": 1440,
+      "clientWidth": 1440,
+      "headerH": 106,
+      "messagesH": 408,
+      "messagesShare": 0.453,
+      "composerH": 145,
+      "sectionH": 680,
+      "rows": [
+        {
+          "tag": "div",
+          "testid": null,
+          "h": 32,
+          "text": "全部会话 56 实现与验证 部署审查 失败排查 历史排查 已归档 只读 新建会话"
+        },
+        {
+          "tag": "div",
+          "testid": null,
+          "h": 78,
+          "text": "Subagent 2 1 个运行中 · 示例 查询链路分析 正在核对 BFF 到"
+        },
+        {
+          "tag": "div",
+          "testid": null,
+          "h": 408,
+          "text": "Agent 任务工作区已就绪，我可以开始检查构建与配置。 Agent 依赖已安装"
+        },
+        {
+          "tag": "div",
+          "testid": "task-composer",
+          "h": 145,
+          "text": "+ 默认权限 上下文 24800 / 200000 Tokens · 12.4%"
+        }
+      ]
+    },
+    "1440x900-one": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "noHorizontalOverflow": true,
+      "scrollWidth": 1440,
+      "clientWidth": 1440,
+      "headerH": 106,
+      "messagesH": 374,
+      "messagesShare": 0.415,
+      "composerH": 179,
+      "sectionH": 680,
+      "rows": [
+        {
+          "tag": "div",
+          "testid": null,
+          "h": 32,
+          "text": "全部会话 56 实现与验证 部署审查 失败排查 历史排查 已归档 只读 新建会话"
+        },
+        {
+          "tag": "div",
+          "testid": null,
+          "h": 78,
+          "text": "Subagent 2 1 个运行中 · 示例 查询链路分析 正在核对 BFF 到"
+        },
+        {
+          "tag": "div",
+          "testid": null,
+          "h": 374,
+          "text": "Agent 任务工作区已就绪，我可以开始检查构建与配置。 Agent 依赖已安装"
+        },
+        {
+          "tag": "div",
+          "testid": "task-composer",
+          "h": 179,
+          "text": "+ 默认权限 上下文 24800 / 200000 Tokens · 12.4%"
+        }
+      ]
+    },
+    "1440x900-all": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "noHorizontalOverflow": true,
+      "scrollWidth": 1440,
+      "clientWidth": 1440,
+      "headerH": 106,
+      "messagesH": 374,
+      "messagesShare": 0.415,
+      "composerH": 179,
+      "sectionH": 680,
+      "rows": [
+        {
+          "tag": "div",
+          "testid": null,
+          "h": 32,
+          "text": "全部会话 56 实现与验证 部署审查 失败排查 历史排查 已归档 只读 新建会话"
+        },
+        {
+          "tag": "div",
+          "testid": null,
+          "h": 78,
+          "text": "Subagent 2 1 个运行中 · 示例 查询链路分析 正在核对 BFF 到"
+        },
+        {
+          "tag": "div",
+          "testid": null,
+          "h": 374,
+          "text": "Agent 任务工作区已就绪，我可以开始检查构建与配置。 Agent 依赖已安装"
+        },
+        {
+          "tag": "div",
+          "testid": "task-composer",
+          "h": 179,
+          "text": "+ 默认权限 上下文 24800 / 200000 Tokens · 12.4%"
+        }
+      ]
+    },
+    "1280x900-closed": {
+      "viewport": {
+        "w": 1280,
+        "h": 900
+      },
+      "noHorizontalOverflow": true,
+      "scrollWidth": 1280,
+      "clientWidth": 1280,
+      "headerH": 106,
+      "messagesH": 408,
+      "messagesShare": 0.453,
+      "composerH": 145,
+      "sectionH": 680,
+      "rows": [
+        {
+          "tag": "div",
+          "testid": null,
+          "h": 32,
+          "text": "全部会话 56 实现与验证 部署审查 失败排查 历史排查 已归档 只读 新建会话"
+        },
+        {
+          "tag": "div",
+          "testid": null,
+          "h": 78,
+          "text": "Subagent 2 1 个运行中 · 示例 查询链路分析 正在核对 BFF 到"
+        },
+        {
+          "tag": "div",
+          "testid": null,
+          "h": 408,
+          "text": "Agent 任务工作区已就绪，我可以开始检查构建与配置。 Agent 依赖已安装"
+        },
+        {
+          "tag": "div",
+          "testid": "task-composer",
+          "h": 145,
+          "text": "+ 默认权限 上下文 24800 / 200000 Tokens · 12.4%"
+        }
+      ]
+    },
+    "1280x900-one": {
+      "viewport": {
+        "w": 1280,
+        "h": 900
+      },
+      "noHorizontalOverflow": true,
+      "scrollWidth": 1280,
+      "clientWidth": 1280,
+      "headerH": 106,
+      "messagesH": 358,
+      "messagesShare": 0.397,
+      "composerH": 179,
+      "sectionH": 680,
+      "rows": [
+        {
+          "tag": "div",
+          "testid": null,
+          "h": 48,
+          "text": "全部会话 56 实现与验证 部署审查 失败排查 历史排查 已归档 只读 新建会话"
+        },
+        {
+          "tag": "div",
+          "testid": null,
+          "h": 78,
+          "text": "Subagent 2 1 个运行中 · 示例 查询链路分析 正在核对 BFF 到"
+        },
+        {
+          "tag": "div",
+          "testid": null,
+          "h": 358,
+          "text": "Agent 任务工作区已就绪，我可以开始检查构建与配置。 Agent 依赖已安装"
+        },
+        {
+          "tag": "div",
+          "testid": "task-composer",
+          "h": 179,
+          "text": "+ 默认权限 上下文 24800 / 200000 Tokens · 12.4%"
+        }
+      ]
+    },
+    "1280x900-all": {
+      "viewport": {
+        "w": 1280,
+        "h": 900
+      },
+      "noHorizontalOverflow": true,
+      "scrollWidth": 1280,
+      "clientWidth": 1280,
+      "headerH": 106,
+      "messagesH": 358,
+      "messagesShare": 0.397,
+      "composerH": 179,
+      "sectionH": 680,
+      "rows": [
+        {
+          "tag": "div",
+          "testid": null,
+          "h": 48,
+          "text": "全部会话 56 实现与验证 部署审查 失败排查 历史排查 已归档 只读 新建会话"
+        },
+        {
+          "tag": "div",
+          "testid": null,
+          "h": 78,
+          "text": "Subagent 2 1 个运行中 · 示例 查询链路分析 正在核对 BFF 到"
+        },
+        {
+          "tag": "div",
+          "testid": null,
+          "h": 358,
+          "text": "Agent 任务工作区已就绪，我可以开始检查构建与配置。 Agent 依赖已安装"
+        },
+        {
+          "tag": "div",
+          "testid": "task-composer",
+          "h": 179,
+          "text": "+ 默认权限 上下文 24800 / 200000 Tokens · 12.4%"
+        }
+      ]
+    },
+    "1024x800-closed": {
+      "viewport": {
+        "w": 1024,
+        "h": 800
+      },
+      "noHorizontalOverflow": true,
+      "scrollWidth": 1024,
+      "clientWidth": 1024,
+      "headerH": 106,
+      "messagesH": 274,
+      "messagesShare": 0.342,
+      "composerH": 179,
+      "sectionH": 580,
+      "rows": [
+        {
+          "tag": "div",
+          "testid": null,
+          "h": 32,
+          "text": "全部会话 56 实现与验证 部署审查 失败排查 历史排查 已归档 只读 新建会话"
+        },
+        {
+          "tag": "div",
+          "testid": null,
+          "h": 78,
+          "text": "Subagent 2 1 个运行中 · 示例 查询链路分析 正在核对 BFF 到"
+        },
+        {
+          "tag": "div",
+          "testid": null,
+          "h": 274,
+          "text": "Agent 任务工作区已就绪，我可以开始检查构建与配置。 Agent 依赖已安装"
+        },
+        {
+          "tag": "div",
+          "testid": "task-composer",
+          "h": 179,
+          "text": "+ 默认权限 上下文 24800 / 200000 Tokens · 12.4%"
+        }
+      ]
+    },
+    "1024x800-one": {
+      "viewport": {
+        "w": 1024,
+        "h": 800
+      },
+      "noHorizontalOverflow": true,
+      "scrollWidth": 1024,
+      "clientWidth": 1024,
+      "headerH": 106,
+      "messagesH": 218,
+      "messagesShare": 0.272,
+      "composerH": 179,
+      "sectionH": 580,
+      "rows": [
+        {
+          "tag": "div",
+          "testid": null,
+          "h": 48,
+          "text": "全部会话 56 实现与验证 部署审查 失败排查 历史排查 已归档 只读 新建会话"
+        },
+        {
+          "tag": "div",
+          "testid": null,
+          "h": 118,
+          "text": "Subagent 2 1 个运行中 · 示例 查询链路分析 正在核对 BFF 到"
+        },
+        {
+          "tag": "div",
+          "testid": null,
+          "h": 218,
+          "text": "Agent 任务工作区已就绪，我可以开始检查构建与配置。 Agent 依赖已安装"
+        },
+        {
+          "tag": "div",
+          "testid": "task-composer",
+          "h": 179,
+          "text": "+ 默认权限 上下文 24800 / 200000 Tokens · 12.4%"
+        }
+      ]
+    },
+    "1024x800-all": {
+      "viewport": {
+        "w": 1024,
+        "h": 800
+      },
+      "noHorizontalOverflow": true,
+      "scrollWidth": 1024,
+      "clientWidth": 1024,
+      "headerH": 106,
+      "messagesH": 218,
+      "messagesShare": 0.272,
+      "composerH": 179,
+      "sectionH": 580,
+      "rows": [
+        {
+          "tag": "div",
+          "testid": null,
+          "h": 48,
+          "text": "全部会话 56 实现与验证 部署审查 失败排查 历史排查 已归档 只读 新建会话"
+        },
+        {
+          "tag": "div",
+          "testid": null,
+          "h": 118,
+          "text": "Subagent 2 1 个运行中 · 示例 查询链路分析 正在核对 BFF 到"
+        },
+        {
+          "tag": "div",
+          "testid": null,
+          "h": 218,
+          "text": "Agent 任务工作区已就绪，我可以开始检查构建与配置。 Agent 依赖已安装"
+        },
+        {
+          "tag": "div",
+          "testid": "task-composer",
+          "h": 179,
+          "text": "+ 默认权限 上下文 24800 / 200000 Tokens · 12.4%"
+        }
+      ]
+    }
+  },
+  "panels": [
+    "运行",
+    "协议",
+    "浏览器",
+    "文件",
+    "终端",
+    "日志"
+  ],
+  "menuItems": [
+    "重命名任务",
+    "新建会话",
+    "查看全部会话",
+    "Subagent 列表（2）",
+    "管理仓库与目录",
+    "审阅与交付",
+    "归档当前任务"
+  ],
+  "directoryHeader": {
+    "eyebrow": "TASK · 普通目录设计资料整理添加目录",
+    "text": "TASK · 普通目录 设计资料整理 添加目录 task/task-c4e21b90 测试环境 · v12 已就绪 代码变化 无 1 个普通目录 · 通过软链接加入 · 修改影响原目录，不提供 Git 分支／差异／提交",
+    "worktreeMentioned": false
+  },
+  "prototypeA": {
+    "headerH": 127,
+    "metaH": 21,
+    "sessionsH": 43,
+    "subagentsH": 117,
+    "messagesH": 256,
+    "composerH": 167,
+    "workbenchW": null,
+    "eyebrow": "TASK WORKSPACE #001"
+  }
+}
