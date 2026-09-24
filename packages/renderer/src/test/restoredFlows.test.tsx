@@ -239,7 +239,9 @@ describe("read-only session guard", () => {
     expect(await screen.findByRole("button", { name: /^选择权限：只读$/ })).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "运行" }));
-    await user.click(screen.getAllByRole("button", { name: /^(启动|停止)$/ })[0]!);
+    // [UI 对齐 04] (#28) the row's run control is the prototype's icon button,
+    // so its accessible name carries the service it acts on.
+    await user.click(screen.getAllByRole("button", { name: /^(启动|停止) / })[0]!);
     expect(await screen.findByText("当前是只读会话，请先调整会话权限")).toBeInTheDocument();
 
     // Switching dependency target is allowed once the session leaves read-only.

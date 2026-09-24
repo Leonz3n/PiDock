@@ -7,7 +7,8 @@
  * aligned. `link` is the protocol glyph: the prototype has no protocol tool,
  * and the 协议 panel is about generated artifacts and their local bindings.
  * `play`/`stop` are the prototype's `toggle-run` glyphs, used by the header's
- * local-service run toggle ([UI 对齐 03] #27).
+ * local-service run toggle ([UI 对齐 03] #27) and the service rows' run button
+ * ([UI 对齐 04] #28). `close` is the tab-close / 收起工具区 glyph.
  */
 
 export const ICON_PATHS = {
@@ -30,6 +31,7 @@ export const ICON_PATHS = {
   more: "M5 12h.01 M12 12h.01 M19 12h.01",
   play: "M8 4l12 8-12 8Z",
   stop: "M5 5h14v14H5z",
+  close: "M6 6l12 12 M18 6L6 18",
 } as const;
 
 export type IconName = keyof typeof ICON_PATHS;

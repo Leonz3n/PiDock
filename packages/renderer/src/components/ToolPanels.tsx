@@ -1,8 +1,10 @@
-import { useState } from "react";
-import { Badge, Button, EmptyState, Panel } from "./ui";
+import { useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { Badge, Button, EmptyState, IconButton, Panel } from "./ui";
+import { Icon, type IconName } from "./Icon";
 import { CodeBlock } from "./CodeBlock";
 import { ConfigTable } from "./ConfigTable";
 import type { BrowserPage, Permission, Service, Subagent, Task, TaskDirectory, WorkspaceFile } from "../data/types";
+import type { ToolPanel } from "../stores/ui";
 import { directoryLinkPath } from "../data/directories";
 import { useDraftStore } from "../stores/drafts";
 import { useHostStore } from "../stores/host";
@@ -15,6 +17,7 @@ import {
   projectServiceTopology,
   type ServiceTopologyView,
 } from "../data/serviceTopology";
+import { serviceRouteView } from "../data/serviceTopology";
 import {
   browserActionRefusal,
   markBrowserIssue,
@@ -34,6 +37,149 @@ import type {
   TerminalStateView,
   WorkspaceBrowserView,
 } from "../data/workspaceFiles";
+
+export function panelName(panel: ToolPanel) {
+  return { runtime: "运行", protocol: "协议", browser: "浏览器", files: "文件", terminal: "终端", logs: "日志" }[panel];
+}
+
+/**
+ * Tool launcher glyphs ([UI 对齐 03] #27): the prototype's `toolItems` mapping
+ * (`app.js`), plus `link` for 协议 — the prototype has no protocol tool, and the
+ * panel is about generated artifacts and their local bindings.
+ */
+export const PANEL_ICONS: Record<ToolPanel, IconName> = {
+  runtime: "server",
+  protocol: "link",
+  browser: "globe",
+  files: "file",
+  terminal: "terminal",
+  logs: "chart",
+};
+
+/**
+ * The prototype's `.workbench` ([UI 对齐 04] #28): a `.work-tabs` strip with one
+ * tab per open tool — each with its own close button — plus the 收起工具区
+ * control at the end, and a single `.work-content` that renders only the active
+ * panel. The rail therefore never stacks panels, and a tab close only removes
+ * the tab (the Host keeps services, browser pages and terminals).
+ */
+export function ToolWorkbench({
+  panels,
+  activePanel,
+  onSelectPanel,
+  onClosePanel,
+  onCollapse,
+  children,
+}: {
+  panels: ToolPanel[];
+  activePanel: ToolPanel;
+  onSelectPanel: (panel: ToolPanel) => void;
+  onClosePanel: (panel: ToolPanel) => void;
+  onCollapse: () => void;
+  children: ReactNode;
+}) {
+  // ARIA tabs pattern with roving tab index: the strip is one Tab stop, arrow
+  // keys move the selection (and focus), Home/End jump to the ends.
+  const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const moveSelection = (panel: ToolPanel, step: number | "first" | "last") => {
+    const from = panels.indexOf(panel);
+    const target =
+      step === "first" ? panels[0] : step === "last" ? panels[panels.length - 1] : panels[(from + step + panels.length) % panels.length];
+    if (target === undefined) return;
+    onSelectPanel(target);
+    tabRefs.current[target]?.focus();
+  };
+  const onTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, panel: ToolPanel) => {
+    const keys = {
+      ArrowRight: 1,
+      ArrowLeft: -1,
+    } as const;
+    if (event.key === "ArrowRight" || event.key === "ArrowLeft") {
+      event.preventDefault();
+      moveSelection(panel, keys[event.key]);
+      return;
+    }
+    if (event.key === "Home" || event.key === "End") {
+      event.preventDefault();
+      moveSelection(panel, event.key === "Home" ? "first" : "last");
+      return;
+    }
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      onSelectPanel(panel);
+    }
+  };
+  return (
+    <section
+      data-testid="task-workbench"
+      aria-label="任务工具面板"
+      className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-panel border border-line bg-[#fafbfb]"
+    >
+      <div
+        role="tablist"
+        aria-label="已打开的工具"
+        data-testid="tool-tabs"
+        className="flex h-11 min-h-11 items-center gap-1.5 overflow-x-auto border-b border-line bg-paper px-4"
+      >
+        {panels.map((panel) => {
+          const active = panel === activePanel;
+          return (
+            <div
+              key={panel}
+              data-testid={`tool-tab-item-${panel}`}
+              className={`flex shrink-0 items-center border-b-2 ${active ? "border-accent" : "border-transparent"}`}
+            >
+              <button
+                type="button"
+                role="tab"
+                id={`tool-tab-${panel}`}
+                aria-selected={active}
+                aria-controls="tool-panel"
+                tabIndex={active ? 0 : -1}
+                ref={(node) => {
+                  tabRefs.current[panel] = node;
+                }}
+                onKeyDown={(event) => onTabKeyDown(event, panel)}
+                data-testid={`tool-tab-${panel}`}
+                onClick={() => onSelectPanel(panel)}
+                className={`flex items-center gap-1.5 whitespace-nowrap py-2.5 pl-1.5 pr-0.5 text-[11px] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${active ? "font-medium text-accent" : "text-muted hover:text-ink"}`}
+              >
+                <Icon name={PANEL_ICONS[panel]} className="h-3.5 w-3.5" />
+                {panelName(panel)}
+              </button>
+              <button
+                type="button"
+                data-testid={`tool-tab-close-${panel}`}
+                aria-label={`关闭${panelName(panel)}`}
+                title={`关闭${panelName(panel)}`}
+                onClick={() => onClosePanel(panel)}
+                className="mr-1 grid h-5 w-5 place-items-center rounded text-[#9ba4b2] hover:bg-soft hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+              >
+                <Icon name="close" className="h-3 w-3" />
+              </button>
+            </div>
+          );
+        })}
+        <IconButton
+          icon="close"
+          label="收起工具区"
+          className="ml-auto"
+          data-testid="collapse-tools"
+          onClick={onCollapse}
+        />
+      </div>
+      <div
+        id="tool-panel"
+        role="tabpanel"
+        aria-labelledby={`tool-tab-${activePanel}`}
+        data-testid="tool-content"
+        className="min-h-0 flex-1 overflow-auto p-5"
+      >
+        {children}
+      </div>
+    </section>
+  );
+}
 
 export function RuntimePanel({
   task,
@@ -65,75 +211,119 @@ export function RuntimePanel({
     : [];
   const locationLabel = (item: Service) => {
     if (item.runType === "prepare") return item.port !== undefined ? `准备步骤 · 本地 :${item.port}` : "准备步骤 · 本机命令";
-    if (item.mode === "remote") return "远程依赖";
-    return item.port !== undefined ? `本地 :${item.port}` : "本地";
+    if (item.mode === "remote") return "测试环境 · 共享";
+    return item.port !== undefined ? `127.0.0.1:${item.port} · ${item.running ? "运行中" : "已停止"}` : `本地 · ${item.running ? "运行中" : "已停止"}`;
+  };
+  // Prototype `services()`: 「本地运行」 and 「远程依赖」 groups over the same
+  // compact rows, so the panel answers "what runs here" before the per-service
+  // detail below.
+  const localServices = task.services.filter((item) => item.mode === "local");
+  const remoteServices = task.services.filter((item) => item.mode === "remote");
+  const route = serviceRouteView(topology, environmentName(task));
+  const serviceRow = (item: Service) => {
+    const unit = topology.units.find((candidate) => candidate.serviceId === item.id);
+    const endpoint = locationLabel(item);
+    const address = unit ? instanceAddress(task.id, unit.serviceId, item.port) : undefined;
+    return (
+      <li
+        key={item.id}
+        data-testid={`service-item-${item.id}`}
+        // The panel is 43% of the workspace and the instance address is a long
+        // monospace string: the row keeps the endpoint on its own line and
+        // exposes the untruncated identity through `title` (#27 review P2-A).
+        title={[item.name, endpoint, address].filter((part): part is string => part !== undefined).join(" · ")}
+        className="flex items-center gap-2.5 border-b border-[#f0f0f1] px-2.5 py-2.5 last:border-0"
+      >
+        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${item.running ? "bg-accent shadow-[0_0_0_3px_rgba(66,90,147,0.07)]" : "bg-[#9aa4ab]"}`} />
+        <button
+          type="button"
+          className="min-w-0 flex-1 text-left"
+          data-testid={`service-row-${item.id}`}
+          onClick={() => setSelected(item.id)}
+        >
+          <span className="block truncate text-[11px] text-ink">{item.name}</span>
+          <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+            {/* The endpoint is the prototype's `.endpoint` and must stay readable
+                at every tier, so it never shrinks; the instance address wraps to
+                its own line when the rail is narrow and truncates there. */}
+            <span className="shrink-0 font-mono text-[10px] text-muted" data-testid={`service-endpoint-${item.id}`}>{endpoint}</span>
+            {unit ? (
+              <span className="min-w-0 truncate font-mono text-[10px] text-muted" data-testid={`service-instance-${item.id}`}>
+                {instanceAddress(task.id, unit.serviceId, item.port)}
+              </span>
+            ) : null}
+          </span>
+        </button>
+        <div className="flex shrink-0 items-center gap-1 whitespace-nowrap">
+          {onSetServiceMode ? (
+            <Button
+              size="sm"
+              className="shrink-0"
+              title="切换本地或远程"
+              aria-label={`切换 ${item.name} 依赖去向`}
+              onClick={() => {
+                if (readonly) {
+                  onReadonlyAttempt?.();
+                  return;
+                }
+                onSetServiceMode(item.id, item.mode === "local" ? "remote" : "local");
+              }}
+            >
+              {item.mode === "local" ? "本地" : "远程"}
+            </Button>
+          ) : null}
+          {item.runType !== "prepare" ? (
+            <IconButton
+              icon={item.running ? "stop" : "play"}
+              label={`${item.running ? "停止" : "启动"} ${item.name}`}
+              className="shrink-0"
+              onClick={() => {
+                if (readonly) {
+                  onReadonlyAttempt?.();
+                  return;
+                }
+                onToggleService(item.id, !item.running);
+              }}
+            />
+          ) : null}
+        </div>
+      </li>
+    );
   };
   return (
     <div className="flex flex-col gap-3">
-      <ul className="flex flex-col gap-1.5">
-        {task.services.map((item) => {
-          const unit = topology.units.find((candidate) => candidate.serviceId === item.id);
-          return (
-          <li key={item.id} className="flex items-center justify-between gap-2 rounded-md border border-line px-2.5 py-2 text-xs">
-            {/* The tool panel is 43% of the workspace and the instance address is
-                a long monospace string, so the name/address truncate and the
-                action group keeps its size: a squeezed `停止`/`改为远程` text
-                button folds into vertical text (#27 review note). */}
-            <button
-              type="button"
-              className="flex min-w-0 flex-1 items-center gap-2 text-left"
-              data-testid={`service-row-${item.id}`}
-              onClick={() => setSelected(item.id)}
-            >
-              <span className="shrink-0 text-ink">{item.name}</span>
-              <span className="truncate text-muted">
-                {locationLabel(item)}
-                {item.repo ? ` · ${item.repo}` : ""}
-              </span>
-              {unit ? (
-                <span className="truncate font-mono text-[10px] text-muted" data-testid={`service-instance-${item.id}`}>
-                  {instanceAddress(task.id, unit.serviceId, item.port)}
-                </span>
-              ) : null}
-            </button>
-            <div className="flex shrink-0 items-center gap-2 whitespace-nowrap">
-              <Badge tone={item.running ? "accent" : "neutral"}>{item.running ? "运行中" : item.mode === "remote" ? "远程" : "已停止"}</Badge>
-              {item.mode === "local" ? (
-                <Button
-                  size="sm"
-                  className="shrink-0"
-                  onClick={() => {
-                    if (readonly) {
-                      onReadonlyAttempt?.();
-                      return;
-                    }
-                    onToggleService(item.id, !item.running);
-                  }}
-                >
-                  {item.running ? "停止" : "启动"}
-                </Button>
-              ) : null}
-              {onSetServiceMode ? (
-                <Button
-                  size="sm"
-                  className="shrink-0"
-                  aria-label={`切换 ${item.name} 依赖去向`}
-                  onClick={() => {
-                    if (readonly) {
-                      onReadonlyAttempt?.();
-                      return;
-                    }
-                    onSetServiceMode(item.id, item.mode === "local" ? "remote" : "local");
-                  }}
-                >
-                  {item.mode === "local" ? "改为远程" : "改为本地"}
-                </Button>
-              ) : null}
-            </div>
-          </li>
-          );
-        })}
-      </ul>
+      <div className="flex flex-col gap-1.5" data-testid="service-groups-view">
+        <div className="flex items-center justify-between text-[10px] tracking-[1px] text-muted">
+          <span>本地运行</span>
+          <span>自动分配端口</span>
+        </div>
+        <ul className="overflow-hidden rounded-md border border-line bg-paper" data-testid="service-list-local">
+          {localServices.map(serviceRow)}
+        </ul>
+      </div>
+      {remoteServices.length > 0 ? (
+        <div className="flex flex-col gap-1.5" data-testid="service-remote-group">
+          <div className="text-[10px] tracking-[1px] text-muted">远程依赖</div>
+          <ul className="overflow-hidden rounded-md border border-line bg-paper" data-testid="service-list-remote">
+            {remoteServices.map(serviceRow)}
+          </ul>
+        </div>
+      ) : null}
+      <div className="rounded-md border border-dashed border-[#d5d8e0] px-3 py-3 text-[10px] leading-relaxed text-muted" data-testid="service-route-box">
+        <div className="text-ink">请求去向 · {route.environment}</div>
+        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+          {route.local.map((segment) => (
+            <span key={segment.name} className="flex items-center gap-1.5">
+              {segment.connector === "call" ? <span aria-hidden="true">→</span> : null}
+              {segment.connector === "pair" ? <span aria-hidden="true">⇄</span> : null}
+              <code className="rounded border border-line bg-paper px-1.5 py-0.5 font-mono">{segment.name}</code>
+            </span>
+          ))}
+          {route.remote.length > 0 ? <span>· 远程 {route.remote.join("、")}</span> : null}
+        </div>
+        <div className="mt-1.5">本地依赖指向当前任务实例；远程数据设施沿用共享环境。</div>
+      </div>
+
       {service && service.failure ? (
         <div className="rounded-md border border-warn/60 bg-warn/10 px-2.5 py-2 text-xs" data-testid="service-failure">
           <div className="text-ink">
@@ -234,6 +424,11 @@ export function RuntimePanel({
           </ul>
         </Panel>
       ) : null}
+      {/* Prototype `services()` closing note: the task owns its working copies,
+          processes, ports and browser state. */}
+      <p className="text-[10px] leading-relaxed text-muted" data-testid="service-runtime-note">
+        worktree、进程、端口和浏览器状态按任务独立。
+      </p>
     </div>
   );
 }
@@ -406,6 +601,9 @@ export function BrowserPanel({
   const active = pages.find((page) => page.id === pageId) ?? pages[0];
   const handle = active ? { pageId: active.id } : undefined;
   const agentRefusal = permission !== undefined ? browserActionRefusal(permission) : undefined;
+  // Read-only sessions never hand the page to the Agent, so the handover
+  // control is disabled with the same reason the refusal states.
+  const readonly = permission === "read";
 
   const toggleTakeover = async () => {
     if (!handle) return;
@@ -452,6 +650,22 @@ export function BrowserPanel({
         任务页面与 PiDock 自有界面分属不同信任范围；Agent 与用户操作同一页面实例，渲染层不直接调用 CDP。
       </p>
       {agentRefusal ? <p className="text-[11px] text-muted">{agentRefusal}</p> : null}
+      {/* Prototype `browser-owner`: who drives the shared page right now, with
+          the handover control beside it. */}
+      <div className="flex items-center justify-between gap-2 border-y border-line py-2.5" data-testid="browser-owner">
+        <span className="flex items-center gap-2 text-[10px] text-muted">
+          <span className={`h-1.5 w-1.5 rounded-full ${takeoverPaused ? "bg-orange" : "bg-accent shadow-[0_0_0_3px_rgba(66,90,147,0.07)]"}`} />
+          {takeoverPaused ? "你正在操作 · Agent 已暂停" : "Agent 可控制 · 当前空闲"}
+        </span>
+        <Button
+          size="sm"
+          disabled={readonly}
+          title={readonly ? "只读会话：Agent 不会操作浏览器，无需接管" : undefined}
+          onClick={() => void toggleTakeover()}
+        >
+          {takeoverPaused ? "交还 Agent" : "接管浏览器"}
+        </Button>
+      </div>
       <ul className="flex flex-col gap-1.5">
         {pages.map((page) => (
           <li key={page.id} className="rounded-md border border-line px-2.5 py-2 text-xs">
@@ -469,15 +683,19 @@ export function BrowserPanel({
         ))}
       </ul>
       <div className="flex flex-wrap items-center gap-2">
-        <Button size="sm" onClick={() => void toggleTakeover()}>
-          {takeoverPaused ? "交还控制" : "人工接管"}
-        </Button>
         <Button size="sm" variant="ghost" onClick={() => void refreshEvidence()}>
           获取证据
         </Button>
         <Badge tone={takeoverPaused ? "warn" : "neutral"}>{takeoverPaused ? "人工接管中：自动化已暂停" : "Agent 控制中"}</Badge>
       </div>
+      {/* Prototype `snapshot`: what the task page instance is, in one block. */}
+      <div className="flex flex-col gap-1.5 rounded-md bg-[#f0f2f5] px-3 py-2.5 text-[10px] text-muted" data-testid="browser-snapshot">
+        <div>{marks.length > 0 ? `${marks.length} 条标记待 Agent 处理` : "尚未标记页面问题"}</div>
+        <div className="font-mono text-[9px]">{active ? active.url : "尚未打开任务页面"}</div>
+        <div>页面实例属于任务 {taskId}；证据与标记经 preload 桥路由 main 处置。</div>
+      </div>
       <div className="flex flex-col gap-1.5">
+        <h3 className="text-[11px] font-medium text-ink">验证记录</h3>
         <label className="text-[11px] text-muted" htmlFor="browser-marker-annotation">
           标记说明
         </label>

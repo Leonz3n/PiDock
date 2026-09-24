@@ -6,6 +6,7 @@ import {
   failureLabel,
   instanceAddress,
   projectServiceTopology,
+  serviceRouteView,
   serviceRouting,
   serviceStartGroups,
   serviceUnits,
@@ -252,6 +253,24 @@ describe("display labels", () => {
 });
 
 describe("in-memory fixture topology", () => {
+  it("orders the request route box by start groups and names the remote units", async () => {
+    // [UI 对齐 04] (#28) the runtime panel's route box: the declared call graph
+    // from the entry unit, a mutual pair joined with `⇄` (never `→`), and the
+    // remote units that keep the shared environment.
+    const host = createMemoryHost();
+    const workspace = await host.getWorkspace();
+    const release = workspace.tasks.find((task) => task.id === "release") as Task;
+    const route = serviceRouteView(projectServiceTopology(release, "testing"), "testing");
+    expect(route.environment).toBe("testing");
+    expect(route.local).toEqual([
+      { name: "saas-web", connector: "start" },
+      { name: "saas-bff", connector: "call" },
+      { name: "invoice-service", connector: "call" },
+      { name: "shipment-service", connector: "pair" },
+    ]);
+    expect(route.remote).toEqual(["account-service", "Redis / PostgreSQL"]);
+  });
+
   it("gives two tasks running the same service name different local ports", async () => {
     const host = createMemoryHost();
     const workspace = await host.getWorkspace();
@@ -266,8 +285,7 @@ describe("in-memory fixture topology", () => {
     expect(portOf("release", "invoice-service")).not.toBe(portOf("checkout", "invoice-service"));
   });
 
-  it("projects the seeded plan with groups, routing and shared external resources", async () => {
-    const host = createMemoryHost();
+  it("projects the seeded plan with groups, routing and shared external resources", async () => {    const host = createMemoryHost();
     const workspace = await host.getWorkspace();
     const release = workspace.tasks.find((task) => task.id === "release");
     expect(release).toBeDefined();

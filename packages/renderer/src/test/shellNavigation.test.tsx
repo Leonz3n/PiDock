@@ -207,7 +207,8 @@ describe("shell bottom summary bar", () => {
 
     await user.click(screen.getByRole("button", { name: "浏览器" }));
     await screen.findByText(/Agent 与用户操作同一页面实例/);
-    await user.click(screen.getByRole("button", { name: "人工接管" }));
+    // [UI 对齐 04] (#28) prototype wording: 接管浏览器 / 交还 Agent.
+    await user.click(screen.getByRole("button", { name: "接管浏览器" }));
 
     expect(await within(screen.getByTestId("shell-summary")).findByText("人工接管中")).toBeInTheDocument();
     expect(taskOp).toHaveBeenCalledWith(

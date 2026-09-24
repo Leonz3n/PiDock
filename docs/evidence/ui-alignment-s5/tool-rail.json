@@ -1,0 +1,809 @@
+{
+  "taskUrl": "http://127.0.0.1:4335/projects/atlas/tasks/release?session=main",
+  "states": {
+    "1440x900-tabs": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "noHorizontalOverflow": true,
+      "railPresent": true,
+      "railW": 493,
+      "workbenchW": 493,
+      "tabStripH": 44,
+      "tabCount": 3,
+      "tabs": [
+        {
+          "label": "运行",
+          "selected": false,
+          "tabIndex": "-1"
+        },
+        {
+          "label": "浏览器",
+          "selected": false,
+          "tabIndex": "-1"
+        },
+        {
+          "label": "文件",
+          "selected": true,
+          "tabIndex": "0"
+        }
+      ],
+      "activeTab": "文件",
+      "contentRendered": [
+        "file-roots",
+        "file-tree",
+        "delivery-target"
+      ],
+      "closeButtons": [
+        "关闭运行",
+        "关闭浏览器",
+        "关闭文件"
+      ],
+      "collapseButton": "收起工具区",
+      "conversationW": 637,
+      "serviceGroups": {
+        "local": 0,
+        "remote": 0,
+        "routeBox": null
+      },
+      "rows": []
+    },
+    "1440x900-runtime": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "noHorizontalOverflow": true,
+      "railPresent": true,
+      "railW": 493,
+      "workbenchW": 493,
+      "tabStripH": 44,
+      "tabCount": 1,
+      "tabs": [
+        {
+          "label": "运行",
+          "selected": true,
+          "tabIndex": "0"
+        }
+      ],
+      "activeTab": "运行",
+      "contentRendered": [
+        "service-groups-view",
+        "service-list-local",
+        "service-item-release-service-1",
+        "service-row-release-service-1",
+        "service-endpoint-release-service-1",
+        "service-instance-release-service-1"
+      ],
+      "closeButtons": [
+        "关闭运行"
+      ],
+      "collapseButton": "收起工具区",
+      "conversationW": 637,
+      "serviceGroups": {
+        "local": 5,
+        "remote": 2,
+        "routeBox": "请求去向 · testing saas-web → saas-bff → invoice-service ⇄ shipment-service · 远程 account-service、Redis / PostgreSQL 本地依赖指向当前任务实例；远程数据设施沿用共享环境。"
+      },
+      "rows": [
+        {
+          "name": "saas-web",
+          "text": "saas-web 127.0.0.1:5173 · 运行中 release/release-service-1@5173 本地",
+          "title": "saas-web · 127.0.0.1:5173 · 运行中 · release/release-service-1@5173",
+          "endpoint": "127.0.0.1:5173 · 运行中",
+          "endpointBox": {
+            "w": 132,
+            "h": 15
+          },
+          "endpointFullyVisible": true,
+          "instance": "release/release-service-1@5173",
+          "instanceClipped": false,
+          "rowH": 55
+        },
+        {
+          "name": "saas-bff",
+          "text": "saas-bff 127.0.0.1:3001 · 运行中 release/release-service-2@3001 本地",
+          "title": "saas-bff · 127.0.0.1:3001 · 运行中 · release/release-service-2@3001",
+          "endpoint": "127.0.0.1:3001 · 运行中",
+          "endpointBox": {
+            "w": 132,
+            "h": 15
+          },
+          "endpointFullyVisible": true,
+          "instance": "release/release-service-2@3001",
+          "instanceClipped": false,
+          "rowH": 55
+        },
+        {
+          "name": "invoice-service",
+          "text": "invoice-service 127.0.0.1:9001 · 运行中 release/release-service-3@9001 本地",
+          "title": "invoice-service · 127.0.0.1:9001 · 运行中 · release/release-service-3@9001",
+          "endpoint": "127.0.0.1:9001 · 运行中",
+          "endpointBox": {
+            "w": 132,
+            "h": 15
+          },
+          "endpointFullyVisible": true,
+          "instance": "release/release-service-3@9001",
+          "instanceClipped": false,
+          "rowH": 55
+        },
+        {
+          "name": "shipment-service",
+          "text": "shipment-service 127.0.0.1:9002 · 运行中 release/release-service-4@9002 本地",
+          "title": "shipment-service · 127.0.0.1:9002 · 运行中 · release/release-service-4@9002",
+          "endpoint": "127.0.0.1:9002 · 运行中",
+          "endpointBox": {
+            "w": 132,
+            "h": 15
+          },
+          "endpointFullyVisible": true,
+          "instance": "release/release-service-4@9002",
+          "instanceClipped": false,
+          "rowH": 55
+        },
+        {
+          "name": "db-migrate",
+          "text": "db-migrate 准备步骤 · 本机命令 release/release-service-5 本地",
+          "title": "db-migrate · 准备步骤 · 本机命令 · release/release-service-5",
+          "endpoint": "准备步骤 · 本机命令",
+          "endpointBox": {
+            "w": 98,
+            "h": 15
+          },
+          "endpointFullyVisible": true,
+          "instance": "release/release-service-5",
+          "instanceClipped": false,
+          "rowH": 54
+        },
+        {
+          "name": "account-service",
+          "text": "account-service 测试环境 · 共享 release/release-service-6 远程",
+          "title": "account-service · 测试环境 · 共享 · release/release-service-6",
+          "endpoint": "测试环境 · 共享",
+          "endpointBox": {
+            "w": 78,
+            "h": 15
+          },
+          "endpointFullyVisible": true,
+          "instance": "release/release-service-6",
+          "instanceClipped": false,
+          "rowH": 55
+        },
+        {
+          "name": "Redis / PostgreSQL",
+          "text": "Redis / PostgreSQL 测试环境 · 共享 release/release-service-7 远程",
+          "title": "Redis / PostgreSQL · 测试环境 · 共享 · release/release-service-7",
+          "endpoint": "测试环境 · 共享",
+          "endpointBox": {
+            "w": 78,
+            "h": 15
+          },
+          "endpointFullyVisible": true,
+          "instance": "release/release-service-7",
+          "instanceClipped": false,
+          "rowH": 54
+        }
+      ]
+    },
+    "1440x900-browser": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "noHorizontalOverflow": true,
+      "railPresent": true,
+      "railW": 493,
+      "workbenchW": 493,
+      "tabStripH": 44,
+      "tabCount": 1,
+      "tabs": [
+        {
+          "label": "浏览器",
+          "selected": true,
+          "tabIndex": "0"
+        }
+      ],
+      "activeTab": "浏览器",
+      "contentRendered": [
+        "browser-owner",
+        "browser-snapshot"
+      ],
+      "closeButtons": [
+        "关闭浏览器"
+      ],
+      "collapseButton": "收起工具区",
+      "conversationW": 637,
+      "serviceGroups": {
+        "local": 0,
+        "remote": 0,
+        "routeBox": null
+      },
+      "rows": [],
+      "browser": {
+        "ownerText": "Agent 可控制 · 当前空闲 接管浏览器",
+        "handover": "接管浏览器",
+        "snapshot": "尚未标记页面问题 https://staging.atlas.example.com/checkout 页面实例属于任务 release；证据与标记经 preload 桥路由 main 处置。",
+        "validationHeading": [
+          "验证记录"
+        ]
+      }
+    },
+    "1440x900-closed": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "noHorizontalOverflow": true,
+      "railPresent": false,
+      "railW": null,
+      "workbenchW": null,
+      "tabStripH": null,
+      "tabCount": 0,
+      "tabs": [],
+      "activeTab": null,
+      "contentRendered": [],
+      "closeButtons": [],
+      "collapseButton": null,
+      "conversationW": 1146,
+      "serviceGroups": {
+        "local": 0,
+        "remote": 0,
+        "routeBox": null
+      },
+      "rows": []
+    },
+    "1280x900-tabs": {
+      "viewport": {
+        "w": 1280,
+        "h": 900
+      },
+      "noHorizontalOverflow": true,
+      "railPresent": true,
+      "railW": 424,
+      "workbenchW": 424,
+      "tabStripH": 44,
+      "tabCount": 3,
+      "tabs": [
+        {
+          "label": "运行",
+          "selected": false,
+          "tabIndex": "-1"
+        },
+        {
+          "label": "浏览器",
+          "selected": false,
+          "tabIndex": "-1"
+        },
+        {
+          "label": "文件",
+          "selected": true,
+          "tabIndex": "0"
+        }
+      ],
+      "activeTab": "文件",
+      "contentRendered": [
+        "file-roots",
+        "file-tree",
+        "delivery-target"
+      ],
+      "closeButtons": [
+        "关闭运行",
+        "关闭浏览器",
+        "关闭文件"
+      ],
+      "collapseButton": "收起工具区",
+      "conversationW": 546,
+      "serviceGroups": {
+        "local": 0,
+        "remote": 0,
+        "routeBox": null
+      },
+      "rows": []
+    },
+    "1280x900-runtime": {
+      "viewport": {
+        "w": 1280,
+        "h": 900
+      },
+      "noHorizontalOverflow": true,
+      "railPresent": true,
+      "railW": 424,
+      "workbenchW": 424,
+      "tabStripH": 44,
+      "tabCount": 1,
+      "tabs": [
+        {
+          "label": "运行",
+          "selected": true,
+          "tabIndex": "0"
+        }
+      ],
+      "activeTab": "运行",
+      "contentRendered": [
+        "service-groups-view",
+        "service-list-local",
+        "service-item-release-service-1",
+        "service-row-release-service-1",
+        "service-endpoint-release-service-1",
+        "service-instance-release-service-1"
+      ],
+      "closeButtons": [
+        "关闭运行"
+      ],
+      "collapseButton": "收起工具区",
+      "conversationW": 546,
+      "serviceGroups": {
+        "local": 5,
+        "remote": 2,
+        "routeBox": "请求去向 · testing saas-web → saas-bff → invoice-service ⇄ shipment-service · 远程 account-service、Redis / PostgreSQL 本地依赖指向当前任务实例；远程数据设施沿用共享环境。"
+      },
+      "rows": [
+        {
+          "name": "saas-web",
+          "text": "saas-web 127.0.0.1:5173 · 运行中 release/release-service-1@5173 本地",
+          "title": "saas-web · 127.0.0.1:5173 · 运行中 · release/release-service-1@5173",
+          "endpoint": "127.0.0.1:5173 · 运行中",
+          "endpointBox": {
+            "w": 132,
+            "h": 15
+          },
+          "endpointFullyVisible": true,
+          "instance": "release/release-service-1@5173",
+          "instanceClipped": false,
+          "rowH": 72
+        },
+        {
+          "name": "saas-bff",
+          "text": "saas-bff 127.0.0.1:3001 · 运行中 release/release-service-2@3001 本地",
+          "title": "saas-bff · 127.0.0.1:3001 · 运行中 · release/release-service-2@3001",
+          "endpoint": "127.0.0.1:3001 · 运行中",
+          "endpointBox": {
+            "w": 132,
+            "h": 15
+          },
+          "endpointFullyVisible": true,
+          "instance": "release/release-service-2@3001",
+          "instanceClipped": false,
+          "rowH": 72
+        },
+        {
+          "name": "invoice-service",
+          "text": "invoice-service 127.0.0.1:9001 · 运行中 release/release-service-3@9001 本地",
+          "title": "invoice-service · 127.0.0.1:9001 · 运行中 · release/release-service-3@9001",
+          "endpoint": "127.0.0.1:9001 · 运行中",
+          "endpointBox": {
+            "w": 132,
+            "h": 15
+          },
+          "endpointFullyVisible": true,
+          "instance": "release/release-service-3@9001",
+          "instanceClipped": false,
+          "rowH": 72
+        },
+        {
+          "name": "shipment-service",
+          "text": "shipment-service 127.0.0.1:9002 · 运行中 release/release-service-4@9002 本地",
+          "title": "shipment-service · 127.0.0.1:9002 · 运行中 · release/release-service-4@9002",
+          "endpoint": "127.0.0.1:9002 · 运行中",
+          "endpointBox": {
+            "w": 132,
+            "h": 15
+          },
+          "endpointFullyVisible": true,
+          "instance": "release/release-service-4@9002",
+          "instanceClipped": false,
+          "rowH": 72
+        },
+        {
+          "name": "db-migrate",
+          "text": "db-migrate 准备步骤 · 本机命令 release/release-service-5 本地",
+          "title": "db-migrate · 准备步骤 · 本机命令 · release/release-service-5",
+          "endpoint": "准备步骤 · 本机命令",
+          "endpointBox": {
+            "w": 98,
+            "h": 15
+          },
+          "endpointFullyVisible": true,
+          "instance": "release/release-service-5",
+          "instanceClipped": false,
+          "rowH": 54
+        },
+        {
+          "name": "account-service",
+          "text": "account-service 测试环境 · 共享 release/release-service-6 远程",
+          "title": "account-service · 测试环境 · 共享 · release/release-service-6",
+          "endpoint": "测试环境 · 共享",
+          "endpointBox": {
+            "w": 78,
+            "h": 15
+          },
+          "endpointFullyVisible": true,
+          "instance": "release/release-service-6",
+          "instanceClipped": false,
+          "rowH": 55
+        },
+        {
+          "name": "Redis / PostgreSQL",
+          "text": "Redis / PostgreSQL 测试环境 · 共享 release/release-service-7 远程",
+          "title": "Redis / PostgreSQL · 测试环境 · 共享 · release/release-service-7",
+          "endpoint": "测试环境 · 共享",
+          "endpointBox": {
+            "w": 78,
+            "h": 15
+          },
+          "endpointFullyVisible": true,
+          "instance": "release/release-service-7",
+          "instanceClipped": false,
+          "rowH": 54
+        }
+      ]
+    },
+    "1280x900-browser": {
+      "viewport": {
+        "w": 1280,
+        "h": 900
+      },
+      "noHorizontalOverflow": true,
+      "railPresent": true,
+      "railW": 424,
+      "workbenchW": 424,
+      "tabStripH": 44,
+      "tabCount": 1,
+      "tabs": [
+        {
+          "label": "浏览器",
+          "selected": true,
+          "tabIndex": "0"
+        }
+      ],
+      "activeTab": "浏览器",
+      "contentRendered": [
+        "browser-owner",
+        "browser-snapshot"
+      ],
+      "closeButtons": [
+        "关闭浏览器"
+      ],
+      "collapseButton": "收起工具区",
+      "conversationW": 546,
+      "serviceGroups": {
+        "local": 0,
+        "remote": 0,
+        "routeBox": null
+      },
+      "rows": [],
+      "browser": {
+        "ownerText": "Agent 可控制 · 当前空闲 接管浏览器",
+        "handover": "接管浏览器",
+        "snapshot": "尚未标记页面问题 https://staging.atlas.example.com/checkout 页面实例属于任务 release；证据与标记经 preload 桥路由 main 处置。",
+        "validationHeading": [
+          "验证记录"
+        ]
+      }
+    },
+    "1280x900-closed": {
+      "viewport": {
+        "w": 1280,
+        "h": 900
+      },
+      "noHorizontalOverflow": true,
+      "railPresent": false,
+      "railW": null,
+      "workbenchW": null,
+      "tabStripH": null,
+      "tabCount": 0,
+      "tabs": [],
+      "activeTab": null,
+      "contentRendered": [],
+      "closeButtons": [],
+      "collapseButton": null,
+      "conversationW": 986,
+      "serviceGroups": {
+        "local": 0,
+        "remote": 0,
+        "routeBox": null
+      },
+      "rows": []
+    },
+    "1024x800-tabs": {
+      "viewport": {
+        "w": 1024,
+        "h": 800
+      },
+      "noHorizontalOverflow": true,
+      "railPresent": true,
+      "railW": 310,
+      "workbenchW": 310,
+      "tabStripH": 44,
+      "tabCount": 3,
+      "tabs": [
+        {
+          "label": "运行",
+          "selected": false,
+          "tabIndex": "-1"
+        },
+        {
+          "label": "浏览器",
+          "selected": false,
+          "tabIndex": "-1"
+        },
+        {
+          "label": "文件",
+          "selected": true,
+          "tabIndex": "0"
+        }
+      ],
+      "activeTab": "文件",
+      "contentRendered": [
+        "file-roots",
+        "file-tree",
+        "delivery-target"
+      ],
+      "closeButtons": [
+        "关闭运行",
+        "关闭浏览器",
+        "关闭文件"
+      ],
+      "collapseButton": "收起工具区",
+      "conversationW": 438,
+      "serviceGroups": {
+        "local": 0,
+        "remote": 0,
+        "routeBox": null
+      },
+      "rows": []
+    },
+    "1024x800-runtime": {
+      "viewport": {
+        "w": 1024,
+        "h": 800
+      },
+      "noHorizontalOverflow": true,
+      "railPresent": true,
+      "railW": 310,
+      "workbenchW": 310,
+      "tabStripH": 44,
+      "tabCount": 1,
+      "tabs": [
+        {
+          "label": "运行",
+          "selected": true,
+          "tabIndex": "0"
+        }
+      ],
+      "activeTab": "运行",
+      "contentRendered": [
+        "service-groups-view",
+        "service-list-local",
+        "service-item-release-service-1",
+        "service-row-release-service-1",
+        "service-endpoint-release-service-1",
+        "service-instance-release-service-1"
+      ],
+      "closeButtons": [
+        "关闭运行"
+      ],
+      "collapseButton": "收起工具区",
+      "conversationW": 438,
+      "serviceGroups": {
+        "local": 5,
+        "remote": 2,
+        "routeBox": "请求去向 · testing saas-web → saas-bff → invoice-service ⇄ shipment-service · 远程 account-service、Redis / PostgreSQL 本地依赖指向当前任务实例；远程数据设施沿用共享环境。"
+      },
+      "rows": [
+        {
+          "name": "saas-web",
+          "text": "saas-web 127.0.0.1:5173 · 运行中 release/release-service-1@5173 本地",
+          "title": "saas-web · 127.0.0.1:5173 · 运行中 · release/release-service-1@5173",
+          "endpoint": "127.0.0.1:5173 · 运行中",
+          "endpointBox": {
+            "w": 132,
+            "h": 15
+          },
+          "endpointFullyVisible": true,
+          "instance": "release/release-service-1@5173",
+          "instanceClipped": true,
+          "rowH": 72
+        },
+        {
+          "name": "saas-bff",
+          "text": "saas-bff 127.0.0.1:3001 · 运行中 release/release-service-2@3001 本地",
+          "title": "saas-bff · 127.0.0.1:3001 · 运行中 · release/release-service-2@3001",
+          "endpoint": "127.0.0.1:3001 · 运行中",
+          "endpointBox": {
+            "w": 132,
+            "h": 15
+          },
+          "endpointFullyVisible": true,
+          "instance": "release/release-service-2@3001",
+          "instanceClipped": true,
+          "rowH": 72
+        },
+        {
+          "name": "invoice-service",
+          "text": "invoice-service 127.0.0.1:9001 · 运行中 release/release-service-3@9001 本地",
+          "title": "invoice-service · 127.0.0.1:9001 · 运行中 · release/release-service-3@9001",
+          "endpoint": "127.0.0.1:9001 · 运行中",
+          "endpointBox": {
+            "w": 132,
+            "h": 15
+          },
+          "endpointFullyVisible": true,
+          "instance": "release/release-service-3@9001",
+          "instanceClipped": true,
+          "rowH": 72
+        },
+        {
+          "name": "shipment-service",
+          "text": "shipment-service 127.0.0.1:9002 · 运行中 release/release-service-4@9002 本地",
+          "title": "shipment-service · 127.0.0.1:9002 · 运行中 · release/release-service-4@9002",
+          "endpoint": "127.0.0.1:9002 · 运行中",
+          "endpointBox": {
+            "w": 132,
+            "h": 15
+          },
+          "endpointFullyVisible": true,
+          "instance": "release/release-service-4@9002",
+          "instanceClipped": true,
+          "rowH": 72
+        },
+        {
+          "name": "db-migrate",
+          "text": "db-migrate 准备步骤 · 本机命令 release/release-service-5 本地",
+          "title": "db-migrate · 准备步骤 · 本机命令 · release/release-service-5",
+          "endpoint": "准备步骤 · 本机命令",
+          "endpointBox": {
+            "w": 98,
+            "h": 15
+          },
+          "endpointFullyVisible": true,
+          "instance": "release/release-service-5",
+          "instanceClipped": false,
+          "rowH": 71
+        },
+        {
+          "name": "account-service",
+          "text": "account-service 测试环境 · 共享 release/release-service-6 远程",
+          "title": "account-service · 测试环境 · 共享 · release/release-service-6",
+          "endpoint": "测试环境 · 共享",
+          "endpointBox": {
+            "w": 78,
+            "h": 15
+          },
+          "endpointFullyVisible": true,
+          "instance": "release/release-service-6",
+          "instanceClipped": true,
+          "rowH": 72
+        },
+        {
+          "name": "Redis / PostgreSQL",
+          "text": "Redis / PostgreSQL 测试环境 · 共享 release/release-service-7 远程",
+          "title": "Redis / PostgreSQL · 测试环境 · 共享 · release/release-service-7",
+          "endpoint": "测试环境 · 共享",
+          "endpointBox": {
+            "w": 78,
+            "h": 15
+          },
+          "endpointFullyVisible": true,
+          "instance": "release/release-service-7",
+          "instanceClipped": true,
+          "rowH": 71
+        }
+      ]
+    },
+    "1024x800-browser": {
+      "viewport": {
+        "w": 1024,
+        "h": 800
+      },
+      "noHorizontalOverflow": true,
+      "railPresent": true,
+      "railW": 310,
+      "workbenchW": 310,
+      "tabStripH": 44,
+      "tabCount": 1,
+      "tabs": [
+        {
+          "label": "浏览器",
+          "selected": true,
+          "tabIndex": "0"
+        }
+      ],
+      "activeTab": "浏览器",
+      "contentRendered": [
+        "browser-owner",
+        "browser-snapshot"
+      ],
+      "closeButtons": [
+        "关闭浏览器"
+      ],
+      "collapseButton": "收起工具区",
+      "conversationW": 438,
+      "serviceGroups": {
+        "local": 0,
+        "remote": 0,
+        "routeBox": null
+      },
+      "rows": [],
+      "browser": {
+        "ownerText": "Agent 可控制 · 当前空闲 接管浏览器",
+        "handover": "接管浏览器",
+        "snapshot": "尚未标记页面问题 https://staging.atlas.example.com/checkout 页面实例属于任务 release；证据与标记经 preload 桥路由 main 处置。",
+        "validationHeading": [
+          "验证记录"
+        ]
+      }
+    },
+    "1024x800-closed": {
+      "viewport": {
+        "w": 1024,
+        "h": 800
+      },
+      "noHorizontalOverflow": true,
+      "railPresent": false,
+      "railW": null,
+      "workbenchW": null,
+      "tabStripH": null,
+      "tabCount": 0,
+      "tabs": [],
+      "activeTab": null,
+      "contentRendered": [],
+      "closeButtons": [],
+      "collapseButton": null,
+      "conversationW": 764,
+      "serviceGroups": {
+        "local": 0,
+        "remote": 0,
+        "routeBox": null
+      },
+      "rows": []
+    }
+  },
+  "prototypeA": {
+    "workbench": {
+      "w": 522,
+      "h": 667
+    },
+    "tabStrip": {
+      "w": 522,
+      "h": 44
+    },
+    "tabLabels": [
+      "运行",
+      "浏览器",
+      "文件",
+      "终端",
+      "日志"
+    ],
+    "closeLabels": [
+      "关闭运行",
+      "关闭浏览器",
+      "关闭文件",
+      "关闭终端",
+      "关闭日志"
+    ],
+    "collapseLabel": "收起工具区",
+    "workContentH": {
+      "w": 522,
+      "h": 623
+    },
+    "serviceRowH": {
+      "w": 480,
+      "h": 58
+    },
+    "hasBrowserOwner": false,
+    "hasSnapshot": false,
+    "serviceRowText": "saas-web 127.0.0.1:5173 · 运行中 本地"
+  },
+  "prototypeABrowser": {
+    "ownerText": "Agent 可控制 · 当前空闲 接管浏览器",
+    "hasSnapshot": true,
+    "snapshotText": "○ 等待本任务页面验证 BFF → invoice:9001 → shipment:9002 Cookie / 本地存储：仅属于 invoice-detail",
+    "validationHeading": [
+      "浏览器",
+      "验证记录"
+    ]
+  }
+}

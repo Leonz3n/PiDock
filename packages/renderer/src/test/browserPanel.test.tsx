@@ -32,7 +32,11 @@ describe("task browser panel", () => {
 
     await user.click(screen.getByRole("button", { name: "浏览器" }));
     expect(await screen.findByText(/Agent 与用户操作同一页面实例/)).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "人工接管" }));
+    // [UI 对齐 04] (#28): the prototype's owner row names the controller, and the
+    // handover control carries the prototype wording.
+    const owner = await screen.findByTestId("browser-owner");
+    expect(owner).toHaveTextContent("Agent 可控制 · 当前空闲");
+    await user.click(within(owner).getByRole("button", { name: "接管浏览器" }));
 
     expect(taskOp).toHaveBeenCalledWith(
       "release",
@@ -40,6 +44,8 @@ describe("task browser panel", () => {
       expect.objectContaining({ action: "takeover/pause", label: "用户接管浏览器" }),
     );
     expect(await screen.findByText("人工接管中：自动化已暂停")).toBeInTheDocument();
+    expect(await screen.findByTestId("browser-owner")).toHaveTextContent("你正在操作 · Agent 已暂停");
+    expect(screen.getByRole("button", { name: "交还 Agent" })).toBeInTheDocument();
   });
 
   it("sends a user marker with the page, URL, epoch and annotation", async () => {
@@ -106,9 +112,14 @@ describe("task browser panel", () => {
     await user.click(screen.getByRole("button", { name: /^选择权限：默认权限$/ }));
     const dialog = await screen.findByRole("dialog", { name: "会话权限" });
     await user.click(within(dialog).getByRole("button", { name: /只读/ }));
-    await user.click(await screen.findByRole("button", { name: "浏览器" }));
-
+    await user.click(screen.getByRole("button", { name: "浏览器" }));
     expect(await screen.findByText("当前是只读会话，Agent 不会操作浏览器")).toBeInTheDocument();
+    // [UI 对齐 04] (#28): nothing to hand over when the Agent never drives the
+    // page, so the owner row's control is disabled and says why.
+    const owner = await screen.findByTestId("browser-owner");
+    const handover = within(owner).getByRole("button", { name: "接管浏览器" });
+    expect(handover).toBeDisabled();
+    expect(handover).toHaveAttribute("title", "只读会话：Agent 不会操作浏览器，无需接管");
     // The user may still mark the page they are looking at.
     expect(screen.getByRole("button", { name: "框选元素标记" })).toBeInTheDocument();
   });
