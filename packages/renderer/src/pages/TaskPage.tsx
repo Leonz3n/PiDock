@@ -47,7 +47,17 @@ import {
   writeCoordinationVisible,
   type SessionWriteState,
 } from "../data/writeCoordination";
-import { approvalStatusLabel, runStateLabel } from "./runState";
+import { approvalStatusLabel } from "./runState";
+import {
+  EXECUTION_ACTION_LABEL,
+  executionActions,
+  executionCardVisible,
+  executionLabel,
+  executionStateOf,
+  otherBusySession,
+  pendingApprovalsFor,
+  type ExecutionAction,
+} from "./executionView";
 import { sessionKeyOf } from "../data/sessionKey";
 import { describeContextDisplay, describeHistoryAttribution, formatTokens, resolveSessionThinking } from "../data/providerState";
 import type { ServiceTopologyView } from "../data/serviceTopology";
@@ -713,20 +723,34 @@ function SessionTabs({
     } else openModal({ type: "sessions", taskId: task.id, filter: session.archived ? "archived" : "active" });
   };
 
+  const addSession = async () => {
+    const created = await useHostStore.getState().createSession(task.id);
+    navigate({ view: "task", projectId: task.projectId, taskId: task.id, sessionId: created.id });
+  };
+
   return (
-    // Prototype `.sessions`: one 43px row with `white-space:nowrap` tabs. The
-    // row must not grow into a second line when the tool panel narrows the
-    // column ([UI 对齐 03] #27), so the tab strip clips and the fixed buttons
-    // keep their size.
+    // Prototype `.sessions`: one row whose tabs `flex-shrink:1`. The row must
+    // not grow into a second line when the tool panel narrows the column
+    // ([UI 对齐 03] #27), and it must not clip tab labels either ([UI 对齐 05]
+    // #29): tabs shrink first, and the non-active ones drop out by tier so the
+    // strip needs less width than it has at every breakpoint (class contract in
+    // `packages/renderer/src/test/sessionNavTier.test.tsx`).
     <div className="flex flex-nowrap items-center gap-2">
       <Button size="sm" className="shrink-0" onClick={() => openModal({ type: "sessions", taskId: task.id, filter: "active" })}>
         全部会话 {task.sessions.length}
       </Button>
-      <div data-testid="session-tab-strip" className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
-        {visibleSessions.map((session) => {
+      <div
+        data-testid="session-tab-strip"
+        className="flex min-w-0 flex-1 flex-nowrap items-center gap-1.5 overflow-hidden"
+      >
+        {visibleSessions.map((session, ordinal) => {
           const role = roles.get(session.id);
           const roleLabel = role ? sessionWriteRoleLabel(role) : null;
           const active = session.id === activeSessionId;
+          // The active tab is never dropped (it names the open session), so the
+          // tiers count the non-active ordinals: 0 stays, 1 leaves below 960px,
+          // 2+ leaves below 1180px — four tabs, then two, then one.
+          const tier = tabTierClass(active, nonActiveOrdinal(visibleSessions, activeSessionId, ordinal));
           return (
             <button
               key={session.id}
@@ -739,8 +763,10 @@ function SessionTabs({
               }}
               title={`${session.name} · 右键操作`}
               className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs ${
-                active ? "border-accent/40 bg-accent/10 text-accent" : "border-line bg-paper text-muted hover:text-ink"
-              } ${active ? "" : "flex below-mid:hidden"}`}
+                active
+                  ? "shrink-0 border-accent/40 bg-accent/10 text-accent"
+                  : "min-w-0 shrink border-line bg-paper text-muted hover:text-ink"
+              } ${tier}`}
             >
               {/* Bounded label: a long name never widens the navigation. */}
               <span className="max-w-[9rem] truncate">{sessionTabLabel(session.name)}</span>
@@ -769,19 +795,28 @@ function SessionTabs({
           onClose={() => setMenu(null)}
         />
       ) : null}
-      <Button
-        size="sm"
-        className="shrink-0"
-        aria-label="新建会话"
-        onClick={async () => {
-          const created = await useHostStore.getState().createSession(task.id);
-          navigate({ view: "task", projectId: task.projectId, taskId: task.id, sessionId: created.id });
-        }}
-      >
-        新建会话
-      </Button>
+      <IconButton icon="plus" label="新建会话" className="shrink-0" onClick={() => void addSession()} />
     </div>
   );
+}
+
+/**
+ * Non-active tabs that precede this one in the rendered strip. Tiers count these
+ * instead of the raw ordinal so the active tab (which is never dropped) does not
+ * shift the count when the user switches sessions.
+ */
+function nonActiveOrdinal(visible: readonly Session[], activeSessionId: string, ordinal: number): number {
+  return visible.slice(0, ordinal).filter((session) => session.id !== activeSessionId).length;
+}
+
+/**
+ * Prototype tab-strip tiers: 4 tabs at desktop, 2 below 1180px, 1 below 960px.
+ * Class-only on purpose — the strip needs no JS width measurement, and the tab
+ * count drops instead of labels being clipped ([UI 对齐 05] #29 验收 2).
+ */
+function tabTierClass(active: boolean, nonActiveOrdinalCount: number): string {
+  if (active) return "";
+  return nonActiveOrdinalCount === 0 ? "below-mid:hidden" : "below-wide:hidden";
 }
 
 /**
@@ -879,53 +914,165 @@ function WriteCoordinationBar({ task }: { task: Task }) {
   );
 }
 
+/**
+ * [UI 对齐 05] (#29) 会话执行状态卡（原型 `executionPanel()`）。
+ *
+ * 结构照原型：`section[aria-label="会话执行状态"]` 的状态行（状态标签 + 该状态
+ * 允许的入口），下面是跨会话提示、阶段说明、等待确认预览（目标/影响/有效期 +
+ * 一次性授权说明）与失败/过期说明行；执行步骤折叠在 `<details>` 里，让卡片不因
+ * 步骤多寡长高（原型把 `.execution-panel` 限制在 `max-height:34vh` 并内部滚动，
+ * 这里沿用同一上限）。
+ *
+ * 状态取自 Host：待确认请求 + 实时运行记录 + 会话 `runState`（`executionView`），
+ * 渲染层不估算进度。空闲不出卡；「标记已处理」只压掉被处理的那个状态。
+ */
 function RunStateCard({ taskId, sessionId }: { taskId: string; sessionId: string }) {
   const key = sessionKeyOf(taskId, sessionId);
-  const run = useEventsStore((state) => state.runs[key]);
+  const session = useHostStore((state) => state.session(taskId, sessionId));
+  const sessions = useHostStore((state) => state.task(taskId)?.sessions);
+  const runs = useEventsStore((state) => state.runs);
+  const approvals = useHostStore((state) => state.approvals);
+  const dismissed = useUiStore((state) => state.dismissedExecutions[key]);
+  const dismissExecution = useUiStore((state) => state.dismissExecution);
   const stopRun = useHostStore((state) => state.stopRun);
+  const resolveApproval = useHostStore((state) => state.resolveApproval);
   const openModal = useUiStore((state) => state.openModal);
   const pushToast = useUiStore((state) => state.pushToast);
-  if (!run || run.state === "idle") return null;
+  if (!session) return null;
+  const record = runs[key];
+  const pending = pendingApprovalsFor(approvals, taskId, sessionId);
+  const approval = pending[0];
+  const state = executionStateOf({
+    sessionRunState: session.runState,
+    ...(record !== undefined ? { record } : {}),
+    ...(approval !== undefined ? { pendingApproval: approval } : {}),
+  });
+  const other = otherBusySession(sessions ?? [], sessionId, (item) =>
+    executionStateOf({
+      sessionRunState: item.runState,
+      ...(runs[sessionKeyOf(taskId, item.id)] !== undefined ? { record: runs[sessionKeyOf(taskId, item.id)] } : {}),
+    }),
+  );
+  if (!executionCardVisible({ state, dismissedState: dismissed, otherBusy: other !== undefined })) return null;
+  const readonly = session.permission === "read";
+  const run = (action: ExecutionAction) => {
+    if (action === "stop") {
+      void stopRun(taskId, sessionId);
+      pushToast("已停止执行；历史、已完成步骤和输入草稿保留");
+      return;
+    }
+    if (action === "approve" && approval) {
+      void resolveApproval(approval.id, "approved");
+      // 一次性授权：批准只覆盖这一条请求，不成为长期许可。
+      pushToast("已批准本次操作；仅授权这一次，执行前仍会校验内容版本与权限");
+      return;
+    }
+    if (action === "reject") {
+      if (approval) void resolveApproval(approval.id, "rejected");
+      pushToast("已拒绝本次操作，未执行；后续周期不受影响");
+      return;
+    }
+    if (action === "retry") {
+      openModal({ type: "retry", taskId, sessionId });
+      return;
+    }
+    dismissExecution(taskId, sessionId, state);
+    pushToast("已移出关注列表，执行记录保留");
+  };
   return (
-    <Panel
-      title="会话执行状态"
-      actions={
-        <div className="flex items-center gap-2">
-          <Badge tone={run.state === "failed" || run.state === "expired" ? "warn" : run.state === "running" ? "accent" : "neutral"}>
-            {runStateLabel(run.state)}
-          </Badge>
-          {run.state === "running" ? (
-            <Button size="sm" onClick={() => void stopRun(taskId, sessionId)}>
-              停止
+    <section
+      data-testid="execution-card"
+      aria-label="会话执行状态"
+      className="max-h-[34vh] flex-shrink-0 overflow-auto rounded-lg border border-[#e0e5ef] bg-[#f6f8fc] px-3 py-2.5 text-xs"
+    >
+      <div className="flex items-center justify-between gap-3">
+        <strong data-testid="execution-card-state" className="text-xs font-semibold text-ink">
+          {executionLabel(state)}
+        </strong>
+        <div className="flex flex-wrap items-center gap-2">
+          {executionActions(state).map((action) => (
+            <Button
+              key={action}
+              size="sm"
+              variant={action === "approve" ? "primary" : "default"}
+              disabled={readonly}
+              title={readonly ? "当前是只读会话，请先调整会话权限" : undefined}
+              onClick={() => run(action)}
+            >
+              {EXECUTION_ACTION_LABEL[action]}
             </Button>
-          ) : null}
-          {run.state === "failed" ? (
-            <Button size="sm" onClick={() => openModal({ type: "retry", taskId, sessionId })}>
-              检查并重试
-            </Button>
-          ) : null}
-          {run.state === "expired" ? (
-            <Button size="sm" onClick={() => pushToast("已移出关注列表，执行记录保留")}>
-              标记已处理
-            </Button>
+          ))}
+        </div>
+      </div>
+
+      {other ? (
+        <p className="mt-1.5 text-[11px] text-muted" data-testid="execution-other-session">
+          「{other.name}」正在执行或等待确认；本会话可编辑草稿，待其结束后再执行。
+        </p>
+      ) : null}
+      {record?.summary ? <p className="mt-1.5 text-[11px] text-muted">{record.summary}</p> : null}
+      {record?.failedScope ? (
+        <p className="mt-1 text-[11px] text-orange">失败范围：{record.failedScope}</p>
+      ) : null}
+
+      {state === "approval" && approval ? (
+        <div className="mt-2 rounded-md bg-paper p-2.5" data-testid="execution-approval-preview">
+          <strong className="block text-[11px] text-ink">待批准：{approval.title}</strong>
+          <p className="mt-1 text-[11px] text-muted">
+            目标：{approval.command}
+            {approval.cwd ? ` · ${approval.cwd}` : ""}
+            {approval.recipient ? ` · 接收人：${approval.recipient}` : ""}
+          </p>
+          <p className="mt-1 text-[11px] text-muted">影响：{approval.impact}</p>
+          <p className="mt-1 text-[11px] text-muted">
+            有效期：{new Date(approval.expiresAt).toLocaleString("zh-CN")}
+            （等待起点后 24 小时与下一次计划时刻取较早者；过期后不发送）
+          </p>
+          <p className="mt-1 text-[11px] text-muted">批准仅授权这一次操作，不自动授权未来执行。</p>
+          {pending.length > 1 ? (
+            <p className="mt-1 text-[11px] text-muted" data-testid="execution-approval-rest">
+              另有 {pending.length - 1} 个待确认请求，可在「需要处理」中查看。
+            </p>
           ) : null}
         </div>
-      }
-    >
-      <p className="text-xs text-muted">{run.summary}</p>
-      {run.failedScope ? <p className="mt-1 text-xs text-orange">失败范围：{run.failedScope}</p> : null}
-      <ol className="mt-2 flex flex-wrap gap-2 text-[11px]">
-        {run.steps.map((step) => (
-          <li key={step.label} className="rounded border border-line px-2 py-1">
-            <span className={step.state === "failed" ? "text-orange" : step.state === "skipped" ? "text-muted/70" : "text-ink"}>
-              {step.label}
-            </span>
-            <span className="ml-1 text-muted">{stepStateLabel(step.state)}</span>
-          </li>
-        ))}
-      </ol>
-      <p className="mt-2 text-[11px] text-muted">停止不回滚已完成操作；恢复不自动重放已完成工具。</p>
-    </Panel>
+      ) : null}
+
+      {state === "failed" ? (
+        <small className="mt-1.5 block text-[11px] text-muted">
+          已完成的步骤保留；外部发送结果不确定时须先核对送达情况。
+        </small>
+      ) : null}
+      {state === "expired" ? (
+        <small className="mt-1.5 block text-[11px] text-muted">
+          旧确认不可继续批准；后续周期可正常触发。需要发送旧结果时重新提出请求。
+        </small>
+      ) : null}
+
+      {record && record.steps.length > 0 ? (
+        <details className="mt-2 text-[11px] text-muted" data-testid="execution-steps">
+          <summary className="cursor-pointer">
+            执行步骤（完成 {record.steps.filter((step) => step.state === "done").length} / 共 {record.steps.length}）
+          </summary>
+          <ol className="mt-1 flex flex-wrap gap-2">
+            {record.steps.map((step) => (
+              <li key={step.label} className="rounded border border-line bg-paper px-2 py-1">
+                <span
+                  className={
+                    step.state === "failed" ? "text-orange" : step.state === "skipped" ? "text-muted/70" : "text-ink"
+                  }
+                >
+                  {step.label}
+                </span>
+                <span className="ml-1 text-muted">{stepStateLabel(step.state)}</span>
+              </li>
+            ))}
+          </ol>
+        </details>
+      ) : null}
+      {state !== "idle" ? (
+        <p className="mt-1.5 text-[11px] text-muted">停止不回滚已完成操作；恢复不自动重放已完成工具。</p>
+      ) : null}
+    </section>
   );
 }
 
