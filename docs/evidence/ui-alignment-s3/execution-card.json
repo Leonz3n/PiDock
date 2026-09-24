@@ -1287,7 +1287,7 @@
           "labelClipped": false
         },
         {
-          "id": "session-tab-session-muf1gdng-1",
+          "id": "session-tab-session-muf213xt-1",
           "text": "跨仓库发布回归验证会",
           "visible": true,
           "active": true,
@@ -1348,7 +1348,7 @@
           "labelClipped": false
         },
         {
-          "id": "session-tab-session-muf1gfj6-1",
+          "id": "session-tab-session-muf215qu-1",
           "text": "跨仓库发布回归验证会",
           "visible": true,
           "active": true,
@@ -1409,7 +1409,7 @@
           "labelClipped": false
         },
         {
-          "id": "session-tab-session-muf1ghdt-1",
+          "id": "session-tab-session-muf217km-1",
           "text": "跨仓库发布回归验证会",
           "visible": true,
           "active": true,
@@ -1470,7 +1470,7 @@
           "labelClipped": false
         },
         {
-          "id": "session-tab-session-muf1gj8m-1",
+          "id": "session-tab-session-muf219e1-1",
           "text": "跨仓库发布回归验证会",
           "visible": true,
           "active": true,
@@ -1531,7 +1531,7 @@
           "labelClipped": false
         },
         {
-          "id": "session-tab-session-muf1gl3r-1",
+          "id": "session-tab-session-muf21b82-1",
           "text": "跨仓库发布回归验证会",
           "visible": true,
           "active": true,
@@ -1592,7 +1592,7 @@
           "labelClipped": false
         },
         {
-          "id": "session-tab-session-muf1gmyz-1",
+          "id": "session-tab-session-muf21d1f-1",
           "text": "跨仓库发布回归验证会",
           "visible": true,
           "active": true,
@@ -1638,6 +1638,8 @@
       "state": "空闲",
       "actions": [],
       "approvalPreview": null,
+      "readonlyHint": null,
+      "approvalOutcome": null,
       "otherSession": 15,
       "steps": null,
       "cardText": "空闲 「部署审查」正在执行或等待确认；本会话可编辑草稿，待其结束后再执行。",
@@ -1696,6 +1698,8 @@
         }
       ],
       "approvalPreview": 93,
+      "readonlyHint": null,
+      "approvalOutcome": null,
       "otherSession": null,
       "steps": null,
       "cardText": "等待确认 批准本次操作 拒绝 标记过期 待批准：部署到 Staging 目标：bun run deploy:staging · /workspace/atlas-web 影响：更新 staging.atlas.example.com，预计 2 分钟。批准仅授权这一次操作，不自动授权未来执行。 有效期：2026/9/25",
@@ -1742,9 +1746,11 @@
         }
       ],
       "approvalPreview": null,
+      "readonlyHint": null,
+      "approvalOutcome": 15,
       "otherSession": null,
       "steps": null,
-      "cardText": "执行中 停止执行 部署到 Staging · 已拒绝，未执行。",
+      "cardText": "执行中 停止执行 执行数据库迁移 · 正在执行 bun run db:migrate",
       "approvalSurfaces": 0,
       "composerH": 145,
       "extraChrome": [
@@ -1766,10 +1772,10 @@
         "h": 900
       },
       "noHorizontalOverflow": true,
-      "messagesH": 414,
-      "messagesShare": 0.46,
+      "messagesH": 433,
+      "messagesShare": 0.481,
       "cardPresent": true,
-      "cardH": 71,
+      "cardH": 53,
       "cardScrolls": false,
       "cardParts": {
         "stateRow": 16,
@@ -1777,10 +1783,6 @@
           {
             "tag": "div",
             "h": 16
-          },
-          {
-            "tag": "small",
-            "h": 15
           },
           {
             "tag": "p",
@@ -1791,9 +1793,11 @@
       "state": "已停止",
       "actions": [],
       "approvalPreview": null,
+      "readonlyHint": null,
+      "approvalOutcome": null,
       "otherSession": null,
       "steps": null,
-      "cardText": "已停止 部署到 Staging · 已拒绝，未执行。 已中止",
+      "cardText": "已停止 已中止",
       "approvalSurfaces": 0,
       "composerH": 145,
       "extraChrome": [
@@ -1832,9 +1836,11 @@
       "state": "已拒绝",
       "actions": [],
       "approvalPreview": null,
+      "readonlyHint": null,
+      "approvalOutcome": 15,
       "otherSession": null,
       "steps": null,
-      "cardText": "已拒绝 部署到 Staging · 已拒绝，未执行。",
+      "cardText": "已拒绝 执行数据库迁移 · 已拒绝，未执行。",
       "approvalSurfaces": 0,
       "composerH": 145,
       "extraChrome": [
@@ -1882,9 +1888,11 @@
         }
       ],
       "approvalPreview": null,
+      "readonlyHint": null,
+      "approvalOutcome": 15,
       "otherSession": null,
       "steps": null,
-      "cardText": "确认已过期 标记已处理 部署到 Staging · 确认已过期，未执行。 旧确认不可继续批准；后续周期可正常触发。需要发送旧结果时重新提出请求。",
+      "cardText": "确认已过期 标记已处理 执行数据库迁移 · 确认已过期，未执行。 旧确认不可继续批准；后续周期可正常触发。需要发送旧结果时重新提出请求。",
       "approvalSurfaces": 0,
       "composerH": 145,
       "extraChrome": [
@@ -1944,6 +1952,8 @@
         }
       ],
       "approvalPreview": null,
+      "readonlyHint": null,
+      "approvalOutcome": null,
       "otherSession": 15,
       "steps": 15,
       "cardText": "失败 检查并重试 「部署审查」正在执行或等待确认；本会话可编辑草稿，待其结束后再执行。 构建失败，已保留现场 失败范围：构建步骤：front-monorepo web 包编译失败 已完成的步骤保留；外部发送结果不确定时须先核对送达情况。 执行步骤（完成 2 / 共 4）",
@@ -1957,6 +1967,70 @@
       ],
       "draftReferencesH": 23,
       "notes": "失败排查会话的真实失败回合：失败范围 + 折叠的步骤"
+    },
+    "failed-readonly": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "noHorizontalOverflow": true,
+      "messagesH": 314,
+      "messagesShare": 0.349,
+      "cardPresent": true,
+      "cardH": 141,
+      "cardScrolls": false,
+      "cardParts": {
+        "stateRow": 26,
+        "topLevelChildren": [
+          {
+            "tag": "div",
+            "h": 26
+          },
+          {
+            "tag": "p",
+            "h": 15
+          },
+          {
+            "tag": "p",
+            "h": 15
+          },
+          {
+            "tag": "p",
+            "h": 15
+          },
+          {
+            "tag": "small",
+            "h": 15
+          },
+          {
+            "tag": "details",
+            "h": 15
+          }
+        ]
+      },
+      "state": "失败",
+      "actions": [
+        {
+          "label": "检查并重试",
+          "disabled": true
+        }
+      ],
+      "approvalPreview": null,
+      "readonlyHint": 15,
+      "approvalOutcome": null,
+      "otherSession": 15,
+      "steps": 15,
+      "cardText": "失败 检查并重试 当前是只读会话，请先调整会话权限；只读会话可以阅读和分析，不能执行这些操作。 「部署审查」正在执行或等待确认；本会话可编辑草稿，待其结束后再执行。 构建失败，已保留现场 失败范围：构建步骤：front-monorepo web 包编译失败 已完成的步骤保留；外部发送结果不确定时须先核对送达情况。 执行",
+      "approvalSurfaces": 0,
+      "composerH": 175,
+      "extraChrome": [
+        {
+          "label": "div全部会话 56实现与验证部署审查失败排查只读历史",
+          "h": 32
+        }
+      ],
+      "draftReferencesH": 23,
+      "notes": "只读会话 + 真实失败记录：入口禁用，可见说明行在状态行内，不改卡片高度"
     },
     "completed": {
       "viewport": {
@@ -1993,6 +2067,8 @@
       "state": "已完成",
       "actions": [],
       "approvalPreview": null,
+      "readonlyHint": null,
+      "approvalOutcome": null,
       "otherSession": 15,
       "steps": 15,
       "cardText": "已完成 「部署审查」正在执行或等待确认；本会话可编辑草稿，待其结束后再执行。 正在执行 执行步骤（完成 1 / 共 2）",
@@ -2045,7 +2121,7 @@
     ]
   },
   "assertions": {
-    "checked": 35,
+    "checked": 36,
     "violations": 0
   }
 }

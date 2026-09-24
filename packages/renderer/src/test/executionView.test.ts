@@ -7,6 +7,7 @@ import {
   executionLabel,
   executionStateOf,
   otherBusySession,
+  outcomeApprovalFor,
   pendingApprovalsFor,
 } from "../pages/executionView";
 
@@ -117,6 +118,45 @@ describe("pending approvals", () => {
       "approval-1",
       "approval-2",
     ]);
+  });
+});
+
+describe("approval outcome line", () => {
+  it("reports the resolution the card's state is derived from", () => {
+    const rejections = [
+      approval({ id: "approval-deploy", status: "rejected", requestedAt: "2026-09-22T09:30:00+08:00" }),
+      approval({ id: "approval-migrate", status: "rejected", requestedAt: "2026-09-22T09:31:00+08:00" }),
+    ];
+    // The latest request wins: taking the first non-pending record instead put
+    // one request's outcome next to another request's state (P2-A).
+    expect(outcomeApprovalFor(rejections, "release", "deploy", "rejected")?.id).toBe("approval-migrate");
+    // 执行中 is the state of the approved turn, so the approved record explains it.
+    expect(
+      outcomeApprovalFor(
+        [
+          approval({ id: "approval-deploy", status: "rejected" }),
+          approval({ id: "approval-migrate", status: "approved", executed: true }),
+        ],
+        "release",
+        "deploy",
+        "running",
+      )?.id,
+    ).toBe("approval-migrate");
+  });
+
+  it("has nothing to report in the states no resolution explains", () => {
+    const approvals = [approval({ id: "a", status: "rejected" }), approval({ id: "b", status: "approved", executed: true })];
+    for (const state of ["idle", "approval", "failed", "completed", "stopped"] as const) {
+      expect(outcomeApprovalFor(approvals, "release", "deploy", state)).toBeUndefined();
+    }
+  });
+
+  it("never borrows another task's or session's resolution", () => {
+    const approvals = [
+      approval({ id: "other-session", status: "rejected", sessionId: "main" }),
+      approval({ id: "other-task", status: "rejected", taskId: "checkout" }),
+    ];
+    expect(outcomeApprovalFor(approvals, "release", "deploy", "rejected")).toBeUndefined();
   });
 });
 

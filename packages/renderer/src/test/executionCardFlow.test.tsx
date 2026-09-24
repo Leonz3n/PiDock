@@ -143,6 +143,21 @@ describe("execution card", () => {
     ).toEqual(["approval-migrate"]);
   });
 
+  it("keeps the outcome line on the request the state came from", async () => {
+    // 拒绝第一条请求、批准第二条后的「执行中」：结果行必须说那条正在执行的请求。
+    // 原来取「第一条非待确认」，于是「执行中」旁边写着另一条早已被拒绝的请求（P2-A）。
+    const user = await openTask("deploy");
+    const card = await screen.findByRole("region", { name: "会话执行状态" });
+    await user.click(within(card).getByRole("button", { name: "拒绝" }));
+    await waitFor(() => expect(approvalState("approval-deploy")).toEqual({ status: "rejected", executed: false }));
+    await user.click(await within(screen.getByRole("region", { name: "会话执行状态" })).findByRole("button", { name: "批准本次操作" }));
+    await waitFor(() => expect(sessionState("deploy")).toBe("running"));
+
+    const outcome = await screen.findByTestId("execution-approval-outcome");
+    expect(outcome).toHaveTextContent("执行数据库迁移 · 正在执行 bun run db:migrate");
+    expect(outcome).not.toHaveTextContent("部署到 Staging");
+  });
+
   it("stops a running session through the existing Host entry", async () => {
     const user = await openTask("deploy");
     // Clear the second pending request first so the card can follow the approved
@@ -156,6 +171,8 @@ describe("execution card", () => {
     expect(await screen.findByText("已停止执行；历史、已完成步骤和输入草稿保留")).toBeInTheDocument();
     await waitFor(() => expect(screen.getByTestId("execution-card-state")).toHaveTextContent("已停止"));
     expect(screen.queryByRole("button", { name: "停止执行" })).toBeNull();
+    // 已停止不由任何一条确认结果解释，所以结果行也不借用上一条请求的结论。
+    expect(screen.queryByTestId("execution-approval-outcome")).toBeNull();
   });
 
   it("routes the failed entry into the existing retry dialog", async () => {
@@ -191,6 +208,10 @@ describe("execution card", () => {
     await waitFor(() => expect(sessionState("deploy")).toBe("expired"));
     const card = await screen.findByRole("region", { name: "会话执行状态" });
     expect(within(card).getByTestId("execution-card-state")).toHaveTextContent("确认已过期");
+    // 该状态由这条过期记录解释，所以结果行说它——而不是会话里另一条请求（P2-A）。
+    expect(within(card).getByTestId("execution-approval-outcome")).toHaveTextContent(
+      "部署到 Staging · 确认已过期，未执行。",
+    );
 
     await user.click(within(card).getByRole("button", { name: "标记已处理" }));
     // 只是本会话隐藏卡片：Host 侧没有 ack 入口，`需要处理` 仍会重新列出过期记录。

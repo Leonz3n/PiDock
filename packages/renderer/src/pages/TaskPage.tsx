@@ -54,6 +54,7 @@ import {
   executionLabel,
   executionStateOf,
   otherBusySession,
+  outcomeApprovalFor,
   pendingApprovalsFor,
   type ExecutionAction,
 } from "./executionView";
@@ -726,7 +727,9 @@ function SessionTabs({
   useEffect(() => {
     const strip = stripRef.current;
     // The strip narrows when a rail opens, so a one-off reveal on session change
-    // is not enough; jsdom has no layout and no ResizeObserver, hence the guard.
+    // is not enough. The guard covers environments without a `ResizeObserver` at
+    // all; `src/test/setup.ts` installs a controllable stub, so the tests take
+    // the observed path too.
     if (!strip || typeof ResizeObserver !== "function") return;
     const observer = new ResizeObserver(() => revealActive());
     observer.observe(strip);
@@ -758,9 +761,9 @@ function SessionTabs({
     // Prototype `.sessions`: one row whose tabs `flex-shrink:1`. The row must
     // not grow into a second line when the tool panel narrows the column
     // ([UI 对齐 03] #27), and it must not clip tab labels either ([UI 对齐 05]
-    // #29): tabs shrink first, and the non-active ones drop out by tier so the
-    // strip needs less width than it has at every breakpoint (class contract in
-    // `packages/renderer/src/test/sessionNavTier.test.tsx`).
+    // #29): the non-active tabs drop out by tier and the active one never does,
+    // so the strip needs less width than it has at every breakpoint (class
+    // contract in `packages/renderer/src/test/sessionNavTier.test.tsx`).
     <div className="flex flex-nowrap items-center gap-2">
       <Button size="sm" className="shrink-0" onClick={() => openModal({ type: "sessions", taskId: task.id, filter: "active" })}>
         全部会话 {task.sessions.length}
@@ -768,11 +771,13 @@ function SessionTabs({
       <div
         data-testid="session-tab-strip"
         ref={stripRef}
-        // The prototype keeps the visible list bounded to four tabs and lets the
-        // row scroll instead of shrinking a label (`.sessions{overflow-x:auto}`
-        // + `.session-tab{white-space:nowrap}` in the later `style.css`
-        // revision): a long name must never be ellipsized or clipped off the
-        // strip, [UI 对齐 05] (#29) review P2-2.
+        // The prototype scrolls the *row* (`.sessions{overflow-x:auto}`) while
+        // its tab list stays `overflow:hidden` with `.session-tab{max-width:180px;
+        // text-overflow:ellipsis}` (navigation.css) — a clipped row that cannot
+        // be scrolled. This strip deliberately deviates: `overflow-x:auto` plus a
+        // 10-character label cap (`sessionTabLabel` ⇒ ≈142px < 180px) means no
+        // label is ever ellipsized and no tab is unreachable ([UI 对齐 05] (#29)
+        // review P2-2/P2-B).
         className="flex min-w-0 flex-1 flex-nowrap items-center gap-1.5 overflow-x-auto"
       >
         {visibleSessions.map((session, ordinal) => {
@@ -986,12 +991,12 @@ function RunStateCard({ taskId, sessionId }: { taskId: string; sessionId: string
     ...(record !== undefined ? { record } : {}),
     ...(approval !== undefined ? { pendingApproval: approval } : {}),
   });
-  // The last resolved request of this session keeps its outcome visible: the
-  // retired payload panel used to state it, and “未执行” is what users rely on
-  // after a refusal or an expiry.
-  const resolvedApproval = approvals.find(
-    (item) => item.taskId === taskId && item.sessionId === sessionId && item.status !== "pending",
-  );
+  // Only the resolution this state is derived from keeps its outcome on screen
+  // (the retired payload panel used to state it, and “未执行” is what users rely
+  // on after a refusal or an expiry): naming the session's first non-pending
+  // record put another request's outcome next to this state ([UI 对齐 05] #29
+  // review P2-A).
+  const outcome = outcomeApprovalFor(approvals, taskId, sessionId, state);
   const other = otherBusySession(sessions ?? [], sessionId, (item) =>
     executionStateOf({
       sessionRunState: item.runState,
@@ -1067,27 +1072,30 @@ function RunStateCard({ taskId, sessionId }: { taskId: string; sessionId: string
               标记过期
             </Button>
           ) : null}
+          {/* A disabled button never shows its `title`, so the read-only rule is
+              stated in this row instead of on a line of its own: a second block
+              costs the message area ~21px and would push the card past its
+              145px guardrail in the read-only + record combination ([UI 对齐 05]
+              #29 review P2-D). Flex-wrap still gives it a line of its own when
+              the controls already fill the row. */}
+          {readonly && executionActions(state).length > 0 ? (
+            <span className="text-[11px] text-orange" data-testid="execution-readonly-hint">
+              {READONLY_ACTION_TITLE}；只读会话可以阅读和分析，不能执行这些操作。
+            </span>
+          ) : null}
         </div>
       </div>
 
-      {/* A disabled button never shows its `title`, so the read-only rule needs
-          a visible line ([UI 对齐 05] #29 review). */}
-      {readonly && executionActions(state).length > 0 ? (
-        <p className="mt-1.5 text-[11px] text-orange" data-testid="execution-readonly-hint">
-          {READONLY_ACTION_TITLE}；只读会话可以阅读和分析，不能执行这些操作。
-        </p>
-      ) : null}
-
-      {resolvedApproval ? (
+      {outcome ? (
         <small className="mt-1 block text-[11px] text-muted" data-testid="execution-approval-outcome">
-          {resolvedApproval.title} ·{" "}
-          <span className={resolvedApproval.status === "expired" ? "text-orange" : undefined}>
-            {resolvedApproval.status === "expired"
+          {outcome.title} ·{" "}
+          <span className={outcome.status === "expired" ? "text-orange" : undefined}>
+            {outcome.status === "expired"
               ? "确认已过期，未执行。"
-              : resolvedApproval.status === "rejected"
+              : outcome.status === "rejected"
                 ? "已拒绝，未执行。"
-                : resolvedApproval.executed
-                  ? `正在执行 ${resolvedApproval.command}`
+                : outcome.executed
+                  ? `正在执行 ${outcome.command}`
                   : "已批准，等待执行。"}
           </span>
         </small>

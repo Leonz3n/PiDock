@@ -3,8 +3,10 @@
 // jsdom has no layout, so the two geometry claims of the slice are measured in
 // headless Chromium: the tab strip never clips at any tier (with and without the
 // tool rail), and the execution card's height is charged against the message
-// area the [UI 对齐 03] (#27) baseline measured at 408px. Run with the renderer
-// dev server on 4335 and the prototype on 4319:
+// area the [UI 对齐 03] (#27) baseline measured at 408px. The floor is tiered
+// ([UI 对齐 05] (#29) parent ruling): 340px in the states whose column only holds
+// the card, 300px in the states that also carry chrome from outside this slice.
+// Run with the renderer dev server on 4335 and the prototype on 4319:
 //
 //   node docs/evidence/ui-alignment-s3/capture-execution.mjs
 //
@@ -47,8 +49,11 @@ const measureTabs = (page) =>
     const overflowX = strip ? getComputedStyle(strip).overflowX : null;
     const stripBox = strip?.getBoundingClientRect();
     return {
-      // A crowded row scrolls (prototype `.sessions{overflow-x:auto}`) instead of
-      // cutting a label, so overflow is only a defect when it is unreachable.
+      // This strip scrolls the tab list itself (`overflow-x:auto`), so a crowded
+      // row stays reachable instead of cutting a label: overflow is only a defect
+      // when it cannot be scrolled. (The prototype scrolls the *row*
+      // `.sessions{overflow-x:auto}` while its own `.session-tabs` is
+      // `overflow:hidden` — see the P2-B note above the long-name sweep.)
       overflowX,
       scrollable: overflowX === "auto" || overflowX === "scroll",
       viewport: { w: innerWidth, h: innerHeight },
@@ -109,6 +114,11 @@ const measureCard = (page) =>
         disabled: button.disabled,
       })),
       approvalPreview: part('[data-testid="execution-approval-preview"]'),
+      // The read-only rule is a visible element (a disabled button never shows its
+      // `title`); it sits in the state row so it cannot push the card past the
+      // guardrail ([UI 对齐 05] #29 review P2-D).
+      readonlyHint: part('[data-testid="execution-readonly-hint"]'),
+      approvalOutcome: part('[data-testid="execution-approval-outcome"]'),
       otherSession: part('[data-testid="execution-other-session"]'),
       steps: part('[data-testid="execution-steps"]'),
       cardText: (card?.innerText ?? "").replace(/\s+/g, " ").slice(0, 160),
@@ -169,11 +179,15 @@ for (const viewport of VIEWPORTS) {
 
 // -------------------------------------------- tab strip: long name + tool rail
 //
-// [UI 对齐 05] (#29) review P2-2: at 1181-1277px with the tool rail open the strip
-// has ~360-410px, and a 10-character session name is the longest a tab label gets
-// (`sessionTabLabel`). The prototype's later `style.css` revision answers this by
-// scrolling the row (`.sessions{overflow-x:auto}`) instead of ellipsizing, so this
-// sweep is the check that no label is cut and the active tab stays reachable.
+// [UI 对齐 05] (#29) review P2-2/P2-B: at 1181-1277px with the tool rail open the
+// strip has ~360-410px, and a 10-character session name is the longest a tab label
+// gets (`sessionTabLabel`). Prototype A's `navigation.css` keeps
+// `.session-tabs{overflow:hidden}` with `.session-tab{min-width:0;max-width:180px;
+// overflow:hidden;text-overflow:ellipsis}` and only the surrounding `.sessions` row
+// scrolls, so a crowded prototype row ellipsizes its tabs. This implementation
+// deliberately deviates: the tab list itself scrolls and the 10-character cap
+// (≈142px < the prototype's 180px) means no label is cut. This sweep is the check
+// that no label is cut and the active tab stays reachable at every tier.
 for (const width of LONG_NAME_VIEWPORTS) {
   const context = await browser.newContext({ viewport: { width, height: 900 } });
   const page = await context.newPage();
@@ -203,7 +217,9 @@ for (const width of LONG_NAME_VIEWPORTS) {
 //
 // Every state is driven through the real UI (the seeded release task has two
 // pending confirmations on 部署审查 and a scripted failing session), so the
-// screenshots show the same card a user would see.
+// screenshots show the same card a user would see. The read-only variant is reached
+// by driving a real failure first and then switching that session to 只读 through
+// its own permission dialog (P2-D).
 async function withPage(fn) {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
   const page = await context.newPage();
@@ -307,6 +323,22 @@ await capture("failed", async (page) => {
   return "失败排查会话的真实失败回合：失败范围 + 折叠的步骤";
 });
 
+await capture("failed-readonly", async (page) => {
+  // [UI 对齐 05] (#29) review P2-D: the read-only rule is a visible element, and
+  // no other state measured it while a record is on screen. The seed data cannot
+  // reach it (the read-only session has no run), so the failing session is driven
+  // into a failure first and then switched to 只读 through its own permission
+  // dialog — the same route a user takes.
+  await page.goto(task("release", "failed"), { waitUntil: "networkidle" });
+  await page.waitForTimeout(400);
+  await sendToComposer(page, "修复构建并重试");
+  await page.getByRole("button", { name: "检查并重试" }).first().waitFor({ timeout: 15000 });
+  await page.getByRole("button", { name: "选择权限：默认权限" }).click();
+  await page.getByTestId("permission-read").click();
+  await page.waitForTimeout(300);
+  return "只读会话 + 真实失败记录：入口禁用，可见说明行在状态行内，不改卡片高度";
+});
+
 await capture("completed", async (page) => {
   await page.goto(task("release", "main"), { waitUntil: "networkidle" });
   await page.waitForTimeout(400);
@@ -400,17 +432,25 @@ function assertGeometry(measured) {
     // the states whose column only holds the card, 300px for the states that also
     // carry chrome outside this slice.
     const floor = ["approval", "expired"].includes(name) ? 340 : 300;
-    if (state.cardPresent && ["approval", "running", "expired", "failed", "completed"].includes(name) && state.messagesH < floor) {
+    if (state.cardPresent && ["approval", "running", "expired", "failed", "completed", "failed-readonly"].includes(name) && state.messagesH < floor) {
       violations.push(`${name}: message area ${state.messagesH}px < the ${floor}px floor for this state's chrome`);
     }
     if (state.cardPresent && state.cardH > CARD_GUARDRAIL) {
       violations.push(`${name}: card ${state.cardH}px > the ${CARD_GUARDRAIL}px guardrail`);
     }
+    // The read-only rule has to stay visible *and* inside the guardrail: the hint
+    // shares the state row instead of taking a block of its own (P2-D).
+    if (name === "failed-readonly" && !(state.readonlyHint > 0)) {
+      violations.push(`${name}: the read-only hint is not visible`);
+    }
+    if (name === "failed-readonly" && state.readonlyHint > 0 && state.readonlyHint > 40) {
+      violations.push(`${name}: the read-only hint adds ${state.readonlyHint}px of its own`);
+    }
     if (state.cardPresent && state.cardH > (measured.prototypeExecutionPanel?.waiting?.panelH ?? Infinity)) {
       violations.push(`${name}: card ${state.cardH}px is taller than the prototype's waiting panel`);
     }
   }
-  for (const name of ["approval", "running", "expired", "failed", "completed"]) {
+  for (const name of ["approval", "running", "expired", "failed", "completed", "failed-readonly"]) {
     if (!measured.card[name]) violations.push(`${name}: missing from the capture`);
   }
   if (violations.length > 0) throw new Error(`geometry assertions failed:\n- ${violations.join("\n- ")}`);
