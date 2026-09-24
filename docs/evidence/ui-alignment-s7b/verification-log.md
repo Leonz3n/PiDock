@@ -125,6 +125,8 @@ pnpm --filter @pidock/renderer test                        # 58 files / 494 test
 | 删掉 `.remote-flow` | `gateway mode draws the request path instead of a command` |
 | 用量 intro 多一句 | `intro deviation @usage is the declared rewrite` |
 
+失败的运行**不会覆写** `pages.json`（写入 `pages.failed.json`），避免把带违规的报告当成证据提交——修复轮中确实发生过一次。
+
 另有 6 条断言在改动当场就抓到真实缺陷（而非事后构造）：P1-1 表头竖排 66px、表头与行轨宽 15px 不一致、`.dot` 无尺寸、`.remote-guard` 白底、`.remote-layout .card` 10px、`重新检测` 多带图标。
 
 以上脚本重跑会重写各自目录里的 JSON/PNG（会话 id 随机、PNG 字节差），本轮按仓库既有做法在提交前

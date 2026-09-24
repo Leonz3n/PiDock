@@ -1121,12 +1121,18 @@ check(
   report.renderer["720x800"].remote.measured.remoteLayout?.gridTemplateColumns,
 );
 
-await writeFile(`${OUT}/pages.json`, `${JSON.stringify(report, null, 2)}\n`);
+// A failing run must not overwrite the committed report: the file is what a
+// reviewer reads, and a report carrying its own violations has been committed by
+// accident before ([UI 对齐 09] #33 fix round — a negative verification left
+// `intro deviation @usage …` inside `pages.json`). The violations go to stdout
+// and the exit code; `.failed.json` keeps the failing reading out of the way.
+const failed = report.assertions.violations.length > 0;
+await writeFile(`${OUT}/${failed ? "pages.failed.json" : "pages.json"}`, `${JSON.stringify(report, null, 2)}\n`);
 
 console.log(
-  `[UI 对齐 09] #33 evidence: ${report.assertions.violations.length === 0 ? "ok" : "FAILED"} ` +
+  `[UI 对齐 09] #33 evidence: ${failed ? "FAILED" : "ok"} ` +
     `(${report.assertions.checked} assertions, ${VIEWPORTS.length} viewport tiers, 6 pages)`,
 );
 for (const violation of report.assertions.violations) console.log(`  - ${violation}`);
 await chrome.close();
-process.exit(report.assertions.violations.length === 0 ? 0 : 1);
+process.exit(failed ? 1 : 0);
