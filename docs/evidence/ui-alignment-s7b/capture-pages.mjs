@@ -296,10 +296,10 @@ const rendererPage = async (route, viewport, testId) => {
   // comparisons use the 近 7 天 reading, where the bar count is the same.
   bucket("1440x900").usageAll = await page.evaluate(COLLECT, SELECTORS);
   bucket("1440x900").usageAll.rows = await page.$eval('[data-testid="usage-table"]', (list) => Number(list.getAttribute("data-total-rows")));
-  await page.selectOption('[data-testid="usage-page"] select[aria-label="统计日期"]', "近 7 天");
+  await page.selectOption('[data-testid="usage-range"]', "近 7 天");
   await page.waitForTimeout(200);
   bucket("1440x900").usage = await page.evaluate(COLLECT, SELECTORS);
-  bucket("1440x900").usage.rangeOptions = await page.$$eval('[data-testid="usage-page"] select[aria-label="统计日期"] option', (options) =>
+  bucket("1440x900").usage.rangeOptions = await page.$$eval('[data-testid="usage-range"] option', (options) =>
     options.map((option) => option.textContent.trim()),
   );
   bucket("1440x900").usage.barHeights = await page.$$eval('[data-testid="usage-page"] .bar-column .bar', (bars) =>
@@ -309,7 +309,7 @@ const rendererPage = async (route, viewport, testId) => {
   await page.screenshot({ path: `${OUT}/renderer/1440x900-usage.png`, fullPage: true });
   // Anti-no-op: 今天 (the fixture has no call on the wall-clock day) must reach
   // the empty state and drop the 每日消耗/构成 block instead of redrawing it.
-  await page.selectOption('[data-testid="usage-page"] select[aria-label="统计日期"]', "今天");
+  await page.selectOption('[data-testid="usage-range"]', "今天");
   await page.waitForTimeout(200);
   const empty = await page.$eval('[data-testid="usage-page"]', (root) => ({
     barChart: root.querySelectorAll(".bar-chart").length,
@@ -318,7 +318,7 @@ const rendererPage = async (route, viewport, testId) => {
     rows: Number(root.querySelector('[data-testid="usage-table"]')?.getAttribute("data-total-rows") ?? "-1"),
   }));
   bucket("1440x900").usage.todaySwitch = empty;
-  await page.selectOption('[data-testid="usage-page"] select[aria-label="统计日期"]', "近 7 天");
+  await page.selectOption('[data-testid="usage-range"]', "近 7 天");
   await page.waitForTimeout(200);
   const weekly = await page.$eval('[data-testid="usage-page"]', (root) => ({
     bars: root.querySelectorAll(".bar-column").length,

@@ -196,6 +196,7 @@ export function UsagePage() {
         </div>
         <div className="usage-controls flex flex-wrap items-center gap-2">
           <select
+            data-testid="usage-range"
             aria-label="统计日期"
             className="rounded-md border border-line bg-paper px-2 py-[5px] text-[11px] text-ink"
             value={range}
