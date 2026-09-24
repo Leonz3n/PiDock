@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Badge, Button, EmptyState, Field, Modal, Segmented } from "./ui";
 import { VirtualList } from "./VirtualList";
-import { CheckRow, InlineNotice, ManagementList, ManagementRow, Note, PageEmpty, PreviewNote } from "./Management";
+import { CheckRow, InlineNotice, ManagementList, ManagementRow, ManagementRowText, Note, PageEmpty, PreviewNote } from "./Management";
 import { ConfigTable } from "./ConfigTable";
 import { runStateLabel } from "../pages/runState";
 import { diffConfigRows, isSensitiveKey, nextTemplateVersion } from "../data/configRows";
@@ -2470,10 +2470,9 @@ function ProjectListModal({ onClose }: { onClose: () => void }) {
           const current = project.id === currentProjectId;
           return (
             <ManagementRow key={project.id}>
-              <div>
-                <strong className="block text-ink">{project.name}</strong>
-                <small className="text-muted">{project.description || "未填写说明"} · {count} 个任务</small>
-              </div>
+              <ManagementRowText title={project.name}>
+                {project.description || "未填写说明"} · {count} 个任务
+              </ManagementRowText>
               <div className="flex gap-1.5">
                 <Button
                   size="sm"

@@ -16,7 +16,8 @@ import { Icon, type IconName } from "./Icon";
  *   `.check-row`      → `CheckRow`
  *   `.tabs`           → `TabRow`
  *   `.table-wrap`/`.table` th/td → `TableWrap` / `Table` / `Th` / `Td`
- *   `.management-list`/`.management-row` → `ManagementList` / `ManagementRow`
+ *   `.management-list`/`.management-row` + its `strong`/`small` → `ManagementList`
+ *                       / `ManagementRow` / `ManagementRowText`
  *   `.preview-note`   → `PreviewNote`
  *   `.formfield`      → the existing `Field` in `components/ui.tsx` (one field
  *                       component, not two spellings)
@@ -132,14 +133,16 @@ export function CheckRow({
   title,
   detail,
   trailing,
+  testId,
 }: {
   icon?: IconName;
   title: ReactNode;
   detail?: ReactNode;
   trailing?: ReactNode;
+  testId?: string;
 }) {
   return (
-    <div className="flex items-center gap-2.5 border-b border-line py-[11px] text-xs">
+    <div data-testid={testId} className="flex items-center gap-2.5 border-b border-line py-[11px] text-xs">
       {icon ? <Icon name={icon} className="text-muted" /> : null}
       <span className="min-w-0 flex-1 truncate text-ink">{title}</span>
       {detail ? <small className="min-w-0 shrink truncate text-[11px] text-muted">{detail}</small> : null}
@@ -199,10 +202,28 @@ export function Td({ children, className = "" }: { children?: ReactNode; classNa
   return <td className={`border-b border-[#f0f0f1] px-[13px] py-[13px] align-middle ${className}`}>{children}</td>;
 }
 
-export function ManagementList({ children }: { children: ReactNode }) {
-  return <div className="grid gap-2.5">{children}</div>;
+export function ManagementList({ children, className = "" }: { children: ReactNode; className?: string }) {
+  return <div className={`grid gap-2.5 ${className}`}>{children}</div>;
 }
 
-export function ManagementRow({ children }: { children: ReactNode }) {
-  return <div className="flex items-center justify-between gap-3.5 border-b border-line py-[13px]">{children}</div>;
+export function ManagementRow({ children, testId }: { children: ReactNode; testId?: string }) {
+  return (
+    <div data-testid={testId} className="flex items-center justify-between gap-3.5 border-b border-line py-[13px]">
+      {children}
+    </div>
+  );
+}
+
+/**
+ * The left half of a `.management-row`: the prototype's
+ * `.management-row>div:first-child{min-width:0;overflow-wrap:anywhere}` and
+ * `.management-row small{display:block;margin-top:3px}`.
+ */
+export function ManagementRowText({ title, children }: { title: string; children?: ReactNode }) {
+  return (
+    <div className="min-w-0 [overflow-wrap:anywhere]">
+      <strong className="text-ink">{title}</strong>
+      {children ? <small className="mt-[3px] block text-[11px] text-muted">{children}</small> : null}
+    </div>
+  );
 }
