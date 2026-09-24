@@ -38,7 +38,8 @@ export function ConfigTable({
       <tbody>
         {rows.map((row) => (
           <tr key={row.key}>
-            <Td className="font-mono text-[10px]">{row.key}</Td>
+            {/* Prototype `.table{font-size:11px}`: the KEY column is 11px. */}
+            <Td className="font-mono">{row.key}</Td>
             <Td>{row.secret ? "••••••••" : row.value}</Td>
             <Td className="text-muted">{row.source}</Td>
           </tr>

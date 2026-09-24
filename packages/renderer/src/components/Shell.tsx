@@ -39,6 +39,7 @@ export function Shell() {
             `.taskheader`/`.conversation` sit directly under `.topbar`, so the
             60px of vertical page padding must not eat the conversation. */}
         <div
+          data-testid="page"
           className={
             route.view === "task"
               ? "flex min-h-0 flex-1 flex-col overflow-auto bg-paper px-[34px] below-mid:px-[25px] below-stack:px-5"

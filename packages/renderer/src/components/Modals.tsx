@@ -626,6 +626,7 @@ function ProjectDirectoriesModal({ projectId, onClose }: { projectId: string; on
   return (
     <Modal
       title="管理普通目录"
+      testId="project-directories-dialog"
       onClose={onClose}
       footer={
         <Button

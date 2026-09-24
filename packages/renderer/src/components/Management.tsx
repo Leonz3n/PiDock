@@ -24,6 +24,11 @@ import { Icon, type IconName } from "./Icon";
  *   `.toolbar-space`/`.rowgap`/`.note` → `mt-4` / `mb-[15px]` / the `Note`
  *                       helper below; plain Tailwind, no component needed.
  *
+ * Every primitive also carries the prototype's class as an unstyled marker
+ * (`card`, `stat`, `grid3`, `management-row`, …), so the evidence script can
+ * read the *same* selector on both sides and compare like with like, and so the
+ * mapping above is verifiable instead of asserted in a comment.
+ *
  * Page padding is not here: the prototype's `.page{padding:30px 34px}` (25px
  * below 960px, 20px below 720px) already lives on the page container in
  * `components/Shell.tsx`.
@@ -33,7 +38,7 @@ import { Icon, type IconName } from "./Icon";
  * no border) used for a page or section that has nothing in it yet.
  */
 export function ViewLabel({ children }: { children: ReactNode }) {
-  return <div className="mb-1.5 text-[10px] tracking-[1.8px] text-[#95979c] uppercase">{children}</div>;
+  return <div className="view-label mb-1.5 text-[10px] tracking-[1.8px] text-[#95979c] uppercase">{children}</div>;
 }
 
 /** Prototype `h1{font-size:23px;letter-spacing:-.7px;font-weight:650}`. */
@@ -68,15 +73,15 @@ export function SectionHeader({
 }
 
 export function PageIntro({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <p className={`mt-1.5 mb-[26px] text-[12px] text-[#8a8c92] ${className}`}>{children}</p>;
+  return <p className={`page-intro mt-1.5 mb-[26px] text-[12px] text-[#8a8c92] ${className}`}>{children}</p>;
 }
 
 export function Note({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <p className={`mt-[11px] text-[10px] leading-[1.9] text-[#939c9f] ${className}`}>{children}</p>;
+  return <p className={`note mt-[11px] text-[10px] leading-[1.9] text-[#939c9f] ${className}`}>{children}</p>;
 }
 
 export function Card({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <div className={`rounded-panel border border-line bg-paper p-5 ${className}`}>{children}</div>;
+  return <div className={`card rounded-panel border border-line bg-paper p-5 ${className}`}>{children}</div>;
 }
 
 /** The prototype's `.card + .card{margin-top:16px}`. */
@@ -92,14 +97,14 @@ export function CardStack({ children, className = "" }: { children: ReactNode; c
 export function CardGrid({ cols, children, className = "" }: { cols: 2 | 3 | 4; children: ReactNode; className?: string }) {
   const columns =
     cols === 2 ? "grid-cols-2 below-stack:grid-cols-1" : cols === 3 ? "grid-cols-3 below-mid:grid-cols-1" : "grid-cols-4 below-wide:grid-cols-2";
-  return <div className={`grid gap-4 ${columns} ${className}`}>{children}</div>;
+  return <div className={`grid grid${cols} gap-4 ${columns} ${className}`}>{children}</div>;
 }
 
 export function StatCard({ label, value, actions }: { label: string; value: ReactNode; actions?: ReactNode }) {
   return (
     <Card>
       <small className="text-[11px] text-muted">{label}</small>
-      <div className="mt-[9px] text-[28px] font-[550] tracking-[-1px] text-ink">{value}</div>
+      <div className="stat mt-[9px] text-[28px] font-[550] tracking-[-1px] text-ink">{value}</div>
       {actions ? <div className="mt-2">{actions}</div> : null}
     </Card>
   );
@@ -107,19 +112,19 @@ export function StatCard({ label, value, actions }: { label: string; value: Reac
 
 export function InlineNotice({ children }: { children: ReactNode }) {
   return (
-    <div className="mb-[19px] rounded-[7px] border border-[#e7e2d5] bg-[#fbf9f2] px-[13px] py-2.5 text-[11px] text-[#948257]">
+    <div className="inline-notice mb-[19px] rounded-[7px] border border-[#e7e2d5] bg-[#fbf9f2] px-[13px] py-2.5 text-[11px] text-[#948257]">
       {children}
     </div>
   );
 }
 
 export function PreviewNote({ children }: { children: ReactNode }) {
-  return <p className="mt-[15px] rounded-lg bg-[#f4f5f7] p-3 text-[11px] leading-[1.85] text-[#7f8288]">{children}</p>;
+  return <p className="preview-note mt-[15px] rounded-lg bg-[#f4f5f7] p-3 text-[11px] leading-[1.85] text-[#7f8288]">{children}</p>;
 }
 
 export function PageEmpty({ title, children, actions }: { title: string; children?: ReactNode; actions?: ReactNode }) {
   return (
-    <div className="px-10 py-10 text-center text-[12px] text-[#8d8f95]">
+    <div className="empty px-10 py-10 text-center text-[12px] text-[#8d8f95]">
       <h3 className="text-[13px] font-[650] text-ink">{title}</h3>
       {children ? <p className="mt-1.5">{children}</p> : null}
       {actions ? <div className="mt-3.5 flex justify-center">{actions}</div> : null}
@@ -142,7 +147,7 @@ export function CheckRow({
   testId?: string;
 }) {
   return (
-    <div data-testid={testId} className="flex items-center gap-2.5 border-b border-line py-[11px] text-xs">
+    <div data-testid={testId} className="check-row flex items-center gap-2.5 border-b border-line py-[11px] text-xs">
       {icon ? <Icon name={icon} className="text-muted" /> : null}
       <span className="min-w-0 flex-1 truncate text-ink">{title}</span>
       {detail ? <small className="min-w-0 shrink truncate text-[11px] text-muted">{detail}</small> : null}
@@ -175,7 +180,7 @@ export function CheckField({
   ariaLabel?: string;
 }) {
   return (
-    <label data-testid={testId} className="flex items-center gap-2.5 border-b border-line py-[11px] text-xs">
+    <label data-testid={testId} className="check-row flex items-center gap-2.5 border-b border-line py-[11px] text-xs">
       <input
         type="checkbox"
         aria-label={ariaLabel}
@@ -202,7 +207,7 @@ export function TabRow<T extends string>({
   ariaLabel: string;
 }) {
   return (
-    <div role="tablist" aria-label={ariaLabel} className="mb-6 flex gap-5 border-b border-line">
+    <div role="tablist" aria-label={ariaLabel} className="tabs mb-6 flex gap-5 border-b border-line">
       {items.map((item) => (
         <button
           key={item.value}
@@ -222,7 +227,7 @@ export function TabRow<T extends string>({
 }
 
 export function TableWrap({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <div className={`overflow-auto rounded-[9px] border border-line bg-paper ${className}`}>{children}</div>;
+  return <div className={`table-wrap overflow-auto rounded-[9px] border border-line bg-paper ${className}`}>{children}</div>;
 }
 
 export function Table({ children, className = "" }: { children: ReactNode; className?: string }) {
@@ -230,7 +235,7 @@ export function Table({ children, className = "" }: { children: ReactNode; class
   // last tier the table scrolls inside its `overflow:auto` parent instead of
   // squashing three columns into 300px.
   return (
-    <table className={`w-full border-collapse text-left text-[11px] below-stack:min-w-[650px] ${className}`}>{children}</table>
+    <table className={`table w-full border-collapse text-left text-[11px] below-stack:min-w-[650px] ${className}`}>{children}</table>
   );
 }
 
@@ -247,12 +252,12 @@ export function Td({ children, className = "" }: { children?: ReactNode; classNa
 }
 
 export function ManagementList({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <div className={`grid gap-2.5 ${className}`}>{children}</div>;
+  return <div className={`management-list grid gap-2.5 ${className}`}>{children}</div>;
 }
 
 export function ManagementRow({ children, testId }: { children: ReactNode; testId?: string }) {
   return (
-    <div data-testid={testId} className="flex items-center justify-between gap-3.5 border-b border-line py-[13px]">
+    <div data-testid={testId} className="management-row flex items-center justify-between gap-3.5 border-b border-line py-[13px]">
       {children}
     </div>
   );
