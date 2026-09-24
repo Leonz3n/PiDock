@@ -160,7 +160,10 @@ describe("delivery review", () => {
     renderApp("/projects/atlas/tasks/release?session=main");
     await screen.findByRole("heading", { name: "发布前检查" });
 
-    await user.click(screen.getByRole("button", { name: "审阅与交付" }));
+    // [UI 对齐 03] (#27): 审阅与交付 moved from the header's text-button row
+    // into the `任务操作` menu; the review flow itself is unchanged.
+    await user.click(screen.getByRole("button", { name: "任务操作" }));
+    await user.click(await screen.findByRole("menuitem", { name: "审阅与交付" }));
     const dialog = await screen.findByRole("dialog", { name: "审阅与交付" });
     expect(within(dialog).getByText("front-monorepo")).toBeInTheDocument();
     await user.type(within(dialog).getByLabelText("提交说明"), "修复对账字段");

@@ -742,30 +742,33 @@ export function SessionSubagentList({
 }) {
   if (agents.length === 0) return null;
   const running = agents.filter((agent) => agent.status === "running").length;
+  // [UI 对齐 03] (#27) vertical budget: the prototype's `.session-subagents` is
+  // a two-line block (`padding:12px 20px` + label + one card row), so the card
+  // keeps a single compact line here instead of wrapping the summary below the
+  // name. Only sessions that actually started Subagents render it (caller).
   return (
-    <div className="rounded-panel border border-line bg-paper px-3 py-2.5" aria-label="当前会话启动的 Subagent">
+    <div className="rounded-panel border border-line bg-paper px-3 py-2" aria-label="当前会话启动的 Subagent">
       <div className="flex items-center justify-between gap-2 text-xs">
         <span className="text-ink">Subagent <Badge>{agents.length}</Badge></span>
         <small className="text-muted">{running > 0 ? `${running} 个运行中` : "全部已结束"} · 示例</small>
       </div>
-      <div className="mt-2 flex flex-wrap gap-2">
+      <div className="mt-1.5 flex flex-wrap gap-2">
         {agents.map((agent) => (
           <button
             key={agent.id}
             type="button"
             aria-pressed={agent.id === selectedId}
             onClick={() => onSelect(agent.id)}
-            className={`w-56 rounded-md border px-2.5 py-2 text-left text-xs ${
+            title={agent.summary}
+            className={`flex w-64 items-center gap-2 rounded-md border px-2.5 py-1 text-left text-xs ${
               agent.id === selectedId ? "border-accent/40 bg-accent/10 text-accent" : "border-line text-ink hover:bg-soft"
             }`}
           >
-            <span className="flex items-center justify-between gap-2">
-              <strong>{agent.name}</strong>
-              <Badge tone={agent.status === "running" ? "accent" : agent.status === "failed" ? "warn" : "neutral"}>
-                {SUBAGENT_STATUS_LABEL[agent.status]}
-              </Badge>
-            </span>
-            <small className="mt-1 block text-muted">{agent.summary}</small>
+            <strong className="shrink-0">{agent.name}</strong>
+            <small className="min-w-0 flex-1 truncate text-muted">{agent.summary}</small>
+            <Badge tone={agent.status === "running" ? "accent" : agent.status === "failed" ? "warn" : "neutral"}>
+              {SUBAGENT_STATUS_LABEL[agent.status]}
+            </Badge>
           </button>
         ))}
       </div>

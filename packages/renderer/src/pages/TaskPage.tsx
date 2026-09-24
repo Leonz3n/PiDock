@@ -1,5 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Badge, Button, EmptyState, Panel } from "../components/ui";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Badge, Button, EmptyState, IconButton, Panel } from "../components/ui";
+import { Icon, type IconName } from "../components/Icon";
+import { TaskActionMenu } from "../components/TaskActionMenu";
 import { CodeBlock } from "../components/CodeBlock";
 import {
   BrowserPanel,
@@ -229,57 +231,144 @@ export function TaskPage({ task, sessionId }: { task: Task; sessionId: string })
   const railOpen = panels.length > 0 || subagentPanelOpen;
   const railClass =
     panels.length > 0
-      ? "w-[43%] min-w-[350px] below-wide:min-w-[310px] below-wide:w-[40%] below-mid:min-w-[290px]"
-      : "w-[40%] min-w-[340px] max-w-[520px] below-narrow:min-w-[300px] below-narrow:w-[45%]";
+      ? "w-[43%] min-w-[350px] below-wide:min-w-[310px] below-wide:w-[40%] below-mid:min-w-[290px] below-stack:min-h-[500px]"
+      : "w-[40%] min-w-[340px] max-w-[520px] below-narrow:min-w-[300px] below-narrow:w-[45%] below-stack:min-h-[620px]";
 
   // [PiDock 09] (#11): tabs keep the creation order (at most four) and the
   // hidden active session takes the last slot; the coordination bar below the
   // tabs shows who holds the task write right.
   const visibleSessions = visibleSessionTabs(task.sessions, session.id);
 
+  // [UI 对齐 03] (#27) task actionset. The prototype keeps one compact row:
+  // tool launcher icons, the Subagent trigger, 添加目录, the local-service run
+  // toggle and the `···` menu; the secondary/destructive actions move into the
+  // menu instead of a second row of text buttons.
+  const readonly = session.permission === "read";
+  const localServices = task.services.filter((service) => service.mode === "local");
+  const runningLocal = localServices.filter((service) => service.running).length;
+  const allRunning = localServices.length > 0 && runningLocal === localServices.length;
+  const toggleLocalServices = () => {
+    if (readonly) {
+      pushToast("当前是只读会话，请先调整会话权限");
+      return;
+    }
+    for (const service of localServices) {
+      void useHostStore.getState().setServiceRunning(task.id, service.id, !allRunning);
+    }
+    pushToast(allRunning ? "已请求停止本地服务" : "已请求启动本地服务");
+  };
+  const menuItems = [
+    {
+      id: "rename-task",
+      label: "重命名任务",
+      detail: "修改任务名称；代码与历史不变",
+      onSelect: () => openModal({ type: "rename-task", taskId: task.id, value: task.name }),
+    },
+    {
+      id: "new-session",
+      label: "新建会话",
+      detail: "在当前任务内新建会话",
+      onSelect: () => {
+        void useHostStore.getState().createSession(task.id);
+        pushToast("当前任务中新建会话，worktree 与原会话保留");
+      },
+    },
+    {
+      id: "all-sessions",
+      label: "查看全部会话",
+      detail: "包含已归档会话",
+      onSelect: () => openModal({ type: "sessions", taskId: task.id, filter: "active" }),
+    },
+    ...(subagents.length > 0
+      ? [
+          {
+            id: "subagents",
+            label: `Subagent 列表（${subagents.length}）`,
+            detail: "查看本会话启动的 Subagent 与执行内容",
+            onSelect: () => {
+              setSubagentOpen(true);
+              if (!selectedSubagentId) setSelectedSubagentId(subagents[0]?.id ?? "");
+            },
+          },
+        ]
+      : []),
+    {
+      id: "task-sources",
+      label: "管理仓库与目录",
+      detail: "添加 Git 仓库或普通目录（软链接）",
+      onSelect: () => openModal({ type: "task-sources", taskId: task.id }),
+    },
+    ...(!directoryOnly && !task.archived
+      ? [
+          {
+            id: "delivery",
+            label: "审阅与交付",
+            detail: "逐仓库审阅变更；提交与推送需显式触发",
+            onSelect: () => openModal({ type: "delivery", taskId: task.id }),
+          },
+        ]
+      : []),
+    {
+      id: "archive-task",
+      label: "归档当前任务",
+      detail: "停止执行并保留代码、会话与草稿",
+      onSelect: () => openModal({ type: "archive-task", taskId: task.id }),
+    },
+  ];
+
   return (
-    <div data-testid="task-body" className="flex min-h-0 flex-1 gap-4 below-stack:block below-stack:flex-none below-stack:space-y-3">
-      <section data-testid="task-workspace" className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 below-stack:min-h-[550px]">
-        <TaskHeader task={task} />
-        <header className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
+    // Prototype structure: `.main > .taskheader + .taskbody` — the header spans
+    // the whole workspace width above the conversation/tool-rail split, so the
+    // rail never squeezes the header into a second line ([UI 对齐 03] #27).
+    <div className="flex min-h-0 flex-1 flex-col">
+      <TaskHeader
+        task={task}
+        actions={
+          <div data-testid="task-actionset" className="flex shrink-0 flex-nowrap items-center justify-end gap-1.5 below-stack:flex-wrap">
+            <div className="flex items-center gap-0.5 border-r border-line pr-2.5 below-stack:border-r-0 below-stack:pr-0">
+            {availablePanels.map((panel) => (
+              <IconButton
+                key={panel}
+                icon={PANEL_ICONS[panel]}
+                label={panelName(panel)}
+                title={`打开${panelName(panel)}面板`}
+                selected={panels.includes(panel)}
+                onClick={() => togglePanel(task.id, panel)}
+              />
+            ))}
             {subagents.length > 0 ? (
-              <Button
-                size="sm"
-                variant={subagentOpen ? "primary" : "default"}
-                aria-label={`查看 Subagent，共 ${subagents.length} 个`}
+              <IconButton
+                icon="branch"
+                label={`查看 Subagent，共 ${subagents.length} 个`}
+                title="查看当前会话的 Subagent"
+                selected={subagentPanelOpen}
                 onClick={() => {
                   setSubagentOpen((value) => !value);
                   if (!selectedSubagentId) setSelectedSubagentId(subagents[0]?.id ?? "");
                 }}
-              >
-                Subagent {subagents.length}
-              </Button>
+              />
             ) : null}
+            </div>
             <Button size="sm" onClick={() => openModal({ type: "task-sources", taskId: task.id })}>
               添加目录
             </Button>
-            {!directoryOnly && !task.archived ? (
-              <Button size="sm" onClick={() => openModal({ type: "delivery", taskId: task.id })}>
-                审阅与交付
+            {localServices.length > 0 ? (
+              <Button
+                size="sm"
+                variant={allRunning ? "default" : "primary"}
+                title={`${allRunning ? "停止" : "启动"}本任务的全部 ${localServices.length} 个本地服务`}
+                onClick={toggleLocalServices}
+              >
+                {allRunning ? "停止服务" : "启动本地服务"}
               </Button>
             ) : null}
-            {availablePanels.map((panel) => (
-              <Button
-                key={panel}
-                size="sm"
-                variant={panels.includes(panel) ? "primary" : "default"}
-                onClick={() => togglePanel(task.id, panel)}
-              >
-                {panelName(panel)}
-              </Button>
-            ))}
-            <Button size="sm" variant="ghost" onClick={() => openModal({ type: "archive-task", taskId: task.id })}>
-              归档当前任务
-            </Button>
+            <TaskActionMenu items={menuItems} />
           </div>
-        </header>
+        }
+      />
 
+      <div data-testid="task-body" className="mt-2 flex min-h-0 flex-1 gap-4 below-stack:block below-stack:flex-none below-stack:space-y-3">
+        <section data-testid="task-workspace" className="flex min-h-0 min-w-0 flex-1 flex-col gap-1.5 below-stack:min-h-[550px]">
         <SessionTabs task={task} visibleSessions={visibleSessions} activeSessionId={session.id} />
 
         <WriteCoordinationBar task={task} />
@@ -303,7 +392,7 @@ export function TaskPage({ task, sessionId }: { task: Task; sessionId: string })
       </section>
 
       {railOpen ? (
-        <aside data-testid="task-rail" className={`flex min-h-0 shrink-0 flex-col gap-3 overflow-auto below-stack:min-h-[500px] below-stack:w-full below-stack:min-w-0 below-stack:max-w-none ${railClass}`}>
+        <aside data-testid="task-rail" className={`flex min-h-0 shrink-0 flex-col gap-3 overflow-auto below-stack:w-full below-stack:min-w-0 below-stack:max-w-none ${railClass}`}>
           {subagentPanelOpen ? (
             <div data-testid="subagent-sidebar" className="flex min-h-0 flex-col">
               <SubagentPanel
@@ -398,6 +487,7 @@ export function TaskPage({ task, sessionId }: { task: Task; sessionId: string })
           ))}
         </aside>
       ) : null}
+      </div>
     </div>
   );
 }
@@ -417,13 +507,35 @@ function panelName(panel: ToolPanel) {
 }
 
 /**
+ * Tool launcher glyphs ([UI 对齐 03] #27): the prototype's `toolItems` mapping
+ * (`app.js`), plus `link` for 协议 — the prototype has no protocol tool, and the
+ * panel is about generated artifacts and their local bindings.
+ */
+const PANEL_ICONS: Record<ToolPanel, IconName> = {
+  runtime: "server",
+  protocol: "link",
+  browser: "globe",
+  files: "file",
+  terminal: "terminal",
+  logs: "chart",
+};
+
+/**
  * [PiDock 02] task header: name / repos / branch / ready-state /
  * code-change, read from the task record + session state. The branch and
  * root shown here are the values stored at creation (local settings in
  * dev/memory, `task.json` through the shell); errors stay bound to this
  * task id so a failure never surfaces as another task's header.
+ *
+ * [UI 对齐 03] (#27) the prototype's `.taskheader`: `TASK WORKSPACE #nnn`
+ * eyebrow, `h1`, one `actionset` (passed in — the tool launcher, 添加目录, the
+ * local-service run toggle and the `···` menu) and a single `.meta` line
+ * (branch / environment·version / running local services / worktree+directory
+ * badges). The former second row of text buttons is gone; repository names and
+ * the task root stay reachable through the files panel, which lists them per
+ * repository.
  */
-function TaskHeader({ task }: { task: Task }) {
+function TaskHeader({ task, actions }: { task: Task; actions: ReactNode }) {
   const adapter = useHostStore((state) => state.adapter);
   // [PiDock 02] the header reads the same `getTaskHeader` contract the
   // provision tests lock (name/repo/branch/ready/code-change + task-bound
@@ -469,38 +581,78 @@ function TaskHeader({ task }: { task: Task }) {
       cancelled = true;
     };
   }, [adapter, task.id]);
-  const project = useHostStore((state) => state.project(task.projectId));
-  const repoNames = task.repos.map((id) => project?.repositories.find((r) => r.id === id)?.name ?? id);
   const changedCount = task.files.length;
   const directoryOnly = task.repos.length === 0 && task.directories.length > 0;
+  const workspace = useHostStore((state) => state.workspace);
+  const environmentName =
+    workspace?.environments.find((item) => item.id === task.environmentId)?.name ?? task.environmentId;
+  const localServices = task.services.filter((service) => service.mode === "local");
+  const runningLocal = localServices.filter((service) => service.running).length;
+  const navigate = useNavigationStore((state) => state.navigate);
   return (
-    <header className="flex flex-wrap items-center justify-between gap-3" data-testid={`task-header-${task.id}`}>
-      <div>
-        {directoryOnly ? <div className="text-[11px] tracking-wide text-muted">TASK · 普通目录</div> : null}
-        <div className="flex items-center gap-3">
-          <h1 className="text-base font-medium text-ink">{task.name}</h1>
-          <Badge>{task.workspaceKey}</Badge>
-          {task.directories.length > 0 && !directoryOnly ? <Badge>{task.directories.length} 个普通目录</Badge> : null}
-          {task.archived ? <Badge tone="warn">已归档</Badge> : null}
-          <Badge tone={ready ? "accent" : "neutral"}>{ready ? "已就绪" : "准备中"}</Badge>
+    <header data-testid={`task-header-${task.id}`} className="border-b border-line pt-4 pb-3">
+      {/* `flex-wrap` + a floor on the title: the actionset is fixed-size, so it
+          drops to its own line instead of squeezing the task name away when the
+          tool panel narrows the column. */}
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        {/* `min-w-0` + `truncate`: the actionset must keep one row when the tool
+            panel narrows the column, so the name is what gives way. */}
+        <div className="min-w-[11rem] flex-1">
+          <div
+            className="truncate text-[10px] tracking-[1.8px] text-muted uppercase"
+            title={`任务根目录：${root}/${task.workspaceKey}`}
+          >
+            {directoryOnly ? (
+              <span>TASK · 普通目录</span>
+            ) : (
+              <>
+                TASK WORKSPACE
+                <span className="ml-2 font-mono tracking-normal normal-case">{task.workspaceKey}</span>
+              </>
+            )}
+          </div>
+          <h1 className="truncate text-[23px] leading-8 font-[650] tracking-[-0.7px] text-ink">
+            {task.name}
+          </h1>
         </div>
-        <p className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted">
-          <span>仓库：{repoNames.length > 0 ? repoNames.join("、") : "—"}</span>
-          <span className="font-mono">分支：{branch}</span>
-          <span className="font-mono">目录：{root}/{task.workspaceKey}</span>
-          <span>代码变化：{changedCount > 0 ? `${changedCount} 个文件` : "无"}</span>
-        </p>
-        {directoryOnly ? (
-          <p className="mt-1 text-[11px] text-muted">
-            {task.directories.length} 个普通目录 · 通过软链接加入 · 修改影响原目录，不提供 Git 分支／差异／提交
-          </p>
-        ) : null}
-        {headerError ? (
-          <p role="alert" className="mt-1 text-[11px] text-orange">
-            本任务异常：{headerError}
-          </p>
-        ) : null}
+        {actions}
       </div>
+      <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted">
+        <span className="flex items-center gap-1.5">
+          <Icon name="branch" className="h-3.5 w-3.5" />
+          <span className="font-mono">{branch}</span>
+        </span>
+        <button
+          type="button"
+          className="flex items-center gap-1.5 hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+          title="在环境与服务中查看生效配置"
+          onClick={() => navigate({ view: "env" })}
+        >
+          <Icon name="settings" className="h-3.5 w-3.5" />
+          {environmentName} · {task.templateVersion}
+        </button>
+        {localServices.length > 0 ? (
+          <span className="flex items-center gap-1.5">
+            <span aria-hidden className={`h-1.5 w-1.5 shrink-0 rounded-full ${runningLocal > 0 ? "bg-[#425a93]" : "bg-[#9aa4ab]"}`} />
+            {runningLocal} / {localServices.length} 本地服务
+          </span>
+        ) : null}
+        {!directoryOnly ? <Badge>{task.repos.length} 个独立 worktree</Badge> : null}
+        {task.directories.length > 0 && !directoryOnly ? <Badge>{task.directories.length} 个普通目录</Badge> : null}
+        {task.archived ? <Badge tone="warn">已归档</Badge> : null}
+        <Badge tone={ready ? "accent" : "neutral"}>{ready ? "已就绪" : "准备中"}</Badge>
+        <span>代码变化 {changedCount > 0 ? changedCount : "无"}</span>
+      </div>
+      {directoryOnly ? (
+        <p className="mt-1 text-[11px] text-muted">
+          {task.directories.length} 个普通目录 · 通过软链接加入 · 修改影响原目录，不提供 Git 分支／差异／提交
+        </p>
+      ) : null}
+      {headerError ? (
+        <p role="alert" className="mt-1 text-[11px] text-orange">
+          本任务异常：{headerError}
+        </p>
+      ) : null}
     </header>
   );
 }
@@ -540,8 +692,12 @@ function SessionTabs({
   };
 
   return (
-    <div className="flex items-center gap-2">
-      <Button size="sm" onClick={() => openModal({ type: "sessions", taskId: task.id, filter: "active" })}>
+    // Prototype `.sessions`: one 43px row with `white-space:nowrap` tabs. The
+    // row must not grow into a second line when the tool panel narrows the
+    // column ([UI 对齐 03] #27), so the tab strip clips and the fixed buttons
+    // keep their size.
+    <div className="flex flex-nowrap items-center gap-2">
+      <Button size="sm" className="shrink-0" onClick={() => openModal({ type: "sessions", taskId: task.id, filter: "active" })}>
         全部会话 {task.sessions.length}
       </Button>
       <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
@@ -562,7 +718,7 @@ function SessionTabs({
               title={`${session.name} · 右键操作`}
               className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs ${
                 active ? "border-accent/40 bg-accent/10 text-accent" : "border-line bg-paper text-muted hover:text-ink"
-              } ${active ? "" : "hidden md:flex"}`}
+              } ${active ? "" : "flex below-mid:hidden"}`}
             >
               {/* Bounded label: a long name never widens the navigation. */}
               <span className="max-w-[9rem] truncate">{sessionTabLabel(session.name)}</span>
@@ -593,6 +749,7 @@ function SessionTabs({
       ) : null}
       <Button
         size="sm"
+        className="shrink-0"
         aria-label="新建会话"
         onClick={async () => {
           const created = await useHostStore.getState().createSession(task.id);
@@ -1083,7 +1240,7 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
   };
 
   return (
-    <div className="flex flex-col gap-2">
+    <div data-testid="task-composer" className="flex flex-col gap-2">
       {approval ? <ApprovalCard approval={approval} /> : null}
       <form
         className="rounded-panel border border-line bg-paper px-3 py-2.5"

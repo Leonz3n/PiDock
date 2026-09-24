@@ -1,4 +1,5 @@
-import { useEffect, type ButtonHTMLAttributes, type ReactNode } from "react";
+import { useEffect, type ButtonHTMLAttributes, type ComponentPropsWithRef, type ReactNode } from "react";
+import { Icon, type IconName } from "./Icon";
 
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: "default" | "primary" | "ghost";
@@ -18,6 +19,39 @@ export function Button({ variant = "default", size = "md", className = "", ...re
     className,
   ].join(" ");
   return <button type="button" className={classes} {...rest} />;
+}
+
+/**
+ * Square icon action ([UI 对齐 03] #27): the prototype's `.iconbtn`
+ * (`28px`, `place-items:center`, `6px` radius, hover `#e9eded`, `.selected`
+ * uses the soft accent). `aria-label` is the accessible name; `title` carries
+ * the longer action wording when the two differ. `ref` arrives as a plain prop
+ * (React 19) and is spread onto the button, so callers can manage focus.
+ */
+export function IconButton({
+  icon,
+  label,
+  title,
+  selected = false,
+  className = "",
+  ...rest
+}: ComponentPropsWithRef<"button"> & {
+  icon: IconName;
+  label: string;
+  title?: string;
+  selected?: boolean;
+}) {
+  const classes = [
+    "inline-grid h-7 w-7 shrink-0 place-items-center rounded-md transition-colors",
+    selected ? "bg-accent/10 text-accent" : "text-[#7c879b] hover:bg-soft hover:text-ink",
+    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
+    className,
+  ].join(" ");
+  return (
+    <button type="button" aria-label={label} title={title ?? label} aria-pressed={selected} className={classes} {...rest}>
+      <Icon name={icon} />
+    </button>
+  );
 }
 
 export function Badge({ children, tone = "neutral" }: { children: ReactNode; tone?: "neutral" | "accent" | "warn" }) {

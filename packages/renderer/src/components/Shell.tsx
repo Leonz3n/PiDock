@@ -33,8 +33,18 @@ export function Shell() {
 
       <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-paper">
         <Breadcrumbs />
-        {/* Prototype `.page`: `30px 34px`, `25px` below 960px and `20px` below 720px. */}
-        <div className="flex min-h-0 flex-1 flex-col overflow-auto bg-[#fbfbfc] px-[34px] py-[30px] below-mid:px-[25px] below-stack:p-5">
+        {/* Prototype `.page` keeps `30px 34px` (`25px` on all four sides below
+            960px, `20px` below 720px). The task workspace keeps the horizontal
+            inset but drops the vertical one ([UI 对齐 03] #27): the prototype's
+            `.taskheader`/`.conversation` sit directly under `.topbar`, so the
+            60px of vertical page padding must not eat the conversation. */}
+        <div
+          className={
+            route.view === "task"
+              ? "flex min-h-0 flex-1 flex-col overflow-auto bg-paper px-[34px] below-mid:px-[25px] below-stack:px-5"
+              : "flex min-h-0 flex-1 flex-col overflow-auto bg-[#fbfbfc] px-[34px] py-[30px] below-mid:p-[25px] below-stack:p-5"
+          }
+        >
           {route.view === "task" && activeTask ? <TaskPage task={activeTask} sessionId={sessionId ?? activeTask.activeSessionId} /> : null}
           {route.view === "attention" ? <AttentionPage /> : null}
           {route.view === "project" ? <ProjectPage projectId={route.projectId} /> : null}

@@ -1,10 +1,11 @@
 /**
- * Line icons for the application shell ([UI 对齐 01] #25).
+ * Line icons for the application shell ([UI 对齐 01] #25, [UI 对齐 03] #27).
  *
  * The paths are copied from `prototypes/pidock-ui/app.js` so the shell and the
  * A baseline draw the same glyphs at the same weight (17px, stroke 1.7). Only
  * the glyphs the shell uses are kept here; pages add their own when they are
- * aligned.
+ * aligned. `link` is the protocol glyph: the prototype has no protocol tool,
+ * and the 协议 panel is about generated artifacts and their local bindings.
  */
 
 export const ICON_PATHS = {
@@ -19,6 +20,15 @@ export const ICON_PATHS = {
   globe: "M21 12a9 9 0 1 0-18 0a9 9 0 1 0 18 0 M3 12h18 M12 3c-5 5-5 13 0 18c5-5 5-13 0-18",
   folder: "M3 5h6l2 3h10v12H3Z",
   key: "M14 7a5 5 0 1 0 3 5L22 7l-3-3-3 3Z M4 9h.01",
+  branch: "M6 6v12 M6 12c9 0 12-1 12-6 M4 4a2 2 0 1 0 4 0a2 2 0 1 0-4 0 M4 20a2 2 0 1 0 4 0a2 2 0 1 0-4 0 M16 4a2 2 0 1 0 4 0a2 2 0 1 0-4 0",
+  server: "M3 3h18v7H3z M3 14h18v7H3z M6 6h1 M6 17h1 M11 6h7 M11 17h7",
+  terminal: "M4 6l6 6-6 6 M13 18h7",
+  file: "M5 2h9l5 5v15H5Z M14 2v6h5 M8 12h8 M8 16h8",
+  link: "M10 14l4-4 M8 16l-2 2a4 4 0 0 1-6-6l5-5a4 4 0 0 1 6 0 M16 8l2-2a4 4 0 0 1 6 6l-5 5a4 4 0 0 1-6 0",
+  more: "M5 12h.01 M12 12h.01 M19 12h.01",
+  play: "M8 4l12 8-12 8Z",
+  stop: "M5 5h14v14H5z",
+  check: "M5 12l4 4L19 6",
 } as const;
 
 export type IconName = keyof typeof ICON_PATHS;
