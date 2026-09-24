@@ -253,7 +253,7 @@ describe("display labels", () => {
 });
 
 describe("in-memory fixture topology", () => {
-  it("orders the request route box by start groups and names the remote units", async () => {
+  it("expands the request route box from the declared call graph and names the remote units", async () => {
     // [UI 对齐 04] (#28) the runtime panel's route box: the declared call graph
     // from the entry unit, a mutual pair joined with `⇄` (never `→`), and the
     // remote units that keep the shared environment.

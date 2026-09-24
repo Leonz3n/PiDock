@@ -3,8 +3,9 @@ import { Badge, Button, EmptyState, IconButton, Panel } from "./ui";
 import { Icon, type IconName } from "./Icon";
 import { CodeBlock } from "./CodeBlock";
 import { ConfigTable } from "./ConfigTable";
-import type { BrowserPage, Permission, Service, Subagent, Task, TaskDirectory, WorkspaceFile } from "../data/types";
+import type { BrowserPage, Environment, Permission, Service, Subagent, Task, TaskDirectory, WorkspaceFile } from "../data/types";
 import type { ToolPanel } from "../stores/ui";
+import { environmentLabel } from "../data/shellNav";
 import { directoryLinkPath } from "../data/directories";
 import { useDraftStore } from "../stores/drafts";
 import { useHostStore } from "../stores/host";
@@ -115,55 +116,60 @@ export function ToolWorkbench({
       aria-label="任务工具面板"
       className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-panel border border-line bg-[#fafbfb]"
     >
-      <div
-        role="tablist"
-        aria-label="已打开的工具"
-        data-testid="tool-tabs"
-        className="flex h-11 min-h-11 items-center gap-1.5 overflow-x-auto border-b border-line bg-paper px-4"
-      >
-        {panels.map((panel) => {
-          const active = panel === activePanel;
-          return (
-            <div
-              key={panel}
-              data-testid={`tool-tab-item-${panel}`}
-              className={`flex shrink-0 items-center border-b-2 ${active ? "border-accent" : "border-transparent"}`}
-            >
-              <button
-                type="button"
-                role="tab"
-                id={`tool-tab-${panel}`}
-                aria-selected={active}
-                aria-controls="tool-panel"
-                tabIndex={active ? 0 : -1}
-                ref={(node) => {
-                  tabRefs.current[panel] = node;
-                }}
-                onKeyDown={(event) => onTabKeyDown(event, panel)}
-                data-testid={`tool-tab-${panel}`}
-                onClick={() => onSelectPanel(panel)}
-                className={`flex items-center gap-1.5 whitespace-nowrap py-2.5 pl-1.5 pr-0.5 text-[11px] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${active ? "font-medium text-accent" : "text-muted hover:text-ink"}`}
+      <div className="flex h-11 min-h-11 items-center gap-1.5 border-b border-line bg-paper px-4">
+        <div
+          role="tablist"
+          aria-label="已打开的工具"
+          data-testid="tool-tabs"
+          className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto"
+        >
+          {panels.map((panel) => {
+            const active = panel === activePanel;
+            return (
+              <div
+                key={panel}
+                data-testid={`tool-tab-item-${panel}`}
+                className={`flex shrink-0 items-center border-b-2 ${active ? "border-accent" : "border-transparent"}`}
               >
-                <Icon name={PANEL_ICONS[panel]} className="h-3.5 w-3.5" />
-                {panelName(panel)}
-              </button>
-              <button
-                type="button"
-                data-testid={`tool-tab-close-${panel}`}
-                aria-label={`关闭${panelName(panel)}`}
-                title={`关闭${panelName(panel)}`}
-                onClick={() => onClosePanel(panel)}
-                className="mr-1 grid h-5 w-5 place-items-center rounded text-[#9ba4b2] hover:bg-soft hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-              >
-                <Icon name="close" className="h-3 w-3" />
-              </button>
-            </div>
-          );
-        })}
+                <button
+                  type="button"
+                  role="tab"
+                  id={`tool-tab-${panel}`}
+                  aria-selected={active}
+                  aria-controls="tool-panel"
+                  tabIndex={active ? 0 : -1}
+                  ref={(node) => {
+                    tabRefs.current[panel] = node;
+                  }}
+                  onKeyDown={(event) => onTabKeyDown(event, panel)}
+                  data-testid={`tool-tab-${panel}`}
+                  onClick={() => onSelectPanel(panel)}
+                  className={`flex items-center gap-1.5 whitespace-nowrap py-2.5 pl-1.5 pr-0.5 text-[11px] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${active ? "font-medium text-accent" : "text-muted hover:text-ink"}`}
+                >
+                  <Icon name={PANEL_ICONS[panel]} className="h-3.5 w-3.5" />
+                  {panelName(panel)}
+                </button>
+                <button
+                  type="button"
+                  data-testid={`tool-tab-close-${panel}`}
+                  aria-label={`关闭${panelName(panel)}`}
+                  title={`关闭${panelName(panel)}`}
+                  onClick={() => onClosePanel(panel)}
+                  className="mr-1 grid h-5 w-5 place-items-center rounded text-[#9ba4b2] hover:bg-soft hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+                >
+                  <Icon name="close" className="h-3 w-3" />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+        {/* The collapse control sits beside the strip, not inside it: the ARIA
+            tabs pattern expects `tablist` to own only tabs, and the visual row
+            keeps it at the right edge (prototype `.collapse-tools`). */}
         <IconButton
           icon="close"
           label="收起工具区"
-          className="ml-auto"
+          className="ml-auto shrink-0"
           data-testid="collapse-tools"
           onClick={onCollapse}
         />
@@ -184,6 +190,7 @@ export function ToolWorkbench({
 export function RuntimePanel({
   task,
   topology: provided,
+  environments = [],
   onToggleService,
   onSetServiceMode,
   readonly = false,
@@ -192,18 +199,27 @@ export function RuntimePanel({
   task: Task;
   /** Adapter view (Host plan in shell mode); falls back to the pure projection. */
   topology?: ServiceTopologyView;
+  /** Workspace environments: the route box names the shared environment. */
+  environments?: readonly Environment[];
   onToggleService: (serviceId: string, running: boolean) => void;
   onSetServiceMode?: (serviceId: string, mode: Service["mode"]) => void;
   /** Read-only sessions cannot change run state (prototype `sessionReadonly()`). */
   readonly?: boolean;
   onReadonlyAttempt?: () => void;
 }) {
-  const [selected, setSelected] = useState<string | undefined>(task.services[0]?.id);
+  // The selected row survives a tab swap, like the prototype's global `state`
+  // (#28 review P2-3), so the detail blocks below keep their subject.
+  const selected = useUiStore((state) => state.toolPanelState[task.id]?.runtimeServiceId) ?? task.services[0]?.id;
+  const setPanelState = useUiStore((state) => state.setToolPanelState);
+  const setSelected = (serviceId: string) => setPanelState(task.id, { runtimeServiceId: serviceId });
   const service: Service | undefined = task.services.find((item) => item.id === selected) ?? task.services[0];
+  // The environment is named the way the rest of the app names it: the display
+  // name ("测试环境"), not the task's `environmentId` (#28 review P2-1).
+  const environment = environmentLabel(task, environments);
   // [PiDock 05] (#10) task-view projection: unit identity + location, the
   // actual dependency destination, the start groups (prestart / bidirectional
   // listener group), the run record and the shared-resource limits.
-  const topology = provided ?? projectServiceTopology(task, environmentName(task));
+  const topology = provided ?? projectServiceTopology(task, environment);
   const selectedUnit = service ? topology.units.find((unit) => unit.serviceId === service.id) : undefined;
   const selectedRouting = selectedUnit ? topology.routing.filter((entry) => entry.unitId === selectedUnit.unitId) : [];
   const selectedGroups = selectedUnit
@@ -219,7 +235,7 @@ export function RuntimePanel({
   // detail below.
   const localServices = task.services.filter((item) => item.mode === "local");
   const remoteServices = task.services.filter((item) => item.mode === "remote");
-  const route = serviceRouteView(topology, environmentName(task));
+  const route = serviceRouteView(topology, environment);
   const serviceRow = (item: Service) => {
     const unit = topology.units.find((candidate) => candidate.serviceId === item.id);
     const endpoint = locationLabel(item);
@@ -568,11 +584,6 @@ export function ProtocolPanel({ view }: { view: ProtocolBindingView }) {
   );
 }
 
-/** Environment display name for the task (remote target label / tests). */
-function environmentName(task: Task): string {
-  return task.environmentId;
-}
-
 export function BrowserPanel({
   pages,
   taskId,
@@ -586,18 +597,20 @@ export function BrowserPanel({
   /** Session tier: read-only means the Agent will not drive the page. */
   permission?: Permission;
 }) {
-  const [pageId, setPageId] = useState(pages[0]?.id);
+  // The panel is unmounted whenever another tab is active, so everything the
+  // user changed inside it is kept in the ui store (prototype `state`), not in
+  // `useState` (#28 review P2-3).
+  const panelState = useUiStore((state) => state.toolPanelState[taskId]);
+  const setPanelState = useUiStore((state) => state.setToolPanelState);
+  const pageId = panelState?.browserPageId ?? pages[0]?.id;
   // The takeover flag lives in the ui store: the panel and the shell summary
   // bar must report the same controller after a handover.
   const takeoverPaused = useUiStore((state) => state.browserTakeover[taskId] ?? false);
   const setTakeoverPaused = useUiStore((state) => state.setBrowserTakeover);
-  const [marks, setMarks] = useState<{ id: string; label: string; needsRelocation: boolean }[]>([]);
-  const [notice, setNotice] = useState<string>();
-  const [annotation, setAnnotation] = useState("");
-  const [evidence, setEvidence] = useState<{ consoleErrors: string[]; failedRequests: { url: string; errorText: string }[] }>({
-    consoleErrors: [],
-    failedRequests: [],
-  });
+  const marks = panelState?.browserMarks ?? [];
+  const notice = panelState?.browserNotice;
+  const annotation = panelState?.browserAnnotation ?? "";
+  const evidence = panelState?.browserEvidence ?? { consoleErrors: [], failedRequests: [] };
   const active = pages.find((page) => page.id === pageId) ?? pages[0];
   const handle = active ? { pageId: active.id } : undefined;
   const agentRefusal = permission !== undefined ? browserActionRefusal(permission) : undefined;
@@ -610,7 +623,7 @@ export function BrowserPanel({
     const paused = !takeoverPaused;
     const result = await setBrowserTakeover({ taskId, page: handle, paused, reason: "用户接管" });
     setTakeoverPaused(taskId, paused);
-    setNotice(result.kind === "idle" ? undefined : result.text);
+    setPanelState(taskId, { browserNotice: result.kind === "idle" ? undefined : result.text });
   };
 
   const markIssue = async () => {
@@ -629,19 +642,23 @@ export function BrowserPanel({
       // the page-side picker actually produced one (GUI residual).
       ...(sessionId !== undefined ? { sessionId } : {}),
     });
-    setNotice(marked.notice.kind === "idle" ? undefined : marked.notice.text);
+    setPanelState(taskId, { browserNotice: marked.notice.kind === "idle" ? undefined : marked.notice.text });
     const marker = marked.marker;
     if (marker) {
-      setMarks((items) => [...items, { id: marker.id, label: `${marker.annotation} · ${marker.url}`, needsRelocation: marker.needsRelocation }]);
-      setAnnotation("");
+      setPanelState(taskId, {
+        browserMarks: [...marks, { id: marker.id, label: `${marker.annotation} · ${marker.url}`, needsRelocation: marker.needsRelocation }],
+        browserAnnotation: "",
+      });
     }
   };
 
   const refreshEvidence = async () => {
     if (!handle) return;
     const result = await readBrowserEvidence({ taskId, page: handle });
-    setEvidence(result.evidence);
-    setNotice(result.ok ? "已获取当前页面的控制台与网络失败证据（内容已限幅）" : result.error);
+    setPanelState(taskId, {
+      browserEvidence: result.evidence,
+      browserNotice: result.ok ? "已获取当前页面的控制台与网络失败证据（内容已限幅）" : result.error,
+    });
   };
 
   return (
@@ -675,7 +692,7 @@ export function BrowserPanel({
             </div>
             <p className="mt-1 font-mono text-[11px] text-muted">{page.url}</p>
             {pages.length > 1 ? (
-              <Button size="sm" variant="ghost" onClick={() => setPageId(page.id)}>
+              <Button size="sm" variant="ghost" onClick={() => setPanelState(taskId, { browserPageId: page.id })}>
                 切换到此页
               </Button>
             ) : null}
@@ -704,7 +721,7 @@ export function BrowserPanel({
           className="rounded-md border border-line bg-transparent px-2.5 py-1.5 text-xs text-ink"
           placeholder="例如：总额与对账单不一致"
           value={annotation}
-          onChange={(event) => setAnnotation(event.target.value)}
+          onChange={(event) => setPanelState(taskId, { browserAnnotation: event.target.value })}
         />
         <Button size="sm" onClick={() => void markIssue()} disabled={!handle}>
           框选元素标记
@@ -867,8 +884,13 @@ export function TerminalPanel({
   };
 }) {
   const runTerminalCommand = useHostStore((state) => state.runTerminalCommand);
-  const [lines, setLines] = useState<string[]>(seed);
-  const [value, setValue] = useState("");
+  // Scrollback and the pending input survive a tab swap, so they live in the ui
+  // store (prototype `state`) and fall back to the task seed the first time the
+  // panel opens (#28 review P2-3).
+  const panelState = useUiStore((state) => state.toolPanelState[taskId]);
+  const setPanelState = useUiStore((state) => state.setToolPanelState);
+  const lines = panelState?.terminalLines ?? seed;
+  const value = panelState?.terminalValue ?? "";
   const instance = terminal?.state?.instances[terminal.state.instances.length - 1];
   return (
     <div className="flex flex-col gap-2">
@@ -931,15 +953,15 @@ export function TerminalPanel({
           event.preventDefault();
           const command = value.trim();
           if (!command) return;
-          setValue("");
+          setPanelState(taskId, { terminalValue: "" });
           const output = await runTerminalCommand(taskId, command);
-          setLines((items) => [...items, ...output]);
+          setPanelState(taskId, { terminalLines: [...lines, ...output] });
         }}
       >
         <input
           aria-label="终端输入"
           value={value}
-          onChange={(event) => setValue(event.target.value)}
+          onChange={(event) => setPanelState(taskId, { terminalValue: event.target.value })}
           className="flex-1 rounded-md border border-line bg-paper px-2.5 py-1.5 font-mono text-xs"
           placeholder="输入命令"
         />
@@ -1233,8 +1255,12 @@ export function DirectoryTerminalPanel({
   };
   const directory = task.directories.find((item) => item.id === selectedId) ?? task.directories[0];
   const runTerminalCommand = useHostStore((state) => state.runTerminalCommand);
-  const [lines, setLines] = useState<string[]>([]);
-  const [value, setValue] = useState("");
+  // Same reason as `TerminalPanel`: the rail unmounts this panel on a tab swap,
+  // so the scrollback and the pending input live in the ui store.
+  const panelState = useUiStore((state) => state.toolPanelState[task.id]);
+  const setPanelState = useUiStore((state) => state.setToolPanelState);
+  const lines = panelState?.terminalLines ?? [];
+  const value = panelState?.terminalValue ?? "";
   if (!directory) return <EmptyState>这个任务还没有普通目录。</EmptyState>;
   const cwd = directoryLinkPath(task.workspaceRoot, task.workspaceKey, directory);
   return (
@@ -1257,15 +1283,15 @@ export function DirectoryTerminalPanel({
           event.preventDefault();
           const command = value.trim();
           if (!command) return;
-          setValue("");
+          setPanelState(task.id, { terminalValue: "" });
           const output = await runTerminalCommand(task.id, command);
-          setLines((items) => [...items, ...output]);
+          setPanelState(task.id, { terminalLines: [...lines, ...output] });
         }}
       >
         <input
           aria-label="终端输入"
           value={value}
-          onChange={(event) => setValue(event.target.value)}
+          onChange={(event) => setPanelState(task.id, { terminalValue: event.target.value })}
           className="flex-1 rounded-md border border-line bg-paper px-2.5 py-1.5 font-mono text-xs"
           placeholder="输入示例命令"
         />

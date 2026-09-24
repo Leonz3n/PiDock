@@ -37,3 +37,39 @@ export function resolveActivePanel(
   if (stored !== undefined && panels.includes(stored)) return stored;
   return panels[panels.length - 1];
 }
+
+/** A page problem the user marked for the Agent (prototype 「验证记录」). */
+export type BrowserIssueMark = { id: string; label: string; needsRelocation: boolean };
+
+type BrowserEvidence = { consoleErrors: string[]; failedRequests: { url: string; errorText: string }[] };
+
+/**
+ * Panel state that must survive a tab swap (#28 review P2-3).
+ *
+ * The rail mounts only the active panel (the prototype's single `.work-
+ * content`), so a panel's `useState` resets whenever the user switches tabs.
+ * The prototype keeps these values in its global `state` instead, so switching
+ * `.work-tabs` never loses the selected browser page, the markers, the terminal
+ * scrollback or the selected service. They live here, keyed per task.
+ */
+export type ToolPanelState = {
+  browserPageId?: string;
+  browserMarks?: BrowserIssueMark[];
+  browserAnnotation?: string;
+  browserEvidence?: BrowserEvidence;
+  browserNotice?: string;
+  terminalLines?: string[];
+  terminalValue?: string;
+  runtimeServiceId?: string;
+};
+
+/**
+ * Apply one panel's patch to the task's stored panel state without dropping the
+ * fields the other panels own (they all share one record per task).
+ */
+export function mergeToolPanelState(
+  current: ToolPanelState | undefined,
+  patch: ToolPanelState,
+): ToolPanelState {
+  return { ...current, ...patch };
+}
