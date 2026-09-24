@@ -37,6 +37,12 @@ export const ICON_PATHS = {
   arrow: "M12 19V5 M5 12l7-7 7 7",
   // Prototype `paths.check`: the tool rows' completed-step glyph.
   check: "M5 12l4 4L19 6",
+  // The two glyphs the prototype's remaining management pages use and the
+  // shell did not carry yet ([UI 对齐 09] #33): `refresh` for the provider card's
+  // 同步模型列表 and `shield` for the remote page's 自建 PiDock Gateway mode
+  // (also `remoteAccessPage`'s mode picker). Same path data as `app.js:2`.
+  refresh: "M20 7a9 9 0 1 0 1 9 M20 2v6h-6",
+  shield: "M12 2l9 4v6c0 6-9 10-9 10S3 18 3 12V6Z M8 12l3 3 5-6",
 } as const;
 
 export type IconName = keyof typeof ICON_PATHS;
