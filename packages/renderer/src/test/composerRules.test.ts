@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   BUILTIN_COMMANDS,
   activeCompletionToken,
+  attachmentSourceLabel,
+  pastedImageFiles,
   checkDraftReference,
   commandAvailability,
   commandCandidates,
@@ -154,5 +156,43 @@ describe("composer rule mirror", () => {
     const rows = fileCandidates(task, "");
     expect(rows.length).toBeGreaterThan(0);
     expect(rows.every((row) => row.sourceKind === "worktree" || row.sourceKind === "plain-dir")).toBe(true);
+  });
+});
+
+/**
+ * [UI 对齐 06] (#30) the paste/attachment rules. The prototype's `paste`
+ * handler only intercepts a clipboard that carries an image (otherwise the
+ * browser keeps its own text paste), names a pasted image after the clipboard
+ * id because the clipboard has no file name, and records the provenance plus
+ * 仅本页保留 in the attachment detail instead of a separate composer note.
+ */
+describe("composer attachment rules", () => {
+  const item = (type: string, file: File | null, kind = "file") => ({ kind, type, getAsFile: () => file });
+
+  it("takes the images out of the clipboard items and falls back to the file list", () => {
+    const shot = new File(["png"], "shot.png", { type: "image/png" });
+    const note = new File(["txt"], "notes.txt", { type: "text/plain" });
+    // An image item wins; a text item alone is left to the browser.
+    expect(pastedImageFiles([item("image/png", shot), item("text/plain", note)], [])).toEqual([shot]);
+    expect(pastedImageFiles([item("text/plain", note)], [note])).toEqual([]);
+    // No usable items: the clipboard's file list still supplies the image.
+    expect(pastedImageFiles([], [note, shot])).toEqual([shot]);
+    // A string item (text/plain kind) is never treated as a file.
+    expect(pastedImageFiles([item("text/plain", note, "string")], [])).toEqual([]);
+  });
+
+  it("names a pasted image after its id and a selected file after itself", () => {
+    const shot = new File([new Uint8Array(2048)], "shot.png", { type: "image/png" });
+    expect(attachmentSourceLabel({ file: shot, pasted: true, id: "abc123" })).toEqual({
+      label: "粘贴图片-abc1.png",
+      detail: "剪贴板图片 · 2 KB · 仅本页保留",
+    });
+    expect(attachmentSourceLabel({ file: shot, pasted: false, id: "abc123" })).toEqual({
+      label: "shot.png",
+      detail: "本机所选文件 · 2 KB · 仅本页保留",
+    });
+    // An empty file still reports 1 KB rather than 0.
+    const empty = new File([], "empty.png", { type: "image/png" });
+    expect(attachmentSourceLabel({ file: empty, pasted: true, id: "ffff" }).detail).toContain("1 KB");
   });
 });

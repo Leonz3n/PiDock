@@ -1,4 +1,4 @@
-import { useEffect, type ButtonHTMLAttributes, type ComponentPropsWithRef, type ReactNode } from "react";
+import { useEffect, useRef, type ButtonHTMLAttributes, type ComponentPropsWithRef, type ReactNode } from "react";
 import { Icon, type IconName } from "./Icon";
 
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
@@ -53,6 +53,9 @@ export function IconButton({
   const classes = [
     "inline-grid h-7 w-7 shrink-0 place-items-center rounded-md transition-colors",
     selected ? "bg-accent/10 text-accent" : "text-[#7c879b] hover:bg-soft hover:text-ink",
+    // A disabled icon button has to look disabled instead of hoverable; the
+    // composer's `+` is disabled in a read-only session ([UI 对齐 06] #30).
+    "disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent",
     "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
     className,
   ].join(" ");
@@ -164,7 +167,18 @@ export function Modal({
   onClose: () => void;
 }) {
   // Esc closes the dialog (the backdrop click already does); the handler lives
-  // on the document so it also works while a picker input has focus.
+  // on the document so it also works while a picker input has focus. The
+  // control that opened the dialog takes focus back when it closes ([UI 对齐 06]
+  // #30): the composer popovers are opened from the button row, and a dialog
+  // that drops focus on the floor loses the keyboard user's place.
+  const opener = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    return () => {
+      const element = opener.current;
+      if (element && document.contains(element)) element.focus();
+    };
+  }, []);
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();

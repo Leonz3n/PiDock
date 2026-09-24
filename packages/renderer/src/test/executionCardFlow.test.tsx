@@ -177,7 +177,7 @@ describe("execution card", () => {
 
   it("routes the failed entry into the existing retry dialog", async () => {
     const user = await openTask("failed");
-    const input = await screen.findByLabelText("消息输入");
+    const input = await screen.findByLabelText("给 Agent 的消息");
     await user.type(input, "修复构建并重试");
     await user.click(screen.getByRole("button", { name: "发送消息" }));
 

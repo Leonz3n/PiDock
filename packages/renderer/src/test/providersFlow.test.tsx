@@ -280,12 +280,12 @@ describe("model popover", () => {
     const user = userEvent.setup();
     renderApp("/projects/atlas/tasks/release?session=main");
     await screen.findByRole("heading", { name: "发布前检查" });
-    await user.type(screen.getByLabelText("消息输入"), "保留草稿");
+    await user.type(screen.getByLabelText("给 Agent 的消息"), "保留草稿");
     await user.click(screen.getByRole("button", { name: /^选择模型：Claude Sonnet$/ }));
     await screen.findByRole("dialog", { name: "选择 Provider 与模型" });
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("dialog", { name: "选择 Provider 与模型" })).toBeNull();
-    expect(screen.getByLabelText("消息输入")).toHaveValue("保留草稿");
+    expect(screen.getByLabelText("给 Agent 的消息")).toHaveValue("保留草稿");
 
     // The busy gate is a session-level rule: the seeded `deploy` session waits
     // for a confirmation, so the switch refuses and changes nothing.
@@ -332,8 +332,11 @@ describe("context and reasoning popovers", () => {
     const user = userEvent.setup();
     renderApp("/projects/atlas/tasks/release?session=main");
     await screen.findByRole("heading", { name: "发布前检查" });
-    // Below the composer input: raw occupancy/window, the percentage and the marker.
-    expect(screen.getByRole("button", { name: "查看上下文占用" })).toHaveTextContent("上下文 24800 / 200000 Tokens · 12.4%");
+    // Prototype `.compose-meta`: the compact `used / window · percent` line,
+    // the estimate marker, and the session's token total next to it.
+    const meta = screen.getByTestId("compose-meta");
+    expect(within(meta).getByRole("button", { name: "查看上下文占用" })).toHaveTextContent("24.8k / 200k · 12.4%");
+    expect(within(meta).getByRole("button", { name: "查看本会话 Token 用量" })).toHaveTextContent("本会话 68.4k tokens");
     await user.click(screen.getByRole("button", { name: "查看上下文占用" }));
     const dialog = await screen.findByRole("dialog", { name: "上下文占用" });
     expect(within(dialog).getByTestId("context-numbers")).toHaveTextContent("占用 24800 Tokens · 上限 200000 Tokens");
@@ -370,7 +373,7 @@ describe("context and reasoning popovers", () => {
     expect(within(dialog).getByTestId("context-numbers")).toBeInTheDocument();
 
     // `/compact` is the other entry point and reports the same reason.
-    await user.type(screen.getByLabelText("消息输入"), "/comp");
+    await user.type(screen.getByLabelText("给 Agent 的消息"), "/comp");
     const listbox = await screen.findByRole("listbox", { name: "输入候选" });
     await user.click(within(listbox).getByRole("option", { name: /\/compact/ }));
     await waitFor(() => expect(screen.getAllByText(refusal)).toHaveLength(2));

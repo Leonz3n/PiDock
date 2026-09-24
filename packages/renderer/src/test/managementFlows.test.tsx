@@ -290,7 +290,7 @@ describe("session permission picker", () => {
     renderApp("/projects/atlas/tasks/release?session=main");
     await screen.findByRole("heading", { name: "发布前检查" });
 
-    const input = screen.getByLabelText("消息输入");
+    const input = screen.getByLabelText("给 Agent 的消息");
     await user.type(input, "保留这段草稿");
 
     await user.click(screen.getByRole("button", { name: "选择权限：默认权限" }));
@@ -299,8 +299,8 @@ describe("session permission picker", () => {
 
     expect(await screen.findByRole("button", { name: "选择权限：只读" })).toBeInTheDocument();
     // The draft typed before the switch is preserved, and read-only gates input.
-    expect(screen.getByLabelText("消息输入")).toHaveValue("保留这段草稿");
-    expect(screen.getByLabelText("消息输入")).toBeDisabled();
+    expect(screen.getByLabelText("给 Agent 的消息")).toHaveValue("保留这段草稿");
+    expect(screen.getByLabelText("给 Agent 的消息")).toBeDisabled();
   });
 });
 

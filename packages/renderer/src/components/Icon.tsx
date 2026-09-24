@@ -32,6 +32,9 @@ export const ICON_PATHS = {
   play: "M8 4l12 8-12 8Z",
   stop: "M5 5h14v14H5z",
   close: "M6 6l12 12 M18 6L6 18",
+  // The composer's send button ([UI 对齐 06] #30): prototype `.send` is an
+  // accent square with this arrow, not a labelled button.
+  arrow: "M12 19V5 M5 12l7-7 7 7",
 } as const;
 
 export type IconName = keyof typeof ICON_PATHS;

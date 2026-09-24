@@ -127,6 +127,51 @@ export function suggestCommand(name: string, known: readonly string[]): string |
   return best !== null && bestDistance <= (target.length <= 4 ? 1 : 2) ? best : null;
 }
 
+/**
+ * One clipboard entry, as much of it as the paste rule needs. `ClipboardItem`
+ * satisfies this shape, and so does a hand-built test double.
+ */
+export type ClipboardImageSource = { kind: string; type: string; getAsFile: () => File | null };
+
+const isImageType = (type: string) => type.startsWith("image/");
+
+/**
+ * [UI 对齐 06] (#30) the prototype's `paste` handler: image items win, the
+ * clipboard's plain file list is the fallback, and a paste without an image
+ * returns nothing so the browser keeps its normal text paste (including undo).
+ * Kept as a rule instead of inline DOM code so both branches stay testable.
+ */
+export function pastedImageFiles(items: Iterable<ClipboardImageSource>, files: Iterable<File> = []): File[] {
+  const fromItems: File[] = [];
+  for (const item of items) {
+    if (item.kind !== "file" || !isImageType(item.type)) continue;
+    const file = item.getAsFile();
+    if (file) fromItems.push(file);
+  }
+  if (fromItems.length > 0) return fromItems;
+  return [...files].filter((file) => isImageType(file.type));
+}
+
+/** Attachment size line used by both attachment paths; never a real upload size. */
+export function attachmentSizeLabel(file: File): string {
+  return `${Math.max(1, Math.ceil(file.size / 1024))} KB`;
+}
+
+/**
+ * The prototype names a pasted image `粘贴图片-<id4>.<ext>` because the
+ * clipboard gives no file name; a selected file keeps its own name. The detail
+ * carries the provenance and the "this page only" limit, which is why the
+ * composer no longer needs a separate note line.
+ */
+export function attachmentSourceLabel(input: { file: File; pasted: boolean; id: string }): { label: string; detail: string } {
+  const { file, pasted, id } = input;
+  const extension = file.type.split("/")[1] ?? "png";
+  return {
+    label: pasted ? `粘贴图片-${id.slice(0, 4)}.${extension}` : file.name,
+    detail: `${pasted ? "剪贴板图片" : "本机所选文件"} · ${attachmentSizeLabel(file)} · 仅本页保留`,
+  };
+}
+
 /** Default ignored directories for the task file candidate list. */
 export const IGNORED_DIRECTORIES: readonly string[] = ["node_modules", ".git", "dist", "build", "out", "coverage", ".turbo", ".next", "target", "vendor"];
 
