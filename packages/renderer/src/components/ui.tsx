@@ -10,7 +10,9 @@ type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
 
 export function Button({ variant = "default", size = "md", className = "", ...rest }: ButtonProps) {
   const classes = [
-    "inline-flex items-center gap-1.5 rounded-md border transition-colors",
+    // `btn` is an unstyled marker for the prototype's `.btn`, so the evidence
+    // scripts can read the same selector on both sides ([UI 对齐 08] #32).
+    "btn inline-flex items-center gap-1.5 rounded-md border transition-colors",
     size === "sm" ? "px-2.5 py-1 text-xs" : "px-3.5 py-1.5 text-sm",
     variant === "primary"
       ? "border-accent bg-accent text-white hover:bg-accent/90"
@@ -77,17 +79,25 @@ export function IconButton({
   );
 }
 
+/**
+ * Prototype `.badge{font-size:10px;padding:2px 7px;border-radius:5px;
+ * background:#f1f3f4;color:#737d85}`, with its two tones
+ * (`.badge.live{color:var(--accent);background:var(--soft)}` and
+ * `.badge.warn{background:#faf1e0;color:#a67531}`) mapped to `accent`/`warn`.
+ * The `badge` class is an unstyled marker so the evidence scripts can read the
+ * same selector on both sides ([UI 对齐 08] #32).
+ */
 export function Badge({ children, tone = "neutral" }: { children: ReactNode; tone?: "neutral" | "accent" | "warn" }) {
   const tones = {
-    neutral: "border-line bg-soft text-muted",
-    accent: "border-accent/25 bg-accent/10 text-accent",
-    warn: "border-orange/35 bg-orange/10 text-orange",
+    neutral: "bg-[#f1f3f4] text-[#737d85]",
+    accent: "bg-soft text-accent",
+    warn: "bg-[#faf1e0] text-[#a67531]",
   } as const;
   return (
     // `whitespace-nowrap`: a squeezed tab strip must not wrap a CJK badge onto a
     // second line and grow the 32px session row ([UI 对齐 03] #27 review note).
     <span
-      className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] leading-4 whitespace-nowrap ${tones[tone]}`}
+      className={`badge inline-block rounded-[5px] px-[7px] py-[2px] text-[10px] whitespace-nowrap ${tones[tone]}`}
     >
       {children}
     </span>
@@ -201,14 +211,14 @@ export function Modal({
         aria-label={title}
         data-testid={testId}
         // Prototype `.modal{width:min(660px,100%);border-radius:13px}`
-        // ([UI 对齐 08] #32): every management dialog is that wide, so the
-        // resolved-config table and the project list have room to line up.
-        className="w-full max-w-[660px] rounded-panel border border-line bg-paper shadow-xl"
+        // ([UI 对齐 08] #32): every management dialog is that wide and that
+        // round, so the resolved-config table and the project list line up.
+        className="w-full max-w-[660px] rounded-[13px] border border-line bg-paper shadow-xl"
         onClick={(event) => event.stopPropagation()}
       >
         <header className="flex items-center justify-between border-b border-line px-5 py-3">
           <h2 className="text-sm font-medium">{title}</h2>
-          <Button variant="ghost" size="sm" onClick={onClose} aria-label="关闭">
+          <Button variant="ghost" size="sm" data-testid="modal-close" onClick={onClose} aria-label="关闭">
             关闭
           </Button>
         </header>
