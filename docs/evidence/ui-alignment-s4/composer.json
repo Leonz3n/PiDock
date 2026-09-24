@@ -256,8 +256,8 @@
       "strip": null,
       "stripCapped": null,
       "attachmentChips": 0,
-      "workspaceH": 3430,
-      "messagesH": 3133,
+      "workspaceH": 3455,
+      "messagesH": 3158,
       "cardPresent": true,
       "cardH": 53,
       "rows": [
@@ -275,7 +275,7 @@
         },
         {
           "kind": "conversation-log",
-          "h": 3133
+          "h": 3158
         },
         {
           "kind": "task-composer",
@@ -509,7 +509,7 @@
     "paste": {
       "defaultPrevented": true,
       "attachmentLabels": [
-        "粘贴图片-3596.png"
+        "粘贴图片-9be9.png"
       ],
       "attachmentDetail": "剪贴板图片 · 1 KB · 仅本页保留",
       "draftText": "看这张截图",

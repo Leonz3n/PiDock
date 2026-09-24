@@ -33,6 +33,24 @@ const task = (id, session) => `${RENDERER}/projects/atlas/tasks/${id}?session=${
 
 /** The #29 evidence (commit 3f20369) measured this message area at 1440x900. */
 const S3_MESSAGES_BASELINE = 349;
+/**
+ * What the [UI 对齐 05] (#29) evidence committed for every card state *before*
+ * this slice rewrote the conversation chrome
+ * (`git show 3f20369:docs/evidence/ui-alignment-s3/execution-card.json`). The
+ * comparison is the point of the field: the band recovery has to show up as a
+ * larger message area, and no other state may shrink.
+ */
+const S3_MESSAGES_BEFORE = {
+  "idle-other-busy": 350,
+  approval: 346,
+  running: 305,
+  stopped: 434,
+  rejected: 434,
+  expired: 406,
+  failed: 315,
+  "failed-readonly": 315,
+  completed: 309,
+};
 /** [UI 对齐 03] (#27) floor for a conversation with no execution card. */
 const MESSAGES_FLOOR_NO_CARD = 400;
 /** [UI 对齐 05] (#29) parent ruling: the floor when this slice's own chrome is absent. */
@@ -94,7 +112,9 @@ report.prototypeA = await prototype.evaluate(() => {
     return {
       padding: computed.padding,
       fontSize: computed.fontSize,
+      color: computed.color,
       gap: computed.gap,
+      marginTop: computed.marginTop,
       marginBottom: computed.marginBottom,
       marginLeft: computed.marginLeft,
       backgroundColor: computed.backgroundColor,
@@ -126,6 +146,10 @@ report.prototypeA = await prototype.evaluate(() => {
     avatarH: box(document.querySelector(".message-head .avatar")),
     dateLabelText: document.querySelector(".date-label")?.textContent?.trim() ?? null,
     toolcardPresent: document.querySelector(".toolcard") !== null,
+    // Prototype `app.js:57`: `.run-result` and the two `.btn.sm` actions are
+    // siblings of `.toolcard` inside `.agentbody`, not children of the card.
+    runResultInsideToolcard: document.querySelector(".toolcard .run-result") !== null,
+    toolcardChildButtons: document.querySelectorAll(".toolcard button").length,
   };
 });
 await prototype.screenshot({ path: `${OUT}/prototype/1440x900-conversation.png` });
@@ -144,7 +168,9 @@ const measureConversation = (page) =>
       return {
         padding: computed.padding,
         fontSize: computed.fontSize,
+        color: computed.color,
         gap: computed.gap,
+        marginTop: computed.marginTop,
         marginBottom: computed.marginBottom,
         marginLeft: computed.marginLeft,
         backgroundColor: computed.backgroundColor,
@@ -225,14 +251,22 @@ const measureConversation = (page) =>
         ? {
             h: box(card),
             insideLog: log ? log.contains(card) : null,
-            rows: [...card.querySelectorAll('[data-testid^="tool-result-row-"]')].map((row) => row.textContent.trim()),
+            rows: [...card.querySelectorAll('div[data-testid^="tool-result-row-"]')].map((row) => row.textContent.trim()),
             steps: [...card.querySelectorAll('[data-testid^="tool-result-step-"]')].map((step) => ({
               text: step.textContent.trim(),
               // The prototype marks the step a running turn is on with `.dot.live`.
               live: step.querySelector("span")?.className.includes("bg-accent") ?? false,
             })),
-            summary: card.querySelector('[data-testid="tool-result-summary"]')?.textContent?.trim() ?? null,
-            actions: [...card.querySelectorAll("button")].map((button) => button.textContent.trim()),
+            // `.run-result` and the action pair belong to the agent body, so they
+            // are read outside the card and the placement is recorded explicitly.
+            summary: document.querySelector('[data-testid="tool-result-summary"]')?.textContent?.trim() ?? null,
+            summaryInsideCard: card.querySelector('[data-testid="tool-result-summary"]') !== null,
+            summaryH: box(document.querySelector('[data-testid="tool-result-summary"]')),
+            actionsInsideCard: card.querySelector('[data-testid="tool-result-actions"]') !== null,
+            actions: [
+              ...card.querySelectorAll("button"),
+              ...document.querySelectorAll('[data-testid="tool-result-actions"] button'),
+            ].map((button) => button.textContent.trim()),
           }
         : null,
       cards: cards ? { h: box(cards), gridTemplateColumns: getComputedStyle(cards).gridTemplateColumns, cardH: box(cards.querySelector("button")) } : null,
@@ -240,7 +274,7 @@ const measureConversation = (page) =>
       cardLabels: [...document.querySelectorAll('[data-testid="subagent-cards"] button')].map((button) => ({
         label: button.getAttribute("aria-label"),
         pressed: button.getAttribute("aria-pressed"),
-        live: button.querySelector("span span")?.className.includes("bg-accent") ?? false,
+        live: button.querySelector("span[aria-hidden]")?.className.includes("bg-accent") ?? false,
       })),
       band: band
         ? {
@@ -337,13 +371,46 @@ await withPage(1440, 900, async (page) => {
     ["brandmark height", `${mine.brandmarkH}px`, `${prototypeA.brandmarkH}px`],
     ["avatar height", `${mine.avatarH}px`, `${prototypeA.avatarH}px`],
     ["date-label font", mine.dateLabel?.fontSize, prototypeA.dateLabel?.fontSize],
+    ["date-label colour", mine.dateLabel?.color, prototypeA.dateLabel?.color],
   ];
+  // Prototype `app.js:57`: `.run-result` lives in `.agentbody`, beside `.toolcard`.
+  // (The footer is compared in the reference-message section: this page's seeded
+  // messages carry no attribution, so there is no `.message-footer` to read here.)
+  check(
+    "prototype keeps the result line out of the card",
+    prototypeA.runResultInsideToolcard === false && prototypeA.toolcardPresent === true,
+    `.toolcard .run-result present=${prototypeA.runResultInsideToolcard} toolcard=${prototypeA.toolcardPresent}`,
+  );
   report.prototypeEquality = pairs.map(([label, actual, expected]) => ({ label, actual, expected, equal: actual === expected }));
   for (const pair of report.prototypeEquality) {
     check(`prototype ${pair.label}`, pair.equal, `${pair.actual} != ${pair.expected}`);
     console.log(`prototype ${pair.label}: ${pair.actual} vs ${pair.expected} ${pair.equal ? "ok" : "MISMATCH"}`);
   }
 });
+
+// The prototype's `.subagent-cards` is `repeat(auto-fit,minmax(190px,1fr))` and is
+// always expanded, so its real track count at a given width is the behaviour the
+// renderer's grid has to reproduce. Measured from the prototype in this run —
+// never asserted from a breakpoint of our own.
+async function prototypeSubagentColumns(width, height) {
+  const page = await chrome.newPage({ viewport: { width, height } });
+  try {
+    await page.goto(`${PROTOTYPE}/?variant=A`, { waitUntil: "networkidle" });
+    await page.waitForTimeout(300);
+    return await page.evaluate(() => {
+      const grid = document.querySelector(".subagent-cards");
+      if (!grid) return null;
+      const tracks = getComputedStyle(grid).gridTemplateColumns;
+      return {
+        tracks,
+        columns: tracks.split(" ").filter((value) => value !== "0px" && value.length > 0).length,
+        cards: grid.children.length,
+      };
+    });
+  } finally {
+    await page.close();
+  }
+}
 
 // ------------------------------------------------------------ subagent band
 for (const [name, width, height] of [
@@ -358,6 +425,7 @@ for (const [name, width, height] of [
     await page.waitForTimeout(250);
     const expanded = await measureConversation(page);
     const columns = (expanded.cards?.gridTemplateColumns ?? "").split(" ").filter((value) => value !== "0px" && value.length > 0).length;
+    const prototypeColumns = await prototypeSubagentColumns(width, height);
     report.subagents[name] = {
       collapsed: { bandH: collapsed.band?.h, messagesH: collapsed.messagesH, padding: collapsed.band?.padding, summary: collapsed.band?.summary },
       expanded: {
@@ -366,6 +434,8 @@ for (const [name, width, height] of [
         padding: expanded.band?.padding,
         gridTemplateColumns: expanded.cards?.gridTemplateColumns,
         columns,
+        prototypeColumns: prototypeColumns?.columns ?? null,
+        prototypeTracks: prototypeColumns?.tracks ?? null,
         cardH: expanded.cards?.cardH,
         cardPadding: expanded.card?.padding,
         labels: expanded.cardLabels,
@@ -376,11 +446,17 @@ for (const [name, width, height] of [
     check(`band target ${name}`, (collapsed.band?.h ?? 999) <= SUBAGENT_BAND_TARGET, `collapsed band ${collapsed.band?.h}px > ${SUBAGENT_BAND_TARGET}px`);
     check(`band delta ${name}`, (collapsed.band?.h ?? 0) < SUBAGENT_BAND_BEFORE, `collapsed band ${collapsed.band?.h}px is not below the ${SUBAGENT_BAND_BEFORE}px the #29 review measured`);
     check(`band grows on expand ${name}`, (expanded.band?.h ?? 0) > (collapsed.band?.h ?? 0), "expanding the disclosure must add the card grid");
-    check(`card columns ${name}`, columns === (width <= 960 ? 1 : 2), `${columns} columns at ${width}px`);
+    // The prototype renders two real tracks at every measured width, so the
+    // column count is compared against the prototype, not against our own rule.
+    check(
+      `card columns ${name}`,
+      prototypeColumns !== null && columns === prototypeColumns.columns,
+      `${columns} columns at ${width}px vs prototype ${prototypeColumns?.columns} (${prototypeColumns?.tracks})`,
+    );
     check(`card padding ${name}`, expanded.card?.padding === "10px 12px", `card padding ${expanded.card?.padding}`);
     check(`card labels ${name}`, expanded.cardLabels.length === 2 && expanded.cardLabels.every((item) => item.label?.startsWith("查看 ")), JSON.stringify(expanded.cardLabels));
     console.log(
-      `subagents ${name}: collapsed=${collapsed.band?.h} expanded=${expanded.band?.h} columns=${columns} ` +
+      `subagents ${name}: collapsed=${collapsed.band?.h} expanded=${expanded.band?.h} columns=${columns} (prototype ${prototypeColumns?.columns}) ` +
         `messages ${collapsed.messagesH} -> ${expanded.messagesH}`,
     );
   });
@@ -447,6 +523,10 @@ await withPage(1440, 900, async (page) => {
   await page.screenshot({ path: `${OUT}/renderer/1440x900-toolcard-completed.png` });
   check("tool card appears after a run", running.toolCard !== null, "no card while the turn runs");
   check("tool card inside the log", running.toolCard?.insideLog === true, "the card must live in the scroll area, not above it");
+  // Prototype `app.js:57`: the result line and the action pair are `.toolcard`'s
+  // siblings inside the agent body, so neither may sit inside the card.
+  check("result line outside the card", running.toolCard?.summaryInsideCard === false, "the summary must be a sibling of the card");
+  check("card actions outside the card", running.toolCard?.actionsInsideCard === false, "the action pair must be a sibling of the card");
   check("tool card rows", running.toolCard?.rows.length === 2, `rows ${JSON.stringify(running.toolCard?.rows)}`);
   check("tool card steps", (running.toolCard?.steps.length ?? 0) >= 2, `steps ${JSON.stringify(running.toolCard?.steps)}`);
   check("tool card live step", running.toolCard?.steps.some((step) => step.live) === true, `running steps ${JSON.stringify(running.toolCard?.steps)}`);
@@ -517,7 +597,13 @@ await withPage(1440, 900, async (page) => {
   check("message image preview", (await page.locator('[data-testid="attachment-preview-image"]').count()) === 1, "thumbnail did not open the lightbox");
   await page.screenshot({ path: `${OUT}/renderer/1440x900-reference-message-lightbox.png` });
   check("message footer", (measured.footerText ?? "").includes(" / "), `footer ${measured.footerText}`);
-  console.log(`reference message: refchip=${measured.refchipText} images=${measured.imageCount} footer=${measured.footerText}`);
+  // Prototype `.message-footer{margin-top:12px;color:#9aa4a9;font-size:10px}` — a
+  // plain line, not a bordered chip; compared against the prototype read in this run.
+  const prototypeFooter = report.prototypeA.messageFooter;
+  check("message footer font", measured.footer?.fontSize === prototypeFooter?.fontSize, `${measured.footer?.fontSize} != ${prototypeFooter?.fontSize}`);
+  check("message footer colour", measured.footer?.color === prototypeFooter?.color, `${measured.footer?.color} != ${prototypeFooter?.color}`);
+  check("message footer margin", measured.footer?.marginTop === prototypeFooter?.marginTop, `${measured.footer?.marginTop} != ${prototypeFooter?.marginTop}`);
+  console.log(`reference message: refchip=${measured.refchipText} images=${measured.imageCount} footer=${measured.footerText} (${measured.footer?.fontSize} ${measured.footer?.color})`);
 });
 
 // ------------------------------------------------------------- empty state
@@ -580,9 +666,15 @@ const S3_FLOORS = {
 report.s3CrossCheck = {};
 for (const [state, floor] of Object.entries(S3_FLOORS)) {
   const measured = s3.card?.[state]?.messagesH ?? null;
-  report.s3CrossCheck[state] = { messagesH: measured, floor, before: report.s3Before?.[state] ?? null };
+  report.s3CrossCheck[state] = { messagesH: measured, floor, before: S3_MESSAGES_BEFORE[state] ?? null };
   check(`#29 floor ${state}`, (measured ?? 0) >= floor, `message area ${measured}px < ${floor}px`);
-  console.log(`${state}: messages=${measured} floor=${floor}`);
+  // The band fell from 78px to 51px, so the conversation may only grow; a state
+  // that came back smaller would mean the chrome moved into the message area.
+  const before = S3_MESSAGES_BEFORE[state];
+  if (before !== undefined && measured !== null) {
+    check(`#29 no regression ${state}`, measured >= before, `message area ${measured}px < the ${before}px #29 committed`);
+  }
+  console.log(`${state}: messages=${measured} floor=${floor} before=${before ?? "-"}`);
 }
 // The band recovery, measured against the value the #29 evidence committed
 // (commit 3f20369): the collapse must have bought the conversation at least 25px.

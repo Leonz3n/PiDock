@@ -8,7 +8,9 @@
     "messages": {
       "padding": "26px 28px 10px",
       "fontSize": "13px",
+      "color": "rgb(37, 43, 48)",
       "gap": "normal",
+      "marginTop": "0px",
       "marginBottom": "0px",
       "marginLeft": "187px",
       "backgroundColor": "rgba(0, 0, 0, 0)",
@@ -22,7 +24,9 @@
     "message": {
       "padding": "0px",
       "fontSize": "13px",
+      "color": "rgb(37, 43, 48)",
       "gap": "normal",
+      "marginTop": "0px",
       "marginBottom": "25px",
       "marginLeft": "0px",
       "backgroundColor": "rgba(0, 0, 0, 0)",
@@ -35,7 +39,9 @@
     "messageHead": {
       "padding": "0px",
       "fontSize": "11px",
+      "color": "rgb(37, 43, 48)",
       "gap": "9px",
+      "marginTop": "0px",
       "marginBottom": "10px",
       "marginLeft": "0px",
       "backgroundColor": "rgba(0, 0, 0, 0)",
@@ -48,7 +54,9 @@
     "userbubble": {
       "padding": "13px 16px",
       "fontSize": "12px",
+      "color": "rgb(37, 43, 48)",
       "gap": "normal",
+      "marginTop": "0px",
       "marginBottom": "0px",
       "marginLeft": "31px",
       "backgroundColor": "rgb(245, 246, 246)",
@@ -61,7 +69,9 @@
     "agentbody": {
       "padding": "0px",
       "fontSize": "13px",
+      "color": "rgb(37, 43, 48)",
       "gap": "normal",
+      "marginTop": "0px",
       "marginBottom": "0px",
       "marginLeft": "31px",
       "backgroundColor": "rgba(0, 0, 0, 0)",
@@ -74,7 +84,9 @@
     "refchip": {
       "padding": "1px 5px",
       "fontSize": "10px",
+      "color": "rgb(100, 103, 108)",
       "gap": "5px",
+      "marginTop": "0px",
       "marginBottom": "0px",
       "marginLeft": "0px",
       "backgroundColor": "rgb(237, 239, 243)",
@@ -87,7 +99,9 @@
     "dateLabel": {
       "padding": "0px",
       "fontSize": "10px",
+      "color": "rgb(164, 171, 176)",
       "gap": "normal",
+      "marginTop": "0px",
       "marginBottom": "22px",
       "marginLeft": "0px",
       "backgroundColor": "rgba(0, 0, 0, 0)",
@@ -100,7 +114,9 @@
     "messageFooter": {
       "padding": "0px",
       "fontSize": "10px",
+      "color": "rgb(154, 164, 169)",
       "gap": "normal",
+      "marginTop": "12px",
       "marginBottom": "0px",
       "marginLeft": "0px",
       "backgroundColor": "rgba(0, 0, 0, 0)",
@@ -113,7 +129,9 @@
     "toolcard": {
       "padding": "0px",
       "fontSize": "13px",
+      "color": "rgb(37, 43, 48)",
       "gap": "normal",
+      "marginTop": "12px",
       "marginBottom": "12px",
       "marginLeft": "0px",
       "backgroundColor": "rgb(255, 255, 255)",
@@ -126,7 +144,9 @@
     "toolrow": {
       "padding": "9px 12px",
       "fontSize": "11px",
+      "color": "rgb(37, 43, 48)",
       "gap": "9px",
+      "marginTop": "0px",
       "marginBottom": "0px",
       "marginLeft": "0px",
       "backgroundColor": "rgba(0, 0, 0, 0)",
@@ -139,7 +159,9 @@
     "steps": {
       "padding": "9px 12px",
       "fontSize": "11px",
+      "color": "rgb(103, 105, 110)",
       "gap": "7px",
+      "marginTop": "0px",
       "marginBottom": "0px",
       "marginLeft": "0px",
       "backgroundColor": "rgba(0, 0, 0, 0)",
@@ -152,7 +174,9 @@
     "runResult": {
       "padding": "9px 12px",
       "fontSize": "11px",
+      "color": "rgb(37, 43, 48)",
       "gap": "normal",
+      "marginTop": "12px",
       "marginBottom": "12px",
       "marginLeft": "0px",
       "backgroundColor": "rgb(244, 245, 248)",
@@ -165,7 +189,9 @@
     "sessionSubagents": {
       "padding": "12px 20px",
       "fontSize": "13px",
+      "color": "rgb(37, 43, 48)",
       "gap": "normal",
+      "marginTop": "0px",
       "marginBottom": "0px",
       "marginLeft": "0px",
       "backgroundColor": "rgb(252, 252, 253)",
@@ -178,7 +204,9 @@
     "subagentCards": {
       "padding": "0px",
       "fontSize": "13px",
+      "color": "rgb(37, 43, 48)",
       "gap": "8px",
+      "marginTop": "9px",
       "marginBottom": "0px",
       "marginLeft": "0px",
       "backgroundColor": "rgba(0, 0, 0, 0)",
@@ -191,7 +219,9 @@
     "subagentCard": {
       "padding": "10px 12px",
       "fontSize": "13px",
+      "color": "rgb(37, 43, 48)",
       "gap": "normal",
+      "marginTop": "0px",
       "marginBottom": "0px",
       "marginLeft": "0px",
       "backgroundColor": "rgb(255, 255, 255)",
@@ -204,7 +234,9 @@
     "brandmarkH": 22,
     "avatarH": 25,
     "dateLabelText": "今天 · 示例会话",
-    "toolcardPresent": true
+    "toolcardPresent": true,
+    "runResultInsideToolcard": false,
+    "toolcardChildButtons": 2
   },
   "viewports": {
     "1440x900": {
@@ -218,7 +250,9 @@
       "messages": {
         "padding": "26px 28px 10px",
         "fontSize": "16px",
+        "color": "rgb(37, 43, 48)",
         "gap": "normal",
+        "marginTop": "0px",
         "marginBottom": "0px",
         "marginLeft": "0px",
         "backgroundColor": "rgb(255, 255, 255)",
@@ -231,7 +265,9 @@
       "message": {
         "padding": "0px",
         "fontSize": "16px",
+        "color": "rgb(37, 43, 48)",
         "gap": "normal",
+        "marginTop": "0px",
         "marginBottom": "25px",
         "marginLeft": "0px",
         "backgroundColor": "rgba(0, 0, 0, 0)",
@@ -244,7 +280,9 @@
       "messageHead": {
         "padding": "0px",
         "fontSize": "11px",
+        "color": "rgb(37, 43, 48)",
         "gap": "9px",
+        "marginTop": "0px",
         "marginBottom": "10px",
         "marginLeft": "0px",
         "backgroundColor": "rgba(0, 0, 0, 0)",
@@ -257,7 +295,9 @@
       "userbubble": {
         "padding": "13px 16px",
         "fontSize": "16px",
+        "color": "rgb(37, 43, 48)",
         "gap": "normal",
+        "marginTop": "0px",
         "marginBottom": "0px",
         "marginLeft": "31px",
         "backgroundColor": "rgb(245, 246, 246)",
@@ -281,7 +321,9 @@
       "dateLabel": {
         "padding": "0px",
         "fontSize": "10px",
+        "color": "rgb(164, 171, 176)",
         "gap": "normal",
+        "marginTop": "0px",
         "marginBottom": "22px",
         "marginLeft": "0px",
         "backgroundColor": "rgba(0, 0, 0, 0)",
@@ -339,7 +381,9 @@
       "messages": {
         "padding": "26px 28px 10px",
         "fontSize": "16px",
+        "color": "rgb(37, 43, 48)",
         "gap": "normal",
+        "marginTop": "0px",
         "marginBottom": "0px",
         "marginLeft": "0px",
         "backgroundColor": "rgb(255, 255, 255)",
@@ -352,7 +396,9 @@
       "message": {
         "padding": "0px",
         "fontSize": "16px",
+        "color": "rgb(37, 43, 48)",
         "gap": "normal",
+        "marginTop": "0px",
         "marginBottom": "25px",
         "marginLeft": "0px",
         "backgroundColor": "rgba(0, 0, 0, 0)",
@@ -365,7 +411,9 @@
       "messageHead": {
         "padding": "0px",
         "fontSize": "11px",
+        "color": "rgb(37, 43, 48)",
         "gap": "9px",
+        "marginTop": "0px",
         "marginBottom": "10px",
         "marginLeft": "0px",
         "backgroundColor": "rgba(0, 0, 0, 0)",
@@ -378,7 +426,9 @@
       "userbubble": {
         "padding": "13px 16px",
         "fontSize": "16px",
+        "color": "rgb(37, 43, 48)",
         "gap": "normal",
+        "marginTop": "0px",
         "marginBottom": "0px",
         "marginLeft": "31px",
         "backgroundColor": "rgb(245, 246, 246)",
@@ -402,7 +452,9 @@
       "dateLabel": {
         "padding": "0px",
         "fontSize": "10px",
+        "color": "rgb(164, 171, 176)",
         "gap": "normal",
+        "marginTop": "0px",
         "marginBottom": "22px",
         "marginLeft": "0px",
         "backgroundColor": "rgba(0, 0, 0, 0)",
@@ -460,7 +512,9 @@
       "messages": {
         "padding": "20px",
         "fontSize": "16px",
+        "color": "rgb(37, 43, 48)",
         "gap": "normal",
+        "marginTop": "0px",
         "marginBottom": "0px",
         "marginLeft": "0px",
         "backgroundColor": "rgb(255, 255, 255)",
@@ -473,7 +527,9 @@
       "message": {
         "padding": "0px",
         "fontSize": "16px",
+        "color": "rgb(37, 43, 48)",
         "gap": "normal",
+        "marginTop": "0px",
         "marginBottom": "25px",
         "marginLeft": "0px",
         "backgroundColor": "rgba(0, 0, 0, 0)",
@@ -486,7 +542,9 @@
       "messageHead": {
         "padding": "0px",
         "fontSize": "11px",
+        "color": "rgb(37, 43, 48)",
         "gap": "9px",
+        "marginTop": "0px",
         "marginBottom": "10px",
         "marginLeft": "0px",
         "backgroundColor": "rgba(0, 0, 0, 0)",
@@ -499,7 +557,9 @@
       "userbubble": {
         "padding": "13px 16px",
         "fontSize": "16px",
+        "color": "rgb(37, 43, 48)",
         "gap": "normal",
+        "marginTop": "0px",
         "marginBottom": "0px",
         "marginLeft": "31px",
         "backgroundColor": "rgb(245, 246, 246)",
@@ -523,7 +583,9 @@
       "dateLabel": {
         "padding": "0px",
         "fontSize": "10px",
+        "color": "rgb(164, 171, 176)",
         "gap": "normal",
+        "marginTop": "0px",
         "marginBottom": "22px",
         "marginLeft": "0px",
         "backgroundColor": "rgba(0, 0, 0, 0)",
@@ -581,7 +643,9 @@
       "messages": {
         "padding": "20px",
         "fontSize": "16px",
+        "color": "rgb(37, 43, 48)",
         "gap": "normal",
+        "marginTop": "0px",
         "marginBottom": "0px",
         "marginLeft": "0px",
         "backgroundColor": "rgb(255, 255, 255)",
@@ -594,7 +658,9 @@
       "message": {
         "padding": "0px",
         "fontSize": "16px",
+        "color": "rgb(37, 43, 48)",
         "gap": "normal",
+        "marginTop": "0px",
         "marginBottom": "25px",
         "marginLeft": "0px",
         "backgroundColor": "rgba(0, 0, 0, 0)",
@@ -607,7 +673,9 @@
       "messageHead": {
         "padding": "0px",
         "fontSize": "11px",
+        "color": "rgb(37, 43, 48)",
         "gap": "9px",
+        "marginTop": "0px",
         "marginBottom": "10px",
         "marginLeft": "0px",
         "backgroundColor": "rgba(0, 0, 0, 0)",
@@ -620,7 +688,9 @@
       "userbubble": {
         "padding": "13px 16px",
         "fontSize": "16px",
+        "color": "rgb(37, 43, 48)",
         "gap": "normal",
+        "marginTop": "0px",
         "marginBottom": "0px",
         "marginLeft": "31px",
         "backgroundColor": "rgb(245, 246, 246)",
@@ -644,7 +714,9 @@
       "dateLabel": {
         "padding": "0px",
         "fontSize": "10px",
+        "color": "rgb(164, 171, 176)",
         "gap": "normal",
+        "marginTop": "0px",
         "marginBottom": "22px",
         "marginLeft": "0px",
         "backgroundColor": "rgba(0, 0, 0, 0)",
@@ -702,7 +774,9 @@
       "messages": {
         "padding": "16px",
         "fontSize": "16px",
+        "color": "rgb(37, 43, 48)",
         "gap": "normal",
+        "marginTop": "0px",
         "marginBottom": "0px",
         "marginLeft": "0px",
         "backgroundColor": "rgb(255, 255, 255)",
@@ -715,7 +789,9 @@
       "message": {
         "padding": "0px",
         "fontSize": "16px",
+        "color": "rgb(37, 43, 48)",
         "gap": "normal",
+        "marginTop": "0px",
         "marginBottom": "25px",
         "marginLeft": "0px",
         "backgroundColor": "rgba(0, 0, 0, 0)",
@@ -728,7 +804,9 @@
       "messageHead": {
         "padding": "0px",
         "fontSize": "11px",
+        "color": "rgb(37, 43, 48)",
         "gap": "9px",
+        "marginTop": "0px",
         "marginBottom": "10px",
         "marginLeft": "0px",
         "backgroundColor": "rgba(0, 0, 0, 0)",
@@ -741,7 +819,9 @@
       "userbubble": {
         "padding": "13px 16px",
         "fontSize": "16px",
+        "color": "rgb(37, 43, 48)",
         "gap": "normal",
+        "marginTop": "0px",
         "marginBottom": "0px",
         "marginLeft": "0px",
         "backgroundColor": "rgb(245, 246, 246)",
@@ -765,7 +845,9 @@
       "dateLabel": {
         "padding": "0px",
         "fontSize": "10px",
+        "color": "rgb(164, 171, 176)",
         "gap": "normal",
+        "marginTop": "0px",
         "marginBottom": "22px",
         "marginLeft": "0px",
         "backgroundColor": "rgba(0, 0, 0, 0)",
@@ -827,13 +909,15 @@
         "padding": "12px 20px",
         "gridTemplateColumns": "549px 549px 0px 0px 0px",
         "columns": 2,
+        "prototypeColumns": 2,
+        "prototypeTracks": "583px 583px 0px 0px 0px",
         "cardH": 60,
         "cardPadding": "10px 12px",
         "labels": [
           {
             "label": "查看 查询链路分析，运行中",
             "pressed": "false",
-            "live": false
+            "live": true
           },
           {
             "label": "查看 前端字段检查，已完成",
@@ -851,18 +935,20 @@
         "summary": "Subagent21 个运行中展开列表"
       },
       "expanded": {
-        "bandH": 185,
-        "messagesH": 147,
+        "bandH": 118,
+        "messagesH": 215,
         "padding": "11px 16px",
-        "gridTemplateColumns": "754px",
-        "columns": 1,
+        "gridTemplateColumns": "373px 373px 0px",
+        "columns": 2,
+        "prototypeColumns": 2,
+        "prototypeTracks": "394px 394px 0px 0px",
         "cardH": 60,
         "cardPadding": "10px 12px",
         "labels": [
           {
             "label": "查看 查询链路分析，运行中",
             "pressed": "false",
-            "live": false
+            "live": true
           },
           {
             "label": "查看 前端字段检查，已完成",
@@ -875,11 +961,11 @@
   },
   "toolCard": {
     "running": {
-      "h": 213,
+      "h": 132,
       "insideLog": true,
       "rows": [
-        "4 个仓库工作副本查看文件 ↗",
-        "服务依赖与端口5 本地 · 2 远程"
+        "准备 4 个仓库工作副本查看文件 ↗",
+        "解析服务依赖与端口5 本地 · 2 远程"
       ],
       "steps": [
         {
@@ -892,6 +978,9 @@
         }
       ],
       "summary": "执行中 · 正在执行",
+      "summaryInsideCard": false,
+      "summaryH": 38,
+      "actionsInsideCard": false,
       "actions": [
         "查看文件 ↗",
         "查看浏览器",
@@ -899,11 +988,11 @@
       ]
     },
     "completed": {
-      "h": 213,
+      "h": 132,
       "insideLog": true,
       "rows": [
-        "4 个仓库工作副本查看文件 ↗",
-        "服务依赖与端口5 本地 · 2 远程"
+        "准备 4 个仓库工作副本查看文件 ↗",
+        "解析服务依赖与端口5 本地 · 2 远程"
       ],
       "steps": [
         {
@@ -916,6 +1005,9 @@
         }
       ],
       "summary": "✓ 执行完成",
+      "summaryInsideCard": false,
+      "summaryH": 38,
+      "actionsInsideCard": false,
       "actions": [
         "查看文件 ↗",
         "查看浏览器",
@@ -925,11 +1017,11 @@
     "completedMessagesH": 336,
     "runningMessagesH": 207,
     "failed": {
-      "h": 281,
+      "h": 179,
       "insideLog": true,
       "rows": [
-        "4 个仓库工作副本查看文件 ↗",
-        "服务依赖与端口5 本地 · 2 远程"
+        "准备 4 个仓库工作副本查看文件 ↗",
+        "解析服务依赖与端口5 本地 · 2 远程"
       ],
       "steps": [
         {
@@ -950,6 +1042,9 @@
         }
       ],
       "summary": "✗ 构建失败，已保留现场失败范围：构建步骤：front-monorepo web 包编译失败",
+      "summaryInsideCard": false,
+      "summaryH": 59,
+      "actionsInsideCard": false,
       "actions": [
         "查看文件 ↗",
         "查看浏览器",
@@ -960,7 +1055,7 @@
   },
   "empty": {
     "present": true,
-    "h": 150,
+    "h": 147,
     "text": "π准备好开始了描述这个任务的目标，或用 @ 引用当前任务代码。",
     "brandmark": true
   },
@@ -984,7 +1079,9 @@
     "messages": {
       "padding": "26px 28px 10px",
       "fontSize": "16px",
+      "color": "rgb(37, 43, 48)",
       "gap": "normal",
+      "marginTop": "0px",
       "marginBottom": "0px",
       "marginLeft": "0px",
       "backgroundColor": "rgb(255, 255, 255)",
@@ -997,7 +1094,9 @@
     "message": {
       "padding": "0px",
       "fontSize": "16px",
+      "color": "rgb(37, 43, 48)",
       "gap": "normal",
+      "marginTop": "0px",
       "marginBottom": "25px",
       "marginLeft": "0px",
       "backgroundColor": "rgba(0, 0, 0, 0)",
@@ -1010,7 +1109,9 @@
     "messageHead": {
       "padding": "0px",
       "fontSize": "11px",
+      "color": "rgb(37, 43, 48)",
       "gap": "9px",
+      "marginTop": "0px",
       "marginBottom": "10px",
       "marginLeft": "0px",
       "backgroundColor": "rgba(0, 0, 0, 0)",
@@ -1023,7 +1124,9 @@
     "userbubble": {
       "padding": "13px 16px",
       "fontSize": "16px",
+      "color": "rgb(37, 43, 48)",
       "gap": "normal",
+      "marginTop": "0px",
       "marginBottom": "0px",
       "marginLeft": "31px",
       "backgroundColor": "rgb(245, 246, 246)",
@@ -1047,7 +1150,9 @@
     "dateLabel": {
       "padding": "0px",
       "fontSize": "10px",
+      "color": "rgb(164, 171, 176)",
       "gap": "normal",
+      "marginTop": "0px",
       "marginBottom": "22px",
       "marginLeft": "0px",
       "backgroundColor": "rgba(0, 0, 0, 0)",
@@ -1068,7 +1173,9 @@
     "refchip": {
       "padding": "1px 5px",
       "fontSize": "10px",
+      "color": "rgb(100, 103, 108)",
       "gap": "5px",
+      "marginTop": "0px",
       "marginBottom": "0px",
       "marginLeft": "0px",
       "backgroundColor": "rgb(237, 239, 243)",
@@ -1090,7 +1197,9 @@
     "footer": {
       "padding": "0px",
       "fontSize": "10px",
+      "color": "rgb(154, 164, 169)",
       "gap": "normal",
+      "marginTop": "12px",
       "marginBottom": "0px",
       "marginLeft": "0px",
       "backgroundColor": "rgba(0, 0, 0, 0)",
@@ -1102,11 +1211,11 @@
     },
     "footerText": "Anthropic 官方 / Claude Sonnet",
     "toolCard": {
-      "h": 213,
+      "h": 132,
       "insideLog": true,
       "rows": [
-        "4 个仓库工作副本查看文件 ↗",
-        "服务依赖与端口5 本地 · 2 远程"
+        "准备 4 个仓库工作副本查看文件 ↗",
+        "解析服务依赖与端口5 本地 · 2 远程"
       ],
       "steps": [
         {
@@ -1119,6 +1228,9 @@
         }
       ],
       "summary": "✓ 执行完成",
+      "summaryInsideCard": false,
+      "summaryH": 38,
+      "actionsInsideCard": false,
       "actions": [
         "查看文件 ↗",
         "查看浏览器",
@@ -1144,7 +1256,7 @@
     }
   },
   "assertions": {
-    "checked": 85,
+    "checked": 101,
     "violations": []
   },
   "prototypeEquality": [
@@ -1213,6 +1325,12 @@
       "actual": "10px",
       "expected": "10px",
       "equal": true
+    },
+    {
+      "label": "date-label colour",
+      "actual": "rgb(164, 171, 176)",
+      "expected": "rgb(164, 171, 176)",
+      "equal": true
     }
   ],
   "recovery": {
@@ -1227,47 +1345,47 @@
     "approval": {
       "messagesH": 346,
       "floor": 340,
-      "before": null
+      "before": 346
     },
     "expired": {
       "messagesH": 406,
       "floor": 340,
-      "before": null
+      "before": 406
     },
     "running": {
       "messagesH": 305,
       "floor": 300,
-      "before": null
+      "before": 305
     },
     "failed": {
       "messagesH": 315,
       "floor": 300,
-      "before": null
+      "before": 315
     },
     "failed-readonly": {
       "messagesH": 315,
       "floor": 300,
-      "before": null
+      "before": 315
     },
     "completed": {
       "messagesH": 336,
       "floor": 300,
-      "before": null
+      "before": 309
     },
     "stopped": {
       "messagesH": 434,
       "floor": 300,
-      "before": null
+      "before": 434
     },
     "rejected": {
       "messagesH": 434,
       "floor": 300,
-      "before": null
+      "before": 434
     },
     "idle-other-busy": {
       "messagesH": 377,
       "floor": 300,
-      "before": null
+      "before": 350
     }
   }
 }

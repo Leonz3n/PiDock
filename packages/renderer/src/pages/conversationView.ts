@@ -153,10 +153,10 @@ export function toolResultView(input: {
   const result = mark === undefined ? (summary.length === 0 || summary.startsWith(label) ? summary || label : `${label} · ${summary}`) : `${mark} ${summary}`;
   return {
     rows: [
-      { id: "workspace", label: `${input.repositories} 个仓库工作副本`, right: "查看文件 ↗", panel: "files" },
+      { id: "workspace", label: `准备 ${input.repositories} 个仓库工作副本`, right: "查看文件 ↗", panel: "files" },
       {
         id: "services",
-        label: "服务依赖与端口",
+        label: "解析服务依赖与端口",
         right: `${input.localServices} 本地 · ${input.remoteServices} 远程`,
       },
     ],

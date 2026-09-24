@@ -1242,8 +1242,10 @@ function MessageAttribution({ attribution }: { attribution: { providerId: string
   const resolved = describeHistoryAttribution(providers, attribution);
   const label = `${resolved.providerName ?? resolved.providerId} / ${resolved.modelName ?? resolved.model}`;
   return (
+    // Prototype `.message-footer`: plain 10px text; only the unavailable branch
+    // (a provider removed from the configuration) still colours the line.
     <span
-      className={`rounded-full border px-1.5 py-0.5 text-[10px] ${resolved.availability === "available" ? "border-line text-muted" : "border-orange/35 text-orange"}`}
+      className={`text-[10px] ${resolved.availability === "available" ? "" : "text-orange"}`}
       data-testid={`message-attribution-${attribution.providerId}`}
     >
       {label}
@@ -1300,18 +1302,18 @@ function Conversation({ taskId, sessionId, archived }: { taskId: string; session
       {messages.length === 0 ? (
         // Prototype `conversation()` empty branch (`task().isNew || session>1`),
         // which is the new/empty session in this app.
-        <div data-testid="conversation-empty" className="px-10 py-10 text-center text-xs text-muted">
+        <div data-testid="conversation-empty" className="px-10 py-10 text-center text-xs text-[#8d8f95]">
           <span className="mx-auto grid w-fit">
             <BrandMark size="sm" />
           </span>
-          <h3 className="mt-2 text-sm font-semibold text-ink">准备好开始了</h3>
+          <h3 className="mt-2 text-[13px] font-[650] text-ink">准备好开始了</h3>
           <p className="mt-1 text-xs text-muted">描述这个任务的目标，或用 @ 引用当前任务代码。</p>
         </div>
       ) : (
         <>
           {groups.map((group) => (
             <section key={group.key} data-testid="conversation-group">
-              <p data-testid="conversation-date-label" className="mb-[22px] text-center text-[10px] text-muted">
+              <p data-testid="conversation-date-label" className="mb-[22px] text-center text-[10px] text-[#a4abb0]">
                 {group.label}
               </p>
               <ul className="flex flex-col">
@@ -1321,9 +1323,11 @@ function Conversation({ taskId, sessionId, archived }: { taskId: string; session
               </ul>
             </section>
           ))}
-          <ToolResultCard taskId={taskId} sessionId={sessionId} />
         </>
       )}
+      {/* Hoisted out of the message branch: a session the Host recorded a run for
+          renders the card even before its first message lands. */}
+      <ToolResultCard taskId={taskId} sessionId={sessionId} />
       {archived ? <p className="mt-3 text-[11px] text-muted">已归档会话仍可查看与继续对话；归档不是任务归档。</p> : null}
     </div>
   );
@@ -1349,7 +1353,7 @@ function MessageRow({
   const images = (message.references ?? []).filter((reference) => reference.kind === "attachment" && reference.previewUrl);
   const chips = (message.references ?? []).filter((reference) => !images.includes(reference));
   return (
-    <li data-testid={`message-${message.id}`} className="mb-[25px] last:mb-0">
+    <li data-testid={`message-${message.id}`} className="mb-[25px]">
       <div className="mb-[10px] flex items-center gap-[9px] text-[11px]" data-testid="message-head">
         {user ? <LocalUserAvatar /> : <BrandMark size="sm" />}
         <strong className="font-semibold text-ink">{user ? "你" : "Pi"}</strong>
@@ -1428,7 +1432,9 @@ function MessageRow({
         ) : null}
         {message.code ? <CodeBlock code={message.code.source} language={message.code.language} label={message.code.label} /> : null}
         {message.attribution === undefined ? null : (
-          <p className="mt-3 text-[10px] text-muted" data-testid="message-footer">
+          // Prototype `.message-footer{margin-top:12px;color:#9aa4a9;font-size:10px}`:
+          // a plain line, not a bordered chip.
+          <p className="mt-3 text-[10px] text-[#9aa4a9]" data-testid="message-footer">
             <MessageAttribution attribution={message.attribution} />
           </p>
         )}
@@ -1460,57 +1466,62 @@ function ToolResultCard({ taskId, sessionId }: { taskId: string; sessionId: stri
   // launcher does and never toggle an already open one shut.
   const open = (panel: ToolPanel) => (panels.includes(panel) ? setActivePanel(taskId, panel) : togglePanel(taskId, panel));
   return (
-    <section
-      data-testid="tool-result-card"
-      aria-label="执行结果"
-      className="ml-[31px] overflow-hidden rounded-lg border border-line bg-paper below-mid:ml-0"
-    >
-      {view.rows.map((row) => (
-        <div
-          key={row.id}
-          data-testid={`tool-result-row-${row.id}`}
-          className="flex items-center gap-[9px] border-b border-line px-3 py-[9px] text-[11px] text-ink"
-        >
-          <Icon name="check" className="h-3.5 w-3.5 text-accent" />
-          <span>{row.label}</span>
-          {row.panel === undefined ? (
-            <span className="ml-auto text-[10px] text-muted">{row.right}</span>
-          ) : (
-            <button
-              type="button"
-              data-testid={`tool-result-row-action-${row.panel}`}
-              onClick={() => open(row.panel as ToolPanel)}
-              className="ml-auto text-[10px] text-muted hover:text-accent"
-            >
-              {row.right}
-            </button>
-          )}
-        </div>
-      ))}
-      {view.steps.length === 0 ? null : (
-        <div data-testid="tool-result-steps" className="grid gap-[7px] border-b border-line px-3 py-[9px] text-[11px] text-[#67696e]">
-          {view.steps.map((step) => (
-            <div key={step.id} data-testid={`tool-result-step-${step.id}`} className="flex items-center gap-2">
-              <span
-                aria-hidden
-                className={`h-1.5 w-1.5 shrink-0 rounded-full ${step.live ? "bg-accent ring-[3px] ring-accent/15" : "bg-muted/70"}`}
-              />
-              <span className={step.state === "failed" ? "text-orange" : undefined}>{step.label}</span>
-              <span className="ml-auto text-muted">{stepStateLabel(step.state)}</span>
-            </div>
-          ))}
-        </div>
-      )}
+    // Prototype agent body (`app.js:57`): `.toolcard` is one sibling and the
+    // `.run-result` line plus the two `.btn.sm` actions are its *siblings* — they
+    // sit below the card, not against its bottom edge.
+    <div data-testid="tool-result" className="ml-[31px] below-mid:ml-0">
+      <section
+        data-testid="tool-result-card"
+        aria-label="执行结果"
+        className="my-3 overflow-hidden rounded-lg border border-line bg-paper"
+      >
+        {view.rows.map((row) => (
+          <div
+            key={row.id}
+            data-testid={`tool-result-row-${row.id}`}
+            className="flex items-center gap-[9px] border-b border-[#f0f2f3] px-3 py-[9px] text-[11px] text-ink"
+          >
+            <Icon name="check" className="h-3.5 w-3.5 text-accent" />
+            <span>{row.label}</span>
+            {row.panel === undefined ? (
+              <span className="ml-auto text-[10px] text-[#989a9f]">{row.right}</span>
+            ) : (
+              <button
+                type="button"
+                data-testid={`tool-result-row-action-${row.panel}`}
+                onClick={() => open(row.panel as ToolPanel)}
+                className="ml-auto text-[10px] text-[#989a9f] hover:text-accent"
+              >
+                {row.right}
+              </button>
+            )}
+          </div>
+        ))}
+        {view.steps.length === 0 ? null : (
+          <div data-testid="tool-result-steps" className="grid gap-[7px] px-3 py-[9px] text-[11px] text-[#67696e]">
+            {view.steps.map((step) => (
+              <div key={step.id} data-testid={`tool-result-step-${step.id}`} className="flex items-center gap-2">
+                <span
+                  aria-hidden
+                  className={`h-1.5 w-1.5 shrink-0 rounded-full ${step.live ? "bg-accent ring-[3px] ring-accent/15" : "bg-muted/70"}`}
+                />
+                <span className={step.state === "failed" ? "text-orange" : undefined}>{step.label}</span>
+                <span className="ml-auto text-muted">{stepStateLabel(step.state)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
       <p
         data-testid="tool-result-summary"
-        className={`border-l-2 border-[#5d719f] bg-[#f4f5f8] px-3 py-[9px] text-[11px] leading-[1.85] ${
+        className={`my-3 border-l-2 border-[#5d719f] bg-[#f4f5f8] px-3 py-[9px] text-[11px] leading-[1.85] ${
           view.warn ? "text-orange" : "text-ink"
         }`}
       >
         {view.result}
         {view.detail === undefined ? null : <span className="block text-muted">{view.detail}</span>}
       </p>
-      <div className="flex flex-wrap gap-2 px-3 py-2">
+      <div data-testid="tool-result-actions" className="flex flex-wrap gap-2">
         <Button size="sm" data-testid="tool-result-action-browser" onClick={() => open("browser")}>
           查看浏览器
         </Button>
@@ -1518,7 +1529,7 @@ function ToolResultCard({ taskId, sessionId }: { taskId: string; sessionId: stri
           查看变更
         </Button>
       </div>
-    </section>
+    </div>
   );
 }
 

@@ -167,17 +167,25 @@ describe("conversation alignment", () => {
       useEventsStore.setState({ runs: { [sessionKeyOf(taskId, sessionId)]: record("running") } });
     });
     const card = await screen.findByTestId("tool-result-card");
-    expect(within(card).getByTestId("tool-result-row-workspace").textContent).toContain("个仓库工作副本");
-    expect(within(card).getByTestId("tool-result-row-services").textContent).toMatch(/\d+ 本地 · \d+ 远程/);
+    // Prototype `app.js:57`: inside the agent body the `.run-result` line and the
+    // two `.btn.sm` actions are *siblings* of `.toolcard`, so the card keeps the
+    // rows and steps and nothing else.
+    const result = await screen.findByTestId("tool-result");
+    const summary = screen.getByTestId("tool-result-summary");
+    expect(result.contains(card)).toBe(true);
+    expect(card.contains(summary)).toBe(false);
+    expect(card.contains(screen.getByTestId("tool-result-actions"))).toBe(false);
+    expect(within(card).getByTestId("tool-result-row-workspace").textContent).toContain("准备 4 个仓库工作副本");
+    expect(within(card).getByTestId("tool-result-row-services").textContent).toMatch(/解析服务依赖与端口\s*\d+ 本地 · \d+ 远程/);
 
     const steps = within(card).getAllByTestId(/^tool-result-step-/);
     expect(steps).toHaveLength(2);
     // Prototype `.dot.live`: only the step the live turn is on carries the ring.
     expect(steps[0]?.querySelector("span")?.className).not.toContain("bg-accent");
     expect(steps[1]?.querySelector("span")?.className).toContain("bg-accent");
-    expect(within(card).getByTestId("tool-result-summary").textContent).toContain("执行中");
+    expect(summary.textContent).toContain("执行中");
 
-    await user.click(within(card).getByTestId("tool-result-action-files"));
+    await user.click(screen.getByTestId("tool-result-action-files"));
     expect(await screen.findByTestId("task-rail")).toBeInTheDocument();
 
     // A finished turn keeps the same pending step, without the live ring.
@@ -186,7 +194,7 @@ describe("conversation alignment", () => {
     });
     const settled = within(card).getAllByTestId(/^tool-result-step-/);
     expect(settled.every((step) => !(step.querySelector("span")?.className ?? "").includes("bg-accent"))).toBe(true);
-    expect(within(card).getByTestId("tool-result-summary").textContent).toContain("✓ 执行完成");
+    expect(screen.getByTestId("tool-result-summary").textContent).toContain("✓ 执行完成");
   });
 
   it("shows the empty state until the first message and reports the child-agent band", async () => {
@@ -206,10 +214,11 @@ describe("conversation alignment", () => {
 
     await user.click(within(band).getByTestId("session-subagents-toggle"));
     const cards = within(band).getByTestId("subagent-cards");
-    // Prototype `.subagent-cards{grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}`
-    // with the ≤960 single column.
+    // Prototype `.subagent-cards{grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}`:
+    // the track count comes from `auto-fit`, so no breakpoint rule of ours may
+    // force a column count (the evidence script compares against the prototype).
     expect(cards.className).toContain("grid-cols-[repeat(auto-fit,minmax(190px,1fr))]");
-    expect(cards.className).toContain("below-mid:grid-cols-1");
+    expect(cards.className).not.toContain("grid-cols-1");
     const card = within(band).getByRole("button", { name: /^查看 查询链路分析，/ });
     expect(card).toHaveAttribute("aria-pressed", "false");
     await user.click(card);

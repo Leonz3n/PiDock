@@ -42,11 +42,11 @@
 
 | 部件 | 原型 | 本片（实测） |
 | --- | --- | --- |
-| 行 | 图标 + 文本 + 右侧操作（`查看文件 ↗` / `任务内覆盖`） | `4 个仓库工作副本` + `查看文件 ↗`（按钮，开文件面板）；`服务依赖与端口` + `5 本地 · 2 远程` |
+| 行 | 图标 + 文本 + 右侧操作（`查看文件 ↗` / `任务内覆盖`） | `准备 4 个仓库工作副本` + `查看文件 ↗`（按钮，开文件面板）；`解析服务依赖与端口` + `5 本地 · 2 远程` |
 | 步骤 | `.steps` + `.dot.live` | 步骤来自 `RunRecord.steps`；`pending` 且回合在跑/等确认 → live 环（实测 `读取任务上下文(非live) / 运行工具(live)`） |
-| 结论条 | `.run-result`（左 2px `#5d719f`、底 `#f4f5f8`） | 同左；`✓ 执行完成`、`✗ 构建失败，已保留现场` + `失败范围：…` |
-| 卡内动作 | `查看浏览器` / `查看变更` | `查看浏览器` / `查看变更`（开同一工具面板） |
-| 卡片高度 | 原型示例卡 138px（视觉参考） | 运行/已完成 213px、失败 281px；**位于滚动区内**（`insideLog: true`），不占消息区高度 |
+| 结论条 | `.run-result`（左 2px `#5d719f`、底 `#f4f5f8`、`margin:12px 0`） | 同左；`✓ 执行完成`、`✗ 构建失败，已保留现场` + `失败范围：…`；**在卡片之外**（原型 `app.js:57` 把它写成 `.toolcard` 的兄弟） |
+| 卡外动作 | `查看浏览器` / `查看变更`（`.agentbody` 内的 `.btn.sm`，不在卡内） | 同左，与结论条同为卡片的兄弟（实测 `summaryInsideCard:false`、`actionsInsideCard:false`） |
+| 卡片高度 | 原型示例卡 138px（仅含行 + 步骤 + 结论） | 运行/已完成 **132px**、失败 179px（结论条已移出卡外）；**位于滚动区内**（`insideLog: true`），不占消息区高度 |
 
 关于「运行中步骤的 live 点」：真实回合约 30ms 结束，脚本用 `page.clock` 冻结时钟取到该态并断言，
 但 **Playwright 的截图路径会推进已安装的假时钟**（实测：`runFor(8)` 后连续四次 `evaluate` 往返仍停在
@@ -58,7 +58,8 @@
 | 项 | #29 交付时（`3f20369`） | 本片 | 结论 |
 | --- | --- | --- | --- |
 | 子代理条高度 @1440 | 78px（常驻卡片网格） | **51px**（一行 + 展开开关）；展开 120px | 回收 27px |
-| 子代理条高度 @900（≤960） | 78px | **49px**；展开 185px（单列） | 一致规则 |
+| 子代理条高度 @900（≤960） | 78px | **49px**；展开 118px | 一致规则 |
+| 卡片列数（与同轮实测原型比对） | 原型 1440/900 均 2 列 | **2 列 / 2 列**（`auto-fit`，无强制单列规则） | 与原型一致 |
 | 消息区 @1440（同态：idle-other-busy） | 349px | **377px** | +28px |
 | 消息区 @1440（completed） | 309px | **336px** | +27px |
 | 消息区 @900（折叠） | — | 283px；展开 147px | 展开可复原 |
@@ -79,7 +80,8 @@
 | 工具栏条带宽度（#28/#30 防空转） | 1440：1014→505 | 同左 | 开栏严格更窄 | 达标 |
 
 `capture-execution.mjs` → `geometry assertions: ok (42 measured states)`；S6 脚本另行复算这 9 个态的
-下限（`s3CrossCheck`）并要求 `idle-other-busy ≥ 349 + 25`。
+下限（`s3CrossCheck`）并要求 `idle-other-busy ≥ 349 + 25`；同时逐态与 `3f20369`（#29 交付时）的
+已提交数值比对，**任何一态都不得变小**（`before` 字段，实测最低为 +0）。
 
 ## 4. 逐盒结论（#31 验收清单）
 
@@ -90,14 +92,14 @@
 | 日期分组标签按真实时间 | COVERED | `conversationView.ts:groupMessagesByDay/dayLabel` | `2026年9月22日 · 实现与验证` |
 | 引用 chip（`.refchip` 形态 + 与既有引用同源 + 不退化） | COVERED | `MessageRow` refchip 分支 | `@ spec.md`（10px / `1px 5px` / 4px / `#edeff3` / `#dfe3eb`）；`restoredFlows.test.tsx` 断言发送后仍在消息上 |
 | 工具结果卡（行 / 步骤 / 结论条 / 卡内动作，数据不得编造） | COVERED | `conversationView.ts:toolResultView`、`TaskPage.tsx:ToolResultCard` | §2；无记录时不渲染 |
-| 消息尾部归属行（`Provider · 账号 / 模型`，不可用按既有规则） | PARTIAL | `MessageRow` → `MessageAttribution` | 名称侧 `Anthropic 官方 / Claude Sonnet`；不可用分支（模型已移出配置）显示橙色说明「模型 … 已不在该配置中，历史保持不变」。**账号段缺失**：`ProviderProfile`（`data/types.ts:388`）只有 `authRef`（凭据引用名，不得展示），没有「账号」显示名 → 见 §6 残留 R1 |
+| 消息尾部归属行（`Provider · 账号 / 模型`，不可用按既有规则） | COVERED | `MessageRow` → `MessageAttribution` | 原型 `.message-footer` 本身就是 `<Provider 显示名> / <模型显示名>`（`app.js:57` 的 `state.providers[0].name` 即 `'Anthropic · 工作账号'`，「账号」是 Provider 名的一部分，**原型也没有独立账号字段**）→ 实测 `Anthropic 官方 / Claude Sonnet`，与原型同形；10px / `#9aa4a9` / `margin-top:12px` 与原型逐项相等（脚本同轮比对）。不可用分支（模型已移出配置）显示橙色说明「模型 … 已不在该配置中，历史保持不变」。残项仅：本应用 Provider 名不含账号语义 |
 | 空态（π + 两行文案；有消息后消失） | COVERED | `TaskPage.tsx` `conversation-empty` 分支 | `1440x900-conversation-empty.png`；测试断言发首条消息后消失 |
-| 子代理条几何 + 卡片网格 + a11y + 回收 78px | COVERED | `ToolPanels.tsx:SessionSubagentList` | §3；`aria-label="当前会话启动的 Subagent"`、卡片 `查看 X，状态` + `aria-pressed`、`1 个运行中`、`minmax(190px,1fr)`、≤960 单列 |
+| 子代理条几何 + 卡片网格 + a11y + 回收 78px | COVERED | `ToolPanels.tsx:SessionSubagentList` | §3；`aria-label="当前会话启动的 Subagent"`、卡片 `查看 X，状态` + `aria-pressed`、`1 个运行中`、`minmax(190px,1fr)`；列数由 `auto-fit` 决定并与**同轮实测原型**比对（1440/900 均 2 列 = 原型 2 列） |
 | 纵向预算不退化 | COVERED | — | §3 表 |
 | 只读会话只影响展示 | COVERED | `conversationBadge` / `conversationModeLabel` | 只读会话 `mode=阅读与分析`、`badge=只读`、消息数 32 不变；权限行为未改（`composerAlignment.test.tsx` 覆盖输入区） |
 | 用例覆盖（日期分组 / 头部 / chip / 卡片各部件 / 归属不可用 / 空态 / 子代理条几何与可访问名） | COVERED | `test/conversationView.test.ts`（14 例）、`test/conversationAlignment.test.tsx`（4 例） | renderer **54 文件 / 463 例**（基线 52/445 → +2 文件 / +18 例） |
 | 证据提交（多档截图 + 几何 JSON + 原型对照 + 本日志） | COVERED | `docs/evidence/ui-alignment-s6/` | 13 张渲染截图 + 1 张原型对照 + `conversation.json` + 本文件 |
-| 证据脚本 `data-testid` 定位、可重跑、带几何断言 | COVERED | `capture-conversation.mjs` | 85 条断言、0 违反；`[data-testid=…]` 前缀定位 |
+| 证据脚本 `data-testid` 定位、可重跑、带几何断言 | COVERED | `capture-conversation.mjs` | **101 条**断言、0 违反；`[data-testid=…]` 前缀定位 |
 | 既有用例零回归 + `pnpm turbo run typecheck test build lint --force` | COVERED | — | §5 |
 
 ## 5. 门禁
@@ -107,7 +109,7 @@
 | `pnpm turbo run typecheck test build lint --force` | 全绿（见交付回报中的汇总数字） |
 | renderer 用例 | **54 文件 / 463 例**（基线 52 / 445） |
 | shell 用例 | 54 文件 / 801 例（未变） |
-| S6 证据脚本 | `ok (85 checks)`，0 违反 |
+| S6 证据脚本 | `ok (101 checks)`，0 违反 |
 | S3 证据脚本（跨切片复测） | `ok (42 measured states)`，9 态下限全部达标 |
 | S4 证据脚本（跨切片复测） | `ok (22 measured states)`；输入区 143px 未回退 |
 
@@ -121,9 +123,10 @@
    本片按会话级 `RunRecord` 渲染一条卡（在滚动区末尾）。因此卡片不绑定某条消息，也不会随时间伪造多条。
 3. **行右侧文案**：第二行右侧用真实数据 `N 本地 · M 远程`（原型示例写作「任务内覆盖」——该短语对应原型内置数据，
    本应用的服务模式计数才是有据可查的值）。
-4. **账号段未渲染**：原型 `Anthropic · 工作账号 / Claude Sonnet` 中的「账号」在本应用没有显示名（只有 `authRef` 引用名）。
-   本片渲染 `<Provider 显示名> / <模型显示名>`，不可用时按既有 `describeHistoryAttribution` 规则给出说明；
-   未回退成只显示 id。
+4. **账号段未渲染（实为与原型同形）**：原型 `.message-footer` 就是 `<Provider 显示名> / <模型显示名>`
+   （`app.js:57` 中 `state.providers[0].name` 即 `'Anthropic · 工作账号'`）；原型也没有独立的「账号」字段。
+   本片渲染同形结果（`Anthropic 官方 / Claude Sonnet`），未回退成只显示 id；不可用时按既有
+   `describeHistoryAttribution` 规则给出说明。仅存差异：本应用的 Provider 名不含账号语义。
 5. **空态品牌尺寸**：原型空态用基准 `.brandmark`（29px），本片沿用消息头的 22px 品牌标记（`BrandMark size="sm"`），
    不为此单开第三种尺寸。品牌标记的形状/尺寸本身是 [#25](https://github.com/Leonz3n/PiDock/issues/25) 遗留的用户裁决项。
 6. **无时间戳的消息**：`Message.createdAt` 是本片新加的**可选**字段，适配器写消息时打上；历史种子消息补了
@@ -133,8 +136,30 @@
 
 | # | 项 | 状态 | 去处 |
 | --- | --- | --- | --- |
-| R1 | 归属行的「账号」显示名 | RESIDUAL-UNTESTED | 需要 Host/配置侧提供账号显示名（`ProviderProfile` 无该字段）；记录，不前端编造 |
+| R1 | 归属行的「账号」语义 | RESIDUAL（不阻断） | 原型自身也只是 Provider 显示名，没有独立账号字段；若产品要真实账号显示名，需 Host/配置侧补字段（`ProviderProfile` 现只有 `authRef` 引用名），**不前端编造** |
 | R2 | 每条消息的工具调用记录 | RESIDUAL-UNTESTED | Host 侧消息模型缺该字段；工具卡因此描述会话级 `RunRecord`（见偏差 2） |
 | R3 | 运行中 live 点的截图 | 未提交（原因见 §2） | 由 `conversation.json` 断言 + `conversationView.test.ts` 覆盖；截图会因假时钟推进而失真 |
 | R4 | Electron GUI 内的真实观感（字体、滚动、粘贴图片硬件路径） | RESIDUAL-UNTESTED | 既有环境残留（GUI 在代理环境被 OS 级弹窗阻塞），需用户本地确认；[#25](https://github.com/Leonz3n/PiDock/issues/25)–[#30](https://github.com/Leonz3n/PiDock/issues/30) 同 |
 | R5 | 品牌标记形状 / 工具区宽度 / 用户 chip 名称 | 待用户裁决 | [#25](https://github.com/Leonz3n/PiDock/issues/25) 起的三项遗留决策 |
+
+## 7. 评审收口微轮（P2-1…P2-8）
+
+对 `docs/evidence/ui-alignment-s6/` 交付后的只读评审，逐条处理结果：
+
+| 项 | 结论 | 落地 | 实测证据 |
+| --- | --- | --- | --- |
+| P2-1 证据脚本把运行中卡片记成 `live:false` | COVERED | `capture-conversation.mjs` 改查卡片内的状态圆点 `span[aria-hidden]`（原来取到的是状态文字包装层） | `conversation.json → subagents.1440x900.expanded.labels = [{live:true},{live:false}]` |
+| P2-2 `before` 永远是 `null`（死字段） | COVERED | 新增常量 `S3_MESSAGES_BEFORE`（取自 `git show 3f20369:…/execution-card.json`）并加**逐态不回退**断言 | 9 态 `before` 均为真实值，`no regression` 断言全通过 |
+| P2-3 自证断言 + 强制 ≤960 单列（与原型不符） | COVERED | `ToolPanels.tsx` 删掉 `below-mid:grid-cols-1`（交给 `auto-fit`）；脚本新增 `prototypeSubagentColumns()`，**与同轮实测原型列数比对**；单测改为断言不得再出现强制单列类 | 1440/900 均 **2 列**，原型同为 2 列；`101 checks` 0 违反 |
+| P2-4 若干样式数值与原型不等 | COVERED | 日期标签 `#a4abb0`；归属行改原型 `.message-footer` 纯文本形态（10px / `#9aa4a9` / `margin-top:12px`）；`.toolrow .right` `#989a9f`、行分隔 `#f0f2f3`；消息头 π 18px；空态 h3 13px/650；去掉 `last:mb-0`；行文案补回动词（`准备 …` / `解析 …`） | 新增 `date-label colour`、`message footer font/colour/margin` 同轮原型比对，全部相等 |
+| P2-5 `.run-result` 与动作被嵌进卡片（原型是兄弟） | COVERED | `ToolResultCard` 拆为 `tool-result`（agent body）容器 + `tool-result-card`（行/步骤）+ `tool-result-summary` + `tool-result-actions`；新增结构断言与原型不变量断言 | `summaryInsideCard:false`、`actionsInsideCard:false`；卡片 213 → **132px**；原型 `.toolcard .run-result` 也不存在 |
+| P2-6 子代理条默认折叠（需裁决） | 已披露偏差 | 保持不变（父级裁决项，非缺陷）；本日志 §6 偏差 1 已登记 | 折叠 51px / 展开 120px |
+| P2-7 无消息时不出卡 | COVERED | `ToolResultCard` 提到消息分支之外 | 有 `RunRecord`、零消息的会话现在也出卡 |
+| P2-8 日志把数据限制写成验收未达标 | COVERED | §4 第 6 项与 §6 偏差 4 改判 COVERED（原型同为 `provider.name / model`），残项只留「Provider 名不含账号语义」 | 见上表 R1 |
+
+本轮另发现并修掉的一处**测量歧义**（未列入评审清单）：`rows` 查询 `[data-testid^="tool-result-row-"]` 也会匹配行内动作按钮
+（`tool-result-row-action-<panel>`），已改为 `div[data-testid^="tool-result-row-"]`，使断言度量的确实是卡片行。
+
+**常见误区（本轮修掉的两个）**：① 断言锁自己的样式规则（`columns === (width<=960?1:2)`）会“永远绿”；
+现已改为与同轮实测原型比对。② 证据脚本用死字段（`report.s3Before`）会静默写 `null`；现改为可核对的常量。
+

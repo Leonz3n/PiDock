@@ -203,3 +203,6 @@ node docs/evidence/ui-alignment-s3/capture-execution.mjs
 
 `node docs/evidence/ui-alignment-s4/capture-composer.mjs` → `geometry assertions: ok (22 measured states)`；
 #29 的 340px 下限在 `card-approval`（346px）仍达标。
+
+> **收口微轮之后再次重跑**：#31 的评审收口微轮（P2-1…P2-8）只改消息区样式与证据脚本，不动输入区；
+> 脚本重跑后本表数值**逐项不变**（`ok (22 measured states)`，0 违反），输入区五档仍为 **143px**。
