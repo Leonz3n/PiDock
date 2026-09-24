@@ -15,6 +15,11 @@ export function Button({ variant = "default", size = "md", className = "", ...re
       : variant === "ghost"
         ? "border-transparent text-muted hover:bg-soft hover:text-ink"
         : "border-line bg-paper text-ink hover:border-accent/40 hover:bg-soft",
+    // A disabled button must look disabled: the task header keeps the
+    // prototype's `toggle-run` visible when a task has no local service, and a
+    // primary-looking button that ignores clicks reads as broken (#27 review
+    // note). Same wording as the local `disabled:` styles elsewhere.
+    "disabled:cursor-not-allowed disabled:opacity-50",
     "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
     className,
   ].join(" ");

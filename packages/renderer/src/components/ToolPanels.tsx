@@ -75,23 +75,33 @@ export function RuntimePanel({
           const unit = topology.units.find((candidate) => candidate.serviceId === item.id);
           return (
           <li key={item.id} className="flex items-center justify-between gap-2 rounded-md border border-line px-2.5 py-2 text-xs">
-            <button type="button" className="text-left" data-testid={`service-row-${item.id}`} onClick={() => setSelected(item.id)}>
-              <span className="text-ink">{item.name}</span>
-              <span className="ml-2 text-muted">
+            {/* The tool panel is 43% of the workspace and the instance address is
+                a long monospace string, so the name/address truncate and the
+                action group keeps its size: a squeezed `停止`/`改为远程` text
+                button folds into vertical text (#27 review note). */}
+            <button
+              type="button"
+              className="flex min-w-0 flex-1 items-center gap-2 text-left"
+              data-testid={`service-row-${item.id}`}
+              onClick={() => setSelected(item.id)}
+            >
+              <span className="shrink-0 text-ink">{item.name}</span>
+              <span className="truncate text-muted">
                 {locationLabel(item)}
                 {item.repo ? ` · ${item.repo}` : ""}
               </span>
               {unit ? (
-                <span className="ml-2 font-mono text-[10px] text-muted" data-testid={`service-instance-${item.id}`}>
+                <span className="truncate font-mono text-[10px] text-muted" data-testid={`service-instance-${item.id}`}>
                   {instanceAddress(task.id, unit.serviceId, item.port)}
                 </span>
               ) : null}
             </button>
-            <div className="flex items-center gap-2">
+            <div className="flex shrink-0 items-center gap-2 whitespace-nowrap">
               <Badge tone={item.running ? "accent" : "neutral"}>{item.running ? "运行中" : item.mode === "remote" ? "远程" : "已停止"}</Badge>
               {item.mode === "local" ? (
                 <Button
                   size="sm"
+                  className="shrink-0"
                   onClick={() => {
                     if (readonly) {
                       onReadonlyAttempt?.();
@@ -106,6 +116,7 @@ export function RuntimePanel({
               {onSetServiceMode ? (
                 <Button
                   size="sm"
+                  className="shrink-0"
                   aria-label={`切换 ${item.name} 依赖去向`}
                   onClick={() => {
                     if (readonly) {

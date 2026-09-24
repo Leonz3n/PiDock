@@ -621,7 +621,11 @@ function TaskHeader({ task, actions }: { task: Task; actions: ReactNode }) {
               <span>TASK · 普通目录</span>
             ) : (
               <>
-                TASK WORKSPACE
+                {/* The prototype has both a space and `margin-left:8px`
+                    (`app.js` `header()`); the space keeps the accessible text
+                    (and the screen-reader reading order) `TASK WORKSPACE #<key>`
+                    instead of gluing the two words together (#27 review note). */}
+                TASK WORKSPACE{" "}
                 {/* Prototype `TASK WORKSPACE #001`: the product has no task
                     ordinal, so the eyebrow shows the task key without its
                     `task-` prefix; the full `workspaceKey` stays in the title. */}
@@ -718,7 +722,7 @@ function SessionTabs({
       <Button size="sm" className="shrink-0" onClick={() => openModal({ type: "sessions", taskId: task.id, filter: "active" })}>
         全部会话 {task.sessions.length}
       </Button>
-      <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
+      <div data-testid="session-tab-strip" className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
         {visibleSessions.map((session) => {
           const role = roles.get(session.id);
           const roleLabel = role ? sessionWriteRoleLabel(role) : null;

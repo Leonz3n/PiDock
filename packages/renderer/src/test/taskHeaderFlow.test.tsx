@@ -78,10 +78,11 @@ describe("task header actionset", () => {
     // key stands in (without the `task-` prefix) and the full key stays in the
     // eyebrow's `title`.
     expect(within(header).getByText("#a1f92c3d")).toBeInTheDocument();
-    expect(within(header).getByText("TASK WORKSPACE").closest("[title]")).toHaveAttribute(
-      "title",
-      expect.stringContaining("task-a1f92c3d"),
-    );
+    const eyebrow = within(header).getByText("TASK WORKSPACE").closest("[title]");
+    expect(eyebrow).toHaveAttribute("title", expect.stringContaining("task-a1f92c3d"));
+    // The prototype keeps both a space and an 8px gap (`app.js` `header()`); the
+    // space is what the accessible text (and a screen reader) relies on.
+    expect(eyebrow?.textContent).toBe("TASK WORKSPACE #a1f92c3d");
   });
 
   it("keeps the run toggle visible but disabled when the task has no local service", async () => {
@@ -100,6 +101,10 @@ describe("task header actionset", () => {
     const toggle = await screen.findByRole("button", { name: "启动本地服务" });
     expect(toggle).toBeDisabled();
     expect(toggle).toHaveAttribute("title", "当前任务没有本地服务");
+    // A disabled button that still looks primary reads as broken; `Button` now
+    // carries the disabled affordance itself (#27 review note).
+    expect(toggle.className).toContain("disabled:opacity-50");
+    expect(toggle.className).toContain("disabled:cursor-not-allowed");
   });
 });
 

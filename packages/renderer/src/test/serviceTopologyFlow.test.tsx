@@ -22,6 +22,19 @@ describe("runtime panel topology", () => {
     expect(await screen.findByTestId("service-instance-release-service-1")).toHaveTextContent("release/release-service-1@5173");
     expect(screen.getByTestId("service-instance-release-service-2")).toHaveTextContent("release/release-service-2@3001");
 
+    // [UI 对齐 03] (#27) a 43%-wide panel with a long monospace address used to
+    // squeeze the action buttons into wrapped text; the row keeps the action
+    // group at its own size and truncates the name/address instead. jsdom has no
+    // layout, so the class contract is asserted here (the rendered result is in
+    // `docs/evidence/ui-alignment-s2/renderer/*-one-panel.png`).
+    const firstRow = screen.getByTestId("service-row-release-service-1");
+    expect(firstRow.querySelector("span.truncate")).not.toBeNull();
+    expect(screen.getByTestId("service-instance-release-service-1").className).toContain("truncate");
+    const stopButton = within(firstRow.closest("li") as HTMLElement).getByRole("button", { name: "停止" });
+    expect(stopButton.className).toContain("shrink-0");
+    expect(stopButton.parentElement?.className).toContain("shrink-0");
+    expect(stopButton.parentElement?.className).toContain("whitespace-nowrap");
+
     // Box 1: the runtime binding of the selected service goes to this task's
     // instance; its repo-default URL keeps the shared environment value.
     const routing = await screen.findByTestId("service-routing");
