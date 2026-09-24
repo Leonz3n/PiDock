@@ -7,11 +7,11 @@
 
 ```
 # 渲染器 127.0.0.1:4335（Vite dev，未重启） / 原型 A 127.0.0.1:4319/?variant=A（只读）
-node docs/evidence/ui-alignment-s7b/capture-pages.mjs     # 181 assertions, 5 viewport tiers, 6 pages, exit 0
+node docs/evidence/ui-alignment-s7b/capture-pages.mjs     # 183 assertions, 5 viewport tiers, 6 pages, exit 0
 pnpm --filter @pidock/renderer test                        # 58 files / 494 tests
 ```
 
-本文件在 #33 评审后经一轮修复（P1-1、P1-2、P2-1…P2-9）更新：断言 142 → 181，逐项变更见 §3 与 §4。
+本文件在 #33 评审后经一轮修复（P1-1、P1-2、P2-1…P2-9）更新：断言 142 → 183，逐项变更见 §3 与 §4。
 
 ## 1. 逐页验收对照
 
@@ -86,6 +86,12 @@ pnpm --filter @pidock/renderer test                        # 58 files / 494 test
     - `实验入口` em：仅 Funnel 卡，属本应用对「实验性入口」的显式标注（原型只在 tailscale 卡写 `推荐`）。
     这四项在脚本里以“声明缺席”断言固定（`declaredAbsent` + `DECLARED_BUTTON_GAPS`），不会静默变成“已完成”。
 20. **`.connection-checks` 三行文案**（评审 P2-4）：本页保留自己的三行（Host 监听／入口地址／Gateway），因为它们报的是 Host 实际上报的值，而原型这三行在 tailscale 模式下写的是示例文案（「原型示例：未检测到可用安装」）。行轨宽、padding、`.dot`、右侧 `.mono` 已全部逐属性断言。
+22. **三处未声明的增补文案**（评审 P2-7，现已在脚本里锁住）：
+    - Provider 页「切换只影响当前会话」卡在多一句「新会话在任务里新建后选择模型。」（本应用的会话模型选择确实在任务里发生）。原型原句保留在前。
+    - 归档页卡片形状行用 `N 个普通目录`（原型只有 `普通目录`，没有数量），本应用有真实的 `directories` 列表所以报数量。
+    - 归档页卡片多一个 `已归档` badge（原型靠所处页面表达该状态），与 `恢复任务`/`预览清理清单` 同属 §3.10。
+    - 归档页 intro 在原型两句后补一句，见 §3.16。
+
 21. **按钮图标是超集**（评审 P2-6）：除 `编辑`（provider 卡片，原型该按钮无图标）外，本应用带图标按钮的集合与原型一致；`schedules` 实际是 **5 个图标 / 21 个按钮**（先前报告写的 3/6 是错的，已更正）。脚本改为逐 label 双向比较（`button glyphs agree with the prototype @<page>`）而不是 `>=`。
 
 ### 3c. 评审修复轮真修的缺陷（不属声明）
@@ -106,7 +112,7 @@ pnpm --filter @pidock/renderer test                        # 58 files / 494 test
 | `ui-alignment-s4/capture-composer.mjs` | `ok (22 measured states)`；`composer=143px`（失败态 174px，见既有残留） |
 | `ui-alignment-s6/capture-conversation.mjs` | `ok (101 checks)` |
 | `ui-alignment-s7a/capture-management.mjs` | `ok (167 assertions, 5 viewport tiers)` |
-| `ui-alignment-s7b/capture-pages.mjs` | `ok (181 assertions, 5 viewport tiers, 6 pages)` |
+| `ui-alignment-s7b/capture-pages.mjs` | `ok (183 assertions, 5 viewport tiers, 6 pages)` |
 
 ### 4b. 负向验证（本轮新增，均已复现失败）
 

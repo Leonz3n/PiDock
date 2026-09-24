@@ -255,6 +255,11 @@ const COLLECT = (selectors) => {
     notes: window.__texts(".note", root),
     providerNames: window.__texts(".provider-card h3", root),
     providerChips: window.__texts(".provider-model-chips .badge", root),
+    // [UI 对齐 09] #33 review P2-7: copy this app adds on top of the prototype's
+    // own sentences. Declared in `verification-log.md` §3.22; asserted as an
+    // extension (the prototype's text must still be there) rather than equality.
+    cardIntros: window.__texts(".card .page-intro", root),
+    cardSmalls: window.__texts(".card small", root),
     // [UI 对齐 09] #33 review P2-7: the prototype prints the protocol's display
     // name, not the wire id the Host stores.
     providerProtocolBadges: window.__texts('[data-testid^="provider-protocol-"]', root),
@@ -837,6 +842,22 @@ check(
   at1440.providers.providerProtocolBadges.length > 0 &&
     at1440.providers.providerProtocolBadges.every((label) => ["Anthropic Messages", "OpenAI Responses", "OpenAI Chat Completions"].includes(label)),
   JSON.stringify(at1440.providers.providerProtocolBadges),
+);
+// [UI 对齐 09] #33 review P2-7: three copy additions that the prototype does not
+// have. They are declared in `verification-log.md` §3.22 — asserted as an
+// extension of the prototype's own sentence, so the base text cannot be dropped.
+check(
+  "the 切换只影响当前会话 card keeps the prototype's sentence and adds ours",
+  (at1440.providers.cardIntros ?? []).some((text) => text.includes(proto.providers.cardIntros?.[0] ?? "\u0000")) &&
+    (at1440.providers.cardIntros ?? []).some((text) => text.includes("新会话在任务里新建后选择模型")),
+  JSON.stringify(at1440.providers.cardIntros),
+);
+check(
+  "the archive card keeps 会话与浏览器状态已保留 and declares its own shape and badge",
+  at1440.archive.intro?.includes(proto.archive.intro) === true &&
+    (at1440.archive.cardSmalls ?? []).some((text) => /会话与浏览器状态已保留$/.test(text)) &&
+    (at1440.archive.badges ?? []).includes("已归档"),
+  JSON.stringify({ intro: at1440.archive.intro, smalls: at1440.archive.cardSmalls, badges: at1440.archive.badges }),
 );
 // The prototype's `.dot` rule and the renderer's utilities must land on the same
 // box; the connection rows used to draw an empty 8px column instead. Chromium
