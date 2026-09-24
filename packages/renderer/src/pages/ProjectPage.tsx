@@ -33,13 +33,16 @@ import { useUiStore } from "../stores/ui";
  *   and ordinary directories with a badge each, and 继续工作 cards that count
  *   both kinds instead of naming repositories.
  *
- * Two deliberate additions, both required by the slice's acceptance: the
- * 普通目录 entry (the prototype only ever opens it from 管理目录 in the
- * directory variant; this page owns the standalone `project-directories`
- * dialog) and real repository data (the prototype prints `本机已注册（示例）`;
- * a repository's actual base branch is what this app knows).
+ * Two deliberate additions, both required by the slice's acceptance and listed
+ * in the evidence log's deviation table: the 普通目录 section (the prototype
+ * only ever opens 管理目录 from the directory variant; this page owns the
+ * standalone `project-directories` dialog, so both shapes carry the entry) and
+ * real repository data (the prototype prints `本机已注册（示例）`; a
+ * repository's actual base branch is what this app knows).
  *
- * Both 普通目录 entries are labelled 管理目录 in the prototype and here.
+ * Both 普通目录 entries are labelled 管理目录 in the prototype and here, and
+ * both note lines are the prototype's sentence verbatim
+ * (`directories.js directoryProjectPage()`).
  */
 export function ProjectPage({ projectId }: { projectId: string }) {
   const project = useHostStore((state) => state.workspace?.projects.find((item) => item.id === projectId));
@@ -129,7 +132,7 @@ export function ProjectPage({ projectId }: { projectId: string }) {
 
         <SectionHeader
           title="项目目录"
-          className="mt-0 mb-0"
+          flush
           actions={
             // The prototype opens `edit-project` from this button; this app has
             // spent a delivered slice ([PiDock 18] and `directoriesFlow`) on a
@@ -190,7 +193,10 @@ export function ProjectPage({ projectId }: { projectId: string }) {
           label="运行环境"
           value={environments.length}
           actions={
-            <Button size="sm" onClick={() => openModal({ type: "environment-list", projectId: project.id })}>
+            // Prototype `management.js`: `button('管理环境','view:env','sm')` —
+            // the stat card navigates to 环境与服务. The `environment-list`
+            // dialog keeps its other entry (the 环境与服务 page itself).
+            <Button size="sm" onClick={() => navigate({ view: "env" })}>
               管理环境
             </Button>
           }
@@ -200,9 +206,7 @@ export function ProjectPage({ projectId }: { projectId: string }) {
       {taskCards("还没有任务，先绑定仓库并创建环境。", (task) => (
         <>
           <h3 className="text-[13px] font-[650] text-ink">{task.name}</h3>
-          <PageIntro className="mt-1.5 mb-0">
-            {task.repos.map(repositoryName).join(" · ") || "普通目录任务"}
-          </PageIntro>
+          <PageIntro>{task.repos.map(repositoryName).join(" · ") || "普通目录任务"}</PageIntro>
           <Badge>{environmentName(task.environmentId)}</Badge>
         </>
       ))}
@@ -216,7 +220,7 @@ export function ProjectPage({ projectId }: { projectId: string }) {
         }
       />
       {project.repositories.length === 0 ? (
-        <PageIntro className="mt-0 mb-0">尚未绑定仓库。</PageIntro>
+        <PageIntro>尚未绑定仓库。</PageIntro>
       ) : (
         project.repositories.map((repository) => (
           <CheckRow
@@ -242,7 +246,7 @@ export function ProjectPage({ projectId }: { projectId: string }) {
         }
       />
       {project.directories.length === 0 ? (
-        <PageIntro className="mt-0 mb-0">该项目没有普通目录。普通目录的原始文件在任务之间共享，不承诺隔离。</PageIntro>
+        <PageIntro>该项目没有普通目录。普通目录的原始文件在任务之间共享，不承诺隔离。</PageIntro>
       ) : (
         project.directories.map((directory) => (
           <CheckRow
@@ -254,7 +258,7 @@ export function ProjectPage({ projectId }: { projectId: string }) {
           />
         ))
       )}
-      <Note>仓库创建独立 worktree；普通目录通过软链接加入任务目录，修改会影响原目录。</Note>
+      <Note>Git 仓库创建独立 worktree；普通目录通过软链接加入任务目录，修改会影响原目录。</Note>
     </div>
   );
 }

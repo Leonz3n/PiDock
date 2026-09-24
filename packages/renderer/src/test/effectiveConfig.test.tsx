@@ -15,11 +15,17 @@ describe("effective config dialog", () => {
 
     await user.click(screen.getByRole("button", { name: "查看生效配置" }));
     const dialog = await screen.findByRole("dialog", { name: "查看生效配置" });
-    // Prototype: `任务名 · 环境 · 任务模板 <version>`.
-    expect(within(dialog).getByText(/发布前检查 · 测试环境 · 任务模板 v\d+/)).toBeInTheDocument();
+    // Prototype: `任务名 · 环境 · 任务模板 <version>`, a plain `<p>` in the modal
+    // body so it inherits the 13px body font (measured on the live prototype; it
+    // was 12px before the S7a close-out round).
+    const header = within(dialog).getByText(/发布前检查 · 测试环境 · 任务模板 v\d+/);
+    expect(header.className).toContain("text-[13px]");
     expect(within(dialog).getByTestId("effective-service")).toBeInTheDocument();
     // The table is KEY / 最终值 / 来源, with a row per layer.
     const table = within(dialog).getByRole("table");
+    // `.table tr:last-child td{border:0}` — the rule sits on the table because a
+    // `last:` variant on the cell would target the row's last cell instead.
+    expect(table.className).toContain("[&_tr:last-child_td]:border-b-0");
     expect(within(table).getByText("KEY")).toBeInTheDocument();
     expect(within(table).getByText("最终值")).toBeInTheDocument();
     expect(within(table).getByText("来源")).toBeInTheDocument();

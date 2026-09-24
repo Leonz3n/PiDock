@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Badge, Button, EmptyState, Field, Modal, Segmented } from "./ui";
 import { VirtualList } from "./VirtualList";
-import { CheckField, CheckRow, InlineNotice, ManagementList, ManagementRow, ManagementRowText, Note, PageEmpty, PreviewNote } from "./Management";
+import { CheckField, CheckRow, InlineNotice, ManagementList, ManagementRow, ManagementRowText, Note, PageEmpty, PageIntro, PreviewNote } from "./Management";
 import { ConfigTable } from "./ConfigTable";
 import { runStateLabel } from "../pages/runState";
 import { diffConfigRows, isSensitiveKey, nextTemplateVersion } from "../data/configRows";
@@ -2406,7 +2406,10 @@ function EffectiveConfigModal({
 
   return (
     <Modal title="查看生效配置" testId="effective-config-dialog" onClose={onClose}>
-      <p className="text-xs text-ink">
+      {/* Prototype `closure.js`: a plain `<p>` in the modal body, so it inherits
+          the 13px body font (measured on the live prototype; this line was 12px
+          before the S7a close-out round). */}
+      <p className="text-[13px] text-ink">
         {task.name} · {environment?.name ?? task.environmentId} · 任务模板 {task.templateVersion}
       </p>
       <div className="mt-3">
@@ -2464,7 +2467,7 @@ function ProjectListModal({ onClose }: { onClose: () => void }) {
         </Button>
       }
     >
-      <p className="text-xs text-muted">切换项目，或管理项目的目录、仓库与名称。</p>
+      <PageIntro dense>切换项目，或管理项目的目录、仓库与名称。</PageIntro>
       <ManagementList>
         {projects.length === 0 ? <PageEmpty title="还没有项目" /> : null}
         {projects.map((project) => {
