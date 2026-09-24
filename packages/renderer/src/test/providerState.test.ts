@@ -18,6 +18,8 @@ import {
   isSecretLike,
   modelDisplayName,
   movePickerCursor,
+  PROTOCOL_LABELS,
+  protocolLabel,
   resolveSessionThinking,
   syncModelCandidates,
   validateProviderDraft,
@@ -327,5 +329,18 @@ describe("model picker", () => {
     const blockedRows = flattenPickerGroups(buildModelPickerGroups({ providers: [DISABLED, LOCAL], contextUsed: 1, contextSource: "actual" }));
     expect(blockedRows[0].model.disabledReason).toBe("Provider 已停用");
     expect(firstSelectablePickerIndex(blockedRows)).toBe(1);
+  });
+});
+
+describe("protocol labels", () => {
+  it("shows the prototype's display name and falls back to the wire id", () => {
+    // [UI 对齐 09] #33 review P2-7: the card badge used to print the raw id
+    // (`anthropic-messages`) where the prototype prints `Anthropic Messages`.
+    expect(protocolLabel("anthropic-messages")).toBe("Anthropic Messages");
+    expect(protocolLabel("openai-responses")).toBe("OpenAI Responses");
+    expect(protocolLabel("openai-chat-completions")).toBe("OpenAI Chat Completions");
+    // The stored value stays the wire id, and an unknown one is never blank.
+    expect(Object.keys(PROTOCOL_LABELS)).toEqual(["anthropic-messages", "openai-responses", "openai-chat-completions"]);
+    expect(protocolLabel("some-future-protocol")).toBe("some-future-protocol");
   });
 });

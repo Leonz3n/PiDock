@@ -28,6 +28,11 @@
         0,
         0
       ],
+      "pageButtonIconMap": {
+        "添加 Provider": 1,
+        "编辑": 0,
+        "选择模型": 0
+      },
       "measured": {
         "page": {
           "padding": "30px 34px",
@@ -534,7 +539,28 @@
         "团队模型 · 128k",
         "团队轻量模型 · 16k"
       ],
+      "providerProtocolBadges": [],
+      "remoteGuardBox": null,
+      "remoteCardBox": null,
+      "connectionChecks": [],
+      "monoFamilies": [
+        "ui-monospace, SFMono-Regular, Consolas, monospace",
+        "ui-monospace, SFMono-Regular, Consolas, monospace",
+        "ui-monospace, SFMono-Regular, Consolas, monospace"
+      ],
+      "dotBoxes": [],
+      "commandPreview": [],
+      "remoteFlowSteps": [],
+      "remoteFlowArrows": 0,
+      "gatewayDetails": [],
+      "declaredAbsent": {
+        "machineName": 0,
+        "entryToggle": 0
+      },
+      "deviceRowCells": [],
+      "deviceNameLines": [],
       "statLabels": [],
+      "statCardLabels": [],
       "capabilityNames": [],
       "capabilityTabLabels": [],
       "capabilitySummary": [],
@@ -562,6 +588,7 @@
       "intro": "按实际调用累计，压缩上下文不会减少消耗。以下均为示例统计。",
       "pageButtons": [],
       "pageButtonIcons": [],
+      "pageButtonIconMap": {},
       "measured": {
         "page": {
           "padding": "30px 34px",
@@ -1200,11 +1227,46 @@
       "notes": [],
       "providerNames": [],
       "providerChips": [],
+      "providerProtocolBadges": [],
+      "remoteGuardBox": null,
+      "remoteCardBox": null,
+      "connectionChecks": [],
+      "monoFamilies": [
+        "ui-monospace, SFMono-Regular, Consolas, monospace",
+        "ui-monospace, SFMono-Regular, Consolas, monospace",
+        "ui-monospace, SFMono-Regular, Consolas, monospace",
+        "ui-monospace, SFMono-Regular, Consolas, monospace",
+        "ui-monospace, SFMono-Regular, Consolas, monospace",
+        "ui-monospace, SFMono-Regular, Consolas, monospace",
+        "ui-monospace, SFMono-Regular, Consolas, monospace",
+        "ui-monospace, SFMono-Regular, Consolas, monospace",
+        "ui-monospace, SFMono-Regular, Consolas, monospace",
+        "ui-monospace, SFMono-Regular, Consolas, monospace",
+        "ui-monospace, SFMono-Regular, Consolas, monospace",
+        "ui-monospace, SFMono-Regular, Consolas, monospace"
+      ],
+      "dotBoxes": [],
+      "commandPreview": [],
+      "remoteFlowSteps": [],
+      "remoteFlowArrows": 0,
+      "gatewayDetails": [],
+      "declaredAbsent": {
+        "machineName": 0,
+        "entryToggle": 0
+      },
+      "deviceRowCells": [],
+      "deviceNameLines": [],
       "statLabels": [
         "1.28M",
         "68.4 k",
         "186",
         "3 次"
+      ],
+      "statCardLabels": [
+        "累计 Token",
+        "当前会话",
+        "已记录调用",
+        "未完整报告"
       ],
       "capabilityNames": [],
       "capabilityTabLabels": [],
@@ -1261,6 +1323,9 @@
       "pageButtonIcons": [
         1
       ],
+      "pageButtonIconMap": {
+        "添加技能来源": 1
+      },
       "measured": {
         "page": {
           "padding": "30px 34px",
@@ -1845,7 +1910,24 @@
       ],
       "providerNames": [],
       "providerChips": [],
+      "providerProtocolBadges": [],
+      "remoteGuardBox": null,
+      "remoteCardBox": null,
+      "connectionChecks": [],
+      "monoFamilies": [],
+      "dotBoxes": [],
+      "commandPreview": [],
+      "remoteFlowSteps": [],
+      "remoteFlowArrows": 0,
+      "gatewayDetails": [],
+      "declaredAbsent": {
+        "machineName": 0,
+        "entryToggle": 0
+      },
+      "deviceRowCells": [],
+      "deviceNameLines": [],
       "statLabels": [],
+      "statCardLabels": [],
       "capabilityNames": [
         "project-deep-dive-interview",
         "buf-cli",
@@ -1905,6 +1987,13 @@
         1,
         0
       ],
+      "pageButtonIconMap": {
+        "手机视图": 1,
+        "重新检测": 0,
+        "启用此入口": 1,
+        "扫码添加": 1,
+        "撤销": 0
+      },
       "measured": {
         "page": {
           "padding": "30px 34px",
@@ -2779,7 +2868,278 @@
       "notes": [],
       "providerNames": [],
       "providerChips": [],
+      "providerProtocolBadges": [],
+      "remoteGuardBox": {
+        "padding": "20px",
+        "margin": "16px 0px 0px",
+        "marginTop": "16px",
+        "marginBottom": "0px",
+        "gap": "normal",
+        "columnGap": "normal",
+        "display": "block",
+        "fontSize": "13px",
+        "fontFamily": "-apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", sans-serif",
+        "fontWeight": "400",
+        "letterSpacing": "normal",
+        "color": "rgb(37, 43, 48)",
+        "backgroundColor": "rgb(250, 249, 245)",
+        "borderColor": "rgb(233, 236, 238)",
+        "borderWidth": "1px",
+        "borderBottomWidth": "1px",
+        "borderRadius": "8px",
+        "textTransform": "none",
+        "gridTemplateColumns": "none",
+        "tracks": 0,
+        "height": 141,
+        "width": 368,
+        "scrollHeight": 139
+      },
+      "remoteCardBox": {
+        "padding": "20px",
+        "margin": "0px",
+        "marginTop": "0px",
+        "marginBottom": "0px",
+        "gap": "normal",
+        "columnGap": "normal",
+        "display": "block",
+        "fontSize": "13px",
+        "fontFamily": "-apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", sans-serif",
+        "fontWeight": "400",
+        "letterSpacing": "normal",
+        "color": "rgb(37, 43, 48)",
+        "backgroundColor": "rgb(255, 255, 255)",
+        "borderColor": "rgb(233, 236, 238)",
+        "borderWidth": "1px",
+        "borderBottomWidth": "1px",
+        "borderRadius": "8px",
+        "textTransform": "none",
+        "gridTemplateColumns": "none",
+        "tracks": 0,
+        "height": 526,
+        "width": 760,
+        "scrollHeight": 524
+      },
+      "connectionChecks": [
+        {
+          "dot": {
+            "padding": "0px",
+            "margin": "0px",
+            "marginTop": "0px",
+            "marginBottom": "0px",
+            "gap": "normal",
+            "columnGap": "normal",
+            "display": "block",
+            "fontSize": "13px",
+            "fontFamily": "-apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", sans-serif",
+            "fontWeight": "400",
+            "letterSpacing": "normal",
+            "color": "rgb(37, 43, 48)",
+            "backgroundColor": "rgb(154, 164, 171)",
+            "borderColor": "rgb(37, 43, 48)",
+            "borderWidth": "0px",
+            "borderBottomWidth": "0px",
+            "borderRadius": "50%",
+            "textTransform": "none",
+            "gridTemplateColumns": "none",
+            "tracks": 0,
+            "height": 6,
+            "width": 6,
+            "scrollHeight": 6
+          },
+          "icons": 0,
+          "mono": null
+        },
+        {
+          "dot": {
+            "padding": "0px",
+            "margin": "0px",
+            "marginTop": "0px",
+            "marginBottom": "0px",
+            "gap": "normal",
+            "columnGap": "normal",
+            "display": "block",
+            "fontSize": "13px",
+            "fontFamily": "-apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", sans-serif",
+            "fontWeight": "400",
+            "letterSpacing": "normal",
+            "color": "rgb(37, 43, 48)",
+            "backgroundColor": "rgb(66, 90, 147)",
+            "borderColor": "rgb(37, 43, 48)",
+            "borderWidth": "0px",
+            "borderBottomWidth": "0px",
+            "borderRadius": "50%",
+            "textTransform": "none",
+            "gridTemplateColumns": "none",
+            "tracks": 0,
+            "height": 6,
+            "width": 6,
+            "scrollHeight": 6
+          },
+          "icons": 0,
+          "mono": {
+            "padding": "0px",
+            "margin": "0px",
+            "marginTop": "0px",
+            "marginBottom": "0px",
+            "gap": "normal",
+            "columnGap": "normal",
+            "display": "block",
+            "fontSize": "9px",
+            "fontFamily": "ui-monospace, SFMono-Regular, Consolas, monospace",
+            "fontWeight": "400",
+            "letterSpacing": "normal",
+            "color": "rgb(133, 141, 148)",
+            "backgroundColor": "rgba(0, 0, 0, 0)",
+            "borderColor": "rgb(133, 141, 148)",
+            "borderWidth": "0px",
+            "borderBottomWidth": "0px",
+            "borderRadius": "0px",
+            "textTransform": "none",
+            "gridTemplateColumns": "none",
+            "tracks": 0,
+            "height": 15,
+            "width": 664,
+            "scrollHeight": 15
+          }
+        },
+        {
+          "dot": {
+            "padding": "0px",
+            "margin": "0px",
+            "marginTop": "0px",
+            "marginBottom": "0px",
+            "gap": "normal",
+            "columnGap": "normal",
+            "display": "block",
+            "fontSize": "13px",
+            "fontFamily": "-apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", sans-serif",
+            "fontWeight": "400",
+            "letterSpacing": "normal",
+            "color": "rgb(37, 43, 48)",
+            "backgroundColor": "rgb(66, 90, 147)",
+            "borderColor": "rgb(37, 43, 48)",
+            "borderWidth": "0px",
+            "borderBottomWidth": "0px",
+            "borderRadius": "50%",
+            "textTransform": "none",
+            "gridTemplateColumns": "none",
+            "tracks": 0,
+            "height": 6,
+            "width": 6,
+            "scrollHeight": 6
+          },
+          "icons": 0,
+          "mono": null
+        }
+      ],
+      "monoFamilies": [
+        "ui-monospace, SFMono-Regular, Consolas, monospace"
+      ],
+      "dotBoxes": [
+        {
+          "padding": "0px",
+          "margin": "0px",
+          "marginTop": "0px",
+          "marginBottom": "0px",
+          "gap": "normal",
+          "columnGap": "normal",
+          "display": "block",
+          "fontSize": "13px",
+          "fontFamily": "-apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", sans-serif",
+          "fontWeight": "400",
+          "letterSpacing": "normal",
+          "color": "rgb(37, 43, 48)",
+          "backgroundColor": "rgb(154, 164, 171)",
+          "borderColor": "rgb(37, 43, 48)",
+          "borderWidth": "0px",
+          "borderBottomWidth": "0px",
+          "borderRadius": "50%",
+          "textTransform": "none",
+          "gridTemplateColumns": "none",
+          "tracks": 0,
+          "height": 6,
+          "width": 6,
+          "scrollHeight": 6
+        },
+        {
+          "padding": "0px",
+          "margin": "0px",
+          "marginTop": "0px",
+          "marginBottom": "0px",
+          "gap": "normal",
+          "columnGap": "normal",
+          "display": "block",
+          "fontSize": "13px",
+          "fontFamily": "-apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", sans-serif",
+          "fontWeight": "400",
+          "letterSpacing": "normal",
+          "color": "rgb(37, 43, 48)",
+          "backgroundColor": "rgb(66, 90, 147)",
+          "borderColor": "rgb(37, 43, 48)",
+          "borderWidth": "0px",
+          "borderBottomWidth": "0px",
+          "borderRadius": "50%",
+          "textTransform": "none",
+          "gridTemplateColumns": "none",
+          "tracks": 0,
+          "height": 6,
+          "width": 6,
+          "scrollHeight": 6
+        },
+        {
+          "padding": "0px",
+          "margin": "0px",
+          "marginTop": "0px",
+          "marginBottom": "0px",
+          "gap": "normal",
+          "columnGap": "normal",
+          "display": "block",
+          "fontSize": "13px",
+          "fontFamily": "-apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", sans-serif",
+          "fontWeight": "400",
+          "letterSpacing": "normal",
+          "color": "rgb(37, 43, 48)",
+          "backgroundColor": "rgb(66, 90, 147)",
+          "borderColor": "rgb(37, 43, 48)",
+          "borderWidth": "0px",
+          "borderBottomWidth": "0px",
+          "borderRadius": "50%",
+          "textTransform": "none",
+          "gridTemplateColumns": "none",
+          "tracks": 0,
+          "height": 6,
+          "width": 6,
+          "scrollHeight": 6
+        }
+      ],
+      "commandPreview": [
+        "tailscale serve --bg 127.0.0.1:4318"
+      ],
+      "remoteFlowSteps": [],
+      "remoteFlowArrows": 0,
+      "gatewayDetails": [],
+      "declaredAbsent": {
+        "machineName": 0,
+        "entryToggle": 1
+      },
+      "deviceRowCells": [
+        [
+          31,
+          242,
+          34
+        ],
+        [
+          31,
+          236,
+          40
+        ]
+      ],
+      "deviceNameLines": [
+        1,
+        1
+      ],
       "statLabels": [],
+      "statCardLabels": [],
       "capabilityNames": [],
       "capabilityTabLabels": [],
       "capabilitySummary": [],
@@ -2810,7 +3170,24 @@
       ],
       "funnelTab": {
         "selected": 2,
-        "warnNotices": 1
+        "warnNotices": 1,
+        "commandPreview": [
+          "tailscale funnel --bg 127.0.0.1:4318"
+        ]
+      },
+      "gatewayTab": {
+        "commandPreview": [],
+        "remoteFlowSteps": [
+          "手机浏览器",
+          "自建 Gateway",
+          "本机 PiDock"
+        ],
+        "remoteFlowArrows": 2,
+        "gatewayDetails": [
+          "HTTPS / WSS",
+          "桌面主动连接",
+          "设备凭据可轮换"
+        ]
       }
     },
     "schedules": {
@@ -2846,6 +3223,12 @@
         0,
         0
       ],
+      "pageButtonIconMap": {
+        "新建定时任务": 1,
+        "查看任务": 0,
+        "立即运行": 1,
+        "打开会话": 0
+      },
       "measured": {
         "page": {
           "padding": "30px 34px",
@@ -3560,7 +3943,24 @@
       ],
       "providerNames": [],
       "providerChips": [],
+      "providerProtocolBadges": [],
+      "remoteGuardBox": null,
+      "remoteCardBox": null,
+      "connectionChecks": [],
+      "monoFamilies": [],
+      "dotBoxes": [],
+      "commandPreview": [],
+      "remoteFlowSteps": [],
+      "remoteFlowArrows": 0,
+      "gatewayDetails": [],
+      "declaredAbsent": {
+        "machineName": 0,
+        "entryToggle": 0
+      },
+      "deviceRowCells": [],
+      "deviceNameLines": [],
       "statLabels": [],
+      "statCardLabels": [],
       "capabilityNames": [],
       "capabilityTabLabels": [],
       "capabilitySummary": [],
@@ -3601,6 +4001,7 @@
       "intro": "归档停止运行并保留代码、会话和浏览器状态；清理是另一个操作。",
       "pageButtons": [],
       "pageButtonIcons": [],
+      "pageButtonIconMap": {},
       "measured": {
         "page": {
           "padding": "30px 34px",
@@ -3845,7 +4246,24 @@
       "notes": [],
       "providerNames": [],
       "providerChips": [],
+      "providerProtocolBadges": [],
+      "remoteGuardBox": null,
+      "remoteCardBox": null,
+      "connectionChecks": [],
+      "monoFamilies": [],
+      "dotBoxes": [],
+      "commandPreview": [],
+      "remoteFlowSteps": [],
+      "remoteFlowArrows": 0,
+      "gatewayDetails": [],
+      "declaredAbsent": {
+        "machineName": 0,
+        "entryToggle": 0
+      },
+      "deviceRowCells": [],
+      "deviceNameLines": [],
       "statLabels": [],
+      "statCardLabels": [],
       "capabilityNames": [],
       "capabilityTabLabels": [],
       "capabilitySummary": [],
@@ -3875,6 +4293,10 @@
         0,
         0
       ],
+      "pageButtonIconMap": {
+        "恢复": 0,
+        "清理…": 0
+      },
       "measured": {
         "page": {
           "padding": "30px 34px",
@@ -4141,7 +4563,24 @@
       "notes": [],
       "providerNames": [],
       "providerChips": [],
+      "providerProtocolBadges": [],
+      "remoteGuardBox": null,
+      "remoteCardBox": null,
+      "connectionChecks": [],
+      "monoFamilies": [],
+      "dotBoxes": [],
+      "commandPreview": [],
+      "remoteFlowSteps": [],
+      "remoteFlowArrows": 0,
+      "gatewayDetails": [],
+      "declaredAbsent": {
+        "machineName": 0,
+        "entryToggle": 0
+      },
+      "deviceRowCells": [],
+      "deviceNameLines": [],
       "statLabels": [],
+      "statCardLabels": [],
       "capabilityNames": [],
       "capabilityTabLabels": [],
       "capabilitySummary": [],
@@ -4185,6 +4624,11 @@
         0,
         0
       ],
+      "pageButtonIconMap": {
+        "添加 Provider": 1,
+        "编辑": 0,
+        "选择模型": 0
+      },
       "measured": {
         "page": {
           "padding": "30px 34px",
@@ -4691,7 +5135,28 @@
         "团队模型 · 128k",
         "团队轻量模型 · 16k"
       ],
+      "providerProtocolBadges": [],
+      "remoteGuardBox": null,
+      "remoteCardBox": null,
+      "connectionChecks": [],
+      "monoFamilies": [
+        "ui-monospace, SFMono-Regular, Consolas, monospace",
+        "ui-monospace, SFMono-Regular, Consolas, monospace",
+        "ui-monospace, SFMono-Regular, Consolas, monospace"
+      ],
+      "dotBoxes": [],
+      "commandPreview": [],
+      "remoteFlowSteps": [],
+      "remoteFlowArrows": 0,
+      "gatewayDetails": [],
+      "declaredAbsent": {
+        "machineName": 0,
+        "entryToggle": 0
+      },
+      "deviceRowCells": [],
+      "deviceNameLines": [],
       "statLabels": [],
+      "statCardLabels": [],
       "capabilityNames": [],
       "capabilityTabLabels": [],
       "capabilitySummary": [],
@@ -4719,6 +5184,7 @@
       "intro": "按实际调用累计，压缩上下文不会减少消耗。以下均为示例统计。",
       "pageButtons": [],
       "pageButtonIcons": [],
+      "pageButtonIconMap": {},
       "measured": {
         "page": {
           "padding": "30px 34px",
@@ -5357,11 +5823,46 @@
       "notes": [],
       "providerNames": [],
       "providerChips": [],
+      "providerProtocolBadges": [],
+      "remoteGuardBox": null,
+      "remoteCardBox": null,
+      "connectionChecks": [],
+      "monoFamilies": [
+        "ui-monospace, SFMono-Regular, Consolas, monospace",
+        "ui-monospace, SFMono-Regular, Consolas, monospace",
+        "ui-monospace, SFMono-Regular, Consolas, monospace",
+        "ui-monospace, SFMono-Regular, Consolas, monospace",
+        "ui-monospace, SFMono-Regular, Consolas, monospace",
+        "ui-monospace, SFMono-Regular, Consolas, monospace",
+        "ui-monospace, SFMono-Regular, Consolas, monospace",
+        "ui-monospace, SFMono-Regular, Consolas, monospace",
+        "ui-monospace, SFMono-Regular, Consolas, monospace",
+        "ui-monospace, SFMono-Regular, Consolas, monospace",
+        "ui-monospace, SFMono-Regular, Consolas, monospace",
+        "ui-monospace, SFMono-Regular, Consolas, monospace"
+      ],
+      "dotBoxes": [],
+      "commandPreview": [],
+      "remoteFlowSteps": [],
+      "remoteFlowArrows": 0,
+      "gatewayDetails": [],
+      "declaredAbsent": {
+        "machineName": 0,
+        "entryToggle": 0
+      },
+      "deviceRowCells": [],
+      "deviceNameLines": [],
       "statLabels": [
         "1.28M",
         "68.4 k",
         "186",
         "3 次"
+      ],
+      "statCardLabels": [
+        "累计 Token",
+        "当前会话",
+        "已记录调用",
+        "未完整报告"
       ],
       "capabilityNames": [],
       "capabilityTabLabels": [],
@@ -5400,6 +5901,9 @@
       "pageButtonIcons": [
         1
       ],
+      "pageButtonIconMap": {
+        "添加技能来源": 1
+      },
       "measured": {
         "page": {
           "padding": "30px 34px",
@@ -5984,7 +6488,24 @@
       ],
       "providerNames": [],
       "providerChips": [],
+      "providerProtocolBadges": [],
+      "remoteGuardBox": null,
+      "remoteCardBox": null,
+      "connectionChecks": [],
+      "monoFamilies": [],
+      "dotBoxes": [],
+      "commandPreview": [],
+      "remoteFlowSteps": [],
+      "remoteFlowArrows": 0,
+      "gatewayDetails": [],
+      "declaredAbsent": {
+        "machineName": 0,
+        "entryToggle": 0
+      },
+      "deviceRowCells": [],
+      "deviceNameLines": [],
       "statLabels": [],
+      "statCardLabels": [],
       "capabilityNames": [
         "project-deep-dive-interview",
         "buf-cli",
@@ -6034,6 +6555,13 @@
         1,
         0
       ],
+      "pageButtonIconMap": {
+        "手机视图": 1,
+        "重新检测": 0,
+        "启用此入口": 1,
+        "扫码添加": 1,
+        "撤销": 0
+      },
       "measured": {
         "page": {
           "padding": "30px 34px",
@@ -6908,7 +7436,278 @@
       "notes": [],
       "providerNames": [],
       "providerChips": [],
+      "providerProtocolBadges": [],
+      "remoteGuardBox": {
+        "padding": "20px",
+        "margin": "16px 0px 0px",
+        "marginTop": "16px",
+        "marginBottom": "0px",
+        "gap": "normal",
+        "columnGap": "normal",
+        "display": "block",
+        "fontSize": "13px",
+        "fontFamily": "-apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", sans-serif",
+        "fontWeight": "400",
+        "letterSpacing": "normal",
+        "color": "rgb(37, 43, 48)",
+        "backgroundColor": "rgb(250, 249, 245)",
+        "borderColor": "rgb(233, 236, 238)",
+        "borderWidth": "1px",
+        "borderBottomWidth": "1px",
+        "borderRadius": "8px",
+        "textTransform": "none",
+        "gridTemplateColumns": "none",
+        "tracks": 0,
+        "height": 161,
+        "width": 280,
+        "scrollHeight": 159
+      },
+      "remoteCardBox": {
+        "padding": "20px",
+        "margin": "0px",
+        "marginTop": "0px",
+        "marginBottom": "0px",
+        "gap": "normal",
+        "columnGap": "normal",
+        "display": "block",
+        "fontSize": "13px",
+        "fontFamily": "-apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", sans-serif",
+        "fontWeight": "400",
+        "letterSpacing": "normal",
+        "color": "rgb(37, 43, 48)",
+        "backgroundColor": "rgb(255, 255, 255)",
+        "borderColor": "rgb(233, 236, 238)",
+        "borderWidth": "1px",
+        "borderBottomWidth": "1px",
+        "borderRadius": "8px",
+        "textTransform": "none",
+        "gridTemplateColumns": "none",
+        "tracks": 0,
+        "height": 526,
+        "width": 466,
+        "scrollHeight": 524
+      },
+      "connectionChecks": [
+        {
+          "dot": {
+            "padding": "0px",
+            "margin": "0px",
+            "marginTop": "0px",
+            "marginBottom": "0px",
+            "gap": "normal",
+            "columnGap": "normal",
+            "display": "block",
+            "fontSize": "13px",
+            "fontFamily": "-apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", sans-serif",
+            "fontWeight": "400",
+            "letterSpacing": "normal",
+            "color": "rgb(37, 43, 48)",
+            "backgroundColor": "rgb(154, 164, 171)",
+            "borderColor": "rgb(37, 43, 48)",
+            "borderWidth": "0px",
+            "borderBottomWidth": "0px",
+            "borderRadius": "50%",
+            "textTransform": "none",
+            "gridTemplateColumns": "none",
+            "tracks": 0,
+            "height": 6,
+            "width": 6,
+            "scrollHeight": 6
+          },
+          "icons": 0,
+          "mono": null
+        },
+        {
+          "dot": {
+            "padding": "0px",
+            "margin": "0px",
+            "marginTop": "0px",
+            "marginBottom": "0px",
+            "gap": "normal",
+            "columnGap": "normal",
+            "display": "block",
+            "fontSize": "13px",
+            "fontFamily": "-apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", sans-serif",
+            "fontWeight": "400",
+            "letterSpacing": "normal",
+            "color": "rgb(37, 43, 48)",
+            "backgroundColor": "rgb(66, 90, 147)",
+            "borderColor": "rgb(37, 43, 48)",
+            "borderWidth": "0px",
+            "borderBottomWidth": "0px",
+            "borderRadius": "50%",
+            "textTransform": "none",
+            "gridTemplateColumns": "none",
+            "tracks": 0,
+            "height": 6,
+            "width": 6,
+            "scrollHeight": 6
+          },
+          "icons": 0,
+          "mono": {
+            "padding": "0px",
+            "margin": "0px",
+            "marginTop": "0px",
+            "marginBottom": "0px",
+            "gap": "normal",
+            "columnGap": "normal",
+            "display": "block",
+            "fontSize": "9px",
+            "fontFamily": "ui-monospace, SFMono-Regular, Consolas, monospace",
+            "fontWeight": "400",
+            "letterSpacing": "normal",
+            "color": "rgb(133, 141, 148)",
+            "backgroundColor": "rgba(0, 0, 0, 0)",
+            "borderColor": "rgb(133, 141, 148)",
+            "borderWidth": "0px",
+            "borderBottomWidth": "0px",
+            "borderRadius": "0px",
+            "textTransform": "none",
+            "gridTemplateColumns": "none",
+            "tracks": 0,
+            "height": 15,
+            "width": 370,
+            "scrollHeight": 15
+          }
+        },
+        {
+          "dot": {
+            "padding": "0px",
+            "margin": "0px",
+            "marginTop": "0px",
+            "marginBottom": "0px",
+            "gap": "normal",
+            "columnGap": "normal",
+            "display": "block",
+            "fontSize": "13px",
+            "fontFamily": "-apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", sans-serif",
+            "fontWeight": "400",
+            "letterSpacing": "normal",
+            "color": "rgb(37, 43, 48)",
+            "backgroundColor": "rgb(66, 90, 147)",
+            "borderColor": "rgb(37, 43, 48)",
+            "borderWidth": "0px",
+            "borderBottomWidth": "0px",
+            "borderRadius": "50%",
+            "textTransform": "none",
+            "gridTemplateColumns": "none",
+            "tracks": 0,
+            "height": 6,
+            "width": 6,
+            "scrollHeight": 6
+          },
+          "icons": 0,
+          "mono": null
+        }
+      ],
+      "monoFamilies": [
+        "ui-monospace, SFMono-Regular, Consolas, monospace"
+      ],
+      "dotBoxes": [
+        {
+          "padding": "0px",
+          "margin": "0px",
+          "marginTop": "0px",
+          "marginBottom": "0px",
+          "gap": "normal",
+          "columnGap": "normal",
+          "display": "block",
+          "fontSize": "13px",
+          "fontFamily": "-apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", sans-serif",
+          "fontWeight": "400",
+          "letterSpacing": "normal",
+          "color": "rgb(37, 43, 48)",
+          "backgroundColor": "rgb(154, 164, 171)",
+          "borderColor": "rgb(37, 43, 48)",
+          "borderWidth": "0px",
+          "borderBottomWidth": "0px",
+          "borderRadius": "50%",
+          "textTransform": "none",
+          "gridTemplateColumns": "none",
+          "tracks": 0,
+          "height": 6,
+          "width": 6,
+          "scrollHeight": 6
+        },
+        {
+          "padding": "0px",
+          "margin": "0px",
+          "marginTop": "0px",
+          "marginBottom": "0px",
+          "gap": "normal",
+          "columnGap": "normal",
+          "display": "block",
+          "fontSize": "13px",
+          "fontFamily": "-apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", sans-serif",
+          "fontWeight": "400",
+          "letterSpacing": "normal",
+          "color": "rgb(37, 43, 48)",
+          "backgroundColor": "rgb(66, 90, 147)",
+          "borderColor": "rgb(37, 43, 48)",
+          "borderWidth": "0px",
+          "borderBottomWidth": "0px",
+          "borderRadius": "50%",
+          "textTransform": "none",
+          "gridTemplateColumns": "none",
+          "tracks": 0,
+          "height": 6,
+          "width": 6,
+          "scrollHeight": 6
+        },
+        {
+          "padding": "0px",
+          "margin": "0px",
+          "marginTop": "0px",
+          "marginBottom": "0px",
+          "gap": "normal",
+          "columnGap": "normal",
+          "display": "block",
+          "fontSize": "13px",
+          "fontFamily": "-apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", sans-serif",
+          "fontWeight": "400",
+          "letterSpacing": "normal",
+          "color": "rgb(37, 43, 48)",
+          "backgroundColor": "rgb(66, 90, 147)",
+          "borderColor": "rgb(37, 43, 48)",
+          "borderWidth": "0px",
+          "borderBottomWidth": "0px",
+          "borderRadius": "50%",
+          "textTransform": "none",
+          "gridTemplateColumns": "none",
+          "tracks": 0,
+          "height": 6,
+          "width": 6,
+          "scrollHeight": 6
+        }
+      ],
+      "commandPreview": [
+        "tailscale serve --bg 127.0.0.1:4318"
+      ],
+      "remoteFlowSteps": [],
+      "remoteFlowArrows": 0,
+      "gatewayDetails": [],
+      "declaredAbsent": {
+        "machineName": 0,
+        "entryToggle": 1
+      },
+      "deviceRowCells": [
+        [
+          31,
+          154,
+          34
+        ],
+        [
+          31,
+          148,
+          40
+        ]
+      ],
+      "deviceNameLines": [
+        1,
+        1
+      ],
       "statLabels": [],
+      "statCardLabels": [],
       "capabilityNames": [],
       "capabilityTabLabels": [],
       "capabilitySummary": [],
@@ -6971,6 +7770,12 @@
         0,
         0
       ],
+      "pageButtonIconMap": {
+        "新建定时任务": 1,
+        "查看任务": 0,
+        "立即运行": 1,
+        "打开会话": 0
+      },
       "measured": {
         "page": {
           "padding": "30px 34px",
@@ -7685,7 +8490,24 @@
       ],
       "providerNames": [],
       "providerChips": [],
+      "providerProtocolBadges": [],
+      "remoteGuardBox": null,
+      "remoteCardBox": null,
+      "connectionChecks": [],
+      "monoFamilies": [],
+      "dotBoxes": [],
+      "commandPreview": [],
+      "remoteFlowSteps": [],
+      "remoteFlowArrows": 0,
+      "gatewayDetails": [],
+      "declaredAbsent": {
+        "machineName": 0,
+        "entryToggle": 0
+      },
+      "deviceRowCells": [],
+      "deviceNameLines": [],
       "statLabels": [],
+      "statCardLabels": [],
       "capabilityNames": [],
       "capabilityTabLabels": [],
       "capabilitySummary": [],
@@ -7721,6 +8543,7 @@
       "intro": "归档停止运行并保留代码、会话和浏览器状态；清理是另一个操作。",
       "pageButtons": [],
       "pageButtonIcons": [],
+      "pageButtonIconMap": {},
       "measured": {
         "page": {
           "padding": "30px 34px",
@@ -7965,7 +8788,24 @@
       "notes": [],
       "providerNames": [],
       "providerChips": [],
+      "providerProtocolBadges": [],
+      "remoteGuardBox": null,
+      "remoteCardBox": null,
+      "connectionChecks": [],
+      "monoFamilies": [],
+      "dotBoxes": [],
+      "commandPreview": [],
+      "remoteFlowSteps": [],
+      "remoteFlowArrows": 0,
+      "gatewayDetails": [],
+      "declaredAbsent": {
+        "machineName": 0,
+        "entryToggle": 0
+      },
+      "deviceRowCells": [],
+      "deviceNameLines": [],
       "statLabels": [],
+      "statCardLabels": [],
       "capabilityNames": [],
       "capabilityTabLabels": [],
       "capabilitySummary": [],
@@ -8034,6 +8874,13 @@
           1,
           0
         ],
+        "pageButtonIconMap": {
+          "添加 Provider": 1,
+          "编辑": 1,
+          "同步模型列表": 1,
+          "停用": 1,
+          "删除": 0
+        },
         "measured": {
           "page": {
             "padding": "30px 34px",
@@ -8276,7 +9123,7 @@
             "columnGap": "normal",
             "display": "block",
             "fontSize": "11px",
-            "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+            "fontFamily": "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
             "fontWeight": "400",
             "letterSpacing": "normal",
             "color": "rgb(148, 151, 156)",
@@ -8446,7 +9293,7 @@
           "columnGap": "normal",
           "display": "block",
           "fontSize": "11px",
-          "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+          "fontFamily": "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
           "fontWeight": "400",
           "letterSpacing": "normal",
           "color": "rgb(148, 151, 156)",
@@ -8465,14 +9312,14 @@
         "dots": [],
         "badges": [
           "已启用",
-          "anthropic-messages",
+          "Anthropic Messages",
           "Claude Sonnet · 200k · 图片",
           "Claude Haiku · 200k",
           "已启用",
-          "openai-responses",
+          "OpenAI Responses",
           "团队轻量模型 · 16k · 图片",
           "已启用",
-          "openai-chat-completions",
+          "OpenAI Chat Completions",
           "本地 Qwen · 32k"
         ],
         "empties": [],
@@ -8488,7 +9335,32 @@
           "团队轻量模型 · 16k · 图片",
           "本地 Qwen · 32k"
         ],
+        "providerProtocolBadges": [
+          "Anthropic Messages",
+          "OpenAI Responses",
+          "OpenAI Chat Completions"
+        ],
+        "remoteGuardBox": null,
+        "remoteCardBox": null,
+        "connectionChecks": [],
+        "monoFamilies": [
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace"
+        ],
+        "dotBoxes": [],
+        "commandPreview": [],
+        "remoteFlowSteps": [],
+        "remoteFlowArrows": 0,
+        "gatewayDetails": [],
+        "declaredAbsent": {
+          "machineName": 0,
+          "entryToggle": 0
+        },
+        "deviceRowCells": [],
+        "deviceNameLines": [],
         "statLabels": [],
+        "statCardLabels": [],
         "capabilityNames": [],
         "capabilityTabLabels": [],
         "capabilitySummary": [],
@@ -8513,7 +9385,7 @@
         "noHorizontalOverflow": true,
         "viewLabel": "USAGE",
         "title": "Token 用量",
-        "intro": "按实际调用累计，压缩上下文不会减少消耗。统计范围为本应用记录，不等同账户账单或供应商配额；未观测到的外部调用不伪造。本页数据为样例数据。",
+        "intro": "按实际调用累计，压缩上下文不会减少消耗。统计范围为本应用记录，不等同账户账单或供应商配额；未观测到的外部调用不伪造。本页数据为样例数据。以上为全部统计。",
         "pageButtons": [
           "清理该会话用量",
           "清理该日期之前",
@@ -8526,6 +9398,12 @@
           0,
           0
         ],
+        "pageButtonIconMap": {
+          "清理该会话用量": 0,
+          "清理该日期之前": 0,
+          "清理全部用量": 0,
+          "重新加载": 0
+        },
         "measured": {
           "page": {
             "padding": "30px 34px",
@@ -8982,7 +9860,7 @@
             "gridTemplateColumns": "none",
             "tracks": 0,
             "height": 38,
-            "width": 302,
+            "width": 298,
             "scrollHeight": 37
           },
           "td": {
@@ -9007,7 +9885,7 @@
             "gridTemplateColumns": "none",
             "tracks": 0,
             "height": 46,
-            "width": 302,
+            "width": 298,
             "scrollHeight": 45
           },
           "capSummary": null,
@@ -9146,7 +10024,7 @@
           "gridTemplateColumns": "none",
           "tracks": 0,
           "height": 38,
-          "width": 302,
+          "width": 298,
           "scrollHeight": 37
         },
         "historyHeadBox": null,
@@ -9161,7 +10039,7 @@
           "columnGap": "normal",
           "display": "table-cell",
           "fontSize": "11px",
-          "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+          "fontFamily": "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
           "fontWeight": "400",
           "letterSpacing": "normal",
           "color": "rgb(37, 43, 48)",
@@ -9174,7 +10052,7 @@
           "gridTemplateColumns": "none",
           "tracks": 0,
           "height": 46,
-          "width": 141,
+          "width": 142,
           "scrollHeight": 45
         },
         "dots": [],
@@ -9193,11 +10071,46 @@
         ],
         "providerNames": [],
         "providerChips": [],
+        "providerProtocolBadges": [],
+        "remoteGuardBox": null,
+        "remoteCardBox": null,
+        "connectionChecks": [],
+        "monoFamilies": [
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace"
+        ],
+        "dotBoxes": [],
+        "commandPreview": [],
+        "remoteFlowSteps": [],
+        "remoteFlowArrows": 0,
+        "gatewayDetails": [],
+        "declaredAbsent": {
+          "machineName": 0,
+          "entryToggle": 0
+        },
+        "deviceRowCells": [],
+        "deviceNameLines": [],
         "statLabels": [
           "2.28M",
           "5,200 Tokens",
           "240",
           "32 次"
+        ],
+        "statCardLabels": [
+          "累计 Token",
+          "最近一次调用",
+          "已记录调用",
+          "未完整报告"
         ],
         "capabilityNames": [],
         "capabilityTabLabels": [],
@@ -9231,7 +10144,7 @@
         "noHorizontalOverflow": true,
         "viewLabel": "USAGE",
         "title": "Token 用量",
-        "intro": "按实际调用累计，压缩上下文不会减少消耗。统计范围为本应用记录，不等同账户账单或供应商配额；未观测到的外部调用不伪造。本页数据为样例数据。",
+        "intro": "按实际调用累计，压缩上下文不会减少消耗。统计范围为本应用记录，不等同账户账单或供应商配额；未观测到的外部调用不伪造。本页数据为样例数据。以上为全部统计。",
         "pageButtons": [
           "清理该会话用量",
           "清理该日期之前",
@@ -9244,6 +10157,12 @@
           0,
           0
         ],
+        "pageButtonIconMap": {
+          "清理该会话用量": 0,
+          "清理该日期之前": 0,
+          "清理全部用量": 0,
+          "重新加载": 0
+        },
         "measured": {
           "page": {
             "padding": "30px 34px",
@@ -9700,7 +10619,7 @@
             "gridTemplateColumns": "none",
             "tracks": 0,
             "height": 38,
-            "width": 304,
+            "width": 303,
             "scrollHeight": 37
           },
           "td": {
@@ -9725,7 +10644,7 @@
             "gridTemplateColumns": "none",
             "tracks": 0,
             "height": 46,
-            "width": 304,
+            "width": 303,
             "scrollHeight": 45
           },
           "capSummary": null,
@@ -9864,7 +10783,7 @@
           "gridTemplateColumns": "none",
           "tracks": 0,
           "height": 38,
-          "width": 304,
+          "width": 303,
           "scrollHeight": 37
         },
         "historyHeadBox": null,
@@ -9879,7 +10798,7 @@
           "columnGap": "normal",
           "display": "table-cell",
           "fontSize": "11px",
-          "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+          "fontFamily": "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
           "fontWeight": "400",
           "letterSpacing": "normal",
           "color": "rgb(37, 43, 48)",
@@ -9892,7 +10811,7 @@
           "gridTemplateColumns": "none",
           "tracks": 0,
           "height": 46,
-          "width": 142,
+          "width": 144,
           "scrollHeight": 45
         },
         "dots": [],
@@ -9911,11 +10830,46 @@
         ],
         "providerNames": [],
         "providerChips": [],
+        "providerProtocolBadges": [],
+        "remoteGuardBox": null,
+        "remoteCardBox": null,
+        "connectionChecks": [],
+        "monoFamilies": [
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace"
+        ],
+        "dotBoxes": [],
+        "commandPreview": [],
+        "remoteFlowSteps": [],
+        "remoteFlowArrows": 0,
+        "gatewayDetails": [],
+        "declaredAbsent": {
+          "machineName": 0,
+          "entryToggle": 0
+        },
+        "deviceRowCells": [],
+        "deviceNameLines": [],
         "statLabels": [
           "1.60M",
           "5,200 Tokens",
           "168",
           "22 次"
+        ],
+        "statCardLabels": [
+          "累计 Token",
+          "最近一次调用",
+          "已记录调用",
+          "未完整报告"
         ],
         "capabilityNames": [],
         "capabilityTabLabels": [],
@@ -10025,6 +10979,16 @@
           0,
           1
         ],
+        "pageButtonIconMap": {
+          "重新检查来源": 1,
+          "添加技能来源": 1,
+          "详情": 0,
+          "启用": 1,
+          "安装 2.4.1": 1,
+          "停用": 1,
+          "更新到 1.9.0": 1,
+          "重试连接": 1
+        },
         "measured": {
           "page": {
             "padding": "30px 34px",
@@ -10564,7 +11528,24 @@
         ],
         "providerNames": [],
         "providerChips": [],
+        "providerProtocolBadges": [],
+        "remoteGuardBox": null,
+        "remoteCardBox": null,
+        "connectionChecks": [],
+        "monoFamilies": [],
+        "dotBoxes": [],
+        "commandPreview": [],
+        "remoteFlowSteps": [],
+        "remoteFlowArrows": 0,
+        "gatewayDetails": [],
+        "declaredAbsent": {
+          "machineName": 0,
+          "entryToggle": 0
+        },
+        "deviceRowCells": [],
+        "deviceNameLines": [],
         "statLabels": [],
+        "statCardLabels": [],
         "capabilityNames": [
           "@pi/pack-protoc",
           "@pi/tools-git",
@@ -10618,6 +11599,7 @@
         "intro": "选择私有网络、自建 Gateway 或实验性公网入口；三种模式共享同一套设备授权和 PiDock 领域权限。",
         "pageButtons": [
           "手机视图",
+          "重新检测",
           "配对设备",
           "轮换凭据",
           "撤销设备",
@@ -10628,6 +11610,7 @@
         ],
         "pageButtonIcons": [
           1,
+          0,
           1,
           1,
           0,
@@ -10636,6 +11619,15 @@
           0,
           0
         ],
+        "pageButtonIconMap": {
+          "手机视图": 1,
+          "重新检测": 0,
+          "配对设备": 1,
+          "轮换凭据": 1,
+          "撤销设备": 0,
+          "确认并收窄权限": 1,
+          "拒绝": 0
+        },
         "measured": {
           "page": {
             "padding": "30px 34px",
@@ -10660,7 +11652,7 @@
             "tracks": 0,
             "height": 794,
             "width": 1214,
-            "scrollHeight": 2002
+            "scrollHeight": 1093
           },
           "viewLabel": {
             "padding": "0px",
@@ -10807,13 +11799,13 @@
             "borderColor": "rgb(233, 236, 238)",
             "borderWidth": "1px",
             "borderBottomWidth": "1px",
-            "borderRadius": "10px",
+            "borderRadius": "8px",
             "textTransform": "none",
             "gridTemplateColumns": "none",
             "tracks": 0,
-            "height": 340,
+            "height": 381,
             "width": 760,
-            "scrollHeight": 338
+            "scrollHeight": 379
           },
           "grid2": null,
           "grid3": null,
@@ -11038,9 +12030,9 @@
             "textTransform": "none",
             "gridTemplateColumns": "760.172px 367.812px",
             "tracks": 2,
-            "height": 1684,
+            "height": 775,
             "width": 1146,
-            "scrollHeight": 1684
+            "scrollHeight": 775
           },
           "orb": {
             "padding": "0px",
@@ -11111,7 +12103,7 @@
             "borderBottomWidth": "1px",
             "borderRadius": "0px",
             "textTransform": "none",
-            "gridTemplateColumns": "8px 571.453px 92.7188px",
+            "gridTemplateColumns": "8px 493.453px 170.719px",
             "tracks": 3,
             "height": 51,
             "width": 716,
@@ -11213,9 +12205,9 @@
             "textTransform": "none",
             "gridTemplateColumns": "none",
             "tracks": 0,
-            "height": 1203,
+            "height": 279,
             "width": 326,
-            "scrollHeight": 1203
+            "scrollHeight": 279
           },
           "deviceRow": {
             "padding": "12px 0px",
@@ -11236,11 +12228,11 @@
             "borderBottomWidth": "1px",
             "borderRadius": "0px",
             "textTransform": "none",
-            "gridTemplateColumns": "32px 104.812px 171px",
+            "gridTemplateColumns": "32px 182.812px 93px",
             "tracks": 3,
-            "height": 125,
+            "height": 87,
             "width": 326,
-            "scrollHeight": 124
+            "scrollHeight": 86
           },
           "deviceSymbol": {
             "padding": "0px",
@@ -11280,11 +12272,11 @@
             "fontWeight": "400",
             "letterSpacing": "normal",
             "color": "rgb(37, 43, 48)",
-            "backgroundColor": "rgb(255, 255, 255)",
+            "backgroundColor": "rgb(250, 249, 245)",
             "borderColor": "rgb(233, 236, 238)",
             "borderWidth": "1px",
             "borderBottomWidth": "1px",
-            "borderRadius": "10px",
+            "borderRadius": "8px",
             "textTransform": "none",
             "gridTemplateColumns": "none",
             "tracks": 0,
@@ -11414,17 +12406,17 @@
             "fontWeight": "400",
             "letterSpacing": "normal",
             "color": "rgb(37, 43, 48)",
-            "backgroundColor": "rgba(0, 0, 0, 0)",
+            "backgroundColor": "rgb(154, 164, 171)",
             "borderColor": "rgb(37, 43, 48)",
             "borderWidth": "0px",
             "borderBottomWidth": "0px",
-            "borderRadius": "0px",
+            "borderRadius": "3.35544e+07px",
             "textTransform": "none",
             "gridTemplateColumns": "none",
             "tracks": 0,
-            "height": 0,
-            "width": 8,
-            "scrollHeight": 0
+            "height": 6,
+            "width": 6,
+            "scrollHeight": 6
           },
           {
             "padding": "0px",
@@ -11439,17 +12431,17 @@
             "fontWeight": "400",
             "letterSpacing": "normal",
             "color": "rgb(37, 43, 48)",
-            "backgroundColor": "rgba(0, 0, 0, 0)",
+            "backgroundColor": "rgb(66, 90, 147)",
             "borderColor": "rgb(37, 43, 48)",
             "borderWidth": "0px",
             "borderBottomWidth": "0px",
-            "borderRadius": "0px",
+            "borderRadius": "3.35544e+07px",
             "textTransform": "none",
             "gridTemplateColumns": "none",
             "tracks": 0,
-            "height": 0,
-            "width": 8,
-            "scrollHeight": 0
+            "height": 6,
+            "width": 6,
+            "scrollHeight": 6
           },
           {
             "padding": "0px",
@@ -11464,17 +12456,17 @@
             "fontWeight": "400",
             "letterSpacing": "normal",
             "color": "rgb(37, 43, 48)",
-            "backgroundColor": "rgba(0, 0, 0, 0)",
+            "backgroundColor": "rgb(154, 164, 171)",
             "borderColor": "rgb(37, 43, 48)",
             "borderWidth": "0px",
             "borderBottomWidth": "0px",
-            "borderRadius": "0px",
+            "borderRadius": "3.35544e+07px",
             "textTransform": "none",
             "gridTemplateColumns": "none",
             "tracks": 0,
-            "height": 0,
-            "width": 8,
-            "scrollHeight": 0
+            "height": 6,
+            "width": 6,
+            "scrollHeight": 6
           }
         ],
         "badges": [
@@ -11491,7 +12483,335 @@
         ],
         "providerNames": [],
         "providerChips": [],
+        "providerProtocolBadges": [],
+        "remoteGuardBox": {
+          "padding": "20px",
+          "margin": "0px",
+          "marginTop": "0px",
+          "marginBottom": "0px",
+          "gap": "normal",
+          "columnGap": "normal",
+          "display": "block",
+          "fontSize": "16px",
+          "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+          "fontWeight": "400",
+          "letterSpacing": "normal",
+          "color": "rgb(37, 43, 48)",
+          "backgroundColor": "rgb(250, 249, 245)",
+          "borderColor": "rgb(233, 236, 238)",
+          "borderWidth": "1px",
+          "borderBottomWidth": "1px",
+          "borderRadius": "8px",
+          "textTransform": "none",
+          "gridTemplateColumns": "none",
+          "tracks": 0,
+          "height": 137,
+          "width": 368,
+          "scrollHeight": 135
+        },
+        "remoteCardBox": {
+          "padding": "20px",
+          "margin": "0px",
+          "marginTop": "0px",
+          "marginBottom": "0px",
+          "gap": "normal",
+          "columnGap": "normal",
+          "display": "block",
+          "fontSize": "16px",
+          "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+          "fontWeight": "400",
+          "letterSpacing": "normal",
+          "color": "rgb(37, 43, 48)",
+          "backgroundColor": "rgb(255, 255, 255)",
+          "borderColor": "rgb(233, 236, 238)",
+          "borderWidth": "1px",
+          "borderBottomWidth": "1px",
+          "borderRadius": "8px",
+          "textTransform": "none",
+          "gridTemplateColumns": "none",
+          "tracks": 0,
+          "height": 381,
+          "width": 760,
+          "scrollHeight": 379
+        },
+        "connectionChecks": [
+          {
+            "dot": {
+              "padding": "0px",
+              "margin": "0px",
+              "marginTop": "0px",
+              "marginBottom": "0px",
+              "gap": "normal",
+              "columnGap": "normal",
+              "display": "block",
+              "fontSize": "16px",
+              "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+              "fontWeight": "400",
+              "letterSpacing": "normal",
+              "color": "rgb(37, 43, 48)",
+              "backgroundColor": "rgb(154, 164, 171)",
+              "borderColor": "rgb(37, 43, 48)",
+              "borderWidth": "0px",
+              "borderBottomWidth": "0px",
+              "borderRadius": "3.35544e+07px",
+              "textTransform": "none",
+              "gridTemplateColumns": "none",
+              "tracks": 0,
+              "height": 6,
+              "width": 6,
+              "scrollHeight": 6
+            },
+            "icons": 0,
+            "mono": {
+              "padding": "0px",
+              "margin": "0px",
+              "marginTop": "0px",
+              "marginBottom": "0px",
+              "gap": "normal",
+              "columnGap": "normal",
+              "display": "block",
+              "fontSize": "11px",
+              "fontFamily": "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+              "fontWeight": "400",
+              "letterSpacing": "normal",
+              "color": "rgb(37, 43, 48)",
+              "backgroundColor": "rgba(0, 0, 0, 0)",
+              "borderColor": "rgb(37, 43, 48)",
+              "borderWidth": "0px",
+              "borderBottomWidth": "0px",
+              "borderRadius": "0px",
+              "textTransform": "none",
+              "gridTemplateColumns": "none",
+              "tracks": 0,
+              "height": 17,
+              "width": 93,
+              "scrollHeight": 17
+            }
+          },
+          {
+            "dot": {
+              "padding": "0px",
+              "margin": "0px",
+              "marginTop": "0px",
+              "marginBottom": "0px",
+              "gap": "normal",
+              "columnGap": "normal",
+              "display": "block",
+              "fontSize": "16px",
+              "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+              "fontWeight": "400",
+              "letterSpacing": "normal",
+              "color": "rgb(37, 43, 48)",
+              "backgroundColor": "rgb(66, 90, 147)",
+              "borderColor": "rgb(37, 43, 48)",
+              "borderWidth": "0px",
+              "borderBottomWidth": "0px",
+              "borderRadius": "3.35544e+07px",
+              "textTransform": "none",
+              "gridTemplateColumns": "none",
+              "tracks": 0,
+              "height": 6,
+              "width": 6,
+              "scrollHeight": 6
+            },
+            "icons": 0,
+            "mono": {
+              "padding": "0px",
+              "margin": "0px",
+              "marginTop": "0px",
+              "marginBottom": "0px",
+              "gap": "normal",
+              "columnGap": "normal",
+              "display": "block",
+              "fontSize": "11px",
+              "fontFamily": "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+              "fontWeight": "400",
+              "letterSpacing": "normal",
+              "color": "rgb(37, 43, 48)",
+              "backgroundColor": "rgba(0, 0, 0, 0)",
+              "borderColor": "rgb(37, 43, 48)",
+              "borderWidth": "0px",
+              "borderBottomWidth": "0px",
+              "borderRadius": "0px",
+              "textTransform": "none",
+              "gridTemplateColumns": "none",
+              "tracks": 0,
+              "height": 17,
+              "width": 225,
+              "scrollHeight": 17
+            }
+          },
+          {
+            "dot": {
+              "padding": "0px",
+              "margin": "0px",
+              "marginTop": "0px",
+              "marginBottom": "0px",
+              "gap": "normal",
+              "columnGap": "normal",
+              "display": "block",
+              "fontSize": "16px",
+              "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+              "fontWeight": "400",
+              "letterSpacing": "normal",
+              "color": "rgb(37, 43, 48)",
+              "backgroundColor": "rgb(154, 164, 171)",
+              "borderColor": "rgb(37, 43, 48)",
+              "borderWidth": "0px",
+              "borderBottomWidth": "0px",
+              "borderRadius": "3.35544e+07px",
+              "textTransform": "none",
+              "gridTemplateColumns": "none",
+              "tracks": 0,
+              "height": 6,
+              "width": 6,
+              "scrollHeight": 6
+            },
+            "icons": 0,
+            "mono": {
+              "padding": "0px",
+              "margin": "0px",
+              "marginTop": "0px",
+              "marginBottom": "0px",
+              "gap": "normal",
+              "columnGap": "normal",
+              "display": "block",
+              "fontSize": "11px",
+              "fontFamily": "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+              "fontWeight": "400",
+              "letterSpacing": "normal",
+              "color": "rgb(37, 43, 48)",
+              "backgroundColor": "rgba(0, 0, 0, 0)",
+              "borderColor": "rgb(37, 43, 48)",
+              "borderWidth": "0px",
+              "borderBottomWidth": "0px",
+              "borderRadius": "0px",
+              "textTransform": "none",
+              "gridTemplateColumns": "none",
+              "tracks": 0,
+              "height": 17,
+              "width": 79,
+              "scrollHeight": 17
+            }
+          }
+        ],
+        "monoFamilies": [
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace"
+        ],
+        "dotBoxes": [
+          {
+            "padding": "0px",
+            "margin": "0px",
+            "marginTop": "0px",
+            "marginBottom": "0px",
+            "gap": "normal",
+            "columnGap": "normal",
+            "display": "block",
+            "fontSize": "16px",
+            "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+            "fontWeight": "400",
+            "letterSpacing": "normal",
+            "color": "rgb(37, 43, 48)",
+            "backgroundColor": "rgb(154, 164, 171)",
+            "borderColor": "rgb(37, 43, 48)",
+            "borderWidth": "0px",
+            "borderBottomWidth": "0px",
+            "borderRadius": "3.35544e+07px",
+            "textTransform": "none",
+            "gridTemplateColumns": "none",
+            "tracks": 0,
+            "height": 6,
+            "width": 6,
+            "scrollHeight": 6
+          },
+          {
+            "padding": "0px",
+            "margin": "0px",
+            "marginTop": "0px",
+            "marginBottom": "0px",
+            "gap": "normal",
+            "columnGap": "normal",
+            "display": "block",
+            "fontSize": "16px",
+            "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+            "fontWeight": "400",
+            "letterSpacing": "normal",
+            "color": "rgb(37, 43, 48)",
+            "backgroundColor": "rgb(66, 90, 147)",
+            "borderColor": "rgb(37, 43, 48)",
+            "borderWidth": "0px",
+            "borderBottomWidth": "0px",
+            "borderRadius": "3.35544e+07px",
+            "textTransform": "none",
+            "gridTemplateColumns": "none",
+            "tracks": 0,
+            "height": 6,
+            "width": 6,
+            "scrollHeight": 6
+          },
+          {
+            "padding": "0px",
+            "margin": "0px",
+            "marginTop": "0px",
+            "marginBottom": "0px",
+            "gap": "normal",
+            "columnGap": "normal",
+            "display": "block",
+            "fontSize": "16px",
+            "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+            "fontWeight": "400",
+            "letterSpacing": "normal",
+            "color": "rgb(37, 43, 48)",
+            "backgroundColor": "rgb(154, 164, 171)",
+            "borderColor": "rgb(37, 43, 48)",
+            "borderWidth": "0px",
+            "borderBottomWidth": "0px",
+            "borderRadius": "3.35544e+07px",
+            "textTransform": "none",
+            "gridTemplateColumns": "none",
+            "tracks": 0,
+            "height": 6,
+            "width": 6,
+            "scrollHeight": 6
+          }
+        ],
+        "commandPreview": [
+          "tailscale serve --bg 127.0.0.1:4318"
+        ],
+        "remoteFlowSteps": [],
+        "remoteFlowArrows": 0,
+        "gatewayDetails": [],
+        "declaredAbsent": {
+          "machineName": 0,
+          "entryToggle": 0
+        },
+        "deviceRowCells": [
+          [
+            31,
+            183,
+            93
+          ],
+          [
+            31,
+            206,
+            70
+          ],
+          [
+            31,
+            147,
+            129
+          ]
+        ],
+        "deviceNameLines": [
+          1,
+          1,
+          1
+        ],
         "statLabels": [],
+        "statCardLabels": [],
         "capabilityNames": [],
         "capabilityTabLabels": [],
         "capabilitySummary": [],
@@ -11516,14 +12836,31 @@
           "远程操作仍受本机约束"
         ],
         "archiveCardsText": [
-          "Tailscale 私有访问尚未建立连接，Host 未上报心跳手机需安装并接入同一私有网络PiDock Host 只监听 127.0.0.1，由 Tailscale Serve 在 tailnet 内提供 HTTPS。Host 监听只监听回环地址，不暴露 Pi RPC，也不代理任意 TCP127.0.0.1:4318入口地址仅在私有网络内可达https://pidock-host.tailnet.ts.netGateway未使用 · 离线（不重放请求）desktop-host私有网络 HTTPS · 无需中继地址；Host 只监听回环，Serve/接入由本机网络配置提供。",
+          "Tailscale 私有访问尚未建立连接，Host 未上报心跳手机需安装并接入同一私有网络PiDock Host 只监听 127.0.0.1，由 Tailscale Serve 在 tailnet 内提供 HTTPS。Host 监听只监听回环地址，不暴露 Pi RPC，也不代理任意 TCP127.0.0.1:4318重新检测入口地址仅在私有网络内可达https://pidock-host.tailnet.ts.netGateway未使用 · 离线（不重放请求）desktop-hosttailscale serve --bg 127.0.0.1:4318私有网络 HTTPS · 无需中继地址；Host 只监听回环，Serve/接入由本机网络配置提供。",
           "移动端允许的操作设备级授权 · 由 Host 裁决查看项目、任务和运行状态只读 · 默认开启查看会话并对话消息进入原会话；待确认展示同一真实内容 · 默认开启暂停、归档与启停服务每次敏感操作再次确认 · 默认关闭 · 每次操作再次确认查看文件和差异默认关闭 · 默认关闭 · 每次操作再次确认远程终端高风险 · 默认关闭 · 默认关闭 · 每次操作再次确认会话权限、任务写锁、共享模板确认和浏览器接管规则不因远程访问放宽；远程会话权限只会更窄。勾选反映配对时的默认值，真正的授予在每台设备确认时发生。",
           "已授权设备配对设备生成短时、单次使用的配对链接；扫码后仍需本机确认。1 / 3 有效。iPhone 16 Pro有效权限 查看项目、任务和运行状态 / 查看会话并对话 · 设备凭据第 1 代 · 最近在线 2026-09-22 08:12轮换凭据撤销设备旧 iPad已撤销权限 无（已撤销） · 设备凭据第 1 代 · 最近在线 2026-08-30 09:00撤销设备Pixel 9等待本机确认权限 查看项目、任务和运行状态 / 查看会话并对话 / 远程终端 · 尚未签发设备凭据 · 从未在线请求权限后等待本机确认；确认前不能查看或操作任何任务。确认并收窄权限拒绝撤销设备",
           "远程操作仍受本机约束会话权限、任务执行权、共享模板确认和浏览器接管规则不因远程访问放宽。配对码不含长期凭据；过期、使用或手动刷新后立即失效。"
         ],
+        "gatewayTab": {
+          "commandPreview": [],
+          "remoteFlowSteps": [
+            "手机浏览器",
+            "自建 Gateway",
+            "本机 PiDock"
+          ],
+          "remoteFlowArrows": 2,
+          "gatewayDetails": [
+            "HTTPS / WSS",
+            "桌面主动连接",
+            "设备凭据可轮换"
+          ]
+        },
         "funnelTab": {
           "selected": 2,
-          "warnNotices": 1
+          "warnNotices": 1,
+          "commandPreview": [
+            "tailscale funnel --bg 127.0.0.1:4318"
+          ]
         }
       },
       "schedules": {
@@ -11581,6 +12918,15 @@
           0,
           0
         ],
+        "pageButtonIconMap": {
+          "新建定时任务": 1,
+          "查看任务": 0,
+          "立即运行": 1,
+          "暂停": 1,
+          "启用": 1,
+          "打开会话": 0,
+          "使用模板": 0
+        },
         "measured": {
           "page": {
             "padding": "30px 34px",
@@ -12258,7 +13604,24 @@
         "notes": [],
         "providerNames": [],
         "providerChips": [],
+        "providerProtocolBadges": [],
+        "remoteGuardBox": null,
+        "remoteCardBox": null,
+        "connectionChecks": [],
+        "monoFamilies": [],
+        "dotBoxes": [],
+        "commandPreview": [],
+        "remoteFlowSteps": [],
+        "remoteFlowArrows": 0,
+        "gatewayDetails": [],
+        "declaredAbsent": {
+          "machineName": 0,
+          "entryToggle": 0
+        },
+        "deviceRowCells": [],
+        "deviceNameLines": [],
         "statLabels": [],
+        "statCardLabels": [],
         "capabilityNames": [],
         "capabilityTabLabels": [],
         "capabilitySummary": [],
@@ -12308,6 +13671,10 @@
           0,
           0
         ],
+        "pageButtonIconMap": {
+          "恢复任务": 0,
+          "预览清理清单": 0
+        },
         "measured": {
           "page": {
             "padding": "30px 34px",
@@ -12576,7 +13943,24 @@
         "notes": [],
         "providerNames": [],
         "providerChips": [],
+        "providerProtocolBadges": [],
+        "remoteGuardBox": null,
+        "remoteCardBox": null,
+        "connectionChecks": [],
+        "monoFamilies": [],
+        "dotBoxes": [],
+        "commandPreview": [],
+        "remoteFlowSteps": [],
+        "remoteFlowArrows": 0,
+        "gatewayDetails": [],
+        "declaredAbsent": {
+          "machineName": 0,
+          "entryToggle": 0
+        },
+        "deviceRowCells": [],
+        "deviceNameLines": [],
         "statLabels": [],
+        "statCardLabels": [],
         "capabilityNames": [],
         "capabilityTabLabels": [],
         "capabilitySummary": [],
@@ -12634,6 +14018,13 @@
           1,
           0
         ],
+        "pageButtonIconMap": {
+          "添加 Provider": 1,
+          "编辑": 1,
+          "同步模型列表": 1,
+          "停用": 1,
+          "删除": 0
+        },
         "measured": {
           "page": {
             "padding": "30px 34px",
@@ -12876,7 +14267,7 @@
             "columnGap": "normal",
             "display": "block",
             "fontSize": "11px",
-            "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+            "fontFamily": "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
             "fontWeight": "400",
             "letterSpacing": "normal",
             "color": "rgb(148, 151, 156)",
@@ -13046,7 +14437,7 @@
           "columnGap": "normal",
           "display": "block",
           "fontSize": "11px",
-          "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+          "fontFamily": "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
           "fontWeight": "400",
           "letterSpacing": "normal",
           "color": "rgb(148, 151, 156)",
@@ -13065,14 +14456,14 @@
         "dots": [],
         "badges": [
           "已启用",
-          "anthropic-messages",
+          "Anthropic Messages",
           "Claude Sonnet · 200k · 图片",
           "Claude Haiku · 200k",
           "已启用",
-          "openai-responses",
+          "OpenAI Responses",
           "团队轻量模型 · 16k · 图片",
           "已启用",
-          "openai-chat-completions",
+          "OpenAI Chat Completions",
           "本地 Qwen · 32k"
         ],
         "empties": [],
@@ -13088,7 +14479,32 @@
           "团队轻量模型 · 16k · 图片",
           "本地 Qwen · 32k"
         ],
+        "providerProtocolBadges": [
+          "Anthropic Messages",
+          "OpenAI Responses",
+          "OpenAI Chat Completions"
+        ],
+        "remoteGuardBox": null,
+        "remoteCardBox": null,
+        "connectionChecks": [],
+        "monoFamilies": [
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace"
+        ],
+        "dotBoxes": [],
+        "commandPreview": [],
+        "remoteFlowSteps": [],
+        "remoteFlowArrows": 0,
+        "gatewayDetails": [],
+        "declaredAbsent": {
+          "machineName": 0,
+          "entryToggle": 0
+        },
+        "deviceRowCells": [],
+        "deviceNameLines": [],
         "statLabels": [],
+        "statCardLabels": [],
         "capabilityNames": [],
         "capabilityTabLabels": [],
         "capabilitySummary": [],
@@ -13113,7 +14529,7 @@
         "noHorizontalOverflow": true,
         "viewLabel": "USAGE",
         "title": "Token 用量",
-        "intro": "按实际调用累计，压缩上下文不会减少消耗。统计范围为本应用记录，不等同账户账单或供应商配额；未观测到的外部调用不伪造。本页数据为样例数据。",
+        "intro": "按实际调用累计，压缩上下文不会减少消耗。统计范围为本应用记录，不等同账户账单或供应商配额；未观测到的外部调用不伪造。本页数据为样例数据。以上为全部统计。",
         "pageButtons": [
           "清理该会话用量",
           "清理该日期之前",
@@ -13126,6 +14542,12 @@
           0,
           0
         ],
+        "pageButtonIconMap": {
+          "清理该会话用量": 0,
+          "清理该日期之前": 0,
+          "清理全部用量": 0,
+          "重新加载": 0
+        },
         "measured": {
           "page": {
             "padding": "30px 34px",
@@ -13582,7 +15004,7 @@
             "gridTemplateColumns": "none",
             "tracks": 0,
             "height": 38,
-            "width": 201,
+            "width": 199,
             "scrollHeight": 37
           },
           "td": {
@@ -13607,7 +15029,7 @@
             "gridTemplateColumns": "none",
             "tracks": 0,
             "height": 46,
-            "width": 201,
+            "width": 199,
             "scrollHeight": 45
           },
           "capSummary": null,
@@ -13746,7 +15168,7 @@
           "gridTemplateColumns": "none",
           "tracks": 0,
           "height": 38,
-          "width": 201,
+          "width": 199,
           "scrollHeight": 37
         },
         "historyHeadBox": null,
@@ -13761,7 +15183,7 @@
           "columnGap": "normal",
           "display": "table-cell",
           "fontSize": "11px",
-          "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+          "fontFamily": "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
           "fontWeight": "400",
           "letterSpacing": "normal",
           "color": "rgb(37, 43, 48)",
@@ -13793,11 +15215,46 @@
         ],
         "providerNames": [],
         "providerChips": [],
+        "providerProtocolBadges": [],
+        "remoteGuardBox": null,
+        "remoteCardBox": null,
+        "connectionChecks": [],
+        "monoFamilies": [
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace"
+        ],
+        "dotBoxes": [],
+        "commandPreview": [],
+        "remoteFlowSteps": [],
+        "remoteFlowArrows": 0,
+        "gatewayDetails": [],
+        "declaredAbsent": {
+          "machineName": 0,
+          "entryToggle": 0
+        },
+        "deviceRowCells": [],
+        "deviceNameLines": [],
         "statLabels": [
           "2.28M",
           "5,200 Tokens",
           "240",
           "32 次"
+        ],
+        "statCardLabels": [
+          "累计 Token",
+          "最近一次调用",
+          "已记录调用",
+          "未完整报告"
         ],
         "capabilityNames": [],
         "capabilityTabLabels": [],
@@ -13869,6 +15326,16 @@
           0,
           1
         ],
+        "pageButtonIconMap": {
+          "重新检查来源": 1,
+          "添加技能来源": 1,
+          "详情": 0,
+          "启用": 1,
+          "安装 2.4.1": 1,
+          "停用": 1,
+          "更新到 1.9.0": 1,
+          "重试连接": 1
+        },
         "measured": {
           "page": {
             "padding": "30px 34px",
@@ -14408,7 +15875,24 @@
         ],
         "providerNames": [],
         "providerChips": [],
+        "providerProtocolBadges": [],
+        "remoteGuardBox": null,
+        "remoteCardBox": null,
+        "connectionChecks": [],
+        "monoFamilies": [],
+        "dotBoxes": [],
+        "commandPreview": [],
+        "remoteFlowSteps": [],
+        "remoteFlowArrows": 0,
+        "gatewayDetails": [],
+        "declaredAbsent": {
+          "machineName": 0,
+          "entryToggle": 0
+        },
+        "deviceRowCells": [],
+        "deviceNameLines": [],
         "statLabels": [],
+        "statCardLabels": [],
         "capabilityNames": [
           "@pi/pack-protoc",
           "@pi/tools-git",
@@ -14450,6 +15934,7 @@
         "intro": "选择私有网络、自建 Gateway 或实验性公网入口；三种模式共享同一套设备授权和 PiDock 领域权限。",
         "pageButtons": [
           "手机视图",
+          "重新检测",
           "配对设备",
           "轮换凭据",
           "撤销设备",
@@ -14460,6 +15945,7 @@
         ],
         "pageButtonIcons": [
           1,
+          0,
           1,
           1,
           0,
@@ -14468,6 +15954,15 @@
           0,
           0
         ],
+        "pageButtonIconMap": {
+          "手机视图": 1,
+          "重新检测": 0,
+          "配对设备": 1,
+          "轮换凭据": 1,
+          "撤销设备": 0,
+          "确认并收窄权限": 1,
+          "拒绝": 0
+        },
         "measured": {
           "page": {
             "padding": "30px 34px",
@@ -14492,7 +15987,7 @@
             "tracks": 0,
             "height": 694,
             "width": 832,
-            "scrollHeight": 2489
+            "scrollHeight": 1334
           },
           "viewLabel": {
             "padding": "0px",
@@ -14639,13 +16134,13 @@
             "borderColor": "rgb(233, 236, 238)",
             "borderWidth": "1px",
             "borderBottomWidth": "1px",
-            "borderRadius": "10px",
+            "borderRadius": "8px",
             "textTransform": "none",
             "gridTemplateColumns": "none",
             "tracks": 0,
-            "height": 340,
+            "height": 394,
             "width": 466,
-            "scrollHeight": 338
+            "scrollHeight": 392
           },
           "grid2": null,
           "grid3": null,
@@ -14870,9 +16365,9 @@
             "textTransform": "none",
             "gridTemplateColumns": "466px 280px",
             "tracks": 2,
-            "height": 2171,
+            "height": 1016,
             "width": 764,
-            "scrollHeight": 2171
+            "scrollHeight": 1016
           },
           "orb": {
             "padding": "0px",
@@ -14920,9 +16415,9 @@
             "textTransform": "none",
             "gridTemplateColumns": "none",
             "tracks": 0,
-            "height": 154,
+            "height": 168,
             "width": 424,
-            "scrollHeight": 152
+            "scrollHeight": 166
           },
           "checkRow": {
             "padding": "10px 12px",
@@ -14943,11 +16438,11 @@
             "borderBottomWidth": "1px",
             "borderRadius": "0px",
             "textTransform": "none",
-            "gridTemplateColumns": "8px 277.281px 92.7188px",
+            "gridTemplateColumns": "8px 199.281px 170.719px",
             "tracks": 3,
-            "height": 51,
+            "height": 65,
             "width": 422,
-            "scrollHeight": 50
+            "scrollHeight": 64
           },
           "permissionList": {
             "padding": "0px",
@@ -15045,9 +16540,9 @@
             "textTransform": "none",
             "gridTemplateColumns": "none",
             "tracks": 0,
-            "height": 1638,
+            "height": 483,
             "width": 238,
-            "scrollHeight": 1638
+            "scrollHeight": 483
           },
           "deviceRow": {
             "padding": "12px 0px",
@@ -15068,11 +16563,11 @@
             "borderBottomWidth": "1px",
             "borderRadius": "0px",
             "textTransform": "none",
-            "gridTemplateColumns": "32px 17px 171px",
+            "gridTemplateColumns": "32px 95px 93px",
             "tracks": 3,
-            "height": 546,
+            "height": 138,
             "width": 238,
-            "scrollHeight": 545
+            "scrollHeight": 137
           },
           "deviceSymbol": {
             "padding": "0px",
@@ -15112,11 +16607,11 @@
             "fontWeight": "400",
             "letterSpacing": "normal",
             "color": "rgb(37, 43, 48)",
-            "backgroundColor": "rgb(255, 255, 255)",
+            "backgroundColor": "rgb(250, 249, 245)",
             "borderColor": "rgb(233, 236, 238)",
             "borderWidth": "1px",
             "borderBottomWidth": "1px",
-            "borderRadius": "10px",
+            "borderRadius": "8px",
             "textTransform": "none",
             "gridTemplateColumns": "none",
             "tracks": 0,
@@ -15246,17 +16741,17 @@
             "fontWeight": "400",
             "letterSpacing": "normal",
             "color": "rgb(37, 43, 48)",
-            "backgroundColor": "rgba(0, 0, 0, 0)",
+            "backgroundColor": "rgb(154, 164, 171)",
             "borderColor": "rgb(37, 43, 48)",
             "borderWidth": "0px",
             "borderBottomWidth": "0px",
-            "borderRadius": "0px",
+            "borderRadius": "3.35544e+07px",
             "textTransform": "none",
             "gridTemplateColumns": "none",
             "tracks": 0,
-            "height": 0,
-            "width": 8,
-            "scrollHeight": 0
+            "height": 6,
+            "width": 6,
+            "scrollHeight": 6
           },
           {
             "padding": "0px",
@@ -15271,17 +16766,17 @@
             "fontWeight": "400",
             "letterSpacing": "normal",
             "color": "rgb(37, 43, 48)",
-            "backgroundColor": "rgba(0, 0, 0, 0)",
+            "backgroundColor": "rgb(66, 90, 147)",
             "borderColor": "rgb(37, 43, 48)",
             "borderWidth": "0px",
             "borderBottomWidth": "0px",
-            "borderRadius": "0px",
+            "borderRadius": "3.35544e+07px",
             "textTransform": "none",
             "gridTemplateColumns": "none",
             "tracks": 0,
-            "height": 0,
-            "width": 8,
-            "scrollHeight": 0
+            "height": 6,
+            "width": 6,
+            "scrollHeight": 6
           },
           {
             "padding": "0px",
@@ -15296,17 +16791,17 @@
             "fontWeight": "400",
             "letterSpacing": "normal",
             "color": "rgb(37, 43, 48)",
-            "backgroundColor": "rgba(0, 0, 0, 0)",
+            "backgroundColor": "rgb(154, 164, 171)",
             "borderColor": "rgb(37, 43, 48)",
             "borderWidth": "0px",
             "borderBottomWidth": "0px",
-            "borderRadius": "0px",
+            "borderRadius": "3.35544e+07px",
             "textTransform": "none",
             "gridTemplateColumns": "none",
             "tracks": 0,
-            "height": 0,
-            "width": 8,
-            "scrollHeight": 0
+            "height": 6,
+            "width": 6,
+            "scrollHeight": 6
           }
         ],
         "badges": [
@@ -15323,7 +16818,335 @@
         ],
         "providerNames": [],
         "providerChips": [],
+        "providerProtocolBadges": [],
+        "remoteGuardBox": {
+          "padding": "20px",
+          "margin": "0px",
+          "marginTop": "0px",
+          "marginBottom": "0px",
+          "gap": "normal",
+          "columnGap": "normal",
+          "display": "block",
+          "fontSize": "16px",
+          "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+          "fontWeight": "400",
+          "letterSpacing": "normal",
+          "color": "rgb(37, 43, 48)",
+          "backgroundColor": "rgb(250, 249, 245)",
+          "borderColor": "rgb(233, 236, 238)",
+          "borderWidth": "1px",
+          "borderBottomWidth": "1px",
+          "borderRadius": "8px",
+          "textTransform": "none",
+          "gridTemplateColumns": "none",
+          "tracks": 0,
+          "height": 157,
+          "width": 280,
+          "scrollHeight": 155
+        },
+        "remoteCardBox": {
+          "padding": "20px",
+          "margin": "0px",
+          "marginTop": "0px",
+          "marginBottom": "0px",
+          "gap": "normal",
+          "columnGap": "normal",
+          "display": "block",
+          "fontSize": "16px",
+          "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+          "fontWeight": "400",
+          "letterSpacing": "normal",
+          "color": "rgb(37, 43, 48)",
+          "backgroundColor": "rgb(255, 255, 255)",
+          "borderColor": "rgb(233, 236, 238)",
+          "borderWidth": "1px",
+          "borderBottomWidth": "1px",
+          "borderRadius": "8px",
+          "textTransform": "none",
+          "gridTemplateColumns": "none",
+          "tracks": 0,
+          "height": 394,
+          "width": 466,
+          "scrollHeight": 392
+        },
+        "connectionChecks": [
+          {
+            "dot": {
+              "padding": "0px",
+              "margin": "0px",
+              "marginTop": "0px",
+              "marginBottom": "0px",
+              "gap": "normal",
+              "columnGap": "normal",
+              "display": "block",
+              "fontSize": "16px",
+              "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+              "fontWeight": "400",
+              "letterSpacing": "normal",
+              "color": "rgb(37, 43, 48)",
+              "backgroundColor": "rgb(154, 164, 171)",
+              "borderColor": "rgb(37, 43, 48)",
+              "borderWidth": "0px",
+              "borderBottomWidth": "0px",
+              "borderRadius": "3.35544e+07px",
+              "textTransform": "none",
+              "gridTemplateColumns": "none",
+              "tracks": 0,
+              "height": 6,
+              "width": 6,
+              "scrollHeight": 6
+            },
+            "icons": 0,
+            "mono": {
+              "padding": "0px",
+              "margin": "0px",
+              "marginTop": "0px",
+              "marginBottom": "0px",
+              "gap": "normal",
+              "columnGap": "normal",
+              "display": "block",
+              "fontSize": "11px",
+              "fontFamily": "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+              "fontWeight": "400",
+              "letterSpacing": "normal",
+              "color": "rgb(37, 43, 48)",
+              "backgroundColor": "rgba(0, 0, 0, 0)",
+              "borderColor": "rgb(37, 43, 48)",
+              "borderWidth": "0px",
+              "borderBottomWidth": "0px",
+              "borderRadius": "0px",
+              "textTransform": "none",
+              "gridTemplateColumns": "none",
+              "tracks": 0,
+              "height": 17,
+              "width": 93,
+              "scrollHeight": 17
+            }
+          },
+          {
+            "dot": {
+              "padding": "0px",
+              "margin": "0px",
+              "marginTop": "0px",
+              "marginBottom": "0px",
+              "gap": "normal",
+              "columnGap": "normal",
+              "display": "block",
+              "fontSize": "16px",
+              "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+              "fontWeight": "400",
+              "letterSpacing": "normal",
+              "color": "rgb(37, 43, 48)",
+              "backgroundColor": "rgb(66, 90, 147)",
+              "borderColor": "rgb(37, 43, 48)",
+              "borderWidth": "0px",
+              "borderBottomWidth": "0px",
+              "borderRadius": "3.35544e+07px",
+              "textTransform": "none",
+              "gridTemplateColumns": "none",
+              "tracks": 0,
+              "height": 6,
+              "width": 6,
+              "scrollHeight": 6
+            },
+            "icons": 0,
+            "mono": {
+              "padding": "0px",
+              "margin": "0px",
+              "marginTop": "0px",
+              "marginBottom": "0px",
+              "gap": "normal",
+              "columnGap": "normal",
+              "display": "block",
+              "fontSize": "11px",
+              "fontFamily": "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+              "fontWeight": "400",
+              "letterSpacing": "normal",
+              "color": "rgb(37, 43, 48)",
+              "backgroundColor": "rgba(0, 0, 0, 0)",
+              "borderColor": "rgb(37, 43, 48)",
+              "borderWidth": "0px",
+              "borderBottomWidth": "0px",
+              "borderRadius": "0px",
+              "textTransform": "none",
+              "gridTemplateColumns": "none",
+              "tracks": 0,
+              "height": 17,
+              "width": 225,
+              "scrollHeight": 17
+            }
+          },
+          {
+            "dot": {
+              "padding": "0px",
+              "margin": "0px",
+              "marginTop": "0px",
+              "marginBottom": "0px",
+              "gap": "normal",
+              "columnGap": "normal",
+              "display": "block",
+              "fontSize": "16px",
+              "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+              "fontWeight": "400",
+              "letterSpacing": "normal",
+              "color": "rgb(37, 43, 48)",
+              "backgroundColor": "rgb(154, 164, 171)",
+              "borderColor": "rgb(37, 43, 48)",
+              "borderWidth": "0px",
+              "borderBottomWidth": "0px",
+              "borderRadius": "3.35544e+07px",
+              "textTransform": "none",
+              "gridTemplateColumns": "none",
+              "tracks": 0,
+              "height": 6,
+              "width": 6,
+              "scrollHeight": 6
+            },
+            "icons": 0,
+            "mono": {
+              "padding": "0px",
+              "margin": "0px",
+              "marginTop": "0px",
+              "marginBottom": "0px",
+              "gap": "normal",
+              "columnGap": "normal",
+              "display": "block",
+              "fontSize": "11px",
+              "fontFamily": "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+              "fontWeight": "400",
+              "letterSpacing": "normal",
+              "color": "rgb(37, 43, 48)",
+              "backgroundColor": "rgba(0, 0, 0, 0)",
+              "borderColor": "rgb(37, 43, 48)",
+              "borderWidth": "0px",
+              "borderBottomWidth": "0px",
+              "borderRadius": "0px",
+              "textTransform": "none",
+              "gridTemplateColumns": "none",
+              "tracks": 0,
+              "height": 17,
+              "width": 79,
+              "scrollHeight": 17
+            }
+          }
+        ],
+        "monoFamilies": [
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace"
+        ],
+        "dotBoxes": [
+          {
+            "padding": "0px",
+            "margin": "0px",
+            "marginTop": "0px",
+            "marginBottom": "0px",
+            "gap": "normal",
+            "columnGap": "normal",
+            "display": "block",
+            "fontSize": "16px",
+            "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+            "fontWeight": "400",
+            "letterSpacing": "normal",
+            "color": "rgb(37, 43, 48)",
+            "backgroundColor": "rgb(154, 164, 171)",
+            "borderColor": "rgb(37, 43, 48)",
+            "borderWidth": "0px",
+            "borderBottomWidth": "0px",
+            "borderRadius": "3.35544e+07px",
+            "textTransform": "none",
+            "gridTemplateColumns": "none",
+            "tracks": 0,
+            "height": 6,
+            "width": 6,
+            "scrollHeight": 6
+          },
+          {
+            "padding": "0px",
+            "margin": "0px",
+            "marginTop": "0px",
+            "marginBottom": "0px",
+            "gap": "normal",
+            "columnGap": "normal",
+            "display": "block",
+            "fontSize": "16px",
+            "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+            "fontWeight": "400",
+            "letterSpacing": "normal",
+            "color": "rgb(37, 43, 48)",
+            "backgroundColor": "rgb(66, 90, 147)",
+            "borderColor": "rgb(37, 43, 48)",
+            "borderWidth": "0px",
+            "borderBottomWidth": "0px",
+            "borderRadius": "3.35544e+07px",
+            "textTransform": "none",
+            "gridTemplateColumns": "none",
+            "tracks": 0,
+            "height": 6,
+            "width": 6,
+            "scrollHeight": 6
+          },
+          {
+            "padding": "0px",
+            "margin": "0px",
+            "marginTop": "0px",
+            "marginBottom": "0px",
+            "gap": "normal",
+            "columnGap": "normal",
+            "display": "block",
+            "fontSize": "16px",
+            "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+            "fontWeight": "400",
+            "letterSpacing": "normal",
+            "color": "rgb(37, 43, 48)",
+            "backgroundColor": "rgb(154, 164, 171)",
+            "borderColor": "rgb(37, 43, 48)",
+            "borderWidth": "0px",
+            "borderBottomWidth": "0px",
+            "borderRadius": "3.35544e+07px",
+            "textTransform": "none",
+            "gridTemplateColumns": "none",
+            "tracks": 0,
+            "height": 6,
+            "width": 6,
+            "scrollHeight": 6
+          }
+        ],
+        "commandPreview": [
+          "tailscale serve --bg 127.0.0.1:4318"
+        ],
+        "remoteFlowSteps": [],
+        "remoteFlowArrows": 0,
+        "gatewayDetails": [],
+        "declaredAbsent": {
+          "machineName": 0,
+          "entryToggle": 0
+        },
+        "deviceRowCells": [
+          [
+            31,
+            95,
+            93
+          ],
+          [
+            31,
+            118,
+            70
+          ],
+          [
+            31,
+            59,
+            129
+          ]
+        ],
+        "deviceNameLines": [
+          1,
+          1,
+          1
+        ],
         "statLabels": [],
+        "statCardLabels": [],
         "capabilityNames": [],
         "capabilityTabLabels": [],
         "capabilitySummary": [],
@@ -15348,7 +17171,7 @@
           "远程操作仍受本机约束"
         ],
         "archiveCardsText": [
-          "Tailscale 私有访问尚未建立连接，Host 未上报心跳手机需安装并接入同一私有网络PiDock Host 只监听 127.0.0.1，由 Tailscale Serve 在 tailnet 内提供 HTTPS。Host 监听只监听回环地址，不暴露 Pi RPC，也不代理任意 TCP127.0.0.1:4318入口地址仅在私有网络内可达https://pidock-host.tailnet.ts.netGateway未使用 · 离线（不重放请求）desktop-host私有网络 HTTPS · 无需中继地址；Host 只监听回环，Serve/接入由本机网络配置提供。",
+          "Tailscale 私有访问尚未建立连接，Host 未上报心跳手机需安装并接入同一私有网络PiDock Host 只监听 127.0.0.1，由 Tailscale Serve 在 tailnet 内提供 HTTPS。Host 监听只监听回环地址，不暴露 Pi RPC，也不代理任意 TCP127.0.0.1:4318重新检测入口地址仅在私有网络内可达https://pidock-host.tailnet.ts.netGateway未使用 · 离线（不重放请求）desktop-hosttailscale serve --bg 127.0.0.1:4318私有网络 HTTPS · 无需中继地址；Host 只监听回环，Serve/接入由本机网络配置提供。",
           "移动端允许的操作设备级授权 · 由 Host 裁决查看项目、任务和运行状态只读 · 默认开启查看会话并对话消息进入原会话；待确认展示同一真实内容 · 默认开启暂停、归档与启停服务每次敏感操作再次确认 · 默认关闭 · 每次操作再次确认查看文件和差异默认关闭 · 默认关闭 · 每次操作再次确认远程终端高风险 · 默认关闭 · 默认关闭 · 每次操作再次确认会话权限、任务写锁、共享模板确认和浏览器接管规则不因远程访问放宽；远程会话权限只会更窄。勾选反映配对时的默认值，真正的授予在每台设备确认时发生。",
           "已授权设备配对设备生成短时、单次使用的配对链接；扫码后仍需本机确认。1 / 3 有效。iPhone 16 Pro有效权限 查看项目、任务和运行状态 / 查看会话并对话 · 设备凭据第 1 代 · 最近在线 2026-09-22 08:12轮换凭据撤销设备旧 iPad已撤销权限 无（已撤销） · 设备凭据第 1 代 · 最近在线 2026-08-30 09:00撤销设备Pixel 9等待本机确认权限 查看项目、任务和运行状态 / 查看会话并对话 / 远程终端 · 尚未签发设备凭据 · 从未在线请求权限后等待本机确认；确认前不能查看或操作任何任务。确认并收窄权限拒绝撤销设备",
           "远程操作仍受本机约束会话权限、任务执行权、共享模板确认和浏览器接管规则不因远程访问放宽。配对码不含长期凭据；过期、使用或手动刷新后立即失效。"
@@ -15409,6 +17232,15 @@
           0,
           0
         ],
+        "pageButtonIconMap": {
+          "新建定时任务": 1,
+          "查看任务": 0,
+          "立即运行": 1,
+          "暂停": 1,
+          "启用": 1,
+          "打开会话": 0,
+          "使用模板": 0
+        },
         "measured": {
           "page": {
             "padding": "30px 34px",
@@ -16086,7 +17918,24 @@
         "notes": [],
         "providerNames": [],
         "providerChips": [],
+        "providerProtocolBadges": [],
+        "remoteGuardBox": null,
+        "remoteCardBox": null,
+        "connectionChecks": [],
+        "monoFamilies": [],
+        "dotBoxes": [],
+        "commandPreview": [],
+        "remoteFlowSteps": [],
+        "remoteFlowArrows": 0,
+        "gatewayDetails": [],
+        "declaredAbsent": {
+          "machineName": 0,
+          "entryToggle": 0
+        },
+        "deviceRowCells": [],
+        "deviceNameLines": [],
         "statLabels": [],
+        "statCardLabels": [],
         "capabilityNames": [],
         "capabilityTabLabels": [],
         "capabilitySummary": [],
@@ -16131,6 +17980,10 @@
           0,
           0
         ],
+        "pageButtonIconMap": {
+          "恢复任务": 0,
+          "预览清理清单": 0
+        },
         "measured": {
           "page": {
             "padding": "30px 34px",
@@ -16399,7 +18252,24 @@
         "notes": [],
         "providerNames": [],
         "providerChips": [],
+        "providerProtocolBadges": [],
+        "remoteGuardBox": null,
+        "remoteCardBox": null,
+        "connectionChecks": [],
+        "monoFamilies": [],
+        "dotBoxes": [],
+        "commandPreview": [],
+        "remoteFlowSteps": [],
+        "remoteFlowArrows": 0,
+        "gatewayDetails": [],
+        "declaredAbsent": {
+          "machineName": 0,
+          "entryToggle": 0
+        },
+        "deviceRowCells": [],
+        "deviceNameLines": [],
         "statLabels": [],
+        "statCardLabels": [],
         "capabilityNames": [],
         "capabilityTabLabels": [],
         "capabilitySummary": [],
@@ -16457,6 +18327,13 @@
           1,
           0
         ],
+        "pageButtonIconMap": {
+          "添加 Provider": 1,
+          "编辑": 1,
+          "同步模型列表": 1,
+          "停用": 1,
+          "删除": 0
+        },
         "measured": {
           "page": {
             "padding": "30px 34px",
@@ -16699,7 +18576,7 @@
             "columnGap": "normal",
             "display": "block",
             "fontSize": "11px",
-            "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+            "fontFamily": "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
             "fontWeight": "400",
             "letterSpacing": "normal",
             "color": "rgb(148, 151, 156)",
@@ -16869,7 +18746,7 @@
           "columnGap": "normal",
           "display": "block",
           "fontSize": "11px",
-          "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+          "fontFamily": "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
           "fontWeight": "400",
           "letterSpacing": "normal",
           "color": "rgb(148, 151, 156)",
@@ -16888,14 +18765,14 @@
         "dots": [],
         "badges": [
           "已启用",
-          "anthropic-messages",
+          "Anthropic Messages",
           "Claude Sonnet · 200k · 图片",
           "Claude Haiku · 200k",
           "已启用",
-          "openai-responses",
+          "OpenAI Responses",
           "团队轻量模型 · 16k · 图片",
           "已启用",
-          "openai-chat-completions",
+          "OpenAI Chat Completions",
           "本地 Qwen · 32k"
         ],
         "empties": [],
@@ -16911,7 +18788,32 @@
           "团队轻量模型 · 16k · 图片",
           "本地 Qwen · 32k"
         ],
+        "providerProtocolBadges": [
+          "Anthropic Messages",
+          "OpenAI Responses",
+          "OpenAI Chat Completions"
+        ],
+        "remoteGuardBox": null,
+        "remoteCardBox": null,
+        "connectionChecks": [],
+        "monoFamilies": [
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace"
+        ],
+        "dotBoxes": [],
+        "commandPreview": [],
+        "remoteFlowSteps": [],
+        "remoteFlowArrows": 0,
+        "gatewayDetails": [],
+        "declaredAbsent": {
+          "machineName": 0,
+          "entryToggle": 0
+        },
+        "deviceRowCells": [],
+        "deviceNameLines": [],
         "statLabels": [],
+        "statCardLabels": [],
         "capabilityNames": [],
         "capabilityTabLabels": [],
         "capabilitySummary": [],
@@ -16936,7 +18838,7 @@
         "noHorizontalOverflow": true,
         "viewLabel": "USAGE",
         "title": "Token 用量",
-        "intro": "按实际调用累计，压缩上下文不会减少消耗。统计范围为本应用记录，不等同账户账单或供应商配额；未观测到的外部调用不伪造。本页数据为样例数据。",
+        "intro": "按实际调用累计，压缩上下文不会减少消耗。统计范围为本应用记录，不等同账户账单或供应商配额；未观测到的外部调用不伪造。本页数据为样例数据。以上为全部统计。",
         "pageButtons": [
           "清理该会话用量",
           "清理该日期之前",
@@ -16949,6 +18851,12 @@
           0,
           0
         ],
+        "pageButtonIconMap": {
+          "清理该会话用量": 0,
+          "清理该日期之前": 0,
+          "清理全部用量": 0,
+          "重新加载": 0
+        },
         "measured": {
           "page": {
             "padding": "30px 34px",
@@ -17405,7 +19313,7 @@
             "gridTemplateColumns": "none",
             "tracks": 0,
             "height": 38,
-            "width": 260,
+            "width": 257,
             "scrollHeight": 37
           },
           "td": {
@@ -17430,7 +19338,7 @@
             "gridTemplateColumns": "none",
             "tracks": 0,
             "height": 46,
-            "width": 260,
+            "width": 257,
             "scrollHeight": 45
           },
           "capSummary": null,
@@ -17569,7 +19477,7 @@
           "gridTemplateColumns": "none",
           "tracks": 0,
           "height": 38,
-          "width": 260,
+          "width": 257,
           "scrollHeight": 37
         },
         "historyHeadBox": null,
@@ -17584,7 +19492,7 @@
           "columnGap": "normal",
           "display": "table-cell",
           "fontSize": "11px",
-          "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+          "fontFamily": "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
           "fontWeight": "400",
           "letterSpacing": "normal",
           "color": "rgb(37, 43, 48)",
@@ -17597,7 +19505,7 @@
           "gridTemplateColumns": "none",
           "tracks": 0,
           "height": 46,
-          "width": 121,
+          "width": 122,
           "scrollHeight": 45
         },
         "dots": [],
@@ -17616,11 +19524,46 @@
         ],
         "providerNames": [],
         "providerChips": [],
+        "providerProtocolBadges": [],
+        "remoteGuardBox": null,
+        "remoteCardBox": null,
+        "connectionChecks": [],
+        "monoFamilies": [
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace"
+        ],
+        "dotBoxes": [],
+        "commandPreview": [],
+        "remoteFlowSteps": [],
+        "remoteFlowArrows": 0,
+        "gatewayDetails": [],
+        "declaredAbsent": {
+          "machineName": 0,
+          "entryToggle": 0
+        },
+        "deviceRowCells": [],
+        "deviceNameLines": [],
         "statLabels": [
           "2.28M",
           "5,200 Tokens",
           "240",
           "32 次"
+        ],
+        "statCardLabels": [
+          "累计 Token",
+          "最近一次调用",
+          "已记录调用",
+          "未完整报告"
         ],
         "capabilityNames": [],
         "capabilityTabLabels": [],
@@ -17692,6 +19635,16 @@
           0,
           1
         ],
+        "pageButtonIconMap": {
+          "重新检查来源": 1,
+          "添加技能来源": 1,
+          "详情": 0,
+          "启用": 1,
+          "安装 2.4.1": 1,
+          "停用": 1,
+          "更新到 1.9.0": 1,
+          "重试连接": 1
+        },
         "measured": {
           "page": {
             "padding": "30px 34px",
@@ -18231,7 +20184,24 @@
         ],
         "providerNames": [],
         "providerChips": [],
+        "providerProtocolBadges": [],
+        "remoteGuardBox": null,
+        "remoteCardBox": null,
+        "connectionChecks": [],
+        "monoFamilies": [],
+        "dotBoxes": [],
+        "commandPreview": [],
+        "remoteFlowSteps": [],
+        "remoteFlowArrows": 0,
+        "gatewayDetails": [],
+        "declaredAbsent": {
+          "machineName": 0,
+          "entryToggle": 0
+        },
+        "deviceRowCells": [],
+        "deviceNameLines": [],
         "statLabels": [],
+        "statCardLabels": [],
         "capabilityNames": [
           "@pi/pack-protoc",
           "@pi/tools-git",
@@ -18273,6 +20243,7 @@
         "intro": "选择私有网络、自建 Gateway 或实验性公网入口；三种模式共享同一套设备授权和 PiDock 领域权限。",
         "pageButtons": [
           "手机视图",
+          "重新检测",
           "配对设备",
           "轮换凭据",
           "撤销设备",
@@ -18283,6 +20254,7 @@
         ],
         "pageButtonIcons": [
           1,
+          0,
           1,
           1,
           0,
@@ -18291,6 +20263,15 @@
           0,
           0
         ],
+        "pageButtonIconMap": {
+          "手机视图": 1,
+          "重新检测": 0,
+          "配对设备": 1,
+          "轮换凭据": 1,
+          "撤销设备": 0,
+          "确认并收窄权限": 1,
+          "拒绝": 0
+        },
         "measured": {
           "page": {
             "padding": "30px 34px",
@@ -18315,7 +20296,7 @@
             "tracks": 0,
             "height": 794,
             "width": 1054,
-            "scrollHeight": 2106
+            "scrollHeight": 1178
           },
           "viewLabel": {
             "padding": "0px",
@@ -18462,13 +20443,13 @@
             "borderColor": "rgb(233, 236, 238)",
             "borderWidth": "1px",
             "borderBottomWidth": "1px",
-            "borderRadius": "10px",
+            "borderRadius": "8px",
             "textTransform": "none",
             "gridTemplateColumns": "none",
             "tracks": 0,
-            "height": 340,
+            "height": 381,
             "width": 652,
-            "scrollHeight": 338
+            "scrollHeight": 379
           },
           "grid2": null,
           "grid3": null,
@@ -18693,9 +20674,9 @@
             "textTransform": "none",
             "gridTemplateColumns": "652.344px 315.656px",
             "tracks": 2,
-            "height": 1788,
+            "height": 860,
             "width": 986,
-            "scrollHeight": 1788
+            "scrollHeight": 860
           },
           "orb": {
             "padding": "0px",
@@ -18766,7 +20747,7 @@
             "borderBottomWidth": "1px",
             "borderRadius": "0px",
             "textTransform": "none",
-            "gridTemplateColumns": "8px 463.625px 92.7188px",
+            "gridTemplateColumns": "8px 385.625px 170.719px",
             "tracks": 3,
             "height": 51,
             "width": 608,
@@ -18868,9 +20849,9 @@
             "textTransform": "none",
             "gridTemplateColumns": "none",
             "tracks": 0,
-            "height": 1287,
+            "height": 359,
             "width": 274,
-            "scrollHeight": 1287
+            "scrollHeight": 359
           },
           "deviceRow": {
             "padding": "12px 0px",
@@ -18891,11 +20872,11 @@
             "borderBottomWidth": "1px",
             "borderRadius": "0px",
             "textTransform": "none",
-            "gridTemplateColumns": "32px 52.6562px 171px",
+            "gridTemplateColumns": "32px 130.656px 93px",
             "tracks": 3,
-            "height": 209,
+            "height": 100,
             "width": 274,
-            "scrollHeight": 208
+            "scrollHeight": 99
           },
           "deviceSymbol": {
             "padding": "0px",
@@ -18935,11 +20916,11 @@
             "fontWeight": "400",
             "letterSpacing": "normal",
             "color": "rgb(37, 43, 48)",
-            "backgroundColor": "rgb(255, 255, 255)",
+            "backgroundColor": "rgb(250, 249, 245)",
             "borderColor": "rgb(233, 236, 238)",
             "borderWidth": "1px",
             "borderBottomWidth": "1px",
-            "borderRadius": "10px",
+            "borderRadius": "8px",
             "textTransform": "none",
             "gridTemplateColumns": "none",
             "tracks": 0,
@@ -19069,17 +21050,17 @@
             "fontWeight": "400",
             "letterSpacing": "normal",
             "color": "rgb(37, 43, 48)",
-            "backgroundColor": "rgba(0, 0, 0, 0)",
+            "backgroundColor": "rgb(154, 164, 171)",
             "borderColor": "rgb(37, 43, 48)",
             "borderWidth": "0px",
             "borderBottomWidth": "0px",
-            "borderRadius": "0px",
+            "borderRadius": "3.35544e+07px",
             "textTransform": "none",
             "gridTemplateColumns": "none",
             "tracks": 0,
-            "height": 0,
-            "width": 8,
-            "scrollHeight": 0
+            "height": 6,
+            "width": 6,
+            "scrollHeight": 6
           },
           {
             "padding": "0px",
@@ -19094,17 +21075,17 @@
             "fontWeight": "400",
             "letterSpacing": "normal",
             "color": "rgb(37, 43, 48)",
-            "backgroundColor": "rgba(0, 0, 0, 0)",
+            "backgroundColor": "rgb(66, 90, 147)",
             "borderColor": "rgb(37, 43, 48)",
             "borderWidth": "0px",
             "borderBottomWidth": "0px",
-            "borderRadius": "0px",
+            "borderRadius": "3.35544e+07px",
             "textTransform": "none",
             "gridTemplateColumns": "none",
             "tracks": 0,
-            "height": 0,
-            "width": 8,
-            "scrollHeight": 0
+            "height": 6,
+            "width": 6,
+            "scrollHeight": 6
           },
           {
             "padding": "0px",
@@ -19119,17 +21100,17 @@
             "fontWeight": "400",
             "letterSpacing": "normal",
             "color": "rgb(37, 43, 48)",
-            "backgroundColor": "rgba(0, 0, 0, 0)",
+            "backgroundColor": "rgb(154, 164, 171)",
             "borderColor": "rgb(37, 43, 48)",
             "borderWidth": "0px",
             "borderBottomWidth": "0px",
-            "borderRadius": "0px",
+            "borderRadius": "3.35544e+07px",
             "textTransform": "none",
             "gridTemplateColumns": "none",
             "tracks": 0,
-            "height": 0,
-            "width": 8,
-            "scrollHeight": 0
+            "height": 6,
+            "width": 6,
+            "scrollHeight": 6
           }
         ],
         "badges": [
@@ -19146,7 +21127,335 @@
         ],
         "providerNames": [],
         "providerChips": [],
+        "providerProtocolBadges": [],
+        "remoteGuardBox": {
+          "padding": "20px",
+          "margin": "0px",
+          "marginTop": "0px",
+          "marginBottom": "0px",
+          "gap": "normal",
+          "columnGap": "normal",
+          "display": "block",
+          "fontSize": "16px",
+          "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+          "fontWeight": "400",
+          "letterSpacing": "normal",
+          "color": "rgb(37, 43, 48)",
+          "backgroundColor": "rgb(250, 249, 245)",
+          "borderColor": "rgb(233, 236, 238)",
+          "borderWidth": "1px",
+          "borderBottomWidth": "1px",
+          "borderRadius": "8px",
+          "textTransform": "none",
+          "gridTemplateColumns": "none",
+          "tracks": 0,
+          "height": 157,
+          "width": 316,
+          "scrollHeight": 155
+        },
+        "remoteCardBox": {
+          "padding": "20px",
+          "margin": "0px",
+          "marginTop": "0px",
+          "marginBottom": "0px",
+          "gap": "normal",
+          "columnGap": "normal",
+          "display": "block",
+          "fontSize": "16px",
+          "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+          "fontWeight": "400",
+          "letterSpacing": "normal",
+          "color": "rgb(37, 43, 48)",
+          "backgroundColor": "rgb(255, 255, 255)",
+          "borderColor": "rgb(233, 236, 238)",
+          "borderWidth": "1px",
+          "borderBottomWidth": "1px",
+          "borderRadius": "8px",
+          "textTransform": "none",
+          "gridTemplateColumns": "none",
+          "tracks": 0,
+          "height": 381,
+          "width": 652,
+          "scrollHeight": 379
+        },
+        "connectionChecks": [
+          {
+            "dot": {
+              "padding": "0px",
+              "margin": "0px",
+              "marginTop": "0px",
+              "marginBottom": "0px",
+              "gap": "normal",
+              "columnGap": "normal",
+              "display": "block",
+              "fontSize": "16px",
+              "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+              "fontWeight": "400",
+              "letterSpacing": "normal",
+              "color": "rgb(37, 43, 48)",
+              "backgroundColor": "rgb(154, 164, 171)",
+              "borderColor": "rgb(37, 43, 48)",
+              "borderWidth": "0px",
+              "borderBottomWidth": "0px",
+              "borderRadius": "3.35544e+07px",
+              "textTransform": "none",
+              "gridTemplateColumns": "none",
+              "tracks": 0,
+              "height": 6,
+              "width": 6,
+              "scrollHeight": 6
+            },
+            "icons": 0,
+            "mono": {
+              "padding": "0px",
+              "margin": "0px",
+              "marginTop": "0px",
+              "marginBottom": "0px",
+              "gap": "normal",
+              "columnGap": "normal",
+              "display": "block",
+              "fontSize": "11px",
+              "fontFamily": "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+              "fontWeight": "400",
+              "letterSpacing": "normal",
+              "color": "rgb(37, 43, 48)",
+              "backgroundColor": "rgba(0, 0, 0, 0)",
+              "borderColor": "rgb(37, 43, 48)",
+              "borderWidth": "0px",
+              "borderBottomWidth": "0px",
+              "borderRadius": "0px",
+              "textTransform": "none",
+              "gridTemplateColumns": "none",
+              "tracks": 0,
+              "height": 17,
+              "width": 93,
+              "scrollHeight": 17
+            }
+          },
+          {
+            "dot": {
+              "padding": "0px",
+              "margin": "0px",
+              "marginTop": "0px",
+              "marginBottom": "0px",
+              "gap": "normal",
+              "columnGap": "normal",
+              "display": "block",
+              "fontSize": "16px",
+              "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+              "fontWeight": "400",
+              "letterSpacing": "normal",
+              "color": "rgb(37, 43, 48)",
+              "backgroundColor": "rgb(66, 90, 147)",
+              "borderColor": "rgb(37, 43, 48)",
+              "borderWidth": "0px",
+              "borderBottomWidth": "0px",
+              "borderRadius": "3.35544e+07px",
+              "textTransform": "none",
+              "gridTemplateColumns": "none",
+              "tracks": 0,
+              "height": 6,
+              "width": 6,
+              "scrollHeight": 6
+            },
+            "icons": 0,
+            "mono": {
+              "padding": "0px",
+              "margin": "0px",
+              "marginTop": "0px",
+              "marginBottom": "0px",
+              "gap": "normal",
+              "columnGap": "normal",
+              "display": "block",
+              "fontSize": "11px",
+              "fontFamily": "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+              "fontWeight": "400",
+              "letterSpacing": "normal",
+              "color": "rgb(37, 43, 48)",
+              "backgroundColor": "rgba(0, 0, 0, 0)",
+              "borderColor": "rgb(37, 43, 48)",
+              "borderWidth": "0px",
+              "borderBottomWidth": "0px",
+              "borderRadius": "0px",
+              "textTransform": "none",
+              "gridTemplateColumns": "none",
+              "tracks": 0,
+              "height": 17,
+              "width": 225,
+              "scrollHeight": 17
+            }
+          },
+          {
+            "dot": {
+              "padding": "0px",
+              "margin": "0px",
+              "marginTop": "0px",
+              "marginBottom": "0px",
+              "gap": "normal",
+              "columnGap": "normal",
+              "display": "block",
+              "fontSize": "16px",
+              "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+              "fontWeight": "400",
+              "letterSpacing": "normal",
+              "color": "rgb(37, 43, 48)",
+              "backgroundColor": "rgb(154, 164, 171)",
+              "borderColor": "rgb(37, 43, 48)",
+              "borderWidth": "0px",
+              "borderBottomWidth": "0px",
+              "borderRadius": "3.35544e+07px",
+              "textTransform": "none",
+              "gridTemplateColumns": "none",
+              "tracks": 0,
+              "height": 6,
+              "width": 6,
+              "scrollHeight": 6
+            },
+            "icons": 0,
+            "mono": {
+              "padding": "0px",
+              "margin": "0px",
+              "marginTop": "0px",
+              "marginBottom": "0px",
+              "gap": "normal",
+              "columnGap": "normal",
+              "display": "block",
+              "fontSize": "11px",
+              "fontFamily": "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+              "fontWeight": "400",
+              "letterSpacing": "normal",
+              "color": "rgb(37, 43, 48)",
+              "backgroundColor": "rgba(0, 0, 0, 0)",
+              "borderColor": "rgb(37, 43, 48)",
+              "borderWidth": "0px",
+              "borderBottomWidth": "0px",
+              "borderRadius": "0px",
+              "textTransform": "none",
+              "gridTemplateColumns": "none",
+              "tracks": 0,
+              "height": 17,
+              "width": 79,
+              "scrollHeight": 17
+            }
+          }
+        ],
+        "monoFamilies": [
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace"
+        ],
+        "dotBoxes": [
+          {
+            "padding": "0px",
+            "margin": "0px",
+            "marginTop": "0px",
+            "marginBottom": "0px",
+            "gap": "normal",
+            "columnGap": "normal",
+            "display": "block",
+            "fontSize": "16px",
+            "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+            "fontWeight": "400",
+            "letterSpacing": "normal",
+            "color": "rgb(37, 43, 48)",
+            "backgroundColor": "rgb(154, 164, 171)",
+            "borderColor": "rgb(37, 43, 48)",
+            "borderWidth": "0px",
+            "borderBottomWidth": "0px",
+            "borderRadius": "3.35544e+07px",
+            "textTransform": "none",
+            "gridTemplateColumns": "none",
+            "tracks": 0,
+            "height": 6,
+            "width": 6,
+            "scrollHeight": 6
+          },
+          {
+            "padding": "0px",
+            "margin": "0px",
+            "marginTop": "0px",
+            "marginBottom": "0px",
+            "gap": "normal",
+            "columnGap": "normal",
+            "display": "block",
+            "fontSize": "16px",
+            "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+            "fontWeight": "400",
+            "letterSpacing": "normal",
+            "color": "rgb(37, 43, 48)",
+            "backgroundColor": "rgb(66, 90, 147)",
+            "borderColor": "rgb(37, 43, 48)",
+            "borderWidth": "0px",
+            "borderBottomWidth": "0px",
+            "borderRadius": "3.35544e+07px",
+            "textTransform": "none",
+            "gridTemplateColumns": "none",
+            "tracks": 0,
+            "height": 6,
+            "width": 6,
+            "scrollHeight": 6
+          },
+          {
+            "padding": "0px",
+            "margin": "0px",
+            "marginTop": "0px",
+            "marginBottom": "0px",
+            "gap": "normal",
+            "columnGap": "normal",
+            "display": "block",
+            "fontSize": "16px",
+            "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+            "fontWeight": "400",
+            "letterSpacing": "normal",
+            "color": "rgb(37, 43, 48)",
+            "backgroundColor": "rgb(154, 164, 171)",
+            "borderColor": "rgb(37, 43, 48)",
+            "borderWidth": "0px",
+            "borderBottomWidth": "0px",
+            "borderRadius": "3.35544e+07px",
+            "textTransform": "none",
+            "gridTemplateColumns": "none",
+            "tracks": 0,
+            "height": 6,
+            "width": 6,
+            "scrollHeight": 6
+          }
+        ],
+        "commandPreview": [
+          "tailscale serve --bg 127.0.0.1:4318"
+        ],
+        "remoteFlowSteps": [],
+        "remoteFlowArrows": 0,
+        "gatewayDetails": [],
+        "declaredAbsent": {
+          "machineName": 0,
+          "entryToggle": 0
+        },
+        "deviceRowCells": [
+          [
+            31,
+            131,
+            93
+          ],
+          [
+            31,
+            154,
+            70
+          ],
+          [
+            31,
+            95,
+            129
+          ]
+        ],
+        "deviceNameLines": [
+          1,
+          1,
+          1
+        ],
         "statLabels": [],
+        "statCardLabels": [],
         "capabilityNames": [],
         "capabilityTabLabels": [],
         "capabilitySummary": [],
@@ -19171,7 +21480,7 @@
           "远程操作仍受本机约束"
         ],
         "archiveCardsText": [
-          "Tailscale 私有访问尚未建立连接，Host 未上报心跳手机需安装并接入同一私有网络PiDock Host 只监听 127.0.0.1，由 Tailscale Serve 在 tailnet 内提供 HTTPS。Host 监听只监听回环地址，不暴露 Pi RPC，也不代理任意 TCP127.0.0.1:4318入口地址仅在私有网络内可达https://pidock-host.tailnet.ts.netGateway未使用 · 离线（不重放请求）desktop-host私有网络 HTTPS · 无需中继地址；Host 只监听回环，Serve/接入由本机网络配置提供。",
+          "Tailscale 私有访问尚未建立连接，Host 未上报心跳手机需安装并接入同一私有网络PiDock Host 只监听 127.0.0.1，由 Tailscale Serve 在 tailnet 内提供 HTTPS。Host 监听只监听回环地址，不暴露 Pi RPC，也不代理任意 TCP127.0.0.1:4318重新检测入口地址仅在私有网络内可达https://pidock-host.tailnet.ts.netGateway未使用 · 离线（不重放请求）desktop-hosttailscale serve --bg 127.0.0.1:4318私有网络 HTTPS · 无需中继地址；Host 只监听回环，Serve/接入由本机网络配置提供。",
           "移动端允许的操作设备级授权 · 由 Host 裁决查看项目、任务和运行状态只读 · 默认开启查看会话并对话消息进入原会话；待确认展示同一真实内容 · 默认开启暂停、归档与启停服务每次敏感操作再次确认 · 默认关闭 · 每次操作再次确认查看文件和差异默认关闭 · 默认关闭 · 每次操作再次确认远程终端高风险 · 默认关闭 · 默认关闭 · 每次操作再次确认会话权限、任务写锁、共享模板确认和浏览器接管规则不因远程访问放宽；远程会话权限只会更窄。勾选反映配对时的默认值，真正的授予在每台设备确认时发生。",
           "已授权设备配对设备生成短时、单次使用的配对链接；扫码后仍需本机确认。1 / 3 有效。iPhone 16 Pro有效权限 查看项目、任务和运行状态 / 查看会话并对话 · 设备凭据第 1 代 · 最近在线 2026-09-22 08:12轮换凭据撤销设备旧 iPad已撤销权限 无（已撤销） · 设备凭据第 1 代 · 最近在线 2026-08-30 09:00撤销设备Pixel 9等待本机确认权限 查看项目、任务和运行状态 / 查看会话并对话 / 远程终端 · 尚未签发设备凭据 · 从未在线请求权限后等待本机确认；确认前不能查看或操作任何任务。确认并收窄权限拒绝撤销设备",
           "远程操作仍受本机约束会话权限、任务执行权、共享模板确认和浏览器接管规则不因远程访问放宽。配对码不含长期凭据；过期、使用或手动刷新后立即失效。"
@@ -19232,6 +21541,15 @@
           0,
           0
         ],
+        "pageButtonIconMap": {
+          "新建定时任务": 1,
+          "查看任务": 0,
+          "立即运行": 1,
+          "暂停": 1,
+          "启用": 1,
+          "打开会话": 0,
+          "使用模板": 0
+        },
         "measured": {
           "page": {
             "padding": "30px 34px",
@@ -19909,7 +22227,24 @@
         "notes": [],
         "providerNames": [],
         "providerChips": [],
+        "providerProtocolBadges": [],
+        "remoteGuardBox": null,
+        "remoteCardBox": null,
+        "connectionChecks": [],
+        "monoFamilies": [],
+        "dotBoxes": [],
+        "commandPreview": [],
+        "remoteFlowSteps": [],
+        "remoteFlowArrows": 0,
+        "gatewayDetails": [],
+        "declaredAbsent": {
+          "machineName": 0,
+          "entryToggle": 0
+        },
+        "deviceRowCells": [],
+        "deviceNameLines": [],
         "statLabels": [],
+        "statCardLabels": [],
         "capabilityNames": [],
         "capabilityTabLabels": [],
         "capabilitySummary": [],
@@ -19954,6 +22289,10 @@
           0,
           0
         ],
+        "pageButtonIconMap": {
+          "恢复任务": 0,
+          "预览清理清单": 0
+        },
         "measured": {
           "page": {
             "padding": "30px 34px",
@@ -20222,7 +22561,24 @@
         "notes": [],
         "providerNames": [],
         "providerChips": [],
+        "providerProtocolBadges": [],
+        "remoteGuardBox": null,
+        "remoteCardBox": null,
+        "connectionChecks": [],
+        "monoFamilies": [],
+        "dotBoxes": [],
+        "commandPreview": [],
+        "remoteFlowSteps": [],
+        "remoteFlowArrows": 0,
+        "gatewayDetails": [],
+        "declaredAbsent": {
+          "machineName": 0,
+          "entryToggle": 0
+        },
+        "deviceRowCells": [],
+        "deviceNameLines": [],
         "statLabels": [],
+        "statCardLabels": [],
         "capabilityNames": [],
         "capabilityTabLabels": [],
         "capabilitySummary": [],
@@ -20280,6 +22636,13 @@
           1,
           0
         ],
+        "pageButtonIconMap": {
+          "添加 Provider": 1,
+          "编辑": 1,
+          "同步模型列表": 1,
+          "停用": 1,
+          "删除": 0
+        },
         "measured": {
           "page": {
             "padding": "25px",
@@ -20522,7 +22885,7 @@
             "columnGap": "normal",
             "display": "block",
             "fontSize": "11px",
-            "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+            "fontFamily": "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
             "fontWeight": "400",
             "letterSpacing": "normal",
             "color": "rgb(148, 151, 156)",
@@ -20692,7 +23055,7 @@
           "columnGap": "normal",
           "display": "block",
           "fontSize": "11px",
-          "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+          "fontFamily": "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
           "fontWeight": "400",
           "letterSpacing": "normal",
           "color": "rgb(148, 151, 156)",
@@ -20711,14 +23074,14 @@
         "dots": [],
         "badges": [
           "已启用",
-          "anthropic-messages",
+          "Anthropic Messages",
           "Claude Sonnet · 200k · 图片",
           "Claude Haiku · 200k",
           "已启用",
-          "openai-responses",
+          "OpenAI Responses",
           "团队轻量模型 · 16k · 图片",
           "已启用",
-          "openai-chat-completions",
+          "OpenAI Chat Completions",
           "本地 Qwen · 32k"
         ],
         "empties": [],
@@ -20734,7 +23097,32 @@
           "团队轻量模型 · 16k · 图片",
           "本地 Qwen · 32k"
         ],
+        "providerProtocolBadges": [
+          "Anthropic Messages",
+          "OpenAI Responses",
+          "OpenAI Chat Completions"
+        ],
+        "remoteGuardBox": null,
+        "remoteCardBox": null,
+        "connectionChecks": [],
+        "monoFamilies": [
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace"
+        ],
+        "dotBoxes": [],
+        "commandPreview": [],
+        "remoteFlowSteps": [],
+        "remoteFlowArrows": 0,
+        "gatewayDetails": [],
+        "declaredAbsent": {
+          "machineName": 0,
+          "entryToggle": 0
+        },
+        "deviceRowCells": [],
+        "deviceNameLines": [],
         "statLabels": [],
+        "statCardLabels": [],
         "capabilityNames": [],
         "capabilityTabLabels": [],
         "capabilitySummary": [],
@@ -20759,7 +23147,7 @@
         "noHorizontalOverflow": true,
         "viewLabel": "USAGE",
         "title": "Token 用量",
-        "intro": "按实际调用累计，压缩上下文不会减少消耗。统计范围为本应用记录，不等同账户账单或供应商配额；未观测到的外部调用不伪造。本页数据为样例数据。",
+        "intro": "按实际调用累计，压缩上下文不会减少消耗。统计范围为本应用记录，不等同账户账单或供应商配额；未观测到的外部调用不伪造。本页数据为样例数据。以上为全部统计。",
         "pageButtons": [
           "清理该会话用量",
           "清理该日期之前",
@@ -20772,6 +23160,12 @@
           0,
           0
         ],
+        "pageButtonIconMap": {
+          "清理该会话用量": 0,
+          "清理该日期之前": 0,
+          "清理全部用量": 0,
+          "重新加载": 0
+        },
         "measured": {
           "page": {
             "padding": "25px",
@@ -21228,7 +23622,7 @@
             "gridTemplateColumns": "none",
             "tracks": 0,
             "height": 38,
-            "width": 207,
+            "width": 205,
             "scrollHeight": 37
           },
           "td": {
@@ -21253,7 +23647,7 @@
             "gridTemplateColumns": "none",
             "tracks": 0,
             "height": 46,
-            "width": 207,
+            "width": 205,
             "scrollHeight": 45
           },
           "capSummary": null,
@@ -21392,7 +23786,7 @@
           "gridTemplateColumns": "none",
           "tracks": 0,
           "height": 38,
-          "width": 207,
+          "width": 205,
           "scrollHeight": 37
         },
         "historyHeadBox": null,
@@ -21407,7 +23801,7 @@
           "columnGap": "normal",
           "display": "table-cell",
           "fontSize": "11px",
-          "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+          "fontFamily": "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
           "fontWeight": "400",
           "letterSpacing": "normal",
           "color": "rgb(37, 43, 48)",
@@ -21439,11 +23833,46 @@
         ],
         "providerNames": [],
         "providerChips": [],
+        "providerProtocolBadges": [],
+        "remoteGuardBox": null,
+        "remoteCardBox": null,
+        "connectionChecks": [],
+        "monoFamilies": [
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace"
+        ],
+        "dotBoxes": [],
+        "commandPreview": [],
+        "remoteFlowSteps": [],
+        "remoteFlowArrows": 0,
+        "gatewayDetails": [],
+        "declaredAbsent": {
+          "machineName": 0,
+          "entryToggle": 0
+        },
+        "deviceRowCells": [],
+        "deviceNameLines": [],
         "statLabels": [
           "2.28M",
           "5,200 Tokens",
           "240",
           "32 次"
+        ],
+        "statCardLabels": [
+          "累计 Token",
+          "最近一次调用",
+          "已记录调用",
+          "未完整报告"
         ],
         "capabilityNames": [],
         "capabilityTabLabels": [],
@@ -21515,6 +23944,16 @@
           0,
           1
         ],
+        "pageButtonIconMap": {
+          "重新检查来源": 1,
+          "添加技能来源": 1,
+          "详情": 0,
+          "启用": 1,
+          "安装 2.4.1": 1,
+          "停用": 1,
+          "更新到 1.9.0": 1,
+          "重试连接": 1
+        },
         "measured": {
           "page": {
             "padding": "25px",
@@ -22054,7 +24493,24 @@
         ],
         "providerNames": [],
         "providerChips": [],
+        "providerProtocolBadges": [],
+        "remoteGuardBox": null,
+        "remoteCardBox": null,
+        "connectionChecks": [],
+        "monoFamilies": [],
+        "dotBoxes": [],
+        "commandPreview": [],
+        "remoteFlowSteps": [],
+        "remoteFlowArrows": 0,
+        "gatewayDetails": [],
+        "declaredAbsent": {
+          "machineName": 0,
+          "entryToggle": 0
+        },
+        "deviceRowCells": [],
+        "deviceNameLines": [],
         "statLabels": [],
+        "statCardLabels": [],
         "capabilityNames": [
           "@pi/pack-protoc",
           "@pi/tools-git",
@@ -22096,6 +24552,7 @@
         "intro": "选择私有网络、自建 Gateway 或实验性公网入口；三种模式共享同一套设备授权和 PiDock 领域权限。",
         "pageButtons": [
           "手机视图",
+          "重新检测",
           "配对设备",
           "轮换凭据",
           "撤销设备",
@@ -22106,6 +24563,7 @@
         ],
         "pageButtonIcons": [
           1,
+          0,
           1,
           1,
           0,
@@ -22114,6 +24572,15 @@
           0,
           0
         ],
+        "pageButtonIconMap": {
+          "手机视图": 1,
+          "重新检测": 0,
+          "配对设备": 1,
+          "轮换凭据": 1,
+          "撤销设备": 0,
+          "确认并收窄权限": 1,
+          "拒绝": 0
+        },
         "measured": {
           "page": {
             "padding": "25px",
@@ -22138,7 +24605,7 @@
             "tracks": 0,
             "height": 694,
             "width": 836,
-            "scrollHeight": 1646
+            "scrollHeight": 1755
           },
           "viewLabel": {
             "padding": "0px",
@@ -22285,13 +24752,13 @@
             "borderColor": "rgb(233, 236, 238)",
             "borderWidth": "1px",
             "borderBottomWidth": "1px",
-            "borderRadius": "10px",
+            "borderRadius": "8px",
             "textTransform": "none",
             "gridTemplateColumns": "none",
             "tracks": 0,
-            "height": 340,
+            "height": 381,
             "width": 786,
-            "scrollHeight": 338
+            "scrollHeight": 379
           },
           "grid2": null,
           "grid3": null,
@@ -22516,9 +24983,9 @@
             "textTransform": "none",
             "gridTemplateColumns": "786px",
             "tracks": 1,
-            "height": 1338,
+            "height": 1447,
             "width": 786,
-            "scrollHeight": 1338
+            "scrollHeight": 1447
           },
           "orb": {
             "padding": "0px",
@@ -22589,7 +25056,7 @@
             "borderBottomWidth": "1px",
             "borderRadius": "0px",
             "textTransform": "none",
-            "gridTemplateColumns": "8px 597.281px 92.7188px",
+            "gridTemplateColumns": "8px 519.281px 170.719px",
             "tracks": 3,
             "height": 51,
             "width": 742,
@@ -22691,9 +25158,9 @@
             "textTransform": "none",
             "gridTemplateColumns": "none",
             "tracks": 0,
-            "height": 197,
+            "height": 265,
             "width": 744,
-            "scrollHeight": 197
+            "scrollHeight": 265
           },
           "deviceRow": {
             "padding": "12px 0px",
@@ -22714,11 +25181,11 @@
             "borderBottomWidth": "1px",
             "borderRadius": "0px",
             "textTransform": "none",
-            "gridTemplateColumns": "32px 523px 171px",
+            "gridTemplateColumns": "32px 601px 93px",
             "tracks": 3,
-            "height": 60,
+            "height": 86,
             "width": 744,
-            "scrollHeight": 59
+            "scrollHeight": 85
           },
           "deviceSymbol": {
             "padding": "0px",
@@ -22758,11 +25225,11 @@
             "fontWeight": "400",
             "letterSpacing": "normal",
             "color": "rgb(37, 43, 48)",
-            "backgroundColor": "rgb(255, 255, 255)",
+            "backgroundColor": "rgb(250, 249, 245)",
             "borderColor": "rgb(233, 236, 238)",
             "borderWidth": "1px",
             "borderBottomWidth": "1px",
-            "borderRadius": "10px",
+            "borderRadius": "8px",
             "textTransform": "none",
             "gridTemplateColumns": "none",
             "tracks": 0,
@@ -22892,17 +25359,17 @@
             "fontWeight": "400",
             "letterSpacing": "normal",
             "color": "rgb(37, 43, 48)",
-            "backgroundColor": "rgba(0, 0, 0, 0)",
+            "backgroundColor": "rgb(154, 164, 171)",
             "borderColor": "rgb(37, 43, 48)",
             "borderWidth": "0px",
             "borderBottomWidth": "0px",
-            "borderRadius": "0px",
+            "borderRadius": "3.35544e+07px",
             "textTransform": "none",
             "gridTemplateColumns": "none",
             "tracks": 0,
-            "height": 0,
-            "width": 8,
-            "scrollHeight": 0
+            "height": 6,
+            "width": 6,
+            "scrollHeight": 6
           },
           {
             "padding": "0px",
@@ -22917,17 +25384,17 @@
             "fontWeight": "400",
             "letterSpacing": "normal",
             "color": "rgb(37, 43, 48)",
-            "backgroundColor": "rgba(0, 0, 0, 0)",
+            "backgroundColor": "rgb(66, 90, 147)",
             "borderColor": "rgb(37, 43, 48)",
             "borderWidth": "0px",
             "borderBottomWidth": "0px",
-            "borderRadius": "0px",
+            "borderRadius": "3.35544e+07px",
             "textTransform": "none",
             "gridTemplateColumns": "none",
             "tracks": 0,
-            "height": 0,
-            "width": 8,
-            "scrollHeight": 0
+            "height": 6,
+            "width": 6,
+            "scrollHeight": 6
           },
           {
             "padding": "0px",
@@ -22942,17 +25409,17 @@
             "fontWeight": "400",
             "letterSpacing": "normal",
             "color": "rgb(37, 43, 48)",
-            "backgroundColor": "rgba(0, 0, 0, 0)",
+            "backgroundColor": "rgb(154, 164, 171)",
             "borderColor": "rgb(37, 43, 48)",
             "borderWidth": "0px",
             "borderBottomWidth": "0px",
-            "borderRadius": "0px",
+            "borderRadius": "3.35544e+07px",
             "textTransform": "none",
             "gridTemplateColumns": "none",
             "tracks": 0,
-            "height": 0,
-            "width": 8,
-            "scrollHeight": 0
+            "height": 6,
+            "width": 6,
+            "scrollHeight": 6
           }
         ],
         "badges": [
@@ -22969,7 +25436,335 @@
         ],
         "providerNames": [],
         "providerChips": [],
+        "providerProtocolBadges": [],
+        "remoteGuardBox": {
+          "padding": "20px",
+          "margin": "0px",
+          "marginTop": "0px",
+          "marginBottom": "0px",
+          "gap": "normal",
+          "columnGap": "normal",
+          "display": "block",
+          "fontSize": "16px",
+          "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+          "fontWeight": "400",
+          "letterSpacing": "normal",
+          "color": "rgb(37, 43, 48)",
+          "backgroundColor": "rgb(250, 249, 245)",
+          "borderColor": "rgb(233, 236, 238)",
+          "borderWidth": "1px",
+          "borderBottomWidth": "1px",
+          "borderRadius": "8px",
+          "textTransform": "none",
+          "gridTemplateColumns": "none",
+          "tracks": 0,
+          "height": 117,
+          "width": 786,
+          "scrollHeight": 115
+        },
+        "remoteCardBox": {
+          "padding": "20px",
+          "margin": "0px",
+          "marginTop": "0px",
+          "marginBottom": "0px",
+          "gap": "normal",
+          "columnGap": "normal",
+          "display": "block",
+          "fontSize": "16px",
+          "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+          "fontWeight": "400",
+          "letterSpacing": "normal",
+          "color": "rgb(37, 43, 48)",
+          "backgroundColor": "rgb(255, 255, 255)",
+          "borderColor": "rgb(233, 236, 238)",
+          "borderWidth": "1px",
+          "borderBottomWidth": "1px",
+          "borderRadius": "8px",
+          "textTransform": "none",
+          "gridTemplateColumns": "none",
+          "tracks": 0,
+          "height": 381,
+          "width": 786,
+          "scrollHeight": 379
+        },
+        "connectionChecks": [
+          {
+            "dot": {
+              "padding": "0px",
+              "margin": "0px",
+              "marginTop": "0px",
+              "marginBottom": "0px",
+              "gap": "normal",
+              "columnGap": "normal",
+              "display": "block",
+              "fontSize": "16px",
+              "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+              "fontWeight": "400",
+              "letterSpacing": "normal",
+              "color": "rgb(37, 43, 48)",
+              "backgroundColor": "rgb(154, 164, 171)",
+              "borderColor": "rgb(37, 43, 48)",
+              "borderWidth": "0px",
+              "borderBottomWidth": "0px",
+              "borderRadius": "3.35544e+07px",
+              "textTransform": "none",
+              "gridTemplateColumns": "none",
+              "tracks": 0,
+              "height": 6,
+              "width": 6,
+              "scrollHeight": 6
+            },
+            "icons": 0,
+            "mono": {
+              "padding": "0px",
+              "margin": "0px",
+              "marginTop": "0px",
+              "marginBottom": "0px",
+              "gap": "normal",
+              "columnGap": "normal",
+              "display": "block",
+              "fontSize": "11px",
+              "fontFamily": "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+              "fontWeight": "400",
+              "letterSpacing": "normal",
+              "color": "rgb(37, 43, 48)",
+              "backgroundColor": "rgba(0, 0, 0, 0)",
+              "borderColor": "rgb(37, 43, 48)",
+              "borderWidth": "0px",
+              "borderBottomWidth": "0px",
+              "borderRadius": "0px",
+              "textTransform": "none",
+              "gridTemplateColumns": "none",
+              "tracks": 0,
+              "height": 17,
+              "width": 93,
+              "scrollHeight": 17
+            }
+          },
+          {
+            "dot": {
+              "padding": "0px",
+              "margin": "0px",
+              "marginTop": "0px",
+              "marginBottom": "0px",
+              "gap": "normal",
+              "columnGap": "normal",
+              "display": "block",
+              "fontSize": "16px",
+              "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+              "fontWeight": "400",
+              "letterSpacing": "normal",
+              "color": "rgb(37, 43, 48)",
+              "backgroundColor": "rgb(66, 90, 147)",
+              "borderColor": "rgb(37, 43, 48)",
+              "borderWidth": "0px",
+              "borderBottomWidth": "0px",
+              "borderRadius": "3.35544e+07px",
+              "textTransform": "none",
+              "gridTemplateColumns": "none",
+              "tracks": 0,
+              "height": 6,
+              "width": 6,
+              "scrollHeight": 6
+            },
+            "icons": 0,
+            "mono": {
+              "padding": "0px",
+              "margin": "0px",
+              "marginTop": "0px",
+              "marginBottom": "0px",
+              "gap": "normal",
+              "columnGap": "normal",
+              "display": "block",
+              "fontSize": "11px",
+              "fontFamily": "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+              "fontWeight": "400",
+              "letterSpacing": "normal",
+              "color": "rgb(37, 43, 48)",
+              "backgroundColor": "rgba(0, 0, 0, 0)",
+              "borderColor": "rgb(37, 43, 48)",
+              "borderWidth": "0px",
+              "borderBottomWidth": "0px",
+              "borderRadius": "0px",
+              "textTransform": "none",
+              "gridTemplateColumns": "none",
+              "tracks": 0,
+              "height": 17,
+              "width": 225,
+              "scrollHeight": 17
+            }
+          },
+          {
+            "dot": {
+              "padding": "0px",
+              "margin": "0px",
+              "marginTop": "0px",
+              "marginBottom": "0px",
+              "gap": "normal",
+              "columnGap": "normal",
+              "display": "block",
+              "fontSize": "16px",
+              "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+              "fontWeight": "400",
+              "letterSpacing": "normal",
+              "color": "rgb(37, 43, 48)",
+              "backgroundColor": "rgb(154, 164, 171)",
+              "borderColor": "rgb(37, 43, 48)",
+              "borderWidth": "0px",
+              "borderBottomWidth": "0px",
+              "borderRadius": "3.35544e+07px",
+              "textTransform": "none",
+              "gridTemplateColumns": "none",
+              "tracks": 0,
+              "height": 6,
+              "width": 6,
+              "scrollHeight": 6
+            },
+            "icons": 0,
+            "mono": {
+              "padding": "0px",
+              "margin": "0px",
+              "marginTop": "0px",
+              "marginBottom": "0px",
+              "gap": "normal",
+              "columnGap": "normal",
+              "display": "block",
+              "fontSize": "11px",
+              "fontFamily": "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+              "fontWeight": "400",
+              "letterSpacing": "normal",
+              "color": "rgb(37, 43, 48)",
+              "backgroundColor": "rgba(0, 0, 0, 0)",
+              "borderColor": "rgb(37, 43, 48)",
+              "borderWidth": "0px",
+              "borderBottomWidth": "0px",
+              "borderRadius": "0px",
+              "textTransform": "none",
+              "gridTemplateColumns": "none",
+              "tracks": 0,
+              "height": 17,
+              "width": 79,
+              "scrollHeight": 17
+            }
+          }
+        ],
+        "monoFamilies": [
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace"
+        ],
+        "dotBoxes": [
+          {
+            "padding": "0px",
+            "margin": "0px",
+            "marginTop": "0px",
+            "marginBottom": "0px",
+            "gap": "normal",
+            "columnGap": "normal",
+            "display": "block",
+            "fontSize": "16px",
+            "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+            "fontWeight": "400",
+            "letterSpacing": "normal",
+            "color": "rgb(37, 43, 48)",
+            "backgroundColor": "rgb(154, 164, 171)",
+            "borderColor": "rgb(37, 43, 48)",
+            "borderWidth": "0px",
+            "borderBottomWidth": "0px",
+            "borderRadius": "3.35544e+07px",
+            "textTransform": "none",
+            "gridTemplateColumns": "none",
+            "tracks": 0,
+            "height": 6,
+            "width": 6,
+            "scrollHeight": 6
+          },
+          {
+            "padding": "0px",
+            "margin": "0px",
+            "marginTop": "0px",
+            "marginBottom": "0px",
+            "gap": "normal",
+            "columnGap": "normal",
+            "display": "block",
+            "fontSize": "16px",
+            "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+            "fontWeight": "400",
+            "letterSpacing": "normal",
+            "color": "rgb(37, 43, 48)",
+            "backgroundColor": "rgb(66, 90, 147)",
+            "borderColor": "rgb(37, 43, 48)",
+            "borderWidth": "0px",
+            "borderBottomWidth": "0px",
+            "borderRadius": "3.35544e+07px",
+            "textTransform": "none",
+            "gridTemplateColumns": "none",
+            "tracks": 0,
+            "height": 6,
+            "width": 6,
+            "scrollHeight": 6
+          },
+          {
+            "padding": "0px",
+            "margin": "0px",
+            "marginTop": "0px",
+            "marginBottom": "0px",
+            "gap": "normal",
+            "columnGap": "normal",
+            "display": "block",
+            "fontSize": "16px",
+            "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+            "fontWeight": "400",
+            "letterSpacing": "normal",
+            "color": "rgb(37, 43, 48)",
+            "backgroundColor": "rgb(154, 164, 171)",
+            "borderColor": "rgb(37, 43, 48)",
+            "borderWidth": "0px",
+            "borderBottomWidth": "0px",
+            "borderRadius": "3.35544e+07px",
+            "textTransform": "none",
+            "gridTemplateColumns": "none",
+            "tracks": 0,
+            "height": 6,
+            "width": 6,
+            "scrollHeight": 6
+          }
+        ],
+        "commandPreview": [
+          "tailscale serve --bg 127.0.0.1:4318"
+        ],
+        "remoteFlowSteps": [],
+        "remoteFlowArrows": 0,
+        "gatewayDetails": [],
+        "declaredAbsent": {
+          "machineName": 0,
+          "entryToggle": 0
+        },
+        "deviceRowCells": [
+          [
+            31,
+            601,
+            93
+          ],
+          [
+            31,
+            624,
+            70
+          ],
+          [
+            31,
+            565,
+            129
+          ]
+        ],
+        "deviceNameLines": [
+          1,
+          1,
+          1
+        ],
         "statLabels": [],
+        "statCardLabels": [],
         "capabilityNames": [],
         "capabilityTabLabels": [],
         "capabilitySummary": [],
@@ -22994,7 +25789,7 @@
           "远程操作仍受本机约束"
         ],
         "archiveCardsText": [
-          "Tailscale 私有访问尚未建立连接，Host 未上报心跳手机需安装并接入同一私有网络PiDock Host 只监听 127.0.0.1，由 Tailscale Serve 在 tailnet 内提供 HTTPS。Host 监听只监听回环地址，不暴露 Pi RPC，也不代理任意 TCP127.0.0.1:4318入口地址仅在私有网络内可达https://pidock-host.tailnet.ts.netGateway未使用 · 离线（不重放请求）desktop-host私有网络 HTTPS · 无需中继地址；Host 只监听回环，Serve/接入由本机网络配置提供。",
+          "Tailscale 私有访问尚未建立连接，Host 未上报心跳手机需安装并接入同一私有网络PiDock Host 只监听 127.0.0.1，由 Tailscale Serve 在 tailnet 内提供 HTTPS。Host 监听只监听回环地址，不暴露 Pi RPC，也不代理任意 TCP127.0.0.1:4318重新检测入口地址仅在私有网络内可达https://pidock-host.tailnet.ts.netGateway未使用 · 离线（不重放请求）desktop-hosttailscale serve --bg 127.0.0.1:4318私有网络 HTTPS · 无需中继地址；Host 只监听回环，Serve/接入由本机网络配置提供。",
           "移动端允许的操作设备级授权 · 由 Host 裁决查看项目、任务和运行状态只读 · 默认开启查看会话并对话消息进入原会话；待确认展示同一真实内容 · 默认开启暂停、归档与启停服务每次敏感操作再次确认 · 默认关闭 · 每次操作再次确认查看文件和差异默认关闭 · 默认关闭 · 每次操作再次确认远程终端高风险 · 默认关闭 · 默认关闭 · 每次操作再次确认会话权限、任务写锁、共享模板确认和浏览器接管规则不因远程访问放宽；远程会话权限只会更窄。勾选反映配对时的默认值，真正的授予在每台设备确认时发生。",
           "已授权设备配对设备生成短时、单次使用的配对链接；扫码后仍需本机确认。1 / 3 有效。iPhone 16 Pro有效权限 查看项目、任务和运行状态 / 查看会话并对话 · 设备凭据第 1 代 · 最近在线 2026-09-22 08:12轮换凭据撤销设备旧 iPad已撤销权限 无（已撤销） · 设备凭据第 1 代 · 最近在线 2026-08-30 09:00撤销设备Pixel 9等待本机确认权限 查看项目、任务和运行状态 / 查看会话并对话 / 远程终端 · 尚未签发设备凭据 · 从未在线请求权限后等待本机确认；确认前不能查看或操作任何任务。确认并收窄权限拒绝撤销设备",
           "远程操作仍受本机约束会话权限、任务执行权、共享模板确认和浏览器接管规则不因远程访问放宽。配对码不含长期凭据；过期、使用或手动刷新后立即失效。"
@@ -23055,6 +25850,15 @@
           0,
           0
         ],
+        "pageButtonIconMap": {
+          "新建定时任务": 1,
+          "查看任务": 0,
+          "立即运行": 1,
+          "暂停": 1,
+          "启用": 1,
+          "打开会话": 0,
+          "使用模板": 0
+        },
         "measured": {
           "page": {
             "padding": "25px",
@@ -23732,7 +26536,24 @@
         "notes": [],
         "providerNames": [],
         "providerChips": [],
+        "providerProtocolBadges": [],
+        "remoteGuardBox": null,
+        "remoteCardBox": null,
+        "connectionChecks": [],
+        "monoFamilies": [],
+        "dotBoxes": [],
+        "commandPreview": [],
+        "remoteFlowSteps": [],
+        "remoteFlowArrows": 0,
+        "gatewayDetails": [],
+        "declaredAbsent": {
+          "machineName": 0,
+          "entryToggle": 0
+        },
+        "deviceRowCells": [],
+        "deviceNameLines": [],
         "statLabels": [],
+        "statCardLabels": [],
         "capabilityNames": [],
         "capabilityTabLabels": [],
         "capabilitySummary": [],
@@ -23777,6 +26598,10 @@
           0,
           0
         ],
+        "pageButtonIconMap": {
+          "恢复任务": 0,
+          "预览清理清单": 0
+        },
         "measured": {
           "page": {
             "padding": "25px",
@@ -24045,7 +26870,24 @@
         "notes": [],
         "providerNames": [],
         "providerChips": [],
+        "providerProtocolBadges": [],
+        "remoteGuardBox": null,
+        "remoteCardBox": null,
+        "connectionChecks": [],
+        "monoFamilies": [],
+        "dotBoxes": [],
+        "commandPreview": [],
+        "remoteFlowSteps": [],
+        "remoteFlowArrows": 0,
+        "gatewayDetails": [],
+        "declaredAbsent": {
+          "machineName": 0,
+          "entryToggle": 0
+        },
+        "deviceRowCells": [],
+        "deviceNameLines": [],
         "statLabels": [],
+        "statCardLabels": [],
         "capabilityNames": [],
         "capabilityTabLabels": [],
         "capabilitySummary": [],
@@ -24103,6 +26945,13 @@
           1,
           0
         ],
+        "pageButtonIconMap": {
+          "添加 Provider": 1,
+          "编辑": 1,
+          "同步模型列表": 1,
+          "停用": 1,
+          "删除": 0
+        },
         "measured": {
           "page": {
             "padding": "20px",
@@ -24345,7 +27194,7 @@
             "columnGap": "normal",
             "display": "block",
             "fontSize": "11px",
-            "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+            "fontFamily": "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
             "fontWeight": "400",
             "letterSpacing": "normal",
             "color": "rgb(148, 151, 156)",
@@ -24515,7 +27364,7 @@
           "columnGap": "normal",
           "display": "block",
           "fontSize": "11px",
-          "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+          "fontFamily": "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
           "fontWeight": "400",
           "letterSpacing": "normal",
           "color": "rgb(148, 151, 156)",
@@ -24534,14 +27383,14 @@
         "dots": [],
         "badges": [
           "已启用",
-          "anthropic-messages",
+          "Anthropic Messages",
           "Claude Sonnet · 200k · 图片",
           "Claude Haiku · 200k",
           "已启用",
-          "openai-responses",
+          "OpenAI Responses",
           "团队轻量模型 · 16k · 图片",
           "已启用",
-          "openai-chat-completions",
+          "OpenAI Chat Completions",
           "本地 Qwen · 32k"
         ],
         "empties": [],
@@ -24557,7 +27406,32 @@
           "团队轻量模型 · 16k · 图片",
           "本地 Qwen · 32k"
         ],
+        "providerProtocolBadges": [
+          "Anthropic Messages",
+          "OpenAI Responses",
+          "OpenAI Chat Completions"
+        ],
+        "remoteGuardBox": null,
+        "remoteCardBox": null,
+        "connectionChecks": [],
+        "monoFamilies": [
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace"
+        ],
+        "dotBoxes": [],
+        "commandPreview": [],
+        "remoteFlowSteps": [],
+        "remoteFlowArrows": 0,
+        "gatewayDetails": [],
+        "declaredAbsent": {
+          "machineName": 0,
+          "entryToggle": 0
+        },
+        "deviceRowCells": [],
+        "deviceNameLines": [],
         "statLabels": [],
+        "statCardLabels": [],
         "capabilityNames": [],
         "capabilityTabLabels": [],
         "capabilitySummary": [],
@@ -24582,7 +27456,7 @@
         "noHorizontalOverflow": true,
         "viewLabel": "USAGE",
         "title": "Token 用量",
-        "intro": "按实际调用累计，压缩上下文不会减少消耗。统计范围为本应用记录，不等同账户账单或供应商配额；未观测到的外部调用不伪造。本页数据为样例数据。",
+        "intro": "按实际调用累计，压缩上下文不会减少消耗。统计范围为本应用记录，不等同账户账单或供应商配额；未观测到的外部调用不伪造。本页数据为样例数据。以上为全部统计。",
         "pageButtons": [
           "清理该会话用量",
           "清理该日期之前",
@@ -24595,6 +27469,12 @@
           0,
           0
         ],
+        "pageButtonIconMap": {
+          "清理该会话用量": 0,
+          "清理该日期之前": 0,
+          "清理全部用量": 0,
+          "重新加载": 0
+        },
         "measured": {
           "page": {
             "padding": "20px",
@@ -25051,7 +27931,7 @@
             "gridTemplateColumns": "none",
             "tracks": 0,
             "height": 38,
-            "width": 172,
+            "width": 170,
             "scrollHeight": 37
           },
           "td": {
@@ -25076,7 +27956,7 @@
             "gridTemplateColumns": "none",
             "tracks": 0,
             "height": 46,
-            "width": 172,
+            "width": 170,
             "scrollHeight": 45
           },
           "capSummary": null,
@@ -25215,7 +28095,7 @@
           "gridTemplateColumns": "none",
           "tracks": 0,
           "height": 38,
-          "width": 172,
+          "width": 170,
           "scrollHeight": 37
         },
         "historyHeadBox": null,
@@ -25230,7 +28110,7 @@
           "columnGap": "normal",
           "display": "table-cell",
           "fontSize": "11px",
-          "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+          "fontFamily": "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
           "fontWeight": "400",
           "letterSpacing": "normal",
           "color": "rgb(37, 43, 48)",
@@ -25262,11 +28142,46 @@
         ],
         "providerNames": [],
         "providerChips": [],
+        "providerProtocolBadges": [],
+        "remoteGuardBox": null,
+        "remoteCardBox": null,
+        "connectionChecks": [],
+        "monoFamilies": [
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace"
+        ],
+        "dotBoxes": [],
+        "commandPreview": [],
+        "remoteFlowSteps": [],
+        "remoteFlowArrows": 0,
+        "gatewayDetails": [],
+        "declaredAbsent": {
+          "machineName": 0,
+          "entryToggle": 0
+        },
+        "deviceRowCells": [],
+        "deviceNameLines": [],
         "statLabels": [
           "2.28M",
           "5,200 Tokens",
           "240",
           "32 次"
+        ],
+        "statCardLabels": [
+          "累计 Token",
+          "最近一次调用",
+          "已记录调用",
+          "未完整报告"
         ],
         "capabilityNames": [],
         "capabilityTabLabels": [],
@@ -25338,6 +28253,16 @@
           0,
           1
         ],
+        "pageButtonIconMap": {
+          "重新检查来源": 1,
+          "添加技能来源": 1,
+          "详情": 0,
+          "启用": 1,
+          "安装 2.4.1": 1,
+          "停用": 1,
+          "更新到 1.9.0": 1,
+          "重试连接": 1
+        },
         "measured": {
           "page": {
             "padding": "20px",
@@ -25877,7 +28802,24 @@
         ],
         "providerNames": [],
         "providerChips": [],
+        "providerProtocolBadges": [],
+        "remoteGuardBox": null,
+        "remoteCardBox": null,
+        "connectionChecks": [],
+        "monoFamilies": [],
+        "dotBoxes": [],
+        "commandPreview": [],
+        "remoteFlowSteps": [],
+        "remoteFlowArrows": 0,
+        "gatewayDetails": [],
+        "declaredAbsent": {
+          "machineName": 0,
+          "entryToggle": 0
+        },
+        "deviceRowCells": [],
+        "deviceNameLines": [],
         "statLabels": [],
+        "statCardLabels": [],
         "capabilityNames": [
           "@pi/pack-protoc",
           "@pi/tools-git",
@@ -25919,6 +28861,7 @@
         "intro": "选择私有网络、自建 Gateway 或实验性公网入口；三种模式共享同一套设备授权和 PiDock 领域权限。",
         "pageButtons": [
           "手机视图",
+          "重新检测",
           "配对设备",
           "轮换凭据",
           "撤销设备",
@@ -25929,6 +28872,7 @@
         ],
         "pageButtonIcons": [
           1,
+          0,
           1,
           1,
           0,
@@ -25937,6 +28881,15 @@
           0,
           0
         ],
+        "pageButtonIconMap": {
+          "手机视图": 1,
+          "重新检测": 0,
+          "配对设备": 1,
+          "轮换凭据": 1,
+          "撤销设备": 0,
+          "确认并收窄权限": 1,
+          "拒绝": 0
+        },
         "measured": {
           "page": {
             "padding": "20px",
@@ -25961,7 +28914,7 @@
             "tracks": 0,
             "height": 694,
             "width": 656,
-            "scrollHeight": 1821
+            "scrollHeight": 1888
           },
           "viewLabel": {
             "padding": "0px",
@@ -26108,13 +29061,13 @@
             "borderColor": "rgb(233, 236, 238)",
             "borderWidth": "1px",
             "borderBottomWidth": "1px",
-            "borderRadius": "10px",
+            "borderRadius": "8px",
             "textTransform": "none",
             "gridTemplateColumns": "none",
             "tracks": 0,
-            "height": 340,
+            "height": 381,
             "width": 616,
-            "scrollHeight": 338
+            "scrollHeight": 379
           },
           "grid2": null,
           "grid3": null,
@@ -26339,9 +29292,9 @@
             "textTransform": "none",
             "gridTemplateColumns": "616px",
             "tracks": 1,
-            "height": 1380,
+            "height": 1447,
             "width": 616,
-            "scrollHeight": 1380
+            "scrollHeight": 1447
           },
           "orb": {
             "padding": "0px",
@@ -26412,7 +29365,7 @@
             "borderBottomWidth": "1px",
             "borderRadius": "0px",
             "textTransform": "none",
-            "gridTemplateColumns": "8px 427.281px 92.7188px",
+            "gridTemplateColumns": "8px 349.281px 170.719px",
             "tracks": 3,
             "height": 51,
             "width": 572,
@@ -26514,9 +29467,9 @@
             "textTransform": "none",
             "gridTemplateColumns": "none",
             "tracks": 0,
-            "height": 239,
+            "height": 265,
             "width": 574,
-            "scrollHeight": 239
+            "scrollHeight": 265
           },
           "deviceRow": {
             "padding": "12px 0px",
@@ -26537,11 +29490,11 @@
             "borderBottomWidth": "1px",
             "borderRadius": "0px",
             "textTransform": "none",
-            "gridTemplateColumns": "32px 353px 171px",
+            "gridTemplateColumns": "32px 431px 93px",
             "tracks": 3,
-            "height": 73,
+            "height": 86,
             "width": 574,
-            "scrollHeight": 72
+            "scrollHeight": 85
           },
           "deviceSymbol": {
             "padding": "0px",
@@ -26581,11 +29534,11 @@
             "fontWeight": "400",
             "letterSpacing": "normal",
             "color": "rgb(37, 43, 48)",
-            "backgroundColor": "rgb(255, 255, 255)",
+            "backgroundColor": "rgb(250, 249, 245)",
             "borderColor": "rgb(233, 236, 238)",
             "borderWidth": "1px",
             "borderBottomWidth": "1px",
-            "borderRadius": "10px",
+            "borderRadius": "8px",
             "textTransform": "none",
             "gridTemplateColumns": "none",
             "tracks": 0,
@@ -26715,17 +29668,17 @@
             "fontWeight": "400",
             "letterSpacing": "normal",
             "color": "rgb(37, 43, 48)",
-            "backgroundColor": "rgba(0, 0, 0, 0)",
+            "backgroundColor": "rgb(154, 164, 171)",
             "borderColor": "rgb(37, 43, 48)",
             "borderWidth": "0px",
             "borderBottomWidth": "0px",
-            "borderRadius": "0px",
+            "borderRadius": "3.35544e+07px",
             "textTransform": "none",
             "gridTemplateColumns": "none",
             "tracks": 0,
-            "height": 0,
-            "width": 8,
-            "scrollHeight": 0
+            "height": 6,
+            "width": 6,
+            "scrollHeight": 6
           },
           {
             "padding": "0px",
@@ -26740,17 +29693,17 @@
             "fontWeight": "400",
             "letterSpacing": "normal",
             "color": "rgb(37, 43, 48)",
-            "backgroundColor": "rgba(0, 0, 0, 0)",
+            "backgroundColor": "rgb(66, 90, 147)",
             "borderColor": "rgb(37, 43, 48)",
             "borderWidth": "0px",
             "borderBottomWidth": "0px",
-            "borderRadius": "0px",
+            "borderRadius": "3.35544e+07px",
             "textTransform": "none",
             "gridTemplateColumns": "none",
             "tracks": 0,
-            "height": 0,
-            "width": 8,
-            "scrollHeight": 0
+            "height": 6,
+            "width": 6,
+            "scrollHeight": 6
           },
           {
             "padding": "0px",
@@ -26765,17 +29718,17 @@
             "fontWeight": "400",
             "letterSpacing": "normal",
             "color": "rgb(37, 43, 48)",
-            "backgroundColor": "rgba(0, 0, 0, 0)",
+            "backgroundColor": "rgb(154, 164, 171)",
             "borderColor": "rgb(37, 43, 48)",
             "borderWidth": "0px",
             "borderBottomWidth": "0px",
-            "borderRadius": "0px",
+            "borderRadius": "3.35544e+07px",
             "textTransform": "none",
             "gridTemplateColumns": "none",
             "tracks": 0,
-            "height": 0,
-            "width": 8,
-            "scrollHeight": 0
+            "height": 6,
+            "width": 6,
+            "scrollHeight": 6
           }
         ],
         "badges": [
@@ -26792,7 +29745,335 @@
         ],
         "providerNames": [],
         "providerChips": [],
+        "providerProtocolBadges": [],
+        "remoteGuardBox": {
+          "padding": "20px",
+          "margin": "0px",
+          "marginTop": "0px",
+          "marginBottom": "0px",
+          "gap": "normal",
+          "columnGap": "normal",
+          "display": "block",
+          "fontSize": "16px",
+          "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+          "fontWeight": "400",
+          "letterSpacing": "normal",
+          "color": "rgb(37, 43, 48)",
+          "backgroundColor": "rgb(250, 249, 245)",
+          "borderColor": "rgb(233, 236, 238)",
+          "borderWidth": "1px",
+          "borderBottomWidth": "1px",
+          "borderRadius": "8px",
+          "textTransform": "none",
+          "gridTemplateColumns": "none",
+          "tracks": 0,
+          "height": 117,
+          "width": 616,
+          "scrollHeight": 115
+        },
+        "remoteCardBox": {
+          "padding": "20px",
+          "margin": "0px",
+          "marginTop": "0px",
+          "marginBottom": "0px",
+          "gap": "normal",
+          "columnGap": "normal",
+          "display": "block",
+          "fontSize": "16px",
+          "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+          "fontWeight": "400",
+          "letterSpacing": "normal",
+          "color": "rgb(37, 43, 48)",
+          "backgroundColor": "rgb(255, 255, 255)",
+          "borderColor": "rgb(233, 236, 238)",
+          "borderWidth": "1px",
+          "borderBottomWidth": "1px",
+          "borderRadius": "8px",
+          "textTransform": "none",
+          "gridTemplateColumns": "none",
+          "tracks": 0,
+          "height": 381,
+          "width": 616,
+          "scrollHeight": 379
+        },
+        "connectionChecks": [
+          {
+            "dot": {
+              "padding": "0px",
+              "margin": "0px",
+              "marginTop": "0px",
+              "marginBottom": "0px",
+              "gap": "normal",
+              "columnGap": "normal",
+              "display": "block",
+              "fontSize": "16px",
+              "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+              "fontWeight": "400",
+              "letterSpacing": "normal",
+              "color": "rgb(37, 43, 48)",
+              "backgroundColor": "rgb(154, 164, 171)",
+              "borderColor": "rgb(37, 43, 48)",
+              "borderWidth": "0px",
+              "borderBottomWidth": "0px",
+              "borderRadius": "3.35544e+07px",
+              "textTransform": "none",
+              "gridTemplateColumns": "none",
+              "tracks": 0,
+              "height": 6,
+              "width": 6,
+              "scrollHeight": 6
+            },
+            "icons": 0,
+            "mono": {
+              "padding": "0px",
+              "margin": "0px",
+              "marginTop": "0px",
+              "marginBottom": "0px",
+              "gap": "normal",
+              "columnGap": "normal",
+              "display": "block",
+              "fontSize": "11px",
+              "fontFamily": "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+              "fontWeight": "400",
+              "letterSpacing": "normal",
+              "color": "rgb(37, 43, 48)",
+              "backgroundColor": "rgba(0, 0, 0, 0)",
+              "borderColor": "rgb(37, 43, 48)",
+              "borderWidth": "0px",
+              "borderBottomWidth": "0px",
+              "borderRadius": "0px",
+              "textTransform": "none",
+              "gridTemplateColumns": "none",
+              "tracks": 0,
+              "height": 17,
+              "width": 93,
+              "scrollHeight": 17
+            }
+          },
+          {
+            "dot": {
+              "padding": "0px",
+              "margin": "0px",
+              "marginTop": "0px",
+              "marginBottom": "0px",
+              "gap": "normal",
+              "columnGap": "normal",
+              "display": "block",
+              "fontSize": "16px",
+              "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+              "fontWeight": "400",
+              "letterSpacing": "normal",
+              "color": "rgb(37, 43, 48)",
+              "backgroundColor": "rgb(66, 90, 147)",
+              "borderColor": "rgb(37, 43, 48)",
+              "borderWidth": "0px",
+              "borderBottomWidth": "0px",
+              "borderRadius": "3.35544e+07px",
+              "textTransform": "none",
+              "gridTemplateColumns": "none",
+              "tracks": 0,
+              "height": 6,
+              "width": 6,
+              "scrollHeight": 6
+            },
+            "icons": 0,
+            "mono": {
+              "padding": "0px",
+              "margin": "0px",
+              "marginTop": "0px",
+              "marginBottom": "0px",
+              "gap": "normal",
+              "columnGap": "normal",
+              "display": "block",
+              "fontSize": "11px",
+              "fontFamily": "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+              "fontWeight": "400",
+              "letterSpacing": "normal",
+              "color": "rgb(37, 43, 48)",
+              "backgroundColor": "rgba(0, 0, 0, 0)",
+              "borderColor": "rgb(37, 43, 48)",
+              "borderWidth": "0px",
+              "borderBottomWidth": "0px",
+              "borderRadius": "0px",
+              "textTransform": "none",
+              "gridTemplateColumns": "none",
+              "tracks": 0,
+              "height": 17,
+              "width": 225,
+              "scrollHeight": 17
+            }
+          },
+          {
+            "dot": {
+              "padding": "0px",
+              "margin": "0px",
+              "marginTop": "0px",
+              "marginBottom": "0px",
+              "gap": "normal",
+              "columnGap": "normal",
+              "display": "block",
+              "fontSize": "16px",
+              "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+              "fontWeight": "400",
+              "letterSpacing": "normal",
+              "color": "rgb(37, 43, 48)",
+              "backgroundColor": "rgb(154, 164, 171)",
+              "borderColor": "rgb(37, 43, 48)",
+              "borderWidth": "0px",
+              "borderBottomWidth": "0px",
+              "borderRadius": "3.35544e+07px",
+              "textTransform": "none",
+              "gridTemplateColumns": "none",
+              "tracks": 0,
+              "height": 6,
+              "width": 6,
+              "scrollHeight": 6
+            },
+            "icons": 0,
+            "mono": {
+              "padding": "0px",
+              "margin": "0px",
+              "marginTop": "0px",
+              "marginBottom": "0px",
+              "gap": "normal",
+              "columnGap": "normal",
+              "display": "block",
+              "fontSize": "11px",
+              "fontFamily": "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+              "fontWeight": "400",
+              "letterSpacing": "normal",
+              "color": "rgb(37, 43, 48)",
+              "backgroundColor": "rgba(0, 0, 0, 0)",
+              "borderColor": "rgb(37, 43, 48)",
+              "borderWidth": "0px",
+              "borderBottomWidth": "0px",
+              "borderRadius": "0px",
+              "textTransform": "none",
+              "gridTemplateColumns": "none",
+              "tracks": 0,
+              "height": 17,
+              "width": 79,
+              "scrollHeight": 17
+            }
+          }
+        ],
+        "monoFamilies": [
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace"
+        ],
+        "dotBoxes": [
+          {
+            "padding": "0px",
+            "margin": "0px",
+            "marginTop": "0px",
+            "marginBottom": "0px",
+            "gap": "normal",
+            "columnGap": "normal",
+            "display": "block",
+            "fontSize": "16px",
+            "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+            "fontWeight": "400",
+            "letterSpacing": "normal",
+            "color": "rgb(37, 43, 48)",
+            "backgroundColor": "rgb(154, 164, 171)",
+            "borderColor": "rgb(37, 43, 48)",
+            "borderWidth": "0px",
+            "borderBottomWidth": "0px",
+            "borderRadius": "3.35544e+07px",
+            "textTransform": "none",
+            "gridTemplateColumns": "none",
+            "tracks": 0,
+            "height": 6,
+            "width": 6,
+            "scrollHeight": 6
+          },
+          {
+            "padding": "0px",
+            "margin": "0px",
+            "marginTop": "0px",
+            "marginBottom": "0px",
+            "gap": "normal",
+            "columnGap": "normal",
+            "display": "block",
+            "fontSize": "16px",
+            "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+            "fontWeight": "400",
+            "letterSpacing": "normal",
+            "color": "rgb(37, 43, 48)",
+            "backgroundColor": "rgb(66, 90, 147)",
+            "borderColor": "rgb(37, 43, 48)",
+            "borderWidth": "0px",
+            "borderBottomWidth": "0px",
+            "borderRadius": "3.35544e+07px",
+            "textTransform": "none",
+            "gridTemplateColumns": "none",
+            "tracks": 0,
+            "height": 6,
+            "width": 6,
+            "scrollHeight": 6
+          },
+          {
+            "padding": "0px",
+            "margin": "0px",
+            "marginTop": "0px",
+            "marginBottom": "0px",
+            "gap": "normal",
+            "columnGap": "normal",
+            "display": "block",
+            "fontSize": "16px",
+            "fontFamily": "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+            "fontWeight": "400",
+            "letterSpacing": "normal",
+            "color": "rgb(37, 43, 48)",
+            "backgroundColor": "rgb(154, 164, 171)",
+            "borderColor": "rgb(37, 43, 48)",
+            "borderWidth": "0px",
+            "borderBottomWidth": "0px",
+            "borderRadius": "3.35544e+07px",
+            "textTransform": "none",
+            "gridTemplateColumns": "none",
+            "tracks": 0,
+            "height": 6,
+            "width": 6,
+            "scrollHeight": 6
+          }
+        ],
+        "commandPreview": [
+          "tailscale serve --bg 127.0.0.1:4318"
+        ],
+        "remoteFlowSteps": [],
+        "remoteFlowArrows": 0,
+        "gatewayDetails": [],
+        "declaredAbsent": {
+          "machineName": 0,
+          "entryToggle": 0
+        },
+        "deviceRowCells": [
+          [
+            31,
+            431,
+            93
+          ],
+          [
+            31,
+            454,
+            70
+          ],
+          [
+            31,
+            395,
+            129
+          ]
+        ],
+        "deviceNameLines": [
+          1,
+          1,
+          1
+        ],
         "statLabels": [],
+        "statCardLabels": [],
         "capabilityNames": [],
         "capabilityTabLabels": [],
         "capabilitySummary": [],
@@ -26817,7 +30098,7 @@
           "远程操作仍受本机约束"
         ],
         "archiveCardsText": [
-          "Tailscale 私有访问尚未建立连接，Host 未上报心跳手机需安装并接入同一私有网络PiDock Host 只监听 127.0.0.1，由 Tailscale Serve 在 tailnet 内提供 HTTPS。Host 监听只监听回环地址，不暴露 Pi RPC，也不代理任意 TCP127.0.0.1:4318入口地址仅在私有网络内可达https://pidock-host.tailnet.ts.netGateway未使用 · 离线（不重放请求）desktop-host私有网络 HTTPS · 无需中继地址；Host 只监听回环，Serve/接入由本机网络配置提供。",
+          "Tailscale 私有访问尚未建立连接，Host 未上报心跳手机需安装并接入同一私有网络PiDock Host 只监听 127.0.0.1，由 Tailscale Serve 在 tailnet 内提供 HTTPS。Host 监听只监听回环地址，不暴露 Pi RPC，也不代理任意 TCP127.0.0.1:4318重新检测入口地址仅在私有网络内可达https://pidock-host.tailnet.ts.netGateway未使用 · 离线（不重放请求）desktop-hosttailscale serve --bg 127.0.0.1:4318私有网络 HTTPS · 无需中继地址；Host 只监听回环，Serve/接入由本机网络配置提供。",
           "移动端允许的操作设备级授权 · 由 Host 裁决查看项目、任务和运行状态只读 · 默认开启查看会话并对话消息进入原会话；待确认展示同一真实内容 · 默认开启暂停、归档与启停服务每次敏感操作再次确认 · 默认关闭 · 每次操作再次确认查看文件和差异默认关闭 · 默认关闭 · 每次操作再次确认远程终端高风险 · 默认关闭 · 默认关闭 · 每次操作再次确认会话权限、任务写锁、共享模板确认和浏览器接管规则不因远程访问放宽；远程会话权限只会更窄。勾选反映配对时的默认值，真正的授予在每台设备确认时发生。",
           "已授权设备配对设备生成短时、单次使用的配对链接；扫码后仍需本机确认。1 / 3 有效。iPhone 16 Pro有效权限 查看项目、任务和运行状态 / 查看会话并对话 · 设备凭据第 1 代 · 最近在线 2026-09-22 08:12轮换凭据撤销设备旧 iPad已撤销权限 无（已撤销） · 设备凭据第 1 代 · 最近在线 2026-08-30 09:00撤销设备Pixel 9等待本机确认权限 查看项目、任务和运行状态 / 查看会话并对话 / 远程终端 · 尚未签发设备凭据 · 从未在线请求权限后等待本机确认；确认前不能查看或操作任何任务。确认并收窄权限拒绝撤销设备",
           "远程操作仍受本机约束会话权限、任务执行权、共享模板确认和浏览器接管规则不因远程访问放宽。配对码不含长期凭据；过期、使用或手动刷新后立即失效。"
@@ -26878,6 +30159,15 @@
           0,
           0
         ],
+        "pageButtonIconMap": {
+          "新建定时任务": 1,
+          "查看任务": 0,
+          "立即运行": 1,
+          "暂停": 1,
+          "启用": 1,
+          "打开会话": 0,
+          "使用模板": 0
+        },
         "measured": {
           "page": {
             "padding": "20px",
@@ -27555,7 +30845,24 @@
         "notes": [],
         "providerNames": [],
         "providerChips": [],
+        "providerProtocolBadges": [],
+        "remoteGuardBox": null,
+        "remoteCardBox": null,
+        "connectionChecks": [],
+        "monoFamilies": [],
+        "dotBoxes": [],
+        "commandPreview": [],
+        "remoteFlowSteps": [],
+        "remoteFlowArrows": 0,
+        "gatewayDetails": [],
+        "declaredAbsent": {
+          "machineName": 0,
+          "entryToggle": 0
+        },
+        "deviceRowCells": [],
+        "deviceNameLines": [],
         "statLabels": [],
+        "statCardLabels": [],
         "capabilityNames": [],
         "capabilityTabLabels": [],
         "capabilitySummary": [],
@@ -27600,6 +30907,10 @@
           0,
           0
         ],
+        "pageButtonIconMap": {
+          "恢复任务": 0,
+          "预览清理清单": 0
+        },
         "measured": {
           "page": {
             "padding": "20px",
@@ -27868,7 +31179,24 @@
         "notes": [],
         "providerNames": [],
         "providerChips": [],
+        "providerProtocolBadges": [],
+        "remoteGuardBox": null,
+        "remoteCardBox": null,
+        "connectionChecks": [],
+        "monoFamilies": [],
+        "dotBoxes": [],
+        "commandPreview": [],
+        "remoteFlowSteps": [],
+        "remoteFlowArrows": 0,
+        "gatewayDetails": [],
+        "declaredAbsent": {
+          "machineName": 0,
+          "entryToggle": 0
+        },
+        "deviceRowCells": [],
+        "deviceNameLines": [],
         "statLabels": [],
+        "statCardLabels": [],
         "capabilityNames": [],
         "capabilityTabLabels": [],
         "capabilitySummary": [],
@@ -27938,6 +31266,7 @@
         ],
         "remote": [
           1,
+          0,
           1,
           1,
           0,
@@ -28045,7 +31374,9 @@
     }
   },
   "assertions": {
-    "checked": 147,
-    "violations": []
+    "checked": 181,
+    "violations": [
+      "intro deviation @usage is the declared rewrite: 按实际调用累计，压缩上下文不会减少消耗。统计范围为本应用记录，不等同账户账单或供应商配额；未观测到的外部调用不伪造。本页数据为样例数据。以上为全部统计。"
+    ]
   }
 }

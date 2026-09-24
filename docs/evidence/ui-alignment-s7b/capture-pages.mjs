@@ -229,6 +229,13 @@ const COLLECT = (selectors) => {
     // [UI 对齐 08] #32 D4: the prototype's management buttons carry a glyph; the
     // renderer had none. Recorded as an array so the difference is visible.
     pageButtonIcons: buttonIcons,
+    // [UI 对齐 09] #33 review P2-6: the count vector above depends on how many
+    // rows the VirtualList happens to render, so a `>=` over it could not catch
+    // a button that lost or gained a glyph. Keyed by the button's own label,
+    // which does not depend on the window.
+    pageButtonIconMap: Object.fromEntries(
+      [...root.querySelectorAll(".btn")].map((button) => [button.textContent.trim(), button.querySelectorAll("svg").length]),
+    ),
     measured: { ...window.__measure(selectors, root), page: window.__styleOf(pageBox) },
     counts: window.__count(selectors, root),
     // The renderer's run history keeps the VirtualList (40+ windowed rows), so
@@ -248,7 +255,50 @@ const COLLECT = (selectors) => {
     notes: window.__texts(".note", root),
     providerNames: window.__texts(".provider-card h3", root),
     providerChips: window.__texts(".provider-model-chips .badge", root),
+    // [UI 对齐 09] #33 review P2-7: the prototype prints the protocol's display
+    // name, not the wire id the Host stores.
+    providerProtocolBadges: window.__texts('[data-testid^="provider-protocol-"]', root),
+    // [UI 对齐 09] #33 review P2-2/P2-3: the guard card's own background and the
+    // remote layout's card radius had no assertion, and the `.dot`/`.mono`
+    // marker classes were declared with no rule behind them — the helper did not
+    // even collect a font family, so nothing could catch it.
+    remoteGuardBox: window.__styleOf(root.querySelector(".remote-guard")),
+    remoteCardBox: window.__styleOf(root.querySelector(".remote-layout .card")),
+    connectionChecks: [...root.querySelectorAll(".connection-checks > div")].map((row) => ({
+      dot: window.__styleOf(row.querySelector(".dot")),
+      icons: row.querySelectorAll("svg").length,
+      mono: window.__styleOf(row.querySelector("code.mono, small.mono")),
+    })),
+    // Every element carrying the bare `mono` marker, on both sides.
+    monoFamilies: [...root.querySelectorAll(".mono")].map((node) => getComputedStyle(node).fontFamily),
+    dotBoxes: [...root.querySelectorAll(".dot")].map((node) => window.__styleOf(node)),
+    // [UI 对齐 09] #33 review P2-4: the blocks the prototype's connection card
+    // has and this page lacked.
+    commandPreview: [...root.querySelectorAll(".command-preview code")].map((node) => node.textContent.trim()),
+    remoteFlowSteps: window.__texts(".remote-flow span", root),
+    remoteFlowArrows: root.querySelectorAll(".remote-flow svg").length,
+    gatewayDetails: window.__texts(".gateway-details > *", root),
+    // Declared absences: the Host owns no machine-name field and no entry
+    // connect/disconnect op, so these stay unrendered on purpose.
+    declaredAbsent: {
+      machineName: root.querySelectorAll('input[aria-label="这台电脑的名称"]').length,
+      entryToggle: [...root.querySelectorAll(".btn")].filter((button) => /^(启用此入口|断开连接)$/.test(button.textContent.trim())).length,
+    },
+    // [UI 对齐 09] #33 review P2-5: the device row's middle column must keep a
+    // floor; its name must stay on one line.
+    deviceRowCells: [...root.querySelectorAll(".device-row")].map((row) => [...row.children].map((cell) => Math.round(cell.getBoundingClientRect().width))),
+    deviceNameLines: [...root.querySelectorAll(".device-row")].map((row) => {
+      const name = row.querySelector("strong");
+      if (!name) return null;
+      const lineHeight = Number.parseFloat(getComputedStyle(name).lineHeight) || 16;
+      return Math.round(name.getBoundingClientRect().height / lineHeight);
+    }),
     statLabels: window.__texts(".stat", root),
+    // The `.stat` text is the value; its label is the card's leading `<small>`
+    // on both sides ([UI 对齐 09] #33 review P2-1).
+    statCardLabels: [...root.querySelectorAll(".stat")].map(
+      (stat) => stat.closest(".card")?.querySelector("small")?.textContent?.trim() ?? null,
+    ),
     capabilityNames: window.__texts(".capability-main strong", root),
     capabilityTabLabels: window.__texts(".capability-tabs button", root),
     capabilitySummary: window.__texts(".capability-summary > div", root),
@@ -421,6 +471,15 @@ const rendererPage = async (route, viewport, testId) => {
   report.prototypeA.remote.funnelTab = await page.evaluate(() => ({
     selected: [...document.querySelectorAll(".remote-mode-picker button")].findIndex((button) => button.classList.contains("selected")),
     warnNotices: document.querySelectorAll(".remote-mode-note.warn").length,
+    commandPreview: [...document.querySelectorAll(".command-preview code")].map((node) => node.textContent.trim()),
+  }));
+  await page.click('[data-action="remote-mode:gateway"]');
+  await page.waitForTimeout(120);
+  report.prototypeA.remote.gatewayTab = await page.evaluate(() => ({
+    commandPreview: [...document.querySelectorAll(".command-preview code")].map((node) => node.textContent.trim()),
+    remoteFlowSteps: [...document.querySelectorAll(".remote-flow span")].map((node) => node.textContent.trim()),
+    remoteFlowArrows: document.querySelectorAll(".remote-flow svg").length,
+    gatewayDetails: [...document.querySelectorAll(".gateway-details > *")].map((node) => node.textContent.trim()),
   }));
   await page.close();
 }
@@ -428,11 +487,24 @@ const rendererPage = async (route, viewport, testId) => {
   const page = await rendererPage("/remote", { width: 1440, height: 900 }, "remote-page");
   bucket("1440x900").remote = await page.evaluate(COLLECT, SELECTORS);
   await page.screenshot({ path: `${OUT}/renderer/1440x900-remote.png`, fullPage: true });
+  // [UI 对齐 09] #33 review P2-4: the prototype renders a different block set per
+  // mode — tailscale/funnel print the local command, gateway draws the request
+  // path and its details. Captured per mode so the assertion is not just "the
+  // tailscale screenshot looks right".
+  await page.click('[data-testid="remote-page"] .remote-mode-picker button:nth-child(2)');
+  await page.waitForTimeout(250);
+  bucket("1440x900").remote.gatewayTab = await page.$eval('[data-testid="remote-page"]', (root) => ({
+    commandPreview: [...root.querySelectorAll(".command-preview code")].map((node) => node.textContent.trim()),
+    remoteFlowSteps: [...root.querySelectorAll(".remote-flow span")].map((node) => node.textContent.trim()),
+    remoteFlowArrows: root.querySelectorAll(".remote-flow svg").length,
+    gatewayDetails: [...root.querySelectorAll(".gateway-details > *")].map((node) => node.textContent.trim()),
+  }));
   await page.click('[data-testid="remote-page"] .remote-mode-picker button:nth-child(3)');
   await page.waitForTimeout(250);
   bucket("1440x900").remote.funnelTab = await page.$eval('[data-testid="remote-page"]', (root) => ({
     selected: [...root.querySelectorAll(".remote-mode-picker button")].findIndex((button) => button.getAttribute("aria-selected") === "true"),
     warnNotices: root.querySelectorAll(".remote-mode-note.warn").length,
+    commandPreview: [...root.querySelectorAll(".command-preview code")].map((node) => node.textContent.trim()),
   }));
   await page.close();
 }
@@ -561,11 +633,50 @@ for (const key of ["providers", "usage", "capabilities", "remote", "schedules"])
 }
 // 已归档 carries no view label in the prototype (`archivePage()` starts at h1).
 check("archive has no view label", proto.archive.viewLabel === null && at1440.archive.viewLabel === null, `${at1440.archive.viewLabel} vs ${proto.archive.viewLabel}`);
-check(
-  "archive intro",
-  at1440.archive.intro?.startsWith(proto.archive.intro.split("；")[0]) === true,
-  `${at1440.archive.intro} vs ${proto.archive.intro}`,
-);
+/**
+ * [UI 对齐 09] #33 review P1-2: `intro` was asserted for one page only and by
+ * `startsWith`, while the report claimed the two sides were equal. Three pages
+ * rewrite it on purpose; each rewrite is pinned here (and in
+ * `verification-log.md` §3) so a silent copy change fails, and every other page
+ * must still match the prototype character for character.
+ */
+const INTRO_DEVIATIONS = {
+  usage:
+    "按实际调用累计，压缩上下文不会减少消耗。统计范围为本应用记录，不等同账户账单或供应商配额；未观测到的外部调用不伪造。本页数据为样例数据。",
+  schedules: "定时任务拥有固定任务工作区，按规则新建独立会话；每次执行不继承上一次对话上下文，历史会话可查看并继续。",
+  archive: "归档停止运行并保留代码、会话和浏览器状态；清理是另一个操作。恢复任务不自动启动服务或重新启用调度。",
+};
+for (const key of ["providers", "usage", "capabilities", "remote", "schedules", "archive"]) {
+  const declared = INTRO_DEVIATIONS[key];
+  if (declared === undefined) {
+    check(`intro is the prototype's @${key}`, at1440[key].intro === proto[key].intro, `${at1440[key].intro} vs ${proto[key].intro}`);
+  } else {
+    check(
+      `intro deviation @${key} is the declared rewrite`,
+      at1440[key].intro === declared && declared !== proto[key].intro,
+      `${at1440[key].intro}`,
+    );
+  }
+}
+/**
+ * The prototype's page buttons this app deliberately does not render — each one
+ * is a D-item in `verification-log.md` §3. `pageButtons` was collected but never
+ * asserted before ([UI 对齐 09] #33 review P1-2); the extras this app adds stay
+ * recorded in `pages.json` and are declared rather than asserted away.
+ */
+const DECLARED_BUTTON_GAPS = {
+  providers: ["选择模型"],
+  usage: [],
+  capabilities: [],
+  remote: ["启用此入口", "扫码添加", "撤销"],
+  schedules: [],
+  archive: ["恢复", "清理…"],
+};
+for (const [key, gaps] of Object.entries(DECLARED_BUTTON_GAPS)) {
+  const have = new Set(at1440[key].pageButtons ?? []);
+  const missing = (proto[key].pageButtons ?? []).filter((label) => !have.has(label) && !gaps.includes(label));
+  check(`every prototype page button is on the ${key} page`, missing.length === 0, `missing ${JSON.stringify(missing)}`);
+}
 
 // 9.2 [UI 对齐 08] #32 D4: management buttons carry the prototype's glyphs.
 const iconCounts = Object.fromEntries(Object.entries(at1440).map(([key, value]) => [key, value.pageButtonIcons]));
@@ -582,10 +693,53 @@ for (const key of ["providers", "capabilities", "schedules"]) {
     `${JSON.stringify(at1440[key].pageButtonIcons)} vs ${JSON.stringify(proto[key].pageButtonIcons)}`,
   );
 }
+/**
+ * [UI 对齐 09] #33 review P2-6: the `>=` above is one-way, so it could not fail
+ * when a button gained a glyph the prototype does not have — and the report's
+ * schedules count (3/6) did not match the JSON (5 glyphs across 21 buttons).
+ * The rule is now two-way and keyed by the button's own label, so it does not
+ * depend on how many rows the VirtualList renders: label by label, the two sides
+ * must agree on whether the button carries a glyph, and the deliberate
+ * exceptions are declared here.
+ */
+const DECLARED_ADDED_BUTTON_ICONS = { providers: ["编辑"] };
+for (const key of ["providers", "usage", "capabilities", "remote", "schedules", "archive"]) {
+  const gaps = DECLARED_BUTTON_GAPS[key];
+  const added = DECLARED_ADDED_BUTTON_ICONS[key] ?? [];
+  const renderer = at1440[key].pageButtonIconMap ?? {};
+  const prototype = proto[key].pageButtonIconMap ?? {};
+  const disagreements = Object.keys(prototype)
+    .filter((label) => !gaps.includes(label) && label in renderer)
+    .filter((label) => (renderer[label] > 0) !== (prototype[label] > 0) && !added.includes(label));
+  check(
+    `button glyphs agree with the prototype @${key}`,
+    disagreements.length === 0,
+    `disagree ${JSON.stringify(disagreements)}; renderer ${JSON.stringify(renderer)} vs prototype ${JSON.stringify(prototype)}`,
+  );
+}
 check(
   "remote 手机视图 carries the prototype's globe glyph",
-  (at1440.remote.pageButtonIcons ?? []).some((count) => count >= 1),
-  JSON.stringify(at1440.remote.pageButtonIcons),
+  (at1440.remote.pageButtonIconMap ?? {})["手机视图"] === 1 && (proto.remote.pageButtonIconMap ?? {})["手机视图"] === 1,
+  JSON.stringify(at1440.remote.pageButtonIconMap),
+);
+/**
+ * [UI 对齐 09] #33 review P2-1: the prototype's second stat card reads 当前会话.
+ * This page is a project-wide ledger with no session context, so it shows
+ * 最近一次调用 — a declared rewrite, pinned here so it cannot change silently
+ * again (the unit test used to skip `labels[1]` for exactly that reason).
+ */
+const USAGE_STAT_LABELS = ["累计 Token", "最近一次调用", "已记录调用", "未完整报告"];
+check(
+  "usage stat labels: 当前会话 → 最近一次调用 is the declared rewrite",
+  JSON.stringify(at1440.usage.statCardLabels) === JSON.stringify(USAGE_STAT_LABELS) &&
+    (proto.usage.statCardLabels ?? [])[1] === "当前会话",
+  `${JSON.stringify(at1440.usage.statCardLabels)} vs ${JSON.stringify(proto.usage.statCardLabels)}`,
+);
+check(
+  "usage stat labels keep the prototype's other three cards",
+  JSON.stringify(at1440.usage.statCardLabels?.filter((_, index) => index !== 1)) ===
+    JSON.stringify((proto.usage.statCardLabels ?? []).filter((_, index) => index !== 1)),
+  `${JSON.stringify(at1440.usage.statCardLabels)} vs ${JSON.stringify(proto.usage.statCardLabels)}`,
 );
 
 // 9.3 Providers: the card's blocks, chips and the three-column grid.
@@ -674,6 +828,113 @@ check(
   (at1440.usage.todaySwitch.barChart === 0) === (at1440.usage.todaySwitch.emptyText !== null) &&
     (at1440.usage.todaySwitch.donut === 0) === (at1440.usage.todaySwitch.barChart === 0),
   JSON.stringify(at1440.usage.todaySwitch),
+);
+
+// 9.4b Remote: the marker classes, the guard card and the per-mode blocks
+// ([UI 对齐 09] #33 review P2-2/P2-3/P2-4/P2-5/P2-7).
+check(
+  "provider badge shows the protocol's display name, not the wire id",
+  at1440.providers.providerProtocolBadges.length > 0 &&
+    at1440.providers.providerProtocolBadges.every((label) => ["Anthropic Messages", "OpenAI Responses", "OpenAI Chat Completions"].includes(label)),
+  JSON.stringify(at1440.providers.providerProtocolBadges),
+);
+// The prototype's `.dot` rule and the renderer's utilities must land on the same
+// box; the connection rows used to draw an empty 8px column instead. Chromium
+// reports the two circles differently (`50%` vs a resolved px value), so the
+// radius is compared as a length, not as a string.
+const radiusPx = (box) =>
+  box === null || box === undefined
+    ? null
+    : box.borderRadius.endsWith("%")
+      ? (Number.parseFloat(box.borderRadius) / 100) * box.width
+      : Number.parseFloat(box.borderRadius);
+const renderedDot = at1440.remote.connectionChecks[0].dot;
+const prototypeDot = proto.remote.connectionChecks[0].dot;
+same(renderedDot, prototypeDot, ["width", "height", "backgroundColor"], "connection-check dot box");
+check(
+  "connection-check dots are circles on both sides",
+  [renderedDot, prototypeDot].every((box) => radiusPx(box) >= box.width / 2 - 0.5),
+  `${radiusPx(renderedDot)}px on ${renderedDot.width} vs ${radiusPx(prototypeDot)}px on ${prototypeDot.width}`,
+);
+check(
+  "the live connection row's dot is the accent one",
+  at1440.remote.connectionChecks[1].dot?.backgroundColor === proto.remote.connectionChecks[1].dot?.backgroundColor &&
+    at1440.remote.connectionChecks[1].dot?.backgroundColor !== at1440.remote.connectionChecks[0].dot?.backgroundColor,
+  `${at1440.remote.connectionChecks[1].dot?.backgroundColor} vs ${proto.remote.connectionChecks[1].dot?.backgroundColor}`,
+);
+check(
+  "every connection row draws a dot",
+  at1440.remote.connectionChecks.every((row) => row.dot !== null) && at1440.remote.connectionChecks.length === 3,
+  JSON.stringify(at1440.remote.connectionChecks.map((row) => row.dot)),
+);
+// `.mono` is declared with no rule in this package; the endpoint/URL figures
+// therefore rendered in the page's sans font. `same(...)` cannot compare the two
+// stacks (this package has no `--mono` token), so the rule asserted is "every
+// element carrying the marker is actually monospace, and not the page's sans
+// family" — true on both sides and exactly the failure the old script missed.
+const monoFamilies = [...(at1440.remote.monoFamilies ?? []), ...(proto.remote.monoFamilies ?? []), ...(at1440.providers.monoFamilies ?? []), ...(at1440.usage.monoFamilies ?? [])];
+const sansFamily = at1440.providers.measured.providerCard?.fontFamily;
+check(
+  "every `.mono` marker renders in a monospace family",
+  monoFamilies.length >= 3 &&
+    monoFamilies.every((family) => /mono/i.test(family)) &&
+    monoFamilies.every((family) => family !== sansFamily),
+  JSON.stringify({ count: monoFamilies.length, monoFamilies, sansFamily }),
+);
+// P2-2: the guard card's own background lost to `Card`'s `bg-paper`, and
+// `.remote-layout .card{border-radius:8px}` was never applied.
+same(at1440.remote.remoteGuardBox, proto.remote.remoteGuardBox, ["backgroundColor", "borderRadius", "padding"], "remote guard card box");
+same(at1440.remote.remoteCardBox, proto.remote.remoteCardBox, ["borderRadius"], "remote layout card radius");
+check(
+  "remote guard card is not plain white",
+  at1440.remote.remoteGuardBox?.backgroundColor !== "rgb(255, 255, 255)",
+  String(at1440.remote.remoteGuardBox?.backgroundColor),
+);
+// P2-4: the blocks the prototype's connection card has and this page lacked.
+check(
+  "tailscale mode prints the local command with the Host's listener",
+  at1440.remote.commandPreview.length === 1 && at1440.remote.commandPreview[0].startsWith("tailscale serve --bg ") &&
+    proto.remote.commandPreview.length === 1 && proto.remote.commandPreview[0].startsWith("tailscale serve --bg "),
+  `${JSON.stringify(at1440.remote.commandPreview)} vs ${JSON.stringify(proto.remote.commandPreview)}`,
+);
+check(
+  "gateway mode draws the request path instead of a command",
+  JSON.stringify(at1440.remote.gatewayTab.remoteFlowSteps) === JSON.stringify(proto.remote.gatewayTab.remoteFlowSteps) &&
+    at1440.remote.gatewayTab.remoteFlowArrows === proto.remote.gatewayTab.remoteFlowArrows &&
+    JSON.stringify(at1440.remote.gatewayTab.gatewayDetails) === JSON.stringify(proto.remote.gatewayTab.gatewayDetails) &&
+    at1440.remote.gatewayTab.commandPreview.length === proto.remote.gatewayTab.commandPreview.length,
+  `${JSON.stringify(at1440.remote.gatewayTab)} vs ${JSON.stringify(proto.remote.gatewayTab)}`,
+);
+check(
+  "funnel mode prints its own command",
+  at1440.remote.funnelTab.commandPreview.length === 1 &&
+    at1440.remote.funnelTab.commandPreview[0].startsWith("tailscale funnel --bg ") &&
+    proto.remote.funnelTab.commandPreview.length === 1 &&
+    proto.remote.funnelTab.commandPreview[0].startsWith("tailscale funnel --bg "),
+  `${JSON.stringify(at1440.remote.funnelTab.commandPreview)} vs ${JSON.stringify(proto.remote.funnelTab.commandPreview)}`,
+);
+check(
+  "`重新检测` sits on the tailscale connection row and carries no glyph",
+  at1440.remote.connectionChecks[0].icons === proto.remote.connectionChecks[0].icons &&
+    (at1440.remote.pageButtons ?? []).includes("重新检测") &&
+    (at1440.remote.pageButtonIconMap ?? {})["重新检测"] === 0 &&
+    (proto.remote.pageButtonIconMap ?? {})["重新检测"] === 0,
+  JSON.stringify({ rowIcons: [at1440.remote.connectionChecks[0].icons, proto.remote.connectionChecks[0].icons], map: at1440.remote.pageButtonIconMap?.["重新检测"] }),
+);
+// The declared absences: no Host field and no write op, so the page must not
+// pretend to have them.
+check(
+  "declared-absent remote controls stay absent",
+  at1440.remote.declaredAbsent.machineName === 0 && at1440.remote.declaredAbsent.entryToggle === 0,
+  JSON.stringify(at1440.remote.declaredAbsent),
+);
+// P2-5: four buttons in the row's `auto` track used to squeeze the name column
+// to zero (measured 15px / 40 wrapped lines at 1440).
+check(
+  "every device row keeps a usable name column",
+  at1440.remote.deviceRowCells.every((cells) => cells.length === 3 && cells[1] >= 100) &&
+    at1440.remote.deviceNameLines.every((lines) => lines === 1),
+  JSON.stringify({ cells: at1440.remote.deviceRowCells, nameLines: at1440.remote.deviceNameLines }),
 );
 
 // 9.5 Capabilities: the summary strip, the counted tabs and the rows.

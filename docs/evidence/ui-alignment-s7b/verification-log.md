@@ -7,18 +7,20 @@
 
 ```
 # 渲染器 127.0.0.1:4335（Vite dev，未重启） / 原型 A 127.0.0.1:4319/?variant=A（只读）
-node docs/evidence/ui-alignment-s7b/capture-pages.mjs     # 142 assertions, 5 viewport tiers, 6 pages, exit 0
-pnpm --filter @pidock/renderer test                        # 57 files / 487 tests
+node docs/evidence/ui-alignment-s7b/capture-pages.mjs     # 181 assertions, 5 viewport tiers, 6 pages, exit 0
+pnpm --filter @pidock/renderer test                        # 58 files / 494 tests
 ```
+
+本文件在 #33 评审后经一轮修复（P1-1、P1-2、P2-1…P2-9）更新：断言 142 → 181，逐项变更见 §3 与 §4。
 
 ## 1. 逐页验收对照
 
 | 页面 | 原型结构 | 本轮实现 | 判定 | 关键读数（1440×900，渲染器 vs 原型） |
 | --- | --- | --- | --- | --- |
 | 模型与 Provider | view-label `MODELS` + h1 + 添加 provider + intro + `.grid3` provider 卡（symbol/协议 badge/mono 端点/模型 chips/`N 个模型 · 凭据已设置`/编辑·选择模型）+「切换只影响当前会话」卡 | 同结构；chips `模型 · 窗口 · 图片`；编辑/同步模型列表/停用/删除；每模型明细表（既有 #12 能力）保留在卡内；选择模型 → 原型的无任务回退文案「在任务会话中选择」 | COVERED（1 处偏差见 §3） | `.provider-card` padding `20px`/radius `9px`、`.provider-symbol` `35×35`/`#f1eee8`/`#a8895f`/`18px`/`600`、`.provider-card p` `11px`/`rgb(148,151,156)`/`12px 0`、chips `flex`/`gap 5px`、`grid3` 3→1 列（960）全部一致 |
-| Token 用量 | view-label `USAGE` + h1 + 两个 select + intro + `.grid4` 4 张 stat + `.grid2`（每日柱状 + 构成环形）+ `按X汇总` + `示例 · 不代表账单` + 6 列汇总表 + 空状态 | 同结构；4 张 stat 全部由 store 计算（916k / 最近一次调用 5,200 Tokens / 96 次 / 13 次）；柱高与环形扇区按真实记录算；6 列表格（维度/输入/输出/缓存读取/总计/完整性） | COVERED（数字来源见 §2） | `.grid4` 4 列→2（1180）、`.stat` `28px`/`550`、`.bar-chart` `155px`/`gap 14px`、`.bar` `65%`/`max 38px`/`#aeb7cd`、`.usage-donut` `120×120`、`.table th` `11px 13px`/`#96999e`/`#fafbfc`、`.table td` `13px` 全部一致；柱宽 26px vs 38px 的差来自「全部(10 天)」与「近 7 天」的柱数差，切到 近 7 天后两侧 chart 宽度都是 523px |
+| Token 用量 | view-label `USAGE` + h1 + 两个 select + intro + `.grid4` 4 张 stat + `.grid2`（每日柱状 + 构成环形）+ `按X汇总` + `示例 · 不代表账单` + 6 列汇总表 + 空状态 | 同结构；4 张 stat 全部由 store 计算（916k / 最近一次调用 5,200 Tokens / 96 次 / 13 次）；柱高与环形扇区按真实记录算；6 列表格（维度/输入/输出/缓存读取/总计/完整性） | COVERED（第 2 张卡改写见 §3.14） | `.grid4` 4 列→2（1180）、`.stat` `28px`/`550`、`.bar-chart` `155px`/`gap 14px`、`.bar` `65%`/`max 38px`/`#aeb7cd`、`.usage-donut` `120×120`、`.table th` `11px 13px`/`#96999e`/`#fafbfc`、`.table td` `13px` 全部一致；柱宽 26px vs 38px 的差来自「全部(10 天)」与「近 7 天」的柱数差，切到同一个 7 天窗口（自定义）后两侧 chart 宽度都是 523px |
 | 能力管理 | view-label `AGENT CAPABILITIES` + h1 + 按类型变化的添加按钮 + intro + `.capability-summary` 4 格 + 带计数的 `.capability-tabs` + MCP/Package inline-notice + `.capability-list`/`.capability-row` + 结尾 note | 同结构；计数与 tabs 计数来自 store（`2/1/1/2`，tab `4 / 6 已启用` 等）；notice 用原型原文；行内含类型/安装版本/bridge/连接/可用性/失败原因与操作 | COVERED | `.capability-summary` 4 列、cell padding `15px 18px`、strong `21px`/`550`、`.capability-tabs` gap `20px`、`.capability-row` padding `13px 15px`/gap `14px`/3 行轨、`.capability-icon` `36×36`/`#f1f3f6`/`#66758f`、`.capability-meta` `10px`/`#8a94a2` 全部一致 |
-| 远程访问 | view-label `REMOTE ACCESS` + h1 + 状态 badge + 手机视图 + intro + `.remote-mode-picker` 3 卡（图标/标题/说明/推荐）+ `.remote-layout`（连接卡 + 权限卡 ‖ 设备卡 + guard 卡） | 同结构；3 模式来自 `REMOTE_ENTRY_ROWS`（图标 shield/server/globe、推荐、实验入口标签）；连接卡展示 Host 监听/Gateway/入口地址的真实读数；权限默认值只读展示；设备行含确认/拒绝/轮换/撤销 | COVERED（标签与色值偏差见 §3） | `.remote-mode-picker` 3 列/gap `10px`、按钮 `12px`/`8px`/`32px + 1fr`、symbol `32×32`/`#f1f3f6`/`#6a7892`、title `11px`、hint `9px`、`.remote-layout` `1.55fr/280px`、`.status-orb` `12×12`、`.connection-checks` 3 轨/`10px 12px`、`.permission-list label` gap `11px`/`10px 0`、`.device-row` 3 轨/`32px`/`12px 0`、`.device-symbol` `31×31` 一致 |
+| 远程访问 | view-label `REMOTE ACCESS` + h1 + 状态 badge + 手机视图 + intro + `.remote-mode-picker` 3 卡（图标/标题/说明/推荐）+ `.remote-layout`（连接卡 + 权限卡 ‖ 设备卡 + guard 卡） | 同结构；3 模式来自 `REMOTE_ENTRY_ROWS`（图标 shield/server/globe、推荐、实验入口标签）；连接卡展示 Host 监听/Gateway/入口地址的真实读数，并按模式补上原型的 `.command-preview`（tailscale/funnel，用 Host 上报的 listener）与 `.remote-flow`/`.gateway-details`（gateway），`重新检测` 重读 Host；权限默认值只读展示；设备行含确认/拒绝/轮换/撤销 | COVERED（标签、色值与三处缺口见 §3.6/§3.7/§3.15…§3.18） | `.remote-mode-picker` 3 列/gap `10px`、按钮 `12px`/`8px`/`32px + 1fr`、symbol `32×32`/`#f1f3f6`/`#6a7892`、title `11px`、hint `9px`、`.remote-layout` `1.55fr/280px`、`.status-orb` `12×12`、`.connection-checks` 3 轨/`10px 12px`、`.permission-list label` gap `11px`/`10px 0`、`.device-row` 3 轨/`32px`/`12px 0`、`.device-symbol` `31×31` 一致 |
 | 定时任务 | view-label `SCHEDULED TASKS` + h1 + 新建定时任务 + intro + `.schedule-summary` 3 格 + `.segmented` 过滤 + `.schedule-list` 行（155px 时间列 + 主区 + 操作）+ `执行记录` 5 列表 + note | 同结构；summary 取存储里的 已启用/最近执行/下次触发；segmented 真实过滤（全部 2 / 已启用 1 / 已暂停 1）；行内规则/时区/状态/任务·模型·权限/提示词/下次/失败原因；历史表保留 VirtualList（40+ 窗口化行）并加同列头 | COVERED | `.schedule-summary` 3 列/cell `16px 18px`/gap `6px`/strong `15px`/`550`、`.segmented` `3px`/`7px`/`#f4f5f7`、按钮 `6px 11px`/`5px`/`10px`、`.schedule-row` `155px + 1fr + auto`/gap `18px`/`16px 18px`、`.schedule-time` 2 轨/`20px` 图标、`.schedule-actions` 右对齐 flex wrap、表头 cell `11px 13px`/`10px`/`#96999e`/`#fafbfc` 一致 |
 | 已归档 | h1（无 view-label）+ intro + 每个归档任务一张 `.card.between`（名称 + `N 个仓库 · 会话与浏览器状态已保留` + 恢复/清理…）+ `.empty` | 同结构；卡片头部换成原型的两栏（名称 + 形状行 + 归档 badge + 两个操作），卡内仍是 Host 的生命周期读数（worktree/进程身份、清理回执与恢复项） | COVERED | `.card` padding `20px`/radius `10px`/`1px`/白底一致；两侧按钮图标都是 `[0,0]`；原型空状态与渲染器卡片在同一轮内都截了图 |
 
@@ -70,6 +72,31 @@ pnpm --filter @pidock/renderer test                        # 57 files / 487 test
     remote `地球/＋/勾/刷新`、schedules `＋/放/停`）；`archive` 两侧都无图标。`usage` 原型的
     `.page .btn` 为空数组，本页 4 个清理/重载按钮保持无图标。
 
+### 3b. 评审修复轮新增的声明（#33 P1-2 / P2-1 / P2-4 / P2-6 / P2-7）
+
+14. **用量页 intro 改写**（`UsagePage.tsx`）：原型写「…以下均为示例统计。」，本页写「…统计范围为本应用记录，不等同账户账单或供应商配额；未观测到的外部调用不伪造。本页数据为样例数据。」——这两句是本应用必须说清的事实（账本只记本机观测到的调用，且夹具不是账单），所以换成实话而不是删掉。脚本按页面钉死这段字符串，改一字即失败。
+15. **计划任务页 intro 改写**：原型写「定时任务拥有固定工作区；每次触发在任务内新建 Agent 会话并发送预设提示词。」，本页写「定时任务拥有固定任务工作区，按规则新建独立会话；每次执行不继承上一次对话上下文，历史会话可查看并继续。」——描述的是本应用的真实行为（历史会话可查看并继续）。同样被脚本钉死。
+16. **归档页 intro 多一句**：在原型两句之后补「恢复任务不自动启动服务或重新启用调度。」（Host 的真实语义，与 §3.10 同一回事）。
+17. **用量页第 2 张 stat 卡的语义**（评审 P2-1）：原型是「当前会话」（值是当前任务的 tokens）；本页是项目级账本，没有会话上下文，所以改成「最近一次调用」（值 = 筛选后 `at` 最新的那条调用）。第 1/3/4 张卡与原型逐字一致，这一张被脚本单独钉死。
+18. **协议展示名**（评审 P2-7）：卡片 badge 与编辑表单的 select 都用原型 `providerProtocols` 的展示名（`Anthropic Messages` / `OpenAI Responses` / `OpenAI Chat Completions`），**存储值仍是 wire id**（`anthropic-messages` …），未知 id 回退为 id 本身。脚本断言 badge 只出现展示名。
+19. **远程页四处仍缺的控制**（评审 P2-4，Host 没有对应能力，**不新增**）：
+    - `这台电脑的名称` 输入：`RemoteEntryState` 没有该字段，Host 也没有设置它的写接口。
+    - `启用此入口／断开连接` 主按钮：Host 没有连接/断开写接口，`gateway.status` 是 Host 上报的只读值。
+    - `扫码添加` 文案：保留「配对设备」（与配对弹窗、既有用例一致，同 §3.10 的 `恢复任务` 同一类）。原型另有 `撤销`，本页为「撤销设备」。
+    - `实验入口` em：仅 Funnel 卡，属本应用对「实验性入口」的显式标注（原型只在 tailscale 卡写 `推荐`）。
+    这四项在脚本里以“声明缺席”断言固定（`declaredAbsent` + `DECLARED_BUTTON_GAPS`），不会静默变成“已完成”。
+20. **`.connection-checks` 三行文案**（评审 P2-4）：本页保留自己的三行（Host 监听／入口地址／Gateway），因为它们报的是 Host 实际上报的值，而原型这三行在 tailscale 模式下写的是示例文案（「原型示例：未检测到可用安装」）。行轨宽、padding、`.dot`、右侧 `.mono` 已全部逐属性断言。
+21. **按钮图标是超集**（评审 P2-6）：除 `编辑`（provider 卡片，原型该按钮无图标）外，本应用带图标按钮的集合与原型一致；`schedules` 实际是 **5 个图标 / 21 个按钮**（先前报告写的 3/6 是错的，已更正）。脚本改为逐 label 双向比较（`button glyphs agree with the prototype @<page>`）而不是 `>=`。
+
+### 3c. 评审修复轮真修的缺陷（不属声明）
+
+- **P1-1 执行记录表头**：`run-history-head` 同时带 `table`（Tailwind `display:table`）与 `grid`，5 个表头格被当成匿名表格行竖排成 66px；已去掉 `table`，并把 body 行的 `px-[13px]` 下放到每个单元格，使表头与行的轨宽一致。
+- **P2-2 死代码**：`remote-guard bg-[#faf9f5]` 输给 `Card` 的 `bg-paper`（实测白底），`.remote-layout .card{border-radius:8px}` 也从未生效；两处改用 `!` 修饰符。
+- **P2-3 标记类无规则**：`.dot`/`.mono` 在本包没有任何规则，连接行画出空白 8px 列、端点/URL/用量数字不是等宽；已补上对应工具类（`tokens.css` 未改），并让证据 helper 采集 `fontFamily`。
+- **P2-5 远程设备行挤压**：该行 `auto` 轨最多塞 4 个按钮，1440 档把名字列压到 **15px / 40 行折行**；改为按钮列竖排（轨仍为原型 3 轨），同行为 **147px / 3 行**。
+- **P2-8 证据时钟炸弹**：用量反 no-op 断言依赖「机器当前周 ∩ 固定夹具 2026-09-12…21」，自 2026-09-28 起必失败。已改为用页面自己的「自定义」窗口钉住夹具日期，并用 2030 年窗口验证空态；另用 Playwright `context.clock` 将页面时钟前移 **+40 天 / +180 天** 复跑仍绿（旧断言在 +40 天时以 `weekly=0 all=240` 复现失败）。
+- **P2-9 重复实现**：`CapabilitiesPage` 复制了 `InlineNotice` 的两段内联样式，已改用该原语。
+
 ## 4. 回归证据（本切片重跑，均 exit 0）
 
 | 脚本 | 结果 |
@@ -79,7 +106,26 @@ pnpm --filter @pidock/renderer test                        # 57 files / 487 test
 | `ui-alignment-s4/capture-composer.mjs` | `ok (22 measured states)`；`composer=143px`（失败态 174px，见既有残留） |
 | `ui-alignment-s6/capture-conversation.mjs` | `ok (101 checks)` |
 | `ui-alignment-s7a/capture-management.mjs` | `ok (167 assertions, 5 viewport tiers)` |
-| `ui-alignment-s7b/capture-pages.mjs` | `ok (142 assertions, 5 viewport tiers, 6 pages)` |
+| `ui-alignment-s7b/capture-pages.mjs` | `ok (181 assertions, 5 viewport tiers, 6 pages)` |
+
+### 4b. 负向验证（本轮新增，均已复现失败）
+
+每条断言都先故意把代码改坏、确认脚本 `exit 1` 并打印可读原因，再恢复。共 10 项：
+
+| 改坏的地方 | 捕获到的断言 |
+| --- | --- |
+| `run-history-head` 加回 `table` | `schedule history header is one row of five cells` / `…display is not table-cell` / `…lines up with the body row`（3 条：66,66,66,66,66） |
+| 用量页把 近 7 天 当基线（旧行为） | 页面时钟前移 +40 天：`weekly=0 all=240`（旧断言原样复现） |
+| 协议 badge 改回 wire id | `provider badge shows the protocol's display name, not the wire id` |
+| `.dot` 去掉工具类 | `connection-check dot box` + `dots are circles on both sides`（8×0 vs 6×6） |
+| `.mono` 去掉 `font-mono` | `every .mono marker renders in a monospace family` |
+| `.remote-guard` 去掉 `!` | `remote guard card box` + `…is not plain white`（白底复现） |
+| 设备行按钮改回横排 | `every device row keeps a usable name column`（15px / 40 行复现） |
+| 用量 stat 卡改名 | `usage stat labels: … is the declared rewrite` |
+| 删掉 `.remote-flow` | `gateway mode draws the request path instead of a command` |
+| 用量 intro 多一句 | `intro deviation @usage is the declared rewrite` |
+
+另有 6 条断言在改动当场就抓到真实缺陷（而非事后构造）：P1-1 表头竖排 66px、表头与行轨宽 15px 不一致、`.dot` 无尺寸、`.remote-guard` 白底、`.remote-layout .card` 10px、`重新检测` 多带图标。
 
 以上脚本重跑会重写各自目录里的 JSON/PNG（会话 id 随机、PNG 字节差），本轮按仓库既有做法在提交前
 `git checkout -- docs/evidence` 还原旧目录，只提交本切片的新目录；重跑结果记录在本文件与 issue 评论里。
@@ -92,4 +138,8 @@ pnpm --filter @pidock/renderer test                        # 57 files / 487 test
 - 真实调度：没有注册系统计划、后台唤醒或真实触发；`立即运行` 走的是 Host 内存投影。
 - 真实 Provider 调用：用量页的 token 数来自 `memoryHost` 记账，不是供应商账单。
 - 真实清理/归档：`预览清理清单` 只预览，不删除磁盘内容；`恢复任务` 不启动服务或重新启用调度。
+- **修复轮未覆盖的残余**（按 reviewer 清单逐项处置，均已在上文给出实修或声明）：
+  - 评审 P2-4 的 `这台电脑的名称` / `启用此入口` 两项不是“未做”，而是 Host 无字段/无写接口，属 §3.19 的声明；在 Host 提供对应能力前不会实现。
+  - 评审 P2-6 的“renderer 给原型没有图标的行按钮加了图标”保留为 §3.21 的声明（本次只把新按钮 `重新检测` 的图标去掉，与原型一致）。
+  - `usage` intro 的“样例数据”与“本应用记录”两句是产品文案，最终文本请以用户裁决为准（与 D5 同属待裁决项）。
 - Electron GUI 冒烟、打包运行仍未验证（沿用 epic 既有的 RESIDUAL-UNTESTED 清单）。

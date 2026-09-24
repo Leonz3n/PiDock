@@ -84,10 +84,11 @@ export function ProvidersPage() {
               </div>
 
               <h3 className="mt-4 text-[13px] font-[650] text-ink">{provider.name}</h3>
-              <div className="mt-[7px]">
+              {/* [UI 对齐 09] #33 review P2-7: the prototype prints the protocol's
+                  display name; the wire id stays the stored value. */}
+              <div className="mt-[7px]" data-testid={`provider-protocol-${provider.id}`}>
                 <Badge>{protocolLabel(provider.protocol)}</Badge>
               </div>
-
               <p className="mono my-3 font-mono text-[11px] text-[#94979c] [overflow-wrap:anywhere]" data-testid={`provider-endpoint-${provider.id}`}>
                 {provider.baseUrl}
               </p>
