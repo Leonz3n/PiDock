@@ -86,6 +86,19 @@ describe("execution card", () => {
     }
   });
 
+  it("renders the payload review only inside the execution card", async () => {
+    await openTask("deploy");
+    // 原型 `executionPanel()` 只有一个审批面；输入框上方不再有第二份审阅面板，
+    // 否则等待确认页的消息区会被两份面板压到 26px（[UI 对齐 05] #29 review P1-1）。
+    const previews = await screen.findAllByTestId("execution-approval-preview");
+    expect(previews).toHaveLength(1);
+    const card = screen.getByRole("region", { name: "会话执行状态" });
+    expect(card).toContainElement(previews[0]!);
+    const composer = screen.getByTestId("task-composer");
+    expect(composer).not.toHaveTextContent("载荷版本");
+    expect(composer).not.toHaveTextContent("待批准：");
+  });
+
   it("keeps the waiting card's payload review and one-shot approval semantics", async () => {
     const user = await openTask("deploy");
     const card = await screen.findByRole("region", { name: "会话执行状态" });
@@ -110,14 +123,24 @@ describe("execution card", () => {
     expect(await screen.findByText(/已批准本次操作；仅授权这一次/)).toBeInTheDocument();
   });
 
-  it("clears the pending request from the Host so it can never fire twice", async () => {
+  it("leaves no approve entry once the Host stops listing the request as pending", async () => {
     // 一次性语义的权威在 Host：`packages/shell/src/host/service-control.ts` 的
-    // `consumeApproval`（`execution-ledger.test.ts` 断言 `consumedAt`）。渲染层只
-    // 负责在请求不再是 pending 后不再给出入口，所以这里断言的是“不再 pending”。
+    // `consumeApproval` 经 `packages/shell/src/main/execution-ledger.ts` 的
+    // `consumeExecutionApproval` 落 `consumedAt`，第二次尝试得到 `already-consumed`
+    // （`execution-ledger.test.ts:131-133` 与 `:166-169`）。渲染层只负责在请求不再是
+    // pending 后不再给出入口，所以这里断言的是“该请求不再 pending”与“入口随之消失”。
     const user = await openTask("deploy");
-    await user.click(await screen.findByRole("button", { name: "批准本次操作" }));
+    const card = await screen.findByRole("region", { name: "会话执行状态" });
+    expect(within(card).getByRole("button", { name: "批准本次操作" })).toBeInTheDocument();
+    await user.click(within(card).getByRole("button", { name: "批准本次操作" }));
     await waitFor(() => expect(approvalState("approval-deploy")).toEqual({ status: "approved", executed: true }));
     expect(screen.queryByTestId("execution-approval-preview")).not.toHaveTextContent("待批准：部署到 Staging");
+    expect(
+      useHostStore
+        .getState()
+        .approvals.filter((item) => item.sessionId === "deploy" && item.status === "pending")
+        .map((item) => item.id),
+    ).toEqual(["approval-migrate"]);
   });
 
   it("stops a running session through the existing Host entry", async () => {
@@ -158,20 +181,20 @@ describe("execution card", () => {
 
   it("dismisses an expired record without deleting it", async () => {
     const user = await openTask("deploy");
-    // The seeded session has two pending requests, and only the first one is
-    // reachable through the composer's review panel — the second one has no
-    // expiry entry anywhere in the UI yet (see the residual in the [UI 对齐 05]
-    // (#29) evidence log), so the store entry is used to clear it here.
+    // 执行状态卡是唯一审批面，所以「标记过期」就在它所审阅的那条请求上：种子会话有两条
+    // 待确认请求，第二条会让状态停在「等待确认」，先把第二条拒绝掉才能观察到过期态。
     await actStore(() => useHostStore.getState().resolveApproval("approval-migrate", "rejected"));
     // 标记过期 moves the pending confirmation past its validity window: the
     // session lands on 确认已过期 and the card offers exactly one entry.
-    await user.click(await screen.findByRole("button", { name: "标记过期" }));
+    const card0 = await screen.findByRole("region", { name: "会话执行状态" });
+    await user.click(await within(card0).findByRole("button", { name: "标记过期" }));
     await waitFor(() => expect(sessionState("deploy")).toBe("expired"));
     const card = await screen.findByRole("region", { name: "会话执行状态" });
     expect(within(card).getByTestId("execution-card-state")).toHaveTextContent("确认已过期");
 
     await user.click(within(card).getByRole("button", { name: "标记已处理" }));
-    expect(await screen.findByText("已移出关注列表，执行记录保留")).toBeInTheDocument();
+    // 只是本会话隐藏卡片：Host 侧没有 ack 入口，`需要处理` 仍会重新列出过期记录。
+    expect(await screen.findByText("已在本会话隐藏该状态卡；执行记录保留")).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByRole("region", { name: "会话执行状态" })).toBeNull());
     // 执行记录保留: dismissing the card never touches the Host record.
     expect(approvalState("approval-deploy")).toEqual({ status: "expired", executed: false });
@@ -205,6 +228,11 @@ describe("execution card", () => {
     const retry = within(card).getByRole("button", { name: "检查并重试" });
     expect(retry).toBeDisabled();
     expect(retry).toHaveAttribute("title", "当前是只读会话，请先调整会话权限");
+    // A disabled button never shows its `title`, so the rule is also stated in
+    // the card itself.
+    expect(within(card).getByTestId("execution-readonly-hint")).toHaveTextContent(
+      "当前是只读会话，请先调整会话权限；只读会话可以阅读和分析，不能执行这些操作。",
+    );
 
     seedRun("release", "archived-1", "running");
     card = await screen.findByRole("region", { name: "会话执行状态" });
@@ -212,6 +240,11 @@ describe("execution card", () => {
     seedRun("release", "archived-1", "expired");
     card = await screen.findByRole("region", { name: "会话执行状态" });
     expect(within(card).getByRole("button", { name: "标记已处理" })).toBeDisabled();
+    // A state without entries carries no hint: the line explains why the
+    // entries are missing, and there are none to explain.
+    seedRun("release", "archived-1", "completed");
+    card = await screen.findByRole("region", { name: "会话执行状态" });
+    expect(within(card).queryByTestId("execution-readonly-hint")).toBeNull();
     // The dismissal never happens while the entry is disabled.
     expect(useUiStore.getState().dismissedExecutions["release:archived-1"]).toBeUndefined();
   });

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Badge, Button, EmptyState, IconButton, Panel } from "../components/ui";
 import { Icon } from "../components/Icon";
 import { TaskActionMenu } from "../components/TaskActionMenu";
@@ -19,7 +19,7 @@ import {
   ToolWorkbench,
   panelName,
 } from "../components/ToolPanels";
-import type { Approval, Environment, Message, Reference, Session, Task } from "../data/types";
+import type { Environment, Message, Reference, Session, Task } from "../data/types";
 import {
   BUILTIN_COMMANDS,
   activeCompletionToken,
@@ -47,7 +47,6 @@ import {
   writeCoordinationVisible,
   type SessionWriteState,
 } from "../data/writeCoordination";
-import { approvalStatusLabel } from "./runState";
 import {
   EXECUTION_ACTION_LABEL,
   executionActions,
@@ -76,6 +75,9 @@ const EMPTY_ENVIRONMENTS: Environment[] = [];
 const EMPTY_LIVE: Message[] = [];
 const EMPTY_DRAFT: { text: string; references: Reference[] } = { text: "", references: [] };
 const EMPTY_REFERENCE: Reference = { id: "empty", kind: "file", label: "", detail: "" };
+
+/** One wording for the read-only rule: button `title` plus a visible card line. */
+const READONLY_ACTION_TITLE = "当前是只读会话，请先调整会话权限";
 
 export function TaskPage({ task, sessionId }: { task: Task; sessionId: string }) {
   const session = task.sessions.find((item) => item.id === sessionId) ?? task.sessions[0];
@@ -706,6 +708,30 @@ function SessionTabs({
   const view = useWriteLockStore((state) => state.views[task.id]);
   const [menu, setMenu] = useState<{ sessionId: string; x: number; y: number } | null>(null);
   const roles = new Map<string, SessionWriteState>((view?.sessions ?? []).map((state) => [state.sessionId, state]));
+  const stripRef = useRef<HTMLDivElement | null>(null);
+  const activeTabRef = useRef<HTMLButtonElement | null>(null);
+  const revealActive = useCallback(() => {
+    // The strip scrolls when the tabs need more room than it has, and the active
+    // session takes the last visible slot: without this the open conversation
+    // could sit past the right edge of its own navigation.
+    const strip = stripRef.current;
+    const tab = activeTabRef.current;
+    if (!strip || !tab) return;
+    const stripBox = strip.getBoundingClientRect();
+    const tabBox = tab.getBoundingClientRect();
+    if (tabBox.left < stripBox.left) strip.scrollLeft -= stripBox.left - tabBox.left;
+    else if (tabBox.right > stripBox.right) strip.scrollLeft += tabBox.right - stripBox.right;
+  }, []);
+  useEffect(revealActive, [revealActive, activeSessionId, visibleSessions.length]);
+  useEffect(() => {
+    const strip = stripRef.current;
+    // The strip narrows when a rail opens, so a one-off reveal on session change
+    // is not enough; jsdom has no layout and no ResizeObserver, hence the guard.
+    if (!strip || typeof ResizeObserver !== "function") return;
+    const observer = new ResizeObserver(() => revealActive());
+    observer.observe(strip);
+    return () => observer.disconnect();
+  }, [revealActive]);
 
   const runAction = async (action: SessionMenuAction, session: Session) => {
     setMenu(null);
@@ -741,7 +767,13 @@ function SessionTabs({
       </Button>
       <div
         data-testid="session-tab-strip"
-        className="flex min-w-0 flex-1 flex-nowrap items-center gap-1.5 overflow-hidden"
+        ref={stripRef}
+        // The prototype keeps the visible list bounded to four tabs and lets the
+        // row scroll instead of shrinking a label (`.sessions{overflow-x:auto}`
+        // + `.session-tab{white-space:nowrap}` in the later `style.css`
+        // revision): a long name must never be ellipsized or clipped off the
+        // strip, [UI 对齐 05] (#29) review P2-2.
+        className="flex min-w-0 flex-1 flex-nowrap items-center gap-1.5 overflow-x-auto"
       >
         {visibleSessions.map((session, ordinal) => {
           const role = roles.get(session.id);
@@ -754,6 +786,7 @@ function SessionTabs({
           return (
             <button
               key={session.id}
+              ref={active ? activeTabRef : undefined}
               type="button"
               data-testid={`session-tab-${session.id}`}
               onClick={() => runAction("open", session)}
@@ -765,11 +798,12 @@ function SessionTabs({
               className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs ${
                 active
                   ? "shrink-0 border-accent/40 bg-accent/10 text-accent"
-                  : "min-w-0 shrink border-line bg-paper text-muted hover:text-ink"
+                  : "shrink-0 border-line bg-paper text-muted hover:text-ink"
               } ${tier}`}
             >
-              {/* Bounded label: a long name never widens the navigation. */}
-              <span className="max-w-[9rem] truncate">{sessionTabLabel(session.name)}</span>
+              {/* Bounded by `sessionTabLabel` (10 chars), never by CSS: the row
+                  scrolls when the tabs need more room than the strip has. */}
+              <span className="whitespace-nowrap">{sessionTabLabel(session.name)}</span>
               {session.archived ? <Badge>已归档</Badge> : session.permission === "read" ? <Badge>只读</Badge> : null}
               {roleLabel ? <Badge tone={role?.role === "owner" ? "accent" : "warn"}>{roleLabel}</Badge> : null}
             </button>
@@ -925,6 +959,10 @@ function WriteCoordinationBar({ task }: { task: Task }) {
  *
  * 状态取自 Host：待确认请求 + 实时运行记录 + 会话 `runState`（`executionView`），
  * 渲染层不估算进度。空闲不出卡；「标记已处理」只压掉被处理的那个状态。
+ *
+ * 审批只有这一处（原型 `executionPanel()` 的 `approval-preview` 就是唯一审批面）：
+ * 载荷审阅（操作/命令/目录/影响/接收人/有效期/载荷版本）与批准·拒绝·标记过期都在卡内，
+ * 输入框上方不再渲染第二份审阅面板——两份曾把等待确认页的消息区压到 26px。
  */
 function RunStateCard({ taskId, sessionId }: { taskId: string; sessionId: string }) {
   const key = sessionKeyOf(taskId, sessionId);
@@ -936,6 +974,7 @@ function RunStateCard({ taskId, sessionId }: { taskId: string; sessionId: string
   const dismissExecution = useUiStore((state) => state.dismissExecution);
   const stopRun = useHostStore((state) => state.stopRun);
   const resolveApproval = useHostStore((state) => state.resolveApproval);
+  const simulateExpiry = useHostStore((state) => state.simulateExpiry);
   const openModal = useUiStore((state) => state.openModal);
   const pushToast = useUiStore((state) => state.pushToast);
   if (!session) return null;
@@ -947,6 +986,12 @@ function RunStateCard({ taskId, sessionId }: { taskId: string; sessionId: string
     ...(record !== undefined ? { record } : {}),
     ...(approval !== undefined ? { pendingApproval: approval } : {}),
   });
+  // The last resolved request of this session keeps its outcome visible: the
+  // retired payload panel used to state it, and “未执行” is what users rely on
+  // after a refusal or an expiry.
+  const resolvedApproval = approvals.find(
+    (item) => item.taskId === taskId && item.sessionId === sessionId && item.status !== "pending",
+  );
   const other = otherBusySession(sessions ?? [], sessionId, (item) =>
     executionStateOf({
       sessionRunState: item.runState,
@@ -976,14 +1021,17 @@ function RunStateCard({ taskId, sessionId }: { taskId: string; sessionId: string
       openModal({ type: "retry", taskId, sessionId });
       return;
     }
+    // Only this session's card is hidden: the Host has no attention-ack entry
+    // (`execution-ledger` regenerates the expired item on every read), so the
+    // toast must not claim the item left 需要处理 ([UI 对齐 05] #29 review).
     dismissExecution(taskId, sessionId, state);
-    pushToast("已移出关注列表，执行记录保留");
+    pushToast("已在本会话隐藏该状态卡；执行记录保留");
   };
   return (
     <section
       data-testid="execution-card"
       aria-label="会话执行状态"
-      className="max-h-[34vh] flex-shrink-0 overflow-auto rounded-lg border border-[#e0e5ef] bg-[#f6f8fc] px-3 py-2.5 text-xs"
+      className="max-h-[34vh] flex-shrink-0 overflow-auto rounded-lg border border-[#e0e5ef] bg-[#f6f8fc] px-3 py-2 text-xs"
     >
       <div className="flex items-center justify-between gap-3">
         <strong data-testid="execution-card-state" className="text-xs font-semibold text-ink">
@@ -996,54 +1044,101 @@ function RunStateCard({ taskId, sessionId }: { taskId: string; sessionId: string
               size="sm"
               variant={action === "approve" ? "primary" : "default"}
               disabled={readonly}
-              title={readonly ? "当前是只读会话，请先调整会话权限" : undefined}
+              title={readonly ? READONLY_ACTION_TITLE : undefined}
               onClick={() => run(action)}
             >
               {EXECUTION_ACTION_LABEL[action]}
             </Button>
           ))}
+          {/* The prototype keeps every control in the state row (`executionPanel()`
+              renders them inside the `.between` row). `标记过期` is the only way to
+              reach 确认已过期 without a scheduler, and a second row costs the
+              message area 34px, so it sits in this row too. */}
+          {state === "approval" && approval ? (
+            <Button
+              size="sm"
+              disabled={readonly}
+              title="把有效期推进到截止时刻，用于演示；真实调度由 Host 承担"
+              onClick={() => {
+                void simulateExpiry(approval.id);
+                pushToast("确认已过期，未执行");
+              }}
+            >
+              标记过期
+            </Button>
+          ) : null}
         </div>
       </div>
 
+      {/* A disabled button never shows its `title`, so the read-only rule needs
+          a visible line ([UI 对齐 05] #29 review). */}
+      {readonly && executionActions(state).length > 0 ? (
+        <p className="mt-1.5 text-[11px] text-orange" data-testid="execution-readonly-hint">
+          {READONLY_ACTION_TITLE}；只读会话可以阅读和分析，不能执行这些操作。
+        </p>
+      ) : null}
+
+      {resolvedApproval ? (
+        <small className="mt-1 block text-[11px] text-muted" data-testid="execution-approval-outcome">
+          {resolvedApproval.title} ·{" "}
+          <span className={resolvedApproval.status === "expired" ? "text-orange" : undefined}>
+            {resolvedApproval.status === "expired"
+              ? "确认已过期，未执行。"
+              : resolvedApproval.status === "rejected"
+                ? "已拒绝，未执行。"
+                : resolvedApproval.executed
+                  ? `正在执行 ${resolvedApproval.command}`
+                  : "已批准，等待执行。"}
+          </span>
+        </small>
+      ) : null}
+
       {other ? (
-        <p className="mt-1.5 text-[11px] text-muted" data-testid="execution-other-session">
+        <p className="mt-1 text-[11px] text-muted" data-testid="execution-other-session">
           「{other.name}」正在执行或等待确认；本会话可编辑草稿，待其结束后再执行。
         </p>
       ) : null}
-      {record?.summary ? <p className="mt-1.5 text-[11px] text-muted">{record.summary}</p> : null}
+      {record?.summary ? <p className="mt-1 text-[11px] text-muted">{record.summary}</p> : null}
       {record?.failedScope ? (
         <p className="mt-1 text-[11px] text-orange">失败范围：{record.failedScope}</p>
       ) : null}
 
       {state === "approval" && approval ? (
-        <div className="mt-2 rounded-md bg-paper p-2.5" data-testid="execution-approval-preview">
+        <div className="mt-1 rounded-md bg-paper px-2.5 py-1.5" data-testid="execution-approval-preview">
           <strong className="block text-[11px] text-ink">待批准：{approval.title}</strong>
-          <p className="mt-1 text-[11px] text-muted">
+          <p className="mt-0.5 text-[11px] text-muted">
             目标：{approval.command}
             {approval.cwd ? ` · ${approval.cwd}` : ""}
             {approval.recipient ? ` · 接收人：${approval.recipient}` : ""}
           </p>
-          <p className="mt-1 text-[11px] text-muted">影响：{approval.impact}</p>
-          <p className="mt-1 text-[11px] text-muted">
+          {/* 原型 `closure.js` 把授权说明挂在审批正文同一段落里，不单占一行。 */}
+          <p className="mt-0.5 text-[11px] text-muted">
+            影响：{approval.impact}。批准仅授权这一次操作，不自动授权未来执行。
+          </p>
+          <p className="mt-0.5 text-[11px] text-muted">
             有效期：{new Date(approval.expiresAt).toLocaleString("zh-CN")}
             （等待起点后 24 小时与下一次计划时刻取较早者；过期后不发送）
           </p>
-          <p className="mt-1 text-[11px] text-muted">批准仅授权这一次操作，不自动授权未来执行。</p>
-          {pending.length > 1 ? (
-            <p className="mt-1 text-[11px] text-muted" data-testid="execution-approval-rest">
-              另有 {pending.length - 1} 个待确认请求，可在「需要处理」中查看。
-            </p>
-          ) : null}
+          <p className="mt-0.5 text-[11px] text-muted">
+            <span data-testid="execution-approval-payload-version">载荷版本：{approval.payloadVersion}</span>
+            {pending.length > 1 ? (
+              <span data-testid="execution-approval-rest">
+                {" · 另有 "}
+                {pending.length - 1}
+                {" 个待确认请求，可在「需要处理」中查看"}
+              </span>
+            ) : null}
+          </p>
         </div>
       ) : null}
 
       {state === "failed" ? (
-        <small className="mt-1.5 block text-[11px] text-muted">
+        <small className="mt-1 block text-[11px] text-muted">
           已完成的步骤保留；外部发送结果不确定时须先核对送达情况。
         </small>
       ) : null}
       {state === "expired" ? (
-        <small className="mt-1.5 block text-[11px] text-muted">
+        <small className="mt-1 block text-[11px] text-muted">
           旧确认不可继续批准；后续周期可正常触发。需要发送旧结果时重新提出请求。
         </small>
       ) : null}
@@ -1069,95 +1164,12 @@ function RunStateCard({ taskId, sessionId }: { taskId: string; sessionId: string
           </ol>
         </details>
       ) : null}
-      {state !== "idle" ? (
-        <p className="mt-1.5 text-[11px] text-muted">停止不回滚已完成操作；恢复不自动重放已完成工具。</p>
-      ) : null}
     </section>
   );
 }
 
 function stepStateLabel(state: "done" | "failed" | "pending" | "skipped") {
   return { done: "完成", failed: "失败", pending: "等待", skipped: "跳过" }[state];
-}
-
-export function ApprovalCard({ approval, onResolved }: { approval: Approval; onResolved?: () => void }) {
-  const resolveApproval = useHostStore((state) => state.resolveApproval);
-  const simulateExpiry = useHostStore((state) => state.simulateExpiry);
-  const pushToast = useUiStore((state) => state.pushToast);
-  const expiresAt = new Date(approval.expiresAt);
-
-  return (
-    <Panel
-      title="等待确认"
-      actions={<Badge tone={approval.status === "pending" ? "warn" : "neutral"}>{approvalStatusLabel(approval.status)}</Badge>}
-    >
-      <dl className="grid grid-cols-[92px_1fr] gap-x-4 gap-y-2 text-xs">
-        <dt className="text-muted">操作</dt>
-        <dd>{approval.title}</dd>
-        <dt className="text-muted">命令</dt>
-        <dd className="font-mono text-[11px]">{approval.command}</dd>
-        <dt className="text-muted">目录</dt>
-        <dd className="font-mono text-[11px]">{approval.cwd}</dd>
-        <dt className="text-muted">影响</dt>
-        <dd>{approval.impact}</dd>
-        {approval.recipient ? (
-          <>
-            <dt className="text-muted">接收人</dt>
-            <dd>{approval.recipient}</dd>
-          </>
-        ) : null}
-        <dt className="text-muted">有效期</dt>
-        <dd>
-          {expiresAt.toLocaleString("zh-CN")}（等待起点后 24 小时与下一次计划时刻取较早者）
-        </dd>
-        <dt className="text-muted">载荷版本</dt>
-        <dd className="font-mono text-[11px]">{approval.payloadVersion}</dd>
-      </dl>
-
-      {approval.status === "pending" ? (
-        <div className="mt-3 flex flex-wrap gap-2">
-          <Button
-            size="sm"
-            variant="primary"
-            onClick={() => {
-              void resolveApproval(approval.id, "approved");
-              pushToast("已批准本次请求，执行前会再次校验内容版本与权限");
-              onResolved?.();
-            }}
-          >
-            批准
-          </Button>
-          <Button
-            size="sm"
-            onClick={() => {
-              void resolveApproval(approval.id, "rejected");
-              pushToast("已拒绝，本次请求不会执行");
-              onResolved?.();
-            }}
-          >
-            拒绝
-          </Button>
-          <Button
-            size="sm"
-            title="把有效期推进到截止时刻，用于演示；真实调度由 Host 承担"
-            onClick={() => {
-              void simulateExpiry(approval.id);
-              pushToast("确认已过期，未执行");
-              onResolved?.();
-            }}
-          >
-            标记过期
-          </Button>
-        </div>
-      ) : null}
-
-      {approval.status === "approved" && approval.executed ? (
-        <p className="mt-3 text-xs text-accent">正在执行 {approval.command}</p>
-      ) : null}
-      {approval.status === "rejected" ? <p className="mt-3 text-xs text-muted">已拒绝，未执行。</p> : null}
-      {approval.status === "expired" ? <p className="mt-3 text-xs text-orange">确认已过期，未执行。</p> : null}
-    </Panel>
-  );
 }
 
 /**
@@ -1256,11 +1268,9 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
   const navigate = useNavigationStore((state) => state.navigate);
   const pushToast = useUiStore((state) => state.pushToast);
   const openModal = useUiStore((state) => state.openModal);
-  const approvals = useHostStore((state) => state.approvals);
   const providers = useHostStore((state) => state.workspace?.providers ?? []);
   const [sending, setSending] = useState(false);
 
-  const approval = approvals.find((item) => item.taskId === task.id && item.sessionId === sessionId);
   const provider = providers.find((item) => item.id === session?.providerId);
   const model = provider?.models.find((item) => item.id === session?.model);
   const permissionLabel = { read: "只读", default: "默认权限", auto: "自动执行" }[session?.permission ?? "default"];
@@ -1410,7 +1420,6 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
 
   return (
     <div data-testid="task-composer" className="flex flex-col gap-2">
-      {approval ? <ApprovalCard approval={approval} /> : null}
       <form
         className="rounded-panel border border-line bg-paper px-3 py-2.5"
         onSubmit={async (event) => {

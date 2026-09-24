@@ -6,12 +6,15 @@ import { renderApp } from "./helpers";
 /**
  * [UI 对齐 05] (#29) session navigation strip.
  *
- * Prototype A (`prototypes/pidock-ui/navigation.js` + `closure.css`) renders the
+ * Prototype A (`prototypes/pidock-ui/navigation.js` + `style.css`) renders the
  * row as 全部会话 N + at most four tabs + a `+` icon button; the tabs stay plain
- * buttons (the strip is not an ARIA tablist) and `closure.css` gives them
- * `flex-shrink:1`. The strip was the one place the workspace could still clip
- * ([UI 对齐 03] #27 残项: 41px at 1280px and 149px at 1024px), so the tabs now
- * shrink (`min-w-0 shrink`) and the non-active ones leave the strip by tier.
+ * buttons (the strip is not an ARIA tablist). The strip was the one place the
+ * workspace could still clip ([UI 对齐 03] #27 残项: 41px at 1280px and 149px at
+ * 1024px). The prototype's later `style.css` revision answers exactly that: the
+ * row keeps one line, a label is never ellipsized (`.session-tab{white-space:
+ * nowrap}`), and the row scrolls when it needs more room
+ * (`.sessions{overflow-x:auto}`). The implementation copies that, so the tabs
+ * no longer shrink into an ellipsis and the tiers only reduce the visible count.
  * jsdom has no layout, so this file checks the class contract; the measured
  * geometry (and its assertions) live in
  * `docs/evidence/ui-alignment-s3/capture-execution.mjs` → `execution-card.json`.
@@ -23,23 +26,25 @@ function tabsOf(strip: HTMLElement) {
 }
 
 describe("session navigation strip", () => {
-  it("keeps one row whose non-active tabs shrink and leave by tier", async () => {
+  it("keeps one scrollable row whose tabs never shrink into an ellipsis", async () => {
     renderApp("/projects/atlas/tasks/release?session=main");
     await screen.findByRole("heading", { name: "发布前检查" });
 
     const strip = await screen.findByTestId("session-tab-strip");
-    // A safety net only: the tiers keep the content inside the box (measured),
-    // the class stays so a future tab can never widen the row.
-    expect(strip.className).toContain("overflow-hidden");
+    // The row scrolls instead of hiding its overflow: a crowded strip must stay
+    // reachable (prototype `.sessions{overflow-x:auto}`).
+    expect(strip.className).toContain("overflow-x-auto");
+    expect(strip.className).not.toContain("overflow-hidden");
     expect(strip.className).toContain("flex-nowrap");
 
     // The seeded task has four active sessions; the cap keeps it at four.
     const [active, first, second, third] = tabsOf(strip);
-    // The active tab keeps its width; the others give way, and only the tiers
-    // remove them (never the label being cut).
+    // Every tab is `shrink-0`: only the tiers remove tabs, never a cut label.
     expect(active!.className).toContain("shrink-0");
-    expect(first!.className).toContain("min-w-0");
-    expect(first!.className).toContain("shrink ");
+    expect(first!.className).toContain("shrink-0");
+    expect(first!.className).not.toContain("shrink ");
+    expect(first!.querySelector("span")).toHaveClass("whitespace-nowrap");
+    expect(first!.querySelector("span")).not.toHaveClass("truncate");
     // 4 tabs at desktop → 2 below 1180px → 1 below 960px.
     expect(first!.className).toContain("below-mid:hidden");
     expect(second!.className).toContain("below-wide:hidden");
@@ -60,7 +65,7 @@ describe("session navigation strip", () => {
     expect(tabs[3]!.className).toContain("below-wide:hidden");
     // The tab names the right-click action the prototype documents.
     expect(tabs[0]).toHaveAttribute("title", "实现与验证 · 右键操作");
-    expect(tabs[0]!.querySelector("span")).toHaveClass("truncate");
+    expect(tabs[0]!.querySelector("span")).toHaveClass("whitespace-nowrap");
 
     // Switching sessions keeps four tabs and moves the tiers with the active one.
     await user.click(tabs[0]!);
