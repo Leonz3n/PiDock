@@ -229,26 +229,34 @@ export function TabRow<T extends string>({
   value,
   onChange,
   ariaLabel,
+  className = "",
 }: {
-  items: { value: T; label: string }[];
+  /** `badge` is the prototype's inner `<span>` count (`capability-tabs`). */
+  items: { value: T; label: string; badge?: ReactNode }[];
   value: T;
   onChange: (value: T) => void;
   ariaLabel: string;
+  className?: string;
 }) {
   return (
-    <div role="tablist" aria-label={ariaLabel} className="tabs mb-6 flex gap-5 border-b border-line">
+    <div role="tablist" aria-label={ariaLabel} className={`tabs mb-6 flex gap-5 border-b border-line ${className}`}>
       {items.map((item) => (
         <button
           key={item.value}
           type="button"
           role="tab"
           aria-selected={value === item.value}
+          // The accessible name is the tab's label; the count span next to it is
+          // visible text but not part of the name (the prototype's
+          // `.capability-tabs button span`).
+          aria-label={item.label}
           onClick={() => onChange(item.value)}
-          className={`border-b-2 px-0.5 py-3 text-xs ${
+          className={`flex items-center gap-2 border-b-2 px-0.5 py-3 text-xs ${
             value === item.value ? "border-accent text-accent" : "border-transparent text-[#8c8e93] hover:text-ink"
           }`}
         >
           {item.label}
+          {item.badge === undefined ? null : <span className="text-[9px] text-[#9aa2ad]">{item.badge}</span>}
         </button>
       ))}
     </div>

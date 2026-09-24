@@ -1,16 +1,32 @@
 import { useState } from "react";
-import { Badge, Button, Panel, Segmented } from "../components/ui";
+import { Badge, Button, Panel } from "../components/ui";
+import { Icon, type IconName } from "../components/Icon";
+import { PageIntro, PageTitle, TabRow, ViewLabel } from "../components/Management";
 import { capabilityChangeLabel, capabilityKindLabel, capabilityRepairChanged, capabilityRows, isCapabilityEnabled, mcpConnectionLabel, mcpBridgeStatus, packageVersionState, sourceKindLabel, type CapabilityRow } from "../data/capabilityRules";
 import type { Capability, CapabilityFailureCode } from "../data/types";
 import { useHostStore } from "../stores/host";
 import { useUiStore } from "../stores/ui";
 
-const kinds = [
-  { value: "all", label: "全部" },
-  { value: "skill", label: "Skills" },
-  { value: "extension", label: "Extensions" },
-  { value: "package", label: "Packages" },
-  { value: "mcp", label: "MCP Servers" },
+/** Prototype `capabilityLabels` plus this page's 全部 position. */
+const KINDS = [
+  { value: "all", label: "全部", addLabel: "添加技能来源" },
+  { value: "skill", label: "Skills", addLabel: "添加技能来源" },
+  { value: "mcp", label: "MCP Servers", addLabel: "添加 MCP Server" },
+  { value: "extension", label: "Extensions", addLabel: "添加 Extension" },
+  { value: "package", label: "Packages", addLabel: "安装扩展包" },
+] as const;
+
+type KindFilter = (typeof KINDS)[number]["value"];
+
+/** Prototype `capabilityRow()`'s per-kind glyph. */
+const KIND_ICON: Record<Capability["kind"], IconName> = { skill: "book", mcp: "server", extension: "code", package: "archive" };
+
+/** Prototype `.capability-summary`: the four counts above the tab strip. */
+const SUMMARY_CELLS = [
+  { kind: "skill", label: "Skills" },
+  { kind: "mcp", label: "MCP Servers" },
+  { kind: "extension", label: "Extensions" },
+  { kind: "package", label: "Packages" },
 ] as const;
 
 export function CapabilitiesPage() {
@@ -21,14 +37,15 @@ export function CapabilitiesPage() {
   const recheckCapabilities = useHostStore((state) => state.recheckCapabilities);
   const openModal = useUiStore((state) => state.openModal);
   const pushToast = useUiStore((state) => state.pushToast);
-  const [kind, setKind] = useState<(typeof kinds)[number]["value"]>("all");
+  const [kind, setKind] = useState<KindFilter>("all");
   const capabilities = workspace?.capabilities ?? [];
   // No session is attached to this page, so the tier shown is the standard
   // `default` session tier: it is the tier where a capability asking for more
   // is visibly capped, and the row says which tier it assumes.
   const rows = capabilityRows(capabilities, "default").filter((row) => kind === "all" || row.capability.kind === kind);
   const addKind: "skill" | "extension" | "package" | "mcp" = kind === "all" ? "skill" : kind;
-  const addLabel = { skill: "添加技能来源", extension: "添加 Extension", package: "安装扩展包", mcp: "添加 MCP Server" }[addKind];
+  const addLabel = (KINDS.find((entry) => entry.value === kind) ?? KINDS[1]).addLabel;
+  const enabledOf = (entries: readonly Capability[]) => `${entries.filter((entry) => isCapabilityEnabled(entry)).length} / ${entries.length} 已启用`;
 
   const fail = (error: unknown) => pushToast(error instanceof Error ? error.message : String(error));
   const toggle = async (capability: Capability) => {
@@ -79,32 +96,65 @@ export function CapabilitiesPage() {
   };
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4" data-testid="capabilities-page">
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-base font-medium text-ink">能力管理</h1>
-          <p className="mt-1 text-xs text-muted">
-            区分 Pi 原生 Skills、Extensions、Packages，以及 PiDock 通过 bridge Extension 接入的 MCP Servers；Package 负责安装版本，其余视图呈现运行资源与连接。
-          </p>
+          <ViewLabel>AGENT CAPABILITIES</ViewLabel>
+          <PageTitle>能力管理</PageTitle>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Segmented ariaLabel="按类型过滤" value={kind} onChange={setKind} options={[...kinds]} />
           <Button size="sm" onClick={() => void recheck()}>
+            <Icon name="refresh" />
             重新检查来源
           </Button>
           <Button size="sm" variant="primary" onClick={() => openModal({ type: "add-capability", kind: addKind })}>
+            <Icon name="plus" />
             {addLabel}
           </Button>
         </div>
       </header>
 
+      <PageIntro>Package 负责安装与版本，Skill、MCP 和 Extension 分别展示运行来源、作用域与风险。</PageIntro>
+
+      <div className="capability-summary grid grid-cols-4 rounded-[8px] border border-line bg-paper below-mid:grid-cols-2 below-stack:grid-cols-1">
+        {SUMMARY_CELLS.map((cell) => (
+          <div key={cell.kind} className="border-r border-line px-[18px] py-[15px] last:border-r-0">
+            <strong className="block text-[21px] font-[550] text-ink">{capabilities.filter((entry) => entry.kind === cell.kind).length}</strong>
+            <small className="mt-[2px] block text-[11px] text-muted">{cell.label}</small>
+          </div>
+        ))}
+      </div>
+
+      <TabRow
+        className="capability-tabs"
+        ariaLabel="按类型过滤"
+        value={kind}
+        onChange={setKind}
+        items={KINDS.map((entry) => ({
+          value: entry.value,
+          label: entry.label,
+          badge: enabledOf(entry.value === "all" ? capabilities : capabilities.filter((capability) => capability.kind === entry.value)),
+        }))}
+      />
+
+      {kind === "mcp" ? (
+        <div className="inline-notice mb-[19px] rounded-[7px] border border-[#e7e2d5] bg-[#fbf9f2] px-[13px] py-[10px] text-[11px] text-[#948257]">
+          Pi 原生不包含 MCP。PiDock 管理 Server，并通过受控的桥接 Extension 注册工具；首版不承诺兼容 MCP 的 prompts、resources 等其他能力。
+        </div>
+      ) : null}
+      {kind === "package" ? (
+        <div className="inline-notice mb-[19px] rounded-[7px] border border-[#e7e2d5] bg-[#fbf9f2] px-[13px] py-[10px] text-[11px] text-[#948257]">
+          Package 是 npm、git 或本地来源的安装与更新单元；其中可包含多个 Skills、Extensions、Prompts 或主题。
+        </div>
+      ) : null}
+
       <div className="rounded-md border border-line bg-soft/40 px-3 py-2 text-[11px] text-muted">
         当前数据来自内存投影：来源、版本与连接状态均为夹具，尚未读取真实磁盘来源或建立真实连接。能力声明的权限不会扩大会话权限。
       </div>
 
-      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+      <div className="capability-list overflow-hidden rounded-[8px] border border-line bg-paper">
         {rows.map((row) => (
-          <CapabilityPanel
+          <CapabilityRowView
             key={row.capability.id}
             row={row}
             capabilities={capabilities}
@@ -115,6 +165,10 @@ export function CapabilitiesPage() {
         ))}
       </div>
 
+      <p className="note text-[10px] leading-[1.9] text-[#939c9f]">
+        启停只改变内存投影里的配置状态；真实的加载、连接与版本切换要等会话空闲边界，磁盘来源与包内容在本页不会被写入。正式产品还需要区分配置已保存、包已安装与运行时已加载。
+      </p>
+
       <Panel title="来源与权限">
         <p className="text-xs text-muted">
           能力来源、适用范围与工具权限分开呈现；技能调用不改变来源或权限。凭据与密钥引用保存在本机私有配置，不随共享模板提交。
@@ -124,7 +178,14 @@ export function CapabilitiesPage() {
   );
 }
 
-function CapabilityPanel({
+/**
+ * One row of the prototype's `.capability-list`: glyph + name + description +
+ * meta on the left, the status badge, then the row's actions. The extra lines
+ * below the row carry this app's real readings (version state, bridge and
+ * connection, the invalid reason, a change waiting for the boundary), which the
+ * prototype's mock does not have ([UI 对齐 09] #33).
+ */
+function CapabilityRowView({
   row,
   capabilities,
   onToggle,
@@ -141,32 +202,71 @@ function CapabilityPanel({
   const { capability } = row;
   const version = packageVersionState(capability);
   const bridge = capability.kind === "mcp" ? mcpBridgeStatus(capabilities, capability) : null;
+  const change = capabilityChangeLabel(capability);
   return (
-    <Panel
-      title={capability.name}
-      actions={
+    <section
+      data-testid={`capability-row-${capability.id}`}
+      className="capability-row border-b border-line px-[15px] py-[13px] last:border-b-0"
+    >
+      <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3.5 below-stack:grid-cols-[minmax(0,1fr)_auto]">
+        <div className="capability-main grid min-w-0 grid-cols-[36px_minmax(0,1fr)] items-start gap-3 text-left">
+          <span aria-hidden="true" className="capability-icon grid h-9 w-9 place-items-center rounded-[7px] bg-[#f1f3f6] text-[#66758f]">
+            <Icon name={KIND_ICON[capability.kind]} />
+          </span>
+          <span className="min-w-0">
+            <strong className="block text-[12px] font-[650] text-ink">{capability.name}</strong>
+            <small className="block truncate text-[11px] text-muted">{capability.description ?? capabilityKindLabel(capability.kind)}</small>
+            <span className="capability-meta flex flex-wrap items-center gap-[13px] text-[10px] text-[#8a94a2]">
+              <span>{capability.source}</span>
+              <span>{sourceKindLabel(row.sourceKind)}</span>
+              <span>{capability.scope}</span>
+              <span>
+                权限 {capability.requestedPermission ?? "未声明"} · 实际为 {row.permission}
+              </span>
+            </span>
+          </span>
+        </div>
         <div className="flex items-center gap-1.5">
           {row.ambiguous ? <Badge tone="warn">重名 · 按来源区分</Badge> : null}
           <Badge tone={capability.status === "enabled" ? "accent" : capability.status === "update-available" ? "warn" : "neutral"}>{statusLabel(capability.status)}</Badge>
         </div>
-      }
-    >
-      <dl className="grid grid-cols-[80px_1fr] gap-x-3 gap-y-1.5 text-xs">
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Button size="sm" variant="ghost" onClick={() => openModal({ type: "capability-detail", capabilityId: capability.id })}>
+            详情
+          </Button>
+          <Button size="sm" onClick={onToggle}>
+            <Icon name={isCapabilityEnabled(capability) ? "stop" : "play"} />
+            {isCapabilityEnabled(capability) ? "停用" : "启用"}
+          </Button>
+          {version === "not-installed" ? (
+            <Button size="sm" variant="primary" onClick={onInstall}>
+              <Icon name="down" />
+              安装 {capability.availableVersion ?? "此版本"}
+            </Button>
+          ) : null}
+          {version === "update-available" ? (
+            <Button size="sm" variant="primary" onClick={onInstall}>
+              <Icon name="refresh" />
+              更新到 {capability.availableVersion}
+            </Button>
+          ) : null}
+          {capability.kind === "mcp" && bridge && !bridge.ok ? <span className="self-center text-[11px] text-orange">需要 bridge Extension</span> : null}
+          {capability.kind === "mcp" && capability.connection?.state !== "connected" && (bridge === null || bridge.ok) ? (
+            <Button size="sm" onClick={onRetry}>
+              <Icon name="refresh" />
+              重试连接
+            </Button>
+          ) : null}
+        </div>
+      </div>
+
+      <dl className="mt-2.5 grid grid-cols-[80px_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-[11px]">
         <dt className="text-muted">类型</dt>
         <dd>{capabilityKindLabel(capability.kind)}</dd>
-        <dt className="text-muted">来源</dt>
-        <dd>
-          <span className="font-mono text-[11px]">{capability.source}</span>
-          <span className="ml-2 text-muted">
-            {sourceKindLabel(row.sourceKind)}
-          </span>
-        </dd>
-        <dt className="text-muted">作用域</dt>
-        <dd>{capability.scope}</dd>
         {capability.kind === "package" ? (
           <>
             <dt className="text-muted">安装版本</dt>
-            <dd>
+            <dd data-testid={`capability-version-${capability.id}`}>
               已安装 {capability.installedVersion ?? "未安装"}
               {capability.availableVersion ? ` · 可用 ${capability.availableVersion}` : ""}
             </dd>
@@ -177,55 +277,25 @@ function CapabilityPanel({
             <dt className="text-muted">bridge</dt>
             <dd>{capability.bridge ? capability.bridge.extensionId : "未选择 bridge Extension"}</dd>
             <dt className="text-muted">连接</dt>
-            <dd>
+            <dd data-testid={`capability-connection-${capability.id}`}>
               {mcpConnectionLabel(capability.connection?.state ?? "disconnected")}
               {capability.connection?.attempts ? ` · 尝试 ${capability.connection.attempts} 次` : ""}
               {capability.authRef ? " · 凭据引用已保存" : ""}
             </dd>
           </>
         ) : null}
-        <dt className="text-muted">权限</dt>
-        <dd>
-          声明 {capability.requestedPermission ?? "未声明"} · 在 default 会话中实际为 {row.permission}
-          {capability.requestedPermission !== undefined && row.permission !== capability.requestedPermission ? "（能力不能扩大会话权限）" : ""}
-        </dd>
         <dt className="text-muted">可用性</dt>
         <dd>{row.provenance === "verified" ? "已在本机验证" : "仅声明（未验证，不代表 SDK 已支持）"}</dd>
       </dl>
 
       {row.invalid ? (
-        <p className="mt-2 rounded-md border border-orange/35 bg-orange/10 px-3 py-2 text-xs text-orange">
+        <p className="mt-2 rounded-md border border-orange/35 bg-orange/10 px-3 py-2 text-[11px] text-orange">
           {invalidLabel(row.invalid.code)}：{row.invalid.message}
         </p>
       ) : null}
 
-      {capabilityChangeLabel(capability) ? <p className="mt-2 text-[11px] text-muted">{capabilityChangeLabel(capability)}</p> : null}
-
-      <div className="mt-3 flex flex-wrap gap-2">
-        <Button size="sm" variant="ghost" onClick={() => openModal({ type: "capability-detail", capabilityId: capability.id })}>
-          详情
-        </Button>
-        <Button size="sm" onClick={onToggle}>
-          {isCapabilityEnabled(capability) ? "停用" : "启用"}
-        </Button>
-        {version === "not-installed" ? (
-          <Button size="sm" variant="primary" onClick={onInstall}>
-            安装 {capability.availableVersion ?? "此版本"}
-          </Button>
-        ) : null}
-        {version === "update-available" ? (
-          <Button size="sm" variant="primary" onClick={onInstall}>
-            更新到 {capability.availableVersion}
-          </Button>
-        ) : null}
-        {capability.kind === "mcp" && bridge && !bridge.ok ? <span className="self-center text-[11px] text-orange">需要 bridge Extension</span> : null}
-        {capability.kind === "mcp" && capability.connection?.state !== "connected" && (bridge === null || bridge.ok) ? (
-          <Button size="sm" onClick={onRetry}>
-            重试连接
-          </Button>
-        ) : null}
-      </div>
-    </Panel>
+      {change ? <p className="mt-2 text-[11px] text-muted">{change}</p> : null}
+    </section>
   );
 }
 
