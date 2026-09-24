@@ -49,6 +49,10 @@ const VIEWPORTS = [
 const MANAGEMENT_SELECTORS = {
   page: ".page",
   viewLabel: ".view-label",
+  // The page's first `h2`. The prototype declares no `font-weight` on `h2`, so
+  // its computed value is the browser's 700 (h1/h3 declare 650) — measured
+  // against the renderer rather than asserted in a comment.
+  sectionTitle: "h2",
   pageIntro: ".page-intro",
   card: ".card",
   stat: ".stat",
@@ -244,6 +248,9 @@ report.prototypeA.effectiveConfig = await prototypePage.evaluate((selectors) => 
       : [],
     cellTh: window.__styleOf(table?.querySelector("th")),
     cellTd: window.__styleOf(table?.querySelector("td")),
+    // `.table tr:last-child td{border:0}` — the last body row carries no bottom
+    // border in the prototype.
+    lastRowTd: window.__styleOf(table?.querySelector("tr:last-child td")),
     editableFields: rows ? rows.querySelectorAll("input, textarea").length : 0,
     selectors: rows ? rows.querySelectorAll("select").length : 0,
     notes: [...document.querySelectorAll(".modal .note")].map((note) => note.textContent.trim()),
@@ -341,6 +348,7 @@ const measureDialog = (page, rootTestId) =>
       table: window.__styleOf(dialog?.querySelector(".table")),
       th: window.__styleOf(dialog?.querySelector("th")),
       td: window.__styleOf(dialog?.querySelector("td")),
+      lastRowTd: window.__styleOf(dialog?.querySelector("tbody tr:last-child td")),
       thText: dialog ? [...dialog.querySelectorAll("th")].map((th) => th.textContent.trim()) : [],
       configRows: dialog
         ? [...dialog.querySelectorAll("tbody tr")].map((row) => [...row.children].map((cell) => cell.textContent.trim()))
@@ -463,7 +471,23 @@ for (const viewport of VIEWPORTS) {
         iconCount: element.querySelectorAll("svg").length,
       };
     };
-    return { primary: read(button), small: read(small) };
+    // The icon side of the deviation, measured the same way as the prototype's
+    // `pageButtons` / `footerPrimary` / `rowSmall` — it used to be read off the
+    // source instead of measured.
+    const overview = document.querySelector('[data-testid="project-overview"]');
+    return {
+      primary: read(button),
+      small: read(small),
+      icons: {
+        footerPrimary: button?.querySelectorAll("svg").length ?? null,
+        rowSmall: small?.querySelectorAll("svg").length ?? null,
+        pageButtons: overview
+          ? [...overview.querySelectorAll("button")]
+              .filter((element) => element.classList.contains("btn"))
+              .map((element) => element.querySelectorAll("svg").length)
+          : null,
+      },
+    };
   });
   report.geometry.button = {
     prototype: {
@@ -608,6 +632,8 @@ const same = (a, b, keys, label) =>
   check(label, pick(a, keys) === pick(b, keys), `${pick(a, keys)} vs ${pick(b, keys)}`);
 
 same(repo1440.measured.card, prototypeRepo.card, ["padding", "borderRadius", "backgroundColor", "borderWidth"], "card box");
+// The prototype's `h2` has no declared weight: both sides must compute 700.
+same(repo1440.measured.sectionTitle, prototypeRepo.sectionTitle, ["fontSize", "fontWeight", "letterSpacing", "color"], "section title");
 same(repo1440.measured.stat, prototypeRepo.stat, ["fontSize", "fontWeight", "letterSpacing", "marginTop", "color"], "stat");
 same(
   repo1440.measured.viewLabel,
@@ -768,6 +794,8 @@ check(
 );
 same(config.th, prototypeConfig.cellTh, ["padding", "backgroundColor", "fontSize", "color", "fontWeight"], "config table th");
 same(config.td, prototypeConfig.cellTd, ["padding", "fontSize"], "config table td");
+// `.table tr:last-child td{border:0}`: the last row carries no bottom border.
+same(config.lastRowTd, prototypeConfig.lastRowTd, ["borderWidth"], "config table last row border");
 check(
   "config table matches the prototype's row count shape",
   config.configRows.every((row) => row.length === prototypeConfig.bodyRows[0].length),
