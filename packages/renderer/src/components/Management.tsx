@@ -121,11 +121,19 @@ export function CardGrid({ cols, children, className = "" }: { cols: 2 | 3 | 4; 
   return <div className={`grid grid${cols} gap-4 ${columns} ${className}`}>{children}</div>;
 }
 
-export function StatCard({ label, value, actions }: { label: string; value: ReactNode; actions?: ReactNode }) {
+/**
+ * Prototype `.grid4 > .card` stat: `<small>label</small>`, the 28px `.stat`
+ * value, then an optional trailing `<small>` line that explains the reading
+ * (`usagePage()`'s 累计 Token card says 包含已报告的缓存用量). The third line is a
+ * prop rather than composed by the caller so every stat card keeps one shape
+ * ([UI 对齐 09] #33).
+ */
+export function StatCard({ label, value, detail, actions }: { label: string; value: ReactNode; detail?: ReactNode; actions?: ReactNode }) {
   return (
     <Card>
       <small className="text-[11px] text-muted">{label}</small>
       <div className="stat mt-[9px] text-[28px] font-[550] tracking-[-1px] text-ink">{value}</div>
+      {detail === undefined ? null : <small className="block text-[11px] text-muted">{detail}</small>}
       {actions ? <div className="mt-2">{actions}</div> : null}
     </Card>
   );
