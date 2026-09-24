@@ -14,16 +14,17 @@ describe("PiDock renderer flows", () => {
   it("reviews a concrete approval payload and expires it without executing", async () => {
     const user = userEvent.setup();
     renderApp("/projects/atlas/tasks/release?session=deploy");
-    // The state row of the execution card ([UI 对齐 05] #29) also reads
-    // 等待确认, so target the payload-review panel by its heading and check the
-    // card separately.
-    expect(await screen.findByRole("heading", { name: "等待确认" })).toBeInTheDocument();
-    expect(await screen.findByTestId("execution-card-state")).toHaveTextContent("等待确认");
-    expect(screen.getByText("bun run deploy:staging")).toBeInTheDocument();
-    expect(screen.queryByText("正在执行 deploy:staging")).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "标记过期" }));
+    // [UI 对齐 05] (#29) 审批只有执行状态卡一处：原型的 `executionPanel()` 自己带
+    // `approval-preview`，所以状态行与载荷审阅在同一个 region 内一起断言。
+    const card = await screen.findByRole("region", { name: "会话执行状态" });
+    expect(within(card).getByTestId("execution-card-state")).toHaveTextContent("等待确认");
+    const preview = await within(card).findByTestId("execution-approval-preview");
+    expect(preview).toHaveTextContent(/bun run deploy:staging/);
+    expect(preview).toHaveTextContent("载荷版本：");
+    expect(screen.queryByText(/正在执行 deploy:staging/)).not.toBeInTheDocument();
+    await user.click(within(card).getByRole("button", { name: "标记过期" }));
     expect(await screen.findByText("确认已过期，未执行。")).toBeInTheDocument();
-    expect(screen.queryByText("正在执行 deploy:staging")).not.toBeInTheDocument();
+    expect(screen.queryByText(/正在执行 deploy:staging/)).not.toBeInTheDocument();
   });
 
   it("retains a draft and references when a run fails", async () => {

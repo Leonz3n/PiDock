@@ -15,10 +15,6 @@ export function runStateLabel(state: RunState) {
   }[state];
 }
 
-export function approvalStatusLabel(status: "pending" | "approved" | "rejected" | "expired") {
-  return { pending: "待处理", approved: "已批准", rejected: "已拒绝", expired: "已过期" }[status];
-}
-
 export function scheduledRunResultLabel(result: ScheduledRun["result"]) {
   return { completed: "完成", "awaiting-approval": "待确认", skipped: "跳过", failed: "失败" }[result];
 }
