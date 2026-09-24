@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
 import { Badge, Button, EmptyState, Field, Modal, Segmented } from "./ui";
 import { VirtualList } from "./VirtualList";
-import { ManagementList, ManagementRow, PageEmpty } from "./Management";
+import { CheckRow, InlineNotice, ManagementList, ManagementRow, Note, PageEmpty, PreviewNote } from "./Management";
+import { ConfigTable } from "./ConfigTable";
 import { runStateLabel } from "../pages/runState";
 import { diffConfigRows, isSensitiveKey, nextTemplateVersion } from "../data/configRows";
 import { capabilityInvalidReason, isCapabilityEnabled, mcpBridgeStatus, mcpConnectionLabel, packageVersionState, sourceKindLabel } from "../data/capabilityRules";
@@ -351,6 +352,10 @@ export function Modals() {
 
   if (modal.type === "provider-edit") {
     return <ProviderEditModal providerId={modal.providerId} onClose={closeModal} />;
+  }
+
+  if (modal.type === "effective-config") {
+    return <EffectiveConfigModal taskId={modal.taskId} serviceId={modal.serviceId} onClose={closeModal} />;
   }
 
   if (modal.type === "project-list") {
@@ -2367,6 +2372,75 @@ function ProviderEditModal({ providerId, onClose }: { providerId?: string; onClo
   );
 }
 
+/**
+ * 查看生效配置 ([UI 对齐 08] #32): prototype `closure.js`
+ * `effectiveConfigDialog()` / `renderEffectiveConfig()`. Read-only by design —
+ * the only control is which service to resolve, and there is no save entry, so
+ * opening it can never write a draft back into the environment.
+ *
+ * The prototype's note says 示例解析 because its rows are invented; this app
+ * resolves the real layers through the Host, so the three claims it makes —
+ * saved config only, precedence needs a runtime check, saving is not loading —
+ * are kept and the 示例 wording is not.
+ */
+function EffectiveConfigModal({
+  taskId,
+  serviceId,
+  onClose,
+}: {
+  taskId?: string;
+  serviceId?: string;
+  onClose: () => void;
+}) {
+  const workspace = useHostStore((state) => state.workspace);
+  const tasks = workspace?.tasks ?? [];
+  const environments = workspace?.environments ?? [];
+  // No task selector: the prototype resolves the task you are already in, and
+  // every entry point into this dialog passes that task along.
+  const task = tasks.find((item) => item.id === taskId) ?? tasks[0];
+  const [selectedServiceId, setSelectedServiceId] = useState(serviceId ?? "");
+  if (!task) return null;
+  const environment = environments.find((item) => item.id === task.environmentId);
+  const service = task.services.find((item) => item.id === selectedServiceId) ?? task.services[0];
+
+  return (
+    <Modal title="查看生效配置" onClose={onClose}>
+      <p className="text-xs text-ink">
+        {task.name} · {environment?.name ?? task.environmentId} · 任务模板 {task.templateVersion}
+      </p>
+      <div className="mt-3">
+        <Field label="服务">
+          <select
+            data-testid="effective-service"
+            value={service?.id ?? ""}
+            onChange={(event) => setSelectedServiceId(event.target.value)}
+            className="rounded-md border border-line bg-paper px-2 py-1.5 text-sm"
+          >
+            {task.services.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+      </div>
+      {service ? (
+        <div data-testid="effective-config-rows">
+          <ConfigTable rows={service.resolved} valueHeader="最终值" />
+        </div>
+      ) : (
+        <p className="text-xs text-muted">该任务没有服务（仅普通目录），没有需要解析的运行配置。</p>
+      )}
+      <Note>
+        仅展示已保存的应用配置；未保存草稿不参与。业务框架配置优先级与真实进程值需运行时核对。保存修改不代表运行中进程已加载，需显式重启受影响服务。
+      </Note>
+      <p className="mt-2 text-[11px] text-muted">
+        只读视图：敏感值遮蔽；每行标出来自 仓库默认配置／共享模板／本机私有配置／任务覆盖／运行时端口绑定 哪一层。
+      </p>
+    </Modal>
+  );
+}
+
 function ProjectListModal({ onClose }: { onClose: () => void }) {
   const workspace = useHostStore((state) => state.workspace);
   const tasks = workspace?.tasks ?? [];
@@ -2580,7 +2654,7 @@ function ProjectDeleteModal({ projectId, onClose }: { projectId: string; onClose
         boundTasks.length === 0 ? (
           <Button
             size="sm"
-            variant="primary"
+            variant="danger"
             onClick={async () => {
               try {
                 await deleteProject(projectId);
@@ -2598,28 +2672,27 @@ function ProjectDeleteModal({ projectId, onClose }: { projectId: string; onClose
         ) : undefined
       }
     >
-      <h3 className="text-sm font-medium text-ink">{project.name}</h3>
+      <h3 className="text-[13px] font-[650] text-ink">{project.name}</h3>
       {boundTasks.length > 0 ? (
         <>
-          <div className="mt-3 rounded-md border border-orange/35 bg-orange/10 px-3 py-2 text-xs text-orange">
-            还有 {boundTasks.length} 个关联任务（包含已归档任务），暂不能删除项目。
+          <div className="mt-3">
+            <InlineNotice>
+              还有 {boundTasks.length} 个关联任务（包含已归档任务），暂不能删除项目。
+            </InlineNotice>
           </div>
-          <p className="mt-2 text-xs text-muted">请先在任务清理流程中处理这些任务；归档不会解除关联。</p>
-          <ul className="mt-2 flex flex-col gap-1 text-xs">
+          <p className="text-xs text-muted">请先在任务清理流程中处理这些任务；归档不会解除关联。</p>
+          <div className="mt-1">
             {boundTasks.map((task) => (
-              <li key={task.id} className="flex items-center justify-between border-b border-line pb-1">
-                <span className="text-ink">{task.name}</span>
-                <small className="text-muted">{task.archived ? "已归档" : "进行中"}</small>
-              </li>
+              <CheckRow key={task.id} title={task.name} detail={task.archived ? "已归档" : "进行中"} />
             ))}
-          </ul>
+          </div>
         </>
       ) : (
         <>
           <p className="mt-2 text-xs text-muted">
             将移除该项目的登记、仓库绑定和 {environmentCount} 个环境配置。原始仓库和磁盘上的共享模板文件保留。
           </p>
-          <p className="mt-2 text-[11px] text-muted">此操作仅演示删除范围，原型中刷新页面可重置。</p>
+          <PreviewNote>此操作仅演示删除范围，原型中刷新页面可重置。</PreviewNote>
         </>
       )}
     </Modal>

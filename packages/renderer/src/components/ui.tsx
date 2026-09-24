@@ -196,7 +196,10 @@ export function Modal({
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className="w-full max-w-xl rounded-panel border border-line bg-paper shadow-xl"
+        // Prototype `.modal{width:min(660px,100%);border-radius:13px}`
+        // ([UI 对齐 08] #32): every management dialog is that wide, so the
+        // resolved-config table and the project list have room to line up.
+        className="w-full max-w-[660px] rounded-panel border border-line bg-paper shadow-xl"
         onClick={(event) => event.stopPropagation()}
       >
         <header className="flex items-center justify-between border-b border-line px-5 py-3">

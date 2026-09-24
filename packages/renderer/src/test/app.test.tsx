@@ -118,9 +118,10 @@ describe("PiDock renderer flows", () => {
     renderApp("/env");
     expect(await screen.findByRole("heading", { name: "环境与服务" })).toBeInTheDocument();
 
-    const panel = screen.getByRole("heading", { name: "按服务查看生效配置", level: 2 }).closest("section");
-    expect(panel).not.toBeNull();
-    const table = within(panel as HTMLElement).getByRole("table");
+    // [UI 对齐 08] #32: the prototype exposes this as the 查看生效配置 dialog.
+    await user.click(screen.getByRole("button", { name: "查看生效配置" }));
+    const dialog = await screen.findByRole("dialog", { name: "查看生效配置" });
+    const table = within(dialog).getByRole("table");
 
     // The 来源 column distinguishes all four configuration layers.
     expect(within(table).getByText(/^共享模板 · .* · v\d+/)).toBeInTheDocument();
@@ -133,8 +134,13 @@ describe("PiDock renderer flows", () => {
     expect(within(table).queryByText("iv_live_9f2c8ba7d41e")).not.toBeInTheDocument();
     expect(within(table).getByText(/^https:\/\/saas-web\./)).toBeInTheDocument();
 
-    await user.selectOptions(screen.getByLabelText("选择服务"), "release-service-3");
-    expect(await within(table).findByText(/^https:\/\/invoice-service\./)).toBeInTheDocument();
+    await user.selectOptions(within(dialog).getByTestId("effective-service"), "release-service-3");
+    expect(await within(dialog).findByText(/^https:\/\/invoice-service\./)).toBeInTheDocument();
+    // Read-only: the only control is the service picker, and there is no save.
+    expect(within(dialog).queryByRole("textbox")).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole("button", { name: /保存/ })).not.toBeInTheDocument();
+    expect(within(dialog).getByText(/未保存草稿不参与/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/需显式重启受影响服务/)).toBeInTheDocument();
   });
 
   it("renders tool panels from adapter data instead of hardcoded fixtures", async () => {

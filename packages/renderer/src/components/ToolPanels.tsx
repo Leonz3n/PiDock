@@ -350,7 +350,19 @@ export function RuntimePanel({
         </div>
       ) : null}
       {service ? (
-        <Panel title={`生效配置 · ${service.name}`}>
+        <Panel
+          title={`生效配置 · ${service.name}`}
+          actions={
+            // The prototype's 查看生效配置 entry (`closure.js`) resolves one
+            // service of one task; from the task workspace this is that service.
+            <Button
+              size="sm"
+              onClick={() => useUiStore.getState().openModal({ type: "effective-config", taskId: task.id, serviceId: service.id })}
+            >
+              查看生效配置
+            </Button>
+          }
+        >
           <ConfigTable rows={service.resolved} />
           <p className="mt-2 text-[11px] text-muted">
             敏感值遮蔽；未保存草稿不参与解析。共享模板版本 {service.templateVersion}。

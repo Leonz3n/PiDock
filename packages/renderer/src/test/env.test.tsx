@@ -152,10 +152,13 @@ describe("environment scope editing", () => {
   });
 
   it("marks each resolved config row with the layer it came from", async () => {
+    const user = userEvent.setup();
     renderApp("/env");
     await screen.findByRole("heading", { name: "环境与服务" });
-    const panel = screen.getByRole("heading", { name: "按服务查看生效配置", level: 2 }).closest("section");
-    const table = within(panel as HTMLElement).getByRole("table");
+    // [UI 对齐 08] #32: the prototype exposes this as the 查看生效配置 dialog.
+    await user.click(screen.getByRole("button", { name: "查看生效配置" }));
+    const dialog = await screen.findByRole("dialog", { name: "查看生效配置" });
+    const table = within(dialog).getByRole("table");
     expect(within(table).getByText("仓库默认配置 · .env")).toBeInTheDocument();
     expect(within(table).getByText(/^共享模板 · .* · v12/)).toBeInTheDocument();
     expect(within(table).getByText("任务覆盖")).toBeInTheDocument();
