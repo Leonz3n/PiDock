@@ -6,6 +6,8 @@
  * the glyphs the shell uses are kept here; pages add their own when they are
  * aligned. `link` is the protocol glyph: the prototype has no protocol tool,
  * and the 协议 panel is about generated artifacts and their local bindings.
+ * `play`/`stop` are the prototype's `toggle-run` glyphs, used by the header's
+ * local-service run toggle ([UI 对齐 03] #27).
  */
 
 export const ICON_PATHS = {
@@ -28,7 +30,6 @@ export const ICON_PATHS = {
   more: "M5 12h.01 M12 12h.01 M19 12h.01",
   play: "M8 4l12 8-12 8Z",
   stop: "M5 5h14v14H5z",
-  check: "M5 12l4 4L19 6",
 } as const;
 
 export type IconName = keyof typeof ICON_PATHS;

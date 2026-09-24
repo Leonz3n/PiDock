@@ -27,12 +27,16 @@ export function Button({ variant = "default", size = "md", className = "", ...re
  * uses the soft accent). `aria-label` is the accessible name; `title` carries
  * the longer action wording when the two differ. `ref` arrives as a plain prop
  * (React 19) and is spread onto the button, so callers can manage focus.
+ * `aria-pressed` is emitted only when the caller passes `selected`: a toggle
+ * (tool launcher, Subagent rail) needs it, while a menu trigger must not
+ * announce itself as a toggle next to `aria-haspopup` ([UI 对齐 03] #27 review
+ * note).
  */
 export function IconButton({
   icon,
   label,
   title,
-  selected = false,
+  selected,
   className = "",
   ...rest
 }: ComponentPropsWithRef<"button"> & {
@@ -48,7 +52,14 @@ export function IconButton({
     className,
   ].join(" ");
   return (
-    <button type="button" aria-label={label} title={title ?? label} aria-pressed={selected} className={classes} {...rest}>
+    <button
+      type="button"
+      aria-label={label}
+      title={title ?? label}
+      {...(selected === undefined ? {} : { "aria-pressed": selected })}
+      className={classes}
+      {...rest}
+    >
       <Icon name={icon} />
     </button>
   );
@@ -61,7 +72,11 @@ export function Badge({ children, tone = "neutral" }: { children: ReactNode; ton
     warn: "border-orange/35 bg-orange/10 text-orange",
   } as const;
   return (
-    <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] leading-4 ${tones[tone]}`}>
+    // `whitespace-nowrap`: a squeezed tab strip must not wrap a CJK badge onto a
+    // second line and grow the 32px session row ([UI 对齐 03] #27 review note).
+    <span
+      className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] leading-4 whitespace-nowrap ${tones[tone]}`}
+    >
       {children}
     </span>
   );

@@ -93,7 +93,12 @@ describe("new-task workspace preview", () => {
     await user.click(within(dialog).getByRole("button", { name: "创建任务" }));
 
     expect(await screen.findByRole("heading", { name: "预览键校验" })).toBeInTheDocument();
-    expect(screen.getByText(key)).toBeInTheDocument();
+    // [UI 对齐 03] (#27) the header eyebrow shows the task key with a `#`
+    // instead of the prototype's ordinal, and keeps the full key in its title:
+    // the created task still displays the key the form previewed.
+    const eyebrow = screen.getByText(key.replace(/^task-/, "#"));
+    expect(eyebrow).toBeInTheDocument();
+    expect(eyebrow.closest("[title]")).toHaveAttribute("title", expect.stringContaining(key));
   });
 
   it("keeps the form on blank baseline: no orphan task", async () => {

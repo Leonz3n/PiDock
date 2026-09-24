@@ -170,15 +170,15 @@
       "scrollWidth": 1280,
       "clientWidth": 1280,
       "headerH": 106,
-      "messagesH": 358,
-      "messagesShare": 0.397,
+      "messagesH": 374,
+      "messagesShare": 0.415,
       "composerH": 179,
       "sectionH": 680,
       "rows": [
         {
           "tag": "div",
           "testid": null,
-          "h": 48,
+          "h": 32,
           "text": "全部会话 56 实现与验证 部署审查 失败排查 历史排查 已归档 只读 新建会话"
         },
         {
@@ -190,7 +190,7 @@
         {
           "tag": "div",
           "testid": null,
-          "h": 358,
+          "h": 374,
           "text": "Agent 任务工作区已就绪，我可以开始检查构建与配置。 Agent 依赖已安装"
         },
         {
@@ -210,15 +210,15 @@
       "scrollWidth": 1280,
       "clientWidth": 1280,
       "headerH": 106,
-      "messagesH": 358,
-      "messagesShare": 0.397,
+      "messagesH": 374,
+      "messagesShare": 0.415,
       "composerH": 179,
       "sectionH": 680,
       "rows": [
         {
           "tag": "div",
           "testid": null,
-          "h": 48,
+          "h": 32,
           "text": "全部会话 56 实现与验证 部署审查 失败排查 历史排查 已归档 只读 新建会话"
         },
         {
@@ -230,7 +230,7 @@
         {
           "tag": "div",
           "testid": null,
-          "h": 358,
+          "h": 374,
           "text": "Agent 任务工作区已就绪，我可以开始检查构建与配置。 Agent 依赖已安装"
         },
         {
@@ -290,15 +290,15 @@
       "scrollWidth": 1024,
       "clientWidth": 1024,
       "headerH": 106,
-      "messagesH": 218,
-      "messagesShare": 0.272,
+      "messagesH": 234,
+      "messagesShare": 0.292,
       "composerH": 179,
       "sectionH": 580,
       "rows": [
         {
           "tag": "div",
           "testid": null,
-          "h": 48,
+          "h": 32,
           "text": "全部会话 56 实现与验证 部署审查 失败排查 历史排查 已归档 只读 新建会话"
         },
         {
@@ -310,7 +310,7 @@
         {
           "tag": "div",
           "testid": null,
-          "h": 218,
+          "h": 234,
           "text": "Agent 任务工作区已就绪，我可以开始检查构建与配置。 Agent 依赖已安装"
         },
         {
@@ -330,15 +330,15 @@
       "scrollWidth": 1024,
       "clientWidth": 1024,
       "headerH": 106,
-      "messagesH": 218,
-      "messagesShare": 0.272,
+      "messagesH": 234,
+      "messagesShare": 0.292,
       "composerH": 179,
       "sectionH": 580,
       "rows": [
         {
           "tag": "div",
           "testid": null,
-          "h": 48,
+          "h": 32,
           "text": "全部会话 56 实现与验证 部署审查 失败排查 历史排查 已归档 只读 新建会话"
         },
         {
@@ -350,7 +350,7 @@
         {
           "tag": "div",
           "testid": null,
-          "h": 218,
+          "h": 234,
           "text": "Agent 任务工作区已就绪，我可以开始检查构建与配置。 Agent 依赖已安装"
         },
         {
