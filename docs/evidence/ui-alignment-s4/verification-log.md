@@ -186,3 +186,20 @@ node docs/evidence/ui-alignment-s3/capture-execution.mjs
 本轮门禁：`pnpm --filter @pidock/renderer test` **52 文件 / 445 例全绿**、
 `pnpm turbo run typecheck test build lint --force` **8/8 成功**；
 两个证据脚本重跑均通过（s3 **42** 个测量态、s4 **22** 个测量态）。
+
+## 7. [UI 对齐 07] (#31) 之后的复测（同一脚本，同一档位）
+
+#31 重写消息区并把子代理条从常驻 78px 改为「一行 + 展开列表」，输入区结构未动。脚本重跑以确认
+**输入区无回退**，并如实记录消息区的新数值：
+
+| 档位 | #30 之后 `composerH` | #31 之后 `composerH` | 消息区 `messagesH`（#30 → #31） |
+| --- | --- | --- | --- |
+| 1440×900 | 143 | **143** | 350 → **377**（子代理条 78 → 51px） |
+| 1280×900 | 143 | **143** | 350 → **377** |
+| 1024×800 | 143 | **143** | 254 → **281** |
+| 900×800 | 143 | **143** | 254 → **283** |
+| 720×760（堆叠档） | 143 | **143** | 2473 → 3133（堆叠布局，滚动高度，无固定视口约束） |
+| `card-approval` / `card-failed` / `card-failed-readonly` | 143 / 174 / 174 | **143 / 174 / 174** | 346 / 315 / 315 不变 |
+
+`node docs/evidence/ui-alignment-s4/capture-composer.mjs` → `geometry assertions: ok (22 measured states)`；
+#29 的 340px 下限在 `card-approval`（346px）仍达标。
