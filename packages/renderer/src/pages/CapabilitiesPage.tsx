@@ -206,95 +206,95 @@ function CapabilityRowView({
   return (
     <section
       data-testid={`capability-row-${capability.id}`}
-      className="capability-row border-b border-line px-[15px] py-[13px] last:border-b-0"
+      className="capability-row grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3.5 border-b border-line px-[15px] py-[13px] last:border-b-0 below-stack:grid-cols-[minmax(0,1fr)_auto]"
     >
-      <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3.5 below-stack:grid-cols-[minmax(0,1fr)_auto]">
-        <div className="capability-main grid min-w-0 grid-cols-[36px_minmax(0,1fr)] items-start gap-3 text-left">
-          <span aria-hidden="true" className="capability-icon grid h-9 w-9 place-items-center rounded-[7px] bg-[#f1f3f6] text-[#66758f]">
-            <Icon name={KIND_ICON[capability.kind]} />
-          </span>
-          <span className="min-w-0">
-            <strong className="block text-[12px] font-[650] text-ink">{capability.name}</strong>
-            <small className="block truncate text-[11px] text-muted">{capability.description ?? capabilityKindLabel(capability.kind)}</small>
-            <span className="capability-meta flex flex-wrap items-center gap-[13px] text-[10px] text-[#8a94a2]">
-              <span>{capability.source}</span>
-              <span>{sourceKindLabel(row.sourceKind)}</span>
-              <span>{capability.scope}</span>
-              <span>
-                权限 {capability.requestedPermission ?? "未声明"} · 实际为 {row.permission}
-              </span>
+      <div className="capability-main grid min-w-0 grid-cols-[36px_minmax(0,1fr)] items-start gap-3 text-left">
+        <span aria-hidden="true" className="capability-icon grid h-9 w-9 place-items-center rounded-[7px] bg-[#f1f3f6] text-[#66758f]">
+          <Icon name={KIND_ICON[capability.kind]} />
+        </span>
+        <span className="min-w-0">
+          <strong className="block text-[12px] text-ink">{capability.name}</strong>
+          <small className="block truncate text-[11px] text-muted">{capability.description ?? capabilityKindLabel(capability.kind)}</small>
+          <span className="capability-meta flex flex-wrap items-center gap-[13px] text-[10px] text-[#8a94a2]">
+            <span>{capability.source}</span>
+            <span>{sourceKindLabel(row.sourceKind)}</span>
+            <span>{capability.scope}</span>
+            <span>
+              权限 {capability.requestedPermission ?? "未声明"} · 实际为 {row.permission}
             </span>
           </span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          {row.ambiguous ? <Badge tone="warn">重名 · 按来源区分</Badge> : null}
-          <Badge tone={capability.status === "enabled" ? "accent" : capability.status === "update-available" ? "warn" : "neutral"}>{statusLabel(capability.status)}</Badge>
-        </div>
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          <Button size="sm" variant="ghost" onClick={() => openModal({ type: "capability-detail", capabilityId: capability.id })}>
-            详情
+        </span>
+      </div>
+      <div className="flex items-center gap-1.5">
+        {row.ambiguous ? <Badge tone="warn">重名 · 按来源区分</Badge> : null}
+        <Badge tone={capability.status === "enabled" ? "accent" : capability.status === "update-available" ? "warn" : "neutral"}>{statusLabel(capability.status)}</Badge>
+      </div>
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        <Button size="sm" variant="ghost" onClick={() => openModal({ type: "capability-detail", capabilityId: capability.id })}>
+          详情
+        </Button>
+        <Button size="sm" onClick={onToggle}>
+          <Icon name={isCapabilityEnabled(capability) ? "stop" : "play"} />
+          {isCapabilityEnabled(capability) ? "停用" : "启用"}
+        </Button>
+        {version === "not-installed" ? (
+          <Button size="sm" variant="primary" onClick={onInstall}>
+            <Icon name="down" />
+            安装 {capability.availableVersion ?? "此版本"}
           </Button>
-          <Button size="sm" onClick={onToggle}>
-            <Icon name={isCapabilityEnabled(capability) ? "stop" : "play"} />
-            {isCapabilityEnabled(capability) ? "停用" : "启用"}
+        ) : null}
+        {version === "update-available" ? (
+          <Button size="sm" variant="primary" onClick={onInstall}>
+            <Icon name="refresh" />
+            更新到 {capability.availableVersion}
           </Button>
-          {version === "not-installed" ? (
-            <Button size="sm" variant="primary" onClick={onInstall}>
-              <Icon name="down" />
-              安装 {capability.availableVersion ?? "此版本"}
-            </Button>
-          ) : null}
-          {version === "update-available" ? (
-            <Button size="sm" variant="primary" onClick={onInstall}>
-              <Icon name="refresh" />
-              更新到 {capability.availableVersion}
-            </Button>
-          ) : null}
-          {capability.kind === "mcp" && bridge && !bridge.ok ? <span className="self-center text-[11px] text-orange">需要 bridge Extension</span> : null}
-          {capability.kind === "mcp" && capability.connection?.state !== "connected" && (bridge === null || bridge.ok) ? (
-            <Button size="sm" onClick={onRetry}>
-              <Icon name="refresh" />
-              重试连接
-            </Button>
-          ) : null}
-        </div>
+        ) : null}
+        {capability.kind === "mcp" && bridge && !bridge.ok ? <span className="self-center text-[11px] text-orange">需要 bridge Extension</span> : null}
+        {capability.kind === "mcp" && capability.connection?.state !== "connected" && (bridge === null || bridge.ok) ? (
+          <Button size="sm" onClick={onRetry}>
+            <Icon name="refresh" />
+            重试连接
+          </Button>
+        ) : null}
       </div>
 
-      <dl className="mt-2.5 grid grid-cols-[80px_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-[11px]">
-        <dt className="text-muted">类型</dt>
-        <dd>{capabilityKindLabel(capability.kind)}</dd>
-        {capability.kind === "package" ? (
-          <>
-            <dt className="text-muted">安装版本</dt>
-            <dd data-testid={`capability-version-${capability.id}`}>
-              已安装 {capability.installedVersion ?? "未安装"}
-              {capability.availableVersion ? ` · 可用 ${capability.availableVersion}` : ""}
-            </dd>
-          </>
-        ) : null}
-        {capability.kind === "mcp" ? (
-          <>
-            <dt className="text-muted">bridge</dt>
-            <dd>{capability.bridge ? capability.bridge.extensionId : "未选择 bridge Extension"}</dd>
-            <dt className="text-muted">连接</dt>
-            <dd data-testid={`capability-connection-${capability.id}`}>
-              {mcpConnectionLabel(capability.connection?.state ?? "disconnected")}
-              {capability.connection?.attempts ? ` · 尝试 ${capability.connection.attempts} 次` : ""}
-              {capability.authRef ? " · 凭据引用已保存" : ""}
-            </dd>
-          </>
-        ) : null}
-        <dt className="text-muted">可用性</dt>
-        <dd>{row.provenance === "verified" ? "已在本机验证" : "仅声明（未验证，不代表 SDK 已支持）"}</dd>
-      </dl>
+      <div className="col-span-3 below-stack:col-span-2">
+        <dl className="mt-2.5 grid grid-cols-[80px_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-[11px]">
+          <dt className="text-muted">类型</dt>
+          <dd>{capabilityKindLabel(capability.kind)}</dd>
+          {capability.kind === "package" ? (
+            <>
+              <dt className="text-muted">安装版本</dt>
+              <dd data-testid={`capability-version-${capability.id}`}>
+                已安装 {capability.installedVersion ?? "未安装"}
+                {capability.availableVersion ? ` · 可用 ${capability.availableVersion}` : ""}
+              </dd>
+            </>
+          ) : null}
+          {capability.kind === "mcp" ? (
+            <>
+              <dt className="text-muted">bridge</dt>
+              <dd>{capability.bridge ? capability.bridge.extensionId : "未选择 bridge Extension"}</dd>
+              <dt className="text-muted">连接</dt>
+              <dd data-testid={`capability-connection-${capability.id}`}>
+                {mcpConnectionLabel(capability.connection?.state ?? "disconnected")}
+                {capability.connection?.attempts ? ` · 尝试 ${capability.connection.attempts} 次` : ""}
+                {capability.authRef ? " · 凭据引用已保存" : ""}
+              </dd>
+            </>
+          ) : null}
+          <dt className="text-muted">可用性</dt>
+          <dd>{row.provenance === "verified" ? "已在本机验证" : "仅声明（未验证，不代表 SDK 已支持）"}</dd>
+        </dl>
 
-      {row.invalid ? (
-        <p className="mt-2 rounded-md border border-orange/35 bg-orange/10 px-3 py-2 text-[11px] text-orange">
-          {invalidLabel(row.invalid.code)}：{row.invalid.message}
-        </p>
-      ) : null}
+        {row.invalid ? (
+          <p className="mt-2 rounded-md border border-orange/35 bg-orange/10 px-3 py-2 text-[11px] text-orange">
+            {invalidLabel(row.invalid.code)}：{row.invalid.message}
+          </p>
+        ) : null}
 
-      {change ? <p className="mt-2 text-[11px] text-muted">{change}</p> : null}
+        {change ? <p className="mt-2 text-[11px] text-muted">{change}</p> : null}
+      </div>
     </section>
   );
 }

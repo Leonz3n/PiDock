@@ -104,14 +104,14 @@ export function RemotePage() {
             aria-selected={mode === item.mode}
             aria-label={item.label}
             onClick={() => void switchMode(item.mode)}
-            className={`relative grid grid-cols-[32px_minmax(0,1fr)] grid-rows-[auto_auto] items-center gap-x-2.5 rounded-[8px] border bg-paper p-3 text-left ${
-              mode === item.mode ? "border-[#9eabc8] bg-[#f7f8fc] shadow-[0_0_0_1px_#c9d0df]" : "border-line"
+            className={`relative grid grid-cols-[32px_minmax(0,1fr)] grid-rows-[auto_auto] items-center gap-x-2.5 rounded-[8px] border p-3 text-left ${
+              mode === item.mode ? "border-[#9eabc8] bg-[#f7f8fc] shadow-[0_0_0_1px_#c9d0df]" : "border-line bg-paper"
             }`}
           >
             <span aria-hidden="true" className="row-span-2 grid h-8 w-8 place-items-center rounded-[7px] bg-[#f1f3f6] text-[#6a7892]">
               <Icon name={MODE_ICON[item.mode]} />
             </span>
-            <strong className="text-[11px] font-[650] text-ink">{item.label}</strong>
+            <strong className="text-[11px] text-ink">{item.label}</strong>
             <small className="text-[9px] text-muted">{item.hint}</small>
             {item.mode === "tailscale" ? <em className="absolute top-[7px] right-2 text-[8px] font-normal text-accent not-italic">推荐</em> : null}
             {item.experimental ? <em className="absolute top-[7px] right-2 text-[8px] font-normal text-warn not-italic">实验入口</em> : null}
@@ -211,7 +211,7 @@ export function RemotePage() {
             </div>
             <div className="permission-list mt-3">
               {REMOTE_PERMISSION_ROWS.map((item) => (
-                <label key={item.permission} className="flex items-center gap-2.5 border-b border-line py-2.5 last:border-b-0">
+                <label key={item.permission} className="flex items-center gap-[11px] border-b border-line py-2.5 last:border-b-0">
                   {/* Read-only: the grant happens per device at confirmation time,
                       and the desktop has no global switch (no write op exists). */}
                   <input
@@ -252,13 +252,13 @@ export function RemotePage() {
             </small>
             <div className="device-list mt-2.5">
               {devices.map((device) => (
-                <div key={device.id} className="device-row grid grid-cols-[31px_minmax(0,1fr)_auto] items-start gap-2.5 border-b border-line py-3 last:border-b-0">
+                <div key={device.id} className="device-row grid grid-cols-[32px_minmax(0,1fr)_auto] items-start gap-[9px] border-b border-line py-3 last:border-b-0">
                   <span aria-hidden="true" className="device-symbol grid h-[31px] w-[31px] place-items-center rounded-full bg-[#f0f2f5] text-[#68758d]">
                     <Icon name="globe" />
                   </span>
                   <span className="min-w-0">
                     <span className="flex flex-wrap items-center gap-2">
-                      <strong className="block text-[11px] font-[650] text-ink">{device.name}</strong>
+                      <strong className="block text-[11px] text-ink">{device.name}</strong>
                       <Badge tone={remoteDeviceStatusTone(device)}>{remoteDeviceStatusLabel(device)}</Badge>
                     </span>
                     <small className="mt-0.5 block text-[9px] text-muted">
