@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import { Badge, Button, Panel, Segmented } from "../components/ui";
-import { ConfigTable } from "../components/ConfigTable";
 import {
   configDraftKey,
   isSensitiveKey,
@@ -44,8 +43,6 @@ export function EnvPage() {
   );
   const [selectedTaskId, setSelectedTaskId] = useState(tasks[0]?.id ?? "");
   const task = environmentTasks.find((item) => item.id === selectedTaskId) ?? environmentTasks[0];
-  const [selectedServiceId, setSelectedServiceId] = useState("");
-  const service = task?.services.find((item) => item.id === selectedServiceId) ?? task?.services[0];
 
   const original = useMemo(() => {
     if (!environment) return [];
@@ -71,6 +68,11 @@ export function EnvPage() {
   }, [scope, environmentTasks.length]);
 
   if (!environment) return <p className="text-xs text-muted">还没有环境配置。</p>;
+
+  // 查看生效配置 resolves one task's services, so the entry passes whichever
+  // task this page is already pointed at: the 任务覆盖 selection, else the
+  // environment's own first task.
+  const configTask = environmentTasks.find((item) => item.id === selectedTaskId) ?? environmentTasks[0];
 
   const scopeTabs =
     environmentTasks.length > 0 ? SCOPE_TABS : SCOPE_TABS.filter((item) => item.value !== "task");
@@ -124,9 +126,14 @@ export function EnvPage() {
             图形界面维护共享模板、本机私有配置与任务覆盖；业务服务继续读取仓库默认配置，生效来源按服务只读核对。
           </p>
         </div>
-        <Button size="sm" onClick={() => void importFromVscode()}>
-          从 .vscode 导入
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button size="sm" onClick={() => openModal({ type: "effective-config", taskId: configTask?.id })}>
+            查看生效配置
+          </Button>
+          <Button size="sm" onClick={() => void importFromVscode()}>
+            从 .vscode 导入
+          </Button>
+        </div>
       </header>
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[260px_1fr]">
@@ -305,45 +312,6 @@ export function EnvPage() {
               ) : null}
             </div>
             <p className="mt-2 text-[11px] text-muted">已有任务保留创建时采用的版本；共享模板保存只新增版本，不自动迁移任务。</p>
-          </Panel>
-
-          <Panel title="按服务查看生效配置">
-            <div className="flex flex-wrap gap-2">
-              <select
-                aria-label="选择任务"
-                value={task?.id ?? ""}
-                onChange={(event) => setSelectedTaskId(event.target.value)}
-                className="rounded-md border border-line bg-paper px-2 py-1 text-xs"
-              >
-                {environmentTasks.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.name}
-                  </option>
-                ))}
-              </select>
-              <select
-                aria-label="选择服务"
-                value={service?.id ?? ""}
-                onChange={(event) => setSelectedServiceId(event.target.value)}
-                className="rounded-md border border-line bg-paper px-2 py-1 text-xs"
-              >
-                {task?.services.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            {service ? (
-              <div className="mt-3">
-                <ConfigTable rows={service.resolved} valueHeader="最终值" />
-              </div>
-            ) : (
-              <p className="mt-3 text-xs text-muted">该任务没有服务（仅普通目录），没有需要解析的运行配置。</p>
-            )}
-            <p className="mt-2 text-[11px] text-muted">
-              只读视图：敏感值遮蔽，未保存草稿不参与；每行标出来自 仓库默认配置／共享模板／本机私有配置／任务覆盖 哪一层。
-            </p>
           </Panel>
 
           <p className="text-[11px] text-muted">

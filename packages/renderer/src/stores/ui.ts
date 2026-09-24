@@ -27,6 +27,10 @@ export type ModalState =
   | { type: "environment-list"; projectId: string }
   | { type: "environment-edit"; projectId: string; environmentId?: string }
   | { type: "environment-delete"; environmentId: string }
+  // [UI 对齐 08] #32: the prototype's 查看生效配置 (`closure.js`
+  // `effectiveConfigDialog()`), opened with whatever task/service the entry
+  // point already had selected.
+  | { type: "effective-config"; taskId?: string; serviceId?: string }
   | { type: "add-capability"; kind: "skill" | "extension" | "package" | "mcp" }
   | { type: "schedule-edit"; scheduleId: string }
   | { type: "permission"; taskId: string; sessionId: string }

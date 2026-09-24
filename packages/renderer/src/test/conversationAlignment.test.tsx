@@ -106,6 +106,10 @@ describe("conversation alignment", () => {
     ]);
     await user.type(screen.getByLabelText("给 Agent 的消息"), "看下附件");
     await user.click(screen.getByRole("button", { name: "发送消息" }));
+    // A send leaves the composer disabled until the Host answers; awaiting the
+    // idle state both asserts that and keeps the promise chain from settling
+    // after the test environment is torn down.
+    await waitFor(() => expect(screen.getByRole("button", { name: "发送消息" })).not.toBeDisabled());
 
     const log = await screen.findByLabelText("会话消息");
     const chip = await within(log).findByText("@ spec.md");
@@ -234,5 +238,6 @@ describe("conversation alignment", () => {
     await user.type(screen.getByLabelText("给 Agent 的消息"), "开始吧");
     await user.click(screen.getByRole("button", { name: "发送消息" }));
     await waitFor(() => expect(screen.queryByTestId("conversation-empty")).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("button", { name: "发送消息" })).not.toBeDisabled());
   });
 });
