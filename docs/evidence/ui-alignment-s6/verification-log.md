@@ -96,7 +96,7 @@
 | 纵向预算不退化 | COVERED | — | §3 表 |
 | 只读会话只影响展示 | COVERED | `conversationBadge` / `conversationModeLabel` | 只读会话 `mode=阅读与分析`、`badge=只读`、消息数 32 不变；权限行为未改（`composerAlignment.test.tsx` 覆盖输入区） |
 | 用例覆盖（日期分组 / 头部 / chip / 卡片各部件 / 归属不可用 / 空态 / 子代理条几何与可访问名） | COVERED | `test/conversationView.test.ts`（14 例）、`test/conversationAlignment.test.tsx`（4 例） | renderer **54 文件 / 463 例**（基线 52/445 → +2 文件 / +18 例） |
-| 证据提交（多档截图 + 几何 JSON + 原型对照 + 本日志） | COVERED | `docs/evidence/ui-alignment-s6/` | 12 张渲染截图 + 1 张原型对照 + `conversation.json` + 本文件 |
+| 证据提交（多档截图 + 几何 JSON + 原型对照 + 本日志） | COVERED | `docs/evidence/ui-alignment-s6/` | 13 张渲染截图 + 1 张原型对照 + `conversation.json` + 本文件 |
 | 证据脚本 `data-testid` 定位、可重跑、带几何断言 | COVERED | `capture-conversation.mjs` | 85 条断言、0 违反；`[data-testid=…]` 前缀定位 |
 | 既有用例零回归 + `pnpm turbo run typecheck test build lint --force` | COVERED | — | §5 |
 
