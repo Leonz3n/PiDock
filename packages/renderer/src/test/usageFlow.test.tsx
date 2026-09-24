@@ -44,12 +44,13 @@ describe("[PiDock 12] usage page", () => {
     await user.click(screen.getByRole("tab", { name: "压缩" }));
     await waitFor(() => expect(screen.getByTestId("usage-table")).toHaveAttribute("data-total-rows", "40"));
     await user.click(screen.getByRole("tab", { name: "全部类型" }));
-    await user.click(screen.getByRole("tab", { name: "调用类型" }));
+    // 统计维度 is the prototype's select (#33), so regrouping is a select change.
+    await user.selectOptions(screen.getByLabelText("统计维度"), "调用类型");
     await waitFor(() => expect(screen.getByTestId("usage-table")).toHaveAttribute("data-total-rows", "240"));
-    expect(await screen.findByRole("heading", { name: "分组 · 调用类型" })).toBeInTheDocument();
-    const groupPanel = screen.getByRole("heading", { name: "分组 · 调用类型" }).closest("section") ?? document.body;
-    expect(groupPanel.textContent).toContain("压缩");
-    expect(groupPanel.textContent).toContain("回合");
+    expect(await screen.findByRole("heading", { name: "按调用类型汇总" })).toBeInTheDocument();
+    // The summary table is the grouped view: one row per kind bucket.
+    expect(screen.getByTestId("usage-group-compaction")).toHaveTextContent("压缩");
+    expect(screen.getByTestId("usage-group-turn")).toHaveTextContent("回合");
   });
 
   it("clears only the scope the user names and reports what stayed", async () => {
