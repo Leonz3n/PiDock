@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { Badge, Button, EmptyState, Field, Modal, Segmented } from "./ui";
 import { VirtualList } from "./VirtualList";
+import { ManagementList, ManagementRow, PageEmpty } from "./Management";
 import { runStateLabel } from "../pages/runState";
 import { diffConfigRows, isSensitiveKey, nextTemplateVersion } from "../data/configRows";
 import { capabilityInvalidReason, isCapabilityEnabled, mcpBridgeStatus, mcpConnectionLabel, packageVersionState, sourceKindLabel } from "../data/capabilityRules";
@@ -2369,9 +2370,14 @@ function ProviderEditModal({ providerId, onClose }: { providerId?: string; onClo
 function ProjectListModal({ onClose }: { onClose: () => void }) {
   const workspace = useHostStore((state) => state.workspace);
   const tasks = workspace?.tasks ?? [];
+  const route = useNavigationStore((state) => state.route);
   const navigate = useNavigationStore((state) => state.navigate);
   const openModal = useUiStore((state) => state.openModal);
   const projects = workspace?.projects ?? [];
+  // The prototype labels the row you are already on 当前项目 and keeps the
+  // others 切换 (`projectsDialog()`); the current one is whichever project the
+  // sidebar has selected ([UI 对齐 01] #25).
+  const currentProjectId = route.view === "project" || route.view === "task" ? route.projectId : projects[0]?.id;
   return (
     <Modal
       title="项目管理"
@@ -2383,12 +2389,13 @@ function ProjectListModal({ onClose }: { onClose: () => void }) {
       }
     >
       <p className="text-xs text-muted">切换项目，或管理项目的目录、仓库与名称。</p>
-      <div className="mt-3 flex flex-col gap-2">
-        {projects.length === 0 ? <EmptyState>还没有项目</EmptyState> : null}
+      <ManagementList>
+        {projects.length === 0 ? <PageEmpty title="还没有项目" /> : null}
         {projects.map((project) => {
           const count = tasks.filter((task) => task.projectId === project.id).length;
+          const current = project.id === currentProjectId;
           return (
-            <div key={project.id} className="flex items-center justify-between gap-2 rounded-md border border-line px-3 py-2 text-xs">
+            <ManagementRow key={project.id}>
               <div>
                 <strong className="block text-ink">{project.name}</strong>
                 <small className="text-muted">{project.description || "未填写说明"} · {count} 个任务</small>
@@ -2396,24 +2403,25 @@ function ProjectListModal({ onClose }: { onClose: () => void }) {
               <div className="flex gap-1.5">
                 <Button
                   size="sm"
+                  aria-current={current ? "true" : undefined}
                   onClick={() => {
                     onClose();
                     navigate({ view: "project", projectId: project.id });
                   }}
                 >
-                  切换
+                  {current ? "当前项目" : "切换"}
                 </Button>
                 <Button size="sm" onClick={() => openModal({ type: "project-edit", projectId: project.id })}>
                   编辑
                 </Button>
-                <Button size="sm" variant="ghost" onClick={() => openModal({ type: "project-delete", projectId: project.id })}>
+                <Button size="sm" variant="danger" onClick={() => openModal({ type: "project-delete", projectId: project.id })}>
                   删除
                 </Button>
               </div>
-            </div>
+            </ManagementRow>
           );
         })}
-      </div>
+      </ManagementList>
     </Modal>
   );
 }

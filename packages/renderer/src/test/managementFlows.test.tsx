@@ -39,7 +39,9 @@ describe("project management", () => {
     renderApp("/projects/atlas");
     await screen.findByRole("heading", { name: "Atlas Web" });
 
-    await user.click(screen.getByRole("button", { name: "编辑项目" }));
+    // The project overview names the repository entry 管理仓库 (prototype
+    // `managementProjectPage()`); it opens the same project editor.
+    await user.click(screen.getByRole("button", { name: "管理仓库" }));
     const dialog = await screen.findByRole("dialog", { name: "编辑项目" });
     const used = within(dialog).getByLabelText("仓库 front-monorepo");
     expect(used).toBeChecked();

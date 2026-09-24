@@ -1,29 +1,65 @@
-import { Badge, Button, Panel } from "../components/ui";
+import { Badge, Button } from "../components/ui";
+import { CardGrid, CheckRow, Note, PageEmpty, PageIntro, PageTitle, SectionHeader, StatCard, ViewLabel } from "../components/Management";
 import { useHostStore } from "../stores/host";
 import { useNavigationStore } from "../stores/navigation";
 import { useUiStore } from "../stores/ui";
 
+/**
+ * 项目总览 ([UI 对齐 08] #32), the prototype's `managementProjectPage()`
+ * (`prototypes/pidock-ui/management.js`): view label + project name, the two
+ * header entries (项目管理 / 新建任务), three stat cards (进行中的任务 /
+ * 已绑定仓库 / 运行环境), the 继续工作 task cards and the bound repositories.
+ *
+ * Two deliberate additions to the prototype's markup, both required by the
+ * slice's acceptance: the 普通目录 block (the prototype only lists ordinary
+ * directories in its directory-project variant, and this page owns the
+ * `project-directories` entry) and real repository data (the prototype prints
+ * `本机已注册（示例）`; a repository's actual base branch is what this app
+ * knows).
+ */
 export function ProjectPage({ projectId }: { projectId: string }) {
   const project = useHostStore((state) => state.workspace?.projects.find((item) => item.id === projectId));
   const workspace = useHostStore((state) => state.workspace);
   const navigate = useNavigationStore((state) => state.navigate);
   const openModal = useUiStore((state) => state.openModal);
 
-  if (!project) return <p className="text-xs text-muted">项目不存在。</p>;
+  // Prototype `managementProjectPage()`: with no project it renders 项目 plus
+  // the 创建第一个项目 empty block instead of a stray "missing" line. The
+  // sidebar disables 项目总览 while no project exists ([UI 对齐 01] #25), so
+  // this branch is reached when a project was removed underneath the route.
+  if (!project) {
+    return (
+      <div data-testid="project-overview">
+        <PageTitle>项目</PageTitle>
+        <PageEmpty
+          title="创建第一个项目"
+          actions={
+            <Button size="sm" variant="primary" onClick={() => openModal({ type: "project-edit" })}>
+              新建项目
+            </Button>
+          }
+        >
+          项目用于组织仓库、任务与运行环境。
+        </PageEmpty>
+      </div>
+    );
+  }
 
-  const tasks = (workspace?.tasks ?? []).filter((task) => task.projectId === project.id);
+  const repositories = workspace?.repositories ?? [];
   const environments = (workspace?.environments ?? []).filter((environment) => environment.projectId === project.id);
+  const tasks = (workspace?.tasks ?? []).filter((task) => task.projectId === project.id);
+  const activeTasks = tasks.filter((task) => !task.archived);
+  const repositoryName = (id: string) => repositories.find((repository) => repository.id === id)?.name ?? id;
+  const environmentName = (id: string) => environments.find((environment) => environment.id === id)?.name ?? id;
 
   return (
-    <div className="flex flex-col gap-4">
-      <header className="flex flex-wrap items-end justify-between gap-3">
+    <div data-testid="project-overview">
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-base font-medium text-ink">{project.name}</h1>
-          <p className="mt-1 text-xs text-muted">
-            {project.description || "项目保存仓库、普通目录、服务与按环境组织的共享模板；任务按需选择其中一部分。"}
-          </p>
+          <ViewLabel>PROJECT</ViewLabel>
+          <PageTitle>{project.name}</PageTitle>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex items-center gap-2">
           <Button size="sm" onClick={() => openModal({ type: "project-list" })}>
             项目管理
           </Button>
@@ -31,93 +67,89 @@ export function ProjectPage({ projectId }: { projectId: string }) {
             新建任务
           </Button>
         </div>
-      </header>
+      </div>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <Panel title="仓库" actions={<Button size="sm" onClick={() => openModal({ type: "project-edit", projectId: project.id })}>编辑项目</Button>}>
-          <ul className="flex flex-col gap-1.5 text-xs">
-            {project.repositories.map((repository) => (
-              <li key={repository.id} className="flex items-center justify-between gap-2 border-b border-line pb-1.5">
-                <span className="font-mono text-[11px] text-ink">{repository.name}</span>
-                <span className="text-muted">基线 {repository.baseBranch}</span>
-              </li>
-            ))}
-          </ul>
-          <p className="mt-2 text-[11px] text-muted">任务使用仓库时创建独立 worktree；同一仓库参与不同任务拥有独立分支与目录。</p>
-        </Panel>
+      <PageIntro>{project.description || "在项目中组织仓库、任务与运行环境。"}</PageIntro>
 
-        <Panel
-          title="普通目录"
-          actions={
-            <Button size="sm" onClick={() => openModal({ type: "project-directories", projectId: project.id })}>
-              管理目录
-            </Button>
-          }
-        >
-          {project.directories.length === 0 ? (
-            <p className="text-xs text-muted">该项目没有普通目录。普通目录的原始文件在任务之间共享，不承诺隔离。</p>
-          ) : (
-            <ul className="flex flex-col gap-1.5 text-xs">
-              {project.directories.map((directory) => (
-                <li key={directory.id} className="flex flex-wrap items-center justify-between gap-2 border-b border-line pb-1.5">
-                  <div>
-                    <span className="block text-ink">{directory.name}</span>
-                    <span className="font-mono text-[11px] text-muted">{directory.path}</span>
-                  </div>
-                  <Badge>普通目录 · 软链接接入</Badge>
-                </li>
-              ))}
-            </ul>
-          )}
-          <p className="mt-2 text-[11px] text-muted">
-            Git 仓库创建独立 worktree；普通目录通过软链接加入任务目录，修改会影响原目录。
-          </p>
-        </Panel>
-
-        <Panel title={`任务 · ${tasks.length}`}>
-          <ul className="flex flex-col gap-2 text-xs">
-            {tasks.map((task) => (
-              <li key={task.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line px-2.5 py-2">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-ink">{task.name}</span>
-                    {task.archived ? <Badge tone="warn">已归档</Badge> : null}
-                    {task.unread > 0 ? <Badge tone="accent">{task.unread} 条未读</Badge> : null}
-                  </div>
-                  <p className="mt-1 text-[11px] text-muted">
-                    {task.workspaceKey} · {task.repos.length} 个 Git 仓库 · {task.directories.length} 个普通目录 · {task.sessions.length} 个会话
-                  </p>
-                </div>
-                <Button
-                  size="sm"
-                  onClick={() => navigate({ view: "task", projectId: project.id, taskId: task.id, sessionId: task.activeSessionId })}
-                >
-                  打开任务
-                </Button>
-              </li>
-            ))}
-          </ul>
-        </Panel>
-
-        <Panel
-          title="环境"
+      <CardGrid cols={3}>
+        <StatCard label="进行中的任务" value={activeTasks.length} />
+        <StatCard label="已绑定仓库" value={project.repositories.length} />
+        <StatCard
+          label="运行环境"
+          value={environments.length}
           actions={
             <Button size="sm" onClick={() => openModal({ type: "environment-list", projectId: project.id })}>
               管理环境
             </Button>
           }
-        >
-          <ul className="flex flex-col gap-1.5 text-xs">
-            {environments.map((environment) => (
-              <li key={environment.id} className="flex items-center justify-between gap-2">
-                <span className="text-ink">{environment.name}</span>
-                <span className="text-muted">共享模板 {environment.templateVersion}</span>
-              </li>
-            ))}
-          </ul>
-          <p className="mt-2 text-[11px] text-muted">不同任务可以选择同一个环境，同时拥有各自的本地服务实例。</p>
-        </Panel>
-      </div>
+        />
+      </CardGrid>
+
+      <SectionHeader title="继续工作" className="mt-4 mb-4" />
+      <CardGrid cols={2}>
+        {activeTasks.map((task) => (
+          <button
+            key={task.id}
+            type="button"
+            data-testid={`project-task-${task.id}`}
+            aria-label={task.name}
+            onClick={() =>
+              navigate({ view: "task", projectId: project.id, taskId: task.id, sessionId: task.activeSessionId })
+            }
+            className="rounded-panel border border-line bg-paper p-5 text-left hover:border-[#afb6c8]"
+          >
+            <h3 className="text-[13px] font-[650] text-ink">{task.name}</h3>
+            <PageIntro>
+              {task.repos.map(repositoryName).join(" · ") || "普通目录任务"}
+            </PageIntro>
+            <Badge>{environmentName(task.environmentId)}</Badge>
+          </button>
+        ))}
+        {activeTasks.length === 0 ? <PageEmpty title="还没有任务">还没有任务，先绑定仓库并创建环境。</PageEmpty> : null}
+      </CardGrid>
+
+      <SectionHeader
+        title="项目仓库"
+        actions={
+          <Button size="sm" onClick={() => openModal({ type: "project-edit", projectId: project.id })}>
+            管理仓库
+          </Button>
+        }
+      />
+      {project.repositories.length === 0 ? (
+        <PageIntro className="mt-0 mb-0">尚未绑定仓库。</PageIntro>
+      ) : (
+        project.repositories.map((repository) => (
+          <CheckRow
+            key={repository.id}
+            icon="folder"
+            title={repository.name}
+            detail={`本机已注册 · 基线 ${repository.baseBranch}`}
+          />
+        ))
+      )}
+
+      <SectionHeader
+        title="普通目录"
+        actions={
+          <Button size="sm" onClick={() => openModal({ type: "project-directories", projectId: project.id })}>
+            管理目录
+          </Button>
+        }
+      />
+      {project.directories.length === 0 ? (
+        <PageIntro className="mt-0 mb-0">该项目没有普通目录。普通目录的原始文件在任务之间共享，不承诺隔离。</PageIntro>
+      ) : (
+        project.directories.map((directory) => (
+          <CheckRow
+            key={directory.id}
+            icon="folder"
+            title={directory.name}
+            detail={<span className="font-mono">{directory.path}</span>}
+          />
+        ))
+      )}
+      <Note>仓库创建独立 worktree；普通目录通过软链接加入任务目录，修改会影响原目录。</Note>
     </div>
   );
 }
