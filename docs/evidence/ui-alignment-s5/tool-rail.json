@@ -10,7 +10,7 @@
       "railPresent": true,
       "railW": 493,
       "workbenchW": 493,
-      "tabStripH": 44,
+      "tabStripH": 39,
       "tabCount": 3,
       "tabs": [
         {
@@ -41,6 +41,7 @@
         "关闭文件"
       ],
       "collapseButton": "收起工具区",
+      "collapseInsideTablist": false,
       "conversationW": 637,
       "serviceGroups": {
         "local": 0,
@@ -58,7 +59,7 @@
       "railPresent": true,
       "railW": 493,
       "workbenchW": 493,
-      "tabStripH": 44,
+      "tabStripH": 39,
       "tabCount": 1,
       "tabs": [
         {
@@ -80,11 +81,12 @@
         "关闭运行"
       ],
       "collapseButton": "收起工具区",
+      "collapseInsideTablist": false,
       "conversationW": 637,
       "serviceGroups": {
         "local": 5,
         "remote": 2,
-        "routeBox": "请求去向 · testing saas-web → saas-bff → invoice-service ⇄ shipment-service · 远程 account-service、Redis / PostgreSQL 本地依赖指向当前任务实例；远程数据设施沿用共享环境。"
+        "routeBox": "请求去向 · 测试环境 saas-web → saas-bff → invoice-service ⇄ shipment-service · 远程 account-service、Redis / PostgreSQL 本地依赖指向当前任务实例；远程数据设施沿用共享环境。"
       },
       "rows": [
         {
@@ -196,7 +198,7 @@
       "railPresent": true,
       "railW": 493,
       "workbenchW": 493,
-      "tabStripH": 44,
+      "tabStripH": 39,
       "tabCount": 1,
       "tabs": [
         {
@@ -214,6 +216,7 @@
         "关闭浏览器"
       ],
       "collapseButton": "收起工具区",
+      "collapseInsideTablist": false,
       "conversationW": 637,
       "serviceGroups": {
         "local": 0,
@@ -246,6 +249,7 @@
       "contentRendered": [],
       "closeButtons": [],
       "collapseButton": null,
+      "collapseInsideTablist": false,
       "conversationW": 1146,
       "serviceGroups": {
         "local": 0,
@@ -263,7 +267,7 @@
       "railPresent": true,
       "railW": 424,
       "workbenchW": 424,
-      "tabStripH": 44,
+      "tabStripH": 39,
       "tabCount": 3,
       "tabs": [
         {
@@ -294,6 +298,7 @@
         "关闭文件"
       ],
       "collapseButton": "收起工具区",
+      "collapseInsideTablist": false,
       "conversationW": 546,
       "serviceGroups": {
         "local": 0,
@@ -311,7 +316,7 @@
       "railPresent": true,
       "railW": 424,
       "workbenchW": 424,
-      "tabStripH": 44,
+      "tabStripH": 39,
       "tabCount": 1,
       "tabs": [
         {
@@ -333,11 +338,12 @@
         "关闭运行"
       ],
       "collapseButton": "收起工具区",
+      "collapseInsideTablist": false,
       "conversationW": 546,
       "serviceGroups": {
         "local": 5,
         "remote": 2,
-        "routeBox": "请求去向 · testing saas-web → saas-bff → invoice-service ⇄ shipment-service · 远程 account-service、Redis / PostgreSQL 本地依赖指向当前任务实例；远程数据设施沿用共享环境。"
+        "routeBox": "请求去向 · 测试环境 saas-web → saas-bff → invoice-service ⇄ shipment-service · 远程 account-service、Redis / PostgreSQL 本地依赖指向当前任务实例；远程数据设施沿用共享环境。"
       },
       "rows": [
         {
@@ -449,7 +455,7 @@
       "railPresent": true,
       "railW": 424,
       "workbenchW": 424,
-      "tabStripH": 44,
+      "tabStripH": 39,
       "tabCount": 1,
       "tabs": [
         {
@@ -467,6 +473,7 @@
         "关闭浏览器"
       ],
       "collapseButton": "收起工具区",
+      "collapseInsideTablist": false,
       "conversationW": 546,
       "serviceGroups": {
         "local": 0,
@@ -499,6 +506,7 @@
       "contentRendered": [],
       "closeButtons": [],
       "collapseButton": null,
+      "collapseInsideTablist": false,
       "conversationW": 986,
       "serviceGroups": {
         "local": 0,
@@ -516,7 +524,7 @@
       "railPresent": true,
       "railW": 310,
       "workbenchW": 310,
-      "tabStripH": 44,
+      "tabStripH": 39,
       "tabCount": 3,
       "tabs": [
         {
@@ -547,6 +555,7 @@
         "关闭文件"
       ],
       "collapseButton": "收起工具区",
+      "collapseInsideTablist": false,
       "conversationW": 438,
       "serviceGroups": {
         "local": 0,
@@ -564,7 +573,7 @@
       "railPresent": true,
       "railW": 310,
       "workbenchW": 310,
-      "tabStripH": 44,
+      "tabStripH": 39,
       "tabCount": 1,
       "tabs": [
         {
@@ -586,11 +595,12 @@
         "关闭运行"
       ],
       "collapseButton": "收起工具区",
+      "collapseInsideTablist": false,
       "conversationW": 438,
       "serviceGroups": {
         "local": 5,
         "remote": 2,
-        "routeBox": "请求去向 · testing saas-web → saas-bff → invoice-service ⇄ shipment-service · 远程 account-service、Redis / PostgreSQL 本地依赖指向当前任务实例；远程数据设施沿用共享环境。"
+        "routeBox": "请求去向 · 测试环境 saas-web → saas-bff → invoice-service ⇄ shipment-service · 远程 account-service、Redis / PostgreSQL 本地依赖指向当前任务实例；远程数据设施沿用共享环境。"
       },
       "rows": [
         {
@@ -702,7 +712,7 @@
       "railPresent": true,
       "railW": 310,
       "workbenchW": 310,
-      "tabStripH": 44,
+      "tabStripH": 39,
       "tabCount": 1,
       "tabs": [
         {
@@ -720,6 +730,7 @@
         "关闭浏览器"
       ],
       "collapseButton": "收起工具区",
+      "collapseInsideTablist": false,
       "conversationW": 438,
       "serviceGroups": {
         "local": 0,
@@ -752,6 +763,7 @@
       "contentRendered": [],
       "closeButtons": [],
       "collapseButton": null,
+      "collapseInsideTablist": false,
       "conversationW": 764,
       "serviceGroups": {
         "local": 0,

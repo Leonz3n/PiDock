@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type { ConfigRowDraft } from "../data/configRows";
-import { nextActivePanel } from "../data/toolRail";
+import { mergeToolPanelState, nextActivePanel, type ToolPanelState } from "../data/toolRail";
 
 export const TOOL_PANELS = ["runtime", "protocol", "browser", "files", "terminal", "logs"] as const;
 
@@ -56,6 +56,12 @@ type UiState = {
    * summary bar can render the same controller the panel shows.
    */
   browserTakeover: Record<string, boolean>;
+  /**
+   * Per task, the panel state a tab swap must not reset ([UI 对齐 04] #28): the
+   * rail mounts only the active panel, so page selection, markers, terminal
+   * scrollback and the selected service are kept here instead of in `useState`.
+   */
+  toolPanelState: Record<string, ToolPanelState | undefined>;
   modal: ModalState;
   toasts: Toast[];
   attentionFilter: "all" | "approval" | "failed" | "expired" | "completed-unread";
@@ -70,6 +76,8 @@ type UiState = {
   closePanel: (taskId: string, panel: ToolPanel) => void;
   closeAllPanels: (taskId: string) => void;
   setBrowserTakeover: (taskId: string, paused: boolean) => void;
+  /** Patch one task's panel state; the other panels' fields stay untouched. */
+  setToolPanelState: (taskId: string, patch: ToolPanelState) => void;
   openModal: (modal: ModalState) => void;
   closeModal: () => void;
   pushToast: (text: string) => void;
@@ -81,6 +89,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   panels: {},
   activePanel: {},
   browserTakeover: {},
+  toolPanelState: {},
   modal: null,
   toasts: [],
   attentionFilter: "all",
@@ -109,6 +118,10 @@ export const useUiStore = create<UiState>((set, get) => ({
   closeAllPanels: (taskId) =>
     set({ panels: { ...get().panels, [taskId]: [] }, activePanel: { ...get().activePanel, [taskId]: undefined } }),
   setBrowserTakeover: (taskId, paused) => set({ browserTakeover: { ...get().browserTakeover, [taskId]: paused } }),
+  setToolPanelState: (taskId, patch) =>
+    set({
+      toolPanelState: { ...get().toolPanelState, [taskId]: mergeToolPanelState(get().toolPanelState[taskId], patch) },
+    }),
   openModal: (modal) => set({ modal }),
   closeModal: () => set({ modal: null }),
   pushToast: (text) => {

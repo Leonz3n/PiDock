@@ -37,9 +37,13 @@ describe("task tool rail", () => {
     expect(await screen.findByTestId("terminal-spawn-residual")).toBeInTheDocument();
     expect(screen.queryByTestId("file-roots")).not.toBeInTheDocument();
 
-    // The tab strip names the selection for assistive tech.
+    // The tab strip names the selection for assistive tech, and the 收起工具区
+    // control sits beside the strip rather than inside `tablist` (an ARIA
+    // tablist owns tabs only — #28 review P2-4).
     expect(screen.getByTestId("tool-tab-terminal")).toHaveAttribute("aria-selected", "true");
     expect(screen.getByTestId("tool-tab-files")).toHaveAttribute("aria-selected", "false");
+    expect(within(tabs).queryByTestId("collapse-tools")).toBeNull();
+    expect(screen.getByTestId("collapse-tools").closest('[role="tablist"]')).toBeNull();
 
     // Switching tabs swaps the content without closing anything.
     await user.click(screen.getByTestId("tool-tab-files"));
@@ -151,6 +155,38 @@ describe("task tool rail", () => {
     expect(screen.getByTestId("tool-tab-logs")).toHaveAttribute("aria-selected", "true");
   });
 
+  it("keeps panel-local state when the active tab is swapped", async () => {
+    // The rail mounts only the active panel, so anything a panel keeps in its
+    // own `useState` would reset on every tab swap. The values therefore live in
+    // the ui store, like the prototype's global `state` (#28 review P2-3).
+    const user = await openTask();
+    const pageRow = (title: string) => screen.getByText(title).closest("li") as HTMLElement;
+
+    // Browser panel: look at the second page and start an annotation.
+    await user.click(screen.getByRole("button", { name: "浏览器" }));
+    await user.click(within(pageRow("对账单详情")).getByRole("button", { name: "切换到此页" }));
+    expect(within(pageRow("对账单详情")).getByText("当前页面")).toBeInTheDocument();
+    await user.type(screen.getByLabelText("标记说明"), "总额与对账单不一致");
+
+    // Terminal panel: a typed command that was not executed yet.
+    await user.click(screen.getByRole("button", { name: "终端" }));
+    await user.type(screen.getByLabelText("终端输入"), "pnpm test");
+
+    // Runtime panel: the detail blocks follow the row the user selected.
+    await user.click(screen.getByRole("button", { name: "运行" }));
+    await user.click(await screen.findByTestId("service-row-release-service-2"));
+    expect(await screen.findByRole("heading", { name: "生效配置 · saas-bff" })).toBeInTheDocument();
+
+    // Swap tabs and come back: each panel restores its own state.
+    await user.click(screen.getByTestId("tool-tab-browser"));
+    expect(within(pageRow("对账单详情")).getByText("当前页面")).toBeInTheDocument();
+    expect(screen.getByLabelText("标记说明")).toHaveValue("总额与对账单不一致");
+    await user.click(screen.getByTestId("tool-tab-terminal"));
+    expect(screen.getByLabelText("终端输入")).toHaveValue("pnpm test");
+    await user.click(screen.getByTestId("tool-tab-runtime"));
+    expect(screen.getByRole("heading", { name: "生效配置 · saas-bff" })).toBeInTheDocument();
+  });
+
   it("groups service rows by local/remote and keeps the endpoint readable", async () => {
     const user = await openTask();
     await user.click(screen.getByRole("button", { name: "运行" }));
@@ -171,14 +207,21 @@ describe("task tool rail", () => {
     const row = within(local).getByTestId("service-row-release-service-1").closest("li") as HTMLElement;
     expect(row).toHaveTextContent("127.0.0.1:5173 · 运行中");
     expect(row).toHaveAttribute("title", expect.stringContaining("release/release-service-1@5173"));
+    // The endpoint must keep its own width at every tier, so the class contract
+    // is asserted here (jsdom has no layout; the rendered result is in
+    // `docs/evidence/ui-alignment-s5/renderer/*-runtime.png`, #28 review P2-2).
+    expect(within(local).getByTestId("service-endpoint-release-service-1").className).toContain("shrink-0");
+    expect(within(local).getByTestId("service-instance-release-service-1").className).toContain("truncate");
     const remoteRow = within(remote).getByTestId("service-row-release-service-6").closest("li") as HTMLElement;
     expect(remoteRow).toHaveTextContent("测试环境 · 共享");
     const prepareRow = within(local).getByTestId("service-row-release-service-5").closest("li") as HTMLElement;
     expect(prepareRow).toHaveTextContent("准备步骤 · 本机命令");
 
-    // The prototype's route box answers "where do requests go".
+    // The prototype's route box answers "where do requests go" and names the
+    // shared environment by its display name — not the task's environment id
+    // (#28 review P2-1).
     const route = await screen.findByTestId("service-route-box");
-    expect(route).toHaveTextContent("请求去向");
+    expect(route).toHaveTextContent("请求去向 · 测试环境");
     expect(route).toHaveTextContent("saas-web");
     expect(route).toHaveTextContent("invoice-service");
     expect(route).toHaveTextContent("远程");

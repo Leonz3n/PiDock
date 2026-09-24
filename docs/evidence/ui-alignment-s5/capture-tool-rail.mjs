@@ -88,6 +88,12 @@ const measure = (page) =>
       contentRendered: [...document.querySelectorAll('[data-testid="tool-content"] [data-testid]')].map((node) => node.getAttribute("data-testid")).slice(0, 6),
       closeButtons: [...document.querySelectorAll('[data-testid^="tool-tab-close-"]')].map((button) => button.getAttribute("aria-label")),
       collapseButton: document.querySelector('[data-testid="collapse-tools"]')?.getAttribute("aria-label") ?? null,
+      // ARIA tabs pattern: the collapse control must sit beside the strip, not
+      // inside `role="tablist"` (#28 review P2-4).
+      collapseInsideTablist: (() => {
+        const collapse = document.querySelector('[data-testid="collapse-tools"]');
+        return collapse !== null && collapse.closest('[role="tablist"]') !== null;
+      })(),
       conversationW: width(document.querySelector('[data-testid="task-workspace"]')),
       serviceGroups: {
         local: document.querySelectorAll('[data-testid="service-list-local"] [data-testid^="service-item-"]').length,

@@ -19,7 +19,7 @@ import {
   ToolWorkbench,
   panelName,
 } from "../components/ToolPanels";
-import type { Approval, Message, Reference, Session, Task } from "../data/types";
+import type { Approval, Environment, Message, Reference, Session, Task } from "../data/types";
 import {
   BUILTIN_COMMANDS,
   activeCompletionToken,
@@ -62,6 +62,7 @@ import { resolveActivePanel } from "../data/toolRail";
 import { useNavigationStore } from "../stores/navigation";
 
 const EMPTY_PANELS: ToolPanel[] = [];
+const EMPTY_ENVIRONMENTS: Environment[] = [];
 const EMPTY_LIVE: Message[] = [];
 const EMPTY_DRAFT: { text: string; references: Reference[] } = { text: "", references: [] };
 const EMPTY_REFERENCE: Reference = { id: "empty", kind: "file", label: "", detail: "" };
@@ -77,6 +78,9 @@ export function TaskPage({ task, sessionId }: { task: Task; sessionId: string })
   const closeAllPanels = useUiStore((state) => state.closeAllPanels);
   const openModal = useUiStore((state) => state.openModal);
   const pushToast = useUiStore((state) => state.pushToast);
+  // The runtime panel's route box names the shared environment by display name,
+  // the way every other surface does (#28 review P2-1).
+  const environments = useHostStore((state) => state.workspace?.environments ?? EMPTY_ENVIRONMENTS);
 
   const directoryOnly = isDirectoryOnlyTask(task);
   // Ordinary directories belong to every task that has them, mixed included;
@@ -439,6 +443,7 @@ export function TaskPage({ task, sessionId }: { task: Task; sessionId: string })
               {activePanel === "runtime" && !directoryOnly ? (
                 <RuntimePanel
                   task={task}
+                  environments={environments}
                   {...(serviceTopology !== undefined ? { topology: serviceTopology } : {})}
                   readonly={session.permission === "read"}
                   onReadonlyAttempt={() => pushToast("当前是只读会话，请先调整会话权限")}
