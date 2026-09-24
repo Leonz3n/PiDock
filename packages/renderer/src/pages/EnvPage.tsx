@@ -127,7 +127,11 @@ export function EnvPage() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Button size="sm" onClick={() => openModal({ type: "effective-config", taskId: configTask?.id })}>
+          <Button
+            size="sm"
+            data-testid="env-effective-config"
+            onClick={() => openModal({ type: "effective-config", taskId: configTask?.id })}
+          >
             查看生效配置
           </Button>
           <Button size="sm" onClick={() => void importFromVscode()}>

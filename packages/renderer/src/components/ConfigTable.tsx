@@ -15,30 +15,36 @@ import { Table, TableWrap, Td, Th } from "./Management";
 export function ConfigTable({
   rows,
   valueHeader = "VALUE",
+  wrapped = true,
 }: {
   rows: ResolvedConfigEntry[];
   valueHeader?: ReactNode;
+  /**
+   * The prototype boxes this table in the runtime panel (`.table-wrap`) but
+   * draws it bare inside `effectiveConfigDialog()`'s `#effective-config-rows`,
+   * so the dialog turns the box off.
+   */
+  wrapped?: boolean;
 }) {
-  return (
-    <TableWrap>
-      <Table>
-        <thead>
-          <tr>
-            <Th>KEY</Th>
-            <Th>{valueHeader}</Th>
-            <Th>来源</Th>
+  const table = (
+    <Table>
+      <thead>
+        <tr>
+          <Th>KEY</Th>
+          <Th>{valueHeader}</Th>
+          <Th>来源</Th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((row) => (
+          <tr key={row.key}>
+            <Td className="font-mono text-[10px]">{row.key}</Td>
+            <Td>{row.secret ? "••••••••" : row.value}</Td>
+            <Td className="text-muted">{row.source}</Td>
           </tr>
-        </thead>
-        <tbody>
-          {rows.map((row) => (
-            <tr key={row.key}>
-              <Td className="font-mono text-[10px]">{row.key}</Td>
-              <Td>{row.secret ? "••••••••" : row.value}</Td>
-              <Td className="text-muted">{row.source}</Td>
-            </tr>
-          ))}
-        </tbody>
-      </Table>
-    </TableWrap>
+        ))}
+      </tbody>
+    </Table>
   );
+  return wrapped ? <TableWrap>{table}</TableWrap> : table;
 }

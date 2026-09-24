@@ -164,11 +164,14 @@ export function Modal({
   children,
   footer,
   onClose,
+  testId,
 }: {
   title: string;
   children: ReactNode;
   footer?: ReactNode;
   onClose: () => void;
+  /** A stable hook for the evidence scripts, which may not key on text. */
+  testId?: string;
 }) {
   // Esc closes the dialog (the backdrop click already does); the handler lives
   // on the document so it also works while a picker input has focus. The
@@ -196,6 +199,7 @@ export function Modal({
         role="dialog"
         aria-modal="true"
         aria-label={title}
+        data-testid={testId}
         // Prototype `.modal{width:min(660px,100%);border-radius:13px}`
         // ([UI 对齐 08] #32): every management dialog is that wide, so the
         // resolved-config table and the project list have room to line up.
