@@ -33,6 +33,21 @@ export const PROTOCOL_MODEL_FIXTURES: Record<string, string[]> = {
   "openai-chat-completions": ["qwen3-coder", "llama3.3-70b"],
 };
 
+/**
+ * Prototype A's `providerProtocols` (`app.js`): the wire id stays the stored
+ * value, the label is what the card badge and the edit form's select show.
+ * Unknown ids fall back to the id itself, so a new protocol is never blank.
+ */
+export const PROTOCOL_LABELS: Record<string, string> = {
+  "anthropic-messages": "Anthropic Messages",
+  "openai-responses": "OpenAI Responses",
+  "openai-chat-completions": "OpenAI Chat Completions",
+};
+
+export function protocolLabel(protocol: string): string {
+  return PROTOCOL_LABELS[protocol] ?? protocol;
+}
+
 /** True for a literal credential (never a reference). */
 export function isSecretLike(value: string): boolean {
   const trimmed = value.trim();

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Badge, Button, Panel } from "../components/ui";
 import { Icon, type IconName } from "../components/Icon";
-import { PageIntro, PageTitle, TabRow, ViewLabel } from "../components/Management";
+import { InlineNotice, PageIntro, PageTitle, TabRow, ViewLabel } from "../components/Management";
 import { capabilityChangeLabel, capabilityKindLabel, capabilityRepairChanged, capabilityRows, isCapabilityEnabled, mcpConnectionLabel, mcpBridgeStatus, packageVersionState, sourceKindLabel, type CapabilityRow } from "../data/capabilityRules";
 import type { Capability, CapabilityFailureCode } from "../data/types";
 import { useHostStore } from "../stores/host";
@@ -138,14 +138,14 @@ export function CapabilitiesPage() {
       />
 
       {kind === "mcp" ? (
-        <div className="inline-notice mb-[19px] rounded-[7px] border border-[#e7e2d5] bg-[#fbf9f2] px-[13px] py-[10px] text-[11px] text-[#948257]">
+        <InlineNotice>
           Pi 原生不包含 MCP。PiDock 管理 Server，并通过受控的桥接 Extension 注册工具；首版不承诺兼容 MCP 的 prompts、resources 等其他能力。
-        </div>
+        </InlineNotice>
       ) : null}
       {kind === "package" ? (
-        <div className="inline-notice mb-[19px] rounded-[7px] border border-[#e7e2d5] bg-[#fbf9f2] px-[13px] py-[10px] text-[11px] text-[#948257]">
+        <InlineNotice>
           Package 是 npm、git 或本地来源的安装与更新单元；其中可包含多个 Skills、Extensions、Prompts 或主题。
-        </div>
+        </InlineNotice>
       ) : null}
 
       <div className="rounded-md border border-line bg-soft/40 px-3 py-2 text-[11px] text-muted">

@@ -326,10 +326,10 @@ export function UsagePage() {
             {groups.map((group) => (
               <tr key={group.key} data-testid={`usage-group-${group.key.replace(/[^\w-]+/g, "-")}`}>
                 <Td className="[overflow-wrap:anywhere]">{groupName(group)}</Td>
-                <Td className="mono">{compactTokens(group.totals.input)}</Td>
-                <Td className="mono">{compactTokens(group.totals.output)}</Td>
-                <Td className="mono">{compactTokens(group.totals.cacheRead)}</Td>
-                <Td className="mono">{compactTokens(recordTotal(group.totals))}</Td>
+                <Td className="mono font-mono">{compactTokens(group.totals.input)}</Td>
+                <Td className="mono font-mono">{compactTokens(group.totals.output)}</Td>
+                <Td className="mono font-mono">{compactTokens(group.totals.cacheRead)}</Td>
+                <Td className="mono font-mono">{compactTokens(recordTotal(group.totals))}</Td>
                 <Td>
                   <Badge tone={group.totals.missing > 0 ? "warn" : "accent"}>{group.totals.missing > 0 ? "部分未报告" : "已报告"}</Badge>
                 </Td>

@@ -30,6 +30,15 @@ import { useUiStore } from "../stores/ui";
  */
 const MODE_ICON: Record<RemoteEntryMode, IconName> = { tailscale: "shield", gateway: "server", funnel: "globe" };
 
+/**
+ * Prototype `.remote-layout .card{border-radius:8px}`: the remote page's cards
+ * are 8px, not the shared `.card` 10px. The `!` is load-bearing — `Card` ships
+ * `rounded-panel` and which of the two declarations wins is decided by Tailwind's
+ * property order, not by class order in the attribute ([UI 对齐 09] #33 P2-2,
+ * the same trap S7a recorded for `bg-[#faf9f5]`).
+ */
+const REMOTE_CARD = "rounded-[8px]!";
+
 export function RemotePage() {
   const workspace = useHostStore((state) => state.workspace);
   const devices = workspace?.devices ?? [];
@@ -45,10 +54,12 @@ export function RemotePage() {
   const revokeDevice = useHostStore((state) => state.revokeDevice);
   const openModal = useUiStore((state) => state.openModal);
   const pushToast = useUiStore((state) => state.pushToast);
+  const refresh = useHostStore((state) => state.refresh);
   const [now] = useState(() => new Date().toISOString());
 
   const mode = entry?.mode ?? "tailscale";
   const row = remoteEntryRow(mode);
+  const listener = entry?.listener ?? "127.0.0.1:4318";
   const warning = remoteEntryWarningText(mode);
   const live = remotePairingIsLive(pairing, now);
   // No real TLS/Gateway connection runs here, so the badge reads the state the
@@ -63,6 +74,16 @@ export function RemotePage() {
   async function mintPairing() {
     const minted = await mintRemotePairing();
     pushToast(`已生成一次性配对凭据（${minted.credentialId}），10 分钟内有效`);
+  }
+
+  /**
+   * Prototype `remote…detect` re-reads the Host's reported entry instead of
+   * probing the local machine (the prototype's own handler only admits it did
+   * not detect anything). No new Host op: `refresh` already re-reads.\n   */
+  async function redetect() {
+    await refresh();
+    const reported = useHostStore.getState().workspace?.remoteEntry;
+    pushToast(`已重新读取 Host 上报：监听 ${reported?.listener ?? "未上报"} · ${reported?.gateway.status === "online" ? "远程入口已连接" : "尚未连接"}`);
   }
 
   async function approveDevice(device: RemoteDevice) {
@@ -121,7 +142,7 @@ export function RemotePage() {
 
       <div className="remote-layout grid grid-cols-[minmax(0,1.55fr)_minmax(280px,0.75fr)] gap-[18px] below-mid:grid-cols-1">
         <section className="flex flex-col gap-[18px]">
-          <Card className="remote-connection">
+          <Card className={`remote-connection ${REMOTE_CARD}`}>
             <div className="flex items-center justify-between gap-3">
               <div>
                 <h3 className="text-[13px] font-[650] text-ink">{row.label}</h3>
@@ -143,32 +164,69 @@ export function RemotePage() {
 
             <div className="connection-checks mt-3 overflow-hidden rounded-[7px] border border-line">
               <div className="grid grid-cols-[8px_minmax(0,1fr)_auto] items-center gap-2.5 border-b border-line px-3 py-2.5">
-                <span className="dot" />
+                <span className="dot inline-block h-[6px] w-[6px] shrink-0 rounded-full bg-[#9aa4ab]" />
                 <span className="min-w-0">
                   <strong className="block text-[11px] text-ink">Host 监听</strong>
                   <small className="block text-[9px] text-muted [overflow-wrap:anywhere]">只监听回环地址，不暴露 Pi RPC，也不代理任意 TCP</small>
                 </span>
-                <code className="mono text-[11px] text-ink">{entry?.listener ?? "127.0.0.1:4318"}</code>
+                <span className="flex items-center gap-2">
+                  <code className="mono font-mono text-[11px] text-ink">{listener}</code>
+                  {/* Prototype `remoteConnectionPanel()` tailscale branch puts 重新检测
+                      on this row. It re-reads what the Host reported — no Host op
+                      probes the local Tailscale install. */}
+                  {mode === "tailscale" ? (
+                    <Button size="sm" onClick={() => void redetect()}>
+                      <Icon name="refresh" />
+                      重新检测
+                    </Button>
+                  ) : null}
+                </span>
               </div>
               <div className="grid grid-cols-[8px_minmax(0,1fr)_auto] items-center gap-2.5 border-b border-line px-3 py-2.5">
-                <span className="dot live" />
+                <span className="dot live inline-block h-[6px] w-[6px] shrink-0 rounded-full bg-[#425a93] shadow-[0_0_0_3px_#425a9312]" />
                 <span className="min-w-0">
                   <strong className="block text-[11px] text-ink">入口地址</strong>
                   <small className="block text-[9px] text-muted [overflow-wrap:anywhere]">{row.publiclyReachable ? "对互联网公开，必须沿用完整登录与限流" : "仅在私有网络内可达"}</small>
                 </span>
-                <code className="mono text-[11px] text-ink">{entry?.baseUrl || "未配置"}</code>
+                <code className="mono font-mono text-[11px] text-ink">{entry?.baseUrl || "未配置"}</code>
               </div>
               <div className="grid grid-cols-[8px_minmax(0,1fr)_auto] items-center gap-2.5 px-3 py-2.5">
-                <span className="dot" />
+                <span className="dot inline-block h-[6px] w-[6px] shrink-0 rounded-full bg-[#9aa4ab]" />
                 <span className="min-w-0">
                   <strong className="block text-[11px] text-ink">Gateway</strong>
                   <small className="block text-[9px] text-muted [overflow-wrap:anywhere]">
                     {entry?.gateway.endpoint || "未使用"} · {REMOTE_GATEWAY_STATUS_LABELS[entry?.gateway.status ?? "offline"]}
                   </small>
                 </span>
-                <code className="mono text-[11px] text-ink">{entry?.gateway.hostId || "未配置"}</code>
+                <code className="mono font-mono text-[11px] text-ink">{entry?.gateway.hostId || "未配置"}</code>
               </div>
             </div>
+
+            {/* Prototype `remoteConnectionPanel()`: tailscale and funnel print the
+                local command with the listener the Host reports; gateway mode has
+                no command and shows the request path instead. */}
+            {mode === "gateway" ? (
+              <>
+                <div className="remote-flow mt-[18px] grid grid-cols-[1fr_18px_1fr_18px_1fr] items-center gap-[7px]">
+                  <span className="rounded-[6px] border border-line bg-[#fafbfc] p-[9px] text-center text-[10px]">手机浏览器</span>
+                  <Icon name="arrow" className="w-[13px] text-[#929aa7]" />
+                  <span className="rounded-[6px] border border-line bg-[#fafbfc] p-[9px] text-center text-[10px]">自建 Gateway</span>
+                  <Icon name="arrow" className="w-[13px] text-[#929aa7]" />
+                  <span className="rounded-[6px] border border-line bg-[#fafbfc] p-[9px] text-center text-[10px]">本机 PiDock</span>
+                </div>
+                <div className="gateway-details mt-3 flex flex-wrap gap-2 text-[10px] text-muted">
+                  <span className="rounded-[5px] border border-line bg-[#fafbfc] px-2 py-0.5">HTTPS / WSS</span>
+                  <span className="rounded-[5px] border border-line bg-[#fafbfc] px-2 py-0.5">桌面主动连接</span>
+                  <span className="rounded-[5px] border border-line bg-[#fafbfc] px-2 py-0.5">设备凭据可轮换</span>
+                </div>
+              </>
+            ) : (
+              <div className="command-preview mt-[18px]">
+                <code className="mono block rounded-[6px] border border-[#e3e5eb] bg-[#fafbfc] px-[7px] py-[3px] font-mono text-[10px] text-[#425173]">
+                  {mode === "tailscale" ? `tailscale serve --bg ${listener}` : `tailscale funnel --bg ${listener}`}
+                </code>
+              </div>
+            )}
 
             <p className="note text-[10px] leading-[1.9] text-[#939c9f]">
               {mode === "gateway"
@@ -180,7 +238,7 @@ export function RemotePage() {
           </Card>
 
           {pairing !== null && pairing.state === "pending" ? (
-            <Card>
+            <Card className={REMOTE_CARD}>
               <div className="flex items-center justify-between gap-3">
                 <h3 className="text-[13px] font-[650] text-ink">配对二维码</h3>
                 <Badge tone={live ? "accent" : "neutral"}>{live ? "有效" : "已失效"}</Badge>
@@ -188,7 +246,7 @@ export function RemotePage() {
               <p className="mt-1 text-[11px] text-muted">
                 凭据一次性、短时（10 分钟），只放在链接的 fragment 中；不编码长期令牌、项目名称或本机路径。手机扫码后仍需在本机确认设备名称与权限。
               </p>
-              <code className="mono mt-2 block break-all rounded bg-soft px-2 py-1.5 text-[11px] text-ink">{pairing.url}</code>
+              <code className="mono mt-2 block break-all rounded bg-soft px-2 py-1.5 font-mono text-[11px] text-ink">{pairing.url}</code>
               <p className="mt-2 text-[11px] text-muted">
                 凭据 {pairing.credentialId} · {remotePairingExpiryText(pairing, now)}
               </p>
@@ -204,7 +262,7 @@ export function RemotePage() {
             </Card>
           ) : null}
 
-          <Card>
+          <Card className={REMOTE_CARD}>
             <div className="flex items-center justify-between gap-3">
               <h3 className="text-[13px] font-[650] text-ink">移动端允许的操作</h3>
               <Badge>设备级授权 · 由 Host 裁决</Badge>
@@ -239,7 +297,7 @@ export function RemotePage() {
         </section>
 
         <aside className="flex flex-col gap-[18px]">
-          <Card>
+          <Card className={REMOTE_CARD}>
             <div className="flex flex-wrap items-center justify-between gap-3">
               <h3 className="text-[13px] font-[650] text-ink">已授权设备</h3>
               <Button size="sm" variant="primary" onClick={() => openModal({ type: "pair-device" })}>
@@ -268,7 +326,11 @@ export function RemotePage() {
                       <small className="mt-1 block text-[10px] text-warn">请求权限后等待本机确认；确认前不能查看或操作任何任务。</small>
                     ) : null}
                   </span>
-                  <div className="flex flex-wrap items-center justify-end gap-2">
+                  {/* Prototype `.device-row` carries a single 撤销 button; this app's
+                      Host exposes four ops, and four buttons on one line ate the
+                      middle column at 1440 (the name broke to one glyph per line).
+                      The tracks stay the prototype's — the button column stacks. */}
+                  <div className="flex flex-col items-stretch gap-2">
                     {canConfirmDevice(device) ? (
                       <Button size="sm" variant="primary" onClick={() => void approveDevice(device)}>
                         <Icon name="check" />
@@ -314,7 +376,7 @@ export function RemotePage() {
             </div>
           </Card>
 
-          <Card className="remote-guard bg-[#faf9f5]">
+          <Card className={`remote-guard bg-[#faf9f5]! ${REMOTE_CARD}`}>
             <h3 className="text-[13px] font-[650] text-ink">远程操作仍受本机约束</h3>
             <p className="mt-2 text-[11px] leading-[1.8] text-[#7f7d76]">会话权限、任务执行权、共享模板确认和浏览器接管规则不因远程访问放宽。</p>
             <p className="mt-2 text-[11px] leading-[1.8] text-[#7f7d76]">配对码不含长期凭据；过期、使用或手动刷新后立即失效。</p>
