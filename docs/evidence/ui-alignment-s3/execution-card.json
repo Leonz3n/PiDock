@@ -59,7 +59,9 @@
       "addButton": {
         "w": 28,
         "visible": true
-      }
+      },
+      "railOpen": false,
+      "railW": 0
     },
     "1440x900-one": {
       "overflowX": "auto",
@@ -70,8 +72,8 @@
       },
       "noHorizontalOverflow": true,
       "strip": {
-        "scrollWidth": 1014,
-        "clientWidth": 1014,
+        "scrollWidth": 505,
+        "clientWidth": 505,
         "clipPx": 0,
         "noClip": true,
         "h": 32
@@ -118,7 +120,9 @@
       "addButton": {
         "w": 28,
         "visible": true
-      }
+      },
+      "railOpen": true,
+      "railW": 493
     },
     "1440x900-all": {
       "overflowX": "auto",
@@ -129,8 +133,8 @@
       },
       "noHorizontalOverflow": true,
       "strip": {
-        "scrollWidth": 1014,
-        "clientWidth": 1014,
+        "scrollWidth": 505,
+        "clientWidth": 505,
         "clipPx": 0,
         "noClip": true,
         "h": 32
@@ -177,7 +181,9 @@
       "addButton": {
         "w": 28,
         "visible": true
-      }
+      },
+      "railOpen": true,
+      "railW": 493
     },
     "1280x900-closed": {
       "overflowX": "auto",
@@ -236,7 +242,9 @@
       "addButton": {
         "w": 28,
         "visible": true
-      }
+      },
+      "railOpen": false,
+      "railW": 0
     },
     "1280x900-one": {
       "overflowX": "auto",
@@ -247,8 +255,8 @@
       },
       "noHorizontalOverflow": true,
       "strip": {
-        "scrollWidth": 854,
-        "clientWidth": 854,
+        "scrollWidth": 414,
+        "clientWidth": 414,
         "clipPx": 0,
         "noClip": true,
         "h": 32
@@ -295,7 +303,9 @@
       "addButton": {
         "w": 28,
         "visible": true
-      }
+      },
+      "railOpen": true,
+      "railW": 424
     },
     "1280x900-all": {
       "overflowX": "auto",
@@ -306,8 +316,8 @@
       },
       "noHorizontalOverflow": true,
       "strip": {
-        "scrollWidth": 854,
-        "clientWidth": 854,
+        "scrollWidth": 414,
+        "clientWidth": 414,
         "clipPx": 0,
         "noClip": true,
         "h": 32
@@ -354,7 +364,9 @@
       "addButton": {
         "w": 28,
         "visible": true
-      }
+      },
+      "railOpen": true,
+      "railW": 424
     },
     "1200x900-closed": {
       "overflowX": "auto",
@@ -413,7 +425,9 @@
       "addButton": {
         "w": 28,
         "visible": true
-      }
+      },
+      "railOpen": false,
+      "railW": 0
     },
     "1200x900-one": {
       "overflowX": "auto",
@@ -424,10 +438,10 @@
       },
       "noHorizontalOverflow": true,
       "strip": {
-        "scrollWidth": 774,
-        "clientWidth": 774,
-        "clipPx": 0,
-        "noClip": true,
+        "scrollWidth": 413,
+        "clientWidth": 368,
+        "clipPx": 45,
+        "noClip": false,
         "h": 32
       },
       "tabs": [
@@ -464,7 +478,7 @@
           "visible": true,
           "active": false,
           "w": 173,
-          "insideStrip": true,
+          "insideStrip": false,
           "labelClipped": false
         }
       ],
@@ -472,7 +486,9 @@
       "addButton": {
         "w": 28,
         "visible": true
-      }
+      },
+      "railOpen": true,
+      "railW": 390
     },
     "1200x900-all": {
       "overflowX": "auto",
@@ -483,10 +499,10 @@
       },
       "noHorizontalOverflow": true,
       "strip": {
-        "scrollWidth": 774,
-        "clientWidth": 774,
-        "clipPx": 0,
-        "noClip": true,
+        "scrollWidth": 413,
+        "clientWidth": 368,
+        "clipPx": 45,
+        "noClip": false,
         "h": 32
       },
       "tabs": [
@@ -523,7 +539,7 @@
           "visible": true,
           "active": false,
           "w": 173,
-          "insideStrip": true,
+          "insideStrip": false,
           "labelClipped": false
         }
       ],
@@ -531,7 +547,9 @@
       "addButton": {
         "w": 28,
         "visible": true
-      }
+      },
+      "railOpen": true,
+      "railW": 390
     },
     "1181x900-closed": {
       "overflowX": "auto",
@@ -590,7 +608,9 @@
       "addButton": {
         "w": 28,
         "visible": true
-      }
+      },
+      "railOpen": false,
+      "railW": 0
     },
     "1181x900-one": {
       "overflowX": "auto",
@@ -601,10 +621,10 @@
       },
       "noHorizontalOverflow": true,
       "strip": {
-        "scrollWidth": 755,
-        "clientWidth": 755,
-        "clipPx": 0,
-        "noClip": true,
+        "scrollWidth": 413,
+        "clientWidth": 357,
+        "clipPx": 56,
+        "noClip": false,
         "h": 32
       },
       "tabs": [
@@ -641,7 +661,7 @@
           "visible": true,
           "active": false,
           "w": 173,
-          "insideStrip": true,
+          "insideStrip": false,
           "labelClipped": false
         }
       ],
@@ -649,7 +669,9 @@
       "addButton": {
         "w": 28,
         "visible": true
-      }
+      },
+      "railOpen": true,
+      "railW": 381
     },
     "1181x900-all": {
       "overflowX": "auto",
@@ -660,10 +682,10 @@
       },
       "noHorizontalOverflow": true,
       "strip": {
-        "scrollWidth": 755,
-        "clientWidth": 755,
-        "clipPx": 0,
-        "noClip": true,
+        "scrollWidth": 413,
+        "clientWidth": 357,
+        "clipPx": 56,
+        "noClip": false,
         "h": 32
       },
       "tabs": [
@@ -700,7 +722,7 @@
           "visible": true,
           "active": false,
           "w": 173,
-          "insideStrip": true,
+          "insideStrip": false,
           "labelClipped": false
         }
       ],
@@ -708,7 +730,9 @@
       "addButton": {
         "w": 28,
         "visible": true
-      }
+      },
+      "railOpen": true,
+      "railW": 381
     },
     "1024x800-closed": {
       "overflowX": "auto",
@@ -767,7 +791,9 @@
       "addButton": {
         "w": 28,
         "visible": true
-      }
+      },
+      "railOpen": false,
+      "railW": 0
     },
     "1024x800-one": {
       "overflowX": "auto",
@@ -778,8 +804,8 @@
       },
       "noHorizontalOverflow": true,
       "strip": {
-        "scrollWidth": 632,
-        "clientWidth": 632,
+        "scrollWidth": 306,
+        "clientWidth": 306,
         "clipPx": 0,
         "noClip": true,
         "h": 26
@@ -826,7 +852,9 @@
       "addButton": {
         "w": 28,
         "visible": true
-      }
+      },
+      "railOpen": true,
+      "railW": 310
     },
     "1024x800-all": {
       "overflowX": "auto",
@@ -837,8 +865,8 @@
       },
       "noHorizontalOverflow": true,
       "strip": {
-        "scrollWidth": 632,
-        "clientWidth": 632,
+        "scrollWidth": 306,
+        "clientWidth": 306,
         "clipPx": 0,
         "noClip": true,
         "h": 26
@@ -885,7 +913,9 @@
       "addButton": {
         "w": 28,
         "visible": true
-      }
+      },
+      "railOpen": true,
+      "railW": 310
     },
     "900x800-closed": {
       "overflowX": "auto",
@@ -944,7 +974,9 @@
       "addButton": {
         "w": 28,
         "visible": true
-      }
+      },
+      "railOpen": false,
+      "railW": 0
     },
     "900x800-one": {
       "overflowX": "auto",
@@ -955,8 +987,8 @@
       },
       "noHorizontalOverflow": true,
       "strip": {
-        "scrollWidth": 654,
-        "clientWidth": 654,
+        "scrollWidth": 323,
+        "clientWidth": 323,
         "clipPx": 0,
         "noClip": true,
         "h": 26
@@ -1003,7 +1035,9 @@
       "addButton": {
         "w": 28,
         "visible": true
-      }
+      },
+      "railOpen": true,
+      "railW": 314
     },
     "900x800-all": {
       "overflowX": "auto",
@@ -1014,8 +1048,8 @@
       },
       "noHorizontalOverflow": true,
       "strip": {
-        "scrollWidth": 654,
-        "clientWidth": 654,
+        "scrollWidth": 323,
+        "clientWidth": 323,
         "clipPx": 0,
         "noClip": true,
         "h": 26
@@ -1062,7 +1096,9 @@
       "addButton": {
         "w": 28,
         "visible": true
-      }
+      },
+      "railOpen": true,
+      "railW": 314
     },
     "720x760-closed": {
       "overflowX": "auto",
@@ -1121,7 +1157,9 @@
       "addButton": {
         "w": 28,
         "visible": true
-      }
+      },
+      "railOpen": false,
+      "railW": 0
     },
     "720x760-one": {
       "overflowX": "auto",
@@ -1180,7 +1218,9 @@
       "addButton": {
         "w": 28,
         "visible": true
-      }
+      },
+      "railOpen": true,
+      "railW": 616
     },
     "720x760-all": {
       "overflowX": "auto",
@@ -1239,11 +1279,13 @@
       "addButton": {
         "w": 28,
         "visible": true
-      }
+      },
+      "railOpen": true,
+      "railW": 616
     }
   },
   "tabStripLongName": {
-    "1181x900-rail": {
+    "1181x900-closed": {
       "overflowX": "auto",
       "scrollable": true,
       "viewport": {
@@ -1287,7 +1329,7 @@
           "labelClipped": false
         },
         {
-          "id": "session-tab-session-muf3k6nj-1",
+          "id": "session-tab-session-muf4h5v1-1",
           "text": "跨仓库发布回归验证会",
           "visible": true,
           "active": true,
@@ -1301,10 +1343,73 @@
         "w": 28,
         "visible": true
       },
-      "sessionName": "跨仓库发布回归验证会",
-      "railOpen": true
+      "railOpen": false,
+      "railW": 0,
+      "sessionName": "跨仓库发布回归验证会"
     },
-    "1200x900-rail": {
+    "1181x900-rail": {
+      "overflowX": "auto",
+      "scrollable": true,
+      "viewport": {
+        "w": 1181,
+        "h": 900
+      },
+      "noHorizontalOverflow": true,
+      "strip": {
+        "scrollWidth": 382,
+        "clientWidth": 358,
+        "clipPx": 24,
+        "noClip": false,
+        "h": 26
+      },
+      "tabs": [
+        {
+          "id": "session-tab-main",
+          "text": "实现与验证",
+          "visible": true,
+          "active": false,
+          "w": 82,
+          "insideStrip": false,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-deploy",
+          "text": "部署审查",
+          "visible": true,
+          "active": false,
+          "w": 70,
+          "insideStrip": true,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-failed",
+          "text": "失败排查",
+          "visible": true,
+          "active": false,
+          "w": 70,
+          "insideStrip": true,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-session-muf4h5v1-1",
+          "text": "跨仓库发布回归验证会",
+          "visible": true,
+          "active": true,
+          "w": 142,
+          "insideStrip": true,
+          "labelClipped": false
+        }
+      ],
+      "visibleTabs": 4,
+      "addButton": {
+        "w": 28,
+        "visible": true
+      },
+      "railOpen": true,
+      "railW": 381,
+      "sessionName": "跨仓库发布回归验证会"
+    },
+    "1200x900-closed": {
       "overflowX": "auto",
       "scrollable": true,
       "viewport": {
@@ -1348,7 +1453,7 @@
           "labelClipped": false
         },
         {
-          "id": "session-tab-session-muf3k88p-1",
+          "id": "session-tab-session-muf4h7t5-1",
           "text": "跨仓库发布回归验证会",
           "visible": true,
           "active": true,
@@ -1362,10 +1467,73 @@
         "w": 28,
         "visible": true
       },
-      "sessionName": "跨仓库发布回归验证会",
-      "railOpen": true
+      "railOpen": false,
+      "railW": 0,
+      "sessionName": "跨仓库发布回归验证会"
     },
-    "1240x900-rail": {
+    "1200x900-rail": {
+      "overflowX": "auto",
+      "scrollable": true,
+      "viewport": {
+        "w": 1200,
+        "h": 900
+      },
+      "noHorizontalOverflow": true,
+      "strip": {
+        "scrollWidth": 382,
+        "clientWidth": 369,
+        "clipPx": 13,
+        "noClip": false,
+        "h": 26
+      },
+      "tabs": [
+        {
+          "id": "session-tab-main",
+          "text": "实现与验证",
+          "visible": true,
+          "active": false,
+          "w": 82,
+          "insideStrip": false,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-deploy",
+          "text": "部署审查",
+          "visible": true,
+          "active": false,
+          "w": 70,
+          "insideStrip": true,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-failed",
+          "text": "失败排查",
+          "visible": true,
+          "active": false,
+          "w": 70,
+          "insideStrip": true,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-session-muf4h7t5-1",
+          "text": "跨仓库发布回归验证会",
+          "visible": true,
+          "active": true,
+          "w": 142,
+          "insideStrip": true,
+          "labelClipped": false
+        }
+      ],
+      "visibleTabs": 4,
+      "addButton": {
+        "w": 28,
+        "visible": true
+      },
+      "railOpen": true,
+      "railW": 390,
+      "sessionName": "跨仓库发布回归验证会"
+    },
+    "1240x900-closed": {
       "overflowX": "auto",
       "scrollable": true,
       "viewport": {
@@ -1409,7 +1577,7 @@
           "labelClipped": false
         },
         {
-          "id": "session-tab-session-muf3k9u2-1",
+          "id": "session-tab-session-muf4h9sa-1",
           "text": "跨仓库发布回归验证会",
           "visible": true,
           "active": true,
@@ -1423,10 +1591,73 @@
         "w": 28,
         "visible": true
       },
-      "sessionName": "跨仓库发布回归验证会",
-      "railOpen": true
+      "railOpen": false,
+      "railW": 0,
+      "sessionName": "跨仓库发布回归验证会"
     },
-    "1277x900-rail": {
+    "1240x900-rail": {
+      "overflowX": "auto",
+      "scrollable": true,
+      "viewport": {
+        "w": 1240,
+        "h": 900
+      },
+      "noHorizontalOverflow": true,
+      "strip": {
+        "scrollWidth": 391,
+        "clientWidth": 391,
+        "clipPx": 0,
+        "noClip": true,
+        "h": 26
+      },
+      "tabs": [
+        {
+          "id": "session-tab-main",
+          "text": "实现与验证",
+          "visible": true,
+          "active": false,
+          "w": 82,
+          "insideStrip": true,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-deploy",
+          "text": "部署审查",
+          "visible": true,
+          "active": false,
+          "w": 70,
+          "insideStrip": true,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-failed",
+          "text": "失败排查",
+          "visible": true,
+          "active": false,
+          "w": 70,
+          "insideStrip": true,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-session-muf4h9sa-1",
+          "text": "跨仓库发布回归验证会",
+          "visible": true,
+          "active": true,
+          "w": 142,
+          "insideStrip": true,
+          "labelClipped": false
+        }
+      ],
+      "visibleTabs": 4,
+      "addButton": {
+        "w": 28,
+        "visible": true
+      },
+      "railOpen": true,
+      "railW": 407,
+      "sessionName": "跨仓库发布回归验证会"
+    },
+    "1277x900-closed": {
       "overflowX": "auto",
       "scrollable": true,
       "viewport": {
@@ -1470,7 +1701,7 @@
           "labelClipped": false
         },
         {
-          "id": "session-tab-session-muf3kbff-1",
+          "id": "session-tab-session-muf4hbql-1",
           "text": "跨仓库发布回归验证会",
           "visible": true,
           "active": true,
@@ -1484,10 +1715,73 @@
         "w": 28,
         "visible": true
       },
-      "sessionName": "跨仓库发布回归验证会",
-      "railOpen": true
+      "railOpen": false,
+      "railW": 0,
+      "sessionName": "跨仓库发布回归验证会"
     },
-    "1280x900-rail": {
+    "1277x900-rail": {
+      "overflowX": "auto",
+      "scrollable": true,
+      "viewport": {
+        "w": 1277,
+        "h": 900
+      },
+      "noHorizontalOverflow": true,
+      "strip": {
+        "scrollWidth": 413,
+        "clientWidth": 413,
+        "clipPx": 0,
+        "noClip": true,
+        "h": 26
+      },
+      "tabs": [
+        {
+          "id": "session-tab-main",
+          "text": "实现与验证",
+          "visible": true,
+          "active": false,
+          "w": 82,
+          "insideStrip": true,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-deploy",
+          "text": "部署审查",
+          "visible": true,
+          "active": false,
+          "w": 70,
+          "insideStrip": true,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-failed",
+          "text": "失败排查",
+          "visible": true,
+          "active": false,
+          "w": 70,
+          "insideStrip": true,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-session-muf4hbql-1",
+          "text": "跨仓库发布回归验证会",
+          "visible": true,
+          "active": true,
+          "w": 142,
+          "insideStrip": true,
+          "labelClipped": false
+        }
+      ],
+      "visibleTabs": 4,
+      "addButton": {
+        "w": 28,
+        "visible": true
+      },
+      "railOpen": true,
+      "railW": 423,
+      "sessionName": "跨仓库发布回归验证会"
+    },
+    "1280x900-closed": {
       "overflowX": "auto",
       "scrollable": true,
       "viewport": {
@@ -1531,7 +1825,7 @@
           "labelClipped": false
         },
         {
-          "id": "session-tab-session-muf3kd1b-1",
+          "id": "session-tab-session-muf4hdph-1",
           "text": "跨仓库发布回归验证会",
           "visible": true,
           "active": true,
@@ -1545,10 +1839,73 @@
         "w": 28,
         "visible": true
       },
-      "sessionName": "跨仓库发布回归验证会",
-      "railOpen": true
+      "railOpen": false,
+      "railW": 0,
+      "sessionName": "跨仓库发布回归验证会"
     },
-    "1440x900-rail": {
+    "1280x900-rail": {
+      "overflowX": "auto",
+      "scrollable": true,
+      "viewport": {
+        "w": 1280,
+        "h": 900
+      },
+      "noHorizontalOverflow": true,
+      "strip": {
+        "scrollWidth": 414,
+        "clientWidth": 414,
+        "clipPx": 0,
+        "noClip": true,
+        "h": 26
+      },
+      "tabs": [
+        {
+          "id": "session-tab-main",
+          "text": "实现与验证",
+          "visible": true,
+          "active": false,
+          "w": 82,
+          "insideStrip": true,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-deploy",
+          "text": "部署审查",
+          "visible": true,
+          "active": false,
+          "w": 70,
+          "insideStrip": true,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-failed",
+          "text": "失败排查",
+          "visible": true,
+          "active": false,
+          "w": 70,
+          "insideStrip": true,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-session-muf4hdph-1",
+          "text": "跨仓库发布回归验证会",
+          "visible": true,
+          "active": true,
+          "w": 142,
+          "insideStrip": true,
+          "labelClipped": false
+        }
+      ],
+      "visibleTabs": 4,
+      "addButton": {
+        "w": 28,
+        "visible": true
+      },
+      "railOpen": true,
+      "railW": 424,
+      "sessionName": "跨仓库发布回归验证会"
+    },
+    "1440x900-closed": {
       "overflowX": "auto",
       "scrollable": true,
       "viewport": {
@@ -1592,7 +1949,7 @@
           "labelClipped": false
         },
         {
-          "id": "session-tab-session-muf3kemb-1",
+          "id": "session-tab-session-muf4hfnm-1",
           "text": "跨仓库发布回归验证会",
           "visible": true,
           "active": true,
@@ -1606,8 +1963,71 @@
         "w": 28,
         "visible": true
       },
-      "sessionName": "跨仓库发布回归验证会",
-      "railOpen": true
+      "railOpen": false,
+      "railW": 0,
+      "sessionName": "跨仓库发布回归验证会"
+    },
+    "1440x900-rail": {
+      "overflowX": "auto",
+      "scrollable": true,
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "noHorizontalOverflow": true,
+      "strip": {
+        "scrollWidth": 505,
+        "clientWidth": 505,
+        "clipPx": 0,
+        "noClip": true,
+        "h": 26
+      },
+      "tabs": [
+        {
+          "id": "session-tab-main",
+          "text": "实现与验证",
+          "visible": true,
+          "active": false,
+          "w": 82,
+          "insideStrip": true,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-deploy",
+          "text": "部署审查",
+          "visible": true,
+          "active": false,
+          "w": 70,
+          "insideStrip": true,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-failed",
+          "text": "失败排查",
+          "visible": true,
+          "active": false,
+          "w": 70,
+          "insideStrip": true,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-session-muf4hfnm-1",
+          "text": "跨仓库发布回归验证会",
+          "visible": true,
+          "active": true,
+          "w": 142,
+          "insideStrip": true,
+          "labelClipped": false
+        }
+      ],
+      "visibleTabs": 4,
+      "addButton": {
+        "w": 28,
+        "visible": true
+      },
+      "railOpen": true,
+      "railW": 493,
+      "sessionName": "跨仓库发布回归验证会"
     }
   },
   "card": {
@@ -2121,7 +2541,7 @@
     ]
   },
   "assertions": {
-    "checked": 36,
+    "checked": 42,
     "violations": 0
   }
 }

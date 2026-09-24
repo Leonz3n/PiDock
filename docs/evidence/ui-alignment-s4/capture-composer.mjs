@@ -174,7 +174,7 @@ for (const vp of VIEWPORTS) {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   await page.goto(task("release", "deploy"), { waitUntil: "networkidle" });
   await page.waitForTimeout(400);
-  await page.locator('[data-testid="execution-card"] button', { hasText: "拒绝" }).first().click();
+  await page.getByTestId("execution-action-reject").first().click();
   await page.waitForTimeout(300);
   await page.getByTestId("session-tab-main").click();
   await page.waitForTimeout(400);
@@ -233,6 +233,17 @@ for (const vp of VIEWPORTS) {
     };
   });
   await page.screenshot({ path: `${OUT}/renderer/1440-paste.png` });
+  // The chip opens the prototype's lightbox (`attachments.js` uses `modal()`), so
+  // the open state is captured too instead of only asserted in jsdom ([UI 对齐 06]
+  // #30 review P2-5).
+  await page.getByTestId("composer-attachment-open").first().click();
+  await page.waitForTimeout(300);
+  report.states.pasteLightbox = {
+    dialogRole: await page.locator('[data-testid="attachment-preview-image"]').evaluate((node) => node.closest('[role="dialog"]') !== null),
+    imagePresent: await page.getByTestId("attachment-preview-image").isVisible(),
+    detail: await page.getByTestId("attachment-preview-detail").textContent(),
+  };
+  await page.screenshot({ path: `${OUT}/renderer/1440-attachment-lightbox.png` });
   await page.close();
 }
 
@@ -242,8 +253,9 @@ for (const vp of VIEWPORTS) {
   await page.goto(task("release", "main"), { waitUntil: "networkidle" });
   await page.waitForTimeout(400);
   await page.getByTestId("composer-model-trigger").click();
-  const picker = page.locator('[role="dialog"]').filter({ hasText: "本地 Qwen" }).first();
-  await picker.getByRole("button", { name: /本地 Qwen/ }).first().click();
+  // Model id, not its label: the picker rows carry a testid so the capture keeps
+  // working when a display name changes ([UI 对齐 06] #30 closing round P2-1).
+  await page.getByTestId("model-choice-本地 Qwen").click();
   await page.waitForTimeout(400);
   await page.evaluate(async () => {
     const textarea = document.querySelector('[data-testid="task-composer-input"]');
@@ -258,7 +270,7 @@ for (const vp of VIEWPORTS) {
     ...(await measureComposer(page)),
     warning: (await page.getByTestId("composer-image-warning").textContent())?.trim() ?? null,
     warningRole: await page.getByTestId("composer-image-warning").evaluate((node) => node.closest("p")?.getAttribute("role") ?? null),
-    inlineModelEntry: await page.locator('[role="status"] button', { hasText: "选择模型" }).count(),
+    inlineModelEntry: await page.getByTestId("composer-image-warning-model").count(),
     sendDisabled: await page.getByTestId("composer-send").isDisabled(),
     attachmentsKept: await page.locator('[data-testid="composer-attachments"] li').count(),
   };
@@ -451,6 +463,11 @@ function assertGeometry(measured) {
   if (paste.draftText !== "看这张截图") violations.push(`paste: the clipboard text is not in the draft (${paste.draftText})`);
   if (paste.toast === null) violations.push("paste: no confirmation toast");
 
+  const lightbox = measured.states.pasteLightbox;
+  if (lightbox.dialogRole !== true) violations.push("attachment lightbox: the preview is not inside a dialog");
+  if (lightbox.imagePresent !== true) violations.push("attachment lightbox: the image is not shown");
+  if (!(lightbox.detail ?? "").includes("仅本页保留")) violations.push("attachment lightbox: the source line is missing");
+
   const warning = measured.states.unsupportedImage;
   if (warning.warningRole !== "status") violations.push("unsupported image: the warning is not a status line");
   if (warning.inlineModelEntry < 1) violations.push("unsupported image: the inline model entry is missing");
@@ -494,6 +511,7 @@ console.log("--- states ---");
 console.log(`card-free: messages=${report.states.cardFree.messagesH} composer=${report.states.cardFree.composerH}`);
 console.log(`read-only: hint=${report.states.readOnly.hintVisible} attachDisabled=${report.states.readOnly.attachDisabled}`);
 console.log(`paste: ${report.states.paste.attachmentLabels.join(",")} toast=${report.states.paste.toast}`);
+console.log(`attachment lightbox: image=${report.states.pasteLightbox.imagePresent} detail=${report.states.pasteLightbox.detail}`);
 console.log(`unsupported image: sendDisabled=${report.states.unsupportedImage.sendDisabled} kept=${report.states.unsupportedImage.attachmentsKept}`);
 console.log(
   `12 attachments: renderer=${report.states.heavyAttachments.composerH}/messages ${report.states.heavyAttachments.messagesH} prototype=${report.states.heavyAttachmentsPrototype.composerH}/messages ${report.states.heavyAttachmentsPrototype.messagesH}`,

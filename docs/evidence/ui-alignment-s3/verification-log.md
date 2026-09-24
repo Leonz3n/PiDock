@@ -52,14 +52,23 @@ pnpm turbo run typecheck test build lint --force
 
 场景：新建会话并改名为上限内的 10 字名（`sessionTabLabel` 上限 10 字），再打开「文件」面板。
 
-| 视口（+ 工具面板） | 条带宽/内容宽 | 溢出可滚动 | 标签文字截断 | 激活标签在条内 |
-| --- | --- | --- | --- | --- |
-| 1181×900 | 358 / 382 | 是（24px） | 无 | 是 |
-| 1200×900 | 369 / 382 | 是（13px） | 无 | 是 |
-| 1240×900 | 391 / 391 | 否 | 无 | 是 |
-| 1277×900 | 413 / 413 | 否 | 无 | 是 |
-| 1280×900 | 414 / 414 | 否 | 无 | 是 |
-| 1440×900 | 505 / 505 | 否 | 无 | 是 |
+| 视口（+ 工具面板） | 条带宽/内容宽（工具栏**关**） | 条带宽/内容宽（工具栏**开**） | 工具区宽 | 溢出可滚动 | 标签文字截断 | 激活标签在条内 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1181×900 | 755 / 755 | **358 / 382** | 381 | 是（24px） | 无 | 是 |
+| 1200×900 | 774 / 774 | **369 / 382** | 390 | 是（13px） | 无 | 是 |
+| 1240×900 | 814 / 814 | **391 / 391** | 407 | 否 | 无 | 是 |
+| 1277×900 | 851 / 851 | **413 / 413** | 423 | 否 | 无 | 是 |
+| 1280×900 | 854 / 854 | **414 / 414** | 424 | 否 | 无 | 是 |
+| 1440×900 | 1014 / 1014 | **505 / 505** | 493 | 否 | 无 | 是 |
+
+> **本轮补强（[UI 对齐 06] #30 收口微轮）**：「工具栏开」这几行**曾经是空转**——`capture-execution.mjs`
+> 按 `tool-tab-<panel>` 开局，而标签只在面板已开时才存在，于是面板一次没开、JSON 里 14 条档位与
+> 6 条长名行都是 `closed` 的复制（1181 档写的是 755），`railOpen` 还是脚本里写死的 `true`。
+> 现在启动器带 `data-testid="tool-launcher-<panel>"`、脚本先用它开局，`railOpen`/`railW` 改为实测，
+> 并新增防空转断言（声明开着工具栏的档位必须 `railOpen=true && railW>0`，且 720px 以上条带
+> 必须严格窄于同视口 `closed`；≤720px 原型把工具区**堆在对话区下方**，条带不变窄是正确结果）。
+> 上表数值就是修复后实测（与本文档原有数值一致，即原数值来自更早一次正常运行，只是 JSON 未同步）。
+> 另：`+` 新建会话入口也已纳入断言（`session-new`，改名前会静默变成 `null`）。
 
 机制（`TaskPage.tsx` 条带）：**实现与原型有意不同**。原型 `navigation.css` 的
 `.session-tabs{display:flex;min-width:0;flex:1;overflow:hidden}` 与
@@ -129,8 +138,12 @@ pnpm turbo run typecheck test build lint --force
 | `failed` / `failed-readonly` | 314 | **315 / 315** | 300 | 达标（只读 + 记录不再重复说明行） |
 | `completed` / `stopped` / `rejected` / `idle-other-busy` | 308 / 414 / 433 / 349 | **309 / 434 / 434 / 350** | 300 | 达标 |
 
-`node docs/evidence/ui-alignment-s3/capture-execution.mjs` → `geometry assertions: ok (36 measured states)`；
+`node docs/evidence/ui-alignment-s3/capture-execution.mjs` → `geometry assertions: ok (42 measured states)`；
 卡片护栏仍为 **141px ≤ 145px**，原型等待态自身 `.messages` 仍为 **99px**（对照留证）。
+
+> 收口微轮（[UI 对齐 06] #30 第二次评审 P1-1）后，本脚本修掉了工具栏扫描空转（新增 6 条长名
+> `closed` 对照行 + 防空转断言），重跑为 **42** 个测量态；卡片与输入区数值不变
+> （`composer` 143、卡片 141、各态 messages 同上：305 / 346 / 406 / 315 / 315 / 309 / 434 / 434 / 350）。
 
 **证据脚本定位规则（本切片引入，两个脚本都遵守）**：捕获脚本一律用 `data-testid`
 定位，不得依赖 `aria-label` 或可见文案。原因是真实事故：#30 把输入框的可访问名称改成
@@ -138,19 +151,22 @@ pnpm turbo run typecheck test build lint --force
 `locator` 超时、无法复跑（[UI 对齐 06] #30 评审发现）。为此本切片补了
 `task-composer-input` / `composer-send` / `composer-permission` / `composer-attach` /
 `composer-file-input` / `execution-action-*` / `execution-approval-expire` /
-`session-new` / `session-menu-*` / `session-name-input` / `session-name-save` 等 testid。
+`session-new` / `session-menu-*` / `session-name-input` / `session-name-save` / `tool-launcher-<panel>` 等 testid。
+本应用页面内**零**文案型定位；唯一例外是原型页面（4319）自身的控件文案（如 `模拟等待确认`）——
+`prototypes/**` 只读，无法加 testid。
 
 ## 4. 门禁与仓库状态
 
 - `pnpm turbo run typecheck test build lint --force`：**8/8 成功**。
-- renderer：**52 文件 / 444 例全绿**（#29 交付时 51/431；[UI 对齐 06] #30 修复轮 +13 例）；shell：54 文件 / 801 例（未变）。
+- renderer：**52 文件 / 445 例全绿**（#29 交付时 51/431；[UI 对齐 06] #30 两轮修复 +14 例）；shell：54 文件 / 801 例（未变）。
 - `not wrapped in act`：0；无 `.skip/.only/.todo`。
 - 改动仅限 `packages/renderer/**` 与 `docs/evidence/ui-alignment-s3/**`，
   `prototypes/**` 0 改动（只读引用），`packages/shell/**` 未触碰。
 - 采集脚本可复跑并带断言：`assertGeometry()` 检查每个档位标签未截断、条带溢出必须可滚动、
   激活标签在条内、可见标签数分层（4/4/2/1/1）、长名档位不截断、卡片不内部滚动、
-  卡片护栏、双档消息区下限、审批面唯一、只读说明行可见且不独占一块、页面无横向溢出
-  （**36** 个测量态）。
+  卡片护栏、双档消息区下限、审批面唯一、只读说明行可见且不独占一块、页面无横向溢出、
+  **工具栏声明的真实性（`railOpen`/`railW` 实测 + 条带必须变窄）**、新建会话入口存在
+  （**42** 个测量态）。
 
 ## 5. 残项（含去向）
 
@@ -236,3 +252,25 @@ pnpm turbo run typecheck test build lint --force
 | P2-C #27 400px 基线被取代未记录 | 已改证据 | §3 新增「与 #27 的 400px 基线的关系」：卡片出现时以 340/300 为准；「空闲 + 跨会话提示」349px < 408px 是卡片按验收 5 必须出现的结果，不是回归 |
 | P2-D 只读说明行未进护栏 | 已修（布局 + 实测 + 断言） | 说明行从独立块移入状态行（`flex-wrap` 下仍可换行）；新增 `failed-readonly` 档位实测：卡片 **141px**（与可写失败态相同）、消息区 **314px** ≥ 300、入口禁用、说明行可见（`readonlyHint` 15px）；`assertGeometry()` 增加该档位的可见性与护栏断言；截图 `renderer/1440-card-failed-readonly.png`；§5-R7 由「无法截图」改为「已补测」 |
 | P2-E 注释不实 | 已改注释 | `TaskPage.tsx` 条带 `ResizeObserver` 注释不再声称「jsdom 没有 ResizeObserver」，改为「守护完全没有 ResizeObserver 的环境；`src/test/setup.ts` 装的是可控 stub，用例走观察路径」 |
+
+### 第三轮（[UI 对齐 06] #30 收口微轮在**本切片证据**里发现的退化）
+
+| review 项 | 结论 | 落地 |
+| --- | --- | --- |
+| P1-1 工具栏扫描空转（14 条档位 + 6 条长名行是 `closed` 的复制，`railOpen` 硬编码） | 已修 + 已加防空转守卫 | 见 §2.1 的补强说明与下表；产品代码只加了一个 `data-testid="tool-launcher-<panel>"`（无行为变化） |
+| 长名档位没有 `closed` 对照 | 已修 | 长名扫描每个宽度先量一次 `closed`（同长名）再开工具栏，`tabStripLongName` 由 6 行变 12 行；断言要求 rail 行条带严格窄于同宽 `closed` 行 |
+| P2-1 残留名称型定位（`aria-label="新建会话"`、`[role=log][aria-label="会话消息"]`） | 已修 | 改用 `session-new` / `[data-testid="task-workspace"] [role="log"]`；`addButton` 纳入断言（此前改名只会得到 `null`，无断言覆盖） |
+
+修后实测（`execution-card.json` → `tabStrip` 与 `tabStripLongName`）：
+
+| 档位 | 条带 clientWidth | railOpen | railW |
+| --- | --- | --- | --- |
+| 1440×900 | closed 1014 → one/all **505** | true | 493 |
+| 1280×900 | closed 854 → one/all **414** | true | 424 |
+| 1024×800 | closed 632 → one/all **306** | true | 310 |
+| 900×800 | closed 654 → one/all **323** | true | 314 |
+| 720×760 | closed 484 → one/all 484（**堆叠档**：工具区占满宽度落在对话区下方，故条带不变窄，按视口豁免） | true | 616 |
+| 1181×900（长名） | closed 755 → rail **358** | true | 381 |
+
+`+` 新建会话入口：24 个档位全部 `w=28 visible=true`（此前若改名只会静默得到 `null`）。
+所有 `railOpen` 为 true 的档位均能满足「条带严格窄于同视口 closed」（720 堆叠档除外，见断言注释）。

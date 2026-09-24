@@ -10,7 +10,12 @@
 无法复跑。修复轮补齐了 `task-composer-input` / `composer-send` / `composer-permission` /
 `composer-attach` / `composer-file-input` / `composer-model-trigger` / `composer-image-warning` /
 `composer-attachment-open|remove` / `tool-tab-<panel>` / `session-new` / `session-menu-*` /
-`session-name-input|save` 等 testid，并把两个脚本改为按它们定位（#29 脚本已重跑并复测，见其 §3.1）。
+`session-name-input|save`、`model-choice-<模型 id>`、`tool-launcher-<panel>`、
+`composer-image-warning-model` 等 testid，并把两个脚本改为按它们定位（#29 脚本已重跑并复测，见其 §3.1）。
+
+**唯一保留的例外**：定位**原型页面**（4319）时仍需按它自己的文案（例如 #29 脚本的
+`getByRole("button", { name: "模拟等待确认" })`）——`prototypes/**` 是本仓的只读参考，不能给它加
+testid。本应用页面内则**零**文案型定位（收口轮把最后两处 `本地 Qwen` 与卡片「拒绝」也改成了 testid）。
 
 ## 1. 验收逐条结论
 
@@ -25,8 +30,8 @@
 | 7 | **修 #27 残留：窄栏输入区高度不再膨胀** | COVERED | 见 §2.1：**5 档全部 143px**（#27 已提交证据：1440/1280 = 145、1024 = **179**），按钮行恒单行 28px、`rowWrapped=false` |
 | 8 | 纵向预算不退化 | COVERED | 无卡片参照态 **409px ≥ 400px**（#27 基线 408px，见 §2.3）；带卡片三态实测 **346 / 315 / 315**，见 §2.4 与 #29 的双档口径（审批/过期 ≥340、带既有 chrome 的态 ≥300） |
 | 9 | 只读会话禁用 + **可见**提示（只出现一次） | COVERED | textarea / 附件入口 / 文件选择 / 发送均禁用且 `+` 有 `disabled:opacity-50`；可见说明行 `role="status"`；**只读 + 有记录的档位由卡片说明行承担、输入框不再重复**（实测 `composerHintVisible=0`，用例锁定） |
-| 10 | 用例覆盖 | COVERED | `composerAlignment.test.tsx` **11 例**（+3：两次粘贴名称唯一 + blob 释放、默认态推理触发器、只读规则只出现一次）+ `composerRules.test.ts` 2 例；几何走可复跑脚本 + 断言 |
-| 11 | 证据提交 | COVERED | `composer.json`（5 档 ×（渲染层+原型）+ 9 状态）+ `renderer/` **18 张**（5 档页面 + 5 档裁剪 + card-free/paste/readonly/warning/heavy + `1440-card-{approval,failed,failed-readonly}`）+ `prototype/` 6 张 + `capture-composer.mjs` |
+| 10 | 用例覆盖 | COVERED | `composerAlignment.test.tsx` **12 例**（+4：两次粘贴名称唯一 + blob 释放、默认态推理触发器、只读规则只出现一次、模型「· 不可用」仅在模型离开配置时出现）+ `composerRules.test.ts` 2 例；几何走可复跑脚本 + 断言 |
+| 11 | 证据提交 | COVERED | `composer.json`（5 档 ×（渲染层+原型）+ 10 状态）+ `renderer/` **19 张**（5 档页面 + 5 档裁剪 + card-free/paste/**attachment-lightbox**/readonly/warning/heavy + `1440-card-{approval,failed,failed-readonly}`）+ `prototype/` 6 张 + `capture-composer.mjs` |
 | 12 | 门禁全绿 | COVERED | 见 §7 |
 
 ## 2. 几何表（实测）
@@ -68,7 +73,13 @@
 | 12 个附件 | 212 | 281 | 原型 213 / 210；条带 61px 不滚动、未超 182px 上限 |
 | 不支持图片 | 227 | 266 | 警告行 + 芯片行；发送禁用、附件保留 |
 
+> **口径（[UI 对齐 06] #30 收口轮补记）**：上表后两行（12 附件 281、不支持图片 266）与「只读」档（326）**没有执行状态卡**，不属于 [UI 对齐 05] (#29) 双档下限（340/300）的适用范围——那两个数字是「有卡片且有卡片外既有 chrome」的态的下限。它们只与**原型 A 同态**比较（原型 210），并在 `capture-composer.mjs` 里按此口径断言（只比原型，不套 300px）。把附件态压到 300px 以上需要削减附件条或警告行本身，属后续决策，记为 §6-R6。
+
 ### 2.4 执行状态卡档位（[UI 对齐 05] (#29) 双档下限复测）
+
+口径补记：§8 里 `b305f41` 的「修复前」实测（`running` 299 / `approval` 340 / `expired` 400 /
+`stopped`·`rejected` 428 / `failed` 344）是**父侧在 shell 里直接跑 #29 脚本得到的、未留产物**，
+本轮已把结果写进 §8；仓库里可核的是修后数值（§2.4 与 `execution-card.json`）。
 
 | 档位 | 输入区 | 消息区 | 下限 | 卡片 | 结论 |
 | --- | --- | --- | --- | --- | --- |
@@ -101,15 +112,16 @@
 2. **表单与 meta 行间距 6px（原型 8px）**：本切片的输入区已比原型矮 24px，把 2px 还原会重新贴到 #29 的审批态下限（340px）上。
 3. **输入区纵向内缩**：原型 wrap 另有 9px（上）/15px（下）内边距，本实现由任务区留白承担；补足会再占 24px 消息区。
 4. **320px 以下档位的换行**：原型 `.compose-bottom` 无 `flex-wrap`，本实现保留 `flex-wrap` 作为窄档降级（实测 5 档均未触发换行）。上一版用例注释把 `flex-wrap` 归因给原型，评审指出有误，本轮已改正注释。
+5. **「不支持推理」的模型仍渲染禁用的推理触发器**：原型 `app.js:127` 的 `thinkingControl()` 在 `thinkingMode==='none'` 时**返回空字符串**（什么都不渲染）；本实现对 Host 报告为 `unsupported` 的模型渲染一个禁用按钮（文案「推理 · 不支持」+ `title` 说明原因），理由是让原因可达而不是控件消失。默认态（目录未解析）与原型一致：`推理 · 跟随模型`。（评审 P2-3 要求把该偏离写进本表；上一版源码注释误把「始终渲染」归因给原型，本轮已改正。）
 
 ## 6. 残项（含去向）
 
 - **R1 真实剪贴板路径未端到端验证**：浏览器证据用页面内构造的 `ClipboardEvent` + 真 `DataTransfer`（真 React 处理器与 store、真渲染），**不是**系统剪贴板硬件路径；jsdom 用例是手写 `clipboardData` 替身。证明：处理器、命名、草稿插入、store 效果、`defaultPrevented`；不证明：浏览器/OS 剪贴板权限与 `navigator.clipboard`。**去向**：随 [#22](https://github.com/Leonz3n/PiDock/issues/22) 打包后在真机上手测。
 - **R2 附件仍为内存态**：不落盘、不上传、刷新即失（blob 生命周期已在 §4 修正）。
-- **R3 权限/推理触发器形态未完全照原型**：原型 `.permission-trigger` 有模式图标 + 箭头、`.thinking-trigger` 有箭头；本实现仍是无边框文字按钮（可访问名与文案已一致，默认态已渲染）。**去向**：[#24](https://github.com/Leonz3n/PiDock/issues/24) 后续切片统一控件形态。
+- **R3 权限/推理触发器形态未完全照原型**：原型 `.permission-trigger` 有模式图标 + 箭头、`.thinking-trigger` 有箭头；本实现仍是无边框文字按钮（可访问名与文案已一致，默认态已渲染）；另：Host 报告「不支持推理」的模型在本实现里渲染禁用触发器，原型渲染**空**（见 §5-5）。**去向**：[#24](https://github.com/Leonz3n/PiDock/issues/24) 后续切片统一控件形态。
 - **R4 只读态输入区比常态高 25px**（168 vs 143）：该档位没有可禁用的卡片入口，规则只能落在输入框内；消息区 326px 仍充裕。**去向**：如后续统一对话区预算再收敛。
 - **R5 `compose-meta` 行高 15px vs 原型 19px**：10px 文字 + 紧行高，数值与语义一致、更省纵向。
-- **R6 12 附件档输入区 212px（本切片前 184px）**：20px 侧内缩让条带多占一行；仍低于原型同档 213px、消息区 281px 高于原型 210px。
+- **R6 12 附件档输入区 212px（本切片前 184px）**：20px 侧内缩让条带多占一行；仍低于原型同档 213px、消息区 281px 高于原型 210px。该档与「不支持图片」档（消息区 266）**不适用** #29 双档下限（无执行状态卡，见 §2.3 口径），若后续要求附件态也进 300px 下限，需削减附件条/警告行本身。
 - **R7 720×760 档页面高 2804px**：整页截图看不到输入区，已补裁剪截图（`720x760-composer-crop.png`）；该档不参与消息区下限（视口高度不同）。
 - **R8 `#29` 交接项「失败态输入框 175px」**：现为 **174px**（143 结构 + 31 草稿引用行），该档消息区 **315px ≥ 300**。差额来自用户草稿里的引用行而非应用 chrome，**不再作为缺口**；[#29](https://github.com/Leonz3n/PiDock/issues/29) 残项表已按此更新。
 - **未测（by design）**：Electron GUI 重启需本地目视确认；真实文件上传/服务进程属 #13 产品缺口；B/C 变体未实现。
@@ -120,12 +132,12 @@
 pnpm turbo run typecheck lint test build --force
  Tasks:    8 successful, 8 total
  @pidock/shell:test:       Tests  801 passed (801)     (54 files)
- @pidock/renderer:test:    Tests  444 passed (444)     (52 files; #29 交付时 51/431)
+ @pidock/renderer:test:    Tests  445 passed (445)     (52 files; #29 交付时 51/431)
  not wrapped in act: 0 ; eslint --max-warnings 0 通过
 node docs/evidence/ui-alignment-s4/capture-composer.mjs
- geometry assertions: ok (21 measured states)
+ geometry assertions: ok (22 measured states)
 node docs/evidence/ui-alignment-s3/capture-execution.mjs
- geometry assertions: ok (36 measured states)
+ geometry assertions: ok (42 measured states)
 ```
 
 ## 7.1 复跑幂等性（本次实测）
@@ -150,3 +162,27 @@ node docs/evidence/ui-alignment-s3/capture-execution.mjs
 | P2-D blob URL 泄漏 | 已修 | 见 §4（移除/发送/切换会话释放；卸载只释放草稿不再引用的） |
 | P2-E #29 交接项未披露 | 已记录 | §6-R8（实测 174px / 消息区 315px） |
 | P2-F 证据卫生 | 已修 | 张数口径改对（18 张，逐类列出）；无出处的「修复前」数字删除（§2.1 注）；720 档补裁剪截图；`flex-wrap` 归因注释改正；`prevented` 变量语义命名改正 |
+
+## 9. 收口微轮（第二次评审 P1-1 与 P2-1..P2-7 → 落地）
+
+第二次评审在**修复轮自己引入的证据**里抓到一条 P1：`capture-execution.mjs` 把面板开合改成
+`tool-tab-<panel>` 后，面板一次都没打开（标签只在 `panels.length > 0` 时才存在，唯一入口是头部
+启动器），于是 14 条档位与 6 条长名档位都是 `closed` 的复制，而 JSON 仍写 `railOpen: true`、
+日志仍声称「带/不带工具栏」都覆盖——[UI 对齐 05] (#29) 的「1181–1277px + 工具栏开、长名不截断」
+这条属性当时**并未被测**。本轮把它变成真测量：
+
+| 项 | 结论 | 落地 |
+| --- | --- | --- |
+| P1-1 工具栏扫描空转 | 已修 + 已加防空转守卫 | 头部启动器补 `data-testid="tool-launcher-<panel>"`（`TaskPage.tsx:380`），`openPanels()` 先按启动器打开（并用 `aria-pressed` 避免 toggle 反向关闭）、再按 `tool-tab-*` 切激活；`measureTabs` 的 `railOpen`/`railW` 改为**实测**（不再是脚本里写死的 `true`），补 `addButton` 实测 |
+| P1-1 断言不能发现空转 | 已修 | `assertGeometry()` 新增：声明开着工具栏的档位必须 `railOpen === true && railW > 0`；720px 以上的档位其条带必须**严格窄于**同视口 `closed` 档（≤720px 原型把工具区**堆到对话区下方**，条带不变宽是正确结果，故按视口豁免并说明）；长名扫描每个宽度都补一条 `closed` 对照行（1181/1200/1240/1277/1280/1440）。实测（本次重跑）：`1181x900-rail` 条带 **358px**（修前 JSON 里是 755 = closed 的复制）、`railW=381`；六条 rail 行 `railOpen=true`、`truncated=none`、`activeInside=true` |
+| P2-1 残留名称型定位 | 已修 | `capture-execution.mjs` 的 `新建会话` → `session-new`（并纳入断言）、`[role="log"][aria-label="会话消息"]` → `[data-testid="task-workspace"] [role="log"]`（两处）；`capture-composer.mjs` 的卡片「拒绝」→ `execution-action-reject`、警告行内联「选择模型」→ 新增 `composer-image-warning-model` testid。现在两个脚本**不含**任何依赖 aria-label/可见文案的定位 |
+| P2-2 口径不一致 | 已修 | §1-item10 改为 12 例（+4）；§7 门禁改为实跑 **445 例 / 52 文件**；`b305f41` 的「修复前」数值标注为「父侧实测、未留产物」（§2.4 注） |
+| P2-3 注释把「始终渲染」归因原型 | 已修 | `TaskPage.tsx:1827` 注释改为如实描述（原型 `thinkingMode:'none'` 返回空字符串）；「不支持」态渲染禁用触发器写入 §5-5 与 §6-R3 |
+| P2-4 「· 不可用」条件过宽 | 已修 | 收窄为 `attribution.availability === "model-unavailable"`（原型 `app.js:56` 只在模型离开该配置时加后缀）；Provider 停用/缺失仍由框内 `session-provider-unavailable` 说明。用例拆成两段：模型离开配置 → 有后缀；Provider 整体移除 → 无后缀 |
+| P2-5 灯箱无截图 | 已修 | `capture-composer.mjs` 粘贴段补点开芯片 + `1440-attachment-lightbox.png`；新增断言 `pasteLightbox.dialogRole/imagePresent/detail`（实测 `dialogRole=true`、来源行「剪贴板图片 · 1 KB · 仅本页保留」） |
+| P2-6 附件态未套 300px 口径 | 已记录 | §2.3 补口径说明（无执行状态卡 → 不适用 #29 双档下限，只与原型同态比较）；数值 281 / 266 如实保留，去向 §6-R6 |
+| P2-7 测试卫生 | 已修 | `composerAlignment.test.tsx` 的全局 `URL.createObjectURL/revokeObjectURL` 改为保存原值 + `finally` 还原（此前写成 `undefined` 不还原） |
+
+本轮门禁：`pnpm --filter @pidock/renderer test` **52 文件 / 445 例全绿**、
+`pnpm turbo run typecheck test build lint --force` **8/8 成功**；
+两个证据脚本重跑均通过（s3 **42** 个测量态、s4 **22** 个测量态）。

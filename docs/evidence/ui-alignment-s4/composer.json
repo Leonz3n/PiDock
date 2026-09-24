@@ -509,12 +509,17 @@
     "paste": {
       "defaultPrevented": true,
       "attachmentLabels": [
-        "粘贴图片-3304.png"
+        "粘贴图片-00d9.png"
       ],
       "attachmentDetail": "剪贴板图片 · 1 KB · 仅本页保留",
       "draftText": "看这张截图",
       "toast": "已粘贴 1 张图片，可附上文字后发送",
       "composerH": 193
+    },
+    "pasteLightbox": {
+      "dialogRole": true,
+      "imagePresent": true,
+      "detail": "剪贴板图片 · 1 KB · 仅本页保留"
     },
     "unsupportedImage": {
       "composerH": 227,
@@ -809,7 +814,7 @@
     }
   },
   "assertions": {
-    "checked": 21,
+    "checked": 22,
     "violations": 0
   }
 }

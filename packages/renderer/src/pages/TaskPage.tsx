@@ -377,6 +377,7 @@ export function TaskPage({ task, sessionId }: { task: Task; sessionId: string })
                 label={panelName(panel)}
                 title={`打开${panelName(panel)}面板`}
                 selected={panels.includes(panel)}
+                data-testid={`tool-launcher-${panel}`}
                 onClick={() => togglePanel(task.id, panel)}
               />
             ))}
@@ -1634,7 +1635,7 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
         {hasUnsupportedImage ? (
           <p className="mb-2 flex items-center gap-2 text-[11px] text-orange" role="status" data-testid="composer-image-warning">
             当前模型未启用图片输入，请切换模型后发送。
-            <Button size="sm" onClick={() => openModal({ type: "model-picker", taskId: task.id, sessionId })}>
+            <Button size="sm" data-testid="composer-image-warning-model" onClick={() => openModal({ type: "model-picker", taskId: task.id, sessionId })}>
               选择模型
             </Button>
           </p>
@@ -1827,10 +1828,14 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
             >
               {permissionLabel}
             </Button>
-            {/* The prototype always renders `thinkingControl()`: a model whose
-                catalog is still unknown shows 「推理 · 跟随模型」 instead of
-                nothing, and a model that declares no reasoning keeps the same
-                trigger, disabled and saying why. */}
+            {/* Prototype `thinkingControl()` returns nothing only for a model that
+                declares `thinkingMode:'none'`; a catalog it has not resolved yet
+                still gets 「推理 · 跟随模型」. The seeded sessions carry no
+                declaration, so the default wording is the one users meet. This
+                implementation keeps a disabled trigger for a catalog the Host
+                reports as unsupported (prototype renders nothing there) — the
+                reason stays reachable instead of the control disappearing
+                ([UI 对齐 06] #30 review P2-3). */}
             <Button
               size="sm"
               variant="ghost"
@@ -1874,7 +1879,7 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
                   the name. */}
               <span className="truncate">
                 {attribution.modelName ?? session?.model ?? "模型"}
-                {attribution.availability === "available" ? "" : " · 不可用"}
+                {attribution.availability === "model-unavailable" ? " · 不可用" : ""}
               </span>
               <Icon name="down" className="h-3 w-3" />
             </Button>
