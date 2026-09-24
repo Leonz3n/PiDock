@@ -10,7 +10,8 @@
       "railPresent": true,
       "railW": 493,
       "workbenchW": 493,
-      "tabStripH": 39,
+      "tabStripH": 44,
+      "tabListH": 39,
       "tabCount": 3,
       "tabs": [
         {
@@ -59,7 +60,8 @@
       "railPresent": true,
       "railW": 493,
       "workbenchW": 493,
-      "tabStripH": 39,
+      "tabStripH": 44,
+      "tabListH": 39,
       "tabCount": 1,
       "tabs": [
         {
@@ -198,7 +200,8 @@
       "railPresent": true,
       "railW": 493,
       "workbenchW": 493,
-      "tabStripH": 39,
+      "tabStripH": 44,
+      "tabListH": 39,
       "tabCount": 1,
       "tabs": [
         {
@@ -243,6 +246,7 @@
       "railW": null,
       "workbenchW": null,
       "tabStripH": null,
+      "tabListH": null,
       "tabCount": 0,
       "tabs": [],
       "activeTab": null,
@@ -267,7 +271,8 @@
       "railPresent": true,
       "railW": 424,
       "workbenchW": 424,
-      "tabStripH": 39,
+      "tabStripH": 44,
+      "tabListH": 39,
       "tabCount": 3,
       "tabs": [
         {
@@ -316,7 +321,8 @@
       "railPresent": true,
       "railW": 424,
       "workbenchW": 424,
-      "tabStripH": 39,
+      "tabStripH": 44,
+      "tabListH": 39,
       "tabCount": 1,
       "tabs": [
         {
@@ -455,7 +461,8 @@
       "railPresent": true,
       "railW": 424,
       "workbenchW": 424,
-      "tabStripH": 39,
+      "tabStripH": 44,
+      "tabListH": 39,
       "tabCount": 1,
       "tabs": [
         {
@@ -500,6 +507,7 @@
       "railW": null,
       "workbenchW": null,
       "tabStripH": null,
+      "tabListH": null,
       "tabCount": 0,
       "tabs": [],
       "activeTab": null,
@@ -524,7 +532,8 @@
       "railPresent": true,
       "railW": 310,
       "workbenchW": 310,
-      "tabStripH": 39,
+      "tabStripH": 44,
+      "tabListH": 39,
       "tabCount": 3,
       "tabs": [
         {
@@ -573,7 +582,8 @@
       "railPresent": true,
       "railW": 310,
       "workbenchW": 310,
-      "tabStripH": 39,
+      "tabStripH": 44,
+      "tabListH": 39,
       "tabCount": 1,
       "tabs": [
         {
@@ -712,7 +722,8 @@
       "railPresent": true,
       "railW": 310,
       "workbenchW": 310,
-      "tabStripH": 39,
+      "tabStripH": 44,
+      "tabListH": 39,
       "tabCount": 1,
       "tabs": [
         {
@@ -757,6 +768,7 @@
       "railW": null,
       "workbenchW": null,
       "tabStripH": null,
+      "tabListH": null,
       "tabCount": 0,
       "tabs": [],
       "activeTab": null,

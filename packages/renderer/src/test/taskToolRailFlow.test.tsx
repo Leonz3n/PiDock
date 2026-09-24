@@ -1,7 +1,7 @@
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
-import { renderApp } from "./helpers";
+import { actStore, renderApp } from "./helpers";
 import { useHostStore } from "../stores/host";
 import { useUiStore } from "../stores/ui";
 
@@ -185,6 +185,44 @@ describe("task tool rail", () => {
     expect(screen.getByLabelText("终端输入")).toHaveValue("pnpm test");
     await user.click(screen.getByTestId("tool-tab-runtime"));
     expect(screen.getByRole("heading", { name: "生效配置 · saas-bff" })).toBeInTheDocument();
+  });
+
+  it("keeps the selected ordinary directory across a tab swap without an owner", async () => {
+    // A directory-only task has no `TaskPage.activeDirectoryId` owner, so the
+    // choice has to live in the ui store — `useState` inside the panel would
+    // restart at the first directory every time the rail swaps tabs
+    // (#28 review P2-3).
+    const user = userEvent.setup();
+    renderApp("/projects/atlas/tasks/design-docs?session=main");
+    await screen.findByText("TASK · 普通目录");
+    const host = useHostStore.getState();
+    await actStore(() =>
+      host.setProjectDirectories("atlas", [
+        { id: "atlas-docs", name: "Atlas 设计资料", path: "/Users/leonz3n/Workspace/atlas-docs" },
+        { id: "design-extra", name: "设计补充", path: "/Users/leonz3n/Workspace/design-extra" },
+      ]),
+    );
+    await actStore(() => host.setTaskDirectories("design-docs", ["atlas-docs", "design-extra"]));
+
+    await user.click(screen.getByRole("button", { name: "文件" }));
+    await user.click(await screen.findByRole("button", { name: "设计补充" }));
+    expect(await screen.findByTestId("directory-original-path")).toHaveTextContent(
+      "/Users/leonz3n/Workspace/design-extra",
+    );
+
+    // The terminal panel follows the same selection (the prototype keeps it in
+    // its global state), and coming back to the file panel keeps it too.
+    await user.click(screen.getByRole("button", { name: "终端" }));
+    expect(await screen.findByTestId("directory-terminal-cwd")).toHaveTextContent("dir-designex");
+    // A command still runs from this panel after the selection moved to the
+    // store (the panel reads `runTerminalCommand` exactly as before).
+    await user.type(screen.getByLabelText("终端输入"), "pwd");
+    await user.click(screen.getByRole("button", { name: "执行" }));
+    expect(await screen.findByText("$ pwd")).toBeInTheDocument();
+    expect(screen.getByLabelText("终端输入")).toHaveValue("");
+    await user.click(screen.getByTestId("tool-tab-files"));
+    expect(await screen.findByTestId("directory-original-path")).toHaveTextContent("design-extra");
+    expect(useUiStore.getState().toolPanelState["design-docs"]?.directoryId).toBe("design-extra");
   });
 
   it("groups service rows by local/remote and keeps the endpoint readable", async () => {

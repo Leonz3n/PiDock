@@ -77,7 +77,11 @@ const measure = (page) =>
       railPresent: rail !== null,
       railW: width(rail),
       workbenchW: width(workbench),
-      tabStripH: box(document.querySelector('[data-testid="tool-tabs"]')),
+      tabStripH: box(document.querySelector('[data-testid="tool-tabs-row"]')),
+      // The inner `tablist` is the scrollable strip itself; it is shorter than the
+      // 44px row because the row owns the border and the vertical padding. The
+      // prototype comparison uses `tabStripH` (`.work-tabs` is the row).
+      tabListH: box(document.querySelector('[data-testid="tool-tabs"]')),
       tabCount: tabs.length,
       tabs: tabs.map((tab) => ({
         label: tab.textContent?.trim() ?? "",
