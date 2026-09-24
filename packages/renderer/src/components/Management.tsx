@@ -35,6 +35,37 @@ export function ViewLabel({ children }: { children: ReactNode }) {
   return <div className="mb-1.5 text-[10px] tracking-[1.8px] text-[#95979c] uppercase">{children}</div>;
 }
 
+/** Prototype `h1{font-size:23px;letter-spacing:-.7px;font-weight:650}`. */
+export function PageTitle({ children }: { children: ReactNode }) {
+  return <h1 className="text-[23px] font-[650] tracking-[-0.7px] text-ink">{children}</h1>;
+}
+
+/** Prototype `h2{font-size:18px;letter-spacing:-.4px;font-weight:650}`. */
+export function SectionTitle({ children, className = "" }: { children: ReactNode; className?: string }) {
+  return <h2 className={`text-[18px] font-[650] tracking-[-0.4px] text-ink ${className}`}>{children}</h2>;
+}
+
+/**
+ * The prototype's `.between.toolbar-space.rowgap`: a section heading with its
+ * action on the right, 16px above and 15px below.
+ */
+export function SectionHeader({
+  title,
+  actions,
+  className = "",
+}: {
+  title: string;
+  actions?: ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={`mt-4 mb-[15px] flex items-center justify-between gap-3 ${className}`}>
+      <SectionTitle>{title}</SectionTitle>
+      {actions}
+    </div>
+  );
+}
+
 export function PageIntro({ children, className = "" }: { children: ReactNode; className?: string }) {
   return <p className={`mt-1.5 mb-[26px] text-[12px] text-[#8a8c92] ${className}`}>{children}</p>;
 }
@@ -110,8 +141,8 @@ export function CheckRow({
   return (
     <div className="flex items-center gap-2.5 border-b border-line py-[11px] text-xs">
       {icon ? <Icon name={icon} className="text-muted" /> : null}
-      <span className="flex-1 min-w-0 truncate text-ink">{title}</span>
-      {detail ? <small className="shrink-0 text-[11px] text-muted">{detail}</small> : null}
+      <span className="min-w-0 flex-1 truncate text-ink">{title}</span>
+      {detail ? <small className="min-w-0 shrink truncate text-[11px] text-muted">{detail}</small> : null}
       {trailing}
     </div>
   );

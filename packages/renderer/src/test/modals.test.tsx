@@ -118,7 +118,7 @@ describe("new-task workspace preview", () => {
     await user.type(within(dialog).getByLabelText("远程基线分支"), "origin/main");
     await user.click(within(dialog).getByRole("button", { name: "创建任务" }));
     expect(await within(dialog).findByRole("alert")).toHaveTextContent("获取远程基线失败");
-    expect(screen.queryByRole("heading", { name: "空白基线任务" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "空白基线任务", level: 1 })).not.toBeInTheDocument();
     expect(useHostStore.getState().workspace?.tasks.length ?? before).toBe(before);
   });
 
@@ -152,10 +152,10 @@ describe("new-task workspace preview", () => {
     await user.click(within(dialog).getByRole("button", { name: "创建任务" }));
     // First attempt: provision fails, form kept with the shell error.
     expect(await within(dialog).findByRole("alert")).toHaveTextContent("远程基线不可用");
-    expect(screen.queryByRole("heading", { name: "重试任务" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "重试任务", level: 1 })).not.toBeInTheDocument();
     // Second submit reuses the same key: no self-conflict, retry succeeds.
     await user.click(within(dialog).getByRole("button", { name: "创建任务" }));
-    expect(await screen.findByRole("heading", { name: "重试任务" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "重试任务", level: 1 })).toBeInTheDocument();
     expect(taskOp).toHaveBeenCalledTimes(2);
     expect(useHostStore.getState().workspace?.tasks.length ?? before).toBe(before + 1);
     } finally {
