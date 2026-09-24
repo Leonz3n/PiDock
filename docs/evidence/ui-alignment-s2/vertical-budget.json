@@ -9,40 +9,46 @@
       "noHorizontalOverflow": true,
       "scrollWidth": 1440,
       "clientWidth": 1440,
-      "headerH": 106,
-      "messagesH": 408,
-      "messagesShare": 0.453,
-      "composerH": 145,
-      "sectionH": 680,
+      "headerH": 103,
+      "messagesH": 384,
+      "messagesShare": 0.427,
+      "composerH": 143,
+      "sectionH": 683,
       "tabStrip": {
-        "scrollWidth": 972,
-        "clientWidth": 972,
+        "scrollWidth": 1014,
+        "clientWidth": 1014,
         "noClip": true
       },
       "rows": [
         {
           "tag": "div",
           "testid": null,
-          "h": 32,
-          "text": "全部会话 56 实现与验证 部署审查 失败排查 历史排查 已归档 只读 新建会话"
+          "h": 28,
+          "text": "全部会话 56 实现与验证 部署审查 失败排查 历史排查 已归档 只读"
+        },
+        {
+          "tag": "section",
+          "testid": "session-subagents",
+          "h": 51,
+          "text": "Subagent 2 1 个运行中 展开列表"
+        },
+        {
+          "tag": "section",
+          "testid": "execution-card",
+          "h": 53,
+          "text": "空闲 「部署审查」正在执行或等待确认；本会话可编辑草稿，待其结束后再执行。"
         },
         {
           "tag": "div",
-          "testid": null,
-          "h": 78,
-          "text": "Subagent 2 1 个运行中 · 示例 查询链路分析 正在核对 BFF 到"
-        },
-        {
-          "tag": "div",
-          "testid": null,
-          "h": 408,
-          "text": "Agent 任务工作区已就绪，我可以开始检查构建与配置。 Agent 依赖已安装"
+          "testid": "conversation-log",
+          "h": 384,
+          "text": "2026年9月22日 · 实现与验证 π Pi 09:12 实现与验证 空闲 任"
         },
         {
           "tag": "div",
           "testid": "task-composer",
-          "h": 145,
-          "text": "+ 默认权限 上下文 24800 / 200000 Tokens · 12.4%"
+          "h": 143,
+          "text": "默认权限 推理 · 跟随模型 Claude Sonnet 24.8k / 200"
         }
       ]
     },
@@ -54,40 +60,46 @@
       "noHorizontalOverflow": true,
       "scrollWidth": 1440,
       "clientWidth": 1440,
-      "headerH": 106,
-      "messagesH": 374,
-      "messagesShare": 0.415,
-      "composerH": 179,
-      "sectionH": 680,
+      "headerH": 103,
+      "messagesH": 384,
+      "messagesShare": 0.427,
+      "composerH": 143,
+      "sectionH": 683,
       "tabStrip": {
-        "scrollWidth": 463,
-        "clientWidth": 463,
+        "scrollWidth": 505,
+        "clientWidth": 505,
         "noClip": true
       },
       "rows": [
         {
           "tag": "div",
           "testid": null,
-          "h": 32,
-          "text": "全部会话 56 实现与验证 部署审查 失败排查 历史排查 已归档 只读 新建会话"
+          "h": 28,
+          "text": "全部会话 56 实现与验证 部署审查 失败排查 历史排查 已归档 只读"
+        },
+        {
+          "tag": "section",
+          "testid": "session-subagents",
+          "h": 51,
+          "text": "Subagent 2 1 个运行中 展开列表"
+        },
+        {
+          "tag": "section",
+          "testid": "execution-card",
+          "h": 53,
+          "text": "空闲 「部署审查」正在执行或等待确认；本会话可编辑草稿，待其结束后再执行。"
         },
         {
           "tag": "div",
-          "testid": null,
-          "h": 78,
-          "text": "Subagent 2 1 个运行中 · 示例 查询链路分析 正在核对 BFF 到"
-        },
-        {
-          "tag": "div",
-          "testid": null,
-          "h": 374,
-          "text": "Agent 任务工作区已就绪，我可以开始检查构建与配置。 Agent 依赖已安装"
+          "testid": "conversation-log",
+          "h": 384,
+          "text": "2026年9月22日 · 实现与验证 π Pi 09:12 实现与验证 空闲 任"
         },
         {
           "tag": "div",
           "testid": "task-composer",
-          "h": 179,
-          "text": "+ 默认权限 上下文 24800 / 200000 Tokens · 12.4%"
+          "h": 143,
+          "text": "默认权限 推理 · 跟随模型 Claude Sonnet 24.8k / 200"
         }
       ]
     },
@@ -99,40 +111,46 @@
       "noHorizontalOverflow": true,
       "scrollWidth": 1440,
       "clientWidth": 1440,
-      "headerH": 106,
-      "messagesH": 374,
-      "messagesShare": 0.415,
-      "composerH": 179,
-      "sectionH": 680,
+      "headerH": 103,
+      "messagesH": 384,
+      "messagesShare": 0.427,
+      "composerH": 143,
+      "sectionH": 683,
       "tabStrip": {
-        "scrollWidth": 463,
-        "clientWidth": 463,
+        "scrollWidth": 505,
+        "clientWidth": 505,
         "noClip": true
       },
       "rows": [
         {
           "tag": "div",
           "testid": null,
-          "h": 32,
-          "text": "全部会话 56 实现与验证 部署审查 失败排查 历史排查 已归档 只读 新建会话"
+          "h": 28,
+          "text": "全部会话 56 实现与验证 部署审查 失败排查 历史排查 已归档 只读"
+        },
+        {
+          "tag": "section",
+          "testid": "session-subagents",
+          "h": 51,
+          "text": "Subagent 2 1 个运行中 展开列表"
+        },
+        {
+          "tag": "section",
+          "testid": "execution-card",
+          "h": 53,
+          "text": "空闲 「部署审查」正在执行或等待确认；本会话可编辑草稿，待其结束后再执行。"
         },
         {
           "tag": "div",
-          "testid": null,
-          "h": 78,
-          "text": "Subagent 2 1 个运行中 · 示例 查询链路分析 正在核对 BFF 到"
-        },
-        {
-          "tag": "div",
-          "testid": null,
-          "h": 374,
-          "text": "Agent 任务工作区已就绪，我可以开始检查构建与配置。 Agent 依赖已安装"
+          "testid": "conversation-log",
+          "h": 384,
+          "text": "2026年9月22日 · 实现与验证 π Pi 09:12 实现与验证 空闲 任"
         },
         {
           "tag": "div",
           "testid": "task-composer",
-          "h": 179,
-          "text": "+ 默认权限 上下文 24800 / 200000 Tokens · 12.4%"
+          "h": 143,
+          "text": "默认权限 推理 · 跟随模型 Claude Sonnet 24.8k / 200"
         }
       ]
     },
@@ -144,40 +162,46 @@
       "noHorizontalOverflow": true,
       "scrollWidth": 1280,
       "clientWidth": 1280,
-      "headerH": 106,
-      "messagesH": 408,
-      "messagesShare": 0.453,
-      "composerH": 145,
-      "sectionH": 680,
+      "headerH": 103,
+      "messagesH": 384,
+      "messagesShare": 0.427,
+      "composerH": 143,
+      "sectionH": 683,
       "tabStrip": {
-        "scrollWidth": 812,
-        "clientWidth": 812,
+        "scrollWidth": 854,
+        "clientWidth": 854,
         "noClip": true
       },
       "rows": [
         {
           "tag": "div",
           "testid": null,
-          "h": 32,
-          "text": "全部会话 56 实现与验证 部署审查 失败排查 历史排查 已归档 只读 新建会话"
+          "h": 28,
+          "text": "全部会话 56 实现与验证 部署审查 失败排查 历史排查 已归档 只读"
+        },
+        {
+          "tag": "section",
+          "testid": "session-subagents",
+          "h": 51,
+          "text": "Subagent 2 1 个运行中 展开列表"
+        },
+        {
+          "tag": "section",
+          "testid": "execution-card",
+          "h": 53,
+          "text": "空闲 「部署审查」正在执行或等待确认；本会话可编辑草稿，待其结束后再执行。"
         },
         {
           "tag": "div",
-          "testid": null,
-          "h": 78,
-          "text": "Subagent 2 1 个运行中 · 示例 查询链路分析 正在核对 BFF 到"
-        },
-        {
-          "tag": "div",
-          "testid": null,
-          "h": 408,
-          "text": "Agent 任务工作区已就绪，我可以开始检查构建与配置。 Agent 依赖已安装"
+          "testid": "conversation-log",
+          "h": 384,
+          "text": "2026年9月22日 · 实现与验证 π Pi 09:12 实现与验证 空闲 任"
         },
         {
           "tag": "div",
           "testid": "task-composer",
-          "h": 145,
-          "text": "+ 默认权限 上下文 24800 / 200000 Tokens · 12.4%"
+          "h": 143,
+          "text": "默认权限 推理 · 跟随模型 Claude Sonnet 24.8k / 200"
         }
       ]
     },
@@ -189,40 +213,46 @@
       "noHorizontalOverflow": true,
       "scrollWidth": 1280,
       "clientWidth": 1280,
-      "headerH": 106,
-      "messagesH": 374,
-      "messagesShare": 0.415,
-      "composerH": 179,
-      "sectionH": 680,
+      "headerH": 103,
+      "messagesH": 384,
+      "messagesShare": 0.427,
+      "composerH": 143,
+      "sectionH": 683,
       "tabStrip": {
-        "scrollWidth": 413,
-        "clientWidth": 372,
-        "noClip": false
+        "scrollWidth": 414,
+        "clientWidth": 414,
+        "noClip": true
       },
       "rows": [
         {
           "tag": "div",
           "testid": null,
-          "h": 32,
-          "text": "全部会话 56 实现与验证 部署审查 失败排查 历史排查 已归档 只读 新建会话"
+          "h": 28,
+          "text": "全部会话 56 实现与验证 部署审查 失败排查 历史排查 已归档 只读"
+        },
+        {
+          "tag": "section",
+          "testid": "session-subagents",
+          "h": 51,
+          "text": "Subagent 2 1 个运行中 展开列表"
+        },
+        {
+          "tag": "section",
+          "testid": "execution-card",
+          "h": 53,
+          "text": "空闲 「部署审查」正在执行或等待确认；本会话可编辑草稿，待其结束后再执行。"
         },
         {
           "tag": "div",
-          "testid": null,
-          "h": 78,
-          "text": "Subagent 2 1 个运行中 · 示例 查询链路分析 正在核对 BFF 到"
-        },
-        {
-          "tag": "div",
-          "testid": null,
-          "h": 374,
-          "text": "Agent 任务工作区已就绪，我可以开始检查构建与配置。 Agent 依赖已安装"
+          "testid": "conversation-log",
+          "h": 384,
+          "text": "2026年9月22日 · 实现与验证 π Pi 09:12 实现与验证 空闲 任"
         },
         {
           "tag": "div",
           "testid": "task-composer",
-          "h": 179,
-          "text": "+ 默认权限 上下文 24800 / 200000 Tokens · 12.4%"
+          "h": 143,
+          "text": "默认权限 推理 · 跟随模型 Claude Sonnet 24.8k / 200"
         }
       ]
     },
@@ -234,40 +264,46 @@
       "noHorizontalOverflow": true,
       "scrollWidth": 1280,
       "clientWidth": 1280,
-      "headerH": 106,
-      "messagesH": 374,
-      "messagesShare": 0.415,
-      "composerH": 179,
-      "sectionH": 680,
+      "headerH": 103,
+      "messagesH": 384,
+      "messagesShare": 0.427,
+      "composerH": 143,
+      "sectionH": 683,
       "tabStrip": {
-        "scrollWidth": 413,
-        "clientWidth": 372,
-        "noClip": false
+        "scrollWidth": 414,
+        "clientWidth": 414,
+        "noClip": true
       },
       "rows": [
         {
           "tag": "div",
           "testid": null,
-          "h": 32,
-          "text": "全部会话 56 实现与验证 部署审查 失败排查 历史排查 已归档 只读 新建会话"
+          "h": 28,
+          "text": "全部会话 56 实现与验证 部署审查 失败排查 历史排查 已归档 只读"
+        },
+        {
+          "tag": "section",
+          "testid": "session-subagents",
+          "h": 51,
+          "text": "Subagent 2 1 个运行中 展开列表"
+        },
+        {
+          "tag": "section",
+          "testid": "execution-card",
+          "h": 53,
+          "text": "空闲 「部署审查」正在执行或等待确认；本会话可编辑草稿，待其结束后再执行。"
         },
         {
           "tag": "div",
-          "testid": null,
-          "h": 78,
-          "text": "Subagent 2 1 个运行中 · 示例 查询链路分析 正在核对 BFF 到"
-        },
-        {
-          "tag": "div",
-          "testid": null,
-          "h": 374,
-          "text": "Agent 任务工作区已就绪，我可以开始检查构建与配置。 Agent 依赖已安装"
+          "testid": "conversation-log",
+          "h": 384,
+          "text": "2026年9月22日 · 实现与验证 π Pi 09:12 实现与验证 空闲 任"
         },
         {
           "tag": "div",
           "testid": "task-composer",
-          "h": 179,
-          "text": "+ 默认权限 上下文 24800 / 200000 Tokens · 12.4%"
+          "h": 143,
+          "text": "默认权限 推理 · 跟随模型 Claude Sonnet 24.8k / 200"
         }
       ]
     },
@@ -279,40 +315,46 @@
       "noHorizontalOverflow": true,
       "scrollWidth": 1024,
       "clientWidth": 1024,
-      "headerH": 106,
-      "messagesH": 274,
-      "messagesShare": 0.342,
-      "composerH": 179,
-      "sectionH": 580,
+      "headerH": 103,
+      "messagesH": 284,
+      "messagesShare": 0.355,
+      "composerH": 143,
+      "sectionH": 583,
       "tabStrip": {
-        "scrollWidth": 590,
-        "clientWidth": 590,
+        "scrollWidth": 632,
+        "clientWidth": 632,
         "noClip": true
       },
       "rows": [
         {
           "tag": "div",
           "testid": null,
-          "h": 32,
-          "text": "全部会话 56 实现与验证 部署审查 失败排查 历史排查 已归档 只读 新建会话"
+          "h": 28,
+          "text": "全部会话 56 实现与验证 部署审查"
+        },
+        {
+          "tag": "section",
+          "testid": "session-subagents",
+          "h": 51,
+          "text": "Subagent 2 1 个运行中 展开列表"
+        },
+        {
+          "tag": "section",
+          "testid": "execution-card",
+          "h": 53,
+          "text": "空闲 「部署审查」正在执行或等待确认；本会话可编辑草稿，待其结束后再执行。"
         },
         {
           "tag": "div",
-          "testid": null,
-          "h": 78,
-          "text": "Subagent 2 1 个运行中 · 示例 查询链路分析 正在核对 BFF 到"
-        },
-        {
-          "tag": "div",
-          "testid": null,
-          "h": 274,
-          "text": "Agent 任务工作区已就绪，我可以开始检查构建与配置。 Agent 依赖已安装"
+          "testid": "conversation-log",
+          "h": 284,
+          "text": "2026年9月22日 · 实现与验证 π Pi 09:12 实现与验证 空闲 任"
         },
         {
           "tag": "div",
           "testid": "task-composer",
-          "h": 179,
-          "text": "+ 默认权限 上下文 24800 / 200000 Tokens · 12.4%"
+          "h": 143,
+          "text": "默认权限 推理 · 跟随模型 Claude Sonnet 24.8k / 200"
         }
       ]
     },
@@ -324,40 +366,46 @@
       "noHorizontalOverflow": true,
       "scrollWidth": 1024,
       "clientWidth": 1024,
-      "headerH": 106,
-      "messagesH": 234,
-      "messagesShare": 0.292,
-      "composerH": 179,
-      "sectionH": 580,
+      "headerH": 103,
+      "messagesH": 251,
+      "messagesShare": 0.314,
+      "composerH": 176,
+      "sectionH": 583,
       "tabStrip": {
-        "scrollWidth": 413,
-        "clientWidth": 264,
-        "noClip": false
+        "scrollWidth": 306,
+        "clientWidth": 306,
+        "noClip": true
       },
       "rows": [
         {
           "tag": "div",
           "testid": null,
-          "h": 32,
-          "text": "全部会话 56 实现与验证 部署审查 失败排查 历史排查 已归档 只读 新建会话"
+          "h": 28,
+          "text": "全部会话 56 实现与验证 部署审查"
+        },
+        {
+          "tag": "section",
+          "testid": "session-subagents",
+          "h": 51,
+          "text": "Subagent 2 1 个运行中 展开列表"
+        },
+        {
+          "tag": "section",
+          "testid": "execution-card",
+          "h": 53,
+          "text": "空闲 「部署审查」正在执行或等待确认；本会话可编辑草稿，待其结束后再执行。"
         },
         {
           "tag": "div",
-          "testid": null,
-          "h": 118,
-          "text": "Subagent 2 1 个运行中 · 示例 查询链路分析 正在核对 BFF 到"
-        },
-        {
-          "tag": "div",
-          "testid": null,
-          "h": 234,
-          "text": "Agent 任务工作区已就绪，我可以开始检查构建与配置。 Agent 依赖已安装"
+          "testid": "conversation-log",
+          "h": 251,
+          "text": "2026年9月22日 · 实现与验证 π Pi 09:12 实现与验证 空闲 任"
         },
         {
           "tag": "div",
           "testid": "task-composer",
-          "h": 179,
-          "text": "+ 默认权限 上下文 24800 / 200000 Tokens · 12.4%"
+          "h": 176,
+          "text": "默认权限 推理 · 跟随模型 Claude Sonnet 24.8k / 200"
         }
       ]
     },
@@ -369,40 +417,46 @@
       "noHorizontalOverflow": true,
       "scrollWidth": 1024,
       "clientWidth": 1024,
-      "headerH": 106,
-      "messagesH": 234,
-      "messagesShare": 0.292,
-      "composerH": 179,
-      "sectionH": 580,
+      "headerH": 103,
+      "messagesH": 251,
+      "messagesShare": 0.314,
+      "composerH": 176,
+      "sectionH": 583,
       "tabStrip": {
-        "scrollWidth": 413,
-        "clientWidth": 264,
-        "noClip": false
+        "scrollWidth": 306,
+        "clientWidth": 306,
+        "noClip": true
       },
       "rows": [
         {
           "tag": "div",
           "testid": null,
-          "h": 32,
-          "text": "全部会话 56 实现与验证 部署审查 失败排查 历史排查 已归档 只读 新建会话"
+          "h": 28,
+          "text": "全部会话 56 实现与验证 部署审查"
+        },
+        {
+          "tag": "section",
+          "testid": "session-subagents",
+          "h": 51,
+          "text": "Subagent 2 1 个运行中 展开列表"
+        },
+        {
+          "tag": "section",
+          "testid": "execution-card",
+          "h": 53,
+          "text": "空闲 「部署审查」正在执行或等待确认；本会话可编辑草稿，待其结束后再执行。"
         },
         {
           "tag": "div",
-          "testid": null,
-          "h": 118,
-          "text": "Subagent 2 1 个运行中 · 示例 查询链路分析 正在核对 BFF 到"
-        },
-        {
-          "tag": "div",
-          "testid": null,
-          "h": 234,
-          "text": "Agent 任务工作区已就绪，我可以开始检查构建与配置。 Agent 依赖已安装"
+          "testid": "conversation-log",
+          "h": 251,
+          "text": "2026年9月22日 · 实现与验证 π Pi 09:12 实现与验证 空闲 任"
         },
         {
           "tag": "div",
           "testid": "task-composer",
-          "h": 179,
-          "text": "+ 默认权限 上下文 24800 / 200000 Tokens · 12.4%"
+          "h": 176,
+          "text": "默认权限 推理 · 跟随模型 Claude Sonnet 24.8k / 200"
         }
       ]
     }

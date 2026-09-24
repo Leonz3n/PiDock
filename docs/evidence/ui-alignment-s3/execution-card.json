@@ -15,7 +15,7 @@
         "clientWidth": 1014,
         "clipPx": 0,
         "noClip": true,
-        "h": 32
+        "h": 27
       },
       "tabs": [
         {
@@ -50,7 +50,7 @@
           "text": "历史排查",
           "visible": true,
           "active": false,
-          "w": 173,
+          "w": 160,
           "insideStrip": true,
           "labelClipped": false
         }
@@ -76,7 +76,7 @@
         "clientWidth": 505,
         "clipPx": 0,
         "noClip": true,
-        "h": 32
+        "h": 27
       },
       "tabs": [
         {
@@ -111,7 +111,7 @@
           "text": "历史排查",
           "visible": true,
           "active": false,
-          "w": 173,
+          "w": 160,
           "insideStrip": true,
           "labelClipped": false
         }
@@ -137,7 +137,7 @@
         "clientWidth": 505,
         "clipPx": 0,
         "noClip": true,
-        "h": 32
+        "h": 27
       },
       "tabs": [
         {
@@ -172,7 +172,7 @@
           "text": "历史排查",
           "visible": true,
           "active": false,
-          "w": 173,
+          "w": 160,
           "insideStrip": true,
           "labelClipped": false
         }
@@ -198,7 +198,7 @@
         "clientWidth": 854,
         "clipPx": 0,
         "noClip": true,
-        "h": 32
+        "h": 27
       },
       "tabs": [
         {
@@ -233,7 +233,7 @@
           "text": "历史排查",
           "visible": true,
           "active": false,
-          "w": 173,
+          "w": 160,
           "insideStrip": true,
           "labelClipped": false
         }
@@ -259,7 +259,7 @@
         "clientWidth": 414,
         "clipPx": 0,
         "noClip": true,
-        "h": 32
+        "h": 27
       },
       "tabs": [
         {
@@ -294,7 +294,7 @@
           "text": "历史排查",
           "visible": true,
           "active": false,
-          "w": 173,
+          "w": 160,
           "insideStrip": true,
           "labelClipped": false
         }
@@ -320,7 +320,7 @@
         "clientWidth": 414,
         "clipPx": 0,
         "noClip": true,
-        "h": 32
+        "h": 27
       },
       "tabs": [
         {
@@ -355,7 +355,7 @@
           "text": "历史排查",
           "visible": true,
           "active": false,
-          "w": 173,
+          "w": 160,
           "insideStrip": true,
           "labelClipped": false
         }
@@ -381,7 +381,7 @@
         "clientWidth": 774,
         "clipPx": 0,
         "noClip": true,
-        "h": 32
+        "h": 27
       },
       "tabs": [
         {
@@ -416,7 +416,7 @@
           "text": "历史排查",
           "visible": true,
           "active": false,
-          "w": 173,
+          "w": 160,
           "insideStrip": true,
           "labelClipped": false
         }
@@ -438,11 +438,11 @@
       },
       "noHorizontalOverflow": true,
       "strip": {
-        "scrollWidth": 413,
+        "scrollWidth": 400,
         "clientWidth": 368,
-        "clipPx": 45,
+        "clipPx": 32,
         "noClip": false,
-        "h": 32
+        "h": 27
       },
       "tabs": [
         {
@@ -477,7 +477,7 @@
           "text": "历史排查",
           "visible": true,
           "active": false,
-          "w": 173,
+          "w": 160,
           "insideStrip": false,
           "labelClipped": false
         }
@@ -499,11 +499,11 @@
       },
       "noHorizontalOverflow": true,
       "strip": {
-        "scrollWidth": 413,
+        "scrollWidth": 400,
         "clientWidth": 368,
-        "clipPx": 45,
+        "clipPx": 32,
         "noClip": false,
-        "h": 32
+        "h": 27
       },
       "tabs": [
         {
@@ -538,7 +538,7 @@
           "text": "历史排查",
           "visible": true,
           "active": false,
-          "w": 173,
+          "w": 160,
           "insideStrip": false,
           "labelClipped": false
         }
@@ -564,7 +564,7 @@
         "clientWidth": 755,
         "clipPx": 0,
         "noClip": true,
-        "h": 32
+        "h": 27
       },
       "tabs": [
         {
@@ -599,7 +599,7 @@
           "text": "历史排查",
           "visible": true,
           "active": false,
-          "w": 173,
+          "w": 160,
           "insideStrip": true,
           "labelClipped": false
         }
@@ -621,11 +621,11 @@
       },
       "noHorizontalOverflow": true,
       "strip": {
-        "scrollWidth": 413,
+        "scrollWidth": 400,
         "clientWidth": 357,
-        "clipPx": 56,
+        "clipPx": 43,
         "noClip": false,
-        "h": 32
+        "h": 27
       },
       "tabs": [
         {
@@ -660,7 +660,7 @@
           "text": "历史排查",
           "visible": true,
           "active": false,
-          "w": 173,
+          "w": 160,
           "insideStrip": false,
           "labelClipped": false
         }
@@ -682,11 +682,11 @@
       },
       "noHorizontalOverflow": true,
       "strip": {
-        "scrollWidth": 413,
+        "scrollWidth": 400,
         "clientWidth": 357,
-        "clipPx": 56,
+        "clipPx": 43,
         "noClip": false,
-        "h": 32
+        "h": 27
       },
       "tabs": [
         {
@@ -721,7 +721,7 @@
           "text": "历史排查",
           "visible": true,
           "active": false,
-          "w": 173,
+          "w": 160,
           "insideStrip": false,
           "labelClipped": false
         }
@@ -1329,7 +1329,7 @@
           "labelClipped": false
         },
         {
-          "id": "session-tab-session-muf6n5zn-1",
+          "id": "session-tab-session-muf85s4y-1",
           "text": "跨仓库发布回归验证会",
           "visible": true,
           "active": true,
@@ -1391,7 +1391,7 @@
           "labelClipped": false
         },
         {
-          "id": "session-tab-session-muf6n5zn-1",
+          "id": "session-tab-session-muf85s4y-1",
           "text": "跨仓库发布回归验证会",
           "visible": true,
           "active": true,
@@ -1453,7 +1453,7 @@
           "labelClipped": false
         },
         {
-          "id": "session-tab-session-muf6n7xr-1",
+          "id": "session-tab-session-muf85u38-1",
           "text": "跨仓库发布回归验证会",
           "visible": true,
           "active": true,
@@ -1515,7 +1515,7 @@
           "labelClipped": false
         },
         {
-          "id": "session-tab-session-muf6n7xr-1",
+          "id": "session-tab-session-muf85u38-1",
           "text": "跨仓库发布回归验证会",
           "visible": true,
           "active": true,
@@ -1577,7 +1577,7 @@
           "labelClipped": false
         },
         {
-          "id": "session-tab-session-muf6n9wy-1",
+          "id": "session-tab-session-muf85w14-1",
           "text": "跨仓库发布回归验证会",
           "visible": true,
           "active": true,
@@ -1639,7 +1639,7 @@
           "labelClipped": false
         },
         {
-          "id": "session-tab-session-muf6n9wy-1",
+          "id": "session-tab-session-muf85w14-1",
           "text": "跨仓库发布回归验证会",
           "visible": true,
           "active": true,
@@ -1701,7 +1701,7 @@
           "labelClipped": false
         },
         {
-          "id": "session-tab-session-muf6nbva-1",
+          "id": "session-tab-session-muf85xzo-1",
           "text": "跨仓库发布回归验证会",
           "visible": true,
           "active": true,
@@ -1763,7 +1763,7 @@
           "labelClipped": false
         },
         {
-          "id": "session-tab-session-muf6nbva-1",
+          "id": "session-tab-session-muf85xzo-1",
           "text": "跨仓库发布回归验证会",
           "visible": true,
           "active": true,
@@ -1825,7 +1825,7 @@
           "labelClipped": false
         },
         {
-          "id": "session-tab-session-muf6ndty-1",
+          "id": "session-tab-session-muf85zxu-1",
           "text": "跨仓库发布回归验证会",
           "visible": true,
           "active": true,
@@ -1887,7 +1887,7 @@
           "labelClipped": false
         },
         {
-          "id": "session-tab-session-muf6ndty-1",
+          "id": "session-tab-session-muf85zxu-1",
           "text": "跨仓库发布回归验证会",
           "visible": true,
           "active": true,
@@ -1949,7 +1949,7 @@
           "labelClipped": false
         },
         {
-          "id": "session-tab-session-muf6nfss-1",
+          "id": "session-tab-session-muf861v4-1",
           "text": "跨仓库发布回归验证会",
           "visible": true,
           "active": true,
@@ -2011,7 +2011,7 @@
           "labelClipped": false
         },
         {
-          "id": "session-tab-session-muf6nfss-1",
+          "id": "session-tab-session-muf861v4-1",
           "text": "跨仓库发布回归验证会",
           "visible": true,
           "active": true,
@@ -2037,8 +2037,8 @@
         "h": 900
       },
       "noHorizontalOverflow": true,
-      "messagesH": 377,
-      "messagesShare": 0.419,
+      "messagesH": 384,
+      "messagesShare": 0.427,
       "cardPresent": true,
       "cardH": 53,
       "cardScrolls": false,
@@ -2068,7 +2068,7 @@
       "extraChrome": [
         {
           "label": "div全部会话 56实现与验证部署审查失败排查历史排查",
-          "h": 32
+          "h": 28
         },
         {
           "label": "session-subagents",
@@ -2084,8 +2084,8 @@
         "h": 900
       },
       "noHorizontalOverflow": true,
-      "messagesH": 346,
-      "messagesShare": 0.384,
+      "messagesH": 353,
+      "messagesShare": 0.392,
       "cardPresent": true,
       "cardH": 141,
       "cardScrolls": false,
@@ -2128,7 +2128,7 @@
       "extraChrome": [
         {
           "label": "div全部会话 56实现与验证部署审查失败排查历史排查",
-          "h": 32
+          "h": 28
         }
       ],
       "draftReferencesH": null,
@@ -2140,8 +2140,8 @@
         "h": 900
       },
       "noHorizontalOverflow": true,
-      "messagesH": 305,
-      "messagesShare": 0.339,
+      "messagesH": 312,
+      "messagesShare": 0.346,
       "cardPresent": true,
       "cardH": 63,
       "cardScrolls": false,
@@ -2176,7 +2176,7 @@
       "extraChrome": [
         {
           "label": "div全部会话 56实现与验证部署审查持有写操作权失败",
-          "h": 32
+          "h": 28
         },
         {
           "label": "section任务写操作权中止持有者部署审查 持有写操作权（回",
@@ -2192,8 +2192,8 @@
         "h": 900
       },
       "noHorizontalOverflow": true,
-      "messagesH": 434,
-      "messagesShare": 0.483,
+      "messagesH": 441,
+      "messagesShare": 0.49,
       "cardPresent": true,
       "cardH": 53,
       "cardScrolls": false,
@@ -2223,7 +2223,7 @@
       "extraChrome": [
         {
           "label": "div全部会话 56实现与验证部署审查失败排查历史排查",
-          "h": 32
+          "h": 28
         }
       ],
       "draftReferencesH": null,
@@ -2235,8 +2235,8 @@
         "h": 900
       },
       "noHorizontalOverflow": true,
-      "messagesH": 434,
-      "messagesShare": 0.483,
+      "messagesH": 441,
+      "messagesShare": 0.49,
       "cardPresent": true,
       "cardH": 53,
       "cardScrolls": false,
@@ -2266,7 +2266,7 @@
       "extraChrome": [
         {
           "label": "div全部会话 56实现与验证部署审查失败排查历史排查",
-          "h": 32
+          "h": 28
         }
       ],
       "draftReferencesH": null,
@@ -2278,8 +2278,8 @@
         "h": 900
       },
       "noHorizontalOverflow": true,
-      "messagesH": 406,
-      "messagesShare": 0.451,
+      "messagesH": 413,
+      "messagesShare": 0.459,
       "cardPresent": true,
       "cardH": 81,
       "cardScrolls": false,
@@ -2318,7 +2318,7 @@
       "extraChrome": [
         {
           "label": "div全部会话 56实现与验证部署审查失败排查历史排查",
-          "h": 32
+          "h": 28
         }
       ],
       "draftReferencesH": null,
@@ -2330,8 +2330,8 @@
         "h": 900
       },
       "noHorizontalOverflow": true,
-      "messagesH": 315,
-      "messagesShare": 0.35,
+      "messagesH": 322,
+      "messagesShare": 0.358,
       "cardPresent": true,
       "cardH": 141,
       "cardScrolls": false,
@@ -2382,7 +2382,7 @@
       "extraChrome": [
         {
           "label": "div全部会话 56实现与验证部署审查失败排查历史排查",
-          "h": 32
+          "h": 28
         }
       ],
       "draftReferencesH": 23,
@@ -2394,8 +2394,8 @@
         "h": 900
       },
       "noHorizontalOverflow": true,
-      "messagesH": 315,
-      "messagesShare": 0.35,
+      "messagesH": 322,
+      "messagesShare": 0.358,
       "cardPresent": true,
       "cardH": 141,
       "cardScrolls": false,
@@ -2446,7 +2446,7 @@
       "extraChrome": [
         {
           "label": "div全部会话 56实现与验证部署审查失败排查只读历史",
-          "h": 32
+          "h": 28
         }
       ],
       "draftReferencesH": 23,
@@ -2458,8 +2458,8 @@
         "h": 900
       },
       "noHorizontalOverflow": true,
-      "messagesH": 336,
-      "messagesShare": 0.373,
+      "messagesH": 343,
+      "messagesShare": 0.381,
       "cardPresent": true,
       "cardH": 94,
       "cardScrolls": false,
@@ -2497,7 +2497,7 @@
       "extraChrome": [
         {
           "label": "div全部会话 56实现与验证部署审查失败排查历史排查",
-          "h": 32
+          "h": 28
         },
         {
           "label": "session-subagents",

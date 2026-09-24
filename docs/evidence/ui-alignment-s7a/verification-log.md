@@ -80,3 +80,5 @@ export PATH="/private/tmp/pidock-pnpm/node_modules/.bin:$HOME/.nvm/versions/node
 # 前置：renderer dev server 127.0.0.1:4335、原型 127.0.0.1:4319（只读）
 node docs/evidence/ui-alignment-s7a/capture-management.mjs   # 165 断言 / 0 违例
 ```
+
+重跑确定性：`management.json` 逐字节可复现（重跑后 `git status` 无差异）；**截图 PNG 不保证逐字节一致**（同一构建重跑时有 3 张因输入框光标/绘制时序产生字节差异），判定以 JSON 数值与断言为准。

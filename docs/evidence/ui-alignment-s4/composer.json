@@ -32,14 +32,14 @@
       "strip": null,
       "stripCapped": null,
       "attachmentChips": 0,
-      "workspaceH": 680,
-      "messagesH": 377,
+      "workspaceH": 683,
+      "messagesH": 384,
       "cardPresent": true,
       "cardH": 53,
       "rows": [
         {
           "kind": "div",
-          "h": 32
+          "h": 28
         },
         {
           "kind": "session-subagents",
@@ -51,7 +51,7 @@
         },
         {
           "kind": "conversation-log",
-          "h": 377
+          "h": 384
         },
         {
           "kind": "task-composer",
@@ -88,14 +88,14 @@
       "strip": null,
       "stripCapped": null,
       "attachmentChips": 0,
-      "workspaceH": 680,
-      "messagesH": 377,
+      "workspaceH": 683,
+      "messagesH": 384,
       "cardPresent": true,
       "cardH": 53,
       "rows": [
         {
           "kind": "div",
-          "h": 32
+          "h": 28
         },
         {
           "kind": "session-subagents",
@@ -107,7 +107,7 @@
         },
         {
           "kind": "conversation-log",
-          "h": 377
+          "h": 384
         },
         {
           "kind": "task-composer",
@@ -144,8 +144,8 @@
       "strip": null,
       "stripCapped": null,
       "attachmentChips": 0,
-      "workspaceH": 580,
-      "messagesH": 281,
+      "workspaceH": 583,
+      "messagesH": 284,
       "cardPresent": true,
       "cardH": 53,
       "rows": [
@@ -163,7 +163,7 @@
         },
         {
           "kind": "conversation-log",
-          "h": 281
+          "h": 284
         },
         {
           "kind": "task-composer",
@@ -200,8 +200,8 @@
       "strip": null,
       "stripCapped": null,
       "attachmentChips": 0,
-      "workspaceH": 580,
-      "messagesH": 283,
+      "workspaceH": 583,
+      "messagesH": 286,
       "cardPresent": true,
       "cardH": 53,
       "rows": [
@@ -219,7 +219,7 @@
         },
         {
           "kind": "conversation-log",
-          "h": 283
+          "h": 286
         },
         {
           "kind": "task-composer",
@@ -416,14 +416,14 @@
       "strip": null,
       "stripCapped": null,
       "attachmentChips": 0,
-      "workspaceH": 680,
-      "messagesH": 436,
+      "workspaceH": 683,
+      "messagesH": 443,
       "cardPresent": false,
       "cardH": null,
       "rows": [
         {
           "kind": "div",
-          "h": 32
+          "h": 28
         },
         {
           "kind": "session-subagents",
@@ -431,7 +431,7 @@
         },
         {
           "kind": "conversation-log",
-          "h": 436
+          "h": 443
         },
         {
           "kind": "task-composer",
@@ -468,14 +468,14 @@
       "strip": null,
       "stripCapped": null,
       "attachmentChips": 0,
-      "workspaceH": 680,
-      "messagesH": 353,
+      "workspaceH": 683,
+      "messagesH": 360,
       "cardPresent": true,
       "cardH": 53,
       "rows": [
         {
           "kind": "div",
-          "h": 32
+          "h": 28
         },
         {
           "kind": "session-subagents",
@@ -487,7 +487,7 @@
         },
         {
           "kind": "conversation-log",
-          "h": 353
+          "h": 360
         },
         {
           "kind": "task-composer",
@@ -509,7 +509,7 @@
     "paste": {
       "defaultPrevented": true,
       "attachmentLabels": [
-        "粘贴图片-9be9.png"
+        "粘贴图片-c9b0.png"
       ],
       "attachmentDetail": "剪贴板图片 · 1 KB · 仅本页保留",
       "draftText": "看这张截图",
@@ -548,14 +548,14 @@
       },
       "stripCapped": true,
       "attachmentChips": 1,
-      "workspaceH": 680,
-      "messagesH": 293,
+      "workspaceH": 683,
+      "messagesH": 300,
       "cardPresent": true,
       "cardH": 53,
       "rows": [
         {
           "kind": "div",
-          "h": 32
+          "h": 28
         },
         {
           "kind": "session-subagents",
@@ -567,7 +567,7 @@
         },
         {
           "kind": "conversation-log",
-          "h": 293
+          "h": 300
         },
         {
           "kind": "task-composer",
@@ -612,14 +612,14 @@
       },
       "stripCapped": true,
       "attachmentChips": 12,
-      "workspaceH": 680,
-      "messagesH": 308,
+      "workspaceH": 683,
+      "messagesH": 315,
       "cardPresent": true,
       "cardH": 53,
       "rows": [
         {
           "kind": "div",
-          "h": 32
+          "h": 28
         },
         {
           "kind": "session-subagents",
@@ -631,7 +631,7 @@
         },
         {
           "kind": "conversation-log",
-          "h": 308
+          "h": 315
         },
         {
           "kind": "task-composer",
@@ -672,14 +672,14 @@
       "strip": null,
       "stripCapped": null,
       "attachmentChips": 0,
-      "workspaceH": 680,
-      "messagesH": 346,
+      "workspaceH": 683,
+      "messagesH": 353,
       "cardPresent": true,
       "cardH": 141,
       "rows": [
         {
           "kind": "div",
-          "h": 32
+          "h": 28
         },
         {
           "kind": "execution-card",
@@ -687,7 +687,7 @@
         },
         {
           "kind": "conversation-log",
-          "h": 346
+          "h": 353
         },
         {
           "kind": "task-composer",
@@ -726,14 +726,14 @@
       "strip": null,
       "stripCapped": null,
       "attachmentChips": 0,
-      "workspaceH": 680,
-      "messagesH": 315,
+      "workspaceH": 683,
+      "messagesH": 322,
       "cardPresent": true,
       "cardH": 141,
       "rows": [
         {
           "kind": "div",
-          "h": 32
+          "h": 28
         },
         {
           "kind": "execution-card",
@@ -741,7 +741,7 @@
         },
         {
           "kind": "conversation-log",
-          "h": 315
+          "h": 322
         },
         {
           "kind": "task-composer",
@@ -780,14 +780,14 @@
       "strip": null,
       "stripCapped": null,
       "attachmentChips": 0,
-      "workspaceH": 680,
-      "messagesH": 315,
+      "workspaceH": 683,
+      "messagesH": 322,
       "cardPresent": true,
       "cardH": 141,
       "rows": [
         {
           "kind": "div",
-          "h": 32
+          "h": 28
         },
         {
           "kind": "execution-card",
@@ -795,7 +795,7 @@
         },
         {
           "kind": "conversation-log",
-          "h": 315
+          "h": 322
         },
         {
           "kind": "task-composer",

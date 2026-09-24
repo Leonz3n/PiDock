@@ -245,8 +245,8 @@
         "h": 900
       },
       "noHorizontalOverflow": true,
-      "messagesH": 377,
-      "messagesHShare": 0.419,
+      "messagesH": 384,
+      "messagesHShare": 0.427,
       "messages": {
         "padding": "26px 28px 10px",
         "fontSize": "16px",
@@ -376,8 +376,8 @@
         "h": 900
       },
       "noHorizontalOverflow": true,
-      "messagesH": 377,
-      "messagesHShare": 0.419,
+      "messagesH": 384,
+      "messagesHShare": 0.427,
       "messages": {
         "padding": "26px 28px 10px",
         "fontSize": "16px",
@@ -507,8 +507,8 @@
         "h": 900
       },
       "noHorizontalOverflow": true,
-      "messagesH": 381,
-      "messagesHShare": 0.424,
+      "messagesH": 384,
+      "messagesHShare": 0.427,
       "messages": {
         "padding": "20px",
         "fontSize": "16px",
@@ -638,8 +638,8 @@
         "h": 800
       },
       "noHorizontalOverflow": true,
-      "messagesH": 281,
-      "messagesHShare": 0.352,
+      "messagesH": 284,
+      "messagesHShare": 0.355,
       "messages": {
         "padding": "20px",
         "fontSize": "16px",
@@ -769,8 +769,8 @@
         "h": 800
       },
       "noHorizontalOverflow": true,
-      "messagesH": 283,
-      "messagesHShare": 0.354,
+      "messagesH": 286,
+      "messagesHShare": 0.358,
       "messages": {
         "padding": "16px",
         "fontSize": "16px",
@@ -899,13 +899,13 @@
     "1440x900": {
       "collapsed": {
         "bandH": 51,
-        "messagesH": 377,
+        "messagesH": 384,
         "padding": "12px 20px",
         "summary": "Subagent21 个运行中展开列表"
       },
       "expanded": {
         "bandH": 120,
-        "messagesH": 309,
+        "messagesH": 316,
         "padding": "12px 20px",
         "gridTemplateColumns": "549px 549px 0px 0px 0px",
         "columns": 2,
@@ -930,13 +930,13 @@
     "900x800": {
       "collapsed": {
         "bandH": 49,
-        "messagesH": 283,
+        "messagesH": 286,
         "padding": "11px 16px",
         "summary": "Subagent21 个运行中展开列表"
       },
       "expanded": {
         "bandH": 118,
-        "messagesH": 215,
+        "messagesH": 218,
         "padding": "11px 16px",
         "gridTemplateColumns": "373px 373px 0px",
         "columns": 2,
@@ -1014,8 +1014,8 @@
         "查看变更"
       ]
     },
-    "completedMessagesH": 336,
-    "runningMessagesH": 207,
+    "completedMessagesH": 343,
+    "runningMessagesH": 214,
     "failed": {
       "h": 179,
       "insideLog": true,
@@ -1051,7 +1051,7 @@
         "查看变更"
       ]
     },
-    "failedMessagesH": 315
+    "failedMessagesH": 322
   },
   "empty": {
     "present": true,
@@ -1074,8 +1074,8 @@
       "h": 900
     },
     "noHorizontalOverflow": true,
-    "messagesH": 336,
-    "messagesHShare": 0.373,
+    "messagesH": 343,
+    "messagesHShare": 0.381,
     "messages": {
       "padding": "26px 28px 10px",
       "fontSize": "16px",
@@ -1338,52 +1338,52 @@
     "bandCollapsed": 51,
     "bandExpanded": 120,
     "messagesBefore": 349,
-    "messagesCollapsed": 377,
-    "messagesExpanded": 309
+    "messagesCollapsed": 384,
+    "messagesExpanded": 316
   },
   "s3CrossCheck": {
     "approval": {
-      "messagesH": 346,
+      "messagesH": 353,
       "floor": 340,
       "before": 346
     },
     "expired": {
-      "messagesH": 406,
+      "messagesH": 413,
       "floor": 340,
       "before": 406
     },
     "running": {
-      "messagesH": 305,
+      "messagesH": 312,
       "floor": 300,
       "before": 305
     },
     "failed": {
-      "messagesH": 315,
+      "messagesH": 322,
       "floor": 300,
       "before": 315
     },
     "failed-readonly": {
-      "messagesH": 315,
+      "messagesH": 322,
       "floor": 300,
       "before": 315
     },
     "completed": {
-      "messagesH": 336,
+      "messagesH": 343,
       "floor": 300,
       "before": 309
     },
     "stopped": {
-      "messagesH": 434,
+      "messagesH": 441,
       "floor": 300,
       "before": 434
     },
     "rejected": {
-      "messagesH": 434,
+      "messagesH": 441,
       "floor": 300,
       "before": 434
     },
     "idle-other-busy": {
-      "messagesH": 377,
+      "messagesH": 384,
       "floor": 300,
       "before": 350
     }
