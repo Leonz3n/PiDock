@@ -14,7 +14,11 @@ describe("PiDock renderer flows", () => {
   it("reviews a concrete approval payload and expires it without executing", async () => {
     const user = userEvent.setup();
     renderApp("/projects/atlas/tasks/release?session=deploy");
-    expect(await screen.findByText("等待确认")).toBeInTheDocument();
+    // The state row of the execution card ([UI 对齐 05] #29) also reads
+    // 等待确认, so target the payload-review panel by its heading and check the
+    // card separately.
+    expect(await screen.findByRole("heading", { name: "等待确认" })).toBeInTheDocument();
+    expect(await screen.findByTestId("execution-card-state")).toHaveTextContent("等待确认");
     expect(screen.getByText("bun run deploy:staging")).toBeInTheDocument();
     expect(screen.queryByText("正在执行 deploy:staging")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "标记过期" }));

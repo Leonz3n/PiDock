@@ -29,6 +29,7 @@ export function resetRenderer(path = "/") {
       activePanel: {},
       browserTakeover: {},
       toolPanelState: {},
+      dismissedExecutions: {},
       modal: null,
       toasts: [],
       attentionFilter: "all",

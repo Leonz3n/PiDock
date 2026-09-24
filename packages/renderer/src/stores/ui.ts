@@ -1,6 +1,8 @@
 import { create } from "zustand";
 import type { ConfigRowDraft } from "../data/configRows";
+import { sessionKeyOf } from "../data/sessionKey";
 import { mergeToolPanelState, nextActivePanel, type ToolPanelState } from "../data/toolRail";
+import type { RunState } from "../data/types";
 
 export const TOOL_PANELS = ["runtime", "protocol", "browser", "files", "terminal", "logs"] as const;
 
@@ -62,6 +64,14 @@ type UiState = {
    * scrollback and the selected service are kept here instead of in `useState`.
    */
   toolPanelState: Record<string, ToolPanelState | undefined>;
+  /**
+   * Per session, the run state 「标记已处理」 has dismissed ([UI 对齐 05] #29).
+   * The prototype only sets `attentionDismissed` on the expired card: the entry
+   * leaves the attention surface while the execution record itself stays, and a
+   * later state change brings the card back. Keyed by `sessionKeyOf`, the value
+   * is the state that was dismissed.
+   */
+  dismissedExecutions: Record<string, RunState | undefined>;
   modal: ModalState;
   toasts: Toast[];
   attentionFilter: "all" | "approval" | "failed" | "expired" | "completed-unread";
@@ -78,6 +88,8 @@ type UiState = {
   setBrowserTakeover: (taskId: string, paused: boolean) => void;
   /** Patch one task's panel state; the other panels' fields stay untouched. */
   setToolPanelState: (taskId: string, patch: ToolPanelState) => void;
+  /** Note that the execution card for this state was handled. Record kept. */
+  dismissExecution: (taskId: string, sessionId: string, state: RunState) => void;
   openModal: (modal: ModalState) => void;
   closeModal: () => void;
   pushToast: (text: string) => void;
@@ -90,6 +102,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   activePanel: {},
   browserTakeover: {},
   toolPanelState: {},
+  dismissedExecutions: {},
   modal: null,
   toasts: [],
   attentionFilter: "all",
@@ -122,6 +135,8 @@ export const useUiStore = create<UiState>((set, get) => ({
     set({
       toolPanelState: { ...get().toolPanelState, [taskId]: mergeToolPanelState(get().toolPanelState[taskId], patch) },
     }),
+  dismissExecution: (taskId, sessionId, state) =>
+    set({ dismissedExecutions: { ...get().dismissedExecutions, [sessionKeyOf(taskId, sessionId)]: state } }),
   openModal: (modal) => set({ modal }),
   closeModal: () => set({ modal: null }),
   pushToast: (text) => {

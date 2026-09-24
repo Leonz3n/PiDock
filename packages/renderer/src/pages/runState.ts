@@ -1,11 +1,13 @@
 import type { AttentionItem, RunState, ScheduledRun } from "../data/types";
 
 export function runStateLabel(state: RunState) {
+  // 原型 `closureLabels`（prototypes/pidock-ui/closure.js）：`failed` 是「失败」，
+  // 与「需要处理」的 kind 文案一致（[UI 对齐 05] #29 验收 3）。
   return {
     idle: "空闲",
     running: "执行中",
     approval: "等待确认",
-    failed: "执行失败",
+    failed: "失败",
     completed: "已完成",
     stopped: "已停止",
     rejected: "已拒绝",

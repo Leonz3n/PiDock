@@ -1,0 +1,1111 @@
+{
+  "renderer": "http://127.0.0.1:4335",
+  "prototype": "http://127.0.0.1:4319",
+  "tabStrip": {
+    "1440x900-closed": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "noHorizontalOverflow": true,
+      "strip": {
+        "scrollWidth": 1014,
+        "clientWidth": 1014,
+        "clipPx": 0,
+        "noClip": true,
+        "h": 32
+      },
+      "tabs": [
+        {
+          "id": "session-tab-main",
+          "text": "实现与验证",
+          "visible": true,
+          "w": 82,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-deploy",
+          "text": "部署审查",
+          "visible": true,
+          "w": 70,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-failed",
+          "text": "失败排查",
+          "visible": true,
+          "w": 70,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-archived-1",
+          "text": "历史排查",
+          "visible": true,
+          "w": 173,
+          "labelClipped": false
+        }
+      ],
+      "visibleTabs": 4,
+      "addButton": {
+        "w": 28,
+        "visible": true
+      }
+    },
+    "1440x900-one": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "noHorizontalOverflow": true,
+      "strip": {
+        "scrollWidth": 505,
+        "clientWidth": 505,
+        "clipPx": 0,
+        "noClip": true,
+        "h": 32
+      },
+      "tabs": [
+        {
+          "id": "session-tab-main",
+          "text": "实现与验证",
+          "visible": true,
+          "w": 82,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-deploy",
+          "text": "部署审查",
+          "visible": true,
+          "w": 70,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-failed",
+          "text": "失败排查",
+          "visible": true,
+          "w": 70,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-archived-1",
+          "text": "历史排查",
+          "visible": true,
+          "w": 173,
+          "labelClipped": false
+        }
+      ],
+      "visibleTabs": 4,
+      "addButton": {
+        "w": 28,
+        "visible": true
+      }
+    },
+    "1440x900-all": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "noHorizontalOverflow": true,
+      "strip": {
+        "scrollWidth": 505,
+        "clientWidth": 505,
+        "clipPx": 0,
+        "noClip": true,
+        "h": 32
+      },
+      "tabs": [
+        {
+          "id": "session-tab-main",
+          "text": "实现与验证",
+          "visible": true,
+          "w": 82,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-deploy",
+          "text": "部署审查",
+          "visible": true,
+          "w": 70,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-failed",
+          "text": "失败排查",
+          "visible": true,
+          "w": 70,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-archived-1",
+          "text": "历史排查",
+          "visible": true,
+          "w": 173,
+          "labelClipped": false
+        }
+      ],
+      "visibleTabs": 4,
+      "addButton": {
+        "w": 28,
+        "visible": true
+      }
+    },
+    "1280x900-closed": {
+      "viewport": {
+        "w": 1280,
+        "h": 900
+      },
+      "noHorizontalOverflow": true,
+      "strip": {
+        "scrollWidth": 854,
+        "clientWidth": 854,
+        "clipPx": 0,
+        "noClip": true,
+        "h": 32
+      },
+      "tabs": [
+        {
+          "id": "session-tab-main",
+          "text": "实现与验证",
+          "visible": true,
+          "w": 82,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-deploy",
+          "text": "部署审查",
+          "visible": true,
+          "w": 70,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-failed",
+          "text": "失败排查",
+          "visible": true,
+          "w": 70,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-archived-1",
+          "text": "历史排查",
+          "visible": true,
+          "w": 173,
+          "labelClipped": false
+        }
+      ],
+      "visibleTabs": 4,
+      "addButton": {
+        "w": 28,
+        "visible": true
+      }
+    },
+    "1280x900-one": {
+      "viewport": {
+        "w": 1280,
+        "h": 900
+      },
+      "noHorizontalOverflow": true,
+      "strip": {
+        "scrollWidth": 414,
+        "clientWidth": 414,
+        "clipPx": 0,
+        "noClip": true,
+        "h": 32
+      },
+      "tabs": [
+        {
+          "id": "session-tab-main",
+          "text": "实现与验证",
+          "visible": true,
+          "w": 82,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-deploy",
+          "text": "部署审查",
+          "visible": true,
+          "w": 70,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-failed",
+          "text": "失败排查",
+          "visible": true,
+          "w": 70,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-archived-1",
+          "text": "历史排查",
+          "visible": true,
+          "w": 173,
+          "labelClipped": false
+        }
+      ],
+      "visibleTabs": 4,
+      "addButton": {
+        "w": 28,
+        "visible": true
+      }
+    },
+    "1280x900-all": {
+      "viewport": {
+        "w": 1280,
+        "h": 900
+      },
+      "noHorizontalOverflow": true,
+      "strip": {
+        "scrollWidth": 414,
+        "clientWidth": 414,
+        "clipPx": 0,
+        "noClip": true,
+        "h": 32
+      },
+      "tabs": [
+        {
+          "id": "session-tab-main",
+          "text": "实现与验证",
+          "visible": true,
+          "w": 82,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-deploy",
+          "text": "部署审查",
+          "visible": true,
+          "w": 70,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-failed",
+          "text": "失败排查",
+          "visible": true,
+          "w": 70,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-archived-1",
+          "text": "历史排查",
+          "visible": true,
+          "w": 173,
+          "labelClipped": false
+        }
+      ],
+      "visibleTabs": 4,
+      "addButton": {
+        "w": 28,
+        "visible": true
+      }
+    },
+    "1024x800-closed": {
+      "viewport": {
+        "w": 1024,
+        "h": 800
+      },
+      "noHorizontalOverflow": true,
+      "strip": {
+        "scrollWidth": 632,
+        "clientWidth": 632,
+        "clipPx": 0,
+        "noClip": true,
+        "h": 26
+      },
+      "tabs": [
+        {
+          "id": "session-tab-main",
+          "text": "实现与验证",
+          "visible": true,
+          "w": 82,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-deploy",
+          "text": "部署审查",
+          "visible": true,
+          "w": 70,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-failed",
+          "text": "失败排查",
+          "visible": false,
+          "w": 0,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-archived-1",
+          "text": "历史排查",
+          "visible": false,
+          "w": 0,
+          "labelClipped": false
+        }
+      ],
+      "visibleTabs": 2,
+      "addButton": {
+        "w": 28,
+        "visible": true
+      }
+    },
+    "1024x800-one": {
+      "viewport": {
+        "w": 1024,
+        "h": 800
+      },
+      "noHorizontalOverflow": true,
+      "strip": {
+        "scrollWidth": 306,
+        "clientWidth": 306,
+        "clipPx": 0,
+        "noClip": true,
+        "h": 26
+      },
+      "tabs": [
+        {
+          "id": "session-tab-main",
+          "text": "实现与验证",
+          "visible": true,
+          "w": 82,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-deploy",
+          "text": "部署审查",
+          "visible": true,
+          "w": 70,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-failed",
+          "text": "失败排查",
+          "visible": false,
+          "w": 0,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-archived-1",
+          "text": "历史排查",
+          "visible": false,
+          "w": 0,
+          "labelClipped": false
+        }
+      ],
+      "visibleTabs": 2,
+      "addButton": {
+        "w": 28,
+        "visible": true
+      }
+    },
+    "1024x800-all": {
+      "viewport": {
+        "w": 1024,
+        "h": 800
+      },
+      "noHorizontalOverflow": true,
+      "strip": {
+        "scrollWidth": 306,
+        "clientWidth": 306,
+        "clipPx": 0,
+        "noClip": true,
+        "h": 26
+      },
+      "tabs": [
+        {
+          "id": "session-tab-main",
+          "text": "实现与验证",
+          "visible": true,
+          "w": 82,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-deploy",
+          "text": "部署审查",
+          "visible": true,
+          "w": 70,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-failed",
+          "text": "失败排查",
+          "visible": false,
+          "w": 0,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-archived-1",
+          "text": "历史排查",
+          "visible": false,
+          "w": 0,
+          "labelClipped": false
+        }
+      ],
+      "visibleTabs": 2,
+      "addButton": {
+        "w": 28,
+        "visible": true
+      }
+    },
+    "900x800-closed": {
+      "viewport": {
+        "w": 900,
+        "h": 800
+      },
+      "noHorizontalOverflow": true,
+      "strip": {
+        "scrollWidth": 654,
+        "clientWidth": 654,
+        "clipPx": 0,
+        "noClip": true,
+        "h": 26
+      },
+      "tabs": [
+        {
+          "id": "session-tab-main",
+          "text": "实现与验证",
+          "visible": true,
+          "w": 82,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-deploy",
+          "text": "部署审查",
+          "visible": false,
+          "w": 0,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-failed",
+          "text": "失败排查",
+          "visible": false,
+          "w": 0,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-archived-1",
+          "text": "历史排查",
+          "visible": false,
+          "w": 0,
+          "labelClipped": false
+        }
+      ],
+      "visibleTabs": 1,
+      "addButton": {
+        "w": 28,
+        "visible": true
+      }
+    },
+    "900x800-one": {
+      "viewport": {
+        "w": 900,
+        "h": 800
+      },
+      "noHorizontalOverflow": true,
+      "strip": {
+        "scrollWidth": 323,
+        "clientWidth": 323,
+        "clipPx": 0,
+        "noClip": true,
+        "h": 26
+      },
+      "tabs": [
+        {
+          "id": "session-tab-main",
+          "text": "实现与验证",
+          "visible": true,
+          "w": 82,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-deploy",
+          "text": "部署审查",
+          "visible": false,
+          "w": 0,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-failed",
+          "text": "失败排查",
+          "visible": false,
+          "w": 0,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-archived-1",
+          "text": "历史排查",
+          "visible": false,
+          "w": 0,
+          "labelClipped": false
+        }
+      ],
+      "visibleTabs": 1,
+      "addButton": {
+        "w": 28,
+        "visible": true
+      }
+    },
+    "900x800-all": {
+      "viewport": {
+        "w": 900,
+        "h": 800
+      },
+      "noHorizontalOverflow": true,
+      "strip": {
+        "scrollWidth": 323,
+        "clientWidth": 323,
+        "clipPx": 0,
+        "noClip": true,
+        "h": 26
+      },
+      "tabs": [
+        {
+          "id": "session-tab-main",
+          "text": "实现与验证",
+          "visible": true,
+          "w": 82,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-deploy",
+          "text": "部署审查",
+          "visible": false,
+          "w": 0,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-failed",
+          "text": "失败排查",
+          "visible": false,
+          "w": 0,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-archived-1",
+          "text": "历史排查",
+          "visible": false,
+          "w": 0,
+          "labelClipped": false
+        }
+      ],
+      "visibleTabs": 1,
+      "addButton": {
+        "w": 28,
+        "visible": true
+      }
+    },
+    "720x760-closed": {
+      "viewport": {
+        "w": 720,
+        "h": 760
+      },
+      "noHorizontalOverflow": true,
+      "strip": {
+        "scrollWidth": 484,
+        "clientWidth": 484,
+        "clipPx": 0,
+        "noClip": true,
+        "h": 26
+      },
+      "tabs": [
+        {
+          "id": "session-tab-main",
+          "text": "实现与验证",
+          "visible": true,
+          "w": 82,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-deploy",
+          "text": "部署审查",
+          "visible": false,
+          "w": 0,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-failed",
+          "text": "失败排查",
+          "visible": false,
+          "w": 0,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-archived-1",
+          "text": "历史排查",
+          "visible": false,
+          "w": 0,
+          "labelClipped": false
+        }
+      ],
+      "visibleTabs": 1,
+      "addButton": {
+        "w": 28,
+        "visible": true
+      }
+    },
+    "720x760-one": {
+      "viewport": {
+        "w": 720,
+        "h": 760
+      },
+      "noHorizontalOverflow": true,
+      "strip": {
+        "scrollWidth": 484,
+        "clientWidth": 484,
+        "clipPx": 0,
+        "noClip": true,
+        "h": 26
+      },
+      "tabs": [
+        {
+          "id": "session-tab-main",
+          "text": "实现与验证",
+          "visible": true,
+          "w": 82,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-deploy",
+          "text": "部署审查",
+          "visible": false,
+          "w": 0,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-failed",
+          "text": "失败排查",
+          "visible": false,
+          "w": 0,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-archived-1",
+          "text": "历史排查",
+          "visible": false,
+          "w": 0,
+          "labelClipped": false
+        }
+      ],
+      "visibleTabs": 1,
+      "addButton": {
+        "w": 28,
+        "visible": true
+      }
+    },
+    "720x760-all": {
+      "viewport": {
+        "w": 720,
+        "h": 760
+      },
+      "noHorizontalOverflow": true,
+      "strip": {
+        "scrollWidth": 484,
+        "clientWidth": 484,
+        "clipPx": 0,
+        "noClip": true,
+        "h": 26
+      },
+      "tabs": [
+        {
+          "id": "session-tab-main",
+          "text": "实现与验证",
+          "visible": true,
+          "w": 82,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-deploy",
+          "text": "部署审查",
+          "visible": false,
+          "w": 0,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-failed",
+          "text": "失败排查",
+          "visible": false,
+          "w": 0,
+          "labelClipped": false
+        },
+        {
+          "id": "session-tab-archived-1",
+          "text": "历史排查",
+          "visible": false,
+          "w": 0,
+          "labelClipped": false
+        }
+      ],
+      "visibleTabs": 1,
+      "addButton": {
+        "w": 28,
+        "visible": true
+      }
+    }
+  },
+  "card": {
+    "idle-other-busy": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "noHorizontalOverflow": true,
+      "messagesH": 343,
+      "messagesShare": 0.381,
+      "cardPresent": true,
+      "cardH": 59,
+      "cardScrolls": false,
+      "cardParts": {
+        "stateRow": 16,
+        "topLevelChildren": [
+          {
+            "tag": "div",
+            "h": 16
+          },
+          {
+            "tag": "p",
+            "h": 15
+          }
+        ]
+      },
+      "state": "空闲",
+      "actions": [],
+      "approvalPreview": null,
+      "otherSession": 15,
+      "steps": null,
+      "cardText": "空闲 「部署审查」正在执行或等待确认；本会话可编辑草稿，待其结束后再执行。",
+      "composerApprovalCard": null,
+      "notes": "空闲会话 + 其它会话等待确认（原型 other>=0 分支）"
+    },
+    "approval": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "noHorizontalOverflow": true,
+      "messagesH": 26,
+      "messagesShare": 0.029,
+      "cardPresent": true,
+      "cardH": 205,
+      "cardScrolls": false,
+      "cardParts": {
+        "stateRow": 26,
+        "topLevelChildren": [
+          {
+            "tag": "div",
+            "h": 26
+          },
+          {
+            "tag": "div",
+            "h": 128
+          },
+          {
+            "tag": "p",
+            "h": 15
+          }
+        ]
+      },
+      "state": "等待确认",
+      "actions": [
+        {
+          "label": "批准本次操作",
+          "disabled": false
+        },
+        {
+          "label": "拒绝",
+          "disabled": false
+        }
+      ],
+      "approvalPreview": 128,
+      "otherSession": null,
+      "steps": null,
+      "cardText": "等待确认 批准本次操作 拒绝 待批准：部署到 Staging 目标：bun run deploy:staging · /workspace/atlas-web 影响：更新 staging.atlas.example.com，预计 2 分钟 有效期：2026/9/25 12:08:15（等待起点后 24 小时与下一次计划",
+      "composerApprovalCard": 247,
+      "notes": "等待确认：预览取自 Host 待确认请求（目标/影响/有效期）"
+    },
+    "running": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "noHorizontalOverflow": true,
+      "messagesH": 52,
+      "messagesShare": 0.058,
+      "cardPresent": true,
+      "cardH": 69,
+      "cardScrolls": false,
+      "cardParts": {
+        "stateRow": 26,
+        "topLevelChildren": [
+          {
+            "tag": "div",
+            "h": 26
+          },
+          {
+            "tag": "p",
+            "h": 15
+          }
+        ]
+      },
+      "state": "执行中",
+      "actions": [
+        {
+          "label": "停止执行",
+          "disabled": false
+        }
+      ],
+      "approvalPreview": null,
+      "otherSession": null,
+      "steps": null,
+      "cardText": "执行中 停止执行 停止不回滚已完成操作；恢复不自动重放已完成工具。",
+      "composerApprovalCard": 237,
+      "notes": "批准第二条待确认请求后进入执行中（会话 runState=running）"
+    },
+    "stopped": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "noHorizontalOverflow": true,
+      "messagesH": 161,
+      "messagesShare": 0.179,
+      "cardPresent": true,
+      "cardH": 79,
+      "cardScrolls": false,
+      "cardParts": {
+        "stateRow": 16,
+        "topLevelChildren": [
+          {
+            "tag": "div",
+            "h": 16
+          },
+          {
+            "tag": "p",
+            "h": 15
+          },
+          {
+            "tag": "p",
+            "h": 15
+          }
+        ]
+      },
+      "state": "已停止",
+      "actions": [],
+      "approvalPreview": null,
+      "otherSession": null,
+      "steps": null,
+      "cardText": "已停止 已中止 停止不回滚已完成操作；恢复不自动重放已完成工具。",
+      "composerApprovalCard": 237,
+      "notes": "停止执行走既有 stopRun；卡片回到已停止且不再提供入口"
+    },
+    "rejected": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "noHorizontalOverflow": true,
+      "messagesH": 182,
+      "messagesShare": 0.202,
+      "cardPresent": true,
+      "cardH": 59,
+      "cardScrolls": false,
+      "cardParts": {
+        "stateRow": 16,
+        "topLevelChildren": [
+          {
+            "tag": "div",
+            "h": 16
+          },
+          {
+            "tag": "p",
+            "h": 15
+          }
+        ]
+      },
+      "state": "已拒绝",
+      "actions": [],
+      "approvalPreview": null,
+      "otherSession": null,
+      "steps": null,
+      "cardText": "已拒绝 停止不回滚已完成操作；恢复不自动重放已完成工具。",
+      "composerApprovalCard": 237,
+      "notes": "两条请求都拒绝后会话落到已拒绝"
+    },
+    "expired-second-pending": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "noHorizontalOverflow": true,
+      "messagesH": 55,
+      "messagesShare": 0.061,
+      "cardPresent": true,
+      "cardH": 186,
+      "cardScrolls": false,
+      "cardParts": {
+        "stateRow": 26,
+        "topLevelChildren": [
+          {
+            "tag": "div",
+            "h": 26
+          },
+          {
+            "tag": "div",
+            "h": 109
+          },
+          {
+            "tag": "p",
+            "h": 15
+          }
+        ]
+      },
+      "state": "等待确认",
+      "actions": [
+        {
+          "label": "批准本次操作",
+          "disabled": false
+        },
+        {
+          "label": "拒绝",
+          "disabled": false
+        }
+      ],
+      "approvalPreview": 109,
+      "otherSession": null,
+      "steps": null,
+      "cardText": "等待确认 批准本次操作 拒绝 待批准：执行数据库迁移 目标：bun run db:migrate · /workspace/atlas-api 影响：变更共享测试库 schema 有效期：2026/9/25 12:08:23（等待起点后 24 小时与下一次计划时刻取较早者；过期后不发送） 批准仅授权这一次操作，不自动授",
+      "composerApprovalCard": 237,
+      "notes": "第一条确认过期后：会话记录已是 expired，但第二条仍待确认（无过期入口）"
+    },
+    "failed": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "noHorizontalOverflow": true,
+      "messagesH": 283,
+      "messagesShare": 0.315,
+      "cardPresent": true,
+      "cardH": 172,
+      "cardScrolls": false,
+      "cardParts": {
+        "stateRow": 26,
+        "topLevelChildren": [
+          {
+            "tag": "div",
+            "h": 26
+          },
+          {
+            "tag": "p",
+            "h": 15
+          },
+          {
+            "tag": "p",
+            "h": 15
+          },
+          {
+            "tag": "p",
+            "h": 15
+          },
+          {
+            "tag": "small",
+            "h": 15
+          },
+          {
+            "tag": "details",
+            "h": 15
+          },
+          {
+            "tag": "p",
+            "h": 15
+          }
+        ]
+      },
+      "state": "失败",
+      "actions": [
+        {
+          "label": "检查并重试",
+          "disabled": false
+        }
+      ],
+      "approvalPreview": null,
+      "otherSession": 15,
+      "steps": 15,
+      "cardText": "失败 检查并重试 「部署审查」正在执行或等待确认；本会话可编辑草稿，待其结束后再执行。 构建失败，已保留现场 失败范围：构建步骤：front-monorepo web 包编译失败 已完成的步骤保留；外部发送结果不确定时须先核对送达情况。 执行步骤（完成 2 / 共 4） 停止不回滚已完成操作；恢复不自动重放已完成工具。",
+      "composerApprovalCard": null,
+      "notes": "失败排查会话的真实失败回合：失败范围 + 折叠的步骤"
+    },
+    "completed": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "noHorizontalOverflow": true,
+      "messagesH": 279,
+      "messagesShare": 0.31,
+      "cardPresent": true,
+      "cardH": 123,
+      "cardScrolls": false,
+      "cardParts": {
+        "stateRow": 16,
+        "topLevelChildren": [
+          {
+            "tag": "div",
+            "h": 16
+          },
+          {
+            "tag": "p",
+            "h": 15
+          },
+          {
+            "tag": "p",
+            "h": 15
+          },
+          {
+            "tag": "details",
+            "h": 15
+          },
+          {
+            "tag": "p",
+            "h": 15
+          }
+        ]
+      },
+      "state": "已完成",
+      "actions": [],
+      "approvalPreview": null,
+      "otherSession": 15,
+      "steps": 15,
+      "cardText": "已完成 「部署审查」正在执行或等待确认；本会话可编辑草稿，待其结束后再执行。 正在执行 执行步骤（完成 1 / 共 2） 停止不回滚已完成操作；恢复不自动重放已完成工具。",
+      "composerApprovalCard": null,
+      "notes": "普通回合结束后的已完成状态（无入口）"
+    }
+  },
+  "prototypeExecutionPanel": {
+    "idle": {
+      "tier": "idle",
+      "panelH": 68,
+      "panelW": 1178,
+      "state": "空闲",
+      "approvalPreviewH": null,
+      "text": "空闲 原型演示状态"
+    },
+    "waiting": {
+      "tier": "waiting",
+      "panelH": 225,
+      "panelW": 1178,
+      "state": "等待确认",
+      "approvalPreviewH": 116,
+      "text": "等待确认 批准本次操作 拒绝 摘要已生成，等待批准发送 待批准：发送研发周报（模拟） 目标：示例研发通知群 · 接收人：该群研发成员 内容：本次已生成的 Git 改动摘要与提交依据。批准仅授权本次发送，不自动授权未来执行。 到下次计划时间或等待满 24 小时（取较早者）失效；实际发送前重新核对目标与内容。过期后不发送。 原型演示状态"
+    },
+    "css": [
+      ".session-tabs { display: flex; min-width: 0px; flex: 1 1 0%; overflow: hidden; }",
+      ".session-tabs .session-tab { min-width: 0px; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; flex: 0 1 auto; }",
+      ".session-tabs .badge { margin-left: 4px; }",
+      "@media (max-width: 650px) {\n  .session-tabs .session-tab:not(.active) { display: none; }\n  .session-tabs .session-tab.active { max-width: 100%; flex: 1 1 0%; }\n}",
+      ".execution-panel { margin: 8px 18px; padding: 10px 12px; background: rgb(246, 248, 252); border: 1px solid rgb(224, 229, 239); border-radius: 8px; font-size: 12px; flex-shrink: 0; max-height: 34vh; overflow: auto; }",
+      ".execution-panel p { margin: 6px 0px; line-height: 1.6; }",
+      ".execution-panel small { line-height: 1.7; }",
+      ".session-tabs .session-tab { flex-shrink: 1; }"
+    ]
+  },
+  "assertions": {
+    "checked": 23,
+    "violations": 0
+  }
+}
