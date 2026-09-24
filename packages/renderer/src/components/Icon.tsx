@@ -43,6 +43,9 @@ export const ICON_PATHS = {
   // (also `remoteAccessPage`'s mode picker). Same path data as `app.js:2`.
   refresh: "M20 7a9 9 0 1 0 1 9 M20 2v6h-6",
   shield: "M12 2l9 4v6c0 6-9 10-9 10S3 18 3 12V6Z M8 12l3 3 5-6",
+  // Prototype `paths.code`: the capability row's Extension glyph
+  // (`capabilityRow()` picks book/server/archive/code by kind).
+  code: "M8 6l-6 6 6 6 M16 6l6 6-6 6 M14 3l-4 18",
 } as const;
 
 export type IconName = keyof typeof ICON_PATHS;
