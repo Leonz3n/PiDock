@@ -1,0 +1,1273 @@
+{
+  "slice": "[UI 对齐 07] #31",
+  "baseline": {
+    "s3MessagesH": 349,
+    "subagentBandH": 78
+  },
+  "prototypeA": {
+    "messages": {
+      "padding": "26px 28px 10px",
+      "fontSize": "13px",
+      "gap": "normal",
+      "marginBottom": "0px",
+      "marginLeft": "187px",
+      "backgroundColor": "rgba(0, 0, 0, 0)",
+      "borderTopLeftRadius": "0px",
+      "borderTopRightRadius": "0px",
+      "borderBottomLeftRadius": "0px",
+      "border": "0px",
+      "gridTemplateColumns": "none"
+    },
+    "messagesH": 256,
+    "message": {
+      "padding": "0px",
+      "fontSize": "13px",
+      "gap": "normal",
+      "marginBottom": "25px",
+      "marginLeft": "0px",
+      "backgroundColor": "rgba(0, 0, 0, 0)",
+      "borderTopLeftRadius": "0px",
+      "borderTopRightRadius": "0px",
+      "borderBottomLeftRadius": "0px",
+      "border": "0px",
+      "gridTemplateColumns": "none"
+    },
+    "messageHead": {
+      "padding": "0px",
+      "fontSize": "11px",
+      "gap": "9px",
+      "marginBottom": "10px",
+      "marginLeft": "0px",
+      "backgroundColor": "rgba(0, 0, 0, 0)",
+      "borderTopLeftRadius": "0px",
+      "borderTopRightRadius": "0px",
+      "borderBottomLeftRadius": "0px",
+      "border": "0px",
+      "gridTemplateColumns": "none"
+    },
+    "userbubble": {
+      "padding": "13px 16px",
+      "fontSize": "12px",
+      "gap": "normal",
+      "marginBottom": "0px",
+      "marginLeft": "31px",
+      "backgroundColor": "rgb(245, 246, 246)",
+      "borderTopLeftRadius": "2px",
+      "borderTopRightRadius": "10px",
+      "borderBottomLeftRadius": "10px",
+      "border": "0px",
+      "gridTemplateColumns": "none"
+    },
+    "agentbody": {
+      "padding": "0px",
+      "fontSize": "13px",
+      "gap": "normal",
+      "marginBottom": "0px",
+      "marginLeft": "31px",
+      "backgroundColor": "rgba(0, 0, 0, 0)",
+      "borderTopLeftRadius": "0px",
+      "borderTopRightRadius": "0px",
+      "borderBottomLeftRadius": "0px",
+      "border": "0px",
+      "gridTemplateColumns": "none"
+    },
+    "refchip": {
+      "padding": "1px 5px",
+      "fontSize": "10px",
+      "gap": "5px",
+      "marginBottom": "0px",
+      "marginLeft": "0px",
+      "backgroundColor": "rgb(237, 239, 243)",
+      "borderTopLeftRadius": "4px",
+      "borderTopRightRadius": "4px",
+      "borderBottomLeftRadius": "4px",
+      "border": "1px",
+      "gridTemplateColumns": "none"
+    },
+    "dateLabel": {
+      "padding": "0px",
+      "fontSize": "10px",
+      "gap": "normal",
+      "marginBottom": "22px",
+      "marginLeft": "0px",
+      "backgroundColor": "rgba(0, 0, 0, 0)",
+      "borderTopLeftRadius": "0px",
+      "borderTopRightRadius": "0px",
+      "borderBottomLeftRadius": "0px",
+      "border": "0px",
+      "gridTemplateColumns": "none"
+    },
+    "messageFooter": {
+      "padding": "0px",
+      "fontSize": "10px",
+      "gap": "normal",
+      "marginBottom": "0px",
+      "marginLeft": "0px",
+      "backgroundColor": "rgba(0, 0, 0, 0)",
+      "borderTopLeftRadius": "0px",
+      "borderTopRightRadius": "0px",
+      "borderBottomLeftRadius": "0px",
+      "border": "0px",
+      "gridTemplateColumns": "none"
+    },
+    "toolcard": {
+      "padding": "0px",
+      "fontSize": "13px",
+      "gap": "normal",
+      "marginBottom": "12px",
+      "marginLeft": "0px",
+      "backgroundColor": "rgb(255, 255, 255)",
+      "borderTopLeftRadius": "8px",
+      "borderTopRightRadius": "8px",
+      "borderBottomLeftRadius": "8px",
+      "border": "1px",
+      "gridTemplateColumns": "none"
+    },
+    "toolrow": {
+      "padding": "9px 12px",
+      "fontSize": "11px",
+      "gap": "9px",
+      "marginBottom": "0px",
+      "marginLeft": "0px",
+      "backgroundColor": "rgba(0, 0, 0, 0)",
+      "borderTopLeftRadius": "0px",
+      "borderTopRightRadius": "0px",
+      "borderBottomLeftRadius": "0px",
+      "border": "0px 0px 1px",
+      "gridTemplateColumns": "none"
+    },
+    "steps": {
+      "padding": "9px 12px",
+      "fontSize": "11px",
+      "gap": "7px",
+      "marginBottom": "0px",
+      "marginLeft": "0px",
+      "backgroundColor": "rgba(0, 0, 0, 0)",
+      "borderTopLeftRadius": "0px",
+      "borderTopRightRadius": "0px",
+      "borderBottomLeftRadius": "0px",
+      "border": "0px",
+      "gridTemplateColumns": "727px"
+    },
+    "runResult": {
+      "padding": "9px 12px",
+      "fontSize": "11px",
+      "gap": "normal",
+      "marginBottom": "12px",
+      "marginLeft": "0px",
+      "backgroundColor": "rgb(244, 245, 248)",
+      "borderTopLeftRadius": "0px",
+      "borderTopRightRadius": "0px",
+      "borderBottomLeftRadius": "0px",
+      "border": "0px 0px 0px 2px",
+      "gridTemplateColumns": "none"
+    },
+    "sessionSubagents": {
+      "padding": "12px 20px",
+      "fontSize": "13px",
+      "gap": "normal",
+      "marginBottom": "0px",
+      "marginLeft": "0px",
+      "backgroundColor": "rgb(252, 252, 253)",
+      "borderTopLeftRadius": "0px",
+      "borderTopRightRadius": "0px",
+      "borderBottomLeftRadius": "0px",
+      "border": "0px 0px 1px",
+      "gridTemplateColumns": "none"
+    },
+    "subagentCards": {
+      "padding": "0px",
+      "fontSize": "13px",
+      "gap": "8px",
+      "marginBottom": "0px",
+      "marginLeft": "0px",
+      "backgroundColor": "rgba(0, 0, 0, 0)",
+      "borderTopLeftRadius": "0px",
+      "borderTopRightRadius": "0px",
+      "borderBottomLeftRadius": "0px",
+      "border": "0px",
+      "gridTemplateColumns": "583px 583px 0px 0px 0px"
+    },
+    "subagentCard": {
+      "padding": "10px 12px",
+      "fontSize": "13px",
+      "gap": "normal",
+      "marginBottom": "0px",
+      "marginLeft": "0px",
+      "backgroundColor": "rgb(255, 255, 255)",
+      "borderTopLeftRadius": "8px",
+      "borderTopRightRadius": "8px",
+      "borderBottomLeftRadius": "8px",
+      "border": "1px",
+      "gridTemplateColumns": "none"
+    },
+    "brandmarkH": 22,
+    "avatarH": 25,
+    "dateLabelText": "今天 · 示例会话",
+    "toolcardPresent": true
+  },
+  "viewports": {
+    "1440x900": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "noHorizontalOverflow": true,
+      "messagesH": 377,
+      "messagesHShare": 0.419,
+      "messages": {
+        "padding": "26px 28px 10px",
+        "fontSize": "16px",
+        "gap": "normal",
+        "marginBottom": "0px",
+        "marginLeft": "0px",
+        "backgroundColor": "rgb(255, 255, 255)",
+        "borderTopLeftRadius": "10px",
+        "borderTopRightRadius": "10px",
+        "borderBottomLeftRadius": "10px",
+        "border": "1px",
+        "gridTemplateColumns": "none"
+      },
+      "message": {
+        "padding": "0px",
+        "fontSize": "16px",
+        "gap": "normal",
+        "marginBottom": "25px",
+        "marginLeft": "0px",
+        "backgroundColor": "rgba(0, 0, 0, 0)",
+        "borderTopLeftRadius": "0px",
+        "borderTopRightRadius": "0px",
+        "borderBottomLeftRadius": "0px",
+        "border": "0px",
+        "gridTemplateColumns": "none"
+      },
+      "messageHead": {
+        "padding": "0px",
+        "fontSize": "11px",
+        "gap": "9px",
+        "marginBottom": "10px",
+        "marginLeft": "0px",
+        "backgroundColor": "rgba(0, 0, 0, 0)",
+        "borderTopLeftRadius": "0px",
+        "borderTopRightRadius": "0px",
+        "borderBottomLeftRadius": "0px",
+        "border": "0px",
+        "gridTemplateColumns": "none"
+      },
+      "userbubble": {
+        "padding": "13px 16px",
+        "fontSize": "16px",
+        "gap": "normal",
+        "marginBottom": "0px",
+        "marginLeft": "31px",
+        "backgroundColor": "rgb(245, 246, 246)",
+        "borderTopLeftRadius": "2px",
+        "borderTopRightRadius": "10px",
+        "borderBottomLeftRadius": "10px",
+        "border": "0px",
+        "gridTemplateColumns": "none"
+      },
+      "userbubbleBody": {
+        "padding": "13px 16px",
+        "marginLeft": "31px",
+        "backgroundColor": "rgb(245, 246, 246)",
+        "borderTopLeftRadius": "2px",
+        "borderTopRightRadius": "10px",
+        "borderBottomLeftRadius": "10px"
+      },
+      "agentBody": {
+        "marginLeft": "31px"
+      },
+      "dateLabel": {
+        "padding": "0px",
+        "fontSize": "10px",
+        "gap": "normal",
+        "marginBottom": "22px",
+        "marginLeft": "0px",
+        "backgroundColor": "rgba(0, 0, 0, 0)",
+        "borderTopLeftRadius": "0px",
+        "borderTopRightRadius": "0px",
+        "borderBottomLeftRadius": "0px",
+        "border": "0px",
+        "gridTemplateColumns": "none"
+      },
+      "dateLabelText": "2026年9月22日 · 实现与验证",
+      "groupCount": 1,
+      "messageCount": 32,
+      "brandmarkH": 22,
+      "avatarH": 25,
+      "modeLabel": "实现与验证",
+      "stateBadge": "空闲",
+      "headTime": "09:12",
+      "refchip": null,
+      "refchipText": null,
+      "imageCount": 0,
+      "imageBox": null,
+      "footer": null,
+      "footerText": null,
+      "toolCard": null,
+      "cards": null,
+      "card": null,
+      "cardLabels": [],
+      "band": {
+        "h": 51,
+        "padding": "12px 20px",
+        "toggle": "展开列表",
+        "expanded": "false",
+        "summary": "Subagent21 个运行中展开列表"
+      },
+      "executionCard": {
+        "h": 53,
+        "state": "空闲"
+      },
+      "empty": {
+        "present": false
+      }
+    },
+    "1440x900-executionCard": {
+      "h": 53,
+      "state": "空闲"
+    },
+    "1280x900": {
+      "viewport": {
+        "w": 1280,
+        "h": 900
+      },
+      "noHorizontalOverflow": true,
+      "messagesH": 377,
+      "messagesHShare": 0.419,
+      "messages": {
+        "padding": "26px 28px 10px",
+        "fontSize": "16px",
+        "gap": "normal",
+        "marginBottom": "0px",
+        "marginLeft": "0px",
+        "backgroundColor": "rgb(255, 255, 255)",
+        "borderTopLeftRadius": "10px",
+        "borderTopRightRadius": "10px",
+        "borderBottomLeftRadius": "10px",
+        "border": "1px",
+        "gridTemplateColumns": "none"
+      },
+      "message": {
+        "padding": "0px",
+        "fontSize": "16px",
+        "gap": "normal",
+        "marginBottom": "25px",
+        "marginLeft": "0px",
+        "backgroundColor": "rgba(0, 0, 0, 0)",
+        "borderTopLeftRadius": "0px",
+        "borderTopRightRadius": "0px",
+        "borderBottomLeftRadius": "0px",
+        "border": "0px",
+        "gridTemplateColumns": "none"
+      },
+      "messageHead": {
+        "padding": "0px",
+        "fontSize": "11px",
+        "gap": "9px",
+        "marginBottom": "10px",
+        "marginLeft": "0px",
+        "backgroundColor": "rgba(0, 0, 0, 0)",
+        "borderTopLeftRadius": "0px",
+        "borderTopRightRadius": "0px",
+        "borderBottomLeftRadius": "0px",
+        "border": "0px",
+        "gridTemplateColumns": "none"
+      },
+      "userbubble": {
+        "padding": "13px 16px",
+        "fontSize": "16px",
+        "gap": "normal",
+        "marginBottom": "0px",
+        "marginLeft": "31px",
+        "backgroundColor": "rgb(245, 246, 246)",
+        "borderTopLeftRadius": "2px",
+        "borderTopRightRadius": "10px",
+        "borderBottomLeftRadius": "10px",
+        "border": "0px",
+        "gridTemplateColumns": "none"
+      },
+      "userbubbleBody": {
+        "padding": "13px 16px",
+        "marginLeft": "31px",
+        "backgroundColor": "rgb(245, 246, 246)",
+        "borderTopLeftRadius": "2px",
+        "borderTopRightRadius": "10px",
+        "borderBottomLeftRadius": "10px"
+      },
+      "agentBody": {
+        "marginLeft": "31px"
+      },
+      "dateLabel": {
+        "padding": "0px",
+        "fontSize": "10px",
+        "gap": "normal",
+        "marginBottom": "22px",
+        "marginLeft": "0px",
+        "backgroundColor": "rgba(0, 0, 0, 0)",
+        "borderTopLeftRadius": "0px",
+        "borderTopRightRadius": "0px",
+        "borderBottomLeftRadius": "0px",
+        "border": "0px",
+        "gridTemplateColumns": "none"
+      },
+      "dateLabelText": "2026年9月22日 · 实现与验证",
+      "groupCount": 1,
+      "messageCount": 32,
+      "brandmarkH": 22,
+      "avatarH": 25,
+      "modeLabel": "实现与验证",
+      "stateBadge": "空闲",
+      "headTime": "09:12",
+      "refchip": null,
+      "refchipText": null,
+      "imageCount": 0,
+      "imageBox": null,
+      "footer": null,
+      "footerText": null,
+      "toolCard": null,
+      "cards": null,
+      "card": null,
+      "cardLabels": [],
+      "band": {
+        "h": 51,
+        "padding": "12px 20px",
+        "toggle": "展开列表",
+        "expanded": "false",
+        "summary": "Subagent21 个运行中展开列表"
+      },
+      "executionCard": {
+        "h": 53,
+        "state": "空闲"
+      },
+      "empty": {
+        "present": false
+      }
+    },
+    "1280x900-executionCard": {
+      "h": 53,
+      "state": "空闲"
+    },
+    "1180x900": {
+      "viewport": {
+        "w": 1180,
+        "h": 900
+      },
+      "noHorizontalOverflow": true,
+      "messagesH": 381,
+      "messagesHShare": 0.424,
+      "messages": {
+        "padding": "20px",
+        "fontSize": "16px",
+        "gap": "normal",
+        "marginBottom": "0px",
+        "marginLeft": "0px",
+        "backgroundColor": "rgb(255, 255, 255)",
+        "borderTopLeftRadius": "10px",
+        "borderTopRightRadius": "10px",
+        "borderBottomLeftRadius": "10px",
+        "border": "1px",
+        "gridTemplateColumns": "none"
+      },
+      "message": {
+        "padding": "0px",
+        "fontSize": "16px",
+        "gap": "normal",
+        "marginBottom": "25px",
+        "marginLeft": "0px",
+        "backgroundColor": "rgba(0, 0, 0, 0)",
+        "borderTopLeftRadius": "0px",
+        "borderTopRightRadius": "0px",
+        "borderBottomLeftRadius": "0px",
+        "border": "0px",
+        "gridTemplateColumns": "none"
+      },
+      "messageHead": {
+        "padding": "0px",
+        "fontSize": "11px",
+        "gap": "9px",
+        "marginBottom": "10px",
+        "marginLeft": "0px",
+        "backgroundColor": "rgba(0, 0, 0, 0)",
+        "borderTopLeftRadius": "0px",
+        "borderTopRightRadius": "0px",
+        "borderBottomLeftRadius": "0px",
+        "border": "0px",
+        "gridTemplateColumns": "none"
+      },
+      "userbubble": {
+        "padding": "13px 16px",
+        "fontSize": "16px",
+        "gap": "normal",
+        "marginBottom": "0px",
+        "marginLeft": "31px",
+        "backgroundColor": "rgb(245, 246, 246)",
+        "borderTopLeftRadius": "2px",
+        "borderTopRightRadius": "10px",
+        "borderBottomLeftRadius": "10px",
+        "border": "0px",
+        "gridTemplateColumns": "none"
+      },
+      "userbubbleBody": {
+        "padding": "13px 16px",
+        "marginLeft": "31px",
+        "backgroundColor": "rgb(245, 246, 246)",
+        "borderTopLeftRadius": "2px",
+        "borderTopRightRadius": "10px",
+        "borderBottomLeftRadius": "10px"
+      },
+      "agentBody": {
+        "marginLeft": "31px"
+      },
+      "dateLabel": {
+        "padding": "0px",
+        "fontSize": "10px",
+        "gap": "normal",
+        "marginBottom": "22px",
+        "marginLeft": "0px",
+        "backgroundColor": "rgba(0, 0, 0, 0)",
+        "borderTopLeftRadius": "0px",
+        "borderTopRightRadius": "0px",
+        "borderBottomLeftRadius": "0px",
+        "border": "0px",
+        "gridTemplateColumns": "none"
+      },
+      "dateLabelText": "2026年9月22日 · 实现与验证",
+      "groupCount": 1,
+      "messageCount": 32,
+      "brandmarkH": 22,
+      "avatarH": 25,
+      "modeLabel": "实现与验证",
+      "stateBadge": "空闲",
+      "headTime": "09:12",
+      "refchip": null,
+      "refchipText": null,
+      "imageCount": 0,
+      "imageBox": null,
+      "footer": null,
+      "footerText": null,
+      "toolCard": null,
+      "cards": null,
+      "card": null,
+      "cardLabels": [],
+      "band": {
+        "h": 51,
+        "padding": "12px 20px",
+        "toggle": "展开列表",
+        "expanded": "false",
+        "summary": "Subagent21 个运行中展开列表"
+      },
+      "executionCard": {
+        "h": 53,
+        "state": "空闲"
+      },
+      "empty": {
+        "present": false
+      }
+    },
+    "1180x900-executionCard": {
+      "h": 53,
+      "state": "空闲"
+    },
+    "1024x800": {
+      "viewport": {
+        "w": 1024,
+        "h": 800
+      },
+      "noHorizontalOverflow": true,
+      "messagesH": 281,
+      "messagesHShare": 0.352,
+      "messages": {
+        "padding": "20px",
+        "fontSize": "16px",
+        "gap": "normal",
+        "marginBottom": "0px",
+        "marginLeft": "0px",
+        "backgroundColor": "rgb(255, 255, 255)",
+        "borderTopLeftRadius": "10px",
+        "borderTopRightRadius": "10px",
+        "borderBottomLeftRadius": "10px",
+        "border": "1px",
+        "gridTemplateColumns": "none"
+      },
+      "message": {
+        "padding": "0px",
+        "fontSize": "16px",
+        "gap": "normal",
+        "marginBottom": "25px",
+        "marginLeft": "0px",
+        "backgroundColor": "rgba(0, 0, 0, 0)",
+        "borderTopLeftRadius": "0px",
+        "borderTopRightRadius": "0px",
+        "borderBottomLeftRadius": "0px",
+        "border": "0px",
+        "gridTemplateColumns": "none"
+      },
+      "messageHead": {
+        "padding": "0px",
+        "fontSize": "11px",
+        "gap": "9px",
+        "marginBottom": "10px",
+        "marginLeft": "0px",
+        "backgroundColor": "rgba(0, 0, 0, 0)",
+        "borderTopLeftRadius": "0px",
+        "borderTopRightRadius": "0px",
+        "borderBottomLeftRadius": "0px",
+        "border": "0px",
+        "gridTemplateColumns": "none"
+      },
+      "userbubble": {
+        "padding": "13px 16px",
+        "fontSize": "16px",
+        "gap": "normal",
+        "marginBottom": "0px",
+        "marginLeft": "31px",
+        "backgroundColor": "rgb(245, 246, 246)",
+        "borderTopLeftRadius": "2px",
+        "borderTopRightRadius": "10px",
+        "borderBottomLeftRadius": "10px",
+        "border": "0px",
+        "gridTemplateColumns": "none"
+      },
+      "userbubbleBody": {
+        "padding": "13px 16px",
+        "marginLeft": "31px",
+        "backgroundColor": "rgb(245, 246, 246)",
+        "borderTopLeftRadius": "2px",
+        "borderTopRightRadius": "10px",
+        "borderBottomLeftRadius": "10px"
+      },
+      "agentBody": {
+        "marginLeft": "31px"
+      },
+      "dateLabel": {
+        "padding": "0px",
+        "fontSize": "10px",
+        "gap": "normal",
+        "marginBottom": "22px",
+        "marginLeft": "0px",
+        "backgroundColor": "rgba(0, 0, 0, 0)",
+        "borderTopLeftRadius": "0px",
+        "borderTopRightRadius": "0px",
+        "borderBottomLeftRadius": "0px",
+        "border": "0px",
+        "gridTemplateColumns": "none"
+      },
+      "dateLabelText": "2026年9月22日 · 实现与验证",
+      "groupCount": 1,
+      "messageCount": 32,
+      "brandmarkH": 22,
+      "avatarH": 25,
+      "modeLabel": "实现与验证",
+      "stateBadge": "空闲",
+      "headTime": "09:12",
+      "refchip": null,
+      "refchipText": null,
+      "imageCount": 0,
+      "imageBox": null,
+      "footer": null,
+      "footerText": null,
+      "toolCard": null,
+      "cards": null,
+      "card": null,
+      "cardLabels": [],
+      "band": {
+        "h": 51,
+        "padding": "12px 20px",
+        "toggle": "展开列表",
+        "expanded": "false",
+        "summary": "Subagent21 个运行中展开列表"
+      },
+      "executionCard": {
+        "h": 53,
+        "state": "空闲"
+      },
+      "empty": {
+        "present": false
+      }
+    },
+    "1024x800-executionCard": {
+      "h": 53,
+      "state": "空闲"
+    },
+    "900x800": {
+      "viewport": {
+        "w": 900,
+        "h": 800
+      },
+      "noHorizontalOverflow": true,
+      "messagesH": 283,
+      "messagesHShare": 0.354,
+      "messages": {
+        "padding": "16px",
+        "fontSize": "16px",
+        "gap": "normal",
+        "marginBottom": "0px",
+        "marginLeft": "0px",
+        "backgroundColor": "rgb(255, 255, 255)",
+        "borderTopLeftRadius": "10px",
+        "borderTopRightRadius": "10px",
+        "borderBottomLeftRadius": "10px",
+        "border": "1px",
+        "gridTemplateColumns": "none"
+      },
+      "message": {
+        "padding": "0px",
+        "fontSize": "16px",
+        "gap": "normal",
+        "marginBottom": "25px",
+        "marginLeft": "0px",
+        "backgroundColor": "rgba(0, 0, 0, 0)",
+        "borderTopLeftRadius": "0px",
+        "borderTopRightRadius": "0px",
+        "borderBottomLeftRadius": "0px",
+        "border": "0px",
+        "gridTemplateColumns": "none"
+      },
+      "messageHead": {
+        "padding": "0px",
+        "fontSize": "11px",
+        "gap": "9px",
+        "marginBottom": "10px",
+        "marginLeft": "0px",
+        "backgroundColor": "rgba(0, 0, 0, 0)",
+        "borderTopLeftRadius": "0px",
+        "borderTopRightRadius": "0px",
+        "borderBottomLeftRadius": "0px",
+        "border": "0px",
+        "gridTemplateColumns": "none"
+      },
+      "userbubble": {
+        "padding": "13px 16px",
+        "fontSize": "16px",
+        "gap": "normal",
+        "marginBottom": "0px",
+        "marginLeft": "0px",
+        "backgroundColor": "rgb(245, 246, 246)",
+        "borderTopLeftRadius": "2px",
+        "borderTopRightRadius": "10px",
+        "borderBottomLeftRadius": "10px",
+        "border": "0px",
+        "gridTemplateColumns": "none"
+      },
+      "userbubbleBody": {
+        "padding": "13px 16px",
+        "marginLeft": "0px",
+        "backgroundColor": "rgb(245, 246, 246)",
+        "borderTopLeftRadius": "2px",
+        "borderTopRightRadius": "10px",
+        "borderBottomLeftRadius": "10px"
+      },
+      "agentBody": {
+        "marginLeft": "0px"
+      },
+      "dateLabel": {
+        "padding": "0px",
+        "fontSize": "10px",
+        "gap": "normal",
+        "marginBottom": "22px",
+        "marginLeft": "0px",
+        "backgroundColor": "rgba(0, 0, 0, 0)",
+        "borderTopLeftRadius": "0px",
+        "borderTopRightRadius": "0px",
+        "borderBottomLeftRadius": "0px",
+        "border": "0px",
+        "gridTemplateColumns": "none"
+      },
+      "dateLabelText": "2026年9月22日 · 实现与验证",
+      "groupCount": 1,
+      "messageCount": 32,
+      "brandmarkH": 22,
+      "avatarH": 25,
+      "modeLabel": "实现与验证",
+      "stateBadge": "空闲",
+      "headTime": "09:12",
+      "refchip": null,
+      "refchipText": null,
+      "imageCount": 0,
+      "imageBox": null,
+      "footer": null,
+      "footerText": null,
+      "toolCard": null,
+      "cards": null,
+      "card": null,
+      "cardLabels": [],
+      "band": {
+        "h": 49,
+        "padding": "11px 16px",
+        "toggle": "展开列表",
+        "expanded": "false",
+        "summary": "Subagent21 个运行中展开列表"
+      },
+      "executionCard": {
+        "h": 53,
+        "state": "空闲"
+      },
+      "empty": {
+        "present": false
+      }
+    },
+    "900x800-executionCard": {
+      "h": 53,
+      "state": "空闲"
+    }
+  },
+  "subagents": {
+    "1440x900": {
+      "collapsed": {
+        "bandH": 51,
+        "messagesH": 377,
+        "padding": "12px 20px",
+        "summary": "Subagent21 个运行中展开列表"
+      },
+      "expanded": {
+        "bandH": 120,
+        "messagesH": 309,
+        "padding": "12px 20px",
+        "gridTemplateColumns": "549px 549px 0px 0px 0px",
+        "columns": 2,
+        "cardH": 60,
+        "cardPadding": "10px 12px",
+        "labels": [
+          {
+            "label": "查看 查询链路分析，运行中",
+            "pressed": "false",
+            "live": false
+          },
+          {
+            "label": "查看 前端字段检查，已完成",
+            "pressed": "false",
+            "live": false
+          }
+        ]
+      }
+    },
+    "900x800": {
+      "collapsed": {
+        "bandH": 49,
+        "messagesH": 283,
+        "padding": "11px 16px",
+        "summary": "Subagent21 个运行中展开列表"
+      },
+      "expanded": {
+        "bandH": 185,
+        "messagesH": 147,
+        "padding": "11px 16px",
+        "gridTemplateColumns": "754px",
+        "columns": 1,
+        "cardH": 60,
+        "cardPadding": "10px 12px",
+        "labels": [
+          {
+            "label": "查看 查询链路分析，运行中",
+            "pressed": "false",
+            "live": false
+          },
+          {
+            "label": "查看 前端字段检查，已完成",
+            "pressed": "false",
+            "live": false
+          }
+        ]
+      }
+    }
+  },
+  "toolCard": {
+    "running": {
+      "h": 213,
+      "insideLog": true,
+      "rows": [
+        "4 个仓库工作副本查看文件 ↗",
+        "服务依赖与端口5 本地 · 2 远程"
+      ],
+      "steps": [
+        {
+          "text": "读取任务上下文完成",
+          "live": false
+        },
+        {
+          "text": "运行工具等待",
+          "live": true
+        }
+      ],
+      "summary": "执行中 · 正在执行",
+      "actions": [
+        "查看文件 ↗",
+        "查看浏览器",
+        "查看变更"
+      ]
+    },
+    "completed": {
+      "h": 213,
+      "insideLog": true,
+      "rows": [
+        "4 个仓库工作副本查看文件 ↗",
+        "服务依赖与端口5 本地 · 2 远程"
+      ],
+      "steps": [
+        {
+          "text": "读取任务上下文完成",
+          "live": false
+        },
+        {
+          "text": "运行工具等待",
+          "live": false
+        }
+      ],
+      "summary": "✓ 执行完成",
+      "actions": [
+        "查看文件 ↗",
+        "查看浏览器",
+        "查看变更"
+      ]
+    },
+    "completedMessagesH": 336,
+    "runningMessagesH": 207,
+    "failed": {
+      "h": 281,
+      "insideLog": true,
+      "rows": [
+        "4 个仓库工作副本查看文件 ↗",
+        "服务依赖与端口5 本地 · 2 远程"
+      ],
+      "steps": [
+        {
+          "text": "安装依赖完成",
+          "live": false
+        },
+        {
+          "text": "启动 saas-web完成",
+          "live": false
+        },
+        {
+          "text": "构建 front-monorepo失败",
+          "live": false
+        },
+        {
+          "text": "运行冒烟检查跳过",
+          "live": false
+        }
+      ],
+      "summary": "✗ 构建失败，已保留现场失败范围：构建步骤：front-monorepo web 包编译失败",
+      "actions": [
+        "查看文件 ↗",
+        "查看浏览器",
+        "查看变更"
+      ]
+    },
+    "failedMessagesH": 315
+  },
+  "empty": {
+    "present": true,
+    "h": 150,
+    "text": "π准备好开始了描述这个任务的目标，或用 @ 引用当前任务代码。",
+    "brandmark": true
+  },
+  "readOnly": {
+    "mode": "阅读与分析",
+    "badge": "只读",
+    "messages": 32,
+    "executionCard": {
+      "h": 53,
+      "state": "空闲"
+    }
+  },
+  "referenceMessage": {
+    "viewport": {
+      "w": 1440,
+      "h": 900
+    },
+    "noHorizontalOverflow": true,
+    "messagesH": 336,
+    "messagesHShare": 0.373,
+    "messages": {
+      "padding": "26px 28px 10px",
+      "fontSize": "16px",
+      "gap": "normal",
+      "marginBottom": "0px",
+      "marginLeft": "0px",
+      "backgroundColor": "rgb(255, 255, 255)",
+      "borderTopLeftRadius": "10px",
+      "borderTopRightRadius": "10px",
+      "borderBottomLeftRadius": "10px",
+      "border": "1px",
+      "gridTemplateColumns": "none"
+    },
+    "message": {
+      "padding": "0px",
+      "fontSize": "16px",
+      "gap": "normal",
+      "marginBottom": "25px",
+      "marginLeft": "0px",
+      "backgroundColor": "rgba(0, 0, 0, 0)",
+      "borderTopLeftRadius": "0px",
+      "borderTopRightRadius": "0px",
+      "borderBottomLeftRadius": "0px",
+      "border": "0px",
+      "gridTemplateColumns": "none"
+    },
+    "messageHead": {
+      "padding": "0px",
+      "fontSize": "11px",
+      "gap": "9px",
+      "marginBottom": "10px",
+      "marginLeft": "0px",
+      "backgroundColor": "rgba(0, 0, 0, 0)",
+      "borderTopLeftRadius": "0px",
+      "borderTopRightRadius": "0px",
+      "borderBottomLeftRadius": "0px",
+      "border": "0px",
+      "gridTemplateColumns": "none"
+    },
+    "userbubble": {
+      "padding": "13px 16px",
+      "fontSize": "16px",
+      "gap": "normal",
+      "marginBottom": "0px",
+      "marginLeft": "31px",
+      "backgroundColor": "rgb(245, 246, 246)",
+      "borderTopLeftRadius": "2px",
+      "borderTopRightRadius": "10px",
+      "borderBottomLeftRadius": "10px",
+      "border": "0px",
+      "gridTemplateColumns": "none"
+    },
+    "userbubbleBody": {
+      "padding": "13px 16px",
+      "marginLeft": "31px",
+      "backgroundColor": "rgb(245, 246, 246)",
+      "borderTopLeftRadius": "2px",
+      "borderTopRightRadius": "10px",
+      "borderBottomLeftRadius": "10px"
+    },
+    "agentBody": {
+      "marginLeft": "31px"
+    },
+    "dateLabel": {
+      "padding": "0px",
+      "fontSize": "10px",
+      "gap": "normal",
+      "marginBottom": "22px",
+      "marginLeft": "0px",
+      "backgroundColor": "rgba(0, 0, 0, 0)",
+      "borderTopLeftRadius": "0px",
+      "borderTopRightRadius": "0px",
+      "borderBottomLeftRadius": "0px",
+      "border": "0px",
+      "gridTemplateColumns": "none"
+    },
+    "dateLabelText": "2026年9月22日 · 实现与验证",
+    "groupCount": 2,
+    "messageCount": 34,
+    "brandmarkH": 22,
+    "avatarH": 25,
+    "modeLabel": "实现与验证",
+    "stateBadge": "空闲",
+    "headTime": "09:12",
+    "refchip": {
+      "padding": "1px 5px",
+      "fontSize": "10px",
+      "gap": "5px",
+      "marginBottom": "0px",
+      "marginLeft": "0px",
+      "backgroundColor": "rgb(237, 239, 243)",
+      "borderTopLeftRadius": "4px",
+      "borderTopRightRadius": "4px",
+      "borderBottomLeftRadius": "4px",
+      "border": "1px",
+      "gridTemplateColumns": "none"
+    },
+    "refchipText": "@ spec.md",
+    "imageCount": 1,
+    "imageBox": {
+      "w": 200,
+      "h": 125,
+      "objectFit": "contain",
+      "background": "rgb(237, 240, 244)",
+      "radius": "7px"
+    },
+    "footer": {
+      "padding": "0px",
+      "fontSize": "10px",
+      "gap": "normal",
+      "marginBottom": "0px",
+      "marginLeft": "0px",
+      "backgroundColor": "rgba(0, 0, 0, 0)",
+      "borderTopLeftRadius": "0px",
+      "borderTopRightRadius": "0px",
+      "borderBottomLeftRadius": "0px",
+      "border": "0px",
+      "gridTemplateColumns": "none"
+    },
+    "footerText": "Anthropic 官方 / Claude Sonnet",
+    "toolCard": {
+      "h": 213,
+      "insideLog": true,
+      "rows": [
+        "4 个仓库工作副本查看文件 ↗",
+        "服务依赖与端口5 本地 · 2 远程"
+      ],
+      "steps": [
+        {
+          "text": "读取任务上下文完成",
+          "live": false
+        },
+        {
+          "text": "运行工具等待",
+          "live": false
+        }
+      ],
+      "summary": "✓ 执行完成",
+      "actions": [
+        "查看文件 ↗",
+        "查看浏览器",
+        "查看变更"
+      ]
+    },
+    "cards": null,
+    "card": null,
+    "cardLabels": [],
+    "band": {
+      "h": 51,
+      "padding": "12px 20px",
+      "toggle": "展开列表",
+      "expanded": "false",
+      "summary": "Subagent21 个运行中展开列表"
+    },
+    "executionCard": {
+      "h": 94,
+      "state": "已完成"
+    },
+    "empty": {
+      "present": false
+    }
+  },
+  "assertions": {
+    "checked": 85,
+    "violations": []
+  },
+  "prototypeEquality": [
+    {
+      "label": "messages padding",
+      "actual": "26px 28px 10px",
+      "expected": "26px 28px 10px",
+      "equal": true
+    },
+    {
+      "label": "message margin-bottom",
+      "actual": "25px",
+      "expected": "25px",
+      "equal": true
+    },
+    {
+      "label": "message-head gap",
+      "actual": "9px",
+      "expected": "9px",
+      "equal": true
+    },
+    {
+      "label": "message-head font",
+      "actual": "11px",
+      "expected": "11px",
+      "equal": true
+    },
+    {
+      "label": "userbubble padding",
+      "actual": "13px 16px",
+      "expected": "13px 16px",
+      "equal": true
+    },
+    {
+      "label": "userbubble background",
+      "actual": "rgb(245, 246, 246)",
+      "expected": "rgb(245, 246, 246)",
+      "equal": true
+    },
+    {
+      "label": "userbubble top-left radius",
+      "actual": "2px",
+      "expected": "2px",
+      "equal": true
+    },
+    {
+      "label": "userbubble top-right radius",
+      "actual": "10px",
+      "expected": "10px",
+      "equal": true
+    },
+    {
+      "label": "brandmark height",
+      "actual": "22px",
+      "expected": "22px",
+      "equal": true
+    },
+    {
+      "label": "avatar height",
+      "actual": "25px",
+      "expected": "25px",
+      "equal": true
+    },
+    {
+      "label": "date-label font",
+      "actual": "10px",
+      "expected": "10px",
+      "equal": true
+    }
+  ],
+  "recovery": {
+    "bandBefore": 78,
+    "bandCollapsed": 51,
+    "bandExpanded": 120,
+    "messagesBefore": 349,
+    "messagesCollapsed": 377,
+    "messagesExpanded": 309
+  },
+  "s3CrossCheck": {
+    "approval": {
+      "messagesH": 346,
+      "floor": 340,
+      "before": null
+    },
+    "expired": {
+      "messagesH": 406,
+      "floor": 340,
+      "before": null
+    },
+    "running": {
+      "messagesH": 305,
+      "floor": 300,
+      "before": null
+    },
+    "failed": {
+      "messagesH": 315,
+      "floor": 300,
+      "before": null
+    },
+    "failed-readonly": {
+      "messagesH": 315,
+      "floor": 300,
+      "before": null
+    },
+    "completed": {
+      "messagesH": 336,
+      "floor": 300,
+      "before": null
+    },
+    "stopped": {
+      "messagesH": 434,
+      "floor": 300,
+      "before": null
+    },
+    "rejected": {
+      "messagesH": 434,
+      "floor": 300,
+      "before": null
+    },
+    "idle-other-busy": {
+      "messagesH": 377,
+      "floor": 300,
+      "before": null
+    }
+  }
+}
