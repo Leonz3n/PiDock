@@ -13,6 +13,10 @@
       "messagesH": 384,
       "messagesShare": 0.427,
       "composerH": 143,
+      "cardH": 53,
+      "cardText": "空闲 「部署审查」正在执行或等待确认；本会话可编辑草稿，待其结束后再执行。",
+      "cardFreeGap": 6,
+      "cardFreeMessagesH": 443,
       "sectionH": 683,
       "tabStrip": {
         "scrollWidth": 1014,
@@ -64,6 +68,10 @@
       "messagesH": 384,
       "messagesShare": 0.427,
       "composerH": 143,
+      "cardH": 53,
+      "cardText": "空闲 「部署审查」正在执行或等待确认；本会话可编辑草稿，待其结束后再执行。",
+      "cardFreeGap": 6,
+      "cardFreeMessagesH": 443,
       "sectionH": 683,
       "tabStrip": {
         "scrollWidth": 505,
@@ -115,6 +123,10 @@
       "messagesH": 384,
       "messagesShare": 0.427,
       "composerH": 143,
+      "cardH": 53,
+      "cardText": "空闲 「部署审查」正在执行或等待确认；本会话可编辑草稿，待其结束后再执行。",
+      "cardFreeGap": 6,
+      "cardFreeMessagesH": 443,
       "sectionH": 683,
       "tabStrip": {
         "scrollWidth": 505,
@@ -166,6 +178,10 @@
       "messagesH": 384,
       "messagesShare": 0.427,
       "composerH": 143,
+      "cardH": 53,
+      "cardText": "空闲 「部署审查」正在执行或等待确认；本会话可编辑草稿，待其结束后再执行。",
+      "cardFreeGap": 6,
+      "cardFreeMessagesH": 443,
       "sectionH": 683,
       "tabStrip": {
         "scrollWidth": 854,
@@ -217,6 +233,10 @@
       "messagesH": 384,
       "messagesShare": 0.427,
       "composerH": 143,
+      "cardH": 53,
+      "cardText": "空闲 「部署审查」正在执行或等待确认；本会话可编辑草稿，待其结束后再执行。",
+      "cardFreeGap": 6,
+      "cardFreeMessagesH": 443,
       "sectionH": 683,
       "tabStrip": {
         "scrollWidth": 414,
@@ -268,6 +288,10 @@
       "messagesH": 384,
       "messagesShare": 0.427,
       "composerH": 143,
+      "cardH": 53,
+      "cardText": "空闲 「部署审查」正在执行或等待确认；本会话可编辑草稿，待其结束后再执行。",
+      "cardFreeGap": 6,
+      "cardFreeMessagesH": 443,
       "sectionH": 683,
       "tabStrip": {
         "scrollWidth": 414,
@@ -319,6 +343,10 @@
       "messagesH": 284,
       "messagesShare": 0.355,
       "composerH": 143,
+      "cardH": 53,
+      "cardText": "空闲 「部署审查」正在执行或等待确认；本会话可编辑草稿，待其结束后再执行。",
+      "cardFreeGap": 6,
+      "cardFreeMessagesH": 343,
       "sectionH": 583,
       "tabStrip": {
         "scrollWidth": 632,
@@ -370,6 +398,10 @@
       "messagesH": 251,
       "messagesShare": 0.314,
       "composerH": 176,
+      "cardH": 53,
+      "cardText": "空闲 「部署审查」正在执行或等待确认；本会话可编辑草稿，待其结束后再执行。",
+      "cardFreeGap": 6,
+      "cardFreeMessagesH": 310,
       "sectionH": 583,
       "tabStrip": {
         "scrollWidth": 306,
@@ -421,6 +453,10 @@
       "messagesH": 251,
       "messagesShare": 0.314,
       "composerH": 176,
+      "cardH": 53,
+      "cardText": "空闲 「部署审查」正在执行或等待确认；本会话可编辑草稿，待其结束后再执行。",
+      "cardFreeGap": 6,
+      "cardFreeMessagesH": 310,
       "sectionH": 583,
       "tabStrip": {
         "scrollWidth": 306,
@@ -492,5 +528,12 @@
     "composerH": 167,
     "workbenchW": null,
     "eyebrow": "TASK WORKSPACE #001"
+  },
+  "assertions": {
+    "checked": 3,
+    "violations": [],
+    "floor": {
+      "cardFree": 400
+    }
   }
 }

@@ -28,6 +28,17 @@ const VIEWPORTS = [
   { name: "1024x800", width: 1024, height: 800 },
 ];
 
+/**
+ * The ≥400px message-area floor from [UI 对齐 03] (#27) is measured in the state
+ * it was accepted in: **no execution status card on screen**. [UI 对齐 05] (#29)
+ * added the cross-session card (an idle session shows it while another session
+ * of the same task is running or waiting), and that card legitimately takes its
+ * height out of the message area, where the tiered 340/300px floors apply
+ * instead. So this script records the card per state and asserts the *equivalent
+ * card-free* height, which is what stays comparable with #27.
+ */
+const MESSAGES_FLOOR_NO_CARD = 400;
+
 const measure = (page) =>
   page.evaluate(() => {
     const box = (element) => (element ? Math.round(element.getBoundingClientRect().height) : null);
@@ -38,6 +49,13 @@ const measure = (page) =>
     // The tab strip is `overflow-hidden`, so a clipped tab never shows up in
     // `documentElement.scrollWidth`; measure the strip itself (#27 review note).
     const tabStrip = document.querySelector('[data-testid="session-tab-strip"]');
+    // [UI 对齐 05] (#29): the cross-session execution card shares this flex
+    // column, so a state that carries one cannot be compared with #27's numbers
+    // without saying so.
+    const card = document.querySelector('[aria-label="会话执行状态"]');
+    const gap = section ? Number.parseFloat(getComputedStyle(section).rowGap) : Number.NaN;
+    const cardH = box(card);
+    const messagesH = box(messages);
     const rows = [...(section?.children ?? [])].map((element) => ({
       tag: element.tagName.toLowerCase(),
       testid: element.getAttribute("data-testid") ?? null,
@@ -50,9 +68,16 @@ const measure = (page) =>
       scrollWidth: document.documentElement.scrollWidth,
       clientWidth: document.documentElement.clientWidth,
       headerH: box(header),
-      messagesH: box(messages),
+      messagesH,
       messagesShare: messages ? Number((messages.getBoundingClientRect().height / innerHeight).toFixed(3)) : null,
       composerH: box(composer),
+      // The card's own height and the equivalent no-card message height, so a
+      // reader (and the assertion below) can tell the two bases apart.
+      cardH,
+      cardText: card ? (card.innerText ?? "").replace(/\s+/g, " ").slice(0, 40) : null,
+      cardFreeGap: cardH === null ? null : (Number.isFinite(gap) ? gap : 0),
+      cardFreeMessagesH:
+        messagesH === null ? null : Math.round(messagesH + (cardH ?? 0) + (cardH === null ? 0 : Number.isFinite(gap) ? gap : 0)),
       sectionH: box(section),
       tabStrip: tabStrip
         ? {
@@ -155,13 +180,40 @@ await prototypePage.screenshot({ path: `${OUT}/prototype/1440-prototype-A.png` }
 await prototypeContext.close();
 
 await browser.close();
+
+// The cross-reference assertion the review of [UI 对齐 08] (#32) asked for: the
+// card-free message height must stay at or above #27's floor. Without it the S2
+// number can slide (or change basis) with every later slice and still look
+// green — which is exactly what happened between the refresh in `b410e6b` and
+// this round's measurement.
+report.assertions = { checked: 0, violations: [], floor: { cardFree: MESSAGES_FLOOR_NO_CARD } };
+for (const [key, value] of Object.entries(report.states)) {
+  // The floor was accepted for the 1440×900 column; the narrower tiers sit in an
+  // 800px-tall viewport and are recorded, not floored ([UI 对齐 05] #29 ruling).
+  if (!key.startsWith("1440x900")) continue;
+  report.assertions.checked += 1;
+  if (value.cardFreeMessagesH !== null && value.cardFreeMessagesH < MESSAGES_FLOOR_NO_CARD) {
+    report.assertions.violations.push(
+      `${key}: card-free message area ${value.cardFreeMessagesH}px < the ${MESSAGES_FLOOR_NO_CARD}px floor from [UI 对齐 03] (#27)`,
+    );
+  }
+}
+
 await writeFile(`${OUT}/vertical-budget.json`, `${JSON.stringify(report, null, 2)}\n`);
 for (const [key, value] of Object.entries(report.states)) {
   console.log(
-    `${key}: header=${value.headerH} messages=${value.messagesH} (${value.messagesShare}) composer=${value.composerH} overflow=${!value.noHorizontalOverflow} tabStripClip=${value.tabStrip ? !value.tabStrip.noClip : "n/a"}`,
+    `${key}: header=${value.headerH} messages=${value.messagesH} (${value.messagesShare}) card=${value.cardH ?? "-"} ` +
+      `cardFree=${value.cardFreeMessagesH} composer=${value.composerH} overflow=${!value.noHorizontalOverflow} ` +
+      `tabStripClip=${value.tabStrip ? !value.tabStrip.noClip : "n/a"}`,
   );
 }
 console.log(`prototype A 1440x900: ${JSON.stringify(report.prototypeA)}`);
 console.log(`menu: ${JSON.stringify(report.menuItems)}`);
 console.log(`directory header: ${JSON.stringify(report.directoryHeader)}`);
+console.log(
+  `assertions: ${report.assertions.violations.length === 0 ? "ok" : "FAILED"} ` +
+    `(${report.assertions.checked} card-free floor checks at ${MESSAGES_FLOOR_NO_CARD}px)`,
+);
+for (const violation of report.assertions.violations) console.log(`  - ${violation}`);
 console.log(`wrote ${OUT}/vertical-budget.json`);
+process.exit(report.assertions.violations.length === 0 ? 0 : 1);
