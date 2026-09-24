@@ -23,7 +23,11 @@ describe("PiDock renderer flows", () => {
     expect(preview).toHaveTextContent("载荷版本：");
     expect(screen.queryByText(/正在执行 deploy:staging/)).not.toBeInTheDocument();
     await user.click(within(card).getByRole("button", { name: "标记过期" }));
-    expect(await screen.findByText("确认已过期，未执行。")).toBeInTheDocument();
+    // 过期不执行：该请求不再是待确认，卡片转去审阅本会话的另一条请求；结果行只描述与
+    // 当前状态对应的记录（P2-A），所以这里断言的是 Host 状态而不是一条借用来的文案。
+    await waitFor(() =>
+      expect(screen.getByTestId("execution-approval-preview")).toHaveTextContent("待批准：执行数据库迁移"),
+    );
     expect(screen.queryByText(/正在执行 deploy:staging/)).not.toBeInTheDocument();
   });
 

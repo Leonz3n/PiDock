@@ -1,4 +1,4 @@
-import type { Approval, RunRecord, RunState, Session } from "../data/types";
+import type { Approval, ApprovalStatus, RunRecord, RunState, Session } from "../data/types";
 import { runStateLabel } from "./runState";
 
 /**
@@ -64,6 +64,33 @@ export function executionStateOf(input: {
   if (input.pendingApproval) return "approval";
   if (input.record && input.record.state !== "idle") return input.record.state;
   return input.sessionRunState;
+}
+
+/**
+ * 结果行只描述与卡片状态对应的那条请求：状态是「已拒绝」「确认已过期」时给最近一条同状态的
+ * 记录，状态是「执行中」时给正在执行的那条批准记录，其余状态没有对应记录。
+ *
+ * 取「数组里第一条非待确认」会张冠李戴：卡片写着「执行中」，行里却报另一条早就被拒绝的请求
+ * （[UI 对齐 05] #29 review P2-A）。最近一条按 `requestedAt` 判定——`Approval` 没有解决时间戳，
+ * 而同一会话的请求只会按提交顺序被审阅。
+ */
+export function outcomeApprovalFor(
+  approvals: readonly Approval[],
+  taskId: string,
+  sessionId: string,
+  state: RunState,
+): Approval | undefined {
+  const status: ApprovalStatus | undefined =
+    state === "rejected" ? "rejected" : state === "expired" ? "expired" : state === "running" ? "approved" : undefined;
+  if (!status) return undefined;
+  return approvals
+    .filter((item) => item.taskId === taskId && item.sessionId === sessionId && item.status === status)
+    .reduce<Approval | undefined>((latest, item) => {
+      if (latest === undefined) return item;
+      const itemAt = Date.parse(item.requestedAt);
+      const latestAt = Date.parse(latest.requestedAt);
+      return Number.isNaN(itemAt) || Number.isNaN(latestAt) ? latest : itemAt > latestAt ? item : latest;
+    }, undefined);
 }
 
 /**
