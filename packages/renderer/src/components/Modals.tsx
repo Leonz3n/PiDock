@@ -400,6 +400,10 @@ export function Modals() {
     return <ContextModal taskId={modal.taskId} sessionId={modal.sessionId} onClose={closeModal} />;
   }
 
+  if (modal.type === "attachment-preview") {
+    return <AttachmentPreviewModal label={modal.label} detail={modal.detail} url={modal.url} onClose={closeModal} />;
+  }
+
   if (modal.type === "capability-detail") {
     return <CapabilityDetailModal capabilityId={modal.capabilityId} onClose={closeModal} />;
   }
@@ -574,6 +578,7 @@ function RenameSessionModal({
         <Button
           size="sm"
           variant="primary"
+          data-testid="session-name-save"
           onClick={async () => {
             const next = value.trim();
             if (!next) return pushToast("请输入名称");
@@ -588,6 +593,7 @@ function RenameSessionModal({
       <Field label="名称">
         <input
           aria-label="会话名称"
+          data-testid="session-name-input"
           value={value}
           onChange={(event) => setValue(event.target.value)}
           className="rounded-md border border-line px-2 py-1.5 text-sm"
@@ -1700,6 +1706,25 @@ function ThinkingPickerModal({ taskId, sessionId, onClose }: { taskId: string; s
         </Button>
         <span className="text-[11px] text-muted">切换档位只影响后续请求；上下文压缩不会减少累计 Token。</span>
       </div>
+    </Modal>
+  );
+}
+
+/**
+ * The prototype's attachment lightbox (`attachments.js` opens `modal()` from a
+ * clicked chip). The chip stays compact in the strip — a 65px-tall card there
+ * would cost the conversation the budget the parent floors keep ([UI 对齐 06]
+ * #30 review P2-B) — while the full image and its source line open here.
+ */
+function AttachmentPreviewModal({ label, detail, url, onClose }: { label: string; detail: string; url?: string; onClose: () => void }) {
+  return (
+    <Modal title={label} onClose={onClose}>
+      {url !== undefined ? (
+        <img src={url} alt={label} className="max-h-[50vh] rounded-md border border-line bg-soft object-contain" data-testid="attachment-preview-image" />
+      ) : null}
+      <p className="mt-2 text-[11px] text-muted" role="status" data-testid="attachment-preview-detail">
+        {detail}
+      </p>
     </Modal>
   );
 }

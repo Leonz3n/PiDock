@@ -264,7 +264,7 @@ describe("composer attachments", () => {
     const attachments = await screen.findByTestId("composer-attachments");
     expect(within(attachments).getByText("notes.txt")).toBeInTheDocument();
 
-    await user.click(within(attachments).getByRole("button", { name: "移除附件 notes.txt" }));
+    await user.click(within(attachments).getByRole("button", { name: "移除 notes.txt" }));
     await waitFor(() => expect(screen.queryByTestId("composer-attachments")).not.toBeInTheDocument());
   });
 
