@@ -188,9 +188,10 @@ await browser.close();
 // this round's measurement.
 report.assertions = { checked: 0, violations: [], floor: { cardFree: MESSAGES_FLOOR_NO_CARD } };
 for (const [key, value] of Object.entries(report.states)) {
-  // The floor was accepted for the 1440×900 column; the narrower tiers sit in an
-  // 800px-tall viewport and are recorded, not floored ([UI 对齐 05] #29 ruling).
-  if (!key.startsWith("1440x900")) continue;
+  // The floor was accepted for a 900px-tall window ([UI 对齐 03] #27 measured it
+  // at 1440x900). Every 900px-tall tier is therefore floored; the 800px-tall
+  // tier is recorded, not floored ([UI 对齐 05] #29 ruling).
+  if (!key.includes("x900")) continue;
   report.assertions.checked += 1;
   if (value.cardFreeMessagesH !== null && value.cardFreeMessagesH < MESSAGES_FLOOR_NO_CARD) {
     report.assertions.violations.push(

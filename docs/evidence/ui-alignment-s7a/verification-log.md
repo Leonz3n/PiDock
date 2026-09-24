@@ -56,7 +56,7 @@ pnpm turbo run typecheck test build lint --force
 | 脚本 | 结果 | 相对已提交快照的数值变化 |
 | --- | --- | --- |
 | `ui-alignment-s1/verify-shell-facts.mjs` | exit 0 | 仅导航相对时间文案（`1 天前 → 2 天前`） |
-| `ui-alignment-s2/capture-vertical.mjs` | exit 0（**本片起自带断言：3 条 card-free floor 检查 @400px**，见其日志 §2.9） | `1440-closed`：`headerH 106 → 103`、`messagesH 408 → 384`（**含 53px 跨会话执行卡**，等效去卡 **443**）、`composerH 145 → 143`、会话标签行 `32 → 28`、子代理条 `78 → 51` |
+| `ui-alignment-s2/capture-vertical.mjs` | exit 0（**本片起自带断言：6 条 card-free floor 检查 @400px**——1440 与 1280 两个 900px 高档位，见其日志 §2.9） | `1440-closed`：`headerH 106 → 103`、`messagesH 408 → 384`（**含 53px 跨会话执行卡**，等效去卡 **443**）、`composerH 145 → 143`、会话标签行 `32 → 28`、子代理条 `78 → 51` |
 | `ui-alignment-s5/capture-tool-rail.mjs` | exit 0 | `tool-rail.json` 数值零变化（工具区与徽标无关）；仅截图重绘 |
 | `ui-alignment-s3/capture-execution-card.mjs` | **ok（42 个实测状态）** | 会话标签内层 `strip.h 32 → 27`、最长标签 `w 173 → 160`；9 个卡片状态的 `messagesH` **各 +7px**（approval 346 → 353、running 305 → 312、failed 315 → 322、completed 336 → 343…），无一下降 |
 | `ui-alignment-s4/capture-composer.mjs` | **ok（22 个实测状态）** | 每档 `+7px`：`cardFree 436 → 443`、`readOnly 353 → 360`、`unsupportedImage 293 → 300`、`heavyAttachments 308 → 315`、`card-approval 346 → 353`、`card-failed` / `card-failed-readonly 315 → 322`；`workspaceH 680 → 683` |

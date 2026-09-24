@@ -530,7 +530,7 @@
     "eyebrow": "TASK WORKSPACE #001"
   },
   "assertions": {
-    "checked": 3,
+    "checked": 6,
     "violations": [],
     "floor": {
       "cardFree": 400

@@ -104,9 +104,9 @@ node docs/evidence/ui-alignment-s2/capture-vertical.mjs
 2. **与 #27 的 ≥400px 的关系**：#27 的下限是在**无执行状态卡**的状态被接受的，等效去卡值 **443px ≥ 400px**（对比 #27 时点的 408px 是 **+35px**），改善来自后续切片的区块压缩（子代理条 78 → 51px、会话标签行 32 → 28px、输入区 145 → 143px；三处均取自本节同 harness 的 rows 实测）。含卡片时按 #29 的双档（审批/过期 ≥340px、带既有 chrome ≥300px）判定，见 `ui-alignment-s3/verification-log.md`。
 3. **`1440x900 one/all` 与 `closed` 同高是正确行为**，不是面板没打开：父侧独立实测开面板后对话列宽 **1146 → 637px**（工具区确实打开），而 1440 档子代理卡在两种列宽下仍各排 2 列、条高不变；1024 档两者仍不同（284 vs 251）。
 
-**下限断言（本轮新增）**：脚本对 `1440x900-*` 三档断言 `cardFreeMessagesH ≥ 400`，违例即写入 `assertions.violations` 并 `process.exit(1)`；JSON 里新增 `assertions = { checked: 3, violations: [], floor: { cardFree: 400 } }`。
+**下限断言（本轮新增）**：脚本对**所有 900px 高的档位**（`1440x900-*` 与 `1280x900-*`，共 **6** 个状态）断言 `cardFreeMessagesH ≥ 400`，违例即写入 `assertions.violations` 并 `process.exit(1)`；JSON 里新增 `assertions = { checked: 6, violations: [], floor: { cardFree: 400 } }`。800px 高的 `1024x800-*` 只记录不断言（该档去卡值 343 / 310，不在 #27 的口径内；#27 的下限是在 900px 高的窗口上接受的）。
 
-负向验证（证明断言真的会失败，而不是永远绿）：把脚本复制到临时目录、把 `MESSAGES_FLOOR_NO_CARD` 改成 `500` 后重跑 → `exit 1`，输出三条 `card-free message area 443px < the 500px floor`。
+负向验证（证明断言真的会失败，而不是永远绿）：把脚本复制到同目录临时文件、把 `MESSAGES_FLOOR_NO_CARD` 改成 `500` 后重跑 → `exit 1`，输出**六条** `card-free message area 443px < the 500px floor`；验证后已删除临时文件并重跑还原 JSON。
 
 此前这条链上没有任何断言（`b410e6b` 的刷新把 408 改成 384，脚本仍然 exit 0），这正是本轮补断言的原因。
 
