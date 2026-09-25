@@ -40,6 +40,14 @@ describe("persisted task inventory", () => {
     expect(JSON.stringify(rows)).not.toContain(dir);
   });
 
+  it("does not falsely discover override-root tasks outside the configured default root", () => {
+    const configured = root();
+    const override = root();
+    task(join(override, "task-abcdef12"), { root: override });
+    expect(listPersistedTasks(configured)).toEqual([]);
+    expect(listPersistedTasks(override)).toHaveLength(1);
+  });
+
   it("rejects corrupt, mismatched and duplicate records instead of displaying a partial list", () => {
     const dir = root();
     task(join(dir, "task-abcdef12"));

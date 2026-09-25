@@ -19,6 +19,7 @@ export interface PidockBridge {
   getSecurityState?: () => { sandboxed: boolean; contextIsolated: boolean };
   getVersions?: () => Promise<unknown>;
   hostPing?: (workspaceId?: string) => Promise<unknown>;
+  listTasks?: () => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
   taskOp?: (taskId: string, op: string, payload?: Record<string, unknown>) => Promise<ShellTaskOpResult>;
 }
 
