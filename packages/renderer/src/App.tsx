@@ -1,4 +1,6 @@
 import { useEffect } from "react";
+import { DesktopInventory } from "./components/DesktopInventory";
+import { desktopMode } from "./data/desktopInventory";
 import { Modals } from "./components/Modals";
 import { Shell } from "./components/Shell";
 import { ToastStack } from "./components/ui";
@@ -8,6 +10,11 @@ import { useNavigationStore } from "./stores/navigation";
 import { useUiStore } from "./stores/ui";
 
 export function App() {
+  if (desktopMode(window.pidock, navigator.userAgent)) return <DesktopInventory />;
+  return <DemoApp />;
+}
+
+function DemoApp() {
   const refresh = useHostStore((state) => state.refresh);
   const attach = useEventsStore((state) => state.attach);
   const syncFromLocation = useNavigationStore((state) => state.syncFromLocation);
