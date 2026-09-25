@@ -55,6 +55,7 @@ export interface ExpectedTaskIdentity {
 export type ShellInvokeMethod =
   | "shell/getVersions"
   | "shell/hostPing"
+  | "shell/listTasks"
   | "shell/taskOp";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -177,11 +178,11 @@ export function validateShellInvocationPayload(
   payload: unknown,
   senderWorkspaceId: string,
 ): { workspaceId: string } {
-  if (method === "shell/getVersions") {
+  if (method === "shell/getVersions" || method === "shell/listTasks") {
     if (payload !== undefined) {
       throw new TrustDomainViolation(
         "invalid-payload",
-        "shell/getVersions does not accept a payload",
+        `${method} does not accept a payload`,
       );
     }
     return { workspaceId: senderWorkspaceId };

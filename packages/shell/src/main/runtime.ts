@@ -24,6 +24,7 @@ import {
 } from "./task-provision.js";
 import { readTaskRecordOnDisk } from "../host/task-store.js";
 import { defaultTasksRoot } from "./task-resolver.js";
+import { listPersistedTasks } from "./task-inventory.js";
 import type { BrowserPerformResult, BrowserRequestParams, HostTaskOp, HostTaskResult, TaskOpOrigin } from "../rpc/protocol.js";
 import { isHostTaskOp } from "../rpc/protocol.js";
 import { TaskBrowser } from "./task-browser.js";
@@ -692,6 +693,17 @@ export function registerIpc(
       return { ok: true as const, payload: result };
     } catch (error) {
       return trustFailureEnvelope(error);
+    }
+  });
+
+  ipcMain.handle("shell/listTasks", async (event, payload?: unknown) => {
+    try {
+      const sender = registry.requireShellSender(event);
+      validateShellInvocationPayload("shell/listTasks", payload, sender.workspaceId);
+      return { ok: true as const, payload: { tasks: listPersistedTasks(defaultTasksRoot()) } };
+    } catch (error) {
+      if (error instanceof TrustDomainViolation) return trustFailureEnvelope(error);
+      return { ok: false as const, error: "任务记录不可读取，请检查本机任务目录后重试" };
     }
   });
 
