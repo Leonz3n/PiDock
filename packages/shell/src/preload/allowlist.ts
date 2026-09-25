@@ -13,6 +13,7 @@ export const PRELOAD_BRIDGE_NAME = "pidock" as const;
 export const ALLOWED_INVOKE_CHANNELS = [
   "shell/getVersions",
   "shell/hostPing",
+  "shell/listTasks",
   "shell/taskOp",
 ] as const;
 

@@ -192,6 +192,13 @@ describe("validateShellInvocationPayload", () => {
     ).toThrow("invalid shell/hostPing payload");
   });
 
+  it("does not permit renderer paths or workspace overrides for task inventory", () => {
+    expect(validateShellInvocationPayload("shell/listTasks", undefined, "workspace-a")).toEqual({ workspaceId: "workspace-a" });
+    for (const payload of [{ root: "/tmp/elsewhere" }, { workspaceId: "workspace-b" }, {}]) {
+      expect(() => validateShellInvocationPayload("shell/listTasks", payload, "workspace-a")).toThrow("does not accept a payload");
+    }
+  });
+
   it("does not permit a payload for shell/getVersions", () => {
     expect(() =>
       validateShellInvocationPayload(
