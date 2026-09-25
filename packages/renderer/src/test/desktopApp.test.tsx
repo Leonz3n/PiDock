@@ -43,6 +43,15 @@ describe("Desktop boot without demo fallback", () => {
     expect(screen.queryByText("Atlas Web")).not.toBeInTheDocument();
   });
 
+  it("fails visibly when Desktop preload lacks listTasks instead of entering demo mode", async () => {
+    const demoRead = vi.spyOn(memoryHost, "getWorkspace");
+    window.pidock = { taskOp: vi.fn() };
+    render(<App />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("桌面壳任务读取接口不可用");
+    expect(demoRead).not.toHaveBeenCalled();
+    expect(screen.queryByText("Atlas Web")).not.toBeInTheDocument();
+  });
+
   it("rejects Desktop writes while project registration and pi are not connected", async () => {
     window.pidock = { listTasks: vi.fn(async () => ({ ok: true, payload: { tasks: [] } })), taskOp: vi.fn() };
     render(<App />);

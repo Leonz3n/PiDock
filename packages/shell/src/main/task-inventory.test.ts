@@ -60,12 +60,17 @@ describe("persisted task inventory", () => {
     expect(() => listPersistedTasks(dir)).toThrow();
   });
 
-  it("rejects symlinked folders and root rather than scanning outside the configured root", () => {
+  it("rejects symlinked folders, record files and root rather than scanning outside the configured root", () => {
     const dir = root();
     const outside = root();
     task(join(outside, "task-abcdef12"));
     symlinkSync(join(outside, "task-abcdef12"), join(dir, "task-abcdef12"));
     expect(() => listPersistedTasks(dir)).toThrow();
+    const recordRoot = root();
+    const recordDir = join(recordRoot, "task-abcdef12");
+    mkdirSync(recordDir);
+    symlinkSync(join(outside, "task-abcdef12", "task.json"), join(recordDir, "task.json"));
+    expect(() => listPersistedTasks(recordRoot)).toThrow();
     const linkedRoot = join(root(), "link");
     symlinkSync(outside, linkedRoot);
     expect(() => listPersistedTasks(linkedRoot)).toThrow();
