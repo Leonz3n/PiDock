@@ -48,7 +48,7 @@ export class HostClient {
       timer: NodeJS.Timeout;
     }
   >();
-  private readonly turnListeners = new Set<(message: { kind: "sdk-turn-event"; event: SdkTextEvent } | { kind: "sdk-turn-status"; turn: TurnRecord }) => void>();
+  private readonly turnListeners = new Set<(message: { kind: "sdk-turn-event"; event: SdkTextEvent } | { kind: "sdk-turn-status"; turn: TurnRecord } | { kind: "sdk-turn-resync"; taskId: string; sessionId: string; turnId: string }) => void>();
   private readonly onMessage = (message: unknown): void => {
     this.handleMessage(message);
   };
@@ -72,7 +72,7 @@ export class HostClient {
     this.browserHandler = handler;
   }
 
-  onTurnEvent(listener: (message: { kind: "sdk-turn-event"; event: SdkTextEvent } | { kind: "sdk-turn-status"; turn: TurnRecord }) => void): () => void {
+  onTurnEvent(listener: (message: { kind: "sdk-turn-event"; event: SdkTextEvent } | { kind: "sdk-turn-status"; turn: TurnRecord } | { kind: "sdk-turn-resync"; taskId: string; sessionId: string; turnId: string }) => void): () => void {
     this.turnListeners.add(listener);
     return () => { this.turnListeners.delete(listener); };
   }
@@ -97,7 +97,14 @@ export class HostClient {
       if (typeof value["taskId"] !== "string" || typeof value["sessionId"] !== "string" ||
           typeof value["turnId"] !== "string" || !Number.isSafeInteger(value["sequence"]) ||
           (value["sequence"] as number) < 1 || !["delta", "message_end", "agent_settled"].includes(String(value["type"])) ||
-          JSON.stringify(event).length > 16_500) return;
+          JSON.stringify(event).length > 16_500) {
+        if (typeof value["taskId"] === "string" && typeof value["sessionId"] === "string" && typeof value["turnId"] === "string") {
+          for (const listener of this.turnListeners) {
+            try { listener({ kind: "sdk-turn-resync", taskId: value["taskId"], sessionId: value["sessionId"], turnId: value["turnId"] }); } catch { /* Dead subscriber. */ }
+          }
+        }
+        return;
+      }
       for (const listener of this.turnListeners) {
         try { listener({ kind: "sdk-turn-event", event: event as SdkTextEvent }); } catch { /* A dead renderer cannot interrupt the Host. */ }
       }

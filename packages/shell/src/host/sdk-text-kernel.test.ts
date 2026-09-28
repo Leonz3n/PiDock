@@ -82,6 +82,23 @@ async function kernel(dir: string, onPrompt?: (texts: string[]) => string, selec
   return { instance: new PiSdkTextKernel(JSON.parse(readFileSync(join(dir, "task.json"), "utf8")).taskId, dir, { model: selectedModel, modelRuntime: runtime }), seen };
 }
 
+it("distinguishes a live pending SDK user entry from a cold interrupted entry", async () => {
+  const dir = task("task-projection-state");
+  const fake = await kernel(dir, () => "wait");
+  const transport = new SdkTurnTransport("task-projection-state", dir, fake.instance);
+  const ack = await transport.start("main", "req1", "waiting", () => {});
+  await vi.waitFor(() => expect(transport.projection("main")).toMatchObject({ pending: true, interrupted: false, messages: [{ role: "user", text: "waiting" }] }));
+  await transport.cancel("main", ack.turnId);
+  await fake.instance.dispose();
+  const reopened = await kernel(dir);
+  const opened = await reopened.instance.open("main");
+  await reopened.instance.dispose();
+  SessionManager.open(opened.file, join(dir, ".pidock-sdk-sessions", "main"), dir)
+    .appendMessage({ role: "user", content: "crashed", timestamp: Date.now() });
+  const cold = new SdkTurnTransport("task-projection-state", dir, new PiSdkTextKernel("task-projection-state", dir));
+  expect(cold.projection("main")).toMatchObject({ pending: false, interrupted: true, messages: expect.arrayContaining([{ role: "user", text: "crashed", usage: null }]) });
+});
+
 it("journals ACK before prompt, deduplicates lost ACK and reads exact SDK JSONL", async () => {
   const dir = task("task-transport");
   const fake = await kernel(dir);
@@ -101,7 +118,7 @@ it("journals ACK before prompt, deduplicates lost ACK and reads exact SDK JSONL"
   const reopened = await kernel(dir);
   const cold = new SdkTurnTransport("task-transport", dir, reopened.instance);
   expect(cold.status("main", "req1")).toMatchObject({ state: "done", turnId: ack.turnId });
-  expect(await cold.start("main", "req1", "changed text", () => {})).toMatchObject({ turnId: ack.turnId });
+  await expect(cold.start("main", "req1", "changed text", () => {})).rejects.toThrow("idempotency-mismatch");
   expect(reopened.seen).toHaveLength(0);
   await reopened.instance.dispose();
 });
@@ -121,9 +138,90 @@ it("never replays a cold accepted turn, rejects hostile payload and turn-matches
   const reopened = await kernel(dir);
   const cold = new SdkTurnTransport("task-transport", dir, reopened.instance);
   expect(cold.status("main", "req1")).toMatchObject({ state: "interrupted", needsResync: true });
-  expect(await cold.start("main", "req1", "do not resend", () => {})).toMatchObject({ state: "interrupted", turnId: ack.turnId });
+  expect(await cold.start("main", "req1", "wait", () => {})).toMatchObject({ state: "interrupted", turnId: ack.turnId });
   expect(reopened.seen).toHaveLength(0);
   await reopened.instance.dispose();
+});
+
+it("releases start lock after journal failure and keeps terminal callback failures queryable", async () => {
+  const dir = task("task-transport");
+  const fake = await kernel(dir);
+  const transport = new SdkTurnTransport("task-transport", dir, fake.instance);
+  const journal = join(dir, ".pidock-sdk-turns");
+  writeFileSync(journal, "invalid");
+  await expect(transport.start("main", "bad", "hello", () => {})).rejects.toThrow("sdk-journal-invalid");
+  rmSync(journal);
+  const ack = await transport.start("main", "good", "hello", () => {}, () => { throw new Error("port-closed"); });
+  await vi.waitFor(() => expect(transport.status("main", "good")).toMatchObject({ state: "done", needsResync: true, turnId: ack.turnId }));
+  expect(fake.seen).toHaveLength(1);
+  await fake.instance.dispose();
+});
+
+it("flags an oversized full event envelope and preserves a queryable failed status", async () => {
+  const dir = task("task-transport");
+  const fake = await kernel(dir, () => "x".repeat(16_350));
+  const transport = new SdkTurnTransport("task-transport", dir, fake.instance);
+  await transport.start("main", "oversized", "hello", () => {});
+  await vi.waitFor(() => expect(transport.status("main", "oversized")).toMatchObject({ state: "failed", needsResync: true, error: "sdk-event-delivery-failed" }));
+  await fake.instance.dispose();
+});
+
+it("blocks the next model turn until an uncommitted terminal journal is repaired", async () => {
+  const dir = task("task-terminal-recovery");
+  const fake = await kernel(dir);
+  let failTerminalSync = true;
+  let syncs = 0;
+  const transport = new SdkTurnTransport("task-terminal-recovery", dir, fake.instance, () => {
+    if (++syncs > 1 && failTerminalSync) throw new Error("fsync-failed");
+  });
+  const first = await transport.start("main", "first", "hello", () => {});
+  await vi.waitFor(() => expect(transport.status("main", "first")).toMatchObject({ turnId: first.turnId, state: "interrupted", error: "sdk-turn-journal-uncommitted", needsResync: true }));
+  expect(() => transport.assertTerminalCommitted()).toThrow("sdk-turn-journal-uncommitted");
+  expect(await transport.start("main", "first", "hello", () => {})).toMatchObject({ state: "interrupted", turnId: first.turnId });
+  await expect(transport.start("main", "second", "again", () => {})).rejects.toThrow("sdk-turn-journal-uncommitted");
+  expect(fake.seen).toHaveLength(1);
+  failTerminalSync = false;
+  expect(transport.reconcileTerminal()).toMatchObject({ turnId: first.turnId, state: "done" });
+  expect(transport.status("main", "first")).toMatchObject({ turnId: first.turnId, state: "done" });
+  await transport.start("main", "second", "again", () => {});
+  await vi.waitFor(() => expect(transport.status("main", "second")).toMatchObject({ state: "done" }));
+  expect(fake.seen).toHaveLength(2);
+  await fake.instance.dispose();
+});
+
+it("blocks turns when terminal publication and its resync journal rewrite both fail", async () => {
+  const dir = task("task-publish-recovery");
+  const fake = await kernel(dir);
+  let failRewrite = true;
+  let syncs = 0;
+  const transport = new SdkTurnTransport("task-publish-recovery", dir, fake.instance, () => {
+    if (++syncs >= 3 && failRewrite) throw new Error("fsync-failed");
+  });
+  const first = await transport.start("main", "first", "hello", () => {}, () => { throw new Error("port-closed"); });
+  await vi.waitFor(() => expect(transport.status("main", "first")).toMatchObject({
+    turnId: first.turnId, state: "interrupted", error: "sdk-turn-journal-uncommitted", needsResync: true,
+  }));
+  await expect(transport.start("main", "second", "again", () => {})).rejects.toThrow("sdk-turn-journal-uncommitted");
+  expect(fake.seen).toHaveLength(1);
+  failRewrite = false;
+  expect(transport.reconcileTerminal()).toMatchObject({ state: "done", needsResync: true });
+  expect(transport.status("main", "first")).toMatchObject({ state: "done", needsResync: true });
+  await transport.start("main", "second", "again", () => {});
+  await vi.waitFor(() => expect(transport.status("main", "second")).toMatchObject({ state: "done" }));
+  expect(fake.seen).toHaveLength(2);
+  await fake.instance.dispose();
+});
+
+it("reports a journal directory sync failure without ACK or replaying the reserved request", async () => {
+  const dir = task("task-transport");
+  const fake = await kernel(dir);
+  const failing = new SdkTurnTransport("task-transport", dir, fake.instance, () => { throw new Error("fsync-failed"); });
+  await expect(failing.start("main", "req1", "hello", () => {})).rejects.toThrow("sdk-journal-sync-failed");
+  expect(failing.status("main", "req1")).toMatchObject({ state: "interrupted", needsResync: true });
+  const retry = new SdkTurnTransport("task-transport", dir, fake.instance);
+  expect(await retry.start("main", "req1", "hello", () => {})).toMatchObject({ state: "interrupted", needsResync: true });
+  expect(fake.seen).toHaveLength(0);
+  await fake.instance.dispose();
 });
 
 it("keeps provider-not-configured readable but refuses acceptance and source writes", async () => {

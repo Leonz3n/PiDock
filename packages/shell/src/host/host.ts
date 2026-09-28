@@ -32,6 +32,7 @@ function getParentPort(): UtilityParentPort {
 }
 
 const hostPort = getParentPort();
+let started = false;
 
 import {
   boundWorkspaceId,
@@ -42,6 +43,7 @@ import {
 } from "./host-guards.js";
 import { TaskWorkspaceHost, diskTaskStore } from "./task-host.js";
 import { SdkTurnTransport } from "./sdk-turn-transport.js";
+import { PiSdkTextKernel } from "./sdk-text-kernel.js";
 import type { ServiceRunObservation } from "../main/execution-ledger.js";
 import { SharedPathCoordinator } from "./path-coordination.js";
 import { TaskServiceRuntime } from "./service-runtime.js";
@@ -107,6 +109,8 @@ function reply(response: RpcResponse): void {
 // touch tasks do not require the task env.
 let workspaceHost: TaskWorkspaceHost | null = null;
 let sdkTurns: SdkTurnTransport | null = null;
+let sdkClosing = false;
+let sdkKernelFactory: (taskId: string, taskDir: string) => PiSdkTextKernel = (id, dir) => new PiSdkTextKernel(id, dir);
 
 // [PiDock 09] (#11) cross-task real-path write coordination. One table for the
 // whole Host process: plain-directory links are shared views of the original
@@ -324,6 +328,9 @@ function taskHostFor(taskId: string): TaskWorkspaceHost | { error: string } {
         }));
       },
       sharedPaths,
+      undefined,
+      undefined,
+      sdkKernelFactory,
     );
   }
   return workspaceHost;
@@ -430,7 +437,8 @@ async function dispatchTaskOp(
   if ("error" in host) return { ok: false, error: host.error };
   const record = asRecord(payload);
   try {
-    if (op.startsWith("task/sdk")) {
+    if (op.startsWith("task/sdk") || op === "task/sendMessage") {
+      if (sdkClosing) throw new Error("sdk-host-closing");
       if (!origin || origin.kind !== "shell-ui") throw new Error("permission-denied: SDK turns require a shell sender");
       const sessionId = record["sessionId"];
       if (typeof sessionId !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/.test(sessionId)) throw new Error("invalid-sdk-session");
@@ -440,7 +448,7 @@ async function dispatchTaskOp(
         if (typeof record["requestId"] !== "string") throw new Error("invalid-sdk-request");
         return { ok: true, payload: { turn: sdkTurns.status(sessionId, record["requestId"]) } };
       }
-      if (op === "task/sdkStart") {
+      if (op === "task/sdkStart" || op === "task/sendMessage") {
         if (typeof record["requestId"] !== "string" || typeof record["text"] !== "string") throw new Error("invalid-sdk-request");
         const turn = await sdkTurns.start(sessionId, record["requestId"], record["text"], (sdkEvent) => {
           hostPort.postMessage({ kind: "sdk-turn-event", event: sdkEvent });
@@ -603,11 +611,6 @@ async function dispatchTaskOp(
         }
         const probed = host.probeLinkTarget(sourcePath);
         return { ok: true, payload: { ...probed } };
-      }
-      case "task/sendMessage": {
-        // #43 keeps the old history readable, but no scripted turn may be
-        // presented as a successful model response before #44 routes SDK events.
-        return { ok: false, error: "sdk-route-unwired: task/sendMessage requires #44" };
       }
       case "task/cancel": {
         const sessionId = record["sessionId"];
@@ -1326,8 +1329,10 @@ async function dispatchTaskOp(
         if (!caller.ok) return { ok: false, error: caller.error };
         const lifecycle = lifecycleFor(taskId);
         if ("error" in lifecycle) return { ok: false, error: lifecycle.error };
+        sdkClosing = true;
         try {
           await workspaceHost?.shutdownSdk();
+          await sdkTurns?.waitForTerminal();
           sdkTurns = null;
           const quit = lifecycle.quit();
           return { ok: true, payload: { quit } };
@@ -1619,7 +1624,11 @@ async function dispatchTaskOp(
   }
 }
 
-hostPort.on("message", async (event: { data: unknown }) => {
+export function startHost(kernelFactory?: (taskId: string, taskDir: string) => PiSdkTextKernel): void {
+  if (started) throw new Error("host-already-started");
+  started = true;
+  if (kernelFactory) sdkKernelFactory = kernelFactory;
+  hostPort.on("message", async (event: { data: unknown }) => {
   const message: unknown = event.data;
   if (!isRpcRequest(message)) {
     reply({ kind: "response", id: "unknown", ok: false, error: "invalid-request" });
@@ -1677,5 +1686,6 @@ hostPort.on("message", async (event: { data: unknown }) => {
   reply({ kind: "response", id: message.id, ok: false, error: "unknown-method" });
 });
 
-// Let the parent know the host is alive (bounded, single line).
-process.stdout.write(`[host] ready node=${process.versions["node"] ?? "unknown"}\n`);
+  // Let the parent know the host is alive (bounded, single line).
+  process.stdout.write(`[host] ready node=${process.versions["node"] ?? "unknown"}\n`);
+}

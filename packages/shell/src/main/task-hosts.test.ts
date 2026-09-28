@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PerTaskHostRegistry, taskBrowserOriginsFromEnv } from "./runtime.js";
+import { createHostStopper, createLastWindowShutdown, PerTaskHostRegistry, taskBrowserOriginsFromEnv } from "./runtime.js";
 import { createDiskTaskDirResolver, defaultTasksRoot } from "./task-resolver.js";
 import { TaskRootIndex } from "./task-root-index.js";
 import type { HostTaskResult } from "../rpc/protocol.js";
@@ -512,15 +512,52 @@ describe("task browser origins", () => {
     expect(taskBrowserOriginsFromEnv("[\"http://localhost:5173\"]")).toEqual({});
   });
 
+  it("retries a failed Host shutdown without disposing pending Hosts", async () => {
+    const quitAll = vi.fn().mockResolvedValueOnce({ ok: false, tasks: [{ taskId: "task-a", ok: false, retainedTasks: ["task-a"] }] })
+      .mockRejectedValueOnce(new Error("temporary timeout"))
+      .mockResolvedValue({ ok: true, tasks: [] });
+    const dispose = vi.fn();
+    const stop = createHostStopper({ quitAll }, { kind: "shell-ui", senderWebContentsId: 7 }, dispose);
+    expect(await stop()).toBe(false);
+    expect(dispose).not.toHaveBeenCalled();
+    expect(await stop()).toBe(false);
+    expect(dispose).not.toHaveBeenCalled();
+    expect(await stop()).toBe(true);
+    expect(await stop()).toBe(true);
+    expect(quitAll).toHaveBeenCalledTimes(3);
+    expect(dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries last-window shutdown after a failed Host report without killing the Host", async () => {
+    vi.useFakeTimers();
+    try {
+      const quitAll = vi.fn().mockResolvedValueOnce({ ok: false, tasks: [{ taskId: "task-a", ok: false, retainedTasks: ["task-a"] }] })
+        .mockResolvedValue({ ok: true, tasks: [] });
+      const dispose = vi.fn();
+      const quitApp = vi.fn();
+      const stop = createHostStopper({ quitAll }, { kind: "shell-ui", senderWebContentsId: 7 }, dispose);
+      const lastWindowClosed = createLastWindowShutdown(stop, quitApp, 5_000);
+      await lastWindowClosed();
+      expect(dispose).not.toHaveBeenCalled();
+      expect(quitApp).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(quitAll).toHaveBeenCalledTimes(2);
+      expect(dispose).toHaveBeenCalledTimes(1);
+      expect(quitApp).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(quitAll).toHaveBeenCalledTimes(2);
+    } finally { vi.useRealTimers(); }
+  });
+
   it("[PiDock 14] (#17) quitAll sends the attested quit op to every forked Host and reports blocked resources", async () => {
     const spawns: Array<{ taskId: string; taskDir: string }> = [];
     const dirs: Record<string, string> = { "task-a": "/tasks/a", "task-b": "/tasks/b" };
-    const calls: { taskId: string; op: string; payload: Record<string, unknown>; origin: unknown }[] = [];
+    const calls: { taskId: string; op: string; payload: Record<string, unknown>; origin: unknown; timeoutMs?: number }[] = [];
     const spawn = vi.fn(async (_workspaceId: string, task: { taskId: string; taskDir: string }) => {
       spawns.push(task);
       const transport = {
-        task: vi.fn(async (params: { taskId: string; op: string; payload?: Record<string, unknown>; origin?: unknown }) => {
-          calls.push({ taskId: params.taskId, op: params.op, payload: params.payload ?? {}, origin: params.origin });
+        task: vi.fn(async (params: { taskId: string; op: string; payload?: Record<string, unknown>; origin?: unknown }, options?: { timeoutMs?: number }) => {
+          calls.push({ taskId: params.taskId, op: params.op, payload: params.payload ?? {}, origin: params.origin, ...(options?.timeoutMs ? { timeoutMs: options.timeoutMs } : {}) });
           return {
             workspaceId: "workspace-a",
             taskId: params.taskId,
@@ -544,8 +581,8 @@ describe("task browser origins", () => {
     const report = await registry.quitAll({ origin, label: "应用明确退出" });
 
     expect(calls.filter((call) => call.op === "task/quit")).toEqual([
-      { taskId: "task-a", op: "task/quit", payload: { label: "应用明确退出" }, origin },
-      { taskId: "task-b", op: "task/quit", payload: { label: "应用明确退出" }, origin },
+      { taskId: "task-a", op: "task/quit", payload: { label: "应用明确退出" }, origin, timeoutMs: 120_000 },
+      { taskId: "task-b", op: "task/quit", payload: { label: "应用明确退出" }, origin, timeoutMs: 120_000 },
     ]);
     expect(report.tasks.map((task) => task.taskId)).toEqual(["task-a", "task-b"]);
     expect(report.ok).toBe(false);

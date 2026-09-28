@@ -210,8 +210,8 @@ export class PiSdkTextKernel {
     let deliveryError = false;
     let cancelled = false;
     const emit = (data: SdkTextEventData) => {
-      if (events.length >= 256 || Buffer.byteLength(JSON.stringify(data), "utf8") > 16_384) { deliveryError = true; return; }
       const event: SdkTextEvent = { ...data, taskId: this.taskId, sessionId, turnId, sequence: events.length + 1 };
+      if (events.length >= 256 || Buffer.byteLength(JSON.stringify(event), "utf8") > 16_384) { deliveryError = true; return; }
       events.push(event);
       try { deliver?.(event); } catch { deliveryError = true; }
     };
