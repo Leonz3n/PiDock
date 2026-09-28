@@ -33,7 +33,7 @@ function source(value: unknown): ProjectSource {
       typeof value.path !== "string") throw new Error("项目来源返回异常");
   return value as unknown as ProjectSource;
 }
-function project(value: unknown): DesktopProject {
+export function parseDesktopProject(value: unknown): DesktopProject {
   if (!object(value) || !exact(value, ["id", "name", "description", "repositories", "directories"]) ||
       typeof value.id !== "string" || !value.id || typeof value.name !== "string" ||
       typeof value.description !== "string" || !Array.isArray(value.repositories) || !Array.isArray(value.directories)) {
@@ -69,7 +69,7 @@ export async function loadDesktopProjects(bridge: PidockBridge): Promise<Desktop
       !object(associations) || !Array.isArray(associations.tasks) || !Array.isArray(associations.roots)) {
     throw new Error("项目或任务归属返回异常");
   }
-  const projects = listed.projects.map(project);
+  const projects = listed.projects.map(parseDesktopProject);
   const rows = associations.tasks.map(association);
   const ids = new Set(projects.map((item) => item.id));
   const taskIds = new Set(rows.map((row) => row.taskId));
