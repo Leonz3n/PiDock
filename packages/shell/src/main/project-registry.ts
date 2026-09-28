@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join, posix, win32 } from "node:path";
+import { isSafeTaskChildName, isTaskDirId } from "./task-provision.js";
 
 export interface ProjectSource { id: string; name: string; path: string }
 export interface LocalProject {
@@ -87,8 +88,11 @@ function document(value: unknown): Document {
   const memberships = value["memberships"].map((item: unknown): ProjectMembership => {
     if (!record(item)) throw new Error("invalid membership");
     keys(item, ["taskId", "projectId", "createdAt", "root", "dirId"]);
-    return { taskId: text(item["taskId"], "task ID"), projectId: id(item["projectId"]),
-      createdAt: text(item["createdAt"], "createdAt"), root: sourcePath(item["root"]), dirId: text(item["dirId"], "dirId") };
+    const taskId = text(item["taskId"], "task ID");
+    const dirId = text(item["dirId"], "dirId");
+    if (!isSafeTaskChildName(taskId) || !isTaskDirId(dirId)) throw new Error("invalid membership task identity");
+    return { taskId, projectId: id(item["projectId"]),
+      createdAt: text(item["createdAt"], "createdAt"), root: sourcePath(item["root"]), dirId };
   });
   if (new Set(memberships.map((row) => row.taskId)).size !== memberships.length ||
       memberships.some((row) => !projects.some((entry) => entry.id === row.projectId))) throw new Error("invalid membership identity");

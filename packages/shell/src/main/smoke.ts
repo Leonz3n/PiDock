@@ -299,6 +299,7 @@ function validateShellProbe(
         "hostPing",
         "listTasks",
         "onHostStatus",
+        "projectOp",
         "taskOp",
       ])
   ) {

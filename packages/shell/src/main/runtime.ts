@@ -25,6 +25,8 @@ import {
 import { readTaskRecordOnDisk } from "../host/task-store.js";
 import { defaultTasksRoot } from "./task-resolver.js";
 import { listPersistedTasks } from "./task-inventory.js";
+import { ProjectRegistry } from "./project-registry.js";
+import { performProjectOperation } from "./project-ipc.js";
 import type { BrowserPerformResult, BrowserRequestParams, HostTaskOp, HostTaskResult, TaskOpOrigin } from "../rpc/protocol.js";
 import { isHostTaskOp } from "../rpc/protocol.js";
 import { TaskBrowser } from "./task-browser.js";
@@ -666,6 +668,7 @@ export function registerIpc(
   client: HostClient,
   registry: TrustDomainRegistry,
   tasks?: PerTaskHostRegistry,
+  projects?: ProjectRegistry,
 ): void {
   ipcMain.handle("shell/getVersions", async (event) => {
     try {
@@ -708,6 +711,17 @@ export function registerIpc(
     } catch (error) {
       if (error instanceof TrustDomainViolation) return trustFailureEnvelope(error);
       return { ok: false as const, error: "任务记录不可读取，请检查本机任务目录后重试" };
+    }
+  });
+
+  ipcMain.handle("shell/projectOp", async (event, payload?: unknown) => {
+    try {
+      registry.requireShellSender(event);
+      if (!projects) return { ok: false as const, error: "项目注册表尚未接入" };
+      return { ok: true as const, payload: await performProjectOperation(projects, payload) };
+    } catch (error) {
+      if (error instanceof TrustDomainViolation) return trustFailureEnvelope(error);
+      return { ok: false as const, error: "项目注册表操作失败，请检查本机项目数据后重试" };
     }
   });
 

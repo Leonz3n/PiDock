@@ -21,6 +21,7 @@ import {
 import { ScheduleDriver } from "./schedule-driver.js";
 import { runSmoke } from "./smoke.js";
 import { createDiskTaskDirResolver, defaultTasksRoot } from "./task-resolver.js";
+import { ProjectRegistry } from "./project-registry.js";
 import {
   runTaskBrowserSmoke,
   type TaskBrowserSmokePhase,
@@ -154,7 +155,7 @@ async function run(): Promise<void> {
     createDiskTaskDirResolver(defaultTasksRoot()),
     browsers.registry,
   );
-  registerIpc(client, views.registry, tasks);
+  registerIpc(client, views.registry, tasks, new ProjectRegistry(app.getPath("userData")));
   // [PiDock 18] (#20) the Host-borne scheduler: main owns the Host processes, so
   // the driver asks each *running* Host to evaluate its own due triggers. It
   // never forks a Host and never overlaps its own ticks; stop it wherever the

@@ -68,6 +68,7 @@ describe("main-owned project registry", () => {
     expect(changed.id).toBe(a.id);
     expect(changed.repositories[0]?.id).toBe(a.repositories[0]?.id);
     expect(store.get(b.id)).toEqual(b);
+    await expect(store.update(a.id, { description: "", repositories: [{ id: b.repositories[0]!.id, name: "api", path: "/workspace/api" }], directories: [] })).rejects.toThrow(/unknown source ID/);
     await expect(store.rename(b.id, "Billing 2")).rejects.toThrow(/name/);
   });
 
@@ -87,6 +88,7 @@ describe("main-owned project registry", () => {
       await expect(store.create({ ...input, repositories: [{ name: "api", path }] })).rejects.toThrow();
     }
     await expect(store.create({ ...input, token: "secret" } as never)).rejects.toThrow();
+    await expect(store.create({ ...input, repositories: [{ id: "01234567-0123-4123-8123-012345678901", name: "api", path: "/workspace/api" }] } as never)).rejects.toThrow(/generated/);
     await expect(store.create({ ...input, repositories: [{ name: "api", path: "/workspace/api", password: "secret" }] } as never)).rejects.toThrow();
   });
 });
