@@ -74,7 +74,13 @@ function syncDirectory(dir: string): void {
   try { fsyncSync(fd); } finally { closeSync(fd); }
 }
 function verifiedRoot(path: string, bound?: string): string {
-  if (!lstatSync(path).isDirectory()) throw new Error("task root missing or linked");
+  let stat;
+  try { stat = lstatSync(path); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new Error("task root missing or linked");
+    throw error;
+  }
+  if (!stat.isDirectory()) throw new Error("task root missing or linked");
   const real = realpathSync(path);
   if (bound !== undefined && real !== bound) throw new Error("task root changed location");
   return real;
@@ -87,6 +93,15 @@ function verifyTask(root: string, task: IndexedTask): PersistedTaskSummary {
   if (!record || record.taskId !== task.taskId || record.dirId !== task.dirId || record.createdAt !== task.createdAt ||
       record.root !== root || record.taskDir !== dir) throw new Error("task record identity changed");
   return { taskId: record.taskId, name: record.name, branch: record.branch, repoCount: record.repos.length, updatedAt: record.updatedAt };
+}
+
+function rootFailure(error: unknown): string {
+  if (error instanceof Error) {
+    if (error.message === "task root missing or linked" || error.message === "task root changed location") return "任务根目录已移走或链接已更改，请检查原位置";
+    if (error.message === "unindexed tasks in registered root") return "目录中有未登记的任务，请使用找回操作明确导入";
+    if (["task directory moved or linked", "task record linked or invalid", "task record identity changed"].includes(error.message)) return "任务目录或磁盘记录身份已改变，请检查后重试";
+  }
+  return "任务根目录不可读取或任务身份冲突，请检查后重试";
 }
 
 /** Main owns one instance. A missing primary with backup requires explicit recovery. */
@@ -195,7 +210,7 @@ export class TaskRootIndex {
     const groups: Array<{ label: string; rows: PersistedTaskSummary[]; message?: string }> = [];
     const add = (label: string, read: () => PersistedTaskSummary[]) => {
       try { groups.push({ label, rows: read() }); }
-      catch { groups.push({ label, rows: [], message: "任务根目录不可读取或任务身份冲突，请检查后重试" }); }
+      catch (error) { groups.push({ label, rows: [], message: rootFailure(error) }); }
     };
     add("默认任务根", () => listPersistedTasks(this.defaultRoot));
     try {
