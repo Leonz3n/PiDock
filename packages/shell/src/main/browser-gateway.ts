@@ -32,6 +32,7 @@ import {
   type ConsoleErrorEvidence,
   type FailedRequestEvidence,
   type NavigationAllowlist,
+  type NavigationCheck,
 } from "./browser-rules.js";
 import type { BrowserPerformResult } from "../rpc/protocol.js";
 
@@ -85,7 +86,8 @@ export interface BrowserSurface {
     pageId?: string,
   ): Promise<{ consoleErrors: ConsoleErrorEvidence[]; failedRequests: FailedRequestEvidence[] }>;
   screenshot(page: { pageId: string; webContentsId: number }): Promise<BrowserScreenshot>;
-  perform(request: BrowserSurfaceRequest): Promise<BrowserPerformResult>;
+  /** Main-only policy callback; a restore candidate is consumed and checked synchronously by the surface. */
+  perform(request: BrowserSurfaceRequest, validateRestoreUrl?: (url: string) => NavigationCheck): Promise<BrowserPerformResult>;
 }
 
 /** Max on-demand screenshot payload (base64 chars) kept inside one RPC envelope. */
@@ -272,7 +274,10 @@ export function createBrowserGateway(deps: BrowserGatewayDeps): {
       };
     }
 
-    const outcome = await deps.surface.perform({ ...request, page });
+    const outcome = await deps.surface.perform(
+      { ...request, page },
+      request.action === "page/restore" ? (url) => navigationTargetAllowed(url, deps.allowlist) : undefined,
+    );
     if (!outcome.ok) return outcome;
     return { ok: true, payload: outcome.payload };
   }
