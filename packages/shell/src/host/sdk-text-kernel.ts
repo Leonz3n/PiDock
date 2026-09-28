@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
@@ -12,10 +13,17 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { readTaskRecordOnDisk } from "./task-store.js";
 
-export type SdkTextEvent =
+type SdkTextEventData =
   | { type: "delta"; text: string }
   | { type: "message_end"; text: string; usage: { input: number; output: number; cacheRead: number; cacheWrite: number } | null; error?: string }
   | { type: "agent_settled" };
+
+export type SdkTextEvent = SdkTextEventData & {
+  taskId: string;
+  sessionId: string;
+  turnId: string;
+  sequence: number;
+};
 
 export interface SdkTextResult {
   state: "done" | "cancelled" | "failed";
@@ -108,12 +116,24 @@ export class PiSdkTextKernel {
           (header as Record<string, unknown>)["id"] !== data["sdkId"]) throw new Error("sdk-binding-invalid");
       manager = SessionManager.open(file, dir, this.taskDir);
       if (manager.getSessionId() !== data["sdkId"]) throw new Error("sdk-binding-invalid");
+      // A terminated run can leave a user entry before its assistant reply.
+      // Keep the JSONL evidence but exclude that unfinished leaf from model context.
+      const branch = manager.getBranch();
+      const latestMessage = branch.filter((entry) => entry.type === "message").at(-1);
+      if (latestMessage?.type === "message" && latestMessage.message.role === "user") {
+        const previousReply = [...branch].reverse().find((entry) => entry.type === "message" && entry.message.role === "assistant");
+        if (previousReply) manager.branch(previousReply.id);
+        else manager.resetLeaf();
+      }
     } else {
       // An existing folder without a binding is never adopted as context.
       if (readdirSync(dir).length > 0) throw new Error("sdk-binding-missing");
-      manager = SessionManager.create(this.taskDir, dir);
-      const file = manager.getSessionFile();
-      if (!file || resolve(file) !== join(dir, basename(file))) throw new Error("sdk-binding-invalid");
+      const file = join(dir, `sdk-${randomUUID()}.jsonl`);
+      // SDK open() writes a header to an exclusive empty file before its binding.
+      writeFileSync(file, "", { flag: "wx", mode: 0o600 });
+      manager = SessionManager.open(file, dir, this.taskDir);
+      if (manager.getSessionFile() !== file || manager.getHeader()?.id !== manager.getSessionId() ||
+          manager.getHeader()?.cwd !== this.taskDir) throw new Error("sdk-binding-invalid");
       writeFileSync(mapping, JSON.stringify({ taskId: this.taskId, sessionId, sdkId: manager.getSessionId(), file: basename(file) }), { flag: "wx", mode: 0o600 });
     }
     const storedModel = manager.buildSessionContext().model;
@@ -156,13 +176,15 @@ export class PiSdkTextKernel {
     if (this.closing) throw new Error("sdk-closing");
     if (this.active.size) throw new Error("task-locked");
     const events: SdkTextEvent[] = [];
+    const turnId = randomUUID();
     let textResult = "";
     let responseError: string | undefined;
     let settled = false;
     let deliveryError = false;
     let cancelled = false;
-    const emit = (event: SdkTextEvent) => {
+    const emit = (data: SdkTextEventData) => {
       if (events.length >= 256) { deliveryError = true; return; }
+      const event: SdkTextEvent = { ...data, taskId: this.taskId, sessionId, turnId, sequence: events.length + 1 };
       events.push(event);
       try { deliver?.(event); } catch { deliveryError = true; }
     };
@@ -187,8 +209,8 @@ export class PiSdkTextKernel {
     try {
       await run;
       cancelled = session.messages.some((message) => message.role === "assistant" && message.stopReason === "aborted" && message === session.messages.at(-1));
-      const error = deliveryError ? "sdk-event-delivery-failed" : responseError ?? (!settled ? "sdk-not-settled" : !textResult.trim() && !cancelled ? "sdk-empty-response" : undefined);
-      return { state: cancelled ? "cancelled" : error ? "failed" : "done", text: textResult, events, ...(error ? { error } : {}) };
+      const error = deliveryError ? "sdk-event-delivery-failed" : cancelled ? undefined : responseError ?? (!settled ? "sdk-not-settled" : !textResult.trim() ? "sdk-empty-response" : undefined);
+      return { state: error ? "failed" : cancelled ? "cancelled" : "done", text: textResult, events, ...(error ? { error } : {}) };
     } catch (error) {
       return { state: "failed", text: textResult, events, error: error instanceof Error ? error.message : String(error) };
     } finally {
