@@ -57,6 +57,8 @@ export function DesktopInventory() {
   const [view, setView] = useState<View>({ kind: "loading" });
   const [selection, setSelection] = useState<Selection>({ kind: "unassigned" });
   const [form, setForm] = useState<"create" | "edit" | null>(null);
+  const formRef = useRef(form);
+  formRef.current = form;
   const [draft, setDraft] = useState<ProjectInput | null>(null);
   const [pendingCreate, setPendingCreate] = useState<PendingCreate | null>(null);
   const pendingCreateRef = useRef<PendingCreate | null>(null);
@@ -73,10 +75,12 @@ export function DesktopInventory() {
         if (pending.id && data.projects.some((project) => project.id === pending.id)) {
           pendingCreateRef.current = null;
           setPendingCreate(null);
-          setSelection({ kind: "project", id: pending.id });
-          setForm(null);
-          setDraft(null);
-          setActionError(null);
+          if (formRef.current === "create") {
+            setSelection({ kind: "project", id: pending.id });
+            setForm(null);
+            setDraft(null);
+            setActionError(null);
+          }
         } else {
           setView({ kind: "ready", data });
           setActionError(pending.id ? "项目创建已提交，但尚未在本机清单中确认；请重新核验，勿重复创建" : "项目创建返回异常，无法确认身份；请检查本机数据，勿重复创建");
