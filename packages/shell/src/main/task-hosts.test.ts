@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PerTaskHostRegistry, taskBrowserOriginsFromEnv } from "./runtime.js";
 import { createDiskTaskDirResolver, defaultTasksRoot } from "./task-resolver.js";
+import { TaskRootIndex } from "./task-root-index.js";
 import type { HostTaskResult } from "../rpc/protocol.js";
 
 // Seam: per-task utilityProcess Host routing in main (S3a slice).
@@ -125,6 +126,47 @@ describe("PerTaskHostRegistry", () => {
       "task-moved",
     );
     expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it("indexes a successful Host provision and retries a failed first index commit", async () => {
+    const { mkdirSync, writeFileSync, rmSync } = await import("node:fs");
+    const home = mkdtempSync(join(tmpdir(), "pidock-index-routing-"));
+    const defaultRoot = join(home, "default");
+    const override = join(home, "override");
+    mkdirSync(defaultRoot);
+    mkdirSync(override);
+    const oldDefault = process.env["PIDOCK_DEFAULT_ROOT"];
+    process.env["PIDOCK_DEFAULT_ROOT"] = defaultRoot;
+    try {
+      let fail = true;
+      const index = new TaskRootIndex(join(home, "userData"), defaultRoot, { beforeCommit: () => {
+        if (fail) { fail = false; throw new Error("disk full"); }
+      } });
+      const taskId = "task-abcdef12";
+      const taskDir = join(override, taskId);
+      const transport = fakeTransport(TASK_RESULT);
+      transport.task.mockImplementation(async () => {
+        mkdirSync(taskDir, { recursive: true });
+        writeFileSync(join(taskDir, "task.json"), JSON.stringify({ taskId, name: "Recovered", dirId: taskId,
+          root: override, taskDir, branch: "task/main", remoteBranch: "main", baseCommit: "abc123",
+          repos: [], createdAt: "2026-09-22T10:00:00Z", updatedAt: "2026-09-22T10:00:00Z" }));
+        return TASK_RESULT;
+      });
+      const spawn = vi.fn(async () => ({ client: transport as never, child: { kill: vi.fn() } as never }));
+      const registry = new PerTaskHostRegistry("workspace-a", spawn, (id) => index.resolve(id), undefined, index);
+      const payload = { name: "Recovered", dirId: taskId, rootOverride: override, remoteBranch: "main", fetchedCommit: "abc123" };
+      await expect(registry.routeTaskOp({ taskId, op: "task/provision", payload })).rejects.toThrow("disk full");
+      expect(index.resolve(taskId)).toBeNull();
+      await expect(registry.routeTaskOp({ taskId, op: "task/cancel", payload: {} })).rejects.toThrow("task-moved");
+      await registry.routeTaskOp({ taskId, op: "task/provision", payload });
+      expect(index.resolve(taskId)).toBe(taskDir);
+      expect(spawn).toHaveBeenCalledTimes(1);
+      expect(new TaskRootIndex(join(home, "userData"), defaultRoot).inventory().tasks).toHaveLength(1);
+    } finally {
+      if (oldDefault === undefined) delete process.env["PIDOCK_DEFAULT_ROOT"];
+      else process.env["PIDOCK_DEFAULT_ROOT"] = oldDefault;
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 
   it("bootstraps a never-recorded id via task/provision from its dirId", async () => {

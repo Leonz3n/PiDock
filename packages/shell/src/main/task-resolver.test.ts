@@ -92,19 +92,17 @@ describe("disk task-id resolver", () => {
     expect(createDiskTaskDirResolver(root)("task-a")).toBeNull();
   });
 
-  it("production wired: main.ts injects the disk resolver with the default root", async () => {
-    // Shape guard only: `main.ts` must keep injecting the disk resolver
-    // with the default tasks root. Behavioral coverage (seeded root +
-    // real resolver + fake spawn asserting first-use forks) lives in
-    // `task-hosts.test.ts` ("resolves provisioned tasks exactly as
-    // main.ts wires the registry").
+  it("production wired: main.ts injects the verified task-root index resolver", async () => {
+    // Behavioral coverage for default and override roots is in task-root-index
+    // and task-hosts tests; this guards only the production injection point.
     const { readFileSync } = await import("node:fs");
     const { join: joinPath, dirname } = await import("node:path");
     const { fileURLToPath } = await import("node:url");
     const here = dirname(fileURLToPath(import.meta.url));
     const source = readFileSync(joinPath(here, "main.ts"), "utf8");
-    expect(source).toContain("createDiskTaskDirResolver");
-    expect(source).toContain("defaultTasksRoot()");
+    expect(source).toContain("new TaskRootIndex(app.getPath(\"userData\"), defaultTasksRoot())");
+    expect(source).toContain("(taskId) => taskRoots.resolve(taskId)");
+    expect(source).toContain("browsers.registry,\n    taskRoots,");
     expect(source).not.toMatch(/new PerTaskHostRegistry\(workspaceId\)(?!\s*,)/);
   });
 });

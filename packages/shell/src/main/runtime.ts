@@ -2,6 +2,7 @@ import path from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import {
   BrowserWindow,
+  dialog,
   ipcMain,
   utilityProcess,
   WebContentsView,
@@ -24,7 +25,7 @@ import {
 } from "./task-provision.js";
 import { readTaskRecordOnDisk } from "../host/task-store.js";
 import { defaultTasksRoot } from "./task-resolver.js";
-import { listPersistedTasks } from "./task-inventory.js";
+import { TaskRootIndex } from "./task-root-index.js";
 import { ProjectRegistry } from "./project-registry.js";
 import { performProjectOperation } from "./project-ipc.js";
 import type { BrowserPerformResult, BrowserRequestParams, HostTaskOp, HostTaskResult, TaskOpOrigin } from "../rpc/protocol.js";
@@ -294,14 +295,9 @@ function trustFailureEnvelope(
  * One utilityProcess serves one task folder: the first `shell/taskOp` for
  * a task forks a bound Host (`buildHostEnv(..., { taskId, taskDir })`) and
  * later ops for the same task reuse it; ops for another task fork their own
- * Host. Task ids are globally unique under the single machine tasks root,
- * so at most one folder can win per id; the registry is still keyed by
- * `taskDir` internally and revalidates the resolved dir on every reuse: a
- * task whose record moved/changed since the fork is rejected with
- * `task-moved` instead of silently reusing a stale Host. The task dir is
- * resolved from the task record on first spawn (production injects the
- * disk-backed resolver from `task-resolver.ts`) and never taken from a
- * renderer payload beyond the task id selector.
+ * Host. Main resolves task IDs from the default root and the explicitly
+ * registered override roots. The resolver verifies disk identity on every
+ * route and never takes a task directory from the renderer payload.
  *
  * S2 note: `registerIpc` currently takes one workspace-only client (used by
  * `getVersions`/`hostPing` smoke paths). Per-task `shell/taskOp` routing
@@ -336,6 +332,7 @@ export class PerTaskHostRegistry {
     private readonly browsers?: {
       handleRequest(request: BrowserRequestParams): Promise<BrowserPerformResult>;
     },
+    private readonly taskRoots?: TaskRootIndex,
   ) {}
 
   private bindHostRequests(client: HostClient): HostClient {
@@ -398,16 +395,15 @@ export class PerTaskHostRegistry {
     }
     const existing = this.entryForTaskId(taskId);
     if (existing) {
-      // Task ids are globally unique, but re-resolve every reuse so a
-      // task whose record moved/changed since the fork cannot silently
-      // ride a stale Host binding. The default-root resolver never
-      // covers `rootOverride` tasks, so reuse is override-aware: the
-      // forked folder stays valid while its own record still names this
-      // task (exact taskId match via `overrideTaskDirStillOurs`; the
-      // path compare below is the normalized one); anything else is
-      // `task-moved`.
+      // A bound Host cannot bypass a failed disk/index lookup. Legacy
+      // no-index tests retain the earlier record guard only at that seam.
+      if (op === "task/provision" && this.taskRoots && this.resolveTaskDir(taskId) === null) {
+        // A Host may have persisted the task before its first index write failed.
+        // Explicit provision retry verifies that record and retries the index.
+        await this.taskRoots.register(existing.taskDir);
+      }
       const current = this.resolveTaskDir(taskId);
-      const overrideStillOurs = this.overrideTaskDirStillOurs(taskId, existing.taskDir);
+      const overrideStillOurs = this.taskRoots ? false : this.overrideTaskDirStillOurs(taskId, existing.taskDir);
       const resolvedDir = current ?? (overrideStillOurs ? existing.taskDir : null);
       if (
         resolvedDir === null ||
@@ -418,7 +414,9 @@ export class PerTaskHostRegistry {
           `task-moved: ${taskId} no longer resolves to the forked task folder; re-provision or restart before sending ops`,
         );
       }
-      return existing.client.task({ workspaceId: this.workspaceId, taskId, op, payload, origin });
+      const result = await existing.client.task({ workspaceId: this.workspaceId, taskId, op, payload, origin });
+      if (op === "task/provision") await this.taskRoots?.register(existing.taskDir);
+      return result;
     }
     const taskDir = this.resolveTaskDir(taskId);
     const provisionDir =
@@ -426,6 +424,9 @@ export class PerTaskHostRegistry {
         ? this.resolveProvisionTaskDir(taskId, payload ?? {})
         : null;
     if (op === "task/provision" && taskDir === null && provisionDir !== null) {
+      if (this.taskRoots?.inventory().roots.some((root) => root.state === "error")) {
+        throw new TrustDomainViolation("invalid-payload", "task root index unavailable; repair before provisioning");
+      }
       const bootstrapDir = provisionDir;
       const spawned = await this.spawn(this.workspaceId, { taskId, taskDir: bootstrapDir });
       const client = this.bindHostRequests(spawned.client);
@@ -433,7 +434,9 @@ export class PerTaskHostRegistry {
       const dirs = this.byTaskId.get(taskId) ?? new Set<string>();
       dirs.add(bootstrapDir);
       this.byTaskId.set(taskId, dirs);
-      return client.task({ workspaceId: this.workspaceId, taskId, op, payload, origin });
+      const result = await client.task({ workspaceId: this.workspaceId, taskId, op, payload, origin });
+      await this.taskRoots?.register(bootstrapDir);
+      return result;
     }
     if (taskDir === null || !isAbsoluteTaskRoot(taskDir)) {
       throw new TrustDomainViolation(
@@ -669,6 +672,11 @@ export function registerIpc(
   registry: TrustDomainRegistry,
   tasks?: PerTaskHostRegistry,
   projects?: ProjectRegistry,
+  taskRoots?: TaskRootIndex,
+  pickRoot: () => Promise<string | null> = async () => {
+    const result = await dialog.showOpenDialog({ properties: ["openDirectory"] });
+    return result.canceled ? null : result.filePaths[0] ?? null;
+  },
 ): void {
   ipcMain.handle("shell/getVersions", async (event) => {
     try {
@@ -707,10 +715,26 @@ export function registerIpc(
     try {
       const sender = registry.requireShellSender(event);
       validateShellInvocationPayload("shell/listTasks", payload, sender.workspaceId);
-      return { ok: true as const, payload: { tasks: listPersistedTasks(defaultTasksRoot()) } };
+      if (!taskRoots) return { ok: false as const, error: "任务根索引尚未接入" };
+      return { ok: true as const, payload: taskRoots.inventory() };
     } catch (error) {
       if (error instanceof TrustDomainViolation) return trustFailureEnvelope(error);
       return { ok: false as const, error: "任务记录不可读取，请检查本机任务目录后重试" };
+    }
+  });
+
+  ipcMain.handle("shell/importTaskRoot", async (event, payload?: unknown) => {
+    try {
+      const sender = registry.requireShellSender(event);
+      if (payload !== undefined) throw new TrustDomainViolation("invalid-payload", "task root picker accepts no path or options");
+      if (!taskRoots) return { ok: false as const, error: "任务根索引尚未接入" };
+      const selected = await pickRoot();
+      registry.requireShellSender(event);
+      if (!selected) return { ok: true as const, payload: { canceled: true } };
+      return { ok: true as const, payload: { canceled: false, count: await taskRoots.importRoot(selected), workspaceId: sender.workspaceId } };
+    } catch (error) {
+      if (error instanceof TrustDomainViolation) return trustFailureEnvelope(error);
+      return { ok: false as const, error: "任务根导入失败：目录或任务身份无效，请检查后重试" };
     }
   });
 
