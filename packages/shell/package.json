@@ -7,8 +7,8 @@
   "author": "PiDock",
   "main": "dist/main/main.js",
   "scripts": {
-    "dev": "electron .",
-    "build": "node scripts/copy-static.mjs && tsc -p tsconfig.build.json",
+    "dev": "pnpm build && electron .",
+    "build": "pnpm --filter @pidock/renderer build && node scripts/copy-static.mjs && tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.build.json --noEmit",
     "test": "vitest run",
     "lint": "eslint . --max-warnings 0",
@@ -23,6 +23,7 @@
     "package:win": "electron-builder --config electron-builder.config.cjs --win nsis --x64"
   },
   "devDependencies": {
+    "@pidock/renderer": "workspace:*",
     "@types/node": "24.13.6",
     "electron": "44.4.3",
     "electron-builder": "26.15.3",

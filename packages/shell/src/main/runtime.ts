@@ -266,7 +266,7 @@ export async function loadTrustedViews(
     loadView(
       views.shellView,
       process.env["PIDOCK_RENDERER_URL"],
-      "index.html",
+      views.layout ? "index.html" : "smoke.html",
     ),
     views.layout ? Promise.resolve("about:blank") : loadView(
       views.taskView,
