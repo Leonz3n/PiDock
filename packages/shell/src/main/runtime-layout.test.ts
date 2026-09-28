@@ -91,6 +91,10 @@ describe("trusted Electron view modes", () => {
       expect(await handler!(event, { ...claim, taskDir })).toMatchObject({ ok: false });
       expect(await handler!(event, claim)).toMatchObject({ ok: true, payload: { action: "claim", toProjectId: projectId } });
       expect(store.associations(new TaskRootIndex(root, taskRoot))).toMatchObject([{ taskId: "task-abcdef12", state: "assigned" }]);
+      expect(await handler!(invalid, { op: "delete", projectId })).toMatchObject({ ok: false });
+      expect(await handler!(event, { op: "unlink", taskId: "task-abcdef12", expectedProjectId: projectId })).toMatchObject({ ok: true, payload: { action: "unlink" } });
+      expect(await handler!(event, { op: "delete", projectId, taskDir })).toMatchObject({ ok: false });
+      expect(await handler!(event, { op: "delete", projectId })).toMatchObject({ ok: true, payload: { action: "delete", projectId } });
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
