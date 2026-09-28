@@ -126,12 +126,13 @@ describe("new-task workspace preview", () => {
     const taskOp = vi.fn();
     const pidockDescriptor = Object.getOwnPropertyDescriptor(window, "pidock");
     Object.defineProperty(window, "pidock", {
-      value: { taskOp, listTasks: vi.fn(async () => ({ ok: true, payload: { tasks: [], roots: [{ label: "默认任务根", state: "ready" }] } })) },
+      value: { taskOp, listTasks: vi.fn(async () => ({ ok: true, payload: { tasks: [], roots: [{ label: "默认任务根", state: "ready" }] } })),
+        projectOp: vi.fn(async (request: { op: string }) => ({ ok: true, payload: request.op === "list" ? { initialized: false, projects: [] } : { tasks: [], roots: [{ label: "默认任务根", state: "ready" }] } })) },
       configurable: true,
     });
     try {
       renderApp("/projects/atlas");
-      expect(await screen.findByText("已检查的任务根暂无可读取的任务")).toBeInTheDocument();
+      expect(await screen.findByText("已检查的任务根暂无未归属任务")).toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "新建任务" })).not.toBeInTheDocument();
       expect(screen.queryByRole("heading", { name: "Atlas Web" })).not.toBeInTheDocument();
       expect(taskOp).not.toHaveBeenCalled();
