@@ -87,6 +87,9 @@ importers:
 
   packages/shell:
     devDependencies:
+      '@pidock/renderer':
+        specifier: workspace:*
+        version: link:../renderer
       '@types/node':
         specifier: 24.13.6
         version: 24.13.6

@@ -56,6 +56,9 @@ afterEach(() => {
 describe("trusted Electron view modes", () => {
   it("retains the default smoke two-visible-view evidence and loads explicit task URLs", async () => {
     const smoke = await createTrustedWindow("workspace-a");
+    const smokeLoaded = await loadTrustedViews(smoke);
+    expect(smokeLoaded.shellUrl).toMatch(/\/renderer\/smoke\.html$/);
+    expect(smoke.shellView.webContents.loadFile).toHaveBeenCalledWith(expect.stringMatching(/\/renderer\/smoke\.html$/));
     assertTrustedWindowEvidence(trustedWindowEvidence(smoke));
     process.env["PIDOCK_TASK_URL"] = "http://127.0.0.1:4319/task";
     const explicit = await createTrustedWindow("workspace-b", "dual");
@@ -99,6 +102,8 @@ describe("trusted Electron view modes", () => {
     delete process.env["PIDOCK_TASK_URL"];
     const views = await createTrustedWindow("workspace-c", "production");
     const loaded = await loadTrustedViews(views);
+    expect(loaded.shellUrl).toMatch(/\/renderer\/index\.html$/);
+    expect(views.shellView.webContents.loadFile).toHaveBeenCalledWith(expect.stringMatching(/\/renderer\/index\.html$/));
     expect(loaded.taskUrl).toBe("about:blank");
     expect(views.taskView.webContents.loadFile).not.toHaveBeenCalled();
     expect(views.taskView.getVisible()).toBe(false);

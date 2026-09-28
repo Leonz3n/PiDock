@@ -297,6 +297,7 @@ function validateShellProbe(
         "getSecurityState",
         "getVersions",
         "hostPing",
+        "listTasks",
         "onHostStatus",
         "taskOp",
       ])
