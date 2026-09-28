@@ -15,7 +15,8 @@
  * touching the filesystem.
  */
 
-import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import type { PiSessionSnapshot } from "../main/pi-session.js";
 import {
@@ -288,7 +289,22 @@ export function parseSessionSnapshot(raw: string): PiSessionSnapshot {
 
 export function writeTaskRecordOnDisk(taskDir: string, record: TaskDiskRecord): void {
   mkdirSync(taskDir, { recursive: true });
-  writeFileSync(taskFilePath(taskDir), serializeTaskRecord({ ...record }), "utf8");
+  if (!lstatSync(taskDir).isDirectory()) throw new Error("invalid task directory");
+  const file = taskFilePath(taskDir);
+  try {
+    if (!lstatSync(file).isFile()) throw new Error("invalid task record file");
+  } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  const tmp = `${file}.${randomUUID()}.tmp`;
+  try {
+    const fd = openSync(tmp, "wx", 0o600);
+    try { writeFileSync(fd, serializeTaskRecord({ ...record }), "utf8"); fsyncSync(fd); }
+    finally { closeSync(fd); }
+    renameSync(tmp, file);
+    if (process.platform !== "win32") {
+      const dir = openSync(taskDir, "r");
+      try { fsyncSync(dir); } finally { closeSync(dir); }
+    }
+  } finally { rmSync(tmp, { force: true }); }
 }
 
 export function readTaskRecordOnDisk(taskDir: string): TaskDiskRecord | null {

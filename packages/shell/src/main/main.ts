@@ -23,6 +23,7 @@ import { runSmoke } from "./smoke.js";
 import { defaultTasksRoot } from "./task-resolver.js";
 import { TaskRootIndex } from "./task-root-index.js";
 import { ProjectRegistry } from "./project-registry.js";
+import { CreationIntentStore, ProjectTaskCreation } from "./project-task-creation.js";
 import {
   runTaskBrowserSmoke,
   type TaskBrowserSmokePhase,
@@ -156,7 +157,9 @@ async function run(): Promise<void> {
     browsers.registry,
     taskRoots,
   );
-  registerIpc(client, views.registry, tasks, new ProjectRegistry(app.getPath("userData")), taskRoots);
+  const projects = new ProjectRegistry(app.getPath("userData"));
+  const creation = new ProjectTaskCreation(new CreationIntentStore(app.getPath("userData")), projects, taskRoots, tasks, defaultTasksRoot());
+  registerIpc(client, views.registry, tasks, projects, taskRoots, undefined, creation);
   // [PiDock 18] (#20) the Host-borne scheduler: main owns the Host processes, so
   // the driver asks each *running* Host to evaluate its own due triggers. It
   // never forks a Host and never overlaps its own ticks; stop it wherever the

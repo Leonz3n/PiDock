@@ -40,7 +40,8 @@ describe("Desktop production data", () => {
     expect(screen.getByText("此项目暂无任务")).toBeInTheDocument();
     expect(screen.queryByText("Atlas Web")).not.toBeInTheDocument();
     expect(demoRead).not.toHaveBeenCalled();
-    expect(screen.getByRole("button", { name: "创建任务（尚未接线）" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "任务" })).toBeDisabled();
+    expect(screen.getByText("桌面壳真实任务创建接口不可用，请重启应用")).toBeInTheDocument();
   });
 
   it("claims an explicitly chosen task, rereads authority, then transfers and unlinks", async () => {

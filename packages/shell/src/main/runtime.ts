@@ -28,6 +28,8 @@ import { defaultTasksRoot } from "./task-resolver.js";
 import { TaskRootIndex } from "./task-root-index.js";
 import { ProjectRegistry } from "./project-registry.js";
 import { performProjectOperation } from "./project-ipc.js";
+import { ProjectTaskCreation } from "./project-task-creation.js";
+import { performCreationOperation } from "./project-task-ipc.js";
 import type { BrowserPerformResult, BrowserRequestParams, HostTaskOp, HostTaskResult, TaskOpOrigin } from "../rpc/protocol.js";
 import { isHostTaskOp } from "../rpc/protocol.js";
 import { TaskBrowser } from "./task-browser.js";
@@ -677,6 +679,7 @@ export function registerIpc(
     const result = await dialog.showOpenDialog({ properties: ["openDirectory"] });
     return result.canceled ? null : result.filePaths[0] ?? null;
   },
+  creation?: ProjectTaskCreation,
 ): void {
   ipcMain.handle("shell/getVersions", async (event) => {
     try {
@@ -735,6 +738,18 @@ export function registerIpc(
     } catch (error) {
       if (error instanceof TrustDomainViolation) return trustFailureEnvelope(error);
       return { ok: false as const, error: "任务根导入失败：目录或任务身份无效，请检查后重试" };
+    }
+  });
+
+  ipcMain.handle("shell/createTask", async (event, payload?: unknown) => {
+    try {
+      registry.requireShellSender(event);
+      if (!creation) return { ok: false as const, error: "真实任务创建尚未接入" };
+      const result = await performCreationOperation(creation, payload, pickRoot, () => { registry.requireShellSender(event); });
+      return { ok: true as const, payload: result };
+    } catch (error) {
+      if (error instanceof TrustDomainViolation) return trustFailureEnvelope(error);
+      return { ok: false as const, error: errorMessage(error) };
     }
   });
 
