@@ -742,7 +742,7 @@ export function registerIpc(
     try {
       registry.requireShellSender(event);
       if (!projects) return { ok: false as const, error: "项目注册表尚未接入" };
-      return { ok: true as const, payload: await performProjectOperation(projects, payload) };
+      return { ok: true as const, payload: await performProjectOperation(projects, payload, taskRoots) };
     } catch (error) {
       if (error instanceof TrustDomainViolation) return trustFailureEnvelope(error);
       return { ok: false as const, error: "项目注册表操作失败，请检查本机项目数据后重试" };

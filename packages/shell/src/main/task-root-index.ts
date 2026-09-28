@@ -11,6 +11,7 @@ interface IndexedRoot { path: string; realPath: string; tasks: IndexedTask[] }
 interface IndexDocument { version: 1; roots: IndexedRoot[] }
 export interface RootStatus { label: string; state: "ready" | "error"; message?: string }
 export interface TaskInventory { tasks: PersistedTaskSummary[]; roots: RootStatus[] }
+export interface VerifiedTaskIdentity { taskId: string; createdAt: string; root: string; dirId: string; realRoot: string }
 
 const FILE = "task-roots.json";
 const MAX_BYTES = 1024 * 1024;
@@ -273,14 +274,19 @@ export class TaskRootIndex {
     };
   }
   inventory(): TaskInventory { return this.scan().inventory; }
-  resolve(taskId: string): string | null {
+  verifiedIdentity(taskId: string): VerifiedTaskIdentity | null {
     if (!isSafeTaskChildName(taskId)) return null;
     const row = this.scan().locations.get(taskId);
     if (!row) return null;
     try {
-      verifiedRoot(row.root, row.realPath);
-      if (!sameSummary(verifyTask(row.root, row.identity), row.summary)) return null;
-      return join(row.root, row.identity.dirId);
+      if (verifiedRoot(row.root, row.realPath) !== row.realPath ||
+          !sameSummary(verifyTask(row.root, row.identity), row.summary)) return null;
+      return { taskId, createdAt: row.identity.createdAt, root: row.root,
+        dirId: row.identity.dirId, realRoot: row.realPath };
     } catch { return null; }
+  }
+  resolve(taskId: string): string | null {
+    const identity = this.verifiedIdentity(taskId);
+    return identity ? join(identity.root, identity.dirId) : null;
   }
 }
