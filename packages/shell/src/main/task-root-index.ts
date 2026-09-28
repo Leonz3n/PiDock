@@ -11,7 +11,10 @@ interface IndexedRoot { path: string; realPath: string; tasks: IndexedTask[] }
 interface IndexDocument { version: 1; roots: IndexedRoot[] }
 export interface RootStatus { label: string; state: "ready" | "error"; message?: string }
 export interface TaskInventory { tasks: PersistedTaskSummary[]; roots: RootStatus[] }
-export interface VerifiedTaskIdentity { taskId: string; createdAt: string; root: string; dirId: string; realRoot: string }
+export interface VerifiedTaskIdentity {
+  taskId: string; createdAt: string; root: string; dirId: string; realRoot: string;
+  directoryDevice: string; directoryInode: string;
+}
 
 const FILE = "task-roots.json";
 const MAX_BYTES = 1024 * 1024;
@@ -279,14 +282,27 @@ export class TaskRootIndex {
     const row = this.scan().locations.get(taskId);
     if (!row) return null;
     try {
-      if (verifiedRoot(row.root, row.realPath) !== row.realPath ||
+      if (verifiedRoot(row.root, row.realPath) !== row.realPath) return null;
+      const dir = join(row.root, row.identity.dirId);
+      const before = lstatSync(dir, { bigint: true });
+      // Filesystems without usable stable identifiers cannot anchor a claim.
+      if (!before.isDirectory() || before.dev <= 0n || before.ino <= 0n ||
           !sameSummary(verifyTask(row.root, row.identity), row.summary)) return null;
+      const after = lstatSync(dir, { bigint: true });
+      if (!after.isDirectory() || after.dev !== before.dev || after.ino !== before.ino) return null;
       return { taskId, createdAt: row.identity.createdAt, root: row.root,
-        dirId: row.identity.dirId, realRoot: row.realPath };
+        dirId: row.identity.dirId, realRoot: row.realPath,
+        directoryDevice: after.dev.toString(), directoryInode: after.ino.toString() };
     } catch { return null; }
   }
   resolve(taskId: string): string | null {
-    const identity = this.verifiedIdentity(taskId);
-    return identity ? join(identity.root, identity.dirId) : null;
+    if (!isSafeTaskChildName(taskId)) return null;
+    const row = this.scan().locations.get(taskId);
+    if (!row) return null;
+    try {
+      verifiedRoot(row.root, row.realPath);
+      if (!sameSummary(verifyTask(row.root, row.identity), row.summary)) return null;
+      return join(row.root, row.identity.dirId);
+    } catch { return null; }
   }
 }

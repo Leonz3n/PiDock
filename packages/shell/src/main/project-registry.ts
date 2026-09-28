@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, normalize, posix, win32 } from "node:path";
 import type { TaskRootIndex, VerifiedTaskIdentity } from "./task-root-index.js";
@@ -19,8 +19,10 @@ export interface ProjectMembership {
   root: string;
   dirId: string;
   realRoot?: string;
+  directoryDevice?: string;
+  directoryInode?: string;
 }
-export interface AssociationReceipt {
+export interface TaskAssociationReceipt {
   id: string;
   at: string;
   action: "claim" | "unlink" | "transfer";
@@ -29,10 +31,14 @@ export interface AssociationReceipt {
   root: string;
   dirId: string;
   realRoot?: string;
+  directoryDevice?: string;
+  directoryInode?: string;
   fromProjectId: string | null;
   toProjectId: string | null;
 }
-interface Document { version: 1 | 2; projects: LocalProject[]; memberships: ProjectMembership[]; receipts?: AssociationReceipt[] }
+export interface ProjectDeletionReceipt { id: string; at: string; action: "delete"; projectId: string }
+export type AssociationReceipt = TaskAssociationReceipt | ProjectDeletionReceipt;
+interface Document { version: 1 | 2; projects: LocalProject[]; memberships: ProjectMembership[]; receipts?: AssociationReceipt[]; auditDigest?: string }
 export type SourceInput = { id?: string; name: string; path: string };
 export type ProjectCreateInput = { name: string; description: string; repositories: SourceInput[]; directories: SourceInput[] };
 export type ProjectUpdateInput = { description: string; repositories: SourceInput[]; directories: SourceInput[] };
@@ -103,19 +109,35 @@ function taskRoot(value: unknown): string {
   }
   return value;
 }
+function directoryIdentity(value: Record<string, unknown>): { directoryDevice?: string; directoryInode?: string } {
+  const device = value["directoryDevice"];
+  const inode = value["directoryInode"];
+  if (device === undefined && inode === undefined) return {};
+  if (typeof device !== "string" || typeof inode !== "string" ||
+      !/^[1-9][0-9]*$/.test(device) || !/^[1-9][0-9]*$/.test(inode)) {
+    throw new Error("invalid task directory identity");
+  }
+  return { directoryDevice: device, directoryInode: inode };
+}
 function membership(value: unknown): ProjectMembership {
   if (!record(value)) throw new Error("invalid membership");
-  keys(value, ["taskId", "projectId", "createdAt", "root", "dirId"], ["realRoot"]);
+  keys(value, ["taskId", "projectId", "createdAt", "root", "dirId"], ["realRoot", "directoryDevice", "directoryInode"]);
   const taskId = text(value["taskId"], "task ID");
   const dirId = text(value["dirId"], "dirId");
   if (!isSafeTaskChildName(taskId) || !isTaskDirId(dirId)) throw new Error("invalid membership task identity");
   return { taskId, projectId: id(value["projectId"]), createdAt: text(value["createdAt"], "createdAt"),
     root: taskRoot(value["root"]), dirId,
-    ...(value["realRoot"] === undefined ? {} : { realRoot: taskRoot(value["realRoot"]) }) };
+    ...(value["realRoot"] === undefined ? {} : { realRoot: taskRoot(value["realRoot"]) }),
+    ...directoryIdentity(value) };
 }
 function receipt(value: unknown): AssociationReceipt {
   if (!record(value)) throw new Error("invalid association receipt");
-  keys(value, ["id", "at", "action", "taskId", "createdAt", "root", "dirId", "fromProjectId", "toProjectId"], ["realRoot"]);
+  if (value["action"] === "delete") {
+    keys(value, ["id", "at", "action", "projectId"]);
+    return { id: id(value["id"]), at: text(value["at"], "receipt time"), action: "delete", projectId: id(value["projectId"]) };
+  }
+  keys(value, ["id", "at", "action", "taskId", "createdAt", "root", "dirId", "fromProjectId", "toProjectId"],
+    ["realRoot", "directoryDevice", "directoryInode"]);
   const action = value["action"];
   if (action !== "claim" && action !== "unlink" && action !== "transfer") throw new Error("invalid association action");
   const taskId = text(value["taskId"], "task ID");
@@ -129,12 +151,19 @@ function receipt(value: unknown): AssociationReceipt {
   return { id: id(value["id"]), at: text(value["at"], "receipt time"), action, taskId,
     createdAt: text(value["createdAt"], "createdAt"), root: taskRoot(value["root"]), dirId,
     ...(value["realRoot"] === undefined ? {} : { realRoot: taskRoot(value["realRoot"]) }),
-    fromProjectId: from, toProjectId: to };
+    ...directoryIdentity(value), fromProjectId: from, toProjectId: to };
+}
+function auditDigest(projects: LocalProject[], memberships: ProjectMembership[], receipts: AssociationReceipt[]): string {
+  // Detect accidental loss/rewrite of history or current identities; this is not an authenticated signature.
+  return createHash("sha256").update(JSON.stringify({ projectIds: projects.map((row) => row.id),
+    memberships: memberships.map((row) => ({ taskId: row.taskId, projectId: row.projectId,
+      createdAt: row.createdAt, root: row.root, dirId: row.dirId, realRoot: row.realRoot,
+      directoryDevice: row.directoryDevice, directoryInode: row.directoryInode })), receipts })).digest("hex");
 }
 function document(value: unknown): Document {
   if (!record(value)) throw new Error("invalid project registry");
   if (value["version"] !== 1 && value["version"] !== 2) throw new Error("unsupported project registry version");
-  keys(value, ["version", "projects", "memberships", ...(value["version"] === 2 ? ["receipts"] : [])]);
+  keys(value, ["version", "projects", "memberships", ...(value["version"] === 2 ? ["receipts", "auditDigest"] : [])]);
   if (!Array.isArray(value["projects"]) || !Array.isArray(value["memberships"])) throw new Error("invalid project registry rows");
   const projects = value["projects"].map(project);
   if (new Set(projects.map((row) => row.id)).size !== projects.length ||
@@ -146,22 +175,30 @@ function document(value: unknown): Document {
   if (!Array.isArray(value["receipts"]) || value["receipts"].length > 1000) throw new Error("invalid association receipts");
   const receipts = value["receipts"].map(receipt);
   if (new Set(receipts.map((row) => row.id)).size !== receipts.length) throw new Error("duplicate association receipt");
-  return { version: 2, projects, memberships, receipts };
+  const digest = auditDigest(projects, memberships, receipts);
+  if (value["auditDigest"] !== digest) throw new Error("project registry audit integrity mismatch");
+  return { version: 2, projects, memberships, receipts, auditDigest: digest };
 }
 
 function sameIdentity(stored: ProjectMembership, actual: VerifiedTaskIdentity): boolean {
   return stored.taskId === actual.taskId && stored.createdAt === actual.createdAt &&
-    stored.root === actual.root && stored.dirId === actual.dirId && stored.realRoot === actual.realRoot;
+    stored.root === actual.root && stored.dirId === actual.dirId && stored.realRoot === actual.realRoot &&
+    stored.directoryDevice === actual.directoryDevice && stored.directoryInode === actual.directoryInode;
 }
-function recordAction(doc: Document, action: AssociationReceipt["action"], identity: Omit<ProjectMembership, "projectId">,
-  fromProjectId: string | null, toProjectId: string | null): AssociationReceipt {
+function appendReceipt(doc: Document, entry: AssociationReceipt): void {
   const receipts = doc.receipts ?? [];
   if (receipts.length >= 1000) throw new Error("association receipt capacity exceeded");
-  const entry: AssociationReceipt = { id: randomUUID(), at: new Date().toISOString(), action,
-    taskId: identity.taskId, createdAt: identity.createdAt, root: identity.root, dirId: identity.dirId,
-    ...(identity.realRoot === undefined ? {} : { realRoot: identity.realRoot }), fromProjectId, toProjectId };
   doc.version = 2;
   doc.receipts = [...receipts, entry];
+}
+function recordAction(doc: Document, action: TaskAssociationReceipt["action"], identity: Omit<ProjectMembership, "projectId">,
+  fromProjectId: string | null, toProjectId: string | null): TaskAssociationReceipt {
+  const entry: TaskAssociationReceipt = { id: randomUUID(), at: new Date().toISOString(), action,
+    taskId: identity.taskId, createdAt: identity.createdAt, root: identity.root, dirId: identity.dirId,
+    ...(identity.realRoot === undefined ? {} : { realRoot: identity.realRoot }),
+    ...(identity.directoryDevice === undefined ? {} : { directoryDevice: identity.directoryDevice, directoryInode: identity.directoryInode }),
+    fromProjectId, toProjectId };
+  appendReceipt(doc, entry);
   return entry;
 }
 
@@ -242,6 +279,7 @@ export class ProjectRegistry {
     const operation = this.pending.then(() => {
       const { initialized, value } = this.load();
       const result = fn(value);
+      if (value.version === 2) value.auditDigest = auditDigest(value.projects, value.memberships, value.receipts ?? []);
       this.save(value, initialized);
       return result;
     });
@@ -336,13 +374,16 @@ export class ProjectRegistry {
       return current;
     });
   }
-  delete(projectId: string): Promise<void> {
+  delete(projectId: string): Promise<ProjectDeletionReceipt> {
     return this.mutate((value) => {
       const selected = id(projectId);
       const index = value.projects.findIndex((item) => item.id === selected);
       if (index < 0) throw new Error("unknown project");
       if (value.memberships.some((item) => item.projectId === selected)) throw new Error("project has associated tasks");
+      const entry: ProjectDeletionReceipt = { id: randomUUID(), at: new Date().toISOString(), action: "delete", projectId: selected };
       value.projects.splice(index, 1);
+      appendReceipt(value, entry);
+      return entry;
     });
   }
 }

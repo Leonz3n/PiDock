@@ -1,5 +1,6 @@
+import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ProjectRegistry, projectRegistryPath } from "./project-registry.js";
@@ -54,6 +55,60 @@ describe("explicit Project task association", () => {
     expect(JSON.parse(readFileSync(projectRegistryPath(f.data), "utf8")).receipts).toHaveLength(1);
   });
 
+  it("does not reassign a replaced directory with the same path and forged record identity", async () => {
+    const f = fixture();
+    const dir = f.task();
+    const original = readFileSync(join(dir, "task.json"), "utf8");
+    const first = await f.project("One");
+    const second = await f.project("Two");
+    const claimed = await f.registry.claim(id, first.id, f.roots);
+    expect(claimed).toMatchObject({ taskId: id });
+    renameSync(dir, join(f.home, "moved-original"));
+    mkdirSync(dir);
+    writeFileSync(join(dir, "task.json"), original);
+    expect(f.roots.verifiedIdentity(id)).not.toBeNull();
+    expect(f.registry.association(id, f.roots)).toMatchObject({ projectId: first.id, state: "needs-repair" });
+    await expect(f.registry.transfer(id, first.id, second.id, f.roots)).rejects.toThrow(/repair/);
+    expect(f.registry.association(id, f.roots).projectId).toBe(first.id);
+  });
+
+  it("atomically audits project deletion, including the first explicit v1 action", async () => {
+    const f = fixture();
+    const target = await f.project("One");
+    const file = projectRegistryPath(f.data);
+    expect(JSON.parse(readFileSync(file, "utf8")).version).toBe(1);
+    const failing = new ProjectRegistry(f.data, { beforeCommit: () => { throw new Error("interrupted delete"); } });
+    await expect(failing.delete(target.id)).rejects.toThrow("interrupted delete");
+    expect(f.registry.get(target.id)).toBeDefined();
+    expect(JSON.parse(readFileSync(file, "utf8")).version).toBe(1);
+    const result = await f.registry.delete(target.id);
+    expect(result).toMatchObject({ action: "delete", projectId: target.id });
+    const saved = JSON.parse(readFileSync(file, "utf8"));
+    expect(saved.version).toBe(2);
+    expect(saved.projects).toEqual([]);
+    expect(saved.receipts).toEqual([result]);
+    expect(saved.receipts[0]).not.toHaveProperty("taskId");
+    expect(JSON.parse(readFileSync(`${file}.bak`, "utf8")).version).toBe(1);
+  });
+
+  it("rejects structurally valid receipt loss and leaves preexisting v1 memberships unclaimed", async () => {
+    const f = fixture();
+    f.task();
+    const first = await f.project("One");
+    const file = projectRegistryPath(f.data);
+    const legacy = JSON.parse(readFileSync(file, "utf8"));
+    legacy.memberships.push({ taskId: id, projectId: first.id, createdAt, root: f.defaultRoot, dirId: id });
+    writeFileSync(file, JSON.stringify(legacy));
+    expect(f.registry.association(id, f.roots).state).toBe("needs-repair");
+    const unlinked = await f.registry.unlink(id, first.id);
+    expect(unlinked).toMatchObject({ action: "unlink", fromProjectId: first.id });
+    const doc = JSON.parse(readFileSync(file, "utf8"));
+    doc.receipts = [];
+    writeFileSync(file, JSON.stringify(doc));
+    expect(() => f.registry.list()).toThrow(/audit/);
+    await expect(f.registry.claim(id, first.id, f.roots)).rejects.toThrow(/audit/);
+  });
+
   it("requires explicit transfer, preserves receipts and permits deliberate unlink of damaged identity", async () => {
     const f = fixture();
     const dir = f.task();
@@ -72,7 +127,7 @@ describe("explicit Project task association", () => {
     const unlinked = await f.registry.unlink(id, second.id);
     expect(unlinked).toMatchObject({ action: "unlink", fromProjectId: second.id, toProjectId: null, createdAt });
     await f.registry.delete(second.id);
-    expect(JSON.parse(readFileSync(projectRegistryPath(f.data), "utf8")).receipts.map((row: { action: string }) => row.action)).toEqual(["claim", "transfer", "unlink"]);
+    expect(JSON.parse(readFileSync(projectRegistryPath(f.data), "utf8")).receipts.map((row: { action: string }) => row.action)).toEqual(["claim", "transfer", "delete", "unlink", "delete"]);
   });
 
   it("rejects undiscovered override, then claims only after explicit root import", async () => {
@@ -147,6 +202,12 @@ describe("explicit Project task association", () => {
     const file = projectRegistryPath(f.data);
     const doc = JSON.parse(readFileSync(file, "utf8"));
     doc.receipts = Array.from({ length: 1000 }, (_unused, n) => ({ ...doc.receipts[0], id: `00000000-0000-4000-8000-${String(n).padStart(12, "0")}` }));
+    doc.auditDigest = createHash("sha256").update(JSON.stringify({ projectIds: doc.projects.map((row: { id: string }) => row.id),
+      memberships: doc.memberships.map((row: { taskId: string; projectId: string; createdAt: string; root: string; dirId: string;
+        realRoot?: string; directoryDevice?: string; directoryInode?: string }) => ({
+        taskId: row.taskId, projectId: row.projectId, createdAt: row.createdAt, root: row.root,
+        dirId: row.dirId, realRoot: row.realRoot, directoryDevice: row.directoryDevice, directoryInode: row.directoryInode,
+      })), receipts: doc.receipts })).digest("hex");
     writeFileSync(file, JSON.stringify(doc));
     await expect(f.registry.unlink(id, target.id)).rejects.toThrow(/capacity/);
     expect(JSON.parse(readFileSync(file, "utf8")).memberships).toHaveLength(1);
