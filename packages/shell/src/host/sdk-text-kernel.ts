@@ -161,12 +161,39 @@ export class PiSdkTextKernel {
     return session;
   }
 
+  /** Read only the explicitly bound SDK JSONL; no model or global auth is required. */
+  projection(sessionId: string): { source: "sdk-jsonl"; sessionId: string; messages: { role: "user" | "assistant"; text: string; usage: { input: number; output: number; cacheRead: number; cacheWrite: number } | null }[]; interrupted: boolean } {
+    safeId(sessionId);
+    this.verifyTask();
+    const dir = join(this.root, sessionId);
+    const mapping = join(dir, "binding.json");
+    if (!existsSync(mapping)) return { source: "sdk-jsonl", sessionId, messages: [], interrupted: false };
+    if (!lstatSync(dir).isDirectory() || realpathSync(dir) !== join(realpathSync(this.taskDir), ".pidock-sdk-sessions", sessionId) || !lstatSync(mapping).isFile()) throw new Error("sdk-binding-invalid");
+    const binding: unknown = JSON.parse(readFileSync(mapping, "utf8"));
+    if (!binding || typeof binding !== "object" || Array.isArray(binding)) throw new Error("sdk-binding-invalid");
+    const data = binding as Record<string, unknown>;
+    if (data["taskId"] !== this.taskId || data["sessionId"] !== sessionId || typeof data["file"] !== "string" || !/^[\w-]+\.jsonl$/.test(data["file"])) throw new Error("sdk-binding-invalid");
+    const file = join(dir, data["file"]);
+    if (!lstatSync(file).isFile() || lstatSync(file).size > 2_000_000) throw new Error("sdk-projection-too-large");
+    const manager = SessionManager.open(file, dir, this.taskDir);
+    if (manager.getHeader()?.cwd !== this.taskDir || manager.getSessionId() !== data["sdkId"]) throw new Error("sdk-binding-invalid");
+    const entries = manager.getBranch().filter((entry) => entry.type === "message" && (entry.message.role === "user" || entry.message.role === "assistant")).slice(-80);
+    const messages = entries.map((entry) => {
+      if (entry.type !== "message" || (entry.message.role !== "user" && entry.message.role !== "assistant")) throw new Error("sdk-projection-invalid");
+      const message = entry.message;
+      const text = (typeof message.content === "string" ? message.content : message.content.filter((part) => part.type === "text").map((part) => part.text).join("")).slice(0, 16_384);
+      const usage = message.role === "assistant" ? { input: message.usage.input, output: message.usage.output, cacheRead: message.usage.cacheRead, cacheWrite: message.usage.cacheWrite } : null;
+      return { role: message.role, text, usage };
+    });
+    return { source: "sdk-jsonl", sessionId, messages, interrupted: messages.at(-1)?.role === "user" };
+  }
+
   async open(sessionId: string): Promise<{ sdkId: string; file: string; tools: string[] }> {
     const session = await this.sessionFor(sessionId);
     return { sdkId: session.sessionId, file: session.sessionFile!, tools: session.getActiveToolNames() };
   }
 
-  async prompt(sessionId: string, text: string, deliver?: (event: SdkTextEvent) => void): Promise<SdkTextResult> {
+  async prompt(sessionId: string, text: string, deliver?: (event: SdkTextEvent) => void, issuedTurnId?: string): Promise<SdkTextResult> {
     if (!text.trim()) throw new Error("invalid-prompt");
     if (this.starting || this.active.size) throw new Error("task-locked");
     this.starting = true;
@@ -176,14 +203,14 @@ export class PiSdkTextKernel {
     if (this.closing) throw new Error("sdk-closing");
     if (this.active.size) throw new Error("task-locked");
     const events: SdkTextEvent[] = [];
-    const turnId = randomUUID();
+    const turnId = issuedTurnId ?? randomUUID();
     let textResult = "";
     let responseError: string | undefined;
     let settled = false;
     let deliveryError = false;
     let cancelled = false;
     const emit = (data: SdkTextEventData) => {
-      if (events.length >= 256) { deliveryError = true; return; }
+      if (events.length >= 256 || Buffer.byteLength(JSON.stringify(data), "utf8") > 16_384) { deliveryError = true; return; }
       const event: SdkTextEvent = { ...data, taskId: this.taskId, sessionId, turnId, sequence: events.length + 1 };
       events.push(event);
       try { deliver?.(event); } catch { deliveryError = true; }
@@ -219,10 +246,14 @@ export class PiSdkTextKernel {
   }
 
   async cancel(sessionId: string): Promise<void> {
+    while (this.starting) await new Promise((resolve) => setTimeout(resolve, 10));
     const run = this.active.get(sessionId);
     if (!run) return;
     const session = this.sessions.get(sessionId);
-    if (session) await session.abort();
+    // SDK abort() is a no-op before prompt preflight starts its agent run.
+    // Wait for the run to become abortable (or finish) before issuing it.
+    while (session?.isIdle && this.active.has(sessionId)) await new Promise((resolve) => setTimeout(resolve, 10));
+    if (session && !session.isIdle) await session.abort();
     await run.catch(() => {});
   }
 

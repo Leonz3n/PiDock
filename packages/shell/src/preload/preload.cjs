@@ -17,8 +17,8 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 const BRIDGE_NAME = "pidock";
-const INVOKE_CHANNELS = ["shell/getVersions", "shell/hostPing", "shell/listTasks", "shell/importTaskRoot", "shell/projectOp", "shell/createTask", "shell/taskOp"];
-const EVENT_CHANNELS = ["shell/hostStatus"];
+const INVOKE_CHANNELS = ["shell/getVersions", "shell/hostPing", "shell/listTasks", "shell/importTaskRoot", "shell/projectOp", "shell/createTask", "shell/taskOp", "shell/sdkTurn"];
+const EVENT_CHANNELS = ["shell/hostStatus", "shell/sdkTurnEvent"];
 
 // Preload-only capabilities (NOT visible to the page itself). Sandboxed
 // preloads receive Electron through the limited built-in `require`; only
@@ -69,6 +69,15 @@ const bridge = {
       op: op,
       payload: payload === undefined ? {} : payload,
     });
+  },
+  sdkTurn: function (request) {
+    return invoke("shell/sdkTurn", request);
+  },
+  onSdkTurnEvent: function (listener) {
+    var channel = EVENT_CHANNELS[1];
+    var wrapped = function (_event, payload) { listener(payload); };
+    ipcRenderer.on(channel, wrapped);
+    return function () { ipcRenderer.removeListener(channel, wrapped); };
   },
   onHostStatus: function (listener) {
     var channel = EVENT_CHANNELS[0];

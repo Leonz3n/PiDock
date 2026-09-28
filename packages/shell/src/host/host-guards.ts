@@ -258,6 +258,15 @@ export function validateHostTaskOp(
   payload: unknown,
 ): { ok: true } | { ok: false; error: string } {
   if (!isHostTaskOp(op)) return { ok: false, error: "unknown-op" };
+  if (["task/sdkStart", "task/sdkStatus", "task/sdkProjection", "task/sdkCancel"].includes(op)) {
+    if (!isRecord(payload) || typeof payload["sessionId"] !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/.test(payload["sessionId"])) return { ok: false, error: "invalid-sdk-session" };
+    const keys = op === "task/sdkStart" ? ["sessionId", "requestId", "text"] : op === "task/sdkStatus" ? ["sessionId", "requestId"] : op === "task/sdkCancel" ? ["sessionId", "turnId"] : ["sessionId"];
+    if (Object.keys(payload).some((key) => !keys.includes(key))) return { ok: false, error: "invalid-sdk-payload: extra key" };
+    if (op === "task/sdkStart" && (typeof payload["text"] !== "string" || !payload["text"].trim() || Buffer.byteLength(payload["text"], "utf8") > 16_384)) return { ok: false, error: "invalid-sdk-prompt" };
+    if ((op === "task/sdkStart" || op === "task/sdkStatus") && (typeof payload["requestId"] !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/.test(payload["requestId"]))) return { ok: false, error: "invalid-sdk-request" };
+    if (op === "task/sdkCancel" && (typeof payload["turnId"] !== "string" || !/^[a-f0-9-]{36}$/.test(payload["turnId"]))) return { ok: false, error: "invalid-sdk-turn" };
+    return { ok: true };
+  }
   if (op === "task/provision") {
     if (!isRecord(payload))
       return {

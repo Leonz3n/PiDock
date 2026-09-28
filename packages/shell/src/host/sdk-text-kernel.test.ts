@@ -2,16 +2,17 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { AssistantMessage, Model, Provider } from "@earendil-works/pi-ai";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { ModelRuntime, SessionManager } from "@earendil-works/pi-coding-agent";
 import { buildTaskDiskRecord, serializeTaskRecord } from "./task-store.js";
 import { PiSdkTextKernel, type SdkTextEvent } from "./sdk-text-kernel.js";
+import { SdkTurnTransport } from "./sdk-turn-transport.js";
 import { TaskWorkspaceHost } from "./task-host.js";
 
 const roots: string[] = [];
-afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
+afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }); });
 
 function task(id: string) {
   const root = mkdtempSync(join(tmpdir(), "pidock-sdk-"));
@@ -80,6 +81,61 @@ async function kernel(dir: string, onPrompt?: (texts: string[]) => string, selec
   runtime.registerNativeProvider(provider);
   return { instance: new PiSdkTextKernel(JSON.parse(readFileSync(join(dir, "task.json"), "utf8")).taskId, dir, { model: selectedModel, modelRuntime: runtime }), seen };
 }
+
+it("journals ACK before prompt, deduplicates lost ACK and reads exact SDK JSONL", async () => {
+  const dir = task("task-transport");
+  const fake = await kernel(dir);
+  const transport = new SdkTurnTransport("task-transport", dir, fake.instance);
+  const events: SdkTextEvent[] = [];
+  const ack = await transport.start("main", "req1", "only once", (event) => events.push(event));
+  expect(ack).toMatchObject({ state: "accepted", requestId: "req1", taskId: "task-transport", sessionId: "main" });
+  expect(await transport.start("main", "req1", "only once", (event) => events.push(event))).toMatchObject({ turnId: ack.turnId });
+  await vi.waitFor(() => expect(transport.status("main", "req1")).toMatchObject({ state: "done", turnId: ack.turnId, lastSequence: 3 }));
+  expect(fake.seen).toHaveLength(1);
+  expect(events.map((event) => event.sequence)).toEqual([1, 2, 3]);
+  expect(events.every((event) => event.turnId === ack.turnId)).toBe(true);
+  expect(transport.projection("main")).toMatchObject({ source: "sdk-jsonl", messages: [
+    { role: "user", text: "only once" }, { role: "assistant", text: "hello", usage: { input: 4, output: 2 } },
+  ] });
+  await fake.instance.dispose();
+  const reopened = await kernel(dir);
+  const cold = new SdkTurnTransport("task-transport", dir, reopened.instance);
+  expect(cold.status("main", "req1")).toMatchObject({ state: "done", turnId: ack.turnId });
+  expect(await cold.start("main", "req1", "changed text", () => {})).toMatchObject({ turnId: ack.turnId });
+  expect(reopened.seen).toHaveLength(0);
+  await reopened.instance.dispose();
+});
+
+it("never replays a cold accepted turn, rejects hostile payload and turn-matches abort", async () => {
+  const dir = task("task-transport");
+  const pending = await kernel(dir, () => "wait");
+  const transport = new SdkTurnTransport("task-transport", dir, pending.instance);
+  const ack = await transport.start("main", "req1", "wait", () => {});
+  await expect(transport.cancel("other", ack.turnId)).rejects.toThrow("sdk-turn-not-active");
+  await expect(transport.cancel("main", "unrelated")).rejects.toThrow("sdk-turn-not-active");
+  expect(await transport.cancel("main", ack.turnId)).toMatchObject({ state: "cancelled", turnId: ack.turnId });
+  await pending.instance.dispose();
+  const journal = join(dir, ".pidock-sdk-turns", "main", "req1.json");
+  const recorded = JSON.parse(readFileSync(journal, "utf8"));
+  writeFileSync(journal, JSON.stringify({ ...recorded, state: "accepted" }));
+  const reopened = await kernel(dir);
+  const cold = new SdkTurnTransport("task-transport", dir, reopened.instance);
+  expect(cold.status("main", "req1")).toMatchObject({ state: "interrupted", needsResync: true });
+  expect(await cold.start("main", "req1", "do not resend", () => {})).toMatchObject({ state: "interrupted", turnId: ack.turnId });
+  expect(reopened.seen).toHaveLength(0);
+  await reopened.instance.dispose();
+});
+
+it("keeps provider-not-configured readable but refuses acceptance and source writes", async () => {
+  const dir = task("task-transport");
+  const source = join(dir, "source.txt");
+  writeFileSync(source, "original");
+  const transport = new SdkTurnTransport("task-transport", dir, new PiSdkTextKernel("task-transport", dir));
+  expect(transport.projection("main")).toMatchObject({ messages: [] });
+  await expect(transport.start("main", "req1", "hello", () => {})).rejects.toThrow("provider-not-configured");
+  expect(transport.status("main", "req1")).toBeNull();
+  expect(readFileSync(source, "utf8")).toBe("original");
+});
 
 it("refuses unconfigured production selection without touching global auth", async () => {
   const dir = task("task-a");

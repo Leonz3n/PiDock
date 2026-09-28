@@ -12,6 +12,8 @@ import type {
   Rectangle,
   UtilityProcess,
   WebPreferences,
+  WebContents,
+  IpcMainInvokeEvent,
 } from "electron";
 import { isAllowedInvokeChannel } from "../preload/allowlist.js";
 import { HostClient } from "../rpc/host-client.js";
@@ -416,7 +418,8 @@ export class PerTaskHostRegistry {
           `task-moved: ${taskId} no longer resolves to the forked task folder; re-provision or restart before sending ops`,
         );
       }
-      const result = await existing.client.task({ workspaceId: this.workspaceId, taskId, op, payload, origin });
+      const result = await existing.client.task({ workspaceId: this.workspaceId, taskId, op, payload, origin },
+        op === "task/sdkCancel" || op === "task/quit" ? { timeoutMs: 120_000 } : undefined);
       if (op === "task/provision") await this.taskRoots?.register(existing.taskDir);
       return result;
     }
@@ -452,7 +455,8 @@ export class PerTaskHostRegistry {
     const dirs = this.byTaskId.get(taskId) ?? new Set<string>();
     dirs.add(taskDir);
     this.byTaskId.set(taskId, dirs);
-    return client.task({ workspaceId: this.workspaceId, taskId, op, payload, origin });
+    return client.task({ workspaceId: this.workspaceId, taskId, op, payload, origin },
+      op === "task/sdkCancel" || op === "task/quit" ? { timeoutMs: 120_000 } : undefined);
   }
 
   /**
@@ -681,6 +685,83 @@ export function registerIpc(
   },
   creation?: ProjectTaskCreation,
 ): void {
+  type Subscription = { taskId: string; sessionId: string; frame: { processId: number; routingId: number }; webContents: WebContents; detach: () => void; sequences: Map<string, number>; resync: Set<string> };
+  const subscriptions = new Map<number, Subscription>();
+  function revoke(webContentsId: number): void {
+    const sub = subscriptions.get(webContentsId);
+    if (!sub) return;
+    subscriptions.delete(webContentsId);
+    sub.detach();
+  }
+  function live(event: IpcMainInvokeEvent, sub: Subscription): boolean {
+    if (sub.webContents.isDestroyed() || event.sender !== sub.webContents ||
+        event.sender.mainFrame.processId !== sub.frame.processId || event.sender.mainFrame.routingId !== sub.frame.routingId) return false;
+    try { registry.requireShellSender({ sender: event.sender, senderFrame: event.sender.mainFrame }); return true; }
+    catch { return false; }
+  }
+  ipcMain.handle("shell/sdkTurn", async (event, raw?: unknown) => {
+    try {
+      const sender = registry.requireShellSender(event);
+      if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error("invalid-sdk-payload");
+      const input = raw as Record<string, unknown>;
+      const action = input["action"];
+      if (!["subscribe", "unsubscribe", "start", "status", "projection", "cancel"].includes(String(action))) throw new Error("invalid-sdk-action");
+      const taskId = input["taskId"];
+      const sessionId = input["sessionId"];
+      if (typeof taskId !== "string" || !taskId || typeof sessionId !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/.test(sessionId)) throw new Error("invalid-sdk-identity");
+      const keys = action === "start" ? ["action", "taskId", "sessionId", "requestId", "text"] :
+        action === "status" ? ["action", "taskId", "sessionId", "requestId"] :
+        action === "cancel" ? ["action", "taskId", "sessionId", "turnId"] : ["action", "taskId", "sessionId"];
+      if (Object.keys(input).some((key) => !keys.includes(key))) throw new Error("invalid-sdk-payload: extra key");
+      const previous = subscriptions.get(sender.webContentsId);
+      if (action === "unsubscribe") {
+        if (previous?.taskId !== taskId || previous.sessionId !== sessionId) throw new Error("sdk-subscription-mismatch");
+        revoke(sender.webContentsId);
+        return { ok: true as const, payload: { unsubscribed: true } };
+      }
+      if (!tasks) throw new Error("sdk-task-registry-unavailable");
+      if (action === "subscribe") {
+        revoke(sender.webContentsId);
+        const snapshot = await tasks.routeTaskOp({ taskId, op: "task/sdkProjection", payload: { sessionId }, origin: { kind: "shell-ui", senderWebContentsId: sender.webContentsId } });
+        registry.requireShellSender(event);
+        const frame = event.sender.mainFrame;
+        if (frame.processId !== event.senderFrame?.processId || frame.routingId !== event.senderFrame.routingId || event.sender.isDestroyed()) throw new Error("sdk-sender-navigated");
+        const hostClient = tasks.entryForTaskId(taskId)?.client;
+        if (!hostClient) throw new Error("sdk-host-unavailable");
+        const sub: Subscription = { taskId, sessionId, frame: { processId: frame.processId, routingId: frame.routingId }, webContents: event.sender, detach: () => {}, sequences: new Map(), resync: new Set() };
+        sub.detach = hostClient.onTurnEvent((message) => {
+          if (subscriptions.get(sender.webContentsId) !== sub || !live(event, sub)) { revoke(sender.webContentsId); return; }
+          const item = message.kind === "sdk-turn-event" ? message.event : message.turn;
+          if (item.taskId !== taskId || item.sessionId !== sessionId) return;
+          if (message.kind === "sdk-turn-event") {
+            const last = sub.sequences.get(item.turnId) ?? 0;
+            if (sub.resync.has(item.turnId)) return;
+            if (message.event.sequence !== last + 1 || last >= 256) {
+              sub.resync.add(item.turnId);
+              sub.webContents.send("shell/sdkTurnEvent", { kind: "needs-resync", taskId, sessionId, turnId: item.turnId });
+              return;
+            }
+            sub.sequences.set(item.turnId, message.event.sequence);
+          }
+          try { sub.webContents.send("shell/sdkTurnEvent", message); }
+          catch { revoke(sender.webContentsId); }
+        });
+        subscriptions.set(sender.webContentsId, sub);
+        event.sender.once("did-start-navigation", () => revoke(sender.webContentsId));
+        event.sender.once("destroyed", () => revoke(sender.webContentsId));
+        return { ok: true as const, payload: { taskId, sessionId, snapshot: snapshot.payload } };
+      }
+      if (!previous || previous.taskId !== taskId || previous.sessionId !== sessionId || !live(event, previous)) throw new Error("sdk-subscription-required");
+      const op = action === "start" ? "task/sdkStart" : action === "status" ? "task/sdkStatus" : action === "cancel" ? "task/sdkCancel" : "task/sdkProjection";
+      const payload: Record<string, unknown> = { sessionId };
+      if (action === "start") { payload["requestId"] = input["requestId"]; payload["text"] = input["text"]; }
+      if (action === "status") payload["requestId"] = input["requestId"];
+      if (action === "cancel") payload["turnId"] = input["turnId"];
+      const result = await tasks.routeTaskOp({ taskId, op, payload, origin: { kind: "shell-ui", senderWebContentsId: sender.webContentsId } });
+      if (!live(event, previous) || subscriptions.get(sender.webContentsId) !== previous) throw new Error("sdk-sender-navigated");
+      return { ok: true as const, payload: result.payload };
+    } catch (error) { return { ok: false as const, error: errorMessage(error) }; }
+  });
   ipcMain.handle("shell/getVersions", async (event) => {
     try {
       const sender = registry.requireShellSender(event);
@@ -788,9 +869,10 @@ export function registerIpc(
       if (typeof taskId !== "string" || taskId.length === 0) {
         throw new TrustDomainViolation("invalid-payload", "shell/taskOp requires a taskId");
       }
-      if (!isHostTaskOp(op)) {
+      if (!isHostTaskOp(op) || op.startsWith("task/sdk")) {
         throw new TrustDomainViolation("invalid-payload", `unknown task op: ${String(op)}`);
       }
+      if (subscriptions.get(sender.webContentsId)?.taskId !== taskId) revoke(sender.webContentsId);
       const opPayload =
         typeof record["payload"] === "object" && record["payload"] !== null
           ? (record["payload"] as Record<string, unknown>)

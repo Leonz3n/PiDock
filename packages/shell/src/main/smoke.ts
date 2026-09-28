@@ -294,13 +294,16 @@ function validateShellProbe(
     bridgeKeys.some((key) => typeof key !== "string") ||
     JSON.stringify(bridgeKeys) !==
       JSON.stringify([
+        "createTask",
         "getSecurityState",
         "getVersions",
         "hostPing",
         "importTaskRoot",
         "listTasks",
         "onHostStatus",
+        "onSdkTurnEvent",
         "projectOp",
+        "sdkTurn",
         "taskOp",
       ])
   ) {
