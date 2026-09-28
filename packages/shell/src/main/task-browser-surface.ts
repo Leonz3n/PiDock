@@ -19,6 +19,7 @@ import { TaskAutomation } from "./task-automation.js";
 import { AgentPageController, type LayoutEntry } from "./agent-control.js";
 import type { TaskBrowser, TaskTab } from "./task-browser.js";
 import type { BrowserPerformResult } from "../rpc/protocol.js";
+import type { NavigationCheck } from "./browser-rules.js";
 import type {
   BrowserLivePage,
   BrowserScreenshot,
@@ -94,7 +95,10 @@ export class TaskBrowserSurface implements BrowserSurface {
     };
   }
 
-  async perform(request: BrowserSurfaceRequest): Promise<BrowserPerformResult> {
+  async perform(
+    request: BrowserSurfaceRequest,
+    validateRestoreUrl?: (url: string) => NavigationCheck,
+  ): Promise<BrowserPerformResult> {
     // The user's own actions are allowed on a page they took over; the
     // gateway only refuses agent actors while paused.
     const human = request.actor.kind === "human";
@@ -132,6 +136,10 @@ export class TaskBrowserSurface implements BrowserSurface {
         case "page/restore": {
           const url = this.closedUrls.pop();
           if (url === undefined) return { ok: false, error: "page-restore: 没有可恢复的已关闭页面" };
+          // The gateway owns the task allowlist. Check the consumed candidate
+          // before the first await, so another restore cannot swap it out.
+          const allowed = validateRestoreUrl?.(url);
+          if (!allowed?.ok) return { ok: false, error: allowed?.reason ?? "page-restore: 缺少任务导航校验" };
           try {
             const tab = await this.browser.openTab(url);
             return { ok: true, payload: { pageId: tab.pageId, webContentsId: tab.webContentsId, url } };

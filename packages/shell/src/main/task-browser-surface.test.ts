@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { createBrowserGateway } from "./browser-gateway.js";
+import { deriveNavigationAllowlist } from "./browser-rules.js";
+import { AgentPageController } from "./agent-control.js";
 import { TaskBrowserSurface } from "./task-browser-surface.js";
 import type { TaskBrowser, TaskTab } from "./task-browser.js";
 import type { BrowserPerformResult } from "../rpc/protocol.js";
@@ -136,19 +139,92 @@ const human = { kind: "human", label: "用户显式操作" } as const;
 const agent = { kind: "agent", sessionId: "main" } as const;
 
 describe("task browser surface attachment", () => {
-  it("restores an opened page even before CDP attachment, and keeps a failed restore retriable", async () => {
+  it("restores an allowed, unattached page and keeps a failed load retriable", async () => {
+    const { browser, raw } = fakeBrowser();
+    const surface = new TaskBrowserSurface(TASK_ID, browser);
+    const gateway = createBrowserGateway({ taskId: TASK_ID, surface, allowlist: deriveNavigationAllowlist({ addresses: ["http://localhost:5173"] }) });
+    const opened = await gateway.perform({ action: "page/open", page: undefined, params: { url: "http://localhost:5173/checkout" }, actor: human });
+    const pageId = String(payloadOf(opened)["pageId"]);
+    const closed = await gateway.perform({ action: "page/close", page: { pageId, webContentsId: browser.tabs[0]!.webContentsId }, params: {}, actor: human });
+    expect(closed).toMatchObject({ ok: true, payload: { closed: true } });
+    const originalOpen = raw.openTab;
+    raw.openTab = () => { throw new Error("navigation failed"); };
+    expect(await gateway.perform({ action: "page/restore", page: undefined, params: {}, actor: human })).toMatchObject({ ok: false, error: "navigation failed" });
+    raw.openTab = originalOpen;
+    const restored = await gateway.perform({ action: "page/restore", page: undefined, params: {}, actor: human });
+    expect(restored).toMatchObject({ ok: true, payload: { url: "http://localhost:5173/checkout" } });
+  });
+
+  it.each([false, true])("discards a redirected URL outside the task allowlist (CDP bound: %s)", async (bound) => {
+    const { browser, raw } = fakeBrowser();
+    const surface = new TaskBrowserSurface(TASK_ID, browser);
+    const gateway = createBrowserGateway({ taskId: TASK_ID, surface, allowlist: deriveNavigationAllowlist({ addresses: ["http://localhost:5173"] }) });
+    const opened = await gateway.perform({ action: "page/open", page: undefined, params: { url: "http://localhost:5173/checkout" }, actor: human });
+    const pageId = String(payloadOf(opened)["pageId"]);
+    const tab = browser.tabs[0]!;
+    const page = { pageId, webContentsId: tab.webContentsId };
+    if (bound) await surface.state(page);
+    // Simulate a server redirect after the allowlisted page/open request.
+    await tab.view.webContents.loadURL("https://outside.example/private");
+    expect((await gateway.perform({ action: "page/close", page, params: {}, actor: human })).ok).toBe(true);
+    const reopen = vi.spyOn(raw, "openTab");
+    const denied = await gateway.perform({ action: "page/restore", page: undefined, params: {}, actor: human });
+    expect(denied).toMatchObject({ ok: false, error: expect.stringContaining("navigation-denied") });
+    expect(reopen).not.toHaveBeenCalled();
+    expect(browser.tabs).toHaveLength(0);
+    expect(await gateway.perform({ action: "page/restore", page: undefined, params: {}, actor: human })).toMatchObject({ ok: false, error: expect.stringContaining("没有可恢复") });
+    expect(reopen).not.toHaveBeenCalled();
+  });
+
+  it("does not accept a restore policy supplied through renderer params or without the gateway", async () => {
     const { browser, raw } = fakeBrowser();
     const surface = new TaskBrowserSurface(TASK_ID, browser);
     const opened = await surface.perform({ action: "page/open", page: undefined, params: { url: "http://localhost:5173/checkout" }, actor: human });
     const pageId = String(payloadOf(opened)["pageId"]);
-    const closed = await surface.perform({ action: "page/close", page: { pageId, webContentsId: browser.tabs[0]!.webContentsId }, params: {}, actor: human });
-    expect(closed).toMatchObject({ ok: true, payload: { closed: true } });
-    const originalOpen = raw.openTab;
-    raw.openTab = () => { throw new Error("navigation failed"); };
-    expect(await surface.perform({ action: "page/restore", page: undefined, params: {}, actor: human })).toMatchObject({ ok: false, error: "navigation failed" });
-    raw.openTab = originalOpen;
-    const restored = await surface.perform({ action: "page/restore", page: undefined, params: {}, actor: human });
-    expect(restored).toMatchObject({ ok: true, payload: { url: "http://localhost:5173/checkout" } });
+    await surface.perform({ action: "page/close", page: { pageId, webContentsId: browser.tabs[0]!.webContentsId }, params: {}, actor: human });
+    const reopen = vi.spyOn(raw, "openTab");
+    expect(await surface.perform({ action: "page/restore", page: undefined, params: { allowlist: { origins: ["http://localhost:5173"] } }, actor: human }))
+      .toMatchObject({ ok: false, error: expect.stringContaining("缺少任务导航校验") });
+    expect(reopen).not.toHaveBeenCalled();
+  });
+
+  it("discards a forbidden top candidate without reordering earlier permitted restores", async () => {
+    const { browser, raw } = fakeBrowser();
+    const surface = new TaskBrowserSurface(TASK_ID, browser);
+    const gateway = createBrowserGateway({ taskId: TASK_ID, surface, allowlist: deriveNavigationAllowlist({ addresses: ["http://localhost:5173"] }) });
+    const close = async (pageId: string) => gateway.perform({ action: "page/close", page: { pageId }, params: {}, actor: human });
+    const first = payloadOf(await gateway.perform({ action: "page/open", page: undefined, params: { url: "http://localhost:5173/first" }, actor: human }));
+    await close(String(first["pageId"]));
+    const second = payloadOf(await gateway.perform({ action: "page/open", page: undefined, params: { url: "http://localhost:5173/second" }, actor: human }));
+    await browser.tabs[0]!.view.webContents.loadURL("https://outside.example/redirect");
+    await close(String(second["pageId"]));
+    const reopen = vi.spyOn(raw, "openTab");
+    expect((await gateway.perform({ action: "page/restore", page: undefined, params: {}, actor: human })).ok).toBe(false);
+    expect(reopen).not.toHaveBeenCalled();
+    expect(await gateway.perform({ action: "page/restore", page: undefined, params: {}, actor: human }))
+      .toMatchObject({ ok: true, payload: { url: "http://localhost:5173/first" } });
+  });
+
+  it("keeps an existing task tab selected when navigation or reload fails", async () => {
+    const { browser } = fakeBrowser();
+    const surface = new TaskBrowserSurface(TASK_ID, browser);
+    const gateway = createBrowserGateway({ taskId: TASK_ID, surface, allowlist: deriveNavigationAllowlist({ addresses: ["http://localhost:5173"] }) });
+    const opened = payloadOf(await gateway.perform({ action: "page/open", page: undefined, params: { url: "http://localhost:5173/checkout" }, actor: human }));
+    const page = { pageId: String(opened["pageId"]), webContentsId: Number(opened["webContentsId"]) };
+    await surface.state(page);
+    const navigate = vi.spyOn(AgentPageController.prototype, "navigate").mockRejectedValueOnce(new Error("navigation failed"));
+    const reload = vi.spyOn(AgentPageController.prototype, "reload").mockRejectedValueOnce(new Error("reload failed"));
+    try {
+      expect(await gateway.perform({ action: "page/navigate", page, params: { url: "http://localhost:5173/new" }, actor: human }))
+        .toMatchObject({ ok: false, error: "navigation failed" });
+      expect(await gateway.perform({ action: "page/reload", page, params: {}, actor: human }))
+        .toMatchObject({ ok: false, error: "reload failed" });
+      expect(browser.activeTab?.pageId).toBe(page.pageId);
+      expect(browser.tabs).toHaveLength(1);
+    } finally {
+      navigate.mockRestore();
+      reload.mockRestore();
+    }
   });
 
   it("attaches on first use so open → state/navigate/evidence work", async () => {
