@@ -6,7 +6,7 @@ import type { PidockBridge } from "../data/shellBridge";
 
 const tasks = [{ taskId: "real-1", name: "真实任务", branch: "task/main", repoCount: 1, updatedAt: "2026-09-22" }];
 const roots = [{ label: "默认任务根", state: "ready" as const }];
-const project = { id: "bcedc870-22bd-474e-ac55-78d30a9d763d", name: "真实项目", description: "系统 A", repositories: [{ id: "source-1", name: "Web", path: "/private/work/web" }], directories: [] };
+const project = { id: "bcedc870-22bd-474e-ac55-78d30a9d763d", name: "真实项目", description: "系统 A", repositories: [{ id: "dad5fcb4-c91f-4ab0-bc33-fbb82053f871", name: "Web", path: "/private/work/web" }], directories: [] };
 const bridge = (settings: { projectPresent?: boolean; assigned?: boolean; fail?: string } = {}): PidockBridge => ({
   listTasks: vi.fn(async () => ({ ok: true, payload: { tasks, roots } })),
   importTaskRoot: vi.fn(async () => ({ ok: true, payload: { canceled: false, count: 1 } })),
@@ -14,7 +14,7 @@ const bridge = (settings: { projectPresent?: boolean; assigned?: boolean; fail?:
     if (settings.fail) return { ok: false, error: settings.fail };
     if (request.op === "list") return { ok: true, payload: { initialized: settings.projectPresent ?? true, projects: settings.projectPresent === false ? [] : [project] } };
     if (request.op === "associations") return { ok: true, payload: { roots, tasks: [{ taskId: "real-1", projectId: settings.assigned ? project.id : null, state: settings.assigned ? "assigned" : "unassigned" }] } };
-    return { ok: true, payload: { id: "receipt-1" } };
+    return { ok: true, payload: { id: "ced35ecc-2d27-4ff8-a3cb-02dc5900e7a9" } };
   }),
 });
 
@@ -46,7 +46,7 @@ describe("Desktop production data", () => {
   it("claims an explicitly chosen task, rereads authority, then transfers and unlinks", async () => {
     const data = { assigned: false, projectPresent: true };
     const projectOp = vi.fn(async (request: { op: string }) => {
-      if (request.op === "list") return { ok: true, payload: { initialized: true, projects: [project, { ...project, id: "second-id", name: "另一个项目", repositories: [] }] } };
+      if (request.op === "list") return { ok: true, payload: { initialized: true, projects: [project, { ...project, id: "6fd712ce-a43b-4614-a459-de81d78a16aa", name: "另一个项目", repositories: [] }] } };
       if (request.op === "associations") return { ok: true, payload: { roots, tasks: [{ taskId: "real-1", projectId: data.assigned ? project.id : null, state: data.assigned ? "assigned" : "unassigned" }] } };
       if (request.op === "claim") data.assigned = true;
       return { ok: true, payload: {} };
@@ -59,16 +59,16 @@ describe("Desktop production data", () => {
     await waitFor(() => expect(projectOp).toHaveBeenCalledWith({ op: "claim", taskId: "real-1", projectId: project.id }));
     await waitFor(() => expect(screen.getByText("已检查的任务根暂无未归属任务")).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "真实项目" }));
-    fireEvent.change(screen.getByRole("combobox", { name: "真实任务 目标项目" }), { target: { value: "second-id" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "真实任务 目标项目" }), { target: { value: "6fd712ce-a43b-4614-a459-de81d78a16aa" } });
     fireEvent.click(screen.getByRole("button", { name: "转移" }));
-    await waitFor(() => expect(projectOp).toHaveBeenCalledWith({ op: "transfer", taskId: "real-1", fromProjectId: project.id, toProjectId: "second-id" }));
+    await waitFor(() => expect(projectOp).toHaveBeenCalledWith({ op: "transfer", taskId: "real-1", fromProjectId: project.id, toProjectId: "6fd712ce-a43b-4614-a459-de81d78a16aa" }));
     fireEvent.click(screen.getByRole("button", { name: "解绑" }));
     await waitFor(() => expect(projectOp).toHaveBeenCalledWith({ op: "unlink", taskId: "real-1", expectedProjectId: project.id }));
   });
 
   it("creates and edits only through main, retaining stable Project IDs", async () => {
     const current = { ...project, repositories: [...project.repositories] };
-    const created = { ...project, id: "new-project-id", name: "新增项目", repositories: [] };
+    const created = { ...project, id: "ddca4190-322c-40b9-bf9e-fab9184ac499", name: "新增项目", repositories: [] };
     let createdPresent = false;
     const projectOp = vi.fn(async (request: Parameters<NonNullable<PidockBridge["projectOp"]>>[0]) => {
       if (request.op === "list") return { ok: true, payload: { initialized: true, projects: createdPresent ? [current, created] : [current] } };
@@ -120,7 +120,7 @@ describe("Desktop production data", () => {
       if (holdRead) await new Promise<void>((resolve) => { releaseRead = resolve; });
       return { ok: true, payload: { tasks, roots } };
     });
-    const created = { ...project, id: "created-draft-id", name: "未保存项目", description: "原样保留", repositories: [{ id: "created-repo-id", name: "Web", path: "/local/web" }], directories: [{ id: "created-dir-id", name: "Notes", path: "/local/notes" }] };
+    const created = { ...project, id: "02444ad5-a691-468d-8430-a87e4a936bd5", name: "未保存项目", description: "原样保留", repositories: [{ id: "eb862802-8dda-42de-8885-0e5751d5ac63", name: "Web", path: "/local/web" }], directories: [{ id: "3155d195-bfac-4eae-80e9-bf2215ae337b", name: "Notes", path: "/local/notes" }] };
     let createdPresent = false;
     const projectOp = vi.fn(async (request: { op: string }) => {
       if (request.op === "list") return { ok: true, payload: { initialized: true, projects: createdPresent ? [project, created] : [project] } };
@@ -165,7 +165,7 @@ describe("Desktop production data", () => {
 
   it("keeps the submitted draft when a write succeeds but authoritative reread fails", async () => {
     let failNextRead = false;
-    const created = { ...project, id: "created-project-id", name: "待核验", repositories: [], directories: [{ id: "created-directory-id", name: "Documents", path: "/local/documents" }] };
+    const created = { ...project, id: "3b4a1dfb-480c-4f32-a71d-a3d41282b050", name: "待核验", repositories: [], directories: [{ id: "039b8a52-e7c9-4b28-af70-3cee22b19a89", name: "Documents", path: "/local/documents" }] };
     const projectOp = vi.fn(async (request: { op: string }) => {
       if (request.op === "create") { failNextRead = true; return { ok: true, payload: created }; }
       if (request.op === "list" && failNextRead) { failNextRead = false; return { ok: false, error: "注册表暂不可读" }; }
@@ -191,7 +191,7 @@ describe("Desktop production data", () => {
   });
 
   it("does not resubmit a committed create absent from a later authoritative list", async () => {
-    const pending = { ...project, id: "pending-id", name: "等待确认" };
+    const pending = { ...project, id: "22ba14c9-c5d9-4ba7-8b84-526e3619df11", name: "等待确认" };
     let failRead = false;
     const projectOp = vi.fn(async (request: { op: string }) => {
       if (request.op === "create") { failRead = true; return { ok: true, payload: pending }; }
@@ -211,6 +211,42 @@ describe("Desktop production data", () => {
     await waitFor(() => expect(screen.getByText(/尚未在本机清单中确认/)).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "重新核验" }));
     expect(await screen.findByLabelText("项目名称")).toHaveValue("等待确认");
+    expect(projectOp.mock.calls.filter(([request]) => request.op === "create")).toHaveLength(1);
+  });
+
+  it("confirming pending A leaves an unrelated unsaved edit of B intact", async () => {
+    const pendingA = { ...project, id: "9eb46dbf-8681-4bd6-850d-f6c44906d101", name: "A", repositories: [] };
+    const existingB = { ...project, id: "9eb46dbf-8681-4bd6-850d-f6c44906d102", name: "B", repositories: [] };
+    let failRead = false;
+    let showA = false;
+    const projectOp = vi.fn(async (request: { op: string }) => {
+      if (request.op === "create") { failRead = true; return { ok: true, payload: pendingA }; }
+      if (request.op === "list" && failRead) { failRead = false; return { ok: false, error: "读取失败" }; }
+      if (request.op === "list") return { ok: true, payload: { initialized: true, projects: showA ? [existingB, pendingA] : [existingB] } };
+      return { ok: true, payload: { roots, tasks: [{ taskId: "real-1", projectId: null, state: "unassigned" }] } };
+    });
+    window.pidock = { listTasks: vi.fn(async () => ({ ok: true, payload: { tasks, roots } })), projectOp };
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /^项目$/ }));
+    fireEvent.change(screen.getByLabelText("项目名称"), { target: { value: "A" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    expect(await screen.findByText("读取失败")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    expect(await screen.findByRole("button", { name: "重新核验" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "B" }));
+    fireEvent.click(screen.getByRole("button", { name: "编辑" }));
+    fireEvent.change(screen.getByLabelText("项目名称"), { target: { value: "B 待改名" } });
+    fireEvent.change(screen.getByLabelText("描述"), { target: { value: "B 未保存的描述" } });
+    fireEvent.click(screen.getByRole("button", { name: "添加目录" }));
+    fireEvent.change(screen.getByLabelText("目录名称 1"), { target: { value: "B notes" } });
+    fireEvent.change(screen.getByLabelText("目录路径 1"), { target: { value: "/local/b-notes" } });
+    showA = true;
+    fireEvent.click(screen.getByRole("button", { name: "重新核验" }));
+    expect(await screen.findByRole("heading", { name: "B" })).toBeInTheDocument();
+    expect(screen.getByLabelText("项目名称")).toHaveValue("B 待改名");
+    expect(screen.getByLabelText("描述")).toHaveValue("B 未保存的描述");
+    expect(screen.getByLabelText("目录路径 1")).toHaveValue("/local/b-notes");
+    expect(screen.queryByRole("button", { name: "重新核验" })).not.toBeInTheDocument();
     expect(projectOp.mock.calls.filter(([request]) => request.op === "create")).toHaveLength(1);
   });
 
@@ -311,7 +347,7 @@ describe("Desktop production data", () => {
   });
 
   it("returns to unassigned after deleting selected A or externally removing it, never targeting B", async () => {
-    let projects = [project, { ...project, id: "second-id", name: "B", repositories: [] }];
+    let projects = [project, { ...project, id: "6fd712ce-a43b-4614-a459-de81d78a16aa", name: "B", repositories: [] }];
     const projectOp = vi.fn(async (request: { op: string }) => {
       if (request.op === "list") return { ok: true, payload: { initialized: true, projects } };
       if (request.op === "associations") return { ok: true, payload: { roots, tasks: [{ taskId: "real-1", projectId: null, state: "unassigned" }] } };

@@ -17,7 +17,7 @@ describe("Desktop Project trust boundary", () => {
     await expect(loadDesktopProjects({ listTasks: bridge.listTasks })).rejects.toThrow("项目接口不可用");
   });
   it("rejects malformed or inconsistent associations, including unknown project IDs", async () => {
-    await expect(loadDesktopProjects(fixture({ taskId: "task-real", projectId: "unknown", state: "assigned" }))).rejects.toThrow("清单不一致");
+    await expect(loadDesktopProjects(fixture({ taskId: "task-real", projectId: "81dccaa0-4da7-41a5-bdcc-1a750614b53b", state: "assigned" }))).rejects.toThrow("清单不一致");
     await expect(loadDesktopProjects(fixture({ taskId: "other", projectId: null, state: "unassigned" }))).rejects.toThrow("清单不一致");
     const bridge = fixture();
     bridge.projectOp = vi.fn(async () => ({ ok: true, payload: { initialized: true, projects: [] } }));
@@ -25,7 +25,7 @@ describe("Desktop Project trust boundary", () => {
   });
   it("keeps bridge errors and denied writes visible", async () => {
     await expect(projectOperation({}, { op: "create", input: {} })).rejects.toThrow("项目接口不可用");
-    await expect(projectOperation({ projectOp: vi.fn(async () => ({ ok: false, error: "project has associated tasks" })) }, { op: "delete", projectId: "known" })).rejects.toThrow("project has associated tasks");
+    await expect(projectOperation({ projectOp: vi.fn(async () => ({ ok: false, error: "project has associated tasks" })) }, { op: "delete", projectId: "81334064-ffea-4415-b03c-c2784b16a749" })).rejects.toThrow("project has associated tasks");
     await expect(loadDesktopProjects({ listTasks: vi.fn(async () => ({ ok: false, error: "任务根损坏" })) })).rejects.toThrow("任务根损坏");
   });
 });
