@@ -131,6 +131,22 @@ describe("main-owned project registry", () => {
     }
   });
 
+  it("rejects Windows device aliases including console streams and superscript COM/LPT digits", () => {
+    const reserved = [
+      "CONIN$", "conout$", "CONIN$.log", "ConOut$.archive.txt",
+      "COM¹", "com².log", "COM³.archive.txt", "LPT¹", "lpt².log", "LPT³.archive.txt",
+    ];
+    for (const component of reserved) {
+      expect(() => sourcePath(`C:\\workspace\\${component}`, "win32"), component).toThrow();
+    }
+    const permitted = ["CONIN$-data", "CONOUT$notes", "COM0", "LPT0.txt", "COM¹report", "LPT²-extra", "COM10", "com-file", "report#2"];
+    for (const component of permitted) {
+      const path = `C:\\workspace\\${component}`;
+      expect(sourcePath(path, "win32"), component).toBe(path);
+    }
+    expect(sourcePath("/workspace/CONIN$/COM¹.txt", "posix")).toBe("/workspace/CONIN$/COM¹.txt");
+  });
+
   it("rejects relative, traversal, URL, and credential-like metadata without touching the source", async () => {
     const { store } = registry();
     for (const path of ["relative", "/workspace/../secret", "https://example.com", "/workspace/./repo", "/workspace/\u0000bad"]) {

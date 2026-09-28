@@ -55,7 +55,7 @@ export function sourcePath(value: unknown, platform: "posix" | "win32" = process
   const components = path.split(windows ? "\\" : "/");
   if ((windows && (!/^[a-zA-Z]:\\/.test(path) || path.includes("/") ||
         components.slice(1).some((part) => /[<>:"|?*]/.test(part) || [...part].some((char) => char.charCodeAt(0) < 32) ||
-          /[. ]$/.test(part) || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part)))) ||
+          /[. ]$/.test(part) || /^(?:con|prn|aux|nul|conin\$|conout\$|com[1-9\u00b9\u00b2\u00b3]|lpt[1-9\u00b9\u00b2\u00b3])(?:\.|$)/i.test(part)))) ||
       !parser.isAbsolute(path) || parser.normalize(path) !== path || path === parser.parse(path).root ||
       components.some((part) => part === "." || part === "..")) {
     throw new Error("invalid absolute source path");
