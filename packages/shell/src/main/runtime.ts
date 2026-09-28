@@ -172,7 +172,7 @@ export async function createHost(
   logExit = true,
   task?: { taskId: string; taskDir: string },
 ): Promise<{ client: HostClient; child: UtilityProcess }> {
-  const entry = path.join(here, "..", "host", "host.js");
+  const entry = path.join(here, "..", "host", "host-entry.js");
   const child = utilityProcess.fork(entry, [], {
     serviceName: task ? `pidock-node-host-${task.taskId}` : "pidock-node-host",
     env: buildHostEnv(process.env, workspaceId, task),
@@ -566,8 +566,9 @@ export class PerTaskHostRegistry {
           op: "task/quit",
           payload,
           origin: input.origin,
-        });
+        }, { timeoutMs: 120_000 });
         const quit = (result.payload as { quit?: { applied?: string[]; plan?: { failures?: unknown[]; retainedTasks?: string[] } } }).quit;
+        if (!quit || !Array.isArray(quit.applied) || !quit.plan || !Array.isArray(quit.plan.failures) || !Array.isArray(quit.plan.retainedTasks)) throw new Error("host-quit-report-invalid");
         tasks.push({
           taskId: entry.taskId,
           ok: true,
@@ -591,6 +592,54 @@ export class PerTaskHostRegistry {
     this.byTaskDir.clear();
     this.byTaskId.clear();
   }
+}
+
+export function createHostStopper(tasks: Pick<PerTaskHostRegistry, "quitAll">, origin: TaskOpOrigin, onStopped: () => void): () => Promise<boolean> {
+  let pending: Promise<boolean> | undefined;
+  return () => {
+    if (pending) return pending;
+    pending = tasks.quitAll({ origin, label: "应用退出" }).then((report) => {
+      console.log(`[main] quit report: ${JSON.stringify(report)}`);
+      if (!report.ok) {
+        console.error(`[main] unresolved Host shutdown; retaining processes: ${JSON.stringify(report.tasks.filter((task) => !task.ok || task.retainedTasks.length))}`);
+        return false;
+      }
+      onStopped();
+      return true;
+    }).catch((error: unknown) => {
+      console.error(`[main] quit report failed; retaining Hosts: ${errorMessage(error)}`);
+      return false;
+    }).then((stopped) => {
+      if (!stopped) pending = undefined;
+      return stopped;
+    });
+    return pending;
+  };
+}
+
+export function createLastWindowShutdown(stopHosts: () => Promise<boolean>, onStopped: () => void, retryMs = 5_000): () => Promise<void> {
+  let pending: Promise<void> | undefined;
+  let retry: ReturnType<typeof setTimeout> | undefined;
+  let finished = false;
+  const attempt = (): Promise<void> => {
+    if (finished) return Promise.resolve();
+    if (pending) return pending;
+    pending = Promise.resolve().then(stopHosts).catch((error: unknown) => {
+      console.error(`[main] last-window shutdown failed: ${errorMessage(error)}`);
+      return false;
+    }).then((stopped) => {
+      if (stopped) {
+        finished = true;
+        if (retry) clearTimeout(retry);
+        onStopped();
+      } else if (!retry) {
+        console.error(`[main] Host shutdown remains pending; retrying in ${retryMs} ms`);
+        retry = setTimeout(() => { retry = undefined; void attempt(); }, retryMs);
+      }
+    }).finally(() => { pending = undefined; });
+    return pending;
+  };
+  return attempt;
 }
 
 /**
@@ -685,16 +734,39 @@ export function registerIpc(
   },
   creation?: ProjectTaskCreation,
 ): void {
-  type Subscription = { taskId: string; sessionId: string; frame: { processId: number; routingId: number }; webContents: WebContents; detach: () => void; sequences: Map<string, number>; resync: Set<string> };
+  type TurnMessage = Parameters<Parameters<HostClient["onTurnEvent"]>[0]>[0];
+  type PendingStart = { requestId: string; buffered: TurnMessage[]; bytes: number; overflow: boolean };
+  type Subscription = { taskId: string; sessionId: string; frame: { processId: number; routingId: number }; webContents: WebContents; detach: () => void; deliver: (message: TurnMessage) => void; onNavigation: () => void; onInPageNavigation: () => void; onDestroyed: () => void; turns: Map<string, { sequence: number; resync: boolean; terminal: boolean }>; evictedTurns: boolean; pendingStart: PendingStart | null };
   const subscriptions = new Map<number, Subscription>();
+  const pendingNavigation = new Map<number, { webContents: WebContents; listener: () => void }>();
+  const revisions = new Map<number, number>();
   function revoke(webContentsId: number): void {
+    revisions.set(webContentsId, (revisions.get(webContentsId) ?? 0) + 1);
+    const pending = pendingNavigation.get(webContentsId);
+    if (pending) {
+      pendingNavigation.delete(webContentsId);
+      pending.webContents.removeListener("did-start-navigation", pending.listener);
+    }
     const sub = subscriptions.get(webContentsId);
     if (!sub) return;
     subscriptions.delete(webContentsId);
+    sub.webContents.removeListener("did-start-navigation", sub.onNavigation);
+    sub.webContents.removeListener("did-navigate-in-page", sub.onInPageNavigation);
+    sub.webContents.removeListener("destroyed", sub.onDestroyed);
+    sub.pendingStart = null;
     sub.detach();
   }
+  function routeMatches(sub: Subscription): boolean {
+    try {
+      const url = new URL(sub.webContents.getURL());
+      // Production inventory has no URL task route; main owns its binding.
+      if (url.protocol === "file:") return fileURLToPath(url) === path.join(here, "..", "renderer", "index.html");
+      const match = /^\/projects\/[^/]+\/tasks\/([^/]+)$/.exec(url.pathname);
+      return !!match && decodeURIComponent(match[1]!) === sub.taskId && url.searchParams.get("session") === sub.sessionId;
+    } catch { return false; }
+  }
   function live(event: IpcMainInvokeEvent, sub: Subscription): boolean {
-    if (sub.webContents.isDestroyed() || event.sender !== sub.webContents ||
+    if (!routeMatches(sub) || sub.webContents.isDestroyed() || event.sender !== sub.webContents ||
         event.sender.mainFrame.processId !== sub.frame.processId || event.sender.mainFrame.routingId !== sub.frame.routingId) return false;
     try { registry.requireShellSender({ sender: event.sender, senderFrame: event.sender.mainFrame }); return true; }
     catch { return false; }
@@ -711,54 +783,184 @@ export function registerIpc(
       if (typeof taskId !== "string" || !taskId || typeof sessionId !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/.test(sessionId)) throw new Error("invalid-sdk-identity");
       const keys = action === "start" ? ["action", "taskId", "sessionId", "requestId", "text"] :
         action === "status" ? ["action", "taskId", "sessionId", "requestId"] :
+        action === "subscribe" ? ["action", "taskId", "sessionId", "requestId"] :
         action === "cancel" ? ["action", "taskId", "sessionId", "turnId"] : ["action", "taskId", "sessionId"];
       if (Object.keys(input).some((key) => !keys.includes(key))) throw new Error("invalid-sdk-payload: extra key");
+      if (action === "subscribe" && input["requestId"] !== undefined &&
+          (typeof input["requestId"] !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/.test(input["requestId"]))) throw new Error("invalid-sdk-request");
       const previous = subscriptions.get(sender.webContentsId);
       if (action === "unsubscribe") {
-        if (previous?.taskId !== taskId || previous.sessionId !== sessionId) throw new Error("sdk-subscription-mismatch");
+        if (previous?.taskId !== taskId || previous.sessionId !== sessionId) {
+          if (pendingNavigation.has(sender.webContentsId)) revoke(sender.webContentsId);
+          throw new Error("sdk-subscription-mismatch");
+        }
         revoke(sender.webContentsId);
         return { ok: true as const, payload: { unsubscribed: true } };
       }
       if (!tasks) throw new Error("sdk-task-registry-unavailable");
       if (action === "subscribe") {
         revoke(sender.webContentsId);
-        const snapshot = await tasks.routeTaskOp({ taskId, op: "task/sdkProjection", payload: { sessionId }, origin: { kind: "shell-ui", senderWebContentsId: sender.webContentsId } });
+        const revision = revisions.get(sender.webContentsId);
+        const initialUrl = event.sender.getURL();
+        let navigated = false;
+        const onNavigation = () => {
+          navigated = true;
+          if (revisions.get(sender.webContentsId) === revision) revoke(sender.webContentsId);
+        };
+        event.sender.once("did-start-navigation", onNavigation);
+        pendingNavigation.set(sender.webContentsId, { webContents: event.sender, listener: onNavigation });
+        try {
+        await tasks.routeTaskOp({ taskId, op: "task/sdkProjection", payload: { sessionId }, origin: { kind: "shell-ui", senderWebContentsId: sender.webContentsId } });
         registry.requireShellSender(event);
         const frame = event.sender.mainFrame;
-        if (frame.processId !== event.senderFrame?.processId || frame.routingId !== event.senderFrame.routingId || event.sender.isDestroyed()) throw new Error("sdk-sender-navigated");
+        if (navigated || revision !== revisions.get(sender.webContentsId) || initialUrl !== event.sender.getURL() ||
+            frame.processId !== event.senderFrame?.processId || frame.routingId !== event.senderFrame.routingId || event.sender.isDestroyed()) throw new Error("sdk-sender-navigated");
         const hostClient = tasks.entryForTaskId(taskId)?.client;
         if (!hostClient) throw new Error("sdk-host-unavailable");
-        const sub: Subscription = { taskId, sessionId, frame: { processId: frame.processId, routingId: frame.routingId }, webContents: event.sender, detach: () => {}, sequences: new Map(), resync: new Set() };
-        sub.detach = hostClient.onTurnEvent((message) => {
-          if (subscriptions.get(sender.webContentsId) !== sub || !live(event, sub)) { revoke(sender.webContentsId); return; }
-          const item = message.kind === "sdk-turn-event" ? message.event : message.turn;
+        const sub: Subscription = { taskId, sessionId, frame: { processId: frame.processId, routingId: frame.routingId }, webContents: event.sender, detach: () => {}, deliver: () => {}, onNavigation,
+          onInPageNavigation: () => {}, onDestroyed: () => {}, turns: new Map(), evictedTurns: false, pendingStart: null };
+        const remember = (turnId: string, sequence: number, resync: boolean, terminal = false) => {
+          sub.turns.delete(turnId);
+          sub.turns.set(turnId, { sequence, resync, terminal });
+          if (sub.turns.size > 64) {
+            sub.turns.delete(sub.turns.keys().next().value!);
+            sub.evictedTurns = true;
+          }
+        };
+        const deliverTurn = (message: TurnMessage) => {
+          if (subscriptions.get(sender.webContentsId) !== sub) return;
+          if (!live(event, sub)) { revoke(sender.webContentsId); return; }
+          const item = message.kind === "sdk-turn-event" ? message.event : message.kind === "sdk-turn-status" ? message.turn : message;
           if (item.taskId !== taskId || item.sessionId !== sessionId) return;
+          if (message.kind === "sdk-turn-resync") {
+            remember(item.turnId, sub.turns.get(item.turnId)?.sequence ?? 0, true);
+            try { sub.webContents.send("shell/sdkTurnEvent", { kind: "needs-resync", taskId, sessionId, turnId: item.turnId }); }
+            catch { revoke(sender.webContentsId); }
+            return;
+          }
           if (message.kind === "sdk-turn-event") {
-            const last = sub.sequences.get(item.turnId) ?? 0;
-            if (sub.resync.has(item.turnId)) return;
-            if (message.event.sequence !== last + 1 || last >= 256) {
-              sub.resync.add(item.turnId);
-              sub.webContents.send("shell/sdkTurnEvent", { kind: "needs-resync", taskId, sessionId, turnId: item.turnId });
+            const previousTurn = sub.turns.get(item.turnId);
+            const last = previousTurn?.sequence ?? 0;
+            if (previousTurn?.terminal || previousTurn?.resync) return;
+            if (!previousTurn && sub.evictedTurns) {
+              remember(item.turnId, 0, true);
+              try { sub.webContents.send("shell/sdkTurnEvent", { kind: "needs-resync", taskId, sessionId, turnId: item.turnId }); }
+              catch { revoke(sender.webContentsId); }
               return;
             }
-            sub.sequences.set(item.turnId, message.event.sequence);
+            if (message.event.sequence !== last + 1 || last >= 256) {
+              remember(item.turnId, last, true);
+              try { sub.webContents.send("shell/sdkTurnEvent", { kind: "needs-resync", taskId, sessionId, turnId: item.turnId }); }
+              catch { revoke(sender.webContentsId); }
+              return;
+            }
+            remember(item.turnId, message.event.sequence, false);
           }
-          try { sub.webContents.send("shell/sdkTurnEvent", message); }
+          try {
+            sub.webContents.send("shell/sdkTurnEvent", message.kind === "sdk-turn-status" && (sub.turns.get(item.turnId)?.resync || (sub.evictedTurns && !sub.turns.has(item.turnId)))
+              ? { ...message, turn: { ...message.turn, needsResync: true } } : message);
+            if (message.kind === "sdk-turn-status") {
+              const prior = sub.turns.get(item.turnId);
+              remember(item.turnId, prior?.sequence ?? 0, prior?.resync ?? sub.evictedTurns, true);
+            }
+          }
           catch { revoke(sender.webContentsId); }
+        };
+        sub.deliver = deliverTurn;
+        sub.detach = hostClient.onTurnEvent((message) => {
+          const item = message.kind === "sdk-turn-event" ? message.event : message.kind === "sdk-turn-status" ? message.turn : message;
+          if (sub.pendingStart && sub.evictedTurns && !sub.turns.has(item.turnId) && item.taskId === taskId && item.sessionId === sessionId) {
+            const bytes = Buffer.byteLength(JSON.stringify(message), "utf8");
+            if (!sub.pendingStart.overflow && sub.pendingStart.buffered.length < 256 && sub.pendingStart.bytes + bytes <= 262_144) {
+              sub.pendingStart.buffered.push(message);
+              sub.pendingStart.bytes += bytes;
+            } else {
+              sub.pendingStart.overflow = true;
+              sub.pendingStart.buffered.length = 0;
+            }
+            return;
+          }
+          deliverTurn(message);
         });
+        if (!routeMatches(sub)) { sub.detach(); throw new Error("sdk-task-route-mismatch"); }
+        pendingNavigation.delete(sender.webContentsId);
         subscriptions.set(sender.webContentsId, sub);
-        event.sender.once("did-start-navigation", () => revoke(sender.webContentsId));
-        event.sender.once("destroyed", () => revoke(sender.webContentsId));
-        return { ok: true as const, payload: { taskId, sessionId, snapshot: snapshot.payload } };
+        sub.onInPageNavigation = () => { if (subscriptions.get(sender.webContentsId) === sub && !routeMatches(sub)) revoke(sender.webContentsId); };
+        sub.onDestroyed = () => { if (subscriptions.get(sender.webContentsId) === sub) revoke(sender.webContentsId); };
+        event.sender.on("did-navigate-in-page", sub.onInPageNavigation);
+        event.sender.on("destroyed", sub.onDestroyed);
+        // A turn can settle between the first Host read and listener attachment.
+        // Read authoritative JSONL again while the guarded listener is live.
+        const snapshot = await tasks.routeTaskOp({ taskId, op: "task/sdkProjection", payload: { sessionId }, origin: { kind: "shell-ui", senderWebContentsId: sender.webContentsId } });
+        const status = input["requestId"] === undefined ? null : await tasks.routeTaskOp({ taskId, op: "task/sdkStatus",
+          payload: { sessionId, requestId: input["requestId"] }, origin: { kind: "shell-ui", senderWebContentsId: sender.webContentsId } });
+        const turn = (status?.payload as { turn?: { turnId?: string; state?: string; needsResync?: boolean } | null } | undefined)?.turn ?? null;
+        // The turn can settle between the first JSONL read and the status read.
+        const reconciled = turn && ["done", "failed", "cancelled"].includes(turn.state ?? "")
+          ? await tasks.routeTaskOp({ taskId, op: "task/sdkProjection", payload: { sessionId }, origin: { kind: "shell-ui", senderWebContentsId: sender.webContentsId } })
+          : snapshot;
+        if (subscriptions.get(sender.webContentsId) !== sub || !live(event, sub)) throw new Error("sdk-sender-navigated");
+        const needsResync = turn?.turnId && (sub.turns.get(turn.turnId)?.resync || (sub.evictedTurns && !sub.turns.has(turn.turnId)));
+        if (turn?.turnId && ["done", "failed", "cancelled", "interrupted"].includes(turn.state ?? "")) {
+          const prior = sub.turns.get(turn.turnId);
+          remember(turn.turnId, prior?.sequence ?? 0, prior?.resync ?? Boolean(needsResync), true);
+        }
+        return { ok: true as const, payload: { taskId, sessionId, snapshot: reconciled.payload,
+          turn: needsResync ? { ...turn, needsResync: true } : turn } };
+        } catch (error) {
+          if (subscriptions.get(sender.webContentsId)?.onNavigation === onNavigation) revoke(sender.webContentsId);
+          if (pendingNavigation.get(sender.webContentsId)?.listener === onNavigation) {
+            pendingNavigation.delete(sender.webContentsId);
+            event.sender.removeListener("did-start-navigation", onNavigation);
+          }
+          throw error;
+        }
       }
       if (!previous || previous.taskId !== taskId || previous.sessionId !== sessionId || !live(event, previous)) throw new Error("sdk-subscription-required");
-      const op = action === "start" ? "task/sdkStart" : action === "status" ? "task/sdkStatus" : action === "cancel" ? "task/sdkCancel" : "task/sdkProjection";
+      const op = action === "start" ? "task/sendMessage" : action === "status" ? "task/sdkStatus" : action === "cancel" ? "task/sdkCancel" : "task/sdkProjection";
       const payload: Record<string, unknown> = { sessionId };
       if (action === "start") { payload["requestId"] = input["requestId"]; payload["text"] = input["text"]; }
       if (action === "status") payload["requestId"] = input["requestId"];
       if (action === "cancel") payload["turnId"] = input["turnId"];
-      const result = await tasks.routeTaskOp({ taskId, op, payload, origin: { kind: "shell-ui", senderWebContentsId: sender.webContentsId } });
+      const pending = action === "start" ? { requestId: input["requestId"] as string, buffered: [] as TurnMessage[], bytes: 0, overflow: false } : null;
+      if (pending && previous.pendingStart) throw new Error("sdk-start-pending");
+      if (pending) previous.pendingStart = pending;
+      let result: Awaited<ReturnType<PerTaskHostRegistry["routeTaskOp"]>>;
+      try {
+        result = await tasks.routeTaskOp({ taskId, op, payload, origin: { kind: "shell-ui", senderWebContentsId: sender.webContentsId } });
+      } catch (error) {
+        if (pending && previous.pendingStart === pending) previous.pendingStart = null;
+        throw error;
+      }
       if (!live(event, previous) || subscriptions.get(sender.webContentsId) !== previous) throw new Error("sdk-sender-navigated");
+      if (action === "start" && result.payload && typeof result.payload === "object") {
+        const turn = (result.payload as { turn?: { turnId?: string; state?: string; lastSequence?: number } }).turn;
+        if (pending && previous.pendingStart === pending) previous.pendingStart = null;
+        if (turn?.turnId && turn.state === "accepted" && !previous.turns.has(turn.turnId)) {
+          // A Host-issued ACK distinguishes a new turn from replay after tombstone eviction.
+          previous.turns.set(turn.turnId, { sequence: 0, resync: Boolean(pending?.overflow) ||
+            (previous.evictedTurns && (turn.lastSequence ?? 0) > 0 && !pending?.buffered.some((message) =>
+              (message.kind === "sdk-turn-event" ? message.event : message.kind === "sdk-turn-status" ? message.turn : message).turnId === turn.turnId)), terminal: false });
+          if (previous.turns.size > 64) {
+            previous.turns.delete(previous.turns.keys().next().value!);
+            previous.evictedTurns = true;
+          }
+        }
+        if (pending && turn?.turnId) {
+          if (pending.overflow) previous.deliver({ kind: "sdk-turn-resync", taskId, sessionId, turnId: turn.turnId });
+          else for (const message of pending.buffered) {
+            const item = message.kind === "sdk-turn-event" ? message.event : message.kind === "sdk-turn-status" ? message.turn : message;
+            if (item.turnId === turn.turnId) previous.deliver(message);
+            else previous.deliver({ kind: "sdk-turn-resync", taskId, sessionId, turnId: item.turnId });
+          }
+        }
+      } else if (pending && previous.pendingStart === pending) previous.pendingStart = null;
+      if (action === "status" && result.payload && typeof result.payload === "object") {
+        const value = result.payload as { turn?: { turnId?: string; needsResync?: boolean } | null };
+        if (value.turn?.turnId && (previous.turns.get(value.turn.turnId)?.resync || (previous.evictedTurns && !previous.turns.has(value.turn.turnId)))) {
+          return { ok: true as const, payload: { ...value, turn: { ...value.turn, needsResync: true } } };
+        }
+      }
       return { ok: true as const, payload: result.payload };
     } catch (error) { return { ok: false as const, error: errorMessage(error) }; }
   });
@@ -869,10 +1071,10 @@ export function registerIpc(
       if (typeof taskId !== "string" || taskId.length === 0) {
         throw new TrustDomainViolation("invalid-payload", "shell/taskOp requires a taskId");
       }
-      if (!isHostTaskOp(op) || op.startsWith("task/sdk")) {
+      if (!isHostTaskOp(op) || op.startsWith("task/sdk") || op === "task/sendMessage") {
         throw new TrustDomainViolation("invalid-payload", `unknown task op: ${String(op)}`);
       }
-      if (subscriptions.get(sender.webContentsId)?.taskId !== taskId) revoke(sender.webContentsId);
+      if (pendingNavigation.has(sender.webContentsId) || subscriptions.get(sender.webContentsId)?.taskId !== taskId) revoke(sender.webContentsId);
       const opPayload =
         typeof record["payload"] === "object" && record["payload"] !== null
           ? (record["payload"] as Record<string, unknown>)

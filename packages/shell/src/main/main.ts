@@ -10,6 +10,8 @@ import {
   assertProductionWindowEvidence,
   assertTrustedWindowEvidence,
   createHost,
+  createHostStopper,
+  createLastWindowShutdown,
   createTrustedWindow,
   errorMessage,
   loadTrustedViews,
@@ -188,23 +190,17 @@ async function run(): Promise<void> {
     })}`,
   );
 
-  let hostsStopped: Promise<void> | undefined;
-  const stopHosts = (): Promise<void> => hostsStopped ??= tasks.quitAll({
-    origin: { kind: "shell-ui", senderWebContentsId: views.shellView.webContents.id }, label: "应用退出",
-  }).then((report) => {
-    console.log(`[main] quit report: ${JSON.stringify(report)}`);
-  }).catch((error: unknown) => {
-    console.error(`[main] quit report failed: ${errorMessage(error)}`);
-  }).finally(() => {
+  const stopHosts = createHostStopper(tasks, { kind: "shell-ui", senderWebContentsId: views.shellView.webContents.id }, () => {
     schedules.stop();
     client.dispose();
     child.kill();
     tasks.disposeAll();
   });
 
-  app.on("window-all-closed", () => {
-    void stopHosts().then(() => { if (process.platform !== "darwin") app.quit(); });
+  const stopAfterLastWindow = createLastWindowShutdown(stopHosts, () => {
+    if (process.platform !== "darwin") app.quit();
   });
+  app.on("window-all-closed", () => { void stopAfterLastWindow(); });
 
   // [PiDock 14] (#17) explicit quit: abort the Agent, then stop this task's
   // services/terminals/subprocess trees (each by verified identity) and save
@@ -217,9 +213,13 @@ async function run(): Promise<void> {
     event.preventDefault();
     if (quitting) return;
     quitting = true;
-    void stopHosts().finally(() => {
-      quitFinished = true;
-      app.quit();
+    void stopHosts().then((stopped) => {
+      if (stopped) {
+        quitFinished = true;
+        app.quit();
+      } else {
+        quitting = false;
+      }
     });
   });
 }

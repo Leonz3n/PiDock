@@ -29,7 +29,8 @@ module.exports = {
   },
   asar: true,
   // The whole compiled shell (main + utilityProcess host + preload + rpc) ships
-  // inside app.asar; the Host entry the utilityProcess spawns is dist/host/host.js.
+  // inside app.asar; production forks dist/host/host-entry.js. Test-only
+  // Provider harnesses under scripts/ are excluded from packaged files.
   files: ["dist/**/*", "package.json"],
   electronDist: wantsWindows ? undefined : localElectronDist,
   mac: {

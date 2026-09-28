@@ -485,7 +485,7 @@ export class TaskWorkspaceHost {
 
   /** #43 Host-internal only; #44 must supply authorized model selection and a streamed route. */
   sdkTextKernel(): PiSdkTextKernel {
-    return this.sdkText ??= new PiSdkTextKernel(this.taskId, this.taskDir);
+    return this.sdkText ??= this.sdkKernelFactory(this.taskId, this.taskDir);
   }
 
   async shutdownSdk(): Promise<void> {
@@ -552,6 +552,7 @@ export class TaskWorkspaceHost {
      * random value, and the value never leaves the Host except as the QR code.
      */
     mintSecret: (kind: "pairing" | "device") => string = defaultSecretMinter,
+    private readonly sdkKernelFactory: (taskId: string, taskDir: string) => PiSdkTextKernel = (id, dir) => new PiSdkTextKernel(id, dir),
   ) {
     if (taskId.trim().length === 0) throw new Error("taskId must be non-empty");
     if (taskDir.trim().length === 0) throw new Error("taskDir must be non-empty");

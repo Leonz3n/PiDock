@@ -267,6 +267,12 @@ export function validateHostTaskOp(
     if (op === "task/sdkCancel" && (typeof payload["turnId"] !== "string" || !/^[a-f0-9-]{36}$/.test(payload["turnId"]))) return { ok: false, error: "invalid-sdk-turn" };
     return { ok: true };
   }
+  // SDK-only send returns a durable async turn ACK. Legacy scripted turn
+  // fields and synchronous model replies are not part of this contract.
+  if (op === "task/sendMessage") {
+    if (!isRecord(payload) || Object.keys(payload).some((key) => !["sessionId", "requestId", "text"].includes(key))) return { ok: false, error: "invalid-sdk-payload: extra key" };
+    return validateHostTaskOp("task/sdkStart", payload);
+  }
   if (op === "task/provision") {
     if (!isRecord(payload))
       return {
@@ -379,126 +385,6 @@ export function validateHostTaskOp(
     if (typeof sourcePath !== "string" || sourcePath.length === 0) {
       return { ok: false, error: "invalid-payload: task/probeLink requires sourcePath" };
     }
-    return { ok: true };
-  }
-  if (op === "task/sendMessage") {
-    if (!isRecord(payload))
-      return {
-        ok: false,
-        error: "invalid-payload: task/sendMessage requires a payload object",
-      };
-    const sessionId = payload["sessionId"];
-    const text = payload["text"];
-    if (typeof sessionId !== "string" || sessionId.trim().length === 0) {
-      return {
-        ok: false,
-        error:
-          "invalid-payload: task/sendMessage.sessionId must be a non-empty string",
-      };
-    }
-    if (typeof text !== "string" || text.trim().length === 0) {
-      return {
-        ok: false,
-        error: "invalid-payload: task/sendMessage.text must be a non-empty string",
-      };
-    }
-    // S6 batch 1 turn options ride the same payload (all optional, all
-    // fail-closed): provider/model override for per-turn selection,
-    // usage counters + source for the persisted call record. `stream` is
-    // a local Host-side callback and never crosses the RPC boundary.
-    // S6 batch 2: structured input refs (`references`) + skill source
-    // (`skillSource`) ride verbatim for send-record association; the Host
-    // persists them but never interprets them.
-    for (const key of ["providerId", "model"] as const) {
-      const value = payload[key];
-      if (value !== undefined && (typeof value !== "string" || value.trim().length === 0)) {
-        return { ok: false, error: `invalid-payload: task/sendMessage.${key} must be a non-empty string` };
-      }
-    }
-    const usageSource = payload["usageSource"];
-    // Intentional asymmetry with `normalizeCallUsage` (pi-session.ts): the
-    // internal `approve()` path mints `usageSource:"approval"` for the
-    // executed call, but clients can never mint it — a client-supplied
-    // `"approval"` is fail-closed here so usage provenance stays honest.
-    if (
-      usageSource !== undefined &&
-      usageSource !== "actual" &&
-      usageSource !== "estimated" &&
-      usageSource !== "unreported" &&
-      usageSource !== "test-double"
-    ) {
-      return { ok: false, error: "invalid-payload: task/sendMessage.usageSource must be actual/estimated/unreported/test-double" };
-    }
-    const usage = payload["usage"];
-    if (usage !== undefined) {
-      if (typeof usage !== "object" || usage === null || Array.isArray(usage)) {
-        return { ok: false, error: "invalid-payload: task/sendMessage.usage must be an object" };
-      }
-      for (const key of ["input", "output", "cacheRead"] as const) {
-        const value = (usage as Record<string, unknown>)[key];
-        if (value !== undefined && (typeof value !== "number" || !Number.isFinite(value) || value < 0)) {
-          return { ok: false, error: `invalid-payload: task/sendMessage.usage.${key} must be a non-negative number` };
-        }
-      }
-    }
-    const credentialRef = payload["credentialRef"];
-    if (credentialRef !== undefined && (typeof credentialRef !== "string" || credentialRef.trim().length === 0)) {
-      return { ok: false, error: "invalid-payload: task/sendMessage.credentialRef must be a non-empty reference" };
-    }
-    const skillSource = payload["skillSource"];
-    if (skillSource !== undefined && (typeof skillSource !== "string" || skillSource.trim().length === 0)) {
-      return { ok: false, error: "invalid-payload: task/sendMessage.skillSource must be a non-empty string" };
-    }
-    const references = payload["references"];
-    if (references !== undefined && !Array.isArray(references)) {
-      return { ok: false, error: "invalid-payload: task/sendMessage.references must be an array" };
-    }
-    // [PiDock 13] (#16) box 15: the Host persists references verbatim, so the
-    // provenance itself is checked fail-closed here — an out-of-source path,
-    // an unknown kind or a plain-directory link claiming a Git version never
-    // reaches the session or a stored draft.
-    if (Array.isArray(references)) {
-      for (let index = 0; index < references.length; index += 1) {
-        const checked = checkReferencePayload(references[index]);
-        if (!checked.ok) {
-          return { ok: false, error: `invalid-payload: task/sendMessage.references[${index}].${checked.error}` };
-        }
-      }
-    }
-    // S6 batch 3: scripted tool plan rides the same payload (all optional,
-    // all fail-closed). `tool` must name a gated tool, `target` a non-empty
-    // string (the task-dir containment check stays Host-side in
-    // `previewGate`), `contentVersion` a non-empty string. No executable
-    // function ever crosses the RPC boundary: the planner is selected by
-    // the Host from `toolPlan` (echo/deny only), never deserialized.
-    const tool = payload["tool"];
-    if (tool !== undefined && (typeof tool !== "string" || tool.trim().length === 0)) {
-      return { ok: false, error: "invalid-payload: task/sendMessage.tool must be a non-empty string" };
-    }
-    const target = payload["target"];
-    if (target !== undefined && (typeof target !== "string" || target.trim().length === 0)) {
-      return { ok: false, error: "invalid-payload: task/sendMessage.target must be a non-empty string" };
-    }
-    const contentVersion = payload["contentVersion"];
-    if (contentVersion !== undefined && (typeof contentVersion !== "string" || contentVersion.trim().length === 0)) {
-      return { ok: false, error: "invalid-payload: task/sendMessage.contentVersion must be a non-empty string" };
-    }
-    const toolPlan = payload["toolPlan"];
-    if (toolPlan !== undefined && toolPlan !== "echo" && toolPlan !== "deny") {
-      return { ok: false, error: 'invalid-payload: task/sendMessage.toolPlan must be echo/deny' };
-    }
-    // Dual-layer parity with Host dispatch (`host.ts` enforces
-    // `buildToolPlannerSpec` before injecting the `execute` closure):
-    // `toolPlan` requires a gated `tool` (`echo` additionally requires
-    // `target`), so the sender side fails closed early instead of
-    // forwarding a combo the Host later rejects.
-    const planner = buildToolPlannerSpec({
-      tool: payload["tool"],
-      target: payload["target"],
-      contentVersion: payload["contentVersion"],
-      toolPlan: payload["toolPlan"],
-    });
-    if (!planner.ok) return { ok: false, error: planner.error };
     return { ok: true };
   }
   // S6 batch 2 follow-up: draft/permission ops are Host-reachable (P1).

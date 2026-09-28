@@ -354,9 +354,10 @@ describe("validateHostTaskOp", () => {
   });
 
   it("requires a sendMessage session id and non-blank text", () => {
-    expect(validateHostTaskOp("task/sendMessage", { sessionId: "main", text: "hi" })).toEqual({
+    expect(validateHostTaskOp("task/sendMessage", { sessionId: "main", requestId: "req1", text: "hi" })).toEqual({
       ok: true,
     });
+    expect(validateHostTaskOp("task/sendMessage", { sessionId: "main", text: "hi" }).ok).toBe(false);
     expect(validateHostTaskOp("task/sendMessage", { sessionId: "", text: "hi" }).ok).toBe(false);
     expect(validateHostTaskOp("task/sendMessage", { sessionId: "main", text: "  " }).ok).toBe(false);
   });
@@ -372,7 +373,7 @@ describe("validateHostTaskOp", () => {
         usage: { input: 10, output: 5, cacheRead: 0 },
         credentialRef: "PIDOCK_PI_TOKEN",
       }),
-    ).toEqual({ ok: true });
+    ).toEqual({ ok: false, error: "invalid-sdk-payload: extra key" });
     expect(
       validateHostTaskOp("task/sendMessage", { sessionId: "main", text: "hi", usageSource: "live" }).ok,
     ).toBe(false);
@@ -425,7 +426,7 @@ describe("S6 batch 2 + [PiDock 13] (#16): send-record refs and draft-tolerant st
         ],
         skillSource: "review",
       }),
-    ).toEqual({ ok: true });
+    ).toEqual({ ok: false, error: "invalid-sdk-payload: extra key" });
     expect(
       validateHostTaskOp("task/sendMessage", { sessionId: "main", text: "hi", references: "nope" }).ok,
     ).toBe(false);
@@ -450,7 +451,7 @@ describe("S6 batch 2 + [PiDock 13] (#16): send-record refs and draft-tolerant st
     expect(send([{ ...base, relativePath: "../outside.ts" }]).ok).toBe(false);
     expect(send([{ ...base, kind: "command" }]).ok).toBe(false);
     expect(send([{ ...base, sourceKind: "plain-dir", version: "abc123" }]).ok).toBe(false);
-    expect(send([{ ...base, sourceKind: "plain-dir", version: null }]).ok).toBe(true);
+    expect(send([{ ...base, sourceKind: "plain-dir", version: null }]).ok).toBe(false);
     // A restored draft carries the same rules.
     const draft = (references: unknown[]) => validateHostTaskOp("task/saveDraft", { sessionId: "main", text: "hi", references });
     expect(draft([{ ...base, relativePath: "/etc/passwd" }]).ok).toBe(false);
@@ -496,7 +497,7 @@ describe("S6 batch 3: scripted tool plan rides sendMessage fail-closed", () => {
         contentVersion: "v3",
         toolPlan: "echo",
       }),
-    ).toEqual({ ok: true });
+    ).toEqual({ ok: false, error: "invalid-sdk-payload: extra key" });
     expect(
       validateHostTaskOp("task/sendMessage", { sessionId: "main", text: "hi", tool: " " }).ok,
     ).toBe(false);
@@ -531,7 +532,7 @@ describe("S6 batch 3: scripted tool plan rides sendMessage fail-closed", () => {
         target: "/tmp/t/run.sh",
         toolPlan: "echo",
       }),
-    ).toEqual({ ok: true });
+    ).toEqual({ ok: false, error: "invalid-sdk-payload: extra key" });
   });
 });
 
