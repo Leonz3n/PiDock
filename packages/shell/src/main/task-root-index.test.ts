@@ -76,6 +76,34 @@ describe("main-owned override task root index", () => {
     expect(index.inventory().roots[1]).toMatchObject({ state: "error" });
   });
 
+  it.each(["corrupt", "missing"])("never routes a default task into a %s override root sharing its ID", async (failure) => {
+    const { defaultRoot, override, index } = setup();
+    const old = task(override);
+    await index.register(old);
+    if (failure === "corrupt") writeFileSync(join(old, "task.json"), "{broken");
+    else rmSync(override, { recursive: true });
+    task(defaultRoot, "task-00000001", "task-abcdef12");
+    expect(index.inventory().tasks).toEqual([]);
+    expect(index.inventory().roots.slice(0, 2).map((root) => root.state)).toEqual(["error", "error"]);
+    expect(index.resolve("task-abcdef12")).toBeNull();
+  });
+
+  it("preserves unrelated validated tasks when a failed root retains a colliding ID", async () => {
+    const { home, defaultRoot, override, index } = setup();
+    const old = task(override);
+    await index.register(old);
+    const second = join(home, "second");
+    mkdirSync(second);
+    const valid = task(second, "task-00000002");
+    await index.register(valid);
+    task(defaultRoot, "task-00000001", "task-abcdef12");
+    task(defaultRoot, "task-00000003");
+    writeFileSync(join(old, "task.json"), "{broken");
+    expect(index.inventory().tasks.map((row) => row.taskId)).toEqual(["task-00000002"]);
+    expect(index.resolve("task-00000002")).toBe(valid);
+    expect(index.resolve("task-abcdef12")).toBeNull();
+  });
+
   it("rejects changed disk record, linked task and ID conflict across existing roots", async () => {
     const { defaultRoot, override, home, index } = setup();
     const dir = task(override);
@@ -148,7 +176,7 @@ describe("main-owned override task root index", () => {
   });
 
   it("fails closed when primary is removed, corrupt, versioned wrong or interrupted after first backup", async () => {
-    const { override, userData, index } = setup();
+    const { defaultRoot, override, userData, index } = setup();
     const dir = task(override);
     await index.register(dir);
     const file = taskRootIndexPath(userData);
@@ -157,6 +185,9 @@ describe("main-owned override task root index", () => {
     await expect(index.register(dir)).rejects.toThrow(/backup requires explicit recovery/);
     expect(existsSync(file)).toBe(false);
     writeFileSync(file, "{broken");
+    task(defaultRoot, "task-00000001");
+    expect(index.inventory().tasks).toEqual([]);
+    expect(index.resolve("task-00000001")).toBeNull();
     expect(index.inventory().roots.at(-1)?.state).toBe("error");
     await expect(index.importRoot(override)).rejects.toThrow();
     writeFileSync(file, JSON.stringify({ version: 2, roots: [] }));

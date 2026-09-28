@@ -104,6 +104,14 @@ function rootFailure(error: unknown): string {
   return "任务根目录不可读取或任务身份冲突，请检查后重试";
 }
 
+function sameSummary(a: PersistedTaskSummary, b: PersistedTaskSummary): boolean {
+  return a.taskId === b.taskId && a.name === b.name && a.branch === b.branch &&
+    a.repoCount === b.repoCount && a.updatedAt === b.updatedAt;
+}
+
+interface ValidatedTask { summary: PersistedTaskSummary; root: string; realPath: string; identity: IndexedTask }
+interface RootGroup { label: string; rows: ValidatedTask[]; message?: string }
+
 /** Main owns one instance. A missing primary with backup requires explicit recovery. */
 export class TaskRootIndex {
   private pending: Promise<unknown> = Promise.resolve();
@@ -206,45 +214,73 @@ export class TaskRootIndex {
       return found.length;
     });
   }
-  inventory(): TaskInventory {
-    const groups: Array<{ label: string; rows: PersistedTaskSummary[]; message?: string }> = [];
-    const add = (label: string, read: () => PersistedTaskSummary[]) => {
+  private scan(): { inventory: TaskInventory; locations: Map<string, ValidatedTask> } {
+    let doc: IndexDocument;
+    try { doc = this.load().value; }
+    catch {
+      return { inventory: { tasks: [], roots: [
+        { label: "默认任务根", state: "error", message: "覆盖根索引不可读取，无法确认任务身份" },
+        { label: "覆盖根索引", state: "error", message: "覆盖根索引不可读取，请检查本机数据后重试" },
+      ] }, locations: new Map() };
+    }
+    const groups: RootGroup[] = [];
+    const add = (label: string, read: () => ValidatedTask[]) => {
       try { groups.push({ label, rows: read() }); }
       catch (error) { groups.push({ label, rows: [], message: rootFailure(error) }); }
     };
-    add("默认任务根", () => listPersistedTasks(this.defaultRoot));
-    try {
-      const doc = this.load().value;
-      doc.roots.forEach((entry, index) => add(`已登记任务根 ${index + 1}`, () => {
-        verifiedRoot(entry.path, entry.realPath);
-        const scanned = listPersistedTasks(entry.path);
-        if (scanned.length !== entry.tasks.length) throw new Error("unindexed tasks in registered root");
-        return entry.tasks.map((item) => verifyTask(entry.path, item));
-      }));
-    } catch { groups.push({ label: "覆盖根索引", rows: [], message: "覆盖根索引不可读取，请检查本机数据后重试" }); }
+    add("默认任务根", () => listPersistedTasks(this.defaultRoot).map((summary) => {
+      const dir = createDiskTaskDirResolver(this.defaultRoot)(summary.taskId);
+      const record = dir && readTaskRecordOnDisk(dir);
+      if (!dir || !record || dirname(dir) !== this.defaultRoot) throw new Error("task record identity changed");
+      const identity = { taskId: summary.taskId, dirId: record.dirId, createdAt: record.createdAt };
+      if (!sameSummary(verifyTask(this.defaultRoot, identity), summary)) throw new Error("task record identity changed");
+      return { summary, root: this.defaultRoot, realPath: verifiedRoot(this.defaultRoot), identity };
+    }));
+    doc.roots.forEach((entry, index) => add(`已登记任务根 ${index + 1}`, () => {
+      verifiedRoot(entry.path, entry.realPath);
+      const scanned = listPersistedTasks(entry.path);
+      if (scanned.length !== entry.tasks.length) throw new Error("unindexed tasks in registered root");
+      return entry.tasks.map((identity) => ({ summary: verifyTask(entry.path, identity), root: entry.path, realPath: entry.realPath, identity }));
+    }));
+    // A failed root still owns every persisted ID. Never let a new default-root
+    // record with that ID be displayed or routed as a different task.
+    const indexedIds = new Map(doc.roots.flatMap((root, index) => root.tasks.map((task) => [task.taskId, index + 1] as const)));
+    for (const row of groups[0]!.rows) {
+      const owner = indexedIds.get(row.summary.taskId);
+      if (owner !== undefined) {
+        groups[0]!.message = "任务身份与另一任务根冲突，请检查后重试";
+        groups[owner]!.message = "任务身份与另一任务根冲突，请检查后重试";
+      }
+    }
     const seen = new Map<string, number>();
     for (const [index, group] of groups.entries()) {
-      for (const task of group.rows) {
-        const other = seen.get(task.taskId);
+      for (const row of group.rows) {
+        const other = seen.get(row.summary.taskId);
         if (other !== undefined) {
           groups[other]!.message = "任务身份与另一任务根冲突，请检查后重试";
           group.message = "任务身份与另一任务根冲突，请检查后重试";
-        } else seen.set(task.taskId, index);
+        } else seen.set(row.summary.taskId, index);
       }
     }
+    const healthy = groups.filter((group) => !group.message);
+    const visible = healthy.flatMap((group) => group.rows);
     return {
-      tasks: groups.filter((group) => !group.message).flatMap((group) => group.rows),
-      roots: groups.map((group) => group.message ? { label: group.label, state: "error", message: group.message } : { label: group.label, state: "ready" }),
+      inventory: {
+        tasks: visible.map((row) => row.summary),
+        roots: groups.map((group) => group.message ? { label: group.label, state: "error", message: group.message } : { label: group.label, state: "ready" }),
+      },
+      locations: new Map(visible.map((row) => [row.summary.taskId, row])),
     };
   }
+  inventory(): TaskInventory { return this.scan().inventory; }
   resolve(taskId: string): string | null {
     if (!isSafeTaskChildName(taskId)) return null;
-    const inventory = this.inventory();
-    if (inventory.roots.some((root) => root.label === "覆盖根索引" && root.state === "error") ||
-        !inventory.tasks.some((task) => task.taskId === taskId)) return null;
-    const doc = this.load().value;
-    const indexed = doc.roots.find((root) => root.tasks.some((task) => task.taskId === taskId));
-    if (indexed) return join(indexed.path, indexed.tasks.find((task) => task.taskId === taskId)!.dirId);
-    return createDiskTaskDirResolver(this.defaultRoot)(taskId);
+    const row = this.scan().locations.get(taskId);
+    if (!row) return null;
+    try {
+      verifiedRoot(row.root, row.realPath);
+      if (!sameSummary(verifyTask(row.root, row.identity), row.summary)) return null;
+      return join(row.root, row.identity.dirId);
+    } catch { return null; }
   }
 }
