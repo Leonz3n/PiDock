@@ -38,7 +38,6 @@ import {
   classifyControlCaller,
   resolveBrowserLogSession,
   routeHostTask,
-  toolPlannerSpecForHostDispatch,
   validateHostTaskOp,
 } from "./host-guards.js";
 import { TaskWorkspaceHost, diskTaskStore } from "./task-host.js";
@@ -582,42 +581,9 @@ async function dispatchTaskOp(
         return { ok: true, payload: { ...probed } };
       }
       case "task/sendMessage": {
-        const sessionId = record["sessionId"];
-        const text = record["text"];
-        if (typeof sessionId !== "string" || typeof text !== "string") {
-          return { ok: false, error: "invalid-payload: task/sendMessage requires sessionId/text" };
-        }
-        // S6 batch 1 turn options (all optional, validated by
-        // `validateHostTaskOp` above): per-turn provider/model selection
-        // plus structured usage for the persisted call record.
-        // S6 batch 3: scripted tool plan rides the same payload. Only
-        // `tool`/`target`/`contentVersion` (plain data) cross the RPC
-        // boundary; the planner is selected here by name (`toolPlan`):
-        // `echo` replays the planned call so the real `exec.run` approval
-        // path (`default` -> ask) is reachable end-to-end, `deny` forces
-        // a denied-target call (fail-closed coverage). No executable
-        // function is ever deserialized from the payload.
-        const turn: Record<string, unknown> = {};
-        for (const key of ["providerId", "model", "usageSource", "usage", "credentialRef", "references", "skillSource", "tool", "target", "contentVersion"] as const) {
-          const value = record[key];
-          if (value !== undefined) turn[key] = value;
-        }
-        const planner = toolPlannerSpecForHostDispatch(record);
-        if (!planner.ok) return { ok: false, error: planner.error };
-        if (planner.mode === "echo" || planner.mode === "deny") {
-          const plannedTool = planner.tool;
-          const plannedTarget = planner.target;
-          const plannedVersion = planner.contentVersion;
-          const plannedMode = planner.mode;
-          (turn as Record<string, unknown>)["execute"] = (_call: unknown) => ({
-            tool: plannedTool,
-            target: plannedTarget,
-            contentVersion: plannedVersion,
-            output: plannedMode === "deny" ? "denied" : "planned",
-          });
-        }
-        const result = host.sendMessage(sessionId, text, turn as never);
-        return { ok: true, payload: { ...result } };
+        // #43 keeps the old history readable, but no scripted turn may be
+        // presented as a successful model response before #44 routes SDK events.
+        return { ok: false, error: "sdk-route-unwired: task/sendMessage requires #44" };
       }
       case "task/cancel": {
         const sessionId = record["sessionId"];
@@ -1337,6 +1303,7 @@ async function dispatchTaskOp(
         const lifecycle = lifecycleFor(taskId);
         if ("error" in lifecycle) return { ok: false, error: lifecycle.error };
         try {
+          await workspaceHost?.shutdownSdk();
           const quit = lifecycle.quit();
           return { ok: true, payload: { quit } };
         } catch (error) {
