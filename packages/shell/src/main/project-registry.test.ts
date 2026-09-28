@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ProjectRegistry, projectRegistryPath } from "./project-registry.js";
+import { ProjectRegistry, projectRegistryPath, sourcePath } from "./project-registry.js";
 
 const roots: string[] = [];
 function registry() {
@@ -25,7 +25,39 @@ describe("main-owned project registry", () => {
     expect(created.id).not.toBe(created.repositories[0]?.id);
     expect(new ProjectRegistry(root).get(created.id)).toEqual(created);
     expect(new ProjectRegistry(root).list()).toEqual({ initialized: true, projects: [created] });
+    expect(JSON.parse(readFileSync(`${file}.bak`, "utf8")).projects).toEqual([created]);
     expect(readFileSync(file, "utf8")).not.toContain("token");
+  });
+
+  it("fails closed after the first successful commit if the primary disappears", async () => {
+    const { root, file, store } = registry();
+    const created = await store.create(input);
+    rmSync(file);
+    const reopened = new ProjectRegistry(root);
+    expect(() => reopened.list()).toThrow(/backup requires explicit recovery/);
+    await expect(reopened.create({ ...input, name: "Replacement" })).rejects.toThrow(/backup requires explicit recovery/);
+    expect(JSON.parse(readFileSync(`${file}.bak`, "utf8")).projects[0].id).toBe(created.id);
+    expect(existsSync(file)).toBe(false);
+  });
+
+  it("leaves a recoverable fail-closed state when the first commit stops after backup", async () => {
+    const { root, file } = registry();
+    const interrupted = new ProjectRegistry(root, { afterBackup: () => { throw new Error("interrupted before primary"); } });
+    await expect(interrupted.create(input)).rejects.toThrow("interrupted before primary");
+    expect(existsSync(file)).toBe(false);
+    expect(JSON.parse(readFileSync(`${file}.bak`, "utf8")).projects).toHaveLength(1);
+    const reopened = new ProjectRegistry(root);
+    expect(() => reopened.list()).toThrow(/backup requires explicit recovery/);
+    await expect(reopened.create(input)).rejects.toThrow(/backup requires explicit recovery/);
+  });
+
+  it("leaves a clean uninitialized state if the first commit fails before backup", async () => {
+    const { root, file } = registry();
+    const interrupted = new ProjectRegistry(root, { beforeCommit: () => { throw new Error("interrupted before backup"); } });
+    await expect(interrupted.create(input)).rejects.toThrow("interrupted before backup");
+    expect(existsSync(file)).toBe(false);
+    expect(existsSync(`${file}.bak`)).toBe(false);
+    expect(new ProjectRegistry(root).list()).toEqual({ initialized: false, projects: [] });
   });
 
   it("rejects corrupt, unsupported and symlinked registry without resetting it", async () => {
@@ -80,6 +112,23 @@ describe("main-owned project registry", () => {
     writeFileSync(file, JSON.stringify(document));
     await expect(store.delete(project.id)).rejects.toThrow(/associated/);
     expect(store.get(project.id)).toBeDefined();
+  });
+
+  it("accepts valid POSIX punctuation and trailing spaces but rejects Windows-invalid components", async () => {
+    const { store } = registry();
+    const path = "/workspace/client#2?/notes ";
+    expect(sourcePath(path, "posix")).toBe(path);
+    expect(sourcePath("/workspace/a\\b", "posix")).toBe("/workspace/a\\b");
+    if (process.platform !== "win32") {
+      expect((await store.create({ ...input, repositories: [{ name: "api", path }] })).repositories[0]?.path).toBe(path);
+    }
+    expect(sourcePath("C:\\workspace\\client#2", "win32")).toBe("C:\\workspace\\client#2");
+    for (const invalid of ["C:\\workspace\\file?", "C:\\workspace\\name.", "C:\\workspace\\name ", "C:\\workspace\\a<bad>", "C:\\workspace\\CON.txt"]) {
+      expect(() => sourcePath(invalid, "win32")).toThrow();
+    }
+    for (const invalid of ["relative", "/workspace/../secret", "/workspace/./repo", "/workspace/\u0000bad"]) {
+      expect(() => sourcePath(invalid, "posix")).toThrow();
+    }
   });
 
   it("rejects relative, traversal, URL, and credential-like metadata without touching the source", async () => {

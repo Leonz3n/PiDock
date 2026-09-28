@@ -45,13 +45,19 @@ function id(value: unknown): string {
   return value;
 }
 // Metadata only: no stat/realpath/Git probe here. A trusted Host rechecks at use time.
-export function sourcePath(value: unknown): string {
-  const path = text(value, "source path", false, 4096);
-  const windows = process.platform === "win32";
+export function sourcePath(value: unknown, platform: "posix" | "win32" = process.platform === "win32" ? "win32" : "posix"): string {
+  if (typeof value !== "string" || value.length === 0 || value.length > 4096 || value.includes("\0")) {
+    throw new Error("invalid source path");
+  }
+  const path = value;
+  const windows = platform === "win32";
   const parser = windows ? win32 : posix;
-  if (path.includes("?") || path.includes("#") || (windows ? !/^[a-zA-Z]:\\/.test(path) || path.includes("/") : !path.startsWith("/") || path.includes("\\")) ||
+  const components = path.split(windows ? "\\" : "/");
+  if ((windows && (!/^[a-zA-Z]:\\/.test(path) || path.includes("/") ||
+        components.slice(1).some((part) => /[<>:"|?*]/.test(part) || [...part].some((char) => char.charCodeAt(0) < 32) ||
+          /[. ]$/.test(part) || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part)))) ||
       !parser.isAbsolute(path) || parser.normalize(path) !== path || path === parser.parse(path).root ||
-      path.split(windows ? "\\" : "/").some((part) => part === "." || part === "..")) {
+      components.some((part) => part === "." || part === "..")) {
     throw new Error("invalid absolute source path");
   }
   return path;
@@ -113,11 +119,17 @@ function writeTemp(file: string, content: string): void {
   const fd = openSync(file, "wx", 0o600);
   try { writeFileSync(fd, content); fsyncSync(fd); } finally { closeSync(fd); }
 }
+function syncDirectory(dir: string): void {
+  // Node cannot portably open Windows directories for fsync; rename remains atomic there.
+  if (process.platform === "win32") return;
+  const fd = openSync(dir, "r");
+  try { fsyncSync(fd); } finally { closeSync(fd); }
+}
 
 /** Only main owns this store; a single instance serializes every local write. */
 export class ProjectRegistry {
   private pending: Promise<unknown> = Promise.resolve();
-  constructor(private readonly userData: string, private readonly hooks: { beforeCommit?: () => void } = {}) {}
+  constructor(private readonly userData: string, private readonly hooks: { beforeCommit?: () => void; afterBackup?: () => void } = {}) {}
 
   private load(): { initialized: boolean; value: Document } {
     const file = projectRegistryPath(this.userData);
@@ -152,14 +164,15 @@ export class ProjectRegistry {
     try {
       writeTemp(tmp, serialized);
       this.hooks.beforeCommit?.();
-      if (previous) {
-        if (safeFile(`${file}.bak`)) document(JSON.parse(readFileSync(`${file}.bak`, "utf8")));
-        const prior = readFileSync(file, "utf8");
-        document(JSON.parse(prior));
-        writeTemp(backupTmp, prior);
-        renameSync(backupTmp, `${file}.bak`);
-      }
+      if (previous && safeFile(`${file}.bak`)) document(JSON.parse(readFileSync(`${file}.bak`, "utf8")));
+      const backup = previous ? readFileSync(file, "utf8") : serialized;
+      if (previous) document(JSON.parse(backup));
+      writeTemp(backupTmp, backup);
+      renameSync(backupTmp, `${file}.bak`);
+      syncDirectory(root);
+      this.hooks.afterBackup?.();
       renameSync(tmp, file);
+      syncDirectory(root);
     } finally {
       rmSync(tmp, { force: true });
       rmSync(backupTmp, { force: true });
