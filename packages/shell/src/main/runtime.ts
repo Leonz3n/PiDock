@@ -29,6 +29,7 @@ import type { BrowserPerformResult, BrowserRequestParams, HostTaskOp, HostTaskRe
 import { isHostTaskOp } from "../rpc/protocol.js";
 import { TaskBrowser } from "./task-browser.js";
 import { TaskBrowserSurface } from "./task-browser-surface.js";
+import { DesktopLayout, splitTaskBounds } from "./desktop-layout.js";
 import { createBrowserGatewayRegistry } from "./browser-gateway.js";
 import { deriveNavigationAllowlist, type NavigationAllowlist } from "./browser-rules.js";
 import {
@@ -90,6 +91,7 @@ export interface TrustedWindowViews {
   taskView: WebContentsView;
   taskBrowser: TaskBrowser;
   registry: TrustDomainRegistry;
+  layout?: DesktopLayout;
 }
 
 export interface ViewPlacementEvidence {
@@ -179,23 +181,13 @@ export async function createHost(
   return { client, child };
 }
 
-function taskBounds(width: number, height: number): Rectangle {
-  const shellWidth = Math.min(380, Math.max(280, Math.floor(width * 0.36)));
-  return {
-    x: shellWidth,
-    y: 0,
-    width: Math.max(1, width - shellWidth),
-    height,
-  };
-}
-
 function layoutTrustedViews(
   window: BrowserWindow,
   shellView: WebContentsView,
   taskBrowser: TaskBrowser,
 ): void {
   const { width, height } = window.getContentBounds();
-  const bounds = taskBounds(width, height);
+  const bounds = splitTaskBounds(width, height);
   shellView.setBounds({ x: 0, y: 0, width: bounds.x, height });
   shellView.setVisible(true);
   taskBrowser.setBounds(bounds);
@@ -203,6 +195,7 @@ function layoutTrustedViews(
 
 export async function createTrustedWindow(
   workspaceId: string,
+  mode: "dual" | "production" = "dual",
 ): Promise<TrustedWindowViews> {
   const window = new BrowserWindow({ ...WINDOW_OPTIONS, show: true });
   const shellView = new WebContentsView({
@@ -217,7 +210,7 @@ export async function createTrustedWindow(
 
   window.contentView.addChildView(shellView);
   const contentBounds = window.getContentBounds();
-  const bounds = taskBounds(contentBounds.width, contentBounds.height);
+  const bounds = splitTaskBounds(contentBounds.width, contentBounds.height);
   shellView.setBounds({ x: 0, y: 0, width: bounds.x, height: bounds.height });
   shellView.setVisible(true);
 
@@ -233,7 +226,13 @@ export async function createTrustedWindow(
     throw new Error(`unexpected task binding for ${TASK_ID}`);
   }
 
-  window.on("resize", () => layoutTrustedViews(window, shellView, taskBrowser));
+  const layout = mode === "production"
+    ? new DesktopLayout(() => window.getContentBounds(), shellView, taskTab.view)
+    : undefined;
+  window.on("resize", () => {
+    if (layout) layout.resize();
+    else layoutTrustedViews(window, shellView, taskBrowser);
+  });
   window.on("closed", () => registry.unregister(shellView.webContents.id));
 
   return {
@@ -242,6 +241,7 @@ export async function createTrustedWindow(
     taskView: taskTab.view,
     taskBrowser,
     registry,
+    ...(layout ? { layout } : {}),
   };
 }
 
@@ -268,7 +268,7 @@ export async function loadTrustedViews(
       process.env["PIDOCK_RENDERER_URL"],
       "index.html",
     ),
-    loadView(
+    views.layout ? Promise.resolve("about:blank") : loadView(
       views.taskView,
       process.env["PIDOCK_TASK_URL"],
       "task.html",
@@ -631,9 +631,11 @@ export function createTaskBrowserCapability(input: {
   trust: TrustDomainRegistry;
   workspaceId: string;
   originsFor: (taskId: string) => readonly string[];
+  layout?: DesktopLayout;
   secretsFor?: (taskId: string) => readonly string[];
 }): TaskBrowserCapability {
   const surfaces = new Map<string, TaskBrowserSurface>();
+  const layout = input.layout;
   const registry = createBrowserGatewayRegistry({
     workspaceId: input.workspaceId,
     surfaceFor: (taskId) => {
@@ -644,9 +646,11 @@ export function createTaskBrowserCapability(input: {
         window: input.window,
         workspaceId: input.workspaceId,
         taskId,
-        bounds: taskBounds(width, height),
+        bounds: splitTaskBounds(width, height),
         registry: input.trust,
+        ...(layout ? { onActiveTabChange: (changed: TaskBrowser) => layout.browserChanged(changed) } : {}),
       });
+      layout?.addBrowser(browser);
       const surface = new TaskBrowserSurface(taskId, browser);
       surfaces.set(taskId, surface);
       return surface;
@@ -769,6 +773,33 @@ export function registerIpc(
     ) {
       throw new Error(`non-allowlisted IPC channel registered: ${channel}`);
     }
+  }
+}
+
+export function assertProductionWindowEvidence(views: TrustedWindowViews): void {
+  const { window, shellView, taskView, registry, layout } = views;
+  if (!layout) throw new Error("production layout is missing");
+  const children = window.contentView.children;
+  const { width, height } = window.getContentBounds();
+  const shell = shellView.getBounds();
+  const browser = layout.activeBrowser as TaskBrowser | undefined;
+  const tab = browser?.activeTab;
+  registry.requireShellSender({ sender: shellView.webContents, senderFrame: shellView.webContents.mainFrame });
+  registry.requireTaskBinding(taskView.webContents.id, { taskId: TASK_ID, pageId: PAGE_ID });
+  if (tab) registry.requireTaskBinding(tab.webContentsId, { taskId: browser.taskId, pageId: tab.pageId });
+  const task = splitTaskBounds(width, height);
+  const visibleChildren = children.filter((child) => child.getVisible());
+  const expectedVisible = tab ? [shellView, tab.view] : [shellView];
+  const pageBounds = tab?.view.getBounds();
+  if (!window.isVisible() || !children.includes(shellView) || !children.includes(taskView) ||
+      shellView.webContents.id === taskView.webContents.id || taskView.getVisible() ||
+      visibleChildren.length !== expectedVisible.length ||
+      expectedVisible.some((view) => !visibleChildren.includes(view)) ||
+      shell.x !== 0 || shell.y !== 0 || shell.height !== height ||
+      shell.width !== (tab ? task.x : width) ||
+      (tab && (!children.includes(tab.view) || pageBounds?.x !== task.x ||
+        pageBounds.y !== task.y || pageBounds.width !== task.width || pageBounds.height !== task.height))) {
+    throw new Error("production trusted view layout failed");
   }
 }
 
