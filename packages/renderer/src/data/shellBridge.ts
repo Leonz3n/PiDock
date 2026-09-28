@@ -20,6 +20,7 @@ export interface PidockBridge {
   getVersions?: () => Promise<unknown>;
   hostPing?: (workspaceId?: string) => Promise<unknown>;
   listTasks?: () => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
+  projectOp?: (request: { op: "list" | "get" | "create" | "update" | "rename" | "delete"; projectId?: string; name?: string; input?: unknown }) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
   taskOp?: (taskId: string, op: string, payload?: Record<string, unknown>) => Promise<ShellTaskOpResult>;
 }
 

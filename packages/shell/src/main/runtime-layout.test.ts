@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const state = vi.hoisted(() => ({ nextId: 1 }));
 vi.mock("electron", () => ({
@@ -34,7 +37,7 @@ vi.mock("electron", () => ({
     once(event: string, listener: () => void) { this.listeners.set(event, listener); }
     isVisible() { return true; }
   },
-  ipcMain: { handle: vi.fn() },
+  ipcMain: { handle: vi.fn(), eventNames: () => [] },
   utilityProcess: { fork: vi.fn() },
 }));
 
@@ -44,8 +47,12 @@ import {
   createTaskBrowserCapability,
   createTrustedWindow,
   loadTrustedViews,
+  registerIpc,
   trustedWindowEvidence,
 } from "./runtime.js";
+
+import { ProjectRegistry } from "./project-registry.js";
+import { ipcMain } from "electron";
 
 const originalTaskUrl = process.env["PIDOCK_TASK_URL"];
 afterEach(() => {
@@ -54,6 +61,24 @@ afterEach(() => {
 });
 
 describe("trusted Electron view modes", () => {
+  it("binds project IPC to shell main frame and fails closed without a configured store", async () => {
+    const root = mkdtempSync(join(tmpdir(), "pidock-project-runtime-"));
+    try {
+      const views = await createTrustedWindow("workspace-project", "production");
+      const store = new ProjectRegistry(root);
+      registerIpc({} as never, views.registry, undefined, store);
+      const handler = vi.mocked(ipcMain.handle).mock.calls.find(([channel]) => channel === "shell/projectOp")?.[1];
+      expect(handler).toBeDefined();
+      const event = { sender: views.shellView.webContents, senderFrame: views.shellView.webContents.mainFrame } as never;
+      const invalid = { sender: views.taskView.webContents, senderFrame: views.taskView.webContents.mainFrame } as never;
+      expect(await handler!(invalid, { op: "list" })).toMatchObject({ ok: false });
+      expect(await handler!(event, { op: "list", registryPath: "/tmp/forbidden" })).toMatchObject({ ok: false });
+      expect(await handler!(event, { op: "list" })).toEqual({ ok: true, payload: { initialized: false, projects: [] } });
+      expect(await handler!(event, { op: "create", input: { name: "Real", description: "", repositories: [], directories: [] } })).toMatchObject({ ok: true });
+      expect(store.list().projects).toHaveLength(1);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   it("retains the default smoke two-visible-view evidence and loads explicit task URLs", async () => {
     const smoke = await createTrustedWindow("workspace-a");
     const smokeLoaded = await loadTrustedViews(smoke);
