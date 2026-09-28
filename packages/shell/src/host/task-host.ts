@@ -110,6 +110,7 @@ import {
   type StoredSchedule,
 } from "../main/schedule-rules.js";
 import { TaskSchedules, type SaveScheduleInput, type SaveScheduleResult, type SchedulePreview } from "./schedules.js";
+import { PiSdkTextKernel } from "./sdk-text-kernel.js";
 import {
   PI_USAGE_GROUP_LABELS,
   UNVERSIONED_PROVIDER_CONFIG,
@@ -480,6 +481,17 @@ interface ClaimedPathScope {
 
 export class TaskWorkspaceHost {
   private readonly channels = new Map<string, PiSessionChannel>();
+  private sdkText: PiSdkTextKernel | null = null;
+
+  /** #43 Host-internal only; #44 must supply authorized model selection and a streamed route. */
+  sdkTextKernel(): PiSdkTextKernel {
+    return this.sdkText ??= new PiSdkTextKernel(this.taskId, this.taskDir);
+  }
+
+  async shutdownSdk(): Promise<void> {
+    await this.sdkText?.dispose();
+    this.sdkText = null;
+  }
   /**
    * [PiDock 09] (#11) task-scoped write coordination: at most one session holds
    * the write right, reads are never blocked, and a derived execution keeps the
@@ -573,6 +585,9 @@ export class TaskWorkspaceHost {
     schedule: StoredSchedule;
     approvalExpiresAt: string;
   }): { state: "done" | "approval" | "failed"; approvalId?: string; failureReason?: string } {
+    if (this.store === diskTaskStore) {
+      return { state: "failed", failureReason: "sdk-route-unwired: scheduled model runs require #44" };
+    }
     const existing = this.store.readSession(this.taskDir, input.sessionId);
     if (existing !== null) {
       // Ids are re-seeded from the persisted record, so this can only be a
@@ -1556,6 +1571,7 @@ export class TaskWorkspaceHost {
      */
     origin?: { scheduleId: string; scheduleConfigVersion: number; approvalExpiresAt: string },
   ): HostTurnResult {
+    if (this.store === diskTaskStore) throw new Error("sdk-route-unwired: task/sendMessage requires #44");
     const channel = this.openSession(sessionId);
     // [PiDock 09] (#11) box 3: a read-only session never runs an execution
     // round; the tool gate stays the second line. Matches the shipped renderer
@@ -1833,13 +1849,15 @@ export class TaskWorkspaceHost {
    * count must read the snapshots via `store`/`sessionIds()`.
    */
   /** Drop in-memory channels (e.g. on Host dispose); disk state is already saved. */
-  dispose(): void {
+  dispose(): Promise<void> {
+    const sdkStopped = this.shutdownSdk();
     this.channels.clear();
     this.approvalClaims.clear();
     this.write.reset();
     // With no live holder left to release them, this task's shared real-path
     // keys end here instead of blocking other tasks for the process lifetime.
     this.sharedPaths.releaseTask(this.taskId);
+    return sdkStopped;
   }
 
   describe(): { taskId: string; taskDir: string; sessions: string[]; lockOwner: string | null; maxSeq: number } {
