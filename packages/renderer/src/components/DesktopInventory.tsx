@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { Icon } from "./Icon";
+import { DesktopTaskCreation } from "./DesktopTaskCreation";
 import { desktopMode, importDesktopTaskRoot } from "../data/desktopInventory";
 import { loadDesktopProjects, parseDesktopProject, projectOperation, type DesktopProject, type DesktopProjects, type ProjectInput, type ProjectSource, type TaskAssociation } from "../data/desktopProjects";
 
@@ -21,6 +22,7 @@ function reconciledDraft(input: ProjectInput, committed: DesktopProject, project
 const button = "inline-flex min-h-8 items-center justify-center gap-1.5 border border-line bg-paper px-2.5 py-1 text-xs hover:bg-bg disabled:cursor-not-allowed disabled:opacity-50";
 const field = "w-full min-w-0 border border-line bg-paper px-2 py-1.5 text-sm text-ink";
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : "本机数据操作失败，请重试";
+const emptyBridge = {};
 
 function SourceFields({ label, rows, onChange }: { label: string; rows: ProjectInput["repositories"]; onChange: (next: ProjectInput["repositories"]) => void }) {
   return <fieldset className="space-y-2"><legend className="mb-2 text-xs font-semibold">{label}</legend>
@@ -154,8 +156,11 @@ export function DesktopInventory() {
     <div className="mx-auto w-full max-w-[1100px] px-4 py-5">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2"><h1 className="text-lg font-semibold">项目与任务</h1>
         <div className="flex gap-2"><button className={button} type="button" disabled={busy || pendingCreate !== null} onClick={() => { setForm("create"); setDraft({ name: "", description: "", repositories: [], directories: [] }); setActionError(null); }}><Icon name="plus" />项目</button>
-          <button className={button} type="button" disabled={busy} onClick={() => void importRoot()}><Icon name="folder" />找回任务根</button>
-          <button className={button} type="button" disabled title="真实任务创建尚未接线" aria-label="创建任务（尚未接线）"><Icon name="plus" />任务</button></div></div>
+          <button className={button} type="button" disabled={busy} onClick={() => void importRoot()}><Icon name="folder" />找回任务根</button></div></div>
+      <DesktopTaskCreation project={project} bridge={window.pidock ?? emptyBridge} onCreated={async (projectId) => {
+        if (!(await load())) throw new Error("任务已创建，但本机清单无法核验；请重试读取");
+        setSelection({ kind: "project", id: projectId });
+      }} />
       {actionError && <p role="alert" className="mb-3 text-sm text-[#ad4545]">{actionError}</p>}
       {pendingCreate && view.kind === "ready" && <button className={`${button} mb-3`} type="button" onClick={() => void load()}>重新核验</button>}
       {view.kind === "loading" && <p role="status" className="text-sm text-muted">正在读取本机项目与任务</p>}
@@ -178,7 +183,7 @@ export function DesktopInventory() {
             <ul className="divide-y divide-line">{shown?.map((row) => <TaskRow key={row.taskId} row={row} name={taskMap.get(row.taskId)?.name ?? row.taskId} projects={data.projects} choice={choice[row.taskId] ?? ""} setChoice={(value) => setChoice((prev) => ({ ...prev, [row.taskId]: value }))} busy={busy} act={operate} />)}</ul>
           </section>
           {data.inventory.roots.filter((root) => root.state === "error").map((root) => <p role="alert" key={root.label} className="mt-3 text-xs text-[#ad4545]">{root.label}：{root.message}</p>)}
-          <p className="mt-5 text-xs text-muted">仅显示默认及已登记任务根；其他位置需明确找回。真实任务创建与 Agent 对话尚未接线。</p>
+          <p className="mt-5 text-xs text-muted">仅显示默认及已登记任务根；其他位置需明确找回。Agent 对话尚未接线。</p>
         </div>
       </div>}
     </div>
