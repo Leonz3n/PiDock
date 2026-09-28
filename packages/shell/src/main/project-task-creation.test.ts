@@ -84,6 +84,8 @@ describe("persistent Project task creation with local Git", () => {
     const realClaim = env.projects.claim.bind(env.projects);
     env.projects.claim = (() => { throw new Error("injected write failure"); }) as typeof env.projects.claim;
     await expect(env.service.commit(preview.id)).rejects.toThrow(/injected/);
+    await expect(env.service.abandon(preview.id)).rejects.toThrow(/不能放弃/);
+    expect(existsSync(join(env.profile, `task-creation-abandon-${preview.id}.json`))).toBe(false);
     expect(readTaskRecordOnDisk(preview.taskDir)).not.toBeNull();
     expect(env.roots.inventory().tasks.map((task) => task.taskId)).toContain(preview.taskId);
     env.projects.claim = realClaim;
@@ -114,27 +116,77 @@ describe("persistent Project task creation with local Git", () => {
     expect(env.storage.read()).toBeNull();
     expect(env.getCalls()).toBe(0);
   });
-  it("recovers all four new-directory interruption boundaries without adopting unmarked user paths", async () => {
-    for (const phase of ["root-stage", "root-renamed", "task-stage", "task-renamed"] as const) {
+  it("fails closed at unmarked mkdir gaps, records explicit abandon, and restarts with a fresh task ID", async () => {
+    for (const phase of ["root-mkdir", "task-mkdir"] as const) {
       const env = await setup();
-      const newRoot = join(env.home, `new-${phase}`);
-      const useOverride = phase.startsWith("root");
-      const preview = await env.service.prepare({ ...env.request, override: useOverride }, useOverride ? newRoot : undefined);
+      const root = join(env.home, `new-${phase}`);
+      const override = phase === "root-mkdir";
+      const preview = await env.service.prepare({ ...env.request, override }, override ? root : undefined);
       const interrupted = new ProjectTaskCreation(env.storage, env.projects, env.roots, env.host, env.root, (boundary) => {
         if (boundary === phase) throw new Error(`interrupted ${phase}`);
       });
       await expect(interrupted.commit(preview.id)).rejects.toThrow(`interrupted ${phase}`);
-      expect(env.storage.read()?.state).toBe("pending");
-      if (phase === "root-stage" || phase === "task-stage") {
-        expect(existsSync(phase === "root-stage" ? newRoot : preview.taskDir)).toBe(false);
-        const parent = phase === "root-stage" ? env.home : env.root;
-        expect(readdirSync(parent).filter((entry) => /^\.pidock-.*\.tmp$/.test(entry))).toHaveLength(1);
-      }
-      if (phase === "root-renamed") expect(readFileSync(join(newRoot, ".pidock-created-root"), "utf8")).toBe(preview.id);
-      if (phase === "task-renamed") expect(readFileSync(join(preview.taskDir, ".pidock-creation"), "utf8")).toBe(preview.id);
+      const unmarked = override ? root : preview.taskDir;
+      expect(readdirSync(unmarked)).toEqual([]);
       const reopened = new ProjectTaskCreation(new CreationIntentStore(env.profile), new ProjectRegistry(env.profile), new TaskRootIndex(env.profile, env.root), env.host, env.root);
+      await expect(reopened.commit(preview.id)).rejects.toThrow(/不能接管|标记不匹配/);
+      expect(reopened.current()?.id).toBe(preview.id);
+      expect(await reopened.abandon(preview.id)).toEqual({ taskId: preview.taskId, abandoned: true });
+      expect(reopened.current()).toBeNull();
+      const receipt = JSON.parse(readFileSync(join(env.profile, `task-creation-abandon-${preview.id}.json`), "utf8"));
+      expect(receipt).toMatchObject({ reason: "operator-abandon", intentId: preview.id, taskId: preview.taskId, taskDir: preview.taskDir });
+      expect(readdirSync(unmarked)).toEqual([]);
+      const restarted = await reopened.prepare(env.request);
+      expect(restarted.taskId).not.toBe(preview.taskId);
+      expect(await reopened.commit(restarted.id)).toEqual({ taskId: restarted.taskId, projectId: env.project.id });
+      expect(readdirSync(unmarked)).toEqual([]);
+    }
+  });
+  it("recovers after durable markers before the root identity or task record is written", async () => {
+    for (const phase of ["root-marked", "task-marked"] as const) {
+      const env = await setup();
+      const root = join(env.home, `new-${phase}`);
+      const override = phase === "root-marked";
+      const preview = await env.service.prepare({ ...env.request, override }, override ? root : undefined);
+      const interrupted = new ProjectTaskCreation(env.storage, env.projects, env.roots, env.host, env.root, (boundary) => {
+        if (boundary === phase) throw new Error(`interrupted ${phase}`);
+      });
+      await expect(interrupted.commit(preview.id)).rejects.toThrow(`interrupted ${phase}`);
+      expect(readFileSync(join(override ? root : preview.taskDir, override ? ".pidock-created-root" : ".pidock-creation"), "utf8")).toBe(preview.id);
+      const reopened = new ProjectTaskCreation(new CreationIntentStore(env.profile), new ProjectRegistry(env.profile), new TaskRootIndex(env.profile, env.root), env.host, env.root);
+      if (!override) await expect(reopened.abandon(preview.id)).rejects.toThrow(/不能放弃/);
       expect(await reopened.commit(preview.id)).toEqual({ taskId: preview.taskId, projectId: env.project.id });
       expect(readTaskRecordOnDisk(preview.taskDir)?.taskId).toBe(preview.taskId);
+    }
+  });
+  it("cannot commit an intent after its abandon receipt is durable but state transition was interrupted", async () => {
+    const env = await setup();
+    const preview = await env.service.prepare(env.request);
+    await env.service.abandon(preview.id);
+    env.storage.write({ ...preview, state: "pending" });
+    const reopened = new ProjectTaskCreation(new CreationIntentStore(env.profile), new ProjectRegistry(env.profile), new TaskRootIndex(env.profile, env.root), env.host, env.root);
+    await expect(reopened.commit(preview.id)).rejects.toThrow(/凭据已写入/);
+    expect(existsSync(preview.taskDir)).toBe(false);
+    expect(await reopened.abandon(preview.id)).toEqual({ taskId: preview.taskId, abandoned: true });
+    expect(reopened.current()).toBeNull();
+    expect(env.getCalls()).toBe(0);
+  });
+  it("does not replace a competitor's empty final directory between the check and exclusive mkdir", async () => {
+    for (const phase of ["root-before-mkdir", "task-before-mkdir"] as const) {
+      const env = await setup();
+      const root = join(env.home, `raced-${phase}`);
+      const override = phase === "root-before-mkdir";
+      const preview = await env.service.prepare({ ...env.request, override }, override ? root : undefined);
+      const target = override ? root : preview.taskDir;
+      const competing = new ProjectTaskCreation(env.storage, env.projects, env.roots, env.host, env.root, (boundary) => {
+        if (boundary === phase) mkdirSync(target);
+      });
+      await expect(competing.commit(preview.id)).rejects.toThrow(/EEXIST/);
+      expect(readdirSync(target)).toEqual([]);
+      expect(readTaskRecordOnDisk(preview.taskDir)).toBeNull();
+      await expect(competing.commit(preview.id)).rejects.toThrow(/不能接管|标记不匹配/);
+      expect(await competing.abandon(preview.id)).toEqual({ taskId: preview.taskId, abandoned: true });
+      expect(readdirSync(target)).toEqual([]);
     }
   });
   it("refuses an unmarked user-created root after prepare without writing into it", async () => {

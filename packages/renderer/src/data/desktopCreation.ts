@@ -40,6 +40,10 @@ export async function prepareCreation(bridge: PidockBridge, input: CreationInput
   if (!("intent" in value)) throw new Error("本机任务创建预览返回异常");
   return parse(value.intent);
 }
+export async function abandonCreation(bridge: PidockBridge, id: string): Promise<void> {
+  const value = await request(bridge, { op: "abandon", id });
+  if (!value || typeof value !== "object" || !("abandoned" in value) || value.abandoned !== true) throw new Error("放弃创建结果返回异常，请重读确认");
+}
 export async function commitCreation(bridge: PidockBridge, id: string): Promise<string> {
   const value = await request(bridge, { op: "commit", id });
   if (!value || typeof value !== "object" || !("taskId" in value) || typeof value.taskId !== "string") throw new Error("本机任务创建结果返回异常，请重读确认");

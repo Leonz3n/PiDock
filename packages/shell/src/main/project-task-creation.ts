@@ -16,7 +16,7 @@ export interface CreationIntent {
   id: string; taskId: string; name: string; projectId: string; projectSnapshot: string;
   root: string; rootDevice: string | null; rootInode: string | null; rootRealPath: string | null;
   taskDir: string; branch: string; repos: Repo[]; directories: Directory[];
-  sharedWriteConfirmed: boolean; state: "pending" | "complete";
+  sharedWriteConfirmed: boolean; state: "pending" | "complete" | "abandoned";
 }
 export interface CreationRequest {
   projectId: string; name: string;
@@ -66,19 +66,17 @@ function matchesMarker(dir: string, marker: string, id: string): boolean {
   try { return lstatSync(dir).isDirectory() && lstatSync(join(dir, marker)).isFile() && readFileSync(join(dir, marker), "utf8") === id; }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
 }
-type CreationBoundary = "root-stage" | "root-renamed" | "task-stage" | "task-renamed";
-function createOwnedDirectory(target: string, marker: string, id: string, boundary: CreationBoundary,
+type CreationBoundary = "root-before-mkdir" | "root-mkdir" | "root-marked" | "task-before-mkdir" | "task-mkdir" | "task-marked";
+function createOwnedDirectory(target: string, marker: string, id: string, kind: "root" | "task",
   afterBoundary?: (boundary: CreationBoundary) => void): void {
-  const parent = dirname(target), stage = join(parent, `.pidock-${randomUUID()}.tmp`);
-  mkdirSync(stage, { mode: 0o700 });
-  afterBoundary?.(boundary);
-  const fd = openSync(join(stage, marker), "wx", 0o600);
+  afterBoundary?.(`${kind}-before-mkdir`);
+  mkdirSync(target, { mode: 0o700 });
+  afterBoundary?.(`${kind}-mkdir`);
+  const fd = openSync(join(target, marker), "wx", 0o600);
   try { writeFileSync(fd, id); fsyncSync(fd); } finally { closeSync(fd); }
-  syncDirectory(stage);
-  if (pathPresent(target)) throw new Error("目标目录已存在，不能接管或覆盖");
-  renameSync(stage, target);
-  syncDirectory(parent);
-  afterBoundary?.(boundary === "root-stage" ? "root-renamed" : "task-renamed");
+  syncDirectory(target);
+  syncDirectory(dirname(target));
+  afterBoundary?.(`${kind}-marked`);
 }
 function git(cwd: string, args: string[]): string {
   try { return execFileSync("git", args, { cwd, encoding: "utf8", timeout: 30000, maxBuffer: 1024 * 1024,
@@ -117,7 +115,7 @@ function strict(value: unknown, fields: string[]): Record<string, unknown> {
 function validate(value: unknown): CreationIntent {
   const row = strict(value, ["id", "taskId", "name", "projectId", "projectSnapshot", "root", "rootDevice", "rootInode", "rootRealPath", "taskDir", "branch", "repos", "directories", "sharedWriteConfirmed", "state"]);
   if (!UUID.test(string(row.id)) || !UUID.test(string(row.projectId)) || !/^task-[a-f0-9]{8}$/.test(string(row.taskId)) ||
-      row.taskDir !== join(path(row.root), row.taskId as string) || !["pending", "complete"].includes(String(row.state)) ||
+      row.taskDir !== join(path(row.root), row.taskId as string) || !["pending", "complete", "abandoned"].includes(String(row.state)) ||
       typeof row.projectSnapshot !== "string" || row.projectSnapshot.length > 65536 || typeof row.sharedWriteConfirmed !== "boolean" ||
       !((row.rootDevice === null && row.rootInode === null && row.rootRealPath === null) ||
         (typeof row.rootDevice === "string" && typeof row.rootInode === "string" && typeof row.rootRealPath === "string" && isAbsolute(row.rootRealPath))) ||
@@ -175,6 +173,30 @@ export class CreationIntentStore {
       renameSync(tmp, file); sync();
     } finally { rmSync(tmp, { force: true }); rmSync(backupTmp, { force: true }); }
   }
+  hasAbandonReceipt(intent: CreationIntent): boolean {
+    const file = join(this.userData, `task-creation-abandon-${intent.id}.json`);
+    if (!pathPresent(file)) return false;
+    if (!lstatSync(file).isFile()) throw new Error("放弃创建凭据损坏");
+    const existing = strict(JSON.parse(readFileSync(file, "utf8")), ["version", "intentId", "taskId", "projectId", "root", "taskDir", "reason", "at"]);
+    if (existing.version !== 1 || existing.intentId !== intent.id || existing.taskId !== intent.taskId ||
+        existing.projectId !== intent.projectId || existing.root !== intent.root || existing.taskDir !== intent.taskDir ||
+        existing.reason !== "operator-abandon" || typeof existing.at !== "string" || !Number.isFinite(Date.parse(existing.at))) {
+      throw new Error("放弃创建凭据损坏");
+    }
+    return true;
+  }
+  abandon(intent: CreationIntent): void {
+    if (intent.state !== "pending" && intent.state !== "abandoned") throw new Error("不能放弃已完成的任务");
+    const file = join(this.userData, `task-creation-abandon-${intent.id}.json`);
+    if (!this.hasAbandonReceipt(intent)) {
+      const receipt = { version: 1, intentId: intent.id, taskId: intent.taskId, projectId: intent.projectId,
+        root: intent.root, taskDir: intent.taskDir, reason: "operator-abandon", at: new Date().toISOString() };
+      const fd = openSync(file, "wx", 0o600);
+      try { writeFileSync(fd, JSON.stringify(receipt)); fsyncSync(fd); } finally { closeSync(fd); }
+      syncDirectory(this.userData);
+    }
+    if (intent.state === "pending") this.write({ ...intent, state: "abandoned" });
+  }
 }
 
 /** The intent is the recovery authority; success is exposed only after all three records agree. */
@@ -186,10 +208,36 @@ export class ProjectTaskCreation {
   private run<T>(action: () => Promise<T>): Promise<T> {
     const result = this.queue.then(action); this.queue = result.catch(() => undefined); return result;
   }
-  current(): CreationIntent | null { return this.store.read(); }
+  current(): CreationIntent | null {
+    const intent = this.store.read();
+    if (intent?.state === "abandoned") {
+      if (!this.store.hasAbandonReceipt(intent)) throw new Error("放弃创建凭据丢失，需要显式恢复");
+      return null;
+    }
+    return intent;
+  }
+  abandon(id: string): Promise<{ taskId: string; abandoned: true }> {
+    return this.run(async () => {
+      const intent = this.store.read();
+      if (!intent || intent.id !== id) throw new Error("创建意图已改变，请重新读取");
+      if (intent.state === "complete") throw new Error("已完成任务不能放弃");
+      if (intent.state === "abandoned" && !this.store.hasAbandonReceipt(intent)) throw new Error("放弃创建凭据丢失，需要显式恢复");
+      if (intent.state === "pending") {
+        if (this.roots.inventory().roots.some((row) => row.state === "error") ||
+            this.projects.association(intent.taskId, this.roots).state !== "unavailable" ||
+            pathPresent(join(intent.taskDir, "task.json")) || matchesMarker(intent.taskDir, ".pidock-creation", intent.id)) {
+          throw new Error("任务记录、工作区或关联已存在，不能放弃；请恢复原任务");
+        }
+      }
+      this.store.abandon(intent);
+      return { taskId: intent.taskId, abandoned: true };
+    });
+  }
   prepare(input: CreationRequest, selectedRoot?: string): Promise<CreationIntent> {
     return this.run(async () => {
-      if (this.store.read()?.state === "pending") throw new Error("已有待完成的任务，请先恢复");
+      const prior = this.store.read();
+      if (prior?.state === "pending") throw new Error("已有待完成的任务，请先恢复");
+      if (prior?.state === "abandoned" && !this.store.hasAbandonReceipt(prior)) throw new Error("放弃创建凭据丢失，需要显式恢复");
       const project = this.projects.get(input.projectId);
       if (!project) throw new Error("项目已删除或不可读取");
       if (!Array.isArray(input.repositories) || !input.repositories.length || input.repositories.length > 30 ||
@@ -247,6 +295,8 @@ export class ProjectTaskCreation {
     return this.run(async () => {
       const intent = this.store.read();
       if (!intent || intent.id !== id) throw new Error("创建意图已改变，请重新读取");
+      if (intent.state === "abandoned") throw new Error("创建意图已放弃，请重新创建任务");
+      if (this.store.hasAbandonReceipt(intent)) throw new Error("放弃创建凭据已写入，只能继续放弃，不能提交原任务");
       if (intent.state === "complete") {
         const association = this.projects.association(intent.taskId, this.roots);
         if (association.state !== "assigned" || association.projectId !== intent.projectId) throw new Error("任务归属需要修复");
@@ -260,7 +310,7 @@ export class ProjectTaskCreation {
       if (intent.rootDevice === null) {
         if (!pathPresent(intent.root)) {
           diskIdentity(dirname(intent.root));
-          createOwnedDirectory(intent.root, ".pidock-created-root", intent.id, "root-stage", this.afterBoundary);
+          createOwnedDirectory(intent.root, ".pidock-created-root", intent.id, "root", this.afterBoundary);
         } else if (!matchesMarker(intent.root, ".pidock-created-root", intent.id)) {
           throw new Error("任务根在准备后被建立，不能接管；需要显式恢复");
         }
@@ -275,7 +325,7 @@ export class ProjectTaskCreation {
       checkWorkspaceOverlap(taskRealPath, intent.repos, intent.directories);
       for (const dir of intent.directories) checkSource(dir);
       if (!pathPresent(intent.taskDir)) {
-        createOwnedDirectory(intent.taskDir, ".pidock-creation", intent.id, "task-stage", this.afterBoundary);
+        createOwnedDirectory(intent.taskDir, ".pidock-creation", intent.id, "task", this.afterBoundary);
       } else if (!matchesMarker(intent.taskDir, ".pidock-creation", intent.id)) {
         throw new Error("任务目录已占用或创建标记不匹配");
       }
