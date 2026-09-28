@@ -63,7 +63,7 @@ describe("main-owned override task root index", () => {
     await index.register(target);
     rmSync(override, { recursive: true });
     expect(index.inventory().tasks.map((row) => row.taskId)).toEqual(["task-00000001"]);
-    expect(index.inventory().roots[1]).toMatchObject({ state: "error" });
+    expect(index.inventory().roots[1]).toMatchObject({ state: "error", message: expect.stringContaining("移走") });
     expect(index.resolve("task-abcdef12")).toBeNull();
     const replacement = join(home, "replacement");
     mkdirSync(replacement);
@@ -108,6 +108,17 @@ describe("main-owned override task root index", () => {
     expect(index.inventory().roots.map((root) => root.state)).toEqual(["ready", "error", "ready"]);
     expect(index.resolve("task-00000002")).toBe(join(second, "task-00000002"));
     expect(index.resolve("task-abcdef12")).toBeNull();
+  });
+
+  it("discloses unindexed legacy tasks in an otherwise registered root until explicit import", async () => {
+    const { override, index } = setup();
+    task(override);
+    await index.importRoot(override);
+    task(override, "task-00000002");
+    expect(index.inventory().roots[1]).toMatchObject({ state: "error", message: expect.stringContaining("未登记") });
+    expect(index.inventory().tasks).toEqual([]);
+    await index.importRoot(override);
+    expect(index.inventory().tasks).toHaveLength(2);
   });
 
   it("serializes concurrent registrations and rejects changed identity on retry", async () => {
