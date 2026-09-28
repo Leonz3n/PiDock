@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync, renameSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync, existsSync, renameSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TaskWorkspaceHost } from "../host/task-host.js";
@@ -264,6 +264,29 @@ describe("persistent Project task creation with local Git", () => {
     expect(env.getCalls()).toBe(0);
     expect(existsSync(preview.taskDir)).toBe(false);
     expect(JSON.stringify(env.storage.read())).not.toContain(env.remote);
+  });
+  it("rejects a file URL whose symlink-then-dotdot path reaches a different repository with the same commit", async () => {
+    const env = await setup();
+    const alternate = join(env.home, "alternate");
+    mkdirSync(join(alternate, "child"), { recursive: true });
+    git(env.home, "clone", "--bare", env.remote, join(alternate, "remote.git"));
+    const baseline = git(env.repo, "rev-parse", "HEAD");
+    git(env.home, `--git-dir=${join(alternate, "remote.git")}`, "branch", "alternate-only", baseline);
+    symlinkSync(join(alternate, "child"), join(env.home, "link"), "dir");
+    const direct = `file://${env.remote}`;
+    const shifted = `file://${env.home}/link/../remote.git`;
+    expect(new URL(direct).toString()).toBe(new URL(shifted).toString());
+    expect(git(env.home, "ls-remote", direct, "refs/heads/alternate-only")).toBe("");
+    expect(git(env.home, "ls-remote", shifted, "refs/heads/alternate-only")).toContain("refs/heads/alternate-only");
+    expect(git(env.home, "ls-remote", shifted, "refs/heads/main")).toContain(baseline);
+    git(env.repo, "remote", "set-url", "origin", direct);
+    const preview = await env.service.prepare(env.request);
+    git(env.repo, "remote", "set-url", "origin", shifted);
+    await expect(env.service.commit(preview.id)).rejects.toThrow(/传输地址已改变/);
+    expect(existsSync(preview.taskDir)).toBe(false);
+    expect(env.getCalls()).toBe(0);
+    expect(JSON.stringify(env.storage.read())).not.toContain(direct);
+    expect(JSON.stringify(env.storage.read())).not.toContain(shifted);
   });
   it("pins the SSH account for URL and SCP remotes even when host, path and commit are unchanged", async () => {
     const env = await setup();
