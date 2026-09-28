@@ -101,7 +101,8 @@ function remoteDigest(url: string): string {
     if ((parsed.protocol !== "ssh:" && userinfo) || /[:%]/.test(userinfo) || parsed.password) {
       throw new Error("远程地址含凭据，无法安全固定来源身份");
     }
-    transport = parsed.toString();
+    // URL serialization removes dot segments before Git resolves symlinked path components.
+    transport = url;
   } else if (/^(?:[^@:]+@)?[^/:]+:.+/.test(url) && !/^[a-z]:[\\/]/i.test(url)) {
     if (/[?#]/.test(url)) throw new Error("远程地址含查询或片段参数，无法固定来源身份");
     const account = url.match(/^([^@:]+)@[^/:]+:.+/)?.[1];
