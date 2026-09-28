@@ -1,17 +1,13 @@
 /**
  * Disk-backed task-id -> task-dir resolver for [PiDock 02] (#5).
  *
- * Production `PerTaskHostRegistry` (see `runtime.ts`) must resolve a
- * provisioned task's folder from its on-disk record — the renderer only
- * selects the task id, never a path. This module is the only production
- * resolver: `main.ts` injects `createDiskTaskDirResolver(defaultTasksRoot())`
- * so first-use of a provisioned task forks its bound Host instead of always
- * throwing `unknown task`. Unprovisioned ids still fail closed (`null`).
+ * Production `PerTaskHostRegistry` resolves task IDs through the main-owned
+ * root index, which uses this default-root resolver only after its inventory
+ * has verified the default-root records and excluded cross-root conflicts.
+ * The renderer selects a task ID, never a task path.
  *
- * Task ids are globally unique: at most one task folder per id under the
- * single tasks root. The resolver returns the first sorted match; the
- * registry revalidates every op and rejects a `task-moved` rebinding
- * instead of silently reusing a stale entry.
+ * This helper resolves from one configured root; the main-owned root index
+ * checks all known roots before permitting a task ID to route.
  *
  * Pure seams (`readdir`/`readTask` injectable) keep unit tests
  * Electron-free; only the defaults touch the filesystem.

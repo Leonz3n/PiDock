@@ -20,7 +20,8 @@ import {
 } from "./runtime.js";
 import { ScheduleDriver } from "./schedule-driver.js";
 import { runSmoke } from "./smoke.js";
-import { createDiskTaskDirResolver, defaultTasksRoot } from "./task-resolver.js";
+import { defaultTasksRoot } from "./task-resolver.js";
+import { TaskRootIndex } from "./task-root-index.js";
 import { ProjectRegistry } from "./project-registry.js";
 import {
   runTaskBrowserSmoke,
@@ -144,18 +145,18 @@ async function run(): Promise<void> {
     originsFor: (taskId) => taskOrigins[taskId] ?? [],
     ...(views.layout ? { layout: views.layout } : {}),
   });
-  // Production resolver: scan the machine tasks root for a `task.json`
-  // matching the routed task id. First-use of a provisioned task forks
-  // its bound Host; unprovisioned ids still fail closed (`unknown task`).
-  // Task ids are globally unique, so at most one folder wins per id; the
-  // registry revalidates the resolved dir on every reuse (`task-moved`).
+  // Production resolver: main owns the default root plus a versioned index of
+  // explicitly registered override roots. Every lookup checks disk identity;
+  // unknown or conflicting tasks cannot pick a folder by ID alone.
+  const taskRoots = new TaskRootIndex(app.getPath("userData"), defaultTasksRoot());
   const tasks = new PerTaskHostRegistry(
     workspaceId,
     (ws, task) => createHost(ws, true, task),
-    createDiskTaskDirResolver(defaultTasksRoot()),
+    (taskId) => taskRoots.resolve(taskId),
     browsers.registry,
+    taskRoots,
   );
-  registerIpc(client, views.registry, tasks, new ProjectRegistry(app.getPath("userData")));
+  registerIpc(client, views.registry, tasks, new ProjectRegistry(app.getPath("userData")), taskRoots);
   // [PiDock 18] (#20) the Host-borne scheduler: main owns the Host processes, so
   // the driver asks each *running* Host to evaluate its own due triggers. It
   // never forks a Host and never overlaps its own ticks; stop it wherever the

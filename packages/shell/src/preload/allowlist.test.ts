@@ -28,6 +28,11 @@ describe("preload invoke whitelist", () => {
     expect(isAllowedInvokeChannel("shell/readFile")).toBe(false);
   });
 
+  it("allows only main's directory picker and not a raw path IPC channel", () => {
+    expect(isAllowedInvokeChannel("shell/importTaskRoot")).toBe(true);
+    expect(isAllowedInvokeChannel("shell/readTaskDir")).toBe(false);
+  });
+
   it("rejects arbitrary IPC channels", () => {
     expect(isAllowedInvokeChannel("arbitrary-channel")).toBe(false);
   });

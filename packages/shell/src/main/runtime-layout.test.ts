@@ -37,6 +37,7 @@ vi.mock("electron", () => ({
     once(event: string, listener: () => void) { this.listeners.set(event, listener); }
     isVisible() { return true; }
   },
+  dialog: { showOpenDialog: vi.fn() },
   ipcMain: { handle: vi.fn(), eventNames: () => [] },
   utilityProcess: { fork: vi.fn() },
 }));
@@ -52,6 +53,7 @@ import {
 } from "./runtime.js";
 
 import { ProjectRegistry } from "./project-registry.js";
+import { TaskRootIndex } from "./task-root-index.js";
 import { ipcMain } from "electron";
 
 const originalTaskUrl = process.env["PIDOCK_TASK_URL"];
@@ -76,6 +78,25 @@ describe("trusted Electron view modes", () => {
       expect(await handler!(event, { op: "list" })).toEqual({ ok: true, payload: { initialized: false, projects: [] } });
       expect(await handler!(event, { op: "create", input: { name: "Real", description: "", repositories: [], directories: [] } })).toMatchObject({ ok: true });
       expect(store.list().projects).toHaveLength(1);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("accepts picker-only import from the shell main frame and refuses payload paths", async () => {
+    const root = mkdtempSync(join(tmpdir(), "pidock-picker-runtime-"));
+    try {
+      const views = await createTrustedWindow("workspace-picker", "production");
+      const index = new TaskRootIndex(join(root, "data"), join(root, "default"));
+      const picker = vi.fn(async () => null);
+      registerIpc({} as never, views.registry, undefined, undefined, index, picker);
+      const handler = vi.mocked(ipcMain.handle).mock.calls.findLast(([channel]) => channel === "shell/importTaskRoot")?.[1];
+      expect(handler).toBeDefined();
+      const sender = { sender: views.shellView.webContents, senderFrame: views.shellView.webContents.mainFrame } as never;
+      const other = { sender: views.taskView.webContents, senderFrame: views.taskView.webContents.mainFrame } as never;
+      expect(await handler!(other)).toMatchObject({ ok: false });
+      expect(await handler!(sender, { path: "/tmp/arbitrary" })).toMatchObject({ ok: false });
+      expect(picker).not.toHaveBeenCalled();
+      expect(await handler!(sender)).toEqual({ ok: true, payload: { canceled: true } });
+      expect(picker).toHaveBeenCalledTimes(1);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { desktopMode, listDesktopTasks } from "../data/desktopInventory";
+import { desktopMode, importDesktopTaskRoot, listDesktopTasks } from "../data/desktopInventory";
 
 describe("Desktop task inventory boundary", () => {
   it("selects desktop once when a bridge exists or Electron preload is missing", () => {
@@ -11,11 +11,14 @@ describe("Desktop task inventory boundary", () => {
   it("lists only strict Host task summaries, without using a demo fallback", async () => {
     const listTasks = vi.fn(async () => ({ ok: true, payload: { tasks: [
       { taskId: "task-a", name: "Real task", branch: "task/real", repoCount: 1, updatedAt: "2026-09-22" },
-    ] } }));
-    await expect(listDesktopTasks({ listTasks })).resolves.toMatchObject([{ taskId: "task-a" }]);
+    ], roots: [{ label: "默认任务根", state: "ready" }] } }));
+    await expect(listDesktopTasks({ listTasks })).resolves.toMatchObject({ tasks: [{ taskId: "task-a" }] });
     expect(listTasks).toHaveBeenCalledTimes(1);
     await expect(listDesktopTasks({ listTasks: vi.fn(async () => ({ ok: false, error: "offline" })) })).rejects.toThrow("offline");
     await expect(listDesktopTasks({})).rejects.toThrow("桌面壳");
-    await expect(listDesktopTasks({ listTasks: vi.fn(async () => ({ ok: true, payload: { tasks: [{ taskId: "task-a", taskDir: "/secret" }] } })) })).rejects.toThrow("异常");
+    await expect(listDesktopTasks({ listTasks: vi.fn(async () => ({ ok: true, payload: { tasks: [{ taskId: "task-a", taskDir: "/secret" }], roots: [{ label: "默认任务根", state: "ready" }] } })) })).rejects.toThrow("异常");
+    await expect(listDesktopTasks({ listTasks: vi.fn(async () => ({ ok: true, payload: { tasks: [] } })) })).rejects.toThrow("异常");
+    await expect(importDesktopTaskRoot({ importTaskRoot: vi.fn(async () => ({ ok: true, payload: { canceled: true } })) })).resolves.toBe(false);
+    await expect(importDesktopTaskRoot({ importTaskRoot: vi.fn(async () => ({ ok: false, error: "picker failed" })) })).rejects.toThrow("picker failed");
   });
 });
