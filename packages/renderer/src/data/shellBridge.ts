@@ -22,7 +22,7 @@ export interface PidockBridge {
   listTasks?: () => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
   importTaskRoot?: () => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
   projectOp?: (request: { op: "list" | "get" | "create" | "update" | "rename" | "delete" | "association" | "associations" | "claim" | "unlink" | "transfer"; projectId?: string; name?: string; input?: unknown; taskId?: string; expectedProjectId?: string; fromProjectId?: string; toProjectId?: string }) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
-  createTask?: (request: { op: "current" | "prepare" | "commit"; input?: unknown; id?: string }) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
+  createTask?: (request: { op: "current" | "prepare" | "commit" | "abandon"; input?: unknown; id?: string }) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
   taskOp?: (taskId: string, op: string, payload?: Record<string, unknown>) => Promise<ShellTaskOpResult>;
 }
 

@@ -58,6 +58,21 @@ describe("Desktop task creation", () => {
     await waitFor(() => expect(createTask.mock.calls.filter(([request]) => request.op === "commit")).toHaveLength(2));
     expect(createTask.mock.calls.filter(([request]) => request.op === "commit").map(([request]) => request.id)).toEqual([intent.id, intent.id]);
   });
+  it("explicitly abandons a pending intent without deleting anything and permits a new form", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const createTask = vi.fn(async (request: { op: string; id?: string }) => request.op === "current"
+      ? { ok: true, payload: intent }
+      : { ok: true, payload: { taskId: intent.taskId, abandoned: true } });
+    render(<DesktopTaskCreation project={project} bridge={bridge(createTask)} onCreated={vi.fn(async () => {})} />);
+    expect(await screen.findByText(intent.taskDir)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "放弃并重新创建" }));
+    await waitFor(() => expect(createTask).toHaveBeenCalledWith({ op: "abandon", id: intent.id }));
+    expect(confirm).toHaveBeenCalledOnce();
+    await waitFor(() => expect(screen.queryByText(intent.taskDir)).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "任务" }));
+    expect(screen.getByLabelText("任务名称")).toHaveValue("");
+    confirm.mockRestore();
+  });
   it("refuses to submit stale source IDs when Project selection changes", async () => {
     const createTask = vi.fn(async (_request: { op: string }) => ({ ok: true, payload: null }));
     const view = render(<DesktopTaskCreation project={project} bridge={bridge(createTask)} onCreated={vi.fn(async () => {})} />);

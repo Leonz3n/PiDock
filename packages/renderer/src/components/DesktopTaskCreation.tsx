@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Icon } from "./Icon";
-import { commitCreation, currentCreation, prepareCreation, type CreationInput, type CreationIntentView } from "../data/desktopCreation";
+import { abandonCreation, commitCreation, currentCreation, prepareCreation, type CreationInput, type CreationIntentView } from "../data/desktopCreation";
 import type { DesktopProject } from "../data/desktopProjects";
 import type { PidockBridge } from "../data/shellBridge";
 
@@ -47,6 +47,15 @@ export function DesktopTaskCreation({ project, bridge, onCreated }: { project?: 
     } catch (failure) { setError(failure instanceof Error ? failure.message : "创建未完成，原任务身份已保留，请重试"); }
     finally { setBusy(false); }
   };
+  const abandon = async () => {
+    if (!intent || !window.confirm("放弃本次创建并生成新任务身份？磁盘上现有目录将原样保留；已有任务记录或关联时不能放弃。")) return;
+    setBusy(true); setError(null);
+    try {
+      await abandonCreation(bridge, intent.id);
+      setIntent(null); setOpen(false); setName(""); setRepos({}); setDirectories([]); setSharedWriteConfirmed(false); setOverride(false);
+    } catch (failure) { setError(failure instanceof Error ? failure.message : "放弃创建失败，请恢复原任务"); }
+    finally { setBusy(false); }
+  };
   return <>
     <button className={button} type="button" disabled={busy || !project || !project.repositories.length || typeof bridge.createTask !== "function"} title={!project ? "请先选择项目" : !project.repositories.length ? "当前创建流程至少需要一个 Git 仓库" : "创建真实任务"}
       onClick={() => { setFormProjectId(project?.id ?? null); setName(""); setRepos({}); setDirectories([]); setSharedWriteConfirmed(false); setOverride(false); setOpen(true); setError(null); }}><Icon name="plus" />任务</button>
@@ -60,7 +69,10 @@ export function DesktopTaskCreation({ project, bridge, onCreated }: { project?: 
         {intent.repos.map((repo) => <p className="break-all text-xs" key={repo.id}>{repo.name} · {repo.remote}/{repo.remoteBranch} · {repo.commit} → {intent.taskDir}/{repo.repoDir}</p>)}
         {intent.directories.map((dir) => <p className="break-all text-xs" key={dir.id}>{dir.name} · {dir.path} → {intent.taskDir}/{dir.linkName}（共享可写）</p>)}
         <p className="text-xs text-muted">创建中断后会保留固定任务身份与提交；重试不会更新基线。未完成的工作区可能出现在未归属任务中。</p>
-        <button className={button} type="button" disabled={busy} onClick={() => void commit()}>{busy ? "正在创建" : "确认创建 / 恢复"}</button>
+        <div className="flex flex-wrap gap-2">
+          <button className={button} type="button" disabled={busy} onClick={() => void commit()}>{busy ? "正在创建" : "确认创建 / 恢复"}</button>
+          <button className={button} type="button" disabled={busy} onClick={() => void abandon()}>放弃并重新创建</button>
+        </div>
       </div> : <form className="space-y-3" onSubmit={(event) => void prepare(event)}>
         <div className="flex items-center justify-between"><h2 className="font-semibold">从项目创建任务</h2><button className={button} type="button" disabled={busy} onClick={() => setOpen(false)}>取消</button></div>
         <label className="block text-xs">任务名称<input className={`${field} mt-1`} required maxLength={256} value={name} onChange={(event) => setName(event.target.value)} /></label>
