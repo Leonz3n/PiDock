@@ -1,6 +1,6 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { sumUsageRecords } from "../data/usageState";
 import { useHostStore } from "../stores/host";
 import { renderApp } from "./helpers";
@@ -70,20 +70,26 @@ describe("management pages alignment ([UI 对齐 09] #33)", () => {
   });
 
   it("keeps the usage empty state truthful when the range has no call", async () => {
-    const user = userEvent.setup();
-    renderApp("/usage");
-    const page = await screen.findByTestId("usage-page");
-    await waitFor(() => expect(screen.getByTestId("usage-table")).toHaveAttribute("data-total-rows", "240"));
+    // Seed calls end on Sep 22: keep "today" empty while the last seven days
+    // still contain calls, regardless of the machine's calendar date.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-23T12:00:00+08:00"));
+    try {
+      const user = userEvent.setup();
+      renderApp("/usage");
+      const page = await screen.findByTestId("usage-page");
+      await waitFor(() => expect(screen.getByTestId("usage-table")).toHaveAttribute("data-total-rows", "240"));
 
-    // 今天 (the wall-clock day) has no recorded call in the fixture, so the page
-    // says so instead of drawing seven zero bars as a value.
-    await user.selectOptions(within(page).getByLabelText("统计日期"), "今天");
-    await waitFor(() => expect(within(page).getByTestId("usage-table")).toHaveAttribute("data-total-rows", "0"));
-    expect(within(page).getByText(/当前筛选没有可查看用量的调用/)).toBeInTheDocument();
-    expect(page.querySelector(".bar-chart")).toBeNull();
+      await user.selectOptions(within(page).getByLabelText("统计日期"), "今天");
+      await waitFor(() => expect(within(page).getByTestId("usage-table")).toHaveAttribute("data-total-rows", "0"));
+      expect(within(page).getByText(/当前筛选没有可查看用量的调用/)).toBeInTheDocument();
+      expect(page.querySelector(".bar-chart")).toBeNull();
 
-    await user.selectOptions(within(page).getByLabelText("统计日期"), "近 7 天");
-    expect(page.querySelectorAll(".bar-column")).toHaveLength(7);
+      await user.selectOptions(within(page).getByLabelText("统计日期"), "近 7 天");
+      expect(page.querySelectorAll(".bar-column")).toHaveLength(7);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("counts capabilities from the store and filters the rows by tab", async () => {
