@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, normalize, relative, resolve } from "node:path";
 import { readTaskRecordOnDisk } from "../host/task-store.js";
@@ -10,7 +10,7 @@ import { buildTaskBranch } from "./task-provision.js";
 import { TaskRootIndex } from "./task-root-index.js";
 
 interface Source { id: string; name: string; path: string; realPath: string; device: string; inode: string }
-interface Repo extends Source { remote: string; remoteBranch: string; commit: string; repoDir: string }
+interface Repo extends Source { remote: string; remoteBranch: string; remoteDigest: string; commonDir: string; commit: string; repoDir: string }
 interface Directory extends Source { linkName: string }
 export interface CreationIntent {
   id: string; taskId: string; name: string; projectId: string; projectSnapshot: string;
@@ -53,6 +53,33 @@ function checkWorkspaceOverlap(taskPath: string, repos: Repo[], directories: Dir
   if (repos.some((repo) => overlaps(repo.realPath, taskPath) || overlaps(taskPath, repo.realPath))) throw new Error("任务工作区不能与来源仓库重叠");
   if (directories.some((dir) => overlaps(dir.realPath, taskPath) || overlaps(taskPath, dir.realPath))) throw new Error("普通目录与任务工作区重叠");
 }
+function syncDirectory(dir: string): void {
+  if (process.platform === "win32") return;
+  const fd = openSync(dir, "r");
+  try { fsyncSync(fd); } finally { closeSync(fd); }
+}
+function pathPresent(target: string): boolean {
+  try { lstatSync(target); return true; }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
+}
+function matchesMarker(dir: string, marker: string, id: string): boolean {
+  try { return lstatSync(dir).isDirectory() && lstatSync(join(dir, marker)).isFile() && readFileSync(join(dir, marker), "utf8") === id; }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
+}
+type CreationBoundary = "root-stage" | "root-renamed" | "task-stage" | "task-renamed";
+function createOwnedDirectory(target: string, marker: string, id: string, boundary: CreationBoundary,
+  afterBoundary?: (boundary: CreationBoundary) => void): void {
+  const parent = dirname(target), stage = join(parent, `.pidock-${randomUUID()}.tmp`);
+  mkdirSync(stage, { mode: 0o700 });
+  afterBoundary?.(boundary);
+  const fd = openSync(join(stage, marker), "wx", 0o600);
+  try { writeFileSync(fd, id); fsyncSync(fd); } finally { closeSync(fd); }
+  syncDirectory(stage);
+  if (pathPresent(target)) throw new Error("目标目录已存在，不能接管或覆盖");
+  renameSync(stage, target);
+  syncDirectory(parent);
+  afterBoundary?.(boundary === "root-stage" ? "root-renamed" : "task-renamed");
+}
 function git(cwd: string, args: string[]): string {
   try { return execFileSync("git", args, { cwd, encoding: "utf8", timeout: 30000, maxBuffer: 1024 * 1024,
     env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never" }, stdio: ["ignore", "pipe", "pipe"] }).trim(); }
@@ -61,12 +88,27 @@ function git(cwd: string, args: string[]): string {
 function optionalGit(cwd: string, args: string[]): string | null {
   try { return git(cwd, args); } catch { return null; }
 }
+function remoteDigest(url: string): string {
+  if (/^(?:ext::|[^:/]+::|-)/i.test(url) || /[\r\n\0]/.test(url)) throw new Error("不支持的远程传输方式");
+  let transport: string;
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) {
+    const parsed = new URL(url);
+    if (!["https:", "http:", "ssh:", "git:", "file:"].includes(parsed.protocol)) throw new Error("不支持的远程传输方式");
+    parsed.username = ""; parsed.password = ""; parsed.search = ""; parsed.hash = "";
+    transport = parsed.toString();
+  } else if (/^(?:[^@:]+@)?[^/:]+:.+/.test(url) && !/^[a-z]:[\\/]/i.test(url)) {
+    transport = url.replace(/^[^@:]+@/, "");
+  } else transport = url;
+  return createHash("sha256").update(transport).digest("hex");
+}
+function gitCommonDir(path: string): string {
+  return realpathSync(resolve(path, git(path, ["rev-parse", "--git-common-dir"])));
+}
 function verifyRepo(repo: Repo): void {
   checkSource(repo);
-  if (realpathSync(git(repo.path, ["rev-parse", "--show-toplevel"])) !== repo.realPath) throw new Error("仓库检出路径已改变");
+  if (realpathSync(git(repo.path, ["rev-parse", "--show-toplevel"])) !== repo.realPath || gitCommonDir(repo.path) !== repo.commonDir) throw new Error("仓库检出身份已改变");
   if (!git(repo.path, ["remote"]).split("\n").includes(repo.remote)) throw new Error("仓库远程已改变");
-  const url = git(repo.path, ["remote", "get-url", repo.remote]);
-  if (/^(?:ext::|[^:/]+::|-)/i.test(url) || /[\r\n\0]/.test(url)) throw new Error("不支持的远程传输方式");
+  if (remoteDigest(git(repo.path, ["remote", "get-url", repo.remote])) !== repo.remoteDigest) throw new Error("仓库远程传输地址已改变");
 }
 function strict(value: unknown, fields: string[]): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).sort().join() !== [...fields].sort().join()) throw new Error("创建意图损坏");
@@ -82,9 +124,10 @@ function validate(value: unknown): CreationIntent {
       !Array.isArray(row.repos) || !row.repos.length || row.repos.length > 30 || !Array.isArray(row.directories) || row.directories.length > 30) throw new Error("创建意图损坏");
   string(row.name); string(row.branch);
   for (const raw of row.repos) {
-    const item = strict(raw, ["id", "name", "path", "realPath", "device", "inode", "remote", "remoteBranch", "commit", "repoDir"]);
+    const item = strict(raw, ["id", "name", "path", "realPath", "device", "inode", "remote", "remoteBranch", "remoteDigest", "commonDir", "commit", "repoDir"]);
     if (!UUID.test(string(item.id)) || !/^[a-f0-9]{40}$/.test(String(item.commit)) || item.repoDir !== `repo-${(item.id as string).slice(0, 8)}`) throw new Error("仓库意图损坏");
-    string(item.name); path(item.path); path(item.realPath); string(item.device); string(item.inode); string(item.remote); string(item.remoteBranch);
+    string(item.name); path(item.path); path(item.realPath); path(item.commonDir); string(item.device); string(item.inode); string(item.remote); string(item.remoteBranch);
+    if (!/^[a-f0-9]{64}$/.test(String(item.remoteDigest))) throw new Error("远程身份意图损坏");
   }
   for (const raw of row.directories) {
     const item = strict(raw, ["id", "name", "path", "realPath", "device", "inode", "linkName"]);
@@ -138,7 +181,8 @@ export class CreationIntentStore {
 export class ProjectTaskCreation {
   private queue: Promise<unknown> = Promise.resolve();
   constructor(private readonly store: CreationIntentStore, private readonly projects: ProjectRegistry,
-    private readonly roots: TaskRootIndex, private readonly host: CreationHost, private readonly defaultRoot: string) {}
+    private readonly roots: TaskRootIndex, private readonly host: CreationHost, private readonly defaultRoot: string,
+    private readonly afterBoundary?: (boundary: CreationBoundary) => void) {}
   private run<T>(action: () => Promise<T>): Promise<T> {
     const result = this.queue.then(action); this.queue = result.catch(() => undefined); return result;
   }
@@ -157,7 +201,7 @@ export class ProjectTaskCreation {
       if (inventory.roots.some((entry) => entry.state === "error")) throw new Error("任务根身份不可读取，请先修复后创建");
       const rootIdentity = existsSync(root) ? diskIdentity(root) : null;
       if (!rootIdentity) diskIdentity(dirname(root));
-      const repoIds = new Set<string>(), dirIds = new Set<string>();
+      const repoIds = new Set<string>(), dirIds = new Set<string>(), commonDirs = new Set<string>();
       const repos: Repo[] = input.repositories.map((selection) => {
         if (!selection || !UUID.test(string(selection.sourceId)) || repoIds.has(selection.sourceId)) throw new Error("仓库选择重复或无效");
         repoIds.add(selection.sourceId);
@@ -166,7 +210,11 @@ export class ProjectTaskCreation {
         const remote = string(selection.remote), remoteBranch = string(selection.remoteBranch);
         if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(remote)) throw new Error("远程名称无效");
         git(source.path, ["check-ref-format", `refs/heads/${remoteBranch}`]);
-        const repo: Repo = { ...source, ...diskIdentity(source.path), remote, remoteBranch, commit: "0".repeat(40), repoDir: `repo-${source.id.slice(0, 8)}` };
+        const repo: Repo = { ...source, ...diskIdentity(source.path), remote, remoteBranch,
+          commonDir: gitCommonDir(source.path), remoteDigest: remoteDigest(git(source.path, ["remote", "get-url", remote])),
+          commit: "0".repeat(40), repoDir: `repo-${source.id.slice(0, 8)}` };
+        if (commonDirs.has(repo.commonDir)) throw new Error("所选仓库属于同一 Git 仓库，请仅选择一个工作树");
+        commonDirs.add(repo.commonDir);
         verifyRepo(repo);
         const [commit, ref] = git(repo.path, ["ls-remote", "--exit-code", repo.remote, `refs/heads/${remoteBranch}`]).split(/\s+/);
         if (!/^[a-f0-9]{40}$/.test(commit ?? "") || ref !== `refs/heads/${remoteBranch}`) throw new Error("远程分支不可用");
@@ -210,8 +258,12 @@ export class ProjectTaskCreation {
       };
       checkProject();
       if (intent.rootDevice === null) {
-        if (existsSync(intent.root)) throw new Error("任务根在准备后被建立，不能接管；需要显式恢复");
-        diskIdentity(dirname(intent.root)); mkdirSync(intent.root);
+        if (!pathPresent(intent.root)) {
+          diskIdentity(dirname(intent.root));
+          createOwnedDirectory(intent.root, ".pidock-created-root", intent.id, "root-stage", this.afterBoundary);
+        } else if (!matchesMarker(intent.root, ".pidock-created-root", intent.id)) {
+          throw new Error("任务根在准备后被建立，不能接管；需要显式恢复");
+        }
         const fresh = diskIdentity(intent.root);
         intent.rootDevice = fresh.device; intent.rootInode = fresh.inode; intent.rootRealPath = fresh.realPath;
         this.store.write(intent);
@@ -222,22 +274,17 @@ export class ProjectTaskCreation {
       const taskRealPath = join(realpathSync(intent.root), intent.taskId);
       checkWorkspaceOverlap(taskRealPath, intent.repos, intent.directories);
       for (const dir of intent.directories) checkSource(dir);
-      const marker = join(intent.taskDir, ".pidock-creation");
-      if (!existsSync(intent.taskDir)) {
-        mkdirSync(intent.taskDir);
-        const fd = openSync(marker, "wx", 0o600); try { writeFileSync(fd, intent.id); fsyncSync(fd); } finally { closeSync(fd); }
-      } else {
-        let marked = false;
-        try { marked = lstatSync(marker).isFile() && readFileSync(marker, "utf8") === intent.id; }
-        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-        if (!lstatSync(intent.taskDir).isDirectory() || !marked) throw new Error("任务目录已占用或创建标记不匹配");
+      if (!pathPresent(intent.taskDir)) {
+        createOwnedDirectory(intent.taskDir, ".pidock-creation", intent.id, "task-stage", this.afterBoundary);
+      } else if (!matchesMarker(intent.taskDir, ".pidock-creation", intent.id)) {
+        throw new Error("任务目录已占用或创建标记不匹配");
       }
       for (const repo of intent.repos) {
         const target = join(intent.taskDir, repo.repoDir);
         if (existsSync(target)) {
-          const common = (cwd: string) => realpathSync(resolve(cwd, git(cwd, ["rev-parse", "--git-common-dir"])));
-          if (!lstatSync(target).isDirectory() || realpathSync(target) !== join(realpathSync(intent.taskDir), repo.repoDir) || git(target, ["rev-parse", "HEAD"]) !== repo.commit ||
-              git(target, ["symbolic-ref", "--quiet", "HEAD"]) !== `refs/heads/${intent.branch}` || common(target) !== common(repo.path)) {
+          if (!lstatSync(target).isDirectory() || realpathSync(target) !== join(realpathSync(intent.taskDir), repo.repoDir) ||
+              git(target, ["merge-base", "--is-ancestor", repo.commit, "HEAD"]) !== "" ||
+              git(target, ["symbolic-ref", "--quiet", "HEAD"]) !== `refs/heads/${intent.branch}` || gitCommonDir(target) !== repo.commonDir) {
             throw new Error("工作树与固定任务提交不符");
           }
           continue;

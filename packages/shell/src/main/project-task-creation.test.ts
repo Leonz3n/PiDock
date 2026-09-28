@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync, renameSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync, renameSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TaskWorkspaceHost } from "../host/task-host.js";
@@ -35,7 +35,7 @@ async function setup() {
   const service = new ProjectTaskCreation(storage, projects, roots, host, root);
   const request = { projectId: project.id, name: "Actual work", repositories: [{ sourceId: project.repositories[0]!.id, remote: "origin", remoteBranch: "main" }],
     directoryIds: [project.directories[0]!.id], sharedWriteConfirmed: true, override: false };
-  return { home, repo, root, profile, remote, project, projects, roots, storage, service, request, getCalls: () => calls };
+  return { home, repo, root, profile, remote, project, projects, roots, storage, service, host, request, getCalls: () => calls };
 }
 afterEach(() => { for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true }); });
 
@@ -113,6 +113,105 @@ describe("persistent Project task creation with local Git", () => {
     await expect(env.service.prepare({ ...env.request, override: true }, nested)).rejects.toThrow(/仓库重叠/);
     expect(env.storage.read()).toBeNull();
     expect(env.getCalls()).toBe(0);
+  });
+  it("recovers all four new-directory interruption boundaries without adopting unmarked user paths", async () => {
+    for (const phase of ["root-stage", "root-renamed", "task-stage", "task-renamed"] as const) {
+      const env = await setup();
+      const newRoot = join(env.home, `new-${phase}`);
+      const useOverride = phase.startsWith("root");
+      const preview = await env.service.prepare({ ...env.request, override: useOverride }, useOverride ? newRoot : undefined);
+      const interrupted = new ProjectTaskCreation(env.storage, env.projects, env.roots, env.host, env.root, (boundary) => {
+        if (boundary === phase) throw new Error(`interrupted ${phase}`);
+      });
+      await expect(interrupted.commit(preview.id)).rejects.toThrow(`interrupted ${phase}`);
+      expect(env.storage.read()?.state).toBe("pending");
+      if (phase === "root-stage" || phase === "task-stage") {
+        expect(existsSync(phase === "root-stage" ? newRoot : preview.taskDir)).toBe(false);
+        const parent = phase === "root-stage" ? env.home : env.root;
+        expect(readdirSync(parent).filter((entry) => /^\.pidock-.*\.tmp$/.test(entry))).toHaveLength(1);
+      }
+      if (phase === "root-renamed") expect(readFileSync(join(newRoot, ".pidock-created-root"), "utf8")).toBe(preview.id);
+      if (phase === "task-renamed") expect(readFileSync(join(preview.taskDir, ".pidock-creation"), "utf8")).toBe(preview.id);
+      const reopened = new ProjectTaskCreation(new CreationIntentStore(env.profile), new ProjectRegistry(env.profile), new TaskRootIndex(env.profile, env.root), env.host, env.root);
+      expect(await reopened.commit(preview.id)).toEqual({ taskId: preview.taskId, projectId: env.project.id });
+      expect(readTaskRecordOnDisk(preview.taskDir)?.taskId).toBe(preview.taskId);
+    }
+  });
+  it("refuses an unmarked user-created root after prepare without writing into it", async () => {
+    const env = await setup();
+    const root = join(env.home, "chosen");
+    const preview = await env.service.prepare({ ...env.request, override: true }, root);
+    mkdirSync(root); writeFileSync(join(root, "user.txt"), "preserve");
+    await expect(env.service.commit(preview.id)).rejects.toThrow(/不能接管/);
+    expect(readFileSync(join(root, "user.txt"), "utf8")).toBe("preserve");
+    expect(env.getCalls()).toBe(0);
+  });
+  it("refuses two registered worktrees of the same Git common directory before intent creation", async () => {
+    const env = await setup();
+    const second = join(env.home, "second-worktree");
+    git(env.repo, "worktree", "add", "-b", "another", second);
+    const updated = await env.projects.update(env.project.id, { description: "", repositories: [...env.project.repositories, { name: "second", path: second }], directories: env.project.directories });
+    await expect(env.service.prepare({ ...env.request, repositories: [env.request.repositories[0]!, { sourceId: updated.repositories[1]!.id, remote: "origin", remoteBranch: "main" }] })).rejects.toThrow(/同一 Git 仓库/);
+    expect(env.storage.read()).toBeNull();
+    expect(readdirSync(env.root)).toEqual([]);
+  });
+  it("accepts a user commit on the expected task branch after a later claim failure", async () => {
+    const env = await setup();
+    const preview = await env.service.prepare(env.request);
+    const claim = env.projects.claim.bind(env.projects);
+    env.projects.claim = (() => { throw new Error("claim interrupted"); }) as typeof env.projects.claim;
+    await expect(env.service.commit(preview.id)).rejects.toThrow(/claim interrupted/);
+    env.projects.claim = claim;
+    const worktree = join(preview.taskDir, preview.repos[0]!.repoDir);
+    git(worktree, "config", "user.email", "test@localhost"); git(worktree, "config", "user.name", "Test");
+    writeFileSync(join(worktree, "work.txt"), "user change\n");
+    git(worktree, "add", "work.txt"); git(worktree, "commit", "-m", "user work");
+    const userHead = git(worktree, "rev-parse", "HEAD");
+    expect(userHead).not.toBe(preview.repos[0]!.commit);
+    expect(await env.service.commit(preview.id)).toEqual({ taskId: preview.taskId, projectId: env.project.id });
+    expect(git(worktree, "rev-parse", "HEAD")).toBe(userHead);
+    expect(readTaskRecordOnDisk(preview.taskDir)?.repoSources?.[0]?.baseCommit).toBe(preview.repos[0]!.commit);
+  });
+  it("recovers a user commit in the first worktree after a later repository branch conflict", async () => {
+    const env = await setup();
+    const second = join(env.home, "independent-repo"); mkdirSync(second);
+    git(second, "init", "-b", "main"); git(second, "remote", "add", "origin", env.remote);
+    git(second, "fetch", "origin", "main"); git(second, "checkout", "-B", "main", "FETCH_HEAD");
+    const updated = await env.projects.update(env.project.id, { description: "", repositories: [...env.project.repositories, { name: "independent", path: second }], directories: env.project.directories });
+    const selection = { ...env.request, repositories: [env.request.repositories[0]!, { sourceId: updated.repositories[1]!.id, remote: "origin", remoteBranch: "main" }] };
+    const preview = await env.service.prepare(selection);
+    git(second, "branch", preview.branch);
+    await expect(env.service.commit(preview.id)).rejects.toThrow(/任务分支已存在/);
+    expect(readTaskRecordOnDisk(preview.taskDir)).toBeNull();
+    const first = join(preview.taskDir, preview.repos[0]!.repoDir);
+    git(first, "config", "user.email", "test@localhost"); git(first, "config", "user.name", "Test");
+    writeFileSync(join(first, "work.txt"), "user change\n"); git(first, "add", "work.txt"); git(first, "commit", "-m", "user work");
+    const userHead = git(first, "rev-parse", "HEAD");
+    git(second, "branch", "-D", preview.branch);
+    expect(await env.service.commit(preview.id)).toEqual({ taskId: preview.taskId, projectId: env.project.id });
+    expect(git(first, "rev-parse", "HEAD")).toBe(userHead);
+    expect(readTaskRecordOnDisk(preview.taskDir)?.repoSources?.map((repo) => repo.baseCommit)).toEqual(preview.repos.map((repo) => repo.commit));
+  });
+  it("rejects an unrelated branch even when its history contains the pinned base", async () => {
+    const env = await setup();
+    const preview = await env.service.prepare(env.request);
+    env.projects.claim = (() => { throw new Error("claim interrupted"); }) as typeof env.projects.claim;
+    await expect(env.service.commit(preview.id)).rejects.toThrow(/claim interrupted/);
+    const worktree = join(preview.taskDir, preview.repos[0]!.repoDir);
+    git(worktree, "switch", "-c", "unrelated");
+    await expect(env.service.commit(preview.id)).rejects.toThrow(/固定任务提交不符/);
+    expect(env.storage.read()?.state).toBe("pending");
+  });
+  it("pins a credential-free remote transport digest across prepare and commit", async () => {
+    const env = await setup();
+    const preview = await env.service.prepare(env.request);
+    const mirror = join(env.home, "mirror.git");
+    git(env.home, "clone", "--bare", env.remote, mirror);
+    git(env.repo, "remote", "set-url", "origin", mirror);
+    await expect(env.service.commit(preview.id)).rejects.toThrow(/传输地址已改变/);
+    expect(env.getCalls()).toBe(0);
+    expect(existsSync(preview.taskDir)).toBe(false);
+    expect(JSON.stringify(env.storage.read())).not.toContain(env.remote);
   });
   it("refuses to overwrite a corrupted existing task record during recovery", async () => {
     const env = await setup();
