@@ -68,10 +68,13 @@ describe("Desktop production data", () => {
 
   it("creates and edits only through main, retaining stable Project IDs", async () => {
     const current = { ...project, repositories: [...project.repositories] };
+    const created = { ...project, id: "new-project-id", name: "新增项目", repositories: [] };
+    let createdPresent = false;
     const projectOp = vi.fn(async (request: Parameters<NonNullable<PidockBridge["projectOp"]>>[0]) => {
-      if (request.op === "list") return { ok: true, payload: { initialized: true, projects: [current] } };
+      if (request.op === "list") return { ok: true, payload: { initialized: true, projects: createdPresent ? [current, created] : [current] } };
       if (request.op === "associations") return { ok: true, payload: { roots, tasks: [{ taskId: "real-1", projectId: null, state: "unassigned" }] } };
-      if (request.op === "update") current.description = (request.input as { description: string }).description;
+      if (request.op === "update") { current.description = (request.input as { description: string }).description; return { ok: true, payload: { ...current } }; }
+      if (request.op === "create") { createdPresent = true; return { ok: true, payload: created }; }
       if (request.op === "rename") current.name = request.name!;
       return { ok: true, payload: {} };
     });
@@ -117,10 +120,13 @@ describe("Desktop production data", () => {
       if (holdRead) await new Promise<void>((resolve) => { releaseRead = resolve; });
       return { ok: true, payload: { tasks, roots } };
     });
+    const created = { ...project, id: "created-draft-id", name: "未保存项目", description: "原样保留", repositories: [{ id: "created-repo-id", name: "Web", path: "/local/web" }], directories: [{ id: "created-dir-id", name: "Notes", path: "/local/notes" }] };
+    let createdPresent = false;
     const projectOp = vi.fn(async (request: { op: string }) => {
-      if (request.op === "list") return { ok: true, payload: { initialized: true, projects: [project] } };
+      if (request.op === "list") return { ok: true, payload: { initialized: true, projects: createdPresent ? [project, created] : [project] } };
       if (request.op === "associations") return { ok: true, payload: { roots, tasks: [{ taskId: "real-1", projectId: null, state: "unassigned" }] } };
       if (request.op === "create" && rejectCreate) return { ok: false, error: "项目名称重复" };
+      if (request.op === "create") { createdPresent = true; return { ok: true, payload: created }; }
       return { ok: true, payload: {} };
     });
     window.pidock = { listTasks, projectOp };
@@ -159,10 +165,11 @@ describe("Desktop production data", () => {
 
   it("keeps the submitted draft when a write succeeds but authoritative reread fails", async () => {
     let failNextRead = false;
+    const created = { ...project, id: "created-project-id", name: "待核验", repositories: [], directories: [{ id: "created-directory-id", name: "Documents", path: "/local/documents" }] };
     const projectOp = vi.fn(async (request: { op: string }) => {
-      if (request.op === "create") { failNextRead = true; return { ok: true, payload: {} }; }
+      if (request.op === "create") { failNextRead = true; return { ok: true, payload: created }; }
       if (request.op === "list" && failNextRead) { failNextRead = false; return { ok: false, error: "注册表暂不可读" }; }
-      if (request.op === "list") return { ok: true, payload: { initialized: true, projects: [project] } };
+      if (request.op === "list") return { ok: true, payload: { initialized: true, projects: [project, created] } };
       return { ok: true, payload: { roots, tasks: [{ taskId: "real-1", projectId: null, state: "unassigned" }] } };
     });
     window.pidock = { listTasks: vi.fn(async () => ({ ok: true, payload: { tasks, roots } })), projectOp };
@@ -174,21 +181,78 @@ describe("Desktop production data", () => {
     fireEvent.change(screen.getByLabelText("目录路径 1"), { target: { value: "/local/documents" } });
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
     expect(await screen.findByText("注册表暂不可读")).toBeInTheDocument();
-    expect(screen.getByText(/操作结果无法核验/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText(/项目创建已提交/)).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "重试" }));
-    expect(await screen.findByLabelText("项目名称")).toHaveValue("待核验");
-    expect(screen.getByLabelText("目录路径 1")).toHaveValue("/local/documents");
+    expect(await screen.findByRole("heading", { name: "待核验" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("项目名称")).not.toBeInTheDocument();
+    expect(screen.queryByText(/操作结果无法核验/)).not.toBeInTheDocument();
+    expect(projectOp).toHaveBeenCalledWith({ op: "create", input: { name: "待核验", description: "", repositories: [], directories: [{ name: "Documents", path: "/local/documents" }] } });
+    expect(projectOp.mock.calls.filter(([request]) => request.op === "create")).toHaveLength(1);
+  });
+
+  it("does not resubmit a committed create absent from a later authoritative list", async () => {
+    const pending = { ...project, id: "pending-id", name: "等待确认" };
+    let failRead = false;
+    const projectOp = vi.fn(async (request: { op: string }) => {
+      if (request.op === "create") { failRead = true; return { ok: true, payload: pending }; }
+      if (request.op === "list" && failRead) { failRead = false; return { ok: false, error: "读取失败" }; }
+      if (request.op === "list") return { ok: true, payload: { initialized: true, projects: [project] } };
+      return { ok: true, payload: { roots, tasks: [{ taskId: "real-1", projectId: null, state: "unassigned" }] } };
+    });
+    window.pidock = { listTasks: vi.fn(async () => ({ ok: true, payload: { tasks, roots } })), projectOp };
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /^项目$/ }));
+    fireEvent.change(screen.getByLabelText("项目名称"), { target: { value: "等待确认" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    expect(await screen.findByText("读取失败")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    expect(await screen.findByLabelText("项目名称")).toHaveValue("等待确认");
+    expect(screen.getByRole("button", { name: "保存" })).toBeDisabled();
+    await waitFor(() => expect(screen.getByText(/尚未在本机清单中确认/)).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "重新核验" }));
+    expect(await screen.findByLabelText("项目名称")).toHaveValue("等待确认");
+    expect(projectOp.mock.calls.filter(([request]) => request.op === "create")).toHaveLength(1);
+  });
+
+  it("does not fabricate a created Project from a malformed operation response", async () => {
+    const projectOp = vi.fn(async (request: { op: string }) => {
+      if (request.op === "create") return { ok: true, payload: { name: "没有 ID" } };
+      if (request.op === "list") return { ok: true, payload: { initialized: true, projects: [project] } };
+      return { ok: true, payload: { roots, tasks: [{ taskId: "real-1", projectId: null, state: "unassigned" }] } };
+    });
+    window.pidock = { listTasks: vi.fn(async () => ({ ok: true, payload: { tasks, roots } })), projectOp };
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /^项目$/ }));
+    fireEvent.change(screen.getByLabelText("项目名称"), { target: { value: "没有 ID" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    expect(await screen.findByText(/创建返回异常/)).toBeInTheDocument();
+    expect(screen.getByLabelText("项目名称")).toHaveValue("没有 ID");
+    expect(screen.getByRole("button", { name: "保存" })).toBeDisabled();
+    expect(projectOp.mock.calls.filter(([request]) => request.op === "create")).toHaveLength(1);
   });
 
   it("preserves the attempted rename after partial edit and distinguishes committed details", async () => {
     const current = { ...project, repositories: [...project.repositories], directories: [] as Array<{ id: string; name: string; path: string }> };
     let rejectRename = true;
+    let nextId = 0;
+    let nextRepoId = 0;
+    const issuedIds: string[] = [];
+    const issuedRepoIds: string[] = [];
     const projectOp = vi.fn(async (request: Parameters<NonNullable<PidockBridge["projectOp"]>>[0]) => {
       if (request.op === "list") return { ok: true, payload: { initialized: true, projects: [current] } };
       if (request.op === "associations") return { ok: true, payload: { roots, tasks: [{ taskId: "real-1", projectId: null, state: "unassigned" }] } };
       if (request.op === "update") {
         const details = request.input as { description: string; repositories: typeof current.repositories; directories: typeof current.directories };
-        Object.assign(current, { ...details, directories: details.directories.map((row) => ({ ...row, id: row.id ?? "new-directory-id" })) });
+        Object.assign(current, { ...details, repositories: details.repositories.map((row) => {
+          const id = row.id ?? `00000000-0000-4000-8000-${String(100 + ++nextRepoId).padStart(12, "0")}`;
+          if (!row.id) issuedRepoIds.push(id);
+          return { ...row, id };
+        }), directories: details.directories.map((row) => {
+          const id = row.id ?? `00000000-0000-4000-8000-${String(++nextId).padStart(12, "0")}`;
+          issuedIds.push(id);
+          return { ...row, id };
+        }) });
+        return { ok: true, payload: { ...current } };
       }
       if (request.op === "rename") {
         if (rejectRename) return { ok: false, error: "名称冲突" };
@@ -202,6 +266,9 @@ describe("Desktop production data", () => {
     fireEvent.click(screen.getByRole("button", { name: "编辑" }));
     fireEvent.change(screen.getByLabelText("项目名称"), { target: { value: "目标名称" } });
     fireEvent.change(screen.getByLabelText("描述"), { target: { value: "已写入描述" } });
+    fireEvent.click(screen.getByRole("button", { name: "添加仓库" }));
+    fireEvent.change(screen.getByLabelText("仓库名称 2"), { target: { value: "API" } });
+    fireEvent.change(screen.getByLabelText("仓库路径 2"), { target: { value: "/local/api" } });
     fireEvent.click(screen.getByRole("button", { name: "添加目录" }));
     fireEvent.change(screen.getByLabelText("目录名称 1"), { target: { value: "Notes" } });
     fireEvent.change(screen.getByLabelText("目录路径 1"), { target: { value: "/local/notes" } });
@@ -211,9 +278,19 @@ describe("Desktop production data", () => {
     expect(screen.getByText("已写入描述", { selector: "p" })).toBeInTheDocument();
     expect(screen.getByLabelText("项目名称")).toHaveValue("目标名称");
     expect(screen.getByLabelText("目录路径 1")).toHaveValue("/local/notes");
+    const firstDirectoryId = "00000000-0000-4000-8000-000000000001";
+    expect(issuedIds).toEqual([firstDirectoryId]);
+    const firstRepoId = "00000000-0000-4000-8000-000000000101";
+    expect(issuedRepoIds).toEqual([firstRepoId]);
+    fireEvent.change(screen.getByLabelText("描述"), { target: { value: "再次修改描述" } });
     rejectRename = false;
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
     expect(await screen.findByRole("heading", { name: "目标名称" })).toBeInTheDocument();
+    expect(issuedIds).toEqual([firstDirectoryId, firstDirectoryId]);
+    expect(issuedRepoIds).toEqual([firstRepoId]);
+    expect(current.repositories[1]?.id).toBe(firstRepoId);
+    expect(current.directories[0]?.id).toBe(firstDirectoryId);
+    expect(current.description).toBe("再次修改描述");
     fireEvent.click(screen.getByRole("button", { name: "编辑" }));
     fireEvent.change(screen.getByLabelText("项目名称"), { target: { value: "取消重命名" } });
     fireEvent.click(screen.getByRole("button", { name: "取消" }));
