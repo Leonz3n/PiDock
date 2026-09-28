@@ -117,21 +117,28 @@ export class TaskBrowserSurface implements BrowserSurface {
         }
         case "page/close": {
           const pageId = request.page?.pageId ?? "";
+          const tab = this.browser.tabs.find((candidate) => candidate.pageId === pageId);
+          const url = tab?.view.webContents.getURL();
           const binding = this.bindings.get(pageId);
           if (binding) {
-            const url = binding.tab.view.webContents.getURL();
-            if (url.length > 0) this.closedUrls.push(url);
             binding.automation.dispose();
             binding.controller.dispose();
             this.bindings.delete(pageId);
           }
-          return { ok: true, payload: { closed: this.browser.closeTab(pageId), pageId } };
+          const closed = this.browser.closeTab(pageId);
+          if (closed && url) this.closedUrls.push(url);
+          return { ok: true, payload: { closed, pageId } };
         }
         case "page/restore": {
           const url = this.closedUrls.pop();
           if (url === undefined) return { ok: false, error: "page-restore: 没有可恢复的已关闭页面" };
-          const tab = await this.browser.openTab(url);
-          return { ok: true, payload: { pageId: tab.pageId, webContentsId: tab.webContentsId, url } };
+          try {
+            const tab = await this.browser.openTab(url);
+            return { ok: true, payload: { pageId: tab.pageId, webContentsId: tab.webContentsId, url } };
+          } catch (error) {
+            this.closedUrls.push(url);
+            throw error;
+          }
         }
         case "input/click": {
           const binding = await this.ensureBinding(request.page?.pageId);

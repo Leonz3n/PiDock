@@ -7,6 +7,7 @@ import {
   TASK_WEB_PREFERENCES,
   createTaskBrowserCapability,
   taskBrowserOriginsFromEnv,
+  assertProductionWindowEvidence,
   assertTrustedWindowEvidence,
   createHost,
   createTrustedWindow,
@@ -128,7 +129,8 @@ async function run(): Promise<void> {
   // (`runVersions`/startup/smoke above intentionally keep workspace-only
   // Hosts: those paths run no task ops.)
   const { client, child } = await createHost(workspaceId);
-  const views = await createTrustedWindow(workspaceId);
+  const dualView = process.env["PIDOCK_TASK_URL"] !== undefined;
+  const views = await createTrustedWindow(workspaceId, dualView ? "dual" : "production");
   // [PiDock 06] (#8) browser capability: per-task visible pages + gateways.
   // `PIDOCK_TASK_BROWSER_ORIGINS` holds each task's own frontend addresses
   // (JSON map taskId -> origins); a task without an entry can navigate
@@ -139,6 +141,7 @@ async function run(): Promise<void> {
     trust: views.registry,
     workspaceId,
     originsFor: (taskId) => taskOrigins[taskId] ?? [],
+    ...(views.layout ? { layout: views.layout } : {}),
   });
   // Production resolver: scan the machine tasks root for a `task.json`
   // matching the routed task id. First-use of a provisioned task forks
@@ -165,7 +168,8 @@ async function run(): Promise<void> {
   });
   schedules.start();
   const loaded = await loadTrustedViews(views);
-  assertTrustedWindowEvidence(trustedWindowEvidence(views));
+  if (views.layout) assertProductionWindowEvidence(views);
+  else assertTrustedWindowEvidence(trustedWindowEvidence(views));
   console.log(
     `[main] trust domains: ${JSON.stringify({
       workspaceId,

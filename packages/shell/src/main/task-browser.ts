@@ -31,6 +31,7 @@ export interface TaskBrowserOptions {
   readonly taskId: string;
   readonly bounds: Rectangle;
   readonly registry: TrustDomainRegistry;
+  readonly onActiveTabChange?: (browser: TaskBrowser) => void;
 }
 
 const SAFE_TASK_WEB_PREFERENCES = {
@@ -55,11 +56,13 @@ export class TaskBrowser {
   private readonly window: BrowserWindow;
   private bounds: Rectangle;
   private readonly registry: TrustDomainRegistry;
+  private readonly onActiveTabChange: ((browser: TaskBrowser) => void) | undefined;
   private readonly tabsById = new Map<string, TaskTab>();
   private readonly popupsById = new Map<number, TaskPopup>();
   private activePageId: string | undefined;
   private nextPageNumber = 1;
   private closing = false;
+  private visible = true;
 
   constructor(options: TaskBrowserOptions) {
     if (options.taskId.trim().length === 0) {
@@ -70,6 +73,7 @@ export class TaskBrowser {
     this.taskId = options.taskId;
     this.bounds = { ...options.bounds };
     this.registry = options.registry;
+    this.onActiveTabChange = options.onActiveTabChange;
     this.partition = taskPartitionName(options.taskId, options.workspaceId);
     this.session = session.fromPartition(this.partition);
     this.window.once("closed", () => this.close());
@@ -96,6 +100,13 @@ export class TaskBrowser {
   setBounds(bounds: Rectangle): void {
     this.bounds = { ...bounds };
     this.activeTab?.view.setBounds(this.bounds);
+  }
+
+  setVisible(visible: boolean): void {
+    this.visible = visible;
+    for (const tab of this.tabsById.values()) {
+      tab.view.setVisible(visible && tab.pageId === this.activePageId);
+    }
   }
 
   async openTab(url: string, preferredPageId?: string): Promise<TaskTab> {
@@ -128,12 +139,13 @@ export class TaskBrowser {
     });
     this.installPopupHandling(tab);
     view.webContents.once("destroyed", () => this.forgetTab(pageId));
+    view.setVisible(false);
     this.window.contentView.addChildView(view);
     this.tabsById.set(pageId, tab);
-    this.activateTab(pageId);
 
     try {
       await view.webContents.loadURL(url);
+      this.activateTab(pageId);
       return tab;
     } catch (error) {
       this.closeTab(pageId);
@@ -146,11 +158,12 @@ export class TaskBrowser {
     if (!tab) throw new Error(`unknown page for task ${this.taskId}: ${pageId}`);
     this.activePageId = pageId;
     for (const candidate of this.tabsById.values()) {
-      candidate.view.setVisible(candidate.pageId === pageId);
+      candidate.view.setVisible(this.visible && candidate.pageId === pageId);
       if (candidate.pageId === pageId) {
         candidate.view.setBounds(this.bounds);
       }
     }
+    this.onActiveTabChange?.(this);
   }
 
   closeTab(pageId: string): boolean {
@@ -245,6 +258,7 @@ export class TaskBrowser {
       this.activePageId = undefined;
       const next = this.tabsById.keys().next();
       if (!next.done) this.activateTab(next.value);
+      else this.onActiveTabChange?.(this);
     }
   }
 

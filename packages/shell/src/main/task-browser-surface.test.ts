@@ -136,6 +136,21 @@ const human = { kind: "human", label: "用户显式操作" } as const;
 const agent = { kind: "agent", sessionId: "main" } as const;
 
 describe("task browser surface attachment", () => {
+  it("restores an opened page even before CDP attachment, and keeps a failed restore retriable", async () => {
+    const { browser, raw } = fakeBrowser();
+    const surface = new TaskBrowserSurface(TASK_ID, browser);
+    const opened = await surface.perform({ action: "page/open", page: undefined, params: { url: "http://localhost:5173/checkout" }, actor: human });
+    const pageId = String(payloadOf(opened)["pageId"]);
+    const closed = await surface.perform({ action: "page/close", page: { pageId, webContentsId: browser.tabs[0]!.webContentsId }, params: {}, actor: human });
+    expect(closed).toMatchObject({ ok: true, payload: { closed: true } });
+    const originalOpen = raw.openTab;
+    raw.openTab = () => { throw new Error("navigation failed"); };
+    expect(await surface.perform({ action: "page/restore", page: undefined, params: {}, actor: human })).toMatchObject({ ok: false, error: "navigation failed" });
+    raw.openTab = originalOpen;
+    const restored = await surface.perform({ action: "page/restore", page: undefined, params: {}, actor: human });
+    expect(restored).toMatchObject({ ok: true, payload: { url: "http://localhost:5173/checkout" } });
+  });
+
   it("attaches on first use so open → state/navigate/evidence work", async () => {
     const { browser } = fakeBrowser();
     const surface = new TaskBrowserSurface(TASK_ID, browser);
