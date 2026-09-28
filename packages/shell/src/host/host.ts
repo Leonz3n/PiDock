@@ -41,6 +41,7 @@ import {
   validateHostTaskOp,
 } from "./host-guards.js";
 import { TaskWorkspaceHost, diskTaskStore } from "./task-host.js";
+import { SdkTurnTransport } from "./sdk-turn-transport.js";
 import type { ServiceRunObservation } from "../main/execution-ledger.js";
 import { SharedPathCoordinator } from "./path-coordination.js";
 import { TaskServiceRuntime } from "./service-runtime.js";
@@ -105,6 +106,7 @@ function reply(response: RpcResponse): void {
 // Lazily created on first dispatch so `host/ping` smoke paths that never
 // touch tasks do not require the task env.
 let workspaceHost: TaskWorkspaceHost | null = null;
+let sdkTurns: SdkTurnTransport | null = null;
 
 // [PiDock 09] (#11) cross-task real-path write coordination. One table for the
 // whole Host process: plain-directory links are shared views of the original
@@ -428,6 +430,28 @@ async function dispatchTaskOp(
   if ("error" in host) return { ok: false, error: host.error };
   const record = asRecord(payload);
   try {
+    if (op.startsWith("task/sdk")) {
+      if (!origin || origin.kind !== "shell-ui") throw new Error("permission-denied: SDK turns require a shell sender");
+      const sessionId = record["sessionId"];
+      if (typeof sessionId !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/.test(sessionId)) throw new Error("invalid-sdk-session");
+      sdkTurns ??= new SdkTurnTransport(taskId, host.taskDir, host.sdkTextKernel());
+      if (op === "task/sdkProjection") return { ok: true, payload: sdkTurns.projection(sessionId) };
+      if (op === "task/sdkStatus") {
+        if (typeof record["requestId"] !== "string") throw new Error("invalid-sdk-request");
+        return { ok: true, payload: { turn: sdkTurns.status(sessionId, record["requestId"]) } };
+      }
+      if (op === "task/sdkStart") {
+        if (typeof record["requestId"] !== "string" || typeof record["text"] !== "string") throw new Error("invalid-sdk-request");
+        const turn = await sdkTurns.start(sessionId, record["requestId"], record["text"], (sdkEvent) => {
+          hostPort.postMessage({ kind: "sdk-turn-event", event: sdkEvent });
+        }, (terminal) => hostPort.postMessage({ kind: "sdk-turn-status", turn: terminal }));
+        return { ok: true, payload: { turn } };
+      }
+      if (op === "task/sdkCancel") {
+        if (typeof record["turnId"] !== "string") throw new Error("invalid-sdk-turn");
+        return { ok: true, payload: { turn: await sdkTurns.cancel(sessionId, record["turnId"]) } };
+      }
+    }
     switch (op) {
       case "task/provision": {
         const name = record["name"];
@@ -1304,6 +1328,7 @@ async function dispatchTaskOp(
         if ("error" in lifecycle) return { ok: false, error: lifecycle.error };
         try {
           await workspaceHost?.shutdownSdk();
+          sdkTurns = null;
           const quit = lifecycle.quit();
           return { ok: true, payload: { quit } };
         } catch (error) {

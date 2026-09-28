@@ -18,12 +18,13 @@ export const ALLOWED_INVOKE_CHANNELS = [
   "shell/projectOp",
   "shell/createTask",
   "shell/taskOp",
+  "shell/sdkTurn",
 ] as const;
 
 export type AllowedInvokeChannel = (typeof ALLOWED_INVOKE_CHANNELS)[number];
 
 /** Renderer-subscribable event channels (main->renderer push). */
-export const ALLOWED_EVENT_CHANNELS = ["shell/hostStatus"] as const;
+export const ALLOWED_EVENT_CHANNELS = ["shell/hostStatus", "shell/sdkTurnEvent"] as const;
 
 export type AllowedEventChannel = (typeof ALLOWED_EVENT_CHANNELS)[number];
 

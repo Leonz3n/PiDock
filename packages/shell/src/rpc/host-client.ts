@@ -1,3 +1,5 @@
+import type { SdkTextEvent } from "../host/sdk-text-kernel.js";
+import type { TurnRecord } from "../host/sdk-turn-transport.js";
 import type { UtilityProcess } from "electron";
 import {
   isBrowserRequest,
@@ -46,6 +48,7 @@ export class HostClient {
       timer: NodeJS.Timeout;
     }
   >();
+  private readonly turnListeners = new Set<(message: { kind: "sdk-turn-event"; event: SdkTextEvent } | { kind: "sdk-turn-status"; turn: TurnRecord }) => void>();
   private readonly onMessage = (message: unknown): void => {
     this.handleMessage(message);
   };
@@ -69,7 +72,37 @@ export class HostClient {
     this.browserHandler = handler;
   }
 
+  onTurnEvent(listener: (message: { kind: "sdk-turn-event"; event: SdkTextEvent } | { kind: "sdk-turn-status"; turn: TurnRecord }) => void): () => void {
+    this.turnListeners.add(listener);
+    return () => { this.turnListeners.delete(listener); };
+  }
+
   private handleMessage(data: unknown): void {
+    if (typeof data === "object" && data !== null && !Array.isArray(data) && (data as Record<string, unknown>)["kind"] === "sdk-turn-status") {
+      const turn = (data as Record<string, unknown>)["turn"];
+      if (!turn || typeof turn !== "object" || Array.isArray(turn)) return;
+      const value = turn as Record<string, unknown>;
+      if (typeof value["taskId"] !== "string" || typeof value["sessionId"] !== "string" ||
+          typeof value["turnId"] !== "string" || !["done", "failed", "cancelled"].includes(String(value["state"])) ||
+          JSON.stringify(turn).length > 2048) return;
+      for (const listener of this.turnListeners) {
+        try { listener({ kind: "sdk-turn-status", turn: turn as TurnRecord }); } catch { /* dead subscriber */ }
+      }
+      return;
+    }
+    if (typeof data === "object" && data !== null && !Array.isArray(data) && (data as Record<string, unknown>)["kind"] === "sdk-turn-event") {
+      const event = (data as Record<string, unknown>)["event"];
+      if (typeof event !== "object" || event === null || Array.isArray(event)) return;
+      const value = event as Record<string, unknown>;
+      if (typeof value["taskId"] !== "string" || typeof value["sessionId"] !== "string" ||
+          typeof value["turnId"] !== "string" || !Number.isSafeInteger(value["sequence"]) ||
+          (value["sequence"] as number) < 1 || !["delta", "message_end", "agent_settled"].includes(String(value["type"])) ||
+          JSON.stringify(event).length > 16_500) return;
+      for (const listener of this.turnListeners) {
+        try { listener({ kind: "sdk-turn-event", event: event as SdkTextEvent }); } catch { /* A dead renderer cannot interrupt the Host. */ }
+      }
+      return;
+    }
     if (isBrowserRequest(data)) {
       // A browser request must always be answered: the Host blocks on a
       // `browser-response` for 10 s and then reports `browser-timeout`, so
@@ -152,6 +185,7 @@ export class HostClient {
   }
 
   dispose(): void {
+    this.turnListeners.clear();
     if (typeof this.transport.removeListener === "function") {
       this.transport.removeListener("message", this.onMessage);
     }

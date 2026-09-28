@@ -12,7 +12,7 @@ vi.mock("electron", () => ({
     private url = "";
     webContents = {
       id: state.nextId++, mainFrame: { processId: 1, routingId: 1 },
-      once: vi.fn(), on: vi.fn(), setWindowOpenHandler: vi.fn(),
+      once: vi.fn(), on: vi.fn(), send: vi.fn(), setWindowOpenHandler: vi.fn(),
       loadURL: vi.fn(async (url: string) => { this.url = url; }), loadFile: vi.fn(async (_file: string) => {}),
       getURL: () => this.url,
       isDestroyed: () => false, close: vi.fn(),
@@ -63,6 +63,42 @@ afterEach(() => {
 });
 
 describe("trusted Electron view modes", () => {
+  it("scopes SDK bridge to subscribed shell main frame and revokes on navigation or task switch", async () => {
+    const views = await createTrustedWindow("workspace-a", "production");
+    const listeners = new Set<(message: unknown) => void>();
+    const detach = vi.fn((listener: (message: unknown) => void) => listeners.delete(listener));
+    const routeTaskOp = vi.fn(async (params: { taskId: string; op: string }) => ({ payload: { source: "sdk-jsonl", messages: [], taskId: params.taskId, op: params.op } }));
+    const taskRegistry = { routeTaskOp, entryForTaskId: () => ({ client: { onTurnEvent: (listener: (message: unknown) => void) => {
+      listeners.add(listener); return () => detach(listener);
+    } } }) };
+    registerIpc({} as never, views.registry, taskRegistry as never);
+    const sdk = vi.mocked(ipcMain.handle).mock.calls.findLast(([channel]) => channel === "shell/sdkTurn")?.[1];
+    const oldTaskOp = vi.mocked(ipcMain.handle).mock.calls.findLast(([channel]) => channel === "shell/taskOp")?.[1];
+    expect(sdk).toBeDefined();
+    const shell = { sender: views.shellView.webContents, senderFrame: views.shellView.webContents.mainFrame } as never;
+    const task = { sender: views.taskView.webContents, senderFrame: views.taskView.webContents.mainFrame } as never;
+    const identity = { taskId: "task-a", sessionId: "main" };
+    expect(await sdk!(task, { action: "subscribe", ...identity })).toMatchObject({ ok: false });
+    expect(await sdk!(shell, { action: "start", ...identity, requestId: "r1", text: "hi" })).toMatchObject({ ok: false });
+    expect(await sdk!(shell, { action: "subscribe", ...identity })).toMatchObject({ ok: true });
+    expect(await sdk!(shell, { action: "start", ...identity, requestId: "r1", text: "hi", toolPlan: [] })).toMatchObject({ ok: false });
+    expect(await oldTaskOp!(shell, { taskId: "task-a", op: "task/sdkStart", payload: { sessionId: "main" } })).toMatchObject({ ok: false });
+    const push = (sequence: number) => ({ kind: "sdk-turn-event", event: { taskId: "task-a", sessionId: "main", turnId: "turn-1", sequence, type: "delta", text: "x" } });
+    for (const listener of listeners) listener(push(1));
+    expect(views.shellView.webContents.send).toHaveBeenCalledWith("shell/sdkTurnEvent", push(1));
+    for (const listener of listeners) listener(push(3));
+    expect(views.shellView.webContents.send).toHaveBeenCalledWith("shell/sdkTurnEvent", expect.objectContaining({ kind: "needs-resync", turnId: "turn-1" }));
+    for (const listener of listeners) listener({ kind: "sdk-turn-event", event: { ...push(1).event, taskId: "other", turnId: "turn-2" } });
+    expect(views.shellView.webContents.send).not.toHaveBeenCalledWith("shell/sdkTurnEvent", expect.objectContaining({ event: expect.objectContaining({ taskId: "other" }) }));
+    const navigation = vi.mocked(views.shellView.webContents.once).mock.calls.find(([name]) => name === "did-start-navigation")?.[1] as (() => void) | undefined;
+    navigation?.();
+    expect(detach).toHaveBeenCalled();
+    expect(await sdk!(shell, { action: "status", ...identity, requestId: "r1" })).toMatchObject({ ok: false });
+    expect(await sdk!(shell, { action: "subscribe", ...identity })).toMatchObject({ ok: true });
+    await oldTaskOp!(shell, { taskId: "task-b", op: "task/sessionStates", payload: {} });
+    expect(await sdk!(shell, { action: "projection", ...identity })).toMatchObject({ ok: false });
+  });
+
   it("binds project IPC to shell main frame and fails closed without a configured store", async () => {
     const root = mkdtempSync(join(tmpdir(), "pidock-project-runtime-"));
     try {
@@ -76,7 +112,7 @@ describe("trusted Electron view modes", () => {
       writeFileSync(join(taskDir, "task.json"), JSON.stringify({ taskId: "task-abcdef12", name: "Real", dirId: "task-abcdef12",
         root: taskRoot, taskDir, branch: "task/main", remoteBranch: "main", baseCommit: "abc123", repos: [], createdAt, updatedAt: createdAt }));
       registerIpc({} as never, views.registry, undefined, store, new TaskRootIndex(root, taskRoot));
-      const handler = vi.mocked(ipcMain.handle).mock.calls.find(([channel]) => channel === "shell/projectOp")?.[1];
+      const handler = vi.mocked(ipcMain.handle).mock.calls.findLast(([channel]) => channel === "shell/projectOp")?.[1];
       expect(handler).toBeDefined();
       const event = { sender: views.shellView.webContents, senderFrame: views.shellView.webContents.mainFrame } as never;
       const invalid = { sender: views.taskView.webContents, senderFrame: views.taskView.webContents.mainFrame } as never;
