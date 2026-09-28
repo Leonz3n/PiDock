@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { join, posix, win32 } from "node:path";
+import { isAbsolute, join, normalize, posix, win32 } from "node:path";
+import type { TaskRootIndex, VerifiedTaskIdentity } from "./task-root-index.js";
 import { isSafeTaskChildName, isTaskDirId } from "./task-provision.js";
 
 export interface ProjectSource { id: string; name: string; path: string }
@@ -17,8 +18,21 @@ export interface ProjectMembership {
   createdAt: string;
   root: string;
   dirId: string;
+  realRoot?: string;
 }
-interface Document { version: 1; projects: LocalProject[]; memberships: ProjectMembership[] }
+export interface AssociationReceipt {
+  id: string;
+  at: string;
+  action: "claim" | "unlink" | "transfer";
+  taskId: string;
+  createdAt: string;
+  root: string;
+  dirId: string;
+  realRoot?: string;
+  fromProjectId: string | null;
+  toProjectId: string | null;
+}
+interface Document { version: 1 | 2; projects: LocalProject[]; memberships: ProjectMembership[]; receipts?: AssociationReceipt[] }
 export type SourceInput = { id?: string; name: string; path: string };
 export type ProjectCreateInput = { name: string; description: string; repositories: SourceInput[]; directories: SourceInput[] };
 export type ProjectUpdateInput = { description: string; repositories: SourceInput[]; directories: SourceInput[] };
@@ -83,26 +97,72 @@ function project(value: unknown): LocalProject {
   return { id: id(value["id"]), name: text(value["name"], "project name"),
     description: text(value["description"], "description", true), repositories, directories };
 }
+function taskRoot(value: unknown): string {
+  if (typeof value !== "string" || value.length > 4096 || value.includes("\0") || !isAbsolute(value) || normalize(value) !== value) {
+    throw new Error("invalid membership root");
+  }
+  return value;
+}
+function membership(value: unknown): ProjectMembership {
+  if (!record(value)) throw new Error("invalid membership");
+  keys(value, ["taskId", "projectId", "createdAt", "root", "dirId"], ["realRoot"]);
+  const taskId = text(value["taskId"], "task ID");
+  const dirId = text(value["dirId"], "dirId");
+  if (!isSafeTaskChildName(taskId) || !isTaskDirId(dirId)) throw new Error("invalid membership task identity");
+  return { taskId, projectId: id(value["projectId"]), createdAt: text(value["createdAt"], "createdAt"),
+    root: taskRoot(value["root"]), dirId,
+    ...(value["realRoot"] === undefined ? {} : { realRoot: taskRoot(value["realRoot"]) }) };
+}
+function receipt(value: unknown): AssociationReceipt {
+  if (!record(value)) throw new Error("invalid association receipt");
+  keys(value, ["id", "at", "action", "taskId", "createdAt", "root", "dirId", "fromProjectId", "toProjectId"], ["realRoot"]);
+  const action = value["action"];
+  if (action !== "claim" && action !== "unlink" && action !== "transfer") throw new Error("invalid association action");
+  const taskId = text(value["taskId"], "task ID");
+  const dirId = text(value["dirId"], "dirId");
+  if (!isSafeTaskChildName(taskId) || !isTaskDirId(dirId)) throw new Error("invalid receipt task identity");
+  const from = value["fromProjectId"] === null ? null : id(value["fromProjectId"]);
+  const to = value["toProjectId"] === null ? null : id(value["toProjectId"]);
+  if ((action === "claim" && (from !== null || to === null)) ||
+      (action === "unlink" && (from === null || to !== null)) ||
+      (action === "transfer" && (from === null || to === null || from === to))) throw new Error("invalid receipt transition");
+  return { id: id(value["id"]), at: text(value["at"], "receipt time"), action, taskId,
+    createdAt: text(value["createdAt"], "createdAt"), root: taskRoot(value["root"]), dirId,
+    ...(value["realRoot"] === undefined ? {} : { realRoot: taskRoot(value["realRoot"]) }),
+    fromProjectId: from, toProjectId: to };
+}
 function document(value: unknown): Document {
   if (!record(value)) throw new Error("invalid project registry");
-  keys(value, ["version", "projects", "memberships"]);
-  if (value["version"] !== 1) throw new Error("unsupported project registry version");
+  if (value["version"] !== 1 && value["version"] !== 2) throw new Error("unsupported project registry version");
+  keys(value, ["version", "projects", "memberships", ...(value["version"] === 2 ? ["receipts"] : [])]);
   if (!Array.isArray(value["projects"]) || !Array.isArray(value["memberships"])) throw new Error("invalid project registry rows");
   const projects = value["projects"].map(project);
   if (new Set(projects.map((row) => row.id)).size !== projects.length ||
       new Set(projects.map((row) => row.name.toLocaleLowerCase())).size !== projects.length) throw new Error("duplicate project ID or name");
-  const memberships = value["memberships"].map((item: unknown): ProjectMembership => {
-    if (!record(item)) throw new Error("invalid membership");
-    keys(item, ["taskId", "projectId", "createdAt", "root", "dirId"]);
-    const taskId = text(item["taskId"], "task ID");
-    const dirId = text(item["dirId"], "dirId");
-    if (!isSafeTaskChildName(taskId) || !isTaskDirId(dirId)) throw new Error("invalid membership task identity");
-    return { taskId, projectId: id(item["projectId"]),
-      createdAt: text(item["createdAt"], "createdAt"), root: sourcePath(item["root"]), dirId };
-  });
+  const memberships = value["memberships"].map(membership);
   if (new Set(memberships.map((row) => row.taskId)).size !== memberships.length ||
       memberships.some((row) => !projects.some((entry) => entry.id === row.projectId))) throw new Error("invalid membership identity");
-  return { version: 1, projects, memberships };
+  if (value["version"] === 1) return { version: 1, projects, memberships };
+  if (!Array.isArray(value["receipts"]) || value["receipts"].length > 1000) throw new Error("invalid association receipts");
+  const receipts = value["receipts"].map(receipt);
+  if (new Set(receipts.map((row) => row.id)).size !== receipts.length) throw new Error("duplicate association receipt");
+  return { version: 2, projects, memberships, receipts };
+}
+
+function sameIdentity(stored: ProjectMembership, actual: VerifiedTaskIdentity): boolean {
+  return stored.taskId === actual.taskId && stored.createdAt === actual.createdAt &&
+    stored.root === actual.root && stored.dirId === actual.dirId && stored.realRoot === actual.realRoot;
+}
+function recordAction(doc: Document, action: AssociationReceipt["action"], identity: Omit<ProjectMembership, "projectId">,
+  fromProjectId: string | null, toProjectId: string | null): AssociationReceipt {
+  const receipts = doc.receipts ?? [];
+  if (receipts.length >= 1000) throw new Error("association receipt capacity exceeded");
+  const entry: AssociationReceipt = { id: randomUUID(), at: new Date().toISOString(), action,
+    taskId: identity.taskId, createdAt: identity.createdAt, root: identity.root, dirId: identity.dirId,
+    ...(identity.realRoot === undefined ? {} : { realRoot: identity.realRoot }), fromProjectId, toProjectId };
+  doc.version = 2;
+  doc.receipts = [...receipts, entry];
+  return entry;
 }
 
 export function projectRegistryPath(userData: string): string { return join(userData, FILE); }
@@ -187,6 +247,53 @@ export class ProjectRegistry {
     });
     this.pending = operation.catch(() => undefined);
     return operation;
+  }
+  association(taskId: string, roots: TaskRootIndex): { taskId: string; projectId: string | null; state: "assigned" | "unassigned" | "needs-repair" | "unavailable" } {
+    if (!isSafeTaskChildName(taskId)) throw new Error("invalid task ID");
+    const stored = this.load().value.memberships.find((row) => row.taskId === taskId);
+    const identity = roots.verifiedIdentity(taskId);
+    if (!stored) return { taskId, projectId: null, state: identity ? "unassigned" : "unavailable" };
+    return { taskId, projectId: stored.projectId,
+      state: identity && sameIdentity(stored, identity) ? "assigned" : "needs-repair" };
+  }
+  associations(roots: TaskRootIndex): ReturnType<ProjectRegistry["association"]>[] {
+    return this.load().value.memberships.map((row) => this.association(row.taskId, roots));
+  }
+  claim(taskId: string, projectId: string, roots: TaskRootIndex): Promise<AssociationReceipt> {
+    return this.mutate((doc) => {
+      const target = id(projectId);
+      if (!isSafeTaskChildName(taskId)) throw new Error("invalid task ID");
+      if (!doc.projects.some((row) => row.id === target)) throw new Error("unknown project");
+      if (doc.memberships.some((row) => row.taskId === taskId)) throw new Error("task already associated; explicit transfer required");
+      const identity = roots.verifiedIdentity(taskId);
+      if (!identity) throw new Error("task identity unavailable");
+      doc.memberships.push({ ...identity, projectId: target });
+      return recordAction(doc, "claim", identity, null, target);
+    });
+  }
+  unlink(taskId: string, expectedProjectId: string): Promise<AssociationReceipt> {
+    return this.mutate((doc) => {
+      const expected = id(expectedProjectId);
+      if (!isSafeTaskChildName(taskId)) throw new Error("invalid task ID");
+      const index = doc.memberships.findIndex((row) => row.taskId === taskId && row.projectId === expected);
+      if (index < 0) throw new Error("association changed or missing");
+      const [previous] = doc.memberships.splice(index, 1);
+      return recordAction(doc, "unlink", previous!, expected, null);
+    });
+  }
+  transfer(taskId: string, fromProjectId: string, toProjectId: string, roots: TaskRootIndex): Promise<AssociationReceipt> {
+    return this.mutate((doc) => {
+      const from = id(fromProjectId);
+      const to = id(toProjectId);
+      if (from === to || !doc.projects.some((row) => row.id === to)) throw new Error("invalid transfer target");
+      if (!isSafeTaskChildName(taskId)) throw new Error("invalid task ID");
+      const stored = doc.memberships.find((row) => row.taskId === taskId && row.projectId === from);
+      if (!stored) throw new Error("association changed or missing");
+      const identity = roots.verifiedIdentity(taskId);
+      if (!identity || !sameIdentity(stored, identity)) throw new Error("task identity needs repair");
+      stored.projectId = to;
+      return recordAction(doc, "transfer", identity, from, to);
+    });
   }
   create(input: ProjectCreateInput): Promise<LocalProject> {
     return this.mutate((value) => {

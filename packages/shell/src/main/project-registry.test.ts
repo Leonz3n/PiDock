@@ -66,8 +66,10 @@ describe("main-owned project registry", () => {
     expect(() => store.list()).toThrow();
     await expect(store.create(input)).rejects.toThrow();
     expect(readFileSync(file, "utf8")).toBe("{bad");
-    writeFileSync(file, JSON.stringify({ version: 2, projects: [], memberships: [] }));
+    writeFileSync(file, JSON.stringify({ version: 3, projects: [], memberships: [] }));
     expect(() => store.list()).toThrow(/version/);
+    writeFileSync(file, JSON.stringify({ version: 2, projects: [], memberships: [] }));
+    expect(() => store.list()).toThrow(/fields/);
     rmSync(file);
     symlinkSync(join(root, "absent"), file);
     expect(() => store.list()).toThrow();

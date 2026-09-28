@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -68,7 +68,14 @@ describe("trusted Electron view modes", () => {
     try {
       const views = await createTrustedWindow("workspace-project", "production");
       const store = new ProjectRegistry(root);
-      registerIpc({} as never, views.registry, undefined, store);
+      const taskRoot = join(root, "tasks");
+      mkdirSync(taskRoot);
+      const taskDir = join(taskRoot, "task-abcdef12");
+      mkdirSync(taskDir);
+      const createdAt = "2026-09-22T10:00:00Z";
+      writeFileSync(join(taskDir, "task.json"), JSON.stringify({ taskId: "task-abcdef12", name: "Real", dirId: "task-abcdef12",
+        root: taskRoot, taskDir, branch: "task/main", remoteBranch: "main", baseCommit: "abc123", repos: [], createdAt, updatedAt: createdAt }));
+      registerIpc({} as never, views.registry, undefined, store, new TaskRootIndex(root, taskRoot));
       const handler = vi.mocked(ipcMain.handle).mock.calls.find(([channel]) => channel === "shell/projectOp")?.[1];
       expect(handler).toBeDefined();
       const event = { sender: views.shellView.webContents, senderFrame: views.shellView.webContents.mainFrame } as never;
@@ -78,6 +85,12 @@ describe("trusted Electron view modes", () => {
       expect(await handler!(event, { op: "list" })).toEqual({ ok: true, payload: { initialized: false, projects: [] } });
       expect(await handler!(event, { op: "create", input: { name: "Real", description: "", repositories: [], directories: [] } })).toMatchObject({ ok: true });
       expect(store.list().projects).toHaveLength(1);
+      const projectId = store.list().projects[0]!.id;
+      const claim = { op: "claim", taskId: "task-abcdef12", projectId };
+      expect(await handler!(invalid, claim)).toMatchObject({ ok: false });
+      expect(await handler!(event, { ...claim, taskDir })).toMatchObject({ ok: false });
+      expect(await handler!(event, claim)).toMatchObject({ ok: true, payload: { action: "claim", toProjectId: projectId } });
+      expect(store.associations(new TaskRootIndex(root, taskRoot))).toMatchObject([{ taskId: "task-abcdef12", state: "assigned" }]);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
