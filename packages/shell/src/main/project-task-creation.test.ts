@@ -265,6 +265,55 @@ describe("persistent Project task creation with local Git", () => {
     expect(existsSync(preview.taskDir)).toBe(false);
     expect(JSON.stringify(env.storage.read())).not.toContain(env.remote);
   });
+  it("pins the SSH account for URL and SCP remotes even when host, path and commit are unchanged", async () => {
+    const env = await setup();
+    const helper = join(env.home, "local-ssh");
+    writeFileSync(helper, "#!/bin/sh\nshift\nexec sh -c \"$*\"\n", { mode: 0o700 });
+    const previous = { ssh: process.env.GIT_SSH, variant: process.env.GIT_SSH_VARIANT };
+    process.env.GIT_SSH = helper; process.env.GIT_SSH_VARIANT = "simple";
+    try {
+      for (const scp of [false, true]) {
+        const current = await setup();
+        const url = (user: string) => scp ? `${user}@local:${current.remote}` : `ssh://${user}@local${current.remote}`;
+        git(current.repo, "remote", "set-url", "origin", url("user-a"));
+        const preview = await current.service.prepare(current.request);
+        expect(preview.repos[0]?.commit).toBe(git(current.repo, "rev-parse", "HEAD"));
+        expect(JSON.stringify(current.storage.read())).not.toContain(url("user-a"));
+        git(current.repo, "remote", "set-url", "origin", url("user-b"));
+        await expect(current.service.commit(preview.id)).rejects.toThrow(/传输地址已改变/);
+        expect(existsSync(preview.taskDir)).toBe(false);
+        expect(current.getCalls()).toBe(0);
+      }
+    } finally {
+      if (previous.ssh === undefined) delete process.env.GIT_SSH; else process.env.GIT_SSH = previous.ssh;
+      if (previous.variant === undefined) delete process.env.GIT_SSH_VARIANT; else process.env.GIT_SSH_VARIANT = previous.variant;
+    }
+  });
+  it("rejects URL query or fragment selectors at prepare and after a credential-free preview", async () => {
+    const env = await setup();
+    for (const suffix of ["?selector=one", "#selector-two"]) {
+      git(env.repo, "remote", "set-url", "origin", `file://${env.remote}${suffix}`);
+      await expect(env.service.prepare(env.request)).rejects.toThrow(/查询或片段/);
+      expect(env.storage.read()).toBeNull();
+    }
+    git(env.repo, "remote", "set-url", "origin", `file://${env.remote}`);
+    const preview = await env.service.prepare(env.request);
+    git(env.repo, "remote", "set-url", "origin", `file://${env.remote}?selector=two`);
+    await expect(env.service.commit(preview.id)).rejects.toThrow(/查询或片段/);
+    expect(existsSync(preview.taskDir)).toBe(false);
+    expect(env.getCalls()).toBe(0);
+  });
+  it("rejects HTTP token userinfo and SSH password userinfo without logging or storing credentials", async () => {
+    const env = await setup();
+    for (const url of ["https://token-secret@example.invalid/repo.git", "https://user:token-secret@example.invalid/repo.git", "ssh://user:token-secret@local/repo.git", "ssh://user%3Atoken-secret@local/repo.git", "user%3Atoken-secret@local:repo.git"]) {
+      git(env.repo, "remote", "set-url", "origin", url);
+      const error = await env.service.prepare(env.request).catch((failure: unknown) => failure);
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toMatch(/含凭据/);
+      expect((error as Error).message).not.toContain("token-secret");
+      expect(env.storage.read()).toBeNull();
+    }
+  });
   it("refuses to overwrite a corrupted existing task record during recovery", async () => {
     const env = await setup();
     const preview = await env.service.prepare(env.request);
