@@ -167,6 +167,16 @@ async function run() {
       cards: await evalJs("[...document.querySelectorAll('[data-provider-card]')].map(el => el.innerText.replace(/\\n+/g,' | '))"),
       credentialVisible: (await text()).includes(CREDENTIAL),
     };
+    // S8e: real Token 用量 page (same SDK JSONL projection the conversation shows).
+    await clickSelector('[data-testid=desktop-shell] button[title="Token 用量"]');
+    await until((body) => body.includes("逐条记录"), "usage page");
+    await wait(200);
+    shots.push(await capture("usage-page", 1440, 900));
+    const usage = {
+      summary: await evalJs("document.querySelector('[data-testid=usage-summary]')?.innerText"),
+      totals: await evalJs("[...document.querySelectorAll('[data-usage-total]')].map(el => el.innerText.replace(/\\n+/g,' '))"),
+      rows: await evalJs("document.querySelectorAll('[data-usage-row]').length"),
+    };
     await clickSelector('[data-testid=desktop-shell] button[title=项目总览]');
     await until((body) => body.includes("继续工作"), "project overview");
     await wait(200);
@@ -187,6 +197,7 @@ async function run() {
       credentialVisible: body.includes(CREDENTIAL),
       dock,
       providers: providersPage,
+      usage,
       overview,
       providerState: await evalJs("document.querySelector('[data-testid=provider-state]')?.textContent"),
       jsonlBytes: readdirSync(join(taskDir, ".pidock-sdk-sessions", "main")).filter((name) => name.endsWith(".jsonl"))

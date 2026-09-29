@@ -6,6 +6,7 @@ import { desktopMode, importDesktopTaskRoot } from "../data/desktopInventory";
 import { DESKTOP_LABELS, DesktopShell, DesktopUnwired, type DesktopUnwiredKey, type DesktopView } from "./DesktopShell";
 import { DesktopProvidersPage } from "./DesktopProvidersPage";
 import { DesktopProjectOverview } from "./DesktopProjectOverview";
+import { DesktopUsagePage } from "./DesktopUsagePage";
 import { loadDesktopProjects, parseDesktopProject, projectOperation, type DesktopProject, type DesktopProjects, type ProjectInput, type ProjectSource, type TaskAssociation } from "../data/desktopProjects";
 
 export { desktopMode };
@@ -82,6 +83,9 @@ export function DesktopInventory() {
   // [UI 对齐 S8e] #47: 项目总览 is the project page; the create/claim/transfer/
   // unlink management surface it links to is a separate view (原型 A 的「项目管理」).
   const [manage, setManage] = useState(false);
+  // [UI 对齐 S8e] #47: Token 用量 reads the same real SDK JSONL projection the
+  // conversation shows, one selected task at a time.
+  const [usageTaskId, setUsageTaskId] = useState<string | null>(null);
   // Prototype A opens on the first project. An explicit pick (shell nav or the
   // management list) wins and is never overridden by a later reread.
   const pinned = useRef(false);
@@ -197,6 +201,8 @@ export function DesktopInventory() {
   const selectedProject = selection.kind === "project" ? shellProjects.find((project) => project.id === selection.id) : undefined;
   const shellView: DesktopView = providers
     ? { view: "providers" }
+    : usageTaskId !== null
+      ? { view: "usage" }
     : activeTask
       ? { view: "task", taskId: activeTask.id }
       : unwired
@@ -211,6 +217,8 @@ export function DesktopInventory() {
     setEditNeedsReview(false);
     if (next.view === "task") {
       setUnwired(null);
+      setUsageTaskId(null);
+      setProviders(false);
       void openTask(next.taskId);
       return;
     }
@@ -218,6 +226,9 @@ export function DesktopInventory() {
     setProviders(next.view === "providers");
     if (next.view === "providers") return;
     if (next.view === "project" || next.view === "unassigned") setManage(false);
+    if (next.view === "usage") { setUsageTaskId(activeTask?.id ?? (shellTasks[0]?.taskId ?? null)); return; }
+    // Any other page leaves the usage view.
+    setUsageTaskId(null);
     setActiveTask(null);
     setUnwired(next.view === "unwired" ? next.key : null);
     if (next.view === "project") { pinned.current = true; setSelection({ kind: "project", id: next.projectId }); }
@@ -226,7 +237,9 @@ export function DesktopInventory() {
   const activeProject = activeTask
     ? shellProjects.find((project) => project.id === shellTasks.find((task) => task.taskId === activeTask.id)?.projectId)
     : undefined;
-  const breadcrumb = providers
+  const breadcrumb = usageTaskId !== null
+    ? { ...(activeProject ? { project: activeProject.name } : selectedProject ? { project: selectedProject.name } : {}), page: "Token 用量" }
+    : providers
     ? { ...(activeProject ? { project: activeProject.name } : selectedProject ? { project: selectedProject.name } : {}), page: "模型与 Provider" }
     : activeTask
     ? { ...(activeProject ? { project: activeProject.name } : {}), task: activeTask.name }
@@ -243,6 +256,11 @@ export function DesktopInventory() {
     roots={ready?.inventory.roots ?? []}
     breadcrumb={breadcrumb}
   >{children}</DesktopShell>;
+  if (usageTaskId !== null) return shell(<DesktopUsagePage
+    tasks={shellTasks}
+    taskId={usageTaskId}
+    onSelectTask={(taskId) => setUsageTaskId(taskId)}
+  />);
   if (providers) return shell(<DesktopProvidersPage
     taskId={activeTask?.id ?? null}
     taskName={activeTask?.name ?? null}
