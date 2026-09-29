@@ -206,6 +206,13 @@ async function run() {
     views.window.setContentSize(1440, 900);
     await wait(250);
     const attention = { rows: await evalJs("document.querySelectorAll('[data-attention-item]').length"), error: await evalJs("document.querySelector('[data-testid=desktop-attention-page] [role=alert]')?.innerText") };
+    await clickSelector('[data-testid=desktop-shell] button[title="远程访问"]');
+    await until((body) => body.includes("该任务尚无已登记设备。"), "remote page state");
+    shots.push(await capture("remote-page", 1440, 900));
+    shots.push(await capture("remote-page", 720, 560));
+    views.window.setContentSize(1440, 900);
+    await wait(250);
+    const remote = { task: await evalJs("document.querySelector('#desktop-remote-task')?.selectedOptions[0]?.textContent"), devices: await evalJs("document.querySelectorAll('[data-remote-device]').length"), error: await evalJs("document.querySelector('[data-testid=desktop-remote-page] [role=alert]')?.innerText") };
     await clickSelector('[data-testid=desktop-shell] button[title="已归档"]');
     await until((body) => body.includes("还没有归档任务。"), "archive page");
     shots.push(await capture("archive-page", 1440, 900));
@@ -258,6 +265,7 @@ async function run() {
       environment,
       schedules,
       attention,
+      remote,
       archive,
       archiveFlow,
       overview,
