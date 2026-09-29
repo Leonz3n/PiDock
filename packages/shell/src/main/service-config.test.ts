@@ -125,6 +125,20 @@ describe("resolveServiceEnv", () => {
     if (!result.ok) return;
     expect(result.rows.find((entry) => entry.key === "LABEL")?.secret).toBe(true);
   });
+  it("preserves sensitivity when a secret reference is later overridden in the same layer", () => {
+    const result = resolveServiceEnv({
+      repoDefaults: [], shared: [],
+      privateEntries: [{ key: "CRED", value: "private-value", secret: true }],
+      task: [
+        { key: "LABEL", value: "prefix-${CRED}", secret: false },
+        { key: "CRED", value: "public-value", secret: false },
+      ],
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.rows.find((row) => row.key === "LABEL")).toMatchObject({ value: "prefix-private-value", secret: true });
+    expect(result.rows.find((row) => row.key === "CRED")).toMatchObject({ value: "public-value", secret: false });
+  });
   it("fails closed on duplicate keys within one layer and secrets in shared", () => {
     const dup = resolveServiceEnv({
       repoDefaults: [],

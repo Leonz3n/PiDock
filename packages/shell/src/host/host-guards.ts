@@ -164,6 +164,16 @@ export function classifyControlCaller(input: {
   return { ok: true, kind: "human", label };
 }
 
+export function authorizeServiceRegistration(input: {
+  sessionId?: unknown;
+  origin?: unknown;
+}): { ok: true } | { ok: false; error: string } {
+  const caller = classifyControlCaller(input);
+  if (!caller.ok) return caller;
+  if (caller.kind === "agent") return { ok: false, error: "permission-denied: Agent 服务配方变更尚未接入差异确认" };
+  return { ok: true };
+}
+
 /**
  * Session a user's browser marker is logged into ([PiDock 06] #8): a named
  * session must already exist, so a typo cannot silently create a new

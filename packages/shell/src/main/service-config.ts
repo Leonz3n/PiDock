@@ -208,7 +208,7 @@ export function resolveServiceEnv(layers: ServiceEnvLayers): { ok: true; rows: R
   for (const [source, entries] of labeled) {
     for (const entry of entries) {
       const key = entry.key.trim();
-      const secret = entry.secret || isServiceSecretKey(key);
+      let secret = entry.secret || isServiceSecretKey(key);
       const missing: string[] = [];
       const resolved = entry.value.replace(REF_PATTERN, (_match, braced: string | undefined, plain: string | undefined) => {
         const name = braced ?? plain ?? "";
@@ -217,6 +217,7 @@ export function resolveServiceEnv(layers: ServiceEnvLayers): { ok: true; rows: R
           missing.push(name);
           return _match;
         }
+        if (target.secret) secret = true;
         return target.value;
       });
       if (missing.length > 0) {
@@ -229,29 +230,7 @@ export function resolveServiceEnv(layers: ServiceEnvLayers): { ok: true; rows: R
       resolvedByKey.set(key, rerendered);
     }
   }
-  // Secret flags follow resolved values: a row referencing a secret
-  // source inherits the secret bit so masking cannot be shed via `${REF}`.
-  for (const [key, row] of resolvedByKey) {
-    const raw = findRawValue(layers, key);
-    if (raw === undefined) continue;
-    const names = new Set<string>();
-    for (const match of raw.matchAll(REF_PATTERN)) names.add(match[1] ?? match[2] ?? "");
-    for (const name of names) {
-      if (resolvedByKey.get(name)?.secret) {
-        resolvedByKey.set(key, { ...row, secret: true });
-        break;
-      }
-    }
-  }
   return { ok: true, rows: order.map((key) => resolvedByKey.get(key) as ResolvedServiceRow) };
-}
-
-function findRawValue(layers: ServiceEnvLayers, key: string): string | undefined {
-  for (const entries of [layers.runtime ?? [], layers.task, layers.privateEntries, layers.shared, layers.repoDefaults]) {
-    const hit = entries.find((entry) => entry.key.trim() === key);
-    if (hit) return hit.value;
-  }
-  return undefined;
 }
 
 /**
