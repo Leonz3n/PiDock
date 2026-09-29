@@ -6,11 +6,16 @@
  * environment is built by `sdk-context-env.ts` (allowlisted minimum, no
  * credential) while the resolved credential travels as `workerData`.
  *
- * Fail-closed semantics: a spawn failure, worker error, unexpected exit, or
- * malformed reply rejects every in-flight operation and poisons the client, so
- * a broken context can never silently degrade into an implicit-credential
+ * Fail-closed semantics: a spawn failure, worker error, unexpected exit, a
+ * malformed/unknown protocol message, or a bootstrap that never answers rejects
+ * every in-flight operation and poisons the client, so a broken context can
+ * neither hang a turn forever nor silently degrade into an implicit-credential
  * request. A task whose provider is not configured does not create a client at
  * all (see the kernel resolver in the Host).
+ *
+ * The dispatch environment, the credential channel, and the poisoning are
+ * covered by `scripts/sdk-context-isolation-test.mjs`, which spawns this real
+ * worker through this class after a build.
  */
 
 import { mkdirSync } from "node:fs";
@@ -30,9 +35,9 @@ export interface SdkTextKernelPort {
 
 /**
  * The subset of `node:worker_threads`' `Worker` this client uses. Injected in
- * unit tests (a real thread can only load the built worker, which is covered by
- * the post-build harness), so the protocol and the dispatch environment are
- * testable without a build step.
+ * unit tests (a real thread can only load the built worker, which
+ * `scripts/sdk-context-isolation-test.mjs` covers after a build), so the
+ * protocol and the dispatch environment are testable without a build step.
  */
 export interface SdkContextWorkerLike {
   postMessage(message: unknown): void;
@@ -50,6 +55,8 @@ export interface SdkContextOptions {
   workspaceId?: string;
   /** Injected for tests; defaults to the compiled worker next to this file. */
   spawn?: (env: Record<string, string>, workerData: unknown) => SdkContextWorkerLike;
+  /** Bound on the worker's bootstrap reply; a silent worker must not hang a turn. */
+  readyTimeoutMs?: number;
 }
 
 interface Pending {
@@ -59,6 +66,7 @@ interface Pending {
 }
 
 const READY_ID = "ready";
+const READY_TIMEOUT_MS = 15_000;
 
 export class SdkContextClient implements SdkTextKernelPort {
   private worker: SdkContextWorkerLike | undefined;
@@ -100,7 +108,8 @@ export class SdkContextClient implements SdkTextKernelPort {
       const worker = this.options.spawn?.(env, workerData) ?? new Worker(new URL("./sdk-context-worker.js", import.meta.url), { env, workerData });
       this.worker = worker;
       await new Promise<void>((resolve, reject) => {
-        this.pending.set(READY_ID, { resolve: () => resolve(), reject });
+        const timeout = setTimeout(() => failed(new Error("sdk-context-bootstrap-timeout")), this.options.readyTimeoutMs ?? READY_TIMEOUT_MS);
+        this.pending.set(READY_ID, { resolve: () => { clearTimeout(timeout); resolve(); }, reject: (error) => { clearTimeout(timeout); reject(error); } });
         const failed = (error: Error) => {
           this.failAll(error);
           reject(error);
@@ -120,12 +129,12 @@ export class SdkContextClient implements SdkTextKernelPort {
   }
 
   private receive(message: unknown): void {
-    if (typeof message !== "object" || message === null || Array.isArray(message)) return;
+    if (this.dead || this.disposed) return;
+    if (typeof message !== "object" || message === null || Array.isArray(message)) return this.poison("sdk-context-protocol-invalid");
     const record = message as Record<string, unknown>;
     const id = record["id"];
-    if (typeof id !== "string") return;
-    const entry = this.pending.get(id);
-    if (!entry) return;
+    if (typeof id !== "string" || !this.pending.has(id)) return this.poison("sdk-context-protocol-invalid");
+    const entry = this.pending.get(id)!;
     if (record["kind"] === "event") {
       const event = record["event"];
       if (event && typeof event === "object") {
@@ -133,7 +142,7 @@ export class SdkContextClient implements SdkTextKernelPort {
       }
       return;
     }
-    if (record["kind"] !== "reply") return;
+    if (record["kind"] !== "reply") return this.poison("sdk-context-protocol-invalid");
     this.pending.delete(id);
     if (record["ok"] === true) {
       const payload = record["payload"];
@@ -141,6 +150,16 @@ export class SdkContextClient implements SdkTextKernelPort {
       return;
     }
     entry.reject(new Error(typeof record["error"] === "string" ? record["error"] : "sdk-context-failed"));
+  }
+
+  /**
+   * An unexpected message means the peer is not speaking our protocol; the
+   * context is unusable and every pending caller must be released rather than
+   * left waiting on a reply that will never arrive.
+   */
+  private poison(code: string): void {
+    this.failAll(new Error(code));
+    try { void this.worker?.terminate(); } catch { /* already exited */ }
   }
 
   private failAll(error: Error): void {

@@ -15,9 +15,11 @@
  * (`workerData`) by the trusted caller, so it never enters a process
  * environment and can never be inherited by anything the model context spawns.
  * Measured behaviour: a `node:worker_threads` worker with an explicit `env`
- * inherits no ambient variable (checked under plain Node and the Electron main
- * process with `OPENAI_API_KEY`, `AWS_SECRET_ACCESS_KEY` and `HTTP_PROXY` set
- * in the parent).
+ * inherits no ambient variable. That is asserted against a real worker thread by
+ * `packages/shell/scripts/sdk-context-isolation-test.mjs`, which runs this
+ * builder while the parent process carries `OPENAI_API_KEY`,
+ * `AWS_SECRET_ACCESS_KEY`, `GOOGLE_APPLICATION_CREDENTIALS` and `HTTP_PROXY`,
+ * and checks the worker's own `process.env`.
  *
  * Pure (injected base env) and unit-tested.
  */
