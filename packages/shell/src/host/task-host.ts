@@ -111,6 +111,9 @@ import {
 } from "../main/schedule-rules.js";
 import { TaskSchedules, type SaveScheduleInput, type SaveScheduleResult, type SchedulePreview } from "./schedules.js";
 import { PiSdkTextKernel } from "./sdk-text-kernel.js";
+import { SdkTextKernelRouter } from "./sdk-kernel-router.js";
+import { SdkContextClient } from "./sdk-context-client.js";
+import type { ExplicitTextProvider } from "./explicit-text-provider.js";
 import {
   PI_USAGE_GROUP_LABELS,
   UNVERSIONED_PROVIDER_CONFIG,
@@ -481,16 +484,61 @@ interface ClaimedPathScope {
 
 export class TaskWorkspaceHost {
   private readonly channels = new Map<string, PiSessionChannel>();
+  /** Read-only kernel for projections; never performs a model call. */
   private sdkText: PiSdkTextKernel | null = null;
+  /** Isolated model context, present only while a Provider is configured. */
+  private sdkContext: SdkContextClient | null = null;
+  private sdkRouter: SdkTextKernelRouter | null = null;
+  private sdkProviderGeneration = 0;
 
-  /** #43 Host-internal only; #44 must supply authorized model selection and a streamed route. */
-  sdkTextKernel(): PiSdkTextKernel {
-    return this.sdkText ??= this.sdkKernelFactory(this.taskId, this.taskDir);
+  /**
+   * #43/#44 Host-internal seam. Until #46 configures an explicit Provider the
+   * router has no isolated context, so every model operation still fails closed
+   * with `provider-not-configured` while projections keep working.
+   */
+  sdkTextKernel(): SdkTextKernelRouter {
+    this.sdkText ??= this.sdkKernelFactory(this.taskId, this.taskDir);
+    return this.sdkRouter ??= new SdkTextKernelRouter(this.sdkText, this.sdkContext ?? undefined);
+  }
+
+  /**
+   * [PiDock 02m] (#46) installs the explicit Provider selection for this task.
+   * `null` clears it. A live context is created eagerly so a bad credential or
+   * an unwritable private home is reported to the caller, not to the first turn.
+   */
+  async configureSdkProvider(provider: { config: ExplicitTextProvider; credential: string; workspaceId?: string } | null): Promise<{ generation: number }> {
+    const previous = this.sdkContext;
+    this.sdkContext = null;
+    this.sdkRouter = null;
+    if (previous) await previous.dispose();
+    this.sdkProviderGeneration += 1;
+    if (provider) {
+      this.sdkContext = new SdkContextClient({
+        task: { taskId: this.taskId, taskDir: this.taskDir },
+        config: provider.config,
+        credential: provider.credential,
+        ...(provider.workspaceId === undefined ? {} : { workspaceId: provider.workspaceId }),
+      });
+      // Create the context now: a misconfigured Provider must fail here.
+      await this.sdkContext.open("main");
+    }
+    return { generation: this.sdkProviderGeneration };
+  }
+
+  /** True when this task currently has an isolated model context. */
+  get sdkProviderConfigured(): boolean {
+    return this.sdkContext !== null;
   }
 
   async shutdownSdk(): Promise<void> {
-    await this.sdkText?.dispose();
-    this.sdkText = null;
+    const context = this.sdkContext;
+    this.sdkContext = null;
+    this.sdkRouter = null;
+    try { await context?.dispose(); }
+    finally {
+      await this.sdkText?.dispose();
+      this.sdkText = null;
+    }
   }
   /**
    * [PiDock 09] (#11) task-scoped write coordination: at most one session holds

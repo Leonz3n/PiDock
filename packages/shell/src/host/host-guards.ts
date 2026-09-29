@@ -258,6 +258,23 @@ export function validateHostTaskOp(
   payload: unknown,
 ): { ok: true } | { ok: false; error: string } {
   if (!isHostTaskOp(op)) return { ok: false, error: "unknown-op" };
+  if (op === "task/sdkProvider") {
+    // Main-internal control op: the renderer channel refuses every `task/sdk*`
+    // op, so only main can install or clear the task's Provider selection. The
+    // credential travels on this trusted channel only; the Host validates the
+    // configuration again before any context is spawned.
+    if (!isRecord(payload)) return { ok: false, error: "invalid-sdk-provider" };
+    const keys = Object.keys(payload);
+    if (keys.length !== 1 || keys[0] !== "provider") return { ok: false, error: "invalid-sdk-payload: extra key" };
+    const provider = payload["provider"];
+    if (provider === null) return { ok: true };
+    if (!isRecord(provider) || Object.keys(provider).sort().join(",") !== "config,credential" || !isRecord(provider["config"])) {
+      return { ok: false, error: "invalid-sdk-provider" };
+    }
+    const credential = provider["credential"];
+    if (typeof credential !== "string" || credential.length === 0 || credential.length > 4096) return { ok: false, error: "invalid-sdk-provider-credential" };
+    return { ok: true };
+  }
   if (["task/sdkStart", "task/sdkStatus", "task/sdkProjection", "task/sdkCancel"].includes(op)) {
     if (!isRecord(payload) || typeof payload["sessionId"] !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/.test(payload["sessionId"])) return { ok: false, error: "invalid-sdk-session" };
     const keys = op === "task/sdkStart" ? ["sessionId", "requestId", "text"] : op === "task/sdkStatus" ? ["sessionId", "requestId"] : op === "task/sdkCancel" ? ["sessionId", "turnId"] : ["sessionId"];
