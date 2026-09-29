@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { PiSdkTextKernel, type SdkTextEvent, type SdkTextResult } from "./sdk-text-kernel.js";
+import type { SdkTextEvent, SdkTextResult } from "./sdk-text-kernel.js";
+import type { SdkTurnKernelPort } from "./sdk-kernel-router.js";
 
 export type TurnRecord = {
   taskId: string;
@@ -37,7 +38,7 @@ export class SdkTurnTransport {
   private uncommitted: TurnRecord | null = null;
   private readonly root: string;
 
-  constructor(private readonly taskId: string, private readonly taskDir: string, private readonly kernel: PiSdkTextKernel,
+  constructor(private readonly taskId: string, private readonly taskDir: string, private readonly kernel: SdkTurnKernelPort,
     private readonly syncJournalDirectory: (directory: string) => void = syncDirectory) {
     this.root = join(taskDir, ".pidock-sdk-turns");
   }

@@ -43,6 +43,7 @@ import {
 } from "./host-guards.js";
 import { TaskWorkspaceHost, diskTaskStore } from "./task-host.js";
 import { SdkTurnTransport } from "./sdk-turn-transport.js";
+import { validateExplicitTextProvider } from "./explicit-text-provider.js";
 import { PiSdkTextKernel } from "./sdk-text-kernel.js";
 import type { ServiceRunObservation } from "../main/execution-ledger.js";
 import { SharedPathCoordinator } from "./path-coordination.js";
@@ -440,6 +441,31 @@ async function dispatchTaskOp(
     if (op.startsWith("task/sdk") || op === "task/sendMessage") {
       if (sdkClosing) throw new Error("sdk-host-closing");
       if (!origin || origin.kind !== "shell-ui") throw new Error("permission-denied: SDK turns require a shell sender");
+      if (op === "task/sdkProvider") {
+        // Installing or clearing the Provider selection must not race a live
+        // turn: a journal that is still open means a model request is in
+        // flight, and a mid-turn context swap would split one turn across two
+        // model identities.
+        sdkTurns?.assertTerminalCommitted();
+        const provider = record["provider"];
+        if (provider === null) {
+          await host.configureSdkProvider(null);
+          sdkTurns = null;
+          return { ok: true, payload: { configured: false } };
+        }
+        if (typeof provider !== "object" || provider === null || Array.isArray(provider)) throw new Error("invalid-sdk-provider");
+        const binding = provider as Record<string, unknown>;
+        const result = await host.configureSdkProvider({
+          config: validateExplicitTextProvider(binding["config"]),
+          credential: binding["credential"] as string,
+          workspaceId: boundWorkspaceId(),
+        });
+        // The transport holds the previous kernel/context; re-create it so the
+        // new isolated context serves subsequent turns. Durable journals make
+        // this safe: nothing is replayed, and status reads still resolve.
+        sdkTurns = null;
+        return { ok: true, payload: { configured: true, generation: result.generation } };
+      }
       const sessionId = record["sessionId"];
       if (typeof sessionId !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/.test(sessionId)) throw new Error("invalid-sdk-session");
       sdkTurns ??= new SdkTurnTransport(taskId, host.taskDir, host.sdkTextKernel());

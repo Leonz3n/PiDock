@@ -52,6 +52,7 @@ export type HostTaskOp =
   | "task/sdkStatus"
   | "task/sdkProjection"
   | "task/sdkCancel"
+  | "task/sdkProvider"
   | "task/cancel"
   | "task/approve"
   | "task/reject"
