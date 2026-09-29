@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from "react"
 import { Icon } from "./Icon";
 import { loadDesktopProjects, type DesktopProjects } from "../data/desktopProjects";
 import { DesktopProviderPanel } from "./DesktopProviderPanel";
+import { BrandMark, LocalUserAvatar } from "./ui";
 
 const sessionId = "main";
 const button = "inline-flex min-h-8 items-center justify-center gap-1.5 border border-line bg-paper px-2.5 py-1 text-xs hover:bg-bg disabled:cursor-not-allowed disabled:opacity-50";
@@ -232,20 +233,62 @@ export function DesktopConversation({ taskId, name, roots, association, onBack }
   };
   const submit = (event: FormEvent) => { event.preventDefault(); void start(); };
   const blocked = !valid || !connected || !!receiptError || snapshot?.pending || attempt?.phase === "starting" || attempt?.phase === "unknown" || attempt?.phase === "accepted";
-  return <main data-testid="desktop-conversation" className="flex h-screen min-h-0 min-w-0 flex-col overflow-hidden bg-bg text-ink">
-    <header className="flex min-w-0 items-center gap-3 border-b border-line bg-paper px-3 py-2">
-      <button type="button" className={button} onClick={onBack} aria-label="返回任务列表" title="返回任务列表"><Icon name="arrow" className="-rotate-90" /></button>
-      <div className="min-w-0"><h1 className="truncate text-sm font-semibold">{name}</h1><p className="truncate text-xs text-muted">{taskId} · SDK / main</p></div>
-      <button type="button" className={`${button} ml-auto`} onClick={() => void refresh()} title="核验状态"><Icon name="refresh" /><span>核验</span></button>
-    </header>
+  // Prototype A task workspace ([UI 对齐 S8b/S8c] #47): eyebrow, title, icon toolbar,
+  // meta chips, the real session tab strip, message chrome, and a composer whose
+  // entries are either real or explicitly marked 未接线. Nothing here fabricates a
+  // service, tool, attachment or session that the real Host does not have.
+  const sessionTokens = snapshot?.messages.reduce((sum, message) => sum + (message.usage?.input ?? 0) + (message.usage?.output ?? 0), 0) ?? 0;
+  const ready = valid && connected;
+  const tools: { icon: "file" | "terminal" | "server" | "globe"; label: string }[] = [
+    { icon: "server", label: "运行" },
+    { icon: "globe", label: "浏览器" },
+    { icon: "file", label: "文件" },
+    { icon: "terminal", label: "终端" },
+  ];
+  return <main data-testid="desktop-conversation" className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-bg text-ink">
+    <div className="shrink-0 border-b border-line bg-paper px-4 pt-3 below-mid:px-3">
+      <div className="flex min-w-0 items-start gap-3">
+        <div className="min-w-0 flex-1">
+          <p className="text-[10px] tracking-[1.4px] text-muted uppercase">Task workspace</p>
+          <h1 className="mt-1 truncate text-[19px] font-semibold tracking-[-0.4px]">{name}</h1>
+          <div className="mt-1.5 mb-2 flex flex-wrap items-center gap-2 text-[11px] text-muted">
+            <span className="inline-flex min-w-0 items-center gap-1"><Icon name="branch" /><span className="truncate">{taskId}</span></span>
+            <span className="inline-flex items-center gap-1"><Icon name="settings" />SDK · main</span>
+            {/* Real property of this kernel: tools are disabled for SDK turns. */}
+            <span className="rounded-[4px] border border-line bg-soft px-1.5 py-0.5 text-[10px] text-[#5b6670]">只读 · 无工具</span>
+            <span className="rounded-[4px] border border-line px-1.5 py-0.5 text-[10px]">{ready ? "已连接" : invalidated ? "已失效" : "未连接"}</span>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-1 pb-1">
+          {tools.map((tool) => <button key={tool.icon} type="button" disabled title={`${tool.label}面板未接线（#47 S8d）`} aria-label={`${tool.label}（未接线）`} className="grid h-7 w-7 place-items-center rounded-md text-[#b3b9be]"><Icon name={tool.icon} /></button>)}
+          <button type="button" className={button} onClick={() => void refresh()} title="核验 SDK 会话与任务身份"><Icon name="refresh" /><span className="below-narrow:hidden">核验</span></button>
+          <button type="button" className={button} onClick={onBack} aria-label="返回任务列表" title="返回任务列表"><Icon name="arrow" className="-rotate-90" /></button>
+        </div>
+      </div>
+      <div className="flex items-end gap-1 text-[12px]" role="tablist" aria-label="会话">
+        {/* #45: production serves exactly one session, `main`; other sessions are not discovered yet. */}
+        <span role="tab" aria-selected className="border-b-2 border-accent px-2 pb-2 font-semibold text-ink">main</span>
+        <span className="pb-2 pl-1 text-[11px] text-muted">仅 main 会话</span>
+      </div>
+    </div>
     <DesktopProviderPanel taskId={taskId} />
     <section aria-label="SDK 对话历史" className="mx-auto w-full max-w-[820px] min-h-0 min-w-0 flex-1 space-y-3 overflow-y-auto px-3 py-4">
       <p className="text-xs text-muted">SDK JSONL 已确认历史 · 最近最多 80 条</p>
       {snapshot && !snapshot.messages.length && <p className="py-8 text-center text-sm text-muted">尚未开始 · 无 SDK 会话记录</p>}
-      {snapshot?.messages.map((message, index) => <article key={index} className="min-w-0 border-b border-line pb-3 text-sm"><div className="mb-1 text-xs font-semibold text-muted">{message.role === "user" ? "你" : "Agent"}</div><p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{message.text}</p>{message.usage && <p className="mt-2 text-xs text-muted">SDK 用量 · 输入 {message.usage.input} / 输出 {message.usage.output} / 缓存读取 {message.usage.cacheRead} / 写入 {message.usage.cacheWrite}</p>}</article>)}
+      {snapshot?.messages.map((message, index) => <article key={index} className="min-w-0 text-sm">
+        <div className="mb-1 flex items-center gap-2 text-[11px] text-muted">
+          {message.role === "user" ? <LocalUserAvatar /> : <BrandMark size="sm" />}
+          <span className="font-semibold text-ink">{message.role === "user" ? "你" : "Pi"}</span>
+          <span>实现与验证</span>
+        </div>
+        <div className={`min-w-0 rounded-[10px] border px-3 py-2 ${message.role === "user" ? "border-line bg-paper" : "border-line bg-paper"}`}>
+          <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{message.text}</p>
+        </div>
+        {message.usage && <p className="mt-1 text-xs text-muted">SDK 用量 · 输入 {message.usage.input} / 输出 {message.usage.output} / 缓存读取 {message.usage.cacheRead} / 写入 {message.usage.cacheWrite}</p>}
+      </article>)}
       {stream && <article className="min-w-0 border-l-2 border-ink pl-3 text-sm"><p className="mb-1 text-xs text-muted">暂存回复 · 尚未核验</p><p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{stream}</p></article>}
     </section>
-    <div className="border-t border-line bg-paper px-3 py-3"><div className="mx-auto max-w-[820px] min-w-0">
+    <div className="shrink-0 border-t border-line bg-paper px-3 py-3"><div className="mx-auto max-w-[820px] min-w-0">
       {receiptError && <p role="alert" className="mb-2 break-words text-xs text-[#ad4545]">{receiptError}</p>}
       {notice && <p role="status" className="mb-2 break-words text-xs text-muted">{notice}</p>}
       <div className="mb-2 flex flex-wrap gap-2">{invalidated ? <button className={button} type="button" onClick={onBack}>返回任务列表</button> : (!connected || !valid) && <button className={button} type="button" onClick={() => setConnectionKey((key) => key + 1)}>重新连接</button>}
@@ -253,7 +296,16 @@ export function DesktopConversation({ taskId, name, roots, association, onBack }
         {attempt?.phase === "unknown" && <button className={button} type="button" disabled={!valid} onClick={() => void start(true)}>按原 ID 重试</button>}
         {attempt?.phase === "accepted" && <button className={button} type="button" onClick={() => void stop()}><Icon name="stop" />停止</button>}
       </div>
-      <form onSubmit={submit} className="flex min-w-0 items-end gap-2"><textarea aria-label="消息" value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); if (!blocked) void start(); } }} rows={2} maxLength={16384} className="min-w-0 flex-1 resize-y border border-line bg-bg p-2 text-sm" placeholder="发送给 Agent" /><button className={button} type="submit" disabled={blocked || !draft.trim()} aria-label="发送" title="发送"><Icon name="arrow" /></button></form>
+      <form onSubmit={submit} className="min-w-0 rounded-[10px] border border-line bg-bg p-2">
+        <textarea aria-label="消息" value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); if (!blocked) void start(); } }} rows={2} maxLength={16384} className="w-full min-w-0 resize-y border-0 bg-transparent p-1 text-sm outline-none" placeholder="描述你想做什么，或粘贴图片 / 截图…" />
+        <div className="mt-1 flex min-w-0 flex-wrap items-center gap-2 text-[11px] text-muted">
+          <button type="button" disabled title="附件未接线（#47 S8c）" aria-label="附件（未接线）" className="grid h-7 w-7 place-items-center rounded-md border border-line bg-paper text-[#b3b9be]"><Icon name="plus" /></button>
+          <span className="inline-flex items-center gap-1 rounded-md border border-line bg-paper px-2 py-1" title="SDK 回合不申请写权限"><Icon name="shield" />默认权限</span>
+          <span className="inline-flex items-center gap-1 rounded-md border border-line bg-paper px-2 py-1" title="模型与 Provider 在上方配置">推理 · 关闭</span>
+          <span className="ml-auto shrink-0">{snapshot ? `本会话 ${sessionTokens} tokens` : "本会话 —"}</span>
+          <button type="submit" disabled={blocked || !draft.trim()} aria-label="发送" title="发送" className="grid h-8 w-8 place-items-center rounded-[7px] bg-accent text-paper disabled:cursor-not-allowed disabled:opacity-50"><Icon name="arrow" /></button>
+        </div>
+      </form>
     </div></div>
   </main>;
 }

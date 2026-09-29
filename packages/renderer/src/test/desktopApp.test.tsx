@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { App } from "../App";
 import { memoryHost } from "../data/memoryHost";
 import type { PidockBridge } from "../data/shellBridge";
@@ -32,7 +32,8 @@ describe("Desktop production data", () => {
     const demoRead = vi.spyOn(memoryHost, "getWorkspace");
     window.pidock = bridge();
     render(<App />);
-    expect(await screen.findByText("真实任务")).toBeInTheDocument();
+    // The sidebar lists the real task as well (prototype A), so both surfaces are checked.
+    expect(await screen.findAllByText("真实任务")).toHaveLength(2);
     expect(screen.getByRole("heading", { name: "未归属任务" })).toBeInTheDocument();
     expect(screen.queryByText("/private/work/web")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "真实项目" }));
@@ -341,7 +342,7 @@ describe("Desktop production data", () => {
     window.pidock = { listTasks: vi.fn(async () => ({ ok: true, payload: { tasks, roots } })), projectOp };
     render(<App />);
     expect(await screen.findByText(/任务不可用/)).toBeInTheDocument();
-    expect(screen.getByText("真实任务")).toBeInTheDocument();
+    expect(screen.getAllByText("真实任务")).toHaveLength(2);
     expect(screen.getByRole("button", { name: "认领" })).toBeDisabled();
     expect(screen.getByRole("combobox", { name: "真实任务 目标项目" })).toBeDisabled();
     expect(screen.queryByText("已检查的任务根暂无未归属任务")).not.toBeInTheDocument();
@@ -391,6 +392,10 @@ describe("Desktop production data", () => {
     fireEvent.click(await screen.findByRole("button", { name: "真实项目" }));
     fireEvent.click(screen.getByRole("button", { name: "进入工作区" }));
     expect(await screen.findByText(/尚未开始/)).toBeInTheDocument();
+    // The shell keeps the workspace context visible: sidebar, breadcrumb and session tab.
+    expect(screen.getByTestId("desktop-sidebar")).toBeInTheDocument();
+    expect(within(screen.getByTestId("desktop-breadcrumb")).getByText("真实项目")).toBeInTheDocument();
+    expect(within(screen.getByTestId("desktop-breadcrumb")).getByText("真实任务")).toBeInTheDocument();
     expect(sdkTurn).toHaveBeenCalledWith({ action: "subscribe", taskId: "real-1", sessionId: "main" });
     expect(shell.listTasks).toHaveBeenCalledTimes(3);
     expect(demoRead).not.toHaveBeenCalled();
