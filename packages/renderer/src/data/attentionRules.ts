@@ -75,6 +75,7 @@ export function attentionItemFromHost(item: HostAttentionItem, project: { id: st
     sessionId: item.sessionId,
     label: attentionLabel(project?.name, item.taskName),
     detail: item.detail,
+    at: item.at,
     read: item.read,
   };
 }

@@ -9,6 +9,7 @@ import { DesktopProjectOverview } from "./DesktopProjectOverview";
 import { DesktopUsagePage } from "./DesktopUsagePage";
 import { DesktopSchedulesPage } from "./DesktopSchedulesPage";
 import { DesktopArchivePage, parseLifecycle } from "./DesktopArchivePage";
+import { DesktopAttentionPage } from "./DesktopAttentionPage";
 import { lifecycleStateThroughShell } from "../data/shellBridge";
 import { loadDesktopProjects, parseDesktopProject, projectOperation, type DesktopProject, type DesktopProjects, type ProjectInput, type ProjectSource, type TaskAssociation } from "../data/desktopProjects";
 
@@ -92,6 +93,7 @@ export function DesktopInventory() {
   const [usageOpen, setUsageOpen] = useState(false);
   const [schedulesOpen, setSchedulesOpen] = useState(false);
   const [archiveOpen, setArchiveOpen] = useState(false);
+  const [attentionOpen, setAttentionOpen] = useState(false);
   const [lifecycleIndex, setLifecycleIndex] = useState<{ data: DesktopProjects; activeIds: Set<string>; errors: string[] } | null>(null);
   // Prototype A opens on the first project. An explicit pick (shell nav or the
   // management list) wins and is never overridden by a later reread.
@@ -225,7 +227,7 @@ export function DesktopInventory() {
     ...task,
     projectId: ready?.associations.find((row) => row.taskId === task.taskId)?.projectId ?? null,
   })), [ready]);
-  const shellProjects = (ready?.projects ?? []).map((project) => ({ id: project.id, name: project.name, description: project.description }));
+  const shellProjects = useMemo(() => (ready?.projects ?? []).map((project) => ({ id: project.id, name: project.name, description: project.description })), [ready]);
   const lifecycleReady = lifecycleIndex?.data === ready && lifecycleIndex !== null;
   const activeTasks = lifecycleReady ? shellTasks.filter((task) => lifecycleIndex?.activeIds.has(task.taskId)) : [];
   const selectedProject = selection.kind === "project" ? shellProjects.find((project) => project.id === selection.id) : undefined;
@@ -235,6 +237,8 @@ export function DesktopInventory() {
       ? { view: "schedules" }
     : archiveOpen
       ? { view: "archive" }
+    : attentionOpen
+      ? { view: "attention" }
     : usageOpen
       ? { view: "usage" }
     : activeTask
@@ -254,6 +258,7 @@ export function DesktopInventory() {
       setUsageOpen(false);
       setSchedulesOpen(false);
       setArchiveOpen(false);
+      setAttentionOpen(false);
       setUsageTaskId(null);
       setProviders(false);
       void openTask(next.taskId);
@@ -264,10 +269,11 @@ export function DesktopInventory() {
     setUsageOpen(next.view === "usage");
     setSchedulesOpen(next.view === "schedules");
     setArchiveOpen(next.view === "archive");
+    setAttentionOpen(next.view === "attention");
     if (next.view === "providers") return;
     if (next.view === "project" || next.view === "unassigned") setManage(false);
     if (next.view === "usage") { setUsageTaskId(activeTask?.id ?? (shellTasks[0]?.taskId ?? null)); return; }
-    if (next.view === "schedules" || next.view === "archive") { setActiveTask(null); setUnwired(null); return; }
+    if (next.view === "schedules" || next.view === "archive" || next.view === "attention") { setActiveTask(null); setUnwired(null); return; }
     // Any other page leaves the usage view.
     setUsageTaskId(null);
     setActiveTask(null);
@@ -278,7 +284,9 @@ export function DesktopInventory() {
   const activeProject = activeTask
     ? shellProjects.find((project) => project.id === shellTasks.find((task) => task.taskId === activeTask.id)?.projectId)
     : undefined;
-  const breadcrumb = archiveOpen
+  const breadcrumb = attentionOpen
+    ? { project: "所有项目", page: "需要处理" }
+    : archiveOpen
     ? { ...(selectedProject ? { project: selectedProject.name } : {}), page: "已归档" }
     : schedulesOpen
     ? { ...(selectedProject ? { project: selectedProject.name } : {}), page: "定时任务" }
@@ -304,6 +312,7 @@ export function DesktopInventory() {
     roots={ready?.inventory.roots ?? []}
     breadcrumb={breadcrumb}
   >{children}</DesktopShell>;
+  if (attentionOpen) return shell(<DesktopAttentionPage tasks={activeTasks} projects={shellProjects} lifecyclePending={!lifecycleReady} lifecycleErrors={lifecycleIndex?.errors ?? []} onOpenTask={(taskId) => navigate({ view: "task", taskId })} />);
   if (archiveOpen) return shell(<DesktopArchivePage tasks={shellTasks} onRestored={() => { void load(); }} />);
   if (schedulesOpen) return shell(<DesktopSchedulesPage tasks={shellTasks} onOpenTask={(taskId) => navigate({ view: "task", taskId })} />);
   if (usageOpen) return shell(<DesktopUsagePage
