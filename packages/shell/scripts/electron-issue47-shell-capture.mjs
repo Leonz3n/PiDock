@@ -153,6 +153,15 @@ async function run() {
       preview: await evalJs("document.querySelector('[data-testid=desktop-tool-dock] pre')?.innerText"),
     };
     await click("关闭面板");
+    await click("协议");
+    await until((body) => body.includes("协议仓库 未配置") && body.includes("实际生成版本：尚未生成"), "protocol state");
+    shots.push(await capture("workspace-protocol", 1440, 900));
+    shots.push(await capture("workspace-protocol", 720, 560));
+    const protocol = {
+      summary: await evalJs("document.querySelector('[data-testid=protocol-summary]')?.innerText"),
+      error: await evalJs("document.querySelector('[data-testid=desktop-tool-dock] [role=alert]')?.innerText"),
+    };
+    await click("关闭面板");
     shots.push(await capture("workspace-turn", 720, 560));
     // S8e: the real 模型与 Provider page (composer entry → page) and the real
     // 项目总览 page, both from the production shell.
@@ -260,6 +269,7 @@ async function run() {
       sessionTabs: await evalJs("document.querySelector('[role=tablist]')?.innerText"),
       credentialVisible: body.includes(CREDENTIAL),
       dock,
+      protocol,
       providers: providersPage,
       usage,
       environment,
