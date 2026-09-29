@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Icon } from "./Icon";
 import { DesktopTaskCreation } from "./DesktopTaskCreation";
 import { DesktopConversation } from "./DesktopConversation";
 import { desktopMode, importDesktopTaskRoot } from "../data/desktopInventory";
+import { DESKTOP_LABELS, DesktopShell, DesktopUnwired, type DesktopUnwiredKey, type DesktopView } from "./DesktopShell";
 import { loadDesktopProjects, parseDesktopProject, projectOperation, type DesktopProject, type DesktopProjects, type ProjectInput, type ProjectSource, type TaskAssociation } from "../data/desktopProjects";
 
 export { desktopMode };
@@ -70,6 +71,8 @@ export function DesktopInventory() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [choice, setChoice] = useState<Record<string, string>>({});
   const [activeTask, setActiveTask] = useState<{ id: string; name: string; roots: string; association: string } | null>(null);
+  /** Non-task nav entries whose real Host data does not exist yet (#47). */
+  const [unwired, setUnwired] = useState<DesktopUnwiredKey | null>(null);
   const entryEpoch = useRef(0);
   const openTask = async (taskId: string) => {
     const epoch = ++entryEpoch.current;
@@ -168,10 +171,64 @@ export function DesktopInventory() {
       }
     });
   };
-  if (activeTask) return <DesktopConversation key={activeTask.id} taskId={activeTask.id} name={activeTask.name} roots={activeTask.roots} association={activeTask.association} onBack={() => { entryEpoch.current++; setActiveTask(null); void load(); }} />;
-  return <main className="min-h-screen bg-bg text-ink" data-testid="desktop-inventory">
-    <header className="flex items-center justify-between border-b border-line bg-paper px-4 py-3 text-sm font-semibold">PiDock <span className="text-xs font-normal text-muted">本机工作区</span></header>
-    <div className="mx-auto w-full max-w-[1100px] px-4 py-5">
+  // The shell wraps every view so the sidebar, breadcrumb and task-root status stay
+  // visible while working, exactly like prototype A.
+  const ready = view.kind === "ready" ? view.data : undefined;
+  const shellTasks = (ready?.inventory.tasks ?? []).map((task) => ({
+    ...task,
+    projectId: ready?.associations.find((row) => row.taskId === task.taskId)?.projectId ?? null,
+  }));
+  const shellProjects = (ready?.projects ?? []).map((project) => ({ id: project.id, name: project.name, description: project.description }));
+  const selectedProject = selection.kind === "project" ? shellProjects.find((project) => project.id === selection.id) : undefined;
+  const shellView: DesktopView = activeTask
+    ? { view: "task", taskId: activeTask.id }
+    : unwired
+      ? { view: "unwired", key: unwired }
+      : selection.kind === "project" && selectedProject
+        ? { view: "project", projectId: selectedProject.id }
+        : { view: "unassigned" };
+  const navigate = (next: DesktopView) => {
+    setActionError(null);
+    setForm(null);
+    setDraft(null);
+    setEditNeedsReview(false);
+    if (next.view === "task") {
+      setUnwired(null);
+      void openTask(next.taskId);
+      return;
+    }
+    entryEpoch.current++;
+    setActiveTask(null);
+    setUnwired(next.view === "unwired" ? next.key : null);
+    if (next.view === "project") setSelection({ kind: "project", id: next.projectId });
+    if (next.view === "unassigned") setSelection({ kind: "unassigned" });
+  };
+  const breadcrumb = activeTask
+    ? { ...(shellTasks.find((task) => task.taskId === activeTask.id)?.projectId ? { project: shellProjects.find((project) => project.id === shellTasks.find((task) => task.taskId === activeTask.id)?.projectId)?.name } : {}), task: activeTask.name }
+    : selectedProject
+      ? { project: selectedProject.name }
+      : { project: "未归属任务" };
+  const shell = (children: ReactNode) => <DesktopShell
+    view={shellView}
+    onNavigate={navigate}
+    projects={shellProjects}
+    tasks={shellTasks}
+    roots={ready?.inventory.roots ?? []}
+    breadcrumb={breadcrumb}
+  >{children}</DesktopShell>;
+  if (activeTask) return shell(<DesktopConversation key={activeTask.id} taskId={activeTask.id} name={activeTask.name} roots={activeTask.roots} association={activeTask.association} onBack={() => { entryEpoch.current++; setActiveTask(null); void load(); }} />);
+  if (unwired) return shell(<DesktopUnwired name={DESKTOP_LABELS[unwired]} onBack={() => navigate({ view: "unassigned" })} />);
+  if (view.kind !== "ready" || !data) return <main className="grid min-h-screen place-items-center bg-bg px-6 text-ink" data-testid="desktop-inventory">
+    <div className="w-full max-w-[560px]">
+      {/* A submitted write whose authoritative reread failed must stay visible: dropping
+          it here would let the user retry a create that already committed. */}
+      {actionError && <p role="alert" className="mb-3 text-sm text-[#ad4545]">{actionError}</p>}
+      {view.kind === "loading"
+        ? <p role="status" className="text-sm text-muted">正在读取本机项目与任务</p>
+        : <div role="alert" className="border border-line bg-paper p-4 text-sm"><p>{view.error}</p><button className={`${button} mt-3`} type="button" onClick={() => void load()}>重试</button></div>}
+    </div>
+  </main>;
+  return shell(<div className="mx-auto w-full max-w-[1100px] px-4 py-5" data-testid="desktop-inventory">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2"><h1 className="text-lg font-semibold">项目与任务</h1>
         <div className="flex gap-2"><button className={button} type="button" disabled={busy || pendingCreate !== null} onClick={() => { setForm("create"); setDraft({ name: "", description: "", repositories: [], directories: [] }); setActionError(null); }}><Icon name="plus" />项目</button>
           <button className={button} type="button" disabled={busy} onClick={() => void importRoot()}><Icon name="folder" />找回任务根</button></div></div>
@@ -180,10 +237,8 @@ export function DesktopInventory() {
         setSelection({ kind: "project", id: projectId });
       }} />
       {actionError && <p role="alert" className="mb-3 text-sm text-[#ad4545]">{actionError}</p>}
-      {pendingCreate && view.kind === "ready" && <button className={`${button} mb-3`} type="button" onClick={() => void load()}>重新核验</button>}
-      {view.kind === "loading" && <p role="status" className="text-sm text-muted">正在读取本机项目与任务</p>}
-      {view.kind === "error" && <div role="alert" className="border border-line bg-paper p-4 text-sm"><p>{view.error}</p><button className={`${button} mt-3`} type="button" onClick={() => void load()}>重试</button></div>}
-      {view.kind === "ready" && data && <div className="grid gap-5 md:grid-cols-[220px_minmax(0,1fr)]">
+      {pendingCreate && <button className={`${button} mb-3`} type="button" onClick={() => void load()}>重新核验</button>}
+      <div className="grid gap-5 md:grid-cols-[220px_minmax(0,1fr)]">
         <nav aria-label="项目导航" className="min-w-0 border-b border-line pb-3 md:border-b-0 md:border-r md:pr-4">
           <h2 className="mb-2 text-xs font-semibold text-muted">项目 · {data.projects.length}</h2>
           <div className="flex gap-1 overflow-x-auto md:block md:space-y-1">{data.projects.map((item) => <button type="button" key={item.id} onClick={() => { setSelection({ kind: "project", id: item.id }); setForm(null); setDraft(null); setActionError(null); }} className={`block min-w-0 shrink-0 px-2 py-2 text-left text-sm md:w-full md:truncate ${project?.id === item.id ? "bg-paper font-semibold" : "hover:bg-paper"}`}>{item.name}</button>)}</div>
@@ -203,9 +258,8 @@ export function DesktopInventory() {
           {data.inventory.roots.filter((root) => root.state === "error").map((root) => <p role="alert" key={root.label} className="mt-3 text-xs text-[#ad4545]">{root.label}：{root.message}</p>)}
           <p className="mt-5 text-xs text-muted">仅显示默认及已登记任务根；其他位置需明确找回。</p>
         </div>
-      </div>}
-    </div>
-  </main>;
+      </div>
+    </div>);
 }
 
 function TaskRow({ row, name, projects, choice, setChoice, busy, open, act }: { row: TaskAssociation; name: string; projects: DesktopProject[]; choice: string; setChoice: (value: string) => void; busy: boolean; open: () => void; act: (request: Parameters<NonNullable<NonNullable<typeof window.pidock>["projectOp"]>>[0]) => Promise<void> }) {
