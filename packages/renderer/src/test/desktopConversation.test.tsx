@@ -41,7 +41,7 @@ function setup(taskId = "task-a") {
 }
 function mount(fixture: ReturnType<typeof setup>, taskId = "task-a") {
   window.pidock = fixture.bridge;
-  return render(<DesktopConversation taskId={taskId} name="Task" roots={JSON.stringify(roots)} association={JSON.stringify(association(taskId))} onBack={vi.fn()} />);
+  return render(<DesktopConversation taskId={taskId} name="Task" roots={JSON.stringify(roots)} association={JSON.stringify(association(taskId))} onBack={vi.fn()} onOpenProviders={vi.fn()} />);
 }
 const send = async (text: string) => {
   fireEvent.change(screen.getByRole("textbox", { name: "消息" }), { target: { value: text } });
@@ -106,7 +106,7 @@ describe("Desktop SDK conversation", () => {
     await screen.findByText(/尚未开始/);
     view.unmount(); expect(a.subscribed()).toBe(false);
     const b = setup("task-b"); window.pidock = b.bridge;
-    render(<DesktopConversation taskId="task-b" name="B" roots={JSON.stringify(roots)} association={JSON.stringify(association("task-b"))} onBack={vi.fn()} />);
+    render(<DesktopConversation taskId="task-b" name="B" roots={JSON.stringify(roots)} association={JSON.stringify(association("task-b"))} onBack={vi.fn()} onOpenProviders={vi.fn()} />);
     await screen.findByText(/尚未开始/);
     a.emit({ kind: "sdk-turn-event", event: { taskId: "task-a", sessionId: "main", turnId: "old", sequence: 1, type: "delta", text: "old" } });
     expect(screen.queryByText("old")).not.toBeInTheDocument();

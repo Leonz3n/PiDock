@@ -4,7 +4,7 @@ import { loadDesktopProjects, type DesktopProjects } from "../data/desktopProjec
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
-import { DesktopProviderPanel } from "./DesktopProviderPanel";
+import { PROVIDER_STATE_TEXT, parseProviderStatus, providerCall, type ProviderStatus } from "../data/providerProfile";
 import { DesktopToolDock, DESKTOP_TOOLS_UNWIRED, type DesktopTool } from "./DesktopToolDock";
 import { BrandMark, LocalUserAvatar } from "./ui";
 
@@ -70,7 +70,7 @@ function allowed(data: DesktopProjects, taskId: string): boolean {
     data.inventory.roots.every((root) => root.state === "ready");
 }
 
-export function DesktopConversation({ taskId, name, roots, association, onBack }: { taskId: string; name: string; roots: string; association: string; onBack: () => void }) {
+export function DesktopConversation({ taskId, name, roots, association, onBack, onOpenProviders }: { taskId: string; name: string; roots: string; association: string; onBack: () => void; onOpenProviders: () => void }) {
   const bridge = window.pidock;
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const recovered = useRef(readReceipt(taskId));
@@ -120,6 +120,7 @@ export function DesktopConversation({ taskId, name, roots, association, onBack }
   }, [request, taskId]);
   const [connectionKey, setConnectionKey] = useState(0);
   const [tool, setTool] = useState<DesktopTool | null>(null);
+  const [provider, setProvider] = useState<ProviderStatus | null>(null);
   const [unwired, setUnwired] = useState<string | null>(null);
   useEffect(() => {
     if (invalidated) { setConnected(false); setValid(false); return; }
@@ -254,6 +255,21 @@ export function DesktopConversation({ taskId, name, roots, association, onBack }
   ];
   // The provider is mounted here as well as at the app root: this component is
   // also rendered standalone (tests, embedded surfaces).
+  // Prototype A keeps the model entry in the composer, not in a strip above the
+  // history, so this is read-only summary text plus a way into the real
+  // 模型与 Provider page. Sending still fails closed with the Host's own reason.
+  useEffect(() => {
+    let live = true;
+    void (async () => {
+      try {
+        const status = parseProviderStatus(await providerCall(taskId, { op: "list" }));
+        if (live) setProvider(status);
+      } catch { if (live) setProvider(null); }
+    })();
+    return () => { live = false; };
+  }, [taskId]);
+  const selectedProfile = provider?.state === "configured" ? provider.profiles.find((entry) => entry.id === provider.profileId) : undefined;
+  const modelLabel = selectedProfile ? `${selectedProfile.name} · ${selectedProfile.modelId}` : provider ? "未配置模型" : "正在读取模型";
   return <TooltipProvider><main data-testid="desktop-conversation" className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-bg text-ink">
     <div className="shrink-0 border-b border-line bg-paper px-4 pt-3 below-mid:px-3">
       <div className="flex min-w-0 items-start gap-3">
@@ -286,7 +302,6 @@ export function DesktopConversation({ taskId, name, roots, association, onBack }
         <span className="pb-2 pl-1 text-[11px] text-muted">仅 main 会话</span>
       </div>
     </div>
-    <DesktopProviderPanel taskId={taskId} />
     {unwired && <p role="status" data-testid="desktop-unwired-tool" className="shrink-0 border-b border-line bg-soft px-4 py-1.5 text-[11px] text-muted">
       {unwired}面板未接线：{DESKTOP_TOOLS_UNWIRED.find((entry) => entry.label === unwired)?.reason ?? "生产读取路径尚未接线"}（不显示样例数据）
     </p>}
@@ -324,6 +339,9 @@ export function DesktopConversation({ taskId, name, roots, association, onBack }
           </TooltipTrigger><TooltipContent>附件未接线（#47 S8c）</TooltipContent></Tooltip>
           <Tooltip><TooltipTrigger asChild><Button type="button" size="sm" title="SDK 回合不申请写权限"><Icon name="shield" />默认权限</Button></TooltipTrigger><TooltipContent>SDK 回合不申请写权限</TooltipContent></Tooltip>
           <Tooltip><TooltipTrigger asChild><Button type="button" size="sm">推理 · 关闭</Button></TooltipTrigger><TooltipContent>模型与 Provider 在上方配置</TooltipContent></Tooltip>
+          <Tooltip><TooltipTrigger asChild>
+            <Button type="button" size="sm" onClick={onOpenProviders} title={provider ? PROVIDER_STATE_TEXT[provider.state] : "正在读取 Provider 配置"} data-testid="composer-model">{modelLabel}<Icon name="down" className="h-3 w-3" /></Button>
+          </TooltipTrigger><TooltipContent>{provider ? PROVIDER_STATE_TEXT[provider.state] : "正在读取 Provider 配置"}</TooltipContent></Tooltip>
           <span className="ml-auto shrink-0">{snapshot ? `本会话 ${sessionTokens} tokens` : "本会话 —"}</span>
           <Button type="submit" variant="default" size="icon" disabled={blocked || !draft.trim()} aria-label="发送" title="发送"><Icon name="arrow" /></Button>
         </div>
