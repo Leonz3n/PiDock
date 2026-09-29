@@ -59,7 +59,13 @@ async function run() {
     process.env[AUTH_REF] = CREDENTIAL;
     await app.whenReady();
     execFileSync("git", ["init", "-q", taskDir]);
-    writeFileSync(join(taskDir, "task.json"), serializeTaskRecord(buildTaskDiskRecord({ taskId, name: "对账单详情·本地联调", dirId: taskId, branch: "main", root: taskRoot, taskDir, remoteBranch: "main", baseCommit: "test", repos: [], now: new Date().toISOString() })));
+    // A real workspace root, so the 文件 panel lists real files: roots come from
+    // the task record's `repos`, each materialised under the task directory.
+    const repoDir = join(taskDir, "invoice-service");
+    mkdirSync(join(repoDir, "src"), { recursive: true });
+    writeFileSync(join(repoDir, "README.md"), "# invoice-service\n\n对账单详情服务的本地工作副本。\n");
+    writeFileSync(join(repoDir, "src", "billing.ts"), "export function invoiceTotal(lines: number[]) {\n  return lines.reduce((sum, value) => sum + value, 0);\n}\n");
+    writeFileSync(join(taskDir, "task.json"), serializeTaskRecord(buildTaskDiskRecord({ taskId, name: "对账单详情·本地联调", dirId: taskId, branch: "main", root: taskRoot, taskDir, remoteBranch: "main", baseCommit: "test", repos: ["invoice-service"], now: new Date().toISOString() })));
     const index = new TaskRootIndex(profile, taskRoot);
     const projects = new ProjectRegistry(profile);
     registry = new PerTaskHostRegistry("issue47", async (workspace, task) => {
@@ -76,8 +82,8 @@ async function run() {
     });
     const saved = profiles.save({ name: "Loopback", baseUrl: `http://127.0.0.1:${port}/v1`, modelId: "issue47-model", contextWindow: 200000, maxTokens: 8192, authRef: AUTH_REF });
     profiles.select(taskId, saved.id);
-    const project = projects.create({ name: "Adder", description: "微服务开发工作台", repositories: [], directories: [] });
-    projects.claim(taskId, project.id, index);
+    const project = await projects.create({ name: "Adder", description: "微服务开发工作台", repositories: [], directories: [] });
+    await projects.claim(taskId, project.id, index);
     views = await createTrustedWindow("issue47", "production");
     registerIpc({}, views.registry, registry, projects, index, undefined, undefined, providers);
     await loadTrustedViews(views);
@@ -90,8 +96,10 @@ async function run() {
     const text = () => evalJs("document.body.innerText");
     const diagnose = async () => JSON.stringify(await evalJs("({iw:window.innerWidth, text:document.body.innerText.slice(0,600), html:document.body.innerHTML.length, url:location.href, conv:Boolean(document.querySelector('[data-testid=desktop-conversation]')), shell:Boolean(document.querySelector('[data-testid=desktop-shell]'))})"));
     const until = async (match, label) => { for (let i = 0; i < 150; i++) { const body = await text(); if (match(body)) return body; await wait(100); } throw Error(`UI timeout (${label}): ${await diagnose()}`); };
-    const click = (name) => evalJs(`(() => { const b = [...document.querySelectorAll('button')].find(el => el.textContent.trim() === ${JSON.stringify(name)} || el.getAttribute('aria-label') === ${JSON.stringify(name)}); if (!b) throw Error('missing '+${JSON.stringify(name)}); b.click(); return true; })()`);
+    const click = (name) => evalJs(`(() => { const b = [...document.querySelectorAll('button')].find(el => el.textContent.trim() === ${JSON.stringify(name)} || el.getAttribute('aria-label') === ${JSON.stringify(name)}); if (!b) throw Error('missing '+${JSON.stringify(name)}+' :: '+document.body.innerText.replace(/\\n+/g,' | ').slice(0,500)); b.click(); return true; })()`);
     const type = (value) => evalJs(`(() => { const el = document.querySelector('textarea[aria-label="消息"]'); const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set; setter.call(el, ${JSON.stringify(value)}); el.dispatchEvent(new Event('input',{bubbles:true})); return el.value; })()`);
+    const clickText = (needle, scope = "document") => evalJs(`(() => { const b = [...${scope}.querySelectorAll('button')].find(el => el.textContent.includes(${JSON.stringify(needle)})); if (!b) throw Error('missing text '+${JSON.stringify(needle)}+' :: '+${scope}.innerText.replace(/\\n+/g,' | ').slice(0,400)); b.click(); return true; })()`);
+    const clickSelector = (selector) => evalJs(`(() => { const b = document.querySelector(${JSON.stringify(selector)}); if (!b) throw Error('missing '+${JSON.stringify(selector)}+' :: '+document.body.innerText.replace(/\\n+/g,' | ').slice(0,500)); b.click(); return true; })()`);
     const capture = async (label, width, height) => {
       views.window.setContentSize(width, height);
       await wait(250);
@@ -104,7 +112,9 @@ async function run() {
     const shots = [];
     await until((body) => body.includes("对账单详情·本地联调"), "shell list");
     shots.push(await capture("shell-tasks", 1440, 900));
-    await click("进入工作区");
+    // The task is claimed to the Project, so it is opened from its sidebar card
+    // (the unassigned list's 进入工作区 button is the other path).
+    await clickSelector(`[data-task-nav="${taskId}"]`);
     await until((body) => /task workspace/i.test(body), "task workspace");
     await type("帮我检查对账单详情中运单账号的信息。");
     // The workspace header renders before the SDK subscription completes; the send
@@ -124,6 +134,20 @@ async function run() {
     await until((body) => body.includes("当前任务已准备独立的工作副本"), "answer");
     await wait(400);
     shots.push(await capture("workspace-turn", 1440, 900));
+    // S8d: open the 文件 tool (real `task/fileRoots`/`fileTree`/`filePreview`) and
+    // drill into a real file, so the dock evidence is real rows, not a placeholder.
+    await click("文件");
+    await until((body) => body.includes("invoice-service"), "file roots");
+    await clickText("README.md", "document.querySelector('[data-testid=dock-tree]')");
+    await until((body) => body.includes("对账单详情服务的本地工作副本"), "file preview");
+    await wait(200);
+    shots.push(await capture("workspace-files", 1440, 900));
+    const dock = {
+      roots: await evalJs("document.querySelector('[data-testid=dock-roots]')?.innerText"),
+      tree: await evalJs("document.querySelector('[data-testid=dock-tree]')?.innerText"),
+      preview: await evalJs("document.querySelector('[data-testid=desktop-tool-dock] pre')?.innerText"),
+    };
+    await click("关闭面板");
     shots.push(await capture("workspace-turn", 720, 560));
     const body = await text();
     console.log("ISSUE47_CAPTURE=" + JSON.stringify({
@@ -132,6 +156,7 @@ async function run() {
       breadcrumb: await evalJs("document.querySelector('[data-testid=desktop-breadcrumb]').innerText"),
       sessionTabs: await evalJs("document.querySelector('[role=tablist]')?.innerText"),
       credentialVisible: body.includes(CREDENTIAL),
+      dock,
       providerState: await evalJs("document.querySelector('[data-testid=provider-state]')?.textContent"),
       jsonlBytes: readdirSync(join(taskDir, ".pidock-sdk-sessions", "main")).filter((name) => name.endsWith(".jsonl"))
         .reduce((sum, name) => sum + readFileSync(join(taskDir, ".pidock-sdk-sessions", "main", name), "utf8").length, 0),
