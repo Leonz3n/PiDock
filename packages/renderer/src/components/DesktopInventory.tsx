@@ -13,6 +13,7 @@ import { DesktopAttentionPage } from "./DesktopAttentionPage";
 import { DesktopEnvironmentPage } from "./DesktopEnvironmentPage";
 import { DesktopRemotePage } from "./DesktopRemotePage";
 import { DesktopCapabilitiesPage } from "./DesktopCapabilitiesPage";
+import { DesktopSettingsPage } from "./DesktopSettingsPage";
 import { lifecycleStateThroughShell } from "../data/shellBridge";
 import { loadDesktopProjects, parseDesktopProject, projectOperation, type DesktopProject, type DesktopProjects, type ProjectInput, type ProjectSource, type TaskAssociation } from "../data/desktopProjects";
 
@@ -350,6 +351,7 @@ export function DesktopInventory() {
   />);
   if (activeTask) return shell(<DesktopConversation key={activeTask.id} taskId={activeTask.id} name={activeTask.name} roots={activeTask.roots} association={activeTask.association} onBack={() => { entryEpoch.current++; setActiveTask(null); void load(); }} onOpenProviders={() => navigate({ view: "providers" })} onArchived={() => { navigate({ view: "archive" }); void load(); }} />);
   if (unwired === "capabilities") return shell(<DesktopCapabilitiesPage />);
+  if (unwired === "settings") return shell(<DesktopSettingsPage />);
   if (unwired) return shell(<DesktopUnwired name={DESKTOP_LABELS[unwired]} onBack={() => navigate({ view: "unassigned" })} />);
   if (view.kind !== "ready" || !data) return <main className="grid min-h-screen place-items-center bg-bg px-6 text-ink" data-testid="desktop-inventory">
     <div className="w-full max-w-[560px]">

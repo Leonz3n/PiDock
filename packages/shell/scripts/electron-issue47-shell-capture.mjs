@@ -214,6 +214,14 @@ async function run() {
     };
     await clickSelector('[data-testid=desktop-capabilities-page] [role=tab][aria-selected=false]');
     await until((body) => body.includes("Host 尚未提供 MCP Servers 的真实清单"), "MCP capability tab");
+    await clickSelector('[data-testid=desktop-shell] button[title="本机设置"]');
+    await until((body) => body.includes("默认任务根目录") && body.includes("权威配置路径"), "settings page");
+    shots.push(await capture("settings-page", 1440, 900));
+    shots.push(await capture("settings-page", 720, 560));
+    const settings = {
+      saveDisabled: await evalJs("[...document.querySelectorAll('[data-testid=desktop-settings-page] button')].find(el => el.textContent.includes('保存设置'))?.disabled"),
+      rootDisabled: await evalJs("document.querySelector('[data-testid=desktop-settings-page] input')?.disabled"),
+    };
     views.window.setContentSize(1440, 900);
     await wait(250);
     await clickSelector('[data-testid=desktop-shell] button[title="定时任务"]');
@@ -293,6 +301,7 @@ async function run() {
       usage,
       environment,
       capabilities,
+      settings,
       schedules,
       attention,
       remote,
