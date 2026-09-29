@@ -54,6 +54,7 @@ function startProvider() {
 }
 
 async function run() {
+  let captureStage = "startup";
   try {
     const port = await startProvider();
     process.env[AUTH_REF] = CREDENTIAL;
@@ -106,12 +107,18 @@ async function run() {
     const clickText = (needle, scope = "document") => evalJs(`(() => { const b = [...${scope}.querySelectorAll('button')].find(el => el.textContent.includes(${JSON.stringify(needle)})); if (!b) throw Error('missing text '+${JSON.stringify(needle)}+' :: '+${scope}.innerText.replace(/\\n+/g,' | ').slice(0,400)); b.click(); return true; })()`);
     const clickSelector = (selector) => evalJs(`(() => { const b = document.querySelector(${JSON.stringify(selector)}); if (!b) throw Error('missing '+${JSON.stringify(selector)}+' :: '+document.body.innerText.replace(/\\n+/g,' | ').slice(0,500)); b.click(); return true; })()`);
     const capture = async (label, width, height) => {
+      captureStage = `${label} ${width}x${height}`;
       views.window.setContentSize(width, height);
       await wait(250);
       const size = views.window.getContentBounds();
       const state = await evalJs("({scrollWidth:document.documentElement.scrollWidth,innerWidth:window.innerWidth})");
       const file = join(output, `${width}x${height}-${label}.png`);
-      writeFileSync(file, (await views.shellView.webContents.capturePage()).toPNG());
+      let image;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try { image = await views.shellView.webContents.capturePage(); break; }
+        catch (error) { if (attempt === 2) throw error; await wait(500); }
+      }
+      writeFileSync(file, image.toPNG());
       return { file, width: size.width, height: size.height, overflow: state.scrollWidth - state.innerWidth };
     };
     const shots = [];
@@ -197,6 +204,18 @@ async function run() {
       environment: await evalJs("document.querySelector('select[aria-label=环境]')?.selectedOptions[0]?.textContent"),
       placeholders: await evalJs("document.querySelectorAll('[data-testid=desktop-environment-page] button:disabled').length"),
     };
+    await clickSelector('[data-testid=desktop-shell] button[title="能力管理"]');
+    await until((body) => body.includes("Host 尚未提供 Skills 的真实清单"), "capabilities page");
+    shots.push(await capture("capabilities-page", 1440, 900));
+    shots.push(await capture("capabilities-page", 720, 560));
+    const capabilities = {
+      unwiredSummaries: await evalJs("document.querySelectorAll('[aria-label=能力汇总] strong').length"),
+      addDisabled: await evalJs("document.querySelector('[data-testid=desktop-capabilities-page] button[title]')?.disabled"),
+    };
+    await clickSelector('[data-testid=desktop-capabilities-page] [role=tab][aria-selected=false]');
+    await until((body) => body.includes("Host 尚未提供 MCP Servers 的真实清单"), "MCP capability tab");
+    views.window.setContentSize(1440, 900);
+    await wait(250);
     await clickSelector('[data-testid=desktop-shell] button[title="定时任务"]');
     await until((body) => body.includes("当前筛选下没有定时任务。"), "schedules page");
     shots.push(await capture("schedules-page", 1440, 900));
@@ -273,6 +292,7 @@ async function run() {
       providers: providersPage,
       usage,
       environment,
+      capabilities,
       schedules,
       attention,
       remote,
@@ -283,7 +303,7 @@ async function run() {
       jsonlBytes: readdirSync(join(taskDir, ".pidock-sdk-sessions", "main")).filter((name) => name.endsWith(".jsonl"))
         .reduce((sum, name) => sum + readFileSync(join(taskDir, ".pidock-sdk-sessions", "main", name), "utf8").length, 0),
     }));
-  } catch (error) { console.error("ISSUE47_CAPTURE_FAILED", error); process.exitCode = 1; }
+  } catch (error) { console.error("ISSUE47_CAPTURE_FAILED", captureStage, error); process.exitCode = 1; }
   finally {
     clearTimeout(watchdog);
     server?.close();

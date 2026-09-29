@@ -12,6 +12,7 @@ import { DesktopArchivePage, parseLifecycle } from "./DesktopArchivePage";
 import { DesktopAttentionPage } from "./DesktopAttentionPage";
 import { DesktopEnvironmentPage } from "./DesktopEnvironmentPage";
 import { DesktopRemotePage } from "./DesktopRemotePage";
+import { DesktopCapabilitiesPage } from "./DesktopCapabilitiesPage";
 import { lifecycleStateThroughShell } from "../data/shellBridge";
 import { loadDesktopProjects, parseDesktopProject, projectOperation, type DesktopProject, type DesktopProjects, type ProjectInput, type ProjectSource, type TaskAssociation } from "../data/desktopProjects";
 
@@ -313,6 +314,8 @@ export function DesktopInventory() {
     ? { ...(activeProject ? { project: activeProject.name } : selectedProject ? { project: selectedProject.name } : {}), page: "模型与 Provider" }
     : activeTask
     ? { ...(activeProject ? { project: activeProject.name } : {}), task: activeTask.name }
+    : unwired
+    ? { ...(selectedProject ? { project: selectedProject.name } : {}), page: DESKTOP_LABELS[unwired] }
     : selectedProject
       ? { project: selectedProject.name, page: manage ? "项目管理" : "项目总览" }
       : selection.kind === "unassigned"
@@ -346,6 +349,7 @@ export function DesktopInventory() {
     onOpenTask={(taskId) => navigate({ view: "task", taskId })}
   />);
   if (activeTask) return shell(<DesktopConversation key={activeTask.id} taskId={activeTask.id} name={activeTask.name} roots={activeTask.roots} association={activeTask.association} onBack={() => { entryEpoch.current++; setActiveTask(null); void load(); }} onOpenProviders={() => navigate({ view: "providers" })} onArchived={() => { navigate({ view: "archive" }); void load(); }} />);
+  if (unwired === "capabilities") return shell(<DesktopCapabilitiesPage />);
   if (unwired) return shell(<DesktopUnwired name={DESKTOP_LABELS[unwired]} onBack={() => navigate({ view: "unassigned" })} />);
   if (view.kind !== "ready" || !data) return <main className="grid min-h-screen place-items-center bg-bg px-6 text-ink" data-testid="desktop-inventory">
     <div className="w-full max-w-[560px]">
