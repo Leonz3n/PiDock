@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { Icon } from "./Icon";
 import { DesktopTaskCreation } from "./DesktopTaskCreation";
+import { DesktopConversation } from "./DesktopConversation";
 import { desktopMode, importDesktopTaskRoot } from "../data/desktopInventory";
 import { loadDesktopProjects, parseDesktopProject, projectOperation, type DesktopProject, type DesktopProjects, type ProjectInput, type ProjectSource, type TaskAssociation } from "../data/desktopProjects";
 
@@ -68,6 +69,22 @@ export function DesktopInventory() {
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [choice, setChoice] = useState<Record<string, string>>({});
+  const [activeTask, setActiveTask] = useState<{ id: string; name: string; roots: string; association: string } | null>(null);
+  const entryEpoch = useRef(0);
+  const openTask = async (taskId: string) => {
+    const epoch = ++entryEpoch.current;
+    setBusy(true); setActionError(null);
+    try {
+      const fresh = await loadDesktopProjects(window.pidock ?? {});
+      if (epoch !== entryEpoch.current) return;
+      setView({ kind: "ready", data: fresh });
+      const row = fresh.associations.find((item) => item.taskId === taskId);
+      const task = fresh.inventory.tasks.find((item) => item.taskId === taskId);
+      if (!task || !row || (row.state !== "assigned" && row.state !== "unassigned") || fresh.inventory.roots.some((root) => root.state !== "ready")) throw new Error("任务或任务根不可用，请重新选择");
+      setActiveTask({ id: taskId, name: task.name, roots: JSON.stringify(fresh.inventory.roots), association: JSON.stringify(row) });
+    } catch (error) { if (epoch === entryEpoch.current) setActionError(errorMessage(error)); }
+    finally { if (epoch === entryEpoch.current) setBusy(false); }
+  };
   const load = useCallback(async (): Promise<boolean> => {
     setView({ kind: "loading" });
     try {
@@ -151,6 +168,7 @@ export function DesktopInventory() {
       }
     });
   };
+  if (activeTask) return <DesktopConversation key={activeTask.id} taskId={activeTask.id} name={activeTask.name} roots={activeTask.roots} association={activeTask.association} onBack={() => { entryEpoch.current++; setActiveTask(null); void load(); }} />;
   return <main className="min-h-screen bg-bg text-ink" data-testid="desktop-inventory">
     <header className="flex items-center justify-between border-b border-line bg-paper px-4 py-3 text-sm font-semibold">PiDock <span className="text-xs font-normal text-muted">本机工作区</span></header>
     <div className="mx-auto w-full max-w-[1100px] px-4 py-5">
@@ -180,20 +198,20 @@ export function DesktopInventory() {
             <Sources title="仓库" rows={project.repositories} /><Sources title="普通目录" rows={project.directories} /></> : <h2 className="text-base font-semibold">未归属任务</h2>}
           <section className="mt-6"><h3 className="border-b border-line pb-2 text-xs font-semibold text-muted">任务 · {shown?.length ?? 0}</h3>
             {!shown?.length && <p className="py-5 text-sm text-muted">{project ? "此项目暂无任务" : "已检查的任务根暂无未归属任务"}</p>}
-            <ul className="divide-y divide-line">{shown?.map((row) => <TaskRow key={row.taskId} row={row} name={taskMap.get(row.taskId)?.name ?? row.taskId} projects={data.projects} choice={choice[row.taskId] ?? ""} setChoice={(value) => setChoice((prev) => ({ ...prev, [row.taskId]: value }))} busy={busy} act={operate} />)}</ul>
+            <ul className="divide-y divide-line">{shown?.map((row) => <TaskRow key={row.taskId} row={row} name={taskMap.get(row.taskId)?.name ?? row.taskId} projects={data.projects} choice={choice[row.taskId] ?? ""} setChoice={(value) => setChoice((prev) => ({ ...prev, [row.taskId]: value }))} busy={busy} open={() => void openTask(row.taskId)} act={operate} />)}</ul>
           </section>
           {data.inventory.roots.filter((root) => root.state === "error").map((root) => <p role="alert" key={root.label} className="mt-3 text-xs text-[#ad4545]">{root.label}：{root.message}</p>)}
-          <p className="mt-5 text-xs text-muted">仅显示默认及已登记任务根；其他位置需明确找回。Agent 对话尚未接线。</p>
+          <p className="mt-5 text-xs text-muted">仅显示默认及已登记任务根；其他位置需明确找回。</p>
         </div>
       </div>}
     </div>
   </main>;
 }
 
-function TaskRow({ row, name, projects, choice, setChoice, busy, act }: { row: TaskAssociation; name: string; projects: DesktopProject[]; choice: string; setChoice: (value: string) => void; busy: boolean; act: (request: Parameters<NonNullable<NonNullable<typeof window.pidock>["projectOp"]>>[0]) => Promise<void> }) {
+function TaskRow({ row, name, projects, choice, setChoice, busy, open, act }: { row: TaskAssociation; name: string; projects: DesktopProject[]; choice: string; setChoice: (value: string) => void; busy: boolean; open: () => void; act: (request: Parameters<NonNullable<NonNullable<typeof window.pidock>["projectOp"]>>[0]) => Promise<void> }) {
   const options = projects.filter((project) => project.id !== row.projectId);
   return <li className="min-w-0 py-3 text-sm"><div className="flex flex-wrap items-center justify-between gap-2"><div className="min-w-0"><strong className="block truncate font-medium">{name}</strong><span className="text-xs text-muted">{row.taskId}{row.state === "needs-repair" ? " · 关联待修复" : row.state === "unavailable" ? " · 任务不可用，请检查任务根" : ""}</span></div>
-    <div className="flex flex-wrap gap-1"><select className={`${field} max-w-[145px]`} aria-label={`${name} 目标项目`} value={choice} disabled={busy || row.state === "needs-repair" || row.state === "unavailable"} onChange={(event) => setChoice(event.target.value)}><option value="">选择项目</option>{options.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select>
+    <div className="flex flex-wrap gap-1"><button type="button" className={button} disabled={busy || row.state === "needs-repair" || row.state === "unavailable"} onClick={open}>进入工作区</button><select className={`${field} max-w-[145px]`} aria-label={`${name} 目标项目`} value={choice} disabled={busy || row.state === "needs-repair" || row.state === "unavailable"} onChange={(event) => setChoice(event.target.value)}><option value="">选择项目</option>{options.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select>
       <button type="button" className={button} disabled={busy || !choice || row.state === "needs-repair" || row.state === "unavailable"} onClick={() => void act(row.projectId ? { op: "transfer", taskId: row.taskId, fromProjectId: row.projectId, toProjectId: choice } : { op: "claim", taskId: row.taskId, projectId: choice })}>{row.projectId ? "转移" : "认领"}</button>
       {row.projectId && <button type="button" className={button} disabled={busy} onClick={() => void act({ op: "unlink", taskId: row.taskId, expectedProjectId: row.projectId! })}>解绑</button>}</div></div></li>;
 }

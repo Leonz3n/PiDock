@@ -24,6 +24,8 @@ export interface PidockBridge {
   projectOp?: (request: { op: "list" | "get" | "create" | "update" | "rename" | "delete" | "association" | "associations" | "claim" | "unlink" | "transfer"; projectId?: string; name?: string; input?: unknown; taskId?: string; expectedProjectId?: string; fromProjectId?: string; toProjectId?: string }) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
   createTask?: (request: { op: "current" | "prepare" | "commit" | "abandon"; input?: unknown; id?: string }) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
   taskOp?: (taskId: string, op: string, payload?: Record<string, unknown>) => Promise<ShellTaskOpResult>;
+  sdkTurn?: (request: Record<string, unknown>) => Promise<ShellTaskOpResult>;
+  onSdkTurnEvent?: (listener: (event: unknown) => void) => () => void;
 }
 
 declare global {

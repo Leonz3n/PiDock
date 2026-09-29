@@ -380,6 +380,25 @@ describe("Desktop production data", () => {
     expect(demoRead).not.toHaveBeenCalled();
   });
 
+  it("opens a freshly verified assigned task in the fixed SDK main session and returns without DemoApp", async () => {
+    const sdkTurn = vi.fn(async (request: Record<string, unknown>) => ({ ok: true, payload: request.action === "subscribe" ?
+      { taskId: "real-1", sessionId: "main", snapshot: { source: "sdk-jsonl", sessionId: "main", messages: [], pending: false, interrupted: false }, turn: null } :
+      { unsubscribed: true } }));
+    const shell = { ...bridge({ assigned: true }), sdkTurn, onSdkTurnEvent: vi.fn(() => vi.fn()) };
+    window.pidock = shell;
+    const demoRead = vi.spyOn(memoryHost, "getWorkspace");
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "真实项目" }));
+    fireEvent.click(screen.getByRole("button", { name: "进入工作区" }));
+    expect(await screen.findByText(/尚未开始/)).toBeInTheDocument();
+    expect(sdkTurn).toHaveBeenCalledWith({ action: "subscribe", taskId: "real-1", sessionId: "main" });
+    expect(shell.listTasks).toHaveBeenCalledTimes(3);
+    expect(demoRead).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "返回任务列表" }));
+    expect(await screen.findByRole("heading", { name: "真实项目" })).toBeInTheDocument();
+    await waitFor(() => expect(sdkTurn).toHaveBeenCalledWith({ action: "unsubscribe", taskId: "real-1", sessionId: "main" }));
+  });
+
   it("fails visibly without bridge and retains native task root import", async () => {
     const original = Object.getOwnPropertyDescriptor(window.navigator, "userAgent");
     Object.defineProperty(window.navigator, "userAgent", { configurable: true, value: "Electron/44" });
