@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { Icon } from "./Icon";
 import { loadDesktopProjects, type DesktopProjects } from "../data/desktopProjects";
+import { DesktopProviderPanel } from "./DesktopProviderPanel";
 
 const sessionId = "main";
 const button = "inline-flex min-h-8 items-center justify-center gap-1.5 border border-line bg-paper px-2.5 py-1 text-xs hover:bg-bg disabled:cursor-not-allowed disabled:opacity-50";
@@ -237,6 +238,7 @@ export function DesktopConversation({ taskId, name, roots, association, onBack }
       <div className="min-w-0"><h1 className="truncate text-sm font-semibold">{name}</h1><p className="truncate text-xs text-muted">{taskId} · SDK / main</p></div>
       <button type="button" className={`${button} ml-auto`} onClick={() => void refresh()} title="核验状态"><Icon name="refresh" /><span>核验</span></button>
     </header>
+    <DesktopProviderPanel taskId={taskId} />
     <section aria-label="SDK 对话历史" className="mx-auto w-full max-w-[820px] min-h-0 min-w-0 flex-1 space-y-3 overflow-y-auto px-3 py-4">
       <p className="text-xs text-muted">SDK JSONL 已确认历史 · 最近最多 80 条</p>
       {snapshot && !snapshot.messages.length && <p className="py-8 text-center text-sm text-muted">尚未开始 · 无 SDK 会话记录</p>}

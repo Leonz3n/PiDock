@@ -19,6 +19,9 @@ function setup(taskId = "task-a") {
     listTasks: vi.fn(async () => unreadable ? { ok: false, error: "root unreadable" } : { ok: true, payload: { tasks: [{ taskId, name: "Task", branch: "main", repoCount: 0, updatedAt: "now" }], roots } }),
     projectOp: vi.fn(async (request) => ({ ok: true, payload: request.op === "list" ? { initialized: true, projects: [] } : { roots, tasks: [{ ...association(taskId), state: associationState }] } })),
     onSdkTurnEvent: vi.fn((callback) => { listener = callback; return () => { listener = undefined; }; }),
+    // Production always serves this channel; the panel must show a real state,
+    // not an error, in the ordinary unconfigured case.
+    providerOp: vi.fn(async () => ({ ok: true, payload: { state: "not-configured", profileId: null, generation: null, profiles: [] } })),
     sdkTurn: vi.fn(async (request) => {
       calls.push(request);
       if (request.action === "subscribe") return { ok: true, payload: { taskId, sessionId: "main", snapshot: snapshot(messages), turn: status } };

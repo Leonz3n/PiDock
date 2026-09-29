@@ -30,6 +30,7 @@ import { defaultTasksRoot } from "./task-resolver.js";
 import { TaskRootIndex } from "./task-root-index.js";
 import { ProjectRegistry } from "./project-registry.js";
 import { performProjectOperation } from "./project-ipc.js";
+import type { ProviderWiring } from "./provider-ipc.js";
 import { ProjectTaskCreation } from "./project-task-creation.js";
 import { performCreationOperation } from "./project-task-ipc.js";
 import type { BrowserPerformResult, BrowserRequestParams, HostTaskOp, HostTaskResult, TaskOpOrigin } from "../rpc/protocol.js";
@@ -733,6 +734,7 @@ export function registerIpc(
     return result.canceled ? null : result.filePaths[0] ?? null;
   },
   creation?: ProjectTaskCreation,
+  providers?: ProviderWiring,
 ): void {
   type TurnMessage = Parameters<Parameters<HostClient["onTurnEvent"]>[0]>[0];
   type PendingStart = { requestId: string; buffered: TurnMessage[]; bytes: number; overflow: boolean };
@@ -1036,6 +1038,20 @@ export function registerIpc(
     }
   });
 
+  ipcMain.handle("shell/providerOp", async (event, payload?: unknown) => {
+    try {
+      const sender = registry.requireShellSender(event);
+      if (!providers) return { ok: false as const, error: "Provider 配置尚未接入" };
+      // Sender-scoped, never payload-scoped: main attests this webContents to
+      // the task Host when it installs a selection or restores one.
+      const result = await providers.perform(payload, sender.webContentsId);
+      return { ok: true as const, payload: result };
+    } catch (error) {
+      if (error instanceof TrustDomainViolation) return trustFailureEnvelope(error);
+      return { ok: false as const, error: "Provider 配置操作失败，请检查本机凭据环境后重试" };
+    }
+  });
+
   ipcMain.handle("shell/projectOp", async (event, payload?: unknown) => {
     try {
       registry.requireShellSender(event);
@@ -1075,6 +1091,11 @@ export function registerIpc(
         throw new TrustDomainViolation("invalid-payload", `unknown task op: ${String(op)}`);
       }
       if (pendingNavigation.has(sender.webContentsId) || subscriptions.get(sender.webContentsId)?.taskId !== taskId) revoke(sender.webContentsId);
+      // A persisted Provider selection is reinstalled on first contact with the
+      // task, before any turn op can run against an unconfigured context. The
+      // status route reports failures, so an install failure never turns an
+      // unrelated op into an error.
+      if (providers) { try { await providers.ensure(taskId, sender.webContentsId); } catch { /* surfaced by shell/providerOp list */ } }
       const opPayload =
         typeof record["payload"] === "object" && record["payload"] !== null
           ? (record["payload"] as Record<string, unknown>)
