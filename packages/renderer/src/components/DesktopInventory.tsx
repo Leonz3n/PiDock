@@ -8,6 +8,8 @@ import { DesktopProvidersPage } from "./DesktopProvidersPage";
 import { DesktopProjectOverview } from "./DesktopProjectOverview";
 import { DesktopUsagePage } from "./DesktopUsagePage";
 import { DesktopSchedulesPage } from "./DesktopSchedulesPage";
+import { DesktopArchivePage, parseLifecycle } from "./DesktopArchivePage";
+import { lifecycleStateThroughShell } from "../data/shellBridge";
 import { loadDesktopProjects, parseDesktopProject, projectOperation, type DesktopProject, type DesktopProjects, type ProjectInput, type ProjectSource, type TaskAssociation } from "../data/desktopProjects";
 
 export { desktopMode };
@@ -89,6 +91,8 @@ export function DesktopInventory() {
   const [usageTaskId, setUsageTaskId] = useState<string | null>(null);
   const [usageOpen, setUsageOpen] = useState(false);
   const [schedulesOpen, setSchedulesOpen] = useState(false);
+  const [archiveOpen, setArchiveOpen] = useState(false);
+  const [lifecycleIndex, setLifecycleIndex] = useState<{ data: DesktopProjects; activeIds: Set<string>; errors: string[] } | null>(null);
   // Prototype A opens on the first project. An explicit pick (shell nav or the
   // management list) wins and is never overridden by a later reread.
   const pinned = useRef(false);
@@ -103,6 +107,10 @@ export function DesktopInventory() {
       const row = fresh.associations.find((item) => item.taskId === taskId);
       const task = fresh.inventory.tasks.find((item) => item.taskId === taskId);
       if (!task || !row || (row.state !== "assigned" && row.state !== "unassigned") || fresh.inventory.roots.some((root) => root.state !== "ready")) throw new Error("任务或任务根不可用，请重新选择");
+      const lifecycle = await lifecycleStateThroughShell(taskId);
+      if (epoch !== entryEpoch.current) return;
+      if (!lifecycle.ok) throw new Error(lifecycle.error ?? "任务归档状态读取失败");
+      if (parseLifecycle(lifecycle.payload, taskId).archived) throw new Error("该任务已归档，请先从已归档页恢复");
       setActiveTask({ id: taskId, name: task.name, roots: JSON.stringify(fresh.inventory.roots), association: JSON.stringify(row) });
     } catch (error) { if (epoch === entryEpoch.current) setActionError(errorMessage(error)); }
     finally { if (epoch === entryEpoch.current) setBusy(false); }
@@ -145,6 +153,23 @@ export function DesktopInventory() {
       setDraft(null);
     }
   }, [view, selection]);
+  useEffect(() => {
+    if (view.kind !== "ready" || !view.data) return;
+    const current = view.data;
+    let live = true;
+    void Promise.all(current.inventory.tasks.map(async (task) => {
+      try {
+        const response = await lifecycleStateThroughShell(task.taskId);
+        if (!response.ok) throw new Error(response.error ?? "读取失败");
+        return { taskId: task.taskId, archived: parseLifecycle(response.payload, task.taskId).archived, error: "" };
+      } catch (error) {
+        return { taskId: task.taskId, archived: true, error: `${task.name}：${errorMessage(error)}` };
+      }
+    })).then((states) => {
+      if (live) setLifecycleIndex({ data: current, activeIds: new Set(states.filter((row) => !row.archived).map((row) => row.taskId)), errors: states.map((row) => row.error).filter(Boolean) });
+    });
+    return () => { live = false; };
+  }, [view]);
   const run = async (action: () => Promise<unknown>) => {
     setBusy(true); setActionError(null);
     try {
@@ -201,11 +226,15 @@ export function DesktopInventory() {
     projectId: ready?.associations.find((row) => row.taskId === task.taskId)?.projectId ?? null,
   })), [ready]);
   const shellProjects = (ready?.projects ?? []).map((project) => ({ id: project.id, name: project.name, description: project.description }));
+  const lifecycleReady = lifecycleIndex?.data === ready && lifecycleIndex !== null;
+  const activeTasks = lifecycleReady ? shellTasks.filter((task) => lifecycleIndex?.activeIds.has(task.taskId)) : [];
   const selectedProject = selection.kind === "project" ? shellProjects.find((project) => project.id === selection.id) : undefined;
   const shellView: DesktopView = providers
     ? { view: "providers" }
     : schedulesOpen
       ? { view: "schedules" }
+    : archiveOpen
+      ? { view: "archive" }
     : usageOpen
       ? { view: "usage" }
     : activeTask
@@ -224,6 +253,7 @@ export function DesktopInventory() {
       setUnwired(null);
       setUsageOpen(false);
       setSchedulesOpen(false);
+      setArchiveOpen(false);
       setUsageTaskId(null);
       setProviders(false);
       void openTask(next.taskId);
@@ -233,10 +263,11 @@ export function DesktopInventory() {
     setProviders(next.view === "providers");
     setUsageOpen(next.view === "usage");
     setSchedulesOpen(next.view === "schedules");
+    setArchiveOpen(next.view === "archive");
     if (next.view === "providers") return;
     if (next.view === "project" || next.view === "unassigned") setManage(false);
     if (next.view === "usage") { setUsageTaskId(activeTask?.id ?? (shellTasks[0]?.taskId ?? null)); return; }
-    if (next.view === "schedules") { setActiveTask(null); setUnwired(null); return; }
+    if (next.view === "schedules" || next.view === "archive") { setActiveTask(null); setUnwired(null); return; }
     // Any other page leaves the usage view.
     setUsageTaskId(null);
     setActiveTask(null);
@@ -247,7 +278,9 @@ export function DesktopInventory() {
   const activeProject = activeTask
     ? shellProjects.find((project) => project.id === shellTasks.find((task) => task.taskId === activeTask.id)?.projectId)
     : undefined;
-  const breadcrumb = schedulesOpen
+  const breadcrumb = archiveOpen
+    ? { ...(selectedProject ? { project: selectedProject.name } : {}), page: "已归档" }
+    : schedulesOpen
     ? { ...(selectedProject ? { project: selectedProject.name } : {}), page: "定时任务" }
     : usageOpen
     ? { ...(activeProject ? { project: activeProject.name } : selectedProject ? { project: selectedProject.name } : {}), page: "Token 用量" }
@@ -264,10 +297,14 @@ export function DesktopInventory() {
     view={shellView}
     onNavigate={navigate}
     projects={shellProjects}
-    tasks={shellTasks}
+    tasks={activeTasks}
+    allTaskCount={shellTasks.length}
+    lifecyclePending={!lifecycleReady}
+    lifecycleErrors={lifecycleReady ? lifecycleIndex?.errors ?? [] : []}
     roots={ready?.inventory.roots ?? []}
     breadcrumb={breadcrumb}
   >{children}</DesktopShell>;
+  if (archiveOpen) return shell(<DesktopArchivePage tasks={shellTasks} onRestored={() => { void load(); }} />);
   if (schedulesOpen) return shell(<DesktopSchedulesPage tasks={shellTasks} onOpenTask={(taskId) => navigate({ view: "task", taskId })} />);
   if (usageOpen) return shell(<DesktopUsagePage
     tasks={shellTasks}
@@ -295,7 +332,8 @@ export function DesktopInventory() {
   const overviewProject = selection.kind === "project" ? data.projects.find((item) => item.id === selection.id) ?? null : null;
   if (!manage) return shell(<DesktopProjectOverview
     project={overviewProject}
-    tasks={shellTasks}
+    tasks={activeTasks}
+    lifecyclePending={!lifecycleReady || (lifecycleIndex?.errors.length ?? 0) > 0}
     associations={data.associations}
     roots={data.inventory.roots}
     onOpenTask={(taskId) => void openTask(taskId)}

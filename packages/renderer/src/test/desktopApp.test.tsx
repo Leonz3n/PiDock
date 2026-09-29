@@ -16,6 +16,7 @@ const project = { id: "bcedc870-22bd-474e-ac55-78d30a9d763d", name: "真实项�
 const bridge = (settings: { projectPresent?: boolean; assigned?: boolean; fail?: string } = {}): PidockBridge => ({
   listTasks: vi.fn(async () => ({ ok: true, payload: { tasks, roots } })),
   importTaskRoot: vi.fn(async () => ({ ok: true, payload: { canceled: false, count: 1 } })),
+  taskOp: vi.fn(async (taskId, op) => ({ ok: true, payload: { lifecycle: { taskId, archived: false, archivedAt: null }, op } })),
   projectOp: vi.fn(async (request) => {
     if (settings.fail) return { ok: false, error: settings.fail };
     if (request.op === "list") return { ok: true, payload: { initialized: settings.projectPresent ?? true, projects: settings.projectPresent === false ? [] : [project] } };
@@ -27,6 +28,25 @@ const bridge = (settings: { projectPresent?: boolean; assigned?: boolean; fail?:
 afterEach(() => { cleanup(); delete window.pidock; vi.restoreAllMocks(); });
 
 describe("Desktop production data", () => {
+  it("keeps archived tasks out of active navigation until the Host restores them", async () => {
+    let archived = true;
+    const taskOp = vi.fn(async (taskId: string, op: string) => {
+      if (op === "task/restore") archived = false;
+      return { ok: true, payload: { lifecycle: { taskId, archived, archivedAt: archived ? "2026-09-29T09:00:00Z" : null } } };
+    });
+    window.pidock = { ...bridge({ assigned: true }), taskOp };
+    render(<App />);
+    await waitFor(() => expect(screen.getByTestId("overview-task-count")).toHaveTextContent("0"));
+    expect(screen.queryByRole("button", { name: /真实任务/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "已归档" }));
+    expect(await screen.findByText("真实任务")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "恢复" }));
+    await waitFor(() => expect(taskOp).toHaveBeenCalledWith("real-1", "task/restore", {}));
+    fireEvent.click(screen.getByRole("button", { name: "项目总览" }));
+    await waitFor(() => expect(screen.getByTestId("overview-task-count")).toHaveTextContent("1"));
+    expect(screen.getAllByRole("button", { name: /真实任务/ }).length).toBeGreaterThan(0);
+  });
+
   it("opens usage without a task and switches cleanly to Provider and schedules", async () => {
     const taskOp = vi.fn(async () => ({ ok: true, payload: { schedules: [], runs: [] } }));
     window.pidock = { ...bridge(), listTasks: vi.fn(async () => ({ ok: true, payload: { tasks: [], roots } })), projectOp: vi.fn(async (request) => request.op === "list"
@@ -79,7 +99,7 @@ describe("Desktop production data", () => {
       if (request.op === "claim") data.assigned = true;
       return { ok: true, payload: {} };
     });
-    window.pidock = { listTasks: vi.fn(async () => ({ ok: true, payload: { tasks, roots } })), projectOp };
+    window.pidock = { ...bridge(), listTasks: vi.fn(async () => ({ ok: true, payload: { tasks, roots } })), projectOp };
     render(<App />);
     await openManagement();
     fireEvent.click(screen.getByRole("button", { name: /^未归属任务/ }));
@@ -108,7 +128,7 @@ describe("Desktop production data", () => {
       if (request.op === "rename") current.name = request.name!;
       return { ok: true, payload: {} };
     });
-    window.pidock = { listTasks: vi.fn(async () => ({ ok: true, payload: { tasks, roots } })), projectOp };
+    window.pidock = { ...bridge(), listTasks: vi.fn(async () => ({ ok: true, payload: { tasks, roots } })), projectOp };
     render(<App />);
     await openManagement();
     fireEvent.click(await screen.findByRole("button", { name: "真实项目" }));
@@ -132,7 +152,7 @@ describe("Desktop production data", () => {
       if (request.op === "delete") return { ok: false, error: "project has associated tasks" };
       return { ok: true, payload: {} };
     });
-    window.pidock = { listTasks: vi.fn(async () => ({ ok: true, payload: { tasks: [], roots } })), projectOp };
+    window.pidock = { ...bridge(), listTasks: vi.fn(async () => ({ ok: true, payload: { tasks: [], roots } })), projectOp };
     vi.spyOn(window, "confirm").mockReturnValue(true);
     render(<App />);
     await openManagement();
@@ -161,7 +181,7 @@ describe("Desktop production data", () => {
       if (request.op === "create") { createdPresent = true; return { ok: true, payload: created }; }
       return { ok: true, payload: {} };
     });
-    window.pidock = { listTasks, projectOp };
+    window.pidock = { ...bridge(), listTasks, projectOp };
     render(<App />);
     await openManagement();
     fireEvent.click(await screen.findByRole("button", { name: /^项目$/ }));
@@ -205,7 +225,7 @@ describe("Desktop production data", () => {
       if (request.op === "list") return { ok: true, payload: { initialized: true, projects: [project, created] } };
       return { ok: true, payload: { roots, tasks: [{ taskId: "real-1", projectId: null, state: "unassigned" }] } };
     });
-    window.pidock = { listTasks: vi.fn(async () => ({ ok: true, payload: { tasks, roots } })), projectOp };
+    window.pidock = { ...bridge(), listTasks: vi.fn(async () => ({ ok: true, payload: { tasks, roots } })), projectOp };
     render(<App />);
     await openManagement();
     fireEvent.click(await screen.findByRole("button", { name: /^项目$/ }));
@@ -233,7 +253,7 @@ describe("Desktop production data", () => {
       if (request.op === "list") return { ok: true, payload: { initialized: true, projects: [project] } };
       return { ok: true, payload: { roots, tasks: [{ taskId: "real-1", projectId: null, state: "unassigned" }] } };
     });
-    window.pidock = { listTasks: vi.fn(async () => ({ ok: true, payload: { tasks, roots } })), projectOp };
+    window.pidock = { ...bridge(), listTasks: vi.fn(async () => ({ ok: true, payload: { tasks, roots } })), projectOp };
     render(<App />);
     await openManagement();
     fireEvent.click(await screen.findByRole("button", { name: /^项目$/ }));
@@ -260,7 +280,7 @@ describe("Desktop production data", () => {
       if (request.op === "list") return { ok: true, payload: { initialized: true, projects: showA ? [existingB, pendingA] : [existingB] } };
       return { ok: true, payload: { roots, tasks: [{ taskId: "real-1", projectId: null, state: "unassigned" }] } };
     });
-    window.pidock = { listTasks: vi.fn(async () => ({ ok: true, payload: { tasks, roots } })), projectOp };
+    window.pidock = { ...bridge(), listTasks: vi.fn(async () => ({ ok: true, payload: { tasks, roots } })), projectOp };
     render(<App />);
     await openManagement();
     fireEvent.click(await screen.findByRole("button", { name: /^项目$/ }));
@@ -292,7 +312,7 @@ describe("Desktop production data", () => {
       if (request.op === "list") return { ok: true, payload: { initialized: true, projects: [project] } };
       return { ok: true, payload: { roots, tasks: [{ taskId: "real-1", projectId: null, state: "unassigned" }] } };
     });
-    window.pidock = { listTasks: vi.fn(async () => ({ ok: true, payload: { tasks, roots } })), projectOp };
+    window.pidock = { ...bridge(), listTasks: vi.fn(async () => ({ ok: true, payload: { tasks, roots } })), projectOp };
     render(<App />);
     await openManagement();
     fireEvent.click(await screen.findByRole("button", { name: /^项目$/ }));
@@ -333,7 +353,7 @@ describe("Desktop production data", () => {
       }
       return { ok: true, payload: {} };
     });
-    window.pidock = { listTasks: vi.fn(async () => ({ ok: true, payload: { tasks, roots } })), projectOp };
+    window.pidock = { ...bridge(), listTasks: vi.fn(async () => ({ ok: true, payload: { tasks, roots } })), projectOp };
     render(<App />);
     await openManagement();
     fireEvent.click(await screen.findByRole("button", { name: "真实项目" }));
@@ -375,7 +395,7 @@ describe("Desktop production data", () => {
   it("shows unavailable inventory tasks without enabling claim", async () => {
     const projectOp = vi.fn(async (request: { op: string }) => ({ ok: true, payload: request.op === "list" ?
       { initialized: true, projects: [project] } : { roots, tasks: [{ taskId: "real-1", projectId: null, state: "unavailable" }] } }));
-    window.pidock = { listTasks: vi.fn(async () => ({ ok: true, payload: { tasks, roots } })), projectOp };
+    window.pidock = { ...bridge(), listTasks: vi.fn(async () => ({ ok: true, payload: { tasks, roots } })), projectOp };
     render(<App />);
     await openManagement();
     fireEvent.click(screen.getByRole("button", { name: /^未归属任务/ }));
@@ -394,7 +414,7 @@ describe("Desktop production data", () => {
       if (request.op === "delete") projects = projects.filter((item) => item.id !== project.id);
       return { ok: true, payload: {} };
     });
-    window.pidock = { listTasks: vi.fn(async () => ({ ok: true, payload: { tasks, roots } })), projectOp };
+    window.pidock = { ...bridge(), listTasks: vi.fn(async () => ({ ok: true, payload: { tasks, roots } })), projectOp };
     vi.spyOn(window, "confirm").mockReturnValue(true);
     render(<App />);
     await openManagement();

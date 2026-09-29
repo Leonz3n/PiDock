@@ -15,6 +15,7 @@ import type { DesktopShellTask } from "./DesktopShell";
 export function DesktopProjectOverview({
   project,
   tasks,
+  lifecyclePending,
   associations,
   roots,
   onOpenTask,
@@ -24,6 +25,7 @@ export function DesktopProjectOverview({
 }: {
   project: DesktopProject | null;
   tasks: readonly DesktopShellTask[];
+  lifecyclePending: boolean;
   associations: readonly TaskAssociation[];
   roots: readonly { label: string; state: string }[];
   onOpenTask: (taskId: string) => void;
@@ -53,7 +55,7 @@ export function DesktopProjectOverview({
       <div className="grid grid-cols-3 gap-4 below-mid:grid-cols-1">
         <div className="rounded-[9px] border border-line bg-paper p-5">
           <p className="text-[11px] text-muted">进行中的任务</p>
-          <p className="mt-1.5 text-[26px] font-semibold text-ink" data-testid="overview-task-count">{scoped.length}</p>
+          <p className="mt-1.5 text-[26px] font-semibold text-ink" data-testid="overview-task-count">{lifecyclePending ? "未核验" : scoped.length}</p>
         </div>
         <div className="rounded-[9px] border border-line bg-paper p-5">
           <p className="text-[11px] text-muted">已绑定仓库</p>
@@ -86,7 +88,7 @@ export function DesktopProjectOverview({
         ))}
         {scoped.length === 0 && (
           <p className="text-xs text-muted" data-testid="overview-no-tasks">
-            这个项目还没有任务。任务需要绑定仓库或普通目录后才会出现。
+            {lifecyclePending ? "正在核验任务归档状态；暂不显示进行中任务。" : "这个项目还没有进行中任务。"}
           </p>
         )}
       </div>

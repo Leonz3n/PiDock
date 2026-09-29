@@ -45,14 +45,14 @@ export type DesktopView =
   | { view: "providers" }
   | { view: "usage" }
   | { view: "schedules" }
+  | { view: "archive" }
   | { view: "unwired"; key: DesktopUnwiredKey };
 
 /** Nav entries without a real Host read path yet (each keeps an explicit reason). */
-export type DesktopUnwiredKey = "env" | "archive" | "attention" | "capabilities" | "remote" | "settings";
+export type DesktopUnwiredKey = "env" | "attention" | "capabilities" | "remote" | "settings";
 
 const LABELS: Record<DesktopUnwiredKey, string> = {
   env: "环境与服务",
-  archive: "已归档",
   attention: "需要处理",
   capabilities: "能力管理",
   remote: "远程访问",
@@ -132,6 +132,9 @@ export function DesktopShell({
   onNavigate,
   projects,
   tasks,
+  allTaskCount,
+  lifecyclePending,
+  lifecycleErrors,
   roots,
   breadcrumb,
   children,
@@ -140,6 +143,9 @@ export function DesktopShell({
   onNavigate: (next: DesktopView) => void;
   projects: DesktopShellProject[];
   tasks: DesktopShellTask[];
+  allTaskCount: number;
+  lifecyclePending: boolean;
+  lifecycleErrors: string[];
   /** Real task-root labels; a broken root is surfaced, never hidden. */
   roots: { label: string; state: "ready" | "error"; message?: string }[];
   /** Real names for the header breadcrumb; omitted parts stay hidden. */
@@ -163,7 +169,7 @@ export function DesktopShell({
           <span className="flex min-w-0 flex-1 flex-col text-left">
             <strong className="truncate text-[12px] font-semibold text-ink">本机工作区</strong>
             <small className="truncate text-[10px] text-muted">
-              {projects.length > 0 ? `${projects.length} 个项目 · ${tasks.length} 个任务` : `${tasks.length} 个任务`}
+              {projects.length > 0 ? `${projects.length} 个项目 · ${allTaskCount} 个任务` : `${allTaskCount} 个任务`}
             </small>
           </span>
         </div>
@@ -178,15 +184,15 @@ export function DesktopShell({
           <div data-nav-group="tasks" role="group" aria-label="进行中的任务" className="flex min-h-0 flex-col">
             <div className={HEADING_CLASS}>
               <span>进行中的任务</span>
-              <span className="text-[10px] normal-case">{tasks.length}</span>
+              <span className="text-[10px] normal-case">{lifecyclePending || lifecycleErrors.length ? "未核验" : tasks.length}</span>
             </div>
             <div className="flex min-h-0 flex-col overflow-y-auto below-mid:hidden">
-              {tasks.length === 0 ? <p className="px-[10px] pb-2 text-[10px] text-muted">已检查的任务根暂无任务。</p> : null}
+              {tasks.length === 0 ? <p className="px-[10px] pb-2 text-[10px] text-muted">{lifecyclePending || lifecycleErrors.length ? "任务归档状态未核验完整。" : "已检查的任务根暂无进行中任务。"}</p> : null}
               {tasks.map((task) => (
                 <TaskNavCard key={task.taskId} task={task} selected={task.taskId === activeTaskId} onSelect={() => onNavigate({ view: "task", taskId: task.taskId })} />
               ))}
             </div>
-            <SidebarNavButton label={LABELS.archive} icon="archive" active={view.view === "unwired" && view.key === "archive"} onSelect={() => onNavigate({ view: "unwired", key: "archive" })} />
+            <SidebarNavButton label="已归档" icon="archive" active={view.view === "archive"} onSelect={() => onNavigate({ view: "archive" })} />
           </div>
 
           <div data-nav-group="system" className="mt-auto border-t border-line pt-[11px]">
@@ -223,6 +229,7 @@ export function DesktopShell({
           </span>
         </header>
         {brokenRoots.map((root) => <p role="alert" key={root.label} className="shrink-0 border-b border-line bg-paper px-4 py-2 text-[11px] text-[#ad4545]">{root.label}：{root.message}</p>)}
+        {lifecycleErrors.length > 0 && <p role="alert" className="shrink-0 border-b border-line bg-paper px-4 py-2 text-[11px] text-[#ad4545]">任务归档状态未核验：{lifecycleErrors.join("；")}</p>}
         <main className="min-h-0 min-w-0 flex-1 overflow-y-auto" data-testid="desktop-shell-content">{children}</main>
       </div>
     </div>
