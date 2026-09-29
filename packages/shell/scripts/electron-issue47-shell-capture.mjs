@@ -177,6 +177,17 @@ async function run() {
       totals: await evalJs("[...document.querySelectorAll('[data-usage-total]')].map(el => el.innerText.replace(/\\n+/g,' '))"),
       rows: await evalJs("document.querySelectorAll('[data-usage-row]').length"),
     };
+    await clickSelector('[data-testid=desktop-shell] button[title="环境与服务"]');
+    await until((body) => body.includes("环境清单未接线") && body.includes("Host 尚未提供项目环境"), "environment page");
+    shots.push(await capture("environment-page", 1440, 900));
+    shots.push(await capture("environment-page", 720, 560));
+    views.window.setContentSize(1440, 900);
+    await wait(250);
+    const environment = {
+      project: await evalJs("document.querySelector('#desktop-env-project')?.selectedOptions[0]?.textContent"),
+      environment: await evalJs("document.querySelector('select[aria-label=环境]')?.selectedOptions[0]?.textContent"),
+      placeholders: await evalJs("document.querySelectorAll('[data-testid=desktop-environment-page] button:disabled').length"),
+    };
     await clickSelector('[data-testid=desktop-shell] button[title="定时任务"]');
     await until((body) => body.includes("当前筛选下没有定时任务。"), "schedules page");
     shots.push(await capture("schedules-page", 1440, 900));
@@ -244,6 +255,7 @@ async function run() {
       dock,
       providers: providersPage,
       usage,
+      environment,
       schedules,
       attention,
       archive,

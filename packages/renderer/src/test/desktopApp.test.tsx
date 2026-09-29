@@ -66,6 +66,10 @@ describe("Desktop production data", () => {
     expect(await screen.findByTestId("desktop-attention-page")).toBeInTheDocument();
     expect(await screen.findByText("当前执行账本暂无需要处理的事项。")).toBeInTheDocument();
     expect(taskOp).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "环境与服务" }));
+    expect(await screen.findByTestId("desktop-environment-page")).toBeInTheDocument();
+    expect(screen.getByLabelText("项目")).toHaveValue(project.id);
+    expect(screen.getByRole("option", { name: "环境清单未接线" })).toBeInTheDocument();
   });
 
   it("keeps standalone Vite in explicit demo mode", async () => {

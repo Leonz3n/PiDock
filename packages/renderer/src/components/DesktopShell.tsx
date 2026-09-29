@@ -47,13 +47,13 @@ export type DesktopView =
   | { view: "schedules" }
   | { view: "archive" }
   | { view: "attention" }
+  | { view: "env" }
   | { view: "unwired"; key: DesktopUnwiredKey };
 
 /** Nav entries without a real Host read path yet (each keeps an explicit reason). */
-export type DesktopUnwiredKey = "env" | "capabilities" | "remote" | "settings";
+export type DesktopUnwiredKey = "capabilities" | "remote" | "settings";
 
 const LABELS: Record<DesktopUnwiredKey, string> = {
-  env: "环境与服务",
   capabilities: "能力管理",
   remote: "远程访问",
   settings: "本机设置",
@@ -177,7 +177,7 @@ export function DesktopShell({
         <nav aria-label="主导航" className="flex min-h-0 flex-1 flex-col">
           <div data-nav-group="workspace" role="group" aria-label="工作区" className="flex flex-col">
             <SidebarNavButton label="项目总览" icon="grid" active={view.view === "project" || view.view === "unassigned"} onSelect={() => { const first = projects[0]; if (first) onNavigate({ view: "project", projectId: first.id }); else onNavigate({ view: "unassigned" }); }} />
-            <SidebarNavButton label={LABELS.env} icon="settings" active={view.view === "unwired" && view.key === "env"} onSelect={() => onNavigate({ view: "unwired", key: "env" })} />
+            <SidebarNavButton label="环境与服务" icon="settings" active={view.view === "env"} onSelect={() => onNavigate({ view: "env" })} />
             <SidebarNavButton label="Token 用量" icon="chart" active={view.view === "usage"} onSelect={() => onNavigate({ view: "usage" })} />
           </div>
 
