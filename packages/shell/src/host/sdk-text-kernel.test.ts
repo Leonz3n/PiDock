@@ -1,17 +1,34 @@
 import { execFileSync } from "node:child_process";
+import { createServer } from "node:http";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, afterAll, expect, it, vi } from "vitest";
 import type { AssistantMessage, Model, Provider } from "@earendil-works/pi-ai";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { ModelRuntime, SessionManager } from "@earendil-works/pi-coding-agent";
 import { buildTaskDiskRecord, serializeTaskRecord } from "./task-store.js";
 import { PiSdkTextKernel, type SdkTextEvent } from "./sdk-text-kernel.js";
+import { createExplicitTextRuntime, isCredentialEnvName } from "./explicit-text-provider.js";
 import { SdkTurnTransport } from "./sdk-turn-transport.js";
 import { TaskWorkspaceHost } from "./task-host.js";
 
 const roots: string[] = [];
+// The explicit Provider runtime only exists in an isolated environment (see
+// `assertIsolatedSdkEnvironment`). This file constructs that precondition for
+// itself — flag on, ambient credentials removed — and restores the real
+// environment afterwards, so the suite never depends on the developer's shell.
+const savedIsolation = process.env["PIDOCK_SDK_ISOLATED"];
+const savedCredentials = Object.entries(process.env).filter(([name]) => isCredentialEnvName(name)) as [string, string][];
+beforeAll(() => {
+  process.env["PIDOCK_SDK_ISOLATED"] = "1";
+  for (const [name] of savedCredentials) delete process.env[name];
+});
+afterAll(() => {
+  if (savedIsolation === undefined) delete process.env["PIDOCK_SDK_ISOLATED"];
+  else process.env["PIDOCK_SDK_ISOLATED"] = savedIsolation;
+  for (const [name, value] of savedCredentials) process.env[name] = value;
+});
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }); });
 
 function task(id: string) {
@@ -446,4 +463,140 @@ it("aborts a pending SDK stream, guards concurrent task prompts and surfaces cal
   await abortedCallback.instance.cancel("main");
   expect(await failedRun).toMatchObject({ state: "failed", error: "sdk-event-delivery-failed" });
   await abortedCallback.instance.dispose();
+});
+
+it("refuses invalid explicit endpoints and missing keys despite ambient Provider credentials", async () => {
+  const base = { profileId: "explicit", baseUrl: "https://api.example.com/v1", modelId: "fixture", contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_TEST", generation: 1 };
+  vi.stubEnv("OPENAI_API_KEY", "SYNTHETIC_AMBIENT_KEY");
+  try {
+    await expect(createExplicitTextRuntime(base, "")).rejects.toThrow("provider-not-configured");
+    await expect(createExplicitTextRuntime(base, "synthetic-key")).rejects.toThrow("provider-environment-unisolated");
+    for (const baseUrl of [
+      "http://example.com/v1", "https://user:pass@example.com/v1", "https://example.com/v1?token=x",
+      "https://example.com/v1#x", "file:///tmp/model", "not a URL",
+    ]) {
+      await expect(createExplicitTextRuntime({ ...base, baseUrl }, "synthetic")).rejects.toThrow("provider-endpoint-invalid");
+    }
+  } finally { vi.unstubAllEnvs(); }
+});
+
+it("refuses an explicit SDK runtime without the trusted isolation opt-in", async () => {
+  const base = { profileId: "explicit", baseUrl: "https://api.example.com/v1", modelId: "fixture", contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_TEST", generation: 1 };
+  const saved = process.env["PIDOCK_SDK_ISOLATED"];
+  delete process.env["PIDOCK_SDK_ISOLATED"];
+  try {
+    await expect(createExplicitTextRuntime(base, "synthetic-key")).rejects.toThrow("provider-environment-unisolated");
+  } finally {
+    if (saved === undefined) delete process.env["PIDOCK_SDK_ISOLATED"];
+    else process.env["PIDOCK_SDK_ISOLATED"] = saved;
+  }
+});
+
+it("rejects a same-name endpoint or credential reference change in a bound SDK session", async () => {
+  const dir = task("task-explicit-identity");
+  const base = { profileId: "explicit", baseUrl: "http://127.0.0.1:8888/v1", modelId: "fixture", contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_TEST", generation: 1 };
+  const first = await createExplicitTextRuntime(base, "synthetic");
+  const original = new PiSdkTextKernel("task-explicit-identity", dir, { model: first.model, modelRuntime: first.runtime, bindingIdentity: first.bindingIdentity });
+  const file = (await original.open("main")).file;
+  await original.dispose();
+  for (const changed of [{ ...base, baseUrl: "http://127.0.0.1:8889/v1" }, { ...base, authRef: "PIDOCK_PROVIDER_OTHER" }, { ...base, generation: 2 }]) {
+    const next = await createExplicitTextRuntime(changed, "synthetic");
+    const reopened = new PiSdkTextKernel("task-explicit-identity", dir, { model: next.model, modelRuntime: next.runtime, bindingIdentity: next.bindingIdentity });
+    await expect(reopened.open("main")).rejects.toThrow("sdk-binding-invalid");
+    expect(reopened.projection("main").source).toBe("sdk-jsonl");
+    await reopened.dispose();
+  }
+  const unbound = await kernel(dir);
+  await expect(unbound.instance.open("main")).rejects.toThrow("sdk-binding-invalid");
+  expect(readFileSync(file, "utf8")).not.toContain("synthetic");
+  await unbound.instance.dispose();
+});
+
+it("normalizes explicit Provider errors before the SDK writes JSONL", async () => {
+  const dir = task("task-explicit-error");
+  const secret = "SYNTHETIC_CREDENTIAL_46_DO_NOT_USE";
+  const config = { profileId: "explicit", baseUrl: "http://127.0.0.1:8888/v1", modelId: "fixture", contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_TEST", generation: 1 };
+  const { runtime, model: selected, bindingIdentity } = await createExplicitTextRuntime(config, secret);
+  const provider: Provider = {
+    id: selected.provider, name: "Synthetic error", auth: { apiKey: { name: "Synthetic", resolve: async () => ({ auth: {} }) } },
+    getModels: () => [selected],
+    stream: (_model, context, options) => provider.streamSimple(_model, context, options),
+    streamSimple: () => {
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => stream.push({ type: "error", reason: "error", error: {
+        role: "assistant", api: selected.api, provider: selected.provider, model: selected.id,
+        content: [{ type: "text", text: secret }], responseId: secret, usage, stopReason: "error", errorMessage: `upstream echoed ${secret}`, timestamp: Date.now(),
+      } }));
+      return stream;
+    },
+  };
+  runtime.registerNativeProvider(provider);
+  const instance = new PiSdkTextKernel("task-explicit-error", dir, { model: selected, modelRuntime: runtime, bindingIdentity });
+  const file = (await instance.open("main")).file;
+  const events: SdkTextEvent[] = [];
+  const result = await instance.prompt("main", "hello", (event) => events.push(event));
+  const jsonl = readFileSync(file, "utf8");
+  expect(result).toMatchObject({ state: "failed", error: "provider-request-failed" });
+  expect(JSON.stringify({ result, events, jsonl })).not.toContain(secret);
+  await instance.dispose();
+});
+
+it("keeps real OpenAI-compatible SDK text and usage with the guarded runtime", async () => {
+  const dir = task("task-explicit-success");
+  const secret = "SYNTHETIC_CREDENTIAL_46_SUCCESS";
+  const requests: string[] = [];
+  const server = createServer((request, response) => {
+    requests.push(String(request.headers.authorization));
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    response.write(`data: {"id":"${secret}","object":"chat.completion.chunk","created":1,"model":"fixture","choices":[{"index":0,"delta":{"role":"assistant","content":"hello${secret.slice(0, 12)}"},"finish_reason":null}]}\n\n`);
+    response.write(`data: {"id":"chat-2","object":"chat.completion.chunk","created":1,"model":"fixture","choices":[{"index":0,"delta":{"content":"${secret.slice(12)}"},"finish_reason":null}]}\n\n`);
+    response.write('data: {"id":"chat-1","object":"chat.completion.chunk","created":1,"model":"fixture","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n');
+    response.write('data: {"id":"chat-1","object":"chat.completion.chunk","created":1,"model":"fixture","choices":[],"usage":{"prompt_tokens":3,"completion_tokens":1,"total_tokens":4}}\n\n');
+    response.end("data: [DONE]\n\n");
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const { runtime, model: selected, bindingIdentity } = await createExplicitTextRuntime({
+      profileId: "explicit", baseUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`,
+      modelId: "fixture", contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_TEST", generation: 1,
+    }, secret);
+    const instance = new PiSdkTextKernel("task-explicit-success", dir, { model: selected, modelRuntime: runtime, bindingIdentity });
+    const file = (await instance.open("main")).file;
+    const result = await instance.prompt("main", "hello");
+    expect(requests).toEqual([`Bearer ${secret}`]);
+    expect(result).toMatchObject({ state: "done", text: "hello[redacted]" });
+    expect(result.events.map((event) => event.type)).toEqual(["delta", "delta", "message_end", "agent_settled"]);
+    expect(result.events.find((event) => event.type === "message_end")).toMatchObject({ usage: { input: 3, output: 1 } });
+    expect(JSON.stringify(result) + readFileSync(file, "utf8")).not.toContain(secret);
+    await instance.dispose();
+  } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
+});
+
+it("keeps explicit OpenAI-compatible auth on the original origin across redirects", async () => {
+  const dir = task("task-explicit-redirect");
+  let redirected = 0;
+  const secondary = createServer((_request, response) => { redirected++; response.end("unexpected"); });
+  const listen = (server: typeof secondary) => new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const close = (server: typeof secondary) => new Promise<void>((resolve) => server.close(() => resolve()));
+  await listen(secondary);
+  const destination = `http://127.0.0.1:${(secondary.address() as { port: number }).port}/catch`;
+  const primary = createServer((_request, response) => { response.writeHead(307, { Location: destination }); response.end(); });
+  try {
+    await listen(primary);
+    const secret = "SYNTHETIC_CREDENTIAL_46_REDIRECT";
+    const { runtime, model: selected, bindingIdentity } = await createExplicitTextRuntime({
+      profileId: "explicit", baseUrl: `http://127.0.0.1:${(primary.address() as { port: number }).port}/v1`,
+      modelId: "fixture", contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_TEST", generation: 1,
+    }, secret);
+    const instance = new PiSdkTextKernel("task-explicit-redirect", dir, { model: selected, modelRuntime: runtime, bindingIdentity });
+    const file = (await instance.open("main")).file;
+    const result = await instance.prompt("main", "hello");
+    expect(result).toMatchObject({ state: "failed", error: "provider-request-failed" });
+    expect(redirected).toBe(0);
+    expect(JSON.stringify(result) + readFileSync(file, "utf8")).not.toContain(secret);
+    await instance.dispose();
+  } finally {
+    if (primary.listening) await close(primary);
+    await close(secondary);
+  }
 });

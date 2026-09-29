@@ -63,7 +63,7 @@ export class PiSdkTextKernel {
   constructor(
     readonly taskId: string,
     readonly taskDir: string,
-    private readonly selection?: { model: Model<Api>; modelRuntime: ModelRuntime },
+    private readonly selection?: { model: Model<Api>; modelRuntime: ModelRuntime; bindingIdentity?: string },
   ) {
     if (!isAbsolute(taskDir) || !taskId) throw new Error("task-unknown");
     this.root = join(taskDir, ".pidock-sdk-sessions");
@@ -108,6 +108,7 @@ export class PiSdkTextKernel {
       if (typeof binding !== "object" || binding === null || Array.isArray(binding)) throw new Error("sdk-binding-invalid");
       const data = binding as Record<string, unknown>;
       if (data["taskId"] !== this.taskId || data["sessionId"] !== sessionId ||
+          data["bindingIdentity"] !== this.selection.bindingIdentity ||
           typeof data["file"] !== "string" || !/^[\w-]+\.jsonl$/.test(data["file"])) throw new Error("sdk-binding-invalid");
       const file = join(dir, data["file"]);
       if (!existsSync(file) || !lstatSync(file).isFile()) throw new Error("sdk-session-missing");
@@ -134,7 +135,8 @@ export class PiSdkTextKernel {
       manager = SessionManager.open(file, dir, this.taskDir);
       if (manager.getSessionFile() !== file || manager.getHeader()?.id !== manager.getSessionId() ||
           manager.getHeader()?.cwd !== this.taskDir) throw new Error("sdk-binding-invalid");
-      writeFileSync(mapping, JSON.stringify({ taskId: this.taskId, sessionId, sdkId: manager.getSessionId(), file: basename(file) }), { flag: "wx", mode: 0o600 });
+      writeFileSync(mapping, JSON.stringify({ taskId: this.taskId, sessionId, sdkId: manager.getSessionId(), file: basename(file),
+        ...(this.selection.bindingIdentity ? { bindingIdentity: this.selection.bindingIdentity } : {}) }), { flag: "wx", mode: 0o600 });
     }
     const storedModel = manager.buildSessionContext().model;
     if (storedModel && (storedModel.provider !== this.selection.model.provider || storedModel.modelId !== this.selection.model.id)) {
