@@ -46,14 +46,14 @@ export type DesktopView =
   | { view: "usage" }
   | { view: "schedules" }
   | { view: "archive" }
+  | { view: "attention" }
   | { view: "unwired"; key: DesktopUnwiredKey };
 
 /** Nav entries without a real Host read path yet (each keeps an explicit reason). */
-export type DesktopUnwiredKey = "env" | "attention" | "capabilities" | "remote" | "settings";
+export type DesktopUnwiredKey = "env" | "capabilities" | "remote" | "settings";
 
 const LABELS: Record<DesktopUnwiredKey, string> = {
   env: "环境与服务",
-  attention: "需要处理",
   capabilities: "能力管理",
   remote: "远程访问",
   settings: "本机设置",
@@ -196,7 +196,7 @@ export function DesktopShell({
           </div>
 
           <div data-nav-group="system" className="mt-auto border-t border-line pt-[11px]">
-            <SidebarNavButton label={LABELS.attention} icon="clock" active={view.view === "unwired" && view.key === "attention"} onSelect={() => onNavigate({ view: "unwired", key: "attention" })} />
+            <SidebarNavButton label="需要处理" icon="clock" active={view.view === "attention"} onSelect={() => onNavigate({ view: "attention" })} />
             <SidebarNavButton label="定时任务" icon="clock" active={view.view === "schedules"} onSelect={() => onNavigate({ view: "schedules" })} />
             <SidebarNavButton label={LABELS.capabilities} icon="book" active={view.view === "unwired" && view.key === "capabilities"} onSelect={() => onNavigate({ view: "unwired", key: "capabilities" })} />
             <SidebarNavButton label={LABELS.remote} icon="globe" active={view.view === "unwired" && view.key === "remote"} onSelect={() => onNavigate({ view: "unwired", key: "remote" })} />

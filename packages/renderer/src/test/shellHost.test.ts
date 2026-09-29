@@ -777,6 +777,7 @@ describe("attention bridging", () => {
         sessionId: "main",
         label: "Atlas Web · 发布前检查",
         detail: "待确认：回合工具 exec.run",
+        at: hostItem.at,
         read: false,
       },
     ]);

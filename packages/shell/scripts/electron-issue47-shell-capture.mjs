@@ -188,6 +188,13 @@ async function run() {
       runs: await evalJs("document.querySelectorAll('[data-schedule-run]').length"),
       error: await evalJs("document.querySelector('[data-testid=desktop-schedules-page] [role=alert]')?.innerText"),
     };
+    await clickSelector('[data-testid=desktop-shell] button[title="需要处理"]');
+    await until((body) => body.includes("当前执行账本暂无需要处理的事项。"), "attention page");
+    shots.push(await capture("attention-page", 1440, 900));
+    shots.push(await capture("attention-page", 720, 560));
+    views.window.setContentSize(1440, 900);
+    await wait(250);
+    const attention = { rows: await evalJs("document.querySelectorAll('[data-attention-item]').length"), error: await evalJs("document.querySelector('[data-testid=desktop-attention-page] [role=alert]')?.innerText") };
     await clickSelector('[data-testid=desktop-shell] button[title="已归档"]');
     await until((body) => body.includes("还没有归档任务。"), "archive page");
     shots.push(await capture("archive-page", 1440, 900));
@@ -238,6 +245,7 @@ async function run() {
       providers: providersPage,
       usage,
       schedules,
+      attention,
       archive,
       archiveFlow,
       overview,
