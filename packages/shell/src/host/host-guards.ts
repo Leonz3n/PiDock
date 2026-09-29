@@ -228,6 +228,12 @@ export function buildHostEnv(
   }
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(baseEnv)) {
+    // [PiDock 02m] (#46) the task Host never resolves a Provider credential:
+    // main resolves the explicit PIDOCK_PROVIDER_* reference and passes the
+    // value only into the isolated SDK context. Dropping these names here keeps
+    // that credential out of every task process this Host can spawn (git,
+    // services, terminals) instead of relying on the SDK kill switch alone.
+    if (key.startsWith("PIDOCK_PROVIDER_")) continue;
     if (typeof value === "string") env[key] = value;
   }
   env["PIDOCK_WORKSPACE_ID"] = workspaceId;
@@ -272,7 +278,9 @@ export function validateHostTaskOp(
       return { ok: false, error: "invalid-sdk-provider" };
     }
     const credential = provider["credential"];
-    if (typeof credential !== "string" || credential.length === 0 || credential.length > 4096) return { ok: false, error: "invalid-sdk-provider-credential" };
+    // Same floor as the isolated context itself, so a value that cannot work is
+    // refused at the envelope instead of surfacing later as provider-not-configured.
+    if (typeof credential !== "string" || credential.length < 8 || credential.length > 4096) return { ok: false, error: "invalid-sdk-provider-credential" };
     return { ok: true };
   }
   if (["task/sdkStart", "task/sdkStatus", "task/sdkProjection", "task/sdkCancel"].includes(op)) {

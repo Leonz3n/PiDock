@@ -15,6 +15,28 @@ describe("approval listing ops", () => {
   });
 });
 
+// [PiDock 02m] (#46) the main-internal Provider install op: exactly one key, a
+// null clear, or a {config, credential} record. The credential is a value only
+// a trusted main can supply, so the envelope checks its shape and length.
+describe("sdk provider op", () => {
+  const config = { profileId: "p-1", baseUrl: "https://models.example.test/v1", modelId: "m", contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_A", generation: 1 };
+  it("accepts a clear and a well-formed install", () => {
+    expect(validateHostTaskOp("task/sdkProvider", { provider: null })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/sdkProvider", { provider: { config, credential: "synthetic-key" } })).toEqual({ ok: true });
+  });
+  it("refuses extra keys, a non-record provider, a bad config or a bad credential", () => {
+    expect(validateHostTaskOp("task/sdkProvider", {}).ok).toBe(false);
+    expect(validateHostTaskOp("task/sdkProvider", { provider: null, taskId: "task-b" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/sdkProvider", { provider: "nope" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/sdkProvider", { provider: { config: config, credential: "synthetic-key", env: {} } }).ok).toBe(false);
+    expect(validateHostTaskOp("task/sdkProvider", { provider: { config: "nope", credential: "synthetic-key" } }).ok).toBe(false);
+    // Too short to be a usable credential, and never a runtime-shaped object.
+    expect(validateHostTaskOp("task/sdkProvider", { provider: { config, credential: "short" } }).ok).toBe(false);
+    expect(validateHostTaskOp("task/sdkProvider", { provider: { config, credential: { value: "x" } } }).ok).toBe(false);
+    expect(validateHostTaskOp("task/sdkProvider", { provider: { config, credential: "x".repeat(4097) } }).ok).toBe(false);
+  });
+});
+
 // [PiDock 09] (#11) write-coordination read: no caller-chosen input, so the
 // guard only rejects a present-but-malformed payload.
 describe("session states op", () => {
@@ -329,6 +351,18 @@ describe("buildHostEnv", () => {
     expect(() => buildHostEnv({}, "")).toThrow("workspaceId");
     expect(() => buildHostEnv({}, "workspace-a", { taskId: "", taskDir: "/tmp/task-a" })).toThrow("taskId");
     expect(() => buildHostEnv({}, "workspace-a", { taskId: "task-a", taskDir: "relative/dir" })).toThrow("taskDir");
+  });
+
+  it("keeps the explicit Provider credential out of every task process it can spawn", () => {
+    const env = buildHostEnv(
+      { PATH: "/bin", PIDOCK_PROVIDER_MAIN: "sk-live-0123456789", PIDOCK_PROVIDER_OTHER: "x", PIDOCK_WORKSPACE_ID: "old" },
+      "workspace-a",
+      { taskId: "task-a", taskDir: "/tmp/task-a" },
+    );
+    expect(Object.keys(env).filter((key) => key.startsWith("PIDOCK_PROVIDER_"))).toEqual([]);
+    expect(Object.values(env)).not.toContain("sk-live-0123456789");
+    // Unrelated environment (git, services, terminals) is untouched.
+    expect(env["PATH"]).toBe("/bin");
   });
 });
 

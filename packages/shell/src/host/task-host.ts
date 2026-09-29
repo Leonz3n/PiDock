@@ -503,8 +503,10 @@ export class TaskWorkspaceHost {
 
   /**
    * [PiDock 02m] (#46) installs the explicit Provider selection for this task.
-   * `null` clears it. A live context is created eagerly so a bad credential or
-   * an unwritable private home is reported to the caller, not to the first turn.
+   * `null` clears it. The context is opened eagerly so a bad credential or an
+   * unwritable private home is reported to the caller instead of the first turn,
+   * and it is only kept when that open succeeded: a failed install must leave the
+   * task unconfigured (fail closed), never pointing at a dead context.
    */
   async configureSdkProvider(provider: { config: ExplicitTextProvider; credential: string; workspaceId?: string } | null): Promise<{ generation: number }> {
     const previous = this.sdkContext;
@@ -513,14 +515,15 @@ export class TaskWorkspaceHost {
     if (previous) await previous.dispose();
     this.sdkProviderGeneration += 1;
     if (provider) {
-      this.sdkContext = new SdkContextClient({
+      const context = this.sdkContextFactory({
         task: { taskId: this.taskId, taskDir: this.taskDir },
         config: provider.config,
         credential: provider.credential,
         ...(provider.workspaceId === undefined ? {} : { workspaceId: provider.workspaceId }),
       });
-      // Create the context now: a misconfigured Provider must fail here.
-      await this.sdkContext.open("main");
+      try { await context.open("main"); }
+      catch (error) { await context.dispose().catch(() => {}); throw error; }
+      this.sdkContext = context;
     }
     return { generation: this.sdkProviderGeneration };
   }
@@ -601,6 +604,8 @@ export class TaskWorkspaceHost {
      */
     mintSecret: (kind: "pairing" | "device") => string = defaultSecretMinter,
     private readonly sdkKernelFactory: (taskId: string, taskDir: string) => PiSdkTextKernel = (id, dir) => new PiSdkTextKernel(id, dir),
+    /** Injectable so the Host's Provider lifecycle is testable without spawning a worker. */
+    private readonly sdkContextFactory: (options: ConstructorParameters<typeof SdkContextClient>[0]) => SdkContextClient = (options) => new SdkContextClient(options),
   ) {
     if (taskId.trim().length === 0) throw new Error("taskId must be non-empty");
     if (taskDir.trim().length === 0) throw new Error("taskDir must be non-empty");

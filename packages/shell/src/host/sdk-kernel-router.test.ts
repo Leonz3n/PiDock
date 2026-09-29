@@ -9,7 +9,9 @@ function reader() {
   const kernel = Object.create(PiSdkTextKernel.prototype) as PiSdkTextKernel;
   kernel.projection = vi.fn(() => snapshot) as unknown as PiSdkTextKernel["projection"];
   kernel.open = vi.fn(async () => { throw new Error("provider-not-configured"); });
-  kernel.prompt = vi.fn(async () => ({ state: "failed" as const, text: "", events: [], error: "provider-not-configured" }));
+  // Faithful double: the real kernel *rejects* a selection-less prompt (the
+  // `provider-not-configured` throw from `sessionFor` escapes `prompt`).
+  kernel.prompt = vi.fn(async () => { throw new Error("provider-not-configured"); });
   kernel.cancel = vi.fn(async () => {});
   kernel.dispose = vi.fn(async () => {});
   return kernel;
@@ -30,7 +32,7 @@ it("keeps projections on the read-only kernel and refuses model calls without a 
   expect(router.configured).toBe(false);
   expect(router.projection("main")).toEqual(snapshot);
   await expect(router.open("main")).rejects.toThrow("provider-not-configured");
-  expect(await router.prompt("main", "hello")).toMatchObject({ state: "failed", error: "provider-not-configured" });
+  await expect(router.prompt("main", "hello")).rejects.toThrow("provider-not-configured");
   // Projection stays available even though model calls fail closed.
   expect(router.projection("main")).toEqual(snapshot);
   await router.dispose();

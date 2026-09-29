@@ -29,7 +29,7 @@ const config = {
 };
 
 /** Scripted worker: records what it was spawned with and answers by op. */
-function scripted(options: { failBootstrap?: string; malformedOpen?: boolean; onPrompt?: (send: (message: unknown) => void, id: string) => void } = {}) {
+function scripted(options: { failBootstrap?: string; malformedOpen?: boolean; onPrompt?: (send: (message: unknown) => void, id: string) => void; replyKind?: string; silentBootstrap?: boolean } = {}) {
   const spawned: { env: Record<string, string>; workerData: unknown }[] = [];
   const listeners = { message: [] as ((message: unknown) => void)[], error: [] as ((error: unknown) => void)[], exit: [] as ((code: number) => void)[] };
   let booted = false;
@@ -38,6 +38,7 @@ function scripted(options: { failBootstrap?: string; malformedOpen?: boolean; on
   const boot = () => {
     if (booted) return;
     booted = true;
+    if (options.silentBootstrap) return;
     queueMicrotask(() => options.failBootstrap
       ? send({ id: "ready", kind: "reply", ok: false, error: options.failBootstrap })
       : send({ id: "ready", kind: "reply", ok: true, payload: { ready: true, bindingIdentity: "b".repeat(64) } }));
@@ -45,6 +46,7 @@ function scripted(options: { failBootstrap?: string; malformedOpen?: boolean; on
   const worker: SdkContextWorkerLike = {
     postMessage(message: unknown) {
       const request = message as { id: string; op: string };
+      if (options.replyKind) { send({ id: request.id, kind: options.replyKind, payload: { secret: "unexpected" } }); return; }
       if (request.op === "open") send(options.malformedOpen ? { id: request.id, kind: "reply", ok: true, payload: { sdkId: 1 } } : { id: request.id, kind: "reply", ok: true, payload: { sdkId: "sdk-1", file: "/tmp/sdk-1.jsonl", tools: [] } });
       if (request.op === "prompt") {
         if (options.onPrompt) options.onPrompt(send, request.id);
@@ -135,6 +137,28 @@ it("poisons the context on bootstrap failure, worker error, exit and malformed r
   await client.open("main");
   await client.dispose();
   await expect(client.prompt("main", "hello")).rejects.toThrow(/sdk-context-(disposed|exit)/);
+});
+
+it("poisons an unusable protocol instead of hanging the caller", async () => {
+  const dir = task("task-context-protocol");
+  const hostile = scripted({ replyKind: "sdk-secret-dump" });
+  const client = new SdkContextClient({
+    task: { taskId: "task-context-protocol", taskDir: dir }, config, credential: "synthetic-key",
+    spawn: (env, workerData) => { hostile.spawned.push({ env, workerData }); return hostile.worker; },
+  });
+  await expect(client.open("main")).rejects.toThrow("sdk-context-protocol-invalid");
+  await expect(client.prompt("main", "hello")).rejects.toThrow("sdk-context-protocol-invalid");
+  await client.dispose();
+
+  // A worker that never announces itself must not hold a turn open forever.
+  const silent = scripted({ silentBootstrap: true });
+  const waiting = new SdkContextClient({
+    task: { taskId: "task-context-protocol", taskDir: dir }, config, credential: "synthetic-key", readyTimeoutMs: 30,
+    spawn: (env, workerData) => { silent.spawned.push({ env, workerData }); return silent.worker; },
+  });
+  await expect(waiting.open("main")).rejects.toThrow("sdk-context-bootstrap-timeout");
+  await expect(waiting.cancel("main")).rejects.toThrow("sdk-context-bootstrap-timeout");
+  await waiting.dispose();
   // Dispose is idempotent.
   await expect(client.dispose()).resolves.toBeUndefined();
 });
