@@ -70,6 +70,10 @@ describe("Desktop production data", () => {
     expect(await screen.findByTestId("desktop-environment-page")).toBeInTheDocument();
     expect(screen.getByLabelText("项目")).toHaveValue(project.id);
     expect(screen.getByRole("option", { name: "环境清单未接线" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "远程访问" }));
+    expect(await screen.findByTestId("desktop-remote-page")).toBeInTheDocument();
+    expect(screen.getByText("没有已核验的活动任务；未读取远程状态。")).toBeInTheDocument();
+    expect(taskOp).not.toHaveBeenCalled();
   });
 
   it("keeps standalone Vite in explicit demo mode", async () => {

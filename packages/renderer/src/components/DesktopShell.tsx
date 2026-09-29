@@ -48,14 +48,14 @@ export type DesktopView =
   | { view: "archive" }
   | { view: "attention" }
   | { view: "env" }
+  | { view: "remote" }
   | { view: "unwired"; key: DesktopUnwiredKey };
 
 /** Nav entries without a real Host read path yet (each keeps an explicit reason). */
-export type DesktopUnwiredKey = "capabilities" | "remote" | "settings";
+export type DesktopUnwiredKey = "capabilities" | "settings";
 
 const LABELS: Record<DesktopUnwiredKey, string> = {
   capabilities: "能力管理",
-  remote: "远程访问",
   settings: "本机设置",
 };
 
@@ -199,7 +199,7 @@ export function DesktopShell({
             <SidebarNavButton label="需要处理" icon="clock" active={view.view === "attention"} onSelect={() => onNavigate({ view: "attention" })} />
             <SidebarNavButton label="定时任务" icon="clock" active={view.view === "schedules"} onSelect={() => onNavigate({ view: "schedules" })} />
             <SidebarNavButton label={LABELS.capabilities} icon="book" active={view.view === "unwired" && view.key === "capabilities"} onSelect={() => onNavigate({ view: "unwired", key: "capabilities" })} />
-            <SidebarNavButton label={LABELS.remote} icon="globe" active={view.view === "unwired" && view.key === "remote"} onSelect={() => onNavigate({ view: "unwired", key: "remote" })} />
+            <SidebarNavButton label="远程访问" icon="globe" active={view.view === "remote"} onSelect={() => onNavigate({ view: "remote" })} />
             <SidebarNavButton label={LABELS.settings} icon="folder" active={view.view === "unwired" && view.key === "settings"} onSelect={() => onNavigate({ view: "unwired", key: "settings" })} />
             <SidebarNavButton label="模型与 Provider" icon="key" active={view.view === "providers"} onSelect={() => onNavigate({ view: "providers" })} />
             <div data-user-chip="local-workspace" title="本机工作区" className="flex items-center gap-[9px] px-2 py-[10px]">

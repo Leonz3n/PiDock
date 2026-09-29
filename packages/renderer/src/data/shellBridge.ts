@@ -105,7 +105,8 @@ export type ShellTaskOp =
   | "task/attention"
   | "task/markAttentionRead"
   | "task/scheduleList"
-  | "task/scheduleRuns";
+  | "task/scheduleRuns"
+  | "task/remoteState";
 
 /**
  * Task-scoped op through main into the per-workspace Host. Rejects outside
@@ -402,6 +403,14 @@ export async function planProtocolThroughShell(input: {
   if (input.acknowledged !== undefined) payload["acknowledged"] = input.acknowledged;
   try {
     return await shellTaskOp(input.taskId, "task/planProtocol", payload);
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+export async function remoteStateThroughShell(taskId: string): Promise<ShellTaskOpResult> {
+  try {
+    return await shellTaskOp(taskId, "task/remoteState");
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
