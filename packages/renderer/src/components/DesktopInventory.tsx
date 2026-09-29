@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Icon } from "./Icon";
 import { DesktopTaskCreation } from "./DesktopTaskCreation";
 import { DesktopConversation } from "./DesktopConversation";
@@ -7,6 +7,7 @@ import { DESKTOP_LABELS, DesktopShell, DesktopUnwired, type DesktopUnwiredKey, t
 import { DesktopProvidersPage } from "./DesktopProvidersPage";
 import { DesktopProjectOverview } from "./DesktopProjectOverview";
 import { DesktopUsagePage } from "./DesktopUsagePage";
+import { DesktopSchedulesPage } from "./DesktopSchedulesPage";
 import { loadDesktopProjects, parseDesktopProject, projectOperation, type DesktopProject, type DesktopProjects, type ProjectInput, type ProjectSource, type TaskAssociation } from "../data/desktopProjects";
 
 export { desktopMode };
@@ -86,6 +87,8 @@ export function DesktopInventory() {
   // [UI 对齐 S8e] #47: Token 用量 reads the same real SDK JSONL projection the
   // conversation shows, one selected task at a time.
   const [usageTaskId, setUsageTaskId] = useState<string | null>(null);
+  const [usageOpen, setUsageOpen] = useState(false);
+  const [schedulesOpen, setSchedulesOpen] = useState(false);
   // Prototype A opens on the first project. An explicit pick (shell nav or the
   // management list) wins and is never overridden by a later reread.
   const pinned = useRef(false);
@@ -193,15 +196,17 @@ export function DesktopInventory() {
   // The shell wraps every view so the sidebar, breadcrumb and task-root status stay
   // visible while working, exactly like prototype A.
   const ready = view.kind === "ready" ? view.data : undefined;
-  const shellTasks = (ready?.inventory.tasks ?? []).map((task) => ({
+  const shellTasks = useMemo(() => (ready?.inventory.tasks ?? []).map((task) => ({
     ...task,
     projectId: ready?.associations.find((row) => row.taskId === task.taskId)?.projectId ?? null,
-  }));
+  })), [ready]);
   const shellProjects = (ready?.projects ?? []).map((project) => ({ id: project.id, name: project.name, description: project.description }));
   const selectedProject = selection.kind === "project" ? shellProjects.find((project) => project.id === selection.id) : undefined;
   const shellView: DesktopView = providers
     ? { view: "providers" }
-    : usageTaskId !== null
+    : schedulesOpen
+      ? { view: "schedules" }
+    : usageOpen
       ? { view: "usage" }
     : activeTask
       ? { view: "task", taskId: activeTask.id }
@@ -217,6 +222,8 @@ export function DesktopInventory() {
     setEditNeedsReview(false);
     if (next.view === "task") {
       setUnwired(null);
+      setUsageOpen(false);
+      setSchedulesOpen(false);
       setUsageTaskId(null);
       setProviders(false);
       void openTask(next.taskId);
@@ -224,9 +231,12 @@ export function DesktopInventory() {
     }
     entryEpoch.current++;
     setProviders(next.view === "providers");
+    setUsageOpen(next.view === "usage");
+    setSchedulesOpen(next.view === "schedules");
     if (next.view === "providers") return;
     if (next.view === "project" || next.view === "unassigned") setManage(false);
     if (next.view === "usage") { setUsageTaskId(activeTask?.id ?? (shellTasks[0]?.taskId ?? null)); return; }
+    if (next.view === "schedules") { setActiveTask(null); setUnwired(null); return; }
     // Any other page leaves the usage view.
     setUsageTaskId(null);
     setActiveTask(null);
@@ -237,7 +247,9 @@ export function DesktopInventory() {
   const activeProject = activeTask
     ? shellProjects.find((project) => project.id === shellTasks.find((task) => task.taskId === activeTask.id)?.projectId)
     : undefined;
-  const breadcrumb = usageTaskId !== null
+  const breadcrumb = schedulesOpen
+    ? { ...(selectedProject ? { project: selectedProject.name } : {}), page: "定时任务" }
+    : usageOpen
     ? { ...(activeProject ? { project: activeProject.name } : selectedProject ? { project: selectedProject.name } : {}), page: "Token 用量" }
     : providers
     ? { ...(activeProject ? { project: activeProject.name } : selectedProject ? { project: selectedProject.name } : {}), page: "模型与 Provider" }
@@ -256,10 +268,11 @@ export function DesktopInventory() {
     roots={ready?.inventory.roots ?? []}
     breadcrumb={breadcrumb}
   >{children}</DesktopShell>;
-  if (usageTaskId !== null) return shell(<DesktopUsagePage
+  if (schedulesOpen) return shell(<DesktopSchedulesPage tasks={shellTasks} onOpenTask={(taskId) => navigate({ view: "task", taskId })} />);
+  if (usageOpen) return shell(<DesktopUsagePage
     tasks={shellTasks}
     taskId={usageTaskId}
-    onSelectTask={(taskId) => setUsageTaskId(taskId)}
+    onSelectTask={(taskId) => { setActiveTask(null); setUsageTaskId(taskId); }}
   />);
   if (providers) return shell(<DesktopProvidersPage
     taskId={activeTask?.id ?? null}

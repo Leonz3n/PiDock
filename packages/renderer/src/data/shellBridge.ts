@@ -103,7 +103,9 @@ export type ShellTaskOp =
   | "task/quit"
   | "task/executionState"
   | "task/attention"
-  | "task/markAttentionRead";
+  | "task/markAttentionRead"
+  | "task/scheduleList"
+  | "task/scheduleRuns";
 
 /**
  * Task-scoped op through main into the per-workspace Host. Rejects outside

@@ -48,5 +48,12 @@ export async function sdkSnapshot(bridge: { sdkTurn?: (request: never) => Promis
   const result = await bridge.sdkTurn({ action: "subscribe", taskId, sessionId: SDK_SESSION_ID } as never);
   if (!result || result.ok !== true) throw new Error(result?.error || "SDK 会话读取失败");
   const payload = result.payload as { snapshot?: unknown } | undefined;
-  return parseSdkSnapshot(payload?.snapshot);
+  try {
+    return parseSdkSnapshot(payload?.snapshot);
+  } catch (error) {
+    // A successful subscribe has installed a listener even if its payload is
+    // malformed. Release it before surfacing the parse failure.
+    await bridge.sdkTurn({ action: "unsubscribe", taskId, sessionId: SDK_SESSION_ID } as never).catch(() => undefined);
+    throw error;
+  }
 }

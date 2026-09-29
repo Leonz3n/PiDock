@@ -177,6 +177,17 @@ async function run() {
       totals: await evalJs("[...document.querySelectorAll('[data-usage-total]')].map(el => el.innerText.replace(/\\n+/g,' '))"),
       rows: await evalJs("document.querySelectorAll('[data-usage-row]').length"),
     };
+    await clickSelector('[data-testid=desktop-shell] button[title="定时任务"]');
+    await until((body) => body.includes("当前筛选下没有定时任务。"), "schedules page");
+    shots.push(await capture("schedules-page", 1440, 900));
+    shots.push(await capture("schedules-page", 720, 560));
+    views.window.setContentSize(1440, 900);
+    await wait(250);
+    const schedules = {
+      rows: await evalJs("document.querySelectorAll('[data-schedule-row]').length"),
+      runs: await evalJs("document.querySelectorAll('[data-schedule-run]').length"),
+      error: await evalJs("document.querySelector('[data-testid=desktop-schedules-page] [role=alert]')?.innerText"),
+    };
     await clickSelector('[data-testid=desktop-shell] button[title=项目总览]');
     await until((body) => body.includes("继续工作"), "project overview");
     await wait(200);
@@ -198,6 +209,7 @@ async function run() {
       dock,
       providers: providersPage,
       usage,
+      schedules,
       overview,
       providerState: await evalJs("document.querySelector('[data-testid=provider-state]')?.textContent"),
       jsonlBytes: readdirSync(join(taskDir, ".pidock-sdk-sessions", "main")).filter((name) => name.endsWith(".jsonl"))
