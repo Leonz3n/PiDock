@@ -207,7 +207,9 @@ export function DesktopInventory() {
     ? { ...(shellTasks.find((task) => task.taskId === activeTask.id)?.projectId ? { project: shellProjects.find((project) => project.id === shellTasks.find((task) => task.taskId === activeTask.id)?.projectId)?.name } : {}), task: activeTask.name }
     : selectedProject
       ? { project: selectedProject.name }
-      : { project: "未归属任务" };
+      : selection.kind === "unassigned"
+        ? { project: "未归属任务" }
+        : {};
   const shell = (children: ReactNode) => <DesktopShell
     view={shellView}
     onNavigate={navigate}
