@@ -800,6 +800,11 @@ export function registerIpc(
         return { ok: true as const, payload: { unsubscribed: true } };
       }
       if (!tasks) throw new Error("sdk-task-registry-unavailable");
+      // #47: install the persisted Provider selection before the first SDK op of a
+      // task, exactly like `shell/taskOp`. Without this a turn issued right after
+      // opening a task could race the panel's own restore and fail closed with
+      // `provider-not-configured` even though a selection exists.
+      if (providers) { try { await providers.ensure(taskId, sender.webContentsId); } catch { /* surfaced by shell/providerOp list */ } }
       if (action === "subscribe") {
         revoke(sender.webContentsId);
         const revision = revisions.get(sender.webContentsId);
