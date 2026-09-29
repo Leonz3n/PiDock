@@ -9,6 +9,7 @@ interface OwnedProcess { child: ChildProcessByStdio<null, Readable, Readable>; d
 /** Host-owned processes only. No renderer PID, cwd or command is accepted at stop time. */
 export class TaskServiceProcesses {
   private readonly running = new Map<string, OwnedProcess>();
+  private closing = false;
   private readonly taskRoot: string;
 
   constructor(taskDir: string, private readonly onLine: (serviceId: string, line: string) => void,
@@ -20,6 +21,7 @@ export class TaskServiceProcesses {
   ids(): string[] { return [...this.running.keys()].sort(); }
 
   async start(plan: ServiceStartPlan): Promise<number> {
+    if (this.closing) throw new Error("host-closing: service starts are disabled");
     if (this.running.has(plan.serviceId)) throw new Error(`already-running: ${plan.serviceId}`);
     if (!isAbsolute(plan.cwd) || !isAbsolute(plan.program)) throw new Error("invalid-launch: absolute cwd and program required");
     const cwd = realpathSync(plan.cwd);
@@ -28,18 +30,24 @@ export class TaskServiceProcesses {
     const child = spawn(plan.program, plan.args, { cwd, env: { ...plan.env }, shell: false, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] });
     const emit = (stream: NodeJS.ReadableStream) => {
       let pending = "";
+      let oversized = false;
       stream.setEncoding("utf8");
       stream.on("data", (chunk: string) => {
         pending += chunk;
-        // Bound partial lines as well as complete lines, even if a child never writes a newline.
-        while (pending.includes("\n") || pending.length > 2000) {
-          const end = pending.indexOf("\n");
-          const size = end < 0 || end > 2000 ? 2000 : end;
-          this.onLine(plan.serviceId, this.redact(pending.slice(0, size).replace(/\r$/, "")));
-          pending = pending.slice(size + (end === size ? 1 : 0));
+        let end: number;
+        while ((end = pending.indexOf("\n")) >= 0) {
+          const line = pending.slice(0, end);
+          if (!oversized && line.length <= 2000) this.onLine(plan.serviceId, this.redact(line.replace(/\r$/, "")).slice(0, 2000));
+          else this.onLine(plan.serviceId, "[output line exceeded 2000 characters]");
+          pending = pending.slice(end + 1);
+          oversized = false;
         }
+        if (pending.length > 2000) { pending = ""; oversized = true; }
       });
-      stream.on("end", () => { if (pending) this.onLine(plan.serviceId, this.redact(pending.slice(0, 2000))); });
+      stream.on("end", () => {
+        if (oversized) this.onLine(plan.serviceId, "[output line exceeded 2000 characters]");
+        else if (pending) this.onLine(plan.serviceId, this.redact(pending).slice(0, 2000));
+      });
     };
     emit(child.stdout);
     emit(child.stderr);
@@ -63,6 +71,7 @@ export class TaskServiceProcesses {
   }
 
   async stopAll(): Promise<void> {
+    this.closing = true;
     await Promise.all(this.ids().map(async (serviceId) => {
       try { await this.stop(serviceId); }
       catch (error) { if (!(error instanceof Error && error.message.startsWith("not-running:"))) throw error; }

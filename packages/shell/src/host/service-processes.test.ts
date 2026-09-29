@@ -46,6 +46,15 @@ describe("#7 Host-owned real service processes", () => {
     } finally { if (processes.ids().includes("two")) await processes.stop("two"); }
   });
 
+  it("does not emit secret fragments from an oversized line", async () => {
+    const root = taskDir(); const lines: string[] = []; const exits: string[] = [];
+    const secret = "private-value";
+    const processes = new TaskServiceProcesses(root, (_, line) => lines.push(line), (_, reason) => exits.push(reason), (line) => line.replaceAll(secret, "[redacted]"));
+    await processes.start(plan("one", root, ["-e", "process.stdout.write('x'.repeat(1999) + process.env.PIDOCK_SECRET + '\\n')"], { PIDOCK_SECRET: secret }));
+    await until(() => exits.length === 1);
+    expect(lines).toEqual(["[output line exceeded 2000 characters]"]);
+  });
+
   it("stops every owned child on normal Host cleanup", async () => {
     const root = taskDir(); const processes = new TaskServiceProcesses(root, () => {}, () => {}, (line) => line);
     const args = ["-e", "setInterval(() => {}, 1000)"];
@@ -53,6 +62,7 @@ describe("#7 Host-owned real service processes", () => {
     await processes.start(plan("two", root, args));
     await processes.stopAll();
     expect(processes.ids()).toEqual([]);
+    await expect(processes.start(plan("late", root, args))).rejects.toThrow("host-closing");
   });
 
   it("never inherits an unrelated Host environment variable", async () => {
