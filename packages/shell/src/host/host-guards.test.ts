@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { boundWorkspaceId, resolveBrowserLogSession, buildHostEnv, buildToolPlannerSpec, classifyControlCaller, DEFAULT_WORKSPACE_ID, routeHostTask, routeTaskBinding, toolPlannerSpecForHostDispatch, toolPlannerSpecForOp, validateHostTaskOp } from "./host-guards.js";
+import { authorizeServiceRegistration, boundWorkspaceId, resolveBrowserLogSession, buildHostEnv, buildToolPlannerSpec, classifyControlCaller, DEFAULT_WORKSPACE_ID, routeHostTask, routeTaskBinding, toolPlannerSpecForHostDispatch, toolPlannerSpecForOp, validateHostTaskOp } from "./host-guards.js";
+
+describe("service registration authorization", () => {
+  it("allows only main-attested human registration until Agent diff approval is wired", () => {
+    const origin = { kind: "shell-ui", senderWebContentsId: 42 };
+    expect(authorizeServiceRegistration({ origin })).toEqual({ ok: true });
+    expect(authorizeServiceRegistration({})).toMatchObject({ ok: false });
+    expect(authorizeServiceRegistration({ sessionId: "main", origin })).toMatchObject({ ok: false });
+    expect(authorizeServiceRegistration({ origin: { kind: "shell-ui", senderWebContentsId: "42" } })).toMatchObject({ ok: false });
+  });
+});
 
 // S6 final wiring: approval-listing reads ride `task/listApprovals` +
 // `task/getApproval` (fail-closed payloads; host.ts needs a parent port).

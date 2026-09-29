@@ -35,6 +35,7 @@ const hostPort = getParentPort();
 let started = false;
 
 import {
+  authorizeServiceRegistration,
   boundWorkspaceId,
   classifyControlCaller,
   resolveBrowserLogSession,
@@ -48,6 +49,7 @@ import { PiSdkTextKernel } from "./sdk-text-kernel.js";
 import type { ServiceRunObservation } from "../main/execution-ledger.js";
 import { SharedPathCoordinator } from "./path-coordination.js";
 import { TaskServiceRuntime } from "./service-runtime.js";
+import { publicServiceStartPreview, publicServiceStatus } from "./service-public.js";
 import { TaskServiceTopology } from "./service-topology.js";
 import { TaskProtocolBinding } from "./protocol-binding.js";
 import { TaskWorkspaceFiles } from "./workspace-files.js";
@@ -56,7 +58,6 @@ import { TaskLifecycleHost } from "./task-lifecycle.js";
 import { createLifecycleResources } from "./lifecycle-resources.js";
 import { runAgentTerminalControl } from "./terminal-control.js";
 import { writeClaimError } from "./write-coordination.js";
-import { runAgentServiceControl } from "./service-control.js";
 import { runAgentBrowserAction, runHumanBrowserAction, type BrowserGatewayPort } from "./browser-control.js";import { HostBrowserClient } from "../rpc/browser-client.js";
 import { isBrowserAction } from "../main/browser-rules.js";
 import type { RemoteEntryMode, RemotePendingRequest } from "../main/remote-rules.js";
@@ -725,16 +726,11 @@ async function dispatchTaskOp(
         if (!approval) return { ok: false, error: "确认请求不存在" };
         return { ok: true, payload: { approval } };
       }
-      // [PiDock 04] (#7) service ops: same fork binding as the task ops
-      // above (via `serviceRuntimeFor`, which reuses the `taskHostFor`
-      // guard, so unbound/foreign tasks fail closed identically).
-      // Agent `service/start|service/stop` control goes through the #5
-      // permission gate on the task's session channel: readonly denies,
-      // default requires a verified live approval id, auto allows. A call
-      // carrying a `sessionId` is always agent control; only a
-      // session-less call is human-explicit. Renderer `actor` /
-      // `approvalGranted` claims are never trusted, and only a Host-minted
-      // `service-control`-scoped approval is accepted (`runAgentServiceControl`).
+      // [PiDock 04] (#7) service ops share the fork-time task binding.
+      // Registration currently accepts only main-attested human UI callers;
+      // Agent template edits await diff approval. Execution remains disabled
+      // until real process ownership, cleanup and cross-platform stop pass.
+      // Reads return allowlisted display projections, never raw launch env.
       case "task/registerService": {
         const services = serviceRuntimeFor(taskId);
         if ("error" in services) return { ok: false, error: services.error };
@@ -754,6 +750,8 @@ async function dispatchTaskOp(
         if (typeof templateVersion !== "string" || templateVersion.trim().length === 0) {
           return { ok: false, error: "invalid-payload: task/registerService requires templateVersion" };
         }
+        const authorization = authorizeServiceRegistration({ sessionId: record["sessionId"], origin });
+        if (!authorization.ok) return { ok: false, error: authorization.error };
         try {
           const saved = services.register({
             serviceId,
@@ -761,7 +759,7 @@ async function dispatchTaskOp(
             layers: serviceLayers as never,
             templateVersion,
           });
-          return { ok: true, payload: { service: saved } };
+          return { ok: true, payload: { service: { serviceId: saved.serviceId, templateVersion: saved.templateVersion, lifecycle: saved.lifecycle } } };
         } catch (error) {
           return { ok: false, error: error instanceof Error ? error.message : String(error) };
         }
@@ -776,7 +774,7 @@ async function dispatchTaskOp(
         }
         try {
           const plan = services.planStart(serviceId, cwd);
-          return { ok: true, payload: { plan } };
+          return { ok: true, payload: { plan: publicServiceStartPreview(plan) } };
         } catch (error) {
           return { ok: false, error: error instanceof Error ? error.message : String(error) };
         }
@@ -802,34 +800,9 @@ async function dispatchTaskOp(
           origin,
         });
         if (!caller.ok) return { ok: false, error: caller.error };
-        if (caller.kind === "agent") {
-          const sessionId = caller.sessionId;
-          // Agent control: tier, approval lookup, one-shot spend and the
-          // act are one testable sequence (`runAgentServiceControl`),
-          // driven by the session channel's live state — never by
-          // caller-claimed booleans or actors.
-          const channel = host.openSession(sessionId);
-          return runAgentServiceControl({
-            services,
-            channel,
-            sessionId,
-            serviceId,
-            action,
-            approvalId: record["approvalId"],
-            // [PiDock 09] (#11) box 3: the task write right constrains even
-            // the `auto` tier (one task, one writer; reads never claim).
-            write: host,
-            persist: () => host.store.writeSession(host.taskDir, channel.snapshot()),
-          });
-        }
-        // Human UI control: attested sender, labelled and auditable.
-        try {
-          if (action === "start") services.markStarted(serviceId, { kind: "human", label: caller.label });
-          else services.markStopped(serviceId, { kind: "human", label: caller.label }, "user-request");
-          return { ok: true, payload: { serviceId, action, actor: "human" } };
-        } catch (error) {
-          return { ok: false, error: error instanceof Error ? error.message : String(error) };
-        }
+        // Lifecycle flags are not processes. Do not mint approval or report a
+        // successful control until Host-owned process-tree execution is wired.
+        return { ok: false, error: "service-execution-unavailable: 真实服务进程启停尚未接线" };
       }
       case "task/serviceStatus": {
         const services = serviceRuntimeFor(taskId);
@@ -840,16 +813,7 @@ async function dispatchTaskOp(
         }
         const status = services.get(serviceId);
         if (!status) return { ok: false, error: `unknown-service: ${serviceId} is not registered on this task` };
-        // Secrets cross the Host boundary only as masked display values;
-        // the resolved snapshot keeps real values Host-side.
-        const masked = {
-          ...status,
-          resolved: status.resolved.map((entry) => ({
-            ...entry,
-            value: entry.secret ? "••••••••" : entry.value,
-          })),
-        };
-        return { ok: true, payload: { service: masked } };
+        return { ok: true, payload: { service: publicServiceStatus(status) } };
       }
       case "task/serviceLog": {
         const services = serviceRuntimeFor(taskId);
