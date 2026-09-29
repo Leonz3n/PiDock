@@ -5,12 +5,13 @@ import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import { PROVIDER_STATE_TEXT, parseProviderStatus, providerCall, type ProviderStatus } from "../data/providerProfile";
+import { SDK_SESSION_ID, parseSdkSnapshot, type SdkMessage } from "../data/sdkSession";
 import { DesktopToolDock, DESKTOP_TOOLS_UNWIRED, type DesktopTool } from "./DesktopToolDock";
 import { BrandMark, LocalUserAvatar } from "./ui";
 
-const sessionId = "main";
+const sessionId = SDK_SESSION_ID;
 type Turn = { taskId: string; sessionId: string; requestId: string; turnId: string; state: "accepted" | "done" | "cancelled" | "failed" | "interrupted"; error?: string; needsResync: boolean };
-type Message = { role: "user" | "assistant"; text: string; usage: { input: number; output: number; cacheRead: number; cacheWrite: number } | null };
+type Message = SdkMessage;
 type Snapshot = { source: "sdk-jsonl"; sessionId: string; messages: Message[]; pending: boolean; interrupted: boolean };
 type Attempt = { requestId: string; text: string; turnId?: string; phase: "starting" | "unknown" | "accepted" | "terminal"; state?: Turn["state"] };
 type Receipt = { schema: 1; taskId: string; sessionId: "main"; requestId: string; text: string };
@@ -45,16 +46,7 @@ function clearReceipt(taskId: string, requestId: string): void {
 }
 const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
 const errorText = (value: unknown) => value instanceof Error ? value.message : "SDK 连接失败，请重新核验";
-function parseSnapshot(value: unknown): Snapshot {
-  if (!object(value) || value.source !== "sdk-jsonl" || value.sessionId !== sessionId || !Array.isArray(value.messages) ||
-      value.messages.length > 80 || typeof value.pending !== "boolean" || typeof value.interrupted !== "boolean") throw new Error("SDK 历史返回异常");
-  const messages = value.messages.map((item: unknown) => {
-    if (!object(item) || !["user", "assistant"].includes(String(item.role)) || typeof item.text !== "string" ||
-        !(item.usage === null || (object(item.usage) && ["input", "output", "cacheRead", "cacheWrite"].every((key) => Number.isSafeInteger((item.usage as Record<string, unknown>)[key]) && Number((item.usage as Record<string, unknown>)[key]) >= 0)))) throw new Error("SDK 消息返回异常");
-    return item as Message;
-  });
-  return { source: "sdk-jsonl", sessionId, messages, pending: value.pending, interrupted: value.interrupted };
-}
+const parseSnapshot = parseSdkSnapshot;
 function parseTurn(value: unknown, taskId: string, requestId: string): Turn | null {
   if (value === null) return null;
   if (!object(value) || value.taskId !== taskId || value.sessionId !== sessionId || value.requestId !== requestId ||
