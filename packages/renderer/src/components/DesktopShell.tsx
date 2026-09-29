@@ -16,6 +16,8 @@
  */
 
 import type { ReactNode } from "react";
+import { Badge } from "./ui/badge";
+import { Button } from "./ui/button";
 import { Icon, type IconName } from "./Icon";
 import { BrandMark, LocalUserAvatar } from "./ui";
 
@@ -70,22 +72,23 @@ export function DesktopUnwired({ name, onBack }: { name: string; onBack: () => v
       <p className="mt-3 text-[12px] leading-6 text-muted">
         真实 Host 尚未提供这项数据，界面不会用样例内容填充。此入口保留，接入后在此页展示真实状态。
       </p>
-      <button type="button" onClick={onBack} className="mt-5 rounded-[7px] border border-line bg-paper px-[11px] py-[7px] text-[12px] text-ink hover:border-[#bec0c3]">
+      <Button type="button" onClick={onBack} className="mt-5 h-auto rounded-[7px] px-[11px] py-[7px] text-[12px] hover:border-[#bec0c3]">
         返回任务
-      </button>
+      </Button>
     </div>
   );
 }
 
 function SidebarNavButton({ label, icon, active, count, disabled, onSelect }: { label: string; icon: IconName; active: boolean; count?: number; disabled?: boolean; onSelect: () => void }) {
   return (
-    <button
+    <Button
       type="button"
+      variant="ghost"
       title={label}
       aria-current={active ? "page" : undefined}
       disabled={disabled}
       onClick={onSelect}
-      className={`${NAV_ITEM_CLASS} my-0.5 disabled:cursor-default disabled:opacity-45 ${
+      className={`${NAV_ITEM_CLASS} my-0.5 h-auto border-transparent bg-transparent disabled:cursor-default disabled:opacity-45 ${
         active ? "bg-[#e3e6ec] font-semibold text-[#283c6c]" : "text-[#69737a] hover:bg-[#eaebec]"
       }`}
     >
@@ -93,32 +96,33 @@ function SidebarNavButton({ label, icon, active, count, disabled, onSelect }: { 
       {/* The 64px rail keeps an accessible name per button (`sr-only`), unlike the
           prototype's `display:none`, without changing the wide layout. */}
       <span className="below-mid:sr-only">{label}</span>
-      {count === undefined ? null : <span className="ml-auto rounded-[5px] bg-[#e7eaea] px-1.5 text-[10px] below-mid:hidden">{count}</span>}
-    </button>
+      {count === undefined ? null : <Badge variant="soft" className="ml-auto rounded-[5px] border-transparent bg-[#e7eaea] px-1.5 text-[10px] below-mid:hidden">{count}</Badge>}
+    </Button>
   );
 }
 
 function TaskNavCard({ task, selected, onSelect }: { task: DesktopShellTask; selected: boolean; onSelect: () => void }) {
   return (
-    <button
+    <Button
       type="button"
+      variant="ghost"
       data-task-nav={task.taskId}
       aria-current={selected ? "page" : undefined}
       onClick={onSelect}
-      className={`mb-[5px] flex w-full flex-col rounded-[7px] border px-[10px] py-[10px] text-left ${
+      className={`mb-[5px] flex h-auto w-full flex-col items-stretch justify-start gap-0 rounded-[7px] px-[10px] py-[10px] text-left ${
         selected ? "border-[#e5e5e6] bg-paper shadow-sm" : "border-transparent hover:bg-paper"
       }`}
     >
       <span className="flex items-center gap-[9px] text-[12px]">
         <span aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-full bg-[#9aa4ab]" />
-        <span className="shrink-0 rounded-[4px] border border-[#d9dde6] bg-[#f8f9fb] px-1 text-[8px] leading-4 text-[#858e9d]">任务</span>
+        <Badge variant="outline" className="shrink-0 rounded-[4px] border-[#d9dde6] bg-[#f8f9fb] px-1 text-[8px] leading-4 text-[#858e9d]">任务</Badge>
         <span className="truncate text-ink">{task.name}</span>
       </span>
       <span className="mt-1 ml-[14px] flex justify-between gap-2 text-[10px] text-[#959da2]">
         <span className="truncate">{task.repoCount > 0 ? `${task.repoCount} 仓库 · ${task.branch}` : task.branch}</span>
         <span className="shrink-0">{task.updatedAt.slice(0, 10)}</span>
       </span>
-    </button>
+    </Button>
   );
 }
 

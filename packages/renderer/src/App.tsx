@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { DesktopInventory } from "./components/DesktopInventory";
+import { TooltipProvider } from "./components/ui/tooltip";
 import { desktopMode } from "./data/desktopInventory";
 import { Modals } from "./components/Modals";
 import { Shell } from "./components/Shell";
@@ -10,7 +11,9 @@ import { useNavigationStore } from "./stores/navigation";
 import { useUiStore } from "./stores/ui";
 
 export function App() {
-  if (desktopMode(window.pidock, navigator.userAgent)) return <DesktopInventory />;
+  // Production desktop path, wrapped once so every shadcn Tooltip (vendored
+  // Radix) has its provider; the demo path renders DemoApp below.
+  if (desktopMode(window.pidock, navigator.userAgent)) return <TooltipProvider><DesktopInventory /></TooltipProvider>;
   return <DemoApp />;
 }
 

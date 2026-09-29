@@ -26,6 +26,34 @@
 
   --font-sans: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
   --radius-panel: 10px;
+
+  /*
+   * shadcn/ui semantic layer ([UI 对齐] #47). shadcn primitives are vendored in
+   * `src/components/ui` and address these names; every value is an alias of a
+   * PiDock token above, so the vendored components inherit the prototype A
+   * palette (neutral grey/white surfaces, navy `accent`) instead of shadcn's
+   * default greys. `accent`/`muted` are deliberately NOT redefined here: in
+   * PiDock `accent` is the brand navy, so the vendored components use
+   * `secondary` for hover surfaces instead of shadcn's `accent`.
+   */
+  --color-background: var(--color-bg);
+  --color-foreground: var(--color-ink);
+  --color-card: var(--color-paper);
+  --color-card-foreground: var(--color-ink);
+  --color-popover: var(--color-paper);
+  --color-popover-foreground: var(--color-ink);
+  --color-primary: var(--color-accent);
+  --color-primary-foreground: var(--color-paper);
+  --color-secondary: var(--color-soft);
+  --color-secondary-foreground: var(--color-ink);
+  --color-muted-foreground: var(--color-muted);
+  --color-border: var(--color-line);
+  --color-input: var(--color-line);
+  --color-ring: var(--color-accent);
+  --color-destructive: #ad4545;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
 }
 
 @layer base {

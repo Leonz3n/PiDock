@@ -1,6 +1,6 @@
+import { Button } from "./ui/button";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 
-const button = "inline-flex min-h-8 items-center justify-center gap-1.5 border border-line bg-paper px-2.5 py-1 text-xs hover:bg-bg disabled:cursor-not-allowed disabled:opacity-50";
 const field = "min-w-0 border border-line bg-bg px-2 py-1 text-xs";
 
 type ProviderView = { id: string; name: string; baseUrl: string; modelId: string; contextWindow: number; maxTokens: number; authRef: string; generation: number; credentialAvailable: boolean };
@@ -92,16 +92,16 @@ export function DesktopProviderPanel({ taskId }: { taskId: string }) {
     <div className="mx-auto flex max-w-[820px] min-w-0 flex-wrap items-center gap-2 text-xs">
       <span className="font-semibold">Provider</span>
       <span role="status" className="min-w-0 flex-1 break-words text-muted" data-testid="provider-state">{status ? STATE_TEXT[status.state] : "正在读取 Provider 配置"}</span>
-      <button type="button" className={button} onClick={() => setOpen((value) => !value)} aria-expanded={open}>{open ? "收起" : "配置"}</button>
-      {status?.state === "configured" && <button type="button" className={button} disabled={busy} onClick={() => { setBusy(true); void (async () => { try { setStatus(parseStatus(await call({ op: "clear" }))); setError(""); } catch (caught) { setError(caught instanceof Error ? caught.message : "Provider 解除失败"); } finally { setBusy(false); } })(); }}>解除</button>}
+      <Button type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open}>{open ? "收起" : "配置"}</Button>
+      {status?.state === "configured" && <Button type="button" disabled={busy} onClick={() => { setBusy(true); void (async () => { try { setStatus(parseStatus(await call({ op: "clear" }))); setError(""); } catch (caught) { setError(caught instanceof Error ? caught.message : "Provider 解除失败"); } finally { setBusy(false); } })(); }}>解除</Button>}
     </div>
     {error && <p role="alert" className="mx-auto mt-1 max-w-[820px] break-words text-xs text-[#ad4545]">{error}</p>}
     {open && <div className="mx-auto mt-2 max-w-[820px] min-w-0 space-y-2">
       {status && status.profiles.length > 0 && <ul className="space-y-1 text-xs">{status.profiles.map((profile) => <li key={profile.id} className="flex min-w-0 flex-wrap items-center gap-2 border border-line px-2 py-1">
         <span className="min-w-0 flex-1 truncate">{profile.name} · {profile.modelId} · 第 {profile.generation} 代{profile.credentialAvailable ? "" : " · 凭据缺失"}</span>
-        <button type="button" className={button} disabled={busy || (status.profileId === profile.id && status.state === "configured")} onClick={() => { setBusy(true); void (async () => { try { setStatus(parseStatus(await call({ op: "select", profileId: profile.id }))); setError(""); } catch (caught) { await run({ op: "list" }); setError(caught instanceof Error ? caught.message : "Provider 选择失败"); } finally { setBusy(false); } })(); }}>选用</button>
-        <button type="button" className={button} onClick={() => edit(profile)}>编辑</button>
-        <button type="button" className={button} disabled={busy} onClick={() => { setBusy(true); void (async () => { try { setStatus(parseStatus(await call({ op: "remove", profileId: profile.id }))); setError(""); } catch (caught) { setError(caught instanceof Error ? caught.message : "Provider 删除失败"); } finally { setBusy(false); } })(); }}>删除</button>
+        <Button type="button" disabled={busy || (status.profileId === profile.id && status.state === "configured")} onClick={() => { setBusy(true); void (async () => { try { setStatus(parseStatus(await call({ op: "select", profileId: profile.id }))); setError(""); } catch (caught) { await run({ op: "list" }); setError(caught instanceof Error ? caught.message : "Provider 选择失败"); } finally { setBusy(false); } })(); }}>选用</Button>
+        <Button type="button" onClick={() => edit(profile)}>编辑</Button>
+        <Button type="button" disabled={busy} onClick={() => { setBusy(true); void (async () => { try { setStatus(parseStatus(await call({ op: "remove", profileId: profile.id }))); setError(""); } catch (caught) { setError(caught instanceof Error ? caught.message : "Provider 删除失败"); } finally { setBusy(false); } })(); }}>删除</Button>
       </li>)}</ul>}
       <form onSubmit={submit} className="grid min-w-0 grid-cols-2 gap-2 text-xs">
         <label className="min-w-0 col-span-2">名称<input className={`${field} w-full`} value={draft.name} maxLength={128} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label>
@@ -112,8 +112,8 @@ export function DesktopProviderPanel({ taskId }: { taskId: string }) {
         <label className="min-w-0">最大输出<input className={`${field} w-full`} inputMode="numeric" value={draft.maxTokens} onChange={(event) => setDraft({ ...draft, maxTokens: event.target.value })} /></label>
         <p className="col-span-2 text-muted">此处只保存引用名，不保存密钥；密钥由本机环境变量提供，只有 main 会读取它。</p>
         <div className="col-span-2 flex gap-2">
-          <button type="submit" className={button} disabled={busy || !draft.name.trim() || !draft.baseUrl.trim() || !draft.modelId.trim() || !/^PIDOCK_PROVIDER_[A-Z0-9_]{1,64}$/.test(draft.authRef.trim())}>保存并选用</button>
-          {draft.id !== undefined && <button type="button" className={button} onClick={() => setDraft(empty)}>新建一份</button>}
+          <Button type="submit" disabled={busy || !draft.name.trim() || !draft.baseUrl.trim() || !draft.modelId.trim() || !/^PIDOCK_PROVIDER_[A-Z0-9_]{1,64}$/.test(draft.authRef.trim())}>保存并选用</Button>
+          {draft.id !== undefined && <Button type="button" onClick={() => setDraft(empty)}>新建一份</Button>}
         </div>
       </form>
       {pending && status?.state === "not-configured" && <p className="text-xs text-muted">未配置时发送消息会失败并说明原因，不会改用其它模型。</p>}
