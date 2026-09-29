@@ -282,11 +282,13 @@ export function DesktopConversation({ taskId, name, roots, association, onBack, 
   const ready = valid && connected;
   // S8d: `文件`/`终端` are wired to real Host ops; the rest stay visible but
   // unwired, with the Host-side reason instead of a silent no-op.
-  const toolIcons: { icon: "file" | "terminal" | "server" | "globe"; tool?: DesktopTool; unwiredId?: string; label: string }[] = [
+  const toolIcons: { icon: "file" | "terminal" | "server" | "globe" | "chart" | "link"; tool?: DesktopTool; unwiredId?: string; label: string }[] = [
     { icon: "server", unwiredId: "runtime", label: "运行" },
     { icon: "globe", unwiredId: "browser", label: "浏览器" },
     { icon: "file", tool: "files", label: "文件" },
     { icon: "terminal", tool: "terminal", label: "终端" },
+    { icon: "chart", unwiredId: "logs", label: "日志" },
+    { icon: "link", tool: "protocol", label: "协议" },
   ];
   // The provider is mounted here as well as at the app root: this component is
   // also rendered standalone (tests, embedded surfaces).
@@ -360,7 +362,7 @@ export function DesktopConversation({ taskId, name, roots, association, onBack, 
       {unwired}面板未接线：{DESKTOP_TOOLS_UNWIRED.find((entry) => entry.label === unwired)?.reason ?? "生产读取路径尚未接线"}（不显示样例数据）
     </p>}
     <div className="flex min-h-0 min-w-0 flex-1">
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+    <div className={`flex min-h-0 min-w-0 flex-1 flex-col ${tool ? "below-narrow:hidden" : ""}`}>
     <section aria-label="SDK 对话历史" className="mx-auto w-full max-w-[820px] min-h-0 min-w-0 flex-1 space-y-3 overflow-y-auto px-3 py-4">
       <p className="text-xs text-muted">SDK JSONL 已确认历史 · 最近最多 80 条</p>
       {snapshot && !snapshot.messages.length && <p className="py-8 text-center text-sm text-muted">尚未开始 · 无 SDK 会话记录</p>}

@@ -120,6 +120,97 @@ describe("[UI 对齐] S8d production tool dock", () => {
   });
 });
 
+describe("[UI 对齐] S8 production protocol dock", () => {
+  const state = (taskId: string) => ({
+    state: {
+      taskId, mode: "release", protocol: { repoDir: "", goGenDir: "", tsGenDir: "" },
+      generatedVersion: null, generation: { runsGeneration: false, reason: "协议未改动：保留发布依赖", steps: [] },
+      consumers: [], prepare: [{ state: "code-ready", label: "代码就绪", ok: false, detail: "尚未配置协议仓库" }],
+      toolchain: { platform: "", ok: false, note: "未探测", entries: [] },
+      switchAssessment: { blockers: [] }, diagnostics: [],
+    },
+  });
+
+  it("shows only the selected task's real unplanned Host state, without planning a write", async () => {
+    const taskOp = vi.fn(async (taskId: string, _op: string) => ({ ok: true, payload: state(taskId) }));
+    bridge(taskOp);
+    const { rerender } = render(<DesktopToolDock taskId="task-1" tool="protocol" onClose={() => {}} />);
+    expect(await screen.findByText("实际生成版本：尚未生成")).toBeInTheDocument();
+    expect(screen.getByText("协议仓库 未配置")).toBeInTheDocument();
+    rerender(<DesktopToolDock taskId="task-2" tool="protocol" onClose={() => {}} />);
+    expect(screen.queryByText("实际生成版本：尚未生成")).not.toBeInTheDocument();
+    await waitFor(() => expect(taskOp).toHaveBeenCalledWith("task-2", "task/protocolState", {}));
+    expect(taskOp.mock.calls.map((call) => call[1])).toEqual(["task/protocolState", "task/protocolState"]);
+  });
+
+  it("renders Host-reported consumer state without inventing a generated version", async () => {
+    const base = state("task-1");
+    const payload = { state: { ...base.state, protocol: { ...base.state.protocol, repoDir: "/tmp/task-1/apis" }, consumers: [{
+      consumerId: "invoice", name: "invoice-service", language: "go", repoDir: "/tmp/task-1/invoice",
+      releaseDependency: "github.com/example/apis v1", binding: { kind: "release", dependency: "github.com/example/apis v1" },
+      staleness: { state: "ready", detail: "使用发布依赖" },
+    }] } };
+    bridge(async () => ({ ok: true, payload }));
+    render(<DesktopToolDock taskId="task-1" tool="protocol" onClose={() => {}} />);
+    expect(await screen.findByText(/invoice-service · Go · 就绪/)).toBeInTheDocument();
+    expect(screen.getByText("实际生成版本：尚未生成")).toBeInTheDocument();
+    expect(screen.getByText("使用发布依赖")).toBeInTheDocument();
+  });
+
+  it("shows Host refusal and malformed or foreign-task payloads as errors", async () => {
+    const taskOp = vi.fn(async (): Promise<unknown> => ({ ok: false, error: "protocol read refused" }));
+    bridge(taskOp);
+    const { rerender } = render(<DesktopToolDock taskId="task-1" tool="protocol" onClose={() => {}} />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("protocol read refused");
+    taskOp.mockImplementation(async () => ({ ok: true, payload: state("another-task") }));
+    rerender(<DesktopToolDock taskId="task-2" tool="protocol" onClose={() => {}} />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Host 协议状态响应无法解析");
+    expect(screen.queryByText("实际生成版本：尚未生成")).not.toBeInTheDocument();
+    taskOp.mockImplementation(async () => ({ ok: true, payload: { state: { taskId: "task-3", mode: "release" } } }));
+    rerender(<DesktopToolDock taskId="task-3" tool="protocol" onClose={() => {}} />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Host 协议状态响应无法解析");
+  });
+
+  it("rejects a malformed local binding instead of presenting it as a release dependency", async () => {
+    const base = state("task-1");
+    const payload = { state: { ...base.state, mode: "local", consumers: [{
+      consumerId: "invoice", name: "invoice-service", language: "go", repoDir: "/tmp/task-1/invoice",
+      releaseDependency: "github.com/example/apis v1", binding: {},
+      staleness: { state: "needs-binding", detail: "尚未绑定" },
+    }] } };
+    bridge(async () => ({ ok: true, payload }));
+    render(<DesktopToolDock taskId="task-1" tool="protocol" onClose={() => {}} />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Host 协议状态响应无法解析");
+    expect(screen.queryByText(/发布依赖：github.com\/example/)).not.toBeInTheDocument();
+  });
+
+  it.each([
+    { kind: "go-workspace", path: "/tmp/go.work", useDirectories: [], excludedConsumers: [], releaseManifestsUntouched: [] },
+    { kind: "ts-link", linkPath: "/tmp/link", artifact: "/tmp/artifact", marker: "managed", restore: { program: "npm", args: [] } },
+  ])("rejects local binding missing its nested Host fields ($kind)", async (binding) => {
+    const base = state("task-1");
+    const payload = { state: { ...base.state, mode: "local", consumers: [{
+      consumerId: "invoice", name: "invoice-service", language: "go", repoDir: "/tmp/task-1/invoice",
+      releaseDependency: "github.com/example/apis v1", binding,
+      staleness: { state: "needs-binding", detail: "尚未绑定" },
+    }] } };
+    bridge(async () => ({ ok: true, payload }));
+    render(<DesktopToolDock taskId="task-1" tool="protocol" onClose={() => {}} />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Host 协议状态响应无法解析");
+  });
+
+  it("ignores an old task's late protocol response", async () => {
+    let resolveOld!: (value: unknown) => void;
+    const taskOp = vi.fn((taskId: string) => taskId === "task-1" ? new Promise<unknown>((resolve) => { resolveOld = resolve; }) : Promise.resolve({ ok: true, payload: state("task-2") }));
+    bridge(taskOp);
+    const { rerender } = render(<DesktopToolDock taskId="task-1" tool="protocol" onClose={() => {}} />);
+    rerender(<DesktopToolDock taskId="task-2" tool="protocol" onClose={() => {}} />);
+    expect(await screen.findByText("实际生成版本：尚未生成")).toBeInTheDocument();
+    resolveOld({ ok: false, error: "old task failure" });
+    await waitFor(() => expect(screen.queryByText("old task failure")).not.toBeInTheDocument());
+  });
+});
+
 describe("[UI 对齐] S8d Host envelope unwrapping", () => {
   it("unwraps the Host envelope main relays inside its own payload", async () => {
     const taskOp = vi.fn(async () => ({

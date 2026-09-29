@@ -9,8 +9,11 @@ import {
   fileRootsThroughShell,
   fileTreeThroughShell,
   planTerminalThroughShell,
+  protocolStateThroughShell,
   terminalStateThroughShell,
 } from "../data/shellBridge";
+import { protocolBindingFromHost } from "../data/protocolBinding";
+import { ProtocolPanel } from "./ToolPanels";
 import {
   terminalPlanFromHost,
   terminalStateFromHost,
@@ -32,23 +35,23 @@ import {
  * Every row here comes from a real Host op (`task/fileRoots`, `task/fileTree`,
  * `task/filePreview`, `task/fileDiff`, `task/planTerminal`, `task/terminalState`)
  * and is parsed strictly; a failed op shows the Host's own refusal instead of
- * falling back to sample data. Tools the Host cannot answer yet (`运行` needs a
- * per-task service listing op, `浏览器`/`协议`/`日志` have no production read
- * path) stay visible-but-unwired rather than pretending.
+ * falling back to sample data. `协议` reads `task/protocolState`. Tools the Host
+ * cannot answer yet (`运行` needs a per-task service listing op, `浏览器` has
+ * no production page read, `日志` needs service enumeration) stay unwired.
  */
-export type DesktopTool = "files" | "terminal";
+export type DesktopTool = "files" | "terminal" | "protocol";
 
 export const DESKTOP_TOOL_LABELS: Record<DesktopTool, string> = {
   files: "文件",
   terminal: "终端",
+  protocol: "协议",
 };
 
 /** Tools the prototype shows that this build cannot answer from the Host yet. */
 export const DESKTOP_TOOLS_UNWIRED: { id: string; label: string; reason: string }[] = [
   { id: "runtime", label: "运行", reason: "Host 尚未提供本任务服务清单 op，无法枚举服务" },
   { id: "browser", label: "浏览器", reason: "生产浏览器视图尚未接线到主进程 BrowserWindow" },
-  { id: "protocol", label: "协议", reason: "协议面板依赖服务拓扑，本轮未接线" },
-  { id: "logs", label: "日志", reason: "日志面板依赖服务清单，本轮未接线" },
+  { id: "logs", label: "日志", reason: "Host 尚未提供本任务服务清单，无法选择服务读取日志" },
 ];
 
 const shellError = (result: { error?: string }, fallback: string) => result.error ?? fallback;
@@ -409,6 +412,74 @@ function TerminalTool({ taskId }: { taskId: string }) {
   );
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
+
+function validProtocolState(payload: unknown, taskId: string): boolean {
+  if (!isRecord(payload) || !isRecord(payload.state)) return false;
+  const state = payload.state;
+  const protocol = state.protocol;
+  const generation = state.generation;
+  const toolchain = state.toolchain;
+  const assessment = state.switchAssessment;
+  const row = (value: unknown) => isRecord(value);
+  const text = (value: unknown) => typeof value === "string";
+  const entries = (value: unknown, check: (entry: Record<string, unknown>) => boolean) =>
+    Array.isArray(value) && value.every((entry: unknown) => row(entry) && check(entry));
+  const stringList = (value: unknown) => Array.isArray(value) && value.every(text);
+  const validBinding = (value: unknown): boolean => {
+    if (!isRecord(value)) return false;
+    if (value.kind === "release") return text(value.dependency);
+    if (value.kind === "go-workspace") return text(value.path) && stringList(value.useDirectories) &&
+      stringList(value.excludedConsumers) && stringList(value.releaseManifestsUntouched) &&
+      isRecord(value.env) && text(value.env.GOWORK);
+    if (value.kind === "ts-link") return text(value.linkPath) && text(value.artifact) && text(value.marker) &&
+      isRecord(value.link) && text(value.link.program) && stringList(value.link.args) &&
+      isRecord(value.restore) && text(value.restore.program) && stringList(value.restore.args);
+    return false;
+  };
+  return state.taskId === taskId && (state.mode === "release" || state.mode === "local") &&
+    isRecord(protocol) && ["repoDir", "goGenDir", "tsGenDir"].every((key) => text(protocol[key])) &&
+    (state.generatedVersion === null || text(state.generatedVersion)) &&
+    isRecord(generation) && typeof generation.runsGeneration === "boolean" && text(generation.reason) &&
+    entries(generation.steps, (step) => (step.kind === "generate" || step.kind === "postprocess") && text(step.program) && text(step.cwd) && Array.isArray(step.args) && step.args.every(text)) &&
+    isRecord(toolchain) && typeof toolchain.ok === "boolean" && text(toolchain.platform) && text(toolchain.note) &&
+    entries(toolchain.entries, (entry) => text(entry.toolId) && text(entry.label) && text(entry.detail) &&
+      ["ready", "missing", "unverified", "unsupported-platform"].includes(String(entry.status))) &&
+    isRecord(assessment) && entries(assessment.blockers, (entry) => text(entry.consumerId) && text(entry.code) && text(entry.message)) &&
+    entries(state.consumers, (consumer) => text(consumer.consumerId) && text(consumer.name) && text(consumer.repoDir) &&
+      text(consumer.releaseDependency) && (consumer.language === "go" || consumer.language === "ts") &&
+      validBinding(consumer.binding) && isRecord(consumer.staleness) &&
+      (consumer.resolution === undefined || (isRecord(consumer.resolution) && typeof consumer.resolution.ok === "boolean" && text(consumer.resolution.message))) &&
+      ["ready", "needs-regenerate", "needs-binding", "needs-compile", "needs-restart"].includes(String(consumer.staleness.state)) && text(consumer.staleness.detail)) &&
+    entries(state.prepare, (entry) => text(entry.state) && text(entry.label) && typeof entry.ok === "boolean" && text(entry.detail)) &&
+    entries(state.diagnostics, (entry) => text(entry.code) && text(entry.message));
+}
+
+function ProtocolTool({ taskId }: { taskId: string }) {
+  const [result, setResult] = useState<{ view: ReturnType<typeof protocolBindingFromHost>; error: string } | null>(null);
+  const [revision, setRevision] = useState(0);
+  useEffect(() => {
+    let live = true;
+    setResult(null);
+    void protocolStateThroughShell(taskId).then((response) => {
+      if (!live) return;
+      if (!response.ok) { setResult({ view: undefined, error: shellError(response, "读取协议状态失败") }); return; }
+      const view = validProtocolState(response.payload, taskId) ? protocolBindingFromHost(taskId, response.payload) : undefined;
+      setResult(view ? { view, error: "" } : { view: undefined, error: "Host 协议状态响应无法解析" });
+    }).catch((error: unknown) => {
+      if (live) setResult({ view: undefined, error: error instanceof Error ? error.message : "读取协议状态失败" });
+    });
+    return () => { live = false; };
+  }, [taskId, revision]);
+  return <div className="min-w-0 space-y-3">
+    <div className="flex items-center justify-between gap-2"><p className="text-[11px] text-muted">本任务协议状态 · 只读</p><Button type="button" size="sm" variant="outline" onClick={() => setRevision((value) => value + 1)}>刷新</Button></div>
+    {!result && <p role="status" className="text-xs text-muted">正在读取协议状态…</p>}
+    {result?.error && <p role="alert" className="break-words border border-[#e0b4b4] bg-[#fdf3f3] p-2 text-xs text-[#ad4545]">{result.error}</p>}
+    {result?.view && <ProtocolPanel view={result.view} />}
+  </div>;
+}
+
 export function DesktopToolDock({
   taskId,
   tool,
@@ -424,7 +495,7 @@ export function DesktopToolDock({
     <aside
       data-testid="desktop-tool-dock"
       data-tool={tool}
-      className="flex h-full w-[380px] min-w-0 shrink-0 flex-col overflow-hidden border-l border-line bg-paper below-mid:w-[300px] below-narrow:hidden"
+      className="flex h-full w-[380px] min-w-0 shrink-0 flex-col overflow-hidden border-l border-line bg-paper below-mid:w-[300px] below-narrow:w-full below-narrow:flex-1 below-narrow:border-l-0"
     >
       <header className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-2.5">
         <span className="text-xs font-semibold text-ink">{DESKTOP_TOOL_LABELS[tool]}</span>
@@ -440,7 +511,7 @@ export function DesktopToolDock({
       </header>
       <Separator />
       <div className="min-h-0 flex-1 overflow-auto p-3">
-        {tool === "files" ? <FilesTool taskId={taskId} /> : <TerminalTool taskId={taskId} />}
+        {tool === "files" ? <FilesTool taskId={taskId} /> : tool === "terminal" ? <TerminalTool taskId={taskId} /> : <ProtocolTool key={taskId} taskId={taskId} />}
       </div>
     </aside>
     </TooltipProvider>
