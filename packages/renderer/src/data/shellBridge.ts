@@ -126,7 +126,21 @@ export async function shellTaskOp(
   if (!result || typeof result !== "object" || typeof (result as ShellTaskOpResult).ok !== "boolean") {
     return { ok: false, error: "invalid-payload: 任务操作返回异常，请重试" };
   }
-  return result;
+  if (!result.ok) return result;
+  // The Host answers with its own envelope (`HostTaskResult`:
+  // `{workspaceId, taskId, op, payload}`) inside main's `payload`, so the op
+  // payload every caller parses lives one level deeper. Production file,
+  // terminal and service reads were silently unparseable before this unwrap:
+  // the outer envelope carried no `roots`/`tree`/`plan` keys.
+  const host = result.payload as Record<string, unknown> | undefined;
+  const isHostEnvelope =
+    host !== undefined &&
+    typeof host === "object" &&
+    typeof host["workspaceId"] === "string" &&
+    typeof host["taskId"] === "string" &&
+    typeof host["op"] === "string" &&
+    "payload" in host;
+  return { ok: true, payload: isHostEnvelope ? host["payload"] : result.payload };
 }
 
 export type ShellTurnPayload = {
