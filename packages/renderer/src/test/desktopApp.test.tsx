@@ -6,6 +6,12 @@ import type { PidockBridge } from "../data/shellBridge";
 
 const tasks = [{ taskId: "real-1", name: "真实任务", branch: "task/main", repoCount: 1, updatedAt: "2026-09-22" }];
 const roots = [{ label: "默认任务根", state: "ready" as const }];
+
+/** [UI 对齐 S8e] 项目总览 is the project page; management (create/claim/transfer) sits behind 项目管理. */
+const openManagement = async () => {
+  fireEvent.click(await screen.findByRole("button", { name: "项目管理" }));
+};
+
 const project = { id: "bcedc870-22bd-474e-ac55-78d30a9d763d", name: "真实项目", description: "系统 A", repositories: [{ id: "dad5fcb4-c91f-4ab0-bc33-fbb82053f871", name: "Web", path: "/private/work/web" }], directories: [] };
 const bridge = (settings: { projectPresent?: boolean; assigned?: boolean; fail?: string } = {}): PidockBridge => ({
   listTasks: vi.fn(async () => ({ ok: true, payload: { tasks, roots } })),
@@ -32,6 +38,9 @@ describe("Desktop production data", () => {
     const demoRead = vi.spyOn(memoryHost, "getWorkspace");
     window.pidock = bridge();
     render(<App />);
+    // Prototype A opens on the first project; the unassigned list is an explicit pick.
+    await openManagement();
+    fireEvent.click(screen.getByRole("button", { name: /^未归属任务/ }));
     // The sidebar lists the real task as well (prototype A), so both surfaces are checked.
     expect(await screen.findAllByText("真实任务")).toHaveLength(2);
     expect(screen.getByRole("heading", { name: "未归属任务" })).toBeInTheDocument();
@@ -55,6 +64,8 @@ describe("Desktop production data", () => {
     });
     window.pidock = { listTasks: vi.fn(async () => ({ ok: true, payload: { tasks, roots } })), projectOp };
     render(<App />);
+    await openManagement();
+    fireEvent.click(screen.getByRole("button", { name: /^未归属任务/ }));
     const target = await screen.findByRole("combobox", { name: "真实任务 目标项目" });
     fireEvent.change(target, { target: { value: project.id } });
     fireEvent.click(screen.getByRole("button", { name: "认领" }));
@@ -82,6 +93,7 @@ describe("Desktop production data", () => {
     });
     window.pidock = { listTasks: vi.fn(async () => ({ ok: true, payload: { tasks, roots } })), projectOp };
     render(<App />);
+    await openManagement();
     fireEvent.click(await screen.findByRole("button", { name: "真实项目" }));
     fireEvent.click(screen.getByRole("button", { name: "编辑" }));
     fireEvent.change(screen.getByLabelText("项目名称"), { target: { value: "重新命名" } });
@@ -106,6 +118,7 @@ describe("Desktop production data", () => {
     window.pidock = { listTasks: vi.fn(async () => ({ ok: true, payload: { tasks: [], roots } })), projectOp };
     vi.spyOn(window, "confirm").mockReturnValue(true);
     render(<App />);
+    await openManagement();
     fireEvent.click(await screen.findByRole("button", { name: "真实项目" }));
     expect(screen.getByText(/关联待修复/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "转移" })).toBeDisabled();
@@ -133,6 +146,7 @@ describe("Desktop production data", () => {
     });
     window.pidock = { listTasks, projectOp };
     render(<App />);
+    await openManagement();
     fireEvent.click(await screen.findByRole("button", { name: /^项目$/ }));
     fireEvent.change(screen.getByLabelText("项目名称"), { target: { value: "未保存项目" } });
     fireEvent.change(screen.getByLabelText("描述"), { target: { value: "原样保留" } });
@@ -176,6 +190,7 @@ describe("Desktop production data", () => {
     });
     window.pidock = { listTasks: vi.fn(async () => ({ ok: true, payload: { tasks, roots } })), projectOp };
     render(<App />);
+    await openManagement();
     fireEvent.click(await screen.findByRole("button", { name: /^项目$/ }));
     fireEvent.change(screen.getByLabelText("项目名称"), { target: { value: "待核验" } });
     fireEvent.click(screen.getByRole("button", { name: "添加目录" }));
@@ -203,6 +218,7 @@ describe("Desktop production data", () => {
     });
     window.pidock = { listTasks: vi.fn(async () => ({ ok: true, payload: { tasks, roots } })), projectOp };
     render(<App />);
+    await openManagement();
     fireEvent.click(await screen.findByRole("button", { name: /^项目$/ }));
     fireEvent.change(screen.getByLabelText("项目名称"), { target: { value: "等待确认" } });
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
@@ -229,6 +245,7 @@ describe("Desktop production data", () => {
     });
     window.pidock = { listTasks: vi.fn(async () => ({ ok: true, payload: { tasks, roots } })), projectOp };
     render(<App />);
+    await openManagement();
     fireEvent.click(await screen.findByRole("button", { name: /^项目$/ }));
     fireEvent.change(screen.getByLabelText("项目名称"), { target: { value: "A" } });
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
@@ -260,6 +277,7 @@ describe("Desktop production data", () => {
     });
     window.pidock = { listTasks: vi.fn(async () => ({ ok: true, payload: { tasks, roots } })), projectOp };
     render(<App />);
+    await openManagement();
     fireEvent.click(await screen.findByRole("button", { name: /^项目$/ }));
     fireEvent.change(screen.getByLabelText("项目名称"), { target: { value: "没有 ID" } });
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
@@ -300,6 +318,7 @@ describe("Desktop production data", () => {
     });
     window.pidock = { listTasks: vi.fn(async () => ({ ok: true, payload: { tasks, roots } })), projectOp };
     render(<App />);
+    await openManagement();
     fireEvent.click(await screen.findByRole("button", { name: "真实项目" }));
     fireEvent.click(screen.getByRole("button", { name: "编辑" }));
     fireEvent.change(screen.getByLabelText("项目名称"), { target: { value: "目标名称" } });
@@ -341,6 +360,8 @@ describe("Desktop production data", () => {
       { initialized: true, projects: [project] } : { roots, tasks: [{ taskId: "real-1", projectId: null, state: "unavailable" }] } }));
     window.pidock = { listTasks: vi.fn(async () => ({ ok: true, payload: { tasks, roots } })), projectOp };
     render(<App />);
+    await openManagement();
+    fireEvent.click(screen.getByRole("button", { name: /^未归属任务/ }));
     expect(await screen.findByText(/任务不可用/)).toBeInTheDocument();
     expect(screen.getAllByText("真实任务")).toHaveLength(2);
     expect(screen.getByRole("button", { name: "认领" })).toBeDisabled();
@@ -359,6 +380,7 @@ describe("Desktop production data", () => {
     window.pidock = { listTasks: vi.fn(async () => ({ ok: true, payload: { tasks, roots } })), projectOp };
     vi.spyOn(window, "confirm").mockReturnValue(true);
     render(<App />);
+    await openManagement();
     fireEvent.click(await screen.findByRole("button", { name: "真实项目" }));
     fireEvent.click(screen.getByRole("button", { name: "删除" }));
     expect(await screen.findByRole("heading", { name: "未归属任务" })).toBeInTheDocument();
@@ -389,6 +411,7 @@ describe("Desktop production data", () => {
     window.pidock = shell;
     const demoRead = vi.spyOn(memoryHost, "getWorkspace");
     render(<App />);
+    await openManagement();
     fireEvent.click(await screen.findByRole("button", { name: "真实项目" }));
     fireEvent.click(screen.getByRole("button", { name: "进入工作区" }));
     expect(await screen.findByText(/尚未开始/)).toBeInTheDocument();
@@ -416,7 +439,31 @@ describe("Desktop production data", () => {
     }
     window.pidock = bridge();
     render(<App />);
+    await openManagement();
     fireEvent.click(await screen.findByRole("button", { name: "找回任务根" }));
     await waitFor(() => expect(window.pidock?.importTaskRoot).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe("[UI 对齐 S8e] project overview page", () => {
+  it("counts real tasks/repos and marks 运行环境 as unwired instead of inventing a number", async () => {
+    window.pidock = bridge({ projectPresent: true });
+    render(<App />);
+    expect(await screen.findByTestId("desktop-project-overview")).toBeInTheDocument();
+    expect(screen.getByTestId("overview-repo-count")).toHaveTextContent("1");
+    expect(screen.getByTestId("overview-env-unwired")).toHaveTextContent("未接线");
+    // The project-scoped task is offered as a real 继续工作 card and opens the workspace.
+    expect(screen.queryByTestId("overview-no-tasks")).toBeInTheDocument();
+  });
+
+  it("opens management from the overview instead of showing it by default", async () => {
+    window.pidock = bridge({ projectPresent: true });
+    render(<App />);
+    await screen.findByTestId("desktop-project-overview");
+    expect(screen.queryByLabelText("项目名称")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "项目管理" }));
+    expect(await screen.findByRole("heading", { name: "真实项目" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "返回项目总览" }));
+    expect(await screen.findByTestId("desktop-project-overview")).toBeInTheDocument();
   });
 });

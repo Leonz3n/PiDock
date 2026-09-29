@@ -82,7 +82,12 @@ async function run() {
     });
     const saved = profiles.save({ name: "Loopback", baseUrl: `http://127.0.0.1:${port}/v1`, modelId: "issue47-model", contextWindow: 200000, maxTokens: 8192, authRef: AUTH_REF });
     profiles.select(taskId, saved.id);
-    const project = await projects.create({ name: "Adder", description: "微服务开发工作台", repositories: [], directories: [] });
+    // A real source repository bound to the Project, so 项目总览 shows a real
+    // 项目仓库 row (the task worktree above is a task-scoped copy, not a binding).
+    const sourceRepo = join(root, "sources", "invoice-service");
+    mkdirSync(sourceRepo, { recursive: true });
+    writeFileSync(join(sourceRepo, "README.md"), "# invoice-service 源仓库\n");
+    const project = await projects.create({ name: "Adder", description: "微服务开发工作台", repositories: [{ name: "invoice-service", path: sourceRepo }], directories: [] });
     await projects.claim(taskId, project.id, index);
     views = await createTrustedWindow("issue47", "production");
     registerIpc({}, views.registry, registry, projects, index, undefined, undefined, providers);
@@ -149,6 +154,30 @@ async function run() {
     };
     await click("关闭面板");
     shots.push(await capture("workspace-turn", 720, 560));
+    // S8e: the real 模型与 Provider page (composer entry → page) and the real
+    // 项目总览 page, both from the production shell.
+    views.window.setContentSize(1440, 900);
+    await wait(250);
+    await clickSelector('[data-testid=composer-model]');
+    await until((body) => body.includes("模型与 Provider"), "providers page");
+    await wait(200);
+    shots.push(await capture("providers-page", 1440, 900));
+    const providersPage = {
+      state: await evalJs("document.querySelector('[data-testid=providers-state]')?.innerText"),
+      cards: await evalJs("[...document.querySelectorAll('[data-provider-card]')].map(el => el.innerText.replace(/\\n+/g,' | '))"),
+      credentialVisible: (await text()).includes(CREDENTIAL),
+    };
+    await clickSelector('[data-testid=desktop-shell] button[title=项目总览]');
+    await until((body) => body.includes("继续工作"), "project overview");
+    await wait(200);
+    shots.push(await capture("project-overview", 1440, 900));
+    const overview = {
+      taskCount: await evalJs("document.querySelector('[data-testid=overview-task-count]')?.innerText"),
+      repoCount: await evalJs("document.querySelector('[data-testid=overview-repo-count]')?.innerText"),
+      env: await evalJs("document.querySelector('[data-testid=overview-env-unwired]')?.innerText"),
+      cards: await evalJs("[...document.querySelectorAll('[data-overview-task]')].map(el => el.innerText.replace(/\\n+/g,' | '))"),
+      unwired: await evalJs("document.querySelector('[data-testid=overview-env-unwired]')?.previousElementSibling?.innerText"),
+    };
     const body = await text();
     console.log("ISSUE47_CAPTURE=" + JSON.stringify({
       shots,
@@ -157,6 +186,8 @@ async function run() {
       sessionTabs: await evalJs("document.querySelector('[role=tablist]')?.innerText"),
       credentialVisible: body.includes(CREDENTIAL),
       dock,
+      providers: providersPage,
+      overview,
       providerState: await evalJs("document.querySelector('[data-testid=provider-state]')?.textContent"),
       jsonlBytes: readdirSync(join(taskDir, ".pidock-sdk-sessions", "main")).filter((name) => name.endsWith(".jsonl"))
         .reduce((sum, name) => sum + readFileSync(join(taskDir, ".pidock-sdk-sessions", "main", name), "utf8").length, 0),

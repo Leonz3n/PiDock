@@ -42,9 +42,11 @@ export type DesktopView =
   | { view: "project"; projectId: string }
   | { view: "unassigned" }
   | { view: "task"; taskId: string }
+  | { view: "providers" }
   | { view: "unwired"; key: DesktopUnwiredKey };
 
-export type DesktopUnwiredKey = "env" | "usage" | "archive" | "attention" | "schedules" | "capabilities" | "remote" | "settings" | "providers";
+/** Nav entries without a real Host read path yet (each keeps an explicit reason). */
+export type DesktopUnwiredKey = "env" | "usage" | "archive" | "attention" | "schedules" | "capabilities" | "remote" | "settings";
 
 const LABELS: Record<DesktopUnwiredKey, string> = {
   env: "环境与服务",
@@ -55,7 +57,6 @@ const LABELS: Record<DesktopUnwiredKey, string> = {
   capabilities: "能力管理",
   remote: "远程访问",
   settings: "本机设置",
-  providers: "模型与 Provider",
 };
 
 const NAV_ITEM_CLASS = "flex w-full items-center gap-[10px] rounded-[7px] px-[11px] py-[9px] text-left text-[12px] below-mid:justify-center";
@@ -142,7 +143,7 @@ export function DesktopShell({
   /** Real task-root labels; a broken root is surfaced, never hidden. */
   roots: { label: string; state: "ready" | "error"; message?: string }[];
   /** Real names for the header breadcrumb; omitted parts stay hidden. */
-  breadcrumb: { project?: string; task?: string };
+  breadcrumb: { project?: string; task?: string; page?: string };
   children: ReactNode;
 }) {
   const activeTaskId = view.view === "task" ? view.taskId : undefined;
@@ -194,7 +195,7 @@ export function DesktopShell({
             <SidebarNavButton label={LABELS.capabilities} icon="book" active={view.view === "unwired" && view.key === "capabilities"} onSelect={() => onNavigate({ view: "unwired", key: "capabilities" })} />
             <SidebarNavButton label={LABELS.remote} icon="globe" active={view.view === "unwired" && view.key === "remote"} onSelect={() => onNavigate({ view: "unwired", key: "remote" })} />
             <SidebarNavButton label={LABELS.settings} icon="folder" active={view.view === "unwired" && view.key === "settings"} onSelect={() => onNavigate({ view: "unwired", key: "settings" })} />
-            <SidebarNavButton label={LABELS.providers} icon="key" active={view.view === "unwired" && view.key === "providers"} onSelect={() => onNavigate({ view: "unwired", key: "providers" })} />
+            <SidebarNavButton label="模型与 Provider" icon="key" active={view.view === "providers"} onSelect={() => onNavigate({ view: "providers" })} />
             <div data-user-chip="local-workspace" title="本机工作区" className="flex items-center gap-[9px] px-2 py-[10px]">
               <LocalUserAvatar />
               <span className="truncate text-[11px] text-ink below-mid:hidden">本机工作区</span>
@@ -208,10 +209,14 @@ export function DesktopShell({
         <header data-testid="desktop-breadcrumb" className="flex min-h-12 shrink-0 items-center gap-2 border-b border-line bg-paper px-4 text-[12px] below-mid:px-3">
           <span className="text-muted">工作区</span>
           <span className="text-[#cfd3d7]">/</span>
-          <span className="truncate text-muted">{breadcrumb.project ?? "未归属任务"}</span>
+          <span className="truncate text-muted">{breadcrumb.project ?? "工作区"}</span>
           {breadcrumb.task ? <>
             <span className="text-[#cfd3d7]">/</span>
             <span className="min-w-0 truncate font-semibold text-ink">{breadcrumb.task}</span>
+          </> : null}
+          {breadcrumb.page ? <>
+            <span className="text-[#cfd3d7]">/</span>
+            <span className="min-w-0 truncate font-semibold text-ink">{breadcrumb.page}</span>
           </> : null}
           <span className="ml-auto shrink-0 text-[11px] text-muted below-narrow:hidden">
             {brokenRoots.length === 0 ? `任务根 ${roots.length}/${roots.length} 就绪` : `${brokenRoots.length} 个任务根不可用`}
