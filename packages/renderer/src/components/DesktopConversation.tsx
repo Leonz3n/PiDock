@@ -6,6 +6,8 @@ import { Button } from "./ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import { PROVIDER_STATE_TEXT, parseProviderStatus, providerCall, type ProviderStatus } from "../data/providerProfile";
 import { SDK_SESSION_ID, parseSdkSnapshot, type SdkMessage } from "../data/sdkSession";
+import { setTaskArchivedThroughShell } from "../data/shellBridge";
+import { parseLifecycle } from "./DesktopArchivePage";
 import { DesktopToolDock, DESKTOP_TOOLS_UNWIRED, type DesktopTool } from "./DesktopToolDock";
 import { BrandMark, LocalUserAvatar } from "./ui";
 
@@ -62,7 +64,7 @@ function allowed(data: DesktopProjects, taskId: string): boolean {
     data.inventory.roots.every((root) => root.state === "ready");
 }
 
-export function DesktopConversation({ taskId, name, roots, association, onBack, onOpenProviders }: { taskId: string; name: string; roots: string; association: string; onBack: () => void; onOpenProviders: () => void }) {
+export function DesktopConversation({ taskId, name, roots, association, onBack, onOpenProviders, onArchived }: { taskId: string; name: string; roots: string; association: string; onBack: () => void; onOpenProviders: () => void; onArchived: () => void }) {
   const bridge = window.pidock;
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const recovered = useRef(readReceipt(taskId));
@@ -114,6 +116,24 @@ export function DesktopConversation({ taskId, name, roots, association, onBack, 
   const [tool, setTool] = useState<DesktopTool | null>(null);
   const [provider, setProvider] = useState<ProviderStatus | null>(null);
   const [unwired, setUnwired] = useState<string | null>(null);
+  const [taskMenu, setTaskMenu] = useState(false);
+  const [archivePrompt, setArchivePrompt] = useState(false);
+  const [archiveBusy, setArchiveBusy] = useState(false);
+  const [archiveError, setArchiveError] = useState("");
+  const archiveCancelRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (archivePrompt) archiveCancelRef.current?.focus();
+  }, [archivePrompt]);
+  useEffect(() => {
+    if (!taskMenu && !archivePrompt) return;
+    const dismiss = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      if (archivePrompt && !archiveBusy) setArchivePrompt(false);
+      else if (!archivePrompt) setTaskMenu(false);
+    };
+    window.addEventListener("keydown", dismiss);
+    return () => window.removeEventListener("keydown", dismiss);
+  }, [taskMenu, archivePrompt, archiveBusy]);
   useEffect(() => {
     if (invalidated) { setConnected(false); setValid(false); return; }
     const epoch = ++generation.current;
@@ -231,6 +251,29 @@ export function DesktopConversation({ taskId, name, roots, association, onBack, 
   };
   const submit = (event: FormEvent) => { event.preventDefault(); void start(); };
   const blocked = !valid || !connected || !!receiptError || snapshot?.pending || attempt?.phase === "starting" || attempt?.phase === "unknown" || attempt?.phase === "accepted";
+  const archive = async () => {
+    if (archiveBusy || blocked || busy.current) { setArchiveError("会话执行或请求状态未核验，不能归档；请先核验或停止执行"); return; }
+    setArchiveBusy(true);
+    setArchiveError("");
+    let issued = false;
+    try {
+      await verify();
+      // A turn can start after opening the confirmation dialog. Check the
+      // authoritative SDK projection again immediately before the Host write.
+      const current = parseSnapshot(await request("projection"));
+      if (current.pending || attemptRef.current?.phase === "unknown" || attemptRef.current?.phase === "accepted" || busy.current) {
+        throw new Error("会话仍在执行或请求结果未知，不能归档");
+      }
+      issued = true;
+      const result = await setTaskArchivedThroughShell({ taskId, archived: true });
+      if (!result.ok) throw new Error(result.error ?? "归档失败");
+      if (!parseLifecycle(result.payload, taskId).archived) throw new Error("归档结果无法核验，请刷新归档状态");
+      onArchived();
+    } catch (error) {
+      if (issued) setInvalidated(true);
+      setArchiveError(issued ? `${errorText(error)}；结果可能已写入，请返回任务列表或已归档页核验` : errorText(error));
+    } finally { setArchiveBusy(false); }
+  };
   // Prototype A task workspace ([UI 对齐 S8b/S8c] #47): eyebrow, title, icon toolbar,
   // meta chips, the real session tab strip, message chrome, and a composer whose
   // entries are either real or explicitly marked 未接线. Nothing here fabricates a
@@ -284,7 +327,13 @@ export function DesktopConversation({ taskId, name, roots, association, onBack, 
               </TooltipTrigger>
               <TooltipContent>{`${item.label}未接线：${DESKTOP_TOOLS_UNWIRED.find((entry) => entry.id === item.unwiredId)?.reason ?? ""}`}</TooltipContent>
             </Tooltip>)}
-          <Button type="button" onClick={() => void refresh()} title="核验 SDK 会话与任务身份"><Icon name="refresh" /><span className="below-narrow:hidden">核验</span></Button>
+          <div className="relative">
+            <Button type="button" variant="ghost" size="icon-sm" aria-label="任务操作" aria-expanded={taskMenu} onClick={() => setTaskMenu((open) => !open)}><Icon name="more" /></Button>
+            {taskMenu && <div className="absolute top-full right-0 z-20 min-w-[150px] rounded-[7px] border border-line bg-paper p-1 shadow-sm">
+              <Button type="button" variant="ghost" className="w-full justify-start" onClick={() => { setTaskMenu(false); setArchiveError(""); setArchivePrompt(true); }}><Icon name="archive" />归档当前任务</Button>
+            </div>}
+          </div>
+          <Button type="button" disabled={!connected} onClick={() => void refresh()} title={connected ? "核验 SDK 会话与任务身份" : "等待 SDK 会话连接后核验"}><Icon name="refresh" /><span className="below-narrow:hidden">核验</span></Button>
           <Button type="button" size="icon" onClick={onBack} aria-label="返回任务列表" title="返回任务列表"><Icon name="arrow" className="-rotate-90" /></Button>
         </div>
       </div>
@@ -294,6 +343,19 @@ export function DesktopConversation({ taskId, name, roots, association, onBack, 
         <span className="pb-2 pl-1 text-[11px] text-muted">仅 main 会话</span>
       </div>
     </div>
+    {archivePrompt && <div className="fixed inset-0 z-50 grid place-items-center bg-black/30 p-4">
+      <div role="dialog" aria-modal="true" aria-label="归档当前任务" className="w-full max-w-[440px] rounded-[7px] border border-line bg-paper p-5 shadow-lg">
+        <h2 className="text-base font-semibold">归档当前任务</h2>
+        <p className="mt-3 text-xs leading-6 text-muted">归档会停止所属执行、使未执行确认失效并暂停定时任务；代码和历史保留。恢复后服务与定时任务不会自动启动。清理需要单独处理。</p>
+        {blocked && !archiveError && <p role="status" className="mt-3 text-xs text-muted">会话尚未连接、正在执行或请求状态未核验；请先完成核验或停止执行。</p>}
+        {archiveError && <p role="alert" className="mt-3 border border-[#e0b4b4] bg-[#fdf3f3] p-2 text-xs text-[#ad4545]">{archiveError}</p>}
+        <div className="mt-5 flex justify-end gap-2">
+          {invalidated && <Button type="button" variant="outline" onClick={onArchived}>查看归档状态</Button>}
+          <Button ref={archiveCancelRef} type="button" variant="outline" disabled={archiveBusy} onClick={() => setArchivePrompt(false)}>取消</Button>
+          <Button type="button" disabled={archiveBusy || blocked} onClick={() => void archive()}>{archiveBusy ? "归档中…" : "确认归档"}</Button>
+        </div>
+      </div>
+    </div>}
     {unwired && <p role="status" data-testid="desktop-unwired-tool" className="shrink-0 border-b border-line bg-soft px-4 py-1.5 text-[11px] text-muted">
       {unwired}面板未接线：{DESKTOP_TOOLS_UNWIRED.find((entry) => entry.label === unwired)?.reason ?? "生产读取路径尚未接线"}（不显示样例数据）
     </p>}

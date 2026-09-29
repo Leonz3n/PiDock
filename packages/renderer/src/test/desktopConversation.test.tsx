@@ -41,7 +41,7 @@ function setup(taskId = "task-a") {
 }
 function mount(fixture: ReturnType<typeof setup>, taskId = "task-a") {
   window.pidock = fixture.bridge;
-  return render(<DesktopConversation taskId={taskId} name="Task" roots={JSON.stringify(roots)} association={JSON.stringify(association(taskId))} onBack={vi.fn()} onOpenProviders={vi.fn()} />);
+  return render(<DesktopConversation taskId={taskId} name="Task" roots={JSON.stringify(roots)} association={JSON.stringify(association(taskId))} onBack={vi.fn()} onOpenProviders={vi.fn()} onArchived={vi.fn()} />);
 }
 const send = async (text: string) => {
   fireEvent.change(screen.getByRole("textbox", { name: "消息" }), { target: { value: text } });
@@ -50,6 +50,61 @@ const send = async (text: string) => {
 afterEach(() => { cleanup(); localStorage.clear(); delete window.pidock; vi.restoreAllMocks(); });
 
 describe("Desktop SDK conversation", () => {
+  it("does not allow projection refresh before SDK subscription is ready", async () => {
+    const f = setup();
+    mount(f);
+    expect(screen.getByRole("button", { name: "核验" })).toBeDisabled();
+    await screen.findByText(/尚未开始/);
+    expect(screen.getByRole("button", { name: "核验" })).not.toBeDisabled();
+  });
+
+  it("archives only after confirmation and a verified Host result", async () => {
+    const f = setup();
+    const taskOp = vi.fn(async (taskId: string, op: string) => ({ ok: true, payload: { lifecycle: { taskId, archived: op === "task/archive", archivedAt: "2026-09-29T09:00:00Z" } } }));
+    f.bridge.taskOp = taskOp;
+    window.pidock = f.bridge;
+    const onArchived = vi.fn();
+    render(<DesktopConversation taskId="task-a" name="Task" roots={JSON.stringify(roots)} association={JSON.stringify(association("task-a"))} onBack={vi.fn()} onOpenProviders={vi.fn()} onArchived={onArchived} />);
+    await screen.findByText(/尚未开始/);
+    fireEvent.click(screen.getByRole("button", { name: "任务操作" }));
+    fireEvent.click(screen.getByRole("button", { name: "归档当前任务" }));
+    expect(screen.getByRole("dialog", { name: "归档当前任务" })).toBeInTheDocument();
+    expect(taskOp).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "确认归档" }));
+    await waitFor(() => expect(onArchived).toHaveBeenCalledOnce());
+    expect(taskOp).toHaveBeenCalledWith("task-a", "task/archive", {});
+    expect(f.calls.some((call) => call.action === "projection")).toBe(true);
+  });
+
+  it("blocks archive during an active SDK turn", async () => {
+    const f = setup();
+    const taskOp = vi.fn(async () => ({ ok: false, error: "task-locked" }));
+    f.bridge.taskOp = taskOp;
+    mount(f);
+    await screen.findByText(/尚未开始/);
+    await send("active");
+    await screen.findByRole("button", { name: "停止" });
+    fireEvent.click(screen.getByRole("button", { name: "任务操作" }));
+    fireEvent.click(screen.getByRole("button", { name: "归档当前任务" }));
+    expect(screen.getByRole("button", { name: "确认归档" })).toBeDisabled();
+    expect(screen.getByText(/会话尚未连接、正在执行或请求状态未核验/)).toBeInTheDocument();
+    expect(taskOp).not.toHaveBeenCalled();
+  });
+
+  it("freezes after a refused Host archive write and offers a status check", async () => {
+    const f = setup();
+    const taskOp = vi.fn(async () => ({ ok: false, error: "task-locked" }));
+    f.bridge.taskOp = taskOp;
+    mount(f);
+    await screen.findByText(/尚未开始/);
+    fireEvent.click(screen.getByRole("button", { name: "任务操作" }));
+    fireEvent.click(screen.getByRole("button", { name: "归档当前任务" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认归档" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("task-locked");
+    expect(screen.getByRole("button", { name: "查看归档状态" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "发送" })).toBeDisabled();
+  });
+
   it("subscribes before sending, refuses unconfigured provider without a fabricated reply and retains draft", async () => {
     const f = setup(); f.setFail("provider-not-configured"); mount(f);
     await screen.findByText(/尚未开始/);
@@ -106,7 +161,7 @@ describe("Desktop SDK conversation", () => {
     await screen.findByText(/尚未开始/);
     view.unmount(); expect(a.subscribed()).toBe(false);
     const b = setup("task-b"); window.pidock = b.bridge;
-    render(<DesktopConversation taskId="task-b" name="B" roots={JSON.stringify(roots)} association={JSON.stringify(association("task-b"))} onBack={vi.fn()} onOpenProviders={vi.fn()} />);
+    render(<DesktopConversation taskId="task-b" name="B" roots={JSON.stringify(roots)} association={JSON.stringify(association("task-b"))} onBack={vi.fn()} onOpenProviders={vi.fn()} onArchived={vi.fn()} />);
     await screen.findByText(/尚未开始/);
     a.emit({ kind: "sdk-turn-event", event: { taskId: "task-a", sessionId: "main", turnId: "old", sequence: 1, type: "delta", text: "old" } });
     expect(screen.queryByText("old")).not.toBeInTheDocument();

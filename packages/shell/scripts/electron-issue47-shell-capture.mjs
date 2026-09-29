@@ -100,7 +100,7 @@ async function run() {
     };
     const text = () => evalJs("document.body.innerText");
     const diagnose = async () => JSON.stringify(await evalJs("({iw:window.innerWidth, text:document.body.innerText.slice(0,600), html:document.body.innerHTML.length, url:location.href, conv:Boolean(document.querySelector('[data-testid=desktop-conversation]')), shell:Boolean(document.querySelector('[data-testid=desktop-shell]'))})"));
-    const until = async (match, label) => { for (let i = 0; i < 150; i++) { const body = await text(); if (match(body)) return body; await wait(100); } throw Error(`UI timeout (${label}): ${await diagnose()}`); };
+    const until = async (match, label) => { for (let i = 0; i < 150; i++) { const body = await text(); if (await match(body)) return body; await wait(100); } throw Error(`UI timeout (${label}): ${await diagnose()}`); };
     const click = (name) => evalJs(`(() => { const b = [...document.querySelectorAll('button')].find(el => el.textContent.trim() === ${JSON.stringify(name)} || el.getAttribute('aria-label') === ${JSON.stringify(name)}); if (!b) throw Error('missing '+${JSON.stringify(name)}+' :: '+document.body.innerText.replace(/\\n+/g,' | ').slice(0,500)); b.click(); return true; })()`);
     const type = (value) => evalJs(`(() => { const el = document.querySelector('textarea[aria-label="消息"]'); const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set; setter.call(el, ${JSON.stringify(value)}); el.dispatchEvent(new Event('input',{bubbles:true})); return el.value; })()`);
     const clickText = (needle, scope = "document") => evalJs(`(() => { const b = [...${scope}.querySelectorAll('button')].find(el => el.textContent.includes(${JSON.stringify(needle)})); if (!b) throw Error('missing text '+${JSON.stringify(needle)}+' :: '+${scope}.innerText.replace(/\\n+/g,' | ').slice(0,400)); b.click(); return true; })()`);
@@ -209,6 +209,24 @@ async function run() {
       cards: await evalJs("[...document.querySelectorAll('[data-overview-task]')].map(el => el.innerText.replace(/\\n+/g,' | '))"),
       unwired: await evalJs("document.querySelector('[data-testid=overview-env-unwired]')?.previousElementSibling?.innerText"),
     };
+    await clickSelector(`[data-task-nav="${taskId}"]`);
+    await until((body) => /task workspace/i.test(body) && body.includes("已连接"), "archive task workspace connected");
+    await click("核验");
+    await wait(350);
+    await click("任务操作");
+    await click("归档当前任务");
+    await until((body) => body.includes("归档会停止所属执行"), "archive confirmation");
+    await until(async () => await evalJs("document.querySelector('[role=dialog] button:last-child')?.disabled === false"), "archive confirmation ready");
+    await click("确认归档");
+    await until(async () => await evalJs(`Boolean(document.querySelector('[data-archived-task="${taskId}"]'))`), "archived task row");
+    if (await evalJs(`Boolean(document.querySelector('[data-task-nav="${taskId}"]'))`)) throw Error("archived task remained in active navigation");
+    shots.push(await capture("archive-with-task", 1440, 900));
+    shots.push(await capture("archive-with-task", 720, 560));
+    views.window.setContentSize(1440, 900);
+    await wait(250);
+    await click("恢复");
+    await until(async () => await evalJs(`Boolean(document.querySelector('[data-task-nav="${taskId}"]'))`), "restored task nav");
+    const archiveFlow = { archivedRow: true, restoredNav: true };
     const body = await text();
     console.log("ISSUE47_CAPTURE=" + JSON.stringify({
       shots,
@@ -221,6 +239,7 @@ async function run() {
       usage,
       schedules,
       archive,
+      archiveFlow,
       overview,
       providerState: await evalJs("document.querySelector('[data-testid=provider-state]')?.textContent"),
       jsonlBytes: readdirSync(join(taskDir, ".pidock-sdk-sessions", "main")).filter((name) => name.endsWith(".jsonl"))
