@@ -25,6 +25,8 @@ import { runSmoke } from "./smoke.js";
 import { defaultTasksRoot } from "./task-resolver.js";
 import { TaskRootIndex } from "./task-root-index.js";
 import { ProjectRegistry } from "./project-registry.js";
+import { ProviderProfileStore } from "./provider-profile-store.js";
+import { ProviderWiring } from "./provider-ipc.js";
 import { CreationIntentStore, ProjectTaskCreation } from "./project-task-creation.js";
 import {
   runTaskBrowserSmoke,
@@ -161,7 +163,19 @@ async function run(): Promise<void> {
   );
   const projects = new ProjectRegistry(app.getPath("userData"));
   const creation = new ProjectTaskCreation(new CreationIntentStore(app.getPath("userData")), projects, taskRoots, tasks, defaultTasksRoot());
-  registerIpc(client, views.registry, tasks, projects, taskRoots, undefined, creation);
+  // [PiDock 02m] (#46) explicit Provider selection. Metadata lives in userData;
+  // the credential value is read from the profile's PIDOCK_PROVIDER_* reference
+  // at install time and is handed only to the task's isolated SDK context.
+  const providerProfiles = new ProviderProfileStore(app.getPath("userData"));
+  const providers = new ProviderWiring(providerProfiles, async (taskId, provider, senderWebContentsId) => {
+    const payload = provider === null
+      ? { provider: null }
+      : { provider: { config: providerProfiles.config(provider.profileId), credential: provider.credential } };
+    const request = { workspaceId, taskId, op: "task/sdkProvider", payload, origin: { kind: "shell-ui", senderWebContentsId } } as const;
+    if (tasks) { await tasks.routeTaskOp(request); return; }
+    await client.task(request);
+  });
+  registerIpc(client, views.registry, tasks, projects, taskRoots, undefined, creation, providers);
   // [PiDock 18] (#20) the Host-borne scheduler: main owns the Host processes, so
   // the driver asks each *running* Host to evaluate its own due triggers. It
   // never forks a Host and never overlaps its own ticks; stop it wherever the

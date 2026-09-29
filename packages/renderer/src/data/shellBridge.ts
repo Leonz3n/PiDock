@@ -23,6 +23,12 @@ export interface PidockBridge {
   importTaskRoot?: () => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
   projectOp?: (request: { op: "list" | "get" | "create" | "update" | "rename" | "delete" | "association" | "associations" | "claim" | "unlink" | "transfer"; projectId?: string; name?: string; input?: unknown; taskId?: string; expectedProjectId?: string; fromProjectId?: string; toProjectId?: string }) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
   createTask?: (request: { op: "current" | "prepare" | "commit" | "abandon"; input?: unknown; id?: string }) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
+  /**
+   * [PiDock 02m] (#46) Provider metadata operations. The renderer names a task,
+   * a profile, and profile metadata only: the credential value is resolved in
+   * main from the profile's environment reference and never crosses this bridge.
+   */
+  providerOp?: (request: { op: "list" | "save" | "remove" | "select" | "clear" | "ensure"; taskId: string; profileId?: string; profile?: unknown }) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
   taskOp?: (taskId: string, op: string, payload?: Record<string, unknown>) => Promise<ShellTaskOpResult>;
   sdkTurn?: (request: Record<string, unknown>) => Promise<ShellTaskOpResult>;
   onSdkTurnEvent?: (listener: (event: unknown) => void) => () => void;
