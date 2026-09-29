@@ -27,6 +27,23 @@ const bridge = (settings: { projectPresent?: boolean; assigned?: boolean; fail?:
 afterEach(() => { cleanup(); delete window.pidock; vi.restoreAllMocks(); });
 
 describe("Desktop production data", () => {
+  it("opens usage without a task and switches cleanly to Provider and schedules", async () => {
+    const taskOp = vi.fn(async () => ({ ok: true, payload: { schedules: [], runs: [] } }));
+    window.pidock = { ...bridge(), listTasks: vi.fn(async () => ({ ok: true, payload: { tasks: [], roots } })), projectOp: vi.fn(async (request) => request.op === "list"
+      ? { ok: true, payload: { initialized: true, projects: [project] } }
+      : { ok: true, payload: { roots, tasks: [] } }), taskOp };
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Token 用量" }));
+    expect(await screen.findByTestId("usage-needs-task")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "模型与 Provider" }));
+    expect(await screen.findByTestId("desktop-providers-page")).toBeInTheDocument();
+    expect(screen.queryByTestId("desktop-usage-page")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "定时任务" }));
+    expect(await screen.findByTestId("desktop-schedules-page")).toBeInTheDocument();
+    expect(screen.queryByTestId("desktop-providers-page")).toBeNull();
+    expect(taskOp).not.toHaveBeenCalled();
+  });
+
   it("keeps standalone Vite in explicit demo mode", async () => {
     const demoRead = vi.spyOn(memoryHost, "getWorkspace");
     render(<App />);

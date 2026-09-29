@@ -55,6 +55,7 @@ it("refuses a malformed snapshot rather than inventing totals", async () => {
   render(<DesktopUsagePage tasks={tasks} taskId="task-1" onSelectTask={() => {}} />);
   expect(await screen.findByRole("alert")).toHaveTextContent("SDK 消息返回异常");
   expect(screen.queryByTestId("usage-summary")).toBeNull();
+  expect((window as unknown as { pidock: { sdkTurn: ReturnType<typeof vi.fn> } }).pidock.sdkTurn).toHaveBeenCalledWith({ action: "unsubscribe", taskId: "task-1", sessionId: "main" });
 });
 
 it("asks for a task instead of showing a zero total, and keeps unwired dimensions explicit", async () => {
@@ -64,6 +65,26 @@ it("asks for a task instead of showing a zero total, and keeps unwired dimension
   expect(screen.queryByTestId("usage-summary")).toBeNull();
   expect(screen.getByText("按 Provider / 模型 / 类型 / 日期分组")).toBeInTheDocument();
   expect(screen.getAllByText("未接线").length).toBeGreaterThan(0);
+});
+
+it("releases a subscription whose response arrives after unmount", async () => {
+  let resolve!: (value: unknown) => void;
+  const sdkTurn = vi.fn((request: { action: string }) => request.action === "unsubscribe"
+    ? Promise.resolve({ ok: true })
+    : new Promise((done) => { resolve = done; }));
+  (window as unknown as { pidock?: unknown }).pidock = { sdkTurn };
+  const view = render(<DesktopUsagePage tasks={tasks} taskId="task-1" onSelectTask={() => {}} />);
+  await waitFor(() => expect(sdkTurn).toHaveBeenCalledTimes(1));
+  view.unmount();
+  resolve({ ok: true, payload: { snapshot: { source: "sdk-jsonl", sessionId: "main", pending: false, interrupted: false, messages: [] } } });
+  await waitFor(() => expect(sdkTurn).toHaveBeenCalledWith({ action: "unsubscribe", taskId: "task-1", sessionId: "main" }));
+});
+
+it("labels the projection cap and never calls its sum a lifetime total", async () => {
+  bridge({ "task-1": { source: "sdk-jsonl", sessionId: "main", pending: false, interrupted: false, messages: Array.from({ length: 80 }, () => message("assistant", { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 })) } });
+  render(<DesktopUsagePage tasks={tasks} taskId="task-1" onSelectTask={() => {}} />);
+  expect(await screen.findByTestId("usage-summary")).toHaveTextContent("已达投影上限，较早用量未计入");
+  expect(screen.getByText(/不是会话累计/)).toBeInTheDocument();
 });
 
 it("offers the real task list and reports it back", async () => {

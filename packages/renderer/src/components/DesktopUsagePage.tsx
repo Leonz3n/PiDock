@@ -9,6 +9,7 @@ const number = (value: number) => value.toLocaleString("en-US");
  * [UI 对齐 S8e] #47 `Token 用量`。
  *
  * 真实来源：每个任务私有的 SDK JSONL 会话投影（与会话视图同一份证据）。
+ * 投影只返回最近最多 80 条消息；这里的求和不是会话累计。
  * 这是本机实际发生的用量，不是服务商的账单或配额。
  *
  * 原型那一页还有 provider / model / kind / 日期 维度与 per-call 记录表；生产里
@@ -36,12 +37,18 @@ export function DesktopUsagePage({
       return;
     }
     let live = true;
+    let subscribed = false;
+    const unsubscribe = () => {
+      void window.pidock?.sdkTurn?.({ action: "unsubscribe", taskId, sessionId: SDK_SESSION_ID } as never).catch(() => undefined);
+    };
     setBusy(true);
     setSnapshot(null);
     void (async () => {
       try {
         const next = await sdkSnapshot(window.pidock, taskId);
+        subscribed = true;
         if (live) { setSnapshot(next); setError(""); }
+        else unsubscribe();
       } catch (caught) {
         if (live) { setSnapshot(null); setError(caught instanceof Error ? caught.message : "SDK 会话读取失败"); }
       } finally {
@@ -50,7 +57,7 @@ export function DesktopUsagePage({
     })();
     return () => {
       live = false;
-      void window.pidock?.sdkTurn?.({ action: "unsubscribe", taskId, sessionId: SDK_SESSION_ID } as never).catch(() => undefined);
+      if (subscribed) unsubscribe();
     };
   }, [taskId]);
 
@@ -62,7 +69,7 @@ export function DesktopUsagePage({
       <p className="text-[10px] tracking-[1.8px] text-[#95979c] uppercase">Usage</p>
       <h1 className="mt-1.5 text-[26px] font-semibold tracking-[-0.6px] text-ink">Token 用量</h1>
       <p className="mt-1.5 mb-6 text-xs text-muted">
-        本机实际发生的用量，记录在任务私有的 SDK 会话里（与会话视图同一份证据）。这不是服务商的账单或配额。
+        最近最多 80 条 SDK 消息的已报告用量（与会话视图同一份证据），不是会话累计，也不是服务商的账单或配额。
       </p>
 
       <div className="mb-5 flex flex-wrap items-center gap-2">
@@ -102,7 +109,8 @@ export function DesktopUsagePage({
             ))}
           </div>
           <p className="mt-3 text-[11px] text-muted" data-testid="usage-summary">
-            {snapshot.messages.length} 条已确认消息 · {totals.turns} 个助手回合
+            最近 {snapshot.messages.length} 条已确认消息 · {totals.turns} 个助手回合
+            {snapshot.messages.length === 80 ? " · 已达投影上限，较早用量未计入" : ""}
             {snapshot.pending ? " · 有进行中的回合" : ""}
             {snapshot.interrupted ? " · 上次中断" : ""}
           </p>
