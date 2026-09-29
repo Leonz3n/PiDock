@@ -132,8 +132,10 @@ describe("new-task workspace preview", () => {
     });
     try {
       renderApp("/projects/atlas");
-      expect(await screen.findByText("已检查的任务根暂无未归属任务")).toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: "新建任务" })).not.toBeInTheDocument();
+      // [UI 对齐 S8e] The production path opens on the real 项目总览 page; the demo
+      // task form (its 任务名称 field) must not appear on any of its views.
+      expect(await screen.findByTestId("desktop-project-overview")).toBeInTheDocument();
+      expect(screen.queryByLabelText("任务名称")).not.toBeInTheDocument();
       expect(screen.queryByRole("heading", { name: "Atlas Web" })).not.toBeInTheDocument();
       expect(taskOp).not.toHaveBeenCalled();
     } finally {

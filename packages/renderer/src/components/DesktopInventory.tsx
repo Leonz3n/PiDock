@@ -4,6 +4,8 @@ import { DesktopTaskCreation } from "./DesktopTaskCreation";
 import { DesktopConversation } from "./DesktopConversation";
 import { desktopMode, importDesktopTaskRoot } from "../data/desktopInventory";
 import { DESKTOP_LABELS, DesktopShell, DesktopUnwired, type DesktopUnwiredKey, type DesktopView } from "./DesktopShell";
+import { DesktopProvidersPage } from "./DesktopProvidersPage";
+import { DesktopProjectOverview } from "./DesktopProjectOverview";
 import { loadDesktopProjects, parseDesktopProject, projectOperation, type DesktopProject, type DesktopProjects, type ProjectInput, type ProjectSource, type TaskAssociation } from "../data/desktopProjects";
 
 export { desktopMode };
@@ -73,6 +75,16 @@ export function DesktopInventory() {
   const [activeTask, setActiveTask] = useState<{ id: string; name: string; roots: string; association: string } | null>(null);
   /** Non-task nav entries whose real Host data does not exist yet (#47). */
   const [unwired, setUnwired] = useState<DesktopUnwiredKey | null>(null);
+  // [UI 对齐 S8e] #47: real Model/Provider page. It keeps the active task as its
+  // selection context (选用 is recorded per task), like the prototype where the
+  // workspace stays selected while another page is shown.
+  const [providers, setProviders] = useState(false);
+  // [UI 对齐 S8e] #47: 项目总览 is the project page; the create/claim/transfer/
+  // unlink management surface it links to is a separate view (原型 A 的「项目管理」).
+  const [manage, setManage] = useState(false);
+  // Prototype A opens on the first project. An explicit pick (shell nav or the
+  // management list) wins and is never overridden by a later reread.
+  const pinned = useRef(false);
   const entryEpoch = useRef(0);
   const openTask = async (taskId: string) => {
     const epoch = ++entryEpoch.current;
@@ -110,6 +122,9 @@ export function DesktopInventory() {
         }
       }
       setView({ kind: "ready", data });
+      if (!pinned.current && pending === null) {
+        setSelection((current) => current.kind === "project" ? current : data.projects[0] ? { kind: "project", id: data.projects[0].id } : current);
+      }
       return true;
     }
     catch (error) { setView({ kind: "error", error: errorMessage(error) }); return false; }
@@ -180,13 +195,15 @@ export function DesktopInventory() {
   }));
   const shellProjects = (ready?.projects ?? []).map((project) => ({ id: project.id, name: project.name, description: project.description }));
   const selectedProject = selection.kind === "project" ? shellProjects.find((project) => project.id === selection.id) : undefined;
-  const shellView: DesktopView = activeTask
-    ? { view: "task", taskId: activeTask.id }
-    : unwired
-      ? { view: "unwired", key: unwired }
-      : selection.kind === "project" && selectedProject
-        ? { view: "project", projectId: selectedProject.id }
-        : { view: "unassigned" };
+  const shellView: DesktopView = providers
+    ? { view: "providers" }
+    : activeTask
+      ? { view: "task", taskId: activeTask.id }
+      : unwired
+        ? { view: "unwired", key: unwired }
+        : selection.kind === "project" && selectedProject
+          ? { view: "project", projectId: selectedProject.id }
+          : { view: "unassigned" };
   const navigate = (next: DesktopView) => {
     setActionError(null);
     setForm(null);
@@ -198,17 +215,25 @@ export function DesktopInventory() {
       return;
     }
     entryEpoch.current++;
+    setProviders(next.view === "providers");
+    if (next.view === "providers") return;
+    if (next.view === "project" || next.view === "unassigned") setManage(false);
     setActiveTask(null);
     setUnwired(next.view === "unwired" ? next.key : null);
-    if (next.view === "project") setSelection({ kind: "project", id: next.projectId });
-    if (next.view === "unassigned") setSelection({ kind: "unassigned" });
+    if (next.view === "project") { pinned.current = true; setSelection({ kind: "project", id: next.projectId }); }
+    if (next.view === "unassigned") { pinned.current = true; setSelection({ kind: "unassigned" }); }
   };
-  const breadcrumb = activeTask
-    ? { ...(shellTasks.find((task) => task.taskId === activeTask.id)?.projectId ? { project: shellProjects.find((project) => project.id === shellTasks.find((task) => task.taskId === activeTask.id)?.projectId)?.name } : {}), task: activeTask.name }
+  const activeProject = activeTask
+    ? shellProjects.find((project) => project.id === shellTasks.find((task) => task.taskId === activeTask.id)?.projectId)
+    : undefined;
+  const breadcrumb = providers
+    ? { ...(activeProject ? { project: activeProject.name } : selectedProject ? { project: selectedProject.name } : {}), page: "模型与 Provider" }
+    : activeTask
+    ? { ...(activeProject ? { project: activeProject.name } : {}), task: activeTask.name }
     : selectedProject
-      ? { project: selectedProject.name }
+      ? { project: selectedProject.name, page: manage ? "项目管理" : "项目总览" }
       : selection.kind === "unassigned"
-        ? { project: "未归属任务" }
+        ? { project: "未归属任务", page: manage ? "项目管理" : "项目总览" }
         : {};
   const shell = (children: ReactNode) => <DesktopShell
     view={shellView}
@@ -218,7 +243,13 @@ export function DesktopInventory() {
     roots={ready?.inventory.roots ?? []}
     breadcrumb={breadcrumb}
   >{children}</DesktopShell>;
-  if (activeTask) return shell(<DesktopConversation key={activeTask.id} taskId={activeTask.id} name={activeTask.name} roots={activeTask.roots} association={activeTask.association} onBack={() => { entryEpoch.current++; setActiveTask(null); void load(); }} />);
+  if (providers) return shell(<DesktopProvidersPage
+    taskId={activeTask?.id ?? null}
+    taskName={activeTask?.name ?? null}
+    availableTasks={shellTasks}
+    onOpenTask={(taskId) => navigate({ view: "task", taskId })}
+  />);
+  if (activeTask) return shell(<DesktopConversation key={activeTask.id} taskId={activeTask.id} name={activeTask.name} roots={activeTask.roots} association={activeTask.association} onBack={() => { entryEpoch.current++; setActiveTask(null); void load(); }} onOpenProviders={() => navigate({ view: "providers" })} />);
   if (unwired) return shell(<DesktopUnwired name={DESKTOP_LABELS[unwired]} onBack={() => navigate({ view: "unassigned" })} />);
   if (view.kind !== "ready" || !data) return <main className="grid min-h-screen place-items-center bg-bg px-6 text-ink" data-testid="desktop-inventory">
     <div className="w-full max-w-[560px]">
@@ -230,6 +261,17 @@ export function DesktopInventory() {
         : <div role="alert" className="border border-line bg-paper p-4 text-sm"><p>{view.error}</p><button className={`${button} mt-3`} type="button" onClick={() => void load()}>重试</button></div>}
     </div>
   </main>;
+  const overviewProject = selection.kind === "project" ? data.projects.find((item) => item.id === selection.id) ?? null : null;
+  if (!manage) return shell(<DesktopProjectOverview
+    project={overviewProject}
+    tasks={shellTasks}
+    associations={data.associations}
+    roots={data.inventory.roots}
+    onOpenTask={(taskId) => void openTask(taskId)}
+    onManage={() => setManage(true)}
+    onManageDirectories={() => setManage(true)}
+    onCreateTask={() => { setManage(true); setForm("create"); setDraft({ name: "", description: "", repositories: [], directories: [] }); setActionError(null); }}
+  />);
   return shell(<div className="mx-auto w-full max-w-[1100px] px-4 py-5" data-testid="desktop-inventory">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2"><h1 className="text-lg font-semibold">项目与任务</h1>
         <div className="flex gap-2"><button className={button} type="button" disabled={busy || pendingCreate !== null} onClick={() => { setForm("create"); setDraft({ name: "", description: "", repositories: [], directories: [] }); setActionError(null); }}><Icon name="plus" />项目</button>
@@ -240,12 +282,15 @@ export function DesktopInventory() {
       }} />
       {actionError && <p role="alert" className="mb-3 text-sm text-[#ad4545]">{actionError}</p>}
       {pendingCreate && <button className={`${button} mb-3`} type="button" onClick={() => void load()}>重新核验</button>}
+      <div className="mb-3 flex flex-wrap gap-2">
+        <button className={button} type="button" onClick={() => setManage(false)}>返回项目总览</button>
+      </div>
       <div className="grid gap-5 md:grid-cols-[220px_minmax(0,1fr)]">
         <nav aria-label="项目导航" className="min-w-0 border-b border-line pb-3 md:border-b-0 md:border-r md:pr-4">
           <h2 className="mb-2 text-xs font-semibold text-muted">项目 · {data.projects.length}</h2>
-          <div className="flex gap-1 overflow-x-auto md:block md:space-y-1">{data.projects.map((item) => <button type="button" key={item.id} onClick={() => { setSelection({ kind: "project", id: item.id }); setForm(null); setDraft(null); setActionError(null); }} className={`block min-w-0 shrink-0 px-2 py-2 text-left text-sm md:w-full md:truncate ${project?.id === item.id ? "bg-paper font-semibold" : "hover:bg-paper"}`}>{item.name}</button>)}</div>
+          <div className="flex gap-1 overflow-x-auto md:block md:space-y-1">{data.projects.map((item) => <button type="button" key={item.id} onClick={() => { pinned.current = true; setSelection({ kind: "project", id: item.id }); setForm(null); setDraft(null); setActionError(null); }} className={`block min-w-0 shrink-0 px-2 py-2 text-left text-sm md:w-full md:truncate ${project?.id === item.id ? "bg-paper font-semibold" : "hover:bg-paper"}`}>{item.name}</button>)}</div>
           {!data.projects.length && <p className="text-xs text-muted">暂无项目</p>}
-          <button type="button" className={`mt-3 block px-2 py-2 text-left text-sm ${!project ? "bg-paper font-semibold" : "hover:bg-paper"}`} onClick={() => { setSelection({ kind: "unassigned" }); setForm(null); setDraft(null); setActionError(null); }}>未归属任务 · {data.associations.filter((row) => row.projectId === null).length}</button>
+          <button type="button" className={`mt-3 block px-2 py-2 text-left text-sm ${!project ? "bg-paper font-semibold" : "hover:bg-paper"}`} onClick={() => { pinned.current = true; setSelection({ kind: "unassigned" }); setForm(null); setDraft(null); setActionError(null); }}>未归属任务 · {data.associations.filter((row) => row.projectId === null).length}</button>
         </nav>
         <div className="min-w-0">
           {form === "create" && draft && <ProjectForm input={draft} onChange={setDraft} busy={busy} saveDisabled={pendingCreate !== null} onCancel={() => { setForm(null); setDraft(null); }} onSubmit={submit} />}
