@@ -92,7 +92,7 @@ describe.skipIf(process.platform !== "darwin")("real macOS supervisor bridge", (
     const lines: string[] = [];
     const session = await launchSupervisorExperiment(binary, { ...launch(root, "/bin/sh", ["-c", "echo $API_TOKEN; exit 3"]), env: { API_TOKEN: "private-value" } },
       { ...options, onLine: (line) => lines.push(line) });
-    expect(await session.completion).toEqual({ event: "exit", code: 3 });
+    expect(await session.completion, JSON.stringify(lines)).toEqual({ event: "exit", code: 3 });
     expect(lines).toEqual(["[redacted]"]);
     const descendants: string[] = [];
     const parent = await launchSupervisorExperiment(binary, launch(root, "/bin/sh", ["-c", "sleep 30 & echo $!; exit 0"]),
@@ -107,7 +107,7 @@ describe.skipIf(process.platform !== "darwin")("real macOS supervisor bridge", (
     try {
       for (let attempt = 0; !descendants.length && attempt < 100; attempt++) await new Promise((resolve) => setTimeout(resolve, 20));
       expect(descendants.length).toBe(1);
-      expect(await waiting.disconnect()).toEqual({ event: "stopped" });
+      expect(await waiting.disconnect(), JSON.stringify(descendants)).toEqual({ event: "stopped" });
       expect(() => process.kill(Number(descendants[0]), 0)).toThrow();
     } finally { await waiting.stop(); }
   }, 30000);

@@ -139,6 +139,43 @@ PID-based production stop mechanism. No Windows acceptance or guarantee for
 macOS descendants escaping the process group is inferred. The production Host
 entry and `task/controlService` are unchanged and remain execution-unavailable.
 
+Async execution-authority experiment: `src/host/service-execution-experiment.ts`
+is a single-service controller used only by tests, never production Host. It
+uses real PiSessionChannel approval records and TaskWriteCoordinator ports.
+An absent driver refuses before minting/claiming/changing lifecycle. Callers
+must supply the Host's actual bound channel and trusted config fingerprint;
+snapshot identity checks are not authentication of a caller-provided channel.
+There is no human/renderer entry or production enable switch.
+
+Default-tier confirmations bind task/session, service, action, and fingerprint;
+pending/rejected/foreign/stale/spent confirmations refuse execution. Spend is
+persisted before acting, and permission/config are checked again after a
+persistence await. The controller retains the write claim across async start
+and stop, rejects duplicate control of this single service (including the same
+session), and exposes owned uncertain/running resources for orphan checks.
+Separate task coordinators remain independent. This is not a multi-service
+same-session scheduler or cross-task shared-path lock.
+
+States are stopped/starting/running/stopping/exited/unconfirmed. Ready and clean
+terminal receipts come from the bounded supervisor driver, not marker-only
+runtime methods. A rejected start may have spawned resources before failure:
+without zero-resource proof it remains unconfirmed, owned, and non-restartable.
+Unknown stop also retains ownership. Natural confirmed completion clears it.
+The driver must be bounded (the experiment uses launchSupervisorExperiment).
+Cancellation/recovery persistence, production approval rendering/adaptation,
+human execution, health checks, installed artifacts and actual business
+configuration are still outstanding. Existing synchronous marker-only service
+control and production task/controlService are not changed by this controller.
+
+During the async authority full-gate run, the existing real macOS bridge test
+once returned native `termination-unconfirmed` rather than exit code 3, and a
+repeat run also observed it on control disconnect. The bridge correctly kept
+that failure unconfirmed. Targeted diagnostics did not isolate a root cause;
+15 full bridge repetitions and 40 real-only repetitions then passed. This is
+an unresolved intermittent native cleanup blocker, not a fixed timing issue.
+Do not relax success conditions or enable production on later green runs.
+Temporary debug logging was removed; redacted assertion context is retained.
+
 Outstanding production blockers:
 
 - The Host must capture and bind trusted task-root and cwd identities to the
