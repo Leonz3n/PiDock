@@ -19,6 +19,7 @@
     "smoke:s3": "node scripts/smoke-s3.mjs",
     "smoke:s4": "electron . -- --smoke-s4",
     "smoke:s5": "electron . -- --smoke-s5",
+    "smoke:supervisor": "electron scripts/electron-service-supervisor-smoke.mjs",
     "startup": "electron . -- --print-startup",
     "package:dir": "electron-builder --config electron-builder.config.cjs --dir",
     "package:mac": "electron-builder --config electron-builder.config.cjs --mac dmg --arm64",

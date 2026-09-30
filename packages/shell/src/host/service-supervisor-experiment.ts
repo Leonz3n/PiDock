@@ -9,6 +9,7 @@ type Terminal = { event: "exit"; code: number } | { event: "stopped" };
 export type SupervisorResult = Terminal | { event: "unconfirmed" };
 export interface SupervisorSession {
   pid: number;
+  supervisorPid: number;
   completion: Promise<SupervisorResult>;
   stop(): Promise<SupervisorResult>;
   disconnect(): Promise<SupervisorResult>;
@@ -126,5 +127,5 @@ export async function launchSupervisorExperiment(binary: string, launch: Supervi
     await abandon();
     return { event: "unconfirmed" };
   };
-  return { pid: servicePid, completion, stop: () => end(false), disconnect: () => end(true) };
+  return { pid: servicePid, supervisorPid: child.pid!, completion, stop: () => end(false), disconnect: () => end(true) };
 }

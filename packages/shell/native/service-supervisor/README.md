@@ -111,6 +111,34 @@ these artifacts. No Go installation is required for ordinary product builds,
 though native experiment tests on macOS require Go. Explicit build output is
 not evidence of Windows execution, installed-package availability, or signing.
 
+Actual utilityProcess lifecycle experiment (macOS arm64 only):
+
+```sh
+pnpm --filter @pidock/shell build
+pnpm --filter @pidock/shell build:supervisor:mac
+pnpm --filter @pidock/shell smoke:supervisor
+```
+
+`scripts/electron-service-supervisor-smoke.mjs` creates an isolated profile,
+real task/project/catalog records, and an explicit native fixture executable.
+It consumes the development artifact manifest and private request preparation,
+then transfers that in-memory request through Electron's parent port to
+`scripts/service-supervisor-utility-fixture.mjs`. Neither script is a product
+RPC endpoint or included in packaged `files`. The utility fixture redacts all
+synthetic request env values before returning logs. The experiment requires Go
+for the fixture and reports exact Electron/Node versions.
+
+The six scenarios are stop, control-input disconnect, utility Host self-exit,
+Host SIGKILL, supervisor SIGKILL, and service-parent exit. For each, the test
+checks that this run's observed helper/service/descendant PIDs disappear, the
+utility exits, and outbound messages/stdout/stderr/private metadata omit the
+synthetic value. Host death has no terminal receipt; supervisor death remains
+`unconfirmed` even when the test later observes resources gone. Those
+observations are test evidence, not automatic production recovery state or a
+PID-based production stop mechanism. No Windows acceptance or guarantee for
+macOS descendants escaping the process group is inferred. The production Host
+entry and `task/controlService` are unchanged and remain execution-unavailable.
+
 Outstanding production blockers:
 
 - The Host must capture and bind trusted task-root and cwd identities to the
