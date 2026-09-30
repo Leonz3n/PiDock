@@ -109,8 +109,16 @@ func expectGone(t *testing.T, pid int) {
 	t.Fatalf("process %d was not reaped after supervisor stopped", pid)
 }
 
+func identity(path string) directoryIdentity {
+	var stat syscall.Stat_t
+	if syscall.Stat(path, &stat) != nil {
+		return directoryIdentity{}
+	}
+	return directoryIdentity{Device: strconv.FormatUint(uint64(stat.Dev), 10), Inode: strconv.FormatUint(stat.Ino, 10)}
+}
+
 func request(root, program string, args ...string) launchRequest {
-	return launchRequest{TaskRoot: root, Cwd: root, Program: program, Args: args,
+	return launchRequest{TaskRoot: root, Cwd: root, RootIdentity: identity(root), CwdIdentity: identity(root), Program: program, Args: args,
 		Env: map[string]string{"PATH": "/usr/bin:/bin"}, GraceMS: 100}
 }
 

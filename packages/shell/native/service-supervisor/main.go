@@ -19,12 +19,19 @@ const maxRequest = 256 * 1024
 var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 type launchRequest struct {
-	TaskRoot string            `json:"taskRoot"`
-	Cwd      string            `json:"cwd"`
-	Program  string            `json:"program"`
-	Args     []string          `json:"args"`
-	Env      map[string]string `json:"env"`
-	GraceMS  int               `json:"graceMs"`
+	RootIdentity directoryIdentity `json:"rootIdentity"`
+	CwdIdentity  directoryIdentity `json:"cwdIdentity"`
+	TaskRoot     string            `json:"taskRoot"`
+	Cwd          string            `json:"cwd"`
+	Program      string            `json:"program"`
+	Args         []string          `json:"args"`
+	Env          map[string]string `json:"env"`
+	GraceMS      int               `json:"graceMs"`
+}
+
+type directoryIdentity struct {
+	Device string `json:"device"`
+	Inode  string `json:"inode"`
 }
 
 type event struct {
@@ -55,39 +62,6 @@ func validate(req launchRequest) error {
 		}
 	}
 	return nil
-}
-
-// Verify the resolved path and opened directory before changing cwd. This is
-// not yet an atomic binding to the Host's task root: the root/path can change
-// before open, and Windows File.Chdir resolves a path again. Keep this helper
-// disconnected from production until both cases have verified ownership.
-func pinCwd(req launchRequest) (*os.File, error) {
-	root, err := filepath.EvalSymlinks(req.TaskRoot)
-	if err != nil {
-		return nil, errors.New("invalid-task-root")
-	}
-	cwd, err := filepath.EvalSymlinks(req.Cwd)
-	if err != nil {
-		return nil, errors.New("invalid-cwd")
-	}
-	inside, err := filepath.Rel(root, cwd)
-	if err != nil || inside == ".." || strings.HasPrefix(inside, ".."+string(os.PathSeparator)) || filepath.IsAbs(inside) {
-		return nil, errors.New("cwd-out-of-task")
-	}
-	before, err := os.Stat(cwd)
-	if err != nil || !before.IsDir() {
-		return nil, errors.New("invalid-cwd")
-	}
-	opened, err := os.Open(cwd)
-	if err != nil {
-		return nil, errors.New("invalid-cwd")
-	}
-	after, err := opened.Stat()
-	if err != nil || !after.IsDir() || !os.SameFile(before, after) {
-		opened.Close()
-		return nil, errors.New("cwd-changed")
-	}
-	return opened, nil
 }
 
 func supervise(scanner *bufio.Scanner) error {
