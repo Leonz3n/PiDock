@@ -980,6 +980,13 @@ export function validateHostTaskOp(
   // here. Which roots exist, whether a path escapes them and how much of an
   // answer may cross the boundary are decided Host-side
   // (`host/workspace-files.ts` + `main/workspace-files.ts`).
+  if (op === "task/serviceImportHints") {
+    if (!isRecord(payload) || Object.keys(payload).length !== 1 ||
+        typeof payload["rootId"] !== "string" || payload["rootId"].trim().length === 0) {
+      return { ok: false, error: "invalid-payload: task/serviceImportHints requires only rootId" };
+    }
+    return { ok: true };
+  }
   if (op === "task/fileRoots" || op === "task/terminalState") {
     if (payload !== undefined && !isRecord(payload)) {
       return { ok: false, error: `invalid-payload: ${op} payload must be an object` };

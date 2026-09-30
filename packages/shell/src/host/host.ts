@@ -49,6 +49,7 @@ import { PiSdkTextKernel } from "./sdk-text-kernel.js";
 import type { ServiceRunObservation } from "../main/execution-ledger.js";
 import { SharedPathCoordinator } from "./path-coordination.js";
 import { TaskServiceRuntime } from "./service-runtime.js";
+import { scanTaskServiceImportHints } from "./service-import.js";
 import { publicServiceStartPreview, publicServiceStatus } from "./service-public.js";
 import { TaskServiceTopology } from "./service-topology.js";
 import { TaskProtocolBinding } from "./protocol-binding.js";
@@ -1138,6 +1139,21 @@ async function dispatchTaskOp(
           return { ok: true, payload: { roots: files.roots(), taskDir: files.taskDir } };
         } catch (error) {
           return { ok: false, error: error instanceof Error ? error.message : String(error) };
+        }
+      }
+      case "task/serviceImportHints": {
+        const files = workspaceFilesFor(taskId);
+        if ("error" in files) return { ok: false, error: files.error };
+        const rootId = record["rootId"];
+        if (typeof rootId !== "string" || rootId.trim().length === 0 || Object.keys(record).length !== 1) {
+          return { ok: false, error: "invalid-payload: task/serviceImportHints requires only rootId" };
+        }
+        try {
+          const scan = scanTaskServiceImportHints({ taskDir: files.taskDir, roots: files.roots() }, rootId);
+          return { ok: true, payload: { scan } };
+        } catch (error) {
+          return { ok: false, error: error instanceof Error && /^(unknown-worktree|path-out-of-scope):/.test(error.message)
+            ? error.message : "import-read-failed: 无法读取选定仓库配置" };
         }
       }
       case "task/fileTree": {
