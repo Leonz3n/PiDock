@@ -57,7 +57,8 @@ async function run() {
     const fixture = join(home, "service-fixture");
     execFileSync("go", ["build", "-trimpath", "-o", fixture, "./testdata/fixture"],
       { cwd: join(import.meta.dirname, "..", "native", "service-supervisor"), timeout: 30000, stdio: "pipe" });
-    const modes = ["stop", "disconnect", "host-exit", "host-kill", "supervisor-kill", "parent-exit"];
+    const modes = ["stop", "disconnect", "host-exit", "host-kill", "supervisor-kill", "parent-exit",
+      "lifecycle-close", "lifecycle-cancel", "lifecycle-recovery"];
     for (const mode of modes) {
       stage = `${mode}:template`;
       const args = mode === "parent-exit" ? ["host-parent", "exit"] : ["host-parent"];
@@ -95,7 +96,9 @@ async function run() {
       const boot = await waitFor((message) => message.event === "boot");
       assert.match(boot.versions.electron, /^44\./); assert.match(boot.versions.node, /^24\./);
       stage = `${mode}:launch`;
-      prepared.use((binary, request) => child.postMessage({ op: "launch", binary, request }));
+      const lifecycle = mode.startsWith("lifecycle-") ? { taskId, taskDir, serviceId: template.serviceId,
+        file: join(profile, `${mode}-checkpoint.json`), holdReady: mode === "lifecycle-cancel" } : undefined;
+      prepared.use((binary, request) => child.postMessage({ op: "launch", binary, request, ...(lifecycle ? { lifecycle } : {}) }));
       const started = await waitFor((message) => message.event === "started");
       const descendantLine = await waitFor((message) => message.event === "log" && /^descendant:[0-9]+$/.test(message.line));
       const descendant = Number(descendantLine.line.split(":")[1]);
@@ -103,18 +106,37 @@ async function run() {
       assert.equal(JSON.stringify(messages).includes(secret), false);
       assert(messages.some((message) => message.event === "log" && message.line === "[redacted]"));
       stage = `${mode}:termination`;
-      if (mode === "host-kill") {
+      if (mode === "lifecycle-close" || mode === "lifecycle-recovery") {
+        assert.deepEqual((await waitFor((message) => message.event === "control-result")).result, { ok: true, state: "running" });
+        assert.equal(JSON.parse(readFileSync(lifecycle.file, "utf8")).state, "running");
+      }
+      if (mode === "lifecycle-cancel") assert.equal(JSON.parse(readFileSync(lifecycle.file, "utf8")).state, "starting");
+      if (mode === "host-kill" || mode === "lifecycle-recovery") {
         assert(Number.isSafeInteger(child.pid) && child.pid > 0);
         process.kill(child.pid, "SIGKILL");
       }
       else if (mode === "host-exit") child.postMessage({ op: "exit" });
       else if (mode === "supervisor-kill") process.kill(started.supervisorPid, "SIGKILL");
+      else if (mode === "lifecycle-close") child.postMessage({ op: "close" });
+      else if (mode === "lifecycle-cancel") child.postMessage({ op: "cancel-start" });
       else if (mode !== "parent-exit") child.postMessage({ op: mode });
       let terminal = null;
-      if (mode !== "host-kill" && mode !== "host-exit") {
+      if (mode !== "host-kill" && mode !== "host-exit" && mode !== "lifecycle-recovery") {
         terminal = (await waitFor((message) => message.event === "completed")).result;
         assert.deepEqual(terminal, mode === "parent-exit" ? { event: "exit", code: 3 }
           : mode === "supervisor-kill" ? { event: "unconfirmed" } : { event: "stopped" });
+      }
+      if (mode === "lifecycle-cancel") {
+        const cancelled = await waitFor((message) => message.event === "control-result");
+        assert.deepEqual(cancelled.result, { ok: false, error: "service-operation-cancelled" });
+        assert.equal(cancelled.snapshot.ownerSessionId, null);
+        child.postMessage({ op: "close" });
+      }
+      if (mode === "lifecycle-close" || mode === "lifecycle-cancel") {
+        const closed = await waitFor((message) => message.event === "close-result");
+        assert.deepEqual(closed.result, { ok: true, state: "stopped" });
+        assert.deepEqual(closed.snapshot, { state: "stopped", ownerSessionId: null, busy: false, closing: true });
+        assert.deepEqual(JSON.parse(readFileSync(lifecycle.file, "utf8")), { schemaVersion: 1, taskId, serviceId: template.serviceId, state: "stopped", ownerSessionId: null });
       }
       stage = `${mode}:gone`;
       await gone(pids);
@@ -124,7 +146,40 @@ async function run() {
       if (!exited) child.kill();
       for (let attempt = 0; !exited && attempt < 100; attempt++) await delay(20);
       assert.equal(exited, true);
-      reports.push({ mode, versions: boot.versions, terminal, observedResourcesGone: true, utilityExited: true, privateValueVisible: false });
+      let recovered = false;
+      if (mode === "lifecycle-recovery") {
+        assert.deepEqual(JSON.parse(readFileSync(lifecycle.file, "utf8")), { schemaVersion: 1, taskId, serviceId: template.serviceId, state: "running", ownerSessionId: "main" });
+        const reopened = utilityProcess.fork(join(import.meta.dirname, "service-supervisor-utility-fixture.mjs"), [],
+          { serviceName: "pidock-recovery-experiment", env: {}, stdio: "pipe" });
+        children.push(reopened);
+        const recoveryMessages = []; let recoveryOutput = "", recoveryExited = false;
+        reopened.on("message", (message) => recoveryMessages.push(message));
+        reopened.stdout?.on("data", (data) => { recoveryOutput += data; });
+        reopened.stderr?.on("data", (data) => { recoveryOutput += data; });
+        reopened.once("exit", () => { recoveryExited = true; });
+        const recoveryWait = async (event) => {
+          for (let attempt = 0; attempt < 200; attempt++) {
+            const match = recoveryMessages.find((message) => message.event === event);
+            if (match) return match;
+            if (recoveryExited || recoveryMessages.some((message) => message.event === "failed")) throw Error("recovery fixture failed");
+            await delay(20);
+          }
+          throw Error("recovery fixture timeout");
+        };
+        await recoveryWait("boot"); reopened.postMessage({ op: "reopen", lifecycle });
+        const recovery = await recoveryWait("recovered");
+        assert.equal(recovery.launchAttempted, false);
+        assert.deepEqual(recovery.control, { ok: false, error: "service-termination-unconfirmed" });
+        assert.deepEqual(recovery.close, { ok: false, error: "service-termination-unconfirmed" });
+        assert.deepEqual(recovery.snapshot, { state: "unconfirmed", ownerSessionId: "main", busy: false, closing: true });
+        assert.deepEqual(recovery.resources, [{ resourceId: template.serviceId, kind: "service", ownerSessionId: "main", verificationRequired: true }]);
+        assert.equal(recoveryMessages.some((message) => message.event === "started"), false);
+        assert.equal((JSON.stringify(recoveryMessages) + recoveryOutput).includes(secret), false);
+        reopened.kill(); for (let attempt = 0; !recoveryExited && attempt < 100; attempt++) await delay(20);
+        assert.equal(recoveryExited, true); recovered = true;
+      }
+      if (lifecycle) assert.equal(readFileSync(lifecycle.file, "utf8").includes(secret), false);
+      reports.push({ mode, versions: boot.versions, terminal, observedResourcesGone: true, utilityExited: true, privateValueVisible: false, ...(lifecycle ? { recoveryChecked: true, ...(recovered ? { reopenedUnconfirmedWithoutReplay: true } : {}) } : {}) });
     }
     console.log("SUPERVISOR_UTILITY_SMOKE_OK", JSON.stringify(reports));
   } catch (error) {
