@@ -6,7 +6,11 @@ import type { ServiceStartPlan } from "./service-runtime.js";
 
 interface OwnedProcess { child: ChildProcessByStdio<null, Readable, Readable>; done: Promise<void> }
 
-/** Host-owned processes only. No renderer PID, cwd or command is accepted at stop time. */
+/**
+ * Host-owned process foundation. Stop confirms stdio closure, not arbitrary
+ * descendant termination; do not wire into production until the process tree
+ * has a separately verified ownership mechanism on each supported platform.
+ */
 export class TaskServiceProcesses {
   private readonly running = new Map<string, OwnedProcess>();
   private closing = false;
@@ -14,7 +18,9 @@ export class TaskServiceProcesses {
 
   constructor(taskDir: string, private readonly onLine: (serviceId: string, line: string) => void,
     private readonly onExit: (serviceId: string, reason: string) => void,
-    private readonly redact: (line: string) => string) {
+    private readonly redact: (line: string) => string,
+    private readonly stopGraceMs = 3000,
+    private readonly stopConfirmMs = 1000) {
     this.taskRoot = realpathSync(taskDir);
   }
 
@@ -22,12 +28,13 @@ export class TaskServiceProcesses {
 
   async start(plan: ServiceStartPlan): Promise<number> {
     if (this.closing) throw new Error("host-closing: service starts are disabled");
+    if (process.platform === "win32") throw new Error("unsupported-platform: Windows service process ownership is not implemented");
     if (this.running.has(plan.serviceId)) throw new Error(`already-running: ${plan.serviceId}`);
     if (!isAbsolute(plan.cwd) || !isAbsolute(plan.program)) throw new Error("invalid-launch: absolute cwd and program required");
     const cwd = realpathSync(plan.cwd);
     const within = relative(this.taskRoot, cwd);
     if (within === ".." || within.startsWith(`..${sep}`) || isAbsolute(within)) throw new Error("invalid-launch: cwd escapes task root");
-    const child = spawn(plan.program, plan.args, { cwd, env: { ...plan.env }, shell: false, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(plan.program, plan.args, { cwd, env: { ...plan.env }, shell: false, detached: true, stdio: ["ignore", "pipe", "pipe"] });
     const emit = (stream: NodeJS.ReadableStream) => {
       let pending = "";
       let oversized = false;
@@ -72,10 +79,24 @@ export class TaskServiceProcesses {
 
   async stopAll(): Promise<void> {
     this.closing = true;
-    await Promise.all(this.ids().map(async (serviceId) => {
+    const results = await Promise.allSettled(this.ids().map(async (serviceId) => {
       try { await this.stop(serviceId); }
       catch (error) { if (!(error instanceof Error && error.message.startsWith("not-running:"))) throw error; }
     }));
+    const failure = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+    if (failure) throw failure.reason;
+  }
+
+  private async closedWithin(done: Promise<void>, timeoutMs: number): Promise<boolean> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        done.then(() => true),
+        new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), timeoutMs); }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   async stop(serviceId: string): Promise<void> {
@@ -92,7 +113,10 @@ export class TaskServiceProcesses {
       }
     };
     signal("SIGTERM");
-    const timer = setTimeout(() => signal("SIGKILL"), 3000);
-    try { await done; } finally { clearTimeout(timer); }
+    if (await this.closedWithin(done, this.stopGraceMs)) return;
+    signal("SIGKILL");
+    if (await this.closedWithin(done, this.stopConfirmMs)) return;
+    // A descendant may still own stdout/stderr after the leader exits.
+    throw new Error(`termination-unconfirmed: ${serviceId} still owns open process output`);
   }
 }
