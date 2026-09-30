@@ -4,31 +4,14 @@ import { verifyServiceControlApproval } from "./service-runtime.js";
 import type { SupervisorSession, SupervisorResult } from "./service-supervisor-experiment.js";
 import { writeClaimError, type WriteCoordinatorPort } from "./write-coordination.js";
 
-export type ExperimentalServiceState = "stopped" | "starting" | "running" | "stopping" | "exited" | "unconfirmed";
+import { serviceExecutionCheckpoint as checkpointFromStore, type ExperimentalServiceState, type ServiceExecutionCheckpoint } from "../rpc/service-execution-checkpoint.js";
+export type { ExperimentalServiceState, ServiceExecutionCheckpoint } from "../rpc/service-execution-checkpoint.js";
 type Result = { ok: true; state: ExperimentalServiceState } | { ok: false; error: string };
-
-export interface ServiceExecutionCheckpoint {
-  schemaVersion: 1; taskId: string; serviceId: string;
-  state: ExperimentalServiceState; ownerSessionId: string | null;
-}
 export interface ServiceExecutionRecoveryPort {
   /** Trusted bounded store; undefined alone means no previous checkpoint. */
   read(): unknown;
   /** Synchronous durable acknowledgement; never paths, PIDs, approvals or env. */
   write(record: ServiceExecutionCheckpoint): undefined;
-}
-
-const states: ExperimentalServiceState[] = ["stopped", "starting", "running", "stopping", "exited", "unconfirmed"];
-function checkpointFromStore(value: unknown, taskId: string, serviceId: string): ServiceExecutionCheckpoint {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw Error("invalid-service-recovery");
-  const row = value as Record<string, unknown>;
-  const terminal = row.state === "stopped" || row.state === "exited";
-  if (Object.keys(row).sort().join(",") !== "ownerSessionId,schemaVersion,serviceId,state,taskId" ||
-      row.schemaVersion !== 1 || row.taskId !== taskId || row.serviceId !== serviceId ||
-      !states.includes(row.state as ExperimentalServiceState) ||
-      (terminal ? row.ownerSessionId !== null : typeof row.ownerSessionId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(row.ownerSessionId)) ||
-      Buffer.byteLength(JSON.stringify(value)) > 2048) throw Error("invalid-service-recovery");
-  return { schemaVersion: 1, taskId, serviceId, state: row.state as ExperimentalServiceState, ownerSessionId: row.ownerSessionId as string | null };
 }
 
 interface BoundControlChannel extends AgentControlChannel {
