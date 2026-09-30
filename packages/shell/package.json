@@ -20,6 +20,7 @@
     "smoke:s4": "electron . -- --smoke-s4",
     "smoke:s5": "electron . -- --smoke-s5",
     "smoke:supervisor": "electron scripts/electron-service-supervisor-smoke.mjs",
+    "smoke:recovery": "electron scripts/electron-service-recovery-smoke.mjs",
     "startup": "electron . -- --print-startup",
     "package:dir": "electron-builder --config electron-builder.config.cjs --dir",
     "package:mac": "electron-builder --config electron-builder.config.cjs --mac dmg --arm64",
