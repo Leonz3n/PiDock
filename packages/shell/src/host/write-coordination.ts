@@ -55,13 +55,15 @@ export interface WriteLockSnapshot {
 /**
  * An agent-owned running resource the Host knows about (a started service, a
  * recorded process). `ownerSessionId` is the session that started it; `null`
- * means the actor was not a session (human UI) and is never an orphan.
+ * means human UI and is not an orphan unless explicit verification is required.
  */
 export interface AgentOwnedResource {
   resourceId: string;
   kind: "service" | "process" | "other";
   ownerSessionId: string | null;
   label?: string;
+  /** Trusted recovery/uncertainty fence: no new write claim, even by the owner. */
+  verificationRequired?: boolean;
 }
 
 export type WriteClaimResult =
@@ -135,7 +137,8 @@ export function writeLockSnapshot(snapshot: WriteLockSnapshot): WriteLockSnapsho
  * running resource owned by **another** session that holds no live claim (its
  * process survived a cancel/restore). Resources owned by the requester itself
  * are its own work, and human-started resources have no session to coordinate
- * with, so neither is an orphan.
+ * with, so neither is an orphan unless trusted recovery marks verificationRequired.
+ * That explicit uncertainty fence also applies to human resources/live owners.
  */
 export function orphanResourcesFor(input: {
   resources: readonly AgentOwnedResource[];
@@ -146,7 +149,8 @@ export function orphanResourcesFor(input: {
   return input.resources
     .filter(
       (resource) =>
-        resource.ownerSessionId !== null && resource.ownerSessionId !== input.requester && !claiming.has(resource.ownerSessionId),
+        resource.verificationRequired === true ||
+        (resource.ownerSessionId !== null && resource.ownerSessionId !== input.requester && !claiming.has(resource.ownerSessionId)),
     )
     .map((resource) => ({ ...resource }))
     .sort((a, b) => (a.resourceId < b.resourceId ? -1 : a.resourceId > b.resourceId ? 1 : 0));
@@ -154,7 +158,7 @@ export function orphanResourcesFor(input: {
 
 /**
  * Leftover resources for the coordination view: agent-owned and still running
- * while their owning session holds no live claim. Independent of the requester,
+ * it is explicitly unverified or its owning session holds no live claim. Independent of the requester,
  * so the UI shows the same leftovers no matter which session asks next.
  */
 export function orphanResourcesForView(
@@ -163,7 +167,7 @@ export function orphanResourcesForView(
 ): AgentOwnedResource[] {
   const claiming = new Set(snapshot.claims.map((claim) => claim.sessionId));
   return resources
-    .filter((resource) => resource.ownerSessionId !== null && !claiming.has(resource.ownerSessionId))
+    .filter((resource) => resource.verificationRequired === true || (resource.ownerSessionId !== null && !claiming.has(resource.ownerSessionId)))
     .map((resource) => ({ ...resource }))
     .sort((a, b) => (a.resourceId < b.resourceId ? -1 : a.resourceId > b.resourceId ? 1 : 0));
 }
@@ -213,12 +217,13 @@ export interface WriteClaimOutcome {
  *
  * 1. a read-only session never obtains the write right (盒子 3),
  * 2. another session's live claim refuses the request and queues it (盒子 2),
- * 3. another session's leftover agent-owned resource refuses the request until
- *    it is verified/stopped (盒子 5),
+ * 3. another session's leftover resource, or any explicitly unverified resource,
+ *    refuses the request until it is verified/stopped (盒子 5),
  * 4. otherwise the claim is added and the owner keeps/receives the right.
  *
- * The requester's own claims need no re-check, so a nested tool inside a turn
- * does not deadlock against its own session's lock.
+ * Known owned resources do not deadlock a nested tool against its own turn.
+ * An explicit verification fence still refuses new claims; it does not revoke
+ * already running work or manufacture termination of existing claims.
  */
 export function claimWrite(snapshot: WriteLockSnapshot, input: WriteClaimInput): WriteClaimOutcome {
   if (input.permission === "read") {
@@ -246,7 +251,9 @@ export function claimWrite(snapshot: WriteLockSnapshot, input: WriteClaimInput):
         ok: false,
         verdict: "locked",
         owner: orphans[0]?.ownerSessionId ?? null,
-        reason: `会话 ${orphans[0]?.ownerSessionId ?? "未知"} 的遗留执行资源仍在运行（${orphans
+        reason: orphans.some((resource) => resource.verificationRequired === true)
+          ? `执行资源尚未核验（${orphans.map((resource) => resource.label ?? resource.resourceId).join("、")}），不能依据旧会话归属继续写入`
+          : `会话 ${orphans[0]?.ownerSessionId ?? "未知"} 的遗留执行资源仍在运行（${orphans
           .map((resource) => resource.label ?? resource.resourceId)
           .join("、")}），请先核验并停止后再写入`,
         queuePosition: 1,

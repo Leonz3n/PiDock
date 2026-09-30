@@ -110,6 +110,17 @@ describe("task write coordination", () => {
     expect(orphanResourcesForView(resources, emptyWriteLock())).toHaveLength(1);
   });
 
+  it("requires verification for every new write claim, including a live owner or human resource", () => {
+    for (const ownerSessionId of ["impl", null]) {
+      const resources: AgentOwnedResource[] = [{ ...SERVICE, ownerSessionId, verificationRequired: true }];
+      const held = claim(emptyWriteLock(), "impl");
+      const orphans = orphanResourcesFor({ resources, requester: "impl", snapshot: held.snapshot });
+      expect(orphans).toHaveLength(1); expect(orphanResourcesForView(resources, held.snapshot)).toHaveLength(1);
+      expect(claimWrite(held.snapshot, { sessionId: "impl", permission: "auto", intent: { kind: "turn", label: "continue" }, orphans }).result).toMatchObject({ ok: false, verdict: "locked" });
+      expect(claimWrite(held.snapshot, { sessionId: "impl", permission: "read", intent: { kind: "turn", label: "continue" }, orphans }).result).toMatchObject({ ok: false, verdict: "readonly" });
+    }
+  });
+
   it("drops claims, derived entries and the queue slot on cancel/stop", () => {
     const first = claim(emptyWriteLock(), "impl");
     const queued = claim(first.snapshot, "review");

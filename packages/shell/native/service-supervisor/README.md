@@ -162,10 +162,21 @@ runtime methods. A rejected start may have spawned resources before failure:
 without zero-resource proof it remains unconfirmed, owned, and non-restartable.
 Unknown stop also retains ownership. Natural confirmed completion clears it.
 The driver must be bounded (the experiment uses launchSupervisorExperiment).
-Cancellation/recovery persistence, production approval rendering/adaptation,
+Production cancellation/recovery persistence, approval rendering/adaptation,
 human execution, health checks, installed artifacts and actual business
 configuration are still outstanding. Existing synchronous marker-only service
 control and production task/controlService are not changed by this controller.
+
+Lifecycle follow-up (still test-only): the controller seals new requests on
+close, waits for in-flight operations, drains owned live sessions and requires
+acknowledged recovery storage before a safe-close report. Abort invalidates
+pending approvals and cleans late ready sessions while retaining write claims.
+A strict IDs/state/owner-only checkpoint is written before spawn; interrupted
+records reopen unconfirmed, never replay or adopt PIDs. The trusted
+verificationRequired resource flag also blocks the original owner's new write
+claims. Production storage/epoch authority and SDK/Host lifecycle wiring are
+not provided. The utility smoke now adds lifecycle-close/cancel/recovery to the
+original six cases. Evidence: `docs/evidence/service-execution-lifecycle/README.md`.
 
 During the async authority full-gate run, the existing real macOS bridge test
 once returned native `termination-unconfirmed` rather than exit code 3, and a

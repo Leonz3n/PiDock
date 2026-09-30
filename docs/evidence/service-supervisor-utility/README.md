@@ -40,6 +40,14 @@ Complete gate: 8/8 successful; shell 1007 passed, 1 Windows-only skipped;
 renderer 609 passed. Native macOS race tests and Windows test compilation passed.
 Windows tests were not executed. There is no UI change or screenshot acceptance.
 
+## Lifecycle Follow-Up
+
+The later [close/cancellation/recovery experiment](../service-execution-lifecycle/README.md)
+adds three cases to this same smoke command (nine total). The six-case table and
+counts above retain the original run's evidence. The follow-up records its own
+updated gate, real checkpoints and fresh-utility recovery refusal; production
+Host integration remains outside both experiments.
+
 ## Boundaries
 
 - Test-only scripts are outside packaged files; production host-entry and

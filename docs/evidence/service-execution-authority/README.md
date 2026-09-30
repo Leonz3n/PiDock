@@ -56,6 +56,8 @@ wiring; matching fields are not authentication of an arbitrary caller-provided
 channel. There is no human entry, production enable flag, installed artifact
 lookup or real business configuration source. The experiment relies on the
 bounded supervisor driver, does not implement multi-service same-session
-scheduling, and does not solve cancellation/recovery persistence, installed
-signatures, executable replacement or Windows cwd/Job Object validation.
+scheduling, and does not solve production cancellation/recovery persistence,
+installed signatures, executable replacement or Windows cwd/Job Object validation.
+The later [lifecycle follow-up](../service-execution-lifecycle/README.md) adds
+test-only close/cancellation/checkpoints without opening production execution.
 Unknown termination intentionally has no automatic reset or retry path.
