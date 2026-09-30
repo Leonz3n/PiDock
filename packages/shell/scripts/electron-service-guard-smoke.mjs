@@ -22,9 +22,14 @@ const children = [];
 async function run() {
 try {
   await app.whenReady();
+  const repoDir = join(taskDir, "invoice");
+  mkdirSync(join(repoDir, ".vscode"), { recursive: true });
+  writeFileSync(join(repoDir, ".vscode", "launch.json"), JSON.stringify({ configurations: [
+    { name: "invoice-dev", program: "node", args: ["secret-command"], env: { API_TOKEN: "synthetic-private-token-guard" } },
+  ] }));
   writeFileSync(join(taskDir, "task.json"), serializeTaskRecord(buildTaskDiskRecord({
     taskId, name: "guard", dirId: taskId, branch: "main", root: taskRoot, taskDir,
-    remoteBranch: "main", baseCommit: "test", repos: [], now: new Date().toISOString(),
+    remoteBranch: "main", baseCommit: "test", repos: ["invoice"], now: new Date().toISOString(),
   })));
   const index = new TaskRootIndex(profile, taskRoot);
   registry = new PerTaskHostRegistry("service-guard", async (workspace, task) => {
@@ -48,6 +53,13 @@ try {
     layers: { repoDefaults: [], shared: [], privateEntries: [{ key: "PRIVATE_KEY", value: secret, secret: true }], task: [] },
   };
   const origin = { kind: "shell-ui", senderWebContentsId: 42 };
+  const scan = await call("task/serviceImportHints", { rootId: "invoice" }, origin);
+  assert.equal(scan.ok, true);
+  assert.equal(scan.payload.scan.hints.length, 1);
+  assert.equal(JSON.stringify(scan).includes(secret), false);
+  assert.equal(JSON.stringify(scan).includes("secret-command"), false);
+  assert.equal((await call("task/serviceImportHints", { rootId: "invoice", path: "/tmp/other" }, origin)).ok, false);
+  assert.equal((await call("task/serviceImportHints", { rootId: "missing" }, origin)).ok, false);
   assert.equal((await call("task/registerService", registration)).ok, false);
   assert.equal((await call("task/registerService", { ...registration, sessionId: "main" }, origin)).ok, false);
   const registered = await call("task/registerService", registration, origin);

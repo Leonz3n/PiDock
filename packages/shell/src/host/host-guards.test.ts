@@ -73,6 +73,9 @@ describe("service ops", () => {
     ).toEqual({ ok: true });
     expect(validateHostTaskOp("task/registerService", { serviceId: " " }).ok).toBe(false);
     expect(validateHostTaskOp("task/planServiceStart", { serviceId: "saas-web" }).ok).toBe(true);
+    expect(validateHostTaskOp("task/serviceImportHints", { rootId: "invoice" })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/serviceImportHints", { rootId: "invoice", path: "/tmp/elsewhere" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/serviceImportHints", { rootId: "" }).ok).toBe(false);
     expect(validateHostTaskOp("task/planServiceStart", {}).ok).toBe(false);
     expect(validateHostTaskOp("task/controlService", { serviceId: "saas-web", action: "start" }).ok).toBe(true);
     expect(validateHostTaskOp("task/controlService", { serviceId: "saas-web", action: "launch" }).ok).toBe(false);

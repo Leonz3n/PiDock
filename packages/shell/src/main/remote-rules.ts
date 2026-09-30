@@ -241,6 +241,7 @@ const MOBILE_OP_SURFACES: Readonly<Record<string, MobileSurface>> = {
   "task/lifecycleState": "archive",
   "task/cleanupPreview": "archive",
   "task/fileRoots": "files",
+  "task/serviceImportHints": "files",
   "task/fileTree": "files",
   "task/filePreview": "files",
   "task/fileDiff": "files",
