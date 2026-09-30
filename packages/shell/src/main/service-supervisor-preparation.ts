@@ -1,39 +1,11 @@
-import { createHash } from "node:crypto";
-import { accessSync, closeSync, constants, fstatSync, lstatSync, openSync, readSync, realpathSync } from "node:fs";
+import { accessSync, constants, lstatSync, realpathSync } from "node:fs";
+import { experimentalArtifactPath as artifactPath, type ExperimentalSupervisorArtifact } from "./service-supervisor-artifact.js";
+export type { ExperimentalSupervisorArtifact } from "./service-supervisor-artifact.js";
 import { isAbsolute, join, relative, sep } from "node:path";
 import type { SupervisorLaunch } from "../host/service-supervisor-experiment.js";
 import { resolvePrivateServiceRefs, type ServiceCatalog } from "./service-catalog.js";
 import { resolveServiceEnv } from "./service-config.js";
 
-export interface ExperimentalSupervisorArtifact {
-  path: string; sha256: string; platform: "darwin"; arch: string;
-}
-function artifactPath(artifact: ExperimentalSupervisorArtifact | undefined): string {
-  if (!artifact || process.platform !== "darwin" || artifact.platform !== process.platform || artifact.arch !== process.arch ||
-      !isAbsolute(artifact.path) || !/^[a-f0-9]{64}$/.test(artifact.sha256)) throw Error("supervisor-artifact-unavailable");
-  let fd: number | undefined;
-  try {
-    fd = openSync(artifact.path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-    const before = fstatSync(fd, { bigint: true });
-    if (!before.isFile() || before.size > 32n * 1024n * 1024n || before.size === 0n || (before.mode & 0o111n) === 0n) throw Error();
-    accessSync(artifact.path, constants.X_OK);
-    const bytes = Buffer.alloc(Number(before.size) + 1);
-    let count = 0;
-    while (count < bytes.length) {
-      const read = readSync(fd, bytes, count, bytes.length - count, null);
-      if (!read) break;
-      count += read;
-    }
-    if (count !== Number(before.size)) throw Error();
-    const digest = createHash("sha256").update(bytes.subarray(0, count)).digest("hex");
-    const after = fstatSync(fd, { bigint: true });
-    const atPath = lstatSync(artifact.path, { bigint: true });
-    if (digest !== artifact.sha256 || before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size ||
-        before.mtimeNs !== after.mtimeNs || !atPath.isFile() || atPath.dev !== after.dev || atPath.ino !== after.ino) throw Error();
-    return realpathSync(artifact.path);
-  } catch { throw Error("supervisor-artifact-unavailable"); }
-  finally { if (fd !== undefined) closeSync(fd); }
-}
 function directoryIdentity(path: string) {
   const stat = lstatSync(path, { bigint: true });
   if (!stat.isDirectory() || stat.dev <= 0n || stat.ino <= 0n) throw Error("service-directory-unavailable");

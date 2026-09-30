@@ -8,6 +8,7 @@ import { ServiceCatalog, serviceCatalogAuthority } from "./service-catalog.js";
 import { ProjectRegistry } from "./project-registry.js";
 import { TaskRootIndex } from "./task-root-index.js";
 import { prepareServiceSupervisorExperiment, type ExperimentalSupervisorArtifact } from "./service-supervisor-preparation.js";
+import { inspectDevelopmentSupervisor } from "./service-supervisor-artifact.js";
 import { launchSupervisorExperiment } from "../host/service-supervisor-experiment.js";
 
 const dirs: string[] = [];
@@ -104,17 +105,19 @@ describe.skipIf(process.platform !== "darwin")("trusted experimental launch prep
     await f.projects.transfer(f.ids.taskId, f.ids.projectId, other.id, f.roots);
     const callback = vi.fn(); expect(() => prepared.use(callback)).toThrow("project changed"); expect(callback).not.toHaveBeenCalled();
   });
-  it("sends captured identities and isolated config to a real supervisor", async () => {
+  it.skipIf(process.arch !== "arm64")("sends captured identities and isolated config to a real supervisor", async () => {
     const f = await fixture();
-    rmSync(f.binary);
-    execFileSync("go", ["build", "-o", f.binary, "."], { cwd: resolve("native/service-supervisor"), timeout: 30000 });
-    const prepared = prepareServiceSupervisorExperiment(f.catalog, f.ids, { LOCAL_SECRET: "private-preparation-value" }, f.artifact());
+    const output = join(f.home, "artifacts");
+    execFileSync(process.execPath, [resolve("scripts/build-service-supervisor.mjs"), "darwin-arm64", output], { timeout: 120000, stdio: "pipe" });
+    const available = inspectDevelopmentSupervisor(join(output, "darwin-arm64"));
+    if (available.state !== "available-for-experiment") throw Error("development artifact unavailable");
+    const prepared = prepareServiceSupervisorExperiment(f.catalog, f.ids, { LOCAL_SECRET: "private-preparation-value" }, available.artifact);
     const lines: string[] = [];
     const session = await prepared.use((binary, request, redact) => launchSupervisorExperiment(binary, request,
       { redact, onLine: (line) => lines.push(line) }));
     expect(await session.completion).toEqual({ event: "exit", code: 0 });
     expect(lines).toEqual(["[redacted]", "3100", f.cwd]);
-    const stale = prepareServiceSupervisorExperiment(f.catalog, f.ids, { LOCAL_SECRET: "private-preparation-value" }, f.artifact());
+    const stale = prepareServiceSupervisorExperiment(f.catalog, f.ids, { LOCAL_SECRET: "private-preparation-value" }, available.artifact);
     await expect(stale.use((binary, request, redact) => {
       // Replace after the main freshness check: the native identity comparison
       // must still refuse launch, without relying on a last path-only check.

@@ -9,6 +9,8 @@
   "scripts": {
     "dev": "pnpm build && electron .",
     "build": "pnpm --filter @pidock/renderer build && node scripts/copy-static.mjs && tsc -p tsconfig.build.json",
+    "build:supervisor:mac": "node scripts/build-service-supervisor.mjs darwin-arm64",
+    "build:supervisor:win": "node scripts/build-service-supervisor.mjs win32-x64",
     "typecheck": "tsc -p tsconfig.build.json --noEmit",
     "test": "vitest run",
     "lint": "eslint . --max-warnings 0",
