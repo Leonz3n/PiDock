@@ -65,6 +65,7 @@ async function run() {
     const repoDir = join(taskDir, "invoice-service");
     mkdirSync(join(repoDir, "src"), { recursive: true });
     writeFileSync(join(repoDir, "README.md"), "# invoice-service\n\n对账单详情服务的本地工作副本。\n");
+    writeFileSync(join(repoDir, "package.json"), JSON.stringify({ scripts: { dev: "PORT=4100 API_TOKEN=synthetic-secret-import-guard node private-command-marker" } }));
     writeFileSync(join(repoDir, "src", "billing.ts"), "export function invoiceTotal(lines: number[]) {\n  return lines.reduce((sum, value) => sum + value, 0);\n}\n");
     mkdirSync(join(repoDir, ".vscode"));
     writeFileSync(join(repoDir, ".vscode", "launch.json"), JSON.stringify({ configurations: [
@@ -209,7 +210,7 @@ async function run() {
     await wait(250);
     await until((body) => body.includes("invoice-service") && body.includes("尚未扫描"), "import source");
     await click("扫描仓库");
-    await until((body) => body.includes("invoice-dev") && body.includes("API_TOKEN：疑似凭据"), "service import hints");
+    await until((body) => body.includes("invoice-dev") && body.includes("API_TOKEN：疑似凭据") && body.includes("脚本开头使用内联环境赋值"), "service import hints");
     if ((await text()).includes("synthetic-secret-import-guard") || (await text()).includes("private-command-marker")) throw Error("service import leaked private config");
     shots.push(await capture("environment-import", 1440, 900, 'section[aria-label="仓库配置草案"]'));
     shots.push(await capture("environment-import", 720, 560, 'section[aria-label="仓库配置草案"]'));
