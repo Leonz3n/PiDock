@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { performServiceBindingOperation, performServiceCatalogOperation } from "./service-catalog-ipc.js";
+import { performServiceBindingOperation, performServiceCatalogOperation, performServiceConfigPreview } from "./service-catalog-ipc.js";
 import type { ServiceCatalog, ServiceTemplate } from "./service-catalog.js";
 
 const template: ServiceTemplate = {
@@ -23,6 +23,18 @@ describe("shell service catalog request boundary", () => {
     const input = { op: "create", projectId: template.projectId, descriptor: template.descriptor, shared: template.shared };
     expect(performServiceCatalogOperation(catalog, input)).toEqual(publicRow);
     expect(catalog.saveTemplate).toHaveBeenCalledWith({ projectId: template.projectId, descriptor: template.descriptor, shared: template.shared });
+  });
+
+  it("accepts only preview identities, never page-supplied environment values", () => {
+    const catalog = { previewSavedConfig: vi.fn(() => ({ taskId: "task-1", serviceId: template.serviceId, templateVersion: 1,
+      scope: "saved-config" as const, state: "ready" as const, rows: [] })) };
+    const request = { op: "previewConfig", projectId: template.projectId, taskId: "task-1", serviceId: template.serviceId };
+    const env = { LOCAL: "trusted-value" };
+    expect(performServiceConfigPreview(catalog, request, env).state).toBe("ready");
+    expect(catalog.previewSavedConfig).toHaveBeenCalledWith(template.projectId, "task-1", template.serviceId, env);
+    catalog.previewSavedConfig.mockClear();
+    expect(() => performServiceConfigPreview(catalog, { ...request, env: { LOCAL: "page-value" } }, env)).toThrow();
+    expect(catalog.previewSavedConfig).not.toHaveBeenCalled();
   });
 
   it("requires the native picker and live sender, projects only private keys", async () => {

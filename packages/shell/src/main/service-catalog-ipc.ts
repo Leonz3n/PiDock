@@ -64,6 +64,17 @@ export async function performServiceBindingOperation(
   return { cancelled: false, binding: bindingProjection(store.commitTaskBinding(prepared, selected)) };
 }
 
+export function performServiceConfigPreview(
+  store: Pick<ServiceCatalog, "previewSavedConfig">, request: unknown, env: Record<string, string | undefined>,
+) {
+  const input = shape(request, ["op", "projectId", "taskId", "serviceId"]);
+  if (input["op"] !== "previewConfig" || typeof input["projectId"] !== "string" || typeof input["taskId"] !== "string" ||
+      typeof input["serviceId"] !== "string" || Buffer.byteLength(JSON.stringify(input)) > 1024) {
+    throw new TrustDomainViolation("invalid-payload", "invalid service config preview");
+  }
+  return store.previewSavedConfig(input["projectId"], input["taskId"], input["serviceId"], env);
+}
+
 /** A shell-only, project-scoped human editing surface. No execution ops. */
 export function performServiceCatalogOperation(
   store: Pick<ServiceCatalog, "listTemplates" | "saveTemplate">, request: unknown,

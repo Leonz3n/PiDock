@@ -2,8 +2,8 @@ import { randomUUID } from "node:crypto";
 import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, normalize } from "node:path";
 import { readTaskRecordOnDisk } from "../host/task-store.js";
-import { SERVICE_KEY_PATTERN, isServiceSecretKey, validateNoSecretsInShared, validateServiceDescriptor,
-  type ServiceConfigEntry, type ServiceDescriptor } from "./service-config.js";
+import { SERVICE_KEY_PATTERN, isServiceSecretKey, maskServiceValue, resolveServiceEnv, validateNoSecretsInShared, validateServiceDescriptor,
+  type ServiceConfigEntry, type ServiceConfigSource, type ServiceDescriptor } from "./service-config.js";
 import { isSafeTaskChildName } from "./task-provision.js";
 import type { ProjectRegistry } from "./project-registry.js";
 import type { TaskRootIndex, VerifiedTaskIdentity } from "./task-root-index.js";
@@ -27,6 +27,16 @@ export interface ServiceTaskBinding {
   programPath: string;
   privateRefs: { key: string; envRef: string }[];
 }
+export interface SavedServiceConfigPreview {
+  taskId: string;
+  serviceId: string;
+  templateVersion: number;
+  scope: "saved-config";
+  state: "ready" | "blocked";
+  error?: "private-reference-unavailable" | "environment-resolution-failed";
+  rows: { key: string; value: string; masked: boolean; source: ServiceConfigSource }[];
+}
+
 export interface ServiceCatalogAuthority {
   projectExists(projectId: string): boolean;
   task(taskId: string): { identity: VerifiedTaskIdentity; projectId: string; rootIds: string[] } | null;
@@ -314,6 +324,22 @@ export class ServiceCatalog {
     if (this.listTask(prepared.taskId).some((row) => row.binding.serviceId === prepared.serviceId)) throw new Error("service already bound");
     const { taskId, serviceId, templateVersion, rootId, subdir, privateRefs } = prepared;
     return this.bindTask({ taskId, serviceId, templateVersion, rootId, subdir, privateRefs, programPath });
+  }
+  previewSavedConfig(project: string, taskId: string, id: string, env: Record<string, string | undefined>): SavedServiceConfigPreview {
+    const selected = this.taskBindings(project, taskId).find((row) => row.binding.serviceId === serviceId(id));
+    if (!selected) throw new Error("service binding unavailable");
+    const base = { taskId, serviceId: id, templateVersion: selected.binding.templateVersion, scope: "saved-config" as const };
+    let privateEntries: ServiceConfigEntry[];
+    try { privateEntries = resolvePrivateServiceRefs(selected.binding.privateRefs, env); }
+    catch { return { ...base, state: "blocked", error: "private-reference-unavailable", rows: [] }; }
+    const resolved = resolveServiceEnv({ repoDefaults: [], shared: selected.template.shared, privateEntries, task: [] });
+    if (!resolved.ok) return { ...base, state: "blocked", error: "environment-resolution-failed", rows: [] };
+    const secrets = [...privateEntries.map((row) => row.value), ...resolved.rows.filter((row) => row.secret).map((row) => row.value)].filter(Boolean);
+    return { ...base, state: "ready", rows: resolved.rows.map((row) => {
+      // Also mask an unmarked shared literal that happens to include a private value.
+      const masked = row.secret || isServiceSecretKey(row.key) || secrets.some((secret) => row.value.includes(secret));
+      return { key: row.key, value: maskServiceValue({ ...row, secret: masked }), masked, source: row.source };
+    }) };
   }
   taskBindings(project: string, taskId: string): { binding: ServiceTaskBinding; template: ServiceTemplate }[] {
     if (this.requireTask(taskId).projectId !== projectId(project)) throw new Error("task project changed");

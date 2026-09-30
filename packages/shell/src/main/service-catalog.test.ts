@@ -182,6 +182,49 @@ describe("machine-private service catalog", () => {
     expect(() => catalog.listTask(taskId)).toThrow("task identity unavailable");
   });
 
+  it("previews only pinned saved layers, masks private values and reports missing refs without partial rows", () => {
+    const f = fixture();
+    const saved = f.catalog.saveTemplate({ projectId, descriptor: f.descriptor, shared: [
+      { key: "PORT", value: "3000", secret: false }, { key: "PUBLIC", value: "safe", secret: false },
+      { key: "COINCIDENTAL", value: "prefix-credential-value", secret: false },
+    ] });
+    f.catalog.bindTask({ taskId, serviceId: saved.serviceId, templateVersion: 1, rootId: "repo-a", subdir: "", programPath: process.execPath,
+      privateRefs: [{ key: "PORT", envRef: "LOCAL_PORT" }, { key: "API_TOKEN", envRef: "LOCAL_TOKEN" }] });
+    const env = { LOCAL_PORT: "4200", LOCAL_TOKEN: "credential-value" };
+    const preview = f.catalog.previewSavedConfig(projectId, taskId, saved.serviceId, env);
+    expect(preview).toMatchObject({ state: "ready", scope: "saved-config", templateVersion: 1 });
+    expect(preview.rows.find((row) => row.key === "PORT")).toMatchObject({ source: "本机私有配置", masked: true });
+    expect(preview.rows.find((row) => row.key === "PUBLIC")).toMatchObject({ source: "共享模板", value: "safe", masked: false });
+    expect(preview.rows.find((row) => row.key === "COINCIDENTAL")?.masked).toBe(true);
+    expect(JSON.stringify(preview)).not.toMatch(/credential-value|4200|LOCAL_TOKEN|programPath/);
+    expect(f.catalog.previewSavedConfig(projectId, taskId, saved.serviceId, {})).toMatchObject({ state: "blocked", error: "private-reference-unavailable", rows: [] });
+    f.catalog.saveTemplate({ projectId, serviceId: saved.serviceId, expectedVersion: 1, descriptor: f.descriptor, shared: [] });
+    expect(f.catalog.previewSavedConfig(projectId, taskId, saved.serviceId, env).templateVersion).toBe(1);
+    f.replaceIdentity(null);
+    expect(() => f.catalog.previewSavedConfig(projectId, taskId, saved.serviceId, env)).toThrow("task identity unavailable");
+  });
+
+  it("masks shared literals matching an interpolated private value", () => {
+    const f = fixture();
+    const saved = f.catalog.saveTemplate({ projectId, descriptor: f.descriptor, shared: [
+      { key: "PORT", value: "3000", secret: false }, { key: "COINCIDENTAL", value: "3000credential", secret: false },
+    ] });
+    f.bind(saved.serviceId);
+    const preview = f.catalog.previewSavedConfig(projectId, taskId, saved.serviceId, { LOCAL_API_TOKEN: "${PORT}credential" });
+    expect(preview.state).toBe("ready");
+    expect(preview.rows.find((row) => row.key === "COINCIDENTAL")?.masked).toBe(true);
+    expect(JSON.stringify(preview)).not.toContain("3000credential");
+  });
+
+  it("does not pretend unresolved shared references are valid configuration", () => {
+    const f = fixture();
+    const saved = f.catalog.saveTemplate({ projectId, descriptor: f.descriptor, shared: [{ key: "ADDRESS", value: "${MISSING}", secret: false }] });
+    f.bind(saved.serviceId);
+    expect(f.catalog.previewSavedConfig(projectId, taskId, saved.serviceId, { LOCAL_API_TOKEN: "secret" })).toMatchObject({
+      state: "blocked", error: "environment-resolution-failed", rows: [],
+    });
+  });
+
   it("pins identity across native selection and refuses replacement or duplicate commits", () => {
     const f = fixture();
     const saved = f.save();

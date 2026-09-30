@@ -212,6 +212,9 @@ async function run() {
     await fill("服务名称", "invoice-local");
     await fill("程序名", "node");
     await fill("参数 1", "server.js");
+    await click("添加共享变量");
+    await fill("共享变量 KEY 1", "PORT");
+    await fill("共享变量 VALUE 1", "4100");
     await click("核对保存");
     await click("确认保存");
     await until((body) => body.includes("invoice-local") && body.includes("任务绑定"), "persisted service template");
@@ -234,6 +237,19 @@ async function run() {
     if (!boundText.includes("私有变量：API_TOKEN") || boundText.includes("PIDOCK_SERVICE_CAPTURE_TOKEN")) throw Error("private binding projection leaked");
     shots.push(await capture("service-binding-saved", 1440, 900, '[aria-label="invoice-local任务绑定"]'));
     shots.push(await capture("service-binding-saved", 720, 560, '[aria-label="invoice-local任务绑定"]'));
+    await click("读取配置预览");
+    await until((body) => body.includes("本机私有引用缺失或无效"), "missing private reference preview");
+    shots.push(await capture("config-preview-blocked", 720, 560, '[aria-label="保存配置预览"]'));
+    const privateValue = "synthetic-config-preview-secret-87654321";
+    process.env["PIDOCK_SERVICE_CAPTURE_TOKEN"] = privateValue;
+    await click("读取配置预览");
+    await until((body) => body.includes("••••••••") && body.includes("本机私有配置") && body.includes("4100"), "masked saved configuration preview");
+    const preview = catalog.previewSavedConfig(project.id, taskId, serviceTemplates[0].serviceId, process.env);
+    if (JSON.stringify(preview).includes(privateValue) || (await text()).includes(privateValue) ||
+        readFileSync(join(profile, "service-machine.json"), "utf8").includes(privateValue)) throw Error("preview secret leaked");
+    shots.push(await capture("config-preview", 1440, 900, '[aria-label="保存配置预览"]'));
+    shots.push(await capture("config-preview", 720, 560, '[aria-label="保存配置预览"]'));
+    delete process.env["PIDOCK_SERVICE_CAPTURE_TOKEN"];
     await click("任务绑定");
     shots.push(await capture("environment-page", 1440, 900));
     shots.push(await capture("environment-page", 720, 560));

@@ -31,7 +31,7 @@ import { defaultTasksRoot } from "./task-resolver.js";
 import { TaskRootIndex } from "./task-root-index.js";
 import { ProjectRegistry } from "./project-registry.js";
 import { ServiceCatalog } from "./service-catalog.js";
-import { performServiceBindingOperation, performServiceCatalogOperation } from "./service-catalog-ipc.js";
+import { performServiceBindingOperation, performServiceCatalogOperation, performServiceConfigPreview } from "./service-catalog-ipc.js";
 import { performProjectOperation } from "./project-ipc.js";
 import type { ProviderWiring } from "./provider-ipc.js";
 import { ProjectTaskCreation } from "./project-task-creation.js";
@@ -1085,6 +1085,9 @@ export function registerIpc(
     try {
       registry.requireShellSender(event);
       if (!catalog) return { ok: false as const, error: "服务配方目录尚未接入" };
+      if (payload && typeof payload === "object" && (payload as Record<string, unknown>)["op"] === "previewConfig") {
+        return { ok: true as const, payload: performServiceConfigPreview(catalog, payload, process.env) };
+      }
       if (payload && typeof payload === "object" && ["bind", "taskBindings"].includes(String((payload as Record<string, unknown>)["op"]))) {
         const url = event.sender.getURL();
         const frame = { processId: event.sender.mainFrame.processId, routingId: event.sender.mainFrame.routingId };
