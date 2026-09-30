@@ -75,6 +75,42 @@ environment, task overrides, runtime bindings, or business-file configuration.
 The preparation tests use real TaskRootIndex/ProjectRegistry/catalog files and
 include replacement after the main check but before native launch.
 
+Development artifact builds (Go on PATH):
+
+```sh
+pnpm --filter @pidock/shell build:supervisor:mac
+pnpm --filter @pidock/shell build:supervisor:win
+```
+
+The scripts produce ignored `packages/shell/build/service-supervisor/` target
+directories for macOS arm64 and Windows x64. Each contains a binary and strict
+`manifest.json`: schema/protocol version, `development-unsigned` kind, target,
+fixed filename, binary SHA-256, sorted local source-tree SHA-256, and host Go
+version. Builds use CGO off, trimpath, readonly modules, no workspace/VCS/build
+ID, and check the output Mach-O/PE target. With identical sources and toolchain,
+repeat macOS builds are tested to produce identical binary hashes; this is not
+a universal cross-toolchain reproducibility claim. Failed builds do not publish
+a new manifest. An existing target is replaced only if its manifest identifies
+the same development target; unrelated directories are left alone. Concurrent
+same-target builds are not supported.
+
+`inspectDevelopmentSupervisor` only reads an explicitly supplied development
+directory. Bounded, non-following reads reject invalid/extra manifest fields,
+unsupported schema/protocol, unsafe filenames, missing/linked binaries, content
+hash mismatch, and mismatching machine headers. Only current macOS arm64 can
+return `available-for-experiment`; Windows x64 remains runtime-unavailable even
+with a valid cross-built artifact. These headers are structural checks, not
+proof of a runnable/signed binary. The source digest is recorded provenance,
+not a trusted release signature or automatic comparison with current checkout.
+Changing both a local binary and its manifest can replace this development
+artifact: do not treat the manifest as authentication. Final hashes must be
+recomputed after release signing, which is not implemented here.
+
+Normal shell build/dev/package scripts do not build, discover, or include
+these artifacts. No Go installation is required for ordinary product builds,
+though native experiment tests on macOS require Go. Explicit build output is
+not evidence of Windows execution, installed-package availability, or signing.
+
 Outstanding production blockers:
 
 - The Host must capture and bind trusted task-root and cwd identities to the
