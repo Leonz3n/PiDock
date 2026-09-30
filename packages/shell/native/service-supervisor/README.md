@@ -171,10 +171,14 @@ During the async authority full-gate run, the existing real macOS bridge test
 once returned native `termination-unconfirmed` rather than exit code 3, and a
 repeat run also observed it on control disconnect. The bridge correctly kept
 that failure unconfirmed. Targeted diagnostics did not isolate a root cause;
-15 full bridge repetitions and 40 real-only repetitions then passed. This is
-an unresolved intermittent native cleanup blocker, not a fixed timing issue.
-Do not relax success conditions or enable production on later green runs.
-Temporary debug logging was removed; redacted assertion context is retained.
+15 full bridge repetitions and 40 real-only repetitions then passed, but that
+was not a fix. A later kqueue probe caught anchor wait status 512 (exit 2), and
+a delayed-signal child reproduced the post-SIGKILL ordinary-exit race. The
+anchor now waits for actual death after successful SIGKILL dispatch; failed
+signals, abnormal waits and timeouts remain unconfirmed. Evidence and bounded
+repeat commands: `docs/evidence/service-supervisor-anchor/README.md`.
+No production gate is opened by this fix. Temporary debug logging was removed;
+redacted assertion context is retained.
 
 Outstanding production blockers:
 
