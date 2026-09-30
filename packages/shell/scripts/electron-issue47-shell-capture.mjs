@@ -66,6 +66,10 @@ async function run() {
     mkdirSync(join(repoDir, "src"), { recursive: true });
     writeFileSync(join(repoDir, "README.md"), "# invoice-service\n\n对账单详情服务的本地工作副本。\n");
     writeFileSync(join(repoDir, "src", "billing.ts"), "export function invoiceTotal(lines: number[]) {\n  return lines.reduce((sum, value) => sum + value, 0);\n}\n");
+    mkdirSync(join(repoDir, ".vscode"));
+    writeFileSync(join(repoDir, ".vscode", "launch.json"), JSON.stringify({ configurations: [
+      { name: "invoice-dev", program: "node", args: ["private-command-marker"], env: { API_TOKEN: "synthetic-secret-import-guard" } },
+    ] }));
     writeFileSync(join(taskDir, "task.json"), serializeTaskRecord(buildTaskDiskRecord({ taskId, name: "对账单详情·本地联调", dirId: taskId, branch: "main", root: taskRoot, taskDir, remoteBranch: "main", baseCommit: "test", repos: ["invoice-service"], now: new Date().toISOString() })));
     const index = new TaskRootIndex(profile, taskRoot);
     const projects = new ProjectRegistry(profile);
@@ -106,10 +110,14 @@ async function run() {
     const type = (value) => evalJs(`(() => { const el = document.querySelector('textarea[aria-label="消息"]'); const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set; setter.call(el, ${JSON.stringify(value)}); el.dispatchEvent(new Event('input',{bubbles:true})); return el.value; })()`);
     const clickText = (needle, scope = "document") => evalJs(`(() => { const b = [...${scope}.querySelectorAll('button')].find(el => el.textContent.includes(${JSON.stringify(needle)})); if (!b) throw Error('missing text '+${JSON.stringify(needle)}+' :: '+${scope}.innerText.replace(/\\n+/g,' | ').slice(0,400)); b.click(); return true; })()`);
     const clickSelector = (selector) => evalJs(`(() => { const b = document.querySelector(${JSON.stringify(selector)}); if (!b) throw Error('missing '+${JSON.stringify(selector)}+' :: '+document.body.innerText.replace(/\\n+/g,' | ').slice(0,500)); b.click(); return true; })()`);
-    const capture = async (label, width, height) => {
+    const capture = async (label, width, height, scrollSelector) => {
       captureStage = `${label} ${width}x${height}`;
       views.window.setContentSize(width, height);
       await wait(250);
+      if (scrollSelector) {
+        await evalJs(`document.querySelector(${JSON.stringify(scrollSelector)})?.scrollIntoView({block:'start'})`);
+        await wait(100);
+      }
       const size = views.window.getContentBounds();
       const state = await evalJs("({scrollWidth:document.documentElement.scrollWidth,innerWidth:window.innerWidth})");
       const file = join(output, `${width}x${height}-${label}.png`);
@@ -197,6 +205,14 @@ async function run() {
     await until((body) => body.includes("环境清单未接线") && body.includes("Host 尚未提供项目环境"), "environment page");
     shots.push(await capture("environment-page", 1440, 900));
     shots.push(await capture("environment-page", 720, 560));
+    views.window.setContentSize(1440, 900);
+    await wait(250);
+    await until((body) => body.includes("invoice-service") && body.includes("尚未扫描"), "import source");
+    await click("扫描仓库");
+    await until((body) => body.includes("invoice-dev") && body.includes("API_TOKEN：疑似凭据"), "service import hints");
+    if ((await text()).includes("synthetic-secret-import-guard") || (await text()).includes("private-command-marker")) throw Error("service import leaked private config");
+    shots.push(await capture("environment-import", 1440, 900, 'section[aria-label="仓库配置草案"]'));
+    shots.push(await capture("environment-import", 720, 560, 'section[aria-label="仓库配置草案"]'));
     views.window.setContentSize(1440, 900);
     await wait(250);
     const environment = {

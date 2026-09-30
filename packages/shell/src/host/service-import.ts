@@ -26,6 +26,7 @@ const MAX_FILE_BYTES = 128 * 1024;
 const MAX_HINTS = 100;
 const MAX_ENV_ROWS = 100;
 const MAX_ENV_KEY_CHARS = 100;
+const MAX_WARNINGS = 30;
 const object = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 const display = (value: string) => value.slice(0, 100);
 
@@ -62,9 +63,10 @@ function envAudit(value: unknown) {
   }));
   const audit = auditImportVars(rows, { sharedDraft: true });
   const malformed = value !== undefined && !object(value) && !Array.isArray(value);
+  const warnings = [...audit.toVerify.map(display), ...(malformed ? ["环境变量结构无效，请人工核对"] : []),
+    ...(entries.length > MAX_ENV_ROWS ? ["环境变量列表已截断，请人工核对"] : [])];
   return { envKeys: rows.map((row) => row.key), invalidVars: audit.invalidVars.map(display),
-    toVerify: [...audit.toVerify.map(display), ...(malformed ? ["环境变量结构无效，请人工核对"] : []),
-      ...(entries.length > MAX_ENV_ROWS ? ["环境变量列表已截断，请人工核对"] : [])] };
+    toVerify: warnings.length > MAX_WARNINGS ? [...warnings.slice(0, MAX_WARNINGS), "待核对项已截断"] : warnings };
 }
 
 export function scanTaskServiceImportHints(input: { taskDir: string; roots: readonly WorkspaceRoot[] }, rootId: string): ServiceImportScan {
