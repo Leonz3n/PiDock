@@ -87,6 +87,7 @@ export type ShellTaskOp =
   | "task/usageRecords"
   | "task/clearUsage"
   | "task/fileRoots"
+  | "task/serviceImportHints"
   | "task/fileTree"
   | "task/filePreview"
   | "task/fileDiff"
@@ -696,6 +697,15 @@ export async function clearUsageThroughShell(input: {
 export async function fileRootsThroughShell(taskId: string): Promise<ShellTaskOpResult> {
   try {
     return await shellTaskOp(taskId, "task/fileRoots", {});
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/** Read-only #7 import hints; the Host resolves rootId from this task's worktree record. */
+export async function serviceImportHintsThroughShell(input: { taskId: string; rootId: string }): Promise<ShellTaskOpResult> {
+  try {
+    return await shellTaskOp(input.taskId, "task/serviceImportHints", { rootId: input.rootId });
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
