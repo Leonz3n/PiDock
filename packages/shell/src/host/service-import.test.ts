@@ -21,6 +21,7 @@ describe("#7 real repository service-import hints", () => {
     writeFileSync(join(repo, "docker-compose.yml"), `services:\n  worker:\n    command: node worker.js\n    environment:\n      - API_TOKEN=secret-token\n      - PORT=4100\n`);
     const scan = scanServiceImportHints(repo);
     expect(scan.errors).toEqual([]);
+    expect(scan.truncated).toBe(false);
     expect(scan.hints.map(({ source, name, runType }) => ({ source, name, runType }))).toEqual([
       { source: "package.json", name: "dev", runType: "long-lived" },
       { source: "package.json", name: "migrate", runType: "prepare" },
@@ -33,6 +34,27 @@ describe("#7 real repository service-import hints", () => {
     expect(scan.hints[2]?.toVerify).toContain("API_TOKEN：疑似凭据，请移入本机私有配置");
     expect(JSON.stringify(scan)).not.toContain("secret-token");
     expect(JSON.stringify(scan)).not.toContain("server.js");
+  });
+
+  it("signals truncated results and invalid environment structures", () => {
+    const repo = root();
+    writeFileSync(join(repo, "package.json"), JSON.stringify({ scripts: Object.fromEntries(
+      Array.from({ length: 101 }, (_, index) => [`service-${index}`, "node server.js"]),
+    ) }));
+    mkdirSync(join(repo, ".vscode"));
+    writeFileSync(join(repo, ".vscode", "launch.json"), JSON.stringify({ configurations: [
+      { name: "invalid-env", env: "API_TOKEN=secret-token" },
+    ] }));
+    const scan = scanServiceImportHints(repo);
+    expect(scan.hints).toHaveLength(100);
+    expect(scan.truncated).toBe(true);
+    expect(JSON.stringify(scan)).not.toContain("secret-token");
+    const second = root();
+    mkdirSync(join(second, ".vscode"));
+    writeFileSync(join(second, ".vscode", "launch.json"), JSON.stringify({ configurations: [
+      { name: "invalid-env", env: "API_TOKEN=secret-token" },
+    ] }));
+    expect(scanServiceImportHints(second).hints[0]?.toVerify).toContain("环境变量结构无效，请人工核对");
   });
 
   it("accepts only the task's in-root worktree identity", () => {

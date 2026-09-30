@@ -18,6 +18,7 @@ export interface ServiceImportHint {
 export interface ServiceImportScan {
   hints: ServiceImportHint[];
   errors: { source: string; reason: string }[];
+  truncated: boolean;
 }
 
 const SOURCES = ["package.json", ".vscode/launch.json", "compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml"] as const;
@@ -60,8 +61,10 @@ function envAudit(value: unknown) {
     value: typeof raw === "string" ? raw : object(raw) && typeof raw["value"] === "string" ? raw["value"] : "",
   }));
   const audit = auditImportVars(rows, { sharedDraft: true });
+  const malformed = value !== undefined && !object(value) && !Array.isArray(value);
   return { envKeys: rows.map((row) => row.key), invalidVars: audit.invalidVars.map(display),
-    toVerify: [...audit.toVerify.map(display), ...(entries.length > MAX_ENV_ROWS ? ["环境变量列表已截断，请人工核对"] : [])] };
+    toVerify: [...audit.toVerify.map(display), ...(malformed ? ["环境变量结构无效，请人工核对"] : []),
+      ...(entries.length > MAX_ENV_ROWS ? ["环境变量列表已截断，请人工核对"] : [])] };
 }
 
 export function scanTaskServiceImportHints(input: { taskDir: string; roots: readonly WorkspaceRoot[] }, rootId: string): ServiceImportScan {
@@ -80,8 +83,9 @@ export function scanServiceImportHints(repoRoot: string): ServiceImportScan {
   if (!statSync(root).isDirectory()) throw Error("所选仓库不是目录");
   const hints: ServiceImportHint[] = [];
   const errors: ServiceImportScan["errors"] = [];
+  let truncated = false;
   const add = (source: string, name: string, command: string, env?: unknown) => {
-    if (hints.length >= MAX_HINTS) return;
+    if (hints.length >= MAX_HINTS) { truncated = true; return; }
     const audit = envAudit(env);
     hints.push({ source, name: display(name), runType: classifyImportDraft({ name, command: `${name} ${command}`, origin: "unknown" }).runType,
       ...audit, toVerify: [...audit.toVerify, "启动命令、参数及工作目录需人工核对；草案不可直接运行"] });
@@ -129,5 +133,5 @@ export function scanServiceImportHints(repoRoot: string): ServiceImportScan {
       errors.push({ source, reason });
     }
   }
-  return { hints, errors };
+  return { hints, errors, truncated };
 }
