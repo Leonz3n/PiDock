@@ -285,6 +285,14 @@ export class ServiceCatalog {
     writeDocument(this.directory, this.templateFile(), { version: 1, revisions: [...doc.revisions, next] }, templates);
     return next;
   }
+  listTemplates(project: string): ServiceTemplate[] {
+    if (!this.authority.projectExists(projectId(project))) throw new Error("project unavailable");
+    const latest = new Map<string, ServiceTemplate>();
+    for (const row of this.readTemplates().revisions) {
+      if (row.projectId === project && (latest.get(row.serviceId)?.version ?? 0) < row.version) latest.set(row.serviceId, row);
+    }
+    return [...latest.values()].sort((a, b) => a.descriptor.name.localeCompare(b.descriptor.name));
+  }
   template(project: string, id: string, selectedVersion: number): ServiceTemplate | null {
     if (!this.authority.projectExists(projectId(project))) throw new Error("project unavailable");
     return this.readTemplates().revisions.find((row) => row.projectId === project && row.serviceId === serviceId(id) && row.version === version(selectedVersion)) ?? null;

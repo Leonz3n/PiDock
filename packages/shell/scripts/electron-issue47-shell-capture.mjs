@@ -17,6 +17,7 @@ import { buildTaskDiskRecord, serializeTaskRecord } from "../dist/host/task-stor
 import { buildHostEnv } from "../dist/host/host-guards.js";
 import { TaskRootIndex } from "../dist/main/task-root-index.js";
 import { ProjectRegistry } from "../dist/main/project-registry.js";
+import { ServiceCatalog, serviceCatalogAuthority } from "../dist/main/service-catalog.js";
 import { createTrustedWindow, loadTrustedViews, PerTaskHostRegistry, registerIpc } from "../dist/main/runtime.js";
 import { ProviderProfileStore } from "../dist/main/provider-profile-store.js";
 import { ProviderWiring } from "../dist/main/provider-ipc.js";
@@ -74,6 +75,7 @@ async function run() {
     writeFileSync(join(taskDir, "task.json"), serializeTaskRecord(buildTaskDiskRecord({ taskId, name: "对账单详情·本地联调", dirId: taskId, branch: "main", root: taskRoot, taskDir, remoteBranch: "main", baseCommit: "test", repos: ["invoice-service"], now: new Date().toISOString() })));
     const index = new TaskRootIndex(profile, taskRoot);
     const projects = new ProjectRegistry(profile);
+    const catalog = new ServiceCatalog(profile, serviceCatalogAuthority(index, projects));
     registry = new PerTaskHostRegistry("issue47", async (workspace, task) => {
       const entry = join(import.meta.dirname, "..", "dist", "host", "host-entry.js");
       const child = utilityProcess.fork(entry, [], { serviceName: "issue47-host", env: buildHostEnv(process.env, workspace, task), stdio: "pipe" });
@@ -96,7 +98,7 @@ async function run() {
     const project = await projects.create({ name: "Adder", description: "微服务开发工作台", repositories: [{ name: "invoice-service", path: sourceRepo }], directories: [] });
     await projects.claim(taskId, project.id, index);
     views = await createTrustedWindow("issue47", "production");
-    registerIpc({}, views.registry, registry, projects, index, undefined, undefined, providers);
+    registerIpc({}, views.registry, registry, projects, index, undefined, undefined, providers, catalog);
     await loadTrustedViews(views);
     views.shellView.webContents.debugger.attach();
     const evalJs = async (expression) => {
@@ -111,6 +113,7 @@ async function run() {
     const type = (value) => evalJs(`(() => { const el = document.querySelector('textarea[aria-label="消息"]'); const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set; setter.call(el, ${JSON.stringify(value)}); el.dispatchEvent(new Event('input',{bubbles:true})); return el.value; })()`);
     const clickText = (needle, scope = "document") => evalJs(`(() => { const b = [...${scope}.querySelectorAll('button')].find(el => el.textContent.includes(${JSON.stringify(needle)})); if (!b) throw Error('missing text '+${JSON.stringify(needle)}+' :: '+${scope}.innerText.replace(/\\n+/g,' | ').slice(0,400)); b.click(); return true; })()`);
     const clickSelector = (selector) => evalJs(`(() => { const b = document.querySelector(${JSON.stringify(selector)}); if (!b) throw Error('missing '+${JSON.stringify(selector)}+' :: '+document.body.innerText.replace(/\\n+/g,' | ').slice(0,500)); b.click(); return true; })()`);
+    const fill = (label, value) => evalJs(`(() => { const el = document.querySelector('input[aria-label=' + JSON.stringify(${JSON.stringify(label)}) + ']'); if (!el) throw Error('missing input '+${JSON.stringify(label)}); const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set; setter.call(el,${JSON.stringify(value)}); el.dispatchEvent(new Event('input',{bubbles:true})); return el.value; })()`);
     const capture = async (label, width, height, scrollSelector) => {
       captureStage = `${label} ${width}x${height}`;
       views.window.setContentSize(width, height);
@@ -203,7 +206,16 @@ async function run() {
       rows: await evalJs("document.querySelectorAll('[data-usage-row]').length"),
     };
     await clickSelector('[data-testid=desktop-shell] button[title="环境与服务"]');
-    await until((body) => body.includes("环境清单未接线") && body.includes("Host 尚未提供项目环境"), "environment page");
+    await until((body) => body.includes("环境清单未接线") && body.includes("Host 尚未提供项目环境") && body.includes("该项目尚未保存服务模板"), "environment page");
+    await click("添加服务");
+    await fill("服务名称", "invoice-local");
+    await fill("程序名", "node");
+    await fill("参数 1", "server.js");
+    await click("核对保存");
+    await click("确认保存");
+    await until((body) => body.includes("invoice-local") && body.includes("未绑定任务"), "persisted service template");
+    const serviceTemplates = catalog.listTemplates(project.id);
+    if (serviceTemplates.length !== 1 || serviceTemplates[0]?.descriptor.name !== "invoice-local") throw Error("service template not persisted");
     shots.push(await capture("environment-page", 1440, 900));
     shots.push(await capture("environment-page", 720, 560));
     views.window.setContentSize(1440, 900);
