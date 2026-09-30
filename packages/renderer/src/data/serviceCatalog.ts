@@ -10,6 +10,29 @@ function object(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+export interface ServiceBindingView {
+  taskId: string;
+  serviceId: string;
+  templateVersion: number;
+  rootId: string;
+  subdir: string;
+  privateKeys: string[];
+}
+export function serviceBindingsFromMain(value: unknown, taskId: string): ServiceBindingView[] | null {
+  if (!Array.isArray(value) || value.length > 500) return null;
+  const result: ServiceBindingView[] = [];
+  for (const row of value) {
+    if (!object(row) || Object.keys(row).sort().join(",") !== "privateKeys,rootId,serviceId,subdir,taskId,templateVersion" ||
+        row["taskId"] !== taskId || typeof row["serviceId"] !== "string" || !/^s-[0-9a-f-]{36}$/i.test(row["serviceId"]) ||
+        !Number.isSafeInteger(row["templateVersion"]) || (row["templateVersion"] as number) < 1 ||
+        typeof row["rootId"] !== "string" || typeof row["subdir"] !== "string" || !Array.isArray(row["privateKeys"]) ||
+        row["privateKeys"].some((key) => typeof key !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key))) return null;
+    result.push({ taskId, serviceId: row["serviceId"], templateVersion: row["templateVersion"] as number,
+      rootId: row["rootId"], subdir: row["subdir"], privateKeys: [...row["privateKeys"]] as string[] });
+  }
+  return new Set(result.map((row) => row.serviceId)).size === result.length ? result : null;
+}
+
 /** Public projection only: machine paths, reference names and values do not enter the page model. */
 export function serviceTemplatesFromMain(value: unknown, projectId: string): ServiceTemplateView[] | null {
   if (!Array.isArray(value) || value.length > 500) return null;

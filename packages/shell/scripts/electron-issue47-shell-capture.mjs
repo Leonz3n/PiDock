@@ -98,7 +98,8 @@ async function run() {
     const project = await projects.create({ name: "Adder", description: "微服务开发工作台", repositories: [{ name: "invoice-service", path: sourceRepo }], directories: [] });
     await projects.claim(taskId, project.id, index);
     views = await createTrustedWindow("issue47", "production");
-    registerIpc({}, views.registry, registry, projects, index, undefined, undefined, providers, catalog);
+    // The capture injects a trusted test picker result; native dialog interaction is manual acceptance.
+    registerIpc({}, views.registry, registry, projects, index, undefined, undefined, providers, catalog, async () => process.execPath);
     await loadTrustedViews(views);
     views.shellView.webContents.debugger.attach();
     const evalJs = async (expression) => {
@@ -213,9 +214,27 @@ async function run() {
     await fill("参数 1", "server.js");
     await click("核对保存");
     await click("确认保存");
-    await until((body) => body.includes("invoice-local") && body.includes("未绑定任务"), "persisted service template");
+    await until((body) => body.includes("invoice-local") && body.includes("任务绑定"), "persisted service template");
     const serviceTemplates = catalog.listTemplates(project.id);
     if (serviceTemplates.length !== 1 || serviceTemplates[0]?.descriptor.name !== "invoice-local") throw Error("service template not persisted");
+    await click("任务绑定");
+    await until((body) => body.includes("工作副本") && body.includes("核对任务绑定"), "binding form");
+    await click("添加私有引用");
+    await fill("私有 KEY 1", "API_TOKEN");
+    await fill("本机环境引用 1", "PIDOCK_SERVICE_CAPTURE_TOKEN");
+    shots.push(await capture("service-binding-form", 1440, 900, '[aria-label="invoice-local任务绑定"]'));
+    shots.push(await capture("service-binding-form", 720, 560, '[aria-label="invoice-local任务绑定"]'));
+    await click("核对任务绑定");
+    await click("选择程序并保存绑定");
+    await until((body) => body.includes("已绑定 · v1 · invoice-service"), "persisted task binding");
+    const serviceBindings = new ServiceCatalog(profile, serviceCatalogAuthority(index, projects)).listTask(taskId);
+    if (serviceBindings.length !== 1 || serviceBindings[0]?.binding.rootId !== "invoice-service" ||
+        serviceBindings[0]?.binding.privateRefs[0]?.envRef !== "PIDOCK_SERVICE_CAPTURE_TOKEN") throw Error("task binding not persisted");
+    const boundText = await text();
+    if (!boundText.includes("私有变量：API_TOKEN") || boundText.includes("PIDOCK_SERVICE_CAPTURE_TOKEN")) throw Error("private binding projection leaked");
+    shots.push(await capture("service-binding-saved", 1440, 900, '[aria-label="invoice-local任务绑定"]'));
+    shots.push(await capture("service-binding-saved", 720, 560, '[aria-label="invoice-local任务绑定"]'));
+    await click("任务绑定");
     shots.push(await capture("environment-page", 1440, 900));
     shots.push(await capture("environment-page", 720, 560));
     views.window.setContentSize(1440, 900);

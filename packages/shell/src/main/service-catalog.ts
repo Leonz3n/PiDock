@@ -297,6 +297,28 @@ export class ServiceCatalog {
     if (!this.authority.projectExists(projectId(project))) throw new Error("project unavailable");
     return this.readTemplates().revisions.find((row) => row.projectId === project && row.serviceId === serviceId(id) && row.version === version(selectedVersion)) ?? null;
   }
+  prepareTaskBinding(project: string, input: Omit<ServiceTaskBinding, "projectId" | "identity" | "programPath">): ServiceTaskBinding {
+    const owner = this.requireTask(input.taskId);
+    if (owner.projectId !== projectId(project)) throw new Error("task project changed");
+    if (this.listTask(input.taskId).some((row) => row.binding.serviceId === input.serviceId)) throw new Error("service already bound");
+    if (!owner.rootIds.includes(input.rootId)) throw new Error("service root is not registered on task");
+    if (!this.template(project, input.serviceId, input.templateVersion)) throw new Error("template version unavailable");
+    // Placeholder is only for schema validation; the native picker supplies the persisted path.
+    return binding({ ...input, projectId: project, identity: owner.identity, programPath: process.execPath });
+  }
+  commitTaskBinding(prepared: ServiceTaskBinding, programPath: string): ServiceTaskBinding {
+    const owner = this.requireTask(prepared.taskId);
+    if (owner.projectId !== prepared.projectId || !sameIdentity(owner.identity, prepared.identity)) {
+      throw new Error("task identity changed during selection");
+    }
+    if (this.listTask(prepared.taskId).some((row) => row.binding.serviceId === prepared.serviceId)) throw new Error("service already bound");
+    const { taskId, serviceId, templateVersion, rootId, subdir, privateRefs } = prepared;
+    return this.bindTask({ taskId, serviceId, templateVersion, rootId, subdir, privateRefs, programPath });
+  }
+  taskBindings(project: string, taskId: string): { binding: ServiceTaskBinding; template: ServiceTemplate }[] {
+    if (this.requireTask(taskId).projectId !== projectId(project)) throw new Error("task project changed");
+    return this.listTask(taskId);
+  }
   bindTask(input: Omit<ServiceTaskBinding, "projectId" | "identity">): ServiceTaskBinding {
     const owner = this.requireTask(input.taskId);
     if (!owner.rootIds.includes(input.rootId)) throw new Error("service root is not registered on task");
