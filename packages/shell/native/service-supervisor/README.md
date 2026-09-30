@@ -32,6 +32,27 @@ directory object. Renaming a pinned directory does not revoke it: this is an
 object-identity guarantee, not continuous pathname containment or a filesystem
 sandbox. Concurrent changes to file contents/programs are outside this check.
 
+Host bridge experiment: `src/host/service-supervisor-experiment.ts` exposes a
+single-run controller for tests only; it is not imported by production Host.
+The caller supplies an explicit binary, already captured identities, a
+redactor, and a log sink. The helper receives no inherited Host environment.
+Ready and stop deadlines are bounded; a cleanup deadline may add one stop
+window. Only a valid terminal receipt followed by clean supervisor/stdio
+closure is confirmed. Missing/malformed/duplicate receipts, timeouts, abnormal
+helper exit, and redactor failure are unconfirmed. Helper kill is never treated
+as proof of descendant termination. Log lines are limited to 2000 characters;
+oversized whole lines are replaced, not segmented, and at most 200 lines plus
+one truncation marker are delivered per run. This is an experiment cap, not a
+production rolling log. `completion` remains pending while a service runs;
+call stop/disconnect to impose the termination deadline.
+
+Run the bridge tests from the repository root (macOS real-helper tests require
+Go on PATH; Windows protocol/runtime tests are not yet implemented):
+
+```sh
+pnpm --filter @pidock/shell exec vitest run src/host/service-supervisor-experiment.test.ts
+```
+
 Outstanding production blockers:
 
 - The Host must capture and bind trusted task-root and cwd identities to the
