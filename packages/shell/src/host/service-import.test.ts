@@ -36,6 +36,24 @@ describe("#7 real repository service-import hints", () => {
     expect(JSON.stringify(scan)).not.toContain("server.js");
   });
 
+  it("flags inline env assignments and malformed Compose lists without exposing their values", () => {
+    const repo = root();
+    writeFileSync(join(repo, "package.json"), JSON.stringify({ scripts: {
+      dev: "PORT=4100 API_TOKEN=secret-token node server.js",
+      broken: "1INVALID=secret-token node server.js",
+      plain: "node server.js",
+    } }));
+    writeFileSync(join(repo, "compose.yaml"), `services:\n  api:\n    environment:\n      - API_TOKEN=secret-token\n      - 42\n`);
+    const scan = scanServiceImportHints(repo);
+    expect(scan.hints[0]?.envKeys).toEqual([]);
+    expect(scan.hints[0]?.toVerify).toContain("脚本开头使用内联环境赋值；请将变量移入配置层以支持跨平台启动");
+    expect(scan.hints[1]?.invalidVars).toContain("1INVALID");
+    expect(scan.hints[2]?.toVerify).not.toContain("脚本开头使用内联环境赋值；请将变量移入配置层以支持跨平台启动");
+    expect(scan.hints[3]?.toVerify).toContain("环境变量结构无效，请人工核对");
+    expect(JSON.stringify(scan)).not.toContain("secret-token");
+    expect(JSON.stringify(scan)).not.toContain("server.js");
+  });
+
   it("signals truncated results and invalid environment structures", () => {
     const repo = root();
     writeFileSync(join(repo, "package.json"), JSON.stringify({ scripts: Object.fromEntries(

@@ -2,7 +2,7 @@ import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readF
 import { join, relative, sep } from "node:path";
 import { parse as parseJsonc, type ParseError } from "jsonc-parser";
 import { parseDocument } from "yaml";
-import { classifyImportDraft, auditImportVars, type ServiceRunType } from "../main/service-config.js";
+import { classifyImportDraft, auditImportVars, SERVICE_KEY_PATTERN, type ServiceRunType } from "../main/service-config.js";
 import type { WorkspaceRoot } from "../main/workspace-files.js";
 
 export interface ServiceImportHint {
@@ -62,11 +62,16 @@ function envAudit(value: unknown) {
     value: typeof raw === "string" ? raw : object(raw) && typeof raw["value"] === "string" ? raw["value"] : "",
   }));
   const audit = auditImportVars(rows, { sharedDraft: true });
-  const malformed = value !== undefined && !object(value) && !Array.isArray(value);
+  const malformed = value !== undefined && !object(value) && (!Array.isArray(value) || value.some((entry) => typeof entry !== "string"));
   const warnings = [...audit.toVerify.map(display), ...(malformed ? ["环境变量结构无效，请人工核对"] : []),
     ...(entries.length > MAX_ENV_ROWS ? ["环境变量列表已截断，请人工核对"] : [])];
   return { envKeys: rows.map((row) => row.key), invalidVars: audit.invalidVars.map(display),
     toVerify: warnings.length > MAX_WARNINGS ? [...warnings.slice(0, MAX_WARNINGS), "待核对项已截断"] : warnings };
+}
+
+function inlineAssignmentKey(command: string): string | null {
+  const match = /^\s*(?:(?:export|set)\s+)?([^\s=]+)=/i.exec(command);
+  return match ? match[1] ?? "" : null;
 }
 
 export function scanTaskServiceImportHints(input: { taskDir: string; roots: readonly WorkspaceRoot[] }, rootId: string): ServiceImportScan {
@@ -89,8 +94,12 @@ export function scanServiceImportHints(repoRoot: string): ServiceImportScan {
   const add = (source: string, name: string, command: string, env?: unknown) => {
     if (hints.length >= MAX_HINTS) { truncated = true; return; }
     const audit = envAudit(env);
+    const inlineKey = source === "package.json" ? inlineAssignmentKey(command) : null;
+    const invalidVars = inlineKey && !SERVICE_KEY_PATTERN.test(inlineKey) ? [...audit.invalidVars, display(inlineKey)] : audit.invalidVars;
     hints.push({ source, name: display(name), runType: classifyImportDraft({ name, command: `${name} ${command}`, origin: "unknown" }).runType,
-      ...audit, toVerify: [...audit.toVerify, "启动命令、参数及工作目录需人工核对；草案不可直接运行"] });
+      ...audit, invalidVars, toVerify: [...audit.toVerify,
+        ...(inlineKey ? ["脚本开头使用内联环境赋值；请将变量移入配置层以支持跨平台启动"] : []),
+        "启动命令、参数及工作目录需人工核对；草案不可直接运行"] });
   };
   for (const source of SOURCES) {
     try {
