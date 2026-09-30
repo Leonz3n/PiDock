@@ -16,7 +16,7 @@ async function until(check: () => boolean) {
   throw Error("timed out waiting for child output");
 }
 
-describe("#7 Host-owned real service processes", () => {
+describe.skipIf(process.platform === "win32")("#7 Host-owned real service processes", () => {
   it("runs with only the planned environment, captures bounded output, and records actual exit", async () => {
     const root = taskDir();
     const lines: string[] = []; const exits: string[] = [];
@@ -54,6 +54,32 @@ describe("#7 Host-owned real service processes", () => {
     await until(() => exits.length === 1);
     expect(lines).toEqual(["[output line exceeded 2000 characters]"]);
   });
+
+  it("returns an unknown stop result when the leader exits but a descendant holds its output", async () => {
+    const root = taskDir(); const lines: string[] = []; const exits: string[] = [];
+    const processes = new TaskServiceProcesses(root, (_, line) => lines.push(line), (_, reason) => exits.push(reason), (line) => line, 40, 40);
+    const script = `const {spawn}=require('node:child_process'); const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:['ignore','inherit','inherit']}); console.log('descendant:'+child.pid); process.exit(0);`;
+    const leaderPid = await processes.start(plan("parent-exited", root, ["-e", script]));
+    let descendantPid: number | undefined;
+    try {
+      await until(() => lines.some((line) => line.startsWith("descendant:")));
+      descendantPid = Number(lines.find((line) => line.startsWith("descendant:"))?.split(":")[1]);
+      expect(descendantPid).toBeGreaterThan(0);
+      await until(() => {
+        try { process.kill(leaderPid, 0); return false; }
+        catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH"; }
+      });
+      await expect(processes.stop("parent-exited")).rejects.toThrow("termination-unconfirmed");
+      expect(exits).toEqual([]);
+      expect(processes.ids()).toEqual(["parent-exited"]);
+    } finally {
+      if (descendantPid) {
+        try { process.kill(descendantPid, "SIGKILL"); }
+        catch { /* Best effort cleanup; the pending process assertion below still fails. */ }
+      }
+      await until(() => processes.ids().length === 0);
+    }
+  }, 10000);
 
   it("stops every owned child on normal Host cleanup", async () => {
     const root = taskDir(); const processes = new TaskServiceProcesses(root, () => {}, () => {}, (line) => line);
@@ -96,4 +122,11 @@ describe("#7 Host-owned real service processes", () => {
     mkdirSync(join(root, "sub"));
     await expect(processes.start(plan("one", join(root, "sub"), ["-e", "0"], {}))).resolves.toBeGreaterThan(0);
   });
+});
+
+it.skipIf(process.platform !== "win32")("refuses Windows launches until a Job Object owns the process tree", async () => {
+  const root = taskDir();
+  const processes = new TaskServiceProcesses(root, () => {}, () => {}, (line) => line);
+  await expect(processes.start(plan("unowned", root, ["-e", "0"]))).rejects.toThrow("unsupported-platform");
+  expect(processes.ids()).toEqual([]);
 });
