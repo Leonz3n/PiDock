@@ -53,6 +53,28 @@ Go on PATH; Windows protocol/runtime tests are not yet implemented):
 pnpm --filter @pidock/shell exec vitest run src/host/service-supervisor-experiment.test.ts
 ```
 
+Trusted preparation experiment: `src/main/service-supervisor-preparation.ts`
+reads the exact persisted task binding/template through catalog authority,
+derives the worktree/subdirectory (no page paths), captures decimal-string
+root/cwd identities, and resolves only saved shared/private layers into a fresh
+environment. A caller must explicitly supply a matching macOS architecture
+artifact path and SHA-256; absent/wrong/unreadable/linked/overlarge/non-executable
+artifacts refuse preparation. This caller-provided hash is an experiment input,
+not a signed package manifest or proof of platform compatibility. The returned
+object has no serializable launch/private values; a trusted callback consumes
+it once after rechecking catalog, directory, program, and artifact snapshots.
+Redaction includes raw and interpolated private values. No binary discovery,
+production permissions, IPC transport, or automatic startup is added.
+
+These checks are snapshots, not atomic filesystem authorization or atomic
+execution of a verified binary. The native helper checks the captured root/cwd
+identities again at launch; concurrent pathname/content changes and executable
+replacement still need a supported production contract. No request should be
+serialized to UI, logs, or disk. The experiment supplies no inherited toolchain
+environment, task overrides, runtime bindings, or business-file configuration.
+The preparation tests use real TaskRootIndex/ProjectRegistry/catalog files and
+include replacement after the main check but before native launch.
+
 Outstanding production blockers:
 
 - The Host must capture and bind trusted task-root and cwd identities to the
