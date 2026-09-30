@@ -4,6 +4,7 @@ import { serviceTemplatesFromMain, type ServiceTemplateView } from "../data/serv
 import { Icon } from "./Icon";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
+import { TaskServiceBinding } from "./TaskServiceBinding";
 
 const runTypeLabel = { "long-lived": "常驻服务", "one-shot": "一次性命令", prepare: "准备步骤" } as const;
 type RunType = keyof typeof runTypeLabel;
@@ -11,7 +12,7 @@ type Draft = { name: string; program: string; args: string[]; ports: string; run
 const emptyDraft = (): Draft => ({ name: "", program: "", args: [""], ports: "", runType: "long-lived", shared: [] });
 
 /** Only explicit human creation is offered; scanned hints cannot populate this form. */
-export function ProjectServiceTemplates({ projectId }: { projectId: string | null }) {
+export function ProjectServiceTemplates({ projectId, tasks = [] }: { projectId: string | null; tasks?: readonly { taskId: string; name: string }[] }) {
   const [rows, setRows] = useState<{ projectId: string; values: ServiceTemplateView[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -20,6 +21,7 @@ export function ProjectServiceTemplates({ projectId }: { projectId: string | nul
   const [review, setReview] = useState(false);
   const [saving, setSaving] = useState(false);
   const [uncertain, setUncertain] = useState(false);
+  const [bindingId, setBindingId] = useState<string | null>(null);
   const epoch = useRef(0);
   const connected = typeof shellBridge()?.serviceCatalogOp === "function";
   const templates = rows?.projectId === projectId ? rows.values : null;
@@ -34,6 +36,7 @@ export function ProjectServiceTemplates({ projectId }: { projectId: string | nul
     setReview(false);
     setSaving(false);
     setUncertain(false);
+    setBindingId(null);
     if (!projectId || !connected) { setLoading(false); return; }
     setLoading(true);
     void serviceCatalogThroughShell({ op: "list", projectId }).then((response) => {
@@ -114,7 +117,8 @@ export function ProjectServiceTemplates({ projectId }: { projectId: string | nul
       <div className="min-w-0"><strong className="break-words font-medium">{row.descriptor.name}</strong><span className="ml-2 text-muted">v{row.version} · {runTypeLabel[row.descriptor.runType]}</span>
         <p className="mt-1 break-all text-muted">{[row.descriptor.program, ...row.descriptor.args].join(" ")}</p>
         {!!row.sharedKeys.length && <p className="mt-1 break-all text-muted">共享变量：{row.sharedKeys.join("、")}</p>}
-      </div><span className="text-muted">未绑定任务</span>
+      </div><Button type="button" size="sm" variant="outline" onClick={() => setBindingId(bindingId === row.serviceId ? null : row.serviceId)}><Icon name="link" />任务绑定</Button>
+      {bindingId === row.serviceId && <div className="w-full"><TaskServiceBinding key={`${projectId}/${row.serviceId}`} template={row} tasks={tasks} /></div>}
     </div>)}
     {editing && <div className="mt-3 border-t border-line pt-3 text-xs">
       <div className="flex items-center justify-between"><h3 className="font-medium">新建共享模板</h3><Button type="button" size="icon" variant="ghost" aria-label="关闭编辑" title="关闭编辑" disabled={saving} onClick={close}><Icon name="close" /></Button></div>

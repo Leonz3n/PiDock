@@ -42,7 +42,7 @@ it("requires an explicit second confirmation before creating a human project tem
   await waitFor(() => expect(screen.getByText("API")).toBeInTheDocument());
   expect(serviceCatalogOp).toHaveBeenCalledWith({ op: "create", projectId,
     descriptor: saved.descriptor, shared: [{ key: "PORT", value: "3000", secret: false }] });
-  expect(screen.getByText("未绑定任务")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "任务绑定" })).toBeInTheDocument();
   expect(screen.getByText("运行未接线")).toBeInTheDocument();
   expect(screen.queryByText("3000")).toBeNull();
 });

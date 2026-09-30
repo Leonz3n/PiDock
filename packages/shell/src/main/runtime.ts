@@ -1,4 +1,5 @@
 import path from "node:path";
+import { accessSync, constants, realpathSync, statSync } from "node:fs";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import {
   BrowserWindow,
@@ -30,7 +31,7 @@ import { defaultTasksRoot } from "./task-resolver.js";
 import { TaskRootIndex } from "./task-root-index.js";
 import { ProjectRegistry } from "./project-registry.js";
 import { ServiceCatalog } from "./service-catalog.js";
-import { performServiceCatalogOperation } from "./service-catalog-ipc.js";
+import { performServiceBindingOperation, performServiceCatalogOperation } from "./service-catalog-ipc.js";
 import { performProjectOperation } from "./project-ipc.js";
 import type { ProviderWiring } from "./provider-ipc.js";
 import { ProjectTaskCreation } from "./project-task-creation.js";
@@ -738,6 +739,15 @@ export function registerIpc(
   creation?: ProjectTaskCreation,
   providers?: ProviderWiring,
   catalog?: ServiceCatalog,
+  pickProgram: () => Promise<string | null> = async () => {
+    const result = await dialog.showOpenDialog({ title: "选择本机服务程序", properties: ["openFile"] });
+    if (result.canceled || !result.filePaths[0]) return null;
+    const selected = realpathSync(result.filePaths[0]);
+    if (!statSync(selected).isFile()) throw new Error("invalid service program file");
+    accessSync(selected, process.platform === "win32" ? constants.F_OK : constants.X_OK);
+    // Metadata selection only; execution must recheck the file and its identity.
+    return selected;
+  },
 ): void {
   type TurnMessage = Parameters<Parameters<HostClient["onTurnEvent"]>[0]>[0];
   type PendingStart = { requestId: string; buffered: TurnMessage[]; bytes: number; overflow: boolean };
@@ -1075,6 +1085,23 @@ export function registerIpc(
     try {
       registry.requireShellSender(event);
       if (!catalog) return { ok: false as const, error: "服务配方目录尚未接入" };
+      if (payload && typeof payload === "object" && ["bind", "taskBindings"].includes(String((payload as Record<string, unknown>)["op"]))) {
+        const url = event.sender.getURL();
+        const frame = { processId: event.sender.mainFrame.processId, routingId: event.sender.mainFrame.routingId };
+        let navigated = false;
+        const onNavigation = () => { navigated = true; };
+        event.sender.on("did-start-navigation", onNavigation);
+        try {
+          const requireLive = () => {
+            registry.requireShellSender(event);
+            if (navigated || event.sender.isDestroyed() || url !== event.sender.getURL() ||
+                frame.processId !== event.sender.mainFrame.processId || frame.routingId !== event.sender.mainFrame.routingId) {
+              throw new Error("service binding sender changed");
+            }
+          };
+          return { ok: true as const, payload: await performServiceBindingOperation(catalog, payload, pickProgram, requireLive) };
+        } finally { event.sender.removeListener("did-start-navigation", onNavigation); }
+      }
       return { ok: true as const, payload: performServiceCatalogOperation(catalog, payload) };
     } catch (error) {
       if (error instanceof TrustDomainViolation) return trustFailureEnvelope(error);

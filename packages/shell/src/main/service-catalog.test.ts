@@ -182,6 +182,23 @@ describe("machine-private service catalog", () => {
     expect(() => catalog.listTask(taskId)).toThrow("task identity unavailable");
   });
 
+  it("pins identity across native selection and refuses replacement or duplicate commits", () => {
+    const f = fixture();
+    const saved = f.save();
+    const input = { taskId, serviceId: saved.serviceId, templateVersion: 1, rootId: "repo-a", subdir: "", privateRefs: [] };
+    const prepared = f.catalog.prepareTaskBinding(projectId, input);
+    f.replaceIdentity({ ...identity, directoryInode: "99" });
+    expect(() => f.catalog.commitTaskBinding(prepared, process.execPath)).toThrow("identity changed during selection");
+    f.replaceIdentity({ ...identity });
+    f.assign(otherProjectId);
+    expect(() => f.catalog.commitTaskBinding(prepared, process.execPath)).toThrow("identity changed during selection");
+    f.assign(projectId);
+    expect(f.catalog.commitTaskBinding(prepared, process.execPath).templateVersion).toBe(1);
+    expect(() => f.catalog.commitTaskBinding(prepared, process.execPath)).toThrow("already bound");
+    expect(() => f.catalog.taskBindings(otherProjectId, taskId)).toThrow("task project changed");
+    expect(() => f.catalog.prepareTaskBinding(projectId, input)).toThrow("already bound");
+  });
+
   it("rejects raw private values, provider credential references, and invalid local subdirectories", () => {
     const f = fixture();
     const first = f.save();
