@@ -4,6 +4,7 @@ import { serviceBindingsFromMain, type ServiceBindingView, type ServiceTemplateV
 import { workspaceRootsFromHost, type WorkspaceRootView } from "../data/workspaceFiles";
 import { Icon } from "./Icon";
 import { Button } from "./ui/button";
+import { SavedServiceConfigPreview } from "./SavedServiceConfigPreview";
 
 export function TaskServiceBinding({ template, tasks }: {
   template: ServiceTemplateView; tasks: readonly { taskId: string; name: string }[];
@@ -69,6 +70,7 @@ export function TaskServiceBinding({ template, tasks }: {
     {error && <p role="alert" className="mt-2 text-[#ad4545]">{error}</p>}
     {pending && <p role="status" className="mt-2 text-muted">正在核对本机绑定</p>}
     {bound && <div className="mt-2 break-words text-muted"><p>已绑定 · v{bound.templateVersion} · {bound.rootId}{bound.subdir ? `/${bound.subdir}` : ""}</p>{!!bound.privateKeys.length && <p>私有变量：{bound.privateKeys.join("、")}</p>}<p>运行未接线</p></div>}
+    {bound && <SavedServiceConfigPreview key={`${taskId}/${bound.templateVersion}`} projectId={template.projectId} taskId={taskId} serviceId={bound.serviceId} templateVersion={bound.templateVersion} />}
     {!bound && state?.taskId === taskId && <fieldset disabled={pending} className="mt-3 min-w-0">
       <div className="grid gap-3 sm:grid-cols-2">
         <label className="grid gap-1">工作副本<select aria-label="绑定工作副本" value={selectedRoot} disabled={!roots.length} onChange={(event) => { setRootId(event.target.value); setReview(false); }} className="min-h-8 min-w-0 rounded-[4px] border border-line bg-paper px-2"><option value="" hidden>选择工作副本</option>{roots.map((root) => <option key={root.id} value={root.id}>{root.label}</option>)}</select></label>
