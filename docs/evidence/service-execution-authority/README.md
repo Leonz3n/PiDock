@@ -39,9 +39,11 @@ An earlier full gate saw the existing real macOS bridge test return native
 it during control disconnect. The bridge correctly refused confirmation; no
 success condition was loosened. Fixed-field temporary diagnostics did not
 isolate a cause, and 15 complete bridge repetitions followed by 40 real-only
-repetitions passed. Debug instrumentation was removed. This is an unresolved
-intermittent native cleanup blocker, not a fixed timing issue or proof that
-later green tests remove the risk. Redacted assertion context is retained.
+repetitions passed. Debug instrumentation was removed. At that point this was
+an unresolved intermittent native cleanup blocker; green repeats did not
+remove the risk. The later anchor diagnosis/fix and original-binary reproduction
+are recorded in [anchor evidence](../service-supervisor-anchor/README.md).
+Redacted assertion context is retained.
 
 Another full-gate attempt saw the unchanged renderer settings test read an
 empty initial value. That test passed separately, and the final full gate passed.

@@ -4,6 +4,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -42,7 +43,7 @@ func (owner *darwinOwner) Stop() error {
 		if anchorStopped(err) {
 			return nil
 		}
-		return errors.New("termination-unconfirmed")
+		return anchorWaitFailure(err)
 	case <-time.After(owner.grace + 2*time.Second):
 		if err := syscall.Kill(-owner.anchor.Process.Pid, syscall.SIGKILL); err != nil && err != syscall.ESRCH {
 			return errors.New("termination-unconfirmed")
@@ -52,9 +53,10 @@ func (owner *darwinOwner) Stop() error {
 			if anchorStopped(err) {
 				return nil
 			}
+			return anchorWaitFailure(err)
 		case <-time.After(time.Second):
 		}
-		return errors.New("termination-unconfirmed")
+		return errors.New("termination-unconfirmed:anchor-timeout")
 	}
 }
 
@@ -112,6 +114,10 @@ func startOwned(req launchRequest) (ownedService, error) {
 // The anchor's PID cannot be reused while the group is live. Its private
 // stdin closes when the supervisor dies, even if the service holds stdout.
 func runAnchor(grace time.Duration) {
+	runAnchorWithSignal(grace, syscall.Kill)
+}
+
+func runAnchorWithSignal(grace time.Duration, sendSignal func(int, syscall.Signal) error) {
 	signal.Ignore(syscall.SIGTERM)
 	ready := os.NewFile(3, "anchor-ready")
 	if ready == nil {
@@ -129,10 +135,28 @@ func runAnchor(grace time.Duration) {
 		}
 	}
 	group := -os.Getpid()
-	_ = syscall.Kill(group, syscall.SIGTERM)
+	_ = sendSignal(group, syscall.SIGTERM)
 	time.Sleep(grace)
-	_ = syscall.Kill(group, syscall.SIGKILL)
-	os.Exit(2)
+	if err := sendSignal(group, syscall.SIGKILL); err != nil {
+		os.Exit(2)
+	}
+	// Group SIGKILL delivery can lag the successful syscall on macOS. Do not
+	// race it with an ordinary exit, which would invalidate ownership proof.
+	for {
+		time.Sleep(time.Hour)
+	}
+}
+
+func anchorWaitFailure(err error) error {
+	if exit, ok := err.(*exec.ExitError); ok {
+		if status, ok := exit.Sys().(syscall.WaitStatus); ok {
+			if status.Signaled() {
+				return fmt.Errorf("termination-unconfirmed:anchor-signal-%d", status.Signal())
+			}
+			return fmt.Errorf("termination-unconfirmed:anchor-exit-%d", status.ExitStatus())
+		}
+	}
+	return errors.New("termination-unconfirmed:anchor-wait-failed")
 }
 
 func anchorStopped(err error) bool {
