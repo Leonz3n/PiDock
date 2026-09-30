@@ -13,7 +13,7 @@ it("preserves the prototype environment layout while refusing invented configura
   expect(screen.getByRole("columnheader", { name: "KEY" })).toBeInTheDocument();
   expect(screen.getByRole("columnheader", { name: "VALUE" })).toBeInTheDocument();
   expect(screen.getByText(/这里不展示示例 KEY 或 VALUE/)).toBeInTheDocument();
-  expect(screen.getByText(/运行记录不能代表当前可启动的服务/)).toBeInTheDocument();
+  expect(screen.getByText("服务配方目录未接线")).toBeInTheDocument();
   for (const name of ["管理环境", "新增环境", "任务覆盖", "共享模板", "本机私有配置", "保存更改", "添加服务"]) expect(screen.getByRole("button", { name })).toBeDisabled();
   fireEvent.change(screen.getByLabelText("项目"), { target: { value: "p2" } });
   expect(onSelectProject).toHaveBeenCalledWith("p2");

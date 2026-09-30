@@ -29,6 +29,8 @@ import { readTaskRecordOnDisk } from "../host/task-store.js";
 import { defaultTasksRoot } from "./task-resolver.js";
 import { TaskRootIndex } from "./task-root-index.js";
 import { ProjectRegistry } from "./project-registry.js";
+import { ServiceCatalog } from "./service-catalog.js";
+import { performServiceCatalogOperation } from "./service-catalog-ipc.js";
 import { performProjectOperation } from "./project-ipc.js";
 import type { ProviderWiring } from "./provider-ipc.js";
 import { ProjectTaskCreation } from "./project-task-creation.js";
@@ -735,6 +737,7 @@ export function registerIpc(
   },
   creation?: ProjectTaskCreation,
   providers?: ProviderWiring,
+  catalog?: ServiceCatalog,
 ): void {
   type TurnMessage = Parameters<Parameters<HostClient["onTurnEvent"]>[0]>[0];
   type PendingStart = { requestId: string; buffered: TurnMessage[]; bytes: number; overflow: boolean };
@@ -1065,6 +1068,17 @@ export function registerIpc(
     } catch (error) {
       if (error instanceof TrustDomainViolation) return trustFailureEnvelope(error);
       return { ok: false as const, error: "项目注册表操作失败，请检查本机项目数据后重试" };
+    }
+  });
+
+  ipcMain.handle("shell/serviceCatalogOp", async (event, payload?: unknown) => {
+    try {
+      registry.requireShellSender(event);
+      if (!catalog) return { ok: false as const, error: "服务配方目录尚未接入" };
+      return { ok: true as const, payload: performServiceCatalogOperation(catalog, payload) };
+    } catch (error) {
+      if (error instanceof TrustDomainViolation) return trustFailureEnvelope(error);
+      return { ok: false as const, error: "服务配方保存或读取失败，请核对项目及配置后重试" };
     }
   });
 

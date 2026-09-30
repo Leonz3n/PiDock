@@ -3,6 +3,7 @@ import { fileRootsThroughShell, serviceImportHintsThroughShell } from "../data/s
 import { serviceImportScanFromHost, type ServiceImportScanView } from "../data/serviceImportHints";
 import { workspaceRootsFromHost, type WorkspaceRootView } from "../data/workspaceFiles";
 import { Icon } from "./Icon";
+import { ProjectServiceTemplates } from "./ProjectServiceTemplates";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 
@@ -121,10 +122,7 @@ export function DesktopEnvironmentPage({ projects, projectId, taskCount, tasks, 
       <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="text-sm font-semibold">环境变量 <Badge variant="soft" className="ml-1">未接线</Badge></h2><Button type="button" size="sm" disabled title="缺少真实配置及变更预览">保存更改</Button></div>
       <div className="mt-3 overflow-x-auto"><table className="w-full min-w-[320px] text-left text-xs"><thead className="border-b border-line text-muted"><tr><th className="py-2 font-medium">KEY</th><th className="py-2 font-medium">VALUE</th><th className="py-2 font-medium">生效来源</th></tr></thead><tbody><tr className="border-b border-line"><td colSpan={3} className="py-5 text-muted">Host 尚未提供项目环境、任务覆盖与敏感值遮蔽后的生效配置。这里不展示示例 KEY 或 VALUE。</td></tr></tbody></table></div>
     </section>
-    <section className="mt-8" aria-label="服务启动配方">
-      <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="text-sm font-semibold">服务启动配方 <Badge variant="soft" className="ml-1">未接线</Badge></h2><Button type="button" size="sm" variant="outline" disabled title="Host 尚无项目服务配方清单"><Icon name="plus" />添加服务</Button></div>
-      <p className="mt-3 border-t border-line py-5 text-xs text-muted">Host 尚未提供该环境的服务配方或本任务服务清单；运行记录不能代表当前可启动的服务。</p>
-    </section>
+    <ProjectServiceTemplates projectId={projectId} />
     <RepositoryImportDrafts tasks={tasks} pending={tasksPending} />
   </div>;
 }

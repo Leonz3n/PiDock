@@ -22,6 +22,7 @@ export interface PidockBridge {
   listTasks?: () => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
   importTaskRoot?: () => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
   projectOp?: (request: { op: "list" | "get" | "create" | "update" | "rename" | "delete" | "association" | "associations" | "claim" | "unlink" | "transfer"; projectId?: string; name?: string; input?: unknown; taskId?: string; expectedProjectId?: string; fromProjectId?: string; toProjectId?: string }) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
+  serviceCatalogOp?: (request: Record<string, unknown>) => Promise<ShellTaskOpResult>;
   createTask?: (request: { op: "current" | "prepare" | "commit" | "abandon"; input?: unknown; id?: string }) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
   /**
    * [PiDock 02m] (#46) Provider metadata operations. The renderer names a task,
@@ -37,6 +38,20 @@ export interface PidockBridge {
 declare global {
   interface Window {
     pidock?: PidockBridge;
+  }
+}
+
+export async function serviceCatalogThroughShell(request: Record<string, unknown>): Promise<ShellTaskOpResult> {
+  const bridge = shellBridge();
+  if (!bridge?.serviceCatalogOp) return { ok: false, error: "服务配方目录尚未接线" };
+  try {
+    const result = await bridge.serviceCatalogOp(request);
+    if (!result || typeof result !== "object" || typeof result.ok !== "boolean") {
+      return { ok: false, error: "服务配方目录响应无法核对" };
+    }
+    return result;
+  } catch {
+    return { ok: false, error: "服务配方目录请求失败" };
   }
 }
 

@@ -22,8 +22,9 @@ describe("preload invoke whitelist", () => {
     expect(isAllowedInvokeChannel("shell/taskOp")).toBe(true);
   });
 
-  it("allows only the project operation channel, not membership or raw filesystem access", () => {
+  it("allows only the project operation and service catalog channels, not raw filesystem access", () => {
     expect(isAllowedInvokeChannel("shell/projectOp")).toBe(true);
+    expect(isAllowedInvokeChannel("shell/serviceCatalogOp")).toBe(true);
     expect(isAllowedInvokeChannel("shell/projectAssign")).toBe(false);
     expect(isAllowedInvokeChannel("shell/readFile")).toBe(false);
   });
