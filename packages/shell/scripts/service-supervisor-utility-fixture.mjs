@@ -3,6 +3,7 @@ import { existsSync, readFileSync, writeFileSync, renameSync, openSync, fsyncSyn
 import { dirname } from "node:path";
 import { PiSessionChannel } from "../dist/main/pi-session.js";
 import { ExperimentalServiceExecution } from "../dist/host/service-execution-experiment.js";
+import { experimentalCheckpointClient } from "../dist/host/service-checkpoint-client-experiment.js";
 import { TaskWriteCoordinator } from "../dist/host/write-coordination.js";
 import { launchSupervisorExperiment } from "../dist/host/service-supervisor-experiment.js";
 
@@ -11,11 +12,19 @@ if (!port) throw Error("utility fixture requires parent port");
 let session, execution, channel, abort, releaseReady;
 let started = false, handling = false;
 const send = (message) => { try { port.postMessage(message); } catch { /* Dead test parent receives no fabricated receipt. */ } };
-function bindExecution(lifecycle, start) {
+async function bindExecution(lifecycle, start) {
   channel = new PiSessionChannel({ taskId: lifecycle.taskId, taskDir: lifecycle.taskDir, sessionId: "main", permission: "auto", providerId: "local", model: "test" });
   const write = new TaskWriteCoordinator(() => execution.resources());
-  execution = new ExperimentalServiceExecution({ taskId: lifecycle.taskId, taskDir: lifecycle.taskDir, serviceId: lifecycle.serviceId,
-    revision: () => "synthetic-config-1", write, start, recovery: {
+  const client = lifecycle.epoch ? experimentalCheckpointClient({
+    send: (message) => port.postMessage(message),
+    subscribe: (receive, disconnected) => {
+      const listener = ({ data }) => { if (data?.kind === "checkpoint-ack") receive(data); };
+      port.on("message", listener); port.on("close", disconnected);
+      return () => { port.removeListener("message", listener); port.removeListener("close", disconnected); };
+    },
+  }, { taskId: lifecycle.taskId, serviceId: lifecycle.serviceId, epoch: lifecycle.epoch }) : undefined;
+  const dependencies = { taskId: lifecycle.taskId, taskDir: lifecycle.taskDir, serviceId: lifecycle.serviceId,
+    revision: () => { client?.verify(); return "synthetic-config-1"; }, write, start, recovery: client?.recovery ?? {
       read: () => existsSync(lifecycle.file) ? JSON.parse(readFileSync(lifecycle.file, "utf8")) : undefined,
       write: (record) => {
         // Isolated test directory only; not the application's recovery store.
@@ -25,10 +34,12 @@ function bindExecution(lifecycle, start) {
         try { fsyncSync(fd); } finally { closeSync(fd); }
         return undefined;
       },
-    } });
+    } };
+  execution = client ? await ExperimentalServiceExecution.create({ ...dependencies, recovery: client.recovery }) : new ExperimentalServiceExecution(dependencies);
 }
 port.on("message", ({ data }) => {
   if (!data || typeof data !== "object") return;
+  if (data.kind === "checkpoint-ack") return;
   const concurrent = data.op === "cancel-start" || data.op === "close";
   if (handling && !concurrent) return;
   if (!concurrent) handling = true;
@@ -48,7 +59,7 @@ port.on("message", ({ data }) => {
         return session;
       };
       if (data.lifecycle) {
-        abort = new AbortController(); bindExecution(data.lifecycle, start);
+        abort = new AbortController(); await bindExecution(data.lifecycle, start);
         const result = await execution.control({ channel, sessionId: "main", action: "start", signal: abort.signal, persist: () => {} });
         send({ event: "control-result", result, snapshot: execution.snapshot() });
       } else await start();
@@ -60,7 +71,7 @@ port.on("message", ({ data }) => {
     } else if (data.op === "reopen" && !started) {
       started = true;
       let attempted = false;
-      bindExecution(data.lifecycle, async () => { attempted = true; throw Error("recovery-must-not-launch"); });
+      await bindExecution(data.lifecycle, async () => { attempted = true; throw Error("recovery-must-not-launch"); });
       const control = await execution.control({ channel, sessionId: "main", action: "start", persist: () => {} });
       const close = await execution.close();
       send({ event: "recovered", control, close, snapshot: execution.snapshot(), resources: execution.resources(), launchAttempted: attempted });

@@ -81,9 +81,9 @@ it("rechecks cancellation and shutdown after persisted approval spend without ex
 it("cleans a late ready session after cancellation while retaining the write claim", async () => {
   const f = setup(), ready = deferred<SupervisorSession>(), stopped = deferred<SupervisorResult>(), abort = new AbortController();
   f.start.mockImplementation(() => ready.promise); vi.mocked(f.session.stop).mockImplementation(() => stopped.promise);
-  const operation = f.control(abort.signal); abort.abort();
+    const operation = f.control(abort.signal); await vi.waitFor(() => expect(f.start).toHaveBeenCalledTimes(1)); abort.abort();
   expect(f.execution.snapshot().state).toBe("starting"); ready.resolve(f.session);
-  await Promise.resolve(); await Promise.resolve();
+  await vi.waitFor(() => expect(f.session.stop).toHaveBeenCalledTimes(1));
   expect(f.execution.snapshot()).toMatchObject({ state: "stopping", busy: true }); expect(f.write.owner).toBe("main");
   expect(f.session.stop).toHaveBeenCalledTimes(1); expect(f.execution.resources()).toHaveLength(1);
   stopped.resolve({ event: "stopped" });
@@ -94,7 +94,7 @@ it("cleans a late ready session after cancellation while retaining the write cla
 it("retains uncertain cancelled launches and never reports safe shutdown or restarts", async () => {
   const f = setup(), ready = deferred<SupervisorSession>(), abort = new AbortController();
   f.start.mockImplementation(() => ready.promise); vi.mocked(f.session.stop).mockResolvedValue({ event: "unconfirmed" });
-  const operation = f.control(abort.signal); abort.abort(); ready.resolve(f.session);
+  const operation = f.control(abort.signal); await vi.waitFor(() => expect(f.start).toHaveBeenCalledTimes(1)); abort.abort(); ready.resolve(f.session);
   expect(await operation).toEqual({ ok: false, error: "service-cancelled-unconfirmed" });
   expect(f.recovery.read()).toEqual(saved("unconfirmed")); expect(f.execution.resources()).toHaveLength(1);
   expect(await f.execution.close()).toEqual({ ok: false, error: "service-termination-unconfirmed" });
@@ -103,12 +103,12 @@ it("retains uncertain cancelled launches and never reports safe shutdown or rest
 it("waits for in-flight start then drains exactly once before a safe close report", async () => {
   const f = setup(), ready = deferred<SupervisorSession>(), stopped = deferred<SupervisorResult>();
   f.start.mockImplementation(() => ready.promise); vi.mocked(f.session.stop).mockImplementation(() => stopped.promise);
-  const operation = f.control(), closing = f.execution.close();
+  const operation = f.control(); await vi.waitFor(() => expect(f.start).toHaveBeenCalledTimes(1)); const closing = f.execution.close();
   expect(f.execution.close()).toBe(closing); expect(f.session.stop).not.toHaveBeenCalled();
   expect(f.execution.snapshot()).toMatchObject({ closing: true, busy: true }); ready.resolve(f.session);
   expect(await operation).toEqual({ ok: false, error: "service-host-closing" });
-  await Promise.resolve();
-  expect(f.session.stop).toHaveBeenCalledTimes(1); expect(f.write.owner).toBe("main");
+  await vi.waitFor(() => expect(f.session.stop).toHaveBeenCalledTimes(1));
+  expect(f.write.owner).toBe("main");
   let completed = false; void closing.then(() => { completed = true; }); await Promise.resolve(); expect(completed).toBe(false);
   stopped.resolve({ event: "stopped" });
   expect(await closing).toEqual({ ok: true, state: "stopped" });
@@ -118,6 +118,7 @@ it("does not duplicate an already pending authorized stop during close", async (
   const f = setup(); await f.control(); const stop = deferred<SupervisorResult>();
   vi.mocked(f.session.stop).mockImplementation(() => stop.promise);
   const operation = f.execution.control({ channel: f.channel, sessionId: "main", action: "stop", persist: f.persist });
+  await vi.waitFor(() => expect(f.session.stop).toHaveBeenCalledTimes(1));
   const closing = f.execution.close(); stop.resolve({ event: "stopped" });
   expect((await operation).ok).toBe(true); expect(await closing).toEqual({ ok: true, state: "stopped" });
   expect(f.session.stop).toHaveBeenCalledTimes(1);
@@ -139,7 +140,7 @@ it("writes starting ahead of spawn and checkpoints real completion without proce
     expect(f.recovery.read()).toEqual(saved("starting")); return f.session;
   });
   await f.control(); expect(f.recovery.records.map((row) => row.state)).toEqual(["starting", "running"]);
-  f.end.resolve({ event: "exit", code: 3 }); await Promise.resolve();
+  f.end.resolve({ event: "exit", code: 3 }); await vi.waitFor(() => expect(f.execution.snapshot().state).toBe("exited"));
   expect(f.recovery.read()).toEqual(saved("exited", null)); expect(f.execution.resources()).toEqual([]);
   expect(Object.keys(f.recovery.records[0]).sort()).toEqual(["ownerSessionId", "schemaVersion", "serviceId", "state", "taskId"]);
 });
@@ -163,8 +164,9 @@ it("cleans owned sessions when running checkpoint fails but never reports start 
     const f = setup("auto", recovery);
     expect(await f.control()).toEqual({ ok: false, error: "service-recovery-persistence-failed" });
     expect(f.session.stop).toHaveBeenCalledTimes(1);
-    expect(f.execution.snapshot().state).toBe(terminalFailure ? "unconfirmed" : "stopped");
-    expect((await f.execution.close()).ok).toBe(!terminalFailure);
+    expect(f.execution.snapshot().state).toBe("unconfirmed");
+    expect((await f.execution.close()).ok).toBe(false);
+    expect(f.recovery.records.map((row) => row.state)).toEqual(["starting"]);
   }
 });
 it("does not report safe shutdown if terminal checkpoint cannot be acknowledged", async () => {
@@ -229,7 +231,7 @@ it("ignores a former run's late completion after a new generation owns the servi
   const next = driver(); f.start.mockResolvedValue(next.session); await f.control();
   f.end.resolve({ event: "unconfirmed" }); await Promise.resolve();
   expect(f.execution.snapshot().state).toBe("running"); expect(f.recovery.read()).toEqual(saved("running"));
-  next.end.resolve({ event: "exit", code: 0 }); await Promise.resolve();
+  next.end.resolve({ event: "exit", code: 0 }); await vi.waitFor(() => expect(f.execution.snapshot().state).toBe("exited"));
   expect(f.execution.snapshot().state).toBe("exited");
 });
 

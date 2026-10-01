@@ -87,6 +87,7 @@ it("keeps the claim during awaited start and rejects concurrent same-session con
   const f = setup("auto"); let release: (session: SupervisorSession) => void = () => {};
   f.start.mockImplementation(() => new Promise((resolve) => { release = resolve; }));
   const pending = f.control();
+  await vi.waitFor(() => expect(f.start).toHaveBeenCalledTimes(1));
   expect(f.execution.snapshot()).toMatchObject({ state: "starting", busy: true }); expect(f.write.owner).toBe("main");
   expect(await f.control()).toMatchObject({ error: "service-operation-in-flight" });
   release(f.session); expect(await pending).toMatchObject({ ok: true }); expect(f.write.owner).toBeNull();
@@ -97,6 +98,7 @@ it("retains the claim while stop is pending and releases only after its result",
   let finishStop: (result: SupervisorResult) => void = () => {};
   vi.mocked(f.session.stop).mockImplementation(() => new Promise((resolve) => { finishStop = resolve; }));
   const pending = f.control("stop");
+  await vi.waitFor(() => expect(f.session.stop).toHaveBeenCalledTimes(1));
   expect(f.execution.snapshot()).toMatchObject({ state: "stopping", busy: true }); expect(f.write.owner).toBe("main");
   expect(await f.control("stop")).toMatchObject({ error: "service-operation-in-flight" });
   finishStop({ event: "stopped" }); expect(await pending).toMatchObject({ ok: true, state: "stopped" });
@@ -144,7 +146,7 @@ it("does not turn an unknown stop into success or drop resource ownership", asyn
 it("updates from natural termination and permits independent tasks to control concurrently", async () => {
   const a = setup("auto"), b = setup("auto", true, "task-other");
   expect((await Promise.all([a.control(), b.control()])).every((row) => row.ok)).toBe(true);
-  a.finish({ event: "exit", code: 3 }); await Promise.resolve();
+  a.finish({ event: "exit", code: 3 }); await vi.waitFor(() => expect(a.execution.snapshot().state).toBe("exited"));
   expect(a.execution.snapshot()).toMatchObject({ state: "exited", ownerSessionId: null });
   expect(a.execution.resources()).toEqual([]); expect(b.execution.snapshot().state).toBe("running");
 });
