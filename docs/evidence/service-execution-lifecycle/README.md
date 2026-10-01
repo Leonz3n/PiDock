@@ -4,6 +4,11 @@ Production `task/controlService`, `task/quit` and Host entry wiring are unchange
 This is an isolated single-service lifecycle contract, not production service
 execution, SDK cancellation integration, packaging or installation acceptance.
 
+Follow-up: [asynchronous durable checkpoint experiment](../service-execution-async/README.md)
+extends saves to awaited acknowledgements and fences the controller after any
+save failure without terminal-save retries. Counts and synchronous behavior below
+record the earlier lifecycle slice, not the new transport evidence.
+
 ## Contract
 
 `ExperimentalServiceExecution.close()` immediately seals new requests, waits

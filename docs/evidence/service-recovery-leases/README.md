@@ -5,6 +5,10 @@ It does not enable production `task/controlService`, `task/quit`, or `host-entry
 The checkpoint lease is metadata write authority, not approval, execution authority,
 configuration authentication, service ownership adoption, or a safe application quit receipt.
 
+Follow-up: [asynchronous durable checkpoint experiment](../service-execution-async/README.md)
+now connects this main store to a test utility controller and native supervisor;
+the original synchronous-port and metadata-only evidence below remains historical.
+
 ## Storage And Lease Contract
 
 - `ExperimentalServiceRecoveryStore` is constructed only by a trusted main caller
