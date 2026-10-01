@@ -9,6 +9,10 @@ Production service execution stays unavailable; #7/#10/#47/#24 remain open.
 
 ## Production Changes
 
+Later [durable report experiment](../host-shutdown-reports/README.md) adds the
+actual main journal/Host lease/parent ack path to an isolated utility probe.
+It does not install report or service shutdown into production task/quit.
+
 `SdkContextClient.dispose()` seals new requests synchronously and caches one
 promise, including failure. Calls already awaiting bootstrap recheck the seal
 before dispatch. Graceful dispose needs the exact `{ disposed: true }` payload.

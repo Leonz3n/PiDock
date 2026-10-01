@@ -3,13 +3,16 @@ import { existsSync, readFileSync, writeFileSync, renameSync, openSync, fsyncSyn
 import { dirname } from "node:path";
 import { PiSessionChannel } from "../dist/main/pi-session.js";
 import { ExperimentalServiceExecution } from "../dist/host/service-execution-experiment.js";
+import { experimentalShutdownClient } from "../dist/host/host-shutdown-client-experiment.js";
+import { ExperimentalHostShutdown } from "../dist/host/host-shutdown-experiment.js";
+import { SdkContextClient } from "../dist/host/sdk-context-client.js";
 import { experimentalCheckpointClient } from "../dist/host/service-checkpoint-client-experiment.js";
 import { TaskWriteCoordinator } from "../dist/host/write-coordination.js";
 import { launchSupervisorExperiment } from "../dist/host/service-supervisor-experiment.js";
 
 const port = process.parentPort;
 if (!port) throw Error("utility fixture requires parent port");
-let session, execution, channel, abort, releaseReady;
+let session, execution, channel, abort, releaseReady, shutdown;
 let started = false, handling = false;
 const send = (message) => { try { port.postMessage(message); } catch { /* Dead test parent receives no fabricated receipt. */ } };
 async function bindExecution(lifecycle, start) {
@@ -36,10 +39,21 @@ async function bindExecution(lifecycle, start) {
       },
     } };
   execution = client ? await ExperimentalServiceExecution.create({ ...dependencies, recovery: client.recovery }) : new ExperimentalServiceExecution(dependencies);
+  if (lifecycle.closeReport) {
+    const reportClient = experimentalShutdownClient({ send: (message) => port.postMessage(message), subscribe: (receive, disconnected) => {
+      const listener = ({ data }) => { if (data?.kind === "shutdown-report-ack") receive(data); };
+      port.on("message", listener); port.on("close", disconnected);
+      return () => { port.removeListener("message", listener); port.removeListener("close", disconnected); };
+    } }, { taskId: lifecycle.taskId, epoch: lifecycle.epoch });
+    const sdk = new SdkContextClient({ task: { taskId: lifecycle.taskId, taskDir: lifecycle.taskDir }, config: { profileId: "fixture", baseUrl: "https://models.example.test/v1", modelId: "fixture", contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_TEST", generation: 1 }, credential: "synthetic-shutdown-credential" });
+    const opened = await sdk.open("main");
+    if (opened.tools.length !== 0) throw Error("unexpected-sdk-tools");
+    shutdown = new ExperimentalHostShutdown({ taskId: lifecycle.taskId, hostEpoch: lifecycle.epoch, sealSdk: () => sdk.seal(), shutdownSdk: () => sdk.dispose(), settleTurns: async () => {}, services: [execution], verify: () => { client.verify(); reportClient.verify(); }, persist: reportClient.persist });
+  }
 }
 port.on("message", ({ data }) => {
   if (!data || typeof data !== "object") return;
-  if (data.kind === "checkpoint-ack") return;
+  if (data.kind === "checkpoint-ack" || data.kind === "shutdown-report-ack") return;
   const concurrent = data.op === "cancel-start" || data.op === "close";
   if (handling && !concurrent) return;
   if (!concurrent) handling = true;
@@ -66,7 +80,7 @@ port.on("message", ({ data }) => {
     } else if (data.op === "cancel-start" && abort && releaseReady) {
       abort.abort(); releaseReady();
     } else if (data.op === "close" && execution) {
-      const result = await execution.close();
+      const result = await (shutdown ? shutdown.close() : execution.close());
       send({ event: "close-result", result, snapshot: execution.snapshot() });
     } else if (data.op === "reopen" && !started) {
       started = true;

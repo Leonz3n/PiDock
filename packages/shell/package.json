@@ -22,6 +22,7 @@
     "smoke:supervisor": "electron scripts/electron-service-supervisor-smoke.mjs",
     "smoke:recovery": "electron scripts/electron-service-recovery-smoke.mjs",
     "smoke:async-checkpoint": "electron scripts/electron-service-async-checkpoint-smoke.mjs",
+    "smoke:shutdown-report": "electron scripts/electron-host-shutdown-report-smoke.mjs",
     "startup": "electron . -- --print-startup",
     "package:dir": "electron-builder --config electron-builder.config.cjs --dir",
     "package:mac": "electron-builder --config electron-builder.config.cjs --mac dmg --arm64",

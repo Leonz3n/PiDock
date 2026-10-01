@@ -57,6 +57,68 @@ describe.skipIf(process.platform === "win32")("main-only recovery store and Host
     expect(readdirSync(f.taskDir)).toEqual([]); expect(readdirSync(f.directory).some((name) => name.endsWith(".tmp"))).toBe(false);
     port.write(checkpoint("stopped")); expect(port.read()).toEqual(checkpoint("stopped"));
   });
+  it("publishes a closed report only after every current-epoch service terminal, then requires explicit confirmation", () => {
+    const f = fixture(), store = f.open(), h = host(), lease = store.acquire(taskId, h.owner);
+    const report = { schemaVersion: 1, taskId, hostEpoch: lease.epoch, status: "closed" };
+    for (const id of [serviceId, "service-b"]) lease.port(h.owner.sender, id).write(checkpoint("stopped", id));
+    lease.request(h.owner.sender, { op: "shutdown", epoch: lease.epoch, report });
+    expect(JSON.parse(readFileSync(f.file, "utf8")).shutdown).toEqual(report);
+    expect(() => store.dispose()).toThrow("service-recovery-hosts-active");
+    expect(() => lease.confirmShutdown({}, report)).toThrow("service-recovery-lease-stale");
+    lease.verifyShutdown(h.owner.sender, report); lease.confirmShutdown(h.owner.sender, report);
+    expect(() => lease.confirmShutdown(h.owner.sender, report)).toThrow("service-recovery-lease-stale");
+    expect(() => lease.port(h.owner.sender, serviceId).write(checkpoint())).toThrow("service-recovery-lease-stale");
+    h.exit(); const fresh = host(), next = store.acquire(taskId, fresh.owner);
+    expect(() => next.confirmShutdown(fresh.owner.sender, report)).toThrow();
+    expect(() => next.request(fresh.owner.sender, { op: "shutdown", epoch: next.epoch, report: { ...report, hostEpoch: next.epoch } })).toThrow("service-recovery-shutdown-unconfirmed");
+  });
+  it("refuses missing, running and unknown service terminals without treating absence as stopped", () => {
+    for (const state of [undefined, "running", "unconfirmed"] as const) {
+      const f = fixture(), h = host(), lease = f.open().acquire(taskId, h.owner);
+      lease.port(h.owner.sender, serviceId).write(checkpoint("stopped"));
+      if (state) lease.port(h.owner.sender, "service-b").write(checkpoint(state, "service-b"));
+      expect(() => lease.request(h.owner.sender, { op: "shutdown", epoch: lease.epoch, report: { schemaVersion: 1, taskId, hostEpoch: lease.epoch, status: "closed" } })).toThrow("service-recovery-shutdown-unconfirmed");
+      expect(JSON.parse(readFileSync(f.file, "utf8")).shutdown).toBeUndefined();
+    }
+  });
+  it("rejects foreign epoch, extra fields and changed catalog membership for closing and confirmation", () => {
+    const f = fixture(), h = host(), lease = f.open().acquire(taskId, h.owner);
+    for (const id of [serviceId, "service-b"]) lease.port(h.owner.sender, id).write(checkpoint("stopped", id));
+    const report = { schemaVersion: 1, taskId, hostEpoch: lease.epoch, status: "closed" }, packet = { op: "shutdown", epoch: lease.epoch, report };
+    for (const invalid of [{ ...packet, epoch: "foreign" }, { ...packet, report: { ...report, secret: "synthetic-private" } }, { ...packet, path: f.profile }]) expect(() => lease.request(h.owner.sender, invalid)).toThrow();
+    lease.request(h.owner.sender, packet); f.services([serviceId]);
+    expect(() => lease.verifyShutdown(h.owner.sender, report)).toThrow("service-recovery-task-changed");
+    expect(() => lease.confirmShutdown(h.owner.sender, report)).toThrow("service-recovery-task-changed");
+  });
+  it("fences a report whose primary was published but directory fsync failed", () => {
+    const f = fixture(), h = host(), lease = f.open().acquire(taskId, h.owner);
+    for (const id of [serviceId, "service-b"]) lease.port(h.owner.sender, id).write(checkpoint("stopped", id));
+    const report = { schemaVersion: 1, taskId, hostEpoch: lease.epoch, status: "closed" };
+    vi.mocked(fsyncSync).mockImplementation((fd) => { if (fstatSync(fd).isDirectory()) throw Error("synthetic-private-error"); actualFs.fsyncSync(fd); });
+    expect(() => lease.request(h.owner.sender, { op: "shutdown", epoch: lease.epoch, report })).toThrow("service-recovery-write-uncertain");
+    expect(JSON.parse(readFileSync(f.file, "utf8")).shutdown).toEqual(report);
+    expect(() => lease.confirmShutdown(h.owner.sender, report)).toThrow("service-recovery-lease-stale");
+  });
+  it("rechecks identity after staging and refuses later out-of-band journal changes", () => {
+    const f = fixture(), h = host(), lease = f.open().acquire(taskId, h.owner);
+    for (const id of [serviceId, "service-b"]) lease.port(h.owner.sender, id).write(checkpoint("stopped", id));
+    const before = readFileSync(f.file, "utf8"), report = { schemaVersion: 1, taskId, hostEpoch: lease.epoch, status: "closed" };
+    vi.mocked(fsyncSync).mockImplementation((fd) => { actualFs.fsyncSync(fd); f.assign(); });
+    expect(() => lease.request(h.owner.sender, { op: "shutdown", epoch: lease.epoch, report })).toThrow("service-recovery-write-uncertain"); expect(readFileSync(f.file, "utf8")).toBe(before);
+    vi.mocked(fsyncSync).mockImplementation(actualFs.fsyncSync);
+    const other = fixture(), current = host(), next = other.open().acquire(taskId, current.owner);
+    for (const id of [serviceId, "service-b"]) next.port(current.owner.sender, id).write(checkpoint("stopped", id));
+    const closed = { ...report, hostEpoch: next.epoch }; next.request(current.owner.sender, { op: "shutdown", epoch: next.epoch, report: closed });
+    writeFileSync(other.file, readFileSync(other.file, "utf8") + "\n"); expect(() => next.confirmShutdown(current.owner.sender, closed)).toThrow("service-recovery-write-uncertain");
+  });
+  it("rejects native Host revocation during report staging before replacing the primary", () => {
+    const f = fixture(), h = host(), lease = f.open().acquire(taskId, h.owner);
+    for (const id of [serviceId, "service-b"]) lease.port(h.owner.sender, id).write(checkpoint("stopped", id));
+    const before = readFileSync(f.file, "utf8"), report = { schemaVersion: 1, taskId, hostEpoch: lease.epoch, status: "closed" };
+    vi.mocked(fsyncSync).mockImplementation((fd) => { actualFs.fsyncSync(fd); h.exit(); });
+    expect(() => lease.request(h.owner.sender, { op: "shutdown", epoch: lease.epoch, report })).toThrow("service-recovery-write-uncertain");
+    expect(readFileSync(f.file, "utf8")).toBe(before); expect(() => lease.confirmShutdown(h.owner.sender, report)).toThrow("service-recovery-lease-stale");
+  });
   it("refuses another store/process writer and never guesses or steals a stale disk lock", () => {
     const f = fixture(), store = f.open();
     expect(() => f.open()).toThrow("service-recovery-unavailable");

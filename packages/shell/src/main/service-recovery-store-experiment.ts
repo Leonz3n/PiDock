@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readSync, realpathSync, renameSync, unlinkSync, writeFileSync, type BigIntStats } from "node:fs";
 import { isAbsolute, join, relative, sep } from "node:path";
+import { experimentalShutdownReport, type ExperimentalShutdownReport } from "../rpc/host-shutdown-report.js";
 import { serviceExecutionCheckpoint, type ServiceExecutionCheckpoint } from "../rpc/service-execution-checkpoint.js";
 import type { ServiceExecutionRecoveryPort } from "../host/service-execution-experiment.js";
 import type { ServiceCatalogAuthority } from "./service-catalog.js";
@@ -10,7 +11,7 @@ const ID = /^[A-Za-z0-9_-]{1,128}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const digest = (text: string) => createHash("sha256").update(text).digest("hex");
 function fail(code = "service-recovery-unavailable"): never { throw Error(code); }
-interface Document { schemaVersion: 1; taskId: string; identityDigest: string; hostEpoch: string; entries: ServiceExecutionCheckpoint[] }
+interface Document { schemaVersion: 1; taskId: string; identityDigest: string; hostEpoch: string; entries: ServiceExecutionCheckpoint[]; shutdown?: ExperimentalShutdownReport }
 export interface CheckpointHostInstance {
   /** Main-held actual child object; never a JSON actor id or PID. */
   sender: object;
@@ -19,10 +20,13 @@ export interface CheckpointHostInstance {
 }
 interface Slot {
   taskId: string; identityDigest: string; hostEpoch: string; owner: CheckpointHostInstance;
-  services: Set<string>; stamp: string | null; revoked: boolean; uncertain: boolean; detach: () => void;
+  services: Set<string>; written: Set<string>; closed: boolean; confirmed: boolean; stamp: string | null; revoked: boolean; uncertain: boolean; detach: () => void;
 }
 export interface ExperimentalCheckpointLease {
   readonly epoch: string;
+  /** Only after the current actual Host returns its successful post-ack receipt. Does not kill it. */
+  confirmShutdown(sender: object, report: unknown): void;
+  verifyShutdown(sender: object, report: unknown): void;
   request(sender: object, message: unknown): ServiceExecutionCheckpoint | undefined;
   /** Same-process test adapter only. Not a synchronous utilityProcess RPC. */
   port(sender: object, serviceId: string): ServiceExecutionRecoveryPort;
@@ -114,7 +118,7 @@ export class ExperimentalServiceRecoveryStore {
     const value: unknown = JSON.parse(text);
     if (!value || typeof value !== "object" || Array.isArray(value)) fail();
     const row = value as Record<string, unknown>;
-    if (Object.keys(row).sort().join(",") !== "entries,hostEpoch,identityDigest,schemaVersion,taskId" || row.schemaVersion !== 1 || row.taskId !== taskId ||
+    if (!["entries,hostEpoch,identityDigest,schemaVersion,taskId", "entries,hostEpoch,identityDigest,schemaVersion,shutdown,taskId"].includes(Object.keys(row).sort().join(",")) || row.schemaVersion !== 1 || row.taskId !== taskId ||
         row.identityDigest !== identityDigest || typeof row.hostEpoch !== "string" || !UUID.test(row.hostEpoch) || !Array.isArray(row.entries) || row.entries.length > 100) fail();
     const entries = row.entries.map((raw: unknown) => {
       if (!raw || typeof raw !== "object" || Array.isArray(raw)) fail();
@@ -123,7 +127,9 @@ export class ExperimentalServiceRecoveryStore {
       return serviceExecutionCheckpoint(raw, taskId, serviceId);
     });
     if (new Set(entries.map((entry) => entry.serviceId)).size !== entries.length) fail();
-    return { schemaVersion: 1, taskId, identityDigest, hostEpoch: row.hostEpoch, entries };
+    const shutdown = row.shutdown === undefined ? undefined : experimentalShutdownReport(row.shutdown, taskId, row.hostEpoch);
+    if (shutdown && entries.some((entry) => (entry.state !== "stopped" && entry.state !== "exited") || entry.ownerSessionId !== null)) fail();
+    return { schemaVersion: 1, taskId, identityDigest, hostEpoch: row.hostEpoch, entries, ...(shutdown ? { shutdown } : {}) };
   }
   private load(taskId: string, identityDigest: string) {
     this.checkDirectory();
@@ -142,7 +148,7 @@ export class ExperimentalServiceRecoveryStore {
       owner = { sender: owner.sender, hasExited: owner.hasExited.bind(owner), subscribeExit: owner.subscribeExit.bind(owner) };
       const scope = this.taskScope(taskId), loaded = this.load(taskId, scope.identityDigest);
       if (loaded.document?.entries.some((row) => !scope.services.has(row.serviceId) && row.state !== "stopped" && row.state !== "exited")) fail("service-recovery-unbound-resource");
-      const slot: Slot = { taskId, ...scope, hostEpoch: randomUUID(), owner, stamp: loaded.stamp, revoked: false, uncertain: false, detach: () => {} };
+      const slot: Slot = { taskId, ...scope, hostEpoch: randomUUID(), owner, written: new Set(), closed: false, confirmed: false, stamp: loaded.stamp, revoked: false, uncertain: false, detach: () => {} };
       this.active.set(taskId, slot);
       try {
         slot.detach = owner.subscribeExit(() => {
@@ -153,7 +159,7 @@ export class ExperimentalServiceRecoveryStore {
         if (owner.hasExited() || slot.revoked) fail();
       } catch { slot.revoked = true; if (this.active.get(taskId) === slot) this.active.delete(taskId); slot.detach(); throw Error(); }
       const request = (sender: object, message: unknown) => this.request(slot, sender, message);
-      return Object.freeze({ epoch: slot.hostEpoch, request, port: (sender: object, serviceId: string): ServiceExecutionRecoveryPort => ({
+      return Object.freeze({ epoch: slot.hostEpoch, request, confirmShutdown: (sender: object, report: unknown) => this.confirmShutdown(slot, sender, report, true), verifyShutdown: (sender: object, report: unknown) => this.confirmShutdown(slot, sender, report, false), port: (sender: object, serviceId: string): ServiceExecutionRecoveryPort => ({
         read: () => request(sender, { epoch: slot.hostEpoch, op: "read", serviceId }),
         write: (checkpoint) => { request(sender, { epoch: slot.hostEpoch, op: "write", serviceId, checkpoint }); return undefined; },
       }) });
@@ -164,6 +170,11 @@ export class ExperimentalServiceRecoveryStore {
       if (this.disposed || slot.revoked || slot.uncertain || this.active.get(slot.taskId) !== slot || sender !== slot.owner.sender || slot.owner.hasExited()) fail("service-recovery-lease-stale");
       if (!message || typeof message !== "object" || Array.isArray(message) || Buffer.byteLength(JSON.stringify(message)) > 4096) fail("invalid-service-recovery-request");
       const row = message as Record<string, unknown>, write = row.op === "write";
+      if (row.op === "shutdown") {
+        this.closeReport(slot, row);
+        return undefined;
+      }
+      if (write && slot.closed) fail("service-recovery-lease-stale");
       if ((row.op !== "read" && !write) || row.epoch !== slot.hostEpoch || typeof row.serviceId !== "string" || !slot.services.has(row.serviceId) ||
           Object.keys(row).sort().join(",") !== (write ? "checkpoint,epoch,op,serviceId" : "epoch,op,serviceId")) fail("invalid-service-recovery-request");
       const scope = this.taskScope(slot.taskId);
@@ -178,11 +189,37 @@ export class ExperimentalServiceRecoveryStore {
       if (Buffer.byteLength(body) > MAX_BYTES || entries.length > 100) fail();
       try { this.publish(slot, checkpoint.serviceId, body, loaded.body); }
       catch { slot.uncertain = true; fail("service-recovery-write-uncertain"); }
-      slot.stamp = digest(body);
+      slot.stamp = digest(body); slot.written.add(checkpoint.serviceId);
       return undefined;
     } catch (error) { this.sanitize(error); }
   }
-  private publish(slot: Slot, serviceId: string, body: string, prior: string | null) {
+  private closeScope(slot: Slot) {
+    const scope = this.taskScope(slot.taskId);
+    if (scope.identityDigest !== slot.identityDigest || scope.services.size !== slot.services.size || [...scope.services].some((id) => !slot.services.has(id))) fail("service-recovery-task-changed");
+    const loaded = this.load(slot.taskId, slot.identityDigest);
+    if (loaded.stamp !== slot.stamp) { slot.uncertain = true; fail("service-recovery-write-uncertain"); }
+    if ([...slot.services].some((id) => !slot.written.has(id) || !loaded.document?.entries.some((entry) => entry.serviceId === id && (entry.state === "stopped" || entry.state === "exited") && entry.ownerSessionId === null)) ||
+        loaded.document?.entries.some((entry) => entry.state !== "stopped" && entry.state !== "exited")) fail("service-recovery-shutdown-unconfirmed");
+    return loaded;
+  }
+  private closeReport(slot: Slot, row: Record<string, unknown>) {
+    if (slot.closed || Object.keys(row).sort().join(",") !== "epoch,op,report" || row.epoch !== slot.hostEpoch) fail("invalid-service-recovery-request");
+    const shutdown = experimentalShutdownReport(row.report, slot.taskId, slot.hostEpoch), loaded = this.closeScope(slot);
+    const body = JSON.stringify({ schemaVersion: 1, taskId: slot.taskId, identityDigest: slot.identityDigest, hostEpoch: slot.hostEpoch, entries: loaded.document?.entries ?? [], shutdown });
+    if (Buffer.byteLength(body) > MAX_BYTES) fail();
+    try { this.publish(slot, undefined, body, loaded.body); }
+    catch { slot.uncertain = true; fail("service-recovery-write-uncertain"); }
+    slot.stamp = digest(body); slot.closed = true;
+  }
+  private confirmShutdown(slot: Slot, sender: object, value: unknown, consume: boolean): void {
+    try {
+      if (this.disposed || slot.revoked || slot.uncertain || slot.confirmed || !slot.closed || sender !== slot.owner.sender || slot.owner.hasExited() || this.active.get(slot.taskId) !== slot) fail("service-recovery-lease-stale");
+      const report = experimentalShutdownReport(value, slot.taskId, slot.hostEpoch), loaded = this.closeScope(slot);
+      if (JSON.stringify(loaded.document?.shutdown) !== JSON.stringify(report)) fail("service-recovery-shutdown-unconfirmed");
+      if (consume) slot.confirmed = true;
+    } catch (error) { this.sanitize(error); }
+  }
+  private publish(slot: Slot, serviceId: string | undefined, body: string, prior: string | null) {
     const file = this.file(slot.taskId), temps: { path: string; stat: BigIntStats }[] = [];
     const stage = (suffix: string, text: string) => {
       this.checkDirectory();
@@ -196,7 +233,8 @@ export class ExperimentalServiceRecoveryStore {
       const temp = stage("tmp", body), backup = stage("bak.tmp", prior ?? body);
       if (this.load(slot.taskId, slot.identityDigest).stamp !== slot.stamp) fail();
       const scope = this.taskScope(slot.taskId);
-      if (scope.identityDigest !== slot.identityDigest || !scope.services.has(serviceId) || slot.owner.hasExited() || slot.revoked) fail();
+      if (serviceId === undefined) this.closeScope(slot);
+      if (scope.identityDigest !== slot.identityDigest || (serviceId !== undefined && !scope.services.has(serviceId)) || slot.owner.hasExited() || slot.revoked) fail();
       renameSync(backup, `${file}.bak`); renameSync(temp, file);
       fsyncSync(this.directoryFd); this.checkDirectory();
       if (this.bounded(file) !== body || this.bounded(`${file}.bak`) !== (prior ?? body)) fail();
@@ -218,7 +256,7 @@ export class ExperimentalServiceRecoveryStore {
   }
   private sanitize(error: unknown): never {
     const message = error instanceof Error ? error.message : "";
-    if (/^(?:service-recovery-(?:unavailable|task-unavailable|storage-overlap|primary-missing|lease-busy|unbound-resource|lease-stale|task-changed|write-uncertain|hosts-active)|invalid-service-recovery(?:-request)?)$/.test(message)) throw Error(message);
+    if (/^(?:service-recovery-(?:unavailable|task-unavailable|storage-overlap|primary-missing|lease-busy|unbound-resource|lease-stale|task-changed|write-uncertain|hosts-active|shutdown-unconfirmed)|invalid-service-recovery(?:-request)?|invalid-shutdown-report)$/.test(message)) throw Error(message);
     return fail();
   }
 }
