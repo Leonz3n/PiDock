@@ -30,7 +30,7 @@ try {
   const index = new TaskRootIndex(profile, taskRoot);
   await index.register(taskDir);
   const makeRegistry = () => new PerTaskHostRegistry(workspaceId, async (ws, task) => {
-    const child = utilityProcess.fork(entry, [], { serviceName: "pidock-sdk-test-host", env: buildHostEnv(process.env, ws, task), stdio: "pipe" });
+    const child = utilityProcess.fork(entry, [], { serviceName: "pidock-sdk-test-host", env: buildHostEnv(process.env, ws, task, app.getPath("userData")), stdio: "pipe" });
     spawned.push(child);
     child.stderr?.on("data", (data) => process.stderr.write(`[sdk-test-host] ${data}`));
     return { child, client: new HostClient(child) };

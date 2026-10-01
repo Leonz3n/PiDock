@@ -102,6 +102,25 @@ describe("persistent Project task creation with local Git", () => {
     expect(new TaskRootIndex(env.profile, env.root).resolve(preview.taskId)).toBe(preview.taskDir);
     expect(env.projects.association(preview.taskId, env.roots).state).toBe("assigned");
   });
+  it("refuses profile, alias and ancestor source selections before creating an intent or calling Host", async () => {
+    const env = await setup(), alias = join(env.home, "profile-alias");
+    if (process.platform !== "win32") symlinkSync(env.profile, alias, "dir");
+    for (const source of [env.profile, env.home, ...(process.platform !== "win32" ? [alias] : [])]) {
+      const project = await env.projects.update(env.project.id, { description: "", repositories: env.project.repositories,
+        directories: [{ name: "protected", path: source }] });
+      await expect(env.service.prepare({ ...env.request, directoryIds: [project.directories[0]!.id] })).rejects.toThrow("protected-application-path");
+      expect(env.storage.read()).toBeNull(); expect(env.getCalls()).toBe(0);
+    }
+    await expect(env.service.prepare({ ...env.request, override: true, directoryIds: [] }, env.profile)).rejects.toThrow("protected-application-path");
+    expect(env.storage.read()).toBeNull(); expect(env.getCalls()).toBe(0);
+  });
+  it.skipIf(process.platform === "win32")("refuses a source retargeted to profile between prepare and commit, retaining the intent", async () => {
+    const env = await setup(), source = join(env.home, "shared");
+    const intent = await env.service.prepare(env.request);
+    renameSync(source, `${source}-old`); symlinkSync(env.profile, source, "dir");
+    await expect(env.service.commit(intent.id)).rejects.toThrow("protected-application-path");
+    expect(env.getCalls()).toBe(0); expect(env.storage.read()?.id).toBe(intent.id); expect(existsSync(intent.taskDir)).toBe(false);
+  });
   it("rejects renderer paths and non-attested picker results", async () => {
     const env = await setup();
     const attest = () => { throw new Error("sender changed"); };

@@ -22,6 +22,7 @@
  *   a recorded residual, this is a bounded read-only diff read.
  */
 
+import type { TaskPathProtection } from "./protected-application-path.js";
 import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import {
@@ -136,12 +137,15 @@ export class TaskWorkspaceFiles {
      * credential-shaped pattern.
      */
     private readonly secrets: () => readonly string[] = () => [],
+    private readonly protection?: TaskPathProtection,
   ) {}
 
   /** Browsable roots of this task, derived from its record. */
   roots(): WorkspaceRoot[] {
     const record = this.requireRecord();
-    return workspaceRoots({
+    this.protection?.assert(this.taskDir);
+    for (const link of record.dirLinks ?? []) this.protection?.assert(link.sourcePath);
+    const roots = workspaceRoots({
       taskId: this.taskId,
       taskDir: this.taskDir,
       repos: record.repos,
@@ -150,6 +154,8 @@ export class TaskWorkspaceFiles {
       branch: record.remoteBranch,
       baseCommit: record.baseCommit,
     });
+    for (const root of roots) this.protection?.assert(root.path);
+    return roots;
   }
 
   /** Attribution of one root (`null` when the id is not one of this task's roots). */
@@ -254,6 +260,8 @@ export class TaskWorkspaceFiles {
    * refused instead of read.
    */
   private rootEscapeError(root: WorkspaceRoot, absolute: string): string | undefined {
+    try { this.protection?.assert(absolute); this.protection?.assert(root.path); }
+    catch { return "protected-application-path: 应用私有目录或其身份不可用于任务工具"; }
     const rootReal = comparisonKey(this.readers.realPath(root.path));
     const resolved = this.readers.realPath(absolute);
     const targetReal = comparisonKey(resolved);
@@ -273,6 +281,7 @@ export class TaskWorkspaceFiles {
   }
 
   private requireRecord(): TaskDiskRecord {
+    this.protection?.assert(this.taskDir);
     const record = this.store.readTask(this.taskDir);
     if (!record) throw new Error(`task-unknown: 无法读取任务记录（${this.taskDir}）`);
     return record;

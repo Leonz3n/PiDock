@@ -348,6 +348,12 @@ describe("task binding rule", () => {
 });
 
 describe("buildHostEnv", () => {
+  it("never inherits the protected profile claim and uses only main's explicit argument", () => {
+    const base = { PIDOCK_PROTECTED_PROFILE: "/forged", PATH: "/bin" };
+    expect(buildHostEnv(base, "workspace")["PIDOCK_PROTECTED_PROFILE"]).toBeUndefined();
+    expect(buildHostEnv(base, "workspace", undefined, "/trusted-profile")["PIDOCK_PROTECTED_PROFILE"]).toBe("/trusted-profile");
+    for (const path of ["relative", "~/profile", "/bad\0path"]) expect(() => buildHostEnv({}, "workspace", undefined, path)).toThrow("protected profile");
+  });
   it("binds workspace plus the fork-time task folder, failing closed on partial bindings", () => {
     const env = buildHostEnv({ PATH: "/bin", EMPTY: undefined, PIDOCK_WORKSPACE_ID: "old" }, "workspace-a", {
       taskId: "task-a",

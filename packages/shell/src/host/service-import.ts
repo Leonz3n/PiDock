@@ -1,3 +1,4 @@
+import type { TaskPathProtection } from "./protected-application-path.js";
 import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { parse as parseJsonc, type ParseError } from "jsonc-parser";
@@ -30,8 +31,9 @@ const MAX_WARNINGS = 30;
 const object = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 const display = (value: string) => value.slice(0, 100);
 
-function readSource(root: string, source: string): string | null {
+function readSource(root: string, source: string, protection?: TaskPathProtection): string | null {
   const path = join(root, source);
+  protection?.assert(path);
   if (!existsSync(path)) return null;
   if (lstatSync(path).isSymbolicLink()) throw Error("配置文件是符号链接，需要人工核对");
   const resolved = realpathSync(path);
@@ -74,18 +76,20 @@ function inlineAssignmentKey(command: string): string | null {
   return match ? match[1] ?? "" : null;
 }
 
-export function scanTaskServiceImportHints(input: { taskDir: string; roots: readonly WorkspaceRoot[] }, rootId: string): ServiceImportScan {
+export function scanTaskServiceImportHints(input: { taskDir: string; roots: readonly WorkspaceRoot[]; protection?: TaskPathProtection }, rootId: string): ServiceImportScan {
   const selected = input.roots.find((root) => root.id === rootId);
   if (!selected || selected.kind !== "worktree") throw Error("unknown-worktree: 请选择当前任务的仓库工作副本");
+  input.protection?.assert(input.taskDir); input.protection?.assert(selected.path);
   const taskRoot = realpathSync(input.taskDir);
   const repoRoot = realpathSync(selected.path);
   const inside = relative(taskRoot, repoRoot);
   if (!inside || inside === ".." || inside.startsWith(`..${sep}`)) throw Error("path-out-of-scope: 仓库工作副本不在任务根内");
-  return scanServiceImportHints(repoRoot);
+  return scanServiceImportHints(repoRoot, input.protection);
 }
 
 /** Read fixed, bounded repo config files into non-executable, value-free import hints. */
-export function scanServiceImportHints(repoRoot: string): ServiceImportScan {
+export function scanServiceImportHints(repoRoot: string, protection?: TaskPathProtection): ServiceImportScan {
+  protection?.assert(repoRoot);
   const root = realpathSync(repoRoot);
   if (!statSync(root).isDirectory()) throw Error("所选仓库不是目录");
   const hints: ServiceImportHint[] = [];
@@ -103,7 +107,7 @@ export function scanServiceImportHints(repoRoot: string): ServiceImportScan {
   };
   for (const source of SOURCES) {
     try {
-      const content = readSource(root, source);
+      const content = readSource(root, source, protection);
       if (content === null) continue;
       if (source === "package.json" || source.endsWith("launch.json")) {
         const parseErrors: ParseError[] = [];

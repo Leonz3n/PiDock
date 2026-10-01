@@ -5,6 +5,10 @@ Follow-up to [main-owned leases](../service-recovery-leases/README.md) and
 `task/controlService`, and `task/quit` remain unchanged and unavailable for service
 execution. This is a development experiment, not business or installation acceptance.
 
+Later [profile-boundary follow-up](../protected-application-profile/README.md) adds
+trusted main/Host path checks for task sources and guarded file APIs. It does not
+provide a filesystem sandbox or enable this experiment in production.
+
 ## Contract
 
 `ServiceExecutionRecoveryPort.write` now accepts a synchronous durable return or

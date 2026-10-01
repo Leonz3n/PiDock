@@ -16,6 +16,7 @@
  * unit tests inject an in-memory store instead of the filesystem.
  */
 
+import type { TaskPathProtection } from "./protected-application-path.js";
 import { PiSessionChannel, type PiPermission, type PiReportedUsage, type PiRunState, type PiSessionSnapshot, type PiTurnInput, type PiModelSwitchEvent, type PiSessionContextView, type PiUsageSource } from "../main/pi-session.js";
 import {
   TaskExecutionLedger,
@@ -606,9 +607,11 @@ export class TaskWorkspaceHost {
     private readonly sdkKernelFactory: (taskId: string, taskDir: string) => PiSdkTextKernel = (id, dir) => new PiSdkTextKernel(id, dir),
     /** Injectable so the Host's Provider lifecycle is testable without spawning a worker. */
     private readonly sdkContextFactory: (options: ConstructorParameters<typeof SdkContextClient>[0]) => SdkContextClient = (options) => new SdkContextClient(options),
+    private readonly protection?: TaskPathProtection,
   ) {
     if (taskId.trim().length === 0) throw new Error("taskId must be non-empty");
     if (taskDir.trim().length === 0) throw new Error("taskDir must be non-empty");
+    this.protection?.assert(taskDir);
     this.write = new TaskWriteCoordinator(liveResources);
     this.executions = new TaskExecutionLedger(taskId, taskDir, store, now);
     this.schedules = new TaskSchedules(taskId, taskDir, store, {
@@ -839,7 +842,12 @@ export class TaskWorkspaceHost {
    * must see (`#6` plain dirs are shared views, never copies).
    */
   sharedRoots(): SharedRoot[] {
+    this.protection?.assert(this.taskDir);
     const record = this.store.readTask(this.taskDir);
+    for (const link of record?.dirLinks ?? []) {
+      this.protection?.assert(link.sourcePath);
+      this.protection?.assert(`${this.taskDir}/${link.linkName}`);
+    }
     return (record?.dirLinks ?? []).map((link) => ({
       directoryId: link.directoryId,
       sourcePath: link.sourcePath,
@@ -855,6 +863,7 @@ export class TaskWorkspaceHost {
   pathScopeOf(target: string): PathScopeVerdict {
     const requested = target.trim();
     const absolute = requested.startsWith("/") || /^[A-Za-z]:[\\/]/.test(requested);
+    this.protection?.assert(absolute ? requested : `${this.taskDir}/${requested}`);
     const real = this.resolveRealPath(absolute ? requested : `${this.taskDir.replace(/[\\/]+$/, "")}/${requested}`);
     return classifyRealPath({ resolvedPath: real, taskDir: this.resolveRealPath(this.taskDir), roots: this.sharedRoots() });
   }
@@ -1015,6 +1024,9 @@ export class TaskWorkspaceHost {
   }
 
   provision(input: ProvisionTaskInput): ProvisionTaskResult {
+    this.protection?.assert(this.taskDir);
+    for (const source of Object.values(input.mainCheckouts ?? {})) this.protection?.assert(source);
+    for (const entry of input.plainDirs ?? []) this.protection?.assert(entry.sourcePath);
     const named = validateTaskName(input.name);
     if (!named.ok) throw new Error(`${named.error.code}: ${named.error.message}`);
     if (!isTaskDirId(input.dirId)) {
@@ -1198,6 +1210,8 @@ export class TaskWorkspaceHost {
     takenPaths?: readonly string[];
     branchesInUse?: readonly string[];
   }): { record: TaskDiskRecord; plan: ProvisionPlan; appended: string[]; skipped: string[] } {
+    this.protection?.assert(this.taskDir);
+    for (const source of Object.values(input.mainCheckouts ?? {})) this.protection?.assert(source);
     const stored = this.store.readTask(this.taskDir);
     if (!stored) throw new Error("unknown task: no task record; provision the task before appending");
     if (stored.taskId !== this.taskId) throw new Error("task-unknown: this Host serves a different task");
@@ -1646,6 +1660,10 @@ export class TaskWorkspaceHost {
     // is validated on the resolved real path before any right is claimed, so a
     // retargeted link or a path outside the task's allowed roots never writes.
     const target = typeof turn?.target === "string" && turn.target.trim().length > 0 ? turn.target : undefined;
+    if (target !== undefined) {
+      const absolute = target.startsWith("/") || /^[A-Za-z]:[\\/]/.test(target);
+      this.protection?.assert(absolute ? target : `${this.taskDir}/${target}`);
+    }
     const scope = sideEffecting && target !== undefined ? this.pathScopeOf(target) : undefined;
     // A lexically out-of-task target is already refused by the session tool gate,
     // so no side effect can happen: the turn runs, fails and records why, and
@@ -1695,7 +1713,20 @@ export class TaskWorkspaceHost {
       label: plannedTool !== undefined && target !== undefined ? `${plannedTool} ${target}` : "回合检查",
     });
     try {
-      result = channel.runTurn({ text, ...turn });
+      const execute = turn?.execute;
+      result = channel.runTurn({ text, ...turn, ...(execute && this.protection ? { execute: (call) => {
+        this.sharedRoots();
+        const target = call.target;
+        const absolute = target.startsWith("/") || /^[A-Za-z]:[\\/]/.test(target);
+        this.protection!.assert(absolute ? target : `${this.taskDir}/${target}`);
+        const proposal = execute(call);
+        if (proposal) {
+          const target = proposal.target;
+          const absolute = target.startsWith("/") || /^[A-Za-z]:[\\/]/.test(target);
+          this.protection!.assert(absolute ? target : `${this.taskDir}/${target}`);
+        }
+        return proposal;
+      } } : {}) });
     } catch (error) {
       // The turn never started (busy round/approval, fail-closed validation):
       // the record names the refusal instead of staying `executing` forever.
@@ -1799,6 +1830,15 @@ export class TaskWorkspaceHost {
    */
   approve(sessionId: string, approvalId: string, contentVersion?: string): string {
     const channel = this.openSession(sessionId);
+    if (this.protection) {
+      const approval = channel.snapshot().approvals.find((row) => row.id === approvalId);
+      if (approval) {
+        this.sharedRoots();
+        const target = approval.target;
+        const absolute = target.startsWith("/") || /^[A-Za-z]:[\\/]/.test(target);
+        this.protection.assert(absolute ? target : `${this.taskDir}/${target}`);
+      }
+    }
     const waiting = this.executions.waitingOnApproval(approvalId);
     if (waiting) {
       this.executions.authorize(waiting.executionId, {

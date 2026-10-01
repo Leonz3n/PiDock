@@ -232,6 +232,7 @@ export function buildHostEnv(
   baseEnv: Record<string, string | undefined>,
   workspaceId: string,
   task?: HostTaskBinding,
+  protectedProfile?: string,
 ): Record<string, string> {
   if (typeof workspaceId !== "string" || workspaceId.length === 0) {
     throw new Error("invalid-payload: workspaceId must be a non-empty string");
@@ -243,10 +244,16 @@ export function buildHostEnv(
     // value only into the isolated SDK context. Dropping these names here keeps
     // that credential out of every task process this Host can spawn (git,
     // services, terminals) instead of relying on the SDK kill switch alone.
-    if (key.startsWith("PIDOCK_PROVIDER_")) continue;
+    if (key.startsWith("PIDOCK_PROVIDER_") || key === "PIDOCK_PROTECTED_PROFILE") continue;
     if (typeof value === "string") env[key] = value;
   }
   env["PIDOCK_WORKSPACE_ID"] = workspaceId;
+  if (protectedProfile !== undefined) {
+    if (!isAbsoluteTaskRoot(protectedProfile) || protectedProfile.startsWith("~/") || protectedProfile.includes("\0") || protectedProfile.length > 4096) {
+      throw new Error("invalid-payload: protected profile must be absolute");
+    }
+    env["PIDOCK_PROTECTED_PROFILE"] = protectedProfile;
+  }
   if (task !== undefined) {
     if (typeof task.taskId !== "string" || task.taskId.length === 0) {
       throw new Error("invalid-payload: taskId must be a non-empty string");

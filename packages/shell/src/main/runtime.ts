@@ -2,6 +2,7 @@ import path from "node:path";
 import { accessSync, constants, realpathSync, statSync } from "node:fs";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import {
+  app,
   BrowserWindow,
   dialog,
   ipcMain,
@@ -179,7 +180,7 @@ export async function createHost(
   const entry = path.join(here, "..", "host", "host-entry.js");
   const child = utilityProcess.fork(entry, [], {
     serviceName: task ? `pidock-node-host-${task.taskId}` : "pidock-node-host",
-    env: buildHostEnv(process.env, workspaceId, task),
+    env: buildHostEnv(process.env, workspaceId, task, app.getPath("userData")),
     stdio: "pipe",
   });
   const client = new HostClient(child);

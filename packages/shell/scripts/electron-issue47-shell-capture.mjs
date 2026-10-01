@@ -78,7 +78,7 @@ async function run() {
     const catalog = new ServiceCatalog(profile, serviceCatalogAuthority(index, projects));
     registry = new PerTaskHostRegistry("issue47", async (workspace, task) => {
       const entry = join(import.meta.dirname, "..", "dist", "host", "host-entry.js");
-      const child = utilityProcess.fork(entry, [], { serviceName: "issue47-host", env: buildHostEnv(process.env, workspace, task), stdio: "pipe" });
+      const child = utilityProcess.fork(entry, [], { serviceName: "issue47-host", env: buildHostEnv(process.env, workspace, task, app.getPath("userData")), stdio: "pipe" });
       children.push(child);
       child.stderr?.on("data", (data) => process.stderr.write(`[issue47-host] ${data}`));
       return { child, client: new HostClient(child) };
