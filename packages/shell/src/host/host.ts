@@ -53,6 +53,7 @@ import { scanTaskServiceImportHints } from "./service-import.js";
 import { publicServiceStartPreview, publicServiceStatus } from "./service-public.js";
 import { TaskServiceTopology } from "./service-topology.js";
 import { TaskProtocolBinding } from "./protocol-binding.js";
+import { protectApplicationProfile, type TaskPathProtection } from "./protected-application-path.js";
 import { TaskWorkspaceFiles } from "./workspace-files.js";
 import { TaskTerminalRegistry, planTerminal, type TerminalPlan } from "../main/terminal-config.js";
 import { TaskLifecycleHost } from "./task-lifecycle.js";
@@ -150,6 +151,11 @@ let protocolBinding: TaskProtocolBinding | null = null;
 // binding and lifetime as the topology above; the file roots come from this
 // task's record and every read is bounded + masked before it crosses back.
 let workspaceFiles: TaskWorkspaceFiles | null = null;
+let applicationPaths: TaskPathProtection | undefined;
+function protectedPaths(): TaskPathProtection {
+  if (!applicationPaths) applicationPaths = protectApplicationProfile(process.env["PIDOCK_PROTECTED_PROFILE"] ?? "");
+  return applicationPaths;
+}
 let terminalRegistry: TaskTerminalRegistry | null = null;
 /**
  * Task/private values seen in a registered service's private layer: previews
@@ -162,7 +168,7 @@ function workspaceFilesFor(taskId: string): TaskWorkspaceFiles | { error: string
   const host = taskHostFor(taskId);
   if ("error" in host) return host;
   if (!workspaceFiles || workspaceFiles.taskDir !== host.taskDir || workspaceFiles.taskId !== host.taskId) {
-    workspaceFiles = new TaskWorkspaceFiles(host.taskId, host.taskDir, host.store, undefined, () => [...privateSecretValues]);
+    workspaceFiles = new TaskWorkspaceFiles(host.taskId, host.taskDir, host.store, undefined, () => [...privateSecretValues], protectedPaths());
   }
   return workspaceFiles;
 }
@@ -311,6 +317,8 @@ function taskHostFor(taskId: string): TaskWorkspaceHost | { error: string } {
   if (taskId !== boundTaskId) {
     return { error: "task-unknown: this Host serves a different task" };
   }
+  try { protectedPaths().assert(taskDir); }
+  catch { return { error: "protected-application-path: 任务目录或应用私有目录身份不可用" }; }
   if (!workspaceHost || workspaceHost.taskId !== boundTaskId || workspaceHost.taskDir !== taskDir) {
     // [PiDock 09] (#11) write coordination reads the service runtime's
     // still-running agent-owned services lazily (the runtime is created on
@@ -334,6 +342,8 @@ function taskHostFor(taskId: string): TaskWorkspaceHost | { error: string } {
       undefined,
       undefined,
       sdkKernelFactory,
+      undefined,
+      protectedPaths(),
     );
   }
   return workspaceHost;
@@ -1149,7 +1159,7 @@ async function dispatchTaskOp(
           return { ok: false, error: "invalid-payload: task/serviceImportHints requires only rootId" };
         }
         try {
-          const scan = scanTaskServiceImportHints({ taskDir: files.taskDir, roots: files.roots() }, rootId);
+          const scan = scanTaskServiceImportHints({ taskDir: files.taskDir, roots: files.roots(), protection: protectedPaths() }, rootId);
           return { ok: true, payload: { scan } };
         } catch (error) {
           return { ok: false, error: error instanceof Error && /^(unknown-worktree|path-out-of-scope):/.test(error.message)

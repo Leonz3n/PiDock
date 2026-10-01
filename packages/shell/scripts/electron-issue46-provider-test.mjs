@@ -80,7 +80,7 @@ async function run() {
     const projects = new ProjectRegistry(profile);
     registry = new PerTaskHostRegistry("issue46", async (workspace, task) => {
       const entry = join(import.meta.dirname, "..", "dist", "host", "host-entry.js");
-      const child = utilityProcess.fork(entry, [], { serviceName: "issue46-host", env: buildHostEnv(process.env, workspace, task), stdio: "pipe" });
+      const child = utilityProcess.fork(entry, [], { serviceName: "issue46-host", env: buildHostEnv(process.env, workspace, task, app.getPath("userData")), stdio: "pipe" });
       children.push(child);
       child.stderr?.on("data", (data) => process.stderr.write(`[issue46-host] ${data}`));
       return { child, client: new HostClient(child) };

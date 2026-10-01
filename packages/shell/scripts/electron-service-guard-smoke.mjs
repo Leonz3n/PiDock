@@ -2,7 +2,7 @@
 // Run after shell build: pnpm --filter @pidock/shell exec electron scripts/electron-service-guard-smoke.mjs
 import { app, utilityProcess } from "electron";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildTaskDiskRecord, serializeTaskRecord } from "../dist/host/task-store.js";
@@ -34,7 +34,7 @@ try {
   const index = new TaskRootIndex(profile, taskRoot);
   registry = new PerTaskHostRegistry("service-guard", async (workspace, task) => {
     const child = utilityProcess.fork(join(import.meta.dirname, "..", "dist", "host", "host-entry.js"), [], {
-      serviceName: "service-guard-host", env: buildHostEnv(process.env, workspace, task), stdio: "pipe",
+      serviceName: "service-guard-host", env: buildHostEnv(process.env, workspace, task, app.getPath("userData")), stdio: "pipe",
     });
     children.push(child);
     child.stderr?.on("data", (data) => process.stderr.write(`[service-guard-host] ${data}`));
@@ -85,7 +85,29 @@ try {
   assert.deepEqual(approvals.payload.approvals, []);
   const after = await call("task/serviceStatus", { serviceId: "invoice" }, origin);
   assert.equal(after.payload.service.lifecycle, "stopped");
-  console.log("SERVICE_GUARD_SMOKE_OK", JSON.stringify({ registered: registered.payload, plan: planned.payload, status: after.payload.service.lifecycle, denied: denied.error }));
+  const privateFile = join(profile, "profile-private.json"); writeFileSync(privateFile, "synthetic-protected-profile-body");
+  symlinkSync(profile, join(repoDir, "profile-link"), "dir");
+  const protectedRead = await call("task/filePreview", { rootId: "invoice", relative: "profile-link/profile-private.json" }, origin);
+  assert.equal(protectedRead.ok, false); assert.equal(JSON.stringify(protectedRead).includes(profile), false);
+  assert.equal(JSON.stringify(protectedRead).includes("synthetic-protected-profile-body"), false);
+  const safeRead = await call("task/filePreview", { rootId: "invoice", relative: ".vscode/launch.json" }, origin);
+  assert.equal(safeRead.ok, true);
+  const taskFile = join(taskDir, "task.json"), record = JSON.parse(readFileSync(taskFile, "utf8"));
+  writeFileSync(taskFile, JSON.stringify({ ...record, dirLinks: [{ directoryId: "abcd1234", linkName: "dir-abcd1234", sourcePath: profile, snapshotAt: record.createdAt }] }));
+  assert.equal((await call("task/fileRoots", {}, origin)).ok, false);
+  assert.equal((await call("task/serviceImportHints", { rootId: "invoice" }, origin)).ok, false);
+  assert.equal(readFileSync(privateFile, "utf8"), "synthetic-protected-profile-body");
+  writeFileSync(taskFile, JSON.stringify(record));
+  assert.equal((await call("task/fileRoots", {}, origin)).ok, true);
+  const unprotectedChild = utilityProcess.fork(join(import.meta.dirname, "..", "dist", "host", "host-entry.js"), [], {
+    serviceName: "missing-profile-context", env: buildHostEnv({ PIDOCK_PROTECTED_PROFILE: profile }, "unprotected-test", { taskId, taskDir }), stdio: "pipe",
+  });
+  children.push(unprotectedChild); const unprotectedClient = new HostClient(unprotectedChild);
+  const unprotectedExit = new Promise((resolve) => unprotectedChild.once("exit", resolve));
+  await unprotectedClient.ping();
+  await assert.rejects(unprotectedClient.task({ workspaceId: "unprotected-test", taskId, op: "task/fileRoots", payload: {}, origin }), /protected-application-path/);
+  unprotectedClient.dispose(); unprotectedChild.kill(); await unprotectedExit;
+  console.log("SERVICE_GUARD_SMOKE_OK", JSON.stringify({ missingTrustedContextDenied: true, protectedProfileReadDenied: true, oldProtectedSourceDenied: true, registered: registered.payload, plan: planned.payload, status: after.payload.service.lifecycle, denied: denied.error }));
 } catch (error) {
   console.error("SERVICE_GUARD_SMOKE_FAILED", error);
   process.exitCode = 1;

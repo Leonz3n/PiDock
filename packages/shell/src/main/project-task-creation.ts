@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
+import { protectApplicationProfile, type TaskPathProtection } from "../host/protected-application-path.js";
 import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, normalize, relative, resolve } from "node:path";
 import { readTaskRecordOnDisk } from "../host/task-store.js";
@@ -150,6 +151,11 @@ function validate(value: unknown): CreationIntent {
 
 /** One main instance owns this file; first-write backup witnesses an initialized store. */
 export class CreationIntentStore {
+  private protection: TaskPathProtection | undefined;
+  assertTaskPath(path: string): void {
+    this.protection ??= protectApplicationProfile(this.userData);
+    this.protection.assert(path);
+  }
   constructor(private readonly userData: string) {}
   read(): CreationIntent | null {
     const file = join(this.userData, FILE);
@@ -257,6 +263,15 @@ export class ProjectTaskCreation {
       if (input.directoryIds.length && input.sharedWriteConfirmed !== true) throw new Error("请确认普通目录的共享写入风险");
       if (input.override !== (selectedRoot !== undefined)) throw new Error("任务根选择结果与请求不符");
       const name = string(input.name), root = path(selectedRoot ?? this.defaultRoot);
+      this.store.assertTaskPath(root);
+      for (const selected of input.repositories) {
+        const source = project.repositories.find((row) => row.id === selected?.sourceId);
+        if (source) this.store.assertTaskPath(source.path);
+      }
+      for (const id of input.directoryIds) {
+        const source = project.directories.find((row) => row.id === id);
+        if (source) this.store.assertTaskPath(source.path);
+      }
       const inventory = this.roots.inventory();
       if (inventory.roots.some((entry) => entry.state === "error")) throw new Error("任务根身份不可读取，请先修复后创建");
       const rootIdentity = existsSync(root) ? diskIdentity(root) : null;
@@ -308,6 +323,8 @@ export class ProjectTaskCreation {
       const intent = this.store.read();
       if (!intent || intent.id !== id) throw new Error("创建意图已改变，请重新读取");
       if (intent.state === "abandoned") throw new Error("创建意图已放弃，请重新创建任务");
+      this.store.assertTaskPath(intent.taskDir);
+      for (const source of [...intent.repos, ...intent.directories]) this.store.assertTaskPath(source.path);
       if (this.store.hasAbandonReceipt(intent)) throw new Error("放弃创建凭据已写入，只能继续放弃，不能提交原任务");
       if (intent.state === "complete") {
         const association = this.projects.association(intent.taskId, this.roots);
@@ -388,6 +405,8 @@ export class ProjectTaskCreation {
           record.dirLinks?.length !== intent.directories.length || intent.directories.some((dir) => !record.dirLinks?.some((entry) => entry.directoryId === dir.id && entry.linkName === dir.linkName && entry.sourcePath === dir.path))) {
         throw new Error("任务磁盘记录与创建意图不符");
       }
+      this.store.assertTaskPath(intent.taskDir);
+      for (const source of [...intent.repos, ...intent.directories]) this.store.assertTaskPath(source.path);
       await this.roots.register(intent.taskDir);
       checkProject();
       const association = this.projects.association(intent.taskId, this.roots);
