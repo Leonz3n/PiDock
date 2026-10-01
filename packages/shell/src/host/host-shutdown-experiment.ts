@@ -1,6 +1,6 @@
 import { shutdownDeadline } from "./shutdown-deadline.js";
-
-export interface ExperimentalShutdownReport { schemaVersion: 1; taskId: string; hostEpoch: string; status: "closed" }
+import type { ExperimentalShutdownReport } from "../rpc/host-shutdown-report.js";
+export type { ExperimentalShutdownReport } from "../rpc/host-shutdown-report.js";
 interface Dependencies {
   taskId: string; hostEpoch: string;
   /** Trusted producer callbacks, never request payloads. */

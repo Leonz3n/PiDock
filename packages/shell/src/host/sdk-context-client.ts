@@ -216,9 +216,10 @@ export class SdkContextClient implements SdkTextKernelPort {
     return this.termination ??= Promise.resolve().then(() => this.worker?.terminate() ?? 0);
   }
 
+  seal(): void { this.closing = true; }
   /** Seals synchronously; all callers share the same sticky success or failure. */
   dispose(): Promise<void> {
-    this.closing = true;
+    this.seal();
     return this.disposal ??= this.shutdown();
   }
   private async shutdown(): Promise<void> {
