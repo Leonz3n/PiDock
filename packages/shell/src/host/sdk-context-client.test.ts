@@ -58,7 +58,7 @@ function scripted(options: { failBootstrap?: string; malformedOpen?: boolean; on
     on(event: "message" | "error" | "exit", listener: never) { (listeners[event] as unknown[]).push(listener); if (event === "message") boot(); return worker; },
     terminate() { return Promise.resolve(0); },
   };
-  return { worker, spawned };
+  return { worker, spawned, send };
 }
 
 it("dispatches a credential-free environment and passes the credential only as worker input", async () => {
@@ -163,6 +163,44 @@ it("poisons an unusable protocol instead of hanging the caller", async () => {
   await expect(client.dispose()).resolves.toBeUndefined();
 });
 
+it("shares a sticky dispose receipt and seals prompt/cancel immediately", async () => {
+  const probe = scripted(), terminate = vi.fn(async () => 0); probe.worker.terminate = terminate;
+  const client = new SdkContextClient({ task: { taskId: "task-close", taskDir: task("task-close") }, config, credential: "synthetic-key", spawn: () => probe.worker });
+  await client.open("main"); const first = client.dispose(); expect(client.dispose()).toBe(first);
+  await expect(client.prompt("main", "late")).rejects.toThrow(/sdk-context-(closing|disposed)/);
+  await expect(client.cancel("main")).rejects.toThrow(/sdk-context-(closing|disposed)/);
+  await first; expect(client.dispose()).toBe(first); expect(terminate).toHaveBeenCalledTimes(1);
+});
+it("retains a silent graceful shutdown failure even after confirmed termination and late reply", async () => {
+  const probe = scripted(), original = probe.worker.postMessage.bind(probe.worker); let late: unknown;
+  probe.worker.postMessage = (message) => { if ((message as { op: string }).op === "dispose") { late = message; return; } original(message); };
+  const terminate = vi.fn(async () => 0); probe.worker.terminate = terminate;
+  const client = new SdkContextClient({ task: { taskId: "task-close", taskDir: task("task-close") }, config, credential: "synthetic-key", spawn: () => probe.worker, shutdownTimeoutMs: 10 });
+  await client.open("main"); const first = client.dispose(); await expect(first).rejects.toThrow("sdk-context-shutdown-unconfirmed");
+  expect(late).toBeDefined(); probe.send({ id: (late as { id: string }).id, kind: "reply", ok: true, payload: { disposed: true } });
+  await expect(client.dispose()).rejects.toThrow("sdk-context-shutdown-unconfirmed"); expect(client.dispose()).toBe(first); expect(terminate).toHaveBeenCalledTimes(1);
+});
+it.each(["throw", "pending", "invalid"])("refuses %s termination and never retries it as success", async (mode) => {
+  const probe = scripted(), terminate = vi.fn(() => mode === "throw" ? Promise.reject(Error("synthetic-private-error")) : mode === "pending" ? new Promise<number>(() => {}) : Promise.resolve(NaN)); probe.worker.terminate = terminate;
+  const client = new SdkContextClient({ task: { taskId: "task-close", taskDir: task("task-close") }, config, credential: "synthetic-key", spawn: () => probe.worker, shutdownTimeoutMs: 10 });
+  await client.open("main"); const first = client.dispose(); await expect(first).rejects.toThrow("sdk-context-shutdown-unconfirmed");
+  await expect(client.dispose()).rejects.toThrow("sdk-context-shutdown-unconfirmed"); expect(client.dispose()).toBe(first); expect(terminate).toHaveBeenCalledTimes(1);
+});
+it("rejects malformed or extra graceful-dispose fields without leaking peer detail", async () => {
+  for (const payload of [{ disposed: false }, { disposed: true, extra: "synthetic-private-detail" }]) {
+    const probe = scripted(), original = probe.worker.postMessage.bind(probe.worker);
+    probe.worker.postMessage = (message) => {
+      const request = message as { id: string; op: string };
+      if (request.op === "dispose") probe.send({ id: request.id, kind: "reply", ok: true, payload }); else original(message);
+    };
+    const client = new SdkContextClient({ task: { taskId: "task-close", taskDir: task("task-close") }, config, credential: "synthetic-key", spawn: () => probe.worker });
+    await client.open("main"); await expect(client.dispose()).rejects.toThrow(/^sdk-context-shutdown-unconfirmed$/);
+    await expect(client.dispose()).rejects.toThrow(/^sdk-context-shutdown-unconfirmed$/);
+  }
+});
+it("rejects unusable shutdown deadlines before spawn", () => {
+  for (const shutdownTimeoutMs of [0, 9, 60_001, NaN, 1.5]) expect(() => new SdkContextClient({ task: { taskId: "task-close", taskDir: "/not-used" }, config, credential: "synthetic-key", shutdownTimeoutMs })).toThrow("invalid-shutdown-deadline");
+});
 it("refuses an unusable selection before any context exists", () => {
   const dir = task("task-context-guard");
   expect(() => new SdkContextClient({ task: { taskId: "task-context-guard", taskDir: dir }, config, credential: "" })).toThrow("provider-not-configured");

@@ -112,21 +112,24 @@ async function run() {
 
     views.window.setContentSize(1440, 900);
     await until((body) => body.includes("Provider task"), "list");
-    await click("进入工作区");
+    const openTask = () => evalJs(`(() => { const button = document.querySelector('[data-task-nav="${taskId}"]'); if (!button) throw Error('missing task navigation'); button.click(); return true; })()`);
+    await openTask();
     // A fresh task has no SDK history; a resumed one must show the history that
     // the previous run persisted, so the marker differs.
-    await until((body) => body.includes("SDK JSONL 已确认历史"), "conversation view");
+    await until((body) => body.includes("SDK JSONL 已确认历史") && body.includes("已连接"), "conversation view");
 
     if (resumeRoot) {
       // A cold reopen must restore the persisted selection by itself.
-      await until((body) => body.includes("已配置"), "restored selection");
+      await until((body) => body.includes("Loopback"), "restored selection");
       const restored = await text();
       if (!restored.includes(ANSWER)) throw Error(`history lost on reopen: ${restored}`);
       if (restored.includes(CREDENTIAL)) throw Error("credential visible after reopen");
       console.log("ISSUE46_E2E_RESUME=" + JSON.stringify({ root, restored: true, historyKept: true, credentialVisible: false, credentialInJsonl: jsonl().includes(CREDENTIAL) }));
     } else {
       await until((body) => body.includes("未配置"), "unconfigured state");
-      await click("配置");
+      await evalJs("document.querySelector('[data-testid=composer-model]').click()");
+      await until((body) => body.includes("添加 Provider"), "provider page");
+      await click("添加 Provider");
       await fill("名称", "Loopback");
       await fill("接口地址", `http://127.0.0.1:${port}/v1`);
       await fill("模型", "issue46-model");
@@ -141,6 +144,11 @@ async function run() {
       if (persisted.includes(CREDENTIAL)) throw Error(`credential persisted: ${persisted}`);
       if (/"(credential|apiKey|api_key|token|secret|password)"\s*:/i.test(persisted)) throw Error(`credential-bearing field persisted: ${persisted}`);
 
+      await openTask();
+      await until((body) => body.includes("SDK JSONL 已确认历史"), "configured conversation");
+      await wait(300);
+      if ((await text()).includes("sdk-sender-navigated")) await click("重新连接");
+      await until((body) => body.includes("已连接"), "configured subscription");
       await type("hello provider");
       await click("发送");
       const answered = await until((body) => body.includes(ANSWER), "answer");
@@ -165,6 +173,16 @@ async function run() {
       }));
       console.log("ISSUE46_E2E_JSONL=" + JSON.stringify(log.slice(0, 1200)));
     }
+    const quitRequest = `window.pidock.taskOp(${JSON.stringify(taskId)}, "task/quit", {label:"Provider shutdown check"})`;
+    const quit = await evalJs(quitRequest), repeated = await evalJs(quitRequest);
+    const receipt = quit.payload?.payload?.quit;
+    if (!quit.ok || receipt?.plan?.failures?.length !== 0 || receipt?.plan?.retainedTasks?.length !== 0) throw Error(`provider-shutdown-unconfirmed: ${JSON.stringify(quit)}`);
+    if (!repeated.ok || JSON.stringify(repeated.payload?.payload?.quit) !== JSON.stringify(receipt)) throw Error("provider-shutdown-receipt-changed");
+    let refusal;
+    try { await registry.routeTaskOp({ taskId, op: "task/sdkProvider", payload: { provider: null }, origin: { kind: "shell-ui", senderWebContentsId: views.shellView.webContents.id } }); }
+    catch (error) { refusal = String(error); }
+    if (!refusal?.includes("sdk-host-closing")) throw Error("provider-reopened-after-shutdown");
+    console.log("ISSUE46_SDK_SHUTDOWN=" + JSON.stringify({ receiptStable: true, providerReinstallRefused: true, jsonlKept: jsonl().includes("hello provider"), credentialInJsonl: jsonl().includes(CREDENTIAL) }));
   } catch (error) { console.error("ISSUE46_E2E_FAILED", error); process.exitCode = 1; }
   finally {
     clearTimeout(watchdog);

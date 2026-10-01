@@ -118,8 +118,10 @@ export class ExperimentalServiceExecution {
     await this.saved();
     return result;
   }
+  /** Seal dispatch synchronously before the Host starts SDK shutdown. */
+  seal(): void { this.closing = true; }
   /** Trusted Host lifecycle only, not an Agent/human approval bypass RPC. */
-  close(): Promise<Result> { this.closing = true; return this.closingPromise ??= this.drain(); }
+  close(): Promise<Result> { this.seal(); return this.closingPromise ??= this.drain(); }
   private async drain(): Promise<Result> {
     await this.idle; await this.saved();
     if (this.state === "unconfirmed") return { ok: false, error: "service-termination-unconfirmed" };
