@@ -585,7 +585,7 @@ export class PerTaskHostRegistry {
         tasks.push({ taskId: entry.taskId, ok: false, applied: [], failures: [], retainedTasks: [entry.taskId], error: errorMessage(error) });
       }
     }
-    return { ok: tasks.every((task) => task.ok && task.retainedTasks.length === 0), tasks };
+    return { ok: tasks.every((task) => task.ok && task.failures.length === 0 && task.retainedTasks.length === 0), tasks };
   }
 
   /** Dispose every forked Host (app exit / window-all-closed). */

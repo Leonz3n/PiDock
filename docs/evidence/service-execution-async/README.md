@@ -9,6 +9,10 @@ Later [profile-boundary follow-up](../protected-application-profile/README.md) a
 trusted main/Host path checks for task sources and guarded file APIs. It does not
 provide a filesystem sandbox or enable this experiment in production.
 
+Later [shutdown preparation](../host-shutdown-preparation/README.md) fixes SDK
+close receipts and tests service drain/report acknowledgement ordering. Its
+report port is not a production main store or installed Host integration.
+
 ## Contract
 
 `ServiceExecutionRecoveryPort.write` now accepts a synchronous durable return or

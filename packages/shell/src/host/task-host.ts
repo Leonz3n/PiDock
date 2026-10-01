@@ -16,6 +16,7 @@
  * unit tests inject an in-memory store instead of the filesystem.
  */
 
+import { shutdownDeadline } from "./shutdown-deadline.js";
 import type { TaskPathProtection } from "./protected-application-path.js";
 import { PiSessionChannel, type PiPermission, type PiReportedUsage, type PiRunState, type PiSessionSnapshot, type PiTurnInput, type PiModelSwitchEvent, type PiSessionContextView, type PiUsageSource } from "../main/pi-session.js";
 import {
@@ -491,6 +492,9 @@ export class TaskWorkspaceHost {
   private sdkContext: SdkContextClient | null = null;
   private sdkRouter: SdkTextKernelRouter | null = null;
   private sdkProviderGeneration = 0;
+  private sdkShutdown: Promise<void> | undefined;
+  private sdkConfiguring: Promise<{ generation: number }> | undefined;
+  private sdkDisposalFailed = false;
 
   /**
    * #43/#44 Host-internal seam. Until #46 configures an explicit Provider the
@@ -499,7 +503,7 @@ export class TaskWorkspaceHost {
    */
   sdkTextKernel(): SdkTextKernelRouter {
     this.sdkText ??= this.sdkKernelFactory(this.taskId, this.taskDir);
-    return this.sdkRouter ??= new SdkTextKernelRouter(this.sdkText, this.sdkContext ?? undefined);
+    return this.sdkRouter ??= new SdkTextKernelRouter(this.sdkText, this.sdkShutdown || this.sdkDisposalFailed ? undefined : this.sdkContext ?? undefined);
   }
 
   /**
@@ -509,11 +513,25 @@ export class TaskWorkspaceHost {
    * and it is only kept when that open succeeded: a failed install must leave the
    * task unconfigured (fail closed), never pointing at a dead context.
    */
-  async configureSdkProvider(provider: { config: ExplicitTextProvider; credential: string; workspaceId?: string } | null): Promise<{ generation: number }> {
+  configureSdkProvider(provider: { config: ExplicitTextProvider; credential: string; workspaceId?: string } | null): Promise<{ generation: number }> {
+    if (this.sdkShutdown) return Promise.reject(Error("sdk-host-closing"));
+    if (this.sdkDisposalFailed) return Promise.reject(Error("sdk-host-shutdown-unconfirmed"));
+    if (this.sdkConfiguring) return Promise.reject(Error("sdk-provider-operation-in-flight"));
+    const pending = this.installSdkProvider(provider);
+    this.sdkConfiguring = pending;
+    void pending.finally(() => { if (this.sdkConfiguring === pending) this.sdkConfiguring = undefined; }).catch(() => { /* The caller receives the install failure. */ });
+    return pending;
+  }
+  private async disposeSdkContext(context: SdkContextClient): Promise<void> {
+    try { await shutdownDeadline(context.dispose(), 35_000, "sdk-host-shutdown-timeout"); }
+    catch { this.sdkDisposalFailed = true; throw Error("sdk-host-shutdown-unconfirmed"); }
+  }
+  private async installSdkProvider(provider: { config: ExplicitTextProvider; credential: string; workspaceId?: string } | null): Promise<{ generation: number }> {
     const previous = this.sdkContext;
     this.sdkContext = null;
     this.sdkRouter = null;
-    if (previous) await previous.dispose();
+    if (previous) await this.disposeSdkContext(previous);
+    if (this.sdkShutdown) throw Error("sdk-host-closing");
     this.sdkProviderGeneration += 1;
     if (provider) {
       const context = this.sdkContextFactory({
@@ -523,7 +541,11 @@ export class TaskWorkspaceHost {
         ...(provider.workspaceId === undefined ? {} : { workspaceId: provider.workspaceId }),
       });
       try { await context.open("main"); }
-      catch (error) { await context.dispose().catch(() => {}); throw error; }
+      catch (error) { await this.disposeSdkContext(context); throw error; }
+      if (this.sdkShutdown) {
+        await this.disposeSdkContext(context);
+        throw Error("sdk-host-closing");
+      }
       this.sdkContext = context;
     }
     return { generation: this.sdkProviderGeneration };
@@ -534,15 +556,24 @@ export class TaskWorkspaceHost {
     return this.sdkContext !== null;
   }
 
-  async shutdownSdk(): Promise<void> {
+  shutdownSdk(): Promise<void> {
+    this.sdkRouter = null;
+    return this.sdkShutdown ??= Promise.resolve().then(() => this.drainSdk());
+  }
+  private async drainSdk(): Promise<void> {
+    let failed = this.sdkDisposalFailed;
+    try { await shutdownDeadline(Promise.resolve(this.sdkConfiguring).then(() => undefined, () => undefined), 30_000, "sdk-host-bootstrap-unconfirmed"); }
+    catch { failed = true; }
+    failed ||= this.sdkDisposalFailed;
     const context = this.sdkContext;
     this.sdkContext = null;
     this.sdkRouter = null;
-    try { await context?.dispose(); }
-    finally {
-      await this.sdkText?.dispose();
-      this.sdkText = null;
-    }
+    try { if (context) await this.disposeSdkContext(context); }
+    catch { failed = true; }
+    try { await shutdownDeadline(Promise.resolve(this.sdkText?.dispose()), 15_000, "sdk-host-shutdown-timeout"); }
+    catch { failed = true; }
+    this.sdkText = null;
+    if (failed) throw Error("sdk-host-shutdown-unconfirmed");
   }
   /**
    * [PiDock 09] (#11) task-scoped write coordination: at most one session holds

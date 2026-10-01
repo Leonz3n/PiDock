@@ -53,6 +53,7 @@ import { scanTaskServiceImportHints } from "./service-import.js";
 import { publicServiceStartPreview, publicServiceStatus } from "./service-public.js";
 import { TaskServiceTopology } from "./service-topology.js";
 import { TaskProtocolBinding } from "./protocol-binding.js";
+import { shutdownDeadline } from "./shutdown-deadline.js";
 import { protectApplicationProfile, type TaskPathProtection } from "./protected-application-path.js";
 import { TaskWorkspaceFiles } from "./workspace-files.js";
 import { TaskTerminalRegistry, planTerminal, type TerminalPlan } from "../main/terminal-config.js";
@@ -114,6 +115,7 @@ function reply(response: RpcResponse): void {
 let workspaceHost: TaskWorkspaceHost | null = null;
 let sdkTurns: SdkTurnTransport | null = null;
 let sdkClosing = false;
+let quitReceipt: Promise<ReturnType<TaskLifecycleHost["quit"]>> | undefined;
 let sdkKernelFactory: (taskId: string, taskDir: string) => PiSdkTextKernel = (id, dir) => new PiSdkTextKernel(id, dir);
 
 // [PiDock 09] (#11) cross-task real-path write coordination. One table for the
@@ -1347,10 +1349,13 @@ async function dispatchTaskOp(
         if ("error" in lifecycle) return { ok: false, error: lifecycle.error };
         sdkClosing = true;
         try {
-          await workspaceHost?.shutdownSdk();
-          await sdkTurns?.waitForTerminal();
-          sdkTurns = null;
-          const quit = lifecycle.quit();
+          quitReceipt ??= (async () => {
+            await workspaceHost?.shutdownSdk();
+            await shutdownDeadline(Promise.resolve(sdkTurns?.waitForTerminal()), 15_000, "sdk-turns-shutdown-unconfirmed");
+            sdkTurns = null;
+            return lifecycle.quit();
+          })();
+          const quit = await quitReceipt;
           return { ok: true, payload: { quit } };
         } catch (error) {
           return { ok: false, error: error instanceof Error ? error.message : String(error) };

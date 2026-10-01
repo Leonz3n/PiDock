@@ -591,6 +591,16 @@ describe("task browser origins", () => {
     expect(registry.size).toBe(2);
   });
 
+  it("retains Hosts when quit reports failures even with an empty retainedTasks list", async () => {
+    const kill = vi.fn(), dispose = vi.fn();
+    const registry = new PerTaskHostRegistry("workspace-a", async () => ({ child: { kill } as never, client: {
+      task: vi.fn(async (params) => ({ workspaceId: "workspace-a", taskId: params.taskId, op: params.op, payload: params.op === "task/quit" ? { quit: { applied: [], plan: { failures: [{ code: "unconfirmed" }], retainedTasks: [] } } } : {} })),
+      onBrowserRequest: vi.fn(), dispose,
+    } as never }), () => "/tasks/a");
+    await registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
+    const stop = createHostStopper(registry, { kind: "shell-ui", senderWebContentsId: 7 }, () => registry.disposeAll());
+    expect(await stop()).toBe(false); expect(kill).not.toHaveBeenCalled(); expect(dispose).not.toHaveBeenCalled(); expect(registry.size).toBe(1);
+  });
   it("[PiDock 14] (#17) quitAll reports a Host that fails to answer instead of dropping the task", async () => {
     const spawn = vi.fn(async () => ({
       client: {

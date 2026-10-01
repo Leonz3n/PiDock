@@ -18,6 +18,7 @@
  * worker through this class after a build.
  */
 
+import { shutdownDeadline } from "./shutdown-deadline.js";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { Worker } from "node:worker_threads";
@@ -57,6 +58,8 @@ export interface SdkContextOptions {
   spawn?: (env: Record<string, string>, workerData: unknown) => SdkContextWorkerLike;
   /** Bound on the worker's bootstrap reply; a silent worker must not hang a turn. */
   readyTimeoutMs?: number;
+  /** Each graceful/termination stage is bounded; timeout remains a failed receipt. */
+  shutdownTimeoutMs?: number;
 }
 
 interface Pending {
@@ -75,9 +78,13 @@ export class SdkContextClient implements SdkTextKernelPort {
   private sequence = 0;
   private dead: string | undefined;
   private disposed = false;
+  private closing = false;
+  private disposal: Promise<void> | undefined;
+  private termination: Promise<number> | undefined;
 
   constructor(private readonly options: SdkContextOptions) {
     validateExplicitTextProvider(options.config);
+    if (options.shutdownTimeoutMs !== undefined && (!Number.isInteger(options.shutdownTimeoutMs) || options.shutdownTimeoutMs < 10 || options.shutdownTimeoutMs > 60_000)) throw Error("invalid-shutdown-deadline");
     if (typeof options.credential !== "string" || options.credential.length < 8 || options.credential.length > 4096) {
       throw new Error("provider-not-configured");
     }
@@ -159,7 +166,7 @@ export class SdkContextClient implements SdkTextKernelPort {
    */
   private poison(code: string): void {
     this.failAll(new Error(code));
-    try { void this.worker?.terminate(); } catch { /* already exited */ }
+    void this.terminateWorker().catch(() => { /* Retained failure is consumed by dispose. */ });
   }
 
   private failAll(error: Error): void {
@@ -168,10 +175,12 @@ export class SdkContextClient implements SdkTextKernelPort {
     this.pending.clear();
   }
 
-  private async call(message: SdkContextRequestPayload, onEvent?: (event: SdkTextEvent) => void): Promise<Record<string, unknown>> {
+  private async call(message: SdkContextRequestPayload, onEvent?: (event: SdkTextEvent) => void, shutdown = false): Promise<Record<string, unknown>> {
+    if (this.closing && !shutdown) throw new Error(this.disposed ? "sdk-context-disposed" : "sdk-context-closing");
     if (this.dead) throw new Error(this.dead);
     if (this.disposed) throw new Error("sdk-context-disposed");
     await this.start();
+    if (this.closing && !shutdown) throw new Error(this.disposed ? "sdk-context-disposed" : "sdk-context-closing");
     if (this.dead) throw new Error(this.dead);
     const id = `c${++this.sequence}`;
     return new Promise<Record<string, unknown>>((resolve, reject) => {
@@ -203,15 +212,31 @@ export class SdkContextClient implements SdkTextKernelPort {
     await this.call({ op: "cancel", sessionId });
   }
 
-  /** Idempotent: a second call after a failure or an explicit dispose is a no-op. */
-  async dispose(): Promise<void> {
-    if (this.disposed) return;
-    const worker = this.worker;
-    try { if (worker && !this.dead) await this.call({ op: "dispose" }); }
-    catch { /* the context is already gone */ }
+  private terminateWorker(): Promise<number> {
+    return this.termination ??= Promise.resolve().then(() => this.worker?.terminate() ?? 0);
+  }
+
+  /** Seals synchronously; all callers share the same sticky success or failure. */
+  dispose(): Promise<void> {
+    this.closing = true;
+    return this.disposal ??= this.shutdown();
+  }
+  private async shutdown(): Promise<void> {
+    const worker = this.worker, timeout = this.options.shutdownTimeoutMs ?? 15_000;
+    let failed = false;
+    try {
+      if (worker && !this.dead) {
+        const reply = await shutdownDeadline(this.call({ op: "dispose" }, undefined, true), timeout, "sdk-context-shutdown-timeout");
+        if (reply["disposed"] !== true || Object.keys(reply).length !== 1) throw Error("sdk-context-shutdown-reply-invalid");
+      }
+    } catch { failed = true; }
     this.disposed = true;
     this.failAll(new Error("sdk-context-disposed"));
-    try { await worker?.terminate(); } catch { /* already exited */ }
+    try {
+      const code = await shutdownDeadline(this.terminateWorker(), timeout, "sdk-context-termination-timeout");
+      if (!Number.isInteger(code)) throw Error("sdk-context-termination-invalid");
+    } catch { failed = true; }
+    if (failed) throw Error("sdk-context-shutdown-unconfirmed");
   }
 }
 
