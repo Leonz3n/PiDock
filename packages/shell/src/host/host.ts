@@ -54,6 +54,7 @@ import { publicServiceStartPreview, publicServiceStatus } from "./service-public
 import { TaskServiceTopology } from "./service-topology.js";
 import { TaskProtocolBinding } from "./protocol-binding.js";
 import { shutdownDeadline } from "./shutdown-deadline.js";
+import { HostTaskAdmission } from "./host-task-admission.js";
 import { protectApplicationProfile, type TaskPathProtection } from "./protected-application-path.js";
 import { TaskWorkspaceFiles } from "./workspace-files.js";
 import { TaskTerminalRegistry, planTerminal, type TerminalPlan } from "../main/terminal-config.js";
@@ -116,6 +117,7 @@ let workspaceHost: TaskWorkspaceHost | null = null;
 let sdkTurns: SdkTurnTransport | null = null;
 let sdkClosing = false;
 let quitReceipt: Promise<ReturnType<TaskLifecycleHost["quit"]>> | undefined;
+const taskAdmission = new HostTaskAdmission();
 let sdkKernelFactory: (taskId: string, taskDir: string) => PiSdkTextKernel = (id, dir) => new PiSdkTextKernel(id, dir);
 
 // [PiDock 09] (#11) cross-task real-path write coordination. One table for the
@@ -412,7 +414,11 @@ function isMainCheckouts(value: unknown): boolean {
 let browserClient: HostBrowserClient | null = null;
 
 function browserClientFor(): HostBrowserClient {
-  if (!browserClient) browserClient = new HostBrowserClient(hostPort, boundWorkspaceId());
+  // Utility parent-port events wrap replies; the browser client consumes bare envelopes.
+  if (!browserClient) browserClient = new HostBrowserClient({
+    postMessage: (message) => hostPort.postMessage(message),
+    on: (_event, listener) => { hostPort.on("message", (event: { data: unknown }) => listener(event.data)); },
+  }, boundWorkspaceId());
   return browserClient;
 }
 
@@ -447,6 +453,15 @@ async function dispatchTaskOp(
   payload: unknown,
   /** Main-stamped sender attestation (absent on unattested routes). */
   origin?: TaskOpOrigin,
+): Promise<{ ok: true; payload: Record<string, unknown> } | { ok: false; error: string }> {
+  if (op === "task/quit") return performTaskOp(taskId, op, payload, origin);
+  if (sdkClosing && (op.startsWith("task/sdk") || op === "task/sendMessage")) return { ok: false, error: "sdk-host-closing" };
+  try { return await taskAdmission.run(() => performTaskOp(taskId, op, payload, origin)); }
+  catch (error) { return { ok: false, error: error instanceof Error ? error.message : "task-operation-failed" }; }
+}
+
+async function performTaskOp(
+  taskId: string, op: string, payload: unknown, origin?: TaskOpOrigin,
 ): Promise<{ ok: true; payload: Record<string, unknown> } | { ok: false; error: string }> {
   const host = taskHostFor(taskId);
   if ("error" in host) return { ok: false, error: host.error };
@@ -1347,6 +1362,7 @@ async function dispatchTaskOp(
         if (!caller.ok) return { ok: false, error: caller.error };
         const lifecycle = lifecycleFor(taskId);
         if ("error" in lifecycle) return { ok: false, error: lifecycle.error };
+        taskAdmission.seal();
         sdkClosing = true;
         sdkTurns?.seal();
         try {
@@ -1354,6 +1370,7 @@ async function dispatchTaskOp(
             await workspaceHost?.shutdownSdk();
             await shutdownDeadline(Promise.resolve(sdkTurns?.waitForTerminal()), 15_000, "sdk-turns-shutdown-unconfirmed");
             sdkTurns = null;
+            await shutdownDeadline(taskAdmission.drain(), 15_000, "task-operations-shutdown-unconfirmed");
             return lifecycle.quit();
           })();
           const quit = await quitReceipt;

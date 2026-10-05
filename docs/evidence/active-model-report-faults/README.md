@@ -1,5 +1,9 @@
 # Active Model Shutdown Report Faults
 
+Later [installed task RPC admission evidence](../host-task-admission/README.md)
+seals non-SDK dispatch and waits for accepted task requests before lifecycle
+quit. Complete tool/native inventory remains a separate missing gate.
+
 Follow-up to [installed SDK admission/quit](../sdk-turn-admission-quit/README.md)
 and [main release/native exit](../host-release-native-exit/README.md), for
 [issue #7](https://github.com/Leonz3n/PiDock/issues/7). This joins active real SDK
