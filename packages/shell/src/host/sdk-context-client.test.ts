@@ -58,7 +58,8 @@ function scripted(options: { failBootstrap?: string; malformedOpen?: boolean; on
     on(event: "message" | "error" | "exit", listener: never) { (listeners[event] as unknown[]).push(listener); if (event === "message") boot(); return worker; },
     terminate() { return Promise.resolve(0); },
   };
-  return { worker, spawned, send };
+  return { worker, spawned, send, exit: (code: number) => { for (const listener of listeners.exit) listener(code); },
+    error: (error: Error) => { for (const listener of listeners.error) listener(error); } };
 }
 
 it("dispatches a credential-free environment and passes the credential only as worker input", async () => {
@@ -148,7 +149,7 @@ it("poisons an unusable protocol instead of hanging the caller", async () => {
   });
   await expect(client.open("main")).rejects.toThrow("sdk-context-protocol-invalid");
   await expect(client.prompt("main", "hello")).rejects.toThrow("sdk-context-protocol-invalid");
-  await client.dispose();
+  await expect(client.dispose()).rejects.toThrow("sdk-context-shutdown-unconfirmed");
 
   // A worker that never announces itself must not hold a turn open forever.
   const silent = scripted({ silentBootstrap: true });
@@ -159,10 +160,29 @@ it("poisons an unusable protocol instead of hanging the caller", async () => {
   await expect(waiting.open("main")).rejects.toThrow("sdk-context-bootstrap-timeout");
   await expect(waiting.cancel("main")).rejects.toThrow("sdk-context-bootstrap-timeout");
   await waiting.dispose();
-  // Dispose is idempotent.
-  await expect(client.dispose()).resolves.toBeUndefined();
+  // The poisoned context retains its same failed disposal receipt.
+  await expect(client.dispose()).rejects.toThrow("sdk-context-shutdown-unconfirmed");
 });
 
+it.each(["error", "exit", "protocol"])("retains active-context %s uncertainty despite confirmed termination", async (fault) => {
+  let prompting = false;
+  const probe = scripted({ onPrompt: () => { prompting = true; } }), terminate = vi.fn(async () => 0); probe.worker.terminate = terminate;
+  const client = new SdkContextClient({ task: { taskId: "task-fault", taskDir: task("task-fault") }, config, credential: "synthetic-key", spawn: () => probe.worker });
+  await client.open("main"); const prompt = client.prompt("main", "active"), refused = expect(prompt).rejects.toThrow();
+  await vi.waitFor(() => expect(prompting).toBe(true), { interval: 1 });
+  if (fault === "error") probe.error(Error("synthetic-private-fault"));
+  else if (fault === "exit") probe.exit(1);
+  else probe.send({ id: "foreign", kind: "reply", ok: true, payload: {} });
+  await refused;
+  const closing = client.dispose(); await expect(closing).rejects.toThrow(/^sdk-context-shutdown-unconfirmed$/);
+  expect(client.dispose()).toBe(closing); await expect(client.dispose()).rejects.toThrow(/^sdk-context-shutdown-unconfirmed$/);
+  expect(terminate).toHaveBeenCalledTimes(1);
+});
+it("retains an idle dispatched-context exit as unconfirmed shutdown", async () => {
+  const probe = scripted(), client = new SdkContextClient({ task: { taskId: "task-fault", taskDir: task("task-fault") }, config, credential: "synthetic-key", spawn: () => probe.worker });
+  await client.open("main"); probe.exit(0);
+  await expect(client.dispose()).rejects.toThrow(/^sdk-context-shutdown-unconfirmed$/);
+});
 it("shares a sticky dispose receipt and seals prompt/cancel immediately", async () => {
   const probe = scripted(), terminate = vi.fn(async () => 0); probe.worker.terminate = terminate;
   const client = new SdkContextClient({ task: { taskId: "task-close", taskDir: task("task-close") }, config, credential: "synthetic-key", spawn: () => probe.worker });

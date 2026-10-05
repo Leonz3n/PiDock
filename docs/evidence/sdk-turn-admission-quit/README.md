@@ -1,5 +1,10 @@
 # Installed SDK Turn Admission And Active Quit
 
+Later [active model/report fault evidence](../active-model-report-faults/README.md)
+joins real model turns to experimental service drain/report/native release,
+including abnormal SDK termination and actual turn-directory permission failure.
+Installed combined service/report/release adapters remain missing.
+
 Follow-up to [main release/native exit](../host-release-native-exit/README.md),
 for [issue #7](https://github.com/Leonz3n/PiDock/issues/7). This slice changes the
 installed Host's existing SDK quit path without enabling service execution,
