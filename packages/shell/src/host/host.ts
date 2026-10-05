@@ -1348,6 +1348,7 @@ async function dispatchTaskOp(
         const lifecycle = lifecycleFor(taskId);
         if ("error" in lifecycle) return { ok: false, error: lifecycle.error };
         sdkClosing = true;
+        sdkTurns?.seal();
         try {
           quitReceipt ??= (async () => {
             await workspaceHost?.shutdownSdk();

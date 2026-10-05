@@ -35,6 +35,9 @@ function syncDirectory(dir: string): void {
 export class SdkTurnTransport {
   private readonly active = new Map<string, { record: TurnRecord; run: Promise<void> }>();
   private starting = false;
+  private opening: Promise<void> | undefined;
+  private closing = false;
+  private acceptanceUncertain = false;
   private uncommitted: TurnRecord | null = null;
   private readonly root: string;
 
@@ -100,7 +103,11 @@ export class SdkTurnTransport {
     return { ...projection, pending, interrupted: projection.interrupted && !pending };
   }
 
+  seal(): void { this.closing = true; }
+
   async start(sessionId: string, requestId: string, text: string, deliver: (event: SdkTextEvent) => void, settled?: (turn: TurnRecord) => void): Promise<TurnRecord> {
+    if (this.closing) throw new Error("sdk-host-closing");
+    if (this.acceptanceUncertain) throw new Error("sdk-turn-journal-uncommitted");
     id(sessionId);
     id(requestId);
     if (typeof text !== "string" || !text.trim() || Buffer.byteLength(text, "utf8") > 16_384) throw new Error("invalid-prompt");
@@ -116,11 +123,15 @@ export class SdkTurnTransport {
     this.starting = true;
     try {
       // A configured model and exact SDK session must exist before acceptance.
-      await this.kernel.open(sessionId);
+      const opening = this.kernel.open(sessionId);
+      // Opening is pre-acceptance work, but shutdown must wait for its refusal.
+      this.opening = opening.then(() => undefined, () => undefined);
+      await opening;
+      if (this.closing) throw new Error("sdk-host-closing");
     } catch (error) {
       this.starting = false;
       throw error;
-    }
+    } finally { this.opening = undefined; }
     const record: TurnRecord = { taskId: this.taskId, sessionId, requestId, promptFingerprint, turnId: randomUUID(), state: "accepted", lastSequence: 0, needsResync: false };
     try {
       const file = this.file(sessionId, requestId);
@@ -128,12 +139,13 @@ export class SdkTurnTransport {
       this.syncJournalDirectory(join(this.root, sessionId));
     } catch (error) {
       this.starting = false;
+      this.acceptanceUncertain = true;
       // A readable record reserves the ID, but its directory sync failed and
       // no prompt was started. Never acknowledge it as an accepted turn.
       if (this.read(sessionId, requestId)) throw new Error("sdk-journal-sync-failed", { cause: error });
       throw error;
     }
-    const run = (async () => {
+    const run = Promise.resolve().then(async () => {
       let result: SdkTextResult;
       try {
         result = await this.kernel.prompt(sessionId, text, (event) => {
@@ -160,7 +172,7 @@ export class SdkTurnTransport {
         // No later model turn may start until this exact terminal record is durable.
         this.uncommitted = { ...record };
       } finally { this.active.delete(record.turnId); }
-    })();
+    });
     this.active.set(record.turnId, { record, run });
     this.starting = false;
     return { ...record };
@@ -176,13 +188,14 @@ export class SdkTurnTransport {
   }
 
   async waitForTerminal(): Promise<void> {
+    await this.opening;
     await Promise.all([...this.active.values()].map(({ run }) => run));
     this.reconcileTerminal();
     this.assertTerminalCommitted();
   }
 
   assertTerminalCommitted(): void {
-    if (this.active.size || this.starting || this.uncommitted) throw new Error("sdk-turn-journal-uncommitted");
+    if (this.active.size || this.starting || this.uncommitted || this.acceptanceUncertain) throw new Error("sdk-turn-journal-uncommitted");
   }
 
   async cancel(sessionId: string, turnId: string): Promise<TurnRecord> {
