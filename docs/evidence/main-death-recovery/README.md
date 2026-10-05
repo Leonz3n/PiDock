@@ -5,6 +5,12 @@ This slice adds actual Electron main SIGKILL/restart evidence. It changes only
 explicit test scripts and evidence, not production recovery or lock repair.
 Production service control and installed report integration remain unavailable.
 
+Follow-up: [presence witnesses](../recovery-presence-witnesses/README.md) now
+refuse loss of the recovery directory or both task journal copies when the
+sibling witness survives. Its main-death regression also snapshots that witness.
+Complete profile/witness deletion, coordinated rollback and trusted stale-lock
+repair remain unimplemented; the observations below are the original slice.
+
 ## Observed Contract
 
 A surviving Node test harness starts an actual separate Electron main, which
