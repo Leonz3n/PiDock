@@ -119,6 +119,10 @@ not a new actual main-crash/restart test of this report store.
 
 ## Failure Record And Remaining Gates
 
+Later [actual main death evidence](../main-death-recovery/README.md) demonstrates
+running and held-report main SIGKILL plus refused restart under the unchanged
+writer lock. It does not implement stale-lock repair or installed recovery.
+
 No red implementation test or actual report probe occurred in this slice. The
 optional baseline typecheck remains red as described above; its result was not
 reclassified. Earlier failure history is retained in the linked documents.
