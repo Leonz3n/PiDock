@@ -119,7 +119,10 @@ export class ExperimentalServiceRecoveryStore {
         !sameFile(current, this.directoryIdentity) || !sameFile(fstatSync(this.directoryFd, { bigint: true }), current)) fail();
     const lock = lstatSync(join(this.directory, "writer.lock"), { bigint: true });
     if (!lock.isFile() || lock.nlink !== 1n || lock.uid !== this.uid || (lock.mode & 0o077n) !== 0n || !sameFile(lock, this.lockIdentity) || !sameFile(lock, fstatSync(this.writerFd, { bigint: true }))) fail();
-    if (checkWitness && this.bounded(this.witnessPath) !== this.witnessBody) { this.fenced = true; fail(); }
+    if (checkWitness) {
+      try { if (this.bounded(this.witnessPath) !== this.witnessBody) fail(); }
+      catch { this.fenced = true; fail(); }
+    }
   }
   private reserveTask(slot: Slot) {
     const key = digest(slot.taskId);
@@ -143,7 +146,7 @@ export class ExperimentalServiceRecoveryStore {
     } catch { this.fenced = true; throw Error("service-recovery-write-uncertain"); }
     finally {
       if (fd !== undefined) closeSync(fd);
-      try { if (stat && sameFile(stat, lstatSync(path, { bigint: true }))) unlinkSync(path); } catch { /* Preserve foreign paths. */ }
+      try { this.checkDirectory(false); if (stat && sameFile(stat, lstatSync(path, { bigint: true }))) unlinkSync(path); } catch { /* Preserve foreign or uncertain paths. */ }
     }
   }
   private taskScope(taskId: string) {

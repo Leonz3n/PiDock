@@ -41,7 +41,7 @@ for (const mode of ["running", "held-report"]) {
     assert.equal(barrier.mainPid, first.child.pid); assert.equal(barrier.mode, mode); assert.equal(barrier.releaseConfirmed, false);
     tracked.push(barrier.hostPid, ...barrier.resourcePids); assert.equal(new Set(tracked).size, 4); assert.ok(tracked.every((pid) => Number.isSafeInteger(pid) && pid > 0 && pid !== process.pid));
     const directory = join(home, "profile", "service-execution-recovery"), primary = join(directory, `${createHash("sha256").update("task-abcdef12").digest("hex")}.json`), lock = join(directory, "writer.lock");
-    const files = [lock, primary, `${primary}.bak`], before = files.map(snapshot), document = JSON.parse(before[1].body);
+    const files = [lock, primary, `${primary}.bak`, join(home, "profile", "service-execution-recovery.witness.json")], before = files.map(snapshot), document = JSON.parse(before[1].body);
     assert.equal(document.entries.length, 1); assert.equal(document.entries[0].state, mode === "running" ? "running" : "stopped");
     if (mode === "held-report") assert.equal(document.shutdown.hostEpoch, barrier.epoch); else assert.equal(document.shutdown, undefined);
     // A live competing Electron main must not steal the writer either.
@@ -57,7 +57,7 @@ for (const mode of ["running", "held-report"]) {
     await delay(500); const survivors = tracked.filter(alive);
     for (const value of ["synthetic-main-death-private", "synthetic-shutdown-credential"]) { assert.ok(!runs.some((h) => h.output.includes(value))); assert.ok(!before.some((row) => row.body.includes(value))); }
     assert.ok(!before.some((row) => row.body.includes(home)));
-    reports.push({ mode, versions: barrier.versions, mainSignal: first.signal, liveContenderDenied: true, restartDenied: true, writerAndJournalUnchanged: true, oldReportAdopted: false, nativeObservationAfterRestart: { hostAlive: survivors.includes(barrier.hostPid), resourceSurvivors: barrier.resourcePids.filter((pid) => survivors.includes(pid)).length, survivorCount: survivors.length, total: tracked.length }, privateValuesExcluded: true });
+    reports.push({ mode, versions: barrier.versions, mainSignal: first.signal, liveContenderDenied: true, restartDenied: true, writerAndJournalUnchanged: true, presenceWitnessUnchanged: true, oldReportAdopted: false, nativeObservationAfterRestart: { hostAlive: survivors.includes(barrier.hostPid), resourceSurvivors: barrier.resourcePids.filter((pid) => survivors.includes(pid)).length, survivorCount: survivors.length, total: tracked.length }, privateValuesExcluded: true });
   } catch (error) {
     console.error("MAIN_DEATH_DEBUG", JSON.stringify(runs.map((h) => ({ exited: h.exited, code: h.code, signal: h.signal, output: h.output.slice(-2000) }))));
     throw error;
