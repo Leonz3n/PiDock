@@ -79,6 +79,7 @@ export class SdkContextClient implements SdkTextKernelPort {
   private dead: string | undefined;
   private disposed = false;
   private closing = false;
+  private contextDispatched = false;
   private disposal: Promise<void> | undefined;
   private termination: Promise<number> | undefined;
 
@@ -182,6 +183,7 @@ export class SdkContextClient implements SdkTextKernelPort {
     await this.start();
     if (this.closing && !shutdown) throw new Error(this.disposed ? "sdk-context-disposed" : "sdk-context-closing");
     if (this.dead) throw new Error(this.dead);
+    if (!shutdown) this.contextDispatched = true;
     const id = `c${++this.sequence}`;
     return new Promise<Record<string, unknown>>((resolve, reject) => {
       this.pending.set(id, { resolve, reject, ...(onEvent ? { onEvent } : {}) });
@@ -224,7 +226,8 @@ export class SdkContextClient implements SdkTextKernelPort {
   }
   private async shutdown(): Promise<void> {
     const worker = this.worker, timeout = this.options.shutdownTimeoutMs ?? 15_000;
-    let failed = false;
+    // A dispatched context that died cannot supply a graceful SDK drain receipt.
+    let failed = this.contextDispatched && this.dead !== undefined;
     try {
       if (worker && !this.dead) {
         const reply = await shutdownDeadline(this.call({ op: "dispose" }, undefined, true), timeout, "sdk-context-shutdown-timeout");
