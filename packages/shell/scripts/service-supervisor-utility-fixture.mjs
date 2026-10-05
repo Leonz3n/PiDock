@@ -13,7 +13,7 @@ import { launchSupervisorExperiment } from "../dist/host/service-supervisor-expe
 const port = process.parentPort;
 if (!port) throw Error("utility fixture requires parent port");
 let session, execution, channel, abort, releaseReady, shutdown;
-let started = false, handling = false;
+let started = false, handling = false, closeSucceeded = false;
 const send = (message) => { try { port.postMessage(message); } catch { /* Dead test parent receives no fabricated receipt. */ } };
 async function bindExecution(lifecycle, start) {
   channel = new PiSessionChannel({ taskId: lifecycle.taskId, taskDir: lifecycle.taskDir, sessionId: "main", permission: "auto", providerId: "local", model: "test" });
@@ -81,6 +81,7 @@ port.on("message", ({ data }) => {
       abort.abort(); releaseReady();
     } else if (data.op === "close" && execution) {
       const result = await (shutdown ? shutdown.close() : execution.close());
+      closeSucceeded = shutdown !== undefined && result.ok === true;
       send({ event: "close-result", result, snapshot: execution.snapshot() });
     } else if (data.op === "reopen" && !started) {
       started = true;
@@ -93,6 +94,8 @@ port.on("message", ({ data }) => {
       await session.stop();
     } else if (data.op === "disconnect" && session) {
       await session.disconnect();
+    } else if (data.op === "release" && closeSucceeded) {
+      process.exit(0);
     } else if (data.op === "exit" && session) {
       process.exit(0);
     } else send({ event: "failed", reason: "invalid-test-operation" });

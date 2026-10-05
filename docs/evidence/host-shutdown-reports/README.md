@@ -1,5 +1,9 @@
 # Main-Owned Durable Shutdown Report Experiment
 
+Later [main release/native exit evidence](../host-release-native-exit/README.md)
+adds a bounded experimental consumer that waits for every actual native exit
+before writer disposal. Installed release/inventory adapters remain missing.
+
 Follow-up to [SDK shutdown preparation](../host-shutdown-preparation/README.md).
 This slice joins the experimental main store, current Host lease, bounded parent
 acknowledgement, real SDK worker disposal and native service controller drain.

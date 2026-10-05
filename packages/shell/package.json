@@ -23,6 +23,7 @@
     "smoke:recovery": "electron scripts/electron-service-recovery-smoke.mjs",
     "smoke:async-checkpoint": "electron scripts/electron-service-async-checkpoint-smoke.mjs",
     "smoke:shutdown-report": "electron scripts/electron-host-shutdown-report-smoke.mjs",
+    "smoke:host-release": "electron scripts/electron-host-release-smoke.mjs",
     "smoke:main-death": "node scripts/main-death-recovery-smoke.mjs",
     "smoke:recovery-presence": "node scripts/recovery-presence-smoke.mjs",
     "startup": "electron . -- --print-startup",
