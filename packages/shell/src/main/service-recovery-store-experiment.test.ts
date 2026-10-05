@@ -45,6 +45,78 @@ function fixture() {
 const checkpoint = (state: ServiceExecutionCheckpoint["state"] = "running", id = serviceId): ServiceExecutionCheckpoint => ({ schemaVersion: 1, taskId, serviceId: id, state, ownerSessionId: state === "stopped" || state === "exited" ? null : "main" });
 
 describe.skipIf(process.platform === "win32")("main-only recovery store and Host instance leases", () => {
+  it("refuses both journal copies deleted across a clean writer restart", () => {
+    const f = fixture(), first = f.open(), h = host();
+    first.acquire(taskId, h.owner).port(h.owner.sender, serviceId).write(checkpoint());
+    h.exit(); first.dispose(); unlinkSync(f.file); unlinkSync(`${f.file}.bak`);
+    const next = f.open();
+    expect(() => next.acquire(taskId, host().owner)).toThrow("service-recovery-primary-missing");
+    expect(existsSync(f.file)).toBe(false); expect(existsSync(`${f.file}.bak`)).toBe(false);
+  });
+  it("refuses a deleted recovery directory without recreating it", () => {
+    const f = fixture(), first = f.open(); first.dispose();
+    rmSync(f.directory, { recursive: true });
+    expect(() => f.open()).toThrow("service-recovery-unavailable");
+    expect(existsSync(f.directory)).toBe(false);
+  });
+  it("does not silently enroll a legacy directory or a deleted profile witness", () => {
+    const legacy = fixture(); mkdirSync(legacy.directory, { mode: 0o700 });
+    expect(() => legacy.open()).toThrow("service-recovery-unavailable");
+    expect(readdirSync(legacy.directory)).toEqual([]);
+    const f = fixture(), first = f.open(); first.dispose();
+    unlinkSync(join(f.profile, "service-execution-recovery.witness.json"));
+    expect(() => f.open()).toThrow("service-recovery-unavailable");
+    expect(readdirSync(f.directory)).toEqual([]);
+  });
+  it("persists private path-free task witnesses before the first journal publication", () => {
+    const f = fixture(), store = f.open(), h = host(), port = store.acquire(taskId, h.owner).port(h.owner.sender, serviceId);
+    const path = join(f.profile, "service-execution-recovery.witness.json"), initial = readFileSync(path, "utf8");
+    expect(JSON.parse(initial).tasks).toEqual({});
+    let seen = false;
+    vi.mocked(fsyncSync).mockImplementation((fd) => {
+      actualFs.fsyncSync(fd);
+      if (!existsSync(f.file) && Object.keys(JSON.parse(readFileSync(path, "utf8")).tasks).length) seen = true;
+    });
+    port.write(checkpoint());
+    expect(seen).toBe(true); expect(statSync(path).mode & 0o777).toBe(0o600);
+    const body = readFileSync(path, "utf8"), witness = JSON.parse(body);
+    expect(Object.keys(witness.tasks)).toEqual([createHash("sha256").update(taskId).digest("hex")]);
+    expect(body).not.toContain(f.home); expect(body).not.toContain(taskId); expect(body).not.toContain("main");
+    h.exit(); store.dispose(); expect(readFileSync(path, "utf8")).toBe(body);
+  });
+  it("fences partial first publication without treating its durable reservation as fresh", () => {
+    const f = fixture(), store = f.open(), h = host(), port = store.acquire(taskId, h.owner).port(h.owner.sender, serviceId);
+    const path = join(f.profile, "service-execution-recovery.witness.json");
+    vi.mocked(fsyncSync).mockImplementation((fd) => {
+      actualFs.fsyncSync(fd);
+      if (fstatSync(fd).isDirectory() && Object.keys(JSON.parse(readFileSync(path, "utf8")).tasks).length) throw Error("synthetic-private-fsync");
+    });
+    expect(() => port.write(checkpoint())).toThrow("service-recovery-write-uncertain");
+    expect(() => port.write(checkpoint())).toThrow("service-recovery-lease-stale");
+    vi.mocked(fsyncSync).mockImplementation(actualFs.fsyncSync);
+    expect(existsSync(f.file)).toBe(false);
+    expect(Object.keys(JSON.parse(readFileSync(path, "utf8")).tasks)).toHaveLength(1);
+  });
+  it("rejects linked, hardlinked, corrupt or public witnesses without replacing them", () => {
+    for (const kind of ["symlink", "hardlink", "corrupt", "public"] as const) {
+      const f = fixture(), first = f.open(); first.dispose();
+      const path = join(f.profile, "service-execution-recovery.witness.json");
+      if (kind === "symlink" || kind === "hardlink") {
+        const outside = join(f.home, "outside-witness"); renameSync(path, outside);
+        if (kind === "symlink") symlinkSync(outside, path); else linkSync(outside, path);
+      } else if (kind === "corrupt") writeFileSync(path, "{"); else chmodSync(path, 0o644);
+      expect(() => f.open()).toThrow("service-recovery-unavailable");
+      expect(existsSync(join(f.directory, "writer.lock"))).toBe(false);
+    }
+  });
+  it("rejects valid out-of-band witness changes before journal writes", () => {
+    const f = fixture(), store = f.open(), h = host(), port = store.acquire(taskId, h.owner).port(h.owner.sender, serviceId);
+    port.write(checkpoint()); const before = readFileSync(f.file, "utf8");
+    const path = join(f.profile, "service-execution-recovery.witness.json");
+    writeFileSync(path, readFileSync(path, "utf8") + "\n");
+    expect(() => port.read()).toThrow(); expect(() => port.write(checkpoint("stopped"))).toThrow();
+    expect(readFileSync(f.file, "utf8")).toBe(before);
+  });
   it("persists bounded minimal records outside the task with private permissions and durable backup", () => {
     const f = fixture(), store = f.open(), h = host(), lease = store.acquire(taskId, h.owner), port = lease.port(h.owner.sender, serviceId);
     expect(port.read()).toBeUndefined(); port.write(checkpoint());

@@ -11,6 +11,7 @@ const ID = /^[A-Za-z0-9_-]{1,128}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const digest = (text: string) => createHash("sha256").update(text).digest("hex");
 function fail(code = "service-recovery-unavailable"): never { throw Error(code); }
+interface PresenceWitness { schemaVersion: 1; profileDigest: string; directoryDevice: string; directoryInode: string; tasks: Record<string, string> }
 interface Document { schemaVersion: 1; taskId: string; identityDigest: string; hostEpoch: string; entries: ServiceExecutionCheckpoint[]; shutdown?: ExperimentalShutdownReport }
 export interface CheckpointHostInstance {
   /** Main-held actual child object; never a JSON actor id or PID. */
@@ -45,45 +46,105 @@ export class ExperimentalServiceRecoveryStore {
   private readonly directoryIdentity: BigIntStats;
   private readonly lockIdentity: BigIntStats;
   private readonly writerFd: number;
+  private readonly profileFd: number;
+  private readonly witnessPath: string;
+  private witness!: PresenceWitness;
+  private witnessBody: string | null = null;
+  private fenced = false;
   private readonly active = new Map<string, Slot>();
   private disposed = false;
   private readonly uid: bigint;
   constructor(profile: string, private readonly authority: ServiceCatalogAuthority, private readonly serviceIds: (taskId: string) => readonly string[]) {
     if (process.platform === "win32" || !process.geteuid || !isAbsolute(profile)) fail();
     this.uid = BigInt(process.geteuid());
-    let directoryFd: number | undefined, lockFd: number | undefined, lockIdentity: BigIntStats | undefined, directory: string | undefined;
+    let directoryFd: number | undefined, profileFd: number | undefined, lockFd: number | undefined, lockIdentity: BigIntStats | undefined, directory: string | undefined;
     try {
       const profileStat = lstatSync(profile, { bigint: true });
       if (!profileStat.isDirectory() || profileStat.uid !== this.uid || (profileStat.mode & 0o022n) !== 0n) fail();
       this.profilePath = realpathSync(profile); this.profileIdentity = profileStat;
+      profileFd = openSync(this.profilePath, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+      if (!sameFile(fstatSync(profileFd, { bigint: true }), profileStat)) fail();
+      this.profileFd = profileFd;
+      this.witnessPath = join(this.profilePath, "service-execution-recovery.witness.json");
+      const witnessBody = this.bounded(this.witnessPath);
       this.directory = directory = join(this.profilePath, "service-execution-recovery");
-      try { mkdirSync(this.directory, { mode: 0o700 }); }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+      // Missing witnesses on existing directories require explicit migration, never implicit enrollment.
+      if (witnessBody === null) { mkdirSync(this.directory, { mode: 0o700 }); fsyncSync(profileFd); }
       directoryFd = openSync(this.directory, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
       const stat = fstatSync(directoryFd, { bigint: true });
       if (!stat.isDirectory() || stat.uid !== this.uid || (stat.mode & 0o077n) !== 0n || !sameFile(stat, lstatSync(this.directory, { bigint: true }))) fail();
+      this.directoryFd = directoryFd; this.directoryIdentity = stat;
+      const profileDigest = digest(JSON.stringify([profileStat.dev.toString(), profileStat.ino.toString()]));
+      this.witness = witnessBody === null ? { schemaVersion: 1, profileDigest, directoryDevice: stat.dev.toString(), directoryInode: stat.ino.toString(), tasks: {} } : this.parseWitness(witnessBody);
+      if (this.witness.profileDigest !== profileDigest || this.witness.directoryDevice !== stat.dev.toString() || this.witness.directoryInode !== stat.ino.toString()) fail();
       lockFd = openSync(join(this.directory, "writer.lock"), constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
       lockIdentity = fstatSync(lockFd, { bigint: true });
       writeFileSync(lockFd, randomUUID()); fsyncSync(lockFd); fsyncSync(directoryFd);
-      this.directoryFd = directoryFd; this.directoryIdentity = stat; this.lockIdentity = lockIdentity;
-      this.writerFd = lockFd; this.checkDirectory(); lockFd = undefined;
+      this.lockIdentity = lockIdentity; this.writerFd = lockFd;
+      if (witnessBody === null) {
+        const fd = openSync(this.witnessPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+        try { writeFileSync(fd, JSON.stringify(this.witness)); fsyncSync(fd); } finally { closeSync(fd); }
+        fsyncSync(profileFd);
+        this.witnessBody = JSON.stringify(this.witness);
+      } else this.witnessBody = witnessBody;
+      this.checkDirectory(); lockFd = undefined;
     } catch {
       if (lockIdentity && directory) {
         try { const path = join(directory, "writer.lock"); if (sameFile(lockIdentity, lstatSync(path, { bigint: true }))) unlinkSync(path); } catch { /* Never remove an unknown lock. */ }
       }
       if (directoryFd !== undefined) closeSync(directoryFd);
+      if (profileFd !== undefined) closeSync(profileFd);
       fail();
     } finally { if (lockFd !== undefined) closeSync(lockFd); }
   }
-  private checkDirectory() {
-    if (this.disposed) fail();
+  private parseWitness(body: string): PresenceWitness {
+    const value: unknown = JSON.parse(body);
+    if (!value || typeof value !== "object" || Array.isArray(value)) fail();
+    const row = value as Record<string, unknown>;
+    if (Object.keys(row).sort().join(",") !== "directoryDevice,directoryInode,profileDigest,schemaVersion,tasks" || row.schemaVersion !== 1 ||
+        typeof row.profileDigest !== "string" || !/^[a-f0-9]{64}$/.test(row.profileDigest) ||
+        typeof row.directoryDevice !== "string" || !/^[0-9]{1,32}$/.test(row.directoryDevice) ||
+        typeof row.directoryInode !== "string" || !/^[0-9]{1,32}$/.test(row.directoryInode) ||
+        !row.tasks || typeof row.tasks !== "object" || Array.isArray(row.tasks)) fail();
+    const tasks = row.tasks as Record<string, unknown>;
+    if (Object.keys(tasks).length > 400 || Object.entries(tasks).some(([key, val]) => !/^[a-f0-9]{64}$/.test(key) || typeof val !== "string" || !/^[a-f0-9]{64}$/.test(val))) fail();
+    return value as PresenceWitness;
+  }
+  private checkDirectory(checkWitness = true) {
+    if (this.disposed || this.fenced) fail();
     const profile = lstatSync(this.profilePath, { bigint: true });
-    if (!profile.isDirectory() || profile.uid !== this.uid || (profile.mode & 0o022n) !== 0n || !sameFile(profile, this.profileIdentity)) fail();
+    if (!profile.isDirectory() || profile.uid !== this.uid || (profile.mode & 0o022n) !== 0n || !sameFile(profile, this.profileIdentity) || !sameFile(profile, fstatSync(this.profileFd, { bigint: true }))) fail();
     const current = lstatSync(this.directory, { bigint: true });
     if (!current.isDirectory() || current.uid !== this.uid || (current.mode & 0o077n) !== 0n ||
         !sameFile(current, this.directoryIdentity) || !sameFile(fstatSync(this.directoryFd, { bigint: true }), current)) fail();
     const lock = lstatSync(join(this.directory, "writer.lock"), { bigint: true });
     if (!lock.isFile() || lock.nlink !== 1n || lock.uid !== this.uid || (lock.mode & 0o077n) !== 0n || !sameFile(lock, this.lockIdentity) || !sameFile(lock, fstatSync(this.writerFd, { bigint: true }))) fail();
+    if (checkWitness && this.bounded(this.witnessPath) !== this.witnessBody) { this.fenced = true; fail(); }
+  }
+  private reserveTask(slot: Slot) {
+    const key = digest(slot.taskId);
+    if (this.witness.tasks[key] === slot.identityDigest) return;
+    if (this.witness.tasks[key] !== undefined || Object.keys(this.witness.tasks).length >= 400) fail();
+    const witness: PresenceWitness = { ...this.witness, tasks: { ...this.witness.tasks, [key]: slot.identityDigest } }, body = JSON.stringify(witness);
+    if (Buffer.byteLength(body) > MAX_BYTES) fail();
+    const path = `${this.witnessPath}.${randomUUID()}.tmp`;
+    let fd: number | undefined, stat: BigIntStats | undefined;
+    try {
+      this.checkDirectory();
+      fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+      stat = fstatSync(fd, { bigint: true }); writeFileSync(fd, body); fsyncSync(fd); closeSync(fd); fd = undefined;
+      this.checkDirectory();
+      const scope = this.taskScope(slot.taskId);
+      if (scope.identityDigest !== slot.identityDigest || slot.revoked || slot.owner.hasExited()) fail();
+      renameSync(path, this.witnessPath); fsyncSync(this.profileFd);
+      this.checkDirectory(false);
+      if (this.bounded(this.witnessPath) !== body) fail();
+      this.witness = witness; this.witnessBody = body;
+    } catch { this.fenced = true; throw Error("service-recovery-write-uncertain"); }
+    finally {
+      if (fd !== undefined) closeSync(fd);
+      try { if (stat && sameFile(stat, lstatSync(path, { bigint: true }))) unlinkSync(path); } catch { /* Preserve foreign paths. */ }
+    }
   }
   private taskScope(taskId: string) {
     if (!ID.test(taskId)) fail();
@@ -131,11 +192,14 @@ export class ExperimentalServiceRecoveryStore {
     if (shutdown && entries.some((entry) => (entry.state !== "stopped" && entry.state !== "exited") || entry.ownerSessionId !== null)) fail();
     return { schemaVersion: 1, taskId, identityDigest, hostEpoch: row.hostEpoch, entries, ...(shutdown ? { shutdown } : {}) };
   }
-  private load(taskId: string, identityDigest: string) {
+  private load(taskId: string, identityDigest: string, initializing = false) {
     this.checkDirectory();
     const file = this.file(taskId), body = this.bounded(file), backup = this.bounded(`${file}.bak`);
     if (backup !== null) this.parse(backup, taskId, identityDigest);
-    if (body === null && backup !== null) fail("service-recovery-primary-missing");
+    const presence = this.witness.tasks[digest(taskId)];
+    if (presence !== undefined && presence !== identityDigest) fail();
+    if (body === null && (backup !== null || (presence !== undefined && !initializing))) fail("service-recovery-primary-missing");
+    if (body !== null && presence === undefined) fail();
     const document = body === null ? null : this.parse(body, taskId, identityDigest);
     this.checkDirectory();
     return { document, body, stamp: body === null ? null : digest(body) };
@@ -231,10 +295,15 @@ export class ExperimentalServiceRecoveryStore {
     };
     try {
       const temp = stage("tmp", body), backup = stage("bak.tmp", prior ?? body);
+      const initializing = this.witness.tasks[digest(slot.taskId)] === undefined;
       if (this.load(slot.taskId, slot.identityDigest).stamp !== slot.stamp) fail();
       const scope = this.taskScope(slot.taskId);
       if (serviceId === undefined) this.closeScope(slot);
       if (scope.identityDigest !== slot.identityDigest || (serviceId !== undefined && !scope.services.has(serviceId)) || slot.owner.hasExited() || slot.revoked) fail();
+      this.reserveTask(slot);
+      if (this.load(slot.taskId, slot.identityDigest, initializing).stamp !== slot.stamp || slot.owner.hasExited() || slot.revoked) fail();
+      const current = this.taskScope(slot.taskId);
+      if (current.identityDigest !== slot.identityDigest || (serviceId !== undefined && !current.services.has(serviceId))) fail();
       renameSync(backup, `${file}.bak`); renameSync(temp, file);
       fsyncSync(this.directoryFd); this.checkDirectory();
       if (this.bounded(file) !== body || this.bounded(`${file}.bak`) !== (prior ?? body)) fail();
@@ -251,7 +320,7 @@ export class ExperimentalServiceRecoveryStore {
       if (this.active.size) fail("service-recovery-hosts-active");
       this.checkDirectory(); unlinkSync(join(this.directory, "writer.lock")); this.disposed = true;
       try { fsyncSync(this.directoryFd); }
-      finally { closeSync(this.writerFd); closeSync(this.directoryFd); }
+      finally { closeSync(this.writerFd); closeSync(this.directoryFd); closeSync(this.profileFd); }
     } catch (error) { this.sanitize(error); }
   }
   private sanitize(error: unknown): never {
