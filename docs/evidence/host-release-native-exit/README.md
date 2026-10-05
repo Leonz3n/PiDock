@@ -1,5 +1,10 @@
 # Main Release And Native Exit Experiment
 
+Later [SDK admission/active quit evidence](../sdk-turn-admission-quit/README.md)
+seals the installed Host turn transport and exercises real SDK/loopback model
+streams during quit. Complete service/tool inventory and installed experimental
+report/release integration remain missing.
+
 Follow-up to [durable shutdown reports](../host-shutdown-reports/README.md) and
 [presence witnesses](../recovery-presence-witnesses/README.md), for
 [issue #7](https://github.com/Leonz3n/PiDock/issues/7). This closes an experimental
