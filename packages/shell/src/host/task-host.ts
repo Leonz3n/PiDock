@@ -1907,7 +1907,7 @@ export class TaskWorkspaceHost {
         this.protection.assert(absolute ? target : `${this.taskDir}/${target}`);
       }
     }
-    const waiting = this.executions.waitingOnApproval(approvalId);
+    const waiting = this.executions.waitingOnApproval(sessionId, approvalId);
     if (waiting) {
       this.executions.authorize(waiting.executionId, {
         approvalId,
@@ -1918,7 +1918,7 @@ export class TaskWorkspaceHost {
       // A settled confirmation never reaches the session channel: the terminal
       // record drops out of `waitingOnApproval`, so without this the re-check
       // (deadline included) would be skipped and a late approve would execute.
-      this.refuseSettledApproval(approvalId);
+      this.refuseSettledApproval(sessionId, approvalId);
     }
     const call = channel.approve(approvalId);
     this.settleApprovalClaim(sessionId);
@@ -1936,8 +1936,8 @@ export class TaskWorkspaceHost {
    * here ([PiDock 17] #19 盒子 3/6). An approval the ledger never recorded (service,
    * terminal and browser control live on the session channel only) passes through.
    */
-  private refuseSettledApproval(approvalId: string): void {
-    const settled = this.executions.byApproval(approvalId);
+  private refuseSettledApproval(sessionId: string, approvalId: string): void {
+    const settled = this.executions.byApproval(sessionId, approvalId);
     if (!settled) return;
     throw new Error(
       `invalid-execution-transition: 确认请求已${SETTLED_APPROVAL_LABEL[settled.state] ?? "处理"}，不能执行且不可重放`,
@@ -1947,7 +1947,7 @@ export class TaskWorkspaceHost {
   reject(sessionId: string, approvalId: string): void {
     const channel = this.openSession(sessionId);
     channel.reject(approvalId);
-    this.executions.rejectApproval(approvalId);
+    this.executions.rejectApproval(sessionId, approvalId);
     this.settleApprovalClaim(sessionId);
     this.store.writeSession(this.taskDir, channel.snapshot());
     this.syncUsageLedger();

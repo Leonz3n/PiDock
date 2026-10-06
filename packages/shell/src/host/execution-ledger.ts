@@ -115,18 +115,20 @@ export class TaskExecutionLedger {
   }
 
   /**
-   * The execution of one confirmation whatever its state (盒子 3/6): a record the
-   * ledger already settled still answers, so a late approve can be refused
-   * instead of falling through to the session channel.
+   * The execution of one session-bound confirmation whatever its state (盒子 3/6):
+   * a record the ledger already settled still answers, so a late approve can be
+   * refused instead of falling through to the session channel.
    */
-  byApproval(approvalId: string): ExecutionRecord | undefined {
-    const record = this.ledgerState.executions.find((item) => item.approval?.approvalId === approvalId);
+  byApproval(sessionId: string, approvalId: string): ExecutionRecord | undefined {
+    const record = this.ledgerState.executions.find(
+      (item) => item.taskId === this.taskId && item.sessionId === sessionId && item.approval?.approvalId === approvalId,
+    );
     return record === undefined ? undefined : cloneRecord(record);
   }
 
-  /** The live execution waiting on one approval (盒子 3 resolves by approval id). */
-  waitingOnApproval(approvalId: string): ExecutionRecord | undefined {
-    const record = this.byApproval(approvalId);
+  /** The live execution waiting on one session-bound approval. */
+  waitingOnApproval(sessionId: string, approvalId: string): ExecutionRecord | undefined {
+    const record = this.byApproval(sessionId, approvalId);
     if (record === undefined) return undefined;
     return record.state === "pending-approval" || record.state === "executing" ? record : undefined;
   }
@@ -241,17 +243,17 @@ export class TaskExecutionLedger {
     });
   }
 
-  rejectApproval(approvalId: string): ExecutionRecord | undefined {
-    const waiting = this.waitingOnApproval(approvalId);
+  rejectApproval(sessionId: string, approvalId: string): ExecutionRecord | undefined {
+    const waiting = this.waitingOnApproval(sessionId, approvalId);
     if (!waiting) return undefined;
     return this.update(waiting.executionId, (record) => rejectExecution(record, { approvalId, at: this.now() }));
   }
 
   /** Deadline reached without a decision; returns every execution it expired. */
-  expireApprovals(approvalIds: readonly string[]): ExecutionRecord[] {
+  expireApprovals(sessionId: string, approvalIds: readonly string[]): ExecutionRecord[] {
     const expired: ExecutionRecord[] = [];
     for (const approvalId of approvalIds) {
-      const waiting = this.waitingOnApproval(approvalId);
+      const waiting = this.waitingOnApproval(sessionId, approvalId);
       if (!waiting) continue;
       expired.push(this.update(waiting.executionId, (record) => expireExecution(record, { at: this.now() })));
     }

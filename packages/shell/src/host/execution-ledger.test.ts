@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { TaskExecutionLedger } from "./execution-ledger.js";
 import { TaskWorkspaceHost, memoryTaskStore } from "./task-host.js";
 import { parseExecutionLedger, serializeExecutionLedger } from "./task-store.js";
+import { resetPiSequencesForTests } from "../main/pi-session.js";
 
 const TASK_ID = "task-aaaaaaaa";
 const TASK_DIR = "/tasks/task-aaaaaaaa";
@@ -144,7 +145,7 @@ describe("TaskExecutionLedger", () => {
     const ledger = new TaskExecutionLedger(TASK_ID, TASK_DIR, memoryTaskStore(), () => AT);
     const waiting = ledger.open({ sessionId: "main", kind: "turn", label: "等待确认" });
     ledger.awaitApproval(waiting.executionId, { approvalId: "approval-1", payloadVersion: "v1" });
-    ledger.rejectApproval("approval-1");
+    ledger.rejectApproval("main", "approval-1");
     // The user's decision is recorded only on a live request; a settled ref
     // reaches the re-check with its own status and is refused there.
     expect(() => ledger.authorize(waiting.executionId, { approvalId: "approval-1", permission: "default", contentVersion: "v1" })).toThrow(
@@ -152,6 +153,42 @@ describe("TaskExecutionLedger", () => {
     );
     expect(ledger.byId(waiting.executionId)?.state).toBe("rejected");
     expect(ledger.byId(waiting.executionId)?.approval?.consumedAt).toBeUndefined();
+  });
+
+  it("rejects only the named session's approval and leaves colliding attention and records unchanged", () => {
+    const ledger = new TaskExecutionLedger(TASK_ID, TASK_DIR, memoryTaskStore(), () => AT);
+    const original = ledger.open({ sessionId: "original", kind: "turn", label: "original" });
+    ledger.awaitApproval(original.executionId, { approvalId: "approval-1", payloadVersion: "v1" });
+    const review = ledger.open({ sessionId: "review", kind: "turn", label: "review" });
+    ledger.awaitApproval(review.executionId, { approvalId: "approval-1", payloadVersion: "v1" });
+    const before = JSON.stringify(ledger.forSession("original"));
+    const attention = ledger.attention({ taskName: "Release" }).find((item) => item.sessionId === "original");
+
+    expect(ledger.rejectApproval("review", "approval-1")?.executionId).toBe(review.executionId);
+    expect(ledger.state("review").session).toBe("rejected");
+    expect(JSON.stringify(ledger.forSession("original"))).toBe(before);
+    expect(ledger.attention({ taskName: "Release" })).toEqual([attention]);
+    expect(ledger.rejectApproval("unknown", "approval-1")).toBeUndefined();
+    expect(ledger.rejectApproval("review", "approval-1")).toBeUndefined();
+    expect(JSON.stringify(ledger.forSession("original"))).toBe(before);
+  });
+
+  it("expires a session-bound approval batch without spending another session's identical id", () => {
+    const store = memoryTaskStore();
+    const ledger = new TaskExecutionLedger(TASK_ID, TASK_DIR, store, () => AT);
+    const original = ledger.open({ sessionId: "original", kind: "turn", label: "original" });
+    ledger.awaitApproval(original.executionId, { approvalId: "approval-1", payloadVersion: "v1" });
+    const review = ledger.open({ sessionId: "review", kind: "turn", label: "review" });
+    ledger.awaitApproval(review.executionId, { approvalId: "approval-1", payloadVersion: "v1" });
+    const before = JSON.stringify(ledger.forSession("original"));
+    expect(ledger.expireApprovals("unknown", ["approval-1"])).toEqual([]);
+    expect(ledger.expireApprovals("review", ["approval-1", "approval-1", "missing"]).map((record) => record.executionId)).toEqual([review.executionId]);
+    expect(ledger.state("review").session).toBe("expired");
+    expect(JSON.stringify(ledger.forSession("original"))).toBe(before);
+    expect(JSON.stringify(store.readExecutions(TASK_DIR).executions.filter((record) => record.sessionId === "original"))).toBe(before);
+    expect(ledger.attention({ taskName: "Release" }).map((item) => [item.sessionId, item.kind])).toEqual([["original", "approval"], ["review", "expired"]]);
+    expect(() => ledger.authorize(review.executionId, { approvalId: "approval-1", permission: "default" })).toThrow(/not-approved|already-consumed/);
+    expect(JSON.stringify(ledger.forSession("original"))).toBe(before);
   });
 
   it("refuses a persisted ledger whose record shape is not trustworthy", () => {
@@ -175,6 +212,107 @@ describe("TaskExecutionLedger", () => {
 });
 
 describe("TaskWorkspaceHost execution wiring", () => {
+  it("approves only the requested session when a recovered session has the same approval id", () => {
+    const store = memoryTaskStore();
+    resetPiSequencesForTests();
+    const previous = host(store);
+    const old = previous.sendMessage("original", "original command", execPlan());
+    previous.approve("original", old.approvalId as string);
+    const originalRecord = JSON.stringify(previous.executionState("original").executions);
+    const originalHistory = JSON.stringify(store.readSession(TASK_DIR, "original"));
+
+    // Simulate a legacy process that minted the same id before opening the
+    // other session's recovered history. No user data or native tools run.
+    resetPiSequencesForTests();
+    const workspace = host(store);
+    const current = workspace.sendMessage("review", "review command", execPlan());
+    expect(current.approvalId).toBe(old.approvalId);
+    expect(workspace.approve("review", current.approvalId as string)).toBe(current.callId);
+    expect(workspace.executionState("review").session).toBe("done");
+    expect(JSON.stringify(workspace.executionState("original").executions)).toBe(originalRecord);
+    expect(JSON.stringify(store.readSession(TASK_DIR, "original"))).toBe(originalHistory);
+    expect(workspace.attention().items.filter((item) => item.kind === "completed-unread").map((item) => item.sessionId)).toEqual(["original", "review"]);
+    expect(() => workspace.approve("review", current.approvalId as string)).toThrow(/已处理/);
+  });
+
+  it("rejects the requested session's colliding approval without changing recovered history", () => {
+    const store = memoryTaskStore();
+    resetPiSequencesForTests();
+    const previous = host(store);
+    const old = previous.sendMessage("original", "original command", execPlan());
+    previous.approve("original", old.approvalId as string);
+    const originalRecord = JSON.stringify(previous.executionState("original").executions);
+    const originalHistory = JSON.stringify(store.readSession(TASK_DIR, "original"));
+    resetPiSequencesForTests();
+    const workspace = host(store);
+    const current = workspace.sendMessage("review", "review command", execPlan());
+    expect(current.approvalId).toBe(old.approvalId);
+    workspace.reject("review", current.approvalId as string);
+    expect(workspace.executionState("review").session).toBe("rejected");
+    expect(workspace.openSession("review").snapshot().approvals[0]?.status).toBe("rejected");
+    expect(JSON.stringify(workspace.executionState("original").executions)).toBe(originalRecord);
+    expect(JSON.stringify(store.readSession(TASK_DIR, "original"))).toBe(originalHistory);
+    expect(workspace.attention().items.map((item) => [item.sessionId, item.kind])).toEqual([["original", "completed-unread"]]);
+    const restarted = host(store);
+    expect(restarted.executionState("review").session).toBe("rejected");
+    expect(JSON.stringify(restarted.executionState("original").executions)).toBe(originalRecord);
+  });
+
+  it("refuses another session's approval without consuming its record or attention item", () => {
+    const workspace = host(memoryTaskStore());
+    const current = workspace.sendMessage("original", "original command", execPlan());
+    const before = JSON.stringify(workspace.executionState("original").executions);
+    const attention = workspace.attention().items;
+    expect(() => workspace.approve("review", current.approvalId as string)).toThrow("确认请求不存在");
+    expect(JSON.stringify(workspace.executionState("original").executions)).toBe(before);
+    expect(workspace.attention().items).toEqual(attention);
+    expect(workspace.openSession("original").snapshot().approvals[0]?.status).toBe("pending");
+  });
+
+  it("refuses a stopped session's colliding approval while leaving the other session pending", () => {
+    resetPiSequencesForTests();
+    const workspace = host(memoryTaskStore());
+    const old = workspace.sendMessage("original", "original command", execPlan());
+    workspace.cancel("original");
+    resetPiSequencesForTests();
+    const current = workspace.sendMessage("review", "review command", execPlan());
+    expect(current.approvalId).toBe(old.approvalId);
+    const before = JSON.stringify(workspace.executionState("review").executions);
+    const history = JSON.stringify(workspace.openSession("review").snapshot());
+    const attention = workspace.attention().items;
+    expect(() => workspace.approve("original", old.approvalId as string)).toThrow(/invalid-execution-transition/);
+    expect(JSON.stringify(workspace.executionState("review").executions)).toBe(before);
+    expect(JSON.stringify(workspace.openSession("review").snapshot())).toBe(history);
+    expect(workspace.attention().items).toEqual(attention);
+    expect(workspace.approve("review", current.approvalId as string)).toBe(current.callId);
+  });
+
+  it("settles only a due colliding session approval and preserves the other session's completed record", () => {
+    const store = memoryTaskStore();
+    resetPiSequencesForTests();
+    const previous = host(store);
+    const old = previous.sendMessage("original", "original command", execPlan());
+    previous.approve("original", old.approvalId as string);
+    const originalRecord = JSON.stringify(previous.executionState("original").executions);
+    const originalHistory = JSON.stringify(store.readSession(TASK_DIR, "original"));
+    resetPiSequencesForTests();
+    let clock = AT;
+    const workspace = host(store, () => clock);
+    const current = workspace.sendMessage("review", "review command", execPlan());
+    expect(current.approvalId).toBe(old.approvalId);
+    clock = "2026-09-23T11:00:00.000Z";
+    workspace.evaluateSchedules();
+    expect(workspace.executionState("review").session).toBe("expired");
+    expect(workspace.openSession("review").snapshot().approvals[0]?.status).toBe("expired");
+    expect(workspace.writeLockOwner).toBeNull();
+    expect(JSON.stringify(workspace.executionState("original").executions)).toBe(originalRecord);
+    expect(JSON.stringify(store.readSession(TASK_DIR, "original"))).toBe(originalHistory);
+    expect(workspace.attention().items.map((item) => [item.sessionId, item.kind])).toEqual([["review", "expired"], ["original", "completed-unread"]]);
+    const before = JSON.stringify(store.readExecutions(TASK_DIR));
+    expect(() => workspace.approve("review", current.approvalId as string)).toThrow(/invalid-execution-transition/);
+    expect(JSON.stringify(store.readExecutions(TASK_DIR))).toBe(before);
+  });
+
   it("records a turn as one execution with its step, its attempt usage and its terminal state", () => {
     const store = memoryTaskStore();
     const workspace = host(store);
