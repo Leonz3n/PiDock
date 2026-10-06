@@ -580,8 +580,11 @@ export interface ExecutionAttentionItem {
  * read mark therefore survives all three.
  */
 export function attentionItemId(record: ExecutionRecord, kind: AttentionKind): string {
-  const suffix = kind === "approval" && record.approval !== undefined ? record.approval.approvalId : record.executionId;
-  return `attention-${kind}-${record.taskId}-${suffix}`;
+  if (kind === "approval" && record.approval !== undefined) {
+    // Tuple encoding keeps session-bound identities distinct even with separators.
+    return `attention-approval-${JSON.stringify([record.taskId, record.sessionId, record.approval.approvalId])}`;
+  }
+  return `attention-${kind}-${record.taskId}-${record.executionId}`;
 }
 
 /** Reading clears unread only: pending/failed/expired items must be handled. */

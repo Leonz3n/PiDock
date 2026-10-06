@@ -303,6 +303,28 @@ describe("attention list", () => {
     expect(grouped.unread.map((item) => item.id)).toEqual([attentionItemId(done, "completed-unread")]);
   });
 
+  it("keeps colliding approval attention rows distinct by task and session across refreshes", () => {
+    const waiting = (taskId: string, sessionId: string, approvalId = "approval-1") =>
+      awaitApproval(execution({ taskId, sessionId }), { approval: approvedRef({ status: "pending", approvalId }), at: AT });
+    const records = [waiting("release", "main"), waiting("release", "review")];
+    const ledger = ledgerWith(records);
+    const first = attentionItemsFromLedger(ledger, { taskId: "release", taskName: "Release" });
+    expect(new Set(first.map((item) => item.id)).size).toBe(2);
+    expect(first.map((item) => item.sessionId).sort()).toEqual(["main", "review"]);
+    expect(attentionItemsFromLedger(ledger, { taskId: "release", taskName: "Release" })).toEqual(first);
+    expect(attentionItemId(waiting("other-task", "main"), "approval")).not.toBe(first[0]?.id);
+    expect(attentionItemId(waiting("task-a", "b-c"), "approval")).not.toBe(attentionItemId(waiting("task-a-b", "c"), "approval"));
+    expect(attentionItemId(waiting("task-a", "b", "c-approval-1"), "approval")).not.toBe(attentionItemId(waiting("task-a", "b-c"), "approval"));
+
+    const legacyId = "attention-approval-release-approval-1";
+    const read = markAttentionRead(ledger, { itemIds: [legacyId, ...first.map((item) => item.id)], at: AT });
+    expect(read.cleared).toEqual([]);
+    expect(read.ledger).toEqual(ledger);
+    expect(attentionItemsFromLedger(read.ledger, { taskId: "release", taskName: "Release" })).toEqual(first);
+    const done = completeExecution(execution({ executionId: "exec-done" }), { at: AT });
+    expect(attentionItemId(done, "completed-unread")).toBe("attention-completed-unread-release-exec-done");
+  });
+
   it("clears unread on read, keeps the same item id across refreshes, and never read-clears a pending item", () => {
     const done = completeExecution(execution({ executionId: "exec-done" }), { at: AT });
     const waiting = awaitApproval(execution({ executionId: "exec-wait" }), { approval: approvedRef({ status: "pending" }), at: AT });
