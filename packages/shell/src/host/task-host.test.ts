@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { TaskWorkspaceHost, isPathInsideTask, memoryTaskStore } from "./task-host.js";
+import { TaskWorkspaceHost, diskTaskStore, isPathInsideTask, memoryTaskStore } from "./task-host.js";
 import {
   listSessionIdsOnDisk,
   parseSessionSnapshot,
@@ -19,11 +19,15 @@ import {
   writeTaskRecordOnDisk,
   writeUsageOnDisk,
   buildTaskDiskRecord,
+  buildLifecycleRecord,
+  lifecycleFilePath,
 } from "./task-store.js";
 import { normalizeReportedUsage, toUsageDetail } from "../main/usage-ledger.js";
 import { PiSessionChannel, resetPiSequencesForTests } from "../main/pi-session.js";
 import { assertProvisionPlanSafe, planWorktreeCreation } from "../main/task-provision.js";
 import { SharedPathCoordinator } from "./path-coordination.js";
+import { TaskLifecycleHost } from "./task-lifecycle.js";
+import { createLifecycleResources } from "./lifecycle-resources.js";
 
 const TASK_ID = "task-a";
 const TASK_DIR = join(mkdtempSync(join(tmpdir(), "pidock-s2-")), "task-abcdef12");
@@ -44,6 +48,119 @@ function provisionInput() {
 
 beforeEach(() => {
   resetPiSequencesForTests();
+});
+
+// Public disk TaskStore boundary: lifecycle persistence must not reclaim a stale path.
+function withLifecycleTask(check: (task: { home: string; root: string; taskDir: string; record: ReturnType<typeof buildTaskDiskRecord>; lifecycle: ReturnType<typeof buildLifecycleRecord> }) => void): void {
+  const home = realpathSync(mkdtempSync(join(tmpdir(), "pidock-lifecycle-")));
+  const root = join(home, "tasks"), taskDir = join(root, "task-abcdef12");
+  const record = buildTaskDiskRecord({ taskId: TASK_ID, name: "Lifecycle", dirId: "task-abcdef12", branch: "task/abcdef12", root, taskDir, remoteBranch: "main", baseCommit: "a5a4a0d1234", repos: [], now: "2026-09-22T10:00:00Z" });
+  const lifecycle = buildLifecycleRecord({ taskId: TASK_ID, now: "2026-09-22T12:00:00Z" });
+  try {
+    diskTaskStore.writeTask(taskDir, record);
+    check({ home, root, taskDir, record, lifecycle });
+  } finally { rmSync(home, { recursive: true, force: true }); }
+}
+
+describe("disk lifecycle ownership", () => {
+  it("persists healthy first and replacement writes for the same task without changing task.json", () => {
+    withLifecycleTask(({ taskDir, lifecycle }) => {
+      const before = readFileSync(taskFilePath(taskDir), "utf8");
+      diskTaskStore.writeLifecycle(taskDir, lifecycle);
+      const updated = { ...lifecycle, archived: true, archivedAt: "2026-09-22T12:00:00Z" };
+      diskTaskStore.writeLifecycle(taskDir, updated);
+      expect(diskTaskStore.readLifecycle(taskDir)).toEqual(updated);
+      expect(readFileSync(taskFilePath(taskDir), "utf8")).toBe(before);
+      expect(readdirSync(taskDir)).toEqual(["lifecycle.json", "task.json"]);
+    });
+  });
+
+  it("refuses a missing task directory without recreating it", () => {
+    withLifecycleTask(({ home, root, taskDir, lifecycle }) => {
+      const moved = join(home, "moved-task");
+      renameSync(taskDir, moved);
+      const before = readFileSync(taskFilePath(moved), "utf8");
+      expect(() => diskTaskStore.writeLifecycle(taskDir, lifecycle)).toThrow();
+      expect(readdirSync(root)).toEqual([]);
+      expect(readdirSync(moved)).toEqual(["task.json"]);
+      expect(readFileSync(taskFilePath(moved), "utf8")).toBe(before);
+    });
+  });
+
+  it("refuses a non-regular lifecycle destination or malformed input before writing anything", () => {
+    withLifecycleTask(({ taskDir, lifecycle }) => {
+      mkdirSync(lifecycleFilePath(taskDir));
+      expect(() => diskTaskStore.writeLifecycle(taskDir, lifecycle)).toThrow("invalid lifecycle record file");
+      expect(readdirSync(lifecycleFilePath(taskDir))).toEqual([]);
+      rmSync(lifecycleFilePath(taskDir), { recursive: true });
+      diskTaskStore.writeLifecycle(taskDir, lifecycle);
+      const before = readFileSync(lifecycleFilePath(taskDir), "utf8");
+      expect(() => diskTaskStore.writeLifecycle(taskDir, { ...lifecycle, archived: "invalid" as never })).toThrow("archived");
+      expect(readFileSync(lifecycleFilePath(taskDir), "utf8")).toBe(before);
+      expect(readdirSync(taskDir)).toEqual(["lifecycle.json", "task.json"]);
+    });
+  });
+
+  it("refuses a moved root without recreating the old path or changing the moved lifecycle", () => {
+    withLifecycleTask(({ home, root, taskDir, lifecycle }) => {
+      diskTaskStore.writeLifecycle(taskDir, lifecycle);
+      expect(diskTaskStore.readLifecycle(taskDir)).toEqual(lifecycle);
+      const before = readFileSync(lifecycleFilePath(taskDir), "utf8");
+      const movedRoot = join(home, "moved-tasks");
+      renameSync(root, movedRoot);
+      expect(() => diskTaskStore.writeLifecycle(taskDir, { ...lifecycle, archived: true })).toThrow();
+      expect(existsSync(root)).toBe(false);
+      expect(readFileSync(lifecycleFilePath(join(movedRoot, "task-abcdef12")), "utf8")).toBe(before);
+    });
+  });
+  it.each(["taskId", "root", "taskDir", "dirId", "missing-record", "corrupt-record", "lifecycle-owner"] as const)("refuses %s without changing existing lifecycle bytes", (change) => {
+    withLifecycleTask(({ taskDir, record, lifecycle }) => {
+      diskTaskStore.writeLifecycle(taskDir, lifecycle);
+      const before = readFileSync(lifecycleFilePath(taskDir), "utf8");
+      if (change === "missing-record") rmSync(taskFilePath(taskDir));
+      else if (change === "corrupt-record") writeFileSync(taskFilePath(taskDir), "{}", "utf8");
+      else if (change !== "lifecycle-owner") diskTaskStore.writeTask(taskDir, { ...record, [change]: "other-owner" });
+      const taskBefore = existsSync(taskFilePath(taskDir)) ? readFileSync(taskFilePath(taskDir), "utf8") : null;
+      expect(() => diskTaskStore.writeLifecycle(taskDir, { ...lifecycle, taskId: change === "lifecycle-owner" ? "other-task" : lifecycle.taskId, archived: true })).toThrow();
+      expect(readFileSync(lifecycleFilePath(taskDir), "utf8")).toBe(before);
+      expect(existsSync(taskFilePath(taskDir)) ? readFileSync(taskFilePath(taskDir), "utf8") : null).toBe(taskBefore);
+    });
+  });
+  it.each(["root", "task", "record", "lifecycle"] as const)("refuses a linked %s without modifying the link or original target bytes", (kind) => {
+    withLifecycleTask(({ home, root, taskDir, lifecycle }) => {
+      diskTaskStore.writeLifecycle(taskDir, lifecycle);
+      const taskBefore = readFileSync(taskFilePath(taskDir), "utf8"), before = readFileSync(lifecycleFilePath(taskDir), "utf8");
+      const path = kind === "root" ? root : kind === "task" ? taskDir : kind === "record" ? taskFilePath(taskDir) : lifecycleFilePath(taskDir);
+      const target = join(home, `external-${kind}`);
+      renameSync(path, target);
+      symlinkSync(target, path, kind === "root" || kind === "task" ? "dir" : "file");
+      const entries = readdirSync(taskDir);
+      expect(() => diskTaskStore.writeLifecycle(taskDir, { ...lifecycle, archived: true })).toThrow();
+      expect(lstatSync(path).isSymbolicLink()).toBe(true);
+      expect(readFileSync(lifecycleFilePath(taskDir), "utf8")).toBe(before);
+      expect(readFileSync(taskFilePath(taskDir), "utf8")).toBe(taskBefore);
+      expect(readdirSync(taskDir)).toEqual(entries);
+    });
+  });
+  it.each([true, false])("refuses an old Host's quit after foreign path reuse (foreign lifecycle present: %s)", (hasLifecycle) => {
+    withLifecycleTask(({ taskDir, record, lifecycle }) => {
+      const host = new TaskWorkspaceHost(TASK_ID, taskDir, diskTaskStore);
+      const owner = new TaskLifecycleHost(TASK_ID, taskDir, diskTaskStore, createLifecycleResources({ host, services: () => null, terminals: () => null, sessionIds: () => [], liveProcesses: () => [] }));
+      owner.archive();
+      diskTaskStore.writeTask(taskDir, { ...record, taskId: "foreign-task" });
+      if (hasLifecycle) diskTaskStore.writeLifecycle(taskDir, { ...lifecycle, taskId: "foreign-task" });
+      else rmSync(lifecycleFilePath(taskDir));
+      const taskBefore = readFileSync(taskFilePath(taskDir), "utf8");
+      const lifecycleBefore = hasLifecycle ? readFileSync(lifecycleFilePath(taskDir), "utf8") : null;
+      expect(() => owner.quit()).toThrow("ownership mismatch");
+      if (hasLifecycle) {
+        expect(() => owner.lifecycle()).toThrow("ownership mismatch");
+        expect(() => owner.restore()).toThrow("ownership mismatch");
+      }
+      expect(readFileSync(taskFilePath(taskDir), "utf8")).toBe(taskBefore);
+      expect(hasLifecycle ? readFileSync(lifecycleFilePath(taskDir), "utf8") : existsSync(lifecycleFilePath(taskDir)) ? "created" : null).toBe(lifecycleBefore);
+    });
+  });
 });
 
 describe("S6 final wiring: Host approval listing", () => {

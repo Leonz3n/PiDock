@@ -15,9 +15,10 @@
  * touching the filesystem.
  */
 
-import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
+import { isAbsoluteTaskRoot, isTaskDirId } from "../main/task-provision.js";
 import type { PiSessionSnapshot } from "../main/pi-session.js";
 import {
   EXECUTION_KINDS,
@@ -614,8 +615,29 @@ export function lifecycleFilePath(taskDir: string): string {
 }
 
 export function writeLifecycleOnDisk(taskDir: string, record: LifecycleRecord): void {
-  mkdirSync(taskDir, { recursive: true });
-  writeFileSync(lifecycleFilePath(taskDir), serializeLifecycleRecord({ ...record }), "utf8");
+  const text = serializeLifecycleRecord({ ...record });
+  parseLifecycleRecord(text);
+  const root = dirname(taskDir), dirId = basename(taskDir);
+  if (!isAbsoluteTaskRoot(taskDir) || !isTaskDirId(dirId) || !lstatSync(root).isDirectory() ||
+      !lstatSync(taskDir).isDirectory() || realpathSync(taskDir) !== join(realpathSync(root), dirId)) {
+    throw new Error("invalid lifecycle task directory");
+  }
+  if (!lstatSync(taskFilePath(taskDir)).isFile()) throw new Error("invalid lifecycle task record file");
+  const task = readTaskRecordOnDisk(taskDir);
+  if (!task || task.taskId !== record.taskId || task.root !== root || task.taskDir !== taskDir || task.dirId !== dirId) {
+    throw new Error("lifecycle task ownership mismatch");
+  }
+  const file = lifecycleFilePath(taskDir);
+  try {
+    if (!lstatSync(file).isFile()) throw new Error("invalid lifecycle record file");
+  } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  // Exclusive creation and rename avoid following/truncating the destination.
+  // Directory replacement between checks and use remains a cross-process race.
+  const tmp = `${file}.${randomUUID()}.tmp`;
+  try {
+    writeFileSync(tmp, text, { flag: "wx", mode: 0o600 });
+    renameSync(tmp, file);
+  } finally { rmSync(tmp, { force: true }); }
 }
 
 export function readLifecycleOnDisk(taskDir: string): LifecycleRecord | null {
