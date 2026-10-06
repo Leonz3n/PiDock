@@ -1,5 +1,5 @@
 import { SERVICE_CONTROL_SCOPE, type PiApproval } from "../main/pi-session.js";
-import type { AgentControlChannel } from "./service-control.js";
+import { channelExecutionClosing, type AgentControlChannel } from "./service-control.js";
 import { verifyServiceControlApproval } from "./service-runtime.js";
 import type { SupervisorSession, SupervisorResult } from "./service-supervisor-experiment.js";
 import { writeClaimError, type WriteCoordinatorPort } from "./write-coordination.js";
@@ -158,6 +158,7 @@ export class ExperimentalServiceExecution {
     let revision: string;
     try { revision = this.dependencies.revision(); } catch { return { ok: false, error: "service-authorization-changed" }; }
     const target = `${this.dependencies.taskDir}/services/${this.dependencies.serviceId}/${input.action}`;
+    if (channelExecutionClosing(input.channel, "exec.run", target)) return { ok: false, error: "task-host-closing" };
     const contentVersion = `${input.action}:${revision}`;
     const approval = input.approvalId === undefined ? undefined : input.channel.snapshot().approvals.find((row) => row.id === input.approvalId);
     if (input.approvalId !== undefined && !approval) return { ok: false, error: "invalid-service-approval" };
@@ -172,6 +173,7 @@ export class ExperimentalServiceExecution {
     this.idle = new Promise<void>((resolve) => { settled = resolve; });
     const guard = () => {
       if (this.closing || input.signal?.aborted) return this.closing ? "service-host-closing" : "service-operation-cancelled";
+      if (channelExecutionClosing(input.channel, "exec.run", target)) return "task-host-closing";
       const caller = input.channel.snapshot();
       try {
         if (caller.taskId !== this.dependencies.taskId || caller.sessionId !== input.sessionId || input.channel.currentPermission !== tier || this.dependencies.revision() !== revision) return "service-authorization-changed";
@@ -184,12 +186,13 @@ export class ExperimentalServiceExecution {
         const gate = input.channel.gate("exec.run", target, contentVersion, undefined, SERVICE_CONTROL_SCOPE);
         if (gate.verdict !== "ask") return { ok: false, error: "service-approval-unavailable" };
         await input.persist();
-        if (this.closing || input.signal?.aborted) {
+        const channelClosed = channelExecutionClosing(input.channel, "exec.run", target);
+        if (this.closing || input.signal?.aborted || channelClosed) {
           const current = input.channel.snapshot().approvals.find((row) => row.id === gate.approvalId);
           if (current?.status === "pending") input.channel.reject(current.id);
           else if (current?.status === "approved") input.channel.consumeApproval(current.id);
           await input.persist();
-          return { ok: false, error: this.closing ? "service-host-closing" : "service-operation-cancelled" };
+          return { ok: false, error: this.closing ? "service-host-closing" : channelClosed ? "task-host-closing" : "service-operation-cancelled" };
         }
         return { ok: false, error: `approval-required:${gate.approvalId}` };
       }

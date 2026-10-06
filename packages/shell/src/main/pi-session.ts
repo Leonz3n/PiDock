@@ -569,6 +569,15 @@ export class PiSessionChannel {
     this.createdAt = this.now();
   }
 
+  private executionClosing = false;
+
+  /** Admission only: previously admitted work may still record its settlement. */
+  sealExecution(): void { this.executionClosing = true; }
+
+  private assertExecutionOpen(): void {
+    if (this.executionClosing) throw Error("task-host-closing");
+  }
+
   get runState(): PiRunState {
     return this.state;
   }
@@ -774,6 +783,7 @@ export class PiSessionChannel {
    * collide on anticipated call ids.
    */
   previewGate(toolName: string, target: string): PiGateDecision {
+    if (this.executionClosing) return { verdict: "deny", reason: "task-host-closing" };
     const tool = isGatedTool(toolName);
     if (!tool) return { verdict: "deny", reason: `工具未接入门禁：${toolName}` };
     if (!targetInTask(this.taskDir, target)) {
@@ -852,6 +862,7 @@ export class PiSessionChannel {
    * chunks (plus a terminal `{ done: true }` frame) once the turn settles.
    */
   runTurn(input: PiTurnInput): PiTurnResult {
+    this.assertExecutionOpen();
     if (this.state === "running" || this.state === "approval") {
       throw new Error("当前执行尚未结束，请先停止或确认");
     }
@@ -988,6 +999,7 @@ export class PiSessionChannel {
    * The occupancy state itself keeps the historical estimate behaviour.
    */
   compactContext(input: { usageSource?: PiUsageSource; usage?: PiReportedUsage; model?: string; responseModel?: string } = {}): PiSessionContext {
+    this.assertExecutionOpen();
     const usage = normalizeCallUsage(input.usageSource, input.usage);
     const kind: PiUsageKind = "compaction";
     piCallSequence += 1;
@@ -1014,6 +1026,7 @@ export class PiSessionChannel {
 
   /** Approve exactly one pending request; the approval never replays. */
   approve(approvalId: string): PiCallRecord {
+    this.assertExecutionOpen();
     const approval = this.approvals.find((item) => item.id === approvalId);
     if (!approval) throw new Error("确认请求不存在");
     if (approval.status !== "pending") throw new Error("确认请求已处理，不可重放");
@@ -1050,6 +1063,7 @@ export class PiSessionChannel {
    * already-spent ids all return `false` so the caller must re-confirm.
    */
   consumeApproval(approvalId: string): boolean {
+    if (this.executionClosing) return false;
     const approval = this.approvals.find((item) => item.id === approvalId);
     if (!approval || approval.status !== "approved" || approval.consumedAt !== undefined) return false;
     approval.consumedAt = this.now();

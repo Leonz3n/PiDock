@@ -22,7 +22,7 @@ import type { BrowserAction } from "../main/browser-rules.js";
 import { browserApprovalTarget, browserToolForAction } from "../main/browser-rules.js";
 import type { BrowserPerformResult } from "../rpc/protocol.js";
 import { writeClaimError, type WriteCoordinatorPort } from "./write-coordination.js";
-import type { AgentControlChannel } from "./service-control.js";
+import { channelExecutionClosing, type AgentControlChannel } from "./service-control.js";
 
 /** The approval slice the browser verifier reads. */
 export interface BrowserApprovalLike {
@@ -190,6 +190,7 @@ export async function runAgentBrowserAction(input: {
       : undefined;
   const pageId = pageIdOf(input.page);
   const target = browserApprovalTarget(input.taskDir, pageId);
+  if (channelExecutionClosing(input.channel, tool, target)) return { ok: false, error: "task-host-closing" };
   const intent = { kind: "browser-action" as const, label: `页面变更 ${input.action}` };
   const decision = decideAgentBrowserControl({ tier, tool, taskDir: input.taskDir, pageId, approval: liveApproval });
   if (!decision.ok) {
@@ -221,12 +222,14 @@ export async function runAgentBrowserAction(input: {
   const claim = input.write.claimWrite(input.sessionId, tier, intent);
   if (!claim.ok) return { ok: false, error: writeClaimError(claim) };
   try {
+    if (channelExecutionClosing(input.channel, tool, target)) return { ok: false, error: "task-host-closing" };
     if (liveApproval !== undefined) {
       if (!input.channel.consumeApproval(liveApproval.id)) {
         return { ok: false, error: "approval-required: 确认请求已被消费，请重新确认" };
       }
       input.persist();
     }
+    if (channelExecutionClosing(input.channel, tool, target)) return { ok: false, error: "task-host-closing" };
     const performed = await input.gateway.perform({
       action: input.action,
       page: input.page,

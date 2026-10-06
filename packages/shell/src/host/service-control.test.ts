@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { PiSessionChannel } from "../main/pi-session.js";
+import { beforeEach, describe, expect, it } from "vitest";
+import { PiSessionChannel, resetPiSequencesForTests } from "../main/pi-session.js";
 import { memoryTaskStore } from "./task-host.js";
 import { runAgentServiceControl } from "./service-control.js";
 import { TaskServiceRuntime } from "./service-runtime.js";
@@ -12,6 +12,7 @@ import { TaskWriteCoordinator } from "./write-coordination.js";
 
 const DIR = "/Users/name/Tasks/task-a1f92c3d";
 const SERVICE_ID = "saas-web";
+beforeEach(() => { resetPiSequencesForTests(); });
 
 function setup(permission: "read" | "default" | "auto" = "default") {
   const services = new TaskServiceRuntime(DIR);
@@ -62,6 +63,16 @@ function setup(permission: "read" | "default" | "auto" = "default") {
 }
 
 describe("agent service-control dispatch", () => {
+  it("refuses a sealed auto channel before claims or modeled service mutation", () => {
+    const f = setup("auto"), before = f.write.snapshot(); f.channel.sealExecution();
+    expect(f.control()).toEqual({ ok: false, error: "task-host-closing" }); expect(f.write.snapshot()).toEqual(before);
+    expect(f.services.get(SERVICE_ID)?.lifecycle).toBe("stopped"); expect(f.persisted()).toBeUndefined();
+  });
+  it("does not act after approval persistence synchronously seals its channel", () => {
+    const f = setup(); f.control(); const id = f.channel.pendingApproval()!.id; f.channel.approve(id);
+    expect(runAgentServiceControl({ services: f.services, channel: f.channel, sessionId: "main", serviceId: SERVICE_ID, action: "start", approvalId: id, write: f.write, persist: () => f.channel.sealExecution() })).toEqual({ ok: false, error: "task-host-closing" });
+    expect(f.services.get(SERVICE_ID)?.lifecycle).toBe("stopped"); expect(f.write.owner).toBeNull();
+  });
   it("mints one scope-bound approval for a default-tier start, then acts on approval and refuses the replay", () => {
     const { services, channel, control, persisted } = setup("default");
     const first = control();

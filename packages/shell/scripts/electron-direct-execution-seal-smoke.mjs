@@ -4,11 +4,13 @@ import { app } from "electron";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Worker } from "node:worker_threads";
 import { TaskWorkspaceHost } from "../dist/host/task-host.js";
+import { runAgentBrowserAction } from "../dist/host/browser-control.js";
+import { TaskWriteCoordinator } from "../dist/host/write-coordination.js";
 import { SdkContextClient } from "../dist/host/sdk-context-client.js";
 import { buildTaskDiskRecord, serializeTaskRecord } from "../dist/host/task-store.js";
 const home = mkdtempSync(join(tmpdir(), "pidock-direct-seal-")), taskId = "task-abcdef12", taskDir = join(home, taskId), credential = "synthetic-direct-seal-private";
@@ -35,12 +37,18 @@ try {
       worker = new Worker(new URL("../dist/host/sdk-context-worker.js", import.meta.url), { env, workerData }); worker.once("exit", () => { sdkExited = true; }); return worker;
     } }));
   host.openSession("main", { permission: "auto" });
+  const legacy = host.openSession("legacy", { permission: "auto" }), lateMarker = join(taskDir, "late-legacy-marker.txt");
   await host.configureSdkProvider({ config: { profileId: "fixture", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, modelId: "fixture", contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_FIXTURE", generation: 1 }, credential });
   const kernel = host.sdkTextKernel(); assert.equal((await kernel.open("main")).tools.length, 0);
   let delta = false; const prompt = kernel.prompt("main", "direct seal fixture", (event) => { if (event.type === "delta") delta = true; });
+  void prompt.catch(() => {});
   await wait(() => delta); assert.equal(hits, 1); assert.equal(authorized, true); assert.equal(closed, false);
   assert.equal(host.claimDerivedExecution({ sessionId: "main", resourceId: "metadata-child", label: "metadata-only witness" }), true);
   host.sealExecution(); await assert.rejects(kernel.prompt("main", "late model"), /sdk-context-closing/);
+  let lateActions = 0;
+  assert.throws(() => legacy.runTurn({ text: "late legacy", execute: () => { lateActions++; writeFileSync(lateMarker, "late turn"); return null; } }), /task-host-closing/);
+  const browser = await runAgentBrowserAction({ gateway: { taskId, perform: async () => { lateActions++; writeFileSync(lateMarker, "late browser"); return { ok: true, payload: {} }; } }, channel: legacy, sessionId: "legacy", taskId, taskDir, action: "page/navigate", write: new TaskWriteCoordinator(), persist: () => {} });
+  assert.deepEqual(browser, { ok: false, error: "task-host-closing" }); assert.equal(lateActions, 0); assert.equal(existsSync(lateMarker), false);
   assert.throws(() => host.claimWrite("main", "auto", { kind: "browser-action", label: "late" }), /task-host-closing/);
   assert.throws(() => host.cancel("main"), /task-derived-executions-unconfirmed/);
   const disposal = host.dispose(); await assert.rejects(disposal, /task-derived-executions-unconfirmed/);
@@ -49,7 +57,7 @@ try {
   host.endDerivedExecution("metadata-child"); assert.equal(host.dispose(), disposal); await assert.rejects(host.dispose(), /task-derived-executions-unconfirmed/);
   const dir = join(taskDir, ".pidock-sdk-sessions", "main"), jsonl = readdirSync(dir).filter((file) => file.endsWith(".jsonl")).map((file) => readFileSync(join(dir, file), "utf8")).join("\n");
   assert.ok(jsonl.includes("direct seal fixture")); assert.ok(!jsonl.includes(credential));
-  console.log("DIRECT_EXECUTION_SEAL_OK", JSON.stringify({ electron: process.versions.electron, node: process.versions.node, providerRequests: hits, tools: 0, retainedKernelRefused: true, sdkNativeExit: sdkExited, derivedMetadataRetained: true, lateSettlementRepairsDisposal: false, credentialExcluded: true }));
+  console.log("DIRECT_EXECUTION_SEAL_OK", JSON.stringify({ electron: process.versions.electron, node: process.versions.node, providerRequests: hits, tools: 0, retainedKernelRefused: true, retainedLegacyRefused: true, lateActionCallbacks: lateActions, sdkNativeExit: sdkExited, derivedMetadataRetained: true, lateSettlementRepairsDisposal: false, credentialExcluded: true }));
 } catch (error) { console.error("DIRECT_EXECUTION_SEAL_FAILED", String(error).replaceAll(credential, "[redacted]").replaceAll(home, "[test-home]").slice(0, 300)); process.exitCode = 1; }
 finally {
   clearTimeout(watchdog); await worker?.terminate(); server?.closeAllConnections(); await new Promise((resolve) => server ? server.close(resolve) : resolve());
