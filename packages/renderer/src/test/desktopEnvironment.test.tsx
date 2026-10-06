@@ -34,6 +34,22 @@ it("shows only Host-scanned drafts for the selected task and worktree", async ()
   expect(screen.getByRole("button", { name: "添加服务" })).toBeDisabled();
 });
 
+it("shows .env as configuration-only key hints and never a runnable service", async () => {
+  window.pidock = { taskOp: vi.fn(async (_taskId, op) => op === "task/fileRoots"
+    ? { ok: true, payload: { taskDir: "/task", roots: [{ id: "repo", kind: "worktree", label: "api", path: "/task/repo" }] } }
+    : { ok: true, payload: { scan: { hints: [{ source: ".env", name: ".env", runType: null,
+      envKeys: ["API_TOKEN", "PORT"], invalidVars: [], toVerify: ["语法及业务读取点需人工核对"] }], errors: [], truncated: false } } }) };
+  render(<DesktopEnvironmentPage projects={[{ id: "p1", name: "真实项目" }]} projectId="p1" taskCount={1} tasks={[{ taskId: "task-1", name: "真实任务" }]} onSelectProject={() => {}} />);
+  expect(await screen.findByRole("option", { name: "api" })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "扫描仓库" }));
+  expect(await screen.findByText("变量键：API_TOKEN、PORT")).toBeInTheDocument();
+  expect(screen.getByText("配置来源")).toBeInTheDocument();
+  expect(screen.queryByText("常驻服务")).toBeNull();
+  expect(screen.queryByText("一次性命令")).toBeNull();
+  expect(screen.queryByText("准备步骤")).toBeNull();
+  expect(screen.getByRole("button", { name: "添加服务" })).toBeDisabled();
+});
+
 it("discards a late scan from a different task and refuses malformed Host data", async () => {
   let finishFirst: ((value: { ok: boolean; payload: unknown }) => void) | undefined;
   const first = new Promise<{ ok: boolean; payload: unknown }>((resolve) => { finishFirst = resolve; });

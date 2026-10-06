@@ -1,7 +1,7 @@
 export interface ServiceImportHintView {
   source: string;
   name: string;
-  runType: "long-lived" | "one-shot" | "prepare";
+  runType: "long-lived" | "one-shot" | "prepare" | null;
   envKeys: string[];
   invalidVars: string[];
   toVerify: string[];
@@ -13,7 +13,7 @@ export interface ServiceImportScanView {
   truncated: boolean;
 }
 
-const sources = new Set(["package.json", ".vscode/launch.json", "compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml"]);
+const sources = new Set(["package.json", ".vscode/launch.json", "compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml", ".env"]);
 const runTypes = new Set(["long-lived", "one-shot", "prepare"]);
 const record = (value: unknown): Record<string, unknown> | null =>
   typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null;
@@ -25,13 +25,16 @@ const shortTexts = (value: unknown, maxEntries: number): value is string[] =>
 export function serviceImportScanFromHost(payload: unknown): ServiceImportScanView | null {
   const scan = record(record(payload)?.["scan"]);
   if (!scan || !Array.isArray(scan["hints"]) || scan["hints"].length > 100 ||
-      !Array.isArray(scan["errors"]) || scan["errors"].length > 6 || typeof scan["truncated"] !== "boolean") return null;
+      !Array.isArray(scan["errors"]) || scan["errors"].length > sources.size || typeof scan["truncated"] !== "boolean") return null;
   const hints: ServiceImportHintView[] = [];
   for (const raw of scan["hints"]) {
     const hint = record(raw);
     if (!hint || !shortText(hint["source"]) || !sources.has(hint["source"]) || !shortText(hint["name"]) ||
-        !shortText(hint["runType"]) || !runTypes.has(hint["runType"]) || !shortTexts(hint["envKeys"], 100) ||
-        !shortTexts(hint["invalidVars"], 100) || !shortTexts(hint["toVerify"], 32)) return null;
+        !shortTexts(hint["envKeys"], 100) || !shortTexts(hint["invalidVars"], 100) || !shortTexts(hint["toVerify"], 32)) return null;
+    if (hint["source"] === ".env") {
+      if (hint["runType"] !== null || hint["name"] !== ".env" || hint["invalidVars"].length ||
+          !hint["envKeys"].every((key) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key))) return null;
+    } else if (!shortText(hint["runType"]) || !runTypes.has(hint["runType"])) return null;
     hints.push({ source: hint["source"], name: hint["name"], runType: hint["runType"] as ServiceImportHintView["runType"],
       envKeys: hint["envKeys"], invalidVars: hint["invalidVars"], toVerify: hint["toVerify"] });
   }

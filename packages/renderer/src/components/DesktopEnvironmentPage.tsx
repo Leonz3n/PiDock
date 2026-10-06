@@ -78,7 +78,7 @@ function RepositoryImportDrafts({ tasks, pending }: { tasks: readonly Task[]; pe
           {!!hint.envKeys.length && <p className="mt-1 break-all text-muted">变量键：{hint.envKeys.join("、")}</p>}
           {hint.invalidVars.map((key, at) => <p key={at} className="mt-1 break-all text-[#ad4545]">无效变量：{key}</p>)}
           {hint.toVerify.map((note, at) => <p key={at} className="mt-1 break-words text-muted">{note}</p>)}
-        </div><span className="text-muted sm:text-right">{runTypeLabel[hint.runType]}</span>
+        </div><span className="text-muted sm:text-right">{hint.runType === null ? "配置来源" : runTypeLabel[hint.runType]}</span>
       </div>)}
     </div>}
   </section>;
