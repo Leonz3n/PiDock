@@ -19,7 +19,7 @@ import type {
 } from "electron";
 import { isAllowedInvokeChannel } from "../preload/allowlist.js";
 import { HostClient } from "../rpc/host-client.js";
-import { buildHostEnv, validateHostTaskOp } from "../host/host-guards.js";
+import { buildHostEnv, classifyControlCaller, validateHostTaskOp } from "../host/host-guards.js";
 import {
   isAbsoluteTaskRoot,
   isTaskDirId,
@@ -29,7 +29,9 @@ import {
 } from "./task-provision.js";
 import { readTaskRecordOnDisk } from "../host/task-store.js";
 import { defaultTasksRoot } from "./task-resolver.js";
-import { TaskRootIndex } from "./task-root-index.js";
+import { TaskRootIndex, type VerifiedTaskIdentity } from "./task-root-index.js";
+import { HostTaskAdmission } from "../host/host-task-admission.js";
+import { shutdownDeadline } from "../host/shutdown-deadline.js";
 import { ProjectRegistry } from "./project-registry.js";
 import { ServiceCatalog } from "./service-catalog.js";
 import { performServiceBindingOperation, performServiceCatalogOperation, performServiceConfigPreview } from "./service-catalog-ipc.js";
@@ -321,9 +323,26 @@ export interface PerTaskHostEntry {
   child: UtilityProcess;
 }
 
+type TaskHostQuitResult = { taskId: string; ok: boolean; applied: string[]; failures: unknown[]; retainedTasks: string[]; error?: string };
+type TaskHostsQuitReport = { ok: boolean; tasks: TaskHostQuitResult[] };
+interface PendingTaskHost {
+  taskId: string;
+  taskDir: string;
+  identity: VerifiedTaskIdentity | null;
+  promise: Promise<PerTaskHostEntry>;
+}
+
 export class PerTaskHostRegistry {
   private readonly byTaskDir = new Map<string, PerTaskHostEntry>();
   private readonly byTaskId = new Map<string, Set<string>>();
+  private readonly identities = new Map<string, VerifiedTaskIdentity>();
+  private readonly pendingHosts = new Map<string, PendingTaskHost>();
+  private readonly spawnFailures = new Map<string, { taskId: string; error: string }>();
+  private readonly activeTaskOps = new Map<string, number>();
+  private readonly admission = new HostTaskAdmission();
+  private closing = false;
+  private quitConfirmed = false;
+  private quitReceipt?: Promise<TaskHostsQuitReport>;
 
   constructor(
     private readonly workspaceId: string,
@@ -359,7 +378,7 @@ export class PerTaskHostRegistry {
   }
 
   hasTaskDir(taskDir: string): boolean {
-    return this.byTaskDir.has(taskDir);
+    return this.byTaskDir.has(normalizeTaskPath(taskDir));
   }
 
   /**
@@ -390,12 +409,27 @@ export class PerTaskHostRegistry {
    * re-resolved there on reuse (see `resolveProvisionTaskDir`), so
    * override folders are first-class tasks, not `unknown task` forever.
    */
-  async routeTaskOp(params: {
+  routeTaskOp(params: {
     taskId: string;
     op: HostTaskOp;
     payload?: Record<string, unknown>;
     /** Main-stamped sender attestation; forwarded verbatim. */
     origin?: TaskOpOrigin;
+  }): Promise<HostTaskResult> {
+    return this.admission.run(async () => {
+      const { taskId } = params;
+      this.activeTaskOps.set(taskId, (this.activeTaskOps.get(taskId) ?? 0) + 1);
+      try { return await this.routeAcceptedTaskOp(params); }
+      finally {
+        const remaining = this.activeTaskOps.get(taskId)! - 1;
+        if (remaining) this.activeTaskOps.set(taskId, remaining);
+        else this.activeTaskOps.delete(taskId);
+      }
+    });
+  }
+
+  private async routeAcceptedTaskOp(params: {
+    taskId: string; op: HostTaskOp; payload?: Record<string, unknown>; origin?: TaskOpOrigin;
   }): Promise<HostTaskResult> {
     const { taskId, op, payload, origin } = params;
     const perOp = validateHostTaskOp(op, payload ?? {});
@@ -407,25 +441,16 @@ export class PerTaskHostRegistry {
       // A bound Host cannot bypass a failed disk/index lookup. Legacy
       // no-index tests retain the earlier record guard only at that seam.
       if (op === "task/provision" && this.taskRoots && this.resolveTaskDir(taskId) === null) {
+        if (this.identities.has(normalizeTaskPath(existing.taskDir))) this.taskMoved(taskId);
         // A Host may have persisted the task before its first index write failed.
         // Explicit provision retry verifies that record and retries the index.
         await this.taskRoots.register(existing.taskDir);
       }
-      const current = this.resolveTaskDir(taskId);
-      const overrideStillOurs = this.taskRoots ? false : this.overrideTaskDirStillOurs(taskId, existing.taskDir);
-      const resolvedDir = current ?? (overrideStillOurs ? existing.taskDir : null);
-      if (
-        resolvedDir === null ||
-        normalizeTaskPath(resolvedDir) !== normalizeTaskPath(existing.taskDir)
-      ) {
-        throw new TrustDomainViolation(
-          "invalid-payload",
-          `task-moved: ${taskId} no longer resolves to the forked task folder; re-provision or restart before sending ops`,
-        );
-      }
+      this.assertRoutingOpen();
+      this.verifyTaskClaim(existing);
       const result = await existing.client.task({ workspaceId: this.workspaceId, taskId, op, payload, origin },
         op === "task/sdkCancel" || op === "task/quit" ? { timeoutMs: 120_000 } : undefined);
-      if (op === "task/provision") await this.taskRoots?.register(existing.taskDir);
+      if (op === "task/provision") await this.indexProvisionedHost(existing);
       return result;
     }
     const taskDir = this.resolveTaskDir(taskId);
@@ -437,15 +462,11 @@ export class PerTaskHostRegistry {
       if (this.taskRoots?.inventory().roots.some((root) => root.state === "error")) {
         throw new TrustDomainViolation("invalid-payload", "task root index unavailable; repair before provisioning");
       }
-      const bootstrapDir = provisionDir;
-      const spawned = await this.spawn(this.workspaceId, { taskId, taskDir: bootstrapDir });
-      const client = this.bindHostRequests(spawned.client);
-      this.byTaskDir.set(bootstrapDir, { taskId, taskDir: bootstrapDir, client, child: spawned.child });
-      const dirs = this.byTaskId.get(taskId) ?? new Set<string>();
-      dirs.add(bootstrapDir);
-      this.byTaskId.set(taskId, dirs);
-      const result = await client.task({ workspaceId: this.workspaceId, taskId, op, payload, origin });
-      await this.taskRoots?.register(bootstrapDir);
+      const entry = await this.claimTaskHost(taskId, provisionDir, true);
+      this.assertRoutingOpen();
+      this.verifyTaskClaim(entry, payload ?? {});
+      const result = await entry.client.task({ workspaceId: this.workspaceId, taskId, op, payload, origin });
+      await this.indexProvisionedHost(entry);
       return result;
     }
     if (taskDir === null || !isAbsoluteTaskRoot(taskDir)) {
@@ -454,14 +475,84 @@ export class PerTaskHostRegistry {
         `unknown task: ${taskId} (no task record; provision the task before sending ops)`,
       );
     }
-    const spawned = await this.spawn(this.workspaceId, { taskId, taskDir });
-    const client = this.bindHostRequests(spawned.client);
-    this.byTaskDir.set(taskDir, { taskId, taskDir, client, child: spawned.child });
-    const dirs = this.byTaskId.get(taskId) ?? new Set<string>();
-    dirs.add(taskDir);
-    this.byTaskId.set(taskId, dirs);
-    return client.task({ workspaceId: this.workspaceId, taskId, op, payload, origin },
+    const entry = await this.claimTaskHost(taskId, taskDir, false);
+    this.assertRoutingOpen();
+    this.verifyTaskClaim(entry);
+    return entry.client.task({ workspaceId: this.workspaceId, taskId, op, payload, origin },
       op === "task/sdkCancel" || op === "task/quit" ? { timeoutMs: 120_000 } : undefined);
+  }
+
+  private assertRoutingOpen(): void {
+    if (this.closing) throw Error("task-host-closing");
+  }
+
+  private taskMoved(taskId: string): never {
+    throw new TrustDomainViolation("invalid-payload", `task-moved: ${taskId} no longer resolves to the forked task identity; re-provision or restart before sending ops`);
+  }
+
+  private sameIdentity(a: VerifiedTaskIdentity | null, b: VerifiedTaskIdentity | null): boolean {
+    if (!a || !b) return a === b;
+    return a.taskId === b.taskId && a.createdAt === b.createdAt && a.root === b.root &&
+      a.dirId === b.dirId && a.realRoot === b.realRoot &&
+      a.directoryDevice === b.directoryDevice && a.directoryInode === b.directoryInode;
+  }
+
+  private verifyTaskClaim(entry: PerTaskHostEntry, bootstrapPayload?: Record<string, unknown>): void {
+    const { taskId, taskDir } = entry;
+    const current = this.resolveTaskDir(taskId);
+    const fallback = bootstrapPayload
+      ? this.resolveProvisionTaskDir(taskId, bootstrapPayload)
+      : !this.taskRoots && this.overrideTaskDirStillOurs(taskId, taskDir) ? taskDir : null;
+    const resolved = current ?? fallback;
+    if (resolved === null || normalizeTaskPath(resolved) !== normalizeTaskPath(taskDir)) this.taskMoved(taskId);
+    const identity = this.identities.get(normalizeTaskPath(taskDir));
+    if (identity && !this.sameIdentity(identity, this.taskRoots?.verifiedIdentity(taskId) ?? null)) this.taskMoved(taskId);
+  }
+
+  private async indexProvisionedHost(entry: PerTaskHostEntry): Promise<void> {
+    if (!this.taskRoots) return;
+    await this.taskRoots.register(entry.taskDir);
+    const identity = this.taskRoots.verifiedIdentity(entry.taskId);
+    if (!identity) this.taskMoved(entry.taskId);
+    const key = normalizeTaskPath(entry.taskDir);
+    const original = this.identities.get(key);
+    if (original && !this.sameIdentity(original, identity)) this.taskMoved(entry.taskId);
+    this.identities.set(key, identity);
+  }
+
+  private claimTaskHost(taskId: string, taskDir: string, bootstrap: boolean): Promise<PerTaskHostEntry> {
+    const key = normalizeTaskPath(taskDir);
+    const identity = this.taskRoots?.verifiedIdentity(taskId) ?? null;
+    if (this.taskRoots && !bootstrap && !identity) this.taskMoved(taskId);
+    const sameTask = [...this.pendingHosts.values()].find((claim) => claim.taskId === taskId);
+    if (sameTask && normalizeTaskPath(sameTask.taskDir) !== key) this.taskMoved(taskId);
+    const pending = this.pendingHosts.get(key);
+    if (pending) {
+      if (pending.taskId !== taskId || !this.sameIdentity(pending.identity, identity)) this.taskMoved(taskId);
+      return pending.promise;
+    }
+    const owned = this.byTaskDir.get(key);
+    if (owned) {
+      if (owned.taskId !== taskId) this.taskMoved(taskId);
+      return Promise.resolve(owned);
+    }
+    // Publish ownership before invoking even a reentrant spawn. A late child
+    // remains owned after sealing or deadline expiry; no business op is replayed.
+    const promise = Promise.resolve().then(() => this.spawn(this.workspaceId, { taskId, taskDir })).then((spawned) => {
+      const entry = { taskId, taskDir, client: spawned.client, child: spawned.child };
+      this.byTaskDir.set(key, entry);
+      const dirs = this.byTaskId.get(taskId) ?? new Set<string>();
+      dirs.add(key); this.byTaskId.set(taskId, dirs);
+      if (identity) this.identities.set(key, identity);
+      this.bindHostRequests(entry.client);
+      return entry;
+    });
+    this.pendingHosts.set(key, { taskId, taskDir, identity, promise });
+    void promise.then(() => { this.pendingHosts.delete(key); }, (error: unknown) => {
+      this.pendingHosts.delete(key);
+      this.spawnFailures.set(key, { taskId, error: errorMessage(error) });
+    });
+    return promise;
   }
 
   /**
@@ -557,45 +648,84 @@ export class PerTaskHostRegistry {
    * so the caller can surface them instead of losing the task silently; the
    * forked Hosts stay alive until the caller disposes them.
    */
-  async quitAll(input: { origin: TaskOpOrigin; label?: string }): Promise<{
-    ok: boolean;
-    tasks: { taskId: string; ok: boolean; applied: string[]; failures: unknown[]; retainedTasks: string[]; error?: string }[];
-  }> {
-    const tasks: { taskId: string; ok: boolean; applied: string[]; failures: unknown[]; retainedTasks: string[]; error?: string }[] = [];
-    const payload: Record<string, unknown> = input.label === undefined ? {} : { label: input.label };
-    for (const entry of this.byTaskDir.values()) {
-      try {
-        const result = await entry.client.task({
-          workspaceId: this.workspaceId,
-          taskId: entry.taskId,
-          op: "task/quit",
-          payload,
-          origin: input.origin,
-        }, { timeoutMs: 120_000 });
-        const quit = (result.payload as { quit?: { applied?: string[]; plan?: { failures?: unknown[]; retainedTasks?: string[] } } }).quit;
-        if (!quit || !Array.isArray(quit.applied) || !quit.plan || !Array.isArray(quit.plan.failures) || !Array.isArray(quit.plan.retainedTasks)) throw new Error("host-quit-report-invalid");
-        tasks.push({
-          taskId: entry.taskId,
-          ok: true,
-          applied: quit?.applied ?? [],
-          failures: quit?.plan?.failures ?? [],
-          retainedTasks: quit?.plan?.retainedTasks ?? [],
+  quitAll(input: { origin: TaskOpOrigin; label?: string }): Promise<TaskHostsQuitReport> {
+    const payloadCheck = validateHostTaskOp("task/quit", input.label === undefined ? {} : { label: input.label });
+    if (!payloadCheck.ok) return Promise.reject(Error(payloadCheck.error));
+    const caller = classifyControlCaller(input);
+    if (!caller.ok) return Promise.reject(Error(caller.error));
+    if (caller.kind !== "human") return Promise.reject(Error("permission-denied: main quit requires an attested UI caller"));
+    if (this.quitReceipt) return this.quitReceipt;
+    this.closing = true;
+    this.admission.seal();
+    let expired = false;
+    const completed = new Map<string, TaskHostQuitResult>();
+    const work = (async (): Promise<TaskHostsQuitReport> => {
+      await Promise.allSettled([...this.pendingHosts.values()].map((claim) => claim.promise));
+      if (expired) return { ok: false, tasks: [] };
+      const payload: Record<string, unknown> = input.label === undefined ? {} : { label: input.label };
+      // Host quit cancels accepted prompts/tools. Fan out before waiting for
+      // main routes: their terminal state can depend on that cancellation.
+      await Promise.all([...this.byTaskDir.values()].map(async (entry) => {
+        let task: TaskHostQuitResult;
+        try {
+          const result = await entry.client.task({
+            workspaceId: this.workspaceId, taskId: entry.taskId,
+            op: "task/quit", payload, origin: input.origin,
+          }, { timeoutMs: 120_000 });
+          const quit = (result.payload as { quit?: { applied?: string[]; plan?: { failures?: unknown[]; retainedTasks?: string[] } } }).quit;
+          if (!quit || !Array.isArray(quit.applied) || !quit.plan || !Array.isArray(quit.plan.failures) || !Array.isArray(quit.plan.retainedTasks)) throw Error("host-quit-report-invalid");
+          task = { taskId: entry.taskId, ok: true, applied: quit.applied, failures: quit.plan.failures, retainedTasks: quit.plan.retainedTasks };
+        } catch (error) {
+          task = { taskId: entry.taskId, ok: false, applied: [], failures: [], retainedTasks: [entry.taskId], error: errorMessage(error) };
+        }
+        completed.set(entry.taskId, task);
+      }));
+      await this.admission.drain();
+      for (const failure of this.spawnFailures.values()) {
+        const previous = completed.get(failure.taskId);
+        completed.set(failure.taskId, {
+          taskId: failure.taskId, ok: false, applied: previous?.applied ?? [], failures: previous?.failures ?? [],
+          retainedTasks: [...new Set([...(previous?.retainedTasks ?? []), failure.taskId])], error: failure.error,
         });
-      } catch (error) {
-        tasks.push({ taskId: entry.taskId, ok: false, applied: [], failures: [], retainedTasks: [entry.taskId], error: errorMessage(error) });
       }
-    }
-    return { ok: tasks.every((task) => task.ok && task.failures.length === 0 && task.retainedTasks.length === 0), tasks };
+      const ids = new Set([...this.byTaskDir.values()].map((entry) => entry.taskId));
+      for (const taskId of completed.keys()) ids.add(taskId);
+      const tasks = [...ids].map((taskId) => completed.get(taskId)!);
+      return { ok: tasks.every((task) => task.ok && task.failures.length === 0 && task.retainedTasks.length === 0), tasks };
+    })();
+    // One budget covers ownership, Host cancellation/report, and main drain.
+    // Expiry bounds only this receipt, not the lifetime of owned work.
+    this.quitReceipt = shutdownDeadline(work, 15_000, "main-task-shutdown-unconfirmed").then((report) => {
+      this.quitConfirmed = report.ok;
+      return report;
+    }, (error: unknown) => {
+      expired = true;
+      const ids = new Set([
+        ...[...this.byTaskDir.values()].map((entry) => entry.taskId),
+        ...[...this.pendingHosts.values()].map((claim) => claim.taskId),
+        ...[...this.spawnFailures.values()].map((failure) => failure.taskId),
+        ...this.activeTaskOps.keys(),
+      ]);
+      return { ok: false, tasks: [...ids].map((taskId) => ({
+        taskId, ok: false, applied: completed.get(taskId)?.applied ?? [],
+        failures: completed.get(taskId)?.failures ?? [], retainedTasks: [taskId], error: errorMessage(error),
+      })) };
+    });
+    return this.quitReceipt;
   }
 
-  /** Dispose every forked Host (app exit / window-all-closed). */
+  /** Dispose owned Hosts only after a successful registry quit receipt. */
   disposeAll(): void {
+    if (!this.quitConfirmed || this.pendingHosts.size || this.activeTaskOps.size) {
+      throw Error("main-task-shutdown-unconfirmed");
+    }
     for (const entry of this.byTaskDir.values()) {
       entry.client.dispose();
       entry.child.kill();
     }
     this.byTaskDir.clear();
     this.byTaskId.clear();
+    this.identities.clear();
   }
 }
 
