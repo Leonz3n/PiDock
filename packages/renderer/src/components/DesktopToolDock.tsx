@@ -133,7 +133,7 @@ function FilesTool({ taskId }: { taskId: string }) {
   const [tree, setTree] = useState<WorkspaceTreeEntryView[] | null>(null);
   const [preview, setPreview] = useState<WorkspacePreviewView | null>(null);
   const [diff, setDiff] = useState<string | null>(null);
-  const [taskDirFailed, setTaskDirFailed] = useState<string | null>(null);
+  const [taskDir, setTaskDir] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -176,7 +176,7 @@ function FilesTool({ taskId }: { taskId: string }) {
         return;
       }
       setRoots(parsed.roots);
-      setTaskDirFailed(null);
+      setTaskDir(parsed.taskDir);
       const first = parsed.roots[0];
       if (!first) {
         setError(null);
@@ -232,6 +232,7 @@ function FilesTool({ taskId }: { taskId: string }) {
     setError(null);
   };
 
+  const selectedRoot = roots?.find((root) => root.id === rootId);
   if (roots === null) return <p className="text-xs text-muted">正在读取任务文件根…</p>;
 
   return (
@@ -241,7 +242,22 @@ function FilesTool({ taskId }: { taskId: string }) {
           {error}
         </p>
       )}
-      {taskDirFailed && <p className="text-[11px] text-muted">{taskDirFailed}</p>}
+      {taskDir !== null && (
+        <dl className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-1 text-[11px]">
+          <dt className="text-muted">任务目录</dt>
+          <dd className="min-w-0 break-all font-mono">{taskDir}</dd>
+          {selectedRoot && <>
+            <dt className="text-muted">实际目录</dt>
+            <dd className="min-w-0 break-all font-mono">{selectedRoot.path}</dd>
+            {selectedRoot.kind === "worktree" && <>
+              <dt className="text-muted">远程基线分支</dt>
+              <dd className="min-w-0 break-all font-mono">{selectedRoot.branch || "Host 未提供"}</dd>
+              <dt className="text-muted">创建提交</dt>
+              <dd className="min-w-0 break-all font-mono">{selectedRoot.baseCommit || "Host 未提供"}</dd>
+            </>}
+          </>}
+        </dl>
+      )}
       {!roots.length && !error && <p className="text-xs text-muted">本任务没有可读取的文件根</p>}
       {roots.length > 0 && (
         <>
@@ -511,7 +527,7 @@ export function DesktopToolDock({
       </header>
       <Separator />
       <div className="min-h-0 flex-1 overflow-auto p-3">
-        {tool === "files" ? <FilesTool taskId={taskId} /> : tool === "terminal" ? <TerminalTool taskId={taskId} /> : <ProtocolTool key={taskId} taskId={taskId} />}
+        {tool === "files" ? <FilesTool key={taskId} taskId={taskId} /> : tool === "terminal" ? <TerminalTool taskId={taskId} /> : <ProtocolTool key={taskId} taskId={taskId} />}
       </div>
     </aside>
     </TooltipProvider>

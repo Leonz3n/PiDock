@@ -20,6 +20,64 @@ afterEach(() => {
 });
 
 describe("[UI 对齐] S8d production tool dock", () => {
+  it("shows the Host task directory and selected worktree baseline without shortening their identities", async () => {
+    const taskDir = "/tmp/" + "long-task-path/".repeat(20) + "task-1";
+    const worktreePath = `${taskDir}/worktrees/primary`;
+    const baseCommit = "0123456789abcdef0123456789abcdef01234567";
+    bridge(async (_taskId, op) => op === "task/fileRoots" ? {
+      ok: true, payload: { taskDir, roots: [{ id: "root-1", kind: "worktree", label: "primary", path: worktreePath, branch: "release/v2", baseCommit }] },
+    } : { ok: true, payload: { tree: { attribution, path: "", entries: [], truncated: false } } });
+    render(<DesktopToolDock taskId="task-1" tool="files" onClose={() => {}} />);
+    expect(await screen.findByText(taskDir)).toBeInTheDocument();
+    expect(screen.getByText(worktreePath)).toBeInTheDocument();
+    expect(screen.getByText(baseCommit)).toBeInTheDocument();
+    expect(screen.getByText("远程基线分支").nextElementSibling).toHaveTextContent("release/v2");
+  });
+
+  it("keeps metadata aligned with the selected root and does not invent shared-directory Git fields", async () => {
+    const baseCommit = "abcdefabcdefabcdefabcdefabcdefabcdefabcd";
+    bridge(async (_taskId, op, payload) => op === "task/fileRoots" ? {
+      ok: true, payload: { taskDir: "/tmp/task-1", roots: [
+        { id: "root-1", kind: "worktree", label: "primary", path: "/tmp/task-1/primary", branch: "release/v2", baseCommit },
+        { id: "shared", kind: "shared-dir", label: "assets", path: "/tmp/task-1/assets", sourcePath: "/tmp/shared-assets" },
+        { id: "root-2", kind: "worktree", label: "secondary", path: "/tmp/task-1/secondary" },
+      ] },
+    } : { ok: true, payload: { tree: { attribution: { ...attribution, rootId: payload["rootId"] }, path: "", entries: [], truncated: false } } });
+    render(<DesktopToolDock taskId="task-1" tool="files" onClose={() => {}} />);
+    expect(await screen.findByText(baseCommit)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /assets/ }));
+    expect(screen.getByText("/tmp/task-1/assets")).toBeInTheDocument();
+    expect(screen.queryByText("创建提交")).not.toBeInTheDocument();
+    expect(screen.queryByText("远程基线分支")).not.toBeInTheDocument();
+    expect(screen.queryByText(baseCommit)).not.toBeInTheDocument();
+    expect(screen.queryByText("/tmp/task-1/primary")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "secondary" }));
+    expect(screen.getByText("/tmp/task-1/secondary")).toBeInTheDocument();
+    expect(screen.getByText("创建提交").nextElementSibling).toHaveTextContent("Host 未提供");
+    expect(screen.getByText("远程基线分支").nextElementSibling).toHaveTextContent("Host 未提供");
+    expect(screen.queryByText(baseCommit)).not.toBeInTheDocument();
+    await screen.findByText("目录为空");
+  });
+
+  it("clears previous-task metadata while the next task is loading or refused", async () => {
+    let resolveNext!: (value: unknown) => void;
+    bridge(async (taskId, op) => {
+      if (taskId === "task-2" && op === "task/fileRoots") return new Promise((resolve) => { resolveNext = resolve; });
+      if (op === "task/fileRoots") return { ok: true, payload: { taskDir: "/tmp/task-1", roots: [{ id: "root-1", kind: "worktree", label: "primary", path: "/tmp/task-1/primary", baseCommit: "old-commit" }] } };
+      return { ok: true, payload: { tree: { attribution, path: "", entries: [], truncated: false } } };
+    });
+    const { rerender } = render(<DesktopToolDock taskId="task-1" tool="files" onClose={() => {}} />);
+    expect(await screen.findByText("old-commit")).toBeInTheDocument();
+    rerender(<DesktopToolDock taskId="task-2" tool="files" onClose={() => {}} />);
+    expect(screen.queryByText("/tmp/task-1")).not.toBeInTheDocument();
+    expect(screen.queryByText("old-commit")).not.toBeInTheDocument();
+    expect(screen.getByText("正在读取任务文件根…")).toBeInTheDocument();
+    resolveNext({ ok: false, error: "new task refused" });
+    expect(await screen.findByText("new task refused")).toBeInTheDocument();
+    expect(screen.queryByText("任务目录")).not.toBeInTheDocument();
+    expect(screen.queryByText("old-commit")).not.toBeInTheDocument();
+  });
+
   it("renders real roots and a real tree, and opens a real preview", async () => {
     const calls: string[] = [];
     const taskOp = vi.fn(async (_taskId: string, op: string, payload: Record<string, unknown>) => {
