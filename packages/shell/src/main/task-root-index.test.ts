@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TaskRootIndex, taskRootIndexPath } from "./task-root-index.js";
@@ -25,6 +25,51 @@ function task(root: string, id = "task-abcdef12", taskId = id, createdAt = "2026
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 
 describe("main-owned override task root index", () => {
+  it("distinguishes a valid empty default root from a missing root and retries after explicit restoration", () => {
+    const { home, defaultRoot, userData, index } = setup();
+    expect(index.inventory()).toEqual({ tasks: [], roots: [{ label: "默认任务根", state: "ready" }] });
+    const dir = task(defaultRoot);
+    expect(index.resolve("task-abcdef12")).toBe(dir);
+    const moved = join(home, "moved-default");
+    renameSync(defaultRoot, moved);
+    const unavailable = { tasks: [], roots: [{ label: "默认任务根", state: "error", message: expect.stringContaining("移走") }] };
+    expect(index.inventory()).toEqual(unavailable);
+    expect(index.resolve("task-abcdef12")).toBeNull();
+    expect(new TaskRootIndex(userData, defaultRoot).inventory()).toEqual(unavailable);
+    expect(existsSync(defaultRoot)).toBe(false);
+    renameSync(moved, defaultRoot);
+    expect(index.inventory().roots).toEqual([{ label: "默认任务根", state: "ready" }]);
+    expect(index.resolve("task-abcdef12")).toBe(dir);
+  });
+
+  it.each(["missing", "file", "empty-link"])("refuses a %s default root on first inventory without creating or routing a task", (kind) => {
+    const { home, defaultRoot, index } = setup();
+    rmSync(defaultRoot, { recursive: true });
+    if (kind === "file") writeFileSync(defaultRoot, "not a directory");
+    if (kind === "empty-link") {
+      const outside = join(home, "outside-empty");
+      mkdirSync(outside);
+      symlinkSync(outside, defaultRoot);
+    }
+    expect(index.inventory()).toEqual({ tasks: [], roots: [{ label: "默认任务根", state: "error", message: expect.stringContaining("移走") }] });
+    expect(index.resolve("task-abcdef12")).toBeNull();
+    if (kind === "missing") expect(existsSync(defaultRoot)).toBe(false);
+  });
+
+  it.each(["missing", "equal-replacement"])("reports %s indexed identities as unavailable, not as unindexed tasks to import", async (kind) => {
+    const { override, index } = setup();
+    const original = task(override);
+    await index.importRoot(override);
+    rmSync(original, { recursive: true });
+    if (kind === "equal-replacement") task(override, "task-00000002");
+    const inventory = index.inventory();
+    expect(inventory.roots[1]).toMatchObject({ state: "error" });
+    expect(inventory.roots[1]?.message).not.toContain("未登记");
+    expect(inventory.tasks).toEqual([]);
+    expect(index.resolve("task-abcdef12")).toBeNull();
+    expect(index.resolve("task-00000002")).toBeNull();
+  });
+
   it("registers only successfully persisted override identities, reopens and idempotently retries", async () => {
     const { defaultRoot, override, userData, index } = setup();
     const original = task(defaultRoot, "task-00000001");
