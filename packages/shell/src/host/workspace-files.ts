@@ -61,22 +61,10 @@ export interface WorkspaceFileReaders {
 /** Read cap: a file bigger than this is refused rather than loaded. */
 export const MAX_PREVIEW_BYTES = 1_000_000;
 
-function stripTrailingSeparator(path: string): string {
-  return path.replace(/[\\/]+$/, "") || "/";
-}
-
-/**
- * Comparable form of one real path. `realpathSync` returns platform
- * separators, so both sides are slash-normalized before the prefix check
- * (otherwise every `C:\repo\name` looks outside `C:\repo`). A path shaped
- * like a Windows drive or UNC path is additionally case-folded, because those
- * filesystems compare case-insensitively; a POSIX absolute path always starts
- * with `/`, so it is never folded.
- */
-function comparisonKey(path: string): string {
-  const normalized = stripTrailingSeparator(path).replace(/\\/g, "/");
-  const windowsShaped = /^[A-Za-z]:\//.test(normalized) || normalized.startsWith("//");
-  return windowsShaped ? normalized.toLowerCase() : normalized;
+/** Windows separators/case apply only to a Windows task, never a POSIX target. */
+function comparisonKey(path: string, windowsPaths: boolean): string {
+  if (!windowsPaths) return path.replace(/\/+$/, "") || "/";
+  return (path.replace(/[\\/]+$/, "") || "/").replace(/\\/g, "/").toLowerCase();
 }
 
 export const realWorkspaceFileReaders: WorkspaceFileReaders = {
@@ -262,9 +250,12 @@ export class TaskWorkspaceFiles {
   private rootEscapeError(root: WorkspaceRoot, absolute: string): string | undefined {
     try { this.protection?.assert(absolute); this.protection?.assert(root.path); }
     catch { return "protected-application-path: 应用私有目录或其身份不可用于任务工具"; }
-    const rootReal = comparisonKey(this.readers.realPath(root.path));
+    // Drive/UNC task paths also support the existing injected Windows reader
+    // contract. Slash-rooted POSIX tasks keep literal backslashes and case.
+    const windowsPaths = process.platform === "win32" || /^[A-Za-z]:[\\/]/.test(this.taskDir) || this.taskDir.startsWith("\\\\");
+    const rootReal = comparisonKey(this.readers.realPath(root.path), windowsPaths);
     const resolved = this.readers.realPath(absolute);
-    const targetReal = comparisonKey(resolved);
+    const targetReal = comparisonKey(resolved, windowsPaths);
     if (targetReal === rootReal || targetReal.startsWith(`${rootReal}/`)) return undefined;
     return `path-out-of-scope: ${root.label} 内的链接指向根之外（${resolved}），已拒绝读取`;
   }
