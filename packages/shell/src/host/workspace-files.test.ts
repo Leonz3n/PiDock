@@ -3,7 +3,7 @@
  * readers (no filesystem, no git) and secret masking at the boundary.
  */
 import { describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TaskDiskRecord } from "./task-store.js";
@@ -196,8 +196,73 @@ describe("TaskWorkspaceFiles", () => {
     expect(files.preview({ rootId: "repo", relative: "api.ts" }).ok).toBe(true);
   });
 
-  it("applies the containment check to Windows-shaped real paths", () => {
-    const taskDir = "C:\\tasks\\task-aaaaaaaa";
+  it.skipIf(process.platform === "win32")("refuses real POSIX sibling links with literal backslashes in tree, preview and diff", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pidock-files-posix-"));
+    try {
+      const root = join(dir, "repo");
+      const sibling = join(dir, "repo\\old");
+      mkdirSync(root);
+      mkdirSync(sibling);
+      writeFileSync(join(sibling, "outside.txt"), "synthetic outside file contents\n");
+      symlinkSync(sibling, join(root, "escape"));
+      const disk = memoryTaskStore();
+      disk.writeTask(dir, { ...record(), taskDir: dir, root: dir, repos: ["repo"], repoSources: [] });
+      const files = new TaskWorkspaceFiles("task-aaaaaaaa", dir, disk, {
+        ...realWorkspaceFileReaders,
+        runGit: () => ({ ok: true, stdout: "synthetic outside diff contents" }),
+      });
+      const results = [
+        files.tree({ rootId: "repo", relative: "escape" }),
+        files.preview({ rootId: "repo", relative: "escape/outside.txt" }),
+        files.diff({ rootId: "repo", relative: "escape/outside.txt" }),
+      ];
+      for (const result of results) {
+        expect.soft(result).toMatchObject({ ok: false, error: expect.stringContaining("path-out-of-scope") });
+        expect.soft(JSON.stringify(result)).not.toContain("synthetic outside");
+      }
+      const listed = files.tree({ rootId: "repo" });
+      expect(listed).toMatchObject({ ok: true, tree: { entries: [] } });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("preserves literal backslashes in real POSIX roots and allows their nested symlink targets", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pidock-files-posix-root-"));
+    try {
+      const root = join(dir, "repo\\");
+      const nested = join(root, "nested\\");
+      mkdirSync(nested, { recursive: true });
+      writeFileSync(join(nested, "api.ts"), "export const inside = true;\n");
+      symlinkSync(nested, join(root, "alias"));
+      const disk = memoryTaskStore();
+      disk.writeTask(dir, { ...record(), taskDir: dir, root: dir, repos: ["repo\\"], repoSources: [] });
+      const files = new TaskWorkspaceFiles("task-aaaaaaaa", dir, disk, realWorkspaceFileReaders);
+      expect(files.tree({ rootId: "repo\\", relative: "alias" })).toMatchObject({
+        ok: true, tree: { entries: [{ path: "alias/api.ts" }] },
+      });
+      expect(files.preview({ rootId: "repo\\", relative: "alias/api.ts" })).toMatchObject({
+        ok: true, preview: { source: "export const inside = true;\n" },
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("does not case-fold double-slash POSIX real paths", () => {
+    const files = new TaskWorkspaceFiles("task-aaaaaaaa", TASK_DIR, store(), readers({
+      realPath: (path) => path.endsWith("outside.txt") ? "//sandbox/repo/outside.txt" : "//sandbox/Repo",
+      readTextFile: () => ({ ok: true, text: "synthetic outside file contents", bytes: 31 }),
+    }));
+    expect(files.preview({ rootId: "front-monorepo", relative: "outside.txt" })).toMatchObject({
+      ok: false, error: expect.stringContaining("path-out-of-scope"),
+    });
+  });
+
+  it.each([
+    { taskDir: "C:\\tasks\\task-aaaaaaaa", inside: "c:\\tasks\\task-aaaaaaaa\\front-monorepo\\api.ts", outside: "C:\\Windows\\system32\\drivers\\etc\\hosts" },
+    { taskDir: "\\\\server\\share\\task-aaaaaaaa", inside: "\\\\SERVER\\SHARE\\task-aaaaaaaa\\front-monorepo\\api.ts", outside: "\\\\server\\other-share\\hosts" },
+  ])("applies the containment check to injected Windows real paths in $taskDir", ({ taskDir, inside, outside }) => {
     const disk = memoryTaskStore();
     disk.writeTask(taskDir, { ...record(), taskDir });
     // `joinRoot` builds this with a forward slash; the realpath reader answers
@@ -213,8 +278,8 @@ describe("TaskWorkspaceFiles", () => {
         ],
         readTextFile: () => ({ ok: true, text: "export const ok = 1;\n", bytes: 22 }),
         realPath: (path) => {
-          if (path.endsWith("secret.txt")) return "C:\\Windows\\system32\\drivers\\etc\\hosts";
-          if (path.endsWith("api.ts")) return "c:\\tasks\\task-aaaaaaaa\\front-monorepo\\api.ts";
+          if (path.endsWith("secret.txt")) return outside;
+          if (path.endsWith("api.ts")) return inside;
           return path;
         },
       }),
