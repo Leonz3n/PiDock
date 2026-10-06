@@ -81,6 +81,7 @@ export function DesktopConversation({ taskId, name, roots, association, onBack, 
   const generation = useRef(0);
   const sequence = useRef(new Map<string, number>());
   const busy = useRef(false);
+  const composing = useRef(false);
   const rootsRef = useRef(roots);
   const setCurrent = (next: Attempt | null) => { attemptRef.current = next; setAttempt(next); };
   const request = useCallback(async (action: string, fields: Record<string, unknown> = {}) => {
@@ -388,7 +389,7 @@ export function DesktopConversation({ taskId, name, roots, association, onBack, 
         {attempt?.phase === "accepted" && <Button type="button" onClick={() => void stop()}><Icon name="stop" />停止</Button>}
       </div>
       <form onSubmit={submit} className="min-w-0 rounded-[10px] border border-line bg-bg p-2">
-        <textarea aria-label="消息" value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); if (!blocked) void start(); } }} rows={2} maxLength={16384} className="w-full min-w-0 resize-y border-0 bg-transparent p-1 text-sm outline-none" placeholder="描述你想做什么，或粘贴图片 / 截图…" />
+        <textarea aria-label="消息" value={draft} onChange={(event) => setDraft(event.target.value)} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !composing.current && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) { event.preventDefault(); if (!blocked) void start(); } }} rows={2} maxLength={16384} className="w-full min-w-0 resize-y border-0 bg-transparent p-1 text-sm outline-none" placeholder="描述你想做什么，或粘贴图片 / 截图…" />
         <div className="mt-1 flex min-w-0 flex-wrap items-center gap-2 text-[11px] text-muted">
           <Tooltip><TooltipTrigger asChild>
             <Button type="button" size="icon-sm" disabled aria-label="附件（未接线）" className="text-[#b3b9be]"><Icon name="plus" /></Button>
