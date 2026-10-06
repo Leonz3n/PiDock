@@ -7,14 +7,18 @@
 
 | 包 | 路径 | `dev`（persistent，不缓存） | `build`（`dependsOn: ["^build"]`） |
 | --- | --- | --- | --- |
-| `@pidock/shell` | `packages/shell` | `electron .`（main + utilityProcess Host + 壳内视图） | `copy-static.mjs` + `tsc -p tsconfig.build.json`（`dist/main` + `dist/host` + `dist/rpc` + `dist/preload` + `dist/renderer` 静态页） |
+| `@pidock/shell` | `packages/shell` | `pnpm build && electron .`（main + utilityProcess Host + 壳内视图） | renderer build → `copy-static.mjs` → `tsc -p tsconfig.build.json`（`dist/main` + `dist/host` + `dist/rpc` + `dist/preload` + `dist/renderer` 生产 React 入口与资产） |
 | `@pidock/renderer` | `packages/renderer` | `vite --host 127.0.0.1 --port 4335 --strictPort` | `vite build`（`dist/`） |
 
 根 `pnpm dev/build/typecheck/test/lint` 经 `turbo run` 调度两个包的同名任务；
 `turbo.json` 的 `build`/`test` 声明 `dependsOn: ["^build"]`（`test`
 在 workspace 构建产物之后运行），`typecheck` 声明 `dependsOn: ["^typecheck"]`，共享协议与
-构建先后关系正确：`shell` 的静态页拷贝不依赖 renderer 构建产物（壳内
-`dist/renderer/*.html` 为 shell 自带占位页），renderer 构建产物由 Vite 独立产出。
+构建先后关系正确：`shell` 通过 workspace 依赖等待 renderer build，直接运行
+shell build 时也先执行 renderer build，再将 Vite 生产入口及相对路径资产复制到
+`dist/renderer/`，清除旧资产后拷贝。正常 `electron .` 不依赖 Vite，默认加载
+React `index.html`；shell 自带诊断页另存为 `smoke.html`，仅双视图诊断路径选用，
+`task.html` 保留用于任务页 smoke。`build` 的缓存输入包含 `scripts/**` 与
+`tsconfig.build.json`；`typecheck`/`test` 也包含该 TypeScript 构建配置。
 
 ## 本地启动
 
@@ -25,9 +29,11 @@ pnpm --filter @pidock/renderer dev   # 仅渲染层（127.0.0.1:4335）
 pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运行）
 ```
 
-- `PIDOCK_RENDERER_URL` / `PIDOCK_TASK_URL` 指向 dev server 时，壳内视图走
-  `loadURL`（开发联调）；未设置时走 `dist/renderer/*.html` 的 `loadFile`
- （打包/离线路径，见 `runtime.ts loadTrustedViews`）。
+- `PIDOCK_RENDERER_URL` 指向 dev server 时，自有界面走 `loadURL`（开发联调）；
+  未设置覆盖 URL 的正常启动走 `dist/renderer/index.html` 的 `loadFile`。
+  显式设置 `PIDOCK_TASK_URL` 会选用双视图诊断布局（自有界面默认 `smoke.html`，
+  任务页走该 URL）；`--smoke` 无覆盖时加载 `smoke.html` 与 `task.html`，
+  不代表默认生产入口（见 `runtime.ts loadTrustedViews`）。
 - main + utilityProcess Host + renderer 由同一 `pnpm dev` 任务图启动；
   退出/重启只清理本次所属进程：`main.ts window-all-closed` 调用
   `client.dispose()` + `child.kill()` + `tasks.disposeAll()`，单注册表
