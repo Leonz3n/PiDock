@@ -50,6 +50,79 @@ const send = async (text: string) => {
 afterEach(() => { cleanup(); localStorage.clear(); delete window.pidock; vi.restoreAllMocks(); });
 
 describe("Desktop SDK conversation", () => {
+  it("labels composer usage as recent reported input and output, not session cumulative usage", async () => {
+    const f = setup();
+    f.setMessages([
+      { role: "user", text: "first request", usage: null },
+      { role: "assistant", text: "first reply", usage: { input: 100, output: 20, cacheRead: 900, cacheWrite: 30 } },
+      { role: "user", text: "second request", usage: null },
+      { role: "assistant", text: "second reply", usage: { input: 50, output: 10, cacheRead: 800, cacheWrite: 40 } },
+    ]);
+    mount(f);
+    expect(await screen.findByText("近期已报告输入+输出 180 tokens")).toBeInTheDocument();
+    expect(screen.queryByText(/本会话.*tokens/)).not.toBeInTheDocument();
+  });
+
+  it.each([
+    { messages: [] },
+    { messages: [{ role: "user", text: "request", usage: null }] },
+    { messages: [{ role: "assistant", text: "unreported reply", usage: null }] },
+  ])("does not present an unreported window as zero usage ($messages)", async ({ messages }) => {
+    const f = setup(); f.setMessages(messages); mount(f);
+    await waitFor(() => expect(screen.getByText("已连接")).toBeInTheDocument());
+    expect(screen.getByText("近期用量未报告")).toBeInTheDocument();
+    expect(screen.queryByText(/0 tokens/)).not.toBeInTheDocument();
+  });
+
+  it("discloses the bounded window and missing assistant reports without inferring truncation", async () => {
+    const f = setup();
+    f.setMessages([
+      { role: "assistant", text: "reported", usage: { input: 0, output: 0, cacheRead: 15, cacheWrite: 5 } },
+      ...Array.from({ length: 79 }, (_, index) => ({ role: "assistant", text: `missing ${index}`, usage: null })),
+    ]);
+    mount(f);
+    const usage = await screen.findByText("近期已报告输入+输出 0 tokens");
+    expect(usage).toHaveAttribute("title", "最近最多 80 条 SDK 消息；不是会话累计，可能不含更早用量。79 条助手消息未报告用量。");
+    expect(screen.queryByText(/已截断|较早用量未计入/)).not.toBeInTheDocument();
+  });
+
+  it("withdraws composer numbers after a failed projection instead of showing stale verified usage", async () => {
+    const f = setup();
+    f.setMessages([{ role: "assistant", text: "stored reply", usage: { input: 10, output: 2, cacheRead: 0, cacheWrite: 0 } }]);
+    mount(f);
+    expect(await screen.findByText("近期已报告输入+输出 12 tokens")).toBeInTheDocument();
+    f.setMessages([{ role: "assistant", text: "invalid reply", usage: { input: -1 } }]);
+    fireEvent.click(screen.getByRole("button", { name: "核验" }));
+    await screen.findByText(/SDK 消息返回异常/);
+    expect(screen.getByText("近期用量未核验")).toBeInTheDocument();
+    expect(screen.queryByText("近期已报告输入+输出 12 tokens")).not.toBeInTheDocument();
+  });
+
+  it("does not reuse another task's usage while a fresh subscription is pending or after a late old reply", async () => {
+    const a = setup("task-a");
+    a.setMessages([{ role: "assistant", text: "task A reply", usage: { input: 20, output: 3, cacheRead: 0, cacheWrite: 0 } }]);
+    const view = mount(a);
+    expect(screen.getByText("近期用量未核验")).toBeInTheDocument();
+    expect(await screen.findByText("近期已报告输入+输出 23 tokens")).toBeInTheDocument();
+    view.unmount();
+    const b = setup("task-b");
+    let resolveSubscribe: ((value: { ok: boolean; payload: unknown }) => void) | undefined;
+    const sdkTurn = b.bridge.sdkTurn!;
+    b.bridge.sdkTurn = (request) => request.action === "subscribe"
+      ? new Promise((resolve) => { resolveSubscribe = resolve; })
+      : sdkTurn(request);
+    const pending = mount(b, "task-b");
+    await waitFor(() => expect(resolveSubscribe).toBeDefined());
+    expect(screen.getByText("近期用量未核验")).toBeInTheDocument();
+    expect(screen.queryByText(/23 tokens/)).not.toBeInTheDocument();
+    pending.unmount();
+    const c = setup("task-c"); mount(c, "task-c");
+    await screen.findByText("近期用量未报告");
+    await act(async () => resolveSubscribe!({ ok: true, payload: { taskId: "task-b", sessionId: "main", snapshot: snapshot([{ role: "assistant", text: "late reply", usage: { input: 40, output: 4, cacheRead: 0, cacheWrite: 0 } }]) } }));
+    expect(screen.getByText("近期用量未报告")).toBeInTheDocument();
+    expect(screen.queryByText(/44 tokens/)).not.toBeInTheDocument();
+  });
+
   it("keeps composition confirmation local even when Enter reports isComposing false", async () => {
     const f = setup(); mount(f);
     await screen.findByText(/尚未开始/);
