@@ -51,6 +51,295 @@ const TASK_RESULT: HostTaskResult = {
   payload: { sessionId: "main" },
 };
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail; });
+  return { promise, resolve, reject };
+}
+
+const QUIT_ORIGIN = { kind: "shell-ui" as const, senderWebContentsId: 7 };
+const QUIT_RESULT: HostTaskResult = {
+  workspaceId: "workspace-a", taskId: "task-a", op: "task/quit",
+  payload: { quit: { applied: ["save-state:task-a"], plan: { failures: [], retainedTasks: [] } } },
+};
+
+describe("PerTaskHostRegistry main shutdown admission", () => {
+  it("single-flights concurrent first use of the same task without serializing its operations", async () => {
+    const started = deferred<void>(), ready = deferred<void>(), firstOp = deferred<HostTaskResult>();
+    const transport = fakeTransport(TASK_RESULT);
+    transport.task.mockImplementationOnce(() => firstOp.promise);
+    const spawn = vi.fn(async () => {
+      started.resolve(); await ready.promise;
+      return { client: transport as never, child: { kill: vi.fn() } as never };
+    });
+    const registry = new PerTaskHostRegistry("workspace-a", spawn, () => "/tasks/a");
+    const first = registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
+    await started.promise;
+    const second = registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
+    ready.resolve();
+    expect(await second).toEqual(TASK_RESULT);
+    firstOp.resolve(TASK_RESULT); await first;
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(transport.task).toHaveBeenCalledTimes(2);
+    expect(registry.size).toBe(1);
+  });
+
+  it("does not let a slow first fork serialize first use of another task", async () => {
+    const ready = deferred<void>(), started = deferred<void>();
+    const spawn = vi.fn(async (_ws: string, task: { taskId: string; taskDir: string }) => {
+      if (task.taskId === "task-a") { started.resolve(); await ready.promise; }
+      return { client: fakeTransport(TASK_RESULT) as never, child: { kill: vi.fn() } as never };
+    });
+    const registry = new PerTaskHostRegistry("workspace-a", spawn, (id) => `/tasks/${id}`);
+    const first = registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
+    await started.promise;
+    await registry.routeTaskOp({ taskId: "task-b", op: "task/cancel", payload: {} });
+    expect(spawn).toHaveBeenCalledTimes(2); expect(registry.size).toBe(1);
+    ready.resolve(); await first; expect(registry.size).toBe(2);
+  });
+
+  it("single-flights the provision bootstrap as well as existing tasks", async () => {
+    const ready = deferred<void>(), started = deferred<void>(), transport = fakeTransport(TASK_RESULT);
+    const spawn = vi.fn(async () => { started.resolve(); await ready.promise; return { client: transport as never, child: { kill: vi.fn() } as never }; });
+    const registry = new PerTaskHostRegistry("workspace-a", spawn, () => null);
+    const params = { taskId: "task-3b8f479a", op: "task/provision" as const,
+      payload: { name: "Bootstrap", dirId: "task-3b8f479a", remoteBranch: "main", fetchedCommit: "abc123" } };
+    const first = registry.routeTaskOp(params); await started.promise;
+    const second = registry.routeTaskOp(params); ready.resolve();
+    await Promise.all([first, second]);
+    expect(spawn).toHaveBeenCalledTimes(1); expect(transport.task).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects another task claiming either a pending or an owned folder", async () => {
+    const ready = deferred<void>(), started = deferred<void>(), transport = fakeTransport(TASK_RESULT);
+    const spawn = vi.fn(async () => { started.resolve(); await ready.promise; return { client: transport as never, child: { kill: vi.fn() } as never }; });
+    const registry = new PerTaskHostRegistry("workspace-a", spawn, () => "/tasks/a");
+    const first = registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} }); await started.promise;
+    await expect(registry.routeTaskOp({ taskId: "task-b", op: "task/cancel", payload: {} })).rejects.toThrow("task-moved");
+    ready.resolve(); await first;
+    await expect(registry.routeTaskOp({ taskId: "task-b", op: "task/cancel", payload: {} })).rejects.toThrow("task-moved");
+    expect(spawn).toHaveBeenCalledTimes(1); expect(transport.task).toHaveBeenCalledTimes(1);
+    expect(registry.entryForTaskId("task-a")?.taskDir).toBe("/tasks/a");
+  });
+
+  it("denies invalid quit authority or payload before sealing even an empty registry", async () => {
+    const transport = fakeTransport(QUIT_RESULT), spawn = vi.fn(async () => ({ client: transport as never, child: { kill: vi.fn() } as never }));
+    const registry = new PerTaskHostRegistry("workspace-a", spawn, () => "/tasks/a");
+    for (const origin of [undefined, { kind: "agent-tool", senderWebContentsId: 7 }, { kind: "shell-ui", senderWebContentsId: "7" }]) {
+      await expect(registry.quitAll({ origin: origin as never })).rejects.toThrow("permission-denied");
+    }
+    await expect(registry.quitAll({ origin: QUIT_ORIGIN, label: 5 as never })).rejects.toThrow("invalid-payload");
+    await expect(registry.quitAll({ origin: QUIT_ORIGIN, sessionId: "main" } as never)).rejects.toThrow("permission-denied");
+    expect(spawn).not.toHaveBeenCalled();
+    await registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
+    expect(await registry.quitAll({ origin: QUIT_ORIGIN })).toMatchObject({ ok: true });
+    await expect(registry.quitAll({ origin: undefined as never })).rejects.toThrow("permission-denied");
+    expect(transport.task).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects a recreated indexed directory with the same path and record before dispatch", async () => {
+    const { mkdirSync, writeFileSync, renameSync, rmSync } = await import("node:fs");
+    const home = mkdtempSync(join(tmpdir(), "pidock-pending-identity-")), root = join(home, "tasks"), taskId = "task-3b8f479a", taskDir = join(root, taskId);
+    mkdirSync(taskDir, { recursive: true });
+    const record = JSON.stringify({ taskId, name: "Identity", dirId: taskId, root, taskDir,
+      branch: "task/main", remoteBranch: "main", baseCommit: "abc123", repos: [],
+      createdAt: "2026-09-22T10:00:00Z", updatedAt: "2026-09-22T10:00:00Z" });
+    writeFileSync(join(taskDir, "task.json"), record);
+    try {
+      const index = new TaskRootIndex(join(home, "userData"), root);
+      const ready = deferred<void>(), started = deferred<void>(), transport = fakeTransport(TASK_RESULT), kill = vi.fn();
+      const spawn = vi.fn(async () => { started.resolve(); await ready.promise; return { client: transport as never, child: { kill } as never }; });
+      const registry = new PerTaskHostRegistry("workspace-a", spawn, (id) => index.resolve(id), undefined, index);
+      const original = index.verifiedIdentity(taskId);
+      expect(original).not.toBeNull();
+      const route = registry.routeTaskOp({ taskId, op: "task/cancel", payload: {} });
+      const moved = expect(route).rejects.toThrow("task-moved"); await started.promise;
+      renameSync(taskDir, join(home, "original-task")); mkdirSync(taskDir); writeFileSync(join(taskDir, "task.json"), record);
+      expect(index.resolve(taskId)).toBe(taskDir);
+      expect(index.verifiedIdentity(taskId)?.directoryInode).not.toBe(original?.directoryInode);
+      await expect(registry.routeTaskOp({ taskId, op: "task/cancel", payload: {} })).rejects.toThrow("task-moved");
+      ready.resolve(); await moved;
+      await expect(registry.routeTaskOp({ taskId, op: "task/cancel", payload: {} })).rejects.toThrow("task-moved");
+      expect(spawn).toHaveBeenCalledTimes(1); expect(transport.task).not.toHaveBeenCalled(); expect(kill).not.toHaveBeenCalled();
+      expect(registry.entryForTaskId(taskId)?.taskDir).toBe(taskDir);
+    } finally { rmSync(home, { recursive: true, force: true }); }
+  });
+
+  it("seals synchronously and inventories an accepted late fork without dispatching its business op", async () => {
+    const started = deferred<void>(), ready = deferred<void>();
+    const transport = fakeTransport(QUIT_RESULT), kill = vi.fn();
+    const spawn = vi.fn(async () => {
+      started.resolve(); await ready.promise;
+      return { client: transport as never, child: { kill } as never };
+    });
+    const registry = new PerTaskHostRegistry("workspace-a", spawn, () => "/tasks/a");
+    const first = registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
+    const refused = expect(first).rejects.toThrow("task-host-closing");
+    await started.promise;
+    let finished = false;
+    const quit = registry.quitAll({ origin: QUIT_ORIGIN }).then((report) => { finished = true; return report; });
+    const late = registry.routeTaskOp({ taskId: "task-b", op: "task/cancel", payload: {} });
+    const lateRefused = expect(late).rejects.toThrow("task-host-closing");
+    expect(finished).toBe(false);
+    ready.resolve(); await Promise.all([refused, lateRefused]);
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(await quit).toMatchObject({ ok: true, tasks: [{ taskId: "task-a", ok: true }] });
+    expect(transport.task.mock.calls).toEqual([[{
+      workspaceId: "workspace-a", taskId: "task-a", op: "task/quit", payload: {}, origin: QUIT_ORIGIN,
+    }, { timeoutMs: 120_000 }]]);
+    expect(registry.entryForTaskId("task-a")?.taskDir).toBe("/tasks/a");
+    expect(transport.dispose).not.toHaveBeenCalled(); expect(kill).not.toHaveBeenCalled();
+    registry.disposeAll(); expect(kill).toHaveBeenCalledTimes(1);
+    await expect(registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} })).rejects.toThrow("task-host-closing");
+  });
+
+  it("sends quit to all owned Hosts before waiting for an admitted prompt to settle", async () => {
+    const prompt = deferred<HostTaskResult>(), started = deferred<void>();
+    const first = fakeTransport(TASK_RESULT), second = fakeTransport(TASK_RESULT);
+    first.task.mockImplementation(async (params: unknown) => {
+      if ((params as { op: string }).op === "task/quit") { prompt.resolve(TASK_RESULT); return QUIT_RESULT; }
+      started.resolve(); return prompt.promise;
+    });
+    second.task.mockResolvedValue(QUIT_RESULT);
+    const registry = new PerTaskHostRegistry("workspace-a", async (_ws, task) => ({
+      client: (task.taskId === "task-a" ? first : second) as never, child: { kill: vi.fn() } as never,
+    }), (id) => `/tasks/${id}`);
+    await registry.routeTaskOp({ taskId: "task-b", op: "task/cancel", payload: {} });
+    const route = registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
+    await started.promise;
+    expect(await registry.quitAll({ origin: QUIT_ORIGIN })).toMatchObject({ ok: true });
+    await route;
+    expect(first.task).toHaveBeenCalledTimes(2);
+    expect(second.task).toHaveBeenLastCalledWith(expect.objectContaining({ op: "task/quit" }), { timeoutMs: 120_000 });
+  });
+
+  it("bounds the whole quit and fans out despite a stuck Host, caching uncertainty and retaining children", async () => {
+    vi.useFakeTimers();
+    try {
+      const stuck = deferred<HostTaskResult>(), kill = vi.fn();
+      const first = fakeTransport(TASK_RESULT), second = fakeTransport(TASK_RESULT);
+      first.task.mockResolvedValueOnce(TASK_RESULT).mockImplementation(() => stuck.promise);
+      second.task.mockResolvedValue(QUIT_RESULT);
+      const registry = new PerTaskHostRegistry("workspace-a", async (_ws, task) => ({
+        client: (task.taskId === "task-a" ? first : second) as never, child: { kill } as never,
+      }), (id) => `/tasks/${id}`);
+      await registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
+      await registry.routeTaskOp({ taskId: "task-b", op: "task/cancel", payload: {} });
+      const quit = registry.quitAll({ origin: QUIT_ORIGIN });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(second.task).toHaveBeenLastCalledWith(expect.objectContaining({ op: "task/quit" }), { timeoutMs: 120_000 });
+      await vi.advanceTimersByTimeAsync(15_000);
+      const report = await quit;
+      expect(report.ok).toBe(false);
+      expect(report.tasks).toEqual(expect.arrayContaining([expect.objectContaining({ taskId: "task-a", ok: false, retainedTasks: ["task-a"] })]));
+      expect(() => registry.disposeAll()).toThrow("shutdown-unconfirmed");
+      expect(kill).not.toHaveBeenCalled(); expect(first.dispose).not.toHaveBeenCalled();
+      stuck.resolve(QUIT_RESULT);
+      expect(await registry.quitAll({ origin: QUIT_ORIGIN })).toEqual(report);
+      expect(first.task).toHaveBeenCalledTimes(2); expect(second.task).toHaveBeenCalledTimes(2);
+      await expect(registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} })).rejects.toThrow("task-host-closing");
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("retains ownership of a child arriving after the shared shutdown deadline without replay or disposal", async () => {
+    vi.useFakeTimers();
+    try {
+      const started = deferred<void>(), ready = deferred<void>(), transport = fakeTransport(QUIT_RESULT), kill = vi.fn();
+      const registry = new PerTaskHostRegistry("workspace-a", async () => {
+        started.resolve(); await ready.promise;
+        return { client: transport as never, child: { kill } as never };
+      }, () => "/tasks/a");
+      const route = registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
+      const refused = expect(route).rejects.toThrow("task-host-closing");
+      await started.promise;
+      const quit = registry.quitAll({ origin: QUIT_ORIGIN });
+      await vi.advanceTimersByTimeAsync(15_000);
+      const report = await quit;
+      expect(report).toMatchObject({ ok: false, tasks: [{ taskId: "task-a", ok: false, retainedTasks: ["task-a"] }] });
+      expect(() => registry.disposeAll()).toThrow("shutdown-unconfirmed");
+      ready.resolve(); await refused;
+      expect(registry.entryForTaskId("task-a")?.taskDir).toBe("/tasks/a");
+      expect(await registry.quitAll({ origin: QUIT_ORIGIN })).toEqual(report);
+      expect(transport.task).not.toHaveBeenCalled(); expect(transport.dispose).not.toHaveBeenCalled(); expect(kill).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("shares one total deadline between fork ownership and settlement of an already-dispatched route", async () => {
+    vi.useFakeTimers();
+    try {
+      const ready = deferred<void>(), started = deferred<void>(), running = deferred<HostTaskResult>();
+      const first = fakeTransport(TASK_RESULT), second = fakeTransport(QUIT_RESULT);
+      first.task.mockImplementation(async (params: unknown) => {
+        if ((params as { op: string }).op === "task/quit") return QUIT_RESULT;
+        started.resolve(); return running.promise;
+      });
+      const registry = new PerTaskHostRegistry("workspace-a", async (_ws, task) => {
+        if (task.taskId === "task-b") await ready.promise;
+        return { client: (task.taskId === "task-a" ? first : second) as never, child: { kill: vi.fn() } as never };
+      }, (id) => `/tasks/${id}`);
+      const a = registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
+      await started.promise;
+      const b = registry.routeTaskOp({ taskId: "task-b", op: "task/cancel", payload: {} });
+      const refused = expect(b).rejects.toThrow("task-host-closing");
+      const quit = registry.quitAll({ origin: QUIT_ORIGIN });
+      await vi.advanceTimersByTimeAsync(14_000); ready.resolve(); await refused;
+      await vi.advanceTimersByTimeAsync(1_000);
+      const report = await quit;
+      expect(report.ok).toBe(false);
+      expect(report.tasks).toEqual(expect.arrayContaining([expect.objectContaining({ taskId: "task-a", ok: false, retainedTasks: ["task-a"] })]));
+      expect(() => registry.disposeAll()).toThrow("shutdown-unconfirmed");
+      running.resolve(TASK_RESULT); await a;
+      expect(await registry.quitAll({ origin: QUIT_ORIGIN })).toEqual(report);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("keeps failed spawn uncertainty instead of reporting an empty successful shutdown", async () => {
+    const ready = deferred<void>(), started = deferred<void>();
+    const registry = new PerTaskHostRegistry("workspace-a", async () => {
+      started.resolve(); await ready.promise; throw Error("fork-unconfirmed");
+    }, () => "/tasks/a");
+    const route = registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
+    const failed = expect(route).rejects.toThrow("fork-unconfirmed");
+    await started.promise;
+    const quit = registry.quitAll({ origin: QUIT_ORIGIN });
+    ready.resolve(); await failed;
+    const report = await quit;
+    expect(report).toMatchObject({ ok: false, tasks: [{ taskId: "task-a", ok: false, retainedTasks: ["task-a"] }] });
+    expect(await registry.quitAll({ origin: QUIT_ORIGIN })).toEqual(report);
+    expect(() => registry.disposeAll()).toThrow("shutdown-unconfirmed");
+  });
+
+  it("preserves an owned child when handler binding fails and reports one failed task", async () => {
+    const transport = fakeTransport(QUIT_RESULT), kill = vi.fn();
+    transport.onBrowserRequest.mockImplementationOnce(() => { throw Error("handler-binding-unconfirmed"); });
+    const registry = new PerTaskHostRegistry("workspace-a", async () => ({ client: transport as never, child: { kill } as never }), () => "/tasks/a");
+    await expect(registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} })).rejects.toThrow("handler-binding-unconfirmed");
+    expect(registry.size).toBe(1); expect(registry.entryForTaskId("task-a")?.taskDir).toBe("/tasks/a");
+    const report = await registry.quitAll({ origin: QUIT_ORIGIN });
+    expect(report).toMatchObject({ ok: false, tasks: [{ taskId: "task-a", ok: false, applied: ["save-state:task-a"], retainedTasks: ["task-a"], error: "handler-binding-unconfirmed" }] });
+    expect(report.tasks).toHaveLength(1);
+    expect(() => registry.disposeAll()).toThrow("shutdown-unconfirmed");
+    expect(transport.dispose).not.toHaveBeenCalled(); expect(kill).not.toHaveBeenCalled();
+    expect(await registry.quitAll({ origin: QUIT_ORIGIN })).toEqual(report);
+    expect(transport.task).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a moved pending claim while preserving the original late child", async () => {
+    const ready = deferred<void>(), started = deferred<void>(), transport = fakeTransport(TASK_RESULT);
+    let dir = "/tasks/a";
+    const spawn = vi.fn(async () => { started.resolve(); await ready.promise; return { client: transport as never, child: { kill: vi.fn() } as never }; });
+    const registry = new PerTaskHostRegistry("workspace-a", spawn, () => dir);
+    const route = registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
+    const moved = expect(route).rejects.toThrow("task-moved");
+    await started.promise; dir = "/tasks/moved";
+    await expect(registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} })).rejects.toThrow("task-moved");
+    ready.resolve(); await moved;
+    expect(spawn).toHaveBeenCalledTimes(1); expect(transport.task).not.toHaveBeenCalled();
+    expect(registry.entryForTaskId("task-a")?.taskDir).toBe("/tasks/a");
+  });
+});
+
 describe("PerTaskHostRegistry", () => {
   it("forks a bound Host on first use and reuses it for later ops", async () => {
     const spawns: Array<{ taskId: string; taskDir: string }> = [];
@@ -383,37 +672,40 @@ describe("PerTaskHostRegistry", () => {
     expect(typeof defaultTasksRoot()).toBe("string");
   });
 
-  it("disposeAll kills every forked Host", async () => {
+  it("disposeAll requires successful quit and then kills every owned Host", async () => {
     const spawns: Array<{ taskId: string; taskDir: string }> = [];
     const dirs: Record<string, string> = { "task-a": "/tasks/a", "task-b": "/tasks/b" };
-    const { registry } = registryWith((id) => dirs[id] ?? null, spawns, TASK_RESULT);
+    const { registry } = registryWith((id) => dirs[id] ?? null, spawns, QUIT_RESULT);
+    expect(() => registry.disposeAll()).toThrow("shutdown-unconfirmed");
     await registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
     await registry.routeTaskOp({ taskId: "task-b", op: "task/cancel", payload: {} });
     expect(registry.size).toBe(2);
+    const entries = [registry.entryForTaskId("task-a")!, registry.entryForTaskId("task-b")!];
+    expect(() => registry.disposeAll()).toThrow("shutdown-unconfirmed");
+    for (const entry of entries) {
+      expect(entry.client.dispose).not.toHaveBeenCalled(); expect(entry.child.kill).not.toHaveBeenCalled();
+    }
+    expect(await registry.quitAll({ origin: QUIT_ORIGIN })).toMatchObject({ ok: true });
     registry.disposeAll();
     expect(registry.size).toBe(0);
+    for (const entry of entries) {
+      expect(entry.client.dispose).toHaveBeenCalledTimes(1); expect(entry.child.kill).toHaveBeenCalledTimes(1);
+    }
   });
 
-  it("never forks two Hosts for one task folder: restarts reuse the single registry entry", async () => {
-    // Toolchain supplement: `root pnpm dev` starts main + Host + renderer
-    // once; exit/restart disposes only this registry's Hosts and never
-    // leaves a duplicate behind. The registry is the single fork point —
-    // a second op for the same task reuses the entry, and `disposeAll`
-    // clears it so a restart forks exactly one replacement.
+  it("restarts with a fresh registry only after quit and disposal of the sealed instance", async () => {
     const spawns: Array<{ taskId: string; taskDir: string }> = [];
-    const { registry, spawn } = registryWith(() => "/tasks/task-a", spawns, TASK_RESULT);
+    const { registry, spawn } = registryWith(() => "/tasks/task-a", spawns, QUIT_RESULT);
     await registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
     await registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
     await registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
-    expect(spawn).toHaveBeenCalledTimes(1);
-    expect(registry.size).toBe(1);
-    // Restart: dispose clears only this registry's Hosts, then the next op
-    // forks exactly one replacement (no duplicate, no leak).
-    registry.disposeAll();
-    expect(registry.size).toBe(0);
-    await registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
-    expect(spawn).toHaveBeenCalledTimes(2);
-    expect(registry.size).toBe(1);
+    expect(spawn).toHaveBeenCalledTimes(1); expect(registry.size).toBe(1);
+    expect(await registry.quitAll({ origin: QUIT_ORIGIN })).toMatchObject({ ok: true });
+    registry.disposeAll(); expect(registry.size).toBe(0);
+    await expect(registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} })).rejects.toThrow("task-host-closing");
+    const restarted = registryWith(() => "/tasks/task-a", spawns, QUIT_RESULT);
+    await restarted.registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
+    expect(restarted.spawn).toHaveBeenCalledTimes(1); expect(spawns).toHaveLength(2); expect(restarted.registry.size).toBe(1);
   });
 });
 
@@ -587,7 +879,7 @@ describe("task browser origins", () => {
     expect(report.tasks.map((task) => task.taskId)).toEqual(["task-a", "task-b"]);
     expect(report.ok).toBe(false);
     expect(report.tasks[1]).toMatchObject({ ok: true, retainedTasks: ["task-b"] });
-    // The Hosts stay forkable until the caller disposes them.
+    // Owned children remain retained, with new routes sealed, until successful disposal.
     expect(registry.size).toBe(2);
   });
 
@@ -600,6 +892,8 @@ describe("task browser origins", () => {
     await registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
     const stop = createHostStopper(registry, { kind: "shell-ui", senderWebContentsId: 7 }, () => registry.disposeAll());
     expect(await stop()).toBe(false); expect(kill).not.toHaveBeenCalled(); expect(dispose).not.toHaveBeenCalled(); expect(registry.size).toBe(1);
+    expect(() => registry.disposeAll()).toThrow("shutdown-unconfirmed");
+    expect(await stop()).toBe(false); expect(kill).not.toHaveBeenCalled(); expect(dispose).not.toHaveBeenCalled();
   });
   it("[PiDock 14] (#17) quitAll reports a Host that fails to answer instead of dropping the task", async () => {
     const spawn = vi.fn(async () => ({
