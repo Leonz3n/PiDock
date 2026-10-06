@@ -238,6 +238,14 @@ export class TaskProtocolBinding {
     if (input.ok && version.length === 0) {
       throw new Error("not-generated: 生成成功必须带回实际生成版本");
     }
+    const resolutions = (input.resolutions ?? []).map((entry) => ({ ...entry }));
+    const knownConsumers = new Set(this.consumers.map((consumer) => consumer.consumerId));
+    // Reject the whole observation before advancing any successful-run state.
+    for (const resolution of resolutions) {
+      if (!knownConsumers.has(resolution.consumerId)) {
+        throw new Error(`invalid-consumer: 未知消费者 ${resolution.consumerId} 的解析结果`);
+      }
+    }
     const at = this.now();
     // Only a run that really succeeded may advance the displayed version; a
     // failed attempt is kept in the history but never shown as "已生成".
@@ -250,13 +258,7 @@ export class TaskProtocolBinding {
     if (input.toolchain) this.toolchainProbe = input.toolchain;
     if (input.depsInstalled) this.depsInstalled = input.depsInstalled.map((entry) => ({ ...entry }));
     if (input.runtimeReachable) this.runtimeReachable = { ...input.runtimeReachable };
-    this.resolutions = (input.resolutions ?? []).map((entry) => ({ ...entry }));
-    const knownConsumers = new Set(this.consumers.map((consumer) => consumer.consumerId));
-    for (const resolution of this.resolutions) {
-      if (!knownConsumers.has(resolution.consumerId)) {
-        throw new Error(`invalid-consumer: 未知消费者 ${resolution.consumerId} 的解析结果`);
-      }
-    }
+    this.resolutions = resolutions;
     // Recompute the verified bindings from the reported resolutions. A
     // consumer being re-verified now replaces its previous binding, so a
     // freshly generated artifact does not block the consumer that just
