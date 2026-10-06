@@ -37,6 +37,18 @@ async function setup() {
     directoryIds: [project.directories[0]!.id], sharedWriteConfirmed: true, override: false };
   return { home, repo, root, profile, remote, project, projects, roots, storage, service, host, request, getCalls: () => calls };
 }
+async function setupTwoRepositories() {
+  const env = await setup();
+  const secondRemote = join(env.home, "second-remote.git"), second = join(env.home, "second-repo");
+  git(env.home, "clone", "--bare", env.repo, secondRemote);
+  git(env.home, "clone", "-b", "main", secondRemote, second);
+  git(second, "config", "user.email", "test@localhost"); git(second, "config", "user.name", "Test");
+  writeFileSync(join(second, "README.md"), "independent second baseline\n");
+  git(second, "add", "README.md"); git(second, "commit", "-m", "second baseline"); git(second, "push", "origin", "main");
+  const project = await env.projects.update(env.project.id, { description: "", repositories: [...env.project.repositories, { name: "second", path: second }], directories: env.project.directories });
+  const request = { ...env.request, repositories: [...env.request.repositories, { sourceId: project.repositories[1]!.id, remote: "origin", remoteBranch: "main" }] };
+  return { ...env, second, secondRemote, project, request };
+}
 afterEach(() => { for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true }); });
 
 describe("persistent Project task creation with local Git", () => {
@@ -58,6 +70,54 @@ describe("persistent Project task creation with local Git", () => {
     expect(env.getCalls()).toBe(1);
     const reopened = new ProjectTaskCreation(new CreationIntentStore(env.profile), new ProjectRegistry(env.profile), new TaskRootIndex(env.profile, env.root), { routeTaskOp: () => { throw new Error("Host should not reprovision"); } }, env.root);
     expect(await reopened.commit(preview.id)).toEqual({ taskId: preview.taskId, projectId: env.project.id });
+  });
+  it("creates no new worktrees or links when the second repository fetch fails, then retries the same intent", async () => {
+    const env = await setupTwoRepositories();
+    const preview = await env.service.prepare(env.request);
+    expect(preview.repos[0]!.commit).not.toBe(preview.repos[1]!.commit);
+    const worktrees = [env.repo, env.second].map((repo) => git(repo, "worktree", "list", "--porcelain"));
+    git(env.home, `--git-dir=${env.secondRemote}`, "update-ref", "-d", "refs/heads/main");
+    await expect(env.service.commit(preview.id)).rejects.toThrow(/Git/);
+    expect(readdirSync(preview.taskDir)).toEqual([".pidock-creation"]);
+    expect([env.repo, env.second].map((repo) => git(repo, "worktree", "list", "--porcelain"))).toEqual(worktrees);
+    expect(env.service.current()?.state).toBe("pending");
+    expect(env.getCalls()).toBe(0);
+    git(env.second, "push", "origin", "main");
+    expect(await env.service.commit(preview.id)).toEqual({ taskId: preview.taskId, projectId: env.project.id });
+    expect(preview.repos.map((repo) => git(join(preview.taskDir, repo.repoDir), "rev-parse", "HEAD"))).toEqual(preview.repos.map((repo) => repo.commit));
+    expect(readTaskRecordOnDisk(preview.taskDir)?.repoSources?.map((repo) => repo.baseCommit)).toEqual(preview.repos.map((repo) => repo.commit));
+    expect(existsSync(join(preview.taskDir, preview.directories[0]!.linkName))).toBe(true);
+    expect(readFileSync(join(env.repo, "dirty.txt"), "utf8")).toBe("keep me\n");
+  });
+  it("creates no new worktrees or links when the second repository's fetched head differs from its pinned preview", async () => {
+    const env = await setupTwoRepositories();
+    const preview = await env.service.prepare(env.request);
+    git(env.second, "config", "user.email", "test@localhost"); git(env.second, "config", "user.name", "Test");
+    writeFileSync(join(env.second, "README.md"), "changed second baseline\n");
+    git(env.second, "add", "README.md"); git(env.second, "commit", "-m", "changed baseline"); git(env.second, "push", "origin", "main");
+    await expect(env.service.commit(preview.id)).rejects.toThrow(/远程分支已变化/);
+    expect(readdirSync(preview.taskDir)).toEqual([".pidock-creation"]);
+    expect(env.service.current()?.repos.map((repo) => repo.commit)).toEqual(preview.repos.map((repo) => repo.commit));
+    expect(env.getCalls()).toBe(0);
+  });
+  it("refuses a changed second remote identity before preparing any worktree or link", async () => {
+    const env = await setupTwoRepositories();
+    const preview = await env.service.prepare(env.request);
+    git(env.second, "remote", "set-url", "origin", env.remote);
+    await expect(env.service.commit(preview.id)).rejects.toThrow(/远程传输地址已改变/);
+    expect(existsSync(preview.taskDir)).toBe(false);
+    expect(env.service.current()?.id).toBe(preview.id);
+    expect(env.getCalls()).toBe(0);
+  });
+  it("creates no new worktrees or links when the second repository's task branch is already occupied", async () => {
+    const env = await setupTwoRepositories();
+    const preview = await env.service.prepare(env.request);
+    git(env.second, "branch", preview.branch);
+    await expect(env.service.commit(preview.id)).rejects.toThrow(/任务分支已存在/);
+    expect(readdirSync(preview.taskDir)).toEqual([".pidock-creation"]);
+    expect(git(env.repo, "branch", "--list", preview.branch)).toBe("");
+    expect(git(env.second, "rev-parse", preview.branch)).toBe(preview.repos[1]!.commit);
+    expect(env.getCalls()).toBe(0);
   });
   it("stays pinned when remote branch moves before commit; retry does not use new baseline", async () => {
     const env = await setup();
@@ -273,25 +333,34 @@ describe("persistent Project task creation with local Git", () => {
     expect(git(worktree, "rev-parse", "HEAD")).toBe(userHead);
     expect(readTaskRecordOnDisk(preview.taskDir)?.repoSources?.[0]?.baseCommit).toBe(preview.repos[0]!.commit);
   });
-  it("recovers a user commit in the first worktree after a later repository branch conflict", async () => {
-    const env = await setup();
-    const second = join(env.home, "independent-repo"); mkdirSync(second);
-    git(second, "init", "-b", "main"); git(second, "remote", "add", "origin", env.remote);
-    git(second, "fetch", "origin", "main"); git(second, "checkout", "-B", "main", "FETCH_HEAD");
-    const updated = await env.projects.update(env.project.id, { description: "", repositories: [...env.project.repositories, { name: "independent", path: second }], directories: env.project.directories });
-    const selection = { ...env.request, repositories: [env.request.repositories[0]!, { sourceId: updated.repositories[1]!.id, remote: "origin", remoteBranch: "main" }] };
-    const preview = await env.service.prepare(selection);
-    git(second, "branch", preview.branch);
-    await expect(env.service.commit(preview.id)).rejects.toThrow(/任务分支已存在/);
-    expect(readTaskRecordOnDisk(preview.taskDir)).toBeNull();
+  it("preserves an owned partial worktree and user edits while recovering only the missing repository", async () => {
+    const env = await setupTwoRepositories();
+    const preview = await env.service.prepare(env.request);
     const first = join(preview.taskDir, preview.repos[0]!.repoDir);
+    const interrupted = new ProjectTaskCreation(env.storage, env.projects, env.roots, env.host, env.root, (boundary) => {
+      if (boundary === "task-marked") {
+        git(env.repo, "worktree", "add", "-b", preview.branch, first, preview.repos[0]!.commit);
+        throw new Error("interrupted after first worktree");
+      }
+    });
+    await expect(interrupted.commit(preview.id)).rejects.toThrow("interrupted after first worktree");
+    const reopened = new ProjectTaskCreation(new CreationIntentStore(env.profile), new ProjectRegistry(env.profile), new TaskRootIndex(env.profile, env.root), env.host, env.root);
+    git(env.second, "branch", preview.branch);
+    await expect(reopened.commit(preview.id)).rejects.toThrow(/任务分支已存在/);
+    expect(readTaskRecordOnDisk(preview.taskDir)).toBeNull();
     git(first, "config", "user.email", "test@localhost"); git(first, "config", "user.name", "Test");
     writeFileSync(join(first, "work.txt"), "user change\n"); git(first, "add", "work.txt"); git(first, "commit", "-m", "user work");
+    writeFileSync(join(first, "dirty.txt"), "unfinished user work\n");
     const userHead = git(first, "rev-parse", "HEAD");
-    git(second, "branch", "-D", preview.branch);
-    expect(await env.service.commit(preview.id)).toEqual({ taskId: preview.taskId, projectId: env.project.id });
+    // The owned worktree must remain usable even when its original remote branch disappears.
+    git(env.home, `--git-dir=${env.remote}`, "update-ref", "-d", "refs/heads/main");
+    git(env.second, "branch", "-D", preview.branch);
+    expect(await reopened.commit(preview.id)).toEqual({ taskId: preview.taskId, projectId: env.project.id });
     expect(git(first, "rev-parse", "HEAD")).toBe(userHead);
+    expect(readFileSync(join(first, "dirty.txt"), "utf8")).toBe("unfinished user work\n");
     expect(readTaskRecordOnDisk(preview.taskDir)?.repoSources?.map((repo) => repo.baseCommit)).toEqual(preview.repos.map((repo) => repo.commit));
+    expect(await reopened.commit(preview.id)).toEqual({ taskId: preview.taskId, projectId: env.project.id });
+    expect(env.getCalls()).toBe(1);
   });
   it("rejects an unrelated branch even when its history contains the pinned base", async () => {
     const env = await setup();

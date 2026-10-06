@@ -358,6 +358,8 @@ export class ProjectTaskCreation {
       } else if (!matchesMarker(intent.taskDir, ".pidock-creation", intent.id)) {
         throw new Error("任务目录已占用或创建标记不匹配");
       }
+      // Validate every missing repository's fresh fetch before creating any new worktree.
+      const missingRepos: Repo[] = [];
       for (const repo of intent.repos) {
         const target = join(intent.taskDir, repo.repoDir);
         if (existsSync(target)) {
@@ -371,7 +373,10 @@ export class ProjectTaskCreation {
         git(repo.path, ["fetch", "--no-tags", repo.remote, `refs/heads/${repo.remoteBranch}`]);
         if (git(repo.path, ["rev-parse", "FETCH_HEAD"]) !== repo.commit) throw new Error("远程分支已变化，不使用旧基线");
         if (optionalGit(repo.path, ["show-ref", "--verify", "--hash", `refs/heads/${intent.branch}`]) !== null) throw new Error("任务分支已存在但工作树不在原位置，请人工恢复");
-        git(repo.path, ["worktree", "add", "-b", intent.branch, target, repo.commit]);
+        missingRepos.push(repo);
+      }
+      for (const repo of missingRepos) {
+        git(repo.path, ["worktree", "add", "-b", intent.branch, join(intent.taskDir, repo.repoDir), repo.commit]);
       }
       for (const dir of intent.directories) {
         checkSource(dir);
