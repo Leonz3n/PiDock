@@ -982,6 +982,7 @@ export class TaskWorkspaceHost {
   sealExecution(): void {
     this.executionClosing = true;
     this.sdkContext?.seal();
+    for (const channel of this.channels.values()) channel.sealExecution();
   }
 
   private assertExecutionOpen(): void {
@@ -1464,6 +1465,7 @@ export class TaskWorkspaceHost {
       // Restore with the current catalog: a configuration that is gone reports
       // unavailable through `contextView()` instead of rerouting the session.
       const restored = PiSessionChannel.restore(saved, this.taskDir, this.catalog);
+      if (this.executionClosing) restored.sealExecution();
       this.channels.set(sessionId, restored);
       return restored;
     }
@@ -1480,6 +1482,7 @@ export class TaskWorkspaceHost {
       // approvals and drafts use, instead of drifting on a second clock.
       now: this.now,
     });
+    if (this.executionClosing) channel.sealExecution();
     this.channels.set(sessionId, channel);
     this.store.writeSession(this.taskDir, channel.snapshot());
     return channel;

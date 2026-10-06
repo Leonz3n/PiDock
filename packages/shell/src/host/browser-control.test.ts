@@ -83,6 +83,24 @@ function setup(permission: "read" | "default" | "auto" = "default") {
 }
 
 describe("agent browser action dispatch", () => {
+  it("refuses a sealed auto channel even with an independent open write coordinator", async () => {
+    const f = setup("auto"), before = f.write.snapshot(); f.channel.sealExecution();
+    expect(await f.control()).toEqual({ ok: false, error: "task-host-closing" });
+    expect(f.calls).toEqual([]); expect(f.write.snapshot()).toEqual(before); expect(f.persisted()).toBeUndefined();
+  });
+  it("does not dispatch after approval persistence synchronously seals its channel", async () => {
+    const f = setup(), first = await f.control(); if (first.ok) throw Error(); const id = f.channel.pendingApproval()!.id; f.channel.approve(id);
+    expect(await runAgentBrowserAction({ gateway: f.gateway, channel: f.channel, sessionId: "main", taskId: TASK_ID, taskDir: DIR, action: "page/navigate", page: PAGE, approvalId: id, write: f.write, persist: () => f.channel.sealExecution() })).toEqual({ ok: false, error: "task-host-closing" });
+    expect(f.calls).toEqual([]); expect(f.write.owner).toBeNull(); expect(f.channel.snapshot().approvals[0].consumedAt).toBeDefined();
+  });
+  it("settles an already-dispatched browser action after seal without admitting another", async () => {
+    const f = setup("auto"); let release!: (value: Awaited<ReturnType<BrowserGatewayPort["perform"]>>) => void;
+    f.gateway.perform = () => new Promise((resolve) => { release = resolve; }); const pending = f.control();
+    expect(f.write.owner).toBe("main"); f.channel.sealExecution();
+    expect(await f.control()).toEqual({ ok: false, error: "task-host-closing" }); expect(f.write.owner).toBe("main");
+    release({ ok: true, payload: { fixture: true } }); expect((await pending).ok).toBe(true);
+    expect(f.write.owner).toBeNull(); expect(f.persisted()?.messages.at(-1)?.origin).toBe("agent");
+  });
   it("mints one scope-bound approval for a default-tier action, then acts once and refuses the replay", async () => {
     const { channel, calls, control, persisted } = setup("default");
     const first = await control();

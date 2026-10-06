@@ -72,6 +72,16 @@ function pendingId(channel: PiSessionChannel): string {
 }
 
 describe("agent terminal-control dispatch", () => {
+  it("refuses a sealed auto channel before claims or the terminal act callback", () => {
+    const f = setup("auto"), before = f.write.snapshot(); f.channel.sealExecution();
+    expect(f.control()).toEqual({ ok: false, error: "task-host-closing" }); expect(f.write.snapshot()).toEqual(before);
+    expect(f.registry.list()).toEqual([]); expect(f.persisted()).toBeUndefined();
+  });
+  it("does not act after approval persistence synchronously seals its channel", () => {
+    const f = setup(); f.control(); const id = pendingId(f.channel); f.channel.approve(id);
+    expect(runAgentTerminalControl({ registry: f.registry, channel: f.channel, taskDir: DIR, sessionId: "main", instanceId: "term-1", action: "start", approvalId: id, write: f.write, persist: () => f.channel.sealExecution(), act: () => { f.registry.register(planned()); return f.registry.markProcess("term-1", { processId: 1 }); } })).toEqual({ ok: false, error: "task-host-closing" });
+    expect(f.registry.list()).toEqual([]); expect(f.write.owner).toBeNull();
+  });
   it("mints one scope-bound approval for a default-tier start, then starts on approval and refuses the replay", () => {
     const { registry, channel, control, persisted } = setup("default");
     const first = control();

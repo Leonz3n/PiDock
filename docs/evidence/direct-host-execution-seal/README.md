@@ -86,6 +86,12 @@ active-model/report scenes pass again; logs
 separate evidence from the direct-class probe. No independent subagent approval
 exists; the previously recorded harness infrastructure blocker remains unresolved.
 
+## Follow-Up
+
+[Retained legacy channel admission seal](../legacy-channel-admission-seal/README.md)
+seals returned PiSessionChannel execution/approval ports and checks Agent control
+helpers before dispatch. Complete native inventory remains a separate gate.
+
 ## Remaining Gates
 
 Complete trusted native ownership/inventory, all-tool admission and direct async

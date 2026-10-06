@@ -34,6 +34,18 @@ async function approve(f: ReturnType<typeof setup>, action: "start" | "stop" = "
   const id = result.error.split(":")[1]; f.c.approve(id); return id;
 }
 
+it("refuses sealed auto channel before experimental claims or dispatch", async () => {
+  const f = setup("auto"), before = f.write.snapshot(); f.c.sealExecution();
+  expect(await f.control()).toEqual({ ok: false, error: "task-host-closing" });
+  expect(f.write.snapshot()).toEqual(before); expect(f.start).not.toHaveBeenCalled(); expect(f.execution.snapshot().state).toBe("stopped");
+});
+it("does not dispatch after the channel seals during approved persistence", async () => {
+  const f = setup(), id = await approve(f); let release!: () => void;
+  f.persist.mockImplementation(() => new Promise<void>((resolve) => { release = resolve; }));
+  const pending = f.control("start", id); await vi.waitFor(() => expect(release).toBeDefined()); f.c.sealExecution(); release();
+  expect(await pending).toEqual({ ok: false, error: "task-host-closing" });
+  expect(f.start).not.toHaveBeenCalled(); expect(f.write.owner).toBeNull(); expect(f.execution.snapshot().state).toBe("stopped");
+});
 it("refuses absent executor before minting approvals or changing state", async () => {
   const f = setup("default", false);
   expect(await f.control()).toEqual({ ok: false, error: "service-execution-unavailable" });

@@ -21,6 +21,7 @@
 import type { PiApproval, PiApprovalScope, PiGateDecision, PiPermission } from "../main/pi-session.js";
 import { TERMINAL_CONTROL_SCOPE } from "../main/pi-session.js";
 import { writeClaimError, type WriteCoordinatorPort } from "./write-coordination.js";
+import { channelExecutionClosing } from "./service-control.js";
 import type { TaskTerminalRegistry, TerminalInstanceRecord } from "../main/terminal-config.js";
 
 /**
@@ -131,6 +132,7 @@ export function runAgentTerminalControl(input: {
       ? input.channel.snapshot().approvals.find((item) => item.id === approvalId)
       : undefined;
   const target = terminalApprovalTarget(input.taskDir, input.instanceId);
+  if (channelExecutionClosing(input.channel, TERMINAL_CONTROL_TOOL, target)) return { ok: false, error: "task-host-closing" };
   const intent = {
     kind: "terminal-control" as const,
     label: `终端${input.action === "start" ? "启动" : "停止"} ${input.instanceId}`,
@@ -158,12 +160,14 @@ export function runAgentTerminalControl(input: {
   const claim = input.write.claimWrite(input.sessionId, tier, intent);
   if (!claim.ok) return { ok: false, error: writeClaimError(claim) };
   try {
+    if (channelExecutionClosing(input.channel, TERMINAL_CONTROL_TOOL, target)) return { ok: false, error: "task-host-closing" };
     if (liveApproval !== undefined) {
       if (!input.channel.consumeApproval(liveApproval.id)) {
         return { ok: false, error: "approval-required: 确认请求已被消费，请重新确认" };
       }
       input.persist();
     }
+    if (channelExecutionClosing(input.channel, TERMINAL_CONTROL_TOOL, target)) return { ok: false, error: "task-host-closing" };
     const instance = input.act();
     return { ok: true, payload: { instanceId: input.instanceId, action: input.action, actor: "agent", tier, instance } };
   } finally {

@@ -39,6 +39,12 @@ export interface AgentControlChannel {
   consumeApproval(approvalId: string): boolean;
 }
 
+/** Read the admission seal while keeping each control's existing permission policy. */
+export function channelExecutionClosing(channel: Pick<AgentControlChannel, "previewGate">, tool: string, target: string): boolean {
+  const gate = channel.previewGate(tool, target);
+  return gate.verdict === "deny" && gate.reason === "task-host-closing";
+}
+
 export type AgentServiceControlResult =
   | { ok: true; payload: { serviceId: string; action: "start" | "stop"; actor: "agent"; tier: PiPermission } }
   | { ok: false; error: string };
@@ -62,6 +68,7 @@ export function runAgentServiceControl(input: {
       ? input.channel.snapshot().approvals.find((item) => item.id === approvalId)
       : undefined;
   const target = `${input.services.taskDir}/services/${input.serviceId}`;
+  if (channelExecutionClosing(input.channel, "exec.run", target)) return { ok: false, error: "task-host-closing" };
   const intent = { kind: "service-control" as const, label: `服务${input.action === "start" ? "启动" : "停止"} ${input.serviceId}` };
   const decision = input.services.decideAgentControl({
     serviceId: input.serviceId,
@@ -103,6 +110,7 @@ export function runAgentServiceControl(input: {
   const claim = input.write.claimWrite(input.sessionId, tier, intent);
   if (!claim.ok) return { ok: false, error: writeClaimError(claim) };
   try {
+    if (channelExecutionClosing(input.channel, "exec.run", target)) return { ok: false, error: "task-host-closing" };
     // One-shot spend: the verified approval authorizes exactly this
     // start/stop. Spending (and persisting) before acting means a replay
     // fails closed even if the same id is sent again.
@@ -112,6 +120,7 @@ export function runAgentServiceControl(input: {
       }
       input.persist();
     }
+    if (channelExecutionClosing(input.channel, "exec.run", target)) return { ok: false, error: "task-host-closing" };
     if (input.action === "start") {
       input.services.markStarted(input.serviceId, { kind: "agent", sessionId: input.sessionId, permissionAtRequest: tier });
     } else {
