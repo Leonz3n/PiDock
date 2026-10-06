@@ -42,6 +42,51 @@ describe("Desktop task creation", () => {
     await waitFor(() => expect(onCreated).toHaveBeenCalledWith(project.id));
     expect(createTask.mock.calls.filter(([request]) => request.op === "commit")).toHaveLength(1);
   });
+  it.each(["cancel", "error"] as const)("retains selected inputs after picker/prepare %s and previews the same request on retry", async (outcome) => {
+    let attempts = 0;
+    const createTask = vi.fn(async (request: { op: string; input?: unknown; id?: string }) => {
+      if (request.op === "current") return { ok: true, payload: null };
+      if (request.op === "prepare" && attempts++ === 0) return outcome === "cancel"
+        ? { ok: true, payload: { canceled: true } }
+        : { ok: false, error: "remote branch unavailable" };
+      if (request.op === "prepare") return { ok: true, payload: { canceled: false, intent } };
+      throw new Error("must not commit before confirmation");
+    });
+    const onCreated = vi.fn(async () => {});
+    render(<DesktopTaskCreation project={project} bridge={bridge(createTask)} onCreated={onCreated} />);
+    fireEvent.click(screen.getByRole("button", { name: "任务" }));
+    const name = screen.getByLabelText("任务名称");
+    fireEvent.change(name, { target: { value: "Retained draft" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Web" }));
+    fireEvent.change(screen.getByLabelText("远程名称"), { target: { value: "origin" } });
+    fireEvent.change(screen.getByLabelText("远程分支"), { target: { value: "main" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: /Documents/ }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /我确认普通目录/ }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /单次选择其他任务根/ }));
+    fireEvent.click(screen.getByRole("button", { name: "固定基线并预览路径" }));
+    await waitFor(() => expect(createTask.mock.calls.filter(([request]) => request.op === "prepare")).toHaveLength(1));
+    await waitFor(() => expect(screen.getByRole("button", { name: "固定基线并预览路径" })).toBeEnabled());
+    expect(screen.getByLabelText("任务名称")).toBe(name);
+    expect(name).toHaveValue("Retained draft");
+    expect(screen.getByLabelText("远程名称")).toHaveValue("origin");
+    expect(screen.getByLabelText("远程分支")).toHaveValue("main");
+    for (const label of ["Web", /Documents/, /我确认普通目录/, /单次选择其他任务根/]) {
+      expect(screen.getByRole("checkbox", { name: label })).toBeChecked();
+    }
+    expect(screen.queryByText(intent.taskDir)).not.toBeInTheDocument();
+    expect(createTask.mock.calls.some(([request]) => request.op === "commit")).toBe(false);
+    expect(onCreated).not.toHaveBeenCalled();
+    if (outcome === "error") expect(screen.getByRole("alert")).toHaveTextContent("remote branch unavailable");
+    else expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "固定基线并预览路径" }));
+    expect(await screen.findByText(intent.taskDir)).toBeInTheDocument();
+    const expected = { op: "prepare", input: { projectId: project.id, name: "Retained draft",
+      repositories: [{ sourceId: project.repositories[0]!.id, remote: "origin", remoteBranch: "main" }],
+      directoryIds: [project.directories[0]!.id], sharedWriteConfirmed: true, override: true } };
+    expect(createTask.mock.calls.filter(([request]) => request.op === "prepare").map(([request]) => request)).toEqual([expected, expected]);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(onCreated).not.toHaveBeenCalled();
+  });
   it("recovers a pending creation after remount, reports failed commit, and retries unchanged ID", async () => {
     let failures = 1;
     const createTask = vi.fn(async (request: { op: string; id?: string }) => {
