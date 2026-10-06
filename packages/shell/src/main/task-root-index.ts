@@ -232,19 +232,23 @@ export class TaskRootIndex {
       try { groups.push({ label, rows: read() }); }
       catch (error) { groups.push({ label, rows: [], message: rootFailure(error) }); }
     };
-    add("默认任务根", () => listPersistedTasks(this.defaultRoot).map((summary) => {
-      const dir = createDiskTaskDirResolver(this.defaultRoot)(summary.taskId);
-      const record = dir && readTaskRecordOnDisk(dir);
-      if (!dir || !record || dirname(dir) !== this.defaultRoot) throw new Error("task record identity changed");
-      const identity = { taskId: summary.taskId, dirId: record.dirId, createdAt: record.createdAt };
-      if (!sameSummary(verifyTask(this.defaultRoot, identity), summary)) throw new Error("task record identity changed");
-      return { summary, root: this.defaultRoot, realPath: verifiedRoot(this.defaultRoot), identity };
-    }));
+    add("默认任务根", () => {
+      const realPath = verifiedRoot(this.defaultRoot);
+      return listPersistedTasks(this.defaultRoot).map((summary) => {
+        const dir = createDiskTaskDirResolver(this.defaultRoot)(summary.taskId);
+        const record = dir && readTaskRecordOnDisk(dir);
+        if (!dir || !record || dirname(dir) !== this.defaultRoot) throw new Error("task record identity changed");
+        const identity = { taskId: summary.taskId, dirId: record.dirId, createdAt: record.createdAt };
+        if (!sameSummary(verifyTask(this.defaultRoot, identity), summary)) throw new Error("task record identity changed");
+        return { summary, root: this.defaultRoot, realPath, identity };
+      });
+    });
     doc.roots.forEach((entry, index) => add(`已登记任务根 ${index + 1}`, () => {
       verifiedRoot(entry.path, entry.realPath);
+      const rows = entry.tasks.map((identity) => ({ summary: verifyTask(entry.path, identity), root: entry.path, realPath: entry.realPath, identity }));
       const scanned = listPersistedTasks(entry.path);
       if (scanned.length !== entry.tasks.length) throw new Error("unindexed tasks in registered root");
-      return entry.tasks.map((identity) => ({ summary: verifyTask(entry.path, identity), root: entry.path, realPath: entry.realPath, identity }));
+      return rows;
     }));
     // A failed root still owns every persisted ID. Never let a new default-root
     // record with that ID be displayed or routed as a different task.
