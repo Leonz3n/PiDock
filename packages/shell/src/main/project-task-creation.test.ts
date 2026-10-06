@@ -128,6 +128,36 @@ describe("persistent Project task creation with local Git", () => {
     await expect(performCreationOperation(env.service, { op: "prepare", input: { ...env.request, override: true } }, async () => env.home, attest)).rejects.toThrow(/sender/);
     expect(env.storage.read()).toBeNull();
   });
+  it("cancels the system root picker without changing disk or task identity and permits another attempt", async () => {
+    const env = await setup();
+    const primary = readFileSync(join(env.profile, "projects.json"), "utf8");
+    const backup = readFileSync(join(env.profile, "projects.json.bak"), "utf8");
+    const profileEntries = readdirSync(env.profile).sort();
+    const originalHead = git(env.repo, "rev-parse", "HEAD");
+    const originalStatus = git(env.repo, "status", "--porcelain");
+    const originalWorktrees = git(env.repo, "worktree", "list", "--porcelain");
+    const request = { op: "prepare", input: { ...env.request, override: true } };
+    let attestations = 0;
+    expect(await performCreationOperation(env.service, request, async () => null, () => { attestations += 1; })).toEqual({ canceled: true });
+    expect(attestations).toBe(1);
+    expect(env.service.current()).toBeNull();
+    expect(env.getCalls()).toBe(0);
+    expect(readdirSync(env.root)).toEqual([]);
+    expect(env.roots.inventory().tasks).toEqual([]);
+    expect(readdirSync(env.profile).sort()).toEqual(profileEntries);
+    expect(readFileSync(join(env.profile, "projects.json"), "utf8")).toBe(primary);
+    expect(readFileSync(join(env.profile, "projects.json.bak"), "utf8")).toBe(backup);
+    expect(git(env.repo, "rev-parse", "HEAD")).toBe(originalHead);
+    expect(git(env.repo, "status", "--porcelain")).toBe(originalStatus);
+    expect(git(env.repo, "worktree", "list", "--porcelain")).toBe(originalWorktrees);
+    const retry = await performCreationOperation(env.service, request, async () => env.root, () => { attestations += 1; });
+    expect(retry).toEqual({ canceled: false, intent: env.service.current() });
+    const intent = env.service.current()!;
+    expect(await env.service.commit(intent.id)).toEqual({ taskId: intent.taskId, projectId: env.project.id });
+    expect(env.getCalls()).toBe(1);
+    expect(env.projects.association(intent.taskId, env.roots).state).toBe("assigned");
+    expect(attestations).toBe(2);
+  });
   it("rejects a selected task root inside the original Git checkout", async () => {
     const env = await setup();
     const nested = join(env.repo, "tasks"); mkdirSync(nested);
