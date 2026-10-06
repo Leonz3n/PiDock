@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { App } from "../App";
@@ -28,6 +29,89 @@ const bridge = (settings: { projectPresent?: boolean; assigned?: boolean; fail?:
 afterEach(() => { cleanup(); delete window.pidock; vi.restoreAllMocks(); });
 
 describe("Desktop production data", () => {
+  it("keeps Desktop authority after the preload disappears on rerender", async () => {
+    const demoRead = vi.spyOn(memoryHost, "getWorkspace");
+    const demoCreate = vi.spyOn(memoryHost, "createTask");
+    const demoSend = vi.spyOn(memoryHost, "sendMessage");
+    window.pidock = { ...bridge(), listTasks: vi.fn(async () => ({ ok: false, error: "Host offline" })) };
+    const app = render(<App />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Host offline");
+
+    delete window.pidock;
+    app.rerender(<App />);
+    expect(screen.getByTestId("desktop-inventory")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("桌面壳任务读取接口不可用");
+    expect(screen.queryByText("Atlas Web")).not.toBeInTheDocument();
+    expect(demoRead).not.toHaveBeenCalled();
+    expect(demoCreate).not.toHaveBeenCalled();
+    expect(demoSend).not.toHaveBeenCalled();
+  });
+
+  it("keeps Desktop authority through StrictMode rerenders with an invalid bridge", async () => {
+    const demoRead = vi.spyOn(memoryHost, "getWorkspace");
+    const demoApprovals = vi.spyOn(memoryHost, "listApprovals");
+    const demoSend = vi.spyOn(memoryHost, "sendMessage");
+    window.pidock = bridge({ fail: "项目数据损坏" });
+    const app = render(<StrictMode><App /></StrictMode>);
+    expect(await screen.findByRole("alert")).toHaveTextContent("项目数据损坏");
+
+    window.pidock = {};
+    app.rerender(<StrictMode><App /></StrictMode>);
+    app.rerender(<StrictMode><App /></StrictMode>);
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("桌面壳任务读取接口不可用");
+    expect(screen.queryByText("Atlas Web")).not.toBeInTheDocument();
+    expect(demoRead).not.toHaveBeenCalled();
+    expect(demoApprovals).not.toHaveBeenCalled();
+    expect(demoSend).not.toHaveBeenCalled();
+  });
+
+  it("starts missing-preload Electron in Desktop synchronously and recovers only through its retry", async () => {
+    const demoRead = vi.spyOn(memoryHost, "getWorkspace");
+    const demoCreate = vi.spyOn(memoryHost, "createTask");
+    const userAgent = vi.spyOn(window.navigator, "userAgent", "get").mockReturnValue("Electron/44 Chrome/100");
+    const app = render(<StrictMode><App /></StrictMode>);
+    expect(screen.getByTestId("desktop-inventory")).toBeInTheDocument();
+    expect(screen.queryByTestId("shell-sidebar")).not.toBeInTheDocument();
+    expect(demoRead).not.toHaveBeenCalled();
+    expect(await screen.findByRole("alert")).toHaveTextContent("桌面壳任务读取接口不可用");
+
+    userAgent.mockReturnValue("Chrome/100");
+    app.rerender(<StrictMode><App /></StrictMode>);
+    expect(screen.getByTestId("desktop-inventory")).toBeInTheDocument();
+    window.pidock = bridge();
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    expect(await screen.findByTestId("desktop-project-overview")).toBeInTheDocument();
+    expect(screen.queryByText("Atlas Web")).not.toBeInTheDocument();
+    expect(demoRead).not.toHaveBeenCalled();
+    expect(demoCreate).not.toHaveBeenCalled();
+  });
+
+  it("keeps the initialized Vite demo after a late bridge, but selects Desktop on a fresh mount", async () => {
+    const demoRead = vi.spyOn(memoryHost, "getWorkspace");
+    const app = render(<StrictMode><App /></StrictMode>);
+    await waitFor(() => expect(demoRead).toHaveBeenCalled());
+    const demoSidebar = screen.getByTestId("shell-sidebar");
+    const shell = bridge();
+    window.pidock = shell;
+    app.rerender(<StrictMode><App /></StrictMode>);
+    app.rerender(<StrictMode><App /></StrictMode>);
+    expect(screen.getByTestId("shell-sidebar")).toBe(demoSidebar);
+    expect(screen.queryByTestId("desktop-inventory")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("desktop-shell")).not.toBeInTheDocument();
+    expect(shell.listTasks).not.toHaveBeenCalled();
+    expect(shell.projectOp).not.toHaveBeenCalled();
+
+    app.unmount();
+    demoRead.mockClear();
+    render(<StrictMode><App /></StrictMode>);
+    expect(await screen.findByTestId("desktop-project-overview")).toBeInTheDocument();
+    expect(shell.listTasks).toHaveBeenCalled();
+    expect(demoRead).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("shell-sidebar")).not.toBeInTheDocument();
+  });
+
   it.each(["overview", "management"])("rereads an externally restored missing root from %s without import or changing identities", async (surface) => {
     let restored = false;
     const currentRoots = () => restored ? roots : [{ label: "默认任务根", state: "error" as const, message: "任务根目录已移走" }];
