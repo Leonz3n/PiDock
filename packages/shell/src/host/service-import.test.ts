@@ -8,6 +8,77 @@ const roots: string[] = [];
 const root = () => { const dir = mkdtempSync(join(tmpdir(), "pidock-import-")); roots.push(dir); return dir; };
 afterEach(() => { for (const dir of roots.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 
+describe("#10 task-bound dotenv configuration hints", () => {
+  it("reports only root .env key names as configuration, using Node dotenv syntax without values", () => {
+    const task = root(); const repo = join(task, "api");
+    mkdirSync(repo);
+    writeFileSync(join(repo, ".env"), `# synthetic configuration\nexport API_TOKEN="synthetic-private-one"\nAPI_TOKEN=synthetic-private-two\nPORT=4100 # comment\nMULTILINE="synthetic-line-one\nsynthetic-line-two"\nLITERAL='${"${synthetic_private_reference}"}'\n`);
+    writeFileSync(join(repo, ".env.production.local"), "IGNORED_KEY=synthetic-ignored-value");
+    const scan = scanTaskServiceImportHints({ taskDir: task, roots: [
+      { id: "api", kind: "worktree", label: "api", path: repo },
+    ] }, "api");
+    expect(scan.errors).toEqual([]);
+    expect(scan.hints).toHaveLength(1);
+    expect(scan.hints[0]).toMatchObject({ source: ".env", name: ".env", runType: null,
+      envKeys: ["API_TOKEN", "LITERAL", "MULTILINE", "PORT"], invalidVars: [] });
+    expect(scan.hints[0]?.toVerify).toContain("仅提取变量键名；语法及业务读取点、生效优先级和 URL 覆盖规则需人工核对");
+    expect(JSON.stringify(scan)).not.toMatch(/synthetic-|synthetic_private_reference|4100|IGNORED_KEY/);
+    expect(process.env["MULTILINE"]).not.toBe("synthetic-line-one\nsynthetic-line-two");
+  });
+  it.each(["existing", "missing"])("refuses a %s external .env symlink without disclosing its target", (targetState) => {
+    const task = root(); const repo = join(task, "api"); const outside = root();
+    mkdirSync(repo);
+    const target = join(outside, "private.env");
+    if (targetState === "existing") writeFileSync(target, "API_TOKEN=synthetic-external-secret");
+    symlinkSync(target, join(repo, ".env"));
+    const scan = scanTaskServiceImportHints({ taskDir: task, roots: [
+      { id: "api", kind: "worktree", label: "api", path: repo },
+    ] }, "api");
+    expect(scan.hints).toEqual([]);
+    expect(scan.errors).toEqual([{ source: ".env", reason: "配置文件是符号链接，需要人工核对" }]);
+    expect(JSON.stringify(scan)).not.toMatch(/synthetic-external-secret|private\.env|pidock-import-/);
+  });
+  it("bounds and filters parsed keys without echoing invalid text, references or tolerant syntax values", () => {
+    const task = root(); const repo = join(task, "api");
+    mkdirSync(repo);
+    writeFileSync(join(repo, ".env"), ["1INVALID=synthetic-invalid-value", "bad-key=synthetic-bad-value",
+      `${"A".repeat(101)}=synthetic-long-key-value`, "UNTERMINATED=\"synthetic-unclosed-value",
+      ...Array.from({ length: 101 }, (_, index) => `KEY_${String(index).padStart(3, "0")}=synthetic-bounded-value`),
+    ].join("\n"));
+    const scan = scanTaskServiceImportHints({ taskDir: task, roots: [
+      { id: "api", kind: "worktree", label: "api", path: repo },
+    ] }, "api");
+    expect(scan.hints[0]?.envKeys).toHaveLength(100);
+    expect(scan.hints[0]?.envKeys[0]).toBe("KEY_000");
+    expect(scan.hints[0]?.envKeys[99]).toBe("KEY_099");
+    expect(scan.hints[0]?.toVerify).toContain("环境变量列表已截断，请人工核对");
+    expect(JSON.stringify(scan)).not.toMatch(/synthetic-|1INVALID|bad-key|A{101}/);
+    expect(scan.errors).toEqual([]);
+  });
+
+  it.each(["directory", "oversize"])("refuses a %s .env without echoing content", (kind) => {
+    const task = root(); const repo = join(task, "api");
+    mkdirSync(repo);
+    if (kind === "directory") mkdirSync(join(repo, ".env"));
+    else writeFileSync(join(repo, ".env"), "API_TOKEN=synthetic-oversize-secret\n" + "x".repeat(128 * 1024));
+    const scan = scanTaskServiceImportHints({ taskDir: task, roots: [
+      { id: "api", kind: "worktree", label: "api", path: repo },
+    ] }, "api");
+    expect(scan.hints).toEqual([]);
+    expect(scan.errors).toEqual([{ source: ".env", reason: "配置文件不是受限大小的普通文件" }]);
+    expect(JSON.stringify(scan)).not.toContain("synthetic-oversize-secret");
+  });
+
+  it("does not scan a .env through a worktree escaping the bound task", () => {
+    const task = root(); const outside = root(); const escaped = join(task, "api");
+    writeFileSync(join(outside, ".env"), "API_TOKEN=synthetic-escaped-secret");
+    symlinkSync(outside, escaped);
+    expect(() => scanTaskServiceImportHints({ taskDir: task, roots: [
+      { id: "api", kind: "worktree", label: "api", path: escaped },
+    ] }, "api")).toThrow("path-out-of-scope");
+  });
+});
+
 describe("#7 real repository service-import hints", () => {
   it("reads JSONC launch, package scripts and Compose as non-executable, value-free drafts", () => {
     const repo = root();

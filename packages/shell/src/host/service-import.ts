@@ -1,6 +1,7 @@
 import type { TaskPathProtection } from "./protected-application-path.js";
-import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
+import { parseEnv } from "node:util";
 import { parse as parseJsonc, type ParseError } from "jsonc-parser";
 import { parseDocument } from "yaml";
 import { classifyImportDraft, auditImportVars, SERVICE_KEY_PATTERN, type ServiceRunType } from "../main/service-config.js";
@@ -9,7 +10,8 @@ import type { WorkspaceRoot } from "../main/workspace-files.js";
 export interface ServiceImportHint {
   source: string;
   name: string;
-  runType: ServiceRunType;
+  /** null identifies configuration-only hints, never an executable run unit. */
+  runType: ServiceRunType | null;
   /** Keys only. The scanner never returns env values or executable commands. */
   envKeys: string[];
   invalidVars: string[];
@@ -22,7 +24,7 @@ export interface ServiceImportScan {
   truncated: boolean;
 }
 
-const SOURCES = ["package.json", ".vscode/launch.json", "compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml"] as const;
+const SOURCES = ["package.json", ".vscode/launch.json", "compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml", ".env"] as const;
 const MAX_FILE_BYTES = 128 * 1024;
 const MAX_HINTS = 100;
 const MAX_ENV_ROWS = 100;
@@ -34,8 +36,9 @@ const display = (value: string) => value.slice(0, 100);
 function readSource(root: string, source: string, protection?: TaskPathProtection): string | null {
   const path = join(root, source);
   protection?.assert(path);
-  if (!existsSync(path)) return null;
-  if (lstatSync(path).isSymbolicLink()) throw Error("配置文件是符号链接，需要人工核对");
+  const entry = lstatSync(path, { throwIfNoEntry: false });
+  if (!entry) return null;
+  if (entry.isSymbolicLink()) throw Error("配置文件是符号链接，需要人工核对");
   const resolved = realpathSync(path);
   const inside = relative(root, resolved);
   if (inside === ".." || inside.startsWith(`..${sep}`)) throw Error("配置文件不在所选仓库内");
@@ -109,7 +112,14 @@ export function scanServiceImportHints(repoRoot: string, protection?: TaskPathPr
     try {
       const content = readSource(root, source, protection);
       if (content === null) continue;
-      if (source === "package.json" || source.endsWith("launch.json")) {
+      if (source === ".env") {
+        if (hints.length >= MAX_HINTS) { truncated = true; continue; }
+        // Node's permissive parser provides candidates, not syntax or business configuration validation.
+        const keys = Object.keys(parseEnv(content)).filter((key) => key.length <= MAX_ENV_KEY_CHARS && SERVICE_KEY_PATTERN.test(key));
+        hints.push({ source, name: source, runType: null, envKeys: keys.slice(0, MAX_ENV_ROWS), invalidVars: [],
+          toVerify: ["仅提取变量键名；语法及业务读取点、生效优先级和 URL 覆盖规则需人工核对",
+            ...(keys.length > MAX_ENV_ROWS ? ["环境变量列表已截断，请人工核对"] : [])] });
+      } else if (source === "package.json" || source.endsWith("launch.json")) {
         const parseErrors: ParseError[] = [];
         const data = parseJsonc(content, parseErrors, { allowTrailingComma: source.endsWith("launch.json"), disallowComments: source === "package.json" }) as unknown;
         if (parseErrors.length || !object(data)) throw Error("JSON 配置格式无效");
