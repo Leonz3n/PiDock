@@ -210,12 +210,46 @@ describe("[PiDock 08] local debug binds consumers to this task's artifact", () =
     ]);
   });
 
-  it("refuses a resolution reported for a consumer that is not in the plan", () => {
-    const binding = host();
+  it("preserves all protocol observations when rejecting an unknown consumer and accepts a valid retry once", () => {
+    let at = "2026-09-22T12:00:00.000Z";
+    const binding = new TaskProtocolBinding("task-a1f92c3d", TASK_DIR, () => at);
     planLocal(binding, [INVOICE], ["invoice"]);
-    expect(() =>
-      binding.recordResult({ generatedVersion: "gen-4", ok: true, resolutions: [{ consumerId: "unknown", path: `${PROTOCOL.goGenDir}/pkg` }] }),
-    ).toThrow(/invalid-consumer/);
+    binding.recordResult({
+      generatedVersion: "gen-3",
+      ok: true,
+      note: "Verified previous generation",
+      toolchain: { platform: "darwin-arm64", probe: { buf: { ok: true, version: "1.0" } } },
+      depsInstalled: [{ consumerId: "invoice", installed: true }],
+      resolutions: [{ consumerId: "invoice", path: `${PROTOCOL.goGenDir}/pkg`, version: "gen-3" }],
+      runtimeReachable: { ok: true, detail: "Previous runtime reachable" },
+    });
+    const before = binding.state();
+    at = "2026-09-22T13:00:00.000Z";
+    const retry = {
+      generatedVersion: "gen-4",
+      ok: true,
+      note: "New generation",
+      toolchain: { platform: "win32-x64", probe: { buf: { ok: false, note: "Missing tool" } } },
+      depsInstalled: [{ consumerId: "invoice", installed: false }],
+      resolutions: [{ consumerId: "invoice", path: `${PROTOCOL.goGenDir}/pkg`, version: "gen-4" }],
+      runtimeReachable: { ok: false, detail: "New runtime unreachable" },
+    };
+    expect(() => binding.recordResult({
+      ...retry,
+      resolutions: [...retry.resolutions, { consumerId: "unknown", path: `${PROTOCOL.goGenDir}/pkg` }],
+    })).toThrow(/invalid-consumer/);
+    expect(binding.state()).toEqual(before);
+
+    const accepted = binding.recordResult(retry);
+    expect(accepted.generatedVersion).toBe("gen-4");
+    expect(accepted.generatedAt).toBe(at);
+    expect(accepted.generationHistory).toEqual([
+      ...before.generationHistory,
+      { version: "gen-4", at, ok: true, note: "New generation" },
+    ]);
+    expect(accepted.observations).toEqual([...before.observations, { at, ok: true, note: "New generation" }]);
+    expect(accepted.consumers[0]?.resolution?.ok).toBe(true);
+    expect(accepted.consumers[0]?.staleness.state).toBe("ready");
   });
 });
 
