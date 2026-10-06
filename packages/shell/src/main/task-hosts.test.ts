@@ -1,11 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHostStopper, createLastWindowShutdown, PerTaskHostRegistry, taskBrowserOriginsFromEnv } from "./runtime.js";
 import { createDiskTaskDirResolver, defaultTasksRoot } from "./task-resolver.js";
 import { TaskRootIndex } from "./task-root-index.js";
 import type { HostTaskResult } from "../rpc/protocol.js";
+import { TaskWorkspaceHost, diskTaskStore } from "../host/task-host.js";
+import { buildLifecycleRecord, buildTaskDiskRecord, lifecycleFilePath, taskFilePath } from "../host/task-store.js";
+import { TaskLifecycleHost } from "../host/task-lifecycle.js";
+import { createLifecycleResources } from "../host/lifecycle-resources.js";
 
 // Seam: per-task utilityProcess Host routing in main (S3a slice).
 // `registerIpc(shell/taskOp)` routes through `PerTaskHostRegistry` when
@@ -895,6 +899,43 @@ describe("task browser origins", () => {
     expect(() => registry.disposeAll()).toThrow("shutdown-unconfirmed");
     expect(await stop()).toBe(false); expect(kill).not.toHaveBeenCalled(); expect(dispose).not.toHaveBeenCalled();
   });
+  it.each(["moved-root", "foreign-task"] as const)("retains a Host and reports a disk lifecycle refusal on quit after %s", async (change) => {
+    const home = realpathSync(mkdtempSync(join(tmpdir(), "pidock-quit-ownership-")));
+    const root = join(home, "tasks"), taskDir = join(root, "task-abcdef12"), moved = join(home, "moved-tasks");
+    const kill = vi.fn(), dispose = vi.fn();
+    try {
+      const record = buildTaskDiskRecord({ taskId: "task-a", name: "Quit ownership", dirId: "task-abcdef12", branch: "task/abcdef12", root, taskDir, remoteBranch: "main", baseCommit: "abc123", repos: [], now: "2026-09-22T10:00:00Z" });
+      diskTaskStore.writeTask(taskDir, record);
+      const host = new TaskWorkspaceHost("task-a", taskDir, diskTaskStore);
+      const lifecycle = new TaskLifecycleHost("task-a", taskDir, diskTaskStore, createLifecycleResources({ host, services: () => null, terminals: () => null, sessionIds: () => [], liveProcesses: () => [] }));
+      lifecycle.archive();
+      const index = new TaskRootIndex(join(home, "profile"), root);
+      const registry = new PerTaskHostRegistry("workspace-a", async () => ({ child: { kill } as never, client: {
+        task: vi.fn(async (params) => ({ workspaceId: "workspace-a", taskId: params.taskId, op: params.op, payload: params.op === "task/quit" ? { quit: lifecycle.quit() } : {} })),
+        onBrowserRequest: vi.fn(), dispose,
+      } as never }), (taskId) => index.resolve(taskId));
+      await registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
+      if (change === "moved-root") renameSync(root, moved);
+      else {
+        diskTaskStore.writeTask(taskDir, { ...record, taskId: "foreign-task" });
+        diskTaskStore.writeLifecycle(taskDir, buildLifecycleRecord({ taskId: "foreign-task", now: "2026-09-22T12:00:00Z" }));
+      }
+      const retainedDir = change === "moved-root" ? join(moved, "task-abcdef12") : taskDir;
+      const before = readFileSync(lifecycleFilePath(retainedDir), "utf8"), taskBefore = readFileSync(taskFilePath(retainedDir), "utf8");
+      expect(index.resolve("task-a")).toBeNull();
+      const report = await registry.quitAll({ origin: QUIT_ORIGIN });
+      expect(report).toMatchObject({ ok: false, tasks: [{ taskId: "task-a", ok: false, applied: [], failures: [], retainedTasks: ["task-a"], error: expect.stringContaining(change === "moved-root" ? "ENOENT" : "ownership mismatch") }] });
+      const stop = createHostStopper(registry, QUIT_ORIGIN, () => registry.disposeAll());
+      expect(await stop()).toBe(false);
+      expect(registry.size).toBe(1);
+      expect(() => registry.disposeAll()).toThrow("main-task-shutdown-unconfirmed");
+      expect(kill).not.toHaveBeenCalled(); expect(dispose).not.toHaveBeenCalled();
+      expect(existsSync(root)).toBe(change !== "moved-root");
+      expect(readFileSync(lifecycleFilePath(retainedDir), "utf8")).toBe(before);
+      expect(readFileSync(taskFilePath(retainedDir), "utf8")).toBe(taskBefore);
+    } finally { rmSync(home, { recursive: true, force: true }); }
+  });
+
   it("[PiDock 14] (#17) quitAll reports a Host that fails to answer instead of dropping the task", async () => {
     const spawn = vi.fn(async () => ({
       client: {

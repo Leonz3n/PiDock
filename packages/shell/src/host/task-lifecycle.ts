@@ -161,7 +161,9 @@ export class TaskLifecycleHost {
 
   /** Persisted record, or an in-memory default before the first archive. */
   private record(): LifecycleRecord {
-    return this.store.readLifecycle(this.taskDir) ?? buildLifecycleRecord({ taskId: this.taskId, now: this.now() });
+    const record = this.store.readLifecycle(this.taskDir);
+    if (record !== null && record.taskId !== this.taskId) throw new Error("lifecycle task ownership mismatch");
+    return record ?? buildLifecycleRecord({ taskId: this.taskId, now: this.now() });
   }
 
   lifecycle(): LifecycleRecord {
