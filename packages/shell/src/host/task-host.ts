@@ -515,6 +515,7 @@ export class TaskWorkspaceHost {
    */
   configureSdkProvider(provider: { config: ExplicitTextProvider; credential: string; workspaceId?: string } | null): Promise<{ generation: number }> {
     if (this.sdkShutdown) return Promise.reject(Error("sdk-host-closing"));
+    if (this.executionClosing) return Promise.reject(Error("task-host-closing"));
     if (this.sdkDisposalFailed) return Promise.reject(Error("sdk-host-shutdown-unconfirmed"));
     if (this.sdkConfiguring) return Promise.reject(Error("sdk-provider-operation-in-flight"));
     const pending = this.installSdkProvider(provider);
@@ -531,7 +532,7 @@ export class TaskWorkspaceHost {
     this.sdkContext = null;
     this.sdkRouter = null;
     if (previous) await this.disposeSdkContext(previous);
-    if (this.sdkShutdown) throw Error("sdk-host-closing");
+    if (this.sdkShutdown || this.executionClosing) throw Error(this.sdkShutdown ? "sdk-host-closing" : "task-host-closing");
     this.sdkProviderGeneration += 1;
     if (provider) {
       const context = this.sdkContextFactory({
@@ -542,9 +543,9 @@ export class TaskWorkspaceHost {
       });
       try { await context.open("main"); }
       catch (error) { await this.disposeSdkContext(context); throw error; }
-      if (this.sdkShutdown) {
+      if (this.sdkShutdown || this.executionClosing) {
         await this.disposeSdkContext(context);
-        throw Error("sdk-host-closing");
+        throw Error(this.sdkShutdown ? "sdk-host-closing" : "task-host-closing");
       }
       this.sdkContext = context;
     }
@@ -673,6 +674,7 @@ export class TaskWorkspaceHost {
     schedule: StoredSchedule;
     approvalExpiresAt: string;
   }): { state: "done" | "approval" | "failed"; approvalId?: string; failureReason?: string } {
+    this.assertExecutionOpen();
     if (this.store === diskTaskStore) {
       return { state: "failed", failureReason: "sdk-route-unwired: scheduled model runs require #44" };
     }
@@ -736,6 +738,7 @@ export class TaskWorkspaceHost {
 
   /** 立即运行: one independent run now, without moving the next planned time. */
   runScheduleNow(scheduleId: string): ScheduledRunRecord {
+    this.assertExecutionOpen();
     // A confirmation whose deadline already passed no longer blocks this run: end
     // it first, exactly like the due evaluation does (盒子 4「先结束旧确认」).
     if (!this.isArchived()) this.settleDueApprovalWaits();
@@ -753,6 +756,7 @@ export class TaskWorkspaceHost {
    * run looking live.
    */
   evaluateSchedules(): ScheduledRunRecord[] {
+    this.assertExecutionOpen();
     if (this.isArchived()) return [];
     this.settleDueApprovalWaits();
     return this.schedules.evaluateDue();
@@ -971,8 +975,35 @@ export class TaskWorkspaceHost {
     return this.write.owner;
   }
 
+  private executionClosing = false;
+  private disposal: Promise<void> | undefined;
+
+  /** Freeze new execution/claims, while allowing admitted work to settle. */
+  sealExecution(): void {
+    this.executionClosing = true;
+    this.sdkContext?.seal();
+  }
+
+  private assertExecutionOpen(): void {
+    if (this.executionClosing) throw Error("task-host-closing");
+  }
+
+  /** Pending approvals have not executed; other held claims still need settlement. */
+  private unconfirmedWriteClaims(sessionId?: string): boolean {
+    const pending = new Set([...this.approvalClaims].filter(([id]) => this.channels.get(id)?.runState === "approval").map(([, claimId]) => claimId));
+    return this.write.snapshot().claims.some((claim) => (sessionId === undefined || claim.sessionId === sessionId) && !pending.has(claim.claimId));
+  }
+
+  /** Known execution registrations require trusted settlement, not a metadata reset. */
+  assertExecutionSettled(): void {
+    if (!this.executionClosing) throw Error("task-host-not-sealed");
+    if (this.write.snapshot().derived.length) throw Error("task-derived-executions-unconfirmed");
+    if (this.unconfirmedWriteClaims()) throw Error("task-write-claims-unconfirmed");
+  }
+
   /** Claim the write right for one side-effecting intent (fail-closed). */
   claimWrite(sessionId: string, permission: PiPermission, intent: WriteIntent) {
+    this.assertExecutionOpen();
     return this.write.claimWrite(sessionId, permission, intent);
   }
 
@@ -986,6 +1017,7 @@ export class TaskWorkspaceHost {
    * a later slice; the rule and its state are what this slice owes.
    */
   claimDerivedExecution(input: DerivedExecutionClaim): boolean {
+    this.assertExecutionOpen();
     const channel = this.channels.get(input.sessionId);
     if (!channel) throw new Error(`unknown-session: ${input.sessionId} 尚未打开，不能声明派生执行`);
     if (channel.currentPermission === "read") throw new Error("只读会话不持有写操作权，不能声明派生执行");
@@ -1670,6 +1702,7 @@ export class TaskWorkspaceHost {
      */
     origin?: { scheduleId: string; scheduleConfigVersion: number; approvalExpiresAt: string },
   ): HostTurnResult {
+    this.assertExecutionOpen();
     if (this.store === diskTaskStore) throw new Error("sdk-route-unwired: task/sendMessage requires #44");
     const channel = this.openSession(sessionId);
     // [PiDock 09] (#11) box 3: a read-only session never runs an execution
@@ -1860,6 +1893,7 @@ export class TaskWorkspaceHost {
    * throws before anything executes.
    */
   approve(sessionId: string, approvalId: string, contentVersion?: string): string {
+    this.assertExecutionOpen();
     const channel = this.openSession(sessionId);
     if (this.protection) {
       const approval = channel.snapshot().approvals.find((row) => row.id === approvalId);
@@ -1954,6 +1988,8 @@ export class TaskWorkspaceHost {
    * session can write. Returns the coordination view after the release.
    */
   cancel(sessionId: string): HostWriteState {
+    if (this.executionClosing && this.write.snapshot().derived.some((entry) => entry.sessionId === sessionId)) throw Error("task-derived-executions-unconfirmed");
+    if (this.executionClosing && this.unconfirmedWriteClaims(sessionId)) throw Error("task-write-claims-unconfirmed");
     const channel = this.openSession(sessionId);
     channel.cancel();
     this.approvalClaims.delete(sessionId);
@@ -1975,14 +2011,17 @@ export class TaskWorkspaceHost {
    */
   /** Drop in-memory channels (e.g. on Host dispose); disk state is already saved. */
   dispose(): Promise<void> {
-    const sdkStopped = this.shutdownSdk();
-    this.channels.clear();
-    this.approvalClaims.clear();
-    this.write.reset();
-    // With no live holder left to release them, this task's shared real-path
-    // keys end here instead of blocking other tasks for the process lifetime.
-    this.sharedPaths.releaseTask(this.taskId);
-    return sdkStopped;
+    if (this.disposal) return this.disposal;
+    this.sealExecution();
+    const unconfirmed = this.write.snapshot().derived.length ? "task-derived-executions-unconfirmed"
+      : this.unconfirmedWriteClaims() ? "task-write-claims-unconfirmed" : undefined;
+    return this.disposal = this.shutdownSdk().then(() => {
+      if (unconfirmed) throw Error(unconfirmed);
+      this.channels.clear();
+      this.approvalClaims.clear();
+      this.write.reset();
+      this.sharedPaths.releaseTask(this.taskId);
+    });
   }
 
   describe(): { taskId: string; taskDir: string; sessions: string[]; lockOwner: string | null; maxSeq: number } {

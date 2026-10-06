@@ -35,6 +35,7 @@ function fakeContext(fail = false) {
     open: vi.fn(async () => { calls.push("open"); if (fail) throw new Error("sdk-binding-invalid"); return { sdkId: "sdk-1", file: "/tmp/sdk-1.jsonl", tools: [] }; }),
     prompt: vi.fn(async () => { calls.push("prompt"); return { state: "done" as const, text: "hi", events: [] }; }),
     cancel: vi.fn(async () => { calls.push("cancel"); }),
+    seal: vi.fn(),
     dispose: vi.fn(async () => { calls.push("dispose"); }),
   } as unknown as SdkContextClient;
   return { client, calls };
@@ -141,6 +142,27 @@ it("does not erase a failed previous context disposal during provider replacemen
   await expect(taskHost.configureSdkProvider({ config: CONFIG, credential: "synthetic-key" })).rejects.toThrow("sdk-host-shutdown-unconfirmed");
   await expect(taskHost.configureSdkProvider(null)).rejects.toThrow("sdk-host-shutdown-unconfirmed");
   await expect(taskHost.shutdownSdk()).rejects.toThrow("sdk-host-shutdown-unconfirmed"); expect(next.client.open).not.toHaveBeenCalled();
+});
+it("preserves channels and approval claims if disposal cannot confirm SDK shutdown", async () => {
+  const installed = fakeContext(), dir = task("task-a"), taskHost = host(dir, [installed.client]);
+  await taskHost.configureSdkProvider({ config: CONFIG, credential: "synthetic-key" });
+  taskHost.openSession("main", { permission: "default" });
+  const turn = taskHost.sendMessage("main", "pending", { tool: "exec.run", target: `${dir}/run.sh`, execute: (call) => ({ tool: call.tool, kind: call.kind, target: call.target, contentVersion: call.contentVersion, output: "fixture" }) });
+  expect(turn.state).toBe("approval"); installed.client.dispose = vi.fn(async () => { throw Error("synthetic-shutdown-failure"); });
+  const closing = taskHost.dispose(); await expect(closing).rejects.toThrow("sdk-host-shutdown-unconfirmed");
+  expect(taskHost.dispose()).toBe(closing); expect(taskHost.writeLockOwner).toBe("main"); expect(taskHost.getApproval(turn.approvalId!)?.status).toBe("pending");
+  expect(taskHost.describe().maxSeq).toBeGreaterThan(0); expect(installed.client.dispose).toHaveBeenCalledTimes(1);
+});
+it("seals the installed SDK handle and rejects late provider attachment without full shutdown", async () => {
+  const installed = fakeContext(), taskHost = host(task("task-a"), [installed.client]);
+  await taskHost.configureSdkProvider({ config: CONFIG, credential: "synthetic-key" }); taskHost.sealExecution();
+  expect(installed.client.seal).toHaveBeenCalledTimes(1);
+  await expect(taskHost.configureSdkProvider(null)).rejects.toThrow("task-host-closing"); await taskHost.shutdownSdk();
+  const pending = fakeContext(); let release!: () => void;
+  pending.client.open = vi.fn(() => new Promise<Awaited<ReturnType<SdkContextClient["open"]>>>((resolve) => { release = () => resolve({ sdkId: "late", file: "/tmp/late", tools: [] }); }));
+  const lateHost = host(task("task-b"), [pending.client]), opening = lateHost.configureSdkProvider({ config: CONFIG, credential: "synthetic-key" });
+  const refused = expect(opening).rejects.toThrow("task-host-closing"); lateHost.sealExecution(); release(); await refused;
+  expect(lateHost.sdkProviderConfigured).toBe(false); expect(pending.client.dispose).toHaveBeenCalledTimes(1); await lateHost.shutdownSdk();
 });
 it("refuses an unusable credential or configuration before any context exists", async () => {
   const dir = task("task-a");

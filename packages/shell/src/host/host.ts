@@ -1363,6 +1363,7 @@ async function performTaskOp(
         const lifecycle = lifecycleFor(taskId);
         if ("error" in lifecycle) return { ok: false, error: lifecycle.error };
         taskAdmission.seal();
+        host.sealExecution();
         sdkClosing = true;
         sdkTurns?.seal();
         try {
@@ -1371,6 +1372,7 @@ async function performTaskOp(
             await shutdownDeadline(Promise.resolve(sdkTurns?.waitForTerminal()), 15_000, "sdk-turns-shutdown-unconfirmed");
             sdkTurns = null;
             await shutdownDeadline(taskAdmission.drain(), 15_000, "task-operations-shutdown-unconfirmed");
+            host.assertExecutionSettled();
             return lifecycle.quit();
           })();
           const quit = await quitReceipt;
