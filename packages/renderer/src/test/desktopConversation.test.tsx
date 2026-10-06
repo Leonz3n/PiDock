@@ -50,6 +50,96 @@ const send = async (text: string) => {
 afterEach(() => { cleanup(); localStorage.clear(); delete window.pidock; vi.restoreAllMocks(); });
 
 describe("Desktop SDK conversation", () => {
+  it("keeps composition confirmation local even when Enter reports isComposing false", async () => {
+    const f = setup(); mount(f);
+    await screen.findByText(/尚未开始/);
+    const input = screen.getByRole("textbox", { name: "消息" });
+    fireEvent.change(input, { target: { value: "composition draft" } });
+    fireEvent.compositionStart(input);
+    fireEvent.keyDown(input, { key: "Enter", isComposing: false });
+    await act(async () => {});
+    expect(f.calls.filter((call) => call.action === "start")).toHaveLength(0);
+    expect(localStorage.getItem("pidock-sdk-main-pending-v1:task-a")).toBeNull();
+    expect(input).toHaveValue("composition draft");
+    fireEvent.compositionEnd(input);
+    fireEvent.keyDown(input, { key: "Enter", isComposing: false });
+    await screen.findByRole("button", { name: "停止" });
+    expect(f.calls.filter((call) => call.action === "start")).toHaveLength(1);
+    expect(f.calls.find((call) => call.action === "start")?.text).toBe("composition draft");
+    expect(input).toHaveValue("");
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(f.calls.filter((call) => call.action === "start")).toHaveLength(1);
+  });
+
+  it("keeps the IME completion Enter local after compositionEnd when keyCode is 229", async () => {
+    const f = setup(); mount(f);
+    await screen.findByText(/尚未开始/);
+    const input = screen.getByRole("textbox", { name: "消息" });
+    fireEvent.change(input, { target: { value: "completed draft" } });
+    fireEvent.compositionStart(input);
+    fireEvent.compositionEnd(input);
+    fireEvent.keyDown(input, { key: "Enter", keyCode: 229, isComposing: false });
+    await act(async () => {});
+    expect(f.calls.filter((call) => call.action === "start")).toHaveLength(0);
+    expect(localStorage.getItem("pidock-sdk-main-pending-v1:task-a")).toBeNull();
+    expect(input).toHaveValue("completed draft");
+    fireEvent.keyDown(input, { key: "Enter", keyCode: 13, isComposing: false });
+    await screen.findByRole("button", { name: "停止" });
+    expect(f.calls.filter((call) => call.action === "start")).toHaveLength(1);
+    expect(f.calls.find((call) => call.action === "start")?.text).toBe("completed draft");
+  });
+
+  it("preserves native composition and Shift+Enter without suppressing ordinary Enter", async () => {
+    const f = setup(); mount(f);
+    await screen.findByText(/尚未开始/);
+    const input = screen.getByRole("textbox", { name: "消息" });
+    const text = "first line\nsecond line";
+    fireEvent.change(input, { target: { value: text } });
+    fireEvent.keyDown(input, { key: "Enter", isComposing: true });
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+    await act(async () => {});
+    expect(f.calls.filter((call) => call.action === "start")).toHaveLength(0);
+    expect(localStorage.getItem("pidock-sdk-main-pending-v1:task-a")).toBeNull();
+    expect(input).toHaveValue(text);
+    fireEvent.keyDown(input, { key: "Enter" });
+    await screen.findByRole("button", { name: "停止" });
+    expect(f.calls.filter((call) => call.action === "start")).toHaveLength(1);
+    expect(f.calls.find((call) => call.action === "start")?.text).toBe(text);
+  });
+
+  it("does not leave composition stuck across repeated cycles or a remount", async () => {
+    const f = setup();
+    const view = mount(f);
+    await screen.findByText(/尚未开始/);
+    let input = screen.getByRole("textbox", { name: "消息" });
+    fireEvent.change(input, { target: { value: "repeated draft" } });
+    for (let cycle = 0; cycle < 3; cycle++) {
+      fireEvent.compositionStart(input);
+      fireEvent.keyDown(input, { key: "Enter", isComposing: false });
+      fireEvent.compositionEnd(input);
+      fireEvent.keyDown(input, { key: "Enter", keyCode: 229, isComposing: false });
+    }
+    await act(async () => {});
+    expect(f.calls.filter((call) => call.action === "start")).toHaveLength(0);
+    expect(localStorage.getItem("pidock-sdk-main-pending-v1:task-a")).toBeNull();
+    expect(input).toHaveValue("repeated draft");
+    fireEvent.keyDown(input, { key: "Enter" });
+    await screen.findByRole("button", { name: "停止" });
+    expect(f.calls.filter((call) => call.action === "start")).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "停止" }));
+    await screen.findByText(/已取消/);
+    fireEvent.compositionStart(input);
+    view.unmount();
+    mount(f);
+    await screen.findByText(/尚未开始/);
+    input = screen.getByRole("textbox", { name: "消息" });
+    fireEvent.change(input, { target: { value: "remounted draft" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await screen.findByRole("button", { name: "停止" });
+    expect(f.calls.filter((call) => call.action === "start")).toHaveLength(2);
+    expect(f.calls.filter((call) => call.action === "start")[1]?.text).toBe("remounted draft");
+  });
+
   it("marks reasoning settings unwired while keeping Provider navigation and SDK send/cancel available", async () => {
     const f = setup(); window.pidock = f.bridge;
     const onOpenProviders = vi.fn();
