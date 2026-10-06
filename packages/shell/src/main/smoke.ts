@@ -303,7 +303,9 @@ function validateShellProbe(
         "onHostStatus",
         "onSdkTurnEvent",
         "projectOp",
+        "providerOp",
         "sdkTurn",
+        "serviceCatalogOp",
         "taskOp",
       ])
   ) {
