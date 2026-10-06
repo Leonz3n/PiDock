@@ -56,7 +56,7 @@ import { ProjectRegistry } from "./project-registry.js";
 import { TaskRootIndex } from "./task-root-index.js";
 import { ProviderWiring } from "./provider-ipc.js";
 import { ProviderProfileStore } from "./provider-profile-store.js";
-import { ipcMain } from "electron";
+import { ipcMain, type WebContentsView } from "electron";
 
 const originalTaskUrl = process.env["PIDOCK_TASK_URL"];
 afterEach(() => {
@@ -354,6 +354,52 @@ describe("trusted Electron view modes", () => {
     assertProductionWindowEvidence(views);
     expect(views.shellView.getBounds().width).toBe(720);
     expect((await request("page/restore")).ok).toBe(true);
+    assertProductionWindowEvidence(views);
+  });
+
+  it("selects the latest committed task page and falls back across tasks before returning to full width", async () => {
+    const views = await createTrustedWindow("workspace-multi", "production");
+    const capability = createTaskBrowserCapability({
+      window: views.window, trust: views.registry, workspaceId: "workspace-multi",
+      originsFor: () => ["http://localhost:5173"], layout: views.layout,
+    });
+    const request = (taskId: string, action: string, page?: { pageId: string; webContentsId: number }) =>
+      capability.registry.handleRequest({ workspaceId: "workspace-multi", taskId, action, page,
+        params: action === "page/open" ? { url: "http://localhost:5173/" } : {},
+        actor: { kind: "human", label: "test" } });
+    const open = async (taskId: string) => {
+      const result = await request(taskId, "page/open");
+      if (!result.ok) throw new Error(result.error);
+      return result.payload as { pageId: string; webContentsId: number };
+    };
+    const firstA = await open("task-a");
+    const viewA = views.layout!.activeBrowser!.activeTab!.view as WebContentsView;
+    const pageB = await open("task-b");
+    const viewB = views.layout!.activeBrowser!.activeTab!.view as WebContentsView;
+    expect(viewA.getVisible()).toBe(false);
+    expect(viewB.getVisible()).toBe(true);
+    const secondA = await open("task-a");
+    const laterA = views.layout!.activeBrowser!.activeTab!.view as WebContentsView;
+    expect(viewB.getVisible()).toBe(false);
+    expect(laterA.getVisible()).toBe(true);
+    views.window.setContentBounds({ width: 720, height: 560 });
+    assertProductionWindowEvidence(views);
+    expect(laterA.getBounds()).toEqual({ x: 280, y: 0, width: 440, height: 560 });
+    expect(await request("task-a", "page/close", secondA)).toMatchObject({ ok: true, payload: { closed: true } });
+    expect(views.layout!.activeBrowser!.activeTab!.view).toBe(viewA);
+    expect(viewA.getVisible()).toBe(true);
+    expect(viewA.getBounds()).toEqual({ x: 280, y: 0, width: 440, height: 560 });
+    expect(viewB.getVisible()).toBe(false);
+    expect(await request("task-a", "page/close", firstA)).toMatchObject({ ok: true, payload: { closed: true } });
+    expect(viewB.getVisible()).toBe(true);
+    expect(viewB.getBounds()).toEqual({ x: 280, y: 0, width: 440, height: 560 });
+    expect(views.registry.requireTaskBinding(pageB.webContentsId, { taskId: "task-b", pageId: pageB.pageId }))
+      .toMatchObject({ taskId: "task-b", pageId: pageB.pageId });
+    assertProductionWindowEvidence(views);
+    expect(await request("task-b", "page/close", pageB)).toMatchObject({ ok: true, payload: { closed: true } });
+    expect(views.layout!.activeBrowser).toBeUndefined();
+    expect(views.shellView.getBounds()).toEqual({ x: 0, y: 0, width: 720, height: 560 });
+    expect(views.taskView.getVisible()).toBe(false);
     assertProductionWindowEvidence(views);
   });
 
