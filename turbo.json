@@ -10,18 +10,18 @@
     },
     "build": {
       "dependsOn": ["^build"],
-      "inputs": ["src/**", "index.html", "vite.config.ts", "tsconfig.json", "package.json"],
+      "inputs": ["src/**", "scripts/**", "index.html", "vite.config.ts", "tsconfig.json", "tsconfig.build.json", "package.json"],
       "outputs": ["dist/**"],
       "env": ["NODE_ENV"]
     },
     "typecheck": {
       "dependsOn": ["^typecheck"],
-      "inputs": ["src/**", "vite.config.ts", "tsconfig.json", "package.json"],
+      "inputs": ["src/**", "vite.config.ts", "tsconfig.json", "tsconfig.build.json", "package.json"],
       "outputs": []
     },
     "test": {
       "dependsOn": ["^build"],
-      "inputs": ["src/**", "vite.config.ts", "tsconfig.json", "package.json"],
+      "inputs": ["src/**", "vite.config.ts", "tsconfig.json", "tsconfig.build.json", "package.json"],
       "outputs": []
     },
     "lint": {

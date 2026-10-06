@@ -17,6 +17,16 @@ describe("packaged Desktop renderer", () => {
     expect(manifest.scripts.dev).toContain("pnpm build");
   });
 
+  it("includes shell build scripts and the TypeScript build configuration in cached task inputs", () => {
+    const graph = JSON.parse(readFileSync(join(shellRoot, "..", "..", "turbo.json"), "utf8")) as {
+      tasks: Record<string, { inputs: string[] }>;
+    };
+    expect(graph.tasks["build"]!.inputs).toContain("scripts/**");
+    for (const task of ["build", "typecheck", "test"]) {
+      expect(graph.tasks[task]!.inputs).toContain("tsconfig.build.json");
+    }
+  });
+
   it("ships the React entry and all referenced file-relative assets, separately from smoke", () => {
     const html = readFileSync(join(output, "index.html"), "utf8");
     const smoke = readFileSync(join(output, "smoke.html"), "utf8");
