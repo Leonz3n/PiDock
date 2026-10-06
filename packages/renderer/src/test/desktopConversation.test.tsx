@@ -50,6 +50,38 @@ const send = async (text: string) => {
 afterEach(() => { cleanup(); localStorage.clear(); delete window.pidock; vi.restoreAllMocks(); });
 
 describe("Desktop SDK conversation", () => {
+  it("marks reasoning settings unwired while keeping Provider navigation and SDK send/cancel available", async () => {
+    const f = setup(); window.pidock = f.bridge;
+    const onOpenProviders = vi.fn();
+    render(<DesktopConversation taskId="task-a" name="Task" roots={JSON.stringify(roots)} association={JSON.stringify(association("task-a"))} onBack={vi.fn()} onOpenProviders={onOpenProviders} onArchived={vi.fn()} />);
+    await screen.findByText(/尚未开始/);
+    const reasoning = screen.getByRole("button", { name: "推理（未接线）" });
+    expect(reasoning).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "推理 · 关闭" })).not.toBeInTheDocument();
+    fireEvent.focus(screen.getByLabelText("推理设置说明"));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("推理设置未接线；此处不表示模型的推理能力或当前档位");
+    fireEvent.click(reasoning);
+    expect(onOpenProviders).not.toHaveBeenCalled();
+    expect(f.calls.some((call) => call.action === "start")).toBe(false);
+    fireEvent.click(screen.getByTestId("composer-model"));
+    expect(onOpenProviders).toHaveBeenCalledOnce();
+    await send("still connected");
+    await screen.findByRole("button", { name: "停止" });
+    fireEvent.click(screen.getByRole("button", { name: "停止" }));
+    expect(await screen.findByText(/已取消/)).toBeInTheDocument();
+  });
+
+  it("shows the SDK zero-tool boundary without offering permission changes", async () => {
+    const f = setup(); mount(f);
+    await screen.findByText(/尚未开始/);
+    const permission = screen.getByRole("button", { name: "权限（未接线）：只读 · 无工具" });
+    expect(permission).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "默认权限" })).not.toBeInTheDocument();
+    fireEvent.focus(screen.getByLabelText("权限说明"));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("权限切换未接线；当前 SDK 回合无工具，不申请写权限");
+    fireEvent.click(permission);
+    expect(f.calls.some((call) => call.action === "start")).toBe(false);
+  });
   it("does not allow projection refresh before SDK subscription is ready", async () => {
     const f = setup();
     mount(f);

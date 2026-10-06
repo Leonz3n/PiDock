@@ -393,8 +393,12 @@ export function DesktopConversation({ taskId, name, roots, association, onBack, 
           <Tooltip><TooltipTrigger asChild>
             <Button type="button" size="icon-sm" disabled aria-label="附件（未接线）" className="text-[#b3b9be]"><Icon name="plus" /></Button>
           </TooltipTrigger><TooltipContent>附件未接线（#47 S8c）</TooltipContent></Tooltip>
-          <Tooltip><TooltipTrigger asChild><Button type="button" size="sm" title="SDK 回合不申请写权限"><Icon name="shield" />默认权限</Button></TooltipTrigger><TooltipContent>SDK 回合不申请写权限</TooltipContent></Tooltip>
-          <Tooltip><TooltipTrigger asChild><Button type="button" size="sm">推理 · 关闭</Button></TooltipTrigger><TooltipContent>模型与 Provider 在上方配置</TooltipContent></Tooltip>
+          <Tooltip><TooltipTrigger asChild><span tabIndex={0} aria-label="权限说明" className="inline-flex">
+            <Button type="button" size="sm" disabled aria-label="权限（未接线）：只读 · 无工具"><Icon name="shield" />只读 · 无工具</Button>
+          </span></TooltipTrigger><TooltipContent>权限切换未接线；当前 SDK 回合无工具，不申请写权限</TooltipContent></Tooltip>
+          <Tooltip><TooltipTrigger asChild><span tabIndex={0} aria-label="推理设置说明" className="inline-flex">
+            <Button type="button" size="sm" disabled>推理（未接线）</Button>
+          </span></TooltipTrigger><TooltipContent>推理设置未接线；此处不表示模型的推理能力或当前档位</TooltipContent></Tooltip>
           <Tooltip><TooltipTrigger asChild>
             <Button type="button" size="sm" onClick={onOpenProviders} title={provider ? PROVIDER_STATE_TEXT[provider.state] : "正在读取 Provider 配置"} data-testid="composer-model">{modelLabel}<Icon name="down" className="h-3 w-3" /></Button>
           </TooltipTrigger><TooltipContent>{provider ? PROVIDER_STATE_TEXT[provider.state] : "正在读取 Provider 配置"}</TooltipContent></Tooltip>
