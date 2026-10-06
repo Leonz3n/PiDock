@@ -54,6 +54,8 @@ import {
 
 import { ProjectRegistry } from "./project-registry.js";
 import { TaskRootIndex } from "./task-root-index.js";
+import { ProviderWiring } from "./provider-ipc.js";
+import { ProviderProfileStore } from "./provider-profile-store.js";
 import { ipcMain } from "electron";
 
 const originalTaskUrl = process.env["PIDOCK_TASK_URL"];
@@ -63,6 +65,59 @@ afterEach(() => {
 });
 
 describe("trusted Electron view modes", () => {
+  it("refuses SDK start after credential removal while preserving projection, status and cancel", async () => {
+    const root = mkdtempSync(join(tmpdir(), "pidock-provider-start-gate-"));
+    try {
+      const views = await createTrustedWindow("workspace-provider", "production");
+      await loadTrustedViews(views);
+      const store = new ProviderProfileStore(root);
+      const env: Record<string, string | undefined> = { PIDOCK_PROVIDER_START_TEST: "synthetic-start-gate-only" };
+      const profile = store.save({ name: "Synthetic", baseUrl: "https://models.example.test/v1", modelId: "text-model",
+        contextWindow: 128000, maxTokens: 8192, authRef: "PIDOCK_PROVIDER_START_TEST" });
+      let active = false;
+      const install = vi.fn(async () => { if (active) throw Error("sdk-turn-journal-uncommitted"); });
+      const providers = new ProviderWiring(store, install, env);
+      await providers.select("task-a", profile.id, views.shellView.webContents.id);
+      const routeTaskOp = vi.fn(async ({ op }: { op: string }) => ({ payload: op === "task/sendMessage"
+        ? { turn: { turnId: "11111111-2222-3333-4444-555555555555", state: "accepted" } }
+        : op === "task/sdkStatus" ? { turn: { state: "accepted" } }
+        : op === "task/sdkCancel" ? { turn: { state: "cancelled" } }
+        : { source: "sdk-jsonl", messages: [] } }));
+      registerIpc({} as never, views.registry, { routeTaskOp,
+        entryForTaskId: () => ({ client: { onTurnEvent: () => () => {} } }) } as never,
+        undefined, undefined, undefined, undefined, providers);
+      const sdk = vi.mocked(ipcMain.handle).mock.calls.findLast(([channel]) => channel === "shell/sdkTurn")?.[1];
+      const shell = { sender: views.shellView.webContents, senderFrame: views.shellView.webContents.mainFrame } as never;
+      const identity = { taskId: "task-a", sessionId: "main" };
+      expect(await sdk!(shell, { action: "subscribe", ...identity })).toMatchObject({ ok: true });
+      expect(await sdk!(shell, { action: "start", ...identity, requestId: "original", text: "original" })).toMatchObject({ ok: true });
+      active = true;
+      delete env[profile.authRef];
+      const startsBefore = routeTaskOp.mock.calls.filter(([request]) => request.op === "task/sendMessage").length;
+      const refused = await sdk!(shell, { action: "start", ...identity, requestId: "must-not-start", text: "next" });
+      const startsAfter = routeTaskOp.mock.calls.filter(([request]) => request.op === "task/sendMessage").length;
+      expect(await sdk!(shell, { action: "projection", ...identity })).toMatchObject({ ok: true, payload: { source: "sdk-jsonl" } });
+      expect(await sdk!(shell, { action: "status", ...identity, requestId: "original" })).toMatchObject({ ok: true, payload: { turn: { state: "accepted" } } });
+      expect(await sdk!(shell, { action: "cancel", ...identity, turnId: "11111111-2222-3333-4444-555555555555" })).toMatchObject({ ok: true, payload: { turn: { state: "cancelled" } } });
+      expect({ refused: refused.ok === false, newStartDispatches: startsAfter - startsBefore,
+        selectionRetained: store.selection("task-a")?.profileId === profile.id })
+        .toEqual({ refused: true, newStartDispatches: 0, selectionRetained: true });
+      env[profile.authRef] = "synthetic-restored-start-test-only";
+      expect(await providers.select("task-a", profile.id, views.shellView.webContents.id))
+        .toMatchObject({ state: "credential-missing" });
+      active = false;
+      expect(await sdk!(shell, { action: "start", ...identity, requestId: "after-terminal", text: "next" }))
+        .toMatchObject({ ok: false });
+      expect(routeTaskOp.mock.calls.filter(([request]) => request.op === "task/sendMessage")).toHaveLength(startsBefore);
+      expect(await sdk!(shell, { action: "status", ...identity, requestId: "original" })).toMatchObject({ ok: true });
+      expect(await sdk!(shell, { action: "projection", ...identity })).toMatchObject({ ok: true });
+      expect(await providers.select("task-a", profile.id, views.shellView.webContents.id)).toMatchObject({ state: "configured" });
+      expect(await sdk!(shell, { action: "start", ...identity, requestId: "after-idle-select", text: "next" }))
+        .toMatchObject({ ok: true });
+      expect(routeTaskOp.mock.calls.filter(([request]) => request.op === "task/sendMessage")).toHaveLength(startsBefore + 1);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   it("reconciles a turn completing while the Host listener is attached", async () => {
     const views = await createTrustedWindow("workspace-a", "production");
     await loadTrustedViews(views);

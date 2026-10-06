@@ -818,7 +818,12 @@ export function registerIpc(
       // task, exactly like `shell/taskOp`. Without this a turn issued right after
       // opening a task could race the panel's own restore and fail closed with
       // `provider-not-configured` even though a selection exists.
-      if (providers) { try { await providers.ensure(taskId, sender.webContentsId); } catch { /* surfaced by shell/providerOp list */ } }
+      let providerConfigured = true;
+      if (providers) {
+        try { providerConfigured = await providers.ensure(taskId, sender.webContentsId) === "configured"; }
+        catch { providerConfigured = false; }
+      }
+      if (action === "start" && !providerConfigured) throw new Error("provider-not-configured");
       if (action === "subscribe") {
         revoke(sender.webContentsId);
         const revision = revisions.get(sender.webContentsId);

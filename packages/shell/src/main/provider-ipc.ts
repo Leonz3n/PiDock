@@ -124,9 +124,9 @@ function profileInput(value: unknown): ProviderProfileInput {
 }
 
 /**
- * Owns the task↔profile↔context wiring. `ensure` re-installs a persisted
- * selection when a task is first touched after a restart; installs are
- * remembered per task so ordinary ops do not repeat the work.
+ * Owns the task↔profile↔context wiring. `ensure` restores a persisted selection
+ * after restart and revalidates its sole credential reference before reusing a
+ * cached context. Invalidation waits for the active turn's committed terminal.
  */
 export class ProviderWiring {
   private readonly installed = new Map<string, string>();
@@ -160,21 +160,70 @@ export class ProviderWiring {
   private state(taskId: string): ProviderInstallState {
     const selection = this.store.selection(taskId);
     const key = selection === null ? null : `${selection.profileId}:${selection.generation}`;
-    if (key !== null && this.installed.get(taskId) === key) return "configured";
     const failure = this.failed.get(taskId);
     if (failure && (key === null || failure.key === key)) return failure.state;
+    if (key !== null && this.installed.get(taskId) === key) return "configured";
     // A saved selection that this process has not installed yet is pending, not
     // missing: the panel reports the difference instead of claiming "unconfigured".
     return key === null ? "not-configured" : "pending";
   }
 
-  /** Installs the persisted selection for a task once per process. */
+  /** Revalidates the selected credential reference before reusing a context. */
   async ensure(taskId: string, sender: number): Promise<ProviderInstallState> {
     const selection = this.store.selection(taskId);
-    if (!selection) return "not-configured";
+    if (!selection) {
+      const installed = this.installed.get(taskId);
+      try { await this.retireInstalled(taskId, sender); }
+      catch (error) {
+        const state = classifyInstallFailure(error);
+        this.failed.set(taskId, { key: installed ?? "unselected", state });
+        return state;
+      }
+      this.failed.delete(taskId);
+      return "not-configured";
+    }
     const key = `${selection.profileId}:${selection.generation}`;
+    const config = this.store.config(selection.profileId);
+    if (config.generation !== selection.generation) {
+      try { await this.retireInstalled(taskId, sender); }
+      catch { /* The existing turn must commit before its context can be retired. */ }
+      this.failed.set(taskId, { key, state: "binding-stale" });
+      return "binding-stale";
+    }
+    try { this.credential(config.authRef); } catch {
+      try { await this.retireInstalled(taskId, sender); }
+      catch { /* An active context remains available to finish or cancel its turn. */ }
+      this.failed.set(taskId, { key, state: "credential-missing" });
+      return "credential-missing";
+    }
+    // Loss of a credential requires an explicit selection to restore sending.
+    if (this.failed.get(taskId)?.key === key && this.failed.get(taskId)?.state === "credential-missing") return "credential-missing";
     if (this.installed.get(taskId) === key) return "configured";
-    return await this.installSelection(taskId, selection.profileId, key, sender);
+    const state = await this.installSelection(taskId, selection.profileId, key, sender);
+    if (state !== "configured") return state;
+    const current = this.store.selection(taskId);
+    if (current === null || `${current.profileId}:${current.generation}` !== key) {
+      try { await this.retireInstalled(taskId, sender); }
+      catch (error) {
+        const refused = classifyInstallFailure(error);
+        this.failed.set(taskId, { key, state: refused });
+        return refused;
+      }
+      return "not-configured";
+    }
+    return "configured";
+  }
+
+  private credential(authRef: string): string {
+    const credential = resolveProviderCredential({ authRef }, this.env);
+    if (credential.length < 8) throw new Error("provider-not-configured");
+    return credential;
+  }
+
+  private async retireInstalled(taskId: string, sender: number): Promise<void> {
+    if (!this.installed.has(taskId)) return;
+    await this.install(taskId, null, sender);
+    this.installed.delete(taskId);
   }
 
   /** Installs and persists an explicit user selection. */
@@ -189,29 +238,43 @@ export class ProviderWiring {
 
   /** Clears the selection; the context is dropped before the record disappears. */
   async clear(taskId: string, sender: number): Promise<ProviderStatus> {
-    try { await this.install(taskId, null, sender); } finally {
-      this.installed.delete(taskId);
-      this.failed.delete(taskId);
-      this.store.deselect(taskId);
-    }
+    await this.install(taskId, null, sender);
+    this.installed.delete(taskId);
+    this.failed.delete(taskId);
+    this.store.deselect(taskId);
     return this.status(taskId);
   }
 
   private async installSelection(taskId: string, id: string, key: string, sender: number): Promise<ProviderInstallState> {
     let credential: string;
-    try { credential = resolveProviderCredential({ authRef: this.store.config(id).authRef }, this.env); }
+    try { credential = this.credential(this.store.config(id).authRef); }
     catch { this.failed.set(taskId, { key, state: "credential-missing" }); return "credential-missing"; }
     try { await this.install(taskId, { profileId: id, credential }, sender); }
     catch (error) {
       const state = classifyInstallFailure(error);
-      // "pending" is a retryable timing condition (a turn is still open) and is
-      // deliberately not remembered as a failure.
-      if (state === "pending") this.failed.delete(taskId);
-      else this.failed.set(taskId, { key, state });
+      // A pending refusal does not change configuration or an existing fence.
+      if (state !== "pending") this.failed.set(taskId, { key, state });
+      return state;
+    }
+    this.installed.set(taskId, key);
+    // Eager SDK open is asynchronous: profile edits or credential loss while it
+    // waits must not turn its eventual reply into permission for a stale send.
+    let state: ProviderInstallState = "configured";
+    try {
+      const current = this.store.config(id);
+      if (`${id}:${current.generation}` !== key) state = "binding-stale";
+      else {
+        try { this.credential(current.authRef); }
+        catch { state = "credential-missing"; }
+      }
+    } catch { state = "install-failed"; }
+    if (state !== "configured") {
+      try { await this.retireInstalled(taskId, sender); }
+      catch { /* Retain the context for drain; the failed state fences new starts. */ }
+      this.failed.set(taskId, { key, state });
       return state;
     }
     this.failed.delete(taskId);
-    this.installed.set(taskId, key);
     return "configured";
   }
 
@@ -224,13 +287,6 @@ export class ProviderWiring {
       generation: selection?.generation ?? null,
       profiles: this.views(),
     };
-  }
-
-  /** Re-renders the status after a profile edit so a bumped generation is visible. */
-  private statusAfterProfileChange(taskId: string): ProviderStatus {
-    const installed = this.installed.get(taskId);
-    if (installed && this.store.selection(taskId) === null) this.installed.delete(taskId);
-    return this.status(taskId);
   }
 
   async perform(request: unknown, sender: number): Promise<unknown> {
@@ -246,7 +302,7 @@ export class ProviderWiring {
       case "save": {
         const args = shape(request, "save", ["taskId", "profile"]);
         const saved = this.store.save(profileInput(args["profile"]));
-        return { profile: saved, status: this.statusAfterProfileChange(taskId(args["taskId"])) };
+        return { profile: saved, status: this.status(taskId(args["taskId"])) };
       }
       case "remove": {
         const args = shape(request, "remove", ["taskId", "profileId"]);
