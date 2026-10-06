@@ -279,8 +279,12 @@ export function DesktopConversation({ taskId, name, roots, association, onBack, 
   // meta chips, the real session tab strip, message chrome, and a composer whose
   // entries are either real or explicitly marked 未接线. Nothing here fabricates a
   // service, tool, attachment or session that the real Host does not have.
-  const sessionTokens = snapshot?.messages.reduce((sum, message) => sum + (message.usage?.input ?? 0) + (message.usage?.output ?? 0), 0) ?? 0;
   const ready = valid && connected;
+  const usageSnapshot = ready ? snapshot : null;
+  const reportedMessages = usageSnapshot?.messages.filter((message) => message.usage !== null) ?? [];
+  const recentTokens = reportedMessages.reduce((sum, message) => sum + message.usage!.input + message.usage!.output, 0);
+  const unreportedReplies = usageSnapshot?.messages.filter((message) => message.role === "assistant" && message.usage === null).length ?? 0;
+  const usageDetail = `最近最多 80 条 SDK 消息；不是会话累计，可能不含更早用量。${unreportedReplies ? `${unreportedReplies} 条助手消息未报告用量。` : ""}`;
   // S8d: `文件`/`终端` are wired to real Host ops; the rest stay visible but
   // unwired, with the Host-side reason instead of a silent no-op.
   const toolIcons: { icon: "file" | "terminal" | "server" | "globe" | "chart" | "link"; tool?: DesktopTool; unwiredId?: string; label: string }[] = [
@@ -403,7 +407,7 @@ export function DesktopConversation({ taskId, name, roots, association, onBack, 
           <Tooltip><TooltipTrigger asChild>
             <Button type="button" size="sm" onClick={onOpenProviders} title={provider ? PROVIDER_STATE_TEXT[provider.state] : "正在读取 Provider 配置"} data-testid="composer-model">{modelLabel}<Icon name="down" className="h-3 w-3" /></Button>
           </TooltipTrigger><TooltipContent>{provider ? PROVIDER_STATE_TEXT[provider.state] : "正在读取 Provider 配置"}</TooltipContent></Tooltip>
-          <span className="ml-auto shrink-0">{snapshot ? `本会话 ${sessionTokens} tokens` : "本会话 —"}</span>
+          <span title={usageDetail} className="ml-auto min-w-0 break-words">{!usageSnapshot ? "近期用量未核验" : reportedMessages.length ? `近期已报告输入+输出 ${recentTokens} tokens` : "近期用量未报告"}</span>
           <Button type="submit" variant="default" size="icon" disabled={blocked || !draft.trim()} aria-label="发送" title="发送"><Icon name="arrow" /></Button>
         </div>
       </form>
