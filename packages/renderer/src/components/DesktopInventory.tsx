@@ -3,7 +3,7 @@ import { Icon } from "./Icon";
 import { DesktopTaskCreation } from "./DesktopTaskCreation";
 import { DesktopConversation } from "./DesktopConversation";
 import { desktopMode, importDesktopTaskRoot } from "../data/desktopInventory";
-import { DESKTOP_LABELS, DesktopShell, DesktopUnwired, type DesktopUnwiredKey, type DesktopView } from "./DesktopShell";
+import { DESKTOP_LABELS, DesktopRootErrors, DesktopShell, DesktopUnwired, type DesktopUnwiredKey, type DesktopView } from "./DesktopShell";
 import { DesktopProvidersPage } from "./DesktopProvidersPage";
 import { DesktopProjectOverview } from "./DesktopProjectOverview";
 import { DesktopUsagePage } from "./DesktopUsagePage";
@@ -79,6 +79,9 @@ export function DesktopInventory() {
   const pendingCreateRef = useRef<PendingCreate | null>(null);
   const [editNeedsReview, setEditNeedsReview] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [rootRetryPending, setRootRetryPending] = useState(false);
+  const [rootRetryError, setRootRetryError] = useState<string | null>(null);
+  const rootRetryRef = useRef(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [choice, setChoice] = useState<Record<string, string>>({});
   const [activeTask, setActiveTask] = useState<{ id: string; name: string; roots: string; association: string } | null>(null);
@@ -106,6 +109,7 @@ export function DesktopInventory() {
   const pinned = useRef(false);
   const entryEpoch = useRef(0);
   const openTask = async (taskId: string) => {
+    if (rootRetryRef.current) return;
     const epoch = ++entryEpoch.current;
     setBusy(true); setActionError(null);
     try {
@@ -123,8 +127,9 @@ export function DesktopInventory() {
     } catch (error) { if (epoch === entryEpoch.current) setActionError(errorMessage(error)); }
     finally { if (epoch === entryEpoch.current) setBusy(false); }
   };
-  const load = useCallback(async (): Promise<boolean> => {
-    setView({ kind: "loading" });
+  const load = useCallback(async (inPlace = false): Promise<boolean> => {
+    if (!inPlace) setView({ kind: "loading" });
+    setRootRetryError(null);
     try {
       const data = await loadDesktopProjects(window.pidock ?? {});
       const pending = pendingCreateRef.current;
@@ -150,8 +155,21 @@ export function DesktopInventory() {
       }
       return true;
     }
-    catch (error) { setView({ kind: "error", error: errorMessage(error) }); return false; }
+    catch (error) {
+      if (inPlace) setRootRetryError(errorMessage(error));
+      else setView({ kind: "error", error: errorMessage(error) });
+      return false;
+    }
   }, []);
+  const retryRoots = async () => {
+    // Shell and management expose the same reread; lock before React rerenders either.
+    if (busy || rootRetryRef.current) return;
+    rootRetryRef.current = true;
+    setBusy(true);
+    setRootRetryPending(true);
+    try { await load(true); }
+    finally { rootRetryRef.current = false; setRootRetryPending(false); setBusy(false); }
+  };
   useEffect(() => { void load(); }, [load]);
   useEffect(() => {
     if (view.kind === "ready" && selection.kind === "project" &&
@@ -179,6 +197,7 @@ export function DesktopInventory() {
     return () => { live = false; };
   }, [view]);
   const run = async (action: () => Promise<unknown>) => {
+    if (rootRetryRef.current) return;
     setBusy(true); setActionError(null);
     try {
       await action();
@@ -331,6 +350,7 @@ export function DesktopInventory() {
     lifecyclePending={!lifecycleReady}
     lifecycleErrors={lifecycleReady ? lifecycleIndex?.errors ?? [] : []}
     roots={ready?.inventory.roots ?? []}
+    rootRetry={{ busy, pending: rootRetryPending, error: rootRetryError, run: () => void retryRoots() }}
     breadcrumb={breadcrumb}
   >{children}</DesktopShell>;
   if (remoteOpen) return shell(<DesktopRemotePage tasks={activeTasks} lifecyclePending={!lifecycleReady} lifecycleErrors={lifecycleIndex?.errors ?? []} />);
@@ -405,7 +425,7 @@ export function DesktopInventory() {
             {!shown?.length && <p className="py-5 text-sm text-muted">{project ? "此项目暂无任务" : "已检查的任务根暂无未归属任务"}</p>}
             <ul className="divide-y divide-line">{shown?.map((row) => <TaskRow key={row.taskId} row={row} name={taskMap.get(row.taskId)?.name ?? row.taskId} projects={data.projects} choice={choice[row.taskId] ?? ""} setChoice={(value) => setChoice((prev) => ({ ...prev, [row.taskId]: value }))} busy={busy} open={() => void openTask(row.taskId)} act={operate} />)}</ul>
           </section>
-          {data.inventory.roots.filter((root) => root.state === "error").map((root) => <p role="alert" key={root.label} className="mt-3 text-xs text-[#ad4545]">{root.label}：{root.message}</p>)}
+          <DesktopRootErrors roots={data.inventory.roots} busy={busy} retryPending={rootRetryPending} retryError={rootRetryError} onRetry={() => void retryRoots()} className="mt-3 empty:hidden" />
           <p className="mt-5 text-xs text-muted">仅显示默认及已登记任务根；其他位置需明确找回。</p>
         </div>
       </div>

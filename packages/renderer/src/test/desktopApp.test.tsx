@@ -28,6 +28,108 @@ const bridge = (settings: { projectPresent?: boolean; assigned?: boolean; fail?:
 afterEach(() => { cleanup(); delete window.pidock; vi.restoreAllMocks(); });
 
 describe("Desktop production data", () => {
+  it.each(["overview", "management"])("rereads an externally restored missing root from %s without import or changing identities", async (surface) => {
+    let restored = false;
+    const currentRoots = () => restored ? roots : [{ label: "默认任务根", state: "error" as const, message: "任务根目录已移走" }];
+    const listTasks = vi.fn(async () => ({ ok: true, payload: { tasks: restored ? tasks : [], roots: currentRoots() } }));
+    const projectOp = vi.fn(async (request: { op: string }) => ({ ok: true, payload: request.op === "list"
+      ? { initialized: true, projects: [project] }
+      : { roots: currentRoots(), tasks: [{ taskId: "real-1", projectId: project.id, state: restored ? "assigned" : "needs-repair" }] } }));
+    const host = { ...bridge(), listTasks, projectOp };
+    window.pidock = host;
+    render(<App />);
+    await screen.findByTestId("desktop-project-overview");
+    if (surface === "management") await openManagement();
+    const page = screen.getByTestId(surface === "management" ? "desktop-inventory" : "desktop-shell");
+    const retry = within(page).getByRole("button", { name: "重试读取默认任务根" });
+    expect(retry).toHaveAttribute("title", "重试读取默认任务根");
+    restored = true;
+    fireEvent.click(retry);
+    await waitFor(() => expect(screen.queryByRole("button", { name: "重试读取默认任务根" })).toBeNull());
+    expect(within(screen.getByTestId("desktop-breadcrumb")).getByText(project.name)).toBeInTheDocument();
+    if (surface === "overview") await waitFor(() => expect(screen.getByTestId("overview-task-count")).toHaveTextContent("1"));
+    else {
+      expect(screen.getByRole("button", { name: "进入工作区" })).toBeEnabled();
+      expect(screen.getByText("real-1")).toBeInTheDocument();
+    }
+    expect(host.importTaskRoot).not.toHaveBeenCalled();
+    expect(listTasks).toHaveBeenCalledTimes(2);
+    expect(projectOp.mock.calls.map(([request]) => request.op)).toEqual(["list", "associations", "list", "associations"]);
+    if (surface === "overview") await openManagement();
+    fireEvent.click(screen.getByRole("button", { name: "编辑" }));
+    expect(screen.getByLabelText("仓库路径 1")).toHaveValue(project.repositories[0]?.path);
+    expect(screen.getByRole("button", { name: project.name })).toBeInTheDocument();
+  });
+
+  it("keeps root Retry in place through busy and failed reads, preserving the edit draft and selection", async () => {
+    let restored = false;
+    let rejectRead: ((error: Error) => void) | undefined;
+    const currentRoots = () => restored ? roots : [{ label: "默认任务根", state: "error" as const, message: "任务根目录已移走" }];
+    const listTasks = vi.fn(async () => ({ ok: true, payload: { tasks: restored ? tasks : [], roots: currentRoots() } }));
+    const projectOp = vi.fn(async (request: { op: string }) => ({ ok: true, payload: request.op === "list"
+      ? { initialized: true, projects: [project] }
+      : { roots: currentRoots(), tasks: [{ taskId: "real-1", projectId: project.id, state: restored ? "assigned" : "needs-repair" }] } }));
+    const host = { ...bridge(), listTasks, projectOp };
+    window.pidock = host;
+    render(<App />);
+    await openManagement();
+    fireEvent.click(screen.getByRole("button", { name: "编辑" }));
+    const name = screen.getByLabelText("项目名称");
+    fireEvent.change(name, { target: { value: "未保存的名称" } });
+    fireEvent.change(screen.getByLabelText("描述"), { target: { value: "未保存的描述" } });
+    listTasks.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectRead = reject; }));
+    const retries = screen.getAllByRole("button", { name: "重试读取默认任务根" });
+    fireEvent.click(retries[0]!);
+    fireEvent.click(retries[1]!);
+    expect(listTasks).toHaveBeenCalledTimes(2);
+    expect(screen.getByLabelText("项目名称")).toBe(name);
+    expect(name).toHaveValue("未保存的名称");
+    expect(screen.getByRole("button", { name: "保存" })).toBeDisabled();
+    for (const retry of retries) expect(retry).toBeDisabled();
+    expect(screen.getAllByRole("status")[0]).toHaveTextContent("正在重读任务根");
+    rejectRead?.(new Error("任务根读取暂时失败"));
+    await waitFor(() => expect(screen.getAllByText("任务根读取暂时失败").length).toBeGreaterThan(0));
+    expect(screen.getByLabelText("项目名称")).toBe(name);
+    expect(screen.getByLabelText("描述")).toHaveValue("未保存的描述");
+    expect(screen.getByRole("button", { name: "保存" })).toBeEnabled();
+    for (const retry of screen.getAllByRole("button", { name: "重试读取默认任务根" })) expect(retry).toBeEnabled();
+    restored = true;
+    fireEvent.click(screen.getAllByRole("button", { name: "重试读取默认任务根" })[1]!);
+    await waitFor(() => expect(screen.queryByText("任务根读取暂时失败")).toBeNull());
+    expect(screen.getByLabelText("项目名称")).toBe(name);
+    expect(name).toHaveValue("未保存的名称");
+    expect(screen.getByLabelText("描述")).toHaveValue("未保存的描述");
+    expect(screen.getByRole("heading", { name: project.name })).toBeInTheDocument();
+    expect(screen.getByText("real-1")).toBeInTheDocument();
+    expect(host.importTaskRoot).not.toHaveBeenCalled();
+    expect(projectOp.mock.calls.every(([request]) => request.op === "list" || request.op === "associations")).toBe(true);
+  });
+
+  it("keeps an unavailable root retryable and preserves navigation during its reread", async () => {
+    const broken = [{ label: "默认任务根", state: "error" as const, message: "任务根目录已移走" }];
+    let releaseRead: (() => void) | undefined;
+    const listTasks = vi.fn(async () => ({ ok: true, payload: { tasks: [], roots: broken } }));
+    window.pidock = { ...bridge(), listTasks, projectOp: vi.fn(async (request) => ({ ok: true, payload: request.op === "list"
+      ? { initialized: true, projects: [project] }
+      : { roots: broken, tasks: [] } })) };
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "重试读取默认任务根" }));
+    await waitFor(() => expect(listTasks).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByRole("button", { name: "重试读取默认任务根" })).toBeEnabled());
+    expect(screen.getByRole("alert")).toHaveTextContent("任务根目录已移走");
+    listTasks.mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => { releaseRead = resolve; });
+      return { ok: true, payload: { tasks: [], roots: broken } };
+    });
+    fireEvent.click(screen.getByRole("button", { name: "重试读取默认任务根" }));
+    fireEvent.click(screen.getByRole("button", { name: "本机设置" }));
+    await screen.findByTestId("desktop-settings-page");
+    releaseRead?.();
+    await waitFor(() => expect(screen.getByRole("button", { name: "重试读取默认任务根" })).toBeEnabled());
+    expect(screen.getByTestId("desktop-settings-page")).toBeInTheDocument();
+    expect(screen.queryByTestId("desktop-project-overview")).toBeNull();
+  });
+
   it("keeps archived tasks out of active navigation until the Host restores them", async () => {
     let archived = true;
     const taskOp = vi.fn(async (taskId: string, op: string) => {

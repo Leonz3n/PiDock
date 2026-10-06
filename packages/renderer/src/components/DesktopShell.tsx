@@ -127,6 +127,28 @@ function TaskNavCard({ task, selected, onSelect }: { task: DesktopShellTask; sel
   );
 }
 
+type DesktopRoot = { label: string; state: "ready" | "error"; message?: string };
+
+export function DesktopRootErrors({ roots, busy, retryPending, retryError, onRetry, className }: {
+  roots: DesktopRoot[];
+  busy: boolean;
+  retryPending: boolean;
+  retryError: string | null;
+  onRetry: () => void;
+  className?: string;
+}) {
+  return <div className={className} aria-busy={retryPending}>
+    {roots.filter((root) => root.state === "error").map((root) => <div role="alert" key={root.label} className="flex min-w-0 items-center gap-2 py-2 text-[11px] text-[#ad4545]">
+      <span className="min-w-0 flex-1 break-words">{root.label}：{root.message}</span>
+      <Button type="button" variant="outline" aria-label={`重试读取${root.label}`} title={`重试读取${root.label}`} disabled={busy} onClick={onRetry} className="h-8 w-8 shrink-0 rounded-[5px] p-0">
+        <Icon name="refresh" className={retryPending ? "animate-spin" : undefined} />
+      </Button>
+    </div>)}
+    {retryPending && <p role="status" className="pb-2 text-[11px] text-muted">正在重读任务根</p>}
+    {retryError && <p role="alert" className="pb-2 text-[11px] text-[#ad4545]">{retryError}</p>}
+  </div>;
+}
+
 export function DesktopShell({
   view,
   onNavigate,
@@ -136,6 +158,7 @@ export function DesktopShell({
   lifecyclePending,
   lifecycleErrors,
   roots,
+  rootRetry,
   breadcrumb,
   children,
 }: {
@@ -147,7 +170,8 @@ export function DesktopShell({
   lifecyclePending: boolean;
   lifecycleErrors: string[];
   /** Real task-root labels; a broken root is surfaced, never hidden. */
-  roots: { label: string; state: "ready" | "error"; message?: string }[];
+  roots: DesktopRoot[];
+  rootRetry: { busy: boolean; pending: boolean; error: string | null; run: () => void };
   /** Real names for the header breadcrumb; omitted parts stay hidden. */
   breadcrumb: { project?: string; task?: string; page?: string };
   children: ReactNode;
@@ -228,7 +252,7 @@ export function DesktopShell({
             {brokenRoots.length === 0 ? `任务根 ${roots.length}/${roots.length} 就绪` : `${brokenRoots.length} 个任务根不可用`}
           </span>
         </header>
-        {brokenRoots.map((root) => <p role="alert" key={root.label} className="shrink-0 border-b border-line bg-paper px-4 py-2 text-[11px] text-[#ad4545]">{root.label}：{root.message}</p>)}
+        <DesktopRootErrors roots={roots} busy={rootRetry.busy} retryPending={rootRetry.pending} retryError={rootRetry.error} onRetry={rootRetry.run} className="shrink-0 border-b border-line bg-paper px-4 empty:hidden" />
         {lifecycleErrors.length > 0 && <p role="alert" className="shrink-0 border-b border-line bg-paper px-4 py-2 text-[11px] text-[#ad4545]">任务归档状态未核验：{lifecycleErrors.join("；")}</p>}
         <main className="min-h-0 min-w-0 flex-1 overflow-y-auto" data-testid="desktop-shell-content">{children}</main>
       </div>
