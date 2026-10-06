@@ -95,6 +95,12 @@ Optional test-inclusive tsc remains red with the same 72 baseline diagnostics,
 byte-identical to `/tmp/pidock-active-report-test-types.log`; latest log
 `/tmp/pidock-admission-test-types-final.log`. It is not reported as passing.
 
+## Follow-Up
+
+[Direct Host execution seal and derived retention](../direct-host-execution-seal/README.md)
+adds guards below dispatch and retains metadata on uncertain disposal. It does
+not establish complete native owned-resource inventory.
+
 ## Remaining Gates
 
 All-tool/direct-call sealing, complete actual owned-resource inventory and
