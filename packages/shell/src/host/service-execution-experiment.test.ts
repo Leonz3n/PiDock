@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { PiSessionChannel } from "../main/pi-session.js";
-import { ExperimentalServiceExecution } from "./service-execution-experiment.js";
+import { ExperimentalServiceExecution, type ManagedServiceBinding, type ServiceOwnerIdentity, type ServiceOwnerLaunch, type ServiceOwnerLease, type ServiceOwnerReceipt, type ServiceOwnerSession } from "./service-execution-experiment.js";
 import { launchSupervisorExperiment, type SupervisorResult, type SupervisorSession } from "./service-supervisor-experiment.js";
 import { TaskWriteCoordinator } from "./write-coordination.js";
 
@@ -188,3 +188,78 @@ it.skipIf(process.platform !== "darwin")("gates a real supervisor start/stop wit
     expect(() => process.kill(session!.pid, 0)).toThrow();
   } finally { await session?.stop(); }
 }, 30000);
+
+it("managed class adapter preserves private-field receivers through approval, dispatch and completion", async () => {
+  let complete!: (receipt: ServiceOwnerReceipt) => void;
+  let identity!: ServiceOwnerIdentity;
+  const launch: ServiceOwnerLaunch = { capability: "reviewed-no-child-fixture", program: "/fixed/node", args: ["/fixed/leaf.mjs"], cwd: taskDir,
+    env: {}, envRevision: "fixed-env-v1", programSha256: "a".repeat(64), sourceSha256: "b".repeat(64) };
+  const lease = { revalidate: vi.fn(), release: vi.fn() };
+  class TrustedAdapter implements ManagedServiceBinding {
+    workspaceId = "class-fixture";
+    #launch = launch;
+    #lease: ServiceOwnerLease = lease;
+    #session: ServiceOwnerSession = { completion: new Promise((resolve) => { complete = resolve; }), stop: async () => { throw Error("unexpected-stop"); } };
+    resolveLaunch() { return this.#launch; }
+    acquireLease() { return this.#lease; }
+    async start(owner: ServiceOwnerIdentity) { identity = owner; return this.#session; }
+  }
+  const managed = new TrustedAdapter(), c = channel();
+  const write: TaskWriteCoordinator = new TaskWriteCoordinator(() => execution.resources());
+  const execution: ExperimentalServiceExecution = new ExperimentalServiceExecution({ taskId, taskDir, serviceId, revision: () => "fixed-v1", write,
+    recovery: { read: () => undefined, write: () => undefined }, managed });
+  managed.workspaceId = "changed-after-capture";
+  managed.resolveLaunch = () => { throw Error("replaced-resolve"); };
+  managed.acquireLease = () => { throw Error("replaced-acquire"); };
+  managed.start = async () => { throw Error("replaced-start"); };
+  const request = (approvalId?: string) => execution.control({ channel: c, sessionId: "main", action: "start", persist: () => {}, approvalId });
+  const ask = await request();
+  expect(ask).toMatchObject({ ok: false, error: expect.stringMatching(/^approval-required:/), review: { workspaceId: "class-fixture" } });
+  if (ask.ok) throw Error("expected-approval");
+  const id = ask.error.split(":")[1]; c.approve(id);
+  expect(await request(id)).toEqual({ ok: true, state: "running" });
+  expect(write.owner).toBe("main");
+  complete({ ...identity, capability: launch.capability, programSha256: launch.programSha256, sourceSha256: launch.sourceSha256,
+    envRevision: launch.envRevision, event: "exit", code: 0 });
+  await vi.waitFor(() => expect(execution.snapshot().state).toBe("exited"));
+  expect(write.owner).toBeNull(); expect(lease.release).toHaveBeenCalledTimes(1);
+});
+
+it("managed binding refuses throwing or non-callable captured methods before dispatch", () => {
+  const start = vi.fn();
+  for (const property of ["workspaceId", "resolveLaunch", "acquireLease", "start"]) {
+    const managed = { workspaceId: "fixture", resolveLaunch: vi.fn(), acquireLease: vi.fn(), start };
+    Object.defineProperty(managed, property, { get: () => { throw Error("unavailable-binding"); } });
+    expect(() => new ExperimentalServiceExecution({ taskId, taskDir, serviceId, revision: () => "fixed-v1", write: new TaskWriteCoordinator(),
+      recovery: { read: () => undefined, write: () => undefined }, managed })).toThrow("incomplete-service-owner-binding");
+  }
+  expect(() => new ExperimentalServiceExecution({ taskId, taskDir, serviceId, revision: () => "fixed-v1", write: new TaskWriteCoordinator(),
+    recovery: { read: () => undefined, write: () => undefined },
+    managed: { workspaceId: "fixture", resolveLaunch: undefined as unknown as ManagedServiceBinding["resolveLaunch"], acquireLease: vi.fn(), start } })).toThrow("incomplete-service-owner-binding");
+  expect(start).not.toHaveBeenCalled();
+});
+
+it("managed owner keeps task and shared rights until exact native completion and durable ownership fence ack", async () => {
+  let complete!: (receipt: import("./service-execution-experiment.js").ServiceOwnerReceipt) => void;
+  let acknowledge!: () => void;
+  const lease = { revalidate: vi.fn(), release: vi.fn() };
+  const c = channel();
+  const write = new TaskWriteCoordinator();
+  const launch = { capability: "reviewed-no-child-fixture" as const, program: "/fixed/node", args: ["/fixed/leaf.mjs"], cwd: taskDir,
+    env: { FIXTURE_VALUE: "synthetic-service-value" }, envRevision: "fixed-env-v1", programSha256: "a".repeat(64), sourceSha256: "b".repeat(64) };
+  let identity!: import("./service-execution-experiment.js").ServiceOwnerIdentity;
+  const execution = new ExperimentalServiceExecution({ taskId, taskDir, serviceId, revision: () => "fixed-v1", write,
+    recovery: { read: () => undefined, write: (record) => record.state === "unconfirmed" ? new Promise<undefined>((resolve) => { acknowledge = () => resolve(undefined); }) : undefined },
+    managed: { workspaceId: "service-owner-fixture", resolveLaunch: () => launch, acquireLease: () => lease,
+      start: async (owner) => { identity = owner; return { completion: new Promise((resolve) => { complete = resolve; }), stop: async () => ({ ...owner, ...launch, event: "unconfirmed" }) }; } } });
+  const request = (approvalId?: string) => execution.control({ channel: c, sessionId: "main", action: "start", persist: () => {}, approvalId });
+  const ask = await request(); if (ask.ok) throw Error(); const id = ask.error.split(":")[1];
+  expect(ask).toMatchObject({ error: expect.stringMatching(/^approval-required:/) });
+  c.approve(id); expect(await request(id)).toEqual({ ok: true, state: "running" });
+  expect(write.owner).toBe("main"); expect(lease.release).not.toHaveBeenCalled();
+  complete({ ...identity, capability: launch.capability, programSha256: launch.programSha256, sourceSha256: launch.sourceSha256, envRevision: launch.envRevision, event: "exit", code: 0 });
+  await vi.waitFor(() => expect(acknowledge).toBeDefined());
+  expect(write.owner).toBe("main"); expect(lease.release).not.toHaveBeenCalled();
+  acknowledge(); await vi.waitFor(() => expect(execution.snapshot().state).toBe("exited"));
+  expect(write.owner).toBeNull(); expect(lease.release).toHaveBeenCalledTimes(1); expect(execution.resources()).toEqual([]);
+});

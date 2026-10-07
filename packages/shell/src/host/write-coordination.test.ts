@@ -56,6 +56,85 @@ describe("task write coordination", () => {
     expect(released.snapshot.waiting).toEqual([]);
   });
 
+  it.each(["retained", "later"] as const)("keeps the other nested claim when %s settles first after its parent", (first) => {
+    const coordinator = new TaskWriteCoordinator();
+    const request = (label: string) => coordinator.claimWrite("main-1-会话", "default", { kind: "turn", label });
+    const parent = request("parent"), retained = request("retained service");
+    if (!parent.ok || !retained.ok) throw Error("expected-claim");
+    coordinator.releaseWrite(parent.claimId);
+    const later = request("later tool");
+    if (!later.ok) throw Error("expected-later-claim");
+    coordinator.releaseWrite(first === "retained" ? retained.claimId : later.claimId);
+    expect(coordinator.owner).toBe("main-1-会话");
+    expect(coordinator.snapshot().claims).toHaveLength(1);
+    expect(coordinator.claimWrite("other", "auto", { kind: "turn", label: "blocked" })).toMatchObject({ ok: false, verdict: "locked" });
+    coordinator.releaseWrite(first === "retained" ? later.claimId : retained.claimId);
+    expect(coordinator.owner).toBeNull();
+    expect(coordinator.claimWrite("other", "auto", { kind: "turn", label: "next" }).ok).toBe(true);
+  });
+
+  it.each(["release", "reset", "forget"] as const)("ignores a late old release after %s while a new claim remains live", (settle) => {
+    const coordinator = new TaskWriteCoordinator();
+    const old = coordinator.claimWrite("main", "default", { kind: "turn", label: "old" });
+    if (!old.ok) throw Error("expected-old-claim");
+    if (settle === "release") coordinator.releaseWrite(old.claimId);
+    else if (settle === "reset") coordinator.reset();
+    else coordinator.forgetSession("main");
+    const current = coordinator.claimWrite("main", "default", { kind: "turn", label: "new" });
+    if (!current.ok) throw Error("expected-new-claim");
+    coordinator.releaseWrite(old.claimId);
+    expect(coordinator.owner).toBe("main");
+    expect(coordinator.snapshot().claims).toMatchObject([{ label: "new" }]);
+    expect(coordinator.claimWrite("main-1", "auto", { kind: "turn", label: "blocked" }).ok).toBe(false);
+    coordinator.releaseWrite(current.claimId);
+    const differentSession = coordinator.claimWrite("main-1", "auto", { kind: "turn", label: "different session" });
+    if (!differentSession.ok) throw Error("expected-different-session-claim");
+    coordinator.releaseWrite(old.claimId); coordinator.releaseWrite(current.claimId);
+    expect(coordinator.owner).toBe("main-1");
+    expect(coordinator.snapshot().claims).toMatchObject([{ label: "different session" }]);
+    expect(coordinator.claimWrite("main", "auto", { kind: "turn", label: "blocked" }).ok).toBe(false);
+  });
+
+  it("allocates deterministic distinct live pure-model claims after an earlier claim ends", () => {
+    const parent = claim(emptyWriteLock(), "main"), retained = claim(parent.snapshot, "main", "retained");
+    if (!parent.result.ok || !retained.result.ok) throw Error("expected-claim");
+    const settled = releaseWrite(retained.snapshot, parent.result.claimId);
+    const later = claim(settled.snapshot, "main", "later");
+    expect(claim(settled.snapshot, "main", "later")).toEqual(later);
+    if (!later.result.ok) throw Error("expected-later-claim");
+    const held = releaseWrite(later.snapshot, retained.result.claimId);
+    expect(held.snapshot.claims).toMatchObject([{ label: "later" }]);
+    expect(writeLockOwner(held.snapshot)).toBe("main");
+    expect(claim(held.snapshot, "other").result.ok).toBe(false);
+    expect(writeLockOwner(releaseWrite(held.snapshot, later.result.claimId).snapshot)).toBeNull();
+  });
+
+  it("releases only one located claim in a legacy snapshot with duplicate identities", () => {
+    const held = claim(emptyWriteLock(), "main", "retained");
+    if (!held.result.ok) throw Error("expected-claim");
+    const legacy = { ...held.snapshot, claims: [...held.snapshot.claims, { ...held.snapshot.claims[0], label: "later" }] };
+    const released = releaseWrite(legacy, held.result.claimId);
+    expect(released.snapshot.claims).toMatchObject([{ label: "later" }]);
+    expect(writeLockOwner(released.snapshot)).toBe("main");
+    expect(claim(released.snapshot, "other").result.ok).toBe(false);
+  });
+
+  it.each([0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1, null, "1"])("refuses invalid trusted ordinal %s without granting rights", (claimOrdinal) => {
+    const refused = claimWrite(emptyWriteLock(), { sessionId: "main", permission: "auto", intent: { kind: "turn", label: "invalid" }, claimOrdinal: claimOrdinal as number });
+    expect(refused.result).toMatchObject({ ok: false, verdict: "locked" });
+    expect(writeLockOwner(refused.snapshot)).toBeNull(); expect(refused.snapshot.claims).toEqual([]);
+  });
+
+  it("accepts the last safe trusted ordinal and refuses a live identity collision", () => {
+    const input = { sessionId: "main", permission: "auto" as const, intent: { kind: "turn" as const, label: "last safe ordinal" }, claimOrdinal: Number.MAX_SAFE_INTEGER };
+    const last = claimWrite(emptyWriteLock(), input);
+    expect(last.result.ok).toBe(true);
+    const refused = claimWrite(last.snapshot, input);
+    expect(refused.result).toMatchObject({ ok: false, verdict: "locked" });
+    expect(refused.snapshot.claims).toHaveLength(1);
+    expect(writeLockOwner(refused.snapshot)).toBe("main");
+  });
+
   it("never gives a read-only session the write right", () => {
     const refused = claimWrite(emptyWriteLock(), {
       sessionId: "audit",
