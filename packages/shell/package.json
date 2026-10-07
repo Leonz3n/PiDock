@@ -11,6 +11,7 @@
     "build": "pnpm --filter @pidock/renderer build && node scripts/copy-static.mjs && tsc -p tsconfig.build.json",
     "build:supervisor:mac": "node scripts/build-service-supervisor.mjs darwin-arm64",
     "build:supervisor:win": "node scripts/build-service-supervisor.mjs win32-x64",
+    "prepare:pty:darwin": "node scripts/prepare-node-pty.mjs",
     "typecheck": "tsc -p tsconfig.build.json --noEmit",
     "test": "vitest run",
     "lint": "eslint . --max-warnings 0",
@@ -47,6 +48,7 @@
     "@earendil-works/pi-ai": "0.87.1",
     "@earendil-works/pi-coding-agent": "0.87.1",
     "jsonc-parser": "3.3.1",
+    "node-pty": "1.1.0",
     "yaml": "2.9.0"
   }
 }
