@@ -1,8 +1,9 @@
+import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import { existsSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createHostStopper, createLastWindowShutdown, PerTaskHostRegistry, taskBrowserOriginsFromEnv } from "./runtime.js";
+import { createHost, createHostStopper, createLastWindowShutdown, PerTaskHostRegistry, taskBrowserOriginsFromEnv } from "./runtime.js";
 import { createDiskTaskDirResolver, defaultTasksRoot } from "./task-resolver.js";
 import { TaskRootIndex } from "./task-root-index.js";
 import type { HostTaskResult } from "../rpc/protocol.js";
@@ -10,6 +11,14 @@ import { TaskWorkspaceHost, diskTaskStore } from "../host/task-host.js";
 import { buildLifecycleRecord, buildTaskDiskRecord, lifecycleFilePath, taskFilePath } from "../host/task-store.js";
 import { TaskLifecycleHost } from "../host/task-lifecycle.js";
 import { createLifecycleResources } from "../host/lifecycle-resources.js";
+
+// Only the Electron fork boundary is doubled; this file never launches an OS child.
+const forkBoundary = vi.hoisted(() => vi.fn());
+vi.mock("electron", () => ({
+  app: { getPath: () => "/synthetic-profile" },
+  BrowserWindow: class {}, WebContentsView: class {}, dialog: {}, ipcMain: {}, session: {},
+  utilityProcess: { fork: forkBoundary },
+}));
 
 // Seam: per-task utilityProcess Host routing in main (S3a slice).
 // `registerIpc(shell/taskOp)` routes through `PerTaskHostRegistry` when
@@ -19,6 +28,12 @@ import { createLifecycleResources } from "../host/lifecycle-resources.js";
 // `taskDir` internally and revalidates the resolved dir on every reuse.
 // Unknown tasks fail closed before any fork (except `task/provision`,
 // which bootstraps a never-recorded id from its validated `dirId`).
+
+// Synthetic exit receipt only: no native launch or signaling occurs here.
+function syntheticChild(kill = vi.fn()) {
+  const child = new EventEmitter();
+  return Object.assign(child, { kill: vi.fn(() => { kill(); child.emit("exit", 0); }) });
+}
 
 function fakeTransport(result: HostTaskResult) {
   return {
@@ -39,9 +54,9 @@ function registryWith(
     const transport = fakeTransport(result);
     return {
       // PerTaskHostRegistry needs only `{ task, dispose }` on the client
-      // plus `kill` on the child; the cast keeps the seam Electron-free.
+      // plus observed exit on the child; the cast keeps the seam Electron-free.
       client: transport as never,
-      child: { kill: vi.fn() } as never,
+      child: syntheticChild() as never,
     };
   });
   const registry = new PerTaskHostRegistry("workspace-a", spawn, resolveTaskDir);
@@ -69,13 +84,86 @@ const QUIT_RESULT: HostTaskResult = {
 };
 
 describe("PerTaskHostRegistry main shutdown admission", () => {
+  it("retains workspace exit emitted before createHost returns across its first await", async () => {
+    const child = syntheticChild();
+    forkBoundary.mockImplementationOnce(() => { queueMicrotask(() => child.emit("exit", 0)); return child; });
+    const owned = await createHost("workspace-a", false);
+    const registry = new PerTaskHostRegistry("workspace-a");
+    expect((await registry.quitAll({ origin: QUIT_ORIGIN })).ok).toBe(true);
+    const stopSchedules = vi.fn();
+    await owned.disposal.disposeAfterTasks(registry, owned.client, stopSchedules);
+    expect(child.kill).not.toHaveBeenCalled(); expect(stopSchedules).toHaveBeenCalledTimes(1);
+    expect(child.listenerCount("message")).toBe(0);
+    expect(forkBoundary).toHaveBeenCalledTimes(1);
+  });
+  it("retains every Host until delayed exits settle one cached disposal receipt", async () => {
+    const children = [new EventEmitter(), new EventEmitter()].map((events) => Object.assign(events, { kill: vi.fn() }));
+    const clients = [fakeTransport(QUIT_RESULT), fakeTransport({ ...QUIT_RESULT, taskId: "task-b" })];
+    const registry = new PerTaskHostRegistry("workspace-a", async (_ws, task) => {
+      const index = task.taskId === "task-a" ? 0 : 1;
+      return { child: children[index] as never, client: clients[index] as never };
+    }, (id) => `/tasks/${id}`);
+    await registry.routeTaskOp({ taskId: "task-a", op: "task/cancel" });
+    await registry.routeTaskOp({ taskId: "task-b", op: "task/cancel" });
+    expect((await registry.quitAll({ origin: QUIT_ORIGIN })).ok).toBe(true);
+    const receipt = registry.disposeAll();
+    expect(receipt).toBeInstanceOf(Promise);
+    expect(registry.disposeAll()).toBe(receipt);
+    let disposed = false;
+    const pending = receipt.then(() => { disposed = true; });
+    for (let index = 0; index < 10; index++) await Promise.resolve();
+    expect(registry.size).toBe(2); expect(disposed).toBe(false);
+    children[0].emit("exit", 0);
+    for (let index = 0; index < 10; index++) await Promise.resolve();
+    expect(registry.size).toBe(2); expect(disposed).toBe(false);
+    children[1].emit("exit", 0); await pending;
+    expect(registry.size).toBe(0);
+    for (const child of children) expect(child.kill).toHaveBeenCalledTimes(1);
+  });
+  it("bounds disposal without repeating signals or accepting late exits", async () => {
+    vi.useFakeTimers();
+    try {
+      const child = Object.assign(new EventEmitter(), { kill: vi.fn() });
+      const transport = fakeTransport(QUIT_RESULT);
+      const registry = new PerTaskHostRegistry("workspace-a", async () => ({ child: child as never, client: transport as never }), () => "/tasks/a");
+      await registry.routeTaskOp({ taskId: "task-a", op: "task/cancel" });
+      const stop = createHostStopper(registry, QUIT_ORIGIN, () => registry.disposeAll());
+      const first = stop();
+      await vi.advanceTimersByTimeAsync(14_999);
+      expect(child.kill).toHaveBeenCalledTimes(1); expect(registry.size).toBe(1);
+      expect(stop()).toBe(first);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await first).toBe(false);
+      const receipt = registry.disposeAll();
+      const rejected = expect(receipt).rejects.toThrow("main-task-disposal-unconfirmed");
+      child.emit("exit", 0); await rejected;
+      expect(await stop()).toBe(false); expect(stop()).toBe(first);
+      expect(registry.disposeAll()).toBe(receipt); expect(registry.size).toBe(1);
+      expect(child.kill).toHaveBeenCalledTimes(1); expect(transport.dispose).toHaveBeenCalledTimes(1);
+    } finally { vi.useRealTimers(); }
+  });
+  it("waits for the asynchronous disposal receipt before reporting stopped", async () => {
+    const receipt = deferred<void>();
+    const quitAll = vi.fn(async () => ({ ok: true, tasks: [] }));
+    const dispose = vi.fn(() => receipt.promise);
+    const stop = createHostStopper({ quitAll }, QUIT_ORIGIN, dispose);
+    let stopped = false;
+    const pending = stop().then((result) => { stopped = result; return result; });
+    for (let index = 0; index < 10; index++) await Promise.resolve();
+    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(stopped).toBe(false);
+    receipt.resolve();
+    expect(await pending).toBe(true);
+    expect(await stop()).toBe(true);
+    expect(dispose).toHaveBeenCalledTimes(1);
+  });
   it("single-flights concurrent first use of the same task without serializing its operations", async () => {
     const started = deferred<void>(), ready = deferred<void>(), firstOp = deferred<HostTaskResult>();
     const transport = fakeTransport(TASK_RESULT);
     transport.task.mockImplementationOnce(() => firstOp.promise);
     const spawn = vi.fn(async () => {
       started.resolve(); await ready.promise;
-      return { client: transport as never, child: { kill: vi.fn() } as never };
+      return { client: transport as never, child: syntheticChild() as never };
     });
     const registry = new PerTaskHostRegistry("workspace-a", spawn, () => "/tasks/a");
     const first = registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
@@ -93,7 +181,7 @@ describe("PerTaskHostRegistry main shutdown admission", () => {
     const ready = deferred<void>(), started = deferred<void>();
     const spawn = vi.fn(async (_ws: string, task: { taskId: string; taskDir: string }) => {
       if (task.taskId === "task-a") { started.resolve(); await ready.promise; }
-      return { client: fakeTransport(TASK_RESULT) as never, child: { kill: vi.fn() } as never };
+      return { client: fakeTransport(TASK_RESULT) as never, child: syntheticChild() as never };
     });
     const registry = new PerTaskHostRegistry("workspace-a", spawn, (id) => `/tasks/${id}`);
     const first = registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
@@ -105,7 +193,7 @@ describe("PerTaskHostRegistry main shutdown admission", () => {
 
   it("single-flights the provision bootstrap as well as existing tasks", async () => {
     const ready = deferred<void>(), started = deferred<void>(), transport = fakeTransport(TASK_RESULT);
-    const spawn = vi.fn(async () => { started.resolve(); await ready.promise; return { client: transport as never, child: { kill: vi.fn() } as never }; });
+    const spawn = vi.fn(async () => { started.resolve(); await ready.promise; return { client: transport as never, child: syntheticChild() as never }; });
     const registry = new PerTaskHostRegistry("workspace-a", spawn, () => null);
     const params = { taskId: "task-3b8f479a", op: "task/provision" as const,
       payload: { name: "Bootstrap", dirId: "task-3b8f479a", remoteBranch: "main", fetchedCommit: "abc123" } };
@@ -117,7 +205,7 @@ describe("PerTaskHostRegistry main shutdown admission", () => {
 
   it("rejects another task claiming either a pending or an owned folder", async () => {
     const ready = deferred<void>(), started = deferred<void>(), transport = fakeTransport(TASK_RESULT);
-    const spawn = vi.fn(async () => { started.resolve(); await ready.promise; return { client: transport as never, child: { kill: vi.fn() } as never }; });
+    const spawn = vi.fn(async () => { started.resolve(); await ready.promise; return { client: transport as never, child: syntheticChild() as never }; });
     const registry = new PerTaskHostRegistry("workspace-a", spawn, () => "/tasks/a");
     const first = registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} }); await started.promise;
     await expect(registry.routeTaskOp({ taskId: "task-b", op: "task/cancel", payload: {} })).rejects.toThrow("task-moved");
@@ -128,7 +216,7 @@ describe("PerTaskHostRegistry main shutdown admission", () => {
   });
 
   it("denies invalid quit authority or payload before sealing even an empty registry", async () => {
-    const transport = fakeTransport(QUIT_RESULT), spawn = vi.fn(async () => ({ client: transport as never, child: { kill: vi.fn() } as never }));
+    const transport = fakeTransport(QUIT_RESULT), spawn = vi.fn(async () => ({ client: transport as never, child: syntheticChild() as never }));
     const registry = new PerTaskHostRegistry("workspace-a", spawn, () => "/tasks/a");
     for (const origin of [undefined, { kind: "agent-tool", senderWebContentsId: 7 }, { kind: "shell-ui", senderWebContentsId: "7" }]) {
       await expect(registry.quitAll({ origin: origin as never })).rejects.toThrow("permission-denied");
@@ -149,7 +237,7 @@ describe("PerTaskHostRegistry main shutdown admission", () => {
   ])("retains the owned Host when the quit reply names a foreign %s", async (_field, changed) => {
     const transport = fakeTransport({ ...QUIT_RESULT, ...changed } as HostTaskResult), kill = vi.fn();
     const registry = new PerTaskHostRegistry("workspace-a", async () => ({
-      client: transport as never, child: { kill } as never,
+      client: transport as never, child: syntheticChild(kill) as never,
     }), () => "/tasks/a");
     await registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
     const quit = registry.quitAll({ origin: QUIT_ORIGIN });
@@ -180,7 +268,7 @@ describe("PerTaskHostRegistry main shutdown admission", () => {
       plan: { failures: [], retainedTasks: "retainedTasks" in changed ? changed.retainedTasks : [] },
     } } }), kill = vi.fn();
     const registry = new PerTaskHostRegistry("workspace-a", async () => ({
-      client: transport as never, child: { kill } as never,
+      client: transport as never, child: syntheticChild(kill) as never,
     }), () => "/tasks/a");
     await registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
     const report = await registry.quitAll({ origin: QUIT_ORIGIN });
@@ -202,7 +290,7 @@ describe("PerTaskHostRegistry main shutdown admission", () => {
   ])("reports malformed quit envelopes with a fixed error: %s", async (_shape, reply) => {
     const transport = fakeTransport(reply as HostTaskResult), kill = vi.fn();
     const registry = new PerTaskHostRegistry("workspace-a", async () => ({
-      client: transport as never, child: { kill } as never,
+      client: transport as never, child: syntheticChild(kill) as never,
     }), () => "/tasks/a");
     await registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
     const report = await registry.quitAll({ origin: QUIT_ORIGIN });
@@ -218,7 +306,7 @@ describe("PerTaskHostRegistry main shutdown admission", () => {
     const retainedTasks = blocked ? ["task-a"] : [];
     const transport = fakeTransport({ ...QUIT_RESULT, payload: { quit: { applied, plan: { failures, retainedTasks } } } }), kill = vi.fn();
     const registry = new PerTaskHostRegistry("workspace-a", async () => ({
-      client: transport as never, child: { kill } as never,
+      client: transport as never, child: syntheticChild(kill) as never,
     }), () => "/tasks/a");
     await registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
     const report = await registry.quitAll({ origin: QUIT_ORIGIN });
@@ -234,7 +322,7 @@ describe("PerTaskHostRegistry main shutdown admission", () => {
       expect(registry.size).toBe(1);
       expect(transport.dispose).not.toHaveBeenCalled(); expect(kill).not.toHaveBeenCalled();
     } else {
-      registry.disposeAll(); expect(registry.size).toBe(0);
+      await registry.disposeAll(); expect(registry.size).toBe(0);
       expect(transport.dispose).toHaveBeenCalledTimes(1); expect(kill).toHaveBeenCalledTimes(1);
     }
     expect(transport.task).toHaveBeenCalledTimes(2);
@@ -251,7 +339,7 @@ describe("PerTaskHostRegistry main shutdown admission", () => {
     try {
       const index = new TaskRootIndex(join(home, "userData"), root);
       const ready = deferred<void>(), started = deferred<void>(), transport = fakeTransport(TASK_RESULT), kill = vi.fn();
-      const spawn = vi.fn(async () => { started.resolve(); await ready.promise; return { client: transport as never, child: { kill } as never }; });
+      const spawn = vi.fn(async () => { started.resolve(); await ready.promise; return { client: transport as never, child: syntheticChild(kill) as never }; });
       const registry = new PerTaskHostRegistry("workspace-a", spawn, (id) => index.resolve(id), undefined, index);
       const original = index.verifiedIdentity(taskId);
       expect(original).not.toBeNull();
@@ -273,7 +361,7 @@ describe("PerTaskHostRegistry main shutdown admission", () => {
     const transport = fakeTransport(QUIT_RESULT), kill = vi.fn();
     const spawn = vi.fn(async () => {
       started.resolve(); await ready.promise;
-      return { client: transport as never, child: { kill } as never };
+      return { client: transport as never, child: syntheticChild(kill) as never };
     });
     const registry = new PerTaskHostRegistry("workspace-a", spawn, () => "/tasks/a");
     const first = registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
@@ -292,7 +380,7 @@ describe("PerTaskHostRegistry main shutdown admission", () => {
     }, { timeoutMs: 120_000 }]]);
     expect(registry.entryForTaskId("task-a")?.taskDir).toBe("/tasks/a");
     expect(transport.dispose).not.toHaveBeenCalled(); expect(kill).not.toHaveBeenCalled();
-    registry.disposeAll(); expect(kill).toHaveBeenCalledTimes(1);
+    await registry.disposeAll(); expect(kill).toHaveBeenCalledTimes(1);
     await expect(registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} })).rejects.toThrow("task-host-closing");
   });
 
@@ -305,7 +393,7 @@ describe("PerTaskHostRegistry main shutdown admission", () => {
     });
     second.task.mockResolvedValue({ ...QUIT_RESULT, taskId: "task-b" });
     const registry = new PerTaskHostRegistry("workspace-a", async (_ws, task) => ({
-      client: (task.taskId === "task-a" ? first : second) as never, child: { kill: vi.fn() } as never,
+      client: (task.taskId === "task-a" ? first : second) as never, child: syntheticChild() as never,
     }), (id) => `/tasks/${id}`);
     await registry.routeTaskOp({ taskId: "task-b", op: "task/cancel", payload: {} });
     const route = registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
@@ -324,7 +412,7 @@ describe("PerTaskHostRegistry main shutdown admission", () => {
       first.task.mockResolvedValueOnce(TASK_RESULT).mockImplementation(() => stuck.promise);
       second.task.mockResolvedValue({ ...QUIT_RESULT, taskId: "task-b" });
       const registry = new PerTaskHostRegistry("workspace-a", async (_ws, task) => ({
-        client: (task.taskId === "task-a" ? first : second) as never, child: { kill } as never,
+        client: (task.taskId === "task-a" ? first : second) as never, child: syntheticChild(kill) as never,
       }), (id) => `/tasks/${id}`);
       await registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
       await registry.routeTaskOp({ taskId: "task-b", op: "task/cancel", payload: {} });
@@ -350,7 +438,7 @@ describe("PerTaskHostRegistry main shutdown admission", () => {
       const started = deferred<void>(), ready = deferred<void>(), transport = fakeTransport(QUIT_RESULT), kill = vi.fn();
       const registry = new PerTaskHostRegistry("workspace-a", async () => {
         started.resolve(); await ready.promise;
-        return { client: transport as never, child: { kill } as never };
+        return { client: transport as never, child: syntheticChild(kill) as never };
       }, () => "/tasks/a");
       const route = registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
       const refused = expect(route).rejects.toThrow("task-host-closing");
@@ -378,7 +466,7 @@ describe("PerTaskHostRegistry main shutdown admission", () => {
       });
       const registry = new PerTaskHostRegistry("workspace-a", async (_ws, task) => {
         if (task.taskId === "task-b") await ready.promise;
-        return { client: (task.taskId === "task-a" ? first : second) as never, child: { kill: vi.fn() } as never };
+        return { client: (task.taskId === "task-a" ? first : second) as never, child: syntheticChild() as never };
       }, (id) => `/tasks/${id}`);
       const a = registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
       await started.promise;
@@ -415,7 +503,7 @@ describe("PerTaskHostRegistry main shutdown admission", () => {
   it("preserves an owned child when handler binding fails and reports one failed task", async () => {
     const transport = fakeTransport(QUIT_RESULT), kill = vi.fn();
     transport.onBrowserRequest.mockImplementationOnce(() => { throw Error("handler-binding-unconfirmed"); });
-    const registry = new PerTaskHostRegistry("workspace-a", async () => ({ client: transport as never, child: { kill } as never }), () => "/tasks/a");
+    const registry = new PerTaskHostRegistry("workspace-a", async () => ({ client: transport as never, child: syntheticChild(kill) as never }), () => "/tasks/a");
     await expect(registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} })).rejects.toThrow("handler-binding-unconfirmed");
     expect(registry.size).toBe(1); expect(registry.entryForTaskId("task-a")?.taskDir).toBe("/tasks/a");
     const report = await registry.quitAll({ origin: QUIT_ORIGIN });
@@ -430,7 +518,7 @@ describe("PerTaskHostRegistry main shutdown admission", () => {
   it("rejects a moved pending claim while preserving the original late child", async () => {
     const ready = deferred<void>(), started = deferred<void>(), transport = fakeTransport(TASK_RESULT);
     let dir = "/tasks/a";
-    const spawn = vi.fn(async () => { started.resolve(); await ready.promise; return { client: transport as never, child: { kill: vi.fn() } as never }; });
+    const spawn = vi.fn(async () => { started.resolve(); await ready.promise; return { client: transport as never, child: syntheticChild() as never }; });
     const registry = new PerTaskHostRegistry("workspace-a", spawn, () => dir);
     const route = registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
     const moved = expect(route).rejects.toThrow("task-moved");
@@ -543,7 +631,7 @@ describe("PerTaskHostRegistry", () => {
           repos: [], createdAt: "2026-09-22T10:00:00Z", updatedAt: "2026-09-22T10:00:00Z" }));
         return TASK_RESULT;
       });
-      const spawn = vi.fn(async () => ({ client: transport as never, child: { kill: vi.fn() } as never }));
+      const spawn = vi.fn(async () => ({ client: transport as never, child: syntheticChild() as never }));
       const registry = new PerTaskHostRegistry("workspace-a", spawn, (id) => index.resolve(id), undefined, index);
       const payload = { name: "Recovered", dirId: taskId, rootOverride: override, remoteBranch: "main", fetchedCommit: "abc123" };
       await expect(registry.routeTaskOp({ taskId, op: "task/provision", payload })).rejects.toThrow("disk full");
@@ -789,7 +877,7 @@ describe("PerTaskHostRegistry", () => {
       expect(entry.client.dispose).not.toHaveBeenCalled(); expect(entry.child.kill).not.toHaveBeenCalled();
     }
     expect(await registry.quitAll({ origin: QUIT_ORIGIN })).toMatchObject({ ok: true });
-    registry.disposeAll();
+    await registry.disposeAll();
     expect(registry.size).toBe(0);
     for (const entry of entries) {
       expect(entry.client.dispose).toHaveBeenCalledTimes(1); expect(entry.child.kill).toHaveBeenCalledTimes(1);
@@ -804,7 +892,7 @@ describe("PerTaskHostRegistry", () => {
     await registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
     expect(spawn).toHaveBeenCalledTimes(1); expect(registry.size).toBe(1);
     expect(await registry.quitAll({ origin: QUIT_ORIGIN })).toMatchObject({ ok: true });
-    registry.disposeAll(); expect(registry.size).toBe(0);
+    await registry.disposeAll(); expect(registry.size).toBe(0);
     await expect(registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} })).rejects.toThrow("task-host-closing");
     const restarted = registryWith(() => "/tasks/task-a", spawns, QUIT_RESULT);
     await restarted.registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
@@ -858,7 +946,7 @@ describe("browser request binding", () => {
         }),
         dispose: vi.fn(),
       } as never,
-      child: { kill: vi.fn() } as never,
+      child: syntheticChild() as never,
     }));
   }
 
@@ -966,7 +1054,7 @@ describe("task browser origins", () => {
         onBrowserRequest: vi.fn(),
         dispose: vi.fn(),
       };
-      return { client: transport as never, child: { kill: vi.fn() } as never };
+      return { client: transport as never, child: syntheticChild() as never };
     });
     const registry = new PerTaskHostRegistry("workspace-a", spawn, (id) => dirs[id] ?? null);
     await registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
@@ -988,7 +1076,7 @@ describe("task browser origins", () => {
 
   it("retains Hosts when quit reports failures even with an empty retainedTasks list", async () => {
     const kill = vi.fn(), dispose = vi.fn();
-    const registry = new PerTaskHostRegistry("workspace-a", async () => ({ child: { kill } as never, client: {
+    const registry = new PerTaskHostRegistry("workspace-a", async () => ({ child: syntheticChild(kill) as never, client: {
       task: vi.fn(async (params) => ({ workspaceId: "workspace-a", taskId: params.taskId, op: params.op, payload: params.op === "task/quit" ? { quit: { applied: [], plan: { failures: [{ code: "unconfirmed" }], retainedTasks: [] } } } : {} })),
       onBrowserRequest: vi.fn(), dispose,
     } as never }), () => "/tasks/a");
@@ -1009,7 +1097,7 @@ describe("task browser origins", () => {
       const lifecycle = new TaskLifecycleHost("task-a", taskDir, diskTaskStore, createLifecycleResources({ host, services: () => null, terminals: () => null, sessionIds: () => [], liveProcesses: () => [] }));
       lifecycle.archive();
       const index = new TaskRootIndex(join(home, "profile"), root);
-      const registry = new PerTaskHostRegistry("workspace-a", async () => ({ child: { kill } as never, client: {
+      const registry = new PerTaskHostRegistry("workspace-a", async () => ({ child: syntheticChild(kill) as never, client: {
         task: vi.fn(async (params) => ({ workspaceId: "workspace-a", taskId: params.taskId, op: params.op, payload: params.op === "task/quit" ? { quit: lifecycle.quit() } : {} })),
         onBrowserRequest: vi.fn(), dispose,
       } as never }), (taskId) => index.resolve(taskId));
@@ -1045,7 +1133,7 @@ describe("task browser origins", () => {
         onBrowserRequest: vi.fn(),
         dispose: vi.fn(),
       } as never,
-      child: { kill: vi.fn() } as never,
+      child: syntheticChild() as never,
     }));
     const registry = new PerTaskHostRegistry("workspace-a", spawn, (id) => (id === "task-a" ? "/tasks/a" : null));
     await registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });

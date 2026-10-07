@@ -33,7 +33,8 @@ import { TaskRootIndex, type VerifiedTaskIdentity } from "./task-root-index.js";
 import { HostTaskAdmission } from "../host/host-task-admission.js";
 import { shutdownDeadline } from "../host/shutdown-deadline.js";
 import { ProjectRegistry } from "./project-registry.js";
-import { ServiceCatalog } from "./service-catalog.js";
+import { ServiceCatalog, serviceCatalogAuthority } from "./service-catalog.js";
+import { InstalledServiceHostAuthority } from "./service-host-binding.js";
 import { performServiceBindingOperation, performServiceCatalogOperation, performServiceConfigPreview } from "./service-catalog-ipc.js";
 import { performProjectOperation } from "./project-ipc.js";
 import type { ProviderWiring } from "./provider-ipc.js";
@@ -174,17 +175,40 @@ export function versionsTriple(hostNode?: string): Record<string, string> {
   };
 }
 
+// Adopt the actual child synchronously after fork, before client construction or any await.
+export function createHostDisposer(child: Pick<UtilityProcess, "once" | "kill">) {
+  let hasExited = false;
+  const exited = new Promise<void>((done) => { child.once("exit", () => { hasExited = true; done(); }); });
+  let receipt: Promise<void> | undefined;
+  return {
+    disposeAfterTasks(tasks: Pick<PerTaskHostRegistry, "disposeAll">, client: Pick<HostClient, "dispose">, stopSchedules: () => void): Promise<void> {
+      return receipt ??= Promise.resolve().then(async () => {
+        stopSchedules();
+        await tasks.disposeAll();
+        const disposed = shutdownDeadline(exited, 15_000, "main-workspace-disposal-unconfirmed");
+        // Keep expiry observed if client disposal or the termination request throws synchronously.
+        void disposed.catch(() => {});
+        client.dispose();
+        if (!hasExited) child.kill();
+        await disposed;
+      });
+    },
+  };
+}
+
 export async function createHost(
   workspaceId: string,
   logExit = true,
   task?: { taskId: string; taskDir: string },
-): Promise<{ client: HostClient; child: UtilityProcess }> {
+): Promise<{ client: HostClient; child: UtilityProcess; disposal: ReturnType<typeof createHostDisposer> }> {
   const entry = path.join(here, "..", "host", "host-entry.js");
   const child = utilityProcess.fork(entry, [], {
     serviceName: task ? `pidock-node-host-${task.taskId}` : "pidock-node-host",
-    env: buildHostEnv(process.env, workspaceId, task, app.getPath("userData"), normalizeTaskPath(defaultTasksRoot())),
+    env: { ...buildHostEnv(process.env, workspaceId, task, app.getPath("userData"), normalizeTaskPath(defaultTasksRoot())),
+      ...(task ? { PIDOCK_SERVICE_OWNER_REQUIRED: "1" } : {}) },
     stdio: "pipe",
   });
+  const disposal = createHostDisposer(child);
   const client = new HostClient(child);
   if (logExit) {
     child.on("exit", (code) => console.log(`[main] host exit code=${code}`));
@@ -192,7 +216,7 @@ export async function createHost(
   child.stderr?.on("data", (chunk) =>
     process.stderr.write(`[host:stderr] ${chunk}`),
   );
-  return { client, child };
+  return { client, child, disposal };
 }
 
 function layoutTrustedViews(
@@ -343,6 +367,18 @@ export class PerTaskHostRegistry {
   private closing = false;
   private quitConfirmed = false;
   private quitReceipt?: Promise<TaskHostsQuitReport>;
+  private disposalReceipt?: Promise<void>;
+  private readonly hostExits = new Map<UtilityProcess, { exited: boolean; receipt: Promise<void> }>();
+  private services?: InstalledServiceHostAuthority;
+  configureServices(create: (workspaceId: string) => InstalledServiceHostAuthority): void {
+    if (this.services || this.closing || this.byTaskDir.size || this.pendingHosts.size) throw Error("service-owner-authority-already-bound");
+    this.services = create(this.workspaceId);
+  }
+  private async prepareServices(entry: PerTaskHostEntry): Promise<void> {
+    if (!this.services) return;
+    try { await this.services.prepare(entry.child, entry.taskId); this.services.verify(entry.child); }
+    catch { /* The actual parent transport installs a sticky Host write/quit fence; reads keep their existing admission. */ }
+  }
 
   constructor(
     private readonly workspaceId: string,
@@ -448,6 +484,8 @@ export class PerTaskHostRegistry {
       }
       this.assertRoutingOpen();
       this.verifyTaskClaim(existing);
+      if (op !== "task/provision") await this.prepareServices(existing);
+      this.assertRoutingOpen();
       const result = await existing.client.task({ workspaceId: this.workspaceId, taskId, op, payload, origin },
         op === "task/sdkCancel" || op === "task/quit" ? { timeoutMs: 120_000 } : undefined);
       if (op === "task/provision") await this.indexProvisionedHost(existing);
@@ -478,6 +516,8 @@ export class PerTaskHostRegistry {
     const entry = await this.claimTaskHost(taskId, taskDir, false);
     this.assertRoutingOpen();
     this.verifyTaskClaim(entry);
+    if (op !== "task/provision") await this.prepareServices(entry);
+    this.assertRoutingOpen();
     return entry.client.task({ workspaceId: this.workspaceId, taskId, op, payload, origin },
       op === "task/sdkCancel" || op === "task/quit" ? { timeoutMs: 120_000 } : undefined);
   }
@@ -541,6 +581,10 @@ export class PerTaskHostRegistry {
     const promise = Promise.resolve().then(() => this.spawn(this.workspaceId, { taskId, taskDir })).then((spawned) => {
       const entry = { taskId, taskDir, client: spawned.client, child: spawned.child };
       this.byTaskDir.set(key, entry);
+      let resolveExit!: () => void;
+      const exit = { exited: false, receipt: new Promise<void>((done) => { resolveExit = done; }) };
+      this.hostExits.set(entry.child, exit);
+      entry.child.once("exit", () => { exit.exited = true; resolveExit(); });
       const dirs = this.byTaskId.get(taskId) ?? new Set<string>();
       dirs.add(key); this.byTaskId.set(taskId, dirs);
       if (identity) this.identities.set(key, identity);
@@ -668,6 +712,7 @@ export class PerTaskHostRegistry {
       await Promise.all([...this.byTaskDir.values()].map(async (entry) => {
         let task: TaskHostQuitResult;
         try {
+          await this.prepareServices(entry);
           const result = await entry.client.task({
             workspaceId: this.workspaceId, taskId: entry.taskId,
             op: "task/quit", payload, origin: input.origin,
@@ -679,6 +724,7 @@ export class PerTaskHostRegistry {
           if (!quit || !Array.isArray(quit.applied) || ![...quit.applied].every((item) => typeof item === "string") ||
             !quit.plan || !Array.isArray(quit.plan.failures) || !Array.isArray(quit.plan.retainedTasks) ||
             ![...quit.plan.retainedTasks].every((item) => typeof item === "string")) throw Error("host-quit-report-invalid");
+          if (this.services && quit.plan.failures.length === 0 && quit.plan.retainedTasks.length === 0) this.services.confirm(entry.child, (result.payload as Record<string, unknown>).serviceOwner);
           task = { taskId: entry.taskId, ok: true, applied: [...quit.applied], failures: [...quit.plan.failures], retainedTasks: [...quit.plan.retainedTasks] };
         } catch (error) {
           task = { taskId: entry.taskId, ok: false, applied: [], failures: [], retainedTasks: [entry.taskId], error: errorMessage(error) };
@@ -719,38 +765,59 @@ export class PerTaskHostRegistry {
     return this.quitReceipt;
   }
 
-  /** Dispose owned Hosts only after a successful registry quit receipt. */
-  disposeAll(): void {
+  /** Success requires observed exits and durable writer disposal; failure retains the sealed registry. */
+  disposeAll(): Promise<void> {
+    if (this.disposalReceipt) return this.disposalReceipt;
     if (!this.quitConfirmed || this.pendingHosts.size || this.activeTaskOps.size) {
       throw Error("main-task-shutdown-unconfirmed");
     }
-    for (const entry of this.byTaskDir.values()) {
-      entry.client.dispose();
-      entry.child.kill();
-    }
-    this.byTaskDir.clear();
-    this.byTaskId.clear();
-    this.identities.clear();
+    let expired = false;
+    const work = Promise.resolve().then(async () => {
+      const entries = [...this.byTaskDir.values()];
+      const settled = Promise.all([
+        ...entries.map((entry) => this.hostExits.get(entry.child)!.receipt),
+        this.services?.disposeWhenExited(),
+      ]);
+      // Observe the authority receipt even when a synchronous dispose/signal request fails.
+      void settled.catch(() => {});
+      for (const entry of entries) {
+        entry.client.dispose();
+        if (!this.hostExits.get(entry.child)!.exited) entry.child.kill();
+      }
+      await settled;
+      if (expired) throw Error("main-task-disposal-unconfirmed");
+      this.byTaskDir.clear();
+      this.byTaskId.clear();
+      this.identities.clear();
+      this.hostExits.clear();
+    });
+    this.disposalReceipt = shutdownDeadline(work, 15_000, "main-task-disposal-unconfirmed").catch((error: unknown) => {
+      expired = true;
+      throw error;
+    });
+    return this.disposalReceipt;
   }
 }
 
-export function createHostStopper(tasks: Pick<PerTaskHostRegistry, "quitAll">, origin: TaskOpOrigin, onStopped: () => void): () => Promise<boolean> {
+export function createHostStopper(tasks: Pick<PerTaskHostRegistry, "quitAll">, origin: TaskOpOrigin, onStopped: () => void | Promise<void>): () => Promise<boolean> {
   let pending: Promise<boolean> | undefined;
+  let disposalRequested = false;
   return () => {
     if (pending) return pending;
-    pending = tasks.quitAll({ origin, label: "应用退出" }).then((report) => {
+    pending = tasks.quitAll({ origin, label: "应用退出" }).then(async (report) => {
       console.log(`[main] quit report: ${JSON.stringify(report)}`);
       if (!report.ok) {
         console.error(`[main] unresolved Host shutdown; retaining processes: ${JSON.stringify(report.tasks.filter((task) => !task.ok || task.retainedTasks.length))}`);
         return false;
       }
-      onStopped();
+      disposalRequested = true;
+      await onStopped();
       return true;
     }).catch((error: unknown) => {
       console.error(`[main] quit report failed; retaining Hosts: ${errorMessage(error)}`);
       return false;
     }).then((stopped) => {
-      if (!stopped) pending = undefined;
+      if (!stopped && !disposalRequested) pending = undefined;
       return stopped;
     });
     return pending;
@@ -885,6 +952,8 @@ export function registerIpc(
     return selected;
   },
 ): void {
+  if (tasks && catalog && taskRoots && projects) tasks.configureServices((workspaceId) => new InstalledServiceHostAuthority(
+    app.getPath("userData"), catalog, serviceCatalogAuthority(taskRoots, projects), workspaceId, process.env));
   type TurnMessage = Parameters<Parameters<HostClient["onTurnEvent"]>[0]>[0];
   type PendingStart = { requestId: string; buffered: TurnMessage[]; bytes: number; overflow: boolean };
   type Subscription = { taskId: string; sessionId: string; frame: { processId: number; routingId: number }; webContents: WebContents; detach: () => void; deliver: (message: TurnMessage) => void; onNavigation: () => void; onInPageNavigation: () => void; onDestroyed: () => void; turns: Map<string, { sequence: number; resync: boolean; terminal: boolean }>; evictedTurns: boolean; pendingStart: PendingStart | null };

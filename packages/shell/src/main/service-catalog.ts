@@ -1,5 +1,6 @@
-import { randomUUID } from "node:crypto";
-import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { accessSync, constants, realpathSync, closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import type { ServiceOwnerCatalogSnapshot } from "../rpc/service-host-binding.js";
 import { isAbsolute, join, normalize } from "node:path";
 import { readTaskRecordOnDisk } from "../host/task-store.js";
 import { SERVICE_KEY_PATTERN, isServiceSecretKey, maskServiceValue, resolveServiceEnv, validateNoSecretsInShared, validateServiceDescriptor,
@@ -40,20 +41,26 @@ export interface SavedServiceConfigPreview {
 export interface ServiceCatalogAuthority {
   projectExists(projectId: string): boolean;
   task(taskId: string): { identity: VerifiedTaskIdentity; projectId: string; rootIds: string[] } | null;
+  verifiedTask?(taskId: string): { identity: VerifiedTaskIdentity; projectId: string | null; rootIds: string[] } | null;
 }
 
 /** Resolves authority from the persisted task index and project association, not page-supplied paths. */
 export function serviceCatalogAuthority(roots: TaskRootIndex, projects: ProjectRegistry): ServiceCatalogAuthority {
+  const verifiedTask: NonNullable<ServiceCatalogAuthority["verifiedTask"]> = (taskId) => {
+    const identity = roots.verifiedIdentity(taskId);
+    if (!identity) return null;
+    const association = projects.association(taskId, roots);
+    if (association.state !== "assigned" && association.state !== "unassigned") return null;
+    const record = readTaskRecordOnDisk(join(identity.root, identity.dirId));
+    if (!record || record.taskId !== taskId || record.createdAt !== identity.createdAt) return null;
+    return { identity, projectId: association.projectId, rootIds: record.repos };
+  };
   return {
     projectExists: (projectId) => projects.get(projectId) !== undefined,
+    verifiedTask,
     task: (taskId) => {
-      const identity = roots.verifiedIdentity(taskId);
-      if (!identity) return null;
-      const association = projects.association(taskId, roots);
-      if (association.state !== "assigned" || !association.projectId) return null;
-      const record = readTaskRecordOnDisk(join(identity.root, identity.dirId));
-      if (!record || record.taskId !== taskId || record.createdAt !== identity.createdAt) return null;
-      return { identity, projectId: association.projectId, rootIds: record.repos };
+      const owner = verifiedTask(taskId);
+      return owner?.projectId ? { ...owner, projectId: owner.projectId } : null;
     },
   };
 }
@@ -280,6 +287,47 @@ export class ServiceCatalog {
     const owner = this.authority.task(taskId);
     if (!owner || owner.identity.taskId !== taskId || !this.authority.projectExists(owner.projectId)) throw new Error("task identity unavailable");
     return owner;
+  }
+  /** Trusted main snapshot only. Saved metadata is a contract to review, never execution authority.
+   * File identities/commitments are freshness snapshots, not atomic execution or same-UID isolation. */
+  ownerSnapshot(taskId: string, workspaceId: string, privateEnv: Record<string, string | undefined>): ServiceOwnerCatalogSnapshot {
+    try {
+      if (!/^[A-Za-z0-9_-]{1,128}$/.test(taskId) || !/^[A-Za-z0-9_-]{1,128}$/.test(workspaceId)) throw Error();
+      const owner = this.authority.verifiedTask?.(taskId);
+      if (!owner || owner.identity.taskId !== taskId || owner.projectId !== null && !this.authority.projectExists(owner.projectId)) throw Error();
+      const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+      const taskRoot = join(owner.identity.realRoot, owner.identity.dirId);
+      const root = lstatSync(taskRoot, { bigint: true });
+      if (!root.isDirectory() || realpathSync(taskRoot) !== taskRoot || root.dev.toString() !== owner.identity.directoryDevice || root.ino.toString() !== owner.identity.directoryInode) throw Error();
+      const bindings = this.readMachine().bindings.filter((row) => row.taskId === taskId);
+      if (owner.projectId === null && bindings.length) throw Error();
+      // Read both documents even for empty/unassigned tasks: corrupt catalogs never mean zero services.
+      this.readTemplates();
+      const selected = owner.projectId === null ? [] : this.listTask(taskId);
+      const entries = selected.map(({ binding, template }) => {
+        const cwd = join(taskRoot, binding.rootId, binding.subdir);
+        const parts = [binding.rootId, ...binding.subdir.split("/").filter(Boolean)];
+        for (let index = 1; index <= parts.length; index++) {
+          const path = join(taskRoot, ...parts.slice(0, index));
+          if (!lstatSync(path).isDirectory() || realpathSync(path) !== path) throw Error();
+        }
+        const cwdStat = lstatSync(cwd, { bigint: true });
+        const program = realpathSync(binding.programPath), programStat = lstatSync(program, { bigint: true });
+        if (!programStat.isFile()) throw Error();
+        accessSync(program, constants.X_OK);
+        const privateEntries = resolvePrivateServiceRefs(binding.privateRefs, privateEnv);
+        const env = resolveServiceEnv({ repoDefaults: [], shared: template.shared, privateEntries, task: [] });
+        if (!env.ok || env.rows.some((row) => row.value.length > 4096 || row.value.includes("\0"))) throw Error();
+        const envRevision = digest(env.rows.map((row) => [row.key, row.value]).sort(([a], [b]) => a.localeCompare(b)));
+        return { serviceId: binding.serviceId, templateVersion: binding.templateVersion, configRevision: digest({ binding, template, envRevision }),
+          program, args: [...template.descriptor.args], cwd, envRevision,
+          programIdentity: digest([program, programStat.dev.toString(), programStat.ino.toString(), programStat.size.toString(), programStat.mtimeNs.toString()]),
+          cwdIdentity: digest([cwd, cwdStat.dev.toString(), cwdStat.ino.toString()]) };
+      }).sort((a, b) => a.serviceId.localeCompare(b.serviceId));
+      const taskIdentity = digest(owner.identity);
+      const snapshot = { workspaceId, taskId, projectId: owner.projectId, taskIdentity, entries };
+      return { ...snapshot, catalogRevision: digest(snapshot) };
+    } catch { throw Error("service-owner-catalog-unavailable"); }
   }
   saveTemplate(input: { projectId: string; serviceId?: string; expectedVersion?: number;
     descriptor: ServiceTemplate["descriptor"]; shared: ServiceConfigEntry[] }): ServiceTemplate {

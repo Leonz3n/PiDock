@@ -136,7 +136,7 @@ async function run(): Promise<void> {
   // the forked Hosts; the workspace-only client stays for ping/versions.
   // (`runVersions`/startup/smoke above intentionally keep workspace-only
   // Hosts: those paths run no task ops.)
-  const { client, child } = await createHost(workspaceId);
+  const { client, disposal } = await createHost(workspaceId);
   const dualView = process.env["PIDOCK_TASK_URL"] !== undefined;
   const views = await createTrustedWindow(workspaceId, dualView ? "dual" : "production");
   // [PiDock 06] (#8) browser capability: per-task visible pages + gateways.
@@ -194,12 +194,8 @@ async function run(): Promise<void> {
   else assertTrustedWindowEvidence(trustedWindowEvidence(views));
   // Install before renderer loading so close/activate are handled while it loads.
   // Initial createTrustedWindow construction still precedes these listeners.
-  const stopHosts = createHostStopper(tasks, { kind: "shell-ui", senderWebContentsId: views.shellView.webContents.id }, () => {
-    schedules.stop();
-    client.dispose();
-    child.kill();
-    tasks.disposeAll();
-  });
+  const stopHosts = createHostStopper(tasks, { kind: "shell-ui", senderWebContentsId: views.shellView.webContents.id },
+    () => disposal.disposeAfterTasks(tasks, client, () => schedules.stop()));
   registerApplicationLifecycle({ app, window: views.window, platform: process.platform, stopHosts });
   schedules.start();
   const loaded = await loadTrustedViews(views);

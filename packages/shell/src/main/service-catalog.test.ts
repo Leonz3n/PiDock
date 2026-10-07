@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mkdtempSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
+import { lstatSync, realpathSync } from "node:fs";
 import { ServiceCatalog, resolvePrivateServiceRefs, serviceCatalogAuthority, type ServiceCatalogAuthority } from "./service-catalog.js";
 import { ProjectRegistry } from "./project-registry.js";
 import { TaskRootIndex } from "./task-root-index.js";
@@ -42,6 +43,33 @@ function fixture() {
     assign: (id: string) => { assigned = id; },
     setRoots: (next: string[]) => { roots = next; }, authority };
 }
+
+describe("trusted service owner catalog snapshots", () => {
+  it("never treats absent trusted task identity callback as an empty catalog", () => {
+    const f = fixture();
+    expect(() => f.catalog.ownerSnapshot(taskId, "workspace-a", {})).toThrow("service-owner-catalog-unavailable");
+  });
+  it("binds ordered argv, canonical program/cwd, task identity and private environment revisions without exposing values", () => {
+    const home = realpathSync(mkdtempSync(join(tmpdir(), "pidock-owner-catalog-"))); directories.push(home);
+    const taskDir = join(home, "task-12345678"); mkdirSync(join(taskDir, "repo-a"), { recursive: true });
+    const stat = lstatSync(taskDir, { bigint: true });
+    const trusted = { ...identity, root: home, realRoot: home, directoryDevice: stat.dev.toString(), directoryInode: stat.ino.toString() };
+    const authority: ServiceCatalogAuthority = {
+      projectExists: (id) => id === projectId,
+      task: () => ({ identity: trusted, projectId, rootIds: ["repo-a"] }),
+      verifiedTask: () => ({ identity: trusted, projectId, rootIds: ["repo-a"] }),
+    };
+    const catalog = new ServiceCatalog(join(home, "profile"), authority);
+    const first = catalog.saveTemplate({ projectId, descriptor: { name: "API", program: "node", args: ["second", "first"], ports: [], runType: "long-lived" }, shared: [] });
+    catalog.bindTask({ taskId, serviceId: first.serviceId, templateVersion: 1, rootId: "repo-a", subdir: "", programPath: process.execPath,
+      privateRefs: [{ key: "API_TOKEN", envRef: "LOCAL_API_TOKEN" }] });
+    const snapshot = catalog.ownerSnapshot(taskId, "workspace-a", { LOCAL_API_TOKEN: "synthetic-private-value" });
+    expect(snapshot.entries[0]).toMatchObject({ serviceId: first.serviceId, args: ["second", "first"], cwd: join(taskDir, "repo-a"), templateVersion: 1 });
+    expect(JSON.stringify(snapshot)).not.toContain("synthetic-private-value");
+    expect(catalog.ownerSnapshot(taskId, "workspace-a", { LOCAL_API_TOKEN: "changed-private-value" }).catalogRevision).not.toBe(snapshot.catalogRevision);
+    expect(() => catalog.ownerSnapshot("foreign-task", "workspace-a", {})).toThrow("service-owner-catalog-unavailable");
+  });
+});
 
 describe("machine-private service catalog", () => {
   it("persists separate shared revisions and private references while pinning old task versions", () => {
