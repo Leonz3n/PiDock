@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, act } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { DesktopConversation } from "../components/DesktopConversation";
 import type { PidockBridge } from "../data/shellBridge";
 
@@ -432,6 +433,31 @@ describe("Desktop SDK conversation", () => {
     await screen.findByRole("button", { name: "停止" });
     expect(f.calls.filter((call) => call.action === "start")).toHaveLength(2);
     expect(f.calls.filter((call) => call.action === "start")[1]?.text).toBe("remounted draft");
+  });
+
+  it("explains text-only messaging from the keyboard without enabling attachments or sending the saved draft", async () => {
+    const f = setup(); mount(f);
+    const user = userEvent.setup();
+    await screen.findByText(/尚未开始/);
+    const input = screen.getByRole("textbox", { name: "消息" });
+    expect(input).toHaveAttribute("placeholder", "描述你想做什么（仅支持文本消息）");
+    const attachment = screen.getByRole("button", { name: "附件（未接线）" });
+    expect(attachment).toBeDisabled();
+    await user.click(input);
+    await user.type(input, "saved text draft");
+    const draft = localStorage.getItem("pidock-sdk-draft-v1:task-a:main");
+    await user.tab();
+    const explanation = screen.getByLabelText("附件说明");
+    expect(explanation).toHaveFocus();
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("附件未接线；当前会话仅支持文本消息");
+    expect(explanation).toHaveAccessibleDescription("附件未接线；当前会话仅支持文本消息");
+    await user.keyboard("{Enter} ");
+    expect(attachment).toBeDisabled();
+    expect(input).toHaveValue("saved text draft");
+    expect(localStorage.getItem("pidock-sdk-draft-v1:task-a:main")).toBe(draft);
+    expect(localStorage.getItem("pidock-sdk-main-pending-v1:task-a")).toBeNull();
+    expect(f.calls.some((call) => call.action === "start")).toBe(false);
+    expect(document.querySelector('input[type="file"]')).toBeNull();
   });
 
   it("marks reasoning settings unwired while keeping Provider navigation and SDK send/cancel available", async () => {
