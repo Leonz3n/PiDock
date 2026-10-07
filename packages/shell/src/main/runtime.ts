@@ -672,9 +672,14 @@ export class PerTaskHostRegistry {
             workspaceId: this.workspaceId, taskId: entry.taskId,
             op: "task/quit", payload, origin: input.origin,
           }, { timeoutMs: 120_000 });
+          if (!result || typeof result !== "object" || Array.isArray(result) ||
+            result.workspaceId !== this.workspaceId || result.taskId !== entry.taskId || result.op !== "task/quit" ||
+            !result.payload || typeof result.payload !== "object" || Array.isArray(result.payload)) throw Error("host-quit-report-invalid");
           const quit = (result.payload as { quit?: { applied?: string[]; plan?: { failures?: unknown[]; retainedTasks?: string[] } } }).quit;
-          if (!quit || !Array.isArray(quit.applied) || !quit.plan || !Array.isArray(quit.plan.failures) || !Array.isArray(quit.plan.retainedTasks)) throw Error("host-quit-report-invalid");
-          task = { taskId: entry.taskId, ok: true, applied: quit.applied, failures: quit.plan.failures, retainedTasks: quit.plan.retainedTasks };
+          if (!quit || !Array.isArray(quit.applied) || ![...quit.applied].every((item) => typeof item === "string") ||
+            !quit.plan || !Array.isArray(quit.plan.failures) || !Array.isArray(quit.plan.retainedTasks) ||
+            ![...quit.plan.retainedTasks].every((item) => typeof item === "string")) throw Error("host-quit-report-invalid");
+          task = { taskId: entry.taskId, ok: true, applied: [...quit.applied], failures: [...quit.plan.failures], retainedTasks: [...quit.plan.retainedTasks] };
         } catch (error) {
           task = { taskId: entry.taskId, ok: false, applied: [], failures: [], retainedTasks: [entry.taskId], error: errorMessage(error) };
         }

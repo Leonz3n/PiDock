@@ -142,6 +142,104 @@ describe("PerTaskHostRegistry main shutdown admission", () => {
     expect(transport.task).toHaveBeenCalledTimes(2);
   });
 
+  it.each([
+    ["workspace", { workspaceId: "foreign-workspace-private-marker" }],
+    ["task", { taskId: "foreign-task-private-marker" }],
+    ["operation", { op: "task/cancel" }],
+  ])("retains the owned Host when the quit reply names a foreign %s", async (_field, changed) => {
+    const transport = fakeTransport({ ...QUIT_RESULT, ...changed } as HostTaskResult), kill = vi.fn();
+    const registry = new PerTaskHostRegistry("workspace-a", async () => ({
+      client: transport as never, child: { kill } as never,
+    }), () => "/tasks/a");
+    await registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
+    const quit = registry.quitAll({ origin: QUIT_ORIGIN });
+    const report = await quit;
+    expect(report).toEqual({ ok: false, tasks: [{ taskId: "task-a", ok: false, applied: [], failures: [],
+      retainedTasks: ["task-a"], error: "host-quit-report-invalid" }] });
+    expect(registry.quitAll({ origin: QUIT_ORIGIN })).toBe(quit);
+    expect(await registry.quitAll({ origin: QUIT_ORIGIN })).toEqual(report);
+    expect(registry.entryForTaskId("task-a")?.taskDir).toBe("/tasks/a");
+    expect(() => registry.disposeAll()).toThrow("main-task-shutdown-unconfirmed");
+    expect(transport.dispose).not.toHaveBeenCalled(); expect(kill).not.toHaveBeenCalled();
+    expect(transport.task).toHaveBeenCalledTimes(2);
+    await expect(registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} })).rejects.toThrow("task-host-closing");
+  });
+
+  it.each([
+    ["null applied", { applied: null }],
+    ["non-array applied", { applied: { privateMarker: "malformed-reply-private-marker" } }],
+    ["non-string applied entry", { applied: [17, "malformed-reply-private-marker"] }],
+    ["sparse applied", { applied: Array(1) }],
+    ["null retainedTasks", { retainedTasks: null }],
+    ["non-array retainedTasks", { retainedTasks: "malformed-reply-private-marker" }],
+    ["non-string retainedTasks entry", { retainedTasks: [null] }],
+    ["sparse retainedTasks", { retainedTasks: Array(1) }],
+  ])("retains the owned Host on a malformed quit report: %s", async (_shape, changed) => {
+    const transport = fakeTransport({ ...QUIT_RESULT, payload: { quit: {
+      applied: "applied" in changed ? changed.applied : [],
+      plan: { failures: [], retainedTasks: "retainedTasks" in changed ? changed.retainedTasks : [] },
+    } } }), kill = vi.fn();
+    const registry = new PerTaskHostRegistry("workspace-a", async () => ({
+      client: transport as never, child: { kill } as never,
+    }), () => "/tasks/a");
+    await registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
+    const report = await registry.quitAll({ origin: QUIT_ORIGIN });
+    expect(report).toEqual({ ok: false, tasks: [{ taskId: "task-a", ok: false, applied: [], failures: [],
+      retainedTasks: ["task-a"], error: "host-quit-report-invalid" }] });
+    transport.task.mockResolvedValue(QUIT_RESULT);
+    expect(await registry.quitAll({ origin: QUIT_ORIGIN })).toEqual(report);
+    expect(() => registry.disposeAll()).toThrow("main-task-shutdown-unconfirmed");
+    expect(registry.size).toBe(1);
+    expect(transport.dispose).not.toHaveBeenCalled(); expect(kill).not.toHaveBeenCalled();
+    expect(transport.task).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ["null envelope", null],
+    ["missing envelope", undefined],
+    ["null payload", { ...QUIT_RESULT, payload: null }],
+    ["non-record payload", { ...QUIT_RESULT, payload: "malformed-reply-private-marker" }],
+  ])("reports malformed quit envelopes with a fixed error: %s", async (_shape, reply) => {
+    const transport = fakeTransport(reply as HostTaskResult), kill = vi.fn();
+    const registry = new PerTaskHostRegistry("workspace-a", async () => ({
+      client: transport as never, child: { kill } as never,
+    }), () => "/tasks/a");
+    await registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
+    const report = await registry.quitAll({ origin: QUIT_ORIGIN });
+    expect(report).toEqual({ ok: false, tasks: [{ taskId: "task-a", ok: false, applied: [], failures: [],
+      retainedTasks: ["task-a"], error: "host-quit-report-invalid" }] });
+    expect(() => registry.disposeAll()).toThrow("main-task-shutdown-unconfirmed");
+    expect(transport.dispose).not.toHaveBeenCalled(); expect(kill).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])("keeps the cached quit result independent of transport array mutation (blocked=%s)", async (blocked) => {
+    const applied = ["save-state:task-a"];
+    const failures = blocked ? [{ code: "unconfirmed" }] : [];
+    const retainedTasks = blocked ? ["task-a"] : [];
+    const transport = fakeTransport({ ...QUIT_RESULT, payload: { quit: { applied, plan: { failures, retainedTasks } } } }), kill = vi.fn();
+    const registry = new PerTaskHostRegistry("workspace-a", async () => ({
+      client: transport as never, child: { kill } as never,
+    }), () => "/tasks/a");
+    await registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
+    const report = await registry.quitAll({ origin: QUIT_ORIGIN });
+    const expected = { ok: !blocked, tasks: [{ taskId: "task-a", ok: true, applied: ["save-state:task-a"],
+      failures: blocked ? [{ code: "unconfirmed" }] : [], retainedTasks: blocked ? ["task-a"] : [] }] };
+    expect(report).toEqual(expected);
+    applied.push("transport-mutated-private-marker");
+    failures.splice(0, failures.length, { code: "transport-mutated-private-marker" });
+    retainedTasks.splice(0, retainedTasks.length, "transport-mutated-private-marker");
+    expect(await registry.quitAll({ origin: QUIT_ORIGIN })).toEqual(expected);
+    if (blocked) {
+      expect(() => registry.disposeAll()).toThrow("main-task-shutdown-unconfirmed");
+      expect(registry.size).toBe(1);
+      expect(transport.dispose).not.toHaveBeenCalled(); expect(kill).not.toHaveBeenCalled();
+    } else {
+      registry.disposeAll(); expect(registry.size).toBe(0);
+      expect(transport.dispose).toHaveBeenCalledTimes(1); expect(kill).toHaveBeenCalledTimes(1);
+    }
+    expect(transport.task).toHaveBeenCalledTimes(2);
+  });
+
   it("rejects a recreated indexed directory with the same path and record before dispatch", async () => {
     const { mkdirSync, writeFileSync, renameSync, rmSync } = await import("node:fs");
     const home = mkdtempSync(join(tmpdir(), "pidock-pending-identity-")), root = join(home, "tasks"), taskId = "task-3b8f479a", taskDir = join(root, taskId);
@@ -205,7 +303,7 @@ describe("PerTaskHostRegistry main shutdown admission", () => {
       if ((params as { op: string }).op === "task/quit") { prompt.resolve(TASK_RESULT); return QUIT_RESULT; }
       started.resolve(); return prompt.promise;
     });
-    second.task.mockResolvedValue(QUIT_RESULT);
+    second.task.mockResolvedValue({ ...QUIT_RESULT, taskId: "task-b" });
     const registry = new PerTaskHostRegistry("workspace-a", async (_ws, task) => ({
       client: (task.taskId === "task-a" ? first : second) as never, child: { kill: vi.fn() } as never,
     }), (id) => `/tasks/${id}`);
@@ -224,7 +322,7 @@ describe("PerTaskHostRegistry main shutdown admission", () => {
       const stuck = deferred<HostTaskResult>(), kill = vi.fn();
       const first = fakeTransport(TASK_RESULT), second = fakeTransport(TASK_RESULT);
       first.task.mockResolvedValueOnce(TASK_RESULT).mockImplementation(() => stuck.promise);
-      second.task.mockResolvedValue(QUIT_RESULT);
+      second.task.mockResolvedValue({ ...QUIT_RESULT, taskId: "task-b" });
       const registry = new PerTaskHostRegistry("workspace-a", async (_ws, task) => ({
         client: (task.taskId === "task-a" ? first : second) as never, child: { kill } as never,
       }), (id) => `/tasks/${id}`);
@@ -273,7 +371,7 @@ describe("PerTaskHostRegistry main shutdown admission", () => {
     vi.useFakeTimers();
     try {
       const ready = deferred<void>(), started = deferred<void>(), running = deferred<HostTaskResult>();
-      const first = fakeTransport(TASK_RESULT), second = fakeTransport(QUIT_RESULT);
+      const first = fakeTransport(TASK_RESULT), second = fakeTransport({ ...QUIT_RESULT, taskId: "task-b" });
       first.task.mockImplementation(async (params: unknown) => {
         if ((params as { op: string }).op === "task/quit") return QUIT_RESULT;
         started.resolve(); return running.promise;
@@ -685,6 +783,7 @@ describe("PerTaskHostRegistry", () => {
     await registry.routeTaskOp({ taskId: "task-b", op: "task/cancel", payload: {} });
     expect(registry.size).toBe(2);
     const entries = [registry.entryForTaskId("task-a")!, registry.entryForTaskId("task-b")!];
+    vi.mocked(entries[1]!.client.task).mockResolvedValue({ ...QUIT_RESULT, taskId: "task-b" });
     expect(() => registry.disposeAll()).toThrow("shutdown-unconfirmed");
     for (const entry of entries) {
       expect(entry.client.dispose).not.toHaveBeenCalled(); expect(entry.child.kill).not.toHaveBeenCalled();
