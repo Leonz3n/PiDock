@@ -6,6 +6,7 @@ import { Button } from "./ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import { PROVIDER_STATE_TEXT, parseProviderStatus, providerCall, type ProviderStatus } from "../data/providerProfile";
 import { SDK_SESSION_ID, parseSdkSnapshot, type SdkMessage } from "../data/sdkSession";
+import { readSdkDraft, saveSdkDraft } from "../data/sdkDraft";
 import { setTaskArchivedThroughShell } from "../data/shellBridge";
 import { parseLifecycle } from "./DesktopArchivePage";
 import { DesktopToolDock, DESKTOP_TOOLS_UNWIRED, type DesktopTool } from "./DesktopToolDock";
@@ -64,11 +65,19 @@ function allowed(data: DesktopProjects, taskId: string): boolean {
     data.inventory.roots.every((root) => root.state === "ready");
 }
 
-export function DesktopConversation({ taskId, name, roots, association, onBack, onOpenProviders, onArchived }: { taskId: string; name: string; roots: string; association: string; onBack: () => void; onOpenProviders: () => void; onArchived: () => void }) {
+type ConversationProps = { taskId: string; name: string; roots: string; association: string; onBack: () => void; onOpenProviders: () => void; onArchived: () => void };
+export function DesktopConversation(props: ConversationProps) {
+  return <TaskConversation key={props.taskId} {...props} />;
+}
+
+function TaskConversation({ taskId, name, roots, association, onBack, onOpenProviders, onArchived }: ConversationProps) {
   const bridge = window.pidock;
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const recovered = useRef(readReceipt(taskId));
   const [draft, setDraft] = useState(recovered.current.receipt?.text ?? "");
+  const [draftError, setDraftError] = useState<string | null>(null);
+  const draftLoaded = useRef(false);
+  const draftRevision = useRef(0);
   const [receiptError, setReceiptError] = useState(recovered.current.error);
   const [attempt, setAttempt] = useState<Attempt | null>(recovered.current.receipt ? { ...recovered.current.receipt, phase: "unknown" } : null);
   const attemptRef = useRef<Attempt | null>(recovered.current.receipt ? { ...recovered.current.receipt, phase: "unknown" } : null);
@@ -102,9 +111,8 @@ export function DesktopConversation({ taskId, name, roots, association, onBack, 
     if (epoch !== generation.current || attemptRef.current?.requestId !== requestId) return;
     sequence.current.clear(); streamRef.current = ""; setStream(""); setSnapshot(projection);
     if (requestId && turn && attemptRef.current) {
-      const originalText = attemptRef.current.text;
       if (turn.state !== "accepted") {
-        try { clearReceipt(taskId, requestId); setReceiptError(null); setDraft((text) => text === originalText ? "" : text); }
+        try { clearReceipt(taskId, requestId); setReceiptError(null); }
         catch { setReceiptError("本机待确认请求记录无法清除，已禁止发送；请核验本机数据"); }
       }
       setCurrent({ ...attemptRef.current, turnId: turn.turnId, phase: turn.state === "accepted" ? "accepted" : "terminal", state: turn.state });
@@ -190,6 +198,12 @@ export function DesktopConversation({ taskId, name, roots, association, onBack, 
       try {
         await verify();
         if (!active()) return;
+        if (!draftLoaded.current) {
+          const saved = readSdkDraft(taskId);
+          draftLoaded.current = true;
+          setDraftError(saved.error);
+          if (saved.text !== null && draftRevision.current === 0) setDraft(saved.text);
+        }
         if (!bridge?.onSdkTurnEvent) throw new Error("SDK 事件接口不可用");
         off = bridge.onSdkTurnEvent(onEvent);
         const reply = await request("subscribe", attemptRef.current ? { requestId: attemptRef.current.requestId } : {});
@@ -214,6 +228,7 @@ export function DesktopConversation({ taskId, name, roots, association, onBack, 
     if (busy.current || !connected || !valid || receiptError || (!reuse && (attemptRef.current?.phase === "unknown" || attemptRef.current?.phase === "accepted" || snapshot?.pending))) return;
     const text = reuse ? attemptRef.current?.text : draft;
     if (!text?.trim()) return;
+    const submittedRevision = draftRevision.current;
     busy.current = true;
     const epoch = generation.current;
     try {
@@ -237,7 +252,10 @@ export function DesktopConversation({ taskId, name, roots, association, onBack, 
       if (!turn) throw new Error("SDK ACK 缺少请求身份");
       setCurrent({ ...current, turnId: turn.turnId, phase: turn.state === "accepted" ? "accepted" : "terminal", state: turn.state });
       setNotice(turn.state === "accepted" ? "正在等待模型" : "正在核验 SDK 历史");
-      if (turn.state === "accepted") setDraft("");
+      if (turn.state === "accepted" && !reuse && draftRevision.current === submittedRevision) {
+        setDraft("");
+        setDraftError(saveSdkDraft(taskId, ""));
+      }
       await reconcile(epoch, current.requestId);
     } catch (error) {
       if (epoch === generation.current) { setValid(false); setNotice(errorText(error)); setInvalidated(true); }
@@ -385,6 +403,7 @@ export function DesktopConversation({ taskId, name, roots, association, onBack, 
       {stream && <article className="min-w-0 border-l-2 border-ink pl-3 text-sm"><p className="mb-1 text-xs text-muted">暂存回复 · 尚未核验</p><p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{stream}</p></article>}
     </section>
     <div className="shrink-0 border-t border-line bg-paper px-3 py-3"><div className="mx-auto max-w-[820px] min-w-0">
+      {draftError && <p role="alert" className="mb-2 break-words text-xs text-[#ad4545]">{draftError}</p>}
       {receiptError && <p role="alert" className="mb-2 break-words text-xs text-[#ad4545]">{receiptError}</p>}
       {notice && <p role="status" className="mb-2 break-words text-xs text-muted">{notice}</p>}
       <div className="mb-2 flex flex-wrap gap-2">{invalidated ? <Button type="button" onClick={onBack}>返回任务列表</Button> : (!connected || !valid) && <Button type="button" onClick={() => setConnectionKey((key) => key + 1)}>重新连接</Button>}
@@ -393,7 +412,7 @@ export function DesktopConversation({ taskId, name, roots, association, onBack, 
         {attempt?.phase === "accepted" && <Button type="button" onClick={() => void stop()}><Icon name="stop" />停止</Button>}
       </div>
       <form onSubmit={submit} className="min-w-0 rounded-[10px] border border-line bg-bg p-2">
-        <textarea aria-label="消息" value={draft} onChange={(event) => setDraft(event.target.value)} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !composing.current && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) { event.preventDefault(); if (!blocked) void start(); } }} rows={2} maxLength={16384} className="w-full min-w-0 resize-y border-0 bg-transparent p-1 text-sm outline-none" placeholder="描述你想做什么，或粘贴图片 / 截图…" />
+        <textarea aria-label="消息" value={draft} onChange={(event) => { const text = event.target.value; draftRevision.current++; setDraft(text); if (valid && connected && !invalidated) setDraftError(saveSdkDraft(taskId, text)); }} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !composing.current && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) { event.preventDefault(); if (!blocked) void start(); } }} rows={2} maxLength={16384} className="w-full min-w-0 resize-y border-0 bg-transparent p-1 text-sm outline-none" placeholder="描述你想做什么，或粘贴图片 / 截图…" />
         <div className="mt-1 flex min-w-0 flex-wrap items-center gap-2 text-[11px] text-muted">
           <Tooltip><TooltipTrigger asChild>
             <Button type="button" size="icon-sm" disabled aria-label="附件（未接线）" className="text-[#b3b9be]"><Icon name="plus" /></Button>

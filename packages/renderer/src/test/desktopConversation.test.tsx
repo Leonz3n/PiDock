@@ -50,6 +50,227 @@ const send = async (text: string) => {
 afterEach(() => { cleanup(); localStorage.clear(); delete window.pidock; vi.restoreAllMocks(); });
 
 describe("Desktop SDK conversation", () => {
+  it("restores literal main drafts separately for two tasks without sending or replaying markers", async () => {
+    const a = setup("task-a"); const first = mount(a);
+    await screen.findByText(/尚未开始/);
+    const text = "中文草稿\n@repo/file.ts $review /skill:review\n/tmp/build.log $HOME";
+    fireEvent.change(screen.getByRole("textbox", { name: "消息" }), { target: { value: text } });
+    first.unmount();
+    const b = setup("task-b"); const second = mount(b, "task-b");
+    await screen.findByText(/尚未开始/);
+    expect(screen.getByRole("textbox", { name: "消息" })).toHaveValue("");
+    fireEvent.change(screen.getByRole("textbox", { name: "消息" }), { target: { value: "other task draft" } });
+    second.unmount();
+    const reopened = mount(a);
+    await screen.findByText(/尚未开始/);
+    expect(screen.getByRole("textbox", { name: "消息" })).toHaveValue(text);
+    expect(a.calls.filter((call) => call.action === "start")).toHaveLength(0);
+    reopened.unmount(); mount(b, "task-b");
+    await screen.findByText(/尚未开始/);
+    expect(screen.getByRole("textbox", { name: "消息" })).toHaveValue("other task draft");
+    expect(b.calls.filter((call) => call.action === "start")).toHaveLength(0);
+  });
+  it("keeps later edits through a delayed positive ACK even when text changes back to the submitted string", async () => {
+    const f = setup();
+    const sdkTurn = f.bridge.sdkTurn!;
+    let release: (() => void) | undefined;
+    f.bridge.sdkTurn = (request) => request.action === "start"
+      ? new Promise((resolve) => { release = () => { void sdkTurn(request).then(resolve); }; })
+      : sdkTurn(request);
+    const view = mount(f); await screen.findByText(/尚未开始/);
+    await send("original");
+    await waitFor(() => expect(release).toBeDefined());
+    const input = screen.getByRole("textbox", { name: "消息" });
+    fireEvent.change(input, { target: { value: "new edit" } });
+    fireEvent.change(input, { target: { value: "original" } });
+    await act(async () => release!());
+    await screen.findByRole("button", { name: "停止" });
+    expect(input).toHaveValue("original");
+    view.unmount(); mount(f);
+    await screen.findByRole("button", { name: "停止" });
+    expect(screen.getByRole("textbox", { name: "消息" })).toHaveValue("original");
+    expect(f.calls.filter((call) => call.action === "start")).toHaveLength(1);
+  });
+
+  it("persists an explicitly cleared draft and an acknowledged fresh send without reviving accepted receipt text", async () => {
+    const f = setup(); let view = mount(f); await screen.findByText(/尚未开始/);
+    const input = screen.getByRole("textbox", { name: "消息" });
+    fireEvent.change(input, { target: { value: "erase me" } });
+    fireEvent.change(input, { target: { value: "" } });
+    view.unmount(); view = mount(f); await screen.findByText(/尚未开始/);
+    expect(screen.getByRole("textbox", { name: "消息" })).toHaveValue("");
+    await send("accepted original"); await screen.findByRole("button", { name: "停止" });
+    expect(localStorage.getItem("pidock-sdk-main-pending-v1:task-a")).not.toBeNull();
+    view.unmount(); mount(f); await screen.findByRole("button", { name: "停止" });
+    expect(screen.getByRole("textbox", { name: "消息" })).toHaveValue("");
+    expect(f.calls.filter((call) => call.action === "start")).toHaveLength(1);
+  });
+
+  it("preserves a next draft on reopen, original-ID retry and terminal reconciliation", async () => {
+    const f = setup(); f.setFail("lost"); const view = mount(f);
+    await screen.findByText(/尚未开始/); await send("original request");
+    await screen.findByText(/请求结果未知/);
+    const first = f.calls.find((call) => call.action === "start")!;
+    fireEvent.change(screen.getByRole("textbox", { name: "消息" }), { target: { value: "next draft" } });
+    view.unmount(); f.setFail(""); mount(f);
+    await screen.findByText(/请求状态未知/);
+    expect(screen.getByRole("textbox", { name: "消息" })).toHaveValue("next draft");
+    expect(f.calls.filter((call) => call.action === "start")).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "按原 ID 重试" }));
+    await screen.findByRole("button", { name: "停止" });
+    expect(f.calls.filter((call) => call.action === "start")[1]).toMatchObject({ requestId: first.requestId, text: "original request" });
+    expect(screen.getByRole("textbox", { name: "消息" })).toHaveValue("next draft");
+    f.setStatus(turn("task-a", String(first.requestId), "done"));
+    act(() => f.emit({ kind: "sdk-turn-status", turn: turn("task-a", String(first.requestId), "done") }));
+    await screen.findByText(/已从 SDK 历史核验/);
+    expect(localStorage.getItem("pidock-sdk-main-pending-v1:task-a")).toBeNull();
+    cleanup(); mount(f); await screen.findByText(/尚未开始/);
+    expect(screen.getByRole("textbox", { name: "消息" })).toHaveValue("next draft");
+    expect(f.calls.filter((call) => call.action === "start")).toHaveLength(2);
+  });
+
+  it.each([
+    "{invalid",
+    JSON.stringify({ schema: 2, taskId: "task-a", sessionId: "main", text: "unsupported" }),
+    JSON.stringify({ schema: 1, taskId: "task-b", sessionId: "main", text: "foreign" }),
+    JSON.stringify({ schema: 1, taskId: "task-a", sessionId: "other", text: "foreign session" }),
+    JSON.stringify({ schema: 1, taskId: "task-a", sessionId: "main", text: "中".repeat(5462) }),
+    " ".repeat(131073),
+  ])("preserves unreadable draft bytes and allows editing and sending without repairing them (%#)", async (raw) => {
+    const key = "pidock-sdk-draft-v1:task-a:main";
+    localStorage.setItem(key, raw);
+    const f = setup(); mount(f); await screen.findByText(/尚未开始/);
+    expect(screen.getByRole("alert")).toHaveTextContent("本机草稿不可读取");
+    expect(screen.getByRole("textbox", { name: "消息" })).toHaveValue("");
+    await send("explicit new text"); await screen.findByRole("button", { name: "停止" });
+    expect(localStorage.getItem(key)).toBe(raw);
+    expect(f.calls.filter((call) => call.action === "start")[0]).toMatchObject({ text: "explicit new text" });
+    expect(screen.getByRole("alert")).toHaveTextContent("原记录保留");
+  });
+
+  it("retains the last saved draft when UTF-8 storage limits are exceeded without truncating the editor", async () => {
+    const f = setup(); const view = mount(f); await screen.findByText(/尚未开始/);
+    const input = screen.getByRole("textbox", { name: "消息" });
+    const within = "中".repeat(5461);
+    fireEvent.change(input, { target: { value: within } });
+    const saved = localStorage.getItem("pidock-sdk-draft-v1:task-a:main");
+    expect(JSON.parse(saved!).text).toBe(within);
+    const beyond = within + "中";
+    fireEvent.change(input, { target: { value: beyond } });
+    expect(screen.getByRole("alert")).toHaveTextContent("文字超过 16 KiB");
+    expect(input).toHaveValue(beyond);
+    expect(localStorage.getItem("pidock-sdk-draft-v1:task-a:main")).toBe(saved);
+    view.unmount(); mount(f); await screen.findByText(/尚未开始/);
+    expect(screen.getByRole("textbox", { name: "消息" })).toHaveValue(within);
+    expect(f.calls.filter((call) => call.action === "start")).toHaveLength(0);
+  });
+
+  it("warns on draft quota failure while preserving saved bytes and keeping independent receipt send usable", async () => {
+    const f = setup(); mount(f); await screen.findByText(/尚未开始/);
+    fireEvent.change(screen.getByRole("textbox", { name: "消息" }), { target: { value: "previous draft" } });
+    const key = "pidock-sdk-draft-v1:task-a:main";
+    const saved = localStorage.getItem(key);
+    const setItem = Storage.prototype.setItem;
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(function (this: Storage, key, value) {
+      if (key.startsWith("pidock-sdk-draft-v1:")) throw new DOMException("full", "QuotaExceededError");
+      setItem.call(this, key, value);
+    });
+    await send("new unsaved text"); await screen.findByRole("button", { name: "停止" });
+    expect(screen.getByRole("alert")).toHaveTextContent("草稿未保存：本机存储不可用");
+    expect(localStorage.getItem(key)).toBe(saved);
+    expect(f.calls.filter((call) => call.action === "start")[0]).toMatchObject({ text: "new unsaved text" });
+    expect(localStorage.getItem("pidock-sdk-main-pending-v1:task-a")).not.toBeNull();
+  });
+
+  it("does not restore or save drafts before fresh identity verification, or for an unavailable task", async () => {
+    const key = "pidock-sdk-draft-v1:task-a:main";
+    const raw = JSON.stringify({ schema: 1, taskId: "task-a", sessionId: "main", text: "saved task text" });
+    localStorage.setItem(key, raw);
+    const f = setup(); f.invalidate(); mount(f);
+    expect(screen.getByRole("textbox", { name: "消息" })).toHaveValue("");
+    await screen.findByText(/任务或任务根已变化/);
+    fireEvent.change(screen.getByRole("textbox", { name: "消息" }), { target: { value: "unverified edit" } });
+    expect(localStorage.getItem(key)).toBe(raw);
+    expect(f.calls.some((call) => call.action === "subscribe" || call.action === "start")).toBe(false);
+  });
+
+  it("drops a delayed old ACK on a task prop switch without changing either task's draft", async () => {
+    const a = setup(); const sdkTurn = a.bridge.sdkTurn!;
+    let release: (() => void) | undefined;
+    a.bridge.sdkTurn = (request) => request.action === "start"
+      ? new Promise((resolve) => { release = () => { void sdkTurn(request).then(resolve); }; })
+      : sdkTurn(request);
+    const view = mount(a); await screen.findByText(/尚未开始/); await send("task A in flight");
+    await waitFor(() => expect(release).toBeDefined());
+    fireEvent.change(screen.getByRole("textbox", { name: "消息" }), { target: { value: "task A next" } });
+    const b = setup("task-b"); window.pidock = b.bridge;
+    view.rerender(<DesktopConversation taskId="task-b" name="B" roots={JSON.stringify(roots)} association={JSON.stringify(association("task-b"))} onBack={vi.fn()} onOpenProviders={vi.fn()} onArchived={vi.fn()} />);
+    expect(screen.getByRole("textbox", { name: "消息" })).toHaveValue("");
+    await screen.findByText(/尚未开始/);
+    fireEvent.change(screen.getByRole("textbox", { name: "消息" }), { target: { value: "task B draft" } });
+    await act(async () => release!());
+    expect(screen.getByRole("textbox", { name: "消息" })).toHaveValue("task B draft");
+    expect(b.calls.filter((call) => call.action === "start")).toHaveLength(0);
+    view.unmount(); mount(a); await screen.findByRole("button", { name: "停止" });
+    expect(screen.getByRole("textbox", { name: "消息" })).toHaveValue("task A next");
+  });
+
+  it("keeps edits made while the fresh send is verifying task identity", async () => {
+    const f = setup(); const listTasks = f.bridge.listTasks!;
+    let release: (() => void) | undefined;
+    let reads = 0;
+    f.bridge.listTasks = () => ++reads === 2
+      ? new Promise((resolve) => { release = () => { void listTasks().then(resolve); }; })
+      : listTasks();
+    mount(f); await screen.findByText(/尚未开始/); await send("before verification");
+    await waitFor(() => expect(release).toBeDefined());
+    fireEvent.change(screen.getByRole("textbox", { name: "消息" }), { target: { value: "during verification" } });
+    await act(async () => release!()); await screen.findByRole("button", { name: "停止" });
+    expect(screen.getByRole("textbox", { name: "消息" })).toHaveValue("during verification");
+    expect(f.calls.find((call) => call.action === "start")?.text).toBe("before verification");
+  });
+
+  it("keeps the legacy receipt-only retry text editable after confirmation without automatically saving or sending it again", async () => {
+    const f = setup(); f.setFail("lost"); const view = mount(f);
+    await screen.findByText(/尚未开始/); await send("legacy request"); await screen.findByText(/请求结果未知/);
+    const first = f.calls.find((call) => call.action === "start")!;
+    view.unmount(); localStorage.removeItem("pidock-sdk-draft-v1:task-a:main"); f.setFail("");
+    const reopened = mount(f); await screen.findByText(/请求状态未知/);
+    expect(screen.getByRole("textbox", { name: "消息" })).toHaveValue("legacy request");
+    fireEvent.click(screen.getByRole("button", { name: "按原 ID 重试" })); await screen.findByRole("button", { name: "停止" });
+    expect(screen.getByRole("textbox", { name: "消息" })).toHaveValue("legacy request");
+    f.setStatus(turn("task-a", String(first.requestId), "done"));
+    act(() => f.emit({ kind: "sdk-turn-status", turn: turn("task-a", String(first.requestId), "done") }));
+    await screen.findByText(/已从 SDK 历史核验/);
+    expect(screen.getByRole("textbox", { name: "消息" })).toHaveValue("legacy request");
+    expect(localStorage.getItem("pidock-sdk-draft-v1:task-a:main")).toBeNull();
+    reopened.unmount(); mount(f); await screen.findByText(/尚未开始/);
+    expect(screen.getByRole("textbox", { name: "消息" })).toHaveValue("");
+    expect(f.calls.filter((call) => call.action === "start")).toHaveLength(2);
+  });
+
+  it("warns when draft reads are unavailable while keeping independent receipt sending usable", async () => {
+    const getItem = Storage.prototype.getItem;
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(function (this: Storage, key) {
+      if (key.startsWith("pidock-sdk-draft-v1:")) throw new DOMException("denied", "SecurityError");
+      return getItem.call(this, key);
+    });
+    const f = setup(); mount(f); await screen.findByText(/尚未开始/);
+    expect(screen.getByRole("alert")).toHaveTextContent("本机草稿不可读取");
+    await send("explicit request"); await screen.findByRole("button", { name: "停止" });
+    expect(f.calls.find((call) => call.action === "start")?.text).toBe("explicit request");
+  });
+
+  it("blocks sending when both draft and pending-receipt storage writes fail", async () => {
+    const f = setup(); mount(f); await screen.findByText(/尚未开始/);
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("storage unavailable"); });
+    await send("unsaved draft and request");
+    await screen.findByText("storage unavailable");
+    expect(screen.getByText(/草稿未保存：本机存储不可用/)).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "消息" })).toHaveValue("unsaved draft and request");
+    expect(f.calls.filter((call) => call.action === "start")).toHaveLength(0);
+  });
+
   it("labels composer usage as recent reported input and output, not session cumulative usage", async () => {
     const f = setup();
     f.setMessages([
@@ -308,6 +529,9 @@ describe("Desktop SDK conversation", () => {
     expect(screen.getByRole("textbox", { name: "消息" })).toHaveValue("hello");
     expect(screen.queryByText("Agent")).not.toBeInTheDocument();
     expect(f.calls.findIndex((call) => call.action === "subscribe")).toBeLessThan(f.calls.findIndex((call) => call.action === "start"));
+    cleanup(); mount(f); await screen.findByText(/尚未开始/);
+    expect(screen.getByRole("textbox", { name: "消息" })).toHaveValue("hello");
+    expect(f.calls.filter((call) => call.action === "start")).toHaveLength(1);
   });
 
   it("holds an unknown ACK and retries the exact request ID and original text after null status", async () => {
@@ -465,7 +689,11 @@ describe("Desktop SDK conversation", () => {
     await send("blocked");
     expect(f.calls.filter((call) => call.action === "start")).toHaveLength(0);
     view.unmount(); localStorage.clear();
-    vi.spyOn(Storage.prototype, "setItem").mockImplementationOnce(() => { throw new Error("storage unavailable"); });
+    const setItem = Storage.prototype.setItem;
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(function (this: Storage, key, value) {
+      if (key.startsWith("pidock-sdk-main-pending-v1:")) throw new Error("storage unavailable");
+      setItem.call(this, key, value);
+    });
     mount(f); await screen.findByText(/尚未开始/);
     await send("not sent");
     expect(await screen.findByText(/storage unavailable/)).toBeInTheDocument();
