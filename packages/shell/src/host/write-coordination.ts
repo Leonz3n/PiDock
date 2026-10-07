@@ -205,6 +205,8 @@ export interface WriteClaimInput {
   intent: WriteIntent;
   /** Leftover agent-owned resources, already filtered to this requester. */
   orphans?: readonly AgentOwnedResource[];
+  /** Trusted coordinator ordinal; snapshots alone carry no released-claim history. */
+  claimOrdinal?: number;
 }
 
 export interface WriteClaimOutcome {
@@ -264,7 +266,15 @@ export function claimWrite(snapshot: WriteLockSnapshot, input: WriteClaimInput):
   if (snapshot.claims.length >= MAX_CLAIMS) {
     return { snapshot, result: { ok: false, verdict: "locked", owner, reason: "写操作声明过多，请先结束当前执行", queuePosition: 1 } };
   }
-  const claimId = `claim-${snapshot.claims.length + 1}-${input.sessionId}`;
+  // The pure model avoids live collisions; the stateful coordinator also prevents reuse after release/reset.
+  let ordinal = input.claimOrdinal === undefined ? 1 : input.claimOrdinal;
+  if (input.claimOrdinal === undefined) {
+    while (snapshot.claims.some((claim) => claim.claimId === `claim-${ordinal}-${input.sessionId}`)) ordinal++;
+  }
+  if (!Number.isSafeInteger(ordinal) || ordinal <= 0 || snapshot.claims.some((claim) => claim.claimId === `claim-${ordinal}-${input.sessionId}`)) {
+    return { snapshot, result: { ok: false, verdict: "locked", owner, reason: "写操作声明编号不可用，请先核验当前执行", queuePosition: 1 } };
+  }
+  const claimId = `claim-${ordinal}-${input.sessionId}`;
   const claim: WriteClaim = { claimId, sessionId: input.sessionId, kind: input.intent.kind, label: input.intent.label };
   const granted: WriteLockSnapshot = { ...snapshot, claims: [...snapshot.claims, claim] };
   // Gaining the right removes the session's own queue entry (it is no longer
@@ -279,9 +289,10 @@ export function claimWrite(snapshot: WriteLockSnapshot, input: WriteClaimInput):
  * that got the right is cleared.
  */
 export function releaseWrite(snapshot: WriteLockSnapshot, claimId: string): WriteLockRelease {
-  const claim = snapshot.claims.find((item) => item.claimId === claimId);
-  if (!claim) return { snapshot, releasedOwner: null };
-  const claims = snapshot.claims.filter((item) => item.claimId !== claimId);
+  const index = snapshot.claims.findIndex((item) => item.claimId === claimId);
+  if (index === -1) return { snapshot, releasedOwner: null };
+  const claim = snapshot.claims[index];
+  const claims = [...snapshot.claims.slice(0, index), ...snapshot.claims.slice(index + 1)];
   const sessionId = claim.sessionId;
   let next: WriteLockSnapshot = { ...snapshot, claims };
   if (claims.some((item) => item.sessionId === sessionId)) {
@@ -416,6 +427,8 @@ export interface WriteCoordinatorPort {
  */
 export class TaskWriteCoordinator implements WriteCoordinatorPort {
   private state: WriteLockSnapshot = emptyWriteLock();
+  /** Never reset: a late release must not target a later claim in this coordinator. */
+  private lastClaimOrdinal = 0;
 
   constructor(private readonly liveResources: () => readonly AgentOwnedResource[] = () => []) {}
 
@@ -433,8 +446,10 @@ export class TaskWriteCoordinator implements WriteCoordinatorPort {
   }
 
   claimWrite(sessionId: string, permission: PiPermission, intent: WriteIntent): WriteClaimResult {
-    const outcome = claimWrite(this.state, { sessionId, permission, intent, orphans: this.liveResources() });
+    const claimOrdinal = this.lastClaimOrdinal + 1;
+    const outcome = claimWrite(this.state, { sessionId, permission, intent, orphans: this.liveResources(), claimOrdinal });
     this.state = outcome.snapshot;
+    if (outcome.result.ok) this.lastClaimOrdinal = claimOrdinal;
     return outcome.result;
   }
 
