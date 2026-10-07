@@ -503,7 +503,7 @@ export class TaskWorkspaceHost {
    */
   sdkTextKernel(): SdkTextKernelRouter {
     this.sdkText ??= this.sdkKernelFactory(this.taskId, this.taskDir);
-    return this.sdkRouter ??= new SdkTextKernelRouter(this.sdkText, this.sdkShutdown || this.sdkDisposalFailed ? undefined : this.sdkContext ?? undefined);
+    return this.sdkRouter ??= new SdkTextKernelRouter(this.sdkText, this.sdkShutdown || this.sdkDisposalFailed ? undefined : this.sdkContext ?? undefined, this.executions);
   }
 
   /**
@@ -574,6 +574,8 @@ export class TaskWorkspaceHost {
     try { await shutdownDeadline(Promise.resolve(this.sdkText?.dispose()), 15_000, "sdk-host-shutdown-timeout"); }
     catch { failed = true; }
     this.sdkText = null;
+    try { this.executions.assertSdkDispatchReady(); }
+    catch { failed = true; }
     if (failed) throw Error("sdk-host-shutdown-unconfirmed");
   }
   /**

@@ -59,7 +59,7 @@ it("keeps a successfully opened context installed and routes model turns to it",
   expect(taskHost.sdkProviderConfigured).toBe(true);
   expect(taskHost.sdkTextKernel().configured).toBe(true);
   expect(first.calls).toEqual(["open"]);
-  expect(await taskHost.sdkTextKernel().prompt("main", "hello")).toMatchObject({ state: "done", text: "hi" });
+  expect(await taskHost.sdkTextKernel().prompt("main", "hello", undefined, "11111111-2222-4333-8444-555555555555")).toMatchObject({ state: "done", text: "hi" });
   expect(first.calls).toEqual(["open", "prompt"]);
   // Reconfiguring disposes the previous context before installing the next one.
   expect(await taskHost.configureSdkProvider({ config: CONFIG, credential: "synthetic-key" })).toEqual({ generation: 2 });
