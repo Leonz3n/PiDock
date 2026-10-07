@@ -4,7 +4,12 @@ import { isAbsolute, join, relative, sep } from "node:path";
 import { experimentalShutdownReport, type ExperimentalShutdownReport } from "../rpc/host-shutdown-report.js";
 import { serviceExecutionCheckpoint, type ServiceExecutionCheckpoint } from "../rpc/service-execution-checkpoint.js";
 import type { ServiceExecutionRecoveryPort } from "../host/service-execution-experiment.js";
-import type { ServiceCatalogAuthority } from "./service-catalog.js";
+import type { VerifiedTaskIdentity } from "./task-root-index.js";
+
+export interface RecoveryStoreAuthority {
+  projectExists(projectId: string): boolean;
+  task(taskId: string): { identity: VerifiedTaskIdentity; projectId: string | null; rootIds: string[] } | null;
+}
 
 const MAX_BYTES = 64 * 1024;
 const ID = /^[A-Za-z0-9_-]{1,128}$/;
@@ -25,6 +30,7 @@ interface Slot {
 }
 export interface ExperimentalCheckpointLease {
   readonly epoch: string;
+  inventory(sender: object): ServiceExecutionCheckpoint[];
   /** Only after the current actual Host returns its successful post-ack receipt. Does not kill it. */
   confirmShutdown(sender: object, report: unknown): void;
   verifyShutdown(sender: object, report: unknown): void;
@@ -37,7 +43,7 @@ function contained(parent: string, child: string) {
   const rel = relative(parent, child); return rel === "" || (!isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`));
 }
 
-/** Main-only POSIX experiment. Not imported by production Host/main or exposed to renderer. */
+/** Main-only strict POSIX recovery port. Production execution remains unavailable. */
 export class ExperimentalServiceRecoveryStore {
   private readonly directory: string;
   private readonly profilePath: string;
@@ -54,7 +60,7 @@ export class ExperimentalServiceRecoveryStore {
   private readonly active = new Map<string, Slot>();
   private disposed = false;
   private readonly uid: bigint;
-  constructor(profile: string, private readonly authority: ServiceCatalogAuthority, private readonly serviceIds: (taskId: string) => readonly string[]) {
+  constructor(profile: string, private readonly authority: RecoveryStoreAuthority, private readonly serviceIds: (taskId: string) => readonly string[]) {
     if (process.platform === "win32" || !process.geteuid || !isAbsolute(profile)) fail();
     this.uid = BigInt(process.geteuid());
     let directoryFd: number | undefined, profileFd: number | undefined, lockFd: number | undefined, lockIdentity: BigIntStats | undefined, directory: string | undefined;
@@ -152,7 +158,7 @@ export class ExperimentalServiceRecoveryStore {
   private taskScope(taskId: string) {
     if (!ID.test(taskId)) fail();
     const task = this.authority.task(taskId);
-    if (!task || task.identity.taskId !== taskId || !this.authority.projectExists(task.projectId)) fail("service-recovery-task-unavailable");
+    if (!task || task.identity.taskId !== taskId || task.projectId !== null && !this.authority.projectExists(task.projectId)) fail("service-recovery-task-unavailable");
     const taskRoot = join(task.identity.realRoot, task.identity.dirId);
     if (contained(taskRoot, this.directory) || contained(this.directory, taskRoot)) fail("service-recovery-storage-overlap");
     const identity = task.identity;
@@ -214,7 +220,7 @@ export class ExperimentalServiceRecoveryStore {
       if (this.active.size >= 128 || !owner.sender || typeof owner.sender !== "object" || owner.hasExited()) fail();
       owner = { sender: owner.sender, hasExited: owner.hasExited.bind(owner), subscribeExit: owner.subscribeExit.bind(owner) };
       const scope = this.taskScope(taskId), loaded = this.load(taskId, scope.identityDigest);
-      if (loaded.document?.entries.some((row) => !scope.services.has(row.serviceId) && row.state !== "stopped" && row.state !== "exited")) fail("service-recovery-unbound-resource");
+      if (loaded.document?.entries.some((row) => !scope.services.has(row.serviceId) && (row.state !== "stopped" && row.state !== "exited" || row.ownerSessionId !== null))) fail("service-recovery-unbound-resource");
       const slot: Slot = { taskId, ...scope, hostEpoch: randomUUID(), owner, written: new Set(), closed: false, confirmed: false, stamp: loaded.stamp, revoked: false, uncertain: false, detach: () => {} };
       this.active.set(taskId, slot);
       try {
@@ -226,10 +232,20 @@ export class ExperimentalServiceRecoveryStore {
         if (owner.hasExited() || slot.revoked) fail();
       } catch { slot.revoked = true; if (this.active.get(taskId) === slot) this.active.delete(taskId); slot.detach(); throw Error(); }
       const request = (sender: object, message: unknown) => this.request(slot, sender, message);
-      return Object.freeze({ epoch: slot.hostEpoch, request, confirmShutdown: (sender: object, report: unknown) => this.confirmShutdown(slot, sender, report, true), verifyShutdown: (sender: object, report: unknown) => this.confirmShutdown(slot, sender, report, false), port: (sender: object, serviceId: string): ServiceExecutionRecoveryPort => ({
+      return Object.freeze({ epoch: slot.hostEpoch, inventory: (sender: object) => this.inventory(slot, sender), request, confirmShutdown: (sender: object, report: unknown) => this.confirmShutdown(slot, sender, report, true), verifyShutdown: (sender: object, report: unknown) => this.confirmShutdown(slot, sender, report, false), port: (sender: object, serviceId: string): ServiceExecutionRecoveryPort => ({
         read: () => request(sender, { epoch: slot.hostEpoch, op: "read", serviceId }),
         write: (checkpoint) => { request(sender, { epoch: slot.hostEpoch, op: "write", serviceId, checkpoint }); return undefined; },
       }) });
+    } catch (error) { this.sanitize(error); }
+  }
+  private inventory(slot: Slot, sender: object): ServiceExecutionCheckpoint[] {
+    try {
+      if (this.disposed || slot.revoked || slot.uncertain || this.active.get(slot.taskId) !== slot || sender !== slot.owner.sender || slot.owner.hasExited()) fail("service-recovery-lease-stale");
+      const scope = this.taskScope(slot.taskId);
+      if (scope.identityDigest !== slot.identityDigest || scope.services.size !== slot.services.size || [...scope.services].some((id) => !slot.services.has(id))) fail("service-recovery-task-changed");
+      const loaded = this.load(slot.taskId, slot.identityDigest);
+      if (loaded.stamp !== slot.stamp) { slot.uncertain = true; fail("service-recovery-write-uncertain"); }
+      return structuredClone(loaded.document?.entries ?? []);
     } catch (error) { this.sanitize(error); }
   }
   private request(slot: Slot, sender: object, message: unknown): ServiceExecutionCheckpoint | undefined {

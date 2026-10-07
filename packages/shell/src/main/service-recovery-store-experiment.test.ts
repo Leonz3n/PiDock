@@ -45,6 +45,20 @@ function fixture() {
 const checkpoint = (state: ServiceExecutionCheckpoint["state"] = "running", id = serviceId): ServiceExecutionCheckpoint => ({ schemaVersion: 1, taskId, serviceId: id, state, ownerSessionId: state === "stopped" || state === "exited" ? null : "main" });
 
 describe.skipIf(process.platform === "win32")("main-only recovery store and Host instance leases", () => {
+  it("enumerates complete cloned trusted inventory, refusing foreign senders and changed service scope", () => {
+    const f = fixture(), store = f.open(), h = host(), lease = store.acquire(taskId, h.owner);
+    expect(lease.inventory(h.owner.sender)).toEqual([]);
+    lease.port(h.owner.sender, serviceId).write(checkpoint());
+    lease.port(h.owner.sender, "service-b").write(checkpoint("stopped", "service-b"));
+    const records = lease.inventory(h.owner.sender); expect(records).toHaveLength(2);
+    records[0].state = "stopped"; expect(lease.inventory(h.owner.sender)[0].state).toBe("running");
+    expect(() => lease.inventory({})).toThrow("service-recovery-lease-stale");
+    f.services([serviceId]); expect(() => lease.inventory(h.owner.sender)).toThrow("service-recovery-task-changed");
+  });
+  it("refuses missing authority even when the requested service inventory is empty", () => {
+    const f = fixture(), store = f.open(); f.services([]); f.setIdentity(null);
+    expect(() => store.acquire(taskId, host().owner)).toThrow("service-recovery-task-unavailable");
+  });
   it("refuses both journal copies deleted across a clean writer restart", () => {
     const f = fixture(), first = f.open(), h = host();
     first.acquire(taskId, h.owner).port(h.owner.sender, serviceId).write(checkpoint());

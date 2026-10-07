@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import type { App, BrowserWindow } from "electron";
 import { describe, expect, it, vi } from "vitest";
 import { registerApplicationLifecycle } from "./application-lifecycle.js";
-import { createHostStopper, PerTaskHostRegistry } from "./runtime.js";
+import { createHostDisposer, createHostStopper, PerTaskHostRegistry } from "./runtime.js";
 import { HostClient } from "../rpc/host-client.js";
 import type { RpcRequest } from "../rpc/protocol.js";
 
@@ -86,7 +86,7 @@ describe("application window lifecycle", () => {
         }
       },
     });
-    const registry = new PerTaskHostRegistry("workspace-a", async () => ({ client, child: { kill } as never }), () => "/tasks/a");
+    const registry = new PerTaskHostRegistry("workspace-a", async () => ({ client, child: Object.assign(new EventEmitter(), { kill }) as never }), () => "/tasks/a");
     await registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
     const stop = createHostStopper(registry, { kind: "shell-ui", senderWebContentsId: 7 }, () => registry.disposeAll());
     const stopped = deferred<void>();
@@ -109,6 +109,75 @@ describe("application window lifecycle", () => {
     client.dispose();
   });
 
+  it("keeps application quit pending through every delayed registry child exit", async () => {
+    const children = [new EventEmitter(), new EventEmitter()].map((events) => Object.assign(events, { kill: vi.fn() }));
+    const registry = new PerTaskHostRegistry("workspace-a", async (_ws, task) => ({
+      child: children[task.taskId === "task-a" ? 0 : 1] as never,
+      client: { onBrowserRequest: vi.fn(), dispose: vi.fn(), task: vi.fn(async () => ({
+        workspaceId: "workspace-a", taskId: task.taskId, op: "task/quit",
+        payload: { quit: { applied: [], plan: { failures: [], retainedTasks: [] } } },
+      })) } as never,
+    }), (id) => `/tasks/${id}`);
+    await registry.routeTaskOp({ taskId: "task-a", op: "task/cancel" });
+    await registry.routeTaskOp({ taskId: "task-b", op: "task/cancel" });
+    const stop = createHostStopper(registry, { kind: "shell-ui", senderWebContentsId: 7 }, () => registry.disposeAll());
+    const f = fixture("darwin", vi.fn(stop));
+    f.quit(); f.quit(); await new Promise<void>((done) => setImmediate(done));
+    expect(f.state.quits).toBe(0); expect(registry.size).toBe(2);
+    children[0].emit("exit", 0); await settled();
+    expect(f.state.quits).toBe(0); expect(registry.size).toBe(2);
+    children[1].emit("exit", 0); await stop(); await settled();
+    expect(f.state.quits).toBe(1); expect(registry.size).toBe(0);
+    for (const child of children) expect(child.kill).toHaveBeenCalledTimes(1);
+  });
+  it("awaits delayed workspace exit through the production disposal callback before application quit", async () => {
+    const workspace = Object.assign(new EventEmitter(), { kill: vi.fn() });
+    const disposal = createHostDisposer(workspace as never);
+    const registry = new PerTaskHostRegistry("workspace-a");
+    const client = { dispose: vi.fn() }, stopSchedules = vi.fn();
+    const stop = createHostStopper(registry, { kind: "shell-ui", senderWebContentsId: 7 },
+      () => disposal.disposeAfterTasks(registry, client, stopSchedules));
+    const f = fixture("darwin", vi.fn(stop));
+    f.quit(); f.quit(); await new Promise<void>((done) => setImmediate(done));
+    const receipt = stop();
+    expect(f.state.quits).toBe(0); expect(workspace.kill).toHaveBeenCalledTimes(1);
+    const disposed = disposal.disposeAfterTasks(registry, client, stopSchedules);
+    expect(disposal.disposeAfterTasks(registry, client, stopSchedules)).toBe(disposed);
+    expect(stop()).toBe(receipt);
+    workspace.emit("exit", 0); await disposed; expect(await receipt).toBe(true); await settled();
+    expect(f.state.quits).toBe(1);
+    expect(workspace.kill).toHaveBeenCalledTimes(1); expect(client.dispose).toHaveBeenCalledTimes(1);
+    expect(stopSchedules).toHaveBeenCalledTimes(1); expect(await stop()).toBe(true);
+  });
+  it.each(["timeout", "signal failure"])("retains workspace %s without another termination request or late-exit success", async (fault) => {
+    const workspace = Object.assign(new EventEmitter(), { kill: vi.fn(() => {
+      if (fault === "signal failure") throw Error("synthetic-signal-failure");
+    }) });
+    const disposal = createHostDisposer(workspace as never);
+    const registry = new PerTaskHostRegistry("workspace-a");
+    const client = { dispose: vi.fn() }, stopSchedules = vi.fn();
+    const stop = createHostStopper(registry, { kind: "shell-ui", senderWebContentsId: 7 },
+      () => disposal.disposeAfterTasks(registry, client, stopSchedules));
+    const f = fixture("darwin", vi.fn(stop));
+    vi.useFakeTimers();
+    try {
+      f.quit();
+      const receipt = stop();
+      await vi.advanceTimersByTimeAsync(14_999);
+      expect(f.state.quits).toBe(0); expect(workspace.kill).toHaveBeenCalledTimes(1);
+      expect(stop()).toBe(receipt);
+      const disposed = disposal.disposeAfterTasks(registry, client, stopSchedules);
+      const rejected = expect(disposed).rejects.toThrow(fault === "timeout" ? "main-workspace-disposal-unconfirmed" : "synthetic-signal-failure");
+      await vi.advanceTimersByTimeAsync(1); await rejected;
+      expect(await receipt).toBe(false); expect(f.state.quits).toBe(0);
+      workspace.emit("exit", 0); await settled();
+      expect(await stop()).toBe(false); expect(stop()).toBe(receipt);
+      expect(disposal.disposeAfterTasks(registry, client, stopSchedules)).toBe(disposed);
+      f.quit(); await settled(); expect(f.state.quits).toBe(0);
+      expect(workspace.kill).toHaveBeenCalledTimes(1); expect(client.dispose).toHaveBeenCalledTimes(1);
+      expect(stopSchedules).toHaveBeenCalledTimes(1);
+    } finally { workspace.emit("exit", 0); vi.useRealTimers(); }
+  });
   it("retains and reveals the existing window when shutdown throws, with no automatic retry", async () => {
     const stop = vi.fn(async () => { throw Error("synthetic-stop-failure"); });
     const f = fixture("darwin", stop);

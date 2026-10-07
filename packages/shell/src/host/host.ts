@@ -42,6 +42,8 @@ import {
   routeHostTask,
   validateHostTaskOp,
 } from "./host-guards.js";
+import { ServiceOwnerInventory } from "./service-owner-inventory.js";
+import { serviceOwnerBootstrap, type ServiceOwnerBootstrap, type ServiceOwnerCompletion } from "../rpc/service-host-binding.js";
 import { TaskWorkspaceHost, diskTaskStore } from "./task-host.js";
 import { SdkTurnTransport } from "./sdk-turn-transport.js";
 import { validateExplicitTextProvider } from "./explicit-text-provider.js";
@@ -117,6 +119,55 @@ let workspaceHost: TaskWorkspaceHost | null = null;
 let sdkTurns: SdkTurnTransport | null = null;
 let sdkClosing = false;
 let quitReceipt: Promise<ReturnType<TaskLifecycleHost["quit"]>> | undefined;
+let serviceOwnerInventory: ServiceOwnerInventory | null = null;
+let serviceScope: ServiceOwnerBootstrap | undefined;
+let serviceCompletion: ServiceOwnerCompletion | undefined;
+const serviceSubscribers = new Map<string | null, { receive(message: unknown): void; disconnected(): void }>();
+function fenceServiceInventory(): void {
+  serviceOwnerInventory?.fence();
+  for (const subscriber of [...serviceSubscribers.values()]) subscriber.disconnected();
+}
+function ownerInventoryFor(host: TaskWorkspaceHost): ServiceOwnerInventory {
+  return serviceOwnerInventory ??= new ServiceOwnerInventory(boundWorkspaceId(), host.taskId, host.taskDir, host, (scope, serviceId) => ({
+    send: (request) => hostPort.postMessage({ kind: "service-owner-request", workspaceId: scope.workspaceId, taskId: scope.taskId,
+      instanceId: scope.instanceId, epoch: scope.epoch, catalogRevision: scope.catalogRevision, serviceId, request }),
+    subscribe: (receive, disconnected) => {
+      if (serviceSubscribers.has(serviceId)) throw Error("service-owner-transport-unconfirmed");
+      const subscriber = { receive, disconnected }; serviceSubscribers.set(serviceId, subscriber);
+      return () => { if (serviceSubscribers.get(serviceId) === subscriber) serviceSubscribers.delete(serviceId); };
+    },
+  }));
+}
+async function handleServiceOwnerMessage(value: unknown): Promise<boolean> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const row = value as Record<string, unknown>;
+  if (!["service-owner-bootstrap", "service-owner-ack", "service-owner-fenced"].includes(String(row.kind))) return false;
+  try {
+    const taskId = process.env["PIDOCK_TASK_ID"] ?? "";
+    const host = taskHostFor(taskId); if ("error" in host) throw Error();
+    const inventory = ownerInventoryFor(host);
+    if (row.kind === "service-owner-bootstrap") {
+      const scope = serviceOwnerBootstrap(value, boundWorkspaceId(), taskId);
+      if (serviceScope) throw Error();
+      serviceScope = scope;
+      await inventory.bootstrap(scope);
+      hostPort.postMessage({ kind: "service-owner-ready", workspaceId: scope.workspaceId, taskId: scope.taskId,
+        instanceId: scope.instanceId, epoch: scope.epoch, catalogRevision: scope.catalogRevision });
+    } else if (row.kind === "service-owner-fenced") {
+      if (Object.keys(row).sort().join(",") !== "kind,taskId,workspaceId" || row.workspaceId !== boundWorkspaceId() || row.taskId !== taskId) throw Error();
+      fenceServiceInventory();
+    } else {
+      const scope = serviceScope;
+      if (!scope || Buffer.byteLength(JSON.stringify(value)) > 8192 || Object.keys(row).sort().join(",") !== "catalogRevision,epoch,instanceId,kind,reply,serviceId,taskId,workspaceId" ||
+          row.workspaceId !== scope.workspaceId || row.taskId !== scope.taskId || row.instanceId !== scope.instanceId || row.epoch !== scope.epoch || row.catalogRevision !== scope.catalogRevision ||
+          row.serviceId !== null && typeof row.serviceId !== "string") throw Error();
+      const subscriber = serviceSubscribers.get(row.serviceId as string | null); if (!subscriber) throw Error();
+      subscriber.receive(row.reply);
+    }
+  } catch { fenceServiceInventory(); }
+  return true;
+}
+
 const taskAdmission = new HostTaskAdmission();
 let sdkKernelFactory: (taskId: string, taskDir: string) => PiSdkTextKernel = (id, dir) => new PiSdkTextKernel(id, dir);
 
@@ -333,14 +384,16 @@ function taskHostFor(taskId: string): TaskWorkspaceHost | { error: string } {
       diskTaskStore,
       undefined,
       () => {
+        const owners = serviceOwnerInventory?.resources() ?? (process.env["PIDOCK_SERVICE_OWNER_REQUIRED"] === "1"
+          ? [{ resourceId: "service-owner-inventory", kind: "service" as const, ownerSessionId: null, verificationRequired: true }] : []);
         const runtime = serviceRuntime;
-        if (!runtime || runtime.taskDir !== taskDir) return [];
-        return runtime.runningAgentOwned().map((service) => ({
+        if (!runtime || runtime.taskDir !== taskDir) return owners;
+        return [...owners, ...runtime.runningAgentOwned().map((service) => ({
           resourceId: service.serviceId,
           kind: "service" as const,
           ownerSessionId: service.ownerSessionId,
           label: service.serviceId,
-        }));
+        }))];
       },
       sharedPaths,
       undefined,
@@ -830,9 +883,15 @@ async function performTaskOp(
         if (!caller.ok) return { ok: false, error: caller.error };
         // Lifecycle flags are not processes. Do not mint approval or report a
         // successful control until Host-owned process-tree execution is wired.
-        return { ok: false, error: "service-execution-unavailable: 真实服务进程启停尚未接线" };
+        return serviceOwnerInventory ? serviceOwnerInventory.control() : { ok: false, error: "service-execution-unavailable: 真实服务进程启停尚未接线" };
       }
       case "task/serviceStatus": {
+        if (serviceOwnerInventory || process.env["PIDOCK_SERVICE_OWNER_REQUIRED"] === "1") {
+          const serviceId = record["serviceId"];
+          if (typeof serviceId !== "string") return { ok: false, error: "invalid-payload" };
+          const status = ownerInventoryFor(host).status(serviceId);
+          return status.ok ? { ok: true, payload: { service: status.service } } : status;
+        }
         const services = serviceRuntimeFor(taskId);
         if ("error" in services) return { ok: false, error: services.error };
         const serviceId = record["serviceId"];
@@ -1364,6 +1423,7 @@ async function performTaskOp(
         if ("error" in lifecycle) return { ok: false, error: lifecycle.error };
         taskAdmission.seal();
         host.sealExecution();
+        if (serviceOwnerInventory || process.env["PIDOCK_SERVICE_OWNER_REQUIRED"] === "1") ownerInventoryFor(host).seal();
         sdkClosing = true;
         sdkTurns?.seal();
         try {
@@ -1373,10 +1433,11 @@ async function performTaskOp(
             sdkTurns = null;
             await shutdownDeadline(taskAdmission.drain(), 15_000, "task-operations-shutdown-unconfirmed");
             host.assertExecutionSettled();
+            if (serviceOwnerInventory) serviceCompletion = await shutdownDeadline(serviceOwnerInventory.close(), 15_000, "service-owner-shutdown-unconfirmed");
             return lifecycle.quit();
           })();
           const quit = await quitReceipt;
-          return { ok: true, payload: { quit } };
+          return { ok: true, payload: { quit, ...(serviceCompletion ? { serviceOwner: serviceCompletion } : {}) } };
         } catch (error) {
           return { ok: false, error: error instanceof Error ? error.message : String(error) };
         }
@@ -1671,6 +1732,7 @@ export function startHost(kernelFactory?: (taskId: string, taskDir: string) => P
   if (kernelFactory) sdkKernelFactory = kernelFactory;
   hostPort.on("message", async (event: { data: unknown }) => {
   const message: unknown = event.data;
+  if (await handleServiceOwnerMessage(message)) return;
   if (!isRpcRequest(message)) {
     reply({ kind: "response", id: "unknown", ok: false, error: "invalid-request" });
     return;

@@ -1,10 +1,14 @@
+import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({ nextId: 1, bridgeKeys: [] as string[] }));
 vi.mock("electron", () => ({
   app: { whenReady: async () => {}, getPath: () => "/tmp/pidock-smoke-contract" },
   session: { fromPartition: (partition: string) => ({ partition }) },
-  utilityProcess: { fork: () => ({ on: vi.fn(), removeListener: vi.fn(), kill: vi.fn() }) },
+  utilityProcess: { fork: () => {
+    const child = new EventEmitter();
+    return Object.assign(child, { kill: vi.fn(() => child.emit("exit", 0)) });
+  } },
   dialog: { showOpenDialog: vi.fn() },
   ipcMain: { handle: vi.fn(), eventNames: () => [] },
   WebContentsView: class {
