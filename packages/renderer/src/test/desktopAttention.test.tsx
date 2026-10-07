@@ -12,15 +12,32 @@ const bridge = (handler: (taskId: string, op: string, payload: Record<string, un
 };
 afterEach(() => { cleanup(); delete window.pidock; });
 
-it("groups real cross-project records and locates the task without claiming to open a legacy session", async () => {
+it("shows the Host main session identity and offers its supported conversation destination", async () => {
+  bridge((taskId) => ({ ok: true, payload: { taskName: taskId, items: [{ ...item(taskId, "completed-unread"), sessionId: "main" }] } }));
+  const onOpenTask = vi.fn();
+  render(<DesktopAttentionPage tasks={[tasks[0]!]} projects={projects} lifecyclePending={false} lifecycleErrors={[]} onOpenTask={onOpenTask} />);
+  expect(await screen.findByText("会话 · main")).toBeInTheDocument();
+  expect(screen.getByText(/SDK main 回合的执行结果已接入/)).toBeInTheDocument();
+  expect(screen.queryByText(/SDK main 回合尚未写入/)).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "查看 main 会话" }));
+  expect(onOpenTask).toHaveBeenCalledWith("a");
+  expect(screen.getByText("完成未读 · 1")).toBeInTheDocument();
+});
+
+it("groups real cross-project records while refusing to substitute main for legacy sessions", async () => {
   const taskOp = bridge((taskId) => ({ ok: true, payload: { taskName: taskId, items: [item(taskId, taskId === "a" ? "approval" : "failed")] } }));
   const onOpenTask = vi.fn();
   render(<DesktopAttentionPage tasks={tasks} projects={projects} lifecyclePending={false} lifecycleErrors={[]} onOpenTask={onOpenTask} />);
   expect(await screen.findByText("项目 A · 任务 A")).toBeInTheDocument();
   expect(screen.getByText("任务 B")).toBeInTheDocument();
   expect(screen.getByText("待处理 · 2")).toBeInTheDocument();
-  fireEvent.click(screen.getAllByRole("button", { name: "查看任务" })[0]!);
-  expect(onOpenTask).toHaveBeenCalledWith("a");
+  expect(screen.getAllByText("会话 · session-1")).toHaveLength(2);
+  const destinations = screen.getAllByRole("button", { name: "原会话定位未接线" });
+  for (const destination of destinations) {
+    expect(destination).toBeDisabled();
+    fireEvent.click(destination);
+  }
+  expect(onOpenTask).not.toHaveBeenCalled();
   expect(taskOp).not.toHaveBeenCalledWith("a", "task/markAttentionRead", expect.anything());
 });
 
