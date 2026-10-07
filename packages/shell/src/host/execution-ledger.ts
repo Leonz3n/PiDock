@@ -70,6 +70,9 @@ export interface ExecutionStateReadout {
 export class TaskExecutionLedger {
   private ledgerState: ExecutionLedgerRecord;
   private sequence: number;
+  private sdkPending: ExecutionLedgerRecord | null = null;
+  private sdkAdmissionUncertain = false;
+  private sdkProjectionUncertain = false;
   private readonly now: () => string;
 
   constructor(
@@ -85,6 +88,62 @@ export class TaskExecutionLedger {
     const settled = settleExecutionsOnRestore(this.ledgerState, { at: this.now() });
     this.ledgerState = settled.ledger;
     if (settled.stopped.length > 0 || settled.expired.length > 0 || settled.spentApprovals.length > 0) this.persist();
+  }
+
+  /** SDK JSONL remains authoritative; this is only the execution projection. */
+  beginSdkTurn(sessionId: string, turnId: string): void {
+    this.assertSdkDispatchReady();
+    if (sessionId !== "main" || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(turnId)) throw Error("invalid-sdk-turn-identity");
+    if (this.ledgerState.executions.some((record) => record.callId === turnId)) throw Error("sdk-turn-already-recorded");
+    const at = this.now();
+    const record = planStep(openExecution({ executionId: `exec-${this.sequence + 1}`, taskId: this.taskId, sessionId, callId: turnId, kind: "turn", label: "SDK main 回合", at }), { stepId: turnId, label: "SDK 模型请求", at });
+    const next = { ...this.ledgerState, executions: [...this.ledgerState.executions, record] };
+    try { this.store.writeExecutions(this.taskDir, next); }
+    catch {
+      // A write may have renamed before failing to sync. This Host cannot
+      // reuse its old sequence or dispatch again on an uncertain admission.
+      this.sdkAdmissionUncertain = true;
+      throw Error("sdk-execution-ledger-uncommitted");
+    }
+    this.ledgerState = next;
+    this.sequence += 1;
+  }
+
+  settleSdkTurn(sessionId: string, turnId: string, state: "done" | "failed" | "cancelled"): void {
+    this.assertSdkDispatchReady();
+    try {
+      const current = this.ledgerState.executions.find((record) => record.taskId === this.taskId && record.sessionId === sessionId && record.callId === turnId);
+      if (!current || sessionId !== "main") throw Error("invalid-sdk-turn-identity");
+      const at = this.now();
+      let record = settleStep(current, { stepId: turnId, state: state === "done" ? "done" : state === "cancelled" ? "skipped" : "failed", at });
+      record = recordAttempt(record, { attemptId: turnId, endState: state === "done" ? "completed" : state === "cancelled" ? "cancelled" : "failed", at });
+      record = state === "done" ? completeExecution(record, { at }) : state === "cancelled" ? stopExecution(record, { at }) : failExecution(record, { at, reason: "sdk-turn-failed" });
+      // Freeze the exact terminal projection before trying persistence. A retry
+      // writes this version and attempt again, never reissues the model request.
+      this.sdkPending = { ...this.ledgerState, executions: this.ledgerState.executions.map((entry) => entry.executionId === record.executionId ? record : entry) };
+    } catch {
+      // A competing transition or invalid identity cannot be repaired by
+      // retrying persistence. Keep SDK history readable, but refuse ledger ACKs.
+      this.sdkProjectionUncertain = true;
+      throw Error("sdk-execution-ledger-uncommitted");
+    }
+    this.reconcileSdkProjection();
+  }
+
+  /** Also guards every ledger mutation against overwriting uncertain admission. */
+  assertSdkDispatchReady(): void {
+    if (this.sdkAdmissionUncertain) throw Error("sdk-execution-ledger-uncommitted");
+    this.reconcileSdkProjection();
+  }
+
+  reconcileSdkProjection(): void {
+    if (this.sdkProjectionUncertain) throw Error("sdk-execution-ledger-uncommitted");
+    if (!this.sdkPending) return;
+    if (this.sdkAdmissionUncertain) throw Error("sdk-execution-ledger-uncommitted");
+    try { this.store.writeExecutions(this.taskDir, this.sdkPending); }
+    catch { throw Error("sdk-execution-ledger-uncommitted"); }
+    this.ledgerState = this.sdkPending;
+    this.sdkPending = null;
   }
 
   /** Copy of the persisted ledger (read-only callers never mutate the live one). */
@@ -142,6 +201,7 @@ export class TaskExecutionLedger {
     scheduleId?: string;
     scheduleConfigVersion?: number;
   }): ExecutionRecord {
+    this.assertSdkDispatchReady();
     this.sequence += 1;
     const record = openExecution({
       executionId: `exec-${this.sequence}`,
@@ -302,6 +362,7 @@ export class TaskExecutionLedger {
    * is still executing.
    */
   state(sessionId: string, services: readonly ServiceRunObservation[] = []): ExecutionStateReadout {
+    this.reconcileSdkProjection();
     this.settleDueApprovals();
     const executions = this.forSession(sessionId);
     const latest = executions[0];
@@ -310,12 +371,14 @@ export class TaskExecutionLedger {
   }
 
   attention(input: { taskName: string }): ExecutionAttentionItem[] {
+    this.reconcileSdkProjection();
     this.settleDueApprovals();
     return attentionItemsFromLedger(this.ledgerState, { taskId: this.taskId, taskName: input.taskName });
   }
 
   /** Read-clearing (盒子 5): only the unread kind clears; others are reported kept. */
   markRead(itemIds: readonly string[]): { cleared: string[]; kept: string[] } {
+    this.assertSdkDispatchReady();
     const result = markAttentionRead(this.ledgerState, { itemIds, at: this.now() });
     if (result.cleared.length > 0) {
       this.ledgerState = result.ledger;
@@ -331,6 +394,7 @@ export class TaskExecutionLedger {
   }
 
   private update(executionId: string, apply: (record: ExecutionRecord) => ExecutionRecord): ExecutionRecord {
+    this.assertSdkDispatchReady();
     const index = this.ledgerState.executions.findIndex((item) => item.executionId === executionId);
     if (index === -1) throw new Error(`unknown-execution: ${executionId}`);
     const next = apply(this.ledgerState.executions[index] as ExecutionRecord);
@@ -339,6 +403,7 @@ export class TaskExecutionLedger {
   }
 
   private mutate(executions: ExecutionRecord[]): void {
+    this.assertSdkDispatchReady();
     this.ledgerState = { ...this.ledgerState, executions };
     this.persist();
   }

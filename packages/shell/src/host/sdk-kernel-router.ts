@@ -16,6 +16,7 @@
  * or to the same read-only kernel (which refuses them).
  */
 
+import type { TaskExecutionLedger } from "./execution-ledger.js";
 import type { SdkTextEvent, SdkTextResult } from "./sdk-text-kernel.js";
 import { PiSdkTextKernel } from "./sdk-text-kernel.js";
 import type { SdkContextClient, SdkTextKernelPort } from "./sdk-context-client.js";
@@ -31,6 +32,7 @@ export class SdkTextKernelRouter implements SdkTurnKernelPort {
     private readonly reader: PiSdkTextKernel,
     /** Isolated model context, present only when a Provider is configured. */
     private context?: SdkContextClient,
+    private readonly executions?: TaskExecutionLedger,
   ) {}
 
   /** True when model calls are possible (a configured, isolated context exists). */
@@ -46,12 +48,31 @@ export class SdkTextKernelRouter implements SdkTurnKernelPort {
     return this.context ?? this.reader;
   }
 
-  open(sessionId: string) {
+  async open(sessionId: string) {
+    this.executions?.assertSdkDispatchReady();
     return this.target().open(sessionId);
   }
 
-  prompt(sessionId: string, text: string, deliver?: (event: SdkTextEvent) => void, issuedTurnId?: string): Promise<SdkTextResult> {
-    return this.target().prompt(sessionId, text, deliver, issuedTurnId);
+  async prompt(sessionId: string, text: string, deliver?: (event: SdkTextEvent) => void, issuedTurnId?: string): Promise<SdkTextResult> {
+    if (!this.executions || !this.context) return this.target().prompt(sessionId, text, deliver, issuedTurnId);
+    if (!issuedTurnId) throw Error("invalid-sdk-turn-identity");
+    this.executions.beginSdkTurn(sessionId, issuedTurnId);
+    let result: SdkTextResult;
+    try { result = await this.context.prompt(sessionId, text, deliver, issuedTurnId); }
+    catch { result = { state: "failed", text: "", events: [], error: "sdk-turn-failed" }; }
+    if (result.state === "failed") {
+      result = { ...result, error: result.error === "sdk-event-delivery-failed" ? "sdk-event-delivery-failed" : "sdk-turn-failed" };
+    } else {
+      // Non-failure outcomes cannot carry an arbitrary Provider error into the
+      // Host journal. Keep their terminal state, content and SDK events intact.
+      result = { state: result.state, text: result.text, events: result.events };
+    }
+    try { this.executions.settleSdkTurn(sessionId, issuedTurnId, result.state); }
+    catch {
+      // The SDK terminal result stays authoritative. The ledger retains the
+      // pending projection and fences reads/new prompts until it is durable.
+    }
+    return result;
   }
 
   cancel(sessionId: string) {
