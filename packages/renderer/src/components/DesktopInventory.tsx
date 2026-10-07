@@ -384,7 +384,9 @@ export function DesktopInventory() {
     </div>
   </main>;
   const overviewProject = selection.kind === "project" ? data.projects.find((item) => item.id === selection.id) ?? null : null;
-  if (!manage) return shell(<DesktopProjectOverview
+  if (!manage) return shell(<>
+    {actionError && <p role="alert" className="mb-3 text-sm text-[#ad4545]">{actionError}</p>}
+    <DesktopProjectOverview
     project={overviewProject}
     tasks={activeTasks}
     lifecyclePending={!lifecycleReady || (lifecycleIndex?.errors.length ?? 0) > 0}
@@ -394,7 +396,7 @@ export function DesktopInventory() {
     onManage={() => setManage(true)}
     onManageDirectories={() => setManage(true)}
     onCreateTask={() => { setManage(true); setForm("create"); setDraft({ name: "", description: "", repositories: [], directories: [] }); setActionError(null); }}
-  />);
+  /></>);
   return shell(<div className="mx-auto w-full max-w-[1100px] px-4 py-5" data-testid="desktop-inventory">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2"><h1 className="text-lg font-semibold">项目与任务</h1>
         <div className="flex gap-2"><button className={button} type="button" disabled={busy || pendingCreate !== null} onClick={() => { setForm("create"); setDraft({ name: "", description: "", repositories: [], directories: [] }); setActionError(null); }}><Icon name="plus" />项目</button>

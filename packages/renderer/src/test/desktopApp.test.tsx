@@ -638,6 +638,71 @@ describe("Desktop production data", () => {
     expect(demoRead).not.toHaveBeenCalled();
   });
 
+  it("opens main attention in the original fixed SDK main conversation without marking it read", async () => {
+    const sdkTurn = vi.fn(async (request: Record<string, unknown>) => ({ ok: true, payload: request.action === "subscribe" ?
+      { taskId: "real-1", sessionId: "main", snapshot: { source: "sdk-jsonl", sessionId: "main", messages: [{ role: "assistant", text: "SDK main 完成结果", usage: null }], pending: false, interrupted: false }, turn: null } :
+      { unsubscribed: true } }));
+    const shell = bridge({ assigned: true });
+    const taskOp = vi.fn(async (taskId: string, op: string) => op === "task/attention" ? { ok: true, payload: { taskName: "真实任务", items: [{ id: "unread:sdk-main", kind: "completed-unread", executionId: "sdk-main", taskId, sessionId: "main", detail: "SDK 回合完成", at: "2026-10-07T09:00:00Z", read: false }] } } : shell.taskOp!(taskId, op, {}));
+    window.pidock = { ...shell, taskOp, sdkTurn, onSdkTurnEvent: vi.fn(() => vi.fn()) };
+    const demoRead = vi.spyOn(memoryHost, "getWorkspace");
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "需要处理" }));
+    fireEvent.click(await screen.findByRole("button", { name: "查看 main 会话" }));
+    const conversation = await screen.findByTestId("desktop-conversation");
+    expect(await within(conversation).findByText("SDK main 完成结果")).toBeInTheDocument();
+    expect(within(conversation).getByRole("tab", { name: "main" })).toBeInTheDocument();
+    expect(within(screen.getByTestId("desktop-breadcrumb")).getByText("真实任务")).toBeInTheDocument();
+    expect(sdkTurn).toHaveBeenCalledWith({ action: "subscribe", taskId: "real-1", sessionId: "main" });
+    expect(sdkTurn).not.toHaveBeenCalledWith(expect.objectContaining({ action: "start" }));
+    expect(taskOp).not.toHaveBeenCalledWith("real-1", "task/markAttentionRead", expect.anything());
+    expect(demoRead).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "需要处理" }));
+    expect(await screen.findByText("完成未读 · 1")).toBeInTheDocument();
+  });
+
+  it("keeps legacy attention visible without opening or subscribing to main", async () => {
+    const shell = bridge({ assigned: true });
+    const sdkTurn = vi.fn(async () => ({ ok: true, payload: {} }));
+    const taskOp = vi.fn(async (taskId: string, op: string) => op === "task/attention" ? { ok: true, payload: { taskName: "真实任务", items: [{ id: "failed:legacy", kind: "failed", executionId: "legacy", taskId, sessionId: "legacy-session", detail: "原会话失败", at: "2026-10-07T09:00:00Z", read: false }] } } : shell.taskOp!(taskId, op, {}));
+    window.pidock = { ...shell, taskOp, sdkTurn, onSdkTurnEvent: vi.fn(() => vi.fn()) };
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "需要处理" }));
+    const destination = await screen.findByRole("button", { name: "原会话定位未接线" });
+    expect(destination).toBeDisabled();
+    expect(screen.getByText("会话 · legacy-session")).toBeInTheDocument();
+    fireEvent.click(destination);
+    expect(screen.getByTestId("desktop-attention-page")).toBeInTheDocument();
+    expect(screen.queryByTestId("desktop-conversation")).not.toBeInTheDocument();
+    expect(sdkTurn).not.toHaveBeenCalled();
+    expect(taskOp).not.toHaveBeenCalledWith("real-1", "task/markAttentionRead", expect.anything());
+  });
+
+  it.each(["unavailable-root", "archived"])("refuses a main attention destination after the task becomes %s", async (unavailable) => {
+    const shell = bridge({ assigned: true });
+    let changed = false;
+    const sdkTurn = vi.fn(async () => ({ ok: true, payload: {} }));
+    const taskOp = vi.fn(async (taskId: string, op: string) => op === "task/attention" ? { ok: true, payload: { taskName: "真实任务", items: [{ id: "failed:main", kind: "failed", executionId: "sdk-main", taskId, sessionId: "main", detail: "SDK 回合失败", at: "2026-10-07T09:00:00Z", read: false }] } } : { ok: true, payload: { lifecycle: { taskId, archived: changed && unavailable === "archived", archivedAt: changed && unavailable === "archived" ? "2026-10-07T09:01:00Z" : null } } });
+    const currentRoots = () => changed && unavailable === "unavailable-root" ? [{ label: "默认任务根", state: "error", message: "任务根已移走" }] : roots;
+    const listTasks = vi.fn(async () => ({ ok: true, payload: { tasks, roots: currentRoots() } }));
+    const projectOp: PidockBridge["projectOp"] = async (request) => request.op === "associations"
+      ? { ok: true, payload: { roots: currentRoots(), tasks: [{ taskId: "real-1", projectId: project.id, state: "assigned" }] } }
+      : shell.projectOp!(request);
+    window.pidock = { ...shell, listTasks, projectOp, taskOp, sdkTurn, onSdkTurnEvent: vi.fn(() => vi.fn()) };
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "需要处理" }));
+    const destination = await screen.findByRole("button", { name: "查看 main 会话" });
+    changed = true;
+    fireEvent.click(destination);
+    const message = unavailable === "archived" ? "该任务已归档，请先从已归档页恢复" : "任务或任务根不可用，请重新选择";
+    expect(await screen.findByText(message)).toBeInTheDocument();
+    expect(screen.queryByTestId("desktop-conversation")).not.toBeInTheDocument();
+    expect(sdkTurn).not.toHaveBeenCalled();
+    expect(taskOp).not.toHaveBeenCalledWith("real-1", "task/markAttentionRead", expect.anything());
+    fireEvent.click(screen.getByRole("button", { name: "项目总览" }));
+    expect(screen.queryByText(message)).not.toBeInTheDocument();
+  });
+
   it("opens a freshly verified assigned task in the fixed SDK main session and returns without DemoApp", async () => {
     const sdkTurn = vi.fn(async (request: Record<string, unknown>) => ({ ok: true, payload: request.action === "subscribe" ?
       { taskId: "real-1", sessionId: "main", snapshot: { source: "sdk-jsonl", sessionId: "main", messages: [], pending: false, interrupted: false }, turn: null } :
