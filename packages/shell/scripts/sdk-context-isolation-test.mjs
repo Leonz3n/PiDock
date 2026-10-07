@@ -3,21 +3,20 @@
 //   node packages/shell/scripts/sdk-context-isolation-test.mjs
 //
 // It exercises the real spawn path (`SdkContextClient` -> node:worker_threads ->
-// `sdk-context-worker.js`) while the *parent* process carries credential-shaped
-// environment variables, and asserts:
+// `sdk-context-worker.js`) with synthetic startup/credential inputs, and asserts:
 //
-//   1. the dispatch environment is a positive allowlist that carries neither the
-//      ambient credential names nor the credential value (probe worker);
-//   2. the real worker's own isolation assertions accept that environment (a
-//      single inherited credential-shaped name or a missing opt-in would make
-//      `open` fail with `provider-environment-unisolated`);
-//   3. a real model turn only happens in the worker: the loopback endpoint
-//      receives the explicit credential, the credential is redacted out of the
-//      live stream and the SDK JSONL, and the task runs with no tools;
+//   1. the outer Host environment and an actual Node descendant exclude unrelated
+//      credentials/config overrides while local Git still starts;
+//   2. the SDK dispatch environment independently rejects ambient poison, and the
+//      real worker accepts the task-bound private HOME (no inherited credential);
+//   3. an unconfigured Host refuses implicit auth/user pi configuration without
+//      a request, while a real worker turn uses only the explicit credential,
+//      redacts it out of events/JSONL, and has no tools;
 //   4. a disposed context refuses further work.
 //
-// This is the gate the docstrings point at. It needs no Electron and no
-// external network: the endpoint is a loopback HTTP server on 127.0.0.1.
+// Electron fork construction is separately tested with a double. This script's
+// actual Node descendant is not an Electron utilityProcess startup assertion.
+// The loopback endpoint needs no external network or real credential.
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
@@ -26,6 +25,8 @@ import { join } from "node:path";
 import { Worker } from "node:worker_threads";
 import { buildTaskDiskRecord, serializeTaskRecord } from "../dist/host/task-store.js";
 import { buildSdkContextEnv } from "../dist/host/sdk-context-env.js";
+import { buildHostEnv } from "../dist/host/host-guards.js";
+import { PiSdkTextKernel } from "../dist/host/sdk-text-kernel.js";
 import { SdkContextClient } from "../dist/host/sdk-context-client.js";
 
 const CREDENTIAL = "issue46-synthetic-credential-0123456789";
@@ -34,6 +35,13 @@ const AMBIENT = {
   ANTHROPIC_API_KEY: "sk-ant-ambient-should-never-be-used",
   AWS_SECRET_ACCESS_KEY: "ambient-aws-secret",
   GOOGLE_APPLICATION_CREDENTIALS: "/tmp/ambient-google.json",
+  BUSINESS_AUTH: "synthetic-unrelated-business-auth",
+  PIDOCK_PROVIDER_ISSUE46: CREDENTIAL,
+  NODE_OPTIONS: "--require /untrusted",
+  NODE_PATH: "/untrusted",
+  PI_CODING_AGENT_DIR: "/untrusted",
+  GIT_CONFIG_GLOBAL: "/untrusted",
+  SSH_AUTH_SOCK: "/untrusted",
   HTTP_PROXY: "http://127.0.0.1:1",
   HTTPS_PROXY: "http://127.0.0.1:1",
 };
@@ -54,7 +62,7 @@ function task() {
   cleanups.push(() => rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }));
   const dir = join(root, "task-abcdef12");
   mkdirSync(dir);
-  execFileSync("git", ["init", "-q", dir], { env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_TEMPLATE_DIR: "" } });
+  execFileSync("git", ["init", "-q", "--template=", dir], { env: { HOME: root, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" }, stdio: "pipe" });
   writeFileSync(join(dir, "task.json"), serializeTaskRecord(buildTaskDiskRecord({
     taskId: "task-abcdef12", name: "isolation", dirId: "task-abcdef12", branch: "main", root,
     taskDir: dir, remoteBranch: "main", baseCommit: "test", repos: [], now: new Date().toISOString(),
@@ -111,11 +119,30 @@ async function run() {
   const dir = task();
   const endpoint = await provider();
   config.baseUrl = `http://127.0.0.1:${endpoint.port}/v1`;
-  // Ambient credential-shaped variables are present for the whole run.
-  for (const [name, value] of Object.entries(AMBIENT)) process.env[name] = value;
-  process.env["HOME"] = join(dir, ".ambient-home");
+  // Entirely synthetic startup input: no real parent environment is inspected.
+  const ambientHome = join(dir, ".ambient-home");
+  const piDir = join(ambientHome, ".pi", "agent");
+  mkdirSync(piDir, { recursive: true });
+  const poisonedAuth = JSON.stringify({ openai: { type: "api_key", key: AMBIENT.OPENAI_API_KEY } });
+  const poisonedModels = JSON.stringify({ providers: { openai: { baseUrl: `http://127.0.0.1:${endpoint.port}/implicit`, apiKey: AMBIENT.OPENAI_API_KEY,
+    models: [{ id: config.modelId, name: "poison", contextWindow: 128000, maxTokens: 8192 }] } } });
+  writeFileSync(join(piDir, "auth.json"), poisonedAuth);
+  writeFileSync(join(piDir, "models.json"), poisonedModels);
+  const startup = { PATH: "/usr/bin:/bin", HOME: ambientHome, TMPDIR: dir };
+  const hostEnv = buildHostEnv({ ...startup, ...AMBIENT, PIDOCK_TASK_ID: "forged", PIDOCK_SDK_ISOLATED: "1" }, "issue46", { taskId: "task-abcdef12", taskDir: dir });
+  const descendant = JSON.parse(execFileSync(process.execPath, ["-e", "console.log(JSON.stringify(process.env))"], { env: hostEnv, encoding: "utf8" }));
+  assert(Object.keys(AMBIENT).every((name) => !(name in descendant)), "Host descendant inherited unrelated credentials or config");
+  assert(!Object.values(descendant).includes(CREDENTIAL), "Host descendant inherited selected credential");
+  assert(!("PIDOCK_SDK_ISOLATED" in descendant), "Host inherited SDK opt-in");
+  execFileSync("git", ["status", "--porcelain"], { cwd: dir, env: hostEnv, stdio: "pipe" });
+  // Simulate the Host's process environment for the real SdkContextClient.
+  process.env = { ...hostEnv };
+  const unconfigured = new PiSdkTextKernel("task-abcdef12", dir);
+  await unconfigured.prompt("main", "must refuse implicit credentials").then(() => fail("unconfigured Host sent a request"),
+    (error) => assert(error.message === "provider-not-configured", "unconfigured Host did not refuse"));
+  assert(endpoint.hits.length === 0, "ambient SDK auth triggered a request before explicit selection");
 
-  const dispatch = buildSdkContextEnv(process.env, { taskId: "task-abcdef12", taskDir: dir }, { home: join(dir, ".pidock-sdk-context-home"), workspaceId: "issue46" });
+  const dispatch = buildSdkContextEnv({ ...hostEnv, ...AMBIENT }, { taskId: "task-abcdef12", taskDir: dir }, { home: join(dir, ".pidock-sdk-context-home"), workspaceId: "issue46" });
   const observed = await probe(dispatch);
   const ambientNames = Object.keys(AMBIENT);
   assert(ambientNames.every((name) => !(name in observed)), `dispatch environment leaked ambient names: ${JSON.stringify(observed)}`);
@@ -151,7 +178,13 @@ async function run() {
   await client.dispose();
   await client.open("main").then(() => fail("a disposed context accepted work"), (error) => assert(/sdk-context-disposed/.test(String(error)), `unexpected disposed error: ${String(error)}`));
 
+  assert(readFileSync(join(piDir, "auth.json"), "utf8") === poisonedAuth && readFileSync(join(piDir, "models.json"), "utf8") === poisonedModels, "synthetic user pi config was modified");
+  assert(endpoint.hits.every((hit) => hit.url === "/v1/chat/completions"), "implicit user model endpoint was used");
   console.log("ISSUE46_ISOLATION=" + JSON.stringify({
+    hostDescendantNames: Object.keys(descendant).sort(),
+    hostAmbientObserved: Object.keys(AMBIENT).filter((name) => name in descendant),
+    hostCredentialInEnvironment: Object.values(descendant).includes(CREDENTIAL),
+    localGitStatus: true, unconfiguredRequests: 0, implicitEndpointHits: 0, syntheticPiConfigUnchanged: true,
     dispatchNames: Object.keys(observed).sort(),
     ambientObserved: ambientNames.filter((name) => name in observed),
     credentialInDispatchEnv: Object.values(observed).includes(CREDENTIAL),

@@ -348,6 +348,66 @@ describe("task binding rule", () => {
 });
 
 describe("buildHostEnv", () => {
+  it("admits only POSIX startup variables and trusted bindings", () => {
+    const env = buildHostEnv({
+      PATH: "/bin", TMPDIR: "/tmp", TMP: "/tmp", TEMP: "/tmp", LANG: "en_US.UTF-8", LC_ALL: "C", LC_CTYPE: "UTF-8", HOME: "/synthetic-home",
+      OPENAI_API_KEY: "synthetic-unrelated-secret", AWS_SECRET_ACCESS_KEY: "synthetic-cloud-secret", CUSTOM_BUSINESS_AUTH: "synthetic-business-secret",
+      PIDOCK_PROVIDER_MAIN: "synthetic-selected-secret", PIDOCK_SDK_ISOLATED: "1", PIDOCK_TASK_ID: "forged-task", PIDOCK_TASK_DIR: "/forged-task", PIDOCK_DEFAULT_ROOT: "/forged-root",
+      NODE_OPTIONS: "--require /untrusted", NODE_PATH: "/untrusted", ELECTRON_RUN_AS_NODE: "1", PI_CODING_AGENT_DIR: "/untrusted", GIT_CONFIG_GLOBAL: "/untrusted", SSH_AUTH_SOCK: "/untrusted",
+      HTTP_PROXY: "http://untrusted", NODE_EXTRA_CA_CERTS: "/untrusted", SystemRoot: "C:\\Windows", APPDATA: "C:\\ambient", EMPTY: undefined,
+    }, "workspace", undefined, "/trusted-profile", undefined, "darwin");
+    expect(env).toEqual({
+      PATH: "/bin", TMPDIR: "/tmp", TMP: "/tmp", TEMP: "/tmp", LANG: "en_US.UTF-8", LC_ALL: "C", LC_CTYPE: "UTF-8", HOME: "/synthetic-home",
+      PIDOCK_WORKSPACE_ID: "workspace", PIDOCK_PROTECTED_PROFILE: "/trusted-profile",
+    });
+  });
+
+  it("admits only Windows startup variables with canonical case", () => {
+    expect(buildHostEnv({
+      Path: "C:\\tools", temp: "C:\\temp", TMP: "C:\\tmp", SYSTEMROOT: "C:\\Windows", COMSPEC: "C:\\Windows\\cmd.exe", pathext: ".EXE;.CMD",
+      userprofile: "C:\\synthetic-user", AppData: "C:\\synthetic-user\\Roaming", LOCALAPPDATA: "C:\\synthetic-user\\Local", PROGRAMDATA: "C:\\ProgramData",
+      HOME: "/posix", LANG: "C", TMPDIR: "/posix", OPENAI_API_KEY: "synthetic-unrelated-secret", PIDOCK_TASK_ID: "forged",
+    }, "workspace", undefined, undefined, undefined, "win32")).toEqual({
+      PATH: "C:\\tools", TEMP: "C:\\temp", TMP: "C:\\tmp", SystemRoot: "C:\\Windows", ComSpec: "C:\\Windows\\cmd.exe", PATHEXT: ".EXE;.CMD",
+      USERPROFILE: "C:\\synthetic-user", APPDATA: "C:\\synthetic-user\\Roaming", LOCALAPPDATA: "C:\\synthetic-user\\Local", ProgramData: "C:\\ProgramData",
+      PIDOCK_WORKSPACE_ID: "workspace",
+    });
+  });
+
+  it("refuses conflicting Windows spellings instead of selecting an ambient value", () => {
+    for (const base of [{ PATH: "C:\\one", Path: "C:\\two" }, { Path: "C:\\two", PATH: "C:\\one" }]) {
+      expect(() => buildHostEnv(base, "workspace", undefined, undefined, undefined, "win32")).toThrow("host-env-conflict: PATH");
+    }
+    expect(buildHostEnv({ Path: "C:\\same", PATH: "C:\\same" }, "workspace", undefined, undefined, undefined, "win32"))
+      .toEqual({ PATH: "C:\\same", PIDOCK_WORKSPACE_ID: "workspace" });
+  });
+
+  it("takes the default task root only from main's explicit argument", () => {
+    expect(buildHostEnv({ PIDOCK_DEFAULT_ROOT: "/forged-root" }, "workspace", undefined, undefined, "/trusted-root")).toEqual({
+      PIDOCK_WORKSPACE_ID: "workspace", PIDOCK_DEFAULT_ROOT: "/trusted-root",
+    });
+    for (const root of ["relative", "~/root", "/bad\0root", ""]) {
+      expect(() => buildHostEnv({}, "workspace", undefined, undefined, root)).toThrow("host-env-invalid: PIDOCK_DEFAULT_ROOT");
+    }
+  });
+
+  it("rejects invalid startup values with value-free errors and permits missing optional inputs", () => {
+    expect(buildHostEnv({}, "workspace")).toEqual({ PIDOCK_WORKSPACE_ID: "workspace" });
+    for (const platform of ["darwin", "win32"] as const) {
+      for (const value of ["", "synthetic-secret\0suffix"]) {
+        expect(() => buildHostEnv({ PATH: value }, "workspace", undefined, undefined, undefined, platform)).toThrow(/^host-env-invalid: PATH$/);
+      }
+    }
+    expect(buildHostEnv({ Path: "ignored", PATH: "/bin", SystemRoot: "ignored" }, "workspace", undefined, undefined, undefined, "darwin"))
+      .toEqual({ PATH: "/bin", PIDOCK_WORKSPACE_ID: "workspace" });
+  });
+
+  it("rejects NUL in trusted workspace and task bindings before forking", () => {
+    expect(() => buildHostEnv({}, "workspace\0forged")).toThrow("workspaceId");
+    expect(() => buildHostEnv({}, "workspace", { taskId: "task\0forged", taskDir: "/task" })).toThrow("taskId");
+    expect(() => buildHostEnv({}, "workspace", { taskId: "task", taskDir: "/task\0forged" })).toThrow("taskDir");
+  });
+
   it("never inherits the protected profile claim and uses only main's explicit argument", () => {
     const base = { PIDOCK_PROTECTED_PROFILE: "/forged", PATH: "/bin" };
     expect(buildHostEnv(base, "workspace")["PIDOCK_PROTECTED_PROFILE"]).toBeUndefined();
@@ -380,7 +440,7 @@ describe("buildHostEnv", () => {
     );
     expect(Object.keys(env).filter((key) => key.startsWith("PIDOCK_PROVIDER_"))).toEqual([]);
     expect(Object.values(env)).not.toContain("sk-live-0123456789");
-    // Unrelated environment (git, services, terminals) is untouched.
+    // Local executable lookup remains available without ambient credentials.
     expect(env["PATH"]).toBe("/bin");
   });
 });
