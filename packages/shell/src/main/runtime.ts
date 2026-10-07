@@ -182,7 +182,7 @@ export async function createHost(
   const entry = path.join(here, "..", "host", "host-entry.js");
   const child = utilityProcess.fork(entry, [], {
     serviceName: task ? `pidock-node-host-${task.taskId}` : "pidock-node-host",
-    env: buildHostEnv(process.env, workspaceId, task, app.getPath("userData")),
+    env: buildHostEnv(process.env, workspaceId, task, app.getPath("userData"), normalizeTaskPath(defaultTasksRoot())),
     stdio: "pipe",
   });
   const client = new HostClient(child);

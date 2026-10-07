@@ -222,32 +222,48 @@ export function routeTaskBinding(
 }
 
 /**
- * Fork-time env for `utilityProcess.fork`: binds the workspace and,
- * when given, the single task folder this Host serves. Partial bindings
- * fail closed here so main never forks a Host that silently serves the
- * wrong task. Pure (base env injected) so unit tests cover it without
- * Electron; `runtime.ts createHost` is the only production caller.
+ * OS path, temporary-directory and locale inputs used by Node and local Git.
+ * All are optional: the absolute Electron entry starts without them and OS
+ * APIs/executable lookup have defaults. Present invalid values fail closed.
+ * Provider keys, loader/config overrides and task claims never come from here.
+ */
+const HOST_ENV_POSIX = ["PATH", "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL", "LC_CTYPE", "HOME"] as const;
+const HOST_ENV_WINDOWS = ["PATH", "TEMP", "TMP", "SystemRoot", "ComSpec", "PATHEXT", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "ProgramData"] as const;
+
+/**
+ * Fork-time env for `utilityProcess.fork`: admits only OS startup inputs and
+ * explicit trusted bindings. Service environments are built from resolved
+ * service rows separately; they do not inherit this environment.
+ * Pure (base env injected); `runtime.ts createHost` is the production caller.
  */
 export function buildHostEnv(
   baseEnv: Record<string, string | undefined>,
   workspaceId: string,
   task?: HostTaskBinding,
   protectedProfile?: string,
+  defaultRoot?: string,
+  platform: NodeJS.Platform = process.platform,
 ): Record<string, string> {
-  if (typeof workspaceId !== "string" || workspaceId.length === 0) {
+  if (typeof workspaceId !== "string" || workspaceId.length === 0 || workspaceId.includes("\0")) {
     throw new Error("invalid-payload: workspaceId must be a non-empty string");
   }
   const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(baseEnv)) {
-    // [PiDock 02m] (#46) the task Host never resolves a Provider credential:
-    // main resolves the explicit PIDOCK_PROVIDER_* reference and passes the
-    // value only into the isolated SDK context. Dropping these names here keeps
-    // that credential out of every task process this Host can spawn (git,
-    // services, terminals) instead of relying on the SDK kill switch alone.
-    if (key.startsWith("PIDOCK_PROVIDER_") || key === "PIDOCK_PROTECTED_PROFILE") continue;
-    if (typeof value === "string") env[key] = value;
+  for (const key of platform === "win32" ? HOST_ENV_WINDOWS : HOST_ENV_POSIX) {
+    const sourceKeys = platform === "win32" ? Object.keys(baseEnv).filter((name) => name.toUpperCase() === key.toUpperCase()) : [key];
+    const values = sourceKeys.map((name) => baseEnv[name]).filter((value) => value !== undefined);
+    if (new Set(values).size > 1) throw new Error(`host-env-conflict: ${key}`);
+    const value = values[0];
+    if (value === undefined) continue;
+    if (typeof value !== "string" || value.length === 0 || value.includes("\0")) throw new Error(`host-env-invalid: ${key}`);
+    env[key] = value;
   }
   env["PIDOCK_WORKSPACE_ID"] = workspaceId;
+  if (defaultRoot !== undefined) {
+    if (!isAbsoluteTaskRoot(defaultRoot) || defaultRoot.startsWith("~/") || defaultRoot.includes("\0") || defaultRoot.length > 4096) {
+      throw new Error("host-env-invalid: PIDOCK_DEFAULT_ROOT");
+    }
+    env["PIDOCK_DEFAULT_ROOT"] = defaultRoot;
+  }
   if (protectedProfile !== undefined) {
     if (!isAbsoluteTaskRoot(protectedProfile) || protectedProfile.startsWith("~/") || protectedProfile.includes("\0") || protectedProfile.length > 4096) {
       throw new Error("invalid-payload: protected profile must be absolute");
@@ -255,10 +271,10 @@ export function buildHostEnv(
     env["PIDOCK_PROTECTED_PROFILE"] = protectedProfile;
   }
   if (task !== undefined) {
-    if (typeof task.taskId !== "string" || task.taskId.length === 0) {
+    if (typeof task.taskId !== "string" || task.taskId.length === 0 || task.taskId.includes("\0")) {
       throw new Error("invalid-payload: taskId must be a non-empty string");
     }
-    if (typeof task.taskDir !== "string" || !isAbsoluteTaskRoot(task.taskDir)) {
+    if (typeof task.taskDir !== "string" || !isAbsoluteTaskRoot(task.taskDir) || task.taskDir.includes("\0")) {
       throw new Error("invalid-payload: taskDir must be an absolute task root");
     }
     env["PIDOCK_TASK_ID"] = task.taskId;
