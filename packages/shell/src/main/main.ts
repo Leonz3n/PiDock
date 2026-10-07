@@ -11,7 +11,6 @@ import {
   assertTrustedWindowEvidence,
   createHost,
   createHostStopper,
-  createLastWindowShutdown,
   createTrustedWindow,
   errorMessage,
   loadTrustedViews,
@@ -20,6 +19,7 @@ import {
   versionsTriple,
   webPreferencesEvidence,
 } from "./runtime.js";
+import { registerApplicationLifecycle } from "./application-lifecycle.js";
 import { ScheduleDriver } from "./schedule-driver.js";
 import { runSmoke } from "./smoke.js";
 import { defaultTasksRoot } from "./task-resolver.js";
@@ -189,10 +189,20 @@ async function run(): Promise<void> {
     },
     onError: (error, taskId) => console.error(`[main] schedule evaluation failed for ${taskId}: ${errorMessage(error)}`),
   });
-  schedules.start();
-  const loaded = await loadTrustedViews(views);
+  if (views.window.isDestroyed()) throw Error("application-window-unavailable");
   if (views.layout) assertProductionWindowEvidence(views);
   else assertTrustedWindowEvidence(trustedWindowEvidence(views));
+  // Install before renderer loading so close/activate are handled while it loads.
+  // Initial createTrustedWindow construction still precedes these listeners.
+  const stopHosts = createHostStopper(tasks, { kind: "shell-ui", senderWebContentsId: views.shellView.webContents.id }, () => {
+    schedules.stop();
+    client.dispose();
+    child.kill();
+    tasks.disposeAll();
+  });
+  registerApplicationLifecycle({ app, window: views.window, platform: process.platform, stopHosts });
+  schedules.start();
+  const loaded = await loadTrustedViews(views);
   console.log(
     `[main] trust domains: ${JSON.stringify({
       workspaceId,
@@ -205,39 +215,6 @@ async function run(): Promise<void> {
       taskWebPreferences: webPreferencesEvidence(TASK_WEB_PREFERENCES, false),
     })}`,
   );
-
-  const stopHosts = createHostStopper(tasks, { kind: "shell-ui", senderWebContentsId: views.shellView.webContents.id }, () => {
-    schedules.stop();
-    client.dispose();
-    child.kill();
-    tasks.disposeAll();
-  });
-
-  const stopAfterLastWindow = createLastWindowShutdown(stopHosts, () => {
-    if (process.platform !== "darwin") app.quit();
-  });
-  app.on("window-all-closed", () => { void stopAfterLastWindow(); });
-
-  // [PiDock 14] (#17) explicit quit: abort the Agent, then stop this task's
-  // services/terminals/subprocess trees (each by verified identity) and save
-  // state before the Hosts go away. The report is printed so a blocked stop is
-  // locatable and a task with unverified resources is never lost silently.
-  let quitting = false;
-  let quitFinished = false;
-  app.on("before-quit", (event) => {
-    if (quitFinished) return;
-    event.preventDefault();
-    if (quitting) return;
-    quitting = true;
-    void stopHosts().then((stopped) => {
-      if (stopped) {
-        quitFinished = true;
-        app.quit();
-      } else {
-        quitting = false;
-      }
-    });
-  });
 }
 
 void run().catch((error: unknown) => {
