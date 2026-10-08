@@ -118,7 +118,9 @@ it("records the same-reference value rotation limitation on every persisted sele
   // generation. The persisted record must state this limitation itself.
   const raw = readFileSync(join(dir, "provider-profiles.json"), "utf8");
   expect(raw).toMatch(/rotation/i);
-  expect(raw).toMatch(/generation/i);
+  // Scoped to the note: the profile's own "generation" field would match a
+  // whole-document /generation/i and prove nothing about the disclosure.
+  expect(raw).toMatch(/"note":"[^"]*generation/i);
   const note = profiles.list().selections[0]?.note ?? "";
   expect(note).toMatch(/rotation/i);
   expect(note).toMatch(/not detected/i);
