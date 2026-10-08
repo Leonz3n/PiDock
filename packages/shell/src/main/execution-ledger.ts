@@ -38,6 +38,29 @@ export const EXECUTION_KINDS: readonly ExecutionKind[] = [
   "scheduled",
 ];
 
+/**
+ * The Host-driven control classes (盒子 1): a service start/stop, a task-browser
+ * action and a terminal start/stop each open their own record, gated exactly
+ * like the transport path that performs them.
+ */
+export type ControlExecutionKind = "service-control" | "browser-action" | "terminal-control";
+
+export const CONTROL_EXECUTION_KINDS: readonly ControlExecutionKind[] = [
+  "service-control",
+  "browser-action",
+  "terminal-control",
+];
+
+/**
+ * A control record's approval decides when the *control operation* runs, not
+ * when the user approves: `task/approve` spends the confirmation, and the
+ * operation completes its record only when it really executes. Callers that
+ * settle an approval use this to tell the two apart.
+ */
+export function isControlExecutionKind(kind: ExecutionKind): kind is ControlExecutionKind {
+  return (CONTROL_EXECUTION_KINDS as readonly string[]).includes(kind);
+}
+
 /** Session-side execution state (盒子 2). */
 export type ExecutionState = "executing" | "pending-approval" | "failed" | "done" | "stopped" | "rejected" | "expired";
 

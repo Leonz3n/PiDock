@@ -24,6 +24,7 @@
 import type { PiApproval, PiApprovalScope, PiGateDecision, PiPermission } from "../main/pi-session.js";
 import { SERVICE_CONTROL_SCOPE } from "../main/pi-session.js";
 import { writeClaimError, type WriteCoordinatorPort } from "./write-coordination.js";
+import type { ControlExecutionHandle, ControlExecutionPort } from "./execution-ledger.js";
 import type { TaskServiceRuntime } from "./service-runtime.js";
 
 /**
@@ -49,7 +50,8 @@ export type AgentServiceControlResult =
   | { ok: true; payload: { serviceId: string; action: "start" | "stop"; actor: "agent"; tier: PiPermission } }
   | { ok: false; error: string };
 
-export function runAgentServiceControl(input: {
+/** Input of one agent service control ([PiDock 04] #7). */
+export interface AgentServiceControlInput {
   services: TaskServiceRuntime;
   channel: AgentControlChannel;
   sessionId: string;
@@ -60,7 +62,35 @@ export function runAgentServiceControl(input: {
   write: WriteCoordinatorPort;
   /** Persists the channel snapshot after minting or spending (Host writes the session file). */
   persist: () => void;
-}): AgentServiceControlResult {
+  /**
+   * [PiDock 14] (#17) the task's execution ledger. Every agent control records
+   * one `service-control` execution carrying the gate's own outcome.
+   */
+  executions?: ControlExecutionPort;
+}
+
+/**
+ * Agent service control through the task's session gate. The execution record
+ * wraps the whole sequence, so every exit settles it; only the minted
+ * confirmation is bound here.
+ */
+export function runAgentServiceControl(input: AgentServiceControlInput): AgentServiceControlResult {
+  const record = input.executions?.record({
+    sessionId: input.sessionId,
+    kind: "service-control",
+    label: `服务${input.action === "start" ? "启动" : "停止"} ${input.serviceId}`,
+    step: `服务${input.action === "start" ? "启动" : "停止"}`,
+    approvalId: input.approvalId,
+  });
+  const result = performAgentServiceControl(input, record);
+  record?.settle(result.ok ? { ok: true } : { ok: false, reason: result.error });
+  return result;
+}
+
+function performAgentServiceControl(
+  input: AgentServiceControlInput,
+  record: ControlExecutionHandle | undefined,
+): AgentServiceControlResult {
   const tier = input.channel.currentPermission;
   const approvalId = input.approvalId;
   const liveApproval =
@@ -89,14 +119,10 @@ export function runAgentServiceControl(input: {
       try {
         const preview = input.channel.previewGate("exec.run", target);
         if (preview.verdict === "ask") {
-          const gate = input.channel.gate(
-            "exec.run",
-            target,
-            input.services.get(input.serviceId)?.templateVersion ?? "v1",
-            undefined,
-            SERVICE_CONTROL_SCOPE,
-          );
+          const contentVersion = input.services.get(input.serviceId)?.templateVersion ?? "v1";
+          const gate = input.channel.gate("exec.run", target, contentVersion, undefined, SERVICE_CONTROL_SCOPE);
           if (gate.verdict === "ask") {
+            record?.awaitApproval({ approvalId: gate.approvalId, payloadVersion: contentVersion, scope: SERVICE_CONTROL_SCOPE });
             input.persist();
             return { ok: false, error: `approval-required: ${gate.approvalId}` };
           }

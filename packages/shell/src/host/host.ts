@@ -1083,6 +1083,9 @@ async function performTaskOp(
             // [PiDock 09] (#11) box 3: a page change holds the task write right.
             write: host,
             persist: () => host.store.writeSession(host.taskDir, channel.snapshot()),
+            // [PiDock 14] (#17) the browser action opens its own execution
+            // record, so the gate's outcome is what `task/executionState` reads.
+            executions: host.controlExecutions,
           });
           return result.ok ? { ok: true, payload: result.payload } : { ok: false, error: result.error };
         }
@@ -1318,6 +1321,9 @@ async function performTaskOp(
             write: host,
             persist: () => host.store.writeSession(host.taskDir, channel.snapshot()),
             act: () => terminals.register(plan),
+            // [PiDock 14] (#17) the terminal control opens its own execution
+            // record, so the gate's outcome is what `task/executionState` reads.
+            executions: host.controlExecutions,
           });
         }
         // Stop: prove the exact process identity first (never by port), then
@@ -1353,6 +1359,7 @@ async function performTaskOp(
             if (!scope.ok) throw new Error(scope.error);
             return terminals.markExited(instanceId, { reason: "agent-request" });
           },
+          executions: host.controlExecutions,
         });
       }
       case "task/terminalState": {

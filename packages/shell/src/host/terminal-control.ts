@@ -22,6 +22,7 @@ import type { PiApproval, PiApprovalScope, PiGateDecision, PiPermission } from "
 import { TERMINAL_CONTROL_SCOPE } from "../main/pi-session.js";
 import { writeClaimError, type WriteCoordinatorPort } from "./write-coordination.js";
 import { channelExecutionClosing } from "./service-control.js";
+import type { ControlExecutionHandle, ControlExecutionPort } from "./execution-ledger.js";
 import type { TaskTerminalRegistry, TerminalInstanceRecord } from "../main/terminal-config.js";
 
 /**
@@ -109,7 +110,8 @@ export type AgentTerminalControlResult =
   | { ok: true; payload: { instanceId: string; action: "start" | "stop"; actor: "agent"; tier: PiPermission; instance: TerminalInstanceRecord } }
   | { ok: false; error: string };
 
-export function runAgentTerminalControl(input: {
+/** Input of one agent terminal control ([PiDock 10] #15). */
+export interface AgentTerminalControlInput {
   registry: TaskTerminalRegistry;
   channel: TerminalControlChannel;
   /** This Host's task folder: the approval target is bound to it. */
@@ -124,7 +126,35 @@ export function runAgentTerminalControl(input: {
   persist: () => void;
   /** Starts/registers the planned instance; returns the recorded instance. */
   act: () => TerminalInstanceRecord;
-}): AgentTerminalControlResult {
+  /**
+   * [PiDock 14] (#17) the task's execution ledger. Every agent control records
+   * one `terminal-control` execution carrying the gate's own outcome.
+   */
+  executions?: ControlExecutionPort;
+}
+
+/**
+ * Agent terminal control through the task's session gate. The execution record
+ * wraps the whole sequence, so every exit settles it; only the minted
+ * confirmation is bound here.
+ */
+export function runAgentTerminalControl(input: AgentTerminalControlInput): AgentTerminalControlResult {
+  const record = input.executions?.record({
+    sessionId: input.sessionId,
+    kind: "terminal-control",
+    label: `终端${input.action === "start" ? "启动" : "停止"} ${input.instanceId}`,
+    step: `终端${input.action === "start" ? "启动" : "停止"}`,
+    approvalId: input.approvalId,
+  });
+  const result = performAgentTerminalControl(input, record);
+  record?.settle(result.ok ? { ok: true } : { ok: false, reason: result.error });
+  return result;
+}
+
+function performAgentTerminalControl(
+  input: AgentTerminalControlInput,
+  record: ControlExecutionHandle | undefined,
+): AgentTerminalControlResult {
   const tier = input.channel.currentPermission;
   const approvalId = input.approvalId;
   const liveApproval =
@@ -147,6 +177,7 @@ export function runAgentTerminalControl(input: {
         if (preview.verdict === "ask") {
           const gate = input.channel.gate(TERMINAL_CONTROL_TOOL, target, "v1", undefined, TERMINAL_CONTROL_SCOPE);
           if (gate.verdict === "ask") {
+            record?.awaitApproval({ approvalId: gate.approvalId, payloadVersion: "v1", scope: TERMINAL_CONTROL_SCOPE });
             input.persist();
             return { ok: false, error: `approval-required: ${gate.approvalId}` };
           }
