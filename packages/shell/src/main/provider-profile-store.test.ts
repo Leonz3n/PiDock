@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
-import { ProviderProfileStore, resolveProviderCredential } from "./provider-profile-store.js";
+import { ProviderProfileStore, SELECTION_VALUE_ROTATION_LIMITATION, resolveProviderCredential } from "./provider-profile-store.js";
 
 const SECRET = "sk-live-should-never-be-stored-0123456789";
 
@@ -107,4 +107,39 @@ it("never lets a name-like credential reference resolve an unrelated variable", 
   const { store: profiles } = store();
   expect(() => profiles.save({ ...input, authRef: "PIDOCK_PROVIDER_EXAMPLE;rm -rf /" })).toThrow();
   expect(() => profiles.save({ ...input, authRef: "PIDOCK_PROVIDER_EXAMPLE\nOPENAI_API_KEY" })).toThrow();
+});
+
+it("records the same-reference value rotation limitation on every persisted selection", () => {
+  const { dir, store: profiles } = store();
+  const created = profiles.save(input);
+  profiles.select("task-1", created.id);
+  // #46: the digest pins the credential reference *name*, so a rotated value
+  // behind that name is undetectable and changes neither endpoint nor
+  // generation. The persisted record must state this limitation itself.
+  const raw = readFileSync(join(dir, "provider-profiles.json"), "utf8");
+  expect(raw).toMatch(/rotation/i);
+  expect(raw).toMatch(/generation/i);
+  const note = profiles.list().selections[0]?.note ?? "";
+  expect(note).toMatch(/rotation/i);
+  expect(note).toMatch(/not detected/i);
+  expect(note).toMatch(/generation/i);
+});
+
+it("keeps a pre-note selection document readable and refuses a contradicting note", () => {
+  const { dir, store: profiles } = store();
+  const created = profiles.save(input);
+  profiles.select("task-1", created.id);
+  const file = join(dir, "provider-profiles.json");
+  const good = readFileSync(file, "utf8");
+  const stripped = JSON.parse(good);
+  delete stripped.selections[0].note;
+  // No migration: an existing record without the note stays readable.
+  writeFileSync(file, JSON.stringify(stripped));
+  expect(profiles.list().selections[0]?.note).toBeUndefined();
+  // A record that claims a different limitation is foreign, not trusted.
+  stripped.selections[0].note = "nothing to disclose";
+  writeFileSync(file, JSON.stringify(stripped));
+  expect(() => profiles.list()).toThrow();
+  writeFileSync(file, good);
+  expect(profiles.list().selections[0]?.note).toBe(SELECTION_VALUE_ROTATION_LIMITATION);
 });
