@@ -277,6 +277,9 @@ export function DesktopProvidersPage({
         <p className="mt-2 text-xs text-muted">
           保留对话历史与工具结果。执行中切换不会被接受；累计 Token 仍按实际调用的 Provider 记录。
         </p>
+        <p className="mt-2 text-xs text-muted" data-testid="providers-rotation-limitation">
+          已知限制：同一凭据引用名背后的取值轮换不会被检测——更换环境变量取值不改变已选端点或配置代际，也不会使既有会话绑定失效。
+        </p>
       </section>
     </div>
   );

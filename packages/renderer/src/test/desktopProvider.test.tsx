@@ -100,6 +100,17 @@ it("keeps the binding-stale warning in the Host's own words", async () => {
   expect(screen.getByTestId("providers-state")).toHaveTextContent("重新选用同一份配置也无法恢复");
 });
 
+it("discloses that value rotation behind the same reference name is not detected", async () => {
+  bridge(async () => ({ state: "configured", profileId: profile.id, generation: 1, profiles: [profile] }));
+  page();
+  await waitFor(() => expect(screen.getByTestId("providers-state")).toHaveTextContent("已配置"));
+  // #46: the digest pins the reference *name*, so a rotated value behind the
+  // same name is undetectable and does not change endpoint or generation. The
+  // limitation must be stated in the UI, not only in delivery records.
+  expect(screen.getByText(/取值轮换[^。]*不[^。]*检测/)).toBeInTheDocument();
+  expect(screen.getByText(/不改变[^。]*(端点|配置代际)/)).toBeInTheDocument();
+});
+
 it("refuses a malformed status payload rather than showing an unverified state", async () => {
   bridge(async () => ({ state: "configured", profileId: "PIDOCK_PROVIDER_EXAMPLE", generation: 1, profiles: [{ ...profile, id: "not-a-profile-id", credential: SECRET }] }));
   page();
