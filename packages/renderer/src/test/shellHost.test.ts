@@ -827,4 +827,76 @@ describe("attention bridging", () => {
     expect(await adapter.getAttention()).toEqual(await fallback.getAttention());
     vi.unstubAllGlobals();
   });
+
+  it("[PiDock 14] (#17) reads one session's persisted executions through task/executionState", async () => {
+    const seen: Array<{ taskId: string; op: string; payload?: Record<string, unknown> }> = [];
+    stubBridge(async (taskId, op, payload) => {
+      seen.push({ taskId, op, payload });
+      if (op !== "task/executionState") return { ok: false, error: "task-unbound" };
+      return {
+        ok: true,
+        payload: {
+          workspaceId: "workspace-a",
+          taskId,
+          op,
+          payload: {
+            state: {
+              session: "pending-approval",
+              services: [{ serviceId: "saas-web", state: "running" }],
+              executions: [
+                {
+                  executionId: "exec-7",
+                  taskId,
+                  sessionId: "main",
+                  kind: "service-control",
+                  label: "服务启动 saas-web",
+                  state: "pending-approval",
+                  version: 2,
+                  startedAt: "2026-09-22T10:00:00.000Z",
+                  updatedAt: "2026-09-22T10:00:00.000Z",
+                  steps: [{ stepId: "control", label: "服务启动", state: "pending" }],
+                  attempts: [],
+                  draftKept: false,
+                  approval: {
+                    approvalId: "approval-4",
+                    status: "pending",
+                    scope: "service-control",
+                    payloadVersion: "v12",
+                    requestedAt: "2026-09-22T10:00:00.000Z",
+                  },
+                },
+              ],
+            },
+          },
+        },
+      };
+    });
+    const adapter = resolveHostAdapter(createMemoryHost());
+    const view = await adapter.sessionExecutionState("release", "main");
+    expect(seen).toEqual([{ taskId: "release", op: "task/executionState", payload: { sessionId: "main" } }]);
+    expect(view).toMatchObject({
+      session: "pending-approval",
+      services: [{ serviceId: "saas-web", state: "running" }],
+      executions: [{ executionId: "exec-7", kind: "service-control", approval: { approvalId: "approval-4" } }],
+    });
+    vi.unstubAllGlobals();
+  });
+
+  it("[PiDock 14] (#17) keeps no readout when the Host refuses or answers an unrecognizable payload", async () => {
+    stubBridge(async (_taskId, op) => (op === "task/executionState" ? { ok: false, error: "unknown-task" } : { ok: true, payload: {} }));
+    const fallback = createMemoryHost();
+    const adapter = resolveHostAdapter(fallback);
+    expect(await adapter.sessionExecutionState("release", "main")).toBeNull();
+    vi.unstubAllGlobals();
+
+    // A recognized envelope with an unparsable readout must not become an empty
+    // ledger: the memory projection (which owns none) answers instead.
+    stubBridge(async (_taskId, op) =>
+      op === "task/executionState"
+        ? { ok: true, payload: { workspaceId: "workspace-a", taskId: "release", op, payload: { state: { session: "not-a-state" } } } }
+        : { ok: true, payload: {} },
+    );
+    expect(await resolveHostAdapter(fallback).sessionExecutionState("release", "main")).toBeNull();
+    vi.unstubAllGlobals();
+  });
 });

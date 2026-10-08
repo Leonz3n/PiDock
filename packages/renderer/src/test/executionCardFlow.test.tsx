@@ -1,12 +1,15 @@
-import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
+import { App } from "../App";
+import type { HostAdapter } from "../data/hostAdapter";
+import { createMemoryHost } from "../data/memoryHost";
 import type { RunState } from "../data/types";
 import { sessionKeyOf } from "../data/sessionKey";
 import { useEventsStore } from "../stores/events";
 import { useHostStore } from "../stores/host";
 import { useUiStore } from "../stores/ui";
-import { actStore, renderApp } from "./helpers";
+import { actStore, renderApp, resetRenderer } from "./helpers";
 
 /**
  * [UI 对齐 05] (#29) 会话执行状态卡。
@@ -268,5 +271,47 @@ describe("execution card", () => {
     expect(within(card).queryByTestId("execution-readonly-hint")).toBeNull();
     // The dismissal never happens while the entry is disabled.
     expect(useUiStore.getState().dismissedExecutions["release:archived-1"]).toBeUndefined();
+  });
+
+  it("[PiDock 14] (#17) reads the Host's persisted execution when the live run record is gone", async () => {
+    // 刷新后事件流里的运行记录不再存在；这条回退让卡片说 Host 真正持久化的执行，
+    // 而不是一个可能过期的会话状态（`task/executionState`）。
+    resetRenderer("/projects/atlas/tasks/latency?session=main");
+    const base = createMemoryHost();
+    const adapter: HostAdapter = new Proxy(base, {
+      get: (target, property, receiver) =>
+        property === "sessionExecutionState"
+          ? async () => ({
+              session: "failed" as const,
+              services: [],
+              executions: [
+                {
+                  executionId: "exec-9",
+                  kind: "browser-action" as const,
+                  label: "页面变更 page/navigate",
+                  state: "failed" as const,
+                  version: 3,
+                  startedAt: "2026-09-22T08:00:00.000Z",
+                  updatedAt: "2026-09-22T08:00:09.000Z",
+                  steps: [{ stepId: "control", label: "浏览器操作 page/navigate", state: "failed" as const }],
+                  attempts: [],
+                  draftKept: true,
+                  failureReason: "页面不可用",
+                },
+              ],
+            })
+          : Reflect.get(target, property, receiver),
+    });
+    act(() => {
+      useHostStore.setState({ adapter });
+    });
+    render(<App />);
+    await screen.findByRole("heading", { name: "排查延迟峰值" });
+    // The session itself is idle, so only the Host readout can put the failed
+    // card (and its persisted step trail) on screen.
+    const card = await screen.findByRole("region", { name: "会话执行状态" });
+    expect(within(card).getByTestId("execution-card-state")).toHaveTextContent("失败");
+    expect(card).toHaveTextContent("页面不可用");
+    expect(within(card).getByTestId("execution-steps")).toHaveTextContent("浏览器操作 page/navigate");
   });
 });

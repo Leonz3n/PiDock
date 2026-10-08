@@ -18,6 +18,7 @@ export function resetRenderer(path = "/") {
       attention: [],
       approvals: [],
       usage: [],
+      executions: {},
       status: "loading",
       error: undefined,
     });

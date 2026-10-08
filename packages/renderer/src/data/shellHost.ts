@@ -37,6 +37,7 @@ import type {
   WriteOrphanView,
 } from "./types";
 import { attentionItemFromHost, asHostAttentionItem } from "./attentionRules";
+import { executionStateFromHost, type SessionExecutionView } from "./executionLedger";
 import {
   attentionThroughShell,
   markAttentionReadThroughShell,
@@ -46,6 +47,7 @@ import {
   controlServiceThroughShell,
   controlTerminalThroughShell,
   deliveryInfoThroughShell,
+  executionStateThroughShell,
   fileDiffThroughShell,
   filePreviewThroughShell,
   fileRootsThroughShell,
@@ -1191,6 +1193,24 @@ export function createShellHostAdapter(fallback: HostAdapter): HostAdapter {
           const fallback = await (target as HostAdapter)[property](taskId).then(() => null).catch((error: unknown) => error);
           if (fallback === null) return;
           throw shellResultError(result, archived ? "归档失败，请重试" : "恢复失败，请重试");
+        };
+      }
+      if (property === "sessionExecutionState") {
+        return async (taskId: string, sessionId: string): Promise<SessionExecutionView | null> => {
+          if (!isShellConnected()) return (target as HostAdapter).sessionExecutionState(taskId, sessionId);
+          let result: ShellTaskOpResult;
+          try {
+            result = await executionStateThroughShell({ taskId, sessionId });
+          } catch {
+            result = { ok: false };
+          }
+          if (result.ok) {
+            // A recognized readout replaces the projection; an unrecognizable
+            // payload keeps `null` so the page holds its current source.
+            const view = executionStateFromHost(result.payload);
+            if (view !== null) return view;
+          }
+          return (target as HostAdapter).sessionExecutionState(taskId, sessionId);
         };
       }
       if (property === "lifecycleState") {

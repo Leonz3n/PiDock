@@ -678,6 +678,23 @@ export async function attentionThroughShell(taskId: string): Promise<ShellTaskOp
 }
 
 /**
+ * [PiDock 14] (#17) 会话执行读数：the Host answers with its own persisted
+ * executions (steps, attempts, the confirmation it waits on) plus the service
+ * states it observed itself. A read only: no write right, no session change and
+ * no replay is involved.
+ */
+export async function executionStateThroughShell(input: {
+  taskId: string;
+  sessionId: string;
+}): Promise<ShellTaskOpResult> {
+  try {
+    return await shellTaskOp(input.taskId, "task/executionState", { sessionId: input.sessionId });
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
  * [PiDock 17] (#19 box 5) 读取完成清除未读: the Host clears only the unread ids and
  * returns the 待处理 ones it kept.
  */

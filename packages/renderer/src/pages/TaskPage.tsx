@@ -60,6 +60,7 @@ import {
   pendingApprovalsFor,
   type ExecutionAction,
 } from "./executionView";
+import { runRecordFromExecutionState } from "../data/executionLedger";
 import { sessionKeyOf } from "../data/sessionKey";
 import {
   conversationBadge,
@@ -1008,8 +1009,19 @@ function useExecutionCardView(taskId: string, sessionId: string) {
   const runs = useEventsStore((state) => state.runs);
   const approvals = useHostStore((state) => state.approvals);
   const dismissed = useUiStore((state) => state.dismissedExecutions[key]);
+  // [PiDock 14] (#17) the Host's persisted execution readout of this session:
+  // after a refresh the live run record is gone, so the card falls back to what
+  // the Host recorded — its steps, its failure reason and the confirmation it
+  // waits on. A *completed* record is left to the session state the card already
+  // shows, so a finished control action never pops a new card on its own.
+  const execution = useHostStore((state) => state.executions[key]);
+  const loadExecutionState = useHostStore((state) => state.loadExecutionState);
+  useEffect(() => {
+    void loadExecutionState(taskId, sessionId);
+  }, [loadExecutionState, taskId, sessionId]);
   if (!session) return null;
-  const record = runs[key];
+  const ledgerRecord = runRecordFromExecutionState(taskId, sessionId, execution);
+  const record = runs[key] ?? (ledgerRecord !== undefined && ledgerRecord.state !== "completed" ? ledgerRecord : undefined);
   const pending = pendingApprovalsFor(approvals, taskId, sessionId);
   const approval = pending[0];
   const state = executionStateOf({

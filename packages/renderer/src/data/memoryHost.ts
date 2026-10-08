@@ -69,6 +69,7 @@ import type {
   UsageFilter,
 } from "./hostAdapter";
 import { sessionKeyOf } from "./sessionKey";
+import type { SessionExecutionView } from "./executionLedger";
 import { attentionClearsOnRead } from "./attentionRules";
 import { validateRuleText } from "./scheduleRules";
 import { describeUsageCleanupScope, filterUsageRecords, usageWindow } from "./usageState";
@@ -1272,6 +1273,15 @@ class MemoryHost implements HostAdapter {
 
   async getRun(taskId: string, sessionId: string) {
     return this.runs[sessionKeyOf(taskId, sessionId)];
+  }
+
+  /**
+   * [PiDock 14] (#17) the in-memory projection owns no persisted execution
+   * ledger: it reports `null` so the page keeps the approvals + live run events
+   * it already has instead of showing invented execution records.
+   */
+  async sessionExecutionState(_taskId: string, _sessionId: string): Promise<SessionExecutionView | null> {
+    return null;
   }
 
   async getAttention(): Promise<AttentionItem[]> {
