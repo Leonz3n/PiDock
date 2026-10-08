@@ -602,6 +602,22 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   清理浮层支持导出选择、执行清理并展示回执与恢复条目；`shellHost` 把
   `archiveTask`/`restoreTask`/`previewCleanup`/`runCleanup`/`lifecycleState`
   接到 Host op（Host 拒绝时内存投影兜底，两侧都拒绝时暴露 Host 错误）。
+- **关窗后台策略（盒子 1）**：`main/application-lifecycle.ts` 注册真实
+  `close`/`activate`/`window-all-closed`/`before-quit` 处理器：`darwin` 的关窗
+  `preventDefault` 并隐藏已有窗口（Agent 与服务继续运行），Dock `activate` 恢复并
+  聚焦同一窗口（不重建绑定、不新建窗口）；`window-all-closed` 只在
+  `backgroundPolicyFor(platform).windowClosedContinues === false` 的平台走有序停止，
+  明确退出仍先 `quitAll` 再 `disposeAll`。`main.ts` 生产路径不再有任何无条件
+  `schedules.stop()/client.dispose()/child.kill()/tasks.disposeAll()`。
+- **控制类执行记录（盒子 1，配合 #19）**：`runAgentServiceControl`／
+  `runAgentBrowserAction`／`runAgentTerminalControl` 三类 Host 驱动控制各自经注入的
+  `ControlExecutionPort`（`TaskWorkspaceHost.controlExecutions`）开设执行记录：铸出确认
+  即 `pending-approval` 并绑定确认（用途 scope 与载荷版本），拒绝且未执行落 `failed`，
+  真正执行完才 `done`；`approve()` 只消费确认、不代替控制动作完成记录，控制动作重试
+  以 `approvalId` 复用同一行（被拒绝后重新请求才另开一行）。renderer 侧
+  `data/executionLedger.ts` 解析 `task/executionState`，`stores/host` 的
+  `loadExecutionState` + 会话执行状态卡消费它：刷新后事件流里的运行记录已消失时，
+  卡片改说 Host 真正持久化的执行（步骤、失败原因、等待确认）。
 - **盒子状态**：盒子 4（进程身份）、5（Git 身份）、6（归档保留与可恢复）、8（清理与
   归档相互独立）、9（身份确认后才移除）、10（归档／恢复不清零不重复计数）、12（清理
   只移除身份确认的任务内链接且不跟随链接）的规则与 Host 状态已覆盖；盒子 2／3／7／11
@@ -609,8 +625,9 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   见残留）。
 - **残留（未测／未实现）**：真实进程树终止未接线（Host 只结束登记的派生执行记录，
   `stopProcessTree` 经 `host.endDerivedExecution`，无真实 spawner 可供 kill）；真实
-  Electron 关窗后台常驻与退出恢复 E2E 未运行（`window-all-closed` 仍 dispose Host，
-  盒子 1 只到 `backgroundPolicyFor` 规则层，非 darwin 平台标注为不可用）；浏览器持久
+  Electron 关窗后台常驻与退出恢复 E2E 未运行（关窗保留窗口／`activate` 重开／
+  `window-all-closed` 分平台已接线并有 Electron 边界夹具测试，但没有真实 GUI 走查，
+  非 darwin 平台因无托盘入口仍标注为不可用）；浏览器持久
   分区数据的移除由 main 持有，Host 侧 `delegateCleanup("browser")` 未接线时失败关闭
   并保留恢复入口（清理因此是「局部失败＋保留登记」）；整份工作副本的**物理**拷贝未实现
   （当前以「保留位置＋导出核验」实现），`undelivered`（未推送／未交付）判定无交付台账
@@ -711,9 +728,11 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   已完成步骤与尝试逐字保留（不回滚）。
 - **盒子状态**：盒子 1–6 的规则层、Host 接线与 renderer 镜像均在单测/流程测试下覆盖；
   盒子 2 的「服务与会话分开」在 Host 读取路径按自己的 service runtime 观测实现。
-  仍属**未测／未实现**：service-control／browser-action／terminal-control 这三类
-  Host 驱动操作**尚未**各自开设执行记录（当前只有服务侧状态投影与回合/压缩记录）；
-  `task/executionState` 目前没有 renderer 消费方（页面只用 `task/attention`）；
+  service-control／browser-action／terminal-control 三类 Host 驱动控制各自开设执行记录
+  （`ControlExecutionPort`，见 #17 章节），renderer 由 `data/executionLedger.ts` 消费
+  `task/executionState`（会话执行状态卡）。
+  仍属**未测／未实现**：service-control 的生产派发仍按 #7 的所有者决策失败关闭
+  （`service-execution-unavailable`），因此该类的记录只在控制序列与 Host 接缝层有测试；
   真实模型调用、真实子进程与浏览器操作、Electron 走查与跨平台运行未执行；
   「载荷版本」没有真实内容生产者，版本复核因此只在同一版本上通过（规则层的
   不匹配路径由单测锁定）；自动化（定时）入口尚未用它建立执行记录。
