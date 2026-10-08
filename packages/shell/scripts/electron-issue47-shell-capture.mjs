@@ -22,9 +22,11 @@ import { createTrustedWindow, loadTrustedViews, PerTaskHostRegistry, registerIpc
 import { ProviderProfileStore } from "../dist/main/provider-profile-store.js";
 import { ProviderWiring } from "../dist/main/provider-ipc.js";
 import { HostClient } from "../dist/rpc/host-client.js";
+import { shutdownTestRegistry } from "./shutdown-test-registry.mjs";
 
 const CREDENTIAL = "issue47-synthetic-credential-0123456789";
 const AUTH_REF = "PIDOCK_PROVIDER_ISSUE47";
+const PRIVATE_VALUE = "synthetic-config-preview-secret-87654321";
 const output = process.argv.includes("--out") ? process.argv[process.argv.indexOf("--out") + 1] : tmpdir();
 const root = mkdtempSync(join(tmpdir(), "pidock-issue47-capture-"));
 const profile = join(root, "profile"), taskRoot = join(root, "tasks"), taskDir = join(taskRoot, "task-abcdef12");
@@ -34,6 +36,9 @@ const taskId = "task-abcdef12";
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const children = [];
 const watchdog = setTimeout(() => { console.error("ISSUE47_CAPTURE_TIMEOUT", root); process.exit(1); }, 60000);
+// Test-only guard: prevent Electron's default quit racing the explicit
+// app.exit(process.exitCode) with a false-pass exit 0.
+app.on("window-all-closed", () => {});
 let views, registry, server;
 
 function startProvider() {
@@ -97,6 +102,17 @@ async function run() {
     writeFileSync(join(sourceRepo, "README.md"), "# invoice-service 源仓库\n");
     const project = await projects.create({ name: "Adder", description: "微服务开发工作台", repositories: [{ name: "invoice-service", path: sourceRepo }], directories: [] });
     await projects.claim(taskId, project.id, index);
+    // Fix the service-owner catalog before the first Host bootstrap. The strict
+    // owner snapshot is a single revision for the Host lifetime, so the saved
+    // template/binding and its private environment reference must exist before
+    // any task op forks the utilityProcess. The missing-reference preview is
+    // checked from trusted main with an empty environment, then the synthetic
+    // value is installed and kept unchanged through shutdown.
+    const serviceTemplate = catalog.saveTemplate({ projectId: project.id, descriptor: { name: "invoice-local", program: "node", args: ["server.js"], ports: [4100], runType: "long-lived" }, shared: [{ key: "PORT", value: "4100", secret: false }] });
+    catalog.bindTask({ taskId, serviceId: serviceTemplate.serviceId, templateVersion: 1, rootId: "invoice-service", subdir: "", programPath: process.execPath, privateRefs: [{ key: "API_TOKEN", envRef: "PIDOCK_SERVICE_CAPTURE_TOKEN" }] });
+    const blockedPreview = catalog.previewSavedConfig(project.id, taskId, serviceTemplate.serviceId, {});
+    if (blockedPreview.state !== "blocked" || blockedPreview.error !== "private-reference-unavailable") throw Error("missing private reference preview unavailable before bootstrap");
+    process.env["PIDOCK_SERVICE_CAPTURE_TOKEN"] = PRIVATE_VALUE;
     views = await createTrustedWindow("issue47", "production");
     // The capture injects a trusted test picker result; native dialog interaction is manual acceptance.
     registerIpc({}, views.registry, registry, projects, index, undefined, undefined, providers, catalog, async () => process.execPath);
@@ -207,28 +223,25 @@ async function run() {
       rows: await evalJs("document.querySelectorAll('[data-usage-row]').length"),
     };
     await clickSelector('[data-testid=desktop-shell] button[title="环境与服务"]');
-    await until((body) => body.includes("环境清单未接线") && body.includes("Host 尚未提供项目环境") && body.includes("该项目尚未保存服务模板"), "environment page");
+    await until((body) => body.includes("环境清单未接线") && body.includes("Host 尚未提供项目环境") && body.includes("invoice-local") && body.includes("任务绑定"), "environment page");
+    const serviceTemplates = catalog.listTemplates(project.id);
+    if (serviceTemplates.length !== 1 || serviceTemplates[0]?.descriptor.name !== "invoice-local") throw Error("service template not persisted");
+    // Exercise the real creation form and review state, then cancel it: the
+    // saved binding above is the catalog revision the Host owns, so this run
+    // must not add another revision after bootstrap.
     await click("添加服务");
-    await fill("服务名称", "invoice-local");
+    await fill("服务名称", "invoice-local-review");
     await fill("程序名", "node");
     await fill("参数 1", "server.js");
     await click("添加共享变量");
     await fill("共享变量 KEY 1", "PORT");
     await fill("共享变量 VALUE 1", "4100");
     await click("核对保存");
-    await click("确认保存");
-    await until((body) => body.includes("invoice-local") && body.includes("任务绑定"), "persisted service template");
-    const serviceTemplates = catalog.listTemplates(project.id);
-    if (serviceTemplates.length !== 1 || serviceTemplates[0]?.descriptor.name !== "invoice-local") throw Error("service template not persisted");
+    shots.push(await capture("service-template-form", 1440, 900, '[aria-label="服务启动配方"]'));
+    shots.push(await capture("service-template-form", 720, 560, '[aria-label="服务启动配方"]'));
+    await click("取消");
+    await until((body) => body.includes("invoice-local") && body.includes("任务绑定"), "saved service template");
     await click("任务绑定");
-    await until((body) => body.includes("工作副本") && body.includes("核对任务绑定"), "binding form");
-    await click("添加私有引用");
-    await fill("私有 KEY 1", "API_TOKEN");
-    await fill("本机环境引用 1", "PIDOCK_SERVICE_CAPTURE_TOKEN");
-    shots.push(await capture("service-binding-form", 1440, 900, '[aria-label="invoice-local任务绑定"]'));
-    shots.push(await capture("service-binding-form", 720, 560, '[aria-label="invoice-local任务绑定"]'));
-    await click("核对任务绑定");
-    await click("选择程序并保存绑定");
     await until((body) => body.includes("已绑定 · v1 · invoice-service"), "persisted task binding");
     const serviceBindings = new ServiceCatalog(profile, serviceCatalogAuthority(index, projects)).listTask(taskId);
     if (serviceBindings.length !== 1 || serviceBindings[0]?.binding.rootId !== "invoice-service" ||
@@ -238,18 +251,12 @@ async function run() {
     shots.push(await capture("service-binding-saved", 1440, 900, '[aria-label="invoice-local任务绑定"]'));
     shots.push(await capture("service-binding-saved", 720, 560, '[aria-label="invoice-local任务绑定"]'));
     await click("读取配置预览");
-    await until((body) => body.includes("本机私有引用缺失或无效"), "missing private reference preview");
-    shots.push(await capture("config-preview-blocked", 720, 560, '[aria-label="保存配置预览"]'));
-    const privateValue = "synthetic-config-preview-secret-87654321";
-    process.env["PIDOCK_SERVICE_CAPTURE_TOKEN"] = privateValue;
-    await click("读取配置预览");
     await until((body) => body.includes("••••••••") && body.includes("本机私有配置") && body.includes("4100"), "masked saved configuration preview");
     const preview = catalog.previewSavedConfig(project.id, taskId, serviceTemplates[0].serviceId, process.env);
-    if (JSON.stringify(preview).includes(privateValue) || (await text()).includes(privateValue) ||
-        readFileSync(join(profile, "service-machine.json"), "utf8").includes(privateValue)) throw Error("preview secret leaked");
+    if (JSON.stringify(preview).includes(PRIVATE_VALUE) || (await text()).includes(PRIVATE_VALUE) ||
+        readFileSync(join(profile, "service-machine.json"), "utf8").includes(PRIVATE_VALUE)) throw Error("preview secret leaked");
     shots.push(await capture("config-preview", 1440, 900, '[aria-label="保存配置预览"]'));
     shots.push(await capture("config-preview", 720, 560, '[aria-label="保存配置预览"]'));
-    delete process.env["PIDOCK_SERVICE_CAPTURE_TOKEN"];
     await click("任务绑定");
     shots.push(await capture("environment-page", 1440, 900));
     shots.push(await capture("environment-page", 720, 560));
@@ -300,7 +307,7 @@ async function run() {
       error: await evalJs("document.querySelector('[data-testid=desktop-schedules-page] [role=alert]')?.innerText"),
     };
     await clickSelector('[data-testid=desktop-shell] button[title="需要处理"]');
-    await until((body) => body.includes("当前执行账本暂无需要处理的事项。"), "attention page");
+    await until((body) => body.includes("完成未读 · 1") && body.includes("查看 main 会话"), "attention page");
     shots.push(await capture("attention-page", 1440, 900));
     shots.push(await capture("attention-page", 720, 560));
     views.window.setContentSize(1440, 900);
@@ -380,11 +387,16 @@ async function run() {
   finally {
     clearTimeout(watchdog);
     server?.close();
-    registry?.disposeAll();
+    const cleanupFailures = await shutdownTestRegistry(registry, {
+      origin: views ? { kind: "shell-ui", senderWebContentsId: views.shellView.webContents.id } : undefined,
+      label: "Issue47 capture cleanup",
+    });
+    delete process.env["PIDOCK_SERVICE_CAPTURE_TOKEN"];
     for (const child of children) child.kill();
     if (views?.shellView.webContents.debugger.isAttached()) views.shellView.webContents.debugger.detach();
     views?.window.destroy();
     rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+    if (cleanupFailures.length) { console.error("ISSUE47_CAPTURE_CLEANUP_FAILED " + JSON.stringify(cleanupFailures)); process.exitCode = process.exitCode ?? 1; }
     app.exit(process.exitCode ?? 0);
   }
 }
