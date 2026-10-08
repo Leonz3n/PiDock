@@ -537,7 +537,7 @@ export class PerTaskHostRegistry {
       a.directoryDevice === b.directoryDevice && a.directoryInode === b.directoryInode;
   }
 
-  private verifyTaskClaim(entry: PerTaskHostEntry, bootstrapPayload?: Record<string, unknown>): void {
+  private verifyTaskClaim(entry: PerTaskHostEntry, bootstrapPayload?: Record<string, unknown>, requireCachedIdentity = false): void {
     const { taskId, taskDir } = entry;
     const current = this.resolveTaskDir(taskId);
     const fallback = bootstrapPayload
@@ -546,6 +546,7 @@ export class PerTaskHostRegistry {
     const resolved = current ?? fallback;
     if (resolved === null || normalizeTaskPath(resolved) !== normalizeTaskPath(taskDir)) this.taskMoved(taskId);
     const identity = this.identities.get(normalizeTaskPath(taskDir));
+    if (this.taskRoots && requireCachedIdentity && !identity) this.taskMoved(taskId);
     if (identity && !this.sameIdentity(identity, this.taskRoots?.verifiedIdentity(taskId) ?? null)) this.taskMoved(taskId);
   }
 
@@ -716,7 +717,7 @@ export class PerTaskHostRegistry {
           // a cached Host must not receive it after its task directory has
           // been replaced or re-created at the same path. Legacy no-index
           // seams keep the Host's own disk-identity refusal as their guard.
-          if (this.taskRoots) this.verifyTaskClaim(entry);
+          if (this.taskRoots) this.verifyTaskClaim(entry, undefined, true);
           await this.prepareServices(entry);
           const result = await entry.client.task({
             workspaceId: this.workspaceId, taskId: entry.taskId,

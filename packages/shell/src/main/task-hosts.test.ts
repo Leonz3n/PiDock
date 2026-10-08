@@ -356,6 +356,50 @@ describe("PerTaskHostRegistry main shutdown admission", () => {
     } finally { rmSync(home, { recursive: true, force: true }); }
   });
 
+  it("fails closed on quit when a bootstrap Host has no cached indexed identity", async () => {
+    const { mkdirSync } = await import("node:fs");
+    const home = realpathSync(mkdtempSync(join(tmpdir(), "pidock-quit-missing-identity-")));
+    const root = join(home, "tasks");
+    mkdirSync(root, { recursive: true });
+    const taskId = "task-abcdef12";
+    const taskDir = join(root, taskId);
+    let resolved: string | null = null;
+    const taskRoots = {
+      inventory: () => ({ tasks: [], roots: [] }),
+      verifiedIdentity: vi.fn(() => null),
+      register: vi.fn(() => Promise.reject(new Error("index unavailable"))),
+    } as unknown as TaskRootIndex;
+    const calls: Array<{ taskId: string; op: string }> = [];
+    const transport = {
+      task: vi.fn(async (params: { taskId: string; op: string }) => {
+        calls.push({ taskId: params.taskId, op: params.op });
+        return params.op === "task/quit"
+          ? { ...QUIT_RESULT, taskId: params.taskId }
+          : { ...TASK_RESULT, taskId: params.taskId, op: params.op };
+      }),
+      onBrowserRequest: vi.fn(),
+      dispose: vi.fn(),
+    };
+    const registry = new PerTaskHostRegistry("workspace-a", async () => ({
+      client: transport as never, child: syntheticChild() as never,
+    }), () => resolved, undefined, taskRoots);
+    try {
+      await expect(registry.routeTaskOp({
+        taskId, op: "task/provision",
+        payload: { name: "Recovered", dirId: taskId, rootOverride: root, remoteBranch: "main", fetchedCommit: "abc123" },
+      })).rejects.toThrow("index unavailable");
+      resolved = taskDir;
+
+      const report = await registry.quitAll({ origin: QUIT_ORIGIN });
+      expect(report).toMatchObject({ ok: false, tasks: [{
+        taskId, ok: false, applied: [], failures: [], retainedTasks: [taskId],
+        error: expect.stringContaining("task-moved"),
+      }] });
+      expect(calls).toEqual([{ taskId, op: "task/provision" }]);
+      expect(() => registry.disposeAll()).toThrow("main-task-shutdown-unconfirmed");
+    } finally { rmSync(home, { recursive: true, force: true }); }
+  });
+
   it("refuses a stale indexed identity before dispatching quit and writes no lifecycle marker", async () => {
     const { mkdirSync, writeFileSync } = await import("node:fs");
     const home = realpathSync(mkdtempSync(join(tmpdir(), "pidock-quit-stale-identity-")));
