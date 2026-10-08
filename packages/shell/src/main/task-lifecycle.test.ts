@@ -321,7 +321,10 @@ describe("verifyCleanupTarget", () => {
     expect(verifyCleanupTarget("/Users/dev/pidock/tasks/task-bbbbbbbb/session.json", identity)).toMatchObject({ ok: false, code: "other-task" });
     expect(verifyCleanupTarget("/Users/dev/work/invoice-docs", identity)).toMatchObject({ ok: false, code: "outside-task" });
     // An in-task path that is not a recorded link is not a cleanable link.
-    expect(verifyCleanupTarget(`${TASK_DIR}/dir-unknown/spec.md`, identity)).toMatchObject({ ok: false, code: "outside-task" });
+    expect(verifyCleanupTarget(`${TASK_DIR}/dir-unknown/spec.md`, identity)).toMatchObject({ ok: false, code: "unknown-path" });
+    expect(verifyCleanupTarget(`${TASK_DIR}/dir-unknown`, identity)).toMatchObject({ ok: false, code: "unknown-path" });
+    expect(verifyCleanupTarget(`${TASK_DIR}/task.json`, identity)).toMatchObject({ ok: false, code: "unknown-path" });
+    expect(verifyCleanupTarget(`${TASK_DIR}/constructor`, identity)).toMatchObject({ ok: false, code: "unknown-path" });
   });
 
   it("does not let a `..` segment escape the task folder", () => {

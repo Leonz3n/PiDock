@@ -528,12 +528,9 @@ export function verifyCleanupTarget(path: string, identity: CleanupIdentityInput
   }
   const linkName = normalizePath(requested).slice(normalizePath(identity.taskDir).length + 1);
   if (linkName.length === 0) return { ok: true, kind: "task-dir", path: requested };
-  const recorded = identity.knownLinkNames[linkName];
+  const recorded = Object.prototype.hasOwnProperty.call(identity.knownLinkNames, linkName) ? identity.knownLinkNames[linkName] : undefined;
   if (recorded !== undefined) return { ok: true, kind: "in-task-link", path: requested };
-  if (linkName.includes("/")) {
-    return { ok: false, code: "outside-task", reason: `${requested} 不在任务根内的登记链接上，拒绝清理` };
-  }
-  return { ok: true, kind: "task-dir", path: requested };
+  return { ok: false, code: "unknown-path", reason: `${requested} 不是任务根或登记链接，拒绝清理` };
 }
 
 export type CleanupDisposition = "remove" | "keep-copy" | "keep";
