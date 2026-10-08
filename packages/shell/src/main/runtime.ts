@@ -712,6 +712,11 @@ export class PerTaskHostRegistry {
       await Promise.all([...this.byTaskDir.values()].map(async (entry) => {
         let task: TaskHostQuitResult;
         try {
+          // Quit is a lifecycle write. With the production task-root index,
+          // a cached Host must not receive it after its task directory has
+          // been replaced or re-created at the same path. Legacy no-index
+          // seams keep the Host's own disk-identity refusal as their guard.
+          if (this.taskRoots) this.verifyTaskClaim(entry);
           await this.prepareServices(entry);
           const result = await entry.client.task({
             workspaceId: this.workspaceId, taskId: entry.taskId,

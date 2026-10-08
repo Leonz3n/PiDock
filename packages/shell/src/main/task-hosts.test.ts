@@ -356,6 +356,61 @@ describe("PerTaskHostRegistry main shutdown admission", () => {
     } finally { rmSync(home, { recursive: true, force: true }); }
   });
 
+  it("refuses a stale indexed identity before dispatching quit and writes no lifecycle marker", async () => {
+    const { mkdirSync, writeFileSync } = await import("node:fs");
+    const home = realpathSync(mkdtempSync(join(tmpdir(), "pidock-quit-stale-identity-")));
+    const root = join(home, "tasks");
+    const taskId = "task-3b8f479a";
+    const taskDir = join(root, taskId);
+    const marker = join(home, "lifecycle-write.marker");
+    mkdirSync(taskDir, { recursive: true });
+    const record = JSON.stringify({
+      taskId, name: "Identity", dirId: taskId, root, taskDir,
+      branch: "task/main", remoteBranch: "main", baseCommit: "abc123", repos: [],
+      createdAt: "2026-09-22T10:00:00Z", updatedAt: "2026-09-22T10:00:00Z",
+    });
+    writeFileSync(join(taskDir, "task.json"), record);
+    try {
+      const index = new TaskRootIndex(join(home, "userData"), root);
+      const calls: Array<{ taskId: string; op: string }> = [];
+      const kill = vi.fn(), dispose = vi.fn();
+      const transport = {
+        task: vi.fn(async (params: { taskId: string; op: string }) => {
+          calls.push({ taskId: params.taskId, op: params.op });
+          if (params.op === "task/quit") writeFileSync(marker, "stale lifecycle write");
+          return params.op === "task/quit"
+            ? { ...QUIT_RESULT, taskId: params.taskId }
+            : { ...TASK_RESULT, taskId: params.taskId };
+        }),
+        onBrowserRequest: vi.fn(),
+        dispose,
+      };
+      const registry = new PerTaskHostRegistry("workspace-a", async () => ({
+        client: transport as never, child: syntheticChild(kill) as never,
+      }), (id) => index.resolve(id), undefined, index);
+      await registry.routeTaskOp({ taskId, op: "task/cancel", payload: {} });
+      const original = index.verifiedIdentity(taskId);
+      expect(original).not.toBeNull();
+
+      renameSync(taskDir, join(home, "original-task"));
+      mkdirSync(taskDir);
+      writeFileSync(join(taskDir, "task.json"), record);
+      expect(index.resolve(taskId)).toBe(taskDir);
+      expect(index.verifiedIdentity(taskId)?.directoryInode).not.toBe(original?.directoryInode);
+
+      const report = await registry.quitAll({ origin: QUIT_ORIGIN });
+      expect(report).toMatchObject({ ok: false, tasks: [{
+        taskId, ok: false, applied: [], failures: [], retainedTasks: [taskId],
+        error: expect.stringContaining("task-moved"),
+      }] });
+      expect(calls).toEqual([{ taskId, op: "task/cancel" }]);
+      expect(existsSync(marker)).toBe(false);
+      expect(() => registry.disposeAll()).toThrow("main-task-shutdown-unconfirmed");
+      expect(dispose).not.toHaveBeenCalled();
+      expect(kill).not.toHaveBeenCalled();
+    } finally { rmSync(home, { recursive: true, force: true }); }
+  });
+
   it("seals synchronously and inventories an accepted late fork without dispatching its business op", async () => {
     const started = deferred<void>(), ready = deferred<void>();
     const transport = fakeTransport(QUIT_RESULT), kill = vi.fn();
