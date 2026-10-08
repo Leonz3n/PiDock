@@ -11,6 +11,7 @@ import { TaskRootIndex } from "../dist/main/task-root-index.js";
 import { ProjectRegistry } from "../dist/main/project-registry.js";
 import { createTrustedWindow, loadTrustedViews, PerTaskHostRegistry, registerIpc } from "../dist/main/runtime.js";
 import { HostClient } from "../dist/rpc/host-client.js";
+import { shutdownTestRegistry } from "./shutdown-test-registry.mjs";
 
 const fixture = process.argv.includes("--test-provider");
 const root = mkdtempSync(join(tmpdir(), "pidock-issue45-gui-"));
@@ -21,6 +22,10 @@ const taskId = "task-abcdef12";
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const children = [];
 const watchdog = setTimeout(() => { console.error("ISSUE45_GUI_TIMEOUT", root); process.exit(1); }, 45000);
+// Test-only guard: a noop listener suppresses Electron's default quit on
+// window-all-closed, which would race the explicit app.exit(process.exitCode)
+// with a false-pass exit 0.
+app.on("window-all-closed", () => {});
 let views, registry;
 async function run() {
   try {
@@ -47,12 +52,21 @@ async function run() {
     };
     const read = () => evalJs("({text:document.body.innerText,scrollWidth:document.documentElement.scrollWidth,innerWidth:window.innerWidth})");
     const capture = async (label) => {
+      // Test-only display stabilization: an unfocused window can report
+      // "display surface not available" to capturePage.
+      views.window.show();
+      views.window.focus();
+      await wait(250);
       const screenshot = join(tmpdir(), `pidock-issue45-${fixture ? "test" : "production"}-${label}.png`);
       writeFileSync(screenshot, (await views.shellView.webContents.capturePage()).toPNG());
       return screenshot;
     };
     const until = async (match) => { for (let i = 0; i < 100; i++) { const state = await read(); if (match(state)) return state; await wait(100); } throw Error(`UI timeout: ${JSON.stringify(await read())}`); };
     const click = (name) => evalJs(`(() => { const button = [...document.querySelectorAll('button')].find(el => el.textContent.trim() === ${JSON.stringify(name)} || el.getAttribute('aria-label') === ${JSON.stringify(name)}); if (!button) throw Error('missing '+${JSON.stringify(name)}); button.click(); return true; })()`);
+    // Project overview is the intentional production landing view. Its task
+    // entry is the scoped 继续工作 card (also covered by renderer navigation
+    // tests), not the management-row 进入工作区 button.
+    const openOverviewTask = () => evalJs(`(() => { const card = document.querySelector('button[data-overview-task=${JSON.stringify(taskId)}]'); if (!card) throw Error('missing overview task card '+${JSON.stringify(taskId)}); card.click(); return true; })()`);
     const input = (text) => evalJs(`(() => { const el = document.querySelector('textarea[aria-label="消息"]'); const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set; setter.call(el, ${JSON.stringify(text)}); el.dispatchEvent(new Event('input',{bubbles:true})); return el.value; })()`);
     const dimensions = [[1440,900],[720,560]];
     for (const [width, height] of dimensions) {
@@ -64,16 +78,16 @@ async function run() {
       const list = await read();
       if (list.scrollWidth > list.innerWidth) throw Error(`list overflow ${JSON.stringify(list)}`);
       const listScreenshot = await capture(`list-${width}x${height}`);
-      await click("进入工作区");
+      await openOverviewTask();
       await until((state) => state.text.includes("尚未开始"));
       const conversation = await read();
       if (conversation.scrollWidth > conversation.innerWidth) throw Error(`conversation overflow ${JSON.stringify(conversation)}`);
       const screenshot = await capture(`conversation-${width}x${height}`);
       console.log("ISSUE45_GUI_VIEW=" + JSON.stringify({ fixture, content, shell: bounds, listOverflow: list.scrollWidth - list.innerWidth, conversationOverflow: conversation.scrollWidth - conversation.innerWidth, listScreenshot, screenshot }));
       await click("返回任务列表");
-      await until((state) => state.text.includes("进入工作区"));
+      await until((state) => state.text.includes("继续工作") && state.text.includes("SDK Desktop task"));
     }
-    await click("进入工作区");
+    await openOverviewTask();
     await until((state) => state.text.includes("尚未开始"));
     views.layout.addBrowser(views.taskBrowser);
     views.layout.browserChanged(views.taskBrowser);
@@ -99,11 +113,15 @@ async function run() {
   } catch (error) { console.error("ISSUE45_GUI_FAILED", error); process.exitCode = 1; }
   finally {
     clearTimeout(watchdog);
-    registry?.disposeAll();
+    const cleanupFailures = await shutdownTestRegistry(registry, {
+      origin: views ? { kind: "shell-ui", senderWebContentsId: views.shellView.webContents.id } : undefined,
+      label: "Desktop GUI test cleanup",
+    });
     for (const child of children) child.kill();
     if (views?.shellView.webContents.debugger.isAttached()) views.shellView.webContents.debugger.detach();
     views?.window.destroy();
     rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    if (cleanupFailures.length) { console.error("ISSUE45_GUI_CLEANUP_FAILED " + JSON.stringify(cleanupFailures)); process.exitCode = process.exitCode ?? 1; }
     app.exit(process.exitCode ?? 0);
   }
 }

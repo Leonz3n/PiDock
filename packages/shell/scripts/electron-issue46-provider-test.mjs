@@ -25,6 +25,7 @@ import { createTrustedWindow, loadTrustedViews, PerTaskHostRegistry, registerIpc
 import { ProviderProfileStore } from "../dist/main/provider-profile-store.js";
 import { ProviderWiring } from "../dist/main/provider-ipc.js";
 import { HostClient } from "../dist/rpc/host-client.js";
+import { shutdownTestRegistry } from "./shutdown-test-registry.mjs";
 
 const CREDENTIAL = "sk-issue46-synthetic-0123456789abcdef";
 const AUTH_REF = "PIDOCK_PROVIDER_ISSUE46";
@@ -40,6 +41,10 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const children = [];
 const received = [];
 const watchdog = setTimeout(() => { console.error("ISSUE46_E2E_TIMEOUT", root); process.exit(1); }, 60000);
+// Test-only guard: a noop listener suppresses Electron's default quit on
+// window-all-closed, which would race the explicit app.exit(process.exitCode)
+// with a false-pass exit 0.
+app.on("window-all-closed", () => {});
 let views, registry, server;
 
 /** Loopback OpenAI-compatible endpoint whose answer carries the credential. */
@@ -163,6 +168,11 @@ async function run() {
       if (!received[0].body.includes("issue46-model") || !received[0].url.endsWith("/v1/chat/completions")) throw Error(`unexpected request: ${JSON.stringify(received[0])}`);
       const hostEnv = readFileSync(join(profile, "provider-profiles.json"), "utf8");
       if (hostEnv.length === 0) throw Error("empty profile store");
+      // Test-only display stabilization: an unfocused window can report
+      // "display surface not available" to capturePage.
+      views.window.show();
+      views.window.focus();
+      await wait(250);
       const screenshot = join(tmpdir(), "pidock-issue46-configured.png");
       writeFileSync(screenshot, (await views.shellView.webContents.capturePage()).toPNG());
       console.log("ISSUE46_E2E=" + JSON.stringify({
@@ -187,11 +197,15 @@ async function run() {
   finally {
     clearTimeout(watchdog);
     server?.close();
-    registry?.disposeAll();
+    const cleanupFailures = await shutdownTestRegistry(registry, {
+      origin: views ? { kind: "shell-ui", senderWebContentsId: views.shellView.webContents.id } : undefined,
+      label: "Provider test cleanup",
+    });
     for (const child of children) child.kill();
     if (views?.shellView.webContents.debugger.isAttached()) views.shellView.webContents.debugger.detach();
     views?.window.destroy();
     if (!resumeRoot) { /* keep the root for the --resume pass */ }
+    if (cleanupFailures.length) { console.error("ISSUE46_E2E_CLEANUP_FAILED " + JSON.stringify(cleanupFailures)); process.exitCode = process.exitCode ?? 1; }
     app.exit(process.exitCode ?? 0);
   }
 }

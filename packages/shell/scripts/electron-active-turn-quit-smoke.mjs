@@ -12,6 +12,7 @@ import { buildHostEnv } from "../dist/host/host-guards.js";
 import { TaskRootIndex } from "../dist/main/task-root-index.js";
 import { PerTaskHostRegistry } from "../dist/main/runtime.js";
 import { HostClient } from "../dist/rpc/host-client.js";
+import { shutdownTestRegistry } from "./shutdown-test-registry.mjs";
 const home = mkdtempSync(join(tmpdir(), "pidock-active-turn-quit-")), profile = join(home, "profile"), root = join(home, "tasks");
 mkdirSync(profile); mkdirSync(root); app.setPath("userData", profile);
 const credential = "synthetic-active-turn-private-value", children = [], reports = [];
@@ -40,7 +41,7 @@ async function run() {
       });
     });
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-    registry = new PerTaskHostRegistry("active-turn-quit", async (workspace, task) => {
+    const makeRegistry = () => new PerTaskHostRegistry("active-turn-quit", async (workspace, task) => {
       const child = utilityProcess.fork(join(import.meta.dirname, "..", "dist", "host", "host-entry.js"), [], { serviceName: "active-turn-quit", env: buildHostEnv(process.env, workspace, task, profile), stdio: "pipe" });
       const h = { child, exited: false, output: "" }; children.push(h); child.once("exit", () => { h.exited = true; });
       child.stdout?.on("data", (data) => { h.output += data; }); child.stderr?.on("data", (data) => { h.output += data; });
@@ -48,7 +49,7 @@ async function run() {
     }, (id) => roots.resolve(id), undefined, roots);
     let index = 0;
     for (mode of ["active-stream", "before-first-delta", "provider-disconnect"]) {
-      stage = mode; const taskId = `task-0000000${++index}`, taskDir = join(root, taskId); mkdirSync(taskDir); execFileSync("git", ["init", "-q", taskDir]);
+      stage = mode; registry = makeRegistry(); const taskId = `task-0000000${++index}`, taskDir = join(root, taskId); mkdirSync(taskDir); execFileSync("git", ["init", "-q", taskDir]);
       writeFileSync(join(taskDir, "task.json"), serializeTaskRecord(buildTaskDiskRecord({ taskId, name: mode, dirId: taskId, branch: "main", root, taskDir, remoteBranch: "main", baseCommit: "fixture", repos: [], now: new Date().toISOString() })));
       const op = (name, payload) => registry.routeTaskOp({ workspaceId: "active-turn-quit", taskId, op: name, payload, origin: { kind: "shell-ui", senderWebContentsId: 1 } });
       await op("task/sdkProvider", { provider: { config: { profileId: "fixture", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, modelId: "fixture", contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_FIXTURE", generation: 1 }, credential } });
@@ -70,13 +71,25 @@ async function run() {
       assert.ok(jsonl.includes("active shutdown fixture"));
       for (const value of [JSON.stringify(journal), jsonl, JSON.stringify(events), children.map((h) => h.output).join("\n")]) assert.ok(!value.includes(credential));
       assert.equal(requests.filter((r) => r.mode === mode).length, 1);
+      // Strict per-mode shutdown seam: the synthetic test origin exercises
+      // the attested quitAll path; this mode's Host is already quit above and
+      // its receipt cached, so disposeAll observes the exit the fixture
+      // kill/wait below then records.
+      const modeCleanup = await shutdownTestRegistry(registry, { origin: { kind: "shell-ui", senderWebContentsId: 1 }, label: "Active SDK test cleanup" });
+      if (modeCleanup.length) { console.error("ACTIVE_TURN_QUIT_CLEANUP_FAILED " + JSON.stringify(modeCleanup)); process.exitCode = process.exitCode ?? 1; }
       const h = children.at(-1); h.child.kill(); await wait(() => h.exited, "test-host-cleanup");
       reports.push({ mode, electron: process.versions.electron, node: process.versions.node, providerRequests: 1, tools: hit.tools, streamClosed: true, journalState: journal.state, quitReceiptStable: true, lateAdmissionRefused: true, credentialExcluded: true });
     }
     console.log("ACTIVE_TURN_QUIT_OK", JSON.stringify(reports));
   } catch (error) { console.error("ACTIVE_TURN_QUIT_FAILED", stage, String(error).replaceAll(credential, "[redacted]").replaceAll(home, "[test-home]").slice(0, 300)); process.exitCode = 1; }
   finally {
-    clearTimeout(watchdog); registry?.disposeAll(); for (const h of children) if (!h.exited) h.child.kill();
+    clearTimeout(watchdog);
+    const cleanupFailures = await shutdownTestRegistry(registry, {
+      origin: { kind: "shell-ui", senderWebContentsId: 1 },
+      label: "Active SDK test cleanup",
+    });
+    if (cleanupFailures.length) { console.error("ACTIVE_TURN_QUIT_CLEANUP_FAILED " + JSON.stringify(cleanupFailures)); process.exitCode = process.exitCode ?? 1; }
+    for (const h of children) if (!h.exited) h.child.kill();
     server?.closeAllConnections(); await new Promise((resolve) => server ? server.close(resolve) : resolve());
     await Promise.all(children.map((h) => h.exited ? undefined : wait(() => h.exited, "cleanup-exit").catch(() => undefined)));
     rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }); app.exit(process.exitCode ?? 0);
