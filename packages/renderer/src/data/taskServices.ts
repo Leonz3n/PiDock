@@ -196,7 +196,14 @@ export async function loadTaskServices(taskId: string): Promise<TaskServicesLoad
   return { ok: true, projectId, rows, templatesError };
 }
 
-/** `Host` refusal text for a panel row, never a fabricated state. */
+/**
+ * `Host` refusal text for a panel row, never a fabricated state. A rejected
+ * `ipcRenderer.invoke` arrives wrapped in Electron's own plumbing prefix; that
+ * wrapper is stripped so the panel shows the Host's reason, not the channel.
+ */
+const INVOKE_WRAPPER = /^Error invoking remote method '[^']*':\s*(?:Error:\s*)?/;
+
 export function shellFailure(result: { error?: string }, fallback: string): string {
-  return typeof result.error === "string" && result.error.length > 0 ? result.error : fallback;
+  const text = typeof result.error === "string" ? result.error.replace(INVOKE_WRAPPER, "").trim() : "";
+  return text.length > 0 ? text : fallback;
 }
