@@ -40,7 +40,7 @@ const taskId = "task-abcdef12";
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const children = [];
 const received = [];
-const watchdog = setTimeout(() => { console.error("ISSUE46_E2E_TIMEOUT", root); process.exit(1); }, 60000);
+const watchdog = setTimeout(() => { console.error("ISSUE46_E2E_TIMEOUT", root); process.exit(1); }, 120000);
 // Test-only guard: a noop listener suppresses Electron's default quit on
 // window-all-closed, which would race the explicit app.exit(process.exitCode)
 // with a false-pass exit 0.
@@ -61,7 +61,10 @@ function startProvider() {
         response.write(chunk({ content: `echo ${CREDENTIAL.slice(0, 14)}` }));
         // The credential is split across two frames: a per-frame filter alone
         // would let the tail through the live stream.
-        response.write(chunk({ content: `${CREDENTIAL.slice(14)} ${ANSWER} ` }));
+        response.write(chunk({ content: `${CREDENTIAL.slice(14)}${body.includes("hold-open-cancel") ? " delta-holding " : ` ${ANSWER} `}` }));
+        // The cancel leg streams and then holds the connection open until the
+        // user stops the turn; a normal turn completes with usage.
+        if (body.includes("hold-open-cancel")) return;
         response.write(chunk({ content: CREDENTIAL }));
         response.write(`data: ${JSON.stringify({ id: `chatcmpl-${CREDENTIAL}`, object: "chat.completion.chunk", model: CREDENTIAL, choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 11, completion_tokens: 7, total_tokens: 18 } })}\n\n`);
         response.write("data: [DONE]\n\n");
@@ -128,6 +131,7 @@ async function run() {
       await until((body) => body.includes("Loopback"), "restored selection");
       const restored = await text();
       if (!restored.includes(ANSWER)) throw Error(`history lost on reopen: ${restored}`);
+      if (!restored.includes("please hold-open-cancel")) throw Error(`cancelled turn prompt lost on reopen: ${restored}`);
       if (restored.includes(CREDENTIAL)) throw Error("credential visible after reopen");
       console.log("ISSUE46_E2E_RESUME=" + JSON.stringify({ root, restored: true, historyKept: true, credentialVisible: false, credentialInJsonl: jsonl().includes(CREDENTIAL) }));
     } else {
@@ -164,6 +168,7 @@ async function run() {
       if (after.includes(CREDENTIAL)) throw Error("credential visible in the UI");
       if (log.includes(CREDENTIAL)) throw Error("credential persisted in SDK JSONL");
       if (!log.includes("hello provider")) throw Error("prompt missing from SDK JSONL");
+      if (!/"input":11[,}]/.test(log) || !/"output":7[,}]/.test(log)) throw Error(`usage missing from SDK JSONL: ${log.slice(0, 600)}`);
       if (received.length !== 1 || received[0].authorization !== `Bearer ${CREDENTIAL}`) throw Error(`loopback did not receive the explicit credential: ${JSON.stringify(received)}`);
       if (!received[0].body.includes("issue46-model") || !received[0].url.endsWith("/v1/chat/completions")) throw Error(`unexpected request: ${JSON.stringify(received[0])}`);
       const hostEnv = readFileSync(join(profile, "provider-profiles.json"), "utf8");
@@ -182,6 +187,30 @@ async function run() {
         overflow: (await evalJs("({scrollWidth:document.documentElement.scrollWidth,innerWidth:window.innerWidth})")),
       }));
       console.log("ISSUE46_E2E_JSONL=" + JSON.stringify(log.slice(0, 1200)));
+      // Box #46 loop: the user cancels an in-flight turn before the cold restart.
+      await type("please hold-open-cancel this turn");
+      await click("发送");
+      let stopShown = false;
+      for (let i = 0; i < 150 && !stopShown; i++) {
+        stopShown = await evalJs(`[...document.querySelectorAll('button')].some(el => el.textContent.trim() === '停止')`);
+        if (!stopShown) await wait(100);
+      }
+      if (!stopShown) throw Error("no stop button for the in-flight turn");
+      await until((body) => body.includes("delta-holding"), "delta before cancel");
+      await click("停止");
+      await until((body) => body.includes("执行已取消"), "cancelled terminal");
+      await wait(300);
+      const afterCancel = await text();
+      const cancelLog = jsonl();
+      if (afterCancel.includes(CREDENTIAL)) throw Error("credential visible after cancel");
+      if (cancelLog.includes(CREDENTIAL)) throw Error("credential persisted after cancel");
+      // The active turn's terminal state is persisted before shutdown; error
+      // frames keep only the bounded code, so the aborted entry records the
+      // terminal (not the staged partial text, which stays 暂存 only).
+      if (!/"stopReason":"aborted"/.test(cancelLog)) throw Error("cancelled terminal missing from SDK JSONL");
+      if (!cancelLog.includes("please hold-open-cancel")) throw Error("cancelled turn prompt missing from SDK JSONL");
+      if (received.length !== 2 || received[1].authorization !== `Bearer ${CREDENTIAL}`) throw Error(`cancel leg did not reach the loopback: ${JSON.stringify(received.map((row) => row.url))}`);
+      console.log("ISSUE46_E2E_CANCEL=" + JSON.stringify({ cancelled: true, terminalPersisted: true, credentialVisible: false, credentialInJsonl: false, providerHits: received.length }));
     }
     const quitRequest = `window.pidock.taskOp(${JSON.stringify(taskId)}, "task/quit", {label:"Provider shutdown check"})`;
     const quit = await evalJs(quitRequest), repeated = await evalJs(quitRequest);
