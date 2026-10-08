@@ -7,6 +7,14 @@
 // Only the Electron window/entry point belongs to the harness, exactly like
 // `electron-issue45-desktop-test.mjs`; no `memoryHost` fixture is involved.
 //
+// Fork env delta vs production `createHost`: the harness passes its isolated
+// default task root as `buildHostEnv`'s `defaultRoot` (PIDOCK_DEFAULT_ROOT), so
+// the Host's provision fallback matches the real default root. It deliberately
+// does NOT set `PIDOCK_SERVICE_OWNER_REQUIRED` — the harness registry wires no
+// service-owner inventory, so the marker would make the attested quit path fail
+// closed with `service-owner-shutdown-unconfirmed` (all sibling harnesses omit
+// it too); creation/provision semantics are unaffected by that marker.
+//
 // Run after `pnpm --filter @pidock/shell build`:
 //   PIDOCK_ISSUE42_ROOT=$(mktemp -d) electron scripts/electron-issue42-creation-test.mjs --phase=create
 //   PIDOCK_ISSUE42_ROOT=<same>       electron scripts/electron-issue42-creation-test.mjs --phase=reopen
@@ -75,8 +83,13 @@ async function main() {
     : projects.list().projects[0];
   if (!project) throw new Error("no registered Project to reopen");
   registry = new PerTaskHostRegistry("issue42", async (workspace, task) => {
+    // Production `createHost` also passes its default task root as `defaultRoot`
+    // (PIDOCK_DEFAULT_ROOT); the header documents the remaining service-owner
+    // env delta this harness keeps intentionally.
     const child = utilityProcess.fork(join(import.meta.dirname, "..", "dist", "host", "host-entry.js"), [], {
-      serviceName: "issue42-gui-host", env: buildHostEnv(process.env, workspace, task, app.getPath("userData")), stdio: "pipe",
+      serviceName: "issue42-gui-host",
+      env: buildHostEnv(process.env, workspace, task, app.getPath("userData"), taskRoot),
+      stdio: "pipe",
     });
     children.push(child);
     child.stderr?.on("data", (data) => process.stderr.write(`[issue42-host] ${data}`));
@@ -254,7 +267,7 @@ async function run() {
     // for the reopen phase.
     for (const failure of [...cleanupFailures, ...failures]) console.error(`ISSUE42_GUI_FAILURE ${phase}: ${failure}`);
     console.log(`ISSUE42_GUI_${phase.toUpperCase()}_RESULT=` + JSON.stringify({ phase, ok: failures.length === 0 && cleanupFailures.length === 0, failures, cleanupFailures }));
-    app.exit(failures.length === 0 ? 0 : 1);
+    app.exit(failures.length === 0 && cleanupFailures.length === 0 ? 0 : 1);
   }
 }
 
