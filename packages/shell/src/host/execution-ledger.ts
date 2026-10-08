@@ -42,6 +42,7 @@ import {
   verifyExternalResult,
   type ExecutionApprovalRef,
   type ExecutionAttentionItem,
+  type ControlExecutionKind,
   type ExecutionKind,
   type ExecutionLedgerRecord,
   type ExecutionRecord,
@@ -65,6 +66,43 @@ export interface ExecutionStateReadout {
   services: { serviceId: string; state: ServiceExecutionState }[];
   /** Newest first. */
   executions: ExecutionRecord[];
+}
+
+/**
+ * One Host-driven control operation's ledger record (盒子 1). The sequence that
+ * owns the gate also owns the record, so the readout says the same thing the
+ * gate decided: a minted confirmation leaves the record waiting, a refusal that
+ * executed nothing fails it, and only a performed action completes it.
+ *
+ * The handle is mutable on purpose: a refreshed confirmation (the previous one
+ * was rejected/expired and the Agent asks again) re-opens a record, so the
+ * settled history row is kept and the live wait lands on a new row.
+ */
+export interface ControlExecutionHandle {
+  /** Bind the confirmation this control now waits on. */
+  awaitApproval(input: { approvalId: string; payloadVersion: string; scope: PiApprovalScope }): void;
+  /** Settle the record for the outcome the gate returned. */
+  settle(result: { ok: true } | { ok: false; reason: string }): void;
+}
+
+/**
+ * The ledger slice a Host-driven control sequence records into. Injected (never
+ * imported) so the sequence stays testable without a Host, and a caller with no
+ * ledger simply records nothing.
+ */
+export interface ControlExecutionPort {
+  /**
+   * `approvalId` is the confirmation the caller is acting on, when it has one.
+   * A retry that spends a confirmation keeps the row that minted it instead of
+   * opening a second record for the same operation.
+   */
+  record(input: {
+    sessionId: string;
+    kind: ControlExecutionKind;
+    label: string;
+    step: string;
+    approvalId?: unknown;
+  }): ControlExecutionHandle;
 }
 
 export class TaskExecutionLedger {

@@ -23,6 +23,7 @@ import { browserApprovalTarget, browserToolForAction } from "../main/browser-rul
 import type { BrowserPerformResult } from "../rpc/protocol.js";
 import { writeClaimError, type WriteCoordinatorPort } from "./write-coordination.js";
 import { channelExecutionClosing, type AgentControlChannel } from "./service-control.js";
+import type { ControlExecutionHandle, ControlExecutionPort } from "./execution-ledger.js";
 
 /** The approval slice the browser verifier reads. */
 export interface BrowserApprovalLike {
@@ -147,16 +148,8 @@ export type AgentBrowserResult =
     }
   | { ok: false; error: string };
 
-/**
- * Agent browser action through the task's session gate.
- *
- * Order matters and is covered by `browser-control.test.ts`: the tier and
- * the approval come from the channel (never from the caller), the approval
- * is spent exactly once before the page is touched, a failed spend stops
- * the action, and every performed action is logged into the session so the
- * user can see what the Agent did to the page.
- */
-export async function runAgentBrowserAction(input: {
+/** Input of one agent browser action ([PiDock 06] #8). */
+export interface AgentBrowserActionInput {
   gateway: BrowserGatewayPort;
   channel: BrowserControlChannel;
   sessionId: string;
@@ -170,7 +163,44 @@ export async function runAgentBrowserAction(input: {
   /** Task write right ([PiDock 09] #11): claimed around the page change. */
   write: WriteCoordinatorPort;
   persist: () => void;
-}): Promise<AgentBrowserResult> {
+  /**
+   * [PiDock 14] (#17) the task's execution ledger. Every agent action records
+   * one `browser-action` execution: the gate's own outcome (a minted
+   * confirmation leaves it waiting, a refusal fails it, a performed action
+   * completes it) is what `task/executionState` then reports.
+   */
+  executions?: ControlExecutionPort;
+}
+
+/**
+ * Agent browser action through the task's session gate.
+ *
+ * Order matters and is covered by `browser-control.test.ts`: the tier and
+ * the approval come from the channel (never from the caller), the approval
+ * is spent exactly once before the page is touched, a failed spend stops
+ * the action, and every performed action is logged into the session so the
+ * user can see what the Agent did to the page.
+ *
+ * The execution record wraps the whole sequence so *every* exit settles it,
+ * and the sequence itself only binds the confirmation it mints.
+ */
+export async function runAgentBrowserAction(input: AgentBrowserActionInput): Promise<AgentBrowserResult> {
+  const record = input.executions?.record({
+    sessionId: input.sessionId,
+    kind: "browser-action",
+    label: `页面变更 ${input.action}`,
+    step: `浏览器操作 ${input.action}`,
+    approvalId: input.approvalId,
+  });
+  const result = await performAgentBrowserAction(input, record);
+  record?.settle(result.ok ? { ok: true } : { ok: false, reason: result.error });
+  return result;
+}
+
+async function performAgentBrowserAction(
+  input: AgentBrowserActionInput,
+  record: ControlExecutionHandle | undefined,
+): Promise<AgentBrowserResult> {
   // The gateway is wired per task; a mismatch would send this action to
   // another task's visible page, so it fails closed before any tier work.
   if (input.gateway.taskId !== input.taskId) {
@@ -204,8 +234,10 @@ export async function runAgentBrowserAction(input: {
       try {
         const preview = input.channel.previewGate(tool, target);
         if (preview.verdict === "ask") {
-          const gate = input.channel.gate(tool, target, input.contentVersion ?? "v1", undefined, BROWSER_CONTROL_SCOPE);
+          const contentVersion = input.contentVersion ?? "v1";
+          const gate = input.channel.gate(tool, target, contentVersion, undefined, BROWSER_CONTROL_SCOPE);
           if (gate.verdict === "ask") {
+            record?.awaitApproval({ approvalId: gate.approvalId, payloadVersion: contentVersion, scope: BROWSER_CONTROL_SCOPE });
             input.persist();
             return { ok: false, error: `approval-required: ${gate.approvalId}` };
           }

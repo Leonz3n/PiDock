@@ -21,9 +21,17 @@ import type { TaskPathProtection } from "./protected-application-path.js";
 import { PiSessionChannel, type PiPermission, type PiReportedUsage, type PiRunState, type PiSessionSnapshot, type PiTurnInput, type PiModelSwitchEvent, type PiSessionContextView, type PiUsageSource } from "../main/pi-session.js";
 import {
   TaskExecutionLedger,
+  type ControlExecutionHandle,
+  type ControlExecutionPort,
   type ExecutionStateReadout,
 } from "./execution-ledger.js";
-import type { ExecutionAttentionItem, ExecutionState, ServiceRunObservation } from "../main/execution-ledger.js";
+import { isControlExecutionKind } from "../main/execution-ledger.js";
+import type {
+  ControlExecutionKind,
+  ExecutionAttentionItem,
+  ExecutionState,
+  ServiceRunObservation,
+} from "../main/execution-ledger.js";
 import {
   TaskWriteCoordinator,
   writeClaimError,
@@ -404,6 +412,13 @@ export interface HostTurnResult {
   agentMessageId: string;
 }
 
+/**
+ * The single step a Host-driven control record plans ([PiDock 14] #17): the
+ * confirmation/execution of one control action, so the record shows the gate's
+ * outcome instead of an empty step trail.
+ */
+const CONTROL_EXECUTION_STEP_ID = "control";
+
 /** What the ledger's terminal states read as in an approve refusal message. */
 const SETTLED_APPROVAL_LABEL: Partial<Record<ExecutionState, string>> = {
   expired: "过期",
@@ -661,6 +676,73 @@ export class TaskWorkspaceHost {
       now: this.now,
     });
     this.remote = new TaskRemoteDevices(taskDir, store, { now, mintSecret });
+  }
+
+  private controlPort?: ControlExecutionPort;
+
+  /**
+   * [PiDock 14] (#17) the ledger slice the Host-driven control sequences record
+   * into. A service/browser/terminal control opens its own execution record, so
+   * `task/executionState` reports the same outcome the gate reached instead of
+   * only the session/service projections (盒子 1).
+   */
+  get controlExecutions(): ControlExecutionPort {
+    return (this.controlPort ??= { record: (input) => this.openControlExecution(input) });
+  }
+
+  private openControlExecution(input: {
+    sessionId: string;
+    kind: ControlExecutionKind;
+    label: string;
+    step: string;
+    approvalId?: unknown;
+  }): ControlExecutionHandle {
+    // Acting on a confirmation the Host already recorded (the Agent retry that
+    // spends it) must settle that row, not open a second record for the same
+    // operation: only a fresh attempt — no approval, or one nobody recorded —
+    // gets its own row.
+    const approvalId = typeof input.approvalId === "string" && input.approvalId.length > 0 ? input.approvalId : undefined;
+    const bound = approvalId === undefined ? undefined : this.executions.byApproval(input.sessionId, approvalId);
+    let executionId = bound?.executionId ?? this.openControlRow(input);
+    return {
+      awaitApproval: (approval) => {
+        // A settled row (rejected/expired/stopped) can never take a second
+        // confirmation: the user asked again, so this is a new attempt and gets
+        // its own row while the settled history stays readable.
+        const current = this.executions.byId(executionId);
+        if (current === undefined || (current.state !== "executing" && current.state !== "pending-approval")) {
+          executionId = this.openControlRow(input);
+        }
+        this.executions.awaitApproval(executionId, {
+          approvalId: approval.approvalId,
+          payloadVersion: approval.payloadVersion,
+          scope: approval.scope,
+        });
+      },
+      settle: (result) => {
+        const row = this.executions.byId(executionId);
+        if (row === undefined || (row.state !== "executing" && row.state !== "pending-approval")) return;
+        if (!result.ok) {
+          // A row waiting on a confirmation keeps waiting: the refusal executed
+          // nothing, and the confirmation is still the user's to decide. Only a
+          // control that really ran (or was refused before minting) fails.
+          if (row.state === "pending-approval") return;
+          this.executions.fail(executionId, result.reason);
+          return;
+        }
+        if (row.steps.some((step) => step.stepId === CONTROL_EXECUTION_STEP_ID && step.state === "pending")) {
+          this.executions.settleStep(executionId, { stepId: CONTROL_EXECUTION_STEP_ID, state: "done" });
+        }
+        this.executions.attempt(executionId, { endState: "completed" });
+        this.executions.complete(executionId);
+      },
+    };
+  }
+
+  private openControlRow(input: { sessionId: string; kind: ControlExecutionKind; label: string; step: string }): string {
+    const row = this.executions.open({ sessionId: input.sessionId, kind: input.kind, label: input.label });
+    this.executions.planStep(row.executionId, { stepId: CONTROL_EXECUTION_STEP_ID, label: input.step });
+    return row.executionId;
   }
 
   /**
@@ -1926,7 +2008,10 @@ export class TaskWorkspaceHost {
     this.settleApprovalClaim(sessionId);
     this.store.writeSession(this.taskDir, channel.snapshot());
     this.syncUsageLedger();
-    if (waiting) {
+    // A turn execution ends with its approval. A Host-driven control record
+    // ([PiDock 14] #17) waits for the *operation*: the Agent still has to send
+    // the confirmed action, and only that run completes the record.
+    if (waiting && !isControlExecutionKind(waiting.kind)) {
       this.executions.attempt(waiting.executionId, { endState: "completed", usageId: call.callId });
       this.executions.complete(waiting.executionId);
     }
