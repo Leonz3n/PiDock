@@ -75,6 +75,30 @@ export function performServiceConfigPreview(
   return store.previewSavedConfig(input["projectId"], input["taskId"], input["serviceId"], env);
 }
 
+/**
+ * One start/stop request for a task-bound service ([PiDock 04] #7). Main
+ * resolves the trusted catalog launch itself; the page names only the
+ * project, task and service, so it can never supply a program, cwd or value.
+ */
+export interface ServiceRunRequest {
+  taskId: string;
+  projectId: string;
+  serviceId: string;
+  action: "start" | "stop";
+}
+
+export function parseServiceRunRequest(request: unknown): ServiceRunRequest {
+  if (!record(request) || Buffer.byteLength(JSON.stringify(request)) > 4096) {
+    throw new TrustDomainViolation("invalid-payload", "invalid service run request");
+  }
+  const input = shape(request, ["op", "projectId", "taskId", "serviceId", "action"]);
+  if (input["op"] !== "runTaskService" || typeof input["projectId"] !== "string" || typeof input["taskId"] !== "string" ||
+      typeof input["serviceId"] !== "string" || (input["action"] !== "start" && input["action"] !== "stop")) {
+    throw new TrustDomainViolation("invalid-payload", "invalid service run request");
+  }
+  return { taskId: input["taskId"], projectId: input["projectId"], serviceId: input["serviceId"], action: input["action"] };
+}
+
 /** A shell-only, project-scoped human editing surface. No execution ops. */
 export function performServiceCatalogOperation(
   store: Pick<ServiceCatalog, "listTemplates" | "saveTemplate">, request: unknown,

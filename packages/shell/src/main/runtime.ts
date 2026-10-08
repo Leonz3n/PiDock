@@ -35,7 +35,7 @@ import { shutdownDeadline } from "../host/shutdown-deadline.js";
 import { ProjectRegistry } from "./project-registry.js";
 import { ServiceCatalog, serviceCatalogAuthority } from "./service-catalog.js";
 import { InstalledServiceHostAuthority } from "./service-host-binding.js";
-import { performServiceBindingOperation, performServiceCatalogOperation, performServiceConfigPreview } from "./service-catalog-ipc.js";
+import { performServiceBindingOperation, performServiceCatalogOperation, performServiceConfigPreview, parseServiceRunRequest } from "./service-catalog-ipc.js";
 import { performProjectOperation } from "./project-ipc.js";
 import type { ProviderWiring } from "./provider-ipc.js";
 import { ProjectTaskCreation } from "./project-task-creation.js";
@@ -935,6 +935,42 @@ export function createTaskBrowserCapability(input: {
   return { surfaces, registry };
 }
 
+/**
+ * Resolve the trusted launch for one task-bound service and drive the task
+ * Host with it ([PiDock 04] #7): register the descriptor/layers/pinned
+ * version, then start or stop through `task/controlService`. Registration
+ * failure stops the sequence - main never asks the Host to control a
+ * service it could not describe. Both ops carry the same main-built
+ * `service-catalog` origin; neither the page nor the Host may supply it.
+ */
+async function runTaskService(
+  tasks: Pick<PerTaskHostRegistry, "routeTaskOp">,
+  catalog: ServiceCatalog,
+  request: ReturnType<typeof parseServiceRunRequest>,
+  event: IpcMainInvokeEvent,
+): Promise<Record<string, unknown>> {
+  const launch = catalog.launchFor(request.taskId, request.projectId, request.serviceId, process.env);
+  const origin = { kind: "service-catalog", senderWebContentsId: event.sender.id } as const;
+  try {
+    await tasks.routeTaskOp({
+      taskId: request.taskId,
+      op: "task/registerService",
+      payload: { serviceId: launch.serviceId, descriptor: launch.descriptor, layers: launch.layers, templateVersion: String(launch.templateVersion) },
+      origin,
+    });
+  } catch (error) {
+    // A failed registration never becomes a control request.
+    throw new Error(`服务登记失败，未发起启停：${error instanceof Error ? error.message : String(error)}`);
+  }
+  const controlled = await tasks.routeTaskOp({
+    taskId: request.taskId,
+    op: "task/controlService",
+    payload: { serviceId: launch.serviceId, action: request.action, label: "环境配置页" },
+    origin,
+  });
+  return controlled.payload;
+}
+
 export function registerIpc(
   client: HostClient,
   registry: TrustDomainRegistry,
@@ -1303,6 +1339,16 @@ export function registerIpc(
       if (!catalog) return { ok: false as const, error: "服务配方目录尚未接入" };
       if (payload && typeof payload === "object" && (payload as Record<string, unknown>)["op"] === "previewConfig") {
         return { ok: true as const, payload: performServiceConfigPreview(catalog, payload, process.env) };
+      }
+      // [PiDock 04] (#7) start/stop one task-bound service. Main resolves the
+      // trusted persisted catalog launch (program path, pinned argv, cwd,
+      // private values) itself and drives the task Host; the page only names
+      // project/task/service. The `service-catalog` origin is main-built, so
+      // nothing the page sends can register an executable launch.
+      if (payload && typeof payload === "object" && (payload as Record<string, unknown>)["op"] === "runTaskService") {
+        if (!tasks) return { ok: false as const, error: "任务 Host 尚未接入" };
+        const request = parseServiceRunRequest(payload);
+        return { ok: true as const, payload: await runTaskService(tasks, catalog, request, event) };
       }
       if (payload && typeof payload === "object" && ["bind", "taskBindings"].includes(String((payload as Record<string, unknown>)["op"]))) {
         const url = event.sender.getURL();
