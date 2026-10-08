@@ -18,7 +18,7 @@ import { buildHostEnv } from "../dist/host/host-guards.js";
 import { TaskRootIndex } from "../dist/main/task-root-index.js";
 import { ProjectRegistry } from "../dist/main/project-registry.js";
 import { ServiceCatalog, serviceCatalogAuthority } from "../dist/main/service-catalog.js";
-import { createTrustedWindow, loadTrustedViews, PerTaskHostRegistry, registerIpc } from "../dist/main/runtime.js";
+import { createTaskBrowserCapability, createTrustedWindow, loadTrustedViews, PerTaskHostRegistry, registerIpc } from "../dist/main/runtime.js";
 import { ProviderProfileStore } from "../dist/main/provider-profile-store.js";
 import { ProviderWiring } from "../dist/main/provider-ipc.js";
 import { HostClient } from "../dist/rpc/host-client.js";
@@ -81,13 +81,24 @@ async function run() {
     const index = new TaskRootIndex(profile, taskRoot);
     const projects = new ProjectRegistry(profile);
     const catalog = new ServiceCatalog(profile, serviceCatalogAuthority(index, projects));
+    views = await createTrustedWindow("issue47", "production");
+    // Main-owned task browser capability ([PiDock 06] #8), wired exactly like the
+    // production entry so a renderer `task/browserAction` really reaches the
+    // gateway. No task frontend origin is configured here, so the Host must
+    // refuse `page/open` by allowlist instead of creating a page view that would
+    // cover the shell in every later screenshot.
+    const browsers = createTaskBrowserCapability({
+      window: views.window, trust: views.registry, workspaceId: "issue47",
+      originsFor: () => [],
+      ...(views.layout ? { layout: views.layout } : {}),
+    });
     registry = new PerTaskHostRegistry("issue47", async (workspace, task) => {
       const entry = join(import.meta.dirname, "..", "dist", "host", "host-entry.js");
       const child = utilityProcess.fork(entry, [], { serviceName: "issue47-host", env: buildHostEnv(process.env, workspace, task, app.getPath("userData")), stdio: "pipe" });
       children.push(child);
       child.stderr?.on("data", (data) => process.stderr.write(`[issue47-host] ${data}`));
       return { child, client: new HostClient(child) };
-    }, (id) => index.resolve(id), undefined, index);
+    }, (id) => index.resolve(id), browsers.registry, index);
     const profiles = new ProviderProfileStore(profile);
     const providers = new ProviderWiring(profiles, async (id, provider, senderWebContentsId) => {
       const payload = provider === null ? { provider: null } : { provider: { config: profiles.config(provider.profileId), credential: provider.credential } };
@@ -113,7 +124,12 @@ async function run() {
     const blockedPreview = catalog.previewSavedConfig(project.id, taskId, serviceTemplate.serviceId, {});
     if (blockedPreview.state !== "blocked" || blockedPreview.error !== "private-reference-unavailable") throw Error("missing private reference preview unavailable before bootstrap");
     process.env["PIDOCK_SERVICE_CAPTURE_TOKEN"] = PRIVATE_VALUE;
-    views = await createTrustedWindow("issue47", "production");
+    // The service-owner snapshot main bootstraps into each task Host. Record it
+    // (or its real failure) so the 运行 panel's state column can be traced back
+    // to the inventory the Host was actually given.
+    let serviceOwnerSnapshot = { ok: false, error: "not-probed" };
+    try { serviceOwnerSnapshot = { ok: true, serviceIds: catalog.ownerSnapshot(taskId, "issue47", process.env).entries.map((entry) => entry.serviceId) }; }
+    catch (error) { serviceOwnerSnapshot = { ok: false, error: error instanceof Error ? error.message : String(error) }; }
     // The capture injects a trusted test picker result; native dialog interaction is manual acceptance.
     registerIpc({}, views.registry, registry, projects, index, undefined, undefined, providers, catalog, async () => process.execPath);
     await loadTrustedViews(views);
@@ -205,6 +221,49 @@ async function run() {
     };
     await click("关闭面板");
     shots.push(await capture("workspace-turn", 720, 560));
+    // S8d: 运行/日志/浏览器 panels. 运行 reads the task's real project service
+    // bindings + template descriptors + the Host's own `task/serviceStatus`;
+    // 日志 reads `task/serviceLog`; 浏览器 issues a real `task/browserAction
+    // page/open` that the Host's navigation allowlist refuses (no task origins
+    // are configured here), so no page view is created over the shell.
+    await click("运行");
+    await until((body) => body.includes("本任务服务"), "runtime panel");
+    await until(async () => (await evalJs("document.querySelectorAll('[data-service-id]').length")) > 0, "runtime service rows");
+    await wait(200);
+    shots.push(await capture("workspace-runtime", 1440, 900));
+    shots.push(await capture("workspace-runtime", 720, 560));
+    const runtimePanel = {
+      rows: await evalJs("[...document.querySelectorAll('[data-service-id]')].map(el => el.innerText.replace(/\\n+/g,' | '))"),
+      unwired: await evalJs("[...document.querySelectorAll('[data-unwired]')].map(el => el.getAttribute('data-unwired'))"),
+    };
+    await click("关闭面板");
+    await click("日志");
+    await until((body) => body.includes("运行日志"), "logs panel");
+    await until(async () => (await evalJs("Boolean(document.querySelector('[data-testid=dock-log-error]') || document.querySelector('[data-testid=dock-log-lines]') || document.querySelector('[data-testid=dock-log-empty]'))")), "logs answer");
+    await wait(200);
+    shots.push(await capture("workspace-logs", 1440, 900));
+    shots.push(await capture("workspace-logs", 720, 560));
+    const logsPanel = {
+      services: await evalJs("document.querySelector('[data-testid=dock-log-services]')?.innerText"),
+      error: await evalJs("document.querySelector('[data-testid=dock-log-error]')?.innerText"),
+      lines: await evalJs("document.querySelectorAll('[data-testid=dock-log-lines] li').length"),
+    };
+    await click("关闭面板");
+    await click("浏览器");
+    await until((body) => body.includes("任务页面"), "browser panel");
+    await fill("任务页面地址", "http://127.0.0.1:5173/");
+    await click("打开任务页面");
+    await until((body) => body.includes("打开任务页面") && !body.includes("正在读取"), "browser open attempt");
+    await until(async () => (await evalJs("document.querySelector('[data-testid=dock-browser-notice]')?.innerText"))?.includes(":") === true, "browser refusal notice");
+    await wait(200);
+    shots.push(await capture("workspace-browser", 1440, 900));
+    shots.push(await capture("workspace-browser", 720, 560));
+    const browserPanel = {
+      notice: await evalJs("document.querySelector('[data-testid=dock-browser-notice]')?.innerText"),
+      opened: await evalJs("Boolean(document.querySelector('[data-testid=dock-browser-page]'))"),
+      unwired: await evalJs("[...document.querySelectorAll('[data-unwired]')].map(el => el.getAttribute('data-unwired'))"),
+    };
+    await click("关闭面板");
     // S8e: the real 模型与 Provider page (composer entry → page) and the real
     // 项目总览 page, both from the production shell.
     views.window.setContentSize(1440, 900);
@@ -385,6 +444,10 @@ async function run() {
       archive,
       archiveFlow,
       overview,
+      runtimePanel,
+      logsPanel,
+      browserPanel,
+      serviceOwnerSnapshot,
       providerState: await evalJs("document.querySelector('[data-testid=provider-state]')?.textContent"),
       jsonlBytes: readdirSync(join(taskDir, ".pidock-sdk-sessions", "main")).filter((name) => name.endsWith(".jsonl"))
         .reduce((sum, name) => sum + readFileSync(join(taskDir, ".pidock-sdk-sessions", "main", name), "utf8").length, 0),

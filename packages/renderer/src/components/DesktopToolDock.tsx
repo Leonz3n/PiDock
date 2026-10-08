@@ -94,7 +94,7 @@ export const DESKTOP_TOOL_CONTROLS_UNWIRED: Record<string, string> = {
   "browser-marks": "页面标记与验证记录入口未接线到生产面板",
 };
 
-const shellError = (result: { error?: string }, fallback: string) => result.error ?? fallback;
+const shellError = shellFailure;
 
 const SERVICE_STATE_TEXT: Record<ServiceStatusView["kind"], Record<string, string>> = {
   owner: { stopped: "已停止", starting: "启动中", running: "运行中", stopping: "停止中", exited: "已退出", unconfirmed: "终止未确认" },
