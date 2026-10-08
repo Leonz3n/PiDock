@@ -172,6 +172,53 @@ describe("[PiDock 14] (#17) control-class execution records", () => {
     expect(f.rows("terminal-control")).toHaveLength(1);
   });
 
+  it("records the operation that really ran when a retry with the same approval id reuses a failed row", () => {
+    const f = setup("default");
+    f.serviceControl();
+    const approvalId = f.pendingId();
+    f.host.approve("main", approvalId);
+    expect(f.rows("service-control")).toMatchObject([{ state: "executing" }]);
+    // Another session holds the task write right, so the first retry is refused
+    // before it can spend the confirmation: the bound row fails while the
+    // confirmation stays approved and unconsumed.
+    const held = f.host.claimWrite("other", "default", { kind: "turn", label: "另一会话" });
+    if (!held.ok) throw new Error("write right not granted");
+    const blocked = f.serviceControl({ approvalId });
+    expect(blocked.ok).toBe(false);
+    expect(blocked.ok ? "" : blocked.error).toContain("task-locked");
+    expect(f.rows("service-control")).toMatchObject([{ state: "failed" }]);
+    // The right is free again: the same confirmation really starts the service,
+    // so the performed operation must read done instead of keeping the failed row.
+    f.host.releaseWrite(held.claimId);
+    const acted = f.serviceControl({ approvalId });
+    expect(acted.ok).toBe(true);
+    expect(f.rows("service-control")).toMatchObject([
+      { state: "done", steps: [{ stepId: "control", state: "done" }], attempts: [{ endState: "completed" }] },
+      { state: "failed" },
+    ]);
+  });
+
+  it("records an auto-tier retry that runs with a stale terminal approval id instead of nothing", () => {
+    const f = setup("default");
+    f.serviceControl();
+    const approvalId = f.pendingId();
+    f.host.approve("main", approvalId);
+    // The refused retry settles the bound row before the confirmation is spent.
+    const held = f.host.claimWrite("other", "default", { kind: "turn", label: "另一会话" });
+    if (!held.ok) throw new Error("write right not granted");
+    expect(f.serviceControl({ approvalId }).ok).toBe(false);
+    expect(f.rows("service-control")).toMatchObject([{ state: "failed" }]);
+    f.host.releaseWrite(held.claimId);
+    // The user raised the session to auto: the still-live confirmation runs
+    // without a new ask, yet the row it was bound to is already terminal.
+    f.host.setPermission("main", "auto");
+    expect(f.serviceControl({ approvalId }).ok).toBe(true);
+    expect(f.rows("service-control")).toMatchObject([
+      { state: "done", attempts: [{ endState: "completed" }] },
+      { state: "failed" },
+    ]);
+  });
+
   it("rejects a control confirmation through the ledger and opens a fresh row when the Agent asks again", async () => {
     const f = setup("default");
     await f.serviceControl();

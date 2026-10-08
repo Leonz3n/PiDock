@@ -720,8 +720,19 @@ export class TaskWorkspaceHost {
         });
       },
       settle: (result) => {
-        const row = this.executions.byId(executionId);
-        if (row === undefined || (row.state !== "executing" && row.state !== "pending-approval")) return;
+        let row = this.executions.byId(executionId);
+        if (row === undefined || (row.state !== "executing" && row.state !== "pending-approval")) {
+          // The bound row is already settled. A refusal before the spend (the
+          // task write right, a closing Host) failed it while the confirmation
+          // stayed approved and unconsumed, so the same id can still authorize a
+          // real run. A refused replay records nothing, but an operation that
+          // really ran settles its own fresh row instead of keeping the failed
+          // (or absent) record for work that happened.
+          if (!result.ok) return;
+          executionId = this.openControlRow(input);
+          row = this.executions.byId(executionId);
+          if (row === undefined) return;
+        }
         if (!result.ok) {
           // A row waiting on a confirmation keeps waiting: the refusal executed
           // nothing, and the confirmation is still the user's to decide. Only a
