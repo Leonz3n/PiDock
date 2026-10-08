@@ -303,14 +303,15 @@ function TaskConversation({ taskId, name, roots, association, onBack, onOpenProv
   const recentTokens = reportedMessages.reduce((sum, message) => sum + message.usage!.input + message.usage!.output, 0);
   const unreportedReplies = usageSnapshot?.messages.filter((message) => message.role === "assistant" && message.usage === null).length ?? 0;
   const usageDetail = `最近最多 80 条 SDK 消息；不是会话累计，可能不含更早用量。${unreportedReplies ? `${unreportedReplies} 条助手消息未报告用量。` : ""}`;
-  // S8d: `文件`/`终端` are wired to real Host ops; the rest stay visible but
-  // unwired, with the Host-side reason instead of a silent no-op.
-  const toolIcons: { icon: "file" | "terminal" | "server" | "globe" | "chart" | "link"; tool?: DesktopTool; unwiredId?: string; label: string }[] = [
-    { icon: "server", unwiredId: "runtime", label: "运行" },
-    { icon: "globe", unwiredId: "browser", label: "浏览器" },
+  // S8d: all six prototype-A tools open a real Host panel (文件/终端/协议/运行/日志/浏览器).
+  // `DESKTOP_TOOLS_UNWIRED` remains the registry for any tool that loses its
+  // Host path; a listed tool stays visible but opens the explicit 未接线 state.
+  const toolIcons: { icon: "file" | "terminal" | "server" | "globe" | "chart" | "link"; tool: DesktopTool; label: string }[] = [
+    { icon: "server", tool: "runtime", label: "运行" },
+    { icon: "globe", tool: "browser", label: "浏览器" },
     { icon: "file", tool: "files", label: "文件" },
     { icon: "terminal", tool: "terminal", label: "终端" },
-    { icon: "chart", unwiredId: "logs", label: "日志" },
+    { icon: "chart", tool: "logs", label: "日志" },
     { icon: "link", tool: "protocol", label: "协议" },
   ];
   // The provider is mounted here as well as at the app root: this component is
@@ -347,13 +348,16 @@ function TaskConversation({ taskId, name, roots, association, onBack, onOpenProv
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1 pb-1">
-          {toolIcons.map((item) => item.tool
-            ? <Button key={item.icon} type="button" variant={tool === item.tool ? "secondary" : "ghost"} size="icon-sm" onClick={() => setTool(tool === item.tool ? null : item.tool!)} aria-pressed={tool === item.tool} title={`${item.label}面板（真实 Host）`} aria-label={item.label}><Icon name={item.icon} /></Button>
-            : <Tooltip key={item.icon}><TooltipTrigger asChild>
-                <Button type="button" variant="ghost" size="icon-sm" onClick={() => setUnwired(item.label)} aria-label={`${item.label}（未接线）`} className="text-[#b3b9be]"><Icon name={item.icon} /></Button>
-              </TooltipTrigger>
-              <TooltipContent>{`${item.label}未接线：${DESKTOP_TOOLS_UNWIRED.find((entry) => entry.id === item.unwiredId)?.reason ?? ""}`}</TooltipContent>
-            </Tooltip>)}
+          {toolIcons.map((item) => {
+            const unwiredReason = DESKTOP_TOOLS_UNWIRED.find((entry) => entry.id === item.tool)?.reason;
+            return unwiredReason === undefined
+              ? <Button key={item.icon} type="button" variant={tool === item.tool ? "secondary" : "ghost"} size="icon-sm" onClick={() => setTool(tool === item.tool ? null : item.tool)} aria-pressed={tool === item.tool} title={`${item.label}面板（真实 Host）`} aria-label={item.label}><Icon name={item.icon} /></Button>
+              : <Tooltip key={item.icon}><TooltipTrigger asChild>
+                  <Button type="button" variant="ghost" size="icon-sm" onClick={() => setUnwired(item.label)} aria-label={`${item.label}（未接线）`} className="text-[#b3b9be]"><Icon name={item.icon} /></Button>
+                </TooltipTrigger>
+                <TooltipContent>{`${item.label}未接线：${unwiredReason}`}</TooltipContent>
+              </Tooltip>;
+          })}
           <div className="relative">
             <Button type="button" variant="ghost" size="icon-sm" aria-label="任务操作" aria-expanded={taskMenu} onClick={() => setTaskMenu((open) => !open)}><Icon name="more" /></Button>
             {taskMenu && <div className="absolute top-full right-0 z-20 min-w-[150px] rounded-[7px] border border-line bg-paper p-1 shadow-sm">
