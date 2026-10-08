@@ -94,8 +94,6 @@ export const DESKTOP_TOOL_CONTROLS_UNWIRED: Record<string, string> = {
   "browser-marks": "页面标记与验证记录入口未接线到生产面板",
 };
 
-const shellError = shellFailure;
-
 const SERVICE_STATE_TEXT: Record<ServiceStatusView["kind"], Record<string, string>> = {
   owner: { stopped: "已停止", starting: "启动中", running: "运行中", stopping: "停止中", exited: "已退出", unconfirmed: "终止未确认" },
   registry: { stopped: "已停止", running: "运行中" },
@@ -212,7 +210,7 @@ function FilesTool({ taskId }: { taskId: string }) {
       setBusy(false);
       if (!result.ok) {
         setTree(null);
-        setError(shellError(result, "读取目录失败"));
+        setError(shellFailure(result, "读取目录失败"));
         return;
       }
       const view = workspaceTreeFromHost(result.payload);
@@ -234,7 +232,7 @@ function FilesTool({ taskId }: { taskId: string }) {
       if (!live) return;
       if (!result.ok) {
         setRoots([]);
-        setError(shellError(result, "读取任务文件根失败"));
+        setError(shellFailure(result, "读取任务文件根失败"));
         return;
       }
       const parsed = workspaceRootsFromHost(result.payload);
@@ -266,7 +264,7 @@ function FilesTool({ taskId }: { taskId: string }) {
     if (!result.ok) {
       setPreview(null);
       setDiff(null);
-      setError(shellError(result, "读取文件失败"));
+      setError(shellFailure(result, "读取文件失败"));
       return;
     }
     const view = workspacePreviewFromHost(result.payload);
@@ -287,7 +285,7 @@ function FilesTool({ taskId }: { taskId: string }) {
     setBusy(false);
     if (!result.ok) {
       setDiff(null);
-      setError(shellError(result, "读取改动失败"));
+      setError(shellFailure(result, "读取改动失败"));
       return;
     }
     const view = workspaceDiffFromHost(result.payload);
@@ -393,7 +391,7 @@ function TerminalTool({ taskId }: { taskId: string }) {
       if (!live) return;
       if (!stateResult.ok) {
         setState({ spawnImplemented: false, instances: [] });
-        setError(shellError(stateResult, "读取终端状态失败"));
+        setError(shellFailure(stateResult, "读取终端状态失败"));
         return;
       }
       const parsed = terminalStateFromHost(stateResult.payload);
@@ -424,7 +422,7 @@ function TerminalTool({ taskId }: { taskId: string }) {
     });
     if (!result.ok) {
       setPlan(null);
-      setError(shellError(result, "终端计划失败"));
+      setError(shellFailure(result, "终端计划失败"));
       return;
     }
     const view = terminalPlanFromHost(result.payload);
@@ -548,7 +546,7 @@ function ProtocolTool({ taskId }: { taskId: string }) {
     setResult(null);
     void protocolStateThroughShell(taskId).then((response) => {
       if (!live) return;
-      if (!response.ok) { setResult({ view: undefined, error: shellError(response, "读取协议状态失败") }); return; }
+      if (!response.ok) { setResult({ view: undefined, error: shellFailure(response, "读取协议状态失败") }); return; }
       const view = validProtocolState(response.payload, taskId) ? protocolBindingFromHost(taskId, response.payload) : undefined;
       setResult(view ? { view, error: "" } : { view: undefined, error: "Host 协议状态响应无法解析" });
     }).catch((error: unknown) => {
