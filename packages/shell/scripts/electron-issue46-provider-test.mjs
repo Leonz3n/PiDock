@@ -209,6 +209,9 @@ async function run() {
       // terminal (not the staged partial text, which stays 暂存 only).
       if (!/"stopReason":"aborted"/.test(cancelLog)) throw Error("cancelled terminal missing from SDK JSONL");
       if (!cancelLog.includes("please hold-open-cancel")) throw Error("cancelled turn prompt missing from SDK JSONL");
+      // The staged "delta-holding" text was visible in the live stream before
+      // the stop, but stays 暂存-only: it must never reach the SDK JSONL.
+      if (cancelLog.includes("delta-holding")) throw Error("staged partial text persisted to SDK JSONL");
       if (received.length !== 2 || received[1].authorization !== `Bearer ${CREDENTIAL}`) throw Error(`cancel leg did not reach the loopback: ${JSON.stringify(received.map((row) => row.url))}`);
       console.log("ISSUE46_E2E_CANCEL=" + JSON.stringify({ cancelled: true, terminalPersisted: true, credentialVisible: false, credentialInJsonl: false, providerHits: received.length }));
     }

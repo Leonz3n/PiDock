@@ -702,6 +702,11 @@ it("keeps a cancelled loopback stream free of the credential and raw error text"
     expect(surfaces).not.toContain(secret);
     // The turn's terminal state lands in the JSONL before anything else reads it.
     expect(readFileSync(file, "utf8")).toContain('"stopReason":"aborted"');
+    // The staged (暂存) partial text reached the live delta stream but must
+    // never be persisted: a regression that began writing staged content into
+    // the JSONL fails the absence pin below.
+    expect(JSON.stringify(events)).toContain("hold");
+    expect(readFileSync(file, "utf8")).not.toContain("hold");
     for (const text of recordedErrorTexts({ result, events })) expect(BOUNDED_ERROR_CODES.has(text)).toBe(true);
     await instance.dispose();
     // Cold start after a cancelled turn keeps the projection readable and clean.
