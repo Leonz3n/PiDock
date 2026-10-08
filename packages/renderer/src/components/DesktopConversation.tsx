@@ -339,7 +339,9 @@ function TaskConversation({ taskId, name, roots, association, onBack, onOpenProv
           <div className="mt-1.5 mb-2 flex flex-wrap items-center gap-2 text-[11px] text-muted">
             <span className="inline-flex min-w-0 items-center gap-1"><Icon name="branch" /><span className="truncate">{taskId}</span></span>
             <span className="inline-flex items-center gap-1"><Icon name="settings" />SDK · main</span>
-            {/* Real property of this kernel: tools are disabled for SDK turns. */}
+            {/* Real property of this kernel: SDK tool wiring is absent. Keep the
+                read-only summary and make the missing Agent tool path explicit. */}
+            <Badge variant="soft">Agent 工具未接线</Badge>
             <Badge variant="soft">只读 · 无工具</Badge>
             <Badge>{ready ? "已连接" : invalidated ? "已失效" : "未连接"}</Badge>
           </div>

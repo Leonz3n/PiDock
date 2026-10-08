@@ -484,6 +484,7 @@ describe("Desktop SDK conversation", () => {
   it("shows the SDK zero-tool boundary without offering permission changes", async () => {
     const f = setup(); mount(f);
     await screen.findByText(/尚未开始/);
+    expect(screen.getByText("Agent 工具未接线")).toBeVisible();
     const permission = screen.getByRole("button", { name: "权限（未接线）：只读 · 无工具" });
     expect(permission).toBeDisabled();
     expect(screen.queryByRole("button", { name: "默认权限" })).not.toBeInTheDocument();
@@ -492,6 +493,7 @@ describe("Desktop SDK conversation", () => {
     fireEvent.click(permission);
     expect(f.calls.some((call) => call.action === "start")).toBe(false);
   });
+
   it("does not allow projection refresh before SDK subscription is ready", async () => {
     const f = setup();
     mount(f);
