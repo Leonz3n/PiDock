@@ -121,6 +121,13 @@ export async function runAgentServiceControl(input: AgentServiceControlInput): P
  * main's sender-bound attestation (`classifyControlCaller`) — and it is
  * labelled `human` so the event trail separates it from Agent control. The
  * real start/stop still goes through the Host's registered process identity.
+ *
+ * It also takes no task write claim ([PiDock 09] #11): the write right
+ * serializes Agent sessions, while an explicit human click is the action the
+ * right exists to guard. The consequence is deliberate and stated here: an
+ * attested session-less call can start a real process while an Agent turn
+ * holds the write claim, and the only record is the `human` label in the
+ * service event trail.
  */
 export async function runHumanServiceControl(input: {
   services: TaskServiceRuntime;
@@ -224,7 +231,10 @@ async function performAgentServiceControl(
     if (channelExecutionClosing(input.channel, "exec.run", target)) return { ok: false, error: "task-host-closing" };
     // One-shot spend: the verified approval authorizes exactly this
     // start/stop. Spending (and persisting) before acting means a replay
-    // fails closed even if the same id is sent again.
+    // fails closed even if the same id is sent again. Stated consequence: a
+    // failed spawn burns the user's confirmation (they must confirm again),
+    // which is the price of spend-before-act and is deliberate, not an
+    // oversight.
     if (liveApproval !== undefined) {
       if (!input.channel.consumeApproval(liveApproval.id)) {
         return { ok: false, error: "approval-required: 确认请求已被消费，请重新确认" };

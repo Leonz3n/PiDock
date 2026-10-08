@@ -308,13 +308,17 @@ export class TaskServiceRuntime {
    * Redactor for this task's real service output: every resolved secret
    * value is replaced before a line reaches the bounded log. Non-secret
    * rows are kept verbatim (they are display data already shown as
-   * effective values).
+   * effective values). Every *non-empty* secret value is masked, however
+   * short: this log is only the child's own bounded output, and unlike
+   * `scrubSecretText`'s document rule (which floors known values at 4
+   * characters to avoid mangling a whole page) a short private value here
+   * can only affect the lines that contain it.
    */
   redactLine(line: string): string {
     let output = line;
     for (const record of this.services.values()) {
       for (const row of record.resolved) {
-        if (row.secret && row.value.length >= 4) output = output.split(row.value).join("••••••••");
+        if (row.secret && row.value.length > 0) output = output.split(row.value).join("••••••••");
       }
     }
     return output;

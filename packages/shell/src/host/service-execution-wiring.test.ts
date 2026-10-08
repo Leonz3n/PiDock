@@ -19,7 +19,7 @@
  */
 import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -34,6 +34,7 @@ const cleanups: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
   vi.unstubAllEnvs();
+  vi.restoreAllMocks();
   vi.resetModules();
 });
 
@@ -67,7 +68,20 @@ async function untilLog(read: () => Promise<string[]>, serviceId: string, check:
   throw Error(`timed out waiting for the log of ${serviceId}: ${seen.join(" | ")}`);
 }
 
-async function installed() {
+interface FixtureOptions {
+  /**
+   * Bind the Host to a spelling of the same task folder that resolves through
+   * a symlinked *ancestor* - the way `/tmp`/`/var` on macOS or a symlinked
+   * home spells a real task path. The folder, the task root's realpath and
+   * the task record all stay the same, so only the Host's own
+   * `PIDOCK_TASK_DIR` text is non-canonical.
+   */
+  nonCanonicalTaskDir?: boolean;
+  /** Main cannot produce a trusted owner snapshot, so it never bootstraps the Host. */
+  ownerAuthorityUnavailable?: boolean;
+}
+
+async function installed(options: FixtureOptions = {}) {
   vi.resetModules();
   const home = realpathSync(mkdtempSync(join(tmpdir(), "pidock-service-wiring-")));
   cleanups.push(() => rmSync(home, { recursive: true, force: true }));
@@ -75,6 +89,8 @@ async function installed() {
   const root = join(home, "tasks");
   const taskId = "task-7f3a91bc";
   const taskDir = join(root, taskId);
+  const hostRoot = options.nonCanonicalTaskDir ? join(linkedHome(home), "tasks") : root;
+  const hostTaskDir = join(hostRoot, taskId);
   const workspaceId = "workspace-a";
   const projectId = randomUUID();
   mkdirSync(profile, { mode: 0o700 });
@@ -82,15 +98,20 @@ async function installed() {
     mkdirSync(join(taskDir, dir), { recursive: true });
     writeFileSync(join(taskDir, dir, "service.cjs"), SERVICE_SCRIPT);
   }
-  diskTaskStore.writeTask(taskDir, buildTaskDiskRecord({ taskId, name: "Wiring", dirId: taskId, branch: "task/main", root, taskDir,
+  // The record spells the folder the way the Host is bound to it, exactly like
+  // a provisioned task whose configured root is reached through a symlink.
+  diskTaskStore.writeTask(taskDir, buildTaskDiskRecord({ taskId, name: "Wiring", dirId: taskId, branch: "task/main", root: hostRoot, taskDir: hostTaskDir,
     remoteBranch: "main", baseCommit: "source-fixture", repos: ["repo-a"], now: "2026-01-01T00:00:00.000Z" }));
   const taskStat = statSync(taskDir, { bigint: true });
   const identity = { taskId, createdAt: "2026-01-01T00:00:00.000Z", root, realRoot: root, dirId: taskId,
     directoryDevice: taskStat.dev.toString(), directoryInode: taskStat.ino.toString() };
+  const owner = (id: string) => id === taskId ? { identity, projectId, rootIds: ["repo-a"] } : null;
   const authority: ServiceCatalogAuthority = {
     projectExists: (id) => id === projectId,
-    task: (id) => id === taskId ? { identity, projectId, rootIds: ["repo-a"] } : null,
-    verifiedTask: (id) => id === taskId ? { identity, projectId, rootIds: ["repo-a"] } : null,
+    task: (id) => owner(id),
+    // Without a verified task snapshot main's `ownerSnapshot` fails, so it
+    // fences the binding and never posts the durable owner bootstrap.
+    ...(options.ownerAuthorityUnavailable ? {} : { verifiedTask: (id: string) => owner(id) }),
   };
   const catalog = new ServiceCatalog(profile, authority);
 
@@ -103,8 +124,8 @@ async function installed() {
   const oldPort = Object.getOwnPropertyDescriptor(process, "parentPort");
   Object.defineProperty(process, "parentPort", { configurable: true, value: parent });
   cleanups.push(() => { if (oldPort) Object.defineProperty(process, "parentPort", oldPort); else Reflect.deleteProperty(process, "parentPort"); });
-  for (const [name, value] of Object.entries({ PIDOCK_WORKSPACE_ID: workspaceId, PIDOCK_TASK_ID: taskId, PIDOCK_TASK_DIR: taskDir,
-    PIDOCK_PROTECTED_PROFILE: profile, PIDOCK_DEFAULT_TASKS_ROOT: root, PIDOCK_SERVICE_OWNER_REQUIRED: "1" })) vi.stubEnv(name, value);
+  for (const [name, value] of Object.entries({ PIDOCK_WORKSPACE_ID: workspaceId, PIDOCK_TASK_ID: taskId, PIDOCK_TASK_DIR: hostTaskDir,
+    PIDOCK_PROTECTED_PROFILE: profile, PIDOCK_SERVICE_OWNER_REQUIRED: "1" })) vi.stubEnv(name, value);
   vi.stubEnv("LOCAL_TEST_TOKEN", "synthetic-private-value");
   const { startHost } = await import("./host.js");
   startHost();
@@ -152,8 +173,15 @@ async function installed() {
     const payload = await request("task/serviceLog", { serviceId, limit: 200 });
     return Array.isArray(payload["log"]) ? (payload["log"] as { line: string }[]).map((entry) => entry.line) : [];
   };
-  return { profile, taskId, taskDir, projectId, catalog, authority, child, parent, client, main, registry,
+  return { profile, taskId, taskDir, hostTaskDir, projectId, catalog, authority, child, parent, client, main, registry,
     task, request, bind, register, run, status, log };
+}
+
+/** A symlinked ancestor of the tasks root: same folders, different path text. */
+function linkedHome(home: string): string {
+  const link = join(home, "linked-home");
+  symlinkSync(home, link);
+  return link;
 }
 
 /** A child pid the fixture script reported; used to observe the real OS process. */
@@ -164,6 +192,10 @@ function reportedPid(lines: string[]): number {
 }
 function alive(pid: number): boolean {
   try { process.kill(pid, 0); return true; } catch { return false; }
+}
+/** The pid the fixture child wrote to its marker file (the live child, not a log line). */
+function markerPid(taskDir: string, tag: string): number {
+  return Number(readFileSync(join(taskDir, `repo-a/svc-${tag}`, `started-${tag}.txt`), "utf8"));
 }
 
 describe.skipIf(process.platform === "win32")("#7 catalog-driven service execution with real child processes", () => {
@@ -292,6 +324,62 @@ describe.skipIf(process.platform === "win32")("#7 catalog-driven service executi
     expect(existsSync(join(f.taskDir, "repo-a/svc-a", "pwned.txt"))).toBe(false);
   }, 30_000);
 
+  it("stops, restarts and quits a child when the Host task path is not canonical", async () => {
+    // `TaskServiceProcesses` stores the task root's realpath while the Host is
+    // bound to a raw `PIDOCK_TASK_DIR`; comparing the two would rebuild the
+    // driver on every control and drop the running-child map (a stop would
+    // answer `not-running`, a second start would spawn a duplicate, and quit
+    // would report a clean stop behind live children).
+    const f = await installed({ nonCanonicalTaskDir: true });
+    const serviceId = f.bind("svc-a", "a");
+    expect(f.hostTaskDir).not.toBe(f.taskDir);
+
+    expect(await f.run(serviceId, "start")).toMatchObject({ serviceId, action: "start", actor: "human" });
+    await until(() => existsSync(join(f.taskDir, "repo-a/svc-a", "started-a.txt")), "the service to start");
+    const firstPid = markerPid(f.taskDir, "a");
+    expect(alive(firstPid)).toBe(true);
+
+    // The stop must reach the child the *same* driver registered.
+    expect(await f.run(serviceId, "stop")).toMatchObject({ serviceId, action: "stop", actor: "human" });
+    await until(() => !alive(firstPid), "the child to exit on stop");
+    expect((await f.status(serviceId)).lifecycle).toBe("stopped");
+
+    // A restart runs a new child: the first one is gone and a different pid
+    // is now live (the driver kept its map, so it did not spawn alongside it).
+    expect(await f.run(serviceId, "start")).toMatchObject({ serviceId, action: "start" });
+    await until(() => markerPid(f.taskDir, "a") !== firstPid, "the restarted child to write its pid");
+    const secondPid = markerPid(f.taskDir, "a");
+    expect(alive(secondPid)).toBe(true);
+
+    // Quit stops the remaining real child before reporting success.
+    const quit = await f.task("task/quit");
+    expect(quit.payload["serviceProcesses"]).toEqual([{ serviceId, state: "stopped" }]);
+    await until(() => !alive(secondPid), "the child to exit on quit");
+  }, 30_000);
+
+  it("stops real child processes even when the Agent/SDK shutdown stage fails", async () => {
+    const f = await installed();
+    const serviceId = f.bind("svc-a", "a");
+    expect(await f.run(serviceId, "start")).toMatchObject({ action: "start" });
+    await until(() => existsSync(join(f.taskDir, "repo-a/svc-a", "started-a.txt")), "the service to start");
+    const pid = markerPid(f.taskDir, "a");
+    expect(alive(pid)).toBe(true);
+
+    // A real SDK shutdown failure must not leave a detached child unstoppable:
+    // service termination cannot sit behind the Agent stages of the quit chain.
+    const { TaskWorkspaceHost } = await import("./task-host.js");
+    vi.spyOn(TaskWorkspaceHost.prototype, "shutdownSdk").mockRejectedValue(new Error("sdk-host-shutdown-unconfirmed"));
+    const quit = await f.request("task/quit");
+    expect(quit["error"]).toContain("sdk-host-shutdown-unconfirmed");
+    await until(() => !alive(pid), "the service child to be stopped despite the SDK failure");
+  }, 30_000);
+});
+
+/**
+ * Refusal legs that must hold on every platform: none of them spawns a child,
+ * so only the legs with a real service process are `win32`-skipped above.
+ */
+describe("#7 catalog-driven service execution refusals", () => {
   it("keeps service control fail-closed when the catalog launch cannot be resolved", async () => {
     const f = await installed();
     const serviceId = f.bind("svc-a", "a");
@@ -303,6 +391,30 @@ describe.skipIf(process.platform === "win32")("#7 catalog-driven service executi
     writeFileSync(machine, JSON.stringify(document));
     await expect(f.run(serviceId, "start")).rejects.toThrow("service-launch-unavailable");
     expect((await f.status(serviceId)).error).toBeDefined();
+    expect(existsSync(join(f.taskDir, "repo-a/svc-a", "started-a.txt"))).toBe(false);
+  }, 30_000);
+
+  it("refuses a catalog start when main never confirmed the durable owner inventory", async () => {
+    // Main fences the Host on any catalog/store/lease failure and swallows it
+    // while still routing `runTaskService`; a missing durable inventory is an
+    // unconfirmed owner state, never permission to spawn.
+    const f = await installed({ ownerAuthorityUnavailable: true });
+    const serviceId = f.bind("svc-a", "a");
+    expect(await f.register(serviceId)).toMatchObject({ service: { launchSource: "catalog" } });
+    expect((await f.request("task/controlService", { serviceId, action: "start" }))["error"])
+      .toContain("service-execution-uncertain");
+    expect(existsSync(join(f.taskDir, "repo-a/svc-a", "started-a.txt"))).toBe(false);
+  }, 30_000);
+
+  it("refuses a catalog start after the durable owner inventory is fenced", async () => {
+    const f = await installed();
+    const serviceId = f.bind("svc-a", "a");
+    expect(await f.register(serviceId)).toMatchObject({ service: { launchSource: "catalog" } });
+    // Main's fence message is the same one a failed owner lease sends.
+    f.child.postMessage({ kind: "service-owner-fenced", workspaceId: "workspace-a", taskId: f.taskId });
+    expect((await f.request("task/controlService", { serviceId, action: "start" }))["error"])
+      .toContain("service-execution-uncertain");
+    expect((await f.status(serviceId))["error"]).toContain("service-execution-uncertain");
     expect(existsSync(join(f.taskDir, "repo-a/svc-a", "started-a.txt"))).toBe(false);
   }, 30_000);
 });

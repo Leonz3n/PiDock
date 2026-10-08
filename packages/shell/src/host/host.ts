@@ -370,30 +370,46 @@ function serviceRuntimeFor(taskId: string): TaskServiceRuntime | { error: string
  * `start` stays refused inside the driver.
  */
 let serviceProcesses: TaskServiceProcesses | null = null;
+/**
+ * The runtime the current driver was built for. `TaskServiceProcesses` stores
+ * the task root's *realpath* while the Host stays bound to the raw
+ * `PIDOCK_TASK_DIR` string, so comparing the two paths would mismatch for
+ * every non-canonical spelling (`/tmp/...` on macOS, a symlinked home or an
+ * override root) and silently rebuild the driver - dropping its
+ * running-child map, so a stop answers `not-running`, a second start spawns a
+ * duplicate and quit reports a clean stop behind live children. One Host
+ * serves exactly one task runtime, so object identity is the correct check.
+ */
+let serviceProcessesFor: TaskServiceRuntime | null = null;
 /** Real terminal state of this task's service children when the Host quit stopped them. */
-let serviceStopReport: { serviceId: string; state: "stopped" | "exited" }[] | undefined;
+let serviceStopReport: { serviceId: string; state: "stopped" }[] | undefined;
 
 /**
  * Normal Host quit stops every real service child this task owns before any
  * durable "closed" report is written. `stopAll` settles every attempt and
  * throws when a stop could not be confirmed, so an uncertain termination
- * fails the quit instead of producing a clean shutdown receipt.
+ * fails the quit instead of producing a clean shutdown receipt. Each stop is
+ * bounded by the driver (grace + confirm, all services in parallel), and
+ * `stopAll` only resolves after a confirmed stop, so every reported id was
+ * really stopped - an id with no runtime record is never invented as
+ * `exited`.
  */
-async function stopRegisteredServiceProcesses(): Promise<{ serviceId: string; state: "stopped" | "exited" }[]> {
+async function stopRegisteredServiceProcesses(): Promise<{ serviceId: string; state: "stopped" }[]> {
   const processes = serviceProcesses;
   if (!processes) return [];
   const ids = processes.ids();
   await processes.stopAll();
-  return ids.map((serviceId) => ({ serviceId, state: serviceRuntime?.get(serviceId)?.lifecycle === "stopped" ? "stopped" : "exited" }));
+  return ids.map((serviceId) => ({ serviceId, state: "stopped" as const }));
 }
 function serviceDriverFor(services: TaskServiceRuntime): ServiceExecutionDriver {
-  if (!serviceProcesses || serviceProcesses.taskDir !== services.taskDir) {
+  if (!serviceProcesses || serviceProcessesFor !== services) {
     serviceProcesses = new TaskServiceProcesses(
       services.taskDir,
       (serviceId, line) => services.recordOutput(serviceId, line),
       (serviceId, reason) => services.markExited(serviceId, reason),
       (line) => services.redactLine(line),
     );
+    serviceProcessesFor = services;
   }
   const processes = serviceProcesses;
   return {
@@ -407,11 +423,33 @@ function serviceDriverFor(services: TaskServiceRuntime): ServiceExecutionDriver 
  * installed owner inventory already recorded as starting/running/stopping/
  * unconfirmed must not be re-launched as if nothing were known about it, and
  * a fresh runtime process must not hide that state behind `stopped`.
+ *
+ * The refusal also covers the two ways the durable owner *cannot answer*,
+ * both of which the pre-slice Host answered fail-closed: a task Host forked
+ * with `PIDOCK_SERVICE_OWNER_REQUIRED` that never received main's bootstrap
+ * (catalog/store/lease failure, or a fence before the bootstrap), and an
+ * inventory that is fenced or otherwise declines the status call. Only
+ * `unknown-service` - an id the durable scope never listed - is not
+ * uncertainty: a freshly bound catalog service legitimately has no durable
+ * entry yet.
+ *
+ * The same check covers `stop`, so an uncertain durable state has no
+ * Host-side cleanup path: that is deliberate - stopping could signal a
+ * process the durable owner still owns, and the uncertainty has to be
+ * resolved in the owner layer first. A confirmed `stopped`/`exited` state, a
+ * registerable catalog service and an inventory that answers `unknown-service`
+ * are the only ways control proceeds.
  */
 function serviceOwnerStateRefusal(serviceId: string): string | null {
-  if (!serviceOwnerInventory) return null;
+  if (!serviceOwnerInventory) {
+    return process.env["PIDOCK_SERVICE_OWNER_REQUIRED"] === "1"
+      ? "service-execution-uncertain: 服务所有者状态未确认"
+      : null;
+  }
   const status = serviceOwnerInventory.status(serviceId);
-  if (!status.ok) return null;
+  if (!status.ok) {
+    return status.error === "unknown-service" ? null : `service-execution-uncertain: ${status.error}`;
+  }
   const state = (status.service as { state?: unknown }).state;
   if (state === "stopped" || state === "exited") return null;
   return `service-execution-uncertain: 服务已登记状态为 ${String(state)}，请先处理该状态后再启停`;
@@ -980,8 +1018,16 @@ async function performTaskOp(
         // state; the owner inventory keeps answering for everything else.
         const registered = serviceRuntimeFor(taskId);
         if (!("error" in registered)) {
-          const serviceRecord = registered.get(String(record["serviceId"]));
-          if (serviceRecord) return { ok: true, payload: { service: publicServiceStatus(serviceRecord) } };
+          const serviceId = record["serviceId"];
+          const serviceRecord = typeof serviceId === "string" ? registered.get(serviceId) : undefined;
+          if (serviceRecord) {
+            // A live registry record must not contradict the control path: when
+            // the durable owner state keeps control fail-closed, the read
+            // reports the same uncertainty instead of a bare `stopped`.
+            const uncertain = serviceOwnerStateRefusal(serviceRecord.serviceId);
+            if (uncertain) return { ok: false, error: uncertain };
+            return { ok: true, payload: { service: publicServiceStatus(serviceRecord) } };
+          }
         }
         if (serviceOwnerInventory || process.env["PIDOCK_SERVICE_OWNER_REQUIRED"] === "1") {
           const serviceId = record["serviceId"];
@@ -1532,12 +1578,18 @@ async function performTaskOp(
         sdkTurns?.seal();
         try {
           quitReceipt ??= (async () => {
+            // Real service children are stopped before the Agent/SDK stages: a
+            // detached child (reserved process group, ignored stdin) has no
+            // other stop path once this op seals control, so its termination
+            // must not depend on the SDK/turn stages succeeding. The driver
+            // bounds each stop and stops every service in parallel.
+            const stoppedServices = await shutdownDeadline(stopRegisteredServiceProcesses(), 15_000, "service-processes-shutdown-unconfirmed");
+            if (stoppedServices.length > 0) serviceStopReport = stoppedServices;
             await workspaceHost?.shutdownSdk();
             await shutdownDeadline(Promise.resolve(sdkTurns?.waitForTerminal()), 15_000, "sdk-turns-shutdown-unconfirmed");
             sdkTurns = null;
             await shutdownDeadline(taskAdmission.drain(), 15_000, "task-operations-shutdown-unconfirmed");
             host.assertExecutionSettled();
-            serviceStopReport = await shutdownDeadline(stopRegisteredServiceProcesses(), 15_000, "service-processes-shutdown-unconfirmed");
             if (serviceOwnerInventory) serviceCompletion = await shutdownDeadline(serviceOwnerInventory.close(), 15_000, "service-owner-shutdown-unconfirmed");
             return lifecycle.quit();
           })();

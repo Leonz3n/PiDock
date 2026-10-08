@@ -56,6 +56,23 @@ describe("register + planStart", () => {
   });
 });
 
+// [PiDock 04] (#7) the bounded log holds real child output, so a private value
+// must never reach it - however short the value is.
+describe("service log redaction", () => {
+  it("masks every non-empty secret value and keeps non-secret output verbatim", () => {
+    const runtime = new TaskServiceRuntime("/Users/name/Tasks/task-a1f92c3d");
+    runtime.register({
+      serviceId: "saas-web",
+      descriptor: { name: "saas-web", program: "node", args: ["server.mjs"], ports: [], runType: "long-lived" },
+      layers: { repoDefaults: [], shared: [{ key: "LOG_LEVEL", value: "debug", secret: false }],
+        privateEntries: [{ key: "SHORT_OTP", value: "ab", secret: true }], task: [] },
+      templateVersion: "v1",
+    });
+    expect(runtime.redactLine("otp=ab and ab")).toBe("otp=•••••••• and ••••••••");
+    expect(runtime.redactLine("debug: nothing secret")).toBe("debug: nothing secret");
+  });
+});
+
 describe("agent control tiers", () => {
   it("denies read, asks on default, allows auto and verified-approval default", () => {
     const runtime = registered();

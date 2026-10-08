@@ -1351,7 +1351,28 @@ export function registerIpc(
       if (payload && typeof payload === "object" && (payload as Record<string, unknown>)["op"] === "runTaskService") {
         if (!tasks) return { ok: false as const, error: "任务 Host 尚未接入" };
         const request = parseServiceRunRequest(payload);
-        return { ok: true as const, payload: await runTaskService(tasks, catalog, request, event.sender.id) };
+        // Execution takes the same live-sender guard as the sibling binding
+        // branch: `requireShellSender` proves which webContents may call, not
+        // that the same, un-navigated document is still the one calling when
+        // the operation commits a real child process.
+        const url = event.sender.getURL();
+        const frame = { processId: event.sender.mainFrame.processId, routingId: event.sender.mainFrame.routingId };
+        let navigated = false;
+        const onNavigation = () => { navigated = true; };
+        event.sender.on("did-start-navigation", onNavigation);
+        try {
+          const requireLive = () => {
+            registry.requireShellSender(event);
+            if (navigated || event.sender.isDestroyed() || url !== event.sender.getURL() ||
+                frame.processId !== event.sender.mainFrame.processId || frame.routingId !== event.sender.mainFrame.routingId) {
+              throw new Error("service execution sender changed");
+            }
+          };
+          requireLive();
+          const result = await runTaskService(tasks, catalog, request, event.sender.id);
+          requireLive();
+          return { ok: true as const, payload: result };
+        } finally { event.sender.removeListener("did-start-navigation", onNavigation); }
       }
       if (payload && typeof payload === "object" && ["bind", "taskBindings"].includes(String((payload as Record<string, unknown>)["op"]))) {
         const url = event.sender.getURL();
