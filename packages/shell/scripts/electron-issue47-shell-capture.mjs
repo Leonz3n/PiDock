@@ -391,9 +391,13 @@ async function run() {
     }));
     // #47 S8 box 1 requires no horizontal overflow at either tier, so a capture that
     // overflows must fail the run rather than be recorded and ignored (sibling issue45
-    // harness throws on overflow too). `overflowContent` is the page-container metric;
-    // `null` means `desktop-shell-content` was absent, which is also a failure.
-    const overflowing = shots.filter((shot) => shot.overflow !== 0 || shot.overflowClient !== 0 || shot.overflowContent !== 0);
+    // harness throws on overflow too). The `overflow` term subtracts `window.innerWidth`,
+    // which INCLUDES a document-level vertical scrollbar while `scrollWidth` excludes it,
+    // so that term can read negative; like electron-issue45-desktop-test.mjs:79 it fails
+    // only on genuine positive overflow. `overflowClient`/`overflowContent` are
+    // scrollbar-safe, so they stay strict; `overflowContent` `null` means
+    // `desktop-shell-content` was absent, which is also a failure.
+    const overflowing = shots.filter((shot) => shot.overflow > 0 || shot.overflowClient !== 0 || shot.overflowContent !== 0);
     if (overflowing.length) throw Error("horizontal overflow " + JSON.stringify(overflowing));
   } catch (error) { console.error("ISSUE47_CAPTURE_FAILED", captureStage, error); process.exitCode = 1; }
   finally {
