@@ -41,7 +41,17 @@ export interface ProviderSelection {
   profileId: string;
   generation: number;
   at: string;
+  /**
+   * Disclosure recorded with every selection: the binding digest pins the
+   * credential reference *name*, so a value rotated behind that name is not
+   * detected and changes neither the selected endpoint nor the generation.
+   */
+  note?: string;
 }
+
+/** The exact limitation statement every persisted selection must carry (#46). */
+export const SELECTION_VALUE_ROTATION_LIMITATION =
+  "same-reference credential value rotation is not detected; it changes neither the selected endpoint nor the configuration generation";
 
 interface Document {
   version: 1;
@@ -113,14 +123,17 @@ function profileOf(value: unknown): ProviderProfile {
 
 function selectionOf(value: unknown): ProviderSelection {
   if (!record(value)) throw new Error("invalid provider selection");
-  keys(value, ["taskId", "profileId", "generation", "at"]);
+  keys(value, ["taskId", "profileId", "generation", "at"], ["note"]);
   const taskId = text(value["taskId"], "selection task id", 128);
   if (!/^[A-Za-z0-9._-]{1,128}$/.test(taskId)) throw new Error("invalid selection task id");
   const profileId = value["profileId"];
   if (typeof profileId !== "string" || !ID.test(profileId)) throw new Error("invalid selection profile id");
   const generation = value["generation"];
   if (!Number.isSafeInteger(generation) || (generation as number) < 1) throw new Error("invalid selection generation");
-  return { taskId, profileId, generation: generation as number, at: text(value["at"], "selection time", 64) };
+  const note = value["note"];
+  if (note !== undefined && note !== SELECTION_VALUE_ROTATION_LIMITATION) throw new Error("invalid selection note");
+  return { taskId, profileId, generation: generation as number, at: text(value["at"], "selection time", 64),
+    ...(note === undefined ? {} : { note: SELECTION_VALUE_ROTATION_LIMITATION }) };
 }
 
 function emptyDocument(): Document {
@@ -234,7 +247,7 @@ export class ProviderProfileStore {
     const document = this.read();
     const profile = document.profiles.find((row) => row.id === profileId);
     if (!profile) throw new Error("provider-profile-unknown");
-    const selection: ProviderSelection = { taskId: text(taskId, "selection task id", 128), profileId, generation: profile.generation, at: this.now() };
+    const selection: ProviderSelection = { taskId: text(taskId, "selection task id", 128), profileId, generation: profile.generation, at: this.now(), note: SELECTION_VALUE_ROTATION_LIMITATION };
     document.selections = [...document.selections.filter((row) => row.taskId !== selection.taskId), selection];
     this.write(document);
     return selection;
