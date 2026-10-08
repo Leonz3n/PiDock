@@ -68,6 +68,22 @@ describe("application window lifecycle", () => {
     expect(f.stopHosts).not.toHaveBeenCalled();
   });
 
+  it("never runs last-window shutdown from an incidental macOS window-all-closed while the Host keeps the window", async () => {
+    // The macOS window is hidden, never destroyed, so a bare `window-all-closed`
+    // stands in for an incidental emission from another window path: it must not
+    // spend schedules, the workspace client, the child process or every task.
+    const f = fixture();
+    f.appEvents.emit("window-all-closed");
+    await settled();
+    expect(f.stopHosts).not.toHaveBeenCalled();
+    expect(f.state).toMatchObject({ visible: true, destroyed: false, quits: 0 });
+    f.close(); await settled();
+    expect(f.stopHosts).not.toHaveBeenCalled();
+    f.appEvents.emit("activate");
+    expect(f.state).toMatchObject({ visible: true, focused: true, destroyed: false, quits: 0 });
+    expect(f.stopHosts).not.toHaveBeenCalled();
+  });
+
   it("reveals the macOS window after refused shutdown while preserving retained Hosts and sealed admission", async () => {
     const messages = new EventEmitter(), kill = vi.fn();
     let quitRequests = 0;
