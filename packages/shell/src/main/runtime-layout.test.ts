@@ -259,6 +259,28 @@ describe("trusted Electron view modes", () => {
     expect(await sdk!(shell, { action: "status", ...identity, requestId: "r1" })).toMatchObject({ ok: false });
   });
 
+  // [PiDock 02i] (#42) box 4: the successor tickets moved production turns to
+  // `shell/sdkTurn`, so the legacy DemoApp `shellHost.sendMessage` path has to
+  // stay refused at the shell bridge instead of reaching any task Host.
+  it("refuses legacy DemoApp conversation ops as unknown at the shell bridge", async () => {
+    const views = await createTrustedWindow("workspace-legacy", "production");
+    const routeTaskOp = vi.fn(async () => ({ payload: {} }));
+    registerIpc({} as never, views.registry, { routeTaskOp } as never);
+    const taskOp = vi.mocked(ipcMain.handle).mock.calls.findLast(([channel]) => channel === "shell/taskOp")?.[1];
+    expect(taskOp).toBeDefined();
+    const shell = { sender: views.shellView.webContents, senderFrame: views.shellView.webContents.mainFrame } as never;
+    for (const op of ["task/sendMessage", "task/sdkStart", "task/sdkStatus", "task/sdkProjection", "task/sdkProvider", "task/sdkCancel"]) {
+      expect(await taskOp!(shell, { taskId: "task-a", op, payload: { sessionId: "main" } }))
+        .toEqual({ ok: false, error: `invalid-payload: unknown task op: ${op}` });
+    }
+    expect(routeTaskOp).not.toHaveBeenCalled();
+    // A surviving whitelisted op still reaches the task Host: the refusal above
+    // comes from the conversation guard, not from sender attestation.
+    expect(await taskOp!(shell, { taskId: "task-a", op: "task/sessionStates", payload: {} })).toMatchObject({ ok: true });
+    expect(routeTaskOp).toHaveBeenCalledWith(expect.objectContaining({ taskId: "task-a", op: "task/sessionStates" }));
+    expect(vi.mocked(ipcMain.handle).mock.calls.findLast(([channel]) => channel === "shell/sdkTurn")?.[1]).toBeDefined();
+  });
+
   it("binds project IPC to shell main frame and fails closed without a configured store", async () => {
     const root = mkdtempSync(join(tmpdir(), "pidock-project-runtime-"));
     try {
