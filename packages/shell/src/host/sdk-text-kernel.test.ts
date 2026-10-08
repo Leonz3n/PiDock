@@ -600,3 +600,113 @@ it("keeps explicit OpenAI-compatible auth on the original origin across redirect
     await close(secondary);
   }
 });
+
+const BOUNDED_ERROR_CODES = new Set(["provider-request-failed", "provider-request-aborted"]);
+
+/** Every `error`/`errorMessage` string recorded in a result, events or projection. */
+function recordedErrorTexts(value: unknown): string[] {
+  const found: string[] = [];
+  const walk = (node: unknown): void => {
+    if (Array.isArray(node)) { node.forEach(walk); return; }
+    if (typeof node !== "object" || node === null) return;
+    for (const [key, field] of Object.entries(node)) {
+      if ((key === "error" || key === "errorMessage") && typeof field === "string") found.push(field);
+      else walk(field);
+    }
+  };
+  walk(value);
+  return found;
+}
+
+it("normalizes loopback non-2xx and mid-stream failures before JSONL, projection and cold start", async () => {
+  const dir = task("task-explicit-error-paths");
+  const secret = "SYNTHETIC_CREDENTIAL_46_ERROR_PATHS";
+  const raw = "RAW_UPSTREAM_ERROR_TEXT_46";
+  let hits = 0;
+  const server = createServer((request, response) => {
+    hits += 1;
+    request.resume();
+    request.on("end", () => {
+      if (hits === 1) {
+        // Non-2xx: the error payload echoes the credential and raw upstream text.
+        response.writeHead(500, { "content-type": "text/plain" });
+        response.end(`${raw} ${secret} ${secret.slice(0, 14)}`);
+        return;
+      }
+      // Mid-stream failure: the credential is split across two frames first.
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.write(`data: {"id":"chatcmpl-${secret}","object":"chat.completion.chunk","created":1,"model":"${secret}","choices":[{"index":0,"delta":{"role":"assistant","content":"${secret.slice(0, 14)}"},"finish_reason":null}]}\n\n`);
+      response.write(`data: {"id":"chatcmpl-${secret}","object":"chat.completion.chunk","created":1,"model":"${secret}","choices":[{"index":0,"delta":{"content":"${secret.slice(14)} tail"},"finish_reason":null}]}\n\n`);
+      response.socket?.destroy();
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const config = { profileId: "explicit", baseUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`, modelId: "fixture", contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_TEST", generation: 1 };
+    const { runtime, model: selected, bindingIdentity } = await createExplicitTextRuntime(config, secret);
+    const instance = new PiSdkTextKernel("task-explicit-error-paths", dir, { model: selected, modelRuntime: runtime, bindingIdentity });
+    const file = (await instance.open("main")).file;
+    const events: SdkTextEvent[] = [];
+    const first = await instance.prompt("main", "non-2xx turn", (event) => events.push(event));
+    const second = await instance.prompt("main", "broken stream turn", (event) => events.push(event));
+    expect(hits).toBe(2);
+    expect(first).toMatchObject({ state: "failed", error: "provider-request-failed" });
+    expect(second).toMatchObject({ state: "failed", error: "provider-request-failed" });
+    const surfaces = JSON.stringify({ first, second, events, projection: instance.projection("main") }) + readFileSync(file, "utf8");
+    // Error payloads never reach results, events, JSONL or projection — not
+    // even redacted: only bounded explicit codes cross the trusted boundary.
+    expect(surfaces).not.toContain(raw);
+    expect(surfaces).not.toContain(secret);
+    for (const text of recordedErrorTexts({ first, second, events })) expect(BOUNDED_ERROR_CODES.has(text)).toBe(true);
+    await instance.dispose();
+    // Cold start: a fresh runtime revalidates the binding identity and keeps
+    // the read-only projection free of raw error text and the credential.
+    const cold = await createExplicitTextRuntime(config, secret);
+    const reopened = new PiSdkTextKernel("task-explicit-error-paths", dir, { model: cold.model, modelRuntime: cold.runtime, bindingIdentity: cold.bindingIdentity });
+    await reopened.open("main");
+    const projection = JSON.stringify(reopened.projection("main"));
+    expect(projection).not.toContain(secret);
+    expect(projection).not.toContain(raw);
+    await reopened.dispose();
+  } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
+});
+
+it("keeps a cancelled loopback stream free of the credential and raw error text", async () => {
+  const dir = task("task-explicit-cancel");
+  const secret = "SYNTHETIC_CREDENTIAL_46_CANCEL";
+  let hits = 0;
+  const server = createServer((request, response) => {
+    hits += 1;
+    request.resume();
+    request.on("end", () => {
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.write(`data: {"id":"chatcmpl-${secret}","object":"chat.completion.chunk","created":1,"model":"${secret}","choices":[{"index":0,"delta":{"role":"assistant","content":"${secret.slice(0, 14)}"},"finish_reason":null}]}\n\n`);
+      response.write(`data: {"id":"chatcmpl-${secret}","object":"chat.completion.chunk","created":1,"model":"${secret}","choices":[{"index":0,"delta":{"content":"${secret.slice(14)} hold"},"finish_reason":null}]}\n\n`);
+      // The stream stays open until the turn is cancelled.
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const config = { profileId: "explicit", baseUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`, modelId: "fixture", contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_TEST", generation: 1 };
+    const { runtime, model: selected, bindingIdentity } = await createExplicitTextRuntime(config, secret);
+    const instance = new PiSdkTextKernel("task-explicit-cancel", dir, { model: selected, modelRuntime: runtime, bindingIdentity });
+    const file = (await instance.open("main")).file;
+    const events: SdkTextEvent[] = [];
+    const run = instance.prompt("main", "cancel me", (event) => events.push(event));
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    await instance.cancel("main");
+    const result = await run;
+    expect(result.state).toBe("cancelled");
+    expect(hits).toBe(1);
+    const surfaces = JSON.stringify({ result, events, projection: instance.projection("main") }) + readFileSync(file, "utf8");
+    expect(surfaces).not.toContain(secret);
+    for (const text of recordedErrorTexts({ result, events })) expect(BOUNDED_ERROR_CODES.has(text)).toBe(true);
+    await instance.dispose();
+    // Cold start after a cancelled turn keeps the projection readable and clean.
+    const cold = await createExplicitTextRuntime(config, secret);
+    const reopened = new PiSdkTextKernel("task-explicit-cancel", dir, { model: cold.model, modelRuntime: cold.runtime, bindingIdentity: cold.bindingIdentity });
+    await reopened.open("main");
+    expect(JSON.stringify(reopened.projection("main"))).not.toContain(secret);
+    await reopened.dispose();
+  } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
+});
