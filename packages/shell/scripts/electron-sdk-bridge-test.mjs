@@ -10,6 +10,7 @@ import { buildHostEnv } from "../dist/host/host-guards.js";
 import { TaskRootIndex } from "../dist/main/task-root-index.js";
 import { createTrustedWindow, loadTrustedViews, PerTaskHostRegistry, registerIpc } from "../dist/main/runtime.js";
 import { HostClient } from "../dist/rpc/host-client.js";
+import { shutdownTestRegistry } from "./shutdown-test-registry.mjs";
 
 const root = mkdtempSync(join(tmpdir(), "pidock-electron-sdk-"));
 const profile = join(root, "profile"), taskRoot = join(root, "tasks"), taskDir = join(taskRoot, "task-abcdef12");
@@ -21,6 +22,9 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const entry = join(import.meta.dirname, "host-sdk-test-entry.mjs");
 let views, current, spawned = [];
 const watchdog = setTimeout(() => { console.error("ELECTRON_SDK_BRIDGE_TIMEOUT"); process.exit(1); }, 30_000);
+// Test-only guard: prevent Electron's default quit racing the explicit
+// app.exit(process.exitCode) with a false-pass exit 0.
+app.on("window-all-closed", () => {});
 async function run() {
 try {
   await app.whenReady();
@@ -35,8 +39,8 @@ try {
     child.stderr?.on("data", (data) => process.stderr.write(`[sdk-test-host] ${data}`));
     return { child, client: new HostClient(child) };
   }, (id) => index.resolve(id), undefined, index);
-  current = makeRegistry();
   views = await createTrustedWindow(workspaceId, "production");
+  current = makeRegistry();
   registerIpc({} , views.registry, {
     routeTaskOp: (...args) => current.routeTaskOp(...args),
     entryForTaskId: (...args) => current.entryForTaskId(...args),
@@ -75,7 +79,11 @@ try {
   const cancelled = await request("cancel", { turnId: pending.payload.turn.turnId });
   assert(cancelled.payload?.turn?.state === "cancelled", "cancel", cancelled);
   await request("unsubscribe");
-  current.disposeAll();
+  // Strict shutdown seam: disposeAll runs only after the attested human
+  // quitAll (real shell-view sender origin) confirmed Host shutdown.
+  const coldQuit = await current.quitAll({ origin: { kind: "shell-ui", senderWebContentsId: views.shellView.webContents.id }, label: "SDK test cold reopen" });
+  assert(coldQuit.ok, "cold quit", coldQuit);
+  await current.disposeAll();
   current = makeRegistry();
   const resumed = await request("subscribe");
   assert(resumed.ok && resumed.payload.snapshot.messages.some((message) => message.text === "local reply"), "cold reopen", resumed);
@@ -93,12 +101,21 @@ try {
   console.error("ELECTRON_SDK_BRIDGE_FAILED", error);
   process.exitCode = 1;
 } finally {
-  current?.disposeAll();
   clearTimeout(watchdog);
+  const cleanupFailures = await shutdownTestRegistry(current, {
+    origin: views ? { kind: "shell-ui", senderWebContentsId: views.shellView.webContents.id } : undefined,
+    label: "SDK test cleanup",
+  });
   for (const child of spawned) child.kill();
-  views?.shellView.webContents.debugger.detach();
+  try { views?.shellView.webContents.debugger.detach(); } catch (error) {
+    cleanupFailures.push(`debugger detach: ${error instanceof Error ? error.message : String(error)}`);
+  }
   views?.window.destroy();
   rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  if (cleanupFailures.length) {
+    console.error("ELECTRON_SDK_BRIDGE_CLEANUP_FAILED " + JSON.stringify(cleanupFailures));
+    process.exitCode = process.exitCode ?? 1;
+  }
   app.exit(process.exitCode ?? 0);
 }
 }

@@ -10,6 +10,7 @@ import { buildHostEnv } from "../dist/host/host-guards.js";
 import { TaskRootIndex } from "../dist/main/task-root-index.js";
 import { PerTaskHostRegistry } from "../dist/main/runtime.js";
 import { HostClient } from "../dist/rpc/host-client.js";
+import { shutdownTestRegistry } from "./shutdown-test-registry.mjs";
 
 const root = mkdtempSync(join(tmpdir(), "pidock-service-guard-"));
 const profile = join(root, "profile"), taskRoot = join(root, "tasks"), taskId = "task-abcdef12";
@@ -113,9 +114,14 @@ try {
   process.exitCode = 1;
 } finally {
   clearTimeout(watchdog);
-  registry?.disposeAll();
+  const cleanupFailures = await shutdownTestRegistry(registry, {
+    // Windowless smoke: synthetic test origin for the attested seam.
+    origin: { kind: "shell-ui", senderWebContentsId: 42 },
+    label: "Service guard cleanup",
+  });
   for (const child of children) child.kill();
   rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+  if (cleanupFailures.length) { console.error("SERVICE_GUARD_CLEANUP_FAILED " + JSON.stringify(cleanupFailures)); process.exitCode = process.exitCode ?? 1; }
   app.exit(process.exitCode ?? 0);
 }
 }
