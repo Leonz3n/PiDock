@@ -131,11 +131,13 @@ export function taskAssociationFromMain(payload: unknown, taskId: string): TaskA
 /**
  * Resolve the project that owns a task. Service bindings live in the project
  * catalog, so a task the user has not confirmed into a project has no bound
- * service list to read — the panel says so instead of listing nothing.
+ * service list to read — the panel says so instead of listing nothing. The
+ * association state is returned alongside so `unavailable` (the Host could not
+ * read a project) stays distinct from `unassigned` (no confirmed project).
  */
 export async function taskProjectIdThroughShell(
   taskId: string,
-): Promise<{ ok: true; projectId: string | null } | { ok: false; error: string }> {
+): Promise<{ ok: true; projectId: string | null; state: string } | { ok: false; error: string }> {
   const bridge = shellBridge();
   if (typeof bridge?.projectOp !== "function") return { ok: false, error: "桌面壳项目接口不可用，请重启应用" };
   let result: { ok: boolean; payload?: unknown; error?: string };
@@ -147,7 +149,7 @@ export async function taskProjectIdThroughShell(
   if (!result || result.ok !== true) return { ok: false, error: result?.error ?? "任务归属读取失败" };
   const association = taskAssociationFromMain(result.payload, taskId);
   if (!association) return { ok: false, error: "任务归属响应无法解析" };
-  return { ok: true, projectId: association.projectId };
+  return { ok: true, projectId: association.projectId, state: association.state };
 }
 
 export interface BoundServiceRow {
@@ -160,20 +162,22 @@ export interface BoundServiceRow {
 }
 
 export type TaskServicesLoad =
-  | { ok: true; projectId: string | null; rows: BoundServiceRow[]; templatesError: string | undefined }
+  | { ok: true; projectId: string | null; associationState: string; rows: BoundServiceRow[]; templatesError: string | undefined }
   | { ok: false; error: string };
 
 /**
  * The task's real bound services plus the Host's own runtime answer for each.
- * `projectId === null` means the user has not confirmed the task into a
- * project, so the Host stores no binding under it — not that the task has no
- * services. A missing project template leaves the row identity-only instead of
- * inventing a name or a port.
+ * `projectId === null` means the Host stores no binding under the task — either
+ * because the user has not confirmed one (`unassigned`) or because the Host
+ * could not read the association (`unavailable`); `associationState` keeps the
+ * two apart. `projectId === null` never means the task has no services. A
+ * missing project template leaves the row identity-only instead of inventing a
+ * name or a port.
  */
 export async function loadTaskServices(taskId: string): Promise<TaskServicesLoad> {
   const association = await taskProjectIdThroughShell(taskId);
   if (!association.ok) return { ok: false, error: association.error };
-  if (association.projectId === null) return { ok: true, projectId: null, rows: [], templatesError: undefined };
+  if (association.projectId === null) return { ok: true, projectId: null, associationState: association.state, rows: [], templatesError: undefined };
   const projectId = association.projectId;
   const [bindingsResult, templatesResult] = await Promise.all([
     serviceCatalogThroughShell({ op: "taskBindings", projectId, taskId }),
@@ -193,7 +197,7 @@ export async function loadTaskServices(taskId: string): Promise<TaskServicesLoad
       ? { binding, template, status, statusError: undefined }
       : { binding, template, status: undefined, statusError: "Host 服务状态响应无法解析" };
   }));
-  return { ok: true, projectId, rows, templatesError };
+  return { ok: true, projectId, associationState: association.state, rows, templatesError };
 }
 
 /**
