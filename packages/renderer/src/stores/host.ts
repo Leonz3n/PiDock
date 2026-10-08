@@ -16,6 +16,8 @@ import type {
   TaskProvisionState,
 } from "../data/hostAdapter";
 import { memoryHost } from "../data/memoryHost";
+import { sessionKeyOf } from "../data/sessionKey";
+import type { SessionExecutionView } from "../data/executionLedger";
 import { useWriteLockStore } from "./writeLock";
 import type {
   Approval,
@@ -68,6 +70,13 @@ type HostState = {
   attention: AttentionItem[];
   /** [PiDock 17] (#19 box 5) 读取完成清除未读: clears unread items, then reloads the list. */
   markAttentionRead: (taskId: string, itemIds: string[]) => Promise<{ cleared: string[]; kept: string[] }>;
+  /**
+   * [PiDock 14] (#17) persisted execution readout per session key. `undefined`
+   * means "not read yet"; `null` means the Host reported no readout (so the card
+   * keeps its approvals + live run record instead of an empty ledger).
+   */
+  executions: Record<string, SessionExecutionView | null>;
+  loadExecutionState: (taskId: string, sessionId: string) => Promise<SessionExecutionView | null>;
   approvals: Approval[];
   usage: UsageRecord[];
   refresh: () => Promise<void>;
@@ -169,6 +178,7 @@ export const useHostStore = create<HostState>((set, get) => ({
   attention: [],
   approvals: [],
   usage: [],
+  executions: {},
 
   refresh: async () => {
     try {
@@ -186,6 +196,19 @@ export const useHostStore = create<HostState>((set, get) => ({
     const result = await get().adapter.markAttentionRead(taskId, itemIds);
     set({ attention: await get().adapter.getAttention() });
     return result;
+  },
+
+  loadExecutionState: async (taskId, sessionId) => {
+    const key = sessionKeyOf(taskId, sessionId);
+    try {
+      const view = await get().adapter.sessionExecutionState(taskId, sessionId);
+      set({ executions: { ...get().executions, [key]: view } });
+      return view;
+    } catch {
+      // A failed read keeps the previous readout: showing an empty ledger would
+      // claim the session has no executions at all.
+      return get().executions[key] ?? null;
+    }
   },
 
   loadUsage: async (taskId) => {

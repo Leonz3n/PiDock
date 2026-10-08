@@ -40,6 +40,7 @@ import type {
   Workspace,
 } from "./types";
 import type { SessionWriteState } from "./writeCoordination";
+import type { SessionExecutionView } from "./executionLedger";
 import type { ProtocolBindingView } from "./protocolBinding";
 import type { ServiceTopologyView } from "./serviceTopology";
 import type {
@@ -290,6 +291,15 @@ export interface HostAdapter {
   getSession(taskId: string, sessionId: string): Promise<Session | undefined>;
   getRun(taskId: string, sessionId: string): Promise<RunRecord | undefined>;
   getAttention(): Promise<AttentionItem[]>;
+  /**
+   * [PiDock 14] (#17) one session's persisted execution readout (execution kind,
+   * steps, attempts, the confirmation it waits on) plus the service states the
+   * Host observed. The shell adapter asks the Host (`task/executionState`) and
+   * returns `null` when there is no Host answer, so the caller keeps its own
+   * source instead of showing an empty ledger; the in-memory projection owns no
+   * execution ledger and always returns `null`.
+   */
+  sessionExecutionState(taskId: string, sessionId: string): Promise<SessionExecutionView | null>;
   /**
    * [PiDock 17] (#19 box 5) 读取完成清除未读: clear the read items of one task.
    * Only 完成未读 items clear; a 待处理 id comes back in `kept` so the caller can
