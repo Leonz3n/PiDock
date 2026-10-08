@@ -2,11 +2,18 @@
  * Host-side agent service-control sequence for [PiDock 04] (#7).
  *
  * `host.ts` keeps the transport concerns (utilityProcess parent port,
- * envelope validation, caller classification) and calls this function for
- * the agent branch, so the order that makes the gate correct is testable
- * without a utilityProcess: resolve the session's live permission → find
- * the live approval → decide → mint (only for a registered service, only
- * when the tier asks) → spend one-shot → persist → act.
+ * envelope validation, caller classification) and calls these sequences for
+ * the agent and human branches, so the order that makes the gate correct is
+ * testable without a utilityProcess: resolve the session's live permission →
+ * find the live approval → decide → mint (only for a registered service, only
+ * when the tier asks) → spend one-shot → persist → execute through the Host's
+ * registered process identity → record the lifecycle that really exists.
+ *
+ * Execution rule ([PiDock 04] #7): the driver call happens after the gate has
+ * settled and after the one-shot approval was spent, and it happens *only*
+ * there. A read-tier denial, a missing/rejected approval, a cancel or any
+ * other refusal returns before `ServiceExecutionDriver` is reached, so a
+ * refusal starts and stops nothing.
  *
  * [PiDock 09] (#11) adds the task write right: even the `auto` tier is
  * constrained by it (盒子 3), so a start/stop claims the right before minting
@@ -50,6 +57,24 @@ export type AgentServiceControlResult =
   | { ok: true; payload: { serviceId: string; action: "start" | "stop"; actor: "agent"; tier: PiPermission } }
   | { ok: false; error: string };
 
+export type ServiceControlResult =
+  | { ok: true; payload: { serviceId: string; action: "start" | "stop"; actor: "agent"; tier: PiPermission } }
+  | { ok: true; payload: { serviceId: string; action: "start" | "stop"; actor: "human"; label: string } }
+  | { ok: false; error: string };
+
+/**
+ * Real Host-side execution of one service control ([PiDock 04] #7). The
+ * driver is the Host's own `TaskServiceProcesses` (registered process
+ * identity only); `start` must resolve only after a real child exists and
+ * `stop` only after the registered child was really stopped. Without it
+ * every control stays fail-closed. A gate refusal, a missing approval or a
+ * cancel never calls the driver, so no process is started or stopped.
+ */
+export interface ServiceExecutionDriver {
+  start(serviceId: string): Promise<{ pid: number }>;
+  stop(serviceId: string): Promise<void>;
+}
+
 /** Input of one agent service control ([PiDock 04] #7). */
 export interface AgentServiceControlInput {
   services: TaskServiceRuntime;
@@ -58,6 +83,8 @@ export interface AgentServiceControlInput {
   serviceId: string;
   action: "start" | "stop";
   approvalId?: unknown;
+  /** Real Host process driver; absent keeps every control fail-closed. */
+  driver?: ServiceExecutionDriver;
   /** Task write right ([PiDock 09] #11): claimed around the one-shot operation. */
   write: WriteCoordinatorPort;
   /** Persists the channel snapshot after minting or spending (Host writes the session file). */
@@ -72,9 +99,10 @@ export interface AgentServiceControlInput {
 /**
  * Agent service control through the task's session gate. The execution record
  * wraps the whole sequence, so every exit settles it; only the minted
- * confirmation is bound here.
+ * confirmation is bound here. The real start/stop happens inside the same
+ * sequence, after the gate and after the one-shot approval was spent.
  */
-export function runAgentServiceControl(input: AgentServiceControlInput): AgentServiceControlResult {
+export async function runAgentServiceControl(input: AgentServiceControlInput): Promise<AgentServiceControlResult> {
   const record = input.executions?.record({
     sessionId: input.sessionId,
     kind: "service-control",
@@ -82,15 +110,72 @@ export function runAgentServiceControl(input: AgentServiceControlInput): AgentSe
     step: `服务${input.action === "start" ? "启动" : "停止"}`,
     approvalId: input.approvalId,
   });
-  const result = performAgentServiceControl(input, record);
+  const result = await performAgentServiceControl(input, record);
   record?.settle(result.ok ? { ok: true } : { ok: false, reason: result.error });
   return result;
 }
 
-function performAgentServiceControl(
+/**
+ * Human-explicit service control from the trusted shell view. It carries no
+ * session and takes no tier gate — it *is* the UI path, reached only through
+ * main's sender-bound attestation (`classifyControlCaller`) — and it is
+ * labelled `human` so the event trail separates it from Agent control. The
+ * real start/stop still goes through the Host's registered process identity.
+ */
+export async function runHumanServiceControl(input: {
+  services: TaskServiceRuntime;
+  driver?: ServiceExecutionDriver;
+  serviceId: string;
+  action: "start" | "stop";
+  label: string;
+}): Promise<ServiceControlResult> {
+  if (input.services.get(input.serviceId) === undefined) {
+    return { ok: false, error: `unknown-service: ${input.serviceId} is not registered on this task` };
+  }
+  const actor = { kind: "human" as const, label: input.label };
+  const acted = await runServiceAction(input.services, input.driver, input.serviceId, input.action, actor);
+  return acted.ok ? { ok: true, payload: { serviceId: input.serviceId, action: input.action, actor: "human", label: input.label } }
+    : { ok: false, error: acted.error };
+}
+
+/**
+ * The one place a service start/stop is dispatched: resolve the real driver,
+ * act, and only then record the lifecycle the process really has. Every
+ * refusal and every driver failure returns before any state change, so a
+ * failed spawn never looks like a running service and a failed stop never
+ * looks stopped.
+ */
+async function runServiceAction(
+  services: TaskServiceRuntime,
+  driver: ServiceExecutionDriver | undefined,
+  serviceId: string,
+  action: "start" | "stop",
+  actor: Parameters<TaskServiceRuntime["markStarted"]>[1],
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!driver) return { ok: false, error: "service-execution-unavailable: 真实服务进程执行器未接线" };
+  if (action === "start") {
+    let pid: number;
+    try {
+      pid = (await driver.start(serviceId)).pid;
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+    services.markStarted(serviceId, actor, `process alive (pid ${pid}); dependencies not probed`);
+    return { ok: true };
+  }
+  try {
+    await driver.stop(serviceId);
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+  services.markStopped(serviceId, actor, actor.kind === "human" ? "human-request" : "agent-request");
+  return { ok: true };
+}
+
+async function performAgentServiceControl(
   input: AgentServiceControlInput,
   record: ControlExecutionHandle | undefined,
-): AgentServiceControlResult {
+): Promise<AgentServiceControlResult> {
   const tier = input.channel.currentPermission;
   const approvalId = input.approvalId;
   const liveApproval =
@@ -147,12 +232,13 @@ function performAgentServiceControl(
       input.persist();
     }
     if (channelExecutionClosing(input.channel, "exec.run", target)) return { ok: false, error: "task-host-closing" };
-    if (input.action === "start") {
-      input.services.markStarted(input.serviceId, { kind: "agent", sessionId: input.sessionId, permissionAtRequest: tier });
-    } else {
-      input.services.markStopped(input.serviceId, { kind: "agent", sessionId: input.sessionId, permissionAtRequest: tier }, "agent-request");
-    }
-    return { ok: true, payload: { serviceId: input.serviceId, action: input.action, actor: "agent", tier } };
+    // The gate is settled and the one-shot approval (when there was one) is
+    // spent: now - and only now - a real process may start or stop. A driver
+    // failure keeps the previous lifecycle and returns the real error.
+    const acted = await runServiceAction(input.services, input.driver, input.serviceId, input.action,
+      { kind: "agent", sessionId: input.sessionId, permissionAtRequest: tier });
+    return acted.ok ? { ok: true, payload: { serviceId: input.serviceId, action: input.action, actor: "agent", tier } }
+      : { ok: false, error: acted.error };
   } finally {
     input.write.releaseWrite(claim.claimId);
   }

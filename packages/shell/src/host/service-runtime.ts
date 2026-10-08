@@ -7,8 +7,18 @@
  * reachability with process liveness), a bounded log buffer, explicit
  * program+args launch plans, and per-platform verification records.
  *
- * Execution policy (never `child_process` here — the real spawner is a
- * later slice; this module owns the plan + state machine + guards):
+ * Execution policy:
+ * - The real spawner is `service-processes.ts` (`TaskServiceProcesses`),
+ *   owned by the Host and reachable only through the gated
+ *   `task/controlService` path. This module still owns the plan + state
+ *   machine + guards; it never calls `child_process` itself.
+ * - Only a service registered from main's trusted service catalog
+ *   (`launchSource: "catalog"`) carries an executable launch;
+ *   `task/registerService` over ordinary task RPC registers display/plan
+ *   data that stays fail-closed on control.
+ * - `markStarted`/`markStopped` are called by the driver *after* a real
+ *   child was spawned or a real stop was confirmed, so `lifecycle`
+ *   tracks the process and never a request.
  * - Agent service control goes through the #5 permission gate
  *   (`previewGate("exec.run", …)` on the task's session channel): readonly
  *   denies, default asks (reject/cancel ⇒ zero start/stop), auto allows
@@ -17,7 +27,8 @@
  * - No Unix-only inline env assignment: launch plans carry program + argv
  *   separately from the child env built by `buildChildEnv` (S1).
  * - Health is process liveness only: `markDependencyReachable` records a
- *   note, never flips `running`.
+ *   note, never flips `running`, and no launch performs a reachability
+ *   probe that could be mistaken for a health check.
  */
 
 import {
@@ -29,6 +40,17 @@ import {
   type ServiceDescriptor,
   type ServiceRunType,
 } from "../main/service-config.js";
+
+/**
+ * Where a registered service's launch material came from. Only
+ * `catalog` (main's trusted task-bound service catalog) may execute in
+ * this slice: a descriptor registered over ordinary task RPC is kept as
+ * display/plan data and its control stays fail-closed, so the renderer
+ * cannot turn a page-supplied descriptor into an arbitrary local program.
+ * The rule is enforced by `authorizeServiceRegistration`'s main-stamped
+ * `service-catalog` origin (`host-guards.ts`), never by a caller claim.
+ */
+export type ServiceLaunchSource = "catalog" | "ui";
 import { appendBounded, truncateText } from "../main/bounded-buffer.js";
 import { SERVICE_CONTROL_SCOPE } from "../main/pi-session.js";
 
@@ -58,6 +80,8 @@ export interface ServiceRecord {
   startedBy?: ServiceControlActor;
   /** Per-platform launch verifications (program+args, explicit). */
   launchVerifications: { platform: string; nodeVersion: string; ok: boolean; note: string }[];
+  /** Trusted-catalog registration only; `ui` registrations never execute. */
+  launchSource: ServiceLaunchSource;
 }
 
 export interface ServiceStartPlan {
@@ -196,6 +220,8 @@ export class TaskServiceRuntime {
       runtime?: ServiceConfigEntry[];
     };
     templateVersion: string;
+    /** Defaults to `ui`: registration alone never enables execution. */
+    launchSource?: ServiceLaunchSource;
   }): ServiceRecord {
     if (input.serviceId.trim().length === 0) throw new Error("invalid-payload: serviceId must be a non-empty string");
     const invalid = validateServiceDescriptor(input.descriptor);
@@ -219,8 +245,9 @@ export class TaskServiceRuntime {
       exitReason: existing?.exitReason,
       dependencyNote: existing?.dependencyNote,
       log: existing ? [...existing.log] : [],
-      events: [...(existing?.events ?? []), `config:registered:${input.templateVersion}`],
+      events: [...(existing?.events ?? []), `config:registered:${input.templateVersion}:${input.launchSource ?? "ui"}`],
       launchVerifications: existing ? [...existing.launchVerifications] : [],
+      launchSource: input.launchSource ?? "ui",
     };
     this.services.set(input.serviceId, record);
     return this.get(input.serviceId) as ServiceRecord;
@@ -236,15 +263,65 @@ export class TaskServiceRuntime {
     if (!record) throw new Error(`unknown-service: ${serviceId} is not registered on this task`);
     const trimmedCwd = cwd.trim();
     if (trimmedCwd.length === 0) throw new Error("invalid-payload: cwd must be a non-empty absolute path");
+    return this.planFor(record, trimmedCwd);
+  }
+
+  /**
+   * Launch plan for a registered service, computed from the *registered*
+   * descriptor: the program, argv and working directory come from the
+   * verified registration, never from the request that asks to start it
+   * (the caller only names the serviceId). `TaskServiceProcesses` still
+   * re-checks that the directory resolves inside this task root before
+   * spawning.
+   */
+  planRegisteredStart(serviceId: string): ServiceStartPlan {
+    const record = this.services.get(serviceId);
+    if (!record) throw new Error(`unknown-service: ${serviceId} is not registered on this task`);
+    if (record.launchSource !== "catalog") {
+      throw new Error("service-execution-unavailable: 仅可信服务目录登记的服务可执行，界面登记的配方尚未接入执行");
+    }
+    const cwd = record.descriptor.cwd?.trim() ?? "";
+    if (cwd.length === 0) throw new Error("invalid-launch: 已注册服务缺少绝对工作目录");
+    return this.planFor(record, cwd);
+  }
+
+  private planFor(record: ServiceRecord, cwd: string): ServiceStartPlan {
     return {
-      serviceId,
+      serviceId: record.serviceId,
       program: record.descriptor.program,
       args: [...record.descriptor.args],
-      cwd: trimmedCwd,
+      cwd,
       env: buildChildEnv(record.resolved),
       healthCheck: record.descriptor.healthCheck,
       runType: record.descriptor.runType,
     };
+  }
+
+  /**
+   * Redactor for this task's real service output: every resolved secret
+   * value is replaced before a line reaches the bounded log. Non-secret
+   * rows are kept verbatim (they are display data already shown as
+   * effective values).
+   */
+  redactLine(line: string): string {
+    let output = line;
+    for (const record of this.services.values()) {
+      for (const row of record.resolved) {
+        if (row.secret && row.value.length >= 4) output = output.split(row.value).join("••••••••");
+      }
+    }
+    return output;
+  }
+
+  /**
+   * Append one real output line of a running service (already redacted by
+   * `redactLine`; truncated and bounded by the same buffer as every other
+   * entry). Used by the Host's process driver only.
+   */
+  recordOutput(serviceId: string, line: string): void {
+    const record = this.services.get(serviceId);
+    if (!record) return;
+    this.pushLog(record, line);
   }
 
   /**
@@ -281,7 +358,11 @@ export class TaskServiceRuntime {
     return { ok: true, reason: `${input.action}:${input.serviceId}` };
   }
 
-  /** Human-explicit start: records the actor label, flips liveness, logs. */
+  /**
+   * Records a start that really happened: the Host driver calls this only
+   * after `TaskServiceProcesses.start` resolved with a real child pid.
+   * Records the actor label, flips liveness, logs.
+   */
   markStarted(serviceId: string, actor: ServiceControlActor, detail?: string): void {
     const record = this.services.get(serviceId);
     if (!record) throw new Error(`unknown-service: ${serviceId} is not registered on this task`);
@@ -294,7 +375,12 @@ export class TaskServiceRuntime {
     this.pushLog(record, detail ?? `listening (process alive; dependencies not probed)`);
   }
 
-  /** Human-explicit or approved-agent stop: flips liveness only. */
+  /**
+   * Records a stop that really happened: the Host driver calls this only
+   * after `TaskServiceProcesses.stop` confirmed the registered child's
+   * output closed. A `termination-unconfirmed` stop never reaches here.
+   * Flips liveness only.
+   */
   markStopped(serviceId: string, actor: ServiceControlActor, reason: string): void {
     const record = this.services.get(serviceId);
     if (!record) throw new Error(`unknown-service: ${serviceId} is not registered on this task`);

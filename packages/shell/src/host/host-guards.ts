@@ -175,6 +175,18 @@ export function authorizeServiceRegistration(input: {
 }
 
 /**
+ * Launch material of a service registration ([PiDock 04] #7). Only main's
+ * trusted service catalog (`service-catalog` origin, stamped on the envelope
+ * by main itself) may register an *executable* launch; a shell-UI registration
+ * keeps its descriptor as display/plan data whose control stays fail-closed,
+ * so the page cannot register an arbitrary local program as a service. Pure
+ * and unit-tested because `host.ts` needs a utilityProcess parent port.
+ */
+export function serviceLaunchSource(origin: unknown): "catalog" | "ui" {
+  return isTaskOpOrigin(origin) && origin.kind === "service-catalog" ? "catalog" : "ui";
+}
+
+/**
  * Session a user's browser marker is logged into ([PiDock 06] #8): a named
  * session must already exist, so a typo cannot silently create a new
  * conversation; without a name the task's first persisted session is the
