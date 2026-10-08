@@ -141,8 +141,12 @@ async function run() {
       }
       const size = views.window.getContentBounds();
       // Horizontal-overflow check (#47 S8): document.scrollWidth vs documentElement.clientWidth,
-      // plus window.innerWidth so a scrollbar-gutter difference cannot hide an overflow.
-      const state = await evalJs("({scrollWidth:document.documentElement.scrollWidth,clientWidth:document.documentElement.clientWidth,innerWidth:window.innerWidth})");
+      // plus window.innerWidth so a scrollbar-gutter difference cannot hide an overflow. The page
+      // content lives inside `main[data-testid=desktop-shell-content]`, whose `overflow-y:auto`
+      // makes it its own scroll container (`overflow-x` computes to `auto` too), so an overflow
+      // *inside* the page is scrolled there and never reaches documentElement; measure that
+      // element's scrollWidth/clientWidth as the page-level metric.
+      const state = await evalJs("(() => { const content = document.querySelector('[data-testid=desktop-shell-content]'); return {scrollWidth:document.documentElement.scrollWidth,clientWidth:document.documentElement.clientWidth,innerWidth:window.innerWidth,contentScrollWidth:content?.scrollWidth ?? null,contentClientWidth:content?.clientWidth ?? null}; })()");
       const file = join(output, `${width}x${height}-${label}.png`);
       let image;
       for (let attempt = 0; attempt < 3; attempt++) {
@@ -150,7 +154,7 @@ async function run() {
         catch (error) { if (attempt === 2) throw error; await wait(500); }
       }
       writeFileSync(file, image.toPNG());
-      return { file, width: size.width, height: size.height, overflow: state.scrollWidth - state.innerWidth, overflowClient: state.scrollWidth - state.clientWidth };
+      return { file, width: size.width, height: size.height, overflow: state.scrollWidth - state.innerWidth, overflowClient: state.scrollWidth - state.clientWidth, overflowContent: state.contentScrollWidth === null || state.contentClientWidth === null ? null : state.contentScrollWidth - state.contentClientWidth };
     };
     const shots = [];
     await until((body) => body.includes("对账单详情·本地联调"), "shell list");
@@ -385,6 +389,12 @@ async function run() {
       jsonlBytes: readdirSync(join(taskDir, ".pidock-sdk-sessions", "main")).filter((name) => name.endsWith(".jsonl"))
         .reduce((sum, name) => sum + readFileSync(join(taskDir, ".pidock-sdk-sessions", "main", name), "utf8").length, 0),
     }));
+    // #47 S8 box 1 requires no horizontal overflow at either tier, so a capture that
+    // overflows must fail the run rather than be recorded and ignored (sibling issue45
+    // harness throws on overflow too). `overflowContent` is the page-container metric;
+    // `null` means `desktop-shell-content` was absent, which is also a failure.
+    const overflowing = shots.filter((shot) => shot.overflow !== 0 || shot.overflowClient !== 0 || shot.overflowContent !== 0);
+    if (overflowing.length) throw Error("horizontal overflow " + JSON.stringify(overflowing));
   } catch (error) { console.error("ISSUE47_CAPTURE_FAILED", captureStage, error); process.exitCode = 1; }
   finally {
     clearTimeout(watchdog);
