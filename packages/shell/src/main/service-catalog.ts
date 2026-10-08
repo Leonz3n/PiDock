@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { accessSync, constants, realpathSync, closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { accessSync, constants, realpathSync, closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync, type BigIntStats } from "node:fs";
 import type { ServiceOwnerCatalogSnapshot } from "../rpc/service-host-binding.js";
 import { isAbsolute, join, normalize } from "node:path";
 import { readTaskRecordOnDisk } from "../host/task-store.js";
@@ -36,6 +36,25 @@ export interface SavedServiceConfigPreview {
   state: "ready" | "blocked";
   error?: "private-reference-unavailable" | "environment-resolution-failed";
   rows: { key: string; value: string; masked: boolean; source: ServiceConfigSource }[];
+}
+
+/**
+ * Trusted launch material for one task-bound service ([PiDock 04] #7).
+ * Main-only: it carries the local program path and the resolved private
+ * values, so it is never a projection sent to a page and never a page
+ * payload. The Host receives it as an executable *registration*, not as a
+ * launch plan it can be told to run by name.
+ */
+export interface ServiceLaunch {
+  serviceId: string;
+  templateVersion: number;
+  descriptor: ServiceDescriptor;
+  layers: {
+    repoDefaults: ServiceConfigEntry[];
+    shared: ServiceConfigEntry[];
+    privateEntries: ServiceConfigEntry[];
+    task: ServiceConfigEntry[];
+  };
 }
 
 export interface ServiceCatalogAuthority {
@@ -288,6 +307,59 @@ export class ServiceCatalog {
     if (!owner || owner.identity.taskId !== taskId || !this.authority.projectExists(owner.projectId)) throw new Error("task identity unavailable");
     return owner;
   }
+  /**
+   * Verified physical launch paths of one binding: every component under the
+   * task root must be a real directory (no symlinked level) and the program
+   * must be an executable regular file. A snapshot, not an atomic open.
+   */
+  private verifiedLaunchPaths(binding: ServiceTaskBinding, taskRoot: string): { cwd: string; cwdStat: BigIntStats; program: string; programStat: BigIntStats } {
+    const cwd = join(taskRoot, binding.rootId, binding.subdir);
+    const parts = [binding.rootId, ...binding.subdir.split("/").filter(Boolean)];
+    for (let index = 1; index <= parts.length; index++) {
+      const path = join(taskRoot, ...parts.slice(0, index));
+      if (!lstatSync(path).isDirectory() || realpathSync(path) !== path) throw Error();
+    }
+    const cwdStat = lstatSync(cwd, { bigint: true });
+    const program = realpathSync(binding.programPath), programStat = lstatSync(program, { bigint: true });
+    if (!programStat.isFile()) throw Error();
+    accessSync(program, constants.X_OK);
+    return { cwd, cwdStat, program, programStat };
+  }
+  /** The trusted task-root directory of a verified identity, checked against its recorded device/inode. */
+  private verifiedTaskRoot(owner: { identity: VerifiedTaskIdentity }): string {
+    const taskRoot = join(owner.identity.realRoot, owner.identity.dirId);
+    const root = lstatSync(taskRoot, { bigint: true });
+    if (!root.isDirectory() || realpathSync(taskRoot) !== taskRoot ||
+        root.dev.toString() !== owner.identity.directoryDevice || root.ino.toString() !== owner.identity.directoryInode) throw Error();
+    return taskRoot;
+  }
+  /**
+   * Trusted launch material for one task-bound service ([PiDock 04] #7): the
+   * pinned template version, the verified absolute program/cwd and the
+   * resolved env layers (shared literals plus this machine's private
+   * reference values). Main alone resolves it from the persisted catalog -
+   * the page names only project/task/service, never a program or a value.
+   * Errors are a single fixed code so no private path or value escapes.
+   */
+  launchFor(taskId: string, project: string, id: string, privateEnv: Record<string, string | undefined>): ServiceLaunch {
+    try {
+      const owner = this.requireTask(taskId);
+      const selected = this.taskBindings(project, taskId).find((row) => row.binding.serviceId === serviceId(id));
+      if (!selected) throw Error();
+      const taskRoot = this.verifiedTaskRoot(owner);
+      const { cwd, program } = this.verifiedLaunchPaths(selected.binding, taskRoot);
+      const privateEntries = resolvePrivateServiceRefs(selected.binding.privateRefs, privateEnv);
+      const pinned = selected.template.descriptor;
+      const descriptor: ServiceDescriptor = { id: selected.binding.serviceId, name: pinned.name, program,
+        args: [...pinned.args], cwd, ports: [...pinned.ports],
+        ...(pinned.healthCheck === undefined ? {} : { healthCheck: { ...pinned.healthCheck } }), runType: pinned.runType };
+      if (validateServiceDescriptor(descriptor)) throw Error();
+      const resolved = resolveServiceEnv({ repoDefaults: [], shared: selected.template.shared, privateEntries, task: [] });
+      if (!resolved.ok) throw Error();
+      return { serviceId: selected.binding.serviceId, templateVersion: selected.binding.templateVersion, descriptor,
+        layers: { repoDefaults: [], shared: selected.template.shared.map((entry) => ({ ...entry })), privateEntries, task: [] } };
+    } catch { throw Error("service-launch-unavailable"); }
+  }
   /** Trusted main snapshot only. Saved metadata is a contract to review, never execution authority.
    * File identities/commitments are freshness snapshots, not atomic execution or same-UID isolation. */
   ownerSnapshot(taskId: string, workspaceId: string, privateEnv: Record<string, string | undefined>): ServiceOwnerCatalogSnapshot {
@@ -296,25 +368,14 @@ export class ServiceCatalog {
       const owner = this.authority.verifiedTask?.(taskId);
       if (!owner || owner.identity.taskId !== taskId || owner.projectId !== null && !this.authority.projectExists(owner.projectId)) throw Error();
       const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
-      const taskRoot = join(owner.identity.realRoot, owner.identity.dirId);
-      const root = lstatSync(taskRoot, { bigint: true });
-      if (!root.isDirectory() || realpathSync(taskRoot) !== taskRoot || root.dev.toString() !== owner.identity.directoryDevice || root.ino.toString() !== owner.identity.directoryInode) throw Error();
+      const taskRoot = this.verifiedTaskRoot(owner);
       const bindings = this.readMachine().bindings.filter((row) => row.taskId === taskId);
       if (owner.projectId === null && bindings.length) throw Error();
       // Read both documents even for empty/unassigned tasks: corrupt catalogs never mean zero services.
       this.readTemplates();
       const selected = owner.projectId === null ? [] : this.listTask(taskId);
       const entries = selected.map(({ binding, template }) => {
-        const cwd = join(taskRoot, binding.rootId, binding.subdir);
-        const parts = [binding.rootId, ...binding.subdir.split("/").filter(Boolean)];
-        for (let index = 1; index <= parts.length; index++) {
-          const path = join(taskRoot, ...parts.slice(0, index));
-          if (!lstatSync(path).isDirectory() || realpathSync(path) !== path) throw Error();
-        }
-        const cwdStat = lstatSync(cwd, { bigint: true });
-        const program = realpathSync(binding.programPath), programStat = lstatSync(program, { bigint: true });
-        if (!programStat.isFile()) throw Error();
-        accessSync(program, constants.X_OK);
+        const { cwd, cwdStat, program, programStat } = this.verifiedLaunchPaths(binding, taskRoot);
         const privateEntries = resolvePrivateServiceRefs(binding.privateRefs, privateEnv);
         const env = resolveServiceEnv({ repoDefaults: [], shared: template.shared, privateEntries, task: [] });
         if (!env.ok || env.rows.some((row) => row.value.length > 4096 || row.value.includes("\0"))) throw Error();
