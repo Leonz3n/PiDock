@@ -30,9 +30,10 @@
  * Identity of a resource this task started. `startedAt` is the OS-reported
  * start time (as reported, compared verbatim) and is what tells a live pid
  * apart from the same pid reused by another process after a crash. `command`
- * and `cwd` strengthen the check when both sides know them (a recorded
- * service/terminal identity only carries pid + start time, so they stay
- * optional rather than making every recorded identity unverifiable).
+ * and `cwd` are optional on the recorded side (a recorded service/terminal
+ * identity may carry only pid + start time), but once recorded they must be
+ * proven by the live observation; a live observation missing either field
+ * fails closed.
  */
 export interface TaskProcessIdentity {
   pid: number;
@@ -100,11 +101,11 @@ export function verifyProcessIdentity(
       reason: `进程号 ${String(pid)} 已被另一个进程复用（启动时间不同），拒绝按过期进程号操作`,
     };
   }
-  if (command !== undefined && found.command !== undefined && found.command.trim() !== command) {
-    return { ok: false, code: "identity-mismatch", reason: `进程 ${String(pid)} 的命令与记录不符` };
+  if (command !== undefined && (found.command === undefined || found.command.trim() !== command)) {
+    return { ok: false, code: "identity-mismatch", reason: `进程 ${String(pid)} 的命令与记录不符或现场未提供可核对的命令` };
   }
-  if (cwd !== undefined && found.cwd !== undefined && found.cwd.trim() !== cwd) {
-    return { ok: false, code: "identity-mismatch", reason: `进程 ${String(pid)} 的工作目录与记录不符` };
+  if (cwd !== undefined && (found.cwd === undefined || found.cwd.trim() !== cwd)) {
+    return { ok: false, code: "identity-mismatch", reason: `进程 ${String(pid)} 的工作目录与记录不符或现场未提供可核对的工作目录` };
   }
   return {
     ok: true,

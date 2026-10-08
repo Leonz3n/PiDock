@@ -76,6 +76,27 @@ describe("verifyProcessIdentity", () => {
     );
     expect(verdict).toMatchObject({ ok: false, code: "identity-mismatch" });
   });
+
+  it("refuses a claim whose recorded command or cwd cannot be proven by the live observation", () => {
+    expect(
+      verifyProcessIdentity(
+        { pid: 4321, startedAt: "2026-09-22T10:00:00+08:00", command: "node server.js", cwd: TASK_DIR },
+        [{ pid: 4321, startedAt: "2026-09-22T10:00:00+08:00" }],
+      ),
+    ).toMatchObject({ ok: false, code: "identity-mismatch" });
+    expect(
+      verifyProcessIdentity(
+        { pid: 4321, startedAt: "2026-09-22T10:00:00+08:00", command: "node server.js", cwd: TASK_DIR },
+        [{ pid: 4321, startedAt: "2026-09-22T10:00:00+08:00", command: "node server.js" }],
+      ),
+    ).toMatchObject({ ok: false, code: "identity-mismatch" });
+    expect(
+      verifyProcessIdentity(
+        { pid: 4321, startedAt: "2026-09-22T10:00:00+08:00", command: "node server.js", cwd: TASK_DIR },
+        [{ pid: 4321, startedAt: "2026-09-22T10:00:00+08:00", cwd: TASK_DIR }],
+      ),
+    ).toMatchObject({ ok: false, code: "identity-mismatch" });
+  });
 });
 
 describe("verifyGitResourceIdentity", () => {
