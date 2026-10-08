@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { performServiceBindingOperation, performServiceCatalogOperation, performServiceConfigPreview } from "./service-catalog-ipc.js";
+import { parseServiceRunRequest, performServiceBindingOperation, performServiceCatalogOperation, performServiceConfigPreview } from "./service-catalog-ipc.js";
 import type { ServiceCatalog, ServiceTemplate } from "./service-catalog.js";
 
 const template: ServiceTemplate = {
@@ -73,5 +73,28 @@ describe("shell service catalog request boundary", () => {
     ]) expect(() => performServiceCatalogOperation(catalog, request)).toThrow();
     expect(catalog.listTemplates).not.toHaveBeenCalled();
     expect(catalog.saveTemplate).not.toHaveBeenCalled();
+  });
+});
+
+// [PiDock 04] (#7) main's only execution entry: it names the identity only, so
+// the request may not carry a program, cwd, value or any other key.
+describe("shell service run request boundary", () => {
+  const valid = { op: "runTaskService", taskId: "task-1", projectId: template.projectId, serviceId: template.serviceId, action: "start" };
+  it("accepts exactly one identity plus an action", () => {
+    expect(parseServiceRunRequest(valid)).toEqual({ taskId: "task-1", projectId: template.projectId, serviceId: template.serviceId, action: "start" });
+    expect(parseServiceRunRequest({ ...valid, action: "stop" }).action).toBe("stop");
+  });
+  it("rejects extra keys, a foreign op and any non-start/stop action", () => {
+    expect(() => parseServiceRunRequest({ ...valid, program: "/bin/sh" })).toThrow();
+    expect(() => parseServiceRunRequest({ ...valid, env: { TOKEN: "page-value" } })).toThrow();
+    expect(() => parseServiceRunRequest({ ...valid, op: "previewConfig" })).toThrow();
+    expect(() => parseServiceRunRequest({ ...valid, action: "restart" })).toThrow();
+    expect(() => parseServiceRunRequest({ ...valid, action: undefined })).toThrow();
+    expect(() => parseServiceRunRequest({ ...valid, taskId: 7 })).toThrow();
+    expect(() => parseServiceRunRequest([valid])).toThrow();
+    expect(() => parseServiceRunRequest(undefined)).toThrow();
+  });
+  it("rejects an oversized request before any caller sees it", () => {
+    expect(() => parseServiceRunRequest({ ...valid, taskId: "t".repeat(4096) })).toThrow();
   });
 });

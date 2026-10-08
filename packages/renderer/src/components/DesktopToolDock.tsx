@@ -57,9 +57,11 @@ import {
  * Controls this build cannot serve (local/remote switching, remote dependency
  * and routing reads, live log streaming, page discovery and embedding, page
  * marks) stay visible and explicitly marked 未接线 with the reason; none of
- * them is filled with sample data. Service start/stop is no longer that kind of
- * gap — the Host now executes a service registered from the trusted catalog —
- * but this panel still offers no trigger, so the row says so instead of hiding.
+ * them is filled with sample data. Service start/stop is no longer that kind
+ * of gap — the Host now executes a service registered from the trusted
+ * catalog and the run panel's per-service toggle already drives it through
+ * `task/controlService` — but this dock still renders no trigger, so the row
+ * says exactly that instead of claiming the page has none.
  */
 export type DesktopTool = "runtime" | "browser" | "files" | "terminal" | "logs" | "protocol";
 
@@ -86,7 +88,7 @@ export const DESKTOP_TOOLS_UNWIRED: { id: string; label: string; reason: string 
  * never replaced by sample data.
  */
 export const DESKTOP_TOOL_CONTROLS_UNWIRED: Record<string, string> = {
-  "service-control": "此面板不提供启停按钮：Host 已接管真实服务进程，但只执行可信服务目录登记的任务绑定服务，页面触发未接线",
+  "service-control": "此坞不提供启停按钮：Host 只执行可信服务目录登记的任务绑定服务；运行面板的启停已按人工路径走 task/controlService，本坞不新增触发器",
   "service-mode": "本地/远程切换需要任务覆盖写入，Host 无对应读写能力",
   "remote-deps": "Host 无本任务远程依赖清单读取 op",
   routing: "Host 无生效路由/请求去向读取 op",

@@ -65,6 +65,13 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   内运行的任何脚本都能拿到无门禁的人工路径，非壳发送方则拿不到。只靠壳
   页可达的通道（`runtime.ts` 仅注册壳页可调的 `ipcMain.handle`）不构成
   多租户隔离，真正的隔离在“谁能以该 sender 发消息”。
+- 信封的来源证明有两种，均由 main 自己盖章，renderer 无法伪造：
+  `{kind:"shell-ui"}` 用于壳页发起的普通 `host/task`；
+  `{kind:"service-catalog"}` 只用于 main 自己在执行任务绑定服务时发出的
+  `task/registerService` / `task/controlService`（`runtime.ts` 的
+  `runTaskService`）。`serviceLaunchSource`（纯函数，`host-guards.test.ts`
+  锁定）只把 `service-catalog` 登记当作可执行启动；`shell-ui` 登记永远只是
+  展示/计划数据，其控制保持 fail-closed。
 - 服务启停的人工/Agent 归属由 `classifyServiceControlCaller`（纯函数，
   `host-guards.test.ts` 锁定）判定；Agent 分支的权限档位取自会话通道的
   实时 `currentPermission`，`default` 档必须携带已验证的 `approvalId`。
@@ -81,6 +88,18 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   （当前 renderer 还没有服务注册入口，服务只在 Host/Agent 侧注册）仍回落
   memory。真实的 `child_process` 启动、日志流与 renderer 注册入口一起落地时
   才能端到端，仍在 #7 残留内。
+- **真实服务执行与其边界**（隐患记录，不只写成功路径）：任务绑定的服务现在真的会被启动：
+  main 从可信服务目录解析绑定（pin 版本 + realpath 程序 + 校验 cwd 在任务根内 +
+  分层环境），以自带的 `service-catalog` origin 走 `task/registerService` 登记，
+  再走既有 `task/controlService` 门禁启动 `TaskServiceProcesses` 的真实子进程；
+  `stop` 只对自己登记的子进程组 SIGTERM→SIGKILL，`task/quit` 先停本任务真实子进程
+  再写关闭回执。这条链此前在代码注释与工单里被显式禁止（“在进程树具备逐平台已核验的
+  所有权机制前不要接入生产”），本次按“单服务真实运行”的方向解除，且**未**新增逐平台
+  所有权机制；工单/ADR 尚未单独登记这次解除，以下边界是接受中的残留、不是已解决项：
+  Windows 整体拒绝 `start`（无 Job Object 监督器）；调用 `setsid` 脱离进程组的后代
+  超出停止契约；真实子进程身份没有写进耐久所有者台账，因此 Host 崩溃/重启后旧子进程
+  可能仍活着而界面按台账显示已停止、新 Host 再启动会重复拉起（需要单独的“耐久进程
+  所有权 + 恢复”切片）；`realpathSync` 校验与 `spawn` 之间不是原子打开。
 
 ### 任务浏览器：任务内页面、门禁与标记回传（[PiDock 06] #8）
 
@@ -182,7 +201,8 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   （`ProcessIdentity` / `verifyRegisteredIdentity` 精确匹配 instance + pid +
   启动时间），绝不按端口或过期 PID 猜测；`planStopScope` 只返回所属任务的身份，
   同名实例属于其他任务时进入 `skipped` 并写明原因。`task/serviceStopScope` 是
-  只读计算，真实终止（`child_process` 进程树）属残留下一个切片。
+  只读计算；真实终止只发生在 #7 的受控路径上（可信服务目录登记的任务绑定服务，
+  `task/controlService` → `TaskServiceProcesses`），不在本节的规划 op 里。
 - **共享外部资源**：`classifyExternalResource` 默认按共享处理，`queue` /
   `dtm-callback` 明确标为 `not-isolated`（消费端与回调端仍是同一实例），
   只有拿到独立实例证据（`isolatedByTask`）才标 `isolated`；任务视图显示资源
@@ -623,8 +643,10 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   只移除身份确认的任务内链接且不跟随链接）的规则与 Host 状态已覆盖；盒子 2／3／7／11
   为部分覆盖（真实进程树终止、真实关窗后台常驻、整份工作副本的物理拷贝、未交付判定
   见残留）。
-- **残留（未测／未实现）**：真实进程树终止未接线（Host 只结束登记的派生执行记录，
-  `stopProcessTree` 经 `host.endDerivedExecution`，无真实 spawner 可供 kill）；真实
+- **残留（未测／未实现）**：本节的 `stopProcessTree`／`host.endDerivedExecution` 路径仍无真实
+  spawner 可供 kill（只结束登记的派生执行记录）；真实进程树终止只存在于 #7 的可信目录路径
+  上（`TaskServiceProcesses` 对单个已登记子进程发进程组 SIGTERM→SIGKILL 并确认 stdio 关闭，
+  `setsid` 脱离进程组的后代与 Windows 仍在契约外）。真实
   Electron 关窗后台常驻与退出恢复 E2E 未运行（关窗保留窗口／`activate` 重开／
   `window-all-closed` 分平台已接线并有 Electron 边界夹具测试，但没有真实 GUI 走查，
   非 darwin 平台因无托盘入口仍标注为不可用）；浏览器持久
@@ -731,8 +753,10 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   service-control／browser-action／terminal-control 三类 Host 驱动控制各自开设执行记录
   （`ControlExecutionPort`，见 #17 章节），renderer 由 `data/executionLedger.ts` 消费
   `task/executionState`（会话执行状态卡）。
-  仍属**未测／未实现**：service-control 的生产派发仍按 #7 的所有者决策失败关闭
-  （`service-execution-unavailable`），因此该类的记录只在控制序列与 Host 接缝层有测试；
+  仍属**未测／未实现**：service-control 的生产派发只对可信服务目录登记的任务绑定服务
+  执行（`task/controlService` → `TaskServiceProcesses`，见 #7 章节）；其余登记（未登记 id、
+  界面配方、所有者状态未确认）仍失败关闭（`service-execution-unavailable` /
+  `service-execution-uncertain`），那部分记录只在控制序列与 Host 接缝层有测试；
   真实模型调用、真实子进程与浏览器操作、Electron 走查与跨平台运行未执行；
   「载荷版本」没有真实内容生产者，版本复核因此只在同一版本上通过（规则层的
   不匹配路径由单测锁定）；自动化（定时）入口尚未用它建立执行记录。

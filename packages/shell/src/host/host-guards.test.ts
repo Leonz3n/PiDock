@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { authorizeServiceRegistration, boundWorkspaceId, resolveBrowserLogSession, buildHostEnv, buildToolPlannerSpec, classifyControlCaller, DEFAULT_WORKSPACE_ID, routeHostTask, routeTaskBinding, toolPlannerSpecForHostDispatch, toolPlannerSpecForOp, validateHostTaskOp } from "./host-guards.js";
+import { authorizeServiceRegistration, boundWorkspaceId, resolveBrowserLogSession, buildHostEnv, buildToolPlannerSpec, classifyControlCaller, DEFAULT_WORKSPACE_ID, routeHostTask, routeTaskBinding, serviceLaunchSource, toolPlannerSpecForHostDispatch, toolPlannerSpecForOp, validateHostTaskOp } from "./host-guards.js";
 
 describe("service registration authorization", () => {
   it("allows only main-attested human registration until Agent diff approval is wired", () => {
@@ -292,6 +292,20 @@ describe("service-control caller classification", () => {
       kind: "human",
       label: "用户显式操作",
     });
+  });
+});
+
+// [PiDock 04] (#7) only main's own `service-catalog` envelope makes a service
+// registration executable; every other origin (including a renderer-forged
+// one, which cannot set the envelope field at all) stays display-only.
+describe("service launch source", () => {
+  it("authorizes an executable launch only for main's service-catalog origin", () => {
+    expect(serviceLaunchSource({ kind: "service-catalog", senderWebContentsId: 42 })).toBe("catalog");
+    expect(serviceLaunchSource({ kind: "shell-ui", senderWebContentsId: 42 })).toBe("ui");
+    expect(serviceLaunchSource(undefined)).toBe("ui");
+    expect(serviceLaunchSource({ kind: "catalog", senderWebContentsId: 42 })).toBe("ui");
+    expect(serviceLaunchSource({ kind: "service-catalog", senderWebContentsId: "42" })).toBe("ui");
+    expect(serviceLaunchSource("service-catalog")).toBe("ui");
   });
 });
 
