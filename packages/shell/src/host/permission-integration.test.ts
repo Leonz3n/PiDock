@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { TaskWorkspaceHost, memoryTaskStore } from "./task-host.js";
-import { runAgentServiceControl } from "./service-control.js";
+import { runAgentServiceControl, type ServiceExecutionDriver } from "./service-control.js";
 import { runAgentBrowserAction, type BrowserGatewayPort } from "./browser-control.js";
 import { TaskServiceRuntime } from "./service-runtime.js";
 import { writeClaimError } from "./write-coordination.js";
@@ -24,6 +24,16 @@ const TASK_ID = "task-a1f92c3d";
 const DIR = "/Users/name/Tasks/task-a1f92c3d";
 const SERVICE_ID = "saas-web";
 const PAGE = { taskId: TASK_ID, pageId: "page-1", webContentsId: 11 };
+
+/**
+ * This suite is about the shared permission gate and the task write right, not
+ * about the spawner: the driver stands in for the Host's process port so an
+ * allowed start still only marks the service running after a real pid is seen.
+ */
+const STUB_DRIVER: ServiceExecutionDriver = {
+  start: async () => ({ pid: 4821 }),
+  stop: async () => {},
+};
 
 function setup(tiers: { file: "read" | "default" | "auto"; service: "read" | "default" | "auto"; browser: "read" | "default" | "auto" }) {
   const store = memoryTaskStore();
@@ -73,6 +83,7 @@ function setup(tiers: { file: "read" | "default" | "auto"; service: "read" | "de
       sessionId,
       serviceId: SERVICE_ID,
       action: "start",
+      driver: STUB_DRIVER,
       ...(approvalId !== undefined ? { approvalId } : {}),
       write: taskHost,
       persist: () => store.writeSession(DIR, channel.snapshot()),
@@ -118,8 +129,8 @@ describe("[PiDock 09] integrated permission acceptance across tool classes", () 
     const gate = env.taskHost.openSession("main").previewGate("exec.run", `${DIR}/run.sh`);
     expect(gate).toMatchObject({ verdict: "deny" });
     // 3) Service control and 4) browser action: denied by their own tier rule.
-    expect(env.serviceControl("main", "read")).toMatchObject({ ok: false });
-    expect(env.serviceControl("main", "read", "approval-guessed")).toMatchObject({ ok: false });
+    expect(await env.serviceControl("main", "read")).toMatchObject({ ok: false });
+    expect(await env.serviceControl("main", "read", "approval-guessed")).toMatchObject({ ok: false });
     await expect(env.browserAction("main", "read")).resolves.toMatchObject({ ok: false });
     expect(env.browserCalls).toHaveLength(0);
     // 5) Arbitrary execution (a derived child process) is refused as well.
@@ -138,12 +149,12 @@ describe("[PiDock 09] integrated permission acceptance across tool classes", () 
     expect(command.state).toBe("approval");
     // Service control: mints its own scope-bound confirmation, acts only after
     // the approval spends it.
-    const serviceMint = env.serviceControl("main", "default");
+    const serviceMint = await env.serviceControl("main", "default");
     expect(serviceMint.ok).toBe(false);
     const serviceApprovalId = String((serviceMint as { error: string }).error).replace("approval-required: ", "");
     expect(env.services.get(SERVICE_ID)?.lifecycle).toBe("stopped");
     env.taskHost.openSession("main").approve(serviceApprovalId);
-    expect(env.serviceControl("main", "default", serviceApprovalId)).toMatchObject({ ok: true });
+    expect(await env.serviceControl("main", "default", serviceApprovalId)).toMatchObject({ ok: true });
     expect(env.services.get(SERVICE_ID)?.lifecycle).toBe("running");
     // Browser: also asks first, and the gateway was not touched.
     const browserMint = await env.browserAction("main", "default");
@@ -181,14 +192,14 @@ describe("[PiDock 09] integrated permission acceptance across tool classes", () 
     // auto file write: refused with the holder named, no mint, no execution.
     expect(env.writeTurn("main", "auto", `${DIR}/notes.md`)).toThrow("同一任务写操作权由会话 other 持有");
     // auto service control and browser action: refused before minting/acting.
-    expect(env.serviceControl("main", "auto")).toMatchObject({ ok: false });
+    expect(await env.serviceControl("main", "auto")).toMatchObject({ ok: false });
     await expect(env.browserAction("main", "auto")).resolves.toMatchObject({ ok: false });
     expect(env.browserCalls).toHaveLength(0);
     expect(env.services.runningAgentOwned()).toHaveLength(0);
     // Releasing the holder lets auto proceed without any confirmation.
     env.taskHost.reject("other", holder.approvalId ?? "");
     expect(env.writeTurn("main", "auto", `${DIR}/notes.md`)()).toMatchObject({ state: "done" });
-    expect(env.serviceControl("main", "auto")).toMatchObject({ ok: true });
+    expect(await env.serviceControl("main", "auto")).toMatchObject({ ok: true });
     await expect(env.browserAction("main", "auto")).resolves.toMatchObject({ ok: true });
     expect(env.browserCalls).toHaveLength(1);
   });
@@ -202,7 +213,7 @@ describe("[PiDock 09] integrated permission acceptance across tool classes", () 
     expect(refusal.ok).toBe(false);
     expect(writeClaimError(refusal as Extract<typeof refusal, { ok: false }>)).toContain("task-locked:");
     expect(() => env.writeTurn("other", "default", `${DIR}/other.md`)()).toThrow("task-locked:");
-    expect(env.serviceControl("other", "default")).toMatchObject({ ok: false });
+    expect(await env.serviceControl("other", "default")).toMatchObject({ ok: false });
     await expect(env.browserAction("other", "default")).resolves.toMatchObject({ ok: false });
     // Ending the child process frees the right for the other session.
     env.taskHost.endDerivedExecution("child-1");
