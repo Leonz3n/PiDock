@@ -140,7 +140,9 @@ async function run() {
         await wait(100);
       }
       const size = views.window.getContentBounds();
-      const state = await evalJs("({scrollWidth:document.documentElement.scrollWidth,innerWidth:window.innerWidth})");
+      // Horizontal-overflow check (#47 S8): document.scrollWidth vs documentElement.clientWidth,
+      // plus window.innerWidth so a scrollbar-gutter difference cannot hide an overflow.
+      const state = await evalJs("({scrollWidth:document.documentElement.scrollWidth,clientWidth:document.documentElement.clientWidth,innerWidth:window.innerWidth})");
       const file = join(output, `${width}x${height}-${label}.png`);
       let image;
       for (let attempt = 0; attempt < 3; attempt++) {
@@ -148,7 +150,7 @@ async function run() {
         catch (error) { if (attempt === 2) throw error; await wait(500); }
       }
       writeFileSync(file, image.toPNG());
-      return { file, width: size.width, height: size.height, overflow: state.scrollWidth - state.innerWidth };
+      return { file, width: size.width, height: size.height, overflow: state.scrollWidth - state.innerWidth, overflowClient: state.scrollWidth - state.clientWidth };
     };
     const shots = [];
     await until((body) => body.includes("对账单详情·本地联调"), "shell list");
