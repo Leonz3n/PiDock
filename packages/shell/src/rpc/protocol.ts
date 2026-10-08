@@ -133,9 +133,17 @@ export type HostTaskOp =
  * renderer payload, so a browser-side caller cannot mint it. The Host
  * reads it only to decide that a session-less service control came from
  * the human UI; ops arriving any other way must name their session.
+ *
+ * `service-catalog` is a second main-only value: main resolved the asking
+ * shell view and is driving a task-bound service recipe from the trusted
+ * persisted catalog itself (the page only named the project/task/service).
+ * Only main constructs it (`PerTaskHostRegistry.routeTaskOp` callers), and
+ * the renderer cannot set the envelope field, so a page can neither forge
+ * the catalog origin nor turn a page-supplied descriptor into an
+ * executable launch.
  */
 export interface TaskOpOrigin {
-  kind: "shell-ui";
+  kind: "shell-ui" | "service-catalog";
   /** webContents id of the shell trust-domain sender (audit only). */
   senderWebContentsId: number;
 }
@@ -143,7 +151,7 @@ export interface TaskOpOrigin {
 export function isTaskOpOrigin(value: unknown): value is TaskOpOrigin {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
-  if (record["kind"] !== "shell-ui") return false;
+  if (record["kind"] !== "shell-ui" && record["kind"] !== "service-catalog") return false;
   const sender = record["senderWebContentsId"];
   return typeof sender === "number" && Number.isInteger(sender) && sender > 0;
 }

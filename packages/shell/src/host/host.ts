@@ -40,9 +40,11 @@ import {
   classifyControlCaller,
   resolveBrowserLogSession,
   routeHostTask,
+  serviceLaunchSource,
   validateHostTaskOp,
 } from "./host-guards.js";
 import { ServiceOwnerInventory } from "./service-owner-inventory.js";
+import { TaskServiceProcesses } from "./service-processes.js";
 import { serviceOwnerBootstrap, type ServiceOwnerBootstrap, type ServiceOwnerCompletion } from "../rpc/service-host-binding.js";
 import { TaskWorkspaceHost, diskTaskStore } from "./task-host.js";
 import { SdkTurnTransport } from "./sdk-turn-transport.js";
@@ -51,6 +53,7 @@ import { PiSdkTextKernel } from "./sdk-text-kernel.js";
 import type { ServiceRunObservation } from "../main/execution-ledger.js";
 import { SharedPathCoordinator } from "./path-coordination.js";
 import { TaskServiceRuntime } from "./service-runtime.js";
+import { runAgentServiceControl, runHumanServiceControl, type ServiceExecutionDriver } from "./service-control.js";
 import { scanTaskServiceImportHints } from "./service-import.js";
 import { publicServiceStartPreview, publicServiceStatus } from "./service-public.js";
 import { TaskServiceTopology } from "./service-topology.js";
@@ -356,6 +359,62 @@ function serviceRuntimeFor(taskId: string): TaskServiceRuntime | { error: string
     serviceRuntime = new TaskServiceRuntime(host.taskDir);
   }
   return serviceRuntime;
+}
+
+/**
+ * [PiDock 04] (#7) the Host-owned real process driver for this task's
+ * registered services: `TaskServiceProcesses` holds the process identity,
+ * captures bounded redacted output and stops only its own registered child.
+ * It is created next to the runtime (same fork binding, same lifetime) and
+ * is reachable only from the gated `task/controlService` path. Windows
+ * `start` stays refused inside the driver.
+ */
+let serviceProcesses: TaskServiceProcesses | null = null;
+/** Real terminal state of this task's service children when the Host quit stopped them. */
+let serviceStopReport: { serviceId: string; state: "stopped" | "exited" }[] | undefined;
+
+/**
+ * Normal Host quit stops every real service child this task owns before any
+ * durable "closed" report is written. `stopAll` settles every attempt and
+ * throws when a stop could not be confirmed, so an uncertain termination
+ * fails the quit instead of producing a clean shutdown receipt.
+ */
+async function stopRegisteredServiceProcesses(): Promise<{ serviceId: string; state: "stopped" | "exited" }[]> {
+  const processes = serviceProcesses;
+  if (!processes) return [];
+  const ids = processes.ids();
+  await processes.stopAll();
+  return ids.map((serviceId) => ({ serviceId, state: serviceRuntime?.get(serviceId)?.lifecycle === "stopped" ? "stopped" : "exited" }));
+}
+function serviceDriverFor(services: TaskServiceRuntime): ServiceExecutionDriver {
+  if (!serviceProcesses || serviceProcesses.taskDir !== services.taskDir) {
+    serviceProcesses = new TaskServiceProcesses(
+      services.taskDir,
+      (serviceId, line) => services.recordOutput(serviceId, line),
+      (serviceId, reason) => services.markExited(serviceId, reason),
+      (line) => services.redactLine(line),
+    );
+  }
+  const processes = serviceProcesses;
+  return {
+    start: async (serviceId) => ({ pid: await processes.start(services.planRegisteredStart(serviceId)) }),
+    stop: async (serviceId) => { await processes.stop(serviceId); },
+  };
+}
+
+/**
+ * Durable service state stays authoritative for uncertainty: a service the
+ * installed owner inventory already recorded as starting/running/stopping/
+ * unconfirmed must not be re-launched as if nothing were known about it, and
+ * a fresh runtime process must not hide that state behind `stopped`.
+ */
+function serviceOwnerStateRefusal(serviceId: string): string | null {
+  if (!serviceOwnerInventory) return null;
+  const status = serviceOwnerInventory.status(serviceId);
+  if (!status.ok) return null;
+  const state = (status.service as { state?: unknown }).state;
+  if (state === "stopped" || state === "exited") return null;
+  return `service-execution-uncertain: 服务已登记状态为 ${String(state)}，请先处理该状态后再启停`;
 }
 
 function taskHostFor(taskId: string): TaskWorkspaceHost | { error: string } {
@@ -839,8 +898,9 @@ async function performTaskOp(
             descriptor: descriptor as never,
             layers: serviceLayers as never,
             templateVersion,
+            launchSource: serviceLaunchSource(origin),
           });
-          return { ok: true, payload: { service: { serviceId: saved.serviceId, templateVersion: saved.templateVersion, lifecycle: saved.lifecycle } } };
+          return { ok: true, payload: { service: { serviceId: saved.serviceId, templateVersion: saved.templateVersion, lifecycle: saved.lifecycle, launchSource: saved.launchSource } } };
         } catch (error) {
           return { ok: false, error: error instanceof Error ? error.message : String(error) };
         }
@@ -881,11 +941,48 @@ async function performTaskOp(
           origin,
         });
         if (!caller.ok) return { ok: false, error: caller.error };
-        // Lifecycle flags are not processes. Do not mint approval or report a
-        // successful control until Host-owned process-tree execution is wired.
-        return serviceOwnerInventory ? serviceOwnerInventory.control() : { ok: false, error: "service-execution-unavailable: 真实服务进程启停尚未接线" };
+        // A service registered on this task is executed by the Host's own
+        // registered process identity; only a `catalog` registration carries
+        // an executable launch (see `serviceLaunchSource`). Everything else - 
+        // unregistered ids, `ui`-only registrations, an unconfirmed durable
+        // owner state - keeps the previous fail-closed answer and never
+        // flips a lifecycle flag as if a process had run.
+        const registered = services.get(serviceId);
+        if (!registered || registered.launchSource !== "catalog") {
+          return serviceOwnerInventory ? serviceOwnerInventory.control()
+            : { ok: false, error: "service-execution-unavailable: 真实服务进程启停尚未接线" };
+        }
+        const uncertain = serviceOwnerStateRefusal(serviceId);
+        if (uncertain) return { ok: false, error: uncertain };
+        const driver = serviceDriverFor(services);
+        if (caller.kind === "human") {
+          const result = await runHumanServiceControl({ services, driver, serviceId, action, label: caller.label });
+          return result.ok ? { ok: true, payload: result.payload } : { ok: false, error: result.error };
+        }
+        const channel = host.openSession(caller.sessionId);
+        const result = await runAgentServiceControl({
+          services,
+          driver,
+          channel,
+          sessionId: caller.sessionId,
+          serviceId,
+          action,
+          approvalId: record["approvalId"],
+          // [PiDock 09] (#11) box 3: a service start/stop holds the task write right.
+          write: host,
+          persist: () => host.store.writeSession(host.taskDir, channel.snapshot()),
+          executions: host.controlExecutions,
+        });
+        return result.ok ? { ok: true, payload: result.payload } : { ok: false, error: result.error };
       }
       case "task/serviceStatus": {
+        // A service registered on this task answers with its real process
+        // state; the owner inventory keeps answering for everything else.
+        const registered = serviceRuntimeFor(taskId);
+        if (!("error" in registered)) {
+          const serviceRecord = registered.get(String(record["serviceId"]));
+          if (serviceRecord) return { ok: true, payload: { service: publicServiceStatus(serviceRecord) } };
+        }
         if (serviceOwnerInventory || process.env["PIDOCK_SERVICE_OWNER_REQUIRED"] === "1") {
           const serviceId = record["serviceId"];
           if (typeof serviceId !== "string") return { ok: false, error: "invalid-payload" };
@@ -1440,11 +1537,13 @@ async function performTaskOp(
             sdkTurns = null;
             await shutdownDeadline(taskAdmission.drain(), 15_000, "task-operations-shutdown-unconfirmed");
             host.assertExecutionSettled();
+            serviceStopReport = await shutdownDeadline(stopRegisteredServiceProcesses(), 15_000, "service-processes-shutdown-unconfirmed");
             if (serviceOwnerInventory) serviceCompletion = await shutdownDeadline(serviceOwnerInventory.close(), 15_000, "service-owner-shutdown-unconfirmed");
             return lifecycle.quit();
           })();
           const quit = await quitReceipt;
-          return { ok: true, payload: { quit, ...(serviceCompletion ? { serviceOwner: serviceCompletion } : {}) } };
+          return { ok: true, payload: { quit, ...(serviceCompletion ? { serviceOwner: serviceCompletion } : {}),
+            ...(serviceStopReport ? { serviceProcesses: serviceStopReport } : {}) } };
         } catch (error) {
           return { ok: false, error: error instanceof Error ? error.message : String(error) };
         }

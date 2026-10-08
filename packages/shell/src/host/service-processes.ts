@@ -7,21 +7,42 @@ import type { ServiceStartPlan } from "./service-runtime.js";
 interface OwnedProcess { child: ChildProcessByStdio<null, Readable, Readable>; done: Promise<void> }
 
 /**
- * Host-owned process foundation. Stop confirms stdio closure, not arbitrary
- * descendant termination; do not wire into production until the process tree
- * has a separately verified ownership mechanism on each supported platform.
+ * Host-owned process foundation for the task-bound service path ([PiDock 04] #7).
+ *
+ * Wired for services registered from main's trusted service catalog
+ * (`ServiceLaunchSource: "catalog"`): `task/controlService` computes the
+ * plan Host-side from the registered descriptor and reaches this class
+ * through the #5 permission gate.
+ *
+ * Contract and boundaries - do not present them as stronger than they are:
+ * - Launch is an explicit program + argv + cwd + a fresh per-child env
+ *   object; the Host's own `process.env` is never read or mutated, and no
+ *   ID is passed through a shell.
+ * - The directory is resolved with `realpathSync` and must stay inside this
+ *   task's real root; a foreign directory or an escaping symlink is refused
+ *   before `spawn`. (The resolve→spawn window is not an atomic open: a
+ *   same-UID actor that renames a checked component can still race it.)
+ * - Output is captured per line, bounded to 2000 characters, and redacted by
+ *   the injected redactor before it reaches the log.
+ * - `stop` signals the child's own process group (SIGTERM, then SIGKILL) and
+ *   confirms stdio closure. `termination-unconfirmed` means a descendant may
+ *   still own the pipes; it is reported as a failure and must never be
+ *   recorded as a clean stop. A descendant that leaves the process group
+ *   (e.g. its own `setsid`) is outside this contract, and Windows refuses
+ *   `start` entirely until a Job-Object-style ownership mechanism exists.
  */
 export class TaskServiceProcesses {
   private readonly running = new Map<string, OwnedProcess>();
   private closing = false;
-  private readonly taskRoot: string;
+  /** Real path of the task root this driver refuses to leave. */
+  readonly taskDir: string;
 
   constructor(taskDir: string, private readonly onLine: (serviceId: string, line: string) => void,
     private readonly onExit: (serviceId: string, reason: string) => void,
     private readonly redact: (line: string) => string,
     private readonly stopGraceMs = 3000,
     private readonly stopConfirmMs = 1000) {
-    this.taskRoot = realpathSync(taskDir);
+    this.taskDir = realpathSync(taskDir);
   }
 
   ids(): string[] { return [...this.running.keys()].sort(); }
@@ -32,7 +53,7 @@ export class TaskServiceProcesses {
     if (this.running.has(plan.serviceId)) throw new Error(`already-running: ${plan.serviceId}`);
     if (!isAbsolute(plan.cwd) || !isAbsolute(plan.program)) throw new Error("invalid-launch: absolute cwd and program required");
     const cwd = realpathSync(plan.cwd);
-    const within = relative(this.taskRoot, cwd);
+    const within = relative(this.taskDir, cwd);
     if (within === ".." || within.startsWith(`..${sep}`) || isAbsolute(within)) throw new Error("invalid-launch: cwd escapes task root");
     const child = spawn(plan.program, plan.args, { cwd, env: { ...plan.env }, shell: false, detached: true, stdio: ["ignore", "pipe", "pipe"] });
     const emit = (stream: NodeJS.ReadableStream) => {

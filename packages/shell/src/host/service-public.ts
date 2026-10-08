@@ -8,6 +8,11 @@ export function publicServiceStatus(record: ServiceRecord) {
     templateVersion: record.templateVersion,
     startedAt: record.startedAt,
     stoppedAt: record.stoppedAt,
+    exitReason: record.exitReason,
+    /** `catalog` only: a `ui` registration is display data and cannot execute yet. */
+    launchSource: record.launchSource,
+    /** Process liveness only; no dependency/health probe contributed to `lifecycle`. */
+    health: "not-probed" as const,
     resolved: record.resolved.map((entry) => ({
       key: entry.key,
       value: entry.secret ? "••••••••" : entry.value,
