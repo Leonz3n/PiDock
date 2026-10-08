@@ -88,9 +88,13 @@ export const DESKTOP_TOOL_CONTROLS_UNWIRED: Record<string, string> = {
   "service-mode": "本地/远程切换需要任务覆盖写入，Host 无对应读写能力",
   "remote-deps": "Host 无本任务远程依赖清单读取 op",
   routing: "Host 无生效路由/请求去向读取 op",
+  "runtime-config": "原型在此提供「配置」入口跳转环境与服务；此面板未接线跳转，共享模板在「环境与服务」页维护",
+  "runtime-worktrees": "原型在本面板列出代码工作副本；生产由「文件」面板读取真实 task/fileRoots，本面板不重复列举",
   "log-stream": "Host 无日志订阅推送 op：只能按需读取一次日志尾部",
   "browser-embed": "任务页面由主进程窗口承载，渲染层不能内嵌（不复制第二套页面）",
   "browser-pages": "Host 无「本任务已打开页面」枚举读取 op，重开面板无法恢复页面句柄",
+  "browser-owner": "Host 无「页面持有者」状态读取 op；接管状态只由接管/交还应答反映",
+  "browser-nav": "任务页面由主进程窗口承载，渲染层无前进/后退/刷新 op",
   "browser-marks": "页面标记与验证记录入口未接线到生产面板",
 };
 
@@ -590,10 +594,17 @@ function RunTool({ taskId }: { taskId: string }) {
         <p className="text-[11px] text-muted">任务运行环境 · 只读</p>
         <Button type="button" size="sm" variant="outline" onClick={() => setRevision((value) => value + 1)}>刷新</Button>
       </div>
+      <UnwiredControls id="runtime-config" label="配置" />
       {load.projectId === null ? (
-        <p role="status" className="border border-line bg-soft px-2 py-1.5 text-[11px] text-muted" data-testid="dock-runtime-unassigned">
-          该任务尚未由用户确认归属项目，Host 不在项目下保存服务绑定；此面板不列举服务，也不冒充空清单。
-        </p>
+        load.associationState === "unavailable" ? (
+          <p role="status" className="border border-line bg-soft px-2 py-1.5 text-[11px] text-muted" data-testid="dock-runtime-unavailable" data-association-state="unavailable">
+            Host 报告该任务归属状态暂不可用，无法确认归属项目；此面板不列举服务，也不冒充空清单。
+          </p>
+        ) : (
+          <p role="status" className="border border-line bg-soft px-2 py-1.5 text-[11px] text-muted" data-testid="dock-runtime-unassigned" data-association-state={load.associationState}>
+            该任务尚未由用户确认归属项目，Host 不在项目下保存服务绑定；此面板不列举服务，也不冒充空清单。
+          </p>
+        )
       ) : (
         <>
           {load.templatesError && <p role="status" className="break-words border border-line bg-soft px-2 py-1.5 text-[11px] text-muted">{load.templatesError}</p>}
@@ -609,8 +620,12 @@ function RunTool({ taskId }: { taskId: string }) {
                       <span className="truncate font-semibold">{serviceName(row)}</span>
                       <span className="ml-auto shrink-0 text-muted">{statusText(row)}</span>
                     </div>
-                    <p className="mt-0.5 truncate font-mono text-[10px] text-muted">
-                      {row.template ? row.template.descriptor.ports.map((port) => `127.0.0.1:${port}`).join(" ") || "配方未声明端口" : "Host 未提供配方描述"}
+                    <p className="mt-0.5 truncate text-[10px] text-muted">
+                      {row.template
+                        ? (row.template.descriptor.ports.length > 0
+                          ? <><span>配方声明端口</span> · <span className="font-mono">{row.template.descriptor.ports.map((port) => `127.0.0.1:${port}`).join(" ")}</span></>
+                          : "配方未声明端口")
+                        : "Host 未提供配方描述"}
                     </p>
                     <p className="mt-0.5 truncate text-[10px] text-muted">
                       绑定 v{row.binding.templateVersion} · {row.binding.rootId}{row.binding.subdir ? `/${row.binding.subdir}` : ""}
@@ -634,6 +649,10 @@ function RunTool({ taskId }: { taskId: string }) {
           </section>
         </>
       )}
+      <section className="border-t border-line pt-2">
+        <p className="text-[11px] text-muted">代码工作副本</p>
+        <ul className="mt-1 flex flex-col gap-1"><UnwiredRow id="runtime-worktrees" /></ul>
+      </section>
       <p className="text-[10px] text-muted" data-testid="dock-runtime-note">
         以上状态是 Host 当前应答；未列出进程不等于已停止，也不代表外部依赖可用。worktree、进程、端口和浏览器状态按任务独立。
       </p>
@@ -825,6 +844,7 @@ function BrowserTool({ taskId }: { taskId: string }) {
         />
         <Button type="button" size="sm" disabled={busy || url.trim().length === 0} onClick={() => void open()}>打开任务页面</Button>
       </div>
+      <UnwiredControls id="browser-nav" label="前进 / 后退 / 刷新" />
       {notice && (notice.kind === "refused"
         ? <p role="alert" className="break-words border border-[#e0b4b4] bg-[#fdf3f3] p-2 text-[11px] text-[#ad4545]" data-testid="dock-browser-notice">{notice.text}</p>
         : <p role="status" className="break-words border border-line bg-soft p-2 text-[11px] text-muted" data-testid="dock-browser-notice">{notice.text}</p>)}
@@ -850,6 +870,7 @@ function BrowserTool({ taskId }: { taskId: string }) {
         </section>
       )}
       <ul className="flex flex-col gap-1 border-t border-line pt-2">
+        <UnwiredRow id="browser-owner" />
         <UnwiredRow id="browser-pages" />
         <UnwiredRow id="browser-embed" />
         <UnwiredRow id="browser-marks" />

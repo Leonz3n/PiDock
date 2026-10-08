@@ -372,6 +372,39 @@ describe("[UI 对齐] S8d 运行 panel (real Host bindings and status)", () => {
     expect(fixture.taskOp).not.toHaveBeenCalled();
   });
 
+  it("renders an unavailable association as its own state instead of calling the task unassigned", async () => {
+    panelBridge({ association: { roots: [], tasks: [{ taskId: "task-1", projectId: null, state: "unavailable" }] } });
+    render(<DesktopToolDock taskId="task-1" tool="runtime" onClose={() => {}} />);
+    const note = await screen.findByTestId("dock-runtime-unavailable");
+    expect(note).toHaveAttribute("data-association-state", "unavailable");
+    expect(note).toHaveTextContent("归属状态暂不可用");
+    expect(note).not.toHaveTextContent("尚未由用户确认归属项目");
+    expect(screen.queryByTestId("dock-runtime-unassigned")).not.toBeInTheDocument();
+  });
+
+  it("labels the recipe-declared port as 配方声明端口 instead of a runtime address", async () => {
+    panelBridge({ statuses: () => ({ ok: true, payload: { service: {
+      serviceId: SERVICE_ID, state: "running", ownerSessionId: null, busy: false, closing: false, retainedRights: null, executionAvailable: false,
+    } } }) });
+    render(<DesktopToolDock taskId="task-1" tool="runtime" onClose={() => {}} />);
+    expect(await screen.findByText("配方声明端口")).toBeInTheDocument();
+    expect(screen.getByText("127.0.0.1:4100")).toBeInTheDocument();
+    expect(screen.getByText("配方声明端口").closest("p")).toHaveTextContent(/配方声明端口 · 127\.0\.0\.1:4100/);
+  });
+
+  it("keeps the prototype's 配置 entry and 代码工作副本 list as explicit 未接线, not dropped", async () => {
+    panelBridge({ statuses: () => ({ ok: true, payload: { service: {
+      serviceId: SERVICE_ID, state: "running", ownerSessionId: null, busy: false, closing: false, retainedRights: null, executionAvailable: false,
+    } } }) });
+    render(<DesktopToolDock taskId="task-1" tool="runtime" onClose={() => {}} />);
+    await screen.findByText("invoice-local");
+    const dock = screen.getByTestId("desktop-tool-dock");
+    const config = dock.querySelector('[data-unwired="runtime-config"]')!;
+    expect(config).toHaveTextContent("未接线");
+    expect(config.querySelector("button")).toBeDisabled();
+    expect(dock.querySelector('[data-unwired="runtime-worktrees"]')).toHaveTextContent("未接线");
+  });
+
   it("treats malformed binding and status payloads as unreadable, never as an empty service list", async () => {
     panelBridge({ bindings: [{ taskId: "task-1", serviceId: "not-a-service-id" }] });
     render(<DesktopToolDock taskId="task-1" tool="runtime" onClose={() => {}} />);
@@ -459,6 +492,16 @@ describe("[UI 对齐] S8d 浏览器 panel (real task/browserAction)", () => {
     expect(screen.getByTestId("desktop-tool-dock").querySelector('[data-unwired="browser-pages"]')).toHaveTextContent("未接线");
     expect(screen.getByTestId("desktop-tool-dock").querySelector('[data-unwired="browser-embed"]')).toHaveTextContent("未接线");
     expect(screen.getByTestId("desktop-tool-dock").querySelector('[data-unwired="browser-marks"]')).toHaveTextContent("未接线");
+  });
+
+  it("keeps the prototype's page-nav controls and 持有者 row as explicit 未接线, not dropped", async () => {
+    panelBridge();
+    render(<DesktopToolDock taskId="task-1" tool="browser" onClose={() => {}} />);
+    const dock = screen.getByTestId("desktop-tool-dock");
+    const nav = dock.querySelector('[data-unwired="browser-nav"]')!;
+    expect(nav).toHaveTextContent("未接线");
+    expect(nav.querySelector("button")).toBeDisabled();
+    expect(dock.querySelector('[data-unwired="browser-owner"]')).toHaveTextContent("未接线");
   });
 
   it("treats a malformed page payload as unreadable instead of using it as a handle", async () => {
