@@ -47,10 +47,32 @@ describe("createHost startup environment", () => {
       PATH: "/usr/bin:/bin", HOME: root, TMPDIR: root,
       PIDOCK_WORKSPACE_ID: "workspace", PIDOCK_TASK_ID: "task-a", PIDOCK_TASK_DIR: join(root, "task-a"),
       PIDOCK_PROTECTED_PROFILE: "/synthetic-profile", PIDOCK_DEFAULT_ROOT: root,
+      // A bound task Host must load the strict service-owner inventory before
+      // it can serve anything; this marker is the only extra task-host key.
+      PIDOCK_SERVICE_OWNER_REQUIRED: "1",
     });
-    const observed = execFileSync(process.execPath, ["-e", "console.log(JSON.stringify({unrelated:process.env.OPENAI_API_KEY??null,business:process.env.BUSINESS_AUTH??null,cloud:process.env.AWS_SECRET_ACCESS_KEY??null,selected:process.env.PIDOCK_PROVIDER_SELECTED??null,task:process.env.PIDOCK_TASK_ID,root:process.env.PIDOCK_DEFAULT_ROOT}))"], { env, encoding: "utf8" });
-    expect(JSON.parse(observed)).toEqual({ unrelated: null, business: null, cloud: null, selected: null, task: "task-a", root });
+    const observed = execFileSync(process.execPath, ["-e", "console.log(JSON.stringify({unrelated:process.env.OPENAI_API_KEY??null,business:process.env.BUSINESS_AUTH??null,cloud:process.env.AWS_SECRET_ACCESS_KEY??null,selected:process.env.PIDOCK_PROVIDER_SELECTED??null,task:process.env.PIDOCK_TASK_ID,root:process.env.PIDOCK_DEFAULT_ROOT,serviceOwnerRequired:process.env.PIDOCK_SERVICE_OWNER_REQUIRED??null}))"], { env, encoding: "utf8" });
+    expect(JSON.parse(observed)).toEqual({ unrelated: null, business: null, cloud: null, selected: null, task: "task-a", root, serviceOwnerRequired: "1" });
     execFileSync("git", ["init", "-q", "--template=", root], { env, stdio: "pipe" });
     expect(execFileSync("git", ["status", "--porcelain"], { env, cwd: root, encoding: "utf8" })).toBe("");
+  });
+
+  it.skipIf(process.platform === "win32")("keeps the task-only service-owner marker out of the unbound root Host environment", async () => {
+    const root = mkdtempSync(join(tmpdir(), "pidock-host-env-root-"));
+    roots.push(root);
+    vi.stubGlobal("process", Object.assign(Object.create(process) as NodeJS.Process, {
+      env: {
+        PATH: "/usr/bin:/bin", HOME: root, TMPDIR: root, PIDOCK_DEFAULT_ROOT: root,
+        OPENAI_API_KEY: "synthetic-unrelated-secret",
+        PIDOCK_SERVICE_OWNER_REQUIRED: "ambient-forged",
+      },
+    }));
+    const { client } = await createHost("workspace", false);
+    client.dispose();
+    expect(state.forks[0]).toEqual({
+      PATH: "/usr/bin:/bin", HOME: root, TMPDIR: root,
+      PIDOCK_WORKSPACE_ID: "workspace",
+      PIDOCK_PROTECTED_PROFILE: "/synthetic-profile", PIDOCK_DEFAULT_ROOT: root,
+    });
   });
 });
