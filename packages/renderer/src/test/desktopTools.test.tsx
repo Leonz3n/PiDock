@@ -287,3 +287,219 @@ describe("[UI 对齐] S8d Host envelope unwrapping", () => {
     expect(await screen.findByText("本任务没有可读取的文件根")).toBeInTheDocument();
   });
 });
+
+const SERVICE_ID = "s-11111111-1111-1111-1111-111111111111";
+const OTHER_SERVICE_ID = "s-22222222-2222-2222-2222-222222222222";
+
+type PanelBridgeOptions = {
+  association?: unknown;
+  templates?: unknown;
+  bindings?: unknown;
+  statuses?: (serviceId: string) => unknown;
+  logs?: (serviceId: string) => unknown;
+  browser?: (request: Record<string, unknown>) => unknown;
+};
+
+function panelBridge(options: PanelBridgeOptions = {}) {
+  const taskOp = vi.fn(async (_taskId: string, op: string, payload: Record<string, unknown>) => {
+    if (op === "task/serviceStatus") return options.statuses ? options.statuses(String(payload["serviceId"])) : { ok: false, error: "unexpected task/serviceStatus" };
+    if (op === "task/serviceLog") return options.logs ? options.logs(String(payload["serviceId"])) : { ok: false, error: "unexpected task/serviceLog" };
+    if (op === "task/browserAction") {
+      const request = payload as Record<string, unknown>;
+      if (!options.browser) return { ok: false, error: "unexpected task/browserAction" };
+      return options.browser(request);
+    }
+    return { ok: false, error: `unexpected ${op}` };
+  });
+  const serviceCatalogOp = vi.fn(async (request: Record<string, unknown>) => {
+    if (request["op"] === "taskBindings") return { ok: true, payload: options.bindings ?? [{
+      taskId: "task-1", serviceId: SERVICE_ID, templateVersion: 2, rootId: "invoice-service", subdir: "apps/svc", privateKeys: ["API_TOKEN"],
+    }] };
+    if (request["op"] === "list") return { ok: true, payload: options.templates ?? [{
+      projectId: "project-1", serviceId: SERVICE_ID, version: 2, sharedKeys: ["PORT"],
+      descriptor: { name: "invoice-local", program: "node", args: ["server.js"], ports: [4100], runType: "long-lived" },
+    }] };
+    return { ok: false, error: `unexpected serviceCatalogOp ${String(request["op"])}` };
+  });
+  const projectOp = vi.fn(async () => ({ ok: true, payload: options.association ?? { roots: [], tasks: [{ taskId: "task-1", projectId: "project-1", state: "assigned" }] } }));
+  const pidge = { taskOp, serviceCatalogOp, projectOp } as unknown as typeof window.pidock;
+  window.pidock = pidge;
+  return { taskOp, serviceCatalogOp, projectOp };
+}
+
+describe("[UI 对齐] S8d 运行 panel (real Host bindings and status)", () => {
+  it("renders the task's real bound service, its template descriptor and the Host's own state", async () => {
+    const fixture = panelBridge({ statuses: () => ({ ok: true, payload: { service: {
+      serviceId: SERVICE_ID, state: "running", ownerSessionId: null, busy: false, closing: false, retainedRights: null, executionAvailable: false,
+    } } }) });
+    render(<DesktopToolDock taskId="task-1" tool="runtime" onClose={() => {}} />);
+    expect(await screen.findByText("invoice-local")).toBeInTheDocument();
+    expect(screen.getByText("运行中 · Host 未接管进程")).toBeInTheDocument();
+    expect(screen.getByText(/127\.0\.0\.1:4100/)).toBeInTheDocument();
+    expect(screen.getByText(/绑定 v2 · invoice-service\/apps\/svc/)).toBeInTheDocument();
+    expect(screen.getByText(/私有引用 1 项/)).toBeInTheDocument();
+    expect(screen.getByText("本任务服务 · 1")).toBeInTheDocument();
+    expect(fixture.serviceCatalogOp).toHaveBeenCalledWith({ op: "taskBindings", projectId: "project-1", taskId: "task-1" });
+  });
+
+  it("keeps service start/stop, local/remote, remote dependencies and routing explicitly 未接线", async () => {
+    panelBridge({ statuses: () => ({ ok: true, payload: { service: {
+      serviceId: SERVICE_ID, state: "running", ownerSessionId: null, busy: false, closing: false, retainedRights: null, executionAvailable: false,
+    } } }) });
+    render(<DesktopToolDock taskId="task-1" tool="runtime" onClose={() => {}} />);
+    await screen.findByText("invoice-local");
+    const control = screen.getByTestId("desktop-tool-dock").querySelector('[data-unwired="service-control"]')!;
+    expect(control).toHaveTextContent("未接线");
+    expect(control.querySelector("button")).toBeDisabled();
+    expect(screen.getByTestId("desktop-tool-dock").querySelector('[data-unwired="service-mode"]')).toHaveTextContent("未接线");
+    expect(screen.getByTestId("desktop-tool-dock").querySelector('[data-unwired="remote-deps"]')).toHaveTextContent("未接线");
+    expect(screen.getByTestId("desktop-tool-dock").querySelector('[data-unwired="routing"]')).toHaveTextContent("未接线");
+    expect(screen.queryByRole("button", { name: /启动/ })).toBeDisabled();
+  });
+
+  it("shows the Host refusal for a status read instead of a fabricated stopped state", async () => {
+    panelBridge({ statuses: () => ({ ok: false, error: "unknown-service: not registered on this task" }) });
+    render(<DesktopToolDock taskId="task-1" tool="runtime" onClose={() => {}} />);
+    expect(await screen.findByText("unknown-service: not registered on this task")).toBeInTheDocument();
+    expect(screen.queryByText("已停止")).not.toBeInTheDocument();
+  });
+
+  it("states that an unassigned task has no project-scoped binding instead of listing zero services", async () => {
+    const fixture = panelBridge({ association: { roots: [], tasks: [{ taskId: "task-1", projectId: null, state: "unassigned" }] } });
+    render(<DesktopToolDock taskId="task-1" tool="runtime" onClose={() => {}} />);
+    expect(await screen.findByTestId("dock-runtime-unassigned")).toHaveTextContent("尚未由用户确认归属项目");
+    expect(screen.queryByTestId("dock-service-rows")).not.toBeInTheDocument();
+    expect(fixture.taskOp).not.toHaveBeenCalled();
+  });
+
+  it("treats malformed binding and status payloads as unreadable, never as an empty service list", async () => {
+    panelBridge({ bindings: [{ taskId: "task-1", serviceId: "not-a-service-id" }] });
+    render(<DesktopToolDock taskId="task-1" tool="runtime" onClose={() => {}} />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Host 任务服务绑定响应无法解析");
+    expect(screen.queryByText("本任务还没有绑定服务。绑定属于项目服务配方，不在此处新建。")).not.toBeInTheDocument();
+    cleanup();
+    panelBridge({ statuses: () => ({ ok: true, payload: { service: { serviceId: SERVICE_ID, state: "teleporting" } } }) });
+    render(<DesktopToolDock taskId="task-1" tool="runtime" onClose={() => {}} />);
+    expect(await screen.findByText("Host 服务状态响应无法解析")).toBeInTheDocument();
+  });
+});
+
+describe("[UI 对齐] S8d 日志 panel (real task/serviceLog)", () => {
+  const bindings = [
+    { taskId: "task-1", serviceId: SERVICE_ID, templateVersion: 2, rootId: "invoice-service", subdir: "", privateKeys: [] },
+    { taskId: "task-1", serviceId: OTHER_SERVICE_ID, templateVersion: 1, rootId: "invoice-service", subdir: "", privateKeys: [] },
+  ];
+  const templates = [
+    { projectId: "project-1", serviceId: SERVICE_ID, version: 2, sharedKeys: [], descriptor: { name: "invoice-local", program: "node", args: [], ports: [4100], runType: "long-lived" } },
+    { projectId: "project-1", serviceId: OTHER_SERVICE_ID, version: 1, sharedKeys: [], descriptor: { name: "shipment-local", program: "node", args: [], ports: [4200], runType: "long-lived" } },
+  ];
+
+  it("reads the Host's real log tail and re-reads it for the other bound service", async () => {
+    const fixture = panelBridge({
+      bindings, templates,
+      logs: (serviceId) => serviceId === SERVICE_ID
+        ? { ok: true, payload: { log: [{ at: "2026-10-08T00:00:01.000Z", line: "listening at :4100" }] } }
+        : { ok: true, payload: { log: [{ at: "2026-10-08T00:00:02.000Z", line: "shipment ready" }] } },
+    });
+    render(<DesktopToolDock taskId="task-1" tool="logs" onClose={() => {}} />);
+    expect(await screen.findByText(/listening at :4100/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "shipment-local" }));
+    expect(await screen.findByText(/shipment ready/)).toBeInTheDocument();
+    expect(fixture.taskOp.mock.calls.filter((call) => call[1] === "task/serviceLog").map((call) => call[2]["serviceId"])).toEqual([SERVICE_ID, OTHER_SERVICE_ID]);
+  });
+
+  it("shows the Host refusal and an explicit 未接线 note when no log stream exists", async () => {
+    panelBridge({ logs: () => ({ ok: false, error: "unknown-service: invoice-local is not registered on this task" }) });
+    render(<DesktopToolDock taskId="task-1" tool="logs" onClose={() => {}} />);
+    expect(await screen.findByTestId("dock-log-error")).toHaveTextContent("unknown-service: invoice-local is not registered on this task");
+    expect(screen.getByTestId("desktop-tool-dock").querySelector('[data-unwired="log-stream"]')).toHaveTextContent("未接线");
+    expect(screen.queryByTestId("dock-log-lines")).not.toBeInTheDocument();
+  });
+
+  it("reports a real empty tail as zero lines rather than an error", async () => {
+    panelBridge({ logs: () => ({ ok: true, payload: { log: [] } }) });
+    render(<DesktopToolDock taskId="task-1" tool="logs" onClose={() => {}} />);
+    expect(await screen.findByTestId("dock-log-empty")).toHaveTextContent("Host 返回 0 行日志");
+  });
+});
+
+describe("[UI 对齐] S8d 浏览器 panel (real task/browserAction)", () => {
+  it("opens a real page through the Host and reads its real state, evidence and takeover", async () => {
+    const actions: string[] = [];
+    panelBridge({
+      browser: (request) => {
+        actions.push(String(request["action"]));
+        if (request["action"] === "page/open") return { ok: true, payload: { pageId: "page-1", webContentsId: 42, url: "http://127.0.0.1:5173/" } };
+        if (request["action"] === "page/state") return { ok: true, payload: { state: { epoch: 3, viewport: { width: 1440, height: 900 }, title: "对账单详情", url: "http://127.0.0.1:5173/invoice" }, pageId: "page-1" } };
+        if (request["action"] === "evidence") return { ok: true, payload: { evidence: { consoleErrors: [{ kind: "console", text: "Uncaught TypeError" }], failedRequests: [{ requestId: "1", url: "http://127.0.0.1:5173/api", errorText: "net::ERR_FAILED", resourceType: "xhr", canceled: false }] } } };
+        if (request["action"] === "takeover/pause") return { ok: true, payload: { takeover: { paused: true, reason: "用户接管浏览器" } } };
+        return { ok: false, error: `unexpected ${String(request["action"])}` };
+      },
+    });
+    render(<DesktopToolDock taskId="task-1" tool="browser" onClose={() => {}} />);
+    fireEvent.change(screen.getByRole("textbox", { name: "任务页面地址" }), { target: { value: "http://127.0.0.1:5173/" } });
+    fireEvent.click(screen.getByRole("button", { name: "打开任务页面" }));
+    expect(await screen.findByTestId("dock-browser-page")).toHaveTextContent("page-1");
+    fireEvent.click(screen.getByRole("button", { name: "读取状态" }));
+    expect(await screen.findByTestId("dock-browser-state")).toHaveTextContent("epoch 3 · 对账单详情");
+    fireEvent.click(screen.getByRole("button", { name: "读取证据" }));
+    expect(await screen.findByTestId("dock-browser-evidence")).toHaveTextContent("控制台错误 1 · 失败请求 1");
+    fireEvent.click(screen.getByRole("button", { name: "接管浏览器" }));
+    expect(await screen.findByRole("button", { name: "交还 Agent" })).toBeInTheDocument();
+    expect(actions).toEqual(["page/open", "page/state", "evidence", "takeover/pause"]);
+  });
+
+  it("shows the Host's navigation refusal and keeps page discovery/embedding 未接线", async () => {
+    panelBridge({ browser: () => ({ ok: false, error: "navigation-denied: 该任务没有配置前端地址" }) });
+    render(<DesktopToolDock taskId="task-1" tool="browser" onClose={() => {}} />);
+    fireEvent.change(screen.getByRole("textbox", { name: "任务页面地址" }), { target: { value: "https://example.com/" } });
+    fireEvent.click(screen.getByRole("button", { name: "打开任务页面" }));
+    expect(await screen.findByTestId("dock-browser-notice")).toHaveTextContent("navigation-denied: 该任务没有配置前端地址");
+    expect(screen.queryByTestId("dock-browser-page")).not.toBeInTheDocument();
+    expect(screen.getByTestId("desktop-tool-dock").querySelector('[data-unwired="browser-pages"]')).toHaveTextContent("未接线");
+    expect(screen.getByTestId("desktop-tool-dock").querySelector('[data-unwired="browser-embed"]')).toHaveTextContent("未接线");
+    expect(screen.getByTestId("desktop-tool-dock").querySelector('[data-unwired="browser-marks"]')).toHaveTextContent("未接线");
+  });
+
+  it("treats a malformed page payload as unreadable instead of using it as a handle", async () => {
+    panelBridge({ browser: () => ({ ok: true, payload: { pageId: "", url: 7 } }) });
+    render(<DesktopToolDock taskId="task-1" tool="browser" onClose={() => {}} />);
+    fireEvent.change(screen.getByRole("textbox", { name: "任务页面地址" }), { target: { value: "http://127.0.0.1:5173/" } });
+    fireEvent.click(screen.getByRole("button", { name: "打开任务页面" }));
+    expect(await screen.findByTestId("dock-browser-notice")).toHaveTextContent("Host 页面响应无法解析");
+    expect(screen.queryByTestId("dock-browser-page")).not.toBeInTheDocument();
+  });
+});
+
+describe("[UI 对齐] S8d panel read inventory", () => {
+  it("only ever reads from the Host and does nothing without a user-opened panel", async () => {
+    const fixture = panelBridge({
+      statuses: () => ({ ok: true, payload: { service: { serviceId: SERVICE_ID, state: "stopped", ownerSessionId: null, busy: false, closing: false, retainedRights: null, executionAvailable: false } } }),
+      logs: () => ({ ok: true, payload: { log: [] } }),
+      browser: () => ({ ok: true, payload: { pageId: "page-1", webContentsId: 1, url: "http://127.0.0.1:5173/" } }),
+    });
+    render(<DesktopToolDock taskId="task-1" tool={null} onClose={() => {}} />);
+    expect(screen.queryByTestId("desktop-tool-dock")).not.toBeInTheDocument();
+    expect(fixture.taskOp).not.toHaveBeenCalled();
+    expect(fixture.serviceCatalogOp).not.toHaveBeenCalled();
+    expect(fixture.projectOp).not.toHaveBeenCalled();
+    for (const tool of ["runtime", "browser", "files", "terminal", "logs", "protocol"] as const) {
+      cleanup();
+      fixture.taskOp.mockClear(); fixture.serviceCatalogOp.mockClear(); fixture.projectOp.mockClear();
+      render(<DesktopToolDock taskId="task-1" tool={tool} onClose={() => {}} />);
+      expect(await screen.findByTestId("desktop-tool-dock")).toBeInTheDocument();
+      // The 浏览器 panel is on-demand only: it reads nothing until the user opens
+      // or reads a page, so an untouched panel proves panel-open is not a write path.
+      if (tool === "browser") {
+        expect(fixture.taskOp).not.toHaveBeenCalled();
+        expect(fixture.serviceCatalogOp).not.toHaveBeenCalled();
+      } else {
+        await waitFor(() => expect(fixture.taskOp.mock.calls.length + fixture.serviceCatalogOp.mock.calls.length).toBeGreaterThan(0));
+      }
+      const writes = fixture.taskOp.mock.calls
+        .map((call) => call[1])
+        .filter((op) => ["task/controlService", "task/quit", "task/archive", "task/restore", "task/terminalControl", "task/runCleanup", "task/registerService"].includes(op));
+      expect(writes).toEqual([]);
+    }
+  });
+});
