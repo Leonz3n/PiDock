@@ -342,7 +342,7 @@ async function run() {
       unwired: await evalJs("document.querySelector('[data-testid=overview-env-unwired]')?.previousElementSibling?.innerText"),
     };
     await clickSelector(`[data-task-nav="${taskId}"]`);
-    await until((body) => /task workspace/i.test(body) && body.includes("已连接"), "archive task workspace connected");
+    await until((body) => /task workspace/i.test(body) && body.includes("已连接") && body.includes("Agent 工具未接线"), "archive task workspace connected");
     await click("核验");
     await wait(350);
     await click("任务操作");
