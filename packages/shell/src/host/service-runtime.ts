@@ -229,6 +229,13 @@ export class TaskServiceRuntime {
     const resolved = resolveServiceEnv(input.layers);
     if (!resolved.ok) throw new Error(`${resolved.error.code}: ${resolved.error.message}`);
     const existing = this.services.get(input.serviceId);
+    // A service already launched from main's trusted catalog must not have its
+    // executable descriptor replaced by an ordinary task-RPC registration: an
+    // attested shell view could otherwise rewrite (or silently disable) a
+    // trusted launch. Refused explicitly instead of downgrading it.
+    if (existing?.launchSource === "catalog" && input.launchSource !== "catalog") {
+      throw new Error("service-registration-conflict: 该服务已由可信服务目录登记，界面配方不能覆盖其可执行描述符");
+    }
     const record: ServiceRecord = {
       serviceId: input.serviceId,
       descriptor: {

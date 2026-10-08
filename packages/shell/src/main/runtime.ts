@@ -942,15 +942,18 @@ export function createTaskBrowserCapability(input: {
  * failure stops the sequence - main never asks the Host to control a
  * service it could not describe. Both ops carry the same main-built
  * `service-catalog` origin; neither the page nor the Host may supply it.
+ *
+ * Exported so the sequence can be driven end to end against a real Host and a
+ * real child process without an Electron `IpcMainInvokeEvent`.
  */
-async function runTaskService(
+export async function runTaskService(
   tasks: Pick<PerTaskHostRegistry, "routeTaskOp">,
-  catalog: ServiceCatalog,
+  catalog: Pick<ServiceCatalog, "launchFor">,
   request: ReturnType<typeof parseServiceRunRequest>,
-  event: IpcMainInvokeEvent,
+  senderWebContentsId: number,
 ): Promise<Record<string, unknown>> {
   const launch = catalog.launchFor(request.taskId, request.projectId, request.serviceId, process.env);
-  const origin = { kind: "service-catalog", senderWebContentsId: event.sender.id } as const;
+  const origin = { kind: "service-catalog", senderWebContentsId } as const;
   try {
     await tasks.routeTaskOp({
       taskId: request.taskId,
@@ -1348,7 +1351,7 @@ export function registerIpc(
       if (payload && typeof payload === "object" && (payload as Record<string, unknown>)["op"] === "runTaskService") {
         if (!tasks) return { ok: false as const, error: "任务 Host 尚未接入" };
         const request = parseServiceRunRequest(payload);
-        return { ok: true as const, payload: await runTaskService(tasks, catalog, request, event) };
+        return { ok: true as const, payload: await runTaskService(tasks, catalog, request, event.sender.id) };
       }
       if (payload && typeof payload === "object" && ["bind", "taskBindings"].includes(String((payload as Record<string, unknown>)["op"]))) {
         const url = event.sender.getURL();

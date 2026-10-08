@@ -1,0 +1,308 @@
+/**
+ * [PiDock 04] (#7) production service-execution wiring, driven through the
+ * real Host RPC path with REAL child processes.
+ *
+ * Evidence split (stated, not implied):
+ * - REAL subprocess: the service fixtures are Node scripts started by
+ *   `TaskServiceProcesses` through the Host's `task/controlService` path
+ *   after main's trusted catalog resolved the launch. Status, bounded
+ *   redacted logs, OS process liveness and per-child env are observed on the
+ *   real children.
+ * - REAL production objects: `ServiceCatalog` on a temp profile, the Host
+ *   itself (`./host.js` with a fake `process.parentPort` pair, the same seam
+ *   `host-service-binding.test.ts` uses), the real `PerTaskHostRegistry` and
+ *   the real `InstalledServiceHostAuthority`.
+ * - FIXTURE: the catalog authority is an in-test stub (the real
+ *   `TaskRootIndex`/`ProjectRegistry` wiring has its own suites) and the
+ *   "program picker" result is `process.execPath`, not a native dialog. No
+ *   Electron UI, no packaged build, no Windows run.
+ */
+import { EventEmitter } from "node:events";
+import { randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { HostClient } from "../rpc/host-client.js";
+import { InstalledServiceHostAuthority } from "../main/service-host-binding.js";
+import { PerTaskHostRegistry, runTaskService } from "../main/runtime.js";
+import { ServiceCatalog, type ServiceCatalogAuthority } from "../main/service-catalog.js";
+import { diskTaskStore } from "./task-host.js";
+import { buildTaskDiskRecord } from "./task-store.js";
+
+const cleanups: (() => void | Promise<void>)[] = [];
+afterEach(async () => {
+  for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
+  vi.unstubAllEnvs();
+  vi.resetModules();
+});
+
+const SERVICE_SCRIPT = `const fs = require("node:fs");
+const path = require("node:path");
+fs.writeFileSync(path.join(process.cwd(), "started-" + process.env.SERVICE_TAG + ".txt"), String(process.pid));
+console.log("ready:" + process.env.SERVICE_GREETING + ":" + process.env.SERVICE_TAG);
+console.log("pid:" + process.pid);
+console.log("token:" + (process.env.SERVICE_TOKEN ?? "none"));
+console.log("ambient:" + (process.env.PIDOCK_TEST_AMBIENT ?? "absent"));
+process.stdout.write("x".repeat(2500) + "\\n");
+setInterval(() => {}, 1000);
+`;
+
+async function until(check: () => boolean, label: string) {
+  for (let index = 0; index < 200; index++) {
+    if (check()) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw Error(`timed out waiting for ${label}`);
+}
+
+/** Wait until a running service's bounded log satisfies a predicate. */
+async function untilLog(read: () => Promise<string[]>, serviceId: string, check: (lines: string[]) => boolean) {
+  let seen: string[] = [];
+  for (let index = 0; index < 200; index++) {
+    seen = await read();
+    if (check(seen)) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw Error(`timed out waiting for the log of ${serviceId}: ${seen.join(" | ")}`);
+}
+
+async function installed() {
+  vi.resetModules();
+  const home = realpathSync(mkdtempSync(join(tmpdir(), "pidock-service-wiring-")));
+  cleanups.push(() => rmSync(home, { recursive: true, force: true }));
+  const profile = join(home, "profile");
+  const root = join(home, "tasks");
+  const taskId = "task-7f3a91bc";
+  const taskDir = join(root, taskId);
+  const workspaceId = "workspace-a";
+  const projectId = randomUUID();
+  mkdirSync(profile, { mode: 0o700 });
+  for (const dir of ["repo-a/svc-a", "repo-a/svc-b"]) {
+    mkdirSync(join(taskDir, dir), { recursive: true });
+    writeFileSync(join(taskDir, dir, "service.cjs"), SERVICE_SCRIPT);
+  }
+  diskTaskStore.writeTask(taskDir, buildTaskDiskRecord({ taskId, name: "Wiring", dirId: taskId, branch: "task/main", root, taskDir,
+    remoteBranch: "main", baseCommit: "source-fixture", repos: ["repo-a"], now: "2026-01-01T00:00:00.000Z" }));
+  const taskStat = statSync(taskDir, { bigint: true });
+  const identity = { taskId, createdAt: "2026-01-01T00:00:00.000Z", root, realRoot: root, dirId: taskId,
+    directoryDevice: taskStat.dev.toString(), directoryInode: taskStat.ino.toString() };
+  const authority: ServiceCatalogAuthority = {
+    projectExists: (id) => id === projectId,
+    task: (id) => id === taskId ? { identity, projectId, rootIds: ["repo-a"] } : null,
+    verifiedTask: (id) => id === taskId ? { identity, projectId, rootIds: ["repo-a"] } : null,
+  };
+  const catalog = new ServiceCatalog(profile, authority);
+
+  // Fake utilityProcess pair: `child` is main's handle, `parent` the Host's parentPort.
+  const child = new EventEmitter() as EventEmitter & { postMessage(value: unknown): void; kill(): void };
+  child.kill = vi.fn(() => { child.emit("exit", 0); });
+  const parent = new EventEmitter() as EventEmitter & { postMessage(value: unknown): void };
+  child.postMessage = (value) => { parent.emit("message", { data: value }); };
+  parent.postMessage = (value) => { child.emit("message", value); };
+  const oldPort = Object.getOwnPropertyDescriptor(process, "parentPort");
+  Object.defineProperty(process, "parentPort", { configurable: true, value: parent });
+  cleanups.push(() => { if (oldPort) Object.defineProperty(process, "parentPort", oldPort); else Reflect.deleteProperty(process, "parentPort"); });
+  for (const [name, value] of Object.entries({ PIDOCK_WORKSPACE_ID: workspaceId, PIDOCK_TASK_ID: taskId, PIDOCK_TASK_DIR: taskDir,
+    PIDOCK_PROTECTED_PROFILE: profile, PIDOCK_DEFAULT_TASKS_ROOT: root, PIDOCK_SERVICE_OWNER_REQUIRED: "1" })) vi.stubEnv(name, value);
+  vi.stubEnv("LOCAL_TEST_TOKEN", "synthetic-private-value");
+  const { startHost } = await import("./host.js");
+  startHost();
+  const client = new HostClient(child as never);
+  const main = new InstalledServiceHostAuthority(profile, catalog, authority, workspaceId, { LOCAL_TEST_TOKEN: "synthetic-private-value" });
+  const registry = new PerTaskHostRegistry(workspaceId, async () => ({ client, child: child as never }), () => taskDir, undefined, undefined);
+  registry.configureServices(() => main);
+  // Cleanups run in reverse: quit the Host (which stops real service children
+  // and needs the live parent authority) before the authority is disposed.
+  cleanups.push(async () => { client.dispose(); child.emit("exit", 0); await main.disposeWhenExited().catch(() => {}); });
+  cleanups.push(async () => { await registry.quitAll({ origin: { kind: "shell-ui", senderWebContentsId: 7 } }).catch(() => {}); });
+
+  const task = (op: Parameters<HostClient["task"]>[0]["op"], payload: Record<string, unknown> = {}) => client.task({ workspaceId, taskId, op, payload,
+    origin: { kind: "shell-ui", senderWebContentsId: 7 } });
+  /** A failed Host op answers with an error response, which the RPC client rejects. */
+  const request = async (op: Parameters<HostClient["task"]>[0]["op"], payload: Record<string, unknown> = {}): Promise<Record<string, unknown>> => {
+    try { return (await task(op, payload)).payload; } catch (error) { return { error: error instanceof Error ? error.message : String(error) }; }
+  };
+  /**
+   * Register exactly like main's trusted catalog step does, without
+   * controlling: the launch is resolved by main and the op carries main's own
+   * `service-catalog` origin, never a renderer-supplied descriptor.
+   */
+  const register = async (serviceId: string) => {
+    const launch = catalog.launchFor(taskId, projectId, serviceId, process.env);
+    const result = await registry.routeTaskOp({ taskId, op: "task/registerService",
+      payload: { serviceId: launch.serviceId, descriptor: launch.descriptor, layers: launch.layers, templateVersion: String(launch.templateVersion) },
+      origin: { kind: "service-catalog", senderWebContentsId: 7 } });
+    return result.payload;
+  };
+  const bind = (subdir: string, tag: string) => {
+    const template = catalog.saveTemplate({ projectId, descriptor: { name: `API ${tag}`, program: "node", args: ["service.cjs"], ports: [], runType: "long-lived" },
+      shared: [{ key: "SERVICE_GREETING", value: `hello-${tag}`, secret: false }, { key: "SERVICE_TAG", value: tag, secret: false }] });
+    catalog.bindTask({ taskId, serviceId: template.serviceId, templateVersion: 1, rootId: "repo-a", subdir,
+      programPath: realpathSync(process.execPath), privateRefs: [{ key: "SERVICE_TOKEN", envRef: "LOCAL_TEST_TOKEN" }] });
+    return template.serviceId;
+  };
+  const run = (serviceId: string, action: "start" | "stop") =>
+    runTaskService(registry, catalog, { taskId, projectId, serviceId, action }, 7);
+  const status = async (serviceId: string) => {
+    const payload = await request("task/serviceStatus", { serviceId });
+    return (payload["service"] ?? payload) as Record<string, unknown>;
+  };
+  const log = async (serviceId: string) => {
+    const payload = await request("task/serviceLog", { serviceId, limit: 200 });
+    return Array.isArray(payload["log"]) ? (payload["log"] as { line: string }[]).map((entry) => entry.line) : [];
+  };
+  return { profile, taskId, taskDir, projectId, catalog, authority, child, parent, client, main, registry,
+    task, request, bind, register, run, status, log };
+}
+
+/** A child pid the fixture script reported; used to observe the real OS process. */
+function reportedPid(lines: string[]): number {
+  const line = lines.find((entry) => entry.startsWith("pid:"));
+  if (!line) throw Error("no pid line in the service log");
+  return Number(line.slice(4));
+}
+function alive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
+describe.skipIf(process.platform === "win32")("#7 catalog-driven service execution with real child processes", () => {
+  it("starts one service, reports its real state, returns its bounded redacted log, and stops only its own tree", async () => {
+    const f = await installed();
+    const first = f.bind("svc-a", "a");
+    const second = f.bind("svc-b", "b");
+    vi.stubEnv("PIDOCK_TEST_AMBIENT", "must-not-reach-a-service");
+
+    expect(await f.run(first, "start")).toMatchObject({ serviceId: first, action: "start", actor: "human" });
+    expect(await f.run(second, "start")).toMatchObject({ serviceId: second, action: "start", actor: "human" });
+
+    // (a) real process state, reported by the Host from the real children.
+    expect(await f.status(first)).toMatchObject({ serviceId: first, lifecycle: "running", launchSource: "catalog", health: "not-probed" });
+    expect(await f.status(second)).toMatchObject({ lifecycle: "running" });
+
+    // (b) real, bounded, redacted output of the running children.
+    await until(() => existsSync(join(f.taskDir, "repo-a/svc-a", "started-a.txt")), "first service to start");
+    await until(() => existsSync(join(f.taskDir, "repo-a/svc-b", "started-b.txt")), "second service to start");
+    await untilLog(() => f.log(first), first, (entries) => entries.length >= 6);
+    const firstLines = await f.log(first);
+    expect(firstLines).toContain("ready:hello-a:a");
+    expect(firstLines).toContain("token:••••••••");
+    expect(firstLines.join("\n")).not.toContain("synthetic-private-value");
+    expect(firstLines).toContain("[output line exceeded 2000 characters]");
+    expect(firstLines.every((line) => line.length <= 2000)).toBe(true);
+    // Each child got only its own planned env: an ambient Host variable stays out.
+    expect(firstLines).toContain("ambient:absent");
+    const firstPid = reportedPid(firstLines);
+    expect(alive(firstPid)).toBe(true);
+    // The two services resolved their own layers into independent env objects.
+    await untilLog(() => f.log(second), second, (entries) => entries.some((line) => line.startsWith("pid:")));
+    const secondLines = await f.log(second);
+    expect(secondLines).toContain("ready:hello-b:b");
+    expect(secondLines).toContain("ambient:absent");
+    const secondPid = reportedPid(secondLines);
+    expect(secondPid).not.toBe(firstPid);
+
+    // (c) stop terminates only the asked-for service's registered child.
+    expect(await f.run(first, "stop")).toMatchObject({ serviceId: first, action: "stop", actor: "human" });
+    await until(() => !alive(firstPid), "first service to exit");
+    expect(alive(secondPid)).toBe(true);
+    expect((await f.status(first)).lifecycle).toBe("stopped");
+    expect((await f.status(second)).lifecycle).toBe("running");
+    expect((await f.log(first)).some((line) => line.startsWith("process exited: signal:"))).toBe(true);
+
+    // Quitting the Host stops the remaining real child before reporting success.
+    const quit = await f.task("task/quit");
+    expect(quit.payload["serviceProcesses"]).toEqual([{ serviceId: second, state: "stopped" }]);
+    await until(() => !alive(secondPid), "second service to exit on quit");
+    const report = await f.registry.quitAll({ origin: { kind: "shell-ui", senderWebContentsId: 7 } });
+    expect(report).toMatchObject({ ok: true, tasks: [{ taskId: f.taskId, failures: [], retainedTasks: [] }] });
+  }, 30_000);
+
+  it("refuses a read-only session, asks first on the default tier, and starts nothing on refusal or rejection", async () => {
+    const f = await installed();
+    const serviceId = f.bind("svc-a", "a");
+    const startedMarker = join(f.taskDir, "repo-a/svc-a", "started-a.txt");
+    // Main registers the trusted launch for the task-bound service; the page
+    // never supplies the descriptor (it only names project/task/service).
+    expect(await f.register(serviceId)).toMatchObject({ service: { launchSource: "catalog" } });
+    const control = (payload: Record<string, unknown>) => f.request("task/controlService", { serviceId, ...payload });
+    await f.task("task/setPermission", { sessionId: "main", permission: "read" });
+
+    // Read-only tier: refused, and no child ever ran.
+    expect(await control({ sessionId: "main", action: "start" })).toMatchObject({ error: expect.stringContaining("只读") });
+    expect(existsSync(startedMarker)).toBe(false);
+    expect((await f.status(serviceId)).lifecycle).toBe("stopped");
+
+    // Default tier: the first call only asks.
+    await f.task("task/setPermission", { sessionId: "main", permission: "default" });
+    const asked = await control({ sessionId: "main", action: "start" });
+    const approvalId = String(asked["error"]).replace("approval-required: ", "");
+    expect(approvalId).toMatch(/^approval-\d+$/);
+    expect(existsSync(startedMarker)).toBe(false);
+    expect((await f.status(serviceId)).lifecycle).toBe("stopped");
+
+    // A rejected confirmation does not start the process either.
+    await f.task("task/reject", { sessionId: "main", approvalId });
+    expect((await control({ sessionId: "main", action: "start", approvalId }))["error"]).toBeDefined();
+    expect(existsSync(startedMarker)).toBe(false);
+    expect((await f.status(serviceId)).lifecycle).toBe("stopped");
+
+    // A fresh confirmation, approved, really starts the child.
+    const askedAgain = await control({ sessionId: "main", action: "start" });
+    const secondId = String(askedAgain["error"]).replace("approval-required: ", "");
+    await f.task("task/approve", { sessionId: "main", approvalId: secondId });
+    const acted = await control({ sessionId: "main", action: "start", approvalId: secondId });
+    expect(acted).toMatchObject({ serviceId, action: "start", actor: "agent", tier: "default" });
+    await until(() => existsSync(startedMarker), "the approved start to run the child");
+    expect((await f.status(serviceId)).lifecycle).toBe("running");
+    // The approval is spent: the same id cannot start or stop again.
+    expect((await control({ sessionId: "main", action: "stop", approvalId: secondId }))["error"]).toBeDefined();
+    expect((await f.status(serviceId)).lifecycle).toBe("running");
+  }, 30_000);
+
+  it("keeps the trusted catalog launch when the page re-registers the same id, and never executes a page descriptor", async () => {
+    const f = await installed();
+    const serviceId = f.bind("svc-a", "a");
+    await f.run(serviceId, "start");
+    await until(() => existsSync(join(f.taskDir, "repo-a/svc-a", "started-a.txt")), "the service to start");
+
+    // Same id, hostile descriptor, attested shell-UI origin: the trusted
+    // catalog registration wins and keeps executing.
+    const conflict = await f.request("task/registerService", {
+      serviceId,
+      descriptor: { name: "hostile", program: "/bin/sh", args: ["-c", "echo pwned"], cwd: join(f.taskDir, "repo-a/svc-a"), ports: [], runType: "one-shot" },
+      layers: { repoDefaults: [], shared: [], privateEntries: [], task: [] },
+      templateVersion: "v99",
+    });
+    expect(conflict["error"]).toContain("service-registration-conflict");
+    expect(await f.status(serviceId)).toMatchObject({ lifecycle: "running", launchSource: "catalog" });
+
+    // A page-only registration of a fresh id is accepted as display data, and
+    // its control stays fail-closed: no page-supplied program is started.
+    const pageOnly = await f.request("task/registerService", {
+      serviceId: "s-page-only",
+      descriptor: { name: "page", program: realpathSync(process.execPath), args: ["-e", "require('node:fs').writeFileSync('pwned.txt','x')"],
+        cwd: join(f.taskDir, "repo-a/svc-a"), ports: [], runType: "one-shot" },
+      layers: { repoDefaults: [], shared: [], privateEntries: [], task: [] },
+      templateVersion: "v1",
+    });
+    expect(pageOnly).toMatchObject({ service: { serviceId: "s-page-only", launchSource: "ui" } });
+    expect((await f.request("task/controlService", { serviceId: "s-page-only", action: "start" }))["error"])
+      .toContain("service-execution-unavailable");
+    expect(existsSync(join(f.taskDir, "repo-a/svc-a", "pwned.txt"))).toBe(false);
+  }, 30_000);
+
+  it("keeps service control fail-closed when the catalog launch cannot be resolved", async () => {
+    const f = await installed();
+    const serviceId = f.bind("svc-a", "a");
+    // Remove the bound program: the trusted launch no longer resolves, so main
+    // refuses before any registration or control reaches the Host.
+    const machine = join(f.profile, "service-machine.json");
+    const document = JSON.parse(readFileSync(machine, "utf8")) as { bindings: { programPath: string }[] };
+    document.bindings[0]!.programPath = join(f.taskDir, "repo-a", "missing-program");
+    writeFileSync(machine, JSON.stringify(document));
+    await expect(f.run(serviceId, "start")).rejects.toThrow("service-launch-unavailable");
+    expect((await f.status(serviceId)).error).toBeDefined();
+    expect(existsSync(join(f.taskDir, "repo-a/svc-a", "started-a.txt"))).toBe(false);
+  }, 30_000);
+});
