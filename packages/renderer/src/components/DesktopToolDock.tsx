@@ -54,10 +54,12 @@ import {
  *   `takeover/pause|resume`); main owns the visible page, so the page itself is
  *   never embedded here.
  *
- * Controls the Host cannot serve (service start/stop, local/remote switching,
- * remote dependency and routing reads, live log streaming, page discovery and
- * embedding, page marks) stay visible and explicitly marked 未接线 with the
- * Host-side reason; none of them is filled with sample data.
+ * Controls this build cannot serve (local/remote switching, remote dependency
+ * and routing reads, live log streaming, page discovery and embedding, page
+ * marks) stay visible and explicitly marked 未接线 with the reason; none of
+ * them is filled with sample data. Service start/stop is no longer that kind of
+ * gap — the Host now executes a service registered from the trusted catalog —
+ * but this panel still offers no trigger, so the row says so instead of hiding.
  */
 export type DesktopTool = "runtime" | "browser" | "files" | "terminal" | "logs" | "protocol";
 
@@ -84,7 +86,7 @@ export const DESKTOP_TOOLS_UNWIRED: { id: string; label: string; reason: string 
  * never replaced by sample data.
  */
 export const DESKTOP_TOOL_CONTROLS_UNWIRED: Record<string, string> = {
-  "service-control": "Host 尚未接管真实服务进程：task/controlService 返回 service-execution-unavailable",
+  "service-control": "此面板不提供启停按钮：Host 已接管真实服务进程，但只执行可信服务目录登记的任务绑定服务，页面触发未接线",
   "service-mode": "本地/远程切换需要任务覆盖写入，Host 无对应读写能力",
   "remote-deps": "Host 无本任务远程依赖清单读取 op",
   routing: "Host 无生效路由/请求去向读取 op",

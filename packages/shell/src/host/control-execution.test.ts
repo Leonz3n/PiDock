@@ -12,7 +12,7 @@ import { describe, expect, it } from "vitest";
 import { planTerminal, TaskTerminalRegistry, type TerminalPlan } from "../main/terminal-config.js";
 import { workspaceRoots } from "../main/workspace-files.js";
 import { runAgentBrowserAction, type BrowserGatewayPort } from "./browser-control.js";
-import { runAgentServiceControl } from "./service-control.js";
+import { runAgentServiceControl, type ServiceExecutionDriver } from "./service-control.js";
 import { runAgentTerminalControl } from "./terminal-control.js";
 import { TaskServiceRuntime } from "./service-runtime.js";
 import { TaskWorkspaceHost, memoryTaskStore } from "./task-host.js";
@@ -24,6 +24,16 @@ const PAGE = { taskId: TASK_ID, pageId: "page-1", webContentsId: 11 };
 const ROOTS = workspaceRoots({ taskId: TASK_ID, taskDir: DIR, repos: ["invoice-service"], branch: "main" });
 
 type Tier = "read" | "default" | "auto";
+
+/**
+ * The gate and the execution ledger are this suite's subject, not the spawner;
+ * `runAgentServiceControl` performs its lifecycle change only after the driver
+ * reports a real pid, so the stub stands in for the Host's process port.
+ */
+const STUB_DRIVER: ServiceExecutionDriver = {
+  start: async () => ({ pid: 4821 }),
+  stop: async () => {},
+};
 
 function plannedTerminal(instanceId = "term-1"): TerminalPlan {
   const result = planTerminal({
@@ -71,6 +81,7 @@ function setup(tier: Tier = "default") {
       sessionId: "main",
       serviceId: SERVICE_ID,
       action: "start",
+      driver: STUB_DRIVER,
       ...(input.approvalId !== undefined ? { approvalId: input.approvalId } : {}),
       write: host,
       persist,
@@ -172,9 +183,9 @@ describe("[PiDock 14] (#17) control-class execution records", () => {
     expect(f.rows("terminal-control")).toHaveLength(1);
   });
 
-  it("records the operation that really ran when a retry with the same approval id reuses a failed row", () => {
+  it("records the operation that really ran when a retry with the same approval id reuses a failed row", async () => {
     const f = setup("default");
-    f.serviceControl();
+    await f.serviceControl();
     const approvalId = f.pendingId();
     f.host.approve("main", approvalId);
     expect(f.rows("service-control")).toMatchObject([{ state: "executing" }]);
@@ -183,14 +194,14 @@ describe("[PiDock 14] (#17) control-class execution records", () => {
     // confirmation stays approved and unconsumed.
     const held = f.host.claimWrite("other", "default", { kind: "turn", label: "另一会话" });
     if (!held.ok) throw new Error("write right not granted");
-    const blocked = f.serviceControl({ approvalId });
+    const blocked = await f.serviceControl({ approvalId });
     expect(blocked.ok).toBe(false);
     expect(blocked.ok ? "" : blocked.error).toContain("task-locked");
     expect(f.rows("service-control")).toMatchObject([{ state: "failed" }]);
     // The right is free again: the same confirmation really starts the service,
     // so the performed operation must read done instead of keeping the failed row.
     f.host.releaseWrite(held.claimId);
-    const acted = f.serviceControl({ approvalId });
+    const acted = await f.serviceControl({ approvalId });
     expect(acted.ok).toBe(true);
     expect(f.rows("service-control")).toMatchObject([
       { state: "done", steps: [{ stepId: "control", state: "done" }], attempts: [{ endState: "completed" }] },
@@ -198,21 +209,21 @@ describe("[PiDock 14] (#17) control-class execution records", () => {
     ]);
   });
 
-  it("records an auto-tier retry that runs with a stale terminal approval id instead of nothing", () => {
+  it("records an auto-tier retry that runs with a stale terminal approval id instead of nothing", async () => {
     const f = setup("default");
-    f.serviceControl();
+    await f.serviceControl();
     const approvalId = f.pendingId();
     f.host.approve("main", approvalId);
     // The refused retry settles the bound row before the confirmation is spent.
     const held = f.host.claimWrite("other", "default", { kind: "turn", label: "另一会话" });
     if (!held.ok) throw new Error("write right not granted");
-    expect(f.serviceControl({ approvalId }).ok).toBe(false);
+    expect((await f.serviceControl({ approvalId })).ok).toBe(false);
     expect(f.rows("service-control")).toMatchObject([{ state: "failed" }]);
     f.host.releaseWrite(held.claimId);
     // The user raised the session to auto: the still-live confirmation runs
     // without a new ask, yet the row it was bound to is already terminal.
     f.host.setPermission("main", "auto");
-    expect(f.serviceControl({ approvalId }).ok).toBe(true);
+    expect((await f.serviceControl({ approvalId })).ok).toBe(true);
     expect(f.rows("service-control")).toMatchObject([
       { state: "done", attempts: [{ endState: "completed" }] },
       { state: "failed" },
@@ -225,7 +236,7 @@ describe("[PiDock 14] (#17) control-class execution records", () => {
     const rejectedId = f.pendingId();
     f.host.reject("main", rejectedId);
     expect(f.rows("service-control")).toMatchObject([{ state: "rejected", approval: { approvalId: rejectedId, status: "rejected" } }]);
-    const asked = f.serviceControl();
+    const asked = await f.serviceControl();
     expect(asked.ok).toBe(false);
     // The settled history row is kept; the new wait is its own row.
     expect(f.rows("service-control")).toMatchObject([
@@ -245,17 +256,17 @@ describe("[PiDock 14] (#17) control-class execution records", () => {
     ]);
   });
 
-  it("completes an auto-tier service-control execution without a confirmation", () => {
+  it("completes an auto-tier service-control execution without a confirmation", async () => {
     const f = setup("auto");
-    const result = f.serviceControl();
+    const result = await f.serviceControl();
     expect(result.ok).toBe(true);
     expect(f.channel.snapshot().approvals).toHaveLength(0);
     expect(f.rows("service-control")).toMatchObject([{ kind: "service-control", state: "done" }]);
   });
 
-  it("keeps the three control families apart from the turn and compaction records", () => {
+  it("keeps the three control families apart from the turn and compaction records", async () => {
     const f = setup("auto");
-    f.serviceControl();
+    await f.serviceControl();
     f.terminalControl();
     const kinds = f.host.executionState("main").executions.map((record) => record.kind).sort();
     expect(kinds).toEqual(["service-control", "terminal-control"]);
