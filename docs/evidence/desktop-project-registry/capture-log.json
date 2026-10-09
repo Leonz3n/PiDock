@@ -2,25 +2,25 @@
   "ticket": "#38 box 5 / #39 box 4 / #40 box 4 / #41 boxes 1,4 — Desktop 项目与未归属任务接入持久 Host",
   "command": "pnpm --filter @pidock/shell exec electron scripts/electron-issue41-project-registry-capture.mjs --out docs/evidence/desktop-project-registry",
   "repoRoot": "/private/tmp/pidock-spec-worktrees/issue-38-41",
-  "revision": "1c568ec231d70f47f68f950155d4026e93e00272",
+  "revision": "34a1f8e117d0f01f9891592e04d3ecb381d0d060",
   "trackedFilesDirty": "false",
   "generatedBy": "scripts/electron-issue41-project-registry-capture.mjs",
   "seeded": {
     "registry": "ProjectRegistry.create/claim (real projects.json under isolated userData)",
     "project": {
-      "id": "4df732ba-21ac-42ba-b6b9-1d4183be0700",
+      "id": "11f67683-f3f4-4fcb-9a63-1a4b7eb1300f",
       "name": "Adder",
       "description": "微服务开发工作台",
       "repositories": [
         {
-          "id": "e725da0b-774e-4f3e-8221-d019b284e2b9",
+          "id": "075bee7f-46d2-43ea-b8f0-9b92d9cca526",
           "name": "invoice-service",
           "path": "/var/folders/fc/mb2t947124l537p11xktw4kw0000gn/T/pidock-issue41-registry-capture/sources/invoice-service"
         }
       ],
       "directories": [
         {
-          "id": "13020ef8-771a-4d9d-9b86-7470e8b5a4dc",
+          "id": "2bf8f9bb-b1f4-4da0-9025-11835740b572",
           "name": "设计资料",
           "path": "/var/folders/fc/mb2t947124l537p11xktw4kw0000gn/T/pidock-issue41-registry-capture/sources/设计资料"
         }
@@ -66,8 +66,8 @@
       "pixelWidth": 1440,
       "pixelHeight": 900,
       "deviceScaleFactor": 1,
-      "sha256": "1435c30cbc400ae2db1668f8a68c956846bf20aea46c61e69f80f2cfb17a208d",
-      "bodyText": "π | PiDock | A | 本机工作区 | 1 个项目 · 3 个任务 | 项目总览 | 环境与服务 | Token 用量 | 进行中的任务 | 3 | 任务 | 对账单详情·已归属 | main | 2026-09-22 | 任务 | 运单查询·未归属 | main | 2026-09-22 | 任务 | 接口联调·待修复 | main | 2026-09-22 | 已归档 | 需要处理 | 定时任务 | 能力管理 | 远程访问 | 本机设置 | 模型与 Provider | 本 | 本机工作区 | 真实 Host | 工作区 | / | Adder | / | 项目管理 | 任务根 1/1 就绪 | 项目与任务 | 项目 | 找回任务根 | 任务 | 真实任务创建尚未接入 | 返回项目总览 | 项目 · 1 | Adder | 未归属任务 · 1 | Adder | 微服务开发工作台 | 编辑 | 删除 | 仓库 · 1 | invoice-service | /var/folders/fc/mb2t947124l537p11xktw4kw0000gn/T/pidock-issue41-registry-capture/sources/invoice-service | 普通目录 · 1 | 设计资料 | /var/folders/fc/mb2t947124l537p11xktw4kw0000gn/T/pidock-issue41-registry-capture/sources/设计资料 | 任务 · 2 | 对账单详情·已归属 | task-aaaa1111 | 进入工作区 | 选择项目 | 转移 | 解绑 | 接口联调·待修复 | task-cccc3333 · 关联待修复 | 进入工作区 | 选择项目 | 转移 | 解绑 | 仅显示默认及已登记任务根；其他位置需明确找回。"
+      "sha256": "7ab210d3b0ca27b72cc79974c69d9a256099b348e78b0b43850822a30d26ee93",
+      "bodyText": "π | PiDock | A | 本机工作区 | 1 个项目 · 3 个任务 | 项目总览 | 环境与服务 | Token 用量 | 进行中的任务 | 3 | 任务 | 对账单详情·已归属 | main | 2026-09-22 | 任务 | 运单查询·未归属 | main | 2026-09-22 | 任务 | 接口联调·待修复 | main | 2026-09-22 | 已归档 | 需要处理 | 定时任务 | 能力管理 | 远程访问 | 本机设置 | 模型与 Provider | 本 | 本机工作区 | 真实 Host | 工作区 | / | Adder | / | 项目管理 | 任务根 1/1 就绪 | 项目与任务 | 项目 | 找回任务根 | 任务 | 返回项目总览 | 项目 · 1 | Adder | 未归属任务 · 1 | Adder | 微服务开发工作台 | 编辑 | 删除 | 仓库 · 1 | invoice-service | /var/folders/fc/mb2t947124l537p11xktw4kw0000gn/T/pidock-issue41-registry-capture/sources/invoice-service | 普通目录 · 1 | 设计资料 | /var/folders/fc/mb2t947124l537p11xktw4kw0000gn/T/pidock-issue41-registry-capture/sources/设计资料 | 任务 · 2 | 对账单详情·已归属 | task-aaaa1111 | 进入工作区 | 选择项目 | 转移 | 解绑 | 接口联调·待修复 | task-cccc3333 · 关联待修复 | 进入工作区 | 选择项目 | 转移 | 解绑 | 仅显示默认及已登记任务根；其他位置需明确找回。"
     },
     {
       "state": "projects-management",
@@ -77,8 +77,8 @@
       "pixelWidth": 720,
       "pixelHeight": 560,
       "deviceScaleFactor": 1,
-      "sha256": "bbea803ff4b5a315cefb9b985b31ae825a8fc3a4932c734850a5e31d903b2c81",
-      "bodyText": "π | 项目总览 | 环境与服务 | Token 用量 | 已归档 | 需要处理 | 定时任务 | 能力管理 | 远程访问 | 本机设置 | 模型与 Provider | 本 | 工作区 | / | Adder | / | 项目管理 | 项目与任务 | 项目 | 找回任务根 | 任务 | 真实任务创建尚未接入 | 返回项目总览 | 项目 · 1 | Adder | 未归属任务 · 1 | Adder | 微服务开发工作台 | 编辑 | 删除 | 仓库 · 1 | invoice-service | /var/folders/fc/mb2t947124l537p11xktw4kw0000gn/T/pidock-issue41-registry-capture/sources/invoice-service | 普通目录 · 1 | 设计资料 | /var/folders/fc/mb2t947124l537p11xktw4kw0000gn/T/pidock-issue41-registry-capture/sources/设计资料 | 任务 · 2 | 对账单详情·已归属 | task-aaaa1111 | 进入工作区 | 选择项目 | 转移 | 解绑 | 接口联调·待修复 | task-cccc3333 · 关联待修复 | 进入工作区 | 选择项目 | 转移 | 解绑 | 仅显示默认及已登记任务根；其他位置需明确找回。"
+      "sha256": "cc84ce48452406f950812c6e5bf132b17318951f580b93d4bdf908de7816ad8b",
+      "bodyText": "π | 项目总览 | 环境与服务 | Token 用量 | 已归档 | 需要处理 | 定时任务 | 能力管理 | 远程访问 | 本机设置 | 模型与 Provider | 本 | 工作区 | / | Adder | / | 项目管理 | 项目与任务 | 项目 | 找回任务根 | 任务 | 返回项目总览 | 项目 · 1 | Adder | 未归属任务 · 1 | Adder | 微服务开发工作台 | 编辑 | 删除 | 仓库 · 1 | invoice-service | /var/folders/fc/mb2t947124l537p11xktw4kw0000gn/T/pidock-issue41-registry-capture/sources/invoice-service | 普通目录 · 1 | 设计资料 | /var/folders/fc/mb2t947124l537p11xktw4kw0000gn/T/pidock-issue41-registry-capture/sources/设计资料 | 任务 · 2 | 对账单详情·已归属 | task-aaaa1111 | 进入工作区 | 选择项目 | 转移 | 解绑 | 接口联调·待修复 | task-cccc3333 · 关联待修复 | 进入工作区 | 选择项目 | 转移 | 解绑 | 仅显示默认及已登记任务根；其他位置需明确找回。"
     },
     {
       "state": "projects-unassigned",
@@ -88,8 +88,8 @@
       "pixelWidth": 1440,
       "pixelHeight": 900,
       "deviceScaleFactor": 1,
-      "sha256": "8938109721520b15a23c93d923d1f7fff8f1d9cedb77748de932870912862623",
-      "bodyText": "π | PiDock | A | 本机工作区 | 1 个项目 · 3 个任务 | 项目总览 | 环境与服务 | Token 用量 | 进行中的任务 | 3 | 任务 | 对账单详情·已归属 | main | 2026-09-22 | 任务 | 运单查询·未归属 | main | 2026-09-22 | 任务 | 接口联调·待修复 | main | 2026-09-22 | 已归档 | 需要处理 | 定时任务 | 能力管理 | 远程访问 | 本机设置 | 模型与 Provider | 本 | 本机工作区 | 真实 Host | 工作区 | / | 未归属任务 | / | 项目管理 | 任务根 1/1 就绪 | 项目与任务 | 项目 | 找回任务根 | 任务 | 真实任务创建尚未接入 | 返回项目总览 | 项目 · 1 | Adder | 未归属任务 · 1 | 未归属任务 | 任务 · 1 | 运单查询·未归属 | task-bbbb2222 | 进入工作区 | 选择项目 | Adder | 认领 | 仅显示默认及已登记任务根；其他位置需明确找回。"
+      "sha256": "efb9e6ca8e98cb2a3cdd3149ee8fc5da66305a28b0098d95431475adc020c4b4",
+      "bodyText": "π | PiDock | A | 本机工作区 | 1 个项目 · 3 个任务 | 项目总览 | 环境与服务 | Token 用量 | 进行中的任务 | 3 | 任务 | 对账单详情·已归属 | main | 2026-09-22 | 任务 | 运单查询·未归属 | main | 2026-09-22 | 任务 | 接口联调·待修复 | main | 2026-09-22 | 已归档 | 需要处理 | 定时任务 | 能力管理 | 远程访问 | 本机设置 | 模型与 Provider | 本 | 本机工作区 | 真实 Host | 工作区 | / | 未归属任务 | / | 项目管理 | 任务根 1/1 就绪 | 项目与任务 | 项目 | 找回任务根 | 任务 | 返回项目总览 | 项目 · 1 | Adder | 未归属任务 · 1 | 未归属任务 | 任务 · 1 | 运单查询·未归属 | task-bbbb2222 | 进入工作区 | 选择项目 | Adder | 认领 | 仅显示默认及已登记任务根；其他位置需明确找回。"
     },
     {
       "state": "projects-unassigned",
@@ -99,8 +99,8 @@
       "pixelWidth": 720,
       "pixelHeight": 560,
       "deviceScaleFactor": 1,
-      "sha256": "a91471d15de1a69ee9c9ec8e001afdf9e2ef45409644b8a1faf41441d8bbe96a",
-      "bodyText": "π | 项目总览 | 环境与服务 | Token 用量 | 已归档 | 需要处理 | 定时任务 | 能力管理 | 远程访问 | 本机设置 | 模型与 Provider | 本 | 工作区 | / | 未归属任务 | / | 项目管理 | 项目与任务 | 项目 | 找回任务根 | 任务 | 真实任务创建尚未接入 | 返回项目总览 | 项目 · 1 | Adder | 未归属任务 · 1 | 未归属任务 | 任务 · 1 | 运单查询·未归属 | task-bbbb2222 | 进入工作区 | 选择项目 | Adder | 认领 | 仅显示默认及已登记任务根；其他位置需明确找回。"
+      "sha256": "d37a5d2d13dc711f8a6550686219961d5dd542a375a871f554965feeae708838",
+      "bodyText": "π | 项目总览 | 环境与服务 | Token 用量 | 已归档 | 需要处理 | 定时任务 | 能力管理 | 远程访问 | 本机设置 | 模型与 Provider | 本 | 工作区 | / | 未归属任务 | / | 项目管理 | 项目与任务 | 项目 | 找回任务根 | 任务 | 返回项目总览 | 项目 · 1 | Adder | 未归属任务 · 1 | 未归属任务 | 任务 · 1 | 运单查询·未归属 | task-bbbb2222 | 进入工作区 | 选择项目 | Adder | 认领 | 仅显示默认及已登记任务根；其他位置需明确找回。"
     }
   ]
 }

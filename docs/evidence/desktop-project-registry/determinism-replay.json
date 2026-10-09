@@ -1,0 +1,66 @@
+{
+  "ticket": "#38 box 5 / #39 box 4 / #40 box 4 / #41 boxes 1,4 — replay determinism for the committed PNGs",
+  "command": "pnpm --filter @pidock/shell exec electron scripts/electron-issue41-project-registry-capture.mjs --out docs/evidence/desktop-project-registry",
+  "revision": "34a1f8e117d0f01f9891592e04d3ecb381d0d060",
+  "note": "Two consecutive runs at this revision wrote byte-identical PNGs; `trackedFilesDirty` was false for both. Each run regenerates the seeded project/repository/directory UUIDs, so `capture-log.json` itself is not byte-stable across runs (those ids are never rendered); only the PNG bytes are claimed deterministic. Compare against `capture-log.json` `shots[].sha256`.",
+  "replays": [
+    {
+      "run": 1,
+      "shots": [
+        {
+          "file": "1440x900-project-overview.png",
+          "sha256": "0ad3952b28d628a7a3c452d8a45661d9692240b146f1fadb7feeb57a9b618ad7"
+        },
+        {
+          "file": "720x560-project-overview.png",
+          "sha256": "664cbeec4561b37199cbb39e7a753691b50800ccbf4dab5da2f16b55df34f7a8"
+        },
+        {
+          "file": "1440x900-projects-management.png",
+          "sha256": "7ab210d3b0ca27b72cc79974c69d9a256099b348e78b0b43850822a30d26ee93"
+        },
+        {
+          "file": "720x560-projects-management.png",
+          "sha256": "cc84ce48452406f950812c6e5bf132b17318951f580b93d4bdf908de7816ad8b"
+        },
+        {
+          "file": "1440x900-projects-unassigned.png",
+          "sha256": "efb9e6ca8e98cb2a3cdd3149ee8fc5da66305a28b0098d95431475adc020c4b4"
+        },
+        {
+          "file": "720x560-projects-unassigned.png",
+          "sha256": "d37a5d2d13dc711f8a6550686219961d5dd542a375a871f554965feeae708838"
+        }
+      ]
+    },
+    {
+      "run": 2,
+      "shots": [
+        {
+          "file": "1440x900-project-overview.png",
+          "sha256": "0ad3952b28d628a7a3c452d8a45661d9692240b146f1fadb7feeb57a9b618ad7"
+        },
+        {
+          "file": "720x560-project-overview.png",
+          "sha256": "664cbeec4561b37199cbb39e7a753691b50800ccbf4dab5da2f16b55df34f7a8"
+        },
+        {
+          "file": "1440x900-projects-management.png",
+          "sha256": "7ab210d3b0ca27b72cc79974c69d9a256099b348e78b0b43850822a30d26ee93"
+        },
+        {
+          "file": "720x560-projects-management.png",
+          "sha256": "cc84ce48452406f950812c6e5bf132b17318951f580b93d4bdf908de7816ad8b"
+        },
+        {
+          "file": "1440x900-projects-unassigned.png",
+          "sha256": "efb9e6ca8e98cb2a3cdd3149ee8fc5da66305a28b0098d95431475adc020c4b4"
+        },
+        {
+          "file": "720x560-projects-unassigned.png",
+          "sha256": "d37a5d2d13dc711f8a6550686219961d5dd542a375a871f554965feeae708838"
+        }
+      ]
+    }
+  ]
+}

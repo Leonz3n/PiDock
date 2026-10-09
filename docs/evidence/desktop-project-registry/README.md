@@ -1,8 +1,9 @@
 # [PiDock 02e/02f/02g/02h] (#38/#39/#40/#41) Desktop 项目注册表 — 真实 Electron 证据
 
-本目录是 **真实 Electron**（生产 main 接线 + 已构建 React renderer，非 Vite/Playwright，非夹具页）
+本目录是 **真实 Electron**（生产运行时接线 + 已构建 React renderer，非 Vite/Playwright，非夹具页）
 对「Desktop 项目与未归属任务接入持久 Host」的窗口级截图证据：从 **真实磁盘** 的 main-owned
-Project 注册表读取项目、仓库/目录、已归属任务、待修复任务与明确未归属任务。
+Project 注册表读取项目、仓库/目录、已归属任务、待修复任务与明确未归属任务。启动路径与生产接线
+的一致性及唯一省略项见 §2 / §4。
 
 - 脚本：`packages/shell/scripts/electron-issue41-project-registry-capture.mjs`
 - PNG：`1440x900-*.png` / `720x560-*.png`
@@ -25,11 +26,20 @@ pnpm --filter @pidock/shell exec electron scripts/electron-issue41-project-regis
 
 ## 2. 启动路径与数据源
 
-- 启动路径：`createTrustedWindow("issue41","production")` + `loadTrustedViews` →
-  `dist/renderer/index.html`（无 fixture entry、无 Vite、无 memoryHost fallback）。
+- 启动路径：脚本从已编译的 `packages/shell/dist/main/*.js` **直接** 导入运行时模块，调用
+  `createTrustedWindow("issue41","production")` + `loadTrustedViews` → `dist/renderer/index.html`
+  （无 fixture entry、无 Vite、无 memoryHost fallback）。它**不**运行 `dist/main/main.js`，因此
+  应用生命周期、窗口证据断言与定时驱动不参与本次捕获。
+- 接线：与生产入口一致（`main.ts:157-180`）。`registerIpc(client, views.registry, tasks, projects, taskRoots,
+  undefined, creation, providers, …)` 中传入真实的 `ProjectTaskCreation`（`CreationIntentStore` +
+  `projects` + `TaskRootIndex` + `PerTaskHostRegistry`）与真实的 `ProviderWiring`
+  （`ProviderProfileStore` + 生产 installer 体）。因此 `shell/createTask` 走真实分支
+  （`current` 返回 `null`），渲染层**不**绘制 `真实任务创建尚未接入` 警报。
 - 数据源：真实 `TaskRootIndex`（隔离默认任务根）+ 真实 `ProjectRegistry`（隔离 `userData` 下的
   `projects.json`）+ `PerTaskHostRegistry`（`utilityProcess` fork `dist/host/host-entry.js`）。
   没有演示对象、没有内存夹具、没有 dev server。
+- 唯一未接线的生产依赖是 **服务配方目录**（`ServiceCatalog` / `tasks.configureServices`）：原因见 §4。
+  本目录三个视图的可见内容不依赖它。
 
 ## 3. 会话内容：seeded 与驱动 vs. 真实用户操作（重要披露）
 
@@ -61,30 +71,47 @@ pnpm --filter @pidock/shell exec electron scripts/electron-issue41-project-regis
 （为制造读取失败而用一个 Proxy 只覆盖 `TaskRootIndex.inventory()`）不同，本脚本全部走生产实现；
 `needs-repair` 是通过真实磁盘目录替换产生的真实注册表状态，不是注入的返回值。
 
+**唯一省略的生产依赖：服务配方目录。** 生产入口还向 `registerIpc` 传入 `ServiceCatalog`
+（`main.ts:180`），使 `tasks.configureServices` 生效服务归属围栏。本 harness **故意不接入**它：
+`needs-repair` 场景会替换 `task-cccc3333` 的目录，而围栏生效时 Host 在 `quitAll` 阶段会因无法
+验证被替换目录的身份而报 `service-owner-shutdown-unconfirmed`，受 `PerTaskHostRegistry.quitAll`/
+`disposeAll` 的封口契约约束，清理 helper 不能忽略该失败。本目录三个视图的可见状态与它无关（服务
+目录 IPC 仅在用户进入服务页面时才被调用）。
+
 ## 5. 规格冲突（不在本目录修正）
 
 `#41` box 2 要求 `创建真实任务` 与 `pi 发送` 保持 **DISABLED（尚未接线）**，但后续 `#42/#45/#47`
-已按负责人决策把它们接线。本证据 **不** 撤销这些后继能力，也 **不** 重写工单；`项目管理`
-顶部仍显示 `真实任务创建尚未接入` 的既有文句。该冲突交由负责人裁决，不属于本次源码改动范围。
+已按负责人决策把它们接线（`main.ts:167` 构造 `ProjectTaskCreation`，`main.ts:180` 传入 `registerIpc`）。
+本证据 **不** 撤销这些后继能力，也 **不** 重写工单。harness 与生产一样接入了 `ProjectTaskCreation`，
+所以本目录 `项目管理` 截图里的 `新建任务` 入口是**可用**的，且 **没有** `真实任务创建尚未接入` 警报：
+截图本身即表明当前源码与 box 2 的期望相反。该冲突交由负责人裁决，不属于本次源码改动范围。
 
 ## 6. 捕获方法与确定性
 
 - 尺寸：脚本 `setContentSize(W,H)` 后断言 `getContentBounds()` 恰为 `1440×900` / `720×560`；
   文件名的 `WxH` 即实测 **CSS 内容盒** 尺寸。
-- 捕获机 deviceScaleFactor 见 `capture-log.json`（本机为面板/显示器 1×；`pixelWidth`/`pixelHeight`
-  记录真实位图尺寸，避免把 `WxH` 文件名误读为像素尺寸）。
+- 捕获机 deviceScaleFactor 见 `capture-log.json`（本机为面板/显示器 1×，所以 `1440×900` 的位图就是
+  1440×900 px；`pixelWidth`/`pixelHeight` 记录真实位图尺寸）。注意兄弟证据
+  `docs/evidence/desktop-task-inventory/` 的 `capture-log.json` 记录 `deviceScaleFactor: 2`
+  （同名 `1440×900` 对应 2880×1800 位图）：两份证据都如实记录各自的 dsf，跨证据比较请用
+  `pixelWidth`/`pixelHeight`，不要按文件名比较。`#38` box 5 的 720×560 可读性检查是在本目录的
+  1× PNG 上完成的。
 - 截图使用渲染器调试协议的 `Page.captureScreenshot`（对精确尺寸的 shell view 取合成帧）。
-  起因：本机某些显示/遮挡状态下 `webContents.capturePage()` 会以 `UnknownVizError` 拒绝，而
-  `Page.captureScreenshot` 稳定；两者对同一状态产生 **逐字节相同** 的 PNG（已用既有
-  `capturePage` 运行对照 sha256 验证）。未做任何「重试到通过」。
-- 固定临时根（`$TMPDIR/pidock-issue41-registry-capture`）使捕获到的本机路径稳定，因此同一源码
-  版本重放得到逐字节相同 PNG。本目录的 PNG/log 出自 `capture-log.json` 的 `revision`（该 commit 已含
-  本 harness），`trackedFilesDirty: false`；在本 revision 连续两次重放 6 张 PNG sha256 逐字节一致。
+  起因：本机某些显示/遮挡状态下 `webContents.capturePage()` 会以 `UnknownVizError` 被拒绝；
+  该调用在本机未产出可用截图，因此本目录**只**提交 `Page.captureScreenshot` 的结果，也**不**
+  声称两者逐字节相同（没有可提交的 `capturePage` 对照运行）。未做任何「重试到通过」。
+- 固定临时根（`$TMPDIR/pidock-issue41-registry-capture`）使捕获到的本机路径稳定。本目录的 PNG/log 出自
+  `capture-log.json` 的 `revision`（commit `34a1f8e`，已含本 harness）；在该 revision 连续两次重放得到
+  6 张 **逐字节相同** 的 PNG，两次的 sha256 集合已提交在 `determinism-replay.json`，可与
+  `capture-log.json` 的 `shots[].sha256` 逐条核对。项目/仓库/目录的 UUID 每次运行会重新生成且从不出现在
+  画面里，故只声称 PNG 字节确定，不声称 `capture-log.json` 字节确定。
+  `trackedFilesDirty` 由 harness 计算「源码树是否干净」：它排除 `--out` 指向的本目录（重放本身会覆盖其中
+  已提交的字节），其余 tracked 路径必须干净；本 revision 的两次运行均为 `false`。
 
 | 视图 | PNG | 实测画面 |
 | --- | --- | --- |
 | 项目总览（1440×900 / 720×560） | `1440x900-project-overview.png` / `720x560-project-overview.png` | 真实 Project「Adder」：进行中的任务 2、已绑定仓库 1、普通目录 1；`项目仓库与目录` 列出真实 `invoice-service` 与 `设计资料`；`另有 1 个任务尚未归属任何项目…` |
-| 项目管理（1440×900 / 720×560） | `1440x900-projects-management.png` / `720x560-projects-management.png` | 项目列表（Adder）+ 详情「仓库 · 1 / 普通目录 · 1」+ 任务行：`对账单详情·已归属`（assigned）与 `接口联调·待修复 · 关联待修复`（真实 needs-repair）；侧栏 `未归属任务 · 1` |
+| 项目管理（1440×900 / 720×560） | `1440x900-projects-management.png` / `720x560-projects-management.png` | 项目列表（Adder）+ 详情「仓库 · 1 / 普通目录 · 1」+ 任务行：`对账单详情·已归属`（assigned）与 `接口联调·待修复 · 关联待修复`（真实 needs-repair）；侧栏 `未归属任务 · 1`；`新建任务` 入口可用、无 `真实任务创建尚未接入` 警报（见 §5） |
 | 未归属条目（1440×900 / 720×560） | `1440x900-projects-unassigned.png` / `720x560-projects-unassigned.png` | `未归属任务 · 任务 · 1` 仅列 `运单查询·未归属`，带 `选择项目`/`认领` 控件 |
 
 每个视图当时的 `document.body.innerText` 直接记录在 `capture-log.json` 的 `shots[].bodyText`，可逐行核对。
