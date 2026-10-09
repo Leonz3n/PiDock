@@ -273,6 +273,7 @@ it("refuses every escape vector by name and changes nothing on disk", async () =
   execFileSync("ln", ["-s", join(outsideDir, "planted.txt"), join(h.fixture.worktree, "link-dangling.txt")]);
   execFileSync("ln", ["-s", join(outsideDir, "planted"), join(h.fixture.worktree, "link-dangling-dir")]);
   const before = snapshot(h.fixture.root);
+  const gitPointerBefore = readFileSync(join(h.fixture.worktree, ".git"), "utf8");
 
   const cases: { tool: string; args: Record<string, unknown>; code: string }[] = [
     { tool: "fs.write", args: { path: "/tmp/pidock-agent-tools-escape.txt", content: "escape" }, code: "tool-refused:out-of-scope" },
@@ -304,9 +305,27 @@ it("refuses every escape vector by name and changes nothing on disk", async () =
     // The worktree's own git control file is not a write target: rewriting it
     // would retarget git at the primary checkout this module keeps out of reach.
     { tool: "fs.write", args: { path: "repo/.git", content: "gitdir: /tmp/primary/.git\n" }, code: "tool-refused:invalid-target" },
-    // The Host's own bookkeeping is not task content.
+    // Case does not make it a different entry: on the product's case-insensitive
+    // filesystems (APFS, Windows) `repo/.GIT` IS `repo/.git`, so a case-sensitive
+    // segment compare would still overwrite the git pointer.
+    { tool: "fs.write", args: { path: "repo/.GIT", content: "gitdir: /tmp/primary/.git\n" }, code: "tool-refused:invalid-target" },
+    // The same control file through `exec.run`: the bare token `.git` carries no
+    // `/`, so a filter that only examines path-shaped tokens never sees it.
+    { tool: "exec.run", args: { command: "echo x > .git" }, code: "tool-refused:invalid-target" },
+    { tool: "exec.run", args: { command: "echo x > ./.GIT" }, code: "tool-refused:invalid-target" },
+    { tool: "exec.run", args: { command: "echo x > '.git'" }, code: "tool-refused:invalid-target" },
+    { tool: "exec.run", args: { command: "echo x > \".GIT\"" }, code: "tool-refused:invalid-target" },
+    // A control path carried as a value (`dd of=.git`) rather than as a bare or
+    // operator-glued token is refused the same way.
+    { tool: "exec.run", args: { command: "dd of=.git" }, code: "tool-refused:invalid-target" },
+    { tool: "exec.run", args: { command: "GIT_DIR=.GIT git status" }, code: "tool-refused:invalid-target" },
+    // The Host's own bookkeeping is not task content, whatever the case the
+    // caller names it in (`.PIDOCK-*` and `TASK.JSON` are the same entries on
+    // the product's filesystems).
     { tool: "fs.read", args: { path: "task.json" }, code: "tool-refused:protected-path" },
     { tool: "fs.read", args: { path: ".pidock-sdk-sessions" }, code: "tool-refused:protected-path" },
+    { tool: "fs.read", args: { path: "TASK.JSON" }, code: "tool-refused:protected-path" },
+    { tool: "fs.read", args: { path: ".PIDOCK-SDK-SESSIONS" }, code: "tool-refused:protected-path" },
     { tool: "exec.run", args: { command: "pwd", cwd: h.fixture.otherTaskDir }, code: "tool-refused:other-task" },
   ];
   for (const entry of cases) {
@@ -315,11 +334,34 @@ it("refuses every escape vector by name and changes nothing on disk", async () =
     expect(result.text).toContain("refused");
   }
   expect(snapshot(h.fixture.root)).toEqual(before);
+  // The worktree's git pointer is byte-identical: no `repo/.git` and no
+  // `repo/.GIT` write reached it.
+  expect(readFileSync(join(h.fixture.worktree, ".git"), "utf8")).toBe(gitPointerBefore);
   expect(existsSync("/tmp/pidock-agent-tools-escape.txt")).toBe(false);
   expect(existsSync(glued)).toBe(false);
   expect(existsSync(glued2)).toBe(false);
   expect(existsSync(join(outsideDir, "planted.txt"))).toBe(false);
   expect(existsSync(join(outsideDir, "planted"))).toBe(false);
+  await h.host.shutdownSdk();
+});
+
+it("never returns the task host's own bookkeeping from a search rooted at the task folder", async () => {
+  const h = await harness();
+  await h.host.configureSdkProvider({ config: PROVIDER_CONFIG, credential: "synthetic-key" });
+  await h.host.setPermission("main", "auto");
+
+  // `original` matches the worktree file, and this request's own prompt (with
+  // its pattern) is echoed into the session JSONL under `.pidock-sdk-sessions`:
+  // a traversal that walked the Host's state would report a match there.
+  const worktree = await h.prompt("fs.search", { path: ".", pattern: "original" });
+  expect(worktree.text).toContain("repo/notes.txt:1: original");
+  expect(worktree.text).not.toContain(".pidock-");
+
+  // `task-aaaaaaaa` is the id in the task record itself: a traversal of the task
+  // folder must not hand the top-level `task.json` back as searchable content.
+  const record = await h.prompt("fs.search", { path: ".", pattern: "task-aaaaaaaa" });
+  expect(record.text).not.toContain("task.json");
+  expect(record.text).not.toContain(".pidock-");
   await h.host.shutdownSdk();
 });
 
