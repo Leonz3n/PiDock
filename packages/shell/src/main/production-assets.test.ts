@@ -27,6 +27,19 @@ describe("packaged Desktop renderer", () => {
     }
   });
 
+  it("orders the shell test task after the shell build that rewrites dist/renderer", () => {
+    // `scripts/copy-static.mjs` rmSync/recreates dist/renderer during `@pidock/shell#build`,
+    // and this package's tests read dist/renderer/*.html, so the workspace `test` task's
+    // `^build`-only ordering lets that read race the build in a fresh `turbo run --force`.
+    // The fix must be package-scoped (not every package's test depending on its own build).
+    const graph = JSON.parse(readFileSync(join(shellRoot, "..", "..", "turbo.json"), "utf8")) as {
+      tasks: Record<string, { dependsOn?: string[] }>;
+    };
+    expect(graph.tasks["@pidock/shell#test"]).toBeDefined();
+    expect(graph.tasks["@pidock/shell#test"]!.dependsOn).toContain("@pidock/shell#build");
+    expect(graph.tasks["@pidock/shell#test"]!.dependsOn).toContain("^build");
+  });
+
   it("ships the React entry and all referenced file-relative assets, separately from smoke", () => {
     const html = readFileSync(join(output, "index.html"), "utf8");
     const smoke = readFileSync(join(output, "smoke.html"), "utf8");
