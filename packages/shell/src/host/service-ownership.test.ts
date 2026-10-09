@@ -469,8 +469,14 @@ describe("#48 service ownership records", () => {
     const pid = await processes.start(plan("env", dir, ["-e", `console.log('env:' + (process.env.${SERVICE_OWNERSHIP_NONCE_ENV} ? 'present' : 'absent')); setInterval(() => {}, 1000)`]));
     await until(() => lines.includes("env:present"), "the child to report its own environment");
     // The marker the verification reads back really is the child's own, and the
-    // Host's own environment never gains it.
-    expect(execFileSync("/bin/ps", ["-E", "-p", String(pid)], { encoding: "utf8" })).toContain(`${SERVICE_OWNERSHIP_NONCE_ENV}=`);
+    // Host's own environment never gains it. Probe the OS the same way the
+    // production readback does, per platform: `ps -E` shows the environment on
+    // macOS only, while on Linux procps `-E` means "all processes" and the
+    // environment must come from /proc.
+    const marker = process.platform === "linux"
+      ? readFileSync(`/proc/${pid}/environ`, "utf8")
+      : execFileSync("/bin/ps", ["-E", "-p", String(pid)], { encoding: "utf8" });
+    expect(marker).toContain(`${SERVICE_OWNERSHIP_NONCE_ENV}=`);
     expect(process.env[SERVICE_OWNERSHIP_NONCE_ENV]).toBeUndefined();
     await processes.stop("env").catch(() => {});
     if (alive(pid)) process.kill(pid, "SIGKILL");
