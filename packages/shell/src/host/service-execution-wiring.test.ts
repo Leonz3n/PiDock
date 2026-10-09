@@ -49,10 +49,23 @@ process.stdout.write("x".repeat(2500) + "\\n");
 setInterval(() => {}, 1000);
 `;
 
+/**
+ * `TaskServiceProcesses.stop` sends SIGTERM, waits `stopGraceMs` (3000ms),
+ * then SIGKILL and waits `stopConfirmMs` (1000ms) before it reports a failure
+ * (`./service-processes.ts`). A stop wait must comfortably EXCEED that
+ * 4000ms budget: a tighter budget can expire while the driver is still inside
+ * its own stop window under parallel test load, turning "still stopping" into
+ * a false "never stopped". This is a generous multiple of the real budget and
+ * still fails on a genuinely stuck child.
+ */
+const STOP_WAIT_MS = 30_000;
+/** Poll interval for the stop/log waits; the budget is polled at this cadence. */
+const POLL_INTERVAL_MS = 25;
+
 async function until(check: () => boolean, label: string) {
-  for (let index = 0; index < 200; index++) {
+  for (let elapsed = 0; elapsed < STOP_WAIT_MS; elapsed += POLL_INTERVAL_MS) {
     if (check()) return;
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
   }
   throw Error(`timed out waiting for ${label}`);
 }
@@ -60,10 +73,10 @@ async function until(check: () => boolean, label: string) {
 /** Wait until a running service's bounded log satisfies a predicate. */
 async function untilLog(read: () => Promise<string[]>, serviceId: string, check: (lines: string[]) => boolean) {
   let seen: string[] = [];
-  for (let index = 0; index < 200; index++) {
+  for (let elapsed = 0; elapsed < STOP_WAIT_MS; elapsed += POLL_INTERVAL_MS) {
     seen = await read();
     if (check(seen)) return;
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
   }
   throw Error(`timed out waiting for the log of ${serviceId}: ${seen.join(" | ")}`);
 }
@@ -190,12 +203,45 @@ function reportedPid(lines: string[]): number {
   if (!line) throw Error("no pid line in the service log");
   return Number(line.slice(4));
 }
+/**
+ * A pid that is not a usable positive integer cannot be probed with
+ * `process.kill`: `kill(0, 0)` signals this process's whole process group and
+ * always succeeds, so a `0` read would look like a permanently live process
+ * and hang the test to its timeout. Failing loudly with the raw marker text
+ * keeps any future recurrence self-diagnosing instead of surfacing as a
+ * timeout.
+ */
+class InvalidPidError extends Error {
+  constructor(readonly raw: string, readonly source: string) {
+    super(`invalid-pid: ${source} yielded ${JSON.stringify(raw)}`);
+    this.name = "InvalidPidError";
+  }
+}
 function alive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) throw new InvalidPidError(String(pid), "alive(pid)");
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
-/** The pid the fixture child wrote to its marker file (the live child, not a log line). */
-function markerPid(taskDir: string, tag: string): number {
-  return Number(readFileSync(join(taskDir, `repo-a/svc-${tag}`, `started-${tag}.txt`), "utf8"));
+/** Raw text the fixture child wrote to its marker file, or undefined before it exists. */
+function rawMarkerPid(taskDir: string, tag: string): string | undefined {
+  try { return readFileSync(join(taskDir, `repo-a/svc-${tag}`, `started-${tag}.txt`), "utf8"); }
+  catch { return undefined; }
+}
+/**
+ * The fixture child writes its own pid with a single `writeFileSync`, which
+ * creates the file before its bytes land. Wait until the file holds a complete
+ * positive integer (a different one from `exclude`, when given) rather than
+ * reading the brief empty/partial window that parses to `0`. Fails loudly with
+ * the raw content if it never yields a usable pid within the budget - never
+ * silently passes or skips.
+ */
+async function untilMarkerPid(taskDir: string, tag: string, exclude?: number): Promise<number> {
+  for (let elapsed = 0; elapsed < STOP_WAIT_MS; elapsed += POLL_INTERVAL_MS) {
+    const raw = rawMarkerPid(taskDir, tag);
+    const pid = raw === undefined ? NaN : Number(raw);
+    if (Number.isInteger(pid) && pid > 0 && pid !== exclude) return pid;
+    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+  }
+  throw new InvalidPidError(rawMarkerPid(taskDir, tag) ?? "<missing>", `started-${tag}.txt`);
 }
 
 describe.skipIf(process.platform === "win32")("#7 catalog-driven service execution with real child processes", () => {
@@ -335,8 +381,7 @@ describe.skipIf(process.platform === "win32")("#7 catalog-driven service executi
     expect(f.hostTaskDir).not.toBe(f.taskDir);
 
     expect(await f.run(serviceId, "start")).toMatchObject({ serviceId, action: "start", actor: "human" });
-    await until(() => existsSync(join(f.taskDir, "repo-a/svc-a", "started-a.txt")), "the service to start");
-    const firstPid = markerPid(f.taskDir, "a");
+    const firstPid = await untilMarkerPid(f.taskDir, "a");
     expect(alive(firstPid)).toBe(true);
 
     // The stop must reach the child the *same* driver registered.
@@ -347,8 +392,7 @@ describe.skipIf(process.platform === "win32")("#7 catalog-driven service executi
     // A restart runs a new child: the first one is gone and a different pid
     // is now live (the driver kept its map, so it did not spawn alongside it).
     expect(await f.run(serviceId, "start")).toMatchObject({ serviceId, action: "start" });
-    await until(() => markerPid(f.taskDir, "a") !== firstPid, "the restarted child to write its pid");
-    const secondPid = markerPid(f.taskDir, "a");
+    const secondPid = await untilMarkerPid(f.taskDir, "a", firstPid);
     expect(alive(secondPid)).toBe(true);
 
     // Quit stops the remaining real child before reporting success.
@@ -361,8 +405,7 @@ describe.skipIf(process.platform === "win32")("#7 catalog-driven service executi
     const f = await installed();
     const serviceId = f.bind("svc-a", "a");
     expect(await f.run(serviceId, "start")).toMatchObject({ action: "start" });
-    await until(() => existsSync(join(f.taskDir, "repo-a/svc-a", "started-a.txt")), "the service to start");
-    const pid = markerPid(f.taskDir, "a");
+    const pid = await untilMarkerPid(f.taskDir, "a");
     expect(alive(pid)).toBe(true);
 
     // A real SDK shutdown failure must not leave a detached child unstoppable:
