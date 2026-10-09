@@ -936,6 +936,31 @@ export function createTaskBrowserCapability(input: {
 }
 
 /**
+ * The production refusal for catalog-driven service execution ([PiDock 04]
+ * #7). Ticket #7's final review still blocks production wiring: a task-bound
+ * service may run only once process-tree ownership/exit reclaim and task-path
+ * identity are redesigned and covered by descendant and cross-platform real
+ * tests, before which main must not register/control a service or open the UI.
+ * The prior slice preserved the capability (and fixed task-path identity) but
+ * re-opened this production entry; this error names the unmet preconditions so
+ * the block stays visible in the tree instead of being rediscovered.
+ */
+export const SERVICE_EXECUTION_BLOCKED =
+  "service-execution-blocked: 进程树所有权与跨平台终止前置条件未满足（见 #7）";
+
+/**
+ * The pure production gate for catalog-driven service execution: `null` when
+ * execution is authorized, the named refusal string when it is blocked. It
+ * takes no caller input on purpose - no page- or caller-supplied value may
+ * unlock execution while the #7 preconditions are unmet - and the production
+ * trigger checks it before resolving a launch or reaching any spawn-capable
+ * call, so the capability and its tests can keep running through the seam.
+ */
+export function serviceExecutionRefusal(): string | null {
+  return SERVICE_EXECUTION_BLOCKED;
+}
+
+/**
  * Resolve the trusted launch for one task-bound service and drive the task
  * Host with it ([PiDock 04] #7): register the descriptor/layers/pinned
  * version, then start or stop through `task/controlService`. Registration
@@ -944,7 +969,10 @@ export function createTaskBrowserCapability(input: {
  * `service-catalog` origin; neither the page nor the Host may supply it.
  *
  * Exported so the sequence can be driven end to end against a real Host and a
- * real child process without an Electron `IpcMainInvokeEvent`.
+ * real child process without an Electron `IpcMainInvokeEvent`. The production
+ * IPC trigger refuses it by default through `serviceExecutionRefusal`; this
+ * seam stays callable so the capability and its real-subprocess tests survive
+ * while production wiring is blocked.
  */
 export async function runTaskService(
   tasks: Pick<PerTaskHostRegistry, "routeTaskOp">,
@@ -1351,6 +1379,12 @@ export function registerIpc(
       if (payload && typeof payload === "object" && (payload as Record<string, unknown>)["op"] === "runTaskService") {
         if (!tasks) return { ok: false as const, error: "任务 Host 尚未接入" };
         const request = parseServiceRunRequest(payload);
+        // Production refuses before resolving a launch or reaching any
+        // spawn-capable call: ticket #7 deliberately keeps this entry point
+        // unwired until the process-tree preconditions are met. See
+        // `serviceExecutionRefusal` for the documented decision.
+        const refusal = serviceExecutionRefusal();
+        if (refusal !== null) return { ok: false as const, error: refusal };
         // Execution takes the same live-sender guard as the sibling binding
         // branch: `requireShellSender` proves which webContents may call, not
         // that the same, un-navigated document is still the one calling when

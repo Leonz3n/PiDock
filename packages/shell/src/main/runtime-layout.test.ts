@@ -49,6 +49,9 @@ import {
   createTrustedWindow,
   loadTrustedViews,
   registerIpc,
+  runTaskService,
+  serviceExecutionRefusal,
+  SERVICE_EXECUTION_BLOCKED,
   trustedWindowEvidence,
 } from "./runtime.js";
 
@@ -279,6 +282,70 @@ describe("trusted Electron view modes", () => {
     expect(await taskOp!(shell, { taskId: "task-a", op: "task/sessionStates", payload: {} })).toMatchObject({ ok: true });
     expect(routeTaskOp).toHaveBeenCalledWith(expect.objectContaining({ taskId: "task-a", op: "task/sessionStates" }));
     expect(vi.mocked(ipcMain.handle).mock.calls.findLast(([channel]) => channel === "shell/sdkTurn")?.[1]).toBeDefined();
+  });
+
+  // [PiDock 04] (#7) The production IPC trigger for catalog-driven service
+  // execution must refuse by default: ticket #7's final review blocks
+  // production wiring until process-tree ownership/exit reclaim and task-path
+  // identity are redesigned with descendant and cross-platform real tests. The
+  // capability (`runTaskService`) and its Host wiring stay intact and are
+  // driven directly by `service-execution-wiring.test.ts`.
+  describe("catalog service execution production gate", () => {
+    const request = { op: "runTaskService", taskId: "task-abcdef12", projectId: "project-a", serviceId: "s-a", action: "start" };
+    async function gate() {
+      const views = await createTrustedWindow("workspace-service-gate", "production");
+      const routeTaskOp = vi.fn(async () => ({ payload: { service: { serviceId: "s-a" } } }));
+      // Refusing must not even resolve the trusted launch: a launch is what
+      // makes a spawn possible, so a resolved launch would be a regression.
+      const launchFor = vi.fn(() => { throw new Error("a launch must not be resolved while the production entry is blocked"); });
+      registerIpc({} as never, views.registry, { routeTaskOp } as never,
+        undefined, undefined, undefined, undefined, undefined, { launchFor } as never);
+      const handler = vi.mocked(ipcMain.handle).mock.calls.findLast(([channel]) => channel === "shell/serviceCatalogOp")?.[1];
+      expect(handler).toBeDefined();
+      const shell = { sender: views.shellView.webContents, senderFrame: views.shellView.webContents.mainFrame } as never;
+      return { handler: handler!, shell, routeTaskOp, launchFor };
+    }
+
+    it("refuses the production trigger and starts no process by default", async () => {
+      const g = await gate();
+      expect(await g.handler(g.shell, request)).toEqual({ ok: false, error: SERVICE_EXECUTION_BLOCKED });
+      // No process can have started: main neither resolved the trusted launch
+      // nor asked the Host to register/control the service.
+      expect(g.launchFor).not.toHaveBeenCalled();
+      expect(g.routeTaskOp).not.toHaveBeenCalled();
+    });
+
+    it("returns the named blocked error, distinct from payload validation", async () => {
+      const g = await gate();
+      const blocked = await g.handler(g.shell, request);
+      const invalid = await g.handler(g.shell, { ...request, program: "/bin/sh" });
+      expect(blocked).toEqual({ ok: false, error: SERVICE_EXECUTION_BLOCKED });
+      // A payload-validation failure stays a validation error; only a
+      // well-formed identity reaches the named, fail-closed refusal.
+      expect(invalid).toMatchObject({ ok: false, error: expect.stringContaining("invalid-payload") });
+      expect((invalid as { error: string }).error).not.toBe(SERVICE_EXECUTION_BLOCKED);
+      expect(g.routeTaskOp).not.toHaveBeenCalled();
+    });
+
+    it("exposes the decision as a pure, documented fail-closed helper", () => {
+      expect(serviceExecutionRefusal()).toBe(SERVICE_EXECUTION_BLOCKED);
+      expect(SERVICE_EXECUTION_BLOCKED).toContain("service-execution-blocked");
+      expect(SERVICE_EXECUTION_BLOCKED).toContain("#7");
+    });
+
+    it("still drives the capability through the main-function seam", async () => {
+      const calls: { op: string; origin: { kind: string } }[] = [];
+      const routeTaskOp = vi.fn(async (entry: { op: string; origin: { kind: string } }) => {
+        calls.push(entry);
+        return { payload: { op: entry.op, action: "start" } };
+      });
+      const launchFor = vi.fn(() => ({ serviceId: "s-a", descriptor: { name: "API" }, layers: { task: [] }, templateVersion: 1 }));
+      const result = await runTaskService({ routeTaskOp } as never, { launchFor } as never,
+        { taskId: "task-a", projectId: "project-a", serviceId: "s-a", action: "start" }, 7);
+      expect(calls.map((entry) => entry.op)).toEqual(["task/registerService", "task/controlService"]);
+      expect(calls.map((entry) => entry.origin.kind)).toEqual(["service-catalog", "service-catalog"]);
+      expect(result).toEqual({ op: "task/controlService", action: "start" });
+    });
   });
 
   it("binds project IPC to shell main frame and fails closed without a configured store", async () => {
