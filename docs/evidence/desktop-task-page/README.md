@@ -2,12 +2,15 @@
 
 本目录是 **真实 Electron 窗口级截图**（生产运行时接线 + 已构建 React renderer，非 Vite/Playwright、
 非夹具页），记录 #37 的页面选择与视图几何契约：无任务页时的全宽 shell、真实任务页打开/激活、
-多任务页面选择规则、关闭最后一页回到全宽、以及 1440×900 ↔ 720×560 的真实 resize。
+多任务页面选择规则、关闭最后一页回到全宽 shell，以及 1440×900 ↔ 1000×700 ↔ 720×560 的真实 resize。
 
-- 脚本：`packages/shell/scripts/electron-issue37-task-page-layout-capture.mjs`
-- PNG：`1440x900-*.png` / `720x560-*.png`（16 张，见 §5）
-- 元数据：`capture-log.json`（命令、源码版本、每张 PNG 的 sha256 / 像素尺寸 / deviceScaleFactor /
-  每个状态的 **视图 bounds/可见性/当前任务/页面 URL** / 捕获时的 `document.body.innerText`）
+- 脚本：`packages/shell/scripts/electron-issue37-task-page-layout-capture.mjs`（其 sha256 记录在
+  `capture-log.json.generatedBySha256`，可与提交的脚本逐字节核对）
+- PNG：**12 张**，每个（状态,尺寸）组合一张：`1440x900-*` 6 张、`1000x700-*` 1 张、`720x560-*` 5 张（见 §5）
+- 元数据：`capture-log.json`（命令、源码版本、harness sha256、每张 PNG 的 sha256 / 像素尺寸 /
+  deviceScaleFactor / 窗口 bounds / 裁剪偏移 / 每个状态的 **视图 bounds/可见性/当前任务/页面 URL** /
+  捕获时 `document.body.innerText`，以及无截图的流程断言 `checks[]`）
+- 复现确定性：`determinism-replay.json`（同一 harness 连续两次运行、逐文件 sha256 相同）
 
 ## 1. 运行方式与截图来源
 
@@ -29,13 +32,33 @@ packages/shell/node_modules/.bin/electron \
 `createTrustedWindow("issue37","production")` + 真实 `createTaskBrowserCapability`（带 `DesktopLayout`）
 + 真实 `PerTaskHostRegistry`（`utilityProcess` fork `dist/host/host-entry.js`）接 `registerIpc`，
 再 `loadTrustedViews` → 生产 `file://…/renderer/index.html`（无 fixture entry、无 Vite、无 dev override）。
-`location.href` 不匹配生产 renderer 即抛错退出（fail closed）。
+`location.href` 不匹配生产 renderer 即抛错退出（fail closed），该 URL 记录在
+`capture-log.json.capture.shellEntryUrl`。
 
-**截图是真实的窗口级捕获。** `BrowserWindow.capturePage()` 只能捕获从未加载过的 base webContents
-（实测返回 0×0），CDP `Page.captureScreenshot` 一次只能截一个 `WebContentsView`；只有
-`desktopCapturer.getSources({types:["window"]})` 的窗口源会把 shell 与任务页视图按用户所见合成。
-脚本按 `window.getMediaSourceId()` 精确匹配本窗口源，`thumbnailSize` 设为窗口尺寸的 2×，因此
-`deviceScaleFactor≈2`。窗口位置固定在屏幕左上区域。
+**截图是真实的窗口级捕获，并裁剪到窗口内容盒。**
+
+- `BrowserWindow.capturePage()` 只能捕获从未加载过的 base webContents（实测返回 0×0），
+  CDP `Page.captureScreenshot` 一次只能截一个 `WebContentsView`；只有
+  `desktopCapturer.getSources({types:["window"]})` 的窗口源会把 shell 与任务页视图按用户所见合成。
+  脚本按 `window.getMediaSourceId()` **精确匹配**本窗口源（没有名称兜底：匹配不到就抛错，绝不截别的窗口），
+  匹配到的源名记录在 `capture-log.json.capture.sourceName`。
+- `thumbnailSize` 设为窗口 bounds × **本机显示器 scale factor**
+  （`capture-log.json.capture.displayScaleFactor`；本机为 1），因此位图是设备像素，不是放大产物；
+  2× 显示器上会得到 2× 位图，`deviceScaleFactor` 随之记录为 2。
+- 窗口源包含真实 macOS 标题栏（本机 32pt），而标题栏不是应用内容：脚本把位图**裁剪到
+  `getContentBounds()`**。所以每张 PNG 文件名里的 `<width>x<height>` 就是这张图自己的逻辑盒
+  （= `setContentSize` 断言过的 CSS 内容盒），并且
+  `pixelWidth === width × deviceScaleFactor`、`pixelHeight === height × deviceScaleFactor`
+  （本机 12 张全部满足：1440×900 / 1000×700 / 720×560 px，`deviceScaleFactor = 1`）。
+  `windowBounds`（含标题栏的整窗逻辑尺寸）与 `frameOffset` 仍逐张记录，任何读者都能自行换算。
+- 裁剪偏移不是假设出来的：`shots[].pageTopEdgePixels` 记录“页区域内首个呈现页面底色的像素行”，
+  它必须等于 `cropOffsetPixels.y`（本机 12 张中 8 张有可见页面的记录均为 32），否则脚本抛错、
+  不写任何文件。没有可见页面的 4 张与它们共用同一个窗口/标题栏几何。
+- **每个（状态,尺寸）组合只捕获一次。** 场景回到既有状态时（例如 resize 回到 1440×900、
+  关闭 B 后回到 A 的页面），脚本改用**断言并记录在 `checks[]`**，不再提交外观相同的图片。
+  写 `capture-log.json` 之前脚本会校验：shots 与 `--out` 下的 PNG 一一对应（文件名不重复）、
+  12 张图两两 sha256 不同、目录里没有本次未写出的遗留 PNG；任一条不满足即以非零退出，
+  不会留下一个“看起来更大/更全”的假证据目录。
 
 ## 2. 与生产接线的差异（唯一省略项）
 
@@ -44,7 +67,7 @@ packages/shell/node_modules/.bin/electron \
 - 与 `main.ts:130-180` 一致地接线了 `ProjectTaskCreation`/`ProviderWiring`，所以渲染层不会绘制
   `真实任务创建尚未接入` 的失败态。
 - **唯一省略的生产依赖是服务配方目录**（`ServiceCatalog`）：`registerIpc` 未传入它，因此
-  `tasks.configureServices` 的 Host 服务归属围栏不生效。本目录四个状态的可见内容不依赖它
+  `tasks.configureServices` 的 Host 服务归属围栏不生效。本目录各状态的可见内容不依赖它
   （浏览器面板只走 `task/browserAction`），省略它可让 Host 在 `quitAll` 时不会因服务归属校验失败
   而违反 `PerTaskHostRegistry.quitAll/disposeAll` 封口契约。与 `#41` harness 相同的取舍。
 
@@ -54,17 +77,17 @@ packages/shell/node_modules/.bin/electron \
 `page/open` 会被 `browser-gateway` 拒绝，不会创建任何页面视图。配置机制就是文档化的环境变量
 `PIDOCK_TASK_BROWSER_ORIGINS`（JSON `taskId -> origins`，见 `docs/task-graph.md:133`）。
 
-本 harness **设置了该变量**，值记录在 `capture-log.json.configuration.value`：
+本 harness **设置了该变量**，值记录在 `capture-log.json.capture.configuration.value`：
 
 ```json
 { "task-aaaa1111": ["http://127.0.0.1:45137"], "task-bbbb2222": ["http://127.0.0.1:45137"] }
 ```
 
-其中 `http://127.0.0.1:45137` 是本 harness 自己启动的 **本机 loopback 页面服务器**（`/a`、`/b`
-两个真实 HTML 页面）。这是**受支持的 operator 配置**，不是测试后门：不设置它，生产就只会拒绝
-`page/open`，本目录一张页面截图都不可能有。脚本通过生产解析器 `taskBrowserOriginsFromEnv`
-读回同一个变量，保证走的就是上线路径。固定端口（而非临时端口）是让页面 URL 在截图里稳定、
-从而 PNG 可逐字节复现。
+其中 `http://127.0.0.1:45137` 是本 harness 自己启动的 **本机 loopback 页面服务器**（`/a`、`/a2`、`/b`
+三个真实 HTML 页面，`/a2` 与 `/a` 同源）。这是**受支持的 operator 配置**，不是测试后门：不设置它，
+生产就只会拒绝 `page/open`，本目录一张页面截图都不可能有。脚本通过生产解析器
+`taskBrowserOriginsFromEnv` 读回同一个变量，保证走的就是上线路径。固定端口（而非临时端口）
+是让页面 URL 在截图里稳定、从而 PNG 可逐字节复现。
 
 ## 4. seeded vs. driven（重要披露）
 
@@ -76,7 +99,7 @@ packages/shell/node_modules/.bin/electron \
 | Project「Adder」+ 仓库 `invoice-service` | `ProjectRegistry.create` |
 | 任务 A / B 归属 Adder | `ProjectRegistry.claim` |
 | 任务 C 明确未归属 | 无 membership |
-| `/a`、`/b` 两个 loopback 页面 | 本 harness 的 `node:http` 服务器，真实 GET 加载 |
+| `/a`、`/a2`、`/b` 三个 loopback 页面 | 本 harness 的 `node:http` 服务器，真实 GET 加载 |
 
 脚本 **driven**（真实生产路径）：
 
@@ -84,47 +107,88 @@ packages/shell/node_modules/.bin/electron \
   走渲染层 → preload → `shell/taskOp` → `task/browserAction` → Host → main gateway 全链路
   （见 `1440x900-browser-tool-open.png`：成功提示 `主进程窗口已打开 http://127.0.0.1:45137/a`
   与页面句柄 `page-1 · webContents 4`）。
-- `pageOpenTaskB`、两次 `page/close`：通过 main 的 `browser-gateway`（human actor）驱动。
+- `pageOpenTaskB`、`pageNavigateTaskA`、两次 `page/close`：通过 main 的 `browser-gateway`（human actor）驱动。
   **原因**：任务页打开后 shell 只占 380/280px、页面覆盖其余窗口，当前 Desktop 没有「在一页可见时
-  切换任务并打开第二页」的入口，也**没有关闭页面控件**（`browser-pages` 未接线）。因此第二页打开
-  与关闭由 main 拥有并校验的同一 gateway 发起；这是真实的生产接缝（Host 的 `task/browserAction`
-  就是打到这个函数），但不是模拟鼠标点击。
+  切换任务并打开第二页」的入口，也**没有关闭页面控件**（`browser-pages` 未接线）。第二页打开、
+  对已打开页面的导航与关闭都由 main 拥有并校验的同一 gateway 发起；这是真实的生产接缝
+  （Host 的 `task/browserAction` 就是打到这个函数），但不是模拟鼠标点击。
+  `pageNavigateTaskA` 只导航到该任务白名单内的同源地址（`/a2`）。
 
 **没有使用任何 Vite/Playwright/夹具 renderer，也没有把静态状态伪装成交互。**
 
-## 5. 每个状态记录了哪些证据
+## 5. 每个状态与每张 PNG
 
-`capture-log.json.shots[]` 每项含 `geometry`：
+`capture-log.json.shots[]` 每项含：
 
-- `shellBounds`/`shellVisible`：shell `WebContentsView` 的真实 bounds 与可见性
-- `pageTaskId`/`pageUrl`/`pageBounds`/`pageVisible`：当前**选中的**任务浏览器活动页
-- `shellHorizontalOverflow`：shell 内 `documentElement` 的水平溢出（记录值，非断言；全部为 0）
+- `width`/`height`：CSS 内容盒尺寸（= `setContentSize` 断言过的尺寸 = 文件名里的 `<width>x<height>`）
+- `pixelWidth`/`pixelHeight`/`deviceScaleFactor`：位图真实像素尺寸与缩放（本机 `deviceScaleFactor = 1`）
+- `windowBounds`/`frameOffset`/`cropOffsetPixels`/`pageTopEdgePixels`：整窗 bounds、标题栏偏移、
+  裁剪偏移与其页顶边校验值
+- `geometry.shellBounds`/`shellVisible`：shell `WebContentsView` 的真实 bounds 与可见性
+- `geometry.pageTaskId`/`pageUrl`/`pageBounds`/`pageVisible`：当前**选中的**任务浏览器活动页
+- `shellHorizontalOverflow`：`{document, maxElement, worstElement}`，即 `documentElement` 的水平溢出
+  与页内所有元素中最大的 `scrollWidth - clientWidth`（**记录值，非断言**；见 §6）
 - `bodyText`：捕获时 shell 的可见文本
 
-状态与 PNG：
-
-| 状态 | 1440×900 | 720×560 | 说明 |
+| 状态 | PNG | 实测画面（`geometry` 摘要） | sha256 |
 | --- | --- | --- | --- |
-| `no-page-selected`（基线，含 resize↔回） | ✅ | ✅ | 无任务页，shell 全宽（bounds 宽 = 窗口内容宽），无占位视图、无 demo Project/Task |
-| `browser-tool-open` | ✅ | — | 浏览器面板真实打开任务页 A 的成功状态（UI 入口证据） |
-| `task-page-open`（含 resize→1440 回） | ✅ | ✅ | 任务页 A + shell 同时可见；1440 下 shell=380 / page=1060，720 下 shell=280 / page=440 |
-| `multi-task-page-b-selected` | ✅ | ✅ | 打开任务 B 页后，B 成为可见页（A 页仍打开但不显示）→ 多任务选择规则 |
-| `multi-task-page-a-restored` | ✅ | ✅ | 关闭 B 页后回落到 A 页（shell 仍非全宽）→ 选择规则的第二半 |
-| `last-page-closed` | ✅ | ✅ | 关闭最后一页后 shell 恢复全宽、无活动页 |
+| `no-page-selected`（基线） | `1440x900-no-page-selected.png` | shell 全宽 1440，无页（`pageTaskId: null`），主内容为真实 `PROJECT Adder`（2 个进行中任务、1 个仓库），无占位视图、无 demo Project/Task | `7cc1c877…893f6e` |
+| 同上（最小档） | `720x560-no-page-selected.png` | shell 全宽 720，主内容同为 `PROJECT Adder` | `51837957…67d0c9` |
+| `browser-tool-open` | `1440x900-browser-tool-open.png` | 真实 Desktop「浏览器」面板打开任务页 A：面板显示 `主进程窗口已打开 http://127.0.0.1:45137/a` 与页面句柄；shell 380 / page 1060，活动页 A（`/a`） | `98694a1c…66027b` |
+| `task-page-open` | `1440x900-task-page-open.png` | 面板关闭后 shell 380 / page 1060，A 页可见（深蓝 `真实任务页 · A`） | `9472f4ae…c28c61` |
+| `task-page-open-resized` | `1000x700-task-page-open-resized.png` | resize 到 1000×700：shell **360** / page **640**——360 是 `floor(1000*0.36)`，落在 280–380 之间，既不是 1440 的 clamp 380 也不是 720 的 clamp 280，证明视图按窗口跟随而不是只在两端取值 | `6b81451f…2e47da` |
+| `task-page-open`（最小档） | `720x560-task-page-open.png` | resize 到生产最小尺寸 720×560：shell 280 / page 440，tile 满窗、无零宽、无重叠 | `15ae28ab…f10ee8` |
+| `multi-task-page-b-selected` | `1440x900-multi-task-page-b-selected.png` | 打开任务 B 的页面后 **B 成为可见页**（橙色 `真实任务页 · B`，`pageTaskId task-bbbb2222`、`/b`），A 页仍打开但不显示；shell 380 / page 1060 | `a26a65dc…442884` |
+| 同上（最小档） | `720x560-multi-task-page-b-selected.png` | 同状态 720×560，shell 280 / page 440 | `4b48e38a…cb1289` |
+| `multi-task-page-a-restored` | `1440x900-multi-task-page-a-restored.png` | 关闭 B 后**恢复到 A 的活页面**：目标页是 A（`pageTaskId task-aaaa1111`），URL 是 A 在后台保持打开期间导航到的 `/a2`（绿色 `真实任务页 · A · 已导航`）；shell 380 / page 1060 | `1b8054cf…2edffb` |
+| 同上（最小档） | `720x560-multi-task-page-a-restored.png` | 同状态 720×560，shell 280 / page 440 | `2fb8b255…0451c2` |
+| `last-page-closed` | `1440x900-last-page-closed.png` | 关闭**最后一页**后 shell 回到全宽 1440，`pageTaskId/pageUrl/pageBounds/pageVisible` 全为 `null`（页面确实消失）；主内容仍是**已选中任务的 workspace**（`TASK WORKSPACE · 对账单详情·任务A`），不是项目列表 | `5bf2cc8e…0d329c` |
+| 同上（最小档） | `720x560-last-page-closed.png` | 同状态 720×560，shell 全宽 720 | `c3ded828…b71606` |
 
-`task-page-open`（1440）与 `multi-task-page-a-restored`（1440）PNG sha256 相同：两者都是「A 页可见、
-shell 380px」的同一真实状态，属预期。所有 PNG 用本 harness 连跑两次、逐字节比对一致后才提交。
+12 张 PNG 的 sha256 **两两不同**（脚本强制校验），也就是说每张图都对应一个别的图没有的
+应用状态：`task-page-open` 与 `multi-task-page-a-restored` 不再是同一张图（后者是 A 页在
+被 B 遮住期间导航到 `/a2` 之后恢复可见的状态），`task-page-open-resized` 也不再等于
+`task-page-open`（它是 1000×700 的第三档几何）。同一状态的两档尺寸之间、以及
+`no-page-selected` / `last-page-closed` 之间也各不相同。
+
+`capture-log.json.checks[]` 记录**没有截图、只做断言**的流程回程：
+
+- `no-page-selected resize return 720x560 -> 1440x900`：回到 1440 后 shell 恢复全宽、仍无活动页
+- `task-page-open resize round trip 1440x900 -> 1000x700 -> 720x560 -> 1440x900`：回到 1440 后的
+  完整 `geometry` 与 resize 前逐字段相同（shell 380 / page 1060 / A 页 `/a`），即 resize 无漂移
+- `task A stayed open and kept its /a2 navigation while task B was selected`：B 可见期间 A 的页面
+  仍然存活并保持在 `/a2`（`pageTaskId` 仍是 B，说明这次导航没有抢走可见页）
 
 ## 6. 本证据**未**覆盖（UNTESTED）
 
-- **真实人手鼠标/键盘**：脚本用程序化 DOM click（工具面板）与 main gateway（开第二页/关闭）；
+- **真实人手鼠标/键盘**：脚本用程序化 DOM click（工具面板）与 main gateway（开第二页/后台导航/关闭）；
   没有可信驱动去产生物理点击事件。
 - **真实用户任务页**：用的是本机 loopback 上由 harness 提供的页面（operator 用
   `PIDOCK_TASK_BROWSER_ORIGINS` 配置的来源），不是用户真实业务前端；真实业务页面/远程来源未测。
 - **导航失败/刷新恢复的 GUI 呈现**（`#37` box 2 的另一半）：由既有聚焦测试覆盖，**不在**本目录。
-- **窗口标题栏**：截图含真实 macOS 窗口标题栏，其标题为 `Electron`（生产窗口的 base webContents
-  从不加载，故沿用默认标题）；这是生产同样的行为，不是 harness 伪造。
+- **shell 内部的「不可触达控件」**（`#37` box 3 的后半句）：本目录只对**视图级**几何做断言
+  （280/360/380 列宽、tile、无零宽、无重叠）。shell 的窄列内部存在**既有**横向溢出——
+  `shellHorizontalOverflow.maxElement` 在 380px 列下为 152（最宽元素 `H1.mt-1`）、在 720 全宽档为
+  175（`SPAN.min-w-0`）、`document` 本身始终为 0——，因此 box 3 的「最小窗口尺寸下没有不可触达控件」
+  在 shell 内部**未验收**（这是既有 renderer 特性，本证据 diff 不改源码，故只记录不裁决）。
 - **SDK 会话状态**：驱动 resize/开页后 shell 出现 `sdk-sender-navigated / 重新连接`（会话订阅被撤销），
   与视图几何契约无关，未在本目录验收。
 - Windows / Linux、原生 picker、凭据、真实 Host/RPC outage。
 - `#24` 原型 A 的同尺寸整体视觉对照仍需用户提供。
+
+## 7. 复现与确定性
+
+`determinism-replay.json` 记录同一 harness 版本的连续两次运行的逐文件 sha256：两次运行 12 张 PNG
+**逐字节相同**（`note` 说明两次运行分别发生在 harness 变更提交前/后，但 harness 字节相同）。
+校验方式：`shasum -a 256 docs/evidence/desktop-task-page/*.png` 与 `capture-log.json.shots[].sha256`
+逐条比对；`capture-log.json` 自身不是逐字节稳定的（它记录 `revision`/`trackedFilesDirty`），
+本目录**只**声称 PNG 可复现。
+
+## 8. 为什么这里的 PNG 是 1440×900 而不是 2880×1864
+
+上一版证据提交的是含 macOS 标题栏、且被放大到 2× 的整窗位图（文件名 `1440x900-*`，实际位图
+2880×1864，`pixelHeight` 与 `height × deviceScaleFactor` 不一致）。现在：捕获仍走窗口源，
+但位图**裁剪到窗口内容盒**（去掉 32pt 标题栏、即非应用内容），并按**显示器真实 scale factor**
+请求缩略图（本机 1×），于是文件名、`width`/`height`、`pixelWidth`/`pixelHeight` 与
+`deviceScaleFactor` 四者自洽（`pixel = width × deviceScaleFactor`）。`windowBounds`/`frameOffset`
+仍逐张记录，因此需要与其它 bundle（例如 `#34` 的 2880×1800）按像素比较时仍可换算。

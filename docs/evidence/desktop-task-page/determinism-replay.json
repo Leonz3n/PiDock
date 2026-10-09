@@ -1,0 +1,121 @@
+{
+  "ticket": "#37 box 6 — replay determinism for the committed PNGs",
+  "command": "packages/shell/node_modules/.bin/electron packages/shell/scripts/electron-issue37-task-page-layout-capture.mjs --out docs/evidence/desktop-task-page",
+  "revision": "cb53f2e85db87dbe09346f3b92459458410a1b12",
+  "harnessSha256": "0a16c58c30200f45df8ea90f7fe26f185d17da49ca9080597b2143ab3e45071e",
+  "note": "Two consecutive runs of this harness revision wrote byte-identical PNGs for all 12 captures. Run 1 ran while the harness change itself was still uncommitted (`trackedFilesDirty: true`); run 2 ran with the same harness bytes committed and every tracked path outside this evidence directory clean (`trackedFilesDirty: false`), which is the run `capture-log.json` describes. Only the PNG bytes are claimed deterministic — the log itself is not byte-stable because it records `revision`/`trackedFilesDirty`. Either run's file can be compared against `capture-log.json` `shots[].sha256`.",
+  "replays": [
+    {
+      "run": 1,
+      "revision": "c2e21f9623cb05c30e16e8f56a6ea5156996f7d9",
+      "trackedFilesDirty": "true",
+      "harnessBytes": "the same file bytes as the committed revision below (sha256 in `harnessSha256`)",
+      "shots": [
+        {
+          "file": "1440x900-no-page-selected.png",
+          "sha256": "7cc1c877c98e381bc5a0572ec2d8a115d72f457b383a67bdfeadeff6c1893f6e"
+        },
+        {
+          "file": "720x560-no-page-selected.png",
+          "sha256": "518379575b2c1afcb43cfa53dabfe911403828f3e083849d05fb2ecd6767d0c9"
+        },
+        {
+          "file": "1440x900-browser-tool-open.png",
+          "sha256": "98694a1c126bf28afe0f858a4f5e3d75e56bdb4999bf181f6b81855ec366027b"
+        },
+        {
+          "file": "1440x900-task-page-open.png",
+          "sha256": "9472f4aeae23a1a99a25f935b816366d2a2547c6f9bdc7c4fafc2c652ec28c61"
+        },
+        {
+          "file": "1000x700-task-page-open-resized.png",
+          "sha256": "6b81451f5549b60d8bc0eb78772d96154756b91beb443e24c7d405c6942e47da"
+        },
+        {
+          "file": "720x560-task-page-open.png",
+          "sha256": "15ae28abf22eca30a37955c2c8577129c59ece3d119714263c6adf20edf10ee8"
+        },
+        {
+          "file": "1440x900-multi-task-page-b-selected.png",
+          "sha256": "a26a65dcae352b6f9947a2a11579035228c0f51eb555d951ba170407b4442884"
+        },
+        {
+          "file": "720x560-multi-task-page-b-selected.png",
+          "sha256": "4b48e38a0202f4797df5089dddff3e134d0151d2c3ce5e042ce702dbcfcb1289"
+        },
+        {
+          "file": "1440x900-multi-task-page-a-restored.png",
+          "sha256": "1b8054cf34cb485f40667c5fadd4bdae6410659dceb608a184d9ce6e802edffb"
+        },
+        {
+          "file": "720x560-multi-task-page-a-restored.png",
+          "sha256": "2fb8b255c0c6c0a0100831df34fcfc2edb85130bde3cf693c522553e8a0451c2"
+        },
+        {
+          "file": "1440x900-last-page-closed.png",
+          "sha256": "5bf2cc8e863bab62bb77fe441578c504bd2697766b39ffc58267f4ebee0d329c"
+        },
+        {
+          "file": "720x560-last-page-closed.png",
+          "sha256": "c3ded828b02aa1c91d90bf10ab3e9ecf2b2242e43974adaf413b278affb71606"
+        }
+      ]
+    },
+    {
+      "run": 2,
+      "revision": "cb53f2e85db87dbe09346f3b92459458410a1b12",
+      "trackedFilesDirty": "false",
+      "harnessBytes": "the committed `scripts/electron-issue37-task-page-layout-capture.mjs` (sha256 in `harnessSha256`)",
+      "shots": [
+        {
+          "file": "1440x900-no-page-selected.png",
+          "sha256": "7cc1c877c98e381bc5a0572ec2d8a115d72f457b383a67bdfeadeff6c1893f6e"
+        },
+        {
+          "file": "720x560-no-page-selected.png",
+          "sha256": "518379575b2c1afcb43cfa53dabfe911403828f3e083849d05fb2ecd6767d0c9"
+        },
+        {
+          "file": "1440x900-browser-tool-open.png",
+          "sha256": "98694a1c126bf28afe0f858a4f5e3d75e56bdb4999bf181f6b81855ec366027b"
+        },
+        {
+          "file": "1440x900-task-page-open.png",
+          "sha256": "9472f4aeae23a1a99a25f935b816366d2a2547c6f9bdc7c4fafc2c652ec28c61"
+        },
+        {
+          "file": "1000x700-task-page-open-resized.png",
+          "sha256": "6b81451f5549b60d8bc0eb78772d96154756b91beb443e24c7d405c6942e47da"
+        },
+        {
+          "file": "720x560-task-page-open.png",
+          "sha256": "15ae28abf22eca30a37955c2c8577129c59ece3d119714263c6adf20edf10ee8"
+        },
+        {
+          "file": "1440x900-multi-task-page-b-selected.png",
+          "sha256": "a26a65dcae352b6f9947a2a11579035228c0f51eb555d951ba170407b4442884"
+        },
+        {
+          "file": "720x560-multi-task-page-b-selected.png",
+          "sha256": "4b48e38a0202f4797df5089dddff3e134d0151d2c3ce5e042ce702dbcfcb1289"
+        },
+        {
+          "file": "1440x900-multi-task-page-a-restored.png",
+          "sha256": "1b8054cf34cb485f40667c5fadd4bdae6410659dceb608a184d9ce6e802edffb"
+        },
+        {
+          "file": "720x560-multi-task-page-a-restored.png",
+          "sha256": "2fb8b255c0c6c0a0100831df34fcfc2edb85130bde3cf693c522553e8a0451c2"
+        },
+        {
+          "file": "1440x900-last-page-closed.png",
+          "sha256": "5bf2cc8e863bab62bb77fe441578c504bd2697766b39ffc58267f4ebee0d329c"
+        },
+        {
+          "file": "720x560-last-page-closed.png",
+          "sha256": "c3ded828b02aa1c91d90bf10ab3e9ecf2b2242e43974adaf413b278affb71606"
+        }
+      ]
+    }
+  ]
+}
