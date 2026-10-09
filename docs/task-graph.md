@@ -47,7 +47,10 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   shell 的 `task-provision.ts` / `task-host.ts` / `task-store.ts` /
   `host-guards.ts` 从未被 renderer 导入；renderer 的任务表单规则是
   `data/directories.ts` 中的独立纯函数镜像（见
-  `task-provision-parity.test.ts`）。
+  `task-provision-parity.test.ts`）。唯一例外是**仅测试**的跨包读取：
+  `serviceTemplateRules.parity.test.ts`（#7）直接 import shell 的纯模块
+  `main/service-config.ts` 以逐字锁定镜像文案；页面本身仍不获 Node 能力，
+  `no-node-in-renderer.test.ts` 按设计跳过 `*.test.*`。
 - `no-node-in-renderer.test.ts` 扫描 renderer 源码：`node:` / `electron`
   导入、`process.env`、shell 模块导入一律失败。preload 仍为最小桥
   （`window.pidock.taskOp` + `{ok:false,error}` 信封），任务路由 id 由 main

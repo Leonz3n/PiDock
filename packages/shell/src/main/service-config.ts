@@ -13,7 +13,12 @@
  *   below only record where each row came from (`仓库默认配置` first,
  *   then 共享模板 / 本机私有配置 / 任务覆盖, then runtime bindings).
  * - Credentials and local paths live in the private layer and NEVER in
- *   the shared template: `validateNoSecretsInShared` enforces it.
+ *   the shared template: `validateNoSecretsInShared` enforces it for keys,
+ *   and `validateSharedServiceProgram` / `validateSharedServiceArgument` /
+ *   `validateSharedServiceHealthTarget` / `validateSharedServiceValue` extend
+ *   the same fail-closed policy to a program name, an argument, a health
+ *   target and a shared value (machine paths and credential spellings are
+ *   refused wherever they appear in one field).
  * - A shared template's working directory is repo-relative and portable
  *   (`validateSharedServiceWorkdir`); the absolute cwd of one machine is
  *   the task binding's job.
@@ -164,6 +169,108 @@ export function validateSharedServiceWorkdir(workdir: string): ServiceConfigErro
   }
   if (isServiceSecretKey(value)) {
     return { code: "secret-in-shared", message: "工作目录不能包含疑似凭据片段，请改用中性目录名" };
+  }
+  return null;
+}
+
+/** One path root at the start of a token: POSIX absolute, home, Windows drive/UNC, or an escape segment. */
+function pathRootOf(value: string): boolean {
+  return value.startsWith("/") || value.startsWith("~") || value.startsWith("\\") || /^[A-Za-z]:[\\/]/.test(value) ||
+    value === ".." || value.startsWith("../") || value.startsWith("..\\");
+}
+
+/**
+ * True when one command token, health target or value carries a machine path
+ * *anywhere* in the token: at the start, after `=` or a short flag cluster
+ * (`-I/Users/name` is as private as `/Users/name`), or as a `file://` URL. A
+ * repo-relative token (`src/main.ts`) stays portable, so a shared revision
+ * does not lose legitimate relative arguments.
+ */
+export function carriesMachinePath(value: string): boolean {
+  if (/^file:\/\//i.test(value)) return true;
+  const flagStripped = value.replace(/^--?[A-Za-z0-9]+/, "");
+  return pathRootOf(value) || (flagStripped !== value && pathRootOf(flagStripped)) ||
+    /(?:^|=)(?:[/\\~]|[A-Za-z]:[\\/]|\.\.[\\/])/.test(value);
+}
+
+/** Credential word; in an argument it counts even without `=` (`--token`). */
+const SHARED_CREDENTIAL_WORD = /(?:password|passwd|secret|token|api[_-]?key|access[_-]?token|private[_-]?key)/i;
+/** Credential assignment or URL userinfo anywhere: `apikey=`, `api_key=`, `x-key=`, `https://user:pass@…`. */
+const SHARED_CREDENTIAL_ASSIGNMENT =
+  /:\/\/[^/\s]+@|(?:password|passwd|secret|token|api[_-]?key|apikey|access[_-]?token|private[_-]?key)\s*=|(?:^|[?&])[^=&\s]{0,40}(?:key|secret|token|password|passwd|auth)\s*=/i;
+/** One shared argument: the value/target spellings plus a bare credential word. */
+const SHARED_ARGUMENT_CREDENTIAL = new RegExp(`(?:${SHARED_CREDENTIAL_WORD.source})|(?:${SHARED_CREDENTIAL_ASSIGNMENT.source})`, "i");
+
+/**
+ * Shared-revision portability policy for the non-key fields (command
+ * arguments, health-check targets, shared values): a shared revision never
+ * carries a machine path or a credential, and the matcher is deliberately
+ * wider than one leading-path or `[?&]`-prefixed spelling. Only the class is
+ * returned, so a refused credential is never echoed back into a page.
+ */
+function sharedFieldRefusal(value: string, credential: RegExp): "path" | "credential" | null {
+  if (credential.test(value)) return "credential";
+  return carriesMachinePath(value) ? "path" : null;
+}
+
+/** One shared command argument: bounded, single-line, and never a machine path or credential. */
+export function validateSharedServiceArgument(argument: string): ServiceConfigError | null {
+  if (argument.length > 512) {
+    return { code: "invalid-service", message: "共享模板参数过长，请改用简短的可移植参数" };
+  }
+  if (/[\r\n\0]/.test(argument)) {
+    return { code: "invalid-service", message: "共享模板参数不能包含控制字符，请改用单行参数" };
+  }
+  const refusal = sharedFieldRefusal(argument, SHARED_ARGUMENT_CREDENTIAL);
+  if (refusal === "path") {
+    return { code: "invalid-service", message: "共享模板参数不能携带本机路径；请改用仓库内相对参数" };
+  }
+  if (refusal === "credential") {
+    return { code: "secret-in-shared", message: "共享模板参数不能携带凭据；请移入本机私有配置" };
+  }
+  return null;
+}
+
+/** One shared health-check target: bounded, single-line, and never a local socket/file path or credential. */
+export function validateSharedServiceHealthTarget(target: string): ServiceConfigError | null {
+  if (target.length > 512) {
+    return { code: "invalid-service", message: "健康检查目标过长，请填写简短的服务地址" };
+  }
+  if (/[\r\n\0]/.test(target)) {
+    return { code: "invalid-service", message: "健康检查目标不能包含控制字符，请填写单行地址" };
+  }
+  const refusal = sharedFieldRefusal(target, SHARED_CREDENTIAL_ASSIGNMENT);
+  if (refusal === "path") {
+    return { code: "invalid-service", message: "健康检查目标不能是本机文件路径；请填写服务地址，如 http://127.0.0.1:3000/health" };
+  }
+  if (refusal === "credential") {
+    return { code: "secret-in-shared", message: "健康检查目标不能携带凭据或令牌；请移入本机私有配置" };
+  }
+  return null;
+}
+
+/** One shared value: bounded, single-line, and never a machine path or credential. */
+export function validateSharedServiceValue(value: string): ServiceConfigError | null {
+  if (value.length > 2048) {
+    return { code: "invalid-service", message: "共享模板的值过长，请改用简短的可提交值" };
+  }
+  if (/[\0\r\n]/.test(value)) {
+    return { code: "invalid-service", message: "共享模板的值不能包含控制字符" };
+  }
+  const refusal = sharedFieldRefusal(value, SHARED_CREDENTIAL_ASSIGNMENT);
+  if (refusal === "path") {
+    return { code: "invalid-service", message: "共享模板的值不能携带本机路径；请移入本机私有配置" };
+  }
+  if (refusal === "credential") {
+    return { code: "secret-in-shared", message: "共享模板的值不能携带凭据；请移入本机私有配置" };
+  }
+  return null;
+}
+
+/** One shared program name: portable only (no machine path, no other special character). */
+export function validateSharedServiceProgram(program: string): ServiceConfigError | null {
+  if (!/^[A-Za-z0-9_.+-]+$/.test(program)) {
+    return { code: "invalid-service", message: "共享模板的启动程序必须是可移植的程序名（如 node、pnpm），不能是本机路径或其他特殊字符" };
   }
   return null;
 }

@@ -4,7 +4,7 @@ import { join, relative, sep } from "node:path";
 import { parseEnv } from "node:util";
 import { parse as parseJsonc, type ParseError } from "jsonc-parser";
 import { parseDocument } from "yaml";
-import { classifyImportDraft, auditImportVars, SERVICE_KEY_PATTERN, validateSharedServiceWorkdir, type ServiceRunType } from "../main/service-config.js";
+import { classifyImportDraft, auditImportVars, carriesMachinePath, SERVICE_KEY_PATTERN, validateSharedServiceWorkdir, type ServiceRunType } from "../main/service-config.js";
 import type { WorkspaceRoot } from "../main/workspace-files.js";
 
 export interface ServiceImportHint {
@@ -47,19 +47,19 @@ const display = (value: string) => value.slice(0, 100);
 
 /**
  * Redaction policy for one command token. A token is emitted only when it
- * carries no machine path and no credential: absolute/`~`/drive/UNC forms,
- * `KEY=VALUE` assignments, `scheme://user:pass@` URLs, credential-looking
- * text and over-long tokens are dropped. Dropped tokens are reported by
- * reason class (never echoed) so the draft reads as incomplete instead of
- * silently truncated.
+ * carries no machine path and no credential: a path root anywhere in the token
+ * (absolute/`~`/drive/UNC forms, `file:` URLs and a path behind a short flag
+ * cluster such as `-I/Users/name/include`), `KEY=VALUE` assignments,
+ * `scheme://user:pass@` URLs, credential-looking text and over-long tokens are
+ * dropped. Dropped tokens are reported by reason class (never echoed) so the
+ * draft reads as incomplete instead of silently truncated.
  */
 function unsafeCommandToken(token: string): "path" | "credential" | null {
   if (token.length === 0) return null;
   if (token.length > MAX_TOKEN_CHARS || /[\r\n\0]/.test(token)) return "credential";
-  if (token.startsWith("/") || token.startsWith("~") || token.startsWith("\\") || /^[A-Za-z]:[\\/]/.test(token)) return "path";
   if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(token) || token.includes("=")) return "credential";
   if (/:\/\/[^/\s]*@/.test(token) || /(?:password|token|secret|api[_-]?key)/i.test(token)) return "credential";
-  return null;
+  return carriesMachinePath(token) ? "path" : null;
 }
 
 /** Split one scanned command into redacted program/argv plus the drop notes. */

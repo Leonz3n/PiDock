@@ -4,6 +4,7 @@ import type { ServiceOwnerCatalogSnapshot } from "../rpc/service-host-binding.js
 import { isAbsolute, join, normalize } from "node:path";
 import { readTaskRecordOnDisk } from "../host/task-store.js";
 import { SERVICE_KEY_PATTERN, isServiceSecretKey, maskServiceValue, resolveServiceEnv, validateNoSecretsInShared, validateServiceDescriptor,
+  validateSharedServiceArgument, validateSharedServiceHealthTarget, validateSharedServiceProgram, validateSharedServiceValue,
   validateSharedServiceWorkdir, diffServiceTemplate, nextServiceTemplateVersion, restartNeededForTemplateAdopt,
   type ServiceConfigEntry, type ServiceConfigSource, type ServiceDescriptor, type TemplateDiff } from "./service-config.js";
 import { isSafeTaskChildName } from "./task-provision.js";
@@ -154,10 +155,9 @@ function descriptor(value: unknown): ServiceTemplate["descriptor"] {
   fields(row, ["name", "program", "args", "ports", "runType"], ["healthCheck", "workdir"]);
   const name = text(row["name"], 128);
   const program = text(row["program"], 128);
-  if (!/^[A-Za-z0-9_.+-]+$/.test(program)) throw new Error("shared program must be a portable name");
-  if (!Array.isArray(row["args"]) || row["args"].length > 40 || row["args"].some((arg) => typeof arg !== "string" ||
-      arg.length > 512 || /[\r\n\0]/.test(arg) || /(?:^|=)(?:\/|~\/|[A-Za-z]:[\\/])/.test(arg) ||
-      /(?:password|token|secret|api[_-]?key)/i.test(arg) || /:\/\/[^/\s]+@/.test(arg))) {
+  if (validateSharedServiceProgram(program)) throw new Error("shared program must be a portable name");
+  if (!Array.isArray(row["args"]) || row["args"].length > 40 ||
+      row["args"].some((arg) => typeof arg !== "string" || validateSharedServiceArgument(arg) !== null)) {
     throw new Error("invalid or private shared argument");
   }
   if (!Array.isArray(row["ports"]) || row["ports"].length > 20 || new Set(row["ports"]).size !== row["ports"].length) {
@@ -169,8 +169,7 @@ function descriptor(value: unknown): ServiceTemplate["descriptor"] {
     const health = object(row["healthCheck"]);
     fields(health, ["kind"], ["target"]);
     if (!["http", "tcp", "grpc"].includes(health["kind"] as string)) throw new Error("invalid health check");
-    if (health["target"] !== undefined && (typeof health["target"] !== "string" || health["target"].length > 512 ||
-        /[\r\n\0]/.test(health["target"]) || /:\/\/[^/\s]+@|[?&](?:token|key|secret|password)=/i.test(health["target"]))) {
+    if (health["target"] !== undefined && (typeof health["target"] !== "string" || validateSharedServiceHealthTarget(health["target"]) !== null)) {
       throw new Error("private health target is not shared");
     }
     healthCheck = { kind: health["kind"] as "http" | "tcp" | "grpc", ...(health["target"] === undefined ? {} : { target: health["target"] as string }) };
@@ -180,7 +179,8 @@ function descriptor(value: unknown): ServiceTemplate["descriptor"] {
     if (typeof row["workdir"] !== "string" || validateSharedServiceWorkdir(row["workdir"])) {
       throw new Error("invalid shared working directory");
     }
-    workdir = row["workdir"];
+    // Store the trimmed portable form the rule validated, never a padded one.
+    workdir = row["workdir"].trim();
   }
   const result: ServiceTemplate["descriptor"] = { name, program, args: [...row["args"]] as string[],
     ports: [...row["ports"]] as number[], runType: row["runType"] as ServiceDescriptor["runType"],
@@ -195,8 +195,7 @@ function shared(value: unknown): ServiceConfigEntry[] {
     fields(row, ["key", "value", "secret"]);
     const key = text(row["key"], 100);
     if (!SERVICE_KEY_PATTERN.test(key) || row["secret"] !== false || isServiceSecretKey(key)) throw new Error("private key in shared template");
-    if (typeof row["value"] !== "string" || row["value"].length > 2048 || /[\0\r\n]/.test(row["value"]) ||
-        /:\/\/[^/\s]+@|[?&](?:token|key|secret|password)=/i.test(row["value"])) throw new Error("invalid shared value");
+    if (typeof row["value"] !== "string" || validateSharedServiceValue(row["value"]) !== null) throw new Error("invalid shared value");
     return { key, value: row["value"], secret: false };
   });
   if (new Set(entries.map((entry) => entry.key)).size !== entries.length || validateNoSecretsInShared(entries)) {

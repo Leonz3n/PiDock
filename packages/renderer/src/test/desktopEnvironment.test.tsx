@@ -66,6 +66,42 @@ it("fills the new-template form only after the explicit draft action and never f
   expect(serviceCatalogOp).toHaveBeenCalledTimes(1);
 });
 
+it("never claims the draft was filled when the template bridge is missing", async () => {
+  window.pidock = { taskOp: vi.fn(async (_taskId: string, op: string) => op === "task/fileRoots"
+    ? { ok: true, payload: { taskDir: "/task", roots: [{ id: "repo", kind: "worktree", label: "invoice", path: "/task/repo" }] } }
+    : { ok: true, payload: { scan: { hints: [
+      { source: "package.json", name: "dev", runType: "long-lived", envKeys: [], program: "node", args: ["server.js"], invalidVars: [], toVerify: [] },
+    ], errors: [], truncated: false } } }) };
+  render(<DesktopEnvironmentPage projects={[{ id: "p1", name: "真实项目" }]} projectId="p1" taskCount={1} tasks={[{ taskId: "task-1", name: "真实任务" }]} onSelectProject={() => {}} />);
+  await screen.findByRole("option", { name: "invoice" });
+  fireEvent.click(screen.getByRole("button", { name: "扫描仓库" }));
+  await screen.findByText("命令候选：node server.js");
+  fireEvent.click(screen.getByRole("button", { name: "填入新建模板" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("服务配方目录未接线，无法填入新建模板");
+  expect(screen.queryByText(/已把草案/)).toBeNull();
+  expect(screen.queryByLabelText("服务名称")).toBeNull();
+});
+
+it("re-applies the same scanned draft after the filled form is closed", async () => {
+  const serviceCatalogOp = vi.fn(async (request: Record<string, unknown>) => request["op"] === "list" ? { ok: true, payload: [] } : { ok: true, payload: [] });
+  window.pidock = { serviceCatalogOp, taskOp: vi.fn(async (_taskId: string, op: string) => op === "task/fileRoots"
+    ? { ok: true, payload: { taskDir: "/task", roots: [{ id: "repo", kind: "worktree", label: "invoice", path: "/task/repo" }] } }
+    : { ok: true, payload: { scan: { hints: [
+      { source: "package.json", name: "dev", runType: "long-lived", envKeys: [], program: "node", args: ["server.js"], invalidVars: [], toVerify: [] },
+    ], errors: [], truncated: false } } }) };
+  render(<DesktopEnvironmentPage projects={[{ id: "p1", name: "真实项目" }]} projectId="p1" taskCount={1} tasks={[{ taskId: "task-1", name: "真实任务" }]} onSelectProject={() => {}} />);
+  await screen.findByRole("option", { name: "invoice" });
+  fireEvent.click(screen.getByRole("button", { name: "扫描仓库" }));
+  await screen.findByText("命令候选：node server.js");
+  fireEvent.click(screen.getByRole("button", { name: "填入新建模板" }));
+  expect(await screen.findByLabelText("服务名称")).toHaveValue("dev");
+  fireEvent.click(screen.getByRole("button", { name: "关闭编辑" }));
+  expect(screen.queryByLabelText("服务名称")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "填入新建模板" }));
+  expect(await screen.findByLabelText("服务名称")).toHaveValue("dev");
+  expect(serviceCatalogOp).toHaveBeenCalledTimes(1);
+});
+
 it("shows .env as configuration-only key hints and never a runnable service", async () => {
   window.pidock = { taskOp: vi.fn(async (_taskId, op) => op === "task/fileRoots"
     ? { ok: true, payload: { taskDir: "/task", roots: [{ id: "repo", kind: "worktree", label: "api", path: "/task/repo" }] } }

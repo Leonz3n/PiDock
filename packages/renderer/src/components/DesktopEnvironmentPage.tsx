@@ -107,10 +107,15 @@ export function DesktopEnvironmentPage({ projects, projectId, taskCount, tasks, 
   tasksPending?: boolean;
   onSelectProject: (id: string) => void;
 }) {
-  // One explicit human action moves a scanned draft into the template form.
+  // One explicit human action moves a scanned draft into the template form;
+  // the success banner comes back from the form itself, so a refused fill is
+  // never announced as applied.
   const [pendingFill, setPendingFill] = useState<ServiceImportHintView | null>(null);
   const [filledName, setFilledName] = useState<string | null>(null);
-  const clearFill = useCallback(() => setPendingFill(null), []);
+  const appliedFill = useCallback((applied: ServiceImportHintView) => {
+    setFilledName(`${applied.source} · ${applied.name}`);
+    setPendingFill(null);
+  }, []);
   return <div data-testid="desktop-environment-page" className="px-[34px] py-[30px] below-narrow:px-5">
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div className="min-w-0"><p className="text-[10px] uppercase tracking-[1.8px] text-[#95979c]">Environments</p><h1 className="mt-1.5 text-[26px] font-semibold text-ink">环境与服务</h1></div>
@@ -142,8 +147,7 @@ export function DesktopEnvironmentPage({ projects, projectId, taskCount, tasks, 
       <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="text-sm font-semibold">环境变量 <Badge variant="soft" className="ml-1">未接线</Badge></h2><Button type="button" size="sm" disabled title="缺少真实配置及变更预览">保存更改</Button></div>
       <div className="mt-3 overflow-x-auto"><table className="w-full min-w-[320px] text-left text-xs"><thead className="border-b border-line text-muted"><tr><th className="py-2 font-medium">KEY</th><th className="py-2 font-medium">VALUE</th><th className="py-2 font-medium">生效来源</th></tr></thead><tbody><tr className="border-b border-line"><td colSpan={3} className="py-5 text-muted">Host 尚未提供项目环境、任务覆盖与敏感值遮蔽后的生效配置。这里不展示示例 KEY 或 VALUE。</td></tr></tbody></table></div>
     </section>
-    <ProjectServiceTemplates projectId={projectId} tasks={tasksPending ? [] : tasks} fillFrom={pendingFill} onFillApplied={clearFill} />
-    <RepositoryImportDrafts tasks={tasks} pending={tasksPending} filled={filledName}
-      onFillForm={(hint) => { setFilledName(`${hint.source} · ${hint.name}`); setPendingFill(hint); }} />
+    <ProjectServiceTemplates projectId={projectId} tasks={tasksPending ? [] : tasks} fillFrom={pendingFill} onFillApplied={appliedFill} />
+    <RepositoryImportDrafts tasks={tasks} pending={tasksPending} filled={filledName} onFillForm={setPendingFill} />
   </div>;
 }
