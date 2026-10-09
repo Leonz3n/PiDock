@@ -212,8 +212,9 @@ ISSUE37_CAPTURE_FAILED browser-tool-open 1440x900 Error: task toolbar intersects
 
 ## 7. 复现与确定性
 
-`determinism-replay.json` 记录同一 harness 版本的连续两次运行的逐文件 sha256：两次运行 12 张 PNG
-**逐字节相同**（`note` 说明两次运行分别发生在 harness 变更提交前/后，但 harness 字节相同）。
+`determinism-replay.json` 记录同一 harness 版本的连续三次运行的逐文件 sha256：三次运行 12 张 PNG
+**逐字节相同**（run 1 在本 #49 源码提交 `37434b4`，run 2/run 3 在证据提交 `e460ff9`，三者的
+`trackedFilesDirty` 均为 `false`）。run 2 与 run 3 之间 `capture-log.json` 本身也逐字节相同。
 校验方式：`shasum -a 256 docs/evidence/desktop-task-page/*.png` 与 `capture-log.json.shots[].sha256`
 逐条比对；`capture-log.json` 自身不是逐字节稳定的（它记录 `revision`/`trackedFilesDirty`），
 本目录**只**声称 PNG 可复现。
