@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildTaskDiskRecord } from "../host/task-store.js";
+import { buildTaskDiskRecord, readTaskRecordOnDisk, taskFilePath } from "../host/task-store.js";
 import {
   PREP_SCAN_UNAVAILABLE,
   PrepScanUnavailableError,
@@ -293,6 +293,29 @@ describe("#6 privileged prep scan (boundary B)", () => {
     expect(failed.ok).toBe(false);
     if (failed.ok) return;
     expect(failed.error).toContain(PREP_SCAN_UNAVAILABLE);
+  });
+
+  it("refuses by name when a present task record cannot be read or parsed", () => {
+    const home = mkdtempSync(join(tmpdir(), "pidock-prep-scan-"));
+    homes.push(home);
+    const taskId = "task-abcdef12";
+    const taskDir = join(home, "tasks", taskId);
+    mkdirSync(taskDir, { recursive: true });
+    // A present-but-unparseable record: `readTaskRecordOnDisk` rethrows the
+    // parse error (only ENOENT maps to `null`), so the scan must map ANY read
+    // failure to its named refusal instead of leaking a raw error.
+    writeFileSync(taskFilePath(taskDir), "{ not valid json\n");
+    expect(() =>
+      derivePrepInputs(
+        { taskId, repoDirs: [] },
+        {
+          resolveTaskDir: () => taskDir,
+          readRecord: (dir) => readTaskRecordOnDisk(dir),
+          projectRepositories: () => [],
+        },
+        createNodePrepScanDeps(),
+      ),
+    ).toThrow("task-scan-unavailable: 任务记录不可读取");
   });
 
   it("reads the task folder the same way the Host spells wanted worktree paths", () => {

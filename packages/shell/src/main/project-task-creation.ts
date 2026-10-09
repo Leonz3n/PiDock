@@ -5,7 +5,7 @@ import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readF
 import { basename, dirname, isAbsolute, join, normalize, relative, resolve } from "node:path";
 import { readTaskRecordOnDisk } from "../host/task-store.js";
 import type { HostTaskResult } from "../rpc/protocol.js";
-import { buildLinkName, checkLinkNameCollisions } from "./multi-repo-provision.js";
+import { buildLinkName, buildRepoChildName, checkLinkNameCollisions } from "./multi-repo-provision.js";
 import type { ProjectRegistry } from "./project-registry.js";
 import { buildTaskBranch } from "./task-provision.js";
 import { TaskRootIndex } from "./task-root-index.js";
@@ -136,7 +136,7 @@ function validate(value: unknown): CreationIntent {
   string(row.name); string(row.branch);
   for (const raw of row.repos) {
     const item = strict(raw, ["id", "name", "path", "realPath", "device", "inode", "remote", "remoteBranch", "remoteDigest", "commonDir", "commit", "repoDir"]);
-    if (!UUID.test(string(item.id)) || !/^[a-f0-9]{40}$/.test(String(item.commit)) || item.repoDir !== `repo-${(item.id as string).slice(0, 8)}`) throw new Error("仓库意图损坏");
+    if (!UUID.test(string(item.id)) || !/^[a-f0-9]{40}$/.test(String(item.commit)) || item.repoDir !== buildRepoChildName(item.id as string)) throw new Error("仓库意图损坏");
     string(item.name); path(item.path); path(item.realPath); path(item.commonDir); string(item.device); string(item.inode); string(item.remote); string(item.remoteBranch);
     if (!/^[a-f0-9]{64}$/.test(String(item.remoteDigest))) throw new Error("远程身份意图损坏");
   }
@@ -287,7 +287,7 @@ export class ProjectTaskCreation {
         git(source.path, ["check-ref-format", `refs/heads/${remoteBranch}`]);
         const repo: Repo = { ...source, ...diskIdentity(source.path), remote, remoteBranch,
           commonDir: gitCommonDir(source.path), remoteDigest: remoteDigest(git(source.path, ["remote", "get-url", remote])),
-          commit: "0".repeat(40), repoDir: `repo-${source.id.slice(0, 8)}` };
+          commit: "0".repeat(40), repoDir: buildRepoChildName(source.id) };
         if (commonDirs.has(repo.commonDir)) throw new Error("所选仓库属于同一 Git 仓库，请仅选择一个工作树");
         commonDirs.add(repo.commonDir);
         verifyRepo(repo);

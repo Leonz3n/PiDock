@@ -446,6 +446,17 @@ export function buildLinkName(directoryId: string): string {
 }
 
 /**
+ * Stable in-task folder name for a selected repository: `repo-` + the first 8
+ * hex characters of the project repository id. The spelling is shared by the
+ * creation-intent validator, the provisioning planner and the main-side prep
+ * scan (`projectRepositoryForRepoDir`); a change here would make every
+ * recorded `repoDir` unresolvable and refuse every append/resume.
+ */
+export function buildRepoChildName(repositoryId: string): string {
+  return `repo-${repositoryId.slice(0, 8)}`;
+}
+
+/**
  * Fail-closed collision check for link names: two directory ids mapping
  * to the same `dir-oooooooo` name must be rejected, never auto-renamed
  * (auto-renaming would break the name <-> snapshot identity).

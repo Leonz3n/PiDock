@@ -38,6 +38,7 @@
 import { createNodeRepoProbe, type RepoProbe } from "../host/repo-identity.js";
 import { isPathInsideTask } from "../host/task-host.js";
 import type { TaskDiskRecord } from "../host/task-store.js";
+import { buildRepoChildName } from "./multi-repo-provision.js";
 
 /** Named refusal for a scan that cannot be produced (never a `[]` fallback). */
 export const PREP_SCAN_UNAVAILABLE = "task-scan-unavailable";
@@ -189,15 +190,16 @@ export function scanPrepConflicts(
 
 /**
  * The project repository a recorded `repoDir` names. The production creation
- * flow fixed the spelling `repo-` + the first 8 hex characters of the project
- * repository id; an unknown or ambiguous name resolves to `null` (never a
- * guess), which makes the scan refuse instead of scanning the wrong repo.
+ * flow fixed the spelling via `buildRepoChildName` (`repo-` + the first 8 hex
+ * characters of the project repository id); an unknown or ambiguous name
+ * resolves to `null` (never a guess), which makes the scan refuse instead of
+ * scanning the wrong repo.
  */
 export function projectRepositoryForRepoDir(
   repoDir: string,
   repositories: readonly { id: string; path: string }[],
 ): { id: string; path: string } | null {
-  const matches = repositories.filter((repository) => repoDir === `repo-${repository.id.slice(0, 8)}`);
+  const matches = repositories.filter((repository) => repoDir === buildRepoChildName(repository.id));
   return matches.length === 1 ? matches[0]! : null;
 }
 
@@ -276,7 +278,15 @@ export function derivePrepInputs(
   if (taskDir === null) {
     throw new PrepScanUnavailableError(`任务目录无法确认，拒绝在未扫描的情况下继续: ${input.taskId}`);
   }
-  const record = authority.readRecord(taskDir);
+  // A record that exists but cannot be read or parsed (corrupt `task.json`) is
+  // the same named refusal as a missing/mismatched one: never let a raw parse
+  // error escape, and never plan or write against an unconfirmed record.
+  let record: TaskDiskRecord | null;
+  try {
+    record = authority.readRecord(taskDir);
+  } catch {
+    throw new PrepScanUnavailableError(`任务记录不可读取，拒绝在未扫描的情况下继续: ${taskDir}`);
+  }
   if (!record || record.taskId !== input.taskId) {
     throw new PrepScanUnavailableError(`任务记录不可读取，拒绝在未扫描的情况下继续: ${taskDir}`);
   }
