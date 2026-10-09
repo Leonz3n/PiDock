@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { readRepoPrepareView, type RepoPrepareStatus, type RepoPrepareView } from "../data/multiRepoPrepare";
 import type { ShellTaskOpResult } from "../data/shellBridge";
 
@@ -14,21 +14,39 @@ const STATUS_LABEL: Record<RepoPrepareStatus, string> = {
   failed: "失败",
 };
 
+const DEFAULT_RESUME_UNAVAILABLE =
+  "需要主进程扫描任务目录与目标仓库（`git worktree list`）后才能继续准备；该能力尚未接线。";
+
 export function TaskPrepareRecovery({
   load,
   resume,
+  resumeUnavailableReason,
 }: {
   /** Read-only per-repo status read (`task/prepareStatus`). */
   load: () => Promise<ShellTaskOpResult>;
   /**
    * Explicit resume (`task/resumeAppend`), called with ONLY the unfinished
-   * repo dirs so a caller-supplied scan can be constrained to them.
+   * repo dirs. It MUST supply the caller-scanned `takenPaths`/`branchesInUse`
+   * the Host requires; omit the prop when the caller cannot scan, and the
+   * control renders disabled with the real reason instead of a doomed call.
    */
-  resume: (input: { repoDirs: string[] }) => Promise<ShellTaskOpResult>;
+  resume?: (input: { repoDirs: string[] }) => Promise<ShellTaskOpResult>;
+  /** Why the resume is unavailable; shown next to the disabled control. */
+  resumeUnavailableReason?: string;
 }) {
   const [view, setView] = useState<RepoPrepareView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Stale-response / unmount guard, matching the sibling async panels
+  // (TaskServiceBinding/DesktopEnvironmentPage/ProjectServiceTemplates): a
+  // response only applies when it is still the latest request.
+  const epoch = useRef(0);
+  useEffect(
+    () => () => {
+      epoch.current += 1;
+    },
+    [],
+  );
   const apply = (result: ShellTaskOpResult): void => {
     if (!result.ok) {
       setError(result.error ?? "准备状态读取失败，已保留表单，请重试");
@@ -42,23 +60,25 @@ export function TaskPrepareRecovery({
     setView(parsed);
     setError(null);
   };
-  const inspect = async () => {
+  const run = async (request: number, action: () => Promise<ShellTaskOpResult>): Promise<void> => {
     setBusy(true);
     try {
-      apply(await load());
+      const result = await action();
+      if (epoch.current !== request) return;
+      apply(result);
     } finally {
-      setBusy(false);
+      if (epoch.current === request) setBusy(false);
     }
   };
-  const retryUnfinished = async () => {
-    if (!view || view.retry.length === 0) return;
-    setBusy(true);
-    try {
-      // Only the unfinished repos are handed to the resume.
-      apply(await resume({ repoDirs: [...view.retry] }));
-    } finally {
-      setBusy(false);
-    }
+  const inspect = (): void => {
+    const request = ++epoch.current;
+    void run(request, load);
+  };
+  const retryUnfinished = (): void => {
+    const current = view;
+    if (!current || current.retry.length === 0 || !resume) return;
+    const request = ++epoch.current;
+    void run(request, () => resume({ repoDirs: [...current.retry] }));
   };
   return (
     <section aria-label="任务准备恢复" className="mt-3 rounded-md border border-line px-2.5 py-2">
@@ -69,7 +89,7 @@ export function TaskPrepareRecovery({
         <button
           type="button"
           disabled={busy}
-          onClick={() => void inspect()}
+          onClick={inspect}
           className="rounded-md border border-line px-2 py-1 text-[11px] hover:bg-soft disabled:opacity-50"
         >
           检查准备状态
@@ -77,14 +97,20 @@ export function TaskPrepareRecovery({
         {view?.canResume ? (
           <button
             type="button"
-            disabled={busy}
-            onClick={() => void retryUnfinished()}
+            disabled={busy || !resume}
+            title={resume ? undefined : (resumeUnavailableReason ?? DEFAULT_RESUME_UNAVAILABLE)}
+            onClick={retryUnfinished}
             className="rounded-md border border-line px-2 py-1 text-[11px] hover:bg-soft disabled:opacity-50"
           >
             继续准备未完成的仓库
           </button>
         ) : null}
       </div>
+      {view?.canResume && !resume ? (
+        <p className="mt-1 text-[11px] text-muted" data-testid="prepare-resume-unavailable">
+          {resumeUnavailableReason ?? DEFAULT_RESUME_UNAVAILABLE}
+        </p>
+      ) : null}
       {view ? (
         <ul className="mt-2 flex flex-col gap-1" data-testid="prepare-status-rows">
           {view.rows.map((row) => (
@@ -94,6 +120,11 @@ export function TaskPrepareRecovery({
             </li>
           ))}
         </ul>
+      ) : null}
+      {view?.resumed ? (
+        <p role="status" className="mt-1 text-[11px] text-orange" data-testid="prepare-resume-planned">
+          已规划以下仓库的恢复，待执行：{view.retry.join("、")}。执行完成后请重新检查准备状态。
+        </p>
       ) : null}
       {view && view.hold.length > 0 ? (
         <p role="status" className="mt-1 text-[11px] text-orange">

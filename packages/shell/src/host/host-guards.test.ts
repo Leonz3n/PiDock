@@ -733,6 +733,30 @@ describe("#6 append + probe guards (S2)", () => {
     expect(
       validateHostTaskOp("task/resumeAppend", { takenPaths: [], branchesInUse: [], prepareErrors: { frontend: {} } }).ok,
     ).toBe(false);
+    // `branch` lands in `git branch <branch> <commit>` argv: a leading `-`
+    // (or an unsafe ref) is refused on both append and resume.
+    expect(
+      validateHostTaskOp("task/resumeAppend", { takenPaths: [], branchesInUse: [], branch: "-m" }).ok,
+    ).toBe(false);
+    expect(validateHostTaskOp("task/resumeAppend", { takenPaths: [], branchesInUse: [], branch: "bad branch" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/resumeAppend", { takenPaths: [], branchesInUse: [], branch: "task/task-abcdef12" }).ok).toBe(true);
+    // `prepareErrors[].code` is constrained to the known MultiRepoErrorCode union.
+    expect(
+      validateHostTaskOp("task/resumeAppend", {
+        takenPaths: [],
+        branchesInUse: [],
+        prepareErrors: { frontend: { code: "not-a-real-code", message: "x" } },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateHostTaskOp("task/appendRepos", {
+        repoSelections: [],
+        fetchedCommits: {},
+        takenPaths: [],
+        branchesInUse: [],
+        branch: "-m",
+      }).ok,
+    ).toBe(false);
     expect(validateHostTaskOp("task/probeLink", { sourcePath: "/data/notes" })).toEqual({ ok: true });
     expect(validateHostTaskOp("task/probeLink", {}).ok).toBe(false);
   });

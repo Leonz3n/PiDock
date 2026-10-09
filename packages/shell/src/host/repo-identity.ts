@@ -14,6 +14,7 @@
  */
 
 import type { GitResourceObservation } from "../main/task-lifecycle.js";
+import type { TaskBranchRefState } from "../main/task-provision.js";
 
 export interface RepoProbe {
   /** `readFileSync` of a text file, or null when unreadable. */
@@ -22,6 +23,12 @@ export interface RepoProbe {
   isFile(path: string): boolean;
   /** `execFileSync(git, args)` stdout trimmed, or null on any failure. */
   runGit(args: readonly string[]): string | null;
+  /**
+   * `git -C <dir> rev-parse --verify --quiet refs/heads/<branch>`: the ref's
+   * commit when it exists, `absent` when it does not (exit 1), or `unknown`
+   * when the probe cannot decide (no git / not a repository).
+   */
+  probeBranchRef(dir: string, branch: string): TaskBranchRefState;
 }
 
 /** The `gitdir: <path>` payload of a linked worktree's `.git` file. */
@@ -120,6 +127,24 @@ export function createNodeRepoProbe(): RepoProbe {
         return null;
       }
     },
+    probeBranchRef: (dir: string, branch: string): TaskBranchRefState => {
+      try {
+        const printed = execFileSync("git", ["-C", dir, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], {
+          encoding: "utf8",
+          timeout: 5_000,
+          stdio: ["ignore", "pipe", "ignore"],
+        }).trim();
+        if (printed.length === 0) return { state: "absent" };
+        return { state: "present", commit: printed };
+      } catch (error) {
+        // `rev-parse --verify --quiet` exits 1 for a missing ref; any other
+        // failure (no git binary, not a repository) stays unknown so it can
+        // only make the caller stricter (never a false "absent" that plans a
+        // create).
+        if ((error as { status?: number }).status === 1) return { state: "absent" };
+        return { state: "unknown" };
+      }
+    },
   };
 }
 
@@ -131,4 +156,15 @@ export function observeRecordedRepo(
   const observed = observeRepoIdentity(input.repoDir, probe);
   if (!observed) return undefined;
   return { ...observed, baseCommitReachable: baseCommitReachable(input.repoDir, input.baseCommit, probe) };
+}
+
+/**
+ * Observe `refs/heads/<branch>` in a source checkout (fixed git argv). The
+ * `absent` / `unknown` split lets a resume create a genuinely missing branch
+ * while failing closed on an unreadable repository instead of planning a
+ * create that would collide with a branch it could not see.
+ */
+export function observeBranchRef(repoDir: string, branch: string, probe: RepoProbe): TaskBranchRefState {
+  if (typeof branch !== "string" || branch.trim().length === 0) return { state: "unknown" };
+  return probe.probeBranchRef(repoDir, branch);
 }

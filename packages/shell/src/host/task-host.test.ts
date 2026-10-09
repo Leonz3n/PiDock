@@ -900,6 +900,23 @@ describe("#6 multi-repo provision + append (S2)", () => {
     expect(taskHost.taskRecord()?.repos).toEqual(["frontend", "invoice"]);
   });
 
+  it("refuses an unsafe branch override on append (a leading `-` would be a git option)", () => {
+    const taskHost = host();
+    taskHost.provision(multiProvisionInput());
+    expect(() =>
+      taskHost.appendRepos({
+        repoSelections: [
+          { repoDir: "shipment", remote: "origin", remoteBranch: "main", mainCheckoutDir: "/src/shipment" },
+        ],
+        fetchedCommits: { shipment: "c0ffee1234" },
+        branch: "-m",
+        takenPaths: [],
+        branchesInUse: [],
+      }),
+    ).toThrow("invalid-payload");
+    expect(taskHost.taskRecord()?.repos).toEqual(["frontend", "invoice"]);
+  });
+
   it("fails the whole append batch when one new repo's fetch is missing (all-success gate)", () => {
     const taskHost = host();
     taskHost.provision(multiProvisionInput());

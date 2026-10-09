@@ -7,7 +7,8 @@
  * `validateHostTaskOp` for backward-compatible imports.
  */
 import { isHostTaskOp, isTaskOpOrigin, type HostTaskOp } from "../rpc/protocol.js";
-import { isAbsoluteTaskRoot } from "../main/task-provision.js";
+import { isAbsoluteTaskRoot, isSafeTaskBranchRef } from "../main/task-provision.js";
+import { isMultiRepoErrorCode } from "../main/multi-repo-provision.js";
 import { PI_GATED_TOOL_NAMES } from "../main/pi-session.js";
 import { PI_USAGE_GROUP_BY, PI_USAGE_KINDS, type PiUsageGroupBy } from "../main/usage-ledger.js";
 import { isUsageKindName } from "./task-store.js";
@@ -459,6 +460,11 @@ export function validateHostTaskOp(
     if (!Array.isArray(payload["takenPaths"]) || !Array.isArray(payload["branchesInUse"])) {
       return { ok: false, error: "invalid-payload: task/appendRepos requires caller-scanned takenPaths + branchesInUse" };
     }
+    // `branch` lands in `git branch <branch> <commit>` argv: reject a leading
+    // `-` (git would parse it as an option) and invalid ref characters.
+    if (payload["branch"] !== undefined && !isSafeTaskBranchRef(payload["branch"])) {
+      return { ok: false, error: "invalid-payload: task/appendRepos.branch must be a safe task branch ref" };
+    }
     return { ok: true };
   }
   // #6 resume: shape-checked here; the real classification + gates run
@@ -472,6 +478,9 @@ export function validateHostTaskOp(
     // cannot be skipped by omitting the scan.
     if (!Array.isArray(payload["takenPaths"]) || !Array.isArray(payload["branchesInUse"])) {
       return { ok: false, error: "invalid-payload: task/resumeAppend requires caller-scanned takenPaths + branchesInUse" };
+    }
+    if (payload["branch"] !== undefined && !isSafeTaskBranchRef(payload["branch"])) {
+      return { ok: false, error: "invalid-payload: task/resumeAppend.branch must be a safe task branch ref" };
     }
     const resumeCheckouts = payload["mainCheckouts"];
     if (resumeCheckouts !== undefined && !isStringMap(resumeCheckouts)) {
@@ -492,9 +501,10 @@ export function validateHostTaskOp(
           entry === null ||
           Array.isArray(entry) ||
           typeof (entry as Record<string, unknown>)["code"] !== "string" ||
+          !isMultiRepoErrorCode((entry as Record<string, unknown>)["code"]) ||
           typeof (entry as Record<string, unknown>)["message"] !== "string"
         ) {
-          return { ok: false, error: "invalid-payload: task/resumeAppend.prepareErrors must map repo names to {code, message}" };
+          return { ok: false, error: "invalid-payload: task/resumeAppend.prepareErrors must map repo names to {code, message} with a known code" };
         }
       }
     }

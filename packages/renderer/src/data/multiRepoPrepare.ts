@@ -29,6 +29,9 @@ export interface RepoPrepareView {
   hold: string[];
   /** True when at least one unfinished repo can be resumed. */
   canResume: boolean;
+  /** True only on a resume response (`resumed`) that planned work; a
+   *  `prepareStatus` read never sets it. Drives the "已规划，待执行" notice. */
+  resumed: boolean;
 }
 
 const STATUSES: readonly RepoPrepareStatus[] = ["created", "pending", "failed"];
@@ -42,9 +45,10 @@ function asStringArray(value: unknown): string[] | null {
 
 /**
  * Parse the Host's prepare payload. Returns `null` for anything that is not
- * the typed shape (missing `outcomes`/`retry`/`hold`, an unknown status, or
- * a retry/hold repo the outcomes do not name), so the UI keeps its last
- * known state instead of showing a fabricated all-created view.
+ * the typed shape (missing `outcomes`/`retry`/`hold`, an unknown status, a
+ * `failed` row without a real `error.message`, or a retry/hold repo the
+ * outcomes do not name), so the UI keeps its last known state instead of
+ * showing a fabricated all-created view.
  */
 export function readRepoPrepareView(payload: unknown): RepoPrepareView | null {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
@@ -67,6 +71,9 @@ export function readRepoPrepareView(payload: unknown): RepoPrepareView | null {
       typeof (failure as Record<string, unknown>)["message"] === "string"
         ? ((failure as Record<string, unknown>)["message"] as string)
         : undefined;
+    // A `failed` row must carry the Host's real reason: a bare status would
+    // drop the only actionable detail the panel can show.
+    if (status === "failed" && (reason === undefined || reason.length === 0)) return null;
     rows.push({ repoDir, status: status as RepoPrepareStatus, reason });
   }
   const named = new Set(rows.map((row) => row.repoDir));
@@ -77,5 +84,6 @@ export function readRepoPrepareView(payload: unknown): RepoPrepareView | null {
     retry,
     hold,
     canResume: retry.length > 0,
+    resumed: record["resumed"] === true,
   };
 }

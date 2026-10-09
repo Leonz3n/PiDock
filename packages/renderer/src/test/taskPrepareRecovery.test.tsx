@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { TaskPrepareRecovery } from "../components/TaskPrepareRecovery";
 import type { ShellTaskOpResult } from "../data/shellBridge";
@@ -45,12 +45,21 @@ it("does not read or resume on mount; an explicit check renders the real statuse
   expect(screen.getByRole("button", { name: "继续准备未完成的仓库" })).toBeInTheDocument();
 });
 
-it("resumes only the unfinished repos and never re-creates the created one", async () => {
+it("hands only the unfinished repos to the injected resume and surfaces the real resumed payload", async () => {
   const load = vi.fn(async () => ok(prepared));
-  // The Host answers a resume with the plan + the classification taken when
-  // it was called: the retried repos are still unfinished (the caller runs
-  // the plan afterwards), so the response keeps the resume affordance.
-  const resume = vi.fn(async (_input: { repoDirs: string[] }) => ok(prepared));
+  // The REAL Host resume payload carries the call-time classification, the
+  // retried set and `resumed: true`; it never returns `canResume` (the view
+  // derives it from `retry`).
+  const resumeResponse = {
+    outcomes: prepared.outcomes,
+    retry: ["invoice", "shipment"],
+    hold: [],
+    created: ["frontend"],
+    pending: ["invoice", "shipment"],
+    failed: [],
+    resumed: true,
+  };
+  const resume = vi.fn(async (_input: { repoDirs: string[] }) => ok(resumeResponse));
   render(<TaskPrepareRecovery load={load} resume={resume} />);
   fireEvent.click(screen.getByRole("button", { name: "检查准备状态" }));
   await screen.findByTestId("prepare-status-rows");
@@ -59,11 +68,15 @@ it("resumes only the unfinished repos and never re-creates the created one", asy
   expect(resume).toHaveBeenCalledTimes(1);
   // `frontend` is created: it must not enter the retry set.
   expect(resume.mock.calls[0]![0]).toEqual({ repoDirs: ["invoice", "shipment"] });
-  await waitFor(() => expect(screen.getByTestId("prepare-status-rows")).toHaveTextContent("invoice · 待准备"));
+  // The planned-but-not-yet-executed state is visible (a real resume is not
+  // silently indistinguishable from "nothing happened").
+  expect(await screen.findByTestId("prepare-resume-planned")).toHaveTextContent("已规划");
+  expect(screen.getByTestId("prepare-resume-planned")).toHaveTextContent("invoice、shipment");
+  expect(screen.getByTestId("prepare-status-rows")).toHaveTextContent("invoice · 待准备");
   expect(screen.getByRole("button", { name: "继续准备未完成的仓库" })).toBeInTheDocument();
 
-  // A later read after the caller executed the plan: nothing is unfinished,
-  // so the affordance disappears.
+  // A later status read after the caller executed the plan: nothing is
+  // unfinished, so the affordance and the planned notice disappear.
   load.mockResolvedValueOnce(
     ok({
       outcomes: [
@@ -79,7 +92,20 @@ it("resumes only the unfinished repos and never re-creates the created one", asy
   await waitFor(() =>
     expect(screen.queryByRole("button", { name: "继续准备未完成的仓库" })).toBeNull(),
   );
+  expect(screen.queryByTestId("prepare-resume-planned")).toBeNull();
   expect(screen.getByTestId("prepare-status-rows")).toHaveTextContent("frontend · 已创建");
+});
+
+it("renders the resume control disabled with the real reason when the caller cannot supply the scan", async () => {
+  const load = vi.fn(async () => ok(prepared));
+  // No scan-capable resume is injected (the sandboxed renderer cannot scan),
+  // so the control must be disabled and name the reason — never a call the
+  // Host is guaranteed to refuse.
+  render(<TaskPrepareRecovery load={load} resumeUnavailableReason="需要主进程扫描后才能继续准备" />);
+  fireEvent.click(screen.getByRole("button", { name: "检查准备状态" }));
+  await screen.findByTestId("prepare-status-rows");
+  expect(screen.getByRole("button", { name: "继续准备未完成的仓库" })).toBeDisabled();
+  expect(screen.getByTestId("prepare-resume-unavailable")).toHaveTextContent("需要主进程扫描后才能继续准备");
 });
 
 it("keeps the form and shows the Host's real reason when a resume is refused", async () => {
@@ -152,3 +178,50 @@ it("rejects a malformed status payload instead of showing a fabricated ready vie
   expect(await screen.findByRole("alert")).toHaveTextContent("准备状态返回异常");
   expect(screen.queryByTestId("prepare-status-rows")).toBeNull();
 });
+
+it("drops a superseded status response so the latest request wins", async () => {
+  // Stale-response epoch guard (same convention as the sibling async panels):
+  // a response only applies when its request is still the latest.
+  let resolveResume: ((value: ShellTaskOpResult) => void) | undefined;
+  const pendingResume = new Promise<ShellTaskOpResult>((resolve) => {
+    resolveResume = resolve;
+  });
+  let resolveSecondInspect: ((value: ShellTaskOpResult) => void) | undefined;
+  const pendingSecondInspect = new Promise<ShellTaskOpResult>((resolve) => {
+    resolveSecondInspect = resolve;
+  });
+  const latest = {
+    outcomes: [{ repoDir: "latest", status: "created" }],
+    retry: [],
+    hold: [],
+  };
+  const staleResume = {
+    outcomes: [{ repoDir: "stale", status: "pending" }],
+    retry: ["stale"],
+    hold: [],
+    resumed: true,
+  };
+  const load = vi.fn().mockResolvedValueOnce(ok(prepared)).mockReturnValueOnce(pendingSecondInspect);
+  const resume = vi.fn(() => pendingResume);
+  render(<TaskPrepareRecovery load={load} resume={resume} />);
+  fireEvent.click(screen.getByRole("button", { name: "检查准备状态" }));
+  await screen.findByTestId("prepare-status-rows");
+
+  // Start a resume, then a newer inspect in the SAME React batch so both
+  // requests are in flight and the second one supersedes the first.
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "继续准备未完成的仓库" }));
+    fireEvent.click(screen.getByRole("button", { name: "检查准备状态" }));
+  });
+  expect(resume).toHaveBeenCalledTimes(1);
+
+  resolveSecondInspect?.(ok(latest));
+  await waitFor(() => expect(screen.getByTestId("prepare-status-rows")).toHaveTextContent("latest · 已创建"));
+  // The superseded resume response arriving last must NOT overwrite the
+  // newer state.
+  resolveResume?.(ok(staleResume));
+  await waitFor(() => expect(screen.getByTestId("prepare-status-rows")).toHaveTextContent("latest · 已创建"));
+  expect(screen.getByTestId("prepare-status-rows")).not.toHaveTextContent("stale");
+  expect(screen.queryByTestId("prepare-resume-planned")).toBeNull();
+});
+
