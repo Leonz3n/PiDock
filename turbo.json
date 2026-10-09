@@ -24,6 +24,11 @@
       "inputs": ["src/**", "vite.config.ts", "tsconfig.json", "tsconfig.build.json", "package.json"],
       "outputs": []
     },
+    "@pidock/shell#test": {
+      "dependsOn": ["@pidock/shell#build", "^build"],
+      "inputs": ["src/**", "vite.config.ts", "tsconfig.json", "tsconfig.build.json", "package.json"],
+      "outputs": []
+    },
     "lint": {
       "inputs": ["src/**", "scripts/**", "$TURBO_ROOT$/eslint.config.mjs", "package.json", "$TURBO_ROOT$/tsconfig.base.json"],
       "outputs": []
