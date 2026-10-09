@@ -218,6 +218,62 @@ describe.skipIf(process.platform === "win32")("#48 service-launch ownership iden
     expect(readServiceOwnershipOnDisk(dir).entries).toEqual([]);
   }, 30_000);
 
+  it("proves the unobservable path end to end with a real platform-binary child: no signal, stop refused, second start refused, durable never reports stopped while alive", async () => {
+    const dir = taskDir();
+    const sleepPlan: ServiceStartPlan = {
+      serviceId: "platform-sleep",
+      cwd: dir,
+      program: "/bin/sleep",
+      args: ["60"],
+      env: {},
+      runType: "long-lived",
+    };
+
+    // Host A starts a real platform-binary child (/bin/sleep) and records it.
+    const hostA = driver(dir);
+    const pid = await hostA.start(sleepPlan);
+    expect(alive(pid)).toBe(true);
+    cleanups.push(() => { if (alive(pid)) process.kill(pid, "SIGKILL"); });
+
+    // Stored on disk:
+    const stored = readServiceOwnershipOnDisk(dir);
+    expect(stored.entries).toHaveLength(1);
+    const recorded = stored.entries[0]!;
+    expect(recorded).toMatchObject({ serviceId: "platform-sleep", pid });
+
+    // Host B reconciles after Host A exited (no in-memory handle).
+    // Platform binary hides environment on macOS -> unobservable.
+    expect(verifyServiceOwnershipIdentity(recorded)).toBe("unobservable");
+    const classified = classifyServiceOwnership(stored.entries);
+    expect(classified).toEqual([
+      {
+        serviceId: "platform-sleep",
+        pid,
+        ownershipNonce: recorded.ownershipNonce,
+        startedAt: recorded.startedAt,
+        state: "orphaned-unverified",
+      },
+    ]);
+
+    const hostB = driver(dir);
+    const beforeAction = readFileSync(join(dir, "service-ownership.json"), "utf8");
+
+    // Invariant 1: refuse a second start (fail-closed)
+    await expect(hostB.start(sleepPlan)).rejects.toThrow(`service-ownership-orphaned-unverified: platform-sleep pid ${pid}`);
+    expect(hostB.ids()).toEqual([]);
+    expect(alive(pid)).toBe(true);
+    expect(readFileSync(join(dir, "service-ownership.json"), "utf8")).toBe(beforeAction);
+
+    // Invariant 2: stop refused (never send any signal to an unobservable process)
+    await expect(hostB.stop("platform-sleep")).rejects.toThrow(`service-ownership-unverified: platform-sleep pid ${pid}`);
+
+    // Invariant 3: NO signal delivered - process remains alive
+    expect(alive(pid)).toBe(true);
+
+    // Invariant 4: durable record never reports stopped while the process is alive
+    expect(readFileSync(join(dir, "service-ownership.json"), "utf8")).toBe(beforeAction);
+  }, 30_000);
+
   it("clears a stale record whose process is confirmed gone, then starts and records the new launch", async () => {
     const dir = taskDir();
     // A real process that has exited: its pid is a legitimately dead pid.
