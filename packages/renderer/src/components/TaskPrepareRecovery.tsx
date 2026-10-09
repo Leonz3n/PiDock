@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { readRepoPrepareView, type RepoPrepareStatus, type RepoPrepareView } from "../data/multiRepoPrepare";
-import { resumeAppendThroughShell, type ShellTaskOpResult } from "../data/shellBridge";
+import type { ShellTaskOpResult } from "../data/shellBridge";
 
 // Seam: [PiDock 03] (#6) partial-prepare recovery UI. The Host classifies the
 // REAL worktree state and resumes only the unfinished repos; this panel shows
@@ -16,22 +16,6 @@ const STATUS_LABEL: Record<RepoPrepareStatus, string> = {
 
 const DEFAULT_RESUME_UNAVAILABLE =
   "需要主进程扫描任务目录与目标仓库（`git worktree list`）后才能继续准备；当前调用方未提供该动作。";
-
-/**
- * Production resume action for the shell surface. The sandboxed renderer
- * cannot scan, so it supplies NO conflict inputs: main derives
- * `takenPaths`/`branchesInUse` (and the target source checkouts) from the
- * task folder and the task's target repos, and the Host keeps requiring
- * both lists. `repoDirs` is the unfinished set the panel read (advisory):
- * the Host re-derives the authoritative set from the record and the real
- * worktrees, so the page never gates itself. Nothing is resumed on mount —
- * the human click is the only trigger.
- */
-export function shellTaskPrepareResume(
-  taskId: string,
-): (input: { repoDirs: string[] }) => Promise<ShellTaskOpResult> {
-  return () => resumeAppendThroughShell({ taskId });
-}
 
 export function TaskPrepareRecovery({
   load,

@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import { TaskPrepareRecovery, shellTaskPrepareResume } from "../components/TaskPrepareRecovery";
-import type { ShellTaskOpResult } from "../data/shellBridge";
+import { TaskPrepareRecovery } from "../components/TaskPrepareRecovery";
+import { shellTaskPrepareResume, type ShellTaskOpResult } from "../data/shellBridge";
 
 // Seam: #6 partial-prepare recovery UI. The panel shows the Host's real
 // per-repo status and triggers an explicit resume; it never runs on mount and
