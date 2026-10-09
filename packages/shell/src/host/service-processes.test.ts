@@ -16,6 +16,11 @@ async function until(check: () => boolean) {
   throw Error("timed out waiting for child output");
 }
 
+const alivePid = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch { return false; } };
+
+const descendantScript = (escaped: boolean): string =>
+  `const {spawn}=require('node:child_process'); const child=spawn(process.execPath,['-e','process.on("SIGTERM",()=>{});setInterval(()=>{},1000)'],{stdio:['ignore','inherit','inherit']${escaped ? ",detached:true" : ""}}); console.log('descendant:'+child.pid); process.exit(0);`;
+
 describe.skipIf(process.platform === "win32")("#7 Host-owned real service processes", () => {
   it("runs with only the planned environment, captures bounded output, and records actual exit", async () => {
     const root = taskDir();
@@ -55,28 +60,44 @@ describe.skipIf(process.platform === "win32")("#7 Host-owned real service proces
     expect(lines).toEqual(["[output line exceeded 2000 characters]"]);
   });
 
-  it("returns an unknown stop result when the leader exits but a descendant holds its output", async () => {
-    const root = taskDir(); const lines: string[] = []; const exits: string[] = [];
-    const processes = new TaskServiceProcesses(root, (_, line) => lines.push(line), (_, reason) => exits.push(reason), (line) => line, 40, 40);
-    const script = `const {spawn}=require('node:child_process'); const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:['ignore','inherit','inherit']}); console.log('descendant:'+child.pid); process.exit(0);`;
-    const leaderPid = await processes.start(plan("parent-exited", root, ["-e", script]));
+  it("reclaims a descendant that inherited the leader's output when the leader exits", async () => {
+    const root = taskDir(); const lines: string[] = [];
+    const processes = new TaskServiceProcesses(root, (_, line) => lines.push(line), () => {}, (line) => line);
+    const leaderPid = await processes.start(plan("parent-exited", root, ["-e", descendantScript(false)]));
     let descendantPid: number | undefined;
     try {
       await until(() => lines.some((line) => line.startsWith("descendant:")));
       descendantPid = Number(lines.find((line) => line.startsWith("descendant:"))?.split(":")[1]);
       expect(descendantPid).toBeGreaterThan(0);
-      await until(() => {
-        try { process.kill(leaderPid, 0); return false; }
-        catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH"; }
-      });
-      await expect(processes.stop("parent-exited")).rejects.toThrow("termination-unconfirmed");
-      expect(exits).toEqual([]);
-      expect(processes.ids()).toEqual(["parent-exited"]);
+      // The leader is gone but its descendant still holds the pipes. Box 2 must
+      // end it from OS process-group evidence, not report an unknown result.
+      await until(() => { try { process.kill(leaderPid, 0); return false; } catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH"; } });
+      await processes.stop("parent-exited");
+      expect(alivePid(descendantPid)).toBe(false);
+      expect(processes.ids()).toEqual([]);
     } finally {
-      if (descendantPid) {
-        try { process.kill(descendantPid, "SIGKILL"); }
-        catch { /* Best effort cleanup; the pending process assertion below still fails. */ }
-      }
+      if (descendantPid) { try { process.kill(descendantPid, "SIGKILL"); } catch { /* already gone */ } }
+      await until(() => processes.ids().length === 0);
+    }
+  }, 10000);
+
+  it("returns an unknown stop result when a descendant escaped the group and holds its output", async () => {
+    const root = taskDir(); const lines: string[] = [];
+    const processes = new TaskServiceProcesses(root, (_, line) => lines.push(line), () => {}, (line) => line, 300, 300);
+    const leaderPid = await processes.start(plan("escaped", root, ["-e", descendantScript(true)]));
+    let descendantPid: number | undefined;
+    try {
+      await until(() => lines.some((line) => line.startsWith("descendant:")));
+      descendantPid = Number(lines.find((line) => line.startsWith("descendant:"))?.split(":")[1]);
+      expect(descendantPid).toBeGreaterThan(0);
+      await until(() => { try { process.kill(leaderPid, 0); return false; } catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH"; } });
+      // The descendant left the process group (`setsid`), so it cannot be named
+      // from OS evidence: the stop must fail closed and keep it registered.
+      await expect(processes.stop("escaped")).rejects.toThrow("termination-unconfirmed");
+      expect(alivePid(descendantPid)).toBe(true);
+      expect(processes.ids()).toEqual(["escaped"]);
+    } finally {
+      if (descendantPid) { try { process.kill(descendantPid, "SIGKILL"); } catch { /* already gone */ } }
       await until(() => processes.ids().length === 0);
     }
   }, 10000);
