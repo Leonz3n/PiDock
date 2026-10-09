@@ -270,20 +270,21 @@ export async function appendReposThroughShell(input: {
   branch?: string;
   mainCheckouts?: Record<string, string>;
   /**
-   * Caller-supplied conflict inputs (kept for callers that still pass them).
-   * Main ignores them for the gate: it derives `takenPaths`/`branchesInUse`
-   * (and the source checkouts) itself, so the renderer must never fabricate
-   * an empty `[]` scan — `[]` would be overwritten, not trusted.
+   * Caller-supplied conflict inputs. Main ignores them for the gate on the
+   * shell route: it derives `takenPaths`/`branchesInUse` (and the source
+   * checkouts) itself, so the renderer must never fabricate an empty `[]`
+   * scan — `[]` would be overwritten, not trusted. Omit them when the caller
+   * cannot scan.
    */
-  takenPaths: string[];
-  branchesInUse: string[];
+  takenPaths?: string[];
+  branchesInUse?: string[];
 }): Promise<ShellTaskOpResult> {
   const payload: Record<string, unknown> = {
     repoSelections: input.repoSelections,
     fetchedCommits: input.fetchedCommits,
-    takenPaths: input.takenPaths,
-    branchesInUse: input.branchesInUse,
   };
+  if (input.takenPaths !== undefined) payload["takenPaths"] = input.takenPaths;
+  if (input.branchesInUse !== undefined) payload["branchesInUse"] = input.branchesInUse;
   if (input.branch !== undefined) payload["branch"] = input.branch;
   if (input.mainCheckouts !== undefined) payload["mainCheckouts"] = input.mainCheckouts;
   try {
