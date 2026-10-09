@@ -310,6 +310,9 @@ describe.skipIf(process.platform === "win32")("#7 catalog-driven service executi
     const f = await installed();
     const serviceId = f.bind("svc-a", "a");
     const startedMarker = join(f.taskDir, "repo-a/svc-a", "started-a.txt");
+    // A refused or unanswered control must leave no durable launch identity
+    // behind either - the record exists only for a start that really ran.
+    const ownershipRecord = join(f.taskDir, "service-ownership.json");
     // Main registers the trusted launch for the task-bound service; the page
     // never supplies the descriptor (it only names project/task/service).
     expect(await f.register(serviceId)).toMatchObject({ service: { launchSource: "catalog" } });
@@ -319,6 +322,7 @@ describe.skipIf(process.platform === "win32")("#7 catalog-driven service executi
     // Read-only tier: refused, and no child ever ran.
     expect(await control({ sessionId: "main", action: "start" })).toMatchObject({ error: expect.stringContaining("只读") });
     expect(existsSync(startedMarker)).toBe(false);
+    expect(existsSync(ownershipRecord)).toBe(false);
     expect((await f.status(serviceId)).lifecycle).toBe("stopped");
 
     // Default tier: the first call only asks.
@@ -329,10 +333,19 @@ describe.skipIf(process.platform === "win32")("#7 catalog-driven service executi
     expect(existsSync(startedMarker)).toBe(false);
     expect((await f.status(serviceId)).lifecycle).toBe("stopped");
 
+    // A pending (unanswered/cancelled) confirmation starts nothing either: the
+    // approval exists but was never approved, so the Host refuses before the
+    // driver is reached.
+    expect((await control({ sessionId: "main", action: "start", approvalId }))["error"]).toBeDefined();
+    expect(existsSync(startedMarker)).toBe(false);
+    expect(existsSync(ownershipRecord)).toBe(false);
+    expect((await f.status(serviceId)).lifecycle).toBe("stopped");
+
     // A rejected confirmation does not start the process either.
     await f.task("task/reject", { sessionId: "main", approvalId });
     expect((await control({ sessionId: "main", action: "start", approvalId }))["error"]).toBeDefined();
     expect(existsSync(startedMarker)).toBe(false);
+    expect(existsSync(ownershipRecord)).toBe(false);
     expect((await f.status(serviceId)).lifecycle).toBe("stopped");
 
     // A fresh confirmation, approved, really starts the child.
