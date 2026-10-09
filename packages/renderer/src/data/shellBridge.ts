@@ -346,6 +346,20 @@ export async function resumeAppendThroughShell(input: {
 }
 
 /**
+ * Production resume action for a shell surface component. The sandboxed
+ * renderer cannot scan, so it supplies NO conflict inputs: main derives
+ * `takenPaths`/`branchesInUse` (and the target source checkouts) from the task
+ * folder and the task's target repos, and the Host keeps requiring both lists.
+ * Returns the callback shape the recovery panel expects; nothing is resumed
+ * until the callback is invoked by an explicit human action.
+ */
+export function shellTaskPrepareResume(
+  taskId: string,
+): (input: { repoDirs: string[] }) => Promise<ShellTaskOpResult> {
+  return () => resumeAppendThroughShell({ taskId });
+}
+
+/**
  * [PiDock 03] (#6) probe a plain-dir link source through the shell
  * (`host/task` + `task/probeLink`). Report only: `{shape: ok/dead}` —
  * never creates, follows, or takes over the target.
