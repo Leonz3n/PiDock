@@ -273,6 +273,46 @@ describe("#6 resumeAppend over real worktrees (S6)", () => {
     expect(readFileSync(join(taskDir, "frontend", "keep.txt"), "utf8")).toBe("do not touch\n");
   });
 
+  it("reads the per-repo prepare state without planning or writing", () => {
+    const home = mkdtempSync(join(tmpdir(), "pidock-resume-"));
+    homes.push(home);
+    const frontend = realRepo(home, "frontend");
+    const invoice = realRepo(home, "invoice");
+    const { taskDir, taskId } = recordSelection({
+      home,
+      taskId: "task-abcdef12",
+      repos: [
+        { repoDir: "frontend", commit: frontend.commit },
+        { repoDir: "invoice", commit: invoice.commit },
+      ],
+      prepareErrors: [{ repoDir: "invoice", code: "fetch-failed", message: "仓库 invoice 获取远程基线失败" }],
+    });
+    const before = readFileSync(taskFilePath(taskDir), "utf8");
+
+    // No conflict scan is needed for a read; the record is byte-identical.
+    const status = hostAt(taskId, taskDir).prepareStatus();
+    expect(status.pending).toEqual(["frontend"]);
+    expect(status.failed.map((entry) => entry.repoDir)).toEqual(["invoice"]);
+    expect(status.failed[0]!.error.message).toBe("仓库 invoice 获取远程基线失败");
+    expect(status.canResume).toBe(true);
+    expect(readFileSync(taskFilePath(taskDir), "utf8")).toBe(before);
+
+    // Once both worktrees exist, the read reports them as created.
+    const resumed = hostAt(taskId, taskDir).resumeAppend({
+      mainCheckouts: { frontend: frontend.checkout, invoice: invoice.checkout },
+      takenPaths: [],
+      branchesInUse: [],
+    });
+    runOps(resumed.plan.ops);
+    const after = hostAt(taskId, taskDir).prepareStatus();
+    expect(after.created.sort()).toEqual(["frontend", "invoice"]);
+    expect(after.canResume).toBe(false);
+
+    // Missing/foreign task fails closed by name.
+    const empty = workspace(home, "task-00000002");
+    expect(() => hostAt(empty.taskId, empty.taskDir).prepareStatus()).toThrow("unknown task");
+  });
+
   it("fails closed on a missing task, an unknown repo and an omitted conflict scan", () => {
     const home = mkdtempSync(join(tmpdir(), "pidock-resume-"));
     homes.push(home);

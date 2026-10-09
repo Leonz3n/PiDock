@@ -884,6 +884,17 @@ async function performTaskOp(
           return { ok: false, error: error instanceof Error ? error.message : String(error) };
         }
       }
+      // #6 prepare read: read-only per-repo classification (created /
+      // pending / failed with the real reason). No plan and no write, so the
+      // caller-scanned conflict gate is not involved; the resume WRITE still
+      // requires it.
+      case "task/prepareStatus": {
+        try {
+          return { ok: true, payload: { ...host.prepareStatus() } };
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : String(error) };
+        }
+      }
       // #6 link probe: Host-side fs check whether a plain-dir source still
       // exists (report only — never creates, follows, or takes over).
       case "task/probeLink": {

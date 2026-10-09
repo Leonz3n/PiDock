@@ -434,6 +434,14 @@ export function validateHostTaskOp(
     }
     return { ok: true };
   }
+  // #6 prepare read: read-only, no caller input, so only the envelope shape
+  // is checked here (the write path `task/resumeAppend` keeps its own gate).
+  if (op === "task/prepareStatus") {
+    if (payload !== undefined && !isRecord(payload)) {
+      return { ok: false, error: "invalid-payload: task/prepareStatus payload must be an object" };
+    }
+    return { ok: true };
+  }
   // #6 append + link probe (shape-checked here; semantic gates run Host-side).
   if (op === "task/appendRepos") {
     if (!isRecord(payload))

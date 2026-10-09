@@ -47,6 +47,7 @@ export type HostTaskOp =
   | "task/provision"
   | "task/appendRepos"
   | "task/resumeAppend"
+  | "task/prepareStatus"
   | "task/probeLink"
   | "task/sendMessage"
   | "task/sdkStart"
@@ -222,6 +223,7 @@ const HOST_TASK_OPS: readonly string[] = [
   "task/provision",
   "task/appendRepos",
   "task/resumeAppend",
+  "task/prepareStatus",
   "task/probeLink",
   "task/sendMessage",
   "task/sdkStart",
