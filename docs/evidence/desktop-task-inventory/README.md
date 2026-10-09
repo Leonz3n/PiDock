@@ -23,10 +23,14 @@ pnpm --filter @pidock/shell exec electron scripts/electron-issue34-task-inventor
 ## 2. 本轮捕获
 
 - 命令：见 `capture-log.json` 的 `command`。
-- 源码版本：`capture-log.json` 的 `revision`。本目录的 PNG 与 log 出自 **`3b08884`**（该 commit 已含本 harness），
-  `trackedFilesDirty: false`（仅本目录下的 untracked 证据文件不计入 dirty）。
-- PNG：`1440x900-<state>.png`。每个文件名等于实测内容盒尺寸（脚本用 `setContentSize(1440,900)` 并断言
-  `getContentBounds()` 等于 1440×900，名字不会超出实际）。
+- 源码版本：`capture-log.json` 的 `revision`。本目录的 PNG 与 log 出自 **`c33a5bb`**（该 commit 已含本 harness），
+  `trackedFilesDirty: false`（仅本目录下的 untracked 证据文件不计入 dirty）。从上一轮捕获的 `3b08884` 到本
+  `revision` 只改了本目录证据、harness 的像素元数据记录与 `docs/desktop-task-root-coverage.md`，renderer/main
+  的 Desktop 源码未变；因此可按 §1 命令从当前源码重放，重放后四个 PNG 的 sha256 与下表逐字相同。
+- PNG：`1440x900-<state>.png`。每个文件名等于实测 **CSS 内容盒**尺寸（脚本用 `setContentSize(1440,900)` 并断言
+  `getContentBounds()` 等于 1440×900）。该名字不是 PNG 的像素尺寸：捕获机 devicePixelRatio=2，实际位图为
+  **2880×1800 px**。`capture-log.json` 的 `shots[].pixelWidth` / `pixelHeight` / `deviceScaleFactor` 记录真实
+  像素尺寸与缩放系数，与旧 1× 证据（如 `docs/evidence/ui-alignment-s8/1440x900-*.png`）按像素比较时请用它。
 - 每个 PNG 的 sha256 记录在 `capture-log.json` 的 `shots[].sha256`；同一源码重复运行得到相同 sha256
   （本 harness 为确定性捕获，无随机内容）。
 

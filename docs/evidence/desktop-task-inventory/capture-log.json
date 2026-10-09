@@ -2,7 +2,7 @@
   "ticket": "#34 [PiDock 02a] Desktop 真实任务列表与空态",
   "command": "pnpm --filter @pidock/shell exec electron scripts/electron-issue34-task-inventory-capture.mjs --out docs/evidence/desktop-task-inventory",
   "repoRoot": "/private/tmp/pidock-spec-worktrees/issue-34-36",
-  "revision": "3b08884a3e3f2c5ce7a908c133f9f7bed8aa044c",
+  "revision": "c33a5bb80689e84e95c844f2a7ede2bc76bebc92",
   "trackedFilesDirty": "false",
   "generatedBy": "scripts/electron-issue34-task-inventory-capture.mjs",
   "shots": [
@@ -11,6 +11,9 @@
       "file": "1440x900-empty-root.png",
       "width": 1440,
       "height": 900,
+      "pixelWidth": 2880,
+      "pixelHeight": 1800,
+      "deviceScaleFactor": 2,
       "sha256": "6fdf1f058bf72dd29e6a688970debbcafc46c9ba9d16b999ed7f501af529cea2",
       "bodyText": "π | PiDock | 本 | 本机工作区 | 0 个任务 | 项目总览 | 环境与服务 | Token 用量 | 进行中的任务 | 0 | 已检查的任务根暂无进行中任务。 | 已归档 | 需要处理 | 定时任务 | 能力管理 | 远程访问 | 本机设置 | 模型与 Provider | 本 | 本机工作区 | 真实 Host | 工作区 | / | 项目映射未建立 | / | 项目总览 | 任务根 1/1 就绪 | PROJECT | 项目映射未建立 | 项目管理 | 新建任务 | 本机尚未建立持久项目映射；任务以未归属状态列出，不编造项目归属。 | 进行中的任务 | 0 | 已绑定仓库 | 0 | 普通目录 0 个 | 运行环境 | 未接线 | Host 尚未提供本机环境清单，这里不编造数量。 | 继续工作 | 这个项目还没有进行中任务。 | 项目仓库与目录 | 管理仓库 | 任务根 1/1 就绪 · 全部数据来自本机真实 Host。"
     },
@@ -19,6 +22,9 @@
       "file": "1440x900-corrupt-record.png",
       "width": 1440,
       "height": 900,
+      "pixelWidth": 2880,
+      "pixelHeight": 1800,
+      "deviceScaleFactor": 2,
       "sha256": "6f172d62a16ed5eb3a0caa15b3caa59d161aea15e6b028f4908bd0afc82e0e19",
       "bodyText": "π | PiDock | 本 | 本机工作区 | 0 个任务 | 项目总览 | 环境与服务 | Token 用量 | 进行中的任务 | 0 | 已检查的任务根暂无进行中任务。 | 已归档 | 需要处理 | 定时任务 | 能力管理 | 远程访问 | 本机设置 | 模型与 Provider | 本 | 本机工作区 | 真实 Host | 工作区 | / | 项目映射未建立 | / | 项目总览 | 1 个任务根不可用 | 默认任务根：任务根目录不可读取或任务身份冲突，请检查后重试 | PROJECT | 项目映射未建立 | 项目管理 | 新建任务 | 本机尚未建立持久项目映射；任务以未归属状态列出，不编造项目归属。 | 进行中的任务 | 0 | 已绑定仓库 | 0 | 普通目录 0 个 | 运行环境 | 未接线 | Host 尚未提供本机环境清单，这里不编造数量。 | 继续工作 | 这个项目还没有进行中任务。 | 项目仓库与目录 | 管理仓库 | 任务根 0/1 就绪 · 全部数据来自本机真实 Host。"
     },
@@ -27,6 +33,9 @@
       "file": "1440x900-real-task.png",
       "width": 1440,
       "height": 900,
+      "pixelWidth": 2880,
+      "pixelHeight": 1800,
+      "deviceScaleFactor": 2,
       "sha256": "bf42e65e697b8535eb687b634a49a3384635acc51e7bc372f5e7cb7f8d324cb4",
       "bodyText": "π | PiDock | 本 | 本机工作区 | 1 个任务 | 项目总览 | 环境与服务 | Token 用量 | 进行中的任务 | 1 | 任务 | 对账单详情·本地联调 | main | 2026-09-22 | 已归档 | 需要处理 | 定时任务 | 能力管理 | 远程访问 | 本机设置 | 模型与 Provider | 本 | 本机工作区 | 真实 Host | 工作区 | / | 项目映射未建立 | / | 项目总览 | 任务根 1/1 就绪 | PROJECT | 项目映射未建立 | 项目管理 | 新建任务 | 本机尚未建立持久项目映射；任务以未归属状态列出，不编造项目归属。 | 进行中的任务 | 1 | 已绑定仓库 | 0 | 普通目录 0 个 | 运行环境 | 未接线 | Host 尚未提供本机环境清单，这里不编造数量。 | 继续工作 | 对账单详情·本地联调 | 普通目录 | 2026-09-22 | 项目仓库与目录 | 管理仓库 | 另有 1 个任务尚未归属任何项目，可在「项目管理」里认领或新建任务。 | 任务根 1/1 就绪 · 全部数据来自本机真实 Host。"
     },
@@ -35,6 +44,9 @@
       "file": "1440x900-read-failure.png",
       "width": 1440,
       "height": 900,
+      "pixelWidth": 2880,
+      "pixelHeight": 1800,
+      "deviceScaleFactor": 2,
       "sha256": "9b5aa3bc012c0b2582d40ffa4c48bef67d806a325c852d2aa6ea5b19d2a0a72d",
       "bodyText": "任务记录不可读取，请检查本机任务目录后重试 | 重试"
     }
