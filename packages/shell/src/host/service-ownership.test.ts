@@ -27,6 +27,7 @@ import {
   diskServiceOwnershipLog,
   processGroupMemberPids,
   readProcessPgid,
+  readProcessTable,
   SERVICE_OWNERSHIP_NONCE_ENV,
   serviceOwnershipState,
   verifyServiceOwnershipIdentity,
@@ -680,6 +681,23 @@ describe("#48 service ownership records", () => {
         launch: { pid: 4242, ownershipNonce: "w".repeat(32) },
       });
       await expect(processes.stop("win-test")).rejects.toThrow(/unsupported-platform/);
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+    }
+  });
+
+  it("keeps win32 fail-closed: start refused and the descendant probe unavailable, not empty", async () => {
+    const originalPlatform = process.platform;
+    try {
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+      const dir = taskDir();
+      const processes = driver(dir, { durable: false });
+      // Windows process-tree termination is UNTESTED: no launch is attempted and
+      // no descendant reclaim runs, but the refusal itself is locked down here.
+      await expect(processes.start(plan("win-start", dir))).rejects.toThrow(/unsupported-platform/);
+      // "The probe could not run" must never read as "no descendants exist".
+      expect(readProcessTable()).toBeNull();
+      expect(processGroupMemberPids(4242)).toBeNull();
     } finally {
       Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
     }
