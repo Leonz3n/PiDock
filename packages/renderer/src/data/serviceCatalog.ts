@@ -184,6 +184,46 @@ export function serviceTemplateUpdateFromMain(
     diff: { added: [...diff["added"]], changed, removed: [...diff["removed"]] }, restartNeeded: restarts };
 }
 
+/**
+ * Strict parse of main's `{op:"adoptBinding"}` answer. A review (`adopted:false`)
+ * and a written re-pin (`adopted:true`) share one shape, so the page can never
+ * read a review as an adopted binding; a moved identity, a different version
+ * pair or a malformed restart row fails closed instead of rendering a partial
+ * result.
+ */
+export function serviceBindingAdoptionFromMain(
+  value: unknown, expected: { taskId: string; serviceId: string; from: number; to: number },
+): ServiceBindingAdoptionView | null {
+  if (!object(value) || Object.keys(value).sort().join(",") !== "adopted,from,restartNeeded,serviceId,taskId,to") return null;
+  if (value["taskId"] !== expected.taskId || value["serviceId"] !== expected.serviceId ||
+      value["from"] !== expected.from || value["to"] !== expected.to || value["from"] === value["to"] ||
+      typeof value["adopted"] !== "boolean") return null;
+  const rows = value["restartNeeded"];
+  if (!Array.isArray(rows) || rows.length > 500) return null;
+  const restarts: ServiceTemplateRestartRow[] = [];
+  for (const entry of rows) {
+    if (!object(entry) || Object.keys(entry).sort().join(",") !== "from,name,serviceId,taskId,to" ||
+        typeof entry["taskId"] !== "string" || entry["serviceId"] !== expected.serviceId || typeof entry["name"] !== "string" ||
+        !Number.isSafeInteger(entry["from"]) || (entry["from"] as number) < 1 || entry["from"] === entry["to"] ||
+        !Number.isSafeInteger(entry["to"]) || entry["to"] !== expected.to) return null;
+    if (restarts.some((row) => row.taskId === entry["taskId"])) return null;
+    restarts.push({ taskId: entry["taskId"], serviceId: expected.serviceId, name: entry["name"],
+      from: entry["from"] as number, to: entry["to"] as number });
+  }
+  return { taskId: expected.taskId, serviceId: expected.serviceId, from: expected.from, to: expected.to,
+    adopted: value["adopted"], restartNeeded: restarts };
+}
+
+/** One explicit adoption of an existing revision by one task binding: the moved pin plus the bindings that still need an explicit restart. */
+export interface ServiceBindingAdoptionView {
+  taskId: string;
+  serviceId: string;
+  from: number;
+  to: number;
+  adopted: boolean;
+  restartNeeded: ServiceTemplateRestartRow[];
+}
+
 /** Shared rows as main stores them: the shared layer is fail-closed on secrets, so `secret` is always false. */
 export function sharedRowsForCatalog(rows: readonly ServiceTemplateSharedRow[]): { key: string; value: string; secret: false }[] {
   return rows.map((row) => ({ key: row.key.trim(), value: row.value, secret: false }));

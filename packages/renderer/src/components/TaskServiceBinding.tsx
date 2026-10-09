@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { fileRootsThroughShell, serviceCatalogThroughShell } from "../data/shellBridge";
-import { serviceBindingsFromMain, type ServiceBindingView, type ServiceTemplateView } from "../data/serviceCatalog";
+import { serviceBindingAdoptionFromMain, serviceBindingsFromMain, type ServiceBindingAdoptionView, type ServiceBindingView, type ServiceTemplateView } from "../data/serviceCatalog";
+import { shellFailure } from "../data/taskServices";
 import { workspaceRootsFromHost, type WorkspaceRootView } from "../data/workspaceFiles";
 import { Icon } from "./Icon";
 import { Button } from "./ui/button";
@@ -21,6 +22,8 @@ export function TaskServiceBinding({ template, tasks }: {
   templateWorkdir.current = template.descriptor.workdir ?? "";
   const [refs, setRefs] = useState<{ key: string; envRef: string }[]>([]);
   const [pending, setPending] = useState(false);
+  const [adopting, setAdopting] = useState(false);
+  const [adoption, setAdoption] = useState<ServiceBindingAdoptionView | null>(null);
   const [review, setReview] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [revision, setRevision] = useState(0);
@@ -28,12 +31,15 @@ export function TaskServiceBinding({ template, tasks }: {
   const roots = state?.taskId === taskId ? state.roots : [];
   const selectedRoot = roots.some((root) => root.id === rootId) ? rootId : roots[0]?.id ?? "";
   const bound = state?.taskId === taskId ? state.bindings.find((row) => row.serviceId === template.serviceId) : undefined;
+  const adoptable = bound !== undefined && template.version > bound.templateVersion;
+  const taskName = (id: string) => tasks.find((task) => task.taskId === id)?.name ?? id;
 
   useEffect(() => {
     const token = epoch;
     const request = ++token.current;
     let live = true;
     setState(null); setError(null); setReview(false); setRootId(""); setSubdir(templateWorkdir.current); setSubdirTouched(false); setRefs([]);
+    setAdoption(null); setAdopting(false);
     if (!taskId) { setPending(false); return; }
     setPending(true);
     void Promise.all([fileRootsThroughShell(taskId), serviceCatalogThroughShell({ op: "taskBindings", taskId, projectId: template.projectId })]).then(([files, catalog]) => {
@@ -67,6 +73,41 @@ export function TaskServiceBinding({ template, tasks }: {
     setRefs([]);
   };
 
+  /**
+   * One explicit human adoption of the displayed revision for this binding.
+   * The first call only reviews (main writes nothing); only the confirmed call
+   * re-pins the version, and the page never touches the local program path,
+   * the working subdirectory or the private references. A refusal keeps the
+   * displayed version exactly as it is.
+   */
+  const adopt = async (confirm: boolean) => {
+    if (!bound || !adoptable || pending || adopting || (confirm && !adoption)) return;
+    const from = bound.templateVersion;
+    const to = template.version;
+    const request = epoch.current;
+    setAdopting(true); setError(null);
+    const result = await serviceCatalogThroughShell({ op: "adoptBinding", projectId: template.projectId, taskId,
+      serviceId: template.serviceId, templateVersion: to, confirm });
+    if (epoch.current !== request) return;
+    setAdopting(false);
+    const parsed = result.ok ? serviceBindingAdoptionFromMain(result.payload, { taskId, serviceId: template.serviceId, from, to }) : null;
+    if (!parsed || parsed.adopted !== confirm) {
+      setAdoption(null);
+      setError(result.ok ? "采用回执无法核对，请刷新核对" : shellFailure(result, "采用新版本失败，请重试"));
+      return;
+    }
+    if (!confirm) { setAdoption(parsed); return; }
+    if (JSON.stringify(parsed.restartNeeded) !== JSON.stringify(adoption?.restartNeeded ?? null)) {
+      setAdoption(null);
+      setError("采用结果无法确认，请刷新核对");
+      return;
+    }
+    setAdoption(parsed);
+    setState((current) => current?.taskId === taskId
+      ? { ...current, bindings: current.bindings.map((row) => row.serviceId === parsed.serviceId ? { ...row, templateVersion: parsed.to } : row) }
+      : current);
+  };
+
   return <div className="mt-3 border-t border-line pt-3" aria-label={`${template.descriptor.name}任务绑定`}>
     <div className="flex flex-wrap items-center gap-2">
       <label className="flex min-w-0 items-center gap-2">任务<select aria-label="绑定任务" disabled={pending || !tasks.length} value={taskId} onChange={(event) => setRequestedTask(event.target.value)} className="min-h-8 min-w-0 max-w-[240px] rounded-[4px] border border-line bg-paper px-2"><option value="" hidden>选择任务</option>{tasks.map((task) => <option key={task.taskId} value={task.taskId}>{task.name}</option>)}</select></label>
@@ -75,6 +116,17 @@ export function TaskServiceBinding({ template, tasks }: {
     {error && <p role="alert" className="mt-2 text-[#ad4545]">{error}</p>}
     {pending && <p role="status" className="mt-2 text-muted">正在核对本机绑定</p>}
     {bound && <div className="mt-2 break-words text-muted"><p>已绑定 · v{bound.templateVersion} · {bound.rootId}{bound.subdir ? `/${bound.subdir}` : ""}</p>{!!bound.privateKeys.length && <p>私有变量：{bound.privateKeys.join("、")}</p>}<p>启停入口在任务运行面板（POSIX 启用，其他平台具名拒绝）；绑定工作子目录即启动时的工作目录。</p></div>}
+    {adoptable && !adoption && <div className="mt-2 flex flex-wrap items-center gap-2">
+      <Button type="button" size="sm" variant="outline" disabled={pending || adopting} onClick={() => void adopt(false)}><Icon name="arrow" />核对采用 v{template.version}</Button>
+      <span className="break-words text-muted">当前绑定固定 v{bound.templateVersion}；采用只重指该绑定的模板版本，不会启动、停止或重启进程。</span>
+    </div>}
+    {adoption && !adoption.adopted && <div role="status" className="mt-2 border border-line bg-soft px-2 py-2 break-words">
+      <p>待采用：{template.descriptor.name} · v{adoption.from} → v{adoption.to}（仅该绑定的模板版本）</p>
+      <p className="mt-1">本次只重指固定的模板版本，未启动、停止或重启任何进程；若该服务当前正在运行，它仍运行 v{adoption.from}，需你在运行面板先停止再启动（显式重启）后 v{adoption.to} 才会生效。</p>
+      {adoption.restartNeeded.length > 0 && <p className="mt-1">需显式重启：{adoption.restartNeeded.map((entry) => `任务 ${taskName(entry.taskId)} 的 ${entry.name}（v${entry.from} → v${entry.to}）`).join("；")}</p>}
+      <div className="mt-2 flex justify-end gap-2"><Button type="button" size="sm" variant="ghost" disabled={adopting} onClick={() => setAdoption(null)}>取消</Button><Button type="button" size="sm" disabled={adopting} onClick={() => void adopt(true)}>确认采用 v{adoption.to}</Button></div>
+    </div>}
+    {adoption?.adopted && <p role="status" className="mt-2 break-words text-muted">已采用 v{adoption.to}（原 v{adoption.from}）；仅改动固定的模板版本，未重启任何进程，需在运行面板显式停止再启动后生效。</p>}
     {bound && <SavedServiceConfigPreview key={`${taskId}/${bound.templateVersion}`} projectId={template.projectId} taskId={taskId} serviceId={bound.serviceId} templateVersion={bound.templateVersion} />}
     {!bound && state?.taskId === taskId && <fieldset disabled={pending} className="mt-3 min-w-0">
       <div className="grid gap-3 sm:grid-cols-2">

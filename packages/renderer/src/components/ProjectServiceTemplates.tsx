@@ -345,8 +345,9 @@ export function ProjectServiceTemplates({ projectId, tasks = [], fillFrom = null
         {update.diff.changed.map((entry) => <p key={entry.key}>修改：{entry.key}：{entry.before} → {entry.after}</p>)}
         {!!update.diff.removed.length && <p>移除：{update.diff.removed.join("、")}</p>}
         <p>启动字段差异：{update.descriptorChanged ? "有（程序、参数、端口、运行类型、健康检查或工作目录）" : "无"}</p>
-        <p className="mt-1">已有任务绑定保留原模板版本；本页不会重启服务或让绑定改用新版本 —— 需要先显式采用新版本（该步骤尚未接线）。</p>
+        <p className="mt-1">已有任务绑定保留原模板版本；本页不会重启服务或让绑定改用新版本 —— 需要先显式采用新版本：关闭编辑后，在列表中该服务的「任务绑定」面板里核对并采用（v{editTarget.version} → v{update.version}，需二次确认），本页保存与刷新都不会自动采用。</p>
         {update.restartNeeded.map((entry) => <p key={entry.taskId}>受影响：任务 {taskName(entry.taskId)} 的 {entry.name}（v{entry.from} → v{entry.to}）仍固定 v{entry.from}，需显式采用 v{entry.to} 并重启后才会生效</p>)}
+        <p className="mt-1 text-muted">Agent 侧修改共享模板并生成差异确认仍未接线（SDK 回合工具为空）；本节与「任务绑定」只覆盖人工编辑与人工采用版本。</p>
       </div>}
       {review && !editTarget && <p role="status" className="mt-3 border-t border-line py-2 text-muted">待保存：{draft.name} · {runTypeLabel[draft.runType]} · {draft.shared.map((row) => row.key).join("、") || "无共享变量"}</p>}
       <div className="mt-3 flex justify-end gap-2"><Button type="button" size="sm" variant="ghost" disabled={saving} onClick={close}>取消</Button>

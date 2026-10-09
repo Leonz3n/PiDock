@@ -86,6 +86,29 @@ export interface ServiceTemplateUpdateReview {
   restartNeeded: { taskId: string; serviceId: string; name: string; from: number; to: number }[];
 }
 
+/**
+ * One explicit human adoption of an existing shared revision by one existing
+ * task binding ([PiDock 04] #7). `adopted:false` is the read-only review
+ * (nothing written); `adopted:true` is the written re-pin. The binding keeps
+ * its local identity - working copy root, subdir, local program path and
+ * private reference names - and only its pinned `templateVersion` moves, so a
+ * local path or a secret can never ride an adoption into a shared revision.
+ * `restartNeeded` comes from the shared rules layer: every binding of this
+ * project/service whose pinned version still differs from the adopted one
+ * needs an explicit restart, and nothing here starts, stops or restarts a
+ * process.
+ */
+export interface ServiceBindingAdoption {
+  taskId: string;
+  serviceId: string;
+  /** Revision the binding pins before the adoption. */
+  from: number;
+  /** Existing revision the confirmed adoption re-pins it to. */
+  to: number;
+  adopted: boolean;
+  restartNeeded: { taskId: string; serviceId: string; name: string; from: number; to: number }[];
+}
+
 export interface ServiceCatalogAuthority {
   projectExists(projectId: string): boolean;
   task(taskId: string): { identity: VerifiedTaskIdentity; projectId: string; rootIds: string[] } | null;
@@ -492,6 +515,50 @@ export class ServiceCatalog {
     return restartNeededForTemplateAdopt(pinned.map((row) => ({ id: row.taskId, name: entry.descriptor.name, templateVersion: String(row.templateVersion) })),
       String(entry.version)).map((row) => ({ taskId: row.id, serviceId: entry.serviceId, name: row.name,
       from: Number(row.from), to: Number(row.to) }));
+  }
+  /**
+   * Read-only review of one binding adoption: the revision must exist for this
+   * project/service, the binding must exist, and the version must differ from
+   * the pinned one. Writes nothing, so a caller cannot read a review as an
+   * adopted binding.
+   */
+  reviewTaskBindingAdoption(input: { projectId: string; taskId: string; serviceId: string; templateVersion: number }): ServiceBindingAdoption {
+    return this.bindingAdoption(input, false);
+  }
+  /** The confirmed re-pin. Only `templateVersion` moves; the revision store stays append-only. */
+  adoptTaskBinding(input: { projectId: string; taskId: string; serviceId: string; templateVersion: number }): ServiceBindingAdoption {
+    return this.bindingAdoption(input, true);
+  }
+  /**
+   * Both steps run the same refusals in the same order: no binding, a stored
+   * identity that no longer matches the task, a foreign project, a revision
+   * that does not exist for this project/service, and a version that is
+   * already pinned. The written form re-validates the stored binding through
+   * `binding()`, so an adoption can only ever change the pinned version.
+   */
+  private bindingAdoption(input: { projectId: string; taskId: string; serviceId: string; templateVersion: number }, adopt: boolean): ServiceBindingAdoption {
+    const owner = this.requireTask(input.taskId);
+    const project = projectId(input.projectId);
+    if (owner.projectId !== project) throw new Error("task project changed");
+    const id = serviceId(input.serviceId);
+    const target = version(input.templateVersion);
+    const doc = this.readMachine();
+    const current = doc.bindings.find((entry) => entry.taskId === input.taskId && entry.serviceId === id);
+    if (!current) throw new Error("service binding unavailable");
+    if (current.projectId !== owner.projectId || !sameIdentity(current.identity, owner.identity) || !owner.rootIds.includes(current.rootId)) {
+      throw new Error("stored service task identity changed");
+    }
+    const selected = this.template(project, id, target);
+    if (!selected) throw new Error("template version unavailable");
+    if (current.templateVersion === target) throw new Error("template version already pinned");
+    const restartNeeded = this.restartNeededFor(selected);
+    const adoption: ServiceBindingAdoption = { taskId: input.taskId, serviceId: id, from: current.templateVersion, to: target,
+      adopted: false, restartNeeded };
+    if (!adopt) return adoption;
+    const next = binding({ ...current, templateVersion: target });
+    doc.bindings = doc.bindings.map((entry) => entry.taskId === input.taskId && entry.serviceId === id ? next : entry);
+    writeDocument(this.directory, this.machineFile(), doc, machine);
+    return { ...adoption, adopted: true };
   }
   listTemplates(project: string): ServiceTemplate[] {
     if (!this.authority.projectExists(projectId(project))) throw new Error("project unavailable");

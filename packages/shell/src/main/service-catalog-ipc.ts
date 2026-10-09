@@ -1,4 +1,4 @@
-import type { ServiceCatalog, ServiceTaskBinding, ServiceTemplate, ServiceTemplateUpdateReview } from "./service-catalog.js";
+import type { ServiceBindingAdoption, ServiceCatalog, ServiceTaskBinding, ServiceTemplate, ServiceTemplateUpdateReview } from "./service-catalog.js";
 import { TrustDomainViolation } from "./trust-domain.js";
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -100,10 +100,24 @@ export function parseServiceRunRequest(request: unknown): ServiceRunRequest {
   return { taskId: input["taskId"], projectId: input["projectId"], serviceId: input["serviceId"], action: input["action"] };
 }
 
-/** A shell-only, project-scoped human editing surface. No execution ops. `update` reviews one edit and only writes it when the page confirms. */
+/** One binding adoption as main reviews and writes it: identity, the moved pin and the restart-needed consequence. */
+export interface ServiceBindingAdoptionProjection {
+  taskId: string;
+  serviceId: string;
+  from: number;
+  to: number;
+  adopted: boolean;
+  restartNeeded: { taskId: string; serviceId: string; name: string; from: number; to: number }[];
+}
+function adoptionProjection(row: ServiceBindingAdoption): ServiceBindingAdoptionProjection {
+  return { taskId: row.taskId, serviceId: row.serviceId, from: row.from, to: row.to, adopted: row.adopted,
+    restartNeeded: row.restartNeeded.map((entry) => ({ ...entry })) };
+}
+
+/** A shell-only, project-scoped human editing surface. No execution ops. `update` reviews one edit and only writes it when the page confirms; `adoptBinding` re-pins one existing binding to an existing revision the same two-step way, and starts or stops nothing. */
 export function performServiceCatalogOperation(
-  store: Pick<ServiceCatalog, "listTemplates" | "saveTemplate" | "reviewTemplateUpdate">, request: unknown,
-): ServiceTemplateProjection[] | ServiceTemplateProjection | ServiceTemplateUpdateReview {
+  store: Pick<ServiceCatalog, "listTemplates" | "saveTemplate" | "reviewTemplateUpdate" | "reviewTaskBindingAdoption" | "adoptTaskBinding">, request: unknown,
+): ServiceTemplateProjection[] | ServiceTemplateProjection | ServiceTemplateUpdateReview | ServiceBindingAdoptionProjection {
   if (!record(request) || typeof request["op"] !== "string") {
     throw new TrustDomainViolation("invalid-payload", "invalid service catalog request");
   }
@@ -141,6 +155,27 @@ export function performServiceCatalogOperation(
       throw new TrustDomainViolation("invalid-payload", "service template update could not be confirmed");
     }
     return { ...review, saved: true };
+  }
+  if (request["op"] === "adoptBinding") {
+    const input = shape(request, ["op", "projectId", "taskId", "serviceId", "templateVersion", "confirm"]);
+    if (typeof input["projectId"] !== "string" || typeof input["taskId"] !== "string" || typeof input["serviceId"] !== "string" ||
+        !Number.isSafeInteger(input["templateVersion"]) || (input["templateVersion"] as number) < 1 || typeof input["confirm"] !== "boolean") {
+      throw new TrustDomainViolation("invalid-payload", "invalid service binding adoption");
+    }
+    const adoption = { projectId: input["projectId"], taskId: input["taskId"], serviceId: input["serviceId"],
+      templateVersion: input["templateVersion"] as number };
+    // Same two-step rule as `update`: the review is the rules layer's answer
+    // (the moved pin plus the bindings that still need a restart) and is always
+    // computed before any write, so a request that does not confirm stops here
+    // and can never be read as an adopted binding.
+    const review = store.reviewTaskBindingAdoption(adoption);
+    if (input["confirm"] !== true) return adoptionProjection(review);
+    const written = store.adoptTaskBinding(adoption);
+    if (written.taskId !== review.taskId || written.serviceId !== review.serviceId ||
+        written.from !== review.from || written.to !== review.to) {
+      throw new TrustDomainViolation("invalid-payload", "service binding adoption could not be confirmed");
+    }
+    return adoptionProjection(written);
   }
   throw new TrustDomainViolation("invalid-payload", "unknown service catalog operation");
 }
