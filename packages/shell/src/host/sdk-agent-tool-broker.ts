@@ -40,12 +40,12 @@
 
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, writeFileSync } from "node:fs";
+import { dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import type { PiApproval, PiApprovalScope, PiGateDecision, PiPermission } from "../main/pi-session.js";
 import { AGENT_TOOL_SCOPE } from "../main/pi-session.js";
 import { isCredentialEnvName } from "./explicit-text-provider.js";
-import { normalizeScopePath, pathScopeOverlaps } from "./path-coordination.js";
+import { normalizeScopePath } from "./path-coordination.js";
 import { writeClaimError, type WriteCoordinatorPort } from "./write-coordination.js";
 import {
   sdkAgentToolSpec,
@@ -135,6 +135,71 @@ function pathRefuse(code: string, reason: string): PathRefusal {
   return { ok: false, code, reason };
 }
 
+/** Components followed before a link chain is declared unresolvable. */
+const MAX_LINK_DEPTH = 64;
+
+type SymlinkComponent = { link: string; target: string };
+
+/** The first path component that is a symlink, or `null` once none is left. */
+function findSymlinkComponent(path: string): SymlinkComponent | null {
+  const absolute = resolve(path);
+  const root = parse(absolute).root || sep;
+  let current = root;
+  for (const part of absolute.slice(root.length).split(sep)) {
+    if (part.length === 0) continue;
+    current = join(current, part);
+    let stat: ReturnType<typeof lstatSync>;
+    try {
+      stat = lstatSync(current);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      // "Does not exist yet" is the normal case for a write target; anything
+      // else (e.g. a denied stat) must not be treated as absence.
+      if (code === "ENOENT" || code === "ENOTDIR") return null;
+      throw error;
+    }
+    if (stat.isSymbolicLink()) return { link: current, target: readlinkSync(current) };
+  }
+  return null;
+}
+
+/**
+ * Resolve a path following every symlink component, including a link whose
+ * target does not exist yet, and then complete the result with the host's real
+ * path resolver.
+ *
+ * Why not `resolveRealPath` alone: it resolves the *deepest existing* ancestor,
+ * so a symlink whose target is missing counts as absent, and a write through it
+ * would create the file at the link's target — outside the task. Walking the
+ * components here closes that hole; a chain that never terminates (or an
+ * unreadable component) is refused by name instead of being approximated.
+ */
+function resolveLinkChain(path: string, realpath: (value: string) => string): string {
+  let current = resolve(path);
+  for (let depth = 0; depth < MAX_LINK_DEPTH; depth++) {
+    const found = findSymlinkComponent(current);
+    if (!found) return realpath(current);
+    const target = isAbsolute(found.target) ? found.target : resolve(dirname(found.link), found.target);
+    current = resolve(target, relative(found.link, current));
+  }
+  throw new Error("tool-refused:symlink-depth");
+}
+
+/**
+ * True when `path` is `root` itself or inside it.
+ *
+ * Deliberately directional: `pathScopeOverlaps` is symmetric, so it would also
+ * accept an *ancestor* of the root (the task folder above its own worktree, or
+ * the folder holding every task), which is exactly the escape a write must not
+ * take.
+ */
+function withinScope(path: string, root: string): boolean {
+  const target = normalizeScopePath(path);
+  const scope = normalizeScopePath(root);
+  if (target.length === 0 || scope.length === 0) return false;
+  return target === scope || target.startsWith(`${scope}/`);
+}
+
 /**
  * Resolve one requested path against the task scope. `base` is what a relative
  * path is relative to (the task folder for file tools, the command's working
@@ -158,46 +223,44 @@ export function resolveSdkAgentToolPath(input: {
   const lexical = resolve(input.base, requested);
   let real: string;
   try {
-    real = input.resolveRealPath(lexical);
+    real = resolveLinkChain(lexical, input.resolveRealPath);
   } catch {
     return pathRefuse("tool-refused:invalid-path", `路径无法解析：${requested}`);
   }
+  // Every comparison below is between real paths: the scope's own roots are
+  // resolved the same way (a task under a symlinked temp/home folder keeps its
+  // identity) instead of being trusted as written.
+  const realRoot = (path: string): string => {
+    try {
+      return normalizeScopePath(resolveLinkChain(path, input.resolveRealPath));
+    } catch {
+      return normalizeScopePath(path);
+    }
+  };
   try {
     input.scope.assertProtected(lexical);
+    input.scope.assertProtected(real);
   } catch {
     return pathRefuse("tool-refused:protected-path", "目标位于应用私有目录，任务工具不可访问");
   }
   for (const checkout of input.scope.primaryCheckouts) {
-    let checkoutReal: string;
-    try {
-      checkoutReal = input.resolveRealPath(checkout);
-    } catch {
-      continue;
-    }
-    if (pathScopeOverlaps(real, checkoutReal)) {
+    if (withinScope(real, realRoot(checkout))) {
       return pathRefuse("tool-refused:primary-checkout", `目标位于原始检出目录 ${checkout}，任务工具不会回退到主检出`);
     }
   }
-  const taskDir = normalizeScopePath(input.scope.taskDir);
-  const taskRoot = normalizeScopePath(input.scope.taskRoot);
-  if (taskRoot.length > 0 && pathScopeOverlaps(real, taskRoot) && !pathScopeOverlaps(real, taskDir)) {
-    return pathRefuse("tool-refused:other-task", "目标位于另一个任务目录，任务工具只在本任务范围内工作");
-  }
+  const taskDir = realRoot(input.scope.taskDir);
+  const taskRoot = realRoot(input.scope.taskRoot);
   const normalizedReal = normalizeScopePath(real);
-  if (taskDir.length === 0 || !pathScopeOverlaps(normalizedReal, taskDir)) {
-    return pathRefuse("tool-refused:out-of-scope", `目标不在任务目录 ${input.scope.taskDir} 内`);
+  if (taskDir.length === 0 || !withinScope(normalizedReal, taskDir)) {
+    return taskRoot.length > 0 && withinScope(normalizedReal, taskRoot)
+      ? pathRefuse("tool-refused:other-task", `目标是本任务目录 ${taskDir} 之外的兄弟路径（${normalizedReal}），任务工具只在本任务范围内工作`)
+      : pathRefuse("tool-refused:out-of-scope", `目标不在任务目录 ${taskDir} 内（解析为 ${normalizedReal}）`);
   }
   if (input.mode === "write") {
     const worktrees = input.scope.worktrees
-      .map((worktree) => {
-        try {
-          return normalizeScopePath(input.resolveRealPath(worktree.path));
-        } catch {
-          return "";
-        }
-      })
+      .map((worktree) => realRoot(worktree.path))
       .filter((root) => root.length > 0);
-    if (!worktrees.some((root) => pathScopeOverlaps(normalizedReal, root))) {
+    if (!worktrees.some((root) => withinScope(normalizedReal, root))) {
       return pathRefuse(
         "tool-refused:not-a-worktree",
         input.scope.worktrees.length === 0
@@ -526,7 +589,9 @@ export class SdkAgentToolBroker {
     const parsed = parseArguments(spec.name, args as Record<string, unknown>);
     if (!parsed.ok) return parsed.outcome;
     const scope = this.options.scope();
-    const base = parsed.values.cwd ?? scope.taskDir;
+    // The default working directory of a command is this task's first worktree:
+    // a command line only ever runs inside a worktree of the task it belongs to.
+    const base = parsed.values.cwd ?? scope.worktrees[0]?.path ?? scope.taskDir;
     if (spec.name === "exec.run") {
       // The command's own working directory is the one path argument that
       // changes what every relative token means, so it is resolved first.
@@ -539,7 +604,7 @@ export class SdkAgentToolBroker {
         if (!tokenPath.ok) return refuse(tokenPath.code, `命令参数 ${token} 越界：${tokenPath.reason}`);
       }
       return await this.runWithGate({
-        sessionId, channel: this.options.channel(sessionId), name: spec.name, kind: spec.kind, target: cwdPath.real,
+        sessionId, channel: this.options.channel(sessionId), name: spec.name, kind: spec.kind, target: cwdPath.absolute,
         version: versionOf([spec.name, spec.kind, cwdPath.real, parsed.values.command, base]),
         effect: () => this.executeCommand(parsed.values.command!, cwdPath.real),
       });
@@ -554,13 +619,13 @@ export class SdkAgentToolBroker {
         return refuse("tool-refused:invalid-target", `目标不是可写文件（${fingerprint}）`);
       }
       return await this.runWithGate({
-        sessionId, channel: this.options.channel(sessionId), name: spec.name, kind: spec.kind, target: resolved.real,
+        sessionId, channel: this.options.channel(sessionId), name: spec.name, kind: spec.kind, target: resolved.absolute,
         version: versionOf([spec.name, spec.kind, resolved.real, fingerprint, createHash("sha256").update(parsed.values.content!).digest("hex")]),
         effect: () => this.executeWrite(resolved.real, parsed.values.content!),
       });
     }
     return await this.runWithGate({
-      sessionId, channel: this.options.channel(sessionId), name: spec.name, kind: spec.kind, target: resolved.real,
+      sessionId, channel: this.options.channel(sessionId), name: spec.name, kind: spec.kind, target: resolved.absolute,
       version: versionOf([spec.name, spec.kind, resolved.real]),
       effect: () => this.executeRead(spec.name, resolved.real, parsed.values),
     });
@@ -569,6 +634,11 @@ export class SdkAgentToolBroker {
   /**
    * Gate → (approval) → effect, with the write right held around a mutating
    * tool. Reads never claim it: analysis is not blocked by a writing session.
+   *
+   * `target` is the requested path as the gate knows it (the task-relative path
+   * resolved against the task folder), while `version` binds the real path the
+   * effect will use: the existing gate compares lexically against its own task
+   * folder, and confinement on the real path has already run before this point.
    */
   private async runWithGate(input: {
     sessionId: string;
@@ -712,7 +782,13 @@ export class SdkAgentToolBroker {
 
   private async executeWrite(path: string, content: string): Promise<SdkAgentToolOutcome> {
     // The write target was resolved and confined before the gate; the parent
-    // directory is created inside that same confined path.
+    // directory is created inside that same confined path. The path is resolved
+    // once more immediately before the effect, so a symlink swapped in after the
+    // confirmation cannot redirect this write outside the task.
+    const again = resolveLinkChain(path, this.options.resolveRealPath);
+    if (normalizeScopePath(again) !== normalizeScopePath(path)) {
+      return refuse("tool-refused:invalid-target", "目标路径在确认之后发生变化，本次写入已取消");
+    }
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, content, { encoding: "utf8", mode: 0o644 });
     const bytes = Buffer.byteLength(content, "utf8");
