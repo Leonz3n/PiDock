@@ -256,7 +256,7 @@ describe("#6 privileged prep scan through the real shell/taskOp handler", () => 
     expect(resumed["resumed"]).toBe(true);
 
     const scan = scanOf(route);
-    expect(scan["takenPaths"]).toEqual(
+    expect([...(scan["takenPaths"] as string[])].sort()).toEqual(
       [`${route.taskDir}/task.json`, `${route.taskDir}/${route.repos.frontend}`].sort(),
     );
     // The task's OWN already-created worktree shares `task/<dirId>`, and git
@@ -330,7 +330,7 @@ describe("#6 privileged prep scan through the real shell/taskOp handler", () => 
     });
     expect(hostPayload(appended)["appended"]).toEqual([route.repos.invoice]);
     const scan = scanOf(route);
-    expect(scan["takenPaths"]).toEqual(
+    expect([...(scan["takenPaths"] as string[])].sort()).toEqual(
       [`${route.taskDir}/task.json`, `${route.taskDir}/${route.repos.frontend}`].sort(),
     );
     expect(scan["branchesInUse"]).not.toContain(route.branch);
@@ -374,5 +374,23 @@ describe("#6 privileged prep scan through the real shell/taskOp handler", () => 
     expect(unknown.error).toContain("task-scan-unavailable");
     expect(route.forwarded).toEqual([]);
     expect(route.recordText()).toBe(before);
+  });
+
+  it("refuses by name and writes nothing when the task record is present but unparseable", async () => {
+    const route = await productionRoute({ recorded: ["frontend", "invoice"], created: ["frontend"] });
+    // Corrupt the on-disk record AFTER the route is wired, so a real read/parse
+    // failure (not a missing record) is what main must turn into the named
+    // `task-scan-unavailable` refusal, never a leaked parse error.
+    const recordPath = join(route.taskDir, "task.json");
+    writeFileSync(recordPath, "{ not valid json\n");
+    const before = route.recordText();
+
+    const failed = (await route.invoke("task/resumeAppend", {})) as { ok: boolean; error: string };
+    expect(failed.ok).toBe(false);
+    expect(failed.error).toContain("task-scan-unavailable");
+    // Never a `[]` fallback: the Host was never asked and nothing changed.
+    expect(route.forwarded).toEqual([]);
+    expect(route.recordText()).toBe(before);
+    expect(existsSync(join(route.taskDir, route.repos.invoice))).toBe(false);
   });
 });

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildLinkName,
+  buildRepoChildName,
   checkLinkNameCollisions,
   checkRepoConflicts,
   classifyLinkTarget,
@@ -20,6 +21,11 @@ import {
 // cannot drift apart. Time-boxed S1: rules only, no git execution.
 
 describe("multi-repo selections", () => {
+  it("spells an in-task repo folder as repo- plus the first 8 id hex characters", () => {
+    expect(buildRepoChildName("11111111-2222-3333-4444-555555555555")).toBe("repo-11111111");
+    expect(buildRepoChildName("abcdef12-3456-7890-abcd-ef1234567890")).toBe("repo-abcdef12");
+  });
+
   it("accepts per-repo remote + baseline branches", () => {
     const result = validateRepoSelections([
       { repoDir: "frontend", remote: "origin", remoteBranch: "main", mainCheckoutDir: "/src/frontend" },
