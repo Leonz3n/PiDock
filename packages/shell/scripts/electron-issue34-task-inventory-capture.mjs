@@ -109,14 +109,18 @@ async function run() {
     };
     const capture = async (state) => {
       stage = state;
+      // A fixed content size keeps the PNG name honest (`<contentW>x<contentH>-<state>`).
+      views.window.setContentSize(1440, 900);
       views.window.show();
       views.window.focus();
       await wait(250);
       const size = views.window.getContentBounds();
-      const file = join(output, `1440x900-${state}.png`);
+      if (size.width !== 1440 || size.height !== 900) throw Error(`unexpected content bounds ${JSON.stringify(size)}`);
+      const name = `${size.width}x${size.height}-${state}.png`;
+      const file = join(output, name);
       const png = (await views.shellView.webContents.capturePage()).toPNG();
       writeFileSync(file, png);
-      shots.push({ state, file: `1440x900-${state}.png`, width: size.width, height: size.height,
+      shots.push({ state, file: name, width: size.width, height: size.height,
         sha256: createHash("sha256").update(png).digest("hex"),
         bodyText: (await text()).replace(/\n+/g, " | ").slice(0, 600) });
     };
