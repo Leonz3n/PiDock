@@ -1,0 +1,585 @@
+{
+  "ticket": "#37 box 6 — real-Electron empty/task-page navigation, multi-task selection and view geometry",
+  "command": "packages/shell/node_modules/.bin/electron packages/shell/scripts/electron-issue37-task-page-layout-capture.mjs --out docs/evidence/desktop-task-page",
+  "repoRoot": "/private/tmp/pidock-spec-worktrees/issue-37",
+  "revision": "3699ff2d5cfa564f0a5bdd29099f2f2c0d9c2a1a",
+  "trackedFilesDirty": "false",
+  "generatedBy": "scripts/electron-issue37-task-page-layout-capture.mjs",
+  "configuration": {
+    "envVariable": "PIDOCK_TASK_BROWSER_ORIGINS",
+    "value": {
+      "task-aaaa1111": [
+        "http://127.0.0.1:45137"
+      ],
+      "task-bbbb2222": [
+        "http://127.0.0.1:45137"
+      ]
+    },
+    "disclosure": "Set by the harness as the documented operator configuration; without it production refuses every page/open (fail-closed)."
+  },
+  "seeded": {
+    "taskRoot": "isolated temp dir; real task.json written by the production task-store serializer",
+    "tasks": {
+      "task-aaaa1111": "claimed to Project Adder",
+      "task-bbbb2222": "claimed to Project Adder",
+      "task-cccc3333": "unassigned"
+    },
+    "loopbackPages": {
+      "/a": "real page served by this harness on 127.0.0.1",
+      "/b": "real page served by this harness on 127.0.0.1"
+    }
+  },
+  "driven": {
+    "pageOpenTaskA": "real Desktop 浏览器 panel: fill 任务页面地址 + click 打开任务页面 (renderer -> shell/taskOp -> Host -> main gateway)",
+    "pageOpenTaskB": "main browser gateway page/open (human actor) — no Desktop control switches task while a page covers the window",
+    "pageClose": "main browser gateway page/close (human actor) — the Desktop exposes no close control"
+  },
+  "shots": [
+    {
+      "state": "no-page-selected",
+      "file": "1440x900-no-page-selected.png",
+      "windowBounds": {
+        "width": 1440,
+        "height": 932
+      },
+      "width": 1440,
+      "height": 900,
+      "pixelWidth": 2880,
+      "pixelHeight": 1864,
+      "deviceScaleFactor": 2,
+      "sha256": "ae247343a601954d47c2cf472bf087d2d8ce1e0c34c6f106deac9ba045b3c135",
+      "shellHorizontalOverflow": 0,
+      "geometry": {
+        "contentWidth": 1440,
+        "contentHeight": 900,
+        "shellBounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1440,
+          "height": 900
+        },
+        "shellVisible": true,
+        "pageTaskId": null,
+        "pageUrl": null,
+        "pageBounds": null,
+        "pageVisible": null
+      },
+      "bodyText": "π | PiDock | A | 本机工作区 | 1 个项目 · 3 个任务 | 项目总览 | 环境与服务 | Token 用量 | 进行中的任务 | 3 | 任务 | 对账单详情·任务A | main | 2026-09-22 | 任务 | 运单查询·任务B | main | 2026-09-22 | 任务 | 库存核对·未归属 | main | 2026-09-22 | 已归档 | 需要处理 | 定时任务 | 能力管理 | 远程访问 | 本机设置 | 模型与 Provider | 本 | 本机工作区 | 真实 Host | 工作区 | / | Adder | / | 项目总览 | 任务根 1/1 就绪 | PROJECT | Adder | 项目管理 | 新建任务 | 微服务开发工作台 | 进行中的任务 | 2 | 已绑定仓库 | 1 | 普通目录 0 个 | 运行环境 | 未接线 | Host 尚未提供本机环境清单，这里不编造数量。 | 继续工作 | 对账单详情·任务A | 普通目录 | 2026-09-22 | 运单查询·任务B | 普通目录 | 2026-09-22 | 项目仓库与目录 | 管理仓库 | ▸ | invoice-service | /var/folders/fc/mb2t947124l537p11xktw4kw0000gn/T/pidock-issue37-task-page-capture/sources/invoice-service | 另有 1 个任务尚未归属任何项目，可在「项目管理」里认领或新建任务。 | 任务根 1/1 就绪 · 全部数据来自本机真实 Host。"
+    },
+    {
+      "state": "no-page-selected",
+      "file": "720x560-no-page-selected.png",
+      "windowBounds": {
+        "width": 720,
+        "height": 592
+      },
+      "width": 720,
+      "height": 560,
+      "pixelWidth": 1440,
+      "pixelHeight": 1184,
+      "deviceScaleFactor": 2,
+      "sha256": "21f409d560be349bcd990f271a853c4cb794909d6c6c50fdd9b261772cb37c32",
+      "shellHorizontalOverflow": 0,
+      "geometry": {
+        "contentWidth": 720,
+        "contentHeight": 560,
+        "shellBounds": {
+          "x": 0,
+          "y": 0,
+          "width": 720,
+          "height": 560
+        },
+        "shellVisible": true,
+        "pageTaskId": null,
+        "pageUrl": null,
+        "pageBounds": null,
+        "pageVisible": null
+      },
+      "bodyText": "π | 项目总览 | 环境与服务 | Token 用量 | 已归档 | 需要处理 | 定时任务 | 能力管理 | 远程访问 | 本机设置 | 模型与 Provider | 本 | 工作区 | / | Adder | / | 项目总览 | PROJECT | Adder | 项目管理 | 新建任务 | 微服务开发工作台 | 进行中的任务 | 2 | 已绑定仓库 | 1 | 普通目录 0 个 | 运行环境 | 未接线 | Host 尚未提供本机环境清单，这里不编造数量。 | 继续工作 | 对账单详情·任务A | 普通目录 | 2026-09-22 | 运单查询·任务B | 普通目录 | 2026-09-22 | 项目仓库与目录 | 管理仓库 | ▸ | invoice-service | /var/folders/fc/mb2t947124l537p11xktw4kw0000gn/T/pidock-issue37-task-page-capture/sources/invoice-service | 另有 1 个任务尚未归属任何项目，可在「项目管理」里认领或新建任务。 | 任务根 1/1 就绪 · 全部数据来自本机真实 Host。"
+    },
+    {
+      "state": "no-page-selected",
+      "file": "1440x900-no-page-selected.png",
+      "windowBounds": {
+        "width": 1440,
+        "height": 932
+      },
+      "width": 1440,
+      "height": 900,
+      "pixelWidth": 2880,
+      "pixelHeight": 1864,
+      "deviceScaleFactor": 2,
+      "sha256": "ae247343a601954d47c2cf472bf087d2d8ce1e0c34c6f106deac9ba045b3c135",
+      "shellHorizontalOverflow": 0,
+      "geometry": {
+        "contentWidth": 1440,
+        "contentHeight": 900,
+        "shellBounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1440,
+          "height": 900
+        },
+        "shellVisible": true,
+        "pageTaskId": null,
+        "pageUrl": null,
+        "pageBounds": null,
+        "pageVisible": null
+      },
+      "bodyText": "π | PiDock | A | 本机工作区 | 1 个项目 · 3 个任务 | 项目总览 | 环境与服务 | Token 用量 | 进行中的任务 | 3 | 任务 | 对账单详情·任务A | main | 2026-09-22 | 任务 | 运单查询·任务B | main | 2026-09-22 | 任务 | 库存核对·未归属 | main | 2026-09-22 | 已归档 | 需要处理 | 定时任务 | 能力管理 | 远程访问 | 本机设置 | 模型与 Provider | 本 | 本机工作区 | 真实 Host | 工作区 | / | Adder | / | 项目总览 | 任务根 1/1 就绪 | PROJECT | Adder | 项目管理 | 新建任务 | 微服务开发工作台 | 进行中的任务 | 2 | 已绑定仓库 | 1 | 普通目录 0 个 | 运行环境 | 未接线 | Host 尚未提供本机环境清单，这里不编造数量。 | 继续工作 | 对账单详情·任务A | 普通目录 | 2026-09-22 | 运单查询·任务B | 普通目录 | 2026-09-22 | 项目仓库与目录 | 管理仓库 | ▸ | invoice-service | /var/folders/fc/mb2t947124l537p11xktw4kw0000gn/T/pidock-issue37-task-page-capture/sources/invoice-service | 另有 1 个任务尚未归属任何项目，可在「项目管理」里认领或新建任务。 | 任务根 1/1 就绪 · 全部数据来自本机真实 Host。"
+    },
+    {
+      "state": "browser-tool-open",
+      "file": "1440x900-browser-tool-open.png",
+      "windowBounds": {
+        "width": 1440,
+        "height": 932
+      },
+      "width": 1440,
+      "height": 900,
+      "pixelWidth": 2880,
+      "pixelHeight": 1864,
+      "deviceScaleFactor": 2,
+      "sha256": "940fca0086a2c955920f1b70abe8a47e92077174f3bace5db4ba92c63643c23d",
+      "shellHorizontalOverflow": 0,
+      "geometry": {
+        "contentWidth": 1440,
+        "contentHeight": 900,
+        "shellBounds": {
+          "x": 0,
+          "y": 0,
+          "width": 380,
+          "height": 900
+        },
+        "shellVisible": true,
+        "pageTaskId": "task-aaaa1111",
+        "pageUrl": "http://127.0.0.1:45137/a",
+        "pageBounds": {
+          "x": 380,
+          "y": 0,
+          "width": 1060,
+          "height": 900
+        },
+        "pageVisible": true
+      },
+      "bodyText": "π | 项目总览 | 环境与服务 | Token 用量 | 已归档 | 需要处理 | 定时任务 | 能力管理 | 远程访问 | 本机设置 | 模型与 Provider | 本 | 工作区 | / | Adder | / | 对账单详情·任务A | TASK WORKSPACE | 对账单详情·任务A | task-aaaa1111 | SDK · main | Agent 工具未接线 | 只读 · 无工具 | 未连接 | main | 仅 main 会话 | 浏览器 | 真实 Host | × | 任务页面 · 主进程窗口（渲染层不内嵌页面） | 打开任务页面 | 前进 / 后退 / 刷新 | 未接线 | 主进程窗口已打开 http://127.0.0.1:45137/a | 页面句柄 page-1 · webContents 4 | http://127.0.0.1:45137/a | 读取状态 | 读取证据 | 接管浏览器 | 未接线 | Host 无「页面持有者」状态读取 op；接管状态只由接管/交还应答反映 | 未接线 | Host 无「本任务已打开页面」枚举读取 op，重开面板无法恢复页面句柄 | 未接线 | 任务页面由主进程窗口承载，渲染层不能内嵌（不复制第二套页面） | 未接线 | 页面标记与验证记录入口未接线到生产面板 | 打开与导航按 Host 的任务导航白名单校验；被拒绝时显示 Host 原话。"
+    },
+    {
+      "state": "task-page-open",
+      "file": "1440x900-task-page-open.png",
+      "windowBounds": {
+        "width": 1440,
+        "height": 932
+      },
+      "width": 1440,
+      "height": 900,
+      "pixelWidth": 2880,
+      "pixelHeight": 1864,
+      "deviceScaleFactor": 2,
+      "sha256": "d9564b58993c28b3d1d1befd15eadbe807d722510635964e6796df0f06d58021",
+      "shellHorizontalOverflow": 0,
+      "geometry": {
+        "contentWidth": 1440,
+        "contentHeight": 900,
+        "shellBounds": {
+          "x": 0,
+          "y": 0,
+          "width": 380,
+          "height": 900
+        },
+        "shellVisible": true,
+        "pageTaskId": "task-aaaa1111",
+        "pageUrl": "http://127.0.0.1:45137/a",
+        "pageBounds": {
+          "x": 380,
+          "y": 0,
+          "width": 1060,
+          "height": 900
+        },
+        "pageVisible": true
+      },
+      "bodyText": "π | 项目总览 | 环境与服务 | Token 用量 | 已归档 | 需要处理 | 定时任务 | 能力管理 | 远程访问 | 本机设置 | 模型与 Provider | 本 | 工作区 | / | Adder | / | 对账单详情·任务A | TASK WORKSPACE | 对账单详情·任务A | task-aaaa1111 | SDK · main | Agent 工具未接线 | 只读 · 无工具 | 未连接 | main | 仅 main 会话 | SDK JSONL 已确认历史 · 最近最多 80 条 | sdk-sender-navigated | 重新连接 | 只读 · 无工具 | 推理（未接线） | 未配置模型 | 近期用量未核验"
+    },
+    {
+      "state": "task-page-open",
+      "file": "720x560-task-page-open.png",
+      "windowBounds": {
+        "width": 720,
+        "height": 592
+      },
+      "width": 720,
+      "height": 560,
+      "pixelWidth": 1440,
+      "pixelHeight": 1184,
+      "deviceScaleFactor": 2,
+      "sha256": "ac1231c79b17d492db3138e5a4a3cb33d412e048fd7d36e887c55e53168a8450",
+      "shellHorizontalOverflow": 0,
+      "geometry": {
+        "contentWidth": 720,
+        "contentHeight": 560,
+        "shellBounds": {
+          "x": 0,
+          "y": 0,
+          "width": 280,
+          "height": 560
+        },
+        "shellVisible": true,
+        "pageTaskId": "task-aaaa1111",
+        "pageUrl": "http://127.0.0.1:45137/a",
+        "pageBounds": {
+          "x": 280,
+          "y": 0,
+          "width": 440,
+          "height": 560
+        },
+        "pageVisible": true
+      },
+      "bodyText": "π | 项目总览 | 环境与服务 | Token 用量 | 已归档 | 需要处理 | 定时任务 | 能力管理 | 远程访问 | 本机设置 | 模型与 Provider | 本 | 工作区 | / | Adder | / | 对账单详情·任务A | TASK WORKSPACE | 对账单详情·任务A | task-aaaa1111 | SDK · main | Agent 工具未接线 | 只读 · 无工具 | 未连接 | main | 仅 main 会话 | SDK JSONL 已确认历史 · 最近最多 80 条 | sdk-sender-navigated | 重新连接 | 只读 · 无工具 | 推理（未接线） | 未配置模型 | 近期用量未核验"
+    },
+    {
+      "state": "task-page-open-resized",
+      "file": "1440x900-task-page-open-resized.png",
+      "windowBounds": {
+        "width": 1440,
+        "height": 932
+      },
+      "width": 1440,
+      "height": 900,
+      "pixelWidth": 2880,
+      "pixelHeight": 1864,
+      "deviceScaleFactor": 2,
+      "sha256": "d9564b58993c28b3d1d1befd15eadbe807d722510635964e6796df0f06d58021",
+      "shellHorizontalOverflow": 0,
+      "geometry": {
+        "contentWidth": 1440,
+        "contentHeight": 900,
+        "shellBounds": {
+          "x": 0,
+          "y": 0,
+          "width": 380,
+          "height": 900
+        },
+        "shellVisible": true,
+        "pageTaskId": "task-aaaa1111",
+        "pageUrl": "http://127.0.0.1:45137/a",
+        "pageBounds": {
+          "x": 380,
+          "y": 0,
+          "width": 1060,
+          "height": 900
+        },
+        "pageVisible": true
+      },
+      "bodyText": "π | 项目总览 | 环境与服务 | Token 用量 | 已归档 | 需要处理 | 定时任务 | 能力管理 | 远程访问 | 本机设置 | 模型与 Provider | 本 | 工作区 | / | Adder | / | 对账单详情·任务A | TASK WORKSPACE | 对账单详情·任务A | task-aaaa1111 | SDK · main | Agent 工具未接线 | 只读 · 无工具 | 未连接 | main | 仅 main 会话 | SDK JSONL 已确认历史 · 最近最多 80 条 | sdk-sender-navigated | 重新连接 | 只读 · 无工具 | 推理（未接线） | 未配置模型 | 近期用量未核验"
+    },
+    {
+      "state": "multi-task-page-b-selected",
+      "file": "1440x900-multi-task-page-b-selected.png",
+      "windowBounds": {
+        "width": 1440,
+        "height": 932
+      },
+      "width": 1440,
+      "height": 900,
+      "pixelWidth": 2880,
+      "pixelHeight": 1864,
+      "deviceScaleFactor": 2,
+      "sha256": "0b66e5ba2d25dea2f934390167c6cc49c2d756736e5ba1d48462756b1c1dd192",
+      "shellHorizontalOverflow": 0,
+      "geometry": {
+        "contentWidth": 1440,
+        "contentHeight": 900,
+        "shellBounds": {
+          "x": 0,
+          "y": 0,
+          "width": 380,
+          "height": 900
+        },
+        "shellVisible": true,
+        "pageTaskId": "task-bbbb2222",
+        "pageUrl": "http://127.0.0.1:45137/b",
+        "pageBounds": {
+          "x": 380,
+          "y": 0,
+          "width": 1060,
+          "height": 900
+        },
+        "pageVisible": true
+      },
+      "bodyText": "π | 项目总览 | 环境与服务 | Token 用量 | 已归档 | 需要处理 | 定时任务 | 能力管理 | 远程访问 | 本机设置 | 模型与 Provider | 本 | 工作区 | / | Adder | / | 对账单详情·任务A | TASK WORKSPACE | 对账单详情·任务A | task-aaaa1111 | SDK · main | Agent 工具未接线 | 只读 · 无工具 | 未连接 | main | 仅 main 会话 | SDK JSONL 已确认历史 · 最近最多 80 条 | sdk-sender-navigated | 重新连接 | 只读 · 无工具 | 推理（未接线） | 未配置模型 | 近期用量未核验"
+    },
+    {
+      "state": "multi-task-page-b-selected",
+      "file": "720x560-multi-task-page-b-selected.png",
+      "windowBounds": {
+        "width": 720,
+        "height": 592
+      },
+      "width": 720,
+      "height": 560,
+      "pixelWidth": 1440,
+      "pixelHeight": 1184,
+      "deviceScaleFactor": 2,
+      "sha256": "fdbc8c944628df61c72c2f64cba70343c8299177ed8f28086ceb51b07b8219f4",
+      "shellHorizontalOverflow": 0,
+      "geometry": {
+        "contentWidth": 720,
+        "contentHeight": 560,
+        "shellBounds": {
+          "x": 0,
+          "y": 0,
+          "width": 280,
+          "height": 560
+        },
+        "shellVisible": true,
+        "pageTaskId": "task-bbbb2222",
+        "pageUrl": "http://127.0.0.1:45137/b",
+        "pageBounds": {
+          "x": 280,
+          "y": 0,
+          "width": 440,
+          "height": 560
+        },
+        "pageVisible": true
+      },
+      "bodyText": "π | 项目总览 | 环境与服务 | Token 用量 | 已归档 | 需要处理 | 定时任务 | 能力管理 | 远程访问 | 本机设置 | 模型与 Provider | 本 | 工作区 | / | Adder | / | 对账单详情·任务A | TASK WORKSPACE | 对账单详情·任务A | task-aaaa1111 | SDK · main | Agent 工具未接线 | 只读 · 无工具 | 未连接 | main | 仅 main 会话 | SDK JSONL 已确认历史 · 最近最多 80 条 | sdk-sender-navigated | 重新连接 | 只读 · 无工具 | 推理（未接线） | 未配置模型 | 近期用量未核验"
+    },
+    {
+      "state": "multi-task-page-b-selected",
+      "file": "1440x900-multi-task-page-b-selected.png",
+      "windowBounds": {
+        "width": 1440,
+        "height": 932
+      },
+      "width": 1440,
+      "height": 900,
+      "pixelWidth": 2880,
+      "pixelHeight": 1864,
+      "deviceScaleFactor": 2,
+      "sha256": "0b66e5ba2d25dea2f934390167c6cc49c2d756736e5ba1d48462756b1c1dd192",
+      "shellHorizontalOverflow": 0,
+      "geometry": {
+        "contentWidth": 1440,
+        "contentHeight": 900,
+        "shellBounds": {
+          "x": 0,
+          "y": 0,
+          "width": 380,
+          "height": 900
+        },
+        "shellVisible": true,
+        "pageTaskId": "task-bbbb2222",
+        "pageUrl": "http://127.0.0.1:45137/b",
+        "pageBounds": {
+          "x": 380,
+          "y": 0,
+          "width": 1060,
+          "height": 900
+        },
+        "pageVisible": true
+      },
+      "bodyText": "π | 项目总览 | 环境与服务 | Token 用量 | 已归档 | 需要处理 | 定时任务 | 能力管理 | 远程访问 | 本机设置 | 模型与 Provider | 本 | 工作区 | / | Adder | / | 对账单详情·任务A | TASK WORKSPACE | 对账单详情·任务A | task-aaaa1111 | SDK · main | Agent 工具未接线 | 只读 · 无工具 | 未连接 | main | 仅 main 会话 | SDK JSONL 已确认历史 · 最近最多 80 条 | sdk-sender-navigated | 重新连接 | 只读 · 无工具 | 推理（未接线） | 未配置模型 | 近期用量未核验"
+    },
+    {
+      "state": "multi-task-page-a-restored",
+      "file": "1440x900-multi-task-page-a-restored.png",
+      "windowBounds": {
+        "width": 1440,
+        "height": 932
+      },
+      "width": 1440,
+      "height": 900,
+      "pixelWidth": 2880,
+      "pixelHeight": 1864,
+      "deviceScaleFactor": 2,
+      "sha256": "d9564b58993c28b3d1d1befd15eadbe807d722510635964e6796df0f06d58021",
+      "shellHorizontalOverflow": 0,
+      "geometry": {
+        "contentWidth": 1440,
+        "contentHeight": 900,
+        "shellBounds": {
+          "x": 0,
+          "y": 0,
+          "width": 380,
+          "height": 900
+        },
+        "shellVisible": true,
+        "pageTaskId": "task-aaaa1111",
+        "pageUrl": "http://127.0.0.1:45137/a",
+        "pageBounds": {
+          "x": 380,
+          "y": 0,
+          "width": 1060,
+          "height": 900
+        },
+        "pageVisible": true
+      },
+      "bodyText": "π | 项目总览 | 环境与服务 | Token 用量 | 已归档 | 需要处理 | 定时任务 | 能力管理 | 远程访问 | 本机设置 | 模型与 Provider | 本 | 工作区 | / | Adder | / | 对账单详情·任务A | TASK WORKSPACE | 对账单详情·任务A | task-aaaa1111 | SDK · main | Agent 工具未接线 | 只读 · 无工具 | 未连接 | main | 仅 main 会话 | SDK JSONL 已确认历史 · 最近最多 80 条 | sdk-sender-navigated | 重新连接 | 只读 · 无工具 | 推理（未接线） | 未配置模型 | 近期用量未核验"
+    },
+    {
+      "state": "multi-task-page-a-restored",
+      "file": "720x560-multi-task-page-a-restored.png",
+      "windowBounds": {
+        "width": 720,
+        "height": 592
+      },
+      "width": 720,
+      "height": 560,
+      "pixelWidth": 1440,
+      "pixelHeight": 1184,
+      "deviceScaleFactor": 2,
+      "sha256": "ac1231c79b17d492db3138e5a4a3cb33d412e048fd7d36e887c55e53168a8450",
+      "shellHorizontalOverflow": 0,
+      "geometry": {
+        "contentWidth": 720,
+        "contentHeight": 560,
+        "shellBounds": {
+          "x": 0,
+          "y": 0,
+          "width": 280,
+          "height": 560
+        },
+        "shellVisible": true,
+        "pageTaskId": "task-aaaa1111",
+        "pageUrl": "http://127.0.0.1:45137/a",
+        "pageBounds": {
+          "x": 280,
+          "y": 0,
+          "width": 440,
+          "height": 560
+        },
+        "pageVisible": true
+      },
+      "bodyText": "π | 项目总览 | 环境与服务 | Token 用量 | 已归档 | 需要处理 | 定时任务 | 能力管理 | 远程访问 | 本机设置 | 模型与 Provider | 本 | 工作区 | / | Adder | / | 对账单详情·任务A | TASK WORKSPACE | 对账单详情·任务A | task-aaaa1111 | SDK · main | Agent 工具未接线 | 只读 · 无工具 | 未连接 | main | 仅 main 会话 | SDK JSONL 已确认历史 · 最近最多 80 条 | sdk-sender-navigated | 重新连接 | 只读 · 无工具 | 推理（未接线） | 未配置模型 | 近期用量未核验"
+    },
+    {
+      "state": "multi-task-page-a-restored",
+      "file": "1440x900-multi-task-page-a-restored.png",
+      "windowBounds": {
+        "width": 1440,
+        "height": 932
+      },
+      "width": 1440,
+      "height": 900,
+      "pixelWidth": 2880,
+      "pixelHeight": 1864,
+      "deviceScaleFactor": 2,
+      "sha256": "d9564b58993c28b3d1d1befd15eadbe807d722510635964e6796df0f06d58021",
+      "shellHorizontalOverflow": 0,
+      "geometry": {
+        "contentWidth": 1440,
+        "contentHeight": 900,
+        "shellBounds": {
+          "x": 0,
+          "y": 0,
+          "width": 380,
+          "height": 900
+        },
+        "shellVisible": true,
+        "pageTaskId": "task-aaaa1111",
+        "pageUrl": "http://127.0.0.1:45137/a",
+        "pageBounds": {
+          "x": 380,
+          "y": 0,
+          "width": 1060,
+          "height": 900
+        },
+        "pageVisible": true
+      },
+      "bodyText": "π | 项目总览 | 环境与服务 | Token 用量 | 已归档 | 需要处理 | 定时任务 | 能力管理 | 远程访问 | 本机设置 | 模型与 Provider | 本 | 工作区 | / | Adder | / | 对账单详情·任务A | TASK WORKSPACE | 对账单详情·任务A | task-aaaa1111 | SDK · main | Agent 工具未接线 | 只读 · 无工具 | 未连接 | main | 仅 main 会话 | SDK JSONL 已确认历史 · 最近最多 80 条 | sdk-sender-navigated | 重新连接 | 只读 · 无工具 | 推理（未接线） | 未配置模型 | 近期用量未核验"
+    },
+    {
+      "state": "last-page-closed",
+      "file": "1440x900-last-page-closed.png",
+      "windowBounds": {
+        "width": 1440,
+        "height": 932
+      },
+      "width": 1440,
+      "height": 900,
+      "pixelWidth": 2880,
+      "pixelHeight": 1864,
+      "deviceScaleFactor": 2,
+      "sha256": "ee0f2952343e2157fd3de88b3615d05a5ed9b9ce6dc11c428d0aad9137dbf99d",
+      "shellHorizontalOverflow": 0,
+      "geometry": {
+        "contentWidth": 1440,
+        "contentHeight": 900,
+        "shellBounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1440,
+          "height": 900
+        },
+        "shellVisible": true,
+        "pageTaskId": null,
+        "pageUrl": null,
+        "pageBounds": null,
+        "pageVisible": null
+      },
+      "bodyText": "π | PiDock | A | 本机工作区 | 1 个项目 · 3 个任务 | 项目总览 | 环境与服务 | Token 用量 | 进行中的任务 | 3 | 任务 | 对账单详情·任务A | main | 2026-09-22 | 任务 | 运单查询·任务B | main | 2026-09-22 | 任务 | 库存核对·未归属 | main | 2026-09-22 | 已归档 | 需要处理 | 定时任务 | 能力管理 | 远程访问 | 本机设置 | 模型与 Provider | 本 | 本机工作区 | 真实 Host | 工作区 | / | Adder | / | 对账单详情·任务A | 任务根 1/1 就绪 | TASK WORKSPACE | 对账单详情·任务A | task-aaaa1111 | SDK · main | Agent 工具未接线 | 只读 · 无工具 | 未连接 | 核验 | main | 仅 main 会话 | SDK JSONL 已确认历史 · 最近最多 80 条 | sdk-sender-navigated | 重新连接 | 只读 · 无工具 | 推理（未接线） | 未配置模型 | 近期用量未核验"
+    },
+    {
+      "state": "last-page-closed",
+      "file": "720x560-last-page-closed.png",
+      "windowBounds": {
+        "width": 720,
+        "height": 592
+      },
+      "width": 720,
+      "height": 560,
+      "pixelWidth": 1440,
+      "pixelHeight": 1184,
+      "deviceScaleFactor": 2,
+      "sha256": "9837c7d3353463360f10ba3db9d53bca41488391cae3549c8b71382c130d4ca4",
+      "shellHorizontalOverflow": 0,
+      "geometry": {
+        "contentWidth": 720,
+        "contentHeight": 560,
+        "shellBounds": {
+          "x": 0,
+          "y": 0,
+          "width": 720,
+          "height": 560
+        },
+        "shellVisible": true,
+        "pageTaskId": null,
+        "pageUrl": null,
+        "pageBounds": null,
+        "pageVisible": null
+      },
+      "bodyText": "π | 项目总览 | 环境与服务 | Token 用量 | 已归档 | 需要处理 | 定时任务 | 能力管理 | 远程访问 | 本机设置 | 模型与 Provider | 本 | 工作区 | / | Adder | / | 对账单详情·任务A | TASK WORKSPACE | 对账单详情·任务A | task-aaaa1111 | SDK · main | Agent 工具未接线 | 只读 · 无工具 | 未连接 | main | 仅 main 会话 | SDK JSONL 已确认历史 · 最近最多 80 条 | sdk-sender-navigated | 重新连接 | 只读 · 无工具 | 推理（未接线） | 未配置模型 | 近期用量未核验"
+    },
+    {
+      "state": "last-page-closed",
+      "file": "1440x900-last-page-closed.png",
+      "windowBounds": {
+        "width": 1440,
+        "height": 932
+      },
+      "width": 1440,
+      "height": 900,
+      "pixelWidth": 2880,
+      "pixelHeight": 1864,
+      "deviceScaleFactor": 2,
+      "sha256": "ee0f2952343e2157fd3de88b3615d05a5ed9b9ce6dc11c428d0aad9137dbf99d",
+      "shellHorizontalOverflow": 0,
+      "geometry": {
+        "contentWidth": 1440,
+        "contentHeight": 900,
+        "shellBounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1440,
+          "height": 900
+        },
+        "shellVisible": true,
+        "pageTaskId": null,
+        "pageUrl": null,
+        "pageBounds": null,
+        "pageVisible": null
+      },
+      "bodyText": "π | PiDock | A | 本机工作区 | 1 个项目 · 3 个任务 | 项目总览 | 环境与服务 | Token 用量 | 进行中的任务 | 3 | 任务 | 对账单详情·任务A | main | 2026-09-22 | 任务 | 运单查询·任务B | main | 2026-09-22 | 任务 | 库存核对·未归属 | main | 2026-09-22 | 已归档 | 需要处理 | 定时任务 | 能力管理 | 远程访问 | 本机设置 | 模型与 Provider | 本 | 本机工作区 | 真实 Host | 工作区 | / | Adder | / | 对账单详情·任务A | 任务根 1/1 就绪 | TASK WORKSPACE | 对账单详情·任务A | task-aaaa1111 | SDK · main | Agent 工具未接线 | 只读 · 无工具 | 未连接 | 核验 | main | 仅 main 会话 | SDK JSONL 已确认历史 · 最近最多 80 条 | sdk-sender-navigated | 重新连接 | 只读 · 无工具 | 推理（未接线） | 未配置模型 | 近期用量未核验"
+    }
+  ]
+}
