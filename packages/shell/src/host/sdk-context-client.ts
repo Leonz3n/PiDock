@@ -25,7 +25,20 @@ import { Worker } from "node:worker_threads";
 import { buildSdkContextEnv, type SdkContextTaskBinding } from "./sdk-context-env.js";
 import { validateExplicitTextProvider, type ExplicitTextProvider } from "./explicit-text-provider.js";
 import type { SdkTextEvent, SdkTextResult } from "./sdk-text-kernel.js";
+import type { SdkAgentToolOutcome, SdkAgentToolRequest } from "./sdk-agent-tool-contract.js";
 import type { SdkContextMessage, SdkContextRequestPayload } from "./sdk-context-worker.js";
+
+/**
+ * The Host side of the Agent tool bridge ([PiDock 02m] #5). The model context
+ * worker holds no filesystem or process capability; every tool call it declares
+ * arrives here and is executed by the Host broker, which is where the
+ * confinement, the permission gate and the write lock live.
+ *
+ * Structural: `sdk-agent-tool-broker.ts` satisfies it.
+ */
+export interface SdkToolHost {
+  call(sessionId: string, request: SdkAgentToolRequest): Promise<SdkAgentToolOutcome>;
+}
 
 export interface SdkTextKernelPort {
   open(sessionId: string): Promise<{ sdkId: string; file: string; tools: string[] }>;
@@ -54,6 +67,11 @@ export interface SdkContextOptions {
   credential: string;
   /** Workspace id for log correlation only. */
   workspaceId?: string;
+  /**
+   * Where the Agent's tool calls are executed and decided. Absent = the worker
+   * still declares no tools, so nothing can execute (fail closed).
+   */
+  toolHost?: SdkToolHost;
   /** Injected for tests; defaults to the compiled worker next to this file. */
   spawn?: (env: Record<string, string>, workerData: unknown) => SdkContextWorkerLike;
   /** Bound on the worker's bootstrap reply; a silent worker must not hang a turn. */
@@ -140,6 +158,9 @@ export class SdkContextClient implements SdkTextKernelPort {
     if (this.dead || this.disposed) return;
     if (typeof message !== "object" || message === null || Array.isArray(message)) return this.poison("sdk-context-protocol-invalid");
     const record = message as Record<string, unknown>;
+    // A tool request is worker-initiated and outside the caller/reply table: it
+    // is answered asynchronously by the Host tool broker.
+    if (record["kind"] === "tool") return this.handleToolRequest(record);
     const id = record["id"];
     if (typeof id !== "string" || !this.pending.has(id)) return this.poison("sdk-context-protocol-invalid");
     const entry = this.pending.get(id)!;
@@ -158,6 +179,38 @@ export class SdkContextClient implements SdkTextKernelPort {
       return;
     }
     entry.reject(new Error(typeof record["error"] === "string" ? record["error"] : "sdk-context-failed"));
+  }
+
+  /**
+   * Execute one worker-declared tool call through the Host broker and answer it.
+   * A malformed request, a missing broker, or a broker failure all become a
+   * refusal the model reads, so a tool can never fall back to a local effect.
+   */
+  private handleToolRequest(record: Record<string, unknown>): void {
+    const id = record["id"];
+    const sessionId = record["sessionId"];
+    const call = record["call"];
+    const refuse = (code: string, reason: string): void => {
+      const outcome = { outcome: "refused" as const, code, text: `${code}: ${reason}` };
+      try { if (typeof id === "string") this.worker?.postMessage({ id, kind: "tool-reply", outcome }); } catch { /* the worker is gone */ }
+    };
+    if (typeof id !== "string" || !/^t\d{1,9}$/.test(id)) return this.poison("sdk-context-protocol-invalid");
+    if (typeof sessionId !== "string" || typeof call !== "object" || call === null || Array.isArray(call)) {
+      return refuse("tool-refused:invalid-request", "工具请求格式无效");
+    }
+    const broker = this.options.toolHost;
+    if (!broker) return refuse("tool-refused:tool-host-unavailable", "工具执行宿主未接入");
+    if (this.closing || this.dead || this.disposed) return refuse("tool-refused:task-host-closing", "模型上下文正在关闭");
+    void (async () => {
+      let outcome: SdkAgentToolOutcome;
+      try {
+        outcome = await broker.call(sessionId, call as SdkAgentToolRequest);
+      } catch {
+        refuse("tool-refused:tool-host-failed", "工具执行宿主拒绝处理该调用");
+        return;
+      }
+      try { this.worker?.postMessage({ id, kind: "tool-reply", outcome } satisfies SdkContextMessage); } catch { /* the worker is gone */ }
+    })();
   }
 
   /**

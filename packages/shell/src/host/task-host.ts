@@ -134,6 +134,7 @@ import { TaskSchedules, type SaveScheduleInput, type SaveScheduleResult, type Sc
 import { PiSdkTextKernel } from "./sdk-text-kernel.js";
 import { SdkTextKernelRouter } from "./sdk-kernel-router.js";
 import { SdkContextClient } from "./sdk-context-client.js";
+import { SdkAgentToolBroker, derivedPrimaryCheckouts, type SdkAgentToolScope } from "./sdk-agent-tool-broker.js";
 import type { ExplicitTextProvider } from "./explicit-text-provider.js";
 import {
   PI_USAGE_GROUP_LABELS,
@@ -607,6 +608,47 @@ export class TaskWorkspaceHost {
   private sdkShutdown: Promise<void> | undefined;
   private sdkConfiguring: Promise<{ generation: number }> | undefined;
   private sdkDisposalFailed = false;
+  /**
+   * [PiDock 02m] #5: the only code that executes an Agent tool. Created lazily
+   * so it reads the constructor-assigned task identity, and handed to the
+   * isolated model context, so every tool call the Agent makes is decided and
+   * performed here (see the module comment of `sdk-agent-tool-broker.ts`).
+   */
+  private sdkToolBroker: SdkAgentToolBroker | undefined;
+  private get sdkTools(): SdkAgentToolBroker {
+    return (this.sdkToolBroker ??= new SdkAgentToolBroker({
+      taskId: this.taskId,
+      sessionKnown: (sessionId) => this.channels.has(sessionId) || this.store.readSession(this.taskDir, sessionId) !== null,
+      channel: (sessionId) => this.openSession(sessionId),
+      persist: (sessionId) => { this.store.writeSession(this.taskDir, this.openSession(sessionId).snapshot()); },
+      write: {
+        claimWrite: (sessionId, permission, intent) => this.claimWrite(sessionId, permission, intent),
+        releaseWrite: (claimId) => this.releaseWrite(claimId),
+      },
+      scope: () => this.sdkToolScope(),
+      resolveRealPath: (path) => this.resolveRealPath(path),
+      closing: () => this.executionClosing || this.sdkDisposalFailed,
+    }));
+  }
+
+  /**
+   * The tool boundary of this task ([PiDock 02m] #5): one worktree per repo of
+   * the task record, never the original checkout. The primary checkout is not
+   * persisted on the record, so it is derived from each worktree's own
+   * `gitdir:` pointer (`derivedPrimaryCheckouts`) instead of assumed.
+   */
+  private sdkToolScope(): SdkAgentToolScope {
+    const record = this.store.readTask(this.taskDir);
+    const taskDir = this.taskDir.replace(/[\\/]+$/, "");
+    const worktrees = (record?.repos ?? []).map((repoDir) => ({ repoDir, path: `${taskDir}/${repoDir}` }));
+    return {
+      taskDir: this.taskDir,
+      taskRoot: parentDirOf(this.taskDir),
+      worktrees,
+      primaryCheckouts: derivedPrimaryCheckouts(worktrees.map((worktree) => worktree.path)),
+      assertProtected: (path) => { this.protection?.assert(path); },
+    };
+  }
 
   /**
    * #43/#44 Host-internal seam. Until #46 configures an explicit Provider the
@@ -615,7 +657,12 @@ export class TaskWorkspaceHost {
    */
   sdkTextKernel(): SdkTextKernelRouter {
     this.sdkText ??= this.sdkKernelFactory(this.taskId, this.taskDir);
-    return this.sdkRouter ??= new SdkTextKernelRouter(this.sdkText, this.sdkShutdown || this.sdkDisposalFailed ? undefined : this.sdkContext ?? undefined, this.executions);
+    return this.sdkRouter ??= new SdkTextKernelRouter(
+      this.sdkText,
+      this.sdkShutdown || this.sdkDisposalFailed ? undefined : this.sdkContext ?? undefined,
+      this.executions,
+      (sessionId) => this.adoptModelSession(sessionId),
+    );
   }
 
   /**
@@ -651,6 +698,9 @@ export class TaskWorkspaceHost {
         task: { taskId: this.taskId, taskDir: this.taskDir },
         config: provider.config,
         credential: provider.credential,
+        // [PiDock 02m] #5: the Agent's tool calls are executed and decided by
+        // this Host, never inside the isolated model context.
+        toolHost: this.sdkTools,
         ...(provider.workspaceId === undefined ? {} : { workspaceId: provider.workspaceId }),
       });
       try { await context.open("main"); }
@@ -662,6 +712,17 @@ export class TaskWorkspaceHost {
       this.sdkContext = context;
     }
     return { generation: this.sdkProviderGeneration };
+  }
+
+  /**
+   * [PiDock 02m] #5: the Host adopts the session a model turn belongs to before
+   * the turn starts, so its permission tier (persisted, `default` for a new
+   * session) is real before the Agent's first tool runs and the session is
+   * addressable by the tool broker.
+   */
+  adoptModelSession(sessionId: string): void {
+    if (this.executionClosing) throw Error("task-host-closing");
+    this.openSession(sessionId);
   }
 
   /** True when this task currently has an isolated model context. */
@@ -1170,9 +1231,13 @@ export class TaskWorkspaceHost {
   private executionClosing = false;
   private disposal: Promise<void> | undefined;
 
-  /** Freeze new execution/claims, while allowing admitted work to settle. */
+  /**
+   * Freeze new execution/claims, while allowing admitted work to settle.
+   */
   sealExecution(): void {
     this.executionClosing = true;
+    // No tool call may stay parked on an approval or start an effect after this.
+    this.sdkToolBroker?.close();
     this.sdkContext?.seal();
     for (const channel of this.channels.values()) channel.sealExecution();
   }
@@ -2499,6 +2564,9 @@ export class TaskWorkspaceHost {
       this.refuseSettledApproval(sessionId, approvalId);
     }
     const call = channel.approve(approvalId);
+    // [PiDock 02m] #5: a real Agent tool call is parked on this confirmation; it
+    // re-checks the approval itself immediately before its effect.
+    this.sdkToolBroker?.settleApproval(approvalId, "approved");
     this.settleApprovalClaim(sessionId);
     this.store.writeSession(this.taskDir, channel.snapshot());
     this.syncUsageLedger();
@@ -2528,6 +2596,7 @@ export class TaskWorkspaceHost {
   reject(sessionId: string, approvalId: string): void {
     const channel = this.openSession(sessionId);
     channel.reject(approvalId);
+    this.sdkToolBroker?.settleApproval(approvalId, "rejected");
     this.executions.rejectApproval(sessionId, approvalId);
     this.settleApprovalClaim(sessionId);
     this.store.writeSession(this.taskDir, channel.snapshot());
@@ -2576,6 +2645,8 @@ export class TaskWorkspaceHost {
     if (this.executionClosing && this.unconfirmedWriteClaims(sessionId)) throw Error("task-write-claims-unconfirmed");
     const channel = this.openSession(sessionId);
     channel.cancel();
+    // A tool call parked on this session's confirmation stops with a refusal.
+    this.sdkToolBroker?.cancelSession(sessionId);
     this.approvalClaims.delete(sessionId);
     // 盒子 6：停止覆盖派生执行（子进程/子 Agent），但不回滚已完成的步骤与尝试。
     const derived = this.write.snapshot().derived.filter((entry) => entry.sessionId === sessionId).map((entry) => entry.resourceId);

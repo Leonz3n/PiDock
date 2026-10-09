@@ -33,6 +33,12 @@ export class SdkTextKernelRouter implements SdkTurnKernelPort {
     /** Isolated model context, present only when a Provider is configured. */
     private context?: SdkContextClient,
     private readonly executions?: TaskExecutionLedger,
+    /**
+     * [PiDock 02m] #5: called with the session of an adopted model operation so
+     * the Host materializes that session (with its persisted permission tier)
+     * before the Agent's tools can run through the tool broker.
+     */
+    private readonly onModelSession?: (sessionId: string) => void,
   ) {}
 
   /** True when model calls are possible (a configured, isolated context exists). */
@@ -50,10 +56,13 @@ export class SdkTextKernelRouter implements SdkTurnKernelPort {
 
   async open(sessionId: string) {
     this.executions?.assertSdkDispatchReady();
-    return this.target().open(sessionId);
+    const opened = await this.target().open(sessionId);
+    this.onModelSession?.(sessionId);
+    return opened;
   }
 
   async prompt(sessionId: string, text: string, deliver?: (event: SdkTextEvent) => void, issuedTurnId?: string): Promise<SdkTextResult> {
+    this.onModelSession?.(sessionId);
     if (!this.executions || !this.context) return this.target().prompt(sessionId, text, deliver, issuedTurnId);
     if (!issuedTurnId) throw Error("invalid-sdk-turn-identity");
     this.executions.beginSdkTurn(sessionId, issuedTurnId);
