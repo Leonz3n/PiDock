@@ -172,9 +172,13 @@ export class TaskServiceProcesses {
     // this instant; it does not eliminate the window and cannot see a swap that
     // was reverted before this read (see the class notes).
     const reResolved = (() => { try { return realpathSync(plan.cwd); } catch { return null; } })();
-    const withinAgain = reResolved === null ? null : relative(this.taskDir, reResolved);
-    const escapesAgain = reResolved === null || withinAgain === ".." || withinAgain!.startsWith(`..${sep}`) || isAbsolute(withinAgain);
-    const identityAgain = reResolved === null ? null : directoryIdentity(reResolved);
+    let escapesAgain = true;
+    let identityAgain: DirectoryIdentity | null = null;
+    if (reResolved !== null) {
+      const withinAgain = relative(this.taskDir, reResolved);
+      escapesAgain = withinAgain === ".." || withinAgain.startsWith(`..${sep}`) || isAbsolute(withinAgain);
+      identityAgain = directoryIdentity(reResolved);
+    }
     if (escapesAgain || identityAgain === null || identityAgain.dev !== checkedIdentity.dev || identityAgain.ino !== checkedIdentity.ino) {
       // Terminate the just-spawned child before refusing: a rejected launch must
       // not leave a live process behind. Its identity is the handle we hold.
