@@ -28,7 +28,9 @@ import { InstalledServiceHostAuthority } from "../main/service-host-binding.js";
 import { PerTaskHostRegistry, runTaskService } from "../main/runtime.js";
 import { ServiceCatalog, type ServiceCatalogAuthority } from "../main/service-catalog.js";
 import { diskTaskStore } from "./task-host.js";
-import { buildTaskDiskRecord } from "./task-store.js";
+import { buildTaskDiskRecord, readServiceOwnershipOnDisk } from "./task-store.js";
+import { SERVICE_STOP_CONFIRM_MS, SERVICE_STOP_GRACE_MS, TaskServiceProcesses } from "./service-processes.js";
+import { diskServiceOwnershipLog, verifyServiceOwnershipIdentity } from "./service-ownership.js";
 
 const cleanups: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
@@ -306,12 +308,53 @@ describe.skipIf(process.platform === "win32")("#7 catalog-driven service executi
     expect(report).toMatchObject({ ok: true, tasks: [{ taskId: f.taskId, failures: [], retainedTasks: [] }] });
   }, 30_000);
 
+  it("records the durable launch identity of a real Host start and refuses a duplicate start beside that survivor", async () => {
+    const f = await installed();
+    const serviceId = f.bind("svc-a", "a");
+    const ownershipFile = join(f.taskDir, "service-ownership.json");
+    expect(existsSync(ownershipFile)).toBe(false);
+
+    expect(await f.run(serviceId, "start")).toMatchObject({ serviceId, action: "start", actor: "human" });
+    const pid = await untilMarkerPid(f.taskDir, "a");
+    expect(alive(pid)).toBe(true);
+
+    // The production Host driver persisted this launch's identity before the
+    // start resolved, and the recorded nonce really is the child's own marker
+    // (read back from the OS), not a pid guess.
+    const [entry] = readServiceOwnershipOnDisk(f.taskDir).entries;
+    expect(entry).toMatchObject({ taskId: f.taskId, serviceId, pid });
+    expect(entry!.ownershipNonce).toMatch(/^[0-9a-f]{32}$/);
+    expect(verifyServiceOwnershipIdentity(entry!)).toBe("verified");
+
+    // A second Host reconciling the same task folder holds no child handle for
+    // this launch, so the durable record is its only evidence - and the same
+    // production factory the Host uses (`diskServiceOwnershipLog`) refuses to
+    // spawn a second instance beside the survivor instead of adopting or
+    // overwriting it. (The Host-independent driver contract this exercises is
+    // covered in `service-ownership.test.ts`; what this leg adds is that the
+    // record it reconciles was written through the real Host path above.)
+    const follower = new TaskServiceProcesses(f.taskDir, () => {}, () => {}, (line) => line,
+      SERVICE_STOP_GRACE_MS, SERVICE_STOP_CONFIRM_MS, diskServiceOwnershipLog({ taskId: f.taskId, taskDir: f.taskDir }));
+    expect(follower.ids()).toEqual([]);
+    await expect(follower.start({ serviceId, cwd: join(f.taskDir, "repo-a/svc-a"), program: realpathSync(process.execPath),
+      args: ["service.cjs"], env: {}, runType: "long-lived" })).rejects.toThrow("service-ownership-own-verified");
+    expect(alive(pid)).toBe(true);
+
+    // A verified record may be reclaimed: the survivor really dies and only
+    // then does the record go.
+    await follower.stop(serviceId);
+    await until(() => !alive(pid), "the recorded launch to stop");
+    expect(readServiceOwnershipOnDisk(f.taskDir).entries).toEqual([]);
+  }, 30_000);
+
   it("refuses a read-only session, asks first on the default tier, and starts nothing on refusal or rejection", async () => {
     const f = await installed();
     const serviceId = f.bind("svc-a", "a");
     const startedMarker = join(f.taskDir, "repo-a/svc-a", "started-a.txt");
     // A refused or unanswered control must leave no durable launch identity
-    // behind either - the record exists only for a start that really ran.
+    // behind either. These absences are meaningful - they can fail: the
+    // sibling test above proves a start that really ran does write the record
+    // through this same production path.
     const ownershipRecord = join(f.taskDir, "service-ownership.json");
     // Main registers the trusted launch for the task-bound service; the page
     // never supplies the descriptor (it only names project/task/service).

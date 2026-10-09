@@ -44,7 +44,8 @@ import {
   validateHostTaskOp,
 } from "./host-guards.js";
 import { ServiceOwnerInventory } from "./service-owner-inventory.js";
-import { TaskServiceProcesses } from "./service-processes.js";
+import { SERVICE_STOP_CONFIRM_MS, SERVICE_STOP_GRACE_MS, TaskServiceProcesses } from "./service-processes.js";
+import { diskServiceOwnershipLog } from "./service-ownership.js";
 import { serviceOwnerBootstrap, type ServiceOwnerBootstrap, type ServiceOwnerCompletion } from "../rpc/service-host-binding.js";
 import { TaskWorkspaceHost, diskTaskStore } from "./task-host.js";
 import { SdkTurnTransport } from "./sdk-turn-transport.js";
@@ -401,13 +402,25 @@ async function stopRegisteredServiceProcesses(): Promise<{ serviceId: string; st
   await processes.stopAll();
   return ids.map((serviceId) => ({ serviceId, state: "stopped" as const }));
 }
-function serviceDriverFor(services: TaskServiceRuntime): ServiceExecutionDriver {
+function serviceDriverFor(taskId: string, services: TaskServiceRuntime): ServiceExecutionDriver {
   if (!serviceProcesses || serviceProcessesFor !== services) {
     serviceProcesses = new TaskServiceProcesses(
       services.taskDir,
       (serviceId, line) => services.recordOutput(serviceId, line),
       (serviceId, reason) => services.markExited(serviceId, reason),
       (line) => services.redactLine(line),
+      SERVICE_STOP_GRACE_MS,
+      SERVICE_STOP_CONFIRM_MS,
+      // The durable launch identity of this task folder ([PiDock 04] #48).
+      // Without it the driver is in-memory only: a detached child that
+      // survives an abnormal Host/main exit would be invisible to the
+      // durable layer, the next Host would answer `unknown-service` for it,
+      // and the following start would spawn a second instance that no PiDock
+      // path can stop. With it, a real start persists `(pid, nonce)` before
+      // it resolves, a duplicate start is refused while that record
+      // verifies, and a surviving recorded launch can be re-verified and
+      // stopped by a later Host.
+      diskServiceOwnershipLog({ taskId, taskDir: services.taskDir }),
     );
     serviceProcessesFor = services;
   }
@@ -992,7 +1005,7 @@ async function performTaskOp(
         }
         const uncertain = serviceOwnerStateRefusal(serviceId);
         if (uncertain) return { ok: false, error: uncertain };
-        const driver = serviceDriverFor(services);
+        const driver = serviceDriverFor(taskId, services);
         if (caller.kind === "human") {
           const result = await runHumanServiceControl({ services, driver, serviceId, action, label: caller.label });
           return result.ok ? { ok: true, payload: result.payload } : { ok: false, error: result.error };
