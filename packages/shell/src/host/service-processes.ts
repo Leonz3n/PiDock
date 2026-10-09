@@ -3,8 +3,24 @@ import type { Readable } from "node:stream";
 import { realpathSync } from "node:fs";
 import { isAbsolute, relative, sep } from "node:path";
 import type { ServiceStartPlan } from "./service-runtime.js";
+import {
+  newServiceOwnershipNonce,
+  serviceOwnershipLaunchEnded,
+  serviceOwnershipRecordError,
+  serviceOwnershipState,
+  serviceOwnershipUnverifiedError,
+  SERVICE_OWNERSHIP_NONCE_ENV,
+  verifyServiceOwnershipIdentity,
+  type ServiceOwnershipIdentity,
+  type ServiceOwnershipLog,
+} from "./service-ownership.js";
 
-interface OwnedProcess { child: ChildProcessByStdio<null, Readable, Readable>; done: Promise<void> }
+/** One launch's identity: leader pid plus the nonce only this launch carries. */
+type OwnedLaunch = ServiceOwnershipIdentity;
+interface OwnedProcess { child: ChildProcessByStdio<null, Readable, Readable>; done: Promise<void>; launch: OwnedLaunch }
+
+/** Poll cadence for confirming that a recovered launch's identity is gone. */
+const STOP_POLL_MS = 25;
 
 /**
  * Host-owned process foundation for the task-bound service path ([PiDock 04] #7).
@@ -24,12 +40,30 @@ interface OwnedProcess { child: ChildProcessByStdio<null, Readable, Readable>; d
  *   same-UID actor that renames a checked component can still race it.)
  * - Output is captured per line, bounded to 2000 characters, and redacted by
  *   the injected redactor before it reaches the log.
+ * - Every launch has a verifiable ownership identity: the leader pid plus a
+ *   fresh 128-bit nonce placed in that child's own environment. When a durable
+ *   `ServiceOwnershipLog` is injected, the identity is persisted before `start`
+ *   resolves and removed only once the launch is confirmed over, so the durable
+ *   layer never says "stopped" about a process it still verifies as alive
+ *   (`./service-ownership.ts` explains why the pair resists pid recycling).
+ * - **No signal is ever sent to a pid whose identity was not verified in the
+ *   same call.** `stop` re-reads the (pid, nonce) identity from the OS before
+ *   each signal; an unverifiable or mismatching identity is refused as
+ *   `service-ownership-unverified` and reported as a failure, never as a stop.
+ *   That also covers a launch recorded by an earlier Host: a record whose pid
+ *   is alive but whose identity does not match is refused, never signalled.
  * - `stop` signals the child's own process group (SIGTERM, then SIGKILL) and
  *   confirms stdio closure. `termination-unconfirmed` means a descendant may
  *   still own the pipes; it is reported as a failure and must never be
  *   recorded as a clean stop. A descendant that leaves the process group
  *   (e.g. its own `setsid`) is outside this contract, and Windows refuses
  *   `start` entirely until a Job-Object-style ownership mechanism exists.
+ * - Out of scope here (stated, not claimed): reclaiming a *descendant* that
+ *   survived its leader and still holds the pipes. For a child this Host
+ *   spawned, stdio closure still detects it; for a launch recovered from a
+ *   durable record the Host holds no pipe, so "stopped" there means exactly
+ *   "the recorded launch identity is no longer alive". Windows process-tree
+ *   termination is UNTESTED in this slice.
  */
 export class TaskServiceProcesses {
   private readonly running = new Map<string, OwnedProcess>();
@@ -41,7 +75,9 @@ export class TaskServiceProcesses {
     private readonly onExit: (serviceId: string, reason: string) => void,
     private readonly redact: (line: string) => string,
     private readonly stopGraceMs = 3000,
-    private readonly stopConfirmMs = 1000) {
+    private readonly stopConfirmMs = 1000,
+    /** Durable per-launch ownership records; absent keeps the driver in-memory only. */
+    private readonly ownership: ServiceOwnershipLog | undefined = undefined) {
     this.taskDir = realpathSync(taskDir);
   }
 
@@ -55,7 +91,12 @@ export class TaskServiceProcesses {
     const cwd = realpathSync(plan.cwd);
     const within = relative(this.taskDir, cwd);
     if (within === ".." || within.startsWith(`..${sep}`) || isAbsolute(within)) throw new Error("invalid-launch: cwd escapes task root");
-    const child = spawn(plan.program, plan.args, { cwd, env: { ...plan.env }, shell: false, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+    this.refuseRecordedLaunch(plan.serviceId);
+    // The ownership marker rides the child's own fresh environment: the kernel
+    // fixes it for this image at execve, and no process can add it to another
+    // image afterwards - which is what makes the identity unforgeable.
+    const ownershipNonce = newServiceOwnershipNonce();
+    const child = spawn(plan.program, plan.args, { cwd, env: { ...plan.env, [SERVICE_OWNERSHIP_NONCE_ENV]: ownershipNonce }, shell: false, detached: true, stdio: ["ignore", "pipe", "pipe"] });
     const emit = (stream: NodeJS.ReadableStream) => {
       let pending = "";
       let oversized = false;
@@ -87,17 +128,60 @@ export class TaskServiceProcesses {
       child.once("close", (code, signal) => {
         if (this.running.get(plan.serviceId)?.child === child) {
           this.running.delete(plan.serviceId);
+          // The launch is over (stdio closed): only now may its durable record
+          // go. A record is never removed while its process could still be alive.
+          this.ownership?.release({ serviceId: plan.serviceId, ownershipNonce: launch.ownershipNonce });
           this.onExit(plan.serviceId, signal ? `signal:${signal}` : `exit:${code ?? "unknown"}`);
         }
         resolve();
       });
     });
-    // Reserve the identity before awaiting spawn; concurrent starts cannot run twice.
-    this.running.set(plan.serviceId, { child, done });
-    try { return await started; }
+    // Reserve the identity before awaiting spawn; concurrent starts cannot run
+    // twice. `pid` is filled in from the spawn event below; until then the
+    // placeholder can never verify, so a concurrent stop refuses instead of
+    // signalling a guess.
+    const launch: OwnedLaunch = { pid: child.pid ?? 0, ownershipNonce };
+    this.running.set(plan.serviceId, { child, done, launch });
+    let pid: number;
+    try { pid = await started; }
     catch (error) { await done; throw error; }
+    const owned = this.running.get(plan.serviceId);
+    if (owned?.child === child) owned.launch = { pid, ownershipNonce };
+    // Persist before resolving: no caller can observe a live child that the
+    // durable layer does not know about. A child that already exited has no
+    // record to keep (its `close` handler ran, or runs, with no record).
+    if (child.exitCode === null && child.signalCode === null) {
+      this.ownership?.record({ serviceId: plan.serviceId, pid, ownershipNonce, startedAt: new Date().toISOString() });
+    }
+    return pid;
   }
 
+  /**
+   * Refuse a start while a durable record of the same service names a launch
+   * that is still alive - verified or not. A verified survivor is still a real
+   * service instance of this task, so starting a second one would be the
+   * "same service started twice" defect; an unverified survivor is exactly the
+   * state nobody may guess about, so it is refused instead of adopted or
+   * silently overwritten. A record whose process is confirmed gone is stale
+   * bookkeeping and is cleared so the next launch can record itself.
+   */
+  private refuseRecordedLaunch(serviceId: string): void {
+    const log = this.ownership;
+    const record = log?.get(serviceId);
+    if (!log || !record) return;
+    const state = serviceOwnershipState(verifyServiceOwnershipIdentity(record));
+    if (state === "gone") {
+      log.release({ serviceId, ownershipNonce: record.ownershipNonce });
+      return;
+    }
+    throw new Error(serviceOwnershipRecordError({ serviceId, pid: record.pid, state }));
+  }
+
+  /**
+   * Stop every child *this Host* spawned. Deliberately not a reclaim of records
+   * left by an earlier Host: those are stopped one by one through `stop`, which
+   * verifies each identity, so a shutdown never signals a pid it cannot verify.
+   */
   async stopAll(): Promise<void> {
     this.closing = true;
     const results = await Promise.allSettled(this.ids().map(async (serviceId) => {
@@ -122,13 +206,16 @@ export class TaskServiceProcesses {
 
   async stop(serviceId: string): Promise<void> {
     const owned = this.running.get(serviceId);
-    if (!owned) throw new Error(`not-running: ${serviceId}`);
-    const { child, done } = owned;
+    if (!owned) return this.stopRecordedLaunch(serviceId);
+    const { child, done, launch } = owned;
     const signal = (kind: NodeJS.Signals) => {
       if (child.exitCode !== null || child.signalCode !== null) return;
+      // Verify this exact launch from the OS before every signal. `gone` means
+      // the process already ended, so nothing needs a signal; anything that is
+      // not `verified` throws before any `process.kill` runs.
+      if (this.verifiedLaunch(serviceId, launch) === "gone") return;
       try {
-        if (process.platform !== "win32" && child.pid) process.kill(-child.pid, kind);
-        else child.kill(kind);
+        process.kill(-launch.pid, kind);
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
       }
@@ -139,5 +226,72 @@ export class TaskServiceProcesses {
     if (await this.closedWithin(done, this.stopConfirmMs)) return;
     // A descendant may still own stdout/stderr after the leader exits.
     throw new Error(`termination-unconfirmed: ${serviceId} still owns open process output`);
+  }
+
+  /**
+   * Verify one in-Host launch. The durable record (when one is configured) must
+   * agree with the launch this Host registered - a disagreement means the
+   * durable layer and the live process describe different launches, so nothing
+   * is signalled - and the OS must still show the launch's own nonce at its pid.
+   */
+  private verifiedLaunch(serviceId: string, launch: OwnedLaunch): "verified" | "gone" {
+    const stored = this.ownership?.get(serviceId);
+    if (this.ownership && (stored === undefined || stored.pid !== launch.pid || stored.ownershipNonce !== launch.ownershipNonce)) {
+      throw new Error(serviceOwnershipUnverifiedError(serviceId, launch.pid, "耐久所有权记录与本次启动不一致"));
+    }
+    const verdict = verifyServiceOwnershipIdentity(launch);
+    if (verdict === "verified" || verdict === "gone") return verdict;
+    throw new Error(serviceOwnershipUnverifiedError(serviceId, launch.pid, `OS 身份核验结果为 ${verdict}`));
+  }
+
+  /**
+   * Stop a launch recorded by an earlier Host (no in-memory handle): the only
+   * evidence is the durable (pid, nonce) record, so the only permitted action is
+   * a signal gated on re-verifying that exact identity. A record whose pid is
+   * alive but whose environment is unreadable is refused, never signalled, and
+   * never rewritten to "stopped" while it may still be running.
+   *
+   * Confirmation here means "the recorded launch identity is no longer alive":
+   * this Host holds no pipe for it, so stdio closure (and with it a descendant
+   * that outlived the leader) is out of this path's reach - see the class notes.
+   */
+  private async stopRecordedLaunch(serviceId: string): Promise<void> {
+    const log = this.ownership;
+    const record = log?.get(serviceId);
+    if (!log || !record) throw new Error(`not-running: ${serviceId}`);
+    const release = () => log.release({ serviceId, ownershipNonce: record.ownershipNonce });
+    const verdict = verifyServiceOwnershipIdentity(record);
+    if (verdict === "gone" || verdict === "mismatch") {
+      // The recorded launch is not alive any more: its pid names no process, or
+      // names an inspectable process that demonstrably is not this launch. There
+      // is nothing to signal, and the record is now stale bookkeeping.
+      release();
+      return;
+    }
+    if (verdict !== "verified") throw new Error(serviceOwnershipUnverifiedError(serviceId, record.pid, `OS 身份核验结果为 ${verdict}`));
+    // The identity matched this launch, so its own process group may be
+    // signalled - re-checking right before each signal, because a pid cannot be
+    // trusted across calls. After a signal the launch is confirmed over only by
+    // positive evidence (`serviceOwnershipLaunchEnded`): a pid that is free
+    // again, or one that now carries another identity. A process that is exiting
+    // but no longer inspectable is NOT such evidence, so the loop keeps polling
+    // instead of claiming a stop behind a live process.
+    const signalVerified = (kind: NodeJS.Signals) => {
+      if (verifyServiceOwnershipIdentity(record) !== "verified") return;
+      try { process.kill(-record.pid, kind); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
+    };
+    const endedWithin = async (timeoutMs: number): Promise<boolean> => {
+      for (let elapsed = 0; elapsed < timeoutMs; elapsed += STOP_POLL_MS) {
+        if (serviceOwnershipLaunchEnded(record)) return true;
+        await new Promise((resolve) => setTimeout(resolve, STOP_POLL_MS));
+      }
+      return serviceOwnershipLaunchEnded(record);
+    };
+    signalVerified("SIGTERM");
+    if (await endedWithin(this.stopGraceMs)) { release(); return; }
+    signalVerified("SIGKILL");
+    if (await endedWithin(this.stopConfirmMs)) { release(); return; }
+    throw new Error(`termination-unconfirmed: ${serviceId} 的已核验启动在停止期限内未结束`);
   }
 }
