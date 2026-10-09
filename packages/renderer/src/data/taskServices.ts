@@ -54,6 +54,10 @@ export interface ServiceRegistryStatusView {
   stoppedAt?: string;
   exitReason?: string;
   resolvedKeys: string[];
+  /** `catalog` only executes; a `ui` registration is display data. */
+  launchSource?: "catalog" | "ui";
+  /** Process liveness is `lifecycle`; no reachability probe is ever reported here. */
+  health?: "not-probed";
 }
 
 export type ServiceStatusView = ServiceOwnerStatusView | ServiceRegistryStatusView;
@@ -72,10 +76,16 @@ function ownerStatus(row: Record<string, unknown>, serviceId: string): ServiceOw
 }
 
 function registryStatus(row: Record<string, unknown>, serviceId: string): ServiceRegistryStatusView | null {
-  const allowed = ["exitReason", "lifecycle", "resolved", "serviceId", "startedAt", "stoppedAt", "templateVersion"];
+  // The Host's public projection (`service-public.ts`) is an allowlist:
+  // `lifecycle` is process liveness only, `health` stays `not-probed` (no
+  // reachability probe is reported as health) and `launchSource` says whether
+  // the launch came from main's trusted catalog or is display-only.
+  const allowed = ["exitReason", "health", "launchSource", "lifecycle", "resolved", "serviceId", "startedAt", "stoppedAt", "templateVersion"];
   const required = ["lifecycle", "resolved", "serviceId", "templateVersion"];
   if (!Object.keys(row).every((key) => allowed.includes(key)) || !required.every((key) => key in row)) return null;
   if (row["lifecycle"] !== "stopped" && row["lifecycle"] !== "running") return null;
+  if (row["health"] !== undefined && row["health"] !== "not-probed") return null;
+  if (row["launchSource"] !== undefined && row["launchSource"] !== "catalog" && row["launchSource"] !== "ui") return null;
   if (typeof row["templateVersion"] !== "string" || !Array.isArray(row["resolved"])) return null;
   const resolvedKeys: string[] = [];
   for (const entry of row["resolved"]) {
@@ -89,7 +99,9 @@ function registryStatus(row: Record<string, unknown>, serviceId: string): Servic
   if (startedAt === null || stoppedAt === null || exitReason === null) return null;
   return { kind: "registry", serviceId, lifecycle: row["lifecycle"], templateVersion: row["templateVersion"],
     resolvedKeys, ...(startedAt !== undefined ? { startedAt } : {}), ...(stoppedAt !== undefined ? { stoppedAt } : {}),
-    ...(exitReason !== undefined ? { exitReason } : {}) };
+    ...(exitReason !== undefined ? { exitReason } : {}),
+    ...(row["launchSource"] !== undefined ? { launchSource: row["launchSource"] as "catalog" | "ui" } : {}),
+    ...(row["health"] !== undefined ? { health: "not-probed" as const } : {}) };
 }
 
 /** One `task/serviceStatus` payload, or `null` when it is not the asked-for service. */
@@ -198,6 +210,33 @@ export async function loadTaskServices(taskId: string): Promise<TaskServicesLoad
       : { binding, template, status: undefined, statusError: "Host 服务状态响应无法解析" };
   }));
   return { ok: true, projectId, associationState: association.state, rows, templatesError };
+}
+
+/** Result of one start/stop of a task-bound service through the production path. */
+export type BoundServiceRunResult = { ok: true } | { ok: false; error: string };
+
+/**
+ * Start/stop one task-bound service through the production path ([PiDock 04]
+ * #7): `shell/serviceCatalogOp {op:"runTaskService"}`. Main resolves the
+ * trusted persisted catalog launch (program, pinned argv, cwd, private
+ * values) itself, registers the descriptor on the task Host and controls it
+ * through the Host's gated `task/controlService`. The renderer names only the
+ * project, task, service and action - it can never supply a program, a cwd or
+ * an env value. The main-built `service-catalog` origin keeps this the
+ * attested human-UI path; Agent control keeps going through the session
+ * gate/tier path Host-side.
+ */
+export async function runBoundTaskServiceThroughShell(input: {
+  projectId: string;
+  taskId: string;
+  serviceId: string;
+  action: "start" | "stop";
+}): Promise<BoundServiceRunResult> {
+  const result = await serviceCatalogThroughShell({
+    op: "runTaskService", projectId: input.projectId, taskId: input.taskId, serviceId: input.serviceId, action: input.action,
+  });
+  if (!result.ok) return { ok: false, error: shellFailure(result, "服务启停失败，请重试") };
+  return { ok: true };
 }
 
 /**

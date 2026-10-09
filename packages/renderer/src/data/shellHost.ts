@@ -7,8 +7,12 @@
  * main allowlists). The adapter wraps a full `HostAdapter` fallback
  * (the in-memory model) for every read/local op that has no shell RPC yet;
  * task turns (`sendMessage`/`stopRun`/approvals/provision) and the service
- * lifecycle of Host-registered services (`setServiceRunning`) ride the real
- * `task/*` ops when the shell is connected and fail closed otherwise.
+ * lifecycle of task-bound services (`setServiceRunning`) ride the real ops
+ * when the shell is connected and fail closed otherwise. Service start/stop
+ * goes through main's trusted catalog path
+ * (`shell/serviceCatalogOp {op:"runTaskService"}`: main resolves the launch,
+ * registers it on the task Host and controls it), never through fixture data,
+ * whenever the shell is connected.
  *
  * Selection helper `resolveHostAdapter` picks the shell-backed adapter when
  * `window.pidock.taskOp` exists, the memory adapter otherwise. `stores/host`
@@ -44,7 +48,6 @@ import {
   cleanupPreviewThroughShell,
   clearUsageThroughShell,
   compactSessionThroughShell,
-  controlServiceThroughShell,
   controlTerminalThroughShell,
   deliveryInfoThroughShell,
   executionStateThroughShell,
@@ -69,6 +72,7 @@ import {
   usageRecordsThroughShell,
   type ShellTaskOpResult,
 } from "./shellBridge";
+import { runBoundTaskServiceThroughShell, taskProjectIdThroughShell } from "./taskServices";
 import {
   terminalHistoryFromHost,
   terminalPlanFromHost,
@@ -879,22 +883,26 @@ export function createShellHostAdapter(fallback: HostAdapter): HostAdapter {
       if (property === "setServiceRunning") {
         return async (taskId: string, serviceId: string, running: boolean) => {
           if (!isShellConnected()) return (target as HostAdapter).setServiceRunning(taskId, serviceId, running);
-          // Shell Host owns the lifecycle of the services it knows.
-          // Probe registration first (`task/serviceStatus`): a service the
-          // Host has not registered (renderer has no registration path yet)
-          // keeps the memory fallback instead of failing closed on
-          // `unknown-service`. A Host-known service is controlled by the
-          // Host — no `sessionId`, so the Host classifies it as the
-          // attested human-UI path and labels it.
-          let probe: ShellTaskOpResult;
-          try {
-            probe = await shellTaskOp(taskId, "task/serviceStatus", { serviceId });
-          } catch {
-            probe = { ok: false };
+          // Production path for a *bound* service ([PiDock 04] #7): the
+          // Host's own project association names the catalog the binding
+          // lives in, and main then resolves the trusted persisted launch
+          // (program + pinned argv + cwd + private values), registers it on
+          // the task Host and starts/stops it. The renderer names only
+          // project/task/service/action, so a page-supplied program or env
+          // value cannot reach the launch, and a Host-side refusal is shown
+          // instead of a fabricated state. The memory mirror is used only
+          // when the shell is genuinely not connected.
+          const association = await taskProjectIdThroughShell(taskId);
+          if (!association.ok) throw new Error(association.error);
+          if (association.projectId === null) {
+            throw new Error(association.state === "unavailable"
+              ? "Host 报告任务归属状态暂不可用，无法启停服务"
+              : "该任务尚未归属项目，Host 不保存服务绑定，无法启停服务");
           }
-          if (!probe.ok) return (target as HostAdapter).setServiceRunning(taskId, serviceId, running);
-          const result = await controlServiceThroughShell({ taskId, serviceId, action: running ? "start" : "stop" });
-          if (!result.ok) throw shellResultError(result, "服务启停失败，请重试");
+          const result = await runBoundTaskServiceThroughShell({
+            projectId: association.projectId, taskId, serviceId, action: running ? "start" : "stop",
+          });
+          if (!result.ok) throw new Error(result.error);
         };
       }
       if (property === "protocolBinding") {

@@ -236,54 +236,71 @@ describe("shell host adapter selection", () => {
     vi.unstubAllGlobals();
   });
 
-  it("routes Host-known service start/stop through task/controlService (human path)", async () => {
-    const seen: Array<{ taskId: string; op: string; payload?: Record<string, unknown> }> = [];
-    stubBridge(async (taskId, op, payload) => {
-      seen.push({ taskId, op, payload });
-      if (op === "task/serviceStatus") return { ok: true, payload: { service: { serviceId: "saas-web" } } };
-      return { ok: true, payload: {} };
-    });
-    const adapter = resolveHostAdapter(createMemoryHost());
-    await adapter.setServiceRunning("task-a", "saas-web", true);
-    await adapter.setServiceRunning("task-a", "saas-web", false);
-    expect(seen.map((entry) => entry.op)).toEqual([
-      "task/serviceStatus",
-      "task/controlService",
-      "task/serviceStatus",
-      "task/controlService",
+  it("routes a bound service start/stop through runTaskService, never fixture data", async () => {
+    const taskId = "task-11111111-1111-1111-1111-111111111111";
+    const serviceId = "s-22222222-2222-2222-2222-222222222222";
+    const catalogOps: Record<string, unknown>[] = [];
+    const taskOps: string[] = [];
+    const memoryCalls: string[] = [];
+    const bridge = (run: () => unknown) => {
+      vi.stubGlobal("window", { pidock: {
+        taskOp: async (_taskId: string, op: string) => { taskOps.push(op); return { ok: false, error: "unexpected task op" }; },
+        projectOp: async () => ({ ok: true, payload: { roots: [], tasks: [{ taskId, projectId: "project-1", state: "assigned" }] } }),
+        serviceCatalogOp: async (request: Record<string, unknown>) => { catalogOps.push(request); return run(); },
+      } });
+    };
+    bridge(() => ({ ok: true, payload: { serviceId, action: "start", actor: "human" } }));
+    const fallback = {
+      setServiceRunning: async (task: string, service: string, running: boolean) => { memoryCalls.push(`${task}:${service}:${running}`); },
+    } as unknown as HostAdapter;
+    const adapter = createShellHostAdapter(fallback);
+    await adapter.setServiceRunning(taskId, serviceId, true);
+    await adapter.setServiceRunning(taskId, serviceId, false);
+    // Main resolves the trusted launch, registers it on the task Host and
+    // controls it; the page names only project/task/service/action.
+    expect(catalogOps).toEqual([
+      { op: "runTaskService", projectId: "project-1", taskId, serviceId, action: "start" },
+      { op: "runTaskService", projectId: "project-1", taskId, serviceId, action: "stop" },
     ]);
-    // No sessionId: the Host classifies this as the attested human-UI path.
-    expect(seen[1].payload).toMatchObject({ serviceId: "saas-web", action: "start" });
-    expect(seen[1].payload?.["sessionId"]).toBeUndefined();
-    expect(seen[3].payload).toMatchObject({ serviceId: "saas-web", action: "stop" });
+    expect(Object.keys(catalogOps[0]!).sort()).toEqual(["action", "op", "projectId", "serviceId", "taskId"]);
+    // No session/approval id: this is the attested human-UI path, not the
+    // Agent gate path, and it never reaches `task/controlService` itself.
+    expect(catalogOps[0]!["sessionId"]).toBeUndefined();
+    expect(catalogOps[0]!["approvalId"]).toBeUndefined();
+    expect(taskOps).toEqual([]);
+    expect(memoryCalls).toEqual([]);
     vi.unstubAllGlobals();
 
-    // A failed Host control surfaces instead of silently succeeding.
-    stubBridge(async (_taskId, op) => {
-      if (op === "task/serviceStatus") return { ok: true, payload: { service: { serviceId: "saas-web" } } };
-      return { ok: false, error: "permission-denied: 无会话的界面操作需要受信任来源，已拒绝" };
-    });
-    await expect(resolveHostAdapter(createMemoryHost()).setServiceRunning("task-a", "saas-web", true)).rejects.toThrow("permission-denied");
+    // A Host refusal surfaces instead of silently succeeding or falling back.
+    bridge(() => ({ ok: false, error: "unsupported-platform: 服务启动身份核验与终止仅在 POSIX 实现" }));
+    await expect(createShellHostAdapter(fallback).setServiceRunning(taskId, serviceId, true)).rejects.toThrow("unsupported-platform");
+    expect(memoryCalls).toEqual([]);
     vi.unstubAllGlobals();
   });
 
-  it("keeps unregistered services on the memory fallback", async () => {
-    const ops: string[] = [];
-    stubBridge(async (_taskId, op) => {
-      ops.push(op as string);
-      return { ok: false, error: "unknown-service: saas-web is not registered on this task" };
-    });
+  it("keeps the memory mirror only when the shell is not connected", async () => {
+    vi.stubGlobal("window", {});
     const memoryCalls: string[] = [];
     const fallback = {
-      setServiceRunning: async (taskId: string, serviceId: string, running: boolean) => {
-        memoryCalls.push(`${taskId}:${serviceId}:${running}`);
-      },
+      setServiceRunning: async (task: string, service: string, running: boolean) => { memoryCalls.push(`${task}:${service}:${running}`); },
     } as unknown as HostAdapter;
     await createShellHostAdapter(fallback).setServiceRunning("task-a", "saas-web", true);
-    // Only the probe ran; the renderer has no service-registration path yet,
-    // so the memory mirror keeps the dev/demo service toggles working.
-    expect(ops).toEqual(["task/serviceStatus"]);
     expect(memoryCalls).toEqual(["task-a:saas-web:true"]);
+    vi.unstubAllGlobals();
+  });
+
+  it("refuses a task with no bound project instead of falling back to the fixture mirror", async () => {
+    const memoryCalls: string[] = [];
+    vi.stubGlobal("window", { pidock: {
+      taskOp: async () => ({ ok: false, error: "unexpected task op" }),
+      projectOp: async () => ({ ok: true, payload: { roots: [], tasks: [{ taskId: "task-a", projectId: null, state: "unassigned" }] } }),
+      serviceCatalogOp: async () => ({ ok: false, error: "unexpected service catalog op" }),
+    } });
+    const fallback = {
+      setServiceRunning: async (task: string, service: string, running: boolean) => { memoryCalls.push(`${task}:${service}:${running}`); },
+    } as unknown as HostAdapter;
+    await expect(createShellHostAdapter(fallback).setServiceRunning("task-a", "saas-web", true)).rejects.toThrow("尚未归属项目");
+    expect(memoryCalls).toEqual([]);
     vi.unstubAllGlobals();
   });
 

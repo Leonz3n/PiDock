@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DesktopToolDock } from "../components/DesktopToolDock";
 
@@ -298,6 +298,7 @@ type PanelBridgeOptions = {
   statuses?: (serviceId: string) => unknown;
   logs?: (serviceId: string) => unknown;
   browser?: (request: Record<string, unknown>) => unknown;
+  run?: (request: Record<string, unknown>) => unknown;
 };
 
 function panelBridge(options: PanelBridgeOptions = {}) {
@@ -312,6 +313,7 @@ function panelBridge(options: PanelBridgeOptions = {}) {
     return { ok: false, error: `unexpected ${op}` };
   });
   const serviceCatalogOp = vi.fn(async (request: Record<string, unknown>) => {
+    if (request["op"] === "runTaskService") return options.run ? options.run(request) : { ok: true, payload: { serviceId: request["serviceId"], action: request["action"], actor: "human" } };
     if (request["op"] === "taskBindings") return { ok: true, payload: options.bindings ?? [{
       taskId: "task-1", serviceId: SERVICE_ID, templateVersion: 2, rootId: "invoice-service", subdir: "apps/svc", privateKeys: ["API_TOKEN"],
     }] };
@@ -342,19 +344,45 @@ describe("[UI 对齐] S8d 运行 panel (real Host bindings and status)", () => {
     expect(fixture.serviceCatalogOp).toHaveBeenCalledWith({ op: "taskBindings", projectId: "project-1", taskId: "task-1" });
   });
 
-  it("keeps service start/stop, local/remote, remote dependencies and routing explicitly 未接线", async () => {
-    panelBridge({ statuses: () => ({ ok: true, payload: { service: {
+  it("drives the real bound-service start/stop through runTaskService and keeps the rest 未接线", async () => {
+    const fixture = panelBridge({ statuses: () => ({ ok: true, payload: { service: {
       serviceId: SERVICE_ID, state: "running", ownerSessionId: null, busy: false, closing: false, retainedRights: null, executionAvailable: false,
     } } }) });
     render(<DesktopToolDock taskId="task-1" tool="runtime" onClose={() => {}} />);
     await screen.findByText("invoice-local");
-    const control = screen.getByTestId("desktop-tool-dock").querySelector('[data-unwired="service-control"]')!;
-    expect(control).toHaveTextContent("未接线");
-    expect(control.querySelector("button")).toBeDisabled();
+    // Service start/stop is real now: no 未接线 badge, and the trigger names
+    // only the project/task/service - never a program, cwd or env value.
+    expect(screen.getByTestId("desktop-tool-dock").querySelector('[data-unwired="service-control"]')).toBeNull();
+    const control = screen.getByTestId("desktop-tool-dock").querySelector(`[data-service-control="${SERVICE_ID}"]`)!;
+    const stop = within(control as HTMLElement).getByRole("button", { name: "停止" });
+    expect(stop).toBeEnabled();
+    fireEvent.click(stop);
+    await waitFor(() => expect(fixture.serviceCatalogOp).toHaveBeenCalledWith({
+      op: "runTaskService", projectId: "project-1", taskId: "task-1", serviceId: SERVICE_ID, action: "stop",
+    }));
+    const request = fixture.serviceCatalogOp.mock.calls.find(([entry]) => entry["op"] === "runTaskService")?.[0] as Record<string, unknown>;
+    expect(Object.keys(request).sort()).toEqual(["action", "op", "projectId", "serviceId", "taskId"]);
+    expect(request["sessionId"]).toBeUndefined();
+    expect(request["approvalId"]).toBeUndefined();
+    // The page never reaches the Host's control op itself for this action.
+    expect(fixture.taskOp.mock.calls.map(([, op]) => op)).not.toContain("task/controlService");
     expect(screen.getByTestId("desktop-tool-dock").querySelector('[data-unwired="service-mode"]')).toHaveTextContent("未接线");
     expect(screen.getByTestId("desktop-tool-dock").querySelector('[data-unwired="remote-deps"]')).toHaveTextContent("未接线");
     expect(screen.getByTestId("desktop-tool-dock").querySelector('[data-unwired="routing"]')).toHaveTextContent("未接线");
-    expect(screen.queryByRole("button", { name: /启动/ })).toBeDisabled();
+  });
+
+  it("shows the Host's runTaskService refusal instead of falling back to fixture data", async () => {
+    const fixture = panelBridge({
+      statuses: () => ({ ok: true, payload: { service: { serviceId: SERVICE_ID, lifecycle: "stopped", templateVersion: "2", health: "not-probed", launchSource: "catalog", resolved: [] } } }),
+      run: () => ({ ok: false, error: "unsupported-platform: 服务启动身份核验与终止仅在 POSIX（darwin/linux）实现" }),
+    });
+    render(<DesktopToolDock taskId="task-1" tool="runtime" onClose={() => {}} />);
+    fireEvent.click(await screen.findByRole("button", { name: "启动" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("unsupported-platform");
+    // The status row keeps the Host's own answer (process liveness + an
+    // un-probed health note), and the refusal is never replaced by a green row.
+    expect(screen.getByText(/健康未探测/)).toBeInTheDocument();
+    expect(fixture.serviceCatalogOp.mock.calls.filter(([entry]) => entry["op"] === "runTaskService")).toHaveLength(1);
   });
 
   it("shows the Host refusal for a status read instead of a fabricated stopped state", async () => {
