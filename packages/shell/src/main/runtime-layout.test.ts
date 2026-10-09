@@ -508,3 +508,67 @@ describe("trusted Electron view modes", () => {
     assertProductionWindowEvidence(views);
   });
 });
+
+// [PiDock 02a/02c] (#34/#36) The Desktop task list is one `shell/listTasks`
+// handler: main owns the roots, the renderer names no path, and a broken root
+// fails closed instead of being padded with fixture rows.
+describe("[PiDock 02a/02c] shell task inventory IPC", () => {
+  function writeTaskRecord(root: string, id: string) {
+    const dir = join(root, id);
+    mkdirSync(dir);
+    writeFileSync(join(dir, "task.json"), JSON.stringify({ taskId: id, name: "Real", dirId: id, root, taskDir: dir,
+      branch: "task/main", remoteBranch: "main", baseCommit: "abc123", repos: [],
+      createdAt: "2026-09-22T10:00:00Z", updatedAt: "2026-09-22T10:00:00Z" }));
+    return dir;
+  }
+  const summary = (taskId: string) => ({ taskId, name: "Real", branch: "task/main", repoCount: 0, updatedAt: "2026-09-22T10:00:00Z" });
+
+  it("lists the configured roots, refuses a task-domain sender and arbitrary taskDir payloads, and reports one failing root without fixture backfill", async () => {
+    const home = mkdtempSync(join(tmpdir(), "pidock-list-tasks-"));
+    try {
+      const defaultRoot = join(home, "default");
+      const overrideRoot = join(home, "override");
+      mkdirSync(defaultRoot);
+      mkdirSync(overrideRoot);
+      writeTaskRecord(defaultRoot, "task-00000001");
+      writeTaskRecord(overrideRoot, "task-00000002");
+      const index = new TaskRootIndex(join(home, "userData"), defaultRoot);
+      const views = await createTrustedWindow("workspace-list", "production");
+      registerIpc({} as never, views.registry, undefined, undefined, index);
+      const handler = vi.mocked(ipcMain.handle).mock.calls.findLast(([channel]) => channel === "shell/listTasks")?.[1];
+      expect(handler).toBeDefined();
+      const shell = { sender: views.shellView.webContents, senderFrame: views.shellView.webContents.mainFrame } as never;
+      const taskSender = { sender: views.taskView.webContents, senderFrame: views.taskView.webContents.mainFrame } as never;
+
+      // A task-domain webContents may not read the Desktop inventory.
+      expect(await handler!(taskSender)).toMatchObject({ ok: false, error: expect.stringContaining("wrong-domain") });
+      // The renderer names an operation, never a task directory or root path.
+      expect(await handler!(shell, { taskDir: overrideRoot })).toMatchObject({ ok: false, error: expect.stringContaining("invalid-payload") });
+
+      // Default root only: the override root is not registered, so its real task
+      // is neither listed nor invented.
+      expect(await handler!(shell)).toEqual({ ok: true, payload: {
+        tasks: [summary("task-00000001")], roots: [{ label: "默认任务根", state: "ready" }],
+      } });
+
+      // Explicitly importing the override root adds only its verified real task.
+      expect(await index.importRoot(overrideRoot)).toBe(1);
+      expect(await handler!(shell)).toEqual({ ok: true, payload: {
+        tasks: [summary("task-00000001"), summary("task-00000002")],
+        roots: [{ label: "默认任务根", state: "ready" }, { label: "已登记任务根 1", state: "ready" }],
+      } });
+
+      // One root fails: the registered root's record is corrupted. Its identity is
+      // refused with a per-root error, the healthy task stays visible, and the
+      // failed root contributes no substitute or fixture row.
+      writeFileSync(join(overrideRoot, "task-00000002", "task.json"), "{ not json");
+      const failed = await handler!(shell);
+      expect(failed).toEqual({ ok: true, payload: {
+        tasks: [summary("task-00000001")],
+        roots: [{ label: "默认任务根", state: "ready" },
+          { label: "已登记任务根 1", state: "error", message: "任务根目录不可读取或任务身份冲突，请检查后重试" }],
+      } });
+      expect((failed as { payload: { tasks: unknown[] } }).payload.tasks).toHaveLength(1);
+    } finally { rmSync(home, { recursive: true, force: true }); }
+  });
+});
