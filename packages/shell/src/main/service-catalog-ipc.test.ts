@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { parseServiceRunRequest, performServiceBindingOperation, performServiceCatalogOperation, performServiceConfigPreview } from "./service-catalog-ipc.js";
-import type { ServiceCatalog, ServiceTemplate, ServiceTemplateUpdateReview } from "./service-catalog.js";
+import type { ServiceBindingAdoption, ServiceCatalog, ServiceTemplate, ServiceTemplateUpdateReview } from "./service-catalog.js";
 
 const template: ServiceTemplate = {
   projectId: "b36323d3-ff33-4e34-a873-536a9775788a",
@@ -13,8 +13,12 @@ function store(saved: ServiceTemplate = template) {
   const review: ServiceTemplateUpdateReview = { projectId: saved.projectId, serviceId: saved.serviceId, version: saved.version,
     versionLabel: `v${String(saved.version)}`, saved: false, descriptorChanged: true,
     diff: { added: [], changed: [], removed: [] }, restartNeeded: [] };
+  const adoption: ServiceBindingAdoption = { taskId: "task-1", serviceId: saved.serviceId, from: 1, to: 2, adopted: false,
+    restartNeeded: [{ taskId: "task-1", serviceId: saved.serviceId, name: "API", from: 1, to: 2 }] };
   return { listTemplates: vi.fn(() => [template]), saveTemplate: vi.fn(() => saved),
-    reviewTemplateUpdate: vi.fn(() => review), review } satisfies Pick<ServiceCatalog, "listTemplates" | "saveTemplate" | "reviewTemplateUpdate">;
+    reviewTemplateUpdate: vi.fn(() => review), review,
+    reviewTaskBindingAdoption: vi.fn(() => adoption), adoptTaskBinding: vi.fn(() => ({ ...adoption, adopted: true })), adoption } satisfies
+    Pick<ServiceCatalog, "listTemplates" | "saveTemplate" | "reviewTemplateUpdate" | "reviewTaskBindingAdoption" | "adoptTaskBinding">;
 }
 
 describe("shell service catalog request boundary", () => {
@@ -63,6 +67,45 @@ describe("shell service catalog request boundary", () => {
     drifted.saveTemplate.mockReturnValue({ ...template, serviceId: "s-524639ce-90ac-4dc5-8a52-c3628386ca36", version: 9 });
     expect(() => performServiceCatalogOperation(drifted, edit)).toThrow();
     expect(drifted.reviewTemplateUpdate).toHaveBeenCalledOnce();
+  });
+
+  it("reviews one binding adoption without writing and confirms it into exactly one re-pin", () => {
+    const catalog = store();
+    const adoption = { projectId: template.projectId, taskId: "task-1", serviceId: template.serviceId, templateVersion: 2 };
+    expect(performServiceCatalogOperation(catalog, { op: "adoptBinding", ...adoption, confirm: false })).toEqual(catalog.adoption);
+    expect(catalog.reviewTaskBindingAdoption).toHaveBeenCalledWith(adoption);
+    expect(catalog.adoptTaskBinding).not.toHaveBeenCalled();
+    expect(performServiceCatalogOperation(catalog, { op: "adoptBinding", ...adoption, confirm: true }))
+      .toEqual({ ...catalog.adoption, adopted: true });
+    expect(catalog.adoptTaskBinding).toHaveBeenCalledWith(adoption);
+  });
+
+  it("keeps the adoption request key-exact and fails closed when the write is not the reviewed re-pin", () => {
+    const catalog = store();
+    const request = { op: "adoptBinding", projectId: template.projectId, taskId: "task-1", serviceId: template.serviceId,
+      templateVersion: 2, confirm: true };
+    for (const invalid of [
+      { ...request, rootId: "repo-a" },
+      { ...request, subdir: "src/api" },
+      { ...request, programPath: "/tmp/executable" },
+      { ...request, privateRefs: [{ key: "API_TOKEN", envRef: "LOCAL_API_TOKEN" }] },
+      { ...request, shared: [] },
+      { ...request, descriptor: template.descriptor },
+      { ...request, to: 3 },
+      { ...request, confirm: "yes" },
+      { ...request, confirm: undefined },
+      { ...request, templateVersion: 0 },
+      { ...request, templateVersion: 1.5 },
+      { ...request, taskId: 7 },
+      { ...request, op: "adopt" },
+    ]) expect(() => performServiceCatalogOperation(catalog, invalid)).toThrow();
+    expect(catalog.reviewTaskBindingAdoption).not.toHaveBeenCalled();
+    expect(catalog.adoptTaskBinding).not.toHaveBeenCalled();
+    // A store that reports a different re-pin than the review must not be read as an adopted binding.
+    const drifted = store();
+    drifted.adoptTaskBinding.mockReturnValue({ ...drifted.adoption, adopted: true, to: 9 });
+    expect(() => performServiceCatalogOperation(drifted, request)).toThrow();
+    expect(drifted.reviewTaskBindingAdoption).toHaveBeenCalledOnce();
   });
 
   it("accepts only preview identities, never page-supplied environment values", () => {

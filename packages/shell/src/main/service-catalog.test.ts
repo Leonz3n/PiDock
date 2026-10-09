@@ -201,6 +201,116 @@ describe("machine-private service catalog", () => {
     expect(new ServiceCatalog(f.dir, f.authority).listTemplates(projectId)[0]?.descriptor.workdir).toBe("apps/api");
   });
 
+  it("re-pins one existing binding to an existing revision without touching the other binding or the append-only revisions", () => {
+    const f = fixture();
+    const api = f.save();
+    const worker = f.catalog.saveTemplate({ projectId,
+      descriptor: { ...f.descriptor, name: "Worker", args: ["worker.js"] }, shared: [] });
+    f.bind(api.serviceId, 1);
+    f.bind(worker.serviceId, 1);
+    const second = f.catalog.saveTemplate({ projectId, serviceId: api.serviceId, expectedVersion: 1,
+      descriptor: { ...f.descriptor, args: ["server-v2.js"] }, shared: [{ key: "PORT", value: "4000", secret: false }] });
+    const revisionsBefore = readFileSync(join(f.dir, "service-templates.json"), "utf8");
+    const review = f.catalog.reviewTaskBindingAdoption({ projectId, taskId, serviceId: api.serviceId, templateVersion: 2 });
+    expect(review).toEqual({ taskId, serviceId: api.serviceId, from: 1, to: 2, adopted: false,
+      restartNeeded: [{ taskId, serviceId: api.serviceId, name: "API", from: 1, to: 2 }] });
+    // A review writes nothing: the pin, the machine file and the revision file stay as they were.
+    expect(f.catalog.listTask(taskId).find((row) => row.binding.serviceId === api.serviceId)?.binding.templateVersion).toBe(1);
+    expect(readFileSync(join(f.dir, "service-templates.json"), "utf8")).toBe(revisionsBefore);
+    expect(f.catalog.adoptTaskBinding({ projectId, taskId, serviceId: api.serviceId, templateVersion: second.version }))
+      .toEqual({ ...review, adopted: true });
+    const rows = new ServiceCatalog(f.dir, f.authority).listTask(taskId);
+    expect(rows.find((row) => row.binding.serviceId === api.serviceId)).toMatchObject({
+      binding: { templateVersion: 2, rootId: "repo-a", subdir: "src/api", programPath: process.execPath,
+        privateRefs: [{ key: "API_TOKEN", envRef: "LOCAL_API_TOKEN" }] },
+      template: { version: 2, descriptor: { args: ["server-v2.js"] }, shared: [{ key: "PORT", value: "4000", secret: false }] },
+    });
+    // The sibling binding of the same task keeps its pin, and the revision store is untouched and still append-only.
+    expect(rows.find((row) => row.binding.serviceId === worker.serviceId)).toMatchObject({ binding: { templateVersion: 1 }, template: { version: 1 } });
+    expect(readFileSync(join(f.dir, "service-templates.json"), "utf8")).toBe(revisionsBefore);
+    expect(f.catalog.template(projectId, api.serviceId, 1)).toEqual(api);
+    expect(JSON.parse(readFileSync(join(f.dir, "service-templates.json"), "utf8")).revisions).toHaveLength(3);
+  });
+
+  it("covers every binding of the service in the restart-needed consequence and allows re-pinning an older existing revision", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pidock-service-adopt-"));
+    directories.push(dir);
+    const secondTask = "task-catalog-b";
+    const owners: Record<string, VerifiedTaskIdentity> = { [taskId]: { ...identity }, [secondTask]: { ...identity, taskId: secondTask } };
+    const authority: ServiceCatalogAuthority = {
+      projectExists: (id) => id === projectId,
+      task: (id) => owners[id] ? { identity: owners[id]!, projectId, rootIds: ["repo-a"] } : null,
+    };
+    const catalog = new ServiceCatalog(dir, authority);
+    const descriptor = { name: "API", program: "node", args: ["server.js"], ports: [3000], runType: "long-lived" as const };
+    const api = catalog.saveTemplate({ projectId, descriptor, shared: [] });
+    const bindFor = (owner: string) => catalog.bindTask({ taskId: owner, serviceId: api.serviceId, templateVersion: 1, rootId: "repo-a",
+      subdir: "", programPath: process.execPath, privateRefs: [] });
+    bindFor(taskId);
+    bindFor(secondTask);
+    catalog.saveTemplate({ projectId, serviceId: api.serviceId, expectedVersion: 1, descriptor: { ...descriptor, args: ["server-v2.js"] }, shared: [] });
+    expect(catalog.adoptTaskBinding({ projectId, taskId, serviceId: api.serviceId, templateVersion: 2 })).toEqual({
+      taskId, serviceId: api.serviceId, from: 1, to: 2, adopted: true,
+      restartNeeded: [{ taskId, serviceId: api.serviceId, name: "API", from: 1, to: 2 },
+        { taskId: secondTask, serviceId: api.serviceId, name: "API", from: 1, to: 2 }],
+    });
+    // Adopting one binding changes no other task's pin and starts, stops or restarts nothing.
+    const reopened = new ServiceCatalog(dir, authority);
+    expect(reopened.listTask(secondTask)[0]?.binding.templateVersion).toBe(1);
+    expect(reopened.listTask(taskId)[0]?.binding.templateVersion).toBe(2);
+    // An older revision that still exists can be adopted back; only the same version is refused.
+    expect(catalog.adoptTaskBinding({ projectId, taskId, serviceId: api.serviceId, templateVersion: 1 }))
+      .toMatchObject({ from: 2, to: 1, adopted: true });
+    expect(() => catalog.adoptTaskBinding({ projectId, taskId, serviceId: api.serviceId, templateVersion: 1 })).toThrow("already pinned");
+  });
+
+  it("refuses an unknown revision, a foreign project, an unbound service and a stale stored identity without writing", () => {
+    const f = fixture();
+    const api = f.save();
+    const unbound = f.catalog.saveTemplate({ projectId, descriptor: { ...f.descriptor, name: "Worker" }, shared: [] });
+    f.bind(api.serviceId);
+    const machineBefore = readFileSync(join(f.dir, "service-machine.json"), "utf8");
+    for (const adopt of [
+      () => f.catalog.reviewTaskBindingAdoption({ projectId, taskId, serviceId: api.serviceId, templateVersion: 2 }),
+      () => f.catalog.adoptTaskBinding({ projectId, taskId, serviceId: api.serviceId, templateVersion: 2 }),
+      () => f.catalog.reviewTaskBindingAdoption({ projectId, taskId, serviceId: api.serviceId, templateVersion: 1 }),
+      () => f.catalog.adoptTaskBinding({ projectId, taskId, serviceId: api.serviceId, templateVersion: 1 }),
+      () => f.catalog.adoptTaskBinding({ projectId: otherProjectId, taskId, serviceId: api.serviceId, templateVersion: 1 }),
+      () => f.catalog.adoptTaskBinding({ projectId, taskId, serviceId: unbound.serviceId, templateVersion: 1 }),
+    ]) expect(adopt).toThrow();
+    expect(readFileSync(join(f.dir, "service-machine.json"), "utf8")).toBe(machineBefore);
+    // A stored identity that no longer matches the live task is refused instead of re-pinned.
+    f.replaceIdentity({ ...identity, directoryInode: "99" });
+    expect(() => f.catalog.reviewTaskBindingAdoption({ projectId, taskId, serviceId: api.serviceId, templateVersion: 2 })).toThrow("stored service task identity changed");
+    f.replaceIdentity({ ...identity });
+    f.setRoots([]);
+    expect(() => f.catalog.adoptTaskBinding({ projectId, taskId, serviceId: api.serviceId, templateVersion: 2 })).toThrow("stored service task identity changed");
+    expect(readFileSync(join(f.dir, "service-machine.json"), "utf8")).toBe(machineBefore);
+  });
+
+  it("never carries a machine path or a secret into a shared revision through an adoption", () => {
+    const f = fixture();
+    const api = f.save();
+    f.catalog.bindTask({ taskId, serviceId: api.serviceId, templateVersion: 1, rootId: "repo-a", subdir: "src/api",
+      programPath: process.execPath, privateRefs: [{ key: "API_TOKEN", envRef: "LOCAL_API_TOKEN" }] });
+    f.catalog.saveTemplate({ projectId, serviceId: api.serviceId, expectedVersion: 1, descriptor: { ...f.descriptor, args: ["server-v2.js"] }, shared: [] });
+    const revisionsBefore = readFileSync(join(f.dir, "service-templates.json"), "utf8");
+    f.catalog.adoptTaskBinding({ projectId, taskId, serviceId: api.serviceId, templateVersion: 2 });
+    const revisions = readFileSync(join(f.dir, "service-templates.json"), "utf8");
+    expect(revisions).toBe(revisionsBefore);
+    expect(revisions).not.toContain(process.execPath);
+    expect(revisions).not.toContain("LOCAL_API_TOKEN");
+    // Only the pinned version moved; the local identity stays in the machine file.
+    expect(f.catalog.listTask(taskId)[0]?.binding).toMatchObject({ templateVersion: 2, rootId: "repo-a", subdir: "src/api",
+      programPath: process.execPath, privateRefs: [{ key: "API_TOKEN", envRef: "LOCAL_API_TOKEN" }] });
+    // A shared revision that carries either is still refused at the source, so an adoption can never smuggle one in.
+    expect(() => f.catalog.saveTemplate({ projectId, serviceId: api.serviceId, expectedVersion: 2,
+      descriptor: { ...f.descriptor, args: ["--prefix=/Users/name/app"] }, shared: [] })).toThrow("private shared argument");
+    expect(() => f.catalog.saveTemplate({ projectId, serviceId: api.serviceId, expectedVersion: 2,
+      descriptor: f.descriptor, shared: [{ key: "API_TOKEN", value: "credential-value", secret: false }] })).toThrow("private key");
+    expect(readFileSync(join(f.dir, "service-templates.json"), "utf8")).toBe(revisionsBefore);
+  });
+
   it("persists a portable shared workdir and never a local path", () => {
     const f = fixture();
     const saved = f.catalog.saveTemplate({ projectId, descriptor: { ...f.descriptor, workdir: "apps/api" },

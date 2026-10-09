@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, expect, it, vi } from "vitest";
 import { TaskServiceBinding } from "../components/TaskServiceBinding";
 import type { ServiceTemplateView } from "../data/serviceCatalog";
-import { serviceBindingsFromMain } from "../data/serviceCatalog";
+import { serviceBindingsFromMain, serviceBindingAdoptionFromMain } from "../data/serviceCatalog";
 import type { ShellTaskOpResult } from "../data/shellBridge";
 
 const template: ServiceTemplateView = { projectId: "b36323d3-ff33-4e34-a873-536a9775788a", serviceId: "s-b36323d3-ff33-4e34-a873-536a9775788a",
@@ -72,6 +72,106 @@ it("discards a late bind receipt after the task becomes unavailable", async () =
   finish?.({ ok: true, payload: { cancelled: false, binding: bound } });
   await waitFor(() => expect(screen.getByText("当前项目无可绑定任务")).toBeInTheDocument());
   expect(screen.queryByText(/已绑定/)).toBeNull();
+});
+
+const adoptReview = { taskId: "task-a", serviceId: template.serviceId, from: 1, to: 2, adopted: false,
+  restartNeeded: [{ taskId: "task-a", serviceId: template.serviceId, name: "API", from: 1, to: 2 }] };
+const newerTemplate: ServiceTemplateView = { ...template, version: 2, descriptor: { ...template.descriptor, workdir: "apps/api" } };
+
+it("offers the adoption of a newer revision only when one exists, and never adopts on load", async () => {
+  const serviceCatalogOp = vi.fn(async (request: Record<string, unknown>) => request["op"] === "taskBindings"
+    ? { ok: true, payload: [bound] } : { ok: true, payload: adoptReview });
+  window.pidock = { taskOp: vi.fn(async () => roots()), serviceCatalogOp };
+  const { unmount } = render(<TaskServiceBinding template={template} tasks={tasks} />);
+  expect(await screen.findByText("已绑定 · v1 · repo")).toBeInTheDocument();
+  expect(serviceCatalogOp).toHaveBeenCalledTimes(1);
+  expect(serviceCatalogOp).toHaveBeenCalledWith({ op: "taskBindings", projectId: template.projectId, taskId: "task-a" });
+  // The pinned revision is the displayed revision: no control, and no adoption request.
+  expect(screen.queryByRole("button", { name: /采用/ })).toBeNull();
+  unmount();
+  serviceCatalogOp.mockClear();
+  render(<TaskServiceBinding template={newerTemplate} tasks={tasks} />);
+  expect(await screen.findByText("已绑定 · v1 · repo")).toBeInTheDocument();
+  expect(serviceCatalogOp).toHaveBeenCalledTimes(1);
+  expect(serviceCatalogOp).not.toHaveBeenCalledWith(expect.objectContaining({ op: "adoptBinding" }));
+  expect(screen.getByRole("button", { name: /核对采用 v2/ })).toBeInTheDocument();
+});
+
+it("adopts v2 only after a confirmation that shows from → to and the restart-needed list", async () => {
+  const serviceCatalogOp = vi.fn(async (request: Record<string, unknown>) => request["op"] === "taskBindings"
+    ? { ok: true, payload: [bound] }
+    : { ok: true, payload: { ...adoptReview, adopted: request["confirm"] === true } });
+  window.pidock = { taskOp: vi.fn(async () => roots()), serviceCatalogOp };
+  render(<TaskServiceBinding template={newerTemplate} tasks={tasks} />);
+  await screen.findByText("已绑定 · v1 · repo");
+  fireEvent.click(screen.getByRole("button", { name: /核对采用 v2/ }));
+  expect(await screen.findByText(/待采用：API · v1 → v2/)).toBeInTheDocument();
+  expect(screen.getByText(/需显式重启：任务 任务甲 的 API（v1 → v2）/)).toBeInTheDocument();
+  expect(screen.getByText(/未启动、停止或重启任何进程/)).toBeInTheDocument();
+  expect(serviceCatalogOp).toHaveBeenCalledWith({ op: "adoptBinding", projectId: template.projectId, taskId: "task-a",
+    serviceId: template.serviceId, templateVersion: 2, confirm: false });
+  // Nothing is written yet: the binding still shows its pinned revision.
+  expect(screen.getByText("已绑定 · v1 · repo")).toBeInTheDocument();
+  expect(serviceCatalogOp.mock.calls.filter(([request]) => (request as Record<string, unknown>)["confirm"] === true)).toHaveLength(0);
+  fireEvent.click(screen.getByRole("button", { name: "确认采用 v2" }));
+  expect(await screen.findByText(/已采用 v2（原 v1）/)).toBeInTheDocument();
+  expect(screen.getByText("已绑定 · v2 · repo")).toBeInTheDocument();
+  expect(serviceCatalogOp).toHaveBeenLastCalledWith({ op: "adoptBinding", projectId: template.projectId, taskId: "task-a",
+    serviceId: template.serviceId, templateVersion: 2, confirm: true });
+  // The adopted revision is the pinned one, so the control is gone.
+  expect(screen.queryByRole("button", { name: /采用/ })).toBeNull();
+});
+
+it("surfaces the real refusal and leaves the shown version unchanged", async () => {
+  const serviceCatalogOp = vi.fn(async (request: Record<string, unknown>) => request["op"] === "taskBindings"
+    ? { ok: true, payload: [bound] }
+    : { ok: false, error: "Error invoking remote method 'shell/serviceCatalogOp': Error: template version unavailable" });
+  window.pidock = { taskOp: vi.fn(async () => roots()), serviceCatalogOp };
+  render(<TaskServiceBinding template={newerTemplate} tasks={tasks} />);
+  await screen.findByText("已绑定 · v1 · repo");
+  fireEvent.click(screen.getByRole("button", { name: /核对采用 v2/ }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("template version unavailable");
+  expect(screen.queryByText(/待采用/)).toBeNull();
+  expect(screen.getByText("已绑定 · v1 · repo")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /核对采用 v2/ })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /核对采用 v2/ }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("template version unavailable");
+  // A refused review never becomes a confirmed write: there is no control to confirm and none was sent.
+  expect(screen.queryByRole("button", { name: "确认采用 v2" })).toBeNull();
+  expect(serviceCatalogOp.mock.calls.filter(([request]) => (request as Record<string, unknown>)["confirm"] === true)).toHaveLength(0);
+  expect(screen.getByText("已绑定 · v1 · repo")).toBeInTheDocument();
+});
+
+it("reads only main's own adoption shape and discards a receipt that does not match the review", async () => {
+  const expected = { taskId: "task-a", serviceId: template.serviceId, from: 1, to: 2 };
+  expect(serviceBindingAdoptionFromMain(adoptReview, expected)).toEqual(adoptReview);
+  for (const refused of [
+    { ...adoptReview, programPath: "/private/program" },
+    { ...adoptReview, rootId: "repo" },
+    { ...adoptReview, taskId: "task-b" },
+    { ...adoptReview, serviceId: "s-524639ce-90ac-4dc5-8a52-c3628386ca36" },
+    { ...adoptReview, from: 2 },
+    { ...adoptReview, to: 3 },
+    { ...adoptReview, from: 2, to: 2 },
+    { ...adoptReview, adopted: "yes" },
+    { ...adoptReview, restartNeeded: [{ ...adoptReview.restartNeeded[0], to: 9 }] },
+    { ...adoptReview, restartNeeded: [{ ...adoptReview.restartNeeded[0], from: 0 }] },
+    { ...adoptReview, restartNeeded: [{ ...adoptReview.restartNeeded[0], serviceId: "s-524639ce-90ac-4dc5-8a52-c3628386ca36" }] },
+    { ...adoptReview, restartNeeded: [adoptReview.restartNeeded[0], adoptReview.restartNeeded[0]] },
+    { ...adoptReview, restartNeeded: { taskId: "task-a" } },
+  ]) expect(serviceBindingAdoptionFromMain(refused, expected)).toBeNull();
+  expect(serviceBindingAdoptionFromMain(undefined, expected)).toBeNull();
+  const serviceCatalogOp = vi.fn(async (request: Record<string, unknown>) => request["op"] === "taskBindings"
+    ? { ok: true, payload: [bound] }
+    : { ok: true, payload: request["confirm"] === true ? { ...adoptReview, adopted: true, restartNeeded: [] } : adoptReview });
+  window.pidock = { taskOp: vi.fn(async () => roots()), serviceCatalogOp };
+  render(<TaskServiceBinding template={newerTemplate} tasks={tasks} />);
+  await screen.findByText("已绑定 · v1 · repo");
+  fireEvent.click(screen.getByRole("button", { name: /核对采用 v2/ }));
+  await screen.findByText(/待采用：API · v1 → v2/);
+  fireEvent.click(screen.getByRole("button", { name: "确认采用 v2" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("采用结果无法确认");
+  expect(screen.getByText("已绑定 · v1 · repo")).toBeInTheDocument();
 });
 
 it("refuses malformed or leaked binding responses instead of treating them as empty", async () => {
