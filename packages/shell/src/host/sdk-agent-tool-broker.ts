@@ -564,6 +564,7 @@ export class SdkAgentToolBroker {
     for (const [approvalId, wait] of [...this.waits]) {
       if (wait.sessionId !== sessionId) continue;
       this.waits.delete(approvalId);
+      this.settleParked(approvalId, sessionId);
       wait.settle("cancelled");
     }
   }
@@ -573,7 +574,23 @@ export class SdkAgentToolBroker {
     this.closed = true;
     for (const [approvalId, wait] of [...this.waits]) {
       this.waits.delete(approvalId);
+      this.settleParked(approvalId, wait.sessionId);
       wait.settle("closed");
+    }
+  }
+
+  /**
+   * A parked call that is cancelled, closed or timed out must not leave a live
+   * confirmation behind: the confirmation is settled through the same channel
+   * that minted it, so a later decision by the user cannot reach an effect that
+   * has already refused.
+   */
+  private settleParked(approvalId: string, sessionId: string): void {
+    try {
+      this.options.channel(sessionId).reject(approvalId);
+      this.options.persist(sessionId);
+    } catch {
+      // The channel is gone or the confirmation was already settled.
     }
   }
 
@@ -731,12 +748,7 @@ export class SdkAgentToolBroker {
       const timer = setTimeout(() => {
         if (!this.waits.has(approvalId)) return;
         this.waits.delete(approvalId);
-        try {
-          this.options.channel(sessionId).reject(approvalId);
-          this.options.persist(sessionId);
-        } catch {
-          // The session is gone; the refusal still stands.
-        }
+        this.settleParked(approvalId, sessionId);
         settle("expired");
       }, this.approvalTimeoutMs);
       const finish = (verdict: SdkAgentApprovalVerdict) => {
