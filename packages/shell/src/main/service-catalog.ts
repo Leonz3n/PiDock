@@ -4,17 +4,24 @@ import type { ServiceOwnerCatalogSnapshot } from "../rpc/service-host-binding.js
 import { isAbsolute, join, normalize } from "node:path";
 import { readTaskRecordOnDisk } from "../host/task-store.js";
 import { SERVICE_KEY_PATTERN, isServiceSecretKey, maskServiceValue, resolveServiceEnv, validateNoSecretsInShared, validateServiceDescriptor,
-  type ServiceConfigEntry, type ServiceConfigSource, type ServiceDescriptor } from "./service-config.js";
+  validateSharedServiceWorkdir, diffServiceTemplate, nextServiceTemplateVersion, restartNeededForTemplateAdopt,
+  type ServiceConfigEntry, type ServiceConfigSource, type ServiceDescriptor, type TemplateDiff } from "./service-config.js";
 import { isSafeTaskChildName } from "./task-provision.js";
 import type { ProjectRegistry } from "./project-registry.js";
 import type { TaskRootIndex, VerifiedTaskIdentity } from "./task-root-index.js";
 
-/** Main-only storage. Shared revisions exclude local program paths and private reference values; arbitrary literals still require human review. */
+/**
+ * Main-only storage. Shared revisions exclude local program paths, machine
+ * working directories and private reference values; arbitrary literals still
+ * require human review. `workdir` is the portable, repo-relative default the
+ * task binding pre-fills; the binding's own `subdir` is what a launch
+ * resolves.
+ */
 export interface ServiceTemplate {
   projectId: string;
   serviceId: string;
   version: number;
-  descriptor: Pick<ServiceDescriptor, "name" | "program" | "args" | "ports" | "healthCheck" | "runType">;
+  descriptor: Pick<ServiceDescriptor, "name" | "program" | "args" | "ports" | "healthCheck" | "runType"> & { workdir?: string };
   shared: ServiceConfigEntry[];
 }
 export interface ServiceTaskBinding {
@@ -55,6 +62,27 @@ export interface ServiceLaunch {
     privateEntries: ServiceConfigEntry[];
     task: ServiceConfigEntry[];
   };
+}
+
+/**
+ * One shared-template edit as main reviews it before writing (and as it looks
+ * just after). `diff` and `restartNeeded` come from the shared rules layer, so
+ * the page never re-derives them; `restartNeeded` lists the pinned task
+ * bindings that must be restarted explicitly - nothing here restarts a
+ * running service.
+ */
+export interface ServiceTemplateUpdateReview {
+  projectId: string;
+  serviceId: string;
+  /** Version the confirmed save produces (the written one once `saved`). */
+  version: number;
+  /** Display label minted by `nextServiceTemplateVersion` (`v13`). */
+  versionLabel: string;
+  saved: boolean;
+  /** True when a launcher field (program/args/ports/runType/healthCheck/workdir) changes. */
+  descriptorChanged: boolean;
+  diff: TemplateDiff;
+  restartNeeded: { taskId: string; serviceId: string; name: string; from: number; to: number }[];
 }
 
 export interface ServiceCatalogAuthority {
@@ -123,7 +151,7 @@ function version(value: unknown): number {
 }
 function descriptor(value: unknown): ServiceTemplate["descriptor"] {
   const row = object(value);
-  fields(row, ["name", "program", "args", "ports", "runType"], ["healthCheck"]);
+  fields(row, ["name", "program", "args", "ports", "runType"], ["healthCheck", "workdir"]);
   const name = text(row["name"], 128);
   const program = text(row["program"], 128);
   if (!/^[A-Za-z0-9_.+-]+$/.test(program)) throw new Error("shared program must be a portable name");
@@ -147,9 +175,16 @@ function descriptor(value: unknown): ServiceTemplate["descriptor"] {
     }
     healthCheck = { kind: health["kind"] as "http" | "tcp" | "grpc", ...(health["target"] === undefined ? {} : { target: health["target"] as string }) };
   }
+  let workdir: string | undefined;
+  if (row["workdir"] !== undefined) {
+    if (typeof row["workdir"] !== "string" || validateSharedServiceWorkdir(row["workdir"])) {
+      throw new Error("invalid shared working directory");
+    }
+    workdir = row["workdir"];
+  }
   const result: ServiceTemplate["descriptor"] = { name, program, args: [...row["args"]] as string[],
     ports: [...row["ports"]] as number[], runType: row["runType"] as ServiceDescriptor["runType"],
-    ...(healthCheck === undefined ? {} : { healthCheck }) };
+    ...(healthCheck === undefined ? {} : { healthCheck }), ...(workdir === undefined ? {} : { workdir }) };
   if (validateServiceDescriptor(result)) throw new Error("invalid service descriptor");
   return result;
 }
@@ -275,6 +310,23 @@ function writeDocument<T>(directory: string, file: string, value: T, parse: (val
   } finally { rmSync(temp, { force: true }); rmSync(backupTemp, { force: true }); }
 }
 
+/**
+ * One version bump, minted by the shared rules layer: `v12` → `v13`. The
+ * stored version is a number and the page shows the minted label, so both
+ * come from the same rule and can never drift.
+ */
+function nextVersion(latest: number): { version: number; label: string } {
+  const label = nextServiceTemplateVersion(`v${String(latest)}`);
+  return { version: Number(label.replace(/^v/, "")), label };
+}
+
+/** Newest revision of one service inside an already-read template document. */
+function latestRevision(doc: TemplateDocument, project: string, id: string): ServiceTemplate | null {
+  return doc.revisions
+    .filter((entry) => entry.projectId === project && entry.serviceId === id)
+    .reduce<ServiceTemplate | null>((max, entry) => (max === null || entry.version > max.version ? entry : max), null);
+}
+
 export function resolvePrivateServiceRefs(
   refs: ServiceTaskBinding["privateRefs"], env: Record<string, string | undefined>,
 ): ServiceConfigEntry[] {
@@ -396,13 +448,51 @@ export class ServiceCatalog {
     if (!this.authority.projectExists(project)) throw new Error("project unavailable");
     const doc = this.readTemplates();
     const id = input.serviceId === undefined ? `s-${randomUUID()}` : serviceId(input.serviceId);
-    const existing = doc.revisions.filter((entry) => entry.projectId === project && entry.serviceId === id);
-    const latest = existing.reduce((max, entry) => Math.max(max, entry.version), 0);
-    if ((input.expectedVersion ?? 0) !== latest) throw new Error("template version conflict");
     if (doc.revisions.some((entry) => entry.serviceId === id && entry.projectId !== project)) throw new Error("service belongs to another project");
-    const next = template({ projectId: project, serviceId: id, version: latest + 1, descriptor: input.descriptor, shared: input.shared });
+    const latest = latestRevision(doc, project, id)?.version ?? 0;
+    if ((input.expectedVersion ?? 0) !== latest) throw new Error("template version conflict");
+    const next = template({ projectId: project, serviceId: id, version: nextVersion(latest).version, descriptor: input.descriptor, shared: input.shared });
     writeDocument(this.directory, this.templateFile(), { version: 1, revisions: [...doc.revisions, next] }, templates);
     return next;
+  }
+  /**
+   * Read-only review of one shared-template edit against the revision the page
+   * last read (`expectedVersion`): the row-level diff, whether a launcher
+   * field changes, the version the confirmed save mints, and the pinned task
+   * bindings that then need an explicit restart. Validates the incoming
+   * revision exactly like a save (same parser, same fail-closed rules) and
+   * writes nothing; `saved` stays false so a caller cannot read a review as a
+   * completed save.
+   */
+  reviewTemplateUpdate(input: { projectId: string; serviceId: string; expectedVersion: number;
+    descriptor: ServiceTemplate["descriptor"]; shared: ServiceConfigEntry[] }): ServiceTemplateUpdateReview {
+    const project = projectId(input.projectId);
+    if (!this.authority.projectExists(project)) throw new Error("project unavailable");
+    const id = serviceId(input.serviceId);
+    const doc = this.readTemplates();
+    if (doc.revisions.some((entry) => entry.serviceId === id && entry.projectId !== project)) throw new Error("service belongs to another project");
+    const current = latestRevision(doc, project, id);
+    if (!current || current.version !== version(input.expectedVersion)) throw new Error("template version conflict");
+    const minted = nextVersion(current.version);
+    const next = template({ projectId: project, serviceId: id, version: minted.version, descriptor: input.descriptor, shared: input.shared });
+    return this.reviewOfCurrent(current, next, minted.label);
+  }
+  private reviewOfCurrent(current: ServiceTemplate, next: ServiceTemplate, versionLabel: string): ServiceTemplateUpdateReview {
+    return { projectId: next.projectId, serviceId: next.serviceId, version: next.version, versionLabel, saved: false,
+      descriptorChanged: JSON.stringify(current.descriptor) !== JSON.stringify(next.descriptor),
+      diff: diffServiceTemplate(current.shared, next.shared), restartNeeded: this.restartNeededFor(next) };
+  }
+  /**
+   * Task bindings of one service still pinned to an older revision: adopting
+   * `entry.version` makes each of them a restart candidate. Each entry carries
+   * the task id as `id` and the service display name, because the restart is
+   * per task binding, not per template.
+   */
+  private restartNeededFor(entry: ServiceTemplate): ServiceTemplateUpdateReview["restartNeeded"] {
+    const pinned = this.readMachine().bindings.filter((row) => row.projectId === entry.projectId && row.serviceId === entry.serviceId);
+    return restartNeededForTemplateAdopt(pinned.map((row) => ({ id: row.taskId, name: entry.descriptor.name, templateVersion: String(row.templateVersion) })),
+      String(entry.version)).map((row) => ({ taskId: row.id, serviceId: entry.serviceId, name: row.name,
+      from: Number(row.from), to: Number(row.to) }));
   }
   listTemplates(project: string): ServiceTemplate[] {
     if (!this.authority.projectExists(projectId(project))) throw new Error("project unavailable");

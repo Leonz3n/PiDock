@@ -14,6 +14,9 @@
  *   then 共享模板 / 本机私有配置 / 任务覆盖, then runtime bindings).
  * - Credentials and local paths live in the private layer and NEVER in
  *   the shared template: `validateNoSecretsInShared` enforces it.
+ * - A shared template's working directory is repo-relative and portable
+ *   (`validateSharedServiceWorkdir`); the absolute cwd of one machine is
+ *   the task binding's job.
  * - Desktop launch uses an explicit program + argv array, never Unix-only
  *   inline env assignment (`FOO=bar cmd`); `validateServiceDescriptor`
  *   rejects programs carrying assignments or shell chaining.
@@ -126,6 +129,41 @@ export function validateServiceDescriptor(descriptor: ServiceDescriptor): Servic
     if (!absolute) {
       return { code: "invalid-service", message: "工作目录必须是本机绝对路径" };
     }
+  }
+  return null;
+}
+
+/**
+ * Shared-template working directory: the portable, repo-relative default the
+ * task binding pre-fills. A shared revision never carries a machine path, so
+ * absolute forms (POSIX `/…`, `~/…`, Windows drive, UNC), `\`, control
+ * characters, `.`/`..` segments, empty segments and credential-looking
+ * segments are rejected fail-closed; the concrete absolute cwd stays in the
+ * task binding (`rootId` + `subdir`) and is what a launch resolves.
+ */
+export function validateSharedServiceWorkdir(workdir: string): ServiceConfigError | null {
+  const value = workdir.trim();
+  if (value.length === 0) {
+    return { code: "invalid-service", message: "工作目录不能为空；不填写表示使用仓库根目录" };
+  }
+  if (value.length > 512) {
+    return { code: "invalid-service", message: "工作目录过长，请使用仓库内的简短相对目录" };
+  }
+  if (value.startsWith("/") || value.startsWith("~") || value.startsWith("\\") || /^[A-Za-z]:/.test(value)) {
+    return { code: "invalid-service", message: "工作目录必须是仓库内相对目录，不能是本机绝对路径" };
+  }
+  if (/[\\\0\r\n]/.test(value)) {
+    return { code: "invalid-service", message: "工作目录不能包含反斜杠或控制字符" };
+  }
+  const parts = value.split("/");
+  if (parts.some((part) => part.length === 0)) {
+    return { code: "invalid-service", message: "工作目录不能以斜杠开头、结尾或包含空目录名" };
+  }
+  if (parts.some((part) => part === "." || part === "..")) {
+    return { code: "invalid-service", message: "工作目录不能包含 . 或 .. 片段，不能跳出仓库" };
+  }
+  if (isServiceSecretKey(value)) {
+    return { code: "secret-in-shared", message: "工作目录不能包含疑似凭据片段，请改用中性目录名" };
   }
   return null;
 }

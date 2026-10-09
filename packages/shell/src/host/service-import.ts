@@ -4,7 +4,7 @@ import { join, relative, sep } from "node:path";
 import { parseEnv } from "node:util";
 import { parse as parseJsonc, type ParseError } from "jsonc-parser";
 import { parseDocument } from "yaml";
-import { classifyImportDraft, auditImportVars, SERVICE_KEY_PATTERN, type ServiceRunType } from "../main/service-config.js";
+import { classifyImportDraft, auditImportVars, SERVICE_KEY_PATTERN, validateSharedServiceWorkdir, type ServiceRunType } from "../main/service-config.js";
 import type { WorkspaceRoot } from "../main/workspace-files.js";
 
 export interface ServiceImportHint {
@@ -12,8 +12,18 @@ export interface ServiceImportHint {
   name: string;
   /** null identifies configuration-only hints, never an executable run unit. */
   runType: ServiceRunType | null;
-  /** Keys only. The scanner never returns env values or executable commands. */
+  /** Keys only. The scanner never returns env values. */
   envKeys: string[];
+  /**
+   * Command-token candidate after the redaction policy below: the program
+   * name (empty when it was dropped or the source carries no command) and
+   * the surviving argv. A hint is a form candidate for human review, never
+   * an executable launch on its own.
+   */
+  program: string;
+  args: string[];
+  /** Repo-relative working-directory candidate; absent when the source names none or it was dropped. */
+  workdir?: string;
   invalidVars: string[];
   toVerify: string[];
 }
@@ -30,8 +40,74 @@ const MAX_HINTS = 100;
 const MAX_ENV_ROWS = 100;
 const MAX_ENV_KEY_CHARS = 100;
 const MAX_WARNINGS = 30;
+const MAX_TOKEN_CHARS = 200;
+const MAX_ARGS = 40;
 const object = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 const display = (value: string) => value.slice(0, 100);
+
+/**
+ * Redaction policy for one command token. A token is emitted only when it
+ * carries no machine path and no credential: absolute/`~`/drive/UNC forms,
+ * `KEY=VALUE` assignments, `scheme://user:pass@` URLs, credential-looking
+ * text and over-long tokens are dropped. Dropped tokens are reported by
+ * reason class (never echoed) so the draft reads as incomplete instead of
+ * silently truncated.
+ */
+function unsafeCommandToken(token: string): "path" | "credential" | null {
+  if (token.length === 0) return null;
+  if (token.length > MAX_TOKEN_CHARS || /[\r\n\0]/.test(token)) return "credential";
+  if (token.startsWith("/") || token.startsWith("~") || token.startsWith("\\") || /^[A-Za-z]:[\\/]/.test(token)) return "path";
+  if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(token) || token.includes("=")) return "credential";
+  if (/:\/\/[^/\s]*@/.test(token) || /(?:password|token|secret|api[_-]?key)/i.test(token)) return "credential";
+  return null;
+}
+
+/** Split one scanned command into redacted program/argv plus the drop notes. */
+function commandCandidate(command: string): { program: string; args: string[]; toVerify: string[] } {
+  const toVerify: string[] = [];
+  const tokens = command.trim().split(/\s+/).filter((token) => token.length > 0);
+  let head = tokens[0] ?? "";
+  // `PORT=4100 node server.js`: the leading assignments are configuration, not
+  // the program, so they are dropped (never echoed) and the first safe token
+  // becomes the program candidate.
+  let droppedHead = 0;
+  while (head.length > 0 && /^[A-Za-z_][A-Za-z0-9_]*=/.test(head)) {
+    droppedHead += 1;
+    head = tokens[droppedHead] ?? "";
+  }
+  if (head.length === 0) {
+    return { program: "", args: [], toVerify: tokens.length > 0
+      ? ["启动命令只包含内联环境赋值，已从草案移除；请填写可移植的程序名"] : toVerify };
+  }
+  const headReason = unsafeCommandToken(head);
+  if (headReason !== null) {
+    return { program: "", args: [], toVerify: [...toVerify, headReason === "path"
+      ? "启动命令以本机路径开头，已从草案移除；请填写可移植的程序名"
+      : "启动命令以疑似凭据开头，已从草案移除；请填写可移植的程序名"] };
+  }
+  const rest = tokens.slice(droppedHead + 1);
+  const args = rest.filter((token) => unsafeCommandToken(token) === null);
+  const dropped = droppedHead + (rest.length - args.length);
+  if (dropped > 0) toVerify.push(`启动命令有 ${String(dropped)} 个片段含本机路径、内联环境赋值或疑似凭据，已从草案移除，请人工核对`);
+  if (args.length > MAX_ARGS) toVerify.push("启动参数已截断，请人工核对");
+  return { program: head, args: args.slice(0, MAX_ARGS), toVerify };
+}
+
+/**
+ * Repo-relative working-directory candidate for one scanned config. Only a
+ * value the shared rule accepts is emitted; `${workspaceFolder}` resolves to
+ * the repo root (no candidate), and anything else is dropped with a note.
+ */
+function workdirCandidate(value: string | undefined, toVerify: string[]): string | undefined {
+  if (value === undefined) return undefined;
+  const relative = value.replace(/^\$\{workspaceFolder\}/, "").replace(/^\$\{workspaceRoot\}/, "");
+  if (relative.length === 0 || relative === ".") return undefined;
+  if (validateSharedServiceWorkdir(relative) !== null) {
+    toVerify.push("配置中的工作目录不是可移植的仓库内相对目录，已从草案移除，请人工核对");
+    return undefined;
+  }
+  return relative;
+}
 
 function readSource(root: string, source: string, protection?: TaskPathProtection): string | null {
   const path = join(root, source);
@@ -90,7 +166,12 @@ export function scanTaskServiceImportHints(input: { taskDir: string; roots: read
   return scanServiceImportHints(repoRoot, input.protection);
 }
 
-/** Read fixed, bounded repo config files into non-executable, value-free import hints. */
+/**
+ * Read fixed, bounded repo config files into redacted import hints. Env rows
+ * are key-only (never values), command tokens pass the redaction policy above
+ * and the working directory stays repo-relative, so nothing here is a launch
+ * plan: a hint only fills a form for human review.
+ */
 export function scanServiceImportHints(repoRoot: string, protection?: TaskPathProtection): ServiceImportScan {
   protection?.assert(repoRoot);
   const root = realpathSync(repoRoot);
@@ -98,13 +179,17 @@ export function scanServiceImportHints(repoRoot: string, protection?: TaskPathPr
   const hints: ServiceImportHint[] = [];
   const errors: ServiceImportScan["errors"] = [];
   let truncated = false;
-  const add = (source: string, name: string, command: string, env?: unknown) => {
+  const add = (source: string, name: string, command: string, env?: unknown, workdir?: unknown) => {
     if (hints.length >= MAX_HINTS) { truncated = true; return; }
     const audit = envAudit(env);
+    const candidate = commandCandidate(command);
     const inlineKey = source === "package.json" ? inlineAssignmentKey(command) : null;
+    const toVerify = [...audit.toVerify, ...candidate.toVerify];
+    const workdirValue = workdirCandidate(typeof workdir === "string" ? workdir : undefined, toVerify);
     const invalidVars = inlineKey && !SERVICE_KEY_PATTERN.test(inlineKey) ? [...audit.invalidVars, display(inlineKey)] : audit.invalidVars;
     hints.push({ source, name: display(name), runType: classifyImportDraft({ name, command: `${name} ${command}`, origin: "unknown" }).runType,
-      ...audit, invalidVars, toVerify: [...audit.toVerify,
+      program: candidate.program, args: candidate.args, ...(workdirValue === undefined ? {} : { workdir: workdirValue }),
+      ...audit, invalidVars, toVerify: [...toVerify,
         ...(inlineKey ? ["脚本开头使用内联环境赋值；请将变量移入配置层以支持跨平台启动"] : []),
         "启动命令、参数及工作目录需人工核对；草案不可直接运行"] });
   };
@@ -116,7 +201,7 @@ export function scanServiceImportHints(repoRoot: string, protection?: TaskPathPr
         if (hints.length >= MAX_HINTS) { truncated = true; continue; }
         // Node's permissive parser provides candidates, not syntax or business configuration validation.
         const keys = Object.keys(parseEnv(content)).filter((key) => key.length <= MAX_ENV_KEY_CHARS && SERVICE_KEY_PATTERN.test(key));
-        hints.push({ source, name: source, runType: null, envKeys: keys.slice(0, MAX_ENV_ROWS), invalidVars: [],
+        hints.push({ source, name: source, runType: null, envKeys: keys.slice(0, MAX_ENV_ROWS), program: "", args: [], invalidVars: [],
           toVerify: ["仅提取变量键名；语法及业务读取点、生效优先级和 URL 覆盖规则需人工核对",
             ...(keys.length > MAX_ENV_ROWS ? ["环境变量列表已截断，请人工核对"] : [])] });
       } else if (source === "package.json" || source.endsWith("launch.json")) {
@@ -134,7 +219,7 @@ export function scanServiceImportHints(repoRoot: string, protection?: TaskPathPr
           for (const config of configs) {
             if (!object(config) || typeof config["name"] !== "string") continue;
             const command = [config["program"], ...(Array.isArray(config["args"]) ? config["args"] : [])].filter((part): part is string => typeof part === "string").join(" ");
-            add(source, config["name"], command, config["env"]);
+            add(source, config["name"], command, config["env"], config["cwd"]);
           }
         }
       } else {
@@ -145,7 +230,7 @@ export function scanServiceImportHints(repoRoot: string, protection?: TaskPathPr
         for (const [name, raw] of Object.entries(data["services"])) {
           if (!object(raw)) continue;
           const command = typeof raw["command"] === "string" ? raw["command"] : Array.isArray(raw["command"]) ? raw["command"].filter((part): part is string => typeof part === "string").join(" ") : "";
-          add(source, name, command, raw["environment"]);
+          add(source, name, command, raw["environment"], raw["working_dir"]);
         }
       }
     } catch (error) {
