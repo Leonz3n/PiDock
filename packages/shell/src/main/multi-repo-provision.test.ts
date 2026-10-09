@@ -191,6 +191,15 @@ describe("conflicts and append", () => {
       repoDir: "later",
       status: "pending",
     });
+    // Absent but the record names no remote baseline for the repo: failed,
+    // never a resumable `pending` (the resume would refuse to plan it).
+    const orphan = classifyRepoPrepareState({
+      repoDir: "orphan",
+      worktreePresent: false,
+      recordedBaselineMissing: true,
+    });
+    expect(orphan.status).toBe("failed");
+    expect(orphan.error?.message).toContain("缺少记录的远程基线");
   });
 
   it("resumes only absent unfinished repos and holds present unknown paths", () => {

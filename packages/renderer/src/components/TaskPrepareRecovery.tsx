@@ -97,7 +97,7 @@ export function TaskPrepareRecovery({
       ) : null}
       {view && view.hold.length > 0 ? (
         <p role="status" className="mt-1 text-[11px] text-orange">
-          以下路径已存在但不是本任务的工作副本，需要人工处理，不会自动覆盖：{view.hold.join("、")}
+          以下仓库无法自动恢复，需要人工处理（不会自动覆盖、重置或重建）：{view.hold.join("、")}
         </p>
       ) : null}
       {error ? (

@@ -311,6 +311,153 @@ describe("#6 resumeAppend over real worktrees (S6)", () => {
     // Missing/foreign task fails closed by name.
     const empty = workspace(home, "task-00000002");
     expect(() => hostAt(empty.taskId, empty.taskDir).prepareStatus()).toThrow("unknown task");
+
+    // A record with no selected repos (a plain-directory-only task) is named
+    // in the user's language instead of leaking an internal English string.
+    const noRepos = workspace(home, "task-00000003");
+    diskTaskStore.writeTask(
+      noRepos.taskDir,
+      buildTaskDiskRecord({
+        taskId: noRepos.taskId,
+        name: "目录任务",
+        dirId: noRepos.taskId,
+        branch: noRepos.branch,
+        root: noRepos.root,
+        taskDir: noRepos.taskDir,
+        remoteBranch: "main",
+        baseCommit: "0".repeat(40),
+        repos: [],
+        now: "2026-09-24T10:00:00.000Z",
+      }),
+    );
+    expect(() => hostAt(noRepos.taskId, noRepos.taskDir).prepareStatus()).toThrow("任务记录中没有已选仓库");
+  });
+
+  it("agrees with the resume when the record lists a repo without a recorded remote baseline", () => {
+    const home = mkdtempSync(join(tmpdir(), "pidock-resume-"));
+    homes.push(home);
+    const frontend = realRepo(home, "frontend");
+    const { root, taskDir, taskId, branch } = workspace(home, "task-abcdef12");
+    // The `repos: [names]` provision shape: the record lists the repo but
+    // carries no recorded remote baseline, so a resume cannot plan it.
+    diskTaskStore.writeTask(
+      taskDir,
+      buildTaskDiskRecord({
+        taskId,
+        name: "多仓任务",
+        dirId: taskId,
+        branch,
+        root,
+        taskDir,
+        remoteBranch: "main",
+        baseCommit: frontend.commit,
+        repos: ["frontend"],
+        now: "2026-09-24T10:00:00.000Z",
+      }),
+    );
+    const before = readFileSync(taskFilePath(taskDir), "utf8");
+
+    // The read must not offer a resume the write would refuse: the repo is
+    // failed/needs-human, not a resumable unfinished repo.
+    const status = hostAt(taskId, taskDir).prepareStatus();
+    expect(status.canResume).toBe(false);
+    expect(status.retry).toEqual([]);
+    expect(status.pending).toEqual([]);
+    expect(status.failed.map((entry) => entry.repoDir)).toEqual(["frontend"]);
+    expect(status.failed[0]!.error.message).toContain("缺少记录的远程基线");
+    expect(readFileSync(taskFilePath(taskDir), "utf8")).toBe(before);
+
+    // The write agrees: the repo is held for human handling, nothing is
+    // planned or created, and the recorded reason is the missing baseline
+    // (a later read still reports failed, never a resumable `pending`).
+    const resumed = hostAt(taskId, taskDir).resumeAppend({ takenPaths: [], branchesInUse: [] });
+    expect(resumed.retry).toEqual([]);
+    expect(resumed.hold).toEqual(["frontend"]);
+    expect(resumed.resumed).toBe(false);
+    expect(resumed.plan.ops).toEqual([]);
+    expect(resumed.failed[0]!.error.message).toContain("缺少记录的远程基线");
+    expect(existsSync(join(taskDir, "frontend"))).toBe(false);
+    expect(readTaskRecordOnDisk(taskDir)?.repoPrepareErrors).toEqual([
+      { repoDir: "frontend", code: "repo-unusable", message: "仓库 frontend 缺少记录的远程基线，无法从此记录恢复，请人工处理" },
+    ]);
+    const after = hostAt(taskId, taskDir).prepareStatus();
+    expect(after.canResume).toBe(false);
+    expect(after.retry).toEqual([]);
+    expect(after.failed.map((entry) => entry.repoDir)).toEqual(["frontend"]);
+  });
+
+  it("refuses a task-branch override that differs from the recorded branch", () => {
+    const home = mkdtempSync(join(tmpdir(), "pidock-resume-"));
+    homes.push(home);
+    const frontend = realRepo(home, "frontend");
+    const { taskDir, taskId, branch } = recordSelection({
+      home,
+      taskId: "task-abcdef12",
+      repos: [{ repoDir: "frontend", commit: frontend.commit }],
+    });
+    const before = readFileSync(taskFilePath(taskDir), "utf8");
+
+    // A different branch would create a worktree the classifier (which
+    // compares against the RECORDED branch) can never accept as created.
+    expect(() =>
+      hostAt(taskId, taskDir).resumeAppend({
+        branch: "task/other",
+        mainCheckouts: { frontend: frontend.checkout },
+        takenPaths: [],
+        branchesInUse: [],
+      }),
+    ).toThrow("invalid-payload");
+    expect(readFileSync(taskFilePath(taskDir), "utf8")).toBe(before);
+    expect(existsSync(join(taskDir, "frontend"))).toBe(false);
+
+    // The recorded branch itself is accepted (no override needed).
+    const resumed = hostAt(taskId, taskDir).resumeAppend({
+      branch,
+      mainCheckouts: { frontend: frontend.checkout },
+      takenPaths: [],
+      branchesInUse: [],
+    });
+    expect(resumed.retry).toEqual(["frontend"]);
+    expect(resumed.plan.ops.filter((op) => op.kind === "worktree")[0]!.args).toEqual([
+      "worktree",
+      "add",
+      join(taskDir, "frontend"),
+      branch,
+    ]);
+  });
+
+  it("refuses a taken worktree path and an in-use branch without planning or writing", () => {
+    const home = mkdtempSync(join(tmpdir(), "pidock-resume-"));
+    homes.push(home);
+    const frontend = realRepo(home, "frontend");
+    const { taskDir, taskId, branch } = recordSelection({
+      home,
+      taskId: "task-abcdef12",
+      repos: [{ repoDir: "frontend", commit: frontend.commit }],
+    });
+    const before = readFileSync(taskFilePath(taskDir), "utf8");
+
+    // The caller-scanned path scan flags the wanted path: refused.
+    expect(() =>
+      hostAt(taskId, taskDir).resumeAppend({
+        mainCheckouts: { frontend: frontend.checkout },
+        takenPaths: [join(taskDir, "frontend")],
+        branchesInUse: [],
+      }),
+    ).toThrow("path-taken");
+    expect(readFileSync(taskFilePath(taskDir), "utf8")).toBe(before);
+    expect(existsSync(join(taskDir, "frontend"))).toBe(false);
+
+    // The caller-scanned branch scan flags the task branch: refused.
+    expect(() =>
+      hostAt(taskId, taskDir).resumeAppend({
+        mainCheckouts: { frontend: frontend.checkout },
+        takenPaths: [],
+        branchesInUse: [branch],
+      }),
+    ).toThrow("branch-in-use");
+    expect(readFileSync(taskFilePath(taskDir), "utf8")).toBe(before);
+    expect(existsSync(join(taskDir, "frontend"))).toBe(false);
   });
 
   it("fails closed on a missing task, an unknown repo and an omitted conflict scan", () => {

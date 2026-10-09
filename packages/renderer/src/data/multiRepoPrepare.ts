@@ -20,9 +20,12 @@ export interface RepoPrepareRow {
 export interface RepoPrepareView {
   rows: RepoPrepareRow[];
   created: string[];
-  /** Unfinished repos whose worktree is absent: the resume retry set. */
+  /** Unfinished repos whose worktree is absent and whose recorded baseline
+   *  allows a resume: the resume retry set. */
   retry: string[];
-  /** Failed repos whose path exists but is not this task's worktree. */
+  /** Repos a resume must not plan: a path already exists at the wanted
+   *  worktree dir (never ours to take over) or the record has no remote
+   *  baseline for the repo. Human handling; the row carries the Host reason. */
   hold: string[];
   /** True when at least one unfinished repo can be resumed. */
   canResume: boolean;

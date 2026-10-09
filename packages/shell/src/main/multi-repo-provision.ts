@@ -324,6 +324,9 @@ export function segmentPrepareOutcomes(
  *   the pinned commit (`RepoProbe` read-only git, same seam as [PiDock 14]
  *   #17); `null` when the probe could not verify it.
  * - `previousError`: a per-repo error already recorded for this repo.
+ * - `recordedBaselineMissing`: the record lists the repo but carries no
+ *   recorded remote baseline for it (`repoSources` entry absent), so no
+ *   resume can plan it.
  */
 export interface RepoPrepareEvidence {
   repoDir: string;
@@ -333,6 +336,8 @@ export interface RepoPrepareEvidence {
   mismatchReason?: string;
   /** A per-repo error already reported for this repo (kept, never dropped). */
   previousError?: MultiRepoError;
+  /** The record names the repo but records no remote baseline for it. */
+  recordedBaselineMissing?: boolean;
 }
 
 /**
@@ -343,11 +348,13 @@ export interface RepoPrepareEvidence {
  *   Never claimed from the record alone: with no probe the repo is not
  *   `created`.
  * - `failed`: the path is present but is NOT this task's pinned worktree
- *   (partial/broken leftover — never overwritten), OR the worktree is
+ *   (partial/broken leftover — never overwritten); OR the worktree is
  *   absent while a per-repo error was already reported for it (kept with
- *   its real reason, never silently dropped).
- * - `pending`: the selection is recorded, the worktree is absent and no
- *   error was ever reported (a create interrupted before any git op).
+ *   its real reason, never silently dropped); OR the record names the repo
+ *   without a recorded remote baseline, so no resume can plan it.
+ * - `pending`: the selection is recorded WITH its remote baseline, the
+ *   worktree is absent and no error was ever reported (a create interrupted
+ *   before any git op).
  */
 export function classifyRepoPrepareState(evidence: RepoPrepareEvidence): RepoPrepareOutcome {
   if (evidence.worktreePresent) {
@@ -366,6 +373,20 @@ export function classifyRepoPrepareState(evidence: RepoPrepareEvidence): RepoPre
       },
     };
   }
+  if (evidence.recordedBaselineMissing) {
+    // The read and the resume write must agree: a repo with no recorded
+    // baseline is not resumable, so it is failed/needs-human here instead of
+    // `pending` (which the resume would then refuse).
+    return {
+      repoDir: evidence.repoDir,
+      status: "failed",
+      error: {
+        code: "repo-unusable",
+        repoDir: evidence.repoDir,
+        message: `仓库 ${evidence.repoDir} 缺少记录的远程基线，无法从此记录恢复，请人工处理`,
+      },
+    };
+  }
   if (evidence.previousError) {
     return { repoDir: evidence.repoDir, status: "failed", error: evidence.previousError };
   }
@@ -373,20 +394,22 @@ export function classifyRepoPrepareState(evidence: RepoPrepareEvidence): RepoPre
 }
 
 /**
- * Split classified outcomes into what a resume may retry (worktree absent,
- * so creating it takes over nothing) and what it must hold (a present path
- * that is not this task's worktree — never reset/refetched/overwritten).
+ * Split classified outcomes into what a resume may retry (worktree absent
+ * AND the record can be planned, so creating it takes over nothing) and what
+ * it must hold (a present path that is not this task's worktree, or a record
+ * with no recorded remote baseline: never reset/refetched/overwritten/planned).
  * `created` repos are never in either list, so their user edits survive.
+ * `mustHold` carries the repo dirs a resume must keep out of its plan.
  */
 export function resumeRepoSet(
   outcomes: readonly RepoPrepareOutcome[],
-  worktreePresent: ReadonlySet<string>,
+  mustHold: ReadonlySet<string>,
 ): { retry: string[]; hold: string[] } {
   const retry: string[] = [];
   const hold: string[] = [];
   for (const outcome of outcomes) {
     if (outcome.status === "created") continue;
-    if (worktreePresent.has(outcome.repoDir)) hold.push(outcome.repoDir);
+    if (mustHold.has(outcome.repoDir)) hold.push(outcome.repoDir);
     else retry.push(outcome.repoDir);
   }
   return { retry, hold };
