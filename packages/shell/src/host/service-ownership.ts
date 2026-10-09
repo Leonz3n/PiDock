@@ -15,20 +15,20 @@
  * - The Host injects `PIDOCK_SERVICE_OWNERSHIP_NONCE=<nonce>` into the child's
  *   fresh environment at spawn (never into the Host's `process.env`).
  * - Tri-state verification semantics:
- *   1. `verified`: STRONG evidence only. The same-Host live process handle we
- *      actually spawned (pid/pgid cross-checked). Env nonce provides optional
- *      corroboration when readable; unreadable must never fail the probe. ONLY
- *      `verified` may ever permit sending a signal.
+ *   1. `verified`: STRONG evidence only. The 128-bit nonce carried in child's
+ *      environment is read back from the OS and matches. Across restart, this
+ *      reconciles as `own-verified` and permits safe termination.
  *   2. `mismatch`: POSITIVE evidence the live process is NOT ours (env readable
  *      AND the nonce absent).
  *   3. `unobservable`: cannot tell (e.g. Apple platform binaries like /bin/sleep
- *      hide their environment; no same-Host handle after restart). NEVER
- *      treated as mismatch, NEVER as verified.
+ *      hide their environment; unsupported platform; zombie). NEVER treated as
+ *      mismatch, NEVER as verified.
  * - Invariants that MUST hold for `unobservable`, exactly as for `mismatch`:
- *   never send any signal; never report stopped/exited while alive; refuse a
- *   second start (fail-closed); report truthfully as `orphaned-unverified`.
- * - Cross-restart: pid-alive + start-time agreement is WEAK evidence ->
- *   `orphaned-unverified`, NEVER verified.
+ *   never send any signal without verified evidence; never report stopped/exited
+ *   while alive; refuse a second start (fail-closed); report truthfully as
+ *   `orphaned-unverified`.
+ * - Cross-restart: when the nonce cannot be read, pid-alive + start-time alone
+ *   is WEAK evidence -> `orphaned-unverified`, NEVER verified.
  * - Why not process start time: on macOS `ps -o lstart=` is locale/time-zone
  *   dependent and only second-granular, so two processes can share it. The
  *   nonce is exact, per launch, and unforgeable; `startedAt` is kept for human
@@ -137,6 +137,51 @@ function processExists(pid: number): boolean {
     return true;
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/**
+ * Read the process group ID (PGID) of one pid from the OS.
+ * Returns null if the process does not exist, belongs to another user,
+ * is on an unsupported platform (e.g. Windows), or cannot be read.
+ */
+export function readProcessPgid(pid: number): number | null {
+  if (!Number.isInteger(pid) || pid <= 1) return null;
+  if (process.platform === "win32") return null;
+  try {
+    if (process.platform === "linux") {
+      try {
+        const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+        const lastParen = stat.lastIndexOf(")");
+        if (lastParen !== -1) {
+          const fields = stat.slice(lastParen + 1).trim().split(/\s+/);
+          const pgid = Number.parseInt(fields[2] ?? "", 10);
+          if (Number.isInteger(pgid) && pgid > 0) return pgid;
+        }
+      } catch {
+        // Fall back to ps if procfs stat is unreadable
+      }
+    }
+    let printed: string;
+    try {
+      printed = execFileSync("/bin/ps", ["-o", "pgid=", "-p", String(pid)], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        printed = execFileSync("ps", ["-o", "pgid=", "-p", String(pid)], {
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "ignore"],
+        });
+      } else {
+        throw error;
+      }
+    }
+    const pgid = Number.parseInt(printed.trim(), 10);
+    return Number.isInteger(pgid) && pgid > 0 ? pgid : null;
+  } catch {
+    return null;
   }
 }
 
