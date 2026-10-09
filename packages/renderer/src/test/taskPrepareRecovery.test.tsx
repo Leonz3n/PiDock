@@ -47,7 +47,10 @@ it("does not read or resume on mount; an explicit check renders the real statuse
 
 it("resumes only the unfinished repos and never re-creates the created one", async () => {
   const load = vi.fn(async () => ok(prepared));
-  const resume = vi.fn(async (_input: { repoDirs: string[] }) => ok({ ...prepared, retry: [], canResume: false }));
+  // The Host answers a resume with the plan + the classification taken when
+  // it was called: the retried repos are still unfinished (the caller runs
+  // the plan afterwards), so the response keeps the resume affordance.
+  const resume = vi.fn(async (_input: { repoDirs: string[] }) => ok(prepared));
   render(<TaskPrepareRecovery load={load} resume={resume} />);
   fireEvent.click(screen.getByRole("button", { name: "检查准备状态" }));
   await screen.findByTestId("prepare-status-rows");
@@ -56,7 +59,23 @@ it("resumes only the unfinished repos and never re-creates the created one", asy
   expect(resume).toHaveBeenCalledTimes(1);
   // `frontend` is created: it must not enter the retry set.
   expect(resume.mock.calls[0]![0]).toEqual({ repoDirs: ["invoice", "shipment"] });
-  // Once nothing is unfinished there is no resume affordance.
+  await waitFor(() => expect(screen.getByTestId("prepare-status-rows")).toHaveTextContent("invoice · 待准备"));
+  expect(screen.getByRole("button", { name: "继续准备未完成的仓库" })).toBeInTheDocument();
+
+  // A later read after the caller executed the plan: nothing is unfinished,
+  // so the affordance disappears.
+  load.mockResolvedValueOnce(
+    ok({
+      outcomes: [
+        { repoDir: "frontend", status: "created" },
+        { repoDir: "invoice", status: "created" },
+        { repoDir: "shipment", status: "created" },
+      ],
+      retry: [],
+      hold: [],
+    }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "检查准备状态" }));
   await waitFor(() =>
     expect(screen.queryByRole("button", { name: "继续准备未完成的仓库" })).toBeNull(),
   );
@@ -88,6 +107,42 @@ it("keeps the last known rows and shows the reason when the status read fails", 
   fireEvent.click(screen.getByRole("button", { name: "检查准备状态" }));
   expect(await screen.findByRole("alert")).toHaveTextContent("unknown task: no task record");
   expect(screen.queryByTestId("prepare-status-rows")).toBeNull();
+});
+
+it("names a held repo as needing human handling instead of claiming it is not ours", async () => {
+  // A diverged-but-intact task worktree: the Host holds it and reports the
+  // real divergence. The panel must not replace that with "不是本任务的工作副本".
+  const diverged = {
+    outcomes: [
+      { repoDir: "frontend", status: "created" },
+      {
+        repoDir: "invoice",
+        status: "failed",
+        error: {
+          code: "repo-unusable",
+          repoDir: "invoice",
+          message: "工作副本 HEAD 不在任务分支 task-abcdef12（实际 main）",
+        },
+      },
+    ],
+    retry: [],
+    hold: ["invoice"],
+    canResume: false,
+  };
+  const load = vi.fn(async () => ok(diverged));
+  render(<TaskPrepareRecovery load={load} resume={vi.fn()} />);
+  fireEvent.click(screen.getByRole("button", { name: "检查准备状态" }));
+  await screen.findByTestId("prepare-status-rows");
+  const notice = screen.getByRole("status");
+  expect(notice).toHaveTextContent("invoice");
+  expect(notice).toHaveTextContent("需要人工处理");
+  expect(notice).not.toHaveTextContent("不是本任务的工作副本");
+  // The Host's real reason rides the row, so the specific divergence shows.
+  expect(screen.getByTestId("prepare-status-rows")).toHaveTextContent(
+    "工作副本 HEAD 不在任务分支 task-abcdef12（实际 main）",
+  );
+  // Nothing is resumable, so there is no resume affordance.
+  expect(screen.queryByRole("button", { name: "继续准备未完成的仓库" })).toBeNull();
 });
 
 it("rejects a malformed status payload instead of showing a fabricated ready view", async () => {

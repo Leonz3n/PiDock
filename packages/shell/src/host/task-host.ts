@@ -415,7 +415,12 @@ export interface ResumeAppendInput {
   /** Source checkout per repoDir for the fetch/branch/worktree ops. Required
    *  for every retry repo (a relative/empty cwd fails closed). */
   mainCheckouts?: Readonly<Record<string, string>>;
-  /** Task branch override; defaults to the stored branch. */
+  /**
+   * Task branch override; it must equal the recorded task branch. A
+   * differing branch is refused: the classification compares the worktree
+   * against the RECORDED branch, so resuming on another branch could only
+   * produce a worktree the next read calls `failed`/held.
+   */
   branch?: string;
   /**
    * Freshly fetched commit per repoDir (caller scan). Only used to detect a
@@ -448,9 +453,12 @@ export interface ResumeAppendResult {
   created: string[];
   pending: string[];
   failed: { repoDir: string; error: MultiRepoError }[];
-  /** Unfinished repos with no worktree on disk: safe to create, so planned. */
+  /** Unfinished repos with no worktree on disk and a recorded baseline: safe
+   *  to create, so planned. */
   retry: string[];
-  /** Failed repos whose path exists but is not this task's worktree (held). */
+  /** Repos a resume must not plan: a path already exists at the wanted
+   *  worktree dir (never taken over) or the record has no remote baseline for
+   *  the repo (nothing to plan from). Human handling. */
   hold: string[];
   /** True when at least one unfinished repo entered the plan. */
   resumed: boolean;
@@ -461,14 +469,18 @@ export interface ResumeAppendResult {
  * evidence-based classification `resumeAppend` uses, but nothing is planned
  * or written and the caller-scanned conflict gate is not needed (there is no
  * write). `canResume` means at least one unfinished repo has no worktree on
- * disk, so a resume write can create it without taking anything over.
+ * disk AND a recorded remote baseline, so a resume write can create it
+ * without taking anything over — the read never offers a resume the write
+ * would refuse.
  */
 export interface TaskPrepareStatusResult {
   outcomes: RepoPrepareOutcome[];
   created: string[];
   pending: string[];
   failed: { repoDir: string; error: MultiRepoError }[];
+  /** Same set `resumeAppend` would plan (see `ResumeAppendResult.retry`). */
   retry: string[];
+  /** Same set `resumeAppend` must not plan (see `ResumeAppendResult.hold`). */
   hold: string[];
   canResume: boolean;
 }
@@ -1546,7 +1558,7 @@ export class TaskWorkspaceHost {
   /** Selected repo dirs of a stored record; fail closed when none exist. */
   private selectedRepoDirs(stored: TaskDiskRecord): string[] {
     const selected = [...stored.repos];
-    if (selected.length === 0) throw new Error("unknown repo: the task records no selected repos");
+    if (selected.length === 0) throw new Error("unknown repo: 任务记录中没有已选仓库，无法恢复多仓库准备");
     return selected;
   }
 
@@ -1628,7 +1640,14 @@ export class TaskWorkspaceHost {
       }
       if (presentOnDisk) present.add(repoDir);
       const baseCommit = recorded.get(repoDir)?.baseCommit ?? (selected.length === 1 ? stored.baseCommit : "");
-      const evidence: RepoPrepareEvidence = { repoDir, worktreePresent: presentOnDisk };
+      const evidence: RepoPrepareEvidence = {
+        repoDir,
+        worktreePresent: presentOnDisk,
+        // A repo the record lists without a recorded remote baseline cannot
+        // be planned by a resume (`resumeAppend` refuses it), so the READ
+        // must report it needs human handling instead of offering a resume.
+        recordedBaselineMissing: !recorded.has(repoDir),
+      };
       if (presentOnDisk) {
         const observed = observeRecordedRepo({ repoDir: worktreeDir, baseCommit }, probe);
         if (observed === undefined) {
@@ -1656,10 +1675,13 @@ export class TaskWorkspaceHost {
       outcomes.push(classifyRepoPrepareState(evidence));
     }
     // `segmentPrepareOutcomes` picks created vs pending vs failed from the
-    // real evidence; the worktree-presence set separates a retryable failed
-    // repo (absent) from a held one (present, not ours).
+    // real evidence; the must-hold set separates what a resume may create
+    // (worktree absent AND the record has its remote baseline) from what it
+    // must leave alone: a present path (never ours to take over) or a repo
+    // with no recorded baseline (nothing to plan from).
     const segmented = segmentPrepareOutcomes(outcomes);
-    const { retry, hold } = resumeRepoSet(outcomes, present);
+    const mustHold = new Set([...present, ...selected.filter((repoDir) => !recorded.has(repoDir))]);
+    const { retry, hold } = resumeRepoSet(outcomes, mustHold);
     return { dirs, present, outcomes, segmented, retry, hold };
   }
 
@@ -1702,10 +1724,12 @@ export class TaskWorkspaceHost {
    * Evidence per state (`classifyRepoPrepareState`): `created` needs the
    * worktree dir present AND a read-only git probe confirming a linked
    * worktree on the task branch with the pinned commit reachable — never
-   * claimed from the record alone; `pending` is a recorded selection with
-   * no worktree and no reported error; `failed` is a present-but-not-ours
-   * path (held, never overwritten) or an absent worktree with a previously
-   * reported per-repo error (kept with its real reason).
+   * claimed from the record alone; `pending` is a recorded selection WITH a
+   * recorded remote baseline, no worktree and no reported error; `failed` is
+   * a present-but-not-ours path (held, never overwritten), an absent worktree
+   * with a previously reported per-repo error (kept with its real reason), or
+   * a repo the record names without a remote baseline (held: nothing to plan
+   * from, so a resume degrades to human handling rather than a refusal).
    *
    * Reuses the existing gates rather than duplicating them:
    * `validateRepoSelections` + `pinRepoBaselines` (all-success, no stale
@@ -1721,6 +1745,12 @@ export class TaskWorkspaceHost {
     const stored = this.store.readTask(this.taskDir);
     if (!stored) throw new Error("unknown task: no task record; provision the task before resuming");
     if (stored.taskId !== this.taskId) throw new Error("task-unknown: this Host serves a different task");
+    if (input.branch !== undefined && input.branch !== stored.branch) {
+      throw new Error(
+        `invalid-payload: resumeAppend 分支覆盖 ${input.branch} 与任务记录的分支 ${stored.branch} 不一致，` +
+          "拒绝在非任务分支上恢复",
+      );
+    }
     const selected = this.selectedRepoDirs(stored);
     const recorded = this.recordedRepoSources(stored);
     const reportedErrors = this.reportedRepoErrors(stored, input.prepareErrors);

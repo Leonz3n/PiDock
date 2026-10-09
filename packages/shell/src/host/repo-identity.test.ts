@@ -1,11 +1,18 @@
 /**
  * Tests for the [PiDock 14] (#17) repository identity probe. Pure shape logic
  * is tested directly; the observation path is driven with an injected probe, so
- * no repository, no `git` binary and no filesystem are needed.
+ * no repository, no `git` binary and no filesystem are needed. The real
+ * `createNodeRepoProbe` wrapper is covered separately against a real temp
+ * repository (its `--is-ancestor` exit status is the answer, not stdout).
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   baseCommitReachable,
+  createNodeRepoProbe,
   observeRecordedRepo,
   observeRepoIdentity,
   parseGitDirMarker,
@@ -103,5 +110,50 @@ describe("baseCommitReachable", () => {
       }),
     );
     expect(observed).toMatchObject({ baseCommitReachable: false });
+  });
+});
+
+describe("createNodeRepoProbe against a real repository", () => {
+  const homes: string[] = [];
+  afterEach(() => {
+    for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true });
+  });
+
+  it("reads the silent merge-base --is-ancestor exit status as true/false, never unknown", () => {
+    const home = mkdtempSync(join(tmpdir(), "pidock-probe-"));
+    homes.push(home);
+    const repo = join(home, "repo");
+    mkdirSync(repo);
+    const git = (...args: string[]): string =>
+      execFileSync("git", args, {
+        cwd: repo,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0" },
+      }).trim();
+    git("init", "-b", "main");
+    git("config", "user.email", "test@localhost");
+    git("config", "user.name", "Test");
+    writeFileSync(join(repo, "base.txt"), "base\n");
+    git("add", "base.txt");
+    git("commit", "-m", "base");
+    const base = git("rev-parse", "HEAD");
+    git("checkout", "-b", "other");
+    writeFileSync(join(repo, "other.txt"), "other\n");
+    git("add", "other.txt");
+    git("commit", "-m", "other");
+    const other = git("rev-parse", "HEAD");
+    git("checkout", "main");
+
+    const realProbe = createNodeRepoProbe();
+    // `--is-ancestor` prints nothing: exit 0 must not collapse to "unknown".
+    expect(realProbe.runGit(["-C", repo, "merge-base", "--is-ancestor", base, "HEAD"])).toBe("0");
+    expect(realProbe.runGit(["-C", repo, "merge-base", "--is-ancestor", other, "HEAD"])).toBe("1");
+    // A real git failure (unknown object) stays unknown, never a "no".
+    expect(realProbe.runGit(["-C", repo, "merge-base", "--is-ancestor", "0".repeat(40), "HEAD"])).toBeNull();
+
+    expect(baseCommitReachable(repo, base, realProbe)).toBe(true);
+    expect(baseCommitReachable(repo, other, realProbe)).toBe(false);
+    expect(baseCommitReachable(repo, "0".repeat(40), realProbe)).toBeNull();
   });
 });
