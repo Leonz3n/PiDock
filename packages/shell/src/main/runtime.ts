@@ -952,6 +952,17 @@ export const SERVICE_EXECUTION_UNSUPPORTED_PLATFORM =
   "unsupported-platform: 服务启动身份核验与终止仅在 POSIX（darwin/linux）实现，本平台按 #48 拒绝执行（见 #48/#7）";
 
 /**
+ * The audit label main stamps on every catalog-driven service control
+ * ([PiDock 04] #7). `runTaskService` has exactly one main-side entry
+ * (`shell/serviceCatalogOp {op:"runTaskService"}`), which now serves both the
+ * environment settings page and the task dock's run panel, so the label names
+ * that entry instead of a specific page that would be wrong for one of the
+ * two callers. It is main-built and never page-supplied: `parseServiceRunRequest`
+ * rejects any key outside `{op,projectId,taskId,serviceId,action}`.
+ */
+export const SERVICE_RUN_HUMAN_LABEL = "主进程服务目录入口";
+
+/**
  * The pure production gate for catalog-driven service execution: `null` when
  * execution is authorized, the named `/^unsupported-platform/` refusal when it
  * is not. It takes no caller input on purpose - no page- or caller-supplied
@@ -999,7 +1010,7 @@ export async function runTaskService(
   const controlled = await tasks.routeTaskOp({
     taskId: request.taskId,
     op: "task/controlService",
-    payload: { serviceId: launch.serviceId, action: request.action, label: "环境配置页" },
+    payload: { serviceId: launch.serviceId, action: request.action, label: SERVICE_RUN_HUMAN_LABEL },
     origin,
   });
   return controlled.payload;

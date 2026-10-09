@@ -267,8 +267,12 @@ describe.skipIf(process.platform === "win32")("#7 production shell/serviceCatalo
     Object.defineProperty(process, "platform", { value: "win32", configurable: true });
     const refused = await f.run(serviceId, "start");
     expect(refused).toMatchObject({ ok: false, error: expect.stringContaining("unsupported-platform") });
-    // No Host was forked and no child was spawned: the refusal precedes the
-    // launch, exactly like the driver's own win32 refusal.
+    // The refusal precedes the launch: no Host entry was created (the registry
+    // has no task, so `routeTaskOp` was never asked to register/control), no
+    // launch was resolved and therefore no child exists - exactly like the
+    // driver's own win32 refusal. (This harness drives a fake utilityProcess
+    // pair, so "forked" is not observable here; the observable fact is the
+    // absent Host entry plus the absent marker.)
     expect(f.tasks.size).toBe(0);
     expect(existsSync(f.marker("a"))).toBe(false);
   }, 30_000);
