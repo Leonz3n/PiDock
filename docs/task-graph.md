@@ -83,36 +83,39 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   授权（start/stop 共用同一个“服务目录”绑定目标）；`restore` 会把
   `approved` 但未消费的请求一并消费，重开应用必须重新确认。本切片不设
   确认有效期（TTL），语义见 `service-runtime.ts` 的 `verifyServiceControlApproval`。
-- renderer 的 `shellHost.setServiceRunning` 先探 `task/serviceStatus`：Host 已
-  注册的服务走 `task/controlService`（无 `sessionId`，人工路径）；未注册的服务
-  （当前 renderer 还没有服务注册入口，服务只在 Host/Agent 侧注册）仍回落
-  memory。真实的 `child_process` 启动、日志流与 renderer 注册入口一起落地时
-  才能端到端，仍在 #7 残留内。
-- **真实服务执行与其边界**（隐患记录，不只写成功路径）：任务绑定的服务能被真实启动，
-  但**生产入口默认拒绝**。能力本身保留：main 从可信服务目录解析绑定（pin 版本 +
-  realpath 程序 + 校验 cwd 在任务根内 + 分层环境），以自带的 `service-catalog` origin
-  走 `task/registerService` 登记，再走既有 `task/controlService` 门禁启动
+- renderer 的 `shellHost.setServiceRunning` 在壳已连接时走生产路径：先按 Host 自己的
+  项目归属解析该任务所属项目，再调 `shell/serviceCatalogOp {op:"runTaskService"}`
+  （main 解析可信启动、登记、控制），页面只给出 project/task/service/action；Host 的拒绝
+  按原文呈现，不回落 fixture 数据，也不冒充 Agent 门禁路径。只有壳确实未连接时才回落
+  memory 镜像（`DesktopToolDock` 运行面板的启停触发器与 `TaskPage` 的启停开关共用
+  这一个入口）。
+- **真实服务执行与其边界**（隐患记录，不只写成功路径）：任务绑定的服务能被真实启动。
+  `runtime.ts` 导出的 `runTaskService` 从可信服务目录解析绑定（pin 版本 + realpath 程序 +
+  校验 cwd 在任务根内 + 分层环境），以自带的 `service-catalog` origin 走
+  `task/registerService` 登记，再走既有 `task/controlService` 门禁启动
   `TaskServiceProcesses` 的真实子进程；`stop` 只对自己登记的子进程组 SIGTERM→SIGKILL，
-  `task/quit` 先停本任务真实子进程再写关闭回执。这条链只由 `runtime.ts` 导出的
-  `runTaskService` 驱动，现有真实子进程套件（`host/service-execution-wiring.test.ts`）
-  直接从该接缝调用它，因此能力与测试都保留。
-  **生产 IPC 触发点（`shell/serviceCatalogOp` 的 `runTaskService` 分支）按 #7 终审
-  意见重新拒绝接线**：`serviceExecutionRefusal()`（纯函数，`runtime-layout.test.ts`
-  锁定）在解析可信启动、进入任何可派生进程的调用**之前**返回具名、失败关闭的错误
-  `SERVICE_EXECUTION_BLOCKED`（`service-execution-blocked: 进程树所有权与跨平台终止
-  前置条件未满足（见 #7）`），且与载荷校验错误区分。工单 #7 终审要求：在进程树
-  所有权/退出回收与任务路径身份用后代与跨平台真实测试重新设计前，「模块不接
-  `task/controlService`、不生成 serviceRunRecords、不开放 UI」。因此该生产入口
-  **不登记、不控制、不开放 UI**，直到下列前置条件满足：
-  - **已修复（本切片）**：任务路径身份——驱动身份曾按规范化任务路径比较，导致每次
-    控制重建驱动、丢失运行中子进程表，令 `stop` 失败且 `start` 重复拉起；现按运行对象
-    记忆化（见提交 `0dd499d`）。
-  - **仍缺**：后代退出回收与 Host/main 死亡后的孤儿所有权（调用 `setsid` 脱离进程组的
-    后代超出停止契约）；Windows 进程树终止（无 Job Object 监督器，整体拒绝 `start`）；
-    cwd 的 `realpathSync` 校验与 `spawn` 之间不是原子打开（TOCTOU）。
-  - **已交付的残留（失败关闭）**：子进程以 detached 启动且对耐久所有者台账不可见；
-    Host 重启后台账可能对仍存活的进程显示 `stopped`，新 Host 再启动会重复拉起。因此在
-    耐久状态非终态时保持失败关闭。
+  `task/quit` 先停本任务真实子进程再写关闭回执。
+  **生产接线按 #48 的结论重新打开（本切片）**：`serviceExecutionRefusal()`（纯函数、
+  不接受调用方输入，`runtime-layout.test.ts` 锁定）在 POSIX（darwin/linux）返回 `null`，
+  其他平台返回具名失败关闭拒绝 `SERVICE_EXECUTION_UNSUPPORTED_PLATFORM`
+  （`unsupported-platform: 服务启动身份核验与终止仅在 POSIX（darwin/linux）实现，…`，
+  与 #48 的措辞一致），并在解析可信启动、进入任何可派生进程的调用**之前**检查，与载荷
+  校验错误区分。证据：`main/service-execution-production.test.ts` 经真实
+  `shell/serviceCatalogOp` 处理器 + 真实 Host + 真实 Node 子进程验证启用/拒绝与
+  「只停本服务登记进程树」，`host/service-execution-wiring.test.ts` 保持接缝级真实子进程覆盖。
+  - **已交付（#48，已在生产路径生效）**：进程树所有权与信号前提——(pid, 128-bit nonce)
+    身份、三态核验（verified / mismatch / unobservable）、**同一次调用未核验身份绝不发信号**
+    （`service-processes.ts` 的 `verifySameHostLaunch`）、仅在进程组正向证据下回收后代、
+    win32 显式 `unsupported-platform`（`start`/信号路径均拒绝）。
+  - **仍未接线（本切片未触及，剩余风险）**：`host.ts` 的 `serviceDriverFor` 未注入
+    `diskServiceOwnershipLog`，因此 #48 的耐久所有权台账（跨重启拒绝重复启动、按记录
+    核验身份后停止孤儿）在 Host 生产路径上不可达：`TaskServiceProcesses` 的
+    `stopRecordedLaunch` / `refuseRecordedLaunch` 只以内存句柄为证据。Host/main 死亡后
+    孤儿进程对耐久层不可见，重启后该 id 的 `task/serviceStatus` 报 `unknown-service`
+    （不谎报已停止），再次启动会拉起第二个实例——记为剩余风险，需后续切片决定是否接线。
+  - **仍缺**：后代退出回收中已脱离进程组且关闭继承 stdio 的后代（超出当前证据模型，
+    需 cgroup/Job Object）；Windows 进程树终止（`start` 整体拒绝）；cwd 的 `realpathSync`
+    校验与 `spawn` 之间不是原子打开（TOCTOU，已检测未消除）。
 
 ### 任务浏览器：任务内页面、门禁与标记回传（[PiDock 06] #8）
 
@@ -767,12 +770,11 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   service-control／browser-action／terminal-control 三类 Host 驱动控制各自开设执行记录
   （`ControlExecutionPort`，见 #17 章节），renderer 由 `data/executionLedger.ts` 消费
   `task/executionState`（会话执行状态卡）。
-  仍属**未测／未实现**：service-control 的生产派发默认拒绝接线（#7 生产入口
-  `service-execution-blocked`，见 #7 章节），因此该类记录只在控制序列与 Host 接缝层
-  有测试；未登记 id、界面配方、所有者状态未确认等登记仍失败关闭
-  （`service-execution-unavailable` / `service-execution-uncertain`），它的执行记录
-  也只在控制序列与 Host 接缝层有测试；
-  真实模型调用、真实子进程与浏览器操作、Electron 走查与跨平台运行未执行；
+  仍属**未测／未实现**：service-control 的生产派发现已接线（#7 生产入口经
+  `serviceExecutionRefusal` 的平台门禁在 POSIX 启用、win32 具名
+  `unsupported-platform` 拒绝，见 #7 章节），但真实模型调用、真实子进程与浏览器操作
+  的整机 Electron 走查与跨平台运行仍未执行；未登记 id、界面配方、所有者状态未确认
+  等登记仍失败关闭（`service-execution-unavailable` / `service-execution-uncertain`）；
   「载荷版本」没有真实内容生产者，版本复核因此只在同一版本上通过（规则层的
   不匹配路径由单测锁定）；自动化（定时）入口尚未用它建立执行记录。
 - **全量校验（P1 修复后重跑）**：`pnpm turbo run typecheck test build lint --force`
