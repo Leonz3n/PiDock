@@ -456,6 +456,23 @@ export interface ResumeAppendResult {
   resumed: boolean;
 }
 
+/**
+ * Read-only per-repo prepare readout for the recovery UI: the same
+ * evidence-based classification `resumeAppend` uses, but nothing is planned
+ * or written and the caller-scanned conflict gate is not needed (there is no
+ * write). `canResume` means at least one unfinished repo has no worktree on
+ * disk, so a resume write can create it without taking anything over.
+ */
+export interface TaskPrepareStatusResult {
+  outcomes: RepoPrepareOutcome[];
+  created: string[];
+  pending: string[];
+  failed: { repoDir: string; error: MultiRepoError }[];
+  retry: string[];
+  hold: string[];
+  canResume: boolean;
+}
+
 export interface HostTurnResult {
   state: string;
   callId: string;
@@ -1526,51 +1543,41 @@ export class TaskWorkspaceHost {
     return { record, plan, appended, skipped };
   }
 
-  /**
-   * [PiDock 03] (#6) resume a partial multi-repo prepare. `appendRepos`
-   * filters against the stored `repos` list and cannot tell `pending` from
-   * `failed` inside the unfinished set; this entry point classifies each
-   * selected repo from the REAL worktree on disk and retries only the
-   * unfinished ones.
-   *
-   * Evidence per state (`classifyRepoPrepareState`): `created` needs the
-   * worktree dir present AND a read-only git probe confirming a linked
-   * worktree on the task branch with the pinned commit reachable — never
-   * claimed from the record alone; `pending` is a recorded selection with
-   * no worktree and no reported error; `failed` is a present-but-not-ours
-   * path (held, never overwritten) or an absent worktree with a previously
-   * reported per-repo error (kept with its real reason).
-   *
-   * Reuses the existing gates rather than duplicating them:
-   * `validateRepoSelections` + `pinRepoBaselines` (all-success, no stale
-   * refs) and the caller-scanned `takenPaths`/`branchesInUse` conflict gate
-   * (REQUIRED, fail-closed when omitted) with `checkRepoConflicts`
-   * reporting. Only the retry set enters the plan, so a created worktree is
-   * never re-created, reset, refetched or overwritten: its user edits are
-   * byte-identical afterwards.
-   */
-  resumeAppend(input: ResumeAppendInput = {}): ResumeAppendResult {
-    this.protection?.assert(this.taskDir);
-    for (const source of Object.values(input.mainCheckouts ?? {})) this.protection?.assert(source);
-    const stored = this.store.readTask(this.taskDir);
-    if (!stored) throw new Error("unknown task: no task record; provision the task before resuming");
-    if (stored.taskId !== this.taskId) throw new Error("task-unknown: this Host serves a different task");
+  /** Selected repo dirs of a stored record; fail closed when none exist. */
+  private selectedRepoDirs(stored: TaskDiskRecord): string[] {
     const selected = [...stored.repos];
-    if (selected.length === 0) throw new Error("unknown repo: the task records no selected repos to resume");
+    if (selected.length === 0) throw new Error("unknown repo: the task records no selected repos");
+    return selected;
+  }
+
+  /** The fixed per-repo baselines recorded at plan time, keyed by repoDir. */
+  private recordedRepoSources(
+    stored: TaskDiskRecord,
+  ): Map<string, NonNullable<TaskDiskRecord["repoSources"]>[number]> {
     const recorded = new Map<string, NonNullable<TaskDiskRecord["repoSources"]>[number]>();
     for (const source of stored.repoSources ?? []) recorded.set(source.repoDir, source);
-    // Persisted errors keep a repo `failed` across a restart; the caller's
-    // latest observation overrides them for this attempt. Neither is dropped.
-    const reportedErrors = new Map<string, MultiRepoError>();
+    return recorded;
+  }
+
+  /**
+   * Persisted per-repo errors (they keep a repo `failed` across a restart)
+   * merged with the caller's latest observation, which wins for this attempt.
+   * A caller-supplied repo the task never selected fails closed.
+   */
+  private reportedRepoErrors(
+    stored: TaskDiskRecord,
+    extra?: Readonly<Record<string, { code: string; message: string }>>,
+  ): Map<string, MultiRepoError> {
+    const reported = new Map<string, MultiRepoError>();
     for (const error of stored.repoPrepareErrors ?? []) {
-      reportedErrors.set(error.repoDir, {
+      reported.set(error.repoDir, {
         code: error.code as MultiRepoErrorCode,
         repoDir: error.repoDir,
         message: error.message,
       });
     }
-    for (const [repoDir, error] of Object.entries(input.prepareErrors ?? {})) {
-      if (!selected.includes(repoDir)) throw new Error(`unknown repo: ${repoDir} 不在任务已选仓库中`);
+    for (const [repoDir, error] of Object.entries(extra ?? {})) {
+      if (!stored.repos.includes(repoDir)) throw new Error(`unknown repo: ${repoDir} 不在任务已选仓库中`);
       if (
         typeof error !== "object" ||
         error === null ||
@@ -1579,10 +1586,32 @@ export class TaskWorkspaceHost {
         typeof error.message !== "string" ||
         error.message.length === 0
       ) {
-        throw new Error("invalid-payload: resumeAppend.prepareErrors entries must be {code, message} strings");
+        throw new Error("invalid-payload: prepareErrors entries must be {code, message} strings");
       }
-      reportedErrors.set(repoDir, { code: error.code as MultiRepoErrorCode, repoDir, message: error.message });
+      reported.set(repoDir, { code: error.code as MultiRepoErrorCode, repoDir, message: error.message });
     }
+    return reported;
+  }
+
+  /**
+   * Classify every selected repo from the REAL worktree on disk. Read-only:
+   * the conflict gate is not needed here because nothing is planned or
+   * written (the resume write carries the gate).
+   */
+  private classifyRepoPrepare(input: {
+    stored: TaskDiskRecord;
+    selected: readonly string[];
+    recorded: ReadonlyMap<string, NonNullable<TaskDiskRecord["repoSources"]>[number]>;
+    reportedErrors: ReadonlyMap<string, MultiRepoError>;
+  }): {
+    dirs: Record<string, string>;
+    present: Set<string>;
+    outcomes: RepoPrepareOutcome[];
+    segmented: ReturnType<typeof segmentPrepareOutcomes>;
+    retry: string[];
+    hold: string[];
+  } {
+    const { stored, selected, recorded, reportedErrors } = input;
     const dirs = previewMixedTaskPaths(this.taskDir, selected, []).worktrees;
     const { lstatSync } = process.getBuiltinModule("node:fs") as typeof import("node:fs");
     const probe = createNodeRepoProbe();
@@ -1631,6 +1660,76 @@ export class TaskWorkspaceHost {
     // repo (absent) from a held one (present, not ours).
     const segmented = segmentPrepareOutcomes(outcomes);
     const { retry, hold } = resumeRepoSet(outcomes, present);
+    return { dirs, present, outcomes, segmented, retry, hold };
+  }
+
+  /**
+   * [PiDock 03] (#6) read-only per-repo prepare readout. Same evidence as
+   * `resumeAppend` but writes nothing and needs no conflict scan, so the
+   * renderer can show created / pending / failed with the real reason
+   * without being able to supply gate inputs it cannot scan.
+   */
+  prepareStatus(): TaskPrepareStatusResult {
+    this.protection?.assert(this.taskDir);
+    const stored = this.store.readTask(this.taskDir);
+    if (!stored) throw new Error("unknown task: no task record; provision the task before reading prepare state");
+    if (stored.taskId !== this.taskId) throw new Error("task-unknown: this Host serves a different task");
+    const selected = this.selectedRepoDirs(stored);
+    const classified = this.classifyRepoPrepare({
+      stored,
+      selected,
+      recorded: this.recordedRepoSources(stored),
+      reportedErrors: this.reportedRepoErrors(stored),
+    });
+    return {
+      outcomes: classified.outcomes,
+      created: classified.segmented.created,
+      pending: classified.segmented.pending,
+      failed: classified.segmented.failed,
+      retry: classified.retry,
+      hold: classified.hold,
+      canResume: classified.retry.length > 0,
+    };
+  }
+
+  /**
+   * [PiDock 03] (#6) resume a partial multi-repo prepare. `appendRepos`
+   * filters against the stored `repos` list and cannot tell `pending` from
+   * `failed` inside the unfinished set; this entry point classifies each
+   * selected repo from the REAL worktree on disk and retries only the
+   * unfinished ones.
+   *
+   * Evidence per state (`classifyRepoPrepareState`): `created` needs the
+   * worktree dir present AND a read-only git probe confirming a linked
+   * worktree on the task branch with the pinned commit reachable — never
+   * claimed from the record alone; `pending` is a recorded selection with
+   * no worktree and no reported error; `failed` is a present-but-not-ours
+   * path (held, never overwritten) or an absent worktree with a previously
+   * reported per-repo error (kept with its real reason).
+   *
+   * Reuses the existing gates rather than duplicating them:
+   * `validateRepoSelections` + `pinRepoBaselines` (all-success, no stale
+   * refs) and the caller-scanned `takenPaths`/`branchesInUse` conflict gate
+   * (REQUIRED, fail-closed when omitted) with `checkRepoConflicts`
+   * reporting. Only the retry set enters the plan, so a created worktree is
+   * never re-created, reset, refetched or overwritten: its user edits are
+   * byte-identical afterwards.
+   */
+  resumeAppend(input: ResumeAppendInput = {}): ResumeAppendResult {
+    this.protection?.assert(this.taskDir);
+    for (const source of Object.values(input.mainCheckouts ?? {})) this.protection?.assert(source);
+    const stored = this.store.readTask(this.taskDir);
+    if (!stored) throw new Error("unknown task: no task record; provision the task before resuming");
+    if (stored.taskId !== this.taskId) throw new Error("task-unknown: this Host serves a different task");
+    const selected = this.selectedRepoDirs(stored);
+    const recorded = this.recordedRepoSources(stored);
+    const reportedErrors = this.reportedRepoErrors(stored, input.prepareErrors);
+    const { dirs, outcomes, segmented, retry, hold } = this.classifyRepoPrepare({
+      stored,
+      selected,
+      recorded,
+      reportedErrors,
+    });
     const branch = input.branch ?? stored.branch;
     const checkouts: Record<string, string> = {};
     const selections: RepoSelection[] = [];
