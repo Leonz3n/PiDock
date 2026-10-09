@@ -6,7 +6,7 @@ import { serviceBindingsFromMain } from "../data/serviceCatalog";
 import type { ShellTaskOpResult } from "../data/shellBridge";
 
 const template: ServiceTemplateView = { projectId: "b36323d3-ff33-4e34-a873-536a9775788a", serviceId: "s-b36323d3-ff33-4e34-a873-536a9775788a",
-  version: 1, descriptor: { name: "API", program: "node", args: [], ports: [], runType: "long-lived" }, sharedKeys: [] };
+  version: 1, descriptor: { name: "API", program: "node", args: [], ports: [], runType: "long-lived" }, shared: [] };
 const bound = { taskId: "task-a", serviceId: template.serviceId, templateVersion: 1, rootId: "repo", subdir: "", privateKeys: ["API_TOKEN"] };
 const tasks = [{ taskId: "task-a", name: "任务甲" }];
 function roots() { return { ok: true, payload: { taskDir: "/task", roots: [{ id: "repo", kind: "worktree", label: "Repo", path: "/task/repo" }] } }; }
@@ -29,7 +29,23 @@ it("submits no page program path and only binds after explicit review", async ()
     serviceId: template.serviceId, templateVersion: 1, rootId: "repo", subdir: "", privateRefs: [{ key: "API_TOKEN", envRef: "LOCAL_REF" }] });
   expect(screen.getByText("私有变量：API_TOKEN")).toBeInTheDocument();
   expect(screen.queryByDisplayValue("LOCAL_REF")).toBeNull();
-  expect(screen.getByText("运行未接线")).toBeInTheDocument();
+  expect(screen.getByText(/启停入口在任务运行面板/)).toBeInTheDocument();
+});
+
+it("prefills the bound working directory from the template default and says which one a launch uses", async () => {
+  const serviceCatalogOp = vi.fn(async (request: Record<string, unknown>) => request["op"] === "taskBindings"
+    ? { ok: true, payload: [] } : { ok: true, payload: { cancelled: false, binding: { ...bound, subdir: String(request["subdir"]), privateKeys: [] } } });
+  window.pidock = { taskOp: vi.fn(async () => roots()), serviceCatalogOp };
+  render(<TaskServiceBinding template={{ ...template, descriptor: { ...template.descriptor, workdir: "apps/api" } }} tasks={tasks} />);
+  await screen.findByRole("option", { name: "Repo" });
+  expect(screen.getByLabelText("绑定工作子目录")).toHaveValue("apps/api");
+  expect(screen.getByText(/已带入模板默认工作目录：apps\/api/)).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText("绑定工作子目录"), { target: { value: "apps/other" } });
+  expect(screen.getByText(/本机绑定的工作子目录即启动时的工作目录/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "核对任务绑定" }));
+  fireEvent.click(screen.getByRole("button", { name: "选择程序并保存绑定" }));
+  expect(await screen.findByText("已绑定 · v1 · repo/apps/other")).toBeInTheDocument();
+  expect(serviceCatalogOp).toHaveBeenCalledWith(expect.objectContaining({ op: "bind", subdir: "apps/other" }));
 });
 
 it("preserves the form after picker cancellation and never invents a binding", async () => {

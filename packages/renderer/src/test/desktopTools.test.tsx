@@ -318,7 +318,7 @@ function panelBridge(options: PanelBridgeOptions = {}) {
       taskId: "task-1", serviceId: SERVICE_ID, templateVersion: 2, rootId: "invoice-service", subdir: "apps/svc", privateKeys: ["API_TOKEN"],
     }] };
     if (request["op"] === "list") return { ok: true, payload: options.templates ?? [{
-      projectId: "project-1", serviceId: SERVICE_ID, version: 2, sharedKeys: ["PORT"],
+      projectId: "project-1", serviceId: SERVICE_ID, version: 2, shared: [{ key: "PORT", value: "3000" }],
       descriptor: { name: "invoice-local", program: "node", args: ["server.js"], ports: [4100], runType: "long-lived" },
     }] };
     return { ok: false, error: `unexpected serviceCatalogOp ${String(request["op"])}` };
@@ -451,8 +451,8 @@ describe("[UI 对齐] S8d 日志 panel (real task/serviceLog)", () => {
     { taskId: "task-1", serviceId: OTHER_SERVICE_ID, templateVersion: 1, rootId: "invoice-service", subdir: "", privateKeys: [] },
   ];
   const templates = [
-    { projectId: "project-1", serviceId: SERVICE_ID, version: 2, sharedKeys: [], descriptor: { name: "invoice-local", program: "node", args: [], ports: [4100], runType: "long-lived" } },
-    { projectId: "project-1", serviceId: OTHER_SERVICE_ID, version: 1, sharedKeys: [], descriptor: { name: "shipment-local", program: "node", args: [], ports: [4200], runType: "long-lived" } },
+    { projectId: "project-1", serviceId: SERVICE_ID, version: 2, shared: [], descriptor: { name: "invoice-local", program: "node", args: [], ports: [4100], runType: "long-lived" } },
+    { projectId: "project-1", serviceId: OTHER_SERVICE_ID, version: 1, shared: [], descriptor: { name: "shipment-local", program: "node", args: [], ports: [4200], runType: "long-lived" } },
   ];
 
   it("reads the Host's real log tail and re-reads it for the other bound service", async () => {

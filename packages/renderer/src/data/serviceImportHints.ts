@@ -1,8 +1,19 @@
+import { serviceWorkdirFromMain } from "./serviceTemplateRules";
+
 export interface ServiceImportHintView {
   source: string;
   name: string;
   runType: "long-lived" | "one-shot" | "prepare" | null;
   envKeys: string[];
+  /**
+   * Redacted command candidate the scanner extracted (`program` empty when it
+   * was dropped or the source carries no command) plus a repo-relative working
+   * directory when the source names one. A hint only fills the form; it never
+   * saves, creates or binds anything.
+   */
+  program: string;
+  args: string[];
+  workdir?: string;
   invalidVars: string[];
   toVerify: string[];
 }
@@ -30,13 +41,22 @@ export function serviceImportScanFromHost(payload: unknown): ServiceImportScanVi
   for (const raw of scan["hints"]) {
     const hint = record(raw);
     if (!hint || !shortText(hint["source"]) || !sources.has(hint["source"]) || !shortText(hint["name"]) ||
-        !shortTexts(hint["envKeys"], 100) || !shortTexts(hint["invalidVars"], 100) || !shortTexts(hint["toVerify"], 32)) return null;
+        !shortTexts(hint["envKeys"], 100) || !shortTexts(hint["invalidVars"], 100) || !shortTexts(hint["toVerify"], 32) ||
+        !shortText(hint["program"], 200) || !shortTexts(hint["args"], 40)) return null;
+    let workdir: string | undefined;
+    if (hint["workdir"] !== undefined) {
+      const parsed = serviceWorkdirFromMain(hint["workdir"]);
+      if (parsed === null) return null;
+      workdir = parsed;
+    }
     if (hint["source"] === ".env") {
-      if (hint["runType"] !== null || hint["name"] !== ".env" || hint["invalidVars"].length ||
+      if (hint["runType"] !== null || hint["name"] !== ".env" || hint["invalidVars"].length || hint["program"] !== "" ||
+          (hint["args"] as string[]).length || workdir !== undefined ||
           !hint["envKeys"].every((key) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key))) return null;
     } else if (!shortText(hint["runType"]) || !runTypes.has(hint["runType"])) return null;
     hints.push({ source: hint["source"], name: hint["name"], runType: hint["runType"] as ServiceImportHintView["runType"],
-      envKeys: hint["envKeys"], invalidVars: hint["invalidVars"], toVerify: hint["toVerify"] });
+      envKeys: hint["envKeys"], program: hint["program"], args: [...hint["args"]], ...(workdir === undefined ? {} : { workdir }),
+      invalidVars: hint["invalidVars"], toVerify: hint["toVerify"] });
   }
   const errors: ServiceImportScanView["errors"] = [];
   for (const raw of scan["errors"]) {

@@ -27,7 +27,7 @@ function setup() {
     projectOp: vi.fn(async (request) => ({ ok: true, payload: request.op === "list" ? { initialized: true, projects: [{ id: "project-1", name: "Adder", description: "", repositories: [], directories: [] }] } : { roots, tasks: [association] } })),
     serviceCatalogOp: vi.fn(async (request: Record<string, unknown>) => {
       if (request["op"] === "taskBindings") return { ok: true, payload: [{ taskId: "task-a", serviceId: SERVICE_ID, templateVersion: 1, rootId: "invoice-service", subdir: "", privateKeys: [] }] };
-      if (request["op"] === "list") return { ok: true, payload: [{ projectId: "project-1", serviceId: SERVICE_ID, version: 1, sharedKeys: [], descriptor: { name: "invoice-local", program: "node", args: [], ports: [4100], runType: "long-lived" } }] };
+      if (request["op"] === "list") return { ok: true, payload: [{ projectId: "project-1", serviceId: SERVICE_ID, version: 1, shared: [], descriptor: { name: "invoice-local", program: "node", args: [], ports: [4100], runType: "long-lived" } }] };
       return { ok: false, error: `unexpected ${String(request["op"])}` };
     }),
     taskOp: vi.fn(async (taskId: string, op: string) => {
