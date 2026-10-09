@@ -25,6 +25,12 @@ export interface SdkContextInput {
   config: ExplicitTextProvider;
   /** Resolved credential value. Never logged, persisted or returned. */
   credential: string;
+  /**
+   * True only when the Host wired a tool broker. Without one the worker must
+   * declare NO tools (fail closed): a model that could call a tool this context
+   * cannot honor is a tool surface that outlives its decision point.
+   */
+  toolsEnabled: boolean;
 }
 
 export type SdkContextRequestPayload =
@@ -127,6 +133,9 @@ function input(value: unknown): SdkContextInput {
     task: { taskId: binding["taskId"], taskDir: binding["taskDir"] },
     config: validateExplicitTextProvider(record["config"]),
     credential: record["credential"],
+    // Anything but an explicit `true` disables tools: a missing marker is a
+    // context nobody wired a broker to, and must not advertise one.
+    toolsEnabled: record["toolsEnabled"] === true,
   };
 }
 
@@ -141,17 +150,20 @@ async function main(): Promise<void> {
     throw new Error("sdk-context-task-mismatch");
   }
   const { runtime, model, bindingIdentity } = await createExplicitTextRuntime(parsed.config, parsed.credential);
-  const tools = toolBridge(port);
+  // Tools exist only when the Host wired a broker to execute them. A worker
+  // with no broker declares no tools at all, so the model never sees a tool
+  // whose only possible answer would be `tool-host-unavailable`.
+  const tools = parsed.toolsEnabled ? toolBridge(port) : undefined;
   const kernel = new PiSdkTextKernel(parsed.task.taskId, parsed.task.taskDir, {
     model,
     modelRuntime: runtime,
     bindingIdentity,
-    callTool: (sessionId, request) => tools.callTool(sessionId, request),
+    ...(tools ? { callTool: (sessionId, request) => tools.callTool(sessionId, request) } : {}),
   });
   const send = (message: SdkContextMessage) => port.postMessage(message);
   let closing = false;
   port.on("message", (raw: unknown) => {
-    if (tools.settle(raw)) return;
+    if (tools?.settle(raw)) return;
     void (async () => {
       let id = "unknown";
       try {
@@ -173,7 +185,7 @@ async function main(): Promise<void> {
           return;
         }
         closing = true;
-        tools.dispose("任务宿主正在关闭，工具调用已取消");
+        tools?.dispose("任务宿主正在关闭，工具调用已取消");
         await kernel.dispose();
         send({ id, kind: "reply", ok: true, payload: { disposed: true } });
         port.close();

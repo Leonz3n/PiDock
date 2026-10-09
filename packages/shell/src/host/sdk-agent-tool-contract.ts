@@ -91,7 +91,7 @@ export const SDK_AGENT_TOOL_SPECS: readonly SdkAgentToolSpec[] = [
     kind: "command",
     summary: "Run a shell command in a task worktree",
     description:
-      "Run `command` with `/bin/sh -c`, in `cwd` (default: the task's first worktree). `cwd` must stay inside a task worktree, arguments naming paths outside the task worktrees are refused, output and runtime are bounded.",
+      "Run `command` with `/bin/sh -c`, in `cwd` (default: the task's first worktree). `cwd` must stay inside a task worktree, arguments naming paths outside the task worktrees are refused, and so is a command whose expansion cannot be decoded (`$`, backticks). Output and runtime are bounded.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -168,7 +168,7 @@ export function sdkAgentSystemPrompt(input: { taskDir: string; worktrees: readon
     `Task folder: ${input.taskDir}`,
     "Worktrees you may write to:",
     worktrees,
-    "You may read files anywhere inside the task folder. Every path and command working directory must stay inside this task; a path that escapes (an absolute path outside, `..`, a symlink pointing outside, an original checkout, another task or an application-private path) is refused before it takes effect.",
+    "You may read files anywhere inside the task folder (the Host's own `.pidock-*` state and `task.json` are not task content). Every path and command working directory must stay inside this task; a path that escapes (an absolute path outside, `..`, a symlink pointing outside, an original checkout, another task or an application-private path) is refused before it takes effect.",
     "Available tools:",
     "- fs.read: read a file (args: path, optional offset/limit)",
     "- fs.search: list a directory or search files by pattern (args: path, optional pattern)",

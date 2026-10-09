@@ -256,6 +256,14 @@ export interface PiApproval {
   status: "pending" | "approved" | "rejected" | "expired";
   executed: boolean;
   /**
+   * What the confirmation really authorizes when the tool's `target` cannot
+   * state it ([PiDock 02m] #5): the `exec.run` command, so a human approves
+   * the operation they can read instead of an opaque payload hash. Display
+   * only — the broker re-reads the request and re-checks `contentVersion`
+   * immediately before the effect.
+   */
+  operation?: string;
+  /**
    * One-shot spend stamp, written on the Host side (never by the
    * renderer). An approved request is spent exactly once — either by the
    * Host-driven execution it authorized (service control / task browser,
@@ -817,7 +825,7 @@ export class PiSessionChannel {
    * Permission changes apply to later calls only: the approval stores the
    * requesting tier.
    */
-  gate(toolName: string, target: string, contentVersion: string, currentCallId?: string, scope?: PiApprovalScope): PiGateDecision {
+  gate(toolName: string, target: string, contentVersion: string, currentCallId?: string, scope?: PiApprovalScope, operation?: string): PiGateDecision {
     const preview = this.previewGate(toolName, target);
     if (preview.verdict !== "ask") return preview;
     const tool = isGatedTool(toolName);
@@ -837,6 +845,7 @@ export class PiSessionChannel {
       status: "pending",
       executed: false,
       ...(scope !== undefined ? { scope } : {}),
+      ...(operation !== undefined && operation.length > 0 ? { operation } : {}),
     };
     this.approvals.push(approval);
     return { verdict: "ask", approvalId: approval.id };

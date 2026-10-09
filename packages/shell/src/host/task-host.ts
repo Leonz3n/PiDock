@@ -581,6 +581,8 @@ export interface HostApprovalListing {
   contentVersion: string;
   status: string;
   executed: boolean;
+  /** The concrete operation when `target` cannot state it (an `exec.run` command). */
+  operation?: string;
 }
 
 /**
@@ -617,7 +619,6 @@ export class TaskWorkspaceHost {
   private sdkToolBroker: SdkAgentToolBroker | undefined;
   private get sdkTools(): SdkAgentToolBroker {
     return (this.sdkToolBroker ??= new SdkAgentToolBroker({
-      taskId: this.taskId,
       sessionKnown: (sessionId) => this.channels.has(sessionId) || this.store.readSession(this.taskDir, sessionId) !== null,
       channel: (sessionId) => this.openSession(sessionId),
       persist: (sessionId) => { this.store.writeSession(this.taskDir, this.openSession(sessionId).snapshot()); },
@@ -662,6 +663,10 @@ export class TaskWorkspaceHost {
       this.sdkShutdown || this.sdkDisposalFailed ? undefined : this.sdkContext ?? undefined,
       this.executions,
       (sessionId) => this.adoptModelSession(sessionId),
+      // [PiDock 02m] #5: a turn cancel (SDK abort) must also withdraw a tool
+      // call parked on the Host broker; the abort alone cannot unblock it and a
+      // later approve must not run a command for a turn that was stopped.
+      (sessionId) => { this.sdkToolBroker?.cancelSession(sessionId); },
     );
   }
 

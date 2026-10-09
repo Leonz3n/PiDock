@@ -31,11 +31,13 @@
  * different file state or a different command.
  *
  * Honest boundary: `exec.run` runs a real shell. Its working directory and the
- * path arguments that can be *recognised* as paths are confined; the command
- * text itself is not a sandbox (shell variables, substitutions or an embedded
- * interpreter are not decoded here). The confinement rules that stop a wrong
- * *tool path* are what this module proves; the human approval under `default`
- * remains the boundary for arbitrary command execution.
+ * path arguments that can be *recognised* as paths are confined — the command
+ * is split on shell operators so a glued redirect (`x>/tmp/y`) is seen, and a
+ * command whose expansion cannot be decoded (`$`, backticks) is refused rather
+ * than approximated. The command text itself is still not a sandbox: an
+ * embedded interpreter (`python -c …`) is not decoded here. The confinement
+ * rules that stop a wrong *tool path* are what this module proves; the human
+ * approval under `default` remains the boundary for arbitrary command execution.
  */
 
 import { spawn } from "node:child_process";
@@ -92,7 +94,7 @@ export interface SdkAgentToolScope {
 export interface SdkAgentToolChannel {
   readonly currentPermission: PiPermission;
   previewGate(toolName: string, target: string): PiGateDecision;
-  gate(toolName: string, target: string, contentVersion: string, currentCallId?: string, scope?: PiApprovalScope): PiGateDecision;
+  gate(toolName: string, target: string, contentVersion: string, currentCallId?: string, scope?: PiApprovalScope, operation?: string): PiGateDecision;
   consumeApproval(approvalId: string): boolean;
   reject(approvalId: string): void;
   snapshot(): { approvals: PiApproval[] };
@@ -105,7 +107,6 @@ export interface SdkAgentCommandResult {
 }
 
 export interface SdkAgentToolBrokerOptions {
-  taskId: string;
   /** True when the Host knows this session (a live channel or a saved snapshot). */
   sessionKnown(sessionId: string): boolean;
   channel(sessionId: string): SdkAgentToolChannel;
@@ -268,11 +269,28 @@ export function resolveSdkAgentToolPath(input: {
           : `目标不在任务工作副本内（可写：${input.scope.worktrees.map((worktree) => worktree.path).join("、")}）`,
       );
     }
+    // A write must never rewrite a worktree's own git control file: in a linked
+    // worktree `.git` is a regular file naming the primary checkout, so writing
+    // it would silently retarget git at the checkout this module exists to keep
+    // out of reach (and `derivedPrimaryCheckouts` would then trust the forgery).
+    // Git changes go through `exec.run`, never a raw write to the control file.
+    if (normalizedReal.split("/").includes(".git")) {
+      return pathRefuse("tool-refused:invalid-target", "不可写入 .git 控制文件或目录");
+    }
+  } else {
+    // The Host's own bookkeeping under the task folder (its SDK sessions,
+    // ledger, context home and the task record itself) is not task content;
+    // the Agent reads the repositories, not the machinery that runs it.
+    const relative = normalizeScopePath(real).slice(taskDir.length + 1);
+    if (relative === "task.json" || relative.split("/").some((segment) => segment.startsWith(".pidock-"))) {
+      return pathRefuse("tool-refused:protected-path", "目标是任务宿主私有状态，任务工具只读取任务内容");
+    }
   }
   return { ok: true, absolute: lexical, real };
 }
 
-/** File fingerprint used as the approval's payload version for a write. */function fileFingerprint(path: string): string {
+/** File fingerprint used as the approval's payload version for a write. */
+function fileFingerprint(path: string): string {
   try {
     const stat = lstatSync(path);
     if (!stat.isFile()) return `not-a-file:${stat.isDirectory() ? "dir" : "other"}`;
@@ -332,21 +350,30 @@ function defaultRunCommand(input: { command: string; cwd: string; timeoutMs: num
 }
 
 /**
- * Recognise the tokens of a command that must be confined. Returns the tokens
- * to resolve against the working directory; flags and their `--flag=value`
- * payloads are included only through their value, so `--file=/etc/passwd` is
- * still checked.
+ * Recognise the tokens of a command that must be confined. The command is
+ * split on shell word/operator boundaries, so a path glued to a redirect or a
+ * pipe (`echo x>/tmp/y`, `cat</etc/hosts`) yields the path token on its own
+ * instead of a single relative-looking token that resolves inside the worktree
+ * while the shell writes outside it. Flags and their `--flag=value` payloads
+ * are included only through their value, so `--file=/etc/passwd` is still
+ * checked.
+ *
+ * A command whose expansion cannot be decoded (`$`, backticks) is reported as
+ * `unresolvable`: the filter must refuse it rather than approximate a path the
+ * shell may or may not produce.
  */
-function commandPathTokens(command: string): string[] {
-  return command
-    .split(/\s+/)
+function commandPathTokens(command: string): { tokens: string[]; unresolvable: boolean } {
+  if (/[`$]/.test(command)) return { tokens: [], unresolvable: true };
+  const tokens = command
+    .split(/[\s;|&<>(){}]+/)
     .map((token) => token.replace(/^['"]+|['"];?$/g, ""))
     .filter((token) => token.length > 0)
     .flatMap((token) => {
       const match = /^-[^\s=]*=(.+)$/.exec(token);
       return match ? [match[1]!] : [token];
     })
-    .filter((token) => token === ".." || token === "~" || token.startsWith("~/") || token.startsWith("~") || token.includes("/"));
+    .filter((token) => token === ".." || token.startsWith("~/") || token.startsWith("~") || token.includes("/"));
+  return { tokens, unresolvable: false };
 }
 
 function readFileText(path: string, offset: number, limit: number | undefined): string {
@@ -614,7 +641,11 @@ export class SdkAgentToolBroker {
       // changes what every relative token means, so it is resolved first.
       const cwdPath = resolveSdkAgentToolPath({ scope, resolveRealPath: this.options.resolveRealPath, requested: base, base: scope.taskDir, mode: "write" });
       if (!cwdPath.ok) return refuse(cwdPath.code, `命令工作目录不可用：${cwdPath.reason}`);
-      for (const token of commandPathTokens(parsed.values.command!)) {
+      const scanned = commandPathTokens(parsed.values.command!);
+      if (scanned.unresolvable) {
+        return refuse("tool-refused:unresolvable-command", "命令包含无法判定的展开（$ 、反引号），已拒绝以防路径越界");
+      }
+      for (const token of scanned.tokens) {
         if (COMMAND_DEVICE_ALLOWLIST.has(token)) continue;
         if (token.startsWith("~")) return refuse("tool-refused:out-of-scope", `命令参数 ${token} 指向任务外的家目录`);
         const tokenPath = resolveSdkAgentToolPath({ scope, resolveRealPath: this.options.resolveRealPath, requested: token, base: cwdPath.real, mode: "write" });
@@ -622,6 +653,7 @@ export class SdkAgentToolBroker {
       }
       return await this.runWithGate({
         sessionId, channel: this.options.channel(sessionId), name: spec.name, kind: spec.kind, target: cwdPath.absolute,
+        operation: parsed.values.command,
         version: versionOf([spec.name, spec.kind, cwdPath.real, parsed.values.command, base]),
         effect: () => this.executeCommand(parsed.values.command!, cwdPath.real),
       });
@@ -663,10 +695,17 @@ export class SdkAgentToolBroker {
     name: SdkAgentToolName;
     kind: "read" | "write" | "command";
     target: string;
+    /** What the confirmation shows when `target` alone cannot state the real operation (an `exec.run` command). */
+    operation?: string;
     version: string;
     effect: () => Promise<SdkAgentToolOutcome>;
   }): Promise<SdkAgentToolOutcome> {
     const mutating = input.kind !== "read";
+    // The gate is previewed before the write right is claimed: a tier denial is
+    // then reported by the permission gate itself (the same component the turn
+    // flow uses), not by the write coordinator, and no claim is taken at all.
+    const preview = input.channel.previewGate(input.name, input.target);
+    if (preview.verdict === "deny") return refuse("tool-refused:gate-denied", preview.reason);
     let claimId: string | undefined;
     if (mutating) {
       const claim = this.options.write.claimWrite(input.sessionId, input.channel.currentPermission, {
@@ -677,11 +716,9 @@ export class SdkAgentToolBroker {
       claimId = claim.claimId;
     }
     try {
-      const preview = input.channel.previewGate(input.name, input.target);
-      if (preview.verdict === "deny") return refuse("tool-refused:gate-denied", preview.reason);
       if (preview.verdict === "ask") {
         const tier = input.channel.currentPermission;
-        const gate = input.channel.gate(input.name, input.target, input.version, undefined, AGENT_TOOL_SCOPE);
+        const gate = input.channel.gate(input.name, input.target, input.version, undefined, AGENT_TOOL_SCOPE, input.operation);
         if (gate.verdict !== "ask") return refuse("tool-refused:gate-denied", "确认请求未能创建，执行已拒绝");
         this.options.persist(input.sessionId);
         const verdict = await this.awaitApproval(gate.approvalId, input.sessionId);

@@ -130,7 +130,10 @@ export class SdkContextClient implements SdkTextKernelPort {
       // A credential must never appear in the spawn environment: the builder
       // asserts this, and the check keeps a future edit from silently breaking it.
       const env = this.environment();
-      const workerData = { task: this.options.task, config: this.options.config, credential: this.options.credential };
+      // `toolsEnabled` is the broker marker the worker gates its tool
+      // declarations on: absent (no `toolHost`) means the isolated context must
+      // declare no tools, so a tool can never exist without a Host executor.
+      const workerData = { task: this.options.task, config: this.options.config, credential: this.options.credential, toolsEnabled: this.options.toolHost !== undefined };
       const worker = this.options.spawn?.(env, workerData) ?? new Worker(new URL("./sdk-context-worker.js", import.meta.url), { env, workerData });
       this.worker = worker;
       await new Promise<void>((resolve, reject) => {

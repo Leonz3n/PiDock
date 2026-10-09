@@ -267,6 +267,8 @@ it("refuses every escape vector by name and changes nothing on disk", async () =
   // A symlink inside the worktree, one of them dangling, are real escape
   // vectors: a write through the dangling one would create the file outside.
   const outsideDir = join("/tmp", `pidock-agent-tools-escape-${process.pid}`);
+  const glued = join("/tmp", `pidock-agent-tools-glued-${process.pid}.txt`);
+  const glued2 = join("/tmp", `pidock-agent-tools-glued2-${process.pid}.txt`);
   execFileSync("ln", ["-s", "/etc", join(h.fixture.worktree, "link-etc")]);
   execFileSync("ln", ["-s", join(outsideDir, "planted.txt"), join(h.fixture.worktree, "link-dangling.txt")]);
   execFileSync("ln", ["-s", join(outsideDir, "planted"), join(h.fixture.worktree, "link-dangling-dir")]);
@@ -291,6 +293,20 @@ it("refuses every escape vector by name and changes nothing on disk", async () =
     { tool: "exec.run", args: { command: "cd .. && ls" }, code: "tool-refused:not-a-worktree" },
     { tool: "exec.run", args: { command: "echo escape > /tmp/pidock-agent-tools-escape.txt" }, code: "tool-refused:out-of-scope" },
     { tool: "exec.run", args: { command: "cat ~/.zshrc" }, code: "tool-refused:out-of-scope" },
+    // A path glued to a shell operator must be recognised as a path, not read
+    // as a relative token that resolves inside the worktree while the shell
+    // writes outside it (`x>/tmp/y`, `cat</etc/hosts`, `sh -c '…>/tmp/y'`).
+    { tool: "exec.run", args: { command: `echo x>${glued}` }, code: "tool-refused:out-of-scope" },
+    { tool: "exec.run", args: { command: "cat</etc/hosts" }, code: "tool-refused:out-of-scope" },
+    { tool: "exec.run", args: { command: `sh -c 'echo x>${glued2}'` }, code: "tool-refused:out-of-scope" },
+    // A command whose expansion the filter cannot decode is refused, not run.
+    { tool: "exec.run", args: { command: "cat $HOME/.zshrc" }, code: "tool-refused:unresolvable-command" },
+    // The worktree's own git control file is not a write target: rewriting it
+    // would retarget git at the primary checkout this module keeps out of reach.
+    { tool: "fs.write", args: { path: "repo/.git", content: "gitdir: /tmp/primary/.git\n" }, code: "tool-refused:invalid-target" },
+    // The Host's own bookkeeping is not task content.
+    { tool: "fs.read", args: { path: "task.json" }, code: "tool-refused:protected-path" },
+    { tool: "fs.read", args: { path: ".pidock-sdk-sessions" }, code: "tool-refused:protected-path" },
     { tool: "exec.run", args: { command: "pwd", cwd: h.fixture.otherTaskDir }, code: "tool-refused:other-task" },
   ];
   for (const entry of cases) {
@@ -300,6 +316,8 @@ it("refuses every escape vector by name and changes nothing on disk", async () =
   }
   expect(snapshot(h.fixture.root)).toEqual(before);
   expect(existsSync("/tmp/pidock-agent-tools-escape.txt")).toBe(false);
+  expect(existsSync(glued)).toBe(false);
+  expect(existsSync(glued2)).toBe(false);
   expect(existsSync(join(outsideDir, "planted.txt"))).toBe(false);
   expect(existsSync(join(outsideDir, "planted"))).toBe(false);
   await h.host.shutdownSdk();
@@ -350,7 +368,9 @@ it("asks first for a command under default permission and executes nothing when 
 
   await vi.waitFor(() => expect(h.host.listApprovals("main").some((item) => item.status === "pending")).toBe(true));
   const approval = h.host.listApprovals("main").find((item) => item.status === "pending")!;
-  expect(approval).toMatchObject({ tool: "exec.run", scope: "agent-tool", permissionAtRequest: "default", target: h.fixture.worktree });
+  // The confirmation must show the real operation, not only the cwd: two
+  // different commands in one worktree otherwise render an identical card.
+  expect(approval).toMatchObject({ tool: "exec.run", scope: "agent-tool", permissionAtRequest: "default", target: h.fixture.worktree, operation: "echo approved > command.txt" });
   h.host.reject("main", approval.id);
 
   const result = await running;
@@ -373,6 +393,29 @@ it("executes an approved command exactly once and refuses to settle the same con
   expect(result.text).toContain("exit 0");
   expect(readFileSync(join(h.fixture.worktree, "command.txt"), "utf8")).toBe("approved\n");
   expect(() => h.host.approve("main", approval.id)).toThrow(/不可重放|已处理|已消费/);
+  await h.host.shutdownSdk();
+});
+
+it("a turn cancel withdraws the parked confirmation so a later approve cannot execute", async () => {
+  const h = await harness();
+  await h.host.configureSdkProvider({ config: PROVIDER_CONFIG, credential: "synthetic-key" });
+  await h.host.setPermission("main", "default");
+  const running = h.prompt("exec.run", { command: "echo turn-cancelled > turn-cancelled.txt" });
+
+  await vi.waitFor(() => expect(h.host.listApprovals("main").some((item) => item.status === "pending")).toBe(true));
+  const approval = h.host.listApprovals("main").find((item) => item.status === "pending")!;
+  // `cancel` here is the router the turn transport uses for `task/sdkCancel`:
+  // the SDK abort alone cannot unblock a tool parked on the Host broker, so
+  // without the withdrawal this call (and the parked turn) never settle.
+  await h.host.sdkTextKernel().cancel("main");
+  await running;
+
+  expect(existsSync(join(h.fixture.worktree, "turn-cancelled.txt"))).toBe(false);
+  expect(h.host.listApprovals("main").filter((item) => item.status === "pending")).toEqual([]);
+  expect(h.host.writeLockOwner).toBeNull();
+  // A late approve of the withdrawn confirmation must not run the command.
+  expect(() => h.host.approve("main", approval.id)).toThrow();
+  expect(existsSync(join(h.fixture.worktree, "turn-cancelled.txt"))).toBe(false);
   await h.host.shutdownSdk();
 });
 
