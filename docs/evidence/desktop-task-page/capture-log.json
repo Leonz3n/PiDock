@@ -2,7 +2,7 @@
   "ticket": "#37 box 6 — real-Electron empty/task-page navigation, multi-task selection and view geometry",
   "command": "packages/shell/node_modules/.bin/electron packages/shell/scripts/electron-issue37-task-page-layout-capture.mjs --out docs/evidence/desktop-task-page",
   "repoRoot": "/private/tmp/pidock-spec-worktrees/issue-37",
-  "revision": "cb53f2e85db87dbe09346f3b92459458410a1b12",
+  "revision": "76575505d6cd1d10be9acebec8208f4ebf22a318",
   "trackedFilesDirty": "false",
   "generatedBy": "scripts/electron-issue37-task-page-layout-capture.mjs",
   "generatedBySha256": "0a16c58c30200f45df8ea90f7fe26f185d17da49ca9080597b2143ab3e45071e",
