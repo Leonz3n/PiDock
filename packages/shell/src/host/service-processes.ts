@@ -240,8 +240,13 @@ export class TaskServiceProcesses {
       throw new Error(serviceOwnershipUnverifiedError(serviceId, launch.pid, "耐久所有权记录与本次启动不一致"));
     }
     const verdict = verifyServiceOwnershipIdentity(launch);
-    if (verdict === "verified" || verdict === "gone") return verdict;
-    throw new Error(serviceOwnershipUnverifiedError(serviceId, launch.pid, `OS 身份核验结果为 ${verdict}`));
+    if (verdict === "gone") return "gone";
+    if (verdict === "mismatch") {
+      throw new Error(serviceOwnershipUnverifiedError(serviceId, launch.pid, `OS 身份核验结果为 ${verdict}`));
+    }
+    // Live in-memory child handle exists for this Host; unreadable environment
+    // (e.g. macOS platform binary hiding env) does not fail the probe.
+    return "verified";
   }
 
   /**
@@ -261,10 +266,9 @@ export class TaskServiceProcesses {
     if (!log || !record) throw new Error(`not-running: ${serviceId}`);
     const release = () => log.release({ serviceId, ownershipNonce: record.ownershipNonce });
     const verdict = verifyServiceOwnershipIdentity(record);
-    if (verdict === "gone" || verdict === "mismatch") {
-      // The recorded launch is not alive any more: its pid names no process, or
-      // names an inspectable process that demonstrably is not this launch. There
-      // is nothing to signal, and the record is now stale bookkeeping.
+    if (verdict === "gone") {
+      // The recorded launch is not alive any more: its pid names no process.
+      // There is nothing to signal, and the record is now stale bookkeeping.
       release();
       return;
     }
