@@ -46,6 +46,14 @@ function runOps(ops: readonly ProvisionPlanOp[]): void {
   for (const op of ops) git(op.cwd, ...op.args);
 }
 
+/** Branch names attached to a worktree in a repo (`git worktree list`). */
+function branchesInUseOf(checkout: string): string[] {
+  return git(checkout, "worktree", "list", "--porcelain")
+    .split("\n")
+    .filter((line) => line.startsWith("branch "))
+    .map((line) => line.slice("branch refs/heads/".length));
+}
+
 function workspace(home: string, taskId = "task-abcdef12") {
   const root = join(home, "tasks");
   const taskDir = join(root, taskId);
@@ -506,6 +514,137 @@ describe("#6 resumeAppend over real worktrees (S6)", () => {
         branchesInUse: [],
       }),
     ).toThrow("fetch-failed");
+    expect(existsSync(join(taskDir, "frontend"))).toBe(false);
+  });
+
+  it("resumes a between-ops interruption when the task branch already exists at the recorded commit", () => {
+    const home = mkdtempSync(join(tmpdir(), "pidock-resume-"));
+    homes.push(home);
+    const frontend = realRepo(home, "frontend");
+    const { taskDir, taskId, branch } = recordSelection({
+      home,
+      taskId: "task-abcdef12",
+      repos: [{ repoDir: "frontend", commit: frontend.commit }],
+    });
+    // The previous prepare was interrupted BETWEEN its git ops: its `git
+    // branch` op ran (the task branch exists at the fixed commit), the
+    // `worktree add` op did not (the target dir is absent).
+    git(frontend.checkout, "branch", branch, frontend.commit);
+    expect(existsSync(join(taskDir, "frontend"))).toBe(false);
+
+    const resumed = hostAt(taskId, taskDir).resumeAppend({
+      mainCheckouts: { frontend: frontend.checkout },
+      takenPaths: [],
+      branchesInUse: branchesInUseOf(frontend.checkout),
+    });
+    expect(resumed.pending).toEqual(["frontend"]);
+    expect(resumed.retry).toEqual(["frontend"]);
+    // No redundant `git branch` op: it would fail hard on the existing ref.
+    expect(resumed.plan.ops.map((op) => op.kind)).toEqual(["fetch", "worktree"]);
+    expect(resumed.plan.ops.every((op) => op.cwd === frontend.checkout)).toBe(true);
+    // The existing branch is not attached to a worktree, so the caller's scan
+    // does not report it as in use and the conflict gate passes.
+    expect(branchesInUseOf(frontend.checkout)).not.toContain(branch);
+
+    runOps(resumed.plan.ops);
+    expect(git(join(taskDir, "frontend"), "rev-parse", "HEAD")).toBe(frontend.commit);
+    expect(git(join(taskDir, "frontend"), "symbolic-ref", "--quiet", "HEAD")).toBe(`refs/heads/${branch}`);
+    // A later read now classifies the repo as created (the interrupted state
+    // is fully recovered) and the record carries no stale per-repo error.
+    expect(hostAt(taskId, taskDir).prepareStatus().created).toEqual(["frontend"]);
+    expect(readTaskRecordOnDisk(taskDir)?.repoPrepareErrors).toBeUndefined();
+  });
+
+  it("refuses a between-ops interruption when the task branch exists at a different commit", () => {
+    const home = mkdtempSync(join(tmpdir(), "pidock-resume-"));
+    homes.push(home);
+    const frontend = realRepo(home, "frontend");
+    const { taskDir, taskId, branch } = recordSelection({
+      home,
+      taskId: "task-abcdef12",
+      repos: [{ repoDir: "frontend", commit: frontend.commit }],
+    });
+    // A foreign branch with the task's name, at a commit other than the
+    // recorded fixed baseline: taking it over would be a reset.
+    writeFileSync(join(frontend.checkout, "other.txt"), "other\n");
+    git(frontend.checkout, "add", "other.txt");
+    git(frontend.checkout, "-c", "user.email=test@localhost", "-c", "user.name=Test", "commit", "-m", "other");
+    const other = git(frontend.checkout, "rev-parse", "HEAD");
+    expect(other).not.toBe(frontend.commit);
+    git(frontend.checkout, "branch", branch, other);
+    const before = readFileSync(taskFilePath(taskDir), "utf8");
+
+    expect(() =>
+      hostAt(taskId, taskDir).resumeAppend({
+        mainCheckouts: { frontend: frontend.checkout },
+        takenPaths: [],
+        branchesInUse: [],
+      }),
+    ).toThrow("任务分支已存在但工作树不在原位置，请人工恢复");
+    // Fail closed: nothing planned, nothing created, record byte-identical.
+    expect(readFileSync(taskFilePath(taskDir), "utf8")).toBe(before);
+    expect(existsSync(join(taskDir, "frontend"))).toBe(false);
+  });
+
+  it("fails closed when the target checkout cannot be probed (branch state unknown)", () => {
+    const home = mkdtempSync(join(tmpdir(), "pidock-resume-"));
+    homes.push(home);
+    const frontend = realRepo(home, "frontend");
+    const { taskDir, taskId } = recordSelection({
+      home,
+      taskId: "task-abcdef12",
+      repos: [{ repoDir: "frontend", commit: frontend.commit }],
+    });
+    // An absolute but non-git directory: the branch probe cannot decide, so
+    // the resume must refuse rather than plan a create that might collide.
+    const notARepo = join(home, "not-a-repo");
+    mkdirSync(notARepo);
+    const before = readFileSync(taskFilePath(taskDir), "utf8");
+
+    expect(() =>
+      hostAt(taskId, taskDir).resumeAppend({
+        mainCheckouts: { frontend: notARepo },
+        takenPaths: [],
+        branchesInUse: [],
+      }),
+    ).toThrow("repo-unusable");
+    expect(readFileSync(taskFilePath(taskDir), "utf8")).toBe(before);
+    expect(existsSync(join(taskDir, "frontend"))).toBe(false);
+  });
+
+  it("refuses an unsafe branch override and an unknown prepare error code without writing", () => {
+    const home = mkdtempSync(join(tmpdir(), "pidock-resume-"));
+    homes.push(home);
+    const frontend = realRepo(home, "frontend");
+    const { taskDir, taskId } = recordSelection({
+      home,
+      taskId: "task-abcdef12",
+      repos: [{ repoDir: "frontend", commit: frontend.commit }],
+    });
+    const before = readFileSync(taskFilePath(taskDir), "utf8");
+
+    // A leading `-` would be parsed as a git option by `git branch`.
+    expect(() =>
+      hostAt(taskId, taskDir).resumeAppend({
+        branch: "-m",
+        mainCheckouts: { frontend: frontend.checkout },
+        takenPaths: [],
+        branchesInUse: [],
+      }),
+    ).toThrow("invalid-payload");
+    expect(readFileSync(taskFilePath(taskDir), "utf8")).toBe(before);
+
+    // `prepareErrors[].code` must be one of the known `MultiRepoErrorCode`s,
+    // not an unchecked cast persisted into the record.
+    expect(() =>
+      hostAt(taskId, taskDir).resumeAppend({
+        mainCheckouts: { frontend: frontend.checkout },
+        takenPaths: [],
+        branchesInUse: [],
+        prepareErrors: { frontend: { code: "not-a-real-code", message: "x" } },
+      }),
+    ).toThrow("invalid-payload");
+    expect(readFileSync(taskFilePath(taskDir), "utf8")).toBe(before);
     expect(existsSync(join(taskDir, "frontend"))).toBe(false);
   });
 });

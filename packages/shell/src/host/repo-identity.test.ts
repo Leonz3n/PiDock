@@ -13,6 +13,7 @@ import { join } from "node:path";
 import {
   baseCommitReachable,
   createNodeRepoProbe,
+  observeBranchRef,
   observeRecordedRepo,
   observeRepoIdentity,
   parseGitDirMarker,
@@ -23,11 +24,17 @@ import {
 const TASK_DIR = "/Users/dev/pidock/tasks/task-aaaaaaaa";
 const WORKTREE = `${TASK_DIR}/invoice-service`;
 
-function probe(input: { files?: Record<string, string>; filePaths?: readonly string[]; git?: Record<string, string> }): RepoProbe {
+function probe(input: {
+  files?: Record<string, string>;
+  filePaths?: readonly string[];
+  git?: Record<string, string>;
+  branchRefs?: Record<string, { state: "present"; commit: string } | { state: "absent" } | { state: "unknown" }>;
+}): RepoProbe {
   return {
     readFile: (path) => input.files?.[path] ?? null,
     isFile: (path) => (input.filePaths ?? Object.keys(input.files ?? {})).includes(path),
     runGit: (args) => input.git?.[args.join(" ")] ?? null,
+    probeBranchRef: (dir, branch) => input.branchRefs?.[`${dir} ${branch}`] ?? { state: "unknown" },
   };
 }
 
@@ -155,5 +162,36 @@ describe("createNodeRepoProbe against a real repository", () => {
     expect(baseCommitReachable(repo, base, realProbe)).toBe(true);
     expect(baseCommitReachable(repo, other, realProbe)).toBe(false);
     expect(baseCommitReachable(repo, "0".repeat(40), realProbe)).toBeNull();
+  });
+
+  it("reads a present branch ref, a missing one and an unreadable repo as present/absent/unknown", () => {
+    const home = mkdtempSync(join(tmpdir(), "pidock-probe-ref-"));
+    homes.push(home);
+    const repo = join(home, "repo");
+    mkdirSync(repo);
+    const notARepo = join(home, "not-a-repo");
+    mkdirSync(notARepo);
+    const git = (...args: string[]): string =>
+      execFileSync("git", args, {
+        cwd: repo,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0" },
+      }).trim();
+    git("init", "-b", "main");
+    git("config", "user.email", "test@localhost");
+    git("config", "user.name", "Test");
+    writeFileSync(join(repo, "base.txt"), "base\n");
+    git("add", "base.txt");
+    git("commit", "-m", "base");
+    const base = git("rev-parse", "HEAD");
+    git("branch", "task-abcdef12", base);
+
+    const realProbe = createNodeRepoProbe();
+    expect(observeBranchRef(repo, "task-abcdef12", realProbe)).toEqual({ state: "present", commit: base });
+    expect(observeBranchRef(repo, "task-missing", realProbe)).toEqual({ state: "absent" });
+    // No repository (or no git): unknown, never a false "absent" that plans a create.
+    expect(observeBranchRef(notARepo, "task-abcdef12", realProbe)).toEqual({ state: "unknown" });
+    expect(observeBranchRef(repo, "", realProbe)).toEqual({ state: "unknown" });
   });
 });

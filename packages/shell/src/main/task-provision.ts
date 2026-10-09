@@ -169,6 +169,28 @@ export function previewTaskPaths(
 }
 
 /**
+ * The ref-fragment rules a task branch must satisfy: valid git ref
+ * characters, no traversal / control chars / lock suffix. Shared by the
+ * create-time naming rule (`buildTaskBranch`) and the append/resume
+ * pass-through (`isSafeTaskBranchRef`) so there is one spelling of
+ * "unsafe branch" in this module.
+ */
+function isUnsafeTaskBranchRef(branch: string): boolean {
+  // eslint-disable-next-line no-control-regex -- git ref rules forbid control chars; the class is the check.
+  const hasControlChar = /[\0-\x1f\x7f]/.test(branch);
+  return (
+    /[\s~^:?*[\]\\]/.test(branch) ||
+    branch.includes("..") ||
+    hasControlChar ||
+    branch.includes("@{") ||
+    branch.endsWith(".lock") ||
+    branch.startsWith("/") ||
+    branch.endsWith("/") ||
+    branch.includes("//")
+  );
+}
+
+/**
  * Editable task branch, stored separately from the display name and the
  * directory id. Defaults to `task/<dirId>`; a custom value must be a
  * non-blank, space-free ref fragment.
@@ -181,21 +203,22 @@ export function buildTaskBranch(
     return { ok: true, branch: `${TASK_BRANCH_PREFIX}${dirId}` };
   }
   const branch = custom.trim();
-  // eslint-disable-next-line no-control-regex -- git ref rules forbid control chars; the class is the check.
-  const hasControlChar = /[\0-\x1f\x7f]/.test(branch);
-  if (
-    /[\s~^:?*[\]\\]/.test(branch) ||
-    branch.includes("..") ||
-    hasControlChar ||
-    branch.includes("@{") ||
-    branch.endsWith(".lock") ||
-    branch.startsWith("/") ||
-    branch.endsWith("/") ||
-    branch.includes("//")
-  ) {
+  if (isUnsafeTaskBranchRef(branch)) {
     return { ok: false, error: { code: "invalid-branch", message: "任务分支格式不正确，请使用不含空格的分支名" } };
   }
   return { ok: true, branch };
+}
+
+/**
+ * A caller-supplied task-branch value safe as a git argv element on the
+ * append/resume pass-through: non-blank, no surrounding whitespace, not a
+ * leading `-` (git would parse it as an option, e.g. `git branch -m`), and a
+ * valid ref fragment by the same rules `buildTaskBranch` applies.
+ */
+export function isSafeTaskBranchRef(branch: unknown): branch is string {
+  if (typeof branch !== "string" || branch.length === 0 || branch.trim() !== branch) return false;
+  if (branch.startsWith("-")) return false;
+  return !isUnsafeTaskBranchRef(branch);
 }
 
 const COMMIT_PATTERN = /^[0-9a-f]{7,40}$/i;
@@ -232,6 +255,35 @@ export function assertProvisionPlanSafe(plan: ProvisionPlan): void {
   }
 }
 
+/** The real state of a task branch in a source checkout (see `observeBranchRef`). */
+export type TaskBranchRefState =
+  | { state: "present"; commit: string }
+  | { state: "absent" }
+  | { state: "unknown" };
+
+/**
+ * [PiDock 03] (#6) decide the branch op for one resume plan from the target
+ * branch's real state in the source checkout. An absent ref is created (the
+ * normal 3-op plan); an existing ref at the recorded baseline is reused (no
+ * redundant `git branch`, which fails hard on an existing ref); an existing
+ * ref at a DIFFERENT commit — or an uncontrollable probe — refuses instead of
+ * returning a doomed plan, using the same fail-closed manual-recovery reason
+ * `project-task-creation.ts` emits for a created-but-worktree-less branch.
+ */
+export function planResumeBranch(input: {
+  observed: TaskBranchRefState;
+  recordedCommit: string;
+}): { ok: true; reuseExistingBranch: boolean } | { ok: false; reason: string } {
+  if (input.observed.state === "absent") return { ok: true, reuseExistingBranch: false };
+  if (input.observed.state === "unknown") {
+    return { ok: false, reason: "任务分支状态无法确认，请人工恢复" };
+  }
+  if (input.observed.commit.trim().toLowerCase() === input.recordedCommit.trim().toLowerCase()) {
+    return { ok: true, reuseExistingBranch: true };
+  }
+  return { ok: false, reason: "任务分支已存在但工作树不在原位置，请人工恢复" };
+}
+
 export interface WorktreePlanInput {
   taskDir: string;
   mainCheckoutDir: string;
@@ -241,6 +293,13 @@ export interface WorktreePlanInput {
   remoteBranch: string;
   commit: string;
   branch: string;
+  /**
+   * The task branch already exists in the source checkout at the pinned
+   * commit (verified by the caller's read-only probe), so the plan omits the
+   * `git branch <branch> <commit>` op: that op fails hard on an existing ref,
+   * while `git worktree add <dir> <branch>` checks the existing branch out.
+   */
+  reuseExistingBranch?: boolean;
 }
 
 /**
@@ -257,6 +316,12 @@ export function planWorktreeCreation(input: WorktreePlanInput): ProvisionPlan {
   if (!isAbsoluteTaskRoot(input.mainCheckoutDir)) {
     throw new Error(`invalid-payload: mainCheckoutDir must be an absolute task root: ${input.mainCheckoutDir}`);
   }
+  // The branch lands in `git branch <branch> <commit>` argv unquoted, so an
+  // unsafe value (leading `-`, option-looking, bad ref chars) must never reach
+  // the plan: fail closed by name here for every plan-building caller.
+  if (!isSafeTaskBranchRef(input.branch)) {
+    throw new Error(`invalid-payload: task branch must be a safe ref fragment: ${String(input.branch)}`);
+  }
   const remote = input.remote ?? "origin";
   if (typeof remote !== "string" || remote.trim().length === 0 || /[\s]/.test(remote)) {
     throw new Error(`invalid-payload: remote must be a non-blank git remote name: ${String(remote)}`);
@@ -266,11 +331,18 @@ export function planWorktreeCreation(input: WorktreePlanInput): ProvisionPlan {
     mainCheckoutDir: input.mainCheckoutDir,
     ops: [
       { kind: "fetch", cwd: input.mainCheckoutDir, args: ["fetch", remote.trim(), input.remoteBranch] },
-      {
-        kind: "branch",
-        cwd: input.mainCheckoutDir,
-        args: ["branch", input.branch, input.commit],
-      },
+      // A resume that found the branch already at the recorded commit skips
+      // this op (re-creating an existing ref fails); `worktree add` then
+      // checks the existing branch out into the absent worktree dir.
+      ...(input.reuseExistingBranch === true
+        ? []
+        : [
+            {
+              kind: "branch",
+              cwd: input.mainCheckoutDir,
+              args: ["branch", input.branch, input.commit],
+            },
+          ]),
       {
         kind: "worktree",
         cwd: input.mainCheckoutDir,

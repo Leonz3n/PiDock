@@ -44,6 +44,26 @@ export type MultiRepoErrorCode =
   | "branch-in-use"
   | "repo-unusable";
 
+const MULTI_REPO_ERROR_CODES = [
+  "empty-selection",
+  "duplicate-repo",
+  "invalid-repo",
+  "fetch-failed",
+  "path-taken",
+  "branch-in-use",
+  "repo-unusable",
+] as const satisfies readonly MultiRepoErrorCode[];
+
+/**
+ * Runtime guard for a per-repo error code crossing the RPC/record boundary:
+ * only the codes in `MultiRepoErrorCode` are accepted, so a caller-supplied
+ * `prepareErrors[].code` or a persisted record cannot smuggle an arbitrary
+ * string past an unchecked cast.
+ */
+export function isMultiRepoErrorCode(value: unknown): value is MultiRepoErrorCode {
+  return typeof value === "string" && (MULTI_REPO_ERROR_CODES as readonly string[]).includes(value);
+}
+
 export interface MultiRepoError {
   code: MultiRepoErrorCode;
   /** The repo selection this error belongs to ("" for task-level errors). */
@@ -353,8 +373,8 @@ export interface RepoPrepareEvidence {
  *   its real reason, never silently dropped); OR the record names the repo
  *   without a recorded remote baseline, so no resume can plan it.
  * - `pending`: the selection is recorded WITH its remote baseline, the
- *   worktree is absent and no error was ever reported (a create interrupted
- *   before any git op).
+ *   worktree is absent and no error was ever reported (worktree absent, no
+ *   reported error — which git op ran, if any, is unknown).
  */
 export function classifyRepoPrepareState(evidence: RepoPrepareEvidence): RepoPrepareOutcome {
   if (evidence.worktreePresent) {

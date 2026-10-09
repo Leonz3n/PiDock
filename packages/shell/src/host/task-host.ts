@@ -59,6 +59,8 @@ import {
   planWorktreeCreation,
   previewTaskPaths,
   assertProvisionPlanSafe,
+  isSafeTaskBranchRef,
+  planResumeBranch,
   resolveTaskRoot,
   validateTaskName,
   type ProvisionPlan,
@@ -69,6 +71,7 @@ import {
   classifyLinkTarget,
   classifyRepoPrepareState,
   filterAppendRepos,
+  isMultiRepoErrorCode,
   pinRepoBaselines,
   previewMixedTaskPaths,
   resumeRepoSet,
@@ -76,14 +79,13 @@ import {
   snapshotPlainDirLink,
   validateRepoSelections,
   type MultiRepoError,
-  type MultiRepoErrorCode,
   type PlainDirLinkSnapshot,
   type PinnedRepoBaseline,
   type RepoPrepareEvidence,
   type RepoPrepareOutcome,
   type RepoSelection,
 } from "../main/multi-repo-provision.js";
-import { createNodeRepoProbe, observeRecordedRepo } from "./repo-identity.js";
+import { createNodeRepoProbe, observeBranchRef, observeRecordedRepo } from "./repo-identity.js";
 import {
   buildTaskDiskRecord,
   deleteSessionOnDisk,
@@ -419,14 +421,18 @@ export interface ResumeAppendInput {
    * Task branch override; it must equal the recorded task branch. A
    * differing branch is refused: the classification compares the worktree
    * against the RECORDED branch, so resuming on another branch could only
-   * produce a worktree the next read calls `failed`/held.
+   * produce a worktree the next read calls `failed`/held. An unsafe value
+   * (leading `-` / invalid ref characters) is refused as `invalid-payload`.
    */
   branch?: string;
   /**
-   * Freshly fetched commit per repoDir (caller scan). Only used to detect a
-   * moved/deleted remote branch: a value that differs from the repo's
-   * recorded fixed baseline fails closed. Omitting a repo uses the recorded
-   * fixed commit (a resume never re-pins a baseline).
+   * Optional freshly fetched commit per repoDir (caller scan). Only used to
+   * detect a moved/deleted remote branch: a value that differs from the
+   * repo's recorded fixed baseline fails closed. A resume does NOT require
+   * fetch evidence — it plans from the recorded fixed commit (a resume never
+   * re-pins a baseline), unlike `appendRepos` which fails closed on a missing
+   * `fetchedCommits` entry. The plan still emits a real `git fetch` per repo,
+   * so a deleted remote fails at that op.
    */
   fetchedCommits?: Readonly<Record<string, string>>;
   /**
@@ -1486,6 +1492,13 @@ export class TaskWorkspaceHost {
       const error: MultiRepoError = batch.error;
       throw new Error(`${error.code}: ${error.message} (form kept, retry fetch)`);
     }
+    // The branch lands in `git branch <branch> <commit>` argv; reject an
+    // unsafe override by name (a leading `-` is parsed as a git option).
+    if (input.branch !== undefined && !isSafeTaskBranchRef(input.branch)) {
+      throw new Error(
+        `invalid-payload: appendRepos 分支名不安全（不得以 - 开头或含 git 保留字符）: ${String(input.branch)}`,
+      );
+    }
     const branch = input.branch ?? stored.branch;
     // Fail closed when the caller omits the conflict scan: defaulting to
     // `[]` here would plan worktrees without any path/branch check.
@@ -1582,8 +1595,13 @@ export class TaskWorkspaceHost {
   ): Map<string, MultiRepoError> {
     const reported = new Map<string, MultiRepoError>();
     for (const error of stored.repoPrepareErrors ?? []) {
+      // A persisted record can only carry a code this Host wrote, but fail
+      // closed by name on a corrupt/foreign code instead of trusting a cast.
+      if (!isMultiRepoErrorCode(error.code)) {
+        throw new Error(`invalid-payload: task record carries an unknown repo error code: ${error.code}`);
+      }
       reported.set(error.repoDir, {
-        code: error.code as MultiRepoErrorCode,
+        code: error.code,
         repoDir: error.repoDir,
         message: error.message,
       });
@@ -1600,7 +1618,10 @@ export class TaskWorkspaceHost {
       ) {
         throw new Error("invalid-payload: prepareErrors entries must be {code, message} strings");
       }
-      reported.set(repoDir, { code: error.code as MultiRepoErrorCode, repoDir, message: error.message });
+      if (!isMultiRepoErrorCode(error.code)) {
+        throw new Error(`invalid-payload: prepareErrors code is not a known repo error code: ${error.code}`);
+      }
+      reported.set(repoDir, { code: error.code, repoDir, message: error.message });
     }
     return reported;
   }
@@ -1725,11 +1746,12 @@ export class TaskWorkspaceHost {
    * worktree dir present AND a read-only git probe confirming a linked
    * worktree on the task branch with the pinned commit reachable — never
    * claimed from the record alone; `pending` is a recorded selection WITH a
-   * recorded remote baseline, no worktree and no reported error; `failed` is
-   * a present-but-not-ours path (held, never overwritten), an absent worktree
-   * with a previously reported per-repo error (kept with its real reason), or
-   * a repo the record names without a remote baseline (held: nothing to plan
-   * from, so a resume degrades to human handling rather than a refusal).
+   * recorded remote baseline, no worktree and no reported error (which git
+   * op ran, if any, is unknown); `failed` is a present-but-not-ours path
+   * (held, never overwritten), an absent worktree with a previously reported
+   * per-repo error (kept with its real reason), or a repo the record names
+   * without a remote baseline (held: nothing to plan from, so a resume
+   * degrades to human handling rather than a refusal).
    *
    * Reuses the existing gates rather than duplicating them:
    * `validateRepoSelections` + `pinRepoBaselines` (all-success, no stale
@@ -1738,6 +1760,25 @@ export class TaskWorkspaceHost {
    * reporting. Only the retry set enters the plan, so a created worktree is
    * never re-created, reset, refetched or overwritten: its user edits are
    * byte-identical afterwards.
+   *
+   * Baseline rule (deliberate relaxation): a resume plans from each repo's
+   * RECORDED fixed baseline and does NOT require fresh-fetch evidence (unlike
+   * `appendRepos`, which fails closed on a missing `fetchedCommits` entry).
+   * A decomposed caller MAY supply `fetchedCommits[repoDir]`; a value that
+   * disagrees with the recorded baseline is refused (`fetch-failed`), so a
+   * moved remote cannot silently re-pin. The plan still emits a real
+   * `git fetch` per repo, so a deleted remote fails at that op. Recovery
+   * preserves recorded baselines even when the remote branch has since
+   * disappeared, matching the existing fetch-gate precedent.
+   *
+   * Partial-state safety: a prepare interrupted BETWEEN its git ops can
+   * leave the task branch created but the worktree absent. A resume probes
+   * the target ref per checkout (`observeBranchRef`, fixed argv) after the
+   * checkout is validated: an absent ref keeps the 3-op plan; a ref present
+   * at the recorded baseline emits only `fetch` + `worktree add` (no
+   * redundant `git branch`, which fails hard on an existing ref); a ref
+   * present at a DIFFERENT commit, or an uncontrollable probe, refuses with
+   * the named manual-recovery reason instead of returning a doomed plan.
    */
   resumeAppend(input: ResumeAppendInput = {}): ResumeAppendResult {
     this.protection?.assert(this.taskDir);
@@ -1745,6 +1786,14 @@ export class TaskWorkspaceHost {
     const stored = this.store.readTask(this.taskDir);
     if (!stored) throw new Error("unknown task: no task record; provision the task before resuming");
     if (stored.taskId !== this.taskId) throw new Error("task-unknown: this Host serves a different task");
+    // The branch lands in `git branch <branch> <commit>` argv; reject an
+    // unsafe override by name before the equality check (a leading `-` is
+    // parsed as a git option).
+    if (input.branch !== undefined && !isSafeTaskBranchRef(input.branch)) {
+      throw new Error(
+        `invalid-payload: resumeAppend 分支名不安全（不得以 - 开头或含 git 保留字符）: ${String(input.branch)}`,
+      );
+    }
     if (input.branch !== undefined && input.branch !== stored.branch) {
       throw new Error(
         `invalid-payload: resumeAppend 分支覆盖 ${input.branch} 与任务记录的分支 ${stored.branch} 不一致，` +
@@ -1812,6 +1861,27 @@ export class TaskWorkspaceHost {
       const error: MultiRepoError = conflict.error;
       throw new Error(`${error.code}: ${error.message}`);
     }
+    // P1: a prepare interrupted BETWEEN its git ops can leave the task branch
+    // created but the worktree absent. Probe each target checkout's ref
+    // (fixed argv, after the checkout was validated): absent -> create it;
+    // present at the recorded baseline -> reuse it (omit the redundant
+    // `git branch` op, which fails hard on an existing ref); present at a
+    // different commit, or uncontrollable -> refuse by name instead of
+    // emitting a doomed plan.
+    const probe = createNodeRepoProbe();
+    const reuseBranch: Record<string, boolean> = {};
+    for (const repoDir of retry) {
+      const source = recorded.get(repoDir);
+      if (!source) throw new Error(`unknown repo: 仓库 ${repoDir} 缺少记录的远程基线，无法恢复，请人工处理`);
+      const decision = planResumeBranch({
+        observed: observeBranchRef(checkouts[repoDir]!, branch, probe),
+        recordedCommit: source.baseCommit,
+      });
+      if (!decision.ok) {
+        throw new Error(`repo-unusable: 仓库 ${repoDir} ${decision.reason}`);
+      }
+      reuseBranch[repoDir] = decision.reuseExistingBranch;
+    }
     const plan: ProvisionPlan = { mainCheckoutDir: stored.root, ops: [] };
     for (const repo of batch.pinned) {
       const repoPlan = planWorktreeCreation({
@@ -1822,6 +1892,7 @@ export class TaskWorkspaceHost {
         remoteBranch: repo.remoteBranch,
         commit: repo.commit,
         branch,
+        reuseExistingBranch: reuseBranch[repo.repoDir] === true,
       });
       plan.ops.push(...repoPlan.ops);
     }

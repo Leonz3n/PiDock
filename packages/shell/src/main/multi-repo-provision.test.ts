@@ -6,6 +6,7 @@ import {
   classifyLinkTarget,
   classifyRepoPrepareState,
   filterAppendRepos,
+  isMultiRepoErrorCode,
   pinRepoBaselines,
   planMultiRepoWorktrees,
   previewMixedTaskPaths,
@@ -200,6 +201,15 @@ describe("conflicts and append", () => {
     });
     expect(orphan.status).toBe("failed");
     expect(orphan.error?.message).toContain("缺少记录的远程基线");
+  });
+
+  it("accepts only the known per-repo error codes across the record/RPC boundary", () => {
+    for (const code of ["empty-selection", "duplicate-repo", "invalid-repo", "fetch-failed", "path-taken", "branch-in-use", "repo-unusable"]) {
+      expect(isMultiRepoErrorCode(code), code).toBe(true);
+    }
+    for (const bad of ["", "not-a-real-code", "FETCH-FAILED", undefined, 1, null, {}]) {
+      expect(isMultiRepoErrorCode(bad), String(bad)).toBe(false);
+    }
   });
 
   it("resumes only absent unfinished repos and holds present unknown paths", () => {
