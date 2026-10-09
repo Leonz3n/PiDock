@@ -12,6 +12,12 @@ import {
   type AgentSession,
 } from "@earendil-works/pi-coding-agent";
 import { readTaskRecordOnDisk } from "./task-store.js";
+import {
+  buildSdkAgentToolDefinitions,
+  sdkAgentSystemPrompt,
+  SDK_AGENT_TOOL_NAMES,
+  type SdkAgentToolCaller,
+} from "./sdk-agent-tool-contract.js";
 
 type SdkTextEventData =
   | { type: "delta"; text: string }
@@ -46,6 +52,26 @@ const emptyResources: ResourceLoader = {
   reload: async () => {},
 };
 
+/**
+ * The same loader with the task-scoped Agent prompt: it replaces the pi default
+ * prompt (the SDK drops its own tools/rules sections when a custom prompt is
+ * supplied), so it has to name the tool set and the confinement rule the Host
+ * broker enforces. Resource discovery stays empty: the Agent gets the four
+ * declared task tools and nothing else.
+ */
+function taskResources(taskDir: string): ResourceLoader {
+  return {
+    ...emptyResources,
+    getSystemPrompt: () => sdkAgentSystemPrompt({ taskDir, worktrees: taskWorktreePaths(taskDir) }),
+  };
+}
+
+/** `repos` of the task record, each as `<taskDir>/<repoDir>` (never the original checkout). */
+function taskWorktreePaths(taskDir: string): string[] {
+  const record = readTaskRecordOnDisk(taskDir);
+  return (record?.repos ?? []).map((repoDir) => `${taskDir.replace(/[\\/]+$/, "")}/${repoDir}`);
+}
+
 function safeId(id: string): void {
   if (!/^[a-zA-Z0-9_-]+$/.test(id)) throw new Error("invalid-session-id");
 }
@@ -63,7 +89,18 @@ export class PiSdkTextKernel {
   constructor(
     readonly taskId: string,
     readonly taskDir: string,
-    private readonly selection?: { model: Model<Api>; modelRuntime: ModelRuntime; bindingIdentity?: string },
+    private readonly selection?: {
+      model: Model<Api>;
+      modelRuntime: ModelRuntime;
+      bindingIdentity?: string;
+      /**
+       * The Host-side tool execution seam ([PiDock 02m] #5). Supplied only by
+       * the isolated context worker (which forwards the call to the Host) or by
+       * an in-process test; without it this kernel offers NO tools, which is
+       * what the fail-closed `provider-not-configured`/no-tools paths rely on.
+       */
+      callTool?: SdkAgentToolCaller;
+    },
   ) {
     if (!isAbsolute(taskDir) || !taskId) throw new Error("task-unknown");
     this.root = join(taskDir, ".pidock-sdk-sessions");
@@ -142,6 +179,14 @@ export class PiSdkTextKernel {
     if (storedModel && (storedModel.provider !== this.selection.model.provider || storedModel.modelId !== this.selection.model.id)) {
       throw new Error("sdk-configuration-mismatch");
     }
+    // The Agent's tool set is exactly the declared task tools ([PiDock 02m] #5),
+    // and only when this kernel was given a Host-side caller. The allowlist is
+    // what keeps a tool the SDK adds later out: `createAgentSession` exposes only
+    // the names listed here, so an unlisted built-in or extension tool can never
+    // reach the model, and the mismatch check below fails closed if the session
+    // ever reports anything else.
+    const callTool = this.selection.callTool;
+    const expectedTools: string[] = callTool ? [...SDK_AGENT_TOOL_NAMES] : [];
     const { session, modelFallbackMessage } = await createAgentSession({
       cwd: this.taskDir,
       agentDir: this.agentDir,
@@ -149,13 +194,18 @@ export class PiSdkTextKernel {
       modelRuntime: this.selection.modelRuntime,
       sessionManager: manager,
       settingsManager: SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false } }),
-      resourceLoader: emptyResources,
+      resourceLoader: callTool ? taskResources(this.taskDir) : emptyResources,
       noTools: "all",
-      tools: [],
+      tools: expectedTools,
+      ...(callTool ? { customTools: buildSdkAgentToolDefinitions(sessionId, callTool) } : {}),
       thinkingLevel: "off",
     });
+    const offered = [...session.getActiveToolNames()].sort();
+    const registered = session.getAllTools().map((tool) => tool.name).sort();
     if (modelFallbackMessage || session.model?.provider !== this.selection.model.provider ||
-        session.model?.id !== this.selection.model.id || session.getActiveToolNames().length !== 0) {
+        session.model?.id !== this.selection.model.id ||
+        JSON.stringify(offered) !== JSON.stringify([...expectedTools].sort()) ||
+        JSON.stringify(registered) !== JSON.stringify([...expectedTools].sort())) {
       session.dispose();
       throw new Error("sdk-configuration-mismatch");
     }

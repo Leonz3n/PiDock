@@ -202,6 +202,9 @@ const BROWSER_TOOL_DEFINITIONS: readonly PiToolDefinition[] = Object.keys(BROWSE
 /** Gated tools: the only tools the Agent may call. Everything else is closed. */
 export const PI_GATED_TOOLS: readonly PiToolDefinition[] = [
   { name: "fs.read", kind: "read" },
+  // [PiDock 02m] #5: the read-only listing/search tool of the real Agent tool
+  // set. It is `read` kind, so the tier rules below already cover it.
+  { name: "fs.search", kind: "read" },
   { name: "fs.write", kind: "write" },
   { name: "exec.run", kind: "command" },
   ...BROWSER_TOOL_DEFINITIONS,
@@ -215,13 +218,14 @@ export type PiGateDecision =
 /**
  * Mint purpose tag on an approval. Absent = the turn flow's own
  * `exec.run`/`browser.*` request (the default). `service-control`,
- * `browser-control` and `terminal-control` are stamped only by the Host when
- * it mints a service start/stop ([PiDock 04] #7), a task-browser action
- * ([PiDock 06] #8) or a built-in terminal start ([PiDock 10] #15) approval,
+ * `browser-control`, `terminal-control` and `agent-tool` are stamped only by
+ * the Host when it mints a service start/stop ([PiDock 04] #7), a
+ * task-browser action ([PiDock 06] #8), a built-in terminal start
+ * ([PiDock 10] #15) or a real Agent tool execution ([PiDock 02m] #5) approval,
  * so an identically shaped turn approval for the same tool + target can never
  * be spent on any Host-driven path (and vice versa).
  */
-export type PiApprovalScope = "service-control" | "browser-control" | "terminal-control";
+export type PiApprovalScope = "service-control" | "browser-control" | "terminal-control" | "agent-tool";
 
 /** The only scope a Host service-control approval is minted with. */
 export const SERVICE_CONTROL_SCOPE: PiApprovalScope = "service-control";
@@ -231,6 +235,14 @@ export const BROWSER_CONTROL_SCOPE: PiApprovalScope = "browser-control";
 
 /** The only scope a Host-minted built-in-terminal approval carries. */
 export const TERMINAL_CONTROL_SCOPE: PiApprovalScope = "terminal-control";
+
+/**
+ * The only scope the Host ties a real Agent tool execution to ([PiDock 02m] #5):
+ * `sdk-agent-tool-broker.ts` mints with it and its re-check accepts only it, so
+ * a scripted turn approval for the same tool + target can never authorize a
+ * tool that really writes or runs a command.
+ */
+export const AGENT_TOOL_SCOPE: PiApprovalScope = "agent-tool";
 
 export interface PiApproval {
   id: string;
