@@ -1440,11 +1440,12 @@ export function registerIpc(
           return { ok: true as const, payload: await performServiceBindingOperation(catalog, payload, pickProgram, requireLive) };
         } finally { event.sender.removeListener("did-start-navigation", onNavigation); }
       }
-      // A shared-template `update` (like `create`) is inert data: it writes no
-      // child process and no task binding, and the catalog re-validates every
-      // field fail-closed and re-checks the version, so it does not take the
-      // sibling `bind`/`runTaskService` live-sender guard. `requireShellSender`
-      // above still proves which webContents may call at all.
+      // A shared-template `update` and a binding `adoptBinding` (like `create`)
+      // are inert data: neither writes a child process, a program path or a task
+      // binding's local identity, and the catalog re-validates every field
+      // fail-closed and re-checks the version, so they do not take the sibling
+      // `bind`/`runTaskService` live-sender guard. `requireShellSender` above
+      // still proves which webContents may call at all.
       return { ok: true as const, payload: performServiceCatalogOperation(catalog, payload) };
     } catch (error) {
       if (error instanceof TrustDomainViolation) return trustFailureEnvelope(error);

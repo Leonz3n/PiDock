@@ -108,6 +108,15 @@ describe("shell service catalog request boundary", () => {
     expect(drifted.reviewTaskBindingAdoption).toHaveBeenCalledOnce();
   });
 
+  it("rejects an oversized adoption request before reviewing or writing", () => {
+    const catalog = store();
+    const request = { op: "adoptBinding", projectId: template.projectId, taskId: "task-1", serviceId: template.serviceId,
+      templateVersion: 2, confirm: true };
+    expect(() => performServiceCatalogOperation(catalog, { ...request, taskId: "t".repeat(20_000) })).toThrow();
+    expect(catalog.reviewTaskBindingAdoption).not.toHaveBeenCalled();
+    expect(catalog.adoptTaskBinding).not.toHaveBeenCalled();
+  });
+
   it("accepts only preview identities, never page-supplied environment values", () => {
     const catalog = { previewSavedConfig: vi.fn(() => ({ taskId: "task-1", serviceId: template.serviceId, templateVersion: 1,
       scope: "saved-config" as const, state: "ready" as const, rows: [] })) };
