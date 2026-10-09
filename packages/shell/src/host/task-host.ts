@@ -53,6 +53,7 @@ import {
 import { validateProviderProfile, type ProviderProfileRow } from "../main/provider-config.js";
 import {
   buildTaskBranch,
+  isAbsoluteTaskRoot,
   isTaskDirId,
   pinBaseline,
   planWorktreeCreation,
@@ -66,16 +67,23 @@ import {
   checkLinkNameCollisions,
   checkRepoConflicts,
   classifyLinkTarget,
+  classifyRepoPrepareState,
   filterAppendRepos,
   pinRepoBaselines,
   previewMixedTaskPaths,
+  resumeRepoSet,
+  segmentPrepareOutcomes,
   snapshotPlainDirLink,
   validateRepoSelections,
   type MultiRepoError,
+  type MultiRepoErrorCode,
   type PlainDirLinkSnapshot,
   type PinnedRepoBaseline,
+  type RepoPrepareEvidence,
+  type RepoPrepareOutcome,
   type RepoSelection,
 } from "../main/multi-repo-provision.js";
+import { createNodeRepoProbe, observeRecordedRepo } from "./repo-identity.js";
 import {
   buildTaskDiskRecord,
   deleteSessionOnDisk,
@@ -102,6 +110,7 @@ import {
   writeTaskRecordOnDisk,
   writeUsageOnDisk,
   type LifecycleRecord,
+  type RepoPrepareErrorRecord,
   type TaskDiskRecord,
 } from "./task-store.js";
 import { emptyExecutionLedger, type ExecutionLedgerRecord } from "../main/execution-ledger.js";
@@ -395,6 +404,56 @@ export interface ProvisionTaskInput {
 export interface ProvisionTaskResult {
   record: TaskDiskRecord;
   plan: ProvisionPlan;
+}
+
+/**
+ * [PiDock 03] (#6) resume input for a partial multi-repo prepare. Selections
+ * come from the task record, not the request: resume never adds a repo the
+ * task did not already select.
+ */
+export interface ResumeAppendInput {
+  /** Source checkout per repoDir for the fetch/branch/worktree ops. Required
+   *  for every retry repo (a relative/empty cwd fails closed). */
+  mainCheckouts?: Readonly<Record<string, string>>;
+  /** Task branch override; defaults to the stored branch. */
+  branch?: string;
+  /**
+   * Freshly fetched commit per repoDir (caller scan). Only used to detect a
+   * moved/deleted remote branch: a value that differs from the repo's
+   * recorded fixed baseline fails closed. Omitting a repo uses the recorded
+   * fixed commit (a resume never re-pins a baseline).
+   */
+  fetchedCommits?: Readonly<Record<string, string>>;
+  /**
+   * Caller-scanned conflict inputs (REQUIRED, never defaulted): the task-dir
+   * listing + `git worktree list` scan runs caller-side; omitting them would
+   * silently disable `checkRepoConflicts`, so an omitted list fails closed.
+   */
+  takenPaths?: readonly string[];
+  branchesInUse?: readonly string[];
+  /**
+   * Per-repo errors the caller observed on its previous execution attempt,
+   * keyed by repoDir. Persisted on the task record so an app restart still
+   * tells `pending` from `failed` with the real per-repo reason.
+   */
+  prepareErrors?: Readonly<Record<string, { code: string; message: string }>>;
+}
+
+export interface ResumeAppendResult {
+  record: TaskDiskRecord;
+  /** Ops for the retry set only; an empty plan means nothing was unfinished. */
+  plan: ProvisionPlan;
+  /** Per-repo classification with the real evidence and reason. */
+  outcomes: RepoPrepareOutcome[];
+  created: string[];
+  pending: string[];
+  failed: { repoDir: string; error: MultiRepoError }[];
+  /** Unfinished repos with no worktree on disk: safe to create, so planned. */
+  retry: string[];
+  /** Failed repos whose path exists but is not this task's worktree (held). */
+  hold: string[];
+  /** True when at least one unfinished repo entered the plan. */
+  resumed: boolean;
 }
 
 export interface HostTurnResult {
@@ -1307,6 +1366,9 @@ export class TaskWorkspaceHost {
       }
       if (pinnedRepos === null && previous.repoSources !== undefined) record.repoSources = previous.repoSources;
       if (linkSnapshots === null && previous.dirLinks !== undefined) record.dirLinks = previous.dirLinks;
+      // #6 recovery: a re-provision must not erase a still-unresolved
+      // per-repo prepare error (resume is the only flow that clears it).
+      if (previous.repoPrepareErrors !== undefined) record.repoPrepareErrors = [...previous.repoPrepareErrors];
     }
     this.store.writeTask(this.taskDir, record);
     // Plan with real cwds via `planWorktreeCreation` (never ""): one
@@ -1455,11 +1517,223 @@ export class TaskWorkspaceHost {
         })),
       ],
       dirLinks: stored.dirLinks !== undefined ? [...stored.dirLinks] : undefined,
+      repoPrepareErrors:
+        stored.repoPrepareErrors !== undefined ? [...stored.repoPrepareErrors] : undefined,
       now: at,
     });
     record.createdAt = stored.createdAt;
     this.store.writeTask(this.taskDir, record);
     return { record, plan, appended, skipped };
+  }
+
+  /**
+   * [PiDock 03] (#6) resume a partial multi-repo prepare. `appendRepos`
+   * filters against the stored `repos` list and cannot tell `pending` from
+   * `failed` inside the unfinished set; this entry point classifies each
+   * selected repo from the REAL worktree on disk and retries only the
+   * unfinished ones.
+   *
+   * Evidence per state (`classifyRepoPrepareState`): `created` needs the
+   * worktree dir present AND a read-only git probe confirming a linked
+   * worktree on the task branch with the pinned commit reachable — never
+   * claimed from the record alone; `pending` is a recorded selection with
+   * no worktree and no reported error; `failed` is a present-but-not-ours
+   * path (held, never overwritten) or an absent worktree with a previously
+   * reported per-repo error (kept with its real reason).
+   *
+   * Reuses the existing gates rather than duplicating them:
+   * `validateRepoSelections` + `pinRepoBaselines` (all-success, no stale
+   * refs) and the caller-scanned `takenPaths`/`branchesInUse` conflict gate
+   * (REQUIRED, fail-closed when omitted) with `checkRepoConflicts`
+   * reporting. Only the retry set enters the plan, so a created worktree is
+   * never re-created, reset, refetched or overwritten: its user edits are
+   * byte-identical afterwards.
+   */
+  resumeAppend(input: ResumeAppendInput = {}): ResumeAppendResult {
+    this.protection?.assert(this.taskDir);
+    for (const source of Object.values(input.mainCheckouts ?? {})) this.protection?.assert(source);
+    const stored = this.store.readTask(this.taskDir);
+    if (!stored) throw new Error("unknown task: no task record; provision the task before resuming");
+    if (stored.taskId !== this.taskId) throw new Error("task-unknown: this Host serves a different task");
+    const selected = [...stored.repos];
+    if (selected.length === 0) throw new Error("unknown repo: the task records no selected repos to resume");
+    const recorded = new Map<string, NonNullable<TaskDiskRecord["repoSources"]>[number]>();
+    for (const source of stored.repoSources ?? []) recorded.set(source.repoDir, source);
+    // Persisted errors keep a repo `failed` across a restart; the caller's
+    // latest observation overrides them for this attempt. Neither is dropped.
+    const reportedErrors = new Map<string, MultiRepoError>();
+    for (const error of stored.repoPrepareErrors ?? []) {
+      reportedErrors.set(error.repoDir, {
+        code: error.code as MultiRepoErrorCode,
+        repoDir: error.repoDir,
+        message: error.message,
+      });
+    }
+    for (const [repoDir, error] of Object.entries(input.prepareErrors ?? {})) {
+      if (!selected.includes(repoDir)) throw new Error(`unknown repo: ${repoDir} 不在任务已选仓库中`);
+      if (
+        typeof error !== "object" ||
+        error === null ||
+        typeof error.code !== "string" ||
+        error.code.length === 0 ||
+        typeof error.message !== "string" ||
+        error.message.length === 0
+      ) {
+        throw new Error("invalid-payload: resumeAppend.prepareErrors entries must be {code, message} strings");
+      }
+      reportedErrors.set(repoDir, { code: error.code as MultiRepoErrorCode, repoDir, message: error.message });
+    }
+    const dirs = previewMixedTaskPaths(this.taskDir, selected, []).worktrees;
+    const { lstatSync } = process.getBuiltinModule("node:fs") as typeof import("node:fs");
+    const probe = createNodeRepoProbe();
+    const present = new Set<string>();
+    const outcomes: RepoPrepareOutcome[] = [];
+    for (const repoDir of selected) {
+      const worktreeDir = dirs[repoDir]!;
+      let presentOnDisk = false;
+      try {
+        lstatSync(worktreeDir);
+        presentOnDisk = true;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      if (presentOnDisk) present.add(repoDir);
+      const baseCommit = recorded.get(repoDir)?.baseCommit ?? (selected.length === 1 ? stored.baseCommit : "");
+      const evidence: RepoPrepareEvidence = { repoDir, worktreePresent: presentOnDisk };
+      if (presentOnDisk) {
+        const observed = observeRecordedRepo({ repoDir: worktreeDir, baseCommit }, probe);
+        if (observed === undefined) {
+          evidence.worktreeMatchesPinnedCommit = false;
+          evidence.mismatchReason = `路径已存在但不是可验证的 Git 工作副本: ${worktreeDir}`;
+        } else if (observed.isWorktree !== true) {
+          evidence.worktreeMatchesPinnedCommit = false;
+          evidence.mismatchReason = `路径 ${worktreeDir} 存在但不是本任务的 linked worktree，不会自动接管`;
+        } else if (observed.branch !== stored.branch) {
+          evidence.worktreeMatchesPinnedCommit = false;
+          evidence.mismatchReason = `工作副本 HEAD 不在任务分支 ${stored.branch}（实际 ${observed.branch ?? "detached"}）`;
+        } else if (observed.baseCommitReachable !== true) {
+          evidence.worktreeMatchesPinnedCommit = false;
+          evidence.mismatchReason =
+            baseCommit.length > 0
+              ? `工作副本未包含固定提交 ${baseCommit}`
+              : "工作副本缺少已记录的固定提交，无法确认来源";
+        } else {
+          evidence.worktreeMatchesPinnedCommit = true;
+        }
+      } else {
+        const previousError = reportedErrors.get(repoDir);
+        if (previousError) evidence.previousError = previousError;
+      }
+      outcomes.push(classifyRepoPrepareState(evidence));
+    }
+    // `segmentPrepareOutcomes` picks created vs pending vs failed from the
+    // real evidence; the worktree-presence set separates a retryable failed
+    // repo (absent) from a held one (present, not ours).
+    const segmented = segmentPrepareOutcomes(outcomes);
+    const { retry, hold } = resumeRepoSet(outcomes, present);
+    const branch = input.branch ?? stored.branch;
+    const checkouts: Record<string, string> = {};
+    const selections: RepoSelection[] = [];
+    const pinnedFetched: Record<string, string> = {};
+    for (const repoDir of retry) {
+      const source = recorded.get(repoDir);
+      if (!source) throw new Error(`unknown repo: 仓库 ${repoDir} 缺少记录的远程基线，无法恢复，请人工处理`);
+      const mainCheckoutDir = input.mainCheckouts?.[repoDir];
+      if (typeof mainCheckoutDir !== "string" || !isAbsoluteTaskRoot(mainCheckoutDir)) {
+        throw new Error(`repo-unusable: 仓库 ${repoDir} 的来源检出不可用: ${String(mainCheckoutDir)}`);
+      }
+      checkouts[repoDir] = mainCheckoutDir.trim();
+      selections.push({ repoDir, remote: source.remote, remoteBranch: source.remoteBranch, mainCheckoutDir });
+      // The baseline is already fixed on the record: a resume never re-pins
+      // it. A supplied fresh fetch must equal it, so a moved/deleted remote
+      // branch fails closed instead of creating from a different baseline.
+      const fetched = input.fetchedCommits?.[repoDir];
+      if (fetched !== undefined && fetched.trim().toLowerCase() !== source.baseCommit.trim().toLowerCase()) {
+        throw new Error(
+          `fetch-failed: 仓库 ${repoDir} 远程基线已变化（${fetched.trim()} ≠ ${source.baseCommit}），不使用与记录不一致的基线 (form kept, retry fetch)`,
+        );
+      }
+      pinnedFetched[repoDir] = source.baseCommit;
+    }
+    const validated = validateRepoSelections(selections);
+    if (!validated.ok) {
+      const error: MultiRepoError = validated.error;
+      throw new Error(`${error.code}: ${error.message} (form kept, retry fetch)`);
+    }
+    const batch = pinRepoBaselines(validated.selections, pinnedFetched);
+    if (!batch.ok) {
+      const error: MultiRepoError = batch.error;
+      throw new Error(`${error.code}: ${error.message} (form kept, retry fetch)`);
+    }
+    // Fail closed when the caller omits the conflict scan: defaulting to
+    // `[]` here would plan worktrees without any path/branch check.
+    if (input.takenPaths === undefined || input.branchesInUse === undefined) {
+      throw new Error(
+        "invalid-payload: resumeAppend requires caller-scanned takenPaths + branchesInUse " +
+          "(task-dir listing + `git worktree list`); refusing to plan without the conflict gate",
+      );
+    }
+    const conflict = checkRepoConflicts({
+      wantedWorktreeDirs: retry.map((repoDir) => dirs[repoDir]!),
+      takenPaths: input.takenPaths,
+      branchesInUse: input.branchesInUse,
+      wantedBranch: branch,
+    });
+    if (!conflict.ok) {
+      const error: MultiRepoError = conflict.error;
+      throw new Error(`${error.code}: ${error.message}`);
+    }
+    const plan: ProvisionPlan = { mainCheckoutDir: stored.root, ops: [] };
+    for (const repo of batch.pinned) {
+      const repoPlan = planWorktreeCreation({
+        taskDir: this.taskDir,
+        mainCheckoutDir: checkouts[repo.repoDir] ?? stored.root,
+        repoDir: repo.repoDir,
+        remote: repo.remote,
+        remoteBranch: repo.remoteBranch,
+        commit: repo.commit,
+        branch,
+      });
+      plan.ops.push(...repoPlan.ops);
+    }
+    assertProvisionPlanSafe(plan);
+    // Persist only the still-unresolved per-repo errors: a `created` repo
+    // clears its stale entry, a `pending` one has none. This is what makes a
+    // later resume (after a restart) tell `failed` from `pending`.
+    const nextErrors: RepoPrepareErrorRecord[] = [];
+    for (const outcome of outcomes) {
+      if (outcome.status === "failed" && outcome.error) {
+        nextErrors.push({ repoDir: outcome.repoDir, code: outcome.error.code, message: outcome.error.message });
+      }
+    }
+    const record = buildTaskDiskRecord({
+      taskId: stored.taskId,
+      name: stored.name,
+      dirId: stored.dirId,
+      branch: stored.branch,
+      root: stored.root,
+      taskDir: stored.taskDir,
+      remoteBranch: stored.remoteBranch,
+      baseCommit: stored.baseCommit,
+      repos: [...stored.repos],
+      repoSources: stored.repoSources !== undefined ? [...stored.repoSources] : undefined,
+      dirLinks: stored.dirLinks !== undefined ? [...stored.dirLinks] : undefined,
+      repoPrepareErrors: nextErrors.length > 0 ? nextErrors : undefined,
+      now: this.now(),
+    });
+    record.createdAt = stored.createdAt;
+    this.store.writeTask(this.taskDir, record);
+    return {
+      record,
+      plan,
+      outcomes,
+      created: segmented.created,
+      pending: segmented.pending,
+      failed: segmented.failed,
+      retry,
+      hold,
+      resumed: retry.length > 0,
+    };
   }
 
   /**

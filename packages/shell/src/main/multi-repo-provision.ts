@@ -285,13 +285,13 @@ export interface RepoPrepareOutcome {
  * distinguishable so recovery resumes only the unfinished ones and keeps
  * user edits in the finished worktrees.
  *
- * DEFERRED wiring (S6 scope, documented not silent): no Host recovery
- * flow consumes this yet — `appendRepos` resumes by filtering against
- * the stored `repos` list (`filterAppendRepos`), which keeps finished
- * worktrees untouched but cannot distinguish `pending` vs `failed`
- * within the unfinished set. A resume-partial-prepare entry point
- * should call this to pick the retry set; until then the form retries
- * the whole unfinished set per repo with `fetch-failed` kept per repo.
+ * The wired recovery flow is `TaskWorkspaceHost.resumeAppend`
+ * (`task/resumeAppend`): it classifies each selected repo from the REAL
+ * worktree on disk (`classifyRepoPrepareState`), feeds the outcomes here,
+ * and plans only the retry set. `appendRepos` itself still resumes by
+ * filtering against the stored `repos` list (`filterAppendRepos`), which
+ * keeps finished worktrees untouched but cannot distinguish `pending` vs
+ * `failed`; resume is the entry point that can.
  */
 export function segmentPrepareOutcomes(
   outcomes: readonly RepoPrepareOutcome[],
@@ -312,6 +312,84 @@ export function segmentPrepareOutcomes(
     }
   }
   return { created, pending, failed };
+}
+
+/**
+ * Real evidence the Host gathered about ONE selected repo's worktree on
+ * disk. Every field is an observation, never a guess:
+ *
+ * - `worktreePresent`: `lstat(taskDir/<repoDir>)` succeeded.
+ * - `worktreeMatchesPinnedCommit`: the present path is a linked Git
+ *   worktree whose HEAD is the task branch and whose HEAD still contains
+ *   the pinned commit (`RepoProbe` read-only git, same seam as [PiDock 14]
+ *   #17); `null` when the probe could not verify it.
+ * - `previousError`: a per-repo error already recorded for this repo.
+ */
+export interface RepoPrepareEvidence {
+  repoDir: string;
+  worktreePresent: boolean;
+  worktreeMatchesPinnedCommit?: boolean | null;
+  /** Reason the present path is not this task's worktree (only for `failed`). */
+  mismatchReason?: string;
+  /** A per-repo error already reported for this repo (kept, never dropped). */
+  previousError?: MultiRepoError;
+}
+
+/**
+ * Classify ONE selected repo from real evidence (honest, fail-closed):
+ *
+ * - `created`: `lstat` found the worktree dir AND the git probe verified a
+ *   linked worktree on the task branch with the pinned commit reachable.
+ *   Never claimed from the record alone: with no probe the repo is not
+ *   `created`.
+ * - `failed`: the path is present but is NOT this task's pinned worktree
+ *   (partial/broken leftover — never overwritten), OR the worktree is
+ *   absent while a per-repo error was already reported for it (kept with
+ *   its real reason, never silently dropped).
+ * - `pending`: the selection is recorded, the worktree is absent and no
+ *   error was ever reported (a create interrupted before any git op).
+ */
+export function classifyRepoPrepareState(evidence: RepoPrepareEvidence): RepoPrepareOutcome {
+  if (evidence.worktreePresent) {
+    if (evidence.worktreeMatchesPinnedCommit === true) {
+      return { repoDir: evidence.repoDir, status: "created" };
+    }
+    return {
+      repoDir: evidence.repoDir,
+      status: "failed",
+      error: {
+        code: "repo-unusable",
+        repoDir: evidence.repoDir,
+        message:
+          evidence.mismatchReason ??
+          `路径 ${evidence.repoDir} 已存在但不是本任务固定提交的工作副本，不会自动覆盖`,
+      },
+    };
+  }
+  if (evidence.previousError) {
+    return { repoDir: evidence.repoDir, status: "failed", error: evidence.previousError };
+  }
+  return { repoDir: evidence.repoDir, status: "pending" };
+}
+
+/**
+ * Split classified outcomes into what a resume may retry (worktree absent,
+ * so creating it takes over nothing) and what it must hold (a present path
+ * that is not this task's worktree — never reset/refetched/overwritten).
+ * `created` repos are never in either list, so their user edits survive.
+ */
+export function resumeRepoSet(
+  outcomes: readonly RepoPrepareOutcome[],
+  worktreePresent: ReadonlySet<string>,
+): { retry: string[]; hold: string[] } {
+  const retry: string[] = [];
+  const hold: string[] = [];
+  for (const outcome of outcomes) {
+    if (outcome.status === "created") continue;
+    if (worktreePresent.has(outcome.repoDir)) hold.push(outcome.repoDir);
+    else retry.push(outcome.repoDir);
+  }
+  return { retry, hold };
 }
 
 /** Stable ASCII link name for a plain directory: `dir-` + up to 8

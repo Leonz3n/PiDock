@@ -299,6 +299,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** A plain string->string map (rejects arrays and nested values). */
+function isStringMap(value: unknown): value is Record<string, string> {
+  return isRecord(value) && Object.values(value).every((entry) => typeof entry === "string");
+}
+
 /**
  * Per-op payload validation (S1 minimal scope). provision/sendMessage reuse
  * the embedded guards; cancel/approve/reject keep an opaque object payload.
@@ -445,6 +450,45 @@ export function validateHostTaskOp(
     // cannot be skipped by omitting the scan.
     if (!Array.isArray(payload["takenPaths"]) || !Array.isArray(payload["branchesInUse"])) {
       return { ok: false, error: "invalid-payload: task/appendRepos requires caller-scanned takenPaths + branchesInUse" };
+    }
+    return { ok: true };
+  }
+  // #6 resume: shape-checked here; the real classification + gates run
+  // Host-side. Selections come from the task record, so only the
+  // caller-scanned conflict inputs are required from the payload.
+  if (op === "task/resumeAppend") {
+    if (!isRecord(payload))
+      return { ok: false, error: "invalid-payload: task/resumeAppend requires a payload object" };
+    // Caller-scanned conflict inputs are REQUIRED (never silently `[]`):
+    // `resumeAppend` fails closed without them so the path/branch gate
+    // cannot be skipped by omitting the scan.
+    if (!Array.isArray(payload["takenPaths"]) || !Array.isArray(payload["branchesInUse"])) {
+      return { ok: false, error: "invalid-payload: task/resumeAppend requires caller-scanned takenPaths + branchesInUse" };
+    }
+    const resumeCheckouts = payload["mainCheckouts"];
+    if (resumeCheckouts !== undefined && !isStringMap(resumeCheckouts)) {
+      return { ok: false, error: "invalid-payload: task/resumeAppend.mainCheckouts must map repo names to path strings" };
+    }
+    const resumeFetched = payload["fetchedCommits"];
+    if (resumeFetched !== undefined && !isStringMap(resumeFetched)) {
+      return { ok: false, error: "invalid-payload: task/resumeAppend.fetchedCommits must map repo names to commit strings" };
+    }
+    const resumeErrors = payload["prepareErrors"];
+    if (resumeErrors !== undefined) {
+      if (!isRecord(resumeErrors)) {
+        return { ok: false, error: "invalid-payload: task/resumeAppend.prepareErrors must map repo names to {code, message}" };
+      }
+      for (const entry of Object.values(resumeErrors)) {
+        if (
+          typeof entry !== "object" ||
+          entry === null ||
+          Array.isArray(entry) ||
+          typeof (entry as Record<string, unknown>)["code"] !== "string" ||
+          typeof (entry as Record<string, unknown>)["message"] !== "string"
+        ) {
+          return { ok: false, error: "invalid-payload: task/resumeAppend.prepareErrors must map repo names to {code, message}" };
+        }
+      }
     }
     return { ok: true };
   }

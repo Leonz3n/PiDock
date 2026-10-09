@@ -106,13 +106,17 @@ export function createNodeRepoProbe(): RepoProbe {
       }
     },
     runGit: (args: readonly string[]): string | null => {
+      const isAncestorProbe = args.includes("--is-ancestor");
       try {
-        return execFileSync("git", [...args], { encoding: "utf8", timeout: 5_000, stdio: ["ignore", "pipe", "ignore"] }).trim();
+        const printed = execFileSync("git", [...args], { encoding: "utf8", timeout: 5_000, stdio: ["ignore", "pipe", "ignore"] }).trim();
+        // `merge-base --is-ancestor` prints nothing: the exit status IS the
+        // answer. A successful run means "yes" and must not read as unknown.
+        return isAncestorProbe ? "0" : printed;
       } catch (error) {
         const status = (error as { status?: number }).status;
         // `--is-ancestor` uses exit 1 for "no"; keep that distinguishable from
         // an unavailable/failed git (which must stay unknown).
-        if (args.includes("--is-ancestor") && status === 1) return "1";
+        if (isAncestorProbe && status === 1) return "1";
         return null;
       }
     },

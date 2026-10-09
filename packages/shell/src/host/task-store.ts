@@ -69,6 +69,18 @@ export interface PlainDirLinkRecord {
   snapshotAt: string;
 }
 
+/**
+ * A per-repo prepare error recorded for [PiDock 03] (#6) recovery: the repo
+ * keeps showing as `failed` with its real reason across an app restart
+ * until a resume verifies its worktree or the caller reports a new outcome.
+ * Absent when no selected repo has a reported failure.
+ */
+export interface RepoPrepareErrorRecord {
+  repoDir: string;
+  code: string;
+  message: string;
+}
+
 export interface TaskDiskRecord {
   taskId: string;
   name: string;
@@ -92,6 +104,13 @@ export interface TaskDiskRecord {
    * through the link modify the original. Absent on pre-#6 records.
    */
   dirLinks?: PlainDirLinkRecord[];
+  /**
+   * Per-repo prepare errors for [PiDock 03] (#6) recovery. Each entry names
+   * the unfinished repo and the real reason it failed, so a resume after an
+   * app restart distinguishes `pending` from `failed` and never silently
+   * drops a failed repo. Absent when nothing failed.
+   */
+  repoPrepareErrors?: RepoPrepareErrorRecord[];
   createdAt: string;
   updatedAt: string;
 }
@@ -139,6 +158,7 @@ export function buildTaskDiskRecord(input: {
   repos: readonly string[];
   repoSources?: RepoSourceRecord[];
   dirLinks?: PlainDirLinkRecord[];
+  repoPrepareErrors?: RepoPrepareErrorRecord[];
   now: string;
 }): TaskDiskRecord {
   const record: TaskDiskRecord = {
@@ -156,6 +176,7 @@ export function buildTaskDiskRecord(input: {
   };
   if (input.repoSources !== undefined) record.repoSources = input.repoSources.map((source) => ({ ...source }));
   if (input.dirLinks !== undefined) record.dirLinks = input.dirLinks.map((link) => ({ ...link }));
+  if (input.repoPrepareErrors !== undefined) record.repoPrepareErrors = input.repoPrepareErrors.map((error) => ({ ...error }));
   return record;
 }
 
@@ -209,6 +230,24 @@ export function parseTaskRecord(raw: string): TaskDiskRecord {
       for (const key of ["linkName", "directoryId", "sourcePath", "snapshotAt"] as const) {
         if (typeof entry[key] !== "string" || (entry[key] as string).length === 0) {
           throw new Error(`invalid-payload: task record.dirLinks.${key} must be a non-empty string`);
+        }
+      }
+    }
+  }
+  // #6 per-repo prepare errors: optional for records without failures,
+  // fully validated when present (each names the repo and its real reason).
+  if (record["repoPrepareErrors"] !== undefined) {
+    if (!Array.isArray(record["repoPrepareErrors"])) {
+      throw new Error("invalid-payload: task record.repoPrepareErrors must be an array");
+    }
+    for (const error of record["repoPrepareErrors"] as unknown[]) {
+      if (typeof error !== "object" || error === null || Array.isArray(error)) {
+        throw new Error("invalid-payload: task record.repoPrepareErrors entries must be objects");
+      }
+      const entry = error as Record<string, unknown>;
+      for (const key of ["repoDir", "code", "message"] as const) {
+        if (typeof entry[key] !== "string" || (entry[key] as string).length === 0) {
+          throw new Error(`invalid-payload: task record.repoPrepareErrors.${key} must be a non-empty string`);
         }
       }
     }
