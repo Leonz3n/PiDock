@@ -1171,7 +1171,12 @@ export function serializeServiceOwnershipRecord(record: ServiceOwnershipDiskReco
 
 /** Full validation on read; a duplicate service id is corrupt, not last-wins. */
 export function parseServiceOwnershipRecord(raw: string): ServiceOwnershipDiskRecord {
-  const value: unknown = JSON.parse(raw);
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`invalid-payload: service ownership record is not valid JSON: ${(error as Error).message}`);
+  }
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error("invalid-payload: service ownership record must be an object");
   }

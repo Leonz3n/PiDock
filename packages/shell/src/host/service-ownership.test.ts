@@ -178,9 +178,20 @@ describe.skipIf(process.platform === "win32")("#48 service-launch ownership iden
     const dir = taskDir();
     const foreign = foreignProcess();
     const nonce = "b".repeat(32);
-    writeServiceOwnershipOnDisk(dir, { version: SERVICE_OWNERSHIP_SCHEMA_VERSION, entries: [record({ serviceId: "one", pid: foreign, ownershipNonce: nonce })] });
+    const entry = record({ serviceId: "one", pid: foreign, ownershipNonce: nonce });
+    writeServiceOwnershipOnDisk(dir, { version: SERVICE_OWNERSHIP_SCHEMA_VERSION, entries: [entry] });
     const processes = driver(dir);
     const before = readFileSync(join(dir, "service-ownership.json"), "utf8");
+
+    // Tri-state: positive evidence of mismatch (process is alive and inspectable, but nonce absent).
+    expect(verifyServiceOwnershipIdentity({ pid: foreign, ownershipNonce: nonce })).toBe("mismatch");
+    expect(classifyServiceOwnership([entry])).toEqual([
+      { serviceId: "one", pid: foreign, ownershipNonce: nonce, startedAt: entry.startedAt, state: "orphaned-unverified" },
+    ]);
+
+    // Invariant: refuse a duplicate start while a recorded live process exists (fail-closed).
+    await expect(processes.start(plan("one", dir))).rejects.toThrow(`service-ownership-orphaned-unverified: one pid ${foreign}`);
+    expect(processes.ids()).toEqual([]);
 
     // No in-memory handle: the only path is the durable record, whose identity
     // does not match, so NOTHING may be signalled.
@@ -332,7 +343,7 @@ describe.skipIf(process.platform === "win32")("#48 service-launch ownership iden
  * than half-restored.
  */
 describe("#48 service ownership records", () => {
-  it("refuses a corrupt or unsafe record instead of restoring it half-shaped", () => {
+  it("refuses a corrupt or unsafe record instead of restoring it half-shaped, failing closed", async () => {
     const dir = taskDir();
     const file = join(dir, "service-ownership.json");
     const good = { version: 1, entries: [record({ serviceId: "one", pid: 4242, ownershipNonce: "d".repeat(32) })] };
@@ -353,6 +364,17 @@ describe("#48 service ownership records", () => {
     for (const corrupt of cases) {
       writeFileSync(file, JSON.stringify(corrupt));
       expect(() => readServiceOwnershipOnDisk(dir), JSON.stringify(corrupt)).toThrow(/invalid-payload/);
+    }
+
+    // Fail-closed driver behavior: a corrupt record halts starts and stops rather than guessing.
+    const corruptCases = ["{ not-even-valid-json", JSON.stringify({ version: 1, entries: [{ ...good.entries[0], pid: 0 }] })];
+    for (const corruptContent of corruptCases) {
+      writeFileSync(file, corruptContent);
+      const corruptProcesses = driver(dir);
+      await expect(corruptProcesses.start(plan("one", dir))).rejects.toThrow(/invalid-payload/);
+      await expect(corruptProcesses.stop("one")).rejects.toThrow(/invalid-payload/);
+      expect(corruptProcesses.ids()).toEqual([]);
+      expect(readFileSync(file, "utf8")).toBe(corruptContent);
     }
     // A record naming another task is never this task's launch, and our writes
     // neither classify nor delete it.
