@@ -250,9 +250,13 @@ describe.skipIf(process.platform === "win32")("#7 production shell/serviceCatalo
     // is what main registers, not something a caller can claim.
     const unknown = await f.run(serviceId, "start", { ...f.shell, sender: { ...f.shell.sender, id: 99 } });
     expect(unknown).toMatchObject({ ok: false, error: expect.stringContaining("unknown-sender") });
-    // A page-supplied program (or any other extra key) is a payload violation.
-    const extra = await f.handler(f.shell, { op: "runTaskService", projectId: f.projectId, taskId: f.taskId, serviceId, action: "start", program: "/bin/sh" });
-    expect(extra).toMatchObject({ ok: false, error: expect.stringContaining("invalid-payload") });
+    // A page-supplied program/cwd/env value, or a session/approval id that
+    // would masquerade as the Agent gate path, is a payload violation: the
+    // page names only project/task/service/action.
+    for (const extra of [{ program: "/bin/sh" }, { cwd: f.taskDir }, { env: { TOKEN: "x" } }, { sessionId: "main" }, { approvalId: "approval-1" }, { label: "用户点击" }]) {
+      const rejected = await f.handler(f.shell, { op: "runTaskService", projectId: f.projectId, taskId: f.taskId, serviceId, action: "start", ...extra });
+      expect(rejected).toMatchObject({ ok: false, error: expect.stringContaining("invalid-payload") });
+    }
     expect(existsSync(f.marker("a"))).toBe(false);
     expect(f.tasks.size).toBe(0);
   }, 30_000);
