@@ -936,28 +936,31 @@ export function createTaskBrowserCapability(input: {
 }
 
 /**
- * The production refusal for catalog-driven service execution ([PiDock 04]
- * #7). Ticket #7's final review still blocks production wiring: a task-bound
- * service may run only once process-tree ownership/exit reclaim and task-path
- * identity are redesigned and covered by descendant and cross-platform real
- * tests, before which main must not register/control a service or open the UI.
- * The prior slice preserved the capability (and fixed task-path identity) but
- * re-opened this production entry; this error names the unmet preconditions so
- * the block stays visible in the tree instead of being rediscovered.
+ * The named production refusal for catalog-driven service execution on a
+ * platform where ownership cannot be verified ([PiDock 04] #7, [PiDock 04]
+ * #48). #48 delivered the prerequisite the previous block waited for: the
+ * durable `(pid, 128-bit nonce)` launch identity, tri-state verification
+ * (verified / mismatch / unobservable), "no signal without verified evidence
+ * in the same call", descendant reclaim only from positive process-group
+ * evidence, and an explicit `unsupported-platform` refusal on win32. The
+ * remaining platform boundary is exactly the one #48 chose: POSIX (darwin,
+ * linux) can verify and terminate a launch; every other platform is refused
+ * fail-closed under the same wording, so production re-opens only where the
+ * ownership module can actually answer "is this pid our launch?".
  */
-export const SERVICE_EXECUTION_BLOCKED =
-  "service-execution-blocked: 进程树所有权与跨平台终止前置条件未满足（见 #7）";
+export const SERVICE_EXECUTION_UNSUPPORTED_PLATFORM =
+  "unsupported-platform: 服务启动身份核验与终止仅在 POSIX（darwin/linux）实现，本平台按 #48 拒绝执行（见 #48/#7）";
 
 /**
  * The pure production gate for catalog-driven service execution: `null` when
- * execution is authorized, the named refusal string when it is blocked. It
- * takes no caller input on purpose - no page- or caller-supplied value may
- * unlock execution while the #7 preconditions are unmet - and the production
- * trigger checks it before resolving a launch or reaching any spawn-capable
- * call, so the capability and its tests can keep running through the seam.
+ * execution is authorized, the named `/^unsupported-platform/` refusal when it
+ * is not. It takes no caller input on purpose - no page- or caller-supplied
+ * value may unlock execution on a platform whose ownership evidence cannot be
+ * read - and the production trigger checks it before resolving a launch or
+ * reaching any spawn-capable call.
  */
 export function serviceExecutionRefusal(): string | null {
-  return SERVICE_EXECUTION_BLOCKED;
+  return process.platform === "darwin" || process.platform === "linux" ? null : SERVICE_EXECUTION_UNSUPPORTED_PLATFORM;
 }
 
 /**
@@ -970,9 +973,9 @@ export function serviceExecutionRefusal(): string | null {
  *
  * Exported so the sequence can be driven end to end against a real Host and a
  * real child process without an Electron `IpcMainInvokeEvent`. The production
- * IPC trigger refuses it by default through `serviceExecutionRefusal`; this
- * seam stays callable so the capability and its real-subprocess tests survive
- * while production wiring is blocked.
+ * IPC trigger (`shell/serviceCatalogOp {op:"runTaskService"}`) calls it after
+ * `serviceExecutionRefusal`, so the authorized platform and this seam run the
+ * same sequence.
  */
 export async function runTaskService(
   tasks: Pick<PerTaskHostRegistry, "routeTaskOp">,
@@ -1379,10 +1382,11 @@ export function registerIpc(
       if (payload && typeof payload === "object" && (payload as Record<string, unknown>)["op"] === "runTaskService") {
         if (!tasks) return { ok: false as const, error: "任务 Host 尚未接入" };
         const request = parseServiceRunRequest(payload);
-        // Production refuses before resolving a launch or reaching any
-        // spawn-capable call: ticket #7 deliberately keeps this entry point
-        // unwired until the process-tree preconditions are met. See
-        // `serviceExecutionRefusal` for the documented decision.
+        // Production gate: authorized on POSIX (the ownership module can
+        // verify a launch identity there), a named `unsupported-platform`
+        // refusal everywhere else (#48's decision). It is checked before
+        // resolving a launch, so an unsupported platform never reaches a
+        // spawn-capable call. See `serviceExecutionRefusal`.
         const refusal = serviceExecutionRefusal();
         if (refusal !== null) return { ok: false as const, error: refusal };
         // Execution takes the same live-sender guard as the sibling binding
