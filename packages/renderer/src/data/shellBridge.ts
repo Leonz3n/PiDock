@@ -71,6 +71,8 @@ export function isShellConnected(): boolean {
 export type ShellTaskOp =
   | "task/provision"
   | "task/appendRepos"
+  | "task/resumeAppend"
+  | "task/prepareStatus"
   | "task/probeLink"
   | "task/sendMessage"
   | "task/cancel"
@@ -279,6 +281,56 @@ export async function appendReposThroughShell(input: {
   if (input.mainCheckouts !== undefined) payload["mainCheckouts"] = input.mainCheckouts;
   try {
     return await shellTaskOp(input.taskId, "task/appendRepos", payload);
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * [PiDock 03] (#6) read-only per-repo prepare readout for the recovery UI
+ * (`host/task` + `task/prepareStatus`). Needs no conflict scan (it plans and
+ * writes nothing), so the sandboxed renderer can read created / pending /
+ * failed with the real per-repo reason without holding git capability.
+ */
+export async function prepareStatusThroughShell(input: { taskId: string }): Promise<ShellTaskOpResult> {
+  try {
+    return await shellTaskOp(input.taskId, "task/prepareStatus", {});
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * [PiDock 03] (#6) resume a partial multi-repo prepare through the shell
+ * (`host/task` + `task/resumeAppend`). Selections come from the stored task
+ * record; the Host classifies the REAL worktree state and retries only the
+ * unfinished repos.
+ *
+ * `takenPaths`/`branchesInUse` are the caller-scanned conflict inputs the
+ * Host (and the RPC guard) REQUIRE and fail closed without. This helper only
+ * forwards them: keys that are `undefined` are omitted from the payload, so
+ * a caller that cannot scan never fabricates an empty scan (`[]` would
+ * silently disable the gate). The renderer passes no scan; a main-side
+ * scanner must supply them for a renderer-triggered resume.
+ */
+export async function resumeAppendThroughShell(input: {
+  taskId: string;
+  mainCheckouts?: Record<string, string>;
+  branch?: string;
+  fetchedCommits?: Record<string, string>;
+  takenPaths?: string[];
+  branchesInUse?: string[];
+  prepareErrors?: Record<string, { code: string; message: string }>;
+}): Promise<ShellTaskOpResult> {
+  const payload: Record<string, unknown> = {};
+  if (input.mainCheckouts !== undefined) payload["mainCheckouts"] = input.mainCheckouts;
+  if (input.branch !== undefined) payload["branch"] = input.branch;
+  if (input.fetchedCommits !== undefined) payload["fetchedCommits"] = input.fetchedCommits;
+  if (input.takenPaths !== undefined) payload["takenPaths"] = input.takenPaths;
+  if (input.branchesInUse !== undefined) payload["branchesInUse"] = input.branchesInUse;
+  if (input.prepareErrors !== undefined) payload["prepareErrors"] = input.prepareErrors;
+  try {
+    return await shellTaskOp(input.taskId, "task/resumeAppend", payload);
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
