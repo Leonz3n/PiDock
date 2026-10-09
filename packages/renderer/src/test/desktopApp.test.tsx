@@ -658,6 +658,28 @@ describe("Desktop production data", () => {
     expect(screen.queryByText("已检查的任务根暂无未归属任务")).not.toBeInTheDocument();
   });
 
+  it("counts only claimable unassigned tasks in the overview and states unavailable ones separately", async () => {
+    const mixedTasks = [
+      { taskId: "real-1", name: "未归属任务", branch: "task/main", repoCount: 1, updatedAt: "2026-09-22" },
+      { taskId: "real-2", name: "不可用任务", branch: "task/main", repoCount: 0, updatedAt: "2026-09-22" },
+      { taskId: "real-3", name: "待修复任务", branch: "task/main", repoCount: 1, updatedAt: "2026-09-22" },
+    ];
+    const projectOp = vi.fn(async (request: { op: string }) => ({ ok: true, payload: request.op === "list"
+      ? { initialized: true, projects: [project] }
+      : { roots, tasks: [
+        { taskId: "real-1", projectId: null, state: "unassigned" },
+        { taskId: "real-2", projectId: null, state: "unavailable" },
+        { taskId: "real-3", projectId: project.id, state: "needs-repair" },
+      ] } }));
+    window.pidock = { ...bridge(), listTasks: vi.fn(async () => ({ ok: true, payload: { tasks: mixedTasks, roots } })), projectOp };
+    render(<App />);
+    const summary = await screen.findByTestId("overview-unassigned");
+    expect(summary).toHaveTextContent("另有 1 个任务尚未归属任何项目，可在「项目管理」里认领或新建任务。");
+    expect(summary).toHaveTextContent("其中 1 个任务当前不可用，无法认领，请先检查任务根。");
+    // The unavailable row must not be advertised as claimable.
+    expect(summary).not.toHaveTextContent("另有 2 个");
+  });
+
   it("returns to unassigned after deleting selected A or externally removing it, never targeting B", async () => {
     let projects = [project, { ...project, id: "6fd712ce-a43b-4614-a459-de81d78a16aa", name: "B", repositories: [] }];
     const projectOp = vi.fn(async (request: { op: string }) => {

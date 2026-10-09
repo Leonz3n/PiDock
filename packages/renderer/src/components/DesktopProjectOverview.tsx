@@ -38,7 +38,12 @@ export function DesktopProjectOverview({
 }) {
   const projectId = project?.id;
   const scoped = tasks.filter((task) => (projectId === undefined ? task.projectId === null : task.projectId === projectId));
-  const unassigned = associations.filter((row) => row.projectId === null);
+  // `projectId === null` also covers rows the Host marks `unavailable`; those rows cannot be
+  // claimed (DesktopInventory disables their 认领/转移/进入工作区 controls), so counting them
+  // as claimable would tell the user to claim tasks they cannot (#41 audit P2). Split it.
+  const unassignedRows = associations.filter((row) => row.projectId === null);
+  const claimableUnassigned = unassignedRows.filter((row) => row.state === "unassigned").length;
+  const unavailableUnassigned = unassignedRows.length - claimableUnassigned;
   return (
     <div className="px-[34px] py-[30px] below-narrow:px-5" data-testid="desktop-project-overview">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -121,9 +126,10 @@ export function DesktopProjectOverview({
         )}
       </div>
 
-      {unassigned.length > 0 && (
+      {unassignedRows.length > 0 && (
         <p className="mt-6 text-[11px] text-muted" data-testid="overview-unassigned">
-          另有 {unassigned.length} 个任务尚未归属任何项目，可在「项目管理」里认领或新建任务。
+          {claimableUnassigned > 0 && `另有 ${claimableUnassigned} 个任务尚未归属任何项目，可在「项目管理」里认领或新建任务。`}
+          {unavailableUnassigned > 0 && `${claimableUnassigned > 0 ? "其中 " : "另有 "}${unavailableUnassigned} 个任务当前不可用，无法认领，请先检查任务根。`}
         </p>
       )}
       <p className="mt-6 text-[10px] text-muted">
