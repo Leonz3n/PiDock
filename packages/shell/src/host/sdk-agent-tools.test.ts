@@ -389,6 +389,27 @@ it("writes are allowed under default permission while commands ask first", async
   await h.host.shutdownSdk();
 });
 
+it("cancelling the session stops a parked tool call with no effect and releases the write right", async () => {
+  const h = await harness();
+  await h.host.configureSdkProvider({ config: PROVIDER_CONFIG, credential: "synthetic-key" });
+  await h.host.setPermission("main", "default");
+  const running = h.prompt("exec.run", { command: "echo cancelled > cancelled.txt" });
+
+  await vi.waitFor(() => expect(h.host.writeLockOwner).toBe("main"));
+  h.host.cancel("main");
+  const result = await running;
+  expect(result.text).toContain("tool-refused:approval-cancelled");
+  expect(existsSync(join(h.fixture.worktree, "cancelled.txt"))).toBe(false);
+  expect(h.host.writeLockOwner).toBeNull();
+  expect(h.host.listApprovals("main").filter((item) => item.status === "pending")).toEqual([]);
+  // `host.cancel` is the legacy session stop, not the SDK turn's cancel
+  // authority: it deliberately fences the in-flight execution projection, so a
+  // clean SDK shutdown is no longer reported (`sdk-execution-ledger.test.ts`
+  // > "retains SDK success and permanently fences an execution whose terminal
+  // transition is no longer valid" documents the same rule without tools).
+  await expect(h.host.shutdownSdk()).rejects.toThrow("sdk-host-shutdown-unconfirmed");
+});
+
 it("a permission change never retroactively authorizes a parked request, and later requests follow the new tier", async () => {
   const h = await harness();
   await h.host.configureSdkProvider({ config: PROVIDER_CONFIG, credential: "synthetic-key" });
