@@ -80,7 +80,7 @@ describe("#10 task-bound dotenv configuration hints", () => {
 });
 
 describe("#7 real repository service-import hints", () => {
-  it("reads JSONC launch, package scripts and Compose as non-executable, value-free drafts", () => {
+  it("reads JSONC launch, package scripts and Compose as redacted command candidates with key-only env", () => {
     const repo = root();
     mkdirSync(join(repo, ".vscode"));
     writeFileSync(join(repo, "package.json"), JSON.stringify({ scripts: { dev: "PRIVATE=secret-token node server.js", migrate: "node migrate.js" } }));
@@ -104,7 +104,54 @@ describe("#7 real repository service-import hints", () => {
     expect(scan.hints[4]?.envKeys).toEqual(["API_TOKEN", "PORT"]);
     expect(scan.hints[2]?.toVerify).toContain("API_TOKEN：疑似凭据，请移入本机私有配置");
     expect(JSON.stringify(scan)).not.toContain("secret-token");
-    expect(JSON.stringify(scan)).not.toContain("server.js");
+    // The command candidate is redacted, not value-free: only portable tokens
+    // survive, never an env value, a credential or a machine path.
+    expect(scan.hints.map(({ program, args }) => ({ program, args }))).toEqual([
+      { program: "node", args: ["server.js"] },
+      { program: "node", args: ["migrate.js"] },
+      { program: "node", args: ["server.js"] },
+      { program: "node", args: ["server.js"] },
+      { program: "node", args: ["worker.js"] },
+    ]);
+    expect(scan.hints.every(({ program, args }) => !/[\s]/.test(program) && [program, ...args].every((token) =>
+      !/^(?:\/|~|\\|[A-Za-z]:)/.test(token) && !token.includes("=") && !/(?:password|token|secret|api[_-]?key)/i.test(token)))).toBe(true);
+  });
+
+  it("drops unsafe command tokens by class and reports each drop without echoing the token", () => {
+    const repo = root();
+    mkdirSync(join(repo, ".vscode"));
+    writeFileSync(join(repo, "package.json"), JSON.stringify({ scripts: {
+      absolute: "/usr/bin/node server.js",
+      assignment: "PORT=4100 node server.js",
+      secret: "node --token secret-token-value server.js",
+      patharg: "node /Users/name/private/service.js https://user:pass@example.test/app.js",
+      mixed: "node server.js /tmp/private.js",
+      onlyAssignment: "API_TOKEN=secret-token-value",
+    } }));
+    writeFileSync(join(repo, ".vscode", "launch.json"), JSON.stringify({ configurations: [
+      { name: "absolute", program: "~/bin/node", args: ["server.js"] },
+      { name: "subdir", program: "node", args: ["server.js"], cwd: "apps/api" },
+      { name: "outside", program: "node", args: ["server.js"], cwd: "/srv/apps/api" },
+    ] }));
+    writeFileSync(join(repo, "compose.yaml"), "services:\n  api:\n    command: node server.js\n    working_dir: ../outside\n");
+    const scan = scanServiceImportHints(repo);
+    const byName = (name: string) => scan.hints.find((hint) => hint.name === name);
+    expect(byName("absolute")).toMatchObject({ program: "", args: [],
+      toVerify: expect.arrayContaining(["启动命令以本机路径开头，已从草案移除；请填写可移植的程序名"]) });
+    expect(byName("assignment")).toMatchObject({ program: "node", args: ["server.js"] });
+    expect(byName("secret")).toMatchObject({ program: "node", args: ["server.js"] });
+    expect(byName("patharg")).toMatchObject({ program: "node", args: [] });
+    expect(byName("patharg")?.toVerify).toContain("启动命令有 2 个片段含本机路径、内联环境赋值或疑似凭据，已从草案移除，请人工核对");
+    expect(byName("mixed")).toMatchObject({ program: "node", args: ["server.js"] });
+    expect(byName("mixed")?.toVerify).toContain("启动命令有 1 个片段含本机路径、内联环境赋值或疑似凭据，已从草案移除，请人工核对");
+    expect(byName("onlyAssignment")).toMatchObject({ program: "", args: [],
+      toVerify: expect.arrayContaining(["启动命令只包含内联环境赋值，已从草案移除；请填写可移植的程序名"]) });
+    expect(byName("subdir")).toMatchObject({ program: "node", args: ["server.js"], workdir: "apps/api" });
+    expect(byName("outside")?.workdir).toBeUndefined();
+    expect(byName("outside")?.toVerify).toContain("配置中的工作目录不是可移植的仓库内相对目录，已从草案移除，请人工核对");
+    expect(byName("api")?.workdir).toBeUndefined();
+    // Never an env value, a credential value, an absolute path or a raw command string.
+    expect(JSON.stringify(scan)).not.toMatch(/secret-token-value|secret-token|\/usr\/bin|\/Users\/|~\/bin|\/srv|user:pass@|\.\.\/outside/);
   });
 
   it("flags inline env assignments and malformed Compose lists without exposing their values", () => {
@@ -121,8 +168,9 @@ describe("#7 real repository service-import hints", () => {
     expect(scan.hints[1]?.invalidVars).toContain("1INVALID");
     expect(scan.hints[2]?.toVerify).not.toContain("脚本开头使用内联环境赋值；请将变量移入配置层以支持跨平台启动");
     expect(scan.hints[3]?.toVerify).toContain("环境变量结构无效，请人工核对");
+    expect(scan.hints[0]).toMatchObject({ program: "node", args: ["server.js"] });
     expect(JSON.stringify(scan)).not.toContain("secret-token");
-    expect(JSON.stringify(scan)).not.toContain("server.js");
+    expect(JSON.stringify(scan)).not.toMatch(/4100|\/usr\/bin/);
   });
 
   it("signals truncated results and invalid environment structures", () => {

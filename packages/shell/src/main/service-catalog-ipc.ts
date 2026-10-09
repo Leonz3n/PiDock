@@ -1,4 +1,4 @@
-import type { ServiceCatalog, ServiceTaskBinding, ServiceTemplate } from "./service-catalog.js";
+import type { ServiceCatalog, ServiceTaskBinding, ServiceTemplate, ServiceTemplateUpdateReview } from "./service-catalog.js";
 import { TrustDomainViolation } from "./trust-domain.js";
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -16,11 +16,12 @@ export interface ServiceTemplateProjection {
   serviceId: string;
   version: number;
   descriptor: ServiceTemplate["descriptor"];
-  sharedKeys: string[];
+  /** Shared rows, not just keys: the editor prefills from them and main still owns the write. */
+  shared: { key: string; value: string }[];
 }
 function projection(row: ServiceTemplate): ServiceTemplateProjection {
   return { projectId: row.projectId, serviceId: row.serviceId, version: row.version,
-    descriptor: row.descriptor, sharedKeys: row.shared.map((entry) => entry.key) };
+    descriptor: row.descriptor, shared: row.shared.map((entry) => ({ key: entry.key, value: entry.value })) };
 }
 
 export interface ServiceBindingProjection {
@@ -99,10 +100,10 @@ export function parseServiceRunRequest(request: unknown): ServiceRunRequest {
   return { taskId: input["taskId"], projectId: input["projectId"], serviceId: input["serviceId"], action: input["action"] };
 }
 
-/** A shell-only, project-scoped human editing surface. No execution ops. */
+/** A shell-only, project-scoped human editing surface. No execution ops. `update` reviews one edit and only writes it when the page confirms. */
 export function performServiceCatalogOperation(
-  store: Pick<ServiceCatalog, "listTemplates" | "saveTemplate">, request: unknown,
-): ServiceTemplateProjection[] | ServiceTemplateProjection {
+  store: Pick<ServiceCatalog, "listTemplates" | "saveTemplate" | "reviewTemplateUpdate">, request: unknown,
+): ServiceTemplateProjection[] | ServiceTemplateProjection | ServiceTemplateUpdateReview {
   if (!record(request) || typeof request["op"] !== "string") {
     throw new TrustDomainViolation("invalid-payload", "invalid service catalog request");
   }
@@ -120,6 +121,26 @@ export function performServiceCatalogOperation(
     }
     return projection(store.saveTemplate({ projectId: input["projectId"], descriptor: input["descriptor"] as unknown as ServiceTemplate["descriptor"],
       shared: input["shared"] }));
+  }
+  if (request["op"] === "update") {
+    const input = shape(request, ["op", "projectId", "serviceId", "expectedVersion", "descriptor", "shared", "confirm"]);
+    if (typeof input["projectId"] !== "string" || typeof input["serviceId"] !== "string" ||
+        !Number.isSafeInteger(input["expectedVersion"]) || (input["expectedVersion"] as number) < 1 ||
+        !record(input["descriptor"]) || !Array.isArray(input["shared"]) || typeof input["confirm"] !== "boolean") {
+      throw new TrustDomainViolation("invalid-payload", "invalid service template update");
+    }
+    const edit = { projectId: input["projectId"], serviceId: input["serviceId"], expectedVersion: input["expectedVersion"] as number,
+      descriptor: input["descriptor"] as unknown as ServiceTemplate["descriptor"], shared: input["shared"] };
+    // The review is the rules layer's answer (row diff, restart candidates) and
+    // is always computed before any write; a request that does not confirm
+    // stops here and can never be read as a saved revision.
+    const review = store.reviewTemplateUpdate(edit);
+    if (input["confirm"] !== true) return review;
+    const written = store.saveTemplate(edit);
+    if (written.serviceId !== review.serviceId || written.version !== review.version) {
+      throw new TrustDomainViolation("invalid-payload", "service template update could not be confirmed");
+    }
+    return { ...review, saved: true };
   }
   throw new TrustDomainViolation("invalid-payload", "unknown service catalog operation");
 }

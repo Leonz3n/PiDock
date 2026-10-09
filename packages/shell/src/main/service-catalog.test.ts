@@ -128,6 +128,56 @@ describe("machine-private service catalog", () => {
     expect(f.catalog.listTask(taskId)).toEqual([]);
   });
 
+  it("reviews a shared-template edit before writing it, then writes one new version without touching pinned bindings", () => {
+    const f = fixture();
+    const first = f.save();
+    f.bind(first.serviceId);
+    const next = { ...f.descriptor, workdir: "apps/api", healthCheck: { kind: "http" as const } };
+    const review = f.catalog.reviewTemplateUpdate({ projectId, serviceId: first.serviceId, expectedVersion: 1, descriptor: next,
+      shared: [{ key: "PORT", value: "4000", secret: false }, { key: "API_URL", value: "http://localhost", secret: false }] });
+    expect(review).toMatchObject({ projectId, serviceId: first.serviceId, version: 2, versionLabel: "v2", saved: false, descriptorChanged: true,
+      diff: { added: ["API_URL"], changed: [{ key: "PORT", before: "3000", after: "4000" }], removed: [] },
+      restartNeeded: [{ taskId, serviceId: first.serviceId, name: "API", from: 1, to: 2 }] });
+    // A review never writes and never restarts anything.
+    expect(f.catalog.listTemplates(projectId)[0]).toMatchObject({ version: 1, descriptor: f.descriptor });
+    expect(f.catalog.listTask(taskId)[0]).toMatchObject({ binding: { templateVersion: 1 }, template: { version: 1 } });
+    const written = f.catalog.saveTemplate({ projectId, serviceId: first.serviceId, expectedVersion: 1, descriptor: next,
+      shared: [{ key: "PORT", value: "4000", secret: false }, { key: "API_URL", value: "http://localhost", secret: false }] });
+    expect(written).toMatchObject({ version: 2, descriptor: { workdir: "apps/api", healthCheck: { kind: "http" } } });
+    const restarted = new ServiceCatalog(f.dir, f.authority);
+    expect(restarted.listTemplates(projectId)[0]).toMatchObject({ version: 2, shared: [{ key: "PORT", value: "4000" }, { key: "API_URL", value: "http://localhost" }] });
+    expect(restarted.listTask(taskId)[0]).toMatchObject({ binding: { templateVersion: 1 }, template: { version: 1 } });
+  });
+
+  it("refuses a review of a stale or foreign revision and rejects machine paths in the shared workdir", () => {
+    const f = fixture();
+    const first = f.save();
+    expect(() => f.catalog.reviewTemplateUpdate({ projectId, serviceId: first.serviceId, expectedVersion: 2,
+      descriptor: f.descriptor, shared: [] })).toThrow("template version conflict");
+    expect(() => f.catalog.reviewTemplateUpdate({ projectId, serviceId: "s-524639ce-90ac-4dc5-8a52-c3628386ca36", expectedVersion: 1,
+      descriptor: f.descriptor, shared: [] })).toThrow("template version conflict");
+    for (const workdir of ["/srv/app", "~/app", "../outside", "apps/api-token", "apps\\api"]) {
+      expect(() => f.catalog.reviewTemplateUpdate({ projectId, serviceId: first.serviceId, expectedVersion: 1,
+        descriptor: { ...f.descriptor, workdir }, shared: [] })).toThrow("invalid shared working directory");
+      expect(() => f.catalog.saveTemplate({ projectId, serviceId: first.serviceId, expectedVersion: 1,
+        descriptor: { ...f.descriptor, workdir }, shared: [] })).toThrow("invalid shared working directory");
+    }
+    expect(() => f.catalog.reviewTemplateUpdate({ projectId, serviceId: first.serviceId, expectedVersion: 1,
+      descriptor: { ...f.descriptor, workdir: "apps/../etc" }, shared: [] })).toThrow("invalid shared working directory");
+    expect(f.catalog.listTemplates(projectId)[0]).toMatchObject({ version: 1 });
+  });
+
+  it("persists a portable shared workdir and never a local path", () => {
+    const f = fixture();
+    const saved = f.catalog.saveTemplate({ projectId, descriptor: { ...f.descriptor, workdir: "apps/api" },
+      shared: [{ key: "PORT", value: "3000", secret: false }] });
+    expect(saved.descriptor.workdir).toBe("apps/api");
+    const body = readFileSync(join(f.dir, "service-templates.json"), "utf8");
+    expect(body).toContain("apps/api");
+    expect(body).not.toContain(process.env["HOME"] ?? "/Users/");
+    expect(new ServiceCatalog(f.dir, f.authority).listTemplates(projectId)[0]?.descriptor.workdir).toBe("apps/api");
+  });
+
   it("refuses identity replacement, project reassignment and removed roots on read or overwrite", () => {
     const f = fixture();
     const first = f.save();

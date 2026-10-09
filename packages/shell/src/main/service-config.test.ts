@@ -13,6 +13,7 @@ import {
   restartNeededForTemplateAdopt,
   validateNoSecretsInShared,
   validateServiceDescriptor,
+  validateSharedServiceWorkdir,
   type ResolvedServiceRow,
   type ServiceDescriptor,
 } from "./service-config.js";
@@ -52,6 +53,25 @@ describe("validateServiceDescriptor", () => {
   it("rejects relative cwd", () => {
     expect(validateServiceDescriptor({ ...base, cwd: "relative/dir" })?.code).toBe("invalid-service");
     expect(validateServiceDescriptor({ ...base, cwd: "/Users/name/tasks/task-a1f92c3d/front" })).toBeNull();
+  });
+});
+
+describe("shared-template working directory", () => {
+  it("accepts a repo-relative directory and rejects machine paths", () => {
+    expect(validateSharedServiceWorkdir("apps/web")).toBeNull();
+    expect(validateSharedServiceWorkdir("apps/api")).toBeNull();
+    for (const value of ["", "   ", "/srv/app", "~/app", "C:\\app", "\\\\host\\share", "app\\sub"]) {
+      expect(validateSharedServiceWorkdir(value)?.code).toBe("invalid-service");
+    }
+    expect(validateSharedServiceWorkdir("/srv/app")?.message).toContain("不能是本机绝对路径");
+  });
+  it("rejects escapes, empty segments, control characters, over-long values and credential-looking segments", () => {
+    expect(validateSharedServiceWorkdir("../outside")?.message).toContain("..");
+    expect(validateSharedServiceWorkdir("apps/../api")?.code).toBe("invalid-service");
+    expect(validateSharedServiceWorkdir("apps//api")?.code).toBe("invalid-service");
+    expect(validateSharedServiceWorkdir(`apps/a${String.fromCharCode(0)}b`)?.message).toContain("控制字符");
+    expect(validateSharedServiceWorkdir("a".repeat(513))?.code).toBe("invalid-service");
+    expect(validateSharedServiceWorkdir("apps/api-token")?.code).toBe("secret-in-shared");
   });
 });
 

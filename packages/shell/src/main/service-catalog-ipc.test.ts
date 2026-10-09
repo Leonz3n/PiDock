@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { parseServiceRunRequest, performServiceBindingOperation, performServiceCatalogOperation, performServiceConfigPreview } from "./service-catalog-ipc.js";
-import type { ServiceCatalog, ServiceTemplate } from "./service-catalog.js";
+import type { ServiceCatalog, ServiceTemplate, ServiceTemplateUpdateReview } from "./service-catalog.js";
 
 const template: ServiceTemplate = {
   projectId: "b36323d3-ff33-4e34-a873-536a9775788a",
@@ -9,20 +9,60 @@ const template: ServiceTemplate = {
   descriptor: { name: "API", program: "node", args: ["server.js"], ports: [3000], runType: "long-lived" },
   shared: [{ key: "PORT", value: "3000", secret: false }],
 };
-function store() {
-  return { listTemplates: vi.fn(() => [template]), saveTemplate: vi.fn(() => template) } satisfies Pick<ServiceCatalog, "listTemplates" | "saveTemplate">;
+function store(saved: ServiceTemplate = template) {
+  const review: ServiceTemplateUpdateReview = { projectId: saved.projectId, serviceId: saved.serviceId, version: saved.version,
+    versionLabel: `v${String(saved.version)}`, saved: false, descriptorChanged: true,
+    diff: { added: [], changed: [], removed: [] }, restartNeeded: [] };
+  return { listTemplates: vi.fn(() => [template]), saveTemplate: vi.fn(() => saved),
+    reviewTemplateUpdate: vi.fn(() => review), review } satisfies Pick<ServiceCatalog, "listTemplates" | "saveTemplate" | "reviewTemplateUpdate">;
 }
 
 describe("shell service catalog request boundary", () => {
   it("lists project templates and creates only a fresh manually submitted template", () => {
     const catalog = store();
     const publicRow = { projectId: template.projectId, serviceId: template.serviceId, version: template.version,
-    descriptor: template.descriptor, sharedKeys: ["PORT"] };
+    descriptor: template.descriptor, shared: [{ key: "PORT", value: "3000" }] };
   expect(performServiceCatalogOperation(catalog, { op: "list", projectId: template.projectId })).toEqual([publicRow]);
     expect(catalog.listTemplates).toHaveBeenCalledWith(template.projectId);
     const input = { op: "create", projectId: template.projectId, descriptor: template.descriptor, shared: template.shared };
     expect(performServiceCatalogOperation(catalog, input)).toEqual(publicRow);
     expect(catalog.saveTemplate).toHaveBeenCalledWith({ projectId: template.projectId, descriptor: template.descriptor, shared: template.shared });
+  });
+
+  it("reviews one existing template edit without writing and confirms it into exactly one new version", () => {
+    const catalog = store({ ...template, version: 2 });
+    const edit = { projectId: template.projectId, serviceId: template.serviceId, expectedVersion: 1,
+      descriptor: { ...template.descriptor, workdir: "apps/api" }, shared: [{ key: "PORT", value: "4000", secret: false }] };
+    expect(performServiceCatalogOperation(catalog, { op: "update", ...edit, confirm: false })).toEqual(catalog.review);
+    expect(catalog.reviewTemplateUpdate).toHaveBeenCalledWith({ projectId: template.projectId, serviceId: template.serviceId,
+      expectedVersion: 1, descriptor: edit.descriptor, shared: edit.shared });
+    expect(catalog.saveTemplate).not.toHaveBeenCalled();
+    expect(performServiceCatalogOperation(catalog, { op: "update", ...edit, confirm: true }))
+      .toEqual({ ...catalog.review, saved: true });
+    expect(catalog.saveTemplate).toHaveBeenCalledWith({ projectId: template.projectId, serviceId: template.serviceId,
+      expectedVersion: 1, descriptor: edit.descriptor, shared: edit.shared });
+  });
+
+  it("keeps the update request key-exact and fails closed when the write is not the reviewed revision", () => {
+    const catalog = store({ ...template, version: 2 });
+    const edit = { op: "update", projectId: template.projectId, serviceId: template.serviceId, expectedVersion: 1,
+      descriptor: template.descriptor, shared: template.shared, confirm: true };
+    for (const request of [
+      { ...edit, programPath: "/tmp/executable" },
+      { ...edit, commit: true },
+      { ...edit, confirm: undefined },
+      { ...edit, confirm: "yes" },
+      { ...edit, expectedVersion: 0 },
+      { ...edit, expectedVersion: 1.5 },
+      { ...edit, shared: { PORT: "3000" } },
+    ]) expect(() => performServiceCatalogOperation(catalog, request)).toThrow();
+    expect(catalog.reviewTemplateUpdate).not.toHaveBeenCalled();
+    expect(catalog.saveTemplate).not.toHaveBeenCalled();
+    // A store that reports a different version than the review must not be read as a confirmed save.
+    const drifted = store({ ...template, version: 2 });
+    drifted.saveTemplate.mockReturnValue({ ...template, serviceId: "s-524639ce-90ac-4dc5-8a52-c3628386ca36", version: 9 });
+    expect(() => performServiceCatalogOperation(drifted, edit)).toThrow();
+    expect(drifted.reviewTemplateUpdate).toHaveBeenCalledOnce();
   });
 
   it("accepts only preview identities, never page-supplied environment values", () => {
