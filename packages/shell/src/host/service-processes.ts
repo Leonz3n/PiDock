@@ -1,10 +1,11 @@
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import type { Readable } from "node:stream";
-import { realpathSync } from "node:fs";
+import { realpathSync, statSync } from "node:fs";
 import { isAbsolute, relative, sep } from "node:path";
 import type { ServiceStartPlan } from "./service-runtime.js";
 import {
   newServiceOwnershipNonce,
+  processGroupMemberPids,
   readProcessPgid,
   serviceOwnershipLaunchEnded,
   serviceOwnershipRecordError,
@@ -22,6 +23,18 @@ interface OwnedProcess { child: ChildProcessByStdio<null, Readable, Readable>; d
 
 /** Poll cadence for confirming that a recovered launch's identity is gone. */
 const STOP_POLL_MS = 25;
+
+/** Device+inode of a directory: the identity the cwd check and spawn must agree on. */
+interface DirectoryIdentity { dev: number; ino: number }
+
+function directoryIdentity(path: string): DirectoryIdentity | null {
+  try {
+    const stat = statSync(path);
+    return { dev: stat.dev, ino: stat.ino };
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Host-owned process foundation for the task-bound service path ([PiDock 04] #7).
@@ -92,6 +105,11 @@ export class TaskServiceProcesses {
     const cwd = realpathSync(plan.cwd);
     const within = relative(this.taskDir, cwd);
     if (within === ".." || within.startsWith(`..${sep}`) || isAbsolute(within)) throw new Error("invalid-launch: cwd escapes task root");
+    // Identity of the directory the cwd check just validated. It is re-read
+    // after `spawn` (see below) so a symlink/directory swapped into the
+    // checked path between the check and the real spawn is detected, not raced.
+    const checkedIdentity = directoryIdentity(cwd);
+    if (!checkedIdentity) throw new Error("invalid-launch: cwd is not a readable directory");
     this.refuseRecordedLaunch(plan.serviceId);
     // The ownership marker rides the child's own fresh environment: the kernel
     // fixes it for this image at execve, and no process can add it to another
@@ -146,6 +164,24 @@ export class TaskServiceProcesses {
     let pid: number;
     try { pid = await started; }
     catch (error) { await done; throw error; }
+    // TOCTOU re-verification: between the cwd check and the real `spawn`, a
+    // same-UID actor can rename the checked directory and leave a symlink to
+    // somewhere else at that path. Re-resolve and re-stat now and refuse (fail
+    // closed) unless the directory the cwd check validated is still the
+    // directory that path names. This detects a swap that is still in place at
+    // this instant; it does not eliminate the window and cannot see a swap that
+    // was reverted before this read (see the class notes).
+    const reResolved = (() => { try { return realpathSync(plan.cwd); } catch { return null; } })();
+    const withinAgain = reResolved === null ? null : relative(this.taskDir, reResolved);
+    const escapesAgain = reResolved === null || withinAgain === ".." || withinAgain!.startsWith(`..${sep}`) || isAbsolute(withinAgain);
+    const identityAgain = reResolved === null ? null : directoryIdentity(reResolved);
+    if (escapesAgain || identityAgain === null || identityAgain.dev !== checkedIdentity.dev || identityAgain.ino !== checkedIdentity.ino) {
+      // Terminate the just-spawned child before refusing: a rejected launch must
+      // not leave a live process behind. Its identity is the handle we hold.
+      child.kill("SIGKILL");
+      await done;
+      throw new Error(`invalid-launch: cwd changed between check and spawn (${plan.serviceId})`);
+    }
     const owned = this.running.get(plan.serviceId);
     if (owned?.child === child) owned.launch = { pid, ownershipNonce };
     // Persist before resolving: no caller can observe a live child that the
@@ -215,7 +251,12 @@ export class TaskServiceProcesses {
       throw new Error(serviceOwnershipUnverifiedError(serviceId, launch.pid, "进程 PID 尚未就绪或无效"));
     }
 
-    const signal = (kind: NodeJS.Signals) => {
+    // Signal the launch's own process group while the *leader* is still ours to
+    // identify. Once the leader's handle reports it exited, the numeric group
+    // handle is no longer proof of ownership (a recycled pid could lead a
+    // foreign group), so descendants are then reclaimed individually by OS
+    // group membership (see `reclaimDescendants`) and never by a blind `-pid`.
+    const signalGroupWhileLeaderLive = (kind: NodeJS.Signals) => {
       if (child.exitCode !== null || child.signalCode !== null) return;
       if (process.platform === "win32") {
         throw new Error("unsupported-platform: Windows service process signalling is not supported");
@@ -233,12 +274,62 @@ export class TaskServiceProcesses {
         if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
       }
     };
-    signal("SIGTERM");
+    signalGroupWhileLeaderLive("SIGTERM");
     if (await this.closedWithin(done, this.stopGraceMs)) return;
-    signal("SIGKILL");
+    signalGroupWhileLeaderLive("SIGKILL");
     if (await this.closedWithin(done, this.stopConfirmMs)) return;
-    // A descendant may still own stdout/stderr after the leader exits.
-    throw new Error(`termination-unconfirmed: ${serviceId} still owns open process output`);
+    // stdout/stderr are still open. The leader may be gone while a descendant
+    // that inherited the pipes outlived it: pipe closure is NOT proof that the
+    // descendant ended, so reclaim it from real OS evidence and confirm it is
+    // gone. A descendant that escaped the process group cannot be named this
+    // way and the launch stays unconfirmed (fail closed) below.
+    const reclaimed = await this.reclaimDescendants(owned);
+    if (await this.closedWithin(done, this.stopConfirmMs)) return;
+    throw new Error(
+      `termination-unconfirmed: ${serviceId} still owns open process output` +
+        (reclaimed ? "" : "；有后代可能已脱离进程组，无法核验"),
+    );
+  }
+
+  /**
+   * Reclaim a launch's descendants that survived their leader and still hold the
+   * leader's stdout/stderr.
+   *
+   * Evidence: the launch was spawned `detached: true`, so it is a process-group
+   * leader whose pgid equals its pid; a descendant that stayed in that group
+   * (did not call `setsid`) inherits the pipes AND the pgid, so the OS names it
+   * as a member of the recorded group. That cannot mistake an unrelated recycled
+   * pid for a descendant: a pid only appears as a member of group `leaderPid`
+   * when it belongs to a group whose leader held that pid, and while this Host
+   * still holds the leader handle its pid is not free for the OS to recycle. The
+   * residual limit (a swap after the leader is reaped, and a `setsid` escape
+   * that is invisible to the group probe) is stated in the class notes.
+   *
+   * Termination is confirmed by POSITIVE evidence: every named member is gone
+   * from the process group (or the group itself is gone) - never inferred from
+   * elapsed time or from the pipes closing. Returns whether the group accounted
+   * for the survivors; `false` means a holder could not be named, so the caller
+   * fails closed and keeps the durable record.
+   */
+  private async reclaimDescendants(owned: OwnedProcess): Promise<boolean> {
+    const leaderPid = owned.launch.pid;
+    if (process.platform === "win32") return false;
+    const deadline = Date.now() + this.stopConfirmMs;
+    for (;;) {
+      const members = processGroupMemberPids(leaderPid).filter((pid) => pid !== leaderPid);
+      for (const pid of members) {
+        // Re-read membership immediately before the signal: a pid cannot be
+        // trusted across calls, and only a current member of this launch's group
+        // may be signalled.
+        if (!processGroupMemberPids(leaderPid).includes(pid)) continue;
+        try { process.kill(pid, "SIGKILL"); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
+      }
+      const remaining = processGroupMemberPids(leaderPid).filter((pid) => pid !== leaderPid);
+      if (remaining.length === 0) return true;
+      if (Date.now() >= deadline) return false;
+      await new Promise((resolve) => setTimeout(resolve, STOP_POLL_MS));
+    }
   }
 
   /**
