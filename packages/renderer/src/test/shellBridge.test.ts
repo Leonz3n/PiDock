@@ -198,6 +198,45 @@ describe("#6 append + probe bridge (S3)", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it("reads prepare status and forwards a resume without fabricating a conflict scan", async () => {
+    const { prepareStatusThroughShell, resumeAppendThroughShell } = await import("../data/shellBridge");
+    const taskOp = vi.fn(async (_taskId: string, _op: string, _payload: Record<string, unknown>) => ({ ok: true, payload: {} }));
+    vi.stubGlobal("window", { pidock: { taskOp } });
+    try {
+      expect((await prepareStatusThroughShell({ taskId: "task-abcdef12" })).ok).toBe(true);
+      expect(taskOp).toHaveBeenCalledWith("task-abcdef12", "task/prepareStatus", {});
+
+      // The renderer cannot scan: omitted inputs must be ABSENT from the
+      // payload, never an empty `[]` that silently disables the gate.
+      taskOp.mockClear();
+      expect((await resumeAppendThroughShell({ taskId: "task-abcdef12" })).ok).toBe(true);
+      const [, op, payload] = taskOp.mock.calls[0]!;
+      expect(op).toBe("task/resumeAppend");
+      expect(payload).not.toHaveProperty("takenPaths");
+      expect(payload).not.toHaveProperty("branchesInUse");
+
+      // Caller-supplied scans and checkouts ride through unchanged when given.
+      taskOp.mockClear();
+      await resumeAppendThroughShell({
+        taskId: "task-abcdef12",
+        mainCheckouts: { frontend: "/src/frontend" },
+        takenPaths: ["/tasks/task-abcdef12/frontend"],
+        branchesInUse: ["task/task-abcdef12"],
+      });
+      expect(taskOp).toHaveBeenCalledWith(
+        "task-abcdef12",
+        "task/resumeAppend",
+        expect.objectContaining({
+          mainCheckouts: { frontend: "/src/frontend" },
+          takenPaths: ["/tasks/task-abcdef12/frontend"],
+          branchesInUse: ["task/task-abcdef12"],
+        }),
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });
 
 describe("#7 service bridge (S4)", () => {

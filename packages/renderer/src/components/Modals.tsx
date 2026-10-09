@@ -21,7 +21,8 @@ import {
   validateTaskFormName,
   workspacePath,
 } from "../data/directories";
-import { isShellConnected, provisionTaskThroughShell } from "../data/shellBridge";
+import { isShellConnected, prepareStatusThroughShell, provisionTaskThroughShell, resumeAppendThroughShell } from "../data/shellBridge";
+import { TaskPrepareRecovery } from "./TaskPrepareRecovery";
 import {
   CONTEXT_WINDOW_SOURCE_LABEL,
   DEFAULT_MODEL_CONTEXT_WINDOW,
@@ -793,6 +794,17 @@ function TaskSourcesModal({ taskId, onClose }: { taskId: string; onClose: () => 
           })}
         </div>
       </fieldset>
+      {isShellConnected() ? (
+        // [PiDock 03] (#6) recovery surface: the Host classifies the real
+        // worktree state and retries only the unfinished repos. The resume
+        // goes through the bridge without a fabricated scan (a main-side
+        // scanner is a separate slice), so a refusal shows the Host's real
+        // fail-closed reason instead of pretending the resume ran.
+        <TaskPrepareRecovery
+          load={() => prepareStatusThroughShell({ taskId })}
+          resume={async ({ repoDirs: _repoDirs }) => resumeAppendThroughShell({ taskId })}
+        />
+      ) : null}
       <p className="mt-3 text-[11px] text-muted">
         任务中自动生成英文数字链接名，中文名称只用于显示。同一目录被多个任务引用时共享文件，不承诺隔离。
       </p>
