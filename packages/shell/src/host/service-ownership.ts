@@ -206,7 +206,9 @@ export interface ProcessTableRow {
  * whitespace split tolerate multiple spaces and a leading header-less line;
  * stderr is discarded; a missing `/bin/ps` falls back to `ps` on PATH; and a
  * non-zero exit or oversized output (`ENOBUFS`, bounded by `maxBuffer`) is
- * treated as an unavailable probe, never as "no processes".
+ * treated as an unavailable probe, never as "no processes". Platform reach: the
+ * `ps -eo pid=,ppid=,pgid=` invocation is exercised on Linux and macOS (the
+ * POSIX suites run on either); other `ps` variants and BSDs are UNTESTED.
  */
 export function readProcessTable(): ProcessTableRow[] | null {
   if (process.platform === "win32") return null;

@@ -19,7 +19,18 @@ import {
 
 /** One launch's identity: leader pid plus the nonce only this launch carries. */
 type OwnedLaunch = ServiceOwnershipIdentity;
-interface OwnedProcess { child: ChildProcessByStdio<null, Readable, Readable>; done: Promise<void>; launch: OwnedLaunch }
+interface OwnedProcess {
+  child: ChildProcessByStdio<null, Readable, Readable>;
+  done: Promise<void>;
+  launch: OwnedLaunch;
+  /**
+   * Set once this launch's process group has been observed empty. Carried on the
+   * launch (not a local of `settled`) so it survives the two `settled` phases of
+   * one `stop`: a group number that reappears after being seen empty can only be
+   * a recycled number, and its members must never be signalled as ours.
+   */
+  leaderGroupObservedEmpty: boolean;
+}
 
 /** Poll cadence for confirming that a recovered launch's identity is gone. */
 const STOP_POLL_MS = 25;
@@ -77,10 +88,14 @@ function directoryIdentity(path: string): DirectoryIdentity | null {
  *   positive evidence - the leader's own `close` **and** an empty process
  *   group - never by elapsed time and never by pipe closure alone (a descendant
  *   holding the pipes keeps `close` pending). A descendant that escaped the
- *   group (its own `setsid`) or that the Host cannot name is **not** reclaimed:
- *   the stop fails closed as `termination-unconfirmed` and the durable record
- *   is kept. Windows process-tree termination is UNTESTED - `start` refuses on
- *   win32 and no descendant reclaim runs there.
+ *   group (its own `setsid`) **while it still holds the launch's stdout/stderr**
+ *   is not reclaimable: it cannot be named, `close` stays pending, and the stop
+ *   fails closed as `termination-unconfirmed` keeping the durable record. A
+ *   descendant that both escaped the group **and** closed its inherited stdio
+ *   is beyond this Host's evidence model: it is unobservable, so a clean stop
+ *   may be reported while it lives (stated, not hidden; a cgroup/Job-Object
+ *   would be needed to bound it). Windows process-tree termination is UNTESTED -
+ *   `start` refuses on win32 and no descendant reclaim runs there.
  * - Out of scope here (stated, not claimed): a launch recovered from a durable
  *   record holds no pipe, so "stopped" there means exactly "the recorded launch
  *   identity is no longer alive"; descendants of such a record are not
@@ -167,7 +182,7 @@ export class TaskServiceProcesses {
     // placeholder can never verify, so a concurrent stop refuses instead of
     // signalling a guess.
     const launch: OwnedLaunch = { pid: 0, ownershipNonce };
-    this.running.set(plan.serviceId, { child, done, launch });
+    this.running.set(plan.serviceId, { child, done, launch, leaderGroupObservedEmpty: false });
     let pid: number;
     try { pid = await started; }
     catch (error) { await done; throw error; }
@@ -195,6 +210,9 @@ export class TaskServiceProcesses {
     if (escapesAgain || identityAgain === null || identityAgain.dev !== checkedIdentity.dev || identityAgain.ino !== checkedIdentity.ino) {
       // Terminate the just-spawned child before refusing: a rejected launch must
       // not leave a live process behind. Its identity is the handle we hold.
+      // Drop the reservation first so the `close` handler's guard sees no launch
+      // and does NOT report this never-started child as an exit to the runtime.
+      this.running.delete(plan.serviceId);
       child.kill("SIGKILL");
       await done;
       throw new Error(`invalid-launch: cwd changed between check and spawn (${plan.serviceId})`);
@@ -312,12 +330,16 @@ export class TaskServiceProcesses {
    *   process table names it as a member of pgid `leaderPid`; while it holds the
    *   pipes the leader's `close` event stays pending.
    * - A pid number cannot be recycled while it is still the pgid of a live
-   *   process group. So a group observed non-empty is provably the group this
-   *   launch created, and this method additionally NEVER signals a member of a
-   *   group it has already seen empty (a group that reappears after emptying can
-   *   only be a *recycled* number, never our launch). Membership is re-read
-   *   immediately before each signal, because a pid cannot be trusted across
-   *   calls.
+   *   process group. So a group observed non-empty while its number is still an
+   *   active pgid belongs to this launch, and this method NEVER signals a member
+   *   of a group it has already seen empty: that number can only be a *recycled*
+   *   group by then, never our launch. The seen-empty guard is carried on the
+   *   launch (`leaderGroupObservedEmpty`), so it holds across the two `settled`
+   *   phases of one `stop`. Membership is re-read immediately before each
+   *   signal, because a pid cannot be trusted across calls. Residual: a group
+   *   that empties and whose number is reallocated *between probes* - with no
+   *   observed-empty transition - is not distinguishable by this evidence model;
+   *   reaching it needs pid-number wrap inside one poll window.
    * - Success requires BOTH that the leader's `close` fired (it exited and its
    *   stdio closed) AND that the process group is empty. Pipe closure alone is
    *   not accepted as proof (a descendant can close the pipes and live on), and
@@ -325,9 +347,11 @@ export class TaskServiceProcesses {
    *   (`null`) the evidence cannot be read, so the wait fails closed.
    *
    * A descendant that escaped the group (`setsid`) cannot be named here; while
-   * it holds the pipes `close` stays pending, so the wait ends unsuccessful and
-   * the caller fails closed. Returns `true` only on the positive evidence
-   * above.
+   * it holds the launch's pipes `close` stays pending, so the wait ends
+   * unsuccessful and the caller fails closed. One that also closed its inherited
+   * stdio is unobservable to this method (no group membership, no pending
+   * `close`) and may therefore look settled. Returns `true` only on the positive
+   * evidence above.
    */
   private async settled(owned: OwnedProcess, timeoutMs: number): Promise<boolean> {
     const leaderPid = owned.launch.pid;
@@ -338,13 +362,12 @@ export class TaskServiceProcesses {
       return this.closedWithin(owned.done, timeoutMs);
     }
     const deadline = Date.now() + timeoutMs;
-    let groupWasEmpty = false;
     for (;;) {
       const allMembers = processGroupMemberPids(leaderPid);
       if (allMembers === null) return false;
-      if (allMembers.length === 0) groupWasEmpty = true;
+      if (allMembers.length === 0) owned.leaderGroupObservedEmpty = true;
       const descendants = allMembers.filter((pid) => pid !== leaderPid && pid > 1);
-      if (descendants.length > 0 && !groupWasEmpty) {
+      if (descendants.length > 0 && !owned.leaderGroupObservedEmpty) {
         const current = new Set(processGroupMemberPids(leaderPid) ?? []);
         for (const pid of descendants) {
           if (!current.has(pid)) continue;
