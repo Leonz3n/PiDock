@@ -475,6 +475,20 @@ export async function recordProtocolRunThroughShell(input: {
   }
 }
 
+/**
+ * Direct `task/controlService` bridge over a task Host - an explicitly
+ * NON-PRODUCTION seam for this renderer.
+ *
+ * No production renderer module imports it: the bound-service start/stop UI
+ * goes through `runTaskService` via `runBoundTaskServiceThroughShell`
+ * (`data/taskServices.ts`), where main resolves the trusted catalog launch
+ * itself. This helper sends a descriptor-less control straight to
+ * `task/controlService`, so it can only ever drive services another path
+ * already registered, and a session-less call still needs main's own
+ * `shell-ui` attestation to be classified as human control. It is kept for
+ * the Host-side control contract only (its own test) and must not be wired
+ * into a production renderer path without the catalog launch resolution.
+ */
 export async function controlServiceThroughShell(input: {
   taskId: string;
   serviceId: string;
