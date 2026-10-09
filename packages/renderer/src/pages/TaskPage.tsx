@@ -1188,6 +1188,11 @@ function RunStateCard({ taskId, sessionId }: { taskId: string; sessionId: string
             {approval.cwd ? ` · ${approval.cwd}` : ""}
             {approval.recipient ? ` · 接收人：${approval.recipient}` : ""}
           </p>
+          {approval.operation ? (
+            <p className="mt-0.5 text-[11px] text-muted" data-testid="execution-approval-operation">
+              操作：{approval.operation}
+            </p>
+          ) : null}
           {/* 原型 `closure.js` 把授权说明挂在审批正文同一段落里，不单占一行。 */}
           <p className="mt-0.5 text-[11px] text-muted">
             影响：{approval.impact}。批准仅授权这一次操作，不自动授权未来执行。

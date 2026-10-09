@@ -148,6 +148,12 @@ export type Approval = {
   title: string;
   command: string;
   cwd: string;
+  /**
+   * The real operation when the tool name + target cannot state it ([PiDock 02m]
+   * #5): an `exec.run` command, shown on the confirmation card so the human
+   * approves what will actually run.
+   */
+  operation?: string;
   impact: string;
   payloadVersion: string;
   status: ApprovalStatus;

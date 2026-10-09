@@ -39,6 +39,12 @@ export class SdkTextKernelRouter implements SdkTurnKernelPort {
      * before the Agent's tools can run through the tool broker.
      */
     private readonly onModelSession?: (sessionId: string) => void,
+    /**
+     * [PiDock 02m] #5: called before a turn cancel reaches the kernel, so a
+     * tool call parked on the Host broker is withdrawn with the turn instead of
+     * waiting out its bounded approval window.
+     */
+    private readonly onCancel?: (sessionId: string) => void,
   ) {}
 
   /** True when model calls are possible (a configured, isolated context exists). */
@@ -84,8 +90,12 @@ export class SdkTextKernelRouter implements SdkTurnKernelPort {
     return result;
   }
 
-  cancel(sessionId: string) {
-    return this.target().cancel(sessionId);
+  async cancel(sessionId: string) {
+    // Withdraw a parked tool confirmation first: the SDK abort alone cannot
+    // unblock a tool call parked on the Host broker, and a later approve must
+    // never run an operation for a turn that was cancelled.
+    this.onCancel?.(sessionId);
+    return await this.target().cancel(sessionId);
   }
 
   /** Disposes the isolated context first (it may hold a model request), then the reader. */

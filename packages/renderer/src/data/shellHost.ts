@@ -422,6 +422,8 @@ type HostApprovalRecord = {
   /** Real payload version the Host minted ([PiDock 17] #19 box 3). */
   contentVersion?: string;
   permissionAtRequest?: string;
+  /** The real operation when `tool`+`target` cannot state it (an `exec.run` command). */
+  operation?: string;
 };
 
 function asHostApprovalRecord(value: unknown): HostApprovalRecord | undefined {
@@ -441,6 +443,9 @@ function asHostApprovalRecord(value: unknown): HostApprovalRecord | undefined {
       : {}),
     ...(typeof record["permissionAtRequest"] === "string" && record["permissionAtRequest"].length > 0
       ? { permissionAtRequest: record["permissionAtRequest"] as string }
+      : {}),
+    ...(typeof record["operation"] === "string" && record["operation"].length > 0
+      ? { operation: record["operation"] as string }
       : {}),
   };
 }
@@ -470,6 +475,7 @@ function toApprovalFromHostRecord(taskId: string, record: HostApprovalRecord): A
     title,
     command: title,
     cwd: "",
+    ...(record.operation !== undefined && record.operation.length > 0 ? { operation: record.operation } : {}),
     impact: approvalImpact({ tool: record.tool, target: record.target, permission: record.permissionAtRequest ?? "" }),
     payloadVersion: record.contentVersion ?? "v1",
     status: record.status as Approval["status"],

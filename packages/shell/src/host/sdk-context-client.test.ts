@@ -94,6 +94,25 @@ it("dispatches a credential-free environment and passes the credential only as w
   }
 });
 
+it("declares tools in the worker only when the Host wired a tool broker", async () => {
+  const dir = task("task-context-tool-marker");
+  const marker = async (toolHost?: { call: () => Promise<{ outcome: "ok"; text: string }> }) => {
+    const probe = scripted();
+    const client = new SdkContextClient({
+      task: { taskId: "task-context-tool-marker", taskDir: dir }, config, credential: "synthetic-key",
+      ...(toolHost ? { toolHost } : {}),
+      spawn: (env, workerData) => { probe.spawned.push({ env, workerData }); return probe.worker; },
+    });
+    await client.open("main");
+    const value = (probe.spawned[0]!.workerData as { toolsEnabled?: unknown }).toolsEnabled;
+    await client.dispose();
+    return value;
+  };
+  // No broker: the isolated context must declare no tools at all (fail closed).
+  expect(await marker()).toBe(false);
+  expect(await marker({ call: async () => ({ outcome: "ok", text: "ok" }) })).toBe(true);
+});
+
 it("forwards streamed events in order and returns only bounded turn results", async () => {
   const dir = task("task-context-stream");
   const probe = scripted();

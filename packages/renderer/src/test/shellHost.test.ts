@@ -205,7 +205,7 @@ describe("shell host adapter selection", () => {
           ok: true,
           payload: {
             approvals: [
-              { id: "approval-7", sessionId: "main", tool: "exec.run", target: "/tmp/task-abcdef12/run.sh", status: "pending", executed: false },
+              { id: "approval-7", sessionId: "main", tool: "exec.run", target: "/tmp/task-abcdef12/run.sh", operation: "echo hi > out.txt", status: "pending", executed: false },
             ],
           },
         };
@@ -214,7 +214,7 @@ describe("shell host adapter selection", () => {
         return {
           ok: true,
           payload: {
-            approval: { id: "approval-7", sessionId: "main", tool: "exec.run", target: "/tmp/task-abcdef12/run.sh", status: "pending", executed: false },
+            approval: { id: "approval-7", sessionId: "main", tool: "exec.run", target: "/tmp/task-abcdef12/run.sh", operation: "echo hi > out.txt", status: "pending", executed: false },
           },
         };
       }
@@ -224,7 +224,9 @@ describe("shell host adapter selection", () => {
     const listed = await adapter.listApprovals("task-a");
     expect(listed).toHaveLength(1);
     expect(listed[0]).toMatchObject({ id: "approval-7", taskId: "task-a", sessionId: "main", title: "exec.run /tmp/task-abcdef12/run.sh" });
-    expect(await adapter.getApproval("approval-7")).toMatchObject({ id: "approval-7", taskId: "task-a" });
+    // [PiDock 02m] #5: the real command reaches the card, not only tool+target.
+    expect(listed[0]?.operation).toBe("echo hi > out.txt");
+    expect(await adapter.getApproval("approval-7")).toMatchObject({ id: "approval-7", taskId: "task-a", operation: "echo hi > out.txt" });
     expect(seen.map((entry) => entry.op)).toEqual(["task/listApprovals", "task/getApproval"]);
     vi.unstubAllGlobals();
   });
