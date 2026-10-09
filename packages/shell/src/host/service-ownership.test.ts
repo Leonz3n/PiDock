@@ -20,11 +20,12 @@ import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { TaskServiceProcesses } from "./service-processes.js";
 import {
   classifyServiceOwnership,
   diskServiceOwnershipLog,
+  readProcessPgid,
   SERVICE_OWNERSHIP_NONCE_ENV,
   serviceOwnershipState,
   verifyServiceOwnershipIdentity,
@@ -285,6 +286,65 @@ describe.skipIf(process.platform === "win32")("#48 service-launch ownership iden
     expect(readFileSync(join(dir, "service-ownership.json"), "utf8")).toBe(beforeAction);
   }, 30_000);
 
+  it("stops a platform-binary child spawned by THIS Host via OS-observable process group leader corroboration", async () => {
+    const dir = taskDir();
+    const sleepPlan: ServiceStartPlan = {
+      serviceId: "same-host-sleep",
+      cwd: dir,
+      program: "/bin/sleep",
+      args: ["60"],
+      env: {},
+      runType: "long-lived",
+    };
+
+    // Host starts a real platform-binary child (/bin/sleep)
+    const host = driver(dir);
+    const pid = await host.start(sleepPlan);
+    expect(alive(pid)).toBe(true);
+    cleanups.push(() => { if (alive(pid)) process.kill(pid, "SIGKILL"); });
+
+    // Corroboration preconditions hold:
+    // 1. pid > 1
+    expect(pid).toBeGreaterThan(1);
+    // 2. OS confirms process group leader: pgid === pid for detached child
+    expect(readProcessPgid(pid)).toBe(pid);
+    // 3. Environment is unobservable on macOS platform binary
+    if (process.platform === "darwin") {
+      expect(verifyServiceOwnershipIdentity({ pid, ownershipNonce: "any" })).toBe("unobservable");
+    }
+
+    // Stop on the same Host that spawned it succeeds via OS PG leader corroboration
+    await host.stop("same-host-sleep");
+
+    // Child is terminated and durable record is cleared
+    expect(alive(pid)).toBe(false);
+    expect(readServiceOwnershipOnDisk(dir).entries).toEqual([]);
+  }, 30_000);
+
+  it("refuses to stop a live same-Host child whose OS process-group leader corroboration fails", async () => {
+    const dir = taskDir();
+    const processes = driver(dir, { durable: false });
+    // Spawn an attached child: detached=false means pgid !== child.pid (pgid is our process group)
+    const nonLeaderChild = spawn("/bin/sleep", ["60"], { detached: false, stdio: "ignore" });
+    const nonLeaderPid = nonLeaderChild.pid!;
+    cleanups.push(() => { if (alive(nonLeaderPid)) process.kill(nonLeaderPid, "SIGKILL"); });
+
+    // Confirm that for this non-leader child, pgid !== pid
+    const pgid = readProcessPgid(nonLeaderPid);
+    expect(pgid).not.toBe(nonLeaderPid);
+
+    (processes as unknown as { running: Map<string, unknown> }).running.set("non-leader", {
+      child: nonLeaderChild,
+      done: new Promise<void>(() => {}),
+      launch: { pid: nonLeaderPid, ownershipNonce: "n".repeat(32) },
+    });
+
+    // Stop must refuse with service-ownership-unverified because PG leader corroboration fails
+    await expect(processes.stop("non-leader")).rejects.toThrow(/service-ownership-unverified.*进程组领队佐证失败/);
+    // Child is still alive: NO signal was sent
+    expect(alive(nonLeaderPid)).toBe(true);
+  }, 30_000);
+
   it("clears a stale record whose process is confirmed gone, then starts and records the new launch", async () => {
     const dir = taskDir();
     // A real process that has exited: its pid is a legitimately dead pid.
@@ -415,6 +475,94 @@ describe("#48 service ownership records", () => {
     await processes.stop("env").catch(() => {});
     if (alive(pid)) process.kill(pid, "SIGKILL");
   }, 30_000);
+
+  it("refuses to stop a launch holding a pid placeholder (or any pid <= 1) and never signals it", async () => {
+    const dir = taskDir();
+    const processes = driver(dir, { durable: false });
+    const killTargets: (number | string)[] = [];
+    const originalKill = process.kill;
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(((target: number, sig?: string | number) => {
+      killTargets.push(target);
+      if (Math.abs(target) <= 1) {
+        return true;
+      }
+      return (originalKill as (t: number, s?: string | number) => boolean).call(process, target, sig);
+    }) as typeof process.kill);
+
+    try {
+      const fakeChild = {
+        exitCode: null,
+        signalCode: null,
+        pid: 0,
+        stdout: { on: () => {} },
+        stderr: { on: () => {} },
+        once: () => {},
+      };
+
+      const internals = processes as unknown as {
+        running: Map<string, { child: unknown; done: Promise<void>; launch: { pid: number; ownershipNonce: string } }>;
+      };
+
+      // 1. Placeholder pid 0
+      internals.running.set("zero-launch", {
+        child: fakeChild,
+        done: new Promise<void>(() => {}),
+        launch: { pid: 0, ownershipNonce: "0".repeat(32) },
+      });
+      await expect(processes.stop("zero-launch")).rejects.toThrow(/service-ownership-unverified/);
+
+      // 2. Invalid pid 1 (init/system)
+      internals.running.set("init-launch", {
+        child: { ...fakeChild, pid: 1 },
+        done: new Promise<void>(() => {}),
+        launch: { pid: 1, ownershipNonce: "1".repeat(32) },
+      });
+      await expect(processes.stop("init-launch")).rejects.toThrow(/service-ownership-unverified/);
+
+      // Assert no signal call was made, and specifically no 0 or -0 target was ever signalled
+      expect(killTargets).toEqual([]);
+
+      // Non-vacuous proof: assert the real stop path still works and signals the real negative pid
+      const realPid = await processes.start(plan("real-launch", dir));
+      await processes.stop("real-launch");
+      expect(alive(realPid)).toBe(false);
+      expect(killTargets).toContain(-realPid);
+      expect(killTargets.includes(0) || killTargets.some((t) => Object.is(t, -0))).toBe(false);
+    } finally {
+      killSpy.mockRestore();
+    }
+  });
+
+  it("proves readProcessPgid reads pgid for real processes and returns null for invalid pids", () => {
+    // Current process PGID is a positive integer
+    const selfPgid = readProcessPgid(process.pid);
+    expect(selfPgid).toBeTypeOf("number");
+    expect(selfPgid!).toBeGreaterThan(0);
+
+    // Invalid pids return null
+    expect(readProcessPgid(0)).toBeNull();
+    expect(readProcessPgid(1)).toBeNull();
+    expect(readProcessPgid(-1)).toBeNull();
+    expect(readProcessPgid(1.5)).toBeNull();
+    expect(readProcessPgid(9999999)).toBeNull();
+  });
+
+  it("refuses signalling on win32 platforms", async () => {
+    const originalPlatform = process.platform;
+    try {
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+      const dir = taskDir();
+      const processes = driver(dir, { durable: false });
+      (processes as unknown as { running: Map<string, unknown> }).running.set("win-test", {
+        child: { exitCode: null, signalCode: null, pid: 4242 },
+        done: Promise.resolve(),
+        launch: { pid: 4242, ownershipNonce: "w".repeat(32) },
+      });
+      await expect(processes.stop("win-test")).rejects.toThrow(/unsupported-platform/);
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+    }
+  });
 });
 
 /** Guard: this suite must not leave a real child of its own behind. */

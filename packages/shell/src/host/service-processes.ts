@@ -5,6 +5,7 @@ import { isAbsolute, relative, sep } from "node:path";
 import type { ServiceStartPlan } from "./service-runtime.js";
 import {
   newServiceOwnershipNonce,
+  readProcessPgid,
   serviceOwnershipLaunchEnded,
   serviceOwnershipRecordError,
   serviceOwnershipState,
@@ -140,7 +141,7 @@ export class TaskServiceProcesses {
     // twice. `pid` is filled in from the spawn event below; until then the
     // placeholder can never verify, so a concurrent stop refuses instead of
     // signalling a guess.
-    const launch: OwnedLaunch = { pid: child.pid ?? 0, ownershipNonce };
+    const launch: OwnedLaunch = { pid: 0, ownershipNonce };
     this.running.set(plan.serviceId, { child, done, launch });
     let pid: number;
     try { pid = await started; }
@@ -208,12 +209,24 @@ export class TaskServiceProcesses {
     const owned = this.running.get(serviceId);
     if (!owned) return this.stopRecordedLaunch(serviceId);
     const { child, done, launch } = owned;
+
+    // Entry check: reject pid <= 1 before ANY signal path
+    if (!Number.isInteger(launch.pid) || launch.pid <= 1) {
+      throw new Error(serviceOwnershipUnverifiedError(serviceId, launch.pid, "进程 PID 尚未就绪或无效"));
+    }
+
     const signal = (kind: NodeJS.Signals) => {
       if (child.exitCode !== null || child.signalCode !== null) return;
+      if (process.platform === "win32") {
+        throw new Error("unsupported-platform: Windows service process signalling is not supported");
+      }
       // Verify this exact launch from the OS before every signal. `gone` means
       // the process already ended, so nothing needs a signal; anything that is
-      // not `verified` throws before any `process.kill` runs.
-      if (this.verifiedLaunch(serviceId, launch) === "gone") return;
+      // not signalable throws before any `process.kill` runs.
+      if (this.verifySameHostLaunch(serviceId, owned) === "gone") return;
+      if (!Number.isInteger(launch.pid) || launch.pid <= 1) {
+        throw new Error(serviceOwnershipUnverifiedError(serviceId, launch.pid, "进程 PID 尚未就绪或无效"));
+      }
       try {
         process.kill(-launch.pid, kind);
       } catch (error) {
@@ -229,12 +242,32 @@ export class TaskServiceProcesses {
   }
 
   /**
-   * Verify one in-Host launch. The durable record (when one is configured) must
-   * agree with the launch this Host registered - a disagreement means the
-   * durable layer and the live process describe different launches, so nothing
-   * is signalled - and the OS must still show the launch's own nonce at its pid.
+   * Verify that an in-memory launch spawned by THIS Host is safe to signal.
+   *
+   * Invariants enforced before signalling:
+   * 1. Reject pid <= 1: never signal 0, 1, or negative targets.
+   * 2. In-memory handle must be live (exitCode === null && signalCode === null).
+   * 3. Handle's pid must match the registered launch pid.
+   * 4. Durable record (if configured) must agree on pid and nonce with this launch.
+   * 5. OS verification:
+   *    - "gone": process already ended, return "gone" (no signal needed).
+   *    - "mismatch": OS environment exists and lacks this nonce -> throw refusal.
+   *    - "verified": 128-bit nonce verified from OS environment -> signalable.
+   *    - "unobservable": NEVER coerce to "verified". Permitted ONLY when corroborated
+   *      by OS-observable process-group leadership evidence:
+   *      the live handle is ours, and the OS confirms the pid still exists as a
+   *      process-group leader whose pgid equals the pid (detached: true child).
+   *      If pgid does not equal pid or cannot be read, fail closed.
    */
-  private verifiedLaunch(serviceId: string, launch: OwnedLaunch): "verified" | "gone" {
+  private verifySameHostLaunch(serviceId: string, owned: OwnedProcess): "signalable" | "gone" {
+    const { child, launch } = owned;
+    if (!Number.isInteger(launch.pid) || launch.pid <= 1) {
+      throw new Error(serviceOwnershipUnverifiedError(serviceId, launch.pid, "进程 PID 尚未就绪或无效"));
+    }
+    if (child.exitCode !== null || child.signalCode !== null) return "gone";
+    if (child.pid !== launch.pid) {
+      throw new Error(serviceOwnershipUnverifiedError(serviceId, launch.pid, "进程句柄 PID 与记录不一致"));
+    }
     const stored = this.ownership?.get(serviceId);
     if (this.ownership && (stored === undefined || stored.pid !== launch.pid || stored.ownershipNonce !== launch.ownershipNonce)) {
       throw new Error(serviceOwnershipUnverifiedError(serviceId, launch.pid, "耐久所有权记录与本次启动不一致"));
@@ -244,9 +277,23 @@ export class TaskServiceProcesses {
     if (verdict === "mismatch") {
       throw new Error(serviceOwnershipUnverifiedError(serviceId, launch.pid, `OS 身份核验结果为 ${verdict}`));
     }
-    // Live in-memory child handle exists for this Host; unreadable environment
-    // (e.g. macOS platform binary hiding env) does not fail the probe.
-    return "verified";
+    if (verdict === "verified") {
+      return "signalable";
+    }
+    // verdict is "unobservable" (e.g. macOS platform binary hiding its environment).
+    // NEVER coerce "unobservable" into "verified".
+    // Corroborate via OS-observable process group leadership: detached child is PG leader (pgid === pid).
+    const pgid = readProcessPgid(launch.pid);
+    if (pgid !== null && pgid === launch.pid) {
+      return "signalable";
+    }
+    throw new Error(
+      serviceOwnershipUnverifiedError(
+        serviceId,
+        launch.pid,
+        `OS 身份无法核验（unobservable）且进程组领队佐证失败（pgid=${pgid ?? "null"}）`,
+      ),
+    );
   }
 
   /**
@@ -264,6 +311,12 @@ export class TaskServiceProcesses {
     const log = this.ownership;
     const record = log?.get(serviceId);
     if (!log || !record) throw new Error(`not-running: ${serviceId}`);
+    if (process.platform === "win32") {
+      throw new Error("unsupported-platform: Windows service process signalling is not supported");
+    }
+    if (!Number.isInteger(record.pid) || record.pid <= 1) {
+      throw new Error(serviceOwnershipUnverifiedError(serviceId, record.pid, "进程 PID 无效"));
+    }
     const release = () => log.release({ serviceId, ownershipNonce: record.ownershipNonce });
     const verdict = verifyServiceOwnershipIdentity(record);
     if (verdict === "gone") {
@@ -281,6 +334,10 @@ export class TaskServiceProcesses {
     // but no longer inspectable is NOT such evidence, so the loop keeps polling
     // instead of claiming a stop behind a live process.
     const signalVerified = (kind: NodeJS.Signals) => {
+      if (process.platform === "win32") {
+        throw new Error("unsupported-platform: Windows service process signalling is not supported");
+      }
+      if (!Number.isInteger(record.pid) || record.pid <= 1) return;
       if (verifyServiceOwnershipIdentity(record) !== "verified") return;
       try { process.kill(-record.pid, kind); }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
