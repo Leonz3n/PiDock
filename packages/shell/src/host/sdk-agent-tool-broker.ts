@@ -33,15 +33,16 @@
  * Honest boundary: `exec.run` runs a real shell. Its working directory and the
  * path arguments that can be *recognised* as paths are confined — the command
  * is split on shell operators so a glued redirect (`x>/tmp/y`) is seen, a token
- * naming a `.git` control path is refused whatever its case or quoting, and a
- * command whose expansion cannot be decoded (`$`, backticks) is refused rather
- * than approximated. This is a filter, not a sandbox: only tokens that contain
- * `/`, start with `~`, are exactly `..` or name a `.git` segment are examined,
- * so a path the shell re-encodes (`printf '\057tmp' | xargs touch`) is not
- * decoded here, and an embedded interpreter (`python -c …`) is not decoded
- * either. The confinement rules that stop a wrong *tool path* are what this
- * module proves; the human approval under `default` remains the boundary for
- * arbitrary command execution.
+ * naming a `.git` control path is refused whatever its case, quoting or simple
+ * backslash escaping (`echo x > .g\it` is the same control file to the shell as
+ * `echo x > .git`), and a command whose expansion cannot be decoded (`$`,
+ * backticks) is refused rather than approximated. This is a filter, not a
+ * sandbox: only tokens that contain `/`, start with `~`, are exactly `..` or
+ * name a `.git` segment are examined, so a path the shell re-encodes
+ * (`printf '\057tmp' | xargs touch`) is not decoded here, and an embedded
+ * interpreter (`python -c …`) is not decoded either. The confinement rules that
+ * stop a wrong *tool path* are what this module proves; the human approval under
+ * `default` remains the boundary for arbitrary command execution.
  */
 
 import { spawn } from "node:child_process";
@@ -227,6 +228,20 @@ function hasGitControlSegment(path: string): boolean {
 }
 
 /**
+ * The one spelling a POSIX shell actually executes for a token: outside quotes a
+ * backslash escapes the next character (`\g` → `g`) and quote characters are
+ * removed (`.g"i"t` → `.git`). The `.git` guard must compare this spelling too,
+ * because `.g\it` carries no `/`, is dropped by the path-shape filter, and its
+ * raw-token segment split (`[\\/]`) yields `[".g", "it"]` — so a raw-token-only
+ * test lets `echo x > .g\it` overwrite the worktree's git pointer under `auto`.
+ * This decodes simple escapes and quoting only, never expansions or the shell
+ * grammar: it stays a filter, not a sandbox.
+ */
+function unquoteShellToken(token: string): string {
+  return token.replace(/\\(.)/g, "$1").replace(/['"]/g, "");
+}
+
+/**
  * Resolve one requested path against the task scope. `base` is what a relative
  * path is relative to (the task folder for file tools, the command's working
  * directory for `exec.run`) — never the Host process cwd.
@@ -406,7 +421,12 @@ function commandPathTokens(command: string): { tokens: string[]; unresolvable: b
       return match ? [match[1]!] : [token];
     })
     .filter((token) =>
-      token === ".." || token.startsWith("~/") || token.startsWith("~") || token.includes("/") || hasGitControlSegment(token),
+      token === ".." ||
+      token.startsWith("~/") ||
+      token.startsWith("~") ||
+      token.includes("/") ||
+      hasGitControlSegment(token) ||
+      hasGitControlSegment(unquoteShellToken(token)),
     );
   return { tokens, unresolvable: false };
 }
@@ -468,9 +488,14 @@ function searchFiles(root: string, pattern: RegExp): string {
       return;
     }
     if (stat.isFile()) {
-      // The task record at the top of the searched folder is Host state, not
-      // task content; the per-target read guard refuses it directly.
-      if (dirname(path) === root && parse(path).base.toLowerCase() === "task.json") return;
+      // The task record at the top of the searched folder, and any regular
+      // `.pidock-*` marker the Host wrote directly (task creation writes
+      // `.pidock-creation` holding the task id), are Host state, not task
+      // content; the per-target read guard refuses them by name too. This is
+      // the file-branch half of the same fold-case prefix rule the directory
+      // branch applies, so `fs.search {path:"."}` cannot hand the marker back.
+      const base = parse(path).base.toLowerCase();
+      if (base.startsWith(".pidock-") || (dirname(path) === root && base === "task.json")) return;
       files.push(path);
     }
   };
@@ -702,8 +727,9 @@ export class SdkAgentToolBroker {
         if (COMMAND_DEVICE_ALLOWLIST.has(token)) continue;
         // A `.git` control path is refused by name here, before any resolution
         // and before the gate, so a bare `.git` token (no `/`, so it is not
-        // path-shaped) cannot rewrite the worktree's git pointer.
-        if (hasGitControlSegment(token)) {
+        // path-shaped) cannot rewrite the worktree's git pointer — and neither
+        // can a quoting/escaping spelling of it (`.g\it`, `.g"i"t`).
+        if (hasGitControlSegment(token) || hasGitControlSegment(unquoteShellToken(token))) {
           return refuse("tool-refused:invalid-target", `命令参数 ${token} 指向 .git 控制文件，任务工具不可写入`);
         }
         if (token.startsWith("~")) return refuse("tool-refused:out-of-scope", `命令参数 ${token} 指向任务外的家目录`);
