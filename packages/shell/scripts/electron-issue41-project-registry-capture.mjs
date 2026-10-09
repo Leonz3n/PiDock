@@ -3,11 +3,15 @@
 //   pnpm --filter @pidock/shell exec electron scripts/electron-issue41-project-registry-capture.mjs \
 //     --out docs/evidence/desktop-project-registry
 //
-// It boots the production main wiring (`createTrustedWindow("...", "production")` +
-// `registerIpc` over a real `TaskRootIndex`/`ProjectRegistry`/`PerTaskHostRegistry`) and
-// the built React renderer (`dist/renderer/index.html`, no fixture entry, no Vite/dev
-// override), then captures the #41 Desktop 项目总览 / 项目管理 views at 1440x900 and
-// 720x560 from a real on-disk registry.
+// It boots the compiled production runtime modules directly (not `dist/main/main.js`) with
+// the production wiring decisions (`createTrustedWindow("...", "production")` + `registerIpc`
+// over a real `TaskRootIndex`/`ProjectRegistry`/`PerTaskHostRegistry`, plus the real
+// `ProjectTaskCreation`/`ProviderWiring` that `main.ts:157-180` also passes; the service
+// catalog is the one production dependency this harness leaves out — see README §4) and the
+// built React renderer (`dist/renderer/index.html`, no fixture entry, no Vite/dev override),
+// then captures the #41 Desktop 项目总览 / 项目管理 views at 1440x900 and 720x560 from a real
+// on-disk registry. It does NOT run `dist/main/main.js`, so app lifecycle, window-evidence
+// asserts and the schedule driver stay out of the capture.
 //
 // Seeded through the real API: `ProjectRegistry.create` writes projects.json under the
 // isolated userData; `ProjectRegistry.claim` writes the v2 membership; the task records
@@ -79,6 +83,9 @@ async function run() {
   const { TaskRootIndex } = await import("../dist/main/task-root-index.js");
   const { ProjectRegistry } = await import("../dist/main/project-registry.js");
   const { createTrustedWindow, loadTrustedViews, PerTaskHostRegistry, registerIpc } = await import("../dist/main/runtime.js");
+  const { CreationIntentStore, ProjectTaskCreation } = await import("../dist/main/project-task-creation.js");
+  const { ProviderProfileStore } = await import("../dist/main/provider-profile-store.js");
+  const { ProviderWiring } = await import("../dist/main/provider-ipc.js");
   const { HostClient } = await import("../dist/rpc/host-client.js");
   const writeTask = (taskId, name) => {
     const taskDir = join(taskRoot, taskId);
@@ -135,7 +142,24 @@ async function run() {
       child.stderr?.on("data", (data) => process.stderr.write(`[issue41-host] ${data}`));
       return { child, client: new HostClient(child) };
     }, (id) => index.resolve(id), undefined, index);
-    registerIpc({}, views.registry, registry, projects, index);
+    // Same wiring decisions as the production entry (`main.ts:157-180`): main owns the real
+    // creation-intent store and Provider wiring, and hands them to `registerIpc`. Omitting
+    // `creation` would leave `shell/createTask` fail-closed with `真实任务创建尚未接入`
+    // (`runtime.ts:1333`), which the renderer draws as a mount-time alert — a state production
+    // cannot produce, so it would be inadmissible as product evidence. The service catalog is
+    // deliberately NOT wired here (see README §4): the needs-repair scenario replaces
+    // `task-cccc3333`'s directory, and with the service-owner fence active the Host reports
+    // `service-owner-shutdown-unconfirmed` at quitAll, which the sealed shutdown contract
+    // forbids this helper from ignoring. Nothing visible in these views depends on it.
+    const providerProfiles = new ProviderProfileStore(profile);
+    const creation = new ProjectTaskCreation(new CreationIntentStore(profile), projects, index, registry, taskRoot);
+    const providers = new ProviderWiring(providerProfiles, async (taskId, provider, senderWebContentsId) => {
+      const payload = provider === null
+        ? { provider: null }
+        : { provider: { config: providerProfiles.config(provider.profileId), credential: provider.credential } };
+      await registry.routeTaskOp({ workspaceId: "issue41", taskId, op: "task/sdkProvider", payload, origin: { kind: "shell-ui", senderWebContentsId } });
+    });
+    registerIpc({}, views.registry, registry, projects, index, undefined, creation, providers);
     await loadTrustedViews(views);
     views.shellView.webContents.debugger.attach();
 
@@ -198,7 +222,10 @@ async function run() {
     // 项目管理: project list + selected detail (repository/directory rows) + task rows,
     // including the honest needs-repair row for task-cccc3333.
     await click("项目管理");
-    await until((body) => body.includes("项目与任务") && body.includes("接口联调·待修复") && body.includes("关联待修复"), "projects management");
+    const managementBody = await until((body) => body.includes("项目与任务") && body.includes("接口联调·待修复") && body.includes("关联待修复"), "projects management");
+    // Guard against silent regression to the fail-closed creation wiring: the renderer would
+    // draw this alert on mount, and such a capture must never be committed as product evidence.
+    if (managementBody.includes("真实任务创建尚未接入")) throw Error("shell/createTask fell back to the fail-closed creation error in the capture");
     await capture("projects-management", 1440, 900);
     await capture("projects-management", 720, 560);
 
