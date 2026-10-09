@@ -14,6 +14,11 @@ export function TaskServiceBinding({ template, tasks }: {
   const [state, setState] = useState<{ taskId: string; roots: WorkspaceRootView[]; bindings: ServiceBindingView[] } | null>(null);
   const [rootId, setRootId] = useState("");
   const [subdir, setSubdir] = useState("");
+  const [subdirTouched, setSubdirTouched] = useState(false);
+  // The template's portable workdir is a prefill snapshot, not a reactive input: a later
+  // template revision must not overwrite the human's local subdir while they are editing it.
+  const templateWorkdir = useRef(template.descriptor.workdir ?? "");
+  templateWorkdir.current = template.descriptor.workdir ?? "";
   const [refs, setRefs] = useState<{ key: string; envRef: string }[]>([]);
   const [pending, setPending] = useState(false);
   const [review, setReview] = useState(false);
@@ -28,7 +33,7 @@ export function TaskServiceBinding({ template, tasks }: {
     const token = epoch;
     const request = ++token.current;
     let live = true;
-    setState(null); setError(null); setReview(false); setRootId(""); setSubdir(""); setRefs([]);
+    setState(null); setError(null); setReview(false); setRootId(""); setSubdir(templateWorkdir.current); setSubdirTouched(false); setRefs([]);
     if (!taskId) { setPending(false); return; }
     setPending(true);
     void Promise.all([fileRootsThroughShell(taskId), serviceCatalogThroughShell({ op: "taskBindings", taskId, projectId: template.projectId })]).then(([files, catalog]) => {
@@ -69,15 +74,18 @@ export function TaskServiceBinding({ template, tasks }: {
     </div>
     {error && <p role="alert" className="mt-2 text-[#ad4545]">{error}</p>}
     {pending && <p role="status" className="mt-2 text-muted">正在核对本机绑定</p>}
-    {bound && <div className="mt-2 break-words text-muted"><p>已绑定 · v{bound.templateVersion} · {bound.rootId}{bound.subdir ? `/${bound.subdir}` : ""}</p>{!!bound.privateKeys.length && <p>私有变量：{bound.privateKeys.join("、")}</p>}<p>运行未接线</p></div>}
+    {bound && <div className="mt-2 break-words text-muted"><p>已绑定 · v{bound.templateVersion} · {bound.rootId}{bound.subdir ? `/${bound.subdir}` : ""}</p>{!!bound.privateKeys.length && <p>私有变量：{bound.privateKeys.join("、")}</p>}<p>启停入口在任务运行面板（POSIX 启用，其他平台具名拒绝）；绑定工作子目录即启动时的工作目录。</p></div>}
     {bound && <SavedServiceConfigPreview key={`${taskId}/${bound.templateVersion}`} projectId={template.projectId} taskId={taskId} serviceId={bound.serviceId} templateVersion={bound.templateVersion} />}
     {!bound && state?.taskId === taskId && <fieldset disabled={pending} className="mt-3 min-w-0">
       <div className="grid gap-3 sm:grid-cols-2">
         <label className="grid gap-1">工作副本<select aria-label="绑定工作副本" value={selectedRoot} disabled={!roots.length} onChange={(event) => { setRootId(event.target.value); setReview(false); }} className="min-h-8 min-w-0 rounded-[4px] border border-line bg-paper px-2"><option value="" hidden>选择工作副本</option>{roots.map((root) => <option key={root.id} value={root.id}>{root.label}</option>)}</select></label>
-        <label className="grid gap-1">工作子目录<input aria-label="绑定工作子目录" value={subdir} maxLength={512} className="min-h-8 min-w-0 rounded-[4px] border border-line bg-paper px-2" onChange={(event) => { setSubdir(event.target.value); setReview(false); }} /></label>
+        <label className="grid gap-1">工作子目录<input aria-label="绑定工作子目录" value={subdir} maxLength={512} placeholder={template.descriptor.workdir ?? "仓库根目录"} className="min-h-8 min-w-0 rounded-[4px] border border-line bg-paper px-2" onChange={(event) => { setSubdir(event.target.value); setSubdirTouched(true); setReview(false); }} /></label>
       </div>
       <div className="mt-2 flex items-center justify-between"><span>本机凭据引用</span><Button type="button" size="icon" variant="ghost" aria-label="添加私有引用" title="添加私有引用" disabled={refs.length >= 80} onClick={() => { setRefs([...refs, { key: "", envRef: "" }]); setReview(false); }}><Icon name="plus" /></Button></div>
       {refs.map((ref, index) => <div key={index} className="mt-2 flex min-w-0 gap-2"><input aria-label={`私有 KEY ${index + 1}`} value={ref.key} maxLength={100} className="min-h-8 min-w-0 w-2/5 rounded-[4px] border border-line bg-paper px-2" onChange={(event) => { setRefs(refs.map((row, at) => at === index ? { ...row, key: event.target.value } : row)); setReview(false); }} /><input aria-label={`本机环境引用 ${index + 1}`} value={ref.envRef} maxLength={100} className="min-h-8 min-w-0 flex-1 rounded-[4px] border border-line bg-paper px-2" onChange={(event) => { setRefs(refs.map((row, at) => at === index ? { ...row, envRef: event.target.value } : row)); setReview(false); }} /><Button type="button" size="icon" variant="ghost" aria-label={`移除私有引用 ${index + 1}`} title="移除私有引用" onClick={() => { setRefs(refs.filter((_, at) => at !== index)); setReview(false); }}><Icon name="close" /></Button></div>)}
+      <p className="mt-2 break-words text-muted">{template.descriptor.workdir && !subdirTouched
+        ? `已带入模板默认工作目录：${template.descriptor.workdir}。本机绑定的工作子目录才是启动时解析的工作目录，可直接修改。`
+        : "本机绑定的工作子目录即启动时的工作目录；留空表示工作副本根目录。"}</p>
       {review && <p role="status" className="mt-3 break-words text-muted">待绑定：{template.descriptor.name} · v{template.version} · {selectedRoot}{subdir ? `/${subdir}` : ""}</p>}
       <div className="mt-3 flex justify-end"><Button type="button" size="sm" disabled={!selectedRoot} onClick={() => { if (review) void bind(); else setReview(true); }}><Icon name="folder" />{review ? "选择程序并保存绑定" : "核对任务绑定"}</Button></div>
     </fieldset>}

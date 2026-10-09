@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { fileRootsThroughShell, serviceImportHintsThroughShell } from "../data/shellBridge";
-import { serviceImportScanFromHost, type ServiceImportScanView } from "../data/serviceImportHints";
+import { serviceImportScanFromHost, type ServiceImportHintView, type ServiceImportScanView } from "../data/serviceImportHints";
 import { workspaceRootsFromHost, type WorkspaceRootView } from "../data/workspaceFiles";
 import { Icon } from "./Icon";
 import { ProjectServiceTemplates } from "./ProjectServiceTemplates";
@@ -11,8 +11,14 @@ interface Project { id: string; name: string }
 interface Task { taskId: string; name: string }
 const runTypeLabel = { "long-lived": "常驻服务", "one-shot": "一次性命令", prepare: "准备步骤" } as const;
 
-/** Repository import hints are read-only until a durable service catalog exists. */
-function RepositoryImportDrafts({ tasks, pending }: { tasks: readonly Task[]; pending: boolean }) {
+/**
+ * Repository import hints are read-only until a human fills the template form
+ * with one: `onFillForm` is that one explicit action, and a configuration-only
+ * hint (runType `null`, e.g. `.env`) cannot be applied as a run unit.
+ */
+function RepositoryImportDrafts({ tasks, pending, filled, onFillForm }: {
+  tasks: readonly Task[]; pending: boolean; filled: string | null; onFillForm: (hint: ServiceImportHintView) => void;
+}) {
   const [requestedTaskId, setRequestedTaskId] = useState("");
   const taskId = tasks.some((task) => task.taskId === requestedTaskId) ? requestedTaskId : tasks[0]?.taskId ?? "";
   const [rootState, setRootState] = useState<{ taskId: string; roots: WorkspaceRootView[] }>({ taskId: "", roots: [] });
@@ -63,6 +69,8 @@ function RepositoryImportDrafts({ tasks, pending }: { tasks: readonly Task[]; pe
 
   return <section className="mt-8" aria-label="仓库配置草案">
     <div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-sm font-semibold">仓库配置草案</h2><Button type="button" size="sm" variant="outline" disabled={!selectedRoot || loadingRoots || loadingScan} onClick={() => void scanRepository()}><Icon name="file" />扫描仓库</Button></div>
+    <p className="mt-1 text-xs text-muted">扫描只读取仓库配置并给出候选：变量只有键名、命令已按去敏规则过滤。草案不会自动保存、绑定或启动，需由你显式填入上方「服务启动配方」的表单后逐项核对。</p>
+    {filled && <p role="status" className="mt-2 text-xs text-muted">已把草案「{filled}」填入上方新建模板表单；尚未保存。</p>}
     <div className="mt-3 flex flex-wrap gap-3 border-y border-line py-3 text-xs">
       <label className="flex min-w-0 items-center gap-2">任务<select aria-label="扫描任务" value={taskId} disabled={!tasks.length || pending} onChange={(event) => setRequestedTaskId(event.target.value)} className="min-h-8 max-w-[240px] min-w-0 rounded-[4px] border border-line bg-paper px-2 text-ink"><option value="" hidden>选择任务</option>{tasks.map((task) => <option key={task.taskId} value={task.taskId}>{task.name}</option>)}</select></label>
       <label className="flex min-w-0 items-center gap-2">仓库<select aria-label="扫描仓库来源" value={selectedRoot} disabled={!roots.length || loadingRoots} onChange={(event) => { epoch.current++; setLoadingScan(false); setScanState(null); setRootId(event.target.value); setError(null); }} className="min-h-8 max-w-[240px] min-w-0 rounded-[4px] border border-line bg-paper px-2 text-ink"><option value="" hidden>选择仓库</option>{roots.map((root) => <option key={root.id} value={root.id}>{root.label}</option>)}</select></label>
@@ -75,16 +83,22 @@ function RepositoryImportDrafts({ tasks, pending }: { tasks: readonly Task[]; pe
       {!scan.hints.length && <p className="py-4 text-muted">{scan.errors.length ? "部分配置读取失败，无法确认是否存在草案" : "未发现可核对的启动草案"}</p>}
       {scan.hints.map((hint, index) => <div key={`${hint.source}-${hint.name}-${index}`} className="grid min-w-0 gap-2 border-b border-line py-3 sm:grid-cols-[minmax(0,1fr)_110px]">
         <div className="min-w-0"><strong className="block break-words font-medium text-ink">{hint.name}</strong><span className="break-all text-muted">{hint.source}</span>
+          {(hint.program !== "" || hint.args.length > 0) && <p className="mt-1 break-all text-muted">命令候选：{[hint.program, ...hint.args].join(" ")}</p>}
+          {hint.workdir !== undefined && <p className="mt-1 break-all text-muted">工作目录候选：{hint.workdir}</p>}
           {!!hint.envKeys.length && <p className="mt-1 break-all text-muted">变量键：{hint.envKeys.join("、")}</p>}
           {hint.invalidVars.map((key, at) => <p key={at} className="mt-1 break-all text-[#ad4545]">无效变量：{key}</p>)}
           {hint.toVerify.map((note, at) => <p key={at} className="mt-1 break-words text-muted">{note}</p>)}
-        </div><span className="text-muted sm:text-right">{hint.runType === null ? "配置来源" : runTypeLabel[hint.runType]}</span>
+        </div><div className="flex flex-col items-start gap-2 sm:items-end"><span className="text-muted">{hint.runType === null ? "配置来源" : runTypeLabel[hint.runType]}</span>
+          {hint.runType === null
+            ? <Button type="button" size="sm" variant="outline" disabled title="配置来源草案不能作为运行单元填入服务模板">仅配置来源</Button>
+            : <Button type="button" size="sm" variant="outline" onClick={() => onFillForm(hint)}>填入新建模板</Button>}
+        </div>
       </div>)}
     </div>}
   </section>;
 }
 
-/** Prototype-A layout with only authoritative Project context; no environment model is exposed by Host yet. */
+/** Prototype-A layout with only authoritative Project context; the environment model itself is still not exposed by Host. */
 export function DesktopEnvironmentPage({ projects, projectId, taskCount, tasks, tasksPending = false, onSelectProject }: {
   projects: readonly Project[];
   projectId: string | null;
@@ -93,6 +107,10 @@ export function DesktopEnvironmentPage({ projects, projectId, taskCount, tasks, 
   tasksPending?: boolean;
   onSelectProject: (id: string) => void;
 }) {
+  // One explicit human action moves a scanned draft into the template form.
+  const [pendingFill, setPendingFill] = useState<ServiceImportHintView | null>(null);
+  const [filledName, setFilledName] = useState<string | null>(null);
+  const clearFill = useCallback(() => setPendingFill(null), []);
   return <div data-testid="desktop-environment-page" className="px-[34px] py-[30px] below-narrow:px-5">
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div className="min-w-0"><p className="text-[10px] uppercase tracking-[1.8px] text-[#95979c]">Environments</p><h1 className="mt-1.5 text-[26px] font-semibold text-ink">环境与服务</h1></div>
@@ -113,7 +131,7 @@ export function DesktopEnvironmentPage({ projects, projectId, taskCount, tasks, 
     <div className="mt-4 flex flex-wrap items-center gap-2">
       <label className="text-xs text-muted">环境</label>
       <select aria-label="环境" disabled value="unwired" className="min-h-8 max-w-full rounded-[4px] border border-line bg-paper px-2 text-xs text-muted"><option value="unwired">环境清单未接线</option></select>
-      <Badge variant="soft">模板版本 · 未接线</Badge>
+      <Badge variant="soft">环境模型未接线 · 共享模板按版本保存</Badge>
     </div>
     <div className="mt-5 flex flex-wrap gap-1 border-b border-line pb-2" role="group" aria-label="配置作用范围">
       {(["任务覆盖", "共享模板", "本机私有配置"] as const).map((scope) => <Button key={scope} type="button" variant="ghost" size="sm" disabled title={`${scope}的生产数据未接线`}>{scope}</Button>)}
@@ -122,7 +140,8 @@ export function DesktopEnvironmentPage({ projects, projectId, taskCount, tasks, 
       <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="text-sm font-semibold">环境变量 <Badge variant="soft" className="ml-1">未接线</Badge></h2><Button type="button" size="sm" disabled title="缺少真实配置及变更预览">保存更改</Button></div>
       <div className="mt-3 overflow-x-auto"><table className="w-full min-w-[320px] text-left text-xs"><thead className="border-b border-line text-muted"><tr><th className="py-2 font-medium">KEY</th><th className="py-2 font-medium">VALUE</th><th className="py-2 font-medium">生效来源</th></tr></thead><tbody><tr className="border-b border-line"><td colSpan={3} className="py-5 text-muted">Host 尚未提供项目环境、任务覆盖与敏感值遮蔽后的生效配置。这里不展示示例 KEY 或 VALUE。</td></tr></tbody></table></div>
     </section>
-    <ProjectServiceTemplates projectId={projectId} tasks={tasksPending ? [] : tasks} />
-    <RepositoryImportDrafts tasks={tasks} pending={tasksPending} />
+    <ProjectServiceTemplates projectId={projectId} tasks={tasksPending ? [] : tasks} fillFrom={pendingFill} onFillApplied={clearFill} />
+    <RepositoryImportDrafts tasks={tasks} pending={tasksPending} filled={filledName}
+      onFillForm={(hint) => { setFilledName(`${hint.source} · ${hint.name}`); setPendingFill(hint); }} />
   </div>;
 }
