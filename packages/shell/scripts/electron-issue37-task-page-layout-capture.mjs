@@ -16,6 +16,12 @@
 //       full width
 //   (4) a real 1440x900 -> 1000x700 -> 720x560 -> 1440x900 resize with a page open
 //
+// #49 shell-column guard: every capture with a task workspace open must pass `shellColumn` (see
+// `assertShellColumnReadable`): the shell column's own `scrollWidth`/`clientWidth`, the toolbar
+// bounding box vs the `Task workspace` eyebrow text box (no intersection), and the toolbar inside
+// the column. The earlier `documentElement.scrollWidth - clientWidth` was 0 for every shot because
+// the overflow lives inside a nested scroll container, so it could never fail.
+//
 // Capture contract (why `capture-log.json` is a 1:1, self-consistent inventory):
 // - every (scenario, size) pair is captured exactly once. A state that a scenario returns to is
 //   asserted through its view geometry and recorded in `checks[]` instead of being committed as a
@@ -259,6 +265,52 @@ async function run() {
       };
     };
 
+    // #49: the defect metric. `documentElement.scrollWidth - clientWidth` is 0 in every shot
+    // because the shell column's overflow is *inside* a nested scroll container, so the old
+    // `shellHorizontalOverflow` could never fail. This measures the column itself (the
+    // `overflow-y-auto` shell main, whose computed `overflow-x` is `auto`) plus the real control
+    // boxes: the toolbar must not intersect the `Task workspace` eyebrow and must stay inside the
+    // column. The range box is what makes the overlap visible even though the shrunk title div is
+    // 0px wide and its eyebrow text only overflows visually.
+    const measureShellColumn = () => evalJs(`(() => {
+      const box = (el) => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height, right: r.right, bottom: r.bottom }; };
+      const rangeBox = (range) => { const r = range.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height, right: r.right, bottom: r.bottom }; };
+      const intersects = (a, b) => a.x < b.right && b.x < a.right && a.y < b.bottom && b.y < a.bottom;
+      const content = document.querySelector('[data-testid="desktop-shell-content"]');
+      const breadcrumb = document.querySelector('[data-testid="desktop-breadcrumb"]');
+      const header = document.querySelector('[data-testid="desktop-conversation-header"]');
+      const metric = {
+        documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        content: content ? { scrollWidth: content.scrollWidth, clientWidth: content.clientWidth, box: box(content) } : null,
+        breadcrumb: breadcrumb ? { scrollWidth: breadcrumb.scrollWidth, clientWidth: breadcrumb.clientWidth, box: box(breadcrumb) } : null,
+        toolbar: null, eyebrow: null, toolbarOverlapsEyebrow: null, toolbarInsideColumn: null,
+      };
+      if (header && content) {
+        const toolbar = header.querySelector('[data-testid="desktop-conversation-toolbar"]');
+        const eyebrow = header.querySelector('[data-testid="desktop-conversation-eyebrow"]');
+        if (toolbar && eyebrow) {
+          const toolbarBox = box(toolbar);
+          const range = document.createRange();
+          range.selectNodeContents(eyebrow);
+          const eyebrowBox = rangeBox(range);
+          metric.toolbar = toolbarBox;
+          metric.eyebrow = eyebrowBox;
+          metric.toolbarOverlapsEyebrow = intersects(toolbarBox, eyebrowBox);
+          metric.toolbarInsideColumn = toolbarBox.x >= metric.content.box.x - 0.5 && toolbarBox.right <= metric.content.box.right + 0.5;
+        }
+      }
+      return metric;
+    })()`);
+    const assertShellColumnReadable = (state, width, height, metric) => {
+      if (!metric.content) return;
+      const overflow = metric.content.scrollWidth - metric.content.clientWidth;
+      if (overflow > 0) throw Error(`shell column has ${overflow}px of inner horizontal overflow at ${width}x${height} (${state})`);
+      const breadcrumbOverflow = metric.breadcrumb ? metric.breadcrumb.scrollWidth - metric.breadcrumb.clientWidth : 0;
+      if (breadcrumbOverflow > 0) throw Error(`shell column breadcrumb has ${breadcrumbOverflow}px of horizontal overflow at ${width}x${height} (${state})`);
+      if (metric.toolbarOverlapsEyebrow === true) throw Error(`task toolbar intersects the Task workspace heading at ${width}x${height} (${state})`);
+      if (metric.toolbarInsideColumn === false) throw Error(`task toolbar extends past the shell column at ${width}x${height} (${state})`);
+    };
+
     const colorClose = (rgb, expected) => Math.abs(rgb[0] - expected[0]) <= 12 && Math.abs(rgb[1] - expected[1]) <= 12 && Math.abs(rgb[2] - expected[2]) <= 12;
 
     const captureWindow = async (state, width, height) => {
@@ -333,15 +385,13 @@ async function run() {
       if (pixels.width !== expectedPixels.width || pixels.height !== expectedPixels.height) {
         throw Error(`cropped bitmap ${pixels.width}x${pixels.height} is not the content box at this scale ${expectedPixels.width}x${expectedPixels.height}`);
       }
+      // #49: the non-hollow guard. Measure (and assert) BEFORE writing the PNG so a broken shell
+      // column cannot leave a captured image behind. The metric is chosen so the pre-#49 layout
+      // fails it: the old `documentElement.scrollWidth - clientWidth` was 0 for every shot.
+      const shellColumn = await measureShellColumn();
+      assertShellColumnReadable(state, width, height, shellColumn);
       const name = `${width}x${height}-${state}.png`;
       writeFileSync(join(output, name), pixel);
-      // Recorded (not asserted): the renderer's own horizontal overflow inside the shell view. The
-      // 280px shell column is narrower than the renderer's own narrowest tier, so the document
-      // overflow alone is not the whole story — the widest element overflow is recorded too.
-      let shellHorizontalOverflow = null;
-      try {
-        shellHorizontalOverflow = await evalJs("(() => { let max = 0; let worst = null; for (const el of document.querySelectorAll('*')) { const d = el.scrollWidth - el.clientWidth; if (d > max) { max = d; worst = el.tagName + (typeof el.className === 'string' && el.className ? '.' + el.className.split(' ')[0] : ''); } } return { document: document.documentElement.scrollWidth - document.documentElement.clientWidth, maxElement: max, worstElement: worst }; })()");
-      } catch { /* recorded as unknown */ }
       shots.push({
         state, file: name,
         width, height,
@@ -352,7 +402,7 @@ async function run() {
         cropOffsetPixels: { x: Math.round(frame.x * pixelsPerLogical), y: Math.round(frame.y * pixelsPerLogical) },
         pageTopEdgePixels: boundaryRow,
         sha256: createHash("sha256").update(pixel).digest("hex"),
-        shellHorizontalOverflow,
+        shellColumn,
         geometry: geometry(),
         bodyText: (await text()).replace(/\n+/g, " | ").slice(0, 900),
       });
