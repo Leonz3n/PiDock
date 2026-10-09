@@ -439,6 +439,9 @@ export interface ResumeAppendInput {
    * Caller-scanned conflict inputs (REQUIRED, never defaulted): the task-dir
    * listing + `git worktree list` scan runs caller-side; omitting them would
    * silently disable `checkRepoConflicts`, so an omitted list fails closed.
+   * On the renderer route main derives and overwrites them (takenPaths,
+   * branchesInUse and the source checkouts) — see `task-prep-scan.ts` — while
+   * the requirement itself is unchanged.
    */
   takenPaths?: readonly string[];
   branchesInUse?: readonly string[];
@@ -1462,6 +1465,8 @@ export class TaskWorkspaceHost {
      * task-dir listing + `git worktree list` scan runs caller-side;
      * omitting them would silently disable `checkRepoConflicts`, so an
      * omitted list fails closed here instead of planning against `[]`.
+     * On the renderer route main derives and overwrites them (see
+     * `task-prep-scan.ts`); the requirement itself is unchanged.
      */
     takenPaths?: readonly string[];
     branchesInUse?: readonly string[];
@@ -1757,7 +1762,11 @@ export class TaskWorkspaceHost {
    * `validateRepoSelections` + `pinRepoBaselines` (all-success, no stale
    * refs) and the caller-scanned `takenPaths`/`branchesInUse` conflict gate
    * (REQUIRED, fail-closed when omitted) with `checkRepoConflicts`
-   * reporting. Only the retry set enters the plan, so a created worktree is
+   * reporting. Precedence: on the renderer route MAIN is the authoritative
+   * producer of that scan (it derives it from the resolved task folder and
+   * each recorded repo's source checkout and overwrites a page-supplied
+   * value); a caller reaching the Host directly still supplies its own.
+   * Only the retry set enters the plan, so a created worktree is
    * never re-created, reset, refetched or overwritten: its user edits are
    * byte-identical afterwards.
    *

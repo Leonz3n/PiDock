@@ -824,7 +824,8 @@ async function performTaskOp(
       // disk and retry only the unfinished ones. Created worktrees are
       // never re-created/reset/refetched; a present path that is not this
       // task's worktree is held and reported, never overwritten. The
-      // caller-scanned conflict gate stays REQUIRED (Host-side fail-closed).
+      // caller-scanned conflict gate stays REQUIRED (Host-side fail-closed);
+      // on the renderer route main derives and overwrites it.
       case "task/resumeAppend": {
         const resumeCheckouts = record["mainCheckouts"];
         const resumeCheckoutMap =

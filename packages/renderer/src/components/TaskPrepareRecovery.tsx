@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { readRepoPrepareView, type RepoPrepareStatus, type RepoPrepareView } from "../data/multiRepoPrepare";
-import type { ShellTaskOpResult } from "../data/shellBridge";
+import { resumeAppendThroughShell, type ShellTaskOpResult } from "../data/shellBridge";
 
 // Seam: [PiDock 03] (#6) partial-prepare recovery UI. The Host classifies the
 // REAL worktree state and resumes only the unfinished repos; this panel shows
@@ -15,7 +15,23 @@ const STATUS_LABEL: Record<RepoPrepareStatus, string> = {
 };
 
 const DEFAULT_RESUME_UNAVAILABLE =
-  "需要主进程扫描任务目录与目标仓库（`git worktree list`）后才能继续准备；该能力尚未接线。";
+  "需要主进程扫描任务目录与目标仓库（`git worktree list`）后才能继续准备；当前调用方未提供该动作。";
+
+/**
+ * Production resume action for the shell surface. The sandboxed renderer
+ * cannot scan, so it supplies NO conflict inputs: main derives
+ * `takenPaths`/`branchesInUse` (and the target source checkouts) from the
+ * task folder and the task's target repos, and the Host keeps requiring
+ * both lists. `repoDirs` is the unfinished set the panel read (advisory):
+ * the Host re-derives the authoritative set from the record and the real
+ * worktrees, so the page never gates itself. Nothing is resumed on mount —
+ * the human click is the only trigger.
+ */
+export function shellTaskPrepareResume(
+  taskId: string,
+): (input: { repoDirs: string[] }) => Promise<ShellTaskOpResult> {
+  return () => resumeAppendThroughShell({ taskId });
+}
 
 export function TaskPrepareRecovery({
   load,
@@ -25,10 +41,12 @@ export function TaskPrepareRecovery({
   /** Read-only per-repo status read (`task/prepareStatus`). */
   load: () => Promise<ShellTaskOpResult>;
   /**
-   * Explicit resume (`task/resumeAppend`), called with ONLY the unfinished
-   * repo dirs. It MUST supply the caller-scanned `takenPaths`/`branchesInUse`
-   * the Host requires; omit the prop when the caller cannot scan, and the
-   * control renders disabled with the real reason instead of a doomed call.
+   * Explicit resume (`task/resumeAppend`), called with the unfinished repo
+   * dirs the panel read (advisory: the Host re-derives the authoritative retry
+   * set). On the shell surface main produces the REQUIRED
+   * `takenPaths`/`branchesInUse` scan and overwrites any page-supplied value;
+   * a caller that cannot scan must omit this prop, and the control renders
+   * disabled with the real reason instead of a doomed call.
    */
   resume?: (input: { repoDirs: string[] }) => Promise<ShellTaskOpResult>;
   /** Why the resume is unavailable; shown next to the disabled control. */

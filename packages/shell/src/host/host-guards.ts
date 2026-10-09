@@ -456,7 +456,11 @@ export function validateHostTaskOp(
     }
     // Caller-scanned conflict inputs are REQUIRED (never silently `[]`):
     // `appendRepos` fails closed without them so the path/branch gate
-    // cannot be skipped by omitting the scan.
+    // cannot be skipped by omitting the scan. Precedence: on the RENDERER
+    // route main is the authoritative producer (it overwrites whatever the
+    // page sent with the scan it derives from the resolved task folder +
+    // each target repo's source checkout), while a caller that invokes the
+    // Host directly (main-internal executor, tests) still supplies its own.
     if (!Array.isArray(payload["takenPaths"]) || !Array.isArray(payload["branchesInUse"])) {
       return { ok: false, error: "invalid-payload: task/appendRepos requires caller-scanned takenPaths + branchesInUse" };
     }
@@ -480,7 +484,11 @@ export function validateHostTaskOp(
       return { ok: false, error: "invalid-payload: task/resumeAppend requires a payload object" };
     // Caller-scanned conflict inputs are REQUIRED (never silently `[]`):
     // `resumeAppend` fails closed without them so the path/branch gate
-    // cannot be skipped by omitting the scan.
+    // cannot be skipped by omitting the scan. Precedence: on the RENDERER
+    // route main is the authoritative producer (it overwrites whatever the
+    // page sent — including `mainCheckouts` — with the scan it derives from
+    // the resolved task folder + each recorded repo's source checkout),
+    // while a caller that invokes the Host directly still supplies its own.
     if (!Array.isArray(payload["takenPaths"]) || !Array.isArray(payload["branchesInUse"])) {
       return { ok: false, error: "invalid-payload: task/resumeAppend requires caller-scanned takenPaths + branchesInUse" };
     }

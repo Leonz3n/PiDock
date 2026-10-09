@@ -256,6 +256,12 @@ export async function provisionTaskThroughShell(input: {
  * [PiDock 03] (#6) append repos to a task through the shell (`host/task` +
  * `task/appendRepos`). Only repos not already in the task are
  * fetched/planned; the form stays on failure with a per-repo retry entry.
+ *
+ * `takenPaths`/`branchesInUse` stay in the payload for compatibility, but
+ * main is the authoritative producer: it derives both from the resolved task
+ * folder and each target repo's own source checkout and OVERWRITES whatever
+ * the page sent, so a page-supplied scan can neither forge nor disable the
+ * path/branch gate the Host keeps requiring.
  */
 export async function appendReposThroughShell(input: {
   taskId: string;
@@ -264,9 +270,10 @@ export async function appendReposThroughShell(input: {
   branch?: string;
   mainCheckouts?: Record<string, string>;
   /**
-   * Caller-scanned conflict inputs (REQUIRED, never defaulted): the
-   * renderer scans the task folder + `git worktree list` first; the
-   * Host and the RPC guard fail closed without them.
+   * Caller-supplied conflict inputs (kept for callers that still pass them).
+   * Main ignores them for the gate: it derives `takenPaths`/`branchesInUse`
+   * (and the source checkouts) itself, so the renderer must never fabricate
+   * an empty `[]` scan — `[]` would be overwritten, not trusted.
    */
   takenPaths: string[];
   branchesInUse: string[];
@@ -306,12 +313,13 @@ export async function prepareStatusThroughShell(input: { taskId: string }): Prom
  * record; the Host classifies the REAL worktree state and retries only the
  * unfinished repos.
  *
- * `takenPaths`/`branchesInUse` are the caller-scanned conflict inputs the
- * Host (and the RPC guard) REQUIRE and fail closed without. This helper only
- * forwards them: keys that are `undefined` are omitted from the payload, so
- * a caller that cannot scan never fabricates an empty scan (`[]` would
- * silently disable the gate). The renderer passes no scan; a main-side
- * scanner must supply them for a renderer-triggered resume.
+ * `takenPaths`/`branchesInUse`/`mainCheckouts` are derived by MAIN on the
+ * shell route (the resolved task folder listing + each recorded repo's own
+ * `git worktree list`): this helper forwards them only when a caller already
+ * holds them, and a page-supplied value is overwritten before the op reaches
+ * the Host. Keys that are `undefined` are omitted from the payload, so a
+ * caller that cannot scan never fabricates an empty scan (`[]` would silently
+ * disable the gate). The renderer passes no scan; main produces it.
  */
 export async function resumeAppendThroughShell(input: {
   taskId: string;

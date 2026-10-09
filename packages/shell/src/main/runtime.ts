@@ -28,6 +28,13 @@ import {
   resolveTaskRoot,
 } from "./task-provision.js";
 import { readTaskRecordOnDisk } from "../host/task-store.js";
+import {
+  PrepScanUnavailableError,
+  createNodePrepScanDeps,
+  deriveRendererPrepPayload,
+  needsPrepScan,
+  type PrepScanAuthority,
+} from "./task-prep-scan.js";
 import { defaultTasksRoot } from "./task-resolver.js";
 import { TaskRootIndex, type VerifiedTaskIdentity } from "./task-root-index.js";
 import { HostTaskAdmission } from "../host/host-task-admission.js";
@@ -1453,6 +1460,34 @@ export function registerIpc(
     }
   });
 
+  /**
+   * Project repositories of a task's confirmed association. Main-owned
+   * authority for turning a recorded `repo-xxxxxxxx` folder into the source
+   * checkout the scan and the plan must use; a task without a confirmed
+   * association has no authoritative checkout source, so the scan refuses.
+   */
+  const prepScanRepositories = (taskId: string): readonly { id: string; path: string }[] => {
+    if (!projects || !taskRoots) {
+      throw new PrepScanUnavailableError("主进程缺少项目登记或任务根索引，无法定位目标仓库的来源检出");
+    }
+    const association = projects.association(taskId, taskRoots);
+    if (association.state !== "assigned" || association.projectId === null) {
+      throw new PrepScanUnavailableError(
+        `任务与项目没有可确认的关联（${association.state}），无法定位目标仓库的来源检出`,
+      );
+    }
+    const project = projects.get(association.projectId);
+    if (!project) throw new PrepScanUnavailableError("任务所属项目不可读取，无法定位目标仓库的来源检出");
+    return project.repositories;
+  };
+
+  /** Task-folder authority for the privileged scan (index-verified, main-owned). */
+  const prepScanAuthority: PrepScanAuthority = {
+    resolveTaskDir: (taskId) => taskRoots?.resolve(taskId) ?? null,
+    readRecord: (taskDir) => readTaskRecordOnDisk(taskDir),
+    projectRepositories: prepScanRepositories,
+  };
+
   // Task-scoped op from the sandboxed renderer: main binds the workspace
   // from the trusted sender (never from the payload) and forwards the
   // validated op to the per-task utilityProcess Host bound to that task's
@@ -1486,10 +1521,25 @@ export function registerIpc(
       // status route reports failures, so an install failure never turns an
       // unrelated op into an error.
       if (providers) { try { await providers.ensure(taskId, sender.webContentsId); } catch { /* surfaced by shell/providerOp list */ } }
-      const opPayload =
+      let opPayload =
         typeof record["payload"] === "object" && record["payload"] !== null
           ? (record["payload"] as Record<string, unknown>)
           : {};
+      // #6 boundary B: the sandboxed renderer cannot list the task folder or
+      // run `git worktree list`, so main produces the scan `appendRepos` and
+      // `resumeAppend` require (the Host keeps requiring it) and OVERWRITES
+      // any page-supplied `takenPaths`/`branchesInUse`/`mainCheckouts`, so a
+      // forged or emptied scan can neither disable nor steer the gate. Every
+      // scan failure refuses by name and plans nothing (never a `[]` default).
+      if (needsPrepScan(op)) {
+        const derived = deriveRendererPrepPayload(
+          { op, taskId, payload: opPayload },
+          prepScanAuthority,
+          createNodePrepScanDeps(),
+        );
+        if (!derived.ok) return { ok: false as const, error: derived.error };
+        opPayload = derived.payload;
+      }
       const perOp = validateHostTaskOp(op, opPayload);
       if (!perOp.ok) {
         throw new TrustDomainViolation("invalid-payload", perOp.error);

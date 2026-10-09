@@ -22,7 +22,7 @@ import {
   workspacePath,
 } from "../data/directories";
 import { isShellConnected, prepareStatusThroughShell, provisionTaskThroughShell } from "../data/shellBridge";
-import { TaskPrepareRecovery } from "./TaskPrepareRecovery";
+import { TaskPrepareRecovery, shellTaskPrepareResume } from "./TaskPrepareRecovery";
 import {
   CONTEXT_WINDOW_SOURCE_LABEL,
   DEFAULT_MODEL_CONTEXT_WINDOW,
@@ -796,14 +796,13 @@ function TaskSourcesModal({ taskId, onClose }: { taskId: string; onClose: () => 
       </fieldset>
       {isShellConnected() ? (
         // [PiDock 03] (#6) recovery surface: the Host classifies the real
-        // worktree state and retries only the unfinished repos. No resume is
-        // injected here: the sandboxed renderer cannot produce the REQUIRED
-        // `takenPaths`/`branchesInUse` conflict scan (a main-side scanner is a
-        // separate slice), so the resume control renders DISABLED with that
-        // reason instead of making a call the Host must refuse.
+        // worktree state and retries only the unfinished repos. Main derives
+        // the required conflict scan (task folder listing + per-repo
+        // `git worktree list`) on the privileged route, so the page neither
+        // scans nor can forge/disable the gate.
         <TaskPrepareRecovery
           load={() => prepareStatusThroughShell({ taskId })}
-          resumeUnavailableReason="需主进程扫描任务目录与目标仓库（`git worktree list`）后才能继续准备；该能力随扫描切片提供。"
+          resume={shellTaskPrepareResume(taskId)}
         />
       ) : null}
       <p className="mt-3 text-[11px] text-muted">
