@@ -19,6 +19,13 @@ export interface DesktopProjects {
   inventory: DesktopTaskInventory;
   projects: DesktopProject[];
   associations: TaskAssociation[];
+  /**
+   * Whether the main-owned Project registry exists on this machine. `false`
+   * means no persistent project mapping was ever established, which the UI must
+   * say explicitly (`项目映射未建立`) instead of showing an invented project or
+   * treating absence of a Project as an unassigned-task state (#34 box 1).
+   */
+  projectsInitialized: boolean;
 }
 
 function object(value: unknown): value is Record<string, unknown> {
@@ -80,5 +87,5 @@ export async function loadDesktopProjects(bridge: PidockBridge): Promise<Desktop
     throw new Error("项目与任务清单不一致，请重试");
   }
   if (JSON.stringify(inventory.roots) !== JSON.stringify(associations.roots)) throw new Error("任务根状态已变化，请重试");
-  return { inventory, projects, associations: rows };
+  return { inventory, projects, associations: rows, projectsInitialized: listed.initialized };
 }

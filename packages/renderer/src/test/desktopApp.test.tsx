@@ -189,6 +189,60 @@ describe("Desktop production data", () => {
     expect(projectOp.mock.calls.every(([request]) => request.op === "list" || request.op === "associations")).toBe(true);
   });
 
+  it("lists the default and a registered override root together, surfaces one failing root, and never touches the demo fixture", async () => {
+    const demoRead = vi.spyOn(memoryHost, "getWorkspace");
+    const demoCreate = vi.spyOn(memoryHost, "createTask");
+    const demoSend = vi.spyOn(memoryHost, "sendMessage");
+    const overrideTask = { taskId: "override-1", name: "覆盖根任务", branch: "task/main", repoCount: 2, updatedAt: "2026-09-23" };
+    const multiRoots = [
+      { label: "默认任务根", state: "ready" as const },
+      { label: "已登记任务根 1", state: "ready" as const },
+      { label: "已登记任务根 2", state: "error" as const, message: "任务根目录已移走或链接已更改，请检查原位置" },
+    ];
+    const listTasks = vi.fn(async () => ({ ok: true, payload: { tasks: [...tasks, overrideTask], roots: multiRoots } }));
+    const projectOp = vi.fn(async (request: { op: string }) => ({ ok: true, payload: request.op === "list"
+      ? { initialized: true, projects: [project] }
+      : { roots: multiRoots, tasks: [
+        { taskId: "real-1", projectId: project.id, state: "assigned" },
+        { taskId: "override-1", projectId: null, state: "unassigned" },
+      ] } }));
+    window.pidock = { ...bridge(), listTasks, projectOp };
+    render(<App />);
+    await screen.findByTestId("desktop-project-overview");
+    const sidebar = within(screen.getByTestId("desktop-sidebar"));
+    await waitFor(() => expect(sidebar.getByText("覆盖根任务")).toBeInTheDocument());
+    expect(sidebar.getByText("真实任务")).toBeInTheDocument();
+    // The failing root keeps its own accurate, actionable error; a healthy root is not flagged.
+    expect(screen.getByText("已登记任务根 2：任务根目录已移走或链接已更改，请检查原位置")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "重试读取已登记任务根 2" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "重试读取已登记任务根 1" })).toBeNull();
+    expect(screen.getByTestId("desktop-breadcrumb")).toHaveTextContent("1 个任务根不可用");
+    // The failed root contributed no fabricated row: only the two real disk-backed tasks exist.
+    expect(sidebar.queryByText(/Atlas|演示/)).toBeNull();
+    expect(demoRead).not.toHaveBeenCalled();
+    expect(demoCreate).not.toHaveBeenCalled();
+    expect(demoSend).not.toHaveBeenCalled();
+  });
+
+  it("states 项目映射未建立 from the parsed registry state instead of inventing a project", async () => {
+    const demoRead = vi.spyOn(memoryHost, "getWorkspace");
+    window.pidock = { ...bridge(), projectOp: vi.fn(async (request: { op: string }) => ({ ok: true, payload: request.op === "list"
+      ? { initialized: false, projects: [] }
+      : { roots, tasks: [{ taskId: "real-1", projectId: null, state: "unassigned" }] } })) };
+    render(<App />);
+    const overview = await screen.findByTestId("desktop-project-overview");
+    expect(within(overview).getByRole("heading", { name: "项目映射未建立" })).toBeInTheDocument();
+    expect(overview).toHaveTextContent("本机尚未建立持久项目映射");
+    // No Project id or count is fabricated to fill the card.
+    expect(screen.getByTestId("overview-repo-count")).toHaveTextContent("0");
+    await openManagement();
+    const nav = screen.getByRole("navigation", { name: "项目导航" });
+    expect(within(nav).getByText("项目映射未建立")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "项目映射未建立 · 1" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "项目映射未建立" })).toBeInTheDocument();
+    expect(demoRead).not.toHaveBeenCalled();
+  });
+
   it("keeps an unavailable root retryable and preserves navigation during its reread", async () => {
     const broken = [{ label: "默认任务根", state: "error" as const, message: "任务根目录已移走" }];
     let releaseRead: (() => void) | undefined;

@@ -28,4 +28,12 @@ describe("Desktop Project trust boundary", () => {
     await expect(projectOperation({ projectOp: vi.fn(async () => ({ ok: false, error: "project has associated tasks" })) }, { op: "delete", projectId: "81334064-ffea-4415-b03c-c2784b16a749" })).rejects.toThrow("project has associated tasks");
     await expect(loadDesktopProjects({ listTasks: vi.fn(async () => ({ ok: false, error: "任务根损坏" })) })).rejects.toThrow("任务根损坏");
   });
+  it("surfaces the parsed registry initialization state instead of defaulting it", async () => {
+    const bridge = fixture();
+    bridge.projectOp = vi.fn(async (request) => ({ ok: true, payload: request.op === "list"
+      ? { initialized: false, projects: [] }
+      : { roots, tasks: [{ taskId: "task-real", projectId: null, state: "unassigned" }] } }));
+    await expect(loadDesktopProjects(bridge)).resolves.toMatchObject({ projectsInitialized: false });
+    await expect(loadDesktopProjects(fixture())).resolves.toMatchObject({ projectsInitialized: true });
+  });
 });

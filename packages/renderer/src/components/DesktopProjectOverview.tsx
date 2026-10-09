@@ -18,6 +18,7 @@ export function DesktopProjectOverview({
   lifecyclePending,
   associations,
   roots,
+  projectsInitialized,
   onOpenTask,
   onManage,
   onCreateTask,
@@ -28,6 +29,8 @@ export function DesktopProjectOverview({
   lifecyclePending: boolean;
   associations: readonly TaskAssociation[];
   roots: readonly { label: string; state: string }[];
+  /** The main-owned Project registry exists. `false` is stated, never faked. */
+  projectsInitialized: boolean;
   onOpenTask: (taskId: string) => void;
   onManage: () => void;
   onCreateTask: () => void;
@@ -41,7 +44,7 @@ export function DesktopProjectOverview({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-[10px] tracking-[1.8px] text-[#95979c] uppercase">Project</p>
-          <h1 className="mt-1.5 truncate text-[26px] font-semibold tracking-[-0.6px] text-ink">{project ? project.name : "未归属任务"}</h1>
+          <h1 className="mt-1.5 truncate text-[26px] font-semibold tracking-[-0.6px] text-ink">{project ? project.name : projectsInitialized ? "未归属任务" : "项目映射未建立"}</h1>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button type="button" onClick={onManage}>项目管理</Button>
@@ -49,7 +52,7 @@ export function DesktopProjectOverview({
         </div>
       </div>
       <p className="mt-1.5 mb-6 text-xs text-muted">
-        {project?.description || "在项目中组织仓库、任务与运行环境。"}
+        {project?.description || (projectsInitialized ? "在项目中组织仓库、任务与运行环境。" : "本机尚未建立持久项目映射；任务以未归属状态列出，不编造项目归属。")}
       </p>
 
       <div className="grid grid-cols-3 gap-4 below-mid:grid-cols-1">
