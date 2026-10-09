@@ -52,6 +52,7 @@ import {
   runTaskService,
   serviceExecutionRefusal,
   SERVICE_EXECUTION_UNSUPPORTED_PLATFORM,
+  SERVICE_RUN_HUMAN_LABEL,
   trustedWindowEvidence,
 } from "./runtime.js";
 
@@ -324,7 +325,10 @@ describe("trusted Electron view modes", () => {
         .toEqual(["task/registerService", "task/controlService"]);
       const entries = g.routeTaskOp.mock.calls.map(([entry]) => entry as { op: string; origin: { kind: string }; payload: Record<string, unknown> });
       expect(entries.map((entry) => entry.origin.kind)).toEqual(["service-catalog", "service-catalog"]);
-      expect(entries[1]!.payload).toEqual({ serviceId: "s-a", action: "start", label: "环境配置页" });
+      expect(entries[1]!.payload).toEqual({ serviceId: "s-a", action: "start", label: SERVICE_RUN_HUMAN_LABEL });
+      // The audit label names main's own entry, not one of the two pages that
+      // reach it, and is never page-supplied (the exact-key payload check above).
+      expect(SERVICE_RUN_HUMAN_LABEL).not.toContain("环境配置页");
       expect(entries[0]!.payload).toMatchObject({ serviceId: "s-a", templateVersion: "2" });
       // The page named only project/task/service/action: no program, cwd or env
       // value ever travels from the caller into the launch.
