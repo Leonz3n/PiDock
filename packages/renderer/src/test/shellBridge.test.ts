@@ -286,3 +286,33 @@ describe("#7 service bridge (S4)", () => {
     }
   });
 });
+
+// #6 boundary B: main derives the conflict scan on the shell route, so a
+// renderer that cannot scan omits the keys instead of fabricating `[]`.
+describe("#6 privileged prep scan precedence", () => {
+  it("omits the scan keys the page cannot produce for append and resume", async () => {
+    const { appendReposThroughShell, resumeAppendThroughShell } = await import("../data/shellBridge");
+    const taskOp = vi.fn(async (_taskId: string, _op: string, _payload: Record<string, unknown>) => ({ ok: true, payload: {} }));
+    vi.stubGlobal("window", { pidock: { taskOp } });
+    try {
+      await appendReposThroughShell({
+        taskId: "task-abcdef12",
+        repoSelections: [
+          { repoDir: "shipment", remote: "origin", remoteBranch: "main", mainCheckoutDir: "/src/shipment" },
+        ],
+        fetchedCommits: { shipment: "c0ffee1234" },
+      });
+      const appendPayload = taskOp.mock.calls.at(-1)![2] as Record<string, unknown>;
+      expect(appendPayload).not.toHaveProperty("takenPaths");
+      expect(appendPayload).not.toHaveProperty("branchesInUse");
+
+      await resumeAppendThroughShell({ taskId: "task-abcdef12" });
+      const resumePayload = taskOp.mock.calls.at(-1)![2] as Record<string, unknown>;
+      expect(resumePayload).not.toHaveProperty("takenPaths");
+      expect(resumePayload).not.toHaveProperty("branchesInUse");
+      expect(resumePayload).not.toHaveProperty("mainCheckouts");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
