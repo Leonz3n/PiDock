@@ -41,6 +41,10 @@ app.setPath("userData", profile);
 const taskId = "task-abcdef12";
 const taskDir = join(taskRoot, taskId);
 const wait = (ms) => new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
+// PNG IHDR holds the true pixel size at bytes 16..24, which differs from the CSS
+// content box on a HiDPI display. Recorded so the `<contentW>x<contentH>` file names
+// cannot be misread as pixel dimensions.
+const pngPixelSize = (png) => ({ width: png.readUInt32BE(16), height: png.readUInt32BE(20) });
 const children = [];
 const watchdog = setTimeout(() => { console.error("ISSUE34_CAPTURE_TIMEOUT", root); process.exit(1); }, 90000);
 // Test-only guard: a noop listener suppresses Electron's default quit on
@@ -120,7 +124,10 @@ async function run() {
       const file = join(output, name);
       const png = (await views.shellView.webContents.capturePage()).toPNG();
       writeFileSync(file, png);
+      const pixels = pngPixelSize(png);
       shots.push({ state, file: name, width: size.width, height: size.height,
+        pixelWidth: pixels.width, pixelHeight: pixels.height,
+        deviceScaleFactor: pixels.width / size.width,
         sha256: createHash("sha256").update(png).digest("hex"),
         bodyText: (await text()).replace(/\n+/g, " | ").slice(0, 600) });
     };
