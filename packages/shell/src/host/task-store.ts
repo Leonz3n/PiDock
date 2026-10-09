@@ -102,6 +102,7 @@ const LIFECYCLE_FILE = "lifecycle.json";
 const EXECUTION_FILE = "execution.json";
 const SCHEDULE_FILE = "schedules.json";
 const REMOTE_DEVICE_FILE = "remote-devices.json";
+const SERVICE_OWNERSHIP_FILE = "service-ownership.json";
 
 function assertSafeFileName(name: string, label: string): void {
   if (
@@ -1077,6 +1078,151 @@ export function readRemoteDeviceRecordOnDisk(taskDir: string): RemoteDeviceDiskR
     return parseRemoteDeviceRecord(readFileSync(remoteDeviceFilePath(taskDir), "utf8"));
   } catch (error) {
     if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return emptyRemoteDeviceRecord();
+    throw error;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// [PiDock 04] (#48) durable per-launch service ownership identity
+// ---------------------------------------------------------------------------
+
+/**
+ * `<taskDir>/service-ownership.json` holds one record per real service launch
+ * this task's Host performed: the task the launch belongs to, the service id,
+ * the pid the Host spawned and the **per-launch identity nonce** the Host
+ * placed in that child's own environment (`host/service-ownership.ts` explains
+ * why the (pid, nonce) pair cannot be satisfied by an unrelated process that
+ * merely recycled the pid).
+ *
+ * The record is written *after* a real child exists and is removed only once
+ * that launch is confirmed not alive. Two consequences are deliberate:
+ * - "no record" means "no launch this layer knows about", never "assumed
+ *   stopped"; a reader must reconcile the record against the real process
+ *   instead of trusting it.
+ * - an unexplained surviving record is visible data (a pid nobody may signal),
+ *   not something to silently forget: `orphaned-unverified` is the state name
+ *   for "we recorded this launch, it is still alive, and we cannot verify that
+ *   ownership".
+ *
+ * Full shape validation on read: a corrupt or partial record must not
+ * half-restore an identity that later gates a signal, and a pid that could
+ * name this process's group (`0`/`1`) is refused outright.
+ */
+export const SERVICE_OWNERSHIP_SCHEMA_VERSION = 1;
+const OWNERSHIP_NONCE_HEX = /^[0-9a-f]{32}$/;
+
+export interface ServiceOwnershipRecord {
+  schemaVersion: typeof SERVICE_OWNERSHIP_SCHEMA_VERSION;
+  /** Task this launch belongs to (the Host's fork-time binding). */
+  taskId: string;
+  serviceId: string;
+  /** Leader pid of the real child the Host spawned (group leader: detached). */
+  pid: number;
+  /** 128-bit hex nonce placed in that child's own environment at spawn. */
+  ownershipNonce: string;
+  startedAt: string;
+}
+
+export interface ServiceOwnershipDiskRecord {
+  version: typeof SERVICE_OWNERSHIP_SCHEMA_VERSION;
+  entries: ServiceOwnershipRecord[];
+}
+
+export function emptyServiceOwnershipDiskRecord(): ServiceOwnershipDiskRecord {
+  return { version: SERVICE_OWNERSHIP_SCHEMA_VERSION, entries: [] };
+}
+
+export function serviceOwnershipFilePath(taskDir: string): string {
+  return join(taskDir, SERVICE_OWNERSHIP_FILE);
+}
+
+function parseServiceOwnershipEntry(value: unknown): ServiceOwnershipRecord {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("invalid-payload: service ownership entry must be an object");
+  }
+  const entry = value as Record<string, unknown>;
+  if (entry["schemaVersion"] !== SERVICE_OWNERSHIP_SCHEMA_VERSION) {
+    throw new Error(`invalid-payload: service ownership entry.schemaVersion must be ${SERVICE_OWNERSHIP_SCHEMA_VERSION}`);
+  }
+  for (const key of ["taskId", "serviceId", "startedAt"] as const) {
+    if (typeof entry[key] !== "string" || (entry[key] as string).length === 0) {
+      throw new Error(`invalid-payload: service ownership entry.${key} must be a non-empty string`);
+    }
+  }
+  assertSafeFileName(entry["serviceId"] as string, "serviceId");
+  // A pid this process could signal as its own group (`0`) or the OS's init
+  // (`1`) is never a recorded service launch.
+  if (typeof entry["pid"] !== "number" || !Number.isInteger(entry["pid"]) || (entry["pid"] as number) <= 1) {
+    throw new Error("invalid-payload: service ownership entry.pid must be an integer greater than 1");
+  }
+  if (typeof entry["ownershipNonce"] !== "string" || !OWNERSHIP_NONCE_HEX.test(entry["ownershipNonce"])) {
+    throw new Error("invalid-payload: service ownership entry.ownershipNonce must be 32 lowercase hex characters");
+  }
+  return value as ServiceOwnershipRecord;
+}
+
+/**
+ * Exact stored text for these records; the caller decides where it lands. Kept
+ * separate so the shape rules are unit-testable without touching the fs.
+ */
+export function serializeServiceOwnershipRecord(record: ServiceOwnershipDiskRecord): string {
+  return JSON.stringify(record, null, 2);
+}
+
+/** Full validation on read; a duplicate service id is corrupt, not last-wins. */
+export function parseServiceOwnershipRecord(raw: string): ServiceOwnershipDiskRecord {
+  const value: unknown = JSON.parse(raw);
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("invalid-payload: service ownership record must be an object");
+  }
+  const record = value as Record<string, unknown>;
+  if (record["version"] !== SERVICE_OWNERSHIP_SCHEMA_VERSION) {
+    throw new Error(`invalid-payload: service ownership record.version must be ${SERVICE_OWNERSHIP_SCHEMA_VERSION}`);
+  }
+  if (!Array.isArray(record["entries"])) {
+    throw new Error("invalid-payload: service ownership record.entries must be an array");
+  }
+  const entries = (record["entries"] as unknown[]).map((entry) => parseServiceOwnershipEntry(entry));
+  // Keyed by task + service: the file is task-scoped, but a record naming
+  // another task is a different launch and must not collide with ours.
+  const ids = new Set<string>();
+  for (const entry of entries) {
+    const key = `${entry.taskId}\u0000${entry.serviceId}`;
+    if (ids.has(key)) throw new Error(`invalid-payload: duplicate service ownership entry ${entry.serviceId}`);
+    ids.add(key);
+  }
+  return { version: SERVICE_OWNERSHIP_SCHEMA_VERSION, entries };
+}
+
+/**
+ * Atomic replacement (exclusive temp file + rename) like the lifecycle record:
+ * a crash mid-write must leave either the previous identity or the new one,
+ * never a truncated record that a later signal decision would read as ours.
+ */
+export function writeServiceOwnershipOnDisk(taskDir: string, record: ServiceOwnershipDiskRecord): void {
+  mkdirSync(taskDir, { recursive: true });
+  if (!lstatSync(taskDir).isDirectory()) throw new Error("invalid task directory");
+  const text = serializeServiceOwnershipRecord(record);
+  parseServiceOwnershipRecord(text);
+  const file = serviceOwnershipFilePath(taskDir);
+  try {
+    if (!lstatSync(file).isFile()) throw new Error("invalid service ownership record file");
+  } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  const tmp = `${file}.${randomUUID()}.tmp`;
+  try {
+    const fd = openSync(tmp, "wx", 0o600);
+    try { writeFileSync(fd, text, "utf8"); fsyncSync(fd); }
+    finally { closeSync(fd); }
+    renameSync(tmp, file);
+  } finally { rmSync(tmp, { force: true }); }
+}
+
+/** Absent file = a task that never launched a service (empty record, not an error). */
+export function readServiceOwnershipOnDisk(taskDir: string): ServiceOwnershipDiskRecord {
+  try {
+    return parseServiceOwnershipRecord(readFileSync(serviceOwnershipFilePath(taskDir), "utf8"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return emptyServiceOwnershipDiskRecord();
     throw error;
   }
 }

@@ -1,0 +1,275 @@
+/**
+ * Verifiable service-launch ownership identity for [PiDock 04] (#48).
+ *
+ * Problem this module exists for: `TaskServiceProcesses` starts real children
+ * with `detached: true`, so after an abnormal Host/main exit the child keeps
+ * running while the in-memory handle is gone. A pid alone is not an identity -
+ * the OS recycles pids, so "the pid is alive" can describe an unrelated
+ * process, and signalling it would be a guess. This module defines, persists,
+ * verifies and classifies an identity strong enough to answer two questions
+ * without guessing: "is the process at this pid really the launch we recorded?"
+ * and "if we cannot tell, what do we say instead?".
+ *
+ * Chosen mechanism: **the pair (pid, per-launch 128-bit random nonce), with the
+ * nonce carried in the child's own environment and read back from the OS.**
+ * - The Host injects `PIDOCK_SERVICE_OWNERSHIP_NONCE=<nonce>` into the child's
+ *   fresh environment at spawn (never into the Host's `process.env`).
+ * - That environment is kernel state of one process image, fixed at `execve`.
+ *   No process - not even the child itself - can rewrite the environment block
+ *   the kernel keeps for it, so the marker cannot appear after the fact in an
+ *   image that was not launched with it.
+ * - Verification reads the live pid's environment from the OS (Linux:
+ *   `/proc/<pid>/environ`; macOS: `/bin/ps -E -p <pid>`) and requires the exact
+ *   128-bit nonce. A pid recycled by an unrelated process therefore can never
+ *   satisfy a record: the new process cannot choose its own pid, and cannot
+ *   retroactively acquire the nonce. The pid is only a lookup key; the nonce is
+ *   the identity.
+ * - Why not process start time: on macOS `ps -o lstart=` is locale/time-zone
+ *   dependent and only second-granular, so two processes can share it. The
+ *   nonce is exact, per launch, and unforgeable; `startedAt` is kept for human
+ *   audit only and never gates a decision.
+ * - Reading the environment is the *only* positive identity evidence: a launch
+ *   that is alive and inspectable always shows its own marker. "The pid names a
+ *   process but its environment cannot be read" (a not-yet-reaped zombie, a
+ *   process of another user, an unsupported platform) is therefore reported as
+ *   `unobservable` - never as "not ours" - and never ends a stop by itself.
+ * - Stated cost: the marker is visible in the child's environment. It is not a
+ *   credential - knowing it does not let anyone claim another pid, because pids
+ *   are kernel-assigned - so it identifies a launch and grants nothing.
+ *
+ * Hard boundary enforced by this module's callers (`TaskServiceProcesses`): no
+ * signal is ever sent to a pid whose identity was not verified in the same call.
+ * `verifyServiceOwnershipIdentity` is the only thing that may report
+ * `"verified"`, and every signal goes through it.
+ *
+ * Platform boundaries (stated, not implied):
+ * - POSIX only. On Windows the environment probe returns `"unobservable"`, so
+ *   nothing is ever signalled there; `start` is refused on Windows already, and
+ *   Windows process-tree termination semantics are UNTESTED in this slice.
+ * - Reading another process's environment needs the same user (true for a
+ *   service child); an unreadable pid is treated as unverified, never as ours.
+ * - A pid whose process is a not-yet-reaped zombie reports no environment; it is
+ *   classified `orphaned-unverified` (fail-closed) rather than assumed over, and
+ *   a stop of such a launch keeps polling until the pid is really free.
+ */
+
+import { execFileSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
+import {
+  readServiceOwnershipOnDisk,
+  SERVICE_OWNERSHIP_SCHEMA_VERSION,
+  writeServiceOwnershipOnDisk,
+  type ServiceOwnershipDiskRecord,
+  type ServiceOwnershipRecord,
+} from "./task-store.js";
+
+/** Environment key carrying a launch's ownership nonce inside the child. */
+export const SERVICE_OWNERSHIP_NONCE_ENV = "PIDOCK_SERVICE_OWNERSHIP_NONCE";
+
+/**
+ * A fresh 128-bit launch nonce. Never reused, never derived from the pid, the
+ * service id or any path: the identity must not be guessable from anything an
+ * unrelated process can observe about the pid it recycled.
+ */
+export function newServiceOwnershipNonce(): string {
+  return randomBytes(16).toString("hex");
+}
+
+/** What the OS says about one recorded (pid, nonce) pair. */
+export type ServiceOwnershipVerdict =
+  /** The live pid carries this exact launch nonce: it is that launch. */
+  | "verified"
+  /** A live, inspectable process holds the pid and carries another identity. */
+  | "mismatch"
+  /** No process holds the pid any more. */
+  | "gone"
+  /** The identity could not be observed (unsupported platform, zombie, other user). */
+  | "unobservable";
+
+/** Reconciled state of a durable record; never a guess about a live process. */
+export type ServiceOwnershipState =
+  /** The recorded launch is alive and its identity was verified. */
+  | "own-verified"
+  /** A process holds the recorded pid but is not verifiably that launch. */
+  | "orphaned-unverified"
+  /** The recorded launch is not alive. */
+  | "gone";
+
+export interface ServiceOwnershipIdentity {
+  pid: number;
+  ownershipNonce: string;
+}
+
+/** One durable record in the state the real process is in. */
+export interface ServiceOwnershipEntry extends ServiceOwnershipIdentity {
+  serviceId: string;
+  startedAt: string;
+  state: ServiceOwnershipState;
+}
+
+/**
+ * Read the OS-observed environment of one pid as `KEY=VALUE` entries.
+ * `null` means the environment could not be read (the pid names no process, the
+ * process is a not-yet-reaped zombie, it belongs to someone else, or the probe
+ * is unavailable) - never "read and empty", so a caller cannot mistake an
+ * unreadable identity for a mismatching one.
+ */
+function readProcessEnvironment(pid: number): string[] | null {
+  try {
+    if (process.platform === "linux") {
+      const entries = readFileSync(`/proc/${pid}/environ`, "utf8").split("\0").filter((entry) => entry.includes("="));
+      return entries.length > 0 ? entries : null;
+    }
+    if (process.platform === "darwin") {
+      // `-E` appends the process's own environment block to the row; entries
+      // are whitespace-separated, which is enough to read an exact nonce value.
+      const printed = execFileSync("/bin/ps", ["-E", "-p", String(pid)], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+      const entries = printed.split(/\s+/).filter((token) => /^[A-Za-z_][A-Za-z0-9_]*=/.test(token));
+      return entries.length > 0 ? entries : null;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+/** Whether the pid currently names a process (a not-yet-reaped child included). */
+function processExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/**
+ * The only identity decision in this slice. Signal nothing unless this returns
+ * `"verified"`.
+ */
+export function verifyServiceOwnershipIdentity(identity: ServiceOwnershipIdentity): ServiceOwnershipVerdict {
+  // A pid that could name our own process group (`0`) or init (`1`) is never a
+  // service launch; refusing up front keeps a corrupt record from ever reaching
+  // a signalling call.
+  if (!Number.isInteger(identity.pid) || identity.pid <= 1) return "unobservable";
+  if (process.platform === "win32") return "unobservable";
+  if (!processExists(identity.pid)) return "gone";
+  const environment = readProcessEnvironment(identity.pid);
+  if (environment === null) return "unobservable";
+  return environment.includes(`${SERVICE_OWNERSHIP_NONCE_ENV}=${identity.ownershipNonce}`) ? "verified" : "mismatch";
+}
+
+/**
+ * Positive evidence that a launch is not alive any more: its pid names no
+ * process, or names one whose environment we did read (so it is inspectable)
+ * and which does not carry this launch's marker. `unobservable` deliberately
+ * does *not* count - a process that is exiting can no longer be inspected, and
+ * that is not yet proof of anything.
+ */
+export function serviceOwnershipLaunchEnded(identity: ServiceOwnershipIdentity): boolean {
+  const verdict = verifyServiceOwnershipIdentity(identity);
+  return verdict === "gone" || verdict === "mismatch";
+}
+
+/** Truthful state name for a verdict: unverified survivors are never "ours". */
+export function serviceOwnershipState(verdict: ServiceOwnershipVerdict): ServiceOwnershipState {
+  if (verdict === "verified") return "own-verified";
+  if (verdict === "gone") return "gone";
+  return "orphaned-unverified";
+}
+
+/**
+ * Classify durable records against the real process state. Pure read: it never
+ * signals, never adopts a process, never rewrites a record. Directly usable as
+ * the boot/read-time reconciliation and as the conflict check before a start.
+ */
+export function classifyServiceOwnership(records: readonly ServiceOwnershipRecord[]): ServiceOwnershipEntry[] {
+  return records
+    .map((record) => ({
+      serviceId: record.serviceId,
+      pid: record.pid,
+      ownershipNonce: record.ownershipNonce,
+      startedAt: record.startedAt,
+      state: serviceOwnershipState(verifyServiceOwnershipIdentity(record)),
+    }))
+    .sort((a, b) => (a.serviceId < b.serviceId ? -1 : a.serviceId > b.serviceId ? 1 : 0));
+}
+
+/**
+ * One spelling for "a durable record says a process is alive and we must not
+ * act as if it were gone, ours, or absent". The state name is part of the
+ * message so a control refusal and a status read report the same truth.
+ */
+export function serviceOwnershipRecordError(entry: Pick<ServiceOwnershipEntry, "serviceId" | "pid" | "state">): string {
+  const detail =
+    entry.state === "own-verified"
+      ? "记录的启动仍存活（所有权已核验），本 Host 未接管该进程"
+      : entry.state === "orphaned-unverified"
+        ? "记录的启动仍存活，但无法核验其所有权，拒绝任何信号与重复启动"
+        : "记录的启动已结束，尚未清理";
+  return `service-ownership-${entry.state}: ${entry.serviceId} pid ${entry.pid} ${detail}`;
+}
+
+/** Named refusal for a stop whose target identity could not be verified. */
+export function serviceOwnershipUnverifiedError(serviceId: string, pid: number, detail: string): string {
+  return `service-ownership-unverified: ${serviceId} pid ${pid} 身份未核验，拒绝发送信号（${detail}）`;
+}
+
+/**
+ * Durable log of this task's service-launch identities. Deliberately dumb:
+ * `get`/`all` return raw records, and every classification happens through
+ * `classifyServiceOwnership` (so the same records always yield the same state
+ * from the same OS state, and no cached truth can go stale).
+ */
+export interface ServiceOwnershipLog {
+  /** The recorded launch of one service, raw (never a classified claim). */
+  get(serviceId: string): ServiceOwnershipRecord | undefined;
+  /** Every record of this task, raw. */
+  all(): ServiceOwnershipRecord[];
+  /** Persist one launch's identity; must be durable before the start resolves. */
+  record(launch: { serviceId: string; pid: number; ownershipNonce: string; startedAt: string }): void;
+  /**
+   * Drop the record of a launch whose process is confirmed over. Scoped by the
+   * nonce so a late writer cannot delete a newer launch's record.
+   */
+  release(launch: { serviceId: string; ownershipNonce: string }): void;
+}
+
+/** The on-disk log for one task folder. */
+export function diskServiceOwnershipLog(input: { taskId: string; taskDir: string }): ServiceOwnershipLog {
+  const read = (): ServiceOwnershipDiskRecord => readServiceOwnershipOnDisk(input.taskDir);
+  // A record naming another task is never this log's own data: it is not
+  // classified as ours and it is never deleted by our writes (the file is
+  // task-scoped, so such an entry is corrupt or foreign and is left intact).
+  const mine = (): ServiceOwnershipRecord[] => read().entries.filter((entry) => entry.taskId === input.taskId);
+  const foreign = (): ServiceOwnershipRecord[] => read().entries.filter((entry) => entry.taskId !== input.taskId);
+  const write = (entries: readonly ServiceOwnershipRecord[], previous: readonly ServiceOwnershipRecord[]): void => {
+    if (entries.length === previous.length && entries.every((entry, index) => entry === previous[index])) return;
+    writeServiceOwnershipOnDisk(input.taskDir, {
+      version: SERVICE_OWNERSHIP_SCHEMA_VERSION,
+      entries: [...foreign(), ...entries],
+    });
+  };
+  return {
+    get: (serviceId) => mine().find((entry) => entry.serviceId === serviceId),
+    all: () => mine(),
+    record: (launch) => {
+      const previous = mine();
+      const entry: ServiceOwnershipRecord = {
+        schemaVersion: SERVICE_OWNERSHIP_SCHEMA_VERSION,
+        taskId: input.taskId,
+        serviceId: launch.serviceId,
+        pid: launch.pid,
+        ownershipNonce: launch.ownershipNonce,
+        startedAt: launch.startedAt,
+      };
+      write([...previous.filter((existing) => existing.serviceId !== launch.serviceId), entry], previous);
+    },
+    release: (launch) => {
+      const previous = mine();
+      const kept = previous.filter((entry) => !(entry.serviceId === launch.serviceId && entry.ownershipNonce === launch.ownershipNonce));
+      write(kept, previous);
+    },
+  };
+}
