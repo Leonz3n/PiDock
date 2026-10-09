@@ -120,13 +120,17 @@ export function TaskServiceBinding({ template, tasks }: {
       <Button type="button" size="sm" variant="outline" disabled={pending || adopting} onClick={() => void adopt(false)}><Icon name="arrow" />核对采用 v{template.version}</Button>
       <span className="break-words text-muted">当前绑定固定 v{bound.templateVersion}；采用只重指该绑定的模板版本，不会启动、停止或重启进程。</span>
     </div>}
-    {adoption && !adoption.adopted && <div role="status" className="mt-2 border border-line bg-soft px-2 py-2 break-words">
-      <p>待采用：{template.descriptor.name} · v{adoption.from} → v{adoption.to}（仅该绑定的模板版本）</p>
-      <p className="mt-1">本次只重指固定的模板版本，未启动、停止或重启任何进程；若该服务当前正在运行，它仍运行 v{adoption.from}，需你在运行面板先停止再启动（显式重启）后 v{adoption.to} 才会生效。</p>
-      {adoption.restartNeeded.length > 0 && <p className="mt-1">需显式重启：{adoption.restartNeeded.map((entry) => `任务 ${taskName(entry.taskId)} 的 ${entry.name}（v${entry.from} → v${entry.to}）`).join("；")}</p>}
+    {adoption && !adoption.adopted && <div className="mt-2 border border-line bg-soft px-2 py-2 break-words">
+      <div role="status">
+        <p>待采用：{template.descriptor.name} · v{adoption.from} → v{adoption.to}（仅该绑定的模板版本）</p>
+        <p className="mt-1">本次只重指固定的模板版本，未启动、停止或重启任何进程；若该服务当前正在运行，它仍运行 v{adoption.from}。采用会改变该任务的执行快照：主进程据此撤销该任务的运行面板启停通道，之后的启停会遭到拒绝（service-owner-inventory-unconfirmed），需重建该任务的 Host 后才能再启停（本版未提供重建入口）；在那之前 v{adoption.to} 不会在运行面板生效。</p>
+        {adoption.restartNeeded.length > 0 && <p className="mt-1">重启影响：{adoption.restartNeeded.map((entry) => entry.taskId === taskId
+          ? `本次采用的任务 ${taskName(entry.taskId)} 的 ${entry.name}（v${entry.from} → v${entry.to}）`
+          : `任务 ${taskName(entry.taskId)} 的 ${entry.name} 仍固定 v${entry.from}，需显式采用 v${entry.to} 并重建该任务的 Host`).join("；")}</p>}
+      </div>
       <div className="mt-2 flex justify-end gap-2"><Button type="button" size="sm" variant="ghost" disabled={adopting} onClick={() => setAdoption(null)}>取消</Button><Button type="button" size="sm" disabled={adopting} onClick={() => void adopt(true)}>确认采用 v{adoption.to}</Button></div>
     </div>}
-    {adoption?.adopted && <p role="status" className="mt-2 break-words text-muted">已采用 v{adoption.to}（原 v{adoption.from}）；仅改动固定的模板版本，未重启任何进程，需在运行面板显式停止再启动后生效。</p>}
+    {adoption?.adopted && <p role="status" className="mt-2 break-words text-muted">已采用 v{adoption.to}（原 v{adoption.from}）；仅改动固定的模板版本，未重启任何进程。该任务的运行面板启停通道已随执行快照撤销，启停会遭到拒绝（service-owner-inventory-unconfirmed），需重建该任务的 Host 后才能启停（本版未提供重建入口），届时启动使用 v{adoption.to}。</p>}
     {bound && <SavedServiceConfigPreview key={`${taskId}/${bound.templateVersion}`} projectId={template.projectId} taskId={taskId} serviceId={bound.serviceId} templateVersion={bound.templateVersion} />}
     {!bound && state?.taskId === taskId && <fieldset disabled={pending} className="mt-3 min-w-0">
       <div className="grid gap-3 sm:grid-cols-2">

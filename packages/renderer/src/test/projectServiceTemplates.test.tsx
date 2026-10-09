@@ -170,7 +170,10 @@ it("reviews an existing shared template row by row, then writes one new version 
   expect(screen.getByText("新增：API_URL")).toBeInTheDocument();
   expect(screen.getByText(/启动字段差异：有/)).toBeInTheDocument();
   expect(screen.getByText(/已有任务绑定保留原模板版本；本页不会重启服务或让绑定改用新版本/)).toBeInTheDocument();
-  expect(screen.getByText(/受影响：任务 任务甲 的 API（v1 → v2）仍固定 v1/)).toBeInTheDocument();
+  // The panel shows the binding's own pin, which need not be the revision being edited here.
+  expect(screen.getByText(/面板显示的是该绑定自己固定的版本 → v2/)).toBeInTheDocument();
+  expect(screen.queryByText(/采用（v1 → v2/)).toBeNull();
+  expect(screen.getByText(/受影响：任务 任务甲 的 API（v1 → v2）仍固定 v1，需显式采用 v2 并在该任务 Host 重建后才会用 v2 启动/)).toBeInTheDocument();
   expect(screen.getByText(/已有任务绑定保留原模板版本/)).toBeInTheDocument();
   expect(calls[1]).toEqual({ op: "update", projectId, serviceId, expectedVersion: 1, confirm: false,
     descriptor: { ...saved.descriptor, workdir: "apps/api" },

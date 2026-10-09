@@ -188,4 +188,13 @@ describe.skipIf(process.platform === "win32")("installed actual-child catalog / 
     expect(c.inventory.control().error).toBe("service-owner-inventory-unconfirmed");
     expect(c.write.claimWrite("main", "auto", { kind: "turn", label: "changed" }).ok).toBe(false);
   });
+  it("revokes the same snapshot for the slice's own adoption op, so panel control and writes are refused", async () => {
+    const f = fixture(), first = f.add(), c = connect(f); await c.prepare();
+    f.catalog.saveTemplate({ projectId: first.projectId, serviceId: first.serviceId, expectedVersion: 1, descriptor: first.descriptor, shared: [] });
+    f.catalog.adoptTaskBinding({ projectId: first.projectId, taskId: f.taskId, serviceId: first.serviceId, templateVersion: 2 });
+    expect(f.catalog.ownerSnapshot(f.taskId, f.workspaceId, {}).entries[0]?.templateVersion).toBe(2);
+    expect(() => c.main.verify(c.child as never)).toThrow("service-owner-inventory-unconfirmed");
+    expect(c.inventory.control().error).toBe("service-owner-inventory-unconfirmed");
+    expect(c.write.claimWrite("main", "auto", { kind: "turn", label: "adopted" }).ok).toBe(false);
+  });
 });

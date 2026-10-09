@@ -106,8 +106,14 @@ it("adopts v2 only after a confirmation that shows from → to and the restart-n
   await screen.findByText("已绑定 · v1 · repo");
   fireEvent.click(screen.getByRole("button", { name: /核对采用 v2/ }));
   expect(await screen.findByText(/待采用：API · v1 → v2/)).toBeInTheDocument();
-  expect(screen.getByText(/需显式重启：任务 任务甲 的 API（v1 → v2）/)).toBeInTheDocument();
+  expect(screen.getByText(/本次采用的任务 任务甲 的 API（v1 → v2）/)).toBeInTheDocument();
   expect(screen.getByText(/未启动、停止或重启任何进程/)).toBeInTheDocument();
+  // The pin change revokes this task's owner snapshot, so the page must not send the human to a
+  // run-panel stop/start step that the same change makes unavailable.
+  expect(screen.getByText(/撤销该任务的运行面板启停通道/)).toBeInTheDocument();
+  expect(screen.getByText(/service-owner-inventory-unconfirmed/)).toBeInTheDocument();
+  expect(screen.getByText(/本版未提供重建入口/)).toBeInTheDocument();
+  expect(screen.queryByText(/在运行面板先停止再启动/)).toBeNull();
   expect(serviceCatalogOp).toHaveBeenCalledWith({ op: "adoptBinding", projectId: template.projectId, taskId: "task-a",
     serviceId: template.serviceId, templateVersion: 2, confirm: false });
   // Nothing is written yet: the binding still shows its pinned revision.
@@ -115,11 +121,36 @@ it("adopts v2 only after a confirmation that shows from → to and the restart-n
   expect(serviceCatalogOp.mock.calls.filter(([request]) => (request as Record<string, unknown>)["confirm"] === true)).toHaveLength(0);
   fireEvent.click(screen.getByRole("button", { name: "确认采用 v2" }));
   expect(await screen.findByText(/已采用 v2（原 v1）/)).toBeInTheDocument();
+  expect(screen.getByText(/未重启任何进程/)).toBeInTheDocument();
+  expect(screen.getByText(/需重建该任务的 Host 后才能启停/)).toBeInTheDocument();
   expect(screen.getByText("已绑定 · v2 · repo")).toBeInTheDocument();
+  expect(serviceCatalogOp.mock.calls.filter(([request]) => (request as Record<string, unknown>)["confirm"] === true)).toHaveLength(1);
   expect(serviceCatalogOp).toHaveBeenLastCalledWith({ op: "adoptBinding", projectId: template.projectId, taskId: "task-a",
     serviceId: template.serviceId, templateVersion: 2, confirm: true });
   // The adopted revision is the pinned one, so the control is gone.
   expect(screen.queryByRole("button", { name: /采用/ })).toBeNull();
+});
+
+it("calls a sibling still-pinned binding a candidate, and keeps the confirm buttons out of the live region", async () => {
+  const sibling = { taskId: "task-b", serviceId: template.serviceId, name: "API", from: 1, to: 2 };
+  const serviceCatalogOp = vi.fn(async (request: Record<string, unknown>) => request["op"] === "taskBindings"
+    ? { ok: true, payload: [bound] }
+    : { ok: true, payload: { ...adoptReview, restartNeeded: [adoptReview.restartNeeded[0], sibling] } });
+  window.pidock = { taskOp: vi.fn(async () => roots()), serviceCatalogOp };
+  render(<TaskServiceBinding template={newerTemplate} tasks={[...tasks, { taskId: "task-b", name: "任务乙" }]} />);
+  await screen.findByText("已绑定 · v1 · repo");
+  fireEvent.click(screen.getByRole("button", { name: /核对采用 v2/ }));
+  expect(await screen.findByText(/待采用：API · v1 → v2/)).toBeInTheDocument();
+  // Only this binding is written by the adoption; the sibling is still pinned and needs its own adoption.
+  expect(screen.getByText(/本次采用的任务 任务甲 的 API（v1 → v2）/)).toBeInTheDocument();
+  expect(screen.getByText(/任务 任务乙 的 API 仍固定 v1，需显式采用 v2/)).toBeInTheDocument();
+  expect(screen.queryByText(/任务 任务乙 的 API（v1 → v2）/)).toBeNull();
+  // The live region carries the text only: the confirm/cancel controls stay outside it.
+  const live = screen.getByText(/未启动、停止或重启任何进程/).closest("[role='status']");
+  expect(live).not.toBeNull();
+  expect(live?.querySelector("button")).toBeNull();
+  expect(screen.getByRole("button", { name: "确认采用 v2" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "取消" })).toBeInTheDocument();
 });
 
 it("surfaces the real refusal and leaves the shown version unchanged", async () => {
