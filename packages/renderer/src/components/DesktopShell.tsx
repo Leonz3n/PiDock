@@ -238,8 +238,8 @@ export function DesktopShell({
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         {/* #49: at the production minimum a task page leaves the column ~192px of
             breadcrumb; without `shrink-0`/`whitespace-nowrap` on the literal
-            segments, CJK text wrapped mid-word and the header grew a scrollbar.
-            The project/task names are the only parts that truncate. */}
+            segments, CJK text wrapped one character per line and pushed the 48px
+            bar taller. The project/task names are the only parts that truncate. */}
         <header data-testid="desktop-breadcrumb" className="flex min-h-12 shrink-0 items-center gap-2 border-b border-line bg-paper px-4 text-[12px] below-mid:px-3">
           <span className="shrink-0 whitespace-nowrap text-muted">工作区</span>
           <span className="shrink-0 text-[#cfd3d7]">/</span>
