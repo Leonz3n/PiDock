@@ -31,7 +31,7 @@ import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { shutdownTestRegistry } from "./shutdown-test-registry.mjs";
 
 // The dev-server override is inadmissible evidence for #38 box 5 / #41 box 4: clear it
@@ -237,7 +237,15 @@ async function run() {
 
     let revision = "unknown"; let trackedFilesDirty = "unknown";
     try { revision = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8", cwd: repoRoot }).trim(); } catch { /* recorded as unknown */ }
-    try { trackedFilesDirty = execFileSync("git", ["status", "--porcelain", "--untracked-files=no"], { encoding: "utf8", cwd: repoRoot }).trim() ? "true" : "false"; } catch { /* recorded as unknown */ }
+    try {
+      // Report whether the SOURCE tree was clean. This run rewrites the evidence directory
+      // named by `--out`, whose tracked bytes legitimately differ until the result is
+      // committed, so that directory is excluded; every other tracked path must be clean.
+      const excluded = relative(repoRoot, output);
+      const args = ["status", "--porcelain", "--untracked-files=no", "--", "."];
+      if (excluded && !excluded.startsWith("..") && !isAbsolute(excluded)) args.push(`:(exclude)${excluded}`);
+      trackedFilesDirty = execFileSync("git", args, { encoding: "utf8", cwd: repoRoot }).trim() ? "true" : "false";
+    } catch { /* recorded as unknown */ }
     const projectRecord = projects.list().projects.find((row) => row.id === project.id);
     const log = {
       ticket: "#38 box 5 / #39 box 4 / #40 box 4 / #41 boxes 1,4 — Desktop 项目与未归属任务接入持久 Host",
