@@ -261,7 +261,15 @@ describe.skipIf(process.platform === "win32")("#7 catalog-driven service executi
     // (b) real, bounded, redacted output of the running children.
     await until(() => existsSync(join(f.taskDir, "repo-a/svc-a", "started-a.txt")), "first service to start");
     await until(() => existsSync(join(f.taskDir, "repo-a/svc-b", "started-b.txt")), "second service to start");
-    await untilLog(() => f.log(first), first, (entries) => entries.length >= 6);
+    // Wait for the evidence this block actually asserts, not a proxy for it: a
+    // bare `entries.length >= 6` can be satisfied while the lines asserted below
+    // have not arrived in the captured log yet (load-dependent, and the added
+    // real-process suites in this repo make that likely).
+    await untilLog(() => f.log(first), first, (entries) => entries.length >= 6
+      && entries.includes("ambient:absent")
+      && entries.includes("ready:hello-a:a")
+      && entries.includes("token:••••••••")
+      && entries.includes("[output line exceeded 2000 characters]"));
     const firstLines = await f.log(first);
     expect(firstLines).toContain("ready:hello-a:a");
     expect(firstLines).toContain("token:••••••••");
@@ -273,7 +281,9 @@ describe.skipIf(process.platform === "win32")("#7 catalog-driven service executi
     const firstPid = reportedPid(firstLines);
     expect(alive(firstPid)).toBe(true);
     // The two services resolved their own layers into independent env objects.
-    await untilLog(() => f.log(second), second, (entries) => entries.some((line) => line.startsWith("pid:")));
+    await untilLog(() => f.log(second), second, (entries) => entries.some((line) => line.startsWith("pid:"))
+      && entries.includes("ambient:absent")
+      && entries.includes("ready:hello-b:b"));
     const secondLines = await f.log(second);
     expect(secondLines).toContain("ready:hello-b:b");
     expect(secondLines).toContain("ambient:absent");
