@@ -89,6 +89,10 @@ function fixture(): Fixture {
     taskId: "task-aaaaaaaa", name: "task-aaaaaaaa", dirId: "task-aaaaaaaa", branch: "task-branch", root, taskDir,
     remoteBranch: "main", baseCommit: "test", repos: ["repo"], now: new Date().toISOString(),
   })));
+  // Task creation always writes this regular marker file (holding the task id)
+  // directly in the task folder (`main/project-task-creation.ts`), so a search
+  // rooted at the task folder must skip it exactly like the `.pidock-*` folders.
+  writeFileSync(join(taskDir, ".pidock-creation"), "task-aaaaaaaa");
 
   const otherTaskDir = join(root, "task-bbbbbbbb");
   mkdirSync(otherTaskDir);
@@ -257,6 +261,11 @@ it("lists and searches inside the task and runs a command in the worktree", asyn
   expect(command.text).toContain(h.fixture.worktreeReal);
   expect(command.text).toContain("original");
   expect(command.text).toContain("exit 0");
+  // `.gitignore` is a legitimate token, not a `.git` control path: the escape
+  // hardening must not refuse it.
+  const gitignore = await h.prompt("exec.run", { command: "echo node_modules > .gitignore" });
+  expect(gitignore.text).toContain("exit 0");
+  expect(readFileSync(join(h.fixture.worktree, ".gitignore"), "utf8")).toBe("node_modules\n");
   await h.host.shutdownSdk();
 });
 
@@ -319,6 +328,16 @@ it("refuses every escape vector by name and changes nothing on disk", async () =
     // operator-glued token is refused the same way.
     { tool: "exec.run", args: { command: "dd of=.git" }, code: "tool-refused:invalid-target" },
     { tool: "exec.run", args: { command: "GIT_DIR=.GIT git status" }, code: "tool-refused:invalid-target" },
+    // A quoting/escaping spelling is the same control file to `/bin/sh`: POSIX
+    // quote removal turns `.g\it`, `.gi\t` and `.g"i"t` into `.git`, but the raw
+    // token carries no `/`, so a raw-token-only test drops it before any check.
+    // `.gi\'t` is refused fail-closed too: the shell keeps its escaped quote
+    // literal, but a filter that decodes escapes must not have to model the
+    // exact quoting pass to stay safe.
+    { tool: "exec.run", args: { command: "echo x > .g\\it" }, code: "tool-refused:invalid-target" },
+    { tool: "exec.run", args: { command: "echo x > .gi\\t" }, code: "tool-refused:invalid-target" },
+    { tool: "exec.run", args: { command: "echo x > .gi\\'t" }, code: "tool-refused:invalid-target" },
+    { tool: "exec.run", args: { command: "echo x > .g\"i\"t" }, code: "tool-refused:invalid-target" },
     // The Host's own bookkeeping is not task content, whatever the case the
     // caller names it in (`.PIDOCK-*` and `TASK.JSON` are the same entries on
     // the product's filesystems).
@@ -362,6 +381,25 @@ it("never returns the task host's own bookkeeping from a search rooted at the ta
   const record = await h.prompt("fs.search", { path: ".", pattern: "task-aaaaaaaa" });
   expect(record.text).not.toContain("task.json");
   expect(record.text).not.toContain(".pidock-");
+  await h.host.shutdownSdk();
+});
+
+it("never returns the .pidock-creation marker or any .pidock-* file, but still returns a repo file", async () => {
+  const h = await harness();
+  await h.host.configureSdkProvider({ config: PROVIDER_CONFIG, credential: "synthetic-key" });
+  await h.host.setPermission("main", "auto");
+  // A regular `.pidock-*` file (not a directory) beside the marker: the
+  // traversal's directory skip alone would still hand both back as content.
+  writeFileSync(join(h.fixture.taskDir, ".pidock-notes.txt"), "task-aaaaaaaa\n");
+
+  const marker = await h.prompt("fs.search", { path: ".", pattern: "task-aaaaaaaa" });
+  expect(marker.text).not.toContain(".pidock-creation");
+  expect(marker.text).not.toContain(".pidock-notes");
+  expect(marker.text).not.toContain(".pidock-");
+
+  // The skip narrows Host state only: a normal repository file is still found.
+  const repo = await h.prompt("fs.search", { path: ".", pattern: "original" });
+  expect(repo.text).toContain("repo/notes.txt:1: original");
   await h.host.shutdownSdk();
 });
 

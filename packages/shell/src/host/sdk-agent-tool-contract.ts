@@ -91,7 +91,7 @@ export const SDK_AGENT_TOOL_SPECS: readonly SdkAgentToolSpec[] = [
     kind: "command",
     summary: "Run a shell command in a task worktree",
     description:
-      "Run `command` with `/bin/sh -c`, in `cwd` (default: the task's first worktree). `cwd` must stay inside a task worktree, and a command whose expansion cannot be decoded (`$`, backticks) is refused outright — even under `default`, so `echo $PWD` is refused instead of offered for approval. This is a filter, not a sandbox: only tokens that contain `/`, start with `~`, are exactly `..`, or name a `.git` path are examined, so a path the shell re-encodes (`printf '\\057tmp\\057x' | xargs touch`) still runs under `auto`, with no approval. Output and runtime are bounded.",
+      "Run `command` with `/bin/sh -c`, in `cwd` (default: the task's first worktree). `cwd` must stay inside a task worktree, and a command whose expansion cannot be decoded (`$`, backticks) is refused outright — even under `default`, so `echo $PWD` is refused instead of offered for approval. This is a filter, not a sandbox: only tokens that contain `/`, start with `~`, are exactly `..`, or name a `.git` path (case-insensitively, including simple quoting/backslash spellings like `.g\\it`) are examined, so a path the shell re-encodes (`printf '\\057tmp\\057x' | xargs touch`) still runs under `auto`, with no approval. Output and runtime are bounded.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -175,6 +175,6 @@ export function sdkAgentSystemPrompt(input: { taskDir: string; worktrees: readon
     "- fs.write: create or overwrite a file in a worktree (args: path, content)",
     "- exec.run: run a shell command in a worktree (args: command, optional cwd)",
     "Every write and command is subject to the task's permission gate and write lock: a refusal comes back as a tool result with a reason, so adapt instead of retrying the same call.",
-    "`exec.run` runs a real shell through a filter, not a sandbox: a command containing `$` or a backtick is refused outright (no approval is offered, even under `default`), a token naming `.git` is refused whatever its case or quoting, and only path-shaped tokens (`/`, `~`, `..`) are examined at all. Never treat it as an isolation boundary.",
+    "`exec.run` runs a real shell through a filter, not a sandbox: a command containing `$` or a backtick is refused outright (no approval is offered, even under `default`), a token naming `.git` is refused whatever its case, quoting or simple backslash escapes (`echo x > .g\\it` is the same control file as `echo x > .git`), and only path-shaped tokens (`/`, `~`, `..`) are examined at all. Never treat it as an isolation boundary.",
   ].join("\n");
 }
