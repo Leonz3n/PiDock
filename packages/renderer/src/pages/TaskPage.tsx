@@ -305,7 +305,9 @@ export function TaskPage({ task, sessionId }: { task: Task; sessionId: string })
       return;
     }
     for (const service of localServices) {
-      void useHostStore.getState().setServiceRunning(task.id, service.id, !allRunning);
+      void useHostStore.getState().setServiceRunning(task.id, service.id, !allRunning).catch((error: unknown) => {
+        pushToast(error instanceof Error ? error.message : "服务启停失败，请重试");
+      });
     }
     pushToast(allRunning ? "已请求停止本地服务" : "已请求启动本地服务");
   };
@@ -488,7 +490,9 @@ export function TaskPage({ task, sessionId }: { task: Task; sessionId: string })
                   readonly={session.permission === "read"}
                   onReadonlyAttempt={() => pushToast("当前是只读会话，请先调整会话权限")}
                   onToggleService={(serviceId, running) => {
-                    void useHostStore.getState().setServiceRunning(task.id, serviceId, running);
+                    void useHostStore.getState().setServiceRunning(task.id, serviceId, running).catch((error: unknown) => {
+                      pushToast(error instanceof Error ? error.message : "服务启停失败，请重试");
+                    });
                   }}
                   onSetServiceMode={(serviceId, mode) => {
                     void useHostStore.getState().setServiceMode(task.id, serviceId, mode);

@@ -17,6 +17,7 @@ import {
 import { protocolBindingFromHost } from "../data/protocolBinding";
 import {
   loadTaskServices,
+  runBoundTaskServiceThroughShell,
   serviceLogFromHost,
   shellFailure,
   type BoundServiceRow,
@@ -57,11 +58,12 @@ import {
  * Controls this build cannot serve (local/remote switching, remote dependency
  * and routing reads, live log streaming, page discovery and embedding, page
  * marks) stay visible and explicitly marked 未接线 with the reason; none of
- * them is filled with sample data. Service start/stop is no longer that kind
- * of gap — the Host now executes a service registered from the trusted
- * catalog and the run panel's per-service toggle already drives it through
- * `task/controlService` — but this dock still renders no trigger, so the row
- * says exactly that instead of claiming the page has none.
+ * them is filled with sample data. Service start/stop is real: the run panel's
+ * per-service trigger drives main's trusted catalog path
+ * (`shell/serviceCatalogOp {op:"runTaskService"}` - main resolves the launch,
+ * registers it on the task Host and controls it), so no row here is labelled
+ * 未接线 for a control that is wired, and no wire is claimed for a control that
+ * is not.
  */
 export type DesktopTool = "runtime" | "browser" | "files" | "terminal" | "logs" | "protocol";
 
@@ -88,7 +90,6 @@ export const DESKTOP_TOOLS_UNWIRED: { id: string; label: string; reason: string 
  * never replaced by sample data.
  */
 export const DESKTOP_TOOL_CONTROLS_UNWIRED: Record<string, string> = {
-  "service-control": "此坞不提供启停按钮：Host 只执行可信服务目录登记的任务绑定服务；运行面板的启停已按人工路径走 task/controlService，本坞不新增触发器",
   "service-mode": "本地/远程切换需要任务覆盖写入，Host 无对应读写能力",
   "remote-deps": "Host 无本任务远程依赖清单读取 op",
   routing: "Host 无生效路由/请求去向读取 op",
@@ -123,7 +124,19 @@ function statusText(row: BoundServiceRow): string {
     const text = SERVICE_STATE_TEXT.owner[status.state] ?? status.state;
     return status.executionAvailable ? text : `${text} · Host 未接管进程`;
   }
-  return `${SERVICE_STATE_TEXT.registry[status.lifecycle] ?? status.lifecycle} · 配方 v${status.templateVersion} · ${status.resolvedKeys.length} 项环境变量`;
+  // `lifecycle` is process liveness only; the Host never reports a
+  // reachability probe as health, so the row states that it was not probed
+  // instead of implying a passing health check.
+  const health = status.health === "not-probed" ? " · 健康未探测" : "";
+  return `${SERVICE_STATE_TEXT.registry[status.lifecycle] ?? status.lifecycle} · 配方 v${status.templateVersion} · ${status.resolvedKeys.length} 项环境变量${health}`;
+}
+
+/** The Host's own liveness answer for one row; a failed read is never "running". */
+function serviceRunning(row: BoundServiceRow): boolean {
+  const status = row.status;
+  if (status?.kind === "owner") return status.state === "running";
+  if (status?.kind === "registry") return status.lifecycle === "running";
+  return false;
 }
 
 function serviceName(row: BoundServiceRow): string {
@@ -579,6 +592,43 @@ function UnwiredControls({ id, label }: { id: string; label: string }) {
   );
 }
 
+/**
+ * Real human start/stop for one bound service ([PiDock 04] #7). The click
+ * sends only project/task/service/action to main's trusted catalog path
+ * (`runTaskService`), which resolves the launch, registers it on the task Host
+ * and controls it; the panel then re-reads the Host's own status. A refusal is
+ * shown verbatim - the control never falls back to fixture data and never
+ * claims a state the Host did not confirm.
+ */
+function ServiceControl({ taskId, projectId, row, onChanged }: {
+  taskId: string;
+  projectId: string;
+  row: BoundServiceRow;
+  onChanged: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | undefined>(undefined);
+  const running = serviceRunning(row);
+  const action = running ? "stop" : "start";
+  const submit = async () => {
+    setBusy(true);
+    setError(undefined);
+    const result = await runBoundTaskServiceThroughShell({ projectId, taskId, serviceId: row.binding.serviceId, action });
+    setBusy(false);
+    if (!result.ok) { setError(result.error); return; }
+    onChanged();
+  };
+  return (
+    <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5" data-service-control={row.binding.serviceId}>
+      <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => { void submit(); }}>
+        {running ? "停止" : "启动"}
+      </Button>
+      <span className="text-[10px] text-muted">{running ? "停止本任务已登记的服务进程" : "按项目配方启动本服务"}</span>
+      {error !== undefined && <span role="alert" className="min-w-0 break-words text-[10px] text-[#ad4545]">{error}</span>}
+    </div>
+  );
+}
+
 function RunTool({ taskId }: { taskId: string }) {
   const [load, setLoad] = useState<TaskServicesLoad | null>(null);
   const [revision, setRevision] = useState(0);
@@ -591,6 +641,7 @@ function RunTool({ taskId }: { taskId: string }) {
 
   if (load === null) return <p className="text-xs text-muted">正在读取任务服务…</p>;
   if (!load.ok) return <p role="alert" className="break-words border border-[#e0b4b4] bg-[#fdf3f3] p-2 text-xs text-[#ad4545]">{load.error}</p>;
+  const boundProjectId = load.projectId;
 
   return (
     <div className="flex min-h-0 flex-col gap-2">
@@ -599,7 +650,7 @@ function RunTool({ taskId }: { taskId: string }) {
         <Button type="button" size="sm" variant="outline" onClick={() => setRevision((value) => value + 1)}>刷新</Button>
       </div>
       <UnwiredControls id="runtime-config" label="配置" />
-      {load.projectId === null ? (
+      {boundProjectId === null ? (
         load.associationState === "unavailable" ? (
           <p role="status" className="border border-line bg-soft px-2 py-1.5 text-[11px] text-muted" data-testid="dock-runtime-unavailable" data-association-state="unavailable">
             Host 报告该任务归属状态暂不可用，无法确认归属项目；此面板不列举服务，也不冒充空清单。
@@ -616,7 +667,7 @@ function RunTool({ taskId }: { taskId: string }) {
             <p className="text-[11px] text-muted">本任务服务 · {load.rows.length}</p>
             <ul className="mt-1 flex flex-col gap-1" data-testid="dock-service-rows">
               {load.rows.map((row) => {
-                const running = row.status?.kind === "owner" ? row.status.state === "running" : row.status?.kind === "registry" ? row.status.lifecycle === "running" : false;
+                const running = serviceRunning(row);
                 return (
                   <li key={row.binding.serviceId} className="border border-line bg-paper px-2 py-1.5 text-[11px]" data-service-id={row.binding.serviceId}>
                     <div className="flex min-w-0 items-center gap-1.5">
@@ -635,7 +686,7 @@ function RunTool({ taskId }: { taskId: string }) {
                       绑定 v{row.binding.templateVersion} · {row.binding.rootId}{row.binding.subdir ? `/${row.binding.subdir}` : ""}
                       {row.binding.privateKeys.length > 0 ? ` · 私有引用 ${row.binding.privateKeys.length} 项` : ""}
                     </p>
-                    <UnwiredControls id="service-control" label="启动 / 停止" />
+                    <ServiceControl taskId={taskId} projectId={boundProjectId} row={row} onChanged={() => setRevision((value) => value + 1)} />
                     <UnwiredControls id="service-mode" label="本地 / 远程" />
                   </li>
                 );
