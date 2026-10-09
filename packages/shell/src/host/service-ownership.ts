@@ -185,6 +185,61 @@ export function readProcessPgid(pid: number): number | null {
   }
 }
 
+/** One row of the OS process table: the fields descendant reclaim needs. */
+export interface ProcessTableRow {
+  pid: number;
+  ppid: number;
+  pgid: number;
+}
+
+/**
+ * Snapshot of the OS process table (`pid`, `ppid`, `pgid`) via `ps`.
+ *
+ * Returns `[]` where the probe is unavailable (e.g. Windows), never a fabricated
+ * row: a caller that reclaims descendants must fail closed when the evidence it
+ * needs cannot be read, so "no rows" and "no processes" produce the same safe
+ * (empty) answer here and the pipe-holder check upstream decides.
+ */
+export function readProcessTable(): ProcessTableRow[] {
+  if (process.platform === "win32") return [];
+  let printed: string;
+  try {
+    printed = execFileSync("/bin/ps", ["-eo", "pid=,ppid=,pgid="], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") return [];
+    try {
+      printed = execFileSync("ps", ["-eo", "pid=,ppid=,pgid="], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    } catch {
+      return [];
+    }
+  }
+  const rows: ProcessTableRow[] = [];
+  for (const line of printed.split("\n")) {
+    const fields = line.trim().split(/\s+/);
+    if (fields.length < 3) continue;
+    const pid = Number.parseInt(fields[0]!, 10);
+    const ppid = Number.parseInt(fields[1]!, 10);
+    const pgid = Number.parseInt(fields[2]!, 10);
+    if (Number.isInteger(pid) && Number.isInteger(ppid) && Number.isInteger(pgid) && pid >= 1 && ppid >= 0 && pgid >= 1) {
+      rows.push({ pid, ppid, pgid });
+    }
+  }
+  return rows;
+}
+
+/**
+ * The live pids the OS reports as members of process group `pgid` (its leader
+ * included while it is alive). Empty when the probe is unavailable or the group
+ * no longer exists.
+ */
+export function processGroupMemberPids(pgid: number): number[] {
+  if (!Number.isInteger(pgid) || pgid <= 1) return [];
+  return readProcessTable()
+    .filter((row) => row.pgid === pgid && row.pid > 1)
+    .map((row) => row.pid)
+    .sort((a, b) => a - b);
+}
+
 /**
  * The only identity decision in this slice. Signal nothing unless this returns
  * `"verified"`.
