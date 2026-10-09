@@ -89,6 +89,12 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   按原文呈现，不回落 fixture 数据，也不冒充 Agent 门禁路径。只有壳确实未连接时才回落
   memory 镜像（`DesktopToolDock` 运行面板的启停触发器与 `TaskPage` 的启停开关共用
   这一个入口）。
+  - **人工入口不带会话（明示，不是隐藏）**：运行面板的启停触发器不接收会话/权限输入，
+    Host 的人类路径也不按会话门禁（`host-guards.ts` 要求 main 盖的 `shell-ui` 来源证明，
+    `service-control.ts` 的只读拒绝/默认询问只作用于 Agent 路径）。这与既有语义一致：
+    面板按钮是用户直接操作，不是 Agent 调用；Agent 启停仍必须经会话门禁。依赖会话的
+    旧面板（`RuntimePanel`）在界面层仍拦截只读会话；新运行面板的触发器本身不按会话区分，
+    只把 Host 的拒绝原文呈现。
 - **真实服务执行与其边界**（隐患记录，不只写成功路径）：任务绑定的服务能被真实启动。
   `runtime.ts` 导出的 `runTaskService` 从可信服务目录解析绑定（pin 版本 + realpath 程序 +
   校验 cwd 在任务根内 + 分层环境），以自带的 `service-catalog` origin 走
@@ -107,15 +113,18 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
     身份、三态核验（verified / mismatch / unobservable）、**同一次调用未核验身份绝不发信号**
     （`service-processes.ts` 的 `verifySameHostLaunch`）、仅在进程组正向证据下回收后代、
     win32 显式 `unsupported-platform`（`start`/信号路径均拒绝）。
-  - **仍未接线（本切片未触及，剩余风险）**：`host.ts` 的 `serviceDriverFor` 未注入
-    `diskServiceOwnershipLog`，因此 #48 的耐久所有权台账（跨重启拒绝重复启动、按记录
-    核验身份后停止孤儿）在 Host 生产路径上不可达：`TaskServiceProcesses` 的
-    `stopRecordedLaunch` / `refuseRecordedLaunch` 只以内存句柄为证据。Host/main 死亡后
-    孤儿进程对耐久层不可见，重启后该 id 的 `task/serviceStatus` 报 `unknown-service`
-    （不谎报已停止），再次启动会拉起第二个实例——记为剩余风险，需后续切片决定是否接线。
-  - **仍缺**：后代退出回收中已脱离进程组且关闭继承 stdio 的后代（超出当前证据模型，
-    需 cgroup/Job Object）；Windows 进程树终止（`start` 整体拒绝）；cwd 的 `realpathSync`
-    校验与 `spawn` 之间不是原子打开（TOCTOU，已检测未消除）。
+  - **已接线（本切片修复）**：`host.ts` 的 `serviceDriverFor` 现按任务注入
+    `diskServiceOwnershipLog({ taskId, taskDir })`（工厂与 #48 的模块同一份），因此耐久
+    所有权台账在生产路径可达：真实启动在 `start` 解析前写入 `(pid, nonce)`（`close` 后
+    才释放），重启后的 Host 在记录仍可核验时拒绝重复启动（`service-ownership-own-verified`），
+    并按记录核验身份后停止该孤儿。证据：`host/service-execution-wiring.test.ts` 的
+    「records the durable launch identity…」用例经真实 Host 启动后断言记录存在、nonce
+    就是子进程自身的 OS 标记，同一生产工厂的第二个 driver 在孤儿存活期间拒绝重复启动
+    并能核验后停止它；跨重启语义的驱动级契约在 `service-ownership.test.ts`。
+  - **仍缺**：记录存活但所有权不可核验（`orphaned-unverified`）时的恢复路径仍需人工在
+    任务层处理，没有自动接管；后代退出回收中已脱离进程组且关闭继承 stdio 的后代（超出
+    当前证据模型，需 cgroup/Job Object）；Windows 进程树终止（`start` 整体拒绝）；cwd 的
+    `realpathSync` 校验与 `spawn` 之间不是原子打开（TOCTOU，已检测未消除）。
 
 ### 任务浏览器：任务内页面、门禁与标记回传（[PiDock 06] #8）
 
@@ -218,8 +227,8 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   启动时间），绝不按端口或过期 PID 猜测；`planStopScope` 只返回所属任务的身份，
   同名实例属于其他任务时进入 `skipped` 并写明原因。`task/serviceStopScope` 是
   只读计算；真实终止只存在于 #7 的能力路径上（可信服务目录登记的任务绑定服务，
-  `task/controlService` → `TaskServiceProcesses`），且 #7 的生产入口默认拒绝接线
-  （见 #7 章节），不在本节的规划 op 里。
+  `task/controlService` → `TaskServiceProcesses`），#7 的生产入口已按平台门禁接线
+  （POSIX 启用、其他平台具名拒绝，见 #7 章节），不在本节的规划 op 里。
 - **共享外部资源**：`classifyExternalResource` 默认按共享处理，`queue` /
   `dtm-callback` 明确标为 `not-isolated`（消费端与回调端仍是同一实例），
   只有拿到独立实例证据（`isolatedByTask`）才标 `isolated`；任务视图显示资源
@@ -233,8 +242,9 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   （`planServiceGroupThroughShell` / `serviceRunRecordsThroughShell` /
   `serviceStopScopeThroughShell`）与适配器 `serviceTopology(taskId)` 取视图，
   Host 不可用时回落内存投影。
-- **残留（未测/未接线）**：真实 `child_process` 启动、日志流、退出与健康检查
-  未实现（因此 `recordRun` / 停止范围没有生产调用方，只有 Host 类与测试）；
+- **残留（未测/未接线）**：真实 `child_process` 启动、日志流与退出已由 #7 的能力路径
+  提供（`TaskServiceProcesses`，生产入口按平台门禁接线，#7 的生产进程测试覆盖），
+  但 `recordRun` / 停止范围仍没有生产调用方（只有 Host 类与测试），且没有真实健康检查；
   两个任务同时运行并检查真实请求去向未执行（端口与绑定隔离有单元测试）；
   「启动失败后重分配」只在规划阶段验证；真实仓库的依赖缺口探测未运行
   （`missing-binding` 与远程可达检查为规划期证据）；`task/planServiceGroup`

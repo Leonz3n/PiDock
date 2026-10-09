@@ -599,6 +599,15 @@ function UnwiredControls({ id, label }: { id: string; label: string }) {
  * and controls it; the panel then re-reads the Host's own status. A refusal is
  * shown verbatim - the control never falls back to fixture data and never
  * claims a state the Host did not confirm.
+ *
+ * Scope, stated instead of implied: this is the HUMAN path, so it is not
+ * session-scoped (a read-only session does not disable the button) - the
+ * session gate guards Agent control, and the Host's human path is main-attested
+ * rather than session-gated. The renderer also holds no platform fact, so the
+ * trigger is enabled on every platform; where the Host cannot verify a launch
+ * identity (non-POSIX), the click answers with main's named
+ * `unsupported-platform` refusal, shown verbatim, rather than being disabled
+ * behind a claim the renderer cannot make.
  */
 function ServiceControl({ taskId, projectId, row, onChanged }: {
   taskId: string;
@@ -646,7 +655,7 @@ function RunTool({ taskId }: { taskId: string }) {
   return (
     <div className="flex min-h-0 flex-col gap-2">
       <div className="flex items-center justify-between gap-2">
-        <p className="text-[11px] text-muted">任务运行环境 · 只读</p>
+        <p className="text-[11px] text-muted">任务运行环境（启停已接线 · 其余状态只读）</p>
         <Button type="button" size="sm" variant="outline" onClick={() => setRevision((value) => value + 1)}>刷新</Button>
       </div>
       <UnwiredControls id="runtime-config" label="配置" />
