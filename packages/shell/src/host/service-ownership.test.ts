@@ -11,13 +11,13 @@
  * - REAL identity probe: verification reads the live process's own environment
  *   block back from the OS (`/proc/<pid>/environ`, `ps -E -p <pid>`), never a
  *   value the test passed back to the code under test.
- * - NOT covered here (must stay labelled, never claimed): POSIX descendant
- *   reclaim when a detached descendant outlives its leader and keeps holding
- *   stdout/stderr; Windows process-tree termination (UNTESTED; `start` refuses
- *   there); the cwd realpath→spawn TOCTOU window.
+ * - NOT covered here (must stay labelled, never claimed): Windows process-tree
+ *   termination (UNTESTED; `start` refuses there, so no descendant reclaim runs
+ *   on win32); the residual cwd realpath→spawn TOCTOU window (the swap test
+ *   below proves detection, not elimination).
  */
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -25,6 +25,7 @@ import { TaskServiceProcesses } from "./service-processes.js";
 import {
   classifyServiceOwnership,
   diskServiceOwnershipLog,
+  processGroupMemberPids,
   readProcessPgid,
   SERVICE_OWNERSHIP_NONCE_ENV,
   serviceOwnershipState,
@@ -107,8 +108,8 @@ const record = (input: { serviceId: string; pid: number; ownershipNonce: string 
 });
 
 /** A driver whose durable records live in `dir`, with the given stop timeouts. */
-function driver(dir: string, options: { graceMs?: number; confirmMs?: number; durable?: boolean; onExit?: (serviceId: string, reason: string) => void } = {}) {
-  return new TaskServiceProcesses(dir, () => {}, options.onExit ?? (() => {}), (line) => line,
+function driver(dir: string, options: { graceMs?: number; confirmMs?: number; durable?: boolean; onExit?: (serviceId: string, reason: string) => void; onLine?: (serviceId: string, line: string) => void } = {}) {
+  return new TaskServiceProcesses(dir, options.onLine ?? (() => {}), options.onExit ?? (() => {}), (line) => line,
     options.graceMs ?? 3000, options.confirmMs ?? 1000,
     options.durable === false ? undefined : diskServiceOwnershipLog({ taskId: TASK_ID, taskDir: dir }));
 }
@@ -394,6 +395,120 @@ describe.skipIf(process.platform === "win32")("#48 service-launch ownership iden
     await expect(processes.stop("never-started")).rejects.toThrow("not-running: never-started");
     expect(readServiceOwnershipOnDisk(dir).entries).toEqual([]);
     expect(existsSync(join(dir, "service-ownership.json"))).toBe(false);
+  }, 30_000);
+});
+
+/**
+ * A real leader that spawns a real grandchild inheriting its stdout/stderr and
+ * then exits, leaving the grandchild alone holding the pipes. `escaped` makes
+ * the grandchild call `setsid` (Node `detached: true`), so it leaves the
+ * leader's process group while still holding the leader's pipes.
+ */
+function descendantLeaderScript(escaped: boolean): string {
+  return [
+    "const { spawn } = require('node:child_process');",
+    `const child = spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"], { stdio: 'inherit'${escaped ? ", detached: true" : ""} });`,
+    "process.stdout.write('descendant:' + child.pid + '\\n');",
+    "setTimeout(() => process.exit(0), 30);",
+  ].join("\n");
+}
+
+/**
+ * [PiDock 04] (#48) box 2: reclaim a descendant that outlived its leader while
+ * still holding the leader's stdout/stderr. Real subprocesses, real OS process
+ * table, real durable records.
+ */
+describe.skipIf(process.platform === "win32")("#48 descendant reclaim (POSIX real processes)", () => {
+  it("reclaims a descendant that outlived the leader and still holds the leader's stdout/stderr", async () => {
+    const dir = taskDir();
+    const lines: string[] = [];
+    const processes = driver(dir, { graceMs: 1000, confirmMs: 1000, onLine: (_serviceId, line) => lines.push(line) });
+    const leaderPid = await processes.start(plan("tree", dir, ["-e", descendantLeaderScript(false)]));
+    await until(() => lines.some((line) => line.startsWith("descendant:")), "the descendant pid line");
+    const descendantPid = Number(lines.find((line) => line.startsWith("descendant:"))!.slice("descendant:".length));
+    expect(Number.isInteger(descendantPid) && descendantPid > 1).toBe(true);
+    cleanups.push(() => { if (alive(descendantPid)) process.kill(descendantPid, "SIGKILL"); });
+
+    // Real OS evidence: the descendant is a member of the leader's process group.
+    expect(processGroupMemberPids(leaderPid)).toContain(descendantPid);
+
+    // The leader has exited by now; the descendant holds the pipes, so `close`
+    // has NOT fired and the durable record still exists. A stop must reclaim the
+    // descendant from OS evidence and only then report a successful stop.
+    await processes.stop("tree");
+
+    // (i) the reclaim really ended what it claimed to end ...
+    expect(alive(descendantPid)).toBe(false);
+    expect(alive(leaderPid)).toBe(false);
+    expect(processes.ids()).toEqual([]);
+    // ... and only a confirmed stop clears the durable record.
+    expect(readServiceOwnershipOnDisk(dir).entries).toEqual([]);
+  }, 30_000);
+
+  it("fails closed with termination-unconfirmed when a descendant escaped the group and still holds the pipes", async () => {
+    const dir = taskDir();
+    const lines: string[] = [];
+    const processes = driver(dir, { graceMs: 300, confirmMs: 300, onLine: (_serviceId, line) => lines.push(line) });
+    const leaderPid = await processes.start(plan("escaped", dir, ["-e", descendantLeaderScript(true)]));
+    await until(() => lines.some((line) => line.startsWith("descendant:")), "the escaped descendant pid line");
+    const descendantPid = Number(lines.find((line) => line.startsWith("descendant:"))!.slice("descendant:".length));
+    cleanups.push(() => { if (alive(descendantPid)) process.kill(descendantPid, "SIGKILL"); });
+
+    // The descendant left the leader's process group (setsid), so the OS group
+    // probe cannot name it even though it still holds the leader's pipes.
+    await until(() => !alive(leaderPid), "the leader to exit");
+    expect(processGroupMemberPids(leaderPid) ?? []).not.toContain(descendantPid);
+
+    // Unnameable holder: fail closed instead of guessing a stop.
+    await expect(processes.stop("escaped")).rejects.toThrow(/termination-unconfirmed/);
+    // (ii) NO clean stop while a descendant is demonstrably alive ...
+    expect(alive(descendantPid)).toBe(true);
+    // ... and the durable record is kept, never rewritten to "stopped".
+    expect(readServiceOwnershipOnDisk(dir).entries).toHaveLength(1);
+  }, 30_000);
+});
+
+/**
+ * [PiDock 04] (#48) box 4: the cwd `realpath`→`spawn` window. Detection, not
+ * elimination - see the comment in `start`.
+ */
+describe.skipIf(process.platform === "win32")("#48 cwd realpath -> spawn TOCTOU (POSIX real processes)", () => {
+  it("detects a real cwd swap inside the check->spawn window, refuses the launch, and kills the child", async () => {
+    const dir = taskDir();
+    const dirA = join(dir, "a");
+    const dirB = join(dir, "b");
+    mkdirSync(dirA);
+    mkdirSync(dirB);
+    const link = join(dir, "link");
+    symlinkSync(dirA, link);
+    const processes = driver(dir);
+    // A real filesystem swap scheduled to run after `start` has resolved the
+    // path and called `spawn`, but before the spawn event resumes `start` - i.e.
+    // exactly inside the check->spawn window the code must detect.
+    process.nextTick(() => { rmSync(link); symlinkSync(dirB, link); });
+    await expect(processes.start(plan("swap", link, ["-e", "setInterval(() => {}, 1000)"])))
+      .rejects.toThrow("invalid-launch: cwd changed between check and spawn (swap)");
+    // The rejected launch left no live child and wrote no durable record.
+    expect(processes.ids()).toEqual([]);
+    expect(readServiceOwnershipOnDisk(dir).entries).toEqual([]);
+  }, 30_000);
+
+  it("still starts normally through a stable symlinked cwd (detection is not a blanket refusal)", async () => {
+    const dir = taskDir();
+    const real = join(dir, "real");
+    mkdirSync(real);
+    const link = join(dir, "link");
+    symlinkSync(real, link);
+    const processes = driver(dir);
+    const pid = await processes.start(plan("stable", link, ["-e", "setInterval(() => {}, 1000)"]));
+    try {
+      expect(alive(pid)).toBe(true);
+      expect(readServiceOwnershipOnDisk(dir).entries).toHaveLength(1);
+    } finally {
+      await processes.stop("stable");
+    }
+    expect(alive(pid)).toBe(false);
+    expect(readServiceOwnershipOnDisk(dir).entries).toEqual([]);
   }, 30_000);
 });
 
