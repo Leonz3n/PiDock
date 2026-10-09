@@ -1,19 +1,38 @@
 // [PiDock 02d] (#37) real-Electron evidence for the Desktop task-page navigation
 // and view-geometry contract. Run after `pnpm --filter @pidock/shell build`:
-//   pnpm --filter @pidock/shell exec electron scripts/electron-issue37-task-page-layout-capture.mjs \
+//   packages/shell/node_modules/.bin/electron \
+//     packages/shell/scripts/electron-issue37-task-page-layout-capture.mjs \
 //     --out docs/evidence/desktop-task-page
 //
 // It boots the compiled production-main wiring (`createTrustedWindow(..., "production")` +
 // `loadTrustedViews` + the real `createTaskBrowserCapability`/`PerTaskHostRegistry`, exactly the
 // decisions `main.ts:130-180` makes) over a real isolated task root/profile and the built React
 // renderer (`dist/renderer/index.html`, no fixture entry, no Vite/dev override), then captures the
-// four #37 GUI states from a real window:
+// #37 GUI states from a real window:
 //   (1) no task page selected — the real Desktop task list spans the full window
 //   (2) a real, allowlisted task page opened via the production Desktop 浏览器 panel
 //   (3) the multi-task selection rule (a second task's page becomes the visible one, closing it
-//       falls back to the other task's still-open page) and the last-close returning the shell to
+//       restores the other task's still-open page) and the last-close returning the shell to
 //       full width
-//   (4) a real 1440x900 -> 720x560 -> 1440x900 resize with a page open
+//   (4) a real 1440x900 -> 1000x700 -> 720x560 -> 1440x900 resize with a page open
+//
+// Capture contract (why `capture-log.json` is a 1:1, self-consistent inventory):
+// - every (scenario, size) pair is captured exactly once. A state that a scenario returns to is
+//   asserted through its view geometry and recorded in `checks[]` instead of being committed as a
+//   byte-identical look-alike image; every committed PNG therefore shows a state no other
+//   committed PNG shows, and the script refuses to write a bundle whose shots are not pairwise
+//   distinct (sha256) and 1:1 with the PNGs in `--out`.
+// - the committed PNG is the real window capture CROPPED to the window content box
+//   (`getContentBounds()`): the OS title bar is not app content. So
+//   `pixelWidth === width * deviceScaleFactor`, `pixelHeight === height * deviceScaleFactor` and
+//   the `<width>x<height>` in the file name is the logical box of the bitmap itself
+//   (= the CSS content box that `setContentSize` asserted).
+// - the capture happens at the display's own scale factor, so `deviceScaleFactor` is the real
+//   device scale and the bitmap is not an upscale of a smaller capture.
+// - each scenario has to change app state: the resize is captured at a third, strictly interior
+//   width (1000 -> shell 360, not the 280/380 clamps), and the restore-to-A capture shows the page
+//   A navigated to *while it was hidden behind B* (`/a2`) — a state only the restore can produce,
+//   which also proves main restored A's live page instead of loading a fresh one.
 //
 // Opening a task page in production is fail-closed unless the task's own front-end origins are
 // configured. The documented operator configuration is the environment variable
@@ -25,22 +44,22 @@
 // Hang discipline: the deadline timer and the uncaught-error handlers are armed before the
 // compiled `dist` graph is imported (dynamically, inside the guarded region), so a stuck import
 // cannot outlive the watchdog and no failure ever leaves Electron running.
-import { app, desktopCapturer, utilityProcess } from "electron";
+import { app, desktopCapturer, screen, utilityProcess } from "electron";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { shutdownTestRegistry } from "./shutdown-test-registry.mjs";
 
 // The dev-server / fixture task overrides are inadmissible evidence: clear them before boot so
 // this capture can only ever load the packaged `file://` renderer.
-delete process.env["PIDOCK_RENDERER_URL"];
-delete process.env["PIDOCK_TASK_URL"];
-if (process.env["PIDOCK_RENDERER_URL"]) throw Error("PIDOCK_RENDERER_URL survived the clear");
+for (const name of ["PIDOCK_RENDERER_URL", "PIDOCK_TASK_URL"]) delete process.env[name];
+if (process.env["PIDOCK_RENDERER_URL"] || process.env["PIDOCK_TASK_URL"]) throw Error("renderer/task URL overrides survived the clear");
 
 const repoRoot = resolve(import.meta.dirname, "..", "..", "..");
+const harnessFile = resolve(import.meta.dirname, "electron-issue37-task-page-layout-capture.mjs");
 const outArg = process.argv.includes("--out") ? process.argv[process.argv.indexOf("--out") + 1] : "docs/evidence/desktop-task-page";
 const output = isAbsolute(outArg) ? outArg : resolve(repoRoot, outArg);
 // The package's own electron binary is invoked directly (equivalent to
@@ -81,24 +100,32 @@ process.on("unhandledRejection", (error) => exitNow(1, `unhandledRejection ${err
 // would race the explicit app.exit(process.exitCode) with a false-pass exit 0.
 app.on("window-all-closed", () => {});
 
+// The loopback pages this harness serves. Each one is a real HTTP document loaded through the
+// production browser path; `/a2` is the address task A's page navigates to while it is hidden
+// behind task B's page (see scenario 3). The background colours are the anchors the capture uses
+// to prove the crop starts exactly at the window's content box (no OS title bar in the PNG).
+const PAGE_BACKGROUND = { "/a": [15, 42, 67], "/a2": [31, 92, 70], "/b": [58, 36, 16] };
+const pageShell = (foreground, muted) => "<style>html,body{margin:0;height:100%}body{color:" + foreground + ";font:600 42px -apple-system,Segoe UI,sans-serif;" +
+  "display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:14px;padding:48px}" +
+  ".row{font-size:20px;font-weight:400;color:" + muted + "}</style>";
 const PAGE_A = "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><title>任务 A 页面</title>" +
-  "<style>html,body{margin:0;height:100%}body{background:#0f2a43;color:#e8f1fb;font:600 42px -apple-system,Segoe UI,sans-serif;" +
-  "display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:14px;padding:48px}" +
-  ".row{font-size:20px;font-weight:400;color:#9fc3e6}</style></head>" +
-  "<body><div>真实任务页 · A</div><div class=\"row\">对账单详情 · 127.0.0.1 loopback</div>" +
+  pageShell("#e8f1fb", "#9fc3e6") + "</head>" +
+  "<body style=\"background:#0f2a43\"><div>真实任务页 · A</div><div class=\"row\">对账单详情 · 127.0.0.1 loopback</div>" +
   "<div class=\"row\" data-page=\"task-a\">task-browser-page task-a</div></body></html>";
+const PAGE_A2 = "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><title>任务 A 页面 · 已导航</title>" +
+  pageShell("#eafff4", "#c9ecd9") + "</head>" +
+  "<body style=\"background:#1f5c46\"><div>真实任务页 · A · 已导航</div><div class=\"row\">对账单详情 · 127.0.0.1 loopback · /a2</div>" +
+  "<div class=\"row\" data-page=\"task-a2\">task-browser-page task-a · 后台导航后恢复</div></body></html>";
 const PAGE_B = "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><title>任务 B 页面</title>" +
-  "<style>html,body{margin:0;height:100%}body{background:#3a2410;color:#ffe9cf;font:600 42px -apple-system,Segoe UI,sans-serif;" +
-  "display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:14px;padding:48px}" +
-  ".row{font-size:20px;font-weight:400;color:#e2b98a}</style></head>" +
-  "<body><div>真实任务页 · B</div><div class=\"row\">运单查询 · 127.0.0.1 loopback</div>" +
+  pageShell("#ffe9cf", "#e2b98a") + "</head>" +
+  "<body style=\"background:#3a2410\"><div>真实任务页 · B</div><div class=\"row\">运单查询 · 127.0.0.1 loopback</div>" +
   "<div class=\"row\" data-page=\"task-b\">task-browser-page task-b</div></body></html>";
 
 function startPageServer() {
   return new Promise((resolvePromise, reject) => {
     server = createServer((request, response) => {
       const path = (request.url ?? "/").split("?")[0];
-      const body = path === "/a" ? PAGE_A : path === "/b" ? PAGE_B : null;
+      const body = path === "/a" ? PAGE_A : path === "/a2" ? PAGE_A2 : path === "/b" ? PAGE_B : null;
       if (body === null) { response.writeHead(404, { "content-type": "text/plain; charset=utf-8" }); response.end("not found"); return; }
       response.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
       response.end(body);
@@ -111,6 +138,10 @@ function startPageServer() {
 async function run() {
   let stage = "startup";
   const shots = [];
+  const checks = [];
+  let captureSourceName = null;
+  let captureDisplayScale = null;
+  const check = (name, detail) => { checks.push({ name, detail }); };
   // Dynamic imports: the compiled dist graph is pulled in only after the watchdog is armed.
   const { buildTaskDiskRecord, serializeTaskRecord } = await import("../dist/host/task-store.js");
   const { buildHostEnv } = await import("../dist/host/host-guards.js");
@@ -210,8 +241,8 @@ async function run() {
     const fill = (label, value) => evalJs(`(() => { const el = document.querySelector('input[aria-label=' + JSON.stringify(${JSON.stringify(label)}) + ']'); if (!el) throw Error('missing input '+${JSON.stringify(label)}); const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set; setter.call(el,${JSON.stringify(value)}); el.dispatchEvent(new Event('input',{bubbles:true})); return el.value; })()`);
 
     // Fail closed: the loaded entry must be the packaged React renderer over file://.
-    const url = await evalJs("location.href");
-    if (typeof url !== "string" || !/^file:\/\/.*\/renderer\/index\.html$/.test(url)) throw Error(`not the production file:// renderer: ${url}`);
+    const shellEntryUrl = await evalJs("location.href");
+    if (typeof shellEntryUrl !== "string" || !/^file:\/\/.*\/renderer\/index\.html$/.test(shellEntryUrl)) throw Error(`not the production file:// renderer: ${shellEntryUrl}`);
 
     const geometry = () => {
       const content = views.window.getContentBounds();
@@ -227,6 +258,8 @@ async function run() {
         pageVisible: tab ? tab.view.getVisible() : null,
       };
     };
+
+    const colorClose = (rgb, expected) => Math.abs(rgb[0] - expected[0]) <= 12 && Math.abs(rgb[1] - expected[1]) <= 12 && Math.abs(rgb[2] - expected[2]) <= 12;
 
     const captureWindow = async (state, width, height) => {
       stage = `${state} ${width}x${height}`;
@@ -244,28 +277,81 @@ async function run() {
       // Real window-level screenshot: `BrowserWindow.capturePage` only captures the (empty) base
       // webContents, and CDP `Page.captureScreenshot` captures one WebContentsView at a time, so
       // only the OS window source shows the shell and the task page composited as the user sees it.
+      // The thumbnail is requested at this display's own scale factor, so the bitmap has the
+      // device's pixels and `deviceScaleFactor` below is a real device scale, not an upscale.
+      const displayScale = screen.getDisplayMatching(bounds).scaleFactor;
+      if (captureDisplayScale === null) captureDisplayScale = displayScale;
+      else if (captureDisplayScale !== displayScale) throw Error(`display scale changed mid-run: ${captureDisplayScale} -> ${displayScale}`);
       const sources = await desktopCapturer.getSources({
         types: ["window"],
-        thumbnailSize: { width: Math.round(bounds.width * 2), height: Math.round(bounds.height * 2) },
+        thumbnailSize: { width: Math.round(bounds.width * displayScale), height: Math.round(bounds.height * displayScale) },
       });
       const sourceId = views.window.getMediaSourceId();
-      const source = sources.find((candidate) => candidate.id === sourceId) ?? sources.find((candidate) => candidate.name.includes("PiDock"));
+      // Exact `mediaSourceId` match only: the name-based fallback could silently capture another
+      // window, which would still produce a PNG.
+      const source = sources.find((candidate) => candidate.id === sourceId);
       if (!source) throw Error(`no desktopCapturer window source for ${sourceId}: ${JSON.stringify(sources.map((candidate) => candidate.name))}`);
-      const png = source.thumbnail.toPNG();
+      if (captureSourceName === null) captureSourceName = source.name;
+      else if (captureSourceName !== source.name) throw Error(`window source name changed mid-run: ${captureSourceName} -> ${source.name}`);
+      const image = source.thumbnail;
+      const imageSize = image.getSize();
+      const sourcePixels = pngPixelSize(image.toPNG());
+      const bitmap = image.toBitmap();
+      if (bitmap.length !== sourcePixels.width * sourcePixels.height * 4) {
+        throw Error(`unexpected thumbnail bitmap length ${bitmap.length} for a ${sourcePixels.width}x${sourcePixels.height} image`);
+      }
+      const pixelsPerLogical = sourcePixels.width / bounds.width;
+      const cropUnitsPerLogical = imageSize.width / bounds.width;
+      const frame = { x: content.x - bounds.x, y: content.y - bounds.y };
+      if (frame.x < 0 || frame.y < 0 || frame.x * cropUnitsPerLogical !== Math.round(frame.x * cropUnitsPerLogical) || frame.y * cropUnitsPerLogical !== Math.round(frame.y * cropUnitsPerLogical)) {
+        throw Error(`window frame offset is not a whole number of bitmap pixels: ${JSON.stringify({ frame, cropUnitsPerLogical })}`);
+      }
+      const before = geometry();
+      // The crop has to start exactly where the app content starts. When a task page is visible the
+      // page's own top edge is the proof: the first row whose page-area pixel carries the page's
+      // background colour must be the row the crop starts at (the rows above are OS title bar).
+      let boundaryRow = null;
+      if (before.pageTaskId !== null && before.pageUrl !== null && before.pageBounds !== null) {
+        const expected = PAGE_BACKGROUND[new URL(before.pageUrl).pathname];
+        if (expected === undefined) throw Error(`unknown page background for ${before.pageUrl}`);
+        const column = Math.round((before.pageBounds.x + Math.min(200, Math.floor(before.pageBounds.width / 2))) * pixelsPerLogical);
+        for (let y = 0; y < Math.round(frame.y * pixelsPerLogical) + 8; y++) {
+          const i = (y * sourcePixels.width + column) * 4;
+          if (colorClose([bitmap[i + 2], bitmap[i + 1], bitmap[i]], expected)) { boundaryRow = y; break; }
+        }
+        const cropRow = Math.round(frame.y * pixelsPerLogical);
+        if (boundaryRow === null || Math.abs(boundaryRow - cropRow) > 2) {
+          throw Error(`crop offset ${cropRow} does not match the page top edge ${boundaryRow} (column ${column})`);
+        }
+      }
+      const pixel = image.crop({
+        x: Math.round(frame.x * cropUnitsPerLogical), y: Math.round(frame.y * cropUnitsPerLogical),
+        width: Math.round(content.width * cropUnitsPerLogical), height: Math.round(content.height * cropUnitsPerLogical),
+      }).toPNG();
+      const pixels = pngPixelSize(pixel);
+      const expectedPixels = { width: Math.round(content.width * pixelsPerLogical), height: Math.round(content.height * pixelsPerLogical) };
+      if (pixels.width !== expectedPixels.width || pixels.height !== expectedPixels.height) {
+        throw Error(`cropped bitmap ${pixels.width}x${pixels.height} is not the content box at this scale ${expectedPixels.width}x${expectedPixels.height}`);
+      }
       const name = `${width}x${height}-${state}.png`;
-      writeFileSync(join(output, name), png);
-      const pixels = pngPixelSize(png);
-      // Recorded (not asserted): the renderer's own horizontal overflow inside the shell view.
-      // At the 720x560 minimum the shell column is 280px, narrower than the renderer's own
-      // narrowest tier; the production view geometry is what this harness asserts.
+      writeFileSync(join(output, name), pixel);
+      // Recorded (not asserted): the renderer's own horizontal overflow inside the shell view. The
+      // 280px shell column is narrower than the renderer's own narrowest tier, so the document
+      // overflow alone is not the whole story — the widest element overflow is recorded too.
       let shellHorizontalOverflow = null;
-      try { shellHorizontalOverflow = await evalJs("document.documentElement.scrollWidth - document.documentElement.clientWidth"); } catch { /* recorded as unknown */ }
+      try {
+        shellHorizontalOverflow = await evalJs("(() => { let max = 0; let worst = null; for (const el of document.querySelectorAll('*')) { const d = el.scrollWidth - el.clientWidth; if (d > max) { max = d; worst = el.tagName + (typeof el.className === 'string' && el.className ? '.' + el.className.split(' ')[0] : ''); } } return { document: document.documentElement.scrollWidth - document.documentElement.clientWidth, maxElement: max, worstElement: worst }; })()");
+      } catch { /* recorded as unknown */ }
       shots.push({
-        state, file: name, windowBounds: { width: bounds.width, height: bounds.height },
+        state, file: name,
         width, height,
         pixelWidth: pixels.width, pixelHeight: pixels.height,
-        deviceScaleFactor: Number((pixels.width / bounds.width).toFixed(3)),
-        sha256: createHash("sha256").update(png).digest("hex"),
+        deviceScaleFactor: Number((pixels.width / width).toFixed(3)),
+        windowBounds: { width: bounds.width, height: bounds.height },
+        frameOffset: frame,
+        cropOffsetPixels: { x: Math.round(frame.x * pixelsPerLogical), y: Math.round(frame.y * pixelsPerLogical) },
+        pageTopEdgePixels: boundaryRow,
+        sha256: createHash("sha256").update(pixel).digest("hex"),
         shellHorizontalOverflow,
         geometry: geometry(),
         bodyText: (await text()).replace(/\n+/g, " | ").slice(0, 900),
@@ -282,11 +368,25 @@ async function run() {
       if (!result.ok) throw Error(`gateway page/open refused: ${JSON.stringify(result)}`);
       return result.payload;
     };
+    const livePage = (taskId, label) => {
+      const page = browsers.surfaces.get(taskId)?.pages()[0];
+      if (!page) throw Error(`no live page for ${label ?? taskId}`);
+      return page;
+    };
+    const navigatePageViaGateway = async (taskId, urlPath) => {
+      const page = livePage(taskId);
+      stage = `gateway page/navigate ${taskId} ${urlPath}`;
+      const result = await browsers.registry.handleRequest({
+        workspaceId: "issue37", taskId, action: "page/navigate",
+        page: { taskId, pageId: page.pageId }, params: { url: `${ORIGIN}${urlPath}` },
+        actor: { kind: "human", label: "issue37 capture" },
+      });
+      if (!result.ok) throw Error(`gateway page/navigate refused: ${JSON.stringify(result)}`);
+      return result.payload;
+    };
     const closePageViaGateway = async (taskId) => {
+      const page = livePage(taskId);
       stage = `gateway page/close ${taskId}`;
-      const surface = browsers.surfaces.get(taskId);
-      const page = surface?.pages()[0];
-      if (!page) throw Error(`no live page to close for ${taskId}`);
       const result = await browsers.registry.handleRequest({
         workspaceId: "issue37", taskId, action: "page/close", page: { taskId, pageId: page.pageId }, params: {},
         actor: { kind: "human", label: "issue37 capture" },
@@ -300,11 +400,16 @@ async function run() {
     const baselineBody = await text();
     if (/Atlas Web|演示任务|演示统计/.test(baselineBody)) throw Error("demo fixture leaked into the Desktop baseline");
     const baselineGeometry = geometry();
-    if (baselineGeometry.shellBounds.width !== 1440) throw Error(`baseline shell is not full width: ${JSON.stringify(baselineGeometry)}`);
+    if (baselineGeometry.shellBounds.width !== baselineGeometry.contentWidth) throw Error(`baseline shell is not full width: ${JSON.stringify(baselineGeometry)}`);
     if (baselineGeometry.pageTaskId !== null) throw Error("baseline unexpectedly has an active task page");
     await captureWindow("no-page-selected", 1440, 900);
     await captureWindow("no-page-selected", 720, 560);
-    await captureWindow("no-page-selected", 1440, 900);
+    // Resizing back to the open size restores the same geometry; asserted, not captured again.
+    views.window.setContentSize(1440, 900);
+    await wait(300);
+    const baselineRestored = geometry();
+    if (baselineRestored.shellBounds.width !== 1440 || baselineRestored.pageTaskId !== null) throw Error(`baseline did not come back to full width: ${JSON.stringify(baselineRestored)}`);
+    check("no-page-selected resize return 720x560 -> 1440x900", baselineRestored);
 
     // (2) A real, allowlisted task page opened through the production Desktop 浏览器 panel
     // (fill + click drive the real renderer -> preload -> shell/taskOp -> Host -> main gateway path).
@@ -321,15 +426,22 @@ async function run() {
     const openGeometry = geometry();
     if (openGeometry.pageTaskId !== TASK_A) throw Error(`page A not active: ${JSON.stringify(openGeometry)}`);
     if (!openGeometry.pageUrl?.endsWith("/a")) throw Error(`page A url unexpected: ${JSON.stringify(openGeometry)}`);
-    if (openGeometry.shellBounds.width >= 1440) throw Error(`shell did not yield width to the page: ${JSON.stringify(openGeometry)}`);
+    if (openGeometry.shellBounds.width >= openGeometry.contentWidth) throw Error(`shell did not yield width to the page: ${JSON.stringify(openGeometry)}`);
     await captureWindow("browser-tool-open", 1440, 900);
     // Close the dock so the shell shows the task workspace next to the page at its real width.
     await click("关闭面板");
     await until((body) => !body.includes("任务页面 · 主进程窗口"), "browser panel closed");
     await captureWindow("task-page-open", 1440, 900);
+    const openAtWide = JSON.parse(JSON.stringify(shots[shots.length - 1].geometry));
 
-    // (4) Real resize with a page open: 1440x900 -> 720x560 -> 1440x900; every visible view must
-    // follow the window and no view may end up zero-width or overlapping.
+    // (4) Real resize with a page open: 1440x900 -> 1000x700 -> 720x560. 1000 is a strictly
+    // interior width (shell 360 = floor(1000*0.36), not the 280/380 clamps), so the shot shows a
+    // geometry no other shot has; 720x560 is the production minimum (runtime.ts minWidth/minHeight).
+    await captureWindow("task-page-open-resized", 1000, 700);
+    const interior = shots[shots.length - 1].geometry;
+    if (interior.shellBounds.width !== 360 || interior.pageBounds.x !== 360 || interior.pageBounds.width !== 640) {
+      throw Error(`views did not take the interior split at 1000x700: ${JSON.stringify(interior)}`);
+    }
     await captureWindow("task-page-open", 720, 560);
     const minGeometry = shots[shots.length - 1].geometry;
     const minShell = minGeometry.shellBounds;
@@ -337,9 +449,13 @@ async function run() {
     if (minShell.width <= 0 || minPage.width <= 0) throw Error(`zero-width view at minimum size: ${JSON.stringify(minGeometry)}`);
     if (minShell.x + minShell.width > minPage.x) throw Error(`shell/page overlap at minimum size: ${JSON.stringify(minGeometry)}`);
     if (minShell.x !== 0 || minPage.x !== minShell.width || minPage.width !== 720 - minShell.width) throw Error(`views do not tile the minimum window: ${JSON.stringify(minGeometry)}`);
-    await captureWindow("task-page-open-resized", 1440, 900);
-    const restored = shots[shots.length - 1].geometry;
-    if (restored.shellBounds.width >= 1440 || restored.pageBounds.width !== 1440 - restored.shellBounds.width) throw Error(`views did not resize back: ${JSON.stringify(restored)}`);
+    // Back to the open size: the round trip has to return the pre-resize geometry. Asserted (the
+    // pixels would be a byte-identical copy of the 1440x900 capture above, so nothing is committed).
+    views.window.setContentSize(1440, 900);
+    await wait(300);
+    const restoredGeometry = geometry();
+    if (JSON.stringify(restoredGeometry) !== JSON.stringify(openAtWide)) throw Error(`resize round trip did not restore the wide geometry: ${JSON.stringify(restoredGeometry)} vs ${JSON.stringify(openAtWide)}`);
+    check("task-page-open resize round trip 1440x900 -> 1000x700 -> 720x560 -> 1440x900", restoredGeometry);
 
     // (3) Multi-task selection rule: opening a second task's page makes it the visible one while
     // the first task's page stays open.
@@ -349,26 +465,50 @@ async function run() {
     if (selected.pageTaskId !== TASK_B || !selected.pageUrl?.endsWith("/b")) throw Error(`task B page not selected: ${JSON.stringify(selected)}`);
     await captureWindow("multi-task-page-b-selected", 1440, 900);
     await captureWindow("multi-task-page-b-selected", 720, 560);
-    await captureWindow("multi-task-page-b-selected", 1440, 900);
-    // Closing B's page returns the layout to A's still-open page (not to full width).
+    // A's page (still open, hidden behind B) navigates through the same gateway the Host uses. The
+    // restore below must show this live page at /a2 — not a freshly loaded /a: that is what makes
+    // the restore capture a state no other capture has.
+    await navigatePageViaGateway(TASK_A, "/a2");
+    await wait(300);
+    const hidden = geometry();
+    if (hidden.pageTaskId !== TASK_B) throw Error(`navigating A's hidden page changed the selected page: ${JSON.stringify(hidden)}`);
+    const hiddenA = livePage(TASK_A);
+    if (!hiddenA.url.endsWith("/a2")) throw Error(`A's hidden page did not navigate: ${JSON.stringify(hiddenA)}`);
+    // Closing B's page restores A's still-open page (not full width).
     await closePageViaGateway(TASK_B);
     await wait(300);
     const fallback = geometry();
-    if (fallback.pageTaskId !== TASK_A || !fallback.pageUrl?.endsWith("/a")) throw Error(`closing B did not fall back to A: ${JSON.stringify(fallback)}`);
-    if (fallback.shellBounds.width >= 1440) throw Error(`shell returned to full width before the last page closed: ${JSON.stringify(fallback)}`);
+    if (fallback.pageTaskId !== TASK_A || !fallback.pageUrl?.endsWith("/a2")) throw Error(`closing B did not fall back to A's live page: ${JSON.stringify(fallback)}`);
+    if (fallback.shellBounds.width >= fallback.contentWidth) throw Error(`shell returned to full width before the last page closed: ${JSON.stringify(fallback)}`);
+    check("task A stayed open and kept its /a2 navigation while task B was selected", fallback);
     await captureWindow("multi-task-page-a-restored", 1440, 900);
     await captureWindow("multi-task-page-a-restored", 720, 560);
-    await captureWindow("multi-task-page-a-restored", 1440, 900);
 
-    // (3) Closing the last page returns the shell to full width.
+    // (3) Closing the last page returns the shell to full width (it keeps the selected task's
+    // workspace; the *page* is gone, which is what this state asserts).
     await closePageViaGateway(TASK_A);
     await wait(300);
     const closed = geometry();
     if (closed.pageTaskId !== null) throw Error(`a page is still active after the last close: ${JSON.stringify(closed)}`);
-    if (closed.shellBounds.width !== 1440 || !closed.shellVisible) throw Error(`shell not full width after last close: ${JSON.stringify(closed)}`);
+    if (closed.shellBounds.width !== closed.contentWidth || !closed.shellVisible) throw Error(`shell not full width after last close: ${JSON.stringify(closed)}`);
     await captureWindow("last-page-closed", 1440, 900);
     await captureWindow("last-page-closed", 720, 560);
-    await captureWindow("last-page-closed", 1440, 900);
+
+    // The bundle has to be a 1:1 inventory that discriminates every scenario: one PNG per shot,
+    // pairwise distinct content, and nothing stale left in the output directory.
+    const duplicates = shots.map((shot) => shot.file).filter((file, position, all) => all.indexOf(file) !== position);
+    if (duplicates.length > 0) throw Error(`duplicate shot files: ${JSON.stringify(duplicates)}`);
+    const byHash = new Map();
+    for (const shot of shots) {
+      const seen = byHash.get(shot.sha256);
+      if (seen) throw Error(`shots ${seen} and ${shot.file} are byte-identical; a scenario did not change app state`);
+      byHash.set(shot.sha256, shot.file);
+    }
+    const written = readdirSync(output).filter((entry) => entry.endsWith(".png")).sort();
+    const expected = shots.map((shot) => shot.file).sort();
+    if (written.length !== expected.length || written.some((entry, position) => entry !== expected[position])) {
+      throw Error(`output directory does not match this run: expected ${JSON.stringify(expected)}, found ${JSON.stringify(written)}`);
+    }
 
     let revision = "unknown"; let trackedFilesDirty = "unknown";
     try { revision = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8", cwd: repoRoot }).trim(); } catch { /* recorded as unknown */ }
@@ -385,21 +525,33 @@ async function run() {
       ticket: "#37 box 6 — real-Electron empty/task-page navigation, multi-task selection and view geometry",
       command, repoRoot, revision, trackedFilesDirty,
       generatedBy: "scripts/electron-issue37-task-page-layout-capture.mjs",
-      configuration: {
-        envVariable: "PIDOCK_TASK_BROWSER_ORIGINS",
-        value: origins,
-        disclosure: "Set by the harness as the documented operator configuration; without it production refuses every page/open (fail-closed).",
+      generatedBySha256: createHash("sha256").update(readFileSync(harnessFile)).digest("hex"),
+      capture: {
+        method: "desktopCapturer.getSources({types:['window']}) matched by window.getMediaSourceId()",
+        sourceName: captureSourceName,
+        displayScaleFactor: captureDisplayScale,
+        bitmap: "the window source, cropped to the window content box (getContentBounds()); the macOS title bar is not app content",
+        fileBox: "file name <width>x<height> = the CSS content box asserted by setContentSize (px / pixelWidth columns below are the bitmap)",
+        configuration: {
+          envVariable: "PIDOCK_TASK_BROWSER_ORIGINS",
+          value: origins,
+          disclosure: "Set by the harness as the documented operator configuration; without it production refuses every page/open (fail-closed).",
+        },
+        clearedOverrides: ["PIDOCK_RENDERER_URL", "PIDOCK_TASK_URL"],
+        shellEntryUrl,
       },
       seeded: {
         taskRoot: "isolated temp dir; real task.json written by the production task-store serializer",
         tasks: { [TASK_A]: "claimed to Project Adder", [TASK_B]: "claimed to Project Adder", [TASK_C]: "unassigned" },
-        loopbackPages: { "/a": "real page served by this harness on 127.0.0.1", "/b": "real page served by this harness on 127.0.0.1" },
+        loopbackPages: { "/a": "task A page served by this harness on 127.0.0.1", "/a2": "the address task A navigates to while hidden behind B's page", "/b": "task B page served by this harness on 127.0.0.1" },
       },
       driven: {
         pageOpenTaskA: "real Desktop 浏览器 panel: fill 任务页面地址 + click 打开任务页面 (renderer -> shell/taskOp -> Host -> main gateway)",
-        pageOpenTaskB: "main browser gateway page/open (human actor) — no Desktop control switches task while a page covers the window",
+        pageOpenTaskB: "main browser gateway page/open (human actor) — the Desktop exposes no control that switches task while a page covers the window",
+        pageNavigateTaskA: "main browser gateway page/navigate (human actor) on A's own live page while B is the visible page (the Host's task/browserAction reaches this same gateway)",
         pageClose: "main browser gateway page/close (human actor) — the Desktop exposes no close control",
       },
+      checks,
       shots,
     };
     writeFileSync(join(output, "capture-log.json"), `${JSON.stringify(log, null, 2)}\n`);
