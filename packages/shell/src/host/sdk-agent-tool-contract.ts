@@ -59,7 +59,7 @@ export const SDK_AGENT_TOOL_SPECS: readonly SdkAgentToolSpec[] = [
     kind: "read",
     summary: "List or search files inside the task folder",
     description:
-      "With `path` only, list the directory entries (directories end with `/`). With `pattern`, search files under `path` line by line and return `path:line: text` matches. `path` is relative to the task folder. `.git` is never searched; results are bounded.",
+      "With `path` only, list the directory entries (directories end with `/`). With `pattern`, search files under `path` line by line and return `path:line: text` matches. `path` is relative to the task folder. `.git`, `node_modules` and the Host's own `.pidock-*` state and `task.json` are never searched, however the search is rooted; results are bounded.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -91,7 +91,7 @@ export const SDK_AGENT_TOOL_SPECS: readonly SdkAgentToolSpec[] = [
     kind: "command",
     summary: "Run a shell command in a task worktree",
     description:
-      "Run `command` with `/bin/sh -c`, in `cwd` (default: the task's first worktree). `cwd` must stay inside a task worktree, arguments naming paths outside the task worktrees are refused, and so is a command whose expansion cannot be decoded (`$`, backticks). Output and runtime are bounded.",
+      "Run `command` with `/bin/sh -c`, in `cwd` (default: the task's first worktree). `cwd` must stay inside a task worktree, and a command whose expansion cannot be decoded (`$`, backticks) is refused outright — even under `default`, so `echo $PWD` is refused instead of offered for approval. This is a filter, not a sandbox: only tokens that contain `/`, start with `~`, are exactly `..`, or name a `.git` path are examined, so a path the shell re-encodes (`printf '\\057tmp\\057x' | xargs touch`) still runs under `auto`, with no approval. Output and runtime are bounded.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -175,5 +175,6 @@ export function sdkAgentSystemPrompt(input: { taskDir: string; worktrees: readon
     "- fs.write: create or overwrite a file in a worktree (args: path, content)",
     "- exec.run: run a shell command in a worktree (args: command, optional cwd)",
     "Every write and command is subject to the task's permission gate and write lock: a refusal comes back as a tool result with a reason, so adapt instead of retrying the same call.",
+    "`exec.run` runs a real shell through a filter, not a sandbox: a command containing `$` or a backtick is refused outright (no approval is offered, even under `default`), a token naming `.git` is refused whatever its case or quoting, and only path-shaped tokens (`/`, `~`, `..`) are examined at all. Never treat it as an isolation boundary.",
   ].join("\n");
 }

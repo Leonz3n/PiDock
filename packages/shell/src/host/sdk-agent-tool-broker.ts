@@ -32,12 +32,16 @@
  *
  * Honest boundary: `exec.run` runs a real shell. Its working directory and the
  * path arguments that can be *recognised* as paths are confined — the command
- * is split on shell operators so a glued redirect (`x>/tmp/y`) is seen, and a
+ * is split on shell operators so a glued redirect (`x>/tmp/y`) is seen, a token
+ * naming a `.git` control path is refused whatever its case or quoting, and a
  * command whose expansion cannot be decoded (`$`, backticks) is refused rather
- * than approximated. The command text itself is still not a sandbox: an
- * embedded interpreter (`python -c …`) is not decoded here. The confinement
- * rules that stop a wrong *tool path* are what this module proves; the human
- * approval under `default` remains the boundary for arbitrary command execution.
+ * than approximated. This is a filter, not a sandbox: only tokens that contain
+ * `/`, start with `~`, are exactly `..` or name a `.git` segment are examined,
+ * so a path the shell re-encodes (`printf '\057tmp' | xargs touch`) is not
+ * decoded here, and an embedded interpreter (`python -c …`) is not decoded
+ * either. The confinement rules that stop a wrong *tool path* are what this
+ * module proves; the human approval under `default` remains the boundary for
+ * arbitrary command execution.
  */
 
 import { spawn } from "node:child_process";
@@ -202,6 +206,27 @@ function withinScope(path: string, root: string): boolean {
 }
 
 /**
+ * True when a path names a git control entry (`.git`, `.GIT`, …) as one of its
+ * segments.
+ *
+ * Case-insensitive on purpose: macOS (APFS) and Windows are product targets,
+ * and there `repo/.git` and `repo/.GIT` are the SAME directory entry. Neither
+ * `normalizeScopePath` (it folds only a Windows drive letter) nor production's
+ * non-native `realpathSync` folds segment case, so a case-sensitive compare
+ * would let `.GIT` rewrite a worktree's git pointer and retarget git at the
+ * primary checkout this module exists to keep out of reach.
+ *
+ * A segment that is the *value* of an assignment (`dd of=.git`,
+ * `GIT_DIR=.git`, `--git-dir=.git`) names the control path just as a bare
+ * token does, so the segment boundary includes `=` after a plain segment.
+ */
+function hasGitControlSegment(path: string): boolean {
+  return path
+    .split(/[\\/]+/)
+    .some((segment) => segment.toLowerCase() === ".git" || /(?:^|=)\.git$/i.test(segment));
+}
+
+/**
  * Resolve one requested path against the task scope. `base` is what a relative
  * path is relative to (the task folder for file tools, the command's working
  * directory for `exec.run`) — never the Host process cwd.
@@ -274,14 +299,18 @@ export function resolveSdkAgentToolPath(input: {
     // it would silently retarget git at the checkout this module exists to keep
     // out of reach (and `derivedPrimaryCheckouts` would then trust the forgery).
     // Git changes go through `exec.run`, never a raw write to the control file.
-    if (normalizedReal.split("/").includes(".git")) {
-      return pathRefuse("tool-refused:invalid-target", "不可写入 .git 控制文件或目录");
+    // The segment is matched case-insensitively: on APFS/Windows `repo/.GIT` IS
+    // `repo/.git`, so a case-sensitive compare is not a guard at all.
+    if (hasGitControlSegment(normalizedReal)) {
+      return pathRefuse("tool-refused:invalid-target", "不可写入 .git 控制文件或目录（大小写不敏感）");
     }
   } else {
     // The Host's own bookkeeping under the task folder (its SDK sessions,
     // ledger, context home and the task record itself) is not task content;
-    // the Agent reads the repositories, not the machinery that runs it.
-    const relative = normalizeScopePath(real).slice(taskDir.length + 1);
+    // the Agent reads the repositories, not the machinery that runs it. Folded
+    // case for the same reason as the git control file above: `.PIDOCK-*` and
+    // `TASK.JSON` are the same entries on the product's filesystems.
+    const relative = normalizeScopePath(real).slice(taskDir.length + 1).toLowerCase();
     if (relative === "task.json" || relative.split("/").some((segment) => segment.startsWith(".pidock-"))) {
       return pathRefuse("tool-refused:protected-path", "目标是任务宿主私有状态，任务工具只读取任务内容");
     }
@@ -361,6 +390,10 @@ function defaultRunCommand(input: { command: string; cwd: string; timeoutMs: num
  * A command whose expansion cannot be decoded (`$`, backticks) is reported as
  * `unresolvable`: the filter must refuse it rather than approximate a path the
  * shell may or may not produce.
+ *
+ * A token that names a `.git` control entry is kept even though it carries no
+ * `/` (`echo x > .git`), because a bare `.git` token is exactly how the
+ * worktree's git pointer gets rewritten.
  */
 function commandPathTokens(command: string): { tokens: string[]; unresolvable: boolean } {
   if (/[`$]/.test(command)) return { tokens: [], unresolvable: true };
@@ -372,7 +405,9 @@ function commandPathTokens(command: string): { tokens: string[]; unresolvable: b
       const match = /^-[^\s=]*=(.+)$/.exec(token);
       return match ? [match[1]!] : [token];
     })
-    .filter((token) => token === ".." || token.startsWith("~/") || token.startsWith("~") || token.includes("/"));
+    .filter((token) =>
+      token === ".." || token.startsWith("~/") || token.startsWith("~") || token.includes("/") || hasGitControlSegment(token),
+    );
   return { tokens, unresolvable: false };
 }
 
@@ -398,6 +433,19 @@ function searchEntries(path: string): string {
   return entries.length > 0 ? entries.join("\n") : "(empty directory)";
 }
 
+/**
+ * Directories a traversal never descends into: git's own control directories
+ * (matched case-insensitively — on APFS/Windows `.GIT` IS `.git`), dependency
+ * trees, and the Host's own task bookkeeping (`.pidock-sdk-sessions`,
+ * `.pidock-sdk-context-home`, …). The last one matters because confinement on a
+ * *target* is per-target: a search rooted at the task folder would otherwise
+ * walk the Host's state and return its lines as task content.
+ */
+function isHiddenSearchDirectory(name: string): boolean {
+  const folded = name.toLowerCase();
+  return folded === ".git" || folded === "node_modules" || folded.startsWith(".pidock-");
+}
+
 function searchFiles(root: string, pattern: RegExp): string {
   const files: string[] = [];
   const walk = (path: string): void => {
@@ -409,7 +457,7 @@ function searchFiles(root: string, pattern: RegExp): string {
       return;
     }
     if (stat.isDirectory()) {
-      if (path.endsWith("/.git") || path.endsWith("/node_modules")) return;
+      if (isHiddenSearchDirectory(parse(path).base)) return;
       let entries: string[];
       try {
         entries = readdirSync(path).sort();
@@ -419,7 +467,12 @@ function searchFiles(root: string, pattern: RegExp): string {
       for (const entry of entries) walk(join(path, entry));
       return;
     }
-    if (stat.isFile()) files.push(path);
+    if (stat.isFile()) {
+      // The task record at the top of the searched folder is Host state, not
+      // task content; the per-target read guard refuses it directly.
+      if (dirname(path) === root && parse(path).base.toLowerCase() === "task.json") return;
+      files.push(path);
+    }
   };
   walk(root);
   const matches: string[] = [];
@@ -647,6 +700,12 @@ export class SdkAgentToolBroker {
       }
       for (const token of scanned.tokens) {
         if (COMMAND_DEVICE_ALLOWLIST.has(token)) continue;
+        // A `.git` control path is refused by name here, before any resolution
+        // and before the gate, so a bare `.git` token (no `/`, so it is not
+        // path-shaped) cannot rewrite the worktree's git pointer.
+        if (hasGitControlSegment(token)) {
+          return refuse("tool-refused:invalid-target", `命令参数 ${token} 指向 .git 控制文件，任务工具不可写入`);
+        }
         if (token.startsWith("~")) return refuse("tool-refused:out-of-scope", `命令参数 ${token} 指向任务外的家目录`);
         const tokenPath = resolveSdkAgentToolPath({ scope, resolveRealPath: this.options.resolveRealPath, requested: token, base: cwdPath.real, mode: "write" });
         if (!tokenPath.ok) return refuse(tokenPath.code, `命令参数 ${token} 越界：${tokenPath.reason}`);
