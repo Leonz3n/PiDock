@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import { TaskPrepareRecovery } from "../components/TaskPrepareRecovery";
+import { TaskPrepareRecovery, shellTaskPrepareResume } from "../components/TaskPrepareRecovery";
 import type { ShellTaskOpResult } from "../data/shellBridge";
 
 // Seam: #6 partial-prepare recovery UI. The panel shows the Host's real
@@ -225,3 +225,56 @@ it("drops a superseded status response so the latest request wins", async () => 
   expect(screen.queryByTestId("prepare-resume-planned")).toBeNull();
 });
 
+
+// The production renderer path (#6 boundary B): main derives the conflict
+// scan, so the panel's explicit human resume reaches the Host through the real
+// shell route with no renderer-supplied scan at all.
+it("resumes through the production shell route without a renderer-supplied scan", async () => {
+  const taskOp = vi.fn(async () => ({
+    ok: true,
+    payload: { outcomes: prepared.outcomes, retry: prepared.retry, hold: [], created: ["frontend"], resumed: true },
+  }));
+  const original = (window as { pidock?: unknown }).pidock;
+  (window as { pidock?: unknown }).pidock = { taskOp };
+  try {
+    const load = vi.fn(async () => ok(prepared));
+    render(<TaskPrepareRecovery load={load} resume={shellTaskPrepareResume("task-abcdef12")} />);
+    // Explicit human action only: neither the read nor the resume runs on mount.
+    expect(taskOp).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "检查准备状态" }));
+    await screen.findByTestId("prepare-status-rows");
+    expect(taskOp).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "继续准备未完成的仓库" }));
+    await waitFor(() => expect(taskOp).toHaveBeenCalledTimes(1));
+    // The page sends no `takenPaths`/`branchesInUse`/`mainCheckouts`: main
+    // derives them for this task and the Host keeps requiring them.
+    expect(taskOp).toHaveBeenCalledWith("task-abcdef12", "task/resumeAppend", {});
+    expect(await screen.findByTestId("prepare-resume-planned")).toHaveTextContent("已规划");
+  } finally {
+    (window as { pidock?: unknown }).pidock = original;
+  }
+});
+
+it("shows main's named refusal reason when the production resume is refused", async () => {
+  const taskOp = vi.fn(async () => {
+    throw new Error(
+      "Error invoking remote method 'shell/taskOp': Error: branch-in-use: 分支已在其他 worktree 使用: task/task-abcdef12",
+    );
+  });
+  const original = (window as { pidock?: unknown }).pidock;
+  (window as { pidock?: unknown }).pidock = { taskOp };
+  try {
+    const load = vi.fn(async () => ok(prepared));
+    render(<TaskPrepareRecovery load={load} resume={shellTaskPrepareResume("task-abcdef12")} />);
+    fireEvent.click(screen.getByRole("button", { name: "检查准备状态" }));
+    await screen.findByTestId("prepare-status-rows");
+    fireEvent.click(screen.getByRole("button", { name: "继续准备未完成的仓库" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("branch-in-use: 分支已在其他 worktree 使用");
+    // The read state is kept, and the resume stays available (no silent damage).
+    expect(screen.getByTestId("prepare-status-rows")).toHaveTextContent("invoice · 待准备");
+    expect(screen.getByRole("button", { name: "继续准备未完成的仓库" })).toBeInTheDocument();
+  } finally {
+    (window as { pidock?: unknown }).pidock = original;
+  }
+});
