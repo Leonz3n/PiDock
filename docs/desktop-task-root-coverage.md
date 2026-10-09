@@ -23,7 +23,7 @@ pnpm --filter @pidock/renderer exec vitest run src/test/desktopApp.test.tsx src/
 | 4（Desktop 渲染层并集与失败根） | 默认根 + 已登记覆盖根 + 失败根：两真实任务同时列出，失败根显示准确错误与重试，demo `memoryHost` 在 desktop 模式下从不读写 | `packages/renderer/src/test/desktopApp.test.tsx`：「lists the default and a registered override root together, surfaces one failing root, and never touches the demo fixture」 |
 | 5（迁移风险/用户确认） | 索引主文件损坏/丢失不静默重建、备份需显式恢复；拒绝自动改写既有任务的 `taskDir`（迁移需单独用户批准） | `packages/shell/src/main/task-root-index.test.ts`：「fails closed when primary is removed, corrupt, versioned wrong or interrupted after first backup」，以及 `task-root-index.ts` 的 `rootFailure` 文案分支 |
 
-相关真实 Electron 证据（#34 盒 4/5）在 `docs/evidence/desktop-task-inventory/`：空根 / 合法持久任务 /
+相关真实 Electron 证据（#34 盒 1/3/5）在 `docs/evidence/desktop-task-inventory/`：空根 / 合法持久任务 /
 损坏记录被拒 / Host-list 读取失败四态，全部来自生产 main + 生产 renderer。
 
 ## 2. 明确 UNTESTED（不得用测试或截图顶替）
