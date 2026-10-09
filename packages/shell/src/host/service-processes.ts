@@ -50,8 +50,11 @@ function directoryIdentity(path: string): DirectoryIdentity | null {
  *   ID is passed through a shell.
  * - The directory is resolved with `realpathSync` and must stay inside this
  *   task's real root; a foreign directory or an escaping symlink is refused
- *   before `spawn`. (The resolve→spawn window is not an atomic open: a
- *   same-UID actor that renames a checked component can still race it.)
+ *   before `spawn`. The `realpath`→`spawn` window is not an atomic open, so a
+ *   swap of the checked directory is **detected, not eliminated**: its
+ *   device+inode identity is re-read after `spawn`, and a change refuses the
+ *   launch and kills the just-spawned child (see the TOCTOU note in `start`).
+ *   A swap that is reverted before that re-read is invisible.
  * - Output is captured per line, bounded to 2000 characters, and redacted by
  *   the injected redactor before it reaches the log.
  * - Every launch has a verifiable ownership identity: the leader pid plus a
@@ -66,18 +69,22 @@ function directoryIdentity(path: string): DirectoryIdentity | null {
  *   `service-ownership-unverified` and reported as a failure, never as a stop.
  *   That also covers a launch recorded by an earlier Host: a record whose pid
  *   is alive but whose identity does not match is refused, never signalled.
- * - `stop` signals the child's own process group (SIGTERM, then SIGKILL) and
- *   confirms stdio closure. `termination-unconfirmed` means a descendant may
- *   still own the pipes; it is reported as a failure and must never be
- *   recorded as a clean stop. A descendant that leaves the process group
- *   (e.g. its own `setsid`) is outside this contract, and Windows refuses
- *   `start` entirely until a Job-Object-style ownership mechanism exists.
- * - Out of scope here (stated, not claimed): reclaiming a *descendant* that
- *   survived its leader and still holds the pipes. For a child this Host
- *   spawned, stdio closure still detects it; for a launch recovered from a
- *   durable record the Host holds no pipe, so "stopped" there means exactly
- *   "the recorded launch identity is no longer alive". Windows process-tree
- *   termination is UNTESTED in this slice.
+ * - `stop` signals the leader's own process group (SIGTERM, then SIGKILL), then
+ *   reclaims any *descendant* that outlived the leader. A launch is spawned
+ *   `detached: true`, so it is a process-group leader; a descendant that
+ *   inherited the leader's stdout/stderr and stayed in that group is named by
+ *   the OS as a member of the same pgid. Termination is confirmed only by
+ *   positive evidence - the leader's own `close` **and** an empty process
+ *   group - never by elapsed time and never by pipe closure alone (a descendant
+ *   holding the pipes keeps `close` pending). A descendant that escaped the
+ *   group (its own `setsid`) or that the Host cannot name is **not** reclaimed:
+ *   the stop fails closed as `termination-unconfirmed` and the durable record
+ *   is kept. Windows process-tree termination is UNTESTED - `start` refuses on
+ *   win32 and no descendant reclaim runs there.
+ * - Out of scope here (stated, not claimed): a launch recovered from a durable
+ *   record holds no pipe, so "stopped" there means exactly "the recorded launch
+ *   identity is no longer alive"; descendants of such a record are not
+ *   reclaimed.
  */
 export class TaskServiceProcesses {
   private readonly running = new Map<string, OwnedProcess>();
@@ -164,13 +171,19 @@ export class TaskServiceProcesses {
     let pid: number;
     try { pid = await started; }
     catch (error) { await done; throw error; }
-    // TOCTOU re-verification: between the cwd check and the real `spawn`, a
-    // same-UID actor can rename the checked directory and leave a symlink to
-    // somewhere else at that path. Re-resolve and re-stat now and refuse (fail
-    // closed) unless the directory the cwd check validated is still the
-    // directory that path names. This detects a swap that is still in place at
-    // this instant; it does not eliminate the window and cannot see a swap that
-    // was reverted before this read (see the class notes).
+    // TOCTOU re-verification - DETECTION, not elimination. Between the cwd
+    // check above and this `spawn`, a same-UID actor can rename the checked
+    // directory and leave a symlink to somewhere else in its place. That window
+    // cannot be closed portably: Node's `spawn` takes a path, not an open
+    // directory descriptor, so check and spawn are two path lookups. What this
+    // does guarantee: the checked directory's device+inode is re-read here (a)
+    // via the original path and (b) after re-resolving it to the real path, and
+    // unless both still name the directory the check validated (and stay inside
+    // the task root) the just-spawned child is killed and the launch is refused.
+    // The child is therefore never allowed to keep running after its cwd was
+    // swapped while the swap was in place at this read. What it does NOT
+    // guarantee: a swap that is reverted before this read is invisible, so the
+    // window is reduced, not removed (see the class notes).
     const reResolved = (() => { try { return realpathSync(plan.cwd); } catch { return null; } })();
     let escapesAgain = true;
     let identityAgain: DirectoryIdentity | null = null;
@@ -248,7 +261,7 @@ export class TaskServiceProcesses {
   async stop(serviceId: string): Promise<void> {
     const owned = this.running.get(serviceId);
     if (!owned) return this.stopRecordedLaunch(serviceId);
-    const { child, done, launch } = owned;
+    const { child, launch } = owned;
 
     // Entry check: reject pid <= 1 before ANY signal path
     if (!Number.isInteger(launch.pid) || launch.pid <= 1) {
@@ -259,8 +272,8 @@ export class TaskServiceProcesses {
     // identify. Once the leader's handle reports it exited, the numeric group
     // handle is no longer proof of ownership (a recycled pid could lead a
     // foreign group), so descendants are then reclaimed individually by OS
-    // group membership (see `reclaimDescendants`) and never by a blind `-pid`.
-    const signalGroupWhileLeaderLive = (kind: NodeJS.Signals) => {
+    // group membership (see `settled`) and never by a blind `-pid`.
+    const signalLeaderGroup = (kind: NodeJS.Signals) => {
       if (child.exitCode !== null || child.signalCode !== null) return;
       if (process.platform === "win32") {
         throw new Error("unsupported-platform: Windows service process signalling is not supported");
@@ -278,59 +291,71 @@ export class TaskServiceProcesses {
         if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
       }
     };
-    signalGroupWhileLeaderLive("SIGTERM");
-    if (await this.closedWithin(done, this.stopGraceMs)) return;
-    signalGroupWhileLeaderLive("SIGKILL");
-    if (await this.closedWithin(done, this.stopConfirmMs)) return;
-    // stdout/stderr are still open. The leader may be gone while a descendant
-    // that inherited the pipes outlived it: pipe closure is NOT proof that the
-    // descendant ended, so reclaim it from real OS evidence and confirm it is
-    // gone. A descendant that escaped the process group cannot be named this
-    // way and the launch stays unconfirmed (fail closed) below.
-    const reclaimed = await this.reclaimDescendants(owned);
-    if (await this.closedWithin(done, this.stopConfirmMs)) return;
-    throw new Error(
-      `termination-unconfirmed: ${serviceId} still owns open process output` +
-        (reclaimed ? "" : "；有后代可能已脱离进程组，无法核验"),
-    );
+    signalLeaderGroup("SIGTERM");
+    if (await this.settled(owned, this.stopGraceMs)) return;
+    signalLeaderGroup("SIGKILL");
+    if (await this.settled(owned, this.stopConfirmMs)) return;
+    // No positive evidence of settlement: the leader is still alive, a
+    // descendant still holds the launch's output, or a descendant left the
+    // group and cannot be named. Fail closed and keep the durable record.
+    throw new Error(`termination-unconfirmed: ${serviceId} 的启动未被证实结束（进程组仍有存活成员或输出仍被持有）`);
   }
 
   /**
-   * Reclaim a launch's descendants that survived their leader and still hold the
-   * leader's stdout/stderr.
+   * Wait (bounded) for positive evidence that a launch this Host spawned is
+   * over, reclaiming reclaimable descendants as it goes.
    *
-   * Evidence: the launch was spawned `detached: true`, so it is a process-group
-   * leader whose pgid equals its pid; a descendant that stayed in that group
-   * (did not call `setsid`) inherits the pipes AND the pgid, so the OS names it
-   * as a member of the recorded group. That cannot mistake an unrelated recycled
-   * pid for a descendant: a pid only appears as a member of group `leaderPid`
-   * when it belongs to a group whose leader held that pid, and while this Host
-   * still holds the leader handle its pid is not free for the OS to recycle. The
-   * residual limit (a swap after the leader is reaped, and a `setsid` escape
-   * that is invisible to the group probe) is stated in the class notes.
+   * Escaping an unrelated recycled pid - the whole point of this method:
+   * - The launch is spawned `detached: true`, so its leader is a process-group
+   *   leader whose pgid equals its pid. A descendant that inherited the leader's
+   *   stdout/stderr and did not call `setsid` stays in that group, so the OS
+   *   process table names it as a member of pgid `leaderPid`; while it holds the
+   *   pipes the leader's `close` event stays pending.
+   * - A pid number cannot be recycled while it is still the pgid of a live
+   *   process group. So a group observed non-empty is provably the group this
+   *   launch created, and this method additionally NEVER signals a member of a
+   *   group it has already seen empty (a group that reappears after emptying can
+   *   only be a *recycled* number, never our launch). Membership is re-read
+   *   immediately before each signal, because a pid cannot be trusted across
+   *   calls.
+   * - Success requires BOTH that the leader's `close` fired (it exited and its
+   *   stdio closed) AND that the process group is empty. Pipe closure alone is
+   *   not accepted as proof (a descendant can close the pipes and live on), and
+   *   elapsed time is never accepted. If the OS probe itself is unavailable
+   *   (`null`) the evidence cannot be read, so the wait fails closed.
    *
-   * Termination is confirmed by POSITIVE evidence: every named member is gone
-   * from the process group (or the group itself is gone) - never inferred from
-   * elapsed time or from the pipes closing. Returns whether the group accounted
-   * for the survivors; `false` means a holder could not be named, so the caller
-   * fails closed and keeps the durable record.
+   * A descendant that escaped the group (`setsid`) cannot be named here; while
+   * it holds the pipes `close` stays pending, so the wait ends unsuccessful and
+   * the caller fails closed. Returns `true` only on the positive evidence
+   * above.
    */
-  private async reclaimDescendants(owned: OwnedProcess): Promise<boolean> {
+  private async settled(owned: OwnedProcess, timeoutMs: number): Promise<boolean> {
     const leaderPid = owned.launch.pid;
-    if (process.platform === "win32") return false;
-    const deadline = Date.now() + this.stopConfirmMs;
+    if (!Number.isInteger(leaderPid) || leaderPid <= 1) return false;
+    if (process.platform === "win32") {
+      // No process-group reclaim on Windows (start refuses there): settle only
+      // on the leader's own handle. Windows termination is UNTESTED.
+      return this.closedWithin(owned.done, timeoutMs);
+    }
+    const deadline = Date.now() + timeoutMs;
+    let groupWasEmpty = false;
     for (;;) {
-      const members = processGroupMemberPids(leaderPid).filter((pid) => pid !== leaderPid);
-      for (const pid of members) {
-        // Re-read membership immediately before the signal: a pid cannot be
-        // trusted across calls, and only a current member of this launch's group
-        // may be signalled.
-        if (!processGroupMemberPids(leaderPid).includes(pid)) continue;
-        try { process.kill(pid, "SIGKILL"); }
-        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
+      const allMembers = processGroupMemberPids(leaderPid);
+      if (allMembers === null) return false;
+      if (allMembers.length === 0) groupWasEmpty = true;
+      const descendants = allMembers.filter((pid) => pid !== leaderPid && pid > 1);
+      if (descendants.length > 0 && !groupWasEmpty) {
+        const current = new Set(processGroupMemberPids(leaderPid) ?? []);
+        for (const pid of descendants) {
+          if (!current.has(pid)) continue;
+          try { process.kill(pid, "SIGKILL"); }
+          catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
+        }
       }
-      const remaining = processGroupMemberPids(leaderPid).filter((pid) => pid !== leaderPid);
-      if (remaining.length === 0) return true;
+      const groupEmpty = allMembers.every((pid) => pid === leaderPid);
+      if (groupEmpty) {
+        return this.closedWithin(owned.done, Math.max(0, deadline - Date.now()));
+      }
       if (Date.now() >= deadline) return false;
       await new Promise((resolve) => setTimeout(resolve, STOP_POLL_MS));
     }

@@ -195,22 +195,30 @@ export interface ProcessTableRow {
 /**
  * Snapshot of the OS process table (`pid`, `ppid`, `pgid`) via `ps`.
  *
- * Returns `[]` where the probe is unavailable (e.g. Windows), never a fabricated
- * row: a caller that reclaims descendants must fail closed when the evidence it
- * needs cannot be read, so "no rows" and "no processes" produce the same safe
- * (empty) answer here and the pipe-holder check upstream decides.
+ * Returns `null` when the probe itself is unavailable (Windows, `ps` missing or
+ * failing): "the probe failed" is NOT the same as "the table was empty", and a
+ * caller that reclaims descendants must fail closed in the former case rather
+ * than read a failed probe as proof that no descendant exists. An actually
+ * empty table is `[]`.
+ *
+ * Fragility considered: the three columns are numeric, so locale and column
+ * alignment cannot change their meaning; header suppression (`=`) and the
+ * whitespace split tolerate multiple spaces and a leading header-less line;
+ * stderr is discarded; a missing `/bin/ps` falls back to `ps` on PATH; and a
+ * non-zero exit or oversized output (`ENOBUFS`, bounded by `maxBuffer`) is
+ * treated as an unavailable probe, never as "no processes".
  */
-export function readProcessTable(): ProcessTableRow[] {
-  if (process.platform === "win32") return [];
+export function readProcessTable(): ProcessTableRow[] | null {
+  if (process.platform === "win32") return null;
   let printed: string;
   try {
-    printed = execFileSync("/bin/ps", ["-eo", "pid=,ppid=,pgid="], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    printed = execFileSync("/bin/ps", ["-eo", "pid=,ppid=,pgid="], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 16 * 1024 * 1024 });
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") return [];
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") return null;
     try {
-      printed = execFileSync("ps", ["-eo", "pid=,ppid=,pgid="], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+      printed = execFileSync("ps", ["-eo", "pid=,ppid=,pgid="], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 16 * 1024 * 1024 });
     } catch {
-      return [];
+      return null;
     }
   }
   const rows: ProcessTableRow[] = [];
@@ -229,12 +237,17 @@ export function readProcessTable(): ProcessTableRow[] {
 
 /**
  * The live pids the OS reports as members of process group `pgid` (its leader
- * included while it is alive). Empty when the probe is unavailable or the group
- * no longer exists.
+ * included while it is alive), or `null` when the OS probe is unavailable.
+ *
+ * `null` is deliberately distinct from `[]`: a caller that reclaims descendants
+ * must fail closed when it cannot read the evidence, so it must never confuse
+ * "the probe could not run" with "the group has no members".
  */
-export function processGroupMemberPids(pgid: number): number[] {
-  if (!Number.isInteger(pgid) || pgid <= 1) return [];
-  return readProcessTable()
+export function processGroupMemberPids(pgid: number): number[] | null {
+  if (!Number.isInteger(pgid) || pgid <= 1) return null;
+  const table = readProcessTable();
+  if (table === null) return null;
+  return table
     .filter((row) => row.pgid === pgid && row.pid > 1)
     .map((row) => row.pid)
     .sort((a, b) => a - b);
