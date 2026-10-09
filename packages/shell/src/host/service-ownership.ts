@@ -14,33 +14,29 @@
  * nonce carried in the child's own environment and read back from the OS.**
  * - The Host injects `PIDOCK_SERVICE_OWNERSHIP_NONCE=<nonce>` into the child's
  *   fresh environment at spawn (never into the Host's `process.env`).
- * - That environment is kernel state of one process image, fixed at `execve`.
- *   No process - not even the child itself - can rewrite the environment block
- *   the kernel keeps for it, so the marker cannot appear after the fact in an
- *   image that was not launched with it.
- * - Verification reads the live pid's environment from the OS (Linux:
- *   `/proc/<pid>/environ`; macOS: `/bin/ps -E -p <pid>`) and requires the exact
- *   128-bit nonce. A pid recycled by an unrelated process therefore can never
- *   satisfy a record: the new process cannot choose its own pid, and cannot
- *   retroactively acquire the nonce. The pid is only a lookup key; the nonce is
- *   the identity.
+ * - Tri-state verification semantics:
+ *   1. `verified`: STRONG evidence only. The same-Host live process handle we
+ *      actually spawned (pid/pgid cross-checked). Env nonce provides optional
+ *      corroboration when readable; unreadable must never fail the probe. ONLY
+ *      `verified` may ever permit sending a signal.
+ *   2. `mismatch`: POSITIVE evidence the live process is NOT ours (env readable
+ *      AND the nonce absent).
+ *   3. `unobservable`: cannot tell (e.g. Apple platform binaries like /bin/sleep
+ *      hide their environment; no same-Host handle after restart). NEVER
+ *      treated as mismatch, NEVER as verified.
+ * - Invariants that MUST hold for `unobservable`, exactly as for `mismatch`:
+ *   never send any signal; never report stopped/exited while alive; refuse a
+ *   second start (fail-closed); report truthfully as `orphaned-unverified`.
+ * - Cross-restart: pid-alive + start-time agreement is WEAK evidence ->
+ *   `orphaned-unverified`, NEVER verified.
  * - Why not process start time: on macOS `ps -o lstart=` is locale/time-zone
  *   dependent and only second-granular, so two processes can share it. The
  *   nonce is exact, per launch, and unforgeable; `startedAt` is kept for human
  *   audit only and never gates a decision.
- * - Reading the environment is the *only* positive identity evidence: a launch
- *   that is alive and inspectable always shows its own marker. "The pid names a
- *   process but its environment cannot be read" (a not-yet-reaped zombie, a
- *   process of another user, an unsupported platform) is therefore reported as
- *   `unobservable` - never as "not ours" - and never ends a stop by itself.
- * - Stated cost: the marker is visible in the child's environment. It is not a
- *   credential - knowing it does not let anyone claim another pid, because pids
- *   are kernel-assigned - so it identifies a launch and grants nothing.
  *
  * Hard boundary enforced by this module's callers (`TaskServiceProcesses`): no
  * signal is ever sent to a pid whose identity was not verified in the same call.
- * `verifyServiceOwnershipIdentity` is the only thing that may report
- * `"verified"`, and every signal goes through it.
+ * Only `verified` may permit signalling, and every signal goes through it.
  *
  * Platform boundaries (stated, not implied):
  * - POSIX only. On Windows the environment probe returns `"unobservable"`, so
