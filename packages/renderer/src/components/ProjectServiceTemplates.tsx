@@ -77,7 +77,8 @@ export function ProjectServiceTemplates({ projectId, tasks = [], fillFrom = null
   projectId: string | null;
   tasks?: readonly { taskId: string; name: string }[];
   fillFrom?: ServiceImportHintView | null;
-  onFillApplied?: () => void;
+  /** Called with the hint only after the form really filled, so no caller announces a refused fill. */
+  onFillApplied?: (applied: ServiceImportHintView) => void;
 }) {
   const [rows, setRows] = useState<{ projectId: string; values: ServiceTemplateView[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -128,9 +129,9 @@ export function ProjectServiceTemplates({ projectId, tasks = [], fillFrom = null
   // fills fields: no request, no save and no binding happens here, and a
   // configuration-only hint (runType === null) is refused as a run unit.
   useEffect(() => {
-    if (!fillFrom || appliedFill.current === fillFrom) return;
+    if (!fillFrom) { appliedFill.current = null; return; }
+    if (appliedFill.current === fillFrom) return;
     appliedFill.current = fillFrom;
-    fillApplied.current?.();
     if (fillFrom.runType === null) {
       setError("该草案仅为配置来源（如 .env），不能作为运行单元填入服务模板");
       return;
@@ -149,6 +150,7 @@ export function ProjectServiceTemplates({ projectId, tasks = [], fillFrom = null
     setFillNotes({ source: `${fillFrom.source} · ${fillFrom.name}`,
       notes: [...fillFrom.envKeys.map((key) => `变量键：${key}（值未知，未写入共享模板）`),
         ...fillFrom.invalidVars.map((key) => `无效变量：${key}`), ...fillFrom.toVerify] });
+    fillApplied.current?.(fillFrom);
   }, [fillFrom, projectId, connected]);
 
   const refresh = async () => {
@@ -201,6 +203,16 @@ export function ProjectServiceTemplates({ projectId, tasks = [], fillFrom = null
     return current && current.version === target.version ? current.version + 1 : null;
   };
 
+  /** True when a projected row is exactly the revision the page asked main to write. */
+  const matchesValue = (row: ServiceTemplateView, value: { descriptor: ServiceTemplateView["descriptor"]; shared: { key: string; value: string }[] }) =>
+    row.descriptor.name === value.descriptor.name && row.descriptor.program === value.descriptor.program &&
+    row.descriptor.args.join("\0") === value.descriptor.args.join("\0") &&
+    row.descriptor.ports.join(",") === value.descriptor.ports.join(",") &&
+    row.descriptor.runType === value.descriptor.runType &&
+    JSON.stringify(row.descriptor.healthCheck ?? null) === JSON.stringify(value.descriptor.healthCheck ?? null) &&
+    (row.descriptor.workdir ?? "") === (value.descriptor.workdir ?? "") &&
+    JSON.stringify(row.shared) === JSON.stringify(value.shared.map((entry) => ({ key: entry.key, value: entry.value })));
+
   const createTemplate = async (targetProjectId: string) => {
     const value = buildValue();
     if (!value) { setReview(false); return; }
@@ -211,12 +223,7 @@ export function ProjectServiceTemplates({ projectId, tasks = [], fillFrom = null
     if (epoch.current !== request) return;
     setSaving(false);
     const created = response.ok ? serviceTemplatesFromMain([response.payload], targetProjectId)?.[0] : null;
-    if (!created || created.version !== 1 || created.descriptor.name !== value.descriptor.name ||
-        created.descriptor.program !== value.descriptor.program || created.descriptor.args.join("\0") !== value.descriptor.args.join("\0") ||
-        created.descriptor.ports.join(",") !== value.descriptor.ports.join(",") || created.descriptor.runType !== value.descriptor.runType ||
-        JSON.stringify(created.descriptor.healthCheck ?? null) !== JSON.stringify(value.descriptor.healthCheck ?? null) ||
-        (created.descriptor.workdir ?? "") !== (value.descriptor.workdir ?? "") ||
-        JSON.stringify(created.shared) !== JSON.stringify(value.shared.map((row) => ({ key: row.key, value: row.value })))) {
+    if (!created || created.version !== 1 || !matchesValue(created, value)) {
       setUncertain(true);
       setReview(false);
       setError("保存结果无法确认，请刷新清单后核对");
@@ -278,7 +285,9 @@ export function ProjectServiceTemplates({ projectId, tasks = [], fillFrom = null
     setSaving(false);
     const parsed = listed.ok ? serviceTemplatesFromMain(listed.payload, targetProjectId) : null;
     const saved = parsed?.find((row) => row.serviceId === target.serviceId);
-    if (!parsed || !saved || saved.version !== expected) {
+    // The list must show the exact revision the page reviewed - the same version
+    // *and* the same descriptor and shared rows - or nothing is reported as saved.
+    if (!parsed || !saved || saved.version !== expected || !matchesValue(saved, value)) {
       setRows(null);
       setUncertain(true);
       setError("清单未能确认新版本，请刷新核对");
@@ -336,8 +345,8 @@ export function ProjectServiceTemplates({ projectId, tasks = [], fillFrom = null
         {update.diff.changed.map((entry) => <p key={entry.key}>修改：{entry.key}：{entry.before} → {entry.after}</p>)}
         {!!update.diff.removed.length && <p>移除：{update.diff.removed.join("、")}</p>}
         <p>启动字段差异：{update.descriptorChanged ? "有（程序、参数、端口、运行类型、健康检查或工作目录）" : "无"}</p>
-        <p className="mt-1">已有任务绑定保留原模板版本；受影响服务需重启后生效，本页不会重启任何服务。</p>
-        {update.restartNeeded.map((entry) => <p key={entry.taskId}>受影响：任务 {taskName(entry.taskId)} 的 {entry.name}（v{entry.from} → v{entry.to}）需重启后生效</p>)}
+        <p className="mt-1">已有任务绑定保留原模板版本；本页不会重启服务或让绑定改用新版本 —— 需要先显式采用新版本（该步骤尚未接线）。</p>
+        {update.restartNeeded.map((entry) => <p key={entry.taskId}>受影响：任务 {taskName(entry.taskId)} 的 {entry.name}（v{entry.from} → v{entry.to}）仍固定 v{entry.from}，需显式采用 v{entry.to} 并重启后才会生效</p>)}
       </div>}
       {review && !editTarget && <p role="status" className="mt-3 border-t border-line py-2 text-muted">待保存：{draft.name} · {runTypeLabel[draft.runType]} · {draft.shared.map((row) => row.key).join("、") || "无共享变量"}</p>}
       <div className="mt-3 flex justify-end gap-2"><Button type="button" size="sm" variant="ghost" disabled={saving} onClick={close}>取消</Button>

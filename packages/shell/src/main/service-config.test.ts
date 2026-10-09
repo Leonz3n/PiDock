@@ -13,6 +13,10 @@ import {
   restartNeededForTemplateAdopt,
   validateNoSecretsInShared,
   validateServiceDescriptor,
+  validateSharedServiceArgument,
+  validateSharedServiceHealthTarget,
+  validateSharedServiceProgram,
+  validateSharedServiceValue,
   validateSharedServiceWorkdir,
   type ResolvedServiceRow,
   type ServiceDescriptor,
@@ -72,6 +76,56 @@ describe("shared-template working directory", () => {
     expect(validateSharedServiceWorkdir(`apps/a${String.fromCharCode(0)}b`)?.message).toContain("控制字符");
     expect(validateSharedServiceWorkdir("a".repeat(513))?.code).toBe("invalid-service");
     expect(validateSharedServiceWorkdir("apps/api-token")?.code).toBe("secret-in-shared");
+  });
+});
+
+describe("shared-revision path and credential policy", () => {
+  it("accepts portable arguments, targets, values and program names", () => {
+    for (const value of ["server.js", "src/main.ts", "--host", "127.0.0.1", "--filter", "saas-web", "--port=3000"]) {
+      expect(validateSharedServiceArgument(value)).toBeNull();
+    }
+    for (const value of ["http://127.0.0.1:3000/health", "tcp://127.0.0.1:5432", "127.0.0.1:3000"]) {
+      expect(validateSharedServiceHealthTarget(value)).toBeNull();
+    }
+    expect(validateSharedServiceValue("3000")).toBeNull();
+    expect(validateSharedServiceValue("http://localhost:4100")).toBeNull();
+    expect(validateSharedServiceProgram("pnpm")).toBeNull();
+    expect(validateSharedServiceProgram("node")).toBeNull();
+  });
+
+  it("refuses a machine path wherever it appears in one token", () => {
+    for (const value of ["/Users/name/private/healthz", "file:///Users/name/private/app.sock", "-I/Users/name/private/include",
+      "--prefix=/srv/app", "~/bin/node", "C:\\app", "\\\\host\\share", "../outside", "-I../outside"]) {
+      expect(validateSharedServiceArgument(value)?.message).toContain("本机路径");
+    }
+    for (const value of ["/Users/name/private/app.sock", "file:///Users/name/private/app.sock", "../outside"]) {
+      expect(validateSharedServiceHealthTarget(value)?.message).toContain("本机文件路径");
+    }
+    expect(validateSharedServiceValue("/Users/name/private/app.sock")?.message).toContain("本机路径");
+  });
+
+  it("refuses credential spellings the narrow [\u0026] form missed, without echoing them", () => {
+    for (const value of ["http://127.0.0.1:3000/health?api_key=SECRET", "http://127.0.0.1:3000/health?apikey=SECRET",
+      "http://127.0.0.1:3000/health?x-key=SECRET", "https://user:pass@example.test/health"]) {
+      expect(validateSharedServiceHealthTarget(value)?.code).toBe("secret-in-shared");
+    }
+    expect(validateSharedServiceValue("apikey=SECRET")?.code).toBe("secret-in-shared");
+    expect(validateSharedServiceValue("https://user:pass@example.test")?.code).toBe("secret-in-shared");
+    expect(validateSharedServiceArgument("--token")?.code).toBe("secret-in-shared");
+    expect(validateSharedServiceArgument("--x-key=SECRET")?.code).toBe("secret-in-shared");
+  });
+
+  it("refuses a machine path or credential in a program name instead of a portable name", () => {
+    for (const value of ["/usr/bin/node", "./bin/dev", "~/bin/node", "bin/dev"]) {
+      expect(validateSharedServiceProgram(value)?.message).toContain("可移植的程序名");
+    }
+  });
+
+  it("bounds the fields exactly like the catalog parser does", () => {
+    expect(validateSharedServiceArgument("x".repeat(513))?.message).toContain("过长");
+    expect(validateSharedServiceArgument("a\nb")?.message).toContain("控制字符");
+    expect(validateSharedServiceHealthTarget("a\nb")?.message).toContain("控制字符");
+    expect(validateSharedServiceValue("x".repeat(2049))?.code).toBe("invalid-service");
   });
 });
 

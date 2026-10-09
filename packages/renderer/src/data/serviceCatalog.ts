@@ -4,7 +4,7 @@ import {
   type ServiceRunType,
 } from "./serviceTemplateRules";
 
-/** One shared row of a stored revision. Shared rows are never secrets (main is fail-closed). */
+/** One shared row of a stored revision. Main keeps the layer credential-free (`secret: false`, no credential-looking key, no credential/path-looking value) and fails closed, so a shared row is a human-typed literal, not a secret. */
 export interface ServiceTemplateSharedRow {
   key: string;
   value: string;
@@ -99,9 +99,9 @@ function sharedFromMain(value: unknown): ServiceTemplateSharedRow[] | null {
 
 /**
  * Public projection only: machine paths, program paths, reference names and
- * reference values do not enter the page model. Shared rows do, because they
- * can never be a secret (main is fail-closed) and the editor has to prefill an
- * existing revision to edit it.
+ * reference values do not enter the page model. Shared rows do, because main
+ * stores them fail-closed (credential-free keys and values, no machine path)
+ * and the editor has to prefill an existing revision to edit it.
  */
 export function serviceTemplatesFromMain(value: unknown, projectId: string): ServiceTemplateView[] | null {
   if (!Array.isArray(value) || value.length > 500) return null;

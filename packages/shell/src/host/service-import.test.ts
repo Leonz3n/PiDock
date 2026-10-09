@@ -154,6 +154,20 @@ describe("#7 real repository service-import hints", () => {
     expect(JSON.stringify(scan)).not.toMatch(/secret-token-value|secret-token|\/usr\/bin|\/Users\/|~\/bin|\/srv|user:pass@|\.\.\/outside/);
   });
 
+  it("drops a machine path that only shows up mid-token and keeps repo-relative arguments", () => {
+    const repo = root();
+    writeFileSync(join(repo, "package.json"), JSON.stringify({ scripts: {
+      compile: "cc -I/Users/name/private/include -I../outside main.c",
+      dev: "node src/main.ts",
+    } }));
+    const scan = scanServiceImportHints(repo);
+    const byName = (name: string) => scan.hints.find((hint) => hint.name === name);
+    expect(byName("compile")).toMatchObject({ program: "cc", args: ["main.c"] });
+    expect(byName("compile")?.toVerify).toContain("启动命令有 2 个片段含本机路径、内联环境赋值或疑似凭据，已从草案移除，请人工核对");
+    expect(byName("dev")).toMatchObject({ program: "node", args: ["src/main.ts"] });
+    expect(JSON.stringify(scan)).not.toMatch(/\/Users\/|private|outside/);
+  });
+
   it("flags inline env assignments and malformed Compose lists without exposing their values", () => {
     const repo = root();
     writeFileSync(join(repo, "package.json"), JSON.stringify({ scripts: {

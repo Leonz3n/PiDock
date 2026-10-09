@@ -167,6 +167,40 @@ describe("machine-private service catalog", () => {
     expect(f.catalog.listTemplates(projectId)[0]).toMatchObject({ version: 1 });
   });
 
+  it("refuses a machine path or credential in the shared health target or a shared value", () => {
+    const f = fixture();
+    const port = [{ key: "PORT", value: "3000", secret: false }];
+    for (const target of ["/Users/name/private/app.sock", "file:///Users/name/private/app.sock",
+      "http://127.0.0.1:3000/health?api_key=SECRET", "http://127.0.0.1:3000/health?apikey=SECRET",
+      "http://127.0.0.1:3000/health?x-key=SECRET"]) {
+      const descriptor = { ...f.descriptor, healthCheck: { kind: "http" as const, target } };
+      expect(() => f.catalog.saveTemplate({ projectId, descriptor, shared: port })).toThrow("private health target is not shared");
+    }
+    for (const value of ["apikey=SECRET", "https://user:pass@example.test"]) {
+      expect(() => f.catalog.saveTemplate({ projectId, descriptor: f.descriptor,
+        shared: [{ key: "API_URL", value, secret: false }] })).toThrow("invalid shared value");
+    }
+    // The `update` write and its read-only review run the same parser on both steps.
+    const first = f.save();
+    const secret = [{ key: "API_TOKEN", value: "credential-value", secret: false }];
+    for (const write of [
+      () => f.catalog.reviewTemplateUpdate({ projectId, serviceId: first.serviceId, expectedVersion: 1, descriptor: first.descriptor, shared: secret }),
+      () => f.catalog.saveTemplate({ projectId, serviceId: first.serviceId, expectedVersion: 1, descriptor: first.descriptor, shared: secret }),
+      () => f.catalog.saveTemplate({ projectId, serviceId: first.serviceId, expectedVersion: 1,
+        descriptor: { ...first.descriptor, args: ["--prefix=/srv/app"] }, shared: [] }),
+    ]) expect(write).toThrow();
+    expect(f.catalog.saveTemplate({ projectId, descriptor: { ...f.descriptor, healthCheck: { kind: "http", target: "http://127.0.0.1:3000/health" } },
+      shared: [{ key: "API_URL", value: "http://localhost:4100", secret: false }] }).descriptor.healthCheck)
+      .toEqual({ kind: "http", target: "http://127.0.0.1:3000/health" });
+  });
+
+  it("stores a portable shared workdir trimmed and never a padded one", () => {
+    const f = fixture();
+    const saved = f.catalog.saveTemplate({ projectId, descriptor: { ...f.descriptor, workdir: " apps/api " }, shared: [] });
+    expect(saved.descriptor.workdir).toBe("apps/api");
+    expect(new ServiceCatalog(f.dir, f.authority).listTemplates(projectId)[0]?.descriptor.workdir).toBe("apps/api");
+  });
+
   it("persists a portable shared workdir and never a local path", () => {
     const f = fixture();
     const saved = f.catalog.saveTemplate({ projectId, descriptor: { ...f.descriptor, workdir: "apps/api" },
