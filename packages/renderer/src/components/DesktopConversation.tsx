@@ -333,9 +333,15 @@ function TaskConversation({ taskId, name, roots, association, onBack, onOpenProv
   const modelLabel = selectedProfile ? `${selectedProfile.name} · ${selectedProfile.modelId}` : provider ? "未配置模型" : "正在读取模型";
   return <TooltipProvider><main data-testid="desktop-conversation" className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-bg text-ink">
     <div className="shrink-0 border-b border-line bg-paper px-4 pt-3 below-mid:px-3">
-      <div className="flex min-w-0 items-start gap-3">
-        <div className="min-w-0 flex-1">
-          <p className="text-[10px] tracking-[1.4px] text-muted uppercase">Task workspace</p>
+      {/* #49: the shell column is 280-380px when a task page is open, and the
+          prototype wraps the task header below 1180px (`.taskheader
+          .between{flex-wrap:wrap}`) and stacks it below 720px. Without the wrap
+          the fixed 288px actionset forced the `flex-1` title to 0 width, so the
+          `Task workspace` eyebrow painted under the icons and the column grew
+          an inner horizontal scrollbar. */}
+      <div data-testid="desktop-conversation-header" className="flex min-w-0 flex-wrap items-start gap-3">
+        <div data-testid="desktop-conversation-title" className="min-w-0 flex-1">
+          <p data-testid="desktop-conversation-eyebrow" className="text-[10px] tracking-[1.4px] text-muted uppercase">Task workspace</p>
           <h1 className="mt-1 truncate text-[19px] font-semibold tracking-[-0.4px]">{name}</h1>
           <div className="mt-1.5 mb-2 flex flex-wrap items-center gap-2 text-[11px] text-muted">
             <span className="inline-flex min-w-0 items-center gap-1"><Icon name="branch" /><span className="truncate">{taskId}</span></span>
@@ -347,7 +353,10 @@ function TaskConversation({ taskId, name, roots, association, onBack, onOpenProv
             <Badge>{ready ? "已连接" : invalidated ? "已失效" : "未连接"}</Badge>
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-1 pb-1">
+        {/* `min-w-0 flex-wrap` (no `shrink-0`): a fixed 288px toolbar would overflow any
+            shell column (the column never exceeds 380px), so it drops to its own line
+            and wraps its icon buttons inside the column width instead. */}
+        <div data-testid="desktop-conversation-toolbar" className="flex min-w-0 flex-wrap items-center gap-1 pb-1">
           {toolIcons.map((item) => {
             const unwiredReason = DESKTOP_TOOLS_UNWIRED.find((entry) => entry.id === item.tool)?.reason;
             return unwiredReason === undefined
