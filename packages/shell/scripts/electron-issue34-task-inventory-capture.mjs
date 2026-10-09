@@ -125,23 +125,28 @@ async function run() {
     if (!/\/renderer\/index\.html$/.test(url)) throw Error(`not the production renderer: ${url}`);
 
     // (a) Empty configured root: a real, range-limited empty state, no demo task.
+    // Captured first so no Host is forked before the states that mutate the root.
     await until((body) => body.includes("这个项目还没有进行中任务。") && body.includes("项目映射未建立"), "empty root");
     const emptyBody = await text();
     if (/Atlas Web|演示任务|演示统计/.test(emptyBody)) throw Error("demo fixture leaked into the empty Desktop");
     await capture("empty-root");
 
-    // (b) A real persisted task in the configured root is listed by name.
+    // (c) A corrupt record in the configured root is refused: the root fails closed
+    // (it does not list its valid neighbour either) and the corrupt identity is never
+    // shown in place of a real task.
     writeRealTask();
-    await reload((body) => body.includes("对账单详情·本地联调") && body.includes("任务根 1/1 就绪"), "real task");
-    await capture("real-task");
-
-    // (c) A corrupt record is refused: the root fails closed, no row is listed, and the
-    // failure is stated on that root (not padded with a substitute task).
-    writeFileSync(join(taskDir, "task.json"), "{ not json");
+    mkdirSync(join(taskRoot, "task-99999999"));
+    writeFileSync(join(taskRoot, "task-99999999", "task.json"), "{ not json");
     await reload((body) => body.includes("默认任务根：任务根目录不可读取或任务身份冲突，请检查后重试"), "corrupt record");
     const corruptBody = await text();
-    if (corruptBody.includes("对账单详情·本地联调")) throw Error("corrupt record was still listed");
+    if (corruptBody.includes("对账单详情·本地联调") || corruptBody.includes("task-99999999")) throw Error("corrupt record was still listed");
     await capture("corrupt-record");
+
+    // (b) Removing the corrupt record leaves the real persisted task listed by name
+    // from the configured root.
+    rmSync(join(taskRoot, "task-99999999"), { recursive: true, force: true });
+    await reload((body) => body.includes("对账单详情·本地联调") && body.includes("任务根 1/1 就绪"), "real task");
+    await capture("real-task");
 
     // (d) The list read itself fails: the renderer shows the actionable error and a
     // retry, and never falls back to the demo fixture.
