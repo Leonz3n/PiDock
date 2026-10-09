@@ -17,7 +17,7 @@
  *   below proves detection, not elimination).
  */
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -458,7 +458,12 @@ describe.skipIf(process.platform === "win32")("#48 descendant reclaim (POSIX rea
     // The descendant left the leader's process group (setsid), so the OS group
     // probe cannot name it even though it still holds the leader's pipes.
     await until(() => !alive(leaderPid), "the leader to exit");
-    expect(processGroupMemberPids(leaderPid) ?? []).not.toContain(descendantPid);
+    // The group probe must be available (not the fail-closed `null`), and it
+    // must not name the escaped descendant - that is the evidence the stop is
+    // denied. Asserting on `?? []` would make the membership check vacuous.
+    const members = processGroupMemberPids(leaderPid);
+    expect(members).not.toBeNull();
+    expect(members).not.toContain(descendantPid);
 
     // Unnameable holder: fail closed instead of guessing a stop.
     await expect(processes.stop("escaped")).rejects.toThrow(/termination-unconfirmed/);
@@ -482,7 +487,8 @@ describe.skipIf(process.platform === "win32")("#48 cwd realpath -> spawn TOCTOU 
     mkdirSync(dirB);
     const link = join(dir, "link");
     symlinkSync(dirA, link);
-    const processes = driver(dir);
+    const exits: string[] = [];
+    const processes = driver(dir, { onExit: (_serviceId, reason) => exits.push(reason) });
     // A real filesystem swap scheduled to run after `start` has resolved the
     // path and called `spawn`, but before the spawn event resumes `start` - i.e.
     // exactly inside the check->spawn window the code must detect.
@@ -492,6 +498,31 @@ describe.skipIf(process.platform === "win32")("#48 cwd realpath -> spawn TOCTOU 
     // The rejected launch left no live child and wrote no durable record.
     expect(processes.ids()).toEqual([]);
     expect(readServiceOwnershipOnDisk(dir).entries).toEqual([]);
+    // A refused launch is not a launch: its just-spawned child is killed as part
+    // of the refusal, so it must not be reported to the runtime as an exit.
+    expect(exits).toEqual([]);
+  }, 30_000);
+
+  it("detects a swap of the resolved directory itself (the swap the child's cwd can actually follow)", async () => {
+    const dir = taskDir();
+    const dirA = join(dir, "a");
+    const dirB = join(dir, "b");
+    mkdirSync(dirA);
+    mkdirSync(dirB);
+    const link = join(dir, "link");
+    symlinkSync(dirA, link);
+    const exits: string[] = [];
+    const processes = driver(dir, { onExit: (_serviceId, reason) => exits.push(reason) });
+    // Unlike swapping the symlink target, this replaces the *resolved* directory
+    // `dirA` after `spawn`: `realpathSync(link)` now resolves link -> dirA (a
+    // symlink) -> dirB, so the re-read sees a different device+inode and the
+    // launch is refused. This is the swap a child's cwd could actually follow.
+    process.nextTick(() => { renameSync(dirA, join(dir, "a-moved")); symlinkSync(dirB, dirA); });
+    await expect(processes.start(plan("swap-resolved", link, ["-e", "setInterval(() => {}, 1000)"])))
+      .rejects.toThrow("invalid-launch: cwd changed between check and spawn (swap-resolved)");
+    expect(processes.ids()).toEqual([]);
+    expect(readServiceOwnershipOnDisk(dir).entries).toEqual([]);
+    expect(exits).toEqual([]);
   }, 30_000);
 
   it("still starts normally through a stable symlinked cwd (detection is not a blanket refusal)", async () => {

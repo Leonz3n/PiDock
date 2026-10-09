@@ -61,8 +61,8 @@ describe.skipIf(process.platform === "win32")("#7 Host-owned real service proces
   });
 
   it("reclaims a descendant that inherited the leader's output when the leader exits", async () => {
-    const root = taskDir(); const lines: string[] = [];
-    const processes = new TaskServiceProcesses(root, (_, line) => lines.push(line), () => {}, (line) => line);
+    const root = taskDir(); const lines: string[] = []; const exits: string[] = [];
+    const processes = new TaskServiceProcesses(root, (_, line) => lines.push(line), (_, reason) => exits.push(reason), (line) => line);
     const leaderPid = await processes.start(plan("parent-exited", root, ["-e", descendantScript(false)]));
     let descendantPid: number | undefined;
     try {
@@ -72,6 +72,9 @@ describe.skipIf(process.platform === "win32")("#7 Host-owned real service proces
       // The leader is gone but its descendant still holds the pipes. Box 2 must
       // end it from OS process-group evidence, not report an unknown result.
       await until(() => { try { process.kill(leaderPid, 0); return false; } catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH"; } });
+      // The descendant holds the launch's output, so `close` has not fired and
+      // the launch is not over: no exit notification may be emitted yet.
+      expect(exits).toEqual([]);
       await processes.stop("parent-exited");
       expect(alivePid(descendantPid)).toBe(false);
       expect(processes.ids()).toEqual([]);
@@ -96,6 +99,9 @@ describe.skipIf(process.platform === "win32")("#7 Host-owned real service proces
       await expect(processes.stop("escaped")).rejects.toThrow("termination-unconfirmed");
       expect(alivePid(descendantPid)).toBe(true);
       expect(processes.ids()).toEqual(["escaped"]);
+      // A failed stop keeps the launch registered, so the same service may not
+      // be started a second time (no double-spawn behind an unconfirmed stop).
+      await expect(processes.start(plan("escaped", root, ["-e", descendantScript(true)]))).rejects.toThrow("already-running");
     } finally {
       if (descendantPid) { try { process.kill(descendantPid, "SIGKILL"); } catch { /* already gone */ } }
       await until(() => processes.ids().length === 0);
