@@ -470,6 +470,11 @@ export function validateHostTaskOp(
   // #6 resume: shape-checked here; the real classification + gates run
   // Host-side. Selections come from the task record, so only the
   // caller-scanned conflict inputs are required from the payload.
+  // `fetchedCommits` is optional by contract: a resume plans from each
+  // repo's RECORDED fixed baseline (recovery preserves it even when the
+  // remote branch has moved/vanished); a supplied value that differs from
+  // the record is refused Host-side, and the plan still emits a real
+  // `git fetch`, so a deleted remote fails at that op.
   if (op === "task/resumeAppend") {
     if (!isRecord(payload))
       return { ok: false, error: "invalid-payload: task/resumeAppend requires a payload object" };
