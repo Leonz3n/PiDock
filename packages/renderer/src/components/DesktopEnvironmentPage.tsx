@@ -134,7 +134,9 @@ export function DesktopEnvironmentPage({ projects, projectId, taskCount, tasks, 
       <Badge variant="soft">环境模型未接线 · 共享模板按版本保存</Badge>
     </div>
     <div className="mt-5 flex flex-wrap gap-1 border-b border-line pb-2" role="group" aria-label="配置作用范围">
-      {(["任务覆盖", "共享模板", "本机私有配置"] as const).map((scope) => <Button key={scope} type="button" variant="ghost" size="sm" disabled title={`${scope}的生产数据未接线`}>{scope}</Button>)}
+      {(["任务覆盖", "共享模板", "本机私有配置"] as const).map((scope) => <Button key={scope} type="button" variant="ghost" size="sm" disabled title={scope === "共享模板"
+        ? "共享模板在下方按版本维护；此作用域切换开关未接线"
+        : `${scope}的生产数据未接线`}>{scope}</Button>)}
     </div>
     <section className="mt-5" aria-label="环境变量">
       <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="text-sm font-semibold">环境变量 <Badge variant="soft" className="ml-1">未接线</Badge></h2><Button type="button" size="sm" disabled title="缺少真实配置及变更预览">保存更改</Button></div>
