@@ -9,8 +9,25 @@
 - PNG：**12 张**，每个（状态,尺寸）组合一张：`1440x900-*` 6 张、`1000x700-*` 1 张、`720x560-*` 5 张（见 §5）
 - 元数据：`capture-log.json`（命令、源码版本、harness sha256、每张 PNG 的 sha256 / 像素尺寸 /
   deviceScaleFactor / 窗口 bounds / 裁剪偏移 / 每个状态的 **视图 bounds/可见性/当前任务/页面 URL** /
-  捕获时 `document.body.innerText`，以及无截图的流程断言 `checks[]`）
+  **shell 列内部几何 `shellColumn`**（可失败的断言，见 §5）/ 捕获时 `document.body.innerText`，
+  以及无截图的流程断言 `checks[]`）
 - 复现确定性：`determinism-replay.json`（同一 harness 连续两次运行、逐文件 sha256 相同）
+
+## 0. #49：shell 窄列的控件重叠与「空洞指标」修复（本目录已刷新）
+
+#49 修复了本目录暴露的两个问题，所以 `1440x900` / `1000x700` / `720x560` 三档的**任务页打开态**
+PNG 已重采（`no-page-selected` / `last-page-closed` 两态未变，sha256 与旧提交相同）：
+
+- **控件重叠**：任务页打开时 shell 列只有 280–380px（`desktop-layout.ts:15`），而 Desktop 任务头
+  持有一个固定约 288px 的 `shrink-0` 图标工具条，把 `flex-1` 标题挤到 0 宽：`Task workspace`
+  被图标盖住、面包屑 `工作区` 逐字换行、列内出现横向滚动条。修复让表头行与工具条按原型在
+  ≤1180px 换行（`prototypes/pidock-ui/style.css` `.taskheader .between/.actionset{flex-wrap:wrap}`，
+  与 `TaskPage.TaskHeader` 同一约定），并让面包屑的字面片段 `shrink-0 whitespace-nowrap`、
+  只有项目/任务名 `min-w-0 truncate`。
+- **空洞指标**：旧 `shellHorizontalOverflow` 用 `documentElement.scrollWidth - clientWidth`，对每张图
+  都是 0（真正的溢出在嵌套滚动容器里），**永远不会失败**。现在每张有任务工作区的截图都要通过
+  `shellColumn` 断言：列自身的 `scrollWidth`/`clientWidth`、工具条包围盒与 `Task workspace` 眉标题
+  文本框（Range 盒）**不相交**、工具条不越出列。该断言在旧布局上会失败（见 §5 末）。
 
 ## 1. 运行方式与截图来源
 
@@ -126,22 +143,25 @@ packages/shell/node_modules/.bin/electron \
   裁剪偏移与其页顶边校验值
 - `geometry.shellBounds`/`shellVisible`：shell `WebContentsView` 的真实 bounds 与可见性
 - `geometry.pageTaskId`/`pageUrl`/`pageBounds`/`pageVisible`：当前**选中的**任务浏览器活动页
-- `shellHorizontalOverflow`：`{document, maxElement, worstElement}`，即 `documentElement` 的水平溢出
-  与页内所有元素中最大的 `scrollWidth - clientWidth`（**记录值，非断言**；见 §6）
+- `shellColumn`：每张有任务工作区的截图都会**断言**的 shell 列内部几何：`content.{scrollWidth,
+  clientWidth}`（列自身的 `overflow-y-auto` 主区）、`breadcrumb.{scrollWidth, clientWidth}`、
+  `toolbar` / `eyebrow` 包围盒（眉标题用 `Range` 取实际文本盒，因为被挤到 0 宽的 `flex-1` 容器
+  本身量不出溢出的文字）、`toolbarOverlapsEyebrow`、`toolbarInsideColumn`、`documentOverflow`。
+  任一项不满足即抛错、不写 PNG（见 §0 与 §5 末）
 - `bodyText`：捕获时 shell 的可见文本
 
 | 状态 | PNG | 实测画面（`geometry` 摘要） | sha256 |
 | --- | --- | --- | --- |
 | `no-page-selected`（基线） | `1440x900-no-page-selected.png` | shell 全宽 1440，无页（`pageTaskId: null`），主内容为真实 `PROJECT Adder`（2 个进行中任务、1 个仓库），无占位视图、无 demo Project/Task | `7cc1c877…893f6e` |
 | 同上（最小档） | `720x560-no-page-selected.png` | shell 全宽 720，主内容同为 `PROJECT Adder` | `51837957…67d0c9` |
-| `browser-tool-open` | `1440x900-browser-tool-open.png` | 真实 Desktop「浏览器」面板打开任务页 A：面板显示 `主进程窗口已打开 http://127.0.0.1:45137/a` 与页面句柄；shell 380 / page 1060，活动页 A（`/a`） | `98694a1c…66027b` |
-| `task-page-open` | `1440x900-task-page-open.png` | 面板关闭后 shell 380 / page 1060，A 页可见（深蓝 `真实任务页 · A`） | `9472f4ae…c28c61` |
-| `task-page-open-resized` | `1000x700-task-page-open-resized.png` | resize 到 1000×700：shell **360** / page **640**——360 是 `floor(1000*0.36)`，落在 280–380 之间，既不是 1440 的 clamp 380 也不是 720 的 clamp 280，证明视图按窗口跟随而不是只在两端取值 | `6b81451f…2e47da` |
-| `task-page-open`（最小档） | `720x560-task-page-open.png` | resize 到生产最小尺寸 720×560：shell 280 / page 440，tile 满窗、无零宽、无重叠 | `15ae28ab…f10ee8` |
-| `multi-task-page-b-selected` | `1440x900-multi-task-page-b-selected.png` | 打开任务 B 的页面后 **B 成为可见页**（橙色 `真实任务页 · B`，`pageTaskId task-bbbb2222`、`/b`），A 页仍打开但不显示；shell 380 / page 1060 | `a26a65dc…442884` |
-| 同上（最小档） | `720x560-multi-task-page-b-selected.png` | 同状态 720×560，shell 280 / page 440 | `4b48e38a…cb1289` |
-| `multi-task-page-a-restored` | `1440x900-multi-task-page-a-restored.png` | 关闭 B 后**恢复到 A 的活页面**：目标页是 A（`pageTaskId task-aaaa1111`），URL 是 A 在后台保持打开期间导航到的 `/a2`（绿色 `真实任务页 · A · 已导航`）；shell 380 / page 1060 | `1b8054cf…2edffb` |
-| 同上（最小档） | `720x560-multi-task-page-a-restored.png` | 同状态 720×560，shell 280 / page 440 | `2fb8b255…0451c2` |
+| `browser-tool-open` | `1440x900-browser-tool-open.png` | 真实 Desktop「浏览器」面板打开任务页 A：面板显示 `主进程窗口已打开 http://127.0.0.1:45137/a` 与页面句柄；shell 380 / page 1060，活动页 A（`/a`） | `b71db418…f261e5` |
+| `task-page-open` | `1440x900-task-page-open.png` | 面板关闭后 shell 380 / page 1060，A 页可见（深蓝 `真实任务页 · A`）；`Task workspace` 标题与工具条上下分列、不重叠（#49） | `ce205ae9…9fe5d8` |
+| `task-page-open-resized` | `1000x700-task-page-open-resized.png` | resize 到 1000×700：shell **360** / page **640**——360 是 `floor(1000*0.36)`，落在 280–380 之间，既不是 1440 的 clamp 380 也不是 720 的 clamp 280，证明视图按窗口跟随而不是只在两端取值 | `8948344a…44a0de` |
+| `task-page-open`（最小档） | `720x560-task-page-open.png` | resize 到生产最小尺寸 720×560：shell 280 / page 440，tile 满窗、无零宽、无重叠；`shellColumn` 断言工具条在列内、不压眉标题、列内无横向溢出（#49） | `017ef728…2b6a88` |
+| `multi-task-page-b-selected` | `1440x900-multi-task-page-b-selected.png` | 打开任务 B 的页面后 **B 成为可见页**（橙色 `真实任务页 · B`，`pageTaskId task-bbbb2222`、`/b`），A 页仍打开但不显示；shell 380 / page 1060 | `9345a327…372fe6` |
+| 同上（最小档） | `720x560-multi-task-page-b-selected.png` | 同状态 720×560，shell 280 / page 440 | `181bd328…55abbd` |
+| `multi-task-page-a-restored` | `1440x900-multi-task-page-a-restored.png` | 关闭 B 后**恢复到 A 的活页面**：目标页是 A（`pageTaskId task-aaaa1111`），URL 是 A 在后台保持打开期间导航到的 `/a2`（绿色 `真实任务页 · A · 已导航`）；shell 380 / page 1060 | `41252916…1999d3` |
+| 同上（最小档） | `720x560-multi-task-page-a-restored.png` | 同状态 720×560，shell 280 / page 440 | `9c72c3e2…790f27` |
 | `last-page-closed` | `1440x900-last-page-closed.png` | 关闭**最后一页**后 shell 回到全宽 1440，`pageTaskId/pageUrl/pageBounds/pageVisible` 全为 `null`（页面确实消失）；主内容仍是**已选中任务的 workspace**（`TASK WORKSPACE · 对账单详情·任务A`），不是项目列表 | `5bf2cc8e…0d329c` |
 | 同上（最小档） | `720x560-last-page-closed.png` | 同状态 720×560，shell 全宽 720 | `c3ded828…b71606` |
 
@@ -150,6 +170,18 @@ packages/shell/node_modules/.bin/electron \
 被 B 遮住期间导航到 `/a2` 之后恢复可见的状态），`task-page-open-resized` 也不再等于
 `task-page-open`（它是 1000×700 的第三档几何）。同一状态的两档尺寸之间、以及
 `no-page-selected` / `last-page-closed` 之间也各不相同。
+
+**#49 `shellColumn` 断言在旧布局上确实会失败。** 在只加 `data-testid`、未加换行的 renderer 上
+（像素与修复前逐字节相同）运行本 harness，第一个任务工作区截图即失败：
+
+```
+ISSUE37_CAPTURE_FAILED browser-tool-open 1440x900 Error: task toolbar intersects the Task workspace heading at 1440x900 (browser-tool-open)
+```
+
+修复后同一断言在 1440×900 / 1000×700 / 720×560 三档全部通过。`shellColumn` 的原始值随每张图
+记录在 `capture-log.json.shots[].shellColumn`（例如 720×560 任务页打开态：
+`toolbarOverlapsEyebrow:false`、`toolbarInsideColumn:true`、
+`content.scrollWidth === content.clientWidth`）。
 
 `capture-log.json.checks[]` 记录**没有截图、只做断言**的流程回程：
 
@@ -166,11 +198,13 @@ packages/shell/node_modules/.bin/electron \
 - **真实用户任务页**：用的是本机 loopback 上由 harness 提供的页面（operator 用
   `PIDOCK_TASK_BROWSER_ORIGINS` 配置的来源），不是用户真实业务前端；真实业务页面/远程来源未测。
 - **导航失败/刷新恢复的 GUI 呈现**（`#37` box 2 的另一半）：由既有聚焦测试覆盖，**不在**本目录。
-- **shell 内部的「不可触达控件」**（`#37` box 3 的后半句）：本目录只对**视图级**几何做断言
-  （280/360/380 列宽、tile、无零宽、无重叠）。shell 的窄列内部存在**既有**横向溢出——
-  `shellHorizontalOverflow.maxElement` 在 380px 列下为 152（最宽元素 `H1.mt-1`）、在 720 全宽档为
-  175（`SPAN.min-w-0`）、`document` 本身始终为 0——，因此 box 3 的「最小窗口尺寸下没有不可触达控件」
-  在 shell 内部**未验收**（这是既有 renderer 特性，本证据 diff 不改源码，故只记录不裁决）。
+- **shell 列内部的「不可触达控件」**（`#37` box 3 的后半句）：#49 起，本目录对**列内部**也有可失败
+  断言：每张有任务工作区的截图都记录并断言 `shellColumn`（工具条 vs `Task workspace` 眉标题的包围盒
+  不相交、工具条不越出列、列内无横向溢出）。旧布局会触发
+  `task toolbar intersects the Task workspace heading ...` 并使脚本非零退出，因此 box 3 的「最小窗口
+  尺寸下没有重叠控件」在本目录覆盖的 1440×900 / 1000×700 / 720×560 三档**已验收**；其它尺寸、
+  真实人手输入与真实业务页面仍未测（见上两条）。
+  旧 `documentElement.scrollWidth - clientWidth` 指标始终为 0，已删除（见 §0）。
 - **SDK 会话状态**：驱动 resize/开页后 shell 出现 `sdk-sender-navigated / 重新连接`（会话订阅被撤销），
   与视图几何契约无关，未在本目录验收。
 - Windows / Linux、原生 picker、凭据、真实 Host/RPC outage。

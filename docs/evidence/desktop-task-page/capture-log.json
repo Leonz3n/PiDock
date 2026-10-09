@@ -1,11 +1,11 @@
 {
   "ticket": "#37 box 6 — real-Electron empty/task-page navigation, multi-task selection and view geometry",
   "command": "packages/shell/node_modules/.bin/electron packages/shell/scripts/electron-issue37-task-page-layout-capture.mjs --out docs/evidence/desktop-task-page",
-  "repoRoot": "/private/tmp/pidock-spec-worktrees/issue-37",
-  "revision": "76575505d6cd1d10be9acebec8208f4ebf22a318",
+  "repoRoot": "/private/tmp/pidock-spec-worktrees/issue-49",
+  "revision": "37434b446792985f7f0d4fbd726257bf1f15bf3c",
   "trackedFilesDirty": "false",
   "generatedBy": "scripts/electron-issue37-task-page-layout-capture.mjs",
-  "generatedBySha256": "0a16c58c30200f45df8ea90f7fe26f185d17da49ca9080597b2143ab3e45071e",
+  "generatedBySha256": "0e5a6e1596c8d84c0281efefcc1f4d9f846e18302d624edace0a31ca3d5b805a",
   "capture": {
     "method": "desktopCapturer.getSources({types:['window']}) matched by window.getMediaSourceId()",
     "sourceName": "Electron",
@@ -28,7 +28,7 @@
       "PIDOCK_RENDERER_URL",
       "PIDOCK_TASK_URL"
     ],
-    "shellEntryUrl": "file:///private/tmp/pidock-spec-worktrees/issue-37/packages/shell/dist/renderer/index.html"
+    "shellEntryUrl": "file:///private/tmp/pidock-spec-worktrees/issue-49/packages/shell/dist/renderer/index.html"
   },
   "seeded": {
     "taskRoot": "isolated temp dir; real task.json written by the production task-store serializer",
@@ -138,10 +138,36 @@
       },
       "pageTopEdgePixels": null,
       "sha256": "7cc1c877c98e381bc5a0572ec2d8a115d72f457b383a67bdfeadeff6c1893f6e",
-      "shellHorizontalOverflow": {
-        "document": 0,
-        "maxElement": 0,
-        "worstElement": null
+      "shellColumn": {
+        "breadcrumb": {
+          "box": {
+            "bottom": 48,
+            "height": 48,
+            "right": 1440,
+            "width": 1214,
+            "x": 226,
+            "y": 0
+          },
+          "clientWidth": 1214,
+          "scrollWidth": 1214
+        },
+        "content": {
+          "box": {
+            "bottom": 900,
+            "height": 852,
+            "right": 1440,
+            "width": 1214,
+            "x": 226,
+            "y": 48
+          },
+          "clientWidth": 1214,
+          "scrollWidth": 1214
+        },
+        "documentOverflow": 0,
+        "eyebrow": null,
+        "toolbar": null,
+        "toolbarInsideColumn": null,
+        "toolbarOverlapsEyebrow": null
       },
       "geometry": {
         "contentWidth": 1440,
@@ -182,10 +208,36 @@
       },
       "pageTopEdgePixels": null,
       "sha256": "518379575b2c1afcb43cfa53dabfe911403828f3e083849d05fb2ecd6767d0c9",
-      "shellHorizontalOverflow": {
-        "document": 0,
-        "maxElement": 175,
-        "worstElement": "SPAN.min-w-0"
+      "shellColumn": {
+        "breadcrumb": {
+          "box": {
+            "bottom": 48,
+            "height": 48,
+            "right": 720,
+            "width": 656,
+            "x": 64,
+            "y": 0
+          },
+          "clientWidth": 656,
+          "scrollWidth": 656
+        },
+        "content": {
+          "box": {
+            "bottom": 560,
+            "height": 512,
+            "right": 720,
+            "width": 656,
+            "x": 64,
+            "y": 48
+          },
+          "clientWidth": 641,
+          "scrollWidth": 641
+        },
+        "documentOverflow": 0,
+        "eyebrow": null,
+        "toolbar": null,
+        "toolbarInsideColumn": null,
+        "toolbarOverlapsEyebrow": null
       },
       "geometry": {
         "contentWidth": 720,
@@ -225,11 +277,51 @@
         "y": 32
       },
       "pageTopEdgePixels": 32,
-      "sha256": "98694a1c126bf28afe0f858a4f5e3d75e56bdb4999bf181f6b81855ec366027b",
-      "shellHorizontalOverflow": {
-        "document": 0,
-        "maxElement": 152,
-        "worstElement": "H1.mt-1"
+      "sha256": "b71db41840e9fc1b2df806060716122a2f1a8c93df60547733743586d1f261e5",
+      "shellColumn": {
+        "breadcrumb": {
+          "box": {
+            "bottom": 48,
+            "height": 48,
+            "right": 380,
+            "width": 316,
+            "x": 64,
+            "y": 0
+          },
+          "clientWidth": 316,
+          "scrollWidth": 316
+        },
+        "content": {
+          "box": {
+            "bottom": 900,
+            "height": 852,
+            "right": 380,
+            "width": 316,
+            "x": 64,
+            "y": 48
+          },
+          "clientWidth": 316,
+          "scrollWidth": 316
+        },
+        "documentOverflow": 0,
+        "eyebrow": {
+          "bottom": 74,
+          "height": 14,
+          "right": 188.5,
+          "width": 112.5,
+          "x": 76,
+          "y": 60
+        },
+        "toolbar": {
+          "bottom": 255.5,
+          "height": 72,
+          "right": 368,
+          "width": 292,
+          "x": 76,
+          "y": 183.5
+        },
+        "toolbarInsideColumn": true,
+        "toolbarOverlapsEyebrow": false
       },
       "geometry": {
         "contentWidth": 1440,
@@ -274,11 +366,51 @@
         "y": 32
       },
       "pageTopEdgePixels": 32,
-      "sha256": "9472f4aeae23a1a99a25f935b816366d2a2547c6f9bdc7c4fafc2c652ec28c61",
-      "shellHorizontalOverflow": {
-        "document": 0,
-        "maxElement": 152,
-        "worstElement": "H1.mt-1"
+      "sha256": "ce205ae9d4fae48fd0a1b68b5e927fb75b56d9b399966232a700d1e92c9fe5d8",
+      "shellColumn": {
+        "breadcrumb": {
+          "box": {
+            "bottom": 48,
+            "height": 48,
+            "right": 380,
+            "width": 316,
+            "x": 64,
+            "y": 0
+          },
+          "clientWidth": 316,
+          "scrollWidth": 316
+        },
+        "content": {
+          "box": {
+            "bottom": 900,
+            "height": 852,
+            "right": 380,
+            "width": 316,
+            "x": 64,
+            "y": 48
+          },
+          "clientWidth": 316,
+          "scrollWidth": 316
+        },
+        "documentOverflow": 0,
+        "eyebrow": {
+          "bottom": 74,
+          "height": 14,
+          "right": 188.5,
+          "width": 112.5,
+          "x": 76,
+          "y": 60
+        },
+        "toolbar": {
+          "bottom": 255.5,
+          "height": 72,
+          "right": 368,
+          "width": 292,
+          "x": 76,
+          "y": 183.5
+        },
+        "toolbarInsideColumn": true,
+        "toolbarOverlapsEyebrow": false
       },
       "geometry": {
         "contentWidth": 1440,
@@ -323,11 +455,51 @@
         "y": 32
       },
       "pageTopEdgePixels": 32,
-      "sha256": "6b81451f5549b60d8bc0eb78772d96154756b91beb443e24c7d405c6942e47da",
-      "shellHorizontalOverflow": {
-        "document": 0,
-        "maxElement": 152,
-        "worstElement": "H1.mt-1"
+      "sha256": "8948344af611c072b60c9082f02a1bf59de068c93ea241f0619462039944a0de",
+      "shellColumn": {
+        "breadcrumb": {
+          "box": {
+            "bottom": 48,
+            "height": 48,
+            "right": 360,
+            "width": 296,
+            "x": 64,
+            "y": 0
+          },
+          "clientWidth": 296,
+          "scrollWidth": 296
+        },
+        "content": {
+          "box": {
+            "bottom": 700,
+            "height": 652,
+            "right": 360,
+            "width": 296,
+            "x": 64,
+            "y": 48
+          },
+          "clientWidth": 296,
+          "scrollWidth": 296
+        },
+        "documentOverflow": 0,
+        "eyebrow": {
+          "bottom": 74,
+          "height": 14,
+          "right": 188.5,
+          "width": 112.5,
+          "x": 76,
+          "y": 60
+        },
+        "toolbar": {
+          "bottom": 251.5,
+          "height": 72,
+          "right": 348,
+          "width": 272,
+          "x": 76,
+          "y": 179.5
+        },
+        "toolbarInsideColumn": true,
+        "toolbarOverlapsEyebrow": false
       },
       "geometry": {
         "contentWidth": 1000,
@@ -372,11 +544,51 @@
         "y": 32
       },
       "pageTopEdgePixels": 32,
-      "sha256": "15ae28abf22eca30a37955c2c8577129c59ece3d119714263c6adf20edf10ee8",
-      "shellHorizontalOverflow": {
-        "document": 0,
-        "maxElement": 152,
-        "worstElement": "H1.mt-1"
+      "sha256": "017ef7285698f9d5884e019c06be6fc18a959113bdfcb1420af6a93ba12b6a88",
+      "shellColumn": {
+        "breadcrumb": {
+          "box": {
+            "bottom": 48,
+            "height": 48,
+            "right": 280,
+            "width": 216,
+            "x": 64,
+            "y": 0
+          },
+          "clientWidth": 216,
+          "scrollWidth": 216
+        },
+        "content": {
+          "box": {
+            "bottom": 560,
+            "height": 512,
+            "right": 280,
+            "width": 216,
+            "x": 64,
+            "y": 48
+          },
+          "clientWidth": 216,
+          "scrollWidth": 216
+        },
+        "documentOverflow": 0,
+        "eyebrow": {
+          "bottom": 74,
+          "height": 14,
+          "right": 188.5,
+          "width": 112.5,
+          "x": 76,
+          "y": 60
+        },
+        "toolbar": {
+          "bottom": 276.5,
+          "height": 68,
+          "right": 268,
+          "width": 192,
+          "x": 76,
+          "y": 208.5
+        },
+        "toolbarInsideColumn": true,
+        "toolbarOverlapsEyebrow": false
       },
       "geometry": {
         "contentWidth": 720,
@@ -421,11 +633,51 @@
         "y": 32
       },
       "pageTopEdgePixels": 32,
-      "sha256": "a26a65dcae352b6f9947a2a11579035228c0f51eb555d951ba170407b4442884",
-      "shellHorizontalOverflow": {
-        "document": 0,
-        "maxElement": 152,
-        "worstElement": "H1.mt-1"
+      "sha256": "9345a327afaa8b06b367a87bfb6725f39fa34147915b03d8a96f563974372fe6",
+      "shellColumn": {
+        "breadcrumb": {
+          "box": {
+            "bottom": 48,
+            "height": 48,
+            "right": 380,
+            "width": 316,
+            "x": 64,
+            "y": 0
+          },
+          "clientWidth": 316,
+          "scrollWidth": 316
+        },
+        "content": {
+          "box": {
+            "bottom": 900,
+            "height": 852,
+            "right": 380,
+            "width": 316,
+            "x": 64,
+            "y": 48
+          },
+          "clientWidth": 316,
+          "scrollWidth": 316
+        },
+        "documentOverflow": 0,
+        "eyebrow": {
+          "bottom": 74,
+          "height": 14,
+          "right": 188.5,
+          "width": 112.5,
+          "x": 76,
+          "y": 60
+        },
+        "toolbar": {
+          "bottom": 255.5,
+          "height": 72,
+          "right": 368,
+          "width": 292,
+          "x": 76,
+          "y": 183.5
+        },
+        "toolbarInsideColumn": true,
+        "toolbarOverlapsEyebrow": false
       },
       "geometry": {
         "contentWidth": 1440,
@@ -470,11 +722,51 @@
         "y": 32
       },
       "pageTopEdgePixels": 32,
-      "sha256": "4b48e38a0202f4797df5089dddff3e134d0151d2c3ce5e042ce702dbcfcb1289",
-      "shellHorizontalOverflow": {
-        "document": 0,
-        "maxElement": 152,
-        "worstElement": "H1.mt-1"
+      "sha256": "181bd32889c928bfe6881a3cde897a939fbf15f584890f160ff8fcde5b55abbd",
+      "shellColumn": {
+        "breadcrumb": {
+          "box": {
+            "bottom": 48,
+            "height": 48,
+            "right": 280,
+            "width": 216,
+            "x": 64,
+            "y": 0
+          },
+          "clientWidth": 216,
+          "scrollWidth": 216
+        },
+        "content": {
+          "box": {
+            "bottom": 560,
+            "height": 512,
+            "right": 280,
+            "width": 216,
+            "x": 64,
+            "y": 48
+          },
+          "clientWidth": 216,
+          "scrollWidth": 216
+        },
+        "documentOverflow": 0,
+        "eyebrow": {
+          "bottom": 74,
+          "height": 14,
+          "right": 188.5,
+          "width": 112.5,
+          "x": 76,
+          "y": 60
+        },
+        "toolbar": {
+          "bottom": 276.5,
+          "height": 68,
+          "right": 268,
+          "width": 192,
+          "x": 76,
+          "y": 208.5
+        },
+        "toolbarInsideColumn": true,
+        "toolbarOverlapsEyebrow": false
       },
       "geometry": {
         "contentWidth": 720,
@@ -519,11 +811,51 @@
         "y": 32
       },
       "pageTopEdgePixels": 32,
-      "sha256": "1b8054cf34cb485f40667c5fadd4bdae6410659dceb608a184d9ce6e802edffb",
-      "shellHorizontalOverflow": {
-        "document": 0,
-        "maxElement": 152,
-        "worstElement": "H1.mt-1"
+      "sha256": "41252916a12a597d1137fe651bc55191905983edc9fe264cb1ae2b35c51999d3",
+      "shellColumn": {
+        "breadcrumb": {
+          "box": {
+            "bottom": 48,
+            "height": 48,
+            "right": 380,
+            "width": 316,
+            "x": 64,
+            "y": 0
+          },
+          "clientWidth": 316,
+          "scrollWidth": 316
+        },
+        "content": {
+          "box": {
+            "bottom": 900,
+            "height": 852,
+            "right": 380,
+            "width": 316,
+            "x": 64,
+            "y": 48
+          },
+          "clientWidth": 316,
+          "scrollWidth": 316
+        },
+        "documentOverflow": 0,
+        "eyebrow": {
+          "bottom": 74,
+          "height": 14,
+          "right": 188.5,
+          "width": 112.5,
+          "x": 76,
+          "y": 60
+        },
+        "toolbar": {
+          "bottom": 255.5,
+          "height": 72,
+          "right": 368,
+          "width": 292,
+          "x": 76,
+          "y": 183.5
+        },
+        "toolbarInsideColumn": true,
+        "toolbarOverlapsEyebrow": false
       },
       "geometry": {
         "contentWidth": 1440,
@@ -568,11 +900,51 @@
         "y": 32
       },
       "pageTopEdgePixels": 32,
-      "sha256": "2fb8b255c0c6c0a0100831df34fcfc2edb85130bde3cf693c522553e8a0451c2",
-      "shellHorizontalOverflow": {
-        "document": 0,
-        "maxElement": 152,
-        "worstElement": "H1.mt-1"
+      "sha256": "9c72c3e23e51515704a8c19c7809cc35c1ca21d7f2b4558c2ecc61c010790f27",
+      "shellColumn": {
+        "breadcrumb": {
+          "box": {
+            "bottom": 48,
+            "height": 48,
+            "right": 280,
+            "width": 216,
+            "x": 64,
+            "y": 0
+          },
+          "clientWidth": 216,
+          "scrollWidth": 216
+        },
+        "content": {
+          "box": {
+            "bottom": 560,
+            "height": 512,
+            "right": 280,
+            "width": 216,
+            "x": 64,
+            "y": 48
+          },
+          "clientWidth": 216,
+          "scrollWidth": 216
+        },
+        "documentOverflow": 0,
+        "eyebrow": {
+          "bottom": 74,
+          "height": 14,
+          "right": 188.5,
+          "width": 112.5,
+          "x": 76,
+          "y": 60
+        },
+        "toolbar": {
+          "bottom": 276.5,
+          "height": 68,
+          "right": 268,
+          "width": 192,
+          "x": 76,
+          "y": 208.5
+        },
+        "toolbarInsideColumn": true,
+        "toolbarOverlapsEyebrow": false
       },
       "geometry": {
         "contentWidth": 720,
@@ -618,10 +990,50 @@
       },
       "pageTopEdgePixels": null,
       "sha256": "5bf2cc8e863bab62bb77fe441578c504bd2697766b39ffc58267f4ebee0d329c",
-      "shellHorizontalOverflow": {
-        "document": 0,
-        "maxElement": 0,
-        "worstElement": null
+      "shellColumn": {
+        "breadcrumb": {
+          "box": {
+            "bottom": 48,
+            "height": 48,
+            "right": 1440,
+            "width": 1214,
+            "x": 226,
+            "y": 0
+          },
+          "clientWidth": 1214,
+          "scrollWidth": 1214
+        },
+        "content": {
+          "box": {
+            "bottom": 900,
+            "height": 852,
+            "right": 1440,
+            "width": 1214,
+            "x": 226,
+            "y": 48
+          },
+          "clientWidth": 1214,
+          "scrollWidth": 1214
+        },
+        "documentOverflow": 0,
+        "eyebrow": {
+          "bottom": 74,
+          "height": 14,
+          "right": 354.5,
+          "width": 112.5,
+          "x": 242,
+          "y": 60
+        },
+        "toolbar": {
+          "bottom": 96,
+          "height": 36,
+          "right": 1424,
+          "width": 329,
+          "x": 1095,
+          "y": 60
+        },
+        "toolbarInsideColumn": true,
+        "toolbarOverlapsEyebrow": false
       },
       "geometry": {
         "contentWidth": 1440,
@@ -662,10 +1074,50 @@
       },
       "pageTopEdgePixels": null,
       "sha256": "c3ded828b02aa1c91d90bf10ab3e9ecf2b2242e43974adaf413b278affb71606",
-      "shellHorizontalOverflow": {
-        "document": 0,
-        "maxElement": 85,
-        "worstElement": "SPAN.below-mid:sr-only"
+      "shellColumn": {
+        "breadcrumb": {
+          "box": {
+            "bottom": 48,
+            "height": 48,
+            "right": 720,
+            "width": 656,
+            "x": 64,
+            "y": 0
+          },
+          "clientWidth": 656,
+          "scrollWidth": 656
+        },
+        "content": {
+          "box": {
+            "bottom": 560,
+            "height": 512,
+            "right": 720,
+            "width": 656,
+            "x": 64,
+            "y": 48
+          },
+          "clientWidth": 656,
+          "scrollWidth": 656
+        },
+        "documentOverflow": 0,
+        "eyebrow": {
+          "bottom": 74,
+          "height": 14,
+          "right": 188.5,
+          "width": 112.5,
+          "x": 76,
+          "y": 60
+        },
+        "toolbar": {
+          "bottom": 96,
+          "height": 36,
+          "right": 708,
+          "width": 299,
+          "x": 409,
+          "y": 60
+        },
+        "toolbarInsideColumn": true,
+        "toolbarOverlapsEyebrow": false
       },
       "geometry": {
         "contentWidth": 720,
