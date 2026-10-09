@@ -713,6 +713,26 @@ describe("#6 append + probe guards (S2)", () => {
     expect(
       validateHostTaskOp("task/appendRepos", { repoSelections: [], fetchedCommits: {} }).ok,
     ).toBe(false);
+    // #6 resume: selections come from the record, but the caller-scanned
+    // conflict gate is still required and shape-checked here.
+    expect(validateHostTaskOp("task/resumeAppend", { takenPaths: [], branchesInUse: [] })).toEqual({ ok: true });
+    expect(
+      validateHostTaskOp("task/resumeAppend", {
+        takenPaths: [],
+        branchesInUse: [],
+        mainCheckouts: { frontend: "/src/frontend" },
+        fetchedCommits: { frontend: "a5a4a0d1234" },
+        prepareErrors: { frontend: { code: "fetch-failed", message: "no" } },
+      }),
+    ).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/resumeAppend", {}).ok).toBe(false);
+    expect(validateHostTaskOp("task/resumeAppend", { takenPaths: [] }).ok).toBe(false);
+    expect(
+      validateHostTaskOp("task/resumeAppend", { takenPaths: [], branchesInUse: [], mainCheckouts: { frontend: 1 } }).ok,
+    ).toBe(false);
+    expect(
+      validateHostTaskOp("task/resumeAppend", { takenPaths: [], branchesInUse: [], prepareErrors: { frontend: {} } }).ok,
+    ).toBe(false);
     expect(validateHostTaskOp("task/probeLink", { sourcePath: "/data/notes" })).toEqual({ ok: true });
     expect(validateHostTaskOp("task/probeLink", {}).ok).toBe(false);
   });

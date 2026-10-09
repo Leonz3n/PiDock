@@ -4,10 +4,12 @@ import {
   checkLinkNameCollisions,
   checkRepoConflicts,
   classifyLinkTarget,
+  classifyRepoPrepareState,
   filterAppendRepos,
   pinRepoBaselines,
   planMultiRepoWorktrees,
   previewMixedTaskPaths,
+  resumeRepoSet,
   segmentPrepareOutcomes,
   snapshotPlainDirLink,
   validateRepoSelections,
@@ -152,6 +154,59 @@ describe("conflicts and append", () => {
         },
       ]),
     ).toMatchObject({ created: ["frontend"], pending: ["invoice"] });
+  });
+
+  it("classifies created only from a verified worktree and keeps failed reasons", () => {
+    // created: the real worktree was present AND matched the pinned commit.
+    expect(
+      classifyRepoPrepareState({ repoDir: "frontend", worktreePresent: true, worktreeMatchesPinnedCommit: true }),
+    ).toEqual({ repoDir: "frontend", status: "created" });
+    // A present path that is NOT this task's pinned worktree is failed, never
+    // silently pending or created: the real reason is kept for the form.
+    const mismatch = classifyRepoPrepareState({
+      repoDir: "invoice",
+      worktreePresent: true,
+      worktreeMatchesPinnedCommit: false,
+      mismatchReason: "工作副本未包含固定提交 abc",
+    });
+    expect(mismatch.status).toBe("failed");
+    expect(mismatch.error?.message).toBe("工作副本未包含固定提交 abc");
+    // An unverified present path (no probe answer) is also not `created`.
+    expect(
+      classifyRepoPrepareState({ repoDir: "x", worktreePresent: true, worktreeMatchesPinnedCommit: null }).status,
+    ).toBe("failed");
+    // Absent with a previously reported error: failed, reason kept.
+    const reported = classifyRepoPrepareState({
+      repoDir: "shipment",
+      worktreePresent: false,
+      previousError: { code: "fetch-failed", repoDir: "shipment", message: "远程不可用" },
+    });
+    expect(reported).toEqual({
+      repoDir: "shipment",
+      status: "failed",
+      error: { code: "fetch-failed", repoDir: "shipment", message: "远程不可用" },
+    });
+    // Absent, never attempted: pending.
+    expect(classifyRepoPrepareState({ repoDir: "later", worktreePresent: false })).toEqual({
+      repoDir: "later",
+      status: "pending",
+    });
+  });
+
+  it("resumes only absent unfinished repos and holds present unknown paths", () => {
+    const outcomes = [
+      { repoDir: "frontend", status: "created" as const },
+      { repoDir: "invoice", status: "pending" as const },
+      {
+        repoDir: "shipment",
+        status: "failed" as const,
+        error: { code: "repo-unusable" as const, repoDir: "shipment", message: "占用" },
+      },
+    ];
+    expect(resumeRepoSet(outcomes, new Set(["frontend", "shipment"]))).toEqual({
+      retry: ["invoice"],
+      hold: ["shipment"],
+    });
   });
 });
 

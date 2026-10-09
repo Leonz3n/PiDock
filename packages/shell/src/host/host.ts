@@ -820,6 +820,70 @@ async function performTaskOp(
           return { ok: false, error: error instanceof Error ? error.message : String(error) };
         }
       }
+      // #6 resume: classify each selected repo from the REAL worktree on
+      // disk and retry only the unfinished ones. Created worktrees are
+      // never re-created/reset/refetched; a present path that is not this
+      // task's worktree is held and reported, never overwritten. The
+      // caller-scanned conflict gate stays REQUIRED (Host-side fail-closed).
+      case "task/resumeAppend": {
+        const resumeCheckouts = record["mainCheckouts"];
+        const resumeCheckoutMap =
+          resumeCheckouts === undefined
+            ? undefined
+            : isMainCheckouts(resumeCheckouts)
+              ? (resumeCheckouts as Record<string, string>)
+              : null;
+        if (resumeCheckoutMap === null) {
+          return { ok: false, error: "invalid-payload: task/resumeAppend.mainCheckouts must map repo names to path strings" };
+        }
+        const resumeFetched = record["fetchedCommits"];
+        const resumeFetchedMap =
+          resumeFetched === undefined ? undefined : isMainCheckouts(resumeFetched) ? (resumeFetched as Record<string, string>) : null;
+        if (resumeFetchedMap === null) {
+          return { ok: false, error: "invalid-payload: task/resumeAppend.fetchedCommits must map repo names to commit strings" };
+        }
+        const resumePrepareErrors = record["prepareErrors"];
+        const resumePrepareMap =
+          resumePrepareErrors === undefined
+            ? undefined
+            : typeof resumePrepareErrors === "object" &&
+                resumePrepareErrors !== null &&
+                !Array.isArray(resumePrepareErrors)
+              ? (resumePrepareErrors as Record<string, { code: string; message: string }>)
+              : null;
+        if (resumePrepareMap === null) {
+          return { ok: false, error: "invalid-payload: task/resumeAppend.prepareErrors must map repo names to {code, message}" };
+        }
+        const resumeTaken = Array.isArray(record["takenPaths"]) ? (record["takenPaths"] as string[]) : undefined;
+        const resumeInUse = Array.isArray(record["branchesInUse"]) ? (record["branchesInUse"] as string[]) : undefined;
+        const resumeBranch = typeof record["branch"] === "string" ? (record["branch"] as string) : undefined;
+        try {
+          const resumed = host.resumeAppend({
+            branch: resumeBranch,
+            mainCheckouts: resumeCheckoutMap,
+            fetchedCommits: resumeFetchedMap,
+            takenPaths: resumeTaken,
+            branchesInUse: resumeInUse,
+            prepareErrors: resumePrepareMap,
+          });
+          return {
+            ok: true,
+            payload: {
+              ...resumed.record,
+              plan: resumed.plan,
+              outcomes: resumed.outcomes,
+              created: resumed.created,
+              pending: resumed.pending,
+              failed: resumed.failed,
+              retry: resumed.retry,
+              hold: resumed.hold,
+              resumed: resumed.resumed,
+            },
+          };
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : String(error) };
+        }
+      }
       // #6 link probe: Host-side fs check whether a plain-dir source still
       // exists (report only — never creates, follows, or takes over).
       case "task/probeLink": {

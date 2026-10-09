@@ -900,6 +900,25 @@ describe("#6 multi-repo provision + append (S2)", () => {
     expect(taskHost.taskRecord()?.repos).toEqual(["frontend", "invoice"]);
   });
 
+  it("fails the whole append batch when one new repo's fetch is missing (all-success gate)", () => {
+    const taskHost = host();
+    taskHost.provision(multiProvisionInput());
+    expect(() =>
+      taskHost.appendRepos({
+        repoSelections: [
+          { repoDir: "shipment", remote: "origin", remoteBranch: "main", mainCheckoutDir: "/src/shipment" },
+          { repoDir: "billing", remote: "origin", remoteBranch: "main", mainCheckoutDir: "/src/billing" },
+        ],
+        // `billing` has no freshly fetched commit: no plan for `shipment`
+        // either, so the caller cannot create the first worktree.
+        fetchedCommits: { shipment: "c0ffee1234" },
+        takenPaths: [],
+        branchesInUse: [],
+      }),
+    ).toThrow("fetch-failed");
+    expect(taskHost.taskRecord()?.repos).toEqual(["frontend", "invoice"]);
+  });
+
   it("reports append conflicts without touching stored baselines", () => {
     const taskHost = host();
     taskHost.provision(multiProvisionInput());

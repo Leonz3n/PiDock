@@ -46,6 +46,7 @@ export interface HostVersionsResult {
 export type HostTaskOp =
   | "task/provision"
   | "task/appendRepos"
+  | "task/resumeAppend"
   | "task/probeLink"
   | "task/sendMessage"
   | "task/sdkStart"
@@ -220,6 +221,7 @@ export function isRequestMethod(value: unknown): value is RequestMethod {
 const HOST_TASK_OPS: readonly string[] = [
   "task/provision",
   "task/appendRepos",
+  "task/resumeAppend",
   "task/probeLink",
   "task/sendMessage",
   "task/sdkStart",
