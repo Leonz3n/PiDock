@@ -339,7 +339,7 @@ export function DesktopInventory() {
     : selectedProject
       ? { project: selectedProject.name, page: manage ? "项目管理" : "项目总览" }
       : selection.kind === "unassigned"
-        ? { project: "未归属任务", page: manage ? "项目管理" : "项目总览" }
+        ? { project: data?.projectsInitialized === false ? "项目映射未建立" : "未归属任务", page: manage ? "项目管理" : "项目总览" }
         : {};
   const shell = (children: ReactNode) => <DesktopShell
     view={shellView}
@@ -392,6 +392,7 @@ export function DesktopInventory() {
     lifecyclePending={!lifecycleReady || (lifecycleIndex?.errors.length ?? 0) > 0}
     associations={data.associations}
     roots={data.inventory.roots}
+    projectsInitialized={data.projectsInitialized}
     onOpenTask={(taskId) => void openTask(taskId)}
     onManage={() => setManage(true)}
     onManageDirectories={() => setManage(true)}
@@ -414,15 +415,15 @@ export function DesktopInventory() {
         <nav aria-label="项目导航" className="min-w-0 border-b border-line pb-3 md:border-b-0 md:border-r md:pr-4">
           <h2 className="mb-2 text-xs font-semibold text-muted">项目 · {data.projects.length}</h2>
           <div className="flex gap-1 overflow-x-auto md:block md:space-y-1">{data.projects.map((item) => <button type="button" key={item.id} onClick={() => { pinned.current = true; setSelection({ kind: "project", id: item.id }); setForm(null); setDraft(null); setActionError(null); }} className={`block min-w-0 shrink-0 px-2 py-2 text-left text-sm md:w-full md:truncate ${project?.id === item.id ? "bg-paper font-semibold" : "hover:bg-paper"}`}>{item.name}</button>)}</div>
-          {!data.projects.length && <p className="text-xs text-muted">暂无项目</p>}
-          <button type="button" className={`mt-3 block px-2 py-2 text-left text-sm ${!project ? "bg-paper font-semibold" : "hover:bg-paper"}`} onClick={() => { pinned.current = true; setSelection({ kind: "unassigned" }); setForm(null); setDraft(null); setActionError(null); }}>未归属任务 · {data.associations.filter((row) => row.projectId === null).length}</button>
+          {!data.projects.length && <p className="text-xs text-muted">{data.projectsInitialized ? "暂无项目" : "项目映射未建立"}</p>}
+          <button type="button" className={`mt-3 block px-2 py-2 text-left text-sm ${!project ? "bg-paper font-semibold" : "hover:bg-paper"}`} onClick={() => { pinned.current = true; setSelection({ kind: "unassigned" }); setForm(null); setDraft(null); setActionError(null); }}>{data.projectsInitialized ? "未归属任务" : "项目映射未建立"} · {data.associations.filter((row) => row.projectId === null).length}</button>
         </nav>
         <div className="min-w-0">
           {form === "create" && draft && <ProjectForm input={draft} onChange={setDraft} busy={busy} saveDisabled={pendingCreate !== null} onCancel={() => { setForm(null); setDraft(null); }} onSubmit={submit} />}
           {project ? <><div className="flex flex-wrap items-start justify-between gap-2"><div className="min-w-0"><h2 className="text-base font-semibold">{project.name}</h2><p className="mt-1 text-xs text-muted">{project.description}</p></div>
             <div className="flex gap-2"><button className={button} type="button" disabled={busy} onClick={() => { setForm("edit"); setEditNeedsReview(false); setDraft({ name: project.name, description: project.description, repositories: project.repositories, directories: project.directories }); }}><Icon name="settings" />编辑</button><button className={button} type="button" disabled={busy} onClick={() => { if (window.confirm(`删除项目「${project.name}」？关联任务必须先解绑或转移。`)) void operate({ op: "delete", projectId: project.id }); }}><Icon name="archive" />删除</button></div></div>
             {form === "edit" && draft && <ProjectForm key={project.id} current={project} input={draft} onChange={setDraft} busy={busy} saveDisabled={editNeedsReview} onCancel={() => { setForm(null); setDraft(null); setEditNeedsReview(false); }} onSubmit={submit} />}
-            <Sources title="仓库" rows={project.repositories} /><Sources title="普通目录" rows={project.directories} /></> : <h2 className="text-base font-semibold">未归属任务</h2>}
+            <Sources title="仓库" rows={project.repositories} /><Sources title="普通目录" rows={project.directories} /></> : <h2 className="text-base font-semibold">{data.projectsInitialized ? "未归属任务" : "项目映射未建立"}</h2>}
           <section className="mt-6"><h3 className="border-b border-line pb-2 text-xs font-semibold text-muted">任务 · {shown?.length ?? 0}</h3>
             {!shown?.length && <p className="py-5 text-sm text-muted">{project ? "此项目暂无任务" : "已检查的任务根暂无未归属任务"}</p>}
             <ul className="divide-y divide-line">{shown?.map((row) => <TaskRow key={row.taskId} row={row} name={taskMap.get(row.taskId)?.name ?? row.taskId} projects={data.projects} choice={choice[row.taskId] ?? ""} setChoice={(value) => setChoice((prev) => ({ ...prev, [row.taskId]: value }))} busy={busy} open={() => void openTask(row.taskId)} act={operate} />)}</ul>
