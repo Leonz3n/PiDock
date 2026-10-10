@@ -83,12 +83,28 @@ export interface SdkAgentWorktree {
   path: string;
 }
 
+/**
+ * One plain-directory link of this task ([PiDock 03] #6). `path` is the in-task
+ * link the Agent names; `sourcePath` is the recorded original it shares. A link
+ * is NOT a copy: a write through `path` changes files under `sourcePath`.
+ */
+export interface SdkAgentSharedDir {
+  linkName: string;
+  path: string;
+  sourcePath: string;
+}
+
 /** Everything the broker needs to know about "this task". */
 export interface SdkAgentToolScope {
   taskDir: string;
   /** The folder that holds this task (and its sibling tasks). */
   taskRoot: string;
   worktrees: readonly SdkAgentWorktree[];
+  /**
+   * Plain-directory links ([PiDock 03] #6): shared, non-isolated views of the
+   * original files. Optional so a pre-#6 caller keeps compiling (absent = none).
+   */
+  sharedDirs?: readonly SdkAgentSharedDir[];
   /** Recorded source checkouts (the ORIGINAL clones): never tool-accessible. */
   primaryCheckouts: readonly string[];
   /** Application-private paths; throws for a path that is one. */
@@ -292,7 +308,23 @@ export function resolveSdkAgentToolPath(input: {
   const taskDir = realRoot(input.scope.taskDir);
   const taskRoot = realRoot(input.scope.taskRoot);
   const normalizedReal = normalizeScopePath(real);
-  if (taskDir.length === 0 || !withinScope(normalizedReal, taskDir)) {
+  const lexicalKey = normalizeScopePath(lexical);
+  // Plain-directory links ([PiDock 03] #6): the Agent reaches a shared original
+  // only THROUGH its in-task link path, and only when the resolved real path
+  // stays under that link's recorded original. Both halves are required — the
+  // link name is the entry point, the real path is the confinement — so naming
+  // the original directly, or a link inside it that escapes it, is refused.
+  const sharedDirs = (input.scope.sharedDirs ?? [])
+    .map((shared) => ({ link: normalizeScopePath(resolve(shared.path)), real: realRoot(shared.sourcePath) }))
+    .filter((shared) => shared.link.length > 0 && shared.real.length > 0);
+  const inTask = taskDir.length > 0 && withinScope(normalizedReal, taskDir);
+  const shared = inTask
+    ? undefined
+    : sharedDirs.find((entry) => withinScope(lexicalKey, entry.link) && withinScope(normalizedReal, entry.real));
+  if (!inTask && shared === undefined) {
+    if (sharedDirs.some((entry) => withinScope(lexicalKey, entry.link))) {
+      return pathRefuse("tool-refused:out-of-scope", `链接指向其原始目录之外（解析为 ${normalizedReal}），已拒绝`);
+    }
     return taskRoot.length > 0 && withinScope(normalizedReal, taskRoot)
       ? pathRefuse("tool-refused:other-task", `目标是本任务目录 ${taskDir} 之外的兄弟路径（${normalizedReal}），任务工具只在本任务范围内工作`)
       : pathRefuse("tool-refused:out-of-scope", `目标不在任务目录 ${taskDir} 内（解析为 ${normalizedReal}）`);
@@ -301,12 +333,17 @@ export function resolveSdkAgentToolPath(input: {
     const worktrees = input.scope.worktrees
       .map((worktree) => realRoot(worktree.path))
       .filter((root) => root.length > 0);
-    if (!worktrees.some((root) => withinScope(normalizedReal, root))) {
+    const inWorktree = worktrees.some((root) => withinScope(normalizedReal, root));
+    // A shared link is writable like a worktree: it is a shared view of the
+    // original, and the create/append flow already required the user's
+    // `sharedWriteConfirmed` before the link existed. Cross-task write
+    // coordination for such a target is #11 / box 13 and stays deferred.
+    if (!inWorktree && shared === undefined) {
       return pathRefuse(
         "tool-refused:not-a-worktree",
-        input.scope.worktrees.length === 0
+        input.scope.worktrees.length === 0 && (input.scope.sharedDirs ?? []).length === 0
           ? "本任务尚无可用工作副本，不可写入"
-          : `目标不在任务工作副本内（可写：${input.scope.worktrees.map((worktree) => worktree.path).join("、")}）`,
+          : `目标不在任务工作副本或普通目录链接内（可写：${[...input.scope.worktrees.map((worktree) => worktree.path), ...(input.scope.sharedDirs ?? []).map((dir) => dir.path)].join("、")}）`,
       );
     }
     // A write must never rewrite a worktree's own git control file: in a linked
@@ -315,16 +352,18 @@ export function resolveSdkAgentToolPath(input: {
     // out of reach (and `derivedPrimaryCheckouts` would then trust the forgery).
     // Git changes go through `exec.run`, never a raw write to the control file.
     // The segment is matched case-insensitively: on APFS/Windows `repo/.GIT` IS
-    // `repo/.git`, so a case-sensitive compare is not a guard at all.
+    // `repo/.git`, so a case-sensitive compare is not a guard at all. The same
+    // guard covers a shared original's own git control files.
     if (hasGitControlSegment(normalizedReal)) {
       return pathRefuse("tool-refused:invalid-target", "不可写入 .git 控制文件或目录（大小写不敏感）");
     }
-  } else {
+  } else if (inTask) {
     // The Host's own bookkeeping under the task folder (its SDK sessions,
     // ledger, context home and the task record itself) is not task content;
     // the Agent reads the repositories, not the machinery that runs it. Folded
     // case for the same reason as the git control file above: `.PIDOCK-*` and
-    // `TASK.JSON` are the same entries on the product's filesystems.
+    // `TASK.JSON` are the same entries on the product's filesystems. Only the
+    // task folder has this bookkeeping; a shared original is ordinary content.
     const relative = normalizeScopePath(real).slice(taskDir.length + 1).toLowerCase();
     if (relative === "task.json" || relative.split("/").some((segment) => segment.startsWith(".pidock-"))) {
       return pathRefuse("tool-refused:protected-path", "目标是任务宿主私有状态，任务工具只读取任务内容");
