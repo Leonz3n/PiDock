@@ -303,6 +303,21 @@ export class TaskTerminalRegistry {
     return record.history.slice(-Math.max(1, limit)).map((entry) => ({ ...entry }));
   }
 
+  /**
+   * Reopen an instance whose previous run exited, so a restart is a new run:
+   * the exit record of the previous run is cleared. Without this a restarted
+   * terminal kept `lifecycle: "exited"` (and its stale pid), which made a later
+   * stop return success without signalling the shell that was really running.
+   */
+  markRunning(instanceId: string): TerminalInstanceRecord {
+    const record = this.require(instanceId);
+    record.lifecycle = "running";
+    delete record.exitedAt;
+    delete record.exitCode;
+    delete record.exitReason;
+    return this.copy(record);
+  }
+
   /** Record the real exit state so the panel never shows a stale "running". */
   markExited(instanceId: string, input: { exitCode?: unknown; reason?: unknown } = {}): TerminalInstanceRecord {
     const record = this.require(instanceId);
