@@ -355,6 +355,43 @@ describe("#15 terminal history freshness", () => {
     expect(screen.getByTestId("terminal-output")).toHaveTextContent("B-out");
     expect(screen.getByTestId("terminal-output")).not.toHaveTextContent("A-stale");
   });
+
+  it("never shows another task's rows when its slow answer arrives after the switch", async () => {
+    const calls: Call[] = [];
+    let releaseEarlier: ((value: unknown) => void) | undefined;
+    const earlier = new Promise((resolve) => {
+      releaseEarlier = resolve;
+    });
+    const taskOp = vi.fn(async (taskId: string, op: string, payload: Record<string, unknown> = {}) => {
+      calls.push({ taskId, op, payload });
+      if (op === "task/terminalState") {
+        if (taskId === "first") return earlier;
+        return { ok: true, payload: { spawnImplemented: true, instances: [hostInstance({ instanceId: `term-${taskId}-1` })] } };
+      }
+      if (op === "task/fileRoots") return { ok: true, payload: ROOTS };
+      if (op === "task/terminalHistory") return { ok: true, payload: { history: [{ at: "t1", line: `${taskId}-line` }] } };
+      return { ok: true, payload: {} };
+    });
+    stubShell(taskOp);
+    const view = render(<TerminalTakeoverPanel taskId="first" />);
+    await flush();
+    // The first task's own read is still pending while the panel moves on.
+    expect(screen.getByText("正在读取终端状态…")).toBeInTheDocument();
+
+    view.rerender(<TerminalTakeoverPanel taskId="second" />);
+    await flush();
+    expect(screen.getByTestId("terminal-instance")).toHaveTextContent("term-second-1");
+    expect(screen.getByTestId("terminal-output")).toHaveTextContent("second-line");
+
+    // The superseded task's answer must not be shown as the current task's rows.
+    await act(async () => {
+      releaseEarlier?.({ ok: true, payload: { spawnImplemented: true, instances: [hostInstance({ instanceId: "term-first-1" })] } });
+    });
+    await flush();
+    expect(screen.getByTestId("terminal-instance")).toHaveTextContent("term-second-1");
+    expect(screen.queryByText(/term-first-1/)).toBeNull();
+    expect(screen.getByTestId("terminal-output")).not.toHaveTextContent("first-line");
+  });
 });
 
 describe("#15 terminal panel without a shell", () => {

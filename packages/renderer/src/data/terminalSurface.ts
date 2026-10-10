@@ -55,7 +55,7 @@ export const TERMINAL_HISTORY_LIMIT = 200;
  */
 export const TERMINAL_HISTORY_POLL_MS = 1500;
 /** The label a panel-initiated terminal action carries; main attests the origin. */
-export const TERMINAL_HUMAN_LABEL = "终端面板（用户显式操作）";
+const TERMINAL_HUMAN_LABEL = "终端面板（用户显式操作）";
 
 export type TerminalRead<T> = { ok: true; value: T } | { ok: false; error: string };
 export type TerminalAck = { ok: true } | { ok: false; error: string };

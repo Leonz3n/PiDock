@@ -136,7 +136,7 @@ describe("#15 terminal surface reads", () => {
   });
 
   it("plans a root without naming a session (the plan is the human action's own preview)", async () => {
-    const taskOp = vi.fn(async () => ({
+    const taskOp = vi.fn(async (_taskId: string, _op: string, _payload: Record<string, unknown>) => ({
       ok: true,
       payload: {
         plan: {

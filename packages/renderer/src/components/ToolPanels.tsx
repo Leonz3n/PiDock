@@ -1071,9 +1071,9 @@ export function TerminalTakeoverPanel({
   const [sandbox, setSandbox] = useState<TerminalTaskState | null>(null);
   const [rootState, setRootState] = useState<{ taskId: string; roots: WorkspaceRootView[] } | null>(null);
   const [rootId, setRootId] = useState("");
-  const [plan, setPlan] = useState<TerminalPlanView | null>(null);
+  const [planState, setPlanState] = useState<{ taskId: string; plan: TerminalPlanView } | null>(null);
   const [history, setHistory] = useState<TerminalHistoryEntryView[]>([]);
-  const [notice, setNotice] = useState<string | undefined>(undefined);
+  const [noticeState, setNoticeState] = useState<{ taskId: string; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   // Freshness guards: a task/instance change, or a newer read of the same kind,
   // supersedes every in-flight answer, so a slow response for a previous task or
@@ -1081,22 +1081,30 @@ export function TerminalTakeoverPanel({
   // panels use). Each epoch is checked before any state is written.
   const stateEpoch = useRef(0);
   const historyEpoch = useRef(0);
+  // The task this panel is currently showing. A callback of a previous task must
+  // not fence (or write) the new task's reads, so it compares against the latest
+  // value instead of the value its own render captured.
+  const shownTask = useRef(taskId);
+  shownTask.current = taskId;
   // Rows are tagged with the task that produced them: another task's answer is
   // never shown as this task's state, even while a read is still in flight.
   const known = sandbox !== null && sandbox.taskId === taskId;
   const instances = known ? sandbox.instances : [];
   const roots = rootState !== null && rootState.taskId === taskId ? rootState.roots : [];
+  const plan = planState !== null && planState.taskId === taskId ? planState.plan : null;
+  const notice = noticeState !== null && noticeState.taskId === taskId ? noticeState.text : undefined;
   const running = instances.filter((instance) => instance.lifecycle === "running");
   const watched = running[running.length - 1] ?? instances[instances.length - 1];
   const watchId = watched?.instanceId;
   const selectedRoot = roots.find((root) => root.id === rootId) ?? roots[0];
 
   const readState = useCallback(async () => {
+    if (shownTask.current !== taskId) return;
     const request = ++stateEpoch.current;
     const result = await readTerminalState(taskId);
     if (stateEpoch.current !== request) return;
     if (!result.ok) {
-      setNotice(result.error);
+      setNoticeState({ taskId, text: result.error });
       return;
     }
     setSandbox({ taskId, spawnImplemented: result.value.spawnImplemented, instances: result.value.instances });
@@ -1104,11 +1112,12 @@ export function TerminalTakeoverPanel({
 
   const readHistory = useCallback(
     async (instanceId: string) => {
+      if (shownTask.current !== taskId) return;
       const request = ++historyEpoch.current;
       const result = await readTerminalHistory({ taskId, instanceId, limit: TERMINAL_HISTORY_LIMIT });
       if (historyEpoch.current !== request) return;
       if (result.ok) setHistory(result.value);
-      else setNotice(result.error);
+      else setNoticeState({ taskId, text: result.error });
     },
     [taskId],
   );
@@ -1118,19 +1127,19 @@ export function TerminalTakeoverPanel({
     // their task tag and its in-flight answers are fenced by the new epoch.
     const request = ++stateEpoch.current;
     setHistory([]);
-    setPlan(null);
-    setNotice(undefined);
+    setPlanState(null);
+    setNoticeState(null);
     setRootId("");
     void (async () => {
       const [state, rootList] = await Promise.all([readTerminalState(taskId), readTerminalRoots(taskId)]);
       if (stateEpoch.current !== request) return;
       if (!state.ok) {
-        setNotice(state.error);
+        setNoticeState({ taskId, text: state.error });
         return;
       }
       setSandbox({ taskId, spawnImplemented: state.value.spawnImplemented, instances: state.value.instances });
       if (!rootList.ok) {
-        setNotice(rootList.error);
+        setNoticeState({ taskId, text: rootList.error });
         return;
       }
       setRootState({ taskId, roots: rootList.value });
@@ -1139,7 +1148,13 @@ export function TerminalTakeoverPanel({
   }, [taskId]);
 
   useEffect(() => {
-    if (watchId === undefined) return;
+    if (watchId === undefined) {
+      // No target: fence whatever read was still in flight and clear the output,
+      // so the previous task's history cannot appear as this task's.
+      ++historyEpoch.current;
+      setHistory([]);
+      return;
+    }
     // Read once when the watched instance changes, then re-read while it runs:
     // one bounded read at a time, and the next tick is scheduled only after the
     // previous one settled, so a slow Host never accumulates overlapping reads.
@@ -1161,7 +1176,7 @@ export function TerminalTakeoverPanel({
 
   const start = async () => {
     if (!selectedRoot) {
-      setNotice("本任务没有可用的文件根，无法打开终端");
+      setNoticeState({ taskId, text: "本任务没有可用的文件根，无法打开终端" });
       return;
     }
     // Same instance id as the memory flow, so restarting reopens the instance the
@@ -1169,11 +1184,11 @@ export function TerminalTakeoverPanel({
     const instanceId = `term-${taskId}-1`;
     setBusy(true);
     const planned = await planTerminalForRoot({ taskId, instanceId, rootId: selectedRoot.id, program, args });
-    if (planned.ok) setPlan(planned.value);
+    if (planned.ok) setPlanState({ taskId, plan: planned.value });
     const started = planned.ok ? await startTerminal({ taskId, instanceId, rootId: selectedRoot.id, program, args }) : planned;
     await readState();
     setBusy(false);
-    setNotice(started.ok ? undefined : started.error);
+    setNoticeState(started.ok ? null : { taskId, text: started.error });
   };
 
   const stop = async () => {
@@ -1182,7 +1197,7 @@ export function TerminalTakeoverPanel({
     const result = await stopTerminal({ taskId, instanceId: watchId });
     await readState();
     setBusy(false);
-    setNotice(result.ok ? undefined : result.error);
+    setNoticeState(result.ok ? null : { taskId, text: result.error });
   };
 
   const widen = async () => {
@@ -1191,7 +1206,7 @@ export function TerminalTakeoverPanel({
     const result = await resizeTerminal({ taskId, instanceId: watched.instanceId, cols: watched.cols + 20, rows: watched.rows });
     if (result.ok) await readState();
     setBusy(false);
-    setNotice(result.ok ? undefined : result.error);
+    setNoticeState(result.ok ? null : { taskId, text: result.error });
   };
 
   const submit = async () => {
@@ -1199,7 +1214,7 @@ export function TerminalTakeoverPanel({
     if (line.length === 0) return;
     setPanelState(taskId, { terminalValue: "" });
     if (watchId === undefined || watched?.lifecycle !== "running") {
-      setNotice("终端没有运行中的真实进程，输入未发送");
+      setNoticeState({ taskId, text: "终端没有运行中的真实进程，输入未发送" });
       return;
     }
     setBusy(true);
@@ -1209,7 +1224,7 @@ export function TerminalTakeoverPanel({
       await readState();
     }
     setBusy(false);
-    setNotice(result.ok ? undefined : result.error);
+    setNoticeState(result.ok ? null : { taskId, text: result.error });
   };
 
   return (
@@ -1672,7 +1687,9 @@ export function DirectoryTerminalPanel({
         {cwd}
       </p>
       <p className="font-mono text-[11px] text-muted">指向原目录：{directory.path}</p>
-      <p className="text-[11px] text-muted">原型终端：拟从以上链接位置打开，仅回显，不执行命令。</p>
+      <p className="text-[11px] text-muted">
+        此变体只回显，不执行命令：普通目录终端尚未接线到真实通道，这里的输入不会发送给 Host。
+      </p>
       <div className="h-48 overflow-auto rounded-md border border-line bg-ink/95 p-3 font-mono text-[11px] leading-5 text-white/90">
         {lines.map((line, index) => (
           <div key={`${line}-${index}`}>{line}</div>
