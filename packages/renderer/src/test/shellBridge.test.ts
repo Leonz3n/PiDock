@@ -324,7 +324,7 @@ describe("#6 privileged prep scan precedence", () => {
 describe("#15 terminal control bridge", () => {
   it("forwards raw input as its own action without naming a session", async () => {
     const { controlTerminalThroughShell } = await import("../data/shellBridge");
-    const taskOp = vi.fn(async () => ({ ok: true, payload: {} }));
+    const taskOp = vi.fn(async (_taskId: string, _op: string, _payload: Record<string, unknown>) => ({ ok: true, payload: {} }));
     vi.stubGlobal("window", { pidock: { taskOp } });
     try {
       const typed = await controlTerminalThroughShell({
@@ -349,7 +349,7 @@ describe("#15 terminal control bridge", () => {
 
   it("forwards a window change as its own action", async () => {
     const { controlTerminalThroughShell } = await import("../data/shellBridge");
-    const taskOp = vi.fn(async () => ({ ok: true, payload: {} }));
+    const taskOp = vi.fn(async (_taskId: string, _op: string, _payload: Record<string, unknown>) => ({ ok: true, payload: {} }));
     vi.stubGlobal("window", { pidock: { taskOp } });
     try {
       const resized = await controlTerminalThroughShell({
@@ -373,7 +373,7 @@ describe("#15 terminal control bridge", () => {
 
   it("refuses an empty input or a non-integer window before asking the Host", async () => {
     const { controlTerminalThroughShell } = await import("../data/shellBridge");
-    const taskOp = vi.fn(async () => ({ ok: true, payload: {} }));
+    const taskOp = vi.fn(async (_taskId: string, _op: string, _payload: Record<string, unknown>) => ({ ok: true, payload: {} }));
     vi.stubGlobal("window", { pidock: { taskOp } });
     try {
       const empty = await controlTerminalThroughShell({
@@ -401,7 +401,7 @@ describe("#15 terminal control bridge", () => {
 
   it("still starts with explicit empty env layers and stops with the same payload shape", async () => {
     const { controlTerminalThroughShell } = await import("../data/shellBridge");
-    const taskOp = vi.fn(async () => ({ ok: true, payload: {} }));
+    const taskOp = vi.fn(async (_taskId: string, _op: string, _payload: Record<string, unknown>) => ({ ok: true, payload: {} }));
     vi.stubGlobal("window", { pidock: { taskOp } });
     try {
       await controlTerminalThroughShell({
