@@ -12,7 +12,7 @@
  * suite skips: the preflight only ships darwin-arm64 binaries.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -57,6 +57,17 @@ function pgidOf(pid: number): number | null {
 async function until(predicate: () => boolean, timeoutMs: number, label: string): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error(`timed out waiting for ${label}`);
+    await delay(25);
+  }
+}
+
+/** The same poll cadence, returning the first value the probe yields. */
+async function untilValue<T>(predicate: () => T | undefined, timeoutMs: number, label: string): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const value = predicate();
+    if (value !== undefined) return value;
     if (Date.now() >= deadline) throw new Error(`timed out waiting for ${label}`);
     await delay(25);
   }
@@ -124,7 +135,7 @@ class Fixture {
   readonly sessions: TaskTerminalSessions;
   readonly pids: number[] = [];
 
-  constructor(tag: string, options: { stopGraceMs?: number; stopConfirmMs?: number } = {}) {
+  constructor(tag: string, options: { stopGraceMs?: number; stopConfirmMs?: number; observeCadenceMs?: number } = {}) {
     this.taskDir = realpathSync(mkdtempSync(join(tmpdir(), `pidock-term-${tag}-`)));
     this.taskId = `task-${tag}`;
     this.registry = new TaskTerminalRegistry(this.taskId);
@@ -425,6 +436,68 @@ realIt("forgets a drained operation so the same terminal identity spawns fresh a
     await until(() => !alive(second.process!.processId), 5000, "respawned shell to stop");
   } finally {
     for (const pid of markerPids(marker)) {
+      try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
+    }
+    await until(() => markerPids(marker).length === 0, 5000, "marker processes to end");
+  }
+});
+
+realIt("contains a job-control descendant observed before the shell exits on its own", { timeout: 30_000 }, async () => {
+  // Containment finding: a natural exit must not be reported while a descendant
+  // that left the shell's own process group is still alive. The descendant is
+  // reclaimable only from the observation the driver made while the root was
+  // alive, so this asserts the real reclaim and not a bookkeeping receipt.
+  const marker = 3274;
+  const f = new Fixture("natural-job", { stopGraceMs: 250, stopConfirmMs: 250 });
+  const { instance } = await f.start();
+  const command = `sh -c 'trap "" HUP; exec sleep ${marker}' & echo BG=$!`;
+  try {
+    await f.sessions.input("term-1", `${command}\r`);
+    await until(() => /BG=(\d+)/.test(f.history()), 8000, "background job pid");
+    const background = Number(/BG=(\d+)/.exec(f.history())![1]);
+    f.track(background);
+    await until(() => pgidOf(background) === background, 3000, "job-controlled group");
+    expect(background).not.toBe(instance!.processGroupId);
+
+    // The typed `exit` is itself an observation point: the job is recorded while
+    // the shell is still alive, and the natural exit must then contain it.
+    await f.sessions.input("term-1", "exit\r");
+    await until(() => f.registry.get("term-1")?.lifecycle === "exited", 15_000, "natural-exit receipt");
+    await until(() => !alive(background), 8000, "observed descendant to be reclaimed");
+    expect(pgidOf(background)).toBeNull();
+    expect(markerPids(marker)).toEqual([]);
+  } finally {
+    await f.sessions.stopAll("test-cleanup").catch(() => undefined);
+    for (const pid of [...f.pids.filter(alive), ...markerPids(marker)]) {
+      try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
+    }
+    await until(() => markerPids(marker).length === 0, 5000, "marker processes to end");
+  }
+});
+
+realIt("records the descendants of a terminal that exits without any input", { timeout: 30_000 }, async () => {
+  // The observer cadence is the only handle on an unattended exit: this terminal
+  // starts a job in its own process group and exits on its own, with no
+  // interaction that could record it. The cadence is injected (50ms) so the test
+  // does not depend on the production cadence.
+  const marker = 3275;
+  const f = new Fixture("natural-cadence", { stopGraceMs: 250, stopConfirmMs: 250, observeCadenceMs: 50 });
+  mkdirSync(join(f.taskDir, "work"), { recursive: true });
+  const script = join(f.taskDir, "work", "unattended.sh");
+  writeFileSync(script, `#!/bin/sh\nset -m\nsh -c 'trap "" HUP; exec sleep ${marker}' &\nsleep 1\nexit\n`, { mode: 0o755 });
+  const { instance } = await f.start("term-1", script);
+  try {
+    const job = await untilValue(() => markerPids(marker)[0], 8000, "job-controlled descendant");
+    f.track(job);
+    expect(job).not.toBe(instance!.processGroupId);
+    expect(pgidOf(job)).toBe(job);
+
+    await until(() => f.registry.get("term-1")?.lifecycle === "exited", 15_000, "natural-exit receipt");
+    await until(() => !alive(job), 8000, "recorded descendant to be reclaimed");
+    expect(markerPids(marker)).toEqual([]);
+  } finally {
+    await f.sessions.stopAll("test-cleanup").catch(() => undefined);
+    for (const pid of [...f.pids.filter(alive), ...markerPids(marker)]) {
       try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
     }
     await until(() => markerPids(marker).length === 0, 5000, "marker processes to end");
