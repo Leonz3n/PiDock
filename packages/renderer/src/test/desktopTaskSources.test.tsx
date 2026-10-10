@@ -15,6 +15,12 @@ const first = { id: "dad5fcb4-c91f-4ab0-bc33-fbb82053f871", name: "Web", path: "
 const second = { id: "3f8e1c02-77aa-4d1e-8b60-2a9c9d0f1b23", name: "API", path: "/local/api" };
 const roots = [{ label: "默认任务根", state: "ready" }];
 
+/** Exactly what the append channel accepts: ids and refs, never a path. */
+interface AppendRequest {
+  taskId: string;
+  repositories: { sourceId: string; remote: string; remoteBranch: string }[];
+}
+
 /** The desktop shell exposes exactly one bridge: `window.pidock`. */
 function withBridge(value: PidockBridge): PidockBridge {
   window.pidock = value;
@@ -45,16 +51,26 @@ afterEach(() => {
 
 describe("Desktop append surface", () => {
   it("appends through the production channel with project repository ids only, and reports the pinned commit and worktree", async () => {
-    const appendTaskRepos = vi.fn(async () => ({
-      ok: true,
-      payload: {
-        taskId,
-        appended: [
-          { repoDir: `repo-${second.id.slice(0, 8)}`, name: "API", remote: "origin", remoteBranch: "main", commit: "a".repeat(40), worktree: `/local/tasks/${taskId}/repo-${second.id.slice(0, 8)}` },
-        ],
-        skipped: [],
-      },
-    }));
+    const appendTaskRepos = vi.fn(async (request: AppendRequest) => {
+      const [selection] = request.repositories;
+      return {
+        ok: true,
+        payload: {
+          taskId: request.taskId,
+          appended: [
+            {
+              repoDir: `repo-${selection!.sourceId.slice(0, 8)}`,
+              name: "API",
+              remote: selection!.remote,
+              remoteBranch: selection!.remoteBranch,
+              commit: "a".repeat(40),
+              worktree: `/local/tasks/${taskId}/repo-${selection!.sourceId.slice(0, 8)}`,
+            },
+          ],
+          skipped: [],
+        },
+      };
+    });
     const onAppended = vi.fn();
     render(<DesktopTaskSources taskId={taskId} bridge={withBridge(bridge({ appendTaskRepos }))} onClose={vi.fn()} onAppended={onAppended} />);
     const api = await screen.findByRole("checkbox", { name: "API" });
@@ -80,7 +96,7 @@ describe("Desktop append surface", () => {
   });
 
   it("keeps the selection and shows main's real refusal, then retries the same intent", async () => {
-    const appendTaskRepos = vi.fn(async () => ({
+    const appendTaskRepos = vi.fn(async (_request: AppendRequest) => ({
       ok: false,
       error: "fetch-failed: 仓库 repo-3f8e1c02（API）获取 origin/main 失败（远程分支不存在或已删除），已保留表单，请重试获取后再追加",
     }));
@@ -107,7 +123,7 @@ describe("Desktop append surface", () => {
   });
 
   it("shows the Host's conflict reason by name and reports an already-present repo as skipped", async () => {
-    const conflict = vi.fn(async () => ({ ok: false, error: `branch-in-use: 分支已在其他 worktree 使用: task/${taskId}，请更换任务分支` }));
+    const conflict = vi.fn(async (_request: AppendRequest) => ({ ok: false, error: `branch-in-use: 分支已在其他 worktree 使用: task/${taskId}，请更换任务分支` }));
     const view = render(<DesktopTaskSources taskId={taskId} bridge={withBridge(bridge({ appendTaskRepos: conflict }))} onClose={vi.fn()} />);
     fireEvent.click(await screen.findByRole("checkbox", { name: "API" }));
     fireEvent.change(screen.getByLabelText("远程名称 API"), { target: { value: "origin" } });
@@ -115,7 +131,7 @@ describe("Desktop append surface", () => {
     fireEvent.click(screen.getByRole("button", { name: /获取最新基线并追加/ }));
     expect(await screen.findByRole("alert")).toHaveTextContent("branch-in-use");
     view.unmount();
-    const skipped = vi.fn(async () => ({ ok: true, payload: { taskId, appended: [], skipped: [{ repoDir: `repo-${first.id.slice(0, 8)}`, name: "Web" }] } }));
+    const skipped = vi.fn(async (_request: AppendRequest) => ({ ok: true, payload: { taskId, appended: [], skipped: [{ repoDir: `repo-${first.id.slice(0, 8)}`, name: "Web" }] } }));
     render(<DesktopTaskSources taskId={taskId} bridge={withBridge(bridge({ appendTaskRepos: skipped }))} onClose={vi.fn()} />);
     fireEvent.click(await screen.findByRole("checkbox", { name: "Web" }));
     fireEvent.change(screen.getByLabelText("远程名称 Web"), { target: { value: "origin" } });
@@ -141,8 +157,8 @@ describe("Desktop append surface", () => {
   });
 
   it("keeps the form when the response cannot be verified, and points a partial append at the existing recovery surface", async () => {
-    const malformed = vi.fn(async () => ({ ok: true, payload: { taskId, appended: [{ repoDir: "repo-x" }], skipped: [] } }));
-    const prepareStatus = vi.fn(async () => ({
+    const malformed = vi.fn(async (_request: AppendRequest) => ({ ok: true, payload: { taskId, appended: [{ repoDir: "repo-x" }], skipped: [] } }));
+    const prepareStatus = vi.fn(async (_taskId: string) => ({
       ok: true,
       payload: {
         outcomes: [{ repoDir: "repo-x", status: "pending" }],
