@@ -113,6 +113,8 @@ export async function planTerminalForRoot(input: {
   rootId: string;
   program: string;
   args?: string[];
+  /** The caller's own label; defaults to the human takeover label the start uses. */
+  label?: string;
 }): Promise<TerminalRead<TerminalPlanView>> {
   const result = await planTerminalThroughShell({
     taskId: input.taskId,
@@ -120,6 +122,7 @@ export async function planTerminalForRoot(input: {
     rootId: input.rootId,
     program: input.program,
     ...(input.args !== undefined ? { args: input.args } : {}),
+    label: input.label ?? TERMINAL_HUMAN_LABEL,
   });
   if (!result.ok) return { ok: false, error: terminalRefusalText(result.error, "终端计划失败") };
   const plan = terminalPlanFromHost(result.payload);

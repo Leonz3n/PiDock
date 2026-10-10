@@ -180,6 +180,9 @@ describe("#15 terminal surface reads", () => {
       );
       const payload = taskOp.mock.calls.at(-1)![2] as Record<string, unknown>;
       expect(payload).not.toHaveProperty("sessionId");
+      // The plan carries the same human label the start does, so the Host labels
+      // the owner `终端面板（用户显式操作）` instead of its own bare default.
+      expect(payload["label"]).toBe("终端面板（用户显式操作）");
     } finally {
       vi.unstubAllGlobals();
     }
