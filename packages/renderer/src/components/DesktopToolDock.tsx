@@ -467,7 +467,7 @@ function TerminalTool({ taskId }: { taskId: string }) {
       )}
       {!state.spawnImplemented && (
         <p className="border border-line bg-soft px-2 py-1.5 text-[11px] text-muted" data-testid="dock-terminal-plan-only">
-          Host 尚未接管真实 pty：下面是计划视图（cwd、环境与实例记录），不会启动进程。
+          Host 无法启动真实 pty（平台不受支持或预检未通过）：下面是计划视图（cwd、环境与实例记录），不会启动进程。
         </p>
       )}
       <section>

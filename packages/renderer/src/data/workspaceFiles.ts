@@ -117,7 +117,11 @@ export type TerminalInstanceView = {
 };
 
 export type TerminalStateView = {
-  /** False while the Host plans/tracks terminals but owns no real pty yet. */
+  /**
+   * False when this Host cannot fork the real PTY helper (unsupported platform
+   * or a failed preflight), so the dock is a plan view only. A real spawner
+   * still reports whether a given single start succeeds through its own result.
+   */
   spawnImplemented: boolean;
   instances: TerminalInstanceView[];
 };
