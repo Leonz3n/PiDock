@@ -72,6 +72,7 @@ import {
   classifyRepoPrepareState,
   filterAppendRepos,
   isMultiRepoErrorCode,
+  buildLinkName,
   pinRepoBaselines,
   previewMixedTaskPaths,
   resumeRepoSet,
@@ -1363,8 +1364,16 @@ export class TaskWorkspaceHost {
     if (!resolved.ok) throw new Error(`${resolved.error.code}: ${resolved.error.message}`);
     const branched = buildTaskBranch(input.dirId, input.branch);
     if (!branched.ok) throw new Error(`${branched.error.code}: ${branched.error.message}`);
-    const pinned = pinBaseline(input.remoteBranch, input.fetchedCommit);
-    if (!pinned.ok) throw new Error(`${pinned.error.code}: ${pinned.error.message} (form kept, retry fetch)`);
+    const hasRepos = (input.repoSelections && input.repoSelections.length > 0) || (input.repos && input.repos.length > 0);
+    const hasPlainDirs = input.plainDirs && input.plainDirs.length > 0;
+    let pinned: { ok: true; remoteBranch: string; commit: string };
+    if (hasRepos || !hasPlainDirs || (input.remoteBranch && input.remoteBranch.length > 0) || (input.fetchedCommit && input.fetchedCommit.length > 0)) {
+      const pinResult = pinBaseline(input.remoteBranch ?? "", input.fetchedCommit ?? "");
+      if (!pinResult.ok) throw new Error(`${pinResult.error.code}: ${pinResult.error.message} (form kept, retry fetch)`);
+      pinned = pinResult;
+    } else {
+      pinned = { ok: true, remoteBranch: "", commit: "" };
+    }
     // #6 per-repo sources (optional): validate selections, pin every repo
     // (all-success gate), persist `repoSources`. The pinned commits ride
     // `fetchedCommits` only; a missing per-repo entry is `fetch-failed`
@@ -1472,8 +1481,14 @@ export class TaskWorkspaceHost {
         const kept = previous.dirLinks.filter((link) => !incoming.has(link.directoryId));
         record.dirLinks = [...kept, ...(record.dirLinks ?? [])];
       }
+      if (pinnedRepos === null && previous.repos !== undefined) {
+        record.repos = [...previous.repos];
+      }
       if (pinnedRepos === null && previous.repoSources !== undefined) record.repoSources = previous.repoSources;
       if (linkSnapshots === null && previous.dirLinks !== undefined) record.dirLinks = previous.dirLinks;
+      if (!hasRepos && previous.branch) record.branch = previous.branch;
+      if (!hasRepos && previous.remoteBranch) record.remoteBranch = previous.remoteBranch;
+      if (!hasRepos && previous.baseCommit) record.baseCommit = previous.baseCommit;
       // #6 recovery: a re-provision must not erase a still-unresolved
       // per-repo prepare error (resume is the only flow that clears it).
       if (previous.repoPrepareErrors !== undefined) record.repoPrepareErrors = [...previous.repoPrepareErrors];
@@ -1641,6 +1656,91 @@ export class TaskWorkspaceHost {
     record.createdAt = stored.createdAt;
     this.store.writeTask(this.taskDir, record);
     return { record, plan, appended, skipped };
+  }
+
+  /**
+   * [PiDock 03] (#6) append plain directories: only directories not already in
+   * the task are snapshotted and added. Existing repos, baselines, root/dirId,
+   * and previous dirLinks are untouched and never mutated. Fail-closed against
+   * link name collisions with existing links or repo folders.
+   *
+   * The link name is always derived from the directory id here
+   * (`buildLinkName`), never taken from the caller: the stable spelling is the
+   * identity that makes a recorded link resolvable again, so a second link
+   * name could only fake an isolation the product does not provide.
+   */
+  appendDirs(input: {
+    plainDirs: readonly { directoryId: string; sourcePath: string }[];
+    now?: string;
+  }): { record: TaskDiskRecord; appended: string[]; skipped: string[] } {
+    this.protection?.assert(this.taskDir);
+    for (const entry of input.plainDirs) this.protection?.assert(entry.sourcePath);
+    const stored = this.store.readTask(this.taskDir);
+    if (!stored) throw new Error("unknown task: no task record; provision the task before appending");
+    if (stored.taskId !== this.taskId) throw new Error("task-unknown: this Host serves a different task");
+
+    const collision = checkLinkNameCollisions(input.plainDirs.map((entry) => entry.directoryId));
+    if (!collision.ok) {
+      const error: MultiRepoError = collision.error;
+      throw new Error(`${error.code}: ${error.message} (form kept)`);
+    }
+
+    const existingLinks = stored.dirLinks ?? [];
+    const existingById = new Map(existingLinks.map((link) => [link.directoryId, link]));
+    const existingByName = new Map(existingLinks.map((link) => [link.linkName, link]));
+    const existingRepos = new Set<string>(stored.repos);
+
+    const appended: PlainDirLinkSnapshot[] = [];
+    const skipped: string[] = [];
+
+    for (const entry of input.plainDirs) {
+      const linkName = buildLinkName(entry.directoryId);
+      if (existingRepos.has(linkName)) {
+        throw new Error(`duplicate-repo: 普通目录链接名 ${linkName} 与现有仓库文件夹冲突`);
+      }
+      const byName = existingByName.get(linkName);
+      if (byName && byName.directoryId !== entry.directoryId) {
+        throw new Error(`duplicate-repo: 普通目录链接名冲突: ${entry.directoryId} 与 ${byName.directoryId} 均映射到 ${linkName} (form kept)`);
+      }
+      const existing = existingById.get(entry.directoryId);
+      if (existing) {
+        if (existing.sourcePath !== entry.sourcePath) {
+          throw new Error(`duplicate-repo: 普通目录 ${entry.directoryId} 已存在但指向不同路径`);
+        }
+        skipped.push(entry.directoryId);
+        continue;
+      }
+      const snap = snapshotPlainDirLink({ directoryId: entry.directoryId, sourcePath: entry.sourcePath, now: input.now ?? this.now() });
+      if (!snap.ok) {
+        const error: MultiRepoError = snap.error;
+        throw new Error(`${error.code}: ${error.message} (form kept)`);
+      }
+      appended.push(snap.snapshot);
+    }
+
+    const at = input.now ?? this.now();
+    const record = buildTaskDiskRecord({
+      taskId: this.taskId,
+      name: stored.name,
+      dirId: stored.dirId,
+      branch: stored.branch,
+      root: stored.root,
+      taskDir: this.taskDir,
+      remoteBranch: stored.remoteBranch,
+      baseCommit: stored.baseCommit,
+      repos: stored.repos,
+      repoSources: stored.repoSources,
+      dirLinks: [...existingLinks, ...appended],
+      repoPrepareErrors: stored.repoPrepareErrors,
+      now: at,
+    });
+    record.createdAt = stored.createdAt;
+    this.store.writeTask(this.taskDir, record);
+    return {
+      record,
+      appended: appended.map((link) => link.directoryId),
+      skipped,
+    };
   }
 
   /** Selected repo dirs of a stored record; fail closed when none exist. */

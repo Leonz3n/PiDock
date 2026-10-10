@@ -56,8 +56,14 @@ export function DesktopTaskCreation({ project, bridge, onCreated }: { project?: 
     } catch (failure) { setError(failure instanceof Error ? failure.message : "放弃创建失败，请恢复原任务"); }
     finally { setBusy(false); }
   };
+  const hasSourcesInProject = Boolean(project && (project.repositories.length > 0 || project.directories.length > 0));
+  const hasSelectedRepos = Object.values(repos).some((row) => row.selected);
+  const hasSelectedDirs = directories.length > 0;
+  const hasSelections = hasSelectedRepos || hasSelectedDirs;
+  const submitDisabled = busy || project?.id !== formProjectId || !hasSelections || (hasSelectedDirs && !sharedWriteConfirmed);
+
   return <>
-    <button className={button} type="button" disabled={busy || !project || !project.repositories.length || typeof bridge.createTask !== "function"} title={!project ? "请先选择项目" : !project.repositories.length ? "当前创建流程至少需要一个 Git 仓库" : "创建真实任务"}
+    <button className={button} type="button" disabled={busy || !project || !hasSourcesInProject || typeof bridge.createTask !== "function"} title={!project ? "请先选择项目" : !hasSourcesInProject ? "当前创建流程至少需要一个仓库或目录" : "创建真实任务"}
       onClick={() => { setFormProjectId(project?.id ?? null); setName(""); setRepos({}); setDirectories([]); setSharedWriteConfirmed(false); setOverride(false); setOpen(true); setError(null); }}><Icon name="plus" />任务</button>
     {error && <p role={typeof bridge.createTask === "function" ? "alert" : undefined} className="w-full text-xs text-[#ad4545]">{error}</p>}
     {open && <section className="w-full border-t border-line py-4 text-sm" aria-label="创建任务">
@@ -89,8 +95,8 @@ export function DesktopTaskCreation({ project, bridge, onCreated }: { project?: 
         </fieldset>
         {directories.length > 0 && <label className="flex items-start gap-2 text-xs"><input type="checkbox" required checked={sharedWriteConfirmed} onChange={(event) => setSharedWriteConfirmed(event.target.checked)} />我确认普通目录通过共享可写链接接入任务，后续写入会直接修改原始目录</label>}
         <label className="flex gap-2 text-xs"><input type="checkbox" checked={override} onChange={(event) => setOverride(event.target.checked)} />单次选择其他任务根（系统目录选择器）</label>
-        <button className={button} type="submit" disabled={busy || project?.id !== formProjectId || !project?.repositories.length || !Object.values(repos).some((row) => row.selected)}>{busy ? "正在固定远程提交" : "固定基线并预览路径"}</button>
-        {!project?.repositories.length && <p className="text-xs text-muted">当前创建流程至少需要一个 Git 仓库。</p>}
+        <button className={button} type="submit" disabled={submitDisabled}>{busy ? (hasSelectedRepos ? "正在固定远程提交" : "正在预览路径") : (hasSelectedRepos ? "固定基线并预览路径" : "预览路径")}</button>
+        {!hasSourcesInProject && <p className="text-xs text-muted">当前创建流程至少需要一个仓库或目录。</p>}
       </form>}
     </section>}
   </>;

@@ -190,13 +190,19 @@ export function parseTaskRecord(raw: string): TaskDiskRecord {
     throw new Error("invalid-payload: task record must be an object");
   }
   const record = value as Record<string, unknown>;
-  for (const key of ["taskId", "name", "dirId", "branch", "root", "taskDir", "remoteBranch", "baseCommit"] as const) {
+  for (const key of ["taskId", "name", "dirId", "branch", "root", "taskDir"] as const) {
     if (typeof record[key] !== "string" || (record[key] as string).length === 0) {
       throw new Error(`invalid-payload: task record.${key} must be a non-empty string`);
     }
   }
   if (!Array.isArray(record["repos"]) || !(record["repos"] as unknown[]).every((item) => typeof item === "string")) {
     throw new Error("invalid-payload: task record.repos must be a string array");
+  }
+  const repos = record["repos"] as string[];
+  for (const key of ["remoteBranch", "baseCommit"] as const) {
+    if (typeof record[key] !== "string" || (repos.length > 0 && (record[key] as string).length === 0)) {
+      throw new Error(`invalid-payload: task record.${key} must be a non-empty string`);
+    }
   }
   // #6 per-repo sources: optional for pre-#6 records, fully validated
   // when present (each source names its own remote + pinned commit).

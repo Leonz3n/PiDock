@@ -288,6 +288,7 @@ export interface TaskRepositorySource {
  */
 export interface PrepScanAuthorityWithSources extends PrepScanAuthority {
   repositorySources(taskId: string): readonly TaskRepositorySource[];
+  directorySources(taskId: string): readonly TaskRepositorySource[];
 }
 
 export function createPrepScanAuthority(
@@ -311,11 +312,26 @@ export function createPrepScanAuthority(
     if (!project) throw new PrepScanUnavailableError("任务所属项目不可读取，无法定位目标仓库的来源检出");
     return project.repositories;
   };
+  const directorySources = (taskId: string): readonly TaskRepositorySource[] => {
+    const registered = projects;
+    const index = roots;
+    if (!registered || !index) missing();
+    const association = registered.association(taskId, index);
+    if (association.state !== "assigned" || association.projectId === null) {
+      throw new PrepScanUnavailableError(
+        `任务与项目没有可确认的关联（${association.state}），无法定位目标目录`,
+      );
+    }
+    const project = registered.get(association.projectId);
+    if (!project) throw new PrepScanUnavailableError("任务所属项目不可读取，无法定位目标目录");
+    return project.directories;
+  };
   return {
     resolveTaskDir: (taskId) => (roots ? roots.resolve(taskId) : missing()),
     readRecord: (taskDir) => readTaskRecordOnDisk(taskDir),
     projectRepositories: (taskId) => repositorySources(taskId),
     repositorySources,
+    directorySources,
   };
 }
 

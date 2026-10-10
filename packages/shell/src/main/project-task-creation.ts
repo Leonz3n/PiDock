@@ -132,7 +132,8 @@ function validate(value: unknown): CreationIntent {
       typeof row.projectSnapshot !== "string" || row.projectSnapshot.length > 65536 || typeof row.sharedWriteConfirmed !== "boolean" ||
       !((row.rootDevice === null && row.rootInode === null && row.rootRealPath === null) ||
         (typeof row.rootDevice === "string" && typeof row.rootInode === "string" && typeof row.rootRealPath === "string" && isAbsolute(row.rootRealPath))) ||
-      !Array.isArray(row.repos) || !row.repos.length || row.repos.length > 30 || !Array.isArray(row.directories) || row.directories.length > 30) throw new Error("创建意图损坏");
+      !Array.isArray(row.repos) || row.repos.length > 30 || !Array.isArray(row.directories) || row.directories.length > 30 ||
+      (!row.repos.length && !row.directories.length)) throw new Error("创建意图损坏");
   string(row.name); string(row.branch);
   for (const raw of row.repos) {
     const item = strict(raw, ["id", "name", "path", "realPath", "device", "inode", "remote", "remoteBranch", "remoteDigest", "commonDir", "commit", "repoDir"]);
@@ -258,8 +259,9 @@ export class ProjectTaskCreation {
       if (prior?.state === "abandoned" && !this.store.hasAbandonReceipt(prior)) throw new Error("放弃创建凭据丢失，需要显式恢复");
       const project = this.projects.get(input.projectId);
       if (!project) throw new Error("项目已删除或不可读取");
-      if (!Array.isArray(input.repositories) || !input.repositories.length || input.repositories.length > 30 ||
-          !Array.isArray(input.directoryIds) || input.directoryIds.length > 30) throw new Error("当前创建流程至少需要一个 Git 仓库");
+      if (!Array.isArray(input.repositories) || input.repositories.length > 30 ||
+          !Array.isArray(input.directoryIds) || input.directoryIds.length > 30 ||
+          (!input.repositories.length && !input.directoryIds.length)) throw new Error("当前创建流程至少需要选择一个仓库或目录");
       if (input.directoryIds.length && input.sharedWriteConfirmed !== true) throw new Error("请确认普通目录的共享写入风险");
       if (input.override !== (selectedRoot !== undefined)) throw new Error("任务根选择结果与请求不符");
       const name = string(input.name), root = path(selectedRoot ?? this.defaultRoot);
@@ -393,10 +395,10 @@ export class ProjectTaskCreation {
       if (!previous) {
         try { lstatSync(join(intent.taskDir, "task.json")); throw new Error("现有任务记录损坏或链接，不能覆盖"); }
         catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-        const first = intent.repos[0]!;
+        const first = intent.repos[0];
         const result = await this.host.routeTaskOp({ taskId: intent.taskId, op: "task/provision", payload: {
           name: intent.name, dirId: intent.taskId, rootOverride: intent.root,
-          remoteBranch: first.remoteBranch, fetchedCommit: first.commit,
+          remoteBranch: first?.remoteBranch ?? "", fetchedCommit: first?.commit ?? "",
           repoSelections: intent.repos.map((repo) => ({ repoDir: repo.repoDir, remote: repo.remote, remoteBranch: repo.remoteBranch, mainCheckoutDir: repo.path })),
           fetchedCommits: Object.fromEntries(intent.repos.map((repo) => [repo.repoDir, repo.commit])),
           plainDirs: intent.directories.map((dir) => ({ directoryId: dir.id, sourcePath: dir.path })),
@@ -407,7 +409,7 @@ export class ProjectTaskCreation {
       if (!record || record.taskId !== intent.taskId || record.dirId !== intent.taskId || record.root !== intent.root || record.taskDir !== intent.taskDir ||
           record.branch !== intent.branch || record.name !== intent.name || record.repos.length !== intent.repos.length ||
           intent.repos.some((repo) => !record.repoSources?.some((entry) => entry.repoDir === repo.repoDir && entry.remote === repo.remote && entry.remoteBranch === repo.remoteBranch && entry.baseCommit === repo.commit)) ||
-          record.dirLinks?.length !== intent.directories.length || intent.directories.some((dir) => !record.dirLinks?.some((entry) => entry.directoryId === dir.id && entry.linkName === dir.linkName && entry.sourcePath === dir.path))) {
+          (record.dirLinks?.length ?? 0) !== intent.directories.length || intent.directories.some((dir) => !record.dirLinks?.some((entry) => entry.directoryId === dir.id && entry.linkName === dir.linkName && entry.sourcePath === dir.path))) {
         throw new Error("任务磁盘记录与创建意图不符");
       }
       this.store.assertTaskPath(intent.taskDir);

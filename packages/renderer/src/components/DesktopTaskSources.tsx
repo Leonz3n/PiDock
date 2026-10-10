@@ -47,6 +47,8 @@ export function DesktopTaskSources({
   const [project, setProject] = useState<DesktopProject | null>(null);
   const [projectError, setProjectError] = useState("");
   const [repos, setRepos] = useState<Record<string, { selected: boolean; remote: string; branch: string }>>({});
+  const [directories, setDirectories] = useState<string[]>([]);
+  const [sharedWriteConfirmed, setSharedWriteConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [outcome, setOutcome] = useState<AppendReposView | null>(null);
@@ -79,6 +81,7 @@ export function DesktopTaskSources({
     };
   }, [bridge, taskId]);
   const selected = project?.repositories.filter((repo) => repos[repo.id]?.selected) ?? [];
+  const selectedDirs = project?.directories.filter((dir) => directories.includes(dir.id)) ?? [];
   // The append payload requires a non-blank remote AND baseline branch for
   // every selected repository (main validates both); gate the primary action
   // on them so the first click can never be a guaranteed `invalid-payload`.
@@ -89,12 +92,16 @@ export function DesktopTaskSources({
     // A new submission invalidates the previous outcome: a stale success must
     // never sit next to a fresh refusal.
     setOutcome(null);
-    if (!project || selected.length === 0) {
-      setError("请选择要追加的仓库");
+    if (!project || (selected.length === 0 && selectedDirs.length === 0)) {
+      setError("请选择要追加的仓库或目录");
       return;
     }
-    if (!ready) {
+    if (selected.length > 0 && !ready) {
       setError("请为每个选中的仓库填写远程名称与远程分支");
+      return;
+    }
+    if (selectedDirs.length > 0 && !sharedWriteConfirmed) {
+      setError("请确认普通目录的共享写入风险");
       return;
     }
     const request = ++epoch.current;
@@ -103,11 +110,16 @@ export function DesktopTaskSources({
     try {
       const result = await appendTaskReposThroughShell({
         taskId,
-        repositories: selected.map((repo) => ({
-          sourceId: repo.id,
-          remote: repos[repo.id]?.remote.trim() ?? "",
-          remoteBranch: repos[repo.id]?.branch.trim() ?? "",
-        })),
+        ...(selected.length > 0
+          ? {
+              repositories: selected.map((repo) => ({
+                sourceId: repo.id,
+                remote: repos[repo.id]?.remote.trim() ?? "",
+                remoteBranch: repos[repo.id]?.branch.trim() ?? "",
+              })),
+            }
+          : {}),
+        ...(selectedDirs.length > 0 ? { directoryIds: directories, sharedWriteConfirmed } : {}),
       });
       if (epoch.current !== request) return;
       if (!result.ok) {
@@ -122,7 +134,7 @@ export function DesktopTaskSources({
         return;
       }
       setOutcome(parsed);
-      if (parsed.appended.length > 0) onAppended?.();
+      if (parsed.appended.length > 0 || (parsed.appendedDirs?.length ?? 0) > 0) onAppended?.();
     } catch (failure) {
       if (epoch.current === request) {
         setError(failure instanceof Error ? failure.message : "追加失败，已保留选择，请重试");
@@ -202,6 +214,44 @@ export function DesktopTaskSources({
           </div>
         </fieldset>
       ) : null}
+      {project && project.directories.length > 0 ? (
+        <fieldset className="mt-3" disabled={busy}>
+          <legend className="text-xs text-muted">选择要追加的普通目录 · 软链接共享原文件</legend>
+          <div className="mt-1.5 flex flex-col gap-2">
+            {project.directories.map((dir) => (
+              <label key={dir.id} className="flex items-start gap-2 text-xs">
+                <input
+                  type="checkbox"
+                  aria-label={dir.name}
+                  checked={directories.includes(dir.id)}
+                  disabled={busy}
+                  onChange={(event) =>
+                    setDirectories((items) =>
+                      event.target.checked ? [...items, dir.id] : items.filter((id) => id !== dir.id),
+                    )
+                  }
+                />
+                <span>
+                  <strong className="block text-ink">{dir.name}</strong>
+                  <small className="font-mono text-[11px] text-muted">{dir.path}</small>
+                </span>
+              </label>
+            ))}
+          </div>
+        </fieldset>
+      ) : null}
+      {directories.length > 0 ? (
+        <label className="mt-2 flex items-start gap-2 text-xs">
+          <input
+            type="checkbox"
+            required
+            checked={sharedWriteConfirmed}
+            disabled={busy}
+            onChange={(event) => setSharedWriteConfirmed(event.target.checked)}
+          />
+          我确认普通目录通过共享可写链接接入任务，后续写入会直接修改原始目录
+        </label>
+      ) : null}
       {error ? <p role="alert" className="mt-3 border border-[#e0b4b4] bg-[#fdf3f3] p-2 text-xs text-[#ad4545]">{error}</p> : null}
       {outcome ? (
         <div className="mt-3 text-xs" data-testid="append-outcome">
@@ -222,7 +272,24 @@ export function DesktopTaskSources({
               已在任务中，未重复创建：{outcome.skipped.map((repo) => `${repo.name}（${repo.repoDir}）`).join("、")}
             </p>
           ) : null}
-          {outcome.appended.length === 0 && outcome.skipped.length > 0 ? (
+          {outcome.appendedDirs?.length ? (
+            <>
+              <p className="mt-2 font-semibold text-ink">本次已追加 {outcome.appendedDirs.length} 个普通目录</p>
+              <ul className="mt-1 flex flex-col gap-1">
+                {outcome.appendedDirs.map((dir) => (
+                  <li key={dir.directoryId} className="break-all">
+                    {dir.name} · <span className="font-mono">{dir.linkPath}</span> → 原始目标 <span className="font-mono">{dir.sourcePath}</span>（共享原文件，非独立副本）
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : null}
+          {outcome.skippedDirs?.length ? (
+            <p className="mt-1 text-muted">
+              普通目录已在任务中，未重复创建：{outcome.skippedDirs.map((dir) => `${dir.name}（${dir.linkName}）`).join("、")}
+            </p>
+          ) : null}
+          {outcome.appended.length === 0 && outcome.skipped.length > 0 && !outcome.appendedDirs?.length && !outcome.skippedDirs?.length ? (
             <p className="mt-1 text-muted">本次没有新增仓库。</p>
           ) : null}
         </div>
@@ -241,8 +308,18 @@ export function DesktopTaskSources({
           <Button type="button" variant="outline" disabled={busy} onClick={onClose}>
             关闭
           </Button>
-          <Button type="button" disabled={busy || !project || selected.length === 0 || !ready} onClick={() => void submit()}>
-            {busy ? "获取中…" : <><Icon name="plus" />获取最新基线并追加</>}
+          <Button
+            type="button"
+            disabled={
+              busy ||
+              !project ||
+              (selected.length === 0 && selectedDirs.length === 0) ||
+              (selected.length > 0 && !ready) ||
+              (selectedDirs.length > 0 && !sharedWriteConfirmed)
+            }
+            onClick={() => void submit()}
+          >
+            {busy ? "处理中…" : <><Icon name="plus" />{selectedDirs.length > 0 && selected.length === 0 ? "追加目录" : "获取最新基线并追加"}</>}
           </Button>
         </div>
       </div>

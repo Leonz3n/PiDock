@@ -52,12 +52,14 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { lstatSync, realpathSync } from "node:fs";
-import { isAbsolute, join, normalize } from "node:path";
+import { lstatSync, readlinkSync, realpathSync, statSync, symlinkSync } from "node:fs";
+import { isAbsolute, join, normalize, relative } from "node:path";
 import { createNodeRepoProbe, observeRecordedRepo } from "../host/repo-identity.js";
 import { readTaskRecordOnDisk } from "../host/task-store.js";
 import type { HostTaskResult } from "../rpc/protocol.js";
 import {
+  buildLinkName,
+  checkLinkNameCollisions,
   buildRepoChildName,
   filterAppendRepos,
   previewMixedTaskPaths,
@@ -92,7 +94,9 @@ export interface AppendRepoSelection {
 
 export interface AppendReposRequest {
   taskId: string;
-  repositories: readonly AppendRepoSelection[];
+  repositories?: readonly AppendRepoSelection[];
+  directoryIds?: readonly string[];
+  sharedWriteConfirmed?: boolean;
 }
 
 export interface AppendedRepoTarget {
@@ -110,10 +114,26 @@ export interface AppendedRepoSkip {
   name: string;
 }
 
+export interface AppendedDirTarget {
+  directoryId: string;
+  name: string;
+  linkName: string;
+  sourcePath: string;
+  linkPath: string;
+}
+
+export interface AppendedDirSkip {
+  directoryId: string;
+  name: string;
+  linkName: string;
+}
+
 export interface AppendReposResult {
   taskId: string;
   appended: AppendedRepoTarget[];
   skipped: AppendedRepoSkip[];
+  appendedDirs?: AppendedDirTarget[];
+  skippedDirs?: AppendedDirSkip[];
 }
 
 /**
@@ -124,7 +144,7 @@ export interface AppendReposResult {
 export interface AppendHost {
   routeTaskOp(params: {
     taskId: string;
-    op: "task/appendRepos" | "task/resumeAppend" | "task/prepareStatus";
+    op: "task/appendRepos" | "task/appendDirs" | "task/resumeAppend" | "task/prepareStatus";
     payload: Record<string, unknown>;
   }): Promise<HostTaskResult>;
 }
@@ -392,8 +412,13 @@ function canonicalPath(value: string): string {
   }
 }
 
+function overlaps(parent: string, child: string): boolean {
+  const rel = relative(parent, child);
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) && !isAbsolute(rel));
+}
+
 /** True when a path exists on disk (`lstatSync`, never following a link). */
-function worktreePresent(path: string): boolean {
+function pathPresent(path: string): boolean {
   try {
     lstatSync(path);
     return true;
@@ -597,10 +622,98 @@ export class ProjectTaskAppend {
     if (!stored || stored.taskId !== taskId) {
       throw new Error(`unknown task: ${taskId} 的任务记录不存在，拒绝在未确认来源的情况下追加`);
     }
+
+    const hasRepoSelections = Array.isArray(request.repositories) && request.repositories.length > 0;
+    const hasDirectorySelections = Array.isArray(request.directoryIds) && request.directoryIds.length > 0;
+    if (!hasRepoSelections && !hasDirectorySelections) {
+      throw new Error("invalid-repo: 请至少选择一个要追加的仓库或目录");
+    }
+
+    const requestedDirs: { directoryId: string; name: string; path: string; linkName: string }[] = [];
+    const skippedDirs: AppendedDirSkip[] = [];
+    const freshDirs: { directoryId: string; name: string; path: string; linkName: string }[] = [];
+
+    if (hasDirectorySelections) {
+      if (request.sharedWriteConfirmed !== true) throw new Error("请确认普通目录的共享写入风险");
+      const dirSources = this.authority.directorySources(taskId);
+      const dirSeen = new Set<string>();
+      for (const id of request.directoryIds!) {
+        if (!id || typeof id !== "string" || !UUID.test(id)) throw new Error("invalid-payload: 目录选择无效");
+        if (dirSeen.has(id)) throw new Error("invalid-repo: 目录重复选择");
+        dirSeen.add(id);
+        const source = dirSources.find((row) => row.id === id);
+        if (!source) throw new Error(`invalid-repo: 目录 ${id} 不在任务所属项目的登记中`);
+        const linkName = buildLinkName(source.id);
+        requestedDirs.push({ directoryId: source.id, name: source.name, path: source.path, linkName });
+      }
+      const dirCollision = checkLinkNameCollisions(requestedDirs.map((d) => d.directoryId));
+      if (!dirCollision.ok) throw new Error(`${dirCollision.error.code}: ${dirCollision.error.message}`);
+
+      const existingRepos = new Set(stored.repos);
+      const existingDirLinks = stored.dirLinks ?? [];
+      const existingLinksById = new Map(existingDirLinks.map((l) => [l.directoryId, l]));
+      const existingLinksByName = new Map(existingDirLinks.map((l) => [l.linkName, l]));
+
+      for (const dir of requestedDirs) {
+        if (existingRepos.has(dir.linkName)) {
+          throw new Error(`duplicate-repo: 普通目录链接名 ${dir.linkName} 与现有仓库文件夹冲突`);
+        }
+        const byName = existingLinksByName.get(dir.linkName);
+        if (byName && byName.directoryId !== dir.directoryId) {
+          throw new Error(`duplicate-repo: 普通目录链接名冲突: ${dir.directoryId} 与 ${byName.directoryId} 均映射到 ${dir.linkName}`);
+        }
+        if (existingLinksById.has(dir.directoryId)) {
+          const target = join(taskDir, dir.linkName);
+          let exists = false;
+          try {
+            lstatSync(target);
+            exists = true;
+          } catch (err) {
+            if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+          }
+          if (!exists) {
+            throw new Error(`link-missing: 普通目录 ${dir.linkName}（${dir.name}）已记录但软链接不存在，请恢复后再追加`);
+          }
+          const stat = lstatSync(target);
+          if (!stat.isSymbolicLink() || readlinkSync(target) !== dir.path) {
+            throw new Error(`link-mismatch: 普通目录 ${dir.linkName}（${dir.name}）已记录但软链接指向不符，请人工处理后再追加`);
+          }
+          skippedDirs.push({ directoryId: dir.directoryId, name: dir.name, linkName: dir.linkName });
+        } else {
+          try {
+            const sourceStat = statSync(dir.path);
+            if (!sourceStat.isDirectory()) throw new Error("not directory");
+          } catch {
+            throw new Error(`repo-unusable: 普通目录 ${dir.name} 的来源不可用: ${dir.path}`);
+          }
+          const realSource = realpathSync(dir.path);
+          const realTask = realpathSync(taskDir);
+          if (overlaps(realSource, realTask) || overlaps(realTask, realSource)) {
+            throw new Error("普通目录与任务工作区重叠");
+          }
+          const target = join(taskDir, dir.linkName);
+          let targetExists = false;
+          try {
+            lstatSync(target);
+            targetExists = true;
+          } catch (err) {
+            if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+          }
+          if (targetExists) {
+            const stat = lstatSync(target);
+            if (!stat.isSymbolicLink() || readlinkSync(target) !== dir.path) {
+              throw new Error("path-taken: 目标路径已占用");
+            }
+          }
+          freshDirs.push(dir);
+        }
+      }
+    }
+
     // Repository paths come from the project registry, never from the page.
     const sources = this.authority.repositorySources(taskId);
     const seen = new Set<string>();
-    const requested: AppendTarget[] = [];
+    const requestedRepos: AppendTarget[] = [];
     for (const selection of request.repositories ?? []) {
       if (!selection || typeof selection !== "object" ||
           !UUID.test(String(selection.sourceId)) || !REMOTE_NAME.test(String(selection.remote)) ||
@@ -612,7 +725,7 @@ export class ProjectTaskAppend {
       const repoDir = buildRepoChildName(source.id);
       if (seen.has(repoDir)) throw new Error(`invalid-repo: 仓库 ${repoDir} 被选择了两次，请只保留一个来源`);
       seen.add(repoDir);
-      requested.push({
+      requestedRepos.push({
         repoDir,
         name: source.name,
         remote: selection.remote.trim(),
@@ -621,9 +734,9 @@ export class ProjectTaskAppend {
         commit: "",
       });
     }
-    if (requested.length === 0) throw new Error("invalid-repo: 请至少选择一个要追加的仓库");
-    const { appended, skipped } = filterAppendRepos(stored.repos, requested.map((repo) => repo.repoDir));
-    const alreadyRecorded = requested.filter((repo) => skipped.includes(repo.repoDir));
+
+    const { appended, skipped } = filterAppendRepos(stored.repos, requestedRepos.map((repo) => repo.repoDir));
+    const alreadyRecorded = requestedRepos.filter((repo) => skipped.includes(repo.repoDir));
     // A recorded repo counts as SKIPPED only when its folder really is THIS
     // task's worktree for the pinned commit on the task branch — not merely
     // when something exists on disk. The Host persists `repos` BEFORE main
@@ -633,7 +746,7 @@ export class ProjectTaskAppend {
     // recorded but missing or mismatched and point at the recovery surface
     // main now EXECUTES (`task/resumeAppend`, see `executeResumePlan`).
     const recordedSources = new Map((stored.repoSources ?? []).map((source) => [source.repoDir, source]));
-    const absent = alreadyRecorded.filter((repo) => !worktreePresent(join(taskDir, repo.repoDir)));
+    const absent = alreadyRecorded.filter((repo) => !pathPresent(join(taskDir, repo.repoDir)));
     if (absent.length > 0) {
       const named = absent.map((repo) => `${repo.repoDir}（${repo.name}）`).join("、");
       throw new Error(
@@ -659,20 +772,29 @@ export class ProjectTaskAppend {
       );
     }
     const skippedRepos = alreadyRecorded.map((repo) => ({ repoDir: repo.repoDir, name: repo.name }));
-    const fresh = requested.filter((repo) => appended.includes(repo.repoDir));
-    // Already-present repositories are skipped without a fetch, a worktree or
-    // a record write: the append stays idempotent.
-    if (fresh.length === 0) return { taskId, appended: [], skipped: skippedRepos };
-    for (const repo of fresh) {
+    const freshRepos = requestedRepos.filter((repo) => appended.includes(repo.repoDir));
+
+    // If nothing fresh in repos and nothing fresh in dirs:
+    if (freshRepos.length === 0 && freshDirs.length === 0) {
+      return {
+        taskId,
+        appended: [],
+        skipped: skippedRepos,
+        ...(hasDirectorySelections ? { appendedDirs: [], skippedDirs } : {}),
+      };
+    }
+
+    for (const repo of freshRepos) {
       if (!isAbsolute(repo.checkout) || this.git.topLevel(repo.checkout) !== canonicalPath(repo.checkout)) {
         throw new Error(`repo-unusable: 仓库 ${repo.repoDir}（${repo.name}）的来源检出不可用: ${repo.checkout}`);
       }
     }
+
     // ALL-SUCCESS gate: pin every new repository's freshly fetched commit
     // before anything is planned or written. One failure means no worktree and
     // no record change, and the refusal names the repo and the reason.
     const pinned: AppendTarget[] = [];
-    for (const repo of fresh) {
+    for (const repo of freshRepos) {
       const fetched = this.git.fetchAndPin(repo.checkout, repo.remote, repo.remoteBranch);
       if (!fetched.ok) {
         throw new Error(
@@ -682,49 +804,96 @@ export class ProjectTaskAppend {
       }
       pinned.push({ ...repo, commit: fetched.commit });
     }
-    // The conflict scan is derived here (the builder takes no scan parameter)
-    // and the source checkouts come back with it.
-    const { payload, prep } = prepareAppendHostPayload(
-      {
-        taskId,
-        selections: pinned.map<RepoSelection>((repo) => ({
-          repoDir: repo.repoDir,
-          remote: repo.remote,
-          remoteBranch: repo.remoteBranch,
-          mainCheckoutDir: repo.checkout,
-        })),
-        fetchedCommits: Object.fromEntries(pinned.map((repo) => [repo.repoDir, repo.commit])),
-        branch: stored.branch,
-      },
-      this.authority,
-      this.deps,
-    );
-    const wanted = previewMixedTaskPaths(prep.taskDir, appended, []);
-    // A task branch that exists WITHOUT a worktree is the same manual-recovery
-    // state the create flow refuses (same words). A branch another worktree
-    // holds, or a taken target path, is left to the Host so the user sees the
-    // real `branch-in-use` / `path-taken` classification instead.
-    for (const repo of pinned) {
-      const observed = this.git.probeBranchRef(repo.checkout, stored.branch);
-      if (observed.state === "unknown") {
-        throw new Error(`repo-unusable: 仓库 ${repo.repoDir}（${repo.name}）的任务分支状态无法确认，请人工恢复`);
+
+    let plan: ProvisionPlan | null = null;
+    let prepTaskDir = taskDir;
+    if (pinned.length > 0) {
+      const { payload, prep } = prepareAppendHostPayload(
+        {
+          taskId,
+          selections: pinned.map<RepoSelection>((repo) => ({
+            repoDir: repo.repoDir,
+            remote: repo.remote,
+            remoteBranch: repo.remoteBranch,
+            mainCheckoutDir: repo.checkout,
+          })),
+          fetchedCommits: Object.fromEntries(pinned.map((repo) => [repo.repoDir, repo.commit])),
+          branch: stored.branch,
+        },
+        this.authority,
+        this.deps,
+      );
+      prepTaskDir = prep.taskDir;
+      const wanted = previewMixedTaskPaths(prep.taskDir, appended, []);
+      for (const repo of pinned) {
+        const observed = this.git.probeBranchRef(repo.checkout, stored.branch);
+        if (observed.state === "unknown") {
+          throw new Error(`repo-unusable: 仓库 ${repo.repoDir}（${repo.name}）的任务分支状态无法确认，请人工恢复`);
+        }
+        if (observed.state === "present" &&
+            !prep.branchesInUse.includes(stored.branch) &&
+            !prep.takenPaths.includes(wanted.worktrees[repo.repoDir]!)) {
+          throw new Error(`${TASK_BRANCH_EXISTS_NO_WORKTREE}（仓库 ${repo.repoDir}）`);
+        }
       }
-      if (observed.state === "present" &&
-          !prep.branchesInUse.includes(stored.branch) &&
-          !prep.takenPaths.includes(wanted.worktrees[repo.repoDir]!)) {
-        throw new Error(`${TASK_BRANCH_EXISTS_NO_WORKTREE}（仓库 ${repo.repoDir}）`);
-      }
+      const result = await this.host.routeTaskOp({ taskId, op: "task/appendRepos", payload });
+      plan = appendPlanFromHost(taskId, result);
     }
-    const result = await this.host.routeTaskOp({ taskId, op: "task/appendRepos", payload });
-    const plan = appendPlanFromHost(taskId, result);
+
     // The sender is re-attested immediately before the operations that create
     // real resources, the same boundary the sibling privileged writes use.
     reattest();
-    const created = executeAppendPlan({
-      plan,
-      expected: { taskDir: prep.taskDir, branch: stored.branch, repos: pinned },
-      exec: this.runExec(),
-    });
+    if (freshDirs.length > 0) {
+      // Create each link FIRST, then record it (the create flow's order). A
+      // crash between the two leaves a correct link the next append records
+      // idempotently; the reverse order would leave a recorded link that is
+      // absent on disk, which only manual repair could clear.
+      for (const dir of freshDirs) {
+        const target = join(taskDir, dir.linkName);
+        if (!pathPresent(target)) symlinkSync(dir.path, target, "dir");
+      }
+      const recorded = await this.host.routeTaskOp({
+        taskId,
+        op: "task/appendDirs",
+        payload: {
+          plainDirs: freshDirs.map((d) => ({ directoryId: d.directoryId, sourcePath: d.path })),
+        },
+      });
+      // Truthful commit: the record must name every link we just created, and
+      // each link must really exist at its stable name pointing at the source.
+      // A missing or wrong entry is a refusal, never a success-shaped result.
+      const after = readTaskRecordOnDisk(taskDir);
+      const recordedLinks = after?.dirLinks ?? [];
+      for (const dir of freshDirs) {
+        const target = join(taskDir, dir.linkName);
+        if (!recordedLinks.some((link) => link.directoryId === dir.directoryId && link.linkName === dir.linkName && link.sourcePath === dir.path)) {
+          throw new Error(`link-missing: 普通目录 ${dir.linkName}（${dir.name}）创建后未记录到任务，请重试追加`);
+        }
+        const stat = lstatSync(target);
+        if (!stat.isSymbolicLink() || readlinkSync(target) !== dir.path) {
+          throw new Error(`link-mismatch: 普通目录 ${dir.linkName}（${dir.name}）已创建但指向不符，请人工处理后重试`);
+        }
+      }
+      if (recorded.taskId !== taskId) throw new Error("Host 任务身份不符");
+    }
+
+    let created: { repoDir: string; worktree: string }[] = [];
+    if (plan !== null && pinned.length > 0) {
+      created = executeAppendPlan({
+        plan,
+        expected: { taskDir: prepTaskDir, branch: stored.branch, repos: pinned },
+        exec: this.runExec(),
+      });
+    }
+
+    const appendedDirs: AppendedDirTarget[] = freshDirs.map((dir) => ({
+      directoryId: dir.directoryId,
+      name: dir.name,
+      linkName: dir.linkName,
+      sourcePath: dir.path,
+      linkPath: join(taskDir, dir.linkName),
+    }));
+
     const byRepoDir = new Map(pinned.map((repo) => [repo.repoDir, repo]));
     return {
       taskId,
@@ -740,6 +909,7 @@ export class ProjectTaskAppend {
         };
       }),
       skipped: skippedRepos,
+      ...(hasDirectorySelections ? { appendedDirs, skippedDirs } : {}),
     };
   }
 }

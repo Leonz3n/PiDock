@@ -717,15 +717,10 @@ async function performTaskOp(
       case "task/provision": {
         const name = record["name"];
         const dirId = record["dirId"];
-        const remoteBranch = record["remoteBranch"];
-        const fetchedCommit = record["fetchedCommit"];
-        if (
-          typeof name !== "string" ||
-          typeof dirId !== "string" ||
-          typeof remoteBranch !== "string" ||
-          typeof fetchedCommit !== "string"
-        ) {
-          return { ok: false, error: "invalid-payload: task/provision requires name/dirId/remoteBranch/fetchedCommit" };
+        const remoteBranch = typeof record["remoteBranch"] === "string" ? (record["remoteBranch"] as string) : "";
+        const fetchedCommit = typeof record["fetchedCommit"] === "string" ? (record["fetchedCommit"] as string) : "";
+        if (typeof name !== "string" || typeof dirId !== "string") {
+          return { ok: false, error: "invalid-payload: task/provision requires name/dirId" };
         }
         const branch = typeof record["branch"] === "string" ? (record["branch"] as string) : undefined;
         const rootOverride = typeof record["rootOverride"] === "string" ? (record["rootOverride"] as string) : undefined;
@@ -796,6 +791,13 @@ async function performTaskOp(
         if (dirs === null) {
           return { ok: false, error: "invalid-payload: task/provision.plainDirs must be an array of {directoryId, sourcePath}" };
         }
+        const hasRepos = (selections !== undefined && selections.length > 0) || (repos !== undefined && repos.length > 0);
+        const hasPlainDirs = dirs !== undefined && dirs.length > 0;
+        if (hasRepos || !hasPlainDirs) {
+          if (!remoteBranch || !fetchedCommit) {
+            return { ok: false, error: "invalid-payload: task/provision requires name/dirId/remoteBranch/fetchedCommit" };
+          }
+        }
         // `host.provision` returns the persisted record AND the executable
         // plan (real cwds; empty only in the sense of zero ops). Both ride
         // the `host/task` result payload so a caller can persist-then-execute
@@ -851,6 +853,20 @@ async function performTaskOp(
             branchesInUse: inUse,
           });
           return { ok: true, payload: { ...appended.record, plan: appended.plan, appended: appended.appended, skipped: appended.skipped } };
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : String(error) };
+        }
+      }
+      case "task/appendDirs": {
+        const plainDirs = record["plainDirs"];
+        if (!Array.isArray(plainDirs)) {
+          return { ok: false, error: "invalid-payload: task/appendDirs requires plainDirs" };
+        }
+        try {
+          const appended = host.appendDirs({
+            plainDirs: plainDirs as { directoryId: string; sourcePath: string }[],
+          });
+          return { ok: true, payload: { ...appended.record, appended: appended.appended, skipped: appended.skipped } };
         } catch (error) {
           return { ok: false, error: error instanceof Error ? error.message : String(error) };
         }
