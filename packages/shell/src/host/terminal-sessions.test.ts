@@ -124,7 +124,7 @@ class Fixture {
   readonly sessions: TaskTerminalSessions;
   readonly pids: number[] = [];
 
-  constructor(tag: string) {
+  constructor(tag: string, options: { stopGraceMs?: number; stopConfirmMs?: number } = {}) {
     this.taskDir = realpathSync(mkdtempSync(join(tmpdir(), `pidock-term-${tag}-`)));
     this.taskId = `task-${tag}`;
     this.registry = new TaskTerminalRegistry(this.taskId);
@@ -133,6 +133,7 @@ class Fixture {
       workspaceId: this.taskId,
       runtime: resolvePtyRuntime,
       onOutput: (identity, sequence, data) => holder.sessions?.ingest(identity, sequence, data),
+      ...options,
     });
     this.sessions = new TaskTerminalSessions(this.registry, this.driver, () => []);
     holder.sessions = this.sessions;
@@ -375,6 +376,54 @@ realIt("restarts an exited instance with a fresh shell and still contains it", {
   } finally {
     // The restarted run must be terminated even when the assertions above fail
     // before its stop: the marker names exactly this suite's own sleeps.
+    for (const pid of markerPids(marker)) {
+      try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
+    }
+    await until(() => markerPids(marker).length === 0, 5000, "marker processes to end");
+  }
+});
+
+realIt("forgets a drained operation so the same terminal identity spawns fresh again", { timeout: 30_000 }, async () => {
+  // Reap finding: a drained operation must leave the driver's bounded map. When
+  // it is retained, the stale (already fenced) operation is what a later start
+  // for that identity resolves against, and eight retained lifecycles make the
+  // ninth real start fail as `terminal-not-started` with a runtime/preflight
+  // blame that is not the real reason.
+  const marker = 3273;
+  const f = new Fixture("reap", { stopGraceMs: 250, stopConfirmMs: 250 });
+  const plan = f.plan("term-1");
+  const launch = {
+    program: resolveProgram(plan.program, plan.env),
+    args: [...plan.args],
+    cwd: plan.cwd,
+    env: { ...plan.env },
+    envRevision: "fixture-reap-1",
+    cols: plan.cols,
+    rows: plan.rows,
+  };
+  const identity = { taskId: f.taskId, sessionId: "human-ui", instanceId: "term-1", generation: 1 };
+  const receipts: string[] = [];
+  try {
+    const first = await f.driver.spawn(identity, launch, (receipt) => receipts.push(receipt.status));
+    expect(first.status).toBe("started");
+    f.track(first.process?.processId);
+    // A HUP-proof child in the recorded group makes the natural-exit settlement
+    // take the reclaim path (`set +m` keeps it in that group), which is the
+    // window in which the helper has already exited before the operation is
+    // reaped.
+    await f.driver.input(identity, "set +m\r");
+    await f.driver.input(identity, `sh -c 'trap "" HUP; exec sleep ${marker}' & echo BG=$!\r`);
+    await f.driver.input(identity, "exit\r");
+    await until(() => receipts.includes("tree-drained"), 15_000, "natural-exit receipt");
+
+    const second = await f.driver.spawn(identity, launch, () => {});
+    expect(second.status).toBe("started");
+    f.track(second.process?.processId);
+    expect(second.process?.processId).not.toBe(first.process?.processId);
+    expect(alive(second.process!.processId)).toBe(true);
+    expect((await f.driver.stop(identity)).status).toBe("tree-drained");
+    await until(() => !alive(second.process!.processId), 5000, "respawned shell to stop");
+  } finally {
     for (const pid of markerPids(marker)) {
       try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
     }

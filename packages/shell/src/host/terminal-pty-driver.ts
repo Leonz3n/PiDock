@@ -322,6 +322,7 @@ export class TerminalPtyDriver implements TerminalDriver {
       }
     }
     this.fence(operation);
+    this.forget(operation);
     this.report(operation, { ...operation.envelope.identity, status: "tree-drained", exitCode: operation.ptyExit?.exitCode ?? 0 });
     await this.reap(operation);
   }
@@ -338,6 +339,20 @@ export class TerminalPtyDriver implements TerminalDriver {
   private fence(operation: Operation): void {
     operation.fenced = true;
     operation.status = "unknown";
+  }
+
+  /**
+   * Drop the operation from the bounded map. Called before its end receipt is
+   * made visible (and again while reaping), so a caller that observed a proven
+   * end can start the same identity again instead of resolving against a stale
+   * operation - and so finished lifecycles never occupy the instance cap.
+   */
+  private forget(operation: Operation): void {
+    const key = operationKey(operation.envelope.identity);
+    // Compare-and-delete: a reap that finishes after a later operation took the
+    // same key must not drop that operation (the identity is reused across a
+    // restart, so a late delete would leave the new terminal untracked).
+    if (this.operations.get(key) === operation) this.operations.delete(key);
   }
 
   private async dispatch(operation: Operation, request: PtyRequest): Promise<PtyEvent & { kind: "reply" }> {
@@ -432,14 +447,21 @@ export class TerminalPtyDriver implements TerminalDriver {
 
   /** Bounded reap of the helper after its PTY session ended. */
   private async reap(operation: Operation): Promise<void> {
+    // The drained operation leaves the bounded map in every path, including the
+    // one where the helper is already gone: a retained entry is what a later
+    // start for this identity resolves against, and enough of them make the next
+    // real start fail as `not-started` (the cap) for no real reason.
     const worker = operation.worker;
-    if (!worker || operation.workerExit !== undefined) return;
+    if (!worker || operation.workerExit !== undefined) {
+      this.forget(operation);
+      return;
+    }
     const deadline = Date.now() + this.confirm;
     while (operation.workerExit === undefined && Date.now() < deadline) await delay(STOP_POLL_MS);
     if (operation.workerExit === undefined) {
       try { worker.kill?.(); } catch { /* helper already gone */ }
     }
-    this.operations.delete(operationKey(operation.envelope.identity));
+    this.forget(operation);
   }
 
   /**
@@ -483,6 +505,7 @@ export class TerminalPtyDriver implements TerminalDriver {
     this.fence(operation);
     const receipt: TerminalDriverReceipt = { ...identity, status: "tree-drained", exitCode: operation.ptyExit?.exitCode ?? 0 };
     operation.observed = true;
+    this.forget(operation);
     void this.reap(operation);
     return receipt;
   }
