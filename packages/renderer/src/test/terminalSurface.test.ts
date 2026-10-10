@@ -62,6 +62,15 @@ describe("#15 terminal state text", () => {
     expect(terminalInstanceStateText(instance({ lifecycle: "exited", exitReason: "user-request" }))).toContain("用户请求停止");
   });
 
+  it("names the Host's real shutdown reason instead of leaking its internal token", () => {
+    // The quit plan records `stopAll("host-quit")` (host.ts:1784); the panel must
+    // not print the raw token `已退出 · host-quit · …` when the app lives on and a
+    // task Host quits or restarts.
+    const text = terminalInstanceStateText(instance({ lifecycle: "exited", exitReason: "host-quit", exitCode: undefined }));
+    expect(text).toContain("应用退出时停止");
+    expect(text).not.toContain("host-quit");
+  });
+
   it("never reads an exit as a proven whole-tree drain", () => {
     // `root-exited` is the same verified drain as `tree-drained` without the
     // containment claim, and an `unknown` receipt leaves the instance running -
