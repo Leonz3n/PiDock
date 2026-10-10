@@ -29,14 +29,28 @@ export interface PtyRuntime {
  * Production runtime resolution. Inside an Electron utilityProcess
  * `process.execPath` is the Electron binary, which runs as plain Node when the
  * child is started with `ELECTRON_RUN_AS_NODE=1` (node-pty 1.1.0 is N-API, so
- * the same binding is ABI-compatible). Outside Electron the resolved Node
- * binary is used with an empty helper environment. The helper environment is
- * deliberately empty - the PTY child gets its own explicit `launch.env`.
+ * the binding is not tied to one Node version). That Electron path is UNTESTED
+ * in this slice - the real-process tests cover the plain Node path. Outside
+ * Electron the resolved Node binary is used with an empty helper environment.
+ * The helper environment is deliberately empty - the PTY child gets its own
+ * explicit `launch.env`.
  */
 export function resolvePtyRuntime(): PtyRuntime {
   return process.versions.electron
     ? { executable: process.execPath, env: { ELECTRON_RUN_AS_NODE: "1" } }
     : { executable: realpathSync(process.execPath), env: {} };
+}
+
+/**
+ * Whether this Host can really fork the PTY helper. The worker admits only
+ * darwin/arm64 (the platform the pinned prebuild ships for), so a Host that can
+ * never spawn reports `spawnImplemented: false` and the renderer keeps its
+ * residual warning instead of only failing every start with a per-attempt
+ * `terminal-not-started` error. Whether the prebuild itself is prepared is
+ * checked per spawn by the worker's preflight, not here.
+ */
+export function ptySpawnerAvailable(): boolean {
+  return process.platform === "darwin" && process.arch === "arm64";
 }
 
 /** Poll cadence while proving a PTY group and its observed descendants drained. */

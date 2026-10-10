@@ -884,8 +884,8 @@ export function TerminalPanel({
   /**
    * [PiDock 10] (#15) Host/memory terminal view: the planned cwd + resolved env
    * rows, this task's instances and their real state. `spawnImplemented: false`
-   * means the plan/tracking exists but no real pty is running yet, and the
-   * panel says so rather than showing a fake pid.
+   * means no real pty can be started on this Host, and the panel says so rather
+   * than showing a fake pid.
    */
   terminal?: {
     plan?: TerminalPlanView;
