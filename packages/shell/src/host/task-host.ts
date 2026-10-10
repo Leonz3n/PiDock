@@ -643,10 +643,20 @@ export class TaskWorkspaceHost {
     const record = this.store.readTask(this.taskDir);
     const taskDir = this.taskDir.replace(/[\\/]+$/, "");
     const worktrees = (record?.repos ?? []).map((repoDir) => ({ repoDir, path: `${taskDir}/${repoDir}` }));
+    // [PiDock 03] #6: a plain-directory link is a shared, non-isolated view of
+    // its original, reachable only through its stable in-task link name. The
+    // broker confines every read/write to the recorded original under that
+    // name, so the Agent sees the same files the user confirmed for sharing.
+    const sharedDirs = (record?.dirLinks ?? []).map((link) => ({
+      linkName: link.linkName,
+      path: `${taskDir}/${link.linkName}`,
+      sourcePath: link.sourcePath,
+    }));
     return {
       taskDir: this.taskDir,
       taskRoot: parentDirOf(this.taskDir),
       worktrees,
+      sharedDirs,
       primaryCheckouts: derivedPrimaryCheckouts(worktrees.map((worktree) => worktree.path)),
       assertProtected: (path) => { this.protection?.assert(path); },
     };
@@ -1481,14 +1491,8 @@ export class TaskWorkspaceHost {
         const kept = previous.dirLinks.filter((link) => !incoming.has(link.directoryId));
         record.dirLinks = [...kept, ...(record.dirLinks ?? [])];
       }
-      if (pinnedRepos === null && previous.repos !== undefined) {
-        record.repos = [...previous.repos];
-      }
       if (pinnedRepos === null && previous.repoSources !== undefined) record.repoSources = previous.repoSources;
       if (linkSnapshots === null && previous.dirLinks !== undefined) record.dirLinks = previous.dirLinks;
-      if (!hasRepos && previous.branch) record.branch = previous.branch;
-      if (!hasRepos && previous.remoteBranch) record.remoteBranch = previous.remoteBranch;
-      if (!hasRepos && previous.baseCommit) record.baseCommit = previous.baseCommit;
       // #6 recovery: a re-provision must not erase a still-unresolved
       // per-repo prepare error (resume is the only flow that clears it).
       if (previous.repoPrepareErrors !== undefined) record.repoPrepareErrors = [...previous.repoPrepareErrors];

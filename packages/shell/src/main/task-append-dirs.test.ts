@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, unlinkSync, writeFileSync } from "node:os";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TaskWorkspaceHost } from "../host/task-host.js";
