@@ -267,4 +267,52 @@ describe("Desktop append surface", () => {
     expect(screen.getByText(/记录存在但工作副本缺失或不符时会按名拒绝/)).toBeInTheDocument();
     expect(screen.queryByText("已是任务成员的仓库会被跳过，不会创建第二个工作副本。")).toBeNull();
   });
+
+  it("appends a plain directory through the production channel, showing the link and its original target", async () => {
+    const docs = { id: "e2eb192a-108b-4f9b-89a4-cd1fd8fb1fd0", name: "Documents", path: "/local/documents" };
+    const projectOp = vi.fn(async (request: { op: string }) => request.op === "list"
+      ? { ok: true, payload: { initialized: true, projects: [{ id: projectId, name: "Real", description: "", repositories: [first], directories: [docs] }] } }
+      : { ok: true, payload: { roots, tasks: [{ taskId, projectId, state: "assigned" }] } });
+    const appendTaskRepos = vi.fn(async (request: AppendRequest) => ({
+      ok: true,
+      payload: {
+        taskId: request.taskId,
+        appended: [],
+        skipped: [],
+        appendedDirs: [{ directoryId: docs.id, name: "Documents", linkName: "dir-e2eb192a", sourcePath: "/local/documents", linkPath: `/local/tasks/${taskId}/dir-e2eb192a` }],
+        skippedDirs: [],
+      },
+    }));
+    const onAppended = vi.fn();
+    render(<DesktopTaskSources taskId={taskId} bridge={withBridge(bridge({ projectOp: projectOp as unknown as PidockBridge["projectOp"], appendTaskRepos }))} onClose={vi.fn()} onAppended={onAppended} />);
+    // A directory row is offered beside the repository rows.
+    fireEvent.click(await screen.findByRole("checkbox", { name: "Documents" }));
+    const confirm = screen.getByRole("checkbox", { name: /我确认普通目录/ });
+    const button = screen.getByRole("button", { name: /追加目录/ });
+    // A shared write is not submitted until the user confirms it.
+    expect(button).toBeDisabled();
+    fireEvent.click(confirm);
+    expect(button).toBeEnabled();
+    fireEvent.click(button);
+    // Production channel: the page names the project directory id and the
+    // confirmation, never a path, a link name or a Git ref.
+    await waitFor(() => expect(appendTaskRepos).toHaveBeenCalledWith({ taskId, directoryIds: [docs.id], sharedWriteConfirmed: true }));
+    const outcome = await screen.findByTestId("append-outcome");
+    expect(outcome).toHaveTextContent("dir-e2eb192a");
+    expect(outcome).toHaveTextContent("/local/documents");
+    expect(outcome).toHaveTextContent("共享原文件，非独立副本");
+    expect(onAppended).toHaveBeenCalledTimes(1);
+  });
+
+  it("never submits a plain directory without the shared-write confirmation", async () => {
+    const docs = { id: "e2eb192a-108b-4f9b-89a4-cd1fd8fb1fd0", name: "Documents", path: "/local/documents" };
+    const projectOp = vi.fn(async (request: { op: string }) => request.op === "list"
+      ? { ok: true, payload: { initialized: true, projects: [{ id: projectId, name: "Real", description: "", repositories: [first], directories: [docs] }] } }
+      : { ok: true, payload: { roots, tasks: [{ taskId, projectId, state: "assigned" }] } });
+    const appendTaskRepos = vi.fn(async () => ({ ok: true, payload: { taskId, appended: [], skipped: [] } }));
+    render(<DesktopTaskSources taskId={taskId} bridge={withBridge(bridge({ projectOp: projectOp as unknown as PidockBridge["projectOp"], appendTaskRepos }))} onClose={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("checkbox", { name: "Documents" }));
+    expect(screen.getByRole("button", { name: /追加目录/ })).toBeDisabled();
+    expect(appendTaskRepos).not.toHaveBeenCalled();
+  });
 });

@@ -129,4 +129,38 @@ describe("Desktop task creation", () => {
     expect(screen.getByRole("button", { name: "固定基线并预览路径" })).toBeDisabled();
     expect(createTask.mock.calls.filter(([request]) => request.op === "prepare")).toHaveLength(0);
   });
+  it("creates a PURE-directory task: zero repositories, one directory, no Git baseline required", async () => {
+    const noRepoProject: DesktopProject = {
+      id: "c1de0000-0000-4000-8000-000000000001", name: "Docs only", description: "",
+      repositories: [], directories: [{ id: "e2eb192a-108b-4f9b-89a4-cd1fd8fb1fd0", name: "Documents", path: "/local/documents" }],
+    };
+    const pureIntent = { id: "b01fe61e-d112-487e-a7e8-113943b91072", taskId: "task-pure", name: "Docs work", projectId: noRepoProject.id,
+      root: "/local/tasks", taskDir: "/local/tasks/task-pure", branch: "task/pure", state: "pending", sharedWriteConfirmed: true,
+      repos: [], directories: [{ id: noRepoProject.directories[0]!.id, name: "Documents", path: "/local/documents", linkName: "dir-e2eb192a" }] };
+    const createTask = vi.fn(async (request: { op: string; input?: unknown; id?: string }) => {
+      if (request.op === "current") return { ok: true, payload: null };
+      if (request.op === "prepare") return { ok: true, payload: { canceled: false, intent: pureIntent } };
+      return { ok: true, payload: { taskId: pureIntent.taskId, projectId: noRepoProject.id } };
+    });
+    const onCreated = vi.fn(async () => {});
+    render(<DesktopTaskCreation project={noRepoProject} bridge={bridge(createTask)} onCreated={onCreated} />);
+    // No Git repository in the project, but the create entry is still available.
+    const open = screen.getByRole("button", { name: "任务" });
+    expect(open).toBeEnabled();
+    fireEvent.click(open);
+    fireEvent.change(screen.getByLabelText("任务名称"), { target: { value: "Docs work" } });
+    const submit = screen.getByRole("button", { name: "预览路径" });
+    // Selecting only a directory is not enough until the shared write is confirmed.
+    fireEvent.click(screen.getByRole("checkbox", { name: /Documents/ }));
+    expect(submit).toBeDisabled();
+    fireEvent.click(screen.getByRole("checkbox", { name: /我确认普通目录/ }));
+    expect(submit).toBeEnabled();
+    fireEvent.click(submit);
+    await waitFor(() => expect(createTask).toHaveBeenCalledWith({ op: "prepare", input: { projectId: noRepoProject.id, name: "Docs work",
+      repositories: [], directoryIds: [noRepoProject.directories[0]!.id], sharedWriteConfirmed: true, override: false } }));
+    expect(await screen.findByText(pureIntent.taskDir)).toBeInTheDocument();
+    expect(screen.getByText(/dir-e2eb192a/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "确认创建 / 恢复" }));
+    await waitFor(() => expect(onCreated).toHaveBeenCalledWith(noRepoProject.id));
+  });
 });
