@@ -1,4 +1,6 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { flushSync } from "react-dom";
+import { useState } from "react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderApp } from "./helpers";
@@ -391,6 +393,40 @@ describe("#15 terminal history freshness", () => {
     expect(screen.getByTestId("terminal-instance")).toHaveTextContent("term-second-1");
     expect(screen.queryByText(/term-first-1/)).toBeNull();
     expect(screen.getByTestId("terminal-output")).not.toHaveTextContent("first-line");
+  });
+
+  it("paints no stale history for one frame during a task switch (the output row is task-tagged)", async () => {
+    // The mount effect clears the history only after the new render commits, so a
+    // task switch would otherwise paint the previous task's lines for one frame.
+    // `flushSync` commits that render without flushing passive effects - exactly
+    // that frame - and the output must already be fenced by its task tag.
+    const calls: Call[] = [];
+    const taskOp = vi.fn(async (taskId: string, op: string, payload: Record<string, unknown> = {}) => {
+      calls.push({ taskId, op, payload });
+      if (op === "task/terminalState") return { ok: true, payload: { spawnImplemented: true, instances: [hostInstance()] } };
+      if (op === "task/fileRoots") return { ok: true, payload: ROOTS };
+      if (op === "task/terminalHistory") return { ok: true, payload: { history: [{ at: "t1", line: `${taskId}-line` }] } };
+      return { ok: true, payload: {} };
+    });
+    stubShell(taskOp);
+    let setTask!: (value: string) => void;
+    function Wrapper() {
+      const [task, setTaskState] = useState("first");
+      setTask = setTaskState;
+      return <TerminalTakeoverPanel taskId={task} />;
+    }
+    render(<Wrapper />);
+    await flush();
+    expect(screen.getByTestId("terminal-output")).toHaveTextContent("first-line");
+
+    act(() => {
+      flushSync(() => setTask("second"));
+      // Still inside `act`: the new render has committed but its passive
+      // effects have not run, so this asserts on the frame in question.
+      expect(screen.getByTestId("terminal-output")).not.toHaveTextContent("first-line");
+    });
+    await flush();
+    expect(screen.getByTestId("terminal-output")).toHaveTextContent("second-line");
   });
 });
 
