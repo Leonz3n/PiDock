@@ -67,6 +67,14 @@ export interface PlainDirLinkRecord {
   sourcePath: string;
   /** ISO time the snapshot was taken. */
   snapshotAt: string;
+  /**
+   * Device + inode of `sourcePath` read from the real filesystem when the link
+   * was recorded ([PiDock 03] #6): a path string alone cannot tell a different
+   * directory swapped in at the same path. Absent on records written before
+   * this field existed — those stay path-only and are never rewritten.
+   */
+  sourceDevice?: string;
+  sourceInode?: string;
 }
 
 /**
@@ -236,6 +244,22 @@ export function parseTaskRecord(raw: string): TaskDiskRecord {
       for (const key of ["linkName", "directoryId", "sourcePath", "snapshotAt"] as const) {
         if (typeof entry[key] !== "string" || (entry[key] as string).length === 0) {
           throw new Error(`invalid-payload: task record.dirLinks.${key} must be a non-empty string`);
+        }
+      }
+      // Recorded source identity is optional (records written before this
+      // field existed are path-only) but must be complete and non-empty when
+      // present: half a device/inode pair cannot be verified, so it is a
+      // damaged record.
+      const hasDevice = entry["sourceDevice"] !== undefined;
+      const hasInode = entry["sourceInode"] !== undefined;
+      if (hasDevice !== hasInode) {
+        throw new Error("invalid-payload: task record.dirLinks source identity must be a device/inode pair");
+      }
+      if (hasDevice) {
+        for (const key of ["sourceDevice", "sourceInode"] as const) {
+          if (typeof entry[key] !== "string" || (entry[key] as string).length === 0) {
+            throw new Error(`invalid-payload: task record.dirLinks.${key} must be a non-empty string`);
+          }
         }
       }
     }

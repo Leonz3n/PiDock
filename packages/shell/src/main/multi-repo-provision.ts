@@ -500,6 +500,15 @@ export interface PlainDirLinkSnapshot {
   sourcePath: string;
   /** ISO time the snapshot was taken. */
   snapshotAt: string;
+  /**
+   * Device + inode of `sourcePath` read from the real filesystem at snapshot
+   * time. The caller supplies them (this module stays pure and fs-free); a
+   * path string alone cannot tell a different directory swapped in at the
+   * same path, so the append re-verifies this pair. Omitted when the caller
+   * could not read them: the entry then stays path-only.
+   */
+  sourceDevice?: string;
+  sourceInode?: string;
 }
 
 /**
@@ -512,6 +521,7 @@ export function snapshotPlainDirLink(input: {
   directoryId: string;
   sourcePath: string;
   now: string;
+  identity?: { device: string; inode: string };
 }): { ok: true; snapshot: PlainDirLinkSnapshot } | { ok: false; error: MultiRepoError } {
   if (typeof input.directoryId !== "string" || input.directoryId.trim().length === 0) {
     return {
@@ -532,6 +542,9 @@ export function snapshotPlainDirLink(input: {
       directoryId: input.directoryId,
       sourcePath: input.sourcePath.trim(),
       snapshotAt: input.now,
+      ...(input.identity !== undefined
+        ? { sourceDevice: input.identity.device, sourceInode: input.identity.inode }
+        : {}),
     },
   };
 }

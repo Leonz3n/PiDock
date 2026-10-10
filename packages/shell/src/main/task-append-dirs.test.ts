@@ -210,6 +210,39 @@ describe("Production plain-directory append for an existing task", () => {
     expect(fs.lstatSync(newLinkPath).isSymbolicLink()).toBe(true);
   });
 
+  it("refuses append by name when a different directory was swapped in at the recorded source path", async () => {
+    const env = await setup();
+    const dir2Id = env.project.directories[1]!.id;
+    const linkName = buildLinkName(dir2Id);
+    const linkPath = join(env.taskDir, linkName);
+
+    // The first append records the link. The record must carry the source's
+    // device/inode, not only the path string: a path is not an identity.
+    await env.appendService.append({ taskId: env.taskId, directoryIds: [dir2Id], sharedWriteConfirmed: true });
+    const recorded = readTaskRecordOnDisk(env.taskDir)!.dirLinks!.find((link) => link.directoryId === dir2Id)!;
+    expect(recorded.sourcePath).toBe(env.dir2);
+    expect(recorded.sourceDevice).toBeTruthy();
+    expect(recorded.sourceInode).toBeTruthy();
+
+    // Replace the directory at the SAME path: `readlink` still matches and the
+    // path string is unchanged, so only the recorded source identity can tell
+    // that this is no longer the directory the link was created for.
+    fs.rmSync(env.dir2, { recursive: true, force: true });
+    fs.mkdirSync(env.dir2);
+    fs.writeFileSync(join(env.dir2, "file2.txt"), "impostor content\n");
+    const before = readTaskRecordOnDisk(env.taskDir);
+
+    await expect(
+      env.appendService.append({ taskId: env.taskId, directoryIds: [dir2Id], sharedWriteConfirmed: true }),
+    ).rejects.toThrow(`source-changed: 普通目录 ${linkName}（dir2）`);
+
+    // Fail closed, write nothing: the record keeps the original snapshot, the
+    // recorded link is not repointed, and no source directory was touched.
+    expect(readTaskRecordOnDisk(env.taskDir)).toEqual(before);
+    expect(fs.readlinkSync(linkPath)).toBe(env.dir2);
+    expect(fs.readFileSync(join(env.dir2, "file2.txt"), "utf8")).toBe("impostor content\n");
+  });
+
   it("truthful retry / idempotent skip: second append skips directory and keeps record identical", async () => {
     const env = await setup();
     const dir2Id = env.project.directories[1]!.id;
