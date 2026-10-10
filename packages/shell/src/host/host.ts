@@ -67,6 +67,8 @@ import { TaskTerminalRegistry, planTerminal, type TerminalPlan } from "../main/t
 import { TaskLifecycleHost } from "./task-lifecycle.js";
 import { createLifecycleResources } from "./lifecycle-resources.js";
 import { runAgentTerminalControl } from "./terminal-control.js";
+import { TerminalPtyDriver, resolvePtyRuntime } from "./terminal-pty-driver.js";
+import { TaskTerminalSessions } from "./terminal-sessions.js";
 import { writeClaimError } from "./write-coordination.js";
 import { runAgentBrowserAction, runHumanBrowserAction, type BrowserGatewayPort } from "./browser-control.js";import { HostBrowserClient } from "../rpc/browser-client.js";
 import { isBrowserAction } from "../main/browser-rules.js";
@@ -239,6 +241,27 @@ function terminalRegistryFor(taskId: string): TaskTerminalRegistry | { error: st
     terminalRegistry = new TaskTerminalRegistry(host.taskId);
   }
   return terminalRegistry;
+}
+
+// [PiDock 10] (#15) the real PTY spawner. One driver per Host process holds the
+// forked helpers (the native node-pty addon never loads in the Host), and one
+// sessions object writes the registry above. Both bind to the same task as the
+// registry they serve, so an output frame or a stop can only ever address this
+// task's own instances.
+let terminalDriver: TerminalPtyDriver | null = null;
+let terminalSessions: TaskTerminalSessions | null = null;
+function terminalSessionsFor(taskId: string): TaskTerminalSessions | { error: string } {
+  const registry = terminalRegistryFor(taskId);
+  if ("error" in registry) return registry;
+  if (!terminalSessions || terminalSessions.registry !== registry) {
+    terminalDriver ??= new TerminalPtyDriver({
+      workspaceId: registry.taskId,
+      runtime: resolvePtyRuntime,
+      onOutput: (identity, sequence, data) => terminalSessions?.ingest(identity, sequence, data),
+    });
+    terminalSessions = new TaskTerminalSessions(registry, terminalDriver, () => [...privateSecretValues]);
+  }
+  return terminalSessions;
 }
 
 // [PiDock 14] (#17) per-task lifecycle state (archive/restore/cleanup records +
@@ -497,13 +520,25 @@ function taskHostFor(taskId: string): TaskWorkspaceHost | { error: string } {
         const owners = serviceOwnerInventory?.resources() ?? (process.env["PIDOCK_SERVICE_OWNER_REQUIRED"] === "1"
           ? [{ resourceId: "service-owner-inventory", kind: "service" as const, ownerSessionId: null, verificationRequired: true }] : []);
         const runtime = serviceRuntime;
-        if (!runtime || runtime.taskDir !== taskDir) return owners;
+        // [PiDock 10] (#15) a running terminal is an agent-owned resource too:
+        // its owner session keeps the write right and another session sees it
+        // as a leftover while it verifies it. A human-started terminal has no
+        // session to coordinate with and is not an orphan.
+        const terminals = terminalRegistry && terminalRegistry.taskId === boundTaskId
+          ? terminalRegistry.list().filter((instance) => instance.lifecycle === "running").map((instance) => ({
+            resourceId: instance.instanceId,
+            kind: "process" as const,
+            ownerSessionId: instance.owner.sessionId,
+            label: `终端 ${instance.instanceId}`,
+          }))
+          : [];
+        if (!runtime || runtime.taskDir !== taskDir) return [...owners, ...terminals];
         return [...owners, ...runtime.runningAgentOwned().map((service) => ({
           resourceId: service.serviceId,
           kind: "service" as const,
           ownerSessionId: service.ownerSessionId,
           label: service.serviceId,
-        }))];
+        })), ...terminals];
       },
       sharedPaths,
       undefined,
@@ -1519,10 +1554,43 @@ async function performTaskOp(
         if ("error" in files) return { ok: false, error: files.error };
         const terminals = terminalRegistryFor(taskId);
         if ("error" in terminals) return { ok: false, error: terminals.error };
+        const sessions = terminalSessionsFor(taskId);
+        if ("error" in sessions) return { ok: false, error: sessions.error };
         const action = record["action"];
         const instanceId = String(record["instanceId"]);
         const caller = classifyControlCaller({ sessionId: record["sessionId"], label: record["label"], origin });
         if (!caller.ok) return { ok: false, error: caller.error };
+        if (action === "input" || action === "resize") {
+          // Raw terminal input/window control is the human takeover surface
+          // ([PiDock 10] #15 box 4). An Agent session is refused rather than
+          // handed an un-reviewed write channel into a running process; its
+          // approved start/stop path is unchanged.
+          if (caller.kind === "agent") {
+            return { ok: false, error: "permission-denied: 终端输入与窗口调整只允许界面显式操作，不能由 Agent 会话发起" };
+          }
+          const claim = host.claimWrite("human-ui", "auto", { kind: "terminal-control", label: `终端${action === "input" ? "输入" : "调整窗口"} ${instanceId}（用户显式操作）` });
+          if (!claim.ok) return { ok: false, error: writeClaimError(claim) };
+          try {
+            if (action === "input") {
+              const data = record["data"];
+              if (typeof data !== "string" || data.length === 0) {
+                return { ok: false, error: "invalid-payload: task/terminalControl.data must be a non-empty string when typing" };
+              }
+              const typed = await sessions.input(instanceId, data);
+              return typed.ok ? { ok: true, payload: { instanceId, action, actor: "human" } } : { ok: false, error: typed.error };
+            }
+            const cols = record["cols"], rows = record["rows"];
+            if (typeof cols !== "number" || typeof rows !== "number") {
+              return { ok: false, error: "invalid-payload: task/terminalControl.cols/rows must be integers when resizing" };
+            }
+            const resized = await sessions.resize(instanceId, cols, rows);
+            return resized.ok
+              ? { ok: true, payload: { instanceId, action, actor: "human", instance: resized.instance } }
+              : { ok: false, error: resized.error };
+          } finally {
+            host.releaseWrite(claim.claimId);
+          }
+        }
         if (action === "start") {
           const planned = terminalPlanFor(host, files, record, caller);
           if (!planned.ok) return { ok: false, error: planned.error };
@@ -1533,8 +1601,11 @@ async function performTaskOp(
             const claim = host.claimWrite("human-ui", "auto", { kind: "terminal-control", label: `终端启动 ${instanceId}（用户显式操作）` });
             if (!claim.ok) return { ok: false, error: writeClaimError(claim) };
             try {
-              const instance = terminals.register(plan);
-              return { ok: true, payload: { instanceId, action, actor: "human", instance } };
+              terminals.register(plan);
+              const started = await sessions.start({ plan, sessionId: null });
+              return started.ok
+                ? { ok: true, payload: { instanceId, action, actor: "human", instance: started.instance } }
+                : { ok: false, error: started.error };
             } catch (error) {
               return { ok: false, error: error instanceof Error ? error.message : String(error) };
             } finally {
@@ -1542,67 +1613,95 @@ async function performTaskOp(
             }
           }
           const channel = host.openSession(caller.sessionId);
-          return runAgentTerminalControl({
-            registry: terminals,
-            channel,
-            taskDir: host.taskDir,
-            sessionId: caller.sessionId,
-            instanceId,
-            action: "start",
-            approvalId: record["approvalId"],
-            write: host,
-            persist: () => host.store.writeSession(host.taskDir, channel.snapshot()),
-            act: () => terminals.register(plan),
-            // [PiDock 14] (#17) the terminal control opens its own execution
-            // record, so the gate's outcome is what `task/executionState` reads.
-            executions: host.controlExecutions,
-          });
+          const tier = host.permissionOf(caller.sessionId) ?? "default";
+          // The real fork is the side effect the write right covers: the outer
+          // claim is held across the gated start *and* the spawn, so another
+          // session cannot write beside a terminal that is being created. The
+          // sequence's own same-session claim nests inside this one.
+          const claim = tier === "read" ? { ok: true as const, claimId: "" } : host.claimWrite(caller.sessionId, tier, { kind: "terminal-control", label: `终端启动 ${instanceId}（Agent 会话）` });
+          if (!claim.ok) return { ok: false, error: writeClaimError(claim) };
+          try {
+            const result = runAgentTerminalControl({
+              registry: terminals,
+              channel,
+              taskDir: host.taskDir,
+              sessionId: caller.sessionId,
+              instanceId,
+              action: "start",
+              approvalId: record["approvalId"],
+              write: host,
+              persist: () => host.store.writeSession(host.taskDir, channel.snapshot()),
+              act: () => terminals.register(plan),
+              // [PiDock 14] (#17) the terminal control opens its own execution
+              // record, so the gate's outcome is what `task/executionState` reads.
+              executions: host.controlExecutions,
+            });
+            if (!result.ok) return result;
+            const started = await sessions.start({ plan, sessionId: caller.sessionId });
+            return started.ok
+              ? { ok: true, payload: { ...result.payload, instance: started.instance } }
+              : { ok: false, error: started.error };
+          } finally {
+            if (claim.claimId) host.releaseWrite(claim.claimId);
+          }
         }
-        // Stop: prove the exact process identity first (never by port), then
-        // flip the state. The real kill belongs to the spawner slice; until it
-        // lands an unspawned terminal has no pid and stop fails closed.
+        // Stop: the spawner signals only the group this Host recorded. A
+        // terminal with no recorded pid/pgid, no matching live session, or a
+        // driver that cannot prove the tree drained fails closed and keeps
+        // running - stop never pretends the process is gone.
         if (caller.kind === "human") {
           const claim = host.claimWrite("human-ui", "auto", { kind: "terminal-control", label: `终端停止 ${instanceId}（用户显式操作）` });
           if (!claim.ok) return { ok: false, error: writeClaimError(claim) };
           try {
-            const scope = terminals.stopScope(instanceId);
-            if (!scope.ok) return { ok: false, error: scope.error };
-            const instance = terminals.markExited(instanceId, { reason: "user-request" });
-            return { ok: true, payload: { instanceId, action, actor: "human", scope: scope.scope, instance } };
-          } catch (error) {
-            return { ok: false, error: error instanceof Error ? error.message : String(error) };
+            const stopped = await sessions.stop(instanceId, "user-request");
+            return stopped.ok
+              ? { ok: true, payload: { instanceId, action, actor: "human", instance: stopped.instance } }
+              : { ok: false, error: stopped.error };
           } finally {
             host.releaseWrite(claim.claimId);
           }
         }
         const channel = host.openSession(caller.sessionId);
-        return runAgentTerminalControl({
-          registry: terminals,
-          channel,
-          taskDir: host.taskDir,
-          sessionId: caller.sessionId,
-          instanceId,
-          action: "stop",
-          approvalId: record["approvalId"],
-          write: host,
-          persist: () => host.store.writeSession(host.taskDir, channel.snapshot()),
-          act: () => {
-            const scope = terminals.stopScope(instanceId);
-            if (!scope.ok) throw new Error(scope.error);
-            return terminals.markExited(instanceId, { reason: "agent-request" });
-          },
-          executions: host.controlExecutions,
-        });
+        const tier = host.permissionOf(caller.sessionId) ?? "default";
+        const claim = tier === "read" ? { ok: true as const, claimId: "" } : host.claimWrite(caller.sessionId, tier, { kind: "terminal-control", label: `终端停止 ${instanceId}（Agent 会话）` });
+        if (!claim.ok) return { ok: false, error: writeClaimError(claim) };
+        try {
+          const result = runAgentTerminalControl({
+            registry: terminals,
+            channel,
+            taskDir: host.taskDir,
+            sessionId: caller.sessionId,
+            instanceId,
+            action: "stop",
+            approvalId: record["approvalId"],
+            write: host,
+            persist: () => host.store.writeSession(host.taskDir, channel.snapshot()),
+            act: () => {
+              const scope = terminals.stopScope(instanceId);
+              if (!scope.ok) throw new Error(scope.error);
+              return terminals.get(instanceId)!;
+            },
+            executions: host.controlExecutions,
+          });
+          if (!result.ok) return result;
+          const stopped = await sessions.stop(instanceId, "agent-request");
+          return stopped.ok
+            ? { ok: true, payload: { ...result.payload, instance: stopped.instance } }
+            : { ok: false, error: stopped.error };
+        } finally {
+          if (claim.claimId) host.releaseWrite(claim.claimId);
+        }
       }
       case "task/terminalState": {
         const terminals = terminalRegistryFor(taskId);
         if ("error" in terminals) return { ok: false, error: terminals.error };
-        // `spawnImplemented: false` is the honest disclosure that this slice
-        // plans and tracks terminals but owns no real pty yet.
+        // The spawner is wired: the state now reports the real pid/pgid this
+        // task's Host spawned, and `processKnown` is the honest per-instance
+        // disclosure of whether a process identity was recorded at all.
         return {
           ok: true,
           payload: {
-            spawnImplemented: false,
+            spawnImplemented: true,
             instances: terminals.list().map((instance) => ({ ...instance, processKnown: instance.processId !== undefined })),
           },
         };
@@ -1674,6 +1773,11 @@ async function performTaskOp(
             // bounds each stop and stops every service in parallel.
             const stoppedServices = await shutdownDeadline(stopRegisteredServiceProcesses(), 15_000, "service-processes-shutdown-unconfirmed");
             if (stoppedServices.length > 0) serviceStopReport = stoppedServices;
+            // [PiDock 10] (#15) the real PTY helper and its session leader have
+            // no other stop path once the Host exits (they are not in the Host's
+            // process group), so every running terminal is contained before the
+            // Agent/SDK stages. Failing to prove one keeps the quit failed.
+            await shutdownDeadline(terminalSessions ? terminalSessions.stopAll("host-quit") : Promise.resolve(), 15_000, "terminal-processes-shutdown-unconfirmed");
             await workspaceHost?.shutdownSdk();
             await shutdownDeadline(Promise.resolve(sdkTurns?.waitForTerminal()), 15_000, "sdk-turns-shutdown-unconfirmed");
             sdkTurns = null;

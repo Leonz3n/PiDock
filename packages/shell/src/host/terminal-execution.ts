@@ -27,18 +27,24 @@ export type TerminalDriverReceipt = TerminalIdentity & (
   | { status: "not-started" }
   | { status: "unknown" }
 );
+/** The two OS handles a spawner observed for one live terminal. */
+export interface TerminalProcessIdentity {
+  processId: number;
+  processGroupId: number;
+}
 /** OS boundary. PTY exit alone must never produce a tree-drained receipt.
  * Unknown spawn (including rejection) remains addressable by the supplied identity.
  * The adapter must bound every async operation and report unknown on timeout;
  * snapshot observations never prove that descendants have drained.
  */
 export interface TerminalDriver {
-  spawn(identity: TerminalIdentity, launch: TerminalLaunch, observe: (receipt: TerminalDriverReceipt) => void): Promise<{ status: "started" | "not-started" | "unknown" }>;
+  /** `process` is the identity the spawner really recorded, absent while unknown. */
+  spawn(identity: TerminalIdentity, launch: TerminalLaunch, observe: (receipt: TerminalDriverReceipt) => void): Promise<{ status: "started" | "not-started" | "unknown"; process?: TerminalProcessIdentity }>;
   /** Rejection means delivery is uncertain; the controller fences further input until termination. */
   input(identity: TerminalIdentity, data: string): Promise<void>;
   resize(identity: TerminalIdentity, cols: number, rows: number): Promise<void>;
   stop(identity: TerminalIdentity): Promise<TerminalDriverReceipt>;
-  snapshot(identity: TerminalIdentity): { status: "running" | "unknown" };
+  snapshot(identity: TerminalIdentity): { status: "running" | "unknown"; process?: TerminalProcessIdentity };
 }
 export interface TerminalLease {
   /** Rechecks trusted path identity, shared-target authorization and retained rights. */
