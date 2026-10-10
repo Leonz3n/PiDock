@@ -224,14 +224,25 @@ export class TaskTerminalSessions {
     return { ok: true, instance: this.registry.resize(instanceId, { cols, rows }) };
   }
 
-  /** Host shutdown: stop every session this Host spawned. Fails closed on any. */
+  /**
+   * Host shutdown: stop every session this Host spawned. The stops run in
+   * parallel - like the service runtime's `stopAll` - because each one may wait
+   * out its own grace+confirm bound while the quitting Host has a single shared
+   * deadline: stopping four live terminals one after another would report
+   * `terminal-shutdown-unconfirmed` for terminals that were all still being
+   * stopped. Still fails closed on any stop this Host could not prove, and still
+   * attempts the others.
+   */
   async stopAll(reason: string): Promise<void> {
-    const ids = [...this.active.keys()];
-    const failures: string[] = [];
-    for (const instanceId of ids) {
-      const result = await this.stop(instanceId, reason);
-      if (!result.ok) failures.push(`${instanceId}: ${result.error}`);
-    }
+    const results = await Promise.all([...this.active.keys()].map(async (instanceId) => {
+      try {
+        const result = await this.stop(instanceId, reason);
+        return result.ok ? undefined : `${instanceId}: ${result.error}`;
+      } catch (error) {
+        return `${instanceId}: ${error instanceof Error ? error.message : String(error)}`;
+      }
+    }));
+    const failures = results.filter((failure) => failure !== undefined);
     if (failures.length > 0) throw new Error(`terminal-shutdown-unconfirmed: ${failures.join("；")}`);
   }
 }

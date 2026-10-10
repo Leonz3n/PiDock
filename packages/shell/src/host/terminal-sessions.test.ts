@@ -371,6 +371,55 @@ it("reopens an exited instance when a start records a fresh process identity", a
   }
 });
 
+it("stops every session at once so a slow stop cannot turn the quit deadline into a false failure", { timeout: 15_000 }, async () => {
+  // Quit finding: `stopAll` awaited one terminal after another, up to
+  // grace+confirm each, while the quitting Host has a single 15s deadline - four
+  // running terminals could report `terminal-shutdown-unconfirmed` although
+  // every one of them was still being stopped. Every stop must be in flight
+  // before any of them settles (a sequential loop leaves the second pending).
+  const taskDir = realpathSync(mkdtempSync(join(tmpdir(), "pidock-term-stopall-")));
+  try {
+    const registry = new TaskTerminalRegistry("task-stopall");
+    const identities = new Map<string, { processId: number; processGroupId: number }>();
+    let pid = 4100;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const inFlight: string[] = [];
+    const driver: TerminalDriver = {
+      spawn: async (identity) => {
+        const process = { processId: (pid += 1), processGroupId: pid };
+        identities.set(identity.instanceId, process);
+        return { status: "started", process: { ...process } };
+      },
+      input: async () => {},
+      resize: async () => {},
+      stop: async (identity) => {
+        inFlight.push(identity.instanceId);
+        await gate;
+        return { ...identity, status: "tree-drained", exitCode: 0 };
+      },
+      snapshot: (identity) => {
+        const process = identities.get(identity.instanceId);
+        return { status: "running", ...(process ? { process: { ...process } } : {}) };
+      },
+    };
+    const sessions = new TaskTerminalSessions(registry, driver);
+    const instanceIds = ["term-1", "term-2", "term-3", "term-4"];
+    for (const instanceId of instanceIds) {
+      const plan = planFor("task-stopall", taskDir, instanceId, "sh");
+      registry.register(plan);
+      expect(await sessions.start({ plan, sessionId: null })).toMatchObject({ ok: true });
+    }
+    const all = sessions.stopAll("host-quit");
+    await until(() => inFlight.length === instanceIds.length, 5000, "every stop to be in flight");
+    release();
+    await expect(all).resolves.toBeUndefined();
+    expect(registry.list().every((instance) => instance.lifecycle === "exited")).toBe(true);
+  } finally {
+    rmSync(taskDir, { recursive: true, force: true });
+  }
+});
+
 realIt("restarts an exited instance with a fresh shell and still contains it", { timeout: 30_000 }, async () => {
   const marker = 3271;
   const f = new Fixture("restart");
