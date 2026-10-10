@@ -954,7 +954,11 @@ export function TerminalPanel({
           按计划启动终端
         </Button>
       ) : null}
-      <p className="text-[11px] text-muted">终端输出与输入由本面板渲染；当前为模拟输入，真实 PTY 属未实现范围。</p>
+      <p className="text-[11px] text-muted">
+        {instance?.processKnown
+          ? "本终端由 Host 启动真实 PTY；面板输入与回滚仍在内存层，真实输入／历史接线属后续切片。"
+          : "终端输出与输入由本面板渲染；当前为模拟输入，真实 PTY 属未实现范围。"}
+      </p>
       <div className="h-56 overflow-auto rounded-md border border-line bg-ink/95 p-3 font-mono text-[11px] leading-5 text-white/90">
         {lines.map((line, index) => (
           <div key={`${line}-${index}`}>{line}</div>

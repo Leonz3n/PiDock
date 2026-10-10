@@ -126,11 +126,14 @@ export function descendantPids(table: readonly ProcessTableRow[], rootPid: numbe
  *   no member of the recorded group and none of the captured descendants is
  *   alive. Anything else - an unreadable table, a missing/mismatching identity,
  *   or survivors after the kill deadline - is reported as `unknown`, never as a
- *   stop that was not verified. A descendant that leaves the group *and* is not
- *   observed before the signal (its own `setsid`, or a job started after the
- *   capture) cannot be named by this evidence model and may survive a natural
- *   exit; the process group and the observed subtree are the boundary, not an
- *   OS sandbox.
+ *   stop that was not verified. When the PTY root exits on its own, the members
+ *   still in its own group are reclaimed before the exit receipt is issued, so
+ *   a `set +m` background child never outlives a reported natural exit. A
+ *   descendant that left the group *and* is not observed before the signal (its
+ *   own `setsid`, or a job started after the capture) cannot be named by this
+ *   evidence model - its parent link died with the root - so it is reported as
+ *   `unknown`; the process group and the observed subtree are the boundary, not
+ *   an OS sandbox.
  * - There is no `kill`/`destroy` request to the helper: termination is a Host
  *   signal to the group it recorded. The helper is reaped after the group
  *   drained so a stopped terminal leaves no helper behind.
@@ -230,9 +233,14 @@ export class TerminalPtyDriver implements TerminalDriver {
       return { status: "not-started" as const };
     }
     operation.worker.on("message", (raw) => this.receive(operation, raw));
-    operation.worker.on("error", () => this.unknown(operation));
-    operation.worker.on("disconnect", () => this.unknown(operation));
-    operation.worker.on("exit", (code, signal) => { operation.workerExit = { code, signal }; this.unknown(operation); });
+    // A helper that goes away while its PTY child is still alive makes the
+    // operation uncontrollable (`unknown`). After the child's own exit event the
+    // helper's shutdown is expected, so it must not clobber the pending
+    // natural-exit receipt (the group may still need reclaiming).
+    const workerGone = () => { if (operation.ptyExit === undefined) this.unknown(operation); };
+    operation.worker.on("error", workerGone);
+    operation.worker.on("disconnect", workerGone);
+    operation.worker.on("exit", (code, signal) => { operation.workerExit = { code, signal }; workerGone(); });
     const reply = await this.dispatch(operation, request).catch(() => undefined);
     if (!reply || operation.fenced) return this.result(operation);
     if (reply.status === "started" && reply.rootPid !== undefined) {
@@ -299,13 +307,32 @@ export class TerminalPtyDriver implements TerminalDriver {
     if (operation.fenced || operation.observed) return;
     const drained = await this.groupDrained(operation, this.grace);
     if (operation.fenced || operation.observed) return;
-    this.fence(operation);
-    if (drained === true) {
-      this.report(operation, { ...operation.envelope.identity, status: "tree-drained", exitCode: operation.ptyExit?.exitCode ?? 0 });
-      await this.reap(operation);
-      return;
+    if (drained !== true) {
+      // The root ended but members of its own group outlived it (a `set +m`
+      // background child). The group number was live under this operation's own
+      // recorded root moments ago, so reclaim the remaining members before
+      // deciding. A descendant that started its OWN group is not nameable here
+      // (its parent link died with the root) and is reported as `unknown`.
+      this.signalMembers(this.groupMemberPids(operation), "SIGKILL");
+      if (await this.groupDrained(operation, this.confirm) !== true) {
+        if (operation.fenced || operation.observed) return;
+        this.fence(operation);
+        this.report(operation, { ...operation.envelope.identity, status: "unknown" });
+        return;
+      }
     }
-    this.report(operation, { ...operation.envelope.identity, status: "unknown" });
+    this.fence(operation);
+    this.report(operation, { ...operation.envelope.identity, status: "tree-drained", exitCode: operation.ptyExit?.exitCode ?? 0 });
+    await this.reap(operation);
+  }
+
+  /** Pids still in the recorded group, excluding this operation's own root. */
+  private groupMemberPids(operation: Operation): number[] {
+    const pgid = operation.processGroupId;
+    if (pgid === undefined || pgid <= 1) return [];
+    const table = readProcessTable();
+    if (table === null) return [];
+    return table.filter((row) => row.pgid === pgid && row.pid !== operation.rootPid).map((row) => row.pid).sort((a, b) => a - b);
   }
 
   private fence(operation: Operation): void {
@@ -439,9 +466,14 @@ export class TerminalPtyDriver implements TerminalDriver {
     // honours (it ignores SIGTERM while a job is in the foreground), and it is
     // what closing a real terminal sends. The confirm phase still SIGKILLs.
     if (identityAlive) this.signalGroup(operation, "SIGHUP");
+    this.signalMembers(this.groupMemberPids(operation), "SIGHUP");
     this.signalMembers(captured, "SIGHUP");
     if (await this.drainWithin(operation, captured, this.grace) === true) return this.finish(operation, identity);
+    // Once the leader is gone `-pgid` can no longer be re-verified, so the
+    // remaining members are signalled individually (each pid re-checked against
+    // the recorded group) instead of trusting a recyclable group number.
     if (readProcessPgid(rootPid) === pgid) this.signalGroup(operation, "SIGKILL");
+    else this.signalMembers(this.groupMemberPids(operation), "SIGKILL");
     this.signalMembers(captured, "SIGKILL");
     if (await this.drainWithin(operation, captured, this.confirm) === true) return this.finish(operation, identity);
     return { ...identity, status: "unknown" };
