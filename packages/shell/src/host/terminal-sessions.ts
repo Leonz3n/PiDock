@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import { accessSync, constants, statSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import type { TaskTerminalRegistry, TerminalInstanceRecord, TerminalPlan } from "../main/terminal-config.js";
-import { operationKey } from "./node-pty-protocol.js";
+import { MAX_PTY_ENVELOPE_BYTES, operationKey } from "./node-pty-protocol.js";
+import { PTY_INPUT_BUDGET_ERROR } from "./terminal-pty-driver.js";
 import type { TerminalDriver, TerminalDriverReceipt, TerminalIdentity, TerminalLaunch } from "./terminal-execution.js";
 
 /** One live real-process session of one registered terminal instance. */
@@ -95,11 +96,16 @@ export class TaskTerminalSessions {
 
   private observe(identity: TerminalIdentity, receipt: TerminalDriverReceipt): void {
     if (!this.owns(identity)) return;
-    if (receipt.status !== "tree-drained") {
+    if (receipt.status !== "tree-drained" && receipt.status !== "root-exited") {
       // An unproven end state keeps the instance addressable: the record stays
       // running with its recorded identity so a later stop can still contain it.
       return;
     }
+    // Both proven exits mean the root really ended and every identity this Host
+    // recorded for it is gone. `root-exited` additionally means the last control
+    // request's window was never observed, so it must never be presented as
+    // whole-tree containment; the record carries the exit code the pty reported
+    // (or none at all when it was signalled / not observed).
     this.active.delete(identity.instanceId);
     this.registry.markExited(identity.instanceId, { exitCode: receipt.exitCode, reason: "exited" });
   }
@@ -156,8 +162,12 @@ export class TaskTerminalSessions {
       return { ok: false, error: `unknown-instance: 本任务没有终端实例 ${instanceId}` };
     }
     // A started spawn without an observed identity cannot be contained (there is
-    // no pid to stop) and must never be reported as a successful start.
+    // no pid to stop) and must never be reported as a successful start. The
+    // active entry is dropped with it: retaining a session that holds no
+    // trackable process only wedges this instanceId (`terminal-owned` on every
+    // retry, `unknown-process` on stop) and keeps one of the eight slots busy.
     if (spawned.status !== "started" || spawned.process === undefined) {
+      this.active.delete(instanceId);
       return { ok: false, error: "terminal-start-unconfirmed: 无法确认终端进程已启动" };
     }
     this.generations.set(instanceId, generation);
@@ -204,7 +214,13 @@ export class TaskTerminalSessions {
     }
     try {
       await this.driver.input(session.identity, data);
-    } catch {
+    } catch (error) {
+      // The lifetime input budget is a deliberate bound that fences the
+      // terminal; the caller must be able to see which boundary it hit instead
+      // of reading a generic delivery failure.
+      if (error instanceof Error && error.message === PTY_INPUT_BUDGET_ERROR) {
+        return { ok: false, error: `terminal-input-failed: 终端输入累计已达生命周期上限（${MAX_PTY_ENVELOPE_BYTES} 字节），该终端已被隔离，不再接受输入` };
+      }
       return { ok: false, error: "terminal-input-failed: 终端输入未被确认送达" };
     }
     return { ok: true, typed: true };

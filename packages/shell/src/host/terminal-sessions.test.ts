@@ -18,18 +18,21 @@
  * (`pnpm --filter @pidock/shell prepare:pty:darwin`). On any other host the
  * real-process tests skip: the preflight only ships darwin-arm64 binaries.
  */
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
-import { TaskTerminalRegistry, planTerminal, type TerminalPlan } from "../main/terminal-config.js";
+import { MAX_TERMINAL_INSTANCES, TaskTerminalRegistry, planTerminal, type TerminalPlan } from "../main/terminal-config.js";
 import { workspaceRoots } from "../main/workspace-files.js";
 import { inspectNodePtyPrebuild, prepareNodePtyPrebuild } from "./node-pty-preflight.js";
-import { descendantPids, ptySpawnerAvailable, resolvePtyRuntime, TerminalPtyDriver, workerEntryUrl } from "./terminal-pty-driver.js";
-import type { TerminalDriver } from "./terminal-execution.js";
+import { MAX_PTY_ENVELOPE_BYTES } from "./node-pty-protocol.js";
+import { descendantPids, PTY_INPUT_BUDGET_ERROR, ptySpawnerAvailable, resolvePtyRuntime, TerminalPtyDriver, workerEntryUrl, type PtyHelper } from "./terminal-pty-driver.js";
+import type { ProcessTableRow } from "./service-ownership.js";
+import type { TerminalDriver, TerminalDriverReceipt, TerminalLaunch } from "./terminal-execution.js";
 import { resolveProgram, TaskTerminalSessions } from "./terminal-sessions.js";
 
 const supported = process.platform === "darwin" && process.arch === "arm64" && existsSync(fileURLToPath(workerEntryUrl())) && (() => {
@@ -56,6 +59,16 @@ function pgidOf(pid: number): number | null {
     const printed = execFileSync("/bin/ps", ["-o", "pgid=", "-p", String(pid)], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
     const value = Number.parseInt(printed, 10);
     return Number.isInteger(value) && value > 0 ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function ppidOf(pid: number): number | null {
+  try {
+    const printed = execFileSync("/bin/ps", ["-o", "ppid=", "-p", String(pid)], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+    const value = Number.parseInt(printed, 10);
+    return Number.isInteger(value) ? value : null;
   } catch {
     return null;
   }
@@ -97,6 +110,45 @@ function markerPids(marker: number): number[] {
     return [];
   }
 }
+
+/**
+ * The forked-helper stand-in for the protocol tests that need no real pty: the
+ * test drives every reply itself, so no binary is ever forked.
+ */
+class DriverWorker extends EventEmitter {
+  readonly requests: Record<string, unknown>[] = [];
+  send(message: Record<string, unknown>, callback: (error: Error | null) => void): boolean {
+    this.requests.push(message);
+    callback(null);
+    return true;
+  }
+  /** Answer the last request with a driver reply carrying the same envelope. */
+  reply(fields: Record<string, unknown>, request = this.requests.at(-1)!): void {
+    this.emit("message", {
+      workspaceId: request["workspaceId"], identity: request["identity"], operationId: request["operationId"],
+      kind: "reply", requestId: request["requestId"], status: "started", ...fields,
+    });
+  }
+}
+
+/**
+ * A real process that leads its own process group, so the driver's `pgid === pid`
+ * identity check accepts it without a real pty. The caller always kills it.
+ */
+function detachedGroupLeader(): ChildProcess {
+  const child = spawn("/bin/sleep", ["600"], { detached: true, stdio: "ignore" });
+  child.unref();
+  return child;
+}
+
+function killPid(pid: number | undefined): void {
+  if (pid === undefined || pid <= 1) return;
+  try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
+}
+
+/** A hand-built launch for driver-level tests: absolute, normalized and bounded. */
+const unitLaunch: TerminalLaunch = { program: "/bin/sh", args: [], cwd: "/tmp", env: {}, envRevision: "fixture-unit", cols: 80, rows: 24 };
+const unitIdentity = { taskId: "task-unit", sessionId: "human-ui", instanceId: "term-1", generation: 1 };
 
 const fixtures: Fixture[] = [];
 afterEach(async () => {
@@ -142,7 +194,18 @@ class Fixture {
   readonly sessions: TaskTerminalSessions;
   readonly pids: number[] = [];
 
-  constructor(tag: string, options: { stopGraceMs?: number; stopConfirmMs?: number; observeCadenceMs?: number } = {}) {
+  constructor(
+    tag: string,
+    options: {
+      stopGraceMs?: number;
+      stopConfirmMs?: number;
+      observeCadenceMs?: number;
+      /** Injected OS snapshot, so the fail-closed no-snapshot path is testable. */
+      processTable?: () => ProcessTableRow[] | null;
+      /** Injected forked helper, so a protocol test never forks a real binary. */
+      spawnWorker?: () => PtyHelper;
+    } = {},
+  ) {
     this.taskDir = realpathSync(mkdtempSync(join(tmpdir(), `pidock-term-${tag}-`)));
     this.taskId = `task-${tag}`;
     this.registry = new TaskTerminalRegistry(this.taskId);
@@ -160,6 +223,20 @@ class Fixture {
 
   plan(instanceId = "term-1", program = "sh", args: string[] = []): TerminalPlan {
     return planFor(this.taskId, this.taskDir, instanceId, program, args);
+  }
+
+  /** The exact launch the driver dispatches for one plan, for driver-level tests. */
+  launch(instanceId = "term-1", revision = "fixture-unit", program = "sh", args: string[] = []): TerminalLaunch {
+    const plan = this.plan(instanceId, program, args);
+    return {
+      program: resolveProgram(plan.program, plan.env),
+      args: [...plan.args],
+      cwd: plan.cwd,
+      env: { ...plan.env },
+      envRevision: revision,
+      cols: plan.cols,
+      rows: plan.rows,
+    };
   }
 
   /** Record every pid this fixture spawned, so the afterEach can prove it gone. */
@@ -481,7 +558,14 @@ realIt("forgets a drained operation so the same terminal identity spawns fresh a
     await f.driver.input(identity, "set +m\r");
     await f.driver.input(identity, `sh -c 'trap "" HUP; exec sleep ${marker}' & echo BG=$!\r`);
     await f.driver.input(identity, "exit\r");
-    await until(() => receipts.includes("tree-drained"), 15_000, "natural-exit receipt");
+    // The `exit` request is dispatched after the last observation of the live
+    // root, so that final window is not covered by the evidence: the accurate
+    // receipt for this natural exit is `root-exited` (the root is gone with the
+    // code it reported and every recorded identity is gone - but a descendant
+    // that request could have created is explicitly not denied). It must never
+    // be reported as `tree-drained`.
+    await until(() => receipts.includes("root-exited"), 15_000, "natural-exit receipt");
+    expect(receipts).not.toContain("tree-drained");
 
     const second = await f.driver.spawn(identity, launch, () => {});
     expect(second.status).toBe("started");
@@ -561,12 +645,8 @@ realIt("records the descendants of a terminal that exits without any input", { t
 });
 
 it("derives the descendant set from one process-table snapshot", () => {
-  const table = [
-    { pid: 10, ppid: 1, pgid: 10 },
-    { pid: 11, ppid: 10, pgid: 11 },
-    { pid: 12, ppid: 11, pgid: 11 },
-    { pid: 13, ppid: 1, pgid: 13 },
-  ];
+  const row = (pid: number, ppid: number, pgid: number) => ({ pid, ppid, pgid, tty: "??", state: "S" });
+  const table = [row(10, 1, 10), row(11, 10, 11), row(12, 11, 11), row(13, 1, 13)];
   expect(descendantPids(table, 10)).toEqual([11, 12]);
   expect(descendantPids(table, 13)).toEqual([]);
   expect(descendantPids(table, 999)).toEqual([]);
@@ -592,5 +672,338 @@ it.each([
     expect(ptySpawnerAvailable()).toBe(expected);
   } finally {
     vi.unstubAllGlobals();
+  }
+});
+
+realIt("reclaims a terminal-session descendant whose parent chain broke before the stop", { timeout: 30_000 }, async () => {
+  // Session-sweep finding: a job-control descendant leaves the shell's own
+  // process group, and when the intermediate shell that started it exits it is
+  // also re-parented to init - so the parent chain from the root no longer
+  // reaches it. It still shares this terminal's session, which is exactly what
+  // the controlling-terminal sweep records while the root is alive. Without that
+  // sweep the stop would report `tree-drained` while this process lived on.
+  const marker = 3276;
+  const f = new Fixture("session-sweep", { stopGraceMs: 250, stopConfirmMs: 250, observeCadenceMs: 50 });
+  const { instance } = await f.start();
+  try {
+    await f.sessions.input("term-1", `sh -c 'sleep ${marker} & exit' & echo BG=$!\r`);
+    const descendant = await untilValue(() => markerPids(marker)[0], 8000, "session descendant");
+    f.track(descendant);
+    expect(descendant).not.toBe(instance!.processGroupId);
+    expect(pgidOf(descendant)).not.toBe(instance!.processGroupId);
+    await until(() => ppidOf(descendant) === 1, 5000, "descendant to be re-parented to init");
+    // An input round trip is a deterministic observation point: the sweep has
+    // then run with the descendant alive and recorded it.
+    await f.sessions.input("term-1", "echo SYNC-$((1+1))\r");
+    await until(() => f.history().includes("SYNC-2"), 8000, "observation round trip");
+
+    expect(await f.sessions.stop("term-1", "user-request")).toMatchObject({ ok: true });
+    await until(() => !alive(descendant), 8000, "session descendant to be reclaimed");
+    expect(markerPids(marker)).toEqual([]);
+  } finally {
+    await f.sessions.stopAll("test-cleanup").catch(() => undefined);
+    for (const pid of [...f.pids.filter(alive), ...markerPids(marker)]) killPid(pid);
+    await until(() => markerPids(marker).length === 0, 5000, "marker processes to end");
+  }
+});
+
+realIt("fails closed when a start plan daemonizes a descendant and exits inside one observation window", { timeout: 30_000 }, async () => {
+  // P1 finding: this plan creates its descendant and exits inside one cadence, so
+  // no snapshot ever sees the root alive. `setsid sleep 300 &` cannot be run as
+  // such here (`setsid(1)` does not exist on macOS), so the plan runs the
+  // equivalent: a detached child, which the OS puts into a brand-new session
+  // that this driver cannot observe at all. The receipt must be `unknown` -
+  // never `tree-drained` - while the daemon lives.
+  const marker = 3278;
+  const f = new Fixture("daemonize");
+  mkdirSync(join(f.taskDir, "work"), { recursive: true });
+  const script = join(f.taskDir, "work", "daemonize.sh");
+  writeFileSync(
+    script,
+    `#!/bin/sh\nset -m\n/usr/bin/nohup '${process.execPath}' -e "require('node:child_process').spawn('/bin/sleep',['${marker}'],{detached:true,stdio:'ignore'}).unref()" >/dev/null 2>&1 &\nexit\n`,
+    { mode: 0o755 },
+  );
+  const identity = { taskId: f.taskId, sessionId: "human-ui", instanceId: "term-1", generation: 1 };
+  const receipts: string[] = [];
+  const daemons: number[] = [];
+  try {
+    const spawned = await f.driver.spawn(identity, f.launch("term-1", "fixture-daemonize", script), (receipt) => receipts.push(receipt.status));
+    expect(spawned.status).toBe("started");
+    const rootPid = spawned.process!.processId;
+    f.track(rootPid);
+    await until(() => !alive(rootPid), 8000, "self-daemonizing root to exit");
+    const daemon = await untilValue(() => markerPids(marker)[0], 10_000, "daemonized descendant");
+    daemons.push(daemon);
+    expect(alive(daemon)).toBe(true);
+    await until(() => receipts.length > 0, 8000, "exit receipt");
+    expect(receipts).toEqual(["unknown"]);
+    // The retained identity is still addressable, and a later stop reports the
+    // one thing a stop can verify here - the identities this driver recorded
+    // (recorded group + recorded descendants) are gone. It cannot deny a daemon
+    // that left for a brand-new session: no OS process accounting exists on this
+    // platform to prove that. The natural-exit receipt above must not claim it,
+    // and it does not.
+    expect(await f.driver.stop(identity)).toMatchObject({ status: "tree-drained" });
+    expect(alive(daemon)).toBe(true);
+  } finally {
+    for (const pid of [...daemons, ...markerPids(marker), ...f.pids.filter(alive)]) killPid(pid);
+    await until(() => markerPids(marker).length === 0, 5000, "daemon to end");
+  }
+});
+
+realIt("keeps an instance addressable when a start plan leaves an unobserved job-control descendant", { timeout: 30_000 }, async () => {
+  // The same window with a job-control descendant: `set -m` gives it its own
+  // process group, `nohup` makes it HUP-proof, and the root exits before any
+  // snapshot saw it, so the survivor cannot be named post-mortem either (the
+  // terminal is revoked). This exit is not covered, so the instance must not be
+  // marked exited behind it. The plan validation refuses shell connectors in an
+  // argument, which is why the self-daemonizing program is a script.
+  const marker = 3279;
+  const f = new Fixture("daemonize-job");
+  mkdirSync(join(f.taskDir, "work"), { recursive: true });
+  const script = join(f.taskDir, "work", "daemonize-job.sh");
+  writeFileSync(script, `#!/bin/sh\nset -m\nnohup sleep ${marker} &\nexit\n`, { mode: 0o755 });
+  try {
+    const { started, instance } = await f.start("term-1", script);
+    expect(started.ok).toBe(true);
+    const rootPid = instance!.processId!;
+    await until(() => !alive(rootPid), 8000, "root to exit");
+    const descendant = await untilValue(() => markerPids(marker)[0], 10_000, "job-control descendant");
+    f.track(descendant);
+    expect(pgidOf(descendant)).toBe(descendant);
+    expect(alive(descendant)).toBe(true);
+    expect(f.registry.get("term-1")?.lifecycle).toBe("running");
+    expect(f.registry.get("term-1")?.exitReason).toBeUndefined();
+  } finally {
+    for (const pid of [...f.pids.filter(alive), ...markerPids(marker)]) killPid(pid);
+    await until(() => markerPids(marker).length === 0, 5000, "descendant to end");
+  }
+});
+
+realIt("fails closed when the process-table snapshot is unavailable", { timeout: 30_000 }, async () => {
+  // (d) snapshot-less environment: with no probe there is no evidence about the
+  // tree at all, so a natural exit is `unknown` (never `tree-drained`) and a stop
+  // cannot prove a stop either.
+  const f = new Fixture("no-snapshot", { processTable: () => null, stopGraceMs: 250, stopConfirmMs: 250 });
+  const identity = { taskId: f.taskId, sessionId: "human-ui", instanceId: "term-1", generation: 1 };
+  const receipts: string[] = [];
+  const spawned = await f.driver.spawn(identity, f.launch(), (receipt) => receipts.push(receipt.status));
+  expect(spawned.status).toBe("started");
+  const rootPid = spawned.process!.processId;
+  f.track(rootPid);
+  try {
+    await f.driver.input(identity, "exit\r");
+    await until(() => receipts.length > 0, 10_000, "exit receipt");
+    expect(receipts).toEqual(["unknown"]);
+    expect((await f.driver.stop(identity)).status).toBe("unknown");
+  } finally {
+    killPid(rootPid);
+    await until(() => !alive(rootPid), 5000, "unverifiable shell to end");
+  }
+});
+
+realIt("bounds the driver at eight terminals and lets a ninth start once one drains", { timeout: 60_000 }, async () => {
+  // Cap finding: a finished lifecycle must not hold one of the eight slots, and
+  // the ninth start must fail as `not-started` only while eight are really live.
+  const f = new Fixture("cap", { stopGraceMs: 250, stopConfirmMs: 250 });
+  const identityFor = (index: number) => ({ taskId: f.taskId, sessionId: "human-ui", instanceId: `term-${index}`, generation: 1 });
+  const launch = f.launch("term-1", "fixture-cap");
+  const live = Array.from({ length: MAX_TERMINAL_INSTANCES }, (_, index) => identityFor(index + 1));
+  for (const identity of live) {
+    const spawned = await f.driver.spawn(identity, launch, () => {});
+    expect(spawned.status).toBe("started");
+    f.track(spawned.process?.processId);
+  }
+  const ninth = identityFor(MAX_TERMINAL_INSTANCES + 1);
+  expect(await f.driver.spawn(ninth, launch, () => {})).toEqual({ status: "not-started" });
+  // One proven end frees its slot, so the ninth really starts.
+  expect((await f.driver.stop(live[0]!)).status).toBe("tree-drained");
+  const retried = await f.driver.spawn(ninth, launch, () => {});
+  expect(retried.status).toBe("started");
+  f.track(retried.process?.processId);
+  for (const identity of [...live, ninth]) await f.driver.stop(identity);
+});
+
+it("forgets a not-started spawn so the same identity really starts afterwards", async () => {
+  // P2-2: the retained `not-started` entry answered every later start for that
+  // identity with the same stale error (even after the cause was fixed) and
+  // counted against the instance cap.
+  const first = new DriverWorker(), second = new DriverWorker();
+  let next: DriverWorker = first;
+  const driver = new TerminalPtyDriver({
+    workspaceId: "workspace-unit", runtime: resolvePtyRuntime, spawnWorker: () => next, onOutput: () => {},
+  });
+  const leader = detachedGroupLeader();
+  try {
+    const starting = driver.spawn(unitIdentity, unitLaunch, () => {});
+    first.reply({ status: "not-started" });
+    expect(await starting).toEqual({ status: "not-started" });
+    next = second;
+    const retrying = driver.spawn(unitIdentity, unitLaunch, () => {});
+    expect(second.requests).toHaveLength(1);
+    second.reply({ status: "started", rootPid: leader.pid });
+    expect(await retrying).toEqual({ status: "started", process: { processId: leader.pid, processGroupId: leader.pid } });
+    expect((await driver.stop(unitIdentity)).status).toBe("tree-drained");
+  } finally {
+    killPid(leader.pid);
+  }
+});
+
+it("forgets an unconfirmed spawn that recorded no root identity so the identity is not wedged", async () => {
+  // P2-3: an `unknown` spawn with no pid can never be stopped or retried, so the
+  // retained entry only wedged the identity and held one of the eight slots.
+  const first = new DriverWorker(), second = new DriverWorker();
+  let next: DriverWorker = first;
+  const driver = new TerminalPtyDriver({
+    workspaceId: "workspace-unit", runtime: resolvePtyRuntime, spawnWorker: () => next, onOutput: () => {},
+  });
+  const receipts: string[] = [];
+  const starting = driver.spawn(unitIdentity, unitLaunch, (receipt) => receipts.push(receipt.status));
+  first.reply({ status: "unknown" });
+  expect(await starting).toEqual({ status: "unknown" });
+  expect(receipts).toEqual(["unknown"]);
+  next = second;
+  const retrying = driver.spawn(unitIdentity, unitLaunch, () => {});
+  expect(second.requests).toHaveLength(1);
+  second.reply({ status: "unknown" });
+  expect(await retrying).toEqual({ status: "unknown" });
+});
+
+it("never reports a fabricated exit code for a stop with no observed child exit", async () => {
+  // P2-5: node-pty prints `exitCode: 0` for a signalled child, so a stop that
+  // killed the terminal must carry no code at all instead of a clean `0`.
+  const worker = new DriverWorker();
+  const driver = new TerminalPtyDriver({
+    workspaceId: "workspace-unit", runtime: resolvePtyRuntime, spawnWorker: () => worker,
+    processTable: () => [], onOutput: () => {}, stopGraceMs: 100, stopConfirmMs: 100,
+  });
+  const leader = detachedGroupLeader();
+  try {
+    const starting = driver.spawn(unitIdentity, unitLaunch, () => {});
+    worker.reply({ status: "started", rootPid: leader.pid });
+    expect(await starting).toEqual({ status: "started", process: { processId: leader.pid, processGroupId: leader.pid } });
+    const stopped = await driver.stop(unitIdentity);
+    expect(stopped).toEqual({ ...unitIdentity, status: "tree-drained" });
+    // `toEqual` already fails on a fabricated `0`; assert the absence directly so
+    // the claim this test makes is unambiguous.
+    expect(stopped).not.toHaveProperty("exitCode");
+  } finally {
+    killPid(leader.pid);
+  }
+});
+
+it("never reports a fabricated exit code for a natural exit the OS reported as signalled", async () => {
+  // The other source of a fabricated `0`: node-pty prints `exitCode: 0` for a
+  // child killed by a signal, so the natural-exit receipt must carry no code when
+  // the pty reported `signal !== 0`.
+  const worker = new DriverWorker();
+  const leader = detachedGroupLeader();
+  let observed = false;
+  const driver = new TerminalPtyDriver({
+    workspaceId: "workspace-unit", runtime: resolvePtyRuntime, spawnWorker: () => worker, observeCadenceMs: 10,
+    // The first snapshot sees the live root (the only moment its session is
+    // attributable to it); every later one reports an empty table, i.e. the root
+    // and its recorded identities are gone.
+    processTable: () => {
+      if (observed) return [];
+      observed = true;
+      return [{ pid: leader.pid!, ppid: 1, pgid: leader.pid!, tty: "ttys900", state: "S" }];
+    },
+    onOutput: () => {}, stopGraceMs: 100, stopConfirmMs: 100,
+  });
+  const receipts: TerminalDriverReceipt[] = [];
+  try {
+    const starting = driver.spawn(unitIdentity, unitLaunch, (receipt) => receipts.push(receipt));
+    worker.reply({ status: "started", rootPid: leader.pid });
+    expect(await starting).toEqual({ status: "started", process: { processId: leader.pid, processGroupId: leader.pid } });
+    await until(() => observed, 3000, "one snapshot of the live root");
+    const spawnRequest = worker.requests[0]!;
+    worker.emit("message", { workspaceId: spawnRequest["workspaceId"], identity: spawnRequest["identity"], operationId: spawnRequest["operationId"], kind: "exit", exitCode: 0, signal: 9 });
+    await until(() => receipts.length > 0, 3000, "natural-exit receipt");
+    expect(receipts).toEqual([{ ...unitIdentity, status: "tree-drained" }]);
+    expect(receipts[0]).not.toHaveProperty("exitCode");
+  } finally {
+    killPid(leader.pid);
+  }
+});
+
+it("does not wedge an instanceId when a start is unconfirmed", async () => {
+  // P2-3 at the session layer: the unconfirmed path keeps no active entry, so the
+  // same instanceId can start again instead of answering `terminal-owned`
+  // forever and holding one of the eight slots.
+  const taskDir = realpathSync(mkdtempSync(join(tmpdir(), "pidock-term-unconfirmed-")));
+  try {
+    const registry = new TaskTerminalRegistry("task-unconfirmed");
+    let mode: "unknown" | "started" = "unknown";
+    const process = { processId: 4200, processGroupId: 4200 };
+    const driver: TerminalDriver = {
+      spawn: async () => (mode === "unknown" ? { status: "unknown" as const } : { status: "started" as const, process: { ...process } }),
+      input: async () => {}, resize: async () => {},
+      stop: async (identity) => ({ ...identity, status: "tree-drained" }),
+      snapshot: () => ({ status: "running", process: { ...process } }),
+    };
+    const sessions = new TaskTerminalSessions(registry, driver);
+    const plan = planFor("task-unconfirmed", taskDir, "term-1", "sh");
+    registry.register(plan);
+    expect(await sessions.start({ plan, sessionId: null })).toMatchObject({ ok: false, error: expect.stringContaining("terminal-start-unconfirmed") });
+    mode = "started";
+    registry.register(plan);
+    expect(await sessions.start({ plan, sessionId: null })).toMatchObject({ ok: true });
+    expect(registry.get("term-1")).toMatchObject({ lifecycle: "running", processId: 4200 });
+  } finally {
+    rmSync(taskDir, { recursive: true, force: true });
+  }
+});
+
+it("refuses to stop a recorded instance this Host holds no live session for", async () => {
+  // Coverage note: the `!session` short-circuit is only reachable while the
+  // record still carries an identity from an earlier Host generation and this
+  // Host has no session for it - the state a restart-after-Host-death leaves.
+  const taskDir = realpathSync(mkdtempSync(join(tmpdir(), "pidock-term-nosession-")));
+  try {
+    const registry = new TaskTerminalRegistry("task-nosession");
+    const driver: TerminalDriver = {
+      spawn: async () => ({ status: "not-started" }),
+      input: async () => {}, resize: async () => {},
+      stop: async (identity) => ({ ...identity, status: "tree-drained" }),
+      snapshot: () => ({ status: "unknown" }),
+    };
+    const sessions = new TaskTerminalSessions(registry, driver);
+    const plan = planFor("task-nosession", taskDir, "term-1", "sh");
+    registry.register(plan);
+    registry.markProcess("term-1", { processId: 4300, processGroupId: 4300 });
+    expect(await sessions.stop("term-1", "user-request")).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("没有本 Host 记录的运行会话"),
+    });
+    expect(registry.get("term-1")!.lifecycle).toBe("running");
+  } finally {
+    rmSync(taskDir, { recursive: true, force: true });
+  }
+});
+
+it("names the lifetime input budget when input is refused", async () => {
+  // P2-4: the lifetime byte budget fences the terminal, so the caller must see
+  // which boundary it hit instead of a generic delivery failure.
+  const taskDir = realpathSync(mkdtempSync(join(tmpdir(), "pidock-term-budget-")));
+  try {
+    const registry = new TaskTerminalRegistry("task-budget");
+    const process = { processId: 4400, processGroupId: 4400 };
+    const driver: TerminalDriver = {
+      spawn: async () => ({ status: "started", process: { ...process } }),
+      input: async () => { throw Error(PTY_INPUT_BUDGET_ERROR); },
+      resize: async () => {},
+      stop: async (identity) => ({ ...identity, status: "tree-drained" }),
+      snapshot: () => ({ status: "running", process: { ...process } }),
+    };
+    const sessions = new TaskTerminalSessions(registry, driver);
+    const plan = planFor("task-budget", taskDir, "term-1", "sh");
+    registry.register(plan);
+    expect(await sessions.start({ plan, sessionId: null })).toMatchObject({ ok: true });
+    const typed = await sessions.input("term-1", "x");
+    expect(typed).toMatchObject({ ok: false, error: expect.stringContaining("terminal-input-failed") });
+    expect(typed).toMatchObject({ ok: false, error: expect.stringContaining(String(MAX_PTY_ENVELOPE_BYTES)) });
+  } finally {
+    rmSync(taskDir, { recursive: true, force: true });
   }
 });
