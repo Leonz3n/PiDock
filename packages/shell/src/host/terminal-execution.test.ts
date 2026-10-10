@@ -152,6 +152,32 @@ it("refuses a not-started completion for an already running terminal rather than
   expect(f.receipts).toEqual([]);
 });
 
+it("records an observed root exit as an exit without upgrading or downgrading the driver's receipt", async () => {
+  const f = fixture(); await f.control();
+  const identity = f.execution.snapshot().identity!;
+  // The driver issues `root-exited` for a verified exit whose last control
+  // request was never observed: an exit, but explicitly no whole-tree claim.
+  f.observer()({ ...identity, status: "root-exited", exitCode: 7 });
+  await f.execution.settled();
+  expect(f.execution.snapshot()).toMatchObject({ state: "exited", identity: null, error: undefined });
+  expect(f.receipts).toEqual([{ ...identity, status: "root-exited", exitCode: 7 }]);
+  expect(f.write.owner).toBeNull();
+});
+
+it.each(["tree-drained", "root-exited"] as const)("records a %s stop with no observed exit code as the exit it is, never as not-started", async (status) => {
+  const f = fixture();
+  // A terminal the OS reports as signalled has no exit code; a verified drain is
+  // still a verified drain, and an unobserved window is still an exit.
+  f.driver.stop = async (identity) => ({ ...identity, status });
+  await f.control();
+  const identity = f.execution.snapshot().identity!;
+  expect(await f.control("stop")).toEqual({ ok: true });
+  expect(f.receipts).toEqual([{ ...identity, status }]);
+  expect(f.receipts[0]!.status).not.toBe("not-started");
+  expect(f.execution.snapshot()).toMatchObject({ state: "exited", identity: null });
+  expect(f.write.owner).toBeNull();
+});
+
 it("reads driver state without stopping the hidden terminal and fences unconfirmed observations", async () => {
   const f = fixture(); await f.control();
   const identity = f.execution.snapshot().identity;

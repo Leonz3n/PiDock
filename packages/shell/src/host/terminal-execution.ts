@@ -22,8 +22,21 @@ export interface TerminalLaunch {
   cols: number;
   rows: number;
 }
+/**
+ * What the OS boundary observed for one terminal. The exit receipts are
+ * deliberately scoped to what the driver can really prove (see
+ * `terminal-pty-driver.ts`): `tree-drained` means the exit was covered by an
+ * observation of the live root and every recorded identity is gone;
+ * `root-exited` means the same verified drain for an exit that was NOT covered
+ * (the last control request was never observed), so a descendant created inside
+ * that window is explicitly not denied; `unknown` means no observation ever saw
+ * the root alive, or survivors remain, or the process table could not be read.
+ * `exitCode` is absent when none was observed (a signalled child, or a stop that
+ * finished before any exit event) - never a fabricated `0`.
+ */
 export type TerminalDriverReceipt = TerminalIdentity & (
-  | { status: "tree-drained"; exitCode: number }
+  | { status: "tree-drained"; exitCode?: number }
+  | { status: "root-exited"; exitCode?: number }
   | { status: "not-started" }
   | { status: "unknown" }
 );
@@ -161,11 +174,27 @@ export class TerminalExecution {
     if (this.active !== active || active.receipt || active.saving) return;
     if (receipt.taskId !== active.identity.taskId || receipt.sessionId !== active.identity.sessionId ||
         receipt.instanceId !== active.identity.instanceId || receipt.generation !== active.identity.generation ||
-        !["tree-drained", "not-started"].includes(receipt.status) || (receipt.status === "not-started" && !notStartedProven) ||
-        (receipt.status === "tree-drained" && !Number.isInteger(receipt.exitCode))) {
+        (receipt.status !== "tree-drained" && receipt.status !== "root-exited" && receipt.status !== "not-started")) {
       this.state = "unconfirmed"; this.error = "terminal-termination-unconfirmed"; return;
     }
-    active.receipt = receipt.status === "tree-drained" ? { ...active.identity, status: "tree-drained", exitCode: receipt.exitCode } : { ...active.identity, status: "not-started" };
+    if (receipt.status === "not-started") {
+      // Only a spawn the driver really proved did not start may end this operation.
+      if (!notStartedProven) { this.state = "unconfirmed"; this.error = "terminal-termination-unconfirmed"; return; }
+      active.receipt = { ...active.identity, status: "not-started" };
+    } else {
+      // Both exit receipts mean the root really ended and every identity the
+      // driver recorded is gone, so this operation is over. Only `tree-drained`
+      // claims the exit was covered by an observation; `root-exited` is an
+      // observed exit whose last control-request window was never observed, so
+      // the receipt is persisted with the status the driver really issued - never
+      // upgraded to a whole-tree claim and never recorded as `not-started`.
+      // `exitCode` is optional on both: it is absent when none was observed (a
+      // signalled child), which is not a reason to refuse a verified exit.
+      if (receipt.exitCode !== undefined && !Number.isInteger(receipt.exitCode)) {
+        this.state = "unconfirmed"; this.error = "terminal-termination-unconfirmed"; return;
+      }
+      active.receipt = { ...active.identity, status: receipt.status, ...(receipt.exitCode !== undefined ? { exitCode: receipt.exitCode } : {}) };
+    }
     void this.saveReceipt(active);
   }
   private saveReceipt(active: Active): Promise<void> {
