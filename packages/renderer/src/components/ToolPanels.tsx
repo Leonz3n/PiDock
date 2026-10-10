@@ -1265,7 +1265,7 @@ export function TerminalTakeoverPanel({
           <span>
             工作目录 <span className="font-mono text-ink">{plan.cwd}</span> · 程序 {plan.program} {plan.args.join(" ")}
           </span>
-          <span>终端归属：{plan.owner.sessionId === null ? `用户显式操作（${plan.owner.label}）` : `Agent 会话 ${plan.owner.sessionId}`}</span>
+          <span>终端归属：{plan.owner.sessionId === null ? `人工 · ${plan.owner.label}` : `Agent 会话 ${plan.owner.sessionId}`}</span>
           <span>
             窗口 {plan.cols}×{plan.rows} · 历史上限 {plan.historyLimit}
           </span>
@@ -1284,6 +1284,10 @@ export function TerminalTakeoverPanel({
           <span>
             {watched.instanceId} · {terminalInstanceStateText(watched)}
           </span>
+          {/* Who owns the instance being driven: a human may type into an
+              Agent-owned terminal, and the row must say so (the plan row only
+              describes this panel's own human plan). */}
+          <span>终端归属：{watched.owner.sessionId === null ? `人工 · ${watched.owner.label}` : `Agent 会话 ${watched.owner.sessionId}`}</span>
           {terminalExitScopeNote(watched) ? <span data-testid="terminal-exit-scope">{terminalExitScopeNote(watched)}</span> : null}
           <div className="flex gap-2">
             {watched.lifecycle === "running" ? (

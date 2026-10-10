@@ -223,6 +223,58 @@ describe("#15 terminal panel on the real channel", () => {
     expect(await screen.findByTestId("terminal-instance")).toHaveTextContent("运行中");
   });
 
+  it("plans the human action with the same label the start carries, so plan and start agree", async () => {
+    // The Host labels an unlabelled human caller `用户显式操作` itself
+    // (host-guards.ts:166), so a plan sent without a label renders
+    // `用户显式操作（用户显式操作）` while the start sends `终端面板（用户显式操作）`.
+    const calls: Call[] = [];
+    const taskOp = hostStub(calls, {
+      "task/terminalState": () => ({ ok: true, payload: { spawnImplemented: true, instances: [] } }),
+      "task/fileRoots": () => ({ ok: true, payload: ROOTS }),
+      // Mirror the Host: the plan's owner label is the caller's own label.
+      "task/planTerminal": (payload) => ({
+        ok: true,
+        payload: { plan: { ...HOST_PLAN.plan, owner: { taskId: "release", sessionId: null, label: payload["label"] ?? "用户显式操作" } } },
+      }),
+      "task/terminalControl": (payload) => ({ ok: true, payload: { instanceId: "term-release-1", action: payload["action"], actor: "human" } }),
+      "task/terminalHistory": () => ({ ok: true, payload: { history: [] } }),
+    });
+    const user = await openTerminalPanel(taskOp);
+
+    await user.click(await screen.findByRole("button", { name: "按计划启动终端" }));
+
+    const plan = await screen.findByTestId("terminal-plan");
+    const planCall = calls.find((call) => call.op === "task/planTerminal");
+    const startCall = calls.find((call) => call.payload["action"] === "start");
+    expect(planCall?.payload["label"]).toBe("终端面板（用户显式操作）");
+    expect(planCall?.payload["label"]).toBe(startCall?.payload["label"]);
+    expect(plan).toHaveTextContent("终端面板（用户显式操作）");
+    // Not the doubled `用户显式操作（用户显式操作）`.
+    expect(plan).not.toHaveTextContent("用户显式操作（用户显式操作）");
+  });
+
+  it("labels who owns the driven instance, so an Agent-owned terminal is driven knowingly", async () => {
+    const calls: Call[] = [];
+    const taskOp = hostStub(calls, {
+      "task/terminalState": () => ({
+        ok: true,
+        payload: {
+          spawnImplemented: true,
+          instances: [
+            hostInstance({ instanceId: "term-agent-1", owner: { taskId: "release", sessionId: "sess-main", label: "会话 sess-main" } }),
+          ],
+        },
+      }),
+      "task/fileRoots": () => ({ ok: true, payload: ROOTS }),
+      "task/terminalHistory": () => ({ ok: true, payload: { history: [] } }),
+    });
+    await openTerminalPanel(taskOp);
+
+    const instance = await screen.findByTestId("terminal-instance");
+    expect(instance).toHaveTextContent("终端归属");
+    expect(instance).toHaveTextContent("Agent 会话 sess-main");
+  });
+
   it("renders an exit whose code was never observed as 未观测 and never as a whole-tree drain", async () => {
     const calls: Call[] = [];
     const taskOp = hostStub(calls, {
