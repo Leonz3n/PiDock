@@ -199,6 +199,10 @@ const EXIT_REASON_TEXT: Record<string, string> = {
   exited: "自然退出（Host 观测到 root 已结束）",
   "user-request": "用户请求停止",
   "agent-request": "Agent 请求停止",
+  // The quit plan records `stopAll("host-quit")` (host.ts:1784), so a task Host
+  // that quits or restarts while the app lives on reads as a named reason here
+  // instead of leaking the raw token into the row.
+  "host-quit": "应用退出时停止",
   "app-quit": "应用退出时停止",
 };
 
