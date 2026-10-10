@@ -198,6 +198,25 @@ realIt("contains the whole process group and the observed descendant tree before
   expect(pgidOf(instance!.processId!)).toBeNull();
 });
 
+realIt("reclaims the group when the shell exits on its own with a HUP-proof child still alive", { timeout: 30_000 }, async () => {
+  // No stop call in this test: the natural-exit path must not report an exit
+  // while a member of its own group is still alive.
+  const f = new Fixture("natural");
+  const { instance } = await f.start();
+  await f.sessions.input("term-1", "set +m\r");
+  await f.sessions.input("term-1", "sh -c 'trap \"\" HUP; sleep 300' & echo BG=$!\r");
+  await until(() => /BG=(\d+)/.test(f.history()), 8000, "HUP-proof background pid");
+  const background = Number(/BG=(\d+)/.exec(f.history())![1]);
+  expect(background).toBeGreaterThan(1);
+  expect(pgidOf(background)).toBe(instance!.processGroupId);
+
+  await f.sessions.input("term-1", "exit\r");
+  await until(() => f.registry.get("term-1")?.lifecycle === "exited", 15_000, "natural-exit receipt");
+  expect(f.registry.get("term-1")?.exitReason).toBe("exited");
+  await until(() => !alive(background), 8000, "HUP-proof child to be reclaimed");
+  expect(pgidOf(background)).toBeNull();
+});
+
 realIt("reclaims a job-controlled descendant that left the shell's process group", { timeout: 30_000 }, async () => {
   // An interactive shell gives each job its own group, so `-pgid` alone leaves
   // the background job alive: this is the descendant-reclaim assertion.
