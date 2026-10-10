@@ -10,6 +10,7 @@ import { readSdkDraft, saveSdkDraft } from "../data/sdkDraft";
 import { setTaskArchivedThroughShell } from "../data/shellBridge";
 import { parseLifecycle } from "./DesktopArchivePage";
 import { DesktopToolDock, DESKTOP_TOOLS_UNWIRED, type DesktopTool } from "./DesktopToolDock";
+import { DesktopTaskSources } from "./DesktopTaskSources";
 import { BrandMark, LocalUserAvatar } from "./ui";
 
 const sessionId = SDK_SESSION_ID;
@@ -65,12 +66,12 @@ function allowed(data: DesktopProjects, taskId: string): boolean {
     data.inventory.roots.every((root) => root.state === "ready");
 }
 
-type ConversationProps = { taskId: string; name: string; roots: string; association: string; onBack: () => void; onOpenProviders: () => void; onArchived: () => void };
+type ConversationProps = { taskId: string; name: string; roots: string; association: string; onBack: () => void; onOpenProviders: () => void; onArchived: () => void; onSourcesChanged?: () => void };
 export function DesktopConversation(props: ConversationProps) {
   return <TaskConversation key={props.taskId} {...props} />;
 }
 
-function TaskConversation({ taskId, name, roots, association, onBack, onOpenProviders, onArchived }: ConversationProps) {
+function TaskConversation({ taskId, name, roots, association, onBack, onOpenProviders, onArchived, onSourcesChanged }: ConversationProps) {
   const bridge = window.pidock;
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const recovered = useRef(readReceipt(taskId));
@@ -127,6 +128,7 @@ function TaskConversation({ taskId, name, roots, association, onBack, onOpenProv
   const [unwired, setUnwired] = useState<string | null>(null);
   const [taskMenu, setTaskMenu] = useState(false);
   const [archivePrompt, setArchivePrompt] = useState(false);
+  const [sourcesOpen, setSourcesOpen] = useState(false);
   const [archiveBusy, setArchiveBusy] = useState(false);
   const [archiveError, setArchiveError] = useState("");
   const archiveCancelRef = useRef<HTMLButtonElement>(null);
@@ -367,6 +369,11 @@ function TaskConversation({ taskId, name, roots, association, onBack, onOpenProv
                 <TooltipContent>{`${item.label}未接线：${unwiredReason}`}</TooltipContent>
               </Tooltip>;
           })}
+          {/* [PiDock 03] (#6) the production 'add repositories' entry: only a
+              shell that really exposes the append channel shows it. */}
+          {typeof bridge?.appendTaskRepos === "function" ? (
+            <Button type="button" onClick={() => setSourcesOpen(true)} aria-label="追加仓库" title="从项目登记中选择仓库并追加到本任务"><Icon name="plus" /><span className="below-narrow:hidden">追加仓库</span></Button>
+          ) : null}
           <div className="relative">
             <Button type="button" variant="ghost" size="icon-sm" aria-label="任务操作" aria-expanded={taskMenu} onClick={() => setTaskMenu((open) => !open)}><Icon name="more" /></Button>
             {taskMenu && <div className="absolute top-full right-0 z-20 min-w-[150px] rounded-[7px] border border-line bg-paper p-1 shadow-sm">
@@ -396,6 +403,14 @@ function TaskConversation({ taskId, name, roots, association, onBack, onOpenProv
         </div>
       </div>
     </div>}
+    {sourcesOpen && bridge?.appendTaskRepos ? <div className="fixed inset-0 z-50 grid place-items-center bg-black/30 p-4">
+      <DesktopTaskSources
+        taskId={taskId}
+        bridge={bridge}
+        onClose={() => setSourcesOpen(false)}
+        onAppended={() => onSourcesChanged?.()}
+      />
+    </div> : null}
     {unwired && <p role="status" data-testid="desktop-unwired-tool" className="shrink-0 border-b border-line bg-soft px-4 py-1.5 text-[11px] text-muted">
       {unwired}面板未接线：{DESKTOP_TOOLS_UNWIRED.find((entry) => entry.label === unwired)?.reason ?? "生产读取路径尚未接线"}（不显示样例数据）
     </p>}

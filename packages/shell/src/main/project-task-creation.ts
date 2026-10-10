@@ -7,7 +7,7 @@ import { readTaskRecordOnDisk } from "../host/task-store.js";
 import type { HostTaskResult } from "../rpc/protocol.js";
 import { buildLinkName, buildRepoChildName, checkLinkNameCollisions } from "./multi-repo-provision.js";
 import type { ProjectRegistry } from "./project-registry.js";
-import { buildTaskBranch } from "./task-provision.js";
+import { buildTaskBranch, TASK_BRANCH_EXISTS_NO_WORKTREE } from "./task-provision.js";
 import { TaskRootIndex } from "./task-root-index.js";
 
 interface Source { id: string; name: string; path: string; realPath: string; device: string; inode: string }
@@ -372,7 +372,7 @@ export class ProjectTaskCreation {
         }
         git(repo.path, ["fetch", "--no-tags", repo.remote, `refs/heads/${repo.remoteBranch}`]);
         if (git(repo.path, ["rev-parse", "FETCH_HEAD"]) !== repo.commit) throw new Error("远程分支已变化，不使用旧基线");
-        if (optionalGit(repo.path, ["show-ref", "--verify", "--hash", `refs/heads/${intent.branch}`]) !== null) throw new Error("任务分支已存在但工作树不在原位置，请人工恢复");
+        if (optionalGit(repo.path, ["show-ref", "--verify", "--hash", `refs/heads/${intent.branch}`]) !== null) throw new Error(TASK_BRANCH_EXISTS_NO_WORKTREE);
         missingRepos.push(repo);
       }
       for (const repo of missingRepos) {

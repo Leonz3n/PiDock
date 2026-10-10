@@ -255,6 +255,14 @@ export function assertProvisionPlanSafe(plan: ProvisionPlan): void {
   }
 }
 
+/**
+ * The task branch already exists in a source checkout but no worktree holds it:
+ * the create flow refuses this state instead of running `git branch` again (it
+ * fails hard on an existing ref), and the append flow uses the same reason so
+ * both surfaces name the one manual-recovery state.
+ */
+export const TASK_BRANCH_EXISTS_NO_WORKTREE = "任务分支已存在但工作树不在原位置，请人工恢复";
+
 /** The real state of a task branch in a source checkout (see `observeBranchRef`). */
 export type TaskBranchRefState =
   | { state: "present"; commit: string }
@@ -281,7 +289,7 @@ export function planResumeBranch(input: {
   if (input.observed.commit.trim().toLowerCase() === input.recordedCommit.trim().toLowerCase()) {
     return { ok: true, reuseExistingBranch: true };
   }
-  return { ok: false, reason: "任务分支已存在但工作树不在原位置，请人工恢复" };
+  return { ok: false, reason: TASK_BRANCH_EXISTS_NO_WORKTREE };
 }
 
 export interface WorktreePlanInput {

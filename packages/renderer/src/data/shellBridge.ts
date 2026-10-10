@@ -25,6 +25,13 @@ export interface PidockBridge {
   serviceCatalogOp?: (request: Record<string, unknown>) => Promise<ShellTaskOpResult>;
   createTask?: (request: { op: "current" | "prepare" | "commit" | "abandon"; input?: unknown; id?: string }) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
   /**
+   * [PiDock 03] (#6) production append for an existing task. The page names
+   * project repository ids, remote names and baseline branches only: main
+   * resolves every checkout from the project registry, fetches and pins the
+   * exact commits, derives the conflict scan and executes the returned plan.
+   */
+  appendTaskRepos?: (request: { taskId: string; repositories: { sourceId: string; remote: string; remoteBranch: string }[] }) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
+  /**
    * [PiDock 02m] (#46) Provider metadata operations. The renderer names a task,
    * a profile, and profile metadata only: the credential value is resolved in
    * main from the profile's environment reference and never crosses this bridge.
@@ -289,6 +296,37 @@ export async function appendReposThroughShell(input: {
   if (input.mainCheckouts !== undefined) payload["mainCheckouts"] = input.mainCheckouts;
   try {
     return await shellTaskOp(input.taskId, "task/appendRepos", payload);
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * [PiDock 03] (#6) append repositories to an EXISTING task through the shell
+ * (`shell/appendTaskRepos`). The page supplies project repository ids, remote
+ * names and baseline branches; main resolves each repository's source checkout
+ * from the project registry, fetches and pins the exact remote commit in that
+ * checkout, derives the conflict scan (`takenPaths`/`branchesInUse`) itself,
+ * routes `task/appendRepos` and executes the returned plan with real git.
+ *
+ * `{ok:false,error}` envelopes are returned, never thrown, so the form keeps
+ * its selection and offers retry; the error is the real named refusal
+ * (`fetch-failed` / `path-taken` / `branch-in-use` / `repo-unusable`).
+ */
+export async function appendTaskReposThroughShell(input: {
+  taskId: string;
+  repositories: { sourceId: string; remote: string; remoteBranch: string }[];
+}): Promise<ShellTaskOpResult> {
+  const bridge = shellBridge();
+  if (typeof bridge?.appendTaskRepos !== "function") {
+    return { ok: false, error: "桌面壳真实任务追加接口不可用，请重启应用" };
+  }
+  try {
+    const result = await bridge.appendTaskRepos({ taskId: input.taskId, repositories: input.repositories });
+    if (!result || typeof result !== "object" || typeof result.ok !== "boolean") {
+      return { ok: false, error: "invalid-payload: 任务追加返回异常，请重试" };
+    }
+    return result;
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
