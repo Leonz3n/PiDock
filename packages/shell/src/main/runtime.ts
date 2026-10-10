@@ -1536,6 +1536,24 @@ export function registerIpc(
           "shell/taskOp 不再接受 task/appendRepos，请使用 shell/appendTaskRepos（ref #6）",
         );
       }
+      // [PiDock 03] (#6) the same legacy-route refusal for the plain-directory
+      // twin: `task/appendDirs` records `{directoryId, sourcePath}` into the
+      // task record. Reached from page code it would let the sandboxed
+      // renderer write a RENDERER-CHOSEN `sourcePath` into `dirLinks` while
+      // skipping every guard this slice relies on — registry resolution of the
+      // directory id, the workspace-overlap check, the recorded source
+      // identity check and the user's `sharedWriteConfirmed`. Those entries
+      // then feed the Agent broker's shared scope. `shell/appendTaskRepos` is
+      // the production entry (registry-only ids, main-derived source identity,
+      // confirmation required), so refuse the legacy op here; no production
+      // caller remains. `task/appendDirs` stays in `HOST_TASK_OPS` because
+      // main→Host routing of the production append still needs it.
+      if (op === "task/appendDirs") {
+        throw new TrustDomainViolation(
+          "invalid-payload",
+          "shell/taskOp 不再接受 task/appendDirs，请使用 shell/appendTaskRepos（ref #6）",
+        );
+      }
       // [PiDock 03] (#6) a resume needs its executor BEFORE the Host op runs:
       // `task/resumeAppend` writes the record, so checking after the route
       // would leave a record update with no executor in main to run the plan
