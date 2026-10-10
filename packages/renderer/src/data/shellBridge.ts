@@ -930,10 +930,12 @@ export async function planTerminalThroughShell(input: {
  * `input` and `resize` are the human takeover surface: the Host refuses an
  * Agent session for raw input and window changes, so neither action names a
  * session (and no flag stands in for one) — main attests the labelled human
- * origin itself. The types the Host guard documents are checked here first, so
- * an obviously wrong payload never becomes a confusing op-level refusal; the
- * bounds that need Host knowledge (line bytes, window range) stay Host-side and
- * are reported verbatim when refused.
+ * origin itself. A caller that does name a session for them is refused here
+ * rather than having the session dropped and the call laundered into the
+ * trusted human path the Host would have rejected. The types the Host guard
+ * documents are checked here first, so an obviously wrong payload never becomes
+ * a confusing op-level refusal; the bounds that need Host knowledge (line bytes,
+ * window range) stay Host-side and are reported verbatim when refused.
  */
 export async function controlTerminalThroughShell(input: {
   taskId: string;
@@ -952,6 +954,14 @@ export async function controlTerminalThroughShell(input: {
   approvalId?: string;
 }): Promise<ShellTaskOpResult> {
   const payload: Record<string, unknown> = { instanceId: input.instanceId, action: input.action };
+  if (input.action === "input" || input.action === "resize") {
+    if (input.sessionId !== undefined) {
+      return {
+        ok: false,
+        error: "invalid-payload: task/terminalControl.input/resize is the labelled human action and must not name a session",
+      };
+    }
+  }
   if (input.action === "input") {
     if (typeof input.data !== "string" || input.data.length === 0) {
       return { ok: false, error: "invalid-payload: task/terminalControl.data must be a non-empty string" };

@@ -399,6 +399,40 @@ describe("#15 terminal control bridge", () => {
     }
   });
 
+  it("refuses a session named on a raw-input or window action instead of laundering it into the human path", async () => {
+    // `input`/`resize` are the labelled human takeover surface. The Host refuses
+    // an Agent session for them (host.ts:1573), so a caller-supplied session id
+    // must never be dropped and turned into the attested human action the Host
+    // would have refused: fail closed instead.
+    const { controlTerminalThroughShell } = await import("../data/shellBridge");
+    const taskOp = vi.fn(async (_taskId: string, _op: string, _payload: Record<string, unknown>) => ({ ok: true, payload: {} }));
+    vi.stubGlobal("window", { pidock: { taskOp } });
+    try {
+      const typed = await controlTerminalThroughShell({
+        taskId: "task-abcdef12",
+        instanceId: "term-1",
+        action: "input",
+        data: "ls\n",
+        sessionId: "sess-main",
+      });
+      expect(typed.ok).toBe(false);
+      expect(typed.error).toContain("must not name a session");
+      const resized = await controlTerminalThroughShell({
+        taskId: "task-abcdef12",
+        instanceId: "term-1",
+        action: "resize",
+        cols: 80,
+        rows: 24,
+        sessionId: "sess-main",
+      });
+      expect(resized.ok).toBe(false);
+      expect(resized.error).toContain("must not name a session");
+      expect(taskOp).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("still starts with explicit empty env layers and stops with the same payload shape", async () => {
     const { controlTerminalThroughShell } = await import("../data/shellBridge");
     const taskOp = vi.fn(async (_taskId: string, _op: string, _payload: Record<string, unknown>) => ({ ok: true, payload: {} }));
