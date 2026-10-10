@@ -338,6 +338,27 @@ describe("#6 privileged prep scan through the real shell/taskOp handler", () => 
     expect(existsSync(join(route.taskDir, route.repos.invoice))).toBe(false);
   });
 
+  it("refuses the legacy task/appendDirs op on shell/taskOp and never reaches the Host", async () => {
+    const route = await productionRoute({ recorded: ["frontend"], created: ["frontend"] });
+    const before = route.recordText();
+    // The renderer cannot create a symlink, but it could still name any
+    // `sourcePath` it likes: main must refuse `task/appendDirs` on this route
+    // BEFORE the Host persists a caller-chosen `dirLinks.sourcePath`. The
+    // production entry (`shell/appendTaskRepos`) resolves directory ids from
+    // the registry and requires the shared-write confirmation.
+    const forgedSource = join(route.home, "forged-source");
+    mkdirSync(forgedSource);
+    const result = (await route.invoke("task/appendDirs", {
+      plainDirs: [{ directoryId: "11111111-0000-4000-8000-000000000001", sourcePath: forgedSource }],
+    })) as { ok: boolean; error: string };
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("shell/appendTaskRepos");
+    // The Host was never asked and the record was never rewritten: no
+    // renderer-chosen source path can reach `dirLinks` on this route.
+    expect(route.forwarded).toEqual([]);
+    expect(route.recordText()).toBe(before);
+  });
+
   it("refuses a resume with no executor in main before the Host writes anything", async () => {
     const route = await productionRoute({ recorded: ["frontend", "invoice"], created: ["frontend"], noExecutor: true });
     const before = route.recordText();
