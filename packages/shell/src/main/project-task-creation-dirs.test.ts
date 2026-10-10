@@ -153,6 +153,13 @@ describe("Pure-directory and mixed Project task creation", () => {
         expect.objectContaining({ directoryId: env.project.directories[1]!.id, linkName: assetsLinkName, sourcePath: env.assetsDir }),
       ]),
     );
+    // The record captures the source's device/inode, not only its path string:
+    // a path alone cannot tell a directory swapped in at the same path, and the
+    // append re-verifies this pair. It is read from the real filesystem.
+    for (const link of record!.dirLinks!) {
+      expect(link.sourceDevice).toBe(String(lstatSync(link.sourcePath, { bigint: true }).dev));
+      expect(link.sourceInode).toBe(String(lstatSync(link.sourcePath, { bigint: true }).ino));
+    }
 
     // Write through the link modifies the ORIGINAL file directly (not a copy!)
     const linkFilePath = join(docsLinkPath, "spec.txt");
@@ -197,6 +204,28 @@ describe("Pure-directory and mixed Project task creation", () => {
     const record = readTaskRecordOnDisk(preview.taskDir);
     expect(record?.repoSources?.[0]?.baseCommit).toBe(expectedCommit);
     expect(record?.dirLinks?.[0]?.directoryId).toBe(env.project.directories[0]!.id);
+  });
+
+  it("creates a pure-directory task with no working git on PATH and no git call at all", async () => {
+    const env = await setupPureDirectoryEnv();
+    // A PATH whose only `git` is a failing stub: if the flow needed git even
+    // once, `prepare`/`commit` would throw and the stub would log the call.
+    // This asserts "no git" directly instead of inferring it from empty loops.
+    const bin = join(env.home, "no-git-bin");
+    mkdirSync(bin);
+    const log = join(env.home, "git-calls.log");
+    writeFileSync(join(bin, "git"), `#!/bin/sh\nprintf '%s\\n' "$*" >> "${log}"\nexit 97\n`, { mode: 0o755 });
+    const previousPath = process.env.PATH;
+    process.env.PATH = bin;
+    try {
+      const preview = await env.service.prepare(env.request);
+      await env.service.commit(preview.id);
+      expect(existsSync(preview.taskDir)).toBe(true);
+      expect(readTaskRecordOnDisk(preview.taskDir)?.dirLinks).toHaveLength(2);
+    } finally {
+      process.env.PATH = previousPath;
+    }
+    expect(existsSync(log)).toBe(false);
   });
 
   it("refuses creation when shared-write confirmation is missing, creating nothing", async () => {
@@ -310,34 +339,48 @@ describe("Pure-directory and mixed Project task creation", () => {
     expect(env.storage.read()).toBeNull();
   });
 
-  it("mutation check (a): skipping sharedWriteConfirmed causes refusal to fail", async () => {
+  it("the shared-write confirmation is the sole blocker: without it the create refuses, with it the same request succeeds", async () => {
     const env = await setupPureDirectoryEnv();
-    const preparePromise = env.service.prepare({
-      ...env.request,
-      sharedWriteConfirmed: false,
-    });
-    // If the check were skipped, prepare would resolve instead of rejecting
-    await expect(preparePromise).rejects.toThrow("请确认普通目录的共享写入风险");
+    // Mutation sensitivity: with the confirmation check removed, the first
+    // assertion fails (`prepare` would RESOLVE instead of rejecting). The
+    // positive control proves the refusal came from the confirmation and not
+    // from an unrelated precondition.
+    await expect(
+      env.service.prepare({ ...env.request, sharedWriteConfirmed: false }),
+    ).rejects.toThrow("请确认普通目录的共享写入风险");
+    const preview = await env.service.prepare({ ...env.request, sharedWriteConfirmed: true });
+    expect(preview.directories).toHaveLength(2);
   });
 
-  it("mutation check (b): removing overlap check causes workspace overlap refusal to fail", async () => {
+  it("the workspace-overlap refusal is specific to the overlapping path, not a blanket refusal", async () => {
     const env = await setupPureDirectoryEnv();
-    const overlapDir = env.root;
+    const sibling = join(env.home, "sibling-source");
+    mkdirSync(sibling);
     const project = await env.projects.create({
-      name: "Mutation Overlap",
+      name: "Overlap Control",
       description: "",
       repositories: [],
-      directories: [{ name: "overlap", path: overlapDir }],
+      directories: [
+        { name: "overlap", path: env.root },
+        { name: "sibling", path: sibling },
+      ],
     });
-    const preparePromise = env.service.prepare({
+    const request = (directoryId: string) => ({
       projectId: project.id,
-      name: "Mutation Overlap Task",
+      name: "Overlap Control Task",
       repositories: [],
-      directoryIds: [project.directories[0]!.id],
+      directoryIds: [directoryId],
       sharedWriteConfirmed: true,
       override: false,
     });
-    // If overlap check were removed, prepare would resolve instead of rejecting
-    await expect(preparePromise).rejects.toThrow("普通目录与任务工作区重叠");
+    // Mutation sensitivity: with `checkWorkspaceOverlap` removed, `prepare`
+    // would RESOLVE for the overlapping source instead of rejecting.
+    await expect(
+      env.service.prepare(request(project.directories[0]!.id)),
+    ).rejects.toThrow("普通目录与任务工作区重叠");
+    // Positive control: a non-overlapping source in the SAME project is
+    // accepted, so the refusal above is the overlap check itself.
+    const preview = await env.service.prepare(request(project.directories[1]!.id));
+    expect(preview.directories).toHaveLength(1);
   });
 });

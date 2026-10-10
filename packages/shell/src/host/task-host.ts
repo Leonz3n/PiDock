@@ -1475,6 +1475,9 @@ export class TaskWorkspaceHost {
               directoryId: link.directoryId,
               sourcePath: link.sourcePath,
               snapshotAt: link.snapshotAt,
+              ...(link.sourceDevice !== undefined && link.sourceInode !== undefined
+                ? { sourceDevice: link.sourceDevice, sourceInode: link.sourceInode }
+                : {}),
             }))
           : undefined,
       now: at,
