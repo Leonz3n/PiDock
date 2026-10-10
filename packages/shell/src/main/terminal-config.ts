@@ -168,6 +168,13 @@ export interface TerminalInstanceRecord {
   lifecycle: "running" | "exited";
   /** OS process identity; absent until the spawner reports it. */
   processId?: number;
+  /**
+   * The process-group id the spawner reported for that pid. A forkpty child is
+   * a session/group leader (`pgid === pid`), so a stop signals `-processGroupId`
+   * and can name exactly one group. It is recorded beside the pid because a
+   * group id that does not match the recorded pid is not this terminal's group.
+   */
+  processGroupId?: number;
   startedAt: string;
   /** Observed state after exit (box 5: show the real end state). */
   exitedAt?: string;
@@ -181,6 +188,7 @@ export interface TerminalStopScope {
   taskId: string;
   instanceId: string;
   processId: number;
+  processGroupId: number;
   startedAt: string;
 }
 
@@ -234,6 +242,7 @@ export class TaskTerminalRegistry {
       envKeys: Object.keys(plan.env).sort(),
       lifecycle: existing?.lifecycle ?? "running",
       ...(existing?.processId !== undefined ? { processId: existing.processId } : {}),
+      ...(existing?.processGroupId !== undefined ? { processGroupId: existing.processGroupId } : {}),
       startedAt: existing?.startedAt ?? this.now(),
       ...(existing?.exitedAt !== undefined ? { exitedAt: existing.exitedAt } : {}),
       ...(existing?.exitCode !== undefined ? { exitCode: existing.exitCode } : {}),
@@ -244,11 +253,19 @@ export class TaskTerminalRegistry {
     return this.copy(record);
   }
 
-  /** Record the OS process identity the spawner reported (real pty: residual). */
-  markProcess(instanceId: string, input: { processId: unknown; startedAt?: unknown }): TerminalInstanceRecord {
+  /**
+   * Record the OS process identity the spawner observed. `processGroupId`
+   * defaults to the pid because a forkpty child leads its own group; a caller
+   * that observed a different group must pass it (and a mismatch is refused at
+   * stop time, never guessed).
+   */
+  markProcess(instanceId: string, input: { processId: unknown; processGroupId?: unknown; startedAt?: unknown }): TerminalInstanceRecord {
     const record = this.require(instanceId);
     if (!isPositiveInt(input.processId)) throw new Error("invalid-process: 终端进程号必须是正整数");
+    const processGroupId = input.processGroupId === undefined ? input.processId : input.processGroupId;
+    if (!isPositiveInt(processGroupId)) throw new Error("invalid-process: 终端进程组号必须是正整数");
     record.processId = input.processId;
+    record.processGroupId = processGroupId;
     if (typeof input.startedAt === "string" && input.startedAt.trim().length > 0) record.startedAt = input.startedAt.trim();
     return this.copy(record);
   }
@@ -312,10 +329,10 @@ export class TaskTerminalRegistry {
     if (record.taskId !== this.taskId) {
       return { ok: false, error: `task-mismatch: 终端 ${instanceId} 属于任务 ${record.taskId}，不会停止其他任务的进程` };
     }
-    if (record.processId === undefined) {
-      return { ok: false, error: `unknown-process: 终端 ${instanceId} 尚未报告进程号，无法安全停止` };
+    if (record.processId === undefined || record.processGroupId === undefined) {
+      return { ok: false, error: `unknown-process: 终端 ${instanceId} 尚未报告进程号与进程组号，无法安全停止` };
     }
-    return { ok: true, scope: { taskId: record.taskId, instanceId: record.instanceId, processId: record.processId, startedAt: record.startedAt } };
+    return { ok: true, scope: { taskId: record.taskId, instanceId: record.instanceId, processId: record.processId, processGroupId: record.processGroupId, startedAt: record.startedAt } };
   }
 
   /** Drop one instance (panel closed after exit, or task disposed). */

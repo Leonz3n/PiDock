@@ -10,6 +10,7 @@ import { isHostTaskOp, isTaskOpOrigin, type HostTaskOp } from "../rpc/protocol.j
 import { isAbsoluteTaskRoot, isSafeTaskBranchRef } from "../main/task-provision.js";
 import { isMultiRepoErrorCode } from "../main/multi-repo-provision.js";
 import { PI_GATED_TOOL_NAMES } from "../main/pi-session.js";
+import { MAX_TERMINAL_LINE } from "../main/terminal-config.js";
 import { PI_USAGE_GROUP_BY, PI_USAGE_KINDS, type PiUsageGroupBy } from "../main/usage-ledger.js";
 import { isUsageKindName } from "./task-store.js";
 import { isBrowserAction, isPageRef } from "../main/browser-rules.js";
@@ -1166,12 +1167,28 @@ export function validateHostTaskOp(
     if (typeof instanceId !== "string" || instanceId.trim().length === 0) {
       return { ok: false, error: "invalid-payload: task/terminalControl.instanceId must be a non-empty string" };
     }
-    if (action !== "start" && action !== "stop") {
-      return { ok: false, error: "invalid-payload: task/terminalControl.action must be start/stop" };
+    if (action !== "start" && action !== "stop" && action !== "input" && action !== "resize") {
+      return { ok: false, error: "invalid-payload: task/terminalControl.action must be start/stop/input/resize" };
     }
     const sessionId = payload["sessionId"];
     if (sessionId !== undefined && (typeof sessionId !== "string" || sessionId.trim().length === 0)) {
       return { ok: false, error: "invalid-payload: task/terminalControl.sessionId must be a non-empty string" };
+    }
+    if (action === "input") {
+      const data = payload["data"];
+      if (typeof data !== "string" || data.length === 0 || Buffer.byteLength(data) > MAX_TERMINAL_LINE) {
+        return { ok: false, error: `invalid-payload: task/terminalControl.data must be a non-empty string of at most ${MAX_TERMINAL_LINE} bytes` };
+      }
+      return { ok: true };
+    }
+    if (action === "resize") {
+      for (const key of ["cols", "rows"] as const) {
+        const value = payload[key];
+        if (typeof value !== "number" || !Number.isInteger(value)) {
+          return { ok: false, error: `invalid-payload: task/terminalControl.${key} must be an integer when resizing` };
+        }
+      }
+      return { ok: true };
     }
     if (action === "start") {
       if (typeof payload["program"] !== "string") {

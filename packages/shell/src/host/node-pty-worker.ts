@@ -77,11 +77,23 @@ async function start(request: PtyRequest & { action: "spawn" }): Promise<void> {
 
 // There is intentionally no kill/destroy/dispose command: public node-pty
 // termination exposes numeric PID/console lists, not a containment handle.
+/**
+ * Admit only the runtime the driver explicitly supplied. The helper is either a
+ * plain Node child or the Electron executable started with
+ * `ELECTRON_RUN_AS_NODE=1`; node-pty 1.1.0 is N-API, so the darwin-arm64
+ * prebuild is ABI-compatible with either host. The Phase-B experiment keeps its
+ * own stricter host gate in `node-pty-driver.ts`; a GUI Electron process never
+ * reaches this helper because it cannot be the forked runtime.
+ */
+function runtimeAdmitted(): boolean {
+  return process.platform === "darwin" && process.arch === "arm64" &&
+    (process.env.ELECTRON_RUN_AS_NODE === "1" || !process.versions.electron);
+}
 process.on("message", (raw: unknown) => {
   let request: PtyRequest;
   try {
     request = parsePtyRequest(raw);
-    if (process.platform !== "darwin" || process.arch !== "arm64" || process.versions.electron || process.versions.node !== "24.21.0") throw Error();
+    if (!runtimeAdmitted()) throw Error();
     if (!binding) {
       if (request.action !== "spawn" || request.requestId !== 1) throw Error();
       binding = { workspaceId: request.workspaceId, identity: { ...request.identity }, operationId: request.operationId };
