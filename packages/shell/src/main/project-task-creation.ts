@@ -5,7 +5,7 @@ import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readF
 import { basename, dirname, isAbsolute, join, normalize, relative, resolve } from "node:path";
 import { readTaskRecordOnDisk } from "../host/task-store.js";
 import type { HostTaskResult } from "../rpc/protocol.js";
-import { buildLinkName, buildRepoChildName, checkLinkNameCollisions } from "./multi-repo-provision.js";
+import { buildLinkName, buildRepoChildName, checkLinkNameCollisions, REMOTE_NAME } from "./multi-repo-provision.js";
 import type { ProjectRegistry } from "./project-registry.js";
 import { buildTaskBranch, TASK_BRANCH_EXISTS_NO_WORKTREE } from "./task-provision.js";
 import { TaskRootIndex } from "./task-root-index.js";
@@ -283,7 +283,7 @@ export class ProjectTaskCreation {
         const source = project.repositories.find((row) => row.id === selection.sourceId);
         if (!source) throw new Error("项目仓库已改变");
         const remote = string(selection.remote), remoteBranch = string(selection.remoteBranch);
-        if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(remote)) throw new Error("远程名称无效");
+        if (!REMOTE_NAME.test(remote)) throw new Error("远程名称无效");
         git(source.path, ["check-ref-format", `refs/heads/${remoteBranch}`]);
         const repo: Repo = { ...source, ...diskIdentity(source.path), remote, remoteBranch,
           commonDir: gitCommonDir(source.path), remoteDigest: remoteDigest(git(source.path, ["remote", "get-url", remote])),

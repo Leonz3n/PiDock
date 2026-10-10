@@ -32,9 +32,11 @@
  *    and no op in a checkout the caller did not resolve;
  * 6. the appended/skipped repos come back named. Existing worktrees, baselines,
  *    links and the stored root/dirId are never touched. A repo is only reported
- *    as `skipped` when its worktree really exists on disk; a repo the record
- *    lists without a worktree is refused by name and pointed at the recovery
- *    surface instead of being reported as an idempotent success.
+ *    as `skipped` when its folder really is THIS task's worktree for the pinned
+ *    commit on the task branch; a recorded repo the record lists without such a
+ *    worktree (absent, or a foreign leftover / non-worktree in that path) is
+ *    refused by name and pointed at the recovery surface instead of being
+ *    reported as an idempotent success.
  * 7. `executeResumePlan` executes the plan `task/resumeAppend` returns for a
  *    partial prepare through the SAME `executeAppendPlan` rules, then re-reads
  *    the Host's per-repo status, so a recorded-but-worktree-absent repo is
@@ -52,15 +54,17 @@
 import { execFileSync } from "node:child_process";
 import { lstatSync, realpathSync } from "node:fs";
 import { isAbsolute, join, normalize } from "node:path";
-import { createNodeRepoProbe } from "../host/repo-identity.js";
+import { createNodeRepoProbe, observeRecordedRepo } from "../host/repo-identity.js";
 import { readTaskRecordOnDisk } from "../host/task-store.js";
 import type { HostTaskResult } from "../rpc/protocol.js";
 import {
   buildRepoChildName,
   filterAppendRepos,
   previewMixedTaskPaths,
+  REMOTE_NAME,
   type RepoSelection,
 } from "./multi-repo-provision.js";
+import type { GitResourceObservation } from "./task-lifecycle.js";
 import {
   assertProvisionPlanSafe,
   isSafeTaskBranchRef,
@@ -77,7 +81,6 @@ import {
 } from "./task-prep-scan.js";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const REMOTE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const COMMIT = /^[0-9a-f]{40}$/;
 
 /** One repository the page selected, named by project repository id. */
@@ -159,6 +162,14 @@ export interface AppendGit {
   topLevel(checkout: string): string | null;
   /** Read-only task-branch probe (`rev-parse --verify --quiet`): present/absent/unknown. */
   probeBranchRef(checkout: string, branch: string): TaskBranchRefState;
+  /**
+   * Read-only identity observation of a recorded worktree candidate: whether
+   * the folder is a linked worktree (not the source checkout or a foreign
+   * leftover), the branch its HEAD is on, and whether the pinned base commit
+   * is still reachable from that HEAD. `undefined` means nothing verifiable
+   * is there and can never read as this task's verified worktree.
+   */
+  observeWorktree(worktreeDir: string, baseCommit: string): GitResourceObservation | undefined;
   /** Execute one validated plan op with fixed argv in its own cwd. */
   exec(cwd: string, args: readonly string[]): void;
 }
@@ -220,6 +231,7 @@ export function createNodeAppendGit(): AppendGit {
       }
     },
     probeBranchRef: (checkout, branch) => probe.probeBranchRef(checkout, branch),
+    observeWorktree: (worktreeDir, baseCommit) => observeRecordedRepo({ repoDir: worktreeDir, baseCommit }, probe),
     exec: (cwd, args) => {
       const result = run(cwd, args);
       // No raw git stderr crosses this seam: the caller (`ProjectTaskAppend`)
@@ -392,10 +404,48 @@ function worktreePresent(path: string): boolean {
 }
 
 /**
+ * `null` when `${taskDir}/${repoDir}` really is THIS task's recorded worktree
+ * for the pinned commit on the task branch — otherwise a short user-facing
+ * reason. The create flow refuses this same state
+ * (`project-task-creation.ts` `commit`); a `skipped` result that cannot be
+ * proven here is refused by name instead of reading as an idempotent success.
+ * Read-only: it observes, it never takes over or repairs anything.
+ */
+function verifyRecordedWorktree(
+  git: AppendGit,
+  input: { worktreeDir: string; taskDir: string; repoDir: string; branch: string; baseCommit: string | undefined },
+): string | null {
+  const { worktreeDir, taskDir, repoDir, branch, baseCommit } = input;
+  let canonicalTaskDir: string;
+  let canonicalTarget: string;
+  try {
+    canonicalTaskDir = realpathSync(taskDir);
+    canonicalTarget = realpathSync(worktreeDir);
+  } catch {
+    return "工作副本不存在";
+  }
+  if (canonicalTarget !== join(canonicalTaskDir, repoDir)) {
+    return "路径不是任务目录下记录的仓库文件夹";
+  }
+  if (typeof baseCommit !== "string" || baseCommit.length === 0) {
+    return "任务记录缺少该仓库的固定基线提交";
+  }
+  const observed = git.observeWorktree(worktreeDir, baseCommit);
+  if (observed === undefined) return "不是可核验的 Git 工作副本";
+  if (observed.isWorktree !== true) return "不是本任务的 linked worktree（可能是来源检出或其他检出）";
+  if (observed.branch !== branch) {
+    return `HEAD 不在任务分支 ${branch}（实际 ${observed.branch ?? "detached"}）`;
+  }
+  if (observed.baseCommitReachable !== true) return `未包含固定提交 ${baseCommit}`;
+  return null;
+}
+
+/**
  * The production append. One instance owns the queue for its main process, so
- * two append clicks cannot interleave their fetch/plan/execution phases; the
- * cross-task/cross-process mutual exclusion for a shared repository stays a
- * separate, still-open concern.
+ * two appends — and a resume (`executeResumePlan`) — cannot interleave their
+ * fetch/plan/execution phases. That queue is intra-process only: it does not
+ * cover two tasks (or two processes) racing the same shared repository, which
+ * stays the separate, still-open #6 mutual-exclusion concern.
  */
 export class ProjectTaskAppend {
   private queue: Promise<unknown> = Promise.resolve();
@@ -447,8 +497,25 @@ export class ProjectTaskAppend {
    * `executeAppendPlan` rules the append uses (kind whitelist, per-repo cwd
    * binding, no `-`-prefixed argv), so a recorded-but-worktree-absent repo is
    * actually completed instead of being reported as `pending`/`skipped`.
+   *
+   * Routed through the same per-instance run queue as `append`, so a resume
+   * cannot interleave its plan execution with a concurrent append's
+   * fetch/plan/write in this process. That queue is intra-process only and is
+   * NOT the cross-task/cross-process mutual exclusion for a shared repository.
    */
-  async executeResumePlan(
+  executeResumePlan(
+    input: {
+      taskId: string;
+      planResult: HostTaskResult;
+      /** main-derived source checkouts (`repoDir` -> checkout), from the scan. */
+      mainCheckouts: Readonly<Record<string, string>>;
+    },
+    reattest: () => void = () => undefined,
+  ): Promise<Record<string, unknown>> {
+    return this.run(() => this.executeResumePlanOnce(input, reattest));
+  }
+
+  private async executeResumePlanOnce(
     input: {
       taskId: string;
       planResult: HostTaskResult;
@@ -557,17 +624,38 @@ export class ProjectTaskAppend {
     if (requested.length === 0) throw new Error("invalid-repo: 请至少选择一个要追加的仓库");
     const { appended, skipped } = filterAppendRepos(stored.repos, requested.map((repo) => repo.repoDir));
     const alreadyRecorded = requested.filter((repo) => skipped.includes(repo.repoDir));
-    // A recorded repo counts as SKIPPED only when its worktree really is on
-    // disk. The Host persists `repos` BEFORE main executes anything, so a
-    // failed execution leaves a repo that is recorded with no worktree: that
-    // state must never be reported as an idempotent success. Name the repos
-    // that are recorded but absent and point at the recovery surface main now
-    // EXECUTES (`task/resumeAppend`, see `executeResumePlan`).
+    // A recorded repo counts as SKIPPED only when its folder really is THIS
+    // task's worktree for the pinned commit on the task branch — not merely
+    // when something exists on disk. The Host persists `repos` BEFORE main
+    // executes anything, so a failed execution leaves a recorded repo whose
+    // worktree is absent, and a foreign leftover / non-worktree can occupy the
+    // same path; neither may read as an idempotent success. Name what is
+    // recorded but missing or mismatched and point at the recovery surface
+    // main now EXECUTES (`task/resumeAppend`, see `executeResumePlan`).
+    const recordedSources = new Map((stored.repoSources ?? []).map((source) => [source.repoDir, source]));
     const absent = alreadyRecorded.filter((repo) => !worktreePresent(join(taskDir, repo.repoDir)));
     if (absent.length > 0) {
       const named = absent.map((repo) => `${repo.repoDir}（${repo.name}）`).join("、");
       throw new Error(
         `worktree-missing: 仓库 ${named}已记录但工作副本不存在，请通过「任务准备恢复」继续准备后再追加`,
+      );
+    }
+    const mismatched = alreadyRecorded.flatMap((repo) => {
+      const reason = verifyRecordedWorktree(this.git, {
+        worktreeDir: join(taskDir, repo.repoDir),
+        taskDir,
+        repoDir: repo.repoDir,
+        branch: stored.branch,
+        baseCommit: recordedSources.get(repo.repoDir)?.baseCommit,
+      });
+      return reason === null ? [] : [{ repo, reason }];
+    });
+    if (mismatched.length > 0) {
+      const named = mismatched.map(({ repo }) => `${repo.repoDir}（${repo.name}）`).join("、");
+      const reasons = mismatched.map(({ reason }) => reason).join("；");
+      throw new Error(
+        `worktree-mismatch: 仓库 ${named}已记录但工作副本不是本任务在任务分支 ${stored.branch} 上的固定提交（${reasons}），` +
+          `请人工处理后再通过「任务准备恢复」继续`,
       );
     }
     const skippedRepos = alreadyRecorded.map((repo) => ({ repoDir: repo.repoDir, name: repo.name }));

@@ -171,26 +171,26 @@ describe("#14 protocol bridge (S3)", () => {
 });
 
 describe("#6 append + probe bridge (S3)", () => {
-  it("forwards appendRepos and probeLink payloads without Node access", async () => {
-    const { appendReposThroughShell, probeLinkThroughShell } = await import("../data/shellBridge");
+  it("forwards the production append channel and probeLink payloads without Node access", async () => {
+    const { appendTaskReposThroughShell, probeLinkThroughShell } = await import("../data/shellBridge");
+    const appendTaskRepos = vi.fn(async () => ({
+      ok: true,
+      payload: { taskId: "task-abcdef12", appended: [], skipped: [] },
+    }));
     const taskOp = vi.fn(async () => ({ ok: true, payload: {} }));
-    vi.stubGlobal("window", { pidock: { taskOp } });
+    vi.stubGlobal("window", { pidock: { appendTaskRepos, taskOp } });
     try {
-      const appended = await appendReposThroughShell({
+      const appended = await appendTaskReposThroughShell({
         taskId: "task-abcdef12",
-        repoSelections: [
-          { repoDir: "shipment", remote: "origin", remoteBranch: "main", mainCheckoutDir: "/src/shipment" },
-        ],
-        fetchedCommits: { shipment: "c0ffee1234" },
-        takenPaths: [],
-        branchesInUse: [],
+        repositories: [{ sourceId: "shipment", remote: "origin", remoteBranch: "main" }],
       });
       expect(appended.ok).toBe(true);
-      expect(taskOp).toHaveBeenCalledWith(
-        "task-abcdef12",
-        "task/appendRepos",
-        expect.objectContaining({ fetchedCommits: { shipment: "c0ffee1234" } }),
-      );
+      // The live path is main's `shell/appendTaskRepos`, not the refused legacy
+      // `task/appendRepos` op: the page names ids and refs only.
+      expect(appendTaskRepos).toHaveBeenCalledWith({
+        taskId: "task-abcdef12",
+        repositories: [{ sourceId: "shipment", remote: "origin", remoteBranch: "main" }],
+      });
       const probed = await probeLinkThroughShell({ taskId: "task-abcdef12", sourcePath: "/data/notes" });
       expect(probed.ok).toBe(true);
       expect(taskOp).toHaveBeenCalledWith("task-abcdef12", "task/probeLink", { sourcePath: "/data/notes" });
@@ -291,20 +291,19 @@ describe("#7 service bridge (S4)", () => {
 // renderer that cannot scan omits the keys instead of fabricating `[]`.
 describe("#6 privileged prep scan precedence", () => {
   it("omits the scan keys the page cannot produce for append and resume", async () => {
-    const { appendReposThroughShell, resumeAppendThroughShell } = await import("../data/shellBridge");
+    const { appendTaskReposThroughShell, resumeAppendThroughShell } = await import("../data/shellBridge");
+    const appendTaskRepos = vi.fn(async (_request: { taskId: string; repositories: { sourceId: string; remote: string; remoteBranch: string }[] }) => ({ ok: true, payload: {} }));
     const taskOp = vi.fn(async (_taskId: string, _op: string, _payload: Record<string, unknown>) => ({ ok: true, payload: {} }));
-    vi.stubGlobal("window", { pidock: { taskOp } });
+    vi.stubGlobal("window", { pidock: { appendTaskRepos, taskOp } });
     try {
-      await appendReposThroughShell({
+      await appendTaskReposThroughShell({
         taskId: "task-abcdef12",
-        repoSelections: [
-          { repoDir: "shipment", remote: "origin", remoteBranch: "main", mainCheckoutDir: "/src/shipment" },
-        ],
-        fetchedCommits: { shipment: "c0ffee1234" },
+        repositories: [{ sourceId: "shipment", remote: "origin", remoteBranch: "main" }],
       });
-      const appendPayload = taskOp.mock.calls.at(-1)![2] as Record<string, unknown>;
-      expect(appendPayload).not.toHaveProperty("takenPaths");
-      expect(appendPayload).not.toHaveProperty("branchesInUse");
+      const appendRequest = appendTaskRepos.mock.calls.at(-1)![0] as Record<string, unknown>;
+      expect(appendRequest).not.toHaveProperty("takenPaths");
+      expect(appendRequest).not.toHaveProperty("branchesInUse");
+      expect(appendRequest).not.toHaveProperty("mainCheckouts");
 
       await resumeAppendThroughShell({ taskId: "task-abcdef12" });
       const resumePayload = taskOp.mock.calls.at(-1)![2] as Record<string, unknown>;

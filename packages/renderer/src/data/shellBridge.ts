@@ -260,51 +260,6 @@ export async function provisionTaskThroughShell(input: {
 }
 
 /**
- * [PiDock 03] (#6) append repos to a task through the shell (`host/task` +
- * `task/appendRepos`). LEGACY: main now REFUSES `task/appendRepos` on
- * `shell/taskOp` (no production caller) because it let page code persist an
- * unverified baseline into `repoSources` with no executor in main. It is kept
- * for the Host-direct contract/tests only; production uses
- * `appendTaskReposThroughShell` (`shell/appendTaskRepos`).
- *
- * `takenPaths`/`branchesInUse` stay in the payload for compatibility, but
- * main is the authoritative producer: it derives both from the resolved task
- * folder and each target repo's own source checkout and OVERWRITES whatever
- * the page sent, so a page-supplied scan can neither forge nor disable the
- * path/branch gate the Host keeps requiring.
- */
-export async function appendReposThroughShell(input: {
-  taskId: string;
-  repoSelections: { repoDir: string; remote: string; remoteBranch: string; mainCheckoutDir: string }[];
-  fetchedCommits: Record<string, string>;
-  branch?: string;
-  mainCheckouts?: Record<string, string>;
-  /**
-   * Caller-supplied conflict inputs. Main ignores them for the gate on the
-   * shell route: it derives `takenPaths`/`branchesInUse` (and the source
-   * checkouts) itself, so the renderer must never fabricate an empty `[]`
-   * scan — `[]` would be overwritten, not trusted. Omit them when the caller
-   * cannot scan.
-   */
-  takenPaths?: string[];
-  branchesInUse?: string[];
-}): Promise<ShellTaskOpResult> {
-  const payload: Record<string, unknown> = {
-    repoSelections: input.repoSelections,
-    fetchedCommits: input.fetchedCommits,
-  };
-  if (input.takenPaths !== undefined) payload["takenPaths"] = input.takenPaths;
-  if (input.branchesInUse !== undefined) payload["branchesInUse"] = input.branchesInUse;
-  if (input.branch !== undefined) payload["branch"] = input.branch;
-  if (input.mainCheckouts !== undefined) payload["mainCheckouts"] = input.mainCheckouts;
-  try {
-    return await shellTaskOp(input.taskId, "task/appendRepos", payload);
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) };
-  }
-}
-
-/**
  * [PiDock 03] (#6) append repositories to an EXISTING task through the shell
  * (`shell/appendTaskRepos`). The page supplies project repository ids, remote
  * names and baseline branches; main resolves each repository's source checkout

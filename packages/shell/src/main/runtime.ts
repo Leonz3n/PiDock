@@ -1536,6 +1536,14 @@ export function registerIpc(
           "shell/taskOp 不再接受 task/appendRepos，请使用 shell/appendTaskRepos（ref #6）",
         );
       }
+      // [PiDock 03] (#6) a resume needs its executor BEFORE the Host op runs:
+      // `task/resumeAppend` writes the record, so checking after the route
+      // would leave a record update with no executor in main to run the plan
+      // it returns. Refuse first; the scan below then only runs for a resume
+      // main can actually complete.
+      if (op === "task/resumeAppend" && !append) {
+        return { ok: false as const, error: "真实任务准备恢复尚未接入" };
+      }
       if (pendingNavigation.has(sender.webContentsId) || subscriptions.get(sender.webContentsId)?.taskId !== taskId) revoke(sender.webContentsId);
       // A persisted Provider selection is reinstalled on first contact with the
       // task, before any turn op can run against an unconfigured context. The
@@ -1584,9 +1592,10 @@ export function registerIpc(
         // freshly re-read per-repo status. A recorded-but-worktree-absent repo
         // is therefore actually completed, never reported as success by plan.
         if (op === "task/resumeAppend") {
-          if (!append) return { ok: false as const, error: "真实任务准备恢复尚未接入" };
           const mainCheckouts = (opPayload["mainCheckouts"] ?? {}) as Record<string, string>;
-          const payload = await append.executeResumePlan(
+          // The executor's presence was proven before routing (see the
+          // `task/resumeAppend` guard above), so it exists here.
+          const payload = await append!.executeResumePlan(
             { taskId, planResult: result, mainCheckouts },
             () => { registry.requireShellSender(event); },
           );

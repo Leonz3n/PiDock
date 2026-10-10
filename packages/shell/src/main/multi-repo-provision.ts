@@ -35,6 +35,14 @@ import {
   type ProvisionPlan,
 } from "./task-provision.js";
 
+/**
+ * A remote name a repository selection may name: one safe token, never a
+ * path, an option or something git would read as a ref. Exported once so the
+ * create flow and the production append cannot drift on the spelling of
+ * "this is a valid remote name".
+ */
+export const REMOTE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
 export type MultiRepoErrorCode =
   | "empty-selection"
   | "duplicate-repo"
