@@ -22,6 +22,7 @@ import { TaskTerminalRegistry, planTerminal, type TerminalPlan } from "../main/t
 import { workspaceRoots } from "../main/workspace-files.js";
 import { inspectNodePtyPrebuild, prepareNodePtyPrebuild } from "./node-pty-preflight.js";
 import { descendantPids, resolvePtyRuntime, TerminalPtyDriver, workerEntryUrl } from "./terminal-pty-driver.js";
+import type { TerminalDriver } from "./terminal-execution.js";
 import { resolveProgram, TaskTerminalSessions } from "./terminal-sessions.js";
 
 const supported = process.platform === "darwin" && process.arch === "arm64" && existsSync(fileURLToPath(workerEntryUrl())) && (() => {
@@ -61,10 +62,33 @@ async function until(predicate: () => boolean, timeoutMs: number, label: string)
   }
 }
 
+/**
+ * Pids whose command line is exactly `sleep <marker>`: a terminal this suite
+ * started with `exec sleep <marker>` is addressable even when a bug left it
+ * without a recorded pid, so a failed containment can still be cleaned up
+ * instead of outliving the run. The marker is a unique duration, never a path.
+ */
+function markerPids(marker: number): number[] {
+  try {
+    return execFileSync("/bin/ps", ["-eo", "pid=,args="], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })
+      .split("\n")
+      .filter((line) => line.trim().endsWith(`sleep ${marker}`))
+      .map((line) => Number.parseInt(line.trim(), 10))
+      .filter((pid) => Number.isInteger(pid) && pid > 1);
+  } catch {
+    return [];
+  }
+}
+
 const fixtures: Fixture[] = [];
 afterEach(async () => {
   for (const fixture of fixtures.splice(0)) {
     await fixture.cleanup();
+    for (const pid of fixture.pids.filter(alive)) {
+      try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
+    }
+    // A containment failure is asserted (never hidden), and the stray is
+    // terminated right after so the suite cannot outlive its own processes.
     for (const pid of fixture.pids) expect(alive(pid), `stray terminal pid ${pid}`).toBe(false);
   }
 });
@@ -119,6 +143,11 @@ class Fixture {
     return planFor(this.taskId, this.taskDir, instanceId, program, args);
   }
 
+  /** Record every pid this fixture spawned, so the afterEach can prove it gone. */
+  track(...pids: (number | undefined)[]): void {
+    for (const pid of pids) if (pid !== undefined && pid > 1 && !this.pids.includes(pid)) this.pids.push(pid);
+  }
+
   history(instanceId = "term-1"): string {
     return this.registry.history(instanceId).map((entry) => entry.line).join("\n");
   }
@@ -128,8 +157,17 @@ class Fixture {
     this.registry.register(plan);
     const started = await this.sessions.start({ plan, sessionId: null });
     const instance = this.registry.get(instanceId);
-    if (instance?.processId !== undefined) this.pids.push(instance.processId);
+    this.track(instance?.processId);
     return { plan, started, instance };
+  }
+
+  /** A second start for an instance this fixture already used: register then spawn. */
+  async restart(instanceId = "term-1", program = "sh", args: string[] = []) {
+    const plan = this.plan(instanceId, program, args);
+    this.registry.register(plan);
+    const started = await this.sessions.start({ plan, sessionId: null });
+    this.track(this.registry.get(instanceId)?.processId);
+    return { plan, started, instance: this.registry.get(instanceId) };
   }
 
   async cleanup(): Promise<void> {
@@ -268,6 +306,80 @@ realIt("fails closed on a missing or mismatching recorded identity without signa
   }
   expect(await f.sessions.stop("term-1", "user-request")).toMatchObject({ ok: true });
   await until(() => !alive(realPid), 5000, "restored stop");
+});
+
+it("reopens an exited instance when a start records a fresh process identity", async () => {
+  // Identity finding: a start that follows the instance's exit must record the
+  // identity it really spawned. Skipping that left the record on the previous
+  // run's `exited` state with a dead pid, so the next stop returned success
+  // without signalling the live shell.
+  const taskDir = realpathSync(mkdtempSync(join(tmpdir(), "pidock-term-restart-")));
+  try {
+    const registry = new TaskTerminalRegistry("task-restart");
+    let spawned: { processId: number; processGroupId: number } | undefined;
+    let spawns = 0;
+    const driver: TerminalDriver = {
+      spawn: async () => {
+        spawns += 1;
+        spawned = { processId: 4000 + spawns, processGroupId: 4000 + spawns };
+        return { status: "started", process: { ...spawned } };
+      },
+      input: async () => {},
+      resize: async () => {},
+      stop: async (identity) => ({ ...identity, status: "tree-drained", exitCode: 0 }),
+      snapshot: () => ({ status: "running", ...(spawned ? { process: { ...spawned } } : {}) }),
+    };
+    const sessions = new TaskTerminalSessions(registry, driver);
+    const plan = planFor("task-restart", taskDir, "term-1", "sh");
+    registry.register(plan);
+    expect(await sessions.start({ plan, sessionId: null })).toMatchObject({ ok: true });
+    expect(registry.get("term-1")).toMatchObject({ lifecycle: "running", processId: 4001 });
+    expect(await sessions.stop("term-1", "user-request")).toMatchObject({ ok: true });
+    expect(registry.get("term-1")!.lifecycle).toBe("exited");
+
+    registry.register(plan);
+    const restarted = await sessions.start({ plan, sessionId: null });
+    expect(restarted).toMatchObject({ ok: true });
+    expect(registry.get("term-1")).toMatchObject({ lifecycle: "running", processId: 4002, processGroupId: 4002 });
+    // The reopened instance is really addressable again, and its stop is a real
+    // stop rather than the idempotent success of an exited record.
+    expect(await sessions.input("term-1", "echo again\r")).toMatchObject({ ok: true });
+    const stopped = await sessions.stop("term-1", "user-request");
+    expect(stopped).toMatchObject({ ok: true });
+    expect(registry.get("term-1")!.lifecycle).toBe("exited");
+  } finally {
+    rmSync(taskDir, { recursive: true, force: true });
+  }
+});
+
+realIt("restarts an exited instance with a fresh shell and still contains it", { timeout: 30_000 }, async () => {
+  const marker = 3271;
+  const f = new Fixture("restart");
+  try {
+    const { instance } = await f.start("term-1", "sh", ["-c", `exec sleep ${marker}`]);
+    const firstPid = instance!.processId!;
+    expect(await f.sessions.stop("term-1", "user-request")).toMatchObject({ ok: true });
+    await until(() => !alive(firstPid), 5000, "first shell to exit");
+
+    const { started, instance: restarted } = await f.restart("term-1", "sh", ["-c", `exec sleep ${marker}`]);
+    expect(started.ok).toBe(true);
+    expect(restarted?.lifecycle).toBe("running");
+    expect(restarted?.processId).toBeGreaterThan(1);
+    expect(restarted?.processId).not.toBe(firstPid);
+    expect(alive(restarted!.processId!)).toBe(true);
+    expect(pgidOf(restarted!.processId!)).toBe(restarted!.processGroupId);
+
+    const stopped = await f.sessions.stop("term-1", "user-request");
+    expect(stopped).toMatchObject({ ok: true });
+    await until(() => !alive(restarted!.processId!), 5000, "restarted shell to stop");
+  } finally {
+    // The restarted run must be terminated even when the assertions above fail
+    // before its stop: the marker names exactly this suite's own sleeps.
+    for (const pid of markerPids(marker)) {
+      try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
+    }
+    await until(() => markerPids(marker).length === 0, 5000, "marker processes to end");
+  }
 });
 
 it("derives the descendant set from one process-table snapshot", () => {

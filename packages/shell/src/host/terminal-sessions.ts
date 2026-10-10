@@ -140,15 +140,26 @@ export class TaskTerminalSessions {
       this.registry.remove(instanceId);
       return { ok: false, error: "terminal-not-started: 本机无法启动真实 PTY（运行时或预检不可用）" };
     }
-    if (spawned.process && this.registry.get(instanceId)?.lifecycle === "running") {
+    if (spawned.process) {
+      // The identity the spawner observed is recorded even when the instance
+      // still carries the previous run's `exited` state: a start that follows an
+      // exit is a new run, so the exit fields are cleared with it. Recording
+      // only on `running` (and never reopening) left a live shell with no
+      // recorded pid, which made the next stop a false success.
+      const record = this.registry.get(instanceId);
       this.registry.markProcess(instanceId, { processId: spawned.process.processId, processGroupId: spawned.process.processGroupId });
+      if (record?.lifecycle === "exited") this.registry.markRunning(instanceId);
     }
     const instance = this.registry.get(instanceId);
     if (!instance) {
       this.active.delete(instanceId);
       return { ok: false, error: `unknown-instance: 本任务没有终端实例 ${instanceId}` };
     }
-    if (spawned.status !== "started") return { ok: false, error: "terminal-start-unconfirmed: 无法确认终端进程已启动" };
+    // A started spawn without an observed identity cannot be contained (there is
+    // no pid to stop) and must never be reported as a successful start.
+    if (spawned.status !== "started" || spawned.process === undefined) {
+      return { ok: false, error: "terminal-start-unconfirmed: 无法确认终端进程已启动" };
+    }
     this.generations.set(instanceId, generation);
     return { ok: true, instance };
   }
@@ -162,10 +173,13 @@ export class TaskTerminalSessions {
   async stop(instanceId: string, reason: string): Promise<TerminalSessionResult<{ instance: TerminalInstanceRecord }>> {
     const record = this.registry.get(instanceId);
     if (!record) return { ok: false, error: `unknown-instance: 本任务没有终端实例 ${instanceId}` };
-    if (record.lifecycle === "exited") return { ok: true, instance: record };
+    const session = this.active.get(instanceId);
+    // An exited instance with no live session of this Host is an idempotent stop.
+    // While this Host still holds a live session, `exited` is not proof: the
+    // retained identity is checked and the real process is contained below.
+    if (record.lifecycle === "exited" && !session) return { ok: true, instance: record };
     const scope = this.registry.stopScope(instanceId);
     if (!scope.ok) return { ok: false, error: scope.error };
-    const session = this.active.get(instanceId);
     if (!session) {
       return { ok: false, error: `unknown-process: 终端 ${instanceId} 没有本 Host 记录的运行会话，拒绝按记录进程号发送信号` };
     }
