@@ -315,4 +315,13 @@ describe("Desktop append surface", () => {
     expect(screen.getByRole("button", { name: /追加目录/ })).toBeDisabled();
     expect(appendTaskRepos).not.toHaveBeenCalled();
   });
+
+  it("states the real ordering instead of claiming one all-or-nothing append step", async () => {
+    render(<DesktopTaskSources taskId={taskId} bridge={withBridge(bridge())} onClose={vi.fn()} />);
+    const dialog = await screen.findByRole("dialog");
+    // The links are created and recorded BEFORE the repo worktrees are made,
+    // so a worktree failure leaves them behind; the copy must say that.
+    expect(dialog.textContent).toContain("普通目录链接会在这之前先接入并登记");
+    expect(dialog.textContent).toContain("已登记的链接与已固定的基线会保留");
+  });
 });

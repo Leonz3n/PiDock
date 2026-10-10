@@ -369,10 +369,11 @@ function TaskConversation({ taskId, name, roots, association, onBack, onOpenProv
                 <TooltipContent>{`${item.label}未接线：${unwiredReason}`}</TooltipContent>
               </Tooltip>;
           })}
-          {/* [PiDock 03] (#6) the production 'add repositories' entry: only a
-              shell that really exposes the append channel shows it. */}
+          {/* [PiDock 03] (#6) the production append entry: repositories AND
+              plain directories. Only a shell that really exposes the append
+              channel shows it. */}
           {typeof bridge?.appendTaskRepos === "function" ? (
-            <Button type="button" onClick={() => setSourcesOpen(true)} aria-label="追加仓库" title="从项目登记中选择仓库并追加到本任务"><Icon name="plus" /><span className="below-narrow:hidden">追加仓库</span></Button>
+            <Button type="button" onClick={() => setSourcesOpen(true)} aria-label="追加仓库或目录" title="从项目登记中选择仓库或普通目录并追加到本任务"><Icon name="plus" /><span className="below-narrow:hidden">追加仓库或目录</span></Button>
           ) : null}
           <div className="relative">
             <Button type="button" variant="ghost" size="icon-sm" aria-label="任务操作" aria-expanded={taskMenu} onClick={() => setTaskMenu((open) => !open)}><Icon name="more" /></Button>

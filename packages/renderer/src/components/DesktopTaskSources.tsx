@@ -7,15 +7,18 @@ import { appendTaskReposThroughShell, prepareStatusThroughShell, shellTaskPrepar
 import { TaskPrepareRecovery } from "./TaskPrepareRecovery";
 
 /**
- * Desktop 'add repositories' entry for an EXISTING task ([PiDock 03] #6).
+ * Desktop append surface for an EXISTING task ([PiDock 03] #6): repositories
+ * AND plain directories.
  *
  * This is the production surface for appending sources: it drives
  * `shell/appendTaskRepos`, where main resolves each repository's source
  * checkout from the project registry, fetches and pins the exact remote commit
  * in that checkout, derives the required conflict scan itself, routes
- * `task/appendRepos` and executes the returned plan with real git. The page
- * therefore names project repository ids, remote names and baseline branches
- * only — it holds no path, no git and no scan.
+ * `task/appendRepos` and executes the returned plan with real git. Plain
+ * directories are resolved from the same registry and appended as shared
+ * links (`task/appendDirs`, `sharedWriteConfirmed` required). The page
+ * therefore names project repository ids, remote names, baseline branches and
+ * directory ids only — it holds no path, no git and no scan.
  *
  * Honesty rules kept here:
  * - the project and its repositories come from the main-owned registry read
@@ -24,6 +27,10 @@ import { TaskPrepareRecovery } from "./TaskPrepareRecovery";
  * - a failure keeps the selection and offers retry, and shows the real named
  *   refusal (fetch-failed / path-taken / branch-in-use / repo-unusable);
  * - the appended list shows the pinned full commit and the created worktree;
+ * - the ordering is stated, not implied: a plain-directory link is created and
+ *   recorded BEFORE the repo worktrees are made, so the copy never claims the
+ *   whole append is one all-or-nothing step (a worktree failure leaves the
+ *   recorded links behind, and re-appending skips them);
  * - a partial/failed append points at the ONE existing recovery surface
  *   (`TaskPrepareRecovery`, `task/prepareStatus` + `task/resumeAppend`), whose
  *   resume MAIN executes through the same validated append-plan rules, so an
@@ -144,11 +151,13 @@ export function DesktopTaskSources({
     }
   };
   return (
-    <div role="dialog" aria-modal="true" aria-label="追加仓库" className="w-full max-w-[560px] rounded-[7px] border border-line bg-paper p-5 shadow-lg">
-      <h2 className="text-base font-semibold">追加仓库</h2>
+    <div role="dialog" aria-modal="true" aria-label="追加仓库或目录" className="w-full max-w-[560px] rounded-[7px] border border-line bg-paper p-5 shadow-lg">
+      <h2 className="text-base font-semibold">追加仓库或目录</h2>
       <p className="mt-2 text-xs text-muted">
-        本次追加会先在各仓库自己的检出里获取所选远程分支，全部获取成功后才按逐仓库固定的完整提交创建独立工作副本；
-        已有仓库、基线、链接与运行状态保持不变。
+        本次追加先在各仓库自己的检出里获取所选远程分支，全部获取成功后才固定逐仓库的完整提交；
+        普通目录链接会在这之前先接入并登记，随后才创建仓库工作副本。
+        因此若某个仓库的工作副本创建失败，已登记的链接与已固定的基线会保留（重新追加会跳过它们，不会重复创建），
+        未完成的仓库请通过下方的任务准备恢复继续；已有仓库、基线与运行状态保持不变。
       </p>
       {projectError ? <p role="alert" className="mt-3 border border-[#e0b4b4] bg-[#fdf3f3] p-2 text-xs text-[#ad4545]">{projectError}</p> : null}
       {project && project.repositories.length === 0 ? (
