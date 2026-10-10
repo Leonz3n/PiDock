@@ -18,7 +18,9 @@ const roots = [{ label: "默认任务根", state: "ready" }];
 /** Exactly what the append channel accepts: ids and refs, never a path. */
 interface AppendRequest {
   taskId: string;
-  repositories: { sourceId: string; remote: string; remoteBranch: string }[];
+  repositories?: { sourceId: string; remote: string; remoteBranch: string }[];
+  directoryIds?: string[];
+  sharedWriteConfirmed?: boolean;
 }
 
 /** The desktop shell exposes exactly one bridge: `window.pidock`. */
@@ -52,7 +54,7 @@ afterEach(() => {
 describe("Desktop append surface", () => {
   it("appends through the production channel with project repository ids only, and reports the pinned commit and worktree", async () => {
     const appendTaskRepos = vi.fn(async (request: AppendRequest) => {
-      const [selection] = request.repositories;
+      const [selection] = request.repositories ?? [];
       return {
         ok: true,
         payload: {

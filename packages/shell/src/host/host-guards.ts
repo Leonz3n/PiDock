@@ -426,14 +426,56 @@ export function validateHostTaskOp(
       }
       return { ok: true };
     }
-    for (const key of ["name", "remoteBranch", "fetchedCommit"] as const) {
-      const value = payload[key];
-      if (typeof value !== "string" || value.trim().length === 0) {
-        return {
-          ok: false,
-          error: `invalid-payload: task/provision.${key} must be a non-empty string`,
-        };
+    const hasRepos = (Array.isArray(payload["repoSelections"]) && payload["repoSelections"].length > 0) ||
+      (Array.isArray(payload["repos"]) && payload["repos"].length > 0);
+    const hasPlainDirs = Array.isArray(payload["plainDirs"]) && payload["plainDirs"].length > 0;
+    const name = payload["name"];
+    if (typeof name !== "string" || name.trim().length === 0) {
+      return {
+        ok: false,
+        error: "invalid-payload: task/provision.name must be a non-empty string",
+      };
+    }
+    if (hasRepos || !hasPlainDirs) {
+      for (const key of ["remoteBranch", "fetchedCommit"] as const) {
+        const value = payload[key];
+        if (typeof value !== "string" || value.trim().length === 0) {
+          return {
+            ok: false,
+            error: `invalid-payload: task/provision.${key} must be a non-empty string`,
+          };
+        }
       }
+    } else {
+      for (const key of ["remoteBranch", "fetchedCommit"] as const) {
+        const value = payload[key];
+        if (value !== undefined && typeof value !== "string") {
+          return {
+            ok: false,
+            error: `invalid-payload: task/provision.${key} must be a string`,
+          };
+        }
+      }
+    }
+    return { ok: true };
+  }
+  // #6 plain-dir append op: guarded payload shape
+  if (op === "task/appendDirs") {
+    if (!isRecord(payload)) return { ok: false, error: "invalid-payload: task/appendDirs requires a payload object" };
+    const plainDirs = payload["plainDirs"];
+    if (
+      !Array.isArray(plainDirs) ||
+      plainDirs.length === 0 ||
+      !plainDirs.every(
+        (entry) =>
+          typeof entry === "object" &&
+          entry !== null &&
+          !Array.isArray(entry) &&
+          typeof (entry as Record<string, unknown>)["directoryId"] === "string" &&
+          typeof (entry as Record<string, unknown>)["sourcePath"] === "string",
+      )
+    ) {
+      return { ok: false, error: "invalid-payload: task/appendDirs.plainDirs must be an array of {directoryId, sourcePath}" };
     }
     return { ok: true };
   }

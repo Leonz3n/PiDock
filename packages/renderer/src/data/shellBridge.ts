@@ -30,7 +30,12 @@ export interface PidockBridge {
    * resolves every checkout from the project registry, fetches and pins the
    * exact commits, derives the conflict scan and executes the returned plan.
    */
-  appendTaskRepos?: (request: { taskId: string; repositories: { sourceId: string; remote: string; remoteBranch: string }[] }) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
+  appendTaskRepos?: (request: {
+    taskId: string;
+    repositories?: { sourceId: string; remote: string; remoteBranch: string }[];
+    directoryIds?: string[];
+    sharedWriteConfirmed?: boolean;
+  }) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
   /**
    * [PiDock 02m] (#46) Provider metadata operations. The renderer names a task,
    * a profile, and profile metadata only: the credential value is resolved in
@@ -273,14 +278,21 @@ export async function provisionTaskThroughShell(input: {
  */
 export async function appendTaskReposThroughShell(input: {
   taskId: string;
-  repositories: { sourceId: string; remote: string; remoteBranch: string }[];
+  repositories?: { sourceId: string; remote: string; remoteBranch: string }[];
+  directoryIds?: string[];
+  sharedWriteConfirmed?: boolean;
 }): Promise<ShellTaskOpResult> {
   const bridge = shellBridge();
   if (typeof bridge?.appendTaskRepos !== "function") {
     return { ok: false, error: "桌面壳真实任务追加接口不可用，请重启应用" };
   }
   try {
-    const result = await bridge.appendTaskRepos({ taskId: input.taskId, repositories: input.repositories });
+    const result = await bridge.appendTaskRepos({
+      taskId: input.taskId,
+      ...(input.repositories !== undefined ? { repositories: input.repositories } : {}),
+      ...(input.directoryIds !== undefined ? { directoryIds: input.directoryIds } : {}),
+      ...(input.sharedWriteConfirmed !== undefined ? { sharedWriteConfirmed: input.sharedWriteConfirmed } : {}),
+    });
     if (!result || typeof result !== "object" || typeof result.ok !== "boolean") {
       return { ok: false, error: "invalid-payload: 任务追加返回异常，请重试" };
     }

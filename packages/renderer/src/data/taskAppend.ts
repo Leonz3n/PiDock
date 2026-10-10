@@ -22,10 +22,26 @@ export interface AppendedRepoSkipView {
   name: string;
 }
 
+export interface AppendedDirView {
+  directoryId: string;
+  name: string;
+  linkName: string;
+  sourcePath: string;
+  linkPath: string;
+}
+
+export interface AppendedDirSkipView {
+  directoryId: string;
+  name: string;
+  linkName: string;
+}
+
 export interface AppendReposView {
   appended: AppendedRepoView[];
   /** Repositories the task already had: skipped, nothing created twice. */
   skipped: AppendedRepoSkipView[];
+  appendedDirs?: AppendedDirView[];
+  skippedDirs?: AppendedDirSkipView[];
 }
 
 const COMMIT = /^[0-9a-f]{40}$/;
@@ -71,5 +87,43 @@ export function readAppendReposView(payload: unknown, taskId: string): AppendRep
     if (!repoDir || !name) return null;
     skipped.push({ repoDir, name });
   }
-  return { appended, skipped };
+
+  let appendedDirs: AppendedDirView[] | undefined;
+  const rawAppendedDirs = record["appendedDirs"];
+  if (Array.isArray(rawAppendedDirs)) {
+    appendedDirs = [];
+    for (const entry of rawAppendedDirs) {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
+      const row = entry as Record<string, unknown>;
+      const directoryId = text(row["directoryId"]);
+      const name = text(row["name"]);
+      const linkName = text(row["linkName"]);
+      const sourcePath = text(row["sourcePath"]);
+      const linkPath = text(row["linkPath"]);
+      if (!directoryId || !name || !linkName || !sourcePath || !linkPath) return null;
+      appendedDirs.push({ directoryId, name, linkName, sourcePath, linkPath });
+    }
+  }
+
+  let skippedDirs: AppendedDirSkipView[] | undefined;
+  const rawSkippedDirs = record["skippedDirs"];
+  if (Array.isArray(rawSkippedDirs)) {
+    skippedDirs = [];
+    for (const entry of rawSkippedDirs) {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
+      const row = entry as Record<string, unknown>;
+      const directoryId = text(row["directoryId"]);
+      const name = text(row["name"]);
+      const linkName = text(row["linkName"]);
+      if (!directoryId || !name || !linkName) return null;
+      skippedDirs.push({ directoryId, name, linkName });
+    }
+  }
+
+  return {
+    appended,
+    skipped,
+    ...(appendedDirs !== undefined ? { appendedDirs } : {}),
+    ...(skippedDirs !== undefined ? { skippedDirs } : {}),
+  };
 }
