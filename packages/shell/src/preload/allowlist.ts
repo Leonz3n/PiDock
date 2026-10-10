@@ -18,6 +18,7 @@ export const ALLOWED_INVOKE_CHANNELS = [
   "shell/projectOp",
   "shell/serviceCatalogOp",
   "shell/createTask",
+  "shell/appendTaskRepos",
   "shell/providerOp",
   "shell/taskOp",
   "shell/sdkTurn",

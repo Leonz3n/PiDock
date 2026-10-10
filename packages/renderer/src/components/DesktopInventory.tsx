@@ -369,7 +369,7 @@ export function DesktopInventory() {
     availableTasks={shellTasks}
     onOpenTask={(taskId) => navigate({ view: "task", taskId })}
   />);
-  if (activeTask) return shell(<DesktopConversation key={activeTask.id} taskId={activeTask.id} name={activeTask.name} roots={activeTask.roots} association={activeTask.association} onBack={() => { entryEpoch.current++; setActiveTask(null); void load(); }} onOpenProviders={() => navigate({ view: "providers" })} onArchived={() => { navigate({ view: "archive" }); void load(); }} />);
+  if (activeTask) return shell(<DesktopConversation key={activeTask.id} taskId={activeTask.id} name={activeTask.name} roots={activeTask.roots} association={activeTask.association} onBack={() => { entryEpoch.current++; setActiveTask(null); void load(); }} onOpenProviders={() => navigate({ view: "providers" })} onArchived={() => { navigate({ view: "archive" }); void load(); }} onSourcesChanged={() => { void load(true); }} />);
   if (unwired === "capabilities") return shell(<DesktopCapabilitiesPage />);
   if (unwired === "settings") return shell(<DesktopSettingsPage />);
   if (unwired) return shell(<DesktopUnwired name={DESKTOP_LABELS[unwired]} onBack={() => navigate({ view: "unassigned" })} />);

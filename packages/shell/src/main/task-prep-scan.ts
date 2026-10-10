@@ -33,12 +33,19 @@
  * gate. Below that boundary the op is unchanged: the Host keeps requiring
  * both lists and a caller that reaches the Host directly (main-internal
  * executor, tests) still supplies its own scan.
+ *
+ * Main's own production append (`ProjectTaskAppend`) sends the op through
+ * `prepareAppendHostPayload` below, which derives the scan itself and has no
+ * parameter for a caller-supplied list: the append cannot be wired without
+ * the gate, and the renderer route keeps a single derivation too.
  */
 
 import { createNodeRepoProbe, type RepoProbe } from "../host/repo-identity.js";
 import { isPathInsideTask } from "../host/task-host.js";
-import type { TaskDiskRecord } from "../host/task-store.js";
-import { buildRepoChildName } from "./multi-repo-provision.js";
+import { readTaskRecordOnDisk, type TaskDiskRecord } from "../host/task-store.js";
+import { buildRepoChildName, type RepoSelection } from "./multi-repo-provision.js";
+import type { ProjectRegistry } from "./project-registry.js";
+import type { TaskRootIndex } from "./task-root-index.js";
 
 /** Named refusal for a scan that cannot be produced (never a `[]` fallback). */
 export const PREP_SCAN_UNAVAILABLE = "task-scan-unavailable";
@@ -262,6 +269,93 @@ export interface DerivedPrepInputs {
   branchesInUse: string[];
   /** Source checkout per repoDir, for the op's git ops (main-owned). */
   mainCheckouts: Record<string, string>;
+}
+
+/** One project repository a task may select, with its display name. */
+export interface TaskRepositorySource {
+  id: string;
+  name: string;
+  path: string;
+}
+
+/**
+ * Main-owned authority for the privileged scan, plus the named source
+ * resolution the production append needs. One spelling for "the repositories
+ * of this task's confirmed project association, or a named refusal": the
+ * renderer route and main's own append operation both build it here, so a task
+ * without a confirmable association can never be scanned (or appended to) by
+ * guessing.
+ */
+export interface PrepScanAuthorityWithSources extends PrepScanAuthority {
+  repositorySources(taskId: string): readonly TaskRepositorySource[];
+}
+
+export function createPrepScanAuthority(
+  projects: ProjectRegistry | undefined,
+  roots: TaskRootIndex | undefined,
+): PrepScanAuthorityWithSources {
+  const missing: () => never = () => {
+    throw new PrepScanUnavailableError("主进程缺少项目登记或任务根索引，无法定位目标仓库的来源检出");
+  };
+  const repositorySources = (taskId: string): readonly TaskRepositorySource[] => {
+    const registered = projects;
+    const index = roots;
+    if (!registered || !index) missing();
+    const association = registered.association(taskId, index);
+    if (association.state !== "assigned" || association.projectId === null) {
+      throw new PrepScanUnavailableError(
+        `任务与项目没有可确认的关联（${association.state}），无法定位目标仓库的来源检出`,
+      );
+    }
+    const project = registered.get(association.projectId);
+    if (!project) throw new PrepScanUnavailableError("任务所属项目不可读取，无法定位目标仓库的来源检出");
+    return project.repositories;
+  };
+  return {
+    resolveTaskDir: (taskId) => (roots ? roots.resolve(taskId) : missing()),
+    readRecord: (taskDir) => readTaskRecordOnDisk(taskDir),
+    projectRepositories: (taskId) => repositorySources(taskId),
+    repositorySources,
+  };
+}
+
+/**
+ * The `task/appendRepos` payload main's OWN append operation sends to the
+ * Host. The conflict scan is derived HERE from main-owned state, and the
+ * function takes no `takenPaths`/`branchesInUse` parameter at all: a caller
+ * cannot supply, omit or forge the gate, so no path that reaches the Host can
+ * forget the scan (the renderer route derives it the same way, see
+ * `deriveRendererPrepPayload`).
+ */
+export function prepareAppendHostPayload(
+  input: {
+    taskId: string;
+    selections: readonly RepoSelection[];
+    fetchedCommits: Readonly<Record<string, string>>;
+    /** The task branch the plan must create (the record's branch). */
+    branch: string;
+  },
+  authority: PrepScanAuthorityWithSources,
+  deps: PrepScanDeps,
+): { payload: Record<string, unknown>; prep: DerivedPrepInputs } {
+  const prep = derivePrepInputs(
+    { taskId: input.taskId, repoDirs: input.selections.map((selection) => selection.repoDir) },
+    authority,
+    deps,
+  );
+  return {
+    prep,
+    payload: {
+      repoSelections: input.selections.map((selection) => ({ ...selection })),
+      fetchedCommits: { ...input.fetchedCommits },
+      // The source checkouts and the conflict scan are main-derived; the
+      // Host overwrites nothing here, it just requires them.
+      mainCheckouts: { ...prep.mainCheckouts },
+      takenPaths: prep.takenPaths,
+      branchesInUse: prep.branchesInUse,
+      branch: input.branch,
+    },
+  };
 }
 
 /**

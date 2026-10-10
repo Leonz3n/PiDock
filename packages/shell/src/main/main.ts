@@ -29,6 +29,8 @@ import { ServiceCatalog, serviceCatalogAuthority } from "./service-catalog.js";
 import { ProviderProfileStore } from "./provider-profile-store.js";
 import { ProviderWiring } from "./provider-ipc.js";
 import { CreationIntentStore, ProjectTaskCreation } from "./project-task-creation.js";
+import { createNodeAppendGit, ProjectTaskAppend } from "./task-append.js";
+import { createNodePrepScanDeps, createPrepScanAuthority } from "./task-prep-scan.js";
 import {
   runTaskBrowserSmoke,
   type TaskBrowserSmokePhase,
@@ -165,6 +167,16 @@ async function run(): Promise<void> {
   const projects = new ProjectRegistry(app.getPath("userData"));
   const catalog = new ServiceCatalog(app.getPath("userData"), serviceCatalogAuthority(taskRoots, projects));
   const creation = new ProjectTaskCreation(new CreationIntentStore(app.getPath("userData")), projects, taskRoots, tasks, defaultTasksRoot());
+  // [PiDock 03] (#6) production append: fetch/pin each selected repository in
+  // its own source checkout, derive the conflict scan, route `task/appendRepos`
+  // and execute the returned plan with real git. The registry is the only
+  // source of repository paths, so the page never supplies one.
+  const append = new ProjectTaskAppend(
+    tasks,
+    createPrepScanAuthority(projects, taskRoots),
+    createNodePrepScanDeps(),
+    createNodeAppendGit(),
+  );
   // [PiDock 02m] (#46) explicit Provider selection. Metadata lives in userData;
   // the credential value is read from the profile's PIDOCK_PROVIDER_* reference
   // at install time and is handed only to the task's isolated SDK context.
@@ -177,7 +189,7 @@ async function run(): Promise<void> {
     if (tasks) { await tasks.routeTaskOp(request); return; }
     await client.task(request);
   });
-  registerIpc(client, views.registry, tasks, projects, taskRoots, undefined, creation, providers, catalog);
+  registerIpc(client, views.registry, tasks, projects, taskRoots, undefined, creation, providers, catalog, undefined, append);
   // [PiDock 18] (#20) the Host-borne scheduler: main owns the Host processes, so
   // the driver asks each *running* Host to evaluate its own due triggers. It
   // never forks a Host and never overlaps its own ticks; stop it wherever the

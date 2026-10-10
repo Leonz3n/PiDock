@@ -29,8 +29,8 @@ import {
 } from "./task-provision.js";
 import { readTaskRecordOnDisk } from "../host/task-store.js";
 import {
-  PrepScanUnavailableError,
   createNodePrepScanDeps,
+  createPrepScanAuthority,
   deriveRendererPrepPayload,
   needsPrepScan,
   type PrepScanAuthority,
@@ -47,6 +47,8 @@ import { performProjectOperation } from "./project-ipc.js";
 import type { ProviderWiring } from "./provider-ipc.js";
 import { ProjectTaskCreation } from "./project-task-creation.js";
 import { performCreationOperation } from "./project-task-ipc.js";
+import type { ProjectTaskAppend } from "./task-append.js";
+import { performAppendOperation } from "./project-append-ipc.js";
 import type { BrowserPerformResult, BrowserRequestParams, HostTaskOp, HostTaskResult, TaskOpOrigin } from "../rpc/protocol.js";
 import { isHostTaskOp } from "../rpc/protocol.js";
 import { TaskBrowser } from "./task-browser.js";
@@ -1045,6 +1047,12 @@ export function registerIpc(
     // Metadata selection only; execution must recheck the file and its identity.
     return selected;
   },
+  /**
+   * [PiDock 03] (#6) production append for an existing task. Kept last so every
+   * existing `registerIpc` caller keeps its positional arguments; without it
+   * `shell/appendTaskRepos` fails closed with "尚未接入".
+   */
+  append?: ProjectTaskAppend,
 ): void {
   if (tasks && catalog && taskRoots && projects) tasks.configureServices((workspaceId) => new InstalledServiceHostAuthority(
     app.getPath("userData"), catalog, serviceCatalogAuthority(taskRoots, projects), workspaceId, process.env));
@@ -1360,6 +1368,25 @@ export function registerIpc(
     }
   });
 
+  // [PiDock 03] (#6) production append for an EXISTING task: main fetches and
+  // pins every selected repository's remote branch in its OWN source checkout
+  // (all-success gate), derives the conflict scan itself, routes
+  // `task/appendRepos` and executes the returned plan with real git. The same
+  // sender-scoped trust pattern as `shell/createTask`: the page names project
+  // repository ids/remote/branches only, and `reattest` re-proves the attested
+  // shell sender right before the plan creates real resources.
+  ipcMain.handle("shell/appendTaskRepos", async (event, payload?: unknown) => {
+    try {
+      registry.requireShellSender(event);
+      if (!append) return { ok: false as const, error: "真实任务追加尚未接入" };
+      const result = await performAppendOperation(append, payload, () => { registry.requireShellSender(event); });
+      return { ok: true as const, payload: result };
+    } catch (error) {
+      if (error instanceof TrustDomainViolation) return trustFailureEnvelope(error);
+      return { ok: false as const, error: errorMessage(error) };
+    }
+  });
+
   ipcMain.handle("shell/providerOp", async (event, payload?: unknown) => {
     try {
       const sender = registry.requireShellSender(event);
@@ -1465,28 +1492,10 @@ export function registerIpc(
    * authority for turning a recorded `repo-xxxxxxxx` folder into the source
    * checkout the scan and the plan must use; a task without a confirmed
    * association has no authoritative checkout source, so the scan refuses.
+   * `shell/taskOp` and main's own production append both build it through
+   * `createPrepScanAuthority`.
    */
-  const prepScanRepositories = (taskId: string): readonly { id: string; path: string }[] => {
-    if (!projects || !taskRoots) {
-      throw new PrepScanUnavailableError("主进程缺少项目登记或任务根索引，无法定位目标仓库的来源检出");
-    }
-    const association = projects.association(taskId, taskRoots);
-    if (association.state !== "assigned" || association.projectId === null) {
-      throw new PrepScanUnavailableError(
-        `任务与项目没有可确认的关联（${association.state}），无法定位目标仓库的来源检出`,
-      );
-    }
-    const project = projects.get(association.projectId);
-    if (!project) throw new PrepScanUnavailableError("任务所属项目不可读取，无法定位目标仓库的来源检出");
-    return project.repositories;
-  };
-
-  /** Task-folder authority for the privileged scan (index-verified, main-owned). */
-  const prepScanAuthority: PrepScanAuthority = {
-    resolveTaskDir: (taskId) => taskRoots?.resolve(taskId) ?? null,
-    readRecord: (taskDir) => readTaskRecordOnDisk(taskDir),
-    projectRepositories: prepScanRepositories,
-  };
+  const prepScanAuthority: PrepScanAuthority = createPrepScanAuthority(projects, taskRoots);
 
   // Task-scoped op from the sandboxed renderer: main binds the workspace
   // from the trusted sender (never from the payload) and forwards the
