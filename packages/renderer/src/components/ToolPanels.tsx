@@ -1,4 +1,4 @@
-import { useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Badge, Button, EmptyState, IconButton, Panel } from "./ui";
 import { Icon, type IconName } from "./Icon";
 import { CodeBlock } from "./CodeBlock";
@@ -26,6 +26,21 @@ import {
   readBrowserPageState,
   setBrowserTakeover,
 } from "../data/browserSurface";
+import { isShellConnected } from "../data/shellBridge";
+import {
+  TERMINAL_HISTORY_LIMIT,
+  TERMINAL_HISTORY_POLL_MS,
+  planTerminalForRoot,
+  readTerminalHistory,
+  readTerminalRoots,
+  readTerminalState,
+  resizeTerminal,
+  sendTerminalInput,
+  startTerminal,
+  stopTerminal,
+  terminalExitScopeNote,
+  terminalInstanceStateText,
+} from "../data/terminalSurface";
 import {
   protocolConsumerStateLabel,
   protocolModeLabel,
@@ -34,9 +49,11 @@ import {
 } from "../data/protocolBinding";
 import type {
   TerminalHistoryEntryView,
+  TerminalInstanceView,
   TerminalPlanView,
   TerminalStateView,
   WorkspaceBrowserView,
+  WorkspaceRootView,
 } from "../data/workspaceFiles";
 
 export function panelName(panel: ToolPanel) {
@@ -874,27 +891,51 @@ export function FilesPanel({
   );
 }
 
-export function TerminalPanel({
+/**
+ * [PiDock 10] (#15) the terminal tool.
+ *
+ * Inside the sandboxed shell the tool is the human takeover surface for a real
+ * Host PTY (`TerminalTakeoverPanel`): plan, instance list, bounded history and
+ * labelled human start/stop/input/resize through the typed bridge. Outside the
+ * shell (Vite dev, tests) it keeps the prototype's in-memory echo and says so
+ * rather than implying a process.
+ */
+export function TerminalPanel(props: {
+  taskId: string;
+  seed: string[];
+  terminal?: MemoryTerminalView;
+}) {
+  return isShellConnected() ? <TerminalTakeoverPanel taskId={props.taskId} /> : <MemoryTerminalPanel {...props} />;
+}
+
+/**
+ * [PiDock 10] (#15) Host/memory terminal view: the planned cwd + resolved env
+ * rows, this task's instances and their real state. `spawnImplemented: false`
+ * means no real pty can be started on this Host, and the panel says so rather
+ * than showing a fake pid.
+ */
+export interface MemoryTerminalView {
+  plan?: TerminalPlanView;
+  state?: TerminalStateView;
+  history?: TerminalHistoryEntryView[];
+  onStart?: () => void;
+  onStop?: (instanceId: string) => void;
+  onResize?: (instanceId: string, cols: number, rows: number) => void;
+}
+
+/**
+ * The in-memory prototype panel (no shell connected): it renders the adapter's
+ * plan/instance rows and echoes what the user types, and it never claims a
+ * process. Rendered only while `isShellConnected()` is false.
+ */
+export function MemoryTerminalPanel({
   taskId,
   seed,
   terminal,
 }: {
   taskId: string;
   seed: string[];
-  /**
-   * [PiDock 10] (#15) Host/memory terminal view: the planned cwd + resolved env
-   * rows, this task's instances and their real state. `spawnImplemented: false`
-   * means no real pty can be started on this Host, and the panel says so rather
-   * than showing a fake pid.
-   */
-  terminal?: {
-    plan?: TerminalPlanView;
-    state?: TerminalStateView;
-    history?: TerminalHistoryEntryView[];
-    onStart?: () => void;
-    onStop?: (instanceId: string) => void;
-    onResize?: (instanceId: string, cols: number, rows: number) => void;
-  };
+  terminal?: MemoryTerminalView;
 }) {
   const runTerminalCommand = useHostStore((state) => state.runTerminalCommand);
   // Scrollback and the pending input survive a tab swap, so they live in the ui
@@ -927,7 +968,7 @@ export function TerminalPanel({
       ) : null}
       {terminal?.state && !terminal.state.spawnImplemented ? (
         <p className="rounded border border-warn/40 px-2 py-1 text-[11px] text-warn" data-testid="terminal-spawn-residual">
-          终端计划、环境与归属已由 Host 管理；本机 PTY 进程启动属未实现范围，面板不会显示进程号。
+          终端计划、环境与归属来自内存模拟；本机 PTY 进程启动属未实现范围，面板不会显示进程号。
         </p>
       ) : null}
       {instance ? (
@@ -944,7 +985,13 @@ export function TerminalPanel({
                 停止终端
               </Button>
             ) : null}
-            <Button size="sm" variant="ghost" onClick={() => terminal?.onResize?.(instance.instanceId, instance.cols + 20, instance.rows)}>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={terminal?.onResize === undefined}
+              title={terminal?.onResize === undefined ? "内存模拟没有可调整窗口的真实进程" : undefined}
+              onClick={() => terminal?.onResize?.(instance.instanceId, instance.cols + 20, instance.rows)}
+            >
               加宽（{instance.cols}×{instance.rows}）
             </Button>
           </div>
@@ -955,9 +1002,7 @@ export function TerminalPanel({
         </Button>
       ) : null}
       <p className="text-[11px] text-muted">
-        {instance?.processKnown
-          ? "本终端由 Host 启动真实 PTY；面板输入与回滚仍在内存层，真实输入／历史接线属后续切片。"
-          : "终端输出与输入由本面板渲染；当前为模拟输入，真实 PTY 属未实现范围。"}
+        未连接桌面壳：这里是内存模拟（原型回显），输入不会执行，也不会发送给 Host；真实终端在桌面壳内由 Host 启动。
       </p>
       <div className="h-56 overflow-auto rounded-md border border-line bg-ink/95 p-3 font-mono text-[11px] leading-5 text-white/90">
         {lines.map((line, index) => (
@@ -983,6 +1028,299 @@ export function TerminalPanel({
           placeholder="输入命令"
         />
         <Button size="sm" type="submit">
+          执行
+        </Button>
+      </form>
+    </div>
+  );
+}
+
+type TerminalTaskState = { taskId: string; spawnImplemented: boolean; instances: TerminalInstanceView[] };
+
+/**
+ * [PiDock 10] (#15) the real terminal tool: the human takeover surface for one
+ * task's Host-spawned PTY.
+ *
+ * Every row is a Host answer through the typed bridge - the plan (cwd, masked
+ * env rows, owner), the instance list, the bounded history - and every control
+ * is a labelled human action: the Host refuses an Agent session for raw input
+ * and window changes, so no `sessionId` is sent and no boolean stands in for it
+ * (main attests the labelled human origin itself).
+ *
+ * Honesty rules: the state shown is the Host's own (lifecycle, the recorded pid
+ * or its absence, the exit code the pty really reported); an exit whose code was
+ * never observed reads 未观测 instead of `0`; a refusal is shown with the Host's
+ * reason verbatim; and no exit is presented as a whole-tree drain - the Host's
+ * `root-exited` receipt means exactly that the containment claim is not made,
+ * while an `unknown` receipt leaves the instance running.
+ */
+export function TerminalTakeoverPanel({
+  taskId,
+  program = "bash",
+  args = ["-l"],
+}: {
+  taskId: string;
+  /** Program the plan asks the Host to run; the Host resolves a bare name itself. */
+  program?: string;
+  args?: string[];
+}) {
+  // The draft survives a tab swap in the ui store: the rail unmounts the panel.
+  const panelState = useUiStore((state) => state.toolPanelState[taskId]);
+  const setPanelState = useUiStore((state) => state.setToolPanelState);
+  const draft = panelState?.terminalValue ?? "";
+  const [sandbox, setSandbox] = useState<TerminalTaskState | null>(null);
+  const [rootState, setRootState] = useState<{ taskId: string; roots: WorkspaceRootView[] } | null>(null);
+  const [rootId, setRootId] = useState("");
+  const [plan, setPlan] = useState<TerminalPlanView | null>(null);
+  const [history, setHistory] = useState<TerminalHistoryEntryView[]>([]);
+  const [notice, setNotice] = useState<string | undefined>(undefined);
+  const [busy, setBusy] = useState(false);
+  // Freshness guards: a task/instance change, or a newer read of the same kind,
+  // supersedes every in-flight answer, so a slow response for a previous task or
+  // instance cannot overwrite the current one (the guard the sibling async
+  // panels use). Each epoch is checked before any state is written.
+  const stateEpoch = useRef(0);
+  const historyEpoch = useRef(0);
+  // Rows are tagged with the task that produced them: another task's answer is
+  // never shown as this task's state, even while a read is still in flight.
+  const known = sandbox !== null && sandbox.taskId === taskId;
+  const instances = known ? sandbox.instances : [];
+  const roots = rootState !== null && rootState.taskId === taskId ? rootState.roots : [];
+  const running = instances.filter((instance) => instance.lifecycle === "running");
+  const watched = running[running.length - 1] ?? instances[instances.length - 1];
+  const watchId = watched?.instanceId;
+  const selectedRoot = roots.find((root) => root.id === rootId) ?? roots[0];
+
+  const readState = useCallback(async () => {
+    const request = ++stateEpoch.current;
+    const result = await readTerminalState(taskId);
+    if (stateEpoch.current !== request) return;
+    if (!result.ok) {
+      setNotice(result.error);
+      return;
+    }
+    setSandbox({ taskId, spawnImplemented: result.value.spawnImplemented, instances: result.value.instances });
+  }, [taskId]);
+
+  const readHistory = useCallback(
+    async (instanceId: string) => {
+      const request = ++historyEpoch.current;
+      const result = await readTerminalHistory({ taskId, instanceId, limit: TERMINAL_HISTORY_LIMIT });
+      if (historyEpoch.current !== request) return;
+      if (result.ok) setHistory(result.value);
+      else setNotice(result.error);
+    },
+    [taskId],
+  );
+
+  useEffect(() => {
+    // A task change starts a fresh read; the previous task's rows are dropped by
+    // their task tag and its in-flight answers are fenced by the new epoch.
+    const request = ++stateEpoch.current;
+    setHistory([]);
+    setPlan(null);
+    setNotice(undefined);
+    setRootId("");
+    void (async () => {
+      const [state, rootList] = await Promise.all([readTerminalState(taskId), readTerminalRoots(taskId)]);
+      if (stateEpoch.current !== request) return;
+      if (!state.ok) {
+        setNotice(state.error);
+        return;
+      }
+      setSandbox({ taskId, spawnImplemented: state.value.spawnImplemented, instances: state.value.instances });
+      if (!rootList.ok) {
+        setNotice(rootList.error);
+        return;
+      }
+      setRootState({ taskId, roots: rootList.value });
+      setRootId(rootList.value[0]?.id ?? "");
+    })();
+  }, [taskId]);
+
+  useEffect(() => {
+    if (watchId === undefined) return;
+    // Read once when the watched instance changes, then re-read while it runs:
+    // one bounded read at a time, and the next tick is scheduled only after the
+    // previous one settled, so a slow Host never accumulates overlapping reads.
+    void readHistory(watchId);
+    if (watched?.lifecycle !== "running") return;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const tick = async () => {
+      await readHistory(watchId);
+      await readState();
+      if (!stopped) timer = setTimeout(() => void tick(), TERMINAL_HISTORY_POLL_MS);
+    };
+    timer = setTimeout(() => void tick(), TERMINAL_HISTORY_POLL_MS);
+    return () => {
+      stopped = true;
+      if (timer !== undefined) clearTimeout(timer);
+    };
+  }, [watchId, watched?.lifecycle, readHistory, readState]);
+
+  const start = async () => {
+    if (!selectedRoot) {
+      setNotice("本任务没有可用的文件根，无法打开终端");
+      return;
+    }
+    // Same instance id as the memory flow, so restarting reopens the instance the
+    // Host already recorded instead of leaking one of its bounded slots.
+    const instanceId = `term-${taskId}-1`;
+    setBusy(true);
+    const planned = await planTerminalForRoot({ taskId, instanceId, rootId: selectedRoot.id, program, args });
+    if (planned.ok) setPlan(planned.value);
+    const started = planned.ok ? await startTerminal({ taskId, instanceId, rootId: selectedRoot.id, program, args }) : planned;
+    await readState();
+    setBusy(false);
+    setNotice(started.ok ? undefined : started.error);
+  };
+
+  const stop = async () => {
+    if (watchId === undefined) return;
+    setBusy(true);
+    const result = await stopTerminal({ taskId, instanceId: watchId });
+    await readState();
+    setBusy(false);
+    setNotice(result.ok ? undefined : result.error);
+  };
+
+  const widen = async () => {
+    if (watched === undefined) return;
+    setBusy(true);
+    const result = await resizeTerminal({ taskId, instanceId: watched.instanceId, cols: watched.cols + 20, rows: watched.rows });
+    if (result.ok) await readState();
+    setBusy(false);
+    setNotice(result.ok ? undefined : result.error);
+  };
+
+  const submit = async () => {
+    const line = draft.trim();
+    if (line.length === 0) return;
+    setPanelState(taskId, { terminalValue: "" });
+    if (watchId === undefined || watched?.lifecycle !== "running") {
+      setNotice("终端没有运行中的真实进程，输入未发送");
+      return;
+    }
+    setBusy(true);
+    const result = await sendTerminalInput({ taskId, instanceId: watchId, data: `${line}\n` });
+    if (result.ok) {
+      await readHistory(watchId);
+      await readState();
+    }
+    setBusy(false);
+    setNotice(result.ok ? undefined : result.error);
+  };
+
+  return (
+    <div className="flex min-h-0 flex-col gap-2">
+      {!known ? <p className="text-[11px] text-muted">正在读取终端状态…</p> : null}
+      {notice ? (
+        <p role="status" data-testid="terminal-notice" className="rounded border border-warn/40 px-2 py-1 text-[11px] text-warn">
+          {notice}
+        </p>
+      ) : null}
+      {roots.length > 1 ? (
+        <label className="flex items-center gap-2 text-[11px] text-muted">
+          终端仓库
+          <select
+            aria-label="终端仓库"
+            value={selectedRoot?.id ?? ""}
+            onChange={(event) => setRootId(event.target.value)}
+            className="rounded-md border border-line bg-paper px-2 py-1 text-xs"
+          >
+            {roots.map((root) => (
+              <option key={root.id} value={root.id}>
+                {root.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
+      {known && sandbox.spawnImplemented === false ? (
+        <p className="rounded border border-warn/40 px-2 py-1 text-[11px] text-warn" data-testid="terminal-spawn-residual">
+          Host 无法启动真实 pty（平台不受支持或预检未通过）：面板只显示计划与实例记录，不会启动进程。
+        </p>
+      ) : null}
+      {plan ? (
+        <div className="flex flex-col gap-1 text-[11px] text-muted" data-testid="terminal-plan">
+          <span>
+            工作目录 <span className="font-mono text-ink">{plan.cwd}</span> · 程序 {plan.program} {plan.args.join(" ")}
+          </span>
+          <span>终端归属：{plan.owner.sessionId === null ? `用户显式操作（${plan.owner.label}）` : `Agent 会话 ${plan.owner.sessionId}`}</span>
+          <span>
+            窗口 {plan.cols}×{plan.rows} · 历史上限 {plan.historyLimit}
+          </span>
+          {plan.attribution.sharedNote ? <span className="text-warn">{plan.attribution.sharedNote}</span> : null}
+          <ul className="flex flex-col gap-0.5">
+            {plan.resolved.map((row) => (
+              <li key={row.key} className="font-mono text-[10px]">
+                {row.key}={row.value} <span className="text-muted">（{row.source}）</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {watched ? (
+        <div className="flex flex-col gap-1 text-[11px] text-muted" data-testid="terminal-instance">
+          <span>
+            {watched.instanceId} · {terminalInstanceStateText(watched)}
+          </span>
+          {terminalExitScopeNote(watched) ? <span data-testid="terminal-exit-scope">{terminalExitScopeNote(watched)}</span> : null}
+          <div className="flex gap-2">
+            {watched.lifecycle === "running" ? (
+              <Button size="sm" disabled={busy} onClick={() => void stop()}>
+                停止终端
+              </Button>
+            ) : null}
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={busy || watched.lifecycle !== "running"}
+              title={watched.lifecycle === "running" ? undefined : "终端已退出，没有可调整窗口的进程"}
+              onClick={() => void widen()}
+            >
+              加宽（{watched.cols}×{watched.rows}）
+            </Button>
+          </div>
+        </div>
+      ) : null}
+      {known && sandbox.spawnImplemented && running.length === 0 ? (
+        <Button size="sm" disabled={busy || selectedRoot === undefined} onClick={() => void start()}>
+          按计划启动终端
+        </Button>
+      ) : null}
+      <p className="text-[11px] text-muted">
+        {watched?.lifecycle === "running"
+          ? "输出是 Host 的有界历史；输入与窗口调整经受控桥发送给运行中的真实终端（人工显式操作，不携带会话授权）。"
+          : "终端未运行：输入与窗口调整不可用，下面是 Host 记录的历史。"}
+      </p>
+      <div
+        className="h-56 overflow-auto rounded-md border border-line bg-ink/95 p-3 font-mono text-[11px] leading-5 text-white/90"
+        data-testid="terminal-output"
+      >
+        {history.map((entry, index) => (
+          <div key={`${index}-${entry.line}`}>{entry.line}</div>
+        ))}
+        {history.length === 0 ? (
+          <div className="text-white/40">{watched?.lifecycle === "running" ? "等待终端输出…" : "尚无可显示的终端历史。"}</div>
+        ) : null}
+      </div>
+      <form
+        className="flex gap-2"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void submit();
+        }}
+      >
+        <input
+          aria-label="终端输入"
+          value={draft}
+          onChange={(event) => setPanelState(taskId, { terminalValue: event.target.value })}
+          className="flex-1 rounded-md border border-line bg-paper px-2.5 py-1.5 font-mono text-xs"
+          placeholder={watched?.lifecycle === "running" ? "输入命令" : "终端未运行"}
+        />
+        <Button size="sm" type="submit" disabled={busy || watched?.lifecycle !== "running"}>
           执行
         </Button>
       </form>
