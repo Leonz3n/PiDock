@@ -3,10 +3,11 @@ import { readRepoPrepareView, type RepoPrepareStatus, type RepoPrepareView } fro
 import type { ShellTaskOpResult } from "../data/shellBridge";
 
 // Seam: [PiDock 03] (#6) partial-prepare recovery UI. The Host classifies the
-// REAL worktree state and resumes only the unfinished repos; this panel shows
-// the per-repo status with the Host's real reason and triggers the explicit
-// human resume. It never runs on its own (no read and no resume on mount) and
-// never fabricates a status or a conflict scan.
+// REAL worktree state and main executes a resume through the same validated
+// append-plan rules; this panel shows the per-repo status (which main re-reads
+// after a resume) with the Host's real reason and triggers the explicit human
+// resume. It never runs on its own (no read and no resume on mount) and never
+// fabricates a status or a conflict scan.
 
 const STATUS_LABEL: Record<RepoPrepareStatus, string> = {
   created: "已创建",
@@ -28,9 +29,11 @@ export function TaskPrepareRecovery({
    * Explicit resume (`task/resumeAppend`), called with the unfinished repo
    * dirs the panel read (advisory: the Host re-derives the authoritative retry
    * set). On the shell surface main produces the REQUIRED
-   * `takenPaths`/`branchesInUse` scan and overwrites any page-supplied value;
-   * a caller that cannot scan must omit this prop, and the control renders
-   * disabled with the real reason instead of a doomed call.
+   * `takenPaths`/`branchesInUse` scan, overwrites any page-supplied value, AND
+   * executes the returned plan through the same validated append-plan rules,
+   * answering with the Host's freshly re-read per-repo status. A caller that
+   * cannot scan must omit this prop, and the control renders disabled with the
+   * real reason instead of a doomed call.
    */
   resume?: (input: { repoDirs: string[] }) => Promise<ShellTaskOpResult>;
   /** Why the resume is unavailable; shown next to the disabled control. */
@@ -124,8 +127,8 @@ export function TaskPrepareRecovery({
         </ul>
       ) : null}
       {view?.resumed ? (
-        <p role="status" className="mt-1 text-[11px] text-orange" data-testid="prepare-resume-planned">
-          已规划以下仓库的恢复，待执行：{view.retry.join("、")}。执行完成后请重新检查准备状态。
+        <p role="status" className="mt-1 text-[11px] text-orange" data-testid="prepare-resume-executed">
+          已按记录基线执行本次恢复并重新核对准备状态；仍未完成的仓库会保留在这里，可再次恢复。
         </p>
       ) : null}
       {view && view.hold.length > 0 ? (

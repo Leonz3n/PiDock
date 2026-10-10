@@ -50,8 +50,9 @@ import { buildTaskDiskRecord, taskFilePath } from "../host/task-store.js";
 import type { HostTaskOp } from "../rpc/protocol.js";
 import { ProjectRegistry } from "./project-registry.js";
 import { createTrustedWindow, registerIpc } from "./runtime.js";
+import { createNodeAppendGit, ProjectTaskAppend } from "./task-append.js";
+import { createNodePrepScanDeps, createPrepScanAuthority } from "./task-prep-scan.js";
 import { TaskRootIndex } from "./task-root-index.js";
-import type { ProvisionPlanOp } from "./task-provision.js";
 
 // Seam: #6 boundary B through the REAL `shell/taskOp` handler (the sandboxed
 // renderer boundary). Main must derive the conflict scan the Host requires
@@ -86,10 +87,6 @@ function realRepo(home: string, name: string): { checkout: string; commit: strin
   git(checkout, "commit", "-m", `${name} baseline`);
   git(checkout, "push", "origin", "main");
   return { checkout, commit: git(checkout, "rev-parse", "HEAD") };
-}
-
-function runOps(ops: readonly ProvisionPlanOp[]): void {
-  for (const op of ops) git(op.cwd, ...op.args);
 }
 
 type RepoKey = "frontend" | "invoice" | "shipment";
@@ -199,19 +196,24 @@ async function productionRoute(options: {
         },
       };
     }
-    if (params.op === "task/appendRepos") {
-      const appended = host.appendRepos(payload as never);
+    if (params.op === "task/prepareStatus") {
       return {
         workspaceId: "workspace-prep-route",
         taskId: params.taskId,
         op: params.op,
-        payload: { appended: appended.appended, skipped: appended.skipped, plan: appended.plan, repos: appended.record.repos },
+        payload: host.prepareStatus() as unknown as Record<string, unknown>,
       };
     }
     throw new Error(`unexpected op ${params.op}`);
   });
+  const append = new ProjectTaskAppend(
+    { routeTaskOp: routeTaskOp as never },
+    createPrepScanAuthority(projects, roots),
+    createNodePrepScanDeps(),
+    createNodeAppendGit(),
+  );
   const views = await createTrustedWindow("workspace-prep-route", "production");
-  registerIpc({} as never, views.registry, { routeTaskOp } as never, projects, roots);
+  registerIpc({} as never, views.registry, { routeTaskOp } as never, projects, roots, undefined, undefined, undefined, undefined, undefined, append);
   const handler = vi
     .mocked(ipcMain.handle)
     .mock.calls.findLast(([channel]) => channel === "shell/taskOp")?.[1] as unknown as (
@@ -232,12 +234,8 @@ async function productionRoute(options: {
   };
 }
 
-function hostPayload(result: unknown): Record<string, unknown> {
-  return (result as { payload: { payload: Record<string, unknown> } }).payload.payload;
-}
-
 function scanOf(route: Route): Record<string, unknown> {
-  return route.forwarded.at(-1)!.payload;
+  return route.forwarded.filter((entry) => entry.op === "task/resumeAppend").at(-1)!.payload;
 }
 
 describe("#6 privileged prep scan through the real shell/taskOp handler", () => {
@@ -250,9 +248,11 @@ describe("#6 privileged prep scan through the real shell/taskOp handler", () => 
       branchesInUse: [],
       mainCheckouts: { forged: "/tmp/forged" },
     });
-    const resumed = hostPayload(result);
-    expect(resumed["created"]).toEqual([route.repos.frontend]);
-    expect(resumed["retry"]).toEqual([route.repos.invoice]);
+    const resumed = (result as { payload: Record<string, unknown> }).payload;
+    // Main EXECUTED the resume plan: the unfinished repo is created and the
+    // freshly re-read status reflects it (never a "planned, not executed" view).
+    expect(resumed["created"]).toEqual(expect.arrayContaining([route.repos.frontend, route.repos.invoice]));
+    expect(resumed["retry"]).toEqual([]);
     expect(resumed["resumed"]).toBe(true);
 
     const scan = scanOf(route);
@@ -270,15 +270,12 @@ describe("#6 privileged prep scan through the real shell/taskOp handler", () => 
       [route.repos.invoice]: route.sources.invoice.checkout,
     });
 
-    // Only the unfinished repo is planned, in its own source checkout.
-    const plan = resumed["plan"] as { ops: ProvisionPlanOp[] };
-    expect(plan.ops.map((op) => op.kind)).toEqual(["fetch", "branch", "worktree"]);
-    expect(plan.ops.every((op) => op.cwd === route.sources.invoice.checkout)).toBe(true);
-    runOps(plan.ops);
-    expect(git(join(route.taskDir, route.repos.invoice), "symbolic-ref", "--quiet", "HEAD")).toBe(
-      `refs/heads/${route.branch}`,
-    );
-    // The created worktree is untouched.
+    // The unfinished repo was REALLY created — at its pinned commit, on the
+    // task branch, in its own source checkout.
+    const invoiceWorktree = join(route.taskDir, route.repos.invoice);
+    expect(git(invoiceWorktree, "rev-parse", "HEAD")).toBe(route.sources.invoice.commit);
+    expect(git(invoiceWorktree, "symbolic-ref", "--quiet", "HEAD")).toBe(`refs/heads/${route.branch}`);
+    // The already-created worktree is untouched.
     expect(git(join(route.taskDir, route.repos.frontend), "rev-parse", "HEAD")).toBe(route.sources.frontend.commit);
   });
 
@@ -317,44 +314,26 @@ describe("#6 privileged prep scan through the real shell/taskOp handler", () => 
     expect(existsSync(join(route.taskDir, route.repos.invoice))).toBe(false);
   });
 
-  it("appends a new repo through the real handler and refuses an occupied path", async () => {
+  it("refuses the legacy task/appendRepos op on shell/taskOp and never reaches the Host", async () => {
     const route = await productionRoute({ recorded: ["frontend"], created: ["frontend"] });
-    const appended = await route.invoke("task/appendRepos", {
+    const before = route.recordText();
+    const result = (await route.invoke("task/appendRepos", {
       repoSelections: [
-        // The page-supplied checkout is not used for the scan or the plan.
+        // The page-supplied checkout must not even be looked at: the op is
+        // refused before the Host (no executor in main on this legacy route).
         { repoDir: route.repos.invoice, remote: "origin", remoteBranch: "main", mainCheckoutDir: "/tmp/forged" },
       ],
       fetchedCommits: { [route.repos.invoice]: route.sources.invoice.commit },
       takenPaths: [],
       branchesInUse: [],
-    });
-    expect(hostPayload(appended)["appended"]).toEqual([route.repos.invoice]);
-    const scan = scanOf(route);
-    expect([...(scan["takenPaths"] as string[])].sort()).toEqual(
-      [`${route.taskDir}/task.json`, `${route.taskDir}/${route.repos.frontend}`].sort(),
-    );
-    expect(scan["branchesInUse"]).not.toContain(route.branch);
-    expect(scan["mainCheckouts"]).toEqual({
-      [route.repos.frontend]: route.sources.frontend.checkout,
-      [route.repos.invoice]: route.sources.invoice.checkout,
-    });
-    const plan = hostPayload(appended)["plan"] as { ops: ProvisionPlanOp[] };
-    expect(plan.ops.every((op) => op.cwd === route.sources.invoice.checkout)).toBe(true);
-    runOps(plan.ops);
-    expect(existsSync(join(route.taskDir, route.repos.invoice))).toBe(true);
-
-    // A new repo whose wanted path is already occupied refuses by name.
-    mkdirSync(join(route.taskDir, route.repos.shipment));
-    const before = route.recordText();
-    await expect(
-      route.invoke("task/appendRepos", {
-        repoSelections: [
-          { repoDir: route.repos.shipment, remote: "origin", remoteBranch: "main", mainCheckoutDir: route.sources.shipment.checkout },
-        ],
-        fetchedCommits: { [route.repos.shipment]: route.sources.shipment.commit },
-      }),
-    ).rejects.toThrow("path-taken");
+    })) as { ok: boolean; error: string };
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("shell/appendTaskRepos");
+    // The Host was never asked and nothing changed on disk: a page can no
+    // longer persist a caller-supplied baseline with no executor in main.
+    expect(route.forwarded).toEqual([]);
     expect(route.recordText()).toBe(before);
+    expect(existsSync(join(route.taskDir, route.repos.invoice))).toBe(false);
   });
 
   it("refuses by name and writes nothing when the scan cannot be produced", async () => {

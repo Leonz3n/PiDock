@@ -25,8 +25,9 @@ import { TaskPrepareRecovery } from "./TaskPrepareRecovery";
  *   refusal (fetch-failed / path-taken / branch-in-use / repo-unusable);
  * - the appended list shows the pinned full commit and the created worktree;
  * - a partial/failed append points at the ONE existing recovery surface
- *   (`TaskPrepareRecovery`, `task/prepareStatus` + `task/resumeAppend`) instead
- *   of inventing a second resume story.
+ *   (`TaskPrepareRecovery`, `task/prepareStatus` + `task/resumeAppend`), whose
+ *   resume MAIN executes through the same validated append-plan rules, so an
+ *   interrupted append is completed in product instead of left planned.
  */
 export function DesktopTaskSources({
   taskId,
@@ -78,9 +79,19 @@ export function DesktopTaskSources({
     };
   }, [bridge, taskId]);
   const selected = project?.repositories.filter((repo) => repos[repo.id]?.selected) ?? [];
+  // The append payload requires a non-blank remote AND baseline branch for
+  // every selected repository (main validates both); gate the primary action
+  // on them so the first click can never be a guaranteed `invalid-payload`.
+  const ready = selected.every(
+    (repo) => (repos[repo.id]?.remote.trim() ?? "").length > 0 && (repos[repo.id]?.branch.trim() ?? "").length > 0,
+  );
   const submit = async () => {
     if (!project || selected.length === 0) {
       setError("请选择要追加的仓库");
+      return;
+    }
+    if (!ready) {
+      setError("请为每个选中的仓库填写远程名称与远程分支");
       return;
     }
     const request = ++epoch.current;
@@ -161,6 +172,7 @@ export function DesktopTaskSources({
                         <input
                           aria-label={`远程名称 ${repo.name}`}
                           placeholder="origin"
+                          required
                           value={row.remote}
                           disabled={busy}
                           onChange={(event) => setRepos((items) => ({ ...items, [repo.id]: { ...items[repo.id]!, remote: event.target.value } }))}
@@ -172,6 +184,7 @@ export function DesktopTaskSources({
                         <input
                           aria-label={`远程分支 ${repo.name}`}
                           placeholder="main"
+                          required
                           value={row.branch}
                           disabled={busy}
                           onChange={(event) => setRepos((items) => ({ ...items, [repo.id]: { ...items[repo.id]!, branch: event.target.value } }))}
@@ -212,8 +225,9 @@ export function DesktopTaskSources({
         </div>
       ) : null}
       {/* One recovery story: the append reports what it created; anything left
-          unfinished is read and retried through the existing prepare surface,
-          which never rebuilds or overwrites a created worktree. */}
+          unfinished is read and completed through the existing prepare surface,
+          whose resume main EXECUTES (it never rebuilds or overwrites a created
+          worktree, and it reports the real post-execution status back). */}
       <TaskPrepareRecovery
         load={() => prepareStatusThroughShell({ taskId })}
         resume={shellTaskPrepareResume(taskId)}
@@ -224,7 +238,7 @@ export function DesktopTaskSources({
           <Button type="button" variant="outline" disabled={busy} onClick={onClose}>
             关闭
           </Button>
-          <Button type="button" disabled={busy || !project || selected.length === 0} onClick={() => void submit()}>
+          <Button type="button" disabled={busy || !project || selected.length === 0 || !ready} onClick={() => void submit()}>
             {busy ? "获取中…" : <><Icon name="plus" />获取最新基线并追加</>}
           </Button>
         </div>

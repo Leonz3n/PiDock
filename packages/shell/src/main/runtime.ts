@@ -1524,6 +1524,18 @@ export function registerIpc(
       if (!isHostTaskOp(op) || op.startsWith("task/sdk") || op === "task/sendMessage") {
         throw new TrustDomainViolation("invalid-payload", `unknown task op: ${String(op)}`);
       }
+      // [PiDock 03] (#6) legacy-route refusal: `shell/taskOp` used to accept
+      // `task/appendRepos` from page code, letting the renderer supply the
+      // `fetchedCommits` baseline the Host then persisted — with NO executor
+      // in main. `shell/appendTaskRepos` is the production entry (registry-only
+      // paths, main-derived scan, fetch/pin, plan execution), so the legacy op
+      // is refused here; no production caller remains.
+      if (op === "task/appendRepos") {
+        throw new TrustDomainViolation(
+          "invalid-payload",
+          "shell/taskOp 不再接受 task/appendRepos，请使用 shell/appendTaskRepos（ref #6）",
+        );
+      }
       if (pendingNavigation.has(sender.webContentsId) || subscriptions.get(sender.webContentsId)?.taskId !== taskId) revoke(sender.webContentsId);
       // A persisted Provider selection is reinstalled on first contact with the
       // task, before any turn op can run against an unconfigured context. The
@@ -1535,11 +1547,14 @@ export function registerIpc(
           ? (record["payload"] as Record<string, unknown>)
           : {};
       // #6 boundary B: the sandboxed renderer cannot list the task folder or
-      // run `git worktree list`, so main produces the scan `appendRepos` and
-      // `resumeAppend` require (the Host keeps requiring it) and OVERWRITES
-      // any page-supplied `takenPaths`/`branchesInUse`/`mainCheckouts`, so a
+      // run `git worktree list`, so main produces the scan `resumeAppend`
+      // requires (the Host keeps requiring it) and OVERWRITES any
+      // page-supplied `takenPaths`/`branchesInUse`/`mainCheckouts`, so a
       // forged or emptied scan can neither disable nor steer the gate. Every
       // scan failure refuses by name and plans nothing (never a `[]` default).
+      // `task/appendRepos` no longer reaches this route (refused above); its
+      // scan is derived by `prepareAppendHostPayload` inside
+      // `ProjectTaskAppend` on the `shell/appendTaskRepos` channel.
       if (needsPrepScan(op)) {
         const derived = deriveRendererPrepPayload(
           { op, taskId, payload: opPayload },
@@ -1563,6 +1578,20 @@ export function registerIpc(
       };
       if (tasks) {
         const result = await tasks.routeTaskOp({ taskId, op, payload: opPayload, origin });
+        // [PiDock 03] (#6) a resume that only PLANNED is not a recovery: main
+        // executes the returned plan through the same validated
+        // `executeAppendPlan` rules the append uses and answers with the Host's
+        // freshly re-read per-repo status. A recorded-but-worktree-absent repo
+        // is therefore actually completed, never reported as success by plan.
+        if (op === "task/resumeAppend") {
+          if (!append) return { ok: false as const, error: "真实任务准备恢复尚未接入" };
+          const mainCheckouts = (opPayload["mainCheckouts"] ?? {}) as Record<string, string>;
+          const payload = await append.executeResumePlan(
+            { taskId, planResult: result, mainCheckouts },
+            () => { registry.requireShellSender(event); },
+          );
+          return { ok: true as const, payload };
+        }
         return { ok: true as const, payload: result };
       }
       const result = await client.task({ workspaceId, taskId, op, payload: opPayload, origin });
