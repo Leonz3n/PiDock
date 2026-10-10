@@ -86,6 +86,9 @@ export function DesktopTaskSources({
     (repo) => (repos[repo.id]?.remote.trim() ?? "").length > 0 && (repos[repo.id]?.branch.trim() ?? "").length > 0,
   );
   const submit = async () => {
+    // A new submission invalidates the previous outcome: a stale success must
+    // never sit next to a fresh refusal.
+    setOutcome(null);
     if (!project || selected.length === 0) {
       setError("请选择要追加的仓库");
       return;
@@ -233,7 +236,7 @@ export function DesktopTaskSources({
         resume={shellTaskPrepareResume(taskId)}
       />
       <div className="mt-3 flex items-center justify-between gap-2">
-        <p className="text-[11px] text-muted">已是任务成员的仓库会被跳过，不会创建第二个工作副本。</p>
+        <p className="text-[11px] text-muted">已是任务成员且工作副本完好的仓库会被跳过，不会创建第二个工作副本；记录存在但工作副本缺失或不符时会按名拒绝，请先通过任务准备恢复处理。</p>
         <div className="flex gap-2">
           <Button type="button" variant="outline" disabled={busy} onClick={onClose}>
             关闭

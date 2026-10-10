@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -375,6 +375,49 @@ describe("production task-source append", () => {
     expect(git(firstWorktree, "status", "--porcelain")).toBe("");
   });
 
+  it("refuses a recorded repo whose path holds a non-worktree leftover instead of reporting an idempotent skip", async () => {
+    const env = await setup();
+    const repoDir = buildRepoChildName(repoIdOf(env.project, env.second));
+    const worktree = join(env.taskDir, repoDir);
+    await env.append.append({ taskId: env.taskId, repositories: [env.selection(env.second)] });
+    const payloadCount = env.payloads.length;
+    // Take over the real worktree with a plain directory that is NOT this
+    // task's worktree (git deregisters it, then an unrelated leftover occupies
+    // the path). The record still lists the repo, so a bare existence check
+    // would report this as an idempotent skip.
+    git(env.second.repo, "worktree", "remove", worktree);
+    mkdirSync(worktree);
+    writeFileSync(join(worktree, "leftover.txt"), "not ours\n");
+    const before = env.recordBytes();
+    await expect(
+      env.append.append({ taskId: env.taskId, repositories: [env.selection(env.second)] }),
+    ).rejects.toThrow(/^worktree-mismatch: 仓库 repo-[0-9a-f]{8}（second）已记录但工作副本不是本任务/);
+    // The foreign leftover is untouched, nothing was written and the Host was
+    // never asked: a refusal, never a success-shaped skip.
+    expect(readFileSync(join(worktree, "leftover.txt"), "utf8")).toBe("not ours\n");
+    expect(env.recordBytes()).toEqual(before);
+    expect(env.payloads).toHaveLength(payloadCount);
+  });
+
+  it("refuses a recorded repo whose path holds a foreign checkout, not this task's linked worktree", async () => {
+    const env = await setup();
+    const repoDir = buildRepoChildName(repoIdOf(env.project, env.second));
+    const worktree = join(env.taskDir, repoDir);
+    await env.append.append({ taskId: env.taskId, repositories: [env.selection(env.second)] });
+    const payloadCount = env.payloads.length;
+    // A plain clone (`.git` DIRECTORY, not a linked worktree) sits where the
+    // task worktree belongs: the same base commit is reachable, but this is not
+    // this task's worktree.
+    git(env.second.repo, "worktree", "remove", worktree);
+    git(env.home, "clone", env.second.remote, worktree);
+    const before = env.recordBytes();
+    await expect(
+      env.append.append({ taskId: env.taskId, repositories: [env.selection(env.second)] }),
+    ).rejects.toThrow(/^worktree-mismatch: 仓库 repo-[0-9a-f]{8}（second）已记录但工作副本不是本任务/);
+    expect(env.recordBytes()).toEqual(before);
+    expect(env.payloads).toHaveLength(payloadCount);
+  });
+
   it("refuses a task branch that exists without a worktree with the create flow's manual-recovery reason", async () => {
     const env = await setup();
     const before = env.recordBytes();
@@ -470,6 +513,65 @@ describe("production task-source append", () => {
     expect(git(worktree, "rev-parse", "HEAD")).toBe(pinned);
     expect(git(worktree, "rev-parse", "--abbrev-ref", "HEAD")).toBe(env.branch);
     expect(readFileSync(join(worktree, "README.md"), "utf8")).toBe("second baseline\n");
+  });
+
+  it("runs a resume through the same instance queue as an in-flight append, never interleaved with it", async () => {
+    const env = await setup();
+    const repoDir = buildRepoChildName(repoIdOf(env.project, env.second));
+    const worktree = join(env.taskDir, repoDir);
+    // Make the second repo a PARTIAL prepare: recorded, worktree absent.
+    await env.append.append({ taskId: env.taskId, repositories: [env.selection(env.second)] });
+    git(env.second.repo, "worktree", "remove", worktree);
+    const authority = createPrepScanAuthority(env.projects, env.roots);
+    const prep = derivePrepInputs({ taskId: env.taskId, repoDirs: [] }, authority, createNodePrepScanDeps());
+    const planResult = await env.host.routeTaskOp({
+      taskId: env.taskId,
+      op: "task/resumeAppend",
+      payload: { takenPaths: prep.takenPaths, branchesInUse: prep.branchesInUse, mainCheckouts: prep.mainCheckouts },
+    });
+
+    const events: string[] = [];
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const inner = createNodeAppendGit();
+    const label = (cwd: string) => (cwd === env.second.repo ? "second" : cwd === env.third.repo ? "third" : cwd);
+    const queueGit = {
+      ...inner,
+      fetchAndPin: (checkout: string, remote: string, branch: string) => {
+        events.push(`fetch:${label(checkout)}`);
+        return inner.fetchAndPin(checkout, remote, branch);
+      },
+      exec: (cwd: string, args: readonly string[]) => {
+        events.push(`exec:${label(cwd)}`);
+        inner.exec(cwd, args);
+      },
+    };
+    const host = {
+      routeTaskOp: async (params: { taskId: string; op: HostTaskOp; payload: Record<string, unknown> }) => {
+        events.push(`host:${params.op}`);
+        // Hold the append's Host write so the append is genuinely in flight.
+        if (params.op === "task/appendRepos") await gate;
+        return env.host.routeTaskOp(params as never);
+      },
+    };
+    const append = new ProjectTaskAppend(host, authority, createNodePrepScanDeps(), queueGit);
+
+    const appending = append.append({ taskId: env.taskId, repositories: [env.selection(env.third)] });
+    await vi.waitFor(() => expect(events).toContain("host:task/appendRepos"));
+    // Submitted while the append holds the queue: the resume must not start
+    // (no git op in the second repo, no status read) until the append finishes.
+    const resuming = append.executeResumePlan({ taskId: env.taskId, planResult, mainCheckouts: prep.mainCheckouts });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(events).not.toContain("exec:second");
+    expect(events).not.toContain("host:task/prepareStatus");
+
+    // Release: the append finishes, then the queued resume runs and completes
+    // the second repo — in order, never interleaved.
+    release!();
+    await appending;
+    await resuming;
+    expect(events.indexOf("exec:third")).toBeLessThan(events.indexOf("exec:second"));
+    expect(existsSync(worktree)).toBe(true);
   });
 
   it("refuses a worktree whose directory was deleted but is still registered, instead of reporting a false success", async () => {

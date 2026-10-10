@@ -217,4 +217,52 @@ describe("Desktop append surface", () => {
       }),
     );
   });
+
+  it("clears the previous success when a later submission is refused", async () => {
+    const repoDir = `repo-${second.id.slice(0, 8)}`;
+    const appendTaskRepos = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        payload: {
+          taskId,
+          appended: [
+            {
+              repoDir,
+              name: "API",
+              remote: "origin",
+              remoteBranch: "main",
+              commit: "a".repeat(40),
+              worktree: `/local/tasks/${taskId}/${repoDir}`,
+            },
+          ],
+          skipped: [],
+        },
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        error: `worktree-mismatch: 仓库 ${repoDir}（API）已记录但工作副本不是本任务在任务分支上的固定提交`,
+      });
+    render(<DesktopTaskSources taskId={taskId} bridge={withBridge(bridge({ appendTaskRepos }))} onClose={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("checkbox", { name: "API" }));
+    fireEvent.change(screen.getByLabelText("远程名称 API"), { target: { value: "origin" } });
+    fireEvent.change(screen.getByLabelText("远程分支 API"), { target: { value: "main" } });
+    fireEvent.click(screen.getByRole("button", { name: /获取最新基线并追加/ }));
+    expect(await screen.findByTestId("append-outcome")).toHaveTextContent("本次已追加 1 个仓库");
+    // The same button retries the same intent; this time main refuses by name.
+    fireEvent.click(screen.getByRole("button", { name: /获取最新基线并追加/ }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("worktree-mismatch");
+    // The stale success must not sit next to the fresh refusal.
+    expect(screen.queryByTestId("append-outcome")).not.toBeInTheDocument();
+  });
+
+  it("does not promise an unconditional skip for repositories the task already has", async () => {
+    const appendTaskRepos = vi.fn(async () => ({ ok: true, payload: { taskId, appended: [], skipped: [] } }));
+    render(<DesktopTaskSources taskId={taskId} bridge={withBridge(bridge({ appendTaskRepos }))} onClose={vi.fn()} />);
+    // The footer now names the exception: a recorded repo whose worktree is
+    // missing or mismatched is refused by name, not silently skipped.
+    expect(screen.getByText(/记录存在但工作副本缺失或不符时会按名拒绝/)).toBeInTheDocument();
+    expect(screen.queryByText("已是任务成员的仓库会被跳过，不会创建第二个工作副本。")).toBeNull();
+  });
 });

@@ -118,6 +118,8 @@ async function productionRoute(options: {
   brokenCheckoutFor?: RepoKey;
   /** Runs in the Host delegate, i.e. AFTER main's privileged scan. */
   beforeHost?: () => void;
+  /** Register `shell/taskOp` with NO resume executor in main. */
+  noExecutor?: boolean;
 }): Promise<Route> {
   const home = mkdtempSync(join(tmpdir(), "pidock-prep-route-"));
   homes.push(home);
@@ -213,7 +215,7 @@ async function productionRoute(options: {
     createNodeAppendGit(),
   );
   const views = await createTrustedWindow("workspace-prep-route", "production");
-  registerIpc({} as never, views.registry, { routeTaskOp } as never, projects, roots, undefined, undefined, undefined, undefined, undefined, append);
+  registerIpc({} as never, views.registry, { routeTaskOp } as never, projects, roots, undefined, undefined, undefined, undefined, undefined, options.noExecutor ? undefined : append);
   const handler = vi
     .mocked(ipcMain.handle)
     .mock.calls.findLast(([channel]) => channel === "shell/taskOp")?.[1] as unknown as (
@@ -331,6 +333,19 @@ describe("#6 privileged prep scan through the real shell/taskOp handler", () => 
     expect(result.error).toContain("shell/appendTaskRepos");
     // The Host was never asked and nothing changed on disk: a page can no
     // longer persist a caller-supplied baseline with no executor in main.
+    expect(route.forwarded).toEqual([]);
+    expect(route.recordText()).toBe(before);
+    expect(existsSync(join(route.taskDir, route.repos.invoice))).toBe(false);
+  });
+
+  it("refuses a resume with no executor in main before the Host writes anything", async () => {
+    const route = await productionRoute({ recorded: ["frontend", "invoice"], created: ["frontend"], noExecutor: true });
+    const before = route.recordText();
+    const result = (await route.invoke("task/resumeAppend", {})) as { ok: boolean; error: string };
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("真实任务准备恢复尚未接入");
+    // The check runs BEFORE routing: the Host never wrote a record update that
+    // main has no executor to complete.
     expect(route.forwarded).toEqual([]);
     expect(route.recordText()).toBe(before);
     expect(existsSync(join(route.taskDir, route.repos.invoice))).toBe(false);
