@@ -126,7 +126,7 @@ type HostState = {
   planTerminal: (taskId: string, request: TerminalPlanRequest) => Promise<TerminalPlanView>;
   /** [PiDock 10] (#15) start/stop one terminal through the Host's gate. */
   controlTerminal: (taskId: string, request: TerminalControlRequest) => Promise<TerminalControlResultView>;
-  /** [PiDock 10] (#15) this task's terminal instances (no real pty yet). */
+  /** [PiDock 10] (#15) this task's terminal instances and their real process state. */
   terminalState: (taskId: string) => Promise<TerminalStateView>;
   setScheduleEnabled: (scheduleId: string, enabled: boolean) => Promise<void>;
   runScheduleNow: (scheduleId: string) => Promise<ScheduledRun>;
