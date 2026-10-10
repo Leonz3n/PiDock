@@ -1072,7 +1072,7 @@ export function TerminalTakeoverPanel({
   const [rootState, setRootState] = useState<{ taskId: string; roots: WorkspaceRootView[] } | null>(null);
   const [rootId, setRootId] = useState("");
   const [planState, setPlanState] = useState<{ taskId: string; plan: TerminalPlanView } | null>(null);
-  const [history, setHistory] = useState<TerminalHistoryEntryView[]>([]);
+  const [historyState, setHistoryState] = useState<{ taskId: string; entries: TerminalHistoryEntryView[] } | null>(null);
   const [noticeState, setNoticeState] = useState<{ taskId: string; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   // Freshness guards: a task/instance change, or a newer read of the same kind,
@@ -1092,6 +1092,9 @@ export function TerminalTakeoverPanel({
   const instances = known ? sandbox.instances : [];
   const roots = rootState !== null && rootState.taskId === taskId ? rootState.roots : [];
   const plan = planState !== null && planState.taskId === taskId ? planState.plan : null;
+  // History is tagged like every other row: a task switch must not paint the
+  // previous task's lines even for the frame before the mount effect clears them.
+  const history = historyState !== null && historyState.taskId === taskId ? historyState.entries : [];
   const notice = noticeState !== null && noticeState.taskId === taskId ? noticeState.text : undefined;
   const running = instances.filter((instance) => instance.lifecycle === "running");
   const watched = running[running.length - 1] ?? instances[instances.length - 1];
@@ -1116,7 +1119,7 @@ export function TerminalTakeoverPanel({
       const request = ++historyEpoch.current;
       const result = await readTerminalHistory({ taskId, instanceId, limit: TERMINAL_HISTORY_LIMIT });
       if (historyEpoch.current !== request) return;
-      if (result.ok) setHistory(result.value);
+      if (result.ok) setHistoryState({ taskId, entries: result.value });
       else setNoticeState({ taskId, text: result.error });
     },
     [taskId],
@@ -1126,7 +1129,7 @@ export function TerminalTakeoverPanel({
     // A task change starts a fresh read; the previous task's rows are dropped by
     // their task tag and its in-flight answers are fenced by the new epoch.
     const request = ++stateEpoch.current;
-    setHistory([]);
+    setHistoryState(null);
     setPlanState(null);
     setNoticeState(null);
     setRootId("");
@@ -1152,7 +1155,7 @@ export function TerminalTakeoverPanel({
       // No target: fence whatever read was still in flight and clear the output,
       // so the previous task's history cannot appear as this task's.
       ++historyEpoch.current;
-      setHistory([]);
+      setHistoryState(null);
       return;
     }
     // Read once when the watched instance changes, then re-read while it runs:
