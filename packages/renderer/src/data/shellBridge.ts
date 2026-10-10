@@ -919,33 +919,57 @@ export async function planTerminalThroughShell(input: {
 }
 
 /**
- * [PiDock 10] (#15) start/stop one terminal (`task/terminalControl`). An agent
- * call names its session and (for the default tier) the live `approvalId`; a
- * human call is labelled and attested by main. Booleans are never sent: the
- * Host reads the tier and the approval from the session channel itself. A start
- * always carries the #7 env layers (empty layers = an explicit empty resolve),
- * because the Host guard refuses a start without them.
+ * [PiDock 10] (#15) start/stop/input/resize one terminal
+ * (`task/terminalControl`). An agent call names its session and (for the
+ * default tier) the live `approvalId`; a human call is labelled and attested by
+ * main. Booleans are never sent: the Host reads the tier and the approval from
+ * the session channel itself. A start always carries the #7 env layers (empty
+ * layers = an explicit empty resolve), because the Host guard refuses a start
+ * without them.
+ *
+ * `input` and `resize` are the human takeover surface: the Host refuses an
+ * Agent session for raw input and window changes, so neither action names a
+ * session (and no flag stands in for one) — main attests the labelled human
+ * origin itself. The types the Host guard documents are checked here first, so
+ * an obviously wrong payload never becomes a confusing op-level refusal; the
+ * bounds that need Host knowledge (line bytes, window range) stay Host-side and
+ * are reported verbatim when refused.
  */
 export async function controlTerminalThroughShell(input: {
   taskId: string;
   instanceId: string;
-  action: "start" | "stop";
+  action: "start" | "stop" | "input" | "resize";
   rootId?: string;
   program?: string;
   args?: string[];
   cols?: number;
   rows?: number;
+  /** Keystrokes for `input`; the Host bounds them per line and lifetime. */
+  data?: string;
   layers?: Record<string, unknown>;
   sessionId?: string;
   label?: string;
   approvalId?: string;
 }): Promise<ShellTaskOpResult> {
   const payload: Record<string, unknown> = { instanceId: input.instanceId, action: input.action };
-  for (const key of ["rootId", "program", "args", "cols", "rows", "layers", "sessionId", "label", "approvalId"] as const) {
-    const value = input[key];
-    if (value !== undefined) payload[key] = value;
+  if (input.action === "input") {
+    if (typeof input.data !== "string" || input.data.length === 0) {
+      return { ok: false, error: "invalid-payload: task/terminalControl.data must be a non-empty string" };
+    }
+    payload["data"] = input.data;
+  } else if (input.action === "resize") {
+    if (!Number.isInteger(input.cols) || !Number.isInteger(input.rows)) {
+      return { ok: false, error: "invalid-payload: task/terminalControl.cols/rows must be integers when resizing" };
+    }
+    payload["cols"] = input.cols;
+    payload["rows"] = input.rows;
+  } else {
+    for (const key of ["rootId", "program", "args", "cols", "rows", "layers", "sessionId", "label", "approvalId"] as const) {
+      const value = input[key];
+      if (value !== undefined) payload[key] = value;
+    }
+    if (input.action === "start") payload["layers"] ??= { repoDefaults: [], shared: [], privateEntries: [], task: [] };
   }
-  if (input.action === "start") payload["layers"] ??= { repoDefaults: [], shared: [], privateEntries: [], task: [] };
   try {
     return await shellTaskOp(input.taskId, "task/terminalControl", payload);
   } catch (error) {
