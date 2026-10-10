@@ -316,3 +316,120 @@ describe("#6 privileged prep scan precedence", () => {
     }
   });
 });
+
+// [PiDock 10] (#15) the terminal control bridge: the Host accepts
+// start/stop/input/resize, and the raw-input/window actions are the human
+// takeover surface - no session is named for them and no boolean stands in for
+// the caller class the Host reads from the session channel itself.
+describe("#15 terminal control bridge", () => {
+  it("forwards raw input as its own action without naming a session", async () => {
+    const { controlTerminalThroughShell } = await import("../data/shellBridge");
+    const taskOp = vi.fn(async () => ({ ok: true, payload: {} }));
+    vi.stubGlobal("window", { pidock: { taskOp } });
+    try {
+      const typed = await controlTerminalThroughShell({
+        taskId: "task-abcdef12",
+        instanceId: "term-task-abcdef12-1",
+        action: "input",
+        data: "echo MARK-11\n",
+      });
+      expect(typed.ok).toBe(true);
+      expect(taskOp).toHaveBeenCalledWith("task-abcdef12", "task/terminalControl", {
+        instanceId: "term-task-abcdef12-1",
+        action: "input",
+        data: "echo MARK-11\n",
+      });
+      const payload = taskOp.mock.calls.at(-1)![2] as Record<string, unknown>;
+      expect(payload).not.toHaveProperty("sessionId");
+      expect(payload).not.toHaveProperty("layers");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("forwards a window change as its own action", async () => {
+    const { controlTerminalThroughShell } = await import("../data/shellBridge");
+    const taskOp = vi.fn(async () => ({ ok: true, payload: {} }));
+    vi.stubGlobal("window", { pidock: { taskOp } });
+    try {
+      const resized = await controlTerminalThroughShell({
+        taskId: "task-abcdef12",
+        instanceId: "term-task-abcdef12-1",
+        action: "resize",
+        cols: 132,
+        rows: 43,
+      });
+      expect(resized.ok).toBe(true);
+      expect(taskOp).toHaveBeenCalledWith("task-abcdef12", "task/terminalControl", {
+        instanceId: "term-task-abcdef12-1",
+        action: "resize",
+        cols: 132,
+        rows: 43,
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("refuses an empty input or a non-integer window before asking the Host", async () => {
+    const { controlTerminalThroughShell } = await import("../data/shellBridge");
+    const taskOp = vi.fn(async () => ({ ok: true, payload: {} }));
+    vi.stubGlobal("window", { pidock: { taskOp } });
+    try {
+      const empty = await controlTerminalThroughShell({
+        taskId: "task-abcdef12",
+        instanceId: "term-1",
+        action: "input",
+        data: "",
+      });
+      expect(empty.ok).toBe(false);
+      expect(empty.error).toContain("data must be a non-empty string");
+      const fractional = await controlTerminalThroughShell({
+        taskId: "task-abcdef12",
+        instanceId: "term-1",
+        action: "resize",
+        cols: 80.5,
+        rows: 24,
+      });
+      expect(fractional.ok).toBe(false);
+      expect(fractional.error).toContain("cols/rows must be integers when resizing");
+      expect(taskOp).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("still starts with explicit empty env layers and stops with the same payload shape", async () => {
+    const { controlTerminalThroughShell } = await import("../data/shellBridge");
+    const taskOp = vi.fn(async () => ({ ok: true, payload: {} }));
+    vi.stubGlobal("window", { pidock: { taskOp } });
+    try {
+      await controlTerminalThroughShell({
+        taskId: "task-abcdef12",
+        instanceId: "term-1",
+        action: "start",
+        rootId: "shipment",
+        program: "bash",
+        args: ["-l"],
+        label: "终端面板（用户显式操作）",
+      });
+      expect(taskOp).toHaveBeenCalledWith("task-abcdef12", "task/terminalControl", {
+        instanceId: "term-1",
+        action: "start",
+        rootId: "shipment",
+        program: "bash",
+        args: ["-l"],
+        layers: { repoDefaults: [], shared: [], privateEntries: [], task: [] },
+        label: "终端面板（用户显式操作）",
+      });
+      await controlTerminalThroughShell({ taskId: "task-abcdef12", instanceId: "term-1", action: "stop", label: "终端面板（用户显式操作）" });
+      expect(taskOp.mock.calls.at(-1)![2]).toEqual({
+        instanceId: "term-1",
+        action: "stop",
+        label: "终端面板（用户显式操作）",
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
