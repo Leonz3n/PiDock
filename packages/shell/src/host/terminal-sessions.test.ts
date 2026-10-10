@@ -22,7 +22,7 @@ import { TaskTerminalRegistry, planTerminal, type TerminalPlan } from "../main/t
 import { workspaceRoots } from "../main/workspace-files.js";
 import { inspectNodePtyPrebuild, prepareNodePtyPrebuild } from "./node-pty-preflight.js";
 import { descendantPids, resolvePtyRuntime, TerminalPtyDriver, workerEntryUrl } from "./terminal-pty-driver.js";
-import { TaskTerminalSessions } from "./terminal-sessions.js";
+import { resolveProgram, TaskTerminalSessions } from "./terminal-sessions.js";
 
 const supported = process.platform === "darwin" && process.arch === "arm64" && existsSync(fileURLToPath(workerEntryUrl())) && (() => {
   try {
@@ -115,7 +115,7 @@ class Fixture {
     fixtures.push(this);
   }
 
-  plan(instanceId = "term-1", program = "/bin/sh", args: string[] = []): TerminalPlan {
+  plan(instanceId = "term-1", program = "sh", args: string[] = []): TerminalPlan {
     return planFor(this.taskId, this.taskDir, instanceId, program, args);
   }
 
@@ -123,7 +123,7 @@ class Fixture {
     return this.registry.history(instanceId).map((entry) => entry.line).join("\n");
   }
 
-  async start(instanceId = "term-1", program = "/bin/sh", args: string[] = []) {
+  async start(instanceId = "term-1", program = "sh", args: string[] = []) {
     const plan = this.plan(instanceId, program, args);
     this.registry.register(plan);
     const started = await this.sessions.start({ plan, sessionId: null });
@@ -261,4 +261,10 @@ it("derives the descendant set from one process-table snapshot", () => {
   expect(descendantPids(table, 10)).toEqual([11, 12]);
   expect(descendantPids(table, 13)).toEqual([]);
   expect(descendantPids(table, 999)).toEqual([]);
+});
+
+it("resolves a bare planned program against the launch PATH without rewriting the plan", () => {
+  expect(resolveProgram("/bin/sh", {})).toBe("/bin/sh");
+  expect(resolveProgram("sh", { PATH: "/usr/bin:/bin" })).toBe("/bin/sh");
+  expect(resolveProgram("definitely-not-a-planned-program", { PATH: "/bin" })).toBe("definitely-not-a-planned-program");
 });

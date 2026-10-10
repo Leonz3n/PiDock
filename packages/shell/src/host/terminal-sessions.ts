@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { accessSync, constants, statSync } from "node:fs";
+import { isAbsolute, join } from "node:path";
 import type { TaskTerminalRegistry, TerminalInstanceRecord, TerminalPlan } from "../main/terminal-config.js";
 import { operationKey } from "./node-pty-protocol.js";
 import type { TerminalDriver, TerminalDriverReceipt, TerminalIdentity, TerminalLaunch } from "./terminal-execution.js";
@@ -18,6 +20,29 @@ const CONTROL_CHARACTERS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g;
 
 function stripControl(line: string): string {
   return line.replace(ANSI_SEQUENCE, "").replace(CONTROL_CHARACTERS, "");
+}
+
+/**
+ * Turn the planned program into the executable image the PTY will exec. A bare
+ * name (`bash`) is resolved against the launch's own `PATH` and then a fixed
+ * system path; an unresolvable name is returned unchanged so the driver refuses
+ * it as `not-started` instead of guessing. The plan's displayed program is not
+ * rewritten, so the panel still shows what the user chose.
+ */
+export function resolveProgram(program: string, env: Record<string, string>): string {
+  if (isAbsolute(program)) return program;
+  const searchPath = (env["PATH"] ?? "").split(":").filter((entry) => entry.length > 0);
+  for (const directory of [...searchPath, "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"]) {
+    const candidate = join(directory, program);
+    try {
+      if (!statSync(candidate).isFile()) continue;
+      accessSync(candidate, constants.X_OK);
+      return candidate;
+    } catch {
+      // Try the next candidate directory.
+    }
+  }
+  return program;
 }
 
 /**
@@ -92,7 +117,7 @@ export class TaskTerminalSessions {
     const generation = (this.generations.get(instanceId) ?? 0) + 1;
     const identity: TerminalIdentity = { taskId: input.plan.taskId, sessionId: input.sessionId ?? "human-ui", instanceId, generation };
     const launch: TerminalLaunch = {
-      program: input.plan.program,
+      program: resolveProgram(input.plan.program, input.plan.env),
       args: [...input.plan.args],
       cwd: input.plan.cwd,
       env: { ...input.plan.env },
@@ -145,7 +170,8 @@ export class TaskTerminalSessions {
       return { ok: false, error: `unknown-process: 终端 ${instanceId} 没有本 Host 记录的运行会话，拒绝按记录进程号发送信号` };
     }
     const observed = this.driver.snapshot(session.identity);
-    if (observed.process?.processId !== scope.scope.processId || observed.process.processGroupId !== scope.scope.processGroupId) {
+    if (record.processGroupId === undefined || observed.process?.processId !== scope.scope.processId ||
+        observed.process.processGroupId !== record.processGroupId) {
       return { ok: false, error: `unknown-process: 终端 ${instanceId} 的记录身份与运行会话不一致，拒绝发送信号` };
     }
     const receipt = await this.driver.stop(session.identity);
