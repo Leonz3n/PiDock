@@ -176,6 +176,55 @@ describe("[UI 对齐] S8d production tool dock", () => {
     await waitFor(() => expect(screen.getByText("read-only-session: 只读会话不能申请终端")).toBeInTheDocument());
     expect(screen.queryByTestId("dock-terminal-plan")).not.toBeInTheDocument();
   });
+
+  it("drives a real terminal from the dock once the Host can spawn one", async () => {
+    // The dock is the terminal tool a packaged app renders, so it must be the
+    // human takeover surface - not a plan-only read - or the panel is dead code
+    // in the shipped build.
+    const instance = {
+      instanceId: "term-task-1-1",
+      rootId: "root-1",
+      attribution,
+      program: "bash",
+      args: ["-l"],
+      cwd: "/tmp/task-1",
+      owner: { taskId: "task-1", sessionId: null, label: "终端面板（用户显式操作）" },
+      cols: 80,
+      rows: 24,
+      envKeys: ["PATH"],
+      lifecycle: "running",
+      processKnown: true,
+      processId: 4321,
+      startedAt: "2026-10-10T00:00:00.000Z",
+    };
+    const calls: { op: string; payload: Record<string, unknown> }[] = [];
+    let started = false;
+    const taskOp = vi.fn(async (_taskId: string, op: string, payload: Record<string, unknown> = {}) => {
+      calls.push({ op, payload });
+      if (op === "task/terminalState") return { ok: true, payload: { spawnImplemented: true, instances: started ? [instance] : [] } };
+      if (op === "task/fileRoots") return { ok: true, payload: { taskDir: "/tmp/task-1", roots: [{ id: "root-1", kind: "worktree", label: "primary", path: "/tmp/task-1" }] } };
+      if (op === "task/planTerminal") return { ok: true, payload: { plan: { ...instance, resolved: [{ key: "PATH", value: "/usr/bin", source: "base", secret: false }], historyLimit: 200, owner: { taskId: "task-1", sessionId: null, label: payload["label"] ?? "用户显式操作" } } } };
+      if (op === "task/terminalControl") {
+        if (payload["action"] === "start") started = true;
+        return { ok: true, payload: { instanceId: "term-task-1-1", action: payload["action"], actor: "human" } };
+      }
+      if (op === "task/terminalHistory") return { ok: true, payload: { history: [{ at: "t1", line: "host-line" }] } };
+      return { ok: true, payload: {} };
+    });
+    bridge(taskOp);
+    render(<DesktopToolDock taskId="task-1" tool="terminal" onClose={() => {}} />);
+
+    // The takeover surface, not the read-only plan view.
+    expect(await screen.findByTestId("terminal-output")).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "按计划启动终端" }));
+    await waitFor(() => expect(calls.some((call) => call.payload["action"] === "start")).toBe(true));
+    const start = calls.find((call) => call.payload["action"] === "start");
+    expect(start?.op).toBe("task/terminalControl");
+    expect(start?.payload["label"]).toBe("终端面板（用户显式操作）");
+    // The started instance comes back from the Host's own state read.
+    expect(await screen.findByTestId("terminal-instance")).toHaveTextContent("term-task-1-1");
+    expect(await screen.findByText("host-line")).toBeInTheDocument();
+  });
 });
 
 describe("[UI 对齐] S8 production protocol dock", () => {
