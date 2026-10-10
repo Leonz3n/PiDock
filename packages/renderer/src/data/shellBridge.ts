@@ -922,7 +922,9 @@ export async function planTerminalThroughShell(input: {
  * [PiDock 10] (#15) start/stop one terminal (`task/terminalControl`). An agent
  * call names its session and (for the default tier) the live `approvalId`; a
  * human call is labelled and attested by main. Booleans are never sent: the
- * Host reads the tier and the approval from the session channel itself.
+ * Host reads the tier and the approval from the session channel itself. A start
+ * always carries the #7 env layers (empty layers = an explicit empty resolve),
+ * because the Host guard refuses a start without them.
  */
 export async function controlTerminalThroughShell(input: {
   taskId: string;
@@ -943,6 +945,7 @@ export async function controlTerminalThroughShell(input: {
     const value = input[key];
     if (value !== undefined) payload[key] = value;
   }
+  if (input.action === "start") payload["layers"] ??= { repoDefaults: [], shared: [], privateEntries: [], task: [] };
   try {
     return await shellTaskOp(input.taskId, "task/terminalControl", payload);
   } catch (error) {

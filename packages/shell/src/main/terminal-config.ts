@@ -188,7 +188,6 @@ export interface TerminalStopScope {
   taskId: string;
   instanceId: string;
   processId: number;
-  processGroupId: number;
   startedAt: string;
 }
 
@@ -321,7 +320,8 @@ export class TaskTerminalRegistry {
 
   /**
    * Prove what a stop request may act on: same task, known instance, recorded
-   * process identity. Anything else fails closed with a reason the UI shows.
+   * process identity (pid and the process-group id the spawner observed).
+   * Anything else fails closed with a reason the UI shows.
    */
   stopScope(instanceId: string): TerminalStopResult {
     const record = this.instances.get(instanceId);
@@ -332,7 +332,7 @@ export class TaskTerminalRegistry {
     if (record.processId === undefined || record.processGroupId === undefined) {
       return { ok: false, error: `unknown-process: 终端 ${instanceId} 尚未报告进程号与进程组号，无法安全停止` };
     }
-    return { ok: true, scope: { taskId: record.taskId, instanceId: record.instanceId, processId: record.processId, processGroupId: record.processGroupId, startedAt: record.startedAt } };
+    return { ok: true, scope: { taskId: record.taskId, instanceId: record.instanceId, processId: record.processId, startedAt: record.startedAt } };
   }
 
   /** Drop one instance (panel closed after exit, or task disposed). */
