@@ -351,6 +351,28 @@ describe("Production plain-directory append for an existing task", () => {
     ).rejects.toThrow("普通目录与任务工作区重叠");
   });
 
+  it("refuses append when the registered directory CONTAINS the task workspace (overlap, other direction)", async () => {
+    const env = await setup();
+    // The other overlap direction: the source is an ANCESTOR of the task
+    // folder (the tasks root contains `<root>/<taskId>`). The sibling test
+    // above covers a source INSIDE the task workspace; each direction is a
+    // separate branch of the append's overlap check.
+    const updatedProject = await env.projects.update(env.project.id, {
+      description: "",
+      repositories: env.project.repositories,
+      directories: [...env.project.directories, { name: "tasks-root", path: env.root }],
+    });
+    const containingId = updatedProject.directories.find((d) => d.name === "tasks-root")!.id;
+
+    await expect(
+      env.appendService.append({
+        taskId: env.taskId,
+        directoryIds: [containingId],
+        sharedWriteConfirmed: true,
+      }),
+    ).rejects.toThrow("普通目录与任务工作区重叠");
+  });
+
   it("refuses append when directory source is unusable/absent", async () => {
     const env = await setup();
     const absentDir = join(env.home, "absent-dir");
