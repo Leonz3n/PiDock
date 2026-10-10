@@ -29,8 +29,8 @@ export interface RepoPrepareView {
   hold: string[];
   /** True when at least one unfinished repo can be resumed. */
   canResume: boolean;
-  /** True only on a resume response (`resumed`) that planned work; a
-   *  `prepareStatus` read never sets it. Drives the "已规划，待执行" notice. */
+  /** True only on a resume response (`resumed`) that executed work in main; a
+   *  `prepareStatus` read never sets it. Drives the "executed" notice. */
   resumed: boolean;
 }
 

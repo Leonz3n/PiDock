@@ -261,8 +261,11 @@ export async function provisionTaskThroughShell(input: {
 
 /**
  * [PiDock 03] (#6) append repos to a task through the shell (`host/task` +
- * `task/appendRepos`). Only repos not already in the task are
- * fetched/planned; the form stays on failure with a per-repo retry entry.
+ * `task/appendRepos`). LEGACY: main now REFUSES `task/appendRepos` on
+ * `shell/taskOp` (no production caller) because it let page code persist an
+ * unverified baseline into `repoSources` with no executor in main. It is kept
+ * for the Host-direct contract/tests only; production uses
+ * `appendTaskReposThroughShell` (`shell/appendTaskRepos`).
  *
  * `takenPaths`/`branchesInUse` stay in the payload for compatibility, but
  * main is the authoritative producer: it derives both from the resolved task
@@ -349,8 +352,11 @@ export async function prepareStatusThroughShell(input: { taskId: string }): Prom
 /**
  * [PiDock 03] (#6) resume a partial multi-repo prepare through the shell
  * (`host/task` + `task/resumeAppend`). Selections come from the stored task
- * record; the Host classifies the REAL worktree state and retries only the
- * unfinished repos.
+ * record; the Host classifies the REAL worktree state and plans only the
+ * unfinished repos, and MAIN then EXECUTES the returned plan through the same
+ * validated append-plan rules and re-reads the Host's per-repo status, so a
+ * recorded-but-worktree-absent repo is actually completed (not reported as a
+ * "planned, not executed" success).
  *
  * `takenPaths`/`branchesInUse`/`mainCheckouts` are derived by MAIN on the
  * shell route (the resolved task folder listing + each recorded repo's own
@@ -387,9 +393,10 @@ export async function resumeAppendThroughShell(input: {
  * Production resume action for a shell surface component. The sandboxed
  * renderer cannot scan, so it supplies NO conflict inputs: main derives
  * `takenPaths`/`branchesInUse` (and the target source checkouts) from the task
- * folder and the task's target repos, and the Host keeps requiring both lists.
- * Returns the callback shape the recovery panel expects; nothing is resumed
- * until the callback is invoked by an explicit human action.
+ * folder and the task's target repos, keeps requiring both lists Host-side,
+ * EXECUTES the returned plan and answers with the Host's re-read per-repo
+ * status. Returns the callback shape the recovery panel expects; nothing is
+ * resumed until the callback is invoked by an explicit human action.
  */
 export function shellTaskPrepareResume(
   taskId: string,

@@ -68,15 +68,15 @@ it("hands only the unfinished repos to the injected resume and surfaces the real
   expect(resume).toHaveBeenCalledTimes(1);
   // `frontend` is created: it must not enter the retry set.
   expect(resume.mock.calls[0]![0]).toEqual({ repoDirs: ["invoice", "shipment"] });
-  // The planned-but-not-yet-executed state is visible (a real resume is not
-  // silently indistinguishable from "nothing happened").
-  expect(await screen.findByTestId("prepare-resume-planned")).toHaveTextContent("已规划");
-  expect(screen.getByTestId("prepare-resume-planned")).toHaveTextContent("invoice、shipment");
+  // A resume that ran is visible (not silently indistinguishable from
+  // "nothing happened"); on the production path main has already executed it
+  // and this payload carries the Host's freshly re-read status.
+  expect(await screen.findByTestId("prepare-resume-executed")).toHaveTextContent("已按记录基线执行本次恢复");
   expect(screen.getByTestId("prepare-status-rows")).toHaveTextContent("invoice · 待准备");
   expect(screen.getByRole("button", { name: "继续准备未完成的仓库" })).toBeInTheDocument();
 
-  // A later status read after the caller executed the plan: nothing is
-  // unfinished, so the affordance and the planned notice disappear.
+  // A later status read after the resume: nothing is unfinished, so the
+  // affordance and the executed notice disappear.
   load.mockResolvedValueOnce(
     ok({
       outcomes: [
@@ -92,7 +92,7 @@ it("hands only the unfinished repos to the injected resume and surfaces the real
   await waitFor(() =>
     expect(screen.queryByRole("button", { name: "继续准备未完成的仓库" })).toBeNull(),
   );
-  expect(screen.queryByTestId("prepare-resume-planned")).toBeNull();
+  expect(screen.queryByTestId("prepare-resume-executed")).toBeNull();
   expect(screen.getByTestId("prepare-status-rows")).toHaveTextContent("frontend · 已创建");
 });
 
@@ -222,7 +222,7 @@ it("drops a superseded status response so the latest request wins", async () => 
   resolveResume?.(ok(staleResume));
   await waitFor(() => expect(screen.getByTestId("prepare-status-rows")).toHaveTextContent("latest · 已创建"));
   expect(screen.getByTestId("prepare-status-rows")).not.toHaveTextContent("stale");
-  expect(screen.queryByTestId("prepare-resume-planned")).toBeNull();
+  expect(screen.queryByTestId("prepare-resume-executed")).toBeNull();
 });
 
 
@@ -250,7 +250,7 @@ it("resumes through the production shell route without a renderer-supplied scan"
     // The page sends no `takenPaths`/`branchesInUse`/`mainCheckouts`: main
     // derives them for this task and the Host keeps requiring them.
     expect(taskOp).toHaveBeenCalledWith("task-abcdef12", "task/resumeAppend", {});
-    expect(await screen.findByTestId("prepare-resume-planned")).toHaveTextContent("已规划");
+    expect(await screen.findByTestId("prepare-resume-executed")).toHaveTextContent("已按记录基线执行本次恢复");
   } finally {
     (window as { pidock?: unknown }).pidock = original;
   }

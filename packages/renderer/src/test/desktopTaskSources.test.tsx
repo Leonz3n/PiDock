@@ -194,4 +194,27 @@ describe("Desktop append surface", () => {
     expect(await screen.findByTestId("prepare-status-rows")).toHaveTextContent("待准备");
     expect(screen.getByRole("button", { name: "继续准备未完成的仓库" })).toBeEnabled();
   });
+
+  it("gates the primary action on a non-blank remote and branch for every selected repo", async () => {
+    const appendTaskRepos = vi.fn(async () => ({ ok: true, payload: { taskId, appended: [], skipped: [] } }));
+    render(<DesktopTaskSources taskId={taskId} bridge={withBridge(bridge({ appendTaskRepos }))} onClose={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("checkbox", { name: "API" }));
+    const button = screen.getByRole("button", { name: /获取最新基线并追加/ });
+    // Blank remote/branch: the primary action is disabled and no request is
+    // sent (a click would be a guaranteed `invalid-payload` from main).
+    expect(button).toBeDisabled();
+    expect(appendTaskRepos).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText("远程名称 API"), { target: { value: "origin" } });
+    // Only one of the two filled is still not enough.
+    expect(button).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("远程分支 API"), { target: { value: "main" } });
+    expect(button).toBeEnabled();
+    fireEvent.click(button);
+    await waitFor(() =>
+      expect(appendTaskRepos).toHaveBeenCalledWith({
+        taskId,
+        repositories: [{ sourceId: second.id, remote: "origin", remoteBranch: "main" }],
+      }),
+    );
+  });
 });

@@ -31,19 +31,27 @@
  *    and `worktree add` only, no option-looking argv element (so no `--force`),
  *    and no op in a checkout the caller did not resolve;
  * 6. the appended/skipped repos come back named. Existing worktrees, baselines,
- *    links and the stored root/dirId are never touched.
+ *    links and the stored root/dirId are never touched. A repo is only reported
+ *    as `skipped` when its worktree really exists on disk; a repo the record
+ *    lists without a worktree is refused by name and pointed at the recovery
+ *    surface instead of being reported as an idempotent success.
+ * 7. `executeResumePlan` executes the plan `task/resumeAppend` returns for a
+ *    partial prepare through the SAME `executeAppendPlan` rules, then re-reads
+ *    the Host's per-repo status, so a recorded-but-worktree-absent repo is
+ *    actually completed in product.
  *
  * Two boundaries are deliberate and stated rather than papered over: the
  * `git fetch` runs before the conflict gate (the scan itself is read
  * immediately before the Host call, but the fetch writes only into the SOURCE
  * checkout, never into the task), and a failure between the Host write and the
  * last `worktree add` leaves an owned partial state which the recovery surface
- * (`task/prepareStatus` + `task/resumeAppend`) reports.
+ * (`task/prepareStatus` + `task/resumeAppend`) both reports AND now completes
+ * (main executes the resume plan via `executeResumePlan`).
  */
 
 import { execFileSync } from "node:child_process";
-import { realpathSync } from "node:fs";
-import { isAbsolute, normalize } from "node:path";
+import { lstatSync, realpathSync } from "node:fs";
+import { isAbsolute, join, normalize } from "node:path";
 import { createNodeRepoProbe } from "../host/repo-identity.js";
 import { readTaskRecordOnDisk } from "../host/task-store.js";
 import type { HostTaskResult } from "../rpc/protocol.js";
@@ -105,11 +113,15 @@ export interface AppendReposResult {
   skipped: AppendedRepoSkip[];
 }
 
-/** The Host seam: main routes `task/appendRepos` to the task's Host. */
+/**
+ * The Host seam: main routes `task/appendRepos` to the task's Host, and
+ * re-reads `task/prepareStatus` after executing a resume plan so the caller
+ * sees what really happened.
+ */
 export interface AppendHost {
   routeTaskOp(params: {
     taskId: string;
-    op: "task/appendRepos";
+    op: "task/appendRepos" | "task/resumeAppend" | "task/prepareStatus";
     payload: Record<string, unknown>;
   }): Promise<HostTaskResult>;
 }
@@ -210,7 +222,10 @@ export function createNodeAppendGit(): AppendGit {
     probeBranchRef: (checkout, branch) => probe.probeBranchRef(checkout, branch),
     exec: (cwd, args) => {
       const result = run(cwd, args);
-      if (!result.ok) throw new Error(result.stderr.trim().split("\n")[0] ?? "");
+      // No raw git stderr crosses this seam: the caller (`ProjectTaskAppend`)
+      // wraps a failure in a named refusal that names the repo, so machine
+      // paths/tool output never reach the sandboxed page.
+      if (!result.ok) throw new Error("append git operation failed");
     },
   };
 }
@@ -227,9 +242,14 @@ function planOp(value: unknown): ProvisionPlanOp {
   return { kind: row["kind"], cwd: row["cwd"], args: [...(row["args"] as string[])] };
 }
 
-/** Read the executable plan out of the Host's `task/appendRepos` payload. */
-export function appendPlanFromHost(taskId: string, result: HostTaskResult): ProvisionPlan {
-  if (result.taskId !== taskId || result.op !== "task/appendRepos") throw new Error("追加计划的 Host 身份不符");
+/** Read one executable plan out of a Host task result, validating the identity. */
+function planFromHost(
+  taskId: string,
+  result: HostTaskResult,
+  op: "task/appendRepos" | "task/resumeAppend",
+  mismatch: string,
+): ProvisionPlan {
+  if (result.taskId !== taskId || result.op !== op) throw new Error(mismatch);
   const plan = result.payload["plan"] as unknown;
   if (!plan || typeof plan !== "object" || Array.isArray(plan)) throw new Error("追加计划不可读取，请重新核对任务状态");
   const row = plan as Record<string, unknown>;
@@ -239,10 +259,29 @@ export function appendPlanFromHost(taskId: string, result: HostTaskResult): Prov
   return { mainCheckoutDir: row["mainCheckoutDir"], ops: row["ops"].map(planOp) };
 }
 
+/** Read the executable plan out of the Host's `task/appendRepos` payload. */
+export function appendPlanFromHost(taskId: string, result: HostTaskResult): ProvisionPlan {
+  return planFromHost(taskId, result, "task/appendRepos", "追加计划的 Host 身份不符");
+}
+
+/** Read the executable plan out of the Host's `task/resumeAppend` payload. */
+export function resumePlanFromHost(taskId: string, result: HostTaskResult): ProvisionPlan {
+  return planFromHost(taskId, result, "task/resumeAppend", "恢复计划的 Host 身份不符");
+}
+
 export interface AppendPlanExpectation {
   taskDir: string;
   branch: string;
-  repos: readonly { repoDir: string; remote: string; remoteBranch: string; checkout: string }[];
+  repos: readonly {
+    repoDir: string;
+    /** Display name used only in a refusal that reaches the user. */
+    name: string;
+    remote: string;
+    remoteBranch: string;
+    checkout: string;
+    /** The pinned commit the branch op must create the task branch at. */
+    commit: string;
+  }[];
 }
 
 /**
@@ -259,12 +298,27 @@ export interface AppendPlanExpectation {
  *   a repo refuses instead of reporting a success it did not achieve.
  */
 export function executeAppendPlan(
-  input: { plan: ProvisionPlan; expected: AppendPlanExpectation; exec: (cwd: string, args: readonly string[]) => void },
+  input: {
+    plan: ProvisionPlan;
+    expected: AppendPlanExpectation;
+    exec: (cwd: string, args: readonly string[], repo: AppendPlanExpectation["repos"][number]) => void;
+  },
 ): { repoDir: string; worktree: string }[] {
   const { plan, expected, exec } = input;
-  assertProvisionPlanSafe(plan);
   const sameDir = (left: string, right: string): boolean =>
     normalize(left).replace(/[\\/]+$/, "") === normalize(right).replace(/[\\/]+$/, "");
+  // Per-repo main-checkout guard. The Host's `plan.mainCheckoutDir` is the
+  // record's task root, so asserting the whole plan against it is vacuous for
+  // an append/resume (every op's cwd is a source checkout). Assert each repo's
+  // OWN plan against its source checkout instead — exactly the guard
+  // `planMultiRepoWorktrees` applies, so `pull/merge/reset` cannot target a
+  // source checkout either.
+  for (const repo of expected.repos) {
+    assertProvisionPlanSafe({
+      mainCheckoutDir: repo.checkout,
+      ops: plan.ops.filter((op) => sameDir(op.cwd, repo.checkout)),
+    });
+  }
   const byWorktree = new Map<string, AppendPlanExpectation["repos"][number]>();
   for (const repo of expected.repos) {
     byWorktree.set(`${expected.taskDir.replace(/[\\/]+$/, "")}/${repo.repoDir}`, repo);
@@ -292,15 +346,17 @@ export function executeAppendPlan(
             (pending.args[0] !== "fetch" || pending.args[1] !== repo.remote || pending.args[2] !== repo.remoteBranch)) {
           throw new Error(`无效的追加计划: 获取操作与所选远程分支不符 ${repo.repoDir}`);
         }
+        // The branch op must create the task branch at THIS repo's pinned
+        // commit — not merely any 40-hex string a plan might carry.
         if (pending.kind === "branch" &&
-            (pending.args[0] !== "branch" || pending.args[1] !== expected.branch || !COMMIT.test(pending.args[2] ?? ""))) {
+            (pending.args[0] !== "branch" || pending.args[1] !== expected.branch || pending.args[2] !== repo.commit)) {
           throw new Error(`无效的追加计划: 分支操作与固定提交不符 ${repo.repoDir}`);
         }
         if (pending.kind !== "fetch" && pending.kind !== "branch") throw new Error(`无效的追加计划: 未知操作 ${pending.kind}`);
       }
-      for (const pending of buffered) exec(pending.cwd, pending.args);
+      for (const pending of buffered) exec(pending.cwd, pending.args, repo);
       buffered = [];
-      exec(op.cwd, op.args);
+      exec(op.cwd, op.args, repo);
       created.push({ repoDir: repo.repoDir, worktree: worktreeDir });
       continue;
     }
@@ -321,6 +377,17 @@ function canonicalPath(value: string): string {
     return realpathSync(value);
   } catch {
     return value;
+  }
+}
+
+/** True when a path exists on disk (`lstatSync`, never following a link). */
+function worktreePresent(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
   }
 }
 
@@ -347,6 +414,102 @@ export class ProjectTaskAppend {
 
   append(request: AppendReposRequest, reattest: () => void = () => undefined): Promise<AppendReposResult> {
     return this.run(() => this.appendOnce(request, reattest));
+  }
+
+  /**
+   * Wrap every plan-execution git failure in a named refusal that names the
+   * repo and the operation, so raw git stderr (machine paths, tool output)
+   * never reaches the sandboxed page. The recovery surface is real and
+   * executable: re-run the same append/resume, which re-derives its plan from
+   * the record and the pinned baselines.
+   */
+  private runExec(): (
+    cwd: string,
+    args: readonly string[],
+    repo: AppendPlanExpectation["repos"][number],
+  ) => void {
+    return (cwd, args, repo) => {
+      try {
+        this.git.exec(cwd, args);
+      } catch {
+        const code = args[0] === "worktree" ? "worktree-add-failed" : "append-op-failed";
+        throw new Error(
+          `${code}: 仓库 ${repo.repoDir}（${repo.name}）执行 git ${String(args[0])} 失败，请人工处理后再试`,
+        );
+      }
+    };
+  }
+
+  /**
+   * Execute the plan `task/resumeAppend` returned for a PARTIAL prepare, then
+   * re-read the Host's per-repo status so the caller sees what really
+   * happened. The plan is validated and executed by the SAME
+   * `executeAppendPlan` rules the append uses (kind whitelist, per-repo cwd
+   * binding, no `-`-prefixed argv), so a recorded-but-worktree-absent repo is
+   * actually completed instead of being reported as `pending`/`skipped`.
+   */
+  async executeResumePlan(
+    input: {
+      taskId: string;
+      planResult: HostTaskResult;
+      /** main-derived source checkouts (`repoDir` -> checkout), from the scan. */
+      mainCheckouts: Readonly<Record<string, string>>;
+    },
+    reattest: () => void = () => undefined,
+  ): Promise<Record<string, unknown>> {
+    const { taskId } = input;
+    const taskDir = this.authority.resolveTaskDir(taskId);
+    if (taskDir === null) throw new Error(`unknown task: ${taskId} 的任务目录不可确认，请先完成创建`);
+    let stored;
+    try {
+      stored = readTaskRecordOnDisk(taskDir);
+    } catch {
+      throw new Error(`unknown task: ${taskId} 的任务记录不可读取，拒绝在未确认来源的情况下恢复`);
+    }
+    if (!stored || stored.taskId !== taskId) {
+      throw new Error(`unknown task: ${taskId} 的任务记录不存在，拒绝在未确认来源的情况下恢复`);
+    }
+    const plan = resumePlanFromHost(taskId, input.planResult);
+    const payload = input.planResult.payload as Record<string, unknown>;
+    const retry = Array.isArray(payload["retry"])
+      ? (payload["retry"] as unknown[]).filter((value): value is string => typeof value === "string")
+      : [];
+    const recorded = new Map((stored.repoSources ?? []).map((source) => [source.repoDir, source]));
+    const names = new Map(
+      this.authority.repositorySources(taskId).map((source) => [buildRepoChildName(source.id), source.name]),
+    );
+    const repos: AppendPlanExpectation["repos"][number][] = [];
+    for (const repoDir of retry) {
+      const source = recorded.get(repoDir);
+      const checkout = input.mainCheckouts[repoDir];
+      if (!source || typeof checkout !== "string") {
+        throw new Error(`repo-unusable: 仓库 ${repoDir} 缺少记录的来源检出或固定基线，无法执行恢复`);
+      }
+      repos.push({
+        repoDir,
+        name: names.get(repoDir) ?? repoDir,
+        remote: source.remote,
+        remoteBranch: source.remoteBranch,
+        checkout,
+        commit: source.baseCommit,
+      });
+    }
+    if (repos.length > 0) {
+      // Re-attest immediately before the operations that create real
+      // resources, the same boundary the append uses.
+      reattest();
+      executeAppendPlan({
+        plan,
+        expected: { taskDir, branch: stored.branch, repos },
+        exec: this.runExec(),
+      });
+    }
+    // Truthful result: re-read the Host's real per-repo status instead of
+    // returning the plan (which would read as a "planned, not executed"
+    // success). `resumed` is true only when this call really executed work.
+    const status = await this.host.routeTaskOp({ taskId, op: "task/prepareStatus", payload: {} });
+    const statusPayload = (status.payload ?? {}) as Record<string, unknown>;
+    return { ...statusPayload, resumed: repos.length > 0 };
   }
 
   private async appendOnce(request: AppendReposRequest, reattest: () => void): Promise<AppendReposResult> {
@@ -393,9 +556,21 @@ export class ProjectTaskAppend {
     }
     if (requested.length === 0) throw new Error("invalid-repo: 请至少选择一个要追加的仓库");
     const { appended, skipped } = filterAppendRepos(stored.repos, requested.map((repo) => repo.repoDir));
-    const skippedRepos = requested
-      .filter((repo) => skipped.includes(repo.repoDir))
-      .map((repo) => ({ repoDir: repo.repoDir, name: repo.name }));
+    const alreadyRecorded = requested.filter((repo) => skipped.includes(repo.repoDir));
+    // A recorded repo counts as SKIPPED only when its worktree really is on
+    // disk. The Host persists `repos` BEFORE main executes anything, so a
+    // failed execution leaves a repo that is recorded with no worktree: that
+    // state must never be reported as an idempotent success. Name the repos
+    // that are recorded but absent and point at the recovery surface main now
+    // EXECUTES (`task/resumeAppend`, see `executeResumePlan`).
+    const absent = alreadyRecorded.filter((repo) => !worktreePresent(join(taskDir, repo.repoDir)));
+    if (absent.length > 0) {
+      const named = absent.map((repo) => `${repo.repoDir}（${repo.name}）`).join("、");
+      throw new Error(
+        `worktree-missing: 仓库 ${named}已记录但工作副本不存在，请通过「任务准备恢复」继续准备后再追加`,
+      );
+    }
+    const skippedRepos = alreadyRecorded.map((repo) => ({ repoDir: repo.repoDir, name: repo.name }));
     const fresh = requested.filter((repo) => appended.includes(repo.repoDir));
     // Already-present repositories are skipped without a fetch, a worktree or
     // a record write: the append stays idempotent.
@@ -460,7 +635,7 @@ export class ProjectTaskAppend {
     const created = executeAppendPlan({
       plan,
       expected: { taskDir: prep.taskDir, branch: stored.branch, repos: pinned },
-      exec: (cwd, args) => this.git.exec(cwd, args),
+      exec: this.runExec(),
     });
     const byRepoDir = new Map(pinned.map((repo) => [repo.repoDir, repo]));
     return {

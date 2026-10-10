@@ -12,7 +12,7 @@ import { CreationIntentStore, ProjectTaskCreation } from "./project-task-creatio
 import { performCreationOperation } from "./project-task-ipc.js";
 import { performAppendOperation } from "./project-append-ipc.js";
 import { createNodeAppendGit, ProjectTaskAppend, executeAppendPlan, describeFetchFailure } from "./task-append.js";
-import { createNodePrepScanDeps, createPrepScanAuthority } from "./task-prep-scan.js";
+import { createNodePrepScanDeps, createPrepScanAuthority, derivePrepInputs } from "./task-prep-scan.js";
 import { TaskRootIndex } from "./task-root-index.js";
 
 // Seam: [PiDock 03] (#6) production append for an EXISTING task. These tests
@@ -104,6 +104,32 @@ async function setup() {
           taskId: params.taskId,
           op: params.op,
           payload: { ...result.record, plan: result.plan, appended: result.appended, skipped: result.skipped },
+        };
+      }
+      if (params.op === "task/resumeAppend") {
+        const resumed = instance.resumeAppend(params.payload as never);
+        return {
+          workspaceId: "w",
+          taskId: params.taskId,
+          op: params.op,
+          payload: {
+            outcomes: resumed.outcomes,
+            created: resumed.created,
+            pending: resumed.pending,
+            failed: resumed.failed,
+            retry: resumed.retry,
+            hold: resumed.hold,
+            resumed: resumed.resumed,
+            plan: resumed.plan,
+          },
+        };
+      }
+      if (params.op === "task/prepareStatus") {
+        return {
+          workspaceId: "w",
+          taskId: params.taskId,
+          op: params.op,
+          payload: instance.prepareStatus() as unknown as Record<string, unknown>,
         };
       }
       throw new Error(`unexpected op ${params.op}`);
@@ -401,10 +427,127 @@ describe("production task-source append", () => {
     expect(status.retry).toEqual([repoDir]);
     expect(status.created).toEqual([buildRepoChildName(repoIdOf(env.project, env.first))]);
   });
+
+  it("never reports a recorded-but-worktree-absent repo as an idempotent skip, and completes it through the resume plan", async () => {
+    const env = await setup();
+    const repoDir = buildRepoChildName(repoIdOf(env.project, env.second));
+    const worktree = join(env.taskDir, repoDir);
+    const appended = await env.append.append({ taskId: env.taskId, repositories: [env.selection(env.second)] });
+    const pinned = appended.appended[0]!.commit;
+    expect(existsSync(worktree)).toBe(true);
+    // The partial state the Host write can leave: the repo is recorded but its
+    // worktree is gone (execution failed, or the user removed it). This is a
+    // real worktree deletion, so git no longer registers it either.
+    git(env.second.repo, "worktree", "remove", worktree);
+    expect(existsSync(worktree)).toBe(false);
+    expect(readTaskRecordOnDisk(env.taskDir)!.repos).toContain(repoDir);
+
+    // The retry must be TRUTHFUL: a repo that is recorded but whose worktree
+    // is absent is refused by name, never reported as `skipped`.
+    await expect(
+      env.append.append({ taskId: env.taskId, repositories: [env.selection(env.second)] }),
+    ).rejects.toThrow(/^worktree-missing: 仓库 repo-[0-9a-f]{8}（second）已记录但工作副本不存在/);
+
+    // The recovery surface main now EXECUTES actually completes it: derive the
+    // scan the shell route derives, take the Host's resume plan, execute it.
+    const authority = createPrepScanAuthority(env.projects, env.roots);
+    const prep = derivePrepInputs({ taskId: env.taskId, repoDirs: [] }, authority, createNodePrepScanDeps());
+    const planResult = await env.host.routeTaskOp({
+      taskId: env.taskId,
+      op: "task/resumeAppend",
+      payload: { takenPaths: prep.takenPaths, branchesInUse: prep.branchesInUse, mainCheckouts: prep.mainCheckouts },
+    });
+    const outcome = await env.append.executeResumePlan({
+      taskId: env.taskId,
+      planResult,
+      mainCheckouts: prep.mainCheckouts,
+    });
+    expect(outcome["resumed"]).toBe(true);
+    expect(outcome["created"]).toContain(repoDir);
+    expect(outcome["retry"]).toEqual([]);
+    // The worktree really exists at the pinned commit on the task branch.
+    expect(existsSync(worktree)).toBe(true);
+    expect(git(worktree, "rev-parse", "HEAD")).toBe(pinned);
+    expect(git(worktree, "rev-parse", "--abbrev-ref", "HEAD")).toBe(env.branch);
+    expect(readFileSync(join(worktree, "README.md"), "utf8")).toBe("second baseline\n");
+  });
+
+  it("refuses a worktree whose directory was deleted but is still registered, instead of reporting a false success", async () => {
+    const env = await setup();
+    const repoDir = buildRepoChildName(repoIdOf(env.project, env.second));
+    const worktree = join(env.taskDir, repoDir);
+    await env.append.append({ taskId: env.taskId, repositories: [env.selection(env.second)] });
+    // `rmSync` removes only the directory: git still registers the worktree as
+    // "missing but already registered" (a `prunable` entry), a state the
+    // allowed capability set (fetch/branch/worktree add; no prune/force) cannot
+    // silently clear. The retry stays truthful: the append refuses by name and
+    // the resume reports a named git failure — never a success.
+    rmSync(worktree, { recursive: true, force: true });
+    await expect(
+      env.append.append({ taskId: env.taskId, repositories: [env.selection(env.second)] }),
+    ).rejects.toThrow(/^worktree-missing: 仓库 repo-[0-9a-f]{8}（second）已记录但工作副本不存在/);
+    const authority = createPrepScanAuthority(env.projects, env.roots);
+    const prep = derivePrepInputs({ taskId: env.taskId, repoDirs: [] }, authority, createNodePrepScanDeps());
+    const planResult = await env.host.routeTaskOp({
+      taskId: env.taskId,
+      op: "task/resumeAppend",
+      payload: { takenPaths: prep.takenPaths, branchesInUse: prep.branchesInUse, mainCheckouts: prep.mainCheckouts },
+    });
+    await expect(
+      env.append.executeResumePlan({ taskId: env.taskId, planResult, mainCheckouts: prep.mainCheckouts }),
+    ).rejects.toThrow(/^worktree-add-failed: 仓库 repo-[0-9a-f]{8}（second）执行 git worktree 失败，请人工处理后再试$/);
+    expect(existsSync(worktree)).toBe(false);
+  });
+
+  it("wraps a plan-execution failure in a named refusal naming the repo, never raw git stderr", async () => {
+    const env = await setup();
+    // A git seam whose plan execution fails with a raw git message that
+    // contains a machine path: it must not reach the caller verbatim.
+    const failing = {
+      ...createNodeAppendGit(),
+      exec: (): void => {
+        throw new Error("fatal: '/secret/path' is not a working tree");
+      },
+    };
+    const append = new ProjectTaskAppend(
+      env.host,
+      createPrepScanAuthority(env.projects, env.roots),
+      createNodePrepScanDeps(),
+      failing,
+    );
+    let failure: unknown;
+    try {
+      await append.append({ taskId: env.taskId, repositories: [env.selection(env.second)] });
+    } catch (error) {
+      failure = error;
+    }
+    const message = (failure as Error).message;
+    // The failing op here is the plan's `fetch` (buffered before the
+    // worktree add), so the code names that op — but always the repo.
+    expect(message).toMatch(/^append-op-failed: 仓库 repo-[0-9a-f]{8}（second）执行 git fetch 失败，请人工处理后再试$/);
+    expect(message).not.toContain("fatal");
+    expect(message).not.toContain("/secret/path");
+  });
+
+  it("never echoes raw git stderr through the append git seam", async () => {
+    const env = await setup();
+    // `rev-parse` on a non-existent ref fails with real git stderr; the seam
+    // must not carry it (the caller wraps with a named refusal instead).
+    expect(() => createNodeAppendGit().exec(env.second.repo, ["rev-parse", "definitely-not-a-ref"])).toThrow(
+      "append git operation failed",
+    );
+  });
 });
 
 describe("append plan execution guard", () => {
-  const repo = { repoDir: "repo-00000001", remote: "origin", remoteBranch: "main", checkout: "/tmp/source" };
+  const repo = {
+    repoDir: "repo-00000001",
+    name: "source",
+    remote: "origin",
+    remoteBranch: "main",
+    checkout: "/tmp/source",
+    commit: "a".repeat(40),
+  };
   const expected = { taskDir: "/tmp/tasks/task-00000001", branch: "task/task00000001", repos: [repo] };
   const plan = {
     mainCheckoutDir: repo.checkout,
@@ -439,6 +582,10 @@ describe("append plan execution guard", () => {
     expect(() => executeAppendPlan({ plan: elsewhere, expected, exec })).toThrow(/操作位置与来源检出不符/);
     const otherBranch = { ...plan, ops: plan.ops.map((op) => (op.kind === "worktree" ? { ...op, args: [...op.args.slice(0, 3), "task/other"] } : op)) };
     expect(() => executeAppendPlan({ plan: otherBranch, expected, exec })).toThrow(/任务分支与记录不符/);
+    // The branch op must create the task branch at THIS repo's pinned commit,
+    // not merely any 40-hex string a plan might carry.
+    const otherCommit = { ...plan, ops: plan.ops.map((op) => (op.kind === "branch" ? { ...op, args: ["branch", expected.branch, "b".repeat(40)] } : op)) };
+    expect(() => executeAppendPlan({ plan: otherCommit, expected, exec })).toThrow(/分支操作与固定提交不符/);
     const fetchOtherRemote = { ...plan, ops: plan.ops.map((op) => (op.kind === "fetch" ? { ...op, args: ["fetch", "upstream", "main"] } : op)) };
     expect(() => executeAppendPlan({ plan: fetchOtherRemote, expected, exec })).toThrow(/获取操作与所选远程分支不符/);
     const dropped = { ...plan, ops: plan.ops.slice(0, 1) };
