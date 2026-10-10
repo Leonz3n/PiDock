@@ -39,6 +39,10 @@ export function DesktopTaskSources({
   onClose: () => void;
   onAppended?: () => void;
 }) {
+  // The `bridge` prop is the same `window.pidock` instance the desktop shell
+  // reads (DesktopConversation passes it through); the append and recovery
+  // helpers below resolve that one global bridge, exactly like every other
+  // desktop data call.
   const [project, setProject] = useState<DesktopProject | null>(null);
   const [projectError, setProjectError] = useState("");
   const [repos, setRepos] = useState<Record<string, { selected: boolean; remote: string; branch: string }>>({});
