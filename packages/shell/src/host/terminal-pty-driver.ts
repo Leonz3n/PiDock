@@ -43,6 +43,14 @@ export function resolvePtyRuntime(): PtyRuntime {
 const STOP_POLL_MS = 25;
 export const TERMINAL_STOP_GRACE_MS = 3000;
 export const TERMINAL_STOP_CONFIRM_MS = 1000;
+/**
+ * Cadence of the descendant observer while a terminal is live. One unref'd
+ * sampler serves the whole driver (one process-table read per cadence, no matter
+ * how many terminals are open) and it is cleared as soon as none has a live root.
+ */
+export const TERMINAL_OBSERVE_MS = 500;
+/** Bounded observation set: past it containment is no longer provable (unknown). */
+const MAX_OBSERVED_DESCENDANTS = 1024;
 
 interface Options {
   workspaceId: string;
@@ -53,6 +61,8 @@ interface Options {
   spawnWorker?: () => PtyHelper;
   stopGraceMs?: number;
   stopConfirmMs?: number;
+  /** Cadence of the descendant observer while a terminal is live (tests inject it). */
+  observeCadenceMs?: number;
 }
 
 /**
@@ -77,6 +87,16 @@ interface Operation {
   processGroupId?: number;
   ptyExit?: { exitCode: number; signal: number };
   workerExit?: { code: number | null; signal: string | null };
+  /**
+   * Descendants observed alive under this operation's root while it ran, with
+   * the process group each was in at that moment. This is the only handle the
+   * driver can ever have on a job-control descendant: it leaves the recorded
+   * group, and once the root exits this platform revokes the terminal's session
+   * and reparents it to init, leaving no post-mortem link to this terminal.
+   */
+  descendants: Map<number, number>;
+  /** The observation cap was hit, so containment can no longer be proven. */
+  descendantOverflow: boolean;
   observed: boolean;
   observe(receipt: TerminalDriverReceipt): void;
   pending?: { action: PtyRequest["action"]; resolve(event: PtyEvent & { kind: "reply" }): void };
@@ -117,8 +137,11 @@ export function descendantPids(table: readonly ProcessTableRow[], rootPid: numbe
  * - The recorded identity is the pty child's pid plus its process-group id. A
  *   forkpty child is a session/group leader, so this driver reads the OS pgid
  *   and refuses to treat the group as its own unless `pgid === pid`. That check
- *   is re-read before every group signal, so a recycled pid can never make this
- *   driver signal a foreign group.
+ *   is re-read before every group signal, so a recycled pid cannot make this
+ *   driver signal a foreign group through the group path. Individual members are
+ *   signalled with the group they were captured in as their identity: a pid that
+ *   is no longer in that group (recycled, or moved) is left alone, and the
+ *   unproven drain is reported as `unknown` instead.
  * - `stop` signals only the recorded group (`-pgid`), then reclaims the
  *   descendant tree that was observed *before* the signal (an interactive shell
  *   puts each job in its own group, so the group alone does not contain it). A
@@ -126,14 +149,20 @@ export function descendantPids(table: readonly ProcessTableRow[], rootPid: numbe
  *   no member of the recorded group and none of the captured descendants is
  *   alive. Anything else - an unreadable table, a missing/mismatching identity,
  *   or survivors after the kill deadline - is reported as `unknown`, never as a
- *   stop that was not verified. When the PTY root exits on its own, the members
- *   still in its own group are reclaimed before the exit receipt is issued, so
- *   a `set +m` background child never outlives a reported natural exit. A
- *   descendant that left the group *and* is not observed before the signal (its
- *   own `setsid`, or a job started after the capture) cannot be named by this
- *   evidence model - its parent link died with the root - so it is reported as
- *   `unknown`; the process group and the observed subtree are the boundary, not
- *   an OS sandbox.
+ *   stop that was not verified.
+ * - The same evidence model governs an exit the terminal reaches on its own.
+ *   While a root is alive the driver records the descendants it holds (before
+ *   every control request and on a bounded cadence). On a natural exit it
+ *   reclaims the members still in the recorded group *and* those recorded
+ *   descendants, then requires the same positive evidence before the exit
+ *   receipt is issued - so a job-control child that outlives its shell is
+ *   contained, not abandoned behind a reported exit. Boundary: a descendant
+ *   that left the group and was never recorded while the root was alive (its own
+ *   `setsid`, or one created in the last observation interval before an
+ *   unattended exit) has no OS-visible link to this terminal once the root dies -
+ *   the parent link is gone, the session and controlling terminal are revoked -
+ *   so it is out of this evidence model. The process group plus the recorded
+ *   descendants are the boundary, not an OS sandbox.
  * - There is no `kill`/`destroy` request to the helper: termination is a Host
  *   signal to the group it recorded. The helper is reaped after the group
  *   drained so a stopped terminal leaves no helper behind.
@@ -145,16 +174,65 @@ export class TerminalPtyDriver implements TerminalDriver {
   private readonly timeout: number;
   private readonly grace: number;
   private readonly confirm: number;
+  private readonly observeCadence: number;
   private readonly options: Options;
+  /** The shared descendant sampler; only alive while some root is live. */
+  private observer?: NodeJS.Timeout;
 
   constructor(options: Options) {
     this.options = { ...options };
     this.timeout = options.operationTimeoutMs ?? 5000;
     this.grace = options.stopGraceMs ?? TERMINAL_STOP_GRACE_MS;
     this.confirm = options.stopConfirmMs ?? TERMINAL_STOP_CONFIRM_MS;
+    this.observeCadence = options.observeCadenceMs ?? TERMINAL_OBSERVE_MS;
     if (!Number.isInteger(this.timeout) || this.timeout < 10 || this.timeout > 30_000) throw Error("invalid-pty-deadline");
     if (!Number.isInteger(this.grace) || this.grace < 10 || this.grace > 30_000) throw Error("invalid-pty-deadline");
     if (!Number.isInteger(this.confirm) || this.confirm < 10 || this.confirm > 30_000) throw Error("invalid-pty-deadline");
+    if (!Number.isInteger(this.observeCadence) || this.observeCadence < 10 || this.observeCadence > 30_000) throw Error("invalid-pty-deadline");
+  }
+
+  /**
+   * Start or clear the one descendant sampler this driver owns. It runs only
+   * while some operation has a live root, is never a reason for the process to
+   * stay alive (`unref`), and stops itself as soon as none is left.
+   */
+  private syncObserver(): void {
+    const wanted = [...this.operations.values()].some((operation) =>
+      operation.rootPid !== undefined && operation.status === "started" && !operation.fenced && !operation.observed);
+    if (wanted && !this.observer) {
+      this.observer = setInterval(() => {
+        for (const operation of this.operations.values()) this.observeDescendants(operation);
+        this.syncObserver();
+      }, this.observeCadence);
+      this.observer.unref();
+    } else if (!wanted && this.observer) {
+      clearInterval(this.observer);
+      this.observer = undefined;
+    }
+  }
+
+  /**
+   * Record the live descendants of one operation's root. Called while that root
+   * is still alive (before each control request and on the observer cadence): a
+   * job-control descendant leaves the recorded group, and once the root exits
+   * this platform revokes the session and reparents it to init, so a pid
+   * recorded here is the only handle this driver can ever have on it. A
+   * descendant recorded gone is forgotten, which also keeps a recycled pid from
+   * being later treated as ours.
+   */
+  private observeDescendants(operation: Operation): void {
+    const rootPid = operation.rootPid;
+    if (rootPid === undefined || rootPid <= 1 || operation.fenced || operation.observed) return;
+    const table = readProcessTable();
+    if (table === null) return;
+    const rows = new Map(table.map((row) => [row.pid, row]));
+    for (const pid of [...operation.descendants.keys()]) if (!rows.has(pid)) operation.descendants.delete(pid);
+    for (const pid of descendantPids(table, rootPid)) {
+      if (operation.descendants.has(pid)) continue;
+      if (operation.descendants.size >= MAX_OBSERVED_DESCENDANTS) { operation.descendantOverflow = true; return; }
+      const row = rows.get(pid);
+      if (row) operation.descendants.set(pid, row.pgid);
+    }
   }
 
   private target(): PtyRuntime | null {
@@ -188,6 +266,7 @@ export class TerminalPtyDriver implements TerminalDriver {
     operation.status = "unknown";
     operation.pending?.resolve({ ...operation.envelope, kind: "reply", requestId: operation.requestId, status: "unknown" });
     if (newlyFenced) this.report(operation, { ...operation.envelope.identity, status: "unknown" });
+    this.syncObserver();
   }
 
   private report(operation: Operation, receipt: TerminalDriverReceipt): void {
@@ -206,7 +285,8 @@ export class TerminalPtyDriver implements TerminalDriver {
     if (this.operations.size >= MAX_TERMINAL_INSTANCES) return { status: "not-started" as const };
     const operation: Operation = {
       envelope: { workspaceId: this.options.workspaceId, identity: { ...identity }, operationId: randomUUID() },
-      status: "unknown", fenced: false, sequence: 0, requestId: 0, inputBytes: 0, observed: false, observe,
+      status: "unknown", fenced: false, sequence: 0, requestId: 0, inputBytes: 0,
+      descendants: new Map(), descendantOverflow: false, observed: false, observe,
     };
     this.operations.set(key, operation);
     let request: PtyRequest & { action: "spawn" };
@@ -255,6 +335,7 @@ export class TerminalPtyDriver implements TerminalDriver {
         return this.result(operation);
       }
       operation.status = "started";
+      this.syncObserver();
       return this.result(operation);
     }
     if (reply.status === "not-started") operation.status = "not-started";
@@ -300,24 +381,30 @@ export class TerminalPtyDriver implements TerminalDriver {
   /**
    * A PTY root exit alone never proves the tree ended. The receipt is
    * `tree-drained` only when the OS process table reports no member of the
-   * recorded group left; an unreadable table or a surviving group member is
+   * recorded group and no recorded descendant left; an unreadable table, a
+   * saturated observation set, or a survivor after the kill deadline is
    * reported as `unknown`.
    */
   private async settle(operation: Operation): Promise<void> {
     if (operation.fenced || operation.observed) return;
-    const drained = await this.groupDrained(operation, this.grace);
-    if (operation.fenced || operation.observed) return;
-    if (drained !== true) {
+    // The descendants recorded while the root was alive. There is no later
+    // moment at which a job-control descendant can be named (this platform
+    // revokes the session and reparents it to init when the leader exits), so
+    // this set - not a post-mortem probe - is what the natural exit contains.
+    const captured = new Map(operation.descendants);
+    const capturedPids = [...captured.keys()];
+    if (await this.drainWithin(operation, capturedPids, this.grace) !== true) {
+      if (operation.fenced || operation.observed) return;
       // The root ended but members of its own group outlived it (a `set +m`
-      // background child). The group number was live under this operation's own
-      // recorded root moments ago, so reclaim the remaining members before
-      // deciding. A descendant that started its OWN group is not nameable here
-      // (its parent link died with the root) and is reported as `unknown`.
-      this.signalMembers(this.groupMemberPids(operation), "SIGKILL");
-      if (await this.groupDrained(operation, this.confirm) !== true) {
+      // background child) or recorded descendants left the group. Reclaim both,
+      // then require the same positive evidence before an exit receipt exists.
+      this.signalCaptured(this.groupMemberIdentities(operation), "SIGKILL");
+      this.signalCaptured(captured, "SIGKILL");
+      if (await this.drainWithin(operation, capturedPids, this.confirm) !== true) {
         if (operation.fenced || operation.observed) return;
         this.fence(operation);
         this.report(operation, { ...operation.envelope.identity, status: "unknown" });
+        this.syncObserver();
         return;
       }
     }
@@ -327,13 +414,15 @@ export class TerminalPtyDriver implements TerminalDriver {
     await this.reap(operation);
   }
 
-  /** Pids still in the recorded group, excluding this operation's own root. */
-  private groupMemberPids(operation: Operation): number[] {
+  /** Pids still in the recorded group (excluding the root), keyed by that group. */
+  private groupMemberIdentities(operation: Operation): Map<number, number> {
+    const members = new Map<number, number>();
     const pgid = operation.processGroupId;
-    if (pgid === undefined || pgid <= 1) return [];
+    if (pgid === undefined || pgid <= 1) return members;
     const table = readProcessTable();
-    if (table === null) return [];
-    return table.filter((row) => row.pgid === pgid && row.pid !== operation.rootPid).map((row) => row.pid).sort((a, b) => a - b);
+    if (table === null) return members;
+    for (const row of table) if (row.pgid === pgid && row.pid !== operation.rootPid && row.pid > 1) members.set(row.pid, pgid);
+    return members;
   }
 
   private fence(operation: Operation): void {
@@ -353,6 +442,7 @@ export class TerminalPtyDriver implements TerminalDriver {
     // same key must not drop that operation (the identity is reused across a
     // restart, so a late delete would leave the new terminal untracked).
     if (this.operations.get(key) === operation) this.operations.delete(key);
+    this.syncObserver();
   }
 
   private async dispatch(operation: Operation, request: PtyRequest): Promise<PtyEvent & { kind: "reply" }> {
@@ -372,6 +462,10 @@ export class TerminalPtyDriver implements TerminalDriver {
   private async control(identity: TerminalIdentity, payload: { action: "input"; data: string } | { action: "resize"; cols: number; rows: number }): Promise<void> {
     const operation = this.operations.get(operationKey(identity));
     if (!operation || operation.status !== "started" || operation.fenced || operation.pending) throw Error("terminal-pty-unconfirmed");
+    // Record what this terminal owns before handing it input or a window size:
+    // the root is alive here, which is the only time its descendants are
+    // attributable to it.
+    this.observeDescendants(operation);
     const request = parsePtyRequest({ ...operation.envelope, requestId: operation.requestId + 1, ...payload });
     if (payload.action === "input") {
       // node-pty has no write-drained acknowledgement; a lifetime byte budget
@@ -401,13 +495,21 @@ export class TerminalPtyDriver implements TerminalDriver {
     }
   }
 
-  private signalMembers(members: readonly number[], kind: NodeJS.Signals): void {
-    if (members.length === 0) return;
+  /**
+   * Signal individual pids that this driver captured, requiring each to still be
+   * in the process group it was captured in. A pid is a number the OS can
+   * recycle between capture and signal; the group it belonged to is the
+   * strongest identity left for an orphan whose parent link is already gone, so
+   * a pid that is gone or changed group is left alone (and its drain then stays
+   * unproven, which is reported as `unknown` rather than as a verified stop).
+   */
+  private signalCaptured(captured: ReadonlyMap<number, number>, kind: NodeJS.Signals): void {
+    if (captured.size === 0) return;
     const table = readProcessTable();
     if (table === null) return;
-    const alive = new Set(table.map((row) => row.pid));
-    for (const pid of members) {
-      if (pid <= 1 || !alive.has(pid)) continue;
+    const groups = new Map(table.map((row) => [row.pid, row.pgid]));
+    for (const [pid, pgid] of captured) {
+      if (pid <= 1 || groups.get(pid) !== pgid) continue;
       try { process.kill(pid, kind); }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
     }
@@ -417,22 +519,14 @@ export class TerminalPtyDriver implements TerminalDriver {
   private drained(operation: Operation, captured: readonly number[]): boolean | null {
     const rootPid = operation.rootPid;
     if (rootPid === undefined || operation.processGroupId === undefined) return null;
+    // A saturated observation set cannot prove the tree ended: fail closed.
+    if (operation.descendantOverflow) return false;
     const table = readProcessTable();
     if (table === null) return null;
     const pids = new Set(table.map((row) => row.pid));
     if (pids.has(rootPid)) return false;
     if (table.some((row) => row.pgid === operation.processGroupId)) return false;
     return !captured.some((pid) => pids.has(pid));
-  }
-
-  private async groupDrained(operation: Operation, timeoutMs: number): Promise<boolean | null> {
-    const deadline = Date.now() + timeoutMs;
-    for (;;) {
-      const drained = this.drained(operation, []);
-      if (drained !== false) return drained;
-      if (Date.now() >= deadline) return false;
-      await delay(STOP_POLL_MS);
-    }
   }
 
   private async drainWithin(operation: Operation, captured: readonly number[], timeoutMs: number): Promise<boolean | null> {
@@ -466,7 +560,7 @@ export class TerminalPtyDriver implements TerminalDriver {
 
   /**
    * Kill exactly the terminal this driver spawned: the recorded group, plus the
-   * descendant tree observed before the signal. A missing or mismatching
+   * descendant set observed before the signal. A missing or mismatching
    * recorded identity refuses (no signal), and a confirmed stop removes the
    * retained operation so a later generation starts cleanly.
    */
@@ -483,21 +577,32 @@ export class TerminalPtyDriver implements TerminalDriver {
       if (identityAlive) this.signalGroup(operation, "SIGTERM");
       return { ...identity, status: "unknown" };
     }
-    const captured = identityAlive || table.some((row) => row.pid === rootPid) ? descendantPids(table, rootPid) : [];
+    // What the root holds now, plus what this driver recorded while it was alive
+    // (a descendant whose parent chain broke earlier is only in the latter).
+    const rows = new Map(table.map((row) => [row.pid, row]));
+    const captured = new Map<number, number>();
+    if (identityAlive || table.some((row) => row.pid === rootPid)) {
+      for (const pid of descendantPids(table, rootPid)) {
+        const row = rows.get(pid);
+        if (row) captured.set(pid, row.pgid);
+      }
+    }
+    for (const [pid, group] of operation.descendants) if (!captured.has(pid)) captured.set(pid, group);
+    const capturedPids = [...captured.keys()];
     // SIGHUP, not SIGTERM: the pty's own hangup is what an interactive shell
     // honours (it ignores SIGTERM while a job is in the foreground), and it is
     // what closing a real terminal sends. The confirm phase still SIGKILLs.
     if (identityAlive) this.signalGroup(operation, "SIGHUP");
-    this.signalMembers(this.groupMemberPids(operation), "SIGHUP");
-    this.signalMembers(captured, "SIGHUP");
-    if (await this.drainWithin(operation, captured, this.grace) === true) return this.finish(operation, identity);
+    this.signalCaptured(this.groupMemberIdentities(operation), "SIGHUP");
+    this.signalCaptured(captured, "SIGHUP");
+    if (await this.drainWithin(operation, capturedPids, this.grace) === true) return this.finish(operation, identity);
     // Once the leader is gone `-pgid` can no longer be re-verified, so the
     // remaining members are signalled individually (each pid re-checked against
     // the recorded group) instead of trusting a recyclable group number.
     if (readProcessPgid(rootPid) === pgid) this.signalGroup(operation, "SIGKILL");
-    else this.signalMembers(this.groupMemberPids(operation), "SIGKILL");
-    this.signalMembers(captured, "SIGKILL");
-    if (await this.drainWithin(operation, captured, this.confirm) === true) return this.finish(operation, identity);
+    else this.signalCaptured(this.groupMemberIdentities(operation), "SIGKILL");
+    this.signalCaptured(captured, "SIGKILL");
+    if (await this.drainWithin(operation, capturedPids, this.confirm) === true) return this.finish(operation, identity);
     return { ...identity, status: "unknown" };
   }
 
