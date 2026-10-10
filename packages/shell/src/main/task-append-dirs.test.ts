@@ -11,6 +11,7 @@ import { CreationIntentStore, ProjectTaskCreation } from "./project-task-creatio
 import { ProjectTaskAppend, createNodeAppendGit } from "./task-append.js";
 import { TaskRootIndex } from "./task-root-index.js";
 import { createNodePrepScanDeps, createPrepScanAuthority } from "./task-prep-scan.js";
+import { performAppendOperation } from "./project-append-ipc.js";
 import * as fs from "node:fs";
 
 const homes: string[] = [];
@@ -35,7 +36,7 @@ function makeRepo(home: string, name: string, content: string) {
   return { repo, remote, branch: "main" };
 }
 
-async function setup() {
+async function setup(options: { lieAboutDirs?: boolean } = {}) {
   const home = fs.mkdtempSync(join(tmpdir(), "pidock-append-dirs-"));
   homes.push(home);
   const root = join(home, "tasks");
@@ -84,6 +85,17 @@ async function setup() {
         };
       }
       if (params.op === "task/appendDirs") {
+        if (options.lieAboutDirs) {
+          // A Host that claims success without recording the link at all: the
+          // sender must never surface that as an appended directory.
+          const record = readTaskRecordOnDisk(taskRootFor(params.taskId, params.payload));
+          return {
+            workspaceId: "w",
+            taskId: params.taskId,
+            op: params.op,
+            payload: { ...record, appended: (params.payload["plainDirs"] as { directoryId: string }[]).map((d) => d.directoryId), skipped: [] },
+          };
+        }
         const result = instance.appendDirs(params.payload as never);
         return {
           workspaceId: "w",
@@ -383,6 +395,37 @@ describe("Production plain-directory append for an existing task", () => {
         sharedWriteConfirmed: true,
       }),
     ).rejects.toThrow(/链接名冲突/);
+    expect(readTaskRecordOnDisk(env.taskDir)).toEqual(before);
+  });
+
+  it("routes a directory-only append through the production IPC guard", async () => {
+    const env = await setup();
+    const dir2Id = env.project.directories[1]!.id;
+    // A directory append is refused until the shared write is confirmed.
+    await expect(
+      performAppendOperation(env.appendService, { taskId: env.taskId, directoryIds: [dir2Id] }, () => undefined),
+    ).rejects.toThrow(/invalid append input/);
+    // An empty request (no repo, no dir) is refused.
+    await expect(
+      performAppendOperation(env.appendService, { taskId: env.taskId }, () => undefined),
+    ).rejects.toThrow(/invalid append input/);
+    // A page-supplied path/link name/scan is not part of the accepted shape.
+    await expect(
+      performAppendOperation(env.appendService, { taskId: env.taskId, directoryIds: [dir2Id], sharedWriteConfirmed: true, linkName: "dir-ffffffff" }, () => undefined),
+    ).rejects.toThrow(/invalid append operation/);
+    // The accepted shape creates the link and records it.
+    await performAppendOperation(env.appendService, { taskId: env.taskId, directoryIds: [dir2Id], sharedWriteConfirmed: true }, () => undefined);
+    expect(fs.readlinkSync(join(env.taskDir, buildLinkName(dir2Id)))).toBe(env.dir2);
+  });
+
+  it("never reports a link the Host did not record as appended", async () => {
+    const env = await setup({ lieAboutDirs: true });
+    const dir2Id = env.project.directories[1]!.id;
+    const before = readTaskRecordOnDisk(env.taskDir);
+    await expect(
+      env.appendService.append({ taskId: env.taskId, directoryIds: [dir2Id], sharedWriteConfirmed: true }),
+    ).rejects.toThrow("link-missing");
+    // The record is untouched and no false success was reported.
     expect(readTaskRecordOnDisk(env.taskDir)).toEqual(before);
   });
 

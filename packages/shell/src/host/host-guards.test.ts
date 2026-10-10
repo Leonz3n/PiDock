@@ -698,6 +698,38 @@ describe("#6 append + probe guards (S2)", () => {
     ).toBe(false);
   });
 
+  it("allows a pure-directory provision with no Git baseline and still requires it once a repo is selected", () => {
+    // A pure-directory task needs no Git repository: no remoteBranch/fetchedCommit.
+    expect(
+      validateHostTaskOp("task/provision", {
+        name: "纯目录",
+        dirId: "task-abcdef12",
+        plainDirs: [{ directoryId: "notes-1", sourcePath: "/data/notes" }],
+      }),
+    ).toEqual({ ok: true });
+    // With a repo selected the baseline is required again (fail closed).
+    expect(
+      validateHostTaskOp("task/provision", {
+        name: "多仓",
+        dirId: "task-abcdef12",
+        plainDirs: [{ directoryId: "notes-1", sourcePath: "/data/notes" }],
+        repoSelections: [{ repoDir: "frontend", remote: "origin", remoteBranch: "main", mainCheckoutDir: "/src/frontend" }],
+      }).ok,
+    ).toBe(false);
+    // Neither a repo nor a directory is still refused.
+    expect(validateHostTaskOp("task/provision", { name: "空", dirId: "task-abcdef12" }).ok).toBe(false);
+    // A non-string remoteBranch with repos is refused by shape, not coerced.
+    expect(
+      validateHostTaskOp("task/provision", {
+        name: "多仓",
+        dirId: "task-abcdef12",
+        remoteBranch: 1,
+        fetchedCommit: "a5a4a0d1234",
+        repoSelections: [{ repoDir: "frontend", remote: "origin", remoteBranch: "main", mainCheckoutDir: "/src/frontend" }],
+      }).ok,
+    ).toBe(false);
+  });
+
   it("gates appendRepos and probeLink payloads", () => {
     expect(
       validateHostTaskOp("task/appendRepos", {
@@ -759,6 +791,17 @@ describe("#6 append + probe guards (S2)", () => {
     ).toBe(false);
     expect(validateHostTaskOp("task/probeLink", { sourcePath: "/data/notes" })).toEqual({ ok: true });
     expect(validateHostTaskOp("task/probeLink", {}).ok).toBe(false);
+  });
+
+  it("gates the plain-dir append op on a non-empty {directoryId, sourcePath} array", () => {
+    expect(
+      validateHostTaskOp("task/appendDirs", {
+        plainDirs: [{ directoryId: "e2eb192a-108b-4f9b-89a4-cd1fd8fb1fd0", sourcePath: "/data/docs" }],
+      }),
+    ).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/appendDirs", { plainDirs: [] }).ok).toBe(false);
+    expect(validateHostTaskOp("task/appendDirs", {}).ok).toBe(false);
+    expect(validateHostTaskOp("task/appendDirs", { plainDirs: [{ directoryId: "x" }] }).ok).toBe(false);
   });
 });
 
