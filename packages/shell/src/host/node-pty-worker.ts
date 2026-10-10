@@ -80,8 +80,11 @@ async function start(request: PtyRequest & { action: "spawn" }): Promise<void> {
 /**
  * Admit only the runtime the driver explicitly supplied. The helper is either a
  * plain Node child or the Electron executable started with
- * `ELECTRON_RUN_AS_NODE=1`; node-pty 1.1.0 is N-API, so the darwin-arm64
- * prebuild is ABI-compatible with either host. The Phase-B experiment keeps its
+ * `ELECTRON_RUN_AS_NODE=1`. The node-pty binding is pinned by exact version and
+ * file hash in the preflight, and it is N-API, so it is not tied to one Node
+ * version - that is why no `process.versions.node` equality is part of this
+ * gate. The Electron runtime path itself is UNTESTED in this slice (the
+ * real-process tests run the plain Node path). The Phase-B experiment keeps its
  * own stricter host gate in `node-pty-driver.ts`; a GUI Electron process never
  * reaches this helper because it cannot be the forked runtime.
  */

@@ -3,13 +3,20 @@
  *
  * These spawn a REAL `/bin/sh` under node-pty through `TerminalPtyDriver` +
  * `TaskTerminalSessions`, then verify the recorded identity against `ps`, the
- * output/input/resize round trip, real process-group containment, task
- * isolation and the fail-closed refusals. Everything spawned here is stopped by
- * `cleanup()`, including on failure, and every recorded pid is asserted gone.
+ * output/input/resize round trip, real process-group and observed-descendant
+ * containment (a stop, a natural exit, a restart after exit), task isolation and
+ * the fail-closed refusals. Two further tests drive the driver directly with a
+ * real pty (the drained-operation reap); the remaining unit tests use no
+ * process.
+ *
+ * Everything spawned here is stopped by `cleanup()`, including on failure, and
+ * every recorded pid is asserted gone - the afterEach records the assertion and
+ * then terminates the stray, so a containment failure fails the test instead of
+ * outliving the run.
  *
  * Environment: Darwin arm64 with node-pty 1.1.0's `spawn-helper` prepared
  * (`pnpm --filter @pidock/shell prepare:pty:darwin`). On any other host the
- * suite skips: the preflight only ships darwin-arm64 binaries.
+ * real-process tests skip: the preflight only ships darwin-arm64 binaries.
  */
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -17,11 +24,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { TaskTerminalRegistry, planTerminal, type TerminalPlan } from "../main/terminal-config.js";
 import { workspaceRoots } from "../main/workspace-files.js";
 import { inspectNodePtyPrebuild, prepareNodePtyPrebuild } from "./node-pty-preflight.js";
-import { descendantPids, resolvePtyRuntime, TerminalPtyDriver, workerEntryUrl } from "./terminal-pty-driver.js";
+import { descendantPids, ptySpawnerAvailable, resolvePtyRuntime, TerminalPtyDriver, workerEntryUrl } from "./terminal-pty-driver.js";
 import type { TerminalDriver } from "./terminal-execution.js";
 import { resolveProgram, TaskTerminalSessions } from "./terminal-sessions.js";
 
@@ -520,4 +527,21 @@ it("resolves a bare planned program against the launch PATH without rewriting th
   expect(resolveProgram("/bin/sh", {})).toBe("/bin/sh");
   expect(resolveProgram("sh", { PATH: "/usr/bin:/bin" })).toBe("/bin/sh");
   expect(resolveProgram("definitely-not-a-planned-program", { PATH: "/bin" })).toBe("definitely-not-a-planned-program");
+});
+
+it.each([
+  ["darwin", "arm64", true],
+  ["darwin", "x64", false],
+  ["linux", "arm64", false],
+  ["win32", "x64", false],
+] as const)("reports real PTY spawn availability on %s/%s as %s", (platform, arch, expected) => {
+  // The reported capability is the worker's own platform gate: a Host that can
+  // never fork the helper must report `spawnImplemented: false` so the renderer
+  // keeps its residual warning instead of losing it while every start fails.
+  vi.stubGlobal("process", { ...process, platform, arch });
+  try {
+    expect(ptySpawnerAvailable()).toBe(expected);
+  } finally {
+    vi.unstubAllGlobals();
+  }
 });

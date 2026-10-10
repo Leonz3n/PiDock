@@ -890,6 +890,19 @@ describe("file and terminal ops", () => {
     expect(validateHostTaskOp("task/terminalControl", { instanceId: "term-1", action: "stop", sessionId: " " }).ok).toBe(false);
   });
 
+  it("bounds a terminal resize with the same window the protocol and registry enforce", () => {
+    const resize = (cols: unknown, rows: unknown) => validateHostTaskOp("task/terminalControl", { instanceId: "term-1", action: "resize", cols, rows });
+    expect(resize(120, 30)).toEqual({ ok: true });
+    expect(resize(20, 5)).toEqual({ ok: true });
+    expect(resize(500, 200)).toEqual({ ok: true });
+    expect(resize(501, 24).ok).toBe(false);
+    expect(resize(19, 24).ok).toBe(false);
+    expect(resize(120, 4).ok).toBe(false);
+    expect(resize(120, 201).ok).toBe(false);
+    expect(resize(120.5, 30).ok).toBe(false);
+    expect(resize("120", 30).ok).toBe(false);
+  });
+
   it("requires an instance id for terminal history and bounds the limit", () => {
     expect(validateHostTaskOp("task/terminalHistory", { instanceId: "term-1" })).toEqual({ ok: true });
     expect(validateHostTaskOp("task/terminalHistory", { instanceId: "term-1", limit: 20 })).toEqual({ ok: true });

@@ -67,7 +67,7 @@ import { TaskTerminalRegistry, planTerminal, type TerminalPlan } from "../main/t
 import { TaskLifecycleHost } from "./task-lifecycle.js";
 import { createLifecycleResources } from "./lifecycle-resources.js";
 import { runAgentTerminalControl } from "./terminal-control.js";
-import { TerminalPtyDriver, resolvePtyRuntime } from "./terminal-pty-driver.js";
+import { ptySpawnerAvailable, TerminalPtyDriver, resolvePtyRuntime } from "./terminal-pty-driver.js";
 import { TaskTerminalSessions } from "./terminal-sessions.js";
 import { writeClaimError } from "./write-coordination.js";
 import { runAgentBrowserAction, runHumanBrowserAction, type BrowserGatewayPort } from "./browser-control.js";import { HostBrowserClient } from "../rpc/browser-client.js";
@@ -1698,10 +1698,14 @@ async function performTaskOp(
         // The spawner is wired: the state now reports the real pid/pgid this
         // task's Host spawned, and `processKnown` is the honest per-instance
         // disclosure of whether a process identity was recorded at all.
+        // `spawnImplemented` reports whether this Host can really fork the helper
+        // (the worker's own platform gate): a Host that cannot spawn must not
+        // claim a capability it fails on, so the renderer keeps its residual
+        // warning instead of losing it while every start fails.
         return {
           ok: true,
           payload: {
-            spawnImplemented: true,
+            spawnImplemented: ptySpawnerAvailable(),
             instances: terminals.list().map((instance) => ({ ...instance, processKnown: instance.processId !== undefined })),
           },
         };
