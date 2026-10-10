@@ -1429,7 +1429,12 @@ export class TaskWorkspaceHost {
       }
       linkSnapshots = [];
       for (const entry of input.plainDirs) {
-        const snap = snapshotPlainDirLink({ directoryId: entry.directoryId, sourcePath: entry.sourcePath, now: input.now ?? this.now() });
+        const snap = snapshotPlainDirLink({
+          directoryId: entry.directoryId,
+          sourcePath: entry.sourcePath,
+          now: input.now ?? this.now(),
+          identity: this.plainDirSourceIdentity(entry.sourcePath),
+        });
         if (!snap.ok) {
           const error: MultiRepoError = snap.error;
           throw new Error(`${error.code}: ${error.message} (form kept)`);
@@ -1663,6 +1668,25 @@ export class TaskWorkspaceHost {
   }
 
   /**
+   * Record-time identity of a plain-directory source: device + inode read
+   * from the REAL filesystem, never from the caller's payload, so no caller
+   * can forge the identity the append later re-verifies. Best effort: when
+   * the path cannot be read as a directory the entry stays path-only, exactly
+   * like a record written before this field existed (main already refuses an
+   * absent/non-directory source before asking the Host to record it).
+   */
+  private plainDirSourceIdentity(path: string): { device: string; inode: string } | undefined {
+    try {
+      const { lstatSync } = process.getBuiltinModule("node:fs") as typeof import("node:fs");
+      const stat = lstatSync(path, { bigint: true });
+      if (!stat.isDirectory() || stat.dev <= 0n || stat.ino <= 0n) return undefined;
+      return { device: String(stat.dev), inode: String(stat.ino) };
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
    * [PiDock 03] (#6) append plain directories: only directories not already in
    * the task are snapshotted and added. Existing repos, baselines, root/dirId,
    * and previous dirLinks are untouched and never mutated. Fail-closed against
@@ -1714,7 +1738,12 @@ export class TaskWorkspaceHost {
         skipped.push(entry.directoryId);
         continue;
       }
-      const snap = snapshotPlainDirLink({ directoryId: entry.directoryId, sourcePath: entry.sourcePath, now: input.now ?? this.now() });
+      const snap = snapshotPlainDirLink({
+        directoryId: entry.directoryId,
+        sourcePath: entry.sourcePath,
+        now: input.now ?? this.now(),
+        identity: this.plainDirSourceIdentity(entry.sourcePath),
+      });
       if (!snap.ok) {
         const error: MultiRepoError = snap.error;
         throw new Error(`${error.code}: ${error.message} (form kept)`);

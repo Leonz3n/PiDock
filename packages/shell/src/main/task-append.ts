@@ -417,6 +417,22 @@ function overlaps(parent: string, child: string): boolean {
   return rel === "" || (rel !== ".." && !rel.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) && !isAbsolute(rel));
 }
 
+/**
+ * Device + inode of a registered plain-directory source, read from the REAL
+ * filesystem (never from the record or the page). `null` when the path is not
+ * an accessible plain directory, so a caller that needs identity fails closed
+ * rather than comparing against a missing pair.
+ */
+function sourceIdentity(path: string): { device: string; inode: string } | null {
+  try {
+    const stat = lstatSync(path, { bigint: true });
+    if (!stat.isDirectory() || stat.dev <= 0n || stat.ino <= 0n) return null;
+    return { device: String(stat.dev), inode: String(stat.ino) };
+  } catch {
+    return null;
+  }
+}
+
 /** True when a path exists on disk (`lstatSync`, never following a link). */
 function pathPresent(path: string): boolean {
   try {
@@ -677,6 +693,25 @@ export class ProjectTaskAppend {
           const stat = lstatSync(target);
           if (!stat.isSymbolicLink() || readlinkSync(target) !== dir.path) {
             throw new Error(`link-mismatch: 普通目录 ${dir.linkName}（${dir.name}）已记录但软链接指向不符，请人工处理后再追加`);
+          }
+          // A matching `readlink` is NOT identity: a DIFFERENT directory
+          // swapped in at the same path keeps the link string identical. The
+          // record captured the source's device/inode at link time (the same
+          // pair the creation flow re-checks), so re-verify it here and fail
+          // closed by name. A record written before identity was recorded has
+          // no pair and stays path-only: it is never rewritten or invalidated.
+          const recorded = existingLinksById.get(dir.directoryId)!;
+          if (recorded.sourceDevice !== undefined && recorded.sourceInode !== undefined) {
+            const current = sourceIdentity(dir.path);
+            if (
+              current === null ||
+              current.device !== recorded.sourceDevice ||
+              current.inode !== recorded.sourceInode
+            ) {
+              throw new Error(
+                `source-changed: 普通目录 ${dir.linkName}（${dir.name}）的来源目录已被替换（设备/索引节点与登记不符），请人工确认后再追加`,
+              );
+            }
           }
           skippedDirs.push({ directoryId: dir.directoryId, name: dir.name, linkName: dir.linkName });
         } else {
