@@ -896,9 +896,10 @@ export function FilesPanel({
  *
  * Inside the sandboxed shell the tool is the human takeover surface for a real
  * Host PTY (`TerminalTakeoverPanel`): plan, instance list, bounded history and
- * labelled human start/stop/input/resize through the typed bridge. Outside the
- * shell (Vite dev, tests) it keeps the prototype's in-memory echo and says so
- * rather than implying a process.
+ * labelled human start/stop/input/resize through the typed bridge. The packaged
+ * desktop app renders the same takeover surface from `DesktopToolDock` once the
+ * Host reports it can spawn a pty. Outside the shell (Vite dev, tests) it keeps
+ * the prototype's in-memory echo and says so rather than implying a process.
  */
 export function TerminalPanel(props: {
   taskId: string;
@@ -1002,7 +1003,7 @@ export function MemoryTerminalPanel({
         </Button>
       ) : null}
       <p className="text-[11px] text-muted">
-        未连接桌面壳：这里是内存模拟（原型回显），输入不会执行，也不会发送给 Host；真实终端在桌面壳内由 Host 启动。
+        未连接桌面壳：这里是内存模拟（原型回显），输入不会执行，也不会发送给 Host；桌面壳的「终端」工具由 Host 启动真实终端。
       </p>
       <div className="h-56 overflow-auto rounded-md border border-line bg-ink/95 p-3 font-mono text-[11px] leading-5 text-white/90">
         {lines.map((line, index) => (

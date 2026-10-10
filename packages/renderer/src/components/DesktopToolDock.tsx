@@ -24,7 +24,7 @@ import {
   type ServiceStatusView,
   type TaskServicesLoad,
 } from "../data/taskServices";
-import { ProtocolPanel } from "./ToolPanels";
+import { ProtocolPanel, TerminalTakeoverPanel } from "./ToolPanels";
 import {
   terminalPlanFromHost,
   terminalStateFromHost,
@@ -405,10 +405,7 @@ function TerminalTool({ taskId }: { taskId: string }) {
   useEffect(() => {
     let live = true;
     void (async () => {
-      const [stateResult, rootsResult] = await Promise.all([
-        terminalStateThroughShell(taskId),
-        fileRootsThroughShell(taskId),
-      ]);
+      const stateResult = await terminalStateThroughShell(taskId);
       if (!live) return;
       if (!stateResult.ok) {
         setState({ spawnImplemented: false, instances: [] });
@@ -422,11 +419,17 @@ function TerminalTool({ taskId }: { taskId: string }) {
         return;
       }
       setState(parsed);
+      setError(null);
+      // A spawning Host renders the takeover surface (`TerminalTakeoverPanel`),
+      // which reads its own roots and plan. The roots here belong to the
+      // plan-only view, so they are only read when this Host cannot spawn.
+      if (parsed.spawnImplemented) return;
+      const rootsResult = await fileRootsThroughShell(taskId);
+      if (!live) return;
       const rootsParsed = rootsResult.ok ? workspaceRootsFromHost(rootsResult.payload) : undefined;
       const list = rootsParsed?.roots ?? [];
       setRoots(list);
       if (list[0]) setRootId(list[0].id);
-      setError(null);
     })();
     return () => {
       live = false;
@@ -457,6 +460,12 @@ function TerminalTool({ taskId }: { taskId: string }) {
   };
 
   if (state === null) return <p className="text-xs text-muted">正在读取终端状态…</p>;
+
+  // When the Host can fork a real pty, the dock is the same human takeover
+  // surface the demo rail uses: plan, bounded history and labelled human
+  // start/stop/input/resize through the typed bridge. Only a Host that cannot
+  // spawn falls back to the read-only plan view.
+  if (state.spawnImplemented) return <TerminalTakeoverPanel taskId={taskId} />;
 
   return (
     <div className="flex min-h-0 flex-col gap-2">
