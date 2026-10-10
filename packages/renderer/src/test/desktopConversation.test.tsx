@@ -728,6 +728,17 @@ describe("Desktop SDK conversation", () => {
     expect(f.calls.filter((call) => call.action === "start")).toHaveLength(0);
   });
 
+  it("labels the append entry for repositories AND plain directories", async () => {
+    const f = setup();
+    f.bridge.appendTaskRepos = vi.fn(async () => ({ ok: true, payload: {} }));
+    mount(f);
+    await screen.findByText(/尚未开始/);
+    // The surface appends plain directories too, so the entry must not promise
+    // only repositories.
+    const entry = screen.getByRole("button", { name: "追加仓库或目录" });
+    expect(entry).toHaveAttribute("title", "从项目登记中选择仓库或普通目录并追加到本任务");
+  });
+
   it("freezes and unsubscribes on an unreadable fresh inventory before send", async () => {
     const f = setup(); mount(f); await screen.findByText(/尚未开始/);
     f.unreadable(); await send("do not send");
