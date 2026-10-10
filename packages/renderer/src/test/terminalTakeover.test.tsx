@@ -1,0 +1,375 @@
+import { act, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { renderApp } from "./helpers";
+import { TerminalTakeoverPanel } from "../components/ToolPanels";
+import { TERMINAL_HISTORY_POLL_MS } from "../data/terminalSurface";
+
+/**
+ * Flow: [PiDock 10] (#15) the terminal panel against the real Host channel.
+ *
+ * The panel is used in both modes: without a shell it keeps the in-memory echo
+ * (covered beside the other terminal flows), and with `window.pidock` present it
+ * must send labelled human start/stop/input/resize, render the Host's bounded
+ * history instead of a local echo, and show the Host's own state - an exit code
+ * nobody observed as 未观测, never `0`, and never as a whole-tree drain.
+ */
+
+type BridgedWindow = { pidock?: { taskOp: ReturnType<typeof vi.fn> } };
+
+/**
+ * Expose the preload bridge on the real jsdom window, exactly as the browser
+ * panel flows do: the renderer only reads `window.pidock`, so a plain property
+ * is what the shell provides.
+ */
+function stubShell(taskOp: ReturnType<typeof vi.fn>) {
+  (window as unknown as BridgedWindow).pidock = { taskOp };
+}
+
+afterEach(() => {
+  delete (window as unknown as BridgedWindow).pidock;
+  vi.useRealTimers();
+});
+
+const ATTRIBUTION = {
+  taskId: "release",
+  rootId: "front-monorepo",
+  rootKind: "worktree" as const,
+  rootLabel: "front-monorepo",
+  piWorkDir: "/w/tasks/release",
+};
+
+const ROOTS = {
+  taskDir: "/w/tasks/release",
+  roots: [
+    { id: "front-monorepo", kind: "worktree", label: "front-monorepo", path: "/w/tasks/release/front-monorepo", repo: "front-monorepo" },
+  ],
+};
+
+/** One instance exactly as `task/terminalState` reports it (the parser is strict). */
+function hostInstance(overrides: Record<string, unknown> = {}) {
+  return {
+    instanceId: "term-release-1",
+    rootId: "front-monorepo",
+    attribution: ATTRIBUTION,
+    program: "bash",
+    args: ["-l"],
+    cwd: "/w/tasks/release/front-monorepo",
+    owner: { taskId: "release", sessionId: null, label: "用户显式操作" },
+    cols: 80,
+    rows: 24,
+    envKeys: ["PATH"],
+    lifecycle: "running",
+    processKnown: true,
+    processId: 4321,
+    startedAt: "2026-10-10T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+const HOST_PLAN = {
+  plan: {
+    instanceId: "term-release-1",
+    rootId: "front-monorepo",
+    attribution: ATTRIBUTION,
+    program: "bash",
+    args: ["-l"],
+    cwd: "/w/tasks/release/front-monorepo",
+    cols: 80,
+    rows: 24,
+    resolved: [{ key: "PATH", value: "/usr/bin", secret: false, source: "仓库默认配置" }],
+    historyLimit: 200,
+    owner: { taskId: "release", sessionId: null, label: "用户显式操作" },
+  },
+};
+
+type Call = { taskId: string; op: string; payload: Record<string, unknown> };
+
+/**
+ * Drain the microtask turns a panel read needs. Used with fake timers, where
+ * `waitFor` cannot advance the clock itself.
+ */
+async function flush(turns = 10) {
+  await act(async () => {
+    for (let turn = 0; turn < turns; turn += 1) await Promise.resolve();
+  });
+}
+
+/** Answer one op the way the Host does; every call is recorded for assertions. */
+function hostStub(
+  calls: Call[],
+  handlers: Partial<Record<string, (payload: Record<string, unknown>) => unknown>>,
+) {
+  return vi.fn(async (taskId: string, op: string, payload: Record<string, unknown> = {}) => {
+    calls.push({ taskId, op, payload });
+    const handler = handlers[op];
+    return handler ? handler(payload) : { ok: true, payload: {} };
+  });
+}
+
+async function openTerminalPanel(taskOp: ReturnType<typeof vi.fn>) {
+  const user = userEvent.setup();
+  renderApp("/projects/atlas/tasks/release?session=main");
+  await screen.findByRole("heading", { name: "发布前检查" });
+  // The bridge appears after the page mounted, so the app stays on the demo path
+  // while the tool panel speaks to the shell.
+  stubShell(taskOp);
+  await user.click(screen.getByRole("button", { name: "终端" }));
+  return user;
+}
+
+describe("#15 terminal panel on the real channel", () => {
+  it("sends typed input to the running instance as the bridge's own input action", async () => {
+    const calls: Call[] = [];
+    const taskOp = hostStub(calls, {
+      "task/terminalState": () => ({ ok: true, payload: { spawnImplemented: true, instances: [hostInstance()] } }),
+      "task/fileRoots": () => ({ ok: true, payload: ROOTS }),
+      "task/terminalHistory": () => ({ ok: true, payload: { history: [{ at: "t1", line: "host-pty-line" }] } }),
+    });
+    const user = await openTerminalPanel(taskOp);
+
+    const instance = await screen.findByTestId("terminal-instance");
+    expect(instance).toHaveTextContent("term-release-1");
+    expect(instance).toHaveTextContent("运行中");
+    // The output is the Host's history, not the panel's local echo of the seed.
+    expect(await within(screen.getByTestId("terminal-output")).findByText("host-pty-line")).toBeInTheDocument();
+    expect(screen.getByTestId("terminal-output")).not.toHaveTextContent("命令已加入模拟队列");
+
+    await user.type(screen.getByLabelText("终端输入"), "echo MARK-11");
+    await user.click(screen.getByRole("button", { name: "执行" }));
+
+    await waitFor(() => expect(calls.some((call) => call.payload["action"] === "input")).toBe(true));
+    const typed = calls.find((call) => call.payload["action"] === "input");
+    expect(typed?.taskId).toBe("release");
+    expect(typed?.op).toBe("task/terminalControl");
+    expect(typed?.payload).toEqual({ instanceId: "term-release-1", action: "input", data: "echo MARK-11\n" });
+    // A human takeover action names no session (the Host refuses an Agent session
+    // for raw input and attests the labelled origin itself) and no boolean stands
+    // in for one.
+    expect(typed?.payload["sessionId"]).toBeUndefined();
+    expect(Object.keys(typed?.payload ?? {}).sort()).toEqual(["action", "data", "instanceId"]);
+    // The draft is cleared and the panel re-read the same instance's history.
+    expect(screen.getByLabelText("终端输入")).toHaveValue("");
+    await waitFor(() => expect(calls.filter((call) => call.op === "task/terminalHistory").length).toBeGreaterThan(1));
+  });
+
+  it("sends a wider window as the bridge's own resize action and re-reads the Host's state", async () => {
+    const calls: Call[] = [];
+    let cols = 80;
+    const taskOp = hostStub(calls, {
+      "task/terminalState": () => ({ ok: true, payload: { spawnImplemented: true, instances: [hostInstance({ cols })] } }),
+      "task/fileRoots": () => ({ ok: true, payload: ROOTS }),
+      "task/terminalHistory": () => ({ ok: true, payload: { history: [] } }),
+      "task/terminalControl": (payload) => {
+        if (payload["action"] === "resize") cols = Number(payload["cols"]);
+        return { ok: true, payload: { instanceId: "term-release-1", action: payload["action"], actor: "human" } };
+      },
+    });
+    const user = await openTerminalPanel(taskOp);
+
+    const instance = await screen.findByTestId("terminal-instance");
+    await user.click(within(instance).getByRole("button", { name: /加宽/ }));
+
+    await waitFor(() => expect(calls.some((call) => call.payload["action"] === "resize")).toBe(true));
+    const resized = calls.find((call) => call.payload["action"] === "resize");
+    expect(resized?.payload).toEqual({ instanceId: "term-release-1", action: "resize", cols: 100, rows: 24 });
+    expect(resized?.payload["sessionId"]).toBeUndefined();
+    // The window shown is the Host's own record after the change, not the click.
+    await waitFor(() => expect(screen.getByTestId("terminal-instance")).toHaveTextContent("100×24"));
+  });
+
+  it("plans and starts the real terminal for the task root as a labelled human action", async () => {
+    const calls: Call[] = [];
+    let started = false;
+    const taskOp = hostStub(calls, {
+      "task/terminalState": () => ({
+        ok: true,
+        payload: { spawnImplemented: true, instances: started ? [hostInstance()] : [] },
+      }),
+      "task/fileRoots": () => ({ ok: true, payload: ROOTS }),
+      "task/planTerminal": () => ({ ok: true, payload: HOST_PLAN }),
+      "task/terminalControl": (payload) => {
+        if (payload["action"] === "start") started = true;
+        return { ok: true, payload: { instanceId: "term-release-1", action: payload["action"], actor: "human" } };
+      },
+      "task/terminalHistory": () => ({ ok: true, payload: { history: [{ at: "t1", line: "bash-5.2$" }] } }),
+    });
+    const user = await openTerminalPanel(taskOp);
+
+    await user.click(await screen.findByRole("button", { name: "按计划启动终端" }));
+
+    const plan = await screen.findByTestId("terminal-plan");
+    // The cwd is the selected task root, and the owner is the explicit human action.
+    expect(plan).toHaveTextContent("/w/tasks/release/front-monorepo");
+    expect(plan).toHaveTextContent("用户显式操作");
+    const start = calls.find((call) => call.payload["action"] === "start");
+    expect(start?.op).toBe("task/terminalControl");
+    expect(start?.payload).toEqual({
+      instanceId: "term-release-1",
+      action: "start",
+      rootId: "front-monorepo",
+      program: "bash",
+      args: ["-l"],
+      // The Host guard refuses a start without the #7 env layers: a human start
+      // resolves them explicitly (empty layers = an explicit empty resolve).
+      layers: { repoDefaults: [], shared: [], privateEntries: [], task: [] },
+      label: "终端面板（用户显式操作）",
+    });
+    expect(start?.payload["sessionId"]).toBeUndefined();
+    expect(calls.find((call) => call.op === "task/planTerminal")?.payload["sessionId"]).toBeUndefined();
+    // The started instance comes back from the Host's own state read.
+    expect(await screen.findByTestId("terminal-instance")).toHaveTextContent("运行中");
+  });
+
+  it("renders an exit whose code was never observed as 未观测 and never as a whole-tree drain", async () => {
+    const calls: Call[] = [];
+    const taskOp = hostStub(calls, {
+      "task/terminalState": () => ({
+        ok: true,
+        payload: {
+          spawnImplemented: true,
+          // A natural exit: the Host proved the root ended, but the receipt is
+          // `root-exited` (the exit was not covered by an observation), so no
+          // exit code was ever observed.
+          instances: [hostInstance({ lifecycle: "exited", processKnown: true, exitReason: "exited", exitedAt: "2026-10-10T00:01:00.000Z" })],
+        },
+      }),
+      "task/fileRoots": () => ({ ok: true, payload: ROOTS }),
+      "task/terminalHistory": () => ({ ok: true, payload: { history: [{ at: "t1", line: "logout" }] } }),
+    });
+    await openTerminalPanel(taskOp);
+
+    const instance = await screen.findByTestId("terminal-instance");
+    expect(instance).toHaveTextContent("已退出");
+    expect(instance).toHaveTextContent("退出码未观测");
+    expect(instance).not.toHaveTextContent("退出码 0");
+    // The exit is not read as "the whole tree is confirmed gone".
+    const scope = screen.getByTestId("terminal-exit-scope");
+    expect(scope).toHaveTextContent("不主张整棵进程树");
+    expect(instance).not.toHaveTextContent("已确认整棵");
+    // No running process, so no input can be sent and no stop is offered.
+    expect(screen.getByRole("button", { name: "执行" })).toBeDisabled();
+    expect(within(instance).queryByRole("button", { name: "停止终端" })).toBeNull();
+  });
+
+  it("keeps an instance running when the Host could not prove the end (unknown receipt)", async () => {
+    const calls: Call[] = [];
+    let stopAttempts = 0;
+    const taskOp = hostStub(calls, {
+      "task/terminalState": () => ({ ok: true, payload: { spawnImplemented: true, instances: [hostInstance()] } }),
+      "task/fileRoots": () => ({ ok: true, payload: ROOTS }),
+      "task/terminalHistory": () => ({ ok: true, payload: { history: [] } }),
+      "task/terminalControl": (payload) => {
+        if (payload["action"] === "stop") stopAttempts += 1;
+        // The Host signals nothing it cannot prove: the instance stays running.
+        return { ok: false, error: "terminal-termination-unconfirmed: 终端 term-release-1 及其子进程未被证实结束" };
+      },
+    });
+    const user = await openTerminalPanel(taskOp);
+
+    const instance = await screen.findByTestId("terminal-instance");
+    await user.click(within(instance).getByRole("button", { name: "停止终端" }));
+
+    await waitFor(() => expect(stopAttempts).toBe(1));
+    // The refusal is the Host's own reason, verbatim...
+    expect(await screen.findByTestId("terminal-notice")).toHaveTextContent(
+      "terminal-termination-unconfirmed: 终端 term-release-1 及其子进程未被证实结束",
+    );
+    // ...and the terminal is still shown as running, never as stopped.
+    expect(screen.getByTestId("terminal-instance")).toHaveTextContent("运行中");
+    expect(screen.queryByTestId("terminal-exit-scope")).toBeNull();
+  });
+
+  it("shows the Host's refusal verbatim when input reaches a terminal without a live process", async () => {
+    const calls: Call[] = [];
+    const taskOp = hostStub(calls, {
+      // The registry still says running (an `unknown` receipt keeps it addressable)
+      // while the Host has no live session behind it.
+      "task/terminalState": () => ({ ok: true, payload: { spawnImplemented: true, instances: [hostInstance()] } }),
+      "task/fileRoots": () => ({ ok: true, payload: ROOTS }),
+      "task/terminalHistory": () => ({ ok: true, payload: { history: [] } }),
+      "task/terminalControl": () => ({ ok: false, error: "terminal-not-running: 终端 term-release-1 没有运行中的真实进程" }),
+    });
+    const user = await openTerminalPanel(taskOp);
+
+    await screen.findByTestId("terminal-instance");
+    await user.type(screen.getByLabelText("终端输入"), "ls");
+    await user.click(screen.getByRole("button", { name: "执行" }));
+
+    const notice = await screen.findByTestId("terminal-notice");
+    expect(notice).toHaveTextContent("terminal-not-running: 终端 term-release-1 没有运行中的真实进程");
+    expect(notice.textContent).toBe("terminal-not-running: 终端 term-release-1 没有运行中的真实进程");
+  });
+});
+
+describe("#15 terminal history freshness", () => {
+  it("drops a history answer for a superseded instance instead of overwriting the current output", async () => {
+    // Mutation that this test is the guard for: deleting the
+    // `if (historyEpoch.current !== request) return;` check in
+    // `TerminalTakeoverPanel.readHistory` lets the slow first answer land and
+    // this assertion fails ("A-stale" replaces "B-out").
+    vi.useFakeTimers();
+    const calls: Call[] = [];
+    let releaseFirst: ((value: unknown) => void) | undefined;
+    const first = new Promise((resolve) => {
+      releaseFirst = resolve;
+    });
+    let stateReads = 0;
+    const taskOp = hostStub(calls, {
+      "task/terminalState": () => {
+        stateReads += 1;
+        return {
+          ok: true,
+          payload: {
+            spawnImplemented: true,
+            instances: [stateReads === 1 ? hostInstance({ instanceId: "inst-a" }) : hostInstance({ instanceId: "inst-b" })],
+          },
+        };
+      },
+      "task/fileRoots": () => ({ ok: true, payload: ROOTS }),
+      "task/terminalHistory": (payload) => {
+        const target = String(payload["instanceId"]);
+        if (target === "inst-a" && calls.filter((call) => call.op === "task/terminalHistory").length === 1) return first;
+        return { ok: true, payload: { history: [{ at: "t1", line: target === "inst-a" ? "A-tail" : "B-out" }] } };
+      },
+    });
+    stubShell(taskOp);
+    render(<TerminalTakeoverPanel taskId="release" />);
+    await flush();
+    expect(screen.getByTestId("terminal-instance")).toHaveTextContent("inst-a");
+
+    // One poll tick: the same instance is re-read, then the Host reports the
+    // newer instance b, which the panel follows.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(TERMINAL_HISTORY_POLL_MS);
+    });
+    await flush();
+    expect(screen.getByTestId("terminal-instance")).toHaveTextContent("inst-b");
+    expect(screen.getByTestId("terminal-output")).toHaveTextContent("B-out");
+
+    // The slow answer for the superseded instance arrives late: it must be dropped.
+    await act(async () => {
+      releaseFirst?.({ ok: true, payload: { history: [{ at: "t1", line: "A-stale" }] } });
+    });
+    await flush();
+    expect(screen.getByTestId("terminal-output")).toHaveTextContent("B-out");
+    expect(screen.getByTestId("terminal-output")).not.toHaveTextContent("A-stale");
+  });
+});
+
+describe("#15 terminal panel without a shell", () => {
+  it("keeps the in-memory echo and never claims a process", async () => {
+    const user = userEvent.setup();
+    renderApp("/projects/atlas/tasks/release?session=main");
+    await screen.findByRole("heading", { name: "发布前检查" });
+
+    await user.click(screen.getByRole("button", { name: "终端" }));
+    expect(await screen.findByTestId("terminal-spawn-residual")).toHaveTextContent("未实现范围");
+
+    await user.type(screen.getByLabelText("终端输入"), "pnpm test");
+    await user.click(screen.getByRole("button", { name: "执行" }));
+    // Today's behaviour stays: the memory adapter echoes, no Host is asked.
+    expect(await screen.findByText("命令已加入模拟队列")).toBeInTheDocument();
+    expect(screen.getByText(/这里是内存模拟/)).toBeInTheDocument();
+  });
+});
