@@ -206,6 +206,32 @@ describe("restart-needed + launch verification", () => {
   });
 });
 
+// [PiDock 04] (#7 box 5): the last control action and who performed it must
+// survive exactly as long as it means something — main re-registers the trusted
+// launch right before every control, so a re-registration that dropped the
+// trail would erase the author of the state the UI is reading.
+describe("last control attribution", () => {
+  it("records the actor and action of the last start/stop, and keeps them across a re-registration", () => {
+    const runtime = registered("v12");
+    expect(runtime.get("saas-web")?.lastControl).toBeUndefined();
+    runtime.markStarted("saas-web", { kind: "agent", sessionId: "impl", permissionAtRequest: "default" });
+    expect(runtime.get("saas-web")?.lastControl).toEqual({ action: "start", actor: { kind: "agent", sessionId: "impl", permissionAtRequest: "default" } });
+    runtime.register({
+      serviceId: "saas-web",
+      descriptor: { name: "saas-web", program: "pnpm", args: ["--filter", "saas-web", "dev"], ports: [5173], runType: "long-lived" },
+      layers,
+      templateVersion: "v13",
+    });
+    expect(runtime.get("saas-web")?.lastControl).toEqual({ action: "start", actor: { kind: "agent", sessionId: "impl", permissionAtRequest: "default" } });
+    // The explicit human action is a different fact, never overwritten by an Agent one.
+    runtime.markStopped("saas-web", { kind: "human", label: "主进程服务目录入口" }, "human-request");
+    expect(runtime.get("saas-web")?.lastControl).toEqual({ action: "stop", actor: { kind: "human", label: "主进程服务目录入口" } });
+    // A crash is not a control: it leaves the last control attribution alone.
+    runtime.markExited("saas-web", "signal: SIGKILL");
+    expect(runtime.get("saas-web")?.lastControl).toMatchObject({ action: "stop", actor: { kind: "human" } });
+  });
+});
+
 // [PiDock 09] (#11) box 5: the write coordination needs the owning session of a
 // still-running service to spot leftovers from another session.
 describe("agent-owned running services (write-coordination probe)", () => {

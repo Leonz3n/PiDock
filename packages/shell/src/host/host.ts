@@ -55,6 +55,7 @@ import type { ServiceRunObservation } from "../main/execution-ledger.js";
 import { SharedPathCoordinator } from "./path-coordination.js";
 import { TaskServiceRuntime } from "./service-runtime.js";
 import { runAgentServiceControl, runHumanServiceControl, type ServiceExecutionDriver } from "./service-control.js";
+import type { SdkAgentServiceHost } from "./sdk-agent-tool-broker.js";
 import { scanTaskServiceImportHints } from "./service-import.js";
 import { publicServiceStartPreview, publicServiceStatus } from "./service-public.js";
 import { TaskServiceTopology } from "./service-topology.js";
@@ -476,6 +477,29 @@ function serviceDriverFor(taskId: string, services: TaskServiceRuntime): Service
 }
 
 /**
+ * [PiDock 04] (#7 box 5) the Agent's service surface for one task: the SAME
+ * `TaskServiceRuntime` the `task/registerService|serviceStatus|serviceLog` ops
+ * answer from, the SAME `TaskServiceProcesses` driver `task/controlService`
+ * uses (one registered-child map, so an Agent stop reaches the child a human
+ * start spawned and never a second instance), the same durable-owner
+ * uncertainty check, and this task's execution ledger. `taskHostFor` hands it
+ * to `TaskWorkspaceHost`, which passes it to the Agent tool broker; exported so
+ * the production wiring is what tests and callers drive, never a copy.
+ */
+export function agentServiceHostFor(taskId: string): SdkAgentServiceHost | undefined {
+  const host = taskHostFor(taskId);
+  if ("error" in host) return undefined;
+  const services = serviceRuntimeFor(taskId);
+  if ("error" in services) return undefined;
+  return {
+    services,
+    driver: () => serviceDriverFor(taskId, services),
+    refusal: (serviceId) => serviceOwnerStateRefusal(serviceId),
+    executions: host.controlExecutions,
+  };
+}
+
+/**
  * Durable service state stays authoritative for uncertainty: a service the
  * installed owner inventory already recorded as starting/running/stopping/
  * unconfirmed must not be re-launched as if nothing were known about it, and
@@ -567,6 +591,10 @@ function taskHostFor(taskId: string): TaskWorkspaceHost | { error: string } {
       sdkKernelFactory,
       undefined,
       protectedPaths(),
+      // [PiDock 04] (#7 box 5): the Agent's service tools get this task's own
+      // runtime + driver + owner check lazily, so the model can start/stop a
+      // task-bound service only through the one gate and the one driver.
+      () => agentServiceHostFor(boundTaskId),
     );
   }
   return workspaceHost;

@@ -482,6 +482,26 @@ describe("[UI 对齐] S8d 运行 panel (real Host bindings and status)", () => {
     expect(screen.queryByText("已停止")).not.toBeInTheDocument();
   });
 
+  it("shows who last started or stopped a service and never presents an Agent action as the user's own click", async () => {
+    let lastControl: unknown = { action: "start", actor: "agent", label: "main" };
+    panelBridge({ statuses: () => ({ ok: true, payload: { service: { serviceId: SERVICE_ID, lifecycle: "running", templateVersion: "2",
+      health: "not-probed", launchSource: "catalog", resolved: [], lastControl } } }) });
+    render(<DesktopToolDock taskId="task-1" tool="runtime" onClose={() => {}} />);
+    // The Host's own labels are repeated verbatim: Agent control carries the
+    // session, and the row never claims the user clicked it.
+    expect(await screen.findByText(/最近启动：Agent 会话 main/)).toBeInTheDocument();
+    expect(screen.queryByText(/最近启动：人工/)).not.toBeInTheDocument();
+
+    // The explicit human action is a different row state, with main's own label.
+    cleanup();
+    lastControl = { action: "stop", actor: "human", label: "主进程服务目录入口" };
+    panelBridge({ statuses: () => ({ ok: true, payload: { service: { serviceId: SERVICE_ID, lifecycle: "stopped", templateVersion: "2",
+      health: "not-probed", launchSource: "catalog", resolved: [], lastControl } } }) });
+    render(<DesktopToolDock taskId="task-1" tool="runtime" onClose={() => {}} />);
+    expect(await screen.findByText(/最近停止：人工（主进程服务目录入口）/)).toBeInTheDocument();
+    expect(screen.queryByText(/最近停止：Agent/)).not.toBeInTheDocument();
+  });
+
   it("states that an unassigned task has no project-scoped binding instead of listing zero services", async () => {
     const fixture = panelBridge({ association: { roots: [], tasks: [{ taskId: "task-1", projectId: null, state: "unassigned" }] } });
     render(<DesktopToolDock taskId="task-1" tool="runtime" onClose={() => {}} />);

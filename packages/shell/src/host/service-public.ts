@@ -13,6 +13,19 @@ export function publicServiceStatus(record: ServiceRecord) {
     launchSource: record.launchSource,
     /** Process liveness only; no dependency/health probe contributed to `lifecycle`. */
     health: "not-probed" as const,
+    /**
+     * Who last started or stopped this service, and through which path
+     * ([PiDock 04] #7 box 5): `human` is the explicit UI action carrying
+     * main's own label, `agent` is the gated Agent path carrying the session
+     * id. The UI renders them apart, so an Agent action is never shown as if
+     * the user had clicked it itself (and the reverse). `null` means the
+     * service has no recorded control yet.
+     */
+    lastControl: record.lastControl === undefined ? null : {
+      action: record.lastControl.action,
+      actor: record.lastControl.actor.kind,
+      label: record.lastControl.actor.kind === "human" ? record.lastControl.actor.label : record.lastControl.actor.sessionId,
+    },
     resolved: record.resolved.map((entry) => ({
       key: entry.key,
       value: entry.secret ? "••••••••" : entry.value,

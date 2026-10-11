@@ -32,7 +32,7 @@ import type { PiApproval, PiApprovalScope, PiGateDecision, PiPermission } from "
 import { SERVICE_CONTROL_SCOPE } from "../main/pi-session.js";
 import { writeClaimError, type WriteCoordinatorPort } from "./write-coordination.js";
 import type { ControlExecutionHandle, ControlExecutionPort } from "./execution-ledger.js";
-import type { TaskServiceRuntime } from "./service-runtime.js";
+import { SERVICE_CONTROL_TOOL, type TaskServiceRuntime } from "./service-runtime.js";
 
 /**
  * The slice of `PiSessionChannel` this sequence uses. Structural, so the
@@ -190,7 +190,7 @@ async function performAgentServiceControl(
       ? input.channel.snapshot().approvals.find((item) => item.id === approvalId)
       : undefined;
   const target = `${input.services.taskDir}/services/${input.serviceId}`;
-  if (channelExecutionClosing(input.channel, "exec.run", target)) return { ok: false, error: "task-host-closing" };
+  if (channelExecutionClosing(input.channel, SERVICE_CONTROL_TOOL, target)) return { ok: false, error: "task-host-closing" };
   const intent = { kind: "service-control" as const, label: `服务${input.action === "start" ? "启动" : "停止"} ${input.serviceId}` };
   const decision = input.services.decideAgentControl({
     serviceId: input.serviceId,
@@ -209,10 +209,10 @@ async function performAgentServiceControl(
       const claim = input.write.claimWrite(input.sessionId, tier, intent);
       if (!claim.ok) return { ok: false, error: writeClaimError(claim) };
       try {
-        const preview = input.channel.previewGate("exec.run", target);
+        const preview = input.channel.previewGate(SERVICE_CONTROL_TOOL, target);
         if (preview.verdict === "ask") {
           const contentVersion = input.services.get(input.serviceId)?.templateVersion ?? "v1";
-          const gate = input.channel.gate("exec.run", target, contentVersion, undefined, SERVICE_CONTROL_SCOPE);
+          const gate = input.channel.gate(SERVICE_CONTROL_TOOL, target, contentVersion, undefined, SERVICE_CONTROL_SCOPE);
           if (gate.verdict === "ask") {
             record?.awaitApproval({ approvalId: gate.approvalId, payloadVersion: contentVersion, scope: SERVICE_CONTROL_SCOPE });
             input.persist();
@@ -228,7 +228,7 @@ async function performAgentServiceControl(
   const claim = input.write.claimWrite(input.sessionId, tier, intent);
   if (!claim.ok) return { ok: false, error: writeClaimError(claim) };
   try {
-    if (channelExecutionClosing(input.channel, "exec.run", target)) return { ok: false, error: "task-host-closing" };
+    if (channelExecutionClosing(input.channel, SERVICE_CONTROL_TOOL, target)) return { ok: false, error: "task-host-closing" };
     // One-shot spend: the verified approval authorizes exactly this
     // start/stop. Spending (and persisting) before acting means a replay
     // fails closed even if the same id is sent again. Stated consequence: a
@@ -241,7 +241,7 @@ async function performAgentServiceControl(
       }
       input.persist();
     }
-    if (channelExecutionClosing(input.channel, "exec.run", target)) return { ok: false, error: "task-host-closing" };
+    if (channelExecutionClosing(input.channel, SERVICE_CONTROL_TOOL, target)) return { ok: false, error: "task-host-closing" };
     // The gate is settled and the one-shot approval (when there was one) is
     // spent: now - and only now - a real process may start or stop. A driver
     // failure keeps the previous lifecycle and returns the real error.

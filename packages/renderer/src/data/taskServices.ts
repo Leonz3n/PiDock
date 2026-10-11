@@ -58,6 +58,14 @@ export interface ServiceRegistryStatusView {
   launchSource?: "catalog" | "ui";
   /** Process liveness is `lifecycle`; no reachability probe is ever reported here. */
   health?: "not-probed";
+  /**
+   * Who last started or stopped this service ([PiDock 04] #7 box 5): `human`
+   * is the explicit UI action (with main's own label), `agent` is the gated
+   * Agent path (with the session it was decided for). Absent means the Host
+   * recorded no control (an older Host, or a service never started through
+   * either path); the row then says so instead of guessing an author.
+   */
+  lastControl?: { action: "start" | "stop"; actor: "human" | "agent"; label: string };
 }
 
 export type ServiceStatusView = ServiceOwnerStatusView | ServiceRegistryStatusView;
@@ -80,7 +88,7 @@ function registryStatus(row: Record<string, unknown>, serviceId: string): Servic
   // `lifecycle` is process liveness only, `health` stays `not-probed` (no
   // reachability probe is reported as health) and `launchSource` says whether
   // the launch came from main's trusted catalog or is display-only.
-  const allowed = ["exitReason", "health", "launchSource", "lifecycle", "resolved", "serviceId", "startedAt", "stoppedAt", "templateVersion"];
+  const allowed = ["exitReason", "health", "lastControl", "launchSource", "lifecycle", "resolved", "serviceId", "startedAt", "stoppedAt", "templateVersion"];
   const required = ["lifecycle", "resolved", "serviceId", "templateVersion"];
   if (!Object.keys(row).every((key) => allowed.includes(key)) || !required.every((key) => key in row)) return null;
   if (row["lifecycle"] !== "stopped" && row["lifecycle"] !== "running") return null;
@@ -97,11 +105,29 @@ function registryStatus(row: Record<string, unknown>, serviceId: string): Servic
   const stoppedAt = text(row["stoppedAt"]);
   const exitReason = text(row["exitReason"]);
   if (startedAt === null || stoppedAt === null || exitReason === null) return null;
+  const lastControl = lastControlFact(row["lastControl"]);
+  if (lastControl === null) return null;
   return { kind: "registry", serviceId, lifecycle: row["lifecycle"], templateVersion: row["templateVersion"],
     resolvedKeys, ...(startedAt !== undefined ? { startedAt } : {}), ...(stoppedAt !== undefined ? { stoppedAt } : {}),
     ...(exitReason !== undefined ? { exitReason } : {}),
     ...(row["launchSource"] !== undefined ? { launchSource: row["launchSource"] as "catalog" | "ui" } : {}),
-    ...(row["health"] !== undefined ? { health: "not-probed" as const } : {}) };
+    ...(row["health"] !== undefined ? { health: "not-probed" as const } : {}),
+    ...(lastControl !== undefined ? { lastControl } : {}) };
+}
+
+/**
+ * The control author of one status row, read strictly: an unknown actor, an
+ * unknown action or a missing label makes the row unreadable (`null`) instead
+ * of being shown as if the user had clicked it. `undefined`/`null` (the Host's
+ * "no control recorded") is the one accepted answer without an author.
+ */
+function lastControlFact(value: unknown): ServiceRegistryStatusView["lastControl"] | undefined | null {
+  if (value === undefined || value === null) return undefined;
+  if (!isRecord(value) || Object.keys(value).sort().join(",") !== "action,actor,label") return null;
+  if (value["action"] !== "start" && value["action"] !== "stop") return null;
+  if (value["actor"] !== "human" && value["actor"] !== "agent") return null;
+  if (typeof value["label"] !== "string" || value["label"].length === 0 || value["label"].length > 200) return null;
+  return { action: value["action"], actor: value["actor"], label: value["label"] };
 }
 
 /** One `task/serviceStatus` payload, or `null` when it is not the asked-for service. */

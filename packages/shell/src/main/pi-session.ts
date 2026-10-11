@@ -207,6 +207,15 @@ export const PI_GATED_TOOLS: readonly PiToolDefinition[] = [
   { name: "fs.search", kind: "read" },
   { name: "fs.write", kind: "write" },
   { name: "exec.run", kind: "command" },
+  // [PiDock 04] #7 box 5: the Agent's service surface. The read pair is `read`
+  // kind (a read-only session may still read status/logs), and start/stop are
+  // `command` kind, so the one tier rule below already refuses them for a
+  // read-only session and asks first under `default`. Nothing here widens a
+  // tier: the tools are gated exactly like `exec.run`.
+  { name: "service.status", kind: "read" },
+  { name: "service.logs", kind: "read" },
+  { name: "service.start", kind: "command" },
+  { name: "service.stop", kind: "command" },
   ...BROWSER_TOOL_DEFINITIONS,
 ] as const;
 

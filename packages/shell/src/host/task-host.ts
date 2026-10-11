@@ -135,7 +135,7 @@ import { TaskSchedules, type SaveScheduleInput, type SaveScheduleResult, type Sc
 import { PiSdkTextKernel } from "./sdk-text-kernel.js";
 import { SdkTextKernelRouter } from "./sdk-kernel-router.js";
 import { SdkContextClient } from "./sdk-context-client.js";
-import { SdkAgentToolBroker, derivedPrimaryCheckouts, type SdkAgentToolScope } from "./sdk-agent-tool-broker.js";
+import { SdkAgentToolBroker, derivedPrimaryCheckouts, type SdkAgentServiceHost, type SdkAgentToolScope } from "./sdk-agent-tool-broker.js";
 import type { ExplicitTextProvider } from "./explicit-text-provider.js";
 import {
   PI_USAGE_GROUP_LABELS,
@@ -629,6 +629,11 @@ export class TaskWorkspaceHost {
       },
       scope: () => this.sdkToolScope(),
       resolveRealPath: (path) => this.resolveRealPath(path),
+      // [PiDock 04] #7 box 5: the Agent's service tools read and control this
+      // task's REAL services through the Host-owned runtime and driver (`host.ts`
+      // hands the same pair to `task/serviceStatus`/`task/controlService`). A
+      // Host constructed without that surface refuses every service tool.
+      services: () => this.agentServices(),
       closing: () => this.executionClosing || this.sdkDisposalFailed,
     }));
   }
@@ -831,6 +836,13 @@ export class TaskWorkspaceHost {
     /** Injectable so the Host's Provider lifecycle is testable without spawning a worker. */
     private readonly sdkContextFactory: (options: ConstructorParameters<typeof SdkContextClient>[0]) => SdkContextClient = (options) => new SdkContextClient(options),
     private readonly protection?: TaskPathProtection,
+    /**
+     * The task's real service surface for the Agent tools ([PiDock 04] #7 box
+     * 5). `host.ts` hands in the same runtime/driver/owner check the
+     * `task/registerService|serviceStatus|controlService` ops use; absent
+     * keeps every Agent service tool fail-closed.
+     */
+    private readonly agentServices: () => SdkAgentServiceHost | undefined = () => undefined,
   ) {
     if (taskId.trim().length === 0) throw new Error("taskId must be non-empty");
     if (taskDir.trim().length === 0) throw new Error("taskDir must be non-empty");
