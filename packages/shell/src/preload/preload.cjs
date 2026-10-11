@@ -17,7 +17,7 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 const BRIDGE_NAME = "pidock";
-const INVOKE_CHANNELS = ["shell/getVersions", "shell/hostPing", "shell/listTasks", "shell/importTaskRoot", "shell/projectOp", "shell/serviceCatalogOp", "shell/createTask", "shell/appendTaskRepos", "shell/providerOp", "shell/taskOp", "shell/sdkTurn"];
+const INVOKE_CHANNELS = ["shell/getVersions", "shell/hostPing", "shell/listTasks", "shell/importTaskRoot", "shell/projectOp", "shell/serviceCatalogOp", "shell/createTask", "shell/appendTaskRepos", "shell/openTaskEditor", "shell/providerOp", "shell/taskOp", "shell/sdkTurn"];
 const EVENT_CHANNELS = ["shell/hostStatus", "shell/sdkTurnEvent"];
 
 // Preload-only capabilities (NOT visible to the page itself). Sandboxed
@@ -68,6 +68,12 @@ const bridge = {
   },
   appendTaskRepos: function (request) {
     return invoke("shell/appendTaskRepos", request);
+  },
+  // [PiDock 10] (#15 box 28) opens the user's configured external editor at a
+  // task workspace root. The page names a task + root only: the program comes
+  // from main's own settings document.
+  openTaskEditor: function (request) {
+    return invoke("shell/openTaskEditor", request);
   },
   providerOp: function (request) {
     return invoke("shell/providerOp", request);

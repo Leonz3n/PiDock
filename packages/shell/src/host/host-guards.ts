@@ -18,6 +18,7 @@ import { isBrowserAction, isPageRef } from "../main/browser-rules.js";
 import { isExternalResourceKind } from "../main/service-runs.js";
 import { checkReferencePayload } from "../main/composer-references.js";
 import { REMOTE_ENTRY_MODES } from "../main/remote-rules.js";
+import { MAX_EDITOR_ARGS, MAX_EDITOR_ARG_CHARS } from "../main/external-editor.js";
 
 export const DEFAULT_WORKSPACE_ID = "s1-default-workspace";
 
@@ -55,6 +56,9 @@ export function boundWorkspaceId(): string {
 function isNonEmptyRootId(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
+
+/** The editor program/arg bound the [PiDock 10] (#15 box 28) settings enforce. */
+const MAX_EDITOR_PROGRAM_CHARS = MAX_EDITOR_ARG_CHARS;
 
 function isUsageGroupBy(value: unknown): value is PiUsageGroupBy {
   return typeof value === "string" && (PI_USAGE_GROUP_BY as readonly string[]).includes(value);
@@ -1160,6 +1164,52 @@ export function validateHostTaskOp(
     // A preview reads one file: an explicit relative path is required.
     if (op === "task/filePreview" && (typeof relative !== "string" || relative.trim().length === 0)) {
       return { ok: false, error: "invalid-payload: task/filePreview.relative must be a non-empty string" };
+    }
+    return { ok: true };
+  }
+  if (op === "task/openEditor") {
+    // [PiDock 10] (#15 box 28) Only main's attested entry builds this payload
+    // (`shell/openTaskEditor`); `shell/taskOp` refuses the op by name. The
+    // schema is exactly `{rootId, editor:{program, args?}}` and the program is
+    // the user's configured one, read by main from its own settings document:
+    // any other key — a page-supplied `program`/`args`/`path` included — is
+    // refused here rather than ignored.
+    if (!isRecord(payload)) return { ok: false, error: "invalid-payload: task/openEditor requires a payload object" };
+    if (!isNonEmptyRootId(payload["rootId"])) {
+      return { ok: false, error: "invalid-payload: task/openEditor.rootId must be a non-empty string" };
+    }
+    const extra = Object.keys(payload).filter((key) => key !== "rootId" && key !== "editor");
+    if (extra.length > 0) {
+      return {
+        ok: false,
+        error: `invalid-payload: task/openEditor 只接受 rootId 与用户配置的 editor，不接受 ${extra.sort().join(",")}`,
+      };
+    }
+    const editor = payload["editor"];
+    if (!isRecord(editor)) return { ok: false, error: "invalid-payload: task/openEditor.editor must be the user-configured program object" };
+    const editorKeys = Object.keys(editor).filter((key) => key !== "program" && key !== "args");
+    if (editorKeys.length > 0) {
+      return { ok: false, error: `invalid-payload: task/openEditor.editor 不接受 ${editorKeys.sort().join(",")}` };
+    }
+    const program = editor["program"];
+    if (
+      typeof program !== "string" ||
+      program.length === 0 ||
+      program.length > MAX_EDITOR_PROGRAM_CHARS ||
+      program.includes("\0")
+    ) {
+      return { ok: false, error: "invalid-payload: task/openEditor.editor.program must be a non-empty absolute path string" };
+    }
+    // Absolute-path semantics are enforced by the rule layer (which also probes
+    // the file); the envelope only bounds the value.
+    const args = editor["args"];
+    if (
+      args !== undefined &&
+      (!Array.isArray(args) ||
+        args.length > MAX_EDITOR_ARGS ||
+        !args.every((entry) => typeof entry === "string" && !entry.includes("\0") && entry.length <= MAX_EDITOR_PROGRAM_CHARS))
+    ) {
+      return { ok: false, error: `invalid-payload: task/openEditor.editor.args must be at most ${MAX_EDITOR_ARGS} strings` };
     }
     return { ok: true };
   }

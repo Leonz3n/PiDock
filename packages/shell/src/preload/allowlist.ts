@@ -19,6 +19,12 @@ export const ALLOWED_INVOKE_CHANNELS = [
   "shell/serviceCatalogOp",
   "shell/createTask",
   "shell/appendTaskRepos",
+  // [PiDock 10] (#15 box 28) 从任务打开外部编辑器: the page names a task and one of
+  // that task's own roots; main reads the editor program from its own user
+  // settings and launches it. This is a dedicated attested entry — the op is
+  // deliberately absent from the renderer task-op set and refused by name on
+  // `shell/taskOp`, so page code can never name the program.
+  "shell/openTaskEditor",
   "shell/providerOp",
   "shell/taskOp",
   "shell/sdkTurn",
