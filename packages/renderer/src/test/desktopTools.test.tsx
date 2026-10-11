@@ -348,6 +348,7 @@ type PanelBridgeOptions = {
   logs?: (serviceId: string) => unknown;
   browser?: (request: Record<string, unknown>) => unknown;
   run?: (request: Record<string, unknown>) => unknown;
+  rebind?: (request: Record<string, unknown>) => unknown;
 };
 
 function panelBridge(options: PanelBridgeOptions = {}) {
@@ -363,6 +364,7 @@ function panelBridge(options: PanelBridgeOptions = {}) {
   });
   const serviceCatalogOp = vi.fn(async (request: Record<string, unknown>) => {
     if (request["op"] === "runTaskService") return options.run ? options.run(request) : { ok: true, payload: { serviceId: request["serviceId"], action: request["action"], actor: "human" } };
+    if (request["op"] === "rebindServiceOwner") return options.rebind ? options.rebind(request) : { ok: false, error: "unexpected rebindServiceOwner" };
     if (request["op"] === "taskBindings") return { ok: true, payload: options.bindings ?? [{
       taskId: "task-1", serviceId: SERVICE_ID, templateVersion: 2, rootId: "invoice-service", subdir: "apps/svc", privateKeys: ["API_TOKEN"],
     }] };
@@ -432,6 +434,45 @@ describe("[UI 对齐] S8d 运行 panel (real Host bindings and status)", () => {
     // un-probed health note), and the refusal is never replaced by a green row.
     expect(screen.getByText(/健康未探测/)).toBeInTheDocument();
     expect(fixture.serviceCatalogOp.mock.calls.filter(([entry]) => entry["op"] === "runTaskService")).toHaveLength(1);
+    // Only the named owner fence has a wired way back: this refusal offers none.
+    expect(screen.queryByTestId("service-owner-rebind")).toBeNull();
+  });
+
+  it("surfaces the named owner fence with the explicit re-bind as the way back, and writes only on the confirmed click", async () => {
+    const view = (over: Record<string, unknown>) => ({ taskId: "task-1", projectId: "project-1", state: "fenced", confirmed: false, rebound: false,
+      changes: [{ serviceId: SERVICE_ID, name: "invoice-local", was: 1, now: 2 }], stopsProcesses: false, restartsProcesses: false, ...over });
+    const fixture = panelBridge({
+      statuses: () => ({ ok: true, payload: { service: { serviceId: SERVICE_ID, lifecycle: "stopped", templateVersion: "2", health: "not-probed", launchSource: "catalog", resolved: [] } } }),
+      run: () => ({ ok: false, error: "service-execution-uncertain: service-owner-inventory-unconfirmed" }),
+      rebind: (request) => ({ ok: true, payload: view(request["confirm"] === true ? { state: "current", confirmed: true, rebound: true } : {}) }),
+    });
+    render(<DesktopToolDock taskId="task-1" tool="runtime" onClose={() => {}} />);
+    fireEvent.click(await screen.findByRole("button", { name: "启动" }));
+    // The Host's named refusal is shown verbatim and the panel offers the
+    // privileged re-bind instead of a copy that claims a rebuild the page cannot do.
+    expect(await screen.findByRole("alert")).toHaveTextContent("service-owner-inventory-unconfirmed");
+    expect(screen.getByTestId("service-owner-rebind")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "核对重新绑定" }));
+    expect(await screen.findByText(/待重新绑定/)).toBeInTheDocument();
+    expect(screen.getByText(/本次重新绑定影响 invoice-local：绑定 v1 → v2/)).toBeInTheDocument();
+    expect(screen.getByText(/重新绑定不停止、不重启任何进程/)).toBeInTheDocument();
+    expect(fixture.serviceCatalogOp).toHaveBeenCalledWith({ op: "rebindServiceOwner", projectId: "project-1", taskId: "task-1", confirm: false });
+    expect(fixture.serviceCatalogOp.mock.calls.filter(([entry]) => entry["op"] === "runTaskService")).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "确认重新绑定" }));
+    expect(await screen.findByText(/已重新绑定该任务的服务所有者/)).toBeInTheDocument();
+    expect(fixture.serviceCatalogOp).toHaveBeenCalledWith({ op: "rebindServiceOwner", projectId: "project-1", taskId: "task-1", confirm: true });
+    const rebinds = fixture.serviceCatalogOp.mock.calls.map(([entry]) => entry).filter((entry) => entry["op"] === "rebindServiceOwner");
+    expect(rebinds).toEqual([{ op: "rebindServiceOwner", projectId: "project-1", taskId: "task-1", confirm: false },
+      { op: "rebindServiceOwner", projectId: "project-1", taskId: "task-1", confirm: true }]);
+    // The receipt stays until the user closes it, and the stale revocation claim
+    // is gone: the panel no longer says this task's control is revoked.
+    expect(screen.getByTestId("service-owner-rebind")).not.toHaveTextContent("该任务的启停通道已被撤销");
+    // The re-bind replaced ownership only: it never asks main to start or stop
+    // a process, and the panel re-reads the Host's own status instead.
+    expect(fixture.serviceCatalogOp.mock.calls.filter(([entry]) => entry["op"] === "runTaskService")).toHaveLength(1);
+    expect(fixture.taskOp.mock.calls.filter(([, op]) => op === "task/serviceStatus").length).toBeGreaterThan(1);
+    fireEvent.click(screen.getByRole("button", { name: "关闭" }));
+    expect(screen.queryByTestId("service-owner-rebind")).toBeNull();
   });
 
   it("shows the Host refusal for a status read instead of a fabricated stopped state", async () => {

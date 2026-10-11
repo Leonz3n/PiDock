@@ -655,7 +655,8 @@ function ServiceControl({ taskId, projectId, row, onChanged }: {
         <span className="text-[10px] text-muted">{running ? "停止本任务已登记的服务进程" : "按项目配方启动本服务"}</span>
         {error !== undefined && <span role="alert" className="min-w-0 break-words text-[10px] text-[#ad4545]">{error}</span>}
       </div>
-      {fenced !== undefined && <ServiceOwnerRebind projectId={projectId} taskId={taskId} surfacedBy={fenced} onRebound={() => { setFenced(undefined); setError(undefined); onChanged(); }} />}
+      {fenced !== undefined && <ServiceOwnerRebind projectId={projectId} taskId={taskId} surfacedBy={fenced}
+        onRebound={() => { setError(undefined); onChanged(); }} onDismiss={() => setFenced(undefined)} />}
     </div>
   );
 }
