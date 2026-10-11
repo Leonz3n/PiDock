@@ -22,6 +22,7 @@ import {
   shellFailure,
   type BoundServiceRow,
   type ServiceStatusView,
+  type ServiceRegistryStatusView,
   type TaskServicesLoad,
 } from "../data/taskServices";
 import { ProtocolPanel, TerminalTakeoverPanel } from "./ToolPanels";
@@ -129,7 +130,23 @@ function statusText(row: BoundServiceRow): string {
   // reachability probe as health, so the row states that it was not probed
   // instead of implying a passing health check.
   const health = status.health === "not-probed" ? " · 健康未探测" : "";
-  return `${SERVICE_STATE_TEXT.registry[status.lifecycle] ?? status.lifecycle} · 配方 v${status.templateVersion} · ${status.resolvedKeys.length} 项环境变量${health}`;
+  return `${SERVICE_STATE_TEXT.registry[status.lifecycle] ?? status.lifecycle} · 配方 v${status.templateVersion} · ${status.resolvedKeys.length} 项环境变量${health}${controlText(status)}`;
+}
+
+/**
+ * Who last started or stopped this service ([PiDock 04] #7 box 5). The Host
+ * labels the explicit human action and the gated Agent path apart, so the row
+ * repeats that fact verbatim: an action the Agent took is never shown as a
+ * click the user made, and the human label keeps main's own wording. A Host
+ * that recorded no control says so instead of guessing an author.
+ */
+function controlText(status: ServiceRegistryStatusView): string {
+  const last = status.lastControl;
+  if (!last) return "";
+  const action = last.action === "start" ? "启动" : "停止";
+  return last.actor === "human"
+    ? ` · 最近${action}：人工（${last.label}）`
+    : ` · 最近${action}：Agent 会话 ${last.label}`;
 }
 
 /** The Host's own liveness answer for one row; a failed read is never "running". */

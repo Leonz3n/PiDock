@@ -228,11 +228,14 @@ function snapshot(root: string): Record<string, string> {
   return out;
 }
 
-it("declares exactly the four task tools and executes a write inside the task worktree", async () => {
+it("declares exactly the task tools (files, command and the #7 service surface) and executes a write inside the task worktree", async () => {
   const h = await harness();
   await h.host.configureSdkProvider({ config: PROVIDER_CONFIG, credential: "synthetic-key" });
   const opened = await h.host.sdkTextKernel().open("main");
   expect([...opened.tools].sort()).toEqual([...SDK_AGENT_TOOL_NAMES].sort());
+  // [PiDock 04] #7 box 5: the Agent's service tools are declared to the session
+  // like every other tool, i.e. every call reaches the one Host broker/gate.
+  for (const name of ["service.status", "service.logs", "service.start", "service.stop"]) expect(opened.tools).toContain(name);
 
   const written = await h.prompt("fs.write", { path: "repo/new-file.txt", content: "written by the agent\n" });
   expect(written.state).toBe("done");

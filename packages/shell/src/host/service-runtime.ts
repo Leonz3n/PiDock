@@ -56,6 +56,15 @@ import { SERVICE_CONTROL_SCOPE } from "../main/pi-session.js";
 
 export type ServiceLifecycle = "stopped" | "running";
 
+/**
+ * The one tool name a Host-minted service-control confirmation is bound to.
+ * Service control is not a shell command the user runs; the approval names the
+ * gated `exec.run` binding at the service folder so the Host's control
+ * sequence, the Agent's service tools and the turn flow all compare against
+ * one spelling instead of three.
+ */
+export const SERVICE_CONTROL_TOOL = "exec.run";
+
 export interface ServiceRecord {
   serviceId: string;
   descriptor: ServiceDescriptor;
@@ -78,6 +87,13 @@ export interface ServiceRecord {
    * another session can be detected instead of silently written alongside.
    */
   startedBy?: ServiceControlActor;
+  /**
+   * The last lifecycle action of this service and who performed it
+   * ([PiDock 04] #7 box 5): an Agent-initiated start/stop (`agent:<sessionId>`)
+   * and the explicit human action (`human:<label>`) must be told apart wherever
+   * the record is read, including the UI-facing projection.
+   */
+  lastControl?: { action: "start" | "stop"; actor: ServiceControlActor };
   /** Per-platform launch verifications (program+args, explicit). */
   launchVerifications: { platform: string; nodeVersion: string; ok: boolean; note: string }[];
   /** Trusted-catalog registration only; `ui` registrations never execute. */
@@ -148,7 +164,7 @@ export function verifyServiceControlApproval(input: {
     return { ok: false, reason: "服务启停需先确认（批准后重试，拒绝/取消不执行）" };
   }
   if (approval.scope !== SERVICE_CONTROL_SCOPE) return { ok: false, reason: "确认请求与服务启停不匹配（用途未绑定）" };
-  if (approval.tool !== "exec.run") return { ok: false, reason: "确认请求与服务启停不匹配" };
+  if (approval.tool !== SERVICE_CONTROL_TOOL) return { ok: false, reason: "确认请求与服务启停不匹配" };
   const expected = `${input.taskDir}/services/${input.serviceId}`;
   if (approval.target !== expected) return { ok: false, reason: "确认请求与服务启停不匹配" };
   return { ok: true };
@@ -180,6 +196,7 @@ export class TaskServiceRuntime {
       events: [...record.events],
       resolved: [...record.resolved.map((entry) => ({ ...entry }))],
       ...(record.startedBy !== undefined ? { startedBy: { ...record.startedBy } } : {}),
+      ...(record.lastControl !== undefined ? { lastControl: { action: record.lastControl.action, actor: { ...record.lastControl.actor } } } : {}),
       launchVerifications: [...record.launchVerifications.map((entry) => ({ ...entry }))],
     };
   }
@@ -252,6 +269,13 @@ export class TaskServiceRuntime {
       exitReason: existing?.exitReason,
       dependencyNote: existing?.dependencyNote,
       log: existing ? [...existing.log] : [],
+      // The control trail survives a re-registration: main re-registers the
+      // trusted launch right before every control, so dropping it here would
+      // erase who last started or stopped the service exactly when the next
+      // action is about to be attributed.
+      ...(existing?.lastControl !== undefined
+        ? { lastControl: { action: existing.lastControl.action, actor: { ...existing.lastControl.actor } } }
+        : {}),
       events: [...(existing?.events ?? []), `config:registered:${input.templateVersion}:${input.launchSource ?? "ui"}`],
       launchVerifications: existing ? [...existing.launchVerifications] : [],
       launchSource: input.launchSource ?? "ui",
@@ -382,6 +406,7 @@ export class TaskServiceRuntime {
     record.stoppedAt = undefined;
     record.exitReason = undefined;
     record.startedBy = { ...actor };
+    record.lastControl = { action: "start", actor: { ...actor } };
     record.events.push(`start:${actor.kind}:${actor.kind === "human" ? actor.label : `${actor.sessionId}:${actor.permissionAtRequest}`}`);
     this.pushLog(record, detail ?? `listening (process alive; dependencies not probed)`);
   }
@@ -398,6 +423,7 @@ export class TaskServiceRuntime {
     record.lifecycle = "stopped";
     record.stoppedAt = this.now();
     record.exitReason = reason;
+    record.lastControl = { action: "stop", actor: { ...actor } };
     record.events.push(`stop:${actor.kind}:${actor.kind === "human" ? actor.label : `${actor.sessionId}:${actor.permissionAtRequest}`}:${reason}`);
     this.pushLog(record, `process stopped: ${reason}`);
   }

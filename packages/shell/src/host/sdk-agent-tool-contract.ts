@@ -12,8 +12,10 @@
  *   anything, after the existing permission gate and the task write lock.
  *
  * Tool names are the gated names of `main/pi-session.ts` (`fs.read`,
- * `fs.write`, `exec.run` plus the read-only `fs.search`), so every invocation
- * is decided by the one existing gate instead of a second opinion here.
+ * `fs.write`, `exec.run`, the read-only `fs.search` and the [PiDock 04] #7
+ * service surface `service.status`/`service.logs`/`service.start`/`service.stop`),
+ * so every invocation is decided by the one existing gate instead of a second
+ * opinion here.
  *
  * The Host never trusts the worker's declared schema: `sdk-agent-tool-broker.ts`
  * re-validates every argument strictly. The schema below exists so the model can
@@ -22,7 +24,15 @@
 
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 
-export type SdkAgentToolName = "fs.read" | "fs.search" | "fs.write" | "exec.run";
+export type SdkAgentToolName =
+  | "fs.read"
+  | "fs.search"
+  | "fs.write"
+  | "exec.run"
+  | "service.status"
+  | "service.logs"
+  | "service.start"
+  | "service.stop";
 
 /** The gate kind each tool is decided as (`PiToolKind` semantics). */
 export type SdkAgentToolKind = "read" | "write" | "command";
@@ -102,6 +112,65 @@ export const SDK_AGENT_TOOL_SPECS: readonly SdkAgentToolSpec[] = [
       },
     },
   },
+  // [PiDock 04] #7 box 5: the Agent's own service tools. The Agent names only a
+  // `serviceId` this task really has bound; the Host resolves the program, the
+  // effective configuration, the logs and the process identity itself, so a
+  // call can never name a program, a path, a port or an environment value.
+  {
+    name: "service.status",
+    kind: "read",
+    summary: "Read one task-bound service's real process state",
+    description:
+      "Report `serviceId`'s real state as the task Host knows it. `serviceId` must be a service this task has bound; anything else is refused by name. `lifecycle` is process liveness only — dependency reachability is reported separately as a note and never turns a dead process into a running one (or the reverse).",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      required: ["serviceId"],
+      properties: { serviceId: { type: "string", description: "Id of a service bound to this task" } },
+    },
+  },
+  {
+    name: "service.logs",
+    kind: "read",
+    summary: "Read the bounded log tail of one task-bound service",
+    description:
+      "Return the bounded log tail of `serviceId` (a service bound to this task). At most `limit` lines (default 40, max 100), each already truncated and redacted by the Host — private values never appear. There is no log stream: this is a bounded read of the tail.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      required: ["serviceId"],
+      properties: {
+        serviceId: { type: "string", description: "Id of a service bound to this task" },
+        limit: { type: "integer", minimum: 1, maximum: 100, description: "Maximum number of trailing log lines" },
+      },
+    },
+  },
+  {
+    name: "service.start",
+    kind: "command",
+    summary: "Start one task-bound service through the Host (gated)",
+    description:
+      "Ask the Host to start `serviceId`, a service this task has bound. The program, arguments, working directory, effective environment and process identity all come from the task's own resolved binding — this call names nothing else, and extra arguments are refused. The permission gate decides first: a read-only session is refused, `default` asks the user for one confirmation (rejection, cancellation or expiry performs no action), and one confirmation authorizes exactly one start or stop. An unknown or foreign `serviceId` starts nothing.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      required: ["serviceId"],
+      properties: { serviceId: { type: "string", description: "Id of a service bound to this task" } },
+    },
+  },
+  {
+    name: "service.stop",
+    kind: "command",
+    summary: "Stop one task-bound service through the Host (gated)",
+    description:
+      "Ask the Host to stop `serviceId`, a service this task has bound. Only the child the Host itself registered for this service is stopped. The permission gate decides first: a read-only session is refused, `default` asks for one confirmation (rejection, cancellation or expiry performs no action), and one confirmation authorizes exactly one start or stop. An unknown or foreign `serviceId` stops nothing.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      required: ["serviceId"],
+      properties: { serviceId: { type: "string", description: "Id of a service bound to this task" } },
+    },
+  },
 ];
 
 export const SDK_AGENT_TOOL_NAMES: readonly SdkAgentToolName[] = SDK_AGENT_TOOL_SPECS.map((spec) => spec.name);
@@ -174,7 +243,11 @@ export function sdkAgentSystemPrompt(input: { taskDir: string; worktrees: readon
     "- fs.search: list a directory or search files by pattern (args: path, optional pattern)",
     "- fs.write: create or overwrite a file in a worktree (args: path, content)",
     "- exec.run: run a shell command in a worktree (args: command, optional cwd)",
+    "- service.status: read a task-bound service's real state (args: serviceId)",
+    "- service.logs: read a task-bound service's bounded log tail (args: serviceId, optional limit)",
+    "- service.start / service.stop: start or stop a task-bound service through the Host (args: serviceId)",
     "Every write and command is subject to the task's permission gate and write lock: a refusal comes back as a tool result with a reason, so adapt instead of retrying the same call.",
+    "The service tools name only a `serviceId` this task has bound; the Host resolves the program, working directory, effective environment, logs and process identity itself, so a call can never name a program, a path, a port or an environment value. `service.start`/`service.stop` are refused in a read-only session, ask the user first under `default` (a rejection, cancellation or expiry performs no action, and one confirmation authorizes exactly one start or stop), and are allowed under `auto`.",
     "`exec.run` runs a real shell through a filter, not a sandbox: a command containing `$` or a backtick is refused outright (no approval is offered, even under `default`), a token naming `.git` is refused whatever its case, quoting or simple backslash escapes (`echo x > .g\\it` is the same control file as `echo x > .git`), and only path-shaped tokens (`/`, `~`, `..`) are examined at all. Never treat it as an isolation boundary.",
   ].join("\n");
 }

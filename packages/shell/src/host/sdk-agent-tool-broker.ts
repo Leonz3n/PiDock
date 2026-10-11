@@ -50,15 +50,19 @@ import { createHash } from "node:crypto";
 import { lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import type { PiApproval, PiApprovalScope, PiGateDecision, PiPermission } from "../main/pi-session.js";
-import { AGENT_TOOL_SCOPE } from "../main/pi-session.js";
+import { AGENT_TOOL_SCOPE, SERVICE_CONTROL_SCOPE } from "../main/pi-session.js";
+import type { ControlExecutionPort } from "./execution-ledger.js";
 import { isCredentialEnvName } from "./explicit-text-provider.js";
 import { normalizeScopePath } from "./path-coordination.js";
+import { runAgentServiceControl, type ServiceExecutionDriver } from "./service-control.js";
+import { SERVICE_CONTROL_TOOL, type ServiceRecord, type TaskServiceRuntime } from "./service-runtime.js";
 import { writeClaimError, type WriteCoordinatorPort } from "./write-coordination.js";
 import {
   sdkAgentToolSpec,
   type SdkAgentToolName,
   type SdkAgentToolOutcome,
   type SdkAgentToolRequest,
+  type SdkAgentToolSpec,
 } from "./sdk-agent-tool-contract.js";
 
 /** Bounded effects: a tool never streams an unbounded payload through a turn. */
@@ -74,6 +78,16 @@ const MAX_COMMAND_CHARS = 4096;
 const MAX_COMMAND_BYTES = 64 * 1024;
 const COMMAND_TIMEOUT_MS = 120_000;
 const DEFAULT_APPROVAL_TIMEOUT_MS = 300_000;
+/**
+ * The Agent service surface is bounded like every other tool: a service id is
+ * an identifier, never a path, and the log tail is a bounded read of the
+ * Host's own already-truncated/redacted lines.
+ */
+const MAX_SERVICE_ID_CHARS = 128;
+const SERVICE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const MAX_SERVICE_LOG_LIMIT = 100;
+const DEFAULT_SERVICE_LOG_LIMIT = 40;
+const MAX_SERVICE_LOG_BYTES = 8 * 1024;
 /** Write-irrelevant device paths a command may still name. */
 const COMMAND_DEVICE_ALLOWLIST = new Set(["/dev/null"]);
 
@@ -111,6 +125,26 @@ export interface SdkAgentToolScope {
   assertProtected(path: string): void;
 }
 
+/**
+ * The real service machinery of this task ([PiDock 04] #7), as the Host owns
+ * it: the SAME `TaskServiceRuntime` the `task/registerService` and
+ * `task/serviceStatus` ops answer from, the SAME `TaskServiceProcesses` driver
+ * `task/controlService` uses, and the same durable-owner uncertainty check. The
+ * Agent service tools never build any of this themselves and never accept a
+ * program, path, port or environment value from the model: the Host hands this
+ * surface in (`host.ts`), and a Host without it refuses every service tool by
+ * name instead of falling back to a local effect.
+ */
+export interface SdkAgentServiceHost {
+  readonly services: TaskServiceRuntime;
+  /** The Host's real process driver (registered process identity only), built on first control. */
+  driver(): ServiceExecutionDriver;
+  /** The durable-owner uncertainty refusal for one service, or `null` when control/read may proceed. */
+  refusal(serviceId: string): string | null;
+  /** The task's execution ledger: every Agent control records one run ([PiDock 14] #17). */
+  readonly executions?: ControlExecutionPort;
+}
+
 /** The gate surface of one session channel (structural `PiSessionChannel`). */
 export interface SdkAgentToolChannel {
   readonly currentPermission: PiPermission;
@@ -135,6 +169,12 @@ export interface SdkAgentToolBrokerOptions {
   persist(sessionId: string): void;
   write: WriteCoordinatorPort;
   scope(): SdkAgentToolScope;
+  /**
+   * The task's real service surface ([PiDock 04] #7). Absent means this Host
+   * has none (a pre-#7 wiring or a task-unbound Host): every service tool is
+   * then refused by name, and nothing is started, stopped or read.
+   */
+  services?: () => SdkAgentServiceHost | undefined;
   /** Real path: `realpath` of the deepest existing ancestor + the rest. */
   resolveRealPath(path: string): string;
   /** True while the Host is closing (no new effect may start). */
@@ -388,6 +428,33 @@ function versionOf(parts: readonly unknown[]): string {
   return createHash("sha256").update(JSON.stringify([1, ...parts])).digest("hex");
 }
 
+/**
+ * Who performed the last start/stop, as the model and the UI both read it: the
+ * explicit human action carries main's own label, the Agent path carries the
+ * session it was decided for. `none` means no control was recorded yet.
+ */
+function serviceControlLabel(lastControl: ServiceRecord["lastControl"]): string {
+  if (lastControl === undefined) return "none";
+  return lastControl.actor.kind === "human"
+    ? `human:${lastControl.actor.label} (${lastControl.action})`
+    : `agent:${lastControl.actor.sessionId} (${lastControl.action})`;
+}
+
+/** One successful service control as the model reads it: the Host's own actor and tier. */
+function serviceActionText(payload: { serviceId: string; action: "start" | "stop"; actor: "agent"; tier: PiPermission }): string {
+  return `service ${payload.serviceId} ${payload.action}: ${payload.actor} (permission ${payload.tier})`;
+}
+
+/**
+ * The Host control sequence's own named refusal, kept readable as
+ * `tool-refused:<its code>` so the model can tell a refusal (`unknown-service`,
+ * `service-execution-unavailable`, a write-lock loss) from a failed action.
+ */
+function serviceControlRefusal(error: string): SdkAgentToolOutcome {
+  const code = error.split(":")[0]!.trim();
+  return refuse(/^[a-z][a-z0-9-]{1,63}$/.test(code) ? `tool-refused:${code}` : "tool-refused:service-control-failed", error);
+}
+
 /** The child environment: the Host's own, minus every credential-shaped name. */
 function commandEnvironment(): Record<string, string> {
   const env: Record<string, string> = { TERM: "dumb" };
@@ -601,7 +668,7 @@ export function derivedPrimaryCheckouts(worktrees: readonly string[]): string[] 
 /** Parsed, strictly validated arguments of one tool call. */
 interface ParsedArguments {
   ok: true;
-  values: { path?: string; pattern?: string; content?: string; command?: string; cwd?: string; offset?: number; limit?: number };
+  values: { path?: string; pattern?: string; content?: string; command?: string; cwd?: string; offset?: number; limit?: number; serviceId?: string };
 }
 type ArgumentsRefusal = { ok: false; outcome: SdkAgentToolOutcome };
 
@@ -611,6 +678,10 @@ function parseArguments(tool: SdkAgentToolName, args: Record<string, unknown>): 
     "fs.search": ["path", "pattern"],
     "fs.write": ["path", "content"],
     "exec.run": ["command", "cwd"],
+    "service.status": ["serviceId"],
+    "service.logs": ["serviceId", "limit"],
+    "service.start": ["serviceId"],
+    "service.stop": ["serviceId"],
   };
   const unknown = Object.keys(args).filter((key) => !allowed[tool].includes(key));
   if (unknown.length > 0) return { ok: false, outcome: refuse("tool-refused:invalid-arguments", `未知参数：${unknown.join("、")}`) };
@@ -671,6 +742,23 @@ function parseArguments(tool: SdkAgentToolName, args: Record<string, unknown>): 
     if (cwd !== undefined && typeof cwd !== "string") return cwd;
     values.command = command;
     if (cwd !== undefined) values.cwd = cwd;
+  }
+  // [PiDock 04] #7: the service tools name a service id and (for the log tail)
+  // a line count — never a program, a path, a port or an environment value.
+  // The key allowlist above is what refuses the latter: an extra key is a
+  // refusal, not a silently ignored hint.
+  if (tool === "service.status" || tool === "service.logs" || tool === "service.start" || tool === "service.stop") {
+    const serviceId = string("serviceId", MAX_SERVICE_ID_CHARS);
+    if (typeof serviceId !== "string") return serviceId;
+    values.serviceId = serviceId;
+  }
+  if (tool === "service.logs") {
+    const limit = optionalPositive("limit");
+    if (limit !== undefined && typeof limit !== "number") return limit;
+    if (limit !== undefined && limit > MAX_SERVICE_LOG_LIMIT) {
+      return { ok: false, outcome: refuse("tool-refused:invalid-arguments", `参数 limit 不能超过 ${MAX_SERVICE_LOG_LIMIT}`) };
+    }
+    if (limit !== undefined) values.limit = limit;
   }
   return { ok: true, values };
 }
@@ -749,6 +837,12 @@ export class SdkAgentToolBroker {
     if (!this.options.sessionKnown(sessionId)) return refuse("tool-refused:unknown-session", `会话 ${sessionId} 不属于本任务`);
     const parsed = parseArguments(spec.name, args as Record<string, unknown>);
     if (!parsed.ok) return parsed.outcome;
+    // The service tools resolve their target against the task's own service
+    // runtime, not against a path: they are answered before any path is
+    // resolved, so an id can never be read as a filename.
+    if (spec.name.startsWith("service.")) {
+      return await this.performServiceTool({ sessionId, channel: this.options.channel(sessionId), spec, values: parsed.values });
+    }
     const scope = this.options.scope();
     // The default working directory of a command is this task's first worktree:
     // a command line only ever runs inside a worktree of the task it belongs to.
@@ -802,6 +896,218 @@ export class SdkAgentToolBroker {
       version: versionOf([spec.name, spec.kind, resolved.real]),
       effect: () => this.executeRead(spec.name, resolved.real, parsed.values),
     });
+  }
+
+  /**
+   * One Agent service tool ([PiDock 04] #7 box 5), answered from this task's own
+   * service runtime:
+   *
+   * - the model names a `serviceId` and nothing else (the argument allowlist
+   *   already refused any other key, so a payload naming a program, a path, a
+   *   port or an env value is a refusal), and the id must be one this task has
+   *   bound — an unknown or foreign id is refused by name with nothing read,
+   *   started or stopped;
+   * - a durable owner state the Host cannot confirm is returned as the same
+   *   named refusal the UI read answers, so the Agent never sees a bare
+   *   `stopped` it cannot trust;
+   * - `service.status`/`service.logs` are `read` kind, so the one gate decides
+   *   them like any other read (a read-only session may still read them), their
+   *   output is bounded, and process liveness is never inferred from dependency
+   *   reachability (or the reverse);
+   * - `service.start`/`service.stop` are `command` kind and go through the
+   *   existing Host service-control sequence (`service-control.ts`), which
+   *   mints the Host's own `service-control`-scoped confirmation, verifies it
+   *   against the live channel, spends it one-shot and only then reaches the
+   *   real process driver. The gate preview here runs first, before any claim or
+   *   mint, so a read-only session is refused without touching anything.
+   */
+  private async performServiceTool(input: {
+    sessionId: string;
+    channel: SdkAgentToolChannel;
+    spec: SdkAgentToolSpec;
+    values: ParsedArguments["values"];
+  }): Promise<SdkAgentToolOutcome> {
+    const serviceId = input.values.serviceId!;
+    if (serviceId.length > MAX_SERVICE_ID_CHARS || !SERVICE_ID_PATTERN.test(serviceId)) {
+      return refuse("tool-refused:invalid-arguments", `serviceId 不是服务标识（只接受本任务已绑定服务的 id）：${serviceId.slice(0, 64)}`);
+    }
+    const host = this.options.services?.();
+    if (!host) return refuse("tool-refused:service-control-unavailable", "本任务未接入真实服务进程通道，Agent 不能读写服务");
+    const record = host.services.get(serviceId);
+    if (!record) return refuse("tool-refused:unknown-service", `${serviceId} 不是本任务绑定的服务`);
+    const uncertain = host.refusal(serviceId);
+    if (uncertain !== null) return refuse("tool-refused:service-execution-uncertain", uncertain);
+    const target = `${host.services.taskDir}/services/${serviceId}`;
+    if (input.spec.kind === "read") {
+      return await this.runWithGate({
+        sessionId: input.sessionId, channel: input.channel, name: input.spec.name, kind: input.spec.kind, target,
+        version: versionOf([input.spec.name, target, record.templateVersion, record.lifecycle]),
+        effect: async () => input.spec.name === "service.logs"
+          ? await this.executeServiceLogs(host, serviceId, input.values.limit)
+          : await this.executeServiceStatus(host, serviceId),
+      });
+    }
+    if (record.launchSource !== "catalog") {
+      return refuse("tool-refused:service-execution-unavailable", `${serviceId} 仅由界面登记，未接入真实进程执行`);
+    }
+    // `controlBoundService` previews the gate again, because it needs the verdict
+    // to choose between the direct (`auto`) and the mint-and-park (`default`)
+    // branch; a `read` tier is denied there with the gate's own reason.
+    return await this.controlBoundService({
+      sessionId: input.sessionId, channel: input.channel, host, serviceId, target,
+      action: input.spec.name === "service.start" ? "start" : "stop",
+    });
+  }
+
+  /**
+   * Start/stop one task-bound service through the Host's own gated control
+   * sequence (`service-control.ts`), which owns the verification, the one-shot
+   * spend and the real process driver.
+   *
+   * `auto` reaches the sequence directly (the tier allows the control; the
+   * sequence holds the task write right around it). Under `default` this method
+   * mints the Host's `service-control`-scoped confirmation through the one gate
+   * and parks on the user's decision **with nothing awaited in between**, so a
+   * decision can never be made in a window where this call is not yet waiting
+   * (the same ordering the `exec.run` path uses). Only an approving decision
+   * reaches the second call, which re-checks the live tier, the confirmation and
+   * the pinned revision immediately before the sequence spends it one-shot and
+   * reaches the driver. A rejection, cancellation or expiry returns here with
+   * nothing started or stopped.
+   */
+  private async controlBoundService(input: {
+    sessionId: string;
+    channel: SdkAgentToolChannel;
+    host: SdkAgentServiceHost;
+    serviceId: string;
+    action: "start" | "stop";
+    target: string;
+  }): Promise<SdkAgentToolOutcome> {
+    const run = (approvalId?: string) => runAgentServiceControl({
+      services: input.host.services,
+      driver: input.host.driver(),
+      channel: input.channel,
+      sessionId: input.sessionId,
+      serviceId: input.serviceId,
+      action: input.action,
+      ...(approvalId !== undefined ? { approvalId } : {}),
+      write: this.options.write,
+      persist: () => this.options.persist(input.sessionId),
+      ...(input.host.executions !== undefined ? { executions: input.host.executions } : {}),
+    });
+    const preview = input.channel.previewGate(input.action === "start" ? "service.start" : "service.stop", input.target);
+    if (preview.verdict === "deny") return refuse("tool-refused:gate-denied", preview.reason);
+    if (preview.verdict === "allow") {
+      const acted = await run();
+      return acted.ok ? { outcome: "ok", text: serviceActionText(acted.payload) } : serviceControlRefusal(acted.error);
+    }
+    // `default`: the tier the confirmation is minted for, checked against the
+    // live tier once more right before the action.
+    if (input.channel.currentPermission !== "default") {
+      return refuse("tool-refused:permission-changed", "会话权限已变更，确认请求只对原请求生效");
+    }
+    const record = input.host.services.get(input.serviceId);
+    if (!record) return refuse("tool-refused:unknown-service", `${input.serviceId} 不是本任务绑定的服务`);
+    const gate = input.channel.gate(SERVICE_CONTROL_TOOL, input.target, record.templateVersion, undefined, SERVICE_CONTROL_SCOPE,
+      `服务${input.action === "start" ? "启动" : "停止"} ${input.serviceId}`);
+    if (gate.verdict !== "ask") return refuse("tool-refused:gate-denied", "确认请求未能创建，执行已拒绝");
+    this.options.persist(input.sessionId);
+    const verdict = await this.awaitApproval(gate.approvalId, input.sessionId);
+    if (verdict !== "approved") {
+      return refuse(
+        verdict === "rejected" ? "tool-refused:approval-rejected" : verdict === "cancelled" ? "tool-refused:approval-cancelled" : verdict === "expired" ? "tool-refused:approval-expired" : "tool-refused:approval-unavailable",
+        `确认请求 ${gate.approvalId} 未获批准（${verdict}），本次调用未执行任何操作`,
+      );
+    }
+    const recheck = this.recheckServiceApproval({ channel: input.channel, approvalId: gate.approvalId, target: input.target, version: record.templateVersion });
+    if (!recheck.ok) return refuse(recheck.code, recheck.reason);
+    if (this.closed || this.options.closing()) return refuse("tool-refused:task-host-closing", "任务宿主正在关闭，执行已取消");
+    const acted = await run(gate.approvalId);
+    return acted.ok ? { outcome: "ok", text: serviceActionText(acted.payload) } : serviceControlRefusal(acted.error);
+  }
+
+  /**
+   * The live-tier/confirmation re-check immediately before the confirmed
+   * action: the tier must still be `default`, the confirmation must still be
+   * the approved, unspent, `service-control`-scoped one for THIS service
+   * folder. It is a pre-flight only: the one-shot spend stays inside the Host
+   * control sequence (`consumeApproval`), so a confirmation can never be spent
+   * twice and the broker never becomes a second spender.
+   */
+  private recheckServiceApproval(input: { channel: SdkAgentToolChannel; approvalId: string; target: string; version: string }):
+    { ok: true } | { ok: false; code: string; reason: string } {
+    if (input.channel.currentPermission !== "default") {
+      return { ok: false, code: "tool-refused:permission-changed", reason: "会话权限已变更，确认请求只对原请求生效" };
+    }
+    const approval = input.channel.snapshot().approvals.find((row) => row.id === input.approvalId);
+    if (!approval || approval.status !== "approved" || approval.consumedAt !== undefined) {
+      return { ok: false, code: "tool-refused:invalid-approval", reason: "确认请求未批准、已处理或已消费" };
+    }
+    if (approval.scope !== SERVICE_CONTROL_SCOPE || approval.tool !== SERVICE_CONTROL_TOOL ||
+        approval.target !== input.target || approval.permissionAtRequest !== "default") {
+      return { ok: false, code: "tool-refused:invalid-approval", reason: "确认请求与本次服务操作不匹配（用途/目标未绑定）" };
+    }
+    // The confirmation names the revision the service was registered with: a
+    // re-registration between the mint and the decision makes it stale instead
+    // of authorizing a control the user never saw.
+    if (approval.contentVersion !== input.version) {
+      return { ok: false, code: "tool-refused:stale-approval", reason: "服务登记版本已变化，确认请求已过期，请重新发起调用" };
+    }
+    return { ok: true };
+  }
+
+  /**
+   * The real state of one task-bound service, read at execution time (after the
+   * gate). `lifecycle` is process liveness only; dependency reachability is a
+   * separate note and is never reported as liveness in either direction.
+   */
+  private async executeServiceStatus(host: SdkAgentServiceHost, serviceId: string): Promise<SdkAgentToolOutcome> {
+    const record = host.services.get(serviceId);
+    if (!record) return refuse("tool-refused:unknown-service", `${serviceId} 不是本任务绑定的服务`);
+    return {
+      outcome: "ok",
+      text: [
+        `service ${record.serviceId}`,
+        `lifecycle: ${record.lifecycle}`,
+        `launchSource: ${record.launchSource} (template v${record.templateVersion})`,
+        `lastControl: ${serviceControlLabel(record.lastControl)}`,
+        ...(record.startedAt !== undefined ? [`startedAt: ${record.startedAt}`] : []),
+        ...(record.stoppedAt !== undefined ? [`stoppedAt: ${record.stoppedAt}`] : []),
+        ...(record.exitReason !== undefined ? [`exitReason: ${record.exitReason}`] : []),
+        record.dependencyNote === undefined
+          ? "dependency: not probed (reachability is never reported as process liveness)"
+          : `dependency: ${record.dependencyNote} (reachability note only; process liveness stays ${record.lifecycle})`,
+      ].join("\n"),
+    };
+  }
+
+  /**
+   * The bounded tail of one task-bound service's log. The lines are the Host's
+   * own (already truncated to 2000 characters each and already redacted, so no
+   * private value reaches the model), and the answer is bounded again here by
+   * the requested line count and a byte budget: there is no log stream and no
+   * unbounded read.
+   */
+  private async executeServiceLogs(host: SdkAgentServiceHost, serviceId: string, limit: number | undefined): Promise<SdkAgentToolOutcome> {
+    if (host.services.get(serviceId) === undefined) return refuse("tool-refused:unknown-service", `${serviceId} 不是本任务绑定的服务`);
+    const lines = host.services.serviceLog(serviceId, Math.min(limit ?? DEFAULT_SERVICE_LOG_LIMIT, MAX_SERVICE_LOG_LIMIT));
+    const selected: { at: string; line: string }[] = [];
+    let bytes = 0;
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      const entry = lines[index]!;
+      const size = Buffer.byteLength(entry.line, "utf8") + 2;
+      if (bytes + size > MAX_SERVICE_LOG_BYTES) break;
+      bytes += size;
+      selected.unshift(entry);
+    }
+    const omitted = lines.length - selected.length;
+    return {
+      outcome: "ok",
+      text: [
+        `service ${serviceId} log tail: ${selected.length} line(s)${omitted > 0 ? `, ${omitted} older line(s) omitted by the byte bound` : ""}`,
+        ...selected.map((entry) => `${entry.at} ${entry.line}`),
+      ].join("\n"),
+    };
   }
 
   /**

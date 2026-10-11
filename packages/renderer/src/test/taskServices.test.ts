@@ -28,6 +28,17 @@ describe("[UI 对齐] S8d task service parsers", () => {
     // reachability probe is never reported as health.
     expect(serviceStatusFromHost({ service: { serviceId: SERVICE_ID, lifecycle: "running", templateVersion: "2", launchSource: "catalog", health: "not-probed", startedAt: "2026-10-08T00:00:00.000Z", stoppedAt: undefined, exitReason: undefined, resolved: [] } }, SERVICE_ID))
       .toMatchObject({ kind: "registry", serviceId: SERVICE_ID, lifecycle: "running", launchSource: "catalog", health: "not-probed", resolvedKeys: [] });
+    // [PiDock 04] #7 box 5: the Host labels the explicit human action and the
+    // gated Agent path apart, and the row keeps both facts instead of an author.
+    expect(serviceStatusFromHost({ service: { serviceId: SERVICE_ID, lifecycle: "running", templateVersion: "2", resolved: [],
+      lastControl: { action: "start", actor: "human", label: "主进程服务目录入口" } } }, SERVICE_ID))
+      .toMatchObject({ kind: "registry", lastControl: { action: "start", actor: "human", label: "主进程服务目录入口" } });
+    expect(serviceStatusFromHost({ service: { serviceId: SERVICE_ID, lifecycle: "stopped", templateVersion: "2", resolved: [],
+      lastControl: { action: "stop", actor: "agent", label: "main" } } }, SERVICE_ID))
+      .toMatchObject({ kind: "registry", lastControl: { action: "stop", actor: "agent", label: "main" } });
+    // A row with no recorded control is readable and says nothing about an author.
+    expect(serviceStatusFromHost({ service: { serviceId: SERVICE_ID, lifecycle: "stopped", templateVersion: "2", resolved: [], lastControl: null } }, SERVICE_ID))
+      .toMatchObject({ kind: "registry" });
     expect(serviceStatusFromHost({ service: { serviceId: SERVICE_ID, lifecycle: "running", templateVersion: "2", health: "green", resolved: [] } }, SERVICE_ID)).toBeNull();
     expect(serviceStatusFromHost({ service: { serviceId: SERVICE_ID, lifecycle: "running", templateVersion: "2", launchSource: "agent", resolved: [] } }, SERVICE_ID)).toBeNull();
     expect(serviceStatusFromHost({ service: { serviceId: "s-99999999-9999-9999-9999-999999999999", state: "running", ownerSessionId: null, busy: false, closing: false, retainedRights: null, executionAvailable: false } }, SERVICE_ID)).toBeNull();
@@ -38,6 +49,12 @@ describe("[UI 对齐] S8d task service parsers", () => {
     expect(serviceStatusFromHost({ service: { serviceId: SERVICE_ID, state: "running", ownerSessionId: null, busy: false, closing: false, retainedRights: "maybe", executionAvailable: false } }, SERVICE_ID)).toBeNull();
     expect(serviceStatusFromHost({ service: { serviceId: SERVICE_ID, lifecycle: "running", templateVersion: "1", resolved: [{ key: 1 }] } }, SERVICE_ID)).toBeNull();
     expect(serviceStatusFromHost({ service: null }, SERVICE_ID)).toBeNull();
+    // An unreadable control author is not shown as anybody: the row is refused
+    // rather than displayed as if the user had clicked it.
+    for (const lastControl of [{ action: "start", actor: "user", label: "x" }, { action: "restart", actor: "agent", label: "main" },
+      { action: "start", actor: "human" }, { action: "start", actor: "agent", label: "" }, "human"]) {
+      expect(serviceStatusFromHost({ service: { serviceId: SERVICE_ID, lifecycle: "running", templateVersion: "2", resolved: [], lastControl } }, SERVICE_ID)).toBeNull();
+    }
   });
 
   it("accepts only a complete log line list", () => {
