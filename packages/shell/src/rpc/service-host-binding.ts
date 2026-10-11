@@ -32,7 +32,27 @@ function text(value: unknown, pattern: RegExp): string {
 export function serviceOwnerBootstrap(value: unknown, workspaceId: string, taskId: string): ServiceOwnerBootstrap {
   if (Buffer.byteLength(JSON.stringify(value)) > 256 * 1024) throw Error("invalid-service-owner-binding");
   const row = object(value, "catalogRevision,entries,epoch,instanceId,kind,projectId,taskId,taskIdentity,workspaceId");
-  if (row.kind !== "service-owner-bootstrap" || row.workspaceId !== workspaceId || row.taskId !== taskId || !ID.test(taskId) || !ID.test(workspaceId) ||
+  if (row.kind !== "service-owner-bootstrap") throw Error("invalid-service-owner-binding");
+  return bootstrapScope(row, workspaceId, taskId);
+}
+/**
+ * The in-place replacement of one already bootstrapped Host's owner scope
+ * ([PiDock 04] #7 slice). Main may only replace the exact scope this Host holds
+ * (`previousInstanceId` must name it) and the replacement must be a different
+ * instance, so a replayed, stale or foreign rebind is refused exactly like a
+ * second bootstrap. The Host then reaps the replaced inventory and re-owns the
+ * same services at the new catalog revision without restarting the Host.
+ */
+export function serviceOwnerRebind(value: unknown, workspaceId: string, taskId: string, previousInstanceId: string): ServiceOwnerBootstrap {
+  if (Buffer.byteLength(JSON.stringify(value)) > 256 * 1024) throw Error("invalid-service-owner-binding");
+  const row = object(value, "catalogRevision,entries,epoch,instanceId,kind,previousInstanceId,projectId,taskId,taskIdentity,workspaceId");
+  if (row.kind !== "service-owner-rebind" || row.previousInstanceId !== previousInstanceId) throw Error("invalid-service-owner-binding");
+  const scope = bootstrapScope(row, workspaceId, taskId);
+  if (scope.instanceId === previousInstanceId) throw Error("invalid-service-owner-binding");
+  return scope;
+}
+function bootstrapScope(row: Record<string, unknown>, workspaceId: string, taskId: string): ServiceOwnerBootstrap {
+  if (row.workspaceId !== workspaceId || row.taskId !== taskId || !ID.test(taskId) || !ID.test(workspaceId) ||
       (row.projectId !== null && (typeof row.projectId !== "string" || !/^[a-f0-9-]{36}$/i.test(row.projectId))) || !Array.isArray(row.entries) || row.entries.length > 100) throw Error("invalid-service-owner-binding");
   const entries = row.entries.map((value): ServiceOwnerContract => {
     const entry = object(value, "args,configRevision,cwd,cwdIdentity,envRevision,program,programIdentity,serviceId,templateVersion");
@@ -47,6 +67,7 @@ export function serviceOwnerBootstrap(value: unknown, workspaceId: string, taskI
   return { kind: "service-owner-bootstrap", workspaceId, taskId, projectId: row.projectId as string | null,
     instanceId: text(row.instanceId, UUID), epoch: text(row.epoch, UUID), taskIdentity: text(row.taskIdentity, HASH), catalogRevision: text(row.catalogRevision, HASH), entries };
 }
+
 export function serviceOwnerCompletion(value: unknown, scope: ServiceOwnerBootstrap): ServiceOwnerCompletion {
   if (Buffer.byteLength(JSON.stringify(value)) > 256 * 1024) throw Error("invalid-service-owner-binding");
   const row = object(value, "catalogRevision,entries,epoch,instanceId,report,taskId,workspaceId");

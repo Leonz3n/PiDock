@@ -13,10 +13,11 @@ const saved = {
   descriptor: { name: "API", program: "node", args: ["server.js"], ports: [3000], runType: "long-lived" },
   shared: [{ key: "PORT", value: "3000" }],
 };
+const restart = { changed: true, processRestarted: false as const, fencedTaskIds: [] as string[] };
 const review = {
-  projectId, serviceId, version: 2, versionLabel: "v2", saved: false, descriptorChanged: true,
+  projectId, serviceId, version: 2, versionLabel: "v2", saved: false, descriptorChanged: true, contentChanged: true,
   diff: { added: ["API_URL"], changed: [{ key: "PORT", before: "3000", after: "4000" }], removed: [] },
-  restartNeeded: [{ taskId: "task-1", serviceId, name: "API", from: 1, to: 2 }],
+  restartNeeded: [{ taskId: "task-1", serviceId, name: "API", from: 1, to: 2 }], restart,
 };
 afterEach(() => { cleanup(); delete window.pidock; });
 
@@ -173,7 +174,9 @@ it("reviews an existing shared template row by row, then writes one new version 
   // The panel shows the binding's own pin, which need not be the revision being edited here.
   expect(screen.getByText(/面板显示的是该绑定自己固定的版本 → v2/)).toBeInTheDocument();
   expect(screen.queryByText(/采用（v1 → v2/)).toBeNull();
-  expect(screen.getByText(/受影响：任务 任务甲 的 API（v1 → v2）仍固定 v1，需显式采用 v2 并在该任务 Host 重建后才会用 v2 启动/)).toBeInTheDocument();
+  expect(screen.getByText(/受影响：任务 任务甲 的 API（v1 → v2）仍固定 v1，需显式采用 v2 并重新绑定该任务的服务所有者后才会用 v2 启动/)).toBeInTheDocument();
+  expect(screen.getByText(/保存配置不等于重启进程/)).toBeInTheDocument();
+  expect(screen.queryByText(/本次保存已撤回这些任务的服务控制/)).toBeNull();
   expect(screen.getByText(/已有任务绑定保留原模板版本/)).toBeInTheDocument();
   expect(calls[1]).toEqual({ op: "update", projectId, serviceId, expectedVersion: 1, confirm: false,
     descriptor: { ...saved.descriptor, workdir: "apps/api" },
@@ -361,4 +364,30 @@ it("never applies a configuration-only draft as a run unit and never fills witho
   expect(applied).not.toHaveBeenCalled();
   expect(second).not.toHaveBeenCalled();
   expect(serviceCatalogOp).toHaveBeenCalledTimes(1);
+});
+
+it("claims no restart for an unchanged save and names every affected binding for a real one", async () => {
+  let updates = 0;
+  const unchanged = { ...review, descriptorChanged: false, contentChanged: false, diff: { added: [], changed: [], removed: [] },
+    restartNeeded: [], restart: { changed: false, processRestarted: false as const, fencedTaskIds: [] as string[] } };
+  stub((request) => {
+    if (request["op"] === "list") return { ok: true, payload: [saved] };
+    updates += 1;
+    // The first review reports an unchanged save; the second one a real change. Both are main's own answers.
+    return { ok: true, payload: updates === 1 ? unchanged : { ...review, saved: request["confirm"] === true } };
+  });
+  render(<ProjectServiceTemplates projectId={projectId} tasks={[{ taskId: "task-1", name: "任务甲" }]} />);
+  await screen.findByText("共享变量：PORT");
+  fireEvent.click(screen.getByRole("button", { name: "编辑" }));
+  fireEvent.click(screen.getByRole("button", { name: "核对新版本" }));
+  expect(await screen.findByText(/将生成 v2/)).toBeInTheDocument();
+  // An unchanged save mints a revision but invalidates nothing: no restart, and no binding is named.
+  expect(screen.getByText(/本次保存未改变任何启动字段与共享变量，因此不产生需重启项/)).toBeInTheDocument();
+  expect(screen.queryByText(/受影响：/)).toBeNull();
+  // A real content change must name the affected binding and claim no process restart.
+  fireEvent.change(screen.getByLabelText("共享变量 VALUE 1"), { target: { value: "4000" } });
+  fireEvent.click(screen.getByRole("button", { name: "核对新版本" }));
+  expect(await screen.findByText(/本次保存改变了启动材料/)).toBeInTheDocument();
+  expect(screen.getByText(/受影响：任务 任务甲 的 API（v1 → v2）仍固定 v1，需显式采用 v2 并重新绑定该任务的服务所有者后才会用 v2 启动/)).toBeInTheDocument();
+  expect(screen.getByText(/保存配置不等于重启进程/)).toBeInTheDocument();
 });

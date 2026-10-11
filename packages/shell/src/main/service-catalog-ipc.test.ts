@@ -11,7 +11,7 @@ const template: ServiceTemplate = {
 };
 function store(saved: ServiceTemplate = template) {
   const review: ServiceTemplateUpdateReview = { projectId: saved.projectId, serviceId: saved.serviceId, version: saved.version,
-    versionLabel: `v${String(saved.version)}`, saved: false, descriptorChanged: true,
+    versionLabel: `v${String(saved.version)}`, saved: false, descriptorChanged: true, contentChanged: true,
     diff: { added: [], changed: [], removed: [] }, restartNeeded: [] };
   const adoption: ServiceBindingAdoption = { taskId: "task-1", serviceId: saved.serviceId, from: 1, to: 2, adopted: false,
     restartNeeded: [{ taskId: "task-1", serviceId: saved.serviceId, name: "API", from: 1, to: 2 }] };

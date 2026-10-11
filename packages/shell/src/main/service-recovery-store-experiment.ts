@@ -238,6 +238,23 @@ export class ExperimentalServiceRecoveryStore {
       }) });
     } catch (error) { this.sanitize(error); }
   }
+  /**
+   * Main revokes one live lease of a task when it replaces that task's owner
+   * binding in the same Host ([PiDock 04] #7 slice). The replaced owner is the
+   * only sender that may release it, the durable document is left exactly as it
+   * is (the replacement lease loads it), and the call is idempotent: a lease
+   * already revoked by its child's exit releases nothing more. Only a
+   * same-process main caller holds the `sender` object, so no message can
+   * release another Host's lease.
+   */
+  release(taskId: string, sender: object): void {
+    if (this.disposed || this.fenced) return;
+    const slot = this.active.get(taskId);
+    if (!slot || slot.owner.sender !== sender) return;
+    slot.revoked = true;
+    this.active.delete(taskId);
+    try { slot.detach(); } catch { /* Detaching the exit listener is best-effort; the slot is revoked. */ }
+  }
   private inventory(slot: Slot, sender: object): ServiceExecutionCheckpoint[] {
     try {
       if (this.disposed || slot.revoked || slot.uncertain || this.active.get(slot.taskId) !== slot || sender !== slot.owner.sender || slot.owner.hasExited()) fail("service-recovery-lease-stale");

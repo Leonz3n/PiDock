@@ -41,8 +41,8 @@ import { HostTaskAdmission } from "../host/host-task-admission.js";
 import { shutdownDeadline } from "../host/shutdown-deadline.js";
 import { ProjectRegistry } from "./project-registry.js";
 import { ServiceCatalog, serviceCatalogAuthority } from "./service-catalog.js";
-import { InstalledServiceHostAuthority } from "./service-host-binding.js";
-import { performServiceBindingOperation, performServiceCatalogOperation, performServiceConfigPreview, parseServiceRunRequest } from "./service-catalog-ipc.js";
+import { InstalledServiceHostAuthority, type ServiceOwnerChange, type ServiceOwnerDurableRecord } from "./service-host-binding.js";
+import { parseServiceOwnerRebindRequest, performServiceBindingOperation, performServiceCatalogOperation, performServiceConfigPreview, parseServiceRunRequest } from "./service-catalog-ipc.js";
 import { performProjectOperation } from "./project-ipc.js";
 import type { ProviderWiring } from "./provider-ipc.js";
 import { ProjectTaskCreation } from "./project-task-creation.js";
@@ -372,6 +372,7 @@ export class PerTaskHostRegistry {
   private readonly pendingHosts = new Map<string, PendingTaskHost>();
   private readonly spawnFailures = new Map<string, { taskId: string; error: string }>();
   private readonly activeTaskOps = new Map<string, number>();
+  private readonly rebindings = new Set<string>();
   private readonly admission = new HostTaskAdmission();
   private closing = false;
   private quitConfirmed = false;
@@ -441,6 +442,53 @@ export class PerTaskHostRegistry {
     const [first] = [...dirs];
     if (first === undefined) return undefined;
     return this.byTaskDir.get(first);
+  }
+
+  /**
+   * Non-throwing owner-binding state of one task's forked Host ([PiDock 04] #7
+   * slice): `absent` when no Host is forked (the next fork binds the current
+   * revision), `current` when the forked Host's owner binding still matches the
+   * authoritative catalog revision, `fenced` when it does not - which is the
+   * real state in which the Host refuses start/stop with
+   * `service-owner-inventory-unconfirmed`.
+   */
+  serviceOwnerState(taskId: string): "absent" | "current" | "fenced" {
+    if (!this.services) return "absent";
+    const entry = this.entryForTaskId(taskId);
+    return entry ? this.services.state(entry.child, entry.taskId) : "absent";
+  }
+
+  /** Per-service owner-contract difference of the task's forked Host against the current catalog; `null` when unresolvable. */
+  serviceOwnerChanges(taskId: string): ServiceOwnerChange[] | null {
+    const entry = this.entryForTaskId(taskId);
+    return entry && this.services ? this.services.changes(entry.child, entry.taskId) : null;
+  }
+
+  /** Durable owner records main can still read for a fenced binding; `null` when main holds no usable lease. */
+  serviceOwnerOwners(taskId: string): ServiceOwnerDurableRecord[] | null {
+    const entry = this.entryForTaskId(taskId);
+    return entry && this.services ? this.services.owners(entry.child, entry.taskId) : null;
+  }
+
+  /**
+   * Replace one task's owner binding at the current catalog revision ([PiDock 04]
+   * #7 slice): the forked Host keeps running and only its owner binding and
+   * durable lease are replaced, so a fenced start/stop channel is restored
+   * without stopping anything. Idempotent when the task has no forked Host
+   * (`absent`) or is already current; refuses while another op of the same task
+   * is in flight so the swap never races a start/stop.
+   */
+  rebindServiceOwner(taskId: string): Promise<"absent" | "current" | "rebound"> {
+    this.assertRoutingOpen();
+    if (!this.services) throw Error("service-owner-authority-unavailable");
+    const entry = this.entryForTaskId(taskId);
+    if (!entry) return Promise.resolve("absent" as const);
+    if (this.activeTaskOps.get(taskId) || this.rebindings.has(taskId)) throw Error("service-owner-rebind-busy");
+    const services = this.services;
+    this.rebindings.add(taskId);
+    return this.admission.run(() => services.rebind(entry.child, entry.taskId))
+      .then((result) => (result === "current" ? "current" as const : "rebound" as const))
+      .finally(() => { this.rebindings.delete(taskId); });
   }
 
   /** Route one op to the bound per-task Host, forking it on first use.
@@ -1025,6 +1073,87 @@ export async function runTaskService(
   return controlled.payload;
 }
 
+/**
+ * One explicit re-bind of a task's service owner ([PiDock 04] #7 slice), as
+ * main resolves and performs it. `state` is main's real observation of the
+ * forked Host's owner binding: `absent` (no Host forked; the next start forks at
+ * the current revision), `current` (the binding already matches, so this is an
+ * idempotent no-op) or `fenced` (the write changed the task's owner snapshot, so
+ * the Host refuses start/stop). `changes` is the named per-service difference
+ * between the replaced owner and the authoritative catalog. `confirmed`/
+ * `rebound` say whether the human-confirmed replacement ran. The copy facts are
+ * explicit: the re-bind replaces only the ownership binding, so it never stops
+ * or restarts a process, and a currently running service keeps running the
+ * revision it was started with.
+ */
+export interface ServiceOwnerRebindProjection {
+  taskId: string;
+  projectId: string;
+  state: "absent" | "current" | "fenced";
+  confirmed: boolean;
+  rebound: boolean;
+  changes: { serviceId: string; name: string; was: number | null; now: number | null }[];
+  stopsProcesses: false;
+  restartsProcesses: false;
+}
+
+/**
+ * Re-bind one task's service owner at the current catalog revision ([PiDock 04]
+ * #7 slice). The two-step contract matches the catalog ops: a request without
+ * `confirm` only reports (real state, named changes); a confirmed request
+ * replaces the fenced owner binding and its durable lease, so start/stop works
+ * again at the new revision while the task's Host, its sessions, its terminals
+ * and any running service process keep running. It refuses, by name, rather than
+ * silently dropping an owner whose durable record is not settled - that record
+ * may still stand for a live process. Exported so the sequence can be driven end
+ * to end against a real Host without an Electron `IpcMainInvokeEvent`.
+ */
+export async function rebindTaskServiceOwner(
+  tasks: Pick<PerTaskHostRegistry, "serviceOwnerState" | "serviceOwnerChanges" | "serviceOwnerOwners" | "rebindServiceOwner">,
+  catalog: Pick<ServiceCatalog, "taskBindings">,
+  request: ReturnType<typeof parseServiceOwnerRebindRequest>,
+): Promise<ServiceOwnerRebindProjection> {
+  // Main resolves the task's own bindings: an unknown task, a foreign project or
+  // a missing pinned revision refuses here with the catalog's named error, and
+  // no page-supplied identity is involved.
+  const names = new Map(catalog.taskBindings(request.projectId, request.taskId)
+    .map(({ binding, template }) => [binding.serviceId, template.descriptor.name]));
+  const state = tasks.serviceOwnerState(request.taskId);
+  const base: ServiceOwnerRebindProjection = { taskId: request.taskId, projectId: request.projectId, state,
+    confirmed: false, rebound: false, changes: [], stopsProcesses: false, restartsProcesses: false };
+  if (state !== "fenced") return base;
+  const changes = tasks.serviceOwnerChanges(request.taskId);
+  if (!changes) throw new Error("service-owner-catalog-unavailable");
+  const review: ServiceOwnerRebindProjection = { ...base, changes: changes.map((row) => ({ serviceId: row.serviceId,
+    name: names.get(row.serviceId) ?? row.serviceId, was: row.was?.templateVersion ?? null, now: row.now?.templateVersion ?? null })) };
+  if (!request.confirm) return review;
+  // Refuse instead of tearing down an uncertain owner: a durable record that is
+  // not stopped/exited (or still names an owner session) can still stand for a
+  // live process, and replacing its owner would orphan that process.
+  const live = (tasks.serviceOwnerOwners(request.taskId) ?? [])
+    .filter((owner) => owner.ownerSessionId !== null || (owner.state !== "stopped" && owner.state !== "exited"));
+  if (live.length > 0) throw new Error(`service-owner-rebind-blocked: ${live.map((owner) => owner.serviceId).join(",")}`);
+  const rebound = await tasks.rebindServiceOwner(request.taskId);
+  return { ...review, confirmed: true, rebound: rebound === "rebound" };
+}
+
+/**
+ * The honest restart consequence of one shared-template write ([PiDock 04] #7
+ * slice), attached to the `update`/`adoptBinding` answer: whether the write
+ * changed launch material at all (`changed`), the explicit fact that a config
+ * write never restarts a process (`processRestarted: false`), and - recomputed
+ * from the real forked Hosts after a confirmed write - the task ids whose
+ * service-control channel it revoked (empty for a read-only review, because
+ * nothing was written yet).
+ */
+export function serviceRestartConsequence(
+  op: "update" | "adoptBinding", payload: Record<string, unknown>, tasks?: PerTaskHostRegistry,
+): { changed: boolean; processRestarted: false; fencedTaskIds: string[] } {
+  const repinned = op === "adoptBinding" && typeof payload["taskId"] === "string" ? [payload["taskId"]] : [];
+  return { changed: op === "adoptBinding" ? payload["from"] !== payload["to"] : payload["contentChanged"] === true,
+    processRestarted: false, fencedTaskIds: repinned.filter((taskId) => tasks?.serviceOwnerState(taskId) === "fenced") };
+}
+
 export function registerIpc(
   client: HostClient,
   registry: TrustDomainRegistry,
@@ -1059,6 +1188,28 @@ export function registerIpc(
   type TurnMessage = Parameters<Parameters<HostClient["onTurnEvent"]>[0]>[0];
   type PendingStart = { requestId: string; buffered: TurnMessage[]; bytes: number; overflow: boolean };
   type Subscription = { taskId: string; sessionId: string; frame: { processId: number; routingId: number }; webContents: WebContents; detach: () => void; deliver: (message: TurnMessage) => void; onNavigation: () => void; onInPageNavigation: () => void; onDestroyed: () => void; turns: Map<string, { sequence: number; resync: boolean; terminal: boolean }>; evictedTurns: boolean; pendingStart: PendingStart | null };
+  /**
+   * Live-sender guard for main's child-owning service entries
+   * (`runTaskService`, `bind`, `rebindServiceOwner`). `requireShellSender`
+   * proves which webContents may call at all; this additionally proves the
+   * same, un-navigated document is still the caller when the operation commits
+   * a real child process or replaces a live ownership binding.
+   */
+  const liveServiceSender = (sender: WebContents, reason: string): { require: () => void; release: () => void } => {
+    const url = sender.getURL();
+    const frame = { processId: sender.mainFrame.processId, routingId: sender.mainFrame.routingId };
+    let navigated = false;
+    const onNavigation = () => { navigated = true; };
+    sender.on("did-start-navigation", onNavigation);
+    return {
+      require: () => {
+        registry.requireShellSender({ sender, senderFrame: sender.mainFrame });
+        if (navigated || sender.isDestroyed() || url !== sender.getURL() ||
+            frame.processId !== sender.mainFrame.processId || frame.routingId !== sender.mainFrame.routingId) throw new Error(reason);
+      },
+      release: () => sender.removeListener("did-start-navigation", onNavigation),
+    };
+  };
   const subscriptions = new Map<number, Subscription>();
   const pendingNavigation = new Map<number, { webContents: WebContents; listener: () => void }>();
   const revisions = new Map<number, number>();
@@ -1438,49 +1589,55 @@ export function registerIpc(
         // branch: `requireShellSender` proves which webContents may call, not
         // that the same, un-navigated document is still the one calling when
         // the operation commits a real child process.
-        const url = event.sender.getURL();
-        const frame = { processId: event.sender.mainFrame.processId, routingId: event.sender.mainFrame.routingId };
-        let navigated = false;
-        const onNavigation = () => { navigated = true; };
-        event.sender.on("did-start-navigation", onNavigation);
+        const live = liveServiceSender(event.sender, "service execution sender changed");
         try {
-          const requireLive = () => {
-            registry.requireShellSender(event);
-            if (navigated || event.sender.isDestroyed() || url !== event.sender.getURL() ||
-                frame.processId !== event.sender.mainFrame.processId || frame.routingId !== event.sender.mainFrame.routingId) {
-              throw new Error("service execution sender changed");
-            }
-          };
-          requireLive();
+          live.require();
           const result = await runTaskService(tasks, catalog, request, event.sender.id);
-          requireLive();
+          live.require();
           return { ok: true as const, payload: result };
-        } finally { event.sender.removeListener("did-start-navigation", onNavigation); }
+        } finally { live.release(); }
+      }
+      // [PiDock 04] (#7 slice) the way back from a fenced task: after a write
+      // moved the task's owner snapshot (a shared-template adoption, a binding
+      // change, a project re-association), the Host refuses start/stop with
+      // `service-owner-inventory-unconfirmed`. This is the privileged,
+      // sender-attested entry that re-binds that task's service owner at the new
+      // revision. It is a two-step like the catalog writes - `confirm:false` only
+      // reports real state and the named changes, `confirm:true` replaces the
+      // fenced binding and its lease - and it takes the same live-sender guard as
+      // the sibling child-owning entries.
+      if (payload && typeof payload === "object" && (payload as Record<string, unknown>)["op"] === "rebindServiceOwner") {
+        if (!tasks) return { ok: false as const, error: "任务 Host 尚未接入" };
+        const request = parseServiceOwnerRebindRequest(payload);
+        const live = liveServiceSender(event.sender, "service owner rebind sender changed");
+        try {
+          live.require();
+          const result = await rebindTaskServiceOwner(tasks, catalog, request);
+          live.require();
+          return { ok: true as const, payload: result };
+        } finally { live.release(); }
       }
       if (payload && typeof payload === "object" && ["bind", "taskBindings"].includes(String((payload as Record<string, unknown>)["op"]))) {
-        const url = event.sender.getURL();
-        const frame = { processId: event.sender.mainFrame.processId, routingId: event.sender.mainFrame.routingId };
-        let navigated = false;
-        const onNavigation = () => { navigated = true; };
-        event.sender.on("did-start-navigation", onNavigation);
+        const live = liveServiceSender(event.sender, "service binding sender changed");
         try {
-          const requireLive = () => {
-            registry.requireShellSender(event);
-            if (navigated || event.sender.isDestroyed() || url !== event.sender.getURL() ||
-                frame.processId !== event.sender.mainFrame.processId || frame.routingId !== event.sender.mainFrame.routingId) {
-              throw new Error("service binding sender changed");
-            }
-          };
-          return { ok: true as const, payload: await performServiceBindingOperation(catalog, payload, pickProgram, requireLive) };
-        } finally { event.sender.removeListener("did-start-navigation", onNavigation); }
+          return { ok: true as const, payload: await performServiceBindingOperation(catalog, payload, pickProgram, live.require) };
+        } finally { live.release(); }
       }
       // A shared-template `update` and a binding `adoptBinding` (like `create`)
       // are inert data: neither writes a child process, a program path or a task
       // binding's local identity, and the catalog re-validates every field
       // fail-closed and re-checks the version, so they do not take the sibling
       // `bind`/`runTaskService` live-sender guard. `requireShellSender` above
-      // still proves which webContents may call at all.
-      return { ok: true as const, payload: performServiceCatalogOperation(catalog, payload) };
+      // still proves which webContents may call at all. Their answer carries the
+      // honest restart consequence - what changed, that a config write never
+      // restarts a process, and which forked task Hosts this write revoked.
+      const result = performServiceCatalogOperation(catalog, payload);
+      const op = (payload as Record<string, unknown>)["op"];
+      if (op === "update" || op === "adoptBinding") {
+        const written = result as unknown as Record<string, unknown>;
+        return { ok: true as const, payload: { ...written, restart: serviceRestartConsequence(op, written, tasks) } };
+      }
+      return { ok: true as const, payload: result };
     } catch (error) {
       if (error instanceof TrustDomainViolation) return trustFailureEnvelope(error);
       return { ok: false as const, error: "服务配方保存或读取失败，请核对项目及配置后重试" };
