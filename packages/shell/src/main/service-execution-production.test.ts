@@ -47,6 +47,7 @@ import { ipcMain } from "electron";
 import { HostClient } from "../rpc/host-client.js";
 import { TrustDomainRegistry } from "./trust-domain.js";
 import { InstalledServiceHostAuthority } from "./service-host-binding.js";
+import { ExperimentalServiceRecoveryStore } from "./service-recovery-store-experiment.js";
 import { PerTaskHostRegistry, registerIpc } from "./runtime.js";
 import { ServiceCatalog, type ServiceCatalogAuthority } from "./service-catalog.js";
 import { diskTaskStore } from "../host/task-host.js";
@@ -69,8 +70,7 @@ function alive(pid: number): boolean {
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
-/** Wait until the fixture child wrote a complete positive pid. */
-async function untilMarkerPid(taskDir: string, tag: string): Promise<number> {
+/** Wait until the fixture child wrote a complete positive pid. */async function untilMarkerPid(taskDir: string, tag: string): Promise<number> {
   for (let elapsed = 0; elapsed < STOP_WAIT_MS; elapsed += POLL_INTERVAL_MS) {
     const raw = (() => { try { return readFileSync(join(taskDir, `repo-a/svc-${tag}`, `started-${tag}.txt`), "utf8"); } catch { return undefined; } })();
     const pid = raw === undefined ? NaN : Number(raw);
@@ -80,9 +80,18 @@ async function untilMarkerPid(taskDir: string, tag: string): Promise<number> {
   throw Error(`no complete pid marker for svc-${tag}`);
 }
 
+/**
+ * The two owner messages that carry a scope (and therefore an instance id):
+ * the first `service-owner-bootstrap` and, after an in-place replacement,
+ * `service-owner-rebind`. Acks and fences carry no scope.
+ */
+const ownerBindings = (scopes: Record<string, unknown>[]) =>
+  scopes.filter((scope) => scope["kind"] === "service-owner-bootstrap" || scope["kind"] === "service-owner-rebind");
+
 const SERVICE_SCRIPT = `const fs = require("node:fs");
 const path = require("node:path");
 fs.writeFileSync(path.join(process.cwd(), "started-" + process.env.SERVICE_TAG + ".txt"), String(process.pid));
+fs.writeFileSync(path.join(process.cwd(), "args-" + process.env.SERVICE_TAG + ".txt"), process.argv.slice(2).join(" "));
 console.log("ready:" + process.env.SERVICE_TAG);
 console.log("pid:" + process.pid);
 console.log("token:" + (process.env.SERVICE_TOKEN ?? "none"));
@@ -135,7 +144,11 @@ async function production(options: { serviceOwnerRequired?: boolean } = {}) {
   const child = new EventEmitter() as EventEmitter & { postMessage(value: unknown): void; kill(): void };
   child.kill = vi.fn(() => { child.emit("exit", 0); });
   const parent = new EventEmitter() as EventEmitter & { postMessage(value: unknown): void };
-  child.postMessage = (value) => { parent.emit("message", { data: value }); };
+  /** Every main-to-Host owner scope, in order: real evidence that a re-bind is in place. */
+  const ownerScopes: Record<string, unknown>[] = [];
+  child.postMessage = (value) => { const row = value as Record<string, unknown>;
+    if (typeof row.kind === "string" && row.kind.startsWith("service-owner-")) ownerScopes.push(row);
+    parent.emit("message", { data: value }); };
   parent.postMessage = (value) => { child.emit("message", value); };
   const oldPort = Object.getOwnPropertyDescriptor(process, "parentPort");
   Object.defineProperty(process, "parentPort", { configurable: true, value: parent });
@@ -180,6 +193,30 @@ async function production(options: { serviceOwnerRequired?: boolean } = {}) {
       programPath: realpathSync(process.execPath), privateRefs: [{ key: "SERVICE_TOKEN", envRef: "LOCAL_TEST_TOKEN" }] });
     return template.serviceId;
   };
+  /**
+   * A new shared revision of one bound template: same program and shared
+   * material, one extra pinned argument. This is the write that moves the
+   * catalog revision a task's Host booted with.
+   */
+  const saveRevision = (serviceId: string) => {
+    const current = catalog.template(projectId, serviceId, 1)!;
+    return catalog.saveTemplate({ projectId, serviceId, expectedVersion: 1,
+      descriptor: { ...current.descriptor, args: ["service.cjs", "v2"] }, shared: current.shared });
+  };
+  /**
+   * One durable owner record written before the task's Host is forked: the
+   * store holds an exclusive writer lock once the authority owns it, so this
+   * fixture writes the document with a throwaway store and disposes it.
+   */
+  const seedOwner = (serviceId: string, state: string) => {
+    const store = new ExperimentalServiceRecoveryStore(profile, authority, () => [serviceId]);
+    let exited = false, exit!: () => void;
+    const sender = {};
+    store.acquire(taskId, { sender, hasExited: () => exited, subscribeExit: (listener) => { exit = listener; return () => {}; } })
+      .port(sender, serviceId).write({ schemaVersion: 1, taskId, serviceId, state, ownerSessionId: "previous-owner" });
+    exited = true; exit(); store.dispose();
+  };
+  const op = (payload: Record<string, unknown>, sender: unknown = shell) => handler!(sender as never, payload);
   /** The production renderer request: only project/task/service/action. */
   const run = (serviceId: string, action: "start" | "stop", sender: unknown = shell) =>
     handler!(sender as never, { op: "runTaskService", projectId, taskId, serviceId, action });
@@ -198,7 +235,11 @@ async function production(options: { serviceOwnerRequired?: boolean } = {}) {
     const payload = await read("task/serviceLog", { serviceId, limit: 200 });
     return Array.isArray(payload["log"]) ? (payload["log"] as { line: string }[]).map((entry) => entry.line) : [];
   };
-  return { taskId, taskDir, projectId, catalog, tasks, client, main, handler: handler!, shell, trust, run, read, status, log, bind, marker: (tag: string) => join(taskDir, `repo-a/svc-${tag}`, `started-${tag}.txt`) };
+  return { taskId, taskDir, projectId, catalog, tasks, client, main, handler: handler!, shell, trust, run, read, status, log, bind, saveRevision, seedOwner, op, ownerScopes,
+    adopt: (serviceId: string, templateVersion: number, confirm: boolean) => op({ op: "adoptBinding", projectId, taskId, serviceId, templateVersion, confirm }),
+    rebind: (confirm: boolean) => op({ op: "rebindServiceOwner", projectId, taskId, confirm }),
+    marker: (tag: string) => join(taskDir, `repo-a/svc-${tag}`, `started-${tag}.txt`),
+    markerArgs: (tag: string) => join(taskDir, `repo-a/svc-${tag}`, `args-${tag}.txt`) };
 }
 
 describe.skipIf(process.platform === "win32")("#7 production shell/serviceCatalogOp service run", () => {
@@ -260,6 +301,90 @@ describe.skipIf(process.platform === "win32")("#7 production shell/serviceCatalo
     expect(existsSync(f.marker("a"))).toBe(false);
     expect(f.tasks.size).toBe(0);
   }, 30_000);
+
+  it("re-binds a fenced task in place, then runs the real child of the new revision through the same Host", async () => {
+    const f = await production();
+    const serviceId = f.bind("svc-a", "a");
+    expect(await f.run(serviceId, "start")).toMatchObject({ ok: true, payload: { serviceId, action: "start" } });
+    const before = await untilMarkerPid(f.taskDir, "a");
+    expect(alive(before)).toBe(true);
+    // The hosted child's real argv, so the next start can prove the revision it runs.
+    expect(readFileSync(f.markerArgs("a"), "utf8")).toBe("");
+    expect(ownerBindings(f.ownerScopes)).toHaveLength(1);
+
+    // The write this slice is about: a new shared revision plus the confirmed
+    // adoption that re-pins the task to it. Saving config is not starting or
+    // restarting a process, and the answer names the task it revoked.
+    expect(f.saveRevision(serviceId).version).toBe(2);
+    expect(await f.adopt(serviceId, 2, true)).toMatchObject({ ok: true, payload: { taskId: f.taskId, from: 1, to: 2,
+      restart: { changed: true, processRestarted: false, fencedTaskIds: [f.taskId] } } });
+
+    // The dead end, observed through the production handler: the task's Host
+    // refuses start/stop with the named owner fence, while the already running
+    // child keeps running.
+    expect(await f.run(serviceId, "stop")).toMatchObject({ ok: false, error: expect.stringContaining("service-owner-inventory-unconfirmed") });
+    expect(alive(before)).toBe(true);
+
+    // The way back is two-step, and the unconfirmed request replaced nothing.
+    expect(await f.rebind(false)).toMatchObject({ ok: true, payload: { taskId: f.taskId, state: "fenced", confirmed: false, rebound: false,
+      changes: [{ serviceId, name: "API a", was: 1, now: 2 }], stopsProcesses: false, restartsProcesses: false } });
+    expect(ownerBindings(f.ownerScopes)).toHaveLength(1);
+    expect(await f.rebind(true)).toMatchObject({ ok: true, payload: { state: "current", confirmed: true, rebound: true } });
+
+    // In place, in the same Host process: exactly one bootstrap ever, and the
+    // replacement scope named the instance the Host actually held.
+    const [bootstrapped, replaced] = ownerBindings(f.ownerScopes);
+    expect(ownerBindings(f.ownerScopes).map((scope) => scope["kind"])).toEqual(["service-owner-bootstrap", "service-owner-rebind"]);
+    expect(replaced!["previousInstanceId"]).toBe(bootstrapped!["instanceId"]);
+    expect(replaced!["instanceId"]).not.toBe(bootstrapped!["instanceId"]);
+    expect(replaced!["catalogRevision"]).not.toBe(bootstrapped!["catalogRevision"]);
+    expect(replaced!["entries"]).toMatchObject([{ serviceId, templateVersion: 2 }]);
+    // The re-bind killed nothing: the child started at revision 1 is alive.
+    expect(alive(before)).toBe(true);
+
+    // Control is genuinely back at the new revision, and the child that runs is
+    // the new revision's launch: real pid, real argv, real liveness.
+    expect(await f.run(serviceId, "stop")).toMatchObject({ ok: true, payload: { serviceId, action: "stop" } });
+    await until(() => !alive(before), "the revision-1 child to exit");
+    rmSync(f.marker("a"), { force: true });
+    rmSync(f.markerArgs("a"), { force: true });
+    expect(await f.run(serviceId, "start")).toMatchObject({ ok: true, payload: { serviceId, action: "start" } });
+    const after = await untilMarkerPid(f.taskDir, "a");
+    expect(after).not.toBe(before);
+    expect(alive(after)).toBe(true);
+    await until(() => readFileSync(f.markerArgs("a"), "utf8") === "v2", "the revision-2 argv marker");
+    expect(await f.status(serviceId)).toMatchObject({ lifecycle: "running", templateVersion: "2" });
+
+    // Idempotent: a repeat re-bind replaces nothing and spawns nothing.
+    expect(await f.rebind(true)).toMatchObject({ ok: true, payload: { state: "current", confirmed: false, rebound: false, changes: [] } });
+    expect(ownerBindings(f.ownerScopes)).toHaveLength(2);
+    expect(readFileSync(f.marker("a"), "utf8")).toBe(String(after));
+    expect(await f.run(serviceId, "stop")).toMatchObject({ ok: true, payload: { action: "stop" } });
+    await until(() => !alive(after), "the revision-2 child to exit");
+  }, 60_000);
+
+  it("refuses a confirmed re-bind by name while a durable owner record is unsettled, and drops nothing", async () => {
+    const f = await production();
+    const serviceId = f.bind("svc-a", "a");
+    // A durable `running` owner written before this task's Host is forked: the
+    // record may still stand for a live process, so it is never replaced
+    // silently. (The same guard with the real store is covered in
+    // `service-host-binding.test.ts`.)
+    f.seedOwner(serviceId, "running");
+    expect(await f.run(serviceId, "start")).toMatchObject({ ok: false, error: expect.stringContaining("service-execution-uncertain") });
+    expect(f.tasks.size).toBe(1);
+    expect(existsSync(f.marker("a"))).toBe(false);
+    f.saveRevision(serviceId);
+    expect(await f.adopt(serviceId, 2, true)).toMatchObject({ ok: true, payload: { restart: { fencedTaskIds: [f.taskId] } } });
+
+    // Fail closed with the named refusal, and leave the fence, the Host and the
+    // durable record exactly as they were.
+    expect(await f.rebind(true)).toMatchObject({ ok: false, error: expect.stringContaining(`service-owner-rebind-blocked: ${serviceId}`) });
+    expect(ownerBindings(f.ownerScopes).map((scope) => scope["kind"])).toEqual(["service-owner-bootstrap"]);
+    expect(await f.rebind(false)).toMatchObject({ ok: true, payload: { state: "fenced", confirmed: false, rebound: false, changes: [{ serviceId, was: 1, now: 2 }] } });
+    expect(await f.run(serviceId, "stop")).toMatchObject({ ok: false, error: expect.stringContaining("service-owner-inventory-unconfirmed") });
+    expect(f.tasks.size).toBe(1);
+  }, 60_000);
 
   it("refuses the production trigger with the named unsupported-platform refusal on win32", async () => {
     const f = await production();

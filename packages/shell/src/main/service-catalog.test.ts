@@ -149,6 +149,27 @@ describe("machine-private service catalog", () => {
     expect(restarted.listTask(taskId)[0]).toMatchObject({ binding: { templateVersion: 1 }, template: { version: 1 } });
   });
 
+  it("reports no restart-needed item for a save that changes no launch material, and names them for a real change", () => {
+    const f = fixture();
+    const first = f.save();
+    f.bind(first.serviceId);
+    // Byte-identical content: the save still mints a revision, but it invalidates
+    // nothing, so listing every binding that pins the older number would be a lie.
+    const unchanged = f.catalog.reviewTemplateUpdate({ projectId, serviceId: first.serviceId, expectedVersion: 1,
+      descriptor: f.descriptor, shared: [{ key: "PORT", value: "3000", secret: false }] });
+    expect(unchanged).toMatchObject({ version: 2, saved: false, descriptorChanged: false, contentChanged: false,
+      diff: { added: [], changed: [], removed: [] }, restartNeeded: [] });
+    // One real field change (here a shared value) must name the pinned binding.
+    const changed = f.catalog.reviewTemplateUpdate({ projectId, serviceId: first.serviceId, expectedVersion: 1,
+      descriptor: f.descriptor, shared: [{ key: "PORT", value: "4000", secret: false }] });
+    expect(changed).toMatchObject({ contentChanged: true, descriptorChanged: false,
+      diff: { added: [], changed: [{ key: "PORT", before: "3000", after: "4000" }], removed: [] },
+      restartNeeded: [{ taskId, serviceId: first.serviceId, name: "API", from: 1, to: 2 }] });
+    // Neither review wrote anything: the pin and the revision store are untouched.
+    expect(f.catalog.listTask(taskId)[0]).toMatchObject({ binding: { templateVersion: 1 }, template: { version: 1 } });
+    expect(f.catalog.listTemplates(projectId)).toMatchObject([{ version: 1 }]);
+  });
+
   it("refuses a review of a stale or foreign revision and rejects machine paths in the shared workdir", () => {
     const f = fixture();
     const first = f.save();
