@@ -64,6 +64,7 @@ import { shutdownDeadline } from "./shutdown-deadline.js";
 import { HostTaskAdmission } from "./host-task-admission.js";
 import { protectApplicationProfile, type TaskPathProtection } from "./protected-application-path.js";
 import { TaskWorkspaceFiles } from "./workspace-files.js";
+import { openExternalEditor } from "./open-editor.js";
 import { TaskTerminalRegistry, planTerminal, type TerminalPlan } from "../main/terminal-config.js";
 import { TaskLifecycleHost } from "./task-lifecycle.js";
 import { createLifecycleResources } from "./lifecycle-resources.js";
@@ -1602,6 +1603,17 @@ async function performTaskOp(
         if ("error" in files) return { ok: false, error: files.error };
         const result = files.delivery({ rootId: record["rootId"] });
         return result.ok ? { ok: true, payload: { target: result.target } } : { ok: false, error: result.error };
+      }
+      // [PiDock 10] (#15 box 28) 从任务打开外部编辑器. The Host is the actor: it
+      // resolves the same root the file tree shows, re-probes the user's
+      // configured program immediately before the spawn, and spawns it with
+      // argv (never a shell). The program comes from main's own settings
+      // read; page code cannot reach this op. The launch writes nothing.
+      case "task/openEditor": {
+        const files = workspaceFilesFor(taskId);
+        if ("error" in files) return { ok: false, error: files.error };
+        const opened = await openExternalEditor({ files, payload: record, origin });
+        return opened.ok ? { ok: true, payload: { launch: opened.launch } } : { ok: false, error: opened.error };
       }
       // [PiDock 10] (#15) built-in terminal. Planning resolves the selected
       // root's cwd + the #7 environment and returns only masked rows: the real

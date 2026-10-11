@@ -43,6 +43,7 @@ import { ProjectRegistry } from "./project-registry.js";
 import { ServiceCatalog, serviceCatalogAuthority } from "./service-catalog.js";
 import { InstalledServiceHostAuthority, type ServiceOwnerChange, type ServiceOwnerDurableRecord } from "./service-host-binding.js";
 import { parseServiceOwnerRebindRequest, performServiceBindingOperation, performServiceCatalogOperation, performServiceConfigPreview, parseServiceRunRequest } from "./service-catalog-ipc.js";
+import { loadExternalEditorSettings, type ExternalEditorSettingsResult } from "./external-editor.js";
 import { performProjectOperation } from "./project-ipc.js";
 import type { ProviderWiring } from "./provider-ipc.js";
 import { ProjectTaskCreation } from "./project-task-creation.js";
@@ -1574,6 +1575,59 @@ export function registerIpc(
     }
   });
 
+  // [PiDock 10] (#15 box 28) 从任务打开外部编辑器: the production entry. The page
+  // names a task and one of that task's own file roots — nothing else. The
+  // editor program is read by main from its own machine-private settings
+  // document (never from the payload, and never from page-supplied code), and
+  // main stamps the attested `shell-ui` origin itself, so the Host's launch is
+  // an explicit human action whose program the caller cannot choose. The op is
+  // NOT part of the renderer task-op set: `shell/taskOp` refuses
+  // `task/openEditor` by name (the same closure as `task/appendRepos`).
+  ipcMain.handle("shell/openTaskEditor", async (event, payload?: unknown) => {
+    try {
+      const sender = registry.requireShellSender(event);
+      const record = typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>) : {};
+      // A page may name the task and one of its roots; every other key — a
+      // program, args, a path — is refused instead of ignored, so a
+      // caller-supplied program cannot reach the Host even as an extra field.
+      const extra = Object.keys(record).filter((key) => key !== "taskId" && key !== "rootId");
+      if (extra.length > 0) {
+        throw new TrustDomainViolation(
+          "invalid-payload",
+          `shell/openTaskEditor 只接受 taskId 与 rootId，不接受 ${extra.sort().join(",")}`,
+        );
+      }
+      const taskId = record["taskId"];
+      const rootId = record["rootId"];
+      if (typeof taskId !== "string" || taskId.length === 0) {
+        throw new TrustDomainViolation("invalid-payload", "shell/openTaskEditor requires a taskId");
+      }
+      if (typeof rootId !== "string" || rootId.trim().length === 0) {
+        throw new TrustDomainViolation("invalid-payload", "shell/openTaskEditor requires a rootId");
+      }
+      if (!tasks) return { ok: false as const, error: "外部编辑器尚未接入（任务 Host 未接线）" };
+      // Main reads the user's own editor setting from its machine-private
+      // document and refuses by name (nothing spawned, no Host call) when the
+      // program is unconfigured or the document is unusable.
+      const settings: ExternalEditorSettingsResult = loadExternalEditorSettings(app.getPath("userData"));
+      if (!settings.ok) return { ok: false as const, error: settings.error };
+      const origin: TaskOpOrigin = {
+        kind: "shell-ui",
+        senderWebContentsId: sender.webContentsId,
+      };
+      const result = await tasks.routeTaskOp({
+        taskId,
+        op: "task/openEditor",
+        payload: { rootId, editor: settings.settings },
+        origin,
+      });
+      return { ok: true as const, payload: result };
+    } catch (error) {
+      if (error instanceof TrustDomainViolation) return trustFailureEnvelope(error);
+      return { ok: false as const, error: errorMessage(error) };
+    }
+  });
+
   ipcMain.handle("shell/providerOp", async (event, payload?: unknown) => {
     try {
       const sender = registry.requireShellSender(event);
@@ -1757,6 +1811,21 @@ export function registerIpc(
         throw new TrustDomainViolation(
           "invalid-payload",
           "shell/taskOp 不再接受 task/appendDirs，请使用 shell/appendTaskRepos（ref #6）",
+        );
+      }
+      // [PiDock 10] (#15 box 28) the same legacy-route refusal for the external
+      // editor: `task/openEditor` carries the user-configured editor program
+      // and a launch authorization. Reached from page code it would let the
+      // sandboxed renderer name the program (or the args) that main then hands
+      // to the Host, and it would mint the attested human origin for a caller
+      // that is not an explicit human action route. `shell/openTaskEditor` is
+      // the only entry: main reads the program from its own settings document,
+      // accepts `taskId` + `rootId` only, and stamps the origin itself. Keep
+      // this op out of the renderer op set — no production caller remains here.
+      if (op === "task/openEditor") {
+        throw new TrustDomainViolation(
+          "invalid-payload",
+          "shell/taskOp 不接受 task/openEditor，外部编辑器只允许从文件面板经 shell/openTaskEditor 打开（ref #15）",
         );
       }
       // [PiDock 03] (#6) a resume needs its executor BEFORE the Host op runs:

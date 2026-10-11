@@ -90,6 +90,7 @@ export type HostTaskOp =
   | "task/filePreview"
   | "task/fileDiff"
   | "task/deliveryInfo"
+  | "task/openEditor"
   | "task/planTerminal"
   | "task/terminalControl"
   | "task/terminalState"
@@ -267,6 +268,11 @@ const HOST_TASK_OPS: readonly string[] = [
   "task/filePreview",
   "task/fileDiff",
   "task/deliveryInfo",
+  // [PiDock 10] (#15 box 28) external editor launch. Main-only entry
+  // (`shell/openTaskEditor`): the renderer op set never names it and
+  // `shell/taskOp` refuses it by name, so the program and the attested human
+  // origin cannot come from page code.
+  "task/openEditor",
   "task/planTerminal",
   "task/terminalControl",
   "task/terminalState",
