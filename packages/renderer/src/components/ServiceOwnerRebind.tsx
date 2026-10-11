@@ -21,12 +21,14 @@ import { Button } from "./ui/button";
  * not silently drop) is shown verbatim and the panel stays on the review, so
  * the previous state remains diagnosable instead of half-torn-down.
  */
-export function ServiceOwnerRebind({ projectId, taskId, surfacedBy, onRebound }: {
+export function ServiceOwnerRebind({ projectId, taskId, surfacedBy, onRebound, onDismiss }: {
   projectId: string;
   taskId: string;
   /** The refusal (or write consequence) that surfaced this control, shown verbatim. */
   surfacedBy?: string;
   onRebound?: () => void;
+  /** Called when the user closes a finished control, so the host panel can drop it. */
+  onDismiss?: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [review, setReview] = useState<ServiceOwnerRebindView | null>(null);
@@ -58,7 +60,7 @@ export function ServiceOwnerRebind({ projectId, taskId, surfacedBy, onRebound }:
   };
 
   return <div className="mt-2 border border-line bg-soft px-2 py-2 text-xs" data-testid="service-owner-rebind">
-    <p className="break-words text-muted" role="status">该任务的启停通道已被撤销：配方变更移动了该任务的执行快照，宿主在重新绑定该任务的服务所有者之前会拒绝启停（<code>service-owner-inventory-unconfirmed</code>）。{surfacedBy && surfacedBy.length > 0 ? `宿主原文：${surfacedBy}` : ""}</p>
+    {done === null && <p className="break-words text-muted" role="status">该任务的启停通道已被撤销：配方变更移动了该任务的执行快照，宿主在重新绑定该任务的服务所有者之前会拒绝启停（<code>service-owner-inventory-unconfirmed</code>）。{surfacedBy && surfacedBy.length > 0 ? `宿主原文：${surfacedBy}` : ""}</p>}
     {review === null && done === null && <div className="mt-2 flex flex-wrap items-center gap-2">
       <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void request(false)}>核对重新绑定</Button>
       <span className="break-words text-muted">核对不会改动任何绑定；重新绑定只替换该任务的服务所有者绑定与租约，不启动、停止或重启任何进程。</span>
@@ -83,7 +85,7 @@ export function ServiceOwnerRebind({ projectId, taskId, surfacedBy, onRebound }:
       <p role="status" className="break-words">{done.rebound
         ? "已重新绑定该任务的服务所有者：启停通道已恢复，可以在运行面板重新启停；本次没有启动、停止或重启任何进程。"
         : "主进程未做替换：该任务没有可重新绑定的派生宿主或所有者绑定已是最新。"}</p>
-      <div className="mt-2 flex justify-end gap-2"><Button type="button" size="sm" variant="ghost" disabled={busy} onClick={() => { setDone(null); setError(null); }}>关闭</Button></div>
+      <div className="mt-2 flex justify-end gap-2"><Button type="button" size="sm" variant="ghost" disabled={busy} onClick={() => { setDone(null); setError(null); onDismiss?.(); }}>关闭</Button></div>
     </div>}
   </div>;
 }
