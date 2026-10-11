@@ -317,6 +317,10 @@ describe.skipIf(process.platform === "win32")("#7 production shell/serviceCatalo
     const before = await untilMarkerPid(f.taskDir, "a");
     expect(alive(before)).toBe(true);
     // The hosted child's real argv, so the next start can prove the revision it runs.
+    // The fixture writes `started-*.txt` first and `args-*.txt` second, so the pid
+    // marker alone does not imply the argv marker landed: wait on the argv value the
+    // assertion is about (revision 1 is launched with no extra args).
+    await until(() => { try { return readFileSync(f.markerArgs("a"), "utf8") === ""; } catch { return false; } }, "the revision-1 argv marker");
     expect(readFileSync(f.markerArgs("a"), "utf8")).toBe("");
     expect(ownerBindings(f.ownerScopes)).toHaveLength(1);
 
@@ -360,7 +364,9 @@ describe.skipIf(process.platform === "win32")("#7 production shell/serviceCatalo
     const after = await untilMarkerPid(f.taskDir, "a");
     expect(after).not.toBe(before);
     expect(alive(after)).toBe(true);
-    await until(() => readFileSync(f.markerArgs("a"), "utf8") === "v2", "the revision-2 argv marker");
+    // Same proxy/real race as above: the argv marker is written after the pid
+    // marker, so wait for the exact argv value instead of racing the child.
+    await until(() => { try { return readFileSync(f.markerArgs("a"), "utf8") === "v2"; } catch { return false; } }, "the revision-2 argv marker");
     expect(await f.status(serviceId)).toMatchObject({ lifecycle: "running", templateVersion: "2" });
 
     // Idempotent: a repeat re-bind replaces nothing and spawns nothing.
