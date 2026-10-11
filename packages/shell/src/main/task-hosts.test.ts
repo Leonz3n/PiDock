@@ -1245,3 +1245,54 @@ describe("task browser origins", () => {
     ]);
   });
 });
+describe("PerTaskHostRegistry service-owner re-bind admission ([PiDock 04] #7 slice)", () => {
+  it("refuses by name without an owner authority, and is an idempotent no-op for a task without a forked Host", async () => {
+    const { registry } = registryWith(() => "/tasks/task-a", [], TASK_RESULT);
+    // No `configureServices` wiring: the way back is unavailable by name, not silently skipped.
+    expect(() => registry.rebindServiceOwner("task-a")).toThrow("service-owner-authority-unavailable");
+    const wired = registryWith(() => "/tasks/task-a", [], TASK_RESULT).registry;
+    const rebind = vi.fn(async () => "current" as const);
+    wired.configureServices(() => ({ rebind } as never));
+    // No Host forked for this task: the next fork binds the current revision itself,
+    // so nothing is replaced and no authority call is made.
+    expect(await wired.rebindServiceOwner("task-a")).toBe("absent");
+    expect(rebind).not.toHaveBeenCalled();
+    expect(wired.size).toBe(0);
+  });
+
+  it("refuses a same-task re-bind while one is already in flight, and replaces exactly once", async () => {
+    const { registry, spawn } = registryWith(() => "/tasks/task-a", [], TASK_RESULT);
+    const gate = deferred<"rebound">();
+    const rebind = vi.fn(() => gate.promise);
+    registry.configureServices(() => ({ rebind } as never));
+    await registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
+    const first = registry.rebindServiceOwner("task-a");
+    expect(() => registry.rebindServiceOwner("task-a")).toThrow("service-owner-rebind-busy");
+    expect(rebind).toHaveBeenCalledTimes(1);
+    gate.resolve("rebound");
+    expect(await first).toBe("rebound");
+    // The guard holds one swap at a time, not the task: afterwards it can be replaced again.
+    rebind.mockResolvedValue("current");
+    expect(await registry.rebindServiceOwner("task-a")).toBe("current");
+    expect(rebind).toHaveBeenCalledTimes(2);
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a re-bind while a routed op of the same task is still in flight", async () => {
+    const gate = deferred<HostTaskResult>();
+    let calls = 0;
+    const transport = { task: vi.fn(() => (++calls === 1 ? Promise.resolve(TASK_RESULT) : gate.promise)), onBrowserRequest: vi.fn(), dispose: vi.fn() };
+    const registry = new PerTaskHostRegistry("workspace-a", async () => ({ client: transport as never, child: syntheticChild() as never }), () => "/tasks/task-a");
+    const rebind = vi.fn(async () => "rebound" as const);
+    registry.configureServices(() => ({ rebind } as never));
+    await registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
+    const inFlight = registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
+    expect(() => registry.rebindServiceOwner("task-a")).toThrow("service-owner-rebind-busy");
+    expect(rebind).not.toHaveBeenCalled();
+    gate.resolve(TASK_RESULT);
+    expect(await inFlight).toEqual(TASK_RESULT);
+    // Once the op settled, the same call is admitted.
+    expect(await registry.rebindServiceOwner("task-a")).toBe("rebound");
+    expect(rebind).toHaveBeenCalledTimes(1);
+  });
+});

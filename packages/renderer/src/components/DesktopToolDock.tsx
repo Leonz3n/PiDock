@@ -637,9 +637,10 @@ function ServiceControl({ taskId, projectId, row, onChanged }: {
     setBusy(false);
     if (!result.ok) {
       setError(result.error);
-      // The named fence is the one refusal with a wired way back: main revoked
-      // this task's service control because a shared-template write moved its
-      // execution snapshot. Any other refusal is shown verbatim with no control.
+      // The named fence is the one refusal with a wired way back: main cannot
+      // confirm this task's owner binding against the current catalog (a moved
+      // execution snapshot, or an owner message it cannot check). Any other
+      // refusal is shown verbatim with no control.
       if (result.error.includes("service-owner-inventory-unconfirmed")) setFenced(result.error);
       return;
     }

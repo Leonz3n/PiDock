@@ -260,6 +260,32 @@ describe.skipIf(process.platform === "win32")("installed actual-child catalog / 
     expect(c.scope().epoch).toBe(after.epoch);
     expect(c.current()).toBe(c.current());
   });
+  it("re-binds a task whose owner contract moved without a version change, and refuses a child it cannot replace by name", async () => {
+    const f = fixture(), first = f.add(), c = connect(f); await c.prepare();
+    const before = c.scope();
+    expect(c.main.state(c.child as never, f.taskId)).toBe("current");
+    // The same pinned revision, a different resolved owner contract: the binding
+    // moved to another work subdirectory, so `ownerSnapshot` no longer matches and
+    // the Host refuses start/stop exactly like it does after an adoption.
+    mkdirSync(join(f.taskDir, "repo-a", "apps"), { recursive: true });
+    f.catalog.bindTask({ taskId: f.taskId, serviceId: first.serviceId, templateVersion: 1, rootId: "repo-a", subdir: "apps",
+      programPath: process.execPath, privateRefs: [] });
+    expect(c.main.state(c.child as never, f.taskId)).toBe("fenced");
+    expect(c.inventory.control().error).toBe("service-owner-inventory-unconfirmed");
+    // The named difference is real, and it is not a version bump: both scopes pin v1.
+    const changes = c.main.changes(c.child as never, f.taskId);
+    expect(changes).toHaveLength(1);
+    expect(changes![0]).toMatchObject({ serviceId: first.serviceId, was: { templateVersion: 1 }, now: { templateVersion: 1 } });
+    expect(changes![0]!.was!.configRevision).not.toBe(changes![0]!.now!.configRevision);
+    // The way back works for that fence too, and it replaces the same pinned version.
+    expect(await c.main.rebind(c.child as never, f.taskId)).toBe("rebound");
+    expect(c.main.state(c.child as never, f.taskId)).toBe("current");
+    expect(c.scope().catalogRevision).not.toBe(before.catalogRevision);
+    expect(c.scope().entries[0]).toMatchObject({ serviceId: first.serviceId, templateVersion: 1 });
+    // A child main never bound, or one bound to another task, is refused by name.
+    expect(() => c.main.rebind(new EventEmitter() as never, f.taskId)).toThrow("service-owner-rebind-unavailable");
+    expect(() => c.main.rebind(c.child as never, "task-other")).toThrow("service-owner-rebind-unavailable");
+  });
   it("refuses the retired owner's instance and epoch, and can still replace it afterwards", async () => {
     const f = fixture(), first = f.add(), c = connect(f); await c.prepare();
     const before = c.scope();

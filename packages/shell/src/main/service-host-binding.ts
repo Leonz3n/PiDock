@@ -145,7 +145,11 @@ export class InstalledServiceHostAuthority {
     prior.detach();
     this.bindings.delete(child);
     // Reap the replaced owner and its lease: the child may no longer answer the
-    // old epoch, and the store frees the task for the replacement lease.
+    // old epoch, and the store frees the task for the replacement lease. The
+    // rejected `ready` is the strongest of the two settle reasons: any fence
+    // already settled it (`fence()` rejects it, and a rejected promise ignores
+    // this later rejection), so this names the replacement for a pending bind
+    // that was never answered rather than being its only failure.
     store.release(taskId, child);
     prior.reject(Error("service-owner-rebind-superseded"));
     return this.attach(child, taskId, { snapshot, ...(previousInstanceId === undefined ? {} : { previousInstanceId }) })

@@ -348,8 +348,10 @@ export function ProjectServiceTemplates({ projectId, tasks = [], fillFrom = null
         <p className="mt-1">保存配置不等于重启进程：本页与「任务绑定」都不会启动、停止或重启任何进程（processRestarted: 否）。{update.contentChanged ? "本次保存改变了启动材料。" : "本次保存未改变任何启动字段与共享变量，因此不产生需重启项。"}</p>
         <p className="mt-1">已有任务绑定保留原模板版本；本页不会重启服务或让绑定改用新版本 —— 需要先显式采用新版本：关闭编辑后，在列表中该服务的「任务绑定」面板里核对并采用（需二次确认；面板显示的是该绑定自己固定的版本 → v{update.version}），本页保存与刷新都不会自动采用。</p>
         {update.restartNeeded.map((entry) => <p key={entry.taskId}>受影响：任务 {taskName(entry.taskId)} 的 {entry.name}（v{entry.from} → v{entry.to}）仍固定 v{entry.from}，需显式采用 v{entry.to} 并重新绑定该任务的服务所有者后才会用 v{entry.to} 启动</p>)}
-        {update.restart.fencedTaskIds.length > 0 && <p className="mt-1">本次保存已撤回这些任务的服务控制：{update.restart.fencedTaskIds.map(taskName).join("、")}（启停会被拒绝为 service-owner-inventory-unconfirmed，需用「任务绑定」面板的「重新绑定服务所有者」恢复）。</p>}
-        <p className="mt-1 text-muted">Agent 侧修改共享模板并生成差异确认仍未接线（SDK 回合工具为空）；本节与「任务绑定」只覆盖人工编辑与人工采用版本。</p>
+        <p className="mt-1 text-muted">{update.restart.fencedTaskIds.length === 0
+          ? "本次保存不会撤回任何任务的服务控制：已有任务绑定保留它们固定的版本，启停通道不受影响（需用新版本请在该服务的「任务绑定」面板显式采用）。"
+          : `本次保存撤回了这些任务的服务控制：${update.restart.fencedTaskIds.map(taskName).join("、")}（启停会被拒绝为 service-owner-inventory-unconfirmed，需用「任务绑定」面板的「重新绑定服务所有者」恢复）。`}</p>
+        <p className="mt-1 text-muted">Agent 侧修改共享模板并生成差异确认仍未接线（SDK 回合工具不含共享模板编辑）；本节与「任务绑定」只覆盖人工编辑与人工采用版本。</p>
       </div>}
       {review && !editTarget && <p role="status" className="mt-3 border-t border-line py-2 text-muted">待保存：{draft.name} · {runTypeLabel[draft.runType]} · {draft.shared.map((row) => row.key).join("、") || "无共享变量"}</p>}
       <div className="mt-3 flex justify-end gap-2"><Button type="button" size="sm" variant="ghost" disabled={saving} onClick={close}>取消</Button>

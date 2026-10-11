@@ -125,7 +125,7 @@ export interface ServiceRestartConsequenceView {
   changed: boolean;
   /** A shared-template save or a binding adoption never starts, stops or restarts a process. */
   processRestarted: false;
-  /** Task ids whose forked service-control channel this write revoked; empty for a read-only review. */
+  /** Task ids whose forked service-control channel this write revoked; empty for a read-only review, and always empty for a shared-template save (it moves no binding's pin). */
   fencedTaskIds: string[];
 }
 
@@ -248,7 +248,7 @@ export interface ServiceOwnerRebindView {
   confirmed: boolean;
   rebound: boolean;
   /** Named services whose resolved owner contract differs between the replaced owner and the catalog now. */
-  changes: { serviceId: string; name: string; was: number | null; now: number | null }[];
+  changes: { serviceId: string; name: string; was: number | null; now: number | null; configChanged: boolean }[];
   /** Copy facts: the re-bind replaces only the ownership binding. */
   stopsProcesses: false;
   restartsProcesses: false;
@@ -259,7 +259,11 @@ export interface ServiceOwnerRebindView {
  * three real states and the two copy facts are required, and every change row
  * must name a service on this task, so the page can never render a re-bind main
  * did not report; an unparseable answer leaves the panel on its previous state
- * instead of claiming control came back.
+ * instead of claiming control came back. A row whose pinned version did not move
+ * is only meaningful when main also reports a moved owner contract
+ * (`configChanged`), which is what a binding/program/environment change produces
+ * without a version bump; a row that names no difference at all is still
+ * rejected.
  */
 export function serviceOwnerRebindFromMain(value: unknown, expected: { taskId: string; projectId: string }): ServiceOwnerRebindView | null {
   if (!object(value) || Object.keys(value).sort().join(",") !==
@@ -273,13 +277,14 @@ export function serviceOwnerRebindFromMain(value: unknown, expected: { taskId: s
   if (!Array.isArray(rows) || rows.length > 500) return null;
   const changes: ServiceOwnerRebindView["changes"] = [];
   for (const entry of rows) {
-    if (!object(entry) || Object.keys(entry).sort().join(",") !== "name,now,serviceId,was" ||
+    if (!object(entry) || Object.keys(entry).sort().join(",") !== "configChanged,name,now,serviceId,was" ||
         typeof entry["serviceId"] !== "string" || !/^s-[0-9a-f-]{36}$/i.test(entry["serviceId"]) ||
-        typeof entry["name"] !== "string" || entry["name"].length === 0) return null;
+        typeof entry["name"] !== "string" || entry["name"].length === 0 || typeof entry["configChanged"] !== "boolean") return null;
     const version = (item: unknown) => item === null || Number.isSafeInteger(item) && (item as number) >= 1;
     if (!version(entry["was"]) || !version(entry["now"]) || entry["was"] === null && entry["now"] === null ||
-        entry["was"] === entry["now"] || changes.some((row) => row.serviceId === entry["serviceId"])) return null;
-    changes.push({ serviceId: entry["serviceId"], name: entry["name"],
+        entry["was"] === entry["now"] && entry["configChanged"] !== true ||
+        changes.some((row) => row.serviceId === entry["serviceId"])) return null;
+    changes.push({ serviceId: entry["serviceId"], name: entry["name"], configChanged: entry["configChanged"],
       was: entry["was"] === null ? null : entry["was"] as number, now: entry["now"] === null ? null : entry["now"] as number });
   }
   return { taskId: expected.taskId, projectId: expected.projectId, state: value["state"] as ServiceOwnerRebindView["state"],
