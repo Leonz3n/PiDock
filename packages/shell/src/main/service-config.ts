@@ -86,9 +86,16 @@ export function isServiceSecretKey(key: string): boolean {
   return /PASSWORD|SECRET|TOKEN|API_KEY|PRIVATE_KEY/i.test(key);
 }
 
+/**
+ * The one masked spelling a value takes wherever it leaves the Host: the page's
+ * effective-config table, the Agent's service status and an import draft all
+ * show this form instead of a private value.
+ */
+export const SERVICE_VALUE_MASK = "••••••••";
+
 /** Display form: secrets are masked, everything else verbatim. */
 export function maskServiceValue(entry: ServiceConfigEntry): string {
-  return entry.secret || isServiceSecretKey(entry.key) ? "••••••••" : entry.value;
+  return entry.secret || isServiceSecretKey(entry.key) ? SERVICE_VALUE_MASK : entry.value;
 }
 
 /**
@@ -267,6 +274,22 @@ export function validateSharedServiceValue(value: string): ServiceConfigError | 
   return null;
 }
 
+/**
+ * Class of one value that must not become a shared value, reusing
+ * `validateSharedServiceValue` ([PiDock 04] #7 box 3): a credential or a
+ * machine path belongs to the local private layer, `unportable` covers the
+ * remaining refusals (control characters, over-long text). Only the class is
+ * returned, so an import draft can name the key that needs review without ever
+ * echoing the value it refused.
+ */
+export function sharedValueRefusalClass(value: string): "credential" | "path" | "unportable" | null {
+  if (value.length === 0) return null;
+  const refusal = validateSharedServiceValue(value);
+  if (refusal === null) return null;
+  if (refusal.code === "secret-in-shared") return "credential";
+  return carriesMachinePath(value) ? "path" : "unportable";
+}
+
 /** One shared program name: portable only (no machine path, no other special character). */
 export function validateSharedServiceProgram(program: string): ServiceConfigError | null {
   if (!/^[A-Za-z0-9_.+-]+$/.test(program)) {
@@ -440,6 +463,15 @@ export interface ImportDraft {
   program: string;
   args: string[];
   runType: ServiceRunType;
+  /** The signal in the candidate that chose `runType`; always shown beside the label. */
+  runTypeBasis: string;
+  /**
+   * True when the candidate names no runnable command, so nothing distinguishes
+   * a resident service from a one-shot command or a prepare step. The caller
+   * must ask the human; the draft keeps the conservative `one-shot` and never
+   * reports the candidate as a resident service.
+   */
+  runTypeUncertain: boolean;
   /** KEYs that are syntactically invalid and need fixing before save. */
   invalidVars: string[];
   /** Items needing human confirmation (empty values, unresolvable refs, secret-looking values in a shared draft). */
@@ -447,30 +479,48 @@ export interface ImportDraft {
   origin: string;
 }
 
+const RESIDENT_RUN_SIGNAL = /(^|[\s:"'])(dev|start|serve|watch)([\s:"']|$)/;
+const PREPARE_RUN_SIGNAL = /(prepare|postinstall|preinstall|install|setup|migrate|seed)/;
+/** A resident word beside one of these starts a prepare step, not a long-running server. */
+const RESIDENT_RUN_SIGNAL_VETO = /(migrate|seed|prepare|install)/;
+
 /**
  * Classify one imported start command into a service draft. Splits the
  * command line on whitespace (no shell evaluation — chaining operators stay
  * inside the last arg so `validateServiceDescriptor` can reject them later).
- * runType guess: `dev|start|serve|watch` → long-lived; `prepare|install|
- * setup|migrate|seed|postinstall` → prepare; everything else → one-shot
- * (caller confirms; the dialog always shows the guess for correction).
+ *
+ * The run type is a *guess with a named basis*, never a silent promotion:
+ * `dev|start|serve|watch` → long-lived, `prepare|install|setup|migrate|seed` →
+ * prepare (a prepare word beside a resident word wins), everything else →
+ * one-shot. The candidate name counts as a signal because that is where a
+ * package script carries its own convention, and `runTypeBasis` says which of
+ * the two matched. A candidate that names **no command at all** cannot be
+ * classified: `runTypeUncertain` is true and `runType` stays `one-shot`, so a
+ * caller can never turn an unknown candidate into a resident service by
+ * accident.
  */
 export function classifyImportDraft(input: ImportDraftInput): ImportDraft {
   const tokens = input.command.trim().split(/\s+/).filter((token) => token.length > 0);
   const [program = "", ...args] = tokens;
-  const lowered = input.command.toLowerCase();
-  const runType: ServiceRunType =
-    /(^|[\s:"'])(dev|start|serve|watch)([\s:"']|$)/.test(lowered) &&
-    !/(migrate|seed|prepare|install)/.test(lowered)
-      ? "long-lived"
-      : /(prepare|postinstall|preinstall|install|setup|migrate|seed)/.test(lowered)
-        ? "prepare"
-        : "one-shot";
+  const name = input.name?.trim() ?? "";
+  const lowered = `${name} ${input.command}`.toLowerCase();
+  const uncertain = program.length === 0;
+  const resident = RESIDENT_RUN_SIGNAL.test(lowered) && !RESIDENT_RUN_SIGNAL_VETO.test(lowered);
+  const prepare = !resident && PREPARE_RUN_SIGNAL.test(lowered);
+  const runTypeBasis = uncertain
+    ? "配置未给出启动命令，无法判定运行类型"
+    : resident
+      ? (RESIDENT_RUN_SIGNAL.test(input.command.toLowerCase()) ? "命令含常驻关键字 dev/start/serve/watch" : "名称含常驻关键字 dev/start/serve/watch")
+      : prepare
+        ? (PREPARE_RUN_SIGNAL.test(input.command.toLowerCase()) ? "命令含准备关键字 prepare/install/setup/migrate/seed" : "名称含准备关键字 prepare/install/setup/migrate/seed")
+        : "未匹配常驻或准备关键字，按一次性命令处理";
   return {
-    name: input.name?.trim() || program,
+    name: name || program,
     program,
     args,
-    runType,
+    runType: uncertain ? "one-shot" : resident ? "long-lived" : prepare ? "prepare" : "one-shot",
+    runTypeBasis,
+    runTypeUncertain: uncertain,
     invalidVars: [],
     toVerify: [],
     origin: input.origin ?? "unknown",

@@ -49,7 +49,11 @@ const draftFromTemplate = (row: ServiceTemplateView): Draft => ({
   shared: row.shared.map((entry) => ({ key: entry.key, value: entry.value })),
 });
 
-/** A scanned draft fills the form as candidates; empty fields stay visible for review. */
+/**
+ * A scanned draft fills the form as candidates; empty fields stay visible for
+ * review. A candidate the Host could not classify keeps that conservative
+ * `one-shot` instead of the form's own default, and the notes say why.
+ */
 const draftFromHint = (hint: ServiceImportHintView): Draft => ({
   ...emptyDraft(),
   name: hint.name,
@@ -70,8 +74,10 @@ const draftFromHint = (hint: ServiceImportHintView): Draft => ({
  * run panel behind the platform gate.
  *
  * A repository import hint can fill this form through one explicit human
- * action; a hint never saves, creates or binds anything, and a
- * configuration-only hint cannot be applied as a run unit.
+ * action; a hint never saves, creates or binds anything, a
+ * configuration-only hint cannot be applied as a run unit, and the form shows
+ * each variable's source with its masked value - no value read from the
+ * repository is ever written into the shared template.
  */
 export function ProjectServiceTemplates({ projectId, tasks = [], fillFrom = null, onFillApplied }: {
   projectId: string | null;
@@ -148,7 +154,9 @@ export function ProjectServiceTemplates({ projectId, tasks = [], fillFrom = null
     setUncertain(false);
     setError(null);
     setFillNotes({ source: `${fillFrom.source} · ${fillFrom.name}`,
-      notes: [...fillFrom.envKeys.map((key) => `变量键：${key}（值未知，未写入共享模板）`),
+      notes: [`运行类型为草案判断：${runTypeLabel[fillFrom.runType]}（依据：${fillFrom.runTypeBasis}）；请核对后再保存`,
+        ...(fillFrom.runTypeUncertain ? ["该草案未给出可判定的启动命令，已按最保守的一次性命令填入；请人工选择运行类型"] : []),
+        ...fillFrom.variables.map((row) => `变量 ${row.key}（来源 ${row.source}）：${row.maskedValue}，仅显示遮蔽值，未写入共享模板`),
         ...fillFrom.invalidVars.map((key) => `无效变量：${key}`), ...fillFrom.toVerify] });
     fillApplied.current?.(fillFrom);
   }, [fillFrom, projectId, connected]);

@@ -9,6 +9,8 @@ import {
   maskServiceValue,
   nextServiceTemplateVersion,
   recordPlatformLaunch,
+  SERVICE_VALUE_MASK,
+  sharedValueRefusalClass,
   resolveServiceEnv,
   restartNeededForTemplateAdopt,
   validateNoSecretsInShared,
@@ -273,10 +275,25 @@ describe("masking + child env isolation", () => {
 });
 
 describe("import drafts", () => {
-  it("classifies long-lived vs prepare vs one-shot", () => {
-    expect(classifyImportDraft({ command: "pnpm --filter saas-web dev" }).runType).toBe("long-lived");
-    expect(classifyImportDraft({ command: "bun run db:migrate" }).runType).toBe("prepare");
-    expect(classifyImportDraft({ command: "node scripts/report.mjs --once" }).runType).toBe("one-shot");
+  it("classifies long-lived vs prepare vs one-shot, naming the signal that decided it", () => {
+    expect(classifyImportDraft({ command: "pnpm --filter saas-web dev" })).toMatchObject({ runType: "long-lived", runTypeUncertain: false,
+      runTypeBasis: "命令含常驻关键字 dev/start/serve/watch" });
+    expect(classifyImportDraft({ command: "bun run db:migrate" })).toMatchObject({ runType: "prepare", runTypeUncertain: false,
+      runTypeBasis: "命令含准备关键字 prepare/install/setup/migrate/seed" });
+    expect(classifyImportDraft({ command: "node scripts/report.mjs --once" })).toMatchObject({ runType: "one-shot", runTypeUncertain: false,
+      runTypeBasis: "未匹配常驻或准备关键字，按一次性命令处理" });
+    // A package script's convention lives in its name, and the basis says so.
+    expect(classifyImportDraft({ name: "dev", command: "node server.js" })).toMatchObject({ runType: "long-lived",
+      runTypeBasis: "名称含常驻关键字 dev/start/serve/watch" });
+  });
+  it("refuses to guess a run type when the candidate names no command", () => {
+    const empty = classifyImportDraft({ name: "database", command: "" });
+    expect(empty).toMatchObject({ runType: "one-shot", runTypeUncertain: true,
+      runTypeBasis: "配置未给出启动命令，无法判定运行类型" });
+    expect(empty.runType).not.toBe("long-lived");
+    // Whitespace is not a command either, and a resident-looking name cannot
+    // turn an unclassifiable candidate into a resident service.
+    expect(classifyImportDraft({ name: "dev", command: "   " })).toMatchObject({ runType: "one-shot", runTypeUncertain: true });
   });
   it("keeps chaining tokens in args so the descriptor validator can reject them", () => {
     const draft = classifyImportDraft({ command: "pnpm dev && pnpm build" });
@@ -299,6 +316,21 @@ describe("import drafts", () => {
     expect(toVerify.join("\n")).toContain("EMPTY");
     expect(toVerify.join("\n")).toContain("API_TOKEN");
     expect(toVerify.join("\n")).toContain("ELSEWHERE");
+  });
+  it("classes the values a shared template must not take, without echoing them", () => {
+    expect(sharedValueRefusalClass("")).toBeNull();
+    expect(sharedValueRefusalClass("4100")).toBeNull();
+    expect(sharedValueRefusalClass("postgres://user:pass@host/db")).toBe("credential");
+    expect(sharedValueRefusalClass("API_TOKEN=abc")).toBe("credential");
+    expect(sharedValueRefusalClass("/Users/name/private/api.yaml")).toBe("path");
+    expect(sharedValueRefusalClass("~/private/key.pem")).toBe("path");
+    expect(sharedValueRefusalClass("line-one\nline-two")).toBe("unportable");
+    expect(sharedValueRefusalClass("x".repeat(2049))).toBe("unportable");
+  });
+  it("masks every value form that leaves the Host with one spelling", () => {
+    expect(maskServiceValue({ key: "API_TOKEN", value: "abc", secret: false })).toBe(SERVICE_VALUE_MASK);
+    expect(maskServiceValue({ key: "PORT", value: "4100", secret: false })).toBe("4100");
+    expect(SERVICE_VALUE_MASK).toBe("••••••••");
   });
 });
 

@@ -85,10 +85,13 @@ function RepositoryImportDrafts({ tasks, pending, filled, onFillForm }: {
         <div className="min-w-0"><strong className="block break-words font-medium text-ink">{hint.name}</strong><span className="break-all text-muted">{hint.source}</span>
           {(hint.program !== "" || hint.args.length > 0) && <p className="mt-1 break-all text-muted">命令候选：{[hint.program, ...hint.args].join(" ")}</p>}
           {hint.workdir !== undefined && <p className="mt-1 break-all text-muted">工作目录候选：{hint.workdir}</p>}
-          {!!hint.envKeys.length && <p className="mt-1 break-all text-muted">变量键：{hint.envKeys.join("、")}</p>}
+          {!!hint.variables.length && <p className="mt-1 break-all text-muted">变量：{hint.variables.map((row) => `${row.key}（来源 ${row.source} · 值 ${row.maskedValue}）`).join("、")}</p>}
           {hint.invalidVars.map((key, at) => <p key={at} className="mt-1 break-all text-[#ad4545]">无效变量：{key}</p>)}
           {hint.toVerify.map((note, at) => <p key={at} className="mt-1 break-words text-muted">{note}</p>)}
-        </div><div className="flex flex-col items-start gap-2 sm:items-end"><span className="text-muted">{hint.runType === null ? "配置来源" : runTypeLabel[hint.runType]}</span>
+        </div><div className="flex flex-col items-start gap-2 sm:items-end"><span className={hint.runTypeUncertain ? "text-[#9a6032]" : "text-muted"}>{hint.runType === null
+          ? "配置来源"
+          : hint.runTypeUncertain ? `${runTypeLabel[hint.runType]}（待确认）` : runTypeLabel[hint.runType]}</span>
+          <span className="break-words text-right text-muted">{hint.runTypeBasis}</span>
           {hint.runType === null
             ? <Button type="button" size="sm" variant="outline" disabled title="配置来源草案不能作为运行单元填入服务模板">仅配置来源</Button>
             : <Button type="button" size="sm" variant="outline" onClick={() => onFillForm(hint)}>填入新建模板</Button>}
