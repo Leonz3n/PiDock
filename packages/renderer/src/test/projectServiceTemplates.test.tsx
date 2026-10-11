@@ -326,7 +326,8 @@ it("treats a malformed catalog response as unavailable, never an empty list", as
 });
 
 const scannedHint: ServiceImportHintView = {
-  source: "package.json", name: "dev", runType: "long-lived", envKeys: ["API_TOKEN"],
+  source: "package.json", name: "dev", runType: "long-lived", runTypeBasis: "名称含常驻关键字 dev/start/serve/watch", runTypeUncertain: false,
+  variables: [{ key: "API_TOKEN", source: "package.json", maskedValue: "••••••••" }],
   program: "node", args: ["server.js"], workdir: "apps/api",
   invalidVars: ["1BAD"], toVerify: ["API_TOKEN：疑似凭据，请移入本机私有配置"],
 };
@@ -344,7 +345,12 @@ it("fills the new-template form from one explicit scanned draft and saves nothin
   expect(screen.getByLabelText("端口")).toHaveValue("");
   expect(screen.getByLabelText("健康检查")).toHaveValue("");
   expect(screen.getByText(/已从草案填入（package.json · dev）/)).toBeInTheDocument();
-  expect(screen.getByText(/变量键：API_TOKEN（值未知，未写入共享模板）/)).toBeInTheDocument();
+  // Provenance and a masked value per variable; the value itself never appears.
+  expect(screen.getByText(/变量 API_TOKEN（来源 package\.json）：••••••••，仅显示遮蔽值，未写入共享模板/)).toBeInTheDocument();
+  expect(screen.getByText(/运行类型为草案判断：常驻服务（依据：名称含常驻关键字 dev\/start\/serve\/watch）/)).toBeInTheDocument();
+  // The draft writes no variable value into the form: the shared rows stay empty.
+  expect(screen.queryByLabelText("共享变量 KEY 1")).toBeNull();
+  expect(screen.queryByDisplayValue(/••••/)).toBeNull();
   expect(screen.getByText(/无效变量：1BAD/)).toBeInTheDocument();
   expect(screen.getByText(/API_TOKEN：疑似凭据/)).toBeInTheDocument();
   expect(applied).toHaveBeenCalledTimes(1);

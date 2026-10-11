@@ -22,7 +22,7 @@ it("preserves the prototype environment layout while refusing invented configura
 it("shows only Host-scanned drafts for the selected task and worktree", async () => {
   const taskOp = vi.fn(async (_taskId: string, op: string) => op === "task/fileRoots"
     ? { ok: true, payload: { taskDir: "/task", roots: [{ id: "repo", kind: "worktree", label: "invoice", path: "/task/repo" }, { id: "link", kind: "shared-dir", label: "shared", path: "/tmp/shared" }] } }
-    : { ok: true, payload: { scan: { hints: [{ source: "package.json", name: "dev", runType: "long-lived", envKeys: ["API_TOKEN"], program: "node", args: ["server.js"], invalidVars: [], toVerify: ["API_TOKEN：疑似凭据"] }], errors: [], truncated: false } } });
+    : { ok: true, payload: { scan: { hints: [{ source: "package.json", name: "dev", runType: "long-lived", runTypeBasis: "名称含常驻关键字 dev/start/serve/watch", runTypeUncertain: false, variables: [{ key: "API_TOKEN", source: "package.json", maskedValue: "••••••••" }], program: "node", args: ["server.js"], invalidVars: [], toVerify: ["API_TOKEN：疑似凭据"] }], errors: [], truncated: false } } });
   window.pidock = { taskOp };
   render(<DesktopEnvironmentPage projects={[{ id: "p1", name: "真实项目" }]} projectId="p1" taskCount={1} tasks={[{ taskId: "task-1", name: "真实任务" }]} onSelectProject={() => {}} />);
   expect(await screen.findByRole("option", { name: "invoice" })).toBeInTheDocument();
@@ -40,8 +40,8 @@ it("fills the new-template form only after the explicit draft action and never f
   const taskOp = vi.fn(async (_taskId: string, op: string) => op === "task/fileRoots"
     ? { ok: true, payload: { taskDir: "/task", roots: [{ id: "repo", kind: "worktree", label: "invoice", path: "/task/repo" }] } }
     : { ok: true, payload: { scan: { hints: [
-      { source: "package.json", name: "dev", runType: "long-lived", envKeys: ["API_TOKEN"], program: "node", args: ["server.js"], workdir: "apps/api", invalidVars: ["1BAD"], toVerify: ["API_TOKEN：疑似凭据"] },
-      { source: ".env", name: ".env", runType: null, envKeys: ["PORT"], program: "", args: [], invalidVars: [], toVerify: ["语法及业务读取点需人工核对"] },
+      { source: "package.json", name: "dev", runType: "long-lived", runTypeBasis: "名称含常驻关键字 dev/start/serve/watch", runTypeUncertain: false, variables: [{ key: "API_TOKEN", source: "package.json", maskedValue: "••••••••" }], program: "node", args: ["server.js"], workdir: "apps/api", invalidVars: ["1BAD"], toVerify: ["API_TOKEN：疑似凭据"] },
+      { source: ".env", name: ".env", runType: null, runTypeBasis: "配置文件本身不是运行单元", runTypeUncertain: false, variables: [{ key: "PORT", source: ".env", maskedValue: "••••••••" }], program: "", args: [], invalidVars: [], toVerify: ["语法及业务读取点需人工核对"] },
     ], errors: [], truncated: false } } });
   window.pidock = { taskOp, serviceCatalogOp };
   render(<DesktopEnvironmentPage projects={[{ id: "p1", name: "真实项目" }]} projectId="p1" taskCount={1} tasks={[{ taskId: "task-1", name: "真实任务" }]} onSelectProject={() => {}} />);
@@ -70,7 +70,7 @@ it("never claims the draft was filled when the template bridge is missing", asyn
   window.pidock = { taskOp: vi.fn(async (_taskId: string, op: string) => op === "task/fileRoots"
     ? { ok: true, payload: { taskDir: "/task", roots: [{ id: "repo", kind: "worktree", label: "invoice", path: "/task/repo" }] } }
     : { ok: true, payload: { scan: { hints: [
-      { source: "package.json", name: "dev", runType: "long-lived", envKeys: [], program: "node", args: ["server.js"], invalidVars: [], toVerify: [] },
+      { source: "package.json", name: "dev", runType: "long-lived", runTypeBasis: "名称含常驻关键字 dev/start/serve/watch", runTypeUncertain: false, variables: [], program: "node", args: ["server.js"], invalidVars: [], toVerify: [] },
     ], errors: [], truncated: false } } }) };
   render(<DesktopEnvironmentPage projects={[{ id: "p1", name: "真实项目" }]} projectId="p1" taskCount={1} tasks={[{ taskId: "task-1", name: "真实任务" }]} onSelectProject={() => {}} />);
   await screen.findByRole("option", { name: "invoice" });
@@ -87,7 +87,7 @@ it("re-applies the same scanned draft after the filled form is closed", async ()
   window.pidock = { serviceCatalogOp, taskOp: vi.fn(async (_taskId: string, op: string) => op === "task/fileRoots"
     ? { ok: true, payload: { taskDir: "/task", roots: [{ id: "repo", kind: "worktree", label: "invoice", path: "/task/repo" }] } }
     : { ok: true, payload: { scan: { hints: [
-      { source: "package.json", name: "dev", runType: "long-lived", envKeys: [], program: "node", args: ["server.js"], invalidVars: [], toVerify: [] },
+      { source: "package.json", name: "dev", runType: "long-lived", runTypeBasis: "名称含常驻关键字 dev/start/serve/watch", runTypeUncertain: false, variables: [], program: "node", args: ["server.js"], invalidVars: [], toVerify: [] },
     ], errors: [], truncated: false } } }) };
   render(<DesktopEnvironmentPage projects={[{ id: "p1", name: "真实项目" }]} projectId="p1" taskCount={1} tasks={[{ taskId: "task-1", name: "真实任务" }]} onSelectProject={() => {}} />);
   await screen.findByRole("option", { name: "invoice" });
@@ -106,12 +106,13 @@ it("shows .env as configuration-only key hints and never a runnable service", as
   window.pidock = { taskOp: vi.fn(async (_taskId, op) => op === "task/fileRoots"
     ? { ok: true, payload: { taskDir: "/task", roots: [{ id: "repo", kind: "worktree", label: "api", path: "/task/repo" }] } }
     : { ok: true, payload: { scan: { hints: [{ source: ".env", name: ".env", runType: null,
-      envKeys: ["API_TOKEN", "PORT"], program: "", args: [], invalidVars: [], toVerify: ["语法及业务读取点需人工核对"] }], errors: [], truncated: false } } }) };
+      runTypeBasis: "配置文件本身不是运行单元", runTypeUncertain: false, variables: [{ key: "API_TOKEN", source: ".env", maskedValue: "••••••••" }, { key: "PORT", source: ".env", maskedValue: "••••••••" }], program: "", args: [], invalidVars: [], toVerify: ["语法及业务读取点需人工核对"] }], errors: [], truncated: false } } }) };
   render(<DesktopEnvironmentPage projects={[{ id: "p1", name: "真实项目" }]} projectId="p1" taskCount={1} tasks={[{ taskId: "task-1", name: "真实任务" }]} onSelectProject={() => {}} />);
   expect(await screen.findByRole("option", { name: "api" })).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "扫描仓库" }));
-  expect(await screen.findByText("变量键：API_TOKEN、PORT")).toBeInTheDocument();
+  expect(await screen.findByText("变量：API_TOKEN（来源 .env · 值 ••••••••）、PORT（来源 .env · 值 ••••••••）")).toBeInTheDocument();
   expect(screen.getByText("配置来源")).toBeInTheDocument();
+  expect(screen.getByText("配置文件本身不是运行单元")).toBeInTheDocument();
   expect(screen.queryByText("常驻服务")).toBeNull();
   expect(screen.queryByText("一次性命令")).toBeNull();
   expect(screen.queryByText("准备步骤")).toBeNull();
@@ -124,7 +125,7 @@ it("discards a late scan from a different task and refuses malformed Host data",
   const taskOp = vi.fn(async (taskId: string, op: string) => {
     if (op === "task/fileRoots") return { ok: true, payload: { taskDir: "/task", roots: [{ id: taskId, kind: "worktree", label: taskId, path: `/task/${taskId}` }] } };
     if (taskId === "task-1") return first;
-    return { ok: true, payload: { scan: { hints: [{ source: "package.json", name: "invalid", runType: "running", envKeys: [], program: "", args: [], invalidVars: [], toVerify: [] }], errors: [], truncated: false } } };
+    return { ok: true, payload: { scan: { hints: [{ source: "package.json", name: "invalid", runType: "running", runTypeBasis: "未匹配常驻或准备关键字，按一次性命令处理", runTypeUncertain: false, variables: [], program: "", args: [], invalidVars: [], toVerify: [] }], errors: [], truncated: false } } };
   });
   window.pidock = { taskOp };
   const projects = [{ id: "p1", name: "真实项目" }];
@@ -134,7 +135,7 @@ it("discards a late scan from a different task and refuses malformed Host data",
   fireEvent.click(screen.getByRole("button", { name: "扫描仓库" }));
   fireEvent.change(screen.getByLabelText("扫描任务"), { target: { value: "task-2" } });
   await waitFor(() => expect(screen.getByLabelText("扫描仓库来源")).toHaveValue("task-2"));
-  finishFirst?.({ ok: true, payload: { scan: { hints: [{ source: "package.json", name: "stale-dev", runType: "long-lived", envKeys: [], program: "", args: [], invalidVars: [], toVerify: [] }], errors: [], truncated: false } } });
+  finishFirst?.({ ok: true, payload: { scan: { hints: [{ source: "package.json", name: "stale-dev", runType: "long-lived", runTypeBasis: "名称含常驻关键字 dev/start/serve/watch", runTypeUncertain: false, variables: [], program: "", args: [], invalidVars: [], toVerify: [] }], errors: [], truncated: false } } });
   await waitFor(() => expect(screen.queryByText("stale-dev")).toBeNull());
   fireEvent.click(screen.getByRole("button", { name: "扫描仓库" }));
   expect(await screen.findByRole("alert")).toHaveTextContent("Host 导入草案响应无法核对");
@@ -158,4 +159,30 @@ it("does not claim an empty environment when there is no Project", () => {
   expect(screen.getByText("尚无项目上下文")).toBeInTheDocument();
   expect(screen.getByRole("option", { name: "环境清单未接线" })).toBeInTheDocument();
   expect(screen.queryByText("暂无环境")).toBeNull();
+});
+
+// [PiDock 04] (#7 box 2) an unclassifiable candidate is shown as unclassified;
+// the page never presents it as a resident service and the fill keeps the
+// conservative category with the reason attached.
+it("shows an unclassified candidate as 待确认 and fills the conservative category, never 常驻服务", async () => {
+  const serviceCatalogOp = vi.fn(async (request: Record<string, unknown>) => request["op"] === "list" ? { ok: true, payload: [] } : { ok: true, payload: [] });
+  const taskOp = vi.fn(async (_taskId: string, op: string) => op === "task/fileRoots"
+    ? { ok: true, payload: { taskDir: "/task", roots: [{ id: "repo", kind: "worktree", label: "api", path: "/task/repo" }] } }
+    : { ok: true, payload: { scan: { hints: [{ source: "compose.yaml", name: "database", runType: "one-shot",
+      runTypeBasis: "配置未给出启动命令，无法判定运行类型", runTypeUncertain: true,
+      variables: [{ key: "POSTGRES_PASSWORD", source: "compose.yaml", maskedValue: "••••••••" }],
+      program: "", args: [], invalidVars: [], toVerify: ["「database」：配置未给出启动命令，无法判定运行类型；请人工选择常驻服务、一次性命令或准备步骤"] }],
+      errors: [], truncated: false } } });
+  window.pidock = { taskOp, serviceCatalogOp };
+  render(<DesktopEnvironmentPage projects={[{ id: "p1", name: "真实项目" }]} projectId="p1" taskCount={1} tasks={[{ taskId: "task-1", name: "真实任务" }]} onSelectProject={() => {}} />);
+  await screen.findByRole("option", { name: "api" });
+  fireEvent.click(screen.getByRole("button", { name: "扫描仓库" }));
+  expect(await screen.findByText("一次性命令（待确认）")).toBeInTheDocument();
+  expect(screen.queryByText("常驻服务")).toBeNull();
+  expect(screen.getByText("配置未给出启动命令，无法判定运行类型")).toBeInTheDocument();
+  // A credential's value is never rendered, only its source and the mask.
+  expect(screen.getByText(/变量：POSTGRES_PASSWORD（来源 compose\.yaml · 值 ••••••••）/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "填入新建模板" }));
+  expect(await screen.findByLabelText("运行类型")).toHaveValue("one-shot");
+  expect(screen.getByText(/该草案未给出可判定的启动命令，已按最保守的一次性命令填入；请人工选择运行类型/)).toBeInTheDocument();
 });

@@ -51,6 +51,7 @@ import { lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, writeFil
 import { dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import type { PiApproval, PiApprovalScope, PiGateDecision, PiPermission } from "../main/pi-session.js";
 import { AGENT_TOOL_SCOPE, SERVICE_CONTROL_SCOPE } from "../main/pi-session.js";
+import { SERVICE_VALUE_MASK } from "../main/service-config.js";
 import type { ControlExecutionPort } from "./execution-ledger.js";
 import { isCredentialEnvName } from "./explicit-text-provider.js";
 import { normalizeScopePath } from "./path-coordination.js";
@@ -88,6 +89,8 @@ const SERVICE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const MAX_SERVICE_LOG_LIMIT = 100;
 const DEFAULT_SERVICE_LOG_LIMIT = 40;
 const MAX_SERVICE_LOG_BYTES = 8 * 1024;
+/** Bounded env disclosure in `service.status`: 80 shared + 80 private rows exist at most. */
+const MAX_AGENT_ENV_ROWS = 40;
 /** Write-irrelevant device paths a command may still name. */
 const COMMAND_DEVICE_ALLOWLIST = new Set(["/dev/null"]);
 
@@ -1064,6 +1067,12 @@ export class SdkAgentToolBroker {
   private async executeServiceStatus(host: SdkAgentServiceHost, serviceId: string): Promise<SdkAgentToolOutcome> {
     const record = host.services.get(serviceId);
     if (!record) return refuse("tool-refused:unknown-service", `${serviceId} 不是本任务绑定的服务`);
+    // [PiDock 04] (#7 box 3) the Agent sees which variables the service resolves
+    // and which layer each one came from, but never a value: the model output
+    // carries the same mask the page shows for a private row. Only keys and
+    // provenance cross back.
+    const envRows = record.resolved.slice(0, MAX_AGENT_ENV_ROWS);
+    const omitted = record.resolved.length - envRows.length;
     return {
       outcome: "ok",
       text: [
@@ -1077,6 +1086,11 @@ export class SdkAgentToolBroker {
         record.dependencyNote === undefined
           ? "dependency: not probed (reachability is never reported as process liveness)"
           : `dependency: ${record.dependencyNote} (reachability note only; process liveness stays ${record.lifecycle})`,
+        envRows.length === 0
+          ? "env: 无已解析的环境变量行"
+          : `env: ${String(record.resolved.length)} 行；只发送变量名、来源与遮蔽值（真实值不进入模型输出）`,
+        ...envRows.map((row) => `  ${row.key} · 来源 ${row.source} · ${SERVICE_VALUE_MASK}`),
+        ...(omitted > 0 ? [`  另有 ${String(omitted)} 行未在此输出中列出`] : []),
       ].join("\n"),
     };
   }

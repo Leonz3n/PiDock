@@ -1,10 +1,14 @@
 import { expect, it } from "vitest";
 import { serviceImportScanFromHost } from "../data/serviceImportHints";
 
-const hint = { source: "package.json", name: "dev", runType: "long-lived", envKeys: ["PORT"], program: "node", args: ["server.js"], invalidVars: [], toVerify: ["人工核对"] };
+const variables = [{ key: "PORT", source: "package.json", maskedValue: "••••••••" }];
+const hint = { source: "package.json", name: "dev", runType: "long-lived", runTypeBasis: "名称含常驻关键字 dev/start/serve/watch",
+  runTypeUncertain: false, variables, program: "node", args: ["server.js"], invalidVars: [], toVerify: ["人工核对"] };
 const reply = { scan: { hints: [hint], errors: [], truncated: false } };
 
-const config = { source: ".env", name: ".env", runType: null as null, envKeys: ["API_TOKEN", "PORT"], program: "", args: [] as string[], invalidVars: [], toVerify: [] };
+const config = { source: ".env", name: ".env", runType: null as null, runTypeBasis: "配置文件本身不是运行单元", runTypeUncertain: false,
+  variables: [{ key: "API_TOKEN", source: ".env", maskedValue: "••••••••" }, { key: "PORT", source: ".env", maskedValue: "••••••••" }],
+  program: "", args: [] as string[], invalidVars: [], toVerify: [] };
 
 it("accepts config-only root .env hints without weakening the six command-source contracts", () => {
   const scan = (hints: unknown[]) => ({ scan: { hints, errors: [], truncated: false } });
@@ -13,13 +17,18 @@ it("accepts config-only root .env hints without weakening the six command-source
     expect(serviceImportScanFromHost(scan([{ ...config, runType }]))).toBeNull();
   }
   for (const source of ["package.json", ".vscode/launch.json", "compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml"]) {
-    expect(serviceImportScanFromHost(scan([{ ...hint, source, runType: null }]))).toBeNull();
-    expect(serviceImportScanFromHost(scan([{ ...hint, source }]))?.hints).toHaveLength(1);
+    const renamed = { ...hint, source, variables: variables.map((row) => ({ ...row, source })) };
+    expect(serviceImportScanFromHost(scan([{ ...renamed, runType: null }]))).toBeNull();
+    expect(serviceImportScanFromHost(scan([renamed]))?.hints).toHaveLength(1);
   }
-  for (const envKeys of [["bad-key"], ["1BAD"], ["A".repeat(101)]]) {
-    expect(serviceImportScanFromHost(scan([{ ...config, envKeys }]))).toBeNull();
+  for (const variables of [[{ key: "bad-key", source: ".env", maskedValue: "••••••••" }],
+    [{ key: "1BAD", source: ".env", maskedValue: "••••••••" }],
+    [{ key: "A".repeat(101), source: ".env", maskedValue: "••••••••" }]]) {
+    expect(serviceImportScanFromHost(scan([{ ...config, variables }]))).toBeNull();
   }
   expect(serviceImportScanFromHost(scan([{ ...config, source: ".env.local" }]))).toBeNull();
+  // A configuration-only source is never an unclassified run unit.
+  expect(serviceImportScanFromHost(scan([{ ...config, runTypeUncertain: true }]))).toBeNull();
 });
 
 it("accepts one bounded read error for each fixed configuration source", () => {
@@ -55,4 +64,36 @@ it("keeps the redacted command candidate and the repo-relative workdir strict", 
   expect(serviceImportScanFromHost({ scan: { hints: [{ ...config, program: "node" }], errors: [], truncated: false } })).toBeNull();
   expect(serviceImportScanFromHost({ scan: { hints: [{ ...config, args: ["server.js"] }], errors: [], truncated: false } })).toBeNull();
   expect(serviceImportScanFromHost({ scan: { hints: [{ ...config, workdir: "apps/api" }], errors: [], truncated: false } })).toBeNull();
+});
+
+// [PiDock 04] (#7 box 3) the page shows provenance and a masked value, and the
+// mask is a wire invariant: a reply that carries a real value is refused whole.
+it("refuses any variable row that is not source-plus-mask, so a value can never render as masked", () => {
+  const scan = (hints: unknown[]) => ({ scan: { hints, errors: [], truncated: false } });
+  const row = { key: "API_TOKEN", source: "package.json", maskedValue: "••••••••" };
+  expect(serviceImportScanFromHost(scan([{ ...hint, variables: [row] }]))?.hints[0]?.variables).toEqual([row]);
+  for (const maskedValue of ["synthetic-secret-token", "", "•••••••", 7, undefined]) {
+    expect(serviceImportScanFromHost(scan([{ ...hint, variables: [{ ...row, maskedValue }] }]))).toBeNull();
+  }
+  // Provenance is per row and must match the file the hint was scanned from.
+  expect(serviceImportScanFromHost(scan([{ ...hint, variables: [{ ...row, source: "compose.yaml" }] }]))).toBeNull();
+  expect(serviceImportScanFromHost(scan([{ ...hint, variables: [{ ...row, source: undefined }] }]))).toBeNull();
+  // Extra fields, duplicate keys and an over-long list are foreign replies.
+  expect(serviceImportScanFromHost(scan([{ ...hint, variables: [{ ...row, value: "synthetic-secret-token" }] }]))).toBeNull();
+  expect(serviceImportScanFromHost(scan([{ ...hint, variables: [row, row] }]))).toBeNull();
+  expect(serviceImportScanFromHost(scan([{ ...hint, variables: Array(101).fill(row) }]))).toBeNull();
+  expect(serviceImportScanFromHost(scan([{ ...hint, variables: undefined }]))).toBeNull();
+});
+
+// [PiDock 04] (#7 box 2) an unclassified candidate must be readable as such.
+it("keeps the run-type basis and the unclassified flag strict", () => {
+  const scan = (hints: unknown[]) => ({ scan: { hints, errors: [], truncated: false } });
+  const uncertain = { ...hint, runType: "one-shot", runTypeBasis: "配置未给出启动命令，无法判定运行类型", runTypeUncertain: true };
+  expect(serviceImportScanFromHost(scan([uncertain]))?.hints[0]).toMatchObject({ runType: "one-shot", runTypeUncertain: true });
+  for (const runTypeUncertain of [undefined, "false", 1]) {
+    expect(serviceImportScanFromHost(scan([{ ...hint, runTypeUncertain }]))).toBeNull();
+  }
+  for (const runTypeBasis of [undefined, "a".repeat(101)]) {
+    expect(serviceImportScanFromHost(scan([{ ...hint, runTypeBasis }]))).toBeNull();
+  }
 });

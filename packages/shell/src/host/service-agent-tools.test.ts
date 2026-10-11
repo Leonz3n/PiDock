@@ -255,6 +255,13 @@ it("starts the task's bound service through the gate with a real child, reads it
   expect(status.text).toContain("launchSource: catalog");
   // (5) Attribution: the Agent path is labelled with the session it was decided for.
   expect(status.text).toContain("lastControl: agent:main (start)");
+  // (3) Provenance and a masked value: the Agent reads which layer each variable
+  // came from, and no resolved value - shared or private - reaches the model.
+  expect(status.text).toContain("env: 3 行");
+  expect(status.text).toContain("SERVICE_GREETING · 来源 共享模板 · ••••••••");
+  expect(status.text).toContain("SERVICE_TOKEN · 来源 本机私有配置 · ••••••••");
+  expect(status.text).not.toContain("synthetic-private-value");
+  expect(status.text).not.toContain("hello-a");
 
   const logs = await untilTool(
     () => f.call("service.logs", { serviceId: f.serviceId, limit: 10 }),
