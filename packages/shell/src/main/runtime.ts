@@ -44,6 +44,7 @@ import { ServiceCatalog, serviceCatalogAuthority } from "./service-catalog.js";
 import { InstalledServiceHostAuthority, type ServiceOwnerChange, type ServiceOwnerDurableRecord } from "./service-host-binding.js";
 import { parseServiceOwnerRebindRequest, performServiceBindingOperation, performServiceCatalogOperation, performServiceConfigPreview, parseServiceRunRequest } from "./service-catalog-ipc.js";
 import { loadExternalEditorSettings, type ExternalEditorSettingsResult } from "./external-editor.js";
+import { performEditorSettingsOperation } from "./external-editor-settings.js";
 import { performProjectOperation } from "./project-ipc.js";
 import type { ProviderWiring } from "./provider-ipc.js";
 import { ProjectTaskCreation } from "./project-task-creation.js";
@@ -1622,6 +1623,30 @@ export function registerIpc(
         origin,
       });
       return { ok: true as const, payload: result };
+    } catch (error) {
+      if (error instanceof TrustDomainViolation) return trustFailureEnvelope(error);
+      return { ok: false as const, error: errorMessage(error) };
+    }
+  });
+
+  // [PiDock 10] (#15 box 28) 外部编辑器的本机设置：the WRITE path for the very
+  // program `shell/openTaskEditor` launches. Until this entry existed the
+  // launch read a document nothing in the app could write, so the box was only
+  // reachable by hand-editing an app-private file; the save now writes the SAME
+  // document, atomically, after validating the program with the launch's own
+  // rules (a refused save writes nothing, so a valid setting is never replaced
+  // by something that cannot launch).
+  //
+  // Same boundary as `shell/providerOp`: the sender must be the attested shell
+  // webContents, the operation set is fixed, extra keys are refused, and the
+  // document path is main's own — page code names a program, never a file. It
+  // is deliberately NOT a task op: nothing is added to the renderer task-op set
+  // (`HOST_TASK_OPS`), so `shell/taskOp` cannot carry this write at all.
+  ipcMain.handle("shell/editorSettingsOp", async (event, payload?: unknown) => {
+    try {
+      registry.requireShellSender(event);
+      const result = performEditorSettingsOperation(payload, app.getPath("userData"));
+      return result.ok ? { ok: true as const, payload: result.status } : { ok: false as const, error: result.error };
     } catch (error) {
       if (error instanceof TrustDomainViolation) return trustFailureEnvelope(error);
       return { ok: false as const, error: errorMessage(error) };

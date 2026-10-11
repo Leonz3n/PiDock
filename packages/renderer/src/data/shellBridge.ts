@@ -15,6 +15,15 @@ export interface ShellTaskOpResult {
   error?: string;
 }
 
+/**
+ * [PiDock 10] (#15 box 28) the exact editor-setting requests main accepts: the
+ * page names a program and its own args, never a file or a task op.
+ */
+export type EditorSettingsRequest =
+  | { op: "read" }
+  | { op: "clear" }
+  | { op: "save"; program: string; args?: string[] };
+
 export interface PidockBridge {
   getSecurityState?: () => { sandboxed: boolean; contextIsolated: boolean };
   getVersions?: () => Promise<unknown>;
@@ -50,6 +59,14 @@ export interface PidockBridge {
    * task-op set (`shell/taskOp` refuses `task/openEditor` by name).
    */
   openTaskEditor?: (request: { taskId: string; rootId: string }) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
+  /**
+   * [PiDock 10] (#15 box 28) the user's external-editor setting. The page names
+   * a program (and its own args) and nothing else: main validates it with the
+   * launch's own rules, probes it on disk, and writes its OWN machine-private
+   * document atomically. It is not a task op, so this write cannot travel on
+   * `taskOp`.
+   */
+  editorSettingsOp?: (request: EditorSettingsRequest) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
   taskOp?: (taskId: string, op: string, payload?: Record<string, unknown>) => Promise<ShellTaskOpResult>;
   sdkTurn?: (request: Record<string, unknown>) => Promise<ShellTaskOpResult>;
   onSdkTurnEvent?: (listener: (event: unknown) => void) => () => void;

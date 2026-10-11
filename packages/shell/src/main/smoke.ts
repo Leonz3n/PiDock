@@ -295,6 +295,7 @@ function validateShellProbe(
     JSON.stringify(bridgeKeys) !==
       JSON.stringify([
         "createTask",
+        "editorSettingsOp",
         "getSecurityState",
         "getVersions",
         "hostPing",
