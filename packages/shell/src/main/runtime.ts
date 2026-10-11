@@ -334,6 +334,21 @@ function trustFailureEnvelope(
 }
 
 /**
+ * A named refusal main resolved for one service operation - the Host's own
+ * control fence, an unsettled durable owner record, a catalog that cannot be
+ * resolved - is the page's only honest explanation for a refused start/stop or
+ * re-bind, so the `shell/serviceCatalogOp` branches that drive real child
+ * processes answer with it verbatim ([PiDock 04] #7 slice). A thrown
+ * non-refusal would otherwise collapse into the generic catalog-save message or
+ * the renderer's "request failed" fallback, which is exactly the untruthful
+ * copy this slice removes. A trust domain violation keeps its own envelope.
+ */
+function namedServiceRefusal(error: unknown): { ok: false; error: string } {
+  if (error instanceof TrustDomainViolation) throw error;
+  return { ok: false, error: error instanceof Error ? error.message : String(error) };
+}
+
+/**
  * Per-task Host registry for main ([PiDock 02] #5, S3a slice).
  *
  * One utilityProcess serves one task folder: the first `shell/taskOp` for
@@ -1115,13 +1130,14 @@ export async function rebindTaskServiceOwner(
 ): Promise<ServiceOwnerRebindProjection> {
   // Main resolves the task's own bindings: an unknown task, a foreign project or
   // a missing pinned revision refuses here with the catalog's named error, and
-  // no page-supplied identity is involved.
-  const names = new Map(catalog.taskBindings(request.projectId, request.taskId)
-    .map(({ binding, template }) => [binding.serviceId, template.descriptor.name]));
+  // no page-supplied identity is involved. Resolved after the state probe so the
+  // idempotent `absent`/`current` answer never depends on a catalog read.
   const state = tasks.serviceOwnerState(request.taskId);
   const base: ServiceOwnerRebindProjection = { taskId: request.taskId, projectId: request.projectId, state,
     confirmed: false, rebound: false, changes: [], stopsProcesses: false, restartsProcesses: false };
   if (state !== "fenced") return base;
+  const names = new Map(catalog.taskBindings(request.projectId, request.taskId)
+    .map(({ binding, template }) => [binding.serviceId, template.descriptor.name]));
   const changes = tasks.serviceOwnerChanges(request.taskId);
   if (!changes) throw new Error("service-owner-catalog-unavailable");
   const review: ServiceOwnerRebindProjection = { ...base, changes: changes.map((row) => ({ serviceId: row.serviceId,
@@ -1134,7 +1150,9 @@ export async function rebindTaskServiceOwner(
     .filter((owner) => owner.ownerSessionId !== null || (owner.state !== "stopped" && owner.state !== "exited"));
   if (live.length > 0) throw new Error(`service-owner-rebind-blocked: ${live.map((owner) => owner.serviceId).join(",")}`);
   const rebound = await tasks.rebindServiceOwner(request.taskId);
-  return { ...review, confirmed: true, rebound: rebound === "rebound" };
+  // The reported state is re-observed after the operation, so a caller never sees
+  // a stale `fenced` for a task whose control actually came back.
+  return { ...review, state: tasks.serviceOwnerState(request.taskId), confirmed: true, rebound: rebound === "rebound" };
 }
 
 /**
@@ -1595,6 +1613,12 @@ export function registerIpc(
           const result = await runTaskService(tasks, catalog, request, event.sender.id);
           live.require();
           return { ok: true as const, payload: result };
+        } catch (error) {
+          // The Host's own refusal (the owner fence, an uncertain durable
+          // owner, an operation already in flight) is the page's only honest
+          // explanation for a refused start/stop, so it reaches the page
+          // verbatim instead of the generic catalog-save message below.
+          return namedServiceRefusal(error);
         } finally { live.release(); }
       }
       // [PiDock 04] (#7 slice) the way back from a fenced task: after a write
@@ -1615,6 +1639,12 @@ export function registerIpc(
           const result = await rebindTaskServiceOwner(tasks, catalog, request);
           live.require();
           return { ok: true as const, payload: result };
+        } catch (error) {
+          // `service-owner-rebind-blocked: <serviceId>` (an unsettled durable
+          // owner) and `service-owner-catalog-unavailable` are the named
+          // refusals the page must show verbatim - a silent drop is exactly
+          // what this operation exists to prevent.
+          return namedServiceRefusal(error);
         } finally { live.release(); }
       }
       if (payload && typeof payload === "object" && ["bind", "taskBindings"].includes(String((payload as Record<string, unknown>)["op"]))) {

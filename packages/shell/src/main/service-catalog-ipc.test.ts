@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { parseServiceRunRequest, performServiceBindingOperation, performServiceCatalogOperation, performServiceConfigPreview } from "./service-catalog-ipc.js";
+import { parseServiceOwnerRebindRequest, parseServiceRunRequest, performServiceBindingOperation, performServiceCatalogOperation, performServiceConfigPreview } from "./service-catalog-ipc.js";
 import type { ServiceBindingAdoption, ServiceCatalog, ServiceTemplate, ServiceTemplateUpdateReview } from "./service-catalog.js";
 
 const template: ServiceTemplate = {
@@ -165,6 +165,35 @@ describe("shell service catalog request boundary", () => {
     ]) expect(() => performServiceCatalogOperation(catalog, request)).toThrow();
     expect(catalog.listTemplates).not.toHaveBeenCalled();
     expect(catalog.saveTemplate).not.toHaveBeenCalled();
+  });
+});
+
+// [PiDock 04] (#7 slice) the way back from a fenced task: identity plus a
+// confirmation flag only. No program, cwd, value, session or label may ride it.
+describe("shell service owner rebind request boundary", () => {
+  const valid = { op: "rebindServiceOwner", projectId: template.projectId, taskId: "task-1", confirm: false };
+  it("accepts exactly the project, the task and a boolean confirmation", () => {
+    expect(parseServiceOwnerRebindRequest(valid)).toEqual({ projectId: template.projectId, taskId: "task-1", confirm: false });
+    expect(parseServiceOwnerRebindRequest({ ...valid, confirm: true }).confirm).toBe(true);
+  });
+  it("rejects extra keys, another op and non-boolean confirmations before any main call", () => {
+    for (const invalid of [
+      { ...valid, programPath: "/tmp/executable" },
+      { ...valid, rootId: "repo-a" },
+      { ...valid, subdir: "src/api" },
+      { ...valid, privateRefs: [{ key: "API_TOKEN", envRef: "LOCAL_API_TOKEN" }] },
+      { ...valid, serviceId: template.serviceId },
+      { ...valid, sessionId: "main" },
+      { ...valid, label: "用户点击" },
+      { ...valid, op: "adoptBinding" },
+      { ...valid, confirm: "yes" },
+      { ...valid, confirm: undefined },
+      { ...valid, taskId: 7 },
+      { ...valid, taskId: "" },
+    ]) expect(() => parseServiceOwnerRebindRequest(invalid)).toThrow();
+    expect(() => parseServiceOwnerRebindRequest(undefined)).toThrow();
+    expect(() => parseServiceOwnerRebindRequest([valid])).toThrow();
+    expect(() => parseServiceOwnerRebindRequest({ ...valid, taskId: "t".repeat(4096) })).toThrow();
   });
 });
 

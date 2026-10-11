@@ -135,9 +135,11 @@ export class InstalledServiceHostAuthority {
     if (!prior || prior.taskId !== taskId || prior.exited) throw Error("service-owner-rebind-unavailable");
     if (this.state(child, taskId) === "current") return Promise.resolve("current");
     // Resolve the replacement before anything is torn down, so a catalog that
-    // cannot be resolved leaves the previous binding exactly as it is.
+    // cannot be resolved leaves the previous binding exactly as it is. A fenced
+    // binding is replaced even when its revision still matches the catalog (a
+    // forged or lost scope): this op exists to make start/stop work again, and
+    // the Host only accepts the replacement for the instance it actually holds.
     const snapshot = this.catalog.ownerSnapshot(taskId, this.workspaceId, this.env);
-    if (snapshot.catalogRevision === prior.scope?.catalogRevision) return Promise.resolve("current");
     const previousInstanceId = prior.scope?.instanceId;
     const store = this.recoveryStore();
     prior.detach();

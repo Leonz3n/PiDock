@@ -9,7 +9,7 @@ import { InstalledServiceHostAuthority } from "./service-host-binding.js";
 import { ServiceOwnerInventory } from "../host/service-owner-inventory.js";
 import { TaskWriteCoordinator } from "../host/write-coordination.js";
 import { ExperimentalServiceRecoveryStore } from "./service-recovery-store-experiment.js";
-import { serviceOwnerBootstrap, type ServiceOwnerBootstrap } from "../rpc/service-host-binding.js";
+import { serviceOwnerBootstrap, serviceOwnerRebind, type ServiceOwnerBootstrap } from "../rpc/service-host-binding.js";
 
 // Inject filesystem I/O faults at the external storage boundary, retaining real store/lease behavior.
 vi.mock("node:fs", async (importOriginal) => {
@@ -43,20 +43,36 @@ function connect(f: ReturnType<typeof fixture>) {
   let holdReports = false;
   const held: unknown[] = [];
   const subscribers = new Map<string | null, { receive(value: unknown): void; disconnected(): void }>();
-  const write: TaskWriteCoordinator = new TaskWriteCoordinator(() => inventory.resources());
-  const inventory = new ServiceOwnerInventory(f.workspaceId, f.taskId, f.taskDir, write, (s, serviceId) => ({
-    send: (request) => child.emit("message", { kind: "service-owner-request", workspaceId: s.workspaceId, taskId: s.taskId,
-      instanceId: s.instanceId, epoch: s.epoch, catalogRevision: s.catalogRevision, serviceId, request }),
-    subscribe: (receive, disconnected) => { subscribers.set(serviceId, { receive, disconnected }); return () => { subscribers.delete(serviceId); }; },
-  }));
+  const write: TaskWriteCoordinator = new TaskWriteCoordinator(() => current().resources());
+  let owner: ServiceOwnerInventory | null = null;
+  function makeOwner(): ServiceOwnerInventory {
+    return new ServiceOwnerInventory(f.workspaceId, f.taskId, f.taskDir, write, (s, serviceId) => ({
+      send: (request) => child.emit("message", { kind: "service-owner-request", workspaceId: s.workspaceId, taskId: s.taskId,
+        instanceId: s.instanceId, epoch: s.epoch, catalogRevision: s.catalogRevision, serviceId, request }),
+      subscribe: (receive, disconnected) => { subscribers.set(serviceId, { receive, disconnected }); return () => { subscribers.delete(serviceId); }; },
+    }));
+  }
+  const current = () => owner ??= makeOwner();
+  const inventory = current();
+  const announceReady = () => child.emit("message", { kind: "service-owner-ready", workspaceId: scope.workspaceId, taskId: scope.taskId,
+    instanceId: scope.instanceId, epoch: scope.epoch, catalogRevision: scope.catalogRevision });
   child.postMessage = (value) => {
     const row = value as Record<string, unknown>;
     if (row.kind === "service-owner-bootstrap") {
       scope = serviceOwnerBootstrap(value, f.workspaceId, f.taskId);
-      void inventory.bootstrap(scope).then(() => child.emit("message", { kind: "service-owner-ready", workspaceId: scope.workspaceId, taskId: scope.taskId,
-        instanceId: scope.instanceId, epoch: scope.epoch, catalogRevision: scope.catalogRevision }), () => inventory.fence());
+      void current().bootstrap(scope).then(announceReady, () => current().fence());
+    } else if (row.kind === "service-owner-rebind") {
+      // Mirror of the Host's own rebind: the replaced inventory is sealed and its
+      // transport released before the replacement subscribes.
+      const replaced = current();
+      replaced.seal(); replaced.fence();
+      for (const subscriber of [...subscribers.values()]) subscriber.disconnected();
+      subscribers.clear();
+      owner = null;
+      scope = serviceOwnerRebind(value, f.workspaceId, f.taskId, scope.instanceId);
+      void current().bootstrap(scope).then(announceReady, () => current().fence());
     } else if (row.kind === "service-owner-fenced") {
-      inventory.fence(); for (const subscriber of [...subscribers.values()]) subscriber.disconnected();
+      current().fence(); for (const subscriber of [...subscribers.values()]) subscriber.disconnected();
     } else if (row.kind === "service-owner-ack") {
       if (holdReports && row.serviceId === null) held.push(value);
       else subscribers.get(row.serviceId as string | null)!.receive(row.reply);
@@ -64,7 +80,7 @@ function connect(f: ReturnType<typeof fixture>) {
   };
   const main = new InstalledServiceHostAuthority(f.profile, f.catalog, f.authority, f.workspaceId, {});
   exits.push(() => child.emit("exit", 0)); dispose.push(() => main.disposeWhenExited());
-  return { child, main, inventory, write, scope: () => scope,
+  return { child, main, inventory, write, scope: () => scope, current,
     prepare: () => main.prepare(child as never, f.taskId),
     holdReportAck: () => { holdReports = true; },
     releaseReportAck: () => { for (const value of held.splice(0)) subscribers.get(null)!.receive((value as { reply: unknown }).reply); },
@@ -196,5 +212,68 @@ describe.skipIf(process.platform === "win32")("installed actual-child catalog / 
     expect(() => c.main.verify(c.child as never)).toThrow("service-owner-inventory-unconfirmed");
     expect(c.inventory.control().error).toBe("service-owner-inventory-unconfirmed");
     expect(c.write.claimWrite("main", "auto", { kind: "turn", label: "adopted" }).ok).toBe(false);
+  });
+  it("re-binds the fenced owner at the new revision in place, replaces its lease and stays idempotent", async () => {
+    const f = fixture(), first = f.add(), c = connect(f); await c.prepare();
+    const before = c.scope();
+    expect(c.main.state(c.child as never, f.taskId)).toBe("current");
+    // Nothing to replace: no scope, no lease and no child is touched.
+    expect(await c.main.rebind(c.child as never, f.taskId)).toBe("current");
+    expect(c.scope().instanceId).toBe(before.instanceId);
+    expect(c.main.changes(c.child as never, f.taskId)).toEqual([]);
+    // The write this slice exists for: adopting a newer revision moves the snapshot main pins,
+    // so the Host refuses control and every later start/stop is refused as well.
+    f.catalog.saveTemplate({ projectId: first.projectId, serviceId: first.serviceId, expectedVersion: 1,
+      descriptor: { ...first.descriptor, args: ["server-v2.js"] }, shared: [] });
+    f.catalog.adoptTaskBinding({ projectId: first.projectId, taskId: f.taskId, serviceId: first.serviceId, templateVersion: 2 });
+    expect(c.main.state(c.child as never, f.taskId)).toBe("fenced");
+    expect(c.inventory.control().error).toBe("service-owner-inventory-unconfirmed");
+    expect(c.write.claimWrite("main", "auto", { kind: "turn", label: "before rebind" }).ok).toBe(false);
+    expect(() => c.main.verify(c.child as never)).toThrow("service-owner-inventory-unconfirmed");
+    // The named change comes from the two real scopes (version + config digest), not from a claim.
+    const changes = c.main.changes(c.child as never, f.taskId);
+    expect(changes).toHaveLength(1);
+    expect(changes![0]).toMatchObject({ serviceId: first.serviceId, was: { templateVersion: 1 }, now: { templateVersion: 2 } });
+    expect(changes![0]!.was!.configRevision).not.toBe(changes![0]!.now!.configRevision);
+    // A durable inventory with nothing unsettled is what the safety gate reads.
+    expect(c.main.owners(c.child as never, f.taskId)).toEqual([]);
+    const replaced = c.scope();
+    expect(await c.main.rebind(c.child as never, f.taskId)).toBe("rebound");
+    const after = c.scope();
+    // The replaced owner and its lease are reaped: a new instance, a new durable epoch, the new revision.
+    expect(after.instanceId).not.toBe(replaced.instanceId);
+    expect(after.epoch).not.toBe(replaced.epoch);
+    expect(after.catalogRevision).not.toBe(replaced.catalogRevision);
+    expect(after.entries[0]).toMatchObject({ serviceId: first.serviceId, templateVersion: 2 });
+    // The same child process now owns the task again: the writer gate and the Host inventory both answer.
+    expect(c.main.state(c.child as never, f.taskId)).toBe("current");
+    expect(() => c.main.verify(c.child as never)).not.toThrow();
+    expect(c.current().control().error).toBe("service-execution-unavailable");
+    expect(c.current().status(first.serviceId)).toMatchObject({ ok: true, service: { state: "stopped" } });
+    expect(c.write.claimWrite("main", "auto", { kind: "turn", label: "after rebind" }).ok).toBe(true);
+    // The replaced inventory is sealed and fenced: it never becomes the task's authority again.
+    expect(c.inventory.control().error).toBe("service-host-closing");
+    expect(c.inventory.resources()[0]).toMatchObject({ resourceId: "service-owner-inventory", verificationRequired: true });
+    // Idempotent: a second confirmed re-bind replaces nothing and reuses the same scope and lease.
+    expect(await c.main.rebind(c.child as never, f.taskId)).toBe("current");
+    expect(c.scope().instanceId).toBe(after.instanceId);
+    expect(c.scope().epoch).toBe(after.epoch);
+    expect(c.current()).toBe(c.current());
+  });
+  it("refuses the retired owner's instance and epoch, and can still replace it afterwards", async () => {
+    const f = fixture(), first = f.add(), c = connect(f); await c.prepare();
+    const before = c.scope();
+    f.catalog.saveTemplate({ projectId: first.projectId, serviceId: first.serviceId, expectedVersion: 1,
+      descriptor: { ...first.descriptor, args: ["server-v2.js"] }, shared: [] });
+    f.catalog.adoptTaskBinding({ projectId: first.projectId, taskId: f.taskId, serviceId: first.serviceId, templateVersion: 2 });
+    expect(await c.main.rebind(c.child as never, f.taskId)).toBe("rebound");
+    // A message still carrying the replaced instance/epoch is a forgery of the retired owner: fail closed.
+    c.requests({ instanceId: before.instanceId, epoch: before.epoch });
+    expect(c.main.state(c.child as never, f.taskId)).toBe("fenced");
+    expect(() => c.main.verify(c.child as never)).toThrow("service-owner-inventory-unconfirmed");
+    // The durable lease was released, not leaked: the same task can still be re-bound.
+    expect(await c.main.rebind(c.child as never, f.taskId)).toBe("rebound");
+    expect(c.main.state(c.child as never, f.taskId)).toBe("current");
+    c.main.verify(c.child as never);
   });
 });
