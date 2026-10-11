@@ -95,7 +95,11 @@ export function serviceImportScanFromHost(payload: unknown): ServiceImportScanVi
       if (hint["runType"] !== null || hint["runTypeUncertain"] !== false || hint["name"] !== ".env" ||
           hint["invalidVars"].length || hint["program"] !== "" ||
           (hint["args"] as string[]).length || workdir !== undefined) return null;
-    } else if (!shortText(hint["runType"]) || !runTypes.has(hint["runType"])) return null;
+    } else if (!shortText(hint["runType"]) || !runTypes.has(hint["runType"]) ||
+      // The Host pairs `runTypeUncertain` only with the conservative
+      // `one-shot`; any other pair would render an unclassified candidate as a
+      // classified (or resident) service.
+      (hint["runTypeUncertain"] === true && hint["runType"] !== "one-shot")) return null;
     hints.push({ source: hint["source"], name: hint["name"], runType: hint["runType"] as ServiceImportHintView["runType"],
       runTypeBasis: hint["runTypeBasis"], runTypeUncertain: hint["runTypeUncertain"], variables,
       program: hint["program"], args: [...hint["args"]], ...(workdir === undefined ? {} : { workdir }),

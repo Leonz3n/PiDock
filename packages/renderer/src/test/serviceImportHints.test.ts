@@ -97,3 +97,15 @@ it("keeps the run-type basis and the unclassified flag strict", () => {
     expect(serviceImportScanFromHost(scan([{ ...hint, runTypeBasis }]))).toBeNull();
   }
 });
+
+// [PiDock 04] (#7 box 2) an unclassified hint stays `one-shot`: the Host never
+// pairs `runTypeUncertain` with a resident or prepare type, so a reply that does
+// is foreign and must not render as "常驻服务（待确认）".
+it("refuses an unclassified hint that claims a classified run type", () => {
+  const scan = (hints: unknown[]) => ({ scan: { hints, errors: [], truncated: false } });
+  const uncertain = { ...hint, runTypeBasis: "配置未给出启动命令，无法判定运行类型", runTypeUncertain: true };
+  expect(serviceImportScanFromHost(scan([{ ...uncertain, runType: "one-shot" }]))?.hints[0]?.runType).toBe("one-shot");
+  for (const runType of ["long-lived", "prepare"]) {
+    expect(serviceImportScanFromHost(scan([{ ...uncertain, runType }]))).toBeNull();
+  }
+});

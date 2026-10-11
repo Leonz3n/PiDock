@@ -69,7 +69,7 @@ function RepositoryImportDrafts({ tasks, pending, filled, onFillForm }: {
 
   return <section className="mt-8" aria-label="仓库配置草案">
     <div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-sm font-semibold">仓库配置草案</h2><Button type="button" size="sm" variant="outline" disabled={!selectedRoot || loadingRoots || loadingScan} onClick={() => void scanRepository()}><Icon name="file" />扫描仓库</Button></div>
-    <p className="mt-1 text-xs text-muted">扫描只读取仓库配置并给出候选：变量只有键名、命令已按去敏规则过滤。草案不会自动保存、绑定或启动，需由你显式填入上方「服务启动配方」的表单后逐项核对。</p>
+    <p className="mt-1 text-xs text-muted">扫描只读取仓库配置并给出候选：变量只保留键名与来源（值一律遮蔽），命令已按去敏规则过滤。草案不会自动保存、绑定或启动，需由你显式填入上方「服务启动配方」的表单后逐项核对。</p>
     {filled && <p role="status" className="mt-2 text-xs text-muted">已把草案「{filled}」填入上方新建模板表单；尚未保存。</p>}
     <div className="mt-3 flex flex-wrap gap-3 border-y border-line py-3 text-xs">
       <label className="flex min-w-0 items-center gap-2">任务<select aria-label="扫描任务" value={taskId} disabled={!tasks.length || pending} onChange={(event) => setRequestedTaskId(event.target.value)} className="min-h-8 max-w-[240px] min-w-0 rounded-[4px] border border-line bg-paper px-2 text-ink"><option value="" hidden>选择任务</option>{tasks.map((task) => <option key={task.taskId} value={task.taskId}>{task.name}</option>)}</select></label>
