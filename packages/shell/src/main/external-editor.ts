@@ -22,7 +22,9 @@
  *   the real path.
  *
  * Pure rules + the real read-only settings loader; the child process itself is
- * spawned Host-side (`host/open-editor.ts`).
+ * spawned Host-side (`host/open-editor.ts`), and the write side of the same
+ * document lives in `main/external-editor-settings.ts` so this module stays
+ * free of any write.
  */
 
 import { accessSync, constants, readFileSync, statSync } from "node:fs";
@@ -73,6 +75,25 @@ function editorNotConfigured(settingsPath: string): { ok: false; error: string }
       `editor-not-configured: 尚未配置外部编辑器程序，未启动任何程序；` +
       `请在 ${settingsPath} 写入 {"program": "/绝对路径/编辑器"} 后重试`,
   };
+}
+
+/**
+ * The ONE absolute-path rule the launch and the save path both apply: a
+ * program is a real absolute path with no `.`/`..` segment, so a relative name
+ * (which only a shell or `PATH` lookup could turn into a program) and any
+ * traversal are refused before a probe. Returns the refusal's reason, or
+ * `null` when the program is well-formed; each caller names its own refusal
+ * and states what did not happen (`未启动任何程序` / `未保存任何设置`).
+ */
+export function editorProgramPathRefusal(program: string): string | null {
+  return !isAbsolute(program) || program.split("/").some((part) => part === "." || part === "..")
+    ? `外部编辑器程序必须是绝对路径（${program}）`
+    : null;
+}
+
+/** The exact document a save writes and a launch reads (`{program, args?}`). */
+export function serializeEditorSettings(settings: ExternalEditorSettings): string {
+  return JSON.stringify(settings);
 }
 
 /** Strict shape check of the user's settings document (no unknown keys). */
@@ -127,6 +148,35 @@ export function loadExternalEditorSettings(profileDir: string): ExternalEditorSe
   return typeof parsed === "string"
     ? { ok: false, error: `editor-settings-invalid: ${path} 的${parsed}，未启动任何程序` }
     : { ok: true, settings: parsed };
+}
+
+/**
+ * Validate one editor program the USER is saving, with the launch's own rules
+ * so a stored value is always a value a launch can use.
+ *
+ * Fail-closed and named: a shape problem is `editor-settings-invalid`, a
+ * relative or traversing program is `editor-program-invalid`, and a document
+ * that would exceed the read cap the launch enforces is refused as
+ * `editor-settings-too-large` instead of being stored as a setting that could
+ * never be read back. The program's existence/executability is probed by the
+ * caller (`saveExternalEditorSetting`), which adds the launch's own
+ * `editor-program-not-found` / `editor-program-not-executable` names.
+ */
+export function validateEditorProgramChoice(input: { program: unknown; args: unknown }): ExternalEditorSettingsResult {
+  const candidate: Record<string, unknown> = { program: input.program };
+  if (input.args !== undefined) candidate["args"] = input.args;
+  const parsed = parseSettings(candidate);
+  if (typeof parsed === "string") return { ok: false, error: `editor-settings-invalid: ${parsed}，未保存任何设置` };
+  const pathRefusal = editorProgramPathRefusal(parsed.program);
+  if (pathRefusal !== null) return { ok: false, error: `editor-program-invalid: ${pathRefusal}，未保存任何设置` };
+  const document = serializeEditorSettings(parsed);
+  if (Buffer.byteLength(document, "utf8") > MAX_EDITOR_SETTINGS_BYTES) {
+    return {
+      ok: false,
+      error: `editor-settings-too-large: 配置超过 ${MAX_EDITOR_SETTINGS_BYTES} 字节，未保存任何设置`,
+    };
+  }
+  return { ok: true, settings: parsed };
 }
 
 /** Result of checking one configured program on the real filesystem. */
@@ -199,11 +249,9 @@ export function externalEditorPlan(input: {
   if (typeof parsed === "string") {
     return { ok: false, error: `editor-settings-invalid: ${parsed}，未启动任何程序` };
   }
-  if (!isAbsolute(parsed.program) || parsed.program.split("/").some((part) => part === "." || part === "..")) {
-    return {
-      ok: false,
-      error: `editor-program-invalid: 外部编辑器程序必须是绝对路径（${parsed.program}），未启动任何程序`,
-    };
+  const pathRefusal = editorProgramPathRefusal(parsed.program);
+  if (pathRefusal !== null) {
+    return { ok: false, error: `editor-program-invalid: ${pathRefusal}，未启动任何程序` };
   }
   const probed = input.probeProgram(parsed.program);
   if (probed === "missing") {

@@ -25,6 +25,13 @@ export const ALLOWED_INVOKE_CHANNELS = [
   // deliberately absent from the renderer task-op set and refused by name on
   // `shell/taskOp`, so page code can never name the program.
   "shell/openTaskEditor",
+  // [PiDock 10] (#15 box 28) the SAVE path for the editor program the launch
+  // reads. The page names a program (and its own args) and nothing else: main
+  // validates it with the launch's own rules, probes it on disk, and writes its
+  // OWN machine-private document atomically. It is not a task op — nothing is
+  // added to the renderer task-op set — so this write can never travel on
+  // `shell/taskOp`.
+  "shell/editorSettingsOp",
   "shell/providerOp",
   "shell/taskOp",
   "shell/sdkTurn",

@@ -423,7 +423,7 @@ function FilesTool({ taskId }: { taskId: string }) {
             >
               用外部编辑器打开
             </Button>
-            <span className="text-[10px] text-muted">程序来自本机用户配置，未写入或复制任何编辑器配置</span>
+            <span className="text-[10px] text-muted">程序来自本机用户配置（可在「本机设置 · 外部编辑器」中配置），未写入或复制任何编辑器配置</span>
           </div>
           {editorBusy && <p className="text-[11px] text-muted">正在启动外部编辑器…</p>}
           {editorError && (

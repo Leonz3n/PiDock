@@ -56,7 +56,7 @@ import { runSmoke } from "./smoke.js";
 // Captured native preload contract; these mocked probes test report validation,
 // not the actual renderer sandbox or native IPC authorization.
 const authorizedKeys = [
-  "createTask", "getSecurityState", "getVersions", "hostPing", "importTaskRoot",
+  "createTask", "editorSettingsOp", "getSecurityState", "getVersions", "hostPing", "importTaskRoot",
   "listTasks", "onHostStatus", "onSdkTurnEvent", "projectOp", "providerOp",
   "sdkTurn", "serviceCatalogOp", "taskOp",
 ];
