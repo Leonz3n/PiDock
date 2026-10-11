@@ -95,6 +95,18 @@ describe("#15 box 28 external editor setting in 本机设置", () => {
     expect(screen.queryByText("/tmp/Fake.app")).not.toBeInTheDocument();
   });
 
+  it("reads a failed read BY NAME as a failed field state instead of a permanent 正在读取", async () => {
+    // A hand-broken document makes the read fail by name (main refuses it as
+    // `editor-settings-invalid`); the field must not keep claiming it is still
+    // reading alongside the refusal.
+    bridge(vi.fn(async () => ({ ok: false, error: `editor-settings-invalid: ${SETTINGS_PATH} 不是合法 JSON，未启动任何程序` })));
+    render(<DesktopSettingsPage />);
+
+    expect(await screen.findByText(/editor-settings-invalid/)).toBeInTheDocument();
+    expect(screen.getByText("读取失败")).toBeInTheDocument();
+    expect(screen.queryByText("正在读取…")).not.toBeInTheDocument();
+  });
+
   it("clears the setting through the same op and returns the honest 未配置 state", async () => {
     const editorSettingsOp = vi.fn(async (request: Record<string, unknown>) =>
       request["op"] === "read"

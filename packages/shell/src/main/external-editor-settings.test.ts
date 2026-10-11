@@ -164,6 +164,23 @@ describe("#15 box 28 the external-editor setting save path", () => {
     expect(cleared.ok && cleared.status.program).toBeNull();
   });
 
+  it("refuses a document that is a directory BY NAME instead of a raw fs error", () => {
+    const dir = profile();
+    // A hand-made directory at the document path: `read` already refuses that
+    // state as `editor-settings-invalid`, so clearing must fail closed with the
+    // same name instead of letting rmSync throw ERR_FS_EISDIR.
+    mkdirSync(externalEditorSettingsPath(dir), { recursive: true });
+
+    expect(() => clearExternalEditorSetting(dir)).not.toThrow();
+    refused(clearExternalEditorSetting(dir), "editor-settings-invalid");
+    // Nothing was removed or half-removed: the path is exactly as it was.
+    expect(statSync(externalEditorSettingsPath(dir)).isDirectory()).toBe(true);
+
+    // The attested op answers the same way instead of crashing main.
+    expect(() => performEditorSettingsOperation({ op: "clear" }, dir)).not.toThrow();
+    refused(performEditorSettingsOperation({ op: "clear" }, dir), "editor-settings-invalid");
+  });
+
   it("refuses an unknown operation and any extra key instead of ignoring it", () => {
     const dir = profile();
     const cases: unknown[] = [
