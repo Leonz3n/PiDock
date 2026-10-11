@@ -74,7 +74,16 @@ function editorEnvironment(): NodeJS.ProcessEnv {
   return env;
 }
 
-/** Wait for the OS result of one spawn: confirmed start, or a named failure. */
+/**
+ * Wait for the OS result of one spawn: confirmed start, or a named failure.
+ *
+ * The `error` listener is deliberately NOT detached on settle: Node reports a
+ * `uv_spawn` failure (ENOENT/EACCES/EMFILE/EAGAIN/ENFILE) as a deferred event
+ * after `spawn()` has already returned, so an unhandled `error` here would
+ * throw inside this Host process — killing the process that owes the caller a
+ * refusal. `onError` is idempotent through `settled`, so the leftover listener
+ * is inert once the result is decided.
+ */
 function confirmSpawn(child: ReturnType<typeof spawn>): Promise<"spawned" | "failed"> {
   return new Promise((resolve) => {
     let settled = false;
@@ -83,7 +92,6 @@ function confirmSpawn(child: ReturnType<typeof spawn>): Promise<"spawned" | "fai
       settled = true;
       clearTimeout(timer);
       child.removeListener("spawn", onSpawn);
-      child.removeListener("error", onError);
       resolve(result);
     };
     const onSpawn = () => settle("spawned");

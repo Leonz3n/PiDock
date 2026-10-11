@@ -246,6 +246,8 @@ function FilesTool({ taskId }: { taskId: string }) {
   const [busy, setBusy] = useState(false);
   const [editor, setEditor] = useState<ExternalEditorLaunchView | null>(null);
   const [editorError, setEditorError] = useState<string | null>(null);
+  /** The launch is its own in-flight state: it is not a file read. */
+  const [editorBusy, setEditorBusy] = useState(false);
 
   const loadTree = useCallback(
     async (nextRootId: string, nextRelative: string) => {
@@ -352,9 +354,9 @@ function FilesTool({ taskId }: { taskId: string }) {
    */
   const openEditor = async () => {
     if (!rootId) return;
-    setBusy(true);
+    setEditorBusy(true);
     const result = await openTaskEditorThroughShell({ taskId, rootId });
-    setBusy(false);
+    setEditorBusy(false);
     if (!result.ok) {
       setEditor(null);
       setEditorError(shellFailure(result, "打开外部编辑器失败"));
@@ -415,7 +417,7 @@ function FilesTool({ taskId }: { taskId: string }) {
               type="button"
               variant="secondary"
               size="sm"
-              disabled={!rootId || busy}
+              disabled={!rootId || busy || editorBusy}
               onClick={() => void openEditor()}
               className="h-auto px-2 py-1 text-[11px]"
             >
@@ -423,6 +425,7 @@ function FilesTool({ taskId }: { taskId: string }) {
             </Button>
             <span className="text-[10px] text-muted">程序来自本机用户配置，未写入或复制任何编辑器配置</span>
           </div>
+          {editorBusy && <p className="text-[11px] text-muted">正在启动外部编辑器…</p>}
           {editorError && (
             <p role="status" className="border border-[#e0b4b4] bg-[#fdf3f3] px-2 py-1.5 text-[11px] text-[#8a3b3b]">
               {editorError}

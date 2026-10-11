@@ -250,6 +250,41 @@ describe("#15 box 28 external editor launch (real process)", () => {
     expect(execFileSync("readlink", [f.linkPath], { encoding: "utf8" }).trim()).toBe(f.sharedSourcePath);
   });
 
+  it("reports an OS spawn failure by name instead of letting its deferred 'error' event take the Host down", async () => {
+    const f = fixture();
+    // The probe→spawn window can lose the program (an app uninstalled or
+    // chmod'ed in between): the rules pass, the spawn does not, and Node
+    // reports that failure AFTER spawn() returned — as a deferred `error`
+    // event, which EventEmitter throws when nothing listens for it.
+    const absent = join(f.home, "absent-editor");
+    const inner = countingLauncher(nodeExternalEditorLauncher);
+    const uncaught: unknown[] = [];
+    const onUncaught = (error: unknown) => uncaught.push(error);
+    process.on("uncaughtException", onUncaught);
+    try {
+      const result = await openExternalEditor({
+        files: f.files,
+        payload: { rootId: REPO_DIR, editor: { program: absent } },
+        origin: { kind: "shell-ui", senderWebContentsId: 7 },
+        launcher: inner.launcher,
+        probeProgram: () => "executable",
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error).toContain("editor-spawn-failed");
+      expect(result.error).toContain(absent);
+      expect(inner.calls).toHaveLength(1);
+      // The refusal must survive the deferred event: give the OS time to
+      // deliver it, then assert this process saw no unhandled exception and
+      // that nothing was launched.
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      expect(uncaught).toEqual([]);
+      expect(existsSync(f.evidencePath)).toBe(false);
+    } finally {
+      process.removeListener("uncaughtException", onUncaught);
+    }
+  });
+
   it("refuses an unconfigured editor by name and spawns nothing", async () => {
     const f = fixture();
     const inner = countingLauncher(nodeExternalEditorLauncher);
