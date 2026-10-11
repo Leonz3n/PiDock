@@ -137,8 +137,7 @@ export type TerminalControlResultView = {
   instance?: TerminalInstanceView;
 };
 
-/** What the file panel renders for one task: roots plus the current selection. */
-export type WorkspaceBrowserView = {
+/** What the file panel renders for one task: roots plus the current selection. */export type WorkspaceBrowserView = {
   taskId: string;
   taskDir: string;
   roots: WorkspaceRootView[];
@@ -153,6 +152,32 @@ export type WorkspaceBrowserView = {
 };
 
 export type WorkspaceBrowserRequest = { rootId?: string; relative?: string };
+
+/**
+ * [PiDock 10] (#15 box 28) the receipt of one external-editor launch: the exact
+ * program + argv the Host spawned, where it opened, and what the launch
+ * discloses. The panel shows these real values; it never derives its own.
+ */
+export type ExternalEditorLaunchView = {
+  rootId: string;
+  rootKind: WorkspaceRootKindView;
+  program: string;
+  args: string[];
+  cwd: string;
+  /** The one path argument handed to the editor (a link's original target). */
+  openedPath: string;
+  attribution: WorkspaceAttributionView;
+  /** Shared-directory or worktree identity, as the Host stated it. */
+  disclosure: string;
+  /** The 盒子 28 rule: no editor configuration was read, written or copied. */
+  note: string;
+  /** Control attribution: the launch is a labelled human explicit action. */
+  actor: "human";
+  label: string;
+  started: true;
+  windowObserved: false;
+  pid?: number;
+};
 export type TerminalPlanRequest = {
   instanceId: string;
   rootId: string;
@@ -343,6 +368,61 @@ export function workspaceDeliveryFromHost(payload: unknown): WorkspaceDeliveryVi
     return undefined;
   }
   return { attribution: attributionView, repo, branch, autoCommit, autoPush, autoMerge };
+}
+
+/**
+ * Parse the `task/openEditor` launch receipt. Fail-closed: a receipt that is
+ * not the documented shape is dropped instead of being shown as a successful
+ * launch, so nothing here can display a fabricated program or path.
+ */
+export function externalEditorLaunchFromHost(payload: unknown): ExternalEditorLaunchView | undefined {
+  const source = record(payload);
+  const launch = source ? record(source["launch"]) : undefined;
+  if (!launch) return undefined;
+  const attributionView = attribution(launch["attribution"]);
+  const rootId = str(launch["rootId"]);
+  const rootKind = str(launch["rootKind"]);
+  const program = str(launch["program"]);
+  const args = strings(launch["args"]);
+  const cwd = str(launch["cwd"]);
+  const openedPath = str(launch["openedPath"]);
+  const disclosure = str(launch["disclosure"]);
+  const note = str(launch["note"]);
+  const label = str(launch["label"]);
+  if (
+    !attributionView ||
+    rootId === undefined ||
+    (rootKind !== "worktree" && rootKind !== "shared-dir") ||
+    program === undefined ||
+    args === undefined ||
+    cwd === undefined ||
+    openedPath === undefined ||
+    disclosure === undefined ||
+    note === undefined ||
+    label === undefined ||
+    launch["actor"] !== "human" ||
+    launch["started"] !== true ||
+    launch["windowObserved"] !== false
+  ) {
+    return undefined;
+  }
+  const pid = num(launch["pid"]);
+  return {
+    rootId,
+    rootKind,
+    program,
+    args,
+    cwd,
+    openedPath,
+    attribution: attributionView,
+    disclosure,
+    note,
+    actor: "human",
+    label,
+    started: true,
+    windowObserved: false,
+    ...(pid !== undefined ? { pid } : {}),
+  };
 }
 
 export function terminalPlanFromHost(payload: unknown): TerminalPlanView | undefined {

@@ -9,6 +9,7 @@ import {
   filePreviewThroughShell,
   fileRootsThroughShell,
   fileTreeThroughShell,
+  openTaskEditorThroughShell,
   planTerminalThroughShell,
   protocolStateThroughShell,
   serviceLogThroughShell,
@@ -28,12 +29,14 @@ import {
 import { ProtocolPanel, TerminalTakeoverPanel } from "./ToolPanels";
 import { ServiceOwnerRebind } from "./ServiceOwnerRebind";
 import {
+  externalEditorLaunchFromHost,
   terminalPlanFromHost,
   terminalStateFromHost,
   workspaceDiffFromHost,
   workspacePreviewFromHost,
   workspaceRootsFromHost,
   workspaceTreeFromHost,
+  type ExternalEditorLaunchView,
   type TerminalPlanView,
   type TerminalStateView,
   type WorkspaceAttributionView,
@@ -241,6 +244,8 @@ function FilesTool({ taskId }: { taskId: string }) {
   const [taskDir, setTaskDir] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [editor, setEditor] = useState<ExternalEditorLaunchView | null>(null);
+  const [editorError, setEditorError] = useState<string | null>(null);
 
   const loadTree = useCallback(
     async (nextRootId: string, nextRelative: string) => {
@@ -338,8 +343,34 @@ function FilesTool({ taskId }: { taskId: string }) {
   };
 
   const selectedRoot = roots?.find((root) => root.id === rootId);
-  if (roots === null) return <p className="text-xs text-muted">正在读取任务文件根…</p>;
 
+  /**
+   * [PiDock 10] (#15 box 28) 从任务打开外部编辑器. The page names the task and the
+   * selected root only: main reads the editor program from the user's own
+   * settings and launches it at the resolved root. The receipt (or the Host's
+   * named refusal) is what is shown — never an invented success.
+   */
+  const openEditor = async () => {
+    if (!rootId) return;
+    setBusy(true);
+    const result = await openTaskEditorThroughShell({ taskId, rootId });
+    setBusy(false);
+    if (!result.ok) {
+      setEditor(null);
+      setEditorError(shellFailure(result, "打开外部编辑器失败"));
+      return;
+    }
+    const view = externalEditorLaunchFromHost(result.payload);
+    if (!view) {
+      setEditor(null);
+      setEditorError("Host 外部编辑器响应无法解析");
+      return;
+    }
+    setEditor(view);
+    setEditorError(null);
+  };
+
+  if (roots === null) return <p className="text-xs text-muted">正在读取任务文件根…</p>;
   return (
     <div className="flex min-h-0 flex-col gap-2">
       {error && (
@@ -374,9 +405,48 @@ function FilesTool({ taskId }: { taskId: string }) {
               setRelative("");
               setPreview(null);
               setDiff(null);
+              setEditor(null);
+              setEditorError(null);
               void loadTree(next, "");
             }}
           />
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              disabled={!rootId || busy}
+              onClick={() => void openEditor()}
+              className="h-auto px-2 py-1 text-[11px]"
+            >
+              用外部编辑器打开
+            </Button>
+            <span className="text-[10px] text-muted">程序来自本机用户配置，未写入或复制任何编辑器配置</span>
+          </div>
+          {editorError && (
+            <p role="status" className="border border-[#e0b4b4] bg-[#fdf3f3] px-2 py-1.5 text-[11px] text-[#8a3b3b]">
+              {editorError}
+            </p>
+          )}
+          {editor && (
+            <section className="border border-line bg-paper p-2 text-[11px]">
+              <p className="text-muted">外部编辑器已启动（用户显式操作）</p>
+              <dl className="mt-1 grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-1">
+                <dt className="text-muted">程序</dt>
+                <dd className="min-w-0 break-all font-mono">{editor.program}</dd>
+                <dt className="text-muted">已打开</dt>
+                <dd className="min-w-0 break-all font-mono">{editor.openedPath}</dd>
+                <dt className="text-muted">工作目录</dt>
+                <dd className="min-w-0 break-all font-mono">{editor.cwd}</dd>
+                {editor.pid !== undefined && <>
+                  <dt className="text-muted">进程号</dt>
+                  <dd className="min-w-0 break-all font-mono">{editor.pid}</dd>
+                </>}
+              </dl>
+              <p className="mt-1 text-[10px] text-muted">{editor.disclosure}</p>
+              <p className="mt-1 text-[10px] text-muted">{editor.note}</p>
+            </section>
+          )}
           {busy && <p className="text-[11px] text-muted">读取中…</p>}
           {tree && rootId && (
             <TreeList
