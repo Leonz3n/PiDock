@@ -534,7 +534,13 @@ realIt("forgets a drained operation so the same terminal identity spawns fresh a
   // ninth real start fail as `terminal-not-started` with a runtime/preflight
   // blame that is not the real reason.
   const marker = 3273;
-  const f = new Fixture("reap", { stopGraceMs: 250, stopConfirmMs: 250 });
+  // The cadence is the driver's maximum so the only observations in this test are
+  // the explicit control-request ones below (each `input` snapshots before it
+  // dispatches). That is what makes this exit deterministically NOT covered: the
+  // last dispatched request is the newest evidence. With a live cadence a tick
+  // landing between the `exit` dispatch and the pty exit event would cover it and
+  // this receipt would flake to `tree-drained` under load.
+  const f = new Fixture("reap", { stopGraceMs: 250, stopConfirmMs: 250, observeCadenceMs: 30_000 });
   const plan = f.plan("term-1");
   const launch = {
     program: resolveProgram(plan.program, plan.env),
@@ -714,8 +720,18 @@ realIt("fails closed when a start plan daemonizes a descendant and exits inside 
   // equivalent: a detached child, which the OS puts into a brand-new session
   // that this driver cannot observe at all. The receipt must be `unknown` -
   // never `tree-drained` - while the daemon lives.
+  //
+  // The "no snapshot ever saw this root alive" premise is forced by the driver's
+  // own injected cadence instead of being hoped for from the plan's race against
+  // the production 500ms cadence. The cadence is set to the driver's maximum, so
+  // this driver's first possible observation is 30s after `spawn` - while the
+  // root's exit is awaited with an 8s bound below. No cadence tick can therefore
+  // complete before the receipt is decided, which is exactly the state a root
+  // that really exits inside one observation window leaves behind (under load a
+  // 500ms cadence can observe the root alive and legitimately report
+  // `tree-drained`).
   const marker = 3278;
-  const f = new Fixture("daemonize");
+  const f = new Fixture("daemonize", { observeCadenceMs: 30_000 });
   mkdirSync(join(f.taskDir, "work"), { recursive: true });
   const script = join(f.taskDir, "work", "daemonize.sh");
   writeFileSync(
@@ -887,6 +903,47 @@ it("never reports a fabricated exit code for a stop with no observed child exit"
     // `toEqual` already fails on a fabricated `0`; assert the absence directly so
     // the claim this test makes is unambiguous.
     expect(stopped).not.toHaveProperty("exitCode");
+  } finally {
+    killPid(leader.pid);
+  }
+});
+
+it("reports root-exited for a natural exit the last dispatched request did not cover", async () => {
+  // The other half of the covered/uncovered distinction, pinned without racing a
+  // cadence: with the cadence at the driver's maximum, the only snapshot this
+  // operation contributes is the one `input` takes before it dispatches, so that
+  // request is the newest evidence (`observations === requestFloor`). An exit
+  // there is `root-exited` - the root is verified gone with the code it really
+  // reported, while the window that request opened is explicitly NOT denied - and
+  // never `tree-drained`, which would claim whole-tree containment for that
+  // unobserved window.
+  const worker = new DriverWorker();
+  const leader = detachedGroupLeader();
+  let live = true;
+  const driver = new TerminalPtyDriver({
+    workspaceId: "workspace-unit", runtime: resolvePtyRuntime, spawnWorker: () => worker, observeCadenceMs: 30_000,
+    // One snapshot of the live root: the identity this operation can really
+    // observe. After `live` is cleared the root and every recorded identity are
+    // gone, which is the same table a really drained tree leaves.
+    processTable: () => (live ? [{ pid: leader.pid!, ppid: 1, pgid: leader.pid!, tty: "ttys901", state: "S" }] : []),
+    onOutput: () => {}, stopGraceMs: 100, stopConfirmMs: 100,
+  });
+  const receipts: TerminalDriverReceipt[] = [];
+  try {
+    const starting = driver.spawn(unitIdentity, unitLaunch, (receipt) => receipts.push(receipt));
+    worker.reply({ status: "started", rootPid: leader.pid });
+    expect(await starting).toEqual({ status: "started", process: { processId: leader.pid, processGroupId: leader.pid } });
+    // Land one completed observation, then clear the root so the exit below is
+    // not covered by any observation after this dispatched request.
+    const inputting = driver.input(unitIdentity, "echo covered\r");
+    live = false;
+    const inputRequest = worker.requests[1]!;
+    worker.reply({ status: "accepted" }, inputRequest);
+    await inputting;
+    worker.emit("message", { workspaceId: inputRequest["workspaceId"], identity: inputRequest["identity"],
+      operationId: inputRequest["operationId"], kind: "exit", exitCode: 0, signal: 0 });
+    await until(() => receipts.length > 0, 3000, "natural-exit receipt");
+    expect(receipts).toEqual([{ ...unitIdentity, status: "root-exited", exitCode: 0 }]);
   } finally {
     killPid(leader.pid);
   }
