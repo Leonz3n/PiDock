@@ -82,6 +82,14 @@ export interface ServiceTemplateUpdateReview {
   saved: boolean;
   /** True when a launcher field (program/args/ports/runType/healthCheck/workdir) changes. */
   descriptorChanged: boolean;
+  /**
+   * True when the minted revision differs from the current one in any field a
+   * launch resolves (`descriptorChanged` or a shared-row diff). An identical
+   * save mints a new revision number but changes no launch material, so it
+   * cannot invalidate a running task: `restartNeeded` stays empty for it
+   * instead of listing every binding that still pins the older revision.
+   */
+  contentChanged: boolean;
   diff: TemplateDiff;
   restartNeeded: { taskId: string; serviceId: string; name: string; from: number; to: number }[];
 }
@@ -500,9 +508,15 @@ export class ServiceCatalog {
     return this.reviewOfCurrent(current, next, minted.label);
   }
   private reviewOfCurrent(current: ServiceTemplate, next: ServiceTemplate, versionLabel: string): ServiceTemplateUpdateReview {
+    const descriptorChanged = JSON.stringify(current.descriptor) !== JSON.stringify(next.descriptor);
+    const diff = diffServiceTemplate(current.shared, next.shared);
+    const contentChanged = descriptorChanged || diff.added.length > 0 || diff.changed.length > 0 || diff.removed.length > 0;
     return { projectId: next.projectId, serviceId: next.serviceId, version: next.version, versionLabel, saved: false,
-      descriptorChanged: JSON.stringify(current.descriptor) !== JSON.stringify(next.descriptor),
-      diff: diffServiceTemplate(current.shared, next.shared), restartNeeded: this.restartNeededFor(next) };
+      descriptorChanged, contentChanged, diff,
+      // Restart-needed is a consequence of a real content change, not of the
+      // version counter: an identical save invalidates nothing, so it reports
+      // no restart instead of every binding that still pins the older number.
+      restartNeeded: contentChanged ? this.restartNeededFor(next) : [] };
   }
   /**
    * Task bindings of one service still pinned to an older revision: adopting

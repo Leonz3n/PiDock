@@ -119,6 +119,24 @@ export function serviceTemplatesFromMain(value: unknown, projectId: string): Ser
   return result;
 }
 
+/** The honest restart consequence of one shared-template write, computed and observed by main. */
+export interface ServiceRestartConsequenceView {
+  /** Whether the write changed the launch material of any binding at all. */
+  changed: boolean;
+  /** A shared-template save or a binding adoption never starts, stops or restarts a process. */
+  processRestarted: false;
+  /** Task ids whose forked service-control channel this write revoked; empty for a read-only review. */
+  fencedTaskIds: string[];
+}
+
+function restartConsequenceFromMain(value: unknown): ServiceRestartConsequenceView | null {
+  if (!object(value) || Object.keys(value).sort().join(",") !== "changed,fencedTaskIds,processRestarted") return null;
+  const ids = value["fencedTaskIds"];
+  if (typeof value["changed"] !== "boolean" || value["processRestarted"] !== false ||
+      !textList(ids, 500) || new Set(ids).size !== ids.length) return null;
+  return { changed: value["changed"], processRestarted: false, fencedTaskIds: [...ids] };
+}
+
 /** One pinned task binding whose service must be restarted before the new template takes effect. */
 export interface ServiceTemplateRestartRow {
   taskId: string;
@@ -136,8 +154,11 @@ export interface ServiceTemplateUpdateReviewView {
   /** False for a review, true only once main reports the revision written. */
   saved: boolean;
   descriptorChanged: boolean;
+  /** True only when the minted revision differs from the current one in any launched field. */
+  contentChanged: boolean;
   diff: { added: string[]; changed: { key: string; before: string; after: string }[]; removed: string[] };
   restartNeeded: ServiceTemplateRestartRow[];
+  restart: ServiceRestartConsequenceView;
 }
 
 function textList(value: unknown, max: number): value is string[] {
@@ -154,11 +175,13 @@ export function serviceTemplateUpdateFromMain(
   value: unknown, expected: { projectId: string; serviceId: string; version: number },
 ): ServiceTemplateUpdateReviewView | null {
   if (!object(value) || Object.keys(value).sort().join(",") !==
-      "descriptorChanged,diff,projectId,restartNeeded,saved,serviceId,version,versionLabel") return null;
+      "contentChanged,descriptorChanged,diff,projectId,restart,restartNeeded,saved,serviceId,version,versionLabel") return null;
   if (value["projectId"] !== expected.projectId || value["serviceId"] !== expected.serviceId ||
       value["version"] !== expected.version || typeof value["versionLabel"] !== "string" ||
       !/^v[1-9][0-9]*$/.test(value["versionLabel"]) || typeof value["saved"] !== "boolean" ||
-      typeof value["descriptorChanged"] !== "boolean") return null;
+      typeof value["descriptorChanged"] !== "boolean" || typeof value["contentChanged"] !== "boolean") return null;
+  const restart = restartConsequenceFromMain(value["restart"]);
+  if (!restart) return null;
   const diff = value["diff"];
   if (!object(diff) || Object.keys(diff).sort().join(",") !== "added,changed,removed" ||
       !textList(diff["added"], 80) || !textList(diff["removed"], 80) || !Array.isArray(diff["changed"]) || diff["changed"].length > 80) return null;
@@ -181,7 +204,8 @@ export function serviceTemplateUpdateFromMain(
   }
   return { projectId: expected.projectId, serviceId: expected.serviceId, version: expected.version,
     versionLabel: value["versionLabel"], saved: value["saved"], descriptorChanged: value["descriptorChanged"],
-    diff: { added: [...diff["added"]], changed, removed: [...diff["removed"]] }, restartNeeded: restarts };
+    contentChanged: value["contentChanged"],
+    diff: { added: [...diff["added"]], changed, removed: [...diff["removed"]] }, restartNeeded: restarts, restart };
 }
 
 /**
@@ -194,10 +218,12 @@ export function serviceTemplateUpdateFromMain(
 export function serviceBindingAdoptionFromMain(
   value: unknown, expected: { taskId: string; serviceId: string; from: number; to: number },
 ): ServiceBindingAdoptionView | null {
-  if (!object(value) || Object.keys(value).sort().join(",") !== "adopted,from,restartNeeded,serviceId,taskId,to") return null;
+  if (!object(value) || Object.keys(value).sort().join(",") !== "adopted,from,restart,restartNeeded,serviceId,taskId,to") return null;
   if (value["taskId"] !== expected.taskId || value["serviceId"] !== expected.serviceId ||
       value["from"] !== expected.from || value["to"] !== expected.to || value["from"] === value["to"] ||
       typeof value["adopted"] !== "boolean") return null;
+  const restart = restartConsequenceFromMain(value["restart"]);
+  if (!restart) return null;
   const rows = value["restartNeeded"];
   if (!Array.isArray(rows) || rows.length > 500) return null;
   const restarts: ServiceTemplateRestartRow[] = [];
@@ -211,7 +237,53 @@ export function serviceBindingAdoptionFromMain(
       from: entry["from"] as number, to: entry["to"] as number });
   }
   return { taskId: expected.taskId, serviceId: expected.serviceId, from: expected.from, to: expected.to,
-    adopted: value["adopted"], restartNeeded: restarts };
+    adopted: value["adopted"], restartNeeded: restarts, restart };
+}
+
+/** One explicit re-bind of a task's service owner ([PiDock 04] #7 slice): main's real observation, what it changes and whether the confirmed replacement ran. */
+export interface ServiceOwnerRebindView {
+  taskId: string;
+  projectId: string;
+  state: "absent" | "current" | "fenced";
+  confirmed: boolean;
+  rebound: boolean;
+  /** Named services whose resolved owner contract differs between the replaced owner and the catalog now. */
+  changes: { serviceId: string; name: string; was: number | null; now: number | null }[];
+  /** Copy facts: the re-bind replaces only the ownership binding. */
+  stopsProcesses: false;
+  restartsProcesses: false;
+}
+
+/**
+ * Strict parse of main's `{op:"rebindServiceOwner"}` answer. The identity, the
+ * three real states and the two copy facts are required, and every change row
+ * must name a service on this task, so the page can never render a re-bind main
+ * did not report; an unparseable answer leaves the panel on its previous state
+ * instead of claiming control came back.
+ */
+export function serviceOwnerRebindFromMain(value: unknown, expected: { taskId: string; projectId: string }): ServiceOwnerRebindView | null {
+  if (!object(value) || Object.keys(value).sort().join(",") !==
+      "changes,confirmed,projectId,rebound,restartsProcesses,state,stopsProcesses,taskId") return null;
+  if (value["taskId"] !== expected.taskId || value["projectId"] !== expected.projectId ||
+      !["absent", "current", "fenced"].includes(value["state"] as string) ||
+      typeof value["confirmed"] !== "boolean" || typeof value["rebound"] !== "boolean" ||
+      value["stopsProcesses"] !== false || value["restartsProcesses"] !== false ||
+      (value["rebound"] === true && value["confirmed"] !== true)) return null;
+  const rows = value["changes"];
+  if (!Array.isArray(rows) || rows.length > 500) return null;
+  const changes: ServiceOwnerRebindView["changes"] = [];
+  for (const entry of rows) {
+    if (!object(entry) || Object.keys(entry).sort().join(",") !== "name,now,serviceId,was" ||
+        typeof entry["serviceId"] !== "string" || !/^s-[0-9a-f-]{36}$/i.test(entry["serviceId"]) ||
+        typeof entry["name"] !== "string" || entry["name"].length === 0) return null;
+    const version = (item: unknown) => item === null || Number.isSafeInteger(item) && (item as number) >= 1;
+    if (!version(entry["was"]) || !version(entry["now"]) || entry["was"] === null && entry["now"] === null ||
+        entry["was"] === entry["now"] || changes.some((row) => row.serviceId === entry["serviceId"])) return null;
+    changes.push({ serviceId: entry["serviceId"], name: entry["name"],
+      was: entry["was"] === null ? null : entry["was"] as number, now: entry["now"] === null ? null : entry["now"] as number });
+  }
+  return { taskId: expected.taskId, projectId: expected.projectId, state: value["state"] as ServiceOwnerRebindView["state"],
+    confirmed: value["confirmed"], rebound: value["rebound"], changes, stopsProcesses: false, restartsProcesses: false };
 }
 
 /** One explicit adoption of an existing revision by one task binding: the moved pin plus the bindings that still need an explicit restart. */
@@ -222,6 +294,7 @@ export interface ServiceBindingAdoptionView {
   to: number;
   adopted: boolean;
   restartNeeded: ServiceTemplateRestartRow[];
+  restart: ServiceRestartConsequenceView;
 }
 
 /** Shared rows as main stores them: the shared layer is fail-closed on secrets, so `secret` is always false. */

@@ -46,7 +46,7 @@ import {
 import { ServiceOwnerInventory } from "./service-owner-inventory.js";
 import { SERVICE_STOP_CONFIRM_MS, SERVICE_STOP_GRACE_MS, TaskServiceProcesses } from "./service-processes.js";
 import { diskServiceOwnershipLog } from "./service-ownership.js";
-import { serviceOwnerBootstrap, type ServiceOwnerBootstrap, type ServiceOwnerCompletion } from "../rpc/service-host-binding.js";
+import { serviceOwnerBootstrap, serviceOwnerRebind, type ServiceOwnerBootstrap, type ServiceOwnerCompletion } from "../rpc/service-host-binding.js";
 import { TaskWorkspaceHost, diskTaskStore } from "./task-host.js";
 import { SdkTurnTransport } from "./sdk-turn-transport.js";
 import { validateExplicitTextProvider } from "./explicit-text-provider.js";
@@ -147,7 +147,7 @@ function ownerInventoryFor(host: TaskWorkspaceHost): ServiceOwnerInventory {
 async function handleServiceOwnerMessage(value: unknown): Promise<boolean> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const row = value as Record<string, unknown>;
-  if (!["service-owner-bootstrap", "service-owner-ack", "service-owner-fenced"].includes(String(row.kind))) return false;
+  if (!["service-owner-bootstrap", "service-owner-rebind", "service-owner-ack", "service-owner-fenced"].includes(String(row.kind))) return false;
   try {
     const taskId = process.env["PIDOCK_TASK_ID"] ?? "";
     const host = taskHostFor(taskId); if ("error" in host) throw Error();
@@ -157,6 +157,27 @@ async function handleServiceOwnerMessage(value: unknown): Promise<boolean> {
       if (serviceScope) throw Error();
       serviceScope = scope;
       await inventory.bootstrap(scope);
+      hostPort.postMessage({ kind: "service-owner-ready", workspaceId: scope.workspaceId, taskId: scope.taskId,
+        instanceId: scope.instanceId, epoch: scope.epoch, catalogRevision: scope.catalogRevision });
+    } else if (row.kind === "service-owner-rebind") {
+      // [PiDock 04] (#7 slice) one explicit in-place replacement of this Host's
+      // owner scope. Main may only name the instance this Host holds; the
+      // replacement instance differs, so this cannot replay the scope it
+      // replaces. The replaced inventory is sealed and its transport released
+      // before the replacement subscribes - it owns no admissible child (the
+      // managed binding is closed), so nothing running is killed or orphaned -
+      // and a failure leaves this Host's owner state fenced and diagnosable.
+      const previous = serviceScope;
+      if (!previous) throw Error();
+      const scope = serviceOwnerRebind(value, boundWorkspaceId(), taskId, previous.instanceId);
+      const replaced = inventory;
+      replaced.seal();
+      fenceServiceInventory();
+      for (const subscriber of [...serviceSubscribers.values()]) subscriber.disconnected();
+      serviceSubscribers.clear();
+      serviceOwnerInventory = null;
+      serviceScope = scope;
+      await ownerInventoryFor(host).bootstrap(scope);
       hostPort.postMessage({ kind: "service-owner-ready", workspaceId: scope.workspaceId, taskId: scope.taskId,
         instanceId: scope.instanceId, epoch: scope.epoch, catalogRevision: scope.catalogRevision });
     } else if (row.kind === "service-owner-fenced") {

@@ -19,7 +19,7 @@
  * Parsing is strict: an unexpected shape returns `null` so the panel reports
  * the response as unreadable instead of rendering a partial or invented row.
  */
-import { serviceBindingsFromMain, serviceTemplatesFromMain, type ServiceBindingView, type ServiceTemplateView } from "./serviceCatalog";
+import { serviceBindingsFromMain, serviceOwnerRebindFromMain, serviceTemplatesFromMain, type ServiceBindingView, type ServiceOwnerRebindView, type ServiceTemplateView } from "./serviceCatalog";
 import { serviceCatalogThroughShell, serviceStatusThroughShell, shellBridge } from "./shellBridge";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -237,6 +237,29 @@ export async function runBoundTaskServiceThroughShell(input: {
   });
   if (!result.ok) return { ok: false, error: shellFailure(result, "服务启停失败，请重试") };
   return { ok: true };
+}
+
+/**
+ * Restore one task's service start/stop channel after a shared-template write
+ * revoked it ([PiDock 04] #7 slice): `shell/serviceCatalogOp
+ * {op:"rebindServiceOwner"}`. Two-step exactly like the catalog writes - the
+ * first call (`confirm:false`) only reports main's real state and the named
+ * services whose owner contract this re-bind changes; only the confirmed call
+ * replaces the fenced owner binding. Nothing is started, stopped or restarted
+ * by either step, and the page names only the project, the task and whether it
+ * confirms.
+ */
+export async function rebindTaskServiceOwnerThroughShell(input: {
+  projectId: string;
+  taskId: string;
+  confirm: boolean;
+}): Promise<{ ok: true; view: ServiceOwnerRebindView } | { ok: false; error: string }> {
+  const result = await serviceCatalogThroughShell({
+    op: "rebindServiceOwner", projectId: input.projectId, taskId: input.taskId, confirm: input.confirm,
+  });
+  if (!result.ok) return { ok: false, error: shellFailure(result, "重新绑定服务所有者失败，请重试") };
+  const view = serviceOwnerRebindFromMain(result.payload, { taskId: input.taskId, projectId: input.projectId });
+  return view ? { ok: true, view } : { ok: false, error: "重新绑定回执无法核对，请刷新核对" };
 }
 
 /**

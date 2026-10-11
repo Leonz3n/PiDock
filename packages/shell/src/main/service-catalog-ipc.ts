@@ -100,6 +100,32 @@ export function parseServiceRunRequest(request: unknown): ServiceRunRequest {
   return { taskId: input["taskId"], projectId: input["projectId"], serviceId: input["serviceId"], action: input["action"] };
 }
 
+/**
+ * One explicit re-bind of a task's service owner ([PiDock 04] #7 slice): the
+ * human asks main to restore the task's start/stop channel after a write moved
+ * the task's owner snapshot (a shared-template adoption, a binding change or a
+ * project re-association). Main resolves the task and its bindings itself; the
+ * page names only the project, the task and whether it confirms.
+ */
+export interface ServiceOwnerRebindRequest {
+  taskId: string;
+  projectId: string;
+  confirm: boolean;
+}
+
+/** Same key-exact, bounded discipline as the sibling catalog requests: identity and a confirmation flag, never a path. */
+export function parseServiceOwnerRebindRequest(request: unknown): ServiceOwnerRebindRequest {
+  if (!record(request) || Buffer.byteLength(JSON.stringify(request)) > 4096) {
+    throw new TrustDomainViolation("invalid-payload", "invalid service owner rebind request");
+  }
+  const input = shape(request, ["op", "projectId", "taskId", "confirm"]);
+  if (input["op"] !== "rebindServiceOwner" || typeof input["projectId"] !== "string" ||
+      typeof input["taskId"] !== "string" || input["taskId"].length === 0 || typeof input["confirm"] !== "boolean") {
+    throw new TrustDomainViolation("invalid-payload", "invalid service owner rebind request");
+  }
+  return { taskId: input["taskId"], projectId: input["projectId"], confirm: input["confirm"] };
+}
+
 /** One binding adoption as main reviews and writes it: identity, the moved pin and the restart-needed consequence. */
 export interface ServiceBindingAdoptionProjection {
   taskId: string;

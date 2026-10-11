@@ -74,8 +74,9 @@ it("discards a late bind receipt after the task becomes unavailable", async () =
   expect(screen.queryByText(/已绑定/)).toBeNull();
 });
 
+const restart = { changed: true, processRestarted: false as const, fencedTaskIds: [] as string[] };
 const adoptReview = { taskId: "task-a", serviceId: template.serviceId, from: 1, to: 2, adopted: false,
-  restartNeeded: [{ taskId: "task-a", serviceId: template.serviceId, name: "API", from: 1, to: 2 }] };
+  restartNeeded: [{ taskId: "task-a", serviceId: template.serviceId, name: "API", from: 1, to: 2 }], restart };
 const newerTemplate: ServiceTemplateView = { ...template, version: 2, descriptor: { ...template.descriptor, workdir: "apps/api" } };
 
 it("offers the adoption of a newer revision only when one exists, and never adopts on load", async () => {
@@ -112,7 +113,8 @@ it("adopts v2 only after a confirmation that shows from → to and the restart-n
   // run-panel stop/start step that the same change makes unavailable.
   expect(screen.getByText(/撤销该任务的运行面板启停通道/)).toBeInTheDocument();
   expect(screen.getByText(/service-owner-inventory-unconfirmed/)).toBeInTheDocument();
-  expect(screen.getByText(/本版未提供重建入口/)).toBeInTheDocument();
+  expect(screen.getByText(/确认后可用本面板的「重新绑定服务所有者」恢复启停/)).toBeInTheDocument();
+  expect(screen.queryByText(/本版未提供重建入口/)).toBeNull();
   expect(screen.queryByText(/在运行面板先停止再启动/)).toBeNull();
   expect(serviceCatalogOp).toHaveBeenCalledWith({ op: "adoptBinding", projectId: template.projectId, taskId: "task-a",
     serviceId: template.serviceId, templateVersion: 2, confirm: false });
@@ -122,7 +124,7 @@ it("adopts v2 only after a confirmation that shows from → to and the restart-n
   fireEvent.click(screen.getByRole("button", { name: "确认采用 v2" }));
   expect(await screen.findByText(/已采用 v2（原 v1）/)).toBeInTheDocument();
   expect(screen.getByText(/未重启任何进程/)).toBeInTheDocument();
-  expect(screen.getByText(/需重建该任务的 Host 后才能启停/)).toBeInTheDocument();
+  expect(screen.getByText(/可在下方重新绑定该任务的服务所有者来恢复/)).toBeInTheDocument();
   expect(screen.getByText("已绑定 · v2 · repo")).toBeInTheDocument();
   expect(serviceCatalogOp.mock.calls.filter(([request]) => (request as Record<string, unknown>)["confirm"] === true)).toHaveLength(1);
   expect(serviceCatalogOp).toHaveBeenLastCalledWith({ op: "adoptBinding", projectId: template.projectId, taskId: "task-a",

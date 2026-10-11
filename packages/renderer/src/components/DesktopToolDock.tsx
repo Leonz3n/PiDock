@@ -25,6 +25,7 @@ import {
   type TaskServicesLoad,
 } from "../data/taskServices";
 import { ProtocolPanel, TerminalTakeoverPanel } from "./ToolPanels";
+import { ServiceOwnerRebind } from "./ServiceOwnerRebind";
 import {
   terminalPlanFromHost,
   terminalStateFromHost,
@@ -626,6 +627,7 @@ function ServiceControl({ taskId, projectId, row, onChanged }: {
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
+  const [fenced, setFenced] = useState<string | undefined>(undefined);
   const running = serviceRunning(row);
   const action = running ? "stop" : "start";
   const submit = async () => {
@@ -633,16 +635,27 @@ function ServiceControl({ taskId, projectId, row, onChanged }: {
     setError(undefined);
     const result = await runBoundTaskServiceThroughShell({ projectId, taskId, serviceId: row.binding.serviceId, action });
     setBusy(false);
-    if (!result.ok) { setError(result.error); return; }
+    if (!result.ok) {
+      setError(result.error);
+      // The named fence is the one refusal with a wired way back: main revoked
+      // this task's service control because a shared-template write moved its
+      // execution snapshot. Any other refusal is shown verbatim with no control.
+      if (result.error.includes("service-owner-inventory-unconfirmed")) setFenced(result.error);
+      return;
+    }
+    setFenced(undefined);
     onChanged();
   };
   return (
-    <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5" data-service-control={row.binding.serviceId}>
-      <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => { void submit(); }}>
-        {running ? "停止" : "启动"}
-      </Button>
-      <span className="text-[10px] text-muted">{running ? "停止本任务已登记的服务进程" : "按项目配方启动本服务"}</span>
-      {error !== undefined && <span role="alert" className="min-w-0 break-words text-[10px] text-[#ad4545]">{error}</span>}
+    <div className="mt-1 min-w-0" data-service-control={row.binding.serviceId}>
+      <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+        <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => { void submit(); }}>
+          {running ? "停止" : "启动"}
+        </Button>
+        <span className="text-[10px] text-muted">{running ? "停止本任务已登记的服务进程" : "按项目配方启动本服务"}</span>
+        {error !== undefined && <span role="alert" className="min-w-0 break-words text-[10px] text-[#ad4545]">{error}</span>}
+      </div>
+      {fenced !== undefined && <ServiceOwnerRebind projectId={projectId} taskId={taskId} surfacedBy={fenced} onRebound={() => { setFenced(undefined); setError(undefined); onChanged(); }} />}
     </div>
   );
 }
