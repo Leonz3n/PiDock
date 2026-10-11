@@ -90,6 +90,25 @@ describe("#15 box 28 external editor from the file panel", () => {
     expect(screen.getByText(launch.note)).toBeInTheDocument();
   });
 
+  it("shows the launch's own progress instead of the file-reading label while the launch is in flight", async () => {
+    let release: (value: { ok: true; payload: unknown }) => void = () => {};
+    const pending = new Promise<{ ok: true; payload: unknown }>((resolve) => {
+      release = resolve;
+    });
+    bridge({ openTaskEditor: vi.fn(() => pending) });
+    render(<DesktopToolDock taskId="task-1" tool="files" onClose={() => {}} />);
+    fireEvent.click(await screen.findByRole("button", { name: "用外部编辑器打开" }));
+
+    // A program launch is not a file read: the shared reading label must not
+    // stand in for it.
+    expect(await screen.findByText("正在启动外部编辑器…")).toBeInTheDocument();
+    expect(screen.queryByText("读取中…")).not.toBeInTheDocument();
+
+    release({ ok: true, payload: { workspaceId: "w", taskId: "task-1", op: "task/openEditor", payload: { launch } } });
+    expect(await screen.findByText("外部编辑器已启动（用户显式操作）")).toBeInTheDocument();
+    expect(screen.queryByText("正在启动外部编辑器…")).not.toBeInTheDocument();
+  });
+
   it("shows the Host's named refusal instead of a launch", async () => {
     bridge({
       openTaskEditor: vi.fn(async () => ({
