@@ -42,6 +42,14 @@ export interface PidockBridge {
    * main from the profile's environment reference and never crosses this bridge.
    */
   providerOp?: (request: { op: "list" | "save" | "remove" | "select" | "clear" | "ensure"; taskId: string; profileId?: string; profile?: unknown }) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
+  /**
+   * [PiDock 10] (#15 box 28) 从任务打开外部编辑器. The page names a task and one
+   * of that task's own file roots — nothing else: main reads the editor program
+   * from its own user settings and launches it at the resolved root. There is no
+   * `program`/`args`/`path` field by design, and the op is not part of the
+   * task-op set (`shell/taskOp` refuses `task/openEditor` by name).
+   */
+  openTaskEditor?: (request: { taskId: string; rootId: string }) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
   taskOp?: (taskId: string, op: string, payload?: Record<string, unknown>) => Promise<ShellTaskOpResult>;
   sdkTurn?: (request: Record<string, unknown>) => Promise<ShellTaskOpResult>;
   onSdkTurnEvent?: (listener: (event: unknown) => void) => () => void;
@@ -891,6 +899,41 @@ export async function fileDiffThroughShell(input: {
 export async function deliveryInfoThroughShell(input: { taskId: string; rootId: string }): Promise<ShellTaskOpResult> {
   try {
     return await shellTaskOp(input.taskId, "task/deliveryInfo", { rootId: input.rootId });
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * [PiDock 10] (#15 box 28) open the user's configured external editor at one of
+ * this task's file roots. It travels on its own attested channel
+ * (`shell/openTaskEditor`), not on `taskOp`: the page names `taskId` + `rootId`
+ * only, and main resolves the editor program from its own settings document.
+ * The result is the Host's own receipt or its named refusal, never a boolean.
+ */
+export async function openTaskEditorThroughShell(input: {
+  taskId: string;
+  rootId: string;
+}): Promise<ShellTaskOpResult> {
+  const bridge = shellBridge();
+  if (!bridge?.openTaskEditor) return { ok: false, error: "当前不在桌面壳内，无法打开外部编辑器" };
+  try {
+    const result = await bridge.openTaskEditor({ taskId: input.taskId, rootId: input.rootId });
+    if (!result || typeof result !== "object" || typeof result.ok !== "boolean") {
+      return { ok: false, error: "invalid-payload: 打开外部编辑器返回异常，请重试" };
+    }
+    if (!result.ok) return result;
+    // Same envelope unwrap as `taskOp`: main wraps the Host's own answer, so the
+    // launch payload lives one level deeper.
+    const host = result.payload as Record<string, unknown> | undefined;
+    const isHostEnvelope =
+      host !== undefined &&
+      typeof host === "object" &&
+      typeof host["workspaceId"] === "string" &&
+      typeof host["taskId"] === "string" &&
+      typeof host["op"] === "string" &&
+      "payload" in host;
+    return { ok: true, payload: isHostEnvelope ? host["payload"] : result.payload };
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
