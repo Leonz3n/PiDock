@@ -137,7 +137,8 @@ export type TerminalControlResultView = {
   instance?: TerminalInstanceView;
 };
 
-/** What the file panel renders for one task: roots plus the current selection. */export type WorkspaceBrowserView = {
+/** What the file panel renders for one task: roots plus the current selection. */
+export type WorkspaceBrowserView = {
   taskId: string;
   taskDir: string;
   roots: WorkspaceRootView[];
