@@ -135,7 +135,7 @@ function ExternalEditorSection() {
             : connected ? "正在读取…" : "未读取"}
         </dd>
         <dt className="text-muted">附加参数</dt>
-        <dd className="min-w-0 break-all font-mono">{settings?.args.length ? settings.args.join(" ") : "无"}</dd>
+        <dd className="min-w-0 break-all font-mono">{settings ? (settings.args.length ? settings.args.join(" ") : "无") : "未读取"}</dd>
         <dt className="text-muted">设置文件</dt>
         <dd className="min-w-0 break-all font-mono">{settings?.settingsPath ?? "未读取"}</dd>
       </dl>
