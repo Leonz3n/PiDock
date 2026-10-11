@@ -281,7 +281,10 @@ it("keeps the form after an ambiguous save and requires a fresh authoritative li
   expect(screen.getByRole("button", { name: "核对保存" })).toBeDisabled();
   expect(serviceCatalogOp).toHaveBeenCalledTimes(2);
   fireEvent.click(screen.getByRole("button", { name: "刷新服务配方" }));
-  await waitFor(() => expect(serviceCatalogOp).toHaveBeenCalledTimes(3));
+  // Wait on the alert the assertion is about: the refresh RPC being *called* is only
+  // the proxy, the authoritative list lands after that request resolves and commits.
+  await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("清单中已有相同模板"));
+  expect(serviceCatalogOp).toHaveBeenCalledTimes(3);
   expect(screen.getByRole("button", { name: "核对保存" })).toBeDisabled();
   expect(screen.getByLabelText("服务名称")).toHaveValue("API");
   expect(screen.getByRole("alert")).toHaveTextContent("清单中已有相同模板");
