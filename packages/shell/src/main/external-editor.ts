@@ -5,9 +5,12 @@
  * Design notes (from the box):
  * - The editor program is a USER SETTING stored in this application's own
  *   machine-private configuration (`external-editor.json` under the app
- *   profile). Nothing the renderer, the page or an Agent names can choose it:
- *   the renderer may only name `taskId` + `rootId`, and this module takes the
- *   program from the settings document alone.
+ *   profile). Nothing the renderer, the page or an Agent names can choose it
+ *   for a launch: the renderer may only name `taskId` + `rootId`, and this
+ *   module takes the program from the settings document alone. The program in
+ *   that document is chosen by the user in 本机设置, which writes the same
+ *   document through main's attested `shell/editorSettingsOp`
+ *   (`main/external-editor-settings.ts`) — never by the launch request.
  * - The launch is a plain `spawn(program, argv)` with `shell: false`. The
  *   resolved path is ONE argv element, never interpolated into a command
  *   string, so a path containing spaces, quotes, `;` or `$HOME` cannot split

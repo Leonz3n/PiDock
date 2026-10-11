@@ -30,6 +30,9 @@ function ExternalEditorSection() {
   // says so directly instead of pretending to load a setting.
   const connected = editorSettingsAvailable();
   const [settings, setSettings] = useState<EditorSettingsView | null>(null);
+  // A failed read is its own state: the named refusal says WHY, and the fields
+  // must stop claiming 「正在读取…」 that will never finish.
+  const [readFailed, setReadFailed] = useState(false);
   const [program, setProgram] = useState("");
   const [args, setArgs] = useState("");
   const [busy, setBusy] = useState(false);
@@ -44,9 +47,11 @@ function ExternalEditorSection() {
   const load = useCallback(async () => {
     const result = await readEditorSettings();
     if (!result.ok) {
+      setReadFailed(true);
       setError(result.error);
       return;
     }
+    setReadFailed(false);
     setError(null);
     apply(result.settings);
   }, [apply]);
@@ -109,6 +114,7 @@ function ExternalEditorSection() {
             placeholder="/绝对路径/编辑器"
             onChange={(event) => setProgram(event.target.value)}
           />
+          <p className="mt-1 text-[11px] text-muted">macOS 上要填可执行文件本身（例如 /usr/local/bin/code）；.app 应用包目录会被拒绝。</p>
         </div>
         <div>
           <label className="text-xs text-muted" htmlFor="external-editor-args">附加参数（每行一项）</label>
@@ -132,7 +138,7 @@ function ExternalEditorSection() {
         <dd className="min-w-0 break-all font-mono">
           {settings !== null
             ? settings.program ?? "未配置（打开外部编辑器会返回 editor-not-configured，且不启动任何程序）"
-            : connected ? "正在读取…" : "未读取"}
+            : !connected ? "未读取" : readFailed ? "读取失败" : "正在读取…"}
         </dd>
         <dt className="text-muted">附加参数</dt>
         <dd className="min-w-0 break-all font-mono">{settings ? (settings.args.length ? settings.args.join(" ") : "无") : "未读取"}</dd>

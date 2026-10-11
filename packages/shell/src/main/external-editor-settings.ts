@@ -32,7 +32,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { closeSync, fsyncSync, mkdirSync, openSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, fsyncSync, mkdirSync, openSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   EXTERNAL_EDITOR_SETTINGS_FILE,
@@ -102,10 +102,23 @@ export function saveExternalEditorSetting(profileDir: string, input: { program: 
 /**
  * Remove the document, returning the feature to the honest
  * `editor-not-configured` refusal the launch reports. Never reads the old
- * document, so this is also how a user recovers from a broken one.
+ * document's CONTENT, so this is also how a user recovers from a malformed one.
+ * A path that is not a regular file (a hand-made directory, say) is refused BY
+ * NAME as `editor-settings-invalid` — the same refusal `read` gives for that
+ * state — instead of a raw fs error escaping from the removal.
  */
 export function clearExternalEditorSetting(profileDir: string): EditorSettingsResult {
-  rmSync(externalEditorSettingsPath(profileDir), { force: true });
+  const path = externalEditorSettingsPath(profileDir);
+  try {
+    if (!statSync(path).isFile()) {
+      return { ok: false, error: `editor-settings-invalid: ${path} 不是可读取的配置文件，未清除任何内容` };
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      return { ok: false, error: `editor-settings-invalid: 无法读取 ${path}，未清除任何内容` };
+    }
+  }
+  rmSync(path, { force: true });
   return readEditorSettingsStatus(profileDir);
 }
 
