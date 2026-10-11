@@ -307,7 +307,17 @@ it("refuses start and stop in a read-only session and leaves the running human-s
   expect((await f.call("service.status", { serviceId: f.serviceId })).text).toContain("lifecycle: running");
   expect((await f.call("service.status", { serviceId: f.serviceId })).text).toContain("lastControl: human:");
   // (2) Reads stay allowed for a read-only session (status/logs are `read` kind).
-  const logs = await f.call("service.logs", { serviceId: f.serviceId, limit: 50 });
+  // The child writes its marker file with a synchronous `writeFileSync` but its
+  // stdout reaches this Host over a pipe asynchronously (on macOS a pipe write
+  // is asynchronous), so "the marker file exists" is NOT "the log line was
+  // ingested yet": read once here and the assertion races the child's output.
+  // Wait for the readiness line this assertion is about, exactly as the
+  // `service.logs` case above waits for the lines it asserts.
+  const logs = await untilTool(
+    () => f.call("service.logs", { serviceId: f.serviceId, limit: 50 }),
+    (outcome) => outcome.text.includes("ready:hello-a:a"),
+    "the human-started child's readiness line in the bounded log",
+  );
   expect(logs.outcome).toBe("ok");
   expect(logs.text).toContain("ready:hello-a:a");
 });
