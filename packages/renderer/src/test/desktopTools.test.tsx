@@ -440,7 +440,7 @@ describe("[UI 对齐] S8d 运行 panel (real Host bindings and status)", () => {
 
   it("surfaces the named owner fence with the explicit re-bind as the way back, and writes only on the confirmed click", async () => {
     const view = (over: Record<string, unknown>) => ({ taskId: "task-1", projectId: "project-1", state: "fenced", confirmed: false, rebound: false,
-      changes: [{ serviceId: SERVICE_ID, name: "invoice-local", was: 1, now: 2 }], stopsProcesses: false, restartsProcesses: false, ...over });
+      changes: [{ serviceId: SERVICE_ID, name: "invoice-local", was: 1, now: 2, configChanged: true }], stopsProcesses: false, restartsProcesses: false, ...over });
     const fixture = panelBridge({
       statuses: () => ({ ok: true, payload: { service: { serviceId: SERVICE_ID, lifecycle: "stopped", templateVersion: "2", health: "not-probed", launchSource: "catalog", resolved: [] } } }),
       run: () => ({ ok: false, error: "service-execution-uncertain: service-owner-inventory-unconfirmed" }),

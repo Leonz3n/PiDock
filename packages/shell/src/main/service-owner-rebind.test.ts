@@ -55,7 +55,7 @@ describe("#7 explicit service-owner re-bind", () => {
     const tasks = registry("fenced");
     const review = await rebindTaskServiceOwner(tasks, catalog, { projectId, taskId, confirm: false });
     expect(review).toEqual({ taskId, projectId, state: "fenced", confirmed: false, rebound: false,
-      changes: [{ serviceId, name: "API", was: 1, now: 2 }], stopsProcesses: false, restartsProcesses: false });
+      changes: [{ serviceId, name: "API", was: 1, now: 2, configChanged: true }], stopsProcesses: false, restartsProcesses: false });
     expect(tasks.rebindServiceOwner).not.toHaveBeenCalled();
     // The receipt re-observes the state after the replacement, so a task whose
     // control came back is never reported as still fenced.
@@ -65,6 +65,24 @@ describe("#7 explicit service-owner re-bind", () => {
     expect(await rebindTaskServiceOwner(tasks, catalog, { projectId, taskId, confirm: true }))
       .toEqual({ ...review, state: "current", confirmed: true, rebound: true });
     expect(tasks.rebindServiceOwner).toHaveBeenCalledWith(taskId);
+  });
+
+  it("names a fence caused only by a moved owner contract, so a same-version re-bind still reaches its confirm step", async () => {
+    // A binding change that keeps the pinned version (another work subdirectory,
+    // a changed local program, a private environment value) moves the resolved
+    // owner contract without moving the version. The row is real, so it must
+    // carry that difference explicitly instead of looking like no change at all.
+    const tasks = registry("fenced");
+    tasks.serviceOwnerChanges.mockReturnValue([{ serviceId, was: contract(2), now: { ...contract(2), configRevision: "c".repeat(64) } }]);
+    const review = await rebindTaskServiceOwner(tasks, catalog, { projectId, taskId, confirm: false });
+    expect(review).toEqual({ taskId, projectId, state: "fenced", confirmed: false, rebound: false,
+      changes: [{ serviceId, name: "API", was: 2, now: 2, configChanged: true }], stopsProcesses: false, restartsProcesses: false });
+    expect(tasks.rebindServiceOwner).not.toHaveBeenCalled();
+    let observed: "fenced" | "current" = "fenced";
+    tasks.serviceOwnerState.mockImplementation(() => observed);
+    tasks.rebindServiceOwner.mockImplementation(async () => { observed = "current"; return "rebound"; });
+    expect(await rebindTaskServiceOwner(tasks, catalog, { projectId, taskId, confirm: true }))
+      .toMatchObject({ state: "current", confirmed: true, rebound: true, changes: [{ was: 2, now: 2, configChanged: true }] });
   });
 
   it("refuses by name while a durable owner record is unsettled, so a possibly live process is never silently dropped", async () => {

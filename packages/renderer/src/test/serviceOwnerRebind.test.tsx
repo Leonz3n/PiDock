@@ -12,7 +12,7 @@ const taskId = "task-1";
 const serviceId = "s-b36323d3-ff33-4e34-a873-536a9775788a";
 
 const view = (over: Record<string, unknown> = {}) => ({ taskId, projectId, state: "fenced", confirmed: false, rebound: false,
-  changes: [{ serviceId, name: "API", was: 1, now: 2 }], stopsProcesses: false, restartsProcesses: false, ...over });
+  changes: [{ serviceId, name: "API", was: 1, now: 2, configChanged: true }], stopsProcesses: false, restartsProcesses: false, ...over });
 
 const bridge = (...results: { ok: boolean; payload?: unknown; error?: string }[]) => {
   const serviceCatalogOp = vi.fn(async () => results.shift() ?? { ok: false, error: "unexpected call" });
@@ -80,8 +80,40 @@ describe("[PiDock 04] (#7) explicit service-owner re-bind panel", () => {
     expect(screen.queryByRole("button", { name: "确认重新绑定" })).toBeNull();
   });
 
+  it("reaches the confirm step for a fence main reports as a moved owner contract with the same version", async () => {
+    // A binding change that keeps the pinned version (another subdirectory, a
+    // changed local program, a private environment value) moves the resolved
+    // owner contract without a version bump. Rejecting that row made the way back
+    // unreachable for exactly the fence #7 is about, so the row must render and
+    // the confirmed click must be offered.
+    const serviceCatalogOp = bridge(
+      { ok: true, payload: view({ changes: [{ serviceId, name: "API", was: 2, now: 2, configChanged: true }] }) },
+      { ok: true, payload: view({ changes: [{ serviceId, name: "API", was: 2, now: 2, configChanged: true }], state: "current", confirmed: true, rebound: true }) });
+    render(<ServiceOwnerRebind projectId={projectId} taskId={taskId} />);
+    fireEvent.click(screen.getByRole("button", { name: "核对重新绑定" }));
+    expect(await screen.findByText(/本次重新绑定影响 API：绑定 v2（版本未变，但本机程序、环境或目录等运行材料已变化）/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "确认重新绑定" }));
+    expect(await screen.findByText(/已重新绑定该任务的服务所有者/)).toBeInTheDocument();
+    expect(serviceCatalogOp).toHaveBeenLastCalledWith({ op: "rebindServiceOwner", projectId, taskId, confirm: true });
+  });
+
+  it("never claims a recovered channel from a receipt whose re-observed state is still fenced", async () => {
+    const onRebound = vi.fn();
+    bridge({ ok: true, payload: view() }, { ok: true, payload: view({ state: "fenced", confirmed: true, rebound: true }) });
+    render(<ServiceOwnerRebind projectId={projectId} taskId={taskId} onRebound={onRebound} />);
+    fireEvent.click(screen.getByRole("button", { name: "核对重新绑定" }));
+    await screen.findByText(/待重新绑定/);
+    fireEvent.click(screen.getByRole("button", { name: "确认重新绑定" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("主进程报告已替换所有者绑定，但重新核对后该任务仍被隔离");
+    expect(screen.queryByText(/已重新绑定该任务的服务所有者/)).toBeNull();
+    expect(screen.queryByText(/启停通道已恢复/)).toBeNull();
+    // The host panel is not told a channel came back that main still reports fenced.
+    expect(onRebound).not.toHaveBeenCalled();
+  });
+
   it("refuses a receipt that claims a process restart or a foreign identity", async () => {
     for (const payload of [{ ...view(), restartsProcesses: true }, { ...view(), taskId: "task-2" }, { ...view(), confirmed: true, rebound: true, restartsProcesses: true },
+      { ...view(), changes: [{ serviceId, name: "API", was: 2, now: 2, configChanged: false }] },
       { ...view(), changes: [{ serviceId, name: "API", was: 2, now: 2 }] }]) {
       cleanup();
       bridge({ ok: true, payload });

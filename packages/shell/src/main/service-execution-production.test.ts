@@ -70,7 +70,8 @@ function alive(pid: number): boolean {
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
-/** Wait until the fixture child wrote a complete positive pid. */async function untilMarkerPid(taskDir: string, tag: string): Promise<number> {
+/** Wait until the fixture child wrote a complete positive pid. */
+async function untilMarkerPid(taskDir: string, tag: string): Promise<number> {
   for (let elapsed = 0; elapsed < STOP_WAIT_MS; elapsed += POLL_INTERVAL_MS) {
     const raw = (() => { try { return readFileSync(join(taskDir, `repo-a/svc-${tag}`, `started-${tag}.txt`), "utf8"); } catch { return undefined; } })();
     const pid = raw === undefined ? NaN : Number(raw);
@@ -298,6 +299,13 @@ describe.skipIf(process.platform === "win32")("#7 production shell/serviceCatalo
       const rejected = await f.handler(f.shell, { op: "runTaskService", projectId: f.projectId, taskId: f.taskId, serviceId, action: "start", ...extra });
       expect(rejected).toMatchObject({ ok: false, error: expect.stringContaining("invalid-payload") });
     }
+    // A sender that is registered but calling from another frame than the shell
+    // main frame never reaches a launch or a re-bind: the frame check is the real
+    // sending frame, not one main synthesized for the inner guard.
+    const subFrame = { ...f.shell, senderFrame: { processId: 2, routingId: 2 } };
+    expect(await f.run(serviceId, "start", subFrame)).toMatchObject({ ok: false, error: expect.stringContaining("non-main-frame") });
+    expect(await f.handler(subFrame, { op: "rebindServiceOwner", projectId: f.projectId, taskId: f.taskId, confirm: true }))
+      .toMatchObject({ ok: false, error: expect.stringContaining("non-main-frame") });
     expect(existsSync(f.marker("a"))).toBe(false);
     expect(f.tasks.size).toBe(0);
   }, 30_000);
@@ -361,6 +369,37 @@ describe.skipIf(process.platform === "win32")("#7 production shell/serviceCatalo
     expect(readFileSync(f.marker("a"), "utf8")).toBe(String(after));
     expect(await f.run(serviceId, "stop")).toMatchObject({ ok: true, payload: { action: "stop" } });
     await until(() => !alive(after), "the revision-2 child to exit");
+  }, 60_000);
+
+  it("re-binds a task fenced by a moved owner contract with the same pinned version, so a config-only revoke is not a dead end", async () => {
+    const f = await production();
+    const serviceId = f.bind("svc-a", "a");
+    expect(await f.run(serviceId, "start")).toMatchObject({ ok: true, payload: { serviceId, action: "start" } });
+    const before = await untilMarkerPid(f.taskDir, "a");
+    expect(alive(before)).toBe(true);
+    // The fence this case is about: the task binding moved to another work
+    // subdirectory, so the resolved owner contract main pins changed while the
+    // template version it pins did not. `ownerSnapshot` digests the binding, so
+    // control is revoked exactly like an adoption would revoke it.
+    f.catalog.bindTask({ taskId: f.taskId, serviceId, templateVersion: 1, rootId: "repo-a", subdir: "svc-b",
+      programPath: realpathSync(process.execPath), privateRefs: [{ key: "SERVICE_TOKEN", envRef: "LOCAL_TEST_TOKEN" }] });
+    expect(await f.run(serviceId, "stop")).toMatchObject({ ok: false, error: expect.stringContaining("service-owner-inventory-unconfirmed") });
+    expect(alive(before)).toBe(true);
+    // The review is renderable: the row names the service and reports that the
+    // difference is the owner contract, not a version bump. Without that fact the
+    // page cannot verify the receipt, so the confirm step would be unreachable.
+    expect(await f.rebind(false)).toMatchObject({ ok: true, payload: { taskId: f.taskId, state: "fenced", confirmed: false, rebound: false,
+      changes: [{ serviceId, name: "API a", was: 1, now: 1, configChanged: true }], stopsProcesses: false, restartsProcesses: false } });
+    expect(ownerBindings(f.ownerScopes)).toHaveLength(1);
+    expect(await f.rebind(true)).toMatchObject({ ok: true, payload: { state: "current", confirmed: true, rebound: true,
+      changes: [{ serviceId, was: 1, now: 1, configChanged: true }] } });
+    // The replacement named the instance this Host held, and it killed nothing.
+    expect(ownerBindings(f.ownerScopes).map((scope) => scope["kind"])).toEqual(["service-owner-bootstrap", "service-owner-rebind"]);
+    expect(alive(before)).toBe(true);
+    // Control is back: the running child is still the one that was started, and
+    // the explicit stop now reaches it.
+    expect(await f.run(serviceId, "stop")).toMatchObject({ ok: true, payload: { serviceId, action: "stop" } });
+    await until(() => !alive(before), "the same-version re-bound service child to exit");
   }, 60_000);
 
   it("refuses a confirmed re-bind by name while a durable owner record is unsettled, and drops nothing", async () => {

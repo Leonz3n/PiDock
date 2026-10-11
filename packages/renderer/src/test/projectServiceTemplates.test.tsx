@@ -176,6 +176,10 @@ it("reviews an existing shared template row by row, then writes one new version 
   expect(screen.queryByText(/采用（v1 → v2/)).toBeNull();
   expect(screen.getByText(/受影响：任务 任务甲 的 API（v1 → v2）仍固定 v1，需显式采用 v2 并重新绑定该任务的服务所有者后才会用 v2 启动/)).toBeInTheDocument();
   expect(screen.getByText(/保存配置不等于重启进程/)).toBeInTheDocument();
+  // Minting a shared revision moves no binding's pin, so this save revokes no
+  // task's service control - the panel says that instead of a branch that can
+  // never render for a shared-template save.
+  expect(screen.getByText(/本次保存不会撤回任何任务的服务控制/)).toBeInTheDocument();
   expect(screen.queryByText(/本次保存已撤回这些任务的服务控制/)).toBeNull();
   expect(screen.getByText(/已有任务绑定保留原模板版本/)).toBeInTheDocument();
   expect(calls[1]).toEqual({ op: "update", projectId, serviceId, expectedVersion: 1, confirm: false,
