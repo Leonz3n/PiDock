@@ -315,12 +315,17 @@ describe("#7 import draft disclosure", () => {
     expect(JSON.stringify(scan)).not.toMatch(/synthetic-value-one|synthetic-secret-token|\/Users\/|api\.yaml/);
   });
 
-  it("shows each variable's source with a masked value and keeps every raw secret out of the payload", () => {
+  it("shows each valid variable's source with a masked value and keeps every raw secret out of the payload", () => {
     const scan = scanServiceImportHints(repo());
     const hint = scan.hints[0]!;
-    expect(hint.variables).toEqual(["1BAD", "DSN", "CONFIG_PATH", "API_TOKEN"]
+    expect(hint.variables).toEqual(["DSN", "CONFIG_PATH", "API_TOKEN"]
       .map((key) => ({ key, source: ".vscode/launch.json", maskedValue: MASK })));
     expect(valuesOf(hint)).toEqual(hint.variables.map(() => MASK));
+    // A key the renderer would refuse must never ride along as a variable row:
+    // one bad row makes the strict parser drop the whole scan reply. The key is
+    // still named for review through `invalidVars`.
+    expect(keysOf(hint)).not.toContain("1BAD");
+    expect(hint.invalidVars).toEqual(["1BAD"]);
     // The assertion below fails the moment a scanned value is emitted unmasked.
     expect(JSON.stringify(scan)).not.toMatch(/synthetic-secret-token|synthetic-value-one|postgres:\/\/|Users/);
 
@@ -335,5 +340,18 @@ describe("#7 import draft disclosure", () => {
     const composeHint = scanServiceImportHints(composeRepo).hints[0]!;
     expect(composeHint.variables).toEqual(["API_TOKEN", "PORT"].map((key) => ({ key, source: "compose.yaml", maskedValue: MASK })));
     expect(JSON.stringify(composeHint)).not.toMatch(/synthetic-secret-token|4200/);
+  });
+
+  // [PiDock 04] (#7 box 2) a hint's review list is a wire field: the renderer
+  // refuses the entire scan when it exceeds 32 entries or 100 chars each, so the
+  // Host must bound it here rather than hand the page a reply it cannot read.
+  it("bounds every hint's review list to the renderer's cap", () => {
+    const repo = root();
+    writeFileSync(join(repo, ".env"), Array.from({ length: 40 }, (_, index) =>
+      `CONFIG_PATH_${String(index).padStart(2, "0")}=/Users/name/private/config-${index}.yaml`).join("\n"));
+    const hint = scanServiceImportHints(repo).hints[0]!;
+    expect(hint.toVerify.length).toBeLessThanOrEqual(32);
+    expect(hint.toVerify.every((note) => note.length <= 100)).toBe(true);
+    expect(hint.toVerify).toContain("仅显示变量来源与遮蔽值；值本身不进入草案，也不写入共享模板");
   });
 });

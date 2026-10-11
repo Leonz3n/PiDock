@@ -58,6 +58,8 @@ const MAX_HINTS = 100;
 const MAX_ENV_ROWS = 100;
 const MAX_ENV_KEY_CHARS = 100;
 const MAX_WARNINGS = 30;
+/** The renderer's per-hint review-list bound; the Host must never emit more. */
+const MAX_TO_VERIFY = 32;
 const MAX_TOKEN_CHARS = 200;
 const MAX_ARGS = 40;
 const object = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
@@ -182,7 +184,33 @@ function valueRefusalNote(key: string, value: string): string | null {
 
 /** Variables with provenance and a masked value; a key's value never rides along. */
 function variablesFor(rows: { key: string }[], source: string): ServiceImportVariable[] {
-  return rows.map((row) => ({ key: row.key, source, maskedValue: SERVICE_VALUE_MASK }));
+  // Only a key the renderer's strict parser accepts becomes a row, and only
+  // once: it refuses the entire reply when a row carries a key outside the
+  // shared pattern or repeats a key (e.g. a Compose list naming one key twice).
+  // An invalid key still surfaces by name through the hint's `invalidVars`.
+  const variables: ServiceImportVariable[] = [];
+  const seen = new Set<string>();
+  for (const row of rows) {
+    const key = row.key.trim();
+    if (!SERVICE_KEY_PATTERN.test(key) || seen.has(key)) continue;
+    seen.add(key);
+    variables.push({ key, source, maskedValue: SERVICE_VALUE_MASK });
+  }
+  return variables;
+}
+
+/**
+ * Bound one hint's review list to the renderer's wire contract (at most
+ * `MAX_TO_VERIFY` short items). Fixed `keep` notes survive a cut so the
+ * mandatory "review by hand" items are never the ones that disappear; the cut
+ * is reported instead of silently dropping items.
+ */
+function boundedToVerify(notes: string[], keep: readonly string[] = []): string[] {
+  const unique = [...new Set(notes.map(display))];
+  if (unique.length <= MAX_TO_VERIFY) return unique;
+  const kept = unique.filter((note) => keep.includes(note));
+  const rest = unique.filter((note) => !keep.includes(note));
+  return [...new Set([...rest.slice(0, Math.max(0, MAX_TO_VERIFY - kept.length - 1)), ...kept, "待核对项已截断"])];
 }
 
 /** The named review items for the values of one scanned environment block. */
@@ -242,13 +270,13 @@ export function scanServiceImportHints(repoRoot: string, protection?: TaskPathPr
     if (draft.runTypeUncertain) toVerify.push(`「${display(name)}」：${draft.runTypeBasis}；请人工选择常驻服务、一次性命令或准备步骤`);
     const workdirValue = workdirCandidate(typeof workdir === "string" ? workdir : undefined, toVerify);
     const invalidVars = inlineKey && !SERVICE_KEY_PATTERN.test(inlineKey) ? [...audit.invalidVars, display(inlineKey)] : audit.invalidVars;
+    const inlineNote = inlineKey ? ["脚本开头使用内联环境赋值；请将变量移入配置层以支持跨平台启动"] : [];
+    const trailer = "启动命令、参数及工作目录需人工核对；草案不可直接运行";
     hints.push({ source, name: display(name), runType: draft.runType, runTypeBasis: draft.runTypeBasis,
       runTypeUncertain: draft.runTypeUncertain,
       variables: variablesFor(audit.rows, source),
       program: candidate.program, args: candidate.args, ...(workdirValue === undefined ? {} : { workdir: workdirValue }),
-      invalidVars, toVerify: [...toVerify,
-        ...(inlineKey ? ["脚本开头使用内联环境赋值；请将变量移入配置层以支持跨平台启动"] : []),
-        "启动命令、参数及工作目录需人工核对；草案不可直接运行"] });
+      invalidVars, toVerify: boundedToVerify([...toVerify, ...inlineNote, trailer], [trailer]) });
   };
   for (const source of SOURCES) {
     try {
@@ -264,11 +292,11 @@ export function scanServiceImportHints(repoRoot: string, protection?: TaskPathPr
         const parsed = parseEnv(content);
         const usable = Object.keys(parsed).filter((key) => key.length <= MAX_ENV_KEY_CHARS && SERVICE_KEY_PATTERN.test(key));
         const rows = usable.slice(0, MAX_ENV_ROWS).map((key) => ({ key, value: parsed[key] ?? "" }));
+        const hintNotes = ["仅提取变量键名；语法及业务读取点、生效优先级和 URL 覆盖规则需人工核对", "仅显示变量来源与遮蔽值；值本身不进入草案，也不写入共享模板"];
         hints.push({ source, name: source, runType: null, runTypeBasis: "配置文件本身不是运行单元", runTypeUncertain: false,
           variables: variablesFor(rows, source), program: "", args: [], invalidVars: [],
-          toVerify: ["仅提取变量键名；语法及业务读取点、生效优先级和 URL 覆盖规则需人工核对", "仅显示变量来源与遮蔽值；值本身不进入草案，也不写入共享模板",
-            ...valueRefusalNotes(rows),
-            ...(usable.length > MAX_ENV_ROWS ? ["环境变量列表已截断，请人工核对"] : [])] });
+          toVerify: boundedToVerify([...hintNotes, ...valueRefusalNotes(rows),
+            ...(usable.length > MAX_ENV_ROWS ? ["环境变量列表已截断，请人工核对"] : [])], hintNotes) });
       } else if (source === "package.json" || source.endsWith("launch.json")) {
         const parseErrors: ParseError[] = [];
         const data = parseJsonc(content, parseErrors, { allowTrailingComma: source.endsWith("launch.json"), disallowComments: source === "package.json" }) as unknown;
