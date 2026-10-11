@@ -774,8 +774,16 @@ realIt("keeps an instance addressable when a start plan leaves an unobserved job
   // terminal is revoked). This exit is not covered, so the instance must not be
   // marked exited behind it. The plan validation refuses shell connectors in an
   // argument, which is why the self-daemonizing program is a script.
+  //
+  // The cadence is forced to the driver's maximum for the same reason as the
+  // self-daemonizing case above: "the root exits before any snapshot saw it" is
+  // this test's premise, and a 500ms cadence only hopes for it. Under load a tick
+  // lands while the root is still alive (and before it forked the descendant), so
+  // the exit is covered by that observation and the driver legitimately reports
+  // `tree-drained` - the race, observed for real: `expected 'exited' to be
+  // 'running'`. No tick can land before the 8s root-exit wait below expires.
   const marker = 3279;
-  const f = new Fixture("daemonize-job");
+  const f = new Fixture("daemonize-job", { observeCadenceMs: 30_000 });
   mkdirSync(join(f.taskDir, "work"), { recursive: true });
   const script = join(f.taskDir, "work", "daemonize-job.sh");
   writeFileSync(script, `#!/bin/sh\nset -m\nnohup sleep ${marker} &\nexit\n`, { mode: 0o755 });
