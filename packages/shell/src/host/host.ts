@@ -35,6 +35,7 @@ const hostPort = getParentPort();
 let started = false;
 
 import {
+  authorizeCodeObservation,
   authorizeServiceRegistration,
   boundWorkspaceId,
   classifyControlCaller,
@@ -609,16 +610,25 @@ async function runGroupServiceStart(input: {
  * `recordRun`, so the box-8 read answered empty while real children ran.
  *
  * What is written is deliberately split:
- * - OBSERVED: the pid and the start time the `TaskServiceProcesses` start
+ * - OBSERVED BY MAIN: the code state — the worktree HEAD commit and whether the
+ *   working tree is dirty — read by main's own bounded git read of the launch's
+ *   verified cwd (`main/service-code-observation.ts`) and carried here by the
+ *   trusted-catalog registration. Absent stays `unknown` by name: this Host
+ *   cannot read a working tree, so it never fills the field in from a guess.
+ * - OBSERVED HERE: the pid and the start time the `TaskServiceProcesses` start
  *   resolved with, and the actor the gate decided for.
  * - DECLARED: the port list, taken from the registration's own descriptor plus
  *   its own `PORT`-like resolved rows (`declaredServicePorts`). This Host owns
  *   no port probe, so the record says `portsSource: "declared"`.
- * - NOT READ: code state and build freshness stay `unknown` here. Reading the
- *   working tree is [PiDock 05] box 6's own slice; claiming a clean tree or a
- *   fresh build without that read would be exactly the over-reporting the
- *   boxes forbid. `recordRun` builds its own `startedAt`/`runId` so the record
- *   cannot be back-dated by this caller.
+ * - NOT READ: build freshness has no observation behind it — nothing in the
+ *   service model names a build artifact or its commit — so `buildCommit` is
+ *   never claimed and a clean tree reads 无法判断构建状态. A dirty tree reads
+ *   `uncommitted-code` from the same observation, never `fresh`.
+ * A registration whose read failed puts its named reason in this service's
+ * bounded log instead of a code state, so `task/serviceRunRecords` showing
+ * `unknown` while the failure is invisible cannot happen.
+ * `recordRun` builds its own `startedAt`/`runId` so the record cannot be
+ * back-dated by this caller.
  */
 function recordServiceRun(
   taskId: string,
@@ -630,6 +640,13 @@ function recordServiceRun(
   const topology = serviceTopologyFor(taskId);
   if ("error" in topology) return;
   const registered = services.get(serviceId);
+  // The failure to read the worktree is named in this service's own bounded log
+  // (`task/serviceLog`), exactly like a refused bookkeeping write below: the run
+  // record then says `unknown` and the reader can see WHY instead of reading an
+  // absent observation as a clean tree.
+  if (registered?.codeObservationFailure !== undefined) {
+    services.recordOutput(serviceId, `代码状态未观测：${registered.codeObservationFailure}；本次运行记录按 unknown 记录`);
+  }
   // The topology record is a read model, never the launch's authority: a refused
   // record must not turn a child that really started into a failure. It is NOT
   // swallowed either - the named refusal lands in this service's own bounded log
@@ -641,6 +658,7 @@ function recordServiceRun(
       templateVersion: registered?.templateVersion ?? "unknown",
       ports: declaredServicePorts(registered?.descriptor.ports ?? [], registered?.resolved ?? []),
       portsSource: "declared",
+      ...(registered?.code !== undefined ? { code: registered.code } : {}),
       pid,
       owner,
     }),
@@ -1322,6 +1340,13 @@ async function performTaskOp(
         }
         const authorization = authorizeServiceRegistration({ sessionId: record["sessionId"], origin });
         if (!authorization.ok) return { ok: false, error: authorization.error };
+        // [PiDock 05] (#10 box 6) the worktree observation is main's own read, so
+        // only main's `service-catalog` registration may carry it: a `shell-ui`
+        // registration (the renderer's own `shell/taskOp` path) is refused by
+        // name, and a contradictory payload is refused too. Nothing is stored
+        // before both checks pass.
+        const observation = authorizeCodeObservation({ origin, code: record["code"], codeObservationFailure: record["codeObservationFailure"] });
+        if (!observation.ok) return { ok: false, error: observation.error };
         try {
           const saved = services.register({
             serviceId,
@@ -1329,6 +1354,8 @@ async function performTaskOp(
             layers: serviceLayers as never,
             templateVersion,
             launchSource: serviceLaunchSource(origin),
+            ...(record["code"] !== undefined ? { code: record["code"] as { commit?: string; dirty: boolean } } : {}),
+            ...(typeof record["codeObservationFailure"] === "string" ? { codeObservationFailure: record["codeObservationFailure"] as string } : {}),
           });
           return { ok: true, payload: { service: { serviceId: saved.serviceId, templateVersion: saved.templateVersion, lifecycle: saved.lifecycle, launchSource: saved.launchSource } } };
         } catch (error) {
