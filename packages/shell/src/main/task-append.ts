@@ -55,12 +55,13 @@ import { execFileSync } from "node:child_process";
 import { lstatSync, readlinkSync, realpathSync, statSync, symlinkSync } from "node:fs";
 import { isAbsolute, join, normalize, relative } from "node:path";
 import { createNodeRepoProbe, observeRecordedRepo } from "../host/repo-identity.js";
-import { readTaskRecordOnDisk } from "../host/task-store.js";
+import { readTaskRecordOnDisk, type TaskDiskRecord } from "../host/task-store.js";
 import type { HostTaskResult } from "../rpc/protocol.js";
 import {
   buildLinkName,
   checkLinkNameCollisions,
   buildRepoChildName,
+  checkRepoConflicts,
   filterAppendRepos,
   previewMixedTaskPaths,
   REMOTE_NAME,
@@ -77,10 +78,16 @@ import {
   type TaskBranchRefState,
 } from "./task-provision.js";
 import {
+  derivePrepInputs,
   prepareAppendHostPayload,
   type PrepScanAuthorityWithSources,
   type PrepScanDeps,
 } from "./task-prep-scan.js";
+import {
+  WorktreeMetadataLock,
+  type WorktreeLockAcquisition,
+  type WorktreeLockOwner,
+} from "./worktree-metadata-lock.js";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const COMMIT = /^[0-9a-f]{40}$/;
@@ -484,9 +491,10 @@ function verifyRecordedWorktree(
 /**
  * The production append. One instance owns the queue for its main process, so
  * two appends — and a resume (`executeResumePlan`) — cannot interleave their
- * fetch/plan/execution phases. That queue is intra-process only: it does not
- * cover two tasks (or two processes) racing the same shared repository, which
- * stays the separate, still-open #6 mutual-exclusion concern.
+ * fetch/plan/execution phases. That queue is intra-process only; the
+ * cross-process half of box 9 is the app-private, real-source-path-keyed lock
+ * wired below (`worktree-metadata-lock.ts`), which production builds in
+ * `main.ts` from the same `userData` directory the other stores use.
  */
 export class ProjectTaskAppend {
   private queue: Promise<unknown> = Promise.resolve();
@@ -495,7 +503,51 @@ export class ProjectTaskAppend {
     private readonly authority: PrepScanAuthorityWithSources,
     private readonly deps: PrepScanDeps,
     private readonly git: AppendGit,
+    private readonly lock?: WorktreeMetadataLock,
   ) {}
+
+  /**
+   * The repository-level mutual exclusion of box 9, keyed by the REAL path of
+   * each shared source repository. Without a wired lock this instance has only
+   * its intra-process queue — the pre-box-9 behaviour, which production never
+   * uses: `main.ts` wires the app-private lock into every creation/append
+   * service. `WorktreeMetadataLock.acquireFor` realpaths each source itself and
+   * refuses by name when a real path cannot be resolved, so a checkout whose
+   * identity is unknown never runs unlocked.
+   */
+  private acquireWorktreeLock(sources: readonly string[], owner: WorktreeLockOwner): WorktreeLockAcquisition {
+    if (!this.lock) return { ok: true, keys: [], release: () => undefined };
+    return this.lock.acquireFor(sources, owner);
+  }
+
+  /**
+   * The conflict re-check taken inside the critical section, immediately before
+   * the real worktree adds. It re-derives the scan from the real filesystem and
+   * git state (never from the earlier lists) and answers with the gate's own
+   * named classification, so a state that changed after the planning scan is
+   * refused rather than clobbered, duplicated or left to a generic git error.
+   */
+  private assertFreshTargetsStillFree(input: {
+    taskId: string;
+    taskDir: string;
+    branch: string;
+    appended: readonly string[];
+    repos: readonly AppendTarget[];
+  }): void {
+    const rescanned = derivePrepInputs(
+      { taskId: input.taskId, repoDirs: input.repos.map((repo) => repo.repoDir) },
+      this.authority,
+      this.deps,
+    );
+    const wanted = previewMixedTaskPaths(input.taskDir, input.appended, []);
+    const conflict = checkRepoConflicts({
+      wantedWorktreeDirs: input.repos.map((repo) => wanted.worktrees[repo.repoDir]!),
+      takenPaths: rescanned.takenPaths,
+      branchesInUse: rescanned.branchesInUse,
+      wantedBranch: input.branch,
+    });
+    if (!conflict.ok) throw new Error(`${conflict.error.code}: ${conflict.error.message}`);
+  }
 
   private run<T>(action: () => Promise<T>): Promise<T> {
     const result = this.queue.then(action);
@@ -541,8 +593,11 @@ export class ProjectTaskAppend {
    *
    * Routed through the same per-instance run queue as `append`, so a resume
    * cannot interleave its plan execution with a concurrent append's
-   * fetch/plan/write in this process. That queue is intra-process only and is
-   * NOT the cross-task/cross-process mutual exclusion for a shared repository.
+   * fetch/plan/write in this process. The plan's execution (the real `git
+   * worktree add`) additionally runs inside the cross-process,
+   * real-source-path-keyed lock of box 9 (`worktree-metadata-lock.ts`), so it
+   * cannot interleave with another process creating a worktree in the same
+   * source repository.
    */
   executeResumePlan(
     input: {
@@ -603,14 +658,29 @@ export class ProjectTaskAppend {
       });
     }
     if (repos.length > 0) {
-      // Re-attest immediately before the operations that create real
-      // resources, the same boundary the append uses.
-      reattest();
-      executeAppendPlan({
-        plan,
-        expected: { taskDir, branch: stored.branch, repos },
-        exec: this.runExec(),
-      });
+      // [PiDock 03] (#6 盒子 9) the worktree adds of a resume run inside the
+      // same repository-level critical section as an append: the retry repos'
+      // source checkouts are locked by their REAL paths, so a resume cannot
+      // create a worktree in a source repository another process is mid-way
+      // through. Named boundary: the resume's conflict scan and plan are
+      // produced UPSTREAM of this call (the renderer route derives the scan and
+      // `task/resumeAppend` plans in the Host), so this acquisition covers the
+      // execution, not that earlier scan.
+      const acquisition = this.acquireWorktreeLock(repos.map((repo) => repo.checkout), { taskId, label: "任务准备恢复" });
+      if (!acquisition.ok) throw new Error(acquisition.error);
+      try {
+        // Re-attest immediately before the operations that create real
+        // resources, the same boundary the append uses.
+        reattest();
+        executeAppendPlan({
+          plan,
+          expected: { taskDir, branch: stored.branch, repos },
+          exec: this.runExec(),
+        });
+      } finally {
+        // Released on success, on a refusal and on every throw.
+        acquisition.release();
+      }
     }
     // Truthful result: re-read the Host's real per-repo status instead of
     // returning the plan (which would read as a "planned, not executed"
@@ -825,6 +895,61 @@ export class ProjectTaskAppend {
       }
     }
 
+    // [PiDock 03] (#6 盒子 9) the repository-level critical section: every fresh
+    // repository's source checkout is locked by its REAL path before the fetch,
+    // so the fetch/`FETCH_HEAD` pin, the conflict scan (`prepareAppendHostPayload`
+    // below), the Host's own `checkRepoConflicts` gate, the re-check of the real
+    // state and the real `git worktree add` all run inside ONE cross-process
+    // critical section. A competing process (or a second service instance)
+    // working the same source repository is refused BY NAME here and creates no
+    // branch, no worktree and no metadata record — which is what the
+    // intra-process queue above can never provide.
+    const acquisition = this.acquireWorktreeLock(freshRepos.map((repo) => repo.checkout), { taskId, label: "追加仓库" });
+    if (!acquisition.ok) throw new Error(acquisition.error);
+    try {
+      return await this.appendFreshRepos({
+        taskId,
+        taskDir,
+        stored,
+        freshRepos,
+        freshDirs,
+        appended,
+        skipped: skippedRepos,
+        skippedDirs,
+        hasDirectorySelections,
+        reattest,
+      });
+    } finally {
+      // Released on success, on a refusal and on every throw; a crash leaves the
+      // named stale-lock policy (`worktree-metadata-lock.ts`) to clear it.
+      acquisition.release();
+    }
+  }
+
+  /**
+   * Everything that must run inside the repository-level critical section,
+   * unchanged: pin each fresh repository's fetched commit, derive the conflict
+   * scan, route `task/appendRepos`, re-check the real state and execute the plan
+   * with real git. Split out only so the acquisition above can wrap it in one
+   * `finally` without moving a single rule.
+   */
+  private async appendFreshRepos(input: {
+    taskId: string;
+    taskDir: string;
+    stored: TaskDiskRecord;
+    freshRepos: AppendTarget[];
+    freshDirs: { directoryId: string; name: string; path: string; linkName: string }[];
+    appended: string[];
+    skipped: { repoDir: string; name: string }[];
+    skippedDirs: AppendedDirSkip[];
+    hasDirectorySelections: boolean;
+    reattest: () => void;
+  }): Promise<AppendReposResult> {
+    const { taskId, taskDir, stored, freshRepos, freshDirs, appended, reattest } = input;
+    const skippedRepos = input.skipped;
+    const skippedDirs = input.skippedDirs;
+    const { hasDirectorySelections } = input;
+
     // ALL-SUCCESS gate: pin every new repository's freshly fetched commit
     // before anything is planned or written. One failure means no worktree and
     // no record change, and the refusal names the repo and the reason.
@@ -914,6 +1039,20 @@ export class ProjectTaskAppend {
 
     let created: { repoDir: string; worktree: string }[] = [];
     if (plan !== null && pinned.length > 0) {
+      // Re-check the REAL state inside the critical section, immediately before
+      // the worktree adds. The planning scan above ran before the Host route
+      // (an await) and before the link writes: a competing state that appeared
+      // in the meantime — a worktree now holding this task branch, a foreign
+      // folder at the wanted path — is refused here BY THE SAME NAMED
+      // classification the Host's gate uses (`branch-in-use` / `path-taken`),
+      // instead of being left to a generic git failure or a duplicate creation.
+      this.assertFreshTargetsStillFree({
+        taskId,
+        taskDir: prepTaskDir,
+        branch: stored.branch,
+        appended,
+        repos: pinned,
+      });
       created = executeAppendPlan({
         plan,
         expected: { taskDir: prepTaskDir, branch: stored.branch, repos: pinned },

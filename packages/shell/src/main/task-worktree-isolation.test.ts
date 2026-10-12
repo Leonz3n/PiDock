@@ -28,7 +28,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { TaskWorkspaceHost, diskTaskStore } from "../host/task-host.js";
 import { readTaskRecordOnDisk, type TaskDiskRecord } from "../host/task-store.js";
 import { TaskWorkspaceFiles, realWorkspaceFileReaders } from "../host/workspace-files.js";
@@ -160,6 +160,14 @@ describe("[PiDock 03] (#6 盒子 6) two tasks sharing one project repository", (
     // `git` reports the canonical path, the record keeps the path it was given.
     expect(realpathSync(git(pathA, "rev-parse", "--show-toplevel"))).toBe(realpathSync(pathA));
     expect(realpathSync(git(pathB, "rev-parse", "--show-toplevel"))).toBe(realpathSync(pathB));
+    // "Shared source repo" stated directly rather than inferred from a common
+    // repoDir/baseCommit: git itself answers that both worktrees hang off the
+    // ONE source checkout's `.git` (a linked worktree's common dir).
+    const commonDirOf = (worktree: string): string =>
+      realpathSync(resolve(worktree, git(worktree, "rev-parse", "--git-common-dir")));
+    const sourceGitDir = realpathSync(join(env.repo, ".git"));
+    expect(commonDirOf(pathA)).toBe(sourceGitDir);
+    expect(commonDirOf(pathB)).toBe(sourceGitDir);
 
     // (2) the two real working branches differ, and each is the task's own
     // DECLARED branch — read back with git, not from the record alone.

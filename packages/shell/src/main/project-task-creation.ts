@@ -9,6 +9,7 @@ import { buildLinkName, buildRepoChildName, checkLinkNameCollisions, REMOTE_NAME
 import type { ProjectRegistry } from "./project-registry.js";
 import { buildTaskBranch, TASK_BRANCH_EXISTS_NO_WORKTREE } from "./task-provision.js";
 import { TaskRootIndex } from "./task-root-index.js";
+import { WorktreeMetadataLock, type WorktreeLockAcquisition, type WorktreeLockOwner } from "./worktree-metadata-lock.js";
 
 interface Source { id: string; name: string; path: string; realPath: string; device: string; inode: string }
 interface Repo extends Source { remote: string; remoteBranch: string; remoteDigest: string; commonDir: string; commit: string; repoDir: string }
@@ -223,9 +224,24 @@ export class ProjectTaskCreation {
   private queue: Promise<unknown> = Promise.resolve();
   constructor(private readonly store: CreationIntentStore, private readonly projects: ProjectRegistry,
     private readonly roots: TaskRootIndex, private readonly host: CreationHost, private readonly defaultRoot: string,
-    private readonly afterBoundary?: (boundary: CreationBoundary) => void) {}
+    private readonly afterBoundary?: (boundary: CreationBoundary) => void,
+    private readonly lock?: WorktreeMetadataLock) {}
   private run<T>(action: () => Promise<T>): Promise<T> {
     const result = this.queue.then(action); this.queue = result.catch(() => undefined); return result;
+  }
+  /**
+   * The repository-level mutual exclusion of [PiDock 03] (#6 盒子 9), keyed by
+   * the REAL path of each shared source repository. Without a wired lock this
+   * instance has only its intra-process queue — the pre-box-9 behaviour, which
+   * production never uses: `main.ts` wires the app-private lock into every
+   * creation/append service. The key is resolved from the live filesystem
+   * (`WorktreeMetadataLock.acquireFor` realpaths each source), and a source
+   * whose real path cannot be resolved refuses by name instead of running
+   * unlocked.
+   */
+  private acquireWorktreeLock(sources: readonly string[], owner: WorktreeLockOwner): WorktreeLockAcquisition {
+    if (!this.lock) return { ok: true, keys: [], release: () => undefined };
+    return this.lock.acquireFor(sources, owner);
   }
   current(): CreationIntent | null {
     const intent = this.store.read();
@@ -338,47 +354,63 @@ export class ProjectTaskCreation {
         if (!current || JSON.stringify(current) !== intent.projectSnapshot) throw new Error("项目或来源已变更，保留待恢复任务，不自动重新归属");
       };
       checkProject();
-      if (intent.rootDevice === null) {
-        if (!pathPresent(intent.root)) {
-          diskIdentity(dirname(intent.root));
-          createOwnedDirectory(intent.root, ".pidock-created-root", intent.id, "root", this.afterBoundary);
-        } else if (!matchesMarker(intent.root, ".pidock-created-root", intent.id)) {
-          throw new Error("任务根在准备后被建立，不能接管；需要显式恢复");
-        }
-        const fresh = diskIdentity(intent.root);
-        intent.rootDevice = fresh.device; intent.rootInode = fresh.inode; intent.rootRealPath = fresh.realPath;
-        this.store.write(intent);
-      }
-      const rootIdentity = diskIdentity(intent.root);
-      if (rootIdentity.device !== intent.rootDevice || rootIdentity.inode !== intent.rootInode || rootIdentity.realPath !== intent.rootRealPath) throw new Error("任务根身份已改变");
-      for (const repo of intent.repos) verifyRepo(repo);
-      const taskRealPath = join(realpathSync(intent.root), intent.taskId);
-      checkWorkspaceOverlap(taskRealPath, intent.repos, intent.directories);
-      for (const dir of intent.directories) checkSource(dir);
-      if (!pathPresent(intent.taskDir)) {
-        createOwnedDirectory(intent.taskDir, ".pidock-creation", intent.id, "task", this.afterBoundary);
-      } else if (!matchesMarker(intent.taskDir, ".pidock-creation", intent.id)) {
-        throw new Error("任务目录已占用或创建标记不匹配");
-      }
-      // Validate every missing repository's fresh fetch before creating any new worktree.
-      const missingRepos: Repo[] = [];
-      for (const repo of intent.repos) {
-        const target = join(intent.taskDir, repo.repoDir);
-        if (existsSync(target)) {
-          if (!lstatSync(target).isDirectory() || realpathSync(target) !== join(realpathSync(intent.taskDir), repo.repoDir) ||
-              git(target, ["merge-base", "--is-ancestor", repo.commit, "HEAD"]) !== "" ||
-              git(target, ["symbolic-ref", "--quiet", "HEAD"]) !== `refs/heads/${intent.branch}` || gitCommonDir(target) !== repo.commonDir) {
-            throw new Error("工作树与固定任务提交不符");
+      // [PiDock 03] (#6 盒子 9) the repository-level critical section: every
+      // shared source repo of this intent is locked by its REAL path before
+      // anything is created, so the conflict scan (the missing-repo validation
+      // below: target folder, `FETCH_HEAD` pin, task-branch ref) AND the real
+      // `git worktree add` run inside ONE cross-process critical section. A
+      // competing process creating a task in the same source repository is
+      // refused BY NAME here, before this commit creates any directory, fetch,
+      // branch, worktree or record.
+      const acquisition = this.acquireWorktreeLock(intent.repos.map((repo) => repo.path), { taskId: intent.taskId, label: "创建任务" });
+      if (!acquisition.ok) throw new Error(acquisition.error);
+      try {
+        if (intent.rootDevice === null) {
+          if (!pathPresent(intent.root)) {
+            diskIdentity(dirname(intent.root));
+            createOwnedDirectory(intent.root, ".pidock-created-root", intent.id, "root", this.afterBoundary);
+          } else if (!matchesMarker(intent.root, ".pidock-created-root", intent.id)) {
+            throw new Error("任务根在准备后被建立，不能接管；需要显式恢复");
           }
-          continue;
+          const fresh = diskIdentity(intent.root);
+          intent.rootDevice = fresh.device; intent.rootInode = fresh.inode; intent.rootRealPath = fresh.realPath;
+          this.store.write(intent);
         }
-        git(repo.path, ["fetch", "--no-tags", repo.remote, `refs/heads/${repo.remoteBranch}`]);
-        if (git(repo.path, ["rev-parse", "FETCH_HEAD"]) !== repo.commit) throw new Error("远程分支已变化，不使用旧基线");
-        if (optionalGit(repo.path, ["show-ref", "--verify", "--hash", `refs/heads/${intent.branch}`]) !== null) throw new Error(TASK_BRANCH_EXISTS_NO_WORKTREE);
-        missingRepos.push(repo);
-      }
-      for (const repo of missingRepos) {
-        git(repo.path, ["worktree", "add", "-b", intent.branch, join(intent.taskDir, repo.repoDir), repo.commit]);
+        const rootIdentity = diskIdentity(intent.root);
+        if (rootIdentity.device !== intent.rootDevice || rootIdentity.inode !== intent.rootInode || rootIdentity.realPath !== intent.rootRealPath) throw new Error("任务根身份已改变");
+        for (const repo of intent.repos) verifyRepo(repo);
+        const taskRealPath = join(realpathSync(intent.root), intent.taskId);
+        checkWorkspaceOverlap(taskRealPath, intent.repos, intent.directories);
+        for (const dir of intent.directories) checkSource(dir);
+        if (!pathPresent(intent.taskDir)) {
+          createOwnedDirectory(intent.taskDir, ".pidock-creation", intent.id, "task", this.afterBoundary);
+        } else if (!matchesMarker(intent.taskDir, ".pidock-creation", intent.id)) {
+          throw new Error("任务目录已占用或创建标记不匹配");
+        }
+        // Validate every missing repository's fresh fetch before creating any new worktree.
+        const missingRepos: Repo[] = [];
+        for (const repo of intent.repos) {
+          const target = join(intent.taskDir, repo.repoDir);
+          if (existsSync(target)) {
+            if (!lstatSync(target).isDirectory() || realpathSync(target) !== join(realpathSync(intent.taskDir), repo.repoDir) ||
+                git(target, ["merge-base", "--is-ancestor", repo.commit, "HEAD"]) !== "" ||
+                git(target, ["symbolic-ref", "--quiet", "HEAD"]) !== `refs/heads/${intent.branch}` || gitCommonDir(target) !== repo.commonDir) {
+              throw new Error("工作树与固定任务提交不符");
+            }
+            continue;
+          }
+          git(repo.path, ["fetch", "--no-tags", repo.remote, `refs/heads/${repo.remoteBranch}`]);
+          if (git(repo.path, ["rev-parse", "FETCH_HEAD"]) !== repo.commit) throw new Error("远程分支已变化，不使用旧基线");
+          if (optionalGit(repo.path, ["show-ref", "--verify", "--hash", `refs/heads/${intent.branch}`]) !== null) throw new Error(TASK_BRANCH_EXISTS_NO_WORKTREE);
+          missingRepos.push(repo);
+        }
+        for (const repo of missingRepos) {
+          git(repo.path, ["worktree", "add", "-b", intent.branch, join(intent.taskDir, repo.repoDir), repo.commit]);
+        }
+      } finally {
+        // Released on success, on refusal and on every throw; a crash leaves the
+        // named stale-lock policy (`worktree-metadata-lock.ts`) to clear it.
+        acquisition.release();
       }
       for (const dir of intent.directories) {
         checkSource(dir);

@@ -877,7 +877,7 @@ export function FilesPanel({
         ) : null}
         {selected?.delivery ? (
           <p className="text-[11px] text-muted" data-testid="delivery-target">
-            交付入口：{selected.delivery.repo} · 分支 {selected.delivery.branch || "未记录"} · 不自动提交/推送/合并
+            交付入口：{selected.delivery.repo} · 远程基线分支 {selected.delivery.branch || "未记录"} · 不自动提交/推送/合并
           </p>
         ) : null}
         <ul className="flex flex-col gap-1 text-xs">

@@ -30,6 +30,7 @@ import { ProviderProfileStore } from "./provider-profile-store.js";
 import { ProviderWiring } from "./provider-ipc.js";
 import { CreationIntentStore, ProjectTaskCreation } from "./project-task-creation.js";
 import { createNodeAppendGit, ProjectTaskAppend } from "./task-append.js";
+import { WorktreeMetadataLock } from "./worktree-metadata-lock.js";
 import { createNodePrepScanDeps, createPrepScanAuthority } from "./task-prep-scan.js";
 import {
   runTaskBrowserSmoke,
@@ -166,7 +167,16 @@ async function run(): Promise<void> {
   );
   const projects = new ProjectRegistry(app.getPath("userData"));
   const catalog = new ServiceCatalog(app.getPath("userData"), serviceCatalogAuthority(taskRoots, projects));
-  const creation = new ProjectTaskCreation(new CreationIntentStore(app.getPath("userData")), projects, taskRoots, tasks, defaultTasksRoot());
+  // [PiDock 03] (#6 盒子 9) repository-level mutual exclusion: ONE app-private
+  // lock, keyed by the REAL path of the shared source repository, shared by the
+  // creation flow and the append flow. It lives in `userData` (never inside a
+  // user's repository or its `.git`), so two service instances — or two app
+  // instances on one profile — cannot both run the conflict scan and the real
+  // `git worktree add` for one source checkout.
+  const worktreeLock = new WorktreeMetadataLock(app.getPath("userData"), {
+    notify: (message) => console.error(`[main] ${message}`),
+  });
+  const creation = new ProjectTaskCreation(new CreationIntentStore(app.getPath("userData")), projects, taskRoots, tasks, defaultTasksRoot(), undefined, worktreeLock);
   // [PiDock 03] (#6) production append: fetch/pin each selected repository in
   // its own source checkout, derive the conflict scan, route `task/appendRepos`
   // and execute the returned plan with real git. The registry is the only
@@ -176,6 +186,7 @@ async function run(): Promise<void> {
     createPrepScanAuthority(projects, taskRoots),
     createNodePrepScanDeps(),
     createNodeAppendGit(),
+    worktreeLock,
   );
   // [PiDock 02m] (#46) explicit Provider selection. Metadata lives in userData;
   // the credential value is read from the profile's PIDOCK_PROVIDER_* reference
