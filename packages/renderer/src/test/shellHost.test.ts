@@ -378,6 +378,61 @@ describe("shell host adapter selection", () => {
     }
   });
 
+  it("keeps a Host run record's ports labelled as declared and never as observed", async () => {
+    /**
+     * The exact shape the real Host answers `task/serviceRunRecords` with after
+     * a catalog start (`service-two-task-isolation.test.ts` reads it back from
+     * the Host): the pid/startedAt are OBSERVED by the process driver, the port
+     * list is DECLARED (`portsSource`) because the Host owns no port probe, and
+     * the code/build state is `unknown` because this slice reads no working
+     * tree. A rename of any of these fields has to fail here, not silently
+     * degrade to the memory projection.
+     */
+    stubBridge(async (_taskId, op) => {
+      if (op === "task/serviceRunRecords") {
+        return {
+          ok: true,
+          payload: {
+            records: [
+              {
+                runId: "run-1",
+                taskId: "release",
+                serviceId: "release-service-1",
+                instanceId: "release/release-service-1@53101",
+                templateVersion: "v1",
+                codeState: { kind: "unknown", note: "缺少提交信息，无法判断代码状态" },
+                buildFreshness: "unknown",
+                ports: [53101],
+                portsSource: "declared",
+                processIdentity: { owner: "human", pid: 4242, startedAt: "2026-10-07T01:00:00.000Z" },
+                logRef: "/tasks/release/services/release-service-1/run-run-1.log",
+                startedAt: "2026-10-07T01:00:00.000Z",
+                verifications: [],
+              },
+            ],
+            registered: [{ instanceId: "release/release-service-1", taskId: "release", serviceId: "release-service-1", pid: 4242, startedAt: "2026-10-07T01:00:00.000Z", owner: "human" }],
+          },
+        };
+      }
+      return { ok: false, error: "no plan in this test" };
+    });
+    try {
+      const view = await resolveHostAdapter(createMemoryHost()).serviceTopology("release");
+      const run = view.records.find((entry) => entry.serviceId === "release-service-1")?.run;
+      expect(run).toMatchObject({
+        runId: "run-1",
+        ports: [53101],
+        portsSource: "declared",
+        processIdentity: { owner: "human", pid: 4242 },
+      });
+      // A real Host record is NOT the fixture: the panel must not print the
+      // "内存模拟记录" row for it.
+      expect(run?.simulated).toBeUndefined();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("asks for no port for a prepare step and labels the plan with the environment name", async () => {
     const seen: Array<{ op: string; payload: Record<string, unknown> }> = [];
     stubBridge(async (_taskId, op, payload) => {

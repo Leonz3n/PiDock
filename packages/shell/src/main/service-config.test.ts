@@ -3,6 +3,7 @@ import {
   auditImportVars,
   autoAdjustPorts,
   buildChildEnv,
+  declaredServicePorts,
   classifyImportDraft,
   diffServiceTemplate,
   isServiceSecretKey,
@@ -268,6 +269,20 @@ describe("masking + child env isolation", () => {
     const { rows, adjusted } = autoAdjustPorts([row("PORT", "5173", "运行时绑定")], taken);
     expect(rows.find((entry) => entry.key === "PORT")?.value).toBe("5173");
     expect(adjusted).toEqual([]);
+  });
+  it("declaredServicePorts takes the recipe list plus the task's own PORT binding, never a probe", () => {
+    // The recipe's own list and this task's binding are both DECLARED facts; a
+    // PORT-like key holding a URL or a non-port is not a port, and an unrelated
+    // key that merely contains a number is ignored.
+    expect(declaredServicePorts([9001], [])).toEqual([9001]);
+    expect(declaredServicePorts([], [row("PORT", "53101", "本机私有配置")])).toEqual([53101]);
+    expect(declaredServicePorts([9001], [
+      row("PORT", "53101", "本机私有配置"),
+      row("API_BASE_URL", "http://127.0.0.1:53102", "任务覆盖"),
+      row("TIMEOUT", "3000", "共享模板"),
+      row("PORT", "not-a-port", "任务覆盖"),
+      row("PORT", "99999", "任务覆盖"),
+    ])).toEqual([9001, 53101]);
   });
   it("diffServiceTemplate trims both sides for removed keys", () => {
     expect(diffServiceTemplate([{ key: " A ", value: "1", secret: false }], [])).toEqual({ added: [], changed: [], removed: ["A"] });

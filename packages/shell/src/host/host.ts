@@ -461,7 +461,11 @@ function serviceDriverFor(taskId: string, services: TaskServiceRuntime): Service
       (serviceId, reason) => {
         // A child that ended on its own is no longer a running instance: close
         // its run record before the runtime flips the lifecycle, so the
-        // registered tree ([PiDock 05] #10 box 8) never keeps a dead pid.
+        // registered tree ([PiDock 05] #10 box 8) never keeps a dead pid. The
+        // record is always written before this handler can run - `start`
+        // resolves on the spawn event and its caller's continuation drains as a
+        // microtask, while the close event is a later macrotask - so a live
+        // child cannot be missed here without also being missed by `stop`.
         closeServiceRun(taskId, serviceId, reason);
         services.markExited(serviceId, reason);
       },
@@ -541,17 +545,19 @@ function recordServiceRun(
   }
 }
 
-/** Close the newest still-open run of one service; a no-op when none is open. */
-function closeServiceRun(taskId: string, serviceId: string, reason: string): void {
+/** Close the newest still-open run of one service; `false` when none was open. */
+function closeServiceRun(taskId: string, serviceId: string, reason: string): boolean {
   const topology = serviceTopologyFor(taskId);
-  if ("error" in topology) return;
+  if ("error" in topology) return false;
   const open = [...topology.runs()].reverse().find((record) => record.serviceId === serviceId && record.endedAt === undefined);
-  if (!open) return;
+  if (!open) return false;
   try {
     topology.exitRun(open.runId, reason);
+    return true;
   } catch {
     // Same boundary as `recordServiceRun`: a bookkeeping refusal never changes
     // the action that really happened.
+    return false;
   }
 }
 

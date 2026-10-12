@@ -67,7 +67,10 @@ describe("runtime panel topology", () => {
     const record = await screen.findByTestId("service-run-record");
     expect(record).toHaveTextContent("构建与当前提交一致");
     expect(record).toHaveTextContent("已提交且干净");
-    expect(record).toHaveTextContent("5173");
+    // Box 3/6 honesty: the port a service row shows is a DECLARED one - nothing
+    // probed the socket - so the record says so instead of reading as observed.
+    expect(record).toHaveTextContent("5173（声明值，未实测监听）");
+    expect(record).not.toHaveTextContent("5173（实测监听）");
     expect(record).toHaveTextContent("pid 4100");
     expect(record).toHaveTextContent("/tasks/release/services/saas-web/run-1.log");
     expect(record).toHaveTextContent("内存模拟记录（未接入真实进程）");
