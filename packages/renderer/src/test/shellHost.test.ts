@@ -433,6 +433,64 @@ describe("shell host adapter selection", () => {
     }
   });
 
+  it("keeps the projection's 已知配置限制 when the Host plan carries none", async () => {
+    // This adapter sends no `externalResources`, so the Host plan's own list is
+    // always empty - replacing the visible projection with it would erase the
+    // real 已知配置限制 rows. The empty Host list must mean "nothing said".
+    const projectedLimits = (await createMemoryHost().serviceTopology("release")).knownLimits;
+    expect(projectedLimits.length).toBeGreaterThan(0);
+    stubBridge(async (_taskId, op) => {
+      if (op === "task/planServiceGroup") return { ok: true, payload: { plan: { assignments: [], reallocated: [], diagnostics: [], knownLimits: [] } } };
+      if (op === "task/serviceRunRecords") return { ok: true, payload: { records: [], registered: [] } };
+      return { ok: true, payload: {} };
+    });
+    try {
+      const view = await resolveHostAdapter(createMemoryHost()).serviceTopology("release");
+      expect(view.knownLimits).toEqual(projectedLimits);
+      // The non-empty Host case still wins over the projection.
+      stubBridge(async (_taskId, op) => {
+        if (op === "task/planServiceGroup") return { ok: true, payload: { plan: { assignments: [], reallocated: [], diagnostics: [], knownLimits: ["共享队列"] } } };
+        if (op === "task/serviceRunRecords") return { ok: true, payload: { records: [], registered: [] } };
+        return { ok: true, payload: {} };
+      });
+      const hostLimits = await resolveHostAdapter(createMemoryHost()).serviceTopology("release");
+      expect(hostLimits.knownLimits).toEqual(["共享队列"]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps the Host's run-record verifications instead of discarding them", async () => {
+    stubBridge(async (_taskId, op) => {
+      if (op === "task/serviceRunRecords") {
+        return { ok: true, payload: { records: [{
+          runId: "run-9", taskId: "release", serviceId: "release-service-1", instanceId: "release/release-service-1@6100",
+          templateVersion: "v13", codeState: { kind: "uncommitted", note: "工作副本有未提交修改" }, buildFreshness: "uncommitted-code",
+          ports: [6100], portsSource: "declared",
+          processIdentity: { owner: "human", pid: 777, startedAt: "2026-09-22T10:00:00.000Z" },
+          logRef: "/tasks/release/services/release-service-1/run-run-9.log", startedAt: "2026-09-22T10:00:00.000Z",
+          // Host-reported verification entries (linkage / readiness): a merge
+          // that hardcodes `verifications: []` silently drops these.
+          verifications: [
+            { kind: "linkage", detail: "联通检查 shipment-service", ok: true, at: "2026-09-22T10:00:05.000Z" },
+            { kind: "readiness", detail: "前置条件就绪检查 db-migrate", ok: false, at: "2026-09-22T10:00:06.000Z" },
+          ],
+        }], registered: [] } };
+      }
+      return { ok: false, error: "no plan in this test" };
+    });
+    try {
+      const view = await resolveHostAdapter(createMemoryHost()).serviceTopology("release");
+      const run = view.records.find((entry) => entry.serviceId === "release-service-1")?.run;
+      expect(run?.verifications).toEqual([
+        { kind: "linkage", detail: "联通检查 shipment-service", ok: true },
+        { kind: "readiness", detail: "前置条件就绪检查 db-migrate", ok: false },
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("asks for no port for a prepare step and labels the plan with the environment name", async () => {
     const seen: Array<{ op: string; payload: Record<string, unknown> }> = [];
     stubBridge(async (_taskId, op, payload) => {

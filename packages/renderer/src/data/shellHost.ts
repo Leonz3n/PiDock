@@ -1009,7 +1009,12 @@ export function createShellHostAdapter(fallback: HostAdapter): HostAdapter {
               });
             }
             const knownLimits = planRecord["knownLimits"];
-            if (Array.isArray(knownLimits)) merged.knownLimits = knownLimits.map(String);
+            // A plan carries its OWN external-resource limits only when the
+            // caller sent `externalResources`; this adapter does not (box 2's
+            // rules/layers wiring is still open), so an empty list here is
+            // "nothing said", not "no limits". Replacing the visible projection
+            // with it would erase the real 已知配置限制 rows.
+            if (Array.isArray(knownLimits) && knownLimits.length > 0) merged.knownLimits = knownLimits.map(String);
             // Assignments the Host decided are authoritative even when a unit
             // has no endpoint variable yet.
             for (const assignment of assignments.map(asRecord)) {
@@ -1049,7 +1054,15 @@ export function createShellHostAdapter(fallback: HostAdapter): HostAdapter {
                   },
                   logRef: String(run["logRef"] ?? ""),
                   startedAt: String(run["startedAt"] ?? ""),
-                  verifications: [],
+                  // The Host's own verification entries (linkage / readiness /
+                  // remote reachability). They are Host-reported facts, so a
+                  // merge that hardcodes `[]` would silently drop them.
+                  verifications: (Array.isArray(run["verifications"]) ? run["verifications"] : [])
+                    .map(asRecord)
+                    .filter((entry) =>
+                      typeof entry["kind"] === "string" && typeof entry["detail"] === "string" && typeof entry["ok"] === "boolean",
+                    )
+                    .map((entry) => ({ kind: entry["kind"] as string, detail: entry["detail"] as string, ok: entry["ok"] as boolean })),
                 },
               };
             });
