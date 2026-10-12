@@ -219,13 +219,21 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   的顺序逐个单元走**同一个**门禁（`runHumanServiceControl` /
   `runAgentServiceControl`，只读拒绝、`default` 先确认），组内所有单元先监听、再
   互验。
-  - **可达性边界（未接线）**：这条能力目前**没有出厂调用方**。它是 Host 层的
-    `task/controlService {group:true}` 载荷，只有测试（`service-group-linkage.test.ts`）
-    真的发送它；渲染层的唯一启停入口 `runBoundTaskServiceThroughShell` →
-    `serviceCatalogOp {op:"runTaskService"}` 只发**单个** `serviceId`，主进程与
-    Agent 工具也都不发 `group`。因此本片交付的是 Host 能力与既有 op 的加性载荷，
-    运行面板的「联通核验」行在出厂应用的当前 UI 里只可能读到 `未探测`；要在产品中
-    真正用上它，还需要一条渲染层发起、主进程转发的整组启动入口（属于后续切片）。
+  - **可达性边界（已接线，带一条具名限制）**：出厂调用方是渲染层运行面板的「整组启动」——
+    `shell/serviceCatalogOp {op:"runTaskServiceGroup"}`（只收 `op/projectId/taskId`；带了 `units` /
+    `plan` / `rules` / `layers` 等任何计划内容一律按名拒绝，页面不能选单元）→ 主进程
+    `runTaskServiceGroup` 用**可信目录**（该任务的绑定）解析每个启动材料并登记到任务 Host，
+    再转发**一次** `task/controlService {group:true, action:"start"}`；每个单元仍走同一个门禁
+    （只读拒绝、`default` 先确认），没有第二个门、也没有新的 `HOST_TASK_OPS`。
+    - **计划来源与「不覆盖」**：Host 的运行单元计划仍由 `task/planServiceGroup` 写入。
+      已有计划时主进程**原样**启动（带调用边的计划因此保留它的 `linkage` 互验）；只有 Host
+      自己回答 `not-planned` 时，主进程才用可信目录一次性生成计划（单元 = 该任务已绑定服务、
+      端口 = 登记声明的端口、runType = 配方自己的）。
+    - **具名限制**：出厂路径生成的计划**没有依赖边**（声明的`call`/`prestart`图目前没有生产读取
+      源——盒 1 的单元/依赖选择是它自己的切片），因此出厂应用里 `已监听` 可达、`已互验` 只会由
+      带边的计划产生；无边的单元在面板上按名显示「无依赖边（未做互验）」，不会显示 `已互验`。
+      声明端口的计划若拿不到端口（长驻服务无声明端口）按 `missing-port` **具名拒绝**且不启动任何
+      单元——被丢出组的成员会让一个缺员的组看起来是绿的。
   - **已启动**只来自一次真实启动（门禁通过且驱动返回真实 pid，本单元回读自驱动刚
     写入的那条运行记录，绝不借用同一服务更早的开启记录）；
     **已监听**只来自 `host/service-linkage.ts` 对**登记声明地址**的有界真实 TCP
