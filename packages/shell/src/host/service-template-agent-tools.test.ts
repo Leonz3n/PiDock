@@ -76,6 +76,20 @@ function alive(pid: number): boolean {
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
+/**
+ * A refusal is immediate; only a confirmed write may park on the user. A call
+ * that would park inside a refusal assertion is a failed assertion, not a
+ * 30-second hang, so the mutation that lets a call through is named here.
+ */
+async function refusedPromptly(call: Promise<SdkAgentToolOutcome>): Promise<SdkAgentToolOutcome> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([call, new Promise<never>((_, reject) => {
+      timer = setTimeout(() => { reject(Error("工具调用没有立即拒绝，反而在等待用户确认")); }, 5_000);
+    })]);
+  } finally { clearTimeout(timer); }
+}
+
 function markerPid(taskDir: string): number | undefined {
   try {
     const pid = Number(readFileSync(join(taskDir, "repo-a", "svc-a", "started-a.txt"), "utf8"));
@@ -352,7 +366,7 @@ it("refuses the edit by name in a read-only session and leaves the document byte
   const f = await harness();
   f.host.setPermission("main", "read");
   const before = f.document();
-  const refused = await f.call(editArgs(f.serviceId, "hello-readonly"));
+  const refused = await refusedPromptly(f.call(editArgs(f.serviceId, "hello-readonly")));
   expect(refused.outcome).toBe("refused");
   expect(refused.code).toBe("tool-refused:gate-denied");
   expect(refused.text).toContain("只读");
@@ -365,12 +379,12 @@ it("refuses a service this task has not bound, a retargeting argument, and an un
   const before = f.document();
   // A service id no binding of this task names (it exists on another project's
   // revision space in this store too): refused by name, nothing written.
-  expect(await f.call(editArgs("s-99999999-9999-4999-8999-999999999999", "x"))).toMatchObject({ outcome: "refused", code: "tool-refused:unknown-service" });
+  expect(await refusedPromptly(f.call(editArgs("s-99999999-9999-4999-8999-999999999999", "x")))).toMatchObject({ outcome: "refused", code: "tool-refused:unknown-service" });
   // (m4) The Agent may not name a project, an environment, a version or a task:
   // every one of them is an unknown argument, refused before main is reached.
   for (const smuggled of [{ projectId: f.projectId }, { environmentId: f.environmentId }, { expectedVersion: 1 },
     { taskId: f.otherTaskId }, { path: "/etc/passwd" }, { program: "/bin/sh" }]) {
-    expect(await f.call(editArgs(f.serviceId, "hello-smuggled", smuggled)))
+    expect(await refusedPromptly(f.call(editArgs(f.serviceId, "hello-smuggled", smuggled))))
       .toMatchObject({ outcome: "refused", code: "tool-refused:invalid-arguments" });
   }
   // A malformed edit (rows that are not rows) is refused at the tool boundary.
@@ -395,7 +409,7 @@ it("fails closed by name when the task's pinned version is no longer the latest 
 
   // (m3) The derived expected version IS the binding pin: dropping it (deriving
   // the latest revision instead) lets this edit through and the assertion reds.
-  const refused = await f.call(editArgs(f.serviceId, "hello-stale"));
+  const refused = await refusedPromptly(f.call(editArgs(f.serviceId, "hello-stale")));
   expect(refused).toMatchObject({ outcome: "refused", code: "tool-refused:template-version-conflict" });
   expect(refused.text).toContain("v1");
   expect(f.document()).toBe(before);
