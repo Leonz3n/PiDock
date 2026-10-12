@@ -238,6 +238,14 @@ export function RuntimePanel({
   // listener group), the run record and the shared-resource limits.
   const topology = provided ?? projectServiceTopology(task, environment);
   const selectedUnit = service ? topology.units.find((unit) => unit.serviceId === service.id) : undefined;
+  // The Host's own run record, when one exists for this service, wins over the
+  // task's `runRecord`: `shellHost` merges the real `task/serviceRunRecords`
+  // payload into `topology.records`, and this is the only component that reads
+  // it. Without this read a Host-recorded declared port / observed pid could
+  // never reach the UI (the board would keep showing the memory fixture).
+  const runRecord = service
+    ? topology.records.find((entry) => entry.serviceId === service.id)?.run ?? service.runRecord
+    : undefined;
   const selectedRouting = selectedUnit ? topology.routing.filter((entry) => entry.unitId === selectedUnit.unitId) : [];
   const selectedGroups = selectedUnit
     ? topology.groups.filter((group) => group.members.includes(selectedUnit.unitId))
@@ -429,36 +437,36 @@ export function RuntimePanel({
           </ul>
         </Panel>
       ) : null}
-      {service?.runRecord ? (
+      {runRecord ? (
         <Panel title="运行记录">
           <dl className="flex flex-col gap-1 text-[11px] text-muted" data-testid="service-run-record">
-            <Row label="运行标识" value={service.runRecord.runId} mono />
-            <Row label="模板版本" value={service.runRecord.templateVersion} />
-            <Row label="代码状态" value={`${codeStateLabel(service.runRecord.codeState)}${service.runRecord.codeCommit ? ` · ${service.runRecord.codeCommit}` : ""}`} />
-            <Row label="构建状态" value={buildFreshnessLabel(service.runRecord.buildFreshness)} />
+            <Row label="运行标识" value={runRecord.runId} mono />
+            <Row label="模板版本" value={runRecord.templateVersion} />
+            <Row label="代码状态" value={`${codeStateLabel(runRecord.codeState)}${runRecord.codeCommit ? ` · ${runRecord.codeCommit}` : ""}`} />
+            <Row label="构建状态" value={buildFreshnessLabel(runRecord.buildFreshness)} />
             <Row
               label="端口"
               value={
-                service.runRecord.ports.length === 0
+                runRecord.ports.length === 0
                   ? "无端口绑定"
-                  : service.runRecord.portsSource === "observed"
-                    ? `${service.runRecord.ports.join(", ")}（实测监听）`
-                    : service.runRecord.portsSource === "declared"
-                      ? `${service.runRecord.ports.join(", ")}（声明端口，未实测监听）`
-                      : `${service.runRecord.ports.join(", ")}（来源未标注）`
+                  : runRecord.portsSource === "observed"
+                    ? `${runRecord.ports.join(", ")}（实测监听）`
+                    : runRecord.portsSource === "declared"
+                      ? `${runRecord.ports.join(", ")}（声明端口，未实测监听）`
+                      : `${runRecord.ports.join(", ")}（来源未标注）`
               }
             />
             <Row
               label="进程身份"
-              value={`${service.runRecord.processIdentity.owner === "human" ? "用户操作" : "Agent"} · pid ${service.runRecord.processIdentity.pid} · ${service.runRecord.processIdentity.startedAt}`}
+              value={`${runRecord.processIdentity.owner === "human" ? "用户操作" : "Agent"} · pid ${runRecord.processIdentity.pid} · ${runRecord.processIdentity.startedAt}`}
             />
-            <Row label="日志" value={service.runRecord.logRef} mono />
-            {service.runRecord.exitReason ? <Row label="结束原因" value={service.runRecord.exitReason} /> : null}
-            {service.runRecord.simulated ? <Row label="数据来源" value="内存模拟记录（未接入真实进程）" /> : null}
+            <Row label="日志" value={runRecord.logRef} mono />
+            {runRecord.exitReason ? <Row label="结束原因" value={runRecord.exitReason} /> : null}
+            {runRecord.simulated ? <Row label="数据来源" value="内存模拟记录（未接入真实进程）" /> : null}
           </dl>
-          {service.runRecord.verifications.length > 0 ? (
+          {runRecord.verifications.length > 0 ? (
             <ul className="mt-2 flex flex-col gap-0.5 text-[11px] text-muted">
-              {service.runRecord.verifications.map((verification) => (
+              {runRecord.verifications.map((verification) => (
                 <li key={verification.detail}>
                   · {verification.ok ? "通过" : "未通过"} {verification.detail}
                 </li>
