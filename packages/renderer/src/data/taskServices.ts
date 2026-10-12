@@ -200,8 +200,8 @@ const durationFact = (value: unknown): number | undefined | null =>
  * The Host's health observation ([PiDock 04] #7 box 5), read strictly because
  * the whole point is that a pass is NOT assumed:
  *
- * - the state must be one of the four the Host can produce; an unknown state
- *   (`green`) makes the row unreadable instead of being shown as a pass;
+ * - the state must be one of the four the Host can produce; any other string
+ *   makes the row unreadable instead of being shown as a pass;
  * - `healthy`/`unhealthy` must carry the real attempt's duration and bound (a
  *   pass with no observed attempt is not a pass), and a `healthy` http row must
  *   carry a 2xx of the declared kind;
