@@ -501,3 +501,161 @@ describe("machine-private service catalog", () => {
     expect(f.catalog.listTask(taskId)).toEqual([]);
   });
 });
+
+/**
+ * [PiDock 04] (#7 box 1) 环境 as a first-class, named, project-scoped entity: a
+ * separate main-only document, a per-environment revision space, and the
+ * environment as the seal on every launch. The store is real and on disk in
+ * every test here - nothing is asserted from an in-memory shape.
+ */
+describe("named project environments", () => {
+  it("round-trips named environments through the real on-disk document and keeps names unique per project", () => {
+    const f = fixture();
+    const staging = f.catalog.createEnvironment({ projectId, name: "预发环境" });
+    const listed = f.catalog.listEnvironments(projectId);
+    expect(listed).toHaveLength(2);
+    expect(new Set(listed.map((row) => row.name))).toEqual(new Set(["开发环境", "预发环境"]));
+    expect(listed.every((row) => row.projectId === projectId && /^e-[0-9a-f-]{36}$/i.test(row.environmentId))).toBe(true);
+    // A fresh instance reads the same rows back from disk, and they are the
+    // project's own: another project's environments are never listed here.
+    const restarted = new ServiceCatalog(f.dir, f.authority);
+    expect(restarted.listEnvironments(projectId)).toEqual(listed);
+    expect(restarted.listEnvironments(otherProjectId)).toEqual([]);
+    expect(restarted.createEnvironment({ projectId: otherProjectId, name: "开发环境" }).environmentId).not.toBe(f.environmentId);
+    const document = JSON.parse(readFileSync(join(f.dir, "service-environments.json"), "utf8")) as { version: number; environments: unknown[] };
+    expect(document.version).toBe(1);
+    expect(document.environments).toHaveLength(3);
+    // The document holds names and ids only - no program, path or value.
+    expect(JSON.stringify(document)).not.toContain("node");
+    // A duplicate name inside one project is refused BY NAME, case-insensitively.
+    expect(() => f.catalog.createEnvironment({ projectId, name: "开发环境" })).toThrow("environment name already used");
+    expect(() => f.catalog.createEnvironment({ projectId, name: "预发环境" })).toThrow("environment name already used");
+    expect(() => f.catalog.createEnvironment({ projectId, name: staging.name.toUpperCase() })).toThrow("environment name already used");
+    // A blank or padded name is not a name a human could select by.
+    expect(() => f.catalog.createEnvironment({ projectId, name: "  " })).toThrow("invalid service catalog text");
+    expect(() => f.catalog.createEnvironment({ projectId, name: " 开发环境" })).toThrow("invalid service catalog text");
+    expect(() => f.catalog.createEnvironment({ projectId, name: "x".repeat(65) })).toThrow("invalid service catalog text");
+    // Refused names wrote nothing: still two environments of THIS project.
+    expect(f.catalog.listEnvironments(projectId)).toHaveLength(2);
+  });
+
+  it("mints one service's versions inside each environment, so one service id names two different revisions", () => {
+    const f = fixture();
+    const staging = f.catalog.createEnvironment({ projectId, name: "预发环境" });
+    const dev = f.save();
+    // The same service id inside the other environment starts its own version line.
+    const stagingRevision = f.catalog.saveTemplate({ projectId, environmentId: staging.environmentId, serviceId: dev.serviceId, expectedVersion: 0,
+      descriptor: { ...f.descriptor, ports: [4100] }, shared: [{ key: "PORT", value: "4100", secret: false }] });
+    expect(stagingRevision).toMatchObject({ serviceId: dev.serviceId, environmentId: staging.environmentId, version: 1 });
+    const devSecond = f.catalog.saveTemplate({ projectId, environmentId: f.environmentId, serviceId: dev.serviceId, expectedVersion: 1,
+      descriptor: { ...f.descriptor, ports: [3001] }, shared: [{ key: "PORT", value: "3001", secret: false }] });
+    expect(devSecond.version).toBe(2);
+    // Each environment has its own latest revision and its own version counter.
+    expect(f.catalog.template(projectId, f.environmentId, dev.serviceId, 2)?.descriptor.ports).toEqual([3001]);
+    expect(f.catalog.template(projectId, staging.environmentId, dev.serviceId, 2)).toBeNull();
+    expect(f.catalog.listTemplates(projectId, staging.environmentId)).toMatchObject([{ version: 1, environmentId: staging.environmentId }]);
+    expect(f.catalog.listTemplates(projectId, f.environmentId)).toMatchObject([{ version: 2, environmentId: f.environmentId }]);
+    // A version conflict in one environment is not one in the other.
+    expect(f.catalog.saveTemplate({ projectId, environmentId: staging.environmentId, serviceId: dev.serviceId, expectedVersion: 1,
+      descriptor: { ...f.descriptor, ports: [4101] }, shared: [] })).toMatchObject({ version: 2, environmentId: staging.environmentId });
+    // ...and an environment that does not exist is refused rather than created.
+    const unknown = "e-00000000-0000-4000-8000-000000000000";
+    expect(() => f.catalog.listTemplates(projectId, unknown)).toThrow("environment unavailable");
+    expect(() => f.catalog.saveTemplate({ projectId, environmentId: unknown, descriptor: f.descriptor, shared: [] })).toThrow("environment unavailable");
+  });
+
+  it("persists one environment's revision without touching the other environment's, across a fresh store instance", () => {
+    const f = fixture();
+    const staging = f.catalog.createEnvironment({ projectId, name: "预发环境" });
+    const dev = f.save();
+    f.catalog.saveTemplate({ projectId, environmentId: staging.environmentId, serviceId: dev.serviceId, expectedVersion: 0,
+      descriptor: f.descriptor, shared: [{ key: "STAGE", value: "staging", secret: false }] });
+    const restarted = new ServiceCatalog(f.dir, f.authority);
+    expect(restarted.listTemplates(projectId, f.environmentId).flatMap((row) => row.shared)).toMatchObject([{ key: "PORT", value: "3000" }]);
+    expect(restarted.listTemplates(projectId, staging.environmentId).flatMap((row) => row.shared)).toMatchObject([{ key: "STAGE", value: "staging" }]);
+  });
+
+  it("names only the bindings pinned inside the edited environment as restart candidates", () => {
+    const home = realpathSync(mkdtempSync(join(tmpdir(), "pidock-env-restart-"))); directories.push(home);
+    const root = join(home, "tasks");
+    const firstTask = "task-catalog-a", secondTask = "task-catalog-b";
+    for (const id of [firstTask, secondTask]) mkdirSync(join(root, id, "repo-a"), { recursive: true });
+    const identityOf = (id: string) => {
+      const stats = lstatSync(join(root, id), { bigint: true });
+      return { taskId: id, createdAt: identity.createdAt, root, realRoot: root, dirId: id,
+        directoryDevice: stats.dev.toString(), directoryInode: stats.ino.toString() };
+    };
+    const owned = (id: string) => [firstTask, secondTask].includes(id)
+      ? { identity: identityOf(id), projectId, rootIds: ["repo-a"] } : null;
+    const catalog = new ServiceCatalog(join(home, "profile"), { projectExists: (id) => id === projectId, task: owned, verifiedTask: owned });
+    const dev = catalog.createEnvironment({ projectId, name: "开发环境" }).environmentId;
+    const staging = catalog.createEnvironment({ projectId, name: "预发环境" }).environmentId;
+    const descriptor = { name: "API", program: "node", args: ["server.js"], ports: [3000], runType: "long-lived" as const };
+    const template = catalog.saveTemplate({ projectId, environmentId: dev, descriptor, shared: [] });
+    catalog.saveTemplate({ projectId, environmentId: staging, serviceId: template.serviceId, expectedVersion: 0, descriptor, shared: [] });
+    // One task is bound inside 开发环境; another task inside 预发环境.
+    catalog.bindTask({ taskId: firstTask, serviceId: template.serviceId, environmentId: dev, templateVersion: 1, rootId: "repo-a", subdir: "",
+      programPath: process.execPath, privateRefs: [] });
+    catalog.bindTask({ taskId: secondTask, serviceId: template.serviceId, environmentId: staging, templateVersion: 1, rootId: "repo-a", subdir: "",
+      programPath: process.execPath, privateRefs: [] });
+    const review = catalog.reviewTemplateUpdate({ projectId, environmentId: dev, serviceId: template.serviceId, expectedVersion: 1,
+      descriptor: { ...descriptor, ports: [3001] }, shared: [] });
+    // The save happened in 开发环境, so only ITS binding is a restart candidate:
+    // the 预发环境 binding pins a different revision space.
+    expect(review.restartNeeded).toMatchObject([{ taskId: firstTask, from: 1, to: 2, name: "API" }]);
+    expect(review.restartNeeded.map((row) => row.taskId)).not.toContain(secondTask);
+  });
+
+  it("refuses a template document written before environments by name and never writes over it", () => {
+    const f = fixture();
+    writeFileSync(join(f.dir, "service-templates.json"), JSON.stringify({ version: 1, revisions: [] }), { mode: 0o600 });
+    expect(() => f.catalog.listTemplates(projectId, f.environmentId))
+      .toThrow("service template document predates environments (version 1); migration required");
+    expect(() => f.catalog.template(projectId, f.environmentId, "s-00000000-0000-0000-0000-000000000000", 1)).toThrow(/predates environments/);
+    expect(() => f.save()).toThrow(/predates environments/);
+    // The legacy document is still exactly where it was: reading it never
+    // rewrote it into the environment-shaped version.
+    expect(JSON.parse(readFileSync(join(f.dir, "service-templates.json"), "utf8"))).toEqual({ version: 1, revisions: [] });
+  });
+
+  it("seals a launch to its own environment and keeps every private value off the disk", () => {
+    const home = realpathSync(mkdtempSync(join(tmpdir(), "pidock-env-seal-"))); directories.push(home);
+    const taskDir = join(home, "task-12345678"); mkdirSync(join(taskDir, "repo-a"), { recursive: true });
+    const stat = lstatSync(taskDir, { bigint: true });
+    const trusted = { ...identity, root: home, realRoot: home, directoryDevice: stat.dev.toString(), directoryInode: stat.ino.toString() };
+    const authority: ServiceCatalogAuthority = {
+      projectExists: (id) => id === projectId,
+      task: () => ({ identity: trusted, projectId, rootIds: ["repo-a"] }),
+      verifiedTask: () => ({ identity: trusted, projectId, rootIds: ["repo-a"] }),
+    };
+    const profile = join(home, "profile");
+    const catalog = new ServiceCatalog(profile, authority);
+    const dev = catalog.createEnvironment({ projectId, name: "开发环境" }).environmentId;
+    const staging = catalog.createEnvironment({ projectId, name: "预发环境" }).environmentId;
+    const descriptor = { name: "API", program: "node", args: ["service.cjs"], ports: [], runType: "long-lived" as const };
+    const first = catalog.saveTemplate({ projectId, environmentId: dev, descriptor, shared: [{ key: "STAGE", value: "development", secret: false }] });
+    const second = catalog.saveTemplate({ projectId, environmentId: staging, serviceId: first.serviceId, expectedVersion: 0, descriptor,
+      shared: [{ key: "STAGE", value: "staging", secret: false }] });
+    catalog.bindTask({ taskId, serviceId: first.serviceId, environmentId: dev, templateVersion: 1, rootId: "repo-a", subdir: "",
+      programPath: process.execPath, privateRefs: [{ key: "API_TOKEN", envRef: "LOCAL_API_TOKEN" }] });
+    const launch = catalog.launchFor(taskId, projectId, first.serviceId, { LOCAL_API_TOKEN: "synthetic-private-value" });
+    expect(launch).toMatchObject({ environmentId: dev, environmentName: "开发环境", templateVersion: 1 });
+    expect(launch.layers.shared).toEqual([{ key: "STAGE", value: "development", secret: false }]);
+    expect(launch.layers.privateEntries).toEqual([{ key: "API_TOKEN", value: "synthetic-private-value", secret: true }]);
+    // The private value exists in the launch material and in NO document.
+    for (const file of ["service-templates.json", "service-environments.json", "service-machine.json"]) {
+      expect(readFileSync(join(profile, file), "utf8")).not.toContain("synthetic-private-value");
+    }
+    // Both environments' own revisions are on disk under one service id.
+    expect(second).toMatchObject({ environmentId: staging, serviceId: first.serviceId, version: 1 });
+    expect(catalog.listTemplates(projectId, staging)).toMatchObject([{ environmentId: staging, shared: [{ key: "STAGE", value: "staging", secret: false }] }]);
+    // An unresolvable private reference is refused by name instead of launching
+    // a child with a partial environment.
+    expect(() => catalog.launchFor(taskId, projectId, first.serviceId, {})).toThrow();
+    // The environment is the seal: with its document gone the SAME binding is
+    // refused, not silently resolved through another environment.
+    rmSync(join(profile, "service-environments.json"));
+    expect(() => catalog.launchFor(taskId, projectId, first.serviceId, { LOCAL_API_TOKEN: "synthetic-private-value" }))
+      .toThrow("service-launch-unavailable");
+  });
+});
