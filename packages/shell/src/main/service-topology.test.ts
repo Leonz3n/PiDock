@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   auditBindingReadPoints,
   bindingsToTaskRows,
+  deriveBindingRules,
   describeDependencyRouting,
   endpointKeyCandidates,
   instanceAddress,
+  planBindingLayers,
   planPortAssignments,
   planRestartScope,
   planStartGroups,
@@ -259,6 +261,95 @@ describe("variable bindings", () => {
     expect(renderBindingValue("url", 9001)).toBe("http://127.0.0.1:9001");
     expect(renderBindingValue("host-port", 9001)).toBe("127.0.0.1:9001");
     expect(renderBindingValue("url", 9001, "grpc://${host}:${port}")).toBe("grpc://127.0.0.1:9001");
+  });
+});
+
+/**
+ * The plan's binding rules come from the TRUSTED side, not from a page: the
+ * read points are the rows main's own catalog carries, and a local unit's address
+ * is only overridden where the plan really declared the dependency (ADR 0002).
+ * These cases pin the derivation main feeds the Host; the real project + real
+ * Host evidence lives in `../host/service-binding-readpoints.test.ts`.
+ */
+describe("trusted binding rules for the plan", () => {
+  const localUnits: RunUnit[] = [
+    { unitId: "repo-a:caller-api", serviceId: "caller-api", name: "Caller API", repoDir: "repo-a", location: "local" },
+    { unitId: "repo-a:callee-api", serviceId: "callee-api", name: "Callee API", repoDir: "repo-a", location: "local" },
+  ];
+  const sharedRows: BindingLayers = {
+    ...emptyLayers,
+    shared: [{ key: "CALLEE_API_URL", value: "https://callee.shared.example", secret: false }],
+  };
+
+  it("binds the declared target's read point and audits it as covered", () => {
+    const rules = deriveBindingRules({ units: localUnits, layers: sharedRows, declaredTargets: ["callee-api"] });
+    // Address for address: the ONE key the trusted config really reads.
+    expect(rules).toEqual([{ key: "CALLEE_API_URL", unitId: "repo-a:callee-api", kind: "url" }]);
+
+    const resolved = resolveTaskBindings({
+      rules,
+      assignments: [
+        { unitId: "repo-a:caller-api", serviceId: "caller-api", port: 9001, instanceId: "task-aaaaaaaa/caller-api" },
+        { unitId: "repo-a:callee-api", serviceId: "callee-api", port: 9002, instanceId: "task-aaaaaaaa/callee-api" },
+      ],
+      units: localUnits,
+      layers: sharedRows,
+    });
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) return;
+    // The read point really was checked AND covered: the task override replaced
+    // the shared-environment address as a whole, and the audit is silent because
+    // of that binding - not because it had nothing to read.
+    expect(resolved.bindings[0]?.readPoints).toEqual(["共享模板"]);
+    expect(resolved.bindings[0]?.value).toBe("http://127.0.0.1:9002");
+    expect(resolved.diagnostics).toEqual([]);
+  });
+
+  it("leaves an undeclared local unit's read point unbound so the audit NAMES it", () => {
+    const rules = deriveBindingRules({ units: localUnits, layers: sharedRows, declaredTargets: [] });
+    expect(rules).toEqual([]);
+    const resolved = resolveTaskBindings({ rules, assignments: [], units: localUnits, layers: sharedRows });
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) return;
+    expect(resolved.bindings).toEqual([]);
+    // No declaration means no local-address override, and the gap is reported by
+    // name instead of the consumer silently keeping the shared address.
+    expect(resolved.diagnostics.map((entry) => [entry.code, entry.scope.key, entry.scope.unitId])).toEqual([
+      ["missing-binding", "CALLEE_API_URL", "repo-a:callee-api"],
+    ]);
+  });
+
+  it("binds the canonical address variable of a declaration whose name the config does not follow", () => {
+    const layers: BindingLayers = { ...emptyLayers, shared: [{ key: "CALLEE_ADDR", value: "callee.shared.example:80", secret: false }] };
+    const rules = deriveBindingRules({ units: localUnits, layers, declaredTargets: ["callee-api"] });
+    expect(rules).toEqual([{ key: "CALLEE_API_ENDPOINT", unitId: "repo-a:callee-api", kind: "url" }]);
+    const resolved = resolveTaskBindings({
+      rules,
+      assignments: [{ unitId: "repo-a:callee-api", serviceId: "callee-api", port: 9002, instanceId: "task-aaaaaaaa/callee-api" }],
+      units: localUnits,
+      layers,
+    });
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) return;
+    // The name the plan bound is read by nobody: the audit says so instead of
+    // reporting the override as effective.
+    expect(resolved.diagnostics.map((entry) => [entry.code, entry.scope.key])).toEqual([["unused-binding", "CALLEE_API_ENDPOINT"]]);
+  });
+
+  it("binds nothing for a unit the plan does not run locally", () => {
+    expect(deriveBindingRules({ units, layers: { ...emptyLayers, shared: [{ key: "ACCOUNT_SERVICE_URL", value: "https://account.example", secret: false }] }, declaredTargets: ["account-service"] })).toEqual([]);
+  });
+
+  it("merges the plan's layers as read points, first row of a layer winning", () => {
+    const layers = planBindingLayers([
+      { ...emptyLayers, shared: [{ key: "CALLEE_API_URL", value: "https://a.example", secret: false }], privateEntries: [{ key: "PORT", value: "9002", secret: true }] },
+      { ...emptyLayers, shared: [{ key: "CALLEE_API_URL", value: "https://b.example", secret: false }, { key: "SERVICE_TAG", value: "callee", secret: false }] },
+    ]);
+    expect(layers.shared).toEqual([
+      { key: "CALLEE_API_URL", value: "https://a.example", secret: false },
+      { key: "SERVICE_TAG", value: "callee", secret: false },
+    ]);
+    expect(layers.privateEntries).toEqual([{ key: "PORT", value: "9002", secret: true }]);
   });
 });
 

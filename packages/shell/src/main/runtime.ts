@@ -44,6 +44,7 @@ import { ServiceCatalog, serviceCatalogAuthority, type ServiceLaunch, type Servi
 import { InstalledServiceHostAuthority, type ServiceOwnerChange, type ServiceOwnerDurableRecord } from "./service-host-binding.js";
 import { parseServiceOwnerRebindRequest, performServiceBindingOperation, performServiceCatalogOperation, performServiceConfigPreview, parseServiceRunGroupRequest, parseServiceRunRequest } from "./service-catalog-ipc.js";
 import { declaredServicePorts, resolveServiceEnv } from "./service-config.js";
+import { deriveBindingRules, planBindingLayers, type RunUnit } from "./service-topology.js";
 import { codeObservationFields } from "./service-code-observation.js";
 import { loadExternalEditorSettings, type ExternalEditorSettingsResult } from "./external-editor.js";
 import { performEditorSettingsOperation } from "./external-editor-settings.js";
@@ -1118,21 +1119,25 @@ export async function runTaskService(
  * Nothing here spawns, signals or re-plans a unit, and the page supplies no unit
  * list - `parseServiceRunGroupRequest` accepts `{op,projectId,taskId}` only.
  *
- * Plan source, stated instead of implied: the Host's run unit plan is per-Host
- * state written by `task/planServiceGroup`. This caller starts on that plan
- * AS-IS when the Host already holds one (so a plan carrying call edges keeps its
- * linkage verification); only when the Host itself answers `not-planned` does
- * main establish the task's group from the trusted catalog (units = the task's
- * bound services, ports = the ports their registrations declare, run type = the
- * template's own).
+ * Plan source, stated instead of implied: main is the ONLY writer of the plan a
+ * group start runs. It writes the task's group from its own trusted catalog
+ * BEFORE every start (units = the task's bound services, ports = the ports their
+ * registrations declare, run type = the template's own, edges = the pinned
+ * revisions' 服务依赖声明, binding rules + config layers = the same trusted read),
+ * so a plan the dock's own topology read left on the Host - which carries no
+ * declaration-derived edge and no rules/layers - can never decide what this start
+ * runs. The plan's resolved task-override rows are then re-registered as the
+ * registrations' `task` layer, so the address the plan resolved is the address
+ * the children really run with (the layer order of `resolveServiceEnv` is
+ * untouched; a plan that binds nothing re-registers nothing).
  *
- * The edges of that fallback plan are the 服务依赖声明 of the revisions the task
- * pins (ADR 0002), mapped onto the plan's own unit ids: a declared `call`/
- * `prestart` edge is what makes the Host's real linkage step run for it, so
- * 已互验 is reachable in the shipped app WITHOUT anybody synthesising an edge. A
- * revision that declares nothing contributes none - the group then starts and
- * listens but has nothing to 互验, which the panel names instead of implying a
- * linkage nobody observed.
+ * The edges of that plan are the 服务依赖声明 of the revisions the task pins
+ * (ADR 0002), mapped onto the plan's own unit ids: a declared `call`/`prestart`
+ * edge is what makes the Host's real linkage step run for it, so 已互验 is
+ * reachable in the shipped app WITHOUT anybody synthesising an edge. A revision
+ * that declares nothing contributes none - the group then starts and listens but
+ * has nothing to 互验, which the panel names instead of implying a linkage nobody
+ * observed.
  *
  * Fail-closed: an unresolvable launch, an unbound task, a declared dependency
  * whose target is not bound to this task or a plan whose ports conflict refuses
@@ -1163,6 +1168,12 @@ export async function runTaskServiceGroup(
       throw new Error(`服务登记失败，未发起整组启动：${binding.serviceId} 的启动材料无法从可信服务目录解析（${error instanceof Error ? error.message : String(error)}）`);
     }
   });
+  // Box 6: the SAME per-unit worktree observation the single-service path makes,
+  // read by main once per launch and carried by BOTH registrations below, so the
+  // two cannot disagree about the code state a start really ran from.
+  const observationOf = new Map(
+    bound.map(({ launch }) => [launch.serviceId, codeObservationFields(launch.descriptor.cwd)] as const),
+  );
   for (const { launch } of bound) {
     try {
       await tasks.routeTaskOp({
@@ -1170,10 +1181,7 @@ export async function runTaskServiceGroup(
         op: "task/registerService",
         payload: {
           serviceId: launch.serviceId, descriptor: launch.descriptor, layers: launch.layers, templateVersion: String(launch.templateVersion),
-          // The SAME per-unit worktree observation the single-service path makes
-          // (box 6): each unit's own verified cwd, read by main, or its named
-          // failure reason.
-          ...codeObservationFields(launch.descriptor.cwd),
+          ...(observationOf.get(launch.serviceId) ?? {}),
         },
         origin,
       });
@@ -1181,29 +1189,44 @@ export async function runTaskServiceGroup(
       throw new Error(`服务登记失败，未发起整组启动：${error instanceof Error ? error.message : String(error)}`);
     }
   }
-  const startPlannedGroup = async (): Promise<Record<string, unknown>> => {
-    const controlled = await tasks.routeTaskOp({
-      taskId: request.taskId,
-      op: "task/controlService",
-      payload: { group: true, action: "start", label: SERVICE_RUN_HUMAN_LABEL },
-      origin,
-    });
-    return controlled.payload;
-  };
-  const first = await startPlannedGroup();
-  if (groupRunState(first) !== "not-planned") return first;
-  // The Host holds no plan for this task: establish one from main's trusted
-  // catalog, then start once. This branch is the ONLY writer, so an existing
-  // plan (with its dependency edges) is never clobbered.
-  await planBoundServiceGroup(tasks, bound, request, origin);
-  return await startPlannedGroup();
-}
-
-/** The group run state the Host answered with; `undefined` when the payload carries no group. */
-function groupRunState(payload: Record<string, unknown>): unknown {
-  const group = payload["group"];
-  if (typeof group !== "object" || group === null || Array.isArray(group)) return undefined;
-  return (group as Record<string, unknown>)["state"];
+  // The plan is written from the catalog on EVERY group start, not only when the
+  // Host happens to hold none. The Host's plan is also written by the dock's own
+  // topology read (`task/planServiceGroup` over the visible projection), so the
+  // old "start an existing plan as-is" branch would let a renderer-shaped,
+  // edge-less plan decide what a group start runs - and the declared edges,
+  // binding rules and config layers main derives here would never reach it.
+  const taskRows = await planBoundServiceGroup(tasks, bound, request, origin);
+  // The plan's resolved address overrides ARE the task's 任务覆盖, so they have to
+  // reach the children: re-registering each trusted launch with them as the
+  // `task` layer is what makes the resolved winner real (the child env is built
+  // from `resolveServiceEnv`'s own precedence, order untouched). No rows means no
+  // re-registration: a plan that binds nothing must not touch the registration.
+  if (taskRows.length > 0) {
+    for (const { launch } of bound) {
+      try {
+        await tasks.routeTaskOp({
+          taskId: request.taskId,
+          op: "task/registerService",
+          payload: {
+            serviceId: launch.serviceId, descriptor: launch.descriptor,
+            layers: { ...launch.layers, task: taskRows },
+            templateVersion: String(launch.templateVersion),
+            ...(observationOf.get(launch.serviceId) ?? {}),
+          },
+          origin,
+        });
+      } catch (error) {
+        throw new Error(`服务登记失败，未发起整组启动：${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  }
+  const controlled = await tasks.routeTaskOp({
+    taskId: request.taskId,
+    op: "task/controlService",
+    payload: { group: true, action: "start", label: SERVICE_RUN_HUMAN_LABEL },
+    origin,
+  });
+  return controlled.payload;
 }
 
 /**
@@ -1220,8 +1243,10 @@ function groupUnitId(rootId: string, serviceId: string): string {
  * The task's own group plan as main derives it from the trusted catalog: every
  * bound service is one LOCAL run unit (a binding is exactly what the dock's
  * single-service start button may execute), with the run type and the declared
- * ports its registration carries, and with the 服务依赖声明 of the pinned
- * revisions as the plan's dependency edges.
+ * ports its registration carries, the 服务依赖声明 of the pinned revisions as the
+ * plan's dependency edges, and the plan's variable-binding rules and config
+ * layers - the two inputs `auditBindingReadPoints` (box 2's 读取点核对) needs and
+ * which production never sent.
  *
  * The edge is the DECLARATION, address for address: each declared target is
  * resolved to the unit id of the SAME service inside this plan (`<rootId>:<serviceId>`, 
@@ -1231,13 +1256,23 @@ function groupUnitId(rootId: string, serviceId: string): string {
  * A revision that declares nothing contributes no edge at all and the
  * `dependencies` key stays OUT of the payload, which is how the plan keeps
  * today's honest "no declaration, no edge" behaviour.
+ *
+ * `rules`/`layers` come from the SAME trusted read (`launch.layers`) main already
+ * resolves the declared ports from, so the page cannot name a binding destination
+ * or a read point. They are sent only when the trusted side really derived
+ * something: an absent key is the honest "nothing was read", never an empty set
+ * that would let the audit pass as if it had checked the read points.
+ *
+ * Returns the plan's own task-override rows (`bindingsToTaskRows`), because the
+ * resolved address overrides are what the children must really run with - the
+ * caller applies them as the `task` layer of the trusted registrations.
  */
 async function planBoundServiceGroup(
   tasks: Pick<PerTaskHostRegistry, "routeTaskOp">,
   bound: { binding: { rootId: string }; template: ServiceTemplate; launch: ServiceLaunch }[],
   request: ReturnType<typeof parseServiceRunGroupRequest>,
   origin: { kind: "service-catalog"; senderWebContentsId: number },
-): Promise<void> {
+): Promise<{ key: string; value: string; secret: boolean }[]> {
   const planned = bound.map(({ binding, launch }) => {
     // The ports this service's launch DECLARES (never a probe): the descriptor's
     // own list plus its `*PORT` RESOLVED rows - the SAME two inputs the Host's
@@ -1264,6 +1299,7 @@ async function planBoundServiceGroup(
     };
   });
   const unitIdOf = new Map(planned.map((entry) => [entry.serviceId, entry.unitId]));
+  const declaredTargets: string[] = [];
   const dependencies = bound.flatMap(({ binding, launch, template }) => {
     const from = groupUnitId(binding.rootId, launch.serviceId);
     return (template.dependencies ?? []).map((dependency) => {
@@ -1275,17 +1311,22 @@ async function planBoundServiceGroup(
         // missing - refused by name instead.
         throw new Error(`服务依赖声明无法满足，未生成整组计划：「${launch.descriptor.name}」（${launch.serviceId}）声明的依赖目标 ${dependency.to} 未在本任务的服务绑定中，请先绑定该服务或从共享模板移除该声明`);
       }
+      declaredTargets.push(dependency.to);
       return { from, to, kind: dependency.kind };
     });
   });
-  await tasks.routeTaskOp({
+  const units: RunUnit[] = planned.map((entry) => ({
+    unitId: entry.unitId, serviceId: entry.serviceId, name: entry.name,
+    repoDir: entry.repoDir, location: "local", runType: entry.runType,
+  }));
+  const layers = planBindingLayers(bound.map(({ launch }) => launch.layers));
+  const layerRowCount = layers.repoDefaults.length + layers.shared.length + layers.privateEntries.length + layers.task.length;
+  const rules = deriveBindingRules({ units, layers, declaredTargets });
+  const answer = await tasks.routeTaskOp({
     taskId: request.taskId,
     op: "task/planServiceGroup",
     payload: {
-      units: planned.map((entry) => ({
-        unitId: entry.unitId, serviceId: entry.serviceId, name: entry.name,
-        repoDir: entry.repoDir, location: "local", runType: entry.runType,
-      })),
+      units,
       selectedRepoDirs: [...new Set(planned.map((entry) => entry.repoDir))],
       requests: planned.flatMap((entry) => {
         const [port] = entry.declared;
@@ -1295,8 +1336,36 @@ async function planBoundServiceGroup(
       // Sent ONLY when the pinned revisions really declare an edge: an empty or
       // absent key is the honest "no declaration, no edge" plan.
       ...(dependencies.length === 0 ? {} : { dependencies }),
+      // The same convention: a key is present only when the trusted side really
+      // derived rows/rules, so an absent `layers` reads as "no config row was read"
+      // and never as a completed read-point audit over nothing.
+      ...(rules.length === 0 ? {} : { rules }),
+      ...(layerRowCount === 0 ? {} : { layers }),
     },
     origin,
+  });
+  return plannedTaskRowsOf(answer.payload);
+}
+
+/**
+ * The plan's own task-override rows, read back from the Host's plan answer.
+ * Absent or malformed answers yield no rows instead of a fabricated override:
+ * the plan's resolved addresses are the Host's allocation, so main never
+ * derives them itself.
+ */
+function plannedTaskRowsOf(payload: Record<string, unknown>): { key: string; value: string; secret: boolean }[] {
+  const plan = payload["plan"];
+  if (typeof plan !== "object" || plan === null || Array.isArray(plan)) return [];
+  const rows = (plan as Record<string, unknown>)["taskRows"];
+  if (!Array.isArray(rows)) return [];
+  return rows.flatMap((entry) => {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return [];
+    const row = entry as Record<string, unknown>;
+    const key = row["key"];
+    const value = row["value"];
+    const secret = row["secret"];
+    if (typeof key !== "string" || key.trim().length === 0 || typeof value !== "string" || typeof secret !== "boolean") return [];
+    return [{ key, value, secret }];
   });
 }
 
