@@ -34,6 +34,7 @@ function setup() {
       taskOpCalls.push({ taskId, op });
       if (op === "task/serviceStatus") return { ok: true, payload: { service: { serviceId: SERVICE_ID, state: "running", ownerSessionId: null, busy: false, closing: false, retainedRights: null, executionAvailable: false } } };
       if (op === "task/serviceLog") return { ok: true, payload: { log: [{ at: "2026-10-08T00:00:01.000Z", line: "listening at :4100" }] } };
+      if (op === "task/serviceRunRecords") return { ok: true, payload: { records: [], registered: [] } };
       return { ok: false, error: `unexpected ${op}` };
     }),
     providerOp: vi.fn(async () => ({ ok: true, payload: { state: "not-configured", profileId: null, generation: null, profiles: [] } })),

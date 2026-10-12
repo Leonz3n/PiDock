@@ -20,7 +20,8 @@
  * the response as unreadable instead of rendering a partial or invented row.
  */
 import { serviceBindingsFromMain, serviceOwnerRebindFromMain, serviceTemplatesFromMain, type ServiceBindingView, type ServiceOwnerRebindView, type ServiceTemplateView } from "./serviceCatalog";
-import { serviceCatalogThroughShell, serviceStatusThroughShell, shellBridge } from "./shellBridge";
+import { serviceCatalogThroughShell, serviceRunRecordsThroughShell, serviceStatusThroughShell, shellBridge } from "./shellBridge";
+import type { ServiceBuildFreshness, ServiceCodeState } from "./types";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -239,6 +240,153 @@ export function serviceStatusFromHost(payload: unknown, serviceId: string): Serv
   return typeof row["state"] === "string" ? ownerStatus(row, serviceId) : registryStatus(row, serviceId);
 }
 
+const RUN_CODE_STATES = ["committed-clean", "uncommitted", "unknown"] as const;
+const RUN_BUILD_FRESHNESS = ["fresh", "stale-build", "uncommitted-code", "unknown"] as const;
+/** The keys a verification entry may carry; the entry itself is validated (so a
+ * Host shape change fails the read) but not displayed here: this slice shows the
+ * run's own facts, and linkage/readiness results are box 4's surface. */
+const RUN_VERIFICATION_KEYS = ["kind", "detail", "ok", "at"];
+const RUN_CODE_KEYS = ["kind", "commit", "note"];
+
+/**
+ * The top-level keys a `task/serviceRunRecords` row may carry. Exported so the
+ * seam test can pin the REAL Host `RunRecord` against this list (mirroring
+ * `VERIFICATION_ROW_KEYS`): a Host key this parser does not accept must fail
+ * there, not silently blank every run record in the panel.
+ */
+export const RUN_RECORD_KEYS = [
+  "runId", "taskId", "serviceId", "instanceId", "templateVersion", "codeState",
+  "buildFreshness", "ports", "portsSource", "processIdentity", "logRef",
+  "protocolArtifact", "startedAt", "endedAt", "exit", "verifications",
+] as const;
+
+/**
+ * One real run record for a service ([PiDock 05] #10 box 6), as the Host's
+ * `task/serviceRunRecords` reports it: code/build state, the port list with its
+ * `declared` vs `observed` origin, the real process identity, the per-run log
+ * entry and the exit reason once the run ended.
+ */
+export interface ServiceRunRecordView {
+  runId: string;
+  templateVersion: string;
+  codeState: ServiceCodeState;
+  codeCommit?: string;
+  buildFreshness: ServiceBuildFreshness;
+  ports: number[];
+  /** Absent means the Host did not say, so the panel must not claim either. */
+  portsSource?: "declared" | "observed";
+  processIdentity: { owner: "agent" | "human"; pid: number; startedAt: string };
+  logRef: string;
+  startedAt: string;
+  endedAt?: string;
+  exitReason?: string;
+}
+
+/** Length-bounded text: `undefined` when absent, `null` when present-but-unusable. */
+function boundedText(value: unknown, max: number): string | undefined | null {
+  if (value === undefined) return undefined;
+  return typeof value === "string" && value.length > 0 && value.length <= max ? value : null;
+}
+
+/**
+ * One run record, read strictly: an unknown field, a missing process identity, a
+ * wrong code/build token or a malformed port makes the WHOLE row unreadable
+ * (`null`) instead of a half-row. Nothing here can invent a pid, a port label or
+ * a code state — a real run whose pid/start time nobody observed must not read
+ * as one that was.
+ */
+function runRecordFromHost(value: unknown): { serviceId: string; record: ServiceRunRecordView } | null {
+  if (!isRecord(value)) return null;
+  if (Object.keys(value).some((key) => !(RUN_RECORD_KEYS as readonly string[]).includes(key))) return null;
+  const runId = value["runId"];
+  const serviceId = value["serviceId"];
+  const templateVersion = value["templateVersion"];
+  if (typeof runId !== "string" || runId.length === 0 || runId.length > 200) return null;
+  if (typeof serviceId !== "string" || serviceId.length === 0) return null;
+  if (typeof templateVersion !== "string" || templateVersion.length > 200) return null;
+  const code = value["codeState"];
+  if (!isRecord(code) || Object.keys(code).some((key) => !RUN_CODE_KEYS.includes(key))) return null;
+  const codeState = RUN_CODE_STATES.find((candidate) => candidate === code["kind"]);
+  if (codeState === undefined) return null;
+  const codeCommit = boundedText(code["commit"], 200);
+  if (codeCommit === null) return null;
+  const buildFreshness = RUN_BUILD_FRESHNESS.find((candidate) => candidate === value["buildFreshness"]);
+  if (buildFreshness === undefined) return null;
+  const rawPorts = value["ports"];
+  if (!Array.isArray(rawPorts) || rawPorts.length > 64) return null;
+  const ports: number[] = [];
+  for (const port of rawPorts) {
+    if (typeof port !== "number" || !Number.isInteger(port) || port < 0 || port > 65535) return null;
+    ports.push(port);
+  }
+  const source = value["portsSource"];
+  if (source !== undefined && source !== "declared" && source !== "observed") return null;
+  const process = value["processIdentity"];
+  if (!isRecord(process) || Object.keys(process).sort().join(",") !== "owner,pid,startedAt") return null;
+  const owner = process["owner"];
+  const pid = process["pid"];
+  const pidStartedAt = process["startedAt"];
+  if (owner !== "agent" && owner !== "human") return null;
+  if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) return null;
+  if (typeof pidStartedAt !== "string" || pidStartedAt.length === 0 || pidStartedAt.length > 200) return null;
+  const logRef = value["logRef"];
+  const startedAt = value["startedAt"];
+  if (typeof logRef !== "string" || logRef.length === 0 || logRef.length > 4000) return null;
+  if (typeof startedAt !== "string" || startedAt.length === 0 || startedAt.length > 200) return null;
+  const endedAt = boundedText(value["endedAt"], 200);
+  if (endedAt === null) return null;
+  const exit = value["exit"];
+  let exitReason: string | undefined;
+  if (exit !== undefined) {
+    if (!isRecord(exit) || Object.keys(exit).sort().join(",") !== "reason") return null;
+    const reason = exit["reason"];
+    if (typeof reason !== "string" || reason.length === 0 || reason.length > 2000) return null;
+    exitReason = reason;
+  }
+  const rawVerifications = value["verifications"];
+  if (!Array.isArray(rawVerifications) || rawVerifications.length > 64) return null;
+  for (const entry of rawVerifications) {
+    if (!isRecord(entry) || Object.keys(entry).some((key) => !RUN_VERIFICATION_KEYS.includes(key))) return null;
+    if (typeof entry["kind"] !== "string" || typeof entry["detail"] !== "string" || typeof entry["ok"] !== "boolean") return null;
+  }
+  const protocolArtifact = value["protocolArtifact"];
+  if (protocolArtifact !== undefined && (!isRecord(protocolArtifact) || Object.keys(protocolArtifact).sort().join(",") !== "version")) return null;
+  return {
+    serviceId,
+    record: {
+      runId, templateVersion, codeState,
+      ...(codeCommit !== undefined ? { codeCommit } : {}),
+      buildFreshness, ports,
+      ...(source !== undefined ? { portsSource: source } : {}),
+      processIdentity: { owner, pid, startedAt: pidStartedAt },
+      logRef, startedAt,
+      ...(endedAt !== undefined ? { endedAt } : {}),
+      ...(exitReason !== undefined ? { exitReason } : {}),
+    },
+  };
+}
+
+/**
+ * Every run record in one `task/serviceRunRecords` payload, latest per service
+ * (`TaskServiceTopology.runs()` is push order). `null` when the payload is not a
+ * real Host answer: one malformed row fails the WHOLE read rather than being
+ * skipped, so a bad record can never hide the row that would have named it. An
+ * empty map means the Host answered and has no record for that service — the
+ * panel must say so by name, never imply a run.
+ */
+export function runRecordsFromHost(payload: unknown): Map<string, ServiceRunRecordView> | null {
+  if (!isRecord(payload) || !Array.isArray(payload["records"])) return null;
+  const rows = payload["records"];
+  if (rows.length > 1000) return null;
+  const byService = new Map<string, ServiceRunRecordView>();
+  for (const row of rows) {
+    const parsed = runRecordFromHost(row);
+    if (parsed === null) return null;
+    byService.set(parsed.serviceId, parsed.record);
+  }
+  return byService;
+}
+
 export interface ServiceLogLine { at: string; line: string }
 
 /** One `task/serviceLog` payload; `null` when the lines are not a real Host answer. */
@@ -298,6 +446,15 @@ export interface BoundServiceRow {
   status: ServiceStatusView | undefined;
   /** Real Host refusal / unreadable-response text for this row's status read. */
   statusError: string | undefined;
+  /**
+   * The Host's latest real run record for this service ([PiDock 05] #10 box 6),
+   * when `task/serviceRunRecords` answered one. `undefined` alone means the Host
+   * answered and has no record; the panel then names that state rather than
+   * implying a run.
+   */
+  runRecord: ServiceRunRecordView | undefined;
+  /** Names why the run-record read could not be shown (refusal / unreadable). */
+  runRecordError: string | undefined;
 }
 
 export type TaskServicesLoad =
@@ -312,29 +469,46 @@ export type TaskServicesLoad =
  * two apart. `projectId === null` never means the task has no services. A
  * missing project template leaves the row identity-only instead of inventing a
  * name or a port.
+ *
+ * Each row also carries the Host's real run record read once through
+ * `task/serviceRunRecords`; a failed or unreadable read is named per row instead
+ * of degrading to "no record".
  */
 export async function loadTaskServices(taskId: string): Promise<TaskServicesLoad> {
   const association = await taskProjectIdThroughShell(taskId);
   if (!association.ok) return { ok: false, error: association.error };
   if (association.projectId === null) return { ok: true, projectId: null, associationState: association.state, rows: [], templatesError: undefined };
   const projectId = association.projectId;
-  const [bindingsResult, templatesResult] = await Promise.all([
+  const [bindingsResult, templatesResult, runRecordsResult] = await Promise.all([
     serviceCatalogThroughShell({ op: "taskBindings", projectId, taskId }),
     serviceCatalogThroughShell({ op: "list", projectId }),
+    serviceRunRecordsThroughShell(taskId),
   ]);
   const templates = templatesResult.ok ? serviceTemplatesFromMain(templatesResult.payload, projectId) : null;
   const templatesError = templates === null ? shellFailure(templatesResult, "读取项目服务配方失败") : undefined;
   if (!bindingsResult.ok) return { ok: false, error: shellFailure(bindingsResult, "读取任务服务绑定失败") };
   const bindings = serviceBindingsFromMain(bindingsResult.payload, taskId);
   if (!bindings) return { ok: false, error: "Host 任务服务绑定响应无法解析" };
+  // A refused read and an unreadable payload are kept apart: one is the Host's
+  // own refusal text, the other a named parse refusal. Both mean "the run record
+  // could not be shown", never "there is no run".
+  const runRecords = runRecordsResult.ok ? runRecordsFromHost(runRecordsResult.payload) : null;
+  const runRecordsError = runRecordsResult.ok === false
+    ? shellFailure(runRecordsResult, "读取运行记录失败")
+    : runRecords === null
+      ? "Host 运行记录响应无法解析"
+      : undefined;
   const rows = await Promise.all(bindings.map(async (binding): Promise<BoundServiceRow> => {
     const template = templates?.find((row) => row.serviceId === binding.serviceId);
     const result = await serviceStatusThroughShell({ taskId, serviceId: binding.serviceId });
-    if (!result.ok) return { binding, template, status: undefined, statusError: shellFailure(result, "读取服务状态失败") };
-    const status = serviceStatusFromHost(result.payload, binding.serviceId);
-    return status
-      ? { binding, template, status, statusError: undefined }
-      : { binding, template, status: undefined, statusError: "Host 服务状态响应无法解析" };
+    const status = result.ok ? (serviceStatusFromHost(result.payload, binding.serviceId) ?? undefined) : undefined;
+    return {
+      binding, template,
+      status,
+      statusError: result.ok ? (status ? undefined : "Host 服务状态响应无法解析") : shellFailure(result, "读取服务状态失败"),
+      runRecord: runRecords?.get(binding.serviceId),
+      runRecordError: runRecordsError,
+    };
   }));
   return { ok: true, projectId, associationState: association.state, rows, templatesError };
 }

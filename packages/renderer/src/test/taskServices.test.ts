@@ -7,6 +7,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   runBoundTaskServiceThroughShell,
+  runRecordsFromHost,
   serviceLogFromHost,
   serviceStatusFromHost,
   shellFailure,
@@ -64,6 +65,60 @@ describe("[UI 对齐] S8d task service parsers", () => {
     expect(serviceLogFromHost({ log: [{ at: "now" }] })).toBeNull();
     expect(serviceLogFromHost({ log: "listening" })).toBeNull();
     expect(serviceLogFromHost({})).toBeNull();
+  });
+
+  it("reads a real run record strictly and keeps the declared/observed port origin apart", () => {
+    const record = {
+      runId: "run-1", taskId: "task-1", serviceId: SERVICE_ID, instanceId: `task-1/${SERVICE_ID}@53101`,
+      templateVersion: "v1",
+      codeState: { kind: "uncommitted", commit: "abc1234", note: "工作副本有未提交修改" },
+      buildFreshness: "uncommitted-code",
+      ports: [53101], portsSource: "declared",
+      processIdentity: { owner: "agent", pid: 4242, startedAt: "2026-10-08T00:00:00.000Z" },
+      logRef: "/tmp/task-1/services/svc/run-run-1.log", startedAt: "2026-10-08T00:00:00.000Z",
+      verifications: [{ kind: "linkage", detail: "联通检查 shipment-service", ok: true, at: "2026-10-08T00:00:01.000Z" }],
+    };
+    const parsed = runRecordsFromHost({ records: [record], registered: [] });
+    expect(parsed?.get(SERVICE_ID)).toEqual({
+      runId: "run-1", templateVersion: "v1", codeState: "uncommitted", codeCommit: "abc1234",
+      buildFreshness: "uncommitted-code", ports: [53101], portsSource: "declared",
+      processIdentity: { owner: "agent", pid: 4242, startedAt: "2026-10-08T00:00:00.000Z" },
+      logRef: "/tmp/task-1/services/svc/run-run-1.log", startedAt: "2026-10-08T00:00:00.000Z",
+    });
+    // Nothing was verified about this record: the missing pid must not be
+    // invented, and the record for another service is simply absent here.
+    expect(parsed?.get("s-99999999-9999-9999-9999-999999999999")).toBeUndefined();
+    // The latest row for a service wins (`runs()` is push order).
+    const restarted = { ...record, runId: "run-2", ports: [53102], portsSource: "observed" };
+    expect(runRecordsFromHost({ records: [record, restarted] })?.get(SERVICE_ID)).toMatchObject({ runId: "run-2", ports: [53102], portsSource: "observed" });
+  });
+
+  it("refuses a malformed run-record payload as a whole instead of hiding the bad row", () => {
+    const base = {
+      runId: "run-1", serviceId: SERVICE_ID, templateVersion: "v1",
+      codeState: { kind: "unknown", note: "缺少提交信息，无法判断代码状态" }, buildFreshness: "unknown",
+      ports: [53101], portsSource: "declared",
+      processIdentity: { owner: "human", pid: 4242, startedAt: "2026-10-08T00:00:00.000Z" },
+      logRef: "/tmp/task-1/svc/run-run-1.log", startedAt: "2026-10-08T00:00:00.000Z", verifications: [],
+    };
+    // An empty answer is readable and simply has no record; it is NOT a refusal.
+    expect(runRecordsFromHost({ records: [] })?.size).toBe(0);
+    expect(runRecordsFromHost({ registered: [] })).toBeNull();
+    for (const bad of [
+      { ...base, portsSource: "guessed" },
+      { ...base, codeState: { kind: "teleporting" } },
+      { ...base, buildFreshness: "maybe" },
+      { ...base, processIdentity: { owner: "human", pid: 0, startedAt: "2026-10-08T00:00:00.000Z" } },
+      { ...base, processIdentity: { owner: "robot", pid: 5, startedAt: "now" } },
+      { ...base, ports: ["53101"] },
+      { ...base, verifications: [{ kind: "linkage", detail: "x" }] },
+      { ...base, unexpected: true },
+      "run-1",
+    ]) {
+      expect(runRecordsFromHost({ records: [bad] })).toBeNull();
+    }
+    // One bad row fails the whole read rather than being skipped for a valid sibling.
+    expect(runRecordsFromHost({ records: [base, { ...base, runId: 7 }] })).toBeNull();
   });
 
   it("reads the task's own association row and refuses an inconsistent project link", () => {
