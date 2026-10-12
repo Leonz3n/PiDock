@@ -15,6 +15,7 @@ import {
   resolveTaskBindings,
   serviceInstanceId,
   setUnitLocation,
+  unitEndpointKeyCandidates,
   unitsByRepo,
   validateRunUnitSelection,
   type BindingLayers,
@@ -338,6 +339,33 @@ describe("trusted binding rules for the plan", () => {
 
   it("binds nothing for a unit the plan does not run locally", () => {
     expect(deriveBindingRules({ units, layers: { ...emptyLayers, shared: [{ key: "ACCOUNT_SERVICE_URL", value: "https://account.example", secret: false }] }, declaredTargets: ["account-service"] })).toEqual([]);
+  });
+
+  it("finds the address spelling the trusted data really uses: the unit's name, not only its opaque id", () => {
+    // The catalog mints UUID service ids, so `S_<uuid>_URL` matches no business
+    // row; the shared template names the service the way its author does.
+    const uuid = "s-11111111-1111-4111-8111-111111111111";
+    const named: RunUnit[] = [
+      { unitId: `repo-a:${uuid}`, serviceId: uuid, name: "Callee API", repoDir: "repo-a", location: "local" },
+    ];
+    expect(unitEndpointKeyCandidates(named[0] as RunUnit)).toEqual([
+      "S_11111111_1111_4111_8111_111111111111_ENDPOINT", "S_11111111_1111_4111_8111_111111111111_URL",
+      "S_11111111_1111_4111_8111_111111111111_BASE_URL", "S_11111111_1111_4111_8111_111111111111_HOST",
+      "CALLEE_API_ENDPOINT", "CALLEE_API_URL", "CALLEE_API_BASE_URL", "CALLEE_API_HOST",
+    ]);
+    const layers: BindingLayers = { ...emptyLayers, shared: [{ key: "CALLEE_API_URL", value: "https://callee.shared.example", secret: false }] };
+    const rules = deriveBindingRules({ units: named, layers, declaredTargets: [uuid] });
+    expect(rules).toEqual([{ key: "CALLEE_API_URL", unitId: `repo-a:${uuid}`, kind: "url" }]);
+    const resolved = resolveTaskBindings({
+      rules,
+      assignments: [{ unitId: `repo-a:${uuid}`, serviceId: uuid, port: 9002, instanceId: `task-aaaaaaaa/${uuid}` }],
+      units: named,
+      layers,
+    });
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) return;
+    expect(resolved.bindings[0]?.readPoints).toEqual(["共享模板"]);
+    expect(resolved.diagnostics).toEqual([]);
   });
 
   it("merges the plan's layers as read points, first row of a layer winning", () => {
