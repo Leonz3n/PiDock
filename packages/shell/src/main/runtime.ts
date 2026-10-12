@@ -42,7 +42,7 @@ import { shutdownDeadline } from "../host/shutdown-deadline.js";
 import { ProjectRegistry } from "./project-registry.js";
 import { ServiceCatalog, serviceCatalogAuthority, type ServiceLaunch, type ServiceTemplate } from "./service-catalog.js";
 import { InstalledServiceHostAuthority, type ServiceOwnerChange, type ServiceOwnerDurableRecord } from "./service-host-binding.js";
-import { parseServiceOwnerRebindRequest, performServiceBindingOperation, performServiceCatalogOperation, performServiceConfigPreview, parseServiceRunGroupRequest, parseServiceRunRequest } from "./service-catalog-ipc.js";
+import { createServiceTemplateHandler, parseServiceOwnerRebindRequest, performServiceBindingOperation, performServiceCatalogOperation, performServiceConfigPreview, parseServiceRunGroupRequest, parseServiceRunRequest } from "./service-catalog-ipc.js";
 import { declaredServicePorts, resolveServiceEnv } from "./service-config.js";
 import { deriveBindingRules, planBindingLayers, type RunUnit } from "./service-topology.js";
 import { codeObservationFields } from "./service-code-observation.js";
@@ -56,6 +56,7 @@ import type { ProjectTaskAppend } from "./task-append.js";
 import { performAppendOperation } from "./project-append-ipc.js";
 import type { BrowserPerformResult, BrowserRequestParams, HostTaskOp, HostTaskResult, TaskOpOrigin } from "../rpc/protocol.js";
 import { isHostTaskOp } from "../rpc/protocol.js";
+import type { ServiceTemplateRequestHandler } from "../rpc/service-template-request.js";
 import { TaskBrowser } from "./task-browser.js";
 import { TaskBrowserSurface } from "./task-browser-surface.js";
 import { DesktopLayout, splitTaskBounds } from "./desktop-layout.js";
@@ -400,9 +401,21 @@ export class PerTaskHostRegistry {
   private disposalReceipt?: Promise<void>;
   private readonly hostExits = new Map<UtilityProcess, { exited: boolean; receipt: Promise<void> }>();
   private services?: InstalledServiceHostAuthority;
+  /** Per-task shared-template handler bound by `registerIpc` once the catalog exists ([PiDock 04] #7 box 6). */
+  private serviceTemplates?: (taskId: string) => ServiceTemplateRequestHandler;
   configureServices(create: (workspaceId: string) => InstalledServiceHostAuthority): void {
     if (this.services || this.closing || this.byTaskDir.size || this.pendingHosts.size) throw Error("service-owner-authority-already-bound");
     this.services = create(this.workspaceId);
+  }
+  /**
+   * The per-task handler for the Host -> main shared-template requests
+   * ([PiDock 04] #7 box 6). Bound late because the catalog exists after this
+   * registry does, exactly like the owner authority above. Absent means every
+   * request is refused by name and nothing is written.
+   */
+  configureServiceTemplates(create: (taskId: string) => ServiceTemplateRequestHandler): void {
+    if (this.serviceTemplates) throw Error("service-template-handler-already-bound");
+    this.serviceTemplates = create;
   }
   private async prepareServices(entry: PerTaskHostEntry): Promise<void> {
     if (!this.services) return;
@@ -429,11 +442,20 @@ export class PerTaskHostRegistry {
     private readonly taskRoots?: TaskRootIndex,
   ) {}
 
-  private bindHostRequests(client: HostClient): HostClient {
+  private bindHostRequests(entry: PerTaskHostEntry): HostClient {
+    const client = entry.client;
     client.onBrowserRequest(async (params) =>
       this.browsers
         ? this.browsers.handleRequest(params)
         : { ok: false, error: "browser-unavailable: 主进程未挂载任务浏览器能力" },
+    );
+    // The task identity is THIS child's own binding (`entry.taskId`, fixed when
+    // main forked it), never a payload field: the handler refuses a request that
+    // names another task.
+    client.onServiceTemplateRequest(async (params) =>
+      this.serviceTemplates
+        ? await this.serviceTemplates(entry.taskId)(params)
+        : { ok: false, error: "template-unavailable: 主进程未挂载共享模板通道" },
     );
     return client;
   }
@@ -670,7 +692,7 @@ export class PerTaskHostRegistry {
       const dirs = this.byTaskId.get(taskId) ?? new Set<string>();
       dirs.add(key); this.byTaskId.set(taskId, dirs);
       if (identity) this.identities.set(key, identity);
-      this.bindHostRequests(entry.client);
+      this.bindHostRequests(entry);
       return entry;
     });
     this.pendingHosts.set(key, { taskId, taskDir, identity, promise });
@@ -1495,6 +1517,10 @@ export function registerIpc(
 ): void {
   if (tasks && catalog && taskRoots && projects) tasks.configureServices((workspaceId) => new InstalledServiceHostAuthority(
     app.getPath("userData"), catalog, serviceCatalogAuthority(taskRoots, projects), workspaceId, process.env));
+  // [PiDock 04] (#7 box 6) the Agent's shared-template edit reaches main here:
+  // one handler per forked task, bound to that child's own task id, using the
+  // same catalog the page's edit path uses (main stays the only writer).
+  if (tasks && catalog) tasks.configureServiceTemplates((taskId) => createServiceTemplateHandler(catalog, taskId));
   type TurnMessage = Parameters<Parameters<HostClient["onTurnEvent"]>[0]>[0];
   type PendingStart = { requestId: string; buffered: TurnMessage[]; bytes: number; overflow: boolean };
   type Subscription = { taskId: string; sessionId: string; frame: { processId: number; routingId: number }; webContents: WebContents; detach: () => void; deliver: (message: TurnMessage) => void; onNavigation: () => void; onInPageNavigation: () => void; onDestroyed: () => void; turns: Map<string, { sequence: number; resync: boolean; terminal: boolean }>; evictedTurns: boolean; pendingStart: PendingStart | null };

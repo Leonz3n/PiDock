@@ -136,6 +136,7 @@ import { PiSdkTextKernel } from "./sdk-text-kernel.js";
 import { SdkTextKernelRouter } from "./sdk-kernel-router.js";
 import { SdkContextClient } from "./sdk-context-client.js";
 import { SdkAgentToolBroker, derivedPrimaryCheckouts, type SdkAgentServiceHost, type SdkAgentToolScope } from "./sdk-agent-tool-broker.js";
+import type { ServiceTemplateEditPort } from "../rpc/service-template-request.js";
 import type { ExplicitTextProvider } from "./explicit-text-provider.js";
 import {
   PI_USAGE_GROUP_LABELS,
@@ -634,6 +635,7 @@ export class TaskWorkspaceHost {
       // hands the same pair to `task/serviceStatus`/`task/controlService`). A
       // Host constructed without that surface refuses every service tool.
       services: () => this.agentServices(),
+      templates: () => this.templateEdits(),
       closing: () => this.executionClosing || this.sdkDisposalFailed,
     }));
   }
@@ -843,6 +845,13 @@ export class TaskWorkspaceHost {
      * keeps every Agent service tool fail-closed.
      */
     private readonly agentServices: () => SdkAgentServiceHost | undefined = () => undefined,
+    /**
+     * The shared-template channel for the Agent's template tool ([PiDock 04] #7
+     * box 6). `host.ts` hands in the parent-port client that asks MAIN (the
+     * catalog store's owner) for the review and for the write; absent keeps the
+     * template tool refused by name with nothing read or written.
+     */
+    private readonly templateEdits: () => ServiceTemplateEditPort | undefined = () => undefined,
   ) {
     if (taskId.trim().length === 0) throw new Error("taskId must be non-empty");
     if (taskDir.trim().length === 0) throw new Error("taskDir must be non-empty");

@@ -1,4 +1,5 @@
 import type { ServiceBindingAdoption, ServiceCatalog, ServiceEnvironment, ServiceTaskBinding, ServiceTemplate, ServiceTemplateDependency, ServiceTemplateUpdateReview } from "./service-catalog.js";
+import { isServiceTemplateEdit, type ServiceTemplateRequestParams, type ServiceTemplateRequestResult, type ServiceTemplateReview } from "../rpc/service-template-request.js";
 import { TrustDomainViolation } from "./trust-domain.js";
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -354,4 +355,120 @@ export function performServiceCatalogOperation(
     return adoptionProjection(written);
   }
   throw new TrustDomainViolation("invalid-payload", "unknown service catalog operation");
+}
+
+/**
+ * [PiDock 04] (#7 box 6) the Agent's half of 「Agent 修改共享模板生成差异确认」: the
+ * SAME two-step as the page's `update` branch above, with the three facts the
+ * Agent must not name derived from the addressed task's OWN binding pin instead
+ * of being supplied:
+ *
+ * - the project and the environment come from the binding that owns `serviceId`
+ *   (`store.listTask`), so an edit cannot retarget another project's or another
+ *   environment's revision space, and a task that has not bound the service is
+ *   refused BY NAME with nothing read or written;
+ * - `expectedVersion` is the binding's own pinned version, so a template that
+ *   moved since the pin (someone edited it first) is the named
+ *   `template-version-conflict` refusal - never a silent overwrite of the newer
+ *   revision;
+ * - the descriptor, the shared rows and the optional 服务依赖声明 are the edit
+ *   content: they are the only page-independent inputs.
+ *
+ * `confirm:false` returns the review and writes NOTHING; the confirming call
+ * writes through the identical store API the page path uses (`reviewTemplateUpdate`
+ * -> `saveTemplate`) and cross-checks that the written revision is the reviewed
+ * one. Main stays the only writer of the template document.
+ */
+export function performTaskBoundTemplateEdit(
+  store: Pick<ServiceCatalog, "listTask" | "reviewTemplateUpdate" | "saveTemplate">,
+  input: {
+    taskId: string;
+    serviceId: string;
+    descriptor: ServiceTemplate["descriptor"];
+    shared: ServiceTemplate["shared"];
+    dependencies?: ServiceTemplateDependency[];
+    confirm: boolean;
+  },
+): ServiceTemplateReview {
+  const bound = store.listTask(input.taskId).find((row) => row.binding.serviceId === input.serviceId);
+  if (!bound) throw new Error(`unknown-service: ${input.serviceId} 不是本任务绑定的服务`);
+  const pinnedVersion = bound.binding.templateVersion;
+  const edit = { projectId: bound.binding.projectId, environmentId: bound.binding.environmentId, serviceId: input.serviceId,
+    expectedVersion: pinnedVersion, descriptor: input.descriptor, shared: input.shared,
+    ...(input.dependencies === undefined ? {} : { dependencies: input.dependencies }) };
+  const review = templateEditCall(() => store.reviewTemplateUpdate(edit), pinnedVersion);
+  if (!input.confirm) return templateReviewProjection(review, pinnedVersion);
+  const written = templateEditCall(() => store.saveTemplate(edit), pinnedVersion);
+  if (written.serviceId !== review.serviceId || written.version !== review.version || written.environmentId !== review.environmentId) {
+    throw new Error("invalid-payload: 共享模板写入结果与复核不一致，未确认");
+  }
+  return templateReviewProjection({ ...review, saved: true }, pinnedVersion);
+}
+
+/**
+ * One store call whose refusal is named for the Host: the store's own version
+ * conflict gets its own code (it is the one refusal the Agent path can hit by
+ * itself), every other store refusal keeps the store's message under a
+ * `invalid-payload:` code. Nothing is written on any of these paths.
+ */
+function templateEditCall<T>(call: () => T, pinnedVersion: number): T {
+  try {
+    return call();
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    if (reason === "template version conflict") {
+      throw new Error(`template-version-conflict: 本任务的绑定钉在 v${pinnedVersion}，共享模板已不是该版本（未写入任何内容，请重新发起调用）`);
+    }
+    throw new Error(`invalid-payload: ${reason}`);
+  }
+}
+
+function templateReviewProjection(review: ServiceTemplateUpdateReview, pinnedVersion: number): ServiceTemplateReview {
+  return { serviceId: review.serviceId, pinnedVersion, version: review.version, versionLabel: review.versionLabel, saved: review.saved,
+    descriptorChanged: review.descriptorChanged, dependenciesChanged: review.dependenciesChanged, contentChanged: review.contentChanged,
+    diff: { added: [...review.diff.added], changed: review.diff.changed.map((row) => ({ ...row })), removed: [...review.diff.removed] },
+    restartNeeded: review.restartNeeded.map((row) => ({ ...row })) };
+}
+
+/** Every refusal the Host reads carries a code token, so the tool can name it. */
+function namedTemplateRefusal(reason: string): string {
+  return /^[a-z][a-z0-9-]{1,63}: /.test(reason) ? reason : `template-unavailable: ${reason}`;
+}
+
+/**
+ * The main half of the Host -> main shared-template request
+ * (`rpc/service-template-request.ts`). Main binds this handler to the child it
+ * actually forked, so `taskId` here is main's own fact and the payload's task id
+ * is only checked against it: a request naming another task is refused by name
+ * and reaches no store call.
+ *
+ * Each operation derives the binding pin for THIS call, so an `apply` never
+ * treats the earlier review's answer as the write's authority: a template that
+ * moved between the review and the confirmation fails closed by name instead of
+ * overwriting the newer revision.
+ */
+export function createServiceTemplateHandler(
+  store: Pick<ServiceCatalog, "listTask" | "reviewTemplateUpdate" | "saveTemplate">,
+  taskId: string,
+): (request: ServiceTemplateRequestParams) => Promise<ServiceTemplateRequestResult> {
+  return async (request) => {
+    if (request.taskId !== taskId) {
+      return { ok: false, error: `task-identity-mismatch: 共享模板请求的任务与子进程绑定不一致（${request.taskId}）` };
+    }
+    if (!isServiceTemplateEdit(request.edit)) {
+      return { ok: false, error: "invalid-payload: 共享模板编辑只能有 serviceId、descriptor、shared 与可选 dependencies" };
+    }
+    try {
+      return { ok: true, payload: performTaskBoundTemplateEdit(store, {
+        taskId,
+        serviceId: request.edit.serviceId,
+        descriptor: request.edit.descriptor as ServiceTemplate["descriptor"],
+        shared: request.edit.shared as ServiceTemplate["shared"],
+        ...(request.edit.dependencies === undefined ? {} : { dependencies: request.edit.dependencies as ServiceTemplateDependency[] }),
+        confirm: request.op === "apply",
+      }) };
+    } catch (error) {
+      return { ok: false, error: namedTemplateRefusal(error instanceof Error ? error.message : String(error)) };
+    }
+  };
 }
