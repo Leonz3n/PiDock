@@ -56,6 +56,15 @@ function rowKey(row: RootRow): string {
 const PLAIN_DIR_NO_DIFF = "plain-dir-no-diff:";
 
 /**
+ * The pinned baseline the change reading compares against, as one row can name
+ * it. Without a recorded commit the phrase stays honest about that instead of
+ * inventing a base.
+ */
+function baselinePhrase(root: WorkspaceRootView): string {
+  return root.baseCommit ? `与基线 ${root.baseCommit.slice(0, 7)} 的差异` : "与固定基线的差异（任务记录未给出基线提交）";
+}
+
+/**
  * One row's change as words. The three inputs are kept apart on purpose: the
  * diff against the pinned baseline cannot see UNTRACKED files, so an empty diff
  * on its own would turn a new file into 无改动 — the uncommitted reading is
@@ -63,7 +72,7 @@ const PLAIN_DIR_NO_DIFF = "plain-dir-no-diff:";
  * claiming one.
  */
 export function changeSummary(root: WorkspaceRootView, change: ChangeRead | undefined): string {
-  const base = root.baseCommit ? root.baseCommit.slice(0, 7) : "未记录的基线提交";
+  const baseline = baselinePhrase(root);
   const dirty = root.dirty;
   const uncommitted =
     dirty === undefined
@@ -74,18 +83,19 @@ export function changeSummary(root: WorkspaceRootView, change: ChangeRead | unde
           : "无未提交或未跟踪文件（实测）"
         : `未提交或未跟踪状态未实测（${dirty.reason}）`;
   if (change === undefined) return `未实测：尚未读取；${uncommitted}`;
-  if (change.state === "unknown") return `未实测：与基线 ${base} 的差异未读取（${change.reason}）；${uncommitted}`;
+  if (change.state === "unknown") return `未实测：${baseline}未读取（${change.reason}）；${uncommitted}`;
   if (change.diff.length > 0) {
-    const lines = change.diff.split("\n").length;
-    return `有改动（实测：与基线 ${base} 的差异 ${lines} 行${change.truncated ? "，已按上限截断" : ""}；${uncommitted}）`;
+    // Trailing newlines are not lines of their own.
+    const lines = change.diff.replace(/\n+$/, "").split("\n").length;
+    return `有改动（实测：${baseline} ${lines} 行${change.truncated ? "，已按上限截断" : ""}；${uncommitted}）`;
   }
   if (dirty?.state === "observed" && dirty.value) {
-    return `有改动（实测：${uncommitted}，未进入与基线 ${base} 的差异）`;
+    return `有改动（实测：${uncommitted}，未进入${baseline}）`;
   }
   if (dirty?.state === "observed") {
-    return `无改动（实测：与基线 ${base} 的差异为空，且无未提交或未跟踪文件）`;
+    return `无改动（实测：${baseline}为空，且无未提交或未跟踪文件）`;
   }
-  return `部分未实测：与基线 ${base} 的差异为空，但${uncommitted}`;
+  return `部分未实测：${baseline}为空，但${uncommitted}`;
 }
 
 /** A link root has no Git view at all: it shows the Host's named refusal. */
