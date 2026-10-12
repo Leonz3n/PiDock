@@ -60,7 +60,7 @@ import type { SdkAgentServiceHost } from "./sdk-agent-tool-broker.js";
 import { scanTaskServiceImportHints } from "./service-import.js";
 import { publicServiceStartPreview, publicServiceStatus } from "./service-public.js";
 import { declaredServicePorts } from "../main/service-config.js";
-import { TaskServiceTopology } from "./service-topology.js";
+import { TaskServiceTopology, attemptRunBookkeeping } from "./service-topology.js";
 import { TaskProtocolBinding } from "./protocol-binding.js";
 import { shutdownDeadline } from "./shutdown-deadline.js";
 import { HostTaskAdmission } from "./host-task-admission.js";
@@ -466,7 +466,7 @@ function serviceDriverFor(taskId: string, services: TaskServiceRuntime): Service
         // resolves on the spawn event and its caller's continuation drains as a
         // microtask, while the close event is a later macrotask - so a live
         // child cannot be missed here without also being missed by `stop`.
-        closeServiceRun(taskId, serviceId, reason);
+        closeServiceRun(taskId, services, serviceId, reason);
         services.markExited(serviceId, reason);
       },
       (line) => services.redactLine(line),
@@ -497,7 +497,7 @@ function serviceDriverFor(taskId: string, services: TaskServiceRuntime): Service
     },
     stop: async (serviceId) => {
       await processes.stop(serviceId);
-      closeServiceRun(taskId, serviceId, "stopped");
+      closeServiceRun(taskId, services, serviceId, "stopped");
     },
   };
 }
@@ -530,7 +530,12 @@ function recordServiceRun(
   const topology = serviceTopologyFor(taskId);
   if ("error" in topology) return;
   const registered = services.get(serviceId);
-  try {
+  // The topology record is a read model, never the launch's authority: a refused
+  // record must not turn a child that really started into a failure. It is NOT
+  // swallowed either - the named refusal lands in this service's own bounded log
+  // (`task/serviceLog`), so `task/serviceRunRecords` answering empty while a
+  // child runs is visible instead of silent.
+  const outcome = attemptRunBookkeeping(() =>
     topology.recordRun({
       serviceId,
       templateVersion: registered?.templateVersion ?? "unknown",
@@ -538,27 +543,22 @@ function recordServiceRun(
       portsSource: "declared",
       pid,
       owner,
-    });
-  } catch {
-    // The topology record is a read model, never the launch's authority: a
-    // refused record must not turn a child that really started into a failure.
-  }
+    }),
+  );
+  if (!outcome.ok) services.recordOutput(serviceId, `运行记录写入被拒绝：${outcome.reason}`);
 }
 
 /** Close the newest still-open run of one service; `false` when none was open. */
-function closeServiceRun(taskId: string, serviceId: string, reason: string): boolean {
+function closeServiceRun(taskId: string, services: TaskServiceRuntime, serviceId: string, reason: string): boolean {
   const topology = serviceTopologyFor(taskId);
   if ("error" in topology) return false;
   const open = [...topology.runs()].reverse().find((record) => record.serviceId === serviceId && record.endedAt === undefined);
   if (!open) return false;
-  try {
-    topology.exitRun(open.runId, reason);
-    return true;
-  } catch {
-    // Same boundary as `recordServiceRun`: a bookkeeping refusal never changes
-    // the action that really happened.
-    return false;
-  }
+  // Same boundary as `recordServiceRun`: a bookkeeping refusal never changes the
+  // action that really happened, but it is named and logged, not swallowed.
+  const outcome = attemptRunBookkeeping(() => topology.exitRun(open.runId, reason));
+  if (!outcome.ok) services.recordOutput(serviceId, `运行记录关闭被拒绝：${outcome.reason}`);
+  return outcome.ok;
 }
 
 /**

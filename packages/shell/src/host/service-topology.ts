@@ -125,6 +125,24 @@ export interface RecordRunInput {
   protocolArtifact?: { version: string };
 }
 
+/**
+ * Outcome of one run-record bookkeeping write. The Host's process driver calls
+ * the record/close helpers only AFTER a real start/stop, so a refused write is
+ * never authority over the action that really happened (fail-open) - but it
+ * must not vanish either: `reason` names the refusal so the caller can surface
+ * it, and `task/serviceRunRecords` answering empty while a child runs cannot go
+ * unnoticed.
+ */
+export type RunBookkeepingOutcome<T> = { ok: true; value: T } | { ok: false; reason: string };
+
+export function attemptRunBookkeeping<T>(write: () => T): RunBookkeepingOutcome<T> {
+  try {
+    return { ok: true, value: write() };
+  } catch (error) {
+    return { ok: false, reason: `run-record-refused: ${error instanceof Error ? error.message : String(error)}` };
+  }
+}
+
 const EMPTY_LAYERS: BindingLayers = { repoDefaults: [], shared: [], privateEntries: [], task: [] };
 
 export class TaskServiceTopology {
@@ -280,7 +298,6 @@ export class TaskServiceTopology {
       throw new Error("invalid-payload: recordServiceRun.pid must be a positive integer from the real process");
     }
     const unit = this.units.find((candidate) => candidate.serviceId === input.serviceId);
-    const assignment = this.assignments.find((candidate) => candidate.serviceId === input.serviceId);
     const startedAt = input.startedAt ?? this.now();
     if (startedAt.trim().length === 0) throw new Error("invalid-payload: recordServiceRun.startedAt must be non-empty");
     const record = buildRunRecord({
@@ -288,7 +305,10 @@ export class TaskServiceTopology {
       taskId: this.taskId,
       serviceId: input.serviceId,
       templateVersion: input.templateVersion,
-      ports: input.ports.length > 0 ? input.ports : assignment ? [assignment.port] : [],
+      // Only the caller's own declared list. The plan's `assignment` is the
+      // renderer's request, not a port the registration's resolved env carried,
+      // so falling back to it would print an unclaimed plan port as `declared`.
+      ports: input.ports,
       portsSource: input.portsSource,
       ...(input.code !== undefined ? { code: input.code } : {}),
       build: { commit: input.buildCommit },
