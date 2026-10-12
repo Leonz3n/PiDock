@@ -8,14 +8,15 @@ import type { ShellTaskOpResult } from "../data/shellBridge";
 const projectId = "b36323d3-ff33-4e34-a873-536a9775788a";
 const otherProject = "524639ce-90ac-4dc5-8a52-c3628386ca36";
 const serviceId = "s-b36323d3-ff33-4e34-a873-536a9775788a";
+const environmentId = "e-b36323d3-ff33-4e34-a873-536a9775788a";
 const saved = {
-  projectId, serviceId, version: 1,
+  projectId, environmentId, serviceId, version: 1,
   descriptor: { name: "API", program: "node", args: ["server.js"], ports: [3000], runType: "long-lived" },
   shared: [{ key: "PORT", value: "3000" }],
 };
 const restart = { changed: true, processRestarted: false as const, fencedTaskIds: [] as string[] };
 const review = {
-  projectId, serviceId, version: 2, versionLabel: "v2", saved: false, descriptorChanged: true, contentChanged: true,
+  projectId, environmentId, serviceId, version: 2, versionLabel: "v2", saved: false, descriptorChanged: true, contentChanged: true,
   diff: { added: ["API_URL"], changed: [{ key: "PORT", before: "3000", after: "4000" }], removed: [] },
   restartNeeded: [{ taskId: "task-1", serviceId, name: "API", from: 1, to: 2 }], restart,
 };
@@ -28,24 +29,24 @@ function stub(handler: (request: Record<string, unknown>) => ShellTaskOpResult) 
 }
 
 it("projects a saved template with only its shared fields and none of the private ones", () => {
-  expect(serviceTemplatesFromMain([saved], projectId)).toEqual([saved]);
-  expect(serviceTemplatesFromMain([{ ...saved, programPath: "/local/private", privateRefs: [{ key: "API_TOKEN", envRef: "PRIVATE_ENV" }] }], projectId)).toBeNull();
-  expect(serviceTemplatesFromMain([{ ...saved, projectId: otherProject }], projectId)).toBeNull();
-  expect(serviceTemplatesFromMain([{ ...saved, descriptor: { ...saved.descriptor, runType: "unknown" } }], projectId)).toBeNull();
+  expect(serviceTemplatesFromMain([saved], projectId, environmentId)).toEqual([saved]);
+  expect(serviceTemplatesFromMain([{ ...saved, programPath: "/local/private", privateRefs: [{ key: "API_TOKEN", envRef: "PRIVATE_ENV" }] }], projectId, environmentId)).toBeNull();
+  expect(serviceTemplatesFromMain([{ ...saved, projectId: otherProject }], projectId, environmentId)).toBeNull();
+  expect(serviceTemplatesFromMain([{ ...saved, descriptor: { ...saved.descriptor, runType: "unknown" } }], projectId, environmentId)).toBeNull();
   // The new shared fields stay key-exact: an unexpected key or a machine path is refused, never partially rendered.
-  expect(serviceTemplatesFromMain([{ ...saved, descriptor: { ...saved.descriptor, cwd: "/Users/name/task" } }], projectId)).toBeNull();
-  expect(serviceTemplatesFromMain([{ ...saved, descriptor: { ...saved.descriptor, workdir: "/Users/name/task" } }], projectId)).toBeNull();
-  expect(serviceTemplatesFromMain([{ ...saved, descriptor: { ...saved.descriptor, workdir: "../outside" } }], projectId)).toBeNull();
-  expect(serviceTemplatesFromMain([{ ...saved, shared: [{ key: "PORT", value: "3000", secret: true }] }], projectId)).toBeNull();
-  expect(serviceTemplatesFromMain([{ ...saved, shared: [{ key: "1BAD", value: "3000" }] }], projectId)).toBeNull();
-  expect(serviceTemplatesFromMain([{ ...saved, descriptor: { ...saved.descriptor, workdir: "apps/api", healthCheck: { kind: "http" } } }], projectId))
+  expect(serviceTemplatesFromMain([{ ...saved, descriptor: { ...saved.descriptor, cwd: "/Users/name/task" } }], projectId, environmentId)).toBeNull();
+  expect(serviceTemplatesFromMain([{ ...saved, descriptor: { ...saved.descriptor, workdir: "/Users/name/task" } }], projectId, environmentId)).toBeNull();
+  expect(serviceTemplatesFromMain([{ ...saved, descriptor: { ...saved.descriptor, workdir: "../outside" } }], projectId, environmentId)).toBeNull();
+  expect(serviceTemplatesFromMain([{ ...saved, shared: [{ key: "PORT", value: "3000", secret: true }] }], projectId, environmentId)).toBeNull();
+  expect(serviceTemplatesFromMain([{ ...saved, shared: [{ key: "1BAD", value: "3000" }] }], projectId, environmentId)).toBeNull();
+  expect(serviceTemplatesFromMain([{ ...saved, descriptor: { ...saved.descriptor, workdir: "apps/api", healthCheck: { kind: "http" } } }], projectId, environmentId))
     .toEqual([{ ...saved, descriptor: { ...saved.descriptor, workdir: "apps/api", healthCheck: { kind: "http" } } }]);
 });
 
 it("requires an explicit second confirmation before creating a human project template", async () => {
   const serviceCatalogOp = stub((request) => request["op"] === "list" ? { ok: true, payload: [] } : { ok: true, payload: saved });
-  render(<ProjectServiceTemplates projectId={projectId} />);
-  expect(await screen.findByText("该项目尚未保存服务模板。")).toBeInTheDocument();
+  render(<ProjectServiceTemplates projectId={projectId} environmentId={environmentId} />);
+  expect(await screen.findByText("该环境尚未保存服务模板。")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "添加服务" }));
   fireEvent.change(screen.getByLabelText("服务名称"), { target: { value: "API" } });
   fireEvent.change(screen.getByLabelText("程序名"), { target: { value: "node" } });
@@ -60,7 +61,7 @@ it("requires an explicit second confirmation before creating a human project tem
   expect(serviceCatalogOp).toHaveBeenCalledTimes(1);
   fireEvent.click(screen.getByRole("button", { name: "确认保存" }));
   await waitFor(() => expect(screen.getByText("API")).toBeInTheDocument());
-  expect(serviceCatalogOp).toHaveBeenCalledWith({ op: "create", projectId,
+  expect(serviceCatalogOp).toHaveBeenCalledWith({ op: "create", projectId, environmentId,
     descriptor: saved.descriptor, shared: [{ key: "PORT", value: "3000", secret: false }] });
   expect(screen.getByRole("button", { name: "任务绑定" })).toBeInTheDocument();
   expect(screen.getByText("共享模板目录已接线")).toBeInTheDocument();
@@ -72,8 +73,8 @@ it("requires an explicit second confirmation before creating a human project tem
 it("keeps the shared workdir and healthCheck of a created template and refuses a machine path with the rule's own message", async () => {
   const serviceCatalogOp = stub((request) => request["op"] === "list" ? { ok: true, payload: [] }
     : { ok: true, payload: { ...saved, shared: [], descriptor: { ...saved.descriptor, workdir: "apps/api", healthCheck: { kind: "http", target: "http://127.0.0.1:3000/health" } } } });
-  render(<ProjectServiceTemplates projectId={projectId} />);
-  await screen.findByText("该项目尚未保存服务模板。");
+  render(<ProjectServiceTemplates projectId={projectId} environmentId={environmentId} />);
+  await screen.findByText("该环境尚未保存服务模板。");
   fireEvent.click(screen.getByRole("button", { name: "添加服务" }));
   fireEvent.change(screen.getByLabelText("服务名称"), { target: { value: "API" } });
   fireEvent.change(screen.getByLabelText("程序名"), { target: { value: "node" } });
@@ -89,7 +90,7 @@ it("keeps the shared workdir and healthCheck of a created template and refuses a
   fireEvent.click(screen.getByRole("button", { name: "核对保存" }));
   fireEvent.click(screen.getByRole("button", { name: "确认保存" }));
   await waitFor(() => expect(screen.getByText(/工作目录 apps\/api/)).toBeInTheDocument());
-  expect(serviceCatalogOp).toHaveBeenLastCalledWith({ op: "create", projectId,
+  expect(serviceCatalogOp).toHaveBeenLastCalledWith({ op: "create", projectId, environmentId,
     descriptor: { ...saved.descriptor, workdir: "apps/api", healthCheck: { kind: "http", target: "http://127.0.0.1:3000/health" } },
     shared: [] });
   expect(screen.getByText(/健康检查 http/)).toBeInTheDocument();
@@ -97,8 +98,8 @@ it("keeps the shared workdir and healthCheck of a created template and refuses a
 
 it("surfaces the descriptor rule's exact message for an invalid port and program", async () => {
   const serviceCatalogOp = stub(() => ({ ok: true, payload: [] }));
-  render(<ProjectServiceTemplates projectId={projectId} />);
-  await screen.findByText("该项目尚未保存服务模板。");
+  render(<ProjectServiceTemplates projectId={projectId} environmentId={environmentId} />);
+  await screen.findByText("该环境尚未保存服务模板。");
   fireEvent.click(screen.getByRole("button", { name: "添加服务" }));
   fireEvent.change(screen.getByLabelText("服务名称"), { target: { value: "API" } });
   fireEvent.change(screen.getByLabelText("程序名"), { target: { value: "node" } });
@@ -122,8 +123,8 @@ it("surfaces the descriptor rule's exact message for an invalid port and program
 
 it("names a non-portable program, a machine-path argument and a credential target before any request", async () => {
   const serviceCatalogOp = stub(() => ({ ok: true, payload: [] }));
-  render(<ProjectServiceTemplates projectId={projectId} />);
-  await screen.findByText("该项目尚未保存服务模板。");
+  render(<ProjectServiceTemplates projectId={projectId} environmentId={environmentId} />);
+  await screen.findByText("该环境尚未保存服务模板。");
   fireEvent.click(screen.getByRole("button", { name: "添加服务" }));
   fireEvent.change(screen.getByLabelText("服务名称"), { target: { value: "API" } });
   fireEvent.change(screen.getByLabelText("程序名"), { target: { value: "/usr/bin/node" } });
@@ -155,7 +156,7 @@ it("reviews an existing shared template row by row, then writes one new version 
       : [{ ...saved, version: 2, descriptor: { ...saved.descriptor, workdir: "apps/api" }, shared: [{ key: "PORT", value: "4000" }, { key: "API_URL", value: "http://localhost" }] }] };
     return { ok: true, payload: { ...review, saved: request["confirm"] === true } };
   });
-  render(<ProjectServiceTemplates projectId={projectId} tasks={[{ taskId: "task-1", name: "任务甲" }]} />);
+  render(<ProjectServiceTemplates projectId={projectId} environmentId={environmentId} tasks={[{ taskId: "task-1", name: "任务甲" }]} />);
   expect(await screen.findByText("共享变量：PORT")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "编辑" }));
   expect(screen.getByLabelText("服务名称")).toHaveValue("API");
@@ -182,7 +183,7 @@ it("reviews an existing shared template row by row, then writes one new version 
   expect(screen.getByText(/本次保存不会撤回任何任务的服务控制/)).toBeInTheDocument();
   expect(screen.queryByText(/本次保存已撤回这些任务的服务控制/)).toBeNull();
   expect(screen.getByText(/已有任务绑定保留原模板版本/)).toBeInTheDocument();
-  expect(calls[1]).toEqual({ op: "update", projectId, serviceId, expectedVersion: 1, confirm: false,
+  expect(calls[1]).toEqual({ op: "update", projectId, environmentId, serviceId, expectedVersion: 1, confirm: false,
     descriptor: { ...saved.descriptor, workdir: "apps/api" },
     shared: [{ key: "PORT", value: "4000", secret: false }, { key: "API_URL", value: "http://localhost", secret: false }] });
   // Nothing was written by the review, and the page never claims a service restarted or adopted the new version.
@@ -192,10 +193,10 @@ it("reviews an existing shared template row by row, then writes one new version 
   fireEvent.click(screen.getByRole("button", { name: "取消" }));
   expect(await screen.findByText(/v2 · 常驻服务/)).toBeInTheDocument();
   expect(screen.getByText(/工作目录 apps\/api/)).toBeInTheDocument();
-  expect(calls.at(-2)).toEqual({ op: "update", projectId, serviceId, expectedVersion: 1, confirm: true,
+  expect(calls.at(-2)).toEqual({ op: "update", projectId, environmentId, serviceId, expectedVersion: 1, confirm: true,
     descriptor: { ...saved.descriptor, workdir: "apps/api" },
     shared: [{ key: "PORT", value: "4000", secret: false }, { key: "API_URL", value: "http://localhost", secret: false }] });
-  expect(calls.at(-1)).toEqual({ op: "list", projectId });
+  expect(calls.at(-1)).toEqual({ op: "list", projectId, environmentId });
   // The binding panel was never opened, so this page shows no bound row of its own.
   expect(screen.queryByText("已绑定")).toBeNull();
 });
@@ -208,7 +209,7 @@ it("refuses a confirmed write whose listed revision is not the one the page revi
       : [{ ...saved, version: 2, descriptor: { ...saved.descriptor, workdir: "apps/other" }, shared: [{ key: "PORT", value: "4000" }] }] };
     return { ok: true, payload: { ...review, saved: request["confirm"] === true } };
   });
-  render(<ProjectServiceTemplates projectId={projectId} />);
+  render(<ProjectServiceTemplates projectId={projectId} environmentId={environmentId} />);
   await screen.findByText("共享变量：PORT");
   fireEvent.click(screen.getByRole("button", { name: "编辑" }));
   fireEvent.change(screen.getByLabelText("共享变量 VALUE 1"), { target: { value: "4000" } });
@@ -223,7 +224,7 @@ it("refuses a confirmed write whose listed revision is not the one the page revi
 it("refuses an edit whose review claims a write, a drifted diff or a wrong version", async () => {
   const drift = stub((request) => request["op"] === "list" ? { ok: true, payload: [saved] }
     : { ok: true, payload: { ...review, saved: true } });
-  render(<ProjectServiceTemplates projectId={projectId} />);
+  render(<ProjectServiceTemplates projectId={projectId} environmentId={environmentId} />);
   await screen.findByText("共享变量：PORT");
   fireEvent.click(screen.getByRole("button", { name: "编辑" }));
   fireEvent.click(screen.getByRole("button", { name: "核对新版本" }));
@@ -233,7 +234,7 @@ it("refuses an edit whose review claims a write, a drifted diff or a wrong versi
   drift.mockClear();
   const wrongVersion = stub((request) => request["op"] === "list" ? { ok: true, payload: [saved] }
     : { ok: true, payload: { ...review, version: 9, versionLabel: "v9" } });
-  render(<ProjectServiceTemplates projectId={projectId} />);
+  render(<ProjectServiceTemplates projectId={projectId} environmentId={environmentId} />);
   await screen.findByText("共享变量：PORT");
   fireEvent.click(screen.getByRole("button", { name: "编辑" }));
   fireEvent.click(screen.getByRole("button", { name: "核对新版本" }));
@@ -245,7 +246,7 @@ it("refuses an edit whose review claims a write, a drifted diff or a wrong versi
   const driftedWrite = stub((request) => request["op"] === "list" ? { ok: true, payload: [saved] }
     : { ok: true, payload: request["confirm"] === true
       ? { ...review, saved: true, diff: { added: [], changed: [], removed: [] } } : review });
-  render(<ProjectServiceTemplates projectId={projectId} />);
+  render(<ProjectServiceTemplates projectId={projectId} environmentId={environmentId} />);
   await screen.findByText("共享变量：PORT");
   fireEvent.click(screen.getByRole("button", { name: "编辑" }));
   fireEvent.click(screen.getByRole("button", { name: "核对新版本" }));
@@ -264,8 +265,8 @@ it("keeps the form after an ambiguous save and requires a fresh authoritative li
     if (calls === 2) return { ok: false, error: "transport disconnected" };
     return { ok: true, payload: [saved] };
   });
-  render(<ProjectServiceTemplates projectId={projectId} />);
-  expect(await screen.findByText("该项目尚未保存服务模板。")).toBeInTheDocument();
+  render(<ProjectServiceTemplates projectId={projectId} environmentId={environmentId} />);
+  expect(await screen.findByText("该环境尚未保存服务模板。")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "添加服务" }));
   fireEvent.change(screen.getByLabelText("服务名称"), { target: { value: "API" } });
   fireEvent.change(screen.getByLabelText("程序名"), { target: { value: "node" } });
@@ -292,14 +293,14 @@ it("keeps the form after an ambiguous save and requires a fresh authoritative li
 
 it("re-applies the same scanned draft after the user closes the filled form", async () => {
   const serviceCatalogOp = stub(() => ({ ok: true, payload: [] }));
-  const { rerender } = render(<ProjectServiceTemplates projectId={projectId} fillFrom={null} onFillApplied={() => {}} />);
-  await screen.findByText("该项目尚未保存服务模板。");
-  rerender(<ProjectServiceTemplates projectId={projectId} fillFrom={scannedHint} onFillApplied={() => {}} />);
+  const { rerender } = render(<ProjectServiceTemplates projectId={projectId} environmentId={environmentId} fillFrom={null} onFillApplied={() => {}} />);
+  await screen.findByText("该环境尚未保存服务模板。");
+  rerender(<ProjectServiceTemplates projectId={projectId} environmentId={environmentId} fillFrom={scannedHint} onFillApplied={() => {}} />);
   expect(await screen.findByLabelText("服务名称")).toHaveValue("dev");
   fireEvent.click(screen.getByRole("button", { name: "关闭编辑" }));
   expect(screen.queryByLabelText("服务名称")).toBeNull();
-  rerender(<ProjectServiceTemplates projectId={projectId} fillFrom={null} onFillApplied={() => {}} />);
-  rerender(<ProjectServiceTemplates projectId={projectId} fillFrom={scannedHint} onFillApplied={() => {}} />);
+  rerender(<ProjectServiceTemplates projectId={projectId} environmentId={environmentId} fillFrom={null} onFillApplied={() => {}} />);
+  rerender(<ProjectServiceTemplates projectId={projectId} environmentId={environmentId} fillFrom={scannedHint} onFillApplied={() => {}} />);
   expect(await screen.findByLabelText("服务名称")).toHaveValue("dev");
   expect(serviceCatalogOp).toHaveBeenCalledTimes(1);
 });
@@ -310,8 +311,8 @@ it("rejects malformed lists and discards stale project responses", async () => {
   const serviceCatalogOp = vi.fn(async (request: Record<string, unknown>) => request["projectId"] === projectId
     ? first : { ok: true, payload: [{ ...saved, projectId: otherProject, descriptor: { ...saved.descriptor, name: "Second" } }] });
   window.pidock = { serviceCatalogOp };
-  const { rerender } = render(<ProjectServiceTemplates projectId={projectId} />);
-  rerender(<ProjectServiceTemplates projectId={otherProject} />);
+  const { rerender } = render(<ProjectServiceTemplates projectId={projectId} environmentId={environmentId} />);
+  rerender(<ProjectServiceTemplates projectId={otherProject} environmentId={environmentId} />);
   expect(await screen.findByText("Second")).toBeInTheDocument();
   resolveFirst?.({ ok: true, payload: [{ ...saved, descriptor: { ...saved.descriptor, name: "Stale" } }] });
   await waitFor(() => expect(screen.queryByText("Stale")).toBeNull());
@@ -319,10 +320,10 @@ it("rejects malformed lists and discards stale project responses", async () => {
 
 it("treats a malformed catalog response as unavailable, never an empty list", async () => {
   stub(() => ({ ok: true, payload: { revisions: [] } }));
-  render(<ProjectServiceTemplates projectId={projectId} />);
+  render(<ProjectServiceTemplates projectId={projectId} environmentId={environmentId} />);
   expect(await screen.findByRole("alert")).toHaveTextContent("响应无法核对");
   expect(screen.getByRole("button", { name: "添加服务" })).toBeDisabled();
-  expect(screen.queryByText("该项目尚未保存服务模板。")).toBeNull();
+  expect(screen.queryByText("该环境尚未保存服务模板。")).toBeNull();
 });
 
 const scannedHint: ServiceImportHintView = {
@@ -335,7 +336,7 @@ const scannedHint: ServiceImportHintView = {
 it("fills the new-template form from one explicit scanned draft and saves nothing", async () => {
   const serviceCatalogOp = stub(() => ({ ok: true, payload: [] }));
   const applied = vi.fn();
-  render(<ProjectServiceTemplates projectId={projectId} fillFrom={scannedHint} onFillApplied={applied} />);
+  render(<ProjectServiceTemplates projectId={projectId} environmentId={environmentId} fillFrom={scannedHint} onFillApplied={applied} />);
   expect(await screen.findByLabelText("服务名称")).toHaveValue("dev");
   expect(screen.getByLabelText("程序名")).toHaveValue("node");
   expect(screen.getByLabelText("参数 1")).toHaveValue("server.js");
@@ -355,7 +356,7 @@ it("fills the new-template form from one explicit scanned draft and saves nothin
   expect(screen.getByText(/API_TOKEN：疑似凭据/)).toBeInTheDocument();
   expect(applied).toHaveBeenCalledTimes(1);
   expect(serviceCatalogOp).toHaveBeenCalledTimes(1);
-  expect(serviceCatalogOp).toHaveBeenCalledWith({ op: "list", projectId });
+  expect(serviceCatalogOp).toHaveBeenCalledWith({ op: "list", projectId, environmentId });
   fireEvent.click(screen.getByRole("button", { name: "核对保存" }));
   expect(screen.getByText(/待保存：dev/)).toBeInTheDocument();
   expect(serviceCatalogOp).toHaveBeenCalledTimes(1);
@@ -364,13 +365,13 @@ it("fills the new-template form from one explicit scanned draft and saves nothin
 it("never applies a configuration-only draft as a run unit and never fills without a project", async () => {
   const serviceCatalogOp = stub(() => ({ ok: true, payload: [] }));
   const applied = vi.fn();
-  const { unmount } = render(<ProjectServiceTemplates projectId={projectId}
+  const { unmount } = render(<ProjectServiceTemplates projectId={projectId} environmentId={environmentId}
     fillFrom={{ ...scannedHint, source: ".env", name: ".env", runType: null, program: "", args: [], workdir: undefined }} onFillApplied={applied} />);
   expect(await screen.findByRole("alert")).toHaveTextContent("该草案仅为配置来源（如 .env），不能作为运行单元填入服务模板");
   expect(screen.queryByLabelText("服务名称")).toBeNull();
   unmount();
   const second = stub(() => ({ ok: true, payload: [] }));
-  render(<ProjectServiceTemplates projectId={null} fillFrom={scannedHint} onFillApplied={applied} />);
+  render(<ProjectServiceTemplates projectId={null} environmentId={null} fillFrom={scannedHint} onFillApplied={applied} />);
   expect(await screen.findByRole("alert")).toHaveTextContent("尚无项目上下文，无法填入新建模板");
   expect(screen.queryByLabelText("服务名称")).toBeNull();
   // A refused fill never reports success to the page above it.
@@ -389,7 +390,7 @@ it("claims no restart for an unchanged save and names every affected binding for
     // The first review reports an unchanged save; the second one a real change. Both are main's own answers.
     return { ok: true, payload: updates === 1 ? unchanged : { ...review, saved: request["confirm"] === true } };
   });
-  render(<ProjectServiceTemplates projectId={projectId} tasks={[{ taskId: "task-1", name: "任务甲" }]} />);
+  render(<ProjectServiceTemplates projectId={projectId} environmentId={environmentId} tasks={[{ taskId: "task-1", name: "任务甲" }]} />);
   await screen.findByText("共享变量：PORT");
   fireEvent.click(screen.getByRole("button", { name: "编辑" }));
   fireEvent.click(screen.getByRole("button", { name: "核对新版本" }));

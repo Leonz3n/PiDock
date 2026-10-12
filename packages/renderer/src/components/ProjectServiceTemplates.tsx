@@ -79,14 +79,23 @@ const draftFromHint = (hint: ServiceImportHintView): Draft => ({
  * each variable's source with its masked value - no value read from the
  * repository is ever written into the shared template.
  */
-export function ProjectServiceTemplates({ projectId, tasks = [], fillFrom = null, onFillApplied }: {
+export function ProjectServiceTemplates({ projectId, environmentId, environmentName, tasks = [], fillFrom = null, onFillApplied }: {
   projectId: string | null;
+  /**
+   * The environment whose shared templates this surface edits. Required: a
+   * template revision belongs to one environment, so with none selected the
+   * section stays unloaded and says so instead of showing a project-wide list
+   * that could be read as "the selected environment's".
+   */
+  environmentId: string | null;
+  /** Display name of the selected environment; shown beside a binding so no page infers one. */
+  environmentName?: string;
   tasks?: readonly { taskId: string; name: string }[];
   fillFrom?: ServiceImportHintView | null;
   /** Called with the hint only after the form really filled, so no caller announces a refused fill. */
   onFillApplied?: (applied: ServiceImportHintView) => void;
 }) {
-  const [rows, setRows] = useState<{ projectId: string; values: ServiceTemplateView[] } | null>(null);
+  const [rows, setRows] = useState<{ projectId: string; environmentId: string; values: ServiceTemplateView[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -103,7 +112,7 @@ export function ProjectServiceTemplates({ projectId, tasks = [], fillFrom = null
   const fillApplied = useRef(onFillApplied);
   fillApplied.current = onFillApplied;
   const connected = typeof shellBridge()?.serviceCatalogOp === "function";
-  const templates = rows?.projectId === projectId ? rows.values : null;
+  const templates = rows?.projectId === projectId && rows.environmentId === environmentId ? rows.values : null;
 
   useEffect(() => {
     let cancelled = false;
@@ -119,17 +128,17 @@ export function ProjectServiceTemplates({ projectId, tasks = [], fillFrom = null
     setUncertain(false);
     setFillNotes(null);
     setBindingId(null);
-    if (!projectId || !connected) { setLoading(false); return; }
+    if (!projectId || !environmentId || !connected) { setLoading(false); return; }
     setLoading(true);
-    void serviceCatalogThroughShell({ op: "list", projectId }).then((response) => {
+    void serviceCatalogThroughShell({ op: "list", projectId, environmentId }).then((response) => {
       if (cancelled || epoch.current !== request) return;
       setLoading(false);
-      const parsed = response.ok ? serviceTemplatesFromMain(response.payload, projectId) : null;
+      const parsed = response.ok ? serviceTemplatesFromMain(response.payload, projectId, environmentId) : null;
       if (!parsed) { setError(response.ok ? "服务配方清单响应无法核对" : "服务配方清单读取失败"); return; }
-      setRows({ projectId, values: parsed });
+      setRows({ projectId, environmentId, values: parsed });
     });
     return () => { cancelled = true; };
-  }, [projectId, connected]);
+  }, [projectId, environmentId, connected]);
 
   // One explicit human action carries a scanned draft into the form. It only
   // fills fields: no request, no save and no binding happens here, and a
@@ -142,8 +151,12 @@ export function ProjectServiceTemplates({ projectId, tasks = [], fillFrom = null
       setError("该草案仅为配置来源（如 .env），不能作为运行单元填入服务模板");
       return;
     }
-    if (!projectId || !connected) {
-      setError(!projectId ? "尚无项目上下文，无法填入新建模板" : "服务配方目录未接线，无法填入新建模板");
+    if (!projectId || !environmentId || !connected) {
+      // Named in the order of what really blocks the fill: the missing
+      // capability first, then the two selection preconditions.
+      setError(!connected ? "服务配方目录未接线，无法填入新建模板"
+        : !projectId ? "尚无项目上下文，无法填入新建模板"
+          : "尚未选择环境，无法填入新建模板");
       return;
     }
     setEditing(true);
@@ -159,18 +172,18 @@ export function ProjectServiceTemplates({ projectId, tasks = [], fillFrom = null
         ...fillFrom.variables.map((row) => `变量 ${row.key}（来源 ${row.source}）：${row.maskedValue}，仅显示遮蔽值，未写入共享模板`),
         ...fillFrom.invalidVars.map((key) => `无效变量：${key}`), ...fillFrom.toVerify] });
     fillApplied.current?.(fillFrom);
-  }, [fillFrom, projectId, connected]);
+  }, [fillFrom, projectId, environmentId, connected]);
 
   const refresh = async () => {
-    if (!projectId || loading) return;
+    if (!projectId || !environmentId || loading) return;
     const request = ++epoch.current;
     setLoading(true);
-    const response = await serviceCatalogThroughShell({ op: "list", projectId });
+    const response = await serviceCatalogThroughShell({ op: "list", projectId, environmentId });
     if (epoch.current !== request) return;
     setLoading(false);
-    const parsed = response.ok ? serviceTemplatesFromMain(response.payload, projectId) : null;
+    const parsed = response.ok ? serviceTemplatesFromMain(response.payload, projectId, environmentId) : null;
     if (!parsed) { setRows(null); setError("服务配方清单无法核对，请重试"); return; }
-    setRows({ projectId, values: parsed });
+    setRows({ projectId, environmentId, values: parsed });
     const duplicate = uncertain && parsed.some((row) => row.descriptor.name === draft.name.trim() &&
       row.descriptor.program === draft.program.trim() && row.descriptor.args.join("\0") === draft.args.filter(Boolean).join("\0") &&
       row.descriptor.ports.join(",") === draft.ports.split(",").map((part) => part.trim()).filter(Boolean).join(",") &&
@@ -221,28 +234,29 @@ export function ProjectServiceTemplates({ projectId, tasks = [], fillFrom = null
     (row.descriptor.workdir ?? "") === (value.descriptor.workdir ?? "") &&
     JSON.stringify(row.shared) === JSON.stringify(value.shared.map((entry) => ({ key: entry.key, value: entry.value })));
 
-  const createTemplate = async (targetProjectId: string) => {
+  const createTemplate = async (targetProjectId: string, targetEnvironmentId: string) => {
     const value = buildValue();
     if (!value) { setReview(false); return; }
     const request = epoch.current;
     setSaving(true);
     setError(null);
-    const response = await serviceCatalogThroughShell({ op: "create", projectId: targetProjectId, ...value });
+    const response = await serviceCatalogThroughShell({ op: "create", projectId: targetProjectId, environmentId: targetEnvironmentId, ...value });
     if (epoch.current !== request) return;
     setSaving(false);
-    const created = response.ok ? serviceTemplatesFromMain([response.payload], targetProjectId)?.[0] : null;
+    const created = response.ok ? serviceTemplatesFromMain([response.payload], targetProjectId, targetEnvironmentId)?.[0] : null;
     if (!created || created.version !== 1 || !matchesValue(created, value)) {
       setUncertain(true);
       setReview(false);
       setError("保存结果无法确认，请刷新清单后核对");
       return;
     }
-    setRows((current) => current?.projectId === targetProjectId ? { projectId: targetProjectId, values: [...current.values, created] } : current);
+    setRows((current) => current?.projectId === targetProjectId && current.environmentId === targetEnvironmentId
+      ? { projectId: targetProjectId, environmentId: targetEnvironmentId, values: [...current.values, created] } : current);
     close();
   };
 
   /** Step one of an edit: main reviews the revision without writing it. */
-  const reviewUpdate = async (targetProjectId: string, target: EditTarget) => {
+  const reviewUpdate = async (targetProjectId: string, targetEnvironmentId: string, target: EditTarget) => {
     const expected = nextVersionOf(target);
     if (expected === null) { setError("清单中的模板版本已变化，请刷新核对"); return; }
     const value = buildValue();
@@ -250,12 +264,13 @@ export function ProjectServiceTemplates({ projectId, tasks = [], fillFrom = null
     const request = epoch.current;
     setSaving(true);
     setError(null);
-    const response = await serviceCatalogThroughShell({ op: "update", projectId: targetProjectId, serviceId: target.serviceId,
-      expectedVersion: target.version, ...value, confirm: false });
+    const response = await serviceCatalogThroughShell({ op: "update", projectId: targetProjectId, environmentId: targetEnvironmentId,
+      serviceId: target.serviceId, expectedVersion: target.version, ...value, confirm: false });
     if (epoch.current !== request) return;
     setSaving(false);
     const reviewed = response.ok
-      ? serviceTemplateUpdateFromMain(response.payload, { projectId: targetProjectId, serviceId: target.serviceId, version: expected })
+      ? serviceTemplateUpdateFromMain(response.payload, { projectId: targetProjectId, environmentId: targetEnvironmentId,
+        serviceId: target.serviceId, version: expected })
       : null;
     if (!reviewed || reviewed.saved) {
       setUncertain(true);
@@ -267,7 +282,7 @@ export function ProjectServiceTemplates({ projectId, tasks = [], fillFrom = null
   };
 
   /** Step two: the confirmed write, verified against the reviewed revision. */
-  const confirmUpdate = async (targetProjectId: string, target: EditTarget) => {
+  const confirmUpdate = async (targetProjectId: string, targetEnvironmentId: string, target: EditTarget) => {
     const expected = nextVersionOf(target);
     if (expected === null) { setError("清单中的模板版本已变化，请刷新核对"); return; }
     const value = buildValue();
@@ -275,11 +290,12 @@ export function ProjectServiceTemplates({ projectId, tasks = [], fillFrom = null
     const request = epoch.current;
     setSaving(true);
     setError(null);
-    const response = await serviceCatalogThroughShell({ op: "update", projectId: targetProjectId, serviceId: target.serviceId,
-      expectedVersion: target.version, ...value, confirm: true });
+    const response = await serviceCatalogThroughShell({ op: "update", projectId: targetProjectId, environmentId: targetEnvironmentId,
+      serviceId: target.serviceId, expectedVersion: target.version, ...value, confirm: true });
     if (epoch.current !== request) return;
     const written = response.ok
-      ? serviceTemplateUpdateFromMain(response.payload, { projectId: targetProjectId, serviceId: target.serviceId, version: expected })
+      ? serviceTemplateUpdateFromMain(response.payload, { projectId: targetProjectId, environmentId: targetEnvironmentId,
+        serviceId: target.serviceId, version: expected })
       : null;
     if (!written || !written.saved || !update || JSON.stringify(written.diff) !== JSON.stringify(update.diff) ||
         written.descriptorChanged !== update.descriptorChanged) {
@@ -288,10 +304,10 @@ export function ProjectServiceTemplates({ projectId, tasks = [], fillFrom = null
       setError(response.ok ? "保存结果无法确认，请刷新清单后核对" : response.error ?? "保存失败，请重试");
       return;
     }
-    const listed = await serviceCatalogThroughShell({ op: "list", projectId: targetProjectId });
+    const listed = await serviceCatalogThroughShell({ op: "list", projectId: targetProjectId, environmentId: targetEnvironmentId });
     if (epoch.current !== request) return;
     setSaving(false);
-    const parsed = listed.ok ? serviceTemplatesFromMain(listed.payload, targetProjectId) : null;
+    const parsed = listed.ok ? serviceTemplatesFromMain(listed.payload, targetProjectId, targetEnvironmentId) : null;
     const saved = parsed?.find((row) => row.serviceId === target.serviceId);
     // The list must show the exact revision the page reviewed - the same version
     // *and* the same descriptor and shared rows - or nothing is reported as saved.
@@ -301,7 +317,7 @@ export function ProjectServiceTemplates({ projectId, tasks = [], fillFrom = null
       setError("清单未能确认新版本，请刷新核对");
       return;
     }
-    setRows({ projectId: targetProjectId, values: parsed });
+    setRows({ projectId: targetProjectId, environmentId: targetEnvironmentId, values: parsed });
     setUpdate(written);
     setUncertain(false);
   };
@@ -312,18 +328,18 @@ export function ProjectServiceTemplates({ projectId, tasks = [], fillFrom = null
   return <section className="mt-8" aria-label="服务启动配方">
     <div className="flex flex-wrap items-center justify-between gap-2">
       <h2 className="text-sm font-semibold">服务启动配方 <Badge variant="soft" className="ml-1">共享模板目录已接线</Badge></h2>
-      <div className="flex flex-wrap gap-1"><Button type="button" size="icon" variant="ghost" aria-label="刷新服务配方" title="刷新服务配方" disabled={!projectId || !connected || loading || saving} onClick={() => void refresh()}><Icon name="refresh" /></Button><Button type="button" size="sm" variant="outline" disabled={!projectId || !connected || loading || templates === null || editing} onClick={openCreate}><Icon name="plus" />添加服务</Button></div>
+      <div className="flex flex-wrap gap-1"><Button type="button" size="icon" variant="ghost" aria-label="刷新服务配方" title="刷新服务配方" disabled={!projectId || !environmentId || !connected || loading || saving} onClick={() => void refresh()}><Icon name="refresh" /></Button><Button type="button" size="sm" variant="outline" disabled={!projectId || !environmentId || !connected || loading || templates === null || editing} onClick={openCreate}><Icon name="plus" />添加服务</Button></div>
     </div>
-    <p className="mt-1 text-xs text-muted">共享模板保存在本机服务目录（主进程唯一写入），每次保存产生新版本；启停入口在任务运行面板（POSIX 启用，其他平台具名拒绝），本节不会启动进程。</p>
+    <p className="mt-1 text-xs text-muted">共享模板按环境保存在本机服务目录（主进程唯一写入），每次保存产生该环境内的新版本；启停入口在任务运行面板（POSIX 启用，其他平台具名拒绝），本节不会启动进程。</p>
     {!editing && error && <p role="alert" className="mt-3 text-xs text-[#ad4545]">{error}</p>}
-    {!editing && templates === null && <p role="status" className="mt-3 border-t border-line py-5 text-xs text-muted">{loading ? "正在读取服务配方" : !connected ? "服务配方目录未接线" : !projectId ? "尚无项目上下文" : error ? "服务配方清单不可读取" : "正在核对项目"}</p>}
-    {!editing && templates?.length === 0 && <p className="mt-3 border-t border-line py-5 text-xs text-muted">该项目尚未保存服务模板。</p>}
+    {!editing && templates === null && <p role="status" className="mt-3 border-t border-line py-5 text-xs text-muted">{loading ? "正在读取服务配方" : !connected ? "服务配方目录未接线" : !projectId ? "尚无项目上下文" : !environmentId ? "尚未选择环境：共享模板按环境保存，请先在上方创建或选择一个环境" : error ? "服务配方清单不可读取" : "正在核对项目"}</p>}
+    {!editing && templates?.length === 0 && <p role="status" className="mt-3 border-t border-line py-5 text-xs text-muted">该环境尚未保存服务模板。</p>}
     {!editing && templates?.map((row) => <div key={row.serviceId} className="flex min-w-0 flex-wrap items-start justify-between gap-2 border-t border-line py-3 text-xs">
       <div className="min-w-0"><strong className="break-words font-medium">{row.descriptor.name}</strong><span className="ml-2 text-muted">v{row.version} · {runTypeLabel[row.descriptor.runType]} · {row.descriptor.healthCheck ? `健康检查 ${row.descriptor.healthCheck.kind}` : "未设置健康检查"} · {workdirLabel(row)}</span>
         <p className="mt-1 break-all text-muted">{[row.descriptor.program, ...row.descriptor.args].join(" ")}</p>
         {!!row.shared.length && <p className="mt-1 break-all text-muted">共享变量：{row.shared.map((entry) => entry.key).join("、")}</p>}
       </div><div className="flex gap-1"><Button type="button" size="sm" variant="outline" onClick={() => openEdit(row)}><Icon name="settings" />编辑</Button><Button type="button" size="sm" variant="outline" onClick={() => setBindingId(bindingId === row.serviceId ? null : row.serviceId)}><Icon name="link" />任务绑定</Button></div>
-      {bindingId === row.serviceId && <div className="w-full"><TaskServiceBinding key={`${projectId}/${row.serviceId}`} template={row} tasks={tasks} /></div>}
+      {bindingId === row.serviceId && <div className="w-full"><TaskServiceBinding key={`${environmentId}/${row.serviceId}`} template={row} environmentName={environmentName} tasks={tasks} /></div>}
     </div>)}
     {editing && <div className="mt-3 border-t border-line pt-3 text-xs">
       <div className="flex items-center justify-between"><h3 className="font-medium">{editTarget ? `编辑共享模板 v${editTarget.version}` : "新建共享模板"}</h3><Button type="button" size="icon" variant="ghost" aria-label="关闭编辑" title="关闭编辑" disabled={saving} onClick={close}><Icon name="close" /></Button></div>
@@ -365,10 +381,11 @@ export function ProjectServiceTemplates({ projectId, tasks = [], fillFrom = null
       <div className="mt-3 flex justify-end gap-2"><Button type="button" size="sm" variant="ghost" disabled={saving} onClick={close}>取消</Button>
         {editTarget && update?.saved
           ? <Button type="button" size="sm" disabled>已保存 {update.versionLabel}</Button>
-          : <Button type="button" size="sm" disabled={saving || uncertain || loading || templates === null} onClick={() => {
+          : <Button type="button" size="sm" disabled={saving || uncertain || loading || templates === null || !environmentId} onClick={() => {
             if (!projectId) return;
-            if (editTarget) { if (review && update && !update.saved) void confirmUpdate(projectId, editTarget); else void reviewUpdate(projectId, editTarget); return; }
-            if (review) { void createTemplate(projectId); return; }
+            if (!environmentId) { setError("尚未选择环境，无法保存共享模板"); return; }
+            if (editTarget) { if (review && update && !update.saved) void confirmUpdate(projectId, environmentId, editTarget); else void reviewUpdate(projectId, environmentId, editTarget); return; }
+            if (review) { void createTemplate(projectId, environmentId); return; }
             if (buildValue()) { setError(null); setReview(true); }
           }}>{saving ? "正在处理" : editTarget ? (review ? "确认新版本" : "核对新版本") : review ? "确认保存" : "核对保存"}</Button>}
       </div>

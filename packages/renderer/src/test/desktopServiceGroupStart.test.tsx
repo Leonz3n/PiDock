@@ -34,6 +34,7 @@ import { TaskServiceTopology } from "../../../shell/src/host/service-topology.js
 
 const CALLEE_ID = "s-11111111-1111-1111-1111-111111111111";
 const CALLER_ID = "s-22222222-2222-2222-2222-222222222222";
+const ENVIRONMENT_ID = "e-11111111-1111-1111-1111-111111111111";
 const CALLEE_UNIT = "invoice-service:api";
 const CALLER_UNIT = "invoice-service:web";
 const STARTED_AT = "2026-10-08T00:00:00.000Z";
@@ -141,10 +142,10 @@ function groupBridge(options: { answer: () => unknown }) {
   const serviceCatalogOp = vi.fn(async (request: Record<string, unknown>) => {
     if (request["op"] === "runTaskServiceGroup") return options.answer();
     if (request["op"] === "taskBindings") {
-      return { ok: true, payload: [{ taskId: "task-1", serviceId: CALLEE_ID, templateVersion: 2, rootId: "invoice-service", subdir: "", privateKeys: [] }] };
+      return { ok: true, payload: [{ taskId: "task-1", serviceId: CALLEE_ID, environmentId: ENVIRONMENT_ID, environmentName: "本地开发", templateVersion: 2, rootId: "invoice-service", subdir: "", privateKeys: [] }] };
     }
     if (request["op"] === "list") {
-      return { ok: true, payload: [{ projectId: "project-1", serviceId: CALLEE_ID, version: 2, shared: [],
+      return { ok: true, payload: [{ projectId: "project-1", environmentId: ENVIRONMENT_ID, serviceId: CALLEE_ID, version: 2, shared: [],
         descriptor: { name: "invoice-api", program: "node", args: ["server.js"], ports: [4100], runType: "long-lived" } }] };
     }
     return { ok: false, error: `unexpected ${request["op"]}` };

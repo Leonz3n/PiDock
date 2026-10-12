@@ -339,6 +339,7 @@ describe("[UI 对齐] S8d Host envelope unwrapping", () => {
 
 const SERVICE_ID = "s-11111111-1111-1111-1111-111111111111";
 const OTHER_SERVICE_ID = "s-22222222-2222-2222-2222-222222222222";
+const ENVIRONMENT_ID = "e-11111111-1111-1111-1111-111111111111";
 
 type PanelBridgeOptions = {
   association?: unknown;
@@ -370,10 +371,11 @@ function panelBridge(options: PanelBridgeOptions = {}) {
     if (request["op"] === "runTaskService") return options.run ? options.run(request) : { ok: true, payload: { serviceId: request["serviceId"], action: request["action"], actor: "human" } };
     if (request["op"] === "rebindServiceOwner") return options.rebind ? options.rebind(request) : { ok: false, error: "unexpected rebindServiceOwner" };
     if (request["op"] === "taskBindings") return { ok: true, payload: options.bindings ?? [{
-      taskId: "task-1", serviceId: SERVICE_ID, templateVersion: 2, rootId: "invoice-service", subdir: "apps/svc", privateKeys: ["API_TOKEN"],
+      taskId: "task-1", serviceId: SERVICE_ID, environmentId: ENVIRONMENT_ID, environmentName: "本地开发",
+      templateVersion: 2, rootId: "invoice-service", subdir: "apps/svc", privateKeys: ["API_TOKEN"],
     }] };
     if (request["op"] === "list") return { ok: true, payload: options.templates ?? [{
-      projectId: "project-1", serviceId: SERVICE_ID, version: 2, shared: [{ key: "PORT", value: "3000" }],
+      projectId: "project-1", environmentId: request["environmentId"], serviceId: SERVICE_ID, version: 2, shared: [{ key: "PORT", value: "3000" }],
       descriptor: { name: "invoice-local", program: "node", args: ["server.js"], ports: [4100], runType: "long-lived" },
     }] };
     return { ok: false, error: `unexpected serviceCatalogOp ${String(request["op"])}` };
@@ -397,6 +399,8 @@ describe("[UI 对齐] S8d 运行 panel (real Host bindings and status)", () => {
     expect(screen.getByText(/私有引用 1 项/)).toBeInTheDocument();
     expect(screen.getByText("本任务服务 · 1")).toBeInTheDocument();
     expect(fixture.serviceCatalogOp).toHaveBeenCalledWith({ op: "taskBindings", projectId: "project-1", taskId: "task-1" });
+    // The template list is scoped to the environment main reported for the binding.
+    expect(fixture.serviceCatalogOp).toHaveBeenCalledWith({ op: "list", projectId: "project-1", environmentId: ENVIRONMENT_ID });
   });
 
   it("drives the real bound-service start/stop through runTaskService and keeps the rest 未接线", async () => {
@@ -596,12 +600,12 @@ describe("[UI 对齐] S8d 运行 panel (real Host bindings and status)", () => {
 
 describe("[UI 对齐] S8d 日志 panel (real task/serviceLog)", () => {
   const bindings = [
-    { taskId: "task-1", serviceId: SERVICE_ID, templateVersion: 2, rootId: "invoice-service", subdir: "", privateKeys: [] },
-    { taskId: "task-1", serviceId: OTHER_SERVICE_ID, templateVersion: 1, rootId: "invoice-service", subdir: "", privateKeys: [] },
+    { taskId: "task-1", serviceId: SERVICE_ID, environmentId: ENVIRONMENT_ID, environmentName: "本地开发", templateVersion: 2, rootId: "invoice-service", subdir: "", privateKeys: [] },
+    { taskId: "task-1", serviceId: OTHER_SERVICE_ID, environmentId: ENVIRONMENT_ID, environmentName: "本地开发", templateVersion: 1, rootId: "invoice-service", subdir: "", privateKeys: [] },
   ];
   const templates = [
-    { projectId: "project-1", serviceId: SERVICE_ID, version: 2, shared: [], descriptor: { name: "invoice-local", program: "node", args: [], ports: [4100], runType: "long-lived" } },
-    { projectId: "project-1", serviceId: OTHER_SERVICE_ID, version: 1, shared: [], descriptor: { name: "shipment-local", program: "node", args: [], ports: [4200], runType: "long-lived" } },
+    { projectId: "project-1", environmentId: ENVIRONMENT_ID, serviceId: SERVICE_ID, version: 2, shared: [], descriptor: { name: "invoice-local", program: "node", args: [], ports: [4100], runType: "long-lived" } },
+    { projectId: "project-1", environmentId: ENVIRONMENT_ID, serviceId: OTHER_SERVICE_ID, version: 1, shared: [], descriptor: { name: "shipment-local", program: "node", args: [], ports: [4200], runType: "long-lived" } },
   ];
 
   it("reads the Host's real log tail and re-reads it for the other bound service", async () => {

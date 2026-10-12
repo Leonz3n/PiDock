@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { fileRootsThroughShell, serviceImportHintsThroughShell } from "../data/shellBridge";
+import { fileRootsThroughShell, serviceCatalogThroughShell, serviceImportHintsThroughShell, shellBridge } from "../data/shellBridge";
+import { serviceEnvironmentsFromMain, type ServiceEnvironmentView } from "../data/serviceCatalog";
 import { serviceImportScanFromHost, type ServiceImportHintView, type ServiceImportScanView } from "../data/serviceImportHints";
 import { workspaceRootsFromHost, type WorkspaceRootView } from "../data/workspaceFiles";
 import { Icon } from "./Icon";
@@ -101,7 +102,16 @@ function RepositoryImportDrafts({ tasks, pending, filled, onFillForm }: {
   </section>;
 }
 
-/** Prototype-A layout with only authoritative Project context; the environment model itself is still not exposed by Host. */
+/**
+ * Prototype-A layout with only authoritative Project context. The environment
+ * dimension of [PiDock 04] #7 box 1 is real here: the list, the creation and the
+ * selection all go through main's own store (`shell/serviceCatalogOp
+ * {op:"listEnvironments"|"createEnvironment"}`) and the shared-template half
+ * below is scoped to the SELECTED environment. Nothing is preselected: with no
+ * environment chosen the section says so instead of showing a project-wide
+ * template list that could be read as the selected environment's, and a project
+ * with no environment really shows an empty list.
+ */
 export function DesktopEnvironmentPage({ projects, projectId, taskCount, tasks, tasksPending = false, onSelectProject }: {
   projects: readonly Project[];
   projectId: string | null;
@@ -119,12 +129,78 @@ export function DesktopEnvironmentPage({ projects, projectId, taskCount, tasks, 
     setFilledName(`${applied.source} · ${applied.name}`);
     setPendingFill(null);
   }, []);
+  const connected = typeof shellBridge()?.serviceCatalogOp === "function";
+  const [environmentRows, setEnvironmentRows] = useState<{ projectId: string; values: ServiceEnvironmentView[] } | null>(null);
+  const [selectedEnvironmentId, setSelectedEnvironmentId] = useState("");
+  const [creatingEnvironment, setCreatingEnvironment] = useState(false);
+  const [newEnvironmentName, setNewEnvironmentName] = useState("");
+  const [environmentError, setEnvironmentError] = useState<string | null>(null);
+  const [environmentPending, setEnvironmentPending] = useState(false);
+  const environmentEpoch = useRef(0);
+  const environments = environmentRows?.projectId === projectId && projectId !== null ? environmentRows.values : null;
+  const selectedEnvironment = environments?.find((row) => row.environmentId === selectedEnvironmentId) ?? null;
+
+  const loadEnvironments = useCallback(async (targetProjectId: string) => {
+    const request = ++environmentEpoch.current;
+    setEnvironmentPending(true);
+    const response = await serviceCatalogThroughShell({ op: "listEnvironments", projectId: targetProjectId });
+    if (environmentEpoch.current !== request) return null;
+    setEnvironmentPending(false);
+    const parsed = response.ok ? serviceEnvironmentsFromMain(response.payload, targetProjectId) : null;
+    if (!parsed) {
+      // A refused or unreadable list is named, never rendered as "no environments".
+      setEnvironmentRows(null);
+      setEnvironmentError(response.ok ? "环境清单响应无法核对" : "环境清单读取失败");
+      return null;
+    }
+    setEnvironmentRows({ projectId: targetProjectId, values: parsed });
+    return parsed;
+  }, []);
+
+  useEffect(() => {
+    environmentEpoch.current++;
+    setEnvironmentRows(null);
+    setSelectedEnvironmentId("");
+    setCreatingEnvironment(false);
+    setNewEnvironmentName("");
+    setEnvironmentError(null);
+    setEnvironmentPending(false);
+    if (!projectId || !connected) return;
+    void loadEnvironments(projectId);
+  }, [projectId, connected, loadEnvironments]);
+
+  /**
+   * One explicit human creation. Main mints the id and owns the document; the
+   * newly created environment is then selected because the human just named it
+   * - never a silent default, and never on behalf of another environment.
+   */
+  const createEnvironment = async () => {
+    if (!projectId || !connected || environmentPending) return;
+    const name = newEnvironmentName;
+    const request = ++environmentEpoch.current;
+    const project = projectId;
+    setEnvironmentPending(true);
+    setEnvironmentError(null);
+    const response = await serviceCatalogThroughShell({ op: "createEnvironment", projectId: project, name });
+    if (environmentEpoch.current !== request) return;
+    setEnvironmentPending(false);
+    const created = response.ok ? serviceEnvironmentsFromMain([response.payload], project)?.[0] : null;
+    if (!created) {
+      setEnvironmentError(response.ok ? "环境创建回执无法核对" : response.error ?? "环境创建失败，请重试");
+      return;
+    }
+    setEnvironmentRows((current) => current?.projectId === project ? { projectId: project, values: [...current.values, created] } : { projectId: project, values: [created] });
+    setSelectedEnvironmentId(created.environmentId);
+    setNewEnvironmentName("");
+    setCreatingEnvironment(false);
+  };
+
   return <div data-testid="desktop-environment-page" className="px-[34px] py-[30px] below-narrow:px-5">
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div className="min-w-0"><p className="text-[10px] uppercase tracking-[1.8px] text-[#95979c]">Environments</p><h1 className="mt-1.5 text-[26px] font-semibold text-ink">环境与服务</h1></div>
       <div className="flex flex-wrap gap-2">
-        <Button type="button" variant="outline" disabled title="Host 尚无项目环境管理接口">管理环境</Button>
-        <Button type="button" disabled title="Host 尚无项目环境创建接口"><Icon name="plus" />新增环境</Button>
+        <Button type="button" variant="outline" disabled title="重命名与删除环境尚未接线（主进程仅有创建与列出）">管理环境</Button>
+        <Button type="button" variant="outline" disabled={!projectId || !connected || environmentPending || creatingEnvironment} title={!connected ? "服务配方目录未接线" : !projectId ? "尚无项目上下文" : "创建一个有名称的项目环境"} onClick={() => { setCreatingEnvironment((open) => !open); setEnvironmentError(null); }}><Icon name="plus" />新增环境</Button>
       </div>
     </div>
     <p className="mt-1.5 text-xs text-muted">继续使用仓库默认配置，通过环境变量调整服务运行方式。配置与服务状态必须以真实 Host 为准。</p>
@@ -137,10 +213,22 @@ export function DesktopEnvironmentPage({ projects, projectId, taskCount, tasks, 
       <span className="text-[11px] text-muted">{projectId ? `关联任务 ${taskCount}` : "尚无项目上下文"}</span>
     </div>
     <div className="mt-4 flex flex-wrap items-center gap-2">
-      <label className="text-xs text-muted">环境</label>
-      <select aria-label="环境" disabled value="unwired" className="min-h-8 max-w-full rounded-[4px] border border-line bg-paper px-2 text-xs text-muted"><option value="unwired">环境清单未接线</option></select>
-      <Badge variant="soft">环境模型未接线 · 共享模板按版本保存</Badge>
+      <label htmlFor="desktop-env-list" className="text-xs text-muted">环境</label>
+      <select id="desktop-env-list" aria-label="环境" value={selectedEnvironment ? selectedEnvironment.environmentId : ""} disabled={!environments || !environments.length || environmentPending}
+        onChange={(event) => { setSelectedEnvironmentId(event.target.value); setEnvironmentError(null); }}
+        className="min-h-8 max-w-full rounded-[4px] border border-line bg-paper px-2 text-xs text-ink">
+        <option value="">尚未选择环境</option>
+        {(environments ?? []).map((row) => <option key={row.environmentId} value={row.environmentId}>{row.name}</option>)}
+      </select>
+      <Badge variant="soft">{!connected ? "服务配方目录未接线" : environments === null ? (environmentPending ? "正在读取环境清单" : "环境清单不可读取") : `环境清单已接线 · ${environments.length} 个环境`}</Badge>
+      <span className="text-[11px] text-muted">{!connected ? "环境由主进程保存" : environments === null ? "环境清单以主进程为准" : !environments.length ? "该项目尚无环境，请先新增并命名" : !selectedEnvironment ? "尚未选择环境：下方共享模板按环境保存" : `已选环境：${selectedEnvironment.name}`}</span>
     </div>
+    {environmentError && <p role="alert" data-testid="desktop-environment-error" className="mt-2 text-xs text-[#ad4545]">{environmentError}</p>}
+    {creatingEnvironment && <div className="mt-2 flex flex-wrap items-end gap-2">
+      <label className="grid gap-1 text-xs">环境名称<input aria-label="环境名称" className="min-h-8 min-w-0 rounded-[4px] border border-line bg-paper px-2" value={newEnvironmentName} maxLength={64} onChange={(event) => setNewEnvironmentName(event.target.value)} /></label>
+      <Button type="button" size="sm" disabled={!newEnvironmentName.trim() || environmentPending} onClick={() => void createEnvironment()}>保存环境</Button>
+      <span className="text-[11px] text-muted">名称由你填写，主进程保存并分配 ID；同名环境会被具名拒绝。</span>
+    </div>}
     <div className="mt-5 flex flex-wrap gap-1 border-b border-line pb-2" role="group" aria-label="配置作用范围">
       {(["任务覆盖", "共享模板", "本机私有配置"] as const).map((scope) => <Button key={scope} type="button" variant="ghost" size="sm" disabled title={scope === "共享模板"
         ? "共享模板在下方按版本维护；此作用域切换开关未接线"
@@ -150,7 +238,8 @@ export function DesktopEnvironmentPage({ projects, projectId, taskCount, tasks, 
       <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="text-sm font-semibold">环境变量 <Badge variant="soft" className="ml-1">未接线</Badge></h2><Button type="button" size="sm" disabled title="缺少真实配置及变更预览">保存更改</Button></div>
       <div className="mt-3 overflow-x-auto"><table className="w-full min-w-[320px] text-left text-xs"><thead className="border-b border-line text-muted"><tr><th className="py-2 font-medium">KEY</th><th className="py-2 font-medium">VALUE</th><th className="py-2 font-medium">生效来源</th></tr></thead><tbody><tr className="border-b border-line"><td colSpan={3} className="py-5 text-muted">Host 尚未提供项目环境、任务覆盖与敏感值遮蔽后的生效配置。这里不展示示例 KEY 或 VALUE。</td></tr></tbody></table></div>
     </section>
-    <ProjectServiceTemplates projectId={projectId} tasks={tasksPending ? [] : tasks} fillFrom={pendingFill} onFillApplied={appliedFill} />
+    <ProjectServiceTemplates projectId={projectId} environmentId={selectedEnvironment?.environmentId ?? null} environmentName={selectedEnvironment?.name}
+      tasks={tasksPending ? [] : tasks} fillFrom={pendingFill} onFillApplied={appliedFill} />
     <RepositoryImportDrafts tasks={tasks} pending={tasksPending} filled={filledName} onFillForm={setPendingFill} />
   </div>;
 }

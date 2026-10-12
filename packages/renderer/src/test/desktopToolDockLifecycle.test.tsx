@@ -16,6 +16,7 @@ import type { PidockBridge } from "../data/shellBridge";
 const roots = [{ label: "默认任务根", state: "ready" }];
 const association = { taskId: "task-a", projectId: "project-1", state: "assigned" };
 const SERVICE_ID = "s-33333333-3333-3333-3333-333333333333";
+const ENVIRONMENT_ID = "e-33333333-3333-3333-3333-333333333333";
 const WRITE_OPS = ["task/controlService", "task/quit", "task/archive", "task/restore", "task/terminalControl", "task/runCleanup"];
 
 function setup() {
@@ -26,8 +27,8 @@ function setup() {
     listTasks: vi.fn(async () => ({ ok: true, payload: { tasks: [{ taskId: "task-a", name: "Task", branch: "main", repoCount: 0, updatedAt: "now" }], roots } })),
     projectOp: vi.fn(async (request) => ({ ok: true, payload: request.op === "list" ? { initialized: true, projects: [{ id: "project-1", name: "Adder", description: "", repositories: [], directories: [] }] } : { roots, tasks: [association] } })),
     serviceCatalogOp: vi.fn(async (request: Record<string, unknown>) => {
-      if (request["op"] === "taskBindings") return { ok: true, payload: [{ taskId: "task-a", serviceId: SERVICE_ID, templateVersion: 1, rootId: "invoice-service", subdir: "", privateKeys: [] }] };
-      if (request["op"] === "list") return { ok: true, payload: [{ projectId: "project-1", serviceId: SERVICE_ID, version: 1, shared: [], descriptor: { name: "invoice-local", program: "node", args: [], ports: [4100], runType: "long-lived" } }] };
+      if (request["op"] === "taskBindings") return { ok: true, payload: [{ taskId: "task-a", serviceId: SERVICE_ID, environmentId: ENVIRONMENT_ID, environmentName: "本地开发", templateVersion: 1, rootId: "invoice-service", subdir: "", privateKeys: [] }] };
+      if (request["op"] === "list") return { ok: true, payload: [{ projectId: "project-1", environmentId: ENVIRONMENT_ID, serviceId: SERVICE_ID, version: 1, shared: [], descriptor: { name: "invoice-local", program: "node", args: [], ports: [4100], runType: "long-lived" } }] };
       return { ok: false, error: `unexpected ${String(request["op"])}` };
     }),
     taskOp: vi.fn(async (taskId: string, op: string) => {

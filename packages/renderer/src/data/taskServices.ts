@@ -9,8 +9,10 @@
  *    task, because Host service bindings are stored per project;
  *  - `shell/serviceCatalogOp {op:"taskBindings"}` is the task's real bound
  *    service list (identity, template version, working copy, private keys);
- *  - `shell/serviceCatalogOp {op:"list"}` carries the project templates the
- *    bindings refer to (display name, program, declared ports);
+ *  - `shell/serviceCatalogOp {op:"list", environmentId}` carries the templates
+ *    the bindings refer to (display name, program, declared ports) — one read
+ *    per environment a binding really selected, because the shared template is
+ *    edited per environment;
  *  - `shell/taskOp task/serviceStatus` is the Host's own runtime answer. It is
  *    either the installed service-owner inventory state or the task runtime
  *    registry lifecycle; a service the Host does not own answers with its
@@ -493,16 +495,27 @@ export async function loadTaskServices(taskId: string): Promise<TaskServicesLoad
   if (!association.ok) return { ok: false, error: association.error };
   if (association.projectId === null) return { ok: true, projectId: null, associationState: association.state, rows: [], templatesError: undefined };
   const projectId = association.projectId;
-  const [bindingsResult, templatesResult, runRecordsResult] = await Promise.all([
+  const [bindingsResult, runRecordsResult] = await Promise.all([
     serviceCatalogThroughShell({ op: "taskBindings", projectId, taskId }),
-    serviceCatalogThroughShell({ op: "list", projectId }),
     serviceRunRecordsThroughShell(taskId),
   ]);
-  const templates = templatesResult.ok ? serviceTemplatesFromMain(templatesResult.payload, projectId) : null;
-  const templatesError = templates === null ? shellFailure(templatesResult, "读取项目服务配方失败") : undefined;
   if (!bindingsResult.ok) return { ok: false, error: shellFailure(bindingsResult, "读取任务服务绑定失败") };
   const bindings = serviceBindingsFromMain(bindingsResult.payload, taskId);
   if (!bindings) return { ok: false, error: "Host 任务服务绑定响应无法解析" };
+  // One template read per environment this task's bindings selected. The pinned
+  // revision lives in one environment, so a single project-wide list could only
+  // show another environment's service as if it were this binding's.
+  const selectedEnvironments = [...new Set(bindings.map((row) => row.environmentId))];
+  const listed = await Promise.all(selectedEnvironments.map((environmentId) =>
+    serviceCatalogThroughShell({ op: "list", projectId, environmentId })));
+  const templates = new Map<string, ServiceTemplateView>();
+  let templatesError: string | undefined;
+  listed.forEach((result, index) => {
+    const environmentId = selectedEnvironments[index] as string;
+    const parsed = result.ok ? serviceTemplatesFromMain(result.payload, projectId, environmentId) : null;
+    if (!parsed) { templatesError ??= shellFailure(result, "读取环境服务配方失败"); return; }
+    for (const row of parsed) templates.set(`${environmentId}/${row.serviceId}`, row);
+  });
   // A refused read and an unreadable payload are kept apart: one is the Host's
   // own refusal text, the other a named parse refusal. Both mean "the run record
   // could not be shown", never "there is no run".
@@ -513,7 +526,7 @@ export async function loadTaskServices(taskId: string): Promise<TaskServicesLoad
       ? "Host 运行记录响应无法解析"
       : undefined;
   const rows = await Promise.all(bindings.map(async (binding): Promise<BoundServiceRow> => {
-    const template = templates?.find((row) => row.serviceId === binding.serviceId);
+    const template = templates.get(`${binding.environmentId}/${binding.serviceId}`);
     const result = await serviceStatusThroughShell({ taskId, serviceId: binding.serviceId });
     const status = result.ok ? (serviceStatusFromHost(result.payload, binding.serviceId) ?? undefined) : undefined;
     return {

@@ -22,6 +22,7 @@ import { runRecordsFromHost, RUN_RECORD_KEYS } from "../data/taskServices";
 import { TaskServiceTopology } from "../../../shell/src/host/service-topology.js";
 
 const SERVICE_ID = "s-11111111-1111-1111-1111-111111111111";
+const ENVIRONMENT_ID = "e-11111111-1111-1111-1111-111111111111";
 const STARTED_AT = "2026-10-08T00:00:00.000Z";
 
 /**
@@ -117,8 +118,8 @@ function bridgeWithRunRecords(answer: unknown) {
     return { ok: false, error: `unexpected ${op}` };
   });
   const serviceCatalogOp = vi.fn(async (request: Record<string, unknown>) => {
-    if (request["op"] === "taskBindings") return { ok: true, payload: [{ taskId: "task-1", serviceId: SERVICE_ID, templateVersion: 2, rootId: "invoice-service", subdir: "", privateKeys: [] }] };
-    if (request["op"] === "list") return { ok: true, payload: [{ projectId: "project-1", serviceId: SERVICE_ID, version: 2, shared: [], descriptor: { name: "invoice-local", program: "node", args: ["server.js"], ports: [4100], runType: "long-lived" } }] };
+    if (request["op"] === "taskBindings") return { ok: true, payload: [{ taskId: "task-1", serviceId: SERVICE_ID, environmentId: ENVIRONMENT_ID, environmentName: "本地开发", templateVersion: 2, rootId: "invoice-service", subdir: "", privateKeys: [] }] };
+    if (request["op"] === "list") return { ok: true, payload: [{ projectId: "project-1", environmentId: ENVIRONMENT_ID, serviceId: SERVICE_ID, version: 2, shared: [], descriptor: { name: "invoice-local", program: "node", args: ["server.js"], ports: [4100], runType: "long-lived" } }] };
     return { ok: false, error: `unexpected ${request["op"]}` };
   });
   const projectOp = vi.fn(async () => ({ ok: true, payload: { roots: [], tasks: [{ taskId: "task-1", projectId: "project-1", state: "assigned" }] } }));
