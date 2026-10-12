@@ -213,6 +213,32 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   互相等待（spec「双向依赖不会造成永远等待启动」）；同一组内出现 `prestart`
   边时报告 `start-order-conflict` 而不是死等。远程依赖不启动，改为所在组的
   「远程依赖可达性检查（共享环境，不标记为任务内隔离）」。
+- **整组启动与真实互验**：上面的计划现在有真实执行方——
+  `task/controlService` 的**同一 op** 接受 `group: true`（不新增 op，
+  `HOST_TASK_OPS` 不变），`host.ts` 的 `runGroupServiceStart` 按 `planStartGroups`
+  的顺序逐个单元走**同一个**门禁（`runHumanServiceControl` /
+  `runAgentServiceControl`，只读拒绝、`default` 先确认），组内所有单元先监听、再
+  互验。
+  - **已启动**只来自一次真实启动（门禁通过且驱动返回真实 pid，回读自运行记录）；
+    **已监听**只来自 `host/service-linkage.ts` 对**登记声明地址**的有界真实 TCP
+    连接（spawn 早于 bind，故在预算内重试；连接被拒绝/超时= `not-listening`）；
+    **已互验**只来自一次真实连到依赖声明地址的连接。计划端口、意图、声明端口都不
+    会被记成观测结果。
+  - 观测沿用既有形状：监听/联通结果经 `TaskServiceTopology.verifyRun` →
+    `attachVerification` 挂到该单元自己的运行记录上（`kind` 为 `readiness` /
+    `linkage`），面板据此显示 `已监听` / `已互验` / `未监听` / `依赖不可达`，无观测
+    则具名显示 `未探测`。
+  - 具名负状态互不合并：`refused`（门禁拒绝）、`approval-required`（`default` 待确认，
+    未启动任何子进程）、`start-failed`（驱动/启动失败，`diagnoseStartFailure` 点名单元）、
+    `dependency-unreachable`（真实连接未到达依赖，`diagnoseDependencyUnreachable`）、
+    `verify-failed`（就绪核验失败）、`not-listening`、`not-probed`。任一单元被拒绝或
+    失败后不再启动后续单元（其前置条件并未就绪），绝不静默跳过成绿色组。
+  - `planRestartScope` 现在有生产调用方：整组启动结果里的 `restartScope` 由它从
+    「本次运行真实登记的身份 + 本计划的 `reallocated`」算出，只**点名**仍需重启/
+    改指的单元，不声称已经更新过任何消费者。
+  - 边界：`default` 档下每个单元仍需各自的确认（既有一次性确认只覆盖一个服务的一
+    次启动，本片不新增第二条确认路径）；远程依赖可达性检查仍具名为 `未探测`
+    （本片不发起远程请求）。
 - **可定位失败与部分重启**：`diagnoseStartFailure` 把端口占用映射为
   `port-taken`（并给出重分配提示），其余保留原始错误为 `start-failed`；
   `diagnoseDependencyUnreachable` 点名消费者变量与目标实例。重分配后
@@ -258,9 +284,10 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   `recordRun` 与停止范围也已由本片接上真实的生产调用方（`host.ts` 的真实启动/停止），
   但还没有真实健康检查；两个任务同时运行并检查真实请求去向未在生产运行（端口与绑定
   隔离有 `host/service-two-task-isolation.test.ts` 的两个真实子进程证据）；
-  「启动失败后重分配」只在规划阶段验证；`planRestartScope`（部分重启规划）
-  也没有生产调用方（只由 `main/service-topology.test.ts` 的单元用例覆盖），本片未
-  新增调用方；真实仓库的依赖缺口探测未运行
+  「启动失败后重分配」只在规划阶段验证（重分配后的消费者更新仍只重算绑定值，
+  没有运行中的进程需要迁移，`planRestartScope` 只点名待办、不执行迁移）；
+  `verifyRegisteredIdentity` 仍没有生产调用方（`planStopScope` 自己做精确匹配）；
+  真实仓库的依赖缺口探测未运行
   （`missing-binding` 与远程可达检查为规划期证据）；`task/planServiceGroup`
   的生产调用方目前是 renderer 的面板（`stores/host.ts` 仍把内存适配器固定为
   默认，与 #9 记录的同一接线缺口）；重新分配地址后的消费者更新已重算绑定值，
