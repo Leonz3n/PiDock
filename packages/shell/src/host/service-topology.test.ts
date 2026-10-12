@@ -99,6 +99,20 @@ describe("TaskServiceTopology planning", () => {
     expect(plan.groups.map((group) => group.members).flat().indexOf("invoice:db-migrate")).toBe(0);
   });
 
+  it("exposes the current plan's declared dependency edges as a read-only copy", () => {
+    const host = topology();
+    host.setPlan(planInput());
+    const deps = host.plannedDependencies();
+    // The group runner derives its verify steps from exactly these edges.
+    expect(deps).toEqual([
+      { from: "front:saas-web", to: "front:saas-bff", kind: "call" },
+      { from: "front:saas-bff", to: "invoice:invoice-service", kind: "prestart" },
+    ]);
+    // A read-only copy: mutating the returned list cannot change the plan.
+    deps.push({ from: "x", to: "y", kind: "call" });
+    expect(host.plannedDependencies()).toHaveLength(2);
+  });
+
   it("allocates a different port for the second task's same-name instance", () => {
     const first = topology().setPlan(planInput());
     const second = new TaskServiceTopology("task-bbbbbbbb", "/tasks/task-bbbbbbbb", () => "2026-09-22T10:00:00.000Z").setPlan({

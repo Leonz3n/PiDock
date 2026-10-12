@@ -25,7 +25,11 @@
  *   never an invented number).
  * - 已监听 (`listening`) comes only from a real successful connect to the
  *   address the unit's REGISTRATION declares — never from the plan's port, never
- *   from "the process started".
+ *   from "the process started". The fact it records is "the registration's
+ *   declared address accepted a connection"; it does not prove the listener IS
+ *   this unit's own child (a foreign process on the same declared port would
+ *   also answer). That boundary is named, not hidden — box 5's 端口被外部占用 is
+ *   its own diagnostic.
  * - 已互验 (`linked`) comes only from a real successful connect to the
  *   dependency's registered address during a `linkage` step.
  * - 未探测 is a named state (`not-probed`), not a missing field, whenever no
@@ -153,7 +157,7 @@ export interface ServiceGroupPlanPort {
  * error string.
  */
 export type GroupUnitStartResult =
-  | { ok: true }
+  | { ok: true; pid?: number }
   | { ok: false; kind: "refused" | "approval-required" | "start-failed"; error: string };
 
 export interface ServiceGroupRunInput {
@@ -187,8 +191,12 @@ export interface ServiceGroupRunInput {
 const DEFAULT_LISTENING_BUDGET_MS = 3000;
 const DEFAULT_LINKAGE_BUDGET_MS = 1200;
 
-function latestOpenRun(topology: ServiceGroupPlanPort, serviceId: string): RunRecord | undefined {
-  return [...topology.runs()].reverse().find((record) => record.serviceId === serviceId && record.endedAt === undefined);
+function latestOpenRun(topology: ServiceGroupPlanPort, serviceId: string, pid?: number): RunRecord | undefined {
+  const open = [...topology.runs()].reverse().find((record) => record.serviceId === serviceId && record.endedAt === undefined);
+  if (pid === undefined) return open;
+  // The pid the dispatch just produced is the only run this start may be
+  // credited to: an older open record for the same service must not supply it.
+  return open?.processIdentity.pid === pid ? open : undefined;
 }
 
 function describeAddress(address: ListeningAddress): string {
@@ -278,7 +286,7 @@ export async function runServiceGroupStart(input: ServiceGroupRunInput): Promise
         startedIndex += 1;
         outcome.start = "started";
         outcome.order = startedIndex;
-        const run = latestOpenRun(input.topology, unit.serviceId);
+        const run = latestOpenRun(input.topology, unit.serviceId, started.pid);
         startedRuns.set(unitId, run);
         outcome.observedRun = run !== undefined;
         outcome.pid = run?.processIdentity.pid;
@@ -287,15 +295,26 @@ export async function runServiceGroupStart(input: ServiceGroupRunInput): Promise
       outcome.start = started.kind;
       blocked = { unitId, state: started.kind };
       if (started.kind === "start-failed") {
-        const failure = diagnoseStartFailure({ unitId, serviceId: unit.serviceId, error: started.error });
+        // The registration's own declared port makes a real EADDRINUSE
+        // locatable (`端口 <declared> 已被占用`) instead of a bare `端口 ?`.
+        const declared = input.registeredAddress(unit.serviceId);
+        const failure = diagnoseStartFailure({
+          unitId,
+          serviceId: unit.serviceId,
+          error: started.error,
+          ...(declared !== undefined ? { port: declared.port } : {}),
+        });
         outcome.diagnostics.push(failure);
         diagnostics.push(failure);
       } else {
+        const approval = started.kind === "approval-required";
+        // A gate refusal and a parked approval are NOT start failures: each
+        // keeps its own diagnostic code so a consumer can tell them apart.
         const refusal = diagnostic(
-          started.kind === "approval-required" ? "start-failed" : "start-failed",
+          approval ? "approval-required" : "control-refused",
           { unitId },
           `运行单元「${unit.name}」未启动：${started.error}`,
-          started.kind === "approval-required" ? "请先确认该服务的启动请求后再重试整组启动" : "请调整会话权限或运行单元选择后重试",
+          approval ? "请先确认该服务的启动请求后再重试整组启动" : "请调整会话权限或运行单元选择后重试",
         );
         outcome.diagnostics.push(refusal);
         diagnostics.push(refusal);
@@ -329,13 +348,15 @@ export async function runServiceGroupStart(input: ServiceGroupRunInput): Promise
         diagnostics.push(
           resolved.outcome === "dependency-unreachable"
             ? diagnoseDependencyUnreachable({ unitId: consumer.unitId, key: step.dependency.to, target: target.name, detail: resolved.detail })
-            : diagnostic("dependency-unreachable", { unitId: consumer.unitId }, `运行单元「${consumer.name}」的${step.kind === "readiness" ? "前置条件" : "依赖"}核验失败：${resolved.detail}`),
+            : diagnostic("verify-failed", { unitId: consumer.unitId }, `运行单元「${consumer.name}」的${step.kind === "readiness" ? "前置条件" : "依赖"}核验失败：${resolved.detail}`, "请检查依赖单元的真实监听状态后重试"),
         );
       }
       // Only a real observation is attached through the existing verification
       // shape: `not-probed` is a named state on this payload, NOT a failed
-      // verification, and must not read as one in the run record.
-      const run = resolved.outcome === "not-probed" ? undefined : latestOpenRun(input.topology, consumer.serviceId);
+      // verification, and must not read as one in the run record. A prestart
+      // group's own 「准备步骤完成检查」 was ALREADY attached as the listening
+      // observation (`selfObserved`), so it is never recorded twice.
+      const run = resolved.outcome === "not-probed" || step.selfObserved === true ? undefined : startedRuns.get(consumer.unitId);
       if (run !== undefined) {
         input.topology.verifyRun(run.runId, {
           kind: step.kind,
@@ -382,6 +403,9 @@ function stepsForGroup(
     dependency: { from: unitId, to: unitId, kind: "prestart" as const },
     kind: "readiness" as const,
     label: `准备步骤完成检查 ${unitsById.get(unitId)?.name ?? unitId}`,
+    // The check is the unit's own address, already observed in the listening
+    // phase; it is not probed a second time and not recorded twice.
+    selfObserved: true,
   }));
 }
 
@@ -400,6 +424,22 @@ async function runVerifyStep(
   // unreachable would claim an observation nobody made.
   if (targetOutcome.start !== "started") {
     return { ...base, outcome: "not-probed", detail: `依赖「${target.name}」未启动，未探测` };
+  }
+  // A prestart group's 「准备步骤完成检查」 is the unit's OWN address, already
+  // observed in the listening phase. Reuse that one observation (a second probe
+  // at a different budget could disagree with it) and record it exactly once.
+  if (step.selfObserved === true) {
+    const own = targetOutcome.address;
+    if (own === undefined) {
+      return { ...base, outcome: "not-probed", detail: `准备步骤「${target.name}」未声明可探测地址，未探测` };
+    }
+    if (targetOutcome.listening === "listening") {
+      return { ...base, address: own, outcome: "passed", detail: `${describeAddress(own)} 已就绪（真实连接成功）` };
+    }
+    if (targetOutcome.listening === "not-listening") {
+      return { ...base, address: own, outcome: "verify-failed", detail: `${describeAddress(own)} 未就绪（真实连接未成功）` };
+    }
+    return { ...base, outcome: "not-probed", detail: `准备步骤「${target.name}」未探测` };
   }
   const address = input.registeredAddress(target.serviceId);
   if (address === undefined) {

@@ -325,7 +325,10 @@ export class TaskServiceTopology {
     if (unit === undefined) {
       // Repo-less helper or an Agent-declared run: record it, but note the
       // unit is not part of the selected set so the UI does not imply it is.
-      record.verifications.push({ kind: "readiness", detail: `运行单元 ${input.serviceId} 不在当前选择中`, ok: false, at: startedAt });
+      // `selection-note` is deliberately NOT a probe kind (`readiness` would
+      // read as 「we probed the address and it did not answer」); the UI shows it
+      // as 未探测 - an observation nobody made.
+      record.verifications.push({ kind: "selection-note", detail: `运行单元 ${input.serviceId} 不在当前选择中`, ok: false, at: startedAt });
     }
     this.records.push(record);
     this.registry.push({

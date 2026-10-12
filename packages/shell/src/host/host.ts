@@ -524,6 +524,12 @@ function serviceDriverFor(taskId: string, services: TaskServiceRuntime): Service
  * actually reached, so a gate refusal (before the driver) is `refused` and a
  * driver/launch failure is `start-failed`. The runner never guesses a state from
  * an error string.
+ *
+ * Reachability: this is the Host's `task/controlService {group:true}` capability;
+ * no shipped renderer/main caller sends that payload yet (the dock's only start
+ * button is the single-service `runTaskService`), so the group path is exercised
+ * today by the Host-level suites. See `docs/task-graph.md` 「整组启动与真实互验」
+ * for the named boundary.
  */
 async function runGroupServiceStart(input: {
   taskId: string;
@@ -537,16 +543,26 @@ async function runGroupServiceStart(input: {
   const channel = caller.kind === "agent" ? host.openSession(caller.sessionId) : undefined;
   const baseDriver = serviceDriverFor(input.taskId, services);
   const startUnit = async ({ serviceId }: { unitId: string; serviceId: string }): Promise<GroupUnitStartResult> => {
-    const registered = services.get(serviceId);
-    if (!registered || registered.launchSource !== "catalog") {
-      return { ok: false, kind: "refused", error: `service-execution-unavailable: ${serviceId} 未由可信服务目录登记，无法执行` };
+    // The SAME precondition the single path applies, from the one shared helper.
+    const precondition = catalogControlPrecondition(services, serviceId);
+    if (precondition.kind !== "ok") {
+      return {
+        ok: false,
+        kind: "refused",
+        error: precondition.kind === "uncertain"
+          ? precondition.error
+          : `service-execution-unavailable: ${serviceId} 未由可信服务目录登记，无法执行`,
+      };
     }
-    // Same durable-owner fail-closed check the single control path applies.
-    const uncertain = serviceOwnerStateRefusal(serviceId);
-    if (uncertain) return { ok: false, kind: "refused", error: uncertain };
     let driverReached = false;
+    let producedPid: number | undefined;
     const driver: ServiceExecutionDriver = {
-      start: async (id, owner) => { driverReached = true; return baseDriver.start(id, owner); },
+      start: async (id, owner) => {
+        driverReached = true;
+        const result = await baseDriver.start(id, owner);
+        producedPid = result.pid;
+        return result;
+      },
       stop: (id, owner) => baseDriver.stop(id, owner),
     };
     const acted = caller.kind === "human"
@@ -563,7 +579,9 @@ async function runGroupServiceStart(input: {
           persist: () => host.store.writeSession(host.taskDir, (channel as NonNullable<typeof channel>).snapshot()),
           executions: host.controlExecutions,
         });
-    if (acted.ok) return { ok: true };
+    // The real pid the dispatch produced travels back, so the runner credits the
+    // run record this start wrote instead of an older open record for the service.
+    if (acted.ok) return producedPid === undefined ? { ok: true } : { ok: true, pid: producedPid };
     if (acted.error.startsWith("approval-required:")) return { ok: false, kind: "approval-required", error: acted.error };
     return { ok: false, kind: driverReached ? "start-failed" : "refused", error: acted.error };
   };
@@ -700,6 +718,24 @@ function serviceOwnerStateRefusal(serviceId: string): string | null {
   const state = (status.service as { state?: unknown }).state;
   if (state === "stopped" || state === "exited") return null;
   return `service-execution-uncertain: 服务已登记状态为 ${String(state)}，请先处理该状态后再启停`;
+}
+
+/**
+ * The precondition BOTH service-control paths share before a catalog service may
+ * be launched: it must come from the trusted catalog, and its durable owner
+ * state must not be uncertain. `kind` says which rule failed so each caller can
+ * keep its own refusal wording - the single `task/controlService` path falls back
+ * to the owner inventory for an unregistered id, the group path refuses it by
+ * name; both fail closed, and neither re-implements the rule.
+ */
+function catalogControlPrecondition(
+  services: TaskServiceRuntime,
+  serviceId: string,
+): { kind: "ok" } | { kind: "unregistered" } | { kind: "uncertain"; error: string } {
+  const registered = services.get(serviceId);
+  if (!registered || registered.launchSource !== "catalog") return { kind: "unregistered" };
+  const uncertain = serviceOwnerStateRefusal(serviceId);
+  return uncertain === null ? { kind: "ok" } : { kind: "uncertain", error: uncertain };
 }
 
 function taskHostFor(taskId: string): TaskWorkspaceHost | { error: string } {
@@ -1356,13 +1392,12 @@ async function performTaskOp(
         // unregistered ids, `ui`-only registrations, an unconfirmed durable
         // owner state - keeps the previous fail-closed answer and never
         // flips a lifecycle flag as if a process had run.
-        const registered = services.get(serviceId);
-        if (!registered || registered.launchSource !== "catalog") {
+        const precondition = catalogControlPrecondition(services, serviceId);
+        if (precondition.kind === "unregistered") {
           return serviceOwnerInventory ? serviceOwnerInventory.control()
             : { ok: false, error: "service-execution-unavailable: 真实服务进程启停尚未接线" };
         }
-        const uncertain = serviceOwnerStateRefusal(serviceId);
-        if (uncertain) return { ok: false, error: uncertain };
+        if (precondition.kind === "uncertain") return { ok: false, error: precondition.error };
         const driver = serviceDriverFor(taskId, services);
         if (caller.kind === "human") {
           const result = await runHumanServiceControl({ services, driver, serviceId, action, label: caller.label });

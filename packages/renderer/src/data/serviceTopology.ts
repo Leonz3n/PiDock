@@ -313,6 +313,12 @@ export function failureLabel(code: string): { label: string; hint: string } {
       return { label: "没有可用端口", hint: "请释放端口或手动指定本任务端口" };
     case "start-failed":
       return { label: "启动失败", hint: "查看该实例的运行日志后重试" };
+    case "control-refused":
+      return { label: "门禁拒绝", hint: "请调整会话权限或运行单元选择后重试" };
+    case "approval-required":
+      return { label: "待确认", hint: "请先确认该服务的启动请求后再重试整组启动" };
+    case "verify-failed":
+      return { label: "核验失败", hint: "依赖已启动但地址未就绪，请检查依赖服务的真实监听状态" };
     case "dependency-unreachable":
       return { label: "依赖不可达", hint: "本地启动成功不等于功能验证成功" };
     case "missing-binding":
@@ -344,6 +350,10 @@ export type ServiceLinkageState = "已监听" | "未监听" | "已互验" | "依
 export function linkageStateLabel(verification: { kind: string; ok: boolean }): ServiceLinkageState {
   if (verification.kind === "linkage") return verification.ok ? "已互验" : "依赖不可达";
   if (verification.kind === "readiness") return verification.ok ? "已监听" : "未监听";
+  // A selection note is NOT a probe result: nobody observed this address, so it
+  // must read 未探测 (an observation nobody made) - never 未监听 (a probe that
+  // failed).
+  if (verification.kind === "selection-note") return "未探测";
   // remote-reachability: a failed reachability check is an unreachable
   // dependency, not a listener that started but never bound.
   return verification.ok ? "已互验" : "依赖不可达";

@@ -213,26 +213,43 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   互相等待（spec「双向依赖不会造成永远等待启动」）；同一组内出现 `prestart`
   边时报告 `start-order-conflict` 而不是死等。远程依赖不启动，改为所在组的
   「远程依赖可达性检查（共享环境，不标记为任务内隔离）」。
-- **整组启动与真实互验**：上面的计划现在有真实执行方——
+- **整组启动与真实互验**：上面的计划现在有了真实执行方——
   `task/controlService` 的**同一 op** 接受 `group: true`（不新增 op，
   `HOST_TASK_OPS` 不变），`host.ts` 的 `runGroupServiceStart` 按 `planStartGroups`
   的顺序逐个单元走**同一个**门禁（`runHumanServiceControl` /
   `runAgentServiceControl`，只读拒绝、`default` 先确认），组内所有单元先监听、再
   互验。
-  - **已启动**只来自一次真实启动（门禁通过且驱动返回真实 pid，回读自运行记录）；
+  - **可达性边界（未接线）**：这条能力目前**没有出厂调用方**。它是 Host 层的
+    `task/controlService {group:true}` 载荷，只有测试（`service-group-linkage.test.ts`）
+    真的发送它；渲染层的唯一启停入口 `runBoundTaskServiceThroughShell` →
+    `serviceCatalogOp {op:"runTaskService"}` 只发**单个** `serviceId`，主进程与
+    Agent 工具也都不发 `group`。因此本片交付的是 Host 能力与既有 op 的加性载荷，
+    运行面板的「联通核验」行在出厂应用的当前 UI 里只可能读到 `未探测`；要在产品中
+    真正用上它，还需要一条渲染层发起、主进程转发的整组启动入口（属于后续切片）。
+  - **已启动**只来自一次真实启动（门禁通过且驱动返回真实 pid，本单元回读自驱动刚
+    写入的那条运行记录，绝不借用同一服务更早的开启记录）；
     **已监听**只来自 `host/service-linkage.ts` 对**登记声明地址**的有界真实 TCP
     连接（spawn 早于 bind，故在预算内重试；连接被拒绝/超时= `not-listening`）；
     **已互验**只来自一次真实连到依赖声明地址的连接。计划端口、意图、声明端口都不
     会被记成观测结果。
+  - **观测归属边界**：已监听/已互验证的是「登记声明地址接受了一次真实连接」，并
+    **不**证明监听者就是本单元的子进程（声明端口上另有一个外部进程时也会答；那属于
+    盒子 5 的「端口被外部占用」，本片不声称已排除）。
   - 观测沿用既有形状：监听/联通结果经 `TaskServiceTopology.verifyRun` →
     `attachVerification` 挂到该单元自己的运行记录上（`kind` 为 `readiness` /
     `linkage`），面板据此显示 `已监听` / `已互验` / `未监听` / `依赖不可达`，无观测
-    则具名显示 `未探测`。
-  - 具名负状态互不合并：`refused`（门禁拒绝）、`approval-required`（`default` 待确认，
-    未启动任何子进程）、`start-failed`（驱动/启动失败，`diagnoseStartFailure` 点名单元）、
-    `dependency-unreachable`（真实连接未到达依赖，`diagnoseDependencyUnreachable`）、
-    `verify-failed`（就绪核验失败）、`not-listening`、`not-probed`。任一单元被拒绝或
-    失败后不再启动后续单元（其前置条件并未就绪），绝不静默跳过成绿色组。
+    则具名显示 `未探测`；不是探测结果的「单元不在当前选择中」用 `selection-note`
+    记录，同样读作 `未探测`，绝不冒充「已探测但未监听」。
+  - 具名负状态互不合并：组状态 `refused`（门禁拒绝）、`approval-required`（`default`
+    待确认，未启动任何子进程）、`start-failed`（驱动/启动失败，`diagnoseStartFailure`
+    点名单元）、`dependency-unreachable`（真实连接未到达依赖，
+    `diagnoseDependencyUnreachable`）、`verify-failed`（就绪核验失败）、
+    `not-listening`、`not-probed`；诊断码与之一一对应，`control-refused` /
+    `approval-required` / `verify-failed` 各自有名，绝不复用 `start-failed` /
+    `dependency-unreachable`。任一单元被拒绝或失败后不再启动后续单元（其前置条件并未
+    就绪），绝不静默跳过成绿色组。
+  - 预启动组（`prepare`/`one-shot`）的「准备步骤完成检查」复用该单元在监听阶段那次
+    真实连接观测，不重复探测、也不重复记录两条一模一样的就绪结论。
   - `planRestartScope` 现在有生产调用方：整组启动结果里的 `restartScope` 由它从
     「本次运行真实登记的身份 + 本计划的 `reallocated`」算出，只**点名**仍需重启/
     改指的单元，不声称已经更新过任何消费者。
