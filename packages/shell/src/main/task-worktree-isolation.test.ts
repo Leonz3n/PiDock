@@ -125,10 +125,6 @@ function worktreePath(task: TaskDiskRecord): string {
   return join(task.taskDir, task.repos[0]!);
 }
 
-function linkPath(task: TaskDiskRecord): string {
-  return join(task.taskDir, task.dirLinks![0]!.linkName);
-}
-
 /**
  * The bytes AND mtimes of everything a git read could rewrite: the source
  * checkout's index/HEAD and each worktree's own index/HEAD (a linked worktree
