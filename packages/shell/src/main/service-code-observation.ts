@@ -19,6 +19,7 @@
  *   hung or credential-prompting git can neither stall a start nor write.
  */
 import { execFileSync } from "node:child_process";
+import { lstatSync } from "node:fs";
 
 /** The code a run started from, as the worktree really read it. */
 export interface CodeObservation {
@@ -76,6 +77,20 @@ export function describeReadFailure(error: unknown): string {
 }
 
 /**
+ * True when `cwd` is a real directory. Checked BEFORE spawning: a spawn with a
+ * missing working directory fails with the same `ENOENT` a missing git binary
+ * produces, so reading the failure code alone would report the wrong fact (and
+ * a machine-wide claim instead of a path-specific one).
+ */
+function readableDirectory(cwd: string): boolean {
+  try {
+    return lstatSync(cwd).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Read the worktree the launch's verified `cwd` lives in. `rev-parse HEAD` and
  * `status --porcelain` are the two reads; both run in that directory, so the
  * observation follows the launch's own working directory instead of a path this
@@ -88,6 +103,7 @@ export function describeReadFailure(error: unknown): string {
  */
 export function observeWorktreeCode(cwd: string | undefined): { ok: true; code: CodeObservation } | { ok: false; reason: string } {
   if (cwd === undefined || cwd.trim().length === 0) return { ok: false, reason: "启动描述符没有工作目录" };
+  if (!readableDirectory(cwd)) return { ok: false, reason: "启动描述符的工作目录不可读" };
   const head = readGit(cwd, ["rev-parse", "HEAD"]);
   if (!head.ok) return { ok: false, reason: head.reason };
   if (!COMMIT_PATTERN.test(head.stdout)) return { ok: false, reason: "读取到的提交标识不可用" };

@@ -140,6 +140,27 @@ describe("[PiDock 05] #10 main's group caller refuses by name", () => {
   });
 });
 
+describe("[PiDock 05] #10 main's group caller reads the worktree of every unit it registers", () => {
+  it("carries main's own worktree read into the unit's registration, never a page claim", async () => {
+    const serviceId = "s-44444444-4444-4444-4444-444444444444";
+    const { tasks, calls } = registry((call) => call.op === "task/controlService" ? { group: { state: "not-planned" } } : { ok: true });
+    const catalog = {
+      taskBindings: () => [boundService(serviceId)],
+      launchFor: () => launchOf(serviceId, EMPTY_LAYERS),
+    } satisfies Pick<ServiceCatalog, "launchFor" | "taskBindings">;
+
+    await runTaskServiceGroup(tasks, catalog, REQUEST, 7);
+
+    // The registration main sends for a unit carries the observation or the named
+    // reason it could not be made - here the fixture's launch cwd does not exist,
+    // so it is the reason. Either way the field is main's own read: a page-attested
+    // registration carrying it is refused by the Host (`host.ts`).
+    const registration = calls.find((call) => call.op === "task/registerService");
+    expect(registration?.payload["codeObservationFailure"]).toBe("启动描述符的工作目录不可读");
+    expect("code" in (registration?.payload ?? {})).toBe(false);
+  });
+});
+
 describe("[PiDock 05] #10 main's group plan reads the SAME declared-port rule as the registration", () => {
   it("feeds every resolved env layer, so a non-empty repoDefaults/task layer still produces its port row", async () => {
     const serviceId = "s-11111111-1111-1111-1111-111111111111";
