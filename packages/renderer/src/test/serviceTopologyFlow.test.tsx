@@ -69,7 +69,7 @@ describe("runtime panel topology", () => {
     expect(record).toHaveTextContent("已提交且干净");
     // Box 3/6 honesty: the port a service row shows is a DECLARED one - nothing
     // probed the socket - so the record says so instead of reading as observed.
-    expect(record).toHaveTextContent("5173（声明值，未实测监听）");
+    expect(record).toHaveTextContent("5173（声明端口，未实测监听）");
     expect(record).not.toHaveTextContent("5173（实测监听）");
     expect(record).toHaveTextContent("pid 4100");
     expect(record).toHaveTextContent("/tasks/release/services/saas-web/run-1.log");
