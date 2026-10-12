@@ -68,6 +68,20 @@ function unobservedRunRecordsPayload() {
   return { records: topology.runs(), registered: topology.registeredIdentities() };
 }
 
+/**
+ * A real Host emit for a run whose unit is NOT in the current selection: the
+ * Host records a `selection-note` (a structural marker, NOT a probe result).
+ * This is the payload that must read 未探测, never 未监听.
+ */
+function selectionNoteRunRecordsPayload() {
+  const topology = new TaskServiceTopology("task-1", "/tmp/task-1", () => STARTED_AT);
+  // No `setPlan`, so the recorded service has no selected unit.
+  topology.recordRun({
+    serviceId: SERVICE_ID, templateVersion: "2", ports: [4100], portsSource: "declared", pid: 4242, owner: "human", startedAt: STARTED_AT,
+  });
+  return { records: topology.runs(), registered: topology.registeredIdentities() };
+}
+
 function observedRunRecordsPayload() {
   const topology = new TaskServiceTopology("task-1", "/tmp/task-1", () => STARTED_AT);
   topology.recordRun({
@@ -174,6 +188,17 @@ describe("[UI 对齐] S8d production 运行 panel reads the Host run record", ()
     expect(absent).toHaveTextContent("联通核验：未探测（运行记录没有实测监听/联通结果）");
     expect(absent).not.toHaveTextContent("已互验");
     expect(absent).not.toHaveTextContent("已监听");
+  });
+
+  it("reads a unit-not-in-selection note as 未探测, never as a failed probe (未监听)", async () => {
+    bridgeWithRunRecords({ ok: true, payload: selectionNoteRunRecordsPayload() });
+    render(<DesktopToolDock taskId="task-1" tool="runtime" onClose={() => {}} />);
+    const note = await screen.findByTestId("dock-run-verification");
+    // The Host recorded a structural note, not a probe: nobody observed this
+    // address, so it must read 未探测 instead of a failed listening probe.
+    expect(note).toHaveTextContent("未探测");
+    expect(note).not.toHaveTextContent("未监听");
+    expect(note).not.toHaveTextContent("已监听");
   });
 
   it("names the absent state for a service with no run record instead of implying a run", async () => {

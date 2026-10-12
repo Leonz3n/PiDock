@@ -88,23 +88,30 @@ function recordingStart(f: Harness, results: Record<string, GroupUnitStartResult
       f.pids.set(serviceId, pid);
       // The real driver writes the run record before a start resolves; the fake
       // start does the same, so `latestOpenRun` finds the observed pid.
-      f.topology.runs().push({
-        runId: `run-${serviceId}`,
-        taskId: "task-1",
-        serviceId,
-        instanceId: `task-1/${serviceId}`,
-        templateVersion: "v1",
-        codeState: { kind: "unknown", note: "" },
-        buildFreshness: "unknown",
-        ports: [],
-        portsSource: "declared",
-        processIdentity: { owner: "human", pid, startedAt: "2026-01-01T00:00:00.000Z" },
-        logRef: "",
-        startedAt: "2026-01-01T00:00:00.000Z",
-        verifications: [],
-      });
+      f.topology.runs().push(openRun(serviceId, `run-${serviceId}`, pid));
+      // The driver's own return value is the real pid the start produced.
+      return { ok: true, pid };
     }
     return result;
+  };
+}
+
+/** A prior open run record for a service, as an earlier run (or session) left it. */
+function openRun(serviceId: string, runId: string, pid: number): RunRecord {
+  return {
+    runId,
+    taskId: "task-1",
+    serviceId,
+    instanceId: `task-1/${serviceId}`,
+    templateVersion: "v0",
+    codeState: { kind: "unknown", note: "" },
+    buildFreshness: "unknown",
+    ports: [],
+    portsSource: "declared",
+    processIdentity: { owner: "human", pid, startedAt: "2026-01-01T00:00:00.000Z" },
+    logRef: "",
+    startedAt: "2026-01-01T00:00:00.000Z",
+    verifications: [],
   };
 }
 
@@ -154,6 +161,10 @@ describe("#10 group start and linkage verification state machine", () => {
     // came up must not be started into a green group.
     expect(f.startedOrder).toEqual([]);
     expect(result.units.find((u) => u.serviceId === "a")).toMatchObject({ start: "not-started" });
+    // A gate refusal keeps its OWN diagnostic code - it is not a start failure.
+    expect(result.units.find((u) => u.serviceId === "b")?.diagnostics[0]?.code).toBe("control-refused");
+    expect(result.diagnostics.some((d) => d.code === "control-refused" && d.scope.unitId === "repo:b")).toBe(true);
+    expect(result.diagnostics.some((d) => d.code === "start-failed")).toBe(false);
     // THE assertion that fails if linkage is credited from the plan instead of a
     // real observation: no linkage verification exists at all here.
     expect(f.verifications.filter((v) => v.input.kind === "linkage")).toEqual([]);
@@ -171,6 +182,9 @@ describe("#10 group start and linkage verification state machine", () => {
     expect(result.state).toBe("approval-required");
     expect(f.startedOrder).toEqual([]);
     expect(f.verifications).toEqual([]);
+    // A parked approval is named as such, never folded into 启动失败.
+    expect(result.units.find((u) => u.serviceId === "b")?.diagnostics[0]?.code).toBe("approval-required");
+    expect(result.diagnostics.some((d) => d.code === "start-failed")).toBe(false);
   });
 
   it("names the unit that failed to start and keeps its start failure locatable", async () => {
@@ -218,6 +232,54 @@ describe("#10 group start and linkage verification state machine", () => {
     const unitA = result.units.find((u) => u.serviceId === "a");
     expect(unitA?.steps[0]).toMatchObject({ kind: "linkage", outcome: "not-probed" });
     expect(f.verifications.filter((v) => v.input.kind === "linkage")).toEqual([]);
+  });
+
+  it("reports a readiness (prestart) step that failed as verify-failed, distinct from an unreachable call dependency", async () => {
+    const prepare: RunUnit = { unitId: "repo:prep", serviceId: "prep", name: "准备步骤", repoDir: "repo", location: "local", runType: "prepare" };
+    const f = harness({ units: [prepare], addresses: { prep: { host: "127.0.0.1", port: 4301 } } });
+    const result = await runServiceGroupStart({
+      topology: f.topology,
+      startUnit: recordingStart(f, {}),
+      observation: observation({ "127.0.0.1:4301": "not-listening" }),
+      registeredAddress: (serviceId) => f.addresses.get(serviceId),
+    });
+    expect(result.state).toBe("verify-failed");
+    const failure = result.diagnostics.find((d) => d.code === "verify-failed");
+    expect(failure).toMatchObject({ code: "verify-failed", scope: { unitId: "repo:prep" } });
+    // The readiness step is NOT an unreachable call dependency.
+    expect(result.diagnostics.some((d) => d.code === "dependency-unreachable")).toBe(false);
+    // The unit's own listening observation is recorded exactly ONCE (the
+    // prestart step reuses it instead of probing and recording it twice).
+    expect(f.verifications.filter((v) => v.input.kind === "readiness")).toHaveLength(1);
+  });
+
+  it("locates a real bind failure on the unit's declared port", async () => {
+    const f = harness({ units: [B], addresses: { b: { host: "127.0.0.1", port: 4302 } } });
+    const result = await runServiceGroupStart({
+      topology: f.topology,
+      startUnit: recordingStart(f, { b: { ok: false, kind: "start-failed", error: "listen EADDRINUSE: address already in use 127.0.0.1:4302" } }),
+      observation: observation({}),
+      registeredAddress: (serviceId) => f.addresses.get(serviceId),
+    });
+    expect(result.state).toBe("start-failed");
+    expect(result.diagnostics.find((d) => d.scope.unitId === "repo:b")).toMatchObject({ code: "port-taken", scope: { unitId: "repo:b", port: 4302 } });
+  });
+
+  it("credits a start only to the run record its own pid produced, never an older open record", async () => {
+    const f = harness({ units: [B], addresses: { b: ADDRESSES.b } });
+    // An earlier run (another session) is still open for this service.
+    f.topology.runs().push(openRun("b", "run-b-old", 777));
+    const result = await runServiceGroupStart({
+      topology: f.topology,
+      // The dispatch really started pid 5555, but its bookkeeping wrote no record.
+      startUnit: async () => ({ ok: true, pid: 5555 }),
+      observation: observation({ "127.0.0.1:4102": "listening" }),
+      registeredAddress: (serviceId) => f.addresses.get(serviceId),
+    });
+    const unitB = result.units.find((u) => u.serviceId === "b");
+    // The stale 777 pid must NOT be credited to this start.
+    expect(unitB).toMatchObject({ start: "started", observedRun: false });
+    expect(unitB?.pid).toBeUndefined();
   });
 
   it("names the consumers a reallocated plan port still owes, and claims no update", async () => {

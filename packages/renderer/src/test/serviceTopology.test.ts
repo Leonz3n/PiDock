@@ -241,6 +241,11 @@ describe("display labels", () => {
   it("labels failures, code state, build freshness and shared resources", () => {
     expect(failureLabel("port-taken")).toEqual({ label: "端口被占用", hint: "重新分配端口后会更新受影响的消费者" });
     expect(failureLabel("dependency-unreachable").label).toBe("依赖不可达");
+    // 门禁拒绝 / 待确认 / 核验失败 are named distinctly, never folded into 启动失败.
+    expect(failureLabel("control-refused").label).toBe("门禁拒绝");
+    expect(failureLabel("approval-required").label).toBe("待确认");
+    expect(failureLabel("verify-failed").label).toBe("核验失败");
+    expect(failureLabel("start-failed").label).toBe("启动失败");
     expect(failureLabel("mystery").label).toBe("运行问题");
     expect(codeStateLabel("uncommitted")).toBe("有未提交修改");
     expect(buildFreshnessLabel("fresh")).toBe("构建与当前提交一致");

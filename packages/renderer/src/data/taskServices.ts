@@ -358,7 +358,7 @@ function runRecordFromHost(value: unknown, taskId: string): { serviceId: string;
   const verifications: ServiceRunRecordView["verifications"] = [];
   for (const entry of rawVerifications) {
     if (!isRecord(entry) || Object.keys(entry).some((key) => !RUN_VERIFICATION_KEYS.includes(key))) return null;
-    if (entry["kind"] !== "linkage" && entry["kind"] !== "readiness" && entry["kind"] !== "remote-reachability") return null;
+    if (entry["kind"] !== "linkage" && entry["kind"] !== "readiness" && entry["kind"] !== "remote-reachability" && entry["kind"] !== "selection-note") return null;
     if (typeof entry["detail"] !== "string" || typeof entry["ok"] !== "boolean" || boundedText(entry["at"], 200) == null) return null;
     verifications.push({ kind: entry["kind"], detail: entry["detail"], ok: entry["ok"] });
   }

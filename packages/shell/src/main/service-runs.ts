@@ -45,7 +45,13 @@ export function classifyBuildFreshness(input: {
 }
 
 export interface RunVerification {
-  kind: "linkage" | "readiness" | "remote-reachability";
+  /**
+   * `linkage`/`readiness`/`remote-reachability` are real probe results. A
+   * `selection-note` is NOT an observation: it marks a recorded run whose unit
+   * is not in the current selection, so a reader must show it as 未探测 rather
+   * than as a probe that failed.
+   */
+  kind: "linkage" | "readiness" | "remote-reachability" | "selection-note";
   detail: string;
   ok: boolean;
   at: string;

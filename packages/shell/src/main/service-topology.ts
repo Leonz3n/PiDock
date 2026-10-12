@@ -69,6 +69,9 @@ export type RunDiagnosticCode =
   | "start-order-conflict"
   | "start-failed"
   | "dependency-unreachable"
+  | "control-refused"
+  | "approval-required"
+  | "verify-failed"
   | "shared-not-isolated";
 
 /**
@@ -746,6 +749,12 @@ export interface GroupVerifyPlanStep {
   kind: "linkage" | "readiness" | "remote-reachability";
   /** Exactly the string `StartGroup.verify` carries. */
   label: string;
+  /**
+   * True for a prestart group's own 「准备步骤完成检查」: the check is the unit's
+   * own address, already observed in the listening phase, so a runner must not
+   * probe it a second time or record a duplicate observation.
+   */
+  selfObserved?: boolean;
 }
 
 export function groupVerifySteps(input: {
