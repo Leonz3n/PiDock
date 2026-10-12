@@ -629,7 +629,7 @@ const GROUP_STATES = ["verified", "listening", "not-probed", "not-listening", "d
 const GROUP_UNIT_STARTS = ["started", "start-failed", "refused", "approval-required", "not-started"] as const;
 const GROUP_UNIT_LISTENING = ["listening", "not-listening", "not-probed"] as const;
 const GROUP_STEP_OUTCOMES = ["passed", "dependency-unreachable", "verify-failed", "not-probed"] as const;
-/** The states that read green; `not-probed`/`not-listening` are deliberately NOT among them. */
+/** The states that read as a pass; `not-probed`/`not-listening` are deliberately NOT among them. */
 const GROUP_GREEN_STATES = ["verified", "listening"] as const;
 
 function groupAddress(value: unknown): { host: string; port: number } | undefined | null {
@@ -640,6 +640,11 @@ function groupAddress(value: unknown): { host: string; port: number } | undefine
   if (typeof host !== "string" || host.length === 0 || host.length > 255) return null;
   if (typeof port !== "number" || !Number.isInteger(port) || port < 1 || port > 65535) return null;
   return { host, port };
+}
+
+/** Required bounded text: `null` when absent or unusable, so a `null` check narrows it to `string`. */
+function groupText(value: unknown, max: number): string | null {
+  return typeof value === "string" && value.length > 0 && value.length <= max ? value : null;
 }
 
 function groupDiagnostic(value: unknown): ServiceGroupDiagnosticView | null {
@@ -666,13 +671,13 @@ function groupDiagnostic(value: unknown): ServiceGroupDiagnosticView | null {
 function groupStep(value: unknown): ServiceGroupStepView | null {
   if (!isRecord(value)) return null;
   if (Object.keys(value).some((key) => !(GROUP_STEP_KEYS as readonly string[]).includes(key))) return null;
-  const label = boundedText(value["label"], 500);
-  const kind = boundedText(value["kind"], 100);
-  const targetUnitId = boundedText(value["targetUnitId"], 300);
-  const targetServiceId = boundedText(value["targetServiceId"], 300);
-  const detail = boundedText(value["detail"], 2000);
+  const label = groupText(value["label"], 500);
+  const kind = groupText(value["kind"], 100);
+  const targetUnitId = groupText(value["targetUnitId"], 300);
+  const targetServiceId = groupText(value["targetServiceId"], 300);
+  const detail = groupText(value["detail"], 2000);
   const outcome = GROUP_STEP_OUTCOMES.find((candidate) => candidate === value["outcome"]);
-  if (label === undefined || kind === undefined || targetUnitId === undefined || targetServiceId === undefined || detail === undefined || outcome === undefined) return null;
+  if (label === null || kind === null || targetUnitId === null || targetServiceId === null || detail === null || outcome === undefined) return null;
   const address = groupAddress(value["address"]);
   if (address === null) return null;
   return { label, kind, targetUnitId, targetServiceId, outcome, detail, ...(address !== undefined ? { address } : {}) };
@@ -687,9 +692,9 @@ function groupStep(value: unknown): ServiceGroupStepView | null {
 function groupUnit(value: unknown): ServiceGroupUnitView | null {
   if (!isRecord(value)) return null;
   if (Object.keys(value).some((key) => !(GROUP_UNIT_KEYS as readonly string[]).includes(key))) return null;
-  const unitId = boundedText(value["unitId"], 300);
-  const serviceId = boundedText(value["serviceId"], 300);
-  if (unitId === undefined || serviceId === undefined) return null;
+  const unitId = groupText(value["unitId"], 300);
+  const serviceId = groupText(value["serviceId"], 300);
+  if (unitId === null || serviceId === null) return null;
   const start = GROUP_UNIT_STARTS.find((candidate) => candidate === value["start"]);
   if (start === undefined) return null;
   const listening = GROUP_UNIT_LISTENING.find((candidate) => candidate === value["listening"]);
@@ -733,9 +738,9 @@ function groupUnit(value: unknown): ServiceGroupUnitView | null {
  * point of this payload is that 已启动 / 已监听 / 已互验 come only from a real
  * observation, so nothing here may be smoothed over:
  *
- * - a green state (「已监听」/「已互验」) requires that NO unit was refused, parked,
+ * - a passing state (「已监听」/「已互验」) requires that NO unit was refused, parked,
  *   failed to start or stopped listening and that NO step failed: a refusal or a
- *   failure therefore cannot leave a green group in the payload or in the UI;
+ *   failure therefore cannot leave a passing group in the payload or in the UI;
  * - 「已互验」 additionally requires a real `linkage` step whose outcome passed, so
  *   the group can never claim a mutual verification nobody observed;
  * - a plan/declared fact has no way in: `listening`/`outcome` are the Host's own
@@ -762,9 +767,9 @@ export function serviceGroupRunFromHost(payload: unknown): ServiceGroupRunView |
   const restartScope: { unitId: string; reason: string }[] = [];
   for (const entry of rawScope) {
     if (!isRecord(entry) || Object.keys(entry).sort().join(",") !== "reason,unitId") return null;
-    const unitId = boundedText(entry["unitId"], 300);
-    const reason = boundedText(entry["reason"], 100);
-    if (unitId === undefined || reason === undefined) return null;
+    const unitId = groupText(entry["unitId"], 300);
+    const reason = groupText(entry["reason"], 100);
+    if (unitId === null || reason === null) return null;
     restartScope.push({ unitId, reason });
   }
   const rawReallocated = envelope["reallocated"];
@@ -772,10 +777,10 @@ export function serviceGroupRunFromHost(payload: unknown): ServiceGroupRunView |
   const reallocated: { unitId: string; before: number; after: number }[] = [];
   for (const entry of rawReallocated) {
     if (!isRecord(entry) || Object.keys(entry).sort().join(",") !== "after,before,unitId") return null;
-    const unitId = boundedText(entry["unitId"], 300);
+    const unitId = groupText(entry["unitId"], 300);
     const before = entry["before"];
     const after = entry["after"];
-    if (unitId === undefined || typeof before !== "number" || typeof after !== "number") return null;
+    if (unitId === null || typeof before !== "number" || typeof after !== "number") return null;
     reallocated.push({ unitId, before, after });
   }
   if (!Array.isArray(envelope["diagnostics"]) || envelope["diagnostics"].length > 500) return null;
@@ -786,9 +791,9 @@ export function serviceGroupRunFromHost(payload: unknown): ServiceGroupRunView |
     diagnostics.push(diagnostic);
   }
   if ((GROUP_GREEN_STATES as readonly string[]).includes(state)) {
-    // A green group must not contain a unit that was refused, parked, failed or
+    // A passing group must not contain a unit that was refused, parked, failed or
     // stopped listening, nor a failed step: without this, one refused unit could
-    // still leave a green group on screen.
+    // still leave a passing group on screen.
     if (units.some((unit) => unit.start !== "started" || unit.listening === "not-listening")) return null;
     if (units.every((unit) => unit.start !== "started")) return null;
     if (units.some((unit) => unit.steps.some((step) => step.outcome === "dependency-unreachable" || step.outcome === "verify-failed"))) return null;

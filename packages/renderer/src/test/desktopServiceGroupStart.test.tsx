@@ -57,10 +57,14 @@ function plannedTopology() {
  * seam (a real `recordRun` for every unit that really started, the pid the group
  * runner reads back), the observation port decides what was really accepted, and
  * a unit the runner was told to refuse is refused before any run is recorded.
+ *
+ * `noAddressFor` drops a unit's declared address, which is the ONLY way a real
+ * `not-probed` listening state is produced: the observation port itself can only
+ * answer `listening` / `not-listening`.
  */
 async function realGroupRun(options: {
   start?: Record<string, "ok" | "refused" | "start-failed">;
-  listening?: Record<string, "listening" | "not-listening" | "not-probed">;
+  noAddressFor?: string;
 } = {}) {
   const topology = plannedTopology();
   let pid = 4200;
@@ -75,8 +79,10 @@ async function realGroupRun(options: {
         portsSource: "declared", pid, owner: "human", startedAt: STARTED_AT });
       return { ok: true, pid };
     },
-    observation: { probeListening: async (address) => options.listening?.[`port:${address.port}`] ?? "listening" },
-    registeredAddress: (serviceId) => ({ host: "127.0.0.1", port: serviceId === CALLEE_ID ? 4100 : 4101 }),
+    observation: { probeListening: async () => "listening" },
+    registeredAddress: (serviceId) => serviceId === options.noAddressFor
+      ? undefined
+      : { host: "127.0.0.1", port: serviceId === CALLEE_ID ? 4100 : 4101 },
   });
   return result;
 }
@@ -219,7 +225,10 @@ describe("[PiDock 05] #10 group start from the shipped 运行 panel", () => {
   });
 
   it("never reads a started unit as listening: 未探测 stays 未探测", async () => {
-    const group = await realGroupRun({ listening: { "port:4100": "not-probed" } });
+    // The callee declares no probeable address, so nothing about it could be
+    // observed - a real 未探测 that must not be smoothed into 已监听.
+    const group = await realGroupRun({ noAddressFor: CALLEE_ID });
+    expect(group.units.find((unit) => unit.serviceId === CALLEE_ID)).toMatchObject({ start: "started", listening: "not-probed" });
     groupBridge({ answer: () => ({ ok: true, payload: { group } }) });
     await clickGroupStart();
     const receipt = await screen.findByTestId("dock-group-run");
