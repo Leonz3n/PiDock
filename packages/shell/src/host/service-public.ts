@@ -33,12 +33,18 @@ export function platformVerificationRows(
   platform: string,
 ): PlatformVerificationRow[] {
   const observed = new Map(verifications.filter((entry) => entry.startedAt !== undefined).map((entry) => [entry.platform, entry]));
+  const withoutObservation = new Set(verifications.filter((entry) => entry.startedAt === undefined).map((entry) => entry.platform));
   const rows: PlatformVerificationRow[] = [];
   for (const name of [...LAUNCH_VERIFICATION_TARGETS, platform, ...verifications.map((entry) => entry.platform)]) {
     if (rows.some((row) => row.platform === name)) continue;
     const entry = observed.get(name);
     if (entry === undefined) {
-      rows.push({ platform: name, verified: false, reason: name === platform ? "本任务尚无该平台的实测启动记录" : "本机未运行该平台，未实测" });
+      // Named reasons, so an unverified row never has to be inferred: a record
+      // that names no launch fact is still not a verification.
+      const reason = withoutObservation.has(name)
+        ? "该平台只有未记录实测事实的条目，不算已验证"
+        : name === platform ? "本任务尚无该平台的实测启动记录" : "本机未运行该平台，未实测";
+      rows.push({ platform: name, verified: false, reason });
       continue;
     }
     const mine = name === platform;
