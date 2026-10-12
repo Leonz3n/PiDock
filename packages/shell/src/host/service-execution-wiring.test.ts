@@ -18,6 +18,7 @@
  *   Electron UI, no packaged build, no Windows run.
  */
 import { EventEmitter } from "node:events";
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -94,6 +95,12 @@ interface FixtureOptions {
   nonCanonicalTaskDir?: boolean;
   /** Main cannot produce a trusted owner snapshot, so it never bootstraps the Host. */
   ownerAuthorityUnavailable?: boolean;
+  /**
+   * Make the task folder a REAL git worktree (one commit) instead of a plain
+   * directory, so main's own worktree read ([PiDock 05] #10 box 6) has something
+   * real to observe. The two `git` calls are test fixtures on a TEMP repository.
+   */
+  gitWorktree?: boolean;
 }
 
 async function installed(options: FixtureOptions = {}) {
@@ -113,10 +120,16 @@ async function installed(options: FixtureOptions = {}) {
     mkdirSync(join(taskDir, dir), { recursive: true });
     writeFileSync(join(taskDir, dir, "service.cjs"), SERVICE_SCRIPT);
   }
-  // The record spells the folder the way the Host is bound to it, exactly like
-  // a provisioned task whose configured root is reached through a symlink.
   diskTaskStore.writeTask(taskDir, buildTaskDiskRecord({ taskId, name: "Wiring", dirId: taskId, branch: "task/main", root: hostRoot, taskDir: hostTaskDir,
     remoteBranch: "main", baseCommit: "source-fixture", repos: ["repo-a"], now: "2026-01-01T00:00:00.000Z" }));
+  if (options.gitWorktree) {
+    // A real worktree for the task folder, committed AFTER the task record is
+    // written so the folder really starts out clean: `repo-a/svc-a` (the launch
+    // cwd) is a subdirectory of it, exactly like a provisioned task.
+    fixtureGit(taskDir, ["init", "-q", "-b", "main", "."]);
+    fixtureGit(taskDir, ["add", "-A"]);
+    fixtureGit(taskDir, ["commit", "-q", "-m", "fixture"]);
+  }
   const taskStat = statSync(taskDir, { bigint: true });
   const identity = { taskId, createdAt: "2026-01-01T00:00:00.000Z", root, realRoot: root, dirId: taskId,
     directoryDevice: taskStat.dev.toString(), directoryInode: taskStat.ino.toString() };
@@ -197,6 +210,20 @@ function linkedHome(home: string): string {
   const link = join(home, "linked-home");
   symlinkSync(home, link);
   return link;
+}
+
+/**
+ * The fixture's OWN git calls, on a TEMP repository only: hermetic (no system or
+ * global config, no prompts, no inherited identity) and never run in the PiDock
+ * checkout. Main's own reads are the code under test, not these.
+ */
+function fixtureGit(cwd: string, args: readonly string[]): string {
+  return execFileSync("git", [...args], {
+    cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_AUTHOR_NAME: "pidock-test", GIT_AUTHOR_EMAIL: "pidock@test.invalid",
+      GIT_COMMITTER_NAME: "pidock-test", GIT_COMMITTER_EMAIL: "pidock@test.invalid" },
+  }).trim();
 }
 
 /** A child pid the fixture script reported; used to observe the real OS process. */
@@ -526,4 +553,94 @@ describe("#7 catalog-driven service execution refusals", () => {
     expect((await f.status(serviceId))["error"]).toContain("service-execution-uncertain");
     expect(existsSync(join(f.taskDir, "repo-a/svc-a", "started-a.txt"))).toBe(false);
   }, 30_000);
+});
+
+/**
+ * [PiDock 05] (#10 box 6) main's REAL worktree read, end to end on the shipped
+ * `runTaskService` route: `shell/serviceCatalogOp {op:"runTaskService"}` → main
+ * resolves the launch and reads the worktree its verified cwd lives in → the
+ * registration carries that read to the Host → the Host writes it on the run
+ * record a real start produced.
+ *
+ * The child processes are REAL (the same driver as the suite above); the task
+ * folder is either a REAL temporary git worktree (one commit) or a plain
+ * directory, which is exactly the difference the box is about.
+ */
+describe.skipIf(process.platform === "win32")("#10 box 6 the run record carries the code state main really read", () => {
+  type WiringFixture = Awaited<ReturnType<typeof installed>>;
+
+  /** The newest run record this task's Host wrote for one service. */
+  async function latestRun(f: WiringFixture, serviceId: string): Promise<Record<string, unknown>> {
+    const payload = await f.request("task/serviceRunRecords", {});
+    const records = (payload["records"] ?? []) as Record<string, unknown>[];
+    const mine = records.filter((record) => record["serviceId"] === serviceId);
+    expect(mine.length).toBeGreaterThan(0);
+    return mine[mine.length - 1] as Record<string, unknown>;
+  }
+
+  it("records the launch worktree's REAL clean commit, then the real uncommitted state of a later start", { timeout: 60_000 }, async () => {
+    const f = await installed({ gitWorktree: true });
+    const serviceId = f.bind("svc-a", "a");
+    const head = fixtureGit(f.taskDir, ["rev-parse", "HEAD"]);
+
+    expect(await f.run(serviceId, "start")).toMatchObject({ serviceId, action: "start", actor: "human" });
+    const firstPid = await untilMarkerPid(f.taskDir, "a");
+    expect(alive(firstPid)).toBe(true);
+
+    // THE assertion the box needs: a real run record names the real commit,
+    // read by main from the worktree the launch's own cwd lives in.
+    const clean = await latestRun(f, serviceId);
+    expect(clean["codeState"]).toMatchObject({ kind: "committed-clean", commit: head });
+    expect((clean["codeState"] as { note?: string }).note).toBe("工作副本与记录提交一致");
+    // Nobody observed a build commit (nothing in the model names a build
+    // artifact), so this stays 无法判断构建状态 instead of claiming `fresh`.
+    expect(clean["buildFreshness"]).toBe("unknown");
+    expect(clean["buildFreshness"]).not.toBe("fresh");
+    // The read succeeded, so no observation-failure line was logged.
+    expect((await f.log(serviceId)).some((line) => line.startsWith("代码状态未观测"))).toBe(false);
+
+    // Stop, edit the worktree, start again: uncommitted code is DISTINGUISHABLE
+    // from a clean commit, and never reads as `fresh`.
+    expect(await f.run(serviceId, "stop")).toMatchObject({ serviceId, action: "stop" });
+    await until(() => !alive(firstPid), "the first child to exit");
+    writeFileSync(join(f.taskDir, "repo-a/svc-a", "service.cjs"), `${SERVICE_SCRIPT}\n// edited by the box-6 test\n`);
+    expect(await f.run(serviceId, "start")).toMatchObject({ serviceId, action: "start" });
+    const secondPid = await untilMarkerPid(f.taskDir, "a", firstPid);
+    expect(alive(secondPid)).toBe(true);
+
+    const dirty = await latestRun(f, serviceId);
+    expect(dirty["codeState"]).toMatchObject({ kind: "uncommitted", commit: head });
+    expect(dirty["buildFreshness"]).toBe("uncommitted-code");
+    expect(dirty["runId"]).not.toBe(clean["runId"]);
+
+    expect(await f.run(serviceId, "stop")).toMatchObject({ serviceId, action: "stop" });
+    await until(() => !alive(secondPid), "the second child to exit");
+  });
+
+  it("leaves the code state unknown BY NAME with the reason in the bounded log when nothing could be read", { timeout: 30_000 }, async () => {
+    // A task folder that is not a worktree: the read fails, so the run record
+    // must not name a code state and must not read as a clean tree.
+    const f = await installed();
+    const serviceId = f.bind("svc-a", "a");
+
+    expect(await f.run(serviceId, "start")).toMatchObject({ serviceId, action: "start", actor: "human" });
+    const pid = await untilMarkerPid(f.taskDir, "a");
+    expect(alive(pid)).toBe(true);
+
+    const run = await latestRun(f, serviceId);
+    expect(run["codeState"]).toMatchObject({ kind: "unknown" });
+    expect(run["codeState"]).not.toMatchObject({ kind: "committed-clean" });
+    expect((run["codeState"] as { commit?: string }).commit).toBeUndefined();
+    expect(run["buildFreshness"]).toBe("unknown");
+
+    // The reason is visible where the user reads the run: the service's own
+    // bounded log, carrying no machine path and no raw tool output.
+    const lines = await f.log(serviceId);
+    expect(lines).toContain(`代码状态未观测：该目录不是 Git 工作树；本次运行记录按 unknown 记录`);
+    expect(lines.every((line) => line.length <= 2000)).toBe(true);
+    expect(lines.join("\n")).not.toContain(f.taskDir);
+
+    expect(await f.run(serviceId, "stop")).toMatchObject({ serviceId, action: "stop" });
+    await until(() => !alive(pid), "the child to exit");
+  });
 });

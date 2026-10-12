@@ -1,5 +1,37 @@
 import { describe, expect, it } from "vitest";
-import { authorizeServiceRegistration, boundWorkspaceId, resolveBrowserLogSession, buildHostEnv, buildToolPlannerSpec, classifyControlCaller, DEFAULT_WORKSPACE_ID, routeHostTask, routeTaskBinding, serviceLaunchSource, toolPlannerSpecForHostDispatch, toolPlannerSpecForOp, validateHostTaskOp } from "./host-guards.js";
+import { authorizeCodeObservation, authorizeServiceRegistration, boundWorkspaceId, resolveBrowserLogSession, buildHostEnv, buildToolPlannerSpec, classifyControlCaller, DEFAULT_WORKSPACE_ID, routeHostTask, routeTaskBinding, serviceLaunchSource, toolPlannerSpecForHostDispatch, toolPlannerSpecForOp, validateHostTaskOp } from "./host-guards.js";
+
+// [PiDock 05] (#10 box 6) the worktree observation a registration may carry.
+// The read belongs to main, so only main's `service-catalog` registration may
+// carry it: the renderer's own `shell/taskOp` route arrives with main's
+// `shell-ui` attestation and must be REFUSED rather than have its claim stored.
+describe("code-state observation authorization", () => {
+  const catalog = { kind: "service-catalog", senderWebContentsId: 7 } as const;
+  const shellUi = { kind: "shell-ui", senderWebContentsId: 7 } as const;
+
+  it("accepts main's own observation only from the trusted catalog registration", () => {
+    expect(authorizeCodeObservation({ origin: catalog, code: { commit: "abc1234", dirty: false } })).toEqual({ ok: true });
+    expect(authorizeCodeObservation({ origin: catalog, codeObservationFailure: "该目录不是 Git 工作树" })).toEqual({ ok: true });
+    // A registration that observed nothing stays legal: `unknown` by name.
+    expect(authorizeCodeObservation({ origin: shellUi })).toEqual({ ok: true });
+    expect(authorizeCodeObservation({})).toEqual({ ok: true });
+  });
+
+  it("refuses a renderer attestation that tries to self-attest the code state", () => {
+    expect(authorizeCodeObservation({ origin: shellUi, code: { commit: "abc1234", dirty: false } }))
+      .toEqual({ ok: false, error: "permission-denied: 代码状态只能来自主进程对真实工作树的观测，界面登记不能自证" });
+    // The failure reason is a claim too (it can spell 不是工作树 for a real
+    // worktree to make a dirty run read as unobserved), so it is refused alike.
+    expect(authorizeCodeObservation({ origin: shellUi, codeObservationFailure: "没有工作树" }).ok).toBe(false);
+    expect(authorizeCodeObservation({ code: { commit: "abc1234", dirty: false } }).ok).toBe(false);
+    expect(authorizeCodeObservation({ origin: { kind: "service-catalog", senderWebContentsId: 0 }, code: { commit: "abc1234", dirty: false } }).ok).toBe(false);
+  });
+
+  it("refuses an observation and a failure reason in the same registration", () => {
+    expect(authorizeCodeObservation({ origin: catalog, code: { dirty: false }, codeObservationFailure: "读取失败" }))
+      .toEqual({ ok: false, error: "invalid-payload: task/registerService 不能同时携带 code 与 codeObservationFailure" });
+  });
+});
 
 describe("service registration authorization", () => {
   it("allows only main-attested human registration until Agent diff approval is wired", () => {
@@ -82,6 +114,25 @@ describe("service ops", () => {
     expect(validateHostTaskOp("task/serviceStatus", { serviceId: "saas-web" }).ok).toBe(true);
     expect(validateHostTaskOp("task/serviceLog", { serviceId: "saas-web" }).ok).toBe(true);
     expect(validateHostTaskOp("task/serviceStatus", {}).ok).toBe(false);
+  });
+
+  it("shape-checks the worktree observation instead of storing a half-observed one", () => {
+    const registration = { serviceId: "saas-web", descriptor: { name: "saas-web" }, layers: {}, templateVersion: "v12" };
+    expect(validateHostTaskOp("task/registerService", { ...registration, code: { commit: "abc1234", dirty: false } })).toEqual({ ok: true });
+    // A read that produced a dirty tree but no commit is still an observation.
+    expect(validateHostTaskOp("task/registerService", { ...registration, code: { dirty: true } })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/registerService", { ...registration, codeObservationFailure: "该目录不是 Git 工作树" })).toEqual({ ok: true });
+    // A malformed field is refused, never coerced into a code state.
+    expect(validateHostTaskOp("task/registerService", { ...registration, code: "abc1234" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/registerService", { ...registration, code: { commit: "abc1234" } }).ok).toBe(false);
+    expect(validateHostTaskOp("task/registerService", { ...registration, code: { commit: "not-a-commit", dirty: false } }).ok).toBe(false);
+    expect(validateHostTaskOp("task/registerService", { ...registration, code: { commit: "abc1234", dirty: "no" } }).ok).toBe(false);
+    // The reason is echoed into the service's bounded log, so it stays a single
+    // bounded line instead of a multi-line dump.
+    expect(validateHostTaskOp("task/registerService", { ...registration, codeObservationFailure: "" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/registerService", { ...registration, codeObservationFailure: "two\nlines" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/registerService", { ...registration, codeObservationFailure: "x".repeat(201) }).ok).toBe(false);
+    expect(validateHostTaskOp("task/registerService", { ...registration, codeObservationFailure: 42 }).ok).toBe(false);
   });
 });
 
