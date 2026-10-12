@@ -22,6 +22,7 @@
  */
 
 import { BROWSER_TOOL_ACTIONS } from "./browser-rules.js";
+import { SERVICE_TEMPLATE_TOOL } from "../host/sdk-agent-tool-contract.js";
 import {
   normalizeReportedUsage,
   providerConfigVersion,
@@ -216,6 +217,13 @@ export const PI_GATED_TOOLS: readonly PiToolDefinition[] = [
   { name: "service.logs", kind: "read" },
   { name: "service.start", kind: "command" },
   { name: "service.stop", kind: "command" },
+  // [PiDock 04] #7 box 6: the Agent's shared-template edit. It is `command`
+  // kind, NOT `write`: the tier rule below asks only for `command`/`browser`,
+  // so a `write`-kind entry would let a cross-task shared template be rewritten
+  // under `default` with no confirmation - the one outcome box 6 forbids. The
+  // name is spelled once, in the tool contract, and the tier rule below carries
+  // the name-scoped always-ask rule that makes this tool ask under `auto` too.
+  { name: SERVICE_TEMPLATE_TOOL, kind: "command" },
   ...BROWSER_TOOL_DEFINITIONS,
 ] as const;
 
@@ -821,6 +829,14 @@ export class PiSessionChannel {
     if (this.permission === "read" && tool.kind !== "read") {
       return { verdict: "deny", reason: `只读会话禁止${tool.kind === "write" ? "写入" : tool.kind === "command" ? "命令" : "浏览器操作"}` };
     }
+    // [PiDock 04] #7 box 6 one name-scoped rule: a shared template is CROSS-TASK
+    // state, so its edit is never written without a confirmation the user saw -
+    // not even under `auto` (`docs/design-notes.md` 共享模板确认: 自动执行不逐次
+    // 询问，但仍遵循共享模板确认). Scoped to this one tool name on purpose: the
+    // generic tier table above/below is unchanged, so `fs.write` still does NOT
+    // ask under `default`. Read-only was already denied above, so this rule can
+    // never grant a confirmation to a read-only session.
+    if (tool.name === SERVICE_TEMPLATE_TOOL) return { verdict: "ask", approvalId: "preview" };
     if (this.permission === "default" && (tool.kind === "command" || tool.kind === "browser")) {
       return { verdict: "ask", approvalId: "preview" };
     }

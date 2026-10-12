@@ -2,10 +2,12 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   BROWSER_CONTROL_SCOPE,
   PI_GATED_TOOLS,
+  PI_GATED_TOOL_NAMES,
   PiSessionChannel,
   resetPiSequencesForTests,
 } from "./pi-session.js";
 import { BROWSER_TOOL_ACTIONS } from "./browser-rules.js";
+import { SERVICE_TEMPLATE_TOOL } from "../host/sdk-agent-tool-contract.js";
 
 const TASK_DIR = "/tmp/pidock-test/task-abcdef12";
 
@@ -77,6 +79,32 @@ describe("PiSessionChannel permission gate", () => {
       expect(autoSession.gate(name, actionTarget, "v1").verdict).toBe("allow");
       expect(autoSession.gate(name, "/Users/name/elsewhere/page", "v1").verdict).toBe("deny");
     }
+  });
+
+  // [PiDock 04] (#7 box 6): the shared-template edit tool is gated like every
+  // other tool and carries ONE name-scoped rule: it asks at EVERY tier, because
+  // a shared template is cross-task state. The rule is scoped to this name only,
+  // so the generic tier table (write does not ask under `default`, tools other
+  // than this one do not ask under `auto`) is unchanged - pinned here so a
+  // "just ask for writes too" relaxation cannot pass.
+  it("asks for the shared-template edit at every tier without widening the tier table", () => {
+    const gated = PI_GATED_TOOLS.find((tool) => tool.name === SERVICE_TEMPLATE_TOOL);
+    expect(gated?.kind).toBe("command");
+    const target = `${TASK_DIR}/services/s-1`;
+    const readSession = channel();
+    readSession.setPermission("read");
+    expect(readSession.gate(SERVICE_TEMPLATE_TOOL, target, "v1")).toMatchObject({ verdict: "deny" });
+    expect(channel().gate(SERVICE_TEMPLATE_TOOL, target, "v1")).toMatchObject({ verdict: "ask" });
+    const autoSession = channel();
+    autoSession.setPermission("auto");
+    expect(autoSession.gate(SERVICE_TEMPLATE_TOOL, target, "v1")).toMatchObject({ verdict: "ask" });
+    // The scoped rule never leaks: `write` kind still does not ask under default
+    // (the in-task write tier of `docs/design-notes.md`), and another `command`
+    // tool is still allowed under `auto`.
+    expect(channel().gate("fs.write", `${TASK_DIR}/notes.md`, "v1")).toEqual({ verdict: "allow" });
+    expect(autoSession.gate("service.start", target, "v1")).toMatchObject({ verdict: "allow" });
+    // The name is one spelling: the contract and the gate cannot drift.
+    expect(PI_GATED_TOOL_NAMES).toContain(SERVICE_TEMPLATE_TOOL);
   });
 
   it("stamps the browser-control scope only when the Host asks for it", () => {

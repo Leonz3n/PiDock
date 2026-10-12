@@ -24,6 +24,15 @@
 
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 
+/**
+ * [PiDock 04] (#7 box 6) the Agent's shared-template edit tool. One spelling for
+ * the two lists that must agree: the gate's `PI_GATED_TOOLS` (`main/pi-session.ts`)
+ * and this contract. The gate carries the name-scoped rule that this tool is
+ * never written without a shown diff (see `PiSessionChannel.previewGate`), so the
+ * name is exported here instead of being spelled twice.
+ */
+export const SERVICE_TEMPLATE_TOOL = "service.template.update";
+
 export type SdkAgentToolName =
   | "fs.read"
   | "fs.search"
@@ -32,7 +41,8 @@ export type SdkAgentToolName =
   | "service.status"
   | "service.logs"
   | "service.start"
-  | "service.stop";
+  | "service.stop"
+  | typeof SERVICE_TEMPLATE_TOOL;
 
 /** The gate kind each tool is decided as (`PiToolKind` semantics). */
 export type SdkAgentToolKind = "read" | "write" | "command";
@@ -171,6 +181,32 @@ export const SDK_AGENT_TOOL_SPECS: readonly SdkAgentToolSpec[] = [
       properties: { serviceId: { type: "string", description: "Id of a service bound to this task" } },
     },
   },
+  // [PiDock 04] #7 box 6: the Agent's shared-template edit. `kind: "command"` is
+  // deliberate and is the tier fact, not a label for what the tool does: the one
+  // tier rule asks only for `command`/`browser`, so a `write`-kind tool would
+  // rewrite a CROSS-TASK shared template under `default` with no confirmation. A
+  // shared template is not task content (`fs.write`'s in-task write) - see
+  // `docs/design-notes.md` 共享模板确认 - so this tool asks under `default` too,
+  // and the gate's name-scoped rule makes it ask under `auto` as well. The edit
+  // content is the same shape the shell's `update` op takes.
+  {
+    name: SERVICE_TEMPLATE_TOOL,
+    kind: "command",
+    summary: "Edit a task-bound service's shared template (diff confirmation first)",
+    description:
+      "Propose an edit to the SHARED template of `serviceId`, a service this task has bound. `descriptor`, `shared` rows and the optional `dependencies` declaration are the whole edit; the Host derives the project, the environment and the pinned version from this task's own binding, so naming any of them is refused, and a `serviceId` this task has not bound is refused by name. The Host computes the real row-level diff from the persisted template and asks the user before anything is written: a read-only session is refused, and `default` and `auto` both ask for one confirmation (rejection, cancellation or expiry writes nothing). The answer carries the before/after rows and the list of task bindings that would need an explicit restart - this tool never starts, stops or restarts a process.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      required: ["serviceId", "descriptor", "shared"],
+      properties: {
+        serviceId: { type: "string", description: "Id of a service bound to this task" },
+        descriptor: { type: "object", description: "Shared launch fields: name, program, args, ports, runType, optional healthCheck/workdir" },
+        shared: { type: "array", description: "The full shared rows of the revision: [{key, value, secret?}]" },
+        dependencies: { type: "array", description: "Optional 服务依赖声明 rows: [{to, kind: \"call\"|\"prestart\"}]" },
+      },
+    },
+  },
 ];
 
 export const SDK_AGENT_TOOL_NAMES: readonly SdkAgentToolName[] = SDK_AGENT_TOOL_SPECS.map((spec) => spec.name);
@@ -246,8 +282,10 @@ export function sdkAgentSystemPrompt(input: { taskDir: string; worktrees: readon
     "- service.status: read a task-bound service's real state (args: serviceId)",
     "- service.logs: read a task-bound service's bounded log tail (args: serviceId, optional limit)",
     "- service.start / service.stop: start or stop a task-bound service through the Host (args: serviceId)",
+    "- service.template.update: edit a task-bound service's shared template (args: serviceId, descriptor, shared, optional dependencies)",
     "Every write and command is subject to the task's permission gate and write lock: a refusal comes back as a tool result with a reason, so adapt instead of retrying the same call.",
     "The service tools name only a `serviceId` this task has bound; the Host resolves the program, working directory, effective environment, logs and process identity itself, so a call can never name a program, a path, a port or an environment value. `service.start`/`service.stop` are refused in a read-only session, ask the user first under `default` (a rejection, cancellation or expiry performs no action, and one confirmation authorizes exactly one start or stop), and are allowed under `auto`.",
+    "`service.template.update` edits the SHARED template of a service this task has bound: name the `serviceId` and the edit content (`descriptor`, the full `shared` rows, optional `dependencies`) and nothing else - the home project, the environment and the pinned version come from this task's own binding, so naming one of them is refused. The Host returns the real row-level diff computed from the persisted template, the user confirms it (a read-only session is refused, and both `default` and `auto` ask before anything is written), and the answer lists the task bindings that need an explicit restart. Editing a shared template starts, stops and restarts nothing.",
     "`exec.run` runs a real shell through a filter, not a sandbox: a command containing `$` or a backtick is refused outright (no approval is offered, even under `default`), a token naming `.git` is refused whatever its case, quoting or simple backslash escapes (`echo x > .g\\it` is the same control file as `echo x > .git`), and only path-shaped tokens (`/`, `~`, `..`) are examined at all. Never treat it as an isolation boundary.",
   ].join("\n");
 }

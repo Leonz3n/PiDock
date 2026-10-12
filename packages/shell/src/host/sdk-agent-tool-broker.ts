@@ -57,8 +57,11 @@ import { isCredentialEnvName } from "./explicit-text-provider.js";
 import { normalizeScopePath } from "./path-coordination.js";
 import { runAgentServiceControl, type ServiceExecutionDriver } from "./service-control.js";
 import { SERVICE_CONTROL_TOOL, type ServiceRecord, type TaskServiceRuntime } from "./service-runtime.js";
+import type { ServiceTemplateEditContent, ServiceTemplateEditPort, ServiceTemplateReview } from "../rpc/service-template-request.js";
+import { isServiceTemplateEdit } from "../rpc/service-template-request.js";
 import { writeClaimError, type WriteCoordinatorPort } from "./write-coordination.js";
 import {
+  SERVICE_TEMPLATE_TOOL,
   sdkAgentToolSpec,
   type SdkAgentToolName,
   type SdkAgentToolOutcome,
@@ -178,6 +181,15 @@ export interface SdkAgentToolBrokerOptions {
    * then refused by name, and nothing is started, stopped or read.
    */
   services?: () => SdkAgentServiceHost | undefined;
+  /**
+   * The shared-template channel ([PiDock 04] #7 box 6). The template document
+   * and the task bindings are MAIN's (`main/service-catalog.ts`), not this
+   * Host's, so the Agent's edit is a request to main over the parent port -
+   * see `rpc/service-template-request.ts`. Absent means this Host has no such
+   * channel (a Host main did not bind, or a Host closing): the template tool is
+   * then refused by name and nothing is read or written.
+   */
+  templates?: () => ServiceTemplateEditPort | undefined;
   /** Real path: `realpath` of the deepest existing ancestor + the rest. */
   resolveRealPath(path: string): string;
   /** True while the Host is closing (no new effect may start). */
@@ -458,6 +470,48 @@ function serviceControlRefusal(error: string): SdkAgentToolOutcome {
   return refuse(/^[a-z][a-z0-9-]{1,63}$/.test(code) ? `tool-refused:${code}` : "tool-refused:service-control-failed", error);
 }
 
+/**
+ * Main's own named refusal for a shared-template request, kept readable as
+ * `tool-refused:<its code>` so the model can tell a refusal (`unknown-service`,
+ * a version conflict, a shape violation) from a failed request.
+ */
+function templateRefusal(error: string): SdkAgentToolOutcome {
+  const code = error.split(":")[0]!.trim();
+  return refuse(/^[a-z][a-z0-9-]{1,63}$/.test(code) ? `tool-refused:${code}` : "tool-refused:template-edit-failed", error);
+}
+
+/** What the confirmation shows: the service, the two versions and the row change. */
+function templateOperationText(review: ServiceTemplateReview): string {
+  const { added, changed, removed } = review.diff;
+  return `共享模板 ${review.serviceId} v${String(review.pinnedVersion)} → v${String(review.version)}：新增 ${String(added.length)} 行、修改 ${String(changed.length)} 行、删除 ${String(removed.length)} 行` +
+    `${review.descriptorChanged ? "；启动方式字段有变化" : ""}${review.dependenciesChanged ? "；依赖声明有变化" : ""}` +
+    `${review.contentChanged ? `；需重启 ${String(review.restartNeeded.length)} 项` : "；内容未变化"}`;
+}
+
+/**
+ * The tool result of a REAL write: the persisted before/after rows, the version
+ * it minted and the bindings that stay on the older revision. `saved` is only
+ * ever printed because main reported it after writing, and the last line states
+ * what this tool did NOT do - no process was started, stopped or restarted.
+ */
+function templateReviewText(review: ServiceTemplateReview): string {
+  const { added, changed, removed } = review.diff;
+  const restart = review.contentChanged
+    ? review.restartNeeded.length === 0
+      ? "需重启项：无（没有其他绑定停留在旧版本）"
+      : ["需重启项（需其任务显式更新才会切换，本次未切换）：", ...review.restartNeeded.map((row) => `  ${row.name}（${row.serviceId}）v${String(row.from)} → v${String(row.to)} · 任务 ${row.taskId}`)].join("\n")
+    : "需重启项：无（内容未变化，不使任何绑定失效）";
+  return [
+    `service ${review.serviceId} 共享模板：v${String(review.pinnedVersion)} → v${String(review.version)}（${review.versionLabel}）${review.saved ? "：已保存" : "：未保存（本次调用未写入）"}`,
+    `变更：新增 ${String(added.length)} 行、修改 ${String(changed.length)} 行、删除 ${String(removed.length)} 行${review.descriptorChanged ? "；启动方式字段有变化" : ""}${review.dependenciesChanged ? "；依赖声明有变化" : ""}`,
+    ...added.map((key) => `+ ${key}`),
+    ...changed.map((row) => `~ ${row.key}: ${row.before} → ${row.after}`),
+    ...removed.map((key) => `- ${key}`),
+    restart,
+    "未启动、停止或重启任何进程。",
+  ].join("\n");
+}
+
 /** The child environment: the Host's own, minus every credential-shaped name. */
 function commandEnvironment(): Record<string, string> {
   const env: Record<string, string> = { TERM: "dumb" };
@@ -671,7 +725,7 @@ export function derivedPrimaryCheckouts(worktrees: readonly string[]): string[] 
 /** Parsed, strictly validated arguments of one tool call. */
 interface ParsedArguments {
   ok: true;
-  values: { path?: string; pattern?: string; content?: string; command?: string; cwd?: string; offset?: number; limit?: number; serviceId?: string };
+  values: { path?: string; pattern?: string; content?: string; command?: string; cwd?: string; offset?: number; limit?: number; serviceId?: string; templateEdit?: ServiceTemplateEditContent };
 }
 type ArgumentsRefusal = { ok: false; outcome: SdkAgentToolOutcome };
 
@@ -685,6 +739,10 @@ function parseArguments(tool: SdkAgentToolName, args: Record<string, unknown>): 
     "service.logs": ["serviceId", "limit"],
     "service.start": ["serviceId"],
     "service.stop": ["serviceId"],
+    // [PiDock 04] #7 box 6: the Agent names a bound service and the edit content.
+    // A project, an environment, an expected version, a task id or a path is an
+    // unknown key here and a named refusal, never a hint main would honour.
+    [SERVICE_TEMPLATE_TOOL]: ["serviceId", "descriptor", "shared", "dependencies"],
   };
   const unknown = Object.keys(args).filter((key) => !allowed[tool].includes(key));
   if (unknown.length > 0) return { ok: false, outcome: refuse("tool-refused:invalid-arguments", `未知参数：${unknown.join("、")}`) };
@@ -762,6 +820,20 @@ function parseArguments(tool: SdkAgentToolName, args: Record<string, unknown>): 
       return { ok: false, outcome: refuse("tool-refused:invalid-arguments", `参数 limit 不能超过 ${MAX_SERVICE_LOG_LIMIT}`) };
     }
     if (limit !== undefined) values.limit = limit;
+  }
+  if (tool === SERVICE_TEMPLATE_TOOL) {
+    const serviceId = string("serviceId", MAX_SERVICE_ID_CHARS);
+    if (typeof serviceId !== "string") return serviceId;
+    // The edit content goes through the SAME key-exact, size-bounded reader the
+    // wire guard uses, so the tool boundary and the request boundary cannot
+    // disagree about what an edit is.
+    const edit = { serviceId, descriptor: args["descriptor"], shared: args["shared"],
+      ...(args["dependencies"] !== undefined ? { dependencies: args["dependencies"] } : {}) };
+    if (!isServiceTemplateEdit(edit)) {
+      return { ok: false, outcome: refuse("tool-refused:invalid-arguments", "共享模板编辑必须是 descriptor 对象、shared 行数组与可选 dependencies；不给项目、环境、版本或路径") };
+    }
+    values.serviceId = serviceId;
+    values.templateEdit = edit;
   }
   return { ok: true, values };
 }
@@ -843,6 +915,9 @@ export class SdkAgentToolBroker {
     // The service tools resolve their target against the task's own service
     // runtime, not against a path: they are answered before any path is
     // resolved, so an id can never be read as a filename.
+    if (spec.name === SERVICE_TEMPLATE_TOOL) {
+      return await this.performTemplateTool({ sessionId, channel: this.options.channel(sessionId), spec, values: parsed.values });
+    }
     if (spec.name.startsWith("service.")) {
       return await this.performServiceTool({ sessionId, channel: this.options.channel(sessionId), spec, values: parsed.values });
     }
@@ -898,6 +973,75 @@ export class SdkAgentToolBroker {
       sessionId, channel: this.options.channel(sessionId), name: spec.name, kind: spec.kind, target: resolved.absolute,
       version: versionOf([spec.name, spec.kind, resolved.real]),
       effect: () => this.executeRead(spec.name, resolved.real, parsed.values),
+    });
+  }
+
+  /**
+   * The Agent's shared-template edit ([PiDock 04] #7 box 6).
+   *
+   * The shared template, its environments, its task bindings and the write
+   * authority are MAIN's (`main/service-catalog.ts`); this process holds only
+   * catalog-derived facts, so the edit travels as a request over the parent port
+   * (`options.templates`) and main stays the only writer:
+   *
+   * - the model names a `serviceId` plus the edit content; main derives the
+   *   project, the environment and the expected version from this task's OWN
+   *   binding pin (and is the one that knows whether the task bound the id at
+   *   all), so a call can retarget nothing: a smuggled
+   *   `projectId`/`environmentId`/`expectedVersion` is an unknown argument, and
+   *   the wire guard refuses it too;
+   * - the REVIEW - the row-level diff computed from the PERSISTED document,
+   *   with the restart-needed bindings - is requested BEFORE anything is minted
+   *   or written, and is what the confirmation names;
+   * - the confirmation is minted through the ONE gate for the reviewed version.
+   *   The tool's kind is `command` and the gate carries a name-scoped rule, so it
+   *   asks under `default` AND under `auto`: a refused, cancelled or expired
+   *   confirmation performs no write at all and leaves the document identical;
+   * - the write itself happens only in `apply`, which re-derives the same pin and
+   *   fails closed by name when the document moved since the review. A template
+   *   edit starts, stops and restarts nothing: the answer says so instead of
+   *   implying a restart.
+   */
+  private async performTemplateTool(input: {
+    sessionId: string;
+    channel: SdkAgentToolChannel;
+    spec: SdkAgentToolSpec;
+    values: ParsedArguments["values"];
+  }): Promise<SdkAgentToolOutcome> {
+    const serviceId = input.values.serviceId!;
+    if (serviceId.length > MAX_SERVICE_ID_CHARS || !SERVICE_ID_PATTERN.test(serviceId)) {
+      return refuse("tool-refused:invalid-arguments", `serviceId 不是服务标识（只接受本任务已绑定服务的 id）：${serviceId.slice(0, 64)}`);
+    }
+    const edit = input.values.templateEdit;
+    if (!edit) return refuse("tool-refused:invalid-arguments", "缺少共享模板编辑内容");
+    const templates = this.options.templates?.();
+    if (!templates) return refuse("tool-refused:template-control-unavailable", "本任务未接入共享模板通道，Agent 不能修改共享模板（未写入任何内容）");
+    // Same target spelling the service tools use for one of this task's
+    // services. Whether this task really BOUND the id is main's answer, not this
+    // process's: the Host holds a registration only after a run sequence, and a
+    // bound service the task has not started yet is exactly the one to edit.
+    const target = `${this.options.scope().taskDir}/services/${serviceId}`;
+    // The review reads main's persisted document; nothing is minted, claimed or
+    // written before it answered.
+    const reviewed = await templates.review(edit);
+    if (!reviewed.ok) return templateRefusal(reviewed.error);
+    const review = reviewed.review;
+    return await this.runWithGate({
+      sessionId: input.sessionId, channel: input.channel, name: input.spec.name, kind: input.spec.kind, target,
+      operation: templateOperationText(review),
+      // The confirmation is bound to the reviewed revision and to this exact
+      // edit: a different edit can never spend it.
+      version: versionOf([input.spec.name, target, String(review.pinnedVersion), String(review.version),
+        JSON.stringify(review.diff), review.descriptorChanged, review.dependenciesChanged, JSON.stringify(edit.shared), JSON.stringify(edit.dependencies ?? null)]),
+      effect: async () => {
+        const applied = await templates.apply(edit);
+        if (!applied.ok) return templateRefusal(applied.error);
+        if (applied.review.serviceId !== review.serviceId || applied.review.version !== review.version) {
+          return refuse("tool-refused:template-version-conflict",
+            `确认的共享模板版本（v${review.version}）与实际写入的版本（v${applied.review.version}）不一致，本次写入已拒绝`);
+        }
+        return { outcome: "ok", text: templateReviewText(applied.review) };
+      },
     });
   }
 
@@ -1199,7 +1343,11 @@ export class SdkAgentToolBroker {
     approvalId: string;
     tier: PiPermission;
   }): { ok: true } | { ok: false; code: string; reason: string } {
-    if (input.tier !== "default") return { ok: false, code: "tool-refused:permission-changed", reason: "确认请求的用户权限已变更，请重新发起调用" };
+    // `tier` is the tier the confirmation was MINTED for. It is not hard-coded to
+    // `default`: the shared-template tool asks under `auto` too, so a live-tier
+    // comparison is what keeps a tier change from either retroactively
+    // authorizing a pending confirmation or throwing away a legitimately minted
+    // one.
     if (input.channel.currentPermission !== input.tier) {
       return { ok: false, code: "tool-refused:permission-changed", reason: "会话权限已变更，确认请求只对原请求生效" };
     }

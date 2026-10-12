@@ -78,6 +78,7 @@ import { ptySpawnerAvailable, TerminalPtyDriver, resolvePtyRuntime } from "./ter
 import { TaskTerminalSessions } from "./terminal-sessions.js";
 import { writeClaimError } from "./write-coordination.js";
 import { runAgentBrowserAction, runHumanBrowserAction, type BrowserGatewayPort } from "./browser-control.js";import { HostBrowserClient } from "../rpc/browser-client.js";
+import { ServiceTemplateRequestClient, type ServiceTemplateEditPort } from "../rpc/service-template-request.js";
 import { isBrowserAction } from "../main/browser-rules.js";
 import type { RemoteEntryMode, RemotePendingRequest } from "../main/remote-rules.js";
 import {
@@ -816,6 +817,10 @@ function taskHostFor(taskId: string): TaskWorkspaceHost | { error: string } {
       // runtime + driver + owner check lazily, so the model can start/stop a
       // task-bound service only through the one gate and the one driver.
       () => agentServiceHostFor(boundTaskId),
+      // [PiDock 04] (#7 box 6): the shared-template edit is main's write, so the
+      // Agent's tool asks main for the review and for the save; a Host without
+      // this port refuses the tool by name.
+      () => serviceTemplateEditPortFor(boundTaskId),
     );
   }
   return workspaceHost;
@@ -902,6 +907,24 @@ function browserGatewayFor(taskId: string): BrowserGatewayPort {
         actor: request.actor,
       }),
   };
+}
+
+// [PiDock 04] (#7 box 6) the shared-template channel: the Agent Host holds
+// catalog-derived facts, not the catalog store, so an Agent edit of a SHARED
+// template becomes one request to main over the same parent port. main is the
+// only writer; `main/service-catalog-ipc.ts` binds the handler to this child's
+// own task id, and a Host whose main did not mount the handler is refused BY
+// NAME (never a local fallback write).
+let serviceTemplateClient: ServiceTemplateRequestClient | null = null;
+
+/** Exported so tests and callers drive the production wiring itself, never a copy (`agentServiceHostFor`'s rule). */
+export function serviceTemplateEditPortFor(taskId: string): ServiceTemplateEditPort {
+  // Utility parent-port events wrap messages; the client consumes bare envelopes.
+  serviceTemplateClient ??= new ServiceTemplateRequestClient({
+    postMessage: (message) => hostPort.postMessage(message),
+    on: (_event, listener) => { hostPort.on("message", (event: { data: unknown }) => listener(event.data)); },
+  }, boundWorkspaceId(), taskId);
+  return serviceTemplateClient;
 }
 
 /**

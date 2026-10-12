@@ -16,6 +16,13 @@ import {
   type RequestParams,
   type RpcRequest,
 } from "./protocol.js";
+import {
+  isServiceTemplateRequest,
+  type ServiceTemplateRequest,
+  type ServiceTemplateRequestParams,
+  type ServiceTemplateRequestResult,
+  type ServiceTemplateResponse,
+} from "./service-template-request.js";
 
 export type { RpcRequest };
 
@@ -55,6 +62,9 @@ export class HostClient {
   private browserHandler:
     | ((params: BrowserRequestParams) => Promise<BrowserPerformResult>)
     | undefined;
+  private serviceTemplateHandler:
+    | ((params: ServiceTemplateRequestParams) => Promise<ServiceTemplateRequestResult>)
+    | undefined;
 
   constructor(private readonly transport: HostTransport | UtilityProcess) {
     this.transport.on("message", this.onMessage);
@@ -70,6 +80,20 @@ export class HostClient {
     handler: (params: BrowserRequestParams) => Promise<BrowserPerformResult>,
   ): void {
     this.browserHandler = handler;
+  }
+
+  /**
+   * Handles Host -> main shared-template requests ([PiDock 04] #7 box 6). The
+   * catalog store and the task bindings are main's, so the Host asks main to
+   * review (diff, no write) or apply (the same two-step the page path uses) one
+   * Agent edit; main binds this handler to the child it forked, so the payload's
+   * task id can only fail the comparison. Without a handler every request fails
+   * closed with a named error and nothing is written.
+   */
+  onServiceTemplateRequest(
+    handler: (params: ServiceTemplateRequestParams) => Promise<ServiceTemplateRequestResult>,
+  ): void {
+    this.serviceTemplateHandler = handler;
   }
 
   onTurnEvent(listener: (message: { kind: "sdk-turn-event"; event: SdkTextEvent } | { kind: "sdk-turn-status"; turn: TurnRecord } | { kind: "sdk-turn-resync"; taskId: string; sessionId: string; turnId: string }) => void): () => void {
@@ -117,6 +141,12 @@ export class HostClient {
       void this.handleBrowserRequest(data).catch(() => undefined);
       return;
     }
+    if (isServiceTemplateRequest(data)) {
+      // Same discipline as the browser pair: the Host is waiting for one
+      // correlated answer, so a failure is an answer, never silence.
+      void this.handleServiceTemplateRequest(data).catch(() => undefined);
+      return;
+    }
     if (!isRpcResponse(data)) return;
     const entry = this.pending.get(data.id);
     if (!entry) return;
@@ -142,6 +172,26 @@ export class HostClient {
     const response: BrowserResponse = result.ok
       ? { kind: "browser-response", id: request.id, ok: true, payload: result.payload }
       : { kind: "browser-response", id: request.id, ok: false, error: result.error };
+    try {
+      this.transport.postMessage(response);
+    } catch {
+      // The Host process is gone; nothing left to answer.
+    }
+  }
+
+  private async handleServiceTemplateRequest(request: ServiceTemplateRequest): Promise<void> {
+    const handler = this.serviceTemplateHandler;
+    let result: ServiceTemplateRequestResult;
+    try {
+      result = handler
+        ? await handler(request.params)
+        : { ok: false, error: "template-unavailable: 主进程未挂载共享模板通道" };
+    } catch (error) {
+      result = { ok: false, error: `template-unavailable: ${error instanceof Error ? error.message : String(error)}` };
+    }
+    const response: ServiceTemplateResponse = result.ok
+      ? { kind: "service-template-response", id: request.id, ok: true, payload: result.payload }
+      : { kind: "service-template-response", id: request.id, ok: false, error: result.error };
     try {
       this.transport.postMessage(response);
     } catch {
