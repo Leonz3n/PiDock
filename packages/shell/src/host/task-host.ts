@@ -65,10 +65,15 @@ import {
   validateTaskName,
   type ProvisionPlan,
 } from "../main/task-provision.js";
+import { hostPlatformLabel } from "../main/service-config.js";
 import {
   checkLinkNameCollisions,
   checkRepoConflicts,
   classifyLinkTarget,
+  LINK_MODEL_VERIFICATION_BOUNDARY,
+  linkCapabilityRows,
+  type LinkCapabilityRow,
+  type LinkTargetObservation,
   classifyRepoPrepareState,
   filterAppendRepos,
   isMultiRepoErrorCode,
@@ -211,6 +216,109 @@ export function isPathInsideTask(target: string | null, taskDir: string): boolea
   const resolved = (absolute.startsWith("/") ? "/" : "") + parts.join("/");
   const task = normalize(taskDir);
   return resolved === task || resolved.startsWith(`${task}/`);
+}
+
+/**
+ * Hop budget for one link-chain observation. A real task link is one hop; the
+ * budget only exists so a pathological chain cannot turn a report into
+ * unbounded syscalls, and exceeding it is named (`unknown`), never guessed.
+ */
+export const MAX_LINK_HOPS = 16;
+
+/** The observed link-target report `probeLinkTarget` answers with. */
+export interface LinkTargetProbe {
+  shape: LinkTargetObservation;
+  /** Named reason / what was really seen; the surface shows this verbatim. */
+  detail: string;
+  /** Plan-time lexical pre-check on path strings (no fs): `ok`/`nested`/`loop-risk`. */
+  lexical: "ok" | "nested" | "loop-risk";
+  /** One-hop readlink target when `sourcePath` itself is a symlink (null otherwise). */
+  linkTarget: string | null;
+  /**
+   * True when the one-hop readlink target resolves inside this task folder:
+   * callers MUST treat it as loop-risk (a link pointing back into the task
+   * would recurse on creation). Report-only.
+   */
+  linkTargetInTask: boolean;
+  /** Per-platform link-capability record: one row per release target + this Host. */
+  platforms: LinkCapabilityRow[];
+  /** The named boundary: this is a Host observation, not a real pi/model run. */
+  modelBoundary: string;
+}
+
+/**
+ * The filesystem reads one link-chain observation needs, injected so the
+ * walk's decisions (including the branches a real filesystem cannot be asked
+ * for on demand) are unit-testable; `probeLinkTarget` passes the real Node fs.
+ * `lstat` must NOT follow the last component (that is what a link is).
+ */
+export interface LinkChainReaders {
+  lstat(path: string): { isSymbolicLink(): boolean; isDirectory(): boolean };
+  readlink(path: string): string;
+  resolveTarget(current: string, target: string): string;
+}
+
+/**
+ * Walk at most `MAX_LINK_HOPS` links from `sourcePath` and NAME the shape.
+ * Read-only by construction: the readers expose `lstat`/`readlink` and nothing
+ * else, so no implementation of this function can create, repair, follow
+ * through or delete a link — it only reports what it found.
+ *
+ * A missing path is `dangling` (失效), a chain that revisits a link it already
+ * followed is `cyclic-link` (循环), a chain that ends at a real directory after
+ * at least one hop is `nested-link` (嵌套: the source is itself a link), and
+ * `unknown` covers everything not established — a read error other than
+ * "missing", a chain that ends at something which is not a directory, or a
+ * chain longer than the hop budget.
+ */
+export function observeLinkChain(sourcePath: string, readers: LinkChainReaders): { shape: LinkTargetObservation; detail: string } {
+  const walked = new Set<string>();
+  let current = sourcePath;
+  for (let hops = 0; ; hops += 1) {
+    if (hops > MAX_LINK_HOPS)
+      return { shape: "unknown", detail: `链接链超过 ${MAX_LINK_HOPS} 跳，未继续跟随，形状未确定: ${current}` };
+    if (walked.has(current))
+      return { shape: "cyclic-link", detail: `链接链回到已跟随过的链接（已跟随 ${hops} 跳后回到）: ${current}` };
+    let stat: { isSymbolicLink(): boolean; isDirectory(): boolean };
+    try {
+      stat = readers.lstat(current);
+    } catch (error) {
+      const reason = describeFailure(error);
+      if (isMissingPath(error))
+        return hops === 0
+          ? { shape: "dangling", detail: `普通目录来源不存在: ${sourcePath}` }
+          : { shape: "dangling", detail: `链接目标不存在（跟随 ${hops} 跳后缺 ${current}）` };
+      return { shape: "unknown", detail: `链接目标形状无法读取（${reason}）: ${current}` };
+    }
+    if (!stat.isSymbolicLink()) {
+      if (!stat.isDirectory())
+        return { shape: "unknown", detail: `链接目标不是目录（${current}）` };
+      return hops === 0
+        ? { shape: "directory", detail: `来源是真实目录: ${current}` }
+        : { shape: "nested-link", detail: `来源本身是软链接（跟随 ${hops} 跳后到达目录 ${current}）` };
+    }
+    walked.add(current);
+    let target: string;
+    try {
+      target = readers.readlink(current);
+    } catch (error) {
+      return { shape: "unknown", detail: `链接目标不可读取（${describeFailure(error)}）: ${current}` };
+    }
+    current = readers.resolveTarget(current, target);
+  }
+}
+
+/** `EACCES: ...`: the filesystem error's named code (when it has one) plus its message. */
+function describeFailure(error: unknown): string {
+  const code = error instanceof Error ? (error as { code?: unknown }).code : undefined;
+  const message = error instanceof Error ? error.message : String(error);
+  return `${typeof code === "string" ? code : ""} ${message}`.trim();
+}
+
+/** A filesystem error that means "this path does not exist" (never "unreadable"). */
+function isMissingPath(error: unknown): boolean {
+  const code = typeof error === "object" && error !== null ? (error as { code?: unknown }).code : undefined;
+  return code === "ENOENT" || code === "ENOTDIR";
 }
 
 /**
@@ -2176,30 +2284,25 @@ export class TaskWorkspaceHost {
    * [PiDock 03] (#6) plain-dir link target probe (Host-side, needs fs).
    * Lexical `loop-risk`/`nested` classification lives in
    * `classifyLinkTarget` (unit-tested without fs); this probe answers the
-   * remaining question: does the source still exist, and is it a symlink
-   * loop back into the task? Never creates or follows links beyond one
-   * `readlink` — report only, no takeover.
+   * question that needs the real filesystem: which shape does the link's
+   * target have — a real directory, 失效 (dangling), 嵌套 (the source is
+   * itself a link), 循环 (the chain returns to a link it already followed),
+   * or a NAMED unknown when the shape could not be read. Bounded and
+   * read-only: `lstat`/`readlink` metadata only, at most `MAX_LINK_HOPS`
+   * hops, and the probe never creates, repairs, follows-through or deletes
+   * anything (a `cyclic-link` or `dangling` source is REPORTED, never fixed).
+   *
+   * This is the raw observation; the op reaches it only through
+   * `probeDeclaredLinkSource` below, which first checks the caller-named path
+   * against this task's OWN recorded plain-directory sources.
    */
-  probeLinkTarget(sourcePath: string): {
-    shape: "ok" | "dead";
-    detail: string;
-    /** Lexical classification (no fs): `ok`/`nested`/`loop-risk`. */
-    lexical: "ok" | "nested" | "loop-risk";
-    /** One-hop readlink target when `sourcePath` itself is a symlink (null otherwise). */
-    linkTarget: string | null;
-    /**
-     * True when the one-hop readlink target resolves inside this task
-     * folder: callers MUST treat it as loop-risk (a link pointing back
-     * into the task would recurse on creation). Report-only, never
-     * followed beyond the single `readlink` hop above.
-     */
-    linkTargetInTask: boolean;
-  } {
+  probeLinkTarget(sourcePath: string): LinkTargetProbe {
     // Lazy Node fs import keeps the class transport-free for tests that
-    // never probe; dynamic require is avoided (ESM) via createRequire.
-    const { existsSync, lstatSync, readlinkSync } = process.getBuiltinModule("node:fs") as typeof import("node:fs");
-    // Report-only: lexical shape rides the payload alongside the fs
-    // answer (one `readlink` hop max, never followed beyond it).
+    // never probe.
+    const { lstatSync, readlinkSync } = process.getBuiltinModule("node:fs") as typeof import("node:fs");
+    const { dirname, isAbsolute, resolve } = process.getBuiltinModule("node:path") as typeof import("node:path");
+    // Report-only: the plan-time lexical pre-check rides the payload beside
+    // the observation, so the two can never be confused for each other.
     const lexical = classifyLinkTarget(sourcePath, this.taskDir, []);
     let linkTarget: string | null = null;
     try {
@@ -2210,9 +2313,39 @@ export class TaskWorkspaceHost {
       linkTarget = null;
     }
     const linkTargetInTask = isPathInsideTask(linkTarget, this.taskDir);
-    if (!existsSync(sourcePath))
-      return { shape: "dead", detail: `普通目录来源不存在: ${sourcePath}`, lexical, linkTarget, linkTargetInTask };
-    return { shape: "ok", detail: "来源可用", lexical, linkTarget, linkTargetInTask };
+    const walk = observeLinkChain(sourcePath, {
+      lstat: (path) => lstatSync(path),
+      readlink: (path) => readlinkSync(path),
+      resolveTarget: (current, target) => (isAbsolute(target) ? target : resolve(dirname(current), target)),
+    });
+    return {
+      ...walk,
+      lexical,
+      linkTarget,
+      linkTargetInTask,
+      platforms: linkCapabilityRows(hostPlatformLabel()),
+      modelBoundary: LINK_MODEL_VERIFICATION_BOUNDARY,
+    };
+  }
+
+  /**
+   * [PiDock 03] (#6) the probe a caller may actually ask for: only a source
+   * path this task itself recorded as a plain-directory link may be observed.
+   * A path the caller names from anywhere else is refused BY NAME with no
+   * filesystem read at all, so the probe cannot be used to fingerprint paths
+   * outside the task's own declared roots. Fails closed: a task with no
+   * recorded link sources has nothing probeable.
+   */
+  probeDeclaredLinkSource(sourcePath: string):
+    | { ok: true; report: LinkTargetProbe }
+    | { ok: false; error: string } {
+    const declared = (this.store.readTask(this.taskDir)?.dirLinks ?? []).map((link) => link.sourcePath);
+    if (!declared.includes(sourcePath))
+      return {
+        ok: false,
+        error: `path-out-of-scope: 只探测本任务记录的普通目录来源（${this.taskDir} 的 dirLinks），收到的是其他路径`,
+      };
+    return { ok: true, report: this.probeLinkTarget(sourcePath) };
   }
 
   taskRecord(): TaskDiskRecord | null {

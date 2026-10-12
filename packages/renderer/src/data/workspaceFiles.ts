@@ -400,6 +400,67 @@ export function workspaceDiffFromHost(payload: unknown): WorkspaceDiffView | und
   return { attribution: attributionView, path, diff, truncated };
 }
 
+/**
+ * One platform row of the link-capability record (`task/probeLink`): `exercised`
+ * is the Host's own platform when the probe really ran there, and every other
+ * row says BY NAME why it is not a verification. The renderer never invents a
+ * platform fact: it shows what the Host recorded.
+ */
+export type WorkspaceLinkCapabilityRowView = { platform: string; exercised: boolean; note: string };
+
+/**
+ * The Host's observed shape of one plain-directory link's TARGET. Every value is
+ * a reading: 失效 (`dangling`), 嵌套 (`nested-link`), 循环 (`cyclic-link`) and a
+ * real directory are kept apart, and a shape that could not be read is
+ * `unknown` — a payload that does not name one of them is DROPPED rather than
+ * shown as a directory.
+ */
+export type WorkspaceLinkTargetView = {
+  shape: "directory" | "nested-link" | "dangling" | "cyclic-link" | "unknown";
+  detail: string;
+  /** Plan-time lexical pre-check on path strings, shown apart from the reading. */
+  lexical: "ok" | "nested" | "loop-risk";
+  platforms: WorkspaceLinkCapabilityRowView[];
+  /** Named boundary: a Host observation, not a real pi/model run. */
+  modelBoundary: string;
+};
+
+const LINK_SHAPES: readonly WorkspaceLinkTargetView["shape"][] = ["directory", "nested-link", "dangling", "cyclic-link", "unknown"];
+const LINK_LEXICAL: readonly WorkspaceLinkTargetView["lexical"][] = ["ok", "nested", "loop-risk"];
+
+/**
+ * Parse the `task/probeLink` payload. Fail-closed: an unknown shape, a shape
+ * the Host never observed, or a platform row without its named note makes the
+ * whole read unusable (`undefined`), so the caller names "未确定" instead of
+ * defaulting an unread link to a healthy directory.
+ */
+export function workspaceLinkTargetFromHost(payload: unknown): WorkspaceLinkTargetView | undefined {
+  const source = record(payload);
+  if (!source) return undefined;
+  const shape = str(source["shape"]) as WorkspaceLinkTargetView["shape"] | undefined;
+  const detail = str(source["detail"]);
+  const lexical = str(source["lexical"]) as WorkspaceLinkTargetView["lexical"] | undefined;
+  const modelBoundary = str(source["modelBoundary"]);
+  const platforms = source["platforms"];
+  if (
+    shape === undefined || !LINK_SHAPES.includes(shape) ||
+    detail === undefined || lexical === undefined || !LINK_LEXICAL.includes(lexical) ||
+    modelBoundary === undefined || !Array.isArray(platforms) || platforms.length === 0
+  ) {
+    return undefined;
+  }
+  const rows: WorkspaceLinkCapabilityRowView[] = [];
+  for (const entry of platforms) {
+    const row = record(entry);
+    const platform = row ? str(row["platform"]) : undefined;
+    const exercised = row ? bool(row["exercised"]) : undefined;
+    const note = row ? str(row["note"]) : undefined;
+    if (platform === undefined || exercised === undefined || note === undefined) return undefined;
+    rows.push({ platform, exercised, note });
+  }
+  return { shape, detail, lexical, platforms: rows, modelBoundary };
+}
+
 export function workspaceDeliveryFromHost(payload: unknown): WorkspaceDeliveryView | undefined {
   const source = record(payload);
   const target = source ? record(source["target"]) : undefined;

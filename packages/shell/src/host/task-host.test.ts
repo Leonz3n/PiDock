@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { TaskWorkspaceHost, diskTaskStore, isPathInsideTask, memoryTaskStore } from "./task-host.js";
+import { TaskWorkspaceHost, diskTaskStore, isPathInsideTask, memoryTaskStore, MAX_LINK_HOPS, observeLinkChain } from "./task-host.js";
 import {
   listSessionIdsOnDisk,
   parseSessionSnapshot,
@@ -23,6 +23,7 @@ import {
   lifecycleFilePath,
 } from "./task-store.js";
 import { normalizeReportedUsage, toUsageDetail } from "../main/usage-ledger.js";
+import { hostPlatformLabel } from "../main/service-config.js";
 import { PiSessionChannel, resetPiSequencesForTests } from "../main/pi-session.js";
 import { assertProvisionPlanSafe, planWorktreeCreation } from "../main/task-provision.js";
 import { SharedPathCoordinator } from "./path-coordination.js";
@@ -979,17 +980,187 @@ describe("#6 multi-repo provision + append (S2)", () => {
     expect(taskHost.taskRecord()).toBeNull();
   });
 
-  it("probes link targets Host-side (dead vs ok, lexical + one-hop link)", () => {
+  it("probes link targets Host-side (dangling vs a real directory, lexical + one-hop link)", () => {
     const taskHost = host();
-    const dead = taskHost.probeLinkTarget("/definitely/missing/pidock-notes");
-    expect(dead.shape).toBe("dead");
-    expect(dead.lexical).toBe("ok");
-    expect(dead.linkTarget).toBeNull();
-    expect(dead.linkTargetInTask).toBe(false);
-    const ok = taskHost.probeLinkTarget("/tmp");
-    expect(ok.shape).toBe("ok");
-    expect(ok.lexical).toBe("ok");
-    expect(ok.linkTargetInTask).toBe(false);
+    const missing = taskHost.probeLinkTarget("/definitely/missing/pidock-notes");
+    expect(missing.shape).toBe("dangling");
+    expect(missing.lexical).toBe("ok");
+    expect(missing.linkTarget).toBeNull();
+    expect(missing.linkTargetInTask).toBe(false);
+    const realDirectory = realpathSync(mkdtempSync(join(tmpdir(), "pidock-link-ok-")));
+    try {
+      const ok = taskHost.probeLinkTarget(realDirectory);
+      expect(ok.shape).toBe("directory");
+      expect(ok.detail).toContain("真实目录");
+      expect(ok.lexical).toBe("ok");
+      expect(ok.linkTargetInTask).toBe(false);
+    } finally {
+      rmSync(realDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("names every link target shape separately, with a created link never fixed into a healthy one", () => {
+    const home = realpathSync(mkdtempSync(join(tmpdir(), "pidock-link-shape-")));
+    try {
+      const taskHost = host();
+      const real = join(home, "real-notes");
+      mkdirSync(real);
+      // 失效: a link whose target does not exist.
+      const dangling = join(home, "gone-notes");
+      symlinkSync(join(home, "never-created"), dangling);
+      // 嵌套: the source is itself a link (here a link to a link).
+      const firstHop = join(home, "first-hop");
+      symlinkSync(real, firstHop);
+      const nested = join(home, "nested-notes");
+      symlinkSync(firstHop, nested);
+      // 循环: two links pointing at each other.
+      const cycleA = join(home, "cycle-a");
+      const cycleB = join(home, "cycle-b");
+      symlinkSync(cycleB, cycleA);
+      symlinkSync(cycleA, cycleB);
+      // 形状未确定: the chain ends at something that is not a directory.
+      const file = join(home, "notes.txt");
+      writeFileSync(file, "not a directory\n");
+
+      const shapes = {
+        real: taskHost.probeLinkTarget(real),
+        dangling: taskHost.probeLinkTarget(dangling),
+        nested: taskHost.probeLinkTarget(nested),
+        cycle: taskHost.probeLinkTarget(cycleA),
+        file: taskHost.probeLinkTarget(file),
+      };
+      expect(Object.fromEntries(Object.entries(shapes).map(([key, report]) => [key, report.shape]))).toEqual({
+        real: "directory",
+        dangling: "dangling",
+        nested: "nested-link",
+        cycle: "cyclic-link",
+        file: "unknown",
+      });
+      // The words the surface shows, pinned: 失效/嵌套/循环 are never collapsed
+      // into "a directory", and each detail names what was really seen.
+      expect(shapes.dangling.detail).toContain("不存在");
+      expect(shapes.nested.detail).toContain("软链接");
+      expect(shapes.cycle.detail).toContain("回到");
+      expect(shapes.file.detail).toContain("不是目录");
+      // A link→directory source (one hop) is a link, not the original directory.
+      expect(taskHost.probeLinkTarget(firstHop)).toMatchObject({ shape: "nested-link" });
+      // Probing really followed the entries: nothing was created or repaired.
+      expect(existsSync(join(home, "never-created"))).toBe(false);
+      expect(readlinkSync(dangling)).toBe(join(home, "never-created"));
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("names an unreadable target as unknown instead of a healthy directory", () => {
+    const unreadable = Object.assign(new Error("EACCES: permission denied, lstat '/root/notes'"), { code: "EACCES" });
+    const report = observeLinkChain("/root/notes", {
+      lstat: () => { throw unreadable; },
+      readlink: () => { throw unreadable; },
+      resolveTarget: (current) => current,
+    });
+    expect(report.shape).toBe("unknown");
+    expect(report.detail).toContain("无法读取");
+    expect(report.detail).toContain("EACCES");
+    // The hop budget is named too: a pathologically long chain is not a shape.
+    let hop = 0;
+    const long = observeLinkChain("/hop-0", {
+      lstat: () => ({ isSymbolicLink: () => true, isDirectory: () => false }),
+      readlink: (path) => path,
+      resolveTarget: () => `/hop-${(hop += 1)}`,
+    });
+    expect(long.shape).toBe("unknown");
+    expect(long.detail).toContain(`超过 ${MAX_LINK_HOPS} 跳`);
+    expect(hop).toBe(MAX_LINK_HOPS + 1);
+  });
+
+  it("probes only this task's own recorded plain-directory sources", () => {
+    const home = realpathSync(mkdtempSync(join(tmpdir(), "pidock-link-scope-")));
+    try {
+      const taskDir = join(home, "task-abcdef12");
+      mkdirSync(taskDir);
+      const original = join(home, "original-notes");
+      mkdirSync(original);
+      const taskHost = new TaskWorkspaceHost("task-a", taskDir, memoryTaskStore(), () => "2026-09-22T10:00:00+08:00");
+      taskHost.provision({
+        name: "普通目录任务",
+        dirId: "task-abcdef12",
+        remoteBranch: "main",
+        fetchedCommit: "a5a4a0d1234",
+        plainDirs: [{ directoryId: "notes", sourcePath: original }],
+      });
+      const allowed = taskHost.probeDeclaredLinkSource(original);
+      expect(allowed.ok && allowed.report.shape).toBe("directory");
+      // A path this task never recorded is refused by name, with no probe at all.
+      const foreign = taskHost.probeDeclaredLinkSource("/etc");
+      expect(foreign.ok).toBe(false);
+      expect(foreign.ok === false && foreign.error).toContain("path-out-of-scope");
+      // A task with no recorded link sources has nothing probeable.
+      expect(host().probeDeclaredLinkSource(original)).toMatchObject({ ok: false });
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("reports the platform record: this Host's own platform exercised, win32 unverified by name", () => {
+    const report = host().probeLinkTarget("/definitely/missing/pidock-notes");
+    const exercised = report.platforms.filter((row) => row.exercised);
+    expect(exercised.map((row) => row.platform)).toEqual([hostPlatformLabel()]);
+    expect(exercised[0]!.note).toContain("真的在本平台执行了链接目标探测");
+    const windows = report.platforms.find((row) => row.platform === "win32-x64");
+    expect(windows).toMatchObject({ platform: "win32-x64", exercised: false });
+    expect(windows!.note).toContain("win32 链接方式未验证");
+    // The 真实 pi clause is a NAMED boundary of this record, not a claim.
+    expect(report.modelBoundary).toContain("不是真实 pi/模型运行");
+  });
+
+  it("past a probe the in-task link, its original target and the task folder are unchanged", () => {
+    const home = realpathSync(mkdtempSync(join(tmpdir(), "pidock-link-readonly-")));
+    try {
+      const taskDir = join(home, "task-abcdef12");
+      mkdirSync(taskDir);
+      const original = join(home, "original-notes");
+      mkdirSync(original);
+      writeFileSync(join(original, "spec.md"), "原目录内容\n");
+      const linkPath = join(taskDir, "dir-notesa");
+      symlinkSync(original, linkPath);
+      const danglingSource = join(home, "gone-notes");
+      symlinkSync(join(home, "never-created"), danglingSource);
+      const taskHost = new TaskWorkspaceHost("task-a", taskDir, memoryTaskStore(), () => "2026-09-22T10:00:00+08:00");
+      taskHost.provision({
+        name: "普通目录任务",
+        dirId: "task-abcdef12",
+        remoteBranch: "main",
+        fetchedCommit: "a5a4a0d1234",
+        plainDirs: [
+          { directoryId: "notes-a", sourcePath: original },
+          { directoryId: "notes-b", sourcePath: danglingSource },
+        ],
+      });
+      const before = ledger();
+      expect(taskHost.probeDeclaredLinkSource(original).ok).toBe(true);
+      expect(taskHost.probeDeclaredLinkSource(danglingSource)).toMatchObject({ ok: true, report: { shape: "dangling" } });
+      expect(ledger()).toEqual(before);
+
+      function ledger() {
+        const entry = (path: string) => {
+          const stat = lstatSync(path);
+          return { mode: stat.mode, size: stat.size, mtimeMs: stat.mtimeMs, link: stat.isSymbolicLink() ? readlinkSync(path) : null };
+        };
+        return {
+          link: entry(linkPath),
+          dangling: entry(danglingSource),
+          original: entry(original),
+          targetFile: entry(join(original, "spec.md")),
+          targetBytes: readFileSync(join(original, "spec.md"), "utf8"),
+          taskDirEntries: readdirSync(taskDir).sort(),
+          parentEntries: readdirSync(home).sort(),
+          repaired: existsSync(join(home, "never-created")),
+        };
+      }
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 
   it("flags a one-hop readlink target inside the task as loop-risk", () => {

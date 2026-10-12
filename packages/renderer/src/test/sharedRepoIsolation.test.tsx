@@ -18,6 +18,25 @@ import { cleanup, render, screen, waitFor, within } from "@testing-library/react
 import { afterEach, describe, expect, it } from "vitest";
 import { DesktopProjectOverview } from "../components/DesktopProjectOverview";
 import { SharedRepoIsolation } from "../components/SharedRepoIsolation";
+import { hostPlatformLabel } from "../../../shell/src/main/service-config.js";
+import { LINK_MODEL_VERIFICATION_BOUNDARY, linkCapabilityRows } from "../../../shell/src/main/multi-repo-provision.js";
+
+/**
+ * The `task/probeLink` payload the Host really answers with, built from the
+ * REAL platform record (`linkCapabilityRows`) so the rows this surface renders
+ * are the shipped ones, not a fixture that could drift from them.
+ */
+function probePayload(shape: string, detail = `Host 观测：${shape}`) {
+  return {
+    shape,
+    detail,
+    lexical: "ok",
+    linkTarget: null,
+    linkTargetInTask: false,
+    platforms: linkCapabilityRows(hostPlatformLabel()),
+    modelBoundary: LINK_MODEL_VERIFICATION_BOUNDARY,
+  };
+}
 
 /** The one project repository both tasks use; `repoDir` is derived from its id. */
 const REPO_ROOT = "repo-51cd20bb";
@@ -71,6 +90,7 @@ function bridge(): void {
   window.pidock = {
     taskOp: async (taskId: string, op: string, payload: Record<string, unknown>) => {
       if (op === "task/fileRoots") return { ok: true, payload: rootsPayload(taskId) };
+      if (op === "task/probeLink") return { ok: true, payload: probePayload("directory", "来源是真实目录: /work/invoice-docs") };
       return diffPayload(taskId, String(payload["rootId"]), op);
     },
   } as unknown as typeof window.pidock;
@@ -128,6 +148,97 @@ describe("[PiDock 03] (#6 盒子 6) two tasks sharing one project repository", (
       expect(within(row).queryByTestId(`row-diff-${taskId}`)).not.toBeInTheDocument();
     }
     expect(within(group).getByTestId(`shared-dir-group-note-${LINK_ROOT}`)).toHaveTextContent("共享原目录，文件未隔离，写入会互相影响");
+  });
+
+  /**
+   * [PiDock 03] (#6 box 12) the link's target shape is the Host's OWN reading:
+   * 失效/嵌套/循环 are three DIFFERENT named states, never "a directory", and an
+   * unread (or refused) probe is a NAME unknown instead of a healthy row. The
+   * per-platform record and the 真实 pi boundary come from the same probe.
+   */
+  it("keeps 失效, 嵌套 and 循环 apart by name and never defaults an unread link to a directory", async () => {
+    const threeTasks = [
+      { taskId: "task-dead0001", name: "失效链接", sourcePath: "/work/gone-docs" },
+      { taskId: "task-nest0002", name: "嵌套链接", sourcePath: "/work/nested-docs" },
+      { taskId: "task-cycl0003", name: "循环链接", sourcePath: "/work/cycle-docs" },
+    ];
+    const shapes: Record<string, { shape: string; detail: string }> = {
+      "/work/gone-docs": { shape: "dangling", detail: "链接目标不存在（跟随 1 跳后缺 /work/missing）" },
+      "/work/nested-docs": { shape: "nested-link", detail: "来源本身是软链接（跟随 2 跳后到达目录 /work/real）" },
+      "/work/cycle-docs": { shape: "cyclic-link", detail: "链接链回到已跟随过的链接（已跟随 1 跳后回到）: /work/cycle-b" },
+    };
+    window.pidock = {
+      taskOp: async (taskId: string, op: string, payload: Record<string, unknown>) => {
+        if (op === "task/fileRoots") {
+          const task = threeTasks.find((row) => row.taskId === taskId)!;
+          return { ok: true, payload: { taskDir: `/tasks/${taskId}`, roots: [
+            { id: LINK_ROOT, kind: "shared-dir", label: task.name, path: `/tasks/${taskId}/${LINK_ROOT}`, sourcePath: task.sourcePath },
+          ] } };
+        }
+        if (op === "task/probeLink") {
+          const sourcePath = String(payload["sourcePath"]);
+          if (sourcePath === "/work/refused-docs") return { ok: false, error: "path-out-of-scope: 只探测本任务记录的普通目录来源" };
+          const shape = shapes[sourcePath]!;
+          return { ok: true, payload: probePayload(shape.shape, shape.detail) };
+        }
+        if (op === "task/fileDiff") return { ok: false, error: "plain-dir-no-diff: 普通目录链接不提供 Git 差异" };
+        return { ok: true, payload: {} };
+      },
+    } as unknown as typeof window.pidock;
+    render(<SharedRepoIsolation tasks={threeTasks} />);
+    const rows = await screen.findAllByTestId("shared-dir-row");
+    const shapeOf = async (taskId: string) => {
+      const row = rows.find((entry) => entry.getAttribute("data-task") === taskId)!;
+      return within(row).findByTestId(`row-link-shape-${taskId}`);
+    };
+    const dead = await shapeOf("task-dead0001");
+    const nested = await shapeOf("task-nest0002");
+    const cycle = await shapeOf("task-cycl0003");
+    expect(dead).toHaveTextContent("失效：链接目标已不存在");
+    expect(dead).toHaveAttribute("data-shape", "dangling");
+    expect(nested).toHaveTextContent("嵌套：来源本身是软链接");
+    expect(nested).toHaveAttribute("data-shape", "nested-link");
+    expect(cycle).toHaveTextContent("循环：链接链回到已跟随过的链接");
+    expect(cycle).toHaveAttribute("data-shape", "cyclic-link");
+    // Each detail is the Host's own observation, not the shape's name again.
+    expect(dead).toHaveTextContent("/work/missing");
+    expect(cycle).toHaveTextContent("/work/cycle-b");
+    for (const row of [dead, nested, cycle]) {
+      expect(row).not.toHaveTextContent("真实目录");
+      expect(row).not.toHaveTextContent("未确定");
+    }
+    // The Host's platform record rides the same read: this machine's platform is
+    // the exercised row and win32 is an explicitly unverified row, by name.
+    const platforms = within(rows[0]!).getByTestId("row-link-platforms-task-dead0001");
+    expect(platforms.querySelector(`li[data-platform="${hostPlatformLabel()}"]`)).toHaveAttribute("data-exercised", "true");
+    const windows = platforms.querySelector('li[data-platform="win32-x64"]');
+    expect(windows).toHaveAttribute("data-exercised", "false");
+    expect(windows).toHaveTextContent("win32 链接方式未验证");
+    expect(within(rows[0]!).getByTestId("row-link-model-boundary-task-dead0001")).toHaveTextContent("不是真实 pi/模型运行");
+  });
+
+  it("reads a refused or unparsable link probe as a named unknown, never as a directory", async () => {
+    const refused = [{ taskId: "task-task0001", name: "被拒绝", sourcePath: "/work/refused-docs" }];
+    window.pidock = {
+      taskOp: async (taskId: string, op: string) => {
+        if (op === "task/fileRoots") return { ok: true, payload: { taskDir: `/tasks/${taskId}`, roots: [
+          { id: LINK_ROOT, kind: "shared-dir", label: "被拒绝", path: `/tasks/${taskId}/${LINK_ROOT}`, sourcePath: "/work/refused-docs" },
+        ] } };
+        if (op === "task/probeLink") return { ok: false, error: "path-out-of-scope: 只探测本任务记录的普通目录来源" };
+        if (op === "task/fileDiff") return { ok: false, error: "plain-dir-no-diff: 普通目录链接不提供 Git 差异" };
+        return { ok: true, payload: { shape: "directory" } };
+      },
+    } as unknown as typeof window.pidock;
+    render(<SharedRepoIsolation tasks={refused} />);
+    const row = await screen.findByTestId("shared-dir-row");
+    const shape = within(row).getByTestId("row-link-shape-task-task0001");
+    expect(shape).toHaveAttribute("data-shape", "unread");
+    expect(shape).toHaveTextContent("未确定");
+    expect(shape).toHaveTextContent("path-out-of-scope");
+    expect(shape).not.toHaveTextContent("真实目录");
+    // No probe record means no platform record and no boundary claim either.
+    expect(within(row).getByTestId("row-link-platforms-task-task0001")).toHaveTextContent("未取得 Host 链接探测记录");
+    expect(within(row).queryByTestId("row-link-model-boundary-task-task0001")).not.toBeInTheDocument();
   });
 
   it("names an unread branch and an unread change instead of showing the baseline or 干净", async () => {

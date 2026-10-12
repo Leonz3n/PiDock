@@ -397,9 +397,13 @@ export function shellTaskPrepareResume(
 }
 
 /**
- * [PiDock 03] (#6) probe a plain-dir link source through the shell
- * (`host/task` + `task/probeLink`). Report only: `{shape: ok/dead}` —
- * never creates, follows, or takes over the target.
+ * [PiDock 03] (#6) probe one plain-dir link source through the shell
+ * (`host/task` + `task/probeLink`). Report only: the Host's observed shape of
+ * the link's TARGET (真实目录 / 失效 / 嵌套 / 循环 / 具名 unknown), its plan-time
+ * lexical pre-check, the per-platform link-capability record and the named
+ * boundary — never creates, follows through, or takes over the target. Main
+ * refuses a source path this task did not record (`path-out-of-scope`), so the
+ * page can only name a source the Host itself reported.
  */
 export async function probeLinkThroughShell(input: {
   taskId: string;

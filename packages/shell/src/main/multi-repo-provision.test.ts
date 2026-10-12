@@ -8,6 +8,8 @@ import {
   classifyRepoPrepareState,
   filterAppendRepos,
   isMultiRepoErrorCode,
+  LINK_MODEL_VERIFICATION_BOUNDARY,
+  linkCapabilityRows,
   pinRepoBaselines,
   planMultiRepoWorktrees,
   previewMixedTaskPaths,
@@ -259,5 +261,33 @@ describe("plain-dir links", () => {
     expect(classifyLinkTarget("/data/a", "/tasks/t1", ["/data/b"])).toBe("ok");
     expect(classifyLinkTarget("/data/shared/sub", "/tasks/t1", ["/data/shared"])).toBe("nested");
     expect(classifyLinkTarget("/tasks/t1/docs", "/tasks/t1", [])).toBe("loop-risk");
+  });
+});
+
+// Seam: #6 box 12's platform half. The link capability is recorded PER
+// PLATFORM and by NAME: a row may only read as exercised for the platform the
+// probe really ran on, and win32 exists to name the gap, never to claim it.
+describe("#6 link capability record (box 12 platforms)", () => {
+  it("marks the platform a probe really ran on and leaves the other targets named-unverified", () => {
+    const rows = linkCapabilityRows("darwin-arm64");
+    expect(rows.map((row) => row.platform)).toEqual(["darwin-arm64", "win32-x64"]);
+    expect(rows[0]).toMatchObject({ platform: "darwin-arm64", exercised: true });
+    expect(rows[0]!.note).toContain("真的在本平台执行了链接目标探测");
+    expect(rows[1]).toMatchObject({ platform: "win32-x64", exercised: false });
+    expect(rows[1]!.note).toContain("win32 链接方式未验证");
+    // No row claims Windows behaviour: the win32 row only names what is missing.
+    expect(rows[1]!.note).not.toMatch(/Windows 上(创建|探测)过链接$/);
+  });
+
+  it("never marks any platform exercised without a real probe on it, and always keeps the win32 row", () => {
+    for (const row of linkCapabilityRows(null)) expect(row.exercised).toBe(false);
+    const linux = linkCapabilityRows("linux-x64");
+    expect(linux.map((row) => row.platform)).toEqual(["darwin-arm64", "win32-x64", "linux-x64"]);
+    expect(linux.filter((row) => row.exercised).map((row) => row.platform)).toEqual(["linux-x64"]);
+    expect(linux.find((row) => row.platform === "darwin-arm64")!.note).toContain("本机未运行该平台");
+    expect(linux.find((row) => row.platform === "win32-x64")!.note).toContain("win32 链接方式未验证");
+    // The 真实 pi clause is a NAMED boundary, never a pass.
+    expect(LINK_MODEL_VERIFICATION_BOUNDARY).toContain("不是真实 pi/模型运行");
+    expect(LINK_MODEL_VERIFICATION_BOUNDARY).toContain("仍未完成");
   });
 });
