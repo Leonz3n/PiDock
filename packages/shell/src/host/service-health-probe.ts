@@ -265,6 +265,12 @@ async function probeTcp(target: string, boundMs: number): Promise<ServiceHealthO
   return await new Promise<ServiceHealthObservation>((resolve) => {
     let settled = false;
     const elapsed = () => Date.now() - startedAt;
+    // The socket is created BEFORE the bound timer is armed: `finish` closes
+    // over both bindings, so arming the timer first would let a synchronous
+    // throw out of `tcpConnect` leave a timer that later dereferences an
+    // uninitialised `socket` (a `ReferenceError` in a timer callback, i.e. an
+    // uncaught crash that contradicts this function's "never throws" contract).
+    const socket: Socket = tcpConnect({ host: socketTarget.host, port: socketTarget.port });
     const finish = (observation: ServiceHealthObservation) => {
       if (settled) return;
       settled = true;
@@ -275,7 +281,6 @@ async function probeTcp(target: string, boundMs: number): Promise<ServiceHealthO
     const timer = setTimeout(() => finish({
       ...base, state: "unhealthy", reason: `探测超时：${String(boundMs)}ms 内未建立连接`, elapsedMs: elapsed(), boundMs,
     }), boundMs);
-    const socket: Socket = tcpConnect({ host: socketTarget.host, port: socketTarget.port });
     socket.once("connect", () => finish({ ...base, state: "healthy", elapsedMs: elapsed(), boundMs }));
     socket.once("error", (error: NodeJS.ErrnoException) => {
       finish({ ...base, state: "unhealthy", reason: connectFailureReason(error), elapsedMs: elapsed(), boundMs });
