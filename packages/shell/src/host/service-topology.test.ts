@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { TaskServiceTopology } from "./service-topology.js";
+import { TaskServiceTopology, attemptRunBookkeeping } from "./service-topology.js";
 import type { BindingLayers, RunUnit } from "../main/service-topology.js";
 
 // Seam: #10 Host-side topology registry. Transport-free, so `host.ts` keeps
@@ -202,7 +202,7 @@ describe("TaskServiceTopology run records and stop scope", () => {
     const record = host.recordRun({
       serviceId: "invoice-service",
       templateVersion: "v13",
-      ports: [],
+      ports: [9001],
       portsSource: "declared",
       code: { commit: "abc1234", dirty: true },
       pid: 4321,
@@ -239,6 +239,39 @@ describe("TaskServiceTopology run records and stop scope", () => {
       host.recordRun({ serviceId: "invoice-service", templateVersion: "v13", ports: [], portsSource: "declared", code: { dirty: false }, pid: 0, owner: "human" }),
     ).toThrow(/pid must be a positive integer/);
     expect(host.runs()).toEqual([]);
+  });
+
+  it("never promotes the renderer-supplied plan port to a declared one", () => {
+    // The plan's assignment (9001) is the renderer's request, not a port the
+    // registration's resolved env ever carried. `portsSource: "declared"` means
+    // "the launch declared these", so an unclaimed plan port must stay out.
+    const host = topology();
+    host.setPlan(planInput());
+    const record = host.recordRun({
+      serviceId: "invoice-service",
+      templateVersion: "v13",
+      ports: [],
+      portsSource: "declared",
+      code: { dirty: false },
+      pid: 55,
+      owner: "human",
+    });
+    expect(record.ports).toEqual([]);
+  });
+
+  it("names a refused bookkeeping write instead of a silent empty catch", () => {
+    // The Host's process driver only calls the record/close helpers after a real
+    // start/stop, so a refusal must not throw (fail-open); but it must not be
+    // swallowed either, or `task/serviceRunRecords` could answer empty while a
+    // child runs. The refusal carries a named reason.
+    expect(attemptRunBookkeeping(() => 7)).toEqual({ ok: true, value: 7 });
+    const refused = attemptRunBookkeeping(() => {
+      throw new Error("invalid-payload: recordServiceRun.pid must be a positive integer from the real process");
+    });
+    expect(refused).toEqual({
+      ok: false,
+      reason: "run-record-refused: invalid-payload: recordServiceRun.pid must be a positive integer from the real process",
+    });
   });
 
   it("attaches linkage verification and closes the run with an exit reason", () => {
