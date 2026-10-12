@@ -225,6 +225,11 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   `<taskDir>/services/<serviceId>/run-<runId>.log`）收在一条记录上；
   `attachVerification` 记录联通/就绪/远程可达检查结果，本地进程存活不等于功能
   验证成功。`recordRun` 拒绝非正整数 pid：没有真实进程身份就不写记录。
+  端口列表带 `portsSource`（`declared` / `observed`）：本机 Host 没有端口探测，
+  生产写入恒为 `declared`，运行时面板据此显示「声明端口，未实测监听」；一条记录
+  里的 pid/启动时刻/调用者身份是 OBSERVED，端口是 DECLARED，代码状态与构建新鲜度
+  保持 `unknown`（本片不读工作树），三者不互相冒充。真实启动/停止路径
+  （`host.ts` 的 `task/controlService`）现在写入并关闭运行记录。
 - **停止范围**：停止范围只来自 Host 登记的进程身份
   （`ProcessIdentity` / `verifyRegisteredIdentity` 精确匹配 instance + pid +
   启动时间），绝不按端口或过期 PID 猜测；`planStopScope` 只返回所属任务的身份，
@@ -232,6 +237,9 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   只读计算；真实终止只存在于 #7 的能力路径上（可信服务目录登记的任务绑定服务，
   `task/controlService` → `TaskServiceProcesses`），#7 的生产入口已按平台门禁接线
   （POSIX 启用、其他平台具名拒绝，见 #7 章节），不在本节的规划 op 里。
+  `planStopScope.skipped` 只在“同一登记表里出现其他任务的同名实例”时非空，而生产
+  是「一个 Host = 一个任务登记表」，所以该分支在生产中结构上不可达（不足报，绝不
+  多报）；它由 `main/service-runs.test.ts` 的单元用例覆盖，不在生产路径上被行使。
 - **共享外部资源**：`classifyExternalResource` 默认按共享处理，`queue` /
   `dtm-callback` 明确标为 `not-isolated`（消费端与回调端仍是同一实例），
   只有拿到独立实例证据（`isolatedByTask`）才标 `isolated`；任务视图显示资源
@@ -247,8 +255,9 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   Host 不可用时回落内存投影。
 - **残留（未测/未接线）**：真实 `child_process` 启动、日志流与退出已由 #7 的能力路径
   提供（`TaskServiceProcesses`，生产入口按平台门禁接线，#7 的生产进程测试覆盖），
-  但 `recordRun` / 停止范围仍没有生产调用方（只有 Host 类与测试），且没有真实健康检查；
-  两个任务同时运行并检查真实请求去向未执行（端口与绑定隔离有单元测试）；
+  `recordRun` 与停止范围也已由本片接上真实的生产调用方（`host.ts` 的真实启动/停止），
+  但还没有真实健康检查；两个任务同时运行并检查真实请求去向未在生产运行（端口与绑定
+  隔离有 `host/service-two-task-isolation.test.ts` 的两个真实子进程证据）；
   「启动失败后重分配」只在规划阶段验证；真实仓库的依赖缺口探测未运行
   （`missing-binding` 与远程可达检查为规划期证据）；`task/planServiceGroup`
   的生产调用方目前是 renderer 的面板（`stores/host.ts` 仍把内存适配器固定为
