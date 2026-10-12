@@ -326,6 +326,14 @@ it("treats a malformed catalog response as unavailable, never an empty list", as
   expect(screen.queryByText("该环境尚未保存服务模板。")).toBeNull();
 });
 
+it("shows main's own named refusal when the environment's template list is refused", async () => {
+  stub(() => ({ ok: false, error: "Error invoking remote method 'shell/serviceCatalogOp': Error: service template document predates environments (version 1); migration required" }));
+  render(<ProjectServiceTemplates projectId={projectId} environmentId={environmentId} />);
+  // A refusal main named reaches the human verbatim (wrapper stripped), not as a generic read failure.
+  expect(await screen.findByRole("alert")).toHaveTextContent("service template document predates environments (version 1); migration required");
+  expect(screen.queryByText("服务配方清单读取失败")).toBeNull();
+});
+
 const scannedHint: ServiceImportHintView = {
   source: "package.json", name: "dev", runType: "long-lived", runTypeBasis: "名称含常驻关键字 dev/start/serve/watch", runTypeUncertain: false,
   variables: [{ key: "API_TOKEN", source: "package.json", maskedValue: "••••••••" }],

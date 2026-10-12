@@ -201,7 +201,8 @@ const SERVICE_ID = /^s-[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3
 const ENVIRONMENT_ID = /^e-[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 /** `2` carries `environmentId` on every revision; `1` predates the environment dimension and is refused by name. */
 type TemplateDocument = { version: 2; revisions: ServiceTemplate[] };
-type PrivateDocument = { version: 1; bindings: ServiceTaskBinding[] };
+/** `2` carries `environmentId` on every binding; `1` predates the environment dimension and is refused by name. */
+type PrivateDocument = { version: 2; bindings: ServiceTaskBinding[] };
 type EnvironmentDocument = { version: 1; environments: ServiceEnvironment[] };
 
 function object(value: unknown): Record<string, unknown> {
@@ -385,10 +386,15 @@ function templates(value: unknown): TemplateDocument {
 function machine(value: unknown): PrivateDocument {
   const row = object(value);
   fields(row, ["version", "bindings"]);
-  if (row["version"] !== 1 || !Array.isArray(row["bindings"]) || row["bindings"].length > 500) throw new Error("invalid machine document");
+  // A document written before the environment dimension exists cannot be
+  // partially trusted: its bindings name no environment, and assigning them to
+  // an invented "default" environment would make an environment nobody named
+  // read as a real, selected one. Refused BY NAME instead.
+  if (row["version"] === 1) throw new Error("service machine document predates environments (version 1); migration required");
+  if (row["version"] !== 2 || !Array.isArray(row["bindings"]) || row["bindings"].length > 500) throw new Error("invalid machine document");
   const bindings = row["bindings"].map(binding);
   if (new Set(bindings.map((entry) => `${entry.taskId}/${entry.serviceId}`)).size !== bindings.length) throw new Error("duplicate task service binding");
-  return { version: 1, bindings };
+  return { version: 2, bindings };
 }
 function readDocument<T>(file: string, empty: T, parse: (value: unknown) => T): T {
   if (!existsSync(file)) {
@@ -475,7 +481,7 @@ export class ServiceCatalog {
   private machineFile(): string { return join(this.directory, PRIVATE); }
   private environmentFile(): string { return join(this.directory, ENVIRONMENTS); }
   private readTemplates(): TemplateDocument { return readDocument(this.templateFile(), { version: 2, revisions: [] }, templates); }
-  private readMachine(): PrivateDocument { return readDocument(this.machineFile(), { version: 1, bindings: [] }, machine); }
+  private readMachine(): PrivateDocument { return readDocument(this.machineFile(), { version: 2, bindings: [] }, machine); }
   private readEnvironments(): EnvironmentDocument { return readDocument(this.environmentFile(), { version: 1, environments: [] }, environmentDocument); }
   /**
    * The environments one project really has, by name. An empty list is the
