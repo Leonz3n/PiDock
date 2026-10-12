@@ -40,9 +40,10 @@ import { TaskRootIndex, type VerifiedTaskIdentity } from "./task-root-index.js";
 import { HostTaskAdmission } from "../host/host-task-admission.js";
 import { shutdownDeadline } from "../host/shutdown-deadline.js";
 import { ProjectRegistry } from "./project-registry.js";
-import { ServiceCatalog, serviceCatalogAuthority } from "./service-catalog.js";
+import { ServiceCatalog, serviceCatalogAuthority, type ServiceLaunch } from "./service-catalog.js";
 import { InstalledServiceHostAuthority, type ServiceOwnerChange, type ServiceOwnerDurableRecord } from "./service-host-binding.js";
-import { parseServiceOwnerRebindRequest, performServiceBindingOperation, performServiceCatalogOperation, performServiceConfigPreview, parseServiceRunRequest } from "./service-catalog-ipc.js";
+import { parseServiceOwnerRebindRequest, performServiceBindingOperation, performServiceCatalogOperation, performServiceConfigPreview, parseServiceRunGroupRequest, parseServiceRunRequest } from "./service-catalog-ipc.js";
+import { declaredServicePorts } from "./service-config.js";
 import { loadExternalEditorSettings, type ExternalEditorSettingsResult } from "./external-editor.js";
 import { performEditorSettingsOperation } from "./external-editor-settings.js";
 import { performProjectOperation } from "./project-ipc.js";
@@ -1095,6 +1096,136 @@ export async function runTaskService(
 }
 
 /**
+ * Start the task's planned run unit group ([PiDock 05] #10 box 4) - the
+ * production caller `task/controlService {group:true}` never had.
+ *
+ * Main owns the group's MEMBERSHIP: it resolves the task's bound services from
+ * the trusted persisted catalog, registers each trusted launch on the task Host
+ * (the same `task/registerService` the single path uses, so the Host never
+ * executes a launch it cannot describe) and then forwards ONE group start
+ * through the SAME gated `task/controlService` every unit already goes through.
+ * Nothing here spawns, signals or re-plans a unit, and the page supplies no unit
+ * list - `parseServiceRunGroupRequest` accepts `{op,projectId,taskId}` only.
+ *
+ * Plan source, stated instead of implied: the Host's run unit plan is per-Host
+ * state written by `task/planServiceGroup`. This caller starts on that plan
+ * AS-IS when the Host already holds one (so a plan carrying call edges keeps its
+ * linkage verification); only when the Host itself answers `not-planned` does
+ * main establish the task's group from the trusted catalog (units = the task's
+ * bound services, ports = the ports their registrations declare, run type = the
+ * template's own). That fallback carries no dependency edges - no production
+ * dependency source exists yet (box 1's unit/dependency selection is its own
+ * slice) - so such a group starts and listens but has nothing to 互验, which the
+ * panel names instead of implying a linkage nobody observed.
+ *
+ * Fail-closed: an unresolvable launch, an unbound task or a plan whose ports
+ * conflict refuses the whole request by name BEFORE any unit is dispatched (a
+ * unit dropped from the group could otherwise leave a green group missing a
+ * bound service).
+ */
+export async function runTaskServiceGroup(
+  tasks: Pick<PerTaskHostRegistry, "routeTaskOp">,
+  catalog: Pick<ServiceCatalog, "launchFor" | "taskBindings">,
+  request: ReturnType<typeof parseServiceRunGroupRequest>,
+  senderWebContentsId: number,
+): Promise<Record<string, unknown>> {
+  const origin = { kind: "service-catalog", senderWebContentsId } as const;
+  const bindings = catalog.taskBindings(request.projectId, request.taskId);
+  if (bindings.length === 0) {
+    throw new Error("service-group-empty: 该任务在可信服务目录中没有已绑定的服务，未发起整组启动");
+  }
+  const bound = bindings.map(({ binding }) => {
+    try {
+      return { binding, launch: catalog.launchFor(request.taskId, request.projectId, binding.serviceId, process.env) };
+    } catch (error) {
+      // `service-launch-unavailable` is main's fixed code and carries no path or
+      // value, so it is safe to name verbatim beside the offending service. A
+      // failed registration never becomes a control request.
+      throw new Error(`服务登记失败，未发起整组启动：${binding.serviceId} 的启动材料无法从可信服务目录解析（${error instanceof Error ? error.message : String(error)}）`);
+    }
+  });
+  for (const { launch } of bound) {
+    try {
+      await tasks.routeTaskOp({
+        taskId: request.taskId,
+        op: "task/registerService",
+        payload: { serviceId: launch.serviceId, descriptor: launch.descriptor, layers: launch.layers, templateVersion: String(launch.templateVersion) },
+        origin,
+      });
+    } catch (error) {
+      throw new Error(`服务登记失败，未发起整组启动：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  const startPlannedGroup = async (): Promise<Record<string, unknown>> => {
+    const controlled = await tasks.routeTaskOp({
+      taskId: request.taskId,
+      op: "task/controlService",
+      payload: { group: true, action: "start", label: SERVICE_RUN_HUMAN_LABEL },
+      origin,
+    });
+    return controlled.payload;
+  };
+  const first = await startPlannedGroup();
+  if (groupRunState(first) !== "not-planned") return first;
+  // The Host holds no plan for this task: establish one from main's trusted
+  // catalog, then start once. This branch is the ONLY writer, so an existing
+  // plan (with its dependency edges) is never clobbered.
+  await planBoundServiceGroup(tasks, bound, request, origin);
+  return await startPlannedGroup();
+}
+
+/** The group run state the Host answered with; `undefined` when the payload carries no group. */
+function groupRunState(payload: Record<string, unknown>): unknown {
+  const group = payload["group"];
+  if (typeof group !== "object" || group === null || Array.isArray(group)) return undefined;
+  return (group as Record<string, unknown>)["state"];
+}
+
+/**
+ * The task's own group plan as main derives it from the trusted catalog: every
+ * bound service is one LOCAL run unit (a binding is exactly what the dock's
+ * single-service start button may execute), with the run type and the declared
+ * ports its registration carries. No dependency edges are sent: the declared
+ * call/prestart graph has no production source yet (box 1).
+ */
+async function planBoundServiceGroup(
+  tasks: Pick<PerTaskHostRegistry, "routeTaskOp">,
+  bound: { binding: { rootId: string }; launch: ServiceLaunch }[],
+  request: ReturnType<typeof parseServiceRunGroupRequest>,
+  origin: { kind: "service-catalog"; senderWebContentsId: number },
+): Promise<void> {
+  const planned = bound.map(({ binding, launch }) => ({
+    unitId: `${binding.rootId}:${launch.serviceId}`,
+    serviceId: launch.serviceId,
+    name: launch.descriptor.name,
+    repoDir: binding.rootId,
+    runType: launch.descriptor.runType,
+    // The ports this service's launch DECLARES (never a probe): the template's
+    // own list plus its `*PORT` config rows, the same rule the registration's
+    // declared address uses. A long-lived unit with none fails the port-first
+    // plan closed by name - it is never dropped from the group.
+    declared: declaredServicePorts(launch.descriptor.ports, [...launch.layers.shared, ...launch.layers.privateEntries]),
+  }));
+  await tasks.routeTaskOp({
+    taskId: request.taskId,
+    op: "task/planServiceGroup",
+    payload: {
+      units: planned.map((entry) => ({
+        unitId: entry.unitId, serviceId: entry.serviceId, name: entry.name,
+        repoDir: entry.repoDir, location: "local", runType: entry.runType,
+      })),
+      selectedRepoDirs: [...new Set(planned.map((entry) => entry.repoDir))],
+      requests: planned.flatMap((entry) => {
+        const [port] = entry.declared;
+        return port === undefined ? [] : [{ unitId: entry.unitId, port }];
+      }),
+      runTypes: Object.fromEntries(planned.map((entry) => [entry.unitId, entry.runType])),
+    },
+    origin,
+  });
+}
+
+/**
  * One explicit re-bind of a task's service owner ([PiDock 04] #7 slice), as
  * main resolves and performs it. `state` is main's real observation of the
  * forked Host's owner binding: `absent` (no Host forked; the next start forks at
@@ -1715,6 +1846,32 @@ export function registerIpc(
           // owner, an operation already in flight) is the page's only honest
           // explanation for a refused start/stop, so it reaches the page
           // verbatim instead of the generic catalog-save message below.
+          return namedServiceRefusal(error);
+        } finally { live.release(); }
+      }
+      // [PiDock 05] (#10 box 4) 整组启动: the task's own run unit group, started
+      // through the SAME op and the SAME gate as one service. Main owns the
+      // membership (it resolves the task's bound services from the trusted
+      // catalog and registers each launch), the page names only project/task, and
+      // the Host's `runGroupServiceStart` still dispatches every unit through the
+      // one gated `task/controlService` path. No `HOST_TASK_OPS` entry is added.
+      if (payload && typeof payload === "object" && (payload as Record<string, unknown>)["op"] === "runTaskServiceGroup") {
+        if (!tasks) return { ok: false as const, error: "任务 Host 尚未接入" };
+        const request = parseServiceRunGroupRequest(payload);
+        // Same production platform gate as the single path, checked before a
+        // launch is resolved or a group is planned.
+        const refusal = serviceExecutionRefusal();
+        if (refusal !== null) return { ok: false as const, error: refusal };
+        const live = liveServiceSender(event, "service group execution sender changed");
+        try {
+          live.require();
+          const result = await runTaskServiceGroup(tasks, catalog, request, event.sender.id);
+          live.require();
+          return { ok: true as const, payload: result };
+        } catch (error) {
+          // The group runner's named negatives (`refused`, `start-failed`, the
+          // port plan's own `missing-port`) and main's registration refusals are
+          // the page's only honest explanation, so they reach the page verbatim.
           return namedServiceRefusal(error);
         } finally { live.release(); }
       }

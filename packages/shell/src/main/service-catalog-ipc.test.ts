@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { parseServiceOwnerRebindRequest, parseServiceRunRequest, performServiceBindingOperation, performServiceCatalogOperation, performServiceConfigPreview } from "./service-catalog-ipc.js";
+import { parseServiceOwnerRebindRequest, parseServiceRunGroupRequest, parseServiceRunRequest, performServiceBindingOperation, performServiceCatalogOperation, performServiceConfigPreview } from "./service-catalog-ipc.js";
 import type { ServiceBindingAdoption, ServiceCatalog, ServiceTemplate, ServiceTemplateUpdateReview } from "./service-catalog.js";
 
 const template: ServiceTemplate = {
@@ -217,5 +217,49 @@ describe("shell service run request boundary", () => {
   });
   it("rejects an oversized request before any caller sees it", () => {
     expect(() => parseServiceRunRequest({ ...valid, taskId: "t".repeat(4096) })).toThrow();
+  });
+});
+
+// [PiDock 05] (#10 box 4) 整组启动: main owns the group's membership, so the
+// renderer may name the project and the task only - never a unit, a port or a
+// plan. A payload carrying plan content is a NAMED refusal, not something the
+// boundary quietly ignores.
+describe("shell service group run request boundary", () => {
+  const valid = { op: "runTaskServiceGroup", taskId: "task-1", projectId: template.projectId };
+  it("accepts exactly the task identity and nothing else", () => {
+    expect(parseServiceRunGroupRequest(valid)).toEqual({ taskId: "task-1", projectId: template.projectId });
+    expect(Object.keys(parseServiceRunGroupRequest(valid)).sort()).toEqual(["projectId", "taskId"]);
+  });
+  it("refuses renderer-supplied plan content by name", () => {
+    const unit = { unitId: "repo-a:svc", serviceId: template.serviceId, name: "svc", location: "local" };
+    for (const extra of [
+      { units: [unit] },
+      { plan: { units: [unit] } },
+      { dependencies: [{ from: "a", to: "b", kind: "call" }] },
+      { requests: [{ unitId: "a", port: 4100 }] },
+      { runTypes: { a: "long-lived" } },
+      { rules: [{ key: "API_URL", unitId: "a", kind: "url" }] },
+      { layers: { repoDefaults: [], shared: [], privateEntries: [], task: [] } },
+      { reservations: [{ port: 4100, owner: "external" }] },
+      { selectedRepoDirs: ["repo-a"] },
+      { serviceId: template.serviceId },
+      { action: "start" },
+      { sessionId: "main" },
+      { approvalId: "approval-1" },
+      { program: "/bin/sh" },
+      { cwd: "/tmp" },
+      { group: true },
+    ]) {
+      expect(() => parseServiceRunGroupRequest({ ...valid, ...extra })).toThrow(/只接受 op\/projectId\/taskId/);
+    }
+  });
+  it("rejects a foreign op, a non-string identity, an array and an oversized request", () => {
+    expect(() => parseServiceRunGroupRequest({ ...valid, op: "runTaskService" })).toThrow();
+    expect(() => parseServiceRunGroupRequest({ ...valid, taskId: 7 })).toThrow();
+    expect(() => parseServiceRunGroupRequest({ ...valid, taskId: "" })).toThrow();
+    expect(() => parseServiceRunGroupRequest({ ...valid, projectId: undefined })).toThrow();
+    expect(() => parseServiceRunGroupRequest([valid])).toThrow();
+    expect(() => parseServiceRunGroupRequest(undefined)).toThrow();
+    expect(() => parseServiceRunGroupRequest({ ...valid, taskId: "t".repeat(4096) })).toThrow();
   });
 });

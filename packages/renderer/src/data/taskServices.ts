@@ -555,6 +555,281 @@ export async function runBoundTaskServiceThroughShell(input: {
 }
 
 /**
+ * The group run states the Host's `runServiceGroupStart` can answer with
+ * (`host/service-group-run.ts`), mirrored here because the sandboxed renderer
+ * cannot import a shell module. Every value is a named state, so 未探测 and each
+ * negative stay distinguishable.
+ */
+export type ServiceGroupStateView =
+  | "verified" | "listening" | "not-probed" | "not-listening" | "dependency-unreachable"
+  | "verify-failed" | "start-failed" | "refused" | "approval-required" | "not-planned";
+
+export type ServiceGroupUnitStartView = "started" | "start-failed" | "refused" | "approval-required" | "not-started";
+export type ServiceGroupUnitListeningView = "listening" | "not-listening" | "not-probed";
+export type ServiceGroupStepOutcomeView = "passed" | "dependency-unreachable" | "verify-failed" | "not-probed";
+
+export interface ServiceGroupStepView {
+  label: string;
+  kind: string;
+  targetUnitId: string;
+  targetServiceId: string;
+  outcome: ServiceGroupStepOutcomeView;
+  detail: string;
+  address?: { host: string; port: number };
+}
+
+export interface ServiceGroupDiagnosticView {
+  code: string;
+  scope: { unitId?: string; key?: string; port?: number };
+  message: string;
+  hint?: string;
+}
+
+/** One unit's REAL observations in a group run ([PiDock 05] #10 box 4). */
+export interface ServiceGroupUnitView {
+  unitId: string;
+  serviceId: string;
+  order?: number;
+  start: ServiceGroupUnitStartView;
+  /** The real pid read back from the run record this start wrote; absent means nobody read one. */
+  pid?: number;
+  observedRun: boolean;
+  listening: ServiceGroupUnitListeningView;
+  /** Carried whenever a real connect was attempted; required by the 已监听 reading. */
+  address?: { host: string; port: number };
+  /** The Host's own answer to "every linkage step of this unit really passed". */
+  linked: boolean;
+  steps: ServiceGroupStepView[];
+  diagnostics: ServiceGroupDiagnosticView[];
+}
+
+/** The Host's whole group run as `task/controlService {group:true}` returns it. */
+export interface ServiceGroupRunView {
+  state: ServiceGroupStateView;
+  groups: string[];
+  units: ServiceGroupUnitView[];
+  restartScope: { unitId: string; reason: string }[];
+  reallocated: { unitId: string; before: number; after: number }[];
+  diagnostics: ServiceGroupDiagnosticView[];
+}
+
+/**
+ * Key allowlists, exported so the seam test can pin the REAL Host result against
+ * them (mirroring `RUN_RECORD_KEYS` / `VERIFICATION_ROW_KEYS`): a field the Host
+ * adds must be added here, or a real group run would be refused as unreadable
+ * instead of silently losing an observation.
+ */
+export const GROUP_RUN_KEYS = ["state", "groups", "units", "restartScope", "reallocated", "diagnostics"] as const;
+export const GROUP_UNIT_KEYS = ["unitId", "serviceId", "order", "start", "pid", "observedRun", "listening", "address", "linked", "steps", "diagnostics"] as const;
+export const GROUP_STEP_KEYS = ["label", "kind", "targetUnitId", "targetServiceId", "outcome", "detail", "address"] as const;
+export const GROUP_DIAGNOSTIC_KEYS = ["code", "scope", "message", "hint"] as const;
+
+const GROUP_STATES = ["verified", "listening", "not-probed", "not-listening", "dependency-unreachable",
+  "verify-failed", "start-failed", "refused", "approval-required", "not-planned"] as const;
+const GROUP_UNIT_STARTS = ["started", "start-failed", "refused", "approval-required", "not-started"] as const;
+const GROUP_UNIT_LISTENING = ["listening", "not-listening", "not-probed"] as const;
+const GROUP_STEP_OUTCOMES = ["passed", "dependency-unreachable", "verify-failed", "not-probed"] as const;
+/** The states that read green; `not-probed`/`not-listening` are deliberately NOT among them. */
+const GROUP_GREEN_STATES = ["verified", "listening"] as const;
+
+function groupAddress(value: unknown): { host: string; port: number } | undefined | null {
+  if (value === undefined) return undefined;
+  if (!isRecord(value) || Object.keys(value).sort().join(",") !== "host,port") return null;
+  const host = value["host"];
+  const port = value["port"];
+  if (typeof host !== "string" || host.length === 0 || host.length > 255) return null;
+  if (typeof port !== "number" || !Number.isInteger(port) || port < 1 || port > 65535) return null;
+  return { host, port };
+}
+
+function groupDiagnostic(value: unknown): ServiceGroupDiagnosticView | null {
+  if (!isRecord(value)) return null;
+  if (Object.keys(value).some((key) => !(GROUP_DIAGNOSTIC_KEYS as readonly string[]).includes(key))) return null;
+  const code = value["code"];
+  const message = value["message"];
+  if (typeof code !== "string" || code.length === 0 || code.length > 100) return null;
+  if (typeof message !== "string" || message.length === 0 || message.length > 2000) return null;
+  const hint = boundedText(value["hint"], 2000);
+  if (hint === null) return null;
+  const scope = value["scope"];
+  if (!isRecord(scope) || Object.keys(scope).some((key) => !["unitId", "key", "port"].includes(key))) return null;
+  const unitId = boundedText(scope["unitId"], 300);
+  const key = boundedText(scope["key"], 300);
+  const port = scope["port"];
+  if (unitId === null || key === null) return null;
+  if (port !== undefined && (typeof port !== "number" || !Number.isInteger(port) || port < 0 || port > 65535)) return null;
+  return { code, message,
+    scope: { ...(unitId !== undefined ? { unitId } : {}), ...(key !== undefined ? { key } : {}), ...(port !== undefined ? { port } : {}) },
+    ...(hint !== undefined ? { hint } : {}) };
+}
+
+function groupStep(value: unknown): ServiceGroupStepView | null {
+  if (!isRecord(value)) return null;
+  if (Object.keys(value).some((key) => !(GROUP_STEP_KEYS as readonly string[]).includes(key))) return null;
+  const label = boundedText(value["label"], 500);
+  const kind = boundedText(value["kind"], 100);
+  const targetUnitId = boundedText(value["targetUnitId"], 300);
+  const targetServiceId = boundedText(value["targetServiceId"], 300);
+  const detail = boundedText(value["detail"], 2000);
+  const outcome = GROUP_STEP_OUTCOMES.find((candidate) => candidate === value["outcome"]);
+  if (label === undefined || kind === undefined || targetUnitId === undefined || targetServiceId === undefined || detail === undefined || outcome === undefined) return null;
+  const address = groupAddress(value["address"]);
+  if (address === null) return null;
+  return { label, kind, targetUnitId, targetServiceId, outcome, detail, ...(address !== undefined ? { address } : {}) };
+}
+
+/**
+ * One unit, read strictly: an unknown field, a wrong token or a listening claim
+ * without the address it was observed at makes the whole group run unreadable.
+ * `已监听` is an OBSERVATION, so a payload that reports it without the address it
+ * connected to is contradictory rather than a partial row.
+ */
+function groupUnit(value: unknown): ServiceGroupUnitView | null {
+  if (!isRecord(value)) return null;
+  if (Object.keys(value).some((key) => !(GROUP_UNIT_KEYS as readonly string[]).includes(key))) return null;
+  const unitId = boundedText(value["unitId"], 300);
+  const serviceId = boundedText(value["serviceId"], 300);
+  if (unitId === undefined || serviceId === undefined) return null;
+  const start = GROUP_UNIT_STARTS.find((candidate) => candidate === value["start"]);
+  if (start === undefined) return null;
+  const listening = GROUP_UNIT_LISTENING.find((candidate) => candidate === value["listening"]);
+  if (listening === undefined) return null;
+  if (value["observedRun"] !== true && value["observedRun"] !== false) return null;
+  if (value["linked"] !== true && value["linked"] !== false) return null;
+  const order = value["order"];
+  if (order !== undefined && (typeof order !== "number" || !Number.isInteger(order) || order < 1 || order > 10_000)) return null;
+  const pid = value["pid"];
+  if (pid !== undefined && (typeof pid !== "number" || !Number.isInteger(pid) || pid < 1)) return null;
+  const address = groupAddress(value["address"]);
+  if (address === null) return null;
+  if (listening === "listening" && address === undefined) return null;
+  const rawSteps = value["steps"];
+  if (!Array.isArray(rawSteps) || rawSteps.length > 200) return null;
+  const steps: ServiceGroupStepView[] = [];
+  for (const entry of rawSteps) {
+    const step = groupStep(entry);
+    if (step === null) return null;
+    steps.push(step);
+  }
+  const rawDiagnostics = value["diagnostics"];
+  if (!Array.isArray(rawDiagnostics) || rawDiagnostics.length > 200) return null;
+  const diagnostics: ServiceGroupDiagnosticView[] = [];
+  for (const entry of rawDiagnostics) {
+    const diagnostic = groupDiagnostic(entry);
+    if (diagnostic === null) return null;
+    diagnostics.push(diagnostic);
+  }
+  // `linked` is the Host's "every linkage step of this unit really passed": a
+  // payload claiming it with no passed observation (or beside a failed one) is
+  // contradictory, so the whole run is refused instead of rendered as 已互验.
+  const linkage = steps.filter((step) => step.kind === "linkage");
+  if (value["linked"] === true && (linkage.length === 0 || linkage.some((step) => step.outcome !== "passed"))) return null;
+  return { unitId, serviceId, start, observedRun: value["observedRun"], listening, linked: value["linked"], steps, diagnostics,
+    ...(order !== undefined ? { order } : {}), ...(pid !== undefined ? { pid } : {}), ...(address !== undefined ? { address } : {}) };
+}
+
+/**
+ * The Host's real group run ([PiDock 05] #10 box 4), read STRICTLY - the whole
+ * point of this payload is that 已启动 / 已监听 / 已互验 come only from a real
+ * observation, so nothing here may be smoothed over:
+ *
+ * - a green state (「已监听」/「已互验」) requires that NO unit was refused, parked,
+ *   failed to start or stopped listening and that NO step failed: a refusal or a
+ *   failure therefore cannot leave a green group in the payload or in the UI;
+ * - 「已互验」 additionally requires a real `linkage` step whose outcome passed, so
+ *   the group can never claim a mutual verification nobody observed;
+ * - a plan/declared fact has no way in: `listening`/`outcome` are the Host's own
+ *   probe results, and no field of this payload is derived from the plan.
+ */
+export function serviceGroupRunFromHost(payload: unknown): ServiceGroupRunView | null {
+  const envelope = isRecord(payload) ? payload["group"] : undefined;
+  if (!isRecord(envelope)) return null;
+  if (Object.keys(envelope).some((key) => !(GROUP_RUN_KEYS as readonly string[]).includes(key))) return null;
+  const state = GROUP_STATES.find((candidate) => candidate === envelope["state"]);
+  if (state === undefined) return null;
+  if (!Array.isArray(envelope["groups"]) || !envelope["groups"].every((entry) => typeof entry === "string" && entry.length <= 300)) return null;
+  const rawUnits = envelope["units"];
+  if (!Array.isArray(rawUnits) || rawUnits.length > 500) return null;
+  const units: ServiceGroupUnitView[] = [];
+  for (const entry of rawUnits) {
+    const unit = groupUnit(entry);
+    if (unit === null) return null;
+    units.push(unit);
+  }
+  if (new Set(units.map((unit) => unit.unitId)).size !== units.length) return null;
+  const rawScope = envelope["restartScope"];
+  if (!Array.isArray(rawScope) || rawScope.length > 500) return null;
+  const restartScope: { unitId: string; reason: string }[] = [];
+  for (const entry of rawScope) {
+    if (!isRecord(entry) || Object.keys(entry).sort().join(",") !== "reason,unitId") return null;
+    const unitId = boundedText(entry["unitId"], 300);
+    const reason = boundedText(entry["reason"], 100);
+    if (unitId === undefined || reason === undefined) return null;
+    restartScope.push({ unitId, reason });
+  }
+  const rawReallocated = envelope["reallocated"];
+  if (!Array.isArray(rawReallocated) || rawReallocated.length > 500) return null;
+  const reallocated: { unitId: string; before: number; after: number }[] = [];
+  for (const entry of rawReallocated) {
+    if (!isRecord(entry) || Object.keys(entry).sort().join(",") !== "after,before,unitId") return null;
+    const unitId = boundedText(entry["unitId"], 300);
+    const before = entry["before"];
+    const after = entry["after"];
+    if (unitId === undefined || typeof before !== "number" || typeof after !== "number") return null;
+    reallocated.push({ unitId, before, after });
+  }
+  if (!Array.isArray(envelope["diagnostics"]) || envelope["diagnostics"].length > 500) return null;
+  const diagnostics: ServiceGroupDiagnosticView[] = [];
+  for (const entry of envelope["diagnostics"]) {
+    const diagnostic = groupDiagnostic(entry);
+    if (diagnostic === null) return null;
+    diagnostics.push(diagnostic);
+  }
+  if ((GROUP_GREEN_STATES as readonly string[]).includes(state)) {
+    // A green group must not contain a unit that was refused, parked, failed or
+    // stopped listening, nor a failed step: without this, one refused unit could
+    // still leave a green group on screen.
+    if (units.some((unit) => unit.start !== "started" || unit.listening === "not-listening")) return null;
+    if (units.every((unit) => unit.start !== "started")) return null;
+    if (units.some((unit) => unit.steps.some((step) => step.outcome === "dependency-unreachable" || step.outcome === "verify-failed"))) return null;
+    if (state === "verified") {
+      const linkage = units.flatMap((unit) => unit.steps).filter((step) => step.kind === "linkage");
+      if (!linkage.some((step) => step.outcome === "passed")) return null;
+    }
+  }
+  return { state, groups: [...envelope["groups"]], units, restartScope, reallocated, diagnostics };
+}
+
+/** Result of one group start of a task's run units through the production path. */
+export type BoundServiceGroupRunResult = { ok: true; group: ServiceGroupRunView } | { ok: false; error: string };
+
+/**
+ * Start the task's run unit group through the production path ([PiDock 05] #10
+ * box 4): `shell/serviceCatalogOp {op:"runTaskServiceGroup"}`. Main resolves the
+ * task's bound services from the trusted persisted catalog, registers each
+ * trusted launch on the task Host and forwards ONE `task/controlService
+ * {group:true}`, which starts every unit through the same gate and observes each
+ * one for real. The renderer names only the project and the task - it cannot
+ * supply a unit list, a program, a port or a value.
+ *
+ * Three exclusive outcomes, each named: the Host's own group observation, its
+ * named refusal (verbatim), or the explicit "the Host returned no group result"
+ * state - never a fixture fallback and never an implied success.
+ */
+export async function runBoundTaskServiceGroupThroughShell(input: {
+  projectId: string;
+  taskId: string;
+}): Promise<BoundServiceGroupRunResult> {
+  const result = await serviceCatalogThroughShell({ op: "runTaskServiceGroup", projectId: input.projectId, taskId: input.taskId });
+  if (!result.ok) return { ok: false, error: shellFailure(result, "整组启动失败，请重试") };
+  const envelope = isRecord(result.payload) ? result.payload["group"] : undefined;
+  if (envelope === undefined) return { ok: false, error: "Host 未返回整组启动结果（未执行任何单元）" };
+  const group = serviceGroupRunFromHost(result.payload);
+  if (group === null) return { ok: false, error: "Host 整组启动回执无法解析（不展示任何状态）" };
+  return { ok: true, group };
+}
+
+/**
  * Restore one task's service start/stop channel after a shared-template write
  * revoked it ([PiDock 04] #7 slice): `shell/serviceCatalogOp
  * {op:"rebindServiceOwner"}`. Two-step exactly like the catalog writes - the

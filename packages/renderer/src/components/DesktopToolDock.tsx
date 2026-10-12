@@ -18,16 +18,20 @@ import {
 import { protocolBindingFromHost } from "../data/protocolBinding";
 import {
   loadTaskServices,
+  runBoundTaskServiceGroupThroughShell,
   runBoundTaskServiceThroughShell,
   serviceLogFromHost,
   shellFailure,
   type BoundServiceRow,
+  type ServiceGroupDiagnosticView,
+  type ServiceGroupRunView,
+  type ServiceGroupUnitView,
   type ServiceRunRecordView,
   type ServiceStatusView,
   type ServiceRegistryStatusView,
   type TaskServicesLoad,
 } from "../data/taskServices";
-import { buildFreshnessLabel, codeStateLabel, linkageStateLabel } from "../data/serviceTopology";
+import { buildFreshnessLabel, codeStateLabel, failureLabel, linkageStateLabel } from "../data/serviceTopology";
 import { ProtocolPanel, TerminalTakeoverPanel } from "./ToolPanels";
 import { ServiceOwnerRebind } from "./ServiceOwnerRebind";
 import {
@@ -868,6 +872,158 @@ function ServiceControl({ taskId, projectId, row, onChanged }: {
   );
 }
 
+/**
+ * 整组启动 ([PiDock 05] #10 box 4): the task's own run unit group, started as a
+ * group. The click sends only the project and the task to main's catalog entry
+ * (`runTaskServiceGroup`); main resolves the task's bound services from the
+ * trusted catalog and forwards ONE `task/controlService {group:true}`, which
+ * starts every unit through the SAME gate a single start uses and observes each
+ * one for real (a real accepted connection for 已监听, a real connection to the
+ * dependency for 已互验).
+ *
+ * Nothing here renders a plan: every label below comes from the Host's returned
+ * group result, and a refusal (or a payload this build cannot read) is shown by
+ * name - the panel never falls back to fixture data and never implies a unit
+ * started.
+ */
+const GROUP_STATE_LABEL: Record<ServiceGroupRunView["state"], string> = {
+  verified: "已互验",
+  listening: "已监听",
+  "not-probed": "未探测",
+  "not-listening": "未监听",
+  "dependency-unreachable": "依赖不可达",
+  "verify-failed": "核验失败",
+  "start-failed": "启动失败",
+  refused: "门禁拒绝",
+  "approval-required": "待确认",
+  "not-planned": "未规划",
+};
+
+const GROUP_START_LABEL: Record<ServiceGroupUnitView["start"], string> = {
+  started: "已启动",
+  "start-failed": "启动失败",
+  refused: "门禁拒绝",
+  "approval-required": "待确认",
+  "not-started": "未启动",
+};
+
+const GROUP_LISTENING_LABEL: Record<ServiceGroupUnitView["listening"], string> = {
+  listening: "已监听",
+  "not-listening": "未监听",
+  "not-probed": "未探测",
+};
+
+/**
+ * One verify step, labelled by what it ACTUALLY observed. A `passed` readiness
+ * step is the unit's 已监听 observation, a `passed` linkage step is 已互验; a
+ * `not-probed` step is named 未探测 instead of being folded into a failure.
+ */
+function stepLabel(step: ServiceGroupUnitView["steps"][number]): string {
+  if (step.outcome === "not-probed") return "未探测";
+  if (step.kind === "linkage") return step.outcome === "passed" ? "已互验" : "依赖不可达";
+  return step.outcome === "passed" ? "已监听" : "核验失败";
+}
+
+/**
+ * A unit's 联通核验 line. 已互验 requires a real passed linkage observation; a
+ * unit the plan gives no dependency edge has nothing to verify, and that is
+ * NAMED (无依赖边 · 未探测) instead of reading as a verified or a failed link.
+ */
+function unitLinkageLabel(unit: ServiceGroupUnitView): string {
+  const linkage = unit.steps.filter((step) => step.kind === "linkage");
+  if (linkage.length === 0) return "无依赖边（未做互验）";
+  if (linkage.every((step) => step.outcome === "passed")) return "已互验";
+  return linkage.some((step) => step.outcome === "dependency-unreachable") ? "依赖不可达" : "未探测";
+}
+
+/** The Host's named diagnostics, each with the vocabulary the panel already uses. */
+function GroupDiagnosticList({ diagnostics, scope }: { diagnostics: readonly ServiceGroupDiagnosticView[]; scope: "unit" | "group" }) {
+  if (diagnostics.length === 0) return null;
+  return (
+    <ul className="mt-0.5 flex flex-col gap-0.5 text-[10px] text-muted"
+      data-testid={scope === "group" ? "dock-group-diagnostics" : "dock-group-unit-diagnostics"} data-scope={scope}>
+      {diagnostics.map((diagnostic, index) => (
+        <li key={`${diagnostic.code}:${index}`} data-diagnostic-code={diagnostic.code}>
+          <span className="text-[#ad4545]">{failureLabel(diagnostic.code).label}</span> · {diagnostic.message}
+          {diagnostic.hint !== undefined ? ` · ${diagnostic.hint}` : ""}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * The Host's REAL group result ([PiDock 05] #10 box 4), one row per unit plus the
+ * group's own named state and diagnostics. Every value rendered here is an
+ * observation the Host made or a negative it named; the plan never appears.
+ */
+function GroupRunReceipt({ group }: { group: ServiceGroupRunView }) {
+  return (
+    <div className="mt-1 min-w-0 text-[10px] text-muted" data-testid="dock-group-run">
+      <p data-testid="dock-group-state" data-state={group.state}>
+        整组状态：{GROUP_STATE_LABEL[group.state]}
+        {group.state === "not-planned" ? "（Host 报告本任务没有已规划的运行单元，未启动任何单元）" : ""}
+      </p>
+      <ul className="mt-0.5 flex flex-col gap-0.5">
+        {group.units.map((unit) => (
+          <li key={unit.unitId} data-group-unit={unit.unitId} data-service-id={unit.serviceId}
+            data-start={unit.start} data-listening={unit.listening} data-linkage={unitLinkageLabel(unit)}>
+            <span className="font-mono">{unit.serviceId}</span>
+            <span> · 启动：{GROUP_START_LABEL[unit.start]}</span>
+            <span>{unit.pid !== undefined ? ` · pid ${unit.pid}` : " · 进程标识未读取"}</span>
+            <span> · 监听：{GROUP_LISTENING_LABEL[unit.listening]}</span>
+            <span>{unit.address !== undefined ? `（${unit.address.host}:${unit.address.port}）` : ""}</span>
+            <span> · 联通：{unitLinkageLabel(unit)}</span>
+            {unit.steps.map((step, index) => (
+              <span key={`${step.targetUnitId}:${index}`} data-group-step={step.outcome}> · {step.label}：{stepLabel(step)}</span>
+            ))}
+            <GroupDiagnosticList diagnostics={unit.diagnostics} scope="unit" />
+          </li>
+        ))}
+        {group.units.length === 0 && <li data-group-unit-empty>Host 未返回任何运行单元的观测结果</li>}
+      </ul>
+      <GroupDiagnosticList diagnostics={group.diagnostics} scope="group" />      {group.restartScope.length > 0 && (
+        <p data-testid="dock-group-restart-scope">
+          本次整组启动未重启任何单元；计划要求后续重启：
+          {group.restartScope.map((row) => `${row.unitId}（${row.reason}）`).join("、")}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function GroupStartControl({ taskId, projectId, onStarted }: {
+  taskId: string;
+  projectId: string;
+  onStarted: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ kind: "refused"; error: string } | { kind: "run"; group: ServiceGroupRunView } | null>(null);
+  const submit = async () => {
+    setBusy(true);
+    const response = await runBoundTaskServiceGroupThroughShell({ projectId, taskId });
+    setBusy(false);
+    if (!response.ok) {
+      setResult({ kind: "refused", error: response.error });
+      return;
+    }
+    setResult({ kind: "run", group: response.group });
+    onStarted();
+  };
+  return (
+    <section className="border-t border-line pt-2" data-testid="dock-group-control">
+      <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+        <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => { void submit(); }}>整组启动</Button>
+        <span className="text-[10px] text-muted">按任务计划顺序启动本任务全部运行单元，先监听再互验</span>
+      </div>
+      {result?.kind === "refused" && (
+        <p role="alert" className="mt-1 min-w-0 break-words text-[10px] text-[#ad4545]" data-testid="dock-group-refusal">{result.error}</p>
+      )}
+      {result?.kind === "run" && <GroupRunReceipt group={result.group} />}
+    </section>
+  );
+}
+
 function RunTool({ taskId }: { taskId: string }) {
   const [load, setLoad] = useState<TaskServicesLoad | null>(null);
   const [revision, setRevision] = useState(0);
@@ -902,6 +1058,7 @@ function RunTool({ taskId }: { taskId: string }) {
       ) : (
         <>
           {load.templatesError && <p role="status" className="break-words border border-line bg-soft px-2 py-1.5 text-[11px] text-muted">{load.templatesError}</p>}
+          {load.rows.length > 0 && <GroupStartControl taskId={taskId} projectId={boundProjectId} onStarted={() => setRevision((value) => value + 1)} />}
           <section>
             <p className="text-[11px] text-muted">本任务服务 · {load.rows.length}</p>
             <ul className="mt-1 flex flex-col gap-1" data-testid="dock-service-rows">

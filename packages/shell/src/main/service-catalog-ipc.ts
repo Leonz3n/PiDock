@@ -101,6 +101,47 @@ export function parseServiceRunRequest(request: unknown): ServiceRunRequest {
 }
 
 /**
+ * One group start for a task's planned run units ([PiDock 05] #10 box 4), the
+ * production caller `task/controlService {group:true}` never had.
+ *
+ * The accepted keys are exactly `{op,projectId,taskId}` - there is deliberately
+ * no `serviceId`, no `units` and no plan of any kind. Which services form the
+ * task's group is decided by MAIN from the trusted persisted catalog (the same
+ * direction as `runTaskService`), so a page can neither select units nor supply
+ * a launch, a cwd or a value; a payload carrying plan content is refused by
+ * name instead of being ignored.
+ */
+export interface ServiceRunGroupRequest {
+  taskId: string;
+  projectId: string;
+}
+
+const SERVICE_RUN_GROUP_KEYS = ["op", "projectId", "taskId"] as const;
+
+/** Key-exact: any extra key (a plan, a unit list, a program, a value) is a named refusal. */
+export function parseServiceRunGroupRequest(request: unknown): ServiceRunGroupRequest {
+  if (!record(request) || Buffer.byteLength(JSON.stringify(request)) > 4096) {
+    throw new TrustDomainViolation("invalid-payload", "invalid service group run request");
+  }
+  if (Object.keys(request).sort().join(",") !== [...SERVICE_RUN_GROUP_KEYS].sort().join(",")) {
+    throw new TrustDomainViolation(
+      "invalid-payload",
+      `invalid service group run request: 只接受 ${SERVICE_RUN_GROUP_KEYS.join("/")}（运行单元由主进程按可信服务目录决定，页面不能提供计划）`,
+    );
+  }
+  const input = request as Record<string, unknown>;
+  if (
+    input["op"] !== "runTaskServiceGroup" ||
+    typeof input["projectId"] !== "string" ||
+    typeof input["taskId"] !== "string" ||
+    input["taskId"].length === 0
+  ) {
+    throw new TrustDomainViolation("invalid-payload", "invalid service group run request");
+  }
+  return { taskId: input["taskId"], projectId: input["projectId"] };
+}
+
+/**
  * One explicit re-bind of a task's service owner ([PiDock 04] #7 slice): the
  * human asks main to restore the task's start/stop channel after a write moved
  * the task's owner snapshot (a shared-template adoption, a binding change or a
