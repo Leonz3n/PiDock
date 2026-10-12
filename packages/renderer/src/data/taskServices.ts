@@ -44,6 +44,31 @@ export interface ServiceOwnerStatusView {
   executionAvailable: boolean;
 }
 
+/** One platform row of the Host's launch-verification read ([PiDock 04] #7 box 7). */
+export interface PlatformVerificationRowView {
+  platform: string;
+  /** True only for a real launch observation made on the platform the Host is answering from. */
+  verified: boolean;
+  nodeVersion?: string;
+  program?: string;
+  startedAt?: string;
+  stopped?: boolean;
+  stoppedAt?: string;
+  /** Why this platform is not verified; present on every not-verified row. */
+  reason?: string;
+}
+
+/**
+ * The Host's per-platform verification read: the platform the Host itself runs
+ * on plus one row per release target. A platform with no real verification is
+ * listed with `verified: false` and its reason, so the UI never has to infer a
+ * pass from an absent row.
+ */
+export interface LaunchVerificationView {
+  platform: string;
+  rows: PlatformVerificationRowView[];
+}
+
 /** `TaskServiceRuntime` registry status (a service the Host registered itself). */
 export interface ServiceRegistryStatusView {
   kind: "registry";
@@ -66,6 +91,12 @@ export interface ServiceRegistryStatusView {
    * either path); the row then says so instead of guessing an author.
    */
   lastControl?: { action: "start" | "stop"; actor: "human" | "agent"; label: string };
+  /**
+   * The platform this Host really runs on and one row per platform
+   * ([PiDock 04] #7 box 7). Absent means this Host predates the record; the row
+   * then states that no platform was verified instead of assuming one was.
+   */
+  launchVerification?: LaunchVerificationView;
 }
 
 export type ServiceStatusView = ServiceOwnerStatusView | ServiceRegistryStatusView;
@@ -88,7 +119,7 @@ function registryStatus(row: Record<string, unknown>, serviceId: string): Servic
   // `lifecycle` is process liveness only, `health` stays `not-probed` (no
   // reachability probe is reported as health) and `launchSource` says whether
   // the launch came from main's trusted catalog or is display-only.
-  const allowed = ["exitReason", "health", "lastControl", "launchSource", "lifecycle", "resolved", "serviceId", "startedAt", "stoppedAt", "templateVersion"];
+  const allowed = ["exitReason", "health", "lastControl", "launchSource", "launchVerification", "lifecycle", "resolved", "serviceId", "startedAt", "stoppedAt", "templateVersion"];
   const required = ["lifecycle", "resolved", "serviceId", "templateVersion"];
   if (!Object.keys(row).every((key) => allowed.includes(key)) || !required.every((key) => key in row)) return null;
   if (row["lifecycle"] !== "stopped" && row["lifecycle"] !== "running") return null;
@@ -107,12 +138,77 @@ function registryStatus(row: Record<string, unknown>, serviceId: string): Servic
   if (startedAt === null || stoppedAt === null || exitReason === null) return null;
   const lastControl = lastControlFact(row["lastControl"]);
   if (lastControl === null) return null;
+  const launchVerification = launchVerificationFact(row["launchVerification"]);
+  if (launchVerification === null) return null;
   return { kind: "registry", serviceId, lifecycle: row["lifecycle"], templateVersion: row["templateVersion"],
     resolvedKeys, ...(startedAt !== undefined ? { startedAt } : {}), ...(stoppedAt !== undefined ? { stoppedAt } : {}),
     ...(exitReason !== undefined ? { exitReason } : {}),
     ...(row["launchSource"] !== undefined ? { launchSource: row["launchSource"] as "catalog" | "ui" } : {}),
     ...(row["health"] !== undefined ? { health: "not-probed" as const } : {}),
-    ...(lastControl !== undefined ? { lastControl } : {}) };
+    ...(lastControl !== undefined ? { lastControl } : {}),
+    ...(launchVerification !== undefined ? { launchVerification } : {}) };
+}
+
+/** `<platform>-<arch>`: the only shape the Host may label a platform with. */
+const PLATFORM_LABEL = /^[a-z0-9]+-[a-z0-9]+$/;
+/** The row keys the projection may carry; anything else makes the read unreadable. */
+const VERIFICATION_ROW_KEYS = ["platform", "verified", "reason", "nodeVersion", "program", "startedAt", "stopped", "stoppedAt"];
+/** `undefined` for an absent field, `null` for a present-but-unusable one. */
+const optionalText = (value: unknown): string | undefined | null =>
+  value === undefined ? undefined : typeof value === "string" && value.length > 0 && value.length <= 2000 ? value : null;
+
+/**
+ * The Host's per-platform launch-verification read ([PiDock 04] #7 box 7), read
+ * strictly because the whole point is that "verified" is NOT assumed:
+ *
+ * - a `verified` row is accepted only when its platform is the platform the
+ *   Host itself declares it is answering from. A payload claiming a pass on
+ *   any other platform is contradictory, so the row is unreadable (`null`) -
+ *   the panel then reports the response as unreadable rather than showing a
+ *   pass the Host cannot have observed;
+ * - a `verified` row must carry the launch facts that justify it;
+ * - a not-verified row must name its reason, so the UI can never render an
+ *   unverified platform as verified and never has to invent wording for it;
+ * - duplicate platform rows are corrupt, not last-wins (a second row could only
+ *   be there to replace a `false` with a `true`).
+ */
+function launchVerificationFact(value: unknown): LaunchVerificationView | undefined | null {
+  if (value === undefined) return undefined;
+  if (!isRecord(value) || Object.keys(value).sort().join(",") !== "platform,rows") return null;
+  const platform = value["platform"];
+  if (typeof platform !== "string" || !PLATFORM_LABEL.test(platform)) return null;
+  const rows = value["rows"];
+  if (!Array.isArray(rows) || rows.length === 0 || rows.length > 12) return null;
+  const parsed: PlatformVerificationRowView[] = [];
+  for (const entry of rows) {
+    if (!isRecord(entry)) return null;
+    if (Object.keys(entry).some((name) => !VERIFICATION_ROW_KEYS.includes(name))) return null;
+    const name = entry["platform"];
+    const verified = entry["verified"];
+    if (typeof name !== "string" || !PLATFORM_LABEL.test(name) || typeof verified !== "boolean") return null;
+    if (parsed.some((rowView) => rowView.platform === name)) return null;
+    const nodeVersion = optionalText(entry["nodeVersion"]);
+    const program = optionalText(entry["program"]);
+    const rowStartedAt = optionalText(entry["startedAt"]);
+    const rowStoppedAt = optionalText(entry["stoppedAt"]);
+    const reason = optionalText(entry["reason"]);
+    if (nodeVersion === null || program === null || rowStartedAt === null || rowStoppedAt === null || reason === null) return null;
+    const stopped = entry["stopped"];
+    if (stopped !== undefined && typeof stopped !== "boolean") return null;
+    if (verified) {
+      // A pass is only readable for the platform the Host says it runs on, and
+      // only with the observed launch facts attached.
+      if (name !== platform) return null;
+      if (rowStartedAt === undefined || program === undefined || nodeVersion === undefined || stopped === undefined) return null;
+    } else if (reason === undefined) {
+      return null;
+    }
+    parsed.push({ platform: name, verified,
+      ...(nodeVersion !== undefined ? { nodeVersion } : {}), ...(program !== undefined ? { program } : {}),
+      ...(rowStartedAt !== undefined ? { startedAt: rowStartedAt } : {}), ...(stopped !== undefined ? { stopped } : {}),
+      ...(rowStoppedAt !== undefined ? { stoppedAt: rowStoppedAt } : {}), ...(reason !== undefined ? { reason } : {}) });
+  }
+  return { platform, rows: parsed };
 }
 
 /**
