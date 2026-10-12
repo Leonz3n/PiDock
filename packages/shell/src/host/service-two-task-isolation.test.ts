@@ -74,8 +74,17 @@ server.listen(port, "127.0.0.1", () => {
 setInterval(() => {}, 1000);
 `;
 
+/** A child that really starts and then really ends on its own. */
+const ONE_SHOT_SCRIPT = `const fs = require("node:fs");
+const path = require("node:path");
+fs.writeFileSync(path.join(process.cwd(), "one-shot.txt"), String(process.pid));
+console.log("one-shot done");
+`;
+
 const WAIT_MS = 30_000;
 const POLL_MS = 25;
+/** Budget for the read-back polls: short enough that the ASSERTION fails, not the test timeout. */
+const READBACK_MS = 10_000;
 
 /** One TCP port nobody holds right now, taken from the OS itself. */
 async function freePort(): Promise<number> {
@@ -96,10 +105,23 @@ async function until(check: () => boolean, label: string): Promise<void> {
   throw Error(`timed out waiting for ${label}`);
 }
 
-/** OS liveness of a pid this suite really started, or of one it never did. */
+/**
+ * OS liveness of a pid this suite really started. `kill(pid, 0)` alone still
+ * succeeds for a corpse the OS has not reaped yet, so the process state is read
+ * too: a `Z` row is NOT a live child, and calling a zombie "still alive" would
+ * be exactly the unsupported claim this ticket forbids. Fixed argv, no shell; an
+ * unreadable row reads as not alive.
+ */
 function alive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) throw Error(`invalid-pid: ${pid}`);
-  try { process.kill(pid, 0); return true; } catch { return false; }
+  try { process.kill(pid, 0); } catch { return false; }
+  const { execFileSync } = process.getBuiltinModule("node:child_process") as typeof import("node:child_process");
+  try {
+    const state = execFileSync("ps", ["-o", "state=", "-p", String(pid)], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+    return state.length > 0 && !state.startsWith("Z");
+  } catch {
+    return false;
+  }
 }
 
 interface Answer { dir: string; pid: number; port: number; greeting: string }
@@ -164,6 +186,7 @@ interface CatalogFixture {
   catalog: ServiceCatalog;
   projectId: string;
   serviceId: string;
+  oneShotId: string;
   taskA: TaskHarness;
   taskB: TaskHarness;
   portA: number;
@@ -226,6 +249,19 @@ async function twoTasks(): Promise<CatalogFixture> {
     });
   }
 
+  // A second, one-shot service bound to task A only: it really starts and then
+  // really ends by itself, so the registered tree can be checked for the dead pid.
+  const oneShot = catalog.saveTemplate({
+    projectId,
+    descriptor: { name: "Migrate once", program: "node", args: ["one-shot.cjs"], ports: [], runType: "one-shot" },
+    shared: [],
+  });
+  writeFileSync(join(provisioned[0]!.taskDir, "repo-a", provisioned[0]!.subdir, "one-shot.cjs"), ONE_SHOT_SCRIPT);
+  catalog.bindTask({
+    taskId: provisioned[0]!.taskId, serviceId: oneShot.serviceId, templateVersion: 1, rootId: "repo-a", subdir: provisioned[0]!.subdir,
+    programPath: realpathSync(process.execPath), privateRefs: [],
+  });
+
   const harnesses = new Map<string, TaskHarness>();
   for (const task of provisioned) {
     // Each Host is imported while ITS env binding is in place, exactly like a
@@ -253,10 +289,12 @@ async function twoTasks(): Promise<CatalogFixture> {
   // same gated stop the suite asserts, and never by a broad kill.
   cleanups.push(async () => {
     for (const task of [taskA, taskB]) {
-      await task.request("task/controlService", { serviceId: template.serviceId, action: "stop", label: "suite cleanup" }, { kind: "shell-ui", senderWebContentsId: 7 });
+      for (const id of [template.serviceId, oneShot.serviceId]) {
+        await task.request("task/controlService", { serviceId: id, action: "stop", label: "suite cleanup" }, { kind: "shell-ui", senderWebContentsId: 7 });
+      }
     }
   });
-  return { catalog, projectId, serviceId: template.serviceId, taskA, taskB, portA, portB };
+  return { catalog, projectId, serviceId: template.serviceId, oneShotId: oneShot.serviceId, taskA, taskB, portA, portB };
 }
 
 /** Register the catalog-resolved launch on one task's Host, like main does. */
@@ -364,5 +402,40 @@ describe.skipIf(process.platform === "win32")("#10 two tasks running the same se
     expect(await control(taskB, serviceId, "stop")).toMatchObject({ serviceId, action: "stop" });
     await until(() => !alive(pidB), "task B's child to really exit");
     expect(alive(pidA)).toBe(false);
+  });
+
+  it("drops a child that ended on its own out of the registered tree, keeping the real exit reason", { timeout: 30_000 }, async () => {
+    const fixture = await twoTasks();
+    const { oneShotId, taskA } = fixture;
+
+    expect(await register(taskA, fixture, oneShotId)).toMatchObject({ service: { serviceId: oneShotId, launchSource: "catalog" } });
+    expect(await control(taskA, oneShotId, "start")).toMatchObject({ serviceId: oneShotId, action: "start" });
+
+    // The child really ran (it reported its own pid into its own cwd) and then
+    // really ended by itself: the Host observed the close, not a guess. The
+    // reading below is what a short-lived child does in production, and it is
+    // also the race the driver's exit reason exists for - the record may be
+    // written after the child is already gone.
+    await until(() => {
+      try { return readFileSync(join(taskA.taskDir, "repo-a", "svc-a", "one-shot.txt"), "utf8").trim().length > 0; }
+      catch { return false; }
+    }, "the one-shot child to report itself");
+    const pid = Number(readFileSync(join(taskA.taskDir, "repo-a", "svc-a", "one-shot.txt"), "utf8"));
+    expect(pid).toBeGreaterThan(0);
+    await until(() => !alive(pid), "the one-shot child to end on its own");
+
+    // A dead pid must not stay in the registered tree: the box-8 stop scope
+    // would otherwise offer a process that no longer exists.
+    let records = await taskA.request("task/serviceRunRecords", {});
+    for (let elapsed = 0; elapsed < READBACK_MS; elapsed += POLL_MS) {
+      if ((records["registered"] as unknown[]).length === 0) break;
+      await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+      records = await taskA.request("task/serviceRunRecords", {});
+    }
+    expect(records["registered"]).toEqual([]);
+    const closed = (records["records"] as Record<string, unknown>[])[0] as Record<string, unknown>;
+    expect(closed["processIdentity"]).toMatchObject({ pid, owner: "human" });
+    expect(closed["endedAt"]).toBeTypeOf("string");
+    expect((closed["exit"] as { reason: string }).reason).toBe("exit:0");
   });
 });
