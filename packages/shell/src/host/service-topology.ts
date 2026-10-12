@@ -267,6 +267,11 @@ export class TaskServiceTopology {
     };
   }
 
+  /** The declared call/prestart edges of the current plan (read-only copy). */
+  plannedDependencies(): ServiceDependency[] {
+    return this.dependencies.map((dependency) => ({ ...dependency }));
+  }
+
   routing(): RoutingEntry[] {
     return describeDependencyRouting({
       taskId: this.taskId,

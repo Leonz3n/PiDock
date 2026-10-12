@@ -759,11 +759,20 @@ export function validateHostTaskOp(
       return { ok: false, error: "invalid-payload: task/controlService requires a payload object" };
     const serviceId = payload["serviceId"];
     const action = payload["action"];
-    if (typeof serviceId !== "string" || serviceId.trim().length === 0) {
-      return { ok: false, error: "invalid-payload: task/controlService.serviceId must be a non-empty string" };
-    }
     if (action !== "start" && action !== "stop") {
       return { ok: false, error: "invalid-payload: task/controlService.action must be start/stop" };
+    }
+    // [PiDock 05] (#10 box 4) the group form of the SAME op: it names the task's
+    // planned group instead of one serviceId, so no `serviceId` is required.
+    // Shape only — every unit still goes through the one gate in
+    // `host/service-control.ts`, and `HOST_TASK_OPS` is unchanged.
+    if (payload["group"] === true) {
+      return action === "start"
+        ? { ok: true }
+        : { ok: false, error: "invalid-payload: task/controlService.group 仅支持 action=start" };
+    }
+    if (typeof serviceId !== "string" || serviceId.trim().length === 0) {
+      return { ok: false, error: "invalid-payload: task/controlService.serviceId must be a non-empty string" };
     }
     return { ok: true };
   }
