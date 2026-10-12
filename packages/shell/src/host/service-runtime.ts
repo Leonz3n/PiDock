@@ -106,6 +106,17 @@ export interface ServiceRecord {
    * one.
    */
   launchVerifications: ServiceLaunchVerification[];
+  /**
+   * Main's own read-only observation of the worktree this launch will run in
+   * ([PiDock 05] #10 box 6), carried by the trusted-catalog registration. Absent
+   * means nobody read the worktree: the run record then says `unknown` by name.
+   */
+  code?: { commit?: string; dirty: boolean };
+  /**
+   * Named reason main could NOT read the worktree. Stored (never turned into a
+   * code state) so the start path can put it in this service's bounded log.
+   */
+  codeObservationFailure?: string;
   /** Trusted-catalog registration only; `ui` registrations never execute. */
   launchSource: ServiceLaunchSource;
 }
@@ -270,6 +281,7 @@ export class TaskServiceRuntime {
       resolved: [...record.resolved.map((entry) => ({ ...entry }))],
       ...(record.startedBy !== undefined ? { startedBy: { ...record.startedBy } } : {}),
       ...(record.lastControl !== undefined ? { lastControl: { action: record.lastControl.action, actor: { ...record.lastControl.actor } } } : {}),
+      ...(record.code !== undefined ? { code: { ...record.code } } : {}),
       launchVerifications: record.launchVerifications.map((entry) => ({ ...entry, ...(entry.args !== undefined ? { args: [...entry.args] } : {}) })),
     };
   }
@@ -312,6 +324,10 @@ export class TaskServiceRuntime {
     templateVersion: string;
     /** Defaults to `ui`: registration alone never enables execution. */
     launchSource?: ServiceLaunchSource;
+    /** Main's own observation of the worktree this launch runs in (#10 box 6). */
+    code?: { commit?: string; dirty: boolean };
+    /** Named reason main could not read the worktree; never a code state. */
+    codeObservationFailure?: string;
   }): ServiceRecord {
     if (input.serviceId.trim().length === 0) throw new Error("invalid-payload: serviceId must be a non-empty string");
     const invalid = validateServiceDescriptor(input.descriptor);
@@ -353,6 +369,12 @@ export class TaskServiceRuntime {
       launchVerifications: existing
         ? existing.launchVerifications.map((entry) => ({ ...entry, ...(entry.args !== undefined ? { args: [...entry.args] } : {}) }))
         : (this.persistedVerifications.get(input.serviceId) ?? []).map((entry) => ({ ...entry, ...(entry.args !== undefined ? { args: [...entry.args] } : {}) })),
+      // The worktree read belongs to THIS registration: main re-registers right
+      // before every control, so a dropped observation would leave the next run
+      // reading a code state nobody observed. A registration without one clears
+      // it (absent stays `unknown`).
+      ...(input.code !== undefined ? { code: { commit: input.code.commit, dirty: input.code.dirty } } : {}),
+      ...(input.codeObservationFailure !== undefined ? { codeObservationFailure: input.codeObservationFailure } : {}),
       launchSource: input.launchSource ?? "ui",
     };
     this.services.set(input.serviceId, record);

@@ -44,6 +44,7 @@ import { ServiceCatalog, serviceCatalogAuthority, type ServiceLaunch } from "./s
 import { InstalledServiceHostAuthority, type ServiceOwnerChange, type ServiceOwnerDurableRecord } from "./service-host-binding.js";
 import { parseServiceOwnerRebindRequest, performServiceBindingOperation, performServiceCatalogOperation, performServiceConfigPreview, parseServiceRunGroupRequest, parseServiceRunRequest } from "./service-catalog-ipc.js";
 import { declaredServicePorts, resolveServiceEnv } from "./service-config.js";
+import { codeObservationFields } from "./service-code-observation.js";
 import { loadExternalEditorSettings, type ExternalEditorSettingsResult } from "./external-editor.js";
 import { performEditorSettingsOperation } from "./external-editor-settings.js";
 import { performProjectOperation } from "./project-ipc.js";
@@ -1079,7 +1080,14 @@ export async function runTaskService(
     await tasks.routeTaskOp({
       taskId: request.taskId,
       op: "task/registerService",
-      payload: { serviceId: launch.serviceId, descriptor: launch.descriptor, layers: launch.layers, templateVersion: String(launch.templateVersion) },
+      payload: {
+        serviceId: launch.serviceId, descriptor: launch.descriptor, layers: launch.layers, templateVersion: String(launch.templateVersion),
+        // Box 6: main reads the worktree the verified launch cwd lives in, right
+        // before the start, and the registration carries either that observation
+        // or the named reason it could not be made. The Host never fills the code
+        // state in from a claim of its own.
+        ...codeObservationFields(launch.descriptor.cwd),
+      },
       origin,
     });
   } catch (error) {
@@ -1149,7 +1157,13 @@ export async function runTaskServiceGroup(
       await tasks.routeTaskOp({
         taskId: request.taskId,
         op: "task/registerService",
-        payload: { serviceId: launch.serviceId, descriptor: launch.descriptor, layers: launch.layers, templateVersion: String(launch.templateVersion) },
+        payload: {
+          serviceId: launch.serviceId, descriptor: launch.descriptor, layers: launch.layers, templateVersion: String(launch.templateVersion),
+          // The SAME per-unit worktree observation the single-service path makes
+          // (box 6): each unit's own verified cwd, read by main, or its named
+          // failure reason.
+          ...codeObservationFields(launch.descriptor.cwd),
+        },
         origin,
       });
     } catch (error) {

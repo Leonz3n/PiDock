@@ -194,6 +194,35 @@ export function serviceLaunchSource(origin: unknown): "catalog" | "ui" {
 }
 
 /**
+ * The code-state observation a registration may carry ([PiDock 05] #10 box 6).
+ *
+ * The observation has to come from main's own read of the task's real worktree,
+ * so only main's `service-catalog` registration (the value `serviceLaunchSource`
+ * already computes) may carry it. The renderer's own registration path reaches
+ * `task/registerService` over `shell/taskOp` with main's `shell-ui` attestation,
+ * so a `shell-ui` registration that carries an observation is refused BY NAME
+ * instead of having its claim stored: a page cannot self-attest the code state.
+ *
+ * `code` and `codeObservationFailure` are mutually exclusive by construction (a
+ * read that failed is not an observation); sending both is a contradiction and
+ * is refused rather than resolved by precedence.
+ */
+export function authorizeCodeObservation(input: {
+  origin?: unknown;
+  code?: unknown;
+  codeObservationFailure?: unknown;
+}): { ok: true } | { ok: false; error: string } {
+  if (input.code === undefined && input.codeObservationFailure === undefined) return { ok: true };
+  if (serviceLaunchSource(input.origin) !== "catalog") {
+    return { ok: false, error: "permission-denied: 代码状态只能来自主进程对真实工作树的观测，界面登记不能自证" };
+  }
+  if (input.code !== undefined && input.codeObservationFailure !== undefined) {
+    return { ok: false, error: "invalid-payload: task/registerService 不能同时携带 code 与 codeObservationFailure" };
+  }
+  return { ok: true };
+}
+
+/**
  * Session a user's browser marker is logged into ([PiDock 06] #8): a named
  * session must already exist, so a typo cannot silently create a new
  * conversation; without a name the task's first persisted session is the
@@ -742,6 +771,29 @@ export function validateHostTaskOp(
     }
     if (typeof templateVersion !== "string" || templateVersion.trim().length === 0) {
       return { ok: false, error: "invalid-payload: task/registerService.templateVersion must be a non-empty string" };
+    }
+    // [PiDock 05] (#10 box 6) the worktree observation: shape here, caller class in
+    // `authorizeCodeObservation`. A malformed field is refused instead of stored
+    // (the record must never hold a half-observed code state), and the failure
+    // reason is bounded single-line text because it is echoed into the service's
+    // renderer-readable bounded log.
+    const code = payload["code"];
+    if (code !== undefined) {
+      if (!isRecord(code)) return { ok: false, error: "invalid-payload: task/registerService.code must be an object" };
+      const commit = code["commit"];
+      if (commit !== undefined && (typeof commit !== "string" || !/^[0-9a-f]{7,64}$/i.test(commit))) {
+        return { ok: false, error: "invalid-payload: task/registerService.code.commit must be a git commit id" };
+      }
+      if (typeof code["dirty"] !== "boolean") {
+        return { ok: false, error: "invalid-payload: task/registerService.code.dirty must be a boolean" };
+      }
+    }
+    const codeObservationFailure = payload["codeObservationFailure"];
+    if (codeObservationFailure !== undefined) {
+      if (typeof codeObservationFailure !== "string" || codeObservationFailure.trim().length === 0 ||
+          codeObservationFailure.length > 200 || /[\r\n\0]/.test(codeObservationFailure)) {
+        return { ok: false, error: "invalid-payload: task/registerService.codeObservationFailure must be a single-line non-empty reason" };
+      }
     }
     return { ok: true };
   }
