@@ -1030,6 +1030,7 @@ export function createShellHostAdapter(fallback: HostAdapter): HostAdapter {
             merged.records = local.records.map((entry) => {
               const run = byService.get(entry.serviceId);
               if (!run) return entry;
+              const portsSource = run["portsSource"] === "declared" || run["portsSource"] === "observed" ? run["portsSource"] : undefined;
               return {
                 ...entry,
                 run: {
@@ -1038,6 +1039,9 @@ export function createShellHostAdapter(fallback: HostAdapter): HostAdapter {
                   codeState: (asRecord(run["codeState"])["kind"] ?? "unknown") as "committed-clean" | "uncommitted" | "unknown",
                   buildFreshness: (run["buildFreshness"] ?? "unknown") as "fresh" | "stale-build" | "uncommitted-code" | "unknown",
                   ports: Array.isArray(run["ports"]) ? run["ports"].map(Number) : [],
+                  // The Host's own declaration: a port list nobody probed is
+                  // carried through as declared, never promoted to observed.
+                  ...(portsSource !== undefined ? { portsSource } : {}),
                   processIdentity: {
                     owner: asRecord(run["processIdentity"])["owner"] === "agent" ? "agent" : "human",
                     pid: Number(asRecord(run["processIdentity"])["pid"] ?? 0),

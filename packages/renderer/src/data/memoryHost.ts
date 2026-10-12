@@ -428,6 +428,8 @@ function simulatedRunRecord(taskId: string, serviceName: string, port: number | 
     ...(variant.codeCommit !== undefined ? { codeCommit: variant.codeCommit } : {}),
     buildFreshness: variant.buildFreshness,
     ports: port === undefined ? [] : [port],
+    // A memory fixture never probed a socket, so its ports are declared ones.
+    portsSource: "declared",
     processIdentity: { owner: "human", pid: 4100 + index, startedAt: "2026-09-22T09:30:00+08:00" },
     logRef: `/tasks/${taskId}/services/${serviceName}/run-${index + 1}.log`,
     startedAt: "2026-09-22T09:30:00+08:00",

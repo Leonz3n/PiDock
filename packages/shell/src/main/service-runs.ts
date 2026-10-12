@@ -51,6 +51,15 @@ export interface RunVerification {
   at: string;
 }
 
+/**
+ * Where one run's port list came from. `declared` = the recipe/shared template's
+ * own port list plus the task's own `PORT`-like binding, i.e. what the launch is
+ * SET UP to bind; `observed` = a probe really saw this instance's listening
+ * socket. The Host owns no port probe, so a production run records `declared` -
+ * and the UI has to say so instead of showing a declared port as an observed one.
+ */
+export type PortsSource = "declared" | "observed";
+
 /** One recorded run of one service instance; logs and verifications hang off it. */
 export interface RunRecord {
   runId: string;
@@ -58,9 +67,12 @@ export interface RunRecord {
   serviceId: string;
   instanceId: string;
   templateVersion: string;
+  /** `unknown` when no working-tree read backed this run (see `buildRunRecord`). */
   codeState: { kind: CodeState; commit?: string; note: string };
   buildFreshness: BuildFreshness;
   ports: number[];
+  /** Declared vs really observed; never inferred from `ports` itself. */
+  portsSource: PortsSource;
   processIdentity: { owner: "agent" | "human"; pid: number; startedAt: string };
   /** Log file for this run: `<taskDir>/services/<serviceId>/run-<runId>.log`. */
   logRef: string;
@@ -87,7 +99,9 @@ const CODE_STATE_NOTE: Record<CodeState, string> = {
  * Build the run record for one start: config (template) version, code
  * state and build freshness, ports, process identity and the log file all
  * belong to the same record, so a stale/old build is distinguishable from
- * the running code.
+ * the running code. The port list is labelled (`portsSource`) because the
+ * caller decides whether a probe really saw the socket; the code/build
+ * fields are only filled when the caller really read the working tree.
  */
 export function buildRunRecord(input: {
   runId: string;
@@ -95,14 +109,22 @@ export function buildRunRecord(input: {
   serviceId: string;
   templateVersion: string;
   ports: readonly number[];
-  code: { commit?: string; dirty: boolean };
-  build: { commit?: string };
+  portsSource: PortsSource;
+  /**
+   * Real working-tree observation of the code this run started from. Absent
+   * means the caller did NOT read the working tree, and the record then says
+   * `unknown` by name instead of inheriting a guess: a run whose code state
+   * nobody observed must not read as clean.
+   */
+  code?: { commit?: string; dirty: boolean };
+  /** Commit the running build was made from, when that was really observed. */
+  build?: { commit?: string };
   processIdentity: { owner: "agent" | "human"; pid: number; startedAt: string };
   taskDir: string;
   startedAt: string;
   protocolArtifact?: { version: string };
 }): RunRecord {
-  const kind = classifyCodeState(input.code);
+  const kind = input.code === undefined ? "unknown" : classifyCodeState(input.code);
   const primaryPort = input.ports[0];
   return {
     runId: input.runId,
@@ -112,15 +134,16 @@ export function buildRunRecord(input: {
     templateVersion: input.templateVersion,
     codeState: {
       kind,
-      ...(input.code.commit !== undefined ? { commit: input.code.commit } : {}),
+      ...(input.code?.commit !== undefined ? { commit: input.code.commit } : {}),
       note: CODE_STATE_NOTE[kind],
     },
     buildFreshness: classifyBuildFreshness({
-      buildCommit: input.build.commit,
-      headCommit: input.code.commit,
-      dirty: input.code.dirty,
+      buildCommit: input.build?.commit,
+      headCommit: input.code?.commit,
+      dirty: input.code?.dirty ?? false,
     }),
     ports: [...input.ports],
+    portsSource: input.portsSource,
     processIdentity: { ...input.processIdentity },
     logRef: `${input.taskDir.replace(/[\\/]+$/, "")}/services/${input.serviceId}/run-${input.runId}.log`,
     ...(input.protocolArtifact !== undefined ? { protocolArtifact: { version: input.protocolArtifact.version } } : {}),
