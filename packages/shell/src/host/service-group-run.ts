@@ -132,6 +132,10 @@ export interface ServiceGroupRunResult {
   restartScope: { unitId: string; reason: "port-reallocated" | "binding-changed" | "template-version" }[];
   /** The plan's port reallocations, so a consumer update can be located. */
   reallocated: { unitId: string; before: number; after: number }[];
+  /**
+   * The plan's own planning diagnostics first (the read-point audit among them),
+   * then this run's own observations (start failures, refusals, reachability).
+   */
   diagnostics: RunDiagnostic[];
 }
 
@@ -142,6 +146,14 @@ export interface ServiceGroupPlanPort {
     units: RunUnit[];
     assignments: PortAssignment[];
     reallocated: { unitId: string; before: number; after: number }[];
+    /**
+     * The plan's own PLANNING diagnostics (port rules, variable bindings and the
+     * read-point audit, start groups, shared resources). This runner carries them
+     * into the group answer so the shipped panel shows them - the production
+     * caller discards the plan op's response, so a diagnostic that only lived
+     * there would never reach a user.
+     */
+    diagnostics: RunDiagnostic[];
   };
   /** The declared call/prestart edges the plan's verify steps are derived from. */
   plannedDependencies(): ServiceDependency[];
@@ -244,7 +256,7 @@ export async function runServiceGroupStart(input: ServiceGroupRunInput): Promise
       units: [...outcomes.values()],
       restartScope: [],
       reallocated: [...plan.reallocated],
-      diagnostics,
+      diagnostics: [...plan.diagnostics, ...diagnostics],
     };
   }
 
@@ -382,7 +394,7 @@ export async function runServiceGroupStart(input: ServiceGroupRunInput): Promise
     units: [...outcomes.values()],
     restartScope,
     reallocated: [...plan.reallocated],
-    diagnostics,
+    diagnostics: [...plan.diagnostics, ...diagnostics],
   };
 }
 
