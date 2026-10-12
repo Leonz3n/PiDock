@@ -189,10 +189,10 @@ describe.skipIf(process.platform === "win32")("#7 an unverified platform is name
     // Read by a Host that really is on win32-x64, the same record is a pass.
     expect(publicServiceStatus(services.get("svc")!, "win32-x64").launchVerification.rows.find((row) => row.platform === "win32-x64")?.verified).toBe(true);
     // A record that named no launch observation (the pre-existing input shape)
-    // is not evidence either.
+    // is not evidence either, and the row says exactly why.
     services.recordLaunchVerification("svc", { platform: "linux-x64", nodeVersion: "24.21.0", ok: true });
     const linux = publicServiceStatus(services.get("svc")!, "linux-x64").launchVerification.rows.find((row) => row.platform === "linux-x64");
-    expect(linux).toEqual({ platform: "linux-x64", verified: false, reason: "本任务尚无该平台的实测启动记录" });
+    expect(linux).toEqual({ platform: "linux-x64", verified: false, reason: "该平台只有未记录实测事实的条目，不算已验证" });
   });
 
   it("lists the exact row shape the renderer parses, so the two ends cannot drift apart", () => {
