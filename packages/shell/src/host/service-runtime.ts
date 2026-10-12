@@ -53,6 +53,8 @@ import {
 export type ServiceLaunchSource = "catalog" | "ui";
 import { appendBounded, truncateText } from "../main/bounded-buffer.js";
 import { SERVICE_CONTROL_SCOPE } from "../main/pi-session.js";
+import { LAUNCH_VERIFICATION_SCHEMA_VERSION } from "./task-store.js";
+import type { LaunchVerificationLog } from "./service-launch-verification.js";
 
 export type ServiceLifecycle = "stopped" | "running";
 
@@ -94,10 +96,39 @@ export interface ServiceRecord {
    * the record is read, including the UI-facing projection.
    */
   lastControl?: { action: "start" | "stop"; actor: ServiceControlActor };
-  /** Per-platform launch verifications (program+args, explicit). */
-  launchVerifications: { platform: string; nodeVersion: string; ok: boolean; note: string }[];
+  /**
+   * Per-platform launch verifications ([PiDock 04] #7 box 7). Each entry is at
+   * most one per platform and carries only what the Host really observed:
+   * `startedAt` means a real child of this service was confirmed alive on that
+   * platform, `stopped`/`stoppedAt` mean that launch was really stopped. An
+   * entry without either observation is NOT a verification and never reads as
+   * one.
+   */
+  launchVerifications: ServiceLaunchVerification[];
   /** Trusted-catalog registration only; `ui` registrations never execute. */
   launchSource: ServiceLaunchSource;
+}
+
+/** One platform's record of a launch of this service that the Host really observed. */
+export interface ServiceLaunchVerification {
+  /** `<process.platform>-<process.arch>` observed by the Host that launched (never a caller claim). */
+  platform: string;
+  /** `process.versions.node` of the Host that launched the child. */
+  nodeVersion: string;
+  ok: boolean;
+  note: string;
+  /**
+   * Explicit program token that was really spawned, when this entry records a
+   * launch. The argv travels with it and stays in the task Host
+   * (`publicServiceStatus` never projects it, like the descriptor's own argv).
+   */
+  program?: string;
+  args?: string[];
+  /** ISO time the real child was confirmed alive; present only for an observed launch. */
+  startedAt?: string;
+  /** True once a real stop of that launch was confirmed. */
+  stopped?: boolean;
+  stoppedAt?: string;
 }
 
 export interface ServiceStartPlan {
@@ -172,12 +203,39 @@ export function verifyServiceControlApproval(input: {
 
 export class TaskServiceRuntime {
   private readonly services = new Map<string, ServiceRecord>();
+  /**
+   * Platform verifications carried by this task's durable document, held per
+   * service so a service registered after this runtime started still shows the
+   * launch a previous Host really verified (a record that survived a restart).
+   */
+  private readonly persistedVerifications = new Map<string, ServiceLaunchVerification[]>();
 
   constructor(
     readonly taskDir: string,
     private readonly now: () => string = () => new Date().toISOString(),
+    /**
+     * Durable per-platform launch verifications of this task
+     * (`./service-launch-verification.ts`). Absent keeps them in memory only,
+     * which is exactly the pre-existing behaviour; a refused read leaves the
+     * platform unverified rather than inventing a pass.
+     */
+    private readonly verifications: LaunchVerificationLog | undefined = undefined,
   ) {
     if (taskDir.trim().length === 0) throw new Error("taskDir must be non-empty");
+    for (const entry of this.verifications?.read() ?? []) {
+      const rows = this.persistedVerifications.get(entry.serviceId) ?? [];
+      rows.push({
+        platform: entry.platform,
+        nodeVersion: entry.nodeVersion,
+        ok: true,
+        note: "",
+        program: entry.program,
+        args: [...entry.args],
+        startedAt: entry.startedAt,
+        ...(entry.stopped ? { stopped: true, stoppedAt: entry.stoppedAt } : {}),
+      });
+      this.persistedVerifications.set(entry.serviceId, rows);
+    }
   }
 
   ids(): string[] {
@@ -197,7 +255,7 @@ export class TaskServiceRuntime {
       resolved: [...record.resolved.map((entry) => ({ ...entry }))],
       ...(record.startedBy !== undefined ? { startedBy: { ...record.startedBy } } : {}),
       ...(record.lastControl !== undefined ? { lastControl: { action: record.lastControl.action, actor: { ...record.lastControl.actor } } } : {}),
-      launchVerifications: [...record.launchVerifications.map((entry) => ({ ...entry }))],
+      launchVerifications: record.launchVerifications.map((entry) => ({ ...entry, ...(entry.args !== undefined ? { args: [...entry.args] } : {}) })),
     };
   }
 
@@ -277,7 +335,9 @@ export class TaskServiceRuntime {
         ? { lastControl: { action: existing.lastControl.action, actor: { ...existing.lastControl.actor } } }
         : {}),
       events: [...(existing?.events ?? []), `config:registered:${input.templateVersion}:${input.launchSource ?? "ui"}`],
-      launchVerifications: existing ? [...existing.launchVerifications] : [],
+      launchVerifications: existing
+        ? existing.launchVerifications.map((entry) => ({ ...entry, ...(entry.args !== undefined ? { args: [...entry.args] } : {}) }))
+        : (this.persistedVerifications.get(input.serviceId) ?? []).map((entry) => ({ ...entry, ...(entry.args !== undefined ? { args: [...entry.args] } : {}) })),
       launchSource: input.launchSource ?? "ui",
     };
     this.services.set(input.serviceId, record);
@@ -469,19 +529,85 @@ export class TaskServiceRuntime {
     return out.sort((a, b) => (a.serviceId < b.serviceId ? -1 : 1));
   }
 
+  /**
+   * Record one platform's launch verification for this service ([PiDock 04] #7
+   * box 7). The production caller is the Host's own service-control dispatch
+   * (`service-control.ts`), and only after the process driver confirmed a real
+   * child started or a real stop. The observation is what makes the platform
+   * read as verified: an exact copy of a claim is never treated as evidence, so
+   * `ok` alone (the pre-existing input shape, which carries no launch fact)
+   * records a note no surface may show as a pass.
+   *
+   * One entry per platform: a later observation of the same platform merges
+   * into it (a stop must not append a second row that hides the start).
+   *
+   * A durable write is attempted FIRST and the in-memory entry is kept only
+   * when it succeeded: a verification the task workspace refused to persist
+   * must not surface as verified. The launch itself already happened, so a
+   * failed write never fails the control — it leaves the platform unverified
+   * and names the reason in the service's own event trail.
+   */
   recordLaunchVerification(
     serviceId: string,
-    input: { platform: string; nodeVersion: string; ok: boolean; note?: string },
+    input: {
+      platform: string;
+      nodeVersion: string;
+      ok: boolean;
+      note?: string;
+      /** The explicit program token of the launch this observation comes from. */
+      program?: string;
+      /** Its exact argv (kept in this Host; the public projection never sends it). */
+      args?: string[];
+      /** True when the observation is a confirmed stop of the launch recorded for this platform. */
+      stopped?: boolean;
+    },
   ): void {
     const record = this.services.get(serviceId);
     if (!record) throw new Error(`unknown-service: ${serviceId} is not registered on this task`);
-    record.launchVerifications.push({
+    const at = record.launchVerifications.findIndex((entry) => entry.platform === input.platform);
+    const previous = at < 0 ? undefined : record.launchVerifications[at];
+    const observedAt = this.now();
+    const launched = input.program !== undefined;
+    const entry: ServiceLaunchVerification = {
       platform: input.platform,
       nodeVersion: input.nodeVersion,
       ok: input.ok,
       note: input.note ?? "",
-    });
-    record.events.push(`launch-verified:${input.platform}:${input.ok ? "ok" : "fail"}`);
+      ...(launched
+        ? { program: input.program, args: [...(input.args ?? [])], startedAt: observedAt }
+        : previous?.startedAt !== undefined
+          ? { program: previous.program, args: [...(previous.args ?? [])], startedAt: previous.startedAt }
+          : {}),
+      ...(input.stopped === true
+        ? { stopped: true, stoppedAt: observedAt }
+        : previous?.stopped === true
+          ? { stopped: true, stoppedAt: previous.stoppedAt }
+          : {}),
+    };
+    // Only an entry that names a real launch is persisted: a stop with no
+    // recorded start for this platform verifies no launch, so it stays a note.
+    if (entry.startedAt !== undefined && this.verifications) {
+      try {
+        this.verifications.record({
+          schemaVersion: LAUNCH_VERIFICATION_SCHEMA_VERSION,
+          serviceId,
+          platform: entry.platform,
+          nodeVersion: entry.nodeVersion,
+          program: entry.program ?? "",
+          args: [...(entry.args ?? [])],
+          startedAt: entry.startedAt ?? observedAt,
+          stopped: entry.stopped === true,
+          ...(entry.stopped === true ? { stoppedAt: entry.stoppedAt ?? observedAt } : {}),
+        });
+      } catch (error) {
+        record.events.push(`launch-verification-unrecorded:${entry.platform}:${error instanceof Error ? error.message : String(error)}`);
+        this.pushLog(record, `平台实测记录未能写入，未记为已验证：${entry.platform}`);
+        return;
+      }
+    }
+    if (at < 0) record.launchVerifications.push(entry);
+    else record.launchVerifications[at] = entry;
+    record.events.push(`launch-verified:${entry.platform}:${entry.startedAt !== undefined ? (entry.stopped === true ? "started+stopped" : "started") : "stop-only"}`);
   }
 
   private pushLog(record: ServiceRecord, line: string): void {

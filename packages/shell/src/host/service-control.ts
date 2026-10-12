@@ -30,6 +30,7 @@
 
 import type { PiApproval, PiApprovalScope, PiGateDecision, PiPermission } from "../main/pi-session.js";
 import { SERVICE_CONTROL_SCOPE } from "../main/pi-session.js";
+import { hostPlatformLabel } from "../main/service-config.js";
 import { writeClaimError, type WriteCoordinatorPort } from "./write-coordination.js";
 import type { ControlExecutionHandle, ControlExecutionPort } from "./execution-ledger.js";
 import { SERVICE_CONTROL_TOOL, type TaskServiceRuntime } from "./service-runtime.js";
@@ -146,6 +147,23 @@ export async function runHumanServiceControl(input: {
 }
 
 /**
+ * Record the platform verification of one launch that really happened
+ * ([PiDock 04] #7 box 7). Called only after the process driver resolved with a
+ * real child pid (start) or confirmed the registered child's end (stop), and
+ * the platform/node version are this Host's own `process` facts — never a
+ * caller claim — so the record cannot exist without a real launch. The
+ * program token comes from the same registered descriptor the driver spawned
+ * (`task/controlService` plans from the registration, not from the request).
+ */
+function recordVerifiedLaunch(services: TaskServiceRuntime, serviceId: string, fact: "started" | "stopped"): void {
+  const descriptor = services.get(serviceId)?.descriptor;
+  const observed = { platform: hostPlatformLabel(), nodeVersion: process.versions.node, ok: true };
+  services.recordLaunchVerification(serviceId, fact === "started"
+    ? { ...observed, ...(descriptor !== undefined ? { program: descriptor.program, args: descriptor.args } : {}) }
+    : { ...observed, stopped: true });
+}
+
+/**
  * The one place a service start/stop is dispatched: resolve the real driver,
  * act, and only then record the lifecycle the process really has. Every
  * refusal and every driver failure returns before any state change, so a
@@ -168,6 +186,7 @@ async function runServiceAction(
       return { ok: false, error: error instanceof Error ? error.message : String(error) };
     }
     services.markStarted(serviceId, actor, `process alive (pid ${pid}); dependencies not probed`);
+    recordVerifiedLaunch(services, serviceId, "started");
     return { ok: true };
   }
   try {
@@ -176,6 +195,7 @@ async function runServiceAction(
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
   services.markStopped(serviceId, actor, actor.kind === "human" ? "human-request" : "agent-request");
+  recordVerifiedLaunch(services, serviceId, "stopped");
   return { ok: true };
 }
 

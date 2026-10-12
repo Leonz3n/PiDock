@@ -130,6 +130,7 @@ const EXECUTION_FILE = "execution.json";
 const SCHEDULE_FILE = "schedules.json";
 const REMOTE_DEVICE_FILE = "remote-devices.json";
 const SERVICE_OWNERSHIP_FILE = "service-ownership.json";
+const LAUNCH_VERIFICATION_FILE = "service-launch-verification.json";
 
 function assertSafeFileName(name: string, label: string): void {
   if (
@@ -1297,6 +1298,154 @@ export function readServiceOwnershipOnDisk(taskDir: string): ServiceOwnershipDis
     return parseServiceOwnershipRecord(readFileSync(serviceOwnershipFilePath(taskDir), "utf8"));
   } catch (error) {
     if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return emptyServiceOwnershipDiskRecord();
+    throw error;
+  }
+}
+
+export const LAUNCH_VERIFICATION_SCHEMA_VERSION = 1;
+/** `<process.platform>-<process.arch>` of the process that observed the launch. */
+const PLATFORM_LABEL = /^[a-z0-9]+-[a-z0-9]+$/;
+
+/**
+ * One per-platform verification of a REAL launch of one service in this task
+ * ([PiDock 04] #7 box 7). `startedAt`/`stopped` are observations, not intentions:
+ * they are written only after the Host's own process driver confirmed a real
+ * child, which is why their presence is what makes a platform "verified".
+ */
+export interface LaunchVerificationEntry {
+  schemaVersion: typeof LAUNCH_VERIFICATION_SCHEMA_VERSION;
+  serviceId: string;
+  /** Platform label observed at launch time (`hostPlatformLabel()`). */
+  platform: string;
+  /** `process.versions.node` of the process that launched the child. */
+  nodeVersion: string;
+  /** Explicit program token that was really spawned (never a shell string). */
+  program: string;
+  /** Its exact argv, kept in the task Host like the descriptor's own argv. */
+  args: string[];
+  /** ISO time the real child of this launch was confirmed alive. */
+  startedAt: string;
+  /** True once a real stop of that launch was confirmed. */
+  stopped: boolean;
+  /** ISO time of that confirmed stop; present exactly when `stopped`. */
+  stoppedAt?: string;
+}
+
+export interface LaunchVerificationDiskRecord {
+  version: typeof LAUNCH_VERIFICATION_SCHEMA_VERSION;
+  entries: LaunchVerificationEntry[];
+}
+
+export function emptyLaunchVerificationDiskRecord(): LaunchVerificationDiskRecord {
+  return { version: LAUNCH_VERIFICATION_SCHEMA_VERSION, entries: [] };
+}
+
+export function launchVerificationFilePath(taskDir: string): string {
+  return join(taskDir, LAUNCH_VERIFICATION_FILE);
+}
+
+/**
+ * Strict on read: a corrupt document is never partially believed. A platform
+ * whose record cannot be parsed is simply not verified (the surface then says so
+ * by name), never upgraded to a pass.
+ */
+function parseLaunchVerificationEntry(value: unknown): LaunchVerificationEntry {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("invalid-payload: launch verification entry must be an object");
+  }
+  const entry = value as Record<string, unknown>;
+  if (entry["schemaVersion"] !== LAUNCH_VERIFICATION_SCHEMA_VERSION) {
+    throw new Error(`invalid-payload: launch verification entry.schemaVersion must be ${LAUNCH_VERIFICATION_SCHEMA_VERSION}`);
+  }
+  for (const key of ["serviceId", "nodeVersion", "program", "startedAt"] as const) {
+    if (typeof entry[key] !== "string" || (entry[key] as string).length === 0) {
+      throw new Error(`invalid-payload: launch verification entry.${key} must be a non-empty string`);
+    }
+  }
+  assertSafeFileName(entry["serviceId"] as string, "serviceId");
+  if (typeof entry["platform"] !== "string" || !PLATFORM_LABEL.test(entry["platform"])) {
+    throw new Error("invalid-payload: launch verification entry.platform must be a <platform>-<arch> label");
+  }
+  if (!Array.isArray(entry["args"]) || entry["args"].some((arg) => typeof arg !== "string")) {
+    throw new Error("invalid-payload: launch verification entry.args must be a string array");
+  }
+  if (typeof entry["stopped"] !== "boolean") {
+    throw new Error("invalid-payload: launch verification entry.stopped must be a boolean");
+  }
+  // A stop time without a stop (or a bare stop with no time) would let a reader
+  // infer an observation that was never recorded.
+  if (entry["stopped"] === true) {
+    if (typeof entry["stoppedAt"] !== "string" || (entry["stoppedAt"] as string).length === 0) {
+      throw new Error("invalid-payload: launch verification entry.stoppedAt is required once stopped");
+    }
+  } else if (entry["stoppedAt"] !== undefined) {
+    throw new Error("invalid-payload: launch verification entry.stoppedAt requires stopped");
+  }
+  return value as LaunchVerificationEntry;
+}
+
+export function serializeLaunchVerificationRecord(record: LaunchVerificationDiskRecord): string {
+  return JSON.stringify(record, null, 2);
+}
+
+/** Full validation on read; a second entry for the same (service, platform) is corrupt, not last-wins. */
+export function parseLaunchVerificationRecord(raw: string): LaunchVerificationDiskRecord {
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`invalid-payload: launch verification record is not valid JSON: ${(error as Error).message}`);
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("invalid-payload: launch verification record must be an object");
+  }
+  const record = value as Record<string, unknown>;
+  if (record["version"] !== LAUNCH_VERIFICATION_SCHEMA_VERSION) {
+    throw new Error(`invalid-payload: launch verification record.version must be ${LAUNCH_VERIFICATION_SCHEMA_VERSION}`);
+  }
+  if (!Array.isArray(record["entries"])) {
+    throw new Error("invalid-payload: launch verification record.entries must be an array");
+  }
+  const entries = (record["entries"] as unknown[]).map((entry) => parseLaunchVerificationEntry(entry));
+  const keys = new Set<string>();
+  for (const entry of entries) {
+    const key = `${entry.serviceId}\u0000${entry.platform}`;
+    if (keys.has(key)) throw new Error(`invalid-payload: duplicate launch verification entry ${entry.serviceId} on ${entry.platform}`);
+    keys.add(key);
+  }
+  return { version: LAUNCH_VERIFICATION_SCHEMA_VERSION, entries };
+}
+
+/**
+ * Atomic replacement (exclusive temp file + fsync + rename) like the sibling
+ * ownership document: a crash mid-write must leave either the previous
+ * verification or the new one, never a truncated file that could lose a real
+ * record.
+ */
+export function writeLaunchVerificationOnDisk(taskDir: string, record: LaunchVerificationDiskRecord): void {
+  mkdirSync(taskDir, { recursive: true });
+  if (!lstatSync(taskDir).isDirectory()) throw new Error("invalid task directory");
+  const text = serializeLaunchVerificationRecord(record);
+  parseLaunchVerificationRecord(text);
+  const file = launchVerificationFilePath(taskDir);
+  try {
+    if (!lstatSync(file).isFile()) throw new Error("invalid launch verification record file");
+  } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  const tmp = `${file}.${randomUUID()}.tmp`;
+  try {
+    const fd = openSync(tmp, "wx", 0o600);
+    try { writeFileSync(fd, text, "utf8"); fsyncSync(fd); }
+    finally { closeSync(fd); }
+    renameSync(tmp, file);
+  } finally { rmSync(tmp, { force: true }); }
+}
+
+/** Absent file = a task with no recorded platform verification (empty, not an error). */
+export function readLaunchVerificationOnDisk(taskDir: string): LaunchVerificationDiskRecord {
+  try {
+    return parseLaunchVerificationRecord(readFileSync(launchVerificationFilePath(taskDir), "utf8"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return emptyLaunchVerificationDiskRecord();
     throw error;
   }
 }
