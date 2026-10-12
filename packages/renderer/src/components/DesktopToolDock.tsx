@@ -22,10 +22,12 @@ import {
   serviceLogFromHost,
   shellFailure,
   type BoundServiceRow,
+  type ServiceRunRecordView,
   type ServiceStatusView,
   type ServiceRegistryStatusView,
   type TaskServicesLoad,
 } from "../data/taskServices";
+import { buildFreshnessLabel, codeStateLabel } from "../data/serviceTopology";
 import { ProtocolPanel, TerminalTakeoverPanel } from "./ToolPanels";
 import { ServiceOwnerRebind } from "./ServiceOwnerRebind";
 import {
@@ -55,7 +57,9 @@ import {
  * - 协议: `task/protocolState`
  * - 运行/日志: `shell/projectOp associations` + `serviceCatalogOp taskBindings|list`
  *   (the task's real bound services), `task/serviceStatus` (the Host's own
- *   runtime answer) and `task/serviceLog` (on-demand log tail).
+ *   runtime answer), `task/serviceRunRecords` (the Host's real run record:
+ *   declared-vs-observed ports, code/build state, process identity, exit reason)
+ *   and `task/serviceLog` (on-demand log tail).
  * - 浏览器: `task/browserAction` (`page/open`, `page/state`, `evidence`,
  *   `takeover/pause|resume`); main owns the visible page, so the page itself is
  *   never embedded here.
@@ -188,6 +192,69 @@ function serviceRunning(row: BoundServiceRow): boolean {
 
 function serviceName(row: BoundServiceRow): string {
   return row.template?.descriptor.name ?? row.binding.serviceId;
+}
+
+/**
+ * The run record's port line ([PiDock 05] #10 box 6 honesty). The Host owns no
+ * port probe, so a production run is `declared`: the list is what the launch is
+ * SET UP to bind, never what was seen listening. The two origins are named
+ * (`配方声明端口` / `实测监听`) so a declared port can never read as observed, and
+ * an unlabelled list says it was not labelled instead of picking a side.
+ */
+function runPortText(record: ServiceRunRecordView): string {
+  if (record.ports.length === 0) return "无端口绑定";
+  const ports = record.ports.map((port) => `127.0.0.1:${port}`).join(" ");
+  if (record.portsSource === "observed") return `${ports}（实测监听）`;
+  if (record.portsSource === "declared") return `${ports}（配方声明端口 · 未实测监听）`;
+  return `${ports}（来源未标注 · 未实测监听）`;
+}
+
+/** One `label: value` frame of the run record. */
+function RunFact({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <>
+      <dt className="text-muted">{label}</dt>
+      <dd className={`min-w-0 break-all ${mono ? "font-mono" : ""}`}>{value}</dd>
+    </>
+  );
+}
+
+/**
+ * The Host's real run record for one service ([PiDock 05] #10 box 6): 运行标识,
+ * 模板版本, code/build state, the DECLARED-vs-OBSERVED port label, the real
+ * process identity (owner + pid + start time) and the per-run log entry. Only
+ * facts the Host recorded are printed; nothing is inferred. No argv or raw
+ * environment is carried here (the Host's `RunRecord` has none).
+ */
+function RunRecordFacts({ record }: { record: ServiceRunRecordView }) {
+  return (
+    <div className="mt-0.5 min-w-0 text-[10px] text-muted" data-testid="dock-run-record">
+      <dl className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-0.5">
+        <RunFact label="运行标识" value={record.runId} mono />
+        <RunFact label="模板版本" value={record.templateVersion} />
+        <RunFact label="代码状态" value={`${codeStateLabel(record.codeState)}${record.codeCommit !== undefined ? ` · ${record.codeCommit}` : ""}`} />
+        <RunFact label="构建状态" value={buildFreshnessLabel(record.buildFreshness)} />
+        <RunFact label="端口" value={runPortText(record)} />
+        <RunFact label="进程标识" value={`${record.processIdentity.owner === "human" ? "用户操作" : "Agent"} · pid ${record.processIdentity.pid} · ${record.processIdentity.startedAt}`} />
+        <RunFact label="日志入口" value={record.logRef} mono />
+        {record.exitReason !== undefined && <RunFact label="结束原因" value={record.exitReason} />}
+      </dl>
+    </div>
+  );
+}
+
+/**
+ * The run-record line of one bound service. Three exclusive states, each named:
+ * the Host's real record, its named refusal/unreadable answer, or the explicit
+ * "no record yet" state. The third is not an empty success: a service nobody
+ * really started here says so by name.
+ */
+function ServiceRunRecord({ row }: { row: BoundServiceRow }) {
+  if (row.runRecordError !== undefined) {
+    return <p role="alert" className="mt-0.5 min-w-0 break-words text-[10px] text-[#ad4545]" data-testid="dock-run-record-error">{row.runRecordError}</p>;
+  }
+  if (row.runRecord !== undefined) return <RunRecordFacts record={row.runRecord} />;
+  return <p className="mt-0.5 text-[10px] text-muted" data-testid="dock-run-record-absent">尚无本任务实测启动记录</p>;
 }
 
 function attribution(entry: WorkspaceAttributionView) {
@@ -835,6 +902,7 @@ function RunTool({ taskId }: { taskId: string }) {
                       绑定 v{row.binding.templateVersion} · {row.binding.rootId}{row.binding.subdir ? `/${row.binding.subdir}` : ""}
                       {row.binding.privateKeys.length > 0 ? ` · 私有引用 ${row.binding.privateKeys.length} 项` : ""}
                     </p>
+                    <ServiceRunRecord row={row} />
                     <ServiceControl taskId={taskId} projectId={boundProjectId} row={row} onChanged={() => setRevision((value) => value + 1)} />
                     {row.status?.kind === "registry" && <LaunchVerification view={row.status.launchVerification} />}
                     <UnwiredControls id="service-mode" label="本地 / 远程" />

@@ -349,12 +349,16 @@ type PanelBridgeOptions = {
   browser?: (request: Record<string, unknown>) => unknown;
   run?: (request: Record<string, unknown>) => unknown;
   rebind?: (request: Record<string, unknown>) => unknown;
+  runRecords?: () => unknown;
 };
 
 function panelBridge(options: PanelBridgeOptions = {}) {
   const taskOp = vi.fn(async (_taskId: string, op: string, payload: Record<string, unknown>) => {
     if (op === "task/serviceStatus") return options.statuses ? options.statuses(String(payload["serviceId"])) : { ok: false, error: "unexpected task/serviceStatus" };
     if (op === "task/serviceLog") return options.logs ? options.logs(String(payload["serviceId"])) : { ok: false, error: "unexpected task/serviceLog" };
+    // Default: the Host answered and holds no run record, so a row says so by
+    // name rather than reading as a silent success.
+    if (op === "task/serviceRunRecords") return options.runRecords ? options.runRecords() : { ok: true, payload: { records: [], registered: [] } };
     if (op === "task/browserAction") {
       const request = payload as Record<string, unknown>;
       if (!options.browser) return { ok: false, error: "unexpected task/browserAction" };
