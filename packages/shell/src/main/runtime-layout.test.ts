@@ -306,7 +306,8 @@ describe("trusted Electron view modes", () => {
         layers: { repoDefaults: [], shared: [], privateEntries: [], task: [] },
         templateVersion: 2,
       })));
-      registerIpc({} as never, views.registry, { routeTaskOp } as never,
+      // The registry binds one shared-template handler per forked task ([PiDock 04] #7 box 6).
+      registerIpc({} as never, views.registry, { routeTaskOp, configureServiceTemplates: vi.fn() } as never,
         undefined, undefined, undefined, undefined, undefined, { launchFor } as never);
       const handler = vi.mocked(ipcMain.handle).mock.calls.findLast(([channel]) => channel === "shell/serviceCatalogOp")?.[1];
       expect(handler).toBeDefined();

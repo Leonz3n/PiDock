@@ -129,7 +129,7 @@ describe("application window lifecycle", () => {
     const children = [new EventEmitter(), new EventEmitter()].map((events) => Object.assign(events, { kill: vi.fn() }));
     const registry = new PerTaskHostRegistry("workspace-a", async (_ws, task) => ({
       child: children[task.taskId === "task-a" ? 0 : 1] as never,
-      client: { onBrowserRequest: vi.fn(), dispose: vi.fn(), task: vi.fn(async () => ({
+      client: { onBrowserRequest: vi.fn(), onServiceTemplateRequest: vi.fn(), dispose: vi.fn(), task: vi.fn(async () => ({
         workspaceId: "workspace-a", taskId: task.taskId, op: "task/quit",
         payload: { quit: { applied: [], plan: { failures: [], retainedTasks: [] } } },
       })) } as never,
