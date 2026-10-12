@@ -4,6 +4,7 @@ import {
   serviceTemplateUpdateFromMain,
   serviceTemplatesFromMain,
   sharedRowsForCatalog,
+  type ServiceDependencyKind,
   type ServiceTemplateUpdateReviewView,
   type ServiceTemplateView,
 } from "../data/serviceCatalog";
@@ -19,6 +20,8 @@ const runTypeLabel = { "long-lived": "常驻服务", "one-shot": "一次性命�
 type RunType = keyof typeof runTypeLabel;
 const healthKindLabel = { "": "不设置", http: "HTTP", tcp: "TCP", grpc: "gRPC" } as const;
 type HealthKind = keyof typeof healthKindLabel;
+/** The two dependency kinds, named as the spec names them (服务调用依赖 / 启动前置条件). */
+const dependencyKindLabel = { call: "调用依赖", prestart: "启动前置" } as const satisfies Record<ServiceDependencyKind, string>;
 
 interface Draft {
   name: string;
@@ -31,12 +34,17 @@ interface Draft {
   /** Repo-relative working directory; empty means the repository root. */
   workdir: string;
   shared: { key: string; value: string }[];
+  /**
+   * The revision's 服务依赖声明 (ADR 0002). Empty is the honest "no declaration":
+   * the save then sends no `dependencies` key at all and the plan keeps no edge.
+   */
+  dependencies: { to: string; kind: ServiceDependencyKind }[];
 }
 /** Editing an existing revision: its identity plus the version the page last read. */
 type EditTarget = { serviceId: string; version: number };
 
 const emptyDraft = (): Draft => ({ name: "", program: "", args: [""], ports: "", runType: "long-lived",
-  healthKind: "", healthTarget: "", workdir: "", shared: [] });
+  healthKind: "", healthTarget: "", workdir: "", shared: [], dependencies: [] });
 
 const draftFromTemplate = (row: ServiceTemplateView): Draft => ({
   name: row.descriptor.name,
@@ -48,6 +56,7 @@ const draftFromTemplate = (row: ServiceTemplateView): Draft => ({
   healthTarget: row.descriptor.healthCheck?.target ?? "",
   workdir: row.descriptor.workdir ?? "",
   shared: row.shared.map((entry) => ({ key: entry.key, value: entry.value })),
+  dependencies: (row.dependencies ?? []).map((dependency) => ({ ...dependency })),
 });
 
 /**
@@ -205,6 +214,13 @@ export function ProjectServiceTemplates({ projectId, environmentId, environmentN
   const buildValue = () => {
     const parsedPorts = servicePortsFromDraft(draft.ports);
     if ("error" in parsedPorts) { setError(parsedPorts.error.message); return null; }
+    // A declaration needs a target this environment really has: a row without one
+    // is refused HERE by name instead of being sent as an empty graph.
+    const dependencies = draft.dependencies.map((row) => ({ to: row.to, kind: row.kind }));
+    if (dependencies.some((row) => row.to === "")) {
+      setError("服务依赖声明缺少目标服务，请选择本环境已保存的其他服务");
+      return null;
+    }
     const healthCheck = draft.healthKind === ""
       ? undefined
       : { kind: draft.healthKind as ServiceHealthKind, ...(draft.healthTarget.trim() === "" ? {} : { target: draft.healthTarget.trim() }) };
@@ -216,7 +232,10 @@ export function ProjectServiceTemplates({ projectId, environmentId, environmentN
     if (invalid) { setError(invalid.message); return null; }
     return { descriptor: { name: candidate.name.trim(), program: candidate.program.trim(), args: candidate.args, ports: candidate.ports,
         runType: candidate.runType, ...(healthCheck === undefined ? {} : { healthCheck }), ...(workdir === undefined ? {} : { workdir: workdir.trim() }) },
-      shared: sharedRowsForCatalog(candidate.shared) };
+      shared: sharedRowsForCatalog(candidate.shared),
+      // No declaration => no `dependencies` key at all: the request keeps the
+      // shape it had before this slice carried one, and no edge is implied.
+      ...(dependencies.length === 0 ? {} : { dependencies }) };
   };
 
   /** The template the confirmed save must produce, or null when the list moved under us. */
@@ -225,15 +244,30 @@ export function ProjectServiceTemplates({ projectId, environmentId, environmentN
     return current && current.version === target.version ? current.version + 1 : null;
   };
 
+  /**
+   * The services this revision may declare a dependency on: the environment's
+   * OTHER services, by the catalog's own identity. The page never invents a
+   * target and never offers a self-edge.
+   */
+  const dependencyTargets = (templates ?? []).filter((row) => row.serviceId !== editTarget?.serviceId);
+  /** The name of a declared target (the raw service id when no row can name it - never an invented name). */
+  const dependencyTargetName = (serviceId: string) =>
+    templates?.find((row) => row.serviceId === serviceId)?.descriptor.name ?? serviceId;
+  /** The next (target, kind) pair nobody has declared yet; undefined means there is nothing left to add. */
+  const nextDependency = dependencyTargets
+    .flatMap((row) => (["call", "prestart"] as ServiceDependencyKind[]).map((kind) => ({ to: row.serviceId, kind })))
+    .find((candidate) => !draft.dependencies.some((row) => row.to === candidate.to && row.kind === candidate.kind));
+
   /** True when a projected row is exactly the revision the page asked main to write. */
-  const matchesValue = (row: ServiceTemplateView, value: { descriptor: ServiceTemplateView["descriptor"]; shared: { key: string; value: string }[] }) =>
+  const matchesValue = (row: ServiceTemplateView, value: { descriptor: ServiceTemplateView["descriptor"]; shared: { key: string; value: string }[]; dependencies?: { to: string; kind: ServiceDependencyKind }[] }) =>
     row.descriptor.name === value.descriptor.name && row.descriptor.program === value.descriptor.program &&
     row.descriptor.args.join("\0") === value.descriptor.args.join("\0") &&
     row.descriptor.ports.join(",") === value.descriptor.ports.join(",") &&
     row.descriptor.runType === value.descriptor.runType &&
     JSON.stringify(row.descriptor.healthCheck ?? null) === JSON.stringify(value.descriptor.healthCheck ?? null) &&
     (row.descriptor.workdir ?? "") === (value.descriptor.workdir ?? "") &&
-    JSON.stringify(row.shared) === JSON.stringify(value.shared.map((entry) => ({ key: entry.key, value: entry.value })));
+    JSON.stringify(row.shared) === JSON.stringify(value.shared.map((entry) => ({ key: entry.key, value: entry.value }))) &&
+    JSON.stringify(row.dependencies ?? []) === JSON.stringify(value.dependencies ?? []);
 
   const createTemplate = async (targetProjectId: string, targetEnvironmentId: string) => {
     const value = buildValue();
@@ -339,6 +373,9 @@ export function ProjectServiceTemplates({ projectId, environmentId, environmentN
       <div className="min-w-0"><strong className="break-words font-medium">{row.descriptor.name}</strong><span className="ml-2 text-muted">v{row.version} · {runTypeLabel[row.descriptor.runType]} · {row.descriptor.healthCheck ? `健康检查 ${row.descriptor.healthCheck.kind}` : "未设置健康检查"} · {workdirLabel(row)}</span>
         <p className="mt-1 break-all text-muted">{[row.descriptor.program, ...row.descriptor.args].join(" ")}</p>
         {!!row.shared.length && <p className="mt-1 break-all text-muted">共享变量：{row.shared.map((entry) => entry.key).join("、")}</p>}
+        {row.dependencies?.length
+          ? <p className="mt-1 break-all text-muted">服务依赖声明：{row.dependencies.map((dependency) => `${dependencyKindLabel[dependency.kind]}→${dependencyTargetName(dependency.to)}`).join("、")}</p>
+          : <p className="mt-1 text-muted">依赖声明：无（无依赖边，未做互验）</p>}
       </div><div className="flex gap-1"><Button type="button" size="sm" variant="outline" onClick={() => openEdit(row)}><Icon name="settings" />编辑</Button><Button type="button" size="sm" variant="outline" onClick={() => setBindingId(bindingId === row.serviceId ? null : row.serviceId)}><Icon name="link" />任务绑定</Button></div>
       {bindingId === row.serviceId && <div className="w-full"><TaskServiceBinding key={`${environmentId}/${row.serviceId}`} template={row} environmentName={environmentName} tasks={tasks} /></div>}
     </div>)}
@@ -362,6 +399,21 @@ export function ProjectServiceTemplates({ projectId, environmentId, environmentN
       {draft.args.map((arg, index) => <div key={index} className="mb-2 flex gap-2"><input aria-label={`参数 ${index + 1}`} className="min-h-8 min-w-0 flex-1 rounded-[4px] border border-line bg-paper px-2" value={arg} onChange={(event) => change({ ...draft, args: draft.args.map((item, at) => at === index ? event.target.value : item) })} /><Button type="button" size="icon" variant="ghost" aria-label={`移除参数 ${index + 1}`} title="移除参数" onClick={() => change({ ...draft, args: draft.args.filter((_, at) => at !== index) })}><Icon name="close" /></Button></div>)}
       <div className="mt-3 flex items-center justify-between"><span>共享变量</span><Button type="button" size="icon" variant="ghost" aria-label="添加共享变量" title="添加共享变量" disabled={draft.shared.length >= 80} onClick={() => change({ ...draft, shared: [...draft.shared, { key: "", value: "" }] })}><Icon name="plus" /></Button></div>
       {draft.shared.map((row, index) => <div key={index} className="mb-2 flex min-w-0 gap-2"><input aria-label={`共享变量 KEY ${index + 1}`} className="min-h-8 min-w-0 w-2/5 rounded-[4px] border border-line bg-paper px-2" value={row.key} onChange={(event) => change({ ...draft, shared: draft.shared.map((item, at) => at === index ? { ...item, key: event.target.value } : item) })} /><input aria-label={`共享变量 VALUE ${index + 1}`} className="min-h-8 min-w-0 flex-1 rounded-[4px] border border-line bg-paper px-2" value={row.value} onChange={(event) => change({ ...draft, shared: draft.shared.map((item, at) => at === index ? { ...item, value: event.target.value } : item) })} /><Button type="button" size="icon" variant="ghost" aria-label={`移除共享变量 ${index + 1}`} title="移除共享变量" onClick={() => change({ ...draft, shared: draft.shared.filter((_, at) => at !== index) })}><Icon name="close" /></Button></div>)}
+      <div className="mt-3 flex items-center justify-between"><span>服务依赖声明</span><Button type="button" size="icon" variant="ghost" aria-label="添加依赖" title="添加依赖" disabled={nextDependency === undefined || draft.dependencies.length >= 40} onClick={() => { if (nextDependency) change({ ...draft, dependencies: [...draft.dependencies, nextDependency] }); }}><Icon name="plus" /></Button></div>
+      {draft.dependencies.length === 0 && <p className="mb-2 text-muted">{dependencyTargets.length === 0
+        ? "本环境还没有其他已保存的服务可作为依赖目标；依赖声明按环境保存，先保存目标服务后再回来声明"
+        : "无依赖声明：保存后计划里不会有任何依赖边，面板按名显示「无依赖边（未做互验）」"}</p>}
+      {draft.dependencies.map((row, index) => <div key={index} className="mb-2 flex min-w-0 gap-2">
+        <select aria-label={`依赖目标 ${index + 1}`} className="min-h-8 min-w-0 flex-1 rounded-[4px] border border-line bg-paper px-2" value={row.to} onChange={(event) => change({ ...draft, dependencies: draft.dependencies.map((item, at) => at === index ? { ...item, to: event.target.value } : item) })}>
+          {dependencyTargets.map((target) => <option key={target.serviceId} value={target.serviceId}>{target.descriptor.name}</option>)}
+          {dependencyTargets.every((target) => target.serviceId !== row.to) && <option value={row.to}>{row.to}</option>}
+        </select>
+        <select aria-label={`依赖类型 ${index + 1}`} className="min-h-8 rounded-[4px] border border-line bg-paper px-2" value={row.kind} onChange={(event) => change({ ...draft, dependencies: draft.dependencies.map((item, at) => at === index ? { ...item, kind: event.target.value as ServiceDependencyKind } : item) })}>
+          {Object.entries(dependencyKindLabel).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+        </select>
+        <Button type="button" size="icon" variant="ghost" aria-label={`移除依赖 ${index + 1}`} title="移除依赖" onClick={() => change({ ...draft, dependencies: draft.dependencies.filter((_, at) => at !== index) })}><Icon name="close" /></Button>
+      </div>)}
+      <p className="mt-1 text-muted">依赖声明保存在本环境的共享模板里（ADR 0002）；目标按服务身份选择，不能指向自己或本环境之外的服务，重复声明会被主进程按名拒绝。调用依赖=运行时调用（被调方先监听），启动前置=目标先就绪。没有声明就是没有边；依赖地址与本地端口属于任务覆盖，不在本页。</p>
       {error && <p role="alert" className="my-2 text-[#ad4545]">{error}</p>}
       {review && editTarget && update && <div role="status" className="mt-3 border-t border-line py-2">
         <p>将生成 {update.versionLabel}（当前 v{editTarget.version}）{update.saved ? " · 已保存" : " · 待确认"}</p>
@@ -370,7 +422,12 @@ export function ProjectServiceTemplates({ projectId, environmentId, environmentN
         {update.diff.changed.map((entry) => <p key={entry.key}>修改：{entry.key}：{entry.before} → {entry.after}</p>)}
         {!!update.diff.removed.length && <p>移除：{update.diff.removed.join("、")}</p>}
         <p>启动字段差异：{update.descriptorChanged ? "有（程序、参数、端口、运行类型、健康检查或工作目录）" : "无"}</p>
-        <p className="mt-1">保存配置不等于重启进程：本页与「任务绑定」都不会启动、停止或重启任何进程（processRestarted: 否）。{update.contentChanged ? "本次保存改变了启动材料。" : "本次保存未改变任何启动字段与共享变量，因此不产生需重启项。"}</p>
+        <p>服务依赖声明差异：{update.dependenciesChanged ? "有（本环境的新版本才带这些声明）" : "无"}</p>
+        <p className="mt-1">保存配置不等于重启进程：本页与「任务绑定」都不会启动、停止或重启任何进程（processRestarted: 否）。{update.contentChanged
+          ? "本次保存改变了启动材料。"
+          : update.dependenciesChanged
+            ? "本次保存没有改变任何启动字段与共享变量，只改变了服务依赖声明：它不重启任何进程，已固定旧版本的任务仍按它自己那份版本取边，需显式采用新版本才会使用新声明。"
+            : "本次保存未改变任何启动字段与共享变量，因此不产生需重启项。"}</p>
         <p className="mt-1">已有任务绑定保留原模板版本；本页不会重启服务或让绑定改用新版本 —— 需要先显式采用新版本：关闭编辑后，在列表中该服务的「任务绑定」面板里核对并采用（需二次确认；面板显示的是该绑定自己固定的版本 → v{update.version}），本页保存与刷新都不会自动采用。</p>
         {update.restartNeeded.map((entry) => <p key={entry.taskId}>受影响：任务 {taskName(entry.taskId)} 的 {entry.name}（v{entry.from} → v{entry.to}）仍固定 v{entry.from}，需显式采用 v{entry.to} 并重新绑定该任务的服务所有者后才会用 v{entry.to} 启动</p>)}
         <p className="mt-1 text-muted">{update.restart.fencedTaskIds.length === 0

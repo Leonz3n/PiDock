@@ -10,6 +10,20 @@ export interface ServiceTemplateSharedRow {
   value: string;
 }
 
+/**
+ * The two 服务依赖声明 kinds of ADR 0002, spelled exactly as the stored revision
+ * spells them. `call` is a runtime call dependency (the callee must listen
+ * first), `prestart` a start precondition (the target must be ready first); the
+ * two stay distinct all the way into the plan.
+ */
+export type ServiceDependencyKind = "call" | "prestart";
+
+/** One declared dependency of a revision: the target's own catalog service id and the kind. */
+export interface ServiceDependencyView {
+  to: string;
+  kind: ServiceDependencyKind;
+}
+
 export interface ServiceTemplateView {
   projectId: string;
   /** Environment this revision belongs to; the editor only ever edits one environment's revisions. */
@@ -27,6 +41,8 @@ export interface ServiceTemplateView {
     workdir?: string;
   };
   shared: ServiceTemplateSharedRow[];
+  /** The revision's 服务依赖声明; ABSENT when it declares none (no declaration = no edge). */
+  dependencies?: ServiceDependencyView[];
 }
 
 function object(value: unknown): value is Record<string, unknown> {
@@ -132,22 +148,48 @@ function sharedFromMain(value: unknown): ServiceTemplateSharedRow[] | null {
 }
 
 /**
+ * Main's `dependencies` rows, as a page may read them: the target's catalog
+ * service id and one of the two kinds, nothing else. `undefined` is the honest
+ * "this revision declares nothing"; a malformed row - including a self-edge or
+ * an exact duplicate - is refused (null) instead of being rendered as a graph a
+ * main process did not write.
+ */
+function dependenciesFromMain(value: unknown, serviceId: string): ServiceDependencyView[] | undefined | null {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length === 0 || value.length > 40) return null;
+  const rows: ServiceDependencyView[] = [];
+  for (const entry of value) {
+    if (!object(entry) || Object.keys(entry).sort().join(",") !== "kind,to" || typeof entry["to"] !== "string" ||
+        !/^s-[0-9a-f-]{36}$/i.test(entry["to"]) || (entry["kind"] !== "call" && entry["kind"] !== "prestart") ||
+        entry["to"] === serviceId) return null;
+    rows.push({ to: entry["to"], kind: entry["kind"] });
+  }
+  return new Set(rows.map((row) => `${row.to}/${row.kind}`)).size === rows.length ? rows : null;
+}
+
+/**
  * Public projection only: machine paths, program paths, reference names and
  * reference values do not enter the page model. Shared rows do, because main
  * stores them fail-closed (credential-free keys and values, no machine path)
- * and the editor has to prefill an existing revision to edit it.
+ * and the editor has to prefill an existing revision to edit it. The 服务依赖声明
+ * rows come along for the same reason: they are this revision's own declaration
+ * and the editor has to show and re-send them.
  */
 export function serviceTemplatesFromMain(value: unknown, projectId: string, environmentId: string): ServiceTemplateView[] | null {
   if (!Array.isArray(value) || value.length > 500) return null;
   const result: ServiceTemplateView[] = [];
   for (const entry of value) {
-    if (!object(entry) || Object.keys(entry).sort().join(",") !== "descriptor,environmentId,projectId,serviceId,shared,version" ||
+    const declared = object(entry) ? dependenciesFromMain(entry["dependencies"], typeof entry["serviceId"] === "string" ? entry["serviceId"] : "") : null;
+    if (!object(entry) ||
+        !["descriptor,environmentId,projectId,serviceId,shared,version",
+          "dependencies,descriptor,environmentId,projectId,serviceId,shared,version"].includes(Object.keys(entry).sort().join(",")) ||
         entry["projectId"] !== projectId || entry["environmentId"] !== environmentId || typeof entry["serviceId"] !== "string" ||
         !/^s-[0-9a-f-]{36}$/i.test(entry["serviceId"]) || !Number.isSafeInteger(entry["version"]) || (entry["version"] as number) < 1) return null;
     const descriptor = descriptorFromMain(entry["descriptor"]);
     const shared = sharedFromMain(entry["shared"]);
-    if (!descriptor || !shared) return null;
-    result.push({ projectId, environmentId, serviceId: entry["serviceId"], version: entry["version"] as number, descriptor, shared });
+    if (!descriptor || !shared || declared === null) return null;
+    result.push({ projectId, environmentId, serviceId: entry["serviceId"], version: entry["version"] as number, descriptor, shared,
+      ...(declared === undefined ? {} : { dependencies: declared }) });
   }
   if (new Set(result.map((row) => row.serviceId)).size !== result.length) return null;
   return result;
@@ -189,6 +231,12 @@ export interface ServiceTemplateUpdateReviewView {
   /** False for a review, true only once main reports the revision written. */
   saved: boolean;
   descriptorChanged: boolean;
+  /**
+   * True when the revision's 服务依赖声明 differ from the current one. A separate
+   * fact on purpose: a declaration is no launch field, so a declaration-only save
+   * changes which edges a LATER adopter's plan reads without restarting anything.
+   */
+  dependenciesChanged: boolean;
   /** True only when the minted revision differs from the current one in any launched field. */
   contentChanged: boolean;
   diff: { added: string[]; changed: { key: string; before: string; after: string }[]; removed: string[] };
@@ -209,13 +257,16 @@ function textList(value: unknown, max: number): value is string[] {
 export function serviceTemplateUpdateFromMain(
   value: unknown, expected: { projectId: string; environmentId: string; serviceId: string; version: number },
 ): ServiceTemplateUpdateReviewView | null {
-  if (!object(value) || Object.keys(value).sort().join(",") !==
-      "contentChanged,descriptorChanged,diff,environmentId,projectId,restart,restartNeeded,saved,serviceId,version,versionLabel") return null;
+  if (!object(value) || Object.keys(value).sort().join(",") !=
+      "contentChanged,dependenciesChanged,descriptorChanged,diff,environmentId,projectId,restart,restartNeeded,saved,serviceId,version,versionLabel") return null;
   if (value["projectId"] !== expected.projectId || value["environmentId"] !== expected.environmentId ||
       value["serviceId"] !== expected.serviceId ||
       value["version"] !== expected.version || typeof value["versionLabel"] !== "string" ||
       !/^v[1-9][0-9]*$/.test(value["versionLabel"]) || typeof value["saved"] !== "boolean" ||
-      typeof value["descriptorChanged"] !== "boolean" || typeof value["contentChanged"] !== "boolean") return null;
+      typeof value["descriptorChanged"] !== "boolean" || typeof value["contentChanged"] !== "boolean" ||
+      // Main always reports whether the 服务依赖声明 moved: a review that omits
+      // the fact is refused rather than read as "nothing changed".
+      typeof value["dependenciesChanged"] !== "boolean") return null;
   const restart = restartConsequenceFromMain(value["restart"]);
   if (!restart) return null;
   const diff = value["diff"];
@@ -240,7 +291,7 @@ export function serviceTemplateUpdateFromMain(
   }
   return { projectId: expected.projectId, environmentId: expected.environmentId, serviceId: expected.serviceId, version: expected.version,
     versionLabel: value["versionLabel"], saved: value["saved"], descriptorChanged: value["descriptorChanged"],
-    contentChanged: value["contentChanged"],
+    dependenciesChanged: value["dependenciesChanged"], contentChanged: value["contentChanged"],
     diff: { added: [...diff["added"]], changed, removed: [...diff["removed"]] }, restartNeeded: restarts, restart };
 }
 

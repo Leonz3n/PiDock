@@ -16,7 +16,7 @@ const saved = {
 };
 const restart = { changed: true, processRestarted: false as const, fencedTaskIds: [] as string[] };
 const review = {
-  projectId, environmentId, serviceId, version: 2, versionLabel: "v2", saved: false, descriptorChanged: true, contentChanged: true,
+  projectId, environmentId, serviceId, version: 2, versionLabel: "v2", saved: false, descriptorChanged: true, dependenciesChanged: false, contentChanged: true,
   diff: { added: ["API_URL"], changed: [{ key: "PORT", before: "3000", after: "4000" }], removed: [] },
   restartNeeded: [{ taskId: "task-1", serviceId, name: "API", from: 1, to: 2 }], restart,
 };
@@ -412,4 +412,109 @@ it("claims no restart for an unchanged save and names every affected binding for
   expect(await screen.findByText(/本次保存改变了启动材料/)).toBeInTheDocument();
   expect(screen.getByText(/受影响：任务 任务甲 的 API（v1 → v2）仍固定 v1，需显式采用 v2 并重新绑定该任务的服务所有者后才会用 v2 启动/)).toBeInTheDocument();
   expect(screen.getByText(/保存配置不等于重启进程/)).toBeInTheDocument();
+});
+
+/**
+ * 服务依赖声明 (ADR 0002) in the environment page's shared-template surface: a
+ * revision may declare which services it CALLS and which must be READY first.
+ * The page shows them by name, sends exactly the declared rows, and a revision
+ * that declares nothing keeps sending a request WITHOUT a `dependencies` key -
+ * no declaration, no edge, never a synthesised one.
+ */
+const workerId = "s-524639ce-90ac-4dc5-8a52-c3628386ca36";
+const worker = { ...saved, serviceId: workerId, descriptor: { ...saved.descriptor, name: "Worker", ports: [4100] } };
+const sharedRows = [{ key: "PORT", value: "3000", secret: false }];
+
+it("projects each revision's declaration rows and refuses a fabricated or malformed one", () => {
+  const declared = { ...saved, dependencies: [{ to: workerId, kind: "call" }] };
+  expect(serviceTemplatesFromMain([declared], projectId, environmentId)).toEqual([declared]);
+  // A revision from the previous slice declares nothing: no key, and it still parses.
+  expect(serviceTemplatesFromMain([saved], projectId, environmentId))
+    .toEqual([{ projectId, environmentId, serviceId, version: 1, descriptor: saved.descriptor, shared: saved.shared }]);
+  // Every shape main would never write is refused instead of rendered: a missing
+  // target, an unknown kind, extra keys, a self-edge and an exact duplicate.
+  for (const dependencies of [
+    [{ to: workerId }], [{ to: workerId, kind: "run" }], [{ to: workerId, kind: "call", label: "worker" }],
+    [{ to: "worker", kind: "call" }], [], [{ to: serviceId, kind: "call" }],
+    [{ to: workerId, kind: "call" }, { to: workerId, kind: "call" }],
+  ]) expect(serviceTemplatesFromMain([{ ...saved, dependencies }], projectId, environmentId)).toBeNull();
+  // The two kinds stay distinguishable, and a bidirectional pair is a real state.
+  expect(serviceTemplatesFromMain([{ ...saved, dependencies: [{ to: workerId, kind: "prestart" }, { to: workerId, kind: "call" }] }], projectId, environmentId))
+    .toEqual([{ ...saved, dependencies: [{ to: workerId, kind: "prestart" }, { to: workerId, kind: "call" }] }]);
+});
+
+it("shows a revision's declarations by name, or names the absence of any edge", async () => {
+  stub((request) => request["op"] === "list"
+    ? { ok: true, payload: [{ ...saved, dependencies: [{ to: workerId, kind: "call" }, { to: workerId, kind: "prestart" }] }, worker] }
+    : { ok: true, payload: [] });
+  render(<ProjectServiceTemplates projectId={projectId} environmentId={environmentId} />);
+  // Targets are named from THIS environment's own list, never invented.
+  expect(await screen.findByText("服务依赖声明：调用依赖→Worker、启动前置→Worker")).toBeInTheDocument();
+  // The service with no declaration says so by name: no edge, nothing verified.
+  expect(screen.getByText("依赖声明：无（无依赖边，未做互验）")).toBeInTheDocument();
+  expect(screen.queryByText(/联通：已互验/)).toBeNull();
+});
+
+it("re-sends exactly the declared rows on an edit and omits the key when nothing is declared", async () => {
+  const calls: Record<string, unknown>[] = [];
+  stub((request) => {
+    calls.push(request);
+    if (request["op"] === "list") return { ok: true, payload: calls.length === 1 ? sliced() : sliced() };
+    return { ok: true, payload: { ...review, saved: request["confirm"] === true } };
+  });
+  function sliced() {
+    return [{ ...saved, dependencies: [{ to: workerId, kind: "call" }] }, worker];
+  }
+  render(<ProjectServiceTemplates projectId={projectId} environmentId={environmentId} />);
+  await screen.findByText("服务依赖声明：调用依赖→Worker");
+  fireEvent.click(screen.getAllByRole("button", { name: "编辑" })[0]);
+  // The form prefills the stored declaration: the human edits a fact, not a guess.
+  expect(screen.getByLabelText("依赖目标 1")).toHaveValue(workerId);
+  expect(screen.getByLabelText("依赖类型 1")).toHaveValue("call");
+  fireEvent.click(screen.getByRole("button", { name: "核对新版本" }));
+  await screen.findByText(/将生成 v2/);
+  expect(calls[1]).toEqual({ op: "update", projectId, environmentId, serviceId, expectedVersion: 1, confirm: false,
+    descriptor: saved.descriptor, shared: sharedRows, dependencies: [{ to: workerId, kind: "call" }] });
+  // Removing the declared row sends a request with NO `dependencies` key at all -
+  // the shape this page sent before this slice, so nothing reads as "0 edges".
+  fireEvent.click(screen.getByRole("button", { name: "移除依赖 1" }));
+  fireEvent.click(screen.getByRole("button", { name: "核对新版本" }));
+  await waitFor(() => expect(calls.at(-1)).toEqual({ op: "update", projectId, environmentId, serviceId, expectedVersion: 1, confirm: false,
+    descriptor: saved.descriptor, shared: sharedRows }));
+  expect(calls.at(-1)).not.toHaveProperty("dependencies");
+});
+
+it("adds the next undeclared (target, kind) pair and reports a declaration-only save as its own fact", async () => {
+  const calls: Record<string, unknown>[] = [];
+  const declarationOnly = { ...review, descriptorChanged: false, dependenciesChanged: true, contentChanged: false,
+    diff: { added: [], changed: [], removed: [] }, restartNeeded: [], restart: { changed: false, processRestarted: false as const, fencedTaskIds: [] as string[] } };
+  stub((request) => {
+    calls.push(request);
+    if (request["op"] === "list") return { ok: true, payload: [saved, worker] };
+    return { ok: true, payload: { ...declarationOnly, saved: request["confirm"] === true } };
+  });
+  render(<ProjectServiceTemplates projectId={projectId} environmentId={environmentId} />);
+  await screen.findByText("Worker");
+  // Both services declare nothing: each row says so by name.
+  expect(screen.getAllByText("依赖声明：无（无依赖边，未做互验）")).toHaveLength(2);
+  // Edit the service the stub reviews (both rows share one fixture id, so pick the first).
+  fireEvent.click(screen.getAllByRole("button", { name: "编辑" })[0]);
+  // Nothing declared yet, so the page says what that means instead of implying a graph.
+  expect(screen.getByText(/无依赖声明：保存后计划里不会有任何依赖边/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "添加依赖" }));
+  expect(screen.getByLabelText("依赖目标 1")).toHaveValue(workerId);
+  expect(screen.getByLabelText("依赖类型 1")).toHaveValue("call");
+  // The next add offers the OTHER kind for the same target: the two kinds are
+  // separate declarations, not a duplicate.
+  fireEvent.click(screen.getByRole("button", { name: "添加依赖" }));
+  expect(screen.getByLabelText("依赖类型 2")).toHaveValue("prestart");
+  fireEvent.click(screen.getByRole("button", { name: "核对新版本" }));
+  await screen.findByText(/将生成 v2/);
+  expect(calls[1]).toEqual({ op: "update", projectId, environmentId, serviceId, expectedVersion: 1, confirm: false,
+    descriptor: saved.descriptor, shared: sharedRows, dependencies: [{ to: workerId, kind: "call" }, { to: workerId, kind: "prestart" }] });
+  // A declaration-only save never claims a restart or a moved launch material.
+  expect(screen.getByText(/服务依赖声明差异：有（本环境的新版本才带这些声明）/)).toBeInTheDocument();
+  expect(screen.getByText(/启动字段差异：无/)).toBeInTheDocument();
+  expect(screen.getByText(/只改变了服务依赖声明：它不重启任何进程/)).toBeInTheDocument();
+  expect(screen.queryByText(/受影响：/)).toBeNull();
 });
