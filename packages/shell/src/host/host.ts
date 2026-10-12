@@ -56,6 +56,8 @@ import type { ServiceRunObservation } from "../main/execution-ledger.js";
 import { SharedPathCoordinator } from "./path-coordination.js";
 import { TaskServiceRuntime } from "./service-runtime.js";
 import { runAgentServiceControl, runHumanServiceControl, type ServiceExecutionDriver } from "./service-control.js";
+import { runServiceGroupStart, type GroupUnitStartResult, type ServiceGroupRunResult } from "./service-group-run.js";
+import { tcpObservation } from "./service-linkage.js";
 import type { SdkAgentServiceHost } from "./sdk-agent-tool-broker.js";
 import { scanTaskServiceImportHints } from "./service-import.js";
 import { publicServiceStartPreview, publicServiceStatus } from "./service-public.js";
@@ -500,6 +502,85 @@ function serviceDriverFor(taskId: string, services: TaskServiceRuntime): Service
       closeServiceRun(taskId, services, serviceId, "stopped");
     },
   };
+}
+
+/**
+ * Start the task's planned group ([PiDock 05] #10 box 4) — the production
+ * caller `planStartGroups`/`verifyStepsFor` never had.
+ *
+ * Group start is a SEQUENCE OVER the existing gated dispatch, not a second
+ * gate: every unit's start goes through the same `runHumanServiceControl` /
+ * `runAgentServiceControl` the single `task/controlService` path uses, with the
+ * same tier rules (a `read` session refuses, `default` parks on a one-shot
+ * approval). No unit is spawned, signalled or re-planned here.
+ *
+ * Observation is real and separate from the plan: a unit's listening state comes
+ * from a bounded TCP connect to the address its REGISTRATION declares (never the
+ * plan's allocated port, which the launch does not use — see `planRegisteredStart`),
+ * and each observation is attached to the unit's own run record through the
+ * existing `verifyRun` shape.
+ *
+ * `start-failed` vs `refused`: the wrapped driver records whether the launch was
+ * actually reached, so a gate refusal (before the driver) is `refused` and a
+ * driver/launch failure is `start-failed`. The runner never guesses a state from
+ * an error string.
+ */
+async function runGroupServiceStart(input: {
+  taskId: string;
+  services: TaskServiceRuntime;
+  topology: TaskServiceTopology;
+  host: TaskWorkspaceHost;
+  caller: { kind: "human"; label: string } | { kind: "agent"; sessionId: string };
+  approvalId: unknown;
+}): Promise<{ ok: true; value: ServiceGroupRunResult } | { ok: false; error: string }> {
+  const { services, topology, host, caller } = input;
+  const channel = caller.kind === "agent" ? host.openSession(caller.sessionId) : undefined;
+  const baseDriver = serviceDriverFor(input.taskId, services);
+  const startUnit = async ({ serviceId }: { unitId: string; serviceId: string }): Promise<GroupUnitStartResult> => {
+    const registered = services.get(serviceId);
+    if (!registered || registered.launchSource !== "catalog") {
+      return { ok: false, kind: "refused", error: `service-execution-unavailable: ${serviceId} 未由可信服务目录登记，无法执行` };
+    }
+    // Same durable-owner fail-closed check the single control path applies.
+    const uncertain = serviceOwnerStateRefusal(serviceId);
+    if (uncertain) return { ok: false, kind: "refused", error: uncertain };
+    let driverReached = false;
+    const driver: ServiceExecutionDriver = {
+      start: async (id, owner) => { driverReached = true; return baseDriver.start(id, owner); },
+      stop: (id, owner) => baseDriver.stop(id, owner),
+    };
+    const acted = caller.kind === "human"
+      ? await runHumanServiceControl({ services, driver, serviceId, action: "start", label: caller.label })
+      : await runAgentServiceControl({
+          services,
+          driver,
+          channel: channel as NonNullable<typeof channel>,
+          sessionId: caller.sessionId,
+          serviceId,
+          action: "start",
+          ...(input.approvalId !== undefined ? { approvalId: input.approvalId } : {}),
+          write: host,
+          persist: () => host.store.writeSession(host.taskDir, (channel as NonNullable<typeof channel>).snapshot()),
+          executions: host.controlExecutions,
+        });
+    if (acted.ok) return { ok: true };
+    if (acted.error.startsWith("approval-required:")) return { ok: false, kind: "approval-required", error: acted.error };
+    return { ok: false, kind: driverReached ? "start-failed" : "refused", error: acted.error };
+  };
+  const value = await runServiceGroupStart({
+    topology,
+    startUnit,
+    observation: tcpObservation,
+    // The address the launch is SET UP to bind, from this task's own
+    // registration. A unit with no declared socket stays `not-probed`.
+    registeredAddress: (serviceId) => {
+      const record = services.get(serviceId);
+      if (!record) return undefined;
+      const [port] = declaredServicePorts(record.descriptor.ports, record.resolved);
+      return port === undefined ? undefined : { host: "127.0.0.1", port };
+    },
+  });
+  return { ok: true, value };
 }
 
 /**
@@ -1244,8 +1325,8 @@ async function performTaskOp(
         // with main's sender-bound `shell-ui` attestation — so a caller
         // can neither spoof `actor` nor drop its session to reach the
         // ungated human path.
-        if (typeof serviceId !== "string" || (action !== "start" && action !== "stop")) {
-          return { ok: false, error: "invalid-payload: task/controlService requires serviceId/action" };
+        if (action !== "start" && action !== "stop") {
+          return { ok: false, error: "invalid-payload: task/controlService requires action" };
         }
         const caller = classifyControlCaller({
           sessionId: record["sessionId"],
@@ -1253,6 +1334,22 @@ async function performTaskOp(
           origin,
         });
         if (!caller.ok) return { ok: false, error: caller.error };
+        // [PiDock 05] (#10 box 4) group start: the SAME op, the SAME gate, run
+        // in the plan's order with a real listening/linkage observation per
+        // unit. No new op is added — `HOST_TASK_OPS` stays exactly as it was —
+        // and every unit still goes through the one gated dispatch below.
+        if (record["group"] === true) {
+          if (action !== "start") return { ok: false, error: "invalid-payload: task/controlService.group 仅支持 action=start" };
+          const topology = serviceTopologyFor(taskId);
+          if ("error" in topology) return { ok: false, error: topology.error };
+          const host = taskHostFor(taskId);
+          if ("error" in host) return { ok: false, error: host.error };
+          const started = await runGroupServiceStart({ taskId, services, topology, host, caller, approvalId: record["approvalId"] });
+          return started.ok ? { ok: true, payload: { group: started.value } } : { ok: false, error: started.error };
+        }
+        if (typeof serviceId !== "string" || serviceId.trim().length === 0) {
+          return { ok: false, error: "invalid-payload: task/controlService requires serviceId" };
+        }
         // A service registered on this task is executed by the Host's own
         // registered process identity; only a `catalog` registration carries
         // an executable launch (see `serviceLaunchSource`). Everything else - 

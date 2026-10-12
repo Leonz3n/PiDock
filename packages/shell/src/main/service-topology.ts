@@ -727,23 +727,50 @@ function verifyStepsFor(
   remoteIds: ReadonlySet<string>,
   cyclic: boolean,
 ): string[] {
-  const steps: string[] = [];
-  for (const dep of deps) {
-    if (!members.includes(dep.from)) continue;
+  const labels = groupVerifySteps({ members, dependencies: deps, units: [...unitsById.values()], remoteIds }).map((step) => step.label);
+  if (cyclic) labels.push("双向调用组联通检查（先监听再互验，不等待对方就绪）");
+  return [...new Set(labels)];
+}
+
+/**
+ * The dependency-backed checks of one listener group, in the same order and with
+ * the same wording `StartGroup.verify` renders, but keeping WHICH dependency each
+ * check tests. `planStartGroups` renders only the labels; the group runner
+ * (`host/service-group-run.ts`) needs the target so a failed check can name the
+ * unit, the dependency and the step instead of a bare string. One rule, two
+ * consumers - the plan text and the run cannot drift apart.
+ */
+export interface GroupVerifyPlanStep {
+  /** The declared dependency this check belongs to (`from` is a group member). */
+  dependency: ServiceDependency;
+  kind: "linkage" | "readiness" | "remote-reachability";
+  /** Exactly the string `StartGroup.verify` carries. */
+  label: string;
+}
+
+export function groupVerifySteps(input: {
+  members: readonly string[];
+  dependencies: readonly ServiceDependency[];
+  units: readonly RunUnit[];
+  remoteIds: ReadonlySet<string>;
+}): GroupVerifyPlanStep[] {
+  const unitsById = new Map(input.units.map((unit) => [unit.unitId, unit]));
+  const steps: GroupVerifyPlanStep[] = [];
+  for (const dep of input.dependencies) {
+    if (!input.members.includes(dep.from)) continue;
     const target = unitsById.get(dep.to);
     if (!target) continue;
-    if (remoteIds.has(dep.to)) {
-      steps.push(`远程依赖可达性检查 ${target.name}（共享环境，不标记为任务内隔离）`);
+    if (input.remoteIds.has(dep.to)) {
+      steps.push({ dependency: { ...dep }, kind: "remote-reachability", label: `远程依赖可达性检查 ${target.name}（共享环境，不标记为任务内隔离）` });
       continue;
     }
     if (dep.kind === "prestart") {
-      steps.push(`前置条件就绪检查 ${target.name}`);
+      steps.push({ dependency: { ...dep }, kind: "readiness", label: `前置条件就绪检查 ${target.name}` });
       continue;
     }
-    steps.push(`联通检查 ${target.name}（${dep.to}）`);
+    steps.push({ dependency: { ...dep }, kind: "linkage", label: `联通检查 ${target.name}（${dep.to}）` });
   }
-  if (cyclic) steps.push("双向调用组联通检查（先监听再互验，不等待对方就绪）");
-  return [...new Set(steps)];
+  return steps;
 }
 
 /** Tarjan SCC, iterative-friendly recursive form (graphs here are small). */
