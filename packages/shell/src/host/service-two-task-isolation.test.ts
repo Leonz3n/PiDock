@@ -233,18 +233,20 @@ async function twoTasks(): Promise<CatalogFixture> {
   };
   const authority: ServiceCatalogAuthority = { projectExists: (id) => id === projectId, task: (id) => owner(id), verifiedTask: (id) => owner(id) };
   const catalog = new ServiceCatalog(profile, authority);
+  const environmentId = catalog.createEnvironment({ projectId, name: "开发环境" }).environmentId;
 
   // ONE shared template: one service name, one program, one argv, one declared
   // port list (empty - the port is the task's own binding below).
   const template = catalog.saveTemplate({
     projectId,
+    environmentId,
     descriptor: { name: "Invoice API", program: "node", args: ["service.cjs"], ports: [], runType: "long-lived" },
     shared: [{ key: "SERVICE_GREETING", value: "hello-shared", secret: false }],
   });
   for (const task of provisioned) {
     vi.stubEnv(task.envRef, String(task.port));
     catalog.bindTask({
-      taskId: task.taskId, serviceId: template.serviceId, templateVersion: 1, rootId: "repo-a", subdir: task.subdir,
+      taskId: task.taskId, serviceId: template.serviceId, environmentId, templateVersion: 1, rootId: "repo-a", subdir: task.subdir,
       programPath: realpathSync(process.execPath), privateRefs: [{ key: "PORT", envRef: task.envRef }],
     });
   }
@@ -253,12 +255,13 @@ async function twoTasks(): Promise<CatalogFixture> {
   // really ends by itself, so the registered tree can be checked for the dead pid.
   const oneShot = catalog.saveTemplate({
     projectId,
+    environmentId,
     descriptor: { name: "Migrate once", program: "node", args: ["one-shot.cjs"], ports: [], runType: "one-shot" },
     shared: [],
   });
   writeFileSync(join(provisioned[0]!.taskDir, "repo-a", provisioned[0]!.subdir, "one-shot.cjs"), ONE_SHOT_SCRIPT);
   catalog.bindTask({
-    taskId: provisioned[0]!.taskId, serviceId: oneShot.serviceId, templateVersion: 1, rootId: "repo-a", subdir: provisioned[0]!.subdir,
+    taskId: provisioned[0]!.taskId, serviceId: oneShot.serviceId, environmentId, templateVersion: 1, rootId: "repo-a", subdir: provisioned[0]!.subdir,
     programPath: realpathSync(process.execPath), privateRefs: [],
   });
 
@@ -294,7 +297,7 @@ async function twoTasks(): Promise<CatalogFixture> {
       }
     }
   });
-  return { catalog, projectId, serviceId: template.serviceId, oneShotId: oneShot.serviceId, taskA, taskB, portA, portB };
+  return { catalog, projectId, environmentId, serviceId: template.serviceId, oneShotId: oneShot.serviceId, taskA, taskB, portA, portB };
 }
 
 /** Register the catalog-resolved launch on one task's Host, like main does. */

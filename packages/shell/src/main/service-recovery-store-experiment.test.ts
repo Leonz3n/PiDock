@@ -410,8 +410,9 @@ describe.skipIf(process.platform === "win32")("main-only recovery store and Host
     const roots = new TaskRootIndex(f.profile, f.root), projects = new ProjectRegistry(f.profile);
     const project = await projects.create({ name: "Recovery", description: "", repositories: [], directories: [] }); await projects.claim(taskId, project.id, roots);
     const authority = serviceCatalogAuthority(roots, projects), catalog = new ServiceCatalog(f.profile, authority);
-    const template = catalog.saveTemplate({ projectId: project.id, descriptor: { name: "API", program: "node", args: [], ports: [], runType: "long-lived" }, shared: [] });
-    catalog.bindTask({ taskId, serviceId: template.serviceId, templateVersion: 1, rootId: "repo-a", subdir: "", programPath: process.execPath, privateRefs: [] });
+    const environmentId = catalog.createEnvironment({ projectId: project.id, name: "开发环境" }).environmentId;
+    const template = catalog.saveTemplate({ projectId: project.id, environmentId, descriptor: { name: "API", program: "node", args: [], ports: [], runType: "long-lived" }, shared: [] });
+    catalog.bindTask({ taskId, serviceId: template.serviceId, environmentId, templateVersion: 1, rootId: "repo-a", subdir: "", programPath: process.execPath, privateRefs: [] });
     const store = new ExperimentalServiceRecoveryStore(f.profile, authority, (id) => catalog.listTask(id).map((row) => row.binding.serviceId)); stores.push(store);
     const h = host(), port = store.acquire(taskId, h.owner).port(h.owner.sender, template.serviceId);
     port.write(checkpoint("starting", template.serviceId)); expect(port.read()).toEqual(checkpoint("starting", template.serviceId));
