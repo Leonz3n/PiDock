@@ -6,6 +6,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { DesktopEnvironmentPage } from "../components/DesktopEnvironmentPage";
 import { ServiceCatalog } from "../../../shell/src/main/service-catalog.js";
 import { performServiceCatalogOperation } from "../../../shell/src/main/service-catalog-ipc.js";
+import { serviceRestartConsequence } from "../../../shell/src/main/runtime.js";
 import type { ShellTaskOpResult } from "../data/shellBridge";
 
 const ENVIRONMENT_ID = "e-11111111-1111-1111-1111-111111111111";
@@ -335,3 +336,128 @@ it("re-reads the selected environment on every switch and drops the previous env
   expect(screen.queryByText("本地服务")).toBeNull();
   expect(serviceCatalogOp).toHaveBeenLastCalledWith({ op: "list", projectId: "p1", environmentId: other.environmentId });
 });
+
+/**
+ * [PiDock 04] #7 box 1 (final half) + ADR 0002, driven through the SHIPPED
+ * environment page and the REAL catalog store (the same
+ * `performServiceCatalogOperation` the IPC handler calls):
+ *
+ * - the human declares, per environment, which service this one CALLS and which
+ *   is its START PRECONDITION;
+ * - the declaration is persisted on the revision of THAT environment, the
+ *   document stays `version === 2` and the revision the page last read keeps its
+ *   own content (an edit mints a new version; nothing re-points a pinned task);
+ * - a duplicate declaration is refused BY MAIN, by name, at the page.
+ */
+it("declares 服务依赖声明 per environment through the shipped page and keeps every earlier revision untouched", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "pidock-env-declaration-"));
+  directories.push(directory);
+  const store = new ServiceCatalog(directory, { projectExists: (id) => id === PROJECT_ID, task: () => null });
+  const seen: Record<string, unknown>[] = [];
+  const serviceCatalogOp = vi.fn(async (request: Record<string, unknown>) => {
+    seen.push(request);
+    try {
+      const payload = performServiceCatalogOperation(store, request) as unknown as Record<string, unknown>;
+      // The SHIPPED `shell/serviceCatalogOp` handler answers a review with the
+      // honest restart consequence (`runtime.ts serviceRestartConsequence`), so
+      // this bridge adds exactly that field instead of inventing one.
+      return { ok: true, payload: request["op"] === "update" ? { ...payload, restart: serviceRestartConsequence("update", payload) } : payload } as ShellTaskOpResult;
+    } catch (error) {
+      const failure = error as { code?: string; message: string };
+      return { ok: false, error: `${failure.code ?? "error"}: ${failure.message}` };
+    }
+  });
+  window.pidock = { serviceCatalogOp };
+  render(<DesktopEnvironmentPage projects={[{ id: PROJECT_ID, name: "真实项目" }]} projectId={PROJECT_ID} taskCount={0} tasks={[]} onSelectProject={() => {}} />);
+  await screen.findByText("该项目尚无环境，请先新增并命名");
+  fireEvent.click(screen.getByRole("button", { name: "新增环境" }));
+  fireEvent.change(screen.getByLabelText("环境名称"), { target: { value: "本地开发" } });
+  fireEvent.click(screen.getByRole("button", { name: "保存环境" }));
+  await screen.findByText("该环境尚未保存服务模板。");
+
+  /** One explicit create through the shipped form, filling only what the target rows assert. */
+  const addService = async (name: string, port: string) => {
+    fireEvent.click(screen.getByRole("button", { name: "添加服务" }));
+    fireEvent.change(screen.getByLabelText("服务名称"), { target: { value: name } });
+    fireEvent.change(screen.getByLabelText("程序名"), { target: { value: "node" } });
+    fireEvent.change(screen.getByLabelText("参数 1"), { target: { value: "server.js" } });
+    fireEvent.change(screen.getByLabelText("端口"), { target: { value: port } });
+  };
+  // The TARGET service first: a declaration may only name a service of this
+  // environment that already exists.
+  await addService("Callee API", "4100");
+  expect(screen.getByText(/本环境还没有其他已保存的服务可作为依赖目标/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "添加依赖" })).toBeDisabled();
+  fireEvent.click(screen.getByRole("button", { name: "核对保存" }));
+  fireEvent.click(screen.getByRole("button", { name: "确认保存" }));
+  await screen.findByText(/Callee API/);
+
+  // The CALLER: its declaration is made in the same explicit save.
+  await addService("Caller API", "4101");
+  fireEvent.click(screen.getByRole("button", { name: "添加依赖" }));
+  const targets = screen.getByLabelText("依赖目标 1") as HTMLSelectElement;
+  const calleeServiceId = targets.value;
+  expect(calleeServiceId).toMatch(/^s-[0-9a-f-]{36}$/i);
+  expect(screen.getByLabelText("依赖类型 1")).toHaveValue("call");
+  fireEvent.click(screen.getByRole("button", { name: "核对保存" }));
+  fireEvent.click(screen.getByRole("button", { name: "确认保存" }));
+  await screen.findByText("服务依赖声明：调用依赖→Callee API");
+
+  // What the page really sent, and what reached the disk: a sibling key of the
+  // revision inside THIS environment's scope, document version unchanged.
+  const create = seen.find((request) => request["op"] === "create" && (request["dependencies"] as unknown[] | undefined)?.length === 1);
+  expect(create?.["dependencies"]).toEqual([{ to: calleeServiceId, kind: "call" }]);
+  const document = JSON.parse(readFileSync(join(directory, "service-templates.json"), "utf8")) as { version: number; revisions: Record<string, unknown>[] };
+  expect(document.version).toBe(2);
+  const callerRevision = document.revisions.find((row) => row["dependencies"] !== undefined) as Record<string, unknown>;
+  expect(Object.keys(callerRevision).sort()).toEqual(["dependencies", "descriptor", "environmentId", "projectId", "serviceId", "shared", "version"]);
+  expect(callerRevision["dependencies"]).toEqual([{ to: calleeServiceId, kind: "call" }]);
+  // The other service's revision carries no `dependencies` key at all: no
+  // declaration is not the same thing as an empty graph.
+  expect(Object.keys(document.revisions.find((row) => row !== callerRevision) as Record<string, unknown>)).not.toContain("dependencies");
+  const callerServiceId = callerRevision["serviceId"] as string;
+
+  // A second, identical declaration is REFUSED BY NAME by main (the store), and
+  // the page shows that refusal instead of saving a graph nobody owns.
+  // The list holds the two services in the order the page received them
+  // (Callee first), so the second 编辑 belongs to the caller.
+  fireEvent.click(screen.getAllByRole("button", { name: "编辑" })[1] as HTMLElement);
+  expect(screen.getByLabelText("服务名称")).toHaveValue("Caller API");
+  fireEvent.click(screen.getByRole("button", { name: "添加依赖" }));
+  expect(screen.getByLabelText("依赖类型 2")).toHaveValue("prestart");
+  fireEvent.change(screen.getByLabelText("依赖类型 2"), { target: { value: "call" } });
+  fireEvent.click(screen.getByRole("button", { name: "核对新版本" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("duplicate dependency declaration");
+  expect(JSON.parse(readFileSync(join(directory, "service-templates.json"), "utf8")).revisions).toHaveLength(2);
+
+  // A refused review parks the form (the page will not save an edit it could not
+  // review), so the human re-opens the row - and gets the stored declaration
+  // back - before completing it with the two kinds kept distinct.
+  fireEvent.click(screen.getByRole("button", { name: "关闭编辑" }));
+  fireEvent.click(screen.getAllByRole("button", { name: "编辑" })[1] as HTMLElement);
+  expect(screen.getByLabelText("依赖目标 1")).toHaveValue(calleeServiceId);
+  expect(screen.getByLabelText("依赖类型 1")).toHaveValue("call");
+  fireEvent.click(screen.getByRole("button", { name: "添加依赖" }));
+  expect(screen.getByLabelText("依赖类型 2")).toHaveValue("prestart");
+  fireEvent.click(screen.getByRole("button", { name: "核对新版本" }));
+  await screen.findByText(/将生成 v2（当前 v1） · 待确认/);
+  fireEvent.click(screen.getByRole("button", { name: "确认新版本" }));
+  // The confirmed save is listed back with BOTH declarations, so the page can
+  // show the revision it wrote; the form stays open until the human closes it.
+  await screen.findByRole("button", { name: "已保存 v2" });
+  expect(screen.getByText(/服务依赖声明差异：有/)).toBeInTheDocument();
+  // The page still says what a shared-template save does NOT do to a task: a
+  // declaration reaches a task only when that task adopts this revision.
+  expect(screen.getByText(/已有任务绑定保留原模板版本/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "取消" }));
+  await screen.findByText("服务依赖声明：调用依赖→Callee API、启动前置→Callee API");
+  const saved = JSON.parse(readFileSync(join(directory, "service-templates.json"), "utf8")) as { version: number; revisions: Record<string, unknown>[] };
+  expect(saved.version).toBe(2);
+  expect(saved.revisions).toHaveLength(3);
+  // The revision the page read is byte-identical: an edit appends, it never
+  // re-points what a pinned task binding already names.
+  expect(saved.revisions.find((row) => row["serviceId"] === callerServiceId && row["version"] === 1)?.["dependencies"])
+    .toEqual([{ to: calleeServiceId, kind: "call" }]);
+  expect(saved.revisions.find((row) => row["serviceId"] === callerServiceId && row["version"] === 2)?.["dependencies"])
+    .toEqual([{ to: calleeServiceId, kind: "call" }, { to: calleeServiceId, kind: "prestart" }]);
+}, 30_000);
