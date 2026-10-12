@@ -1085,8 +1085,11 @@ export async function runTaskService(
         // Box 6: main reads the worktree the verified launch cwd lives in, right
         // before the start, and the registration carries either that observation
         // or the named reason it could not be made. The Host never fills the code
-        // state in from a claim of its own.
-        ...codeObservationFields(launch.descriptor.cwd),
+        // state in from a claim of its own. A `stop` records no run, so its code
+        // state is not a fact the record needs: observing it would be pure cost
+        // (two blocking git reads on main's event loop), so it is a start-only
+        // read.
+        ...(request.action === "start" ? codeObservationFields(launch.descriptor.cwd) : {}),
       },
       origin,
     });

@@ -379,6 +379,40 @@ describe("trusted Electron view modes", () => {
       expect(calls.map((entry) => entry.origin.kind)).toEqual(["service-catalog", "service-catalog"]);
       expect(result).toEqual({ op: "task/controlService", action: "start" });
     });
+
+    it("observes the worktree for a start but performs no observation for a stop", async () => {
+      const calls: { op: string; payload: Record<string, unknown> }[] = [];
+      const routeTaskOp = vi.fn(async (entry: { op: string; payload: Record<string, unknown> }) => {
+        calls.push(entry);
+        return { payload: { op: entry.op, action: "start" } };
+      });
+      // A real directory that is deliberately NOT a git worktree: if the stop
+      // path observed the code state, THIS is what its registration would carry.
+      const notARepo = mkdtempSync(join(tmpdir(), "pidock-stop-observation-"));
+      try {
+        const launch = { serviceId: "s-a", descriptor: { name: "API", cwd: notARepo }, layers: { task: [] }, templateVersion: 1 };
+        const launchFor = vi.fn(() => launch);
+        await runTaskService({ routeTaskOp } as never, { launchFor } as never,
+          { taskId: "task-a", projectId: "project-a", serviceId: "s-a", action: "start" }, 7);
+        const started = calls.find((entry) => entry.op === "task/registerService")!;
+        // Proof the fake path really exercises the observation: a start on a
+        // non-worktree carries the named failure, never a code state.
+        expect(started.payload["codeObservationFailure"]).toBe("该目录不是 Git 工作树");
+        expect(started.payload["code"]).toBeUndefined();
+
+        calls.length = 0;
+        await runTaskService({ routeTaskOp } as never, { launchFor } as never,
+          { taskId: "task-a", projectId: "project-a", serviceId: "s-a", action: "stop" }, 7);
+        const stopped = calls.find((entry) => entry.op === "task/registerService")!;
+        // A stop records no run, so it neither observes nor pays for the read:
+        // neither the observation nor its named failure is on the stop payload.
+        expect(stopped.payload).not.toHaveProperty("code");
+        expect(stopped.payload).not.toHaveProperty("codeObservationFailure");
+        expect(calls.find((entry) => entry.op === "task/controlService")!.payload).toMatchObject({ action: "stop" });
+      } finally {
+        rmSync(notARepo, { recursive: true, force: true });
+      }
+    });
   });
 
   it("binds project IPC to shell main frame and fails closed without a configured store", async () => {
