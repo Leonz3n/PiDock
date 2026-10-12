@@ -1338,9 +1338,11 @@ async function performTaskOp(
         return { ok: true, payload: { approval } };
       }
       // [PiDock 04] (#7) service ops share the fork-time task binding.
-      // Registration currently accepts only main-attested human UI callers;
-      // Agent template edits await diff approval. Execution remains disabled
-      // until real process ownership, cleanup and cross-platform stop pass.
+      // Registration currently accepts only main-attested human UI callers; the
+      // Agent's shared-template edit has its own path ([PiDock 04] #7 box 6,
+      // `main/service-catalog-ipc.ts`) and never registers a service. Execution
+      // remains disabled until real process ownership, cleanup and cross-platform
+      // stop pass.
       // Reads return allowlisted display projections, never raw launch env.
       case "task/registerService": {
         const services = serviceRuntimeFor(taskId);
