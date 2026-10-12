@@ -525,11 +525,12 @@ function serviceDriverFor(taskId: string, services: TaskServiceRuntime): Service
  * driver/launch failure is `start-failed`. The runner never guesses a state from
  * an error string.
  *
- * Reachability: this is the Host's `task/controlService {group:true}` capability;
- * no shipped renderer/main caller sends that payload yet (the dock's only start
- * button is the single-service `runTaskService`), so the group path is exercised
- * today by the Host-level suites. See `docs/task-graph.md` 「整组启动与真实互验」
- * for the named boundary.
+ * Reachability: this is the Host's `task/controlService {group:true}` capability,
+ * and it has a shipped caller - main's `runTaskServiceGroup`
+ * (`../main/runtime.ts`), reached from the dock's 整组启动 through
+ * `shell/serviceCatalogOp {op:"runTaskServiceGroup"}`. See `docs/task-graph.md`
+ * 「整组启动与真实互验」 for the named boundary (no dependency edge on that
+ * route, so 已互验 stays unreachable there).
  */
 async function runGroupServiceStart(input: {
   taskId: string;

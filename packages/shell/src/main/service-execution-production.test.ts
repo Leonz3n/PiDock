@@ -29,6 +29,7 @@
 import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -98,6 +99,35 @@ console.log("pid:" + process.pid);
 console.log("token:" + (process.env.SERVICE_TOKEN ?? "none"));
 setInterval(() => {}, 1000);
 `;
+
+/**
+ * A real child that binds the port its OWN environment declares and writes the
+ * pid it really got. The group branch observes 已监听 through a real TCP connect
+ * to that registration-declared address, so the fixture has to really listen.
+ */
+const GROUP_LISTENING_SCRIPT = `const http = require("node:http");
+const fs = require("node:fs");
+const port = Number(process.env.PORT);
+const tag = process.env.SERVICE_TAG;
+fs.writeFileSync("started-" + tag + ".txt", String(process.pid));
+const server = http.createServer((_request, response) => { response.end(tag); });
+server.listen(port, "127.0.0.1", () => {
+  fs.writeFileSync("listening.txt", String(process.pid));
+  console.log("listening:" + tag);
+});
+setInterval(() => {}, 1000);
+`;
+
+/** One free loopback port for a bound service to declare; closed again at once. */
+async function freePort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (address === null || typeof address === "string") throw Error("no ephemeral port");
+  const port = address.port;
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  return port;
+}
 
 const cleanups: (() => void | Promise<void>)[] = [];
 const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
@@ -445,5 +475,89 @@ describe.skipIf(process.platform === "win32")("#7 production shell/serviceCatalo
     // absent Host entry plus the absent marker.)
     expect(f.tasks.size).toBe(0);
     expect(existsSync(f.marker("a"))).toBe(false);
+  }, 30_000);
+});
+
+/**
+ * [PiDock 05] (#10 box 4) the SAME installed handler, the group branch: the
+ * `{op:"runTaskServiceGroup"}` case of `shell/serviceCatalogOp`. The sibling
+ * suite above drives the single-service branch; `../host/service-group-linkage.test.ts`
+ * drives `runTaskServiceGroup` through a fake registry. This one is the hop the
+ * two leave unpinned: the real handler → `runTaskServiceGroup` → the real
+ * registry → the real Host → REAL children.
+ */
+describe.skipIf(process.platform === "win32")("#10 production shell/serviceCatalogOp group start", () => {
+  it("starts the task's whole bound group through the registered handler and observes the real children", async () => {
+    const f = await production();
+    const portA = await freePort();
+    const portB = await freePort();
+    // The renderer names only project/task, so main owns the membership: every
+    // service bound in the trusted catalog is a member of the group.
+    const bindListening = (subdir: string, tag: string, port: number) => {
+      writeFileSync(join(f.taskDir, "repo-a", subdir, "service.cjs"), GROUP_LISTENING_SCRIPT);
+      // The port comes from the template's own SHARED row: it is both the value
+      // the child binds and the port the registration declares, so no synthetic
+      // private reference is needed to drive the real group path.
+      const template = f.catalog.saveTemplate({ projectId: f.projectId,
+        descriptor: { name: `API ${tag}`, program: "node", args: ["service.cjs"], ports: [], runType: "long-lived" },
+        shared: [{ key: "SERVICE_TAG", value: tag, secret: false }, { key: "PORT", value: String(port), secret: false }] });
+      f.catalog.bindTask({ taskId: f.taskId, serviceId: template.serviceId, templateVersion: 1, rootId: "repo-a", subdir,
+        programPath: realpathSync(process.execPath), privateRefs: [] });
+      return template.serviceId;
+    };
+    const first = bindListening("svc-a", "a", portA);
+    const second = bindListening("svc-b", "b", portB);
+
+    const answered = await f.op({ op: "runTaskServiceGroup", projectId: f.projectId, taskId: f.taskId }) as
+      { ok: boolean; payload?: { group: Record<string, unknown> } };
+    expect(answered.ok).toBe(true);
+    const group = answered.payload?.group as Record<string, unknown>;
+    // The Host's own group observation, over the plan main derived from the
+    // catalog: both units really started and really accepted a connection on the
+    // address their own registration declares. No dependency edge exists on this
+    // route, so 已互验 is not claimed.
+    expect(group["state"]).toBe("listening");
+    const units = group["units"] as Record<string, unknown>[];
+    expect(units).toHaveLength(2);
+    expect(units.map((unit) => unit["serviceId"]).sort()).toEqual([first, second].sort());
+    expect(units.map((unit) => unit["start"])).toEqual(["started", "started"]);
+    expect(units.map((unit) => unit["listening"])).toEqual(["listening", "listening"]);
+    expect(units.map((unit) => unit["linked"])).toEqual([false, false]);
+    expect(units.flatMap((unit) => (unit["steps"] as Record<string, unknown>[])).filter((step) => step["kind"] === "linkage")).toEqual([]);
+    expect(units.find((unit) => unit["serviceId"] === first)).toMatchObject({ order: 1, address: { host: "127.0.0.1", port: portA }, observedRun: true });
+    expect(units.find((unit) => unit["serviceId"] === second)).toMatchObject({ order: 2, address: { host: "127.0.0.1", port: portB }, observedRun: true });
+
+    // REAL children: each unit's own pid is alive and is the pid that wrote the
+    // marker in ITS OWN working directory - and the Host registered the same
+    // launch the single-service path executes.
+    const children: number[] = [];
+    for (const [subdir, tag, serviceId] of [["svc-a", "a", first], ["svc-b", "b", second]] as const) {
+      const marker = join(f.taskDir, "repo-a", subdir, "listening.txt");
+      const pid = await untilMarkerPid(f.taskDir, tag);
+      children.push(pid);
+      expect(alive(pid)).toBe(true);
+      // The binding the Host observed is the child's OWN socket: it wrote this
+      // pid only from its `listen` callback, on the declared port.
+      await until(() => { try { return readFileSync(marker, "utf8") === String(pid); } catch { return false; } }, `the listening marker of svc-${tag}`);
+      expect(units.find((unit) => unit["serviceId"] === serviceId)?.["pid"]).toBe(pid);
+      expect(await f.status(serviceId)).toMatchObject({ lifecycle: "running", launchSource: "catalog", health: "not-probed" });
+    }
+    expect(new Set(children).size).toBe(2);
+
+    // Stopped through the SAME registered tree: the group path left no child of
+    // its own behind.
+    for (const serviceId of [first, second]) {
+      expect(await f.run(serviceId, "stop")).toMatchObject({ ok: true, payload: { serviceId, action: "stop" } });
+    }
+    await until(() => children.every((pid) => !alive(pid)), "both group children to exit");
+  }, 60_000);
+
+  it("refuses a group start with no bound service by name through the same handler, starting nothing", async () => {
+    const f = await production();
+    // The task exists but the trusted catalog binds nothing to it: main refuses
+    // by name before resolving a launch, forking a Host or planning a group.
+    expect(await f.op({ op: "runTaskServiceGroup", projectId: f.projectId, taskId: f.taskId }))
+      .toEqual({ ok: false, error: "service-group-empty: 该任务在可信服务目录中没有已绑定的服务，未发起整组启动" });
+    expect(f.tasks.size).toBe(0);
   }, 30_000);
 });

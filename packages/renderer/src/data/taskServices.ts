@@ -739,8 +739,10 @@ function groupUnit(value: unknown): ServiceGroupUnitView | null {
  * observation, so nothing here may be smoothed over:
  *
  * - a passing state (「已监听」/「已互验」) requires that NO unit was refused, parked,
- *   failed to start or stopped listening and that NO step failed: a refusal or a
- *   failure therefore cannot leave a passing group in the payload or in the UI;
+ *   failed to start, stopped listening or stayed unobserved (`not-probed`) and
+ *   that NO step failed or stayed unobserved: a refusal, a failure or an
+ *   unprobed thing therefore cannot leave a passing group in the payload or in
+ *   the UI;
  * - 「已互验」 additionally requires a real `linkage` step whose outcome passed, so
  *   the group can never claim a mutual verification nobody observed;
  * - a plan/declared fact has no way in: `listening`/`outcome` are the Host's own
@@ -791,12 +793,14 @@ export function serviceGroupRunFromHost(payload: unknown): ServiceGroupRunView |
     diagnostics.push(diagnostic);
   }
   if ((GROUP_GREEN_STATES as readonly string[]).includes(state)) {
-    // A passing group must not contain a unit that was refused, parked, failed or
-    // stopped listening, nor a failed step: without this, one refused unit could
-    // still leave a passing group on screen.
-    if (units.some((unit) => unit.start !== "started" || unit.listening === "not-listening")) return null;
+    // A passing group must not contain a unit that was refused, parked, failed,
+    // stopped listening or stayed unobserved, nor a failed or unobserved step:
+    // without this, one refused unit could still leave a passing group on screen
+    // (and one never-probed unit/step could ride a 已互验 group). `not-probed` is
+    // a named state, so an unobserved thing never passes for an observed one.
+    if (units.some((unit) => unit.start !== "started" || unit.listening === "not-listening" || unit.listening === "not-probed")) return null;
     if (units.every((unit) => unit.start !== "started")) return null;
-    if (units.some((unit) => unit.steps.some((step) => step.outcome === "dependency-unreachable" || step.outcome === "verify-failed"))) return null;
+    if (units.some((unit) => unit.steps.some((step) => step.outcome === "dependency-unreachable" || step.outcome === "verify-failed" || step.outcome === "not-probed"))) return null;
     if (state === "verified") {
       const linkage = units.flatMap((unit) => unit.steps).filter((step) => step.kind === "linkage");
       if (!linkage.some((step) => step.outcome === "passed")) return null;

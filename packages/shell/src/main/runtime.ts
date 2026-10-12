@@ -43,7 +43,7 @@ import { ProjectRegistry } from "./project-registry.js";
 import { ServiceCatalog, serviceCatalogAuthority, type ServiceLaunch } from "./service-catalog.js";
 import { InstalledServiceHostAuthority, type ServiceOwnerChange, type ServiceOwnerDurableRecord } from "./service-host-binding.js";
 import { parseServiceOwnerRebindRequest, performServiceBindingOperation, performServiceCatalogOperation, performServiceConfigPreview, parseServiceRunGroupRequest, parseServiceRunRequest } from "./service-catalog-ipc.js";
-import { declaredServicePorts } from "./service-config.js";
+import { declaredServicePorts, resolveServiceEnv } from "./service-config.js";
 import { loadExternalEditorSettings, type ExternalEditorSettingsResult } from "./external-editor.js";
 import { performEditorSettingsOperation } from "./external-editor-settings.js";
 import { performProjectOperation } from "./project-ipc.js";
@@ -1194,18 +1194,31 @@ async function planBoundServiceGroup(
   request: ReturnType<typeof parseServiceRunGroupRequest>,
   origin: { kind: "service-catalog"; senderWebContentsId: number },
 ): Promise<void> {
-  const planned = bound.map(({ binding, launch }) => ({
-    unitId: `${binding.rootId}:${launch.serviceId}`,
-    serviceId: launch.serviceId,
-    name: launch.descriptor.name,
-    repoDir: binding.rootId,
-    runType: launch.descriptor.runType,
-    // The ports this service's launch DECLARES (never a probe): the template's
-    // own list plus its `*PORT` config rows, the same rule the registration's
-    // declared address uses. A long-lived unit with none fails the port-first
-    // plan closed by name - it is never dropped from the group.
-    declared: declaredServicePorts(launch.descriptor.ports, [...launch.layers.shared, ...launch.layers.privateEntries]),
-  }));
+  const planned = bound.map(({ binding, launch }) => {
+    // The ports this service's launch DECLARES (never a probe): the descriptor's
+    // own list plus its `*PORT` RESOLVED rows - the SAME two inputs the Host's
+    // declared-address rule reads (`declaredServicePorts(descriptor.ports,
+    // record.resolved)`), so main cannot drift from what the registration will
+    // declare. Re-deriving a subset of the layers here would drop a port that
+    // lives in `repoDefaults`/`task` and fail the plan closed as a FALSE
+    // `missing-port`. A long-lived unit with none fails the port-first plan
+    // closed by name - it is never dropped from the group.
+    const resolved = resolveServiceEnv(launch.layers);
+    if (!resolved.ok) {
+      // The registration of this same launch already resolved these layers, so
+      // this is defence in depth: it refuses by the same name rather than
+      // planning against rows main could not read.
+      throw new Error(`服务登记失败，未发起整组启动：${launch.serviceId} 的启动材料无法从可信服务目录解析（${resolved.error.code}: ${resolved.error.message}）`);
+    }
+    return {
+      unitId: `${binding.rootId}:${launch.serviceId}`,
+      serviceId: launch.serviceId,
+      name: launch.descriptor.name,
+      repoDir: binding.rootId,
+      runType: launch.descriptor.runType,
+      declared: declaredServicePorts(launch.descriptor.ports, resolved.rows),
+    };
+  });
   await tasks.routeTaskOp({
     taskId: request.taskId,
     op: "task/planServiceGroup",
