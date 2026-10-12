@@ -430,6 +430,22 @@ export function endpointKeyCandidates(serviceId: string): string[] {
 }
 
 /**
+ * The address variables of one run unit, under BOTH spellings the trusted data
+ * uses: the unit's stable `serviceId` AND its human name.
+ *
+ * The name is not decoration: a catalog-minted service id is an opaque UUID
+ * (`s-<uuid>`), so its derived spelling (`S_<uuid>_URL`) matches no business
+ * config row, while the shared template and the repo config name the service the
+ * way its author does (`CALLEE_API_URL` for a service named `Callee API`). An
+ * audit that looked at the id alone would therefore be silent in production for
+ * exactly the rows box 2 asks about. Both spellings are searched, in this order,
+ * and duplicates collapse.
+ */
+export function unitEndpointKeyCandidates(unit: Pick<RunUnit, "serviceId" | "name">): string[] {
+  return [...new Set([...endpointKeyCandidates(unit.serviceId), ...endpointKeyCandidates(unit.name)])];
+}
+
+/**
  * Resolve the task override rows from port assignments. Ports must already
  * be final (`planPortAssignments` / `reallocatePortAssignments`): a rule for
  * a local unit without an assignment fails closed with `missing-port`
@@ -582,7 +598,7 @@ export function deriveBindingRules(input: {
   const rules: BindingRule[] = [];
   for (const unit of input.units) {
     if (unit.location !== "local") continue;
-    const candidates = endpointKeyCandidates(unit.serviceId).filter((key) => SERVICE_KEY_PATTERN.test(key));
+    const candidates = unitEndpointKeyCandidates(unit).filter((key) => SERVICE_KEY_PATTERN.test(key));
     if (candidates.length === 0) continue;
     const read = candidates.filter((key) => readKeys.has(key));
     // A declaration always yields one bound address variable; without one, a
@@ -620,7 +636,7 @@ export function auditBindingReadPoints(input: {
   const diagnostics: RunDiagnostic[] = [];
   for (const unit of input.units) {
     if (unit.location !== "local") continue;
-    for (const candidate of endpointKeyCandidates(unit.serviceId)) {
+    for (const candidate of unitEndpointKeyCandidates(unit)) {
       if (boundKeys.has(candidate)) continue;
       for (const [source, entries] of points) {
         if (!entries.some((entry) => entry.key.trim() === candidate)) continue;
