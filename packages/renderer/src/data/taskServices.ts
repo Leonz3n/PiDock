@@ -151,8 +151,13 @@ function registryStatus(row: Record<string, unknown>, serviceId: string): Servic
 
 /** `<platform>-<arch>`: the only shape the Host may label a platform with. */
 const PLATFORM_LABEL = /^[a-z0-9]+-[a-z0-9]+$/;
-/** The row keys the projection may carry; anything else makes the read unreadable. */
-const VERIFICATION_ROW_KEYS = ["platform", "verified", "reason", "nodeVersion", "program", "startedAt", "stopped", "stoppedAt"];
+/**
+ * The row keys the Host's projection may carry; anything else makes the read
+ * unreadable. Exported so the seam test (`taskLaunchVerificationSeam.test.ts`)
+ * can pin the REAL `publicServiceStatus` rows against this list: a key the Host
+ * adds must be added here too, or every status row would silently go blank.
+ */
+export const VERIFICATION_ROW_KEYS = ["platform", "verified", "reason", "nodeVersion", "program", "startedAt", "stopped", "stoppedAt"];
 /** `undefined` for an absent field, `null` for a present-but-unusable one. */
 const optionalText = (value: unknown): string | undefined | null =>
   value === undefined ? undefined : typeof value === "string" && value.length > 0 && value.length <= 2000 ? value : null;

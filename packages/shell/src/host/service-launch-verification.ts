@@ -20,8 +20,13 @@
  * Scope: one document per task workspace
  * (`<taskDir>/service-launch-verification.json`), shaped and written like its
  * sibling `service-ownership.json` (strict parse, exclusive temp file + fsync +
- * rename). Each entry carries the machine's own platform label, so the record
- * is per task + service + platform and never claims a platform it did not run.
+ * rename). Each entry carries the machine's own platform label, the
+ * installation identity that observed the launch (`hostInstallationId()`), and
+ * the template version it was observed against, so the record is per task +
+ * service + platform + installation and never claims a launch this installation
+ * (or this template) did not run. The installation/template binding is optional
+ * on read so a workspace written before it existed still parses; an entry
+ * without a binding never reads as verified.
  */
 
 import {

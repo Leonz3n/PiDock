@@ -508,6 +508,11 @@ it("records THIS platform's real launch in the task workspace and projects it wi
     args: ["service.cjs"],
     startedAt: expect.any(String),
     stopped: false,
+    // Bound to THIS installation and the template it launched against, so a
+    // task folder copied to another machine of the same platform is not a
+    // verification of that machine ([PiDock 04] #7 box 7).
+    installationId: expect.any(String),
+    templateVersion: "1",
   }]);
 
   const rows = publicServiceStatus(f.surface.services.get(f.serviceId)!).launchVerification.rows;

@@ -1329,6 +1329,16 @@ export interface LaunchVerificationEntry {
   stopped: boolean;
   /** ISO time of that confirmed stop; present exactly when `stopped`. */
   stoppedAt?: string;
+  /**
+   * The installation that observed this launch (`hostInstallationId()`), when
+   * bound. Optional on read so a workspace written before this binding existed
+   * still parses; an entry without it never reads as verified here. A task
+   * folder copied to another machine of the same platform must not carry a
+   * verification of this one.
+   */
+  installationId?: string;
+  /** The service template version this launch was observed against, when bound. */
+  templateVersion?: string;
 }
 
 export interface LaunchVerificationDiskRecord {
@@ -1371,6 +1381,14 @@ function parseLaunchVerificationEntry(value: unknown): LaunchVerificationEntry {
   }
   if (typeof entry["stopped"] !== "boolean") {
     throw new Error("invalid-payload: launch verification entry.stopped must be a boolean");
+  }
+  // The installation/template binding is optional on read (a workspace written
+  // before it existed still parses), but a present value must be usable: an
+  // empty string would silently read as "bound to nothing".
+  for (const key of ["installationId", "templateVersion"] as const) {
+    if (entry[key] !== undefined && (typeof entry[key] !== "string" || (entry[key] as string).length === 0)) {
+      throw new Error(`invalid-payload: launch verification entry.${key} must be a non-empty string`);
+    }
   }
   // A stop time without a stop (or a bare stop with no time) would let a reader
   // infer an observation that was never recorded.
