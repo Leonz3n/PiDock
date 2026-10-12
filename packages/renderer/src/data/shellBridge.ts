@@ -440,30 +440,30 @@ export async function registerServiceThroughShell(input: {
 
 /**
  * [PiDock 05] (#10) plan the task's multi-service topology on the Host
- * (`task/planServiceGroup`): units, final ports, variable bindings, routing,
- * start groups and diagnostics. Sending no `sessionId` keeps the attested
- * human-UI path (the plan is labelled with the actor). The response carries
- * no env layers and no secret values — only masked/derived task addresses.
+ * (`task/planServiceGroup`): units, final ports and start groups. Sending no
+ * `sessionId` keeps the attested human-UI path (the plan is labelled with the
+ * actor). The response carries no env layers and no secret values — only
+ * masked/derived task addresses.
+ *
+ * Deliberately NOT parameters: `dependencies` (the group's call/prestart edges),
+ * `rules` (variable binding rules) and `layers` (the config read points). Those
+ * are the plan's TRUSTED inputs — main derives them from the service catalog, so
+ * a page has no API here to name them at all; and if such a payload ever reaches
+ * main's `shell/taskOp`, that route refuses it by name.
  */
 export async function planServiceGroupThroughShell(input: {
   taskId: string;
   units: Record<string, unknown>[];
   selectedRepoDirs?: string[];
-  dependencies?: { from: string; to: string; kind: "call" | "prestart" }[];
   requests?: { unitId: string; port: number }[];
   reservations?: { port: number; owner: "external" | "task"; taskId?: string; unitId?: string; serviceId?: string; note?: string }[];
-  rules?: { key: string; unitId: string; kind: "url" | "host-port"; template?: string }[];
-  layers?: Record<string, unknown>;
   environment?: string;
   externalResources?: { resourceId: string; name: string; kind: string; isolatedByTask?: boolean }[];
 }): Promise<ShellTaskOpResult> {
   const payload: Record<string, unknown> = { units: input.units };
   if (input.selectedRepoDirs !== undefined) payload["selectedRepoDirs"] = input.selectedRepoDirs;
-  if (input.dependencies !== undefined) payload["dependencies"] = input.dependencies;
   if (input.requests !== undefined) payload["requests"] = input.requests;
   if (input.reservations !== undefined) payload["reservations"] = input.reservations;
-  if (input.rules !== undefined) payload["rules"] = input.rules;
-  if (input.layers !== undefined) payload["layers"] = input.layers;
   if (input.environment !== undefined) payload["environment"] = input.environment;
   if (input.externalResources !== undefined) payload["externalResources"] = input.externalResources;
   try {

@@ -954,10 +954,12 @@ export function createShellHostAdapter(fallback: HostAdapter): HostAdapter {
           const plan = await planServiceGroupThroughShell({
             taskId,
             units,
-            dependencies: local.units.flatMap((unit) =>
-              unit.dependencies.map((dependency) => ({ from: unit.unitId, to: dependency.to, kind: dependency.kind })),
-            ),
             requests,
+            // No `dependencies`: the plan's call/prestart edges are TRUSTED data.
+            // They come from the environment's shared templates through main
+            // (`runTaskServiceGroup` → `planBoundServiceGroup`), and main's
+            // `shell/taskOp` refuses a page that names them. This read asks the
+            // Host only for its ports, groups and diagnostics.
             // The environment label the memory projection uses
             // (`environment?.name ?? task.environmentId`) is carried on its
             // remote routing target; reuse it instead of sending the task id

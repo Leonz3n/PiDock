@@ -2154,6 +2154,29 @@ export function registerIpc(
           "shell/taskOp 不接受 task/openEditor，外部编辑器只允许从文件面板经 shell/openTaskEditor 打开（ref #15）",
         );
       }
+      // [PiDock 05] (#10 box 1/4 + ADR 0002) the plan's own inputs are TRUSTED
+      // data, so this route refuses the three keys a page could otherwise name:
+      // `dependencies` (the group's call/prestart edges), `rules` (which variable
+      // a task override binds) and `layers` (the read points the audit checks). A
+      // page that could send them would decide what a group start really runs and
+      // what the read-point audit gets to look at - measured against rows it
+      // supplied itself. Main derives all three from the trusted service catalog
+      // (`runTaskServiceGroup` -> `planBoundServiceGroup`) and reaches the Host
+      // through `PerTaskHostRegistry.routeTaskOp`, never through this handler, so
+      // no production caller is lost here. Refused BY NAME per key, before the
+      // Host is asked anything.
+      if (op === "task/planServiceGroup") {
+        const planPayload = typeof record["payload"] === "object" && record["payload"] !== null
+          ? (record["payload"] as Record<string, unknown>)
+          : {};
+        for (const key of ["dependencies", "rules", "layers"] as const) {
+          if (planPayload[key] === undefined) continue;
+          throw new TrustDomainViolation(
+            "invalid-payload",
+            `shell/taskOp 不接受 task/planServiceGroup.${key}：计划的依赖边、变量绑定规则与配置层只从可信服务目录读取（ref #7）`,
+          );
+        }
+      }
       // [PiDock 03] (#6) a resume needs its executor BEFORE the Host op runs:
       // `task/resumeAppend` writes the record, so checking after the route
       // would leave a record update with no executor in main to run the plan

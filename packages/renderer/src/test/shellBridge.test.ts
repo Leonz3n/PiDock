@@ -68,10 +68,8 @@ describe("#10 service group bridge (S3)", () => {
             taskId: "task-a",
             units,
             selectedRepoDirs: ["front"],
-            dependencies: [{ from: "front:saas-web", to: "front:saas-bff", kind: "prestart" }],
             requests: [{ unitId: "front:saas-web", port: 5173 }],
             reservations: [{ port: 5173, owner: "task", taskId: "task-b" }],
-            rules: [{ key: "SAAS_WEB_URL", unitId: "front:saas-web", kind: "url" }],
             environment: "testing",
             externalResources: [{ resourceId: "res-q", name: "events", kind: "queue" }],
           })
@@ -90,6 +88,12 @@ describe("#10 service group bridge (S3)", () => {
         requests: [{ unitId: "front:saas-web", port: 5173 }],
         environment: "testing",
       });
+      // The plan's TRUSTED inputs are not part of this bridge at all: a panel plan
+      // can name no dependency edge, no binding rule and no config layer. Main's
+      // `shell/taskOp` refuses a payload that carries any of them by name.
+      expect(seen[0].payload).not.toHaveProperty("dependencies");
+      expect(seen[0].payload).not.toHaveProperty("rules");
+      expect(seen[0].payload).not.toHaveProperty("layers");
       // Human-UI path: no sessionId is ever sent by the panel plan.
       expect(seen[0].payload?.["sessionId"]).toBeUndefined();
       expect(seen[2].payload).toEqual({ instanceId: "task-a/saas-web" });
