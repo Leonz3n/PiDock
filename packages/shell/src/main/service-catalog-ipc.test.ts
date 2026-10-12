@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { parseServiceOwnerRebindRequest, parseServiceRunGroupRequest, parseServiceRunRequest, performServiceBindingOperation, performServiceCatalogOperation, performServiceConfigPreview } from "./service-catalog-ipc.js";
-import type { ServiceBindingAdoption, ServiceCatalog, ServiceEnvironment, ServiceTemplate, ServiceTemplateUpdateReview } from "./service-catalog.js";
+import type { ServiceBindingAdoption, ServiceCatalog, ServiceEnvironment, ServiceTemplate, ServiceTemplateDependency, ServiceTemplateUpdateReview } from "./service-catalog.js";
 
 const projectId = "b36323d3-ff33-4e34-a873-536a9775788a";
 const environment: ServiceEnvironment = { projectId, environmentId: "e-b36323d3-ff33-4e34-a873-536a9775788a", name: "开发环境" };
@@ -14,7 +14,7 @@ const template: ServiceTemplate = {
 };
 function store(saved: ServiceTemplate = template) {
   const review: ServiceTemplateUpdateReview = { projectId: saved.projectId, environmentId: saved.environmentId, serviceId: saved.serviceId, version: saved.version,
-    versionLabel: `v${String(saved.version)}`, saved: false, descriptorChanged: true, contentChanged: true,
+    versionLabel: `v${String(saved.version)}`, saved: false, descriptorChanged: true, dependenciesChanged: false, contentChanged: true,
     diff: { added: [], changed: [], removed: [] }, restartNeeded: [] };
   const adoption: ServiceBindingAdoption = { taskId: "task-1", serviceId: saved.serviceId, environmentId: saved.environmentId, from: 1, to: 2, adopted: false,
     restartNeeded: [{ taskId: "task-1", serviceId: saved.serviceId, name: "API", from: 1, to: 2 }] };
@@ -189,6 +189,56 @@ describe("shell service catalog request boundary", () => {
       { op: "list", projectId: template.projectId, environmentId: environment.environmentId, taskId: "other-task" },
     ]) expect(() => performServiceCatalogOperation(catalog, request)).toThrow();
     expect(catalog.listTemplates).not.toHaveBeenCalled();
+    expect(catalog.saveTemplate).not.toHaveBeenCalled();
+  });
+
+  // [PiDock 04] #7 box 1 (ADR 0002): the 服务依赖声明 an environment's shared
+  // template may carry. The boundary accepts exactly `{to, kind}` rows per
+  // target, an absent key and `[]` both mean "no declaration", and anything else
+  // is refused by name before the store is reached.
+  it("carries an environment's service dependency declarations through save and review, and nothing else", () => {
+    const declared: ServiceTemplateDependency[] = [{ to: "s-11111111-1111-4111-8111-111111111111", kind: "call" }, { to: "s-22222222-2222-4222-8222-222222222222", kind: "prestart" }];
+    const catalog = store({ ...template, version: 2 });
+    const input = { op: "create", projectId: template.projectId, environmentId: environment.environmentId, descriptor: template.descriptor, shared: template.shared, dependencies: declared };
+    performServiceCatalogOperation(catalog, input);
+    expect(catalog.saveTemplate).toHaveBeenCalledWith({ projectId: template.projectId, environmentId: environment.environmentId,
+      descriptor: template.descriptor, shared: template.shared, dependencies: declared });
+    // The projection carries the declaration back; a revision nobody declared
+    // anything on projects NO key (absent, never an empty graph - the case the
+    // first test in this file pins with its key-exact `publicRow`).
+    const publicRow = { projectId: template.projectId, environmentId: template.environmentId, serviceId: template.serviceId, version: template.version,
+      descriptor: template.descriptor, shared: [{ key: "PORT", value: "3000" }] };
+    expect(performServiceCatalogOperation(store({ ...template, dependencies: declared }),
+      { op: "create", projectId: template.projectId, environmentId: environment.environmentId, descriptor: template.descriptor, shared: template.shared }))
+      .toEqual({ ...publicRow, dependencies: declared });
+    const edit = { op: "update", projectId: template.projectId, environmentId: environment.environmentId, serviceId: template.serviceId,
+      expectedVersion: 1, descriptor: template.descriptor, shared: template.shared, confirm: false, dependencies: declared };
+    performServiceCatalogOperation(catalog, edit);
+    expect(catalog.reviewTemplateUpdate).toHaveBeenCalledWith({ projectId: template.projectId, environmentId: environment.environmentId,
+      serviceId: template.serviceId, expectedVersion: 1, descriptor: template.descriptor, shared: template.shared, dependencies: declared });
+    // An absent key reaches the store as absent: the previous request shape still works verbatim.
+    performServiceCatalogOperation(catalog, { op: "create", projectId: template.projectId, environmentId: environment.environmentId, descriptor: template.descriptor, shared: [] });
+    expect(catalog.saveTemplate).toHaveBeenLastCalledWith({ projectId: template.projectId, environmentId: environment.environmentId,
+      descriptor: template.descriptor, shared: [] });
+  });
+
+  it("refuses a declaration row that carries more than a target and a kind, or an invented target shape", () => {
+    const catalog = store();
+    const base = { op: "create", projectId: template.projectId, environmentId: environment.environmentId, descriptor: template.descriptor, shared: template.shared };
+    for (const dependencies of [
+      [{ to: template.serviceId, kind: "call", label: "worker" }],
+      [{ to: template.serviceId, kind: "run" }],
+      [{ to: template.serviceId }],
+      [{ to: 7, kind: "call" }],
+      { to: template.serviceId, kind: "call" },
+      Array.from({ length: 41 }, () => ({ to: template.serviceId, kind: "call" })),
+    ]) expect(() => performServiceCatalogOperation(catalog, { ...base, dependencies })).toThrow(/invalid service dependency declaration/);
+    // The deeper rules stay the STORE's named refusals: an unknown target and a
+    // self-edge are not silently fixed up at the boundary either.
+    const deep = store();
+    deep.saveTemplate.mockImplementation(() => { throw new Error("dependency declaration target s-00000000-0000-4000-8000-000000000000 does not exist in this environment"); });
+    expect(() => performServiceCatalogOperation(deep, { ...base, dependencies: [{ to: "s-00000000-0000-4000-8000-000000000000", kind: "call" }] }))
+      .toThrow(/does not exist in this environment/);
     expect(catalog.saveTemplate).not.toHaveBeenCalled();
   });
 });

@@ -16,7 +16,7 @@
 import { describe, expect, it } from "vitest";
 import type { HostTaskResult } from "../rpc/protocol.js";
 import { runTaskServiceGroup, type PerTaskHostRegistry } from "./runtime.js";
-import type { ServiceCatalog, ServiceLaunch, ServiceTaskBinding, ServiceTemplate } from "./service-catalog.js";
+import type { ServiceCatalog, ServiceLaunch, ServiceTaskBinding, ServiceTemplate, ServiceTemplateDependency } from "./service-catalog.js";
 
 const PROJECT = "b36323d3-ff33-4e34-a873-536a9775788a";
 const TASK = "task-1";
@@ -206,5 +206,78 @@ describe("[PiDock 05] #10 main's group plan reads the SAME declared-port rule as
     const planned = calls.find((call) => call.op === "task/planServiceGroup");
     expect(planned?.payload["requests"]).toEqual([]);
     expect(planned?.payload["units"]).toHaveLength(1);
+  });
+});
+
+/**
+ * [PiDock 04] #7 box 1 (ADR 0002) + [PiDock 05] #10 box 4: the plan's dependency
+ * edges come from the 服务依赖声明 of the revisions the task PINS. These cases
+ * pin the exact payload main sends (the neighbouring
+ * `../host/service-group-declaration.test.ts` drives the same route against a
+ * real Host and real children), and the honesty rule that goes with it: a
+ * revision that declares nothing contributes NO edge, and a declared target the
+ * task has not bound is refused BY NAME instead of being dropped.
+ */
+const CALLEE = "s-11111111-1111-4111-8111-111111111111";
+const CALLER = "s-22222222-2222-4222-8222-222222222222";
+
+/** One bound service whose PINNED revision carries these declarations. */
+function declaring(serviceId: string, dependencies: ServiceTemplateDependency[]): { binding: ServiceTaskBinding; template: ServiceTemplate } {
+  const row = boundService(serviceId);
+  return { binding: row.binding, template: { ...row.template, dependencies } };
+}
+
+describe("[PiDock 05] #10 main's group plan feeds the DECLARED edges and nothing else", () => {
+  it("maps each declared edge onto the plan's own unit ids, keeping call and prestart distinct", async () => {
+    const { tasks, calls } = registry((call) => call.op === "task/controlService" ? { group: { state: "not-planned" } } : { ok: true });
+    const catalog = {
+      taskBindings: () => [declaring(CALLER, [{ to: CALLEE, kind: "call" }, { to: CALLEE, kind: "prestart" }]), boundService(CALLEE)],
+      launchFor: (_taskId: string, _projectId: string, serviceId: string) => launchOf(serviceId, EMPTY_LAYERS),
+    } satisfies Pick<ServiceCatalog, "launchFor" | "taskBindings">;
+
+    await runTaskServiceGroup(tasks, catalog, REQUEST, 7);
+
+    const planned = calls.find((call) => call.op === "task/planServiceGroup");
+    const declaredEdges = [{ from: `repo-a:${CALLER}`, to: `repo-a:${CALLEE}`, kind: "call" },
+      { from: `repo-a:${CALLER}`, to: `repo-a:${CALLEE}`, kind: "prestart" }];
+    // The whole list, in declaration order and by the plan's own unit ids: the
+    // two kinds stay distinguishable, and the plan receives no edge the
+    // declaration does not contain.
+    expect(planned?.payload["dependencies"]).toEqual(declaredEdges);
+    // MUTATION: a synthesised edge - the reverse direction, or one more edge than
+    // was declared - fails this equality. Nothing in this route invents an edge.
+    expect(planned?.payload["dependencies"]).not.toEqual([...declaredEdges, { from: `repo-a:${CALLEE}`, to: `repo-a:${CALLER}`, kind: "call" }]);
+    expect(planned?.payload["dependencies"]).not.toEqual([{ from: `repo-a:${CALLEE}`, to: `repo-a:${CALLER}`, kind: "call" }]);
+  });
+
+  it("sends NO dependencies key when the pinned revisions declare nothing: no declaration, no edge", async () => {
+    const { tasks, calls } = registry((call) => call.op === "task/controlService" ? { group: { state: "not-planned" } } : { ok: true });
+    const catalog = {
+      taskBindings: () => [boundService(CALLER), boundService(CALLEE)],
+      launchFor: (_taskId: string, _projectId: string, serviceId: string) => launchOf(serviceId, EMPTY_LAYERS),
+    } satisfies Pick<ServiceCatalog, "launchFor" | "taskBindings">;
+
+    await runTaskServiceGroup(tasks, catalog, REQUEST, 7);
+
+    const planned = calls.find((call) => call.op === "task/planServiceGroup");
+    // THE honesty assertion of this slice: two bound services with no declaration
+    // produce a plan with NO edge at all - not an edge inferred from binding
+    // order, from a shared variable or from the repository they live in.
+    expect(planned?.payload).not.toHaveProperty("dependencies");
+  });
+
+  it("refuses by name when a declared target is not bound to this task, and plans nothing", async () => {
+    const { tasks, calls } = registry((call) => call.op === "task/controlService" ? { group: { state: "not-planned" } } : { ok: true });
+    const catalog = {
+      taskBindings: () => [declaring(CALLER, [{ to: CALLEE, kind: "call" }])],
+      launchFor: (_taskId: string, _projectId: string, serviceId: string) => launchOf(serviceId, EMPTY_LAYERS),
+    } satisfies Pick<ServiceCatalog, "launchFor" | "taskBindings">;
+
+    expect(await refusalOf(() => runTaskServiceGroup(tasks, catalog, REQUEST, 7))).toBe(
+      `服务依赖声明无法满足，未生成整组计划：「API」（${CALLER}）声明的依赖目标 ${CALLEE} 未在本任务的服务绑定中，请先绑定该服务或从共享模板移除该声明`,
+    );
+    // The refusal precedes the plan AND the start: a group missing its declared
+    // prerequisite must not be started as if it were complete.
+    expect(calls.map((call) => call.op)).toEqual(["task/registerService", "task/controlService"]);
   });
 });

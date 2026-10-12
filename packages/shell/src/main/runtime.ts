@@ -40,7 +40,7 @@ import { TaskRootIndex, type VerifiedTaskIdentity } from "./task-root-index.js";
 import { HostTaskAdmission } from "../host/host-task-admission.js";
 import { shutdownDeadline } from "../host/shutdown-deadline.js";
 import { ProjectRegistry } from "./project-registry.js";
-import { ServiceCatalog, serviceCatalogAuthority, type ServiceLaunch } from "./service-catalog.js";
+import { ServiceCatalog, serviceCatalogAuthority, type ServiceLaunch, type ServiceTemplate } from "./service-catalog.js";
 import { InstalledServiceHostAuthority, type ServiceOwnerChange, type ServiceOwnerDurableRecord } from "./service-host-binding.js";
 import { parseServiceOwnerRebindRequest, performServiceBindingOperation, performServiceCatalogOperation, performServiceConfigPreview, parseServiceRunGroupRequest, parseServiceRunRequest } from "./service-catalog-ipc.js";
 import { declaredServicePorts, resolveServiceEnv } from "./service-config.js";
@@ -1124,15 +1124,20 @@ export async function runTaskService(
  * linkage verification); only when the Host itself answers `not-planned` does
  * main establish the task's group from the trusted catalog (units = the task's
  * bound services, ports = the ports their registrations declare, run type = the
- * template's own). That fallback carries no dependency edges - no production
- * dependency source exists yet (box 1's unit/dependency selection is its own
- * slice) - so such a group starts and listens but has nothing to 互验, which the
- * panel names instead of implying a linkage nobody observed.
+ * template's own).
  *
- * Fail-closed: an unresolvable launch, an unbound task or a plan whose ports
- * conflict refuses the whole request by name BEFORE any unit is dispatched (a
- * unit dropped from the group could otherwise leave a green group missing a
- * bound service).
+ * The edges of that fallback plan are the 服务依赖声明 of the revisions the task
+ * pins (ADR 0002), mapped onto the plan's own unit ids: a declared `call`/
+ * `prestart` edge is what makes the Host's real linkage step run for it, so
+ * 已互验 is reachable in the shipped app WITHOUT anybody synthesising an edge. A
+ * revision that declares nothing contributes none - the group then starts and
+ * listens but has nothing to 互验, which the panel names instead of implying a
+ * linkage nobody observed.
+ *
+ * Fail-closed: an unresolvable launch, an unbound task, a declared dependency
+ * whose target is not bound to this task or a plan whose ports conflict refuses
+ * the whole request by name BEFORE any unit is dispatched (a unit dropped from
+ * the group could otherwise leave a green group missing a bound service).
  */
 export async function runTaskServiceGroup(
   tasks: Pick<PerTaskHostRegistry, "routeTaskOp">,
@@ -1145,9 +1150,12 @@ export async function runTaskServiceGroup(
   if (bindings.length === 0) {
     throw new Error("service-group-empty: 该任务在可信服务目录中没有已绑定的服务，未发起整组启动");
   }
-  const bound = bindings.map(({ binding }) => {
+  const bound = bindings.map(({ binding, template }) => {
     try {
-      return { binding, launch: catalog.launchFor(request.taskId, request.projectId, binding.serviceId, process.env) };
+      // The revision the binding PINS carries the launch material AND the
+      // declaration the plan's edges come from; both are read from main's own
+      // store, never from a page or a Host answer.
+      return { binding, template, launch: catalog.launchFor(request.taskId, request.projectId, binding.serviceId, process.env) };
     } catch (error) {
       // `service-launch-unavailable` is main's fixed code and carries no path or
       // value, so it is safe to name verbatim beside the offending service. A
@@ -1199,15 +1207,34 @@ function groupRunState(payload: Record<string, unknown>): unknown {
 }
 
 /**
+ * The plan's own unit id for one task-bound service: `<rootId>:<serviceId>`, the
+ * id the Host's plan units (and therefore its start groups and verify steps)
+ * carry. Main reads the plan back by this id, so the edge mapping and the unit
+ * list can never name two different units for one service.
+ */
+function groupUnitId(rootId: string, serviceId: string): string {
+  return `${rootId}:${serviceId}`;
+}
+
+/**
  * The task's own group plan as main derives it from the trusted catalog: every
  * bound service is one LOCAL run unit (a binding is exactly what the dock's
  * single-service start button may execute), with the run type and the declared
- * ports its registration carries. No dependency edges are sent: the declared
- * call/prestart graph has no production source yet (box 1).
+ * ports its registration carries, and with the 服务依赖声明 of the pinned
+ * revisions as the plan's dependency edges.
+ *
+ * The edge is the DECLARATION, address for address: each declared target is
+ * resolved to the unit id of the SAME service inside this plan (`<rootId>:<serviceId>`, 
+ * the id the plan's units carry), and no other edge is added. A target the task
+ * has not bound has no unit here, and inventing one would be exactly the
+ * synthesised edge ADR 0002 forbids - so the group is refused by name instead.
+ * A revision that declares nothing contributes no edge at all and the
+ * `dependencies` key stays OUT of the payload, which is how the plan keeps
+ * today's honest "no declaration, no edge" behaviour.
  */
 async function planBoundServiceGroup(
   tasks: Pick<PerTaskHostRegistry, "routeTaskOp">,
-  bound: { binding: { rootId: string }; launch: ServiceLaunch }[],
+  bound: { binding: { rootId: string }; template: ServiceTemplate; launch: ServiceLaunch }[],
   request: ReturnType<typeof parseServiceRunGroupRequest>,
   origin: { kind: "service-catalog"; senderWebContentsId: number },
 ): Promise<void> {
@@ -1228,13 +1255,28 @@ async function planBoundServiceGroup(
       throw new Error(`服务登记失败，未发起整组启动：${launch.serviceId} 的启动材料无法从可信服务目录解析（${resolved.error.code}: ${resolved.error.message}）`);
     }
     return {
-      unitId: `${binding.rootId}:${launch.serviceId}`,
+      unitId: groupUnitId(binding.rootId, launch.serviceId),
       serviceId: launch.serviceId,
       name: launch.descriptor.name,
       repoDir: binding.rootId,
       runType: launch.descriptor.runType,
       declared: declaredServicePorts(launch.descriptor.ports, resolved.rows),
     };
+  });
+  const unitIdOf = new Map(planned.map((entry) => [entry.serviceId, entry.unitId]));
+  const dependencies = bound.flatMap(({ binding, launch, template }) => {
+    const from = groupUnitId(binding.rootId, launch.serviceId);
+    return (template.dependencies ?? []).map((dependency) => {
+      const to = unitIdOf.get(dependency.to);
+      if (to === undefined) {
+        // The declaration names a service of this environment that this task has
+        // not bound, so the plan has no unit for it. Dropping the edge silently
+        // would report a group as complete while the declared prerequisite is
+        // missing - refused by name instead.
+        throw new Error(`服务依赖声明无法满足，未生成整组计划：「${launch.descriptor.name}」（${launch.serviceId}）声明的依赖目标 ${dependency.to} 未在本任务的服务绑定中，请先绑定该服务或从共享模板移除该声明`);
+      }
+      return { from, to, kind: dependency.kind };
+    });
   });
   await tasks.routeTaskOp({
     taskId: request.taskId,
@@ -1250,6 +1292,9 @@ async function planBoundServiceGroup(
         return port === undefined ? [] : [{ unitId: entry.unitId, port }];
       }),
       runTypes: Object.fromEntries(planned.map((entry) => [entry.unitId, entry.runType])),
+      // Sent ONLY when the pinned revisions really declare an edge: an empty or
+      // absent key is the honest "no declaration, no edge" plan.
+      ...(dependencies.length === 0 ? {} : { dependencies }),
     },
     origin,
   });
