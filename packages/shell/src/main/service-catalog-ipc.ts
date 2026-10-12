@@ -1,4 +1,4 @@
-import type { ServiceBindingAdoption, ServiceCatalog, ServiceEnvironment, ServiceTaskBinding, ServiceTemplate, ServiceTemplateUpdateReview } from "./service-catalog.js";
+import type { ServiceBindingAdoption, ServiceCatalog, ServiceEnvironment, ServiceTaskBinding, ServiceTemplate, ServiceTemplateDependency, ServiceTemplateUpdateReview } from "./service-catalog.js";
 import { TrustDomainViolation } from "./trust-domain.js";
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -9,6 +9,34 @@ function shape(value: unknown, names: string[]): Record<string, unknown> {
     throw new TrustDomainViolation("invalid-payload", "invalid service catalog request");
   }
   return value;
+}
+/**
+ * Key-exact shape with ONE documented optional key (the 服务依赖声明). A request
+ * that declares nothing omits it - the shape the slice before this one sent - so
+ * an absent key and an empty list mean the same thing here: no declaration, and
+ * therefore no edge, never a synthesised one.
+ */
+function shapeWithOptional(value: unknown, names: string[], optional: string): Record<string, unknown> {
+  if (!record(value)) throw new TrustDomainViolation("invalid-payload", "invalid service catalog request");
+  const keys = Object.keys(value).sort().join(",");
+  if (keys !== [...names].sort().join(",") && keys !== [...names, optional].sort().join(",")) {
+    throw new TrustDomainViolation("invalid-payload", "invalid service catalog request");
+  }
+  return value;
+}
+/**
+ * The declaration rows as the page may send them: the target's catalog identity
+ * and one of the two kinds, nothing else. The deeper rules (the target really
+ * exists in this environment, no self-edge, no duplicate) are the store's own
+ * named refusals, so both callers answer identically.
+ */
+function dependencyRows(value: unknown): ServiceTemplateDependency[] | undefined {
+  if (value === undefined) return undefined;
+  const wellFormed = Array.isArray(value) && value.length <= 40 && value.every((entry) => record(entry) &&
+    Object.keys(entry).sort().join(",") === "kind,to" && typeof entry["to"] === "string" &&
+    (entry["kind"] === "call" || entry["kind"] === "prestart"));
+  if (!wellFormed) throw new TrustDomainViolation("invalid-payload", "invalid service dependency declaration");
+  return (value as Record<string, unknown>[]).map((entry) => ({ to: entry["to"] as string, kind: entry["kind"] as ServiceTemplateDependency["kind"] }));
 }
 
 /**
@@ -37,10 +65,13 @@ export interface ServiceTemplateProjection {
   descriptor: ServiceTemplate["descriptor"];
   /** Shared rows, not just keys: the editor prefills from them and main still owns the write. */
   shared: { key: string; value: string }[];
+  /** The revision's 服务依赖声明, ABSENT when it declares none: no key, no edge. */
+  dependencies?: ServiceTemplateDependency[];
 }
 function projection(row: ServiceTemplate): ServiceTemplateProjection {
   return { projectId: row.projectId, environmentId: row.environmentId, serviceId: row.serviceId, version: row.version,
-    descriptor: row.descriptor, shared: row.shared.map((entry) => ({ key: entry.key, value: entry.value })) };
+    descriptor: row.descriptor, shared: row.shared.map((entry) => ({ key: entry.key, value: entry.value })),
+    ...(row.dependencies === undefined ? {} : { dependencies: row.dependencies.map((dependency) => ({ ...dependency })) }) };
 }
 
 /**
@@ -267,25 +298,29 @@ export function performServiceCatalogOperation(
     return namedEnvironmentRefusal(() => store.listTemplates(project, environment)).map(projection);
   }
   if (request["op"] === "create") {
-    const input = shape(request, ["op", "projectId", "environmentId", "descriptor", "shared"]);
+    const input = shapeWithOptional(request, ["op", "projectId", "environmentId", "descriptor", "shared"], "dependencies");
     const project = input["projectId"], environment = input["environmentId"], descriptor = input["descriptor"], rows = input["shared"];
     if (typeof project !== "string" || typeof environment !== "string" || !record(descriptor) || !Array.isArray(rows)) {
       throw new TrustDomainViolation("invalid-payload", "invalid service template");
     }
+    const declared = dependencyRows(input["dependencies"]);
     return projection(namedEnvironmentRefusal(() => store.saveTemplate({ projectId: project, environmentId: environment,
-      descriptor: descriptor as unknown as ServiceTemplate["descriptor"], shared: rows })));
+      descriptor: descriptor as unknown as ServiceTemplate["descriptor"], shared: rows,
+      ...(declared === undefined ? {} : { dependencies: declared }) })));
   }
   if (request["op"] === "update") {
-    const input = shape(request, ["op", "projectId", "environmentId", "serviceId", "expectedVersion", "descriptor", "shared", "confirm"]);
+    const input = shapeWithOptional(request, ["op", "projectId", "environmentId", "serviceId", "expectedVersion", "descriptor", "shared", "confirm"], "dependencies");
     const project = input["projectId"], environment = input["environmentId"], id = input["serviceId"], rows = input["shared"];
     if (typeof project !== "string" || typeof environment !== "string" || typeof id !== "string" ||
         !Number.isSafeInteger(input["expectedVersion"]) || (input["expectedVersion"] as number) < 1 ||
         !record(input["descriptor"]) || !Array.isArray(rows) || typeof input["confirm"] !== "boolean") {
       throw new TrustDomainViolation("invalid-payload", "invalid service template update");
     }
+    const declared = dependencyRows(input["dependencies"]);
     const edit = { projectId: project, environmentId: environment, serviceId: id,
       expectedVersion: input["expectedVersion"] as number,
-      descriptor: input["descriptor"] as unknown as ServiceTemplate["descriptor"], shared: rows };
+      descriptor: input["descriptor"] as unknown as ServiceTemplate["descriptor"], shared: rows,
+      ...(declared === undefined ? {} : { dependencies: declared }) };
     // The review is the rules layer's answer (row diff, restart candidates) and
     // is always computed before any write; a request that does not confirm
     // stops here and can never be read as a saved revision.

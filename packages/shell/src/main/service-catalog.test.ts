@@ -681,3 +681,144 @@ describe("named project environments", () => {
       .toThrow("service-launch-unavailable");
   });
 });
+
+/**
+ * [PiDock 04] #7 box 1 (final half) + ADR 0002: the 服务依赖声明 (调用依赖 /
+ * 启动前置) lives in the PER-ENVIRONMENT shared template as a sibling key of the
+ * revision. Absent means "no declaration"; a malformed one, a self-edge, a
+ * duplicate and a target outside the environment are refused BY NAME instead of
+ * being dropped or defaulted into an empty graph.
+ */
+describe("per-environment service dependency declarations", () => {
+  const unknownService = "s-00000000-0000-4000-8000-000000000000";
+
+  it("persists call and prestart declarations on the revision without a version bump and parses yesterday's documents", () => {
+    const f = fixture();
+    // A revision written by the previous slice: no `dependencies` key at all.
+    const callee = f.save();
+    const caller = f.catalog.saveTemplate({ projectId, environmentId: f.environmentId,
+      descriptor: { ...f.descriptor, name: "Web", ports: [3001] }, shared: [],
+      dependencies: [{ to: callee.serviceId, kind: "call" }] });
+    const gate = f.catalog.saveTemplate({ projectId, environmentId: f.environmentId,
+      descriptor: { ...f.descriptor, name: "Gate", ports: [3002] }, shared: [],
+      dependencies: [{ to: callee.serviceId, kind: "call" }, { to: caller.serviceId, kind: "prestart" }] });
+    // The two kinds stay distinguishable on the stored revision (spec #1).
+    expect(gate.dependencies).toEqual([{ to: callee.serviceId, kind: "call" }, { to: caller.serviceId, kind: "prestart" }]);
+
+    const document = JSON.parse(readFileSync(join(f.dir, "service-templates.json"), "utf8"));
+    // The document version is UNCHANGED: this key is additive, so no migration.
+    expect(document.version).toBe(2);
+    const rowOf = (id: string) => document.revisions.find((entry: { serviceId: string }) => entry.serviceId === id);
+    // A declaration is a sibling of `descriptor`/`shared`, not inside either.
+    expect(Object.keys(rowOf(caller.serviceId)).sort()).toEqual(["dependencies", "descriptor", "environmentId", "projectId", "serviceId", "shared", "version"]);
+    expect(rowOf(caller.serviceId).dependencies).toEqual([{ to: callee.serviceId, kind: "call" }]);
+    // A revision nobody declared anything on keeps the previous slice's exact shape.
+    expect(Object.keys(rowOf(callee.serviceId)).sort()).toEqual(["descriptor", "environmentId", "projectId", "serviceId", "shared", "version"]);
+    // ...and every document that shape is read back by a fresh store: no migration, no default graph.
+    const reopened = new ServiceCatalog(f.dir, f.authority);
+    expect(reopened.template(projectId, f.environmentId, caller.serviceId, 1)?.dependencies).toEqual([{ to: callee.serviceId, kind: "call" }]);
+    expect(reopened.template(projectId, f.environmentId, callee.serviceId, 1)?.dependencies).toBeUndefined();
+    expect(reopened.listTemplates(projectId, f.environmentId)).toHaveLength(3);
+    // An empty list is the same honest state as no key: never a declared empty graph.
+    const empty = f.catalog.saveTemplate({ projectId, environmentId: f.environmentId,
+      descriptor: { ...f.descriptor, name: "Empty" }, shared: [], dependencies: [] });
+    expect(empty.dependencies).toBeUndefined();
+    expect(readFileSync(join(f.dir, "service-templates.json"), "utf8")).not.toContain("\"dependencies\":[]");
+  });
+
+  it("scopes the declaration to its own environment: the same target id in another environment is a different revision", () => {
+    const f = fixture();
+    const api = f.save();
+    const worker = f.catalog.saveTemplate({ projectId, environmentId: f.environmentId, descriptor: { ...f.descriptor, name: "Worker" }, shared: [] });
+    const staging = f.catalog.createEnvironment({ projectId, name: "预发环境" });
+    // A service that exists ONLY in the staging environment.
+    const stagingOnly = f.catalog.saveTemplate({ projectId, environmentId: staging.environmentId,
+      descriptor: { ...f.descriptor, name: "Staging only" }, shared: [] });
+    // The declaration names a service of ITS OWN environment...
+    const declared = f.catalog.saveTemplate({ projectId, environmentId: f.environmentId, serviceId: api.serviceId, expectedVersion: 1,
+      descriptor: f.descriptor, shared: [], dependencies: [{ to: worker.serviceId, kind: "call" }] });
+    expect(declared.dependencies).toEqual([{ to: worker.serviceId, kind: "call" }]);
+    // ...and a service that exists only in a sibling environment's revision scope
+    // is refused by name: the declaration never reaches across environments.
+    expect(() => f.catalog.saveTemplate({ projectId, environmentId: f.environmentId, serviceId: api.serviceId, expectedVersion: 2,
+      descriptor: f.descriptor, shared: [], dependencies: [{ to: stagingOnly.serviceId, kind: "call" }] }))
+      .toThrow(`dependency declaration target ${stagingOnly.serviceId} does not exist in this environment`);
+    // The same service id in 预发环境 carries no declaration of its own: the
+    // declaration is per environment, not per service id.
+    f.catalog.saveTemplate({ projectId, environmentId: staging.environmentId, serviceId: api.serviceId, expectedVersion: 0,
+      descriptor: f.descriptor, shared: [] });
+    expect(f.catalog.template(projectId, staging.environmentId, api.serviceId, 1)?.dependencies).toBeUndefined();
+    expect(f.catalog.template(projectId, f.environmentId, api.serviceId, 2)?.dependencies).toEqual([{ to: worker.serviceId, kind: "call" }]);
+  });
+
+  it("refuses a malformed, self-referencing or duplicate declaration by name and writes nothing", () => {
+    const f = fixture();
+    const api = f.save();
+    const other = f.catalog.saveTemplate({ projectId, environmentId: f.environmentId, descriptor: { ...f.descriptor, name: "Worker" }, shared: [] });
+    const before = readFileSync(join(f.dir, "service-templates.json"), "utf8");
+    const edit = (dependencies: unknown) => f.catalog.saveTemplate({ projectId, environmentId: f.environmentId, serviceId: api.serviceId,
+      expectedVersion: 1, descriptor: api.descriptor, shared: api.shared, dependencies: dependencies as never });
+    const review = (dependencies: unknown) => f.catalog.reviewTemplateUpdate({ projectId, environmentId: f.environmentId, serviceId: api.serviceId,
+      expectedVersion: 1, descriptor: api.descriptor, shared: api.shared, dependencies: dependencies as never });
+    expect(() => edit([{ to: other.serviceId, kind: "call" }, { to: other.serviceId, kind: "call" }])).toThrow("duplicate dependency declaration");
+    expect(() => edit([{ to: api.serviceId, kind: "call" }])).toThrow("dependency declaration must not target its own service");
+    expect(() => edit([{ to: other.serviceId, kind: "run" }])).toThrow("invalid dependency kind");
+    expect(() => edit([{ to: other.serviceId }])).toThrow("invalid service catalog fields");
+    expect(() => edit([{ to: other.serviceId, kind: "call", label: "worker" }])).toThrow("invalid service catalog fields");
+    expect(() => edit([{ to: "worker", kind: "call" }])).toThrow("invalid service ID");
+    expect(() => edit({ to: other.serviceId, kind: "call" })).toThrow("invalid dependency declaration");
+    expect(() => edit(Array.from({ length: 41 }, () => ({ to: other.serviceId, kind: "call" })))).toThrow("invalid dependency declaration");
+    expect(() => review([{ to: unknownService, kind: "call" }])).toThrow(`dependency declaration target ${unknownService} does not exist in this environment`);
+    // The read-only review refuses the same malformed shapes as the write.
+    expect(() => review([{ to: other.serviceId, kind: "call" }, { to: other.serviceId, kind: "call" }])).toThrow("duplicate dependency declaration");
+    // Nothing was written and no declaration was defaulted in.
+    expect(readFileSync(join(f.dir, "service-templates.json"), "utf8")).toBe(before);
+  });
+
+  it("refuses to READ a document whose declaration points at a missing service instead of rendering it as an empty graph", () => {
+    const f = fixture();
+    const api = f.save();
+    const other = f.catalog.saveTemplate({ projectId, environmentId: f.environmentId, descriptor: { ...f.descriptor, name: "Worker" }, shared: [] });
+    f.bind(api.serviceId, 1);
+    const file = join(f.dir, "service-templates.json");
+    const document = JSON.parse(readFileSync(file, "utf8"));
+    // What a corrupted (or hand-edited) document looks like: a declaration whose
+    // target nobody saved. It must refuse to be read, not answer "no edges".
+    document.revisions.find((entry: { serviceId: string }) => entry.serviceId === api.serviceId).dependencies = [{ to: unknownService, kind: "call" }];
+    writeFileSync(file, JSON.stringify(document), { mode: 0o600 });
+    expect(() => new ServiceCatalog(f.dir, f.authority).listTemplates(projectId, f.environmentId))
+      .toThrow(`dependency declaration target ${unknownService} does not exist in this environment`);
+    expect(() => new ServiceCatalog(f.dir, f.authority).listTask(taskId)).toThrow(/does not exist in this environment/);
+    // The stored target that DOES exist is still readable once the bad row is gone.
+    document.revisions.find((entry: { serviceId: string }) => entry.serviceId === api.serviceId).dependencies = [{ to: other.serviceId, kind: "prestart" }];
+    writeFileSync(file, JSON.stringify(document), { mode: 0o600 });
+    expect(new ServiceCatalog(f.dir, f.authority).listTemplates(projectId, f.environmentId))
+      .toMatchObject([{ serviceId: api.serviceId, dependencies: [{ to: other.serviceId, kind: "prestart" }] }, { serviceId: other.serviceId }]);
+  });
+
+  it("reports a declaration-only edit as its own fact and never as a launch-material change or a restart", () => {
+    const f = fixture();
+    const api = f.save();
+    const other = f.catalog.saveTemplate({ projectId, environmentId: f.environmentId, descriptor: { ...f.descriptor, name: "Worker" }, shared: [] });
+    f.bind(api.serviceId, 1);
+    const review = f.catalog.reviewTemplateUpdate({ projectId, environmentId: f.environmentId, serviceId: api.serviceId, expectedVersion: 1,
+      descriptor: api.descriptor, shared: api.shared, dependencies: [{ to: other.serviceId, kind: "call" }] });
+    expect(review).toMatchObject({ dependenciesChanged: true, descriptorChanged: false, contentChanged: false, restartNeeded: [], saved: false });
+    const written = f.catalog.saveTemplate({ projectId, environmentId: f.environmentId, serviceId: api.serviceId, expectedVersion: 1,
+      descriptor: api.descriptor, shared: api.shared, dependencies: [{ to: other.serviceId, kind: "call" }] });
+    expect(written.version).toBe(2);
+    // An unchanged declaration is not reported as a change either.
+    expect(f.catalog.reviewTemplateUpdate({ projectId, environmentId: f.environmentId, serviceId: api.serviceId, expectedVersion: 2,
+      descriptor: api.descriptor, shared: api.shared, dependencies: [{ to: other.serviceId, kind: "call" }] }).dependenciesChanged).toBe(false);
+    // Minting a revision moves no pin: the bound task still resolves the
+    // revision it pinned, which carries NO declaration - a new declaration
+    // reaches a task only when that task explicitly adopts the new revision.
+    const pinned = f.catalog.listTask(taskId).find((row) => row.binding.serviceId === api.serviceId) as { binding: { templateVersion: number }; template: { version: number; dependencies?: unknown } };
+    expect(pinned.binding.templateVersion).toBe(1);
+    expect(pinned.template.version).toBe(1);
+    expect(pinned.template.dependencies).toBeUndefined();
+    // ...and the newer revision really carries it, so the plan a LATER adopter
+    // reads has it (the mechanism the group plan depends on).
+    expect(f.catalog.template(projectId, f.environmentId, api.serviceId, 2)?.dependencies).toEqual([{ to: other.serviceId, kind: "call" }]);
+  });
+});

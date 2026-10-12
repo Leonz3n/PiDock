@@ -7,6 +7,7 @@ import { SERVICE_KEY_PATTERN, isServiceSecretKey, maskServiceValue, resolveServi
   validateSharedServiceArgument, validateSharedServiceHealthTarget, validateSharedServiceProgram, validateSharedServiceValue,
   validateSharedServiceWorkdir, diffServiceTemplate, nextServiceTemplateVersion, restartNeededForTemplateAdopt,
   type ServiceConfigEntry, type ServiceConfigSource, type ServiceDescriptor, type TemplateDiff } from "./service-config.js";
+import type { DependencyKind } from "./service-topology.js";
 import { isSafeTaskChildName } from "./task-provision.js";
 import type { ProjectRegistry } from "./project-registry.js";
 import type { TaskRootIndex, VerifiedTaskIdentity } from "./task-root-index.js";
@@ -36,6 +37,12 @@ export interface ServiceEnvironment {
  * A revision belongs to exactly one environment (`environmentId`), and its
  * `version` is minted per (project, environment, service), so
  * `(environmentId, version)` names one revision.
+ *
+ * `dependencies` is the revision's own 服务依赖声明 (ADR 0002): the sibling key
+ * that is NOT part of `descriptor` (it is no spawn input) and NOT a `shared`
+ * row (it is no key/value env row), and which stays inside this environment.
+ * ABSENT means "no declaration" - there is deliberately no empty-graph default
+ * a reader could mistake for a declared one.
  */
 export interface ServiceTemplate {
   projectId: string;
@@ -44,6 +51,20 @@ export interface ServiceTemplate {
   version: number;
   descriptor: Pick<ServiceDescriptor, "name" | "program" | "args" | "ports" | "healthCheck" | "runType"> & { workdir?: string };
   shared: ServiceConfigEntry[];
+  dependencies?: ServiceTemplateDependency[];
+}
+
+/**
+ * One declared dependency of a revision ([PiDock 04] #7 box 1, ADR 0002). The
+ * declaring service is the revision's own `serviceId`, so only the target and
+ * the kind are stored; `to` names another service by the catalog's OWN identity
+ * inside the same environment (never an invented name or a path). The two kinds
+ * stay distinct: `call` is a runtime call dependency, `prestart` a start
+ * precondition.
+ */
+export interface ServiceTemplateDependency {
+  to: string;
+  kind: DependencyKind;
 }
 export interface ServiceTaskBinding {
   taskId: string;
@@ -116,6 +137,13 @@ export interface ServiceTemplateUpdateReview {
   saved: boolean;
   /** True when a launcher field (program/args/ports/runType/healthCheck/workdir) changes. */
   descriptorChanged: boolean;
+  /**
+   * True when the revision's 服务依赖声明 differ from the current one. Its own
+   * fact, not part of `contentChanged`: a dependency declaration is no launch
+   * field, so a declaration-only save changes which edges a LATER adopter's plan
+   * reads without invalidating a running process.
+   */
+  dependenciesChanged: boolean;
   /**
    * True when the minted revision differs from the current one in any field a
    * launch resolves (`descriptorChanged` or a shared-row diff). An identical
@@ -292,6 +320,45 @@ function environmentId(value: unknown): string {
   if (!ENVIRONMENT_ID.test(result)) throw new Error("invalid environment ID");
   return result;
 }
+/**
+ * The 服务依赖声明 of one revision: a sibling key of `descriptor`/`shared`,
+ * `undefined` when absent (no declaration is a real state, never an invented
+ * empty graph). Each entry names another service by the catalog's own identity
+ * and one of the two dependency kinds; an exact duplicate and a self-edge are
+ * refused BY NAME here, a missing target is refused by the document rule below.
+ */
+function dependencies(value: unknown): ServiceTemplateDependency[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length > 40) throw new Error("invalid dependency declaration");
+  const rows = value.map((item) => {
+    const row = object(item);
+    fields(row, ["to", "kind"]);
+    if (row["kind"] !== "call" && row["kind"] !== "prestart") throw new Error("invalid dependency kind");
+    return { to: serviceId(row["to"]), kind: row["kind"] as DependencyKind };
+  });
+  if (rows.length === 0) return undefined;
+  if (new Set(rows.map((row) => `${row.to}/${row.kind}`)).size !== rows.length) throw new Error("duplicate dependency declaration");
+  return rows;
+}
+/** The scope a declaration may point into: one service of one environment of one project. */
+function revisionScope(project: string, environment: string, service: string): string {
+  return `${project}/${environment}/${service}`;
+}
+/**
+ * Every declared target must be a service that really exists INSIDE the same
+ * environment. A declaration pointing at a service nobody saved - or at another
+ * environment's revision space - is refused by name instead of being silently
+ * dropped or defaulted to an empty graph (ADR 0002).
+ */
+function requireDeclarationTargets(
+  known: ReadonlySet<string>, project: string, environment: string, declared: readonly ServiceTemplateDependency[] | undefined,
+): void {
+  for (const dependency of declared ?? []) {
+    if (!known.has(revisionScope(project, environment, dependency.to))) {
+      throw new Error(`dependency declaration target ${dependency.to} does not exist in this environment`);
+    }
+  }
+}
 function environment(value: unknown): ServiceEnvironment {
   const row = object(value);
   fields(row, ["projectId", "environmentId", "name"]);
@@ -316,10 +383,15 @@ function environmentDocument(value: unknown): EnvironmentDocument {
 }
 function template(value: unknown): ServiceTemplate {
   const row = object(value);
-  fields(row, ["projectId", "environmentId", "serviceId", "version", "descriptor", "shared"]);
+  fields(row, ["projectId", "environmentId", "serviceId", "version", "descriptor", "shared"], ["dependencies"]);
+  const id = serviceId(row["serviceId"]);
+  const declared = dependencies(row["dependencies"]);
+  // A self-edge is a declaration no plan can order: refused by name.
+  if (declared?.some((dependency) => dependency.to === id)) throw new Error("dependency declaration must not target its own service");
   return { projectId: projectId(row["projectId"]), environmentId: environmentId(row["environmentId"]),
-    serviceId: serviceId(row["serviceId"]), version: version(row["version"]),
-    descriptor: descriptor(row["descriptor"]), shared: shared(row["shared"]) };
+    serviceId: id, version: version(row["version"]),
+    descriptor: descriptor(row["descriptor"]), shared: shared(row["shared"]),
+    ...(declared === undefined ? {} : { dependencies: declared }) };
 }
 function identity(value: unknown): VerifiedTaskIdentity {
   const row = object(value);
@@ -381,6 +453,12 @@ function templates(value: unknown): TemplateDocument {
   const revisions = row["revisions"].map(template);
   const keys = revisions.map((entry) => `${entry.projectId}/${entry.environmentId}/${entry.serviceId}/${entry.version}`);
   if (new Set(keys).size !== keys.length) throw new Error("duplicate template revision");
+  // A declaration is only meaningful against the revision scope it points into,
+  // so the target is resolved here too: a document whose declaration names a
+  // service this environment does not have refuses to be read at all rather
+  // than being partially trusted as a graph with missing edges.
+  const known = new Set(revisions.map((entry) => revisionScope(entry.projectId, entry.environmentId, entry.serviceId)));
+  for (const entry of revisions) requireDeclarationTargets(known, entry.projectId, entry.environmentId, entry.dependencies);
   return { version: 2, revisions };
 }
 function machine(value: unknown): PrivateDocument {
@@ -452,6 +530,11 @@ function latestRevision(doc: TemplateDocument, project: string, environment: str
   return doc.revisions
     .filter((entry) => entry.projectId === project && entry.environmentId === environment && entry.serviceId === id)
     .reduce<ServiceTemplate | null>((max, entry) => (max === null || entry.version > max.version ? entry : max), null);
+}
+
+/** Every revision scope this document really holds: what a declaration may point into. */
+function revisionScopes(doc: TemplateDocument): Set<string> {
+  return new Set(doc.revisions.map((entry) => revisionScope(entry.projectId, entry.environmentId, entry.serviceId)));
 }
 
 export function resolvePrivateServiceRefs(
@@ -603,7 +686,7 @@ export class ServiceCatalog {
     } catch { throw Error("service-owner-catalog-unavailable"); }
   }
   saveTemplate(input: { projectId: string; environmentId: string; serviceId?: string; expectedVersion?: number;
-    descriptor: ServiceTemplate["descriptor"]; shared: ServiceConfigEntry[] }): ServiceTemplate {
+    descriptor: ServiceTemplate["descriptor"]; shared: ServiceConfigEntry[]; dependencies?: ServiceTemplateDependency[] }): ServiceTemplate {
     const project = projectId(input.projectId);
     if (!this.authority.projectExists(project)) throw new Error("project unavailable");
     const environment = this.requireEnvironment(project, environmentId(input.environmentId)).environmentId;
@@ -613,7 +696,11 @@ export class ServiceCatalog {
     const latest = latestRevision(doc, project, environment, id)?.version ?? 0;
     if ((input.expectedVersion ?? 0) !== latest) throw new Error("template version conflict");
     const next = template({ projectId: project, environmentId: environment, serviceId: id, version: nextVersion(latest).version,
-      descriptor: input.descriptor, shared: input.shared });
+      descriptor: input.descriptor, shared: input.shared, dependencies: input.dependencies });
+    // Shape first, then the reference: a declaration is validated by the SAME
+    // parser the stored document goes through, so neither step can accept what
+    // the other refuses.
+    requireDeclarationTargets(revisionScopes(doc), project, environment, next.dependencies);
     writeDocument(this.directory, this.templateFile(), { version: 2, revisions: [...doc.revisions, next] }, templates);
     return next;
   }
@@ -627,7 +714,7 @@ export class ServiceCatalog {
    * completed save.
    */
   reviewTemplateUpdate(input: { projectId: string; environmentId: string; serviceId: string; expectedVersion: number;
-    descriptor: ServiceTemplate["descriptor"]; shared: ServiceConfigEntry[] }): ServiceTemplateUpdateReview {
+    descriptor: ServiceTemplate["descriptor"]; shared: ServiceConfigEntry[]; dependencies?: ServiceTemplateDependency[] }): ServiceTemplateUpdateReview {
     const project = projectId(input.projectId);
     if (!this.authority.projectExists(project)) throw new Error("project unavailable");
     const environment = this.requireEnvironment(project, environmentId(input.environmentId)).environmentId;
@@ -638,15 +725,19 @@ export class ServiceCatalog {
     if (!current || current.version !== version(input.expectedVersion)) throw new Error("template version conflict");
     const minted = nextVersion(current.version);
     const next = template({ projectId: project, environmentId: environment, serviceId: id, version: minted.version,
-      descriptor: input.descriptor, shared: input.shared });
+      descriptor: input.descriptor, shared: input.shared, dependencies: input.dependencies });
+    // The review runs the same two refusals as the write, in the same order, so
+    // a declaration that cannot be saved can never be reviewed as approvable.
+    requireDeclarationTargets(revisionScopes(doc), project, environment, next.dependencies);
     return this.reviewOfCurrent(current, next, minted.label);
   }
   private reviewOfCurrent(current: ServiceTemplate, next: ServiceTemplate, versionLabel: string): ServiceTemplateUpdateReview {
     const descriptorChanged = JSON.stringify(current.descriptor) !== JSON.stringify(next.descriptor);
+    const dependenciesChanged = JSON.stringify(current.dependencies ?? null) !== JSON.stringify(next.dependencies ?? null);
     const diff = diffServiceTemplate(current.shared, next.shared);
     const contentChanged = descriptorChanged || diff.added.length > 0 || diff.changed.length > 0 || diff.removed.length > 0;
     return { projectId: next.projectId, environmentId: next.environmentId, serviceId: next.serviceId, version: next.version, versionLabel, saved: false,
-      descriptorChanged, contentChanged, diff,
+      descriptorChanged, dependenciesChanged, contentChanged, diff,
       // Restart-needed is a consequence of a real content change, not of the
       // version counter: an identical save invalidates nothing, so it reports
       // no restart instead of every binding that still pins the older number.
