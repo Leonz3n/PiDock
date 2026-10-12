@@ -16,11 +16,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import {
   WORKTREE_LOCK_DIRECTORY,
   WORKTREE_LOCK_STALE_TAKEOVER,
+  WORKTREE_LOCK_TAKEOVER_SUFFIX,
   WorktreeMetadataLock,
+  type WorktreeLockAcquisition,
 } from "./worktree-metadata-lock.js";
 
 const homes: string[] = [];
@@ -230,6 +232,178 @@ describe("[PiDock 03] (#6 盒子 9) the repository-level worktree lock", () => {
     expect(receipt["key"]).toBe(key);
     expect(readRecord(file)["taskId"]).toBe("task-bbbbbbbb");
     if (takeover.ok) takeover.release();
+  });
+
+  it("keys a nested source repository by its OWN real path, so two tasks sharing that repo's .git contend", () => {
+    const { source, profile } = setup();
+    // Nesting is registerable: `/a` and `/a/b` are two repositories with two
+    // `.git` directories, and both can be selected by one task.
+    const nested = join(source, "nested");
+    mkdirSync(nested);
+
+    const both = new WorktreeMetadataLock(profile).acquireFor([source, nested], { taskId: "task-aaaaaaaa", label: "创建任务" });
+    expect(both.ok).toBe(true);
+    // Worktree metadata is PER REPOSITORY, so the key set never collapses the
+    // nested repository into the outer one.
+    expect(both.ok && both.keys).toEqual([realpathSync(source), realpathSync(nested)]);
+
+    // A task selecting ONLY the nested repository writes that repository's
+    // `.git` (the `FETCH_HEAD` pin of the wrong baseline): it must contend.
+    const nestedOnly = new WorktreeMetadataLock(profile).acquireFor([nested], { taskId: "task-bbbbbbbb", label: "创建任务" });
+    expect(nestedOnly.ok).toBe(false);
+    if (!nestedOnly.ok) {
+      expect(nestedOnly.error).toMatch(/^worktree-locked: /);
+      expect(nestedOnly.error).toContain("task-aaaaaaaa");
+    }
+    if (both.ok) both.release();
+
+    // And the reverse direction: nested first, then the pair.
+    const nestedFirst = new WorktreeMetadataLock(profile).acquireFor([nested], { taskId: "task-bbbbbbbb", label: "追加仓库" });
+    expect(nestedFirst.ok).toBe(true);
+    const pair = new WorktreeMetadataLock(profile).acquireFor([source, nested], { taskId: "task-cccccccc", label: "创建任务" });
+    expect(pair.ok).toBe(false);
+    if (!pair.ok) expect(pair.error).toMatch(/^worktree-locked: /);
+    // The failed batch freed the outer key it had already taken.
+    const outerOnly = new WorktreeMetadataLock(profile).acquireFor([source], { taskId: "task-dddddddd", label: "创建任务" });
+    expect(outerOnly.ok).toBe(true);
+    if (outerOnly.ok) outerOnly.release();
+    if (nestedFirst.ok) nestedFirst.release();
+  });
+
+  it("never evicts a live lock: a contender that already replaced the stale record keeps holding it", () => {
+    const { source, profile } = setup();
+    const directory = join(profile, WORKTREE_LOCK_DIRECTORY);
+    const key = realpathSync(source);
+    const file = new WorktreeMetadataLock(profile).fileFor(key);
+    mkdirSync(directory, { recursive: true });
+    const stalePid = deadPid();
+    writeFileSync(file, JSON.stringify({
+      version: 1, key, taskId: "task-deadbeef", label: "追加仓库", pid: stalePid, at: new Date(Date.now() - 5_000).toISOString(),
+    }));
+
+    // The interleave the takeover must survive: two contenders read the SAME
+    // stale record, the second one completes the WHOLE takeover and becomes the
+    // live holder, and only then does the first one reach its rename. The
+    // injected liveness question is exactly the point at which production asks
+    // "is the recorded owner gone?", and the competitor is a full, real
+    // acquisition through the production module.
+    const notices: string[] = [];
+    const competitor: { acquisition: WorktreeLockAcquisition | null } = { acquisition: null };
+    const recovering = new WorktreeMetadataLock(profile, {
+      notify: (message) => notices.push(message),
+      isProcessAlive: (pid) => {
+        if (pid === stalePid && competitor.acquisition === null) {
+          competitor.acquisition = new WorktreeMetadataLock(profile).acquireFor([source], { taskId: "task-competitor", label: "创建任务" });
+        }
+        return false;
+      },
+    });
+    const recovery = recovering.acquireFor([source], { taskId: "task-aaaaaaaa", label: "创建任务" });
+
+    const winner = competitor.acquisition;
+    expect(winner?.ok).toBe(true);
+    // The live holder was NOT evicted: it is still the holder of the key, and the
+    // recovery refused by name instead of stealing from it.
+    expect(recovery.ok).toBe(false);
+    if (!recovery.ok) {
+      expect(recovery.error).toMatch(/^worktree-locked: /);
+      expect(recovery.error).toContain("task-competitor");
+    }
+    expect(readRecord(file)["taskId"]).toBe("task-competitor");
+    expect(readRecord(file)["pid"]).toBe(process.pid);
+    // The ONE receipt is the stale record, never the live one, and the takeover
+    // marker was dropped again: nothing is left behind.
+    const receipts = staleReceipts(directory);
+    expect(receipts).toHaveLength(1);
+    expect(readRecord(join(directory, receipts[0]!))["taskId"]).toBe("task-deadbeef");
+    expect(notices.filter((message) => message.includes("task-competitor"))).toEqual([]);
+    expect(readdirSync(directory).filter((name) => !name.includes(".stale-"))).toEqual([basename(file)]);
+
+    // The winner really does hold it: releasing frees the key.
+    if (winner !== null && winner.ok) winner.release();
+    expect(existsSync(file)).toBe(false);
+  });
+
+  it("refuses by name while another contender is already taking the stale lock over, and never steals its marker", () => {
+    const { source, profile } = setup();
+    const directory = join(profile, WORKTREE_LOCK_DIRECTORY);
+    const key = realpathSync(source);
+    const file = new WorktreeMetadataLock(profile).fileFor(key);
+    mkdirSync(directory, { recursive: true });
+    const at = new Date(Date.now() - 3_000).toISOString();
+    writeFileSync(file, JSON.stringify({ version: 1, key, taskId: "task-deadbeef", label: "追加仓库", pid: deadPid(), at: new Date(Date.now() - 5_000).toISOString() }));
+    // A recovery in progress: the marker carries the recovering process's own
+    // identity, written exactly as production writes it.
+    const marker = `${file}${WORKTREE_LOCK_TAKEOVER_SUFFIX}`;
+    writeFileSync(marker, JSON.stringify({ version: 1, key, taskId: "task-recovery", label: "创建任务", pid: process.pid, at }));
+
+    const notify = vi.fn();
+    const refused = new WorktreeMetadataLock(profile, { notify, now: () => new Date(Date.parse(at) + 3_000) })
+      .acquireFor([source], { taskId: "task-aaaaaaaa", label: "创建任务" });
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) {
+      expect(refused.error).toMatch(/^worktree-locked: /);
+      expect(refused.error).toContain("task-recovery");
+      expect(refused.error).toContain("接管");
+      expect(refused.error).toContain(`进程 ${String(process.pid)}`);
+      expect(refused.error).toContain("已持续 3 秒");
+      expect(refused.error).toContain("未创建任何分支、工作副本或记录");
+    }
+    // Nothing was stolen: the live marker and the stale record are untouched.
+    expect(existsSync(marker)).toBe(true);
+    expect(readRecord(marker)["taskId"]).toBe("task-recovery");
+    expect(readRecord(file)["taskId"]).toBe("task-deadbeef");
+    expect(staleReceipts(directory)).toEqual([]);
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("recovers a takeover marker whose owner is provably gone, so a crash during recovery cannot block the repository", () => {
+    const { source, profile } = setup();
+    const directory = join(profile, WORKTREE_LOCK_DIRECTORY);
+    const key = realpathSync(source);
+    const file = new WorktreeMetadataLock(profile).fileFor(key);
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(file, JSON.stringify({ version: 1, key, taskId: "task-deadbeef", label: "追加仓库", pid: deadPid(), at: new Date(Date.now() - 9_000).toISOString() }));
+    // The marker a recovery process that was killed mid-takeover left behind.
+    const marker = `${file}${WORKTREE_LOCK_TAKEOVER_SUFFIX}`;
+    writeFileSync(marker, JSON.stringify({ version: 1, key, taskId: "task-crashed", label: "创建任务", pid: deadPid(), at: new Date(Date.now() - 7_000).toISOString() }));
+
+    const notices: string[] = [];
+    const acquired = new WorktreeMetadataLock(profile, { notify: (message) => notices.push(message) })
+      .acquireFor([source], { taskId: "task-aaaaaaaa", label: "创建任务" });
+    expect(acquired.ok).toBe(true);
+    expect(readRecord(file)["taskId"]).toBe("task-aaaaaaaa");
+    // Both the stale lock and the stale marker are kept as receipts, and both are
+    // announced: taking over a marker is as visible as taking over a lock.
+    expect(existsSync(marker)).toBe(false);
+    const receipts = staleReceipts(directory);
+    expect(receipts).toHaveLength(2);
+    expect(receipts.map((name) => readRecord(join(directory, name))["taskId"]).sort()).toEqual(["task-crashed", "task-deadbeef"]);
+    expect(notices.filter((message) => message.includes(WORKTREE_LOCK_STALE_TAKEOVER))).toHaveLength(2);
+    expect(notices.filter((message) => message.includes("task-crashed"))).toHaveLength(1);
+    expect(readdirSync(directory).filter((name) => !name.includes(".stale-"))).toEqual([basename(file)]);
+    if (acquired.ok) acquired.release();
+  });
+
+  it("refuses a takeover marker it cannot read instead of taking the stale lock over", () => {
+    const { source, profile } = setup();
+    const directory = join(profile, WORKTREE_LOCK_DIRECTORY);
+    const key = realpathSync(source);
+    const file = new WorktreeMetadataLock(profile).fileFor(key);
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(file, JSON.stringify({ version: 1, key, taskId: "task-deadbeef", label: "追加仓库", pid: deadPid(), at: new Date(Date.now() - 5_000).toISOString() }));
+    const marker = `${file}${WORKTREE_LOCK_TAKEOVER_SUFFIX}`;
+    writeFileSync(marker, "{ this is not a takeover marker");
+
+    const notify = vi.fn();
+    const refused = new WorktreeMetadataLock(profile, { notify }).acquireFor([source], { taskId: "task-aaaaaaaa", label: "创建任务" });
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) expect(refused.error).toMatch(/^worktree-lock-unreadable: /);
+    // Nothing was taken over, and neither file was rewritten.
+    expect(readFileSync(marker, "utf8")).toBe("{ this is not a takeover marker");
+    expect(readRecord(file)["taskId"]).toBe("task-deadbeef");
+    expect(staleReceipts(directory)).toEqual([]);
+    expect(notify).not.toHaveBeenCalled();
   });
 
   it("refuses an unreadable lock record by name and never takes it over", () => {
