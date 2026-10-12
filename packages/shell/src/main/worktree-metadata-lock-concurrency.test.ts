@@ -28,7 +28,7 @@
  * process is killed on every path, and every home is removed.
  */
 import { afterEach, describe, expect, it } from "vitest";
-import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -46,6 +46,7 @@ import { TaskRootIndex } from "./task-root-index.js";
 import {
   WORKTREE_LOCK_DIRECTORY,
   WORKTREE_LOCK_STALE_TAKEOVER,
+  WORKTREE_LOCK_TAKEOVER_SUFFIX,
   WorktreeMetadataLock,
 } from "./worktree-metadata-lock.js";
 
@@ -267,19 +268,22 @@ registerHooks({
 });
 `;
 
-/** A real second process that acquires the production lock and holds it. */
+/**
+ * A real second process that acquires the production lock and holds it. It
+ * reports exactly ONE outcome line and then keeps its stdio open until the
+ * parent stops it — on the refusal path too, so the parent can read that line
+ * without racing the process exit.
+ */
 const holderSource = (modulePath: string): string => `
 import { WorktreeMetadataLock } from ${JSON.stringify(modulePath)};
 
 const [userData, source, taskId, label] = process.argv.slice(2);
 const lock = new WorktreeMetadataLock(userData);
 const acquisition = lock.acquireFor([source], { taskId, label });
-if (!acquisition.ok) {
-  process.stdout.write(JSON.stringify({ ok: false, error: acquisition.error }) + "\\n");
-  process.exit(2);
-}
-process.stdout.write(JSON.stringify({ ok: true, keys: acquisition.keys, pid: process.pid }) + "\\n");
-const stop = () => { acquisition.release(); process.exit(0); };
+process.stdout.write(JSON.stringify(
+  acquisition.ok ? { ok: true, keys: acquisition.keys, pid: process.pid } : { ok: false, error: acquisition.error },
+) + "\\n");
+const stop = () => { if (acquisition.ok) acquisition.release(); process.exit(acquisition.ok ? 0 : 2); };
 process.stdin.resume();
 process.stdin.on("data", stop);
 process.stdin.on("end", stop);
@@ -314,12 +318,20 @@ function readLine(child: ChildProcess, boundMs: number): Promise<string> {
   });
 }
 
-async function startHolder(
+interface HolderLine {
+  ok: boolean;
+  keys?: string[];
+  pid?: number;
+  error?: string;
+}
+
+/** Run the production lock module in a real child process and read its one outcome line. */
+async function launchHolder(
   env: Awaited<ReturnType<typeof setup>>,
   sourcePath: string,
   taskId: string,
   label: string,
-): Promise<Holder> {
+): Promise<{ child: ChildProcess; line: HolderLine }> {
   const hook = join(env.home, "ts-js-resolver.mjs");
   const script = join(env.home, `holder-${taskId}.ts`);
   writeFileSync(hook, RESOLVER_HOOK);
@@ -328,23 +340,32 @@ async function startHolder(
     stdio: ["pipe", "pipe", "pipe"],
   });
   children.push(child);
-  const line = JSON.parse(await readLine(child, EVIDENCE_TEST_TIMEOUT_MS)) as {
-    ok: boolean;
-    keys?: string[];
-    pid?: number;
-    error?: string;
-  };
+  const line = JSON.parse(await readLine(child, EVIDENCE_TEST_TIMEOUT_MS)) as HolderLine;
+  return { child, line };
+}
+
+async function startHolder(
+  env: Awaited<ReturnType<typeof setup>>,
+  sourcePath: string,
+  taskId: string,
+  label: string,
+): Promise<Holder> {
+  const { child, line } = await launchHolder(env, sourcePath, taskId, label);
   if (!line.ok) throw new Error(`the second process refused to hold the lock: ${line.error ?? "unknown"}`);
   return { child, keys: line.keys ?? [], pid: line.pid ?? -1 };
 }
 
-async function stopHolder(holder: Holder): Promise<void> {
-  if (holder.child.exitCode !== null || holder.child.signalCode !== null) return;
-  const exited = new Promise<void>((resolve) => holder.child.once("exit", () => resolve()));
-  holder.child.stdin?.write("release\n");
-  holder.child.kill("SIGTERM");
+async function stopChild(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+  child.stdin?.write("release\n");
+  child.kill("SIGTERM");
   await Promise.race([exited, new Promise<void>((resolve) => setTimeout(resolve, 5_000))]);
-  if (holder.child.exitCode === null && holder.child.signalCode === null) holder.child.kill("SIGKILL");
+  if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+}
+
+async function stopHolder(holder: Holder): Promise<void> {
+  await stopChild(holder.child);
 }
 
 async function killHolder(holder: Holder): Promise<void> {
@@ -554,6 +575,50 @@ describe("[PiDock 03] (#6 盒子 9) repository-level worktree creation is mutual
     expect(existsSync(env.worktreeOf(task, env.second))).toBe(false);
     expect(git(env.second.repo, "branch", "--list", task.branch, "--format=%(refname:short)")).toBe(task.branch);
     expect(existsSync(env.lockFile(env.second))).toBe(false);
+  });
+
+  it("refuses BY NAME while a REAL second process is recovering the source repo's stale lock, and steals nothing from it", { timeout: EVIDENCE_TEST_TIMEOUT_MS }, async () => {
+    const env = await setup();
+    const file = env.lockFile(env.first);
+    const key = realpathSync(env.first.repo);
+    const directory = join(env.profile, WORKTREE_LOCK_DIRECTORY);
+    mkdirSync(directory, { recursive: true });
+    // A stale lock (its owner is a REAL, already-exited process) plus a LIVE
+    // takeover marker held by THIS process: the second process must refuse by
+    // name instead of renaming the marker away and evicting a live recovery —
+    // i.e. instead of becoming a second holder of the repository key.
+    const gone = spawnSync(process.execPath, ["-e", "0"]);
+    const marker = `${file}${WORKTREE_LOCK_TAKEOVER_SUFFIX}`;
+    writeFileSync(file, JSON.stringify({ version: 1, key, taskId: "task-deadbeef", label: "追加仓库", pid: gone.pid, at: new Date(Date.now() - 5_000).toISOString() }));
+    writeFileSync(marker, JSON.stringify({ version: 1, key, taskId: "task-recovery", label: "创建任务", pid: process.pid, at: new Date().toISOString() }));
+
+    const refused = await launchHolder(env, env.first.repo, "task-child005", "追加仓库");
+    try {
+      expect(refused.line.ok).toBe(false);
+      expect(refused.line.error).toMatch(/^worktree-locked: /);
+      expect(refused.line.error).toContain("task-recovery");
+      expect(refused.line.error).toContain(`进程 ${String(process.pid)}`);
+      // Nothing was stolen across processes: the live marker and the stale record
+      // are both exactly as they were, and no receipt was written.
+      expect(readFileSync(marker, "utf8")).toContain("task-recovery");
+      expect(readFileSync(file, "utf8")).toContain("task-deadbeef");
+      expect(env.receipts()).toEqual([]);
+    } finally {
+      await stopChild(refused.child);
+    }
+
+    // The live recovery is over (marker dropped): the same real second process
+    // then takes the stale lock over under the named policy and holds the key.
+    rmSync(marker);
+    const holder = await startHolder(env, env.first.repo, "task-child006", "追加仓库");
+    try {
+      expect(holder.keys).toEqual([key]);
+      expect(env.receipts()).toHaveLength(1);
+      expect(readFileSync(file, "utf8")).toContain("task-child006");
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      await stopHolder(holder);
+    }
   });
 
   it("takes over under the NAMED stale policy after a holder process is killed, and the app is not blocked", { timeout: EVIDENCE_TEST_TIMEOUT_MS }, async () => {
