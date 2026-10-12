@@ -299,6 +299,25 @@ it("names an unreadable environment list instead of rendering it as zero environ
   expect(screen.getByRole("option", { name: "尚未选择环境" })).toBeInTheDocument();
 });
 
+it("never reports a create's own row as the whole environment list when the list stays unreadable", async () => {
+  const serviceCatalogOp = vi.fn(async (request: Record<string, unknown>) => {
+    if (request["op"] === "listEnvironments") return { ok: false, error: "环境清单读取失败" };
+    if (request["op"] === "createEnvironment") return { ok: true, payload: { projectId: "p1", environmentId: ENVIRONMENT_ID, name: "本地开发" } };
+    return { ok: true, payload: [] };
+  });
+  window.pidock = { serviceCatalogOp };
+  render(<DesktopEnvironmentPage projects={projects} projectId="p1" taskCount={0} tasks={[]} onSelectProject={() => {}} />);
+  expect(await screen.findByTestId("desktop-environment-error")).toHaveTextContent("环境清单读取失败");
+  fireEvent.click(screen.getByRole("button", { name: "新增环境" }));
+  fireEvent.change(screen.getByLabelText("环境名称"), { target: { value: "本地开发" } });
+  fireEvent.click(screen.getByRole("button", { name: "保存环境" }));
+  // The create really succeeded, but the list is still refused: the page says
+  // so instead of rendering one row as the observed environment list.
+  await waitFor(() => expect(screen.getByText("环境清单不可读取")).toBeInTheDocument());
+  expect(screen.queryByText(/环境清单已接线/)).toBeNull();
+  expect(screen.queryByText(/已选环境/)).toBeNull();
+});
+
 it("re-reads the selected environment on every switch and drops the previous environment's rows", async () => {
   const other = { projectId: "p1", environmentId: "e-22222222-2222-2222-2222-222222222222", name: "预发" };
   const serviceCatalogOp = vi.fn(async (request: Record<string, unknown>) => {

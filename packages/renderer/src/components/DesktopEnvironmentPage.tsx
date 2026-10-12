@@ -189,10 +189,13 @@ export function DesktopEnvironmentPage({ projects, projectId, taskCount, tasks, 
       setEnvironmentError(response.ok ? "环境创建回执无法核对" : response.error ?? "环境创建失败，请重试");
       return;
     }
-    setEnvironmentRows((current) => current?.projectId === project ? { projectId: project, values: [...current.values, created] } : { projectId: project, values: [created] });
-    setSelectedEnvironmentId(created.environmentId);
     setNewEnvironmentName("");
     setCreatingEnvironment(false);
+    // Main owns the full list, so re-read it instead of appending to whatever
+    // state the page holds: a create can never turn a refused read into a
+    // partial list the page then reports as the observed environment list.
+    const refreshed = await loadEnvironments(project);
+    if (refreshed?.some((row) => row.environmentId === created.environmentId)) setSelectedEnvironmentId(created.environmentId);
   };
 
   return <div data-testid="desktop-environment-page" className="px-[34px] py-[30px] below-narrow:px-5">

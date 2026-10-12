@@ -618,6 +618,28 @@ describe("named project environments", () => {
     expect(JSON.parse(readFileSync(join(f.dir, "service-templates.json"), "utf8"))).toEqual({ version: 1, revisions: [] });
   });
 
+  it("refuses a task binding document written before environments by name and never writes over it", () => {
+    const f = fixture();
+    const first = f.save();
+    f.bind(first.serviceId);
+    const machineFile = join(f.dir, "service-machine.json");
+    const written = JSON.parse(readFileSync(machineFile, "utf8")) as { version: number; bindings: Record<string, unknown>[] };
+    // What this slice's predecessor persisted: version 1, bindings that carry
+    // no environment. Without a named branch they die as a generic field error.
+    const legacy = { version: 1, bindings: written.bindings.map((row) => {
+      const copy = { ...row };
+      delete copy["environmentId"];
+      return copy;
+    }) };
+    writeFileSync(machineFile, JSON.stringify(legacy), { mode: 0o600 });
+    expect(() => f.catalog.listTask(taskId))
+      .toThrow("service machine document predates environments (version 1); migration required");
+    expect(() => f.bind(first.serviceId)).toThrow(/predates environments/);
+    // The legacy document is still exactly where it was: reading it never
+    // rewrote it into the environment-shaped version.
+    expect(JSON.parse(readFileSync(machineFile, "utf8"))).toEqual(legacy);
+  });
+
   it("seals a launch to its own environment and keeps every private value off the disk", () => {
     const home = realpathSync(mkdtempSync(join(tmpdir(), "pidock-env-seal-"))); directories.push(home);
     const taskDir = join(home, "task-12345678"); mkdirSync(join(taskDir, "repo-a"), { recursive: true });

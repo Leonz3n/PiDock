@@ -9,6 +9,7 @@ import {
 } from "../data/serviceCatalog";
 import type { ServiceImportHintView } from "../data/serviceImportHints";
 import { servicePortsFromDraft, validateServiceTemplateDraft, type ServiceHealthKind } from "../data/serviceTemplateRules";
+import { shellFailure } from "../data/taskServices";
 import { Icon } from "./Icon";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
@@ -134,7 +135,7 @@ export function ProjectServiceTemplates({ projectId, environmentId, environmentN
       if (cancelled || epoch.current !== request) return;
       setLoading(false);
       const parsed = response.ok ? serviceTemplatesFromMain(response.payload, projectId, environmentId) : null;
-      if (!parsed) { setError(response.ok ? "服务配方清单响应无法核对" : "服务配方清单读取失败"); return; }
+      if (!parsed) { setError(response.ok ? "服务配方清单响应无法核对" : shellFailure(response, "服务配方清单读取失败")); return; }
       setRows({ projectId, environmentId, values: parsed });
     });
     return () => { cancelled = true; };
