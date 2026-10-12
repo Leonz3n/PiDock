@@ -6,6 +6,7 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  loadTaskServices,
   runBoundTaskServiceThroughShell,
   runRecordsFromHost,
   serviceLogFromHost,
@@ -15,6 +16,44 @@ import {
 } from "../data/taskServices";
 
 const SERVICE_ID = "s-11111111-1111-1111-1111-111111111111";
+const OTHER_SERVICE_ID = "s-22222222-2222-2222-2222-222222222222";
+const ENVIRONMENT_ID = "e-11111111-1111-1111-1111-111111111111";
+const OTHER_ENVIRONMENT_ID = "e-22222222-2222-2222-2222-222222222222";
+
+/**
+ * [PiDock 04] (#7 box 1) the read point that decides which revision the 运行
+ * panel shows: one template list per environment the task's bindings selected,
+ * and each row read against ITS OWN environment. A single project-wide list
+ * would show another environment's service as if this binding pinned it.
+ */
+it("reads one template list per environment a task's bindings selected and matches each row to its own environment", async () => {
+  const seen: Record<string, unknown>[] = [];
+  vi.stubGlobal("window", { pidock: {
+    projectOp: async () => ({ ok: true, payload: { roots: [], tasks: [{ taskId: "task-1", projectId: "project-1", state: "assigned" }] } }),
+    taskOp: async () => ({ ok: true, payload: { records: [], registered: [] } }),
+    serviceCatalogOp: async (request: Record<string, unknown>) => {
+      seen.push(request);
+      if (request["op"] === "taskBindings") return { ok: true, payload: [
+        { taskId: "task-1", serviceId: SERVICE_ID, environmentId: ENVIRONMENT_ID, environmentName: "开发环境", templateVersion: 1, rootId: "repo-a", subdir: "", privateKeys: [] },
+        { taskId: "task-1", serviceId: OTHER_SERVICE_ID, environmentId: OTHER_ENVIRONMENT_ID, environmentName: "预发环境", templateVersion: 1, rootId: "repo-a", subdir: "", privateKeys: [] },
+      ] };
+      if (request["op"] === "list") return { ok: true, payload: [{ projectId: "project-1", environmentId: request["environmentId"], serviceId: request["environmentId"] === ENVIRONMENT_ID ? SERVICE_ID : OTHER_SERVICE_ID,
+        version: 1, shared: [], descriptor: { name: request["environmentId"] === ENVIRONMENT_ID ? "本地服务" : "预发服务", program: "node", args: [], ports: [], runType: "long-lived" } }] };
+      return { ok: false, error: `unexpected ${String(request["op"])}` };
+    } } });
+  const loaded = await loadTaskServices("task-1");
+  expect(loaded.ok).toBe(true);
+  if (!loaded.ok) throw Error("unreachable");
+  // One read per DISTINCT environment, each naming that environment.
+  expect(seen.filter((request) => request["op"] === "list")).toEqual([
+    { op: "list", projectId: "project-1", environmentId: ENVIRONMENT_ID },
+    { op: "list", projectId: "project-1", environmentId: OTHER_ENVIRONMENT_ID },
+  ]);
+  expect(loaded.templatesError).toBeUndefined();
+  // Each binding shows the revision of the environment IT selected.
+  const names = loaded.rows.map((row) => [row.binding.environmentName, row.binding.serviceId === SERVICE_ID ? row.template?.descriptor.name : row.template?.descriptor.name]);
+  expect(names).toEqual([["开发环境", "本地服务"], ["预发环境", "预发服务"]]);
+});
 
 afterEach(() => { vi.unstubAllGlobals(); });
 

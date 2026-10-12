@@ -185,6 +185,10 @@ async function startTaskHost(taskId: string, taskDir: string, profile: string): 
 interface CatalogFixture {
   catalog: ServiceCatalog;
   projectId: string;
+  /** The environment task A's binding selects (the project's first, `开发环境`). */
+  environmentId: string;
+  /** The second named environment and its own greeting, present only with `perEnvironment`. */
+  stagingEnvironmentId: string | null;
   serviceId: string;
   oneShotId: string;
   taskA: TaskHarness;
@@ -197,8 +201,13 @@ interface CatalogFixture {
  * Two provisioned task workspaces, one shared template, one binding each, and a
  * real Host per task. The only per-task launch difference is the local private
  * reference layer of that task's own binding.
+ *
+ * With `perEnvironment` the two bindings select two DIFFERENT named environments
+ * that hold the same service name with a different shared greeting, so the
+ * effective environment each real child prints is the one its own environment
+ * carries - the per-environment half of [PiDock 04] #7 box 1.
  */
-async function twoTasks(): Promise<CatalogFixture> {
+async function twoTasks(options: { perEnvironment?: boolean } = {}): Promise<CatalogFixture> {
   const home = realpathSync(mkdtempSync(join(tmpdir(), "pidock-two-tasks-")));
   cleanups.push(() => rmSync(home, { recursive: true, force: true }));
   const profile = join(home, "profile");
@@ -234,19 +243,32 @@ async function twoTasks(): Promise<CatalogFixture> {
   const authority: ServiceCatalogAuthority = { projectExists: (id) => id === projectId, task: (id) => owner(id), verifiedTask: (id) => owner(id) };
   const catalog = new ServiceCatalog(profile, authority);
   const environmentId = catalog.createEnvironment({ projectId, name: "开发环境" }).environmentId;
+  const stagingEnvironmentId = options.perEnvironment ? catalog.createEnvironment({ projectId, name: "预发环境" }).environmentId : null;
 
   // ONE shared template: one service name, one program, one argv, one declared
   // port list (empty - the port is the task's own binding below).
+  const descriptor = { name: "Invoice API", program: "node", args: ["service.cjs"], ports: [], runType: "long-lived" as const };
   const template = catalog.saveTemplate({
     projectId,
     environmentId,
-    descriptor: { name: "Invoice API", program: "node", args: ["service.cjs"], ports: [], runType: "long-lived" },
+    descriptor,
     shared: [{ key: "SERVICE_GREETING", value: "hello-shared", secret: false }],
   });
+  // The SAME service id inside the second environment: its own version line, its
+  // own shared material. Nothing here is a fixture value the launch could skip -
+  // main resolves the revision from the environment the binding selected.
+  if (stagingEnvironmentId !== null) {
+    catalog.saveTemplate({
+      projectId, environmentId: stagingEnvironmentId, serviceId: template.serviceId, expectedVersion: 0, descriptor,
+      shared: [{ key: "SERVICE_GREETING", value: "hello-staging", secret: false }],
+    });
+  }
   for (const task of provisioned) {
     vi.stubEnv(task.envRef, String(task.port));
     catalog.bindTask({
-      taskId: task.taskId, serviceId: template.serviceId, environmentId, templateVersion: 1, rootId: "repo-a", subdir: task.subdir,
+      taskId: task.taskId, serviceId: template.serviceId,
+      environmentId: stagingEnvironmentId !== null && task.tag === "beta" ? stagingEnvironmentId : environmentId,
+      templateVersion: 1, rootId: "repo-a", subdir: task.subdir,
       programPath: realpathSync(process.execPath), privateRefs: [{ key: "PORT", envRef: task.envRef }],
     });
   }
@@ -297,7 +319,7 @@ async function twoTasks(): Promise<CatalogFixture> {
       }
     }
   });
-  return { catalog, projectId, environmentId, serviceId: template.serviceId, oneShotId: oneShot.serviceId, taskA, taskB, portA, portB };
+  return { catalog, projectId, environmentId, stagingEnvironmentId, serviceId: template.serviceId, oneShotId: oneShot.serviceId, taskA, taskB, portA, portB };
 }
 
 /** Register the catalog-resolved launch on one task's Host, like main does. */
@@ -412,6 +434,54 @@ describe.skipIf(process.platform === "win32")("#10 two tasks running the same se
     expect(await control(taskB, serviceId, "stop")).toMatchObject({ serviceId, action: "stop" });
     await until(() => !alive(pidB), "task B's child to really exit");
     expect(alive(pidA)).toBe(false);
+  });
+
+  // [PiDock 04] (#7 box 1) the environment is a launch input, not a label: two
+  // tasks bound to the SAME service name in two DIFFERENT named environments
+  // each run a real child whose effective variables are its own environment's.
+  it("runs each task's service out of its own named environment, so the effective value each real child prints differs per environment", { timeout: 60_000 }, async () => {
+    const fixture = await twoTasks({ perEnvironment: true });
+    const { serviceId, taskA, taskB } = fixture;
+    expect(fixture.stagingEnvironmentId).not.toBeNull();
+    expect(fixture.stagingEnvironmentId).not.toBe(fixture.environmentId);
+
+    // Main's own resolution names the environment it read, per binding.
+    expect(fixture.catalog.launchFor(taskA.taskId, fixture.projectId, serviceId, process.env))
+      .toMatchObject({ environmentId: fixture.environmentId, environmentName: "开发环境", templateVersion: 1 });
+    expect(fixture.catalog.launchFor(taskB.taskId, fixture.projectId, serviceId, process.env))
+      .toMatchObject({ environmentId: fixture.stagingEnvironmentId, environmentName: "预发环境", templateVersion: 1 });
+
+    for (const task of [taskA, taskB]) {
+      expect(await register(task, fixture, serviceId)).toMatchObject({ service: { serviceId, launchSource: "catalog" } });
+    }
+    expect(await control(taskA, serviceId, "start")).toMatchObject({ serviceId, action: "start" });
+    expect(await control(taskB, serviceId, "start")).toMatchObject({ serviceId, action: "start" });
+
+    await until(() => markerPid(taskA.taskDir, "svc-a") !== undefined, "task A's child to report itself");
+    await until(() => markerPid(taskB.taskDir, "svc-b") !== undefined, "task B's child to report itself");
+    await until(() => ask(fixture.portA) !== null, "task A's service to answer");
+    await until(() => ask(fixture.portB) !== null, "task B's service to answer");
+    const pidA = markerPid(taskA.taskDir, "svc-a") as number;
+    const pidB = markerPid(taskB.taskDir, "svc-b") as number;
+    const answerA = (await ask(fixture.portA)) as Answer;
+    const answerB = (await ask(fixture.portB)) as Answer;
+    expect(answerA).toEqual({ dir: "svc-a", pid: pidA, port: fixture.portA, greeting: "hello-shared" });
+    expect(answerB).toEqual({ dir: "svc-b", pid: pidB, port: fixture.portB, greeting: "hello-staging" });
+    // The two children really observed different values, and neither is a plan:
+    // each answer carries its own OS pid and its own environment's greeting.
+    expect(answerA.greeting).not.toBe(answerB.greeting);
+    expect(alive(pidA)).toBe(true);
+    expect(alive(pidB)).toBe(true);
+    // Same service name, and each task still runs its own instance.
+    expect(pidA).not.toBe(pidB);
+
+    // Stopping the 开发环境 instance leaves the 预发环境 one really running.
+    expect(await control(taskA, serviceId, "stop")).toMatchObject({ serviceId, action: "stop" });
+    await until(() => !alive(pidA), "task A's child to really exit");
+    expect(alive(pidB)).toBe(true);
+    expect(await ask(fixture.portB)).toEqual({ dir: "svc-b", pid: pidB, port: fixture.portB, greeting: "hello-staging" });
+    expect(await control(taskB, serviceId, "stop")).toMatchObject({ serviceId, action: "stop" });
+    await until(() => !alive(pidB), "task B's child to really exit");
   });
 
   it("drops a child that ended on its own out of the registered tree, keeping the real exit reason", { timeout: 30_000 }, async () => {
