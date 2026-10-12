@@ -19,6 +19,8 @@
  */
 import { EventEmitter } from "node:events";
 import { execFileSync } from "node:child_process";
+import { createServer as createHttpServer } from "node:http";
+import type { Socket } from "node:net";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -28,6 +30,7 @@ import { HostClient } from "../rpc/host-client.js";
 import { InstalledServiceHostAuthority } from "../main/service-host-binding.js";
 import { PerTaskHostRegistry, runTaskService } from "../main/runtime.js";
 import { ServiceCatalog, type ServiceCatalogAuthority } from "../main/service-catalog.js";
+import type { ServiceDescriptor } from "../main/service-config.js";
 import { diskTaskStore } from "./task-host.js";
 import { buildTaskDiskRecord, readServiceOwnershipOnDisk } from "./task-store.js";
 import { SERVICE_STOP_CONFIRM_MS, SERVICE_STOP_GRACE_MS, TaskServiceProcesses } from "./service-processes.js";
@@ -51,6 +54,40 @@ console.log("ambient:" + (process.env.PIDOCK_TEST_AMBIENT ?? "absent"));
 process.stdout.write("x".repeat(2500) + "\\n");
 setInterval(() => {}, 1000);
 `;
+
+/**
+ * A real HTTP health listener on 127.0.0.1 for the declared 健康检查 of one
+ * test. It answers 200, counts the connections it really accepted (so "nothing
+ * was dialled" and "exactly one attempt" are observable facts), and is closed
+ * by every exit path - internally when the test wants a refused target, and by
+ * the suite's own cleanup otherwise.
+ */
+interface HealthListener {
+  readonly port: number;
+  readonly connections: number;
+  close(): Promise<void>;
+}
+
+async function httpHealthListener(): Promise<HealthListener> {
+  const server = createHttpServer((_request, response) => { response.writeHead(200, { "content-type": "text/plain" }); response.end("health"); });
+  const sockets = new Set<Socket>();
+  let connections = 0;
+  server.on("connection", (socket) => { connections += 1; sockets.add(socket); socket.on("close", () => sockets.delete(socket)); });
+  server.on("clientError", () => {});
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (address === null || typeof address === "string") throw Error("no-bound-port");
+  const listener: HealthListener = {
+    port: address.port,
+    get connections() { return connections; },
+    close: async () => {
+      for (const socket of sockets) socket.destroy();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    },
+  };
+  cleanups.push(() => listener.close());
+  return listener;
+}
 
 /**
  * `TaskServiceProcesses.stop` sends SIGTERM, waits `stopGraceMs` (3000ms),
@@ -185,8 +222,9 @@ async function installed(options: FixtureOptions = {}) {
       origin: { kind: "service-catalog", senderWebContentsId: 7 } });
     return result.payload;
   };
-  const bind = (subdir: string, tag: string) => {
-    const template = catalog.saveTemplate({ projectId, environmentId, descriptor: { name: `API ${tag}`, program: "node", args: ["service.cjs"], ports: [], runType: "long-lived" },
+  const bind = (subdir: string, tag: string, healthCheck?: ServiceDescriptor["healthCheck"]) => {
+    const template = catalog.saveTemplate({ projectId, environmentId, descriptor: { name: `API ${tag}`, program: "node", args: ["service.cjs"], ports: [], runType: "long-lived",
+      ...(healthCheck === undefined ? {} : { healthCheck }) },
       shared: [{ key: "SERVICE_GREETING", value: `hello-${tag}`, secret: false }, { key: "SERVICE_TAG", value: tag, secret: false }] });
     catalog.bindTask({ taskId, serviceId: template.serviceId, environmentId, templateVersion: 1, rootId: "repo-a", subdir,
       programPath: realpathSync(process.execPath), privateRefs: [{ key: "SERVICE_TOKEN", envRef: "LOCAL_TEST_TOKEN" }] });
@@ -336,6 +374,49 @@ describe.skipIf(process.platform === "win32")("#7 catalog-driven service executi
     await until(() => !alive(secondPid), "second service to exit on quit");
     const report = await f.registry.quitAll({ origin: { kind: "shell-ui", senderWebContentsId: 7 } });
     expect(report).toMatchObject({ ok: true, tasks: [{ taskId: f.taskId, failures: [], retainedTasks: [] }] });
+  }, 30_000);
+
+  it("probes the pinned revision's declared 健康检查 for real, and a failed probe never reads as a dead process", async () => {
+    const f = await installed();
+    const listener = await httpHealthListener();
+    const target = `http://127.0.0.1:${String(listener.port)}/health`;
+    const serviceId = f.bind("svc-a", "a", { kind: "http", target });
+
+    // (1) 未探测 for a STOPPED service: the declared target is a live socket, and
+    // it is never dialled because the process is not running.
+    await f.register(serviceId);
+    const stopped = await f.status(serviceId);
+    expect(stopped).toMatchObject({ lifecycle: "stopped", health: { state: "not-probed", kind: "http", target } });
+    expect((stopped["health"] as { reason: string }).reason).toContain("服务未运行");
+    expect(listener.connections).toBe(0);
+
+    // (2) A REAL pass: a real HTTP listener declared by the pinned revision, a
+    // real child, and the listener's real status code in the read.
+    expect(await f.run(serviceId, "start")).toMatchObject({ serviceId, action: "start", actor: "human" });
+    const pid = await untilMarkerPid(f.taskDir, "a");
+    expect(alive(pid)).toBe(true);
+    const healthy = await f.status(serviceId);
+    expect(healthy).toMatchObject({ lifecycle: "running", health: { state: "healthy", kind: "http", target, statusCode: 200 } });
+    const runningStartedAt = healthy["startedAt"];
+    expect(listener.connections).toBeGreaterThanOrEqual(1);
+
+    // (3) The declared target closes while the REAL child keeps running: the
+    // probe fails by name and `lifecycle`/`startedAt`/`exitReason` do not move.
+    await listener.close();
+    const unhealthy = await f.status(serviceId);
+    expect(unhealthy).toMatchObject({ lifecycle: "running", health: { state: "unhealthy", kind: "http", reason: "连接被拒" } });
+    expect(unhealthy["startedAt"]).toBe(runningStartedAt);
+    expect(unhealthy["exitReason"]).toBeUndefined();
+    expect(alive(pid)).toBe(true);
+    // (4) Nothing was started, stopped or restarted by the probe: the same real
+    // child is still the one of this service.
+    expect(await untilMarkerPid(f.taskDir, "a")).toBe(pid);
+    expect((await f.status(serviceId)).lifecycle).toBe("running");
+
+    // (5) A stopped service goes back to a named 未探测 without dialling.
+    expect(await f.run(serviceId, "stop")).toMatchObject({ serviceId, action: "stop", actor: "human" });
+    await until(() => !alive(pid), "the service child to exit");
+    expect(await f.status(serviceId)).toMatchObject({ lifecycle: "stopped", health: { state: "not-probed", reason: "服务未运行，不发起探测" } });
   }, 30_000);
 
   it("records the durable launch identity of a real Host start and refuses a duplicate start beside that survivor", async () => {
