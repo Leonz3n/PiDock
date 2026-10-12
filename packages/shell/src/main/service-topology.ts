@@ -431,18 +431,20 @@ export function endpointKeyCandidates(serviceId: string): string[] {
 
 /**
  * The address variables of one run unit, under BOTH spellings the trusted data
- * uses: the unit's stable `serviceId` AND its human name.
+ * uses: the unit's human name FIRST, then its stable `serviceId`.
  *
  * The name is not decoration: a catalog-minted service id is an opaque UUID
  * (`s-<uuid>`), so its derived spelling (`S_<uuid>_URL`) matches no business
  * config row, while the shared template and the repo config name the service the
  * way its author does (`CALLEE_API_URL` for a service named `Callee API`). An
  * audit that looked at the id alone would therefore be silent in production for
- * exactly the rows box 2 asks about. Both spellings are searched, in this order,
- * and duplicates collapse.
+ * exactly the rows box 2 asks about. The name comes first because the first
+ * candidate is also the canonical key a declaration binds when the config
+ * follows no convention name - and that key has to be one a person could have
+ * written. Duplicates collapse.
  */
 export function unitEndpointKeyCandidates(unit: Pick<RunUnit, "serviceId" | "name">): string[] {
-  return [...new Set([...endpointKeyCandidates(unit.serviceId), ...endpointKeyCandidates(unit.name)])];
+  return [...new Set([...endpointKeyCandidates(unit.name), ...endpointKeyCandidates(unit.serviceId)])];
 }
 
 /**

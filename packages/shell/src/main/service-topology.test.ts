@@ -348,10 +348,12 @@ describe("trusted binding rules for the plan", () => {
     const named: RunUnit[] = [
       { unitId: `repo-a:${uuid}`, serviceId: uuid, name: "Callee API", repoDir: "repo-a", location: "local" },
     ];
+    // The human name first: it is the spelling a business config really uses, and
+    // it is the canonical key a declaration falls back to.
     expect(unitEndpointKeyCandidates(named[0] as RunUnit)).toEqual([
+      "CALLEE_API_ENDPOINT", "CALLEE_API_URL", "CALLEE_API_BASE_URL", "CALLEE_API_HOST",
       "S_11111111_1111_4111_8111_111111111111_ENDPOINT", "S_11111111_1111_4111_8111_111111111111_URL",
       "S_11111111_1111_4111_8111_111111111111_BASE_URL", "S_11111111_1111_4111_8111_111111111111_HOST",
-      "CALLEE_API_ENDPOINT", "CALLEE_API_URL", "CALLEE_API_BASE_URL", "CALLEE_API_HOST",
     ]);
     const layers: BindingLayers = { ...emptyLayers, shared: [{ key: "CALLEE_API_URL", value: "https://callee.shared.example", secret: false }] };
     const rules = deriveBindingRules({ units: named, layers, declaredTargets: [uuid] });
