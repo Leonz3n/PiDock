@@ -261,6 +261,45 @@ describe("[PiDock 05] #10 group start from the shipped 运行 panel", () => {
     expect(receipt.querySelector(`[data-group-unit="${CALLER_UNIT}"]`)).toHaveTextContent("启动：未启动");
   });
 
+  it("shows the plan's own read-point audit in the shipped panel", async () => {
+    // The plan carries the trusted config layer reading the callee's address while
+    // NO binding covers it (no declaration authorised a local override), so the
+    // Host's own planning diagnostics hold a `missing-binding` row. It must reach
+    // the user through the group answer the production caller returns.
+    const topology = new TaskServiceTopology("task-1", "/tmp/task-1", () => STARTED_AT);
+    topology.setPlan({
+      units: [{ unitId: CALLEE_UNIT, serviceId: "callee-api", name: "Callee API", repoDir: "invoice-service", location: "local", runType: "long-lived" }],
+      selectedRepoDirs: ["invoice-service"],
+      requests: [{ unitId: CALLEE_UNIT, port: 4100 }],
+      layers: { repoDefaults: [], shared: [{ key: "CALLEE_API_URL", value: "https://callee.shared.example", secret: false }], privateEntries: [], task: [] },
+    });
+    let pid = 4500;
+    const group = await runServiceGroupStart({
+      topology,
+      startUnit: async ({ serviceId }) => {
+        pid += 1;
+        topology.recordRun({ serviceId, templateVersion: "2", ports: [4100], portsSource: "declared", pid, owner: "human", startedAt: STARTED_AT });
+        return { ok: true, pid };
+      },
+      observation: { probeListening: async () => "listening" },
+      registeredAddress: () => ({ host: "127.0.0.1", port: 4100 }),
+    });
+    const audit = group.diagnostics.find((entry) => entry.code === "missing-binding");
+    expect(audit).toBeDefined();
+    expect(audit?.scope).toEqual({ key: "CALLEE_API_URL", unitId: CALLEE_UNIT });
+    // The audit is real: the plan DID carry the layer row that produced it.
+    expect(group.diagnostics.length).toBeGreaterThan(0);
+
+    groupBridge({ answer: () => ({ ok: true, payload: { group } }) });
+    await clickGroupStart();
+    const diagnostics = await screen.findByTestId("dock-group-diagnostics");
+    // The shipped vocabulary for the code, plus the exact key the audit named.
+    expect(diagnostics).toHaveTextContent("缺少变量绑定");
+    expect(diagnostics).toHaveTextContent("CALLEE_API_URL");
+    // The Host's own hint reaches the user too (the panel keeps the named next step).
+    expect(diagnostics).toHaveTextContent("否则消费者会继续使用共享环境地址");
+  });
+
   it("refuses a green state declared beside a refused unit instead of rendering it", async () => {
     const group = await realGroupRun({ start: { [CALLEE_ID]: "refused" } });
     // A contradictory payload: the Host's own rules can never produce it, and a
