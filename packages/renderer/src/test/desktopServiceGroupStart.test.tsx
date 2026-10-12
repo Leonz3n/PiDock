@@ -105,6 +105,24 @@ async function realNoEdgeRun() {
   });
 }
 
+/** The REAL emit for a plan whose call edge could not be observed at all (the target declares no probeable address). */
+async function realNonObservableRun() {
+  const topology = plannedTopology();
+  let pid = 4400;
+  return await runServiceGroupStart({
+    topology,
+    startUnit: async ({ serviceId }) => {
+      pid += 1;
+      topology.recordRun({ serviceId, templateVersion: "2", ports: [], portsSource: "declared", pid, owner: "human", startedAt: STARTED_AT });
+      return { ok: true, pid };
+    },
+    observation: { probeListening: async () => "listening" },
+    // The caller declares an address (so it is observed listening); the callee
+    // declares none, so nothing about the link could be probed.
+    registeredAddress: (serviceId) => (serviceId === CALLER_ID ? { host: "127.0.0.1", port: 4101 } : undefined),
+  });
+}
+
 /** One binding + one template, so the dock loads a real bound service before its group affordance appears. */
 function groupBridge(options: { answer: () => unknown }) {
   const taskOp = vi.fn(async (_taskId: string, op: string) => {
@@ -229,7 +247,7 @@ describe("[PiDock 05] #10 group start from the shipped 运行 panel", () => {
     expect(receipt.querySelector(`[data-group-unit="${CALLER_UNIT}"]`)).toHaveTextContent("启动：未启动");
   });
 
-  it("refuses a green group declared beside a refused unit instead of rendering it", async () => {
+  it("refuses a green state declared beside a refused unit instead of rendering it", async () => {
     const group = await realGroupRun({ start: { [CALLEE_ID]: "refused" } });
     // A contradictory payload: the Host's own rules can never produce it, and a
     // parser that accepted it would print a green group over a refused unit.
@@ -241,9 +259,12 @@ describe("[PiDock 05] #10 group start from the shipped 运行 panel", () => {
     expect(fixture.serviceCatalogOp.mock.calls.filter(([entry]) => entry["op"] === "runTaskServiceGroup")).toHaveLength(1);
   });
 
-  it("refuses a start-failed group whose state claims 已互验 without a passed linkage observation", async () => {
-    const group = await realGroupRun({ start: { [CALLEE_ID]: "start-failed" } });
-    expect(group.state).toBe("start-failed");
+  it("refuses 已互验 declared without a single passed linkage observation", async () => {
+    const group = await realNonObservableRun();
+    // The real run probed nothing: its own state is 未探测, and no linkage step
+    // passed. Claiming 已互验 for it is the exact over-report to refuse.
+    expect(group.state).toBe("not-probed");
+    expect(group.units.flatMap((unit) => unit.steps).filter((step) => step.outcome === "passed")).toEqual([]);
     groupBridge({ answer: () => ({ ok: true, payload: { group: { ...group, state: "verified" } } }) });
     await clickGroupStart();
     expect(await screen.findByTestId("dock-group-refusal")).toHaveTextContent("无法解析");
@@ -266,12 +287,16 @@ describe("[PiDock 05] #10 group start from the shipped 运行 panel", () => {
     await waitFor(() => expect(fixture.serviceCatalogOp.mock.calls.filter(([entry]) => entry["op"] === "runTaskServiceGroup")).toHaveLength(1));
   });
 
-  it("refuses a malformed unit inside an otherwise valid group payload", async () => {
-    const group = await realGroupRun();
-    const broken = { ...group, units: [{ ...group.units[0]!, listening: "listening", address: undefined }] };
-    groupBridge({ answer: () => ({ ok: true, payload: { group: broken } }) });
+  it("refuses 已监听 for a unit whose observation carries no address", async () => {
+    const group = await realNoEdgeRun();
+    expect(group.state).toBe("listening");
+    // The real payload names the address it connected to; a payload that reports
+    // the observation without it is contradictory (nobody could have observed it).
+    const withoutAddress = group.units.map(({ address: _address, ...rest }) => rest);
+    expect(Object.keys(group.units[0] ?? {})).toContain("address");
+    groupBridge({ answer: () => ({ ok: true, payload: { group: { ...group, units: withoutAddress } } }) });
     await clickGroupStart();
-    // 已监听 without the address it was observed at is contradictory.
     expect(await screen.findByTestId("dock-group-refusal")).toHaveTextContent("无法解析");
+    expect(screen.queryByTestId("dock-group-run")).not.toBeInTheDocument();
   });
 });
