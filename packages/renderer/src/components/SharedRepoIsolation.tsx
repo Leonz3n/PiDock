@@ -26,14 +26,24 @@
  * (`plain-dir-no-diff`) where a Git view would be. A write through it lands in
  * the original target, which is exactly why the worktree isolation below does
  * not apply to it.
+ *
+ * [PiDock 03] (#6 box 12) the link's TARGET shape is read here too, through the
+ * one existing link op (`task/probeLink` → `probeLinkThroughShell`). The Host
+ * answers with its own observation, so 失效/嵌套/循环 are three DIFFERENT named
+ * states (never "a directory"), a shape it could not read is NAMED unknown, and
+ * the row carries the Host's per-platform link-capability record (this machine's
+ * platform exercised, `win32` unverified by name) plus the named boundary that
+ * this is a Host observation and NOT a real pi/model verification.
  */
 import { useEffect, useRef, useState } from "react";
-import { fileDiffThroughShell, fileRootsThroughShell } from "../data/shellBridge";
+import { fileDiffThroughShell, fileRootsThroughShell, probeLinkThroughShell } from "../data/shellBridge";
 import { shellFailure } from "../data/taskServices";
 import {
   observedText,
   workspaceDiffFromHost,
+  workspaceLinkTargetFromHost,
   workspaceRootsFromHost,
+  type WorkspaceLinkTargetView,
   type WorkspaceRootView,
 } from "../data/workspaceFiles";
 import { Icon } from "./Icon";
@@ -44,6 +54,36 @@ type RootRow = { taskId: string; taskName: string; root: WorkspaceRootView };
 
 /** One read of a row's change: the Host's bounded diff, or its named refusal. */
 type ChangeRead = { state: "observed"; diff: string; truncated: boolean } | { state: "unknown"; reason: string };
+
+/** One read of a link's target shape: the Host's observation, or a named unknown. */
+type LinkRead = { state: "observed"; link: WorkspaceLinkTargetView } | { state: "unknown"; reason: string };
+
+/**
+ * The Host's observed shape as words. Each shape keeps its OWN name, so 失效
+ * (目标不存在), 嵌套 (来源本身是软链接) and 循环 (链回到已跟随过的链接) can never be
+ * read as the same "a directory", and `unknown` never silently becomes healthy.
+ */
+const LINK_SHAPE_LABEL: Record<WorkspaceLinkTargetView["shape"], string> = {
+  directory: "真实目录（Host 实测）",
+  dangling: "失效：链接目标已不存在（Host 实测）",
+  "nested-link": "嵌套：来源本身是软链接，不是原目录（Host 实测）",
+  "cyclic-link": "循环：链接链回到已跟随过的链接（Host 实测）",
+  unknown: "未确定：形状未实测",
+};
+
+/** The plan-time lexical pre-check, labelled apart from the observation. */
+const LINK_LEXICAL_LABEL: Record<WorkspaceLinkTargetView["lexical"], string> = {
+  ok: "路径不嵌套、不在任务目录内",
+  nested: "来源位于另一个来源内（视图重叠，合法）",
+  "loop-risk": "来源在任务目录内，创建链接可能回环（风险，不是已观测的循环）",
+};
+
+/** The shape read as words: the reading, what the Host really saw, and the pre-check. */
+function linkShapeSummary(link: LinkRead | undefined): string {
+  if (link === undefined) return "未实测：尚未读取";
+  if (link.state === "unknown") return `未确定：${link.reason}`;
+  return `${LINK_SHAPE_LABEL[link.link.shape]} · Host 观测：${link.link.detail} · 词法预检：${LINK_LEXICAL_LABEL[link.link.lexical]}`;
+}
 
 /** One task whose roots could not be read at all; named, so it is never dropped silently. */
 type TaskReadFailure = { taskName: string; reason: string };
@@ -135,7 +175,7 @@ function WorktreeRow({ row, change }: { row: RootRow; change: ChangeRead | undef
   );
 }
 
-function LinkRow({ row, change }: { row: RootRow; change: ChangeRead | undefined }) {
+function LinkRow({ row, change, link }: { row: RootRow; change: ChangeRead | undefined; link: LinkRead | undefined }) {
   const root = row.root;
   return (
     <div className="mt-2 rounded-[7px] border border-line bg-paper px-3 py-2" data-testid="shared-dir-row" data-task={row.taskId} data-root={root.id}>
@@ -149,6 +189,36 @@ function LinkRow({ row, change }: { row: RootRow; change: ChangeRead | undefined
         <dd className="min-w-0 break-words" data-testid={`row-link-isolation-${row.taskId}`}>
           共享原目录，文件未隔离（写入会落到原目录，不是独立副本）
         </dd>
+        {/* [PiDock 03] (#6 box 12) the Host's OWN shape reading of this link's
+            target: 失效/嵌套/循环 stay three named states, and a shape that could
+            not be read is a named unknown. */}
+        <dt className="text-muted">链接目标形状</dt>
+        <dd className="min-w-0 break-words" data-testid={`row-link-shape-${row.taskId}`} data-shape={link?.state === "observed" ? link.link.shape : "unread"}>
+          {linkShapeSummary(link)}
+        </dd>
+        <dt className="text-muted">链接能力（按平台）</dt>
+        <dd className="min-w-0 break-words" data-testid={`row-link-platforms-${row.taskId}`}>
+          {link?.state === "observed" ? (
+            <ul className="flex flex-col gap-y-0.5">
+              {link.link.platforms.map((platform) => (
+                <li key={platform.platform} data-platform={platform.platform} data-exercised={platform.exercised ? "true" : "false"}>
+                  <span className="font-mono">{platform.platform}</span>：{platform.exercised ? "已实测" : "未实测"} · {platform.note}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            /* No probe result: the platform record was never read, and this row
+               says so instead of leaving an empty area that could be taken for
+               "no platform problem". */
+            "本次未取得 Host 链接探测记录：未记录任何平台实测，也未声明真实 pi 边界。"
+          )}
+        </dd>
+        {link?.state === "observed" && (
+          <>
+            <dt className="text-muted">记录边界</dt>
+            <dd className="min-w-0 break-words" data-testid={`row-link-model-boundary-${row.taskId}`}>{link.link.modelBoundary}</dd>
+          </>
+        )}
         <dt className="text-muted">Git 视图</dt>
         <dd className="min-w-0 break-words" data-testid={`row-link-git-${row.taskId}`}>{linkGitSummary(change)}</dd>
       </dl>
@@ -161,7 +231,7 @@ function LinkRow({ row, change }: { row: RootRow; change: ChangeRead | undefined
  * than one task is the shared case this panel exists for, and its note states
  * which sharing it is: two independent worktrees, or one original directory.
  */
-function RootGroup({ rootId, rows, changes }: { rootId: string; rows: readonly RootRow[]; changes: Record<string, ChangeRead> }) {
+function RootGroup({ rootId, rows, changes, links }: { rootId: string; rows: readonly RootRow[]; changes: Record<string, ChangeRead>; links: Record<string, LinkRead> }) {
   const root = rows[0]!.root;
   const shared = rows.length > 1;
   return (
@@ -181,7 +251,7 @@ function RootGroup({ rootId, rows, changes }: { rootId: string; rows: readonly R
       )}
       {rows.map((row) =>
         root.kind === "shared-dir" ? (
-          <LinkRow key={row.taskId} row={row} change={changes[rowKey(row)]} />
+          <LinkRow key={row.taskId} row={row} change={changes[rowKey(row)]} link={links[rowKey(row)]} />
         ) : (
           <WorktreeRow key={row.taskId} row={row} change={changes[rowKey(row)]} />
         ),
@@ -193,6 +263,7 @@ function RootGroup({ rootId, rows, changes }: { rootId: string; rows: readonly R
 export function SharedRepoIsolation({ tasks }: { tasks: readonly { taskId: string; name: string }[] }) {
   const [rows, setRows] = useState<RootRow[] | null>(null);
   const [changes, setChanges] = useState<Record<string, ChangeRead>>({});
+  const [links, setLinks] = useState<Record<string, LinkRead>>({});
   const [failures, setFailures] = useState<TaskReadFailure[]>([]);
   const [revision, setRevision] = useState(0);
   // The task list is rebuilt on every render of the page, so the effect keys on
@@ -207,6 +278,7 @@ export function SharedRepoIsolation({ tasks }: { tasks: readonly { taskId: strin
     void (async () => {
       setRows(null);
       setChanges({});
+      setLinks({});
       setFailures([]);
       const collected: RootRow[] = [];
       const unread: TaskReadFailure[] = [];
@@ -240,6 +312,30 @@ export function SharedRepoIsolation({ tasks }: { tasks: readonly { taskId: strin
       }
       if (!live) return;
       setChanges(read);
+      // The link's OWN shape read, through the one existing link op. A plain
+      // directory the Host reported without a source path cannot be probed at
+      // all, and that stays a named unknown rather than a healthy directory.
+      const probed: Record<string, LinkRead> = {};
+      for (const row of collected) {
+        if (row.root.kind !== "shared-dir") continue;
+        const sourcePath = row.root.sourcePath;
+        if (sourcePath === undefined) {
+          probed[rowKey(row)] = { state: "unknown", reason: "Host 未上报该链接的源路径，无法探测目标形状" };
+          continue;
+        }
+        const result = await probeLinkThroughShell({ taskId: row.taskId, sourcePath });
+        if (!live) return;
+        if (!result.ok) {
+          probed[rowKey(row)] = { state: "unknown", reason: shellFailure(result, "读取链接目标形状失败") };
+          continue;
+        }
+        const view = workspaceLinkTargetFromHost(result.payload);
+        probed[rowKey(row)] = view
+          ? { state: "observed", link: view }
+          : { state: "unknown", reason: "Host 链接探测响应无法解析" };
+      }
+      if (!live) return;
+      setLinks(probed);
     })();
     return () => {
       live = false;
@@ -262,7 +358,7 @@ export function SharedRepoIsolation({ tasks }: { tasks: readonly { taskId: strin
         </Button>
       </div>
       <p className="mt-1 text-xs text-muted">
-        每行都是本机 Host 的实测结果：工作分支与变化来自该任务自己的工作副本，远程基线分支是固定记录。普通目录链接共享原目录，文件未隔离，写入会落到原目录。
+        每行都是本机 Host 的实测结果：工作分支与变化来自该任务自己的工作副本，远程基线分支是固定记录。普通目录链接共享原目录，文件未隔离，写入会落到原目录；它的目标形状（真实目录 / 失效 / 嵌套 / 循环 / 未确定）与按平台的链接能力记录来自同一次 Host 探测，不是真实 pi 运行。
       </p>
       {rows === null && <p className="mt-3 text-xs text-muted" role="status">正在读取各任务的真实工作副本…</p>}
       {failures.map((failure) => (
@@ -274,7 +370,7 @@ export function SharedRepoIsolation({ tasks }: { tasks: readonly { taskId: strin
         <p className="mt-3 text-xs text-muted" data-testid="shared-repo-empty">本项目还没有可读取的仓库或普通目录链接。</p>
       )}
       {[...groups.entries()].map(([rootId, group]) => (
-        <RootGroup key={rootId} rootId={rootId} rows={group} changes={changes} />
+        <RootGroup key={rootId} rootId={rootId} rows={group} changes={changes} links={links} />
       ))}
     </section>
   );

@@ -596,3 +596,83 @@ export function classifyLinkTarget(
   }
   return "ok";
 }
+
+/**
+ * The OBSERVED shape of a link's target, read from the filesystem by the
+ * Host-side probe (`probeLinkTarget` in `host/task-host.ts`). Distinct from
+ * `LinkTargetShape`, which is the plan-time lexical pre-check on path strings:
+ * every value here is a reading, and a shape that could not be read is
+ * `unknown` — never `directory`.
+ *
+ * - `directory`: the source is a real directory reached without following a link;
+ * - `nested-link`: the source IS a link (the task link points at another link);
+ * - `dangling`: the link chain ends at a path that does not exist (失效);
+ * - `cyclic-link`: the chain returns to a link it already followed (循环);
+ * - `unknown`: the shape was not established (a read error other than
+ *   "missing", or a chain that ends at something that is not a directory).
+ */
+export type LinkTargetObservation = "directory" | "nested-link" | "dangling" | "cyclic-link" | "unknown";
+
+/**
+ * Platforms the project's release/validation matrix names for the link
+ * capability (`docs/mvp-validation-plan.md`: macOS arm64 + Windows x64, "只有
+ * 实际测试通过的平台可以标记已验证"). The SAME matrix `LAUNCH_VERIFICATION_TARGETS`
+ * (`main/service-config.ts`) projects for the service launch record, kept as
+ * its own list so a link row can never be read as a launch verification. A row
+ * exists for every target even when nothing was verified, because an absent row
+ * is exactly the state that reads as a pass.
+ */
+export const LINK_CAPABILITY_TARGETS = ["darwin-arm64", "win32-x64"] as const;
+
+/**
+ * One platform row of the link-capability record. `exercised` is true ONLY for
+ * the platform this Host really ran the link probe on (the caller stamps what it
+ * observed); every other row says BY NAME why it is not a verification. No
+ * branch of the link path asserts Windows behaviour: `win32` exists here to name
+ * the gap, not to claim it.
+ */
+export interface LinkCapabilityRow {
+  platform: string;
+  exercised: boolean;
+  note: string;
+}
+
+/**
+ * The named boundary of the link-shape report ([PiDock 03] #6 box 12). It is a
+ * HOST observation of link targets, not a model run: the box's 「用真实 pi 验证」
+ * half stays open, and the existing link behaviour suite replaces the model hop
+ * with a context stub.
+ */
+export const LINK_MODEL_VERIFICATION_BOUNDARY =
+  "本记录是 Host 对链接目标形状的观测（lstat/readlink），不是真实 pi/模型运行：盒子要求的「用真实 pi 验证统一 cwd 下普通链接的列举、搜索、读取和写入」仍未完成（现有链接行为证明用上下文桩替代了模型跳，未跑过真实 Provider 回合）。";
+
+/**
+ * Build the platform rows of one link-shape report. `observedPlatform` is the
+ * `hostPlatformLabel()` of the process that really ran the probe, or `null`
+ * when no probe ran — a caller can then never make an unexercised platform look
+ * exercised. The row set is the project's release targets plus that platform,
+ * so a platform the link path was never really run on is named instead of being
+ * left out.
+ */
+export function linkCapabilityRows(observedPlatform: string | null): LinkCapabilityRow[] {
+  const rows: LinkCapabilityRow[] = [];
+  for (const name of [...LINK_CAPABILITY_TARGETS, ...(observedPlatform === null ? [] : [observedPlatform])]) {
+    if (rows.some((row) => row.platform === name)) continue;
+    if (name === observedPlatform) {
+      rows.push({
+        platform: name,
+        exercised: true,
+        note: `本平台（${name}）：本次真的在本平台执行了链接目标探测（lstat/readlink 链）；未在其它平台做过同类运行`,
+      });
+      continue;
+    }
+    rows.push({
+      platform: name,
+      exercised: false,
+      note: name.startsWith("win32")
+        ? "win32 链接方式未验证：未在 Windows 上创建或探测过链接，本记录不冒充已验证"
+        : `本机未运行该平台（${name}），链接方式未实测`,
+    });
+  }
+  return rows;
+}

@@ -1241,15 +1241,20 @@ async function performTaskOp(
           return { ok: false, error: error instanceof Error ? error.message : String(error) };
         }
       }
-      // #6 link probe: Host-side fs check whether a plain-dir source still
-      // exists (report only — never creates, follows, or takes over).
+      // #6 link probe: Host-side, real-fs report of a plain-directory link's
+      // TARGET shape (真实目录 / 失效 / 嵌套 / 循环 / 具名 unknown) plus the
+      // per-platform link capability. Report only — never creates, repairs,
+      // follows through or deletes a link. The caller-named path must be one of
+      // THIS task's own recorded link sources (`probeDeclaredLinkSource`);
+      // anything else is refused by name, before any filesystem read.
       case "task/probeLink": {
         const sourcePath = record["sourcePath"];
         if (typeof sourcePath !== "string" || sourcePath.length === 0) {
           return { ok: false, error: "invalid-payload: task/probeLink requires sourcePath" };
         }
-        const probed = host.probeLinkTarget(sourcePath);
-        return { ok: true, payload: { ...probed } };
+        const probed = host.probeDeclaredLinkSource(sourcePath);
+        if (!probed.ok) return { ok: false, error: probed.error };
+        return { ok: true, payload: { ...probed.report } };
       }
       case "task/cancel": {
         const sessionId = record["sessionId"];
