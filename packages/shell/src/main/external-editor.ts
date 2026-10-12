@@ -293,7 +293,9 @@ export function externalEditorPlan(input: {
   }
   const disclosure =
     root.kind === "worktree"
-      ? `外部编辑器在任务工作副本打开：${openedPath}（仓库 ${attribution.repo ?? root.id}，分支 ${root.branch ?? ""}）`
+      // The pinned baseline is named as such: this worktree is on the task's own
+      // branch (`task/<taskDirId>`), which is a different fact.
+      ? `外部编辑器在任务工作副本打开：${openedPath}（仓库 ${attribution.repo ?? root.id}，远程基线分支 ${root.baselineBranch ?? ""}）`
       : `${attribution.sharedNote ?? "普通目录链接"}；外部编辑器打开原目录（链接位置 ${attribution.linkPath ?? root.path}）`;
   return {
     ok: true,

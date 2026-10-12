@@ -25,7 +25,7 @@ describe("[UI 对齐] S8d production tool dock", () => {
     const worktreePath = `${taskDir}/worktrees/primary`;
     const baseCommit = "0123456789abcdef0123456789abcdef01234567";
     bridge(async (_taskId, op) => op === "task/fileRoots" ? {
-      ok: true, payload: { taskDir, roots: [{ id: "root-1", kind: "worktree", label: "primary", path: worktreePath, branch: "release/v2", baseCommit }] },
+      ok: true, payload: { taskDir, roots: [{ id: "root-1", kind: "worktree", label: "primary", path: worktreePath, baselineBranch: "release/v2", baseCommit }] },
     } : { ok: true, payload: { tree: { attribution, path: "", entries: [], truncated: false } } });
     render(<DesktopToolDock taskId="task-1" tool="files" onClose={() => {}} />);
     expect(await screen.findByText(taskDir)).toBeInTheDocument();
@@ -38,7 +38,7 @@ describe("[UI 对齐] S8d production tool dock", () => {
     const baseCommit = "abcdefabcdefabcdefabcdefabcdefabcdefabcd";
     bridge(async (_taskId, op, payload) => op === "task/fileRoots" ? {
       ok: true, payload: { taskDir: "/tmp/task-1", roots: [
-        { id: "root-1", kind: "worktree", label: "primary", path: "/tmp/task-1/primary", branch: "release/v2", baseCommit },
+        { id: "root-1", kind: "worktree", label: "primary", path: "/tmp/task-1/primary", baselineBranch: "release/v2", baseCommit },
         { id: "shared", kind: "shared-dir", label: "assets", path: "/tmp/task-1/assets", sourcePath: "/tmp/shared-assets" },
         { id: "root-2", kind: "worktree", label: "secondary", path: "/tmp/task-1/secondary" },
       ] },
@@ -87,7 +87,7 @@ describe("[UI 对齐] S8d production tool dock", () => {
           ok: true,
           payload: {
             taskDir: "/tmp/task-1",
-            roots: [{ id: "root-1", kind: "worktree", label: "primary", path: "/tmp/task-1/worktrees/primary", branch: "main" }],
+            roots: [{ id: "root-1", kind: "worktree", label: "primary", path: "/tmp/task-1/worktrees/primary", baselineBranch: "main" }],
           },
         };
       }

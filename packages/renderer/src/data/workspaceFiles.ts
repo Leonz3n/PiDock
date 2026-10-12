@@ -16,6 +16,13 @@ import type { Task, WorkspaceFile } from "./types";
 
 export type WorkspaceRootKindView = "worktree" | "shared-dir";
 
+/**
+ * One fact the Host really read, or its named reason for not reading one. A
+ * view never upgrades `unknown` to a declared record value: the panel shows
+ * the pinned baseline branch and the observed working branch as two rows.
+ */
+export type WorkspaceObservationView<T> = { state: "observed"; value: T } | { state: "unknown"; reason: string };
+
 export type WorkspaceRootView = {
   id: string;
   kind: WorkspaceRootKindView;
@@ -24,7 +31,14 @@ export type WorkspaceRootView = {
   repo?: string;
   directoryId?: string;
   sourcePath?: string;
-  branch?: string;
+  /** DECLARED: the pinned remote baseline this worktree was prepared from. */
+  baselineBranch?: string;
+  /** DECLARED: the branch the task created this worktree with. */
+  expectedBranch?: string;
+  /** OBSERVED: the branch this worktree is really on. */
+  workingBranch?: WorkspaceObservationView<string>;
+  /** OBSERVED: whether the worktree really has uncommitted (including untracked) changes. */
+  dirty?: WorkspaceObservationView<boolean>;
   baseCommit?: string;
 };
 
@@ -263,6 +277,38 @@ function attribution(value: unknown): WorkspaceAttributionView | undefined {
   };
 }
 
+/**
+ * Parse one observation payload. An absent or malformed observation is DROPPED,
+ * never turned into `observed` and never into the record's declared value: the
+ * panel then names the missing reading instead of inventing one.
+ */
+function observation<T>(source: unknown, read: (value: unknown) => T | undefined): WorkspaceObservationView<T> | undefined {
+  const item = record(source);
+  if (!item) return undefined;
+  const state = str(item["state"]);
+  if (state === "observed") {
+    const value = read(item["value"]);
+    return value === undefined ? undefined : { state: "observed", value };
+  }
+  const reason = str(item["reason"]);
+  return state === "unknown" && reason !== undefined ? { state: "unknown", reason } : undefined;
+}
+
+/**
+ * Display text for one observation. A reading is MARKED as a reading, an unread
+ * fact names why it is unread, and a payload that carried no observation says
+ * so instead of falling back to a declared record value.
+ */
+export function observedText<T>(
+  observation: WorkspaceObservationView<T> | undefined,
+  format: (value: T) => string,
+  absent: string,
+): string {
+  if (observation === undefined) return `未实测：${absent}`;
+  if (observation.state === "observed") return `${format(observation.value)}（实测）`;
+  return `未实测：${observation.reason}`;
+}
+
 /** Parse the `task/fileRoots` payload; `undefined` when the shape is unusable. */
 export function workspaceRootsFromHost(payload: unknown): { roots: WorkspaceRootView[]; taskDir: string } | undefined {
   const source = record(payload);
@@ -283,7 +329,10 @@ export function workspaceRootsFromHost(payload: unknown): { roots: WorkspaceRoot
     const repo = str(item["repo"] ?? item["repoDir"]);
     const directoryId = str(item["directoryId"]);
     const sourcePath = str(item["sourcePath"]);
-    const branch = str(item["branch"]);
+    const baselineBranch = str(item["baselineBranch"]);
+    const expectedBranch = str(item["expectedBranch"]);
+    const workingBranch = observation(item["workingBranch"], str);
+    const dirty = observation(item["dirty"], bool);
     const baseCommit = str(item["baseCommit"]);
     parsed.push({
       id,
@@ -293,7 +342,10 @@ export function workspaceRootsFromHost(payload: unknown): { roots: WorkspaceRoot
       ...(repo !== undefined ? { repo } : {}),
       ...(directoryId !== undefined ? { directoryId } : {}),
       ...(sourcePath !== undefined ? { sourcePath } : {}),
-      ...(branch !== undefined ? { branch } : {}),
+      ...(baselineBranch !== undefined ? { baselineBranch } : {}),
+      ...(expectedBranch !== undefined ? { expectedBranch } : {}),
+      ...(workingBranch !== undefined ? { workingBranch } : {}),
+      ...(dirty !== undefined ? { dirty } : {}),
       ...(baseCommit !== undefined ? { baseCommit } : {}),
     });
   }
@@ -590,7 +642,7 @@ export function memoryWorkspaceBrowser(
       label: repo,
       path: `${taskDir}/${repo}`,
       repo,
-      ...(baseBranchOf(repo) !== undefined ? { branch: baseBranchOf(repo) as string } : {}),
+      ...(baseBranchOf(repo) !== undefined ? { baselineBranch: baseBranchOf(repo) as string } : {}),
     })),
     ...task.directories.map((directory) => ({
       id: directory.linkName,
@@ -662,7 +714,7 @@ export function memoryWorkspaceBrowser(
       ? {
           attribution: attributionView,
           repo: root.repo ?? root.id,
-          branch: root.branch ?? "",
+          branch: root.baselineBranch ?? "",
           autoCommit: false,
           autoPush: false,
           autoMerge: false,

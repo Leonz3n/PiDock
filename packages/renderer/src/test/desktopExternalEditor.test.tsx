@@ -18,7 +18,7 @@ const attribution = {
 
 const ROOTS_PAYLOAD = {
   taskDir: "/tmp/task-1",
-  roots: [{ id: "repo-1", kind: "worktree", label: "repo-1", path: "/tmp/task-1/repo-1", branch: "task/task-1" }],
+  roots: [{ id: "repo-1", kind: "worktree", label: "repo-1", path: "/tmp/task-1/repo-1", baselineBranch: "task/task-1" }],
 };
 
 const launch = {

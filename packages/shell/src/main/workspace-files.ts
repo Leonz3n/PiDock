@@ -15,6 +15,11 @@
  *   original, so it has no Git diff and no Git delivery entry point; the
  *   attribution says so explicitly (`修改影响原文件`) instead of silently
  *   showing an empty diff.
+ * - A worktree root keeps its OWN observed working branch and uncommitted
+ *   state apart from the pinned baseline branch it was prepared from (盒子 6):
+ *   the observation fields are optional here because no reading happens in
+ *   this pure module — the Host fills them with real reads or a named unknown,
+ *   and the panel never renders the baseline as if it were the working branch.
  * - Paths are relative to one root and are refused when they are absolute or
  *   contain `..`; a refused request never falls back to the host path space,
  *   so no browse request can read another task's folder.
@@ -42,6 +47,14 @@ export const MAX_PREVIEW_CHARS = 20_000;
 export const MAX_DIFF_LINES = 400;
 export const MAX_DIFF_CHARS = 40_000;
 
+/**
+ * One fact a Host read really produced, or the NAMED reason it could not be
+ * read. Declared record fields are never spelled as an observation: an
+ * unobserved branch or change state is `unknown` with its reason, and no
+ * reader may substitute the pinned baseline branch or "clean" for it.
+ */
+export type WorkspaceObservation<T> = { state: "observed"; value: T } | { state: "unknown"; reason: string };
+
 /** One browsable root: a task repo worktree, or a plain-directory link. */
 export interface WorkspaceRoot {
   /** Stable id within the task: `repoDir` for a worktree, `linkName` for a link. */
@@ -57,8 +70,29 @@ export interface WorkspaceRoot {
   directoryId?: string;
   /** Shared-dir only: absolute original target recorded at link time. */
   sourcePath?: string;
-  /** Worktree only: baseline branch shown by the delivery entry point. */
-  branch?: string;
+  /**
+   * Worktree only, DECLARED: the pinned remote baseline this worktree was
+   * prepared from, and the branch the delivery entry point names. It is a
+   * record fact, never the branch the worktree is on.
+   */
+  baselineBranch?: string;
+  /**
+   * Worktree only, DECLARED: the branch the task created this worktree with
+   * (`task/<taskDirId>`, `main/task-provision.ts` `buildTaskBranch`). Shown as
+   * the expectation beside an unobserved `workingBranch`, never as a reading.
+   */
+  expectedBranch?: string;
+  /** Worktree only, OBSERVED: the branch this worktree is really on. */
+  workingBranch?: WorkspaceObservation<string>;
+  /**
+   * Worktree only, OBSERVED: whether `git status --porcelain` reported anything
+   * in this worktree (uncommitted, including untracked) — the same fact
+   * `main/service-code-observation.ts` records as `dirty`. An unread state is
+   * `unknown`, never `false`: "no uncommitted change" is a reading, not a
+   * default. A committed change since `baseCommit` is not visible here; it is
+   * what `boundDiff` against `baseCommit` reports.
+   */
+  dirty?: WorkspaceObservation<boolean>;
   /** Worktree only: pinned baseline commit the diff compares against. */
   baseCommit?: string;
 }
@@ -76,8 +110,10 @@ export interface WorkspaceRootsInput {
   repoSources?: readonly { repoDir: string; remoteBranch: string; baseCommit?: string }[];
   /** Plain-directory links ([PiDock 03] #6). */
   dirLinks?: readonly { linkName: string; directoryId: string; sourcePath: string }[];
-  /** Task baseline branch when no per-repo source exists. */
-  branch?: string;
+  /** Pinned baseline branch of the task when no per-repo source exists. */
+  baselineBranch?: string;
+  /** The task's own declared branch (record `branch`); same for every worktree. */
+  taskBranch?: string;
   /** Task baseline commit when no per-repo source exists. */
   baseCommit?: string;
 }
@@ -109,7 +145,8 @@ export function workspaceRoots(input: WorkspaceRootsInput): WorkspaceRoot[] {
       label: id,
       path: joinRoot(input.taskDir, id),
       repoDir: id,
-      branch: branchByRepo.get(id) ?? input.branch ?? "",
+      baselineBranch: branchByRepo.get(id) ?? input.baselineBranch ?? "",
+      ...(input.taskBranch !== undefined && input.taskBranch.length > 0 ? { expectedBranch: input.taskBranch } : {}),
       ...(baseCommit !== undefined && baseCommit.length > 0 ? { baseCommit } : {}),
     });
   }
@@ -413,7 +450,9 @@ export function deliveryTarget(input: {
     target: {
       attribution: workspaceAttribution(input.root, input.taskId, input.taskDir),
       repo: input.root.repoDir ?? input.root.id,
-      branch: input.root.branch ?? "",
+      // The delivery target is the pinned baseline the user would deliver to,
+      // which is a DECLARED record fact, not the worktree's own branch.
+      branch: input.root.baselineBranch ?? "",
       autoCommit: false,
       autoPush: false,
       autoMerge: false,
