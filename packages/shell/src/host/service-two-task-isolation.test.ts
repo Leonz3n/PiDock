@@ -376,9 +376,11 @@ describe.skipIf(process.platform === "win32")("#10 two tasks running the same se
     // DECLARED, never observed: this Host owns no port probe.
     expect(runA["portsSource"]).toBe("declared");
     expect(runA["endedAt"]).toBeUndefined();
-    // This slice reads no working tree, so the code/build state stays `unknown`
-    // on the REAL seam: a genuine start here must never read as a clean tree or
-    // a fresh build. Reading `.git` is box 6's own slice, not this one.
+    // This registration carried no worktree observation, so the code/build state
+    // stays `unknown` BY NAME on the REAL seam: a start whose worktree nobody
+    // read must never read as a clean tree or a fresh build. (Box 6's own read is
+    // exercised end to end in `service-execution-wiring.test.ts` and
+    // `main/service-code-observation.test.ts`.)
     expect(runA["codeState"]).toMatchObject({ kind: "unknown" });
     expect(runA["buildFreshness"]).toBe("unknown");
 
@@ -442,5 +444,61 @@ describe.skipIf(process.platform === "win32")("#10 two tasks running the same se
     expect(closed["processIdentity"]).toMatchObject({ pid, owner: "human" });
     expect(closed["endedAt"]).toBeTypeOf("string");
     expect((closed["exit"] as { reason: string }).reason).toBe("exit:0");
+  });
+
+  it("refuses a shell-UI registration that tries to SELF-ATTEST the code state, and stores nothing", { timeout: 30_000 }, async () => {
+    const fixture = await twoTasks();
+    const { taskA } = fixture;
+    const launch = fixture.catalog.launchFor(taskA.taskId, fixture.projectId, fixture.serviceId, process.env);
+    const claimed = { commit: "0".repeat(40), dirty: false };
+
+    // The renderer's own route is `shell/taskOp` with main's `shell-ui`
+    // attestation: it can send this payload, and it must be refused by name
+    // rather than have its claim become a code state.
+    const refused = await taskA.request("task/registerService", {
+      serviceId: launch.serviceId, descriptor: launch.descriptor, layers: launch.layers,
+      templateVersion: String(launch.templateVersion), code: claimed,
+    }, { kind: "shell-ui", senderWebContentsId: 7 });
+    expect(refused["error"]).toBe("permission-denied: 代码状态只能来自主进程对真实工作树的观测，界面登记不能自证");
+    // Nothing was stored: the refusal precedes the registration, so no run can
+    // ever report the page's claim.
+    expect(await taskA.request("task/serviceStatus", { serviceId: fixture.serviceId }))
+      .toMatchObject({ error: `unknown-service: ${fixture.serviceId} is not registered on this task` });
+    const records = await taskA.request("task/serviceRunRecords", {});
+    expect(records["records"]).toEqual([]);
+    expect(records["registered"]).toEqual([]);
+
+    // The discriminating half: the SAME payload from main's own trusted-catalog
+    // registration is accepted, so the refusal is about the caller, not about
+    // the field being silently dropped.
+    expect(await register(taskA, fixture, fixture.serviceId)).toMatchObject({ service: { launchSource: "catalog" } });
+    expect(await control(taskA, fixture.serviceId, "start")).toMatchObject({ serviceId: fixture.serviceId, action: "start" });
+    const [run] = (await taskA.request("task/serviceRunRecords", {}))["records"] as Record<string, unknown>[];
+    // No observation was carried by this hand-built registration, so the code
+    // state stays `unknown` BY NAME - the field is never filled in from a guess.
+    expect(run?.["codeState"]).toMatchObject({ kind: "unknown" });
+    expect(run?.["buildFreshness"]).toBe("unknown");
+  });
+
+  it("records the observation main's catalog registration carried, for the run the start really produced", { timeout: 30_000 }, async () => {
+    const fixture = await twoTasks();
+    const { taskA } = fixture;
+    const launch = fixture.catalog.launchFor(taskA.taskId, fixture.projectId, fixture.serviceId, process.env);
+    // Exactly what main sends after reading the launch's verified cwd
+    // (`runtime.ts` + `main/service-code-observation.ts`), with main's own
+    // `service-catalog` attestation.
+    const observed = { commit: "a".repeat(40), dirty: true };
+    expect(await taskA.request("task/registerService", {
+      serviceId: launch.serviceId, descriptor: launch.descriptor, layers: launch.layers,
+      templateVersion: String(launch.templateVersion), code: observed,
+    }, { kind: "service-catalog", senderWebContentsId: 7 })).toMatchObject({ service: { launchSource: "catalog" } });
+
+    expect(await control(taskA, fixture.serviceId, "start")).toMatchObject({ serviceId: fixture.serviceId, action: "start" });
+    const [run] = (await taskA.request("task/serviceRunRecords", {}))["records"] as Record<string, unknown>[];
+    expect(run?.["codeState"]).toMatchObject({ kind: "uncommitted", commit: observed.commit });
+    // A dirty tree is `uncommitted-code`, never `fresh`: the build cannot
+    // contain the edits nobody committed.
+    expect(run?.["buildFreshness"]).toBe("uncommitted-code");
+    expect((run?.["processIdentity"] as { pid: number }).pid).toBeGreaterThan(0);
   });
 });
