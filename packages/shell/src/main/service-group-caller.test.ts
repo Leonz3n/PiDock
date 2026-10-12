@@ -113,6 +113,31 @@ describe("[PiDock 05] #10 main's group caller refuses by name", () => {
     // no plan was sent after it.
     expect(calls.map((call) => call.op)).toEqual(["task/registerService"]);
   });
+
+  it("refuses by name when the launch's own layers cannot be resolved before planning", async () => {
+    // The defence-in-depth twin of the registration refusal above: this Host
+    // answered the registration and holds no plan yet (`not-planned`), so main
+    // derives the plan from the catalog - and the SAME layers it just registered
+    // cannot be resolved. Refusing here keeps main from planning against rows it
+    // could not read instead of sending a plan with the port rows dropped.
+    const serviceId = "s-33333333-3333-3333-3333-333333333333";
+    const { tasks, calls } = registry((call) => call.op === "task/controlService" ? { group: { state: "not-planned" } } : { ok: true });
+    const unresolved: ServiceLaunch["layers"] = {
+      repoDefaults: [], shared: [], privateEntries: [],
+      task: [{ key: "API_URL", value: "${NOT_DEFINED}", secret: false }],
+    };
+    const catalog = {
+      taskBindings: () => [boundService(serviceId)],
+      launchFor: () => launchOf(serviceId, unresolved),
+    } satisfies Pick<ServiceCatalog, "launchFor" | "taskBindings">;
+
+    expect(await refusalOf(() => runTaskServiceGroup(tasks, catalog, REQUEST, 7))).toBe(
+      `服务登记失败，未发起整组启动：${serviceId} 的启动材料无法从可信服务目录解析（missing-ref: 变量「API_URL」引用的 「NOT_DEFINED」 未定义）`,
+    );
+    // It refuses BEFORE planning: no plan op was sent, so no half-resolved group
+    // reached the Host's port allocator.
+    expect(calls.map((call) => call.op)).toEqual(["task/registerService", "task/controlService"]);
+  });
 });
 
 describe("[PiDock 05] #10 main's group plan reads the SAME declared-port rule as the registration", () => {
