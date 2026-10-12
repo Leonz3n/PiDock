@@ -37,7 +37,14 @@ export interface CodeObservation {
   dirty: boolean;
 }
 
-const GIT_READ_TIMEOUT_MS = 10_000;
+/**
+ * Bound on each git read. A local `rev-parse HEAD` / `status --porcelain` on a
+ * task worktree completes in tens of milliseconds, so 5 s is already ~100x the
+ * observed cost: generous enough not to false-timeout a loaded machine, while
+ * halving the per-read window a hung git can block main's event loop (the group
+ * path issues 2 such reads per bound unit, sequentially).
+ */
+const GIT_READ_TIMEOUT_MS = 5_000;
 const GIT_READ_MAX_BUFFER = 1024 * 1024;
 const COMMIT_PATTERN = /^[0-9a-f]{7,64}$/i;
 
