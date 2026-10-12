@@ -142,6 +142,7 @@ async function installed(options: FixtureOptions = {}) {
     ...(options.ownerAuthorityUnavailable ? {} : { verifiedTask: (id: string) => owner(id) }),
   };
   const catalog = new ServiceCatalog(profile, authority);
+  const environmentId = catalog.createEnvironment({ projectId, name: "开发环境" }).environmentId;
 
   // Fake utilityProcess pair: `child` is main's handle, `parent` the Host's parentPort.
   const child = new EventEmitter() as EventEmitter & { postMessage(value: unknown): void; kill(): void };
@@ -185,9 +186,9 @@ async function installed(options: FixtureOptions = {}) {
     return result.payload;
   };
   const bind = (subdir: string, tag: string) => {
-    const template = catalog.saveTemplate({ projectId, descriptor: { name: `API ${tag}`, program: "node", args: ["service.cjs"], ports: [], runType: "long-lived" },
+    const template = catalog.saveTemplate({ projectId, environmentId, descriptor: { name: `API ${tag}`, program: "node", args: ["service.cjs"], ports: [], runType: "long-lived" },
       shared: [{ key: "SERVICE_GREETING", value: `hello-${tag}`, secret: false }, { key: "SERVICE_TAG", value: tag, secret: false }] });
-    catalog.bindTask({ taskId, serviceId: template.serviceId, templateVersion: 1, rootId: "repo-a", subdir,
+    catalog.bindTask({ taskId, serviceId: template.serviceId, environmentId, templateVersion: 1, rootId: "repo-a", subdir,
       programPath: realpathSync(process.execPath), privateRefs: [{ key: "SERVICE_TOKEN", envRef: "LOCAL_TEST_TOKEN" }] });
     return template.serviceId;
   };
@@ -201,7 +202,7 @@ async function installed(options: FixtureOptions = {}) {
     const payload = await request("task/serviceLog", { serviceId, limit: 200 });
     return Array.isArray(payload["log"]) ? (payload["log"] as { line: string }[]).map((entry) => entry.line) : [];
   };
-  return { profile, taskId, taskDir, hostTaskDir, projectId, catalog, authority, child, parent, client, main, registry,
+  return { profile, taskId, taskDir, hostTaskDir, projectId, environmentId, catalog, authority, child, parent, client, main, registry,
     task, request, bind, register, run, status, log };
 }
 

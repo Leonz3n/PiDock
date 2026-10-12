@@ -171,6 +171,7 @@ async function production(options: { serviceOwnerRequired?: boolean } = {}) {
     verifiedTask: (id) => owner(id),
   };
   const catalog = new ServiceCatalog(profile, authority);
+  const environmentId = catalog.createEnvironment({ projectId, name: "开发环境" }).environmentId;
 
   const child = new EventEmitter() as EventEmitter & { postMessage(value: unknown): void; kill(): void };
   child.kill = vi.fn(() => { child.emit("exit", 0); });
@@ -218,9 +219,9 @@ async function production(options: { serviceOwnerRequired?: boolean } = {}) {
   };
 
   const bind = (subdir: string, tag: string) => {
-    const template = catalog.saveTemplate({ projectId, descriptor: { name: `API ${tag}`, program: "node", args: ["service.cjs"], ports: [], runType: "long-lived" },
+    const template = catalog.saveTemplate({ projectId, environmentId, descriptor: { name: `API ${tag}`, program: "node", args: ["service.cjs"], ports: [], runType: "long-lived" },
       shared: [{ key: "SERVICE_TAG", value: tag, secret: false }] });
-    catalog.bindTask({ taskId, serviceId: template.serviceId, templateVersion: 1, rootId: "repo-a", subdir,
+    catalog.bindTask({ taskId, serviceId: template.serviceId, environmentId, templateVersion: 1, rootId: "repo-a", subdir,
       programPath: realpathSync(process.execPath), privateRefs: [{ key: "SERVICE_TOKEN", envRef: "LOCAL_TEST_TOKEN" }] });
     return template.serviceId;
   };
@@ -230,8 +231,8 @@ async function production(options: { serviceOwnerRequired?: boolean } = {}) {
    * catalog revision a task's Host booted with.
    */
   const saveRevision = (serviceId: string) => {
-    const current = catalog.template(projectId, serviceId, 1)!;
-    return catalog.saveTemplate({ projectId, serviceId, expectedVersion: 1,
+    const current = catalog.template(projectId, environmentId, serviceId, 1)!;
+    return catalog.saveTemplate({ projectId, environmentId, serviceId, expectedVersion: 1,
       descriptor: { ...current.descriptor, args: ["service.cjs", "v2"] }, shared: current.shared });
   };
   /**
@@ -266,7 +267,7 @@ async function production(options: { serviceOwnerRequired?: boolean } = {}) {
     const payload = await read("task/serviceLog", { serviceId, limit: 200 });
     return Array.isArray(payload["log"]) ? (payload["log"] as { line: string }[]).map((entry) => entry.line) : [];
   };
-  return { taskId, taskDir, projectId, catalog, tasks, client, main, handler: handler!, shell, trust, run, read, status, log, bind, saveRevision, seedOwner, op, ownerScopes,
+  return { taskId, taskDir, projectId, environmentId, catalog, tasks, client, main, handler: handler!, shell, trust, run, read, status, log, bind, saveRevision, seedOwner, op, ownerScopes,
     adopt: (serviceId: string, templateVersion: number, confirm: boolean) => op({ op: "adoptBinding", projectId, taskId, serviceId, templateVersion, confirm }),
     rebind: (confirm: boolean) => op({ op: "rebindServiceOwner", projectId, taskId, confirm }),
     marker: (tag: string) => join(taskDir, `repo-a/svc-${tag}`, `started-${tag}.txt`),
@@ -417,7 +418,7 @@ describe.skipIf(process.platform === "win32")("#7 production shell/serviceCatalo
     // subdirectory, so the resolved owner contract main pins changed while the
     // template version it pins did not. `ownerSnapshot` digests the binding, so
     // control is revoked exactly like an adoption would revoke it.
-    f.catalog.bindTask({ taskId: f.taskId, serviceId, templateVersion: 1, rootId: "repo-a", subdir: "svc-b",
+    f.catalog.bindTask({ taskId: f.taskId, serviceId, environmentId: f.environmentId, templateVersion: 1, rootId: "repo-a", subdir: "svc-b",
       programPath: realpathSync(process.execPath), privateRefs: [{ key: "SERVICE_TOKEN", envRef: "LOCAL_TEST_TOKEN" }] });
     expect(await f.run(serviceId, "stop")).toMatchObject({ ok: false, error: expect.stringContaining("service-owner-inventory-unconfirmed") });
     expect(alive(before)).toBe(true);
@@ -498,10 +499,10 @@ describe.skipIf(process.platform === "win32")("#10 production shell/serviceCatal
       // The port comes from the template's own SHARED row: it is both the value
       // the child binds and the port the registration declares, so no synthetic
       // private reference is needed to drive the real group path.
-      const template = f.catalog.saveTemplate({ projectId: f.projectId,
+      const template = f.catalog.saveTemplate({ projectId: f.projectId, environmentId: f.environmentId,
         descriptor: { name: `API ${tag}`, program: "node", args: ["service.cjs"], ports: [], runType: "long-lived" },
         shared: [{ key: "SERVICE_TAG", value: tag, secret: false }, { key: "PORT", value: String(port), secret: false }] });
-      f.catalog.bindTask({ taskId: f.taskId, serviceId: template.serviceId, templateVersion: 1, rootId: "repo-a", subdir,
+      f.catalog.bindTask({ taskId: f.taskId, serviceId: template.serviceId, environmentId: f.environmentId, templateVersion: 1, rootId: "repo-a", subdir,
         programPath: realpathSync(process.execPath), privateRefs: [] });
       return template.serviceId;
     };

@@ -156,11 +156,12 @@ async function harness(): Promise<Harness> {
   const owner = (id: string) => id === taskId ? { identity, projectId, rootIds: ["repo-a"] } : null;
   const authority: ServiceCatalogAuthority = { projectExists: (id) => id === projectId, task: (id) => owner(id), verifiedTask: (id) => owner(id) };
   const catalog = new ServiceCatalog(profile, authority);
+  const environmentId = catalog.createEnvironment({ projectId, name: "开发环境" }).environmentId;
   // The trusted launch main resolves for a task-bound service (program, pinned
   // argv, cwd, private refs): the Agent never supplies any of it.
-  const template = catalog.saveTemplate({ projectId, descriptor: { name: "API a", program: "node", args: ["service.cjs"], ports: [], runType: "long-lived" },
+  const template = catalog.saveTemplate({ projectId, environmentId, descriptor: { name: "API a", program: "node", args: ["service.cjs"], ports: [], runType: "long-lived" },
     shared: [{ key: "SERVICE_GREETING", value: "hello-a", secret: false }, { key: "SERVICE_TAG", value: "a", secret: false }] });
-  catalog.bindTask({ taskId, serviceId: template.serviceId, templateVersion: 1, rootId: "repo-a", subdir: "svc-a",
+  catalog.bindTask({ taskId, serviceId: template.serviceId, environmentId, templateVersion: 1, rootId: "repo-a", subdir: "svc-a",
     programPath: realpathSync(process.execPath), privateRefs: [{ key: "SERVICE_TOKEN", envRef: "LOCAL_TEST_TOKEN" }] });
   const launch = catalog.launchFor(taskId, projectId, template.serviceId, process.env);
   surface.services.register({ serviceId: launch.serviceId, descriptor: launch.descriptor, layers: launch.layers,

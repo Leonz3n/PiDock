@@ -30,12 +30,13 @@ function fixture(unassigned = false) {
     task: (id) => id === taskId && assigned ? { identity, projectId, rootIds: ["repo-a"] } : null,
     verifiedTask: (id) => id === taskId ? { identity, projectId: assigned ? projectId : null, rootIds: ["repo-a"] } : null };
   const catalog = new ServiceCatalog(profile, authority);
+  const environmentId = catalog.createEnvironment({ projectId, name: "开发环境" }).environmentId;
   const add = () => {
-    const template = catalog.saveTemplate({ projectId, descriptor: { name: "API", program: "node", args: ["server.js"], ports: [], runType: "long-lived" }, shared: [] });
-    catalog.bindTask({ taskId, serviceId: template.serviceId, templateVersion: 1, rootId: "repo-a", subdir: "", programPath: process.execPath, privateRefs: [] });
+    const template = catalog.saveTemplate({ projectId, environmentId, descriptor: { name: "API", program: "node", args: ["server.js"], ports: [], runType: "long-lived" }, shared: [] });
+    catalog.bindTask({ taskId, serviceId: template.serviceId, environmentId, templateVersion: 1, rootId: "repo-a", subdir: "", programPath: process.execPath, privateRefs: [] });
     return template;
   };
-  return { profile, taskId, taskDir, workspaceId, authority, catalog, add, unlink: () => { assigned = false; } };
+  return { profile, taskId, taskDir, workspaceId, authority, catalog, add, environmentId, unlink: () => { assigned = false; } };
 }
 function connect(f: ReturnType<typeof fixture>) {
   const child = new EventEmitter() as EventEmitter & { postMessage(value: unknown): void };
@@ -197,16 +198,16 @@ describe.skipIf(process.platform === "win32")("installed actual-child catalog / 
   });
   it("invalidates the inventory when saved UI metadata changes and never confers execution authority", async () => {
     const f = fixture(), first = f.add(), c = connect(f); await c.prepare();
-    f.catalog.saveTemplate({ projectId: first.projectId, serviceId: first.serviceId, expectedVersion: 1, descriptor: first.descriptor, shared: [] });
+    f.catalog.saveTemplate({ projectId: first.projectId, environmentId: f.environmentId, serviceId: first.serviceId, expectedVersion: 1, descriptor: first.descriptor, shared: [] });
     // Pinning is deliberate: changing the task binding, rather than an unrelated new version, revokes this snapshot.
-    f.catalog.bindTask({ taskId: f.taskId, serviceId: first.serviceId, templateVersion: 2, rootId: "repo-a", subdir: "", programPath: process.execPath, privateRefs: [] });
+    f.catalog.bindTask({ taskId: f.taskId, serviceId: first.serviceId, environmentId: f.environmentId, templateVersion: 2, rootId: "repo-a", subdir: "", programPath: process.execPath, privateRefs: [] });
     expect(() => c.main.verify(c.child as never)).toThrow("service-owner-inventory-unconfirmed");
     expect(c.inventory.control().error).toBe("service-owner-inventory-unconfirmed");
     expect(c.write.claimWrite("main", "auto", { kind: "turn", label: "changed" }).ok).toBe(false);
   });
   it("revokes the same snapshot for the slice's own adoption op, so panel control and writes are refused", async () => {
     const f = fixture(), first = f.add(), c = connect(f); await c.prepare();
-    f.catalog.saveTemplate({ projectId: first.projectId, serviceId: first.serviceId, expectedVersion: 1, descriptor: first.descriptor, shared: [] });
+    f.catalog.saveTemplate({ projectId: first.projectId, environmentId: f.environmentId, serviceId: first.serviceId, expectedVersion: 1, descriptor: first.descriptor, shared: [] });
     f.catalog.adoptTaskBinding({ projectId: first.projectId, taskId: f.taskId, serviceId: first.serviceId, templateVersion: 2 });
     expect(f.catalog.ownerSnapshot(f.taskId, f.workspaceId, {}).entries[0]?.templateVersion).toBe(2);
     expect(() => c.main.verify(c.child as never)).toThrow("service-owner-inventory-unconfirmed");
@@ -223,7 +224,7 @@ describe.skipIf(process.platform === "win32")("installed actual-child catalog / 
     expect(c.main.changes(c.child as never, f.taskId)).toEqual([]);
     // The write this slice exists for: adopting a newer revision moves the snapshot main pins,
     // so the Host refuses control and every later start/stop is refused as well.
-    f.catalog.saveTemplate({ projectId: first.projectId, serviceId: first.serviceId, expectedVersion: 1,
+    f.catalog.saveTemplate({ projectId: first.projectId, environmentId: f.environmentId, serviceId: first.serviceId, expectedVersion: 1,
       descriptor: { ...first.descriptor, args: ["server-v2.js"] }, shared: [] });
     f.catalog.adoptTaskBinding({ projectId: first.projectId, taskId: f.taskId, serviceId: first.serviceId, templateVersion: 2 });
     expect(c.main.state(c.child as never, f.taskId)).toBe("fenced");
@@ -268,7 +269,7 @@ describe.skipIf(process.platform === "win32")("installed actual-child catalog / 
     // moved to another work subdirectory, so `ownerSnapshot` no longer matches and
     // the Host refuses start/stop exactly like it does after an adoption.
     mkdirSync(join(f.taskDir, "repo-a", "apps"), { recursive: true });
-    f.catalog.bindTask({ taskId: f.taskId, serviceId: first.serviceId, templateVersion: 1, rootId: "repo-a", subdir: "apps",
+    f.catalog.bindTask({ taskId: f.taskId, serviceId: first.serviceId, environmentId: f.environmentId, templateVersion: 1, rootId: "repo-a", subdir: "apps",
       programPath: process.execPath, privateRefs: [] });
     expect(c.main.state(c.child as never, f.taskId)).toBe("fenced");
     expect(c.inventory.control().error).toBe("service-owner-inventory-unconfirmed");
@@ -289,7 +290,7 @@ describe.skipIf(process.platform === "win32")("installed actual-child catalog / 
   it("refuses the retired owner's instance and epoch, and can still replace it afterwards", async () => {
     const f = fixture(), first = f.add(), c = connect(f); await c.prepare();
     const before = c.scope();
-    f.catalog.saveTemplate({ projectId: first.projectId, serviceId: first.serviceId, expectedVersion: 1,
+    f.catalog.saveTemplate({ projectId: first.projectId, environmentId: f.environmentId, serviceId: first.serviceId, expectedVersion: 1,
       descriptor: { ...first.descriptor, args: ["server-v2.js"] }, shared: [] });
     f.catalog.adoptTaskBinding({ projectId: first.projectId, taskId: f.taskId, serviceId: first.serviceId, templateVersion: 2 });
     expect(await c.main.rebind(c.child as never, f.taskId)).toBe("rebound");

@@ -183,6 +183,7 @@ async function fixture(mode: CalleeMode): Promise<Fixture> {
   const owner = (id: string) => id === taskId ? { identity, projectId, rootIds: ["repo-a"] } : null;
   const authority: ServiceCatalogAuthority = { projectExists: (id) => id === projectId, task: (id) => owner(id), verifiedTask: (id) => owner(id) };
   const catalog = new ServiceCatalog(profile, authority);
+  const environmentId = catalog.createEnvironment({ projectId, name: "开发环境" }).environmentId;
 
   const pair = portPair();
   pair.child.kill = vi.fn(() => { pair.child.emit("exit", 0); });
@@ -216,11 +217,12 @@ async function fixture(mode: CalleeMode): Promise<Fixture> {
 
   const callerTemplate = catalog.saveTemplate({
     projectId,
+    environmentId,
     descriptor: { name: "Caller API", program: "node", args: ["service.cjs"], ports: [], runType: "long-lived" },
     shared: [{ key: "SERVICE_TAG", value: "caller", secret: false }],
   });
   catalog.bindTask({
-    taskId, serviceId: callerTemplate.serviceId, templateVersion: 1, rootId: "repo-a", subdir: "svc-a",
+    taskId, serviceId: callerTemplate.serviceId, environmentId, templateVersion: 1, rootId: "repo-a", subdir: "svc-a",
     programPath: realpathSync(process.execPath), privateRefs: [{ key: "PORT", envRef: "PIDOCK_GROUP_PORT_A" }, { key: "ORDER_FILE", envRef: "PIDOCK_GROUP_ORDER_FILE" }],
   });
 
@@ -270,6 +272,7 @@ async function fixture(mode: CalleeMode): Promise<Fixture> {
       }
       const calleeTemplate = catalog.saveTemplate({
         projectId,
+        environmentId,
         descriptor: {
           name: "Callee API", program: "node", args: ["service.cjs"],
           // `declared-mismatch`: the registration declares a port nothing binds,
@@ -280,7 +283,7 @@ async function fixture(mode: CalleeMode): Promise<Fixture> {
         shared: [{ key: "SERVICE_TAG", value: "callee", secret: false }],
       });
       catalog.bindTask({
-        taskId, serviceId: calleeTemplate.serviceId, templateVersion: 1, rootId: "repo-a", subdir: "svc-b",
+        taskId, serviceId: calleeTemplate.serviceId, environmentId, templateVersion: 1, rootId: "repo-a", subdir: "svc-b",
         programPath: realpathSync(process.execPath),
         privateRefs: options === "declared-mismatch"
           ? [{ key: "LISTEN_ON", envRef: "PIDOCK_GROUP_PORT_B" }, { key: "ORDER_FILE", envRef: "PIDOCK_GROUP_ORDER_FILE" }]

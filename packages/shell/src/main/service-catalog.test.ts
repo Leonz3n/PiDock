@@ -33,12 +33,13 @@ function fixture() {
     task: (id) => current && id === taskId ? { identity: { ...current }, projectId: assigned, rootIds: [...roots] } : null,
   };
   const catalog = new ServiceCatalog(dir, authority);
+  const environmentId = catalog.createEnvironment({ projectId, name: "开发环境" }).environmentId;
   const descriptor = { name: "API", program: "node", args: ["server.js"], ports: [3000], runType: "long-lived" as const };
-  const save = () => catalog.saveTemplate({ projectId, descriptor, shared: [{ key: "PORT", value: "3000", secret: false }] });
-  const bind = (serviceId: string, templateVersion = 1) => catalog.bindTask({ taskId, serviceId, templateVersion,
+  const save = () => catalog.saveTemplate({ projectId, environmentId, descriptor, shared: [{ key: "PORT", value: "3000", secret: false }] });
+  const bind = (serviceId: string, templateVersion = 1) => catalog.bindTask({ taskId, serviceId, environmentId, templateVersion,
     rootId: "repo-a", subdir: "src/api", programPath: process.execPath,
     privateRefs: [{ key: "API_TOKEN", envRef: "LOCAL_API_TOKEN" }] });
-  return { dir, catalog, descriptor, save, bind,
+  return { dir, catalog, descriptor, save, bind, environmentId,
     replaceIdentity: (next: VerifiedTaskIdentity | null) => { current = next; },
     assign: (id: string) => { assigned = id; },
     setRoots: (next: string[]) => { roots = next; }, authority };
@@ -60,8 +61,9 @@ describe("trusted service owner catalog snapshots", () => {
       verifiedTask: () => ({ identity: trusted, projectId, rootIds: ["repo-a"] }),
     };
     const catalog = new ServiceCatalog(join(home, "profile"), authority);
-    const first = catalog.saveTemplate({ projectId, descriptor: { name: "API", program: "node", args: ["second", "first"], ports: [], runType: "long-lived" }, shared: [] });
-    catalog.bindTask({ taskId, serviceId: first.serviceId, templateVersion: 1, rootId: "repo-a", subdir: "", programPath: process.execPath,
+    const environmentId = catalog.createEnvironment({ projectId, name: "开发环境" }).environmentId;
+    const first = catalog.saveTemplate({ projectId, environmentId, descriptor: { name: "API", program: "node", args: ["second", "first"], ports: [], runType: "long-lived" }, shared: [] });
+    catalog.bindTask({ taskId, serviceId: first.serviceId, environmentId, templateVersion: 1, rootId: "repo-a", subdir: "", programPath: process.execPath,
       privateRefs: [{ key: "API_TOKEN", envRef: "LOCAL_API_TOKEN" }] });
     const snapshot = catalog.ownerSnapshot(taskId, "workspace-a", { LOCAL_API_TOKEN: "synthetic-private-value" });
     expect(snapshot.entries[0]).toMatchObject({ serviceId: first.serviceId, args: ["second", "first"], cwd: join(taskDir, "repo-a"), templateVersion: 1 });
@@ -78,7 +80,7 @@ describe("machine-private service catalog", () => {
     expect(first).toMatchObject({ projectId, version: 1, descriptor: f.descriptor });
     expect(first.serviceId).toMatch(/^s-/);
     f.bind(first.serviceId);
-    const second = f.catalog.saveTemplate({ projectId, serviceId: first.serviceId, expectedVersion: 1,
+    const second = f.catalog.saveTemplate({ projectId, environmentId: f.environmentId, serviceId: first.serviceId, expectedVersion: 1,
       descriptor: { ...f.descriptor, args: ["new-server.js"] }, shared: [{ key: "PORT", value: "4000", secret: false }] });
     expect(second.version).toBe(2);
     const restarted = new ServiceCatalog(f.dir, f.authority);
@@ -86,7 +88,7 @@ describe("machine-private service catalog", () => {
       binding: { templateVersion: 1, rootId: "repo-a", privateRefs: [{ key: "API_TOKEN", envRef: "LOCAL_API_TOKEN" }] },
       template: { version: 1, descriptor: f.descriptor, shared: [{ key: "PORT", value: "3000", secret: false }] },
     });
-    expect(restarted.template(projectId, first.serviceId, 2)?.descriptor.args).toEqual(["new-server.js"]);
+    expect(restarted.template(projectId, f.environmentId, first.serviceId, 2)?.descriptor.args).toEqual(["new-server.js"]);
     expect(readFileSync(join(f.dir, "service-templates.json"), "utf8")).not.toContain(process.execPath);
     expect(readFileSync(join(f.dir, "service-templates.json"), "utf8")).not.toContain("LOCAL_API_TOKEN");
     expect(readFileSync(join(f.dir, "service-machine.json"), "utf8")).not.toContain("credential-value");
@@ -98,17 +100,17 @@ describe("machine-private service catalog", () => {
   it("rejects stale template edits and values or command flags that look private", () => {
     const f = fixture();
     const first = f.save();
-    expect(() => f.catalog.saveTemplate({ projectId, serviceId: first.serviceId, expectedVersion: 0,
+    expect(() => f.catalog.saveTemplate({ projectId, environmentId: f.environmentId, serviceId: first.serviceId, expectedVersion: 0,
       descriptor: f.descriptor, shared: [] })).toThrow("template version conflict");
-    expect(() => f.catalog.saveTemplate({ projectId, descriptor: f.descriptor,
+    expect(() => f.catalog.saveTemplate({ projectId, environmentId: f.environmentId, descriptor: f.descriptor,
       shared: [{ key: "API_TOKEN", value: "credential-value", secret: false }] })).toThrow("private key");
-    expect(() => f.catalog.saveTemplate({ projectId, descriptor: { ...f.descriptor, args: ["--token", "credential-value"] },
+    expect(() => f.catalog.saveTemplate({ projectId, environmentId: f.environmentId, descriptor: { ...f.descriptor, args: ["--token", "credential-value"] },
       shared: [] })).toThrow("private shared argument");
-    expect(() => f.catalog.saveTemplate({ projectId, descriptor: { ...f.descriptor, program: "/usr/bin/node" },
+    expect(() => f.catalog.saveTemplate({ projectId, environmentId: f.environmentId, descriptor: { ...f.descriptor, program: "/usr/bin/node" },
       shared: [] })).toThrow("portable name");
-    expect(() => f.catalog.saveTemplate({ projectId, descriptor: f.descriptor,
+    expect(() => f.catalog.saveTemplate({ projectId, environmentId: f.environmentId, descriptor: f.descriptor,
       shared: [{ key: "API_URL", value: "https://user:pass@example.test", secret: false }] })).toThrow("invalid shared value");
-    expect(f.catalog.template(projectId, first.serviceId, 2)).toBeNull();
+    expect(f.catalog.template(projectId, f.environmentId, first.serviceId, 2)).toBeNull();
   });
 
   it("requires an assigned live task, registered root, and exact pinned template", () => {
@@ -133,19 +135,19 @@ describe("machine-private service catalog", () => {
     const first = f.save();
     f.bind(first.serviceId);
     const next = { ...f.descriptor, workdir: "apps/api", healthCheck: { kind: "http" as const } };
-    const review = f.catalog.reviewTemplateUpdate({ projectId, serviceId: first.serviceId, expectedVersion: 1, descriptor: next,
+    const review = f.catalog.reviewTemplateUpdate({ projectId, environmentId: f.environmentId, serviceId: first.serviceId, expectedVersion: 1, descriptor: next,
       shared: [{ key: "PORT", value: "4000", secret: false }, { key: "API_URL", value: "http://localhost", secret: false }] });
     expect(review).toMatchObject({ projectId, serviceId: first.serviceId, version: 2, versionLabel: "v2", saved: false, descriptorChanged: true,
       diff: { added: ["API_URL"], changed: [{ key: "PORT", before: "3000", after: "4000" }], removed: [] },
       restartNeeded: [{ taskId, serviceId: first.serviceId, name: "API", from: 1, to: 2 }] });
     // A review never writes and never restarts anything.
-    expect(f.catalog.listTemplates(projectId)[0]).toMatchObject({ version: 1, descriptor: f.descriptor });
+    expect(f.catalog.listTemplates(projectId, f.environmentId)[0]).toMatchObject({ version: 1, descriptor: f.descriptor });
     expect(f.catalog.listTask(taskId)[0]).toMatchObject({ binding: { templateVersion: 1 }, template: { version: 1 } });
-    const written = f.catalog.saveTemplate({ projectId, serviceId: first.serviceId, expectedVersion: 1, descriptor: next,
+    const written = f.catalog.saveTemplate({ projectId, environmentId: f.environmentId, serviceId: first.serviceId, expectedVersion: 1, descriptor: next,
       shared: [{ key: "PORT", value: "4000", secret: false }, { key: "API_URL", value: "http://localhost", secret: false }] });
     expect(written).toMatchObject({ version: 2, descriptor: { workdir: "apps/api", healthCheck: { kind: "http" } } });
     const restarted = new ServiceCatalog(f.dir, f.authority);
-    expect(restarted.listTemplates(projectId)[0]).toMatchObject({ version: 2, shared: [{ key: "PORT", value: "4000" }, { key: "API_URL", value: "http://localhost" }] });
+    expect(restarted.listTemplates(projectId, f.environmentId)[0]).toMatchObject({ version: 2, shared: [{ key: "PORT", value: "4000" }, { key: "API_URL", value: "http://localhost" }] });
     expect(restarted.listTask(taskId)[0]).toMatchObject({ binding: { templateVersion: 1 }, template: { version: 1 } });
   });
 
@@ -155,37 +157,37 @@ describe("machine-private service catalog", () => {
     f.bind(first.serviceId);
     // Byte-identical content: the save still mints a revision, but it invalidates
     // nothing, so listing every binding that pins the older number would be a lie.
-    const unchanged = f.catalog.reviewTemplateUpdate({ projectId, serviceId: first.serviceId, expectedVersion: 1,
+    const unchanged = f.catalog.reviewTemplateUpdate({ projectId, environmentId: f.environmentId, serviceId: first.serviceId, expectedVersion: 1,
       descriptor: f.descriptor, shared: [{ key: "PORT", value: "3000", secret: false }] });
     expect(unchanged).toMatchObject({ version: 2, saved: false, descriptorChanged: false, contentChanged: false,
       diff: { added: [], changed: [], removed: [] }, restartNeeded: [] });
     // One real field change (here a shared value) must name the pinned binding.
-    const changed = f.catalog.reviewTemplateUpdate({ projectId, serviceId: first.serviceId, expectedVersion: 1,
+    const changed = f.catalog.reviewTemplateUpdate({ projectId, environmentId: f.environmentId, serviceId: first.serviceId, expectedVersion: 1,
       descriptor: f.descriptor, shared: [{ key: "PORT", value: "4000", secret: false }] });
     expect(changed).toMatchObject({ contentChanged: true, descriptorChanged: false,
       diff: { added: [], changed: [{ key: "PORT", before: "3000", after: "4000" }], removed: [] },
       restartNeeded: [{ taskId, serviceId: first.serviceId, name: "API", from: 1, to: 2 }] });
     // Neither review wrote anything: the pin and the revision store are untouched.
     expect(f.catalog.listTask(taskId)[0]).toMatchObject({ binding: { templateVersion: 1 }, template: { version: 1 } });
-    expect(f.catalog.listTemplates(projectId)).toMatchObject([{ version: 1 }]);
+    expect(f.catalog.listTemplates(projectId, f.environmentId)).toMatchObject([{ version: 1 }]);
   });
 
   it("refuses a review of a stale or foreign revision and rejects machine paths in the shared workdir", () => {
     const f = fixture();
     const first = f.save();
-    expect(() => f.catalog.reviewTemplateUpdate({ projectId, serviceId: first.serviceId, expectedVersion: 2,
+    expect(() => f.catalog.reviewTemplateUpdate({ projectId, environmentId: f.environmentId, serviceId: first.serviceId, expectedVersion: 2,
       descriptor: f.descriptor, shared: [] })).toThrow("template version conflict");
-    expect(() => f.catalog.reviewTemplateUpdate({ projectId, serviceId: "s-524639ce-90ac-4dc5-8a52-c3628386ca36", expectedVersion: 1,
+    expect(() => f.catalog.reviewTemplateUpdate({ projectId, environmentId: f.environmentId, serviceId: "s-524639ce-90ac-4dc5-8a52-c3628386ca36", expectedVersion: 1,
       descriptor: f.descriptor, shared: [] })).toThrow("template version conflict");
     for (const workdir of ["/srv/app", "~/app", "../outside", "apps/api-token", "apps\\api"]) {
-      expect(() => f.catalog.reviewTemplateUpdate({ projectId, serviceId: first.serviceId, expectedVersion: 1,
+      expect(() => f.catalog.reviewTemplateUpdate({ projectId, environmentId: f.environmentId, serviceId: first.serviceId, expectedVersion: 1,
         descriptor: { ...f.descriptor, workdir }, shared: [] })).toThrow("invalid shared working directory");
-      expect(() => f.catalog.saveTemplate({ projectId, serviceId: first.serviceId, expectedVersion: 1,
+      expect(() => f.catalog.saveTemplate({ projectId, environmentId: f.environmentId, serviceId: first.serviceId, expectedVersion: 1,
         descriptor: { ...f.descriptor, workdir }, shared: [] })).toThrow("invalid shared working directory");
     }
-    expect(() => f.catalog.reviewTemplateUpdate({ projectId, serviceId: first.serviceId, expectedVersion: 1,
+    expect(() => f.catalog.reviewTemplateUpdate({ projectId, environmentId: f.environmentId, serviceId: first.serviceId, expectedVersion: 1,
       descriptor: { ...f.descriptor, workdir: "apps/../etc" }, shared: [] })).toThrow("invalid shared working directory");
-    expect(f.catalog.listTemplates(projectId)[0]).toMatchObject({ version: 1 });
+    expect(f.catalog.listTemplates(projectId, f.environmentId)[0]).toMatchObject({ version: 1 });
   });
 
   it("refuses a machine path or credential in the shared health target or a shared value", () => {
@@ -195,45 +197,45 @@ describe("machine-private service catalog", () => {
       "http://127.0.0.1:3000/health?api_key=SECRET", "http://127.0.0.1:3000/health?apikey=SECRET",
       "http://127.0.0.1:3000/health?x-key=SECRET"]) {
       const descriptor = { ...f.descriptor, healthCheck: { kind: "http" as const, target } };
-      expect(() => f.catalog.saveTemplate({ projectId, descriptor, shared: port })).toThrow("private health target is not shared");
+      expect(() => f.catalog.saveTemplate({ projectId, environmentId: f.environmentId, descriptor, shared: port })).toThrow("private health target is not shared");
     }
     for (const value of ["apikey=SECRET", "https://user:pass@example.test"]) {
-      expect(() => f.catalog.saveTemplate({ projectId, descriptor: f.descriptor,
+      expect(() => f.catalog.saveTemplate({ projectId, environmentId: f.environmentId, descriptor: f.descriptor,
         shared: [{ key: "API_URL", value, secret: false }] })).toThrow("invalid shared value");
     }
     // The `update` write and its read-only review run the same parser on both steps.
     const first = f.save();
     const secret = [{ key: "API_TOKEN", value: "credential-value", secret: false }];
     for (const write of [
-      () => f.catalog.reviewTemplateUpdate({ projectId, serviceId: first.serviceId, expectedVersion: 1, descriptor: first.descriptor, shared: secret }),
-      () => f.catalog.saveTemplate({ projectId, serviceId: first.serviceId, expectedVersion: 1, descriptor: first.descriptor, shared: secret }),
-      () => f.catalog.saveTemplate({ projectId, serviceId: first.serviceId, expectedVersion: 1,
+      () => f.catalog.reviewTemplateUpdate({ projectId, environmentId: f.environmentId, serviceId: first.serviceId, expectedVersion: 1, descriptor: first.descriptor, shared: secret }),
+      () => f.catalog.saveTemplate({ projectId, environmentId: f.environmentId, serviceId: first.serviceId, expectedVersion: 1, descriptor: first.descriptor, shared: secret }),
+      () => f.catalog.saveTemplate({ projectId, environmentId: f.environmentId, serviceId: first.serviceId, expectedVersion: 1,
         descriptor: { ...first.descriptor, args: ["--prefix=/srv/app"] }, shared: [] }),
     ]) expect(write).toThrow();
-    expect(f.catalog.saveTemplate({ projectId, descriptor: { ...f.descriptor, healthCheck: { kind: "http", target: "http://127.0.0.1:3000/health" } },
+    expect(f.catalog.saveTemplate({ projectId, environmentId: f.environmentId, descriptor: { ...f.descriptor, healthCheck: { kind: "http", target: "http://127.0.0.1:3000/health" } },
       shared: [{ key: "API_URL", value: "http://localhost:4100", secret: false }] }).descriptor.healthCheck)
       .toEqual({ kind: "http", target: "http://127.0.0.1:3000/health" });
   });
 
   it("stores a portable shared workdir trimmed and never a padded one", () => {
     const f = fixture();
-    const saved = f.catalog.saveTemplate({ projectId, descriptor: { ...f.descriptor, workdir: " apps/api " }, shared: [] });
+    const saved = f.catalog.saveTemplate({ projectId, environmentId: f.environmentId, descriptor: { ...f.descriptor, workdir: " apps/api " }, shared: [] });
     expect(saved.descriptor.workdir).toBe("apps/api");
-    expect(new ServiceCatalog(f.dir, f.authority).listTemplates(projectId)[0]?.descriptor.workdir).toBe("apps/api");
+    expect(new ServiceCatalog(f.dir, f.authority).listTemplates(projectId, f.environmentId)[0]?.descriptor.workdir).toBe("apps/api");
   });
 
   it("re-pins one existing binding to an existing revision without touching the other binding or the append-only revisions", () => {
     const f = fixture();
     const api = f.save();
-    const worker = f.catalog.saveTemplate({ projectId,
+    const worker = f.catalog.saveTemplate({ projectId, environmentId: f.environmentId,
       descriptor: { ...f.descriptor, name: "Worker", args: ["worker.js"] }, shared: [] });
     f.bind(api.serviceId, 1);
     f.bind(worker.serviceId, 1);
-    const second = f.catalog.saveTemplate({ projectId, serviceId: api.serviceId, expectedVersion: 1,
+    const second = f.catalog.saveTemplate({ projectId, environmentId: f.environmentId, serviceId: api.serviceId, expectedVersion: 1,
       descriptor: { ...f.descriptor, args: ["server-v2.js"] }, shared: [{ key: "PORT", value: "4000", secret: false }] });
     const revisionsBefore = readFileSync(join(f.dir, "service-templates.json"), "utf8");
     const review = f.catalog.reviewTaskBindingAdoption({ projectId, taskId, serviceId: api.serviceId, templateVersion: 2 });
-    expect(review).toEqual({ taskId, serviceId: api.serviceId, from: 1, to: 2, adopted: false,
+    expect(review).toEqual({ taskId, serviceId: api.serviceId, environmentId: f.environmentId, from: 1, to: 2, adopted: false,
       restartNeeded: [{ taskId, serviceId: api.serviceId, name: "API", from: 1, to: 2 }] });
     // A review writes nothing: the pin, the machine file and the revision file stay as they were.
     expect(f.catalog.listTask(taskId).find((row) => row.binding.serviceId === api.serviceId)?.binding.templateVersion).toBe(1);
@@ -249,7 +251,7 @@ describe("machine-private service catalog", () => {
     // The sibling binding of the same task keeps its pin, and the revision store is untouched and still append-only.
     expect(rows.find((row) => row.binding.serviceId === worker.serviceId)).toMatchObject({ binding: { templateVersion: 1 }, template: { version: 1 } });
     expect(readFileSync(join(f.dir, "service-templates.json"), "utf8")).toBe(revisionsBefore);
-    expect(f.catalog.template(projectId, api.serviceId, 1)).toEqual(api);
+    expect(f.catalog.template(projectId, f.environmentId, api.serviceId, 1)).toEqual(api);
     expect(JSON.parse(readFileSync(join(f.dir, "service-templates.json"), "utf8")).revisions).toHaveLength(3);
   });
 
@@ -263,15 +265,16 @@ describe("machine-private service catalog", () => {
       task: (id) => owners[id] ? { identity: owners[id]!, projectId, rootIds: ["repo-a"] } : null,
     };
     const catalog = new ServiceCatalog(dir, authority);
+    const environmentId = catalog.createEnvironment({ projectId, name: "开发环境" }).environmentId;
     const descriptor = { name: "API", program: "node", args: ["server.js"], ports: [3000], runType: "long-lived" as const };
-    const api = catalog.saveTemplate({ projectId, descriptor, shared: [] });
-    const bindFor = (owner: string) => catalog.bindTask({ taskId: owner, serviceId: api.serviceId, templateVersion: 1, rootId: "repo-a",
+    const api = catalog.saveTemplate({ projectId, environmentId, descriptor, shared: [] });
+    const bindFor = (owner: string) => catalog.bindTask({ taskId: owner, serviceId: api.serviceId, environmentId, templateVersion: 1, rootId: "repo-a",
       subdir: "", programPath: process.execPath, privateRefs: [] });
     bindFor(taskId);
     bindFor(secondTask);
-    catalog.saveTemplate({ projectId, serviceId: api.serviceId, expectedVersion: 1, descriptor: { ...descriptor, args: ["server-v2.js"] }, shared: [] });
+    catalog.saveTemplate({ projectId, environmentId, serviceId: api.serviceId, expectedVersion: 1, descriptor: { ...descriptor, args: ["server-v2.js"] }, shared: [] });
     expect(catalog.adoptTaskBinding({ projectId, taskId, serviceId: api.serviceId, templateVersion: 2 })).toEqual({
-      taskId, serviceId: api.serviceId, from: 1, to: 2, adopted: true,
+      taskId, serviceId: api.serviceId, environmentId, from: 1, to: 2, adopted: true,
       restartNeeded: [{ taskId, serviceId: api.serviceId, name: "API", from: 1, to: 2 },
         { taskId: secondTask, serviceId: api.serviceId, name: "API", from: 1, to: 2 }],
     });
@@ -288,7 +291,7 @@ describe("machine-private service catalog", () => {
   it("refuses an unknown revision, a foreign project, an unbound service and a stale stored identity without writing", () => {
     const f = fixture();
     const api = f.save();
-    const unbound = f.catalog.saveTemplate({ projectId, descriptor: { ...f.descriptor, name: "Worker" }, shared: [] });
+    const unbound = f.catalog.saveTemplate({ projectId, environmentId: f.environmentId, descriptor: { ...f.descriptor, name: "Worker" }, shared: [] });
     f.bind(api.serviceId);
     const machineBefore = readFileSync(join(f.dir, "service-machine.json"), "utf8");
     for (const adopt of [
@@ -312,9 +315,9 @@ describe("machine-private service catalog", () => {
   it("never carries a machine path or a secret into a shared revision through an adoption", () => {
     const f = fixture();
     const api = f.save();
-    f.catalog.bindTask({ taskId, serviceId: api.serviceId, templateVersion: 1, rootId: "repo-a", subdir: "src/api",
+    f.catalog.bindTask({ taskId, serviceId: api.serviceId, environmentId: f.environmentId, templateVersion: 1, rootId: "repo-a", subdir: "src/api",
       programPath: process.execPath, privateRefs: [{ key: "API_TOKEN", envRef: "LOCAL_API_TOKEN" }] });
-    f.catalog.saveTemplate({ projectId, serviceId: api.serviceId, expectedVersion: 1, descriptor: { ...f.descriptor, args: ["server-v2.js"] }, shared: [] });
+    f.catalog.saveTemplate({ projectId, environmentId: f.environmentId, serviceId: api.serviceId, expectedVersion: 1, descriptor: { ...f.descriptor, args: ["server-v2.js"] }, shared: [] });
     const revisionsBefore = readFileSync(join(f.dir, "service-templates.json"), "utf8");
     f.catalog.adoptTaskBinding({ projectId, taskId, serviceId: api.serviceId, templateVersion: 2 });
     const revisions = readFileSync(join(f.dir, "service-templates.json"), "utf8");
@@ -325,22 +328,22 @@ describe("machine-private service catalog", () => {
     expect(f.catalog.listTask(taskId)[0]?.binding).toMatchObject({ templateVersion: 2, rootId: "repo-a", subdir: "src/api",
       programPath: process.execPath, privateRefs: [{ key: "API_TOKEN", envRef: "LOCAL_API_TOKEN" }] });
     // A shared revision that carries either is still refused at the source, so an adoption can never smuggle one in.
-    expect(() => f.catalog.saveTemplate({ projectId, serviceId: api.serviceId, expectedVersion: 2,
+    expect(() => f.catalog.saveTemplate({ projectId, environmentId: f.environmentId, serviceId: api.serviceId, expectedVersion: 2,
       descriptor: { ...f.descriptor, args: ["--prefix=/Users/name/app"] }, shared: [] })).toThrow("private shared argument");
-    expect(() => f.catalog.saveTemplate({ projectId, serviceId: api.serviceId, expectedVersion: 2,
+    expect(() => f.catalog.saveTemplate({ projectId, environmentId: f.environmentId, serviceId: api.serviceId, expectedVersion: 2,
       descriptor: f.descriptor, shared: [{ key: "API_TOKEN", value: "credential-value", secret: false }] })).toThrow("private key");
     expect(readFileSync(join(f.dir, "service-templates.json"), "utf8")).toBe(revisionsBefore);
   });
 
   it("persists a portable shared workdir and never a local path", () => {
     const f = fixture();
-    const saved = f.catalog.saveTemplate({ projectId, descriptor: { ...f.descriptor, workdir: "apps/api" },
+    const saved = f.catalog.saveTemplate({ projectId, environmentId: f.environmentId, descriptor: { ...f.descriptor, workdir: "apps/api" },
       shared: [{ key: "PORT", value: "3000", secret: false }] });
     expect(saved.descriptor.workdir).toBe("apps/api");
     const body = readFileSync(join(f.dir, "service-templates.json"), "utf8");
     expect(body).toContain("apps/api");
     expect(body).not.toContain(process.env["HOME"] ?? "/Users/");
-    expect(new ServiceCatalog(f.dir, f.authority).listTemplates(projectId)[0]?.descriptor.workdir).toBe("apps/api");
+    expect(new ServiceCatalog(f.dir, f.authority).listTemplates(projectId, f.environmentId)[0]?.descriptor.workdir).toBe("apps/api");
   });
 
   it("refuses identity replacement, project reassignment and removed roots on read or overwrite", () => {
@@ -372,7 +375,7 @@ describe("machine-private service catalog", () => {
     const templates = join(f.dir, "service-templates.json");
     rmSync(templates);
     symlinkSync(join(f.dir, "service-templates.json.bak"), templates);
-    expect(() => f.catalog.template(projectId, first.serviceId, 1)).toThrow("unreadable");
+    expect(() => f.catalog.template(projectId, f.environmentId, first.serviceId, 1)).toThrow("unreadable");
   });
 
   it("resolves private references only at use time without persisting values", () => {
@@ -414,9 +417,10 @@ describe("machine-private service catalog", () => {
     const secondProject = await projects.create({ name: "Second", description: "", repositories: [], directories: [] });
     await projects.claim(taskId, firstProject.id, roots);
     const catalog = new ServiceCatalog(userData, serviceCatalogAuthority(roots, projects));
-    const saved = catalog.saveTemplate({ projectId: firstProject.id,
+    const environmentId = catalog.createEnvironment({ projectId: firstProject.id, name: "开发环境" }).environmentId;
+    const saved = catalog.saveTemplate({ projectId: firstProject.id, environmentId,
       descriptor: { name: "API", program: "node", args: ["server.js"], ports: [], runType: "long-lived" }, shared: [] });
-    catalog.bindTask({ taskId, serviceId: saved.serviceId, templateVersion: 1, rootId: "repo-a", subdir: "", programPath: process.execPath, privateRefs: [] });
+    catalog.bindTask({ taskId, serviceId: saved.serviceId, environmentId, templateVersion: 1, rootId: "repo-a", subdir: "", programPath: process.execPath, privateRefs: [] });
     expect(new ServiceCatalog(userData, serviceCatalogAuthority(roots, projects)).listTask(taskId)[0]?.template).toEqual(saved);
     await projects.transfer(taskId, firstProject.id, secondProject.id, roots);
     expect(() => catalog.listTask(taskId)).toThrow("stored service task identity changed");
@@ -427,11 +431,11 @@ describe("machine-private service catalog", () => {
 
   it("previews only pinned saved layers, masks private values and reports missing refs without partial rows", () => {
     const f = fixture();
-    const saved = f.catalog.saveTemplate({ projectId, descriptor: f.descriptor, shared: [
+    const saved = f.catalog.saveTemplate({ projectId, environmentId: f.environmentId, descriptor: f.descriptor, shared: [
       { key: "PORT", value: "3000", secret: false }, { key: "PUBLIC", value: "safe", secret: false },
       { key: "COINCIDENTAL", value: "prefix-credential-value", secret: false },
     ] });
-    f.catalog.bindTask({ taskId, serviceId: saved.serviceId, templateVersion: 1, rootId: "repo-a", subdir: "", programPath: process.execPath,
+    f.catalog.bindTask({ taskId, serviceId: saved.serviceId, environmentId: f.environmentId, templateVersion: 1, rootId: "repo-a", subdir: "", programPath: process.execPath,
       privateRefs: [{ key: "PORT", envRef: "LOCAL_PORT" }, { key: "API_TOKEN", envRef: "LOCAL_TOKEN" }] });
     const env = { LOCAL_PORT: "4200", LOCAL_TOKEN: "credential-value" };
     const preview = f.catalog.previewSavedConfig(projectId, taskId, saved.serviceId, env);
@@ -441,7 +445,7 @@ describe("machine-private service catalog", () => {
     expect(preview.rows.find((row) => row.key === "COINCIDENTAL")?.masked).toBe(true);
     expect(JSON.stringify(preview)).not.toMatch(/credential-value|4200|LOCAL_TOKEN|programPath/);
     expect(f.catalog.previewSavedConfig(projectId, taskId, saved.serviceId, {})).toMatchObject({ state: "blocked", error: "private-reference-unavailable", rows: [] });
-    f.catalog.saveTemplate({ projectId, serviceId: saved.serviceId, expectedVersion: 1, descriptor: f.descriptor, shared: [] });
+    f.catalog.saveTemplate({ projectId, environmentId: f.environmentId, serviceId: saved.serviceId, expectedVersion: 1, descriptor: f.descriptor, shared: [] });
     expect(f.catalog.previewSavedConfig(projectId, taskId, saved.serviceId, env).templateVersion).toBe(1);
     f.replaceIdentity(null);
     expect(() => f.catalog.previewSavedConfig(projectId, taskId, saved.serviceId, env)).toThrow("task identity unavailable");
@@ -449,7 +453,7 @@ describe("machine-private service catalog", () => {
 
   it("masks shared literals matching an interpolated private value", () => {
     const f = fixture();
-    const saved = f.catalog.saveTemplate({ projectId, descriptor: f.descriptor, shared: [
+    const saved = f.catalog.saveTemplate({ projectId, environmentId: f.environmentId, descriptor: f.descriptor, shared: [
       { key: "PORT", value: "3000", secret: false }, { key: "COINCIDENTAL", value: "3000credential", secret: false },
     ] });
     f.bind(saved.serviceId);
@@ -461,7 +465,7 @@ describe("machine-private service catalog", () => {
 
   it("does not pretend unresolved shared references are valid configuration", () => {
     const f = fixture();
-    const saved = f.catalog.saveTemplate({ projectId, descriptor: f.descriptor, shared: [{ key: "ADDRESS", value: "${MISSING}", secret: false }] });
+    const saved = f.catalog.saveTemplate({ projectId, environmentId: f.environmentId, descriptor: f.descriptor, shared: [{ key: "ADDRESS", value: "${MISSING}", secret: false }] });
     f.bind(saved.serviceId);
     expect(f.catalog.previewSavedConfig(projectId, taskId, saved.serviceId, { LOCAL_API_TOKEN: "secret" })).toMatchObject({
       state: "blocked", error: "environment-resolution-failed", rows: [],
@@ -471,7 +475,7 @@ describe("machine-private service catalog", () => {
   it("pins identity across native selection and refuses replacement or duplicate commits", () => {
     const f = fixture();
     const saved = f.save();
-    const input = { taskId, serviceId: saved.serviceId, templateVersion: 1, rootId: "repo-a", subdir: "", privateRefs: [] };
+    const input = { taskId, serviceId: saved.serviceId, environmentId: f.environmentId, templateVersion: 1, rootId: "repo-a", subdir: "", privateRefs: [] };
     const prepared = f.catalog.prepareTaskBinding(projectId, input);
     f.replaceIdentity({ ...identity, directoryInode: "99" });
     expect(() => f.catalog.commitTaskBinding(prepared, process.execPath)).toThrow("identity changed during selection");
@@ -488,12 +492,12 @@ describe("machine-private service catalog", () => {
   it("rejects raw private values, provider credential references, and invalid local subdirectories", () => {
     const f = fixture();
     const first = f.save();
-    const basic = { taskId, serviceId: first.serviceId, templateVersion: 1, rootId: "repo-a", subdir: "", programPath: process.execPath };
-    expect(() => f.catalog.bindTask({ ...basic, privateRefs: [{ key: "API_TOKEN", envRef: "PIDOCK_PROVIDER_KEY" }] })).toThrow("invalid private reference");
-    expect(() => f.catalog.bindTask({ ...basic, privateRefs: [{ key: "API_TOKEN", envRef: "pidock_provider_key" }] })).toThrow("invalid private reference");
-    expect(() => f.catalog.bindTask({ ...basic, privateRefs: [{ key: "API_TOKEN", envRef: "secret-value!" }] })).toThrow("invalid private reference");
-    expect(() => f.catalog.bindTask({ ...basic, subdir: "../other-task", privateRefs: [] })).toThrow("invalid service subdirectory");
-    expect(() => f.catalog.bindTask({ ...basic, subdir: "CON", privateRefs: [] })).toThrow("invalid service subdirectory");
+    const basic = { taskId, serviceId: first.serviceId, environmentId: f.environmentId, templateVersion: 1, rootId: "repo-a", subdir: "", programPath: process.execPath };
+    expect(() => f.catalog.bindTask({ environmentId: f.environmentId, ...basic, privateRefs: [{ key: "API_TOKEN", envRef: "PIDOCK_PROVIDER_KEY" }] })).toThrow("invalid private reference");
+    expect(() => f.catalog.bindTask({ environmentId: f.environmentId, ...basic, privateRefs: [{ key: "API_TOKEN", envRef: "pidock_provider_key" }] })).toThrow("invalid private reference");
+    expect(() => f.catalog.bindTask({ environmentId: f.environmentId, ...basic, privateRefs: [{ key: "API_TOKEN", envRef: "secret-value!" }] })).toThrow("invalid private reference");
+    expect(() => f.catalog.bindTask({ environmentId: f.environmentId, ...basic, subdir: "../other-task", privateRefs: [] })).toThrow("invalid service subdirectory");
+    expect(() => f.catalog.bindTask({ environmentId: f.environmentId, ...basic, subdir: "CON", privateRefs: [] })).toThrow("invalid service subdirectory");
     expect(f.catalog.listTask(taskId)).toEqual([]);
   });
 });

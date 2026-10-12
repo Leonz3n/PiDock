@@ -29,13 +29,14 @@ async function fixture() {
   writeFileSync(program, `#!${process.execPath}\nconsole.log(process.env.API_TOKEN);console.log(process.env.PORT);console.log(process.cwd());`);
   chmodSync(program, 0o700);
   const descriptor = { name: "API", program: "node", args: [], ports: [], runType: "one-shot" as const };
-  const template = catalog.saveTemplate({ projectId: project.id, descriptor, shared: [{ key: "PORT", value: "3100", secret: false }] });
-  catalog.bindTask({ taskId, serviceId: template.serviceId, templateVersion: 1, rootId: "repo-a", subdir: "app", programPath: program,
+  const environmentId = catalog.createEnvironment({ projectId: project.id, name: "开发环境" }).environmentId;
+  const template = catalog.saveTemplate({ projectId: project.id, environmentId, descriptor, shared: [{ key: "PORT", value: "3100", secret: false }] });
+  catalog.bindTask({ taskId, serviceId: template.serviceId, environmentId, templateVersion: 1, rootId: "repo-a", subdir: "app", programPath: program,
     privateRefs: [{ key: "API_TOKEN", envRef: "LOCAL_SECRET" }] });
   const binary = join(home, "supervisor"); writeFileSync(binary, "experimental-placeholder"); chmodSync(binary, 0o700);
   const artifact = (): ExperimentalSupervisorArtifact => ({ path: binary, sha256: createHash("sha256").update(readFileSync(binary)).digest("hex"), platform: "darwin", arch: process.arch });
   const ids = { projectId: project.id, taskId, serviceId: template.serviceId };
-  return { home, userData, taskDir, cwd, catalog, projects, roots, program, binary, artifact, ids, descriptor };
+  return { home, userData, taskDir, cwd, catalog, projects, roots, program, binary, artifact, ids, descriptor, environmentId };
 }
 
 it("refuses unavailable artifact before reading task or private references", () => {
@@ -49,8 +50,8 @@ describe.skipIf(process.platform !== "darwin")("trusted experimental launch prep
     const f = await fixture(); const env = { LOCAL_SECRET: "private-preparation-value", UNRELATED: "not-inherited" };
     const prepared = prepareServiceSupervisorExperiment(f.catalog, f.ids, env, f.artifact());
     expect(JSON.stringify(prepared)).not.toMatch(/private-preparation-value|supervisor|service-program|LOCAL_SECRET/);
-    f.catalog.saveTemplate({ projectId: f.ids.projectId, serviceId: f.ids.serviceId, expectedVersion: 1, descriptor: f.descriptor,
-      shared: [{ key: "PORT", value: "9900", secret: false }] });
+    f.catalog.saveTemplate({ projectId: f.ids.projectId, environmentId: f.environmentId, serviceId: f.ids.serviceId, expectedVersion: 1,
+      descriptor: f.descriptor, shared: [{ key: "PORT", value: "9900", secret: false }] });
     env.LOCAL_SECRET = "changed-after-preparation";
     prepared.use((binary, request, redact) => {
       expect(binary).toBe(f.binary);
@@ -68,9 +69,9 @@ describe.skipIf(process.platform !== "darwin")("trusted experimental launch prep
       expect(request.env["API_TOKEN"]).toBe("3100private");
       expect(redact("${PORT}private / 3100private")).toBe("[redacted] / [redacted]");
     });
-    f.catalog.saveTemplate({ projectId: f.ids.projectId, serviceId: f.ids.serviceId, expectedVersion: 1, descriptor: f.descriptor,
-      shared: [{ key: "X", value: "x".repeat(2048), secret: false }] });
-    f.catalog.bindTask({ taskId: f.ids.taskId, serviceId: f.ids.serviceId, templateVersion: 2, rootId: "repo-a", subdir: "app",
+    f.catalog.saveTemplate({ projectId: f.ids.projectId, environmentId: f.environmentId, serviceId: f.ids.serviceId, expectedVersion: 1,
+      descriptor: f.descriptor, shared: [{ key: "X", value: "x".repeat(2048), secret: false }] });
+    f.catalog.bindTask({ taskId: f.ids.taskId, serviceId: f.ids.serviceId, environmentId: f.environmentId, templateVersion: 2, rootId: "repo-a", subdir: "app",
       programPath: f.program, privateRefs: [{ key: "API_TOKEN", envRef: "LOCAL_SECRET" }] });
     expect(() => prepareServiceSupervisorExperiment(f.catalog, f.ids, { LOCAL_SECRET: "${X}${X}${X}" }, f.artifact())).toThrow("environment-unavailable");
   });

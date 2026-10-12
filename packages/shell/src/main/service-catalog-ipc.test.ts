@@ -1,55 +1,80 @@
 import { describe, expect, it, vi } from "vitest";
 import { parseServiceOwnerRebindRequest, parseServiceRunGroupRequest, parseServiceRunRequest, performServiceBindingOperation, performServiceCatalogOperation, performServiceConfigPreview } from "./service-catalog-ipc.js";
-import type { ServiceBindingAdoption, ServiceCatalog, ServiceTemplate, ServiceTemplateUpdateReview } from "./service-catalog.js";
+import type { ServiceBindingAdoption, ServiceCatalog, ServiceEnvironment, ServiceTemplate, ServiceTemplateUpdateReview } from "./service-catalog.js";
 
+const projectId = "b36323d3-ff33-4e34-a873-536a9775788a";
+const environment: ServiceEnvironment = { projectId, environmentId: "e-b36323d3-ff33-4e34-a873-536a9775788a", name: "开发环境" };
 const template: ServiceTemplate = {
-  projectId: "b36323d3-ff33-4e34-a873-536a9775788a",
+  projectId,
+  environmentId: environment.environmentId,
   serviceId: "s-b36323d3-ff33-4e34-a873-536a9775788a",
   version: 1,
   descriptor: { name: "API", program: "node", args: ["server.js"], ports: [3000], runType: "long-lived" },
   shared: [{ key: "PORT", value: "3000", secret: false }],
 };
 function store(saved: ServiceTemplate = template) {
-  const review: ServiceTemplateUpdateReview = { projectId: saved.projectId, serviceId: saved.serviceId, version: saved.version,
+  const review: ServiceTemplateUpdateReview = { projectId: saved.projectId, environmentId: saved.environmentId, serviceId: saved.serviceId, version: saved.version,
     versionLabel: `v${String(saved.version)}`, saved: false, descriptorChanged: true, contentChanged: true,
     diff: { added: [], changed: [], removed: [] }, restartNeeded: [] };
-  const adoption: ServiceBindingAdoption = { taskId: "task-1", serviceId: saved.serviceId, from: 1, to: 2, adopted: false,
+  const adoption: ServiceBindingAdoption = { taskId: "task-1", serviceId: saved.serviceId, environmentId: saved.environmentId, from: 1, to: 2, adopted: false,
     restartNeeded: [{ taskId: "task-1", serviceId: saved.serviceId, name: "API", from: 1, to: 2 }] };
-  return { listTemplates: vi.fn(() => [template]), saveTemplate: vi.fn(() => saved),
+  return { listEnvironments: vi.fn(() => [environment]), createEnvironment: vi.fn(() => environment),
+    listTemplates: vi.fn(() => [template]), saveTemplate: vi.fn(() => saved),
     reviewTemplateUpdate: vi.fn(() => review), review,
     reviewTaskBindingAdoption: vi.fn(() => adoption), adoptTaskBinding: vi.fn(() => ({ ...adoption, adopted: true })), adoption } satisfies
-    Pick<ServiceCatalog, "listTemplates" | "saveTemplate" | "reviewTemplateUpdate" | "reviewTaskBindingAdoption" | "adoptTaskBinding">;
+    Pick<ServiceCatalog, "listEnvironments" | "createEnvironment" | "listTemplates" | "saveTemplate" | "reviewTemplateUpdate" | "reviewTaskBindingAdoption" | "adoptTaskBinding">;
 }
 
 describe("shell service catalog request boundary", () => {
   it("lists project templates and creates only a fresh manually submitted template", () => {
     const catalog = store();
-    const publicRow = { projectId: template.projectId, serviceId: template.serviceId, version: template.version,
+    const publicRow = { projectId: template.projectId, environmentId: template.environmentId, serviceId: template.serviceId, version: template.version,
     descriptor: template.descriptor, shared: [{ key: "PORT", value: "3000" }] };
-  expect(performServiceCatalogOperation(catalog, { op: "list", projectId: template.projectId })).toEqual([publicRow]);
-    expect(catalog.listTemplates).toHaveBeenCalledWith(template.projectId);
-    const input = { op: "create", projectId: template.projectId, descriptor: template.descriptor, shared: template.shared };
+  expect(performServiceCatalogOperation(catalog, { op: "list", projectId: template.projectId, environmentId: environment.environmentId })).toEqual([publicRow]);
+    expect(catalog.listTemplates).toHaveBeenCalledWith(template.projectId, environment.environmentId);
+    const input = { op: "create", projectId: template.projectId, environmentId: environment.environmentId, descriptor: template.descriptor, shared: template.shared };
     expect(performServiceCatalogOperation(catalog, input)).toEqual(publicRow);
-    expect(catalog.saveTemplate).toHaveBeenCalledWith({ projectId: template.projectId, descriptor: template.descriptor, shared: template.shared });
+    expect(catalog.saveTemplate).toHaveBeenCalledWith({ projectId: template.projectId, environmentId: environment.environmentId,
+      descriptor: template.descriptor, shared: template.shared });
+  });
+
+  it("lists and creates the named environments a project really has, refusing anything but a name", () => {
+    const catalog = store();
+    expect(performServiceCatalogOperation(catalog, { op: "listEnvironments", projectId: template.projectId }))
+      .toEqual([{ projectId: template.projectId, environmentId: environment.environmentId, name: "开发环境" }]);
+    expect(catalog.listEnvironments).toHaveBeenCalledWith(template.projectId);
+    expect(performServiceCatalogOperation(catalog, { op: "createEnvironment", projectId: template.projectId, name: "测试环境" }))
+      .toEqual({ projectId: template.projectId, environmentId: environment.environmentId, name: "开发环境" });
+    expect(catalog.createEnvironment).toHaveBeenCalledWith({ projectId: template.projectId, name: "测试环境" });
+    for (const invalid of [
+      { op: "createEnvironment", projectId: template.projectId },
+      { op: "createEnvironment", projectId: template.projectId, name: "测试环境", environmentId: environment.environmentId },
+      { op: "createEnvironment", projectId: template.projectId, name: "测试环境", shared: [] },
+      { op: "createEnvironment", projectId: template.projectId, name: 7 },
+      { op: "listEnvironments", projectId: template.projectId, name: "测试环境" },
+      { op: "list", projectId: template.projectId },
+      { op: "create", projectId: template.projectId, descriptor: template.descriptor, shared: [] },
+    ]) expect(() => performServiceCatalogOperation(catalog, invalid)).toThrow();
+    expect(catalog.createEnvironment).toHaveBeenCalledTimes(1);
   });
 
   it("reviews one existing template edit without writing and confirms it into exactly one new version", () => {
     const catalog = store({ ...template, version: 2 });
-    const edit = { projectId: template.projectId, serviceId: template.serviceId, expectedVersion: 1,
+    const edit = { projectId: template.projectId, environmentId: environment.environmentId, serviceId: template.serviceId, expectedVersion: 1,
       descriptor: { ...template.descriptor, workdir: "apps/api" }, shared: [{ key: "PORT", value: "4000", secret: false }] };
     expect(performServiceCatalogOperation(catalog, { op: "update", ...edit, confirm: false })).toEqual(catalog.review);
-    expect(catalog.reviewTemplateUpdate).toHaveBeenCalledWith({ projectId: template.projectId, serviceId: template.serviceId,
-      expectedVersion: 1, descriptor: edit.descriptor, shared: edit.shared });
+    expect(catalog.reviewTemplateUpdate).toHaveBeenCalledWith({ projectId: template.projectId, environmentId: environment.environmentId,
+      serviceId: template.serviceId, expectedVersion: 1, descriptor: edit.descriptor, shared: edit.shared });
     expect(catalog.saveTemplate).not.toHaveBeenCalled();
     expect(performServiceCatalogOperation(catalog, { op: "update", ...edit, confirm: true }))
       .toEqual({ ...catalog.review, saved: true });
-    expect(catalog.saveTemplate).toHaveBeenCalledWith({ projectId: template.projectId, serviceId: template.serviceId,
-      expectedVersion: 1, descriptor: edit.descriptor, shared: edit.shared });
+    expect(catalog.saveTemplate).toHaveBeenCalledWith({ projectId: template.projectId, environmentId: environment.environmentId,
+      serviceId: template.serviceId, expectedVersion: 1, descriptor: edit.descriptor, shared: edit.shared });
   });
 
   it("keeps the update request key-exact and fails closed when the write is not the reviewed revision", () => {
     const catalog = store({ ...template, version: 2 });
-    const edit = { op: "update", projectId: template.projectId, serviceId: template.serviceId, expectedVersion: 1,
+    const edit = { op: "update", projectId: template.projectId, environmentId: environment.environmentId, serviceId: template.serviceId, expectedVersion: 1,
       descriptor: template.descriptor, shared: template.shared, confirm: true };
     for (const request of [
       { ...edit, programPath: "/tmp/executable" },
@@ -130,13 +155,13 @@ describe("shell service catalog request boundary", () => {
   });
 
   it("requires the native picker and live sender, projects only private keys", async () => {
-    const bound = { taskId: "task-1", projectId: template.projectId, serviceId: template.serviceId, templateVersion: 1,
-      rootId: "repo", subdir: "", programPath: "/private/program", privateRefs: [{ key: "API_TOKEN", envRef: "PRIVATE_REF" }],
+    const bound = { taskId: "task-1", projectId: template.projectId, serviceId: template.serviceId, environmentId: environment.environmentId,
+      templateVersion: 1, rootId: "repo", subdir: "", programPath: "/private/program", privateRefs: [{ key: "API_TOKEN", envRef: "PRIVATE_REF" }],
       identity: { taskId: "task-1", createdAt: "now", root: "/private/root", realRoot: "/private/root", dirId: "task-12345678", directoryDevice: "1", directoryInode: "2" } };
     const catalog = { prepareTaskBinding: vi.fn(() => bound), commitTaskBinding: vi.fn(() => bound),
-      taskBindings: vi.fn(() => [{ binding: bound, template }]) };
-    const request = { op: "bind", projectId: template.projectId, taskId: "task-1", serviceId: template.serviceId,
-      templateVersion: 1, rootId: "repo", subdir: "", privateRefs: bound.privateRefs };
+      taskBindings: vi.fn(() => [{ binding: bound, template, environment }]) };
+    const request = { op: "bind", projectId: template.projectId, environmentId: environment.environmentId, taskId: "task-1",
+      serviceId: template.serviceId, templateVersion: 1, rootId: "repo", subdir: "", privateRefs: bound.privateRefs };
     const pick = vi.fn(async () => "/native/program");
     const requireLive = vi.fn();
     const result = await performServiceBindingOperation(catalog, request, pick, requireLive);
@@ -144,7 +169,7 @@ describe("shell service catalog request boundary", () => {
     expect(requireLive).toHaveBeenCalledTimes(2);
     expect(catalog.commitTaskBinding).toHaveBeenCalledWith(bound, "/native/program");
     expect(JSON.stringify(result)).not.toMatch(/PRIVATE_REF|private\/program|private\/root|identity/);
-    expect(result).toMatchObject({ cancelled: false, binding: { privateKeys: ["API_TOKEN"] } });
+    expect(result).toMatchObject({ cancelled: false, binding: { privateKeys: ["API_TOKEN"], environmentId: environment.environmentId, environmentName: "开发环境" } });
     catalog.commitTaskBinding.mockClear();
     expect(await performServiceBindingOperation(catalog, request, async () => null, requireLive)).toEqual({ cancelled: true });
     expect(catalog.commitTaskBinding).not.toHaveBeenCalled();
@@ -157,11 +182,11 @@ describe("shell service catalog request boundary", () => {
   it("rejects extra fields, task binding attempts, and oversized requests before touching disk", () => {
     const catalog = store();
     for (const request of [
-      { op: "create", projectId: template.projectId, descriptor: template.descriptor, shared: [], privateRefs: [{ key: "API_TOKEN", value: "private-value" }] },
-      { op: "create", projectId: template.projectId, descriptor: template.descriptor, shared: [], programPath: "/tmp/executable" },
+      { op: "create", projectId: template.projectId, environmentId: environment.environmentId, descriptor: template.descriptor, shared: [], privateRefs: [{ key: "API_TOKEN", value: "private-value" }] },
+      { op: "create", projectId: template.projectId, environmentId: environment.environmentId, descriptor: template.descriptor, shared: [], programPath: "/tmp/executable" },
       { op: "bindTask", taskId: "task-1", serviceId: template.serviceId },
-      { op: "create", projectId: template.projectId, descriptor: { ...template.descriptor, args: ["x".repeat(20_000)] }, shared: [] },
-      { op: "list", projectId: template.projectId, taskId: "other-task" },
+      { op: "create", projectId: template.projectId, environmentId: environment.environmentId, descriptor: { ...template.descriptor, args: ["x".repeat(20_000)] }, shared: [] },
+      { op: "list", projectId: template.projectId, environmentId: environment.environmentId, taskId: "other-task" },
     ]) expect(() => performServiceCatalogOperation(catalog, request)).toThrow();
     expect(catalog.listTemplates).not.toHaveBeenCalled();
     expect(catalog.saveTemplate).not.toHaveBeenCalled();
