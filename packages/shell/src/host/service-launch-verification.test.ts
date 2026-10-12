@@ -15,12 +15,13 @@
  *   NEGATIVE ones (an unverified platform must not read as verified), never a
  *   claim that Windows was tested.
  */
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { basename, join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { hostPlatformLabel } from "../main/service-config.js";
 import { runHumanServiceControl } from "./service-control.js";
+import { hostInstallationId } from "./installation-identity.js";
 import { TaskServiceProcesses } from "./service-processes.js";
 import { publicServiceStatus } from "./service-public.js";
 import { TaskServiceRuntime } from "./service-runtime.js";
@@ -36,6 +37,7 @@ import {
 const cleanups: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
+  vi.unstubAllEnvs();
 });
 
 const dirs: string[] = [];
@@ -58,6 +60,12 @@ async function until(check: () => boolean, label: string): Promise<void> {
 
 /** A service whose script proves it ran by writing its own pid. */
 function fixture(dir: string, options: { log?: LaunchVerificationLog } = {}) {
+  // The Host gets its installation identity from the application profile main
+  // forks it with; the fixture provides one so a real launch is bound to THIS
+  // installation rather than to nothing.
+  const profile = join(dir, "profile");
+  mkdirSync(profile, { recursive: true });
+  vi.stubEnv("PIDOCK_PROTECTED_PROFILE", profile);
   const marker = join(dir, "child-pid.txt");
   const services = new TaskServiceRuntime(dir, undefined, options.log ?? diskLaunchVerificationLog(dir));
   services.register({
@@ -179,7 +187,9 @@ describe.skipIf(process.platform === "win32")("#7 an unverified platform is name
   it("does not promote another platform's record to a pass on this machine", () => {
     const dir = taskDir();
     const { services } = fixture(dir, { log: memoryLaunchVerificationLog() });
-    services.recordLaunchVerification("svc", { platform: "win32-x64", nodeVersion: "24.21.0", ok: true, program: "pnpm.cmd", args: ["dev"] });
+    const installationId = hostInstallationId();
+    expect(installationId).toBeDefined();
+    services.recordLaunchVerification("svc", { platform: "win32-x64", nodeVersion: "24.21.0", ok: true, program: "pnpm.cmd", args: ["dev"], installationId });
     const status = publicServiceStatus(services.get("svc")!);
     const windows = status.launchVerification.rows.find((row) => row.platform === "win32-x64");
     // Read by a Host running on this macOS machine: the record is real evidence
@@ -187,7 +197,7 @@ describe.skipIf(process.platform === "win32")("#7 an unverified platform is name
     expect(windows?.verified).toBe(false);
     expect(windows?.reason).toBe(`记录来自其他平台（win32-x64），本机 ${hostPlatformLabel()} 未实测`);
     // Read by a Host that really is on win32-x64, the same record is a pass.
-    expect(publicServiceStatus(services.get("svc")!, "win32-x64").launchVerification.rows.find((row) => row.platform === "win32-x64")?.verified).toBe(true);
+    expect(publicServiceStatus(services.get("svc")!, "win32-x64", installationId).launchVerification.rows.find((row) => row.platform === "win32-x64")?.verified).toBe(true);
     // A record that named no launch observation (the pre-existing input shape)
     // is not evidence either, and the row says exactly why.
     services.recordLaunchVerification("svc", { platform: "linux-x64", nodeVersion: "24.21.0", ok: true });
@@ -195,10 +205,37 @@ describe.skipIf(process.platform === "win32")("#7 an unverified platform is name
     expect(linux).toEqual({ platform: "linux-x64", verified: false, reason: "该平台只有未记录实测事实的条目，不算已验证" });
   });
 
+  it("does not verify a same-platform record written by ANOTHER installation", () => {
+    const dir = taskDir();
+    const platform = hostPlatformLabel();
+    // The task folder was copied from another machine of the same platform: the
+    // record is a real launch, but not of THIS installation.
+    const foreign = {
+      schemaVersion: 1 as const, serviceId: "svc", platform, nodeVersion: "24.21.0", program: "pnpm", args: ["dev"],
+      startedAt: "2026-10-08T00:00:00.000Z", stopped: false, installationId: "other-installation", templateVersion: "v1",
+    };
+    const { services } = fixture(dir, { log: memoryLaunchVerificationLog([foreign]) });
+    const row = publicServiceStatus(services.get("svc")!, platform, "this-installation").launchVerification.rows.find((r) => r.platform === platform);
+    expect(row).toEqual({ platform, verified: false, reason: "记录来自其他安装（同一平台），本安装未实测" });
+    // The SAME record read by the installation that really observed it IS the
+    // verification: the binding denies the copy, not the observation.
+    expect(publicServiceStatus(services.get("svc")!, platform, "other-installation").launchVerification.rows.find((r) => r.platform === platform)?.verified).toBe(true);
+    // A record with no installation binding (written before this binding
+    // existed) and one whose template was superseded both stay unverified, by
+    // name, with the reason that says so.
+    const unbound = { ...foreign, serviceId: "svc", installationId: undefined };
+    const stale = { ...foreign, serviceId: "svc", installationId: "this-installation", templateVersion: "v0" };
+    const { services: unboundServices } = fixture(taskDir(), { log: memoryLaunchVerificationLog([unbound]) });
+    expect(publicServiceStatus(unboundServices.get("svc")!, platform, "this-installation").launchVerification.rows.find((r) => r.platform === platform)).toEqual({ platform, verified: false, reason: "记录未绑定安装标识，本安装未实测" });
+    const { services: staleServices } = fixture(taskDir(), { log: memoryLaunchVerificationLog([stale]) });
+    expect(publicServiceStatus(staleServices.get("svc")!, platform, "this-installation").launchVerification.rows.find((r) => r.platform === platform)).toEqual({ platform, verified: false, reason: `记录来自模板 v0，当前模板 v1，未算已验证` });
+  });
+
   it("lists the exact row shape the renderer parses, so the two ends cannot drift apart", () => {
     const dir = taskDir();
     const { services } = fixture(dir, { log: memoryLaunchVerificationLog() });
-    services.recordLaunchVerification("svc", { platform: hostPlatformLabel(), nodeVersion: "24.21.0", ok: true, program: "pnpm", args: ["dev", "web"] });
+    const installationId = hostInstallationId();
+    services.recordLaunchVerification("svc", { platform: hostPlatformLabel(), nodeVersion: "24.21.0", ok: true, program: "pnpm", args: ["dev", "web"], installationId });
     const status = publicServiceStatus(services.get("svc")!);
     expect(Object.keys(status.launchVerification).sort()).toEqual(["platform", "rows"]);
     const mine = status.launchVerification.rows.find((row) => row.platform === hostPlatformLabel())!;
@@ -207,6 +244,22 @@ describe.skipIf(process.platform === "win32")("#7 an unverified platform is name
     expect(Object.keys(other).sort()).toEqual(["platform", "reason", "verified"]);
     // The argv stays in the task Host: only the program token is projected.
     expect(JSON.stringify(status.launchVerification)).not.toContain("dev");
+  });
+
+  it("degrades a record with unusable launch facts to THAT row instead of blanking the status", () => {
+    // `program: ""` is the exact shape the old projection turned into
+    // `program: ""`, which the renderer's `optionalText` rejects - blanking the
+    // ENTIRE service status. It must fail locally instead.
+    const platform = hostPlatformLabel();
+    const unusable = {
+      schemaVersion: 1 as const, serviceId: "svc", platform, nodeVersion: "24.21.0", program: "", args: [],
+      startedAt: "2026-10-08T00:00:00.000Z", stopped: false, installationId: "this-installation", templateVersion: "v1",
+    };
+    const { services } = fixture(taskDir(), { log: memoryLaunchVerificationLog([unusable]) });
+    const status = publicServiceStatus(services.get("svc")!, platform, "this-installation");
+    expect(status.launchVerification.rows.find((row) => row.platform === platform)).toEqual({ platform, verified: false, reason: "该平台的记录缺少启动事实，未算已验证" });
+    // The rest of the read survives: one bad record never hides the other rows.
+    expect(status.launchVerification.rows.map((row) => row.platform)).toEqual(expect.arrayContaining(["win32-x64"]));
   });
 });
 
@@ -230,8 +283,12 @@ describe("#7 the task workspace's launch verification document", () => {
     log.record({ ...entry({ serviceId: "other" }) } as never);
     const document = readLaunchVerificationOnDisk(dir);
     expect(document.entries.map((row) => row.serviceId).sort()).toEqual(["other", "svc"]);
-    // The temp file lives next to the document and never survives the write.
-    expect(existsSync(`${launchVerificationFilePath(dir)}.tmp`)).toBe(false);
+    // The real temp name is `${file}.${uuid}.tmp`; the previous assertion
+    // (`existsSync(`${file}.tmp`)`) could never be true and proved nothing.
+    // Assert the real invariant: no temp file matching the real pattern is left
+    // behind next to the document.
+    const documentPath = launchVerificationFilePath(dir);
+    expect(readdirSync(dir).filter((name) => name.startsWith(`${basename(documentPath)}.`) && name.endsWith(".tmp"))).toEqual([]);
     expect(readFileSync(launchVerificationFilePath(dir), "utf8")).toBe(JSON.stringify(document, null, 2));
   });
 
@@ -244,6 +301,10 @@ describe("#7 the task workspace's launch verification document", () => {
     expect(() => parseLaunchVerificationRecord(JSON.stringify({ version: 1, entries: [entry({ stopped: true })] }))).toThrow("stoppedAt is required");
     expect(() => parseLaunchVerificationRecord(JSON.stringify({ version: 1, entries: [entry(), entry()] }))).toThrow("duplicate launch verification entry");
     expect(() => parseLaunchVerificationRecord(JSON.stringify({ version: 1, entries: [entry({ platform: "darwin" })] }))).toThrow("platform must be a <platform>-<arch> label");
+    // The installation/template binding is optional on read, but a present
+    // value must be usable: an empty string would read as "bound to nothing".
+    expect(() => parseLaunchVerificationRecord(JSON.stringify({ version: 1, entries: [entry({ installationId: "" })] }))).toThrow("installationId must be a non-empty string");
+    expect(() => parseLaunchVerificationRecord(JSON.stringify({ version: 1, entries: [entry({ templateVersion: "" })] }))).toThrow("templateVersion must be a non-empty string");
     expect(() => writeLaunchVerificationOnDisk(dir, { version: 99 as never, entries: [] })).toThrow("record.version must be 1");
   });
 

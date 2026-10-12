@@ -133,6 +133,15 @@ export interface ServiceLaunchVerification {
   /** True once a real stop of that launch was confirmed. */
   stopped?: boolean;
   stoppedAt?: string;
+  /**
+   * The installation that observed this launch (`hostInstallationId()`), when
+   * bound. A verification is about one installation, so a record copied inside
+   * a task workspace between two machines of the same platform does not verify
+   * the other one; a record with no binding never reads as verified.
+   */
+  installationId?: string;
+  /** The service template version this launch was observed against. */
+  templateVersion?: string;
 }
 
 export interface ServiceStartPlan {
@@ -237,6 +246,8 @@ export class TaskServiceRuntime {
         args: [...entry.args],
         startedAt: entry.startedAt,
         ...(entry.stopped ? { stopped: true, stoppedAt: entry.stoppedAt } : {}),
+        ...(entry.installationId !== undefined ? { installationId: entry.installationId } : {}),
+        ...(entry.templateVersion !== undefined ? { templateVersion: entry.templateVersion } : {}),
       });
       this.persistedVerifications.set(entry.serviceId, rows);
     }
@@ -566,6 +577,13 @@ export class TaskServiceRuntime {
       args?: string[];
       /** True when the observation is a confirmed stop of the launch recorded for this platform. */
       stopped?: boolean;
+      /**
+       * The installation that observed this launch (`hostInstallationId()` at
+       * the production caller). Absent leaves the record unbound, which never
+       * reads as verified; like `program`/`startedAt` it belongs to the START,
+       * so a later stop keeps the installation of the launch it merged into.
+       */
+      installationId?: string;
     },
   ): void {
     const record = this.services.get(serviceId);
@@ -581,23 +599,32 @@ export class TaskServiceRuntime {
     const startedAt = launched ? observedAt : previous?.startedAt;
     const stopped = input.stopped === true || previous?.stopped === true;
     const stoppedAt = input.stopped === true ? observedAt : previous?.stoppedAt;
+    // The installation and template version are facts of the LAUNCH, not of the
+    // observation: a later stop keeps the ones it merged into, so a workspace
+    // copied to another installation cannot re-stamp an old launch as its own.
+    const installationId = launched ? input.installationId : previous?.installationId;
+    const templateVersion = launched ? record.templateVersion : previous?.templateVersion;
     const entry: ServiceLaunchVerification = {
       platform: input.platform,
       nodeVersion: input.nodeVersion,
       ok: input.ok,
       note: input.note ?? "",
       ...(program !== undefined && startedAt !== undefined
-        ? recordPlatformLaunch({
-            program,
-            args,
-            platform: input.platform,
-            nodeVersion: input.nodeVersion,
-            ok: input.ok,
-            note: input.note,
-            startedAt,
-            stopped,
-            ...(stoppedAt !== undefined ? { stoppedAt } : {}),
-          })
+        ? {
+            ...recordPlatformLaunch({
+              program,
+              args,
+              platform: input.platform,
+              nodeVersion: input.nodeVersion,
+              ok: input.ok,
+              note: input.note,
+              startedAt,
+              stopped,
+              ...(stoppedAt !== undefined ? { stoppedAt } : {}),
+            }),
+            ...(installationId !== undefined ? { installationId } : {}),
+            ...(templateVersion !== undefined ? { templateVersion } : {}),
+          }
         : {}),
     };
     // Only an entry that names a real launch is persisted: a stop with no
@@ -613,6 +640,8 @@ export class TaskServiceRuntime {
           args,
           startedAt,
           stopped,
+          ...(installationId !== undefined ? { installationId } : {}),
+          ...(templateVersion !== undefined ? { templateVersion } : {}),
           ...(stoppedAt !== undefined ? { stoppedAt } : {}),
         });
       } catch (error) {

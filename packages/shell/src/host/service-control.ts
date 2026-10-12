@@ -31,6 +31,7 @@
 import type { PiApproval, PiApprovalScope, PiGateDecision, PiPermission } from "../main/pi-session.js";
 import { SERVICE_CONTROL_SCOPE } from "../main/pi-session.js";
 import { hostPlatformLabel } from "../main/service-config.js";
+import { hostInstallationId } from "./installation-identity.js";
 import { writeClaimError, type WriteCoordinatorPort } from "./write-coordination.js";
 import type { ControlExecutionHandle, ControlExecutionPort } from "./execution-ledger.js";
 import { SERVICE_CONTROL_TOOL, type TaskServiceRuntime } from "./service-runtime.js";
@@ -152,12 +153,15 @@ export async function runHumanServiceControl(input: {
  * real child pid (start) or confirmed the registered child's end (stop), and
  * the platform/node version are this Host's own `process` facts — never a
  * caller claim — so the record cannot exist without a real launch. The
- * program token comes from the same registered descriptor the driver spawned
- * (`task/controlService` plans from the registration, not from the request).
+ * installation identity (`hostInstallationId()`) is this Host's own profile
+ * binding, so the record verifies THIS installation and a workspace copied to
+ * another machine of the same platform does not. The program token comes from
+ * the same registered descriptor the driver spawned (`task/controlService`
+ * plans from the registration, not from the request).
  */
 function recordVerifiedLaunch(services: TaskServiceRuntime, serviceId: string, fact: "started" | "stopped"): void {
   const descriptor = services.get(serviceId)?.descriptor;
-  const observed = { platform: hostPlatformLabel(), nodeVersion: process.versions.node, ok: true };
+  const observed = { platform: hostPlatformLabel(), nodeVersion: process.versions.node, ok: true, installationId: hostInstallationId() };
   services.recordLaunchVerification(serviceId, fact === "started"
     ? { ...observed, ...(descriptor !== undefined ? { program: descriptor.program, args: descriptor.args } : {}) }
     : { ...observed, stopped: true });
