@@ -376,6 +376,11 @@ describe.skipIf(process.platform === "win32")("#10 two tasks running the same se
     // DECLARED, never observed: this Host owns no port probe.
     expect(runA["portsSource"]).toBe("declared");
     expect(runA["endedAt"]).toBeUndefined();
+    // This slice reads no working tree, so the code/build state stays `unknown`
+    // on the REAL seam: a genuine start here must never read as a clean tree or
+    // a fresh build. Reading `.git` is box 6's own slice, not this one.
+    expect(runA["codeState"]).toMatchObject({ kind: "unknown" });
+    expect(runA["buildFreshness"]).toBe("unknown");
 
     const scopeA = (await taskA.request("task/serviceStopScope", {})).scope as { stop: { pid: number }[]; skipped: unknown[] };
     const scopeBeforeStopB = (await taskB.request("task/serviceStopScope", {})).scope as { stop: { pid: number }[] };
