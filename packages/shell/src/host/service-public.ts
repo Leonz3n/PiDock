@@ -1,5 +1,6 @@
 import { LAUNCH_VERIFICATION_TARGETS, hostPlatformLabel } from "../main/service-config.js";
 import { hostInstallationId } from "./installation-identity.js";
+import { unprobedServiceHealth, type ServiceHealthObservation } from "./service-health-probe.js";
 import type { ServiceLaunchVerification, ServiceRecord, ServiceStartPlan } from "./service-runtime.js";
 
 /**
@@ -121,6 +122,13 @@ export function publicServiceStatus(
   record: ServiceRecord,
   platform: string = hostPlatformLabel(),
   installationId: string | undefined = hostInstallationId(),
+  /**
+   * The health observation the caller produced for THIS read
+   * (`probeServiceHealth`). Absent does NOT mean a pass: the projection then
+   * states, by name, that this read ran no probe (see `unprobedServiceHealth`),
+   * so a caller that forgets to probe can never render as healthy.
+   */
+  health: ServiceHealthObservation = unprobedServiceHealth(record.descriptor.healthCheck),
 ) {
   return {
     serviceId: record.serviceId,
@@ -131,8 +139,17 @@ export function publicServiceStatus(
     exitReason: record.exitReason,
     /** `catalog` only: a `ui` registration is display data and cannot execute yet. */
     launchSource: record.launchSource,
-    /** Process liveness only; no dependency/health probe contributed to `lifecycle`. */
-    health: "not-probed" as const,
+    /**
+     * The declared 健康检查, as OBSERVED by one bounded probe of the pinned
+     * revision's own target ([PiDock 04] #7 box 5): `healthy` only after a real
+     * 2xx/completed connect, `unhealthy` with the named reason of a real
+     * failure, `not-probed` when nothing was dialled (the process is not
+     * running, no target is declared, or the kind has no implementation here),
+     * `undeclared` when the pinned revision declares no check at all. A probe
+     * failure is a statement about the TARGET, never about the process:
+     * `lifecycle` stays process liveness.
+     */
+    health,
     /**
      * Who last started or stopped this service, and through which path
      * ([PiDock 04] #7 box 5): `human` is the explicit UI action carrying

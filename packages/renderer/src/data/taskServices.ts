@@ -72,6 +72,37 @@ export interface LaunchVerificationView {
   rows: PlatformVerificationRowView[];
 }
 
+/**
+ * The named states of one service's declared 健康检查 ([PiDock 04] #7 box 5),
+ * exactly as the Host reports them. `healthy` is the only state that reads as a
+ * pass: `not-probed` means nothing was dialled (and says why), `undeclared`
+ * means the pinned revision declares no check at all. A probe failure is a
+ * statement about the declared TARGET, never about the process - the row keeps
+ * `lifecycle` for that.
+ */
+export const SERVICE_HEALTH_STATES = ["healthy", "unhealthy", "not-probed", "undeclared"] as const;
+export type ServiceHealthStateView = (typeof SERVICE_HEALTH_STATES)[number];
+
+/** The check kinds the Host may declare (`service-config.ts`'s `ServiceHealthKind`). */
+export const SERVICE_HEALTH_KINDS = ["http", "tcp", "grpc"] as const;
+
+/**
+ * One health observation as the panel reads it: the named state plus the facts
+ * the probe really observed. `elapsedMs`/`boundMs` are present IF AND ONLY IF a
+ * connection was really attempted, so an unprobed row can never carry a
+ * duration that would imply a probe ran.
+ */
+export interface ServiceHealthView {
+  state: ServiceHealthStateView;
+  kind?: (typeof SERVICE_HEALTH_KINDS)[number];
+  target?: string;
+  statusCode?: number;
+  elapsedMs?: number;
+  boundMs?: number;
+  /** Why this is not a pass; the Host names it on every `unhealthy`/`not-probed` row. */
+  reason?: string;
+}
+
 /** `TaskServiceRuntime` registry status (a service the Host registered itself). */
 export interface ServiceRegistryStatusView {
   kind: "registry";
@@ -84,8 +115,12 @@ export interface ServiceRegistryStatusView {
   resolvedKeys: string[];
   /** `catalog` only executes; a `ui` registration is display data. */
   launchSource?: "catalog" | "ui";
-  /** Process liveness is `lifecycle`; no reachability probe is ever reported here. */
-  health?: "not-probed";
+  /**
+   * The observed 健康检查 of this service ([PiDock 04] #7 box 5); `lifecycle`
+   * stays process liveness. Absent means this Host predates the field, not that
+   * the service was healthy.
+   */
+  health?: ServiceHealthView;
   /**
    * Who last started or stopped this service ([PiDock 04] #7 box 5): `human`
    * is the explicit UI action (with main's own label), `agent` is the gated
@@ -122,11 +157,10 @@ function registryStatus(row: Record<string, unknown>, serviceId: string): Servic
   // `lifecycle` is process liveness only, `health` stays `not-probed` (no
   // reachability probe is reported as health) and `launchSource` says whether
   // the launch came from main's trusted catalog or is display-only.
-  const allowed = ["exitReason", "health", "lastControl", "launchSource", "launchVerification", "lifecycle", "resolved", "serviceId", "startedAt", "stoppedAt", "templateVersion"];
+  const allowed = ["exitReason", "health", "healthDetail", "lastControl", "launchSource", "launchVerification", "lifecycle", "resolved", "serviceId", "startedAt", "stoppedAt", "templateVersion"];
   const required = ["lifecycle", "resolved", "serviceId", "templateVersion"];
   if (!Object.keys(row).every((key) => allowed.includes(key)) || !required.every((key) => key in row)) return null;
   if (row["lifecycle"] !== "stopped" && row["lifecycle"] !== "running") return null;
-  if (row["health"] !== undefined && row["health"] !== "not-probed") return null;
   if (row["launchSource"] !== undefined && row["launchSource"] !== "catalog" && row["launchSource"] !== "ui") return null;
   if (typeof row["templateVersion"] !== "string" || !Array.isArray(row["resolved"])) return null;
   const resolvedKeys: string[] = [];
@@ -139,6 +173,8 @@ function registryStatus(row: Record<string, unknown>, serviceId: string): Servic
   const stoppedAt = text(row["stoppedAt"]);
   const exitReason = text(row["exitReason"]);
   if (startedAt === null || stoppedAt === null || exitReason === null) return null;
+  const health = healthFact(row["health"], row["healthDetail"]);
+  if (health === null) return null;
   const lastControl = lastControlFact(row["lastControl"]);
   if (lastControl === null) return null;
   const launchVerification = launchVerificationFact(row["launchVerification"]);
@@ -147,9 +183,58 @@ function registryStatus(row: Record<string, unknown>, serviceId: string): Servic
     resolvedKeys, ...(startedAt !== undefined ? { startedAt } : {}), ...(stoppedAt !== undefined ? { stoppedAt } : {}),
     ...(exitReason !== undefined ? { exitReason } : {}),
     ...(row["launchSource"] !== undefined ? { launchSource: row["launchSource"] as "catalog" | "ui" } : {}),
-    ...(row["health"] !== undefined ? { health: "not-probed" as const } : {}),
+    ...(health !== undefined ? { health } : {}),
     ...(lastControl !== undefined ? { lastControl } : {}),
     ...(launchVerification !== undefined ? { launchVerification } : {}) };
+}
+
+/** The keys the Host's health DETAIL may carry; anything else makes the read unreadable. */
+const HEALTH_DETAIL_KEYS = ["kind", "target", "statusCode", "elapsedMs", "boundMs", "reason"];
+/** A real millisecond count: a bounded whole number of ms, never negative. */
+const durationFact = (value: unknown): number | undefined | null =>
+  value === undefined ? undefined : typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 60_000 ? value : null;
+
+/**
+ * The Host's health observation ([PiDock 04] #7 box 5), read strictly because
+ * the whole point is that a pass is NOT assumed:
+ *
+ * - the state must be one of the four the Host can produce; an unknown state
+ *   (`green`) makes the row unreadable instead of being shown as a pass;
+ * - `healthy`/`unhealthy` must carry the real attempt's duration and bound (a
+ *   pass with no observed attempt is not a pass), and a `healthy` http row must
+ *   carry a 2xx of the declared kind;
+ * - `not-probed`/`undeclared` must NOT carry a duration or a status code: those
+ *   rows say nothing was dialled, and a duration on one would imply it was;
+ * - `unhealthy`/`not-probed` must name their reason, and `undeclared` must not
+ *   claim a kind or a target it never had;
+ * - the detail is only readable together with its state (a detail with no state
+ *   is a fact nobody can attribute).
+ */
+function healthFact(value: unknown, detail: unknown): ServiceHealthView | undefined | null {
+  if (value === undefined) return detail === undefined ? undefined : null;
+  if (!(SERVICE_HEALTH_STATES as readonly string[]).includes(String(value))) return null;
+  const state = value as ServiceHealthStateView;
+  if (detail === undefined) return state === "healthy" || state === "unhealthy" ? null : { state };
+  if (!isRecord(detail) || Object.keys(detail).some((key) => !HEALTH_DETAIL_KEYS.includes(key))) return null;
+  const kind = detail["kind"];
+  if (kind !== undefined && !(SERVICE_HEALTH_KINDS as readonly string[]).includes(String(kind))) return null;
+  const target = optionalText(detail["target"]);
+  const reason = optionalText(detail["reason"]);
+  const statusCode = detail["statusCode"];
+  const elapsedMs = durationFact(detail["elapsedMs"]);
+  const boundMs = durationFact(detail["boundMs"]);
+  if (target === null || reason === null || elapsedMs === null || boundMs === null) return null;
+  if (statusCode !== undefined && (typeof statusCode !== "number" || !Number.isInteger(statusCode) || statusCode < 100 || statusCode > 599)) return null;
+  if (statusCode !== undefined && kind !== "http") return null;
+  const attempted = elapsedMs !== undefined && boundMs !== undefined;
+  if ((state === "healthy" || state === "unhealthy") && !attempted) return null;
+  if ((state === "not-probed" || state === "undeclared") && (elapsedMs !== undefined || boundMs !== undefined || statusCode !== undefined)) return null;
+  if (state === "healthy" && statusCode !== undefined && (statusCode < 200 || statusCode >= 300)) return null;
+  if ((state === "unhealthy" || state === "not-probed") && reason === undefined) return null;
+  if (state === "undeclared" && (kind !== undefined || target !== undefined)) return null;
+  return { state, ...(kind === undefined ? {} : { kind: kind as ServiceHealthView["kind"] }), ...(target === undefined ? {} : { target }),
+    ...(statusCode === undefined ? {} : { statusCode }), ...(elapsedMs === undefined ? {} : { elapsedMs }),
+    ...(boundMs === undefined ? {} : { boundMs }), ...(reason === undefined ? {} : { reason }) };
 }
 
 /** `<platform>-<arch>`: the only shape the Host may label a platform with. */
