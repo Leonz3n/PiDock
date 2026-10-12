@@ -56,6 +56,7 @@ import type { ControlExecutionPort } from "./execution-ledger.js";
 import { isCredentialEnvName } from "./explicit-text-provider.js";
 import { normalizeScopePath } from "./path-coordination.js";
 import { runAgentServiceControl, type ServiceExecutionDriver } from "./service-control.js";
+import { probeServiceHealth, type ServiceHealthObservation } from "./service-health-probe.js";
 import { SERVICE_CONTROL_TOOL, type ServiceRecord, type TaskServiceRuntime } from "./service-runtime.js";
 import type { ServiceTemplateEditContent, ServiceTemplateEditPort, ServiceTemplateReview } from "../rpc/service-template-request.js";
 import { isServiceTemplateEdit } from "../rpc/service-template-request.js";
@@ -458,6 +459,35 @@ function serviceControlLabel(lastControl: ServiceRecord["lastControl"]): string 
 /** One successful service control as the model reads it: the Host's own actor and tier. */
 function serviceActionText(payload: { serviceId: string; action: "start" | "stop"; actor: "agent"; tier: PiPermission }): string {
   return `service ${payload.serviceId} ${payload.action}: ${payload.actor} (permission ${payload.tier})`;
+}
+
+/**
+ * The one Chinese name of each health state, repeated by the UI row.
+ */
+const SERVICE_HEALTH_NAME: Record<ServiceHealthObservation["state"], string> = {
+  healthy: "健康正常",
+  unhealthy: "健康异常",
+  "not-probed": "健康未探测",
+  undeclared: "未声明健康检查",
+};
+
+/**
+ * The named state of the declared 健康检查 ([PiDock 04] #7 box 5), as the model
+ * reads it: the state token the UI row carries too, the same Chinese name, the
+ * facts the probe really observed, and - whenever it is not a pass - the
+ * observation's own named reason. `undeclared` says the pinned revision
+ * declares no check; `not-probed` says nothing was dialled. Neither is a pass,
+ * and `healthy` appears only after a real 2xx / completed connect.
+ */
+export function serviceHealthText(observation: ServiceHealthObservation): string {
+  const facts: string[] = [];
+  if (observation.kind === "http" && observation.statusCode !== undefined) facts.push(`HTTP ${String(observation.statusCode)}`);
+  else if (observation.kind !== undefined) facts.push(observation.kind);
+  if (observation.elapsedMs !== undefined) facts.push(`${String(observation.elapsedMs)}ms`);
+  if (observation.target !== undefined) facts.push(`目标 ${observation.target}`);
+  const name = SERVICE_HEALTH_NAME[observation.state];
+  return `${observation.state} · ${name}${facts.length === 0 ? "" : `（${facts.join("，")}）`}` +
+    (observation.reason === undefined ? "" : ` — ${observation.reason}`);
 }
 
 /**
@@ -1217,6 +1247,14 @@ export class SdkAgentToolBroker {
   private async executeServiceStatus(host: SdkAgentServiceHost, serviceId: string): Promise<SdkAgentToolOutcome> {
     const record = host.services.get(serviceId);
     if (!record) return refuse("tool-refused:unknown-service", `${serviceId} 不是本任务绑定的服务`);
+    // [PiDock 04] (#7 box 5) the SAME bounded probe the UI's status read runs,
+    // against the SAME pinned declaration: the Agent is told the declared
+    // 健康检查's real outcome by name, so an unprobed thing can never reach the
+    // model as a passing health check. `lifecycle` stays process liveness.
+    const health = await probeServiceHealth({
+      healthCheck: record.descriptor.healthCheck,
+      running: record.lifecycle === "running",
+    });
     // [PiDock 04] (#7 box 3) the Agent sees which variables the service resolves
     // and which layer each one came from, but never a value: the model output
     // carries the same mask the page shows for a private row. Only keys and
@@ -1228,6 +1266,7 @@ export class SdkAgentToolBroker {
       text: [
         `service ${record.serviceId}`,
         `lifecycle: ${record.lifecycle}`,
+        `health: ${serviceHealthText(health)}`,
         `launchSource: ${record.launchSource} (template v${record.templateVersion})`,
         `lastControl: ${serviceControlLabel(record.lastControl)}`,
         ...(record.startedAt !== undefined ? [`startedAt: ${record.startedAt}`] : []),

@@ -62,6 +62,7 @@ import { tcpObservation } from "./service-linkage.js";
 import type { SdkAgentServiceHost } from "./sdk-agent-tool-broker.js";
 import { scanTaskServiceImportHints } from "./service-import.js";
 import { publicServiceStartPreview, publicServiceStatus } from "./service-public.js";
+import { probeServiceHealth } from "./service-health-probe.js";
 import { declaredServicePorts } from "../main/service-config.js";
 import { TaskServiceTopology, attemptRunBookkeeping } from "./service-topology.js";
 import { TaskProtocolBinding } from "./protocol-binding.js";
@@ -1485,7 +1486,17 @@ async function performTaskOp(
             // reports the same uncertainty instead of a bare `stopped`.
             const uncertain = serviceOwnerStateRefusal(serviceRecord.serviceId);
             if (uncertain) return { ok: false, error: uncertain };
-            return { ok: true, payload: { service: publicServiceStatus(serviceRecord) } };
+            // [PiDock 04] (#7 box 5) the declared 健康检查 is really probed on
+            // this read: one bounded attempt against the PINNED revision's own
+            // target, only while the service's process is alive. A read cannot
+            // start/stop anything, and the probe's outcome never touches
+            // `lifecycle` - a dead process is still the only thing that makes
+            // `lifecycle` `stopped`.
+            const health = await probeServiceHealth({
+              healthCheck: serviceRecord.descriptor.healthCheck,
+              running: serviceRecord.lifecycle === "running",
+            });
+            return { ok: true, payload: { service: publicServiceStatus(serviceRecord, undefined, undefined, health) } };
           }
         }
         if (serviceOwnerInventory || process.env["PIDOCK_SERVICE_OWNER_REQUIRED"] === "1") {

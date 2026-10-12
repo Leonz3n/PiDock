@@ -285,7 +285,9 @@ describe.skipIf(process.platform === "win32")("#7 catalog-driven service executi
     expect(await f.run(second, "start")).toMatchObject({ serviceId: second, action: "start", actor: "human" });
 
     // (a) real process state, reported by the Host from the real children.
-    expect(await f.status(first)).toMatchObject({ serviceId: first, lifecycle: "running", launchSource: "catalog", health: "not-probed" });
+    // The bound template declares no 健康检查, so the health half of the row is
+    // `未声明` by name - never a pass, and never a probe of an invented target.
+    expect(await f.status(first)).toMatchObject({ serviceId: first, lifecycle: "running", launchSource: "catalog", health: { state: "undeclared" } });
     expect(await f.status(second)).toMatchObject({ lifecycle: "running" });
 
     // (b) real, bounded, redacted output of the running children.

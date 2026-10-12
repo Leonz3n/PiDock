@@ -26,6 +26,7 @@ import {
   type ServiceGroupDiagnosticView,
   type ServiceGroupRunView,
   type ServiceGroupUnitView,
+  type ServiceHealthView,
   type ServiceRunRecordView,
   type ServiceStatusView,
   type ServiceRegistryStatusView,
@@ -137,11 +138,38 @@ function statusText(row: BoundServiceRow): string {
     const text = SERVICE_STATE_TEXT.owner[status.state] ?? status.state;
     return status.executionAvailable ? text : `${text} · Host 未接管进程`;
   }
-  // `lifecycle` is process liveness only; the Host never reports a
-  // reachability probe as health, so the row states that it was not probed
-  // instead of implying a passing health check.
-  const health = status.health === "not-probed" ? " · 健康未探测" : "";
-  return `${SERVICE_STATE_TEXT.registry[status.lifecycle] ?? status.lifecycle} · 配方 v${status.templateVersion} · ${status.resolvedKeys.length} 项环境变量${health}${controlText(status)}`;
+  // `lifecycle` is process liveness only. The declared 健康检查's observed
+  // state rides beside it ([PiDock 04] #7 box 5): the row states the named
+  // result of the Host's bounded probe, so a failed probe never reads as a
+  // dead process (nor a live one as healthy).
+  return `${SERVICE_STATE_TEXT.registry[status.lifecycle] ?? status.lifecycle} · 配方 v${status.templateVersion} · ${status.resolvedKeys.length} 项环境变量${healthText(status)}${controlText(status)}`;
+}
+
+/** One Chinese name per health state; the Agent's `service.status` text repeats them verbatim. */
+const HEALTH_STATE_TEXT: Record<ServiceHealthView["state"], string> = {
+  healthy: "健康正常",
+  unhealthy: "健康异常",
+  "not-probed": "健康未探测",
+  undeclared: "未声明健康检查",
+};
+
+const HEALTH_KIND_TEXT: Record<NonNullable<ServiceHealthView["kind"]>, string> = { http: "HTTP", tcp: "TCP", grpc: "gRPC" };
+
+/**
+ * The observed health of one service, as the row shows it: the named state, the
+ * facts the probe really observed (the real HTTP code or kind, the real elapsed
+ * ms) and - whenever it is not a pass - the Host's own named reason. A Host that
+ * reports no health field at all says so instead of implying a pass.
+ */
+function healthText(status: ServiceRegistryStatusView): string {
+  const health = status.health;
+  if (!health) return " · 健康未读取（Host 未报告健康字段）";
+  const facts: string[] = [];
+  if (health.kind === "http" && health.statusCode !== undefined) facts.push(`HTTP ${String(health.statusCode)}`);
+  else if (health.kind !== undefined) facts.push(HEALTH_KIND_TEXT[health.kind]);
+  if (health.elapsedMs !== undefined) facts.push(`${String(health.elapsedMs)}ms`);
+  if (health.reason !== undefined) facts.push(health.reason);
+  return ` · ${HEALTH_STATE_TEXT[health.state]}${facts.length === 0 ? "" : `（${facts.join("，")}）`}`;
 }
 
 /**
@@ -1065,7 +1093,8 @@ function RunTool({ taskId }: { taskId: string }) {
               {load.rows.map((row) => {
                 const running = serviceRunning(row);
                 return (
-                  <li key={row.binding.serviceId} className="border border-line bg-paper px-2 py-1.5 text-[11px]" data-service-id={row.binding.serviceId}>
+                  <li key={row.binding.serviceId} className="border border-line bg-paper px-2 py-1.5 text-[11px]" data-service-id={row.binding.serviceId}
+                    data-service-health={row.status?.kind === "registry" ? row.status.health?.state ?? "unreported" : undefined}>
                     <div className="flex min-w-0 items-center gap-1.5">
                       <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${running ? "bg-accent" : "bg-line"}`} aria-hidden="true" />
                       <span className="truncate font-semibold">{serviceName(row)}</span>

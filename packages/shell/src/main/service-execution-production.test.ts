@@ -291,9 +291,10 @@ describe.skipIf(process.platform === "win32")("#7 production shell/serviceCatalo
     expect(alive(secondPid)).toBe(true);
     expect(firstPid).not.toBe(secondPid);
 
-    // Real process liveness, not a dependency-reachability probe: `health`
-    // stays `not-probed` while `lifecycle` follows the real child.
-    expect(await f.status(first)).toMatchObject({ serviceId: first, lifecycle: "running", launchSource: "catalog", health: "not-probed" });
+    // Real process liveness, not a dependency-reachability probe: the bound
+    // template declares no 健康检查, so the row says `未声明` by name while
+    // `lifecycle` follows the real child.
+    expect(await f.status(first)).toMatchObject({ serviceId: first, lifecycle: "running", launchSource: "catalog", health: { state: "undeclared" } });
     expect(await f.status(second)).toMatchObject({ lifecycle: "running" });
 
     // Real, bounded, redacted output captured from the running child.
@@ -541,7 +542,7 @@ describe.skipIf(process.platform === "win32")("#10 production shell/serviceCatal
       // pid only from its `listen` callback, on the declared port.
       await until(() => { try { return readFileSync(marker, "utf8") === String(pid); } catch { return false; } }, `the listening marker of svc-${tag}`);
       expect(units.find((unit) => unit["serviceId"] === serviceId)?.["pid"]).toBe(pid);
-      expect(await f.status(serviceId)).toMatchObject({ lifecycle: "running", launchSource: "catalog", health: "not-probed" });
+      expect(await f.status(serviceId)).toMatchObject({ lifecycle: "running", launchSource: "catalog", health: { state: "undeclared" } });
     }
     expect(new Set(children).size).toBe(2);
 
