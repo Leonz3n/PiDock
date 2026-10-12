@@ -27,6 +27,8 @@
 import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createServer as createHttpServer } from "node:http";
+import type { Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -98,6 +100,39 @@ function marker(taskDir: string, tag: string): string | undefined {
   try { return readFileSync(join(taskDir, "repo-a", `svc-${tag}`, `started-${tag}.txt`), "utf8"); } catch { return undefined; }
 }
 
+/**
+ * A real HTTP health listener on 127.0.0.1 for one declared 健康检查, counting
+ * the connections it really accepted (so "nothing was dialled", "exactly one
+ * attempt" and "the declared target was the one dialled" are observed facts).
+ * Closed by the suite's own cleanup on every exit path.
+ */
+interface HealthListener {
+  readonly port: number;
+  readonly connections: number;
+  close(): Promise<void>;
+}
+
+async function httpHealthListener(): Promise<HealthListener> {
+  const server = createHttpServer((_request, response) => { response.writeHead(200, { "content-type": "text/plain" }); response.end("health"); });
+  const sockets = new Set<Socket>();
+  let connections = 0;
+  server.on("connection", (socket) => { connections += 1; sockets.add(socket); socket.on("close", () => sockets.delete(socket)); });
+  server.on("clientError", () => {});
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (address === null || typeof address === "string") throw Error("no-bound-port");
+  const listener: HealthListener = {
+    port: address.port,
+    get connections() { return connections; },
+    close: async () => {
+      for (const socket of sockets) socket.destroy();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    },
+  };
+  cleanups.push(() => listener.close());
+  return listener;
+}
+
 /** The pid the marker file holds once the child wrote a complete positive integer. */
 function markerPid(taskDir: string, tag: string): number | undefined {
   const raw = marker(taskDir, tag);
@@ -119,7 +154,12 @@ interface Harness {
   call(tool: SdkAgentToolName, args: Record<string, unknown>, sessionId?: string): Promise<SdkAgentToolOutcome>;
 }
 
-async function harness(): Promise<Harness> {
+/** One optional 健康检查 the fixture's pinned template declares. */
+interface HarnessOptions {
+  healthCheck?: { kind: "http" | "tcp" | "grpc"; target?: string };
+}
+
+async function harness(options: HarnessOptions = {}): Promise<Harness> {
   vi.resetModules();
   const home = realpathSync(mkdtempSync(join(tmpdir(), "pidock-agent-service-")));
   cleanups.push(() => rmSync(home, { recursive: true, force: true }));
@@ -159,7 +199,8 @@ async function harness(): Promise<Harness> {
   const environmentId = catalog.createEnvironment({ projectId, name: "开发环境" }).environmentId;
   // The trusted launch main resolves for a task-bound service (program, pinned
   // argv, cwd, private refs): the Agent never supplies any of it.
-  const template = catalog.saveTemplate({ projectId, environmentId, descriptor: { name: "API a", program: "node", args: ["service.cjs"], ports: [], runType: "long-lived" },
+  const template = catalog.saveTemplate({ projectId, environmentId, descriptor: { name: "API a", program: "node", args: ["service.cjs"], ports: [], runType: "long-lived",
+    ...(options.healthCheck === undefined ? {} : { healthCheck: options.healthCheck }) },
     shared: [{ key: "SERVICE_GREETING", value: "hello-a", secret: false }, { key: "SERVICE_TAG", value: "a", secret: false }] });
   catalog.bindTask({ taskId, serviceId: template.serviceId, environmentId, templateVersion: 1, rootId: "repo-a", subdir: "svc-a",
     programPath: realpathSync(process.execPath), privateRefs: [{ key: "SERVICE_TOKEN", envRef: "LOCAL_TEST_TOKEN" }] });
@@ -419,6 +460,72 @@ it("reports process liveness and dependency reachability as two separate facts",
   expect(dead.text).toContain("lifecycle: stopped");
   expect(dead.text).toContain("dependency: port 127.0.0.1:9412 answered (reachability note only; process liveness stays stopped)");
   expect(dead.text).not.toContain("lifecycle: running");
+});
+
+it("tells the Agent the declared 健康检查's real state, and a failed probe never reads as a dead process", { timeout: 30_000 }, async () => {
+  const listener = await httpHealthListener();
+  const target = `http://127.0.0.1:${String(listener.port)}/health`;
+  const f = await harness({ healthCheck: { kind: "http", target } });
+  await f.host.setPermission("main", "auto");
+  await f.call("service.start", { serviceId: f.serviceId });
+  await until(() => markerPid(f.taskDir, "a") !== undefined, "the service child");
+  const pid = markerPid(f.taskDir, "a")!;
+
+  // A REAL pass, through the real gated read: the state, its name and the
+  // listener's own status code reach the model.
+  const healthy = await f.call("service.status", { serviceId: f.serviceId });
+  expect(healthy.outcome).toBe("ok");
+  expect(healthy.text).toContain("lifecycle: running");
+  expect(healthy.text).toContain("health: healthy · 健康正常（HTTP 200");
+  expect(healthy.text).toContain(`目标 ${target}`);
+  expect(listener.connections).toBeGreaterThanOrEqual(1);
+
+  // The declared target closes while the REAL child keeps running: the Agent is
+  // told the named failure, and liveness stays liveness.
+  await listener.close();
+  const unhealthy = await f.call("service.status", { serviceId: f.serviceId });
+  expect(unhealthy.text).toContain("lifecycle: running");
+  expect(unhealthy.text).toContain("health: unhealthy · 健康异常");
+  expect(unhealthy.text).toContain("连接被拒");
+  expect(unhealthy.text).not.toContain("health: healthy");
+  expect(alive(pid)).toBe(true);
+  // Nothing was started, stopped or restarted by the two reads above: the same
+  // real child, with the same recorded start, is still the one this service has.
+  expect(markerPid(f.taskDir, "a")).toBe(pid);
+  expect((await f.call("service.status", { serviceId: f.serviceId })).text).toContain("lifecycle: running");
+
+  // The health half is a READ: a read-only session still gets the same named
+  // state (no new gate, no new op, nothing to approve).
+  await f.host.setPermission("main", "read");
+  const readOnly = await f.call("service.status", { serviceId: f.serviceId });
+  expect(readOnly.outcome).toBe("ok");
+  expect(readOnly.text).toContain("health: unhealthy · 健康异常");
+
+  // A stopped service is never dialled: the state becomes a named 未探测.
+  await f.host.setPermission("main", "auto");
+  expect((await f.call("service.stop", { serviceId: f.serviceId })).outcome).toBe("ok");
+  await until(() => !alive(pid), "the service child to exit");
+  const stopped = await f.call("service.status", { serviceId: f.serviceId });
+  expect(stopped.text).toContain("lifecycle: stopped");
+  expect(stopped.text).toContain("health: not-probed · 健康未探测");
+  expect(stopped.text).toContain("服务未运行，不发起探测");
+  expect(stopped.text).not.toContain("health: healthy");
+});
+
+it("tells the Agent a declared gRPC check is not implemented here, never that it is healthy", { timeout: 30_000 }, async () => {
+  const f = await harness({ healthCheck: { kind: "grpc", target: "127.0.0.1:9" } });
+  await f.host.setPermission("main", "auto");
+  await f.call("service.start", { serviceId: f.serviceId });
+  await until(() => markerPid(f.taskDir, "a") !== undefined, "the service child");
+  const pid = markerPid(f.taskDir, "a")!;
+
+  const status = await f.call("service.status", { serviceId: f.serviceId });
+  expect(status.outcome).toBe("ok");
+  expect(status.text).toContain("lifecycle: running");
+  expect(status.text).toContain("health: not-probed · 健康未探测（grpc");
+  expect(status.text).toContain("gRPC 健康探测尚未接入");
+  expect(status.text).not.toContain("health: healthy");
+  expect(alive(pid)).toBe(true);
 });
 
 it("refuses an unknown or foreign service, a display-only registration, and any payload naming a program, path or port", { timeout: 30_000 }, async () => {
