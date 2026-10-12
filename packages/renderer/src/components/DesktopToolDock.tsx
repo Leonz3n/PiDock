@@ -1014,7 +1014,7 @@ function GroupStartControl({ taskId, projectId, onStarted }: {
     <section className="border-t border-line pt-2" data-testid="dock-group-control">
       <div className="flex min-w-0 flex-wrap items-center gap-1.5">
         <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => { void submit(); }}>整组启动</Button>
-        <span className="text-[10px] text-muted">按任务计划顺序启动本任务全部运行单元，先监听再互验</span>
+        <span className="text-[10px] text-muted">按任务计划顺序启动本任务全部运行单元，先监听；有依赖边才互验</span>
       </div>
       {result?.kind === "refused" && (
         <p role="alert" className="mt-1 min-w-0 break-words text-[10px] text-[#ad4545]" data-testid="dock-group-refusal">{result.error}</p>

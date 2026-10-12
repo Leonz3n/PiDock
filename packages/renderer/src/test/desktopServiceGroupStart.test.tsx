@@ -215,7 +215,11 @@ describe("[PiDock 05] #10 group start from the shipped 运行 panel", () => {
     const group = await realNoEdgeRun();
     expect(group.state).toBe("listening");
     groupBridge({ answer: () => ({ ok: true, payload: { group } }) });
-    await clickGroupStart();
+    const control = await clickGroupStart();
+    // The affordance's own copy is qualified the same way as the panel below it:
+    // the shipped plan carries no dependency edge, so 互验 is conditional and
+    // never promised by the button.
+    expect(control).toHaveTextContent("先监听；有依赖边才互验");
     const receipt = await screen.findByTestId("dock-group-run");
     // The plan has no call edge, so nothing was verified - and the panel says so
     // by name instead of showing 已互验.
@@ -278,6 +282,62 @@ describe("[PiDock 05] #10 group start from the shipped 运行 panel", () => {
     await clickGroupStart();
     expect(await screen.findByTestId("dock-group-refusal")).toHaveTextContent("无法解析");
     expect(screen.queryByTestId("dock-group-run")).not.toBeInTheDocument();
+  });
+
+  it("refuses a green group declared beside an unobserved unit", async () => {
+    const group = await realGroupRun();
+    expect(group.state).toBe("verified");
+    // A contradictory payload: the Host's own `resolveGroupState` answers 未探测
+    // for a started unit nobody observed, so a parser that accepted this would
+    // print 已互验 over a unit that was never probed.
+    const contradictory = {
+      ...group,
+      units: group.units.map((unit) => {
+        if (unit.serviceId !== CALLEE_ID) return unit;
+        // The shape the real runner emits for a unit that declares no observable
+        // address: started, no address, 未探测. This payload claims 已互验 beside it.
+        const unobserved = { ...unit, listening: "not-probed" as const };
+        delete unobserved.address;
+        return unobserved;
+      }),
+    };
+    groupBridge({ answer: () => ({ ok: true, payload: { group: contradictory } }) });
+    await clickGroupStart();
+    expect(await screen.findByTestId("dock-group-refusal")).toHaveTextContent("Host 整组启动回执无法解析（不展示任何状态）");
+    expect(screen.queryByTestId("dock-group-run")).not.toBeInTheDocument();
+  });
+
+  it("refuses a green group declared beside a step nobody probed", async () => {
+    const group = await realGroupRun();
+    expect(group.state).toBe("verified");
+    // Same contradiction for a STEP: 已互验 requires every step to be a real
+    // observation, so a step that was never probed disqualifies the whole group.
+    const unprobedStep = { label: "准备步骤完成检查 invoice-api", kind: "readiness", targetUnitId: CALLEE_UNIT, targetServiceId: CALLEE_ID,
+      outcome: "not-probed" as const, detail: "准备步骤「invoice-api」未探测" };
+    const contradictory = {
+      ...group,
+      units: group.units.map((unit) => unit.serviceId === CALLEE_ID ? { ...unit, steps: [unprobedStep] } : unit),
+    };
+    groupBridge({ answer: () => ({ ok: true, payload: { group: contradictory } }) });
+    await clickGroupStart();
+    expect(await screen.findByTestId("dock-group-refusal")).toHaveTextContent("Host 整组启动回执无法解析（不展示任何状态）");
+    expect(screen.queryByTestId("dock-group-run")).not.toBeInTheDocument();
+  });
+
+  it("still parses every REAL group payload the Host's runner emits", async () => {
+    // The `not-probed` contradiction guard is defence in depth: no real emission
+    // contains an unobserved unit or step in a passing group, so every real
+    // payload must keep parsing to the SAME state it had before.
+    const real = [
+      await realGroupRun(),
+      await realNoEdgeRun(),
+      await realGroupRun({ start: { [CALLEE_ID]: "refused" } }),
+      await realGroupRun({ start: { [CALLEE_ID]: "start-failed" } }),
+      await realGroupRun({ noAddressFor: CALLEE_ID }),
+      await realNonObservableRun(),
+    ];
+    expect(real.map((group) => group.state)).toEqual(["verified", "listening", "refused", "start-failed", "not-probed", "not-probed"]);
+    expect(real.map((group) => serviceGroupRunFromHost({ group })?.state)).toEqual(["verified", "listening", "refused", "start-failed", "not-probed", "not-probed"]);
   });
 
   it("names the absence of a group result instead of implying a run", async () => {
