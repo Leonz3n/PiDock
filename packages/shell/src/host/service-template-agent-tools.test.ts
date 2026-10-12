@@ -434,6 +434,32 @@ it("refuses an approval whose document moved before the confirmation was spent",
   expect(JSON.parse(f.document()).revisions).toHaveLength(3);
 });
 
+it("fails closed with nothing written when the pin is adopted to a newer revision between the review and the approval", { timeout: 30_000 }, async () => {
+  const f = await harness();
+  const call = f.call(editArgs(f.serviceId, "hello-adopted"));
+  await until(() => f.host.listApprovals("main").some((row) => row.status === "pending"), "the confirmation");
+  const asked = pending(f);
+  expect(f.versions()).toEqual({ pinned: 1, latest: 1, otherPinned: 1 });
+  // The page edits the shared template AND adopts the new revision for THIS task
+  // while the confirmation is parked. The pin is now the latest again, so the pin
+  // alone no longer tells the apply leg that the reviewed base moved: the write
+  // would take v2 (with the row the page added there) as its base and drop it.
+  f.catalog.saveTemplate({ projectId: f.projectId, environmentId: f.environmentId, serviceId: f.serviceId, expectedVersion: 1,
+    descriptor: { name: "API a", program: "node", args: ["service.cjs"], ports: [], runType: "long-lived" },
+    shared: [{ key: "SERVICE_GREETING", value: "hello-human", secret: false }, { key: "SERVICE_PAGE_ROW", value: "kept", secret: false }] });
+  f.catalog.adoptTaskBinding({ projectId: f.projectId, taskId: f.taskId, serviceId: f.serviceId, templateVersion: 2 });
+  const afterPage = f.document();
+  expect(f.versions()).toEqual({ pinned: 2, latest: 2, otherPinned: 1 });
+
+  f.host.approve("main", asked.id);
+  // The pin the user confirmed the diff against is gone: refused by name, and
+  // NOTHING lands - v2 and its page-added row survive byte-identically.
+  expect(await call).toMatchObject({ outcome: "refused", code: "tool-refused:template-version-conflict" });
+  expect(f.document()).toBe(afterPage);
+  expect(f.versions()).toEqual({ pinned: 2, latest: 2, otherPinned: 1 });
+  expect(JSON.parse(f.document()).revisions).toHaveLength(3);
+});
+
 it("cannot spend an auto-minted confirmation after the session tier changed", { timeout: 30_000 }, async () => {
   const f = await harness();
   f.host.setPermission("main", "auto");

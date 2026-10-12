@@ -378,6 +378,13 @@ export function performServiceCatalogOperation(
  * writes through the identical store API the page path uses (`reviewTemplateUpdate`
  * -> `saveTemplate`) and cross-checks that the written revision is the reviewed
  * one. Main stays the only writer of the template document.
+ *
+ * A confirming call must also carry the pin MAIN derived for the review it
+ * continues (`reviewedPinnedVersion`): the page can re-pin this task to a newer
+ * revision between the diff it showed and the approval, and then the pin alone
+ * no longer tells the write that its base moved. That case is refused BY NAME
+ * before the review and before the save, so a confirmed diff can never be
+ * written onto a base the user never looked at.
  */
 export function performTaskBoundTemplateEdit(
   store: Pick<ServiceCatalog, "listTask" | "reviewTemplateUpdate" | "saveTemplate">,
@@ -388,11 +395,21 @@ export function performTaskBoundTemplateEdit(
     shared: ServiceTemplate["shared"];
     dependencies?: ServiceTemplateDependency[];
     confirm: boolean;
+    reviewedPinnedVersion?: number;
   },
 ): ServiceTemplateReview {
   const bound = store.listTask(input.taskId).find((row) => row.binding.serviceId === input.serviceId);
   if (!bound) throw new Error(`unknown-service: ${input.serviceId} 不是本任务绑定的服务`);
   const pinnedVersion = bound.binding.templateVersion;
+  // The continuation check, before the review and before the save: a write only
+  // continues the review the user confirmed, so a pin that moved in between is a
+  // named refusal with nothing read for a write and nothing written.
+  if (input.confirm) {
+    if (input.reviewedPinnedVersion === undefined) throw new Error("invalid-payload: 共享模板写入必须带上复核时的绑定版本");
+    if (input.reviewedPinnedVersion !== pinnedVersion) {
+      throw new Error(`template-version-conflict: 复核时的绑定版本（v${String(input.reviewedPinnedVersion)}）已不是本任务当前钉住的版本（v${String(pinnedVersion)}），未写入任何内容`);
+    }
+  }
   const edit = { projectId: bound.binding.projectId, environmentId: bound.binding.environmentId, serviceId: input.serviceId,
     expectedVersion: pinnedVersion, descriptor: input.descriptor, shared: input.shared,
     ...(input.dependencies === undefined ? {} : { dependencies: input.dependencies }) };
@@ -443,9 +460,10 @@ function namedTemplateRefusal(reason: string): string {
  * and reaches no store call.
  *
  * Each operation derives the binding pin for THIS call, so an `apply` never
- * treats the earlier review's answer as the write's authority: a template that
- * moved between the review and the confirmation fails closed by name instead of
- * overwriting the newer revision.
+ * treats the earlier review's answer as the write's authority: a pin the page
+ * adopted since the review, and a template that moved between the review and the
+ * confirmation, both fail closed by name instead of overwriting the newer
+ * revision.
  */
 export function createServiceTemplateHandler(
   store: Pick<ServiceCatalog, "listTask" | "reviewTemplateUpdate" | "saveTemplate">,
@@ -466,6 +484,7 @@ export function createServiceTemplateHandler(
         shared: request.edit.shared as ServiceTemplate["shared"],
         ...(request.edit.dependencies === undefined ? {} : { dependencies: request.edit.dependencies as ServiceTemplateDependency[] }),
         confirm: request.op === "apply",
+        ...(request.op === "apply" ? { reviewedPinnedVersion: request.reviewedPinnedVersion } : {}),
       }) };
     } catch (error) {
       return { ok: false, error: namedTemplateRefusal(error instanceof Error ? error.message : String(error)) };
