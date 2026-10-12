@@ -444,7 +444,7 @@ export function RuntimePanel({
                   : service.runRecord.portsSource === "observed"
                     ? `${service.runRecord.ports.join(", ")}（实测监听）`
                     : service.runRecord.portsSource === "declared"
-                      ? `${service.runRecord.ports.join(", ")}（声明值，未实测监听）`
+                      ? `${service.runRecord.ports.join(", ")}（声明端口，未实测监听）`
                       : `${service.runRecord.ports.join(", ")}（来源未标注）`
               }
             />
