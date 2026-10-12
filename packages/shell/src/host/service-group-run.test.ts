@@ -66,6 +66,10 @@ function harness(input: {
       units: input.units,
       assignments: input.units.map((u, index) => ({ unitId: u.unitId, serviceId: u.serviceId, port: 4000 + index, instanceId: `task-1/${u.serviceId}` })),
       reallocated: input.reallocated ?? [],
+      // No HOST-side planning diagnostics in this stub harness. The real
+      // `TaskServiceTopology` carries them (the read-point audit among them), and
+      // `service-binding-readpoints.test.ts` asserts they reach the group answer.
+      diagnostics: [],
     }),
     plannedDependencies: () => dependencies,
     runs: () => runs,
