@@ -19,9 +19,11 @@
  *
  * - `review` computes the real row-level diff from the persisted document and
  *   writes NOTHING;
- * - `apply` re-derives the same pin and writes through the existing two-step
- *   (`reviewTemplateUpdate` -> `saveTemplate`), failing closed by name when the
- *   document moved since the review.
+ * - `apply` carries back the pin MAIN derived for that review (a main-derived
+ *   fact the Host echoes, never a value the model named) and re-derives the same
+ *   pin, so the write fails closed by name when the task's pin moved between the
+ *   shown diff and the confirmation, and again when the document itself moved
+ *   since the review (`reviewTemplateUpdate` -> `saveTemplate`).
  *
  * The envelope is key-exact and size-bounded so a smuggled `projectId`,
  * `environmentId`, `expectedVersion` or path is a refusal, not a hint.
@@ -79,7 +81,13 @@ export type ServiceTemplateEditResult = { ok: true; review: ServiceTemplateRevie
  */
 export interface ServiceTemplateEditPort {
   review(edit: ServiceTemplateEditContent): Promise<ServiceTemplateEditResult>;
-  apply(edit: ServiceTemplateEditContent): Promise<ServiceTemplateEditResult>;
+  /**
+   * The confirmed write. `reviewedPinnedVersion` is the `pinnedVersion` MAIN
+   * derived for the review this confirmation belongs to: the caller echoes a
+   * main-derived fact, so main can refuse BY NAME when the pin moved since the
+   * diff the user saw instead of building the write on a base nobody confirmed.
+   */
+  apply(edit: ServiceTemplateEditContent, reviewedPinnedVersion: number): Promise<ServiceTemplateEditResult>;
 }
 
 export type ServiceTemplateRequestHandler = (params: ServiceTemplateRequestParams) => Promise<ServiceTemplateRequestResult>;
@@ -89,6 +97,13 @@ export interface ServiceTemplateRequestParams {
   taskId: string;
   op: "review" | "apply";
   edit: ServiceTemplateEditContent;
+  /**
+   * Required on `apply`, absent on `review`: the pin main derived for the review
+   * the confirmation belongs to, echoed back by the Host. Main compares it with
+   * the pin IT derives for the write, so the field can only ever narrow - a
+   * stale, missing or smuggled number refuses a write, it never retargets one.
+   */
+  reviewedPinnedVersion?: number;
 }
 
 export interface ServiceTemplateRequest {
@@ -158,12 +173,20 @@ export function isServiceTemplateRequest(value: unknown): value is ServiceTempla
   const id = value["id"];
   if (typeof id !== "string" || id.length === 0 || id.length > MAX_ENVELOPE_ID_CHARS) return false;
   const params = value["params"];
-  if (!isRecord(params) || Object.keys(params).sort().join(",") !== "edit,op,taskId,workspaceId") return false;
+  if (!isRecord(params)) return false;
   for (const key of ["workspaceId", "taskId"] as const) {
     const field = params[key];
     if (typeof field !== "string" || field.length === 0 || field.length > MAX_IDENTITY_CHARS) return false;
   }
-  if (params["op"] !== "review" && params["op"] !== "apply") return false;
+  // Key-exact PER OPERATION: a `review` names no version at all, and an `apply`
+  // must carry the pin the review derived - never a requester's own expectation.
+  if (params["op"] === "review") {
+    if (Object.keys(params).sort().join(",") !== "edit,op,taskId,workspaceId") return false;
+  } else if (params["op"] === "apply") {
+    if (Object.keys(params).sort().join(",") !== "edit,op,reviewedPinnedVersion,taskId,workspaceId") return false;
+    const reviewed = params["reviewedPinnedVersion"];
+    if (!Number.isSafeInteger(reviewed) || (reviewed as number) < 1) return false;
+  } else return false;
   return isServiceTemplateEdit(params["edit"]);
 }
 
@@ -224,11 +247,11 @@ export class ServiceTemplateRequestClient implements ServiceTemplateEditPort {
   }
 
   review(edit: ServiceTemplateEditContent): Promise<ServiceTemplateEditResult> {
-    return this.send("review", edit);
+    return this.send({ workspaceId: this.workspaceId, taskId: this.taskId, op: "review", edit });
   }
 
-  apply(edit: ServiceTemplateEditContent): Promise<ServiceTemplateEditResult> {
-    return this.send("apply", edit);
+  apply(edit: ServiceTemplateEditContent, reviewedPinnedVersion: number): Promise<ServiceTemplateEditResult> {
+    return this.send({ workspaceId: this.workspaceId, taskId: this.taskId, op: "apply", edit, reviewedPinnedVersion });
   }
 
   dispose(): void {
@@ -240,13 +263,15 @@ export class ServiceTemplateRequestClient implements ServiceTemplateEditPort {
     }
   }
 
-  private send(op: "review" | "apply", edit: ServiceTemplateEditContent): Promise<ServiceTemplateEditResult> {
+  private send(params: ServiceTemplateRequestParams): Promise<ServiceTemplateEditResult> {
     const id = `template-${++this.sequence}`;
-    const request: ServiceTemplateRequest = { kind: "service-template-request", id, params: { workspaceId: this.workspaceId, taskId: this.taskId, op, edit } };
+    const request: ServiceTemplateRequest = { kind: "service-template-request", id, params };
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        resolve({ ok: false, error: `template-timeout: 主进程未在 ${this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS}ms 内完成共享模板操作` });
+        // Main may have written before it went silent: this answer states that
+        // the disk state was NOT observed instead of implying nothing landed.
+        resolve({ ok: false, error: `template-timeout: 主进程未在 ${this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS}ms 内返回共享模板操作结果，本次是否已落盘未探测（请重新读取共享模板后再决定）` });
       }, this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
       this.pending.set(id, { resolve, timer });
       try {

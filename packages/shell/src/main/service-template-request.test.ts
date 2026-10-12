@@ -70,7 +70,7 @@ it("derives project, environment and expected version from the task's own bindin
   // A review writes nothing at all: the bytes are identical.
   expect(f.document()).toBe(before);
 
-  const applied = await f.handler(f.envelope({ op: "apply" }).params);
+  const applied = await f.handler(f.envelope({ op: "apply", reviewedPinnedVersion: 1 }).params);
   expect(applied).toMatchObject({ ok: true, payload: { saved: true, version: 2, pinnedVersion: 1 } });
   expect(f.document()).not.toBe(before);
   expect(f.revisions().at(-1)).toMatchObject({ serviceId: f.serviceId, environmentId: f.environmentId, version: 2 });
@@ -104,14 +104,44 @@ it("fails closed by name when the pinned version is no longer the latest revisio
     descriptor: DESCRIPTOR, shared: [{ key: "SERVICE_GREETING", value: "hello-human", secret: false }] });
   const before = f.document();
   // Both operations derive the pin afresh, so neither the review nor the write
-  // can act on a document this task is no longer pinned to.
-  for (const op of ["review", "apply"] as const) {
-    const result = await f.handler(f.envelope({ op }).params);
+  // can act on a document this task is no longer pinned to. The apply carries the
+  // pin the review derived (still this task's pin), so what refuses it is the
+  // document, not the pin.
+  for (const params of [{ op: "review" }, { op: "apply", reviewedPinnedVersion: 1 }] as const) {
+    const result = await f.handler(f.envelope(params).params);
     expect(result.ok).toBe(false);
     expect(result.ok ? "" : result.error).toContain("template-version-conflict:");
   }
   expect(f.document()).toBe(before);
   expect(f.versions()).toEqual({ pinned: 1, latest: 2 });
+});
+
+it("refuses an apply whose reviewed pin is no longer this task's pin, writing nothing", async () => {
+  const f = fixture();
+  // Both moves the page can make while the confirmation is parked: a newer
+  // revision, then this task's pin adopted to it. The review the user confirmed
+  // was derived against v1, and v1 is not what the write would build on.
+  f.catalog.saveTemplate({ projectId: f.projectId, environmentId: f.environmentId, serviceId: f.serviceId, expectedVersion: 1,
+    descriptor: { name: "API a", program: "node", args: ["service.cjs"], ports: [], runType: "long-lived" },
+    shared: [{ key: "SERVICE_GREETING", value: "hello-human", secret: false }, { key: "SERVICE_PAGE_ROW", value: "kept", secret: false }] });
+  f.catalog.adoptTaskBinding({ projectId: f.projectId, taskId: TASK_ID, serviceId: f.serviceId, templateVersion: 2 });
+  const before = f.document();
+  // Without the pin on the request the write is refused as malformed, never
+  // applied with a pin the Host guessed: main derives the pin and only then
+  // compares it with the reviewed one.
+  const missing = await f.handler(f.envelope({ op: "apply" }).params);
+  expect(missing).toMatchObject({ ok: false, error: "invalid-payload: 共享模板写入必须带上复核时的绑定版本" });
+  expect(f.document()).toBe(before);
+
+  const result = await f.handler(f.envelope({ op: "apply", reviewedPinnedVersion: 1 }).params);
+  expect(result.ok).toBe(false);
+  expect(result.ok ? "" : result.error).toMatch(/^template-version-conflict: /);
+  expect(result.ok ? "" : result.error).toContain("v1");
+  expect(result.ok ? "" : result.error).toContain("v2");
+  // Byte-identical: the page's own v2 and the row it added there survive.
+  expect(f.document()).toBe(before);
+  expect(f.versions()).toEqual({ pinned: 2, latest: 2 });
+  expect(f.revisions()).toHaveLength(2);
 });
 
 it("refuses a smuggled project/environment/version/task/path in the envelope or the edit", async () => {
@@ -127,6 +157,19 @@ it("refuses a smuggled project/environment/version/task/path in the envelope or 
   }
   expect(f.document()).toBe(before);
   expect(f.versions()).toEqual({ pinned: 1, latest: 1 });
+});
+
+it("carries the reviewed pin only on a write, and only as a real version number", async () => {
+  const f = fixture();
+  // The reviewed pin is a MAIN-derived fact the Host echoes back, never a
+  // caller's expectation: a `review` that claims one, an `apply` without one and
+  // an `apply` that names something other than a version are all refused by the
+  // envelope guard itself, before any handler runs.
+  expect(isServiceTemplateRequest(f.envelope({ reviewedPinnedVersion: 1 }))).toBe(false);
+  expect(isServiceTemplateRequest(f.envelope({ op: "apply" }))).toBe(false);
+  expect(isServiceTemplateRequest(f.envelope({ op: "apply", reviewedPinnedVersion: 0 }))).toBe(false);
+  expect(isServiceTemplateRequest(f.envelope({ op: "apply", reviewedPinnedVersion: "1" as never }))).toBe(false);
+  expect(isServiceTemplateRequest(f.envelope({ op: "apply", reviewedPinnedVersion: 1 }))).toBe(true);
 });
 
 it("refuses an edit that is not the bounded shared-template shape", async () => {
@@ -152,7 +195,7 @@ it("refuses a value the store would not accept, naming the store's own reason an
   const before = f.document();
   // A descriptor the store refuses (a program path is not portable) is the
   // store's named refusal carried back under the payload code; nothing lands.
-  const request = f.envelope({ op: "apply" }, { descriptor: { ...DESCRIPTOR, program: "/bin/sh" } });
+  const request = f.envelope({ op: "apply", reviewedPinnedVersion: 1 }, { descriptor: { ...DESCRIPTOR, program: "/bin/sh" } });
   expect(isServiceTemplateRequest(request)).toBe(true);
   const result = await f.handler(request.params);
   expect(result.ok).toBe(false);

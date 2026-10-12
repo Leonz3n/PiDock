@@ -997,10 +997,12 @@ export class SdkAgentToolBroker {
    *   The tool's kind is `command` and the gate carries a name-scoped rule, so it
    *   asks under `default` AND under `auto`: a refused, cancelled or expired
    *   confirmation performs no write at all and leaves the document identical;
-   * - the write itself happens only in `apply`, which re-derives the same pin and
-   *   fails closed by name when the document moved since the review. A template
-   *   edit starts, stops and restarts nothing: the answer says so instead of
-   *   implying a restart.
+   * - the write itself happens only in `apply`, which re-derives the same pin,
+   *   is handed the pin MAIN derived for the review this confirmation names (an
+   *   echoed main-derived fact, never a value the model named), and fails closed
+   *   by name when that pin moved or the document moved since the review. A
+   *   template edit starts, stops and restarts nothing: the answer says so
+   *   instead of implying a restart.
    */
   private async performTemplateTool(input: {
     sessionId: string;
@@ -1034,11 +1036,15 @@ export class SdkAgentToolBroker {
       version: versionOf([input.spec.name, target, String(review.pinnedVersion), String(review.version),
         JSON.stringify(review.diff), review.descriptorChanged, review.dependenciesChanged, JSON.stringify(edit.shared), JSON.stringify(edit.dependencies ?? null)]),
       effect: async () => {
-        const applied = await templates.apply(edit);
+        const applied = await templates.apply(edit, review.pinnedVersion);
         if (!applied.ok) return templateRefusal(applied.error);
         if (applied.review.serviceId !== review.serviceId || applied.review.version !== review.version) {
+          // Never reached through this contract: main refuses BEFORE the write
+          // when the pin or the document moved since the review. If main ever
+          // mints a revision other than the confirmed one, say what happened -
+          // an unconfirmed write landed - instead of claiming it was refused.
           return refuse("tool-refused:template-version-conflict",
-            `确认的共享模板版本（v${review.version}）与实际写入的版本（v${applied.review.version}）不一致，本次写入已拒绝`);
+            `确认的共享模板版本（v${review.version}）与实际写入的版本（v${applied.review.version}）不一致，该写入已落盘（请重新读取共享模板）`);
         }
         return { outcome: "ok", text: templateReviewText(applied.review) };
       },
