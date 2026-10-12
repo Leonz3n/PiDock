@@ -77,7 +77,7 @@ describe("[UI 对齐] S8d production 运行 panel reads the Host run record", ()
     const emitted = Object.keys(payload.records[0] as unknown as Record<string, unknown>);
     expect(emitted.length).toBeGreaterThan(0);
     expect(emitted.every((key) => (RUN_RECORD_KEYS as readonly string[]).includes(key))).toBe(true);
-    expect(runRecordsFromHost(payload)?.get(SERVICE_ID)).toMatchObject({ runId: "run-1", portsSource: "declared" });
+    expect(runRecordsFromHost(payload, "task-1")?.get(SERVICE_ID)).toMatchObject({ runId: "run-1", portsSource: "declared" });
 
     bridgeWithRunRecords({ ok: true, payload });
     render(<DesktopToolDock taskId="task-1" tool="runtime" onClose={() => {}} />);
@@ -144,6 +144,17 @@ describe("[UI 对齐] S8d production 运行 panel reads the Host run record", ()
     render(<DesktopToolDock taskId="task-1" tool="runtime" onClose={() => {}} />);
     const error = await screen.findByTestId("dock-run-record-error");
     expect(error).toHaveTextContent("Host 运行记录响应无法解析");
+    expect(screen.queryByTestId("dock-run-record")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("dock-run-record-absent")).not.toBeInTheDocument();
+    expect(screen.queryByText(/（实测监听）/)).not.toBeInTheDocument();
+  });
+
+  it("refuses a foreign-task run even when its service ID matches the binding", async () => {
+    const payload = realRunRecordsPayload({ portsSource: "observed" });
+    const foreign = { ...payload.records[0]!, taskId: "task-2", instanceId: `task-2/${SERVICE_ID}@4100` };
+    bridgeWithRunRecords({ ok: true, payload: { ...payload, records: [foreign] } });
+    render(<DesktopToolDock taskId="task-1" tool="runtime" onClose={() => {}} />);
+    expect(await screen.findByTestId("dock-run-record-error")).toHaveTextContent("Host 运行记录响应无法解析");
     expect(screen.queryByTestId("dock-run-record")).not.toBeInTheDocument();
     expect(screen.queryByTestId("dock-run-record-absent")).not.toBeInTheDocument();
     expect(screen.queryByText(/（实测监听）/)).not.toBeInTheDocument();

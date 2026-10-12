@@ -78,33 +78,43 @@ describe("[UI 对齐] S8d task service parsers", () => {
       logRef: "/tmp/task-1/services/svc/run-run-1.log", startedAt: "2026-10-08T00:00:00.000Z",
       verifications: [{ kind: "linkage", detail: "联通检查 shipment-service", ok: true, at: "2026-10-08T00:00:01.000Z" }],
     };
-    const parsed = runRecordsFromHost({ records: [record], registered: [] });
+    const parsed = runRecordsFromHost({ records: [record], registered: [] }, "task-1");
     expect(parsed?.get(SERVICE_ID)).toEqual({
       runId: "run-1", templateVersion: "v1", codeState: "uncommitted", codeCommit: "abc1234",
       buildFreshness: "uncommitted-code", ports: [53101], portsSource: "declared",
       processIdentity: { owner: "agent", pid: 4242, startedAt: "2026-10-08T00:00:00.000Z" },
       logRef: "/tmp/task-1/services/svc/run-run-1.log", startedAt: "2026-10-08T00:00:00.000Z",
     });
+    expect(runRecordsFromHost({ records: [{ ...record, protocolArtifact: { version: "v2" } }] }, "task-1")?.get(SERVICE_ID)).toMatchObject({ runId: "run-1" });
     // Nothing was verified about this record: the missing pid must not be
     // invented, and the record for another service is simply absent here.
     expect(parsed?.get("s-99999999-9999-9999-9999-999999999999")).toBeUndefined();
     // The latest row for a service wins (`runs()` is push order).
-    const restarted = { ...record, runId: "run-2", ports: [53102], portsSource: "observed" };
-    expect(runRecordsFromHost({ records: [record, restarted] })?.get(SERVICE_ID)).toMatchObject({ runId: "run-2", ports: [53102], portsSource: "observed" });
+    const restarted = { ...record, runId: "run-2", ports: [53102], instanceId: `task-1/${SERVICE_ID}@53102`, portsSource: "observed" };
+    expect(runRecordsFromHost({ records: [record, restarted] }, "task-1")?.get(SERVICE_ID)).toMatchObject({ runId: "run-2", ports: [53102], portsSource: "observed" });
   });
 
   it("refuses a malformed run-record payload as a whole instead of hiding the bad row", () => {
     const base = {
-      runId: "run-1", serviceId: SERVICE_ID, templateVersion: "v1",
+      runId: "run-1", taskId: "task-1", serviceId: SERVICE_ID, instanceId: `task-1/${SERVICE_ID}@53101`, templateVersion: "v1",
       codeState: { kind: "unknown", note: "缺少提交信息，无法判断代码状态" }, buildFreshness: "unknown",
       ports: [53101], portsSource: "declared",
       processIdentity: { owner: "human", pid: 4242, startedAt: "2026-10-08T00:00:00.000Z" },
       logRef: "/tmp/task-1/svc/run-run-1.log", startedAt: "2026-10-08T00:00:00.000Z", verifications: [],
     };
     // An empty answer is readable and simply has no record; it is NOT a refusal.
-    expect(runRecordsFromHost({ records: [] })?.size).toBe(0);
-    expect(runRecordsFromHost({ registered: [] })).toBeNull();
+    expect(runRecordsFromHost({ records: [] }, "task-1")?.size).toBe(0);
+    expect(runRecordsFromHost({ registered: [] }, "task-1")).toBeNull();
     for (const bad of [
+      { ...base, ports: [53102] },
+      { ...base, instanceId: `task-2/${SERVICE_ID}@53101` },
+      { ...base, codeState: { kind: "unknown", note: 42 } },
+      { ...base, codeState: { kind: "unknown" } },
+      { ...base, verifications: [{ kind: "other", detail: "x", ok: true, at: "2026-10-08T00:00:01.000Z" }] },
+      { ...base, verifications: [{ kind: "linkage", detail: "x", ok: true, at: 42 }] },
+      { ...base, verifications: [{ kind: "linkage", detail: "x", ok: true }] },
+      { ...base, protocolArtifact: { version: 42 } },
+      { ...base, protocolArtifact: { version: "" } },
       { ...base, portsSource: "guessed" },
       { ...base, codeState: { kind: "teleporting" } },
       { ...base, buildFreshness: "maybe" },
@@ -115,10 +125,10 @@ describe("[UI 对齐] S8d task service parsers", () => {
       { ...base, unexpected: true },
       "run-1",
     ]) {
-      expect(runRecordsFromHost({ records: [bad] })).toBeNull();
+      expect(runRecordsFromHost({ records: [bad] }, "task-1")).toBeNull();
     }
     // One bad row fails the whole read rather than being skipped for a valid sibling.
-    expect(runRecordsFromHost({ records: [base, { ...base, runId: 7 }] })).toBeNull();
+    expect(runRecordsFromHost({ records: [base, { ...base, runId: 7 }] }, "task-1")).toBeNull();
   });
 
   it("reads the task's own association row and refuses an inconsistent project link", () => {

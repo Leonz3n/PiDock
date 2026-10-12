@@ -295,7 +295,7 @@ function boundedText(value: unknown, max: number): string | undefined | null {
  * a code state — a real run whose pid/start time nobody observed must not read
  * as one that was.
  */
-function runRecordFromHost(value: unknown): { serviceId: string; record: ServiceRunRecordView } | null {
+function runRecordFromHost(value: unknown, taskId: string): { serviceId: string; record: ServiceRunRecordView } | null {
   if (!isRecord(value)) return null;
   if (Object.keys(value).some((key) => !(RUN_RECORD_KEYS as readonly string[]).includes(key))) return null;
   const runId = value["runId"];
@@ -303,11 +303,13 @@ function runRecordFromHost(value: unknown): { serviceId: string; record: Service
   const templateVersion = value["templateVersion"];
   if (typeof runId !== "string" || runId.length === 0 || runId.length > 200) return null;
   if (typeof serviceId !== "string" || serviceId.length === 0) return null;
+  if (value["taskId"] !== taskId) return null;
   if (typeof templateVersion !== "string" || templateVersion.length > 200) return null;
   const code = value["codeState"];
   if (!isRecord(code) || Object.keys(code).some((key) => !RUN_CODE_KEYS.includes(key))) return null;
   const codeState = RUN_CODE_STATES.find((candidate) => candidate === code["kind"]);
   if (codeState === undefined) return null;
+  if (boundedText(code["note"], 2000) == null) return null;
   const codeCommit = boundedText(code["commit"], 200);
   if (codeCommit === null) return null;
   const buildFreshness = RUN_BUILD_FRESHNESS.find((candidate) => candidate === value["buildFreshness"]);
@@ -319,6 +321,7 @@ function runRecordFromHost(value: unknown): { serviceId: string; record: Service
     if (typeof port !== "number" || !Number.isInteger(port) || port < 0 || port > 65535) return null;
     ports.push(port);
   }
+  if (value["instanceId"] !== `${taskId}/${serviceId}${ports[0] === undefined ? "" : `@${ports[0]}`}`) return null;
   const source = value["portsSource"];
   if (source !== undefined && source !== "declared" && source !== "observed") return null;
   const process = value["processIdentity"];
@@ -347,10 +350,11 @@ function runRecordFromHost(value: unknown): { serviceId: string; record: Service
   if (!Array.isArray(rawVerifications) || rawVerifications.length > 64) return null;
   for (const entry of rawVerifications) {
     if (!isRecord(entry) || Object.keys(entry).some((key) => !RUN_VERIFICATION_KEYS.includes(key))) return null;
-    if (typeof entry["kind"] !== "string" || typeof entry["detail"] !== "string" || typeof entry["ok"] !== "boolean") return null;
+    if (entry["kind"] !== "linkage" && entry["kind"] !== "readiness" && entry["kind"] !== "remote-reachability") return null;
+    if (typeof entry["detail"] !== "string" || typeof entry["ok"] !== "boolean" || boundedText(entry["at"], 200) == null) return null;
   }
   const protocolArtifact = value["protocolArtifact"];
-  if (protocolArtifact !== undefined && (!isRecord(protocolArtifact) || Object.keys(protocolArtifact).sort().join(",") !== "version")) return null;
+  if (protocolArtifact !== undefined && (!isRecord(protocolArtifact) || Object.keys(protocolArtifact).sort().join(",") !== "version" || boundedText(protocolArtifact["version"], 200) == null)) return null;
   return {
     serviceId,
     record: {
@@ -374,13 +378,13 @@ function runRecordFromHost(value: unknown): { serviceId: string; record: Service
  * empty map means the Host answered and has no record for that service — the
  * panel must say so by name, never imply a run.
  */
-export function runRecordsFromHost(payload: unknown): Map<string, ServiceRunRecordView> | null {
+export function runRecordsFromHost(payload: unknown, taskId: string): Map<string, ServiceRunRecordView> | null {
   if (!isRecord(payload) || !Array.isArray(payload["records"])) return null;
   const rows = payload["records"];
   if (rows.length > 1000) return null;
   const byService = new Map<string, ServiceRunRecordView>();
   for (const row of rows) {
-    const parsed = runRecordFromHost(row);
+    const parsed = runRecordFromHost(row, taskId);
     if (parsed === null) return null;
     byService.set(parsed.serviceId, parsed.record);
   }
@@ -492,7 +496,7 @@ export async function loadTaskServices(taskId: string): Promise<TaskServicesLoad
   // A refused read and an unreadable payload are kept apart: one is the Host's
   // own refusal text, the other a named parse refusal. Both mean "the run record
   // could not be shown", never "there is no run".
-  const runRecords = runRecordsResult.ok ? runRecordsFromHost(runRecordsResult.payload) : null;
+  const runRecords = runRecordsResult.ok ? runRecordsFromHost(runRecordsResult.payload, taskId) : null;
   const runRecordsError = runRecordsResult.ok === false
     ? shellFailure(runRecordsResult, "读取运行记录失败")
     : runRecords === null
