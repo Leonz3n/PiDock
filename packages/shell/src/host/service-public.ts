@@ -1,6 +1,6 @@
 import { LAUNCH_VERIFICATION_TARGETS, hostPlatformLabel } from "../main/service-config.js";
 import { hostInstallationId } from "./installation-identity.js";
-import { unprobedServiceHealth, type ServiceHealthObservation } from "./service-health-probe.js";
+import { healthDetailOf, unprobedServiceHealth, type ServiceHealthObservation } from "./service-health-probe.js";
 import type { ServiceLaunchVerification, ServiceRecord, ServiceStartPlan } from "./service-runtime.js";
 
 /**
@@ -130,6 +130,7 @@ export function publicServiceStatus(
    */
   health: ServiceHealthObservation = unprobedServiceHealth(record.descriptor.healthCheck),
 ) {
+  const healthDetail = healthDetailOf(health);
   return {
     serviceId: record.serviceId,
     lifecycle: record.lifecycle,
@@ -147,9 +148,12 @@ export function publicServiceStatus(
      * running, no target is declared, or the kind has no implementation here),
      * `undeclared` when the pinned revision declares no check at all. A probe
      * failure is a statement about the TARGET, never about the process:
-     * `lifecycle` stays process liveness.
+     * `lifecycle` stays process liveness. `healthDetail` carries the facts the
+     * probe really observed (declared kind, declared target, real status code,
+     * real elapsed ms and bound, and the named reason of a non-pass).
      */
-    health,
+    health: health.state,
+    ...(healthDetail === undefined ? {} : { healthDetail }),
     /**
      * Who last started or stopped this service, and through which path
      * ([PiDock 04] #7 box 5): `human` is the explicit UI action carrying

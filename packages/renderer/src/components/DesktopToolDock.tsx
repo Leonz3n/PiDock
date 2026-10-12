@@ -26,7 +26,8 @@ import {
   type ServiceGroupDiagnosticView,
   type ServiceGroupRunView,
   type ServiceGroupUnitView,
-  type ServiceHealthView,
+  type ServiceHealthDetailView,
+  type ServiceHealthStateView,
   type ServiceRunRecordView,
   type ServiceStatusView,
   type ServiceRegistryStatusView,
@@ -146,14 +147,14 @@ function statusText(row: BoundServiceRow): string {
 }
 
 /** One Chinese name per health state; the Agent's `service.status` text repeats them verbatim. */
-const HEALTH_STATE_TEXT: Record<ServiceHealthView["state"], string> = {
+const HEALTH_STATE_TEXT: Record<ServiceHealthStateView, string> = {
   healthy: "健康正常",
   unhealthy: "健康异常",
   "not-probed": "健康未探测",
   undeclared: "未声明健康检查",
 };
 
-const HEALTH_KIND_TEXT: Record<NonNullable<ServiceHealthView["kind"]>, string> = { http: "HTTP", tcp: "TCP", grpc: "gRPC" };
+const HEALTH_KIND_TEXT: Record<NonNullable<ServiceHealthDetailView["kind"]>, string> = { http: "HTTP", tcp: "TCP", grpc: "gRPC" };
 
 /**
  * The observed health of one service, as the row shows it: the named state, the
@@ -162,14 +163,15 @@ const HEALTH_KIND_TEXT: Record<NonNullable<ServiceHealthView["kind"]>, string> =
  * reports no health field at all says so instead of implying a pass.
  */
 function healthText(status: ServiceRegistryStatusView): string {
-  const health = status.health;
-  if (!health) return " · 健康未读取（Host 未报告健康字段）";
+  const state = status.health;
+  if (state === undefined) return " · 健康未读取（Host 未报告健康字段）";
+  const detail = status.healthDetail;
   const facts: string[] = [];
-  if (health.kind === "http" && health.statusCode !== undefined) facts.push(`HTTP ${String(health.statusCode)}`);
-  else if (health.kind !== undefined) facts.push(HEALTH_KIND_TEXT[health.kind]);
-  if (health.elapsedMs !== undefined) facts.push(`${String(health.elapsedMs)}ms`);
-  if (health.reason !== undefined) facts.push(health.reason);
-  return ` · ${HEALTH_STATE_TEXT[health.state]}${facts.length === 0 ? "" : `（${facts.join("，")}）`}`;
+  if (detail?.kind === "http" && detail.statusCode !== undefined) facts.push(`HTTP ${String(detail.statusCode)}`);
+  else if (detail?.kind !== undefined) facts.push(HEALTH_KIND_TEXT[detail.kind]);
+  if (detail?.elapsedMs !== undefined) facts.push(`${String(detail.elapsedMs)}ms`);
+  if (detail?.reason !== undefined) facts.push(detail.reason);
+  return ` · ${HEALTH_STATE_TEXT[state]}${facts.length === 0 ? "" : `（${facts.join("，")}）`}`;
 }
 
 /**
@@ -1094,7 +1096,7 @@ function RunTool({ taskId }: { taskId: string }) {
                 const running = serviceRunning(row);
                 return (
                   <li key={row.binding.serviceId} className="border border-line bg-paper px-2 py-1.5 text-[11px]" data-service-id={row.binding.serviceId}
-                    data-service-health={row.status?.kind === "registry" ? row.status.health?.state ?? "unreported" : undefined}>
+                    data-service-health={row.status?.kind === "registry" ? row.status.health ?? "unreported" : undefined}>
                     <div className="flex min-w-0 items-center gap-1.5">
                       <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${running ? "bg-accent" : "bg-line"}`} aria-hidden="true" />
                       <span className="truncate font-semibold">{serviceName(row)}</span>

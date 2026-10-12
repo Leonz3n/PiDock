@@ -87,13 +87,12 @@ export type ServiceHealthStateView = (typeof SERVICE_HEALTH_STATES)[number];
 export const SERVICE_HEALTH_KINDS = ["http", "tcp", "grpc"] as const;
 
 /**
- * One health observation as the panel reads it: the named state plus the facts
- * the probe really observed. `elapsedMs`/`boundMs` are present IF AND ONLY IF a
- * connection was really attempted, so an unprobed row can never carry a
- * duration that would imply a probe ran.
+ * The facts the probe really observed, beside the named state the row reads
+ * (`health`). `elapsedMs`/`boundMs` are present IF AND ONLY IF a connection was
+ * really attempted, so an unprobed row can never carry a duration that would
+ * imply a probe ran; `reason` names the outcome of every non-pass.
  */
-export interface ServiceHealthView {
-  state: ServiceHealthStateView;
+export interface ServiceHealthDetailView {
   kind?: (typeof SERVICE_HEALTH_KINDS)[number];
   target?: string;
   statusCode?: number;
@@ -120,7 +119,9 @@ export interface ServiceRegistryStatusView {
    * stays process liveness. Absent means this Host predates the field, not that
    * the service was healthy.
    */
-  health?: ServiceHealthView;
+  health?: ServiceHealthStateView;
+  /** The facts behind `health`; absent when the state observed nothing more. */
+  healthDetail?: ServiceHealthDetailView;
   /**
    * Who last started or stopped this service ([PiDock 04] #7 box 5): `human`
    * is the explicit UI action (with main's own label), `agent` is the gated
@@ -183,7 +184,8 @@ function registryStatus(row: Record<string, unknown>, serviceId: string): Servic
     resolvedKeys, ...(startedAt !== undefined ? { startedAt } : {}), ...(stoppedAt !== undefined ? { stoppedAt } : {}),
     ...(exitReason !== undefined ? { exitReason } : {}),
     ...(row["launchSource"] !== undefined ? { launchSource: row["launchSource"] as "catalog" | "ui" } : {}),
-    ...(health !== undefined ? { health } : {}),
+    ...(health.health === undefined ? {} : { health: health.health }),
+    ...(health.healthDetail === undefined ? {} : { healthDetail: health.healthDetail }),
     ...(lastControl !== undefined ? { lastControl } : {}),
     ...(launchVerification !== undefined ? { launchVerification } : {}) };
 }
@@ -210,11 +212,11 @@ const durationFact = (value: unknown): number | undefined | null =>
  * - the detail is only readable together with its state (a detail with no state
  *   is a fact nobody can attribute).
  */
-function healthFact(value: unknown, detail: unknown): ServiceHealthView | undefined | null {
-  if (value === undefined) return detail === undefined ? undefined : null;
+function healthFact(value: unknown, detail: unknown): { health?: ServiceHealthStateView; healthDetail?: ServiceHealthDetailView } | null {
+  if (value === undefined) return detail === undefined ? {} : null;
   if (!(SERVICE_HEALTH_STATES as readonly string[]).includes(String(value))) return null;
   const state = value as ServiceHealthStateView;
-  if (detail === undefined) return state === "healthy" || state === "unhealthy" ? null : { state };
+  if (detail === undefined) return state === "healthy" || state === "unhealthy" ? null : { health: state };
   if (!isRecord(detail) || Object.keys(detail).some((key) => !HEALTH_DETAIL_KEYS.includes(key))) return null;
   const kind = detail["kind"];
   if (kind !== undefined && !(SERVICE_HEALTH_KINDS as readonly string[]).includes(String(kind))) return null;
@@ -232,9 +234,9 @@ function healthFact(value: unknown, detail: unknown): ServiceHealthView | undefi
   if (state === "healthy" && statusCode !== undefined && (statusCode < 200 || statusCode >= 300)) return null;
   if ((state === "unhealthy" || state === "not-probed") && reason === undefined) return null;
   if (state === "undeclared" && (kind !== undefined || target !== undefined)) return null;
-  return { state, ...(kind === undefined ? {} : { kind: kind as ServiceHealthView["kind"] }), ...(target === undefined ? {} : { target }),
+  return { health: state, healthDetail: { ...(kind === undefined ? {} : { kind: kind as ServiceHealthDetailView["kind"] }), ...(target === undefined ? {} : { target }),
     ...(statusCode === undefined ? {} : { statusCode }), ...(elapsedMs === undefined ? {} : { elapsedMs }),
-    ...(boundMs === undefined ? {} : { boundMs }), ...(reason === undefined ? {} : { reason }) };
+    ...(boundMs === undefined ? {} : { boundMs }), ...(reason === undefined ? {} : { reason }) } };
 }
 
 /** `<platform>-<arch>`: the only shape the Host may label a platform with. */
