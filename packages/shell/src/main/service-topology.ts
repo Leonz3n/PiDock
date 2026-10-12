@@ -28,11 +28,7 @@
  * shared external resources live in `service-runs.ts`.
  */
 
-import type {
-  ServiceConfigEntry,
-  ServiceConfigSource,
-  ServiceRunType,
-} from "./service-config.js";
+import { SERVICE_KEY_PATTERN, type ServiceConfigEntry, type ServiceConfigSource, type ServiceRunType } from "./service-config.js";
 
 export type ServiceLocation = "local" | "remote";
 
@@ -513,6 +509,92 @@ export function resolveTaskBindings(input: {
 /** Task override rows for the resolved bindings (never secret). */
 export function bindingsToTaskRows(bindings: readonly ResolvedBinding[]): ServiceConfigEntry[] {
   return bindings.map((binding) => ({ key: binding.key, value: binding.value, secret: false }));
+}
+
+/**
+ * The trusted config layers of a plan's bound services, merged for the
+ * read-point audit: one layer per `ServiceConfigSource`, de-duplicated by key
+ * (the first row of a layer wins). This is a **read-point union**, not one
+ * service's effective environment - two services may set the same key
+ * differently, and only "which variable does the config really read" is asked
+ * here. Main derives it from its own catalog (`ServiceLaunch.layers`), never
+ * from a page, so the audit sees the rows the plan's services actually read.
+ */
+export function planBindingLayers(layers: readonly BindingLayers[]): BindingLayers {
+  const merge = (pick: (layer: BindingLayers) => ServiceConfigEntry[]): ServiceConfigEntry[] => {
+    const seen = new Set<string>();
+    const rows: ServiceConfigEntry[] = [];
+    for (const layer of layers) {
+      for (const entry of pick(layer)) {
+        const key = entry.key.trim();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        rows.push({ key: entry.key, value: entry.value, secret: entry.secret });
+      }
+    }
+    return rows;
+  };
+  return {
+    repoDefaults: merge((layer) => layer.repoDefaults),
+    shared: merge((layer) => layer.shared),
+    privateEntries: merge((layer) => layer.privateEntries),
+    task: merge((layer) => layer.task),
+  };
+}
+
+/**
+ * The plan's own variable bindings, derived from the TRUSTED side (main's own
+ * catalog) instead of from the caller's payload.
+ *
+ * A local run unit's address variables are the `<SERVICE>_ENDPOINT/_URL/
+ * _BASE_URL/_HOST` names of the trusted config layers - but a local instance is
+ * only addressed *by name* where the plan DECLARES the dependency (ADR 0002's
+ * 服务依赖声明 is the only trusted declaration of "A addresses B"; the same rule
+ * as 没有声明就没有边). So:
+ *
+ * - a unit a pinned revision declares as a dependency target gets a binding for
+ *   every convention key the layers really read; when the declaration exists but
+ *   the config follows no convention name, the canonical `<SERVICE>_ENDPOINT` is
+ *   the one key bound, so the audit can report BY NAME that no read point uses
+ *   the name the plan bound (`unused-binding`);
+ * - a read point of a local unit that no declaration covers gets NO binding, so
+ *   the audit reports it as `missing-binding` (the consumer would keep the shared
+ *   environment address) instead of silently rewriting a variable nobody asked
+ *   to override.
+ *
+ * Keys are restricted to the catalog's own variable-name rule, so a derived rule
+ * can never carry a name the registration machinery would refuse.
+ */
+export function deriveBindingRules(input: {
+  units: readonly RunUnit[];
+  layers: BindingLayers;
+  /** Service ids the plan's own pinned revisions declare as dependency targets. */
+  declaredTargets: readonly string[];
+}): BindingRule[] {
+  const declared = new Set(input.declaredTargets.map((id) => id.trim()));
+  const layerRows: ServiceConfigEntry[] = [
+    ...input.layers.repoDefaults,
+    ...input.layers.shared,
+    ...input.layers.privateEntries,
+    ...input.layers.task,
+  ];
+  const readKeys = new Set(layerRows.map((entry) => entry.key.trim()));
+  const rules: BindingRule[] = [];
+  for (const unit of input.units) {
+    if (unit.location !== "local") continue;
+    const candidates = endpointKeyCandidates(unit.serviceId).filter((key) => SERVICE_KEY_PATTERN.test(key));
+    if (candidates.length === 0) continue;
+    const read = candidates.filter((key) => readKeys.has(key));
+    // A declaration always yields one bound address variable; without one, a
+    // local unit binds NOTHING even where the config reads its address, so the
+    // audit names that read point instead of main silently rewriting a variable
+    // no declaration asked to override.
+    const keys = declared.has(unit.serviceId.trim()) ? (read.length > 0 ? read : [candidates[0] as string]) : [];
+    for (const key of keys) {
+      rules.push({ key, unitId: unit.unitId, kind: key.endsWith("_HOST") ? "host-port" : "url" });
+    }
+  }
+  return rules;
 }
 
 /**

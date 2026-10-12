@@ -134,9 +134,10 @@ describe("[PiDock 05] #10 main's group caller refuses by name", () => {
     expect(await refusalOf(() => runTaskServiceGroup(tasks, catalog, REQUEST, 7))).toBe(
       `服务登记失败，未发起整组启动：${serviceId} 的启动材料无法从可信服务目录解析（missing-ref: 变量「API_URL」引用的 「NOT_DEFINED」 未定义）`,
     );
-    // It refuses BEFORE planning: no plan op was sent, so no half-resolved group
-    // reached the Host's port allocator.
-    expect(calls.map((call) => call.op)).toEqual(["task/registerService", "task/controlService"]);
+    // It refuses BEFORE planning AND before any start: the whole op list is the
+    // registration, so no half-resolved group reached the Host's port allocator
+    // and no unit was dispatched.
+    expect(calls.map((call) => call.op)).toEqual(["task/registerService"]);
   });
 });
 
@@ -186,7 +187,11 @@ describe("[PiDock 05] #10 main's group plan reads the SAME declared-port rule as
     // `requests: []` and the plan would fail closed with a FALSE `missing-port`
     // for a service that really declares the port through its own layer.
     expect(planned?.payload["requests"]).toEqual([{ unitId: `repo-a:${serviceId}`, port: 53100 }]);
-    expect(calls.filter((call) => call.op === "task/controlService")).toHaveLength(2);
+    // Main is the plan's only writer on this route: the plan is written BEFORE the
+    // single group start, so an edge-less plan the dock's own topology read left
+    // on the Host can never be what a group start runs.
+    expect(calls.map((call) => call.op)).toEqual(["task/registerService", "task/planServiceGroup", "task/controlService"]);
+    expect(calls.filter((call) => call.op === "task/controlService")).toHaveLength(1);
     expect(calls.filter((call) => call.op === "task/registerService")).toHaveLength(1);
   });
 
@@ -277,7 +282,7 @@ describe("[PiDock 05] #10 main's group plan feeds the DECLARED edges and nothing
       `服务依赖声明无法满足，未生成整组计划：「API」（${CALLER}）声明的依赖目标 ${CALLEE} 未在本任务的服务绑定中，请先绑定该服务或从共享模板移除该声明`,
     );
     // The refusal precedes the plan AND the start: a group missing its declared
-    // prerequisite must not be started as if it were complete.
-    expect(calls.map((call) => call.op)).toEqual(["task/registerService", "task/controlService"]);
+    // prerequisite must not be planned and must not be started as if it were complete.
+    expect(calls.map((call) => call.op)).toEqual(["task/registerService"]);
   });
 });

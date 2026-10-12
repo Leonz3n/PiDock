@@ -199,6 +199,18 @@ describe("TaskServiceTopology planning", () => {
     expect(remote?.target).toEqual({ kind: "remote", environment: "testing" });
   });
 
+  it("keeps the plan's layers across a location toggle instead of auditing over nothing", () => {
+    const host = topology();
+    host.setPlan(planInput());
+    // A toggle re-plans the SAME task, and the surviving binding's read point has
+    // to survive with it: dropping the layers here would make the read-point audit
+    // silent about a binding it can no longer check (and report `unused-binding`
+    // for a variable whose read point is still in the project).
+    const plan = host.setLocation("invoice:invoice-service", "remote");
+    expect(plan.bindings[0]?.readPoints).toEqual(["共享模板"]);
+    expect(plan.diagnostics.filter((entry) => entry.code === "unused-binding")).toEqual([]);
+  });
+
   it("a rule pointing at a remote unit writes no task row", () => {
     const plan = topology().setPlan({
       ...planInput(),

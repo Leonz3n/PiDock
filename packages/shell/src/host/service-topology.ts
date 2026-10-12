@@ -153,6 +153,7 @@ export class TaskServiceTopology {
   private reallocated: { unitId: string; before: number; after: number }[] = [];
   private bindings: ResolvedBinding[] = [];
   private rules: BindingRule[] = [];
+  private layers: BindingLayers = EMPTY_LAYERS;
   private environment = "";
   private planningDiagnostics: RunDiagnostic[] = [];
   private resources: ExternalResource[] = [];
@@ -210,6 +211,7 @@ export class TaskServiceTopology {
     this.assignments = ports.assignments;
     this.reallocated = ports.reallocated;
     this.rules = input.rules ?? [];
+    this.layers = layers;
     this.bindings = resolved.bindings;
     this.environment = input.environment ?? "";
     this.resources = (input.externalResources ?? []).map((resource) => classifyExternalResource(resource));
@@ -233,7 +235,10 @@ export class TaskServiceTopology {
       requests: input.requests ?? this.assignments.map((assignment) => ({ unitId: assignment.unitId, port: assignment.port })),
       reservations: input.reservations ?? [],
       rules: this.rules,
-      layers: input.layers ?? EMPTY_LAYERS,
+      // The plan's own layers, unless the caller brings its own: re-planning a
+      // location toggle with `EMPTY_LAYERS` would drop every read point the plan
+      // was audited against and let the read-point audit pass over nothing.
+      layers: input.layers ?? this.layers,
       environment: this.environment,
       externalResources: this.resources.map((resource) => ({
         resourceId: resource.resourceId,

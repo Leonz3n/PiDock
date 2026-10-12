@@ -518,42 +518,47 @@ describe.skipIf(process.platform === "win32")("#10 real group start and linkage 
     expect(group["state"]).not.toBe("verified");
   });
 
-  it("starts the task's PLANNED group through the new catalog caller and really verifies the linkage", { timeout: 60_000 }, async () => {
+  it("re-plans from the trusted catalog, so a caller-written plan's edges never decide a group start", { timeout: 60_000 }, async () => {
     const f = await fixture("listening");
-    // A plan with a real call edge exists, but NOBODY registered the launches:
-    // the new caller must do that itself, from the trusted catalog.
+    // A plan carrying a real call edge was written through the plan op (units +
+    // edges named by that caller), but NOBODY registered the launches and the
+    // pinned revisions declare nothing: the edges of that plan are undeclared.
     await f.planOnly();
     expect(existsSync(f.orderPath)).toBe(false);
 
     const result = await f.startGroupThroughMain();
     const group = (result["group"] ?? {}) as Record<string, unknown>;
-    // The group really verified through the production caller: callee first,
-    // caller second, both observed listening, and the caller's linkage step
-    // connected to the callee's own declared address.
-    expect(group["state"]).toBe("verified");
+    // The trusted plan is what ran: both units really started and really listen,
+    // and NOTHING is claimed as 互验 - an undeclared edge can no longer drive a
+    // group start just because somebody wrote a plan onto this Host.
+    expect(group["state"]).toBe("listening");
+    expect(group["state"]).not.toBe("verified");
     const units = group["units"] as Record<string, unknown>[];
-    const callee = units.find((entry) => entry["serviceId"] === f.calleeId) as Record<string, unknown>;
-    const caller = units.find((entry) => entry["serviceId"] === f.callerId) as Record<string, unknown>;
-    expect(callee).toMatchObject({ start: "started", order: 1, listening: "listening" });
-    expect(caller).toMatchObject({ start: "started", order: 2, listening: "listening", linked: true });
-    expect((caller["steps"] as Record<string, unknown>[])[0]).toMatchObject({ kind: "linkage", outcome: "passed", targetServiceId: f.calleeId });
+    expect(units.map((entry) => entry["start"])).toEqual(["started", "started"]);
+    expect(units.every((entry) => entry["listening"] === "listening")).toBe(true);
+    expect(units.every((entry) => entry["linked"] === false)).toBe(true);
+    expect(units.flatMap((entry) => entry["steps"] as Record<string, unknown>[]).filter((step) => step["kind"] === "linkage")).toEqual([]);
 
     // REAL children: the order file is what the children themselves wrote, and
     // each port answers with the identity only its own child knows.
     await until(() => orderOf(f.orderPath).length === 2, "both children to report their start");
-    expect(orderOf(f.orderPath).map(([tag]) => tag)).toEqual(["callee", "caller"]);
+    expect(orderOf(f.orderPath).map(([tag]) => tag).sort()).toEqual(["callee", "caller"]);
     await until(() => ask(f.portA) !== null && ask(f.portB) !== null, "both services to answer");
     expect(await ask(f.portB)).toMatchObject({ tag: "callee" });
     expect(await ask(f.portA)).toMatchObject({ tag: "caller" });
 
-    // What the production caller really sent: the task's group started ONCE
-    // through the same gated op, its two launches registered from the trusted
-    // catalog, and NO second plan - an existing plan is never clobbered.
+    // What the production caller really sent: ONE catalog-derived plan (with no
+    // `dependencies` key, because the pinned revisions declare none) BEFORE the
+    // single gated group start, and both launches registered from the catalog.
+    const opOrder = f.routed().map((entry) => entry.op);
+    expect(opOrder.indexOf("task/planServiceGroup")).toBeLessThan(opOrder.indexOf("task/controlService"));
     const control = f.routed().filter((entry) => entry.op === "task/controlService");
     expect(control).toHaveLength(1);
     expect(control[0]?.payload).toEqual({ group: true, action: "start", label: "主进程服务目录入口" });
     expect(control[0]?.origin).toEqual({ kind: "service-catalog", senderWebContentsId: 7 });
-    expect(f.routed().filter((entry) => entry.op === "task/planServiceGroup")).toEqual([]);
+    const planned = f.routed().filter((entry) => entry.op === "task/planServiceGroup");
+    expect(planned).toHaveLength(1);
+    expect(planned[0]?.payload["dependencies"]).toBeUndefined();
     expect(f.routed().filter((entry) => entry.op === "task/registerService")).toHaveLength(2);
   });
 
@@ -578,13 +583,18 @@ describe.skipIf(process.platform === "win32")("#10 real group start and linkage 
     await until(() => orderOf(f.orderPath).length === 2, "both children to report their start");
     await until(() => ask(f.portA) !== null && ask(f.portB) !== null, "both services to answer");
 
-    // Main planned once (the Host answered `not-planned`), then started once.
+    // Main planned once from the catalog and started the planned group once.
     expect(f.routed().filter((entry) => entry.op === "task/planServiceGroup")).toHaveLength(1);
-    expect(f.routed().filter((entry) => entry.op === "task/controlService")).toHaveLength(2);
+    expect(f.routed().filter((entry) => entry.op === "task/controlService")).toHaveLength(1);
     const planned = f.routed().find((entry) => entry.op === "task/planServiceGroup");
     const plannedUnits = planned?.payload["units"] as Record<string, unknown>[];
     expect(plannedUnits.map((entry) => entry["location"])).toEqual(["local", "local"]);
     expect(planned?.payload["dependencies"]).toBeUndefined();
+    // The trusted config layers of the plan's services ARE sent (this is what the
+    // read-point audit reads), while `rules` stays absent: no pinned revision
+    // declares a target, so nothing may be overridden.
+    expect(Object.keys(planned?.payload["layers"] ?? {}).sort()).toEqual(["privateEntries", "repoDefaults", "shared", "task"]);
+    expect(planned?.payload["rules"]).toBeUndefined();
   });
 
   it("fails a portless bound service CLOSED by name, starting nothing", { timeout: 60_000 }, async () => {
@@ -617,14 +627,21 @@ describe.skipIf(process.platform === "win32")("#10 real group start and linkage 
     expect(control?.payload["approvalId"]).toBeUndefined();
     expect(Object.keys(control?.payload ?? {}).sort()).toEqual(["action", "group", "label"]);
     expect(control?.origin?.kind).toBe("service-catalog");
-    // Every unit start still went through the ONE gated dispatch, in plan order.
-    expect(orderOf(f.orderPath).map(([tag]) => tag)).toEqual(["callee", "caller"]);
+    // Both units really started through the ONE gated dispatch. Their order is the
+    // TRUSTED plan's order (no declared edge exists in this fixture, so the caller
+    // is dispatched before the callee) - never the order of the plan a caller wrote.
+    await until(() => orderOf(f.orderPath).length === 2, "both children to report their start");
+    expect(orderOf(f.orderPath).map(([tag]) => tag).sort()).toEqual(["callee", "caller"]);
+    expect(f.routed().filter((entry) => entry.op === "task/controlService")).toHaveLength(1);
   });
 
   it("keeps the group gate intact after the production caller ran: read-only refuses, default parks, no child added", { timeout: 60_000 }, async () => {
     const f = await fixture("listening");
     await f.planOnly();
-    expect(((await f.startGroupThroughMain())["group"] as Record<string, unknown>)["state"]).toBe("verified");
+    // The caller-written plan carries an edge the pinned revisions never declared,
+    // so the trusted plan has none: the group really starts and listens, and no
+    // 已互验 is claimed. What this case pins is that the gate below is unchanged.
+    expect(((await f.startGroupThroughMain())["group"] as Record<string, unknown>)["state"]).toBe("listening");
     await until(() => orderOf(f.orderPath).length === 2, "both children to report their start");
     const before = orderOf(f.orderPath).length;
     const beforeRecords = (await f.request("task/serviceRunRecords", {}))["records"] as unknown[];
