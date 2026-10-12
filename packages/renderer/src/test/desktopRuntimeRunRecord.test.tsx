@@ -92,6 +92,21 @@ function observedRunRecordsPayload() {
   return { records: topology.runs(), registered: topology.registeredIdentities() };
 }
 
+/**
+ * The REAL Host emit for a run whose code state main really observed ([PiDock 05]
+ * #10 box 6): the same `TaskServiceTopology.recordRun` projector `host.ts`
+ * calls, with the observation `main/service-code-observation.ts` produced. No
+ * build commit is passed, because nothing in the service model names one.
+ */
+function observedCodeRunRecordsPayload(code: { commit: string; dirty: boolean }) {
+  const topology = new TaskServiceTopology("task-1", "/tmp/task-1", () => STARTED_AT);
+  topology.recordRun({
+    serviceId: SERVICE_ID, templateVersion: "2", ports: [4100], portsSource: "declared",
+    code, pid: 4242, owner: "human", startedAt: STARTED_AT,
+  });
+  return { records: topology.runs(), registered: topology.registeredIdentities() };
+}
+
 /** One bound service in project-1, with the run-record op stubbed to `answer`. */
 function bridgeWithRunRecords(answer: unknown) {
   const taskOp = vi.fn(async (_taskId: string, op: string) => {
@@ -150,6 +165,42 @@ describe("[UI 对齐] S8d production 运行 panel reads the Host run record", ()
     expect(record).toHaveTextContent("user-request");
     // No argv / raw environment ever reaches the renderer.
     expect(record).not.toHaveTextContent("server.js");
+  });
+
+  it("renders the code state main really observed, not a fixture value", async () => {
+    const HEAD = "0123456789abcdef0123456789abcdef01234567";
+    bridgeWithRunRecords({ ok: true, payload: observedCodeRunRecordsPayload({ commit: HEAD, dirty: false }) });
+    render(<DesktopToolDock taskId="task-1" tool="runtime" onClose={() => {}} />);
+    const clean = await screen.findByTestId("dock-run-record");
+    // The REAL value end to end: the observation the Host recorded, through the
+    // real parser, into the shipped dock's own row.
+    expect(clean).toHaveTextContent(`已提交且干净 · ${HEAD}`);
+    // Nobody observed a build commit, so the build row says so instead of
+    // inheriting the code commit as a build.
+    expect(clean).toHaveTextContent("无法判断构建状态");
+    expect(clean).not.toHaveTextContent("构建与当前提交一致");
+    cleanup();
+
+    bridgeWithRunRecords({ ok: true, payload: observedCodeRunRecordsPayload({ commit: HEAD, dirty: true }) });
+    render(<DesktopToolDock taskId="task-1" tool="runtime" onClose={() => {}} />);
+    const dirty = await screen.findByTestId("dock-run-record");
+    // Uncommitted code is distinguishable from a clean commit AND from a stale
+    // build, and the dirty observation never reads as a fresh build.
+    expect(dirty).toHaveTextContent(`有未提交修改 · ${HEAD}`);
+    expect(dirty).toHaveTextContent("工作副本有未提交修改，构建不含这些改动");
+    expect(dirty).not.toHaveTextContent("构建与当前提交一致");
+  });
+
+  it("keeps rendering 未知 for a run whose code state nobody observed", async () => {
+    bridgeWithRunRecords({ ok: true, payload: unobservedRunRecordsPayload() });
+    render(<DesktopToolDock taskId="task-1" tool="runtime" onClose={() => {}} />);
+    const record = await screen.findByTestId("dock-run-record");
+    // The legitimate `unknown`: no observation was made, so the row must not show
+    // a commit, a clean tree or a fresh build.
+    expect(record).toHaveTextContent("缺少提交信息");
+    expect(record).toHaveTextContent("无法判断构建状态");
+    expect(record).not.toHaveTextContent("已提交且干净");
+    expect(record).not.toHaveTextContent("有未提交修改");
   });
 
   it("never renders a DECLARED port as 实测监听", async () => {

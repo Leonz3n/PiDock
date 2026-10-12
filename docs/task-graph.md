@@ -278,8 +278,18 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   验证成功。`recordRun` 拒绝非正整数 pid：没有真实进程身份就不写记录。
   端口列表带 `portsSource`（`declared` / `observed`）：本机 Host 没有端口探测，
   生产写入恒为 `declared`，运行时面板据此显示「声明端口，未实测监听」；一条记录
-  里的 pid/启动时刻/调用者身份是 OBSERVED，端口是 DECLARED，代码状态与构建新鲜度
-  保持 `unknown`（本片不读工作树），三者不互相冒充。真实启动/停止路径
+  里的 pid/启动时刻/调用者身份是 OBSERVED，端口是 DECLARED。代码状态同样是
+  OBSERVED，但**不是 Host 自己读的**：main 在每次启动前用有界的只读 git 调用
+  （`main/service-code-observation.ts` 的 `rev-parse HEAD` + `status --porcelain`）
+  读启动自己的已校验 cwd（`service-catalog.ts` 的 `verifiedLaunchPaths`）所在的
+  工作树，把「HEAD 提交 + 是否脏」随可信服务目录的 `task/registerService` 注册
+  交给 Host；只有 `service-catalog` 来源的注册可以携带它，界面来源的注册带着
+  该字段会被具名拒绝（页面不能自证代码状态）。观察失败（不是工作树、没有 HEAD、
+  没有 git、没有 cwd）不产生任何代码状态：记录按 `unknown` 具名保留，原因写进该
+  服务自己的有界日志（`task/serviceLog`），绝不会读成 `committed-clean`。构建
+  新鲜度没有观察来源——服务配方里没有任何“构建产物”的身份——所以 `buildCommit`
+  永不被声称：干净工作树读 `unknown`（无法判断构建状态），脏工作树读
+  `uncommitted-code`，两者都不会冒充 `fresh`。真实启动/停止路径
   （`host.ts` 的 `task/controlService`）现在写入并关闭运行记录。
 - **停止范围**：停止范围只来自 Host 登记的进程身份
   （`ProcessIdentity` / `verifyRegisteredIdentity` 精确匹配 instance + pid +
