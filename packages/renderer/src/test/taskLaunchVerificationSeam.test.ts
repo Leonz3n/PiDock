@@ -11,9 +11,11 @@
  * key the Host no longer emits — fails here before it can blank the live status.
  * No payload is a literal below.
  */
-import { describe, expect, it } from "vitest";
+import { createServer } from "node:http";
+import { afterEach, describe, expect, it } from "vitest";
 import { serviceStatusFromHost, VERIFICATION_ROW_KEYS, type ServiceStatusView } from "../data/taskServices";
 import { memoryLaunchVerificationLog } from "../../../shell/src/host/service-launch-verification.js";
+import { probeServiceHealth } from "../../../shell/src/host/service-health-probe.js";
 import { publicServiceStatus } from "../../../shell/src/host/service-public.js";
 import { TaskServiceRuntime } from "../../../shell/src/host/service-runtime.js";
 import { LAUNCH_VERIFICATION_SCHEMA_VERSION, type LaunchVerificationEntry } from "../../../shell/src/host/task-store.js";
@@ -40,10 +42,11 @@ function entry(input: { serviceId: string; platform?: string; installationId?: s
   };
 }
 
-function register(runtime: TaskServiceRuntime, serviceId: string): void {
+function register(runtime: TaskServiceRuntime, serviceId: string, healthCheck?: { kind: "http" | "tcp" | "grpc"; target?: string }): void {
   runtime.register({
     serviceId,
-    descriptor: { name: serviceId, program: "node", args: ["service.cjs"], ports: [], runType: "long-lived" },
+    descriptor: { name: serviceId, program: "node", args: ["service.cjs"], ports: [], runType: "long-lived",
+      ...(healthCheck === undefined ? {} : { healthCheck }) },
     layers: { repoDefaults: [], shared: [], privateEntries: [], task: [] },
     templateVersion: TEMPLATE,
     launchSource: "catalog",
@@ -129,5 +132,75 @@ describe("[PiDock 04] #7 the real Host projection parses in the real renderer", 
     // the live status), so the two ends cannot silently drift apart.
     expect([...emitted].every((key) => VERIFICATION_ROW_KEYS.includes(key))).toBe(true);
     expect([...emitted].sort()).toEqual(["nodeVersion", "platform", "program", "reason", "startedAt", "stopped", "verified"]);
+  });
+
+  /**
+   * [PiDock 04] (#7 box 5) the SAME seam for the declared 健康检查: the REAL
+   * probe of a REAL listener, through the REAL projection, into the REAL parser.
+   * A health state the Host can produce but the panel refuses to read would be
+   * the "capability exists but production cannot reach it" bug this file exists
+   * to prevent, so the three states are pinned end to end here.
+   */
+  describe("the declared 健康检查's real observation", () => {
+    const listeners: { close(): Promise<void> }[] = [];
+    afterEach(async () => {
+      for (const listener of listeners.splice(0)) await listener.close();
+    });
+    /** A real HTTP listener on 127.0.0.1; `respond` decides what (if anything) it answers. */
+    const listener = async (statusCode: number | undefined): Promise<number> => {
+      const server = createServer((_request, response) => {
+        if (statusCode === undefined) return;
+        response.writeHead(statusCode, { "content-type": "text/plain" });
+        response.end("health");
+      });
+      server.on("clientError", () => {});
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const address = server.address();
+      if (address === null || typeof address === "string") throw Error("no-bound-port");
+      listeners.push({ close: async () => { await new Promise<void>((resolve) => server.close(() => resolve())); } });
+      return address.port;
+    };
+    /** The real Host projection for a running service, carrying a real probe result. */
+    const projectedWithProbe = async (healthCheck: { kind: "http" | "tcp" | "grpc"; target?: string } | undefined, running: boolean): Promise<ServiceStatusView> => {
+      const runtime = new TaskServiceRuntime("/tmp/seam-health-task", undefined, memoryLaunchVerificationLog([]));
+      register(runtime, "svc-health", healthCheck);
+      const record = runtime.get("svc-health")!;
+      if (running) runtime.markStarted("svc-health", { kind: "human", label: "fixture" });
+      const observation = await probeServiceHealth({ healthCheck: record.descriptor.healthCheck, running });
+      const view = serviceStatusFromHost({ service: publicServiceStatus(runtime.get("svc-health")!, HERE, THIS_INSTALLATION, observation) }, "svc-health");
+      expect(view).not.toBeNull();
+      return view as ServiceStatusView;
+    };
+
+    it("carries a real 200 and its real elapsed time to the panel", async () => {
+      const port = await listener(200);
+      const view = await projectedWithProbe({ kind: "http", target: `http://127.0.0.1:${String(port)}/health` }, true);
+      expect(view.kind === "registry" ? view.health : undefined).toBe("healthy");
+      expect(view.kind === "registry" ? view.healthDetail : undefined).toMatchObject({ kind: "http", statusCode: 200 });
+      expect(view.kind === "registry" ? view.healthDetail?.elapsedMs : undefined).toBeGreaterThanOrEqual(0);
+    });
+
+    it("carries a refused declared target by name while the process stays running", async () => {
+      const port = await listener(200);
+      // Close the declared port for real before the read.
+      for (const entry of listeners.splice(0)) await entry.close();
+      const view = await projectedWithProbe({ kind: "http", target: `http://127.0.0.1:${String(port)}/health` }, true);
+      expect(view.kind === "registry" ? view.health : undefined).toBe("unhealthy");
+      expect(view.kind === "registry" ? view.healthDetail?.reason : undefined).toBe("连接被拒");
+      // Invariant 1 through the renderer's own view: a failed probe is not a dead process.
+      expect(view.kind === "registry" ? view.lifecycle : undefined).toBe("running");
+    });
+
+    it("carries 未声明 and 未探测 as named states, never as a pass", async () => {
+      const undeclared = await projectedWithProbe(undefined, true);
+      expect(undeclared.kind === "registry" ? undeclared.health : undefined).toBe("undeclared");
+      expect(undeclared.kind === "registry" ? undeclared.healthDetail : undefined).toBeUndefined();
+      const notRunning = await projectedWithProbe({ kind: "http", target: "http://127.0.0.1:1/health" }, false);
+      expect(notRunning.kind === "registry" ? notRunning.health : undefined).toBe("not-probed");
+      expect(notRunning.kind === "registry" ? notRunning.healthDetail?.reason : undefined).toBe("服务未运行，不发起探测");
+      const grpc = await projectedWithProbe({ kind: "grpc", target: "127.0.0.1:9" }, true);
+      expect(grpc.kind === "registry" ? grpc.health : undefined).toBe("not-probed");
+      expect(grpc.kind === "registry" ? grpc.healthDetail?.reason : undefined).toContain("gRPC");
+    });
   });
 });

@@ -325,7 +325,7 @@ describe.skipIf(process.platform === "win32")("#7 catalog-driven service executi
     // (a) real process state, reported by the Host from the real children.
     // The bound template declares no 健康检查, so the health half of the row is
     // `未声明` by name - never a pass, and never a probe of an invented target.
-    expect(await f.status(first)).toMatchObject({ serviceId: first, lifecycle: "running", launchSource: "catalog", health: { state: "undeclared" } });
+    expect(await f.status(first)).toMatchObject({ serviceId: first, lifecycle: "running", launchSource: "catalog", health: "undeclared" });
     expect(await f.status(second)).toMatchObject({ lifecycle: "running" });
 
     // (b) real, bounded, redacted output of the running children.
@@ -386,8 +386,8 @@ describe.skipIf(process.platform === "win32")("#7 catalog-driven service executi
     // it is never dialled because the process is not running.
     await f.register(serviceId);
     const stopped = await f.status(serviceId);
-    expect(stopped).toMatchObject({ lifecycle: "stopped", health: { state: "not-probed", kind: "http", target } });
-    expect((stopped["health"] as { reason: string }).reason).toContain("服务未运行");
+    expect(stopped).toMatchObject({ lifecycle: "stopped", health: "not-probed", healthDetail: { kind: "http", target } });
+    expect((stopped["healthDetail"] as { reason: string }).reason).toContain("服务未运行");
     expect(listener.connections).toBe(0);
 
     // (2) A REAL pass: a real HTTP listener declared by the pinned revision, a
@@ -396,7 +396,7 @@ describe.skipIf(process.platform === "win32")("#7 catalog-driven service executi
     const pid = await untilMarkerPid(f.taskDir, "a");
     expect(alive(pid)).toBe(true);
     const healthy = await f.status(serviceId);
-    expect(healthy).toMatchObject({ lifecycle: "running", health: { state: "healthy", kind: "http", target, statusCode: 200 } });
+    expect(healthy).toMatchObject({ lifecycle: "running", health: "healthy", healthDetail: { kind: "http", target, statusCode: 200 } });
     const runningStartedAt = healthy["startedAt"];
     expect(listener.connections).toBeGreaterThanOrEqual(1);
 
@@ -404,7 +404,7 @@ describe.skipIf(process.platform === "win32")("#7 catalog-driven service executi
     // probe fails by name and `lifecycle`/`startedAt`/`exitReason` do not move.
     await listener.close();
     const unhealthy = await f.status(serviceId);
-    expect(unhealthy).toMatchObject({ lifecycle: "running", health: { state: "unhealthy", kind: "http", reason: "连接被拒" } });
+    expect(unhealthy).toMatchObject({ lifecycle: "running", health: "unhealthy", healthDetail: { kind: "http", reason: "连接被拒" } });
     expect(unhealthy["startedAt"]).toBe(runningStartedAt);
     expect(unhealthy["exitReason"]).toBeUndefined();
     expect(alive(pid)).toBe(true);
@@ -416,7 +416,7 @@ describe.skipIf(process.platform === "win32")("#7 catalog-driven service executi
     // (5) A stopped service goes back to a named 未探测 without dialling.
     expect(await f.run(serviceId, "stop")).toMatchObject({ serviceId, action: "stop", actor: "human" });
     await until(() => !alive(pid), "the service child to exit");
-    expect(await f.status(serviceId)).toMatchObject({ lifecycle: "stopped", health: { state: "not-probed", reason: "服务未运行，不发起探测" } });
+    expect(await f.status(serviceId)).toMatchObject({ lifecycle: "stopped", health: "not-probed", healthDetail: { reason: "服务未运行，不发起探测" } });
   }, 30_000);
 
   it("records the durable launch identity of a real Host start and refuses a duplicate start beside that survivor", async () => {

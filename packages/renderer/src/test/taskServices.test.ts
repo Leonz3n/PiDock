@@ -67,7 +67,7 @@ describe("[UI 对齐] S8d task service parsers", () => {
     // trusted launch source and the named health state of the declared
     // 健康检查; a reachability probe is never reported as health.
     expect(serviceStatusFromHost({ service: { serviceId: SERVICE_ID, lifecycle: "running", templateVersion: "2", launchSource: "catalog", health: "not-probed", startedAt: "2026-10-08T00:00:00.000Z", stoppedAt: undefined, exitReason: undefined, resolved: [] } }, SERVICE_ID))
-      .toMatchObject({ kind: "registry", serviceId: SERVICE_ID, lifecycle: "running", launchSource: "catalog", health: { state: "not-probed" }, resolvedKeys: [] });
+      .toMatchObject({ kind: "registry", serviceId: SERVICE_ID, lifecycle: "running", launchSource: "catalog", health: "not-probed", resolvedKeys: [] });
     // [PiDock 04] #7 box 5: the Host labels the explicit human action and the
     // gated Agent path apart, and the row keeps both facts instead of an author.
     expect(serviceStatusFromHost({ service: { serviceId: SERVICE_ID, lifecycle: "running", templateVersion: "2", resolved: [],
@@ -89,15 +89,15 @@ describe("[UI 对齐] S8d task service parsers", () => {
       resolved: [], health, ...(healthDetail === undefined ? {} : { healthDetail }) } });
     // A real pass carries the observed attempt: the real status code and the real ms.
     expect(serviceStatusFromHost(status("healthy", { kind: "http", target: "http://127.0.0.1:4100/health", statusCode: 200, elapsedMs: 12, boundMs: 1500 }), SERVICE_ID))
-      .toMatchObject({ kind: "registry", health: { state: "healthy", kind: "http", statusCode: 200, elapsedMs: 12 } });
+      .toMatchObject({ kind: "registry", health: "healthy", healthDetail: { kind: "http", statusCode: 200, elapsedMs: 12 } });
     // A failure is named, and is about the TARGET only: `lifecycle` stays liveness.
     expect(serviceStatusFromHost(status("unhealthy", { kind: "http", target: "http://127.0.0.1:4100/health", elapsedMs: 3, boundMs: 1500, reason: "连接被拒" }), SERVICE_ID))
-      .toMatchObject({ kind: "registry", lifecycle: "running", health: { state: "unhealthy", reason: "连接被拒" } });
+      .toMatchObject({ kind: "registry", lifecycle: "running", health: "unhealthy", healthDetail: { reason: "连接被拒" } });
     // 未声明 and 未探测 are named states; neither is a pass and neither may carry
     // a duration that would imply a probe ran.
-    expect(serviceStatusFromHost(status("undeclared"), SERVICE_ID)).toMatchObject({ kind: "registry", health: { state: "undeclared" } });
+    expect(serviceStatusFromHost(status("undeclared"), SERVICE_ID)).toMatchObject({ kind: "registry", health: "undeclared" });
     expect(serviceStatusFromHost(status("not-probed", { kind: "grpc", reason: "gRPC 健康探测尚未接入" }), SERVICE_ID))
-      .toMatchObject({ kind: "registry", health: { state: "not-probed" } });
+      .toMatchObject({ kind: "registry", health: "not-probed" });
     // A `healthy` row with no observed attempt (no duration), a `not-probed`
     // row that carries one, an unknown state, a non-2xx "healthy" code, a code on
     // a non-http kind and a detail with no state are all unreadable.

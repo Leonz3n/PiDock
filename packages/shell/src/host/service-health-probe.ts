@@ -101,6 +101,32 @@ export interface DeclaredHealthCheck {
 }
 
 /**
+ * The observed FACTS of one health observation, as the status projection
+ * carries them beside the named state (`healthDetail`): absent when the state
+ * observed nothing beyond its own name, so `undeclared` is stated once rather
+ * than restated as an empty detail. The readers derive no fact from this
+ * object's presence except that it is the probe's own report.
+ */
+export function healthDetailOf(observation: ServiceHealthObservation): {
+  kind?: ServiceHealthKind;
+  target?: string;
+  statusCode?: number;
+  elapsedMs?: number;
+  boundMs?: number;
+  reason?: string;
+} | undefined {
+  const detail = {
+    ...(observation.kind === undefined ? {} : { kind: observation.kind }),
+    ...(observation.target === undefined ? {} : { target: observation.target }),
+    ...(observation.statusCode === undefined ? {} : { statusCode: observation.statusCode }),
+    ...(observation.elapsedMs === undefined ? {} : { elapsedMs: observation.elapsedMs }),
+    ...(observation.boundMs === undefined ? {} : { boundMs: observation.boundMs }),
+    ...(observation.reason === undefined ? {} : { reason: observation.reason }),
+  };
+  return Object.keys(detail).length === 0 ? undefined : detail;
+}
+
+/**
  * The honest state of a read that produced no observation (no probe ran), e.g.
  * a projection built by a caller that is not the Host's status read. It is
  * NEVER `healthy`: an unprobed thing says so, by name, and says WHO did not
