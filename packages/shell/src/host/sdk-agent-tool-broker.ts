@@ -471,6 +471,9 @@ const SERVICE_HEALTH_NAME: Record<ServiceHealthObservation["state"], string> = {
   undeclared: "未声明健康检查",
 };
 
+/** The one label of each declared check kind, repeated by the UI row. */
+const SERVICE_HEALTH_KIND: Record<NonNullable<ServiceHealthObservation["kind"]>, string> = { http: "HTTP", tcp: "TCP", grpc: "gRPC" };
+
 /**
  * The named state of the declared 健康检查 ([PiDock 04] #7 box 5), as the model
  * reads it: the state token the UI row carries too, the same Chinese name, the
@@ -482,7 +485,7 @@ const SERVICE_HEALTH_NAME: Record<ServiceHealthObservation["state"], string> = {
 export function serviceHealthText(observation: ServiceHealthObservation): string {
   const facts: string[] = [];
   if (observation.kind === "http" && observation.statusCode !== undefined) facts.push(`HTTP ${String(observation.statusCode)}`);
-  else if (observation.kind !== undefined) facts.push(observation.kind);
+  else if (observation.kind !== undefined) facts.push(SERVICE_HEALTH_KIND[observation.kind]);
   if (observation.elapsedMs !== undefined) facts.push(`${String(observation.elapsedMs)}ms`);
   if (observation.target !== undefined) facts.push(`目标 ${observation.target}`);
   const name = SERVICE_HEALTH_NAME[observation.state];

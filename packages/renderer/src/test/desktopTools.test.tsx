@@ -483,6 +483,57 @@ describe("[UI 对齐] S8d 运行 panel (real Host bindings and status)", () => {
     expect(screen.queryByTestId("service-owner-rebind")).toBeNull();
   });
 
+  it("shows the observed 健康检查 of the row, and a failed probe never reads as a dead process", async () => {
+    const target = "http://127.0.0.1:4100/health";
+    let health = "healthy";
+    let healthDetail: unknown = { kind: "http", target, statusCode: 200, elapsedMs: 12, boundMs: 1500 };
+    // One bridge whose answer is replaced between the two renders below.
+    panelBridge({ statuses: () => ({ ok: true, payload: { service: { serviceId: SERVICE_ID, lifecycle: "running", templateVersion: "2",
+      launchSource: "catalog", resolved: [], health, healthDetail } } }) });
+    render(<DesktopToolDock taskId="task-1" tool="runtime" onClose={() => {}} />);
+    const row = (await screen.findByText("invoice-local")).closest("li")!;
+    // A REAL pass, as the Host observed it: the row carries the same named state
+    // the Agent's status text does, with the real code and the real elapsed ms.
+    expect(row).toHaveAttribute("data-service-health", "healthy");
+    expect(row).toHaveTextContent("运行中");
+    expect(row).toHaveTextContent("健康正常（HTTP 200，12ms）");
+
+    // The declared target really failed while the process really runs: the row
+    // names the failure AND keeps the live process - "unhealthy" is never shown
+    // as healthy and never as a dead service.
+    cleanup();
+    health = "unhealthy";
+    healthDetail = { kind: "http", target, elapsedMs: 3, boundMs: 1500, reason: "连接被拒" };
+    render(<DesktopToolDock taskId="task-1" tool="runtime" onClose={() => {}} />);
+    const failed = (await screen.findByText("invoice-local")).closest("li")!;
+    expect(failed).toHaveAttribute("data-service-health", "unhealthy");
+    expect(failed).toHaveTextContent("运行中 · 配方 v2");
+    expect(failed).toHaveTextContent("健康异常（HTTP，3ms，连接被拒）");
+    expect(failed).not.toHaveTextContent("健康正常");
+    expect(failed).not.toHaveTextContent("已停止");
+  });
+
+  it("states 未声明 health check for a revision that declares none, and never a pass", async () => {
+    panelBridge({ statuses: () => ({ ok: true, payload: { service: { serviceId: SERVICE_ID, lifecycle: "running", templateVersion: "2",
+      launchSource: "catalog", resolved: [], health: "undeclared" } } }) });
+    render(<DesktopToolDock taskId="task-1" tool="runtime" onClose={() => {}} />);
+    const row = (await screen.findByText("invoice-local")).closest("li")!;
+    expect(row).toHaveAttribute("data-service-health", "undeclared");
+    expect(row).toHaveTextContent("运行中 · 配方 v2");
+    expect(row).toHaveTextContent("未声明健康检查");
+    expect(row).not.toHaveTextContent("健康正常");
+    expect(row).not.toHaveTextContent("健康未探测");
+  });
+
+  it("says a Host reported no health field instead of implying a pass", async () => {
+    panelBridge({ statuses: () => ({ ok: true, payload: { service: { serviceId: SERVICE_ID, lifecycle: "running", templateVersion: "2",
+      launchSource: "catalog", resolved: [] } } }) });
+    render(<DesktopToolDock taskId="task-1" tool="runtime" onClose={() => {}} />);
+    const row = (await screen.findByText("invoice-local")).closest("li")!;
+    expect(row).toHaveAttribute("data-service-health", "unreported");
+    expect(row).toHaveTextContent("健康未读取（Host 未报告健康字段）");
+  });
+
   it("shows the Host refusal for a status read instead of a fabricated stopped state", async () => {
     panelBridge({ statuses: () => ({ ok: false, error: "unknown-service: not registered on this task" }) });
     render(<DesktopToolDock taskId="task-1" tool="runtime" onClose={() => {}} />);
