@@ -33,6 +33,7 @@
 
 import {
   buildChildEnv,
+  recordPlatformLaunch,
   resolveServiceEnv,
   validateServiceDescriptor,
   type ResolvedServiceRow,
@@ -109,7 +110,14 @@ export interface ServiceRecord {
   launchSource: ServiceLaunchSource;
 }
 
-/** One platform's record of a launch of this service that the Host really observed. */
+/**
+ * One platform's entry in a service's launch-verification record: the shared
+ * `PlatformLaunchRecord` fields, with the launch facts OPTIONAL because the
+ * pre-existing input shape (`platform`/`nodeVersion`/`ok`/`note`) records a
+ * note that observed nothing. Only an entry carrying `startedAt` is a
+ * verification; the argv stays in this Host (`publicServiceStatus` never
+ * projects it, like the descriptor's own argv).
+ */
 export interface ServiceLaunchVerification {
   /** `<process.platform>-<process.arch>` observed by the Host that launched (never a caller claim). */
   platform: string;
@@ -117,11 +125,7 @@ export interface ServiceLaunchVerification {
   nodeVersion: string;
   ok: boolean;
   note: string;
-  /**
-   * Explicit program token that was really spawned, when this entry records a
-   * launch. The argv travels with it and stays in the task Host
-   * (`publicServiceStatus` never projects it, like the descriptor's own argv).
-   */
+  /** Explicit program token that was really spawned, when this entry records a launch. */
   program?: string;
   args?: string[];
   /** ISO time the real child was confirmed alive; present only for an observed launch. */
@@ -533,10 +537,12 @@ export class TaskServiceRuntime {
    * Record one platform's launch verification for this service ([PiDock 04] #7
    * box 7). The production caller is the Host's own service-control dispatch
    * (`service-control.ts`), and only after the process driver confirmed a real
-   * child started or a real stop. The observation is what makes the platform
-   * read as verified: an exact copy of a claim is never treated as evidence, so
-   * `ok` alone (the pre-existing input shape, which carries no launch fact)
-   * records a note no surface may show as a pass.
+   * child started or a real stop. The record is built by `recordPlatformLaunch`
+   * from observations the Host itself made — the platform and node version are
+   * this process's own `process` facts, never a caller claim — and what makes a
+   * platform read as verified is an observation (`startedAt`), never `ok`:
+   * the pre-existing input shape, which names no launch fact, records a note no
+   * surface may show as a pass.
    *
    * One entry per platform: a later observation of the same platform merges
    * into it (a stop must not append a second row that hides the start).
@@ -567,37 +573,47 @@ export class TaskServiceRuntime {
     const at = record.launchVerifications.findIndex((entry) => entry.platform === input.platform);
     const previous = at < 0 ? undefined : record.launchVerifications[at];
     const observedAt = this.now();
+    // The launch facts of this platform's entry: a start observation replaces
+    // them, any other observation keeps the recorded launch it refers to.
     const launched = input.program !== undefined;
+    const program = launched ? input.program : previous?.program;
+    const args = launched ? [...(input.args ?? [])] : [...(previous?.args ?? [])];
+    const startedAt = launched ? observedAt : previous?.startedAt;
+    const stopped = input.stopped === true || previous?.stopped === true;
+    const stoppedAt = input.stopped === true ? observedAt : previous?.stoppedAt;
     const entry: ServiceLaunchVerification = {
       platform: input.platform,
       nodeVersion: input.nodeVersion,
       ok: input.ok,
       note: input.note ?? "",
-      ...(launched
-        ? { program: input.program, args: [...(input.args ?? [])], startedAt: observedAt }
-        : previous?.startedAt !== undefined
-          ? { program: previous.program, args: [...(previous.args ?? [])], startedAt: previous.startedAt }
-          : {}),
-      ...(input.stopped === true
-        ? { stopped: true, stoppedAt: observedAt }
-        : previous?.stopped === true
-          ? { stopped: true, stoppedAt: previous.stoppedAt }
-          : {}),
+      ...(program !== undefined && startedAt !== undefined
+        ? recordPlatformLaunch({
+            program,
+            args,
+            platform: input.platform,
+            nodeVersion: input.nodeVersion,
+            ok: input.ok,
+            note: input.note,
+            startedAt,
+            stopped,
+            ...(stoppedAt !== undefined ? { stoppedAt } : {}),
+          })
+        : {}),
     };
     // Only an entry that names a real launch is persisted: a stop with no
     // recorded start for this platform verifies no launch, so it stays a note.
-    if (entry.startedAt !== undefined && this.verifications) {
+    if (program !== undefined && startedAt !== undefined && this.verifications) {
       try {
         this.verifications.record({
           schemaVersion: LAUNCH_VERIFICATION_SCHEMA_VERSION,
           serviceId,
           platform: entry.platform,
           nodeVersion: entry.nodeVersion,
-          program: entry.program ?? "",
-          args: [...(entry.args ?? [])],
-          startedAt: entry.startedAt ?? observedAt,
-          stopped: entry.stopped === true,
-          ...(entry.stopped === true ? { stoppedAt: entry.stoppedAt ?? observedAt } : {}),
+          program,
+          args,
+          startedAt,
+          stopped,
+          ...(stoppedAt !== undefined ? { stoppedAt } : {}),
         });
       } catch (error) {
         record.events.push(`launch-verification-unrecorded:${entry.platform}:${error instanceof Error ? error.message : String(error)}`);
