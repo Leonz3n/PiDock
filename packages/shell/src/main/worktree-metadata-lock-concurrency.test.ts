@@ -470,6 +470,28 @@ describe("[PiDock 03] (#6 盒子 9) repository-level worktree creation is mutual
     expect(existsSync(env.lockFile(env.second))).toBe(false);
   });
 
+  it("refuses an append BY NAME and writes no metadata at all while a REAL second process holds the lock", { timeout: EVIDENCE_TEST_TIMEOUT_MS }, async () => {
+    const env = await setup();
+    const task = await env.createTask(env.first, "Task A");
+    const holder = await startHolder(env, env.second.repo, "task-child004", "追加仓库");
+    try {
+      const recordBefore = env.recordOf(task);
+      const listingBefore = readdirSync(task.taskDir).sort();
+      await expect(
+        env.append().append({ taskId: task.taskId, repositories: [env.selection(env.second)] }),
+      ).rejects.toThrow(/^worktree-locked: /);
+      // The planning scan AND the Host's record write are inside the critical
+      // section: a loser must not leave even a half-written metadata record.
+      expect(env.recordOf(task)).toEqual(recordBefore);
+      expect(readdirSync(task.taskDir).sort()).toEqual(listingBefore);
+      expect(git(env.second.repo, "branch", "--list", task.branch)).toBe("");
+      expect(existsSync(env.worktreeOf(task, env.second))).toBe(false);
+      expect(git(env.second.repo, "worktree", "list", "--porcelain").split("\n").filter((line) => line.startsWith("worktree "))).toHaveLength(1);
+    } finally {
+      await stopHolder(holder);
+    }
+  });
+
   it("lets two tasks of one source repository create their worktrees one after the other", { timeout: EVIDENCE_TEST_TIMEOUT_MS }, async () => {
     const env = await setup();
     const taskA = await env.createTask(env.first, "Task A");
