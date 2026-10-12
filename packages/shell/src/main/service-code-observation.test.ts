@@ -148,6 +148,12 @@ describe("[PiDock 05] #10 a failed worktree read never reads as clean", () => {
     expect(observeWorktreeCode("  ")).toEqual({ ok: false, reason: "启动描述符没有工作目录" });
   });
 
+  it("names an unreadable working directory as such, not as a missing git binary", () => {
+    // A spawn with a missing cwd fails with the same ENOENT a missing binary
+    // produces, so the reason must come from checking the directory itself.
+    expect(observeWorktreeCode(join(nonRepo(), "missing-subdir"))).toEqual({ ok: false, reason: "启动描述符的工作目录不可读" });
+  });
+
   it("keeps machine paths out of the named reason (the reason reaches the renderer-readable log)", () => {
     const dir = nonRepo();
     const observed = observeWorktreeCode(dir);
