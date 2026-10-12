@@ -84,6 +84,9 @@ describe("[UI 对齐] S8d task service parsers", () => {
       buildFreshness: "uncommitted-code", ports: [53101], portsSource: "declared",
       processIdentity: { owner: "agent", pid: 4242, startedAt: "2026-10-08T00:00:00.000Z" },
       logRef: "/tmp/task-1/services/svc/run-run-1.log", startedAt: "2026-10-08T00:00:00.000Z",
+      // The real observation rides the parsed view so the panel can label it
+      // 已互验 instead of leaving the linkage result invisible ([PiDock 05] #10 box 4).
+      verifications: [{ kind: "linkage", detail: "联通检查 shipment-service", ok: true }],
     });
     expect(runRecordsFromHost({ records: [{ ...record, protocolArtifact: { version: "v2" } }] }, "task-1")?.get(SERVICE_ID)).toMatchObject({ runId: "run-1" });
     // Nothing was verified about this record: the missing pid must not be

@@ -27,7 +27,7 @@ import {
   type ServiceRegistryStatusView,
   type TaskServicesLoad,
 } from "../data/taskServices";
-import { buildFreshnessLabel, codeStateLabel } from "../data/serviceTopology";
+import { buildFreshnessLabel, codeStateLabel, linkageStateLabel } from "../data/serviceTopology";
 import { ProtocolPanel, TerminalTakeoverPanel } from "./ToolPanels";
 import { ServiceOwnerRebind } from "./ServiceOwnerRebind";
 import {
@@ -239,7 +239,30 @@ function RunRecordFacts({ record }: { record: ServiceRunRecordView }) {
         <RunFact label="日志入口" value={record.logRef} mono />
         {record.exitReason !== undefined && <RunFact label="结束原因" value={record.exitReason} />}
       </dl>
+      <RunVerification record={record} />
     </div>
+  );
+}
+
+/**
+ * The run's REAL observations ([PiDock 05] #10 box 4), each labelled by what it
+ * actually observed: 已监听 / 已互验 for an accepted connection, 未监听 /
+ * 依赖不可达 for one that did not reach, and 未探测 when the record carried no
+ * observation at all. 已启动 is the record's own 进程标识 row above — this block
+ * never turns a started process into a listening or a verified one.
+ */
+function RunVerification({ record }: { record: ServiceRunRecordView }) {
+  if (record.verifications.length === 0) {
+    return <p className="mt-0.5 text-[10px] text-muted" data-testid="dock-run-verification" data-state="未探测">联通核验：未探测（运行记录没有实测监听/联通结果）</p>;
+  }
+  return (
+    <ul className="mt-0.5 flex flex-col text-[10px] text-muted" data-testid="dock-run-verification">
+      {record.verifications.map((entry, index) => (
+        <li key={`${entry.kind}:${index}`} data-verification-state={linkageStateLabel(entry)}>
+          联通核验：{linkageStateLabel(entry)} · {entry.detail}
+        </li>
+      ))}
+    </ul>
   );
 }
 

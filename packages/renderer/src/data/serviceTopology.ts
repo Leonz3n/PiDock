@@ -328,6 +328,27 @@ export function failureLabel(code: string): { label: string; hint: string } {
   }
 }
 
+/**
+ * The named state of one REAL run observation ([PiDock 05] #10 box 4). The three
+ * facts the panel must never conflate: 已启动 (the run's real pid, shown by the
+ * record's own 进程标识 row), 已监听 (a real connect was accepted at the unit's
+ * address) and 已互验 (a real connect reached the dependency). The negative
+ * states are distinct on purpose: 依赖不可达 is a failed connect to a dependency,
+ * 未监听 a unit that started but accepts nothing, and 未探测 an observation
+ * nobody made - it is named here, never shown as a blank field. The group
+ * payload names the same facts per unit and per step (`host/service-group-run.ts`),
+ * including the step-level 核验失败.
+ */
+export type ServiceLinkageState = "已监听" | "未监听" | "已互验" | "依赖不可达" | "未探测";
+
+export function linkageStateLabel(verification: { kind: string; ok: boolean }): ServiceLinkageState {
+  if (verification.kind === "linkage") return verification.ok ? "已互验" : "依赖不可达";
+  if (verification.kind === "readiness") return verification.ok ? "已监听" : "未监听";
+  // remote-reachability: a failed reachability check is an unreachable
+  // dependency, not a listener that started but never bound.
+  return verification.ok ? "已互验" : "依赖不可达";
+}
+
 /** Build-rfreshness label: an old build and uncommitted code read differently (box 6). */
 export function buildFreshnessLabel(freshness: ServiceBuildFreshness): string {
   switch (freshness) {
