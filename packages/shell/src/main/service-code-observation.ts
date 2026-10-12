@@ -15,8 +15,16 @@
  * - the failure reason is a fixed, named classification. Raw git stderr can
  *   name machine paths, and the reason travels to a bounded log the sandboxed
  *   page reads (`task/serviceLog`), so no raw tool output crosses this seam;
- * - every child is bounded (timeout + output cap) and non-interactive, so a
- *   hung or credential-prompting git can neither stall a start nor write.
+ * - every child is bounded (timeout + output cap), non-interactive and
+ *   INDEX-NEUTRAL, so a hung or credential-prompting git can neither stall a
+ *   start nor write (`GIT_OPTIONAL_LOCKS=0`: without it `status --porcelain`
+ *   refreshes and may rewrite the user's worktree index, and can collide with
+ *   the user's own concurrent git on `index.lock`);
+ * - the child's environment is pinned to `cwd` by clearing `GIT_DIR`,
+ *   `GIT_WORK_TREE` and `GIT_INDEX_FILE`: an inherited one of these (PiDock
+ *   launched from a git hook, or an exporting shell) would make every read
+ *   answer about a DIFFERENT repository - possibly PiDock's own checkout -
+ *   so a dirty task worktree could read `committed-clean` about the wrong repo.
  */
 import { execFileSync } from "node:child_process";
 import { lstatSync } from "node:fs";
@@ -34,10 +42,15 @@ const GIT_READ_MAX_BUFFER = 1024 * 1024;
 const COMMIT_PATTERN = /^[0-9a-f]{7,64}$/i;
 
 /**
- * Read-only git in a bounded, non-interactive child. `GIT_TERMINAL_PROMPT`/
- * `GCM_INTERACTIVE` are the same pair `task-append.ts` uses for its own child
- * git calls: a read here must never wait on a prompt. No mutating subcommand is
- * ever passed by this module.
+ * Read-only git in a bounded, non-interactive, INDEX-NEUTRAL child.
+ * `GIT_TERMINAL_PROMPT`/`GCM_INTERACTIVE` are the same pair `task-append.ts`
+ * uses for its own child git calls: a read here must never wait on a prompt.
+ * `GIT_OPTIONAL_LOCKS=0` keeps `status --porcelain` from refreshing/writing the
+ * worktree index (a write here would mutate the user's repository and can fail
+ * on `index.lock` contention with the user's own git). `GIT_DIR`,
+ * `GIT_WORK_TREE` and `GIT_INDEX_FILE` are cleared (`undefined` drops the key
+ * from the child env) so the reads can only ever answer about `cwd`. No
+ * mutating subcommand is ever passed by this module.
  */
 function readGit(cwd: string, args: readonly string[]): { ok: true; stdout: string } | { ok: false; reason: string } {
   try {
@@ -46,7 +59,15 @@ function readGit(cwd: string, args: readonly string[]): { ok: true; stdout: stri
       encoding: "utf8",
       timeout: GIT_READ_TIMEOUT_MS,
       maxBuffer: GIT_READ_MAX_BUFFER,
-      env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never" },
+      env: {
+        ...process.env,
+        GIT_TERMINAL_PROMPT: "0",
+        GCM_INTERACTIVE: "never",
+        GIT_OPTIONAL_LOCKS: "0",
+        GIT_DIR: undefined,
+        GIT_WORK_TREE: undefined,
+        GIT_INDEX_FILE: undefined,
+      },
       stdio: ["ignore", "pipe", "pipe"],
     });
     return { ok: true, stdout: stdout.trim() };

@@ -16,7 +16,7 @@
  * guaranteed) and every temp directory is removed in `afterEach`.
  */
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -161,6 +161,86 @@ describe("[PiDock 05] #10 a failed worktree read never reads as clean", () => {
     expect(observed.reason).not.toContain(dir);
     expect(observed.reason).not.toContain("fatal:");
     expect(observed.reason).not.toContain("/");
+  });
+});
+
+describe("[PiDock 05] #10 the observation is READ-ONLY and can only answer about cwd", () => {
+  it("does not write the worktree index (status --porcelain is index-neutral here)", () => {
+    const { root, cwd } = worktree();
+    const index = join(root, ".git", "index");
+    // `git status` refreshes and REWRITES the index exactly when a tracked
+    // file's recorded stat no longer matches its real stat: touch the file (same
+    // content, new mtime) to create that condition. Pin the index file's own
+    // mtime to a fixed past moment so a rewrite would move it to now - making
+    // any write unmistakable rather than a same-millisecond coin flip.
+    const past = new Date(1_000_000);
+    utimesSync(join(cwd, "service.cjs"), past, past);
+    utimesSync(index, past, past);
+    const beforeMtime = statSync(index).mtimeMs;
+    const beforeBytes = readFileSync(index);
+
+    expect(observeWorktreeCode(cwd)).toEqual({ ok: true, code: { commit: git(cwd, ["rev-parse", "HEAD"]), dirty: false } });
+
+    // The supposedly read-only observation left the user's index byte-identical
+    // and untouched: without `GIT_OPTIONAL_LOCKS=0` git refreshes it here.
+    expect(statSync(index).mtimeMs).toBe(beforeMtime);
+    expect(readFileSync(index)).toEqual(beforeBytes);
+  });
+
+  it("answers about cwd when an inherited GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE name another repo", () => {
+    const { cwd, commit } = worktree();
+    // The launch worktree is DIRTY: this is the exact way a redirected read
+    // could (wrongly) read `committed-clean` about the wrong repository.
+    writeFileSync(join(cwd, "service.cjs"), "console.log('dirty');\n");
+    // A second, CLEAN repository with a different HEAD - what a git hook or an
+    // exporting shell pointed the three variables at.
+    const decoy = mkdtempSync(join(tmpdir(), "pidock-code-observation-decoy-"));
+    roots.push(decoy);
+    writeFileSync(join(decoy, "decoy.cjs"), "console.log('decoy');\n");
+    git(decoy, ["init", "-q", "-b", "main", "."]);
+    git(decoy, ["-c", "user.name=pidock-test", "-c", "user.email=pidock@test.invalid", "add", "-A"]);
+    git(decoy, ["-c", "user.name=pidock-test", "-c", "user.email=pidock@test.invalid", "commit", "-q", "-m", "decoy"]);
+    expect(git(decoy, ["rev-parse", "HEAD"])).not.toBe(commit);
+
+    const saved = { GIT_DIR: process.env["GIT_DIR"], GIT_WORK_TREE: process.env["GIT_WORK_TREE"], GIT_INDEX_FILE: process.env["GIT_INDEX_FILE"] };
+    process.env["GIT_DIR"] = join(decoy, ".git");
+    process.env["GIT_WORK_TREE"] = decoy;
+    process.env["GIT_INDEX_FILE"] = join(decoy, ".git", "index");
+    try {
+      // Without clearing the three, this would answer with the decoy's clean HEAD.
+      expect(observeWorktreeCode(cwd)).toEqual({ ok: true, code: { commit, dirty: true } });
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
+  it("answers about cwd's own index when GIT_INDEX_FILE names a different index", () => {
+    const { root, cwd, commit } = worktree();
+    const index = join(root, ".git", "index");
+    // A poisoned alternate index whose blob for the tracked file differs from
+    // HEAD. Keep it OUTSIDE the worktree (an in-tree file would itself read as
+    // untracked), then reset the worktree clean. If the read honoured
+    // GIT_INDEX_FILE, a CLEAN cwd would read dirty (index vs HEAD); clearing it
+    // keeps the answer about cwd's own index.
+    const poisonDir = mkdtempSync(join(tmpdir(), "pidock-code-observation-poison-"));
+    roots.push(poisonDir);
+    const poisoned = join(poisonDir, "index");
+    writeFileSync(join(cwd, "service.cjs"), "console.log('poison');\n");
+    git(root, ["add", "-A"]);
+    copyFileSync(index, poisoned);
+    git(root, ["reset", "-q", "--hard", "HEAD"]);
+
+    const saved = process.env["GIT_INDEX_FILE"];
+    process.env["GIT_INDEX_FILE"] = poisoned;
+    try {
+      expect(observeWorktreeCode(cwd)).toEqual({ ok: true, code: { commit, dirty: false } });
+    } finally {
+      if (saved === undefined) delete process.env["GIT_INDEX_FILE"];
+      else process.env["GIT_INDEX_FILE"] = saved;
+    }
   });
 });
 
