@@ -603,6 +603,26 @@ export function restartNeededForTemplateAdopt(
     .map((service) => ({ id: service.id, name: service.name, from: service.templateVersion, to: adoptedVersion }));
 }
 
+/**
+ * The one spelling of "which platform is this process running on":
+ * `<process.platform>-<process.arch>` (e.g. `darwin-arm64`, `win32-x64`).
+ * Both the launch-verification record the Host writes and the platform rows it
+ * projects use this label, so a row can only ever name the platform it was
+ * really observed on — never a caller-supplied one.
+ */
+export function hostPlatformLabel(platform: string = process.platform, arch: string = process.arch): string {
+  return `${platform}-${arch}`;
+}
+
+/**
+ * Platforms the project's release/validation matrix names
+ * (`docs/mvp-validation-plan.md`: macOS arm64 + Windows x64, "只有实际测试通过
+ * 的平台可以标记已验证"). They exist here so the surface can show a platform
+ * that has NO real verification BY NAME instead of leaving it out — an absent
+ * row is exactly the state that could be misread as a pass.
+ */
+export const LAUNCH_VERIFICATION_TARGETS = ["darwin-arm64", "win32-x64"] as const;
+
 export interface PlatformLaunchRecord {
   program: string;
   args: string[];
@@ -610,9 +630,18 @@ export interface PlatformLaunchRecord {
   nodeVersion: string;
   ok: boolean;
   note: string;
+  /** When the real child of this launch was confirmed alive (ISO), when observed. */
+  startedAt?: string;
+  /** True once a real stop of that launch was confirmed, when observed. */
+  stopped?: boolean;
+  stoppedAt?: string;
 }
 
-/** Record one per-platform desktop-launch verification (explicit program+args). */
+/**
+ * Build one per-platform desktop-launch verification (explicit program+args).
+ * Pure: it stamps nothing and observes nothing, so only a caller that really
+ * watched a child start or stop may use its result as a verification record.
+ */
 export function recordPlatformLaunch(input: {
   program: string;
   args: string[];
@@ -620,6 +649,9 @@ export function recordPlatformLaunch(input: {
   nodeVersion: string;
   ok: boolean;
   note?: string;
+  startedAt?: string;
+  stopped?: boolean;
+  stoppedAt?: string;
 }): PlatformLaunchRecord {
   return {
     program: input.program,
@@ -628,5 +660,8 @@ export function recordPlatformLaunch(input: {
     nodeVersion: input.nodeVersion,
     ok: input.ok,
     note: input.note ?? "",
+    ...(input.startedAt !== undefined ? { startedAt: input.startedAt } : {}),
+    ...(input.stopped !== undefined ? { stopped: input.stopped } : {}),
+    ...(input.stoppedAt !== undefined ? { stoppedAt: input.stoppedAt } : {}),
   };
 }

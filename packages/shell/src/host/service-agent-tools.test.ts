@@ -38,6 +38,7 @@ import { SdkAgentToolBroker, type SdkAgentServiceHost } from "./sdk-agent-tool-b
 import { SDK_AGENT_TOOL_NAMES, type SdkAgentToolName, type SdkAgentToolOutcome, type SdkAgentToolRequest } from "./sdk-agent-tool-contract.js";
 import { publicServiceStatus } from "./service-public.js";
 import { runHumanServiceControl } from "./service-control.js";
+import { readLaunchVerificationOnDisk } from "./task-store.js";
 import type { TaskWorkspaceHost } from "./task-host.js";
 
 const cleanups: (() => void | Promise<void>)[] = [];
@@ -483,4 +484,40 @@ it("declares only gated service tools, so no service tool is reachable outside t
   expect(await unwired.call("main", { tool: "service.status", args: { serviceId: f.serviceId } })).toMatchObject({ code: "tool-refused:service-control-unavailable" });
   expect(await unwired.call("main", { tool: "service.start", args: { serviceId: f.serviceId } })).toMatchObject({ code: "tool-refused:service-control-unavailable" });
   expect(existsSync(join(f.taskDir, "service-ownership.json"))).toBe(false);
+});
+
+// [PiDock 04] (#7 box 7) the production wiring of the platform launch record:
+// `host.js`'s own `agentServiceHostFor` builds the task runtime with the task
+// workspace's durable launch-verification document, so a real Agent-driven
+// launch leaves a record a later read can show - and every platform this
+// machine did not run stays explicitly unverified.
+it("records THIS platform's real launch in the task workspace and projects it with Windows unverified", { timeout: 30_000 }, async () => {
+  const f = await harness();
+  await f.host.setPermission("main", "auto");
+  expect((await f.call("service.start", { serviceId: f.serviceId })).outcome).toBe("ok");
+  await until(() => markerPid(f.taskDir, "a") !== undefined, "the service child to report its pid");
+
+  const document = readLaunchVerificationOnDisk(f.taskDir);
+  const program = realpathSync(process.execPath);
+  expect(document.entries).toEqual([{
+    schemaVersion: 1,
+    serviceId: f.serviceId,
+    platform: `${process.platform}-${process.arch}`,
+    nodeVersion: process.versions.node,
+    program,
+    args: ["service.cjs"],
+    startedAt: expect.any(String),
+    stopped: false,
+  }]);
+
+  const rows = publicServiceStatus(f.surface.services.get(f.serviceId)!).launchVerification.rows;
+  expect(process.platform).not.toBe("win32");
+  expect(rows.filter((row) => row.verified)).toEqual([
+    { platform: `${process.platform}-${process.arch}`, verified: true, nodeVersion: process.versions.node, program, startedAt: expect.any(String), stopped: false },
+  ]);
+  // Windows is named and unverified, never absent and never a pass.
+  expect(rows.find((row) => row.platform === "win32-x64")).toEqual({ platform: "win32-x64", verified: false, reason: "本机未运行该平台，未实测" });
+
+  expect((await f.call("service.stop", { serviceId: f.serviceId })).outcome).toBe("ok");
+  expect(readLaunchVerificationOnDisk(f.taskDir).entries[0]).toMatchObject({ stopped: true, startedAt: document.entries[0].startedAt });
 });

@@ -46,6 +46,7 @@ import {
 import { ServiceOwnerInventory } from "./service-owner-inventory.js";
 import { SERVICE_STOP_CONFIRM_MS, SERVICE_STOP_GRACE_MS, TaskServiceProcesses } from "./service-processes.js";
 import { diskServiceOwnershipLog } from "./service-ownership.js";
+import { diskLaunchVerificationLog } from "./service-launch-verification.js";
 import { serviceOwnerBootstrap, serviceOwnerRebind, type ServiceOwnerBootstrap, type ServiceOwnerCompletion } from "../rpc/service-host-binding.js";
 import { TaskWorkspaceHost, diskTaskStore } from "./task-host.js";
 import { SdkTurnTransport } from "./sdk-turn-transport.js";
@@ -403,7 +404,10 @@ function serviceRuntimeFor(taskId: string): TaskServiceRuntime | { error: string
   const host = taskHostFor(taskId);
   if ("error" in host) return host;
   if (!serviceRuntime || serviceRuntime.taskDir !== host.taskDir) {
-    serviceRuntime = new TaskServiceRuntime(host.taskDir);
+    // The task workspace's own launch-verification document ([PiDock 04] #7 box
+    // 7): without it a verification would live only in this Host's memory and
+    // the platform would read as unverified again after every restart.
+    serviceRuntime = new TaskServiceRuntime(host.taskDir, undefined, diskLaunchVerificationLog(host.taskDir));
   }
   return serviceRuntime;
 }
