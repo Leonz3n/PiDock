@@ -14,7 +14,7 @@ PiDock 是一个面向软件开发任务的桌面 Agent 工作台。它把项目
 
 ## 当前内容
 
-- [`CONTEXT.md`](CONTEXT.md)：项目领域术语。
+- [`GLOSSARY.md`](GLOSSARY.md)：项目领域术语。
 - [首版规格](.scratch/pidock-mvp/spec.md)：当前权威 MVP 规格。
 - [`docs/`](docs)：设计记录、调研和验证计划。
 - [`docs/toolchain-warmup.md`](docs/toolchain-warmup.md)：实现前的本机工具链预热记录（Electron、Playwright、pi SDK 等）。
