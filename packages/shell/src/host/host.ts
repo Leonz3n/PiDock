@@ -1838,7 +1838,11 @@ async function performTaskOp(
         const files = workspaceFilesFor(taskId);
         if ("error" in files) return { ok: false, error: files.error };
         try {
-          return { ok: true, payload: { roots: files.roots(), taskDir: files.taskDir } };
+          // [PiDock 03] (#6 box 6) the roots readout observes each worktree's OWN
+          // branch and uncommitted state (`observedRoots`) and keeps the pinned
+          // baseline branch as a separate declared field, so two tasks sharing
+          // one repo can never read as the same branch.
+          return { ok: true, payload: { roots: files.observedRoots(), taskDir: files.taskDir } };
         } catch (error) {
           return { ok: false, error: error instanceof Error ? error.message : String(error) };
         }

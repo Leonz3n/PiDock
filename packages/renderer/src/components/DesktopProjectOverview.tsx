@@ -1,5 +1,6 @@
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
+import { SharedRepoIsolation } from "./SharedRepoIsolation";
 import type { DesktopProject, TaskAssociation } from "../data/desktopProjects";
 import type { DesktopShellTask } from "./DesktopShell";
 
@@ -100,6 +101,11 @@ export function DesktopProjectOverview({
           </p>
         )}
       </div>
+
+      {/* [PiDock 03] (#6 盒子 6) the tasks above are already shown together; this
+          is the readout that keeps their shared repositories apart, and the
+          plain-directory link that is NOT isolated. */}
+      <SharedRepoIsolation tasks={scoped.map((task) => ({ taskId: task.taskId, name: task.name }))} />
 
       <div className="mt-7 flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-[13px] font-semibold text-ink">项目仓库与目录</h2>

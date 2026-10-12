@@ -38,6 +38,7 @@ import { ProtocolPanel, TerminalTakeoverPanel } from "./ToolPanels";
 import { ServiceOwnerRebind } from "./ServiceOwnerRebind";
 import {
   externalEditorLaunchFromHost,
+  observedText,
   terminalPlanFromHost,
   terminalStateFromHost,
   workspaceDiffFromHost,
@@ -340,7 +341,12 @@ function RootChips({
           className={root.id === selectedId ? "border-primary" : "text-muted-foreground"}
         >
           <span>{root.label}</span>
-          {root.branch && <span className="text-[10px] text-muted">· {root.branch}</span>}
+          {/* The chip carries the OBSERVED working branch, never the root's
+              pinned baseline: a worktree the Host could not read shows no
+              branch here, and the metadata block below names the unknown. */}
+          {root.workingBranch?.state === "observed" && (
+            <span className="text-[10px] text-muted">· {root.workingBranch.value}</span>
+          )}
         </Button>
       ))}
     </div>
@@ -538,8 +544,20 @@ function FilesTool({ taskId }: { taskId: string }) {
             <dt className="text-muted">实际目录</dt>
             <dd className="min-w-0 break-all font-mono">{selectedRoot.path}</dd>
             {selectedRoot.kind === "worktree" && <>
+              {/* [PiDock 03] (#6 盒子 6) 工作分支 is an OBSERVATION of this worktree
+                  (`task/fileRoots` → `observedRoots()`); the pinned baseline is a
+                  DECLARED record fact shown beside it, never as the working
+                  branch. An unread branch says so by name. */}
+              <dt className="text-muted">工作分支</dt>
+              <dd className="min-w-0 break-all font-mono" data-testid="dock-working-branch">
+                {observedText(selectedRoot.workingBranch, (name) => name, "Host 未上报工作分支观察")}
+              </dd>
+              <dt className="text-muted">未提交改动</dt>
+              <dd className="min-w-0 break-all font-mono" data-testid="dock-uncommitted">
+                {observedText(selectedRoot.dirty, (dirty) => (dirty ? "有" : "无"), "Host 未上报未提交状态")}
+              </dd>
               <dt className="text-muted">远程基线分支</dt>
-              <dd className="min-w-0 break-all font-mono">{selectedRoot.branch || "Host 未提供"}</dd>
+              <dd className="min-w-0 break-all font-mono">{selectedRoot.baselineBranch || "Host 未提供"}</dd>
               <dt className="text-muted">创建提交</dt>
               <dd className="min-w-0 break-all font-mono">{selectedRoot.baseCommit || "Host 未提供"}</dd>
             </>}
