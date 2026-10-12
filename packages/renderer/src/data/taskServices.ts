@@ -280,6 +280,13 @@ export interface ServiceRunRecordView {
   startedAt: string;
   endedAt?: string;
   exitReason?: string;
+  /**
+   * Real per-run observations ([PiDock 05] #10 box 4): each entry is a real
+   * connect the Host made (listening / linkage / remote reachability). An empty
+   * list means nobody observed anything, which the panel names 未探测 instead of
+   * leaving the field blank.
+   */
+  verifications: { kind: string; detail: string; ok: boolean }[];
 }
 
 /** Length-bounded text: `undefined` when absent, `null` when present-but-unusable. */
@@ -348,10 +355,12 @@ function runRecordFromHost(value: unknown, taskId: string): { serviceId: string;
   }
   const rawVerifications = value["verifications"];
   if (!Array.isArray(rawVerifications) || rawVerifications.length > 64) return null;
+  const verifications: ServiceRunRecordView["verifications"] = [];
   for (const entry of rawVerifications) {
     if (!isRecord(entry) || Object.keys(entry).some((key) => !RUN_VERIFICATION_KEYS.includes(key))) return null;
     if (entry["kind"] !== "linkage" && entry["kind"] !== "readiness" && entry["kind"] !== "remote-reachability") return null;
     if (typeof entry["detail"] !== "string" || typeof entry["ok"] !== "boolean" || boundedText(entry["at"], 200) == null) return null;
+    verifications.push({ kind: entry["kind"], detail: entry["detail"], ok: entry["ok"] });
   }
   const protocolArtifact = value["protocolArtifact"];
   if (protocolArtifact !== undefined && (!isRecord(protocolArtifact) || Object.keys(protocolArtifact).sort().join(",") !== "version" || boundedText(protocolArtifact["version"], 200) == null)) return null;
@@ -366,6 +375,7 @@ function runRecordFromHost(value: unknown, taskId: string): { serviceId: string;
       logRef, startedAt,
       ...(endedAt !== undefined ? { endedAt } : {}),
       ...(exitReason !== undefined ? { exitReason } : {}),
+      verifications,
     },
   };
 }

@@ -45,6 +45,39 @@ function realRunRecordsPayload(input: { portsSource: "declared" | "observed"; ex
   return { records: topology.runs(), registered: topology.registeredIdentities() };
 }
 
+/**
+ * The REAL Host emit for a run that was really observed: the same
+ * `TaskServiceTopology` `host.ts` writes, with the group runner's own
+ * observations attached through `verifyRun` (the existing verification shape).
+ */
+/**
+ * A real Host emit of a run NOBODY observed: the unit is in the plan, so
+ * `recordRun` adds no "not selected" note, and no verification was ever
+ * attached. This is the payload that must read 未探测 by name.
+ */
+function unobservedRunRecordsPayload() {
+  const topology = new TaskServiceTopology("task-1", "/tmp/task-1", () => STARTED_AT);
+  topology.setPlan({
+    units: [{ unitId: "repo:svc", serviceId: SERVICE_ID, name: "invoice-local", repoDir: "repo", location: "local", runType: "long-lived" }],
+    selectedRepoDirs: ["repo"],
+    requests: [{ unitId: "repo:svc", port: 4100 }],
+  });
+  topology.recordRun({
+    serviceId: SERVICE_ID, templateVersion: "2", ports: [4100], portsSource: "declared", pid: 4242, owner: "human", startedAt: STARTED_AT,
+  });
+  return { records: topology.runs(), registered: topology.registeredIdentities() };
+}
+
+function observedRunRecordsPayload() {
+  const topology = new TaskServiceTopology("task-1", "/tmp/task-1", () => STARTED_AT);
+  topology.recordRun({
+    serviceId: SERVICE_ID, templateVersion: "2", ports: [4100], portsSource: "declared", pid: 4242, owner: "human", startedAt: STARTED_AT,
+  });
+  topology.verifyRun("run-1", { kind: "readiness", detail: "已监听 127.0.0.1:4100（真实连接成功）", ok: true });
+  topology.verifyRun("run-1", { kind: "linkage", detail: "联通检查 invoice-local: 已互验：真实连接到达 127.0.0.1:4100", ok: true });
+  return { records: topology.runs(), registered: topology.registeredIdentities() };
+}
+
 /** One bound service in project-1, with the run-record op stubbed to `answer`. */
 function bridgeWithRunRecords(answer: unknown) {
   const taskOp = vi.fn(async (_taskId: string, op: string) => {
@@ -119,6 +152,28 @@ describe("[UI 对齐] S8d production 运行 panel reads the Host run record", ()
     bridgeWithRunRecords({ ok: true, payload: realRunRecordsPayload({ portsSource: "observed" }) });
     render(<DesktopToolDock taskId="task-1" tool="runtime" onClose={() => {}} />);
     expect(await screen.findByTestId("dock-run-record")).toHaveTextContent("127.0.0.1:4100（实测监听）");
+  });
+
+  it("labels the run's REAL observations 已监听 / 已互验, never conflating them with 已启动", async () => {
+    bridgeWithRunRecords({ ok: true, payload: observedRunRecordsPayload() });
+    render(<DesktopToolDock taskId="task-1" tool="runtime" onClose={() => {}} />);
+    await screen.findByTestId("dock-run-record");
+    const observed = await screen.findByTestId("dock-run-verification");
+    // The two distinct facts the group runner really observed.
+    expect(observed).toHaveTextContent("联通核验：已监听 · 已监听 127.0.0.1:4100（真实连接成功）");
+    expect(observed).toHaveTextContent("联通核验：已互验 · 联通检查 invoice-local: 已互验：真实连接到达 127.0.0.1:4100");
+    // 已启动 stays the run's own pid row; nothing here invents a listening or a
+    // verified state from the process having started.
+    expect(await screen.findByTestId("dock-run-record")).toHaveTextContent("进程标识");
+  });
+
+  it("names 未探测 when the run record carries no observation at all", async () => {
+    bridgeWithRunRecords({ ok: true, payload: unobservedRunRecordsPayload() });
+    render(<DesktopToolDock taskId="task-1" tool="runtime" onClose={() => {}} />);
+    const absent = await screen.findByTestId("dock-run-verification");
+    expect(absent).toHaveTextContent("联通核验：未探测（运行记录没有实测监听/联通结果）");
+    expect(absent).not.toHaveTextContent("已互验");
+    expect(absent).not.toHaveTextContent("已监听");
   });
 
   it("names the absent state for a service with no run record instead of implying a run", async () => {
