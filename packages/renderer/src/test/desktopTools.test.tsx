@@ -502,6 +502,41 @@ describe("[UI 对齐] S8d 运行 panel (real Host bindings and status)", () => {
     expect(screen.queryByText(/最近停止：Agent/)).not.toBeInTheDocument();
   });
 
+  it("shows which platform was really verified and names Windows as unverified", async () => {
+    const here = `${process.platform}-${process.arch}`;
+    panelBridge({ statuses: () => ({ ok: true, payload: { service: {
+      serviceId: SERVICE_ID, lifecycle: "stopped", templateVersion: "2", health: "not-probed", launchSource: "catalog", resolved: [],
+      launchVerification: { platform: here, rows: [
+        { platform: here, verified: true, nodeVersion: "24.21.0", program: "node", startedAt: "2026-10-08T00:00:00.000Z", stopped: true, stoppedAt: "2026-10-08T00:01:00.000Z" },
+        { platform: "win32-x64", verified: false, reason: "本机未运行该平台，未实测" },
+      ] },
+    } } }) });
+    render(<DesktopToolDock taskId="task-1" tool="runtime" onClose={() => {}} />);
+    await screen.findByText("invoice-local");
+    const line = await screen.findByTestId("dock-launch-verification");
+    expect(line).toHaveAttribute("data-platform", here);
+    // What was verified, on WHICH platform: a real start and a confirmed stop.
+    expect(line.querySelector(`[data-platform-row="${here}"]`)).toHaveAttribute("data-verified", "true");
+    expect(line.querySelector(`[data-platform-row="${here}"]`)).toHaveTextContent(`本机 ${here} 实测：已启动（node） · 已停止 · Node 24.21.0`);
+    // Windows is named and NOT verified; nothing in the row reads as a pass.
+    const windows = line.querySelector('[data-platform-row="win32-x64"]');
+    expect(windows).toHaveAttribute("data-verified", "false");
+    expect(windows).toHaveTextContent("win32-x64 未验证（本机未运行该平台，未实测）");
+    expect(line.querySelectorAll('[data-verified="true"]')).toHaveLength(1);
+  });
+
+  it("says a Host provided no platform record instead of implying a verification", async () => {
+    panelBridge({ statuses: () => ({ ok: true, payload: { service: {
+      serviceId: SERVICE_ID, lifecycle: "stopped", templateVersion: "2", health: "not-probed", launchSource: "catalog", resolved: [],
+    } } }) });
+    render(<DesktopToolDock taskId="task-1" tool="runtime" onClose={() => {}} />);
+    await screen.findByText("invoice-local");
+    const line = await screen.findByTestId("dock-launch-verification");
+    expect(line).toHaveAttribute("data-platform", "unknown");
+    expect(line).toHaveTextContent("该 Host 未提供平台实测记录（不表示已通过）");
+    expect(line.querySelectorAll('[data-verified="true"]')).toHaveLength(0);
+  });
+
   it("states that an unassigned task has no project-scoped binding instead of listing zero services", async () => {
     const fixture = panelBridge({ association: { roots: [], tasks: [{ taskId: "task-1", projectId: null, state: "unassigned" }] } });
     render(<DesktopToolDock taskId="task-1" tool="runtime" onClose={() => {}} />);

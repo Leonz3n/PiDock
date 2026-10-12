@@ -152,6 +152,32 @@ function controlText(status: ServiceRegistryStatusView): string {
     : ` · 最近${action}：Agent 会话 ${last.label}`;
 }
 
+/**
+ * The Host's per-platform launch verification for one service ([PiDock 04] #7
+ * box 7). Each row names WHICH platform and WHAT was actually observed on this
+ * machine (that a real service child started, and whether its stop was
+ * confirmed); every other platform the Host names stays 未验证 with the Host's
+ * own reason, so a platform nobody ran here — Windows on this macOS machine,
+ * say — can never read as a pass. A Host that sends no record at all says
+ * exactly that instead of implying one.
+ */
+function LaunchVerification({ view }: { view: ServiceRegistryStatusView["launchVerification"] }) {
+  if (view === undefined) {
+    return <ul className="mt-0.5 text-[10px] text-muted" data-testid="dock-launch-verification" data-platform="unknown">
+      <li>本机平台实测：该 Host 未提供平台实测记录（不表示已通过）</li>
+    </ul>;
+  }
+  return <ul className="mt-0.5 flex flex-col text-[10px] text-muted" data-testid="dock-launch-verification" data-platform={view.platform}>
+    {view.rows.map((row) => (
+      <li key={row.platform} data-platform-row={row.platform} data-verified={row.verified ? "true" : "false"}>
+        {row.verified
+          ? `本机 ${row.platform} 实测：已启动（${row.program ?? "程序未记录"}）${row.stopped ? " · 已停止" : " · 停止未记录"} · Node ${row.nodeVersion ?? "未记录"}`
+          : `${row.platform} 未验证（${row.reason ?? "Host 未给出原因"}）`}
+      </li>
+    ))}
+  </ul>;
+}
+
 /** The Host's own liveness answer for one row; a failed read is never "running". */
 function serviceRunning(row: BoundServiceRow): boolean {
   const status = row.status;
@@ -810,6 +836,7 @@ function RunTool({ taskId }: { taskId: string }) {
                       {row.binding.privateKeys.length > 0 ? ` · 私有引用 ${row.binding.privateKeys.length} 项` : ""}
                     </p>
                     <ServiceControl taskId={taskId} projectId={boundProjectId} row={row} onChanged={() => setRevision((value) => value + 1)} />
+                    {row.status?.kind === "registry" && <LaunchVerification view={row.status.launchVerification} />}
                     <UnwiredControls id="service-mode" label="本地 / 远程" />
                   </li>
                 );
