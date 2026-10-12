@@ -58,6 +58,7 @@ import {
   recordRunExit,
   type ExternalResource,
   type ExternalResourceKind,
+  type PortsSource,
   type ProcessIdentity,
   type RunRecord,
   type RunVerification,
@@ -107,7 +108,15 @@ export interface RecordRunInput {
   /** Shared-template version this run's config snapshot came from. */
   templateVersion: string;
   ports: number[];
-  code: { commit?: string; dirty: boolean };
+  /** Declared ports (recipe/binding) or a probe-observed listening socket. */
+  portsSource: PortsSource;
+  /** Only when the caller really read the working tree; absent stays `unknown`. */
+  code?: { commit?: string; dirty: boolean };
+  /**
+   * Commit the running build was made from, when that was really observed. No
+   * caller may leave it out and still read as `fresh`: an unobserved build
+   * stays `unknown` instead of inheriting the code commit.
+   */
   buildCommit?: string;
   pid: number;
   owner: "agent" | "human";
@@ -260,6 +269,11 @@ export class TaskServiceTopology {
    * start time), so a run can never be recorded from a guess. The record
    * keeps the code/build state, ports and log path together with the
    * registered identity the stop scope later works from.
+   *
+   * `portsSource` obliges the caller to say whether the port list was really
+   * observed or only declared; `code`/`buildCommit` stay optional because a
+   * caller that did not read the working tree must leave them `unknown`
+   * rather than let an unobserved build read as fresh.
    */
   recordRun(input: RecordRunInput): RunRecord {
     if (!Number.isInteger(input.pid) || input.pid <= 0) {
@@ -275,8 +289,9 @@ export class TaskServiceTopology {
       serviceId: input.serviceId,
       templateVersion: input.templateVersion,
       ports: input.ports.length > 0 ? input.ports : assignment ? [assignment.port] : [],
-      code: input.code,
-      build: { commit: input.buildCommit ?? input.code.commit },
+      portsSource: input.portsSource,
+      ...(input.code !== undefined ? { code: input.code } : {}),
+      build: { commit: input.buildCommit },
       processIdentity: { owner: input.owner, pid: input.pid, startedAt },
       taskDir: this.taskDir,
       startedAt,

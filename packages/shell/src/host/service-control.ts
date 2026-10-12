@@ -73,8 +73,13 @@ export type ServiceControlResult =
  * cancel never calls the driver, so no process is started or stopped.
  */
 export interface ServiceExecutionDriver {
-  start(serviceId: string): Promise<{ pid: number }>;
-  stop(serviceId: string): Promise<void>;
+  /**
+   * Spawn the registered launch and resolve with the real child pid. `owner`
+   * is the actor the gate really decided for (agent session vs. attested
+   * human click), so a driver that records the run can label it truthfully.
+   */
+  start(serviceId: string, owner: "agent" | "human"): Promise<{ pid: number }>;
+  stop(serviceId: string, owner: "agent" | "human"): Promise<void>;
 }
 
 /** Input of one agent service control ([PiDock 04] #7). */
@@ -185,7 +190,7 @@ async function runServiceAction(
   if (action === "start") {
     let pid: number;
     try {
-      pid = (await driver.start(serviceId)).pid;
+      pid = (await driver.start(serviceId, actor.kind)).pid;
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : String(error) };
     }
@@ -194,7 +199,7 @@ async function runServiceAction(
     return { ok: true };
   }
   try {
-    await driver.stop(serviceId);
+    await driver.stop(serviceId, actor.kind);
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }

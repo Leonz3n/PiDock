@@ -59,6 +59,7 @@ import { runAgentServiceControl, runHumanServiceControl, type ServiceExecutionDr
 import type { SdkAgentServiceHost } from "./sdk-agent-tool-broker.js";
 import { scanTaskServiceImportHints } from "./service-import.js";
 import { publicServiceStartPreview, publicServiceStatus } from "./service-public.js";
+import { declaredServicePorts } from "../main/service-config.js";
 import { TaskServiceTopology } from "./service-topology.js";
 import { TaskProtocolBinding } from "./protocol-binding.js";
 import { shutdownDeadline } from "./shutdown-deadline.js";
@@ -457,7 +458,13 @@ function serviceDriverFor(taskId: string, services: TaskServiceRuntime): Service
     serviceProcesses = new TaskServiceProcesses(
       services.taskDir,
       (serviceId, line) => services.recordOutput(serviceId, line),
-      (serviceId, reason) => services.markExited(serviceId, reason),
+      (serviceId, reason) => {
+        // A child that ended on its own is no longer a running instance: close
+        // its run record before the runtime flips the lifecycle, so the
+        // registered tree ([PiDock 05] #10 box 8) never keeps a dead pid.
+        closeServiceRun(taskId, serviceId, reason);
+        services.markExited(serviceId, reason);
+      },
       (line) => services.redactLine(line),
       SERVICE_STOP_GRACE_MS,
       SERVICE_STOP_CONFIRM_MS,
@@ -476,9 +483,76 @@ function serviceDriverFor(taskId: string, services: TaskServiceRuntime): Service
   }
   const processes = serviceProcesses;
   return {
-    start: async (serviceId) => ({ pid: await processes.start(services.planRegisteredStart(serviceId)) }),
-    stop: async (serviceId) => { await processes.stop(serviceId); },
+    start: async (serviceId, owner) => {
+      const plan = services.planRegisteredStart(serviceId);
+      const pid = await processes.start(plan);
+      // Only a start that really resolved with a child pid reaches this line,
+      // and the pid is the driver's own return value - never a caller claim.
+      recordServiceRun(taskId, services, plan.serviceId, pid, owner);
+      return { pid };
+    },
+    stop: async (serviceId) => {
+      await processes.stop(serviceId);
+      closeServiceRun(taskId, serviceId, "stopped");
+    },
   };
+}
+
+/**
+ * Register the process identity a real start just produced in this task's
+ * topology ([PiDock 05] #10 boxes 6/8). Until this slice `task/serviceRunRecords`
+ * and `task/serviceStopScope` had no production writer: nothing ever called
+ * `recordRun`, so the box-8 read answered empty while real children ran.
+ *
+ * What is written is deliberately split:
+ * - OBSERVED: the pid and the start time the `TaskServiceProcesses` start
+ *   resolved with, and the actor the gate decided for.
+ * - DECLARED: the port list, taken from the registration's own descriptor plus
+ *   its own `PORT`-like resolved rows (`declaredServicePorts`). This Host owns
+ *   no port probe, so the record says `portsSource: "declared"`.
+ * - NOT READ: code state and build freshness stay `unknown` here. Reading the
+ *   working tree is [PiDock 05] box 6's own slice; claiming a clean tree or a
+ *   fresh build without that read would be exactly the over-reporting the
+ *   boxes forbid. `recordRun` builds its own `startedAt`/`runId` so the record
+ *   cannot be back-dated by this caller.
+ */
+function recordServiceRun(
+  taskId: string,
+  services: TaskServiceRuntime,
+  serviceId: string,
+  pid: number,
+  owner: "agent" | "human",
+): void {
+  const topology = serviceTopologyFor(taskId);
+  if ("error" in topology) return;
+  const registered = services.get(serviceId);
+  try {
+    topology.recordRun({
+      serviceId,
+      templateVersion: registered?.templateVersion ?? "unknown",
+      ports: declaredServicePorts(registered?.descriptor.ports ?? [], registered?.resolved ?? []),
+      portsSource: "declared",
+      pid,
+      owner,
+    });
+  } catch {
+    // The topology record is a read model, never the launch's authority: a
+    // refused record must not turn a child that really started into a failure.
+  }
+}
+
+/** Close the newest still-open run of one service; a no-op when none is open. */
+function closeServiceRun(taskId: string, serviceId: string, reason: string): void {
+  const topology = serviceTopologyFor(taskId);
+  if ("error" in topology) return;
+  const open = [...topology.runs()].reverse().find((record) => record.serviceId === serviceId && record.endedAt === undefined);
+  if (!open) return;
+  try {
+    topology.exitRun(open.runId, reason);
+  } catch {
+    // Same boundary as `recordServiceRun`: a bookkeeping refusal never changes
+    // the action that really happened.
+  }
 }
 
 /**

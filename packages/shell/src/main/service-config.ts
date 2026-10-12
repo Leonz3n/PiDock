@@ -449,6 +449,30 @@ export function autoAdjustPorts(
   return { rows: next, adjusted };
 }
 
+/**
+ * The ports one service's launch *declares*, never the ports a probe observed:
+ * the descriptor's own list (the recipe/shared-template declaration) plus every
+ * resolved row whose key ends in `PORT` and whose value is a usable port number
+ * - the same key rule `autoAdjustPorts` uses. A task's own port binding lands in
+ * `rows`, which is how two tasks bound to one template can declare different
+ * ports. No socket is inspected here: `RunRecord.portsSource` carries that
+ * distinction into the payload instead of letting a declared port read as an
+ * observed one.
+ */
+export function declaredServicePorts(
+  descriptorPorts: readonly number[],
+  rows: readonly ServiceConfigEntry[],
+): number[] {
+  const ports = new Set<number>();
+  for (const port of descriptorPorts) if (Number.isInteger(port) && port >= 1 && port <= 65535) ports.add(port);
+  for (const row of rows) {
+    if (!/PORT$/.test(row.key)) continue;
+    const value = Number(row.value);
+    if (Number.isInteger(value) && value >= 1 && value <= 65535) ports.add(value);
+  }
+  return [...ports].sort((a, b) => a - b);
+}
+
 export interface ImportDraftInput {
   /** Service/recipe display name guess (e.g. package.json name, compose service). */
   name?: string;

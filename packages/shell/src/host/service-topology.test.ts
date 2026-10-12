@@ -203,6 +203,7 @@ describe("TaskServiceTopology run records and stop scope", () => {
       serviceId: "invoice-service",
       templateVersion: "v13",
       ports: [],
+      portsSource: "declared",
       code: { commit: "abc1234", dirty: true },
       pid: 4321,
       owner: "human",
@@ -235,7 +236,7 @@ describe("TaskServiceTopology run records and stop scope", () => {
     const host = topology();
     host.setPlan(planInput());
     expect(() =>
-      host.recordRun({ serviceId: "invoice-service", templateVersion: "v13", ports: [], code: { dirty: false }, pid: 0, owner: "human" }),
+      host.recordRun({ serviceId: "invoice-service", templateVersion: "v13", ports: [], portsSource: "declared", code: { dirty: false }, pid: 0, owner: "human" }),
     ).toThrow(/pid must be a positive integer/);
     expect(host.runs()).toEqual([]);
   });
@@ -243,7 +244,7 @@ describe("TaskServiceTopology run records and stop scope", () => {
   it("attaches linkage verification and closes the run with an exit reason", () => {
     const host = topology();
     host.setPlan(planInput());
-    host.recordRun({ serviceId: "saas-bff", templateVersion: "v13", ports: [3001], code: { commit: "abc1234", dirty: false }, pid: 77, owner: "agent" });
+    host.recordRun({ serviceId: "saas-bff", templateVersion: "v13", ports: [3001], portsSource: "declared", code: { commit: "abc1234", dirty: false }, pid: 77, owner: "agent" });
     const verified = host.verifyRun("run-1", { kind: "readiness", detail: "前置条件就绪检查 invoice-service", ok: true });
     expect(verified.verifications).toEqual([{ kind: "readiness", detail: "前置条件就绪检查 invoice-service", ok: true, at: "2026-09-22T10:00:00.000Z" }]);
     const closed = host.exitRun("run-1", "user-request");
@@ -256,8 +257,8 @@ describe("TaskServiceTopology run records and stop scope", () => {
   it("computes the stop scope from registered identities only", () => {
     const host = topology();
     host.setPlan(planInput());
-    host.recordRun({ serviceId: "saas-bff", templateVersion: "v13", ports: [3001], code: { dirty: false }, pid: 11, owner: "human" });
-    host.recordRun({ serviceId: "invoice-service", templateVersion: "v13", ports: [9001], code: { dirty: false }, pid: 22, owner: "human" });
+    host.recordRun({ serviceId: "saas-bff", templateVersion: "v13", ports: [3001], portsSource: "declared", code: { dirty: false }, pid: 11, owner: "human" });
+    host.recordRun({ serviceId: "invoice-service", templateVersion: "v13", ports: [9001], portsSource: "declared", code: { dirty: false }, pid: 22, owner: "human" });
     expect(host.stopScope().stop.map((entry) => entry.pid).sort()).toEqual([11, 22]);
     expect(host.stopScope("task-aaaaaaaa/invoice-service").stop.map((entry) => entry.pid)).toEqual([22]);
     expect(() => host.stopScope("task-aaaaaaaa/ghost")).toThrow(/unknown-instance/);

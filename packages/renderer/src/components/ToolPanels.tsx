@@ -436,7 +436,18 @@ export function RuntimePanel({
             <Row label="模板版本" value={service.runRecord.templateVersion} />
             <Row label="代码状态" value={`${codeStateLabel(service.runRecord.codeState)}${service.runRecord.codeCommit ? ` · ${service.runRecord.codeCommit}` : ""}`} />
             <Row label="构建状态" value={buildFreshnessLabel(service.runRecord.buildFreshness)} />
-            <Row label="端口" value={service.runRecord.ports.length > 0 ? service.runRecord.ports.join(", ") : "无端口绑定"} />
+            <Row
+              label="端口"
+              value={
+                service.runRecord.ports.length === 0
+                  ? "无端口绑定"
+                  : service.runRecord.portsSource === "observed"
+                    ? `${service.runRecord.ports.join(", ")}（实测监听）`
+                    : service.runRecord.portsSource === "declared"
+                      ? `${service.runRecord.ports.join(", ")}（声明值，未实测监听）`
+                      : `${service.runRecord.ports.join(", ")}（来源未标注）`
+              }
+            />
             <Row
               label="进程身份"
               value={`${service.runRecord.processIdentity.owner === "human" ? "用户操作" : "Agent"} · pid ${service.runRecord.processIdentity.pid} · ${service.runRecord.processIdentity.startedAt}`}
