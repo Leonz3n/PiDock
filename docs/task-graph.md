@@ -258,7 +258,9 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   `recordRun` 与停止范围也已由本片接上真实的生产调用方（`host.ts` 的真实启动/停止），
   但还没有真实健康检查；两个任务同时运行并检查真实请求去向未在生产运行（端口与绑定
   隔离有 `host/service-two-task-isolation.test.ts` 的两个真实子进程证据）；
-  「启动失败后重分配」只在规划阶段验证；真实仓库的依赖缺口探测未运行
+  「启动失败后重分配」只在规划阶段验证；`planRestartScope`（部分重启规划）
+  也没有生产调用方（只由 `main/service-topology.test.ts` 的单元用例覆盖），本片未
+  新增调用方；真实仓库的依赖缺口探测未运行
   （`missing-binding` 与远程可达检查为规划期证据）；`task/planServiceGroup`
   的生产调用方目前是 renderer 的面板（`stores/host.ts` 仍把内存适配器固定为
   默认，与 #9 记录的同一接线缺口）；重新分配地址后的消费者更新已重算绑定值，
