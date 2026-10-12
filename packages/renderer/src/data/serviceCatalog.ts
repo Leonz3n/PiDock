@@ -12,6 +12,8 @@ export interface ServiceTemplateSharedRow {
 
 export interface ServiceTemplateView {
   projectId: string;
+  /** Environment this revision belongs to; the editor only ever edits one environment's revisions. */
+  environmentId: string;
   serviceId: string;
   version: number;
   descriptor: {
@@ -34,6 +36,10 @@ function object(value: unknown): value is Record<string, unknown> {
 export interface ServiceBindingView {
   taskId: string;
   serviceId: string;
+  /** Environment this task selected for this service, as main's own store answered it. */
+  environmentId: string;
+  /** The environment's name at read time, so the page names it instead of guessing one. */
+  environmentName: string;
   templateVersion: number;
   rootId: string;
   subdir: string;
@@ -43,15 +49,43 @@ export function serviceBindingsFromMain(value: unknown, taskId: string): Service
   if (!Array.isArray(value) || value.length > 500) return null;
   const result: ServiceBindingView[] = [];
   for (const row of value) {
-    if (!object(row) || Object.keys(row).sort().join(",") !== "privateKeys,rootId,serviceId,subdir,taskId,templateVersion" ||
+    if (!object(row) || Object.keys(row).sort().join(",") !== "environmentId,environmentName,privateKeys,rootId,serviceId,subdir,taskId,templateVersion" ||
         row["taskId"] !== taskId || typeof row["serviceId"] !== "string" || !/^s-[0-9a-f-]{36}$/i.test(row["serviceId"]) ||
+        typeof row["environmentId"] !== "string" || !/^e-[0-9a-f-]{36}$/i.test(row["environmentId"]) ||
+        typeof row["environmentName"] !== "string" || row["environmentName"].length === 0 ||
         !Number.isSafeInteger(row["templateVersion"]) || (row["templateVersion"] as number) < 1 ||
         typeof row["rootId"] !== "string" || typeof row["subdir"] !== "string" || !Array.isArray(row["privateKeys"]) ||
         row["privateKeys"].some((key) => typeof key !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key))) return null;
-    result.push({ taskId, serviceId: row["serviceId"], templateVersion: row["templateVersion"] as number,
+    result.push({ taskId, serviceId: row["serviceId"], environmentId: row["environmentId"], environmentName: row["environmentName"],
+      templateVersion: row["templateVersion"] as number,
       rootId: row["rootId"], subdir: row["subdir"], privateKeys: [...row["privateKeys"]] as string[] });
   }
   return new Set(result.map((row) => row.serviceId)).size === result.length ? result : null;
+}
+
+/** One named, project-scoped environment as main stores it ([PiDock 04] #7 box 1, GLOSSARY:23-24). */
+export interface ServiceEnvironmentView {
+  projectId: string;
+  environmentId: string;
+  name: string;
+}
+
+/**
+ * Strict parse of main's `{op:"listEnvironments"}` answer. An empty list is the
+ * honest answer for a project nobody has named an environment in: the page must
+ * then show no selection instead of inventing one.
+ */
+export function serviceEnvironmentsFromMain(value: unknown, projectId: string): ServiceEnvironmentView[] | null {
+  if (!Array.isArray(value) || value.length > 200) return null;
+  const result: ServiceEnvironmentView[] = [];
+  for (const entry of value) {
+    if (!object(entry) || Object.keys(entry).sort().join(",") !== "environmentId,name,projectId" ||
+        entry["projectId"] !== projectId || typeof entry["environmentId"] !== "string" ||
+        !/^e-[0-9a-f-]{36}$/i.test(entry["environmentId"]) ||
+        typeof entry["name"] !== "string" || entry["name"].length === 0 || entry["name"].length > 64) return null;
+    result.push({ projectId, environmentId: entry["environmentId"], name: entry["name"] });
+  }
+  return new Set(result.map((row) => row.environmentId)).size === result.length ? result : null;
 }
 
 function descriptorFromMain(value: unknown): ServiceTemplateView["descriptor"] | null {
@@ -103,17 +137,17 @@ function sharedFromMain(value: unknown): ServiceTemplateSharedRow[] | null {
  * stores them fail-closed (credential-free keys and values, no machine path)
  * and the editor has to prefill an existing revision to edit it.
  */
-export function serviceTemplatesFromMain(value: unknown, projectId: string): ServiceTemplateView[] | null {
+export function serviceTemplatesFromMain(value: unknown, projectId: string, environmentId: string): ServiceTemplateView[] | null {
   if (!Array.isArray(value) || value.length > 500) return null;
   const result: ServiceTemplateView[] = [];
   for (const entry of value) {
-    if (!object(entry) || Object.keys(entry).sort().join(",") !== "descriptor,projectId,serviceId,shared,version" ||
-        entry["projectId"] !== projectId || typeof entry["serviceId"] !== "string" ||
+    if (!object(entry) || Object.keys(entry).sort().join(",") !== "descriptor,environmentId,projectId,serviceId,shared,version" ||
+        entry["projectId"] !== projectId || entry["environmentId"] !== environmentId || typeof entry["serviceId"] !== "string" ||
         !/^s-[0-9a-f-]{36}$/i.test(entry["serviceId"]) || !Number.isSafeInteger(entry["version"]) || (entry["version"] as number) < 1) return null;
     const descriptor = descriptorFromMain(entry["descriptor"]);
     const shared = sharedFromMain(entry["shared"]);
     if (!descriptor || !shared) return null;
-    result.push({ projectId, serviceId: entry["serviceId"], version: entry["version"] as number, descriptor, shared });
+    result.push({ projectId, environmentId, serviceId: entry["serviceId"], version: entry["version"] as number, descriptor, shared });
   }
   if (new Set(result.map((row) => row.serviceId)).size !== result.length) return null;
   return result;
@@ -148,6 +182,7 @@ export interface ServiceTemplateRestartRow {
 
 export interface ServiceTemplateUpdateReviewView {
   projectId: string;
+  environmentId: string;
   serviceId: string;
   version: number;
   versionLabel: string;
@@ -172,11 +207,12 @@ function textList(value: unknown, max: number): value is string[] {
  * fails closed instead of rendering a partial result.
  */
 export function serviceTemplateUpdateFromMain(
-  value: unknown, expected: { projectId: string; serviceId: string; version: number },
+  value: unknown, expected: { projectId: string; environmentId: string; serviceId: string; version: number },
 ): ServiceTemplateUpdateReviewView | null {
   if (!object(value) || Object.keys(value).sort().join(",") !==
-      "contentChanged,descriptorChanged,diff,projectId,restart,restartNeeded,saved,serviceId,version,versionLabel") return null;
-  if (value["projectId"] !== expected.projectId || value["serviceId"] !== expected.serviceId ||
+      "contentChanged,descriptorChanged,diff,environmentId,projectId,restart,restartNeeded,saved,serviceId,version,versionLabel") return null;
+  if (value["projectId"] !== expected.projectId || value["environmentId"] !== expected.environmentId ||
+      value["serviceId"] !== expected.serviceId ||
       value["version"] !== expected.version || typeof value["versionLabel"] !== "string" ||
       !/^v[1-9][0-9]*$/.test(value["versionLabel"]) || typeof value["saved"] !== "boolean" ||
       typeof value["descriptorChanged"] !== "boolean" || typeof value["contentChanged"] !== "boolean") return null;
@@ -202,7 +238,7 @@ export function serviceTemplateUpdateFromMain(
     restarts.push({ taskId: entry["taskId"], serviceId: expected.serviceId, name: entry["name"],
       from: entry["from"] as number, to: entry["to"] as number });
   }
-  return { projectId: expected.projectId, serviceId: expected.serviceId, version: expected.version,
+  return { projectId: expected.projectId, environmentId: expected.environmentId, serviceId: expected.serviceId, version: expected.version,
     versionLabel: value["versionLabel"], saved: value["saved"], descriptorChanged: value["descriptorChanged"],
     contentChanged: value["contentChanged"],
     diff: { added: [...diff["added"]], changed, removed: [...diff["removed"]] }, restartNeeded: restarts, restart };
@@ -216,10 +252,11 @@ export function serviceTemplateUpdateFromMain(
  * result.
  */
 export function serviceBindingAdoptionFromMain(
-  value: unknown, expected: { taskId: string; serviceId: string; from: number; to: number },
+  value: unknown, expected: { taskId: string; serviceId: string; environmentId: string; from: number; to: number },
 ): ServiceBindingAdoptionView | null {
-  if (!object(value) || Object.keys(value).sort().join(",") !== "adopted,from,restart,restartNeeded,serviceId,taskId,to") return null;
+  if (!object(value) || Object.keys(value).sort().join(",") !== "adopted,environmentId,from,restart,restartNeeded,serviceId,taskId,to") return null;
   if (value["taskId"] !== expected.taskId || value["serviceId"] !== expected.serviceId ||
+      value["environmentId"] !== expected.environmentId ||
       value["from"] !== expected.from || value["to"] !== expected.to || value["from"] === value["to"] ||
       typeof value["adopted"] !== "boolean") return null;
   const restart = restartConsequenceFromMain(value["restart"]);
@@ -236,8 +273,8 @@ export function serviceBindingAdoptionFromMain(
     restarts.push({ taskId: entry["taskId"], serviceId: expected.serviceId, name: entry["name"],
       from: entry["from"] as number, to: entry["to"] as number });
   }
-  return { taskId: expected.taskId, serviceId: expected.serviceId, from: expected.from, to: expected.to,
-    adopted: value["adopted"], restartNeeded: restarts, restart };
+  return { taskId: expected.taskId, serviceId: expected.serviceId, environmentId: expected.environmentId,
+    from: expected.from, to: expected.to, adopted: value["adopted"], restartNeeded: restarts, restart };
 }
 
 /** One explicit re-bind of a task's service owner ([PiDock 04] #7 slice): main's real observation, what it changes and whether the confirmed replacement ran. */
@@ -295,6 +332,8 @@ export function serviceOwnerRebindFromMain(value: unknown, expected: { taskId: s
 export interface ServiceBindingAdoptionView {
   taskId: string;
   serviceId: string;
+  /** The binding's own environment: an adoption only ever re-pins inside it. */
+  environmentId: string;
   from: number;
   to: number;
   adopted: boolean;

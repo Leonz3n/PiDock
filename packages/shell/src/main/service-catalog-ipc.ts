@@ -248,7 +248,7 @@ export function performServiceCatalogOperation(
     const input = shape(request, ["op", "projectId"]);
     const project = input["projectId"];
     if (typeof project !== "string") throw new TrustDomainViolation("invalid-payload", "invalid project ID");
-    return store.listEnvironments(project).map(environmentProjection);
+    return namedEnvironmentRefusal(() => store.listEnvironments(project)).map(environmentProjection);
   }
   if (request["op"] === "createEnvironment") {
     const input = shape(request, ["op", "projectId", "name"]);

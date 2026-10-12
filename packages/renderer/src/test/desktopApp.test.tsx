@@ -309,7 +309,10 @@ describe("Desktop production data", () => {
     fireEvent.click(screen.getByRole("button", { name: "环境与服务" }));
     expect(await screen.findByTestId("desktop-environment-page")).toBeInTheDocument();
     expect(screen.getByLabelText("项目")).toHaveValue(project.id);
-    expect(screen.getByRole("option", { name: "环境清单未接线" })).toBeInTheDocument();
+    // This bridge has no service-catalog channel, so the page names that instead
+    // of showing a selectable environment it never read.
+    expect(screen.getByRole("option", { name: "尚未选择环境" })).toBeInTheDocument();
+    expect(screen.getByLabelText("环境")).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "远程访问" }));
     expect(await screen.findByTestId("desktop-remote-page")).toBeInTheDocument();
     expect(screen.getByText("没有已核验的活动任务；未读取远程状态。")).toBeInTheDocument();

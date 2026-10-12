@@ -8,8 +8,11 @@ import { Button } from "./ui/button";
 import { SavedServiceConfigPreview } from "./SavedServiceConfigPreview";
 import { ServiceOwnerRebind } from "./ServiceOwnerRebind";
 
-export function TaskServiceBinding({ template, tasks }: {
-  template: ServiceTemplateView; tasks: readonly { taskId: string; name: string }[];
+export function TaskServiceBinding({ template, environmentName, tasks }: {
+  template: ServiceTemplateView;
+  /** Display name of the environment the displayed revision belongs to; shown so a page never has to infer it. */
+  environmentName?: string;
+  tasks: readonly { taskId: string; name: string }[];
 }) {
   const [requestedTask, setRequestedTask] = useState("");
   const taskId = tasks.some((task) => task.taskId === requestedTask) ? requestedTask : tasks[0]?.taskId ?? "";
@@ -31,7 +34,12 @@ export function TaskServiceBinding({ template, tasks }: {
   const epoch = useRef(0);
   const roots = state?.taskId === taskId ? state.roots : [];
   const selectedRoot = roots.some((root) => root.id === rootId) ? rootId : roots[0]?.id ?? "";
-  const bound = state?.taskId === taskId ? state.bindings.find((row) => row.serviceId === template.serviceId) : undefined;
+  // A task has one binding per service. The binding is only "this environment's"
+  // when main says it selected THIS environment: a binding that points at
+  // another environment is named as such and never read as this revision's.
+  const existing = state?.taskId === taskId ? state.bindings.find((row) => row.serviceId === template.serviceId) : undefined;
+  const bound = existing?.environmentId === template.environmentId ? existing : undefined;
+  const foreignBinding = existing !== undefined && bound === undefined ? existing : undefined;
   const adoptable = bound !== undefined && template.version > bound.templateVersion;
   const taskName = (id: string) => tasks.find((task) => task.taskId === id)?.name ?? id;
 
@@ -58,15 +66,16 @@ export function TaskServiceBinding({ template, tasks }: {
     if (!review || pending || !taskId || !selectedRoot || bound) return;
     const request = epoch.current;
     setPending(true); setError(null);
-    const result = await serviceCatalogThroughShell({ op: "bind", projectId: template.projectId, taskId,
-      serviceId: template.serviceId, templateVersion: template.version, rootId: selectedRoot, subdir, privateRefs: refs });
+    const result = await serviceCatalogThroughShell({ op: "bind", projectId: template.projectId, environmentId: template.environmentId,
+      taskId, serviceId: template.serviceId, templateVersion: template.version, rootId: selectedRoot, subdir, privateRefs: refs });
     if (epoch.current !== request) return;
     setPending(false); setReview(false);
     if (!result.ok || !result.payload || typeof result.payload !== "object") { setState(null); setError("绑定结果无法确认，请刷新核对"); return; }
     const response = result.payload as { cancelled?: unknown; binding?: unknown };
     if (response.cancelled === true) return;
     const parsed = response.cancelled === false ? serviceBindingsFromMain([response.binding], taskId)?.[0] : null;
-    if (!parsed || parsed.serviceId !== template.serviceId || parsed.templateVersion !== template.version || parsed.rootId !== selectedRoot ||
+    if (!parsed || parsed.serviceId !== template.serviceId || parsed.environmentId !== template.environmentId ||
+        parsed.templateVersion !== template.version || parsed.rootId !== selectedRoot ||
         parsed.subdir !== subdir || parsed.privateKeys.join("\0") !== refs.map((ref) => ref.key).join("\0")) {
       setState(null); setError("绑定回执无法核对，请刷新核对"); return;
     }
@@ -91,7 +100,9 @@ export function TaskServiceBinding({ template, tasks }: {
       serviceId: template.serviceId, templateVersion: to, confirm });
     if (epoch.current !== request) return;
     setAdopting(false);
-    const parsed = result.ok ? serviceBindingAdoptionFromMain(result.payload, { taskId, serviceId: template.serviceId, from, to }) : null;
+    const parsed = result.ok
+      ? serviceBindingAdoptionFromMain(result.payload, { taskId, serviceId: template.serviceId, environmentId: bound.environmentId, from, to })
+      : null;
     if (!parsed || parsed.adopted !== confirm) {
       setAdoption(null);
       setError(result.ok ? "采用回执无法核对，请刷新核对" : shellFailure(result, "采用新版本失败，请重试"));
@@ -116,7 +127,7 @@ export function TaskServiceBinding({ template, tasks }: {
     </div>
     {error && <p role="alert" className="mt-2 text-[#ad4545]">{error}</p>}
     {pending && <p role="status" className="mt-2 text-muted">正在核对本机绑定</p>}
-    {bound && <div className="mt-2 break-words text-muted"><p>已绑定 · v{bound.templateVersion} · {bound.rootId}{bound.subdir ? `/${bound.subdir}` : ""}</p>{!!bound.privateKeys.length && <p>私有变量：{bound.privateKeys.join("、")}</p>}<p>启停入口在任务运行面板（POSIX 启用，其他平台具名拒绝）；绑定工作子目录即启动时的工作目录。</p></div>}
+    {bound && <div className="mt-2 break-words text-muted"><p>已绑定 · 环境 {bound.environmentName} · v{bound.templateVersion} · {bound.rootId}{bound.subdir ? `/${bound.subdir}` : ""}</p>{!!bound.privateKeys.length && <p>私有变量：{bound.privateKeys.join("、")}</p>}<p>启停入口在任务运行面板（POSIX 启用，其他平台具名拒绝）；绑定工作子目录即启动时的工作目录。</p></div>}
     {adoptable && !adoption && <div className="mt-2 flex flex-wrap items-center gap-2">
       <Button type="button" size="sm" variant="outline" disabled={pending || adopting} onClick={() => void adopt(false)}><Icon name="arrow" />核对采用 v{template.version}</Button>
       <span className="break-words text-muted">当前绑定固定 v{bound.templateVersion}；采用只重指该绑定的模板版本，不会启动、停止或重启进程。</span>
@@ -133,7 +144,8 @@ export function TaskServiceBinding({ template, tasks }: {
     </div>}
     {adoption?.adopted && <div className="mt-2"><p role="status" className="break-words text-muted">已采用 v{adoption.to}（原 v{adoption.from}）；仅改动固定的模板版本，未重启任何进程。该任务的运行面板启停通道已随执行快照撤销，启停会遭到拒绝（service-owner-inventory-unconfirmed），可在下方重新绑定该任务的服务所有者来恢复（不重启任何进程），届时启动使用 v{adoption.to}。</p>{adoption.restart.fencedTaskIds.includes(taskId) && <ServiceOwnerRebind projectId={template.projectId} taskId={taskId} surfacedBy="service-owner-inventory-unconfirmed" onRebound={() => setRevision((value) => value + 1)} />}</div>}
     {bound && <SavedServiceConfigPreview key={`${taskId}/${bound.templateVersion}`} projectId={template.projectId} taskId={taskId} serviceId={bound.serviceId} templateVersion={bound.templateVersion} />}
-    {!bound && state?.taskId === taskId && <fieldset disabled={pending} className="mt-3 min-w-0">
+    {foreignBinding && <p role="status" className="mt-2 break-words text-[#9a6032]">该任务在此服务上绑定的是环境「{foreignBinding.environmentName}」的 v{foreignBinding.templateVersion}，不是当前环境的模板；本面板不会把它当成当前环境的绑定，也不会改写它（同一任务同一服务只能有一个绑定）。</p>}
+    {!bound && !foreignBinding && state?.taskId === taskId && <fieldset disabled={pending} className="mt-3 min-w-0">
       <div className="grid gap-3 sm:grid-cols-2">
         <label className="grid gap-1">工作副本<select aria-label="绑定工作副本" value={selectedRoot} disabled={!roots.length} onChange={(event) => { setRootId(event.target.value); setReview(false); }} className="min-h-8 min-w-0 rounded-[4px] border border-line bg-paper px-2"><option value="" hidden>选择工作副本</option>{roots.map((root) => <option key={root.id} value={root.id}>{root.label}</option>)}</select></label>
         <label className="grid gap-1">工作子目录<input aria-label="绑定工作子目录" value={subdir} maxLength={512} placeholder={template.descriptor.workdir ?? "仓库根目录"} className="min-h-8 min-w-0 rounded-[4px] border border-line bg-paper px-2" onChange={(event) => { setSubdir(event.target.value); setSubdirTouched(true); setReview(false); }} /></label>
@@ -143,7 +155,7 @@ export function TaskServiceBinding({ template, tasks }: {
       <p className="mt-2 break-words text-muted">{template.descriptor.workdir && !subdirTouched
         ? `已带入模板默认工作目录：${template.descriptor.workdir}。本机绑定的工作子目录才是启动时解析的工作目录，可直接修改。`
         : "本机绑定的工作子目录即启动时的工作目录；留空表示工作副本根目录。"}</p>
-      {review && <p role="status" className="mt-3 break-words text-muted">待绑定：{template.descriptor.name} · v{template.version} · {selectedRoot}{subdir ? `/${subdir}` : ""}</p>}
+      {review && <p role="status" className="mt-3 break-words text-muted">待绑定：{template.descriptor.name} · 环境 {environmentName ?? "（名称未读取）"} · v{template.version} · {selectedRoot}{subdir ? `/${subdir}` : ""}</p>}
       <div className="mt-3 flex justify-end"><Button type="button" size="sm" disabled={!selectedRoot} onClick={() => { if (review) void bind(); else setReview(true); }}><Icon name="folder" />{review ? "选择程序并保存绑定" : "核对任务绑定"}</Button></div>
     </fieldset>}
     {!taskId && <p className="mt-2 text-muted">当前项目无可绑定任务</p>}
