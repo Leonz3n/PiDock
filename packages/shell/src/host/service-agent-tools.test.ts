@@ -522,7 +522,7 @@ it("tells the Agent a declared gRPC check is not implemented here, never that it
   const status = await f.call("service.status", { serviceId: f.serviceId });
   expect(status.outcome).toBe("ok");
   expect(status.text).toContain("lifecycle: running");
-  expect(status.text).toContain("health: not-probed · 健康未探测（grpc");
+  expect(status.text).toContain("health: not-probed · 健康未探测（gRPC");
   expect(status.text).toContain("gRPC 健康探测尚未接入");
   expect(status.text).not.toContain("health: healthy");
   expect(alive(pid)).toBe(true);
