@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, act } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { DesktopConversation } from "../components/DesktopConversation";
 import type { PidockBridge } from "../data/shellBridge";
@@ -8,6 +8,22 @@ const roots = [{ label: "默认任务根", state: "ready" }];
 const association = (id: string) => ({ taskId: id, projectId: null, state: "unassigned" });
 const snapshot = (messages: unknown[] = [], pending = false) => ({ source: "sdk-jsonl", sessionId: "main", messages, pending, interrupted: false });
 const turn = (taskId: string, requestId: string, state = "accepted") => ({ taskId, sessionId: "main", requestId, turnId: requestId, state, needsResync: false });
+const hostContext = (overrides: Record<string, unknown> = {}) => ({
+  providerId: "provider-anthropic",
+  providerName: "Anthropic 官方",
+  model: "claude-sonnet-4-5",
+  modelName: "Claude Sonnet",
+  availability: { status: "available" },
+  window: 200,
+  used: 24.8,
+  source: "estimated",
+  tokens: 4321,
+  percent: 12.4,
+  thinking: "medium",
+  thinkingCatalog: "declared",
+  ...overrides,
+});
+
 function setup(taskId = "task-a") {
   let listener: ((event: unknown) => void) | undefined;
   let status: unknown = null;
@@ -460,17 +476,23 @@ describe("Desktop SDK conversation", () => {
     expect(document.querySelector('input[type="file"]')).toBeNull();
   });
 
-  it("marks reasoning settings unwired while keeping Provider navigation and SDK send/cancel available", async () => {
+  it("keeps Provider navigation and SDK send/cancel available without offering a reasoning tier it cannot read", async () => {
     const f = setup(); window.pidock = f.bridge;
     const onOpenProviders = vi.fn();
     render(<DesktopConversation taskId="task-a" name="Task" roots={JSON.stringify(roots)} association={JSON.stringify(association("task-a"))} onBack={vi.fn()} onOpenProviders={onOpenProviders} onArchived={vi.fn()} />);
     await screen.findByText(/尚未开始/);
-    const reasoning = screen.getByRole("button", { name: "推理（未接线）" });
-    expect(reasoning).toBeDisabled();
-    expect(screen.queryByRole("button", { name: "推理 · 关闭" })).not.toBeInTheDocument();
-    fireEvent.focus(screen.getByLabelText("推理设置说明"));
-    expect(await screen.findByRole("tooltip")).toHaveTextContent("推理设置未接线；此处不表示模型的推理能力或当前档位");
+    // `setup`'s bridge has no `taskOp`, so the Host read cannot answer at all.
+    // The control says THAT (「推理 · 读取失败」), never 「未接线」: the capability
+    // exists (`task/sessionContext`), the read is what failed.
+    const reasoning = await screen.findByTestId("composer-thinking");
+    await waitFor(() => expect(reasoning).toHaveTextContent("推理 · 读取失败"));
+    expect(reasoning).not.toBeDisabled();
+    expect(screen.getByTestId("composer-context")).toHaveTextContent("上下文 读取失败");
+    expect(screen.queryByText("推理（未接线）")).toBeNull();
+    expect(screen.queryByLabelText("推理设置说明")).toBeNull();
+    expect(reasoning.getAttribute("title")).toContain("Host 会话推理档位读取失败");
     fireEvent.click(reasoning);
+    expect(screen.getByRole("dialog", { name: "推理档位" })).toHaveTextContent("重新读取 Host 读数");
     expect(onOpenProviders).not.toHaveBeenCalled();
     expect(f.calls.some((call) => call.action === "start")).toBe(false);
     fireEvent.click(screen.getByTestId("composer-model"));
@@ -479,6 +501,89 @@ describe("Desktop SDK conversation", () => {
     await screen.findByRole("button", { name: "停止" });
     fireEvent.click(screen.getByRole("button", { name: "停止" }));
     expect(await screen.findByText(/已取消/)).toBeInTheDocument();
+  });
+
+  it("shows the reasoning tier the Host reports and names the read as 未读取 until it answers", async () => {
+    const f = setup();
+    let release: ((value: { ok: true; payload: unknown }) => void) | undefined;
+    const taskOp = vi.fn(async (_taskId: string, op: string) => op === "task/sessionContext"
+      ? new Promise<{ ok: true; payload: unknown }>((resolve) => { release = resolve; })
+      : { ok: true, payload: {} });
+    f.bridge.taskOp = taskOp as never;
+    mount(f);
+    // While the read is outstanding the control names that state: no tier is shown
+    // (not even the one the Host would default to) and 未接线 never appears.
+    const reasoning = await screen.findByTestId("composer-thinking");
+    await waitFor(() => expect(reasoning).toHaveTextContent("推理 · 未读取"));
+    expect(reasoning).toBeDisabled();
+    expect(screen.getByTestId("composer-context")).toHaveTextContent("上下文 未读取");
+    await act(async () => release!({ ok: true, payload: { context: hostContext({ thinking: "xhigh" }) } }));
+    // `xhigh` is a tier no default in this engagement produces (the seeded demo
+    // model defaults to `high`, the prototype to `medium`), so only the Host read
+    // can account for this label.
+    await waitFor(() => expect(reasoning).toHaveTextContent("推理 · 极高（xhigh）"));
+    expect(reasoning).not.toBeDisabled();
+    expect(taskOp).toHaveBeenCalledWith("task-a", "task/sessionContext", { sessionId: "main" });
+  });
+
+  it("sends the selected tier through the existing Host op and applies the Host's post-write readout", async () => {
+    const f = setup();
+    const sent: Array<Record<string, unknown>> = [];
+    f.bridge.taskOp = vi.fn(async (_taskId: string, op: string, payload?: Record<string, unknown>) => {
+      if (op === "task/sessionContext") return { ok: true, payload: { context: hostContext({ thinking: "low", thinkingCatalog: "declared" }) } };
+      if (op === "task/setSessionThinking") {
+        sent.push(payload ?? {});
+        return { ok: true, payload: { context: hostContext({ thinking: String(payload?.["level"]), thinkingCatalog: "declared" }) } };
+      }
+      return { ok: true, payload: {} };
+    }) as never;
+    mount(f);
+    const reasoning = await screen.findByTestId("composer-thinking");
+    await waitFor(() => expect(reasoning).toHaveTextContent("推理 · 低（low）"));
+    fireEvent.click(reasoning);
+    fireEvent.click(within(screen.getByRole("dialog", { name: "推理档位" })).getByRole("button", { name: /最高/ }));
+    await waitFor(() => expect(reasoning).toHaveTextContent("推理 · 最高（max）"));
+    expect(sent).toEqual([{ sessionId: "main", level: "max" }]);
+    expect(screen.queryByRole("dialog", { name: "推理档位" })).toBeNull();
+  });
+
+  it("shows the Host's own refusal wording for a tier it declines, without faking success", async () => {
+    const f = setup();
+    f.bridge.taskOp = vi.fn(async (_taskId: string, op: string) => op === "task/sessionContext"
+      ? { ok: true, payload: { context: hostContext({ thinking: "medium", thinkingCatalog: "declared" }) } }
+      : op === "task/setSessionThinking" ? { ok: false, error: "thinking-level-not-declared: 模型未声明该推理档位：max" }
+        : { ok: true, payload: {} }) as never;
+    mount(f);
+    const reasoning = await screen.findByTestId("composer-thinking");
+    await waitFor(() => expect(reasoning).toHaveTextContent("推理 · 中（medium）"));
+    fireEvent.click(reasoning);
+    fireEvent.click(within(screen.getByRole("dialog", { name: "推理档位" })).getByRole("button", { name: /最高/ }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("thinking-level-not-declared: 模型未声明该推理档位：max");
+    expect(reasoning).toHaveTextContent("推理 · 中（medium）");
+    expect(screen.getByRole("dialog", { name: "推理档位" })).toBeInTheDocument();
+  });
+
+  it("reads the Host occupancy as used/window/percent", async () => {
+    const f = setup();
+    f.bridge.taskOp = vi.fn(async (_taskId: string, op: string) => op === "task/sessionContext"
+      ? { ok: true, payload: { context: hostContext() } }
+      : { ok: true, payload: {} }) as never;
+    mount(f);
+    const context = await screen.findByTestId("composer-context");
+    await waitFor(() => expect(context).toHaveTextContent("上下文 24.8k / 200k · 12.4% · 估算"));
+    expect(context.getAttribute("title")).toBe("Anthropic 官方 · Claude Sonnet · 已用 24.8k Tokens（来源 estimated）· 窗口 200k Tokens · 占用比例 12.4%；数字即 Host 会话读数，未做推断");
+  });
+
+  it("names an unknown window instead of rendering a 0% nobody measured", async () => {
+    const f = setup();
+    f.bridge.taskOp = vi.fn(async (_taskId: string, op: string) => op === "task/sessionContext"
+      ? { ok: true, payload: { context: hostContext({ window: 0, used: 0, source: "unknown", percent: null, tokens: 0 }) } }
+      : { ok: true, payload: {} }) as never;
+    mount(f);
+    const context = await screen.findByTestId("composer-context");
+    await waitFor(() => expect(context).toHaveTextContent("上下文 0.0k / 窗口未知 · 占比未知 · 待更新"));
+    expect(context).not.toHaveTextContent("0%");
+    expect(context.getAttribute("title")).toContain("窗口 未知 · 占用比例 未知");
   });
 
   it("shows the SDK zero-tool boundary without offering permission changes", async () => {
@@ -513,7 +618,9 @@ describe("Desktop SDK conversation", () => {
     fireEvent.click(screen.getByRole("button", { name: "任务操作" }));
     fireEvent.click(screen.getByRole("button", { name: "归档当前任务" }));
     expect(screen.getByRole("dialog", { name: "归档当前任务" })).toBeInTheDocument();
-    expect(taskOp).not.toHaveBeenCalled();
+    // The composer's own 推理/上下文 read (`task/sessionContext`) is not the dialog:
+    // confirming is what may write, so every other op is still untouched here.
+    expect(taskOp.mock.calls.filter(([, op]) => op !== "task/sessionContext").map(([, op]) => op)).toEqual([]);
     fireEvent.click(screen.getByRole("button", { name: "确认归档" }));
     await waitFor(() => expect(onArchived).toHaveBeenCalledOnce());
     expect(taskOp).toHaveBeenCalledWith("task-a", "task/archive", {});
@@ -522,7 +629,8 @@ describe("Desktop SDK conversation", () => {
 
   it("blocks archive during an active SDK turn", async () => {
     const f = setup();
-    const taskOp = vi.fn(async () => ({ ok: false, error: "task-locked" }));
+    const ops: string[] = [];
+    const taskOp = vi.fn(async (_taskId: string, op: string) => { ops.push(op); return { ok: false, error: "task-locked" }; });
     f.bridge.taskOp = taskOp;
     mount(f);
     await screen.findByText(/尚未开始/);
@@ -532,7 +640,7 @@ describe("Desktop SDK conversation", () => {
     fireEvent.click(screen.getByRole("button", { name: "归档当前任务" }));
     expect(screen.getByRole("button", { name: "确认归档" })).toBeDisabled();
     expect(screen.getByText(/会话尚未连接、正在执行或请求状态未核验/)).toBeInTheDocument();
-    expect(taskOp).not.toHaveBeenCalled();
+    expect(ops.filter((op) => op !== "task/sessionContext")).toEqual([]);
   });
 
   it("freezes after a refused Host archive write and offers a status check", async () => {

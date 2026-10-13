@@ -145,12 +145,19 @@ type DesktopRoot = { label: string; state: "ready" | "error"; message?: string }
  * long name truncates instead of widening the column.
  */
 function DesktopSummaryBar({ segments }: { segments: DesktopSummarySegment[] }) {
+  // Non-scope segments are `below-mid:hidden` (prototype A's
+  // `.switcher .state{display:none}` at 960). On a view that names neither a task
+  // nor a Project (用量/已归档/需要处理…) that left the section painting its border
+  // and background as an empty ~22×14px pill at the mid tier, so the pill itself
+  // is hidden there when there is no `scope` segment to show. The wide tier and
+  // the bar's real segments are unchanged.
+  const hasScope = segments.some((segment) => segment.key === "scope");
   return (
     <div className="shrink-0 bg-bg px-4 py-2 below-mid:px-3 below-stack:px-2">
       <section
         aria-label="当前任务摘要"
         data-testid="desktop-summary"
-        className="mx-auto flex w-fit min-w-0 max-w-full items-center gap-2 overflow-hidden rounded-[10px] border border-[#3b465c] bg-[#293142] px-[10px] py-1.5 text-[10px] whitespace-nowrap text-[#b5bfd4] shadow-[0_4px_15px_#151a2522] below-stack:gap-1 below-stack:px-1.5"
+        className={`mx-auto flex w-fit min-w-0 max-w-full items-center gap-2 overflow-hidden rounded-[10px] border border-[#3b465c] bg-[#293142] px-[10px] py-1.5 text-[10px] whitespace-nowrap text-[#b5bfd4] shadow-[0_4px_15px_#151a2522] below-stack:gap-1 below-stack:px-1.5 ${hasScope ? "" : "below-mid:hidden"}`}
       >
         {segments.map((segment, index) => (
           <span
