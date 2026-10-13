@@ -104,7 +104,10 @@ describe("[UI 对齐 S8a] production bottom summary bar", () => {
     // Prototype A's other two state elements are unreadable from the shell: the
     // task's services live in its own tool dock (`task/serviceRunRecords`), the
     // browser owner in the page main owns. Neither may be replaced by a value.
+    // The one count the shell does read is a verified number, not a zero-filler.
+    await waitFor(() => expect(strip().textContent ?? "").toContain("进行中的任务 1"));
     const text = strip().textContent ?? "";
+    expect(text).toMatch(/真实任务/);
     expect(text).not.toMatch(/服务/);
     expect(text).not.toMatch(/浏览器|未打开|接管/);
     expect(text).not.toMatch(/\d+\s*服务/);
@@ -112,8 +115,6 @@ describe("[UI 对齐 S8a] production bottom summary bar", () => {
     // …and the demo bar's own fallback wording (`ShellSummaryBar` says 未选择工作区
     // when its store holds no task) is not production state either.
     expect(text).not.toContain("未选择工作区");
-    // The one count the shell does read is a verified number, not a zero-filler.
-    await waitFor(() => expect(text).toContain("进行中的任务 1"));
   });
 
   it("reads an unverified lifecycle as 未核验 instead of a zero count", async () => {
@@ -122,6 +123,9 @@ describe("[UI 对齐 S8a] production bottom summary bar", () => {
     await screen.findByTestId("desktop-project-overview");
 
     await waitFor(() => expect(within(strip()).getByText("进行中的任务 · 未核验")).toBeInTheDocument());
+    // The name is a real readout, so it stays; only the unverifiable count is
+    // withheld. A `0` here would claim every task is archived.
+    expect(within(strip()).getByText(project.name)).toBeInTheDocument();
     expect(within(strip()).queryByText(/进行中的任务 0/)).toBeNull();
     // The sidebar states the same condition; a disagreement here is a defect.
     await waitFor(() => expect(within(screen.getByTestId("desktop-sidebar")).getByText("未核验")).toBeInTheDocument());
@@ -181,7 +185,7 @@ describe("[UI 对齐 S8a] production bottom summary bar", () => {
     // `.switcher .state{display:none}`); jsdom has no layout engine, so the
     // contract that produced that tier is asserted here and the geometry itself
     // stays a named boundary (real-Electron capture).
-    expect(tiers(within(bar).getByText("真实任务").className)).toEqual(expect.arrayContaining(["min-w-0", "truncate"]));
+    expect(tiers(within(bar).getByText("对账单详情·任务A").className)).toEqual(expect.arrayContaining(["min-w-0", "truncate"]));
     for (const label of ["进行中的任务 1", "任务根 1/1 就绪"]) {
       expect(tiers(within(bar).getByText(label).className)).toContain("below-mid:hidden");
     }

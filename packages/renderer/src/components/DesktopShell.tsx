@@ -224,6 +224,15 @@ export function DesktopShell({
   // One condition for "the lifecycle was verified": the sidebar count, the
   // alert below and the strip must never disagree about it.
   const lifecycleUnverified = lifecyclePending || lifecycleErrors.length > 0;
+  // The strip names what the shell is showing from the same real names the
+  // breadcrumb already resolved out of the inventory read, so a pending
+  // lifecycle read does not blank the name; a view that names neither a task
+  // nor a Project (用量/已归档/需要处理…) yields no scope segment.
+  const summaryScope = view.view === "task"
+    ? (breadcrumb.task === undefined ? undefined : { kind: "task" as const, name: breadcrumb.task })
+    : view.view === "project"
+      ? (breadcrumb.project === undefined ? undefined : { kind: "project" as const, name: breadcrumb.project })
+      : undefined;
   return (
     <div className="flex h-screen min-h-0 w-full bg-bg text-ink" data-testid="desktop-shell">
       <aside data-testid="desktop-sidebar" className="flex min-h-0 w-[226px] shrink-0 flex-col border-r border-line bg-sidebar px-[13px] below-wide:w-[192px] below-mid:w-16 below-mid:px-2">
@@ -307,7 +316,7 @@ export function DesktopShell({
         <main className="min-h-0 min-w-0 flex-1 overflow-y-auto" data-testid="desktop-shell-content">{children}</main>
         <DesktopSummaryBar
           segments={desktopSummarySegments({
-            scope: shellSummaryScope(view, tasks, projects),
+            scope: summaryScope,
             activeTaskCount: lifecycleUnverified ? null : tasks.length,
             roots,
           })}
@@ -315,27 +324,6 @@ export function DesktopShell({
       </div>
     </div>
   );
-}
-
-/**
- * The name the strip may show for the current view, taken from the real
- * inventory the shell already holds; a view that names neither a task nor a
- * Project yields no scope segment (the breadcrumb still names the page).
- */
-function shellSummaryScope(
-  view: DesktopView,
-  tasks: readonly DesktopShellTask[],
-  projects: readonly DesktopShellProject[],
-): { kind: "task" | "project"; name: string } | undefined {
-  if (view.view === "task") {
-    const name = tasks.find((task) => task.taskId === view.taskId)?.name;
-    return name === undefined ? undefined : { kind: "task", name };
-  }
-  if (view.view === "project") {
-    const name = projects.find((project) => project.id === view.projectId)?.name;
-    return name === undefined ? undefined : { kind: "project", name };
-  }
-  return undefined;
 }
 
 /** Nav wording, shared so pages and the shell cannot drift apart. */
