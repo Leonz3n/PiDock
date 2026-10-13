@@ -190,10 +190,21 @@ export interface ProcessTableRow {
   pid: number;
   ppid: number;
   pgid: number;
+  /**
+   * The process's controlling terminal (`ttysNNN` on macOS, `pts/N` on Linux),
+   * or `??`/`?` when it has none. Every process of one terminal's session
+   * shares this device while the session lives, which is the only session
+   * handle this platform exposes (`prsna`/`sess` are print-only here: on macOS
+   * `ps` has no `sid` keyword at all and prints `0` for `sess`).
+   */
+  tty: string;
+  /** `Z` marks a not-yet-reaped zombie: it holds no resources but still names a pid. */
+  state: string;
 }
 
 /**
- * Snapshot of the OS process table (`pid`, `ppid`, `pgid`) via `ps`.
+ * Snapshot of the OS process table (`pid`, `ppid`, `pgid`, `tty`, `state`) via
+ * `ps`.
  *
  * Returns `null` when the probe itself is unavailable (Windows, `ps` missing or
  * failing): "the probe failed" is NOT the same as "the table was empty", and a
@@ -201,24 +212,33 @@ export interface ProcessTableRow {
  * than read a failed probe as proof that no descendant exists. An actually
  * empty table is `[]`.
  *
- * Fragility considered: the three columns are numeric, so locale and column
- * alignment cannot change their meaning; header suppression (`=`) and the
- * whitespace split tolerate multiple spaces and a leading header-less line;
- * stderr is discarded; a missing `/bin/ps` falls back to `ps` on PATH; and a
- * non-zero exit or oversized output (`ENOBUFS`, bounded by `maxBuffer`) is
- * treated as an unavailable probe, never as "no processes". Platform reach: the
- * `ps -eo pid=,ppid=,pgid=` invocation is exercised on Linux and macOS (the
- * POSIX suites run on either); other `ps` variants and BSDs are UNTESTED.
+ * Platform premise: `/bin/ps` (falling back to `ps` on PATH) accepts
+ * `-eo pid=,ppid=,pgid=,tty=,state=`. That invocation is exercised on this
+ * macOS host and on Linux (the POSIX suites run on either). The controlling
+ * terminal is used instead of a session id because macOS `ps` exposes no usable
+ * session column - measured here: `sid` is not a keyword (`ps: sid: keyword not
+ * found`) and `sess` prints `0` for every row, including a pty session leader.
+ * Other `ps` variants and BSDs are UNTESTED; a variant that cannot print these
+ * columns fails the probe (`null`), never "no processes".
+ *
+ * Fragility considered: `pid`, `ppid` and `pgid` are numeric, so locale and
+ * column alignment cannot change their meaning; `tty` never contains whitespace;
+ * `state` is one short word; header suppression (`=`) and the whitespace split
+ * tolerate multiple spaces and a leading header-less line; stderr is discarded;
+ * and a non-zero exit or oversized output (`ENOBUFS`, bounded by `maxBuffer`) is
+ * treated as an unavailable probe, never as "no processes". A row whose `state`
+ * is present but has no `tty` word is dropped rather than guessed.
  */
 export function readProcessTable(): ProcessTableRow[] | null {
   if (process.platform === "win32") return null;
+  const invocation: [string, string[]] = ["/bin/ps", ["-eo", "pid=,ppid=,pgid=,tty=,state="]];
   let printed: string;
   try {
-    printed = execFileSync("/bin/ps", ["-eo", "pid=,ppid=,pgid="], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 16 * 1024 * 1024 });
+    printed = execFileSync(invocation[0], invocation[1], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 16 * 1024 * 1024 });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") return null;
     try {
-      printed = execFileSync("ps", ["-eo", "pid=,ppid=,pgid="], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 16 * 1024 * 1024 });
+      printed = execFileSync("ps", invocation[1], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 16 * 1024 * 1024 });
     } catch {
       return null;
     }
@@ -226,12 +246,14 @@ export function readProcessTable(): ProcessTableRow[] | null {
   const rows: ProcessTableRow[] = [];
   for (const line of printed.split("\n")) {
     const fields = line.trim().split(/\s+/);
-    if (fields.length < 3) continue;
+    if (fields.length < 5) continue;
     const pid = Number.parseInt(fields[0]!, 10);
     const ppid = Number.parseInt(fields[1]!, 10);
     const pgid = Number.parseInt(fields[2]!, 10);
+    const tty = fields[3]!;
+    const state = fields[4]!;
     if (Number.isInteger(pid) && Number.isInteger(ppid) && Number.isInteger(pgid) && pid >= 1 && ppid >= 0 && pgid >= 1) {
-      rows.push({ pid, ppid, pgid });
+      rows.push({ pid, ppid, pgid, tty, state });
     }
   }
   return rows;

@@ -8,15 +8,25 @@ import { PROVIDER_STATE_TEXT, parseProviderStatus, providerCall, type ProviderSt
 import { SDK_SESSION_ID, parseSdkSnapshot, type SdkMessage } from "../data/sdkSession";
 import { readSdkDraft, saveSdkDraft } from "../data/sdkDraft";
 import { setTaskArchivedThroughShell } from "../data/shellBridge";
+import { describeContextDisplay, REASONING_LABELS, REASONING_LEVELS } from "../data/providerState";
+import { readSessionContext, writeSessionThinking, type SessionContextView } from "../data/sessionContext";
 import { parseLifecycle } from "./DesktopArchivePage";
 import { DesktopToolDock, DESKTOP_TOOLS_UNWIRED, type DesktopTool } from "./DesktopToolDock";
+import { DesktopTaskSources } from "./DesktopTaskSources";
 import { BrandMark, LocalUserAvatar } from "./ui";
+import { hostText } from "../data/workspaceFiles";
 
 const sessionId = SDK_SESSION_ID;
 type Turn = { taskId: string; sessionId: string; requestId: string; turnId: string; state: "accepted" | "done" | "cancelled" | "failed" | "interrupted"; error?: string; needsResync: boolean };
 type Message = SdkMessage;
 type Snapshot = { source: "sdk-jsonl"; sessionId: string; messages: Message[]; pending: boolean; interrupted: boolean };
 type Attempt = { requestId: string; text: string; turnId?: string; phase: "starting" | "unknown" | "accepted" | "terminal"; state?: Turn["state"] };
+/**
+ * The 推理/上下文 entries read one Host readout (`task/sessionContext`). `reading`
+ * is a named state of its own: while it is outstanding the composer shows no
+ * level and no occupancy, because nothing has been read yet.
+ */
+type ContextRead = { phase: "reading" } | { phase: "read"; context: SessionContextView } | { phase: "failed"; error: string };
 type Receipt = { schema: 1; taskId: string; sessionId: "main"; requestId: string; text: string };
 const receiptKey = (taskId: string) => `pidock-sdk-main-pending-v1:${encodeURIComponent(taskId)}`;
 function readReceipt(taskId: string): { receipt: Receipt | null; error: string | null } {
@@ -65,12 +75,12 @@ function allowed(data: DesktopProjects, taskId: string): boolean {
     data.inventory.roots.every((root) => root.state === "ready");
 }
 
-type ConversationProps = { taskId: string; name: string; roots: string; association: string; onBack: () => void; onOpenProviders: () => void; onArchived: () => void };
+type ConversationProps = { taskId: string; name: string; roots: string; association: string; onBack: () => void; onOpenProviders: () => void; onArchived: () => void; onSourcesChanged?: () => void };
 export function DesktopConversation(props: ConversationProps) {
   return <TaskConversation key={props.taskId} {...props} />;
 }
 
-function TaskConversation({ taskId, name, roots, association, onBack, onOpenProviders, onArchived }: ConversationProps) {
+function TaskConversation({ taskId, name, roots, association, onBack, onOpenProviders, onArchived, onSourcesChanged }: ConversationProps) {
   const bridge = window.pidock;
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const recovered = useRef(readReceipt(taskId));
@@ -125,8 +135,14 @@ function TaskConversation({ taskId, name, roots, association, onBack, onOpenProv
   const [tool, setTool] = useState<DesktopTool | null>(null);
   const [provider, setProvider] = useState<ProviderStatus | null>(null);
   const [unwired, setUnwired] = useState<string | null>(null);
+  const [contextRead, setContextRead] = useState<ContextRead>({ phase: "reading" });
+  const [thinkingOpen, setThinkingOpen] = useState(false);
+  const [thinkingError, setThinkingError] = useState<string | null>(null);
+  const [thinkingBusy, setThinkingBusy] = useState(false);
+  const contextAttempt = useRef(0);
   const [taskMenu, setTaskMenu] = useState(false);
   const [archivePrompt, setArchivePrompt] = useState(false);
+  const [sourcesOpen, setSourcesOpen] = useState(false);
   const [archiveBusy, setArchiveBusy] = useState(false);
   const [archiveError, setArchiveError] = useState("");
   const archiveCancelRef = useRef<HTMLButtonElement>(null);
@@ -330,7 +346,89 @@ function TaskConversation({ taskId, name, roots, association, onBack, onOpenProv
     return () => { live = false; };
   }, [taskId]);
   const selectedProfile = provider?.state === "configured" ? provider.profiles.find((entry) => entry.id === provider.profileId) : undefined;
-  const modelLabel = selectedProfile ? `${selectedProfile.name} · ${selectedProfile.modelId}` : provider ? "未配置模型" : "正在读取模型";
+  const modelLabel = selectedProfile
+    // The profile's OWN name and model identity: a blank one is named here, so a
+    // selected profile never renders as a bare ` · `.
+    ? `${hostText(selectedProfile.name, "Host 未上报配置名称")} · ${hostText(selectedProfile.modelId, "Host 未上报模型标识")}`
+    : provider ? "未配置模型" : "正在读取模型";
+  // [UI 对齐 S8c] #47: 推理 and 上下文 are read from the Host's own session state
+  // (`task/sessionContext`), which the demo path has used since [PiDock 11] #9 and
+  // which the shipped composer wrongly called 未接线. The attempt counter makes a
+  // late answer from a previous read (or a replaced task) unable to overwrite the
+  // current one, and the write's own post-write readout always wins over a read
+  // that was already in flight.
+  const loadSessionContext = useCallback(async () => {
+    const attempt = contextAttempt.current + 1;
+    contextAttempt.current = attempt;
+    setContextRead({ phase: "reading" });
+    const result = await readSessionContext({ taskId, sessionId });
+    if (contextAttempt.current !== attempt) return;
+    setContextRead(result.ok ? { phase: "read", context: result.context } : { phase: "failed", error: result.error });
+  }, [taskId]);
+  useEffect(() => { void loadSessionContext(); }, [loadSessionContext]);
+  const chooseThinking = async (level: string) => {
+    if (thinkingBusy) return;
+    setThinkingBusy(true);
+    setThinkingError(null);
+    const result = await writeSessionThinking({ taskId, sessionId, level });
+    setThinkingBusy(false);
+    if (!result.ok) { setThinkingError(result.error); return; }
+    contextAttempt.current += 1;
+    setContextRead({ phase: "read", context: result.context });
+    setThinkingOpen(false);
+  };
+  const readout = contextRead.phase === "read" ? contextRead.context : null;
+  // Every state names itself: an outstanding/failed read is not a level, a catalog
+  // the Host reports as unsupported is not a choice, and an unknown tier set is
+  // never rendered as one of the tiers. `resolveSessionThinking`
+  // (`shell/src/main/provider-config.ts:386`) is what decides these three.
+  const thinkingLabel =
+    readout === null
+      ? contextRead.phase === "reading" ? "推理 · 未读取" : "推理 · 读取失败"
+      : readout.thinkingCatalog === "unsupported"
+        ? "推理 · 不支持"
+        : readout.thinking.length > 0 ? `推理 · ${REASONING_LABELS[readout.thinking] ?? readout.thinking}（${readout.thinking}）` : "推理 · 跟随模型";
+  const thinkingTitle =
+    contextRead.phase === "reading"
+      ? "正在读取 Host 会话推理档位；读取完成前不显示任何档位"
+      : contextRead.phase === "failed" ? `Host 会话推理档位读取失败：${contextRead.error}`
+      : readout?.thinkingCatalog === "unsupported" ? "Host 报告该模型不支持推理档位"
+      : "本会话推理档位（来自 Host 会话读数）";
+  // The one occupancy number this control shows is the Host's own `percent`
+  // (`shell/src/main/pi-session.ts:727`, parsed in `data/sessionContext.ts:99`),
+  // and every other number on the line is the Host's own field too. The ratio is
+  // never recomputed here: a locally derived ratio printed as the Host's reading
+  // drifts silently the day the Host changes what `percent` means, which is
+  // exactly the one-number-two-sources claim this engagement forbids. The helper
+  // stays for the 估算/待更新 marker, which labels the Host's `source` and is not
+  // a number.
+  const contextMarker = readout === null ? "" : describeContextDisplay({ used: readout.used, window: readout.window, source: readout.source }).marker;
+  // The prototype's meta line (`prototypes/pidock-ui/app.js:56`) and the demo
+  // composer's own readout (`pages/TaskPage.tsx`) share this wording. The Host
+  // sends `percent: null` while the window is unknown, so the line says 占比未知
+  // instead of printing a `0%` nobody measured.
+  const contextLabel = readout === null
+    ? `上下文 ${contextRead.phase === "reading" ? "未读取" : "读取失败"}`
+    : `上下文 ${readout.used.toFixed(1)}k / ${readout.window > 0 ? `${readout.window}k` : "窗口未知"}${readout.percent === null ? " · 占比未知" : ` · ${readout.percent.toFixed(1)}%`}${contextMarker.length > 0 ? ` · ${contextMarker}` : ""}`;
+  // The hover names the same Host identity the visible composer line shows, so a
+  // blank `providerName`/`providerId`/`modelName`/`model` (`data/sessionContext.ts:68-75`
+  // type-checks all four) is named here too instead of ending in a bare ` · `.
+  const contextTitle = contextRead.phase === "reading"
+    ? "正在读取 Host 会话占用读数；读取完成前不显示数字"
+    : contextRead.phase === "failed" ? `Host 会话占用读数读取失败：${contextRead.error}`
+    : readout === null ? "Host 未返回会话读数"
+      : `${hostText(readout.providerName ?? readout.providerId, "Host 未上报配置名称")} · ${hostText(readout.modelName ?? readout.model, "Host 未上报模型标识")} · 已用 ${readout.used}k Tokens（来源 ${readout.source}）· 窗口 ${readout.window > 0 ? `${readout.window}k Tokens` : "未知"} · 占用比例 ${readout.percent === null ? "未知" : `${readout.percent.toFixed(1)}%`}；数字即 Host 会话读数，未做推断`;
+  // The Token line keeps its bounded-window LABEL. Its hover names the Host's own
+  // session total as read, and — when the two reads disagree in the one direction
+  // that matters (Host total 0 while this window reports usage) — reports what
+  // these two numbers show. The Host returned two numbers, not a cause, so the
+  // clause says so instead of reading as a statement the Host made; it stays
+  // scoped to this route because that is all that was read (a store that
+  // accumulated would show its own number instead).
+  const hostLedgerNote = readout === null ? ""
+    : readout.tokens === 0 && recentTokens > 0
+      ? ` Host 会话账本本次读数 0 tokens，而本窗口已报告 ${recentTokens} tokens；对照这两项读数，本路由的 SDK 回合用量未计入 Host 会话账本（此为本页两项读数的对照结论，并非 Host 返回的说明）。`
+      : ` Host 会话账本读数 ${readout.tokens} tokens。`;
   return <TooltipProvider><main data-testid="desktop-conversation" className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-bg text-ink">
     <div className="shrink-0 border-b border-line bg-paper px-4 pt-3 below-mid:px-3">
       {/* #49: the shell column is 280-380px when a task page is open, and the
@@ -367,6 +465,12 @@ function TaskConversation({ taskId, name, roots, association, onBack, onOpenProv
                 <TooltipContent>{`${item.label}未接线：${unwiredReason}`}</TooltipContent>
               </Tooltip>;
           })}
+          {/* [PiDock 03] (#6) the production append entry: repositories AND
+              plain directories. Only a shell that really exposes the append
+              channel shows it. */}
+          {typeof bridge?.appendTaskRepos === "function" ? (
+            <Button type="button" onClick={() => setSourcesOpen(true)} aria-label="追加仓库或目录" title="从项目登记中选择仓库或普通目录并追加到本任务"><Icon name="plus" /><span className="below-narrow:hidden">追加仓库或目录</span></Button>
+          ) : null}
           <div className="relative">
             <Button type="button" variant="ghost" size="icon-sm" aria-label="任务操作" aria-expanded={taskMenu} onClick={() => setTaskMenu((open) => !open)}><Icon name="more" /></Button>
             {taskMenu && <div className="absolute top-full right-0 z-20 min-w-[150px] rounded-[7px] border border-line bg-paper p-1 shadow-sm">
@@ -396,6 +500,14 @@ function TaskConversation({ taskId, name, roots, association, onBack, onOpenProv
         </div>
       </div>
     </div>}
+    {sourcesOpen && bridge?.appendTaskRepos ? <div className="fixed inset-0 z-50 grid place-items-center bg-black/30 p-4">
+      <DesktopTaskSources
+        taskId={taskId}
+        bridge={bridge}
+        onClose={() => setSourcesOpen(false)}
+        onAppended={() => onSourcesChanged?.()}
+      />
+    </div> : null}
     {unwired && <p role="status" data-testid="desktop-unwired-tool" className="shrink-0 border-b border-line bg-soft px-4 py-1.5 text-[11px] text-muted">
       {unwired}面板未接线：{DESKTOP_TOOLS_UNWIRED.find((entry) => entry.label === unwired)?.reason ?? "生产读取路径尚未接线"}（不显示样例数据）
     </p>}
@@ -435,13 +547,26 @@ function TaskConversation({ taskId, name, roots, association, onBack, onOpenProv
           <Tooltip><TooltipTrigger asChild><span tabIndex={0} aria-label="权限说明" className="inline-flex">
             <Button type="button" size="sm" disabled aria-label="权限（未接线）：只读 · 无工具"><Icon name="shield" />只读 · 无工具</Button>
           </span></TooltipTrigger><TooltipContent>权限切换未接线；当前 SDK 回合无工具，不申请写权限</TooltipContent></Tooltip>
-          <Tooltip><TooltipTrigger asChild><span tabIndex={0} aria-label="推理设置说明" className="inline-flex">
-            <Button type="button" size="sm" disabled>推理（未接线）</Button>
-          </span></TooltipTrigger><TooltipContent>推理设置未接线；此处不表示模型的推理能力或当前档位</TooltipContent></Tooltip>
+          <div className="relative">
+            <Button type="button" size="sm" data-testid="composer-thinking" aria-haspopup="dialog" aria-expanded={thinkingOpen} title={thinkingTitle} disabled={contextRead.phase === "reading"} onClick={() => { setThinkingError(null); setThinkingOpen((open) => !open); }}>{thinkingLabel}<Icon name="down" className="h-3 w-3" /></Button>
+            {thinkingOpen && <div role="dialog" aria-label="推理档位" className="absolute right-0 bottom-full z-30 mb-1 w-[248px] rounded-[7px] border border-line bg-paper p-2 text-left shadow-md">
+              {contextRead.phase === "failed" ? <>
+                <p className="px-1 pb-1 text-[10px] leading-5 text-muted">Host 会话推理档位读取失败：{contextRead.error}</p>
+                <Button type="button" variant="ghost" size="sm" className="w-full justify-start" onClick={() => void loadSessionContext()}><Icon name="refresh" />重新读取 Host 读数</Button>
+              </> : readout === null ? <p className="px-1 text-[10px] leading-5 text-muted">正在读取 Host 会话读数…</p> : readout.thinkingCatalog === "unsupported" ?
+                <p className="px-1 text-[10px] leading-5 text-muted">Host 报告该模型不支持推理档位，本会话无可选档位。</p>
+              : <>
+                <p className="px-1 pb-1 text-[10px] leading-5 text-muted">{readout.thinkingCatalog === "declared" ? "Host 已声明该模型的可用档位集合并自行校验；被拒绝时显示 Host 原文。" : "Host 尚未声明该模型的可用档位，选中档位按模型目录执行；不认识的取值由 Host 拒绝并显示原文。"}</p>
+                {REASONING_LEVELS.map((level) => <Button key={level} type="button" variant="ghost" size="sm" className="w-full justify-start" aria-pressed={readout.thinking === level} disabled={thinkingBusy} onClick={() => void chooseThinking(level)}>{REASONING_LABELS[level] ?? level}<span className="text-muted">{level}</span></Button>)}
+              </>}
+              {thinkingError && <p role="alert" className="mt-1 border border-[#e0b4b4] bg-[#fdf3f3] p-1.5 text-[10px] leading-5 break-words text-[#ad4545]">{thinkingError}</p>}
+            </div>}
+          </div>
           <Tooltip><TooltipTrigger asChild>
             <Button type="button" size="sm" onClick={onOpenProviders} title={provider ? PROVIDER_STATE_TEXT[provider.state] : "正在读取 Provider 配置"} data-testid="composer-model">{modelLabel}<Icon name="down" className="h-3 w-3" /></Button>
           </TooltipTrigger><TooltipContent>{provider ? PROVIDER_STATE_TEXT[provider.state] : "正在读取 Provider 配置"}</TooltipContent></Tooltip>
-          <span title={usageDetail} className="ml-auto min-w-0 break-words">{!usageSnapshot ? "近期用量未核验" : reportedMessages.length ? `近期已报告输入+输出 ${recentTokens} tokens` : "近期用量未报告"}</span>
+          <span data-testid="composer-context" title={contextTitle} className="min-w-0 break-words">{contextLabel}</span>
+          <span data-testid="composer-usage" title={`${usageDetail}${hostLedgerNote}`} className="ml-auto min-w-0 break-words">{!usageSnapshot ? "近期用量未核验" : reportedMessages.length ? `近期已报告输入+输出 ${recentTokens} tokens` : "近期用量未报告"}</span>
           <Button type="submit" variant="default" size="icon" disabled={blocked || !draft.trim()} aria-label="发送" title="发送"><Icon name="arrow" /></Button>
         </div>
       </form>

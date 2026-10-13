@@ -47,7 +47,10 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   shell 的 `task-provision.ts` / `task-host.ts` / `task-store.ts` /
   `host-guards.ts` 从未被 renderer 导入；renderer 的任务表单规则是
   `data/directories.ts` 中的独立纯函数镜像（见
-  `task-provision-parity.test.ts`）。
+  `task-provision-parity.test.ts`）。唯一例外是**仅测试**的跨包读取：
+  `serviceTemplateRules.parity.test.ts`（#7）直接 import shell 的纯模块
+  `main/service-config.ts` 以逐字锁定镜像文案；页面本身仍不获 Node 能力，
+  `no-node-in-renderer.test.ts` 按设计跳过 `*.test.*`。
 - `no-node-in-renderer.test.ts` 扫描 renderer 源码：`node:` / `electron`
   导入、`process.env`、shell 模块导入一律失败。preload 仍为最小桥
   （`window.pidock.taskOp` + `{ok:false,error}` 信封），任务路由 id 由 main
@@ -83,36 +86,48 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   授权（start/stop 共用同一个“服务目录”绑定目标）；`restore` 会把
   `approved` 但未消费的请求一并消费，重开应用必须重新确认。本切片不设
   确认有效期（TTL），语义见 `service-runtime.ts` 的 `verifyServiceControlApproval`。
-- renderer 的 `shellHost.setServiceRunning` 先探 `task/serviceStatus`：Host 已
-  注册的服务走 `task/controlService`（无 `sessionId`，人工路径）；未注册的服务
-  （当前 renderer 还没有服务注册入口，服务只在 Host/Agent 侧注册）仍回落
-  memory。真实的 `child_process` 启动、日志流与 renderer 注册入口一起落地时
-  才能端到端，仍在 #7 残留内。
-- **真实服务执行与其边界**（隐患记录，不只写成功路径）：任务绑定的服务能被真实启动，
-  但**生产入口默认拒绝**。能力本身保留：main 从可信服务目录解析绑定（pin 版本 +
-  realpath 程序 + 校验 cwd 在任务根内 + 分层环境），以自带的 `service-catalog` origin
-  走 `task/registerService` 登记，再走既有 `task/controlService` 门禁启动
+- renderer 的 `shellHost.setServiceRunning` 在壳已连接时走生产路径：先按 Host 自己的
+  项目归属解析该任务所属项目，再调 `shell/serviceCatalogOp {op:"runTaskService"}`
+  （main 解析可信启动、登记、控制），页面只给出 project/task/service/action；Host 的拒绝
+  按原文呈现，不回落 fixture 数据，也不冒充 Agent 门禁路径。只有壳确实未连接时才回落
+  memory 镜像（`DesktopToolDock` 运行面板的启停触发器与 `TaskPage` 的启停开关共用
+  这一个入口）。
+  - **人工入口不带会话（明示，不是隐藏）**：运行面板的启停触发器不接收会话/权限输入，
+    Host 的人类路径也不按会话门禁（`host-guards.ts` 要求 main 盖的 `shell-ui` 来源证明，
+    `service-control.ts` 的只读拒绝/默认询问只作用于 Agent 路径）。这与既有语义一致：
+    面板按钮是用户直接操作，不是 Agent 调用；Agent 启停仍必须经会话门禁。依赖会话的
+    旧面板（`RuntimePanel`）在界面层仍拦截只读会话；新运行面板的触发器本身不按会话区分，
+    只把 Host 的拒绝原文呈现。
+- **真实服务执行与其边界**（隐患记录，不只写成功路径）：任务绑定的服务能被真实启动。
+  `runtime.ts` 导出的 `runTaskService` 从可信服务目录解析绑定（pin 版本 + realpath 程序 +
+  校验 cwd 在任务根内 + 分层环境），以自带的 `service-catalog` origin 走
+  `task/registerService` 登记，再走既有 `task/controlService` 门禁启动
   `TaskServiceProcesses` 的真实子进程；`stop` 只对自己登记的子进程组 SIGTERM→SIGKILL，
-  `task/quit` 先停本任务真实子进程再写关闭回执。这条链只由 `runtime.ts` 导出的
-  `runTaskService` 驱动，现有真实子进程套件（`host/service-execution-wiring.test.ts`）
-  直接从该接缝调用它，因此能力与测试都保留。
-  **生产 IPC 触发点（`shell/serviceCatalogOp` 的 `runTaskService` 分支）按 #7 终审
-  意见重新拒绝接线**：`serviceExecutionRefusal()`（纯函数，`runtime-layout.test.ts`
-  锁定）在解析可信启动、进入任何可派生进程的调用**之前**返回具名、失败关闭的错误
-  `SERVICE_EXECUTION_BLOCKED`（`service-execution-blocked: 进程树所有权与跨平台终止
-  前置条件未满足（见 #7）`），且与载荷校验错误区分。工单 #7 终审要求：在进程树
-  所有权/退出回收与任务路径身份用后代与跨平台真实测试重新设计前，「模块不接
-  `task/controlService`、不生成 serviceRunRecords、不开放 UI」。因此该生产入口
-  **不登记、不控制、不开放 UI**，直到下列前置条件满足：
-  - **已修复（本切片）**：任务路径身份——驱动身份曾按规范化任务路径比较，导致每次
-    控制重建驱动、丢失运行中子进程表，令 `stop` 失败且 `start` 重复拉起；现按运行对象
-    记忆化（见提交 `0dd499d`）。
-  - **仍缺**：后代退出回收与 Host/main 死亡后的孤儿所有权（调用 `setsid` 脱离进程组的
-    后代超出停止契约）；Windows 进程树终止（无 Job Object 监督器，整体拒绝 `start`）；
-    cwd 的 `realpathSync` 校验与 `spawn` 之间不是原子打开（TOCTOU）。
-  - **已交付的残留（失败关闭）**：子进程以 detached 启动且对耐久所有者台账不可见；
-    Host 重启后台账可能对仍存活的进程显示 `stopped`，新 Host 再启动会重复拉起。因此在
-    耐久状态非终态时保持失败关闭。
+  `task/quit` 先停本任务真实子进程再写关闭回执。
+  **生产接线按 #48 的结论重新打开（本切片）**：`serviceExecutionRefusal()`（纯函数、
+  不接受调用方输入，`runtime-layout.test.ts` 锁定）在 POSIX（darwin/linux）返回 `null`，
+  其他平台返回具名失败关闭拒绝 `SERVICE_EXECUTION_UNSUPPORTED_PLATFORM`
+  （`unsupported-platform: 服务启动身份核验与终止仅在 POSIX（darwin/linux）实现，…`，
+  与 #48 的措辞一致），并在解析可信启动、进入任何可派生进程的调用**之前**检查，与载荷
+  校验错误区分。证据：`main/service-execution-production.test.ts` 经真实
+  `shell/serviceCatalogOp` 处理器 + 真实 Host + 真实 Node 子进程验证启用/拒绝与
+  「只停本服务登记进程树」，`host/service-execution-wiring.test.ts` 保持接缝级真实子进程覆盖。
+  - **已交付（#48，已在生产路径生效）**：进程树所有权与信号前提——(pid, 128-bit nonce)
+    身份、三态核验（verified / mismatch / unobservable）、**同一次调用未核验身份绝不发信号**
+    （`service-processes.ts` 的 `verifySameHostLaunch`）、仅在进程组正向证据下回收后代、
+    win32 显式 `unsupported-platform`（`start`/信号路径均拒绝）。
+  - **已接线（本切片修复）**：`host.ts` 的 `serviceDriverFor` 现按任务注入
+    `diskServiceOwnershipLog({ taskId, taskDir })`（工厂与 #48 的模块同一份），因此耐久
+    所有权台账在生产路径可达：真实启动在 `start` 解析前写入 `(pid, nonce)`（`close` 后
+    才释放），重启后的 Host 在记录仍可核验时拒绝重复启动（`service-ownership-own-verified`），
+    并按记录核验身份后停止该孤儿。证据：`host/service-execution-wiring.test.ts` 的
+    「records the durable launch identity…」用例经真实 Host 启动后断言记录存在、nonce
+    就是子进程自身的 OS 标记，同一生产工厂的第二个 driver 在孤儿存活期间拒绝重复启动
+    并能核验后停止它；跨重启语义的驱动级契约在 `service-ownership.test.ts`。
+  - **仍缺**：记录存活但所有权不可核验（`orphaned-unverified`）时的恢复路径仍需人工在
+    任务层处理，没有自动接管；后代退出回收中已脱离进程组且关闭继承 stdio 的后代（超出
+    当前证据模型，需 cgroup/Job Object）；Windows 进程树终止（`start` 整体拒绝）；cwd 的
+    `realpathSync` 校验与 `spawn` 之间不是原子打开（TOCTOU，已检测未消除）。
 
 ### 任务浏览器：任务内页面、门禁与标记回传（[PiDock 06] #8）
 
@@ -198,6 +213,61 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   互相等待（spec「双向依赖不会造成永远等待启动」）；同一组内出现 `prestart`
   边时报告 `start-order-conflict` 而不是死等。远程依赖不启动，改为所在组的
   「远程依赖可达性检查（共享环境，不标记为任务内隔离）」。
+- **整组启动与真实互验**：上面的计划现在有了真实执行方——
+  `task/controlService` 的**同一 op** 接受 `group: true`（不新增 op，
+  `HOST_TASK_OPS` 不变），`host.ts` 的 `runGroupServiceStart` 按 `planStartGroups`
+  的顺序逐个单元走**同一个**门禁（`runHumanServiceControl` /
+  `runAgentServiceControl`，只读拒绝、`default` 先确认），组内所有单元先监听、再
+  互验。
+  - **可达性边界（已接线，带一条具名限制）**：出厂调用方是渲染层运行面板的「整组启动」——
+    `shell/serviceCatalogOp {op:"runTaskServiceGroup"}`（只收 `op/projectId/taskId`；带了 `units` /
+    `plan` / `rules` / `layers` 等任何计划内容一律按名拒绝，页面不能选单元）→ 主进程
+    `runTaskServiceGroup` 用**可信目录**（该任务的绑定）解析每个启动材料并登记到任务 Host，
+    再转发**一次** `task/controlService {group:true, action:"start"}`；每个单元仍走同一个门禁
+    （只读拒绝、`default` 先确认），没有第二个门、也没有新的 `HOST_TASK_OPS`。
+    - **计划来源与「不覆盖」**：Host 的运行单元计划仍由 `task/planServiceGroup` 写入。
+      已有计划时主进程**原样**启动（带调用边的计划因此保留它的 `linkage` 互验）；只有 Host
+      自己回答 `not-planned` 时，主进程才用可信目录一次性生成计划（单元 = 该任务已绑定服务、
+      端口 = 登记声明的端口、runType = 配方自己的）。
+    - **依赖边的生产来源（盒 1 末半片已完成）**：出厂路径生成的计划的依赖边来自**每环境共享
+      模板上的 `服务依赖声明`**（`call` / `prestart`，见 `docs/adr/0002-dependency-declaration.md`），
+      登记到该任务 Host 时按声明读取：声明的目标已绑定 → 该 `{from,to,kind}` 进
+      `task/planServiceGroup`；**没有任何声明 → 不发 `dependencies` 键**（不是空图，也不是合成的边），
+      面板按名显示「无依赖边（未做互验）」，不会显示 `已互验`。声明了但目标**未绑定到本任务**时
+      按名拒绝整组（不丢边、不启动任何单元）。因此出厂应用里带真实 `call` 声明的任务可以真的走到
+      `已互验`；`已互验` 仍只来自一次真实连通观测，声明本身不会被记成观测。
+      声明端口的计划若拿不到端口（长驻服务无声明端口）按 `missing-port` **具名拒绝**且不启动任何
+      单元——被丢出组的成员会让一个缺员的组看起来是绿的。
+  - **已启动**只来自一次真实启动（门禁通过且驱动返回真实 pid，本单元回读自驱动刚
+    写入的那条运行记录，绝不借用同一服务更早的开启记录）；
+    **已监听**只来自 `host/service-linkage.ts` 对**登记声明地址**的有界真实 TCP
+    连接（spawn 早于 bind，故在预算内重试；连接被拒绝/超时= `not-listening`）；
+    **已互验**只来自一次真实连到依赖声明地址的连接。计划端口、意图、声明端口都不
+    会被记成观测结果。
+  - **观测归属边界**：已监听/已互验证的是「登记声明地址接受了一次真实连接」，并
+    **不**证明监听者就是本单元的子进程（声明端口上另有一个外部进程时也会答；那属于
+    盒子 5 的「端口被外部占用」，本片不声称已排除）。
+  - 观测沿用既有形状：监听/联通结果经 `TaskServiceTopology.verifyRun` →
+    `attachVerification` 挂到该单元自己的运行记录上（`kind` 为 `readiness` /
+    `linkage`），面板据此显示 `已监听` / `已互验` / `未监听` / `依赖不可达`，无观测
+    则具名显示 `未探测`；不是探测结果的「单元不在当前选择中」用 `selection-note`
+    记录，同样读作 `未探测`，绝不冒充「已探测但未监听」。
+  - 具名负状态互不合并：组状态 `refused`（门禁拒绝）、`approval-required`（`default`
+    待确认，未启动任何子进程）、`start-failed`（驱动/启动失败，`diagnoseStartFailure`
+    点名单元）、`dependency-unreachable`（真实连接未到达依赖，
+    `diagnoseDependencyUnreachable`）、`verify-failed`（就绪核验失败）、
+    `not-listening`、`not-probed`；诊断码与之一一对应，`control-refused` /
+    `approval-required` / `verify-failed` 各自有名，绝不复用 `start-failed` /
+    `dependency-unreachable`。任一单元被拒绝或失败后不再启动后续单元（其前置条件并未
+    就绪），绝不静默跳过成绿色组。
+  - 预启动组（`prepare`/`one-shot`）的「准备步骤完成检查」复用该单元在监听阶段那次
+    真实连接观测，不重复探测、也不重复记录两条一模一样的就绪结论。
+  - `planRestartScope` 现在有生产调用方：整组启动结果里的 `restartScope` 由它从
+    「本次运行真实登记的身份 + 本计划的 `reallocated`」算出，只**点名**仍需重启/
+    改指的单元，不声称已经更新过任何消费者。
+  - 边界：`default` 档下每个单元仍需各自的确认（既有一次性确认只覆盖一个服务的一
+    次启动，本片不新增第二条确认路径）；远程依赖可达性检查仍具名为 `未探测`
+    （本片不发起远程请求）。
 - **可定位失败与部分重启**：`diagnoseStartFailure` 把端口占用映射为
   `port-taken`（并给出重分配提示），其余保留原始错误为 `start-failed`；
   `diagnoseDependencyUnreachable` 点名消费者变量与目标实例。重分配后
@@ -210,13 +280,31 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   `<taskDir>/services/<serviceId>/run-<runId>.log`）收在一条记录上；
   `attachVerification` 记录联通/就绪/远程可达检查结果，本地进程存活不等于功能
   验证成功。`recordRun` 拒绝非正整数 pid：没有真实进程身份就不写记录。
+  端口列表带 `portsSource`（`declared` / `observed`）：本机 Host 没有端口探测，
+  生产写入恒为 `declared`，运行时面板据此显示「声明端口，未实测监听」；一条记录
+  里的 pid/启动时刻/调用者身份是 OBSERVED，端口是 DECLARED。代码状态同样是
+  OBSERVED，但**不是 Host 自己读的**：main 在每次启动前用有界的只读 git 调用
+  （`main/service-code-observation.ts` 的 `rev-parse HEAD` + `status --porcelain`）
+  读启动自己的已校验 cwd（`service-catalog.ts` 的 `verifiedLaunchPaths`）所在的
+  工作树，把「HEAD 提交 + 是否脏」随可信服务目录的 `task/registerService` 注册
+  交给 Host；只有 `service-catalog` 来源的注册可以携带它，界面来源的注册带着
+  该字段会被具名拒绝（页面不能自证代码状态）。观察失败（不是工作树、没有 HEAD、
+  没有 git、没有 cwd）不产生任何代码状态：记录按 `unknown` 具名保留，原因写进该
+  服务自己的有界日志（`task/serviceLog`），绝不会读成 `committed-clean`。构建
+  新鲜度没有观察来源——服务配方里没有任何“构建产物”的身份——所以 `buildCommit`
+  永不被声称：干净工作树读 `unknown`（无法判断构建状态），脏工作树读
+  `uncommitted-code`，两者都不会冒充 `fresh`。真实启动/停止路径
+  （`host.ts` 的 `task/controlService`）现在写入并关闭运行记录。
 - **停止范围**：停止范围只来自 Host 登记的进程身份
   （`ProcessIdentity` / `verifyRegisteredIdentity` 精确匹配 instance + pid +
   启动时间），绝不按端口或过期 PID 猜测；`planStopScope` 只返回所属任务的身份，
   同名实例属于其他任务时进入 `skipped` 并写明原因。`task/serviceStopScope` 是
   只读计算；真实终止只存在于 #7 的能力路径上（可信服务目录登记的任务绑定服务，
-  `task/controlService` → `TaskServiceProcesses`），且 #7 的生产入口默认拒绝接线
-  （见 #7 章节），不在本节的规划 op 里。
+  `task/controlService` → `TaskServiceProcesses`），#7 的生产入口已按平台门禁接线
+  （POSIX 启用、其他平台具名拒绝，见 #7 章节），不在本节的规划 op 里。
+  `planStopScope.skipped` 只在“同一登记表里出现其他任务的同名实例”时非空，而生产
+  是「一个 Host = 一个任务登记表」，所以该分支在生产中结构上不可达（不足报，绝不
+  多报）；它由 `main/service-runs.test.ts` 的单元用例覆盖，不在生产路径上被行使。
 - **共享外部资源**：`classifyExternalResource` 默认按共享处理，`queue` /
   `dtm-callback` 明确标为 `not-isolated`（消费端与回调端仍是同一实例），
   只有拿到独立实例证据（`isolatedByTask`）才标 `isolated`；任务视图显示资源
@@ -230,10 +318,15 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   （`planServiceGroupThroughShell` / `serviceRunRecordsThroughShell` /
   `serviceStopScopeThroughShell`）与适配器 `serviceTopology(taskId)` 取视图，
   Host 不可用时回落内存投影。
-- **残留（未测/未接线）**：真实 `child_process` 启动、日志流、退出与健康检查
-  未实现（因此 `recordRun` / 停止范围没有生产调用方，只有 Host 类与测试）；
-  两个任务同时运行并检查真实请求去向未执行（端口与绑定隔离有单元测试）；
-  「启动失败后重分配」只在规划阶段验证；真实仓库的依赖缺口探测未运行
+- **残留（未测/未接线）**：真实 `child_process` 启动、日志流与退出已由 #7 的能力路径
+  提供（`TaskServiceProcesses`，生产入口按平台门禁接线，#7 的生产进程测试覆盖），
+  `recordRun` 与停止范围也已由本片接上真实的生产调用方（`host.ts` 的真实启动/停止），
+  但还没有真实健康检查；两个任务同时运行并检查真实请求去向未在生产运行（端口与绑定
+  隔离有 `host/service-two-task-isolation.test.ts` 的两个真实子进程证据）；
+  「启动失败后重分配」只在规划阶段验证（重分配后的消费者更新仍只重算绑定值，
+  没有运行中的进程需要迁移，`planRestartScope` 只点名待办、不执行迁移）；
+  `verifyRegisteredIdentity` 仍没有生产调用方（`planStopScope` 自己做精确匹配）；
+  真实仓库的依赖缺口探测未运行
   （`missing-binding` 与远程可达检查为规划期证据）；`task/planServiceGroup`
   的生产调用方目前是 renderer 的面板（`stores/host.ts` 仍把内存适配器固定为
   默认，与 #9 记录的同一接线缺口）；重新分配地址后的消费者更新已重算绑定值，
@@ -540,15 +633,18 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   内存投影。工具区默认关闭，按需加载（面板打开才发起 Host 读取或终端计划），
   逐标签关闭、最后一个关闭后释放对话空间，关闭面板不停止服务、不结束终端进程、
   不删除浏览器持久状态（这些生命周期各自独立）。
-- **盒子状态**：盒子 1／2／3（规则与 Host 计划部分）／5／8 已覆盖；盒子 3 的真实
-  PTY 进程、盒子 4 的「真实命令执行不接受 UI 只读标记」端到端、盒子 6 的外部
-  编辑器入口、盒子 7 的真实 Git 交付执行属残留，因此 #15 保持 OPEN。
+- **盒子状态**：盒子 1／2／3（规则与 Host 计划部分）／5／8 已覆盖，盒子 6 的外部
+  编辑器入口已在应用内可达（任务文件面板的「用外部编辑器打开」，程序在「本机设置」
+  保存）；盒子 3 的真实 PTY 进程、盒子 4 的「真实命令执行不接受 UI 只读标记」
+  端到端、盒子 6 的断点调试集成、盒子 7 的真实 Git 交付执行属残留，因此 #15 保持
+  OPEN。
 - **残留（未测／未实现）**：真实 PTY 进程未启动（`task/terminalState` 明确返回
   `spawnImplemented: false`，面板显示「本机 PTY 进程启动属未实现范围」，实例只在
   有真实 spawner 报告进程号后才能停止）；`git diff` 真实运行（固定 argv、无 shell）
   只由注入读取器的单测覆盖，未在有真实仓库的环境执行；文件树／预览未在打包应用里
-  做过 GUI 走查（Electron smoke 未运行）；外部编辑器打开入口与断点调试方式未实现
-  （盒子 6 未覆盖）；「人工终端接管」目前只到写操作权与归属标识，真实接管流程
+  做过 GUI 走查（Electron smoke 未运行）；外部编辑器入口与设置只有单测覆盖，未在
+  真实桌面壳里做过 GUI 走查、Windows 未验证，仍未实现的只有断点／调试方式；
+  「人工终端接管」目前只到写操作权与归属标识，真实接管流程
   （暂停 Agent、用户输入、恢复）依赖真实 PTY；终端输入仍是模拟（`runTerminalCommand`
   内存队列），未接真实 shell；`task/planTerminal` / `task/terminalControl` 的生产
   调用方只在 renderer 面板（`stores/host.ts` 仍把内存适配器固定为默认，与 #9/#10/#12/#14
@@ -767,12 +863,11 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   service-control／browser-action／terminal-control 三类 Host 驱动控制各自开设执行记录
   （`ControlExecutionPort`，见 #17 章节），renderer 由 `data/executionLedger.ts` 消费
   `task/executionState`（会话执行状态卡）。
-  仍属**未测／未实现**：service-control 的生产派发默认拒绝接线（#7 生产入口
-  `service-execution-blocked`，见 #7 章节），因此该类记录只在控制序列与 Host 接缝层
-  有测试；未登记 id、界面配方、所有者状态未确认等登记仍失败关闭
-  （`service-execution-unavailable` / `service-execution-uncertain`），它的执行记录
-  也只在控制序列与 Host 接缝层有测试；
-  真实模型调用、真实子进程与浏览器操作、Electron 走查与跨平台运行未执行；
+  仍属**未测／未实现**：service-control 的生产派发现已接线（#7 生产入口经
+  `serviceExecutionRefusal` 的平台门禁在 POSIX 启用、win32 具名
+  `unsupported-platform` 拒绝，见 #7 章节），但真实模型调用、真实子进程与浏览器操作
+  的整机 Electron 走查与跨平台运行仍未执行；未登记 id、界面配方、所有者状态未确认
+  等登记仍失败关闭（`service-execution-unavailable` / `service-execution-uncertain`）；
   「载荷版本」没有真实内容生产者，版本复核因此只在同一版本上通过（规则层的
   不匹配路径由单测锁定）；自动化（定时）入口尚未用它建立执行记录。
 - **全量校验（P1 修复后重跑）**：`pnpm turbo run typecheck test build lint --force`

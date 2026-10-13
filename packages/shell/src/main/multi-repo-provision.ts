@@ -35,6 +35,14 @@ import {
   type ProvisionPlan,
 } from "./task-provision.js";
 
+/**
+ * A remote name a repository selection may name: one safe token, never a
+ * path, an option or something git would read as a ref. Exported once so the
+ * create flow and the production append cannot drift on the spelling of
+ * "this is a valid remote name".
+ */
+export const REMOTE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
 export type MultiRepoErrorCode =
   | "empty-selection"
   | "duplicate-repo"
@@ -43,6 +51,26 @@ export type MultiRepoErrorCode =
   | "path-taken"
   | "branch-in-use"
   | "repo-unusable";
+
+const MULTI_REPO_ERROR_CODES = [
+  "empty-selection",
+  "duplicate-repo",
+  "invalid-repo",
+  "fetch-failed",
+  "path-taken",
+  "branch-in-use",
+  "repo-unusable",
+] as const satisfies readonly MultiRepoErrorCode[];
+
+/**
+ * Runtime guard for a per-repo error code crossing the RPC/record boundary:
+ * only the codes in `MultiRepoErrorCode` are accepted, so a caller-supplied
+ * `prepareErrors[].code` or a persisted record cannot smuggle an arbitrary
+ * string past an unchecked cast.
+ */
+export function isMultiRepoErrorCode(value: unknown): value is MultiRepoErrorCode {
+  return typeof value === "string" && (MULTI_REPO_ERROR_CODES as readonly string[]).includes(value);
+}
 
 export interface MultiRepoError {
   code: MultiRepoErrorCode;
@@ -285,13 +313,13 @@ export interface RepoPrepareOutcome {
  * distinguishable so recovery resumes only the unfinished ones and keeps
  * user edits in the finished worktrees.
  *
- * DEFERRED wiring (S6 scope, documented not silent): no Host recovery
- * flow consumes this yet — `appendRepos` resumes by filtering against
- * the stored `repos` list (`filterAppendRepos`), which keeps finished
- * worktrees untouched but cannot distinguish `pending` vs `failed`
- * within the unfinished set. A resume-partial-prepare entry point
- * should call this to pick the retry set; until then the form retries
- * the whole unfinished set per repo with `fetch-failed` kept per repo.
+ * The wired recovery flow is `TaskWorkspaceHost.resumeAppend`
+ * (`task/resumeAppend`): it classifies each selected repo from the REAL
+ * worktree on disk (`classifyRepoPrepareState`), feeds the outcomes here,
+ * and plans only the retry set. `appendRepos` itself still resumes by
+ * filtering against the stored `repos` list (`filterAppendRepos`), which
+ * keeps finished worktrees untouched but cannot distinguish `pending` vs
+ * `failed`; resume is the entry point that can.
  */
 export function segmentPrepareOutcomes(
   outcomes: readonly RepoPrepareOutcome[],
@@ -314,6 +342,107 @@ export function segmentPrepareOutcomes(
   return { created, pending, failed };
 }
 
+/**
+ * Real evidence the Host gathered about ONE selected repo's worktree on
+ * disk. Every field is an observation, never a guess:
+ *
+ * - `worktreePresent`: `lstat(taskDir/<repoDir>)` succeeded.
+ * - `worktreeMatchesPinnedCommit`: the present path is a linked Git
+ *   worktree whose HEAD is the task branch and whose HEAD still contains
+ *   the pinned commit (`RepoProbe` read-only git, same seam as [PiDock 14]
+ *   #17); `null` when the probe could not verify it.
+ * - `previousError`: a per-repo error already recorded for this repo.
+ * - `recordedBaselineMissing`: the record lists the repo but carries no
+ *   recorded remote baseline for it (`repoSources` entry absent), so no
+ *   resume can plan it.
+ */
+export interface RepoPrepareEvidence {
+  repoDir: string;
+  worktreePresent: boolean;
+  worktreeMatchesPinnedCommit?: boolean | null;
+  /** Reason the present path is not this task's worktree (only for `failed`). */
+  mismatchReason?: string;
+  /** A per-repo error already reported for this repo (kept, never dropped). */
+  previousError?: MultiRepoError;
+  /** The record names the repo but records no remote baseline for it. */
+  recordedBaselineMissing?: boolean;
+}
+
+/**
+ * Classify ONE selected repo from real evidence (honest, fail-closed):
+ *
+ * - `created`: `lstat` found the worktree dir AND the git probe verified a
+ *   linked worktree on the task branch with the pinned commit reachable.
+ *   Never claimed from the record alone: with no probe the repo is not
+ *   `created`.
+ * - `failed`: the path is present but is NOT this task's pinned worktree
+ *   (partial/broken leftover — never overwritten); OR the worktree is
+ *   absent while a per-repo error was already reported for it (kept with
+ *   its real reason, never silently dropped); OR the record names the repo
+ *   without a recorded remote baseline, so no resume can plan it.
+ * - `pending`: the selection is recorded WITH its remote baseline, the
+ *   worktree is absent and no error was ever reported (worktree absent, no
+ *   reported error — which git op ran, if any, is unknown).
+ */
+export function classifyRepoPrepareState(evidence: RepoPrepareEvidence): RepoPrepareOutcome {
+  if (evidence.worktreePresent) {
+    if (evidence.worktreeMatchesPinnedCommit === true) {
+      return { repoDir: evidence.repoDir, status: "created" };
+    }
+    return {
+      repoDir: evidence.repoDir,
+      status: "failed",
+      error: {
+        code: "repo-unusable",
+        repoDir: evidence.repoDir,
+        message:
+          evidence.mismatchReason ??
+          `路径 ${evidence.repoDir} 已存在但不是本任务固定提交的工作副本，不会自动覆盖`,
+      },
+    };
+  }
+  if (evidence.recordedBaselineMissing) {
+    // The read and the resume write must agree: a repo with no recorded
+    // baseline is not resumable, so it is failed/needs-human here instead of
+    // `pending` (which the resume would then refuse).
+    return {
+      repoDir: evidence.repoDir,
+      status: "failed",
+      error: {
+        code: "repo-unusable",
+        repoDir: evidence.repoDir,
+        message: `仓库 ${evidence.repoDir} 缺少记录的远程基线，无法从此记录恢复，请人工处理`,
+      },
+    };
+  }
+  if (evidence.previousError) {
+    return { repoDir: evidence.repoDir, status: "failed", error: evidence.previousError };
+  }
+  return { repoDir: evidence.repoDir, status: "pending" };
+}
+
+/**
+ * Split classified outcomes into what a resume may retry (worktree absent
+ * AND the record can be planned, so creating it takes over nothing) and what
+ * it must hold (a present path that is not this task's worktree, or a record
+ * with no recorded remote baseline: never reset/refetched/overwritten/planned).
+ * `created` repos are never in either list, so their user edits survive.
+ * `mustHold` carries the repo dirs a resume must keep out of its plan.
+ */
+export function resumeRepoSet(
+  outcomes: readonly RepoPrepareOutcome[],
+  mustHold: ReadonlySet<string>,
+): { retry: string[]; hold: string[] } {
+  const retry: string[] = [];
+  const hold: string[] = [];
+  for (const outcome of outcomes) {
+    if (outcome.status === "created") continue;
+    if (mustHold.has(outcome.repoDir)) hold.push(outcome.repoDir);
+    else retry.push(outcome.repoDir);
+  }
+  return { retry, hold };
+}
+
 /** Stable ASCII link name for a plain directory: `dir-` + up to 8
  * alphanumerics of the directory id (lowercased). The spelling is locked
  * by renderer parity (`directoryLinkName`); callers adding several links
@@ -322,6 +451,17 @@ export function segmentPrepareOutcomes(
  */
 export function buildLinkName(directoryId: string): string {
   return `dir-${directoryId.replace(/[^a-zA-Z0-9]/g, "").slice(0, 8).toLowerCase()}`;
+}
+
+/**
+ * Stable in-task folder name for a selected repository: `repo-` + the first 8
+ * hex characters of the project repository id. The spelling is shared by the
+ * creation-intent validator, the provisioning planner and the main-side prep
+ * scan (`projectRepositoryForRepoDir`); a change here would make every
+ * recorded `repoDir` unresolvable and refuse every append/resume.
+ */
+export function buildRepoChildName(repositoryId: string): string {
+  return `repo-${repositoryId.slice(0, 8)}`;
 }
 
 /**
@@ -360,6 +500,15 @@ export interface PlainDirLinkSnapshot {
   sourcePath: string;
   /** ISO time the snapshot was taken. */
   snapshotAt: string;
+  /**
+   * Device + inode of `sourcePath` read from the real filesystem at snapshot
+   * time. The caller supplies them (this module stays pure and fs-free); a
+   * path string alone cannot tell a different directory swapped in at the
+   * same path, so the append re-verifies this pair. Omitted when the caller
+   * could not read them: the entry then stays path-only.
+   */
+  sourceDevice?: string;
+  sourceInode?: string;
 }
 
 /**
@@ -372,6 +521,7 @@ export function snapshotPlainDirLink(input: {
   directoryId: string;
   sourcePath: string;
   now: string;
+  identity?: { device: string; inode: string };
 }): { ok: true; snapshot: PlainDirLinkSnapshot } | { ok: false; error: MultiRepoError } {
   if (typeof input.directoryId !== "string" || input.directoryId.trim().length === 0) {
     return {
@@ -392,6 +542,9 @@ export function snapshotPlainDirLink(input: {
       directoryId: input.directoryId,
       sourcePath: input.sourcePath.trim(),
       snapshotAt: input.now,
+      ...(input.identity !== undefined
+        ? { sourceDevice: input.identity.device, sourceInode: input.identity.inode }
+        : {}),
     },
   };
 }
@@ -442,4 +595,95 @@ export function classifyLinkTarget(
     if (source.startsWith(`${other}/`) || other.startsWith(`${source}/`)) return "nested";
   }
   return "ok";
+}
+
+/**
+ * The OBSERVED shape of a link's target, read from the filesystem by the
+ * Host-side probe (`probeLinkTarget` in `host/task-host.ts`). Distinct from
+ * `LinkTargetShape`, which is the plan-time lexical pre-check on path strings:
+ * every value here is a reading, and a shape that could not be read is
+ * `unknown` — never `directory`.
+ *
+ * - `directory`: the source is a real directory reached without following a link;
+ * - `nested-link`: the source IS a link (the task link points at another link);
+ * - `dangling`: the link chain ends at a path that does not exist (失效);
+ * - `cyclic-link`: the chain returns to a link it already followed (循环);
+ * - `unknown`: the shape was not established (a read error other than
+ *   "missing", or a chain that ends at something that is not a directory).
+ */
+export type LinkTargetObservation = "directory" | "nested-link" | "dangling" | "cyclic-link" | "unknown";
+
+/**
+ * Platforms the project's release/validation matrix names for the link
+ * capability (`docs/mvp-validation-plan.md`: macOS arm64 + Windows x64, "只有
+ * 实际测试通过的平台可以标记已验证"). The SAME matrix `LAUNCH_VERIFICATION_TARGETS`
+ * (`main/service-config.ts`) projects for the service launch record, kept as
+ * its own list so a link row can never be read as a launch verification. A row
+ * exists for every target even when nothing was verified, because an absent row
+ * is exactly the state that reads as a pass.
+ */
+export const LINK_CAPABILITY_TARGETS = ["darwin-arm64", "win32-x64"] as const;
+
+/**
+ * One platform row of the link-capability record. `exercised` is true ONLY for
+ * the platform this Host really ran the link probe on (the caller stamps what it
+ * observed); every other row says BY NAME why it is not a verification. No
+ * branch of the link path asserts Windows behaviour: `win32` exists here to name
+ * the gap, not to claim it.
+ */
+export interface LinkCapabilityRow {
+  platform: string;
+  exercised: boolean;
+  note: string;
+}
+
+/**
+ * The named boundary of the link-shape report ([PiDock 03] #6 box 12). It is a
+ * HOST observation of link targets, not a model run: the box's 「用真实 pi 验证」
+ * half stays open, and the existing link behaviour suite replaces the model hop
+ * with a context stub.
+ */
+export const LINK_MODEL_VERIFICATION_BOUNDARY =
+  "本记录是 Host 对链接目标形状的观测（lstat/readlink），不是真实 pi/模型运行：盒子要求的「用真实 pi 验证统一 cwd 下普通链接的列举、搜索、读取和写入」仍未完成（现有链接行为证明用上下文桩替代了模型跳，未跑过真实 Provider 回合）。";
+
+/**
+ * Build the platform rows of one link-shape report. `observedPlatform` is the
+ * `hostPlatformLabel()` of the process that really ran the probe, or `null`
+ * when no probe ran — a caller can then never make an unexercised platform look
+ * exercised. The row set is the project's release targets plus that platform,
+ * so a platform the link path was never really run on is named instead of being
+ * left out.
+ *
+ * The observed row claims exactly one thing: a link-TARGET probe
+ * (`lstat`/`readlink`) ran on this platform. It never claims a real link was in
+ * the chain, and it never claims link creation was exercised — on a `win32` host
+ * it therefore also carries the named 「win32 链接方式未验证」 sentence, so the row
+ * that exists to name the gap can never be absorbed by it.
+ */
+export function linkCapabilityRows(observedPlatform: string | null): LinkCapabilityRow[] {
+  const rows: LinkCapabilityRow[] = [];
+  for (const name of [...LINK_CAPABILITY_TARGETS, ...(observedPlatform === null ? [] : [observedPlatform])]) {
+    if (rows.some((row) => row.platform === name)) continue;
+    if (name === observedPlatform) {
+      rows.push({
+        platform: name,
+        exercised: true,
+        note: `本平台（${name}）：本次在本平台执行了链接目标探测（lstat/readlink 链；链中可能没有真实链接，本行不表示已在本平台创建或读写过链接）`
+          + (name.startsWith("win32") ? "；win32 链接方式未验证：未在 Windows 上创建过链接，本记录不冒充已验证" : "；未在其它平台做过同类运行"),
+      });
+      continue;
+    }
+    rows.push({
+      platform: name,
+      exercised: false,
+      // The row may claim only what it knows: THIS platform was not run, and no
+      // Windows link was created. It may not claim "no link was probed on
+      // Windows" - another `win32*` variant (Windows on ARM) can be the observed
+      // platform of this same record.
+      note: name.startsWith("win32")
+        ? `本机未运行该平台（${name}），链接方式未实测；win32 链接方式未验证：未在 Windows 上创建过链接，本记录不冒充已验证`
+        : `本机未运行该平台（${name}），链接方式未实测`,
+    });
+  }
+  return rows;
 }

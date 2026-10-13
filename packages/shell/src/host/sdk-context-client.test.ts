@@ -94,6 +94,25 @@ it("dispatches a credential-free environment and passes the credential only as w
   }
 });
 
+it("declares tools in the worker only when the Host wired a tool broker", async () => {
+  const dir = task("task-context-tool-marker");
+  const marker = async (toolHost?: { call: () => Promise<{ outcome: "ok"; text: string }> }) => {
+    const probe = scripted();
+    const client = new SdkContextClient({
+      task: { taskId: "task-context-tool-marker", taskDir: dir }, config, credential: "synthetic-key",
+      ...(toolHost ? { toolHost } : {}),
+      spawn: (env, workerData) => { probe.spawned.push({ env, workerData }); return probe.worker; },
+    });
+    await client.open("main");
+    const value = (probe.spawned[0]!.workerData as { toolsEnabled?: unknown }).toolsEnabled;
+    await client.dispose();
+    return value;
+  };
+  // No broker: the isolated context must declare no tools at all (fail closed).
+  expect(await marker()).toBe(false);
+  expect(await marker({ call: async () => ({ outcome: "ok", text: "ok" }) })).toBe(true);
+});
+
 it("forwards streamed events in order and returns only bounded turn results", async () => {
   const dir = task("task-context-stream");
   const probe = scripted();
@@ -109,6 +128,68 @@ it("forwards streamed events in order and returns only bounded turn results", as
   const tolerant = await client.prompt("main", "hello", () => { throw new Error("receiver"); });
   expect(tolerant.state).toBe("done");
   await client.dispose();
+});
+
+it("executes a worker-declared tool call through the Host tool broker, never locally", async () => {
+  const dir = task("task-context-tool");
+  const replies: unknown[] = [];
+  const probe = scripted({ onPrompt: (send, id) => {
+    send({ id: "t1", kind: "tool", sessionId: "main", call: { tool: "fs.write", args: { path: "repo/a.txt", content: "x" } } });
+    send({ id, kind: "reply", ok: true, payload: { state: "done", text: "ok" } });
+  } });
+  const calls: { sessionId: string; request: unknown }[] = [];
+  const client = new SdkContextClient({
+    task: { taskId: "task-context-tool", taskDir: dir }, config, credential: "synthetic-key",
+    toolHost: {
+      call: async (sessionId, request) => {
+        calls.push({ sessionId, request });
+        return { outcome: "refused", code: "tool-refused:gate-denied", text: "tool-refused:gate-denied: refused" };
+      },
+    },
+    spawn: (env, workerData) => {
+      probe.spawned.push({ env, workerData });
+      return {
+        postMessage: (message: unknown) => { replies.push(message); probe.worker.postMessage(message); },
+        on: probe.worker.on,
+        terminate: probe.worker.terminate,
+      } as SdkContextWorkerLike;
+    },
+  });
+  await client.open("main");
+  await client.prompt("main", "hello");
+  await vi.waitFor(() => expect(replies.some((message) => (message as { kind?: string }).kind === "tool-reply")).toBe(true));
+  // The request reached the Host broker with its session, and the broker's
+  // outcome is what travels back to the worker that declared the tool.
+  expect(calls).toEqual([{ sessionId: "main", request: { tool: "fs.write", args: { path: "repo/a.txt", content: "x" } } }]);
+  expect(replies).toContainEqual({ id: "t1", kind: "tool-reply", outcome: { outcome: "refused", code: "tool-refused:gate-denied", text: "tool-refused:gate-denied: refused" } });
+  await client.dispose();
+});
+
+it("refuses a tool call when no Host broker is wired and when the broker fails", async () => {
+  const dir = task("task-context-tool-absent");
+  const collect = async (toolHost?: { call: () => Promise<never> }) => {
+    const replies: unknown[] = [];
+    const probe = scripted({ onPrompt: (send, id) => {
+      send({ id: "t1", kind: "tool", sessionId: "main", call: { tool: "exec.run", args: { command: "ls" } } });
+      send({ id, kind: "reply", ok: true, payload: { state: "done", text: "ok" } });
+    } });
+    const client = new SdkContextClient({
+      task: { taskId: "task-context-tool-absent", taskDir: dir }, config, credential: "synthetic-key",
+      ...(toolHost ? { toolHost } : {}),
+      spawn: (env, workerData) => {
+        probe.spawned.push({ env, workerData });
+        return { postMessage: (message: unknown) => { replies.push(message); probe.worker.postMessage(message); }, on: probe.worker.on, terminate: probe.worker.terminate } as SdkContextWorkerLike;
+      },
+    });
+    await client.open("main");
+    await client.prompt("main", "hello");
+    await vi.waitFor(() => expect(replies.some((message) => (message as { kind?: string }).kind === "tool-reply")).toBe(true));
+    const reply = replies.find((message) => (message as { kind?: string }).kind === "tool-reply") as { outcome: { code: string } };
+    await client.dispose();
+    return reply.outcome.code;
+  };
+  expect(await collect()).toBe("tool-refused:tool-host-unavailable");
+  expect(await collect({ call: async () => { throw new Error("broker-exploded"); } })).toBe("tool-refused:tool-host-failed");
 });
 
 it("poisons the context on bootstrap failure, worker error, exit and malformed replies", async () => {

@@ -30,9 +30,11 @@
 
 import type { PiApproval, PiApprovalScope, PiGateDecision, PiPermission } from "../main/pi-session.js";
 import { SERVICE_CONTROL_SCOPE } from "../main/pi-session.js";
+import { hostPlatformLabel } from "../main/service-config.js";
+import { hostInstallationId } from "./installation-identity.js";
 import { writeClaimError, type WriteCoordinatorPort } from "./write-coordination.js";
 import type { ControlExecutionHandle, ControlExecutionPort } from "./execution-ledger.js";
-import type { TaskServiceRuntime } from "./service-runtime.js";
+import { SERVICE_CONTROL_TOOL, type TaskServiceRuntime } from "./service-runtime.js";
 
 /**
  * The slice of `PiSessionChannel` this sequence uses. Structural, so the
@@ -71,8 +73,13 @@ export type ServiceControlResult =
  * cancel never calls the driver, so no process is started or stopped.
  */
 export interface ServiceExecutionDriver {
-  start(serviceId: string): Promise<{ pid: number }>;
-  stop(serviceId: string): Promise<void>;
+  /**
+   * Spawn the registered launch and resolve with the real child pid. `owner`
+   * is the actor the gate really decided for (agent session vs. attested
+   * human click), so a driver that records the run can label it truthfully.
+   */
+  start(serviceId: string, owner: "agent" | "human"): Promise<{ pid: number }>;
+  stop(serviceId: string, owner: "agent" | "human"): Promise<void>;
 }
 
 /** Input of one agent service control ([PiDock 04] #7). */
@@ -146,6 +153,26 @@ export async function runHumanServiceControl(input: {
 }
 
 /**
+ * Record the platform verification of one launch that really happened
+ * ([PiDock 04] #7 box 7). Called only after the process driver resolved with a
+ * real child pid (start) or confirmed the registered child's end (stop), and
+ * the platform/node version are this Host's own `process` facts — never a
+ * caller claim — so the record cannot exist without a real launch. The
+ * installation identity (`hostInstallationId()`) is this Host's own profile
+ * binding, so the record verifies THIS installation and a workspace copied to
+ * another machine of the same platform does not. The program token comes from
+ * the same registered descriptor the driver spawned (`task/controlService`
+ * plans from the registration, not from the request).
+ */
+function recordVerifiedLaunch(services: TaskServiceRuntime, serviceId: string, fact: "started" | "stopped"): void {
+  const descriptor = services.get(serviceId)?.descriptor;
+  const observed = { platform: hostPlatformLabel(), nodeVersion: process.versions.node, ok: true, installationId: hostInstallationId() };
+  services.recordLaunchVerification(serviceId, fact === "started"
+    ? { ...observed, ...(descriptor !== undefined ? { program: descriptor.program, args: descriptor.args } : {}) }
+    : { ...observed, stopped: true });
+}
+
+/**
  * The one place a service start/stop is dispatched: resolve the real driver,
  * act, and only then record the lifecycle the process really has. Every
  * refusal and every driver failure returns before any state change, so a
@@ -163,19 +190,21 @@ async function runServiceAction(
   if (action === "start") {
     let pid: number;
     try {
-      pid = (await driver.start(serviceId)).pid;
+      pid = (await driver.start(serviceId, actor.kind)).pid;
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : String(error) };
     }
     services.markStarted(serviceId, actor, `process alive (pid ${pid}); dependencies not probed`);
+    recordVerifiedLaunch(services, serviceId, "started");
     return { ok: true };
   }
   try {
-    await driver.stop(serviceId);
+    await driver.stop(serviceId, actor.kind);
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
   services.markStopped(serviceId, actor, actor.kind === "human" ? "human-request" : "agent-request");
+  recordVerifiedLaunch(services, serviceId, "stopped");
   return { ok: true };
 }
 
@@ -190,7 +219,7 @@ async function performAgentServiceControl(
       ? input.channel.snapshot().approvals.find((item) => item.id === approvalId)
       : undefined;
   const target = `${input.services.taskDir}/services/${input.serviceId}`;
-  if (channelExecutionClosing(input.channel, "exec.run", target)) return { ok: false, error: "task-host-closing" };
+  if (channelExecutionClosing(input.channel, SERVICE_CONTROL_TOOL, target)) return { ok: false, error: "task-host-closing" };
   const intent = { kind: "service-control" as const, label: `服务${input.action === "start" ? "启动" : "停止"} ${input.serviceId}` };
   const decision = input.services.decideAgentControl({
     serviceId: input.serviceId,
@@ -209,10 +238,10 @@ async function performAgentServiceControl(
       const claim = input.write.claimWrite(input.sessionId, tier, intent);
       if (!claim.ok) return { ok: false, error: writeClaimError(claim) };
       try {
-        const preview = input.channel.previewGate("exec.run", target);
+        const preview = input.channel.previewGate(SERVICE_CONTROL_TOOL, target);
         if (preview.verdict === "ask") {
           const contentVersion = input.services.get(input.serviceId)?.templateVersion ?? "v1";
-          const gate = input.channel.gate("exec.run", target, contentVersion, undefined, SERVICE_CONTROL_SCOPE);
+          const gate = input.channel.gate(SERVICE_CONTROL_TOOL, target, contentVersion, undefined, SERVICE_CONTROL_SCOPE);
           if (gate.verdict === "ask") {
             record?.awaitApproval({ approvalId: gate.approvalId, payloadVersion: contentVersion, scope: SERVICE_CONTROL_SCOPE });
             input.persist();
@@ -228,7 +257,7 @@ async function performAgentServiceControl(
   const claim = input.write.claimWrite(input.sessionId, tier, intent);
   if (!claim.ok) return { ok: false, error: writeClaimError(claim) };
   try {
-    if (channelExecutionClosing(input.channel, "exec.run", target)) return { ok: false, error: "task-host-closing" };
+    if (channelExecutionClosing(input.channel, SERVICE_CONTROL_TOOL, target)) return { ok: false, error: "task-host-closing" };
     // One-shot spend: the verified approval authorizes exactly this
     // start/stop. Spending (and persisting) before acting means a replay
     // fails closed even if the same id is sent again. Stated consequence: a
@@ -241,7 +270,7 @@ async function performAgentServiceControl(
       }
       input.persist();
     }
-    if (channelExecutionClosing(input.channel, "exec.run", target)) return { ok: false, error: "task-host-closing" };
+    if (channelExecutionClosing(input.channel, SERVICE_CONTROL_TOOL, target)) return { ok: false, error: "task-host-closing" };
     // The gate is settled and the one-shot approval (when there was one) is
     // spent: now - and only now - a real process may start or stop. A driver
     // failure keeps the previous lifecycle and returns the real error.

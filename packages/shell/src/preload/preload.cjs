@@ -17,7 +17,7 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 const BRIDGE_NAME = "pidock";
-const INVOKE_CHANNELS = ["shell/getVersions", "shell/hostPing", "shell/listTasks", "shell/importTaskRoot", "shell/projectOp", "shell/serviceCatalogOp", "shell/createTask", "shell/providerOp", "shell/taskOp", "shell/sdkTurn"];
+const INVOKE_CHANNELS = ["shell/getVersions", "shell/hostPing", "shell/listTasks", "shell/importTaskRoot", "shell/projectOp", "shell/serviceCatalogOp", "shell/createTask", "shell/appendTaskRepos", "shell/openTaskEditor", "shell/editorSettingsOp", "shell/providerOp", "shell/taskOp", "shell/sdkTurn"];
 const EVENT_CHANNELS = ["shell/hostStatus", "shell/sdkTurnEvent"];
 
 // Preload-only capabilities (NOT visible to the page itself). Sandboxed
@@ -65,6 +65,21 @@ const bridge = {
   },
   createTask: function (request) {
     return invoke("shell/createTask", request);
+  },
+  appendTaskRepos: function (request) {
+    return invoke("shell/appendTaskRepos", request);
+  },
+  // [PiDock 10] (#15 box 28) opens the user's configured external editor at a
+  // task workspace root. The page names a task + root only: the program comes
+  // from main's own settings document.
+  openTaskEditor: function (request) {
+    return invoke("shell/openTaskEditor", request);
+  },
+  // [PiDock 10] (#15 box 28) the user's external-editor setting. The page names
+  // a program it wants to save; main validates and probes it before writing its
+  // own machine-private document. No task op carries this write.
+  editorSettingsOp: function (request) {
+    return invoke("shell/editorSettingsOp", request);
   },
   providerOp: function (request) {
     return invoke("shell/providerOp", request);

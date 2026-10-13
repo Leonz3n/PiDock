@@ -1,7 +1,7 @@
-import { render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ProtocolPanel } from "../components/ToolPanels";
-import type { ProtocolBindingView } from "../data/protocolBinding";
+import { protocolBindingFromHost, type ProtocolBindingView } from "../data/protocolBinding";
 import { renderApp } from "./helpers";
 
 /**
@@ -78,6 +78,54 @@ const LOCAL_VIEW: ProtocolBindingView = {
   diagnostics: [{ code: "not-generated", message: "本地联调还没有生成产物版本" }],
 };
 
+/**
+ * A Host `task/protocolState` payload with every string field left blank, as the
+ * Host sends it. The panel's blank case below runs this through the SHIPPED
+ * parser (`protocolBindingFromHost`) instead of hand-building a view, so the
+ * fixture proves its own claim that `String(x ?? "")` keeps `""` for each of
+ * these fields — a hand-built view can drift from the parser and hide one
+ * (`generatedVersion` was exactly that).
+ */
+const BLANK_PAYLOAD = {
+  state: {
+    taskId: "task-blank",
+    mode: "local",
+    protocol: { repoDir: "", goGenDir: "", tsGenDir: "" },
+    generatedVersion: "",
+    consumers: [
+      {
+        consumerId: "blank-go", name: "", language: "go", repoDir: "", releaseDependency: "",
+        staleness: { state: "needs-binding", detail: "" },
+        resolution: { ok: false, message: "" },
+        binding: { kind: "go-workspace", path: "", useDirectories: [], excludedConsumers: [], releaseManifestsUntouched: [] },
+      },
+      {
+        consumerId: "blank-ts", name: "ts-consumer", language: "ts", repoDir: "", releaseDependency: "",
+        staleness: { state: "ready", detail: "已使用本任务产物 gen-4" },
+        binding: { kind: "ts-link", linkPath: "", artifact: "", marker: "", restore: { program: "", args: [] } },
+      },
+      {
+        consumerId: "blank-release", name: "release-consumer", language: "go", repoDir: "", releaseDependency: "",
+        staleness: { state: "ready", detail: "已使用本任务产物 gen-4" },
+        binding: { kind: "release", dependency: "" },
+      },
+    ],
+    generation: { reason: "", runsGeneration: true, steps: [{ kind: "generate", program: "", args: [], cwd: "", note: "" }] },
+    prepare: [{ state: "code-ready", label: "", ok: false, detail: "" }],
+    toolchain: { platform: "", ok: false, note: "", entries: [{ toolId: "blank-tool", label: "", status: "unverified", detail: "" }] },
+    switchAssessment: { blockers: [{ consumerId: "blank-go", code: "", message: "" }] },
+    diagnostics: [{ code: "", message: "" }],
+  },
+};
+
+const blankView = (overrides: Record<string, unknown> = {}): ProtocolBindingView => {
+  const view = protocolBindingFromHost("task-blank", { state: { ...BLANK_PAYLOAD.state, ...overrides } });
+  if (view === undefined) throw new Error("blank payload must parse");
+  return view;
+};
+
+const BLANK_VIEW = blankView();
+
 describe("protocol panel", () => {
   it("shows the protocol repository, the actual generated version and the generation steps", () => {
     render(<ProtocolPanel view={LOCAL_VIEW} />);
@@ -122,6 +170,70 @@ describe("protocol panel", () => {
     expect(toolchain).toHaveTextContent("buf：平台不支持");
     expect(screen.getByText(/桌面可启动不等同于生成支持/)).toBeInTheDocument();
     expect(screen.getByTestId("protocol-stale-note")).toHaveTextContent("1 个消费者需要重新生成/编译/重启");
+  });
+
+  it("names every blank Host string it renders instead of leaving a blank", () => {
+    // Reachability at the panel's own boundary: `protocolBindingFromHost` keeps
+    // `""` for each of these fields, and `validProtocolState` accepts it too
+    // (its own `text` is `typeof === "string"`), so a blank payload really does
+    // arrive here. Every one of them has to name the absence rather than print
+    // a bare `受管链接：` or `· [`.
+    render(<ProtocolPanel view={BLANK_VIEW} />);
+    expect(screen.getByTestId("protocol-generated-version")).toHaveTextContent("Host 未上报生成说明");
+    // A blank version is a string the Host DID report (`protocolBindingFromHost`
+    // keeps `""`), so it is named; only the absent `null` is 尚未生成.
+    expect(screen.getByTestId("protocol-generated-version")).toHaveTextContent("实际生成版本：Host 未上报生成版本");
+    expect(screen.getByTestId("protocol-steps")).toHaveTextContent("生成 Host 未上报步骤程序");
+    expect(screen.getByTestId("protocol-prepare")).toHaveTextContent("Host 未上报准备项名称：Host 未上报准备项说明");
+    const consumers = screen.getByTestId("protocol-consumers");
+    expect(consumers).toHaveTextContent("Host 未上报消费者名称 · Go · 需绑定");
+    expect(consumers).toHaveTextContent("任务工作区：Host 未上报工作区文件");
+    expect(consumers).toHaveTextContent("受管链接：Host 未上报受管链接路径");
+    expect(consumers).toHaveTextContent("发布依赖：Host 未上报发布依赖");
+    expect(consumers).toHaveTextContent("恢复绑定：Host 未上报恢复程序");
+    expect(consumers).toHaveTextContent("Host 未上报状态说明");
+    expect(consumers).toHaveTextContent("解析路径：未通过 Host 未给出解析说明");
+    const diagnostics = screen.getByTestId("protocol-diagnostics");
+    expect(diagnostics).toHaveTextContent("[Host 未上报停止原因代码] Host 未上报停止原因");
+    expect(diagnostics).toHaveTextContent("[Host 未上报诊断代码] Host 未上报诊断说明");
+    expect(screen.getByTestId("protocol-toolchain")).toHaveTextContent("Host 未上报工具名称：未检查");
+    // `asStringArray` (`data/protocolBinding.ts:299`) turns a missing list into
+    // `[]` and keeps `""` elements, so both shapes have to be named: `[]` renders
+    // no line at all (the Host listed nothing) and `[""]` names the blank element
+    // instead of a bare `未并入（避免合并依赖选择）：` / `不改写发布配置：`.
+    expect(consumers.textContent).not.toContain("未并入（避免合并依赖选择）：");
+    expect(consumers.textContent).not.toContain("不改写发布配置：");
+
+    cleanup();
+    const blankGo = BLANK_PAYLOAD.state.consumers[0];
+    render(<ProtocolPanel view={blankView({ consumers: [
+      { ...blankGo, binding: { ...blankGo.binding, excludedConsumers: [""], releaseManifestsUntouched: ["", ""] } },
+      BLANK_PAYLOAD.state.consumers[1],
+      BLANK_PAYLOAD.state.consumers[2],
+    ] })} />);
+    const listed = screen.getByTestId("protocol-consumers");
+    expect(listed).toHaveTextContent("未并入（避免合并依赖选择）：Host 未上报未并入消费者名");
+    expect(listed).toHaveTextContent("不改写发布配置：Host 未上报发布配置路径、Host 未上报发布配置路径");
+
+    cleanup();
+    render(<ProtocolPanel view={blankView({ consumers: [
+      { ...blankGo, binding: { ...blankGo.binding, excludedConsumers: ["shipment", ""] } },
+      BLANK_PAYLOAD.state.consumers[1],
+      BLANK_PAYLOAD.state.consumers[2],
+    ] })} />);
+    // A real element next to a blank one keeps its own name; only the blank is named.
+    expect(screen.getByTestId("protocol-consumers")).toHaveTextContent("未并入（避免合并依赖选择）：shipment、Host 未上报未并入消费者名");
+
+    // The toolchain note is the whole list only when there is no entry at all.
+    cleanup();
+    render(<ProtocolPanel view={{ ...BLANK_VIEW, toolchain: { ...BLANK_VIEW.toolchain, entries: [] } }} />);
+    expect(screen.getByTestId("protocol-toolchain")).toHaveTextContent("Host 未上报工具链说明");
+
+    // `null` is the Host's own "nothing generated yet" and keeps its own wording:
+    // the two absences are not the same state.
+    cleanup();
+    render(<ProtocolPanel view={blankView({ generatedVersion: null })} />);
+    expect(screen.getByTestId("protocol-generated-version")).toHaveTextContent("实际生成版本：尚未生成");
   });
 });
 

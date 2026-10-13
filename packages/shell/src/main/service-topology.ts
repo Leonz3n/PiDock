@@ -28,11 +28,7 @@
  * shared external resources live in `service-runs.ts`.
  */
 
-import type {
-  ServiceConfigEntry,
-  ServiceConfigSource,
-  ServiceRunType,
-} from "./service-config.js";
+import { SERVICE_KEY_PATTERN, type ServiceConfigEntry, type ServiceConfigSource, type ServiceRunType } from "./service-config.js";
 
 export type ServiceLocation = "local" | "remote";
 
@@ -69,6 +65,9 @@ export type RunDiagnosticCode =
   | "start-order-conflict"
   | "start-failed"
   | "dependency-unreachable"
+  | "control-refused"
+  | "approval-required"
+  | "verify-failed"
   | "shared-not-isolated";
 
 /**
@@ -431,6 +430,24 @@ export function endpointKeyCandidates(serviceId: string): string[] {
 }
 
 /**
+ * The address variables of one run unit, under BOTH spellings the trusted data
+ * uses: the unit's human name FIRST, then its stable `serviceId`.
+ *
+ * The name is not decoration: a catalog-minted service id is an opaque UUID
+ * (`s-<uuid>`), so its derived spelling (`S_<uuid>_URL`) matches no business
+ * config row, while the shared template and the repo config name the service the
+ * way its author does (`CALLEE_API_URL` for a service named `Callee API`). An
+ * audit that looked at the id alone would therefore be silent in production for
+ * exactly the rows box 2 asks about. The name comes first because the first
+ * candidate is also the canonical key a declaration binds when the config
+ * follows no convention name - and that key has to be one a person could have
+ * written. Duplicates collapse.
+ */
+export function unitEndpointKeyCandidates(unit: Pick<RunUnit, "serviceId" | "name">): string[] {
+  return [...new Set([...endpointKeyCandidates(unit.name), ...endpointKeyCandidates(unit.serviceId)])];
+}
+
+/**
  * Resolve the task override rows from port assignments. Ports must already
  * be final (`planPortAssignments` / `reallocatePortAssignments`): a rule for
  * a local unit without an assignment fails closed with `missing-port`
@@ -513,6 +530,92 @@ export function bindingsToTaskRows(bindings: readonly ResolvedBinding[]): Servic
 }
 
 /**
+ * The trusted config layers of a plan's bound services, merged for the
+ * read-point audit: one layer per `ServiceConfigSource`, de-duplicated by key
+ * (the first row of a layer wins). This is a **read-point union**, not one
+ * service's effective environment - two services may set the same key
+ * differently, and only "which variable does the config really read" is asked
+ * here. Main derives it from its own catalog (`ServiceLaunch.layers`), never
+ * from a page, so the audit sees the rows the plan's services actually read.
+ */
+export function planBindingLayers(layers: readonly BindingLayers[]): BindingLayers {
+  const merge = (pick: (layer: BindingLayers) => ServiceConfigEntry[]): ServiceConfigEntry[] => {
+    const seen = new Set<string>();
+    const rows: ServiceConfigEntry[] = [];
+    for (const layer of layers) {
+      for (const entry of pick(layer)) {
+        const key = entry.key.trim();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        rows.push({ key: entry.key, value: entry.value, secret: entry.secret });
+      }
+    }
+    return rows;
+  };
+  return {
+    repoDefaults: merge((layer) => layer.repoDefaults),
+    shared: merge((layer) => layer.shared),
+    privateEntries: merge((layer) => layer.privateEntries),
+    task: merge((layer) => layer.task),
+  };
+}
+
+/**
+ * The plan's own variable bindings, derived from the TRUSTED side (main's own
+ * catalog) instead of from the caller's payload.
+ *
+ * A local run unit's address variables are the `<SERVICE>_ENDPOINT/_URL/
+ * _BASE_URL/_HOST` names of the trusted config layers - but a local instance is
+ * only addressed *by name* where the plan DECLARES the dependency (ADR 0002's
+ * 服务依赖声明 is the only trusted declaration of "A addresses B"; the same rule
+ * as 没有声明就没有边). So:
+ *
+ * - a unit a pinned revision declares as a dependency target gets a binding for
+ *   every convention key the layers really read; when the declaration exists but
+ *   the config follows no convention name, the canonical `<SERVICE>_ENDPOINT` is
+ *   the one key bound, so the audit can report BY NAME that no read point uses
+ *   the name the plan bound (`unused-binding`);
+ * - a read point of a local unit that no declaration covers gets NO binding, so
+ *   the audit reports it as `missing-binding` (the consumer would keep the shared
+ *   environment address) instead of silently rewriting a variable nobody asked
+ *   to override.
+ *
+ * Keys are restricted to the catalog's own variable-name rule, so a derived rule
+ * can never carry a name the registration machinery would refuse.
+ */
+export function deriveBindingRules(input: {
+  units: readonly RunUnit[];
+  layers: BindingLayers;
+  /** Service ids the plan's own pinned revisions declare as dependency targets. */
+  declaredTargets: readonly string[];
+}): BindingRule[] {
+  const declared = new Set(input.declaredTargets.map((id) => id.trim()));
+  const layerRows: ServiceConfigEntry[] = [
+    ...input.layers.repoDefaults,
+    ...input.layers.shared,
+    ...input.layers.privateEntries,
+    ...input.layers.task,
+  ];
+  const readKeys = new Set(layerRows.map((entry) => entry.key.trim()));
+  const rules: BindingRule[] = [];
+  for (const unit of input.units) {
+    if (unit.location !== "local") continue;
+    const candidates = unitEndpointKeyCandidates(unit).filter((key) => SERVICE_KEY_PATTERN.test(key));
+    if (candidates.length === 0) continue;
+    const read = candidates.filter((key) => readKeys.has(key));
+    // A declaration always yields one bound address variable; without one, a
+    // local unit binds NOTHING even where the config reads its address, so the
+    // audit names that read point instead of main silently rewriting a variable
+    // no declaration asked to override.
+    const keys = declared.has(unit.serviceId.trim()) ? (read.length > 0 ? read : [candidates[0] as string]) : [];
+    for (const key of keys) {
+      rules.push({ key, unitId: unit.unitId, kind: key.endsWith("_HOST") ? "host-port" : "url" });
+    }
+  }
+  return rules;
+}
+
+/**
  * Read-point audit (box 2: 完整 URL 覆盖规则经过实际配置读取点核对): a config
  * row that names an endpoint variable for a local unit but has no task
  * binding would keep pointing at the shared environment, so it is reported
@@ -535,7 +638,7 @@ export function auditBindingReadPoints(input: {
   const diagnostics: RunDiagnostic[] = [];
   for (const unit of input.units) {
     if (unit.location !== "local") continue;
-    for (const candidate of endpointKeyCandidates(unit.serviceId)) {
+    for (const candidate of unitEndpointKeyCandidates(unit)) {
       if (boundKeys.has(candidate)) continue;
       for (const [source, entries] of points) {
         if (!entries.some((entry) => entry.key.trim() === candidate)) continue;
@@ -727,23 +830,56 @@ function verifyStepsFor(
   remoteIds: ReadonlySet<string>,
   cyclic: boolean,
 ): string[] {
-  const steps: string[] = [];
-  for (const dep of deps) {
-    if (!members.includes(dep.from)) continue;
+  const labels = groupVerifySteps({ members, dependencies: deps, units: [...unitsById.values()], remoteIds }).map((step) => step.label);
+  if (cyclic) labels.push("双向调用组联通检查（先监听再互验，不等待对方就绪）");
+  return [...new Set(labels)];
+}
+
+/**
+ * The dependency-backed checks of one listener group, in the same order and with
+ * the same wording `StartGroup.verify` renders, but keeping WHICH dependency each
+ * check tests. `planStartGroups` renders only the labels; the group runner
+ * (`host/service-group-run.ts`) needs the target so a failed check can name the
+ * unit, the dependency and the step instead of a bare string. One rule, two
+ * consumers - the plan text and the run cannot drift apart.
+ */
+export interface GroupVerifyPlanStep {
+  /** The declared dependency this check belongs to (`from` is a group member). */
+  dependency: ServiceDependency;
+  kind: "linkage" | "readiness" | "remote-reachability";
+  /** Exactly the string `StartGroup.verify` carries. */
+  label: string;
+  /**
+   * True for a prestart group's own 「准备步骤完成检查」: the check is the unit's
+   * own address, already observed in the listening phase, so a runner must not
+   * probe it a second time or record a duplicate observation.
+   */
+  selfObserved?: boolean;
+}
+
+export function groupVerifySteps(input: {
+  members: readonly string[];
+  dependencies: readonly ServiceDependency[];
+  units: readonly RunUnit[];
+  remoteIds: ReadonlySet<string>;
+}): GroupVerifyPlanStep[] {
+  const unitsById = new Map(input.units.map((unit) => [unit.unitId, unit]));
+  const steps: GroupVerifyPlanStep[] = [];
+  for (const dep of input.dependencies) {
+    if (!input.members.includes(dep.from)) continue;
     const target = unitsById.get(dep.to);
     if (!target) continue;
-    if (remoteIds.has(dep.to)) {
-      steps.push(`远程依赖可达性检查 ${target.name}（共享环境，不标记为任务内隔离）`);
+    if (input.remoteIds.has(dep.to)) {
+      steps.push({ dependency: { ...dep }, kind: "remote-reachability", label: `远程依赖可达性检查 ${target.name}（共享环境，不标记为任务内隔离）` });
       continue;
     }
     if (dep.kind === "prestart") {
-      steps.push(`前置条件就绪检查 ${target.name}`);
+      steps.push({ dependency: { ...dep }, kind: "readiness", label: `前置条件就绪检查 ${target.name}` });
       continue;
     }
-    steps.push(`联通检查 ${target.name}（${dep.to}）`);
+    steps.push({ dependency: { ...dep }, kind: "linkage", label: `联通检查 ${target.name}（${dep.to}）` });
   }
-  if (cyclic) steps.push("双向调用组联通检查（先监听再互验，不等待对方就绪）");
-  return [...new Set(steps)];
+  return steps;
 }
 
 /** Tarjan SCC, iterative-friendly recursive form (graphs here are small). */

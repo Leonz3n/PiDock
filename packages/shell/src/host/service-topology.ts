@@ -58,6 +58,7 @@ import {
   recordRunExit,
   type ExternalResource,
   type ExternalResourceKind,
+  type PortsSource,
   type ProcessIdentity,
   type RunRecord,
   type RunVerification,
@@ -107,13 +108,39 @@ export interface RecordRunInput {
   /** Shared-template version this run's config snapshot came from. */
   templateVersion: string;
   ports: number[];
-  code: { commit?: string; dirty: boolean };
+  /** Declared ports (recipe/binding) or a probe-observed listening socket. */
+  portsSource: PortsSource;
+  /** Only when the caller really read the working tree; absent stays `unknown`. */
+  code?: { commit?: string; dirty: boolean };
+  /**
+   * Commit the running build was made from, when that was really observed. No
+   * caller may leave it out and still read as `fresh`: an unobserved build
+   * stays `unknown` instead of inheriting the code commit.
+   */
   buildCommit?: string;
   pid: number;
   owner: "agent" | "human";
   startedAt?: string;
   /** [PiDock 08] (#14) protocol artifact version this instance loaded, when observed. */
   protocolArtifact?: { version: string };
+}
+
+/**
+ * Outcome of one run-record bookkeeping write. The Host's process driver calls
+ * the record/close helpers only AFTER a real start/stop, so a refused write is
+ * never authority over the action that really happened (fail-open) - but it
+ * must not vanish either: `reason` names the refusal so the caller can surface
+ * it, and `task/serviceRunRecords` answering empty while a child runs cannot go
+ * unnoticed.
+ */
+export type RunBookkeepingOutcome<T> = { ok: true; value: T } | { ok: false; reason: string };
+
+export function attemptRunBookkeeping<T>(write: () => T): RunBookkeepingOutcome<T> {
+  try {
+    return { ok: true, value: write() };
+  } catch (error) {
+    return { ok: false, reason: `run-record-refused: ${error instanceof Error ? error.message : String(error)}` };
+  }
 }
 
 const EMPTY_LAYERS: BindingLayers = { repoDefaults: [], shared: [], privateEntries: [], task: [] };
@@ -126,6 +153,7 @@ export class TaskServiceTopology {
   private reallocated: { unitId: string; before: number; after: number }[] = [];
   private bindings: ResolvedBinding[] = [];
   private rules: BindingRule[] = [];
+  private layers: BindingLayers = EMPTY_LAYERS;
   private environment = "";
   private planningDiagnostics: RunDiagnostic[] = [];
   private resources: ExternalResource[] = [];
@@ -183,6 +211,7 @@ export class TaskServiceTopology {
     this.assignments = ports.assignments;
     this.reallocated = ports.reallocated;
     this.rules = input.rules ?? [];
+    this.layers = layers;
     this.bindings = resolved.bindings;
     this.environment = input.environment ?? "";
     this.resources = (input.externalResources ?? []).map((resource) => classifyExternalResource(resource));
@@ -206,7 +235,10 @@ export class TaskServiceTopology {
       requests: input.requests ?? this.assignments.map((assignment) => ({ unitId: assignment.unitId, port: assignment.port })),
       reservations: input.reservations ?? [],
       rules: this.rules,
-      layers: input.layers ?? EMPTY_LAYERS,
+      // The plan's own layers, unless the caller brings its own: re-planning a
+      // location toggle with `EMPTY_LAYERS` would drop every read point the plan
+      // was audited against and let the read-point audit pass over nothing.
+      layers: input.layers ?? this.layers,
       environment: this.environment,
       externalResources: this.resources.map((resource) => ({
         resourceId: resource.resourceId,
@@ -240,6 +272,11 @@ export class TaskServiceTopology {
     };
   }
 
+  /** The declared call/prestart edges of the current plan (read-only copy). */
+  plannedDependencies(): ServiceDependency[] {
+    return this.dependencies.map((dependency) => ({ ...dependency }));
+  }
+
   routing(): RoutingEntry[] {
     return describeDependencyRouting({
       taskId: this.taskId,
@@ -260,13 +297,17 @@ export class TaskServiceTopology {
    * start time), so a run can never be recorded from a guess. The record
    * keeps the code/build state, ports and log path together with the
    * registered identity the stop scope later works from.
+   *
+   * `portsSource` obliges the caller to say whether the port list was really
+   * observed or only declared; `code`/`buildCommit` stay optional because a
+   * caller that did not read the working tree must leave them `unknown`
+   * rather than let an unobserved build read as fresh.
    */
   recordRun(input: RecordRunInput): RunRecord {
     if (!Number.isInteger(input.pid) || input.pid <= 0) {
       throw new Error("invalid-payload: recordServiceRun.pid must be a positive integer from the real process");
     }
     const unit = this.units.find((candidate) => candidate.serviceId === input.serviceId);
-    const assignment = this.assignments.find((candidate) => candidate.serviceId === input.serviceId);
     const startedAt = input.startedAt ?? this.now();
     if (startedAt.trim().length === 0) throw new Error("invalid-payload: recordServiceRun.startedAt must be non-empty");
     const record = buildRunRecord({
@@ -274,9 +315,13 @@ export class TaskServiceTopology {
       taskId: this.taskId,
       serviceId: input.serviceId,
       templateVersion: input.templateVersion,
-      ports: input.ports.length > 0 ? input.ports : assignment ? [assignment.port] : [],
-      code: input.code,
-      build: { commit: input.buildCommit ?? input.code.commit },
+      // Only the caller's own declared list. The plan's `assignment` is the
+      // renderer's request, not a port the registration's resolved env carried,
+      // so falling back to it would print an unclaimed plan port as `declared`.
+      ports: input.ports,
+      portsSource: input.portsSource,
+      ...(input.code !== undefined ? { code: input.code } : {}),
+      build: { commit: input.buildCommit },
       processIdentity: { owner: input.owner, pid: input.pid, startedAt },
       taskDir: this.taskDir,
       startedAt,
@@ -285,7 +330,10 @@ export class TaskServiceTopology {
     if (unit === undefined) {
       // Repo-less helper or an Agent-declared run: record it, but note the
       // unit is not part of the selected set so the UI does not imply it is.
-      record.verifications.push({ kind: "readiness", detail: `运行单元 ${input.serviceId} 不在当前选择中`, ok: false, at: startedAt });
+      // `selection-note` is deliberately NOT a probe kind (`readiness` would
+      // read as 「we probed the address and it did not answer」); the UI shows it
+      // as 未探测 - an observation nobody made.
+      record.verifications.push({ kind: "selection-note", detail: `运行单元 ${input.serviceId} 不在当前选择中`, ok: false, at: startedAt });
     }
     this.records.push(record);
     this.registry.push({

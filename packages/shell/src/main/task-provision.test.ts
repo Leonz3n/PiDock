@@ -5,9 +5,11 @@ import {
   checkDirIdConflict,
   generateTaskDirId,
   isAbsoluteTaskRoot,
+  isSafeTaskBranchRef,
   isSafeTaskChildName,
   isTaskDirId,
   pinBaseline,
+  planResumeBranch,
   planWorktreeCreation,
   previewTaskPaths,
   resolveTaskRoot,
@@ -161,6 +163,56 @@ describe("task provisioning rules", () => {
         ops: [{ kind: "pull", cwd: "/Users/name/Workspace/repo", args: ["pull"] }],
       }),
     ).toThrow("forbidden-main-op");
+  });
+
+  it("reuses an existing task branch by omitting the redundant `git branch` op", () => {
+    const plan = planWorktreeCreation({
+      taskDir: "/tasks/task-abcdef12",
+      mainCheckoutDir: "/src/invoice",
+      repoDir: "invoice",
+      remoteBranch: "main",
+      commit: "beef001234",
+      branch: "task/task-abcdef12",
+      reuseExistingBranch: true,
+    });
+    expect(plan.ops.map((op) => op.kind)).toEqual(["fetch", "worktree"]);
+    expect(plan.ops[1]!.args).toEqual(["worktree", "add", "/tasks/task-abcdef12/invoice", "task/task-abcdef12"]);
+  });
+
+  it("rejects an unsafe branch before it can enter git argv", () => {
+    expect(isSafeTaskBranchRef("task/task-abcdef12")).toBe(true);
+    expect(isSafeTaskBranchRef("feature/checkout-fix")).toBe(true);
+    for (const bad of ["-m", "--force", "", "bad branch", "feature/../evil", "feature@{1}", "feature.lock", "a\u0001b"]) {
+      expect(isSafeTaskBranchRef(bad), bad).toBe(false);
+    }
+    expect(isSafeTaskBranchRef(undefined)).toBe(false);
+    expect(() =>
+      planWorktreeCreation({
+        taskDir: "/tasks/task-abcdef12",
+        mainCheckoutDir: "/src/invoice",
+        repoDir: "invoice",
+        remoteBranch: "main",
+        commit: "beef001234",
+        branch: "-m",
+      }),
+    ).toThrow("invalid-payload");
+  });
+
+  it("plans the resume branch op from the target ref's real state", () => {
+    // An absent ref keeps the normal create op.
+    expect(planResumeBranch({ observed: { state: "absent" }, recordedCommit: "beef001234" })).toEqual({
+      ok: true,
+      reuseExistingBranch: false,
+    });
+    // A ref already at the recorded baseline is reused (case-insensitive).
+    expect(
+      planResumeBranch({ observed: { state: "present", commit: "BEEF001234" }, recordedCommit: "beef001234" }),
+    ).toEqual({ ok: true, reuseExistingBranch: true });
+    // A ref at a different commit, or an uncontrollable probe, refuses.
+    expect(
+      planResumeBranch({ observed: { state: "present", commit: "deadbeef" }, recordedCommit: "beef001234" }),
+    ).toEqual({ ok: false, reason: "任务分支已存在但工作树不在原位置，请人工恢复" });
+    expect(planResumeBranch({ observed: { state: "unknown" }, recordedCommit: "beef001234" }).ok).toBe(false);
   });
 
   it("accepts absolute roots in the documented shapes", () => {

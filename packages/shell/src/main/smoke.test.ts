@@ -1,4 +1,6 @@
 import { EventEmitter } from "node:events";
+import { readFileSync } from "node:fs";
+import { createContext, runInContext } from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({ nextId: 1, bridgeKeys: [] as string[] }));
@@ -51,15 +53,13 @@ vi.mock("electron", () => ({
   },
 }));
 
-import { runSmoke } from "./smoke.js";
+import { SHELL_BRIDGE_SURFACE, runSmoke } from "./smoke.js";
 
 // Captured native preload contract; these mocked probes test report validation,
-// not the actual renderer sandbox or native IPC authorization.
-const authorizedKeys = [
-  "createTask", "getSecurityState", "getVersions", "hostPing", "importTaskRoot",
-  "listTasks", "onHostStatus", "onSdkTurnEvent", "projectOp", "providerOp",
-  "sdkTurn", "serviceCatalogOp", "taskOp",
-];
+// not the actual renderer sandbox or native IPC authorization. The list is the
+// smoke run's own contract, and `native preload bridge surface` below derives
+// the real keys from preload.cjs, so the mirror cannot drift unnoticed (#15).
+const authorizedKeys = [...SHELL_BRIDGE_SURFACE];
 const rendererUrl = process.env["PIDOCK_RENDERER_URL"];
 const taskUrl = process.env["PIDOCK_TASK_URL"];
 afterEach(() => {
@@ -93,5 +93,49 @@ describe("mocked native smoke bridge contract", () => {
     expect(await report([...authorizedKeys, "arbitraryIpc"].sort())).toMatchObject({
       ok: false, error: { message: expect.stringContaining("shell bridge surface mismatch") },
     });
+  });
+});
+
+describe("native preload bridge surface", () => {
+  // Runs the real preload script with a stub Electron in a vm context and
+  // captures exactly what it puts on the page global. This is the surface the
+  // smoke probe compares against, so deriving it here (instead of restating it)
+  // is what keeps `SHELL_BRIDGE_SURFACE` honest.
+  function exposedByPreload(source = readFileSync(new URL("../preload/preload.cjs", import.meta.url), "utf8")): { name: string; bridge: Record<string, unknown> } {
+    const exposures: { name: string; bridge: Record<string, unknown> }[] = [];
+    const context = createContext({
+      require: (specifier: string) => {
+        if (specifier !== "electron") throw new Error(`unexpected preload require: ${specifier}`);
+        return {
+          contextBridge: {
+            exposeInMainWorld: (name: string, bridge: Record<string, unknown>) => exposures.push({ name, bridge }),
+          },
+          ipcRenderer: { invoke: async () => ({ ok: true }), on: () => {}, removeListener: () => {} },
+        };
+      },
+      process: { sandboxed: true, contextIsolated: true },
+    });
+    runInContext(source, context, { filename: "preload.cjs" });
+    expect(exposures).toHaveLength(1);
+    return exposures[0]!;
+  }
+
+  it("exposes exactly the smoke contract's keys, derived from preload.cjs itself", () => {
+    const { name, bridge } = exposedByPreload();
+    expect(name).toBe("pidock");
+    for (const key of Object.keys(bridge)) expect(typeof bridge[key]).toBe("function");
+    expect(Object.keys(bridge).sort()).toEqual([...SHELL_BRIDGE_SURFACE]);
+  });
+
+  it("would catch the preload surface drifting from the smoke contract", () => {
+    // MUTATION CHECK: the assertion above is only a pin if the derivation reads
+    // the file. Renaming one bridge entry in the source must change the derived
+    // key set, so a future preload edit cannot pass unnoticed.
+    const source = readFileSync(new URL("../preload/preload.cjs", import.meta.url), "utf8");
+    const forked = source.replace("  appendTaskRepos: function", "  appendTaskReposRenamed: function");
+    expect(forked).not.toBe(source);
+    const keys = Object.keys(exposedByPreload(forked).bridge).sort();
+    expect(keys).toContain("appendTaskReposRenamed");
+    expect(keys).not.toEqual([...SHELL_BRIDGE_SURFACE]);
   });
 });

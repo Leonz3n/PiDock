@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { constants, closeSync, fchmodSync, fstatSync, lstatSync, openSync, readFileSync, readSync, realpathSync, statSync } from "node:fs";
+import { constants, closeSync, existsSync, fchmodSync, fstatSync, lstatSync, openSync, readFileSync, readSync, realpathSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,24 +11,71 @@ const files = {
 };
 interface FileEvidence { path: string; dev: number; ino: number; nlink: number; mode: number; size: number; sha256: string }
 export function nodePtyRepositoryRoot(): string { return fileURLToPath(new URL("../../../../", import.meta.url)).replace(/\/$/, ""); }
-function packageDirectory(repositoryRoot: string): string {
-  if (process.platform !== "darwin" || process.arch !== "arm64" || !isAbsolute(repositoryRoot) || realpathSync(repositoryRoot) !== repositoryRoot) throw Error("node-pty-preflight-unavailable");
-  const directory = join(repositoryRoot, `node_modules/.pnpm/node-pty@${NODE_PTY_VERSION}/node_modules/node-pty`);
-  // Refuse shared/global stores and symlinks at any package-directory component.
-  if (realpathSync(directory) !== directory) throw Error("node-pty-preflight-unavailable");
-  const manifest = JSON.parse(readFileSync(join(directory, "package.json"), "utf8"));
-  if (manifest.name !== "node-pty" || manifest.version !== NODE_PTY_VERSION) throw Error("node-pty-preflight-unavailable");
-  // node-pty 1.1.0 lib/utils.js searches these locations relative to lib.
-  // Refuse competing directories themselves, including empty/dangling entries.
-  for (const relative of ["build/Release", "lib/build/Release", "build/Debug", "lib/build/Debug", "lib/prebuilds/darwin-arm64"]) {
-    try { lstatSync(join(directory, relative)); }
-    catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+
+/** The physical package directory the audit runs against, plus the app.asar
+ * spellings of its entry that `require.resolve` can report inside a packed app. */
+interface NodePtyLayout { directory: string; archiveDirectories?: string[] }
+
+/**
+ * Where the pinned package must live, chosen by the anchored layout this process
+ * runs from and never by anything the payload says about itself:
+ * - a packed app (`<resourcesPath>/app.asar` exists) extracts production modules
+ *   flat under `app.asar.unpacked`, pinned by `asarUnpack` in
+ *   packages/shell/electron-builder.config.cjs, so that the native payload is a
+ *   real file on disk and not only an archive member;
+ * - a dev checkout has no archive and uses the pnpm virtual store under the
+ *   repository root.
+ *
+ * The app prefix is canonicalized here and the payload deliberately is not. The
+ * prefix only says *where this process runs from*: a bundle reached through a
+ * symlinked directory is a legitimate app (macOS `/var/folders/...` is
+ * `/private/var`), so a symlinked prefix must not disable the terminal the
+ * preflight exists to enable. The payload is what the audit claims identity for,
+ * so canonicalizing it would defeat the audit: a symlinked package directory,
+ * entry or prebuild file could point the pinned size/sha256/mode checks at bytes
+ * nobody pinned, which is why `packageDirectory`/`withFile` keep requiring
+ * `realpathSync(x) === x`. Both archive spellings are accepted because the
+ * resolver inside the app reports whichever prefix the archive was loaded
+ * through; they name one member of one archive, and no other path is accepted.
+ */
+function nodePtyLayout(repositoryRoot: string, resourcesPath: string | undefined): NodePtyLayout {
+  if (process.platform !== "darwin" || process.arch !== "arm64") throw Error("node-pty-preflight-unavailable");
+  const resources = typeof resourcesPath === "string" && isAbsolute(resourcesPath) ? resourcesPath : undefined;
+  if (resources !== undefined && existsSync(join(resources, "app.asar"))) {
+    const anchor = realpathSync(resources);
+    return {
+      directory: join(anchor, "app.asar.unpacked/node_modules/node-pty"),
+      archiveDirectories: [...new Set([
+        join(resources, "app.asar/node_modules/node-pty"),
+        join(anchor, "app.asar/node_modules/node-pty"),
+      ])],
+    };
+  }
+  if (!isAbsolute(repositoryRoot) || realpathSync(repositoryRoot) !== repositoryRoot) throw Error("node-pty-preflight-unavailable");
+  return { directory: join(repositoryRoot, `node_modules/.pnpm/node-pty@${NODE_PTY_VERSION}/node_modules/node-pty`) };
+}
+
+/** The audited package directory of `layout`, or a refusal. Every check below is
+ * a refusal boundary: a missing, symlinked, foreign or unpinned package never
+ * escapes as a raw filesystem error. */
+function packageDirectory(layout: NodePtyLayout): string {
+  try {
+    const directory = layout.directory;
+    if (realpathSync(directory) !== directory) throw Error("node-pty-preflight-unavailable");
+    const manifest = JSON.parse(readFileSync(join(directory, "package.json"), "utf8"));
+    if (manifest.name !== "node-pty" || manifest.version !== NODE_PTY_VERSION) throw Error("node-pty-preflight-unavailable");
+    // node-pty 1.1.0 lib/utils.js searches these locations relative to lib.
+    // Refuse competing directories themselves, including empty/dangling entries.
+    for (const relative of ["build/Release", "lib/build/Release", "build/Debug", "lib/build/Debug", "lib/prebuilds/darwin-arm64"]) {
+      try { lstatSync(join(directory, relative)); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+        throw Error("node-pty-preflight-unavailable");
+      }
       throw Error("node-pty-preflight-unavailable");
     }
-    throw Error("node-pty-preflight-unavailable");
-  }
-  return directory;
+    return directory;
+  } catch { throw Error("node-pty-preflight-unavailable"); }
 }
 function withFile<T>(directory: string, kind: keyof typeof files, work: (fd: number, evidence: FileEvidence) => T): T {
   const expected = files[kind], path = join(directory, "prebuilds/darwin-arm64", expected.name);
@@ -57,13 +104,21 @@ function resolveNodePtyEntry(): string {
 }
 
 /** Read-only preflight, before native addon loading/spawn. No implicit chmod.
- * resolveEntry is the trusted package-resolution boundary for filesystem tests.
+ * resolveEntry is the trusted package-resolution boundary for filesystem tests:
+ * inside a packed app it reports the app.asar member whose extraction the
+ * `asarUnpack` pin makes the audited file, so the unpacked path and the
+ * app.asar spelling of this entry (under either prefix that names the app) are
+ * accepted and no other path is.
  * Later path-based loading still has a TOCTOU boundary; this is not a sandbox.
  */
-export function inspectNodePtyPrebuild(repositoryRoot = nodePtyRepositoryRoot(), resolveEntry = resolveNodePtyEntry) {
-  const directory = packageDirectory(repositoryRoot), entryPath = join(directory, "lib/index.js");
+export function inspectNodePtyPrebuild(repositoryRoot = nodePtyRepositoryRoot(), resolveEntry = resolveNodePtyEntry, resourcesPath = process.resourcesPath) {
+  const layout = nodePtyLayout(repositoryRoot, resourcesPath), directory = packageDirectory(layout);
+  const entryPath = join(directory, "lib/index.js");
   const entry = lstatSync(entryPath);
-  if (!entry.isFile() || entry.nlink !== 1 || realpathSync(entryPath) !== entryPath || resolveEntry() !== entryPath) throw Error("node-pty-preflight-unavailable");
+  if (!entry.isFile() || entry.nlink !== 1 || realpathSync(entryPath) !== entryPath) throw Error("node-pty-preflight-unavailable");
+  const resolution = resolveEntry();
+  const archiveEntryPaths = (layout.archiveDirectories ?? []).map((archive) => join(archive, "lib/index.js"));
+  if (resolution !== entryPath && !archiveEntryPaths.includes(resolution)) throw Error("node-pty-preflight-unavailable");
   const addon = withFile(directory, "addon", (_fd, evidence) => evidence);
   const helper = withFile(directory, "helper", (_fd, evidence) => evidence);
   return { ready: helper.mode === 0o755, version: NODE_PTY_VERSION, entryPath, helper, addon };
@@ -73,13 +128,13 @@ export function inspectNodePtyPrebuild(repositoryRoot = nodePtyRepositoryRoot(),
  * Identity/hash checks plus same-fd chmod narrow the path race; this is not a
  * filesystem sandbox or a packaging/installed runtime ownership guarantee.
  */
-export function prepareNodePtyPrebuild(repositoryRoot = nodePtyRepositoryRoot(), resolveEntry = resolveNodePtyEntry) {
-  const before = inspectNodePtyPrebuild(repositoryRoot, resolveEntry), directory = packageDirectory(repositoryRoot);
+export function prepareNodePtyPrebuild(repositoryRoot = nodePtyRepositoryRoot(), resolveEntry = resolveNodePtyEntry, resourcesPath = process.resourcesPath) {
+  const before = inspectNodePtyPrebuild(repositoryRoot, resolveEntry, resourcesPath), directory = packageDirectory(nodePtyLayout(repositoryRoot, resourcesPath));
   withFile(directory, "helper", (fd, evidence) => {
     if (before.helper.dev !== evidence.dev || before.helper.ino !== evidence.ino) throw Error("node-pty-preflight-unavailable");
     if (evidence.mode === 0o644) fchmodSync(fd, 0o755);
   });
-  const after = inspectNodePtyPrebuild(repositoryRoot, resolveEntry);
+  const after = inspectNodePtyPrebuild(repositoryRoot, resolveEntry, resourcesPath);
   if (!after.ready || before.helper.dev !== after.helper.dev || before.helper.ino !== after.helper.ino) throw Error("node-pty-preflight-unavailable");
   return { before, after };
 }

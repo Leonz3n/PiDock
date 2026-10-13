@@ -16,6 +16,13 @@ import type { Task, WorkspaceFile } from "./types";
 
 export type WorkspaceRootKindView = "worktree" | "shared-dir";
 
+/**
+ * One fact the Host really read, or its named reason for not reading one. A
+ * view never upgrades `unknown` to a declared record value: the panel shows
+ * the pinned baseline branch and the observed working branch as two rows.
+ */
+export type WorkspaceObservationView<T> = { state: "observed"; value: T } | { state: "unknown"; reason: string };
+
 export type WorkspaceRootView = {
   id: string;
   kind: WorkspaceRootKindView;
@@ -24,7 +31,14 @@ export type WorkspaceRootView = {
   repo?: string;
   directoryId?: string;
   sourcePath?: string;
-  branch?: string;
+  /** DECLARED: the pinned remote baseline this worktree was prepared from. */
+  baselineBranch?: string;
+  /** DECLARED: the branch the task created this worktree with. */
+  expectedBranch?: string;
+  /** OBSERVED: the branch this worktree is really on. */
+  workingBranch?: WorkspaceObservationView<string>;
+  /** OBSERVED: whether the worktree really has uncommitted (including untracked) changes. */
+  dirty?: WorkspaceObservationView<boolean>;
   baseCommit?: string;
 };
 
@@ -117,7 +131,11 @@ export type TerminalInstanceView = {
 };
 
 export type TerminalStateView = {
-  /** False while the Host plans/tracks terminals but owns no real pty yet. */
+  /**
+   * False when this Host cannot fork the real PTY helper (unsupported platform
+   * or a failed preflight), so the dock is a plan view only. A real spawner
+   * still reports whether a given single start succeeds through its own result.
+   */
   spawnImplemented: boolean;
   instances: TerminalInstanceView[];
 };
@@ -149,6 +167,32 @@ export type WorkspaceBrowserView = {
 };
 
 export type WorkspaceBrowserRequest = { rootId?: string; relative?: string };
+
+/**
+ * [PiDock 10] (#15 box 28) the receipt of one external-editor launch: the exact
+ * program + argv the Host spawned, where it opened, and what the launch
+ * discloses. The panel shows these real values; it never derives its own.
+ */
+export type ExternalEditorLaunchView = {
+  rootId: string;
+  rootKind: WorkspaceRootKindView;
+  program: string;
+  args: string[];
+  cwd: string;
+  /** The one path argument handed to the editor (a link's original target). */
+  openedPath: string;
+  attribution: WorkspaceAttributionView;
+  /** Shared-directory or worktree identity, as the Host stated it. */
+  disclosure: string;
+  /** The 盒子 28 rule: no editor configuration was read, written or copied. */
+  note: string;
+  /** Control attribution: the launch is a labelled human explicit action. */
+  actor: "human";
+  label: string;
+  started: true;
+  windowObserved: false;
+  pid?: number;
+};
 export type TerminalPlanRequest = {
   instanceId: string;
   rootId: string;
@@ -233,6 +277,51 @@ function attribution(value: unknown): WorkspaceAttributionView | undefined {
   };
 }
 
+/**
+ * Parse one observation payload. An absent or malformed observation is DROPPED,
+ * never turned into `observed` and never into the record's declared value: the
+ * panel then names the missing reading instead of inventing one.
+ */
+function observation<T>(source: unknown, read: (value: unknown) => T | undefined): WorkspaceObservationView<T> | undefined {
+  const item = record(source);
+  if (!item) return undefined;
+  const state = str(item["state"]);
+  if (state === "observed") {
+    const value = read(item["value"]);
+    return value === undefined ? undefined : { state: "observed", value };
+  }
+  const reason = str(item["reason"]);
+  return state === "unknown" && reason !== undefined ? { state: "unknown", reason } : undefined;
+}
+
+/**
+ * Display text for one observation. A reading is MARKED as a reading, an unread
+ * fact names why it is unread, and a payload that carried no observation says
+ * so instead of falling back to a declared record value.
+ */
+export function observedText<T>(
+  observation: WorkspaceObservationView<T> | undefined,
+  format: (value: T) => string,
+  absent: string,
+): string {
+  if (observation === undefined) return `未实测：${absent}`;
+  if (observation.state === "observed") return `${format(observation.value)}（实测）`;
+  // `observation()` keeps a NAMED `unknown` whose `reason` is `""`, so the
+  // absence of a reason is named here rather than rendering a bare `未实测：`.
+  return `未实测：${hostText(observation.reason, "Host 未给出未读原因")}`;
+}
+
+/**
+ * Display text for one Host string. A value the Host left absent OR blank is
+ * NAMED, never substituted — and in particular never by the root's label, which
+ * is a root's own identity and not a repository's or a linked directory's. This
+ * is the shared rule for every view that renders a Host string, so a blank fact
+ * reads the same way wherever it is shown.
+ */
+export function hostText(value: string | undefined, absent: string): string {
+  return value !== undefined && value.length > 0 ? value : absent;
+}
+
 /** Parse the `task/fileRoots` payload; `undefined` when the shape is unusable. */
 export function workspaceRootsFromHost(payload: unknown): { roots: WorkspaceRootView[]; taskDir: string } | undefined {
   const source = record(payload);
@@ -253,7 +342,10 @@ export function workspaceRootsFromHost(payload: unknown): { roots: WorkspaceRoot
     const repo = str(item["repo"] ?? item["repoDir"]);
     const directoryId = str(item["directoryId"]);
     const sourcePath = str(item["sourcePath"]);
-    const branch = str(item["branch"]);
+    const baselineBranch = str(item["baselineBranch"]);
+    const expectedBranch = str(item["expectedBranch"]);
+    const workingBranch = observation(item["workingBranch"], str);
+    const dirty = observation(item["dirty"], bool);
     const baseCommit = str(item["baseCommit"]);
     parsed.push({
       id,
@@ -263,7 +355,10 @@ export function workspaceRootsFromHost(payload: unknown): { roots: WorkspaceRoot
       ...(repo !== undefined ? { repo } : {}),
       ...(directoryId !== undefined ? { directoryId } : {}),
       ...(sourcePath !== undefined ? { sourcePath } : {}),
-      ...(branch !== undefined ? { branch } : {}),
+      ...(baselineBranch !== undefined ? { baselineBranch } : {}),
+      ...(expectedBranch !== undefined ? { expectedBranch } : {}),
+      ...(workingBranch !== undefined ? { workingBranch } : {}),
+      ...(dirty !== undefined ? { dirty } : {}),
       ...(baseCommit !== undefined ? { baseCommit } : {}),
     });
   }
@@ -318,6 +413,67 @@ export function workspaceDiffFromHost(payload: unknown): WorkspaceDiffView | und
   return { attribution: attributionView, path, diff, truncated };
 }
 
+/**
+ * One platform row of the link-capability record (`task/probeLink`): `exercised`
+ * is the Host's own platform when the probe really ran there, and every other
+ * row says BY NAME why it is not a verification. The renderer never invents a
+ * platform fact: it shows what the Host recorded.
+ */
+export type WorkspaceLinkCapabilityRowView = { platform: string; exercised: boolean; note: string };
+
+/**
+ * The Host's observed shape of one plain-directory link's TARGET. Every value is
+ * a reading: 失效 (`dangling`), 嵌套 (`nested-link`), 循环 (`cyclic-link`) and a
+ * real directory are kept apart, and a shape that could not be read is
+ * `unknown` — a payload that does not name one of them is DROPPED rather than
+ * shown as a directory.
+ */
+export type WorkspaceLinkTargetView = {
+  shape: "directory" | "nested-link" | "dangling" | "cyclic-link" | "unknown";
+  detail: string;
+  /** Plan-time lexical pre-check on path strings, shown apart from the reading. */
+  lexical: "ok" | "nested" | "loop-risk";
+  platforms: WorkspaceLinkCapabilityRowView[];
+  /** Named boundary: a Host observation, not a real pi/model run. */
+  modelBoundary: string;
+};
+
+const LINK_SHAPES: readonly WorkspaceLinkTargetView["shape"][] = ["directory", "nested-link", "dangling", "cyclic-link", "unknown"];
+const LINK_LEXICAL: readonly WorkspaceLinkTargetView["lexical"][] = ["ok", "nested", "loop-risk"];
+
+/**
+ * Parse the `task/probeLink` payload. Fail-closed: an unknown shape, a shape
+ * the Host never observed, or a platform row without its named note makes the
+ * whole read unusable (`undefined`), so the caller names "未确定" instead of
+ * defaulting an unread link to a healthy directory.
+ */
+export function workspaceLinkTargetFromHost(payload: unknown): WorkspaceLinkTargetView | undefined {
+  const source = record(payload);
+  if (!source) return undefined;
+  const shape = str(source["shape"]) as WorkspaceLinkTargetView["shape"] | undefined;
+  const detail = str(source["detail"]);
+  const lexical = str(source["lexical"]) as WorkspaceLinkTargetView["lexical"] | undefined;
+  const modelBoundary = str(source["modelBoundary"]);
+  const platforms = source["platforms"];
+  if (
+    shape === undefined || !LINK_SHAPES.includes(shape) ||
+    detail === undefined || lexical === undefined || !LINK_LEXICAL.includes(lexical) ||
+    modelBoundary === undefined || !Array.isArray(platforms) || platforms.length === 0
+  ) {
+    return undefined;
+  }
+  const rows: WorkspaceLinkCapabilityRowView[] = [];
+  for (const entry of platforms) {
+    const row = record(entry);
+    const platform = row ? str(row["platform"]) : undefined;
+    const exercised = row ? bool(row["exercised"]) : undefined;
+    const note = row ? str(row["note"]) : undefined;
+    if (platform === undefined || exercised === undefined || note === undefined) return undefined;
+    rows.push({ platform, exercised, note });
+  }
+  return { shape, detail, lexical, platforms: rows, modelBoundary };
+}
+
 export function workspaceDeliveryFromHost(payload: unknown): WorkspaceDeliveryView | undefined {
   const source = record(payload);
   const target = source ? record(source["target"]) : undefined;
@@ -339,6 +495,61 @@ export function workspaceDeliveryFromHost(payload: unknown): WorkspaceDeliveryVi
     return undefined;
   }
   return { attribution: attributionView, repo, branch, autoCommit, autoPush, autoMerge };
+}
+
+/**
+ * Parse the `task/openEditor` launch receipt. Fail-closed: a receipt that is
+ * not the documented shape is dropped instead of being shown as a successful
+ * launch, so nothing here can display a fabricated program or path.
+ */
+export function externalEditorLaunchFromHost(payload: unknown): ExternalEditorLaunchView | undefined {
+  const source = record(payload);
+  const launch = source ? record(source["launch"]) : undefined;
+  if (!launch) return undefined;
+  const attributionView = attribution(launch["attribution"]);
+  const rootId = str(launch["rootId"]);
+  const rootKind = str(launch["rootKind"]);
+  const program = str(launch["program"]);
+  const args = strings(launch["args"]);
+  const cwd = str(launch["cwd"]);
+  const openedPath = str(launch["openedPath"]);
+  const disclosure = str(launch["disclosure"]);
+  const note = str(launch["note"]);
+  const label = str(launch["label"]);
+  if (
+    !attributionView ||
+    rootId === undefined ||
+    (rootKind !== "worktree" && rootKind !== "shared-dir") ||
+    program === undefined ||
+    args === undefined ||
+    cwd === undefined ||
+    openedPath === undefined ||
+    disclosure === undefined ||
+    note === undefined ||
+    label === undefined ||
+    launch["actor"] !== "human" ||
+    launch["started"] !== true ||
+    launch["windowObserved"] !== false
+  ) {
+    return undefined;
+  }
+  const pid = num(launch["pid"]);
+  return {
+    rootId,
+    rootKind,
+    program,
+    args,
+    cwd,
+    openedPath,
+    attribution: attributionView,
+    disclosure,
+    note,
+    actor: "human",
+    label,
+    started: true,
+    windowObserved: false,
+    ...(pid !== undefined ? { pid } : {}),
+  };
 }
 
 export function terminalPlanFromHost(payload: unknown): TerminalPlanView | undefined {
@@ -505,7 +716,7 @@ export function memoryWorkspaceBrowser(
       label: repo,
       path: `${taskDir}/${repo}`,
       repo,
-      ...(baseBranchOf(repo) !== undefined ? { branch: baseBranchOf(repo) as string } : {}),
+      ...(baseBranchOf(repo) !== undefined ? { baselineBranch: baseBranchOf(repo) as string } : {}),
     })),
     ...task.directories.map((directory) => ({
       id: directory.linkName,
@@ -577,7 +788,7 @@ export function memoryWorkspaceBrowser(
       ? {
           attribution: attributionView,
           repo: root.repo ?? root.id,
-          branch: root.branch ?? "",
+          branch: root.baselineBranch ?? "",
           autoCommit: false,
           autoPush: false,
           autoMerge: false,

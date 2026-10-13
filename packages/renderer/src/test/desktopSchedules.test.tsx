@@ -28,6 +28,33 @@ it("lists Host schedules and runs across tasks with working filters and task nav
   expect(taskOp).toHaveBeenCalledWith("b", "task/scheduleRuns", {});
 });
 
+it("names a blank schedule field instead of an empty rule, name or table cell", async () => {
+  // `parseSchedules`/`parseRuns` read every string with `text = typeof ===
+  // "string"`, so a blank Host field really reaches this page; each fact names
+  // its own absence instead of emptying a column or a row's own identity.
+  bridge((taskId, op) => ({ ok: true, payload: { workspaceId: "local", taskId, op, payload: op === "task/scheduleList"
+    ? { schedules: [{ ...schedule(taskId, true), name: "", ruleText: "", timezone: "", providerId: "", model: "" }], templates: [] }
+    : { runs: [{ ...run(taskId), startedAt: "", reason: "" }] } } }));
+  render(<DesktopSchedulesPage tasks={[tasks[0]!]} onOpenTask={() => {}} />);
+  await screen.findByText("Host 未上报规则");
+  const row = document.querySelector('[data-schedule-row="schedule-a"]') as HTMLElement;
+  expect(row).toHaveTextContent("Host 未上报规则");
+  expect(row).toHaveTextContent("Host 未上报时区");
+  expect(row).toHaveTextContent("Host 未上报定时任务名称");
+  expect(row).toHaveTextContent("Host 未上报 Provider / Host 未上报模型");
+  const runRow = within(document.querySelector('[data-schedule-run="run-a"]') as HTMLElement);
+  expect(runRow.getByText("Host 未上报开始时间")).toBeInTheDocument();
+  // `??` used to miss a real `""`; the em dash is the named absence for this column.
+  expect(runRow.getByText("—")).toBeInTheDocument();
+  // The run table's 定时任务 cell names the same blank schedule name instead of
+  // rendering a blank cell under a column header (the card above is not the only
+  // render path of `parseSchedules.name`).
+  expect(runRow.getByText("Host 未上报定时任务名称")).toBeInTheDocument();
+  // ...and a run whose schedule really is gone keeps its own wording, so the two
+  // cases stay distinguishable instead of collapsing into one string.
+  expect(runRow.queryByText("已删除的定时任务")).toBeNull();
+});
+
 it("shows partial failure without presenting a global empty result", async () => {
   bridge((taskId, op) => taskId === "a" ? { ok: false, error: "host-unavailable" } : { ok: true, payload: op === "task/scheduleList" ? { schedules: [schedule(taskId, true)] } : { runs: [] } });
   render(<DesktopSchedulesPage tasks={tasks} onOpenTask={() => {}} />);

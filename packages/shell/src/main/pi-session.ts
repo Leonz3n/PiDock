@@ -22,6 +22,7 @@
  */
 
 import { BROWSER_TOOL_ACTIONS } from "./browser-rules.js";
+import { SERVICE_TEMPLATE_TOOL } from "../host/sdk-agent-tool-contract.js";
 import {
   normalizeReportedUsage,
   providerConfigVersion,
@@ -202,8 +203,27 @@ const BROWSER_TOOL_DEFINITIONS: readonly PiToolDefinition[] = Object.keys(BROWSE
 /** Gated tools: the only tools the Agent may call. Everything else is closed. */
 export const PI_GATED_TOOLS: readonly PiToolDefinition[] = [
   { name: "fs.read", kind: "read" },
+  // [PiDock 02m] #5: the read-only listing/search tool of the real Agent tool
+  // set. It is `read` kind, so the tier rules below already cover it.
+  { name: "fs.search", kind: "read" },
   { name: "fs.write", kind: "write" },
   { name: "exec.run", kind: "command" },
+  // [PiDock 04] #7 box 5: the Agent's service surface. The read pair is `read`
+  // kind (a read-only session may still read status/logs), and start/stop are
+  // `command` kind, so the one tier rule below already refuses them for a
+  // read-only session and asks first under `default`. Nothing here widens a
+  // tier: the tools are gated exactly like `exec.run`.
+  { name: "service.status", kind: "read" },
+  { name: "service.logs", kind: "read" },
+  { name: "service.start", kind: "command" },
+  { name: "service.stop", kind: "command" },
+  // [PiDock 04] #7 box 6: the Agent's shared-template edit. It is `command`
+  // kind, NOT `write`: the tier rule below asks only for `command`/`browser`,
+  // so a `write`-kind entry would let a cross-task shared template be rewritten
+  // under `default` with no confirmation - the one outcome box 6 forbids. The
+  // name is spelled once, in the tool contract, and the tier rule below carries
+  // the name-scoped always-ask rule that makes this tool ask under `auto` too.
+  { name: SERVICE_TEMPLATE_TOOL, kind: "command" },
   ...BROWSER_TOOL_DEFINITIONS,
 ] as const;
 
@@ -215,13 +235,14 @@ export type PiGateDecision =
 /**
  * Mint purpose tag on an approval. Absent = the turn flow's own
  * `exec.run`/`browser.*` request (the default). `service-control`,
- * `browser-control` and `terminal-control` are stamped only by the Host when
- * it mints a service start/stop ([PiDock 04] #7), a task-browser action
- * ([PiDock 06] #8) or a built-in terminal start ([PiDock 10] #15) approval,
+ * `browser-control`, `terminal-control` and `agent-tool` are stamped only by
+ * the Host when it mints a service start/stop ([PiDock 04] #7), a
+ * task-browser action ([PiDock 06] #8), a built-in terminal start
+ * ([PiDock 10] #15) or a real Agent tool execution ([PiDock 02m] #5) approval,
  * so an identically shaped turn approval for the same tool + target can never
  * be spent on any Host-driven path (and vice versa).
  */
-export type PiApprovalScope = "service-control" | "browser-control" | "terminal-control";
+export type PiApprovalScope = "service-control" | "browser-control" | "terminal-control" | "agent-tool";
 
 /** The only scope a Host service-control approval is minted with. */
 export const SERVICE_CONTROL_SCOPE: PiApprovalScope = "service-control";
@@ -231,6 +252,14 @@ export const BROWSER_CONTROL_SCOPE: PiApprovalScope = "browser-control";
 
 /** The only scope a Host-minted built-in-terminal approval carries. */
 export const TERMINAL_CONTROL_SCOPE: PiApprovalScope = "terminal-control";
+
+/**
+ * The only scope the Host ties a real Agent tool execution to ([PiDock 02m] #5):
+ * `sdk-agent-tool-broker.ts` mints with it and its re-check accepts only it, so
+ * a scripted turn approval for the same tool + target can never authorize a
+ * tool that really writes or runs a command.
+ */
+export const AGENT_TOOL_SCOPE: PiApprovalScope = "agent-tool";
 
 export interface PiApproval {
   id: string;
@@ -243,6 +272,14 @@ export interface PiApproval {
   contentVersion: string;
   status: "pending" | "approved" | "rejected" | "expired";
   executed: boolean;
+  /**
+   * What the confirmation really authorizes when the tool's `target` cannot
+   * state it ([PiDock 02m] #5): the `exec.run` command, so a human approves
+   * the operation they can read instead of an opaque payload hash. Display
+   * only — the broker re-reads the request and re-checks `contentVersion`
+   * immediately before the effect.
+   */
+  operation?: string;
   /**
    * One-shot spend stamp, written on the Host side (never by the
    * renderer). An approved request is spent exactly once — either by the
@@ -792,6 +829,14 @@ export class PiSessionChannel {
     if (this.permission === "read" && tool.kind !== "read") {
       return { verdict: "deny", reason: `只读会话禁止${tool.kind === "write" ? "写入" : tool.kind === "command" ? "命令" : "浏览器操作"}` };
     }
+    // [PiDock 04] #7 box 6 one name-scoped rule: a shared template is CROSS-TASK
+    // state, so its edit is never written without a confirmation the user saw -
+    // not even under `auto` (`docs/design-notes.md` 共享模板确认: 自动执行不逐次
+    // 询问，但仍遵循共享模板确认). Scoped to this one tool name on purpose: the
+    // generic tier table above/below is unchanged, so `fs.write` still does NOT
+    // ask under `default`. Read-only was already denied above, so this rule can
+    // never grant a confirmation to a read-only session.
+    if (tool.name === SERVICE_TEMPLATE_TOOL) return { verdict: "ask", approvalId: "preview" };
     if (this.permission === "default" && (tool.kind === "command" || tool.kind === "browser")) {
       return { verdict: "ask", approvalId: "preview" };
     }
@@ -805,7 +850,7 @@ export class PiSessionChannel {
    * Permission changes apply to later calls only: the approval stores the
    * requesting tier.
    */
-  gate(toolName: string, target: string, contentVersion: string, currentCallId?: string, scope?: PiApprovalScope): PiGateDecision {
+  gate(toolName: string, target: string, contentVersion: string, currentCallId?: string, scope?: PiApprovalScope, operation?: string): PiGateDecision {
     const preview = this.previewGate(toolName, target);
     if (preview.verdict !== "ask") return preview;
     const tool = isGatedTool(toolName);
@@ -825,6 +870,7 @@ export class PiSessionChannel {
       status: "pending",
       executed: false,
       ...(scope !== undefined ? { scope } : {}),
+      ...(operation !== undefined && operation.length > 0 ? { operation } : {}),
     };
     this.approvals.push(approval);
     return { verdict: "ask", approvalId: approval.id };

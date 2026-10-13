@@ -4,24 +4,81 @@ import type { ServiceOwnerCatalogSnapshot } from "../rpc/service-host-binding.js
 import { isAbsolute, join, normalize } from "node:path";
 import { readTaskRecordOnDisk } from "../host/task-store.js";
 import { SERVICE_KEY_PATTERN, isServiceSecretKey, maskServiceValue, resolveServiceEnv, validateNoSecretsInShared, validateServiceDescriptor,
-  type ServiceConfigEntry, type ServiceConfigSource, type ServiceDescriptor } from "./service-config.js";
+  validateSharedServiceArgument, validateSharedServiceHealthTarget, validateSharedServiceProgram, validateSharedServiceValue,
+  validateSharedServiceWorkdir, diffServiceTemplate, nextServiceTemplateVersion, restartNeededForTemplateAdopt,
+  type ServiceConfigEntry, type ServiceConfigSource, type ServiceDescriptor, type TemplateDiff } from "./service-config.js";
+import type { DependencyKind } from "./service-topology.js";
 import { isSafeTaskChildName } from "./task-provision.js";
 import type { ProjectRegistry } from "./project-registry.js";
 import type { TaskRootIndex, VerifiedTaskIdentity } from "./task-root-index.js";
 
-/** Main-only storage. Shared revisions exclude local program paths and private reference values; arbitrary literals still require human review. */
+/**
+ * One named, project-scoped environment ([PiDock 04] #7 box 1, GLOSSARY:23-24
+ * 「一组有名称的运行配置」): the scope a shared service template is edited in and
+ * the selection a task binding pins. It is main-only state in its own document,
+ * written atomically like the rest of this catalog; a project may hold several,
+ * and different tasks may select the same one while keeping their own local
+ * instances (their bindings own the root/subdir/program/private refs).
+ */
+export interface ServiceEnvironment {
+  projectId: string;
+  environmentId: string;
+  /** User-visible name, unique inside the project (never a default invented by the app). */
+  name: string;
+}
+
+/**
+ * Main-only storage. Shared revisions exclude local program paths, machine
+ * working directories and private reference values; arbitrary literals still
+ * require human review. `workdir` is the portable, repo-relative default the
+ * task binding pre-fills; the binding's own `subdir` is what a launch
+ * resolves.
+ *
+ * A revision belongs to exactly one environment (`environmentId`), and its
+ * `version` is minted per (project, environment, service), so
+ * `(environmentId, version)` names one revision.
+ *
+ * `dependencies` is the revision's own 服务依赖声明 (ADR 0002): the sibling key
+ * that is NOT part of `descriptor` (it is no spawn input) and NOT a `shared`
+ * row (it is no key/value env row), and which stays inside this environment.
+ * ABSENT means "no declaration" - there is deliberately no empty-graph default
+ * a reader could mistake for a declared one.
+ */
 export interface ServiceTemplate {
   projectId: string;
+  environmentId: string;
   serviceId: string;
   version: number;
-  descriptor: Pick<ServiceDescriptor, "name" | "program" | "args" | "ports" | "healthCheck" | "runType">;
+  descriptor: Pick<ServiceDescriptor, "name" | "program" | "args" | "ports" | "healthCheck" | "runType"> & { workdir?: string };
   shared: ServiceConfigEntry[];
+  dependencies?: ServiceTemplateDependency[];
+}
+
+/**
+ * One declared dependency of a revision ([PiDock 04] #7 box 1, ADR 0002). The
+ * declaring service is the revision's own `serviceId`, so only the target and
+ * the kind are stored; `to` names another service by the catalog's OWN identity
+ * inside the same environment (never an invented name or a path). The two kinds
+ * stay distinct: `call` is a runtime call dependency, `prestart` a start
+ * precondition.
+ */
+export interface ServiceTemplateDependency {
+  to: string;
+  kind: DependencyKind;
 }
 export interface ServiceTaskBinding {
   taskId: string;
   projectId: string;
   identity: VerifiedTaskIdentity;
   serviceId: string;
+  /**
+   * The environment this task selected for this service. Together with
+   * `templateVersion` it names exactly one revision, so the pin can no longer
+   * be read against another environment's numbering. The local identity
+   * (`rootId`/`subdir`/`programPath`/`privateRefs`) stays per task, which is
+   * what keeps two tasks on one environment on their own instances.
+   */
+  environmentId: string;
   templateVersion: number;
   rootId: string;
   subdir: string;
@@ -47,6 +104,10 @@ export interface SavedServiceConfigPreview {
  */
 export interface ServiceLaunch {
   serviceId: string;
+  /** Environment the pinned revision belongs to; resolved from main's own store, never from a page. */
+  environmentId: string;
+  /** The environment's user-visible name at resolution time (display only; never a value). */
+  environmentName: string;
   templateVersion: number;
   descriptor: ServiceDescriptor;
   layers: {
@@ -55,6 +116,81 @@ export interface ServiceLaunch {
     privateEntries: ServiceConfigEntry[];
     task: ServiceConfigEntry[];
   };
+}
+
+/**
+ * One shared-template edit as main reviews it before writing (and as it looks
+ * just after). `diff` and `restartNeeded` come from the shared rules layer, so
+ * the page never re-derives them; `restartNeeded` lists the pinned task
+ * bindings that must be restarted explicitly - nothing here restarts a
+ * running service.
+ */
+export interface ServiceTemplateUpdateReview {
+  projectId: string;
+  /** Environment the reviewed edit belongs to; the page echoes it so it cannot read a review of another environment as its own. */
+  environmentId: string;
+  serviceId: string;
+  /** Version the confirmed save produces (the written one once `saved`). */
+  version: number;
+  /** Display label minted by `nextServiceTemplateVersion` (`v13`). */
+  versionLabel: string;
+  saved: boolean;
+  /** True when a launcher field (program/args/ports/runType/healthCheck/workdir) changes. */
+  descriptorChanged: boolean;
+  /**
+   * True when the revision's 服务依赖声明 differ from the current one. Its own
+   * fact, not part of `contentChanged`: a dependency declaration is no launch
+   * field, so a declaration-only save changes which edges a LATER adopter's plan
+   * reads without invalidating a running process.
+   */
+  dependenciesChanged: boolean;
+  /**
+   * True when the minted revision differs from the current one in any field a
+   * launch resolves (`descriptorChanged` or a shared-row diff). An identical
+   * save mints a new revision number but changes no launch material, so it
+   * cannot invalidate a running task: `restartNeeded` stays empty for it
+   * instead of listing every binding that still pins the older revision.
+   */
+  contentChanged: boolean;
+  diff: TemplateDiff;
+  restartNeeded: { taskId: string; serviceId: string; name: string; from: number; to: number }[];
+}
+
+/**
+ * One explicit human adoption of an existing shared revision by one existing
+ * task binding ([PiDock 04] #7). `adopted:false` is the read-only review
+ * (nothing written); `adopted:true` is the written re-pin. The binding keeps
+ * its local identity - working copy root, subdir, local program path and
+ * private reference names - and only its pinned `templateVersion` moves, so a
+ * local path or a secret can never ride an adoption into a shared revision.
+ * `restartNeeded` comes from the shared rules layer: every binding of this
+ * project/service whose pinned version still differs from the adopted one
+ * needs an explicit restart, and nothing here starts, stops or restarts a
+ * process.
+ */
+export interface ServiceBindingAdoption {
+  taskId: string;
+  serviceId: string;
+  /** The binding's own environment: an adoption only ever re-pins inside it. */
+  environmentId: string;
+  /** Revision the binding pins before the adoption. */
+  from: number;
+  /** Existing revision the confirmed adoption re-pins it to. */
+  to: number;
+  adopted: boolean;
+  restartNeeded: { taskId: string; serviceId: string; name: string; from: number; to: number }[];
+}
+
+/**
+ * One task binding with the revision it pins and the environment that revision
+ * belongs to. The environment is resolved from main's own store on every read,
+ * so a page never has to infer which environment a task really uses and an
+ * unknown environment fails closed instead of rendering as a real one.
+ */
+export interface ServiceCatalogBinding {
+  binding: ServiceTaskBinding;
+  template: ServiceTemplate;
+  environment: ServiceEnvironment;
 }
 
 export interface ServiceCatalogAuthority {
@@ -86,11 +222,16 @@ export function serviceCatalogAuthority(roots: TaskRootIndex, projects: ProjectR
 
 const TEMPLATES = "service-templates.json";
 const PRIVATE = "service-machine.json";
+const ENVIRONMENTS = "service-environments.json";
 const MAX_BYTES = 1024 * 1024;
 const PROJECT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SERVICE_ID = /^s-[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-type TemplateDocument = { version: 1; revisions: ServiceTemplate[] };
-type PrivateDocument = { version: 1; bindings: ServiceTaskBinding[] };
+const ENVIRONMENT_ID = /^e-[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+/** `2` carries `environmentId` on every revision; `1` predates the environment dimension and is refused by name. */
+type TemplateDocument = { version: 2; revisions: ServiceTemplate[] };
+/** `2` carries `environmentId` on every binding; `1` predates the environment dimension and is refused by name. */
+type PrivateDocument = { version: 2; bindings: ServiceTaskBinding[] };
+type EnvironmentDocument = { version: 1; environments: ServiceEnvironment[] };
 
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid service catalog");
@@ -123,13 +264,12 @@ function version(value: unknown): number {
 }
 function descriptor(value: unknown): ServiceTemplate["descriptor"] {
   const row = object(value);
-  fields(row, ["name", "program", "args", "ports", "runType"], ["healthCheck"]);
+  fields(row, ["name", "program", "args", "ports", "runType"], ["healthCheck", "workdir"]);
   const name = text(row["name"], 128);
   const program = text(row["program"], 128);
-  if (!/^[A-Za-z0-9_.+-]+$/.test(program)) throw new Error("shared program must be a portable name");
-  if (!Array.isArray(row["args"]) || row["args"].length > 40 || row["args"].some((arg) => typeof arg !== "string" ||
-      arg.length > 512 || /[\r\n\0]/.test(arg) || /(?:^|=)(?:\/|~\/|[A-Za-z]:[\\/])/.test(arg) ||
-      /(?:password|token|secret|api[_-]?key)/i.test(arg) || /:\/\/[^/\s]+@/.test(arg))) {
+  if (validateSharedServiceProgram(program)) throw new Error("shared program must be a portable name");
+  if (!Array.isArray(row["args"]) || row["args"].length > 40 ||
+      row["args"].some((arg) => typeof arg !== "string" || validateSharedServiceArgument(arg) !== null)) {
     throw new Error("invalid or private shared argument");
   }
   if (!Array.isArray(row["ports"]) || row["ports"].length > 20 || new Set(row["ports"]).size !== row["ports"].length) {
@@ -141,15 +281,22 @@ function descriptor(value: unknown): ServiceTemplate["descriptor"] {
     const health = object(row["healthCheck"]);
     fields(health, ["kind"], ["target"]);
     if (!["http", "tcp", "grpc"].includes(health["kind"] as string)) throw new Error("invalid health check");
-    if (health["target"] !== undefined && (typeof health["target"] !== "string" || health["target"].length > 512 ||
-        /[\r\n\0]/.test(health["target"]) || /:\/\/[^/\s]+@|[?&](?:token|key|secret|password)=/i.test(health["target"]))) {
+    if (health["target"] !== undefined && (typeof health["target"] !== "string" || validateSharedServiceHealthTarget(health["target"]) !== null)) {
       throw new Error("private health target is not shared");
     }
     healthCheck = { kind: health["kind"] as "http" | "tcp" | "grpc", ...(health["target"] === undefined ? {} : { target: health["target"] as string }) };
   }
+  let workdir: string | undefined;
+  if (row["workdir"] !== undefined) {
+    if (typeof row["workdir"] !== "string" || validateSharedServiceWorkdir(row["workdir"])) {
+      throw new Error("invalid shared working directory");
+    }
+    // Store the trimmed portable form the rule validated, never a padded one.
+    workdir = row["workdir"].trim();
+  }
   const result: ServiceTemplate["descriptor"] = { name, program, args: [...row["args"]] as string[],
     ports: [...row["ports"]] as number[], runType: row["runType"] as ServiceDescriptor["runType"],
-    ...(healthCheck === undefined ? {} : { healthCheck }) };
+    ...(healthCheck === undefined ? {} : { healthCheck }), ...(workdir === undefined ? {} : { workdir }) };
   if (validateServiceDescriptor(result)) throw new Error("invalid service descriptor");
   return result;
 }
@@ -160,8 +307,7 @@ function shared(value: unknown): ServiceConfigEntry[] {
     fields(row, ["key", "value", "secret"]);
     const key = text(row["key"], 100);
     if (!SERVICE_KEY_PATTERN.test(key) || row["secret"] !== false || isServiceSecretKey(key)) throw new Error("private key in shared template");
-    if (typeof row["value"] !== "string" || row["value"].length > 2048 || /[\0\r\n]/.test(row["value"]) ||
-        /:\/\/[^/\s]+@|[?&](?:token|key|secret|password)=/i.test(row["value"])) throw new Error("invalid shared value");
+    if (typeof row["value"] !== "string" || validateSharedServiceValue(row["value"]) !== null) throw new Error("invalid shared value");
     return { key, value: row["value"], secret: false };
   });
   if (new Set(entries.map((entry) => entry.key)).size !== entries.length || validateNoSecretsInShared(entries)) {
@@ -169,11 +315,83 @@ function shared(value: unknown): ServiceConfigEntry[] {
   }
   return entries;
 }
+function environmentId(value: unknown): string {
+  const result = text(value, 38);
+  if (!ENVIRONMENT_ID.test(result)) throw new Error("invalid environment ID");
+  return result;
+}
+/**
+ * The 服务依赖声明 of one revision: a sibling key of `descriptor`/`shared`,
+ * `undefined` when absent (no declaration is a real state, never an invented
+ * empty graph). Each entry names another service by the catalog's own identity
+ * and one of the two dependency kinds; an exact duplicate and a self-edge are
+ * refused BY NAME here, a missing target is refused by the document rule below.
+ */
+function dependencies(value: unknown): ServiceTemplateDependency[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length > 40) throw new Error("invalid dependency declaration");
+  const rows = value.map((item) => {
+    const row = object(item);
+    fields(row, ["to", "kind"]);
+    if (row["kind"] !== "call" && row["kind"] !== "prestart") throw new Error("invalid dependency kind");
+    return { to: serviceId(row["to"]), kind: row["kind"] as DependencyKind };
+  });
+  if (rows.length === 0) return undefined;
+  if (new Set(rows.map((row) => `${row.to}/${row.kind}`)).size !== rows.length) throw new Error("duplicate dependency declaration");
+  return rows;
+}
+/** The scope a declaration may point into: one service of one environment of one project. */
+function revisionScope(project: string, environment: string, service: string): string {
+  return `${project}/${environment}/${service}`;
+}
+/**
+ * Every declared target must be a service that really exists INSIDE the same
+ * environment. A declaration pointing at a service nobody saved - or at another
+ * environment's revision space - is refused by name instead of being silently
+ * dropped or defaulted to an empty graph (ADR 0002).
+ */
+function requireDeclarationTargets(
+  known: ReadonlySet<string>, project: string, environment: string, declared: readonly ServiceTemplateDependency[] | undefined,
+): void {
+  for (const dependency of declared ?? []) {
+    if (!known.has(revisionScope(project, environment, dependency.to))) {
+      throw new Error(`dependency declaration target ${dependency.to} does not exist in this environment`);
+    }
+  }
+}
+function environment(value: unknown): ServiceEnvironment {
+  const row = object(value);
+  fields(row, ["projectId", "environmentId", "name"]);
+  return { projectId: projectId(row["projectId"]), environmentId: environmentId(row["environmentId"]), name: text(row["name"], 64) };
+}
+function environmentDocument(value: unknown): EnvironmentDocument {
+  const row = object(value);
+  fields(row, ["version", "environments"]);
+  if (row["version"] !== 1 || !Array.isArray(row["environments"]) || row["environments"].length > 200) {
+    throw new Error("invalid environment document");
+  }
+  const environments = row["environments"].map(environment);
+  if (new Set(environments.map((entry) => `${entry.projectId}/${entry.environmentId}`)).size !== environments.length) {
+    throw new Error("duplicate environment");
+  }
+  // Names are what a human selects by, so two environments of one project may
+  // never share one (compared case-insensitively, the way a picker reads them).
+  if (new Set(environments.map((entry) => `${entry.projectId}/${entry.name.toLowerCase()}`)).size !== environments.length) {
+    throw new Error("duplicate environment name");
+  }
+  return { version: 1, environments };
+}
 function template(value: unknown): ServiceTemplate {
   const row = object(value);
-  fields(row, ["projectId", "serviceId", "version", "descriptor", "shared"]);
-  return { projectId: projectId(row["projectId"]), serviceId: serviceId(row["serviceId"]),
-    version: version(row["version"]), descriptor: descriptor(row["descriptor"]), shared: shared(row["shared"]) };
+  fields(row, ["projectId", "environmentId", "serviceId", "version", "descriptor", "shared"], ["dependencies"]);
+  const id = serviceId(row["serviceId"]);
+  const declared = dependencies(row["dependencies"]);
+  // A self-edge is a declaration no plan can order: refused by name.
+  if (declared?.some((dependency) => dependency.to === id)) throw new Error("dependency declaration must not target its own service");
+  return { projectId: projectId(row["projectId"]), environmentId: environmentId(row["environmentId"]),
+    serviceId: id, version: version(row["version"]),
+    descriptor: descriptor(row["descriptor"]), shared: shared(row["shared"]),
+    ...(declared === undefined ? {} : { dependencies: declared }) };
 }
 function identity(value: unknown): VerifiedTaskIdentity {
   const row = object(value);
@@ -193,7 +411,7 @@ function identity(value: unknown): VerifiedTaskIdentity {
 }
 function binding(value: unknown): ServiceTaskBinding {
   const row = object(value);
-  fields(row, ["taskId", "projectId", "identity", "serviceId", "templateVersion", "rootId", "subdir", "programPath", "privateRefs"]);
+  fields(row, ["taskId", "projectId", "identity", "serviceId", "environmentId", "templateVersion", "rootId", "subdir", "programPath", "privateRefs"]);
   const task = identity(row["identity"]);
   const taskId = text(row["taskId"], 128);
   if (task.taskId !== taskId) throw new Error("binding task identity mismatch");
@@ -220,24 +438,41 @@ function binding(value: unknown): ServiceTaskBinding {
   const names = privateRefs.map((ref) => process.platform === "win32" ? ref.key.toUpperCase() : ref.key);
   if (new Set(names).size !== names.length) throw new Error("duplicate private references");
   return { taskId, projectId: projectId(row["projectId"]), identity: task, serviceId: serviceId(row["serviceId"]),
-    templateVersion: version(row["templateVersion"]), rootId, subdir: row["subdir"], programPath, privateRefs };
+    environmentId: environmentId(row["environmentId"]), templateVersion: version(row["templateVersion"]),
+    rootId, subdir: row["subdir"], programPath, privateRefs };
 }
 function templates(value: unknown): TemplateDocument {
   const row = object(value);
   fields(row, ["version", "revisions"]);
-  if (row["version"] !== 1 || !Array.isArray(row["revisions"]) || row["revisions"].length > 500) throw new Error("invalid template document");
+  // A document written before the environment dimension exists cannot be
+  // partially trusted: its revisions name no environment, and assigning them
+  // to an invented "default" environment would make an environment nobody
+  // named read as a real, selected one. Refused BY NAME instead.
+  if (row["version"] === 1) throw new Error("service template document predates environments (version 1); migration required");
+  if (row["version"] !== 2 || !Array.isArray(row["revisions"]) || row["revisions"].length > 500) throw new Error("invalid template document");
   const revisions = row["revisions"].map(template);
-  const keys = revisions.map((entry) => `${entry.projectId}/${entry.serviceId}/${entry.version}`);
+  const keys = revisions.map((entry) => `${entry.projectId}/${entry.environmentId}/${entry.serviceId}/${entry.version}`);
   if (new Set(keys).size !== keys.length) throw new Error("duplicate template revision");
-  return { version: 1, revisions };
+  // A declaration is only meaningful against the revision scope it points into,
+  // so the target is resolved here too: a document whose declaration names a
+  // service this environment does not have refuses to be read at all rather
+  // than being partially trusted as a graph with missing edges.
+  const known = new Set(revisions.map((entry) => revisionScope(entry.projectId, entry.environmentId, entry.serviceId)));
+  for (const entry of revisions) requireDeclarationTargets(known, entry.projectId, entry.environmentId, entry.dependencies);
+  return { version: 2, revisions };
 }
 function machine(value: unknown): PrivateDocument {
   const row = object(value);
   fields(row, ["version", "bindings"]);
-  if (row["version"] !== 1 || !Array.isArray(row["bindings"]) || row["bindings"].length > 500) throw new Error("invalid machine document");
+  // A document written before the environment dimension exists cannot be
+  // partially trusted: its bindings name no environment, and assigning them to
+  // an invented "default" environment would make an environment nobody named
+  // read as a real, selected one. Refused BY NAME instead.
+  if (row["version"] === 1) throw new Error("service machine document predates environments (version 1); migration required");
+  if (row["version"] !== 2 || !Array.isArray(row["bindings"]) || row["bindings"].length > 500) throw new Error("invalid machine document");
   const bindings = row["bindings"].map(binding);
   if (new Set(bindings.map((entry) => `${entry.taskId}/${entry.serviceId}`)).size !== bindings.length) throw new Error("duplicate task service binding");
-  return { version: 1, bindings };
+  return { version: 2, bindings };
 }
 function readDocument<T>(file: string, empty: T, parse: (value: unknown) => T): T {
   if (!existsSync(file)) {
@@ -275,6 +510,33 @@ function writeDocument<T>(directory: string, file: string, value: T, parse: (val
   } finally { rmSync(temp, { force: true }); rmSync(backupTemp, { force: true }); }
 }
 
+/**
+ * One version bump, minted by the shared rules layer: `v12` → `v13`. The
+ * stored version is a number and the page shows the minted label, so both
+ * come from the same rule and can never drift.
+ */
+function nextVersion(latest: number): { version: number; label: string } {
+  const label = nextServiceTemplateVersion(`v${String(latest)}`);
+  return { version: Number(label.replace(/^v/, "")), label };
+}
+
+/**
+ * Newest revision of one service INSIDE one environment of an already-read
+ * template document. The environment is part of the identity: versions are
+ * minted per (project, environment, service), so this is the only comparison
+ * that can decide a version conflict for the environment the page edited.
+ */
+function latestRevision(doc: TemplateDocument, project: string, environment: string, id: string): ServiceTemplate | null {
+  return doc.revisions
+    .filter((entry) => entry.projectId === project && entry.environmentId === environment && entry.serviceId === id)
+    .reduce<ServiceTemplate | null>((max, entry) => (max === null || entry.version > max.version ? entry : max), null);
+}
+
+/** Every revision scope this document really holds: what a declaration may point into. */
+function revisionScopes(doc: TemplateDocument): Set<string> {
+  return new Set(doc.revisions.map((entry) => revisionScope(entry.projectId, entry.environmentId, entry.serviceId)));
+}
+
 export function resolvePrivateServiceRefs(
   refs: ServiceTaskBinding["privateRefs"], env: Record<string, string | undefined>,
 ): ServiceConfigEntry[] {
@@ -300,8 +562,39 @@ export class ServiceCatalog {
   constructor(private readonly directory: string, private readonly authority: ServiceCatalogAuthority) {}
   private templateFile(): string { return join(this.directory, TEMPLATES); }
   private machineFile(): string { return join(this.directory, PRIVATE); }
-  private readTemplates(): TemplateDocument { return readDocument(this.templateFile(), { version: 1, revisions: [] }, templates); }
-  private readMachine(): PrivateDocument { return readDocument(this.machineFile(), { version: 1, bindings: [] }, machine); }
+  private environmentFile(): string { return join(this.directory, ENVIRONMENTS); }
+  private readTemplates(): TemplateDocument { return readDocument(this.templateFile(), { version: 2, revisions: [] }, templates); }
+  private readMachine(): PrivateDocument { return readDocument(this.machineFile(), { version: 2, bindings: [] }, machine); }
+  private readEnvironments(): EnvironmentDocument { return readDocument(this.environmentFile(), { version: 1, environments: [] }, environmentDocument); }
+  /**
+   * The environments one project really has, by name. An empty list is the
+   * honest answer for a project nobody has named an environment in - there is
+   * no implicit default environment a page could silently select.
+   */
+  listEnvironments(project: string): ServiceEnvironment[] {
+    const id = projectId(project);
+    if (!this.authority.projectExists(id)) throw new Error("project unavailable");
+    return this.readEnvironments().environments.filter((row) => row.projectId === id)
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+  /** One explicit human creation. The name is the human's; a duplicate in the project is refused by name. */
+  createEnvironment(input: { projectId: string; name: string }): ServiceEnvironment {
+    const project = projectId(input.projectId);
+    if (!this.authority.projectExists(project)) throw new Error("project unavailable");
+    const row = environment({ projectId: project, environmentId: `e-${randomUUID()}`, name: input.name });
+    const doc = this.readEnvironments();
+    if (doc.environments.some((entry) => entry.projectId === project && entry.name.toLowerCase() === row.name.toLowerCase())) {
+      throw new Error("environment name already used");
+    }
+    writeDocument(this.directory, this.environmentFile(), { version: 1, environments: [...doc.environments, row] }, environmentDocument);
+    return row;
+  }
+  /** The environment of one project, or a named refusal: a template is never edited in an environment that does not exist. */
+  private requireEnvironment(project: string, id: string): ServiceEnvironment {
+    const selected = this.readEnvironments().environments.find((row) => row.projectId === project && row.environmentId === id);
+    if (!selected) throw new Error("environment unavailable");
+    return selected;
+  }
   private requireTask(taskId: string) {
     const owner = this.authority.task(taskId);
     if (!owner || owner.identity.taskId !== taskId || !this.authority.projectExists(owner.projectId)) throw new Error("task identity unavailable");
@@ -349,6 +642,7 @@ export class ServiceCatalog {
       const taskRoot = this.verifiedTaskRoot(owner);
       const { cwd, program } = this.verifiedLaunchPaths(selected.binding, taskRoot);
       const privateEntries = resolvePrivateServiceRefs(selected.binding.privateRefs, privateEnv);
+      const environment = this.requireEnvironment(project, selected.binding.environmentId);
       const pinned = selected.template.descriptor;
       const descriptor: ServiceDescriptor = { id: selected.binding.serviceId, name: pinned.name, program,
         args: [...pinned.args], cwd, ports: [...pinned.ports],
@@ -356,7 +650,8 @@ export class ServiceCatalog {
       if (validateServiceDescriptor(descriptor)) throw Error();
       const resolved = resolveServiceEnv({ repoDefaults: [], shared: selected.template.shared, privateEntries, task: [] });
       if (!resolved.ok) throw Error();
-      return { serviceId: selected.binding.serviceId, templateVersion: selected.binding.templateVersion, descriptor,
+      return { serviceId: selected.binding.serviceId, environmentId: environment.environmentId, environmentName: environment.name,
+        templateVersion: selected.binding.templateVersion, descriptor,
         layers: { repoDefaults: [], shared: selected.template.shared.map((entry) => ({ ...entry })), privateEntries, task: [] } };
     } catch { throw Error("service-launch-unavailable"); }
   }
@@ -390,38 +685,153 @@ export class ServiceCatalog {
       return { ...snapshot, catalogRevision: digest(snapshot) };
     } catch { throw Error("service-owner-catalog-unavailable"); }
   }
-  saveTemplate(input: { projectId: string; serviceId?: string; expectedVersion?: number;
-    descriptor: ServiceTemplate["descriptor"]; shared: ServiceConfigEntry[] }): ServiceTemplate {
+  saveTemplate(input: { projectId: string; environmentId: string; serviceId?: string; expectedVersion?: number;
+    descriptor: ServiceTemplate["descriptor"]; shared: ServiceConfigEntry[]; dependencies?: ServiceTemplateDependency[] }): ServiceTemplate {
     const project = projectId(input.projectId);
     if (!this.authority.projectExists(project)) throw new Error("project unavailable");
+    const environment = this.requireEnvironment(project, environmentId(input.environmentId)).environmentId;
     const doc = this.readTemplates();
     const id = input.serviceId === undefined ? `s-${randomUUID()}` : serviceId(input.serviceId);
-    const existing = doc.revisions.filter((entry) => entry.projectId === project && entry.serviceId === id);
-    const latest = existing.reduce((max, entry) => Math.max(max, entry.version), 0);
-    if ((input.expectedVersion ?? 0) !== latest) throw new Error("template version conflict");
     if (doc.revisions.some((entry) => entry.serviceId === id && entry.projectId !== project)) throw new Error("service belongs to another project");
-    const next = template({ projectId: project, serviceId: id, version: latest + 1, descriptor: input.descriptor, shared: input.shared });
-    writeDocument(this.directory, this.templateFile(), { version: 1, revisions: [...doc.revisions, next] }, templates);
+    const latest = latestRevision(doc, project, environment, id)?.version ?? 0;
+    if ((input.expectedVersion ?? 0) !== latest) throw new Error("template version conflict");
+    const next = template({ projectId: project, environmentId: environment, serviceId: id, version: nextVersion(latest).version,
+      descriptor: input.descriptor, shared: input.shared, dependencies: input.dependencies });
+    // Shape first, then the reference: a declaration is validated by the SAME
+    // parser the stored document goes through, so neither step can accept what
+    // the other refuses.
+    requireDeclarationTargets(revisionScopes(doc), project, environment, next.dependencies);
+    writeDocument(this.directory, this.templateFile(), { version: 2, revisions: [...doc.revisions, next] }, templates);
     return next;
   }
-  listTemplates(project: string): ServiceTemplate[] {
+  /**
+   * Read-only review of one shared-template edit against the revision the page
+   * last read (`expectedVersion`): the row-level diff, whether a launcher
+   * field changes, the version the confirmed save mints, and the pinned task
+   * bindings that then need an explicit restart. Validates the incoming
+   * revision exactly like a save (same parser, same fail-closed rules) and
+   * writes nothing; `saved` stays false so a caller cannot read a review as a
+   * completed save.
+   */
+  reviewTemplateUpdate(input: { projectId: string; environmentId: string; serviceId: string; expectedVersion: number;
+    descriptor: ServiceTemplate["descriptor"]; shared: ServiceConfigEntry[]; dependencies?: ServiceTemplateDependency[] }): ServiceTemplateUpdateReview {
+    const project = projectId(input.projectId);
+    if (!this.authority.projectExists(project)) throw new Error("project unavailable");
+    const environment = this.requireEnvironment(project, environmentId(input.environmentId)).environmentId;
+    const id = serviceId(input.serviceId);
+    const doc = this.readTemplates();
+    if (doc.revisions.some((entry) => entry.serviceId === id && entry.projectId !== project)) throw new Error("service belongs to another project");
+    const current = latestRevision(doc, project, environment, id);
+    if (!current || current.version !== version(input.expectedVersion)) throw new Error("template version conflict");
+    const minted = nextVersion(current.version);
+    const next = template({ projectId: project, environmentId: environment, serviceId: id, version: minted.version,
+      descriptor: input.descriptor, shared: input.shared, dependencies: input.dependencies });
+    // The review runs the same two refusals as the write, in the same order, so
+    // a declaration that cannot be saved can never be reviewed as approvable.
+    requireDeclarationTargets(revisionScopes(doc), project, environment, next.dependencies);
+    return this.reviewOfCurrent(current, next, minted.label);
+  }
+  private reviewOfCurrent(current: ServiceTemplate, next: ServiceTemplate, versionLabel: string): ServiceTemplateUpdateReview {
+    const descriptorChanged = JSON.stringify(current.descriptor) !== JSON.stringify(next.descriptor);
+    const dependenciesChanged = JSON.stringify(current.dependencies ?? null) !== JSON.stringify(next.dependencies ?? null);
+    const diff = diffServiceTemplate(current.shared, next.shared);
+    const contentChanged = descriptorChanged || diff.added.length > 0 || diff.changed.length > 0 || diff.removed.length > 0;
+    return { projectId: next.projectId, environmentId: next.environmentId, serviceId: next.serviceId, version: next.version, versionLabel, saved: false,
+      descriptorChanged, dependenciesChanged, contentChanged, diff,
+      // Restart-needed is a consequence of a real content change, not of the
+      // version counter: an identical save invalidates nothing, so it reports
+      // no restart instead of every binding that still pins the older number.
+      restartNeeded: contentChanged ? this.restartNeededFor(next) : [] };
+  }
+  /**
+   * Task bindings of one service still pinned to an older revision: adopting
+   * `entry.version` makes each of them a restart candidate. Each entry carries
+   * the task id as `id` and the service display name, because the restart is
+   * per task binding, not per template.
+   */
+  private restartNeededFor(entry: ServiceTemplate): ServiceTemplateUpdateReview["restartNeeded"] {
+    // Only bindings pinned INSIDE this environment: another environment's
+    // revision space is a different set of run configs, so a save here cannot
+    // make a task that uses it a restart candidate.
+    const pinned = this.readMachine().bindings.filter((row) => row.projectId === entry.projectId &&
+      row.environmentId === entry.environmentId && row.serviceId === entry.serviceId);
+    return restartNeededForTemplateAdopt(pinned.map((row) => ({ id: row.taskId, name: entry.descriptor.name, templateVersion: String(row.templateVersion) })),
+      String(entry.version)).map((row) => ({ taskId: row.id, serviceId: entry.serviceId, name: row.name,
+      from: Number(row.from), to: Number(row.to) }));
+  }
+  /**
+   * Read-only review of one binding adoption: the revision must exist for this
+   * project/service, the binding must exist, and the version must differ from
+   * the pinned one. Writes nothing, so a caller cannot read a review as an
+   * adopted binding.
+   */
+  reviewTaskBindingAdoption(input: { projectId: string; taskId: string; serviceId: string; templateVersion: number }): ServiceBindingAdoption {
+    return this.bindingAdoption(input, false);
+  }
+  /** The confirmed re-pin. Only `templateVersion` moves; the revision store stays append-only. */
+  adoptTaskBinding(input: { projectId: string; taskId: string; serviceId: string; templateVersion: number }): ServiceBindingAdoption {
+    return this.bindingAdoption(input, true);
+  }
+  /**
+   * Both steps run the same refusals in the same order: no binding, a stored
+   * identity that no longer matches the task, a foreign project, a revision
+   * that does not exist for this project/service, and a version that is
+   * already pinned. The written form re-validates the stored binding through
+   * `binding()`, so an adoption can only ever change the pinned version.
+   */
+  private bindingAdoption(input: { projectId: string; taskId: string; serviceId: string; templateVersion: number }, adopt: boolean): ServiceBindingAdoption {
+    const owner = this.requireTask(input.taskId);
+    const project = projectId(input.projectId);
+    if (owner.projectId !== project) throw new Error("task project changed");
+    const id = serviceId(input.serviceId);
+    const target = version(input.templateVersion);
+    const doc = this.readMachine();
+    const current = doc.bindings.find((entry) => entry.taskId === input.taskId && entry.serviceId === id);
+    if (!current) throw new Error("service binding unavailable");
+    if (current.projectId !== owner.projectId || !sameIdentity(current.identity, owner.identity) || !owner.rootIds.includes(current.rootId)) {
+      throw new Error("stored service task identity changed");
+    }
+    // Resolved INSIDE the binding's own environment: the same version number
+    // in another environment is a different revision, so an adoption can only
+    // ever re-pin what this task already selected.
+    const selected = this.template(project, current.environmentId, id, target);
+    if (!selected) throw new Error("template version unavailable");
+    if (current.templateVersion === target) throw new Error("template version already pinned");
+    const restartNeeded = this.restartNeededFor(selected);
+    const adoption: ServiceBindingAdoption = { taskId: input.taskId, serviceId: id, environmentId: current.environmentId,
+      from: current.templateVersion, to: target, adopted: false, restartNeeded };
+    if (!adopt) return adoption;
+    const next = binding({ ...current, templateVersion: target });
+    doc.bindings = doc.bindings.map((entry) => entry.taskId === input.taskId && entry.serviceId === id ? next : entry);
+    writeDocument(this.directory, this.machineFile(), doc, machine);
+    return { ...adoption, adopted: true };
+  }
+  /**
+   * Newest revision of each service INSIDE one environment. The environment is
+   * a required argument: there is no project-wide list a page could render as
+   * if an environment had been selected.
+   */
+  listTemplates(project: string, environment: string): ServiceTemplate[] {
     if (!this.authority.projectExists(projectId(project))) throw new Error("project unavailable");
+    const selected = this.requireEnvironment(project, environmentId(environment)).environmentId;
     const latest = new Map<string, ServiceTemplate>();
     for (const row of this.readTemplates().revisions) {
-      if (row.projectId === project && (latest.get(row.serviceId)?.version ?? 0) < row.version) latest.set(row.serviceId, row);
+      if (row.projectId === project && row.environmentId === selected && (latest.get(row.serviceId)?.version ?? 0) < row.version) latest.set(row.serviceId, row);
     }
     return [...latest.values()].sort((a, b) => a.descriptor.name.localeCompare(b.descriptor.name));
   }
-  template(project: string, id: string, selectedVersion: number): ServiceTemplate | null {
+  template(project: string, environment: string, id: string, selectedVersion: number): ServiceTemplate | null {
     if (!this.authority.projectExists(projectId(project))) throw new Error("project unavailable");
-    return this.readTemplates().revisions.find((row) => row.projectId === project && row.serviceId === serviceId(id) && row.version === version(selectedVersion)) ?? null;
+    const selected = this.requireEnvironment(project, environmentId(environment)).environmentId;
+    return this.readTemplates().revisions.find((row) => row.projectId === project && row.environmentId === selected &&
+      row.serviceId === serviceId(id) && row.version === version(selectedVersion)) ?? null;
   }
   prepareTaskBinding(project: string, input: Omit<ServiceTaskBinding, "projectId" | "identity" | "programPath">): ServiceTaskBinding {
     const owner = this.requireTask(input.taskId);
     if (owner.projectId !== projectId(project)) throw new Error("task project changed");
     if (this.listTask(input.taskId).some((row) => row.binding.serviceId === input.serviceId)) throw new Error("service already bound");
     if (!owner.rootIds.includes(input.rootId)) throw new Error("service root is not registered on task");
-    if (!this.template(project, input.serviceId, input.templateVersion)) throw new Error("template version unavailable");
+    if (!this.template(project, input.environmentId, input.serviceId, input.templateVersion)) throw new Error("template version unavailable");
     // Placeholder is only for schema validation; the native picker supplies the persisted path.
     return binding({ ...input, projectId: project, identity: owner.identity, programPath: process.execPath });
   }
@@ -431,8 +841,8 @@ export class ServiceCatalog {
       throw new Error("task identity changed during selection");
     }
     if (this.listTask(prepared.taskId).some((row) => row.binding.serviceId === prepared.serviceId)) throw new Error("service already bound");
-    const { taskId, serviceId, templateVersion, rootId, subdir, privateRefs } = prepared;
-    return this.bindTask({ taskId, serviceId, templateVersion, rootId, subdir, privateRefs, programPath });
+    const { taskId, serviceId, environmentId, templateVersion, rootId, subdir, privateRefs } = prepared;
+    return this.bindTask({ taskId, serviceId, environmentId, templateVersion, rootId, subdir, privateRefs, programPath });
   }
   previewSavedConfig(project: string, taskId: string, id: string, env: Record<string, string | undefined>): SavedServiceConfigPreview {
     const selected = this.taskBindings(project, taskId).find((row) => row.binding.serviceId === serviceId(id));
@@ -450,7 +860,7 @@ export class ServiceCatalog {
       return { key: row.key, value: maskServiceValue({ ...row, secret: masked }), masked, source: row.source };
     }) };
   }
-  taskBindings(project: string, taskId: string): { binding: ServiceTaskBinding; template: ServiceTemplate }[] {
+  taskBindings(project: string, taskId: string): ServiceCatalogBinding[] {
     if (this.requireTask(taskId).projectId !== projectId(project)) throw new Error("task project changed");
     return this.listTask(taskId);
   }
@@ -462,22 +872,22 @@ export class ServiceCatalog {
     if (previous && (previous.projectId !== owner.projectId || !sameIdentity(previous.identity, owner.identity))) {
       throw new Error("stored service task identity changed");
     }
-    const selected = this.template(owner.projectId, input.serviceId, input.templateVersion);
+    const selected = this.template(owner.projectId, input.environmentId, input.serviceId, input.templateVersion);
     if (!selected) throw new Error("template version unavailable");
     const next = binding({ ...input, identity: owner.identity, projectId: owner.projectId });
     doc.bindings = [...doc.bindings.filter((entry) => entry.taskId !== input.taskId || entry.serviceId !== input.serviceId), next];
     writeDocument(this.directory, this.machineFile(), doc, machine);
     return next;
   }
-  listTask(taskId: string): { binding: ServiceTaskBinding; template: ServiceTemplate }[] {
+  listTask(taskId: string): ServiceCatalogBinding[] {
     const owner = this.requireTask(taskId);
     const doc = this.readMachine();
     return doc.bindings.filter((row) => row.taskId === taskId).map((row) => {
       if (row.projectId !== owner.projectId || !sameIdentity(row.identity, owner.identity) ||
           !owner.rootIds.includes(row.rootId)) throw new Error("stored service task identity changed");
-      const selected = this.template(owner.projectId, row.serviceId, row.templateVersion);
+      const selected = this.template(owner.projectId, row.environmentId, row.serviceId, row.templateVersion);
       if (!selected) throw new Error("pinned template version missing");
-      return { binding: row, template: selected };
+      return { binding: row, template: selected, environment: this.requireEnvironment(owner.projectId, row.environmentId) };
     });
   }
 }

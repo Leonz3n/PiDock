@@ -381,6 +381,100 @@ describe("TaskWorkspaceFiles", () => {
     expect(result.error).toContain("git-failed");
   });
 
+  it("observes each worktree's own branch and uncommitted state, and never reads a link root", () => {
+    const calls: { args: readonly string[]; cwd: string }[] = [];
+    const files = new TaskWorkspaceFiles(
+      "task-aaaaaaaa",
+      TASK_DIR,
+      store(),
+      readers({
+        runGit: (args, cwd) => {
+          calls.push({ args, cwd });
+          const front = cwd.endsWith("front-monorepo");
+          if (args[0] === "rev-parse") return { ok: true, stdout: front ? "task/task-aaaaaaaa\n" : "task/task-bbbbbbbb\n" };
+          return { ok: true, stdout: front ? " M README.md\n" : "" };
+        },
+      }),
+    );
+    const roots = files.observedRoots();
+    expect(roots.map((root) => root.kind)).toEqual(["worktree", "worktree", "shared-dir"]);
+    expect(roots[0]).toMatchObject({
+      baselineBranch: "main",
+      expectedBranch: "work/checkout",
+      workingBranch: { state: "observed", value: "task/task-aaaaaaaa" },
+      dirty: { state: "observed", value: true },
+    });
+    expect(roots[1]).toMatchObject({
+      baselineBranch: "release/v2",
+      expectedBranch: "work/checkout",
+      workingBranch: { state: "observed", value: "task/task-bbbbbbbb" },
+      dirty: { state: "observed", value: false },
+    });
+    // Two tasks of one repo: distinct observed branches, and neither baseline is
+    // the working branch.
+    expect(roots[0]!.workingBranch).not.toEqual(roots[1]!.workingBranch);
+    expect(roots[0]!.baselineBranch).not.toBe((roots[0]!.workingBranch as { value: string }).value);
+    // The link root carries neither an observation nor a declared branch, and no
+    // git child is spawned for it.
+    expect(roots[2]!.workingBranch).toBeUndefined();
+    expect(roots[2]!.baselineBranch).toBeUndefined();
+    expect(calls).toEqual([
+      { args: ["rev-parse", "--abbrev-ref", "HEAD"], cwd: `${TASK_DIR}/front-monorepo` },
+      { args: ["status", "--porcelain"], cwd: `${TASK_DIR}/front-monorepo` },
+      { args: ["rev-parse", "--abbrev-ref", "HEAD"], cwd: `${TASK_DIR}/invoice-service` },
+      { args: ["status", "--porcelain"], cwd: `${TASK_DIR}/invoice-service` },
+    ]);
+  });
+
+  it("names an unread worktree instead of answering its declared branch or 'clean'", () => {
+    const files = new TaskWorkspaceFiles(
+      "task-aaaaaaaa",
+      TASK_DIR,
+      store(),
+      readers({
+        runGit: (args) =>
+          args[0] === "rev-parse"
+            ? { ok: false, error: "工作副本目录不可读：该工作副本可能已被移除" }
+            : { ok: false, error: "读取 Git 状态超时" },
+      }),
+    );
+    const [first] = files.observedRoots();
+    expect(first!.workingBranch).toEqual({ state: "unknown", reason: expect.stringContaining("不可读") });
+    // A failed status read is NOT an empty (clean) worktree.
+    expect(first!.dirty).toEqual({ state: "unknown", reason: "读取 Git 状态超时" });
+    // The declaration stays visible as a declaration, and is not the answer.
+    expect(first!.expectedBranch).toBe("work/checkout");
+  });
+
+  it("reads a detached worktree as a named unknown, never as a branch", () => {
+    const files = new TaskWorkspaceFiles(
+      "task-aaaaaaaa",
+      TASK_DIR,
+      store(),
+      readers({ runGit: (args) => ({ ok: true, stdout: args[0] === "rev-parse" ? "HEAD\n" : "" }) }),
+    );
+    const [first] = files.observedRoots();
+    expect(first!.workingBranch).toEqual({ state: "unknown", reason: expect.stringContaining("分离头指针") });
+    expect(first!.dirty).toEqual({ state: "observed", value: false });
+  });
+
+  it("derives roots without running git, so no path read pays a git child per root", () => {
+    const calls: string[] = [];
+    const files = new TaskWorkspaceFiles(
+      "task-aaaaaaaa",
+      TASK_DIR,
+      store(),
+      readers({
+        runGit: (args) => {
+          calls.push([...args].join(" "));
+          return { ok: true, stdout: "" };
+        },
+      }),
+    );
+    expect(files.roots().map((root) => root.id)).toEqual(["front-monorepo", "invoice-service", "dir-51cd20bb"]);
+    expect(calls).toEqual([]);
+  });
+
   it("gives the delivery target for a worktree and refuses it for a link", () => {
     const files = new TaskWorkspaceFiles("task-aaaaaaaa", TASK_DIR, store(), readers());
     const worktree = files.delivery({ rootId: "front-monorepo" });

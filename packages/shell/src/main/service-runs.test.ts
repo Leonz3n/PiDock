@@ -42,6 +42,60 @@ describe("code state and build freshness", () => {
     expect(classifyBuildFreshness({ dirty: false })).toBe("unknown");
   });
 
+  it("never reads a build as `fresh` unless a build commit was really observed", () => {
+    // The real production shape since box 6: main observed the worktree (so the
+    // code state is real) and NOTHING observed a build commit, because no service
+    // recipe names a build artifact. A clean tree must then read 无法判断构建状态
+    // rather than inheriting the code commit as a build commit.
+    const clean = buildRunRecord({
+      runId: "run-1", taskId: "task-aaaaaaaa", serviceId: "invoice-service", templateVersion: "v13",
+      ports: [9001], portsSource: "declared", code: { commit: "abc1234", dirty: false },
+      processIdentity: { owner: "human", pid: 4321, startedAt: "2026-09-22T10:00:00.000Z" },
+      taskDir: "/tasks/task-aaaaaaaa", startedAt: "2026-09-22T10:00:00.000Z",
+    });
+    expect(clean.codeState).toMatchObject({ kind: "committed-clean", commit: "abc1234" });
+    expect(clean.buildFreshness).toBe("unknown");
+
+    // A dirty tree with no recorded build commit is distinguishable from a fresh
+    // build AND from uncommitted-but-unknown code: it is `uncommitted-code`.
+    const dirty = buildRunRecord({
+      runId: "run-2", taskId: "task-aaaaaaaa", serviceId: "invoice-service", templateVersion: "v13",
+      ports: [9001], portsSource: "declared", code: { commit: "abc1234", dirty: true },
+      processIdentity: { owner: "human", pid: 4322, startedAt: "2026-09-22T10:05:00.000Z" },
+      taskDir: "/tasks/task-aaaaaaaa", startedAt: "2026-09-22T10:05:00.000Z",
+    });
+    expect(dirty.codeState.kind).toBe("uncommitted");
+    expect(dirty.buildFreshness).toBe("uncommitted-code");
+
+    // An OLD build is distinguishable from a fresh one only when the build's own
+    // commit is known: the same record with `build.commit` = HEAD is fresh, and
+    // with an older commit it is stale - while the dirty tree still wins.
+    const record = { ...clean, runId: "run-3" };
+    const fresh = buildRunRecord({
+      runId: "run-4", taskId: "task-aaaaaaaa", serviceId: "invoice-service", templateVersion: "v13",
+      ports: [9001], portsSource: "declared", code: { commit: "abc1234", dirty: false }, build: { commit: "abc1234" },
+      processIdentity: record.processIdentity, taskDir: "/tasks/task-aaaaaaaa", startedAt: "2026-09-22T10:10:00.000Z",
+    });
+    const stale = buildRunRecord({
+      runId: "run-5", taskId: "task-aaaaaaaa", serviceId: "invoice-service", templateVersion: "v13",
+      ports: [9001], portsSource: "declared", code: { commit: "abc1234", dirty: false }, build: { commit: "def5678" },
+      processIdentity: record.processIdentity, taskDir: "/tasks/task-aaaaaaaa", startedAt: "2026-09-22T10:15:00.000Z",
+    });
+    expect(fresh.buildFreshness).toBe("fresh");
+    expect(stale.buildFreshness).toBe("stale-build");
+    expect(isRunRecordCurrent(fresh, { headCommit: "abc1234", dirty: false })).toBe(true);
+    expect(isRunRecordCurrent(stale, { headCommit: "abc1234", dirty: false })).toBe(false);
+    // And a run nobody observed is current for nothing.
+    const unobserved = buildRunRecord({
+      runId: "run-6", taskId: "task-aaaaaaaa", serviceId: "invoice-service", templateVersion: "v13",
+      ports: [9001], portsSource: "declared", processIdentity: record.processIdentity,
+      taskDir: "/tasks/task-aaaaaaaa", startedAt: "2026-09-22T10:20:00.000Z",
+    });
+    expect(unobserved.codeState.kind).toBe("unknown");
+    expect(unobserved.buildFreshness).toBe("unknown");
+    expect(isRunRecordCurrent(unobserved, { headCommit: "abc1234", dirty: false })).toBe(false);
+  });
+
   it("records config version, ports, process identity and log path on one run", () => {
     const record = buildRunRecord({
       runId: "run-1",
@@ -49,6 +103,7 @@ describe("code state and build freshness", () => {
       serviceId: "invoice-service",
       templateVersion: "v13",
       ports: [9001],
+      portsSource: "declared",
       code: { commit: "abc1234", dirty: true },
       build: { commit: "abc1234" },
       processIdentity: { owner: "human", pid: 4321, startedAt: "2026-09-22T10:00:00.000Z" },
@@ -73,6 +128,7 @@ describe("code state and build freshness", () => {
       serviceId: "invoice-service",
       templateVersion: "v13",
       ports: [9001],
+      portsSource: "declared",
       code: { commit: "abc1234", dirty: false },
       build: { commit: "abc1234" },
       processIdentity: { owner: "agent", pid: 4322, startedAt: "2026-09-22T10:05:00.000Z" },
@@ -90,6 +146,7 @@ describe("code state and build freshness", () => {
       serviceId: "saas-bff",
       templateVersion: "v13",
       ports: [3001],
+      portsSource: "declared",
       code: { commit: "abc1234", dirty: false },
       build: { commit: "abc1234" },
       processIdentity: { owner: "human", pid: 99, startedAt: "2026-09-22T10:00:00.000Z" },

@@ -54,7 +54,7 @@ async function run() {
       const op = (name, payload) => registry.routeTaskOp({ workspaceId: "active-turn-quit", taskId, op: name, payload, origin: { kind: "shell-ui", senderWebContentsId: 1 } });
       await op("task/sdkProvider", { provider: { config: { profileId: "fixture", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, modelId: "fixture", contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_FIXTURE", generation: 1 }, credential } });
       const started = await op("task/sdkStart", { sessionId: "main", requestId: "request-a", text: "active shutdown fixture" }); assert.equal(started.payload.turn.state, "accepted");
-      const hit = await wait(() => requests.find((r) => r.mode === mode), "model-request"); assert.equal(hit.authorized, true); assert.equal(hit.expectedPath, true); assert.equal(hit.modelMatched, true); assert.equal(hit.tools, 0);
+      const hit = await wait(() => requests.find((r) => r.mode === mode), "model-request"); assert.equal(hit.authorized, true); assert.equal(hit.expectedPath, true); assert.equal(hit.modelMatched, true); assert.equal(hit.tools, 4); // #5: four task-scoped tools are declared.
       if (mode === "active-stream") await wait(() => events.find((e) => e.event?.taskId === taskId && e.event.type === "delta"), "first-delta");
       if (mode === "provider-disconnect") await wait(() => events.find((e) => e.turn?.taskId === taskId && e.turn.state === "failed"), "failed-turn");
       else assert.equal(hit.closed, false);

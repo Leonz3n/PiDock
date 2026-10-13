@@ -367,8 +367,9 @@ export interface HostAdapter {
   workspaceBrowser(taskId: string, request?: WorkspaceBrowserRequest): Promise<WorkspaceBrowserView>;
   /**
    * [PiDock 10] (#15) built-in terminal: plan one terminal for a task root
-   * (cwd + resolved env rows, masked) and list this task's instances. No real
-   * pty in this slice (`spawnImplemented: false`).
+   * (cwd + resolved env rows, masked) and list this task's instances. The shell
+   * Host spawns a real pty for a start; `spawnImplemented` reports whether this
+   * Host can fork it.
    */
   planTerminal(taskId: string, request: TerminalPlanRequest): Promise<TerminalPlanView>;
   controlTerminal(taskId: string, request: TerminalControlRequest): Promise<TerminalControlResultView>;

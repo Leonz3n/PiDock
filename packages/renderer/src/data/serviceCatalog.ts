@@ -1,9 +1,48 @@
+import {
+  serviceWorkdirFromMain,
+  type ServiceHealthKind,
+  type ServiceRunType,
+} from "./serviceTemplateRules";
+
+/** One shared row of a stored revision. Main keeps the layer credential-free (`secret: false`, no credential-looking key, no credential/path-looking value) and fails closed, so a shared row is a human-typed literal, not a secret. */
+export interface ServiceTemplateSharedRow {
+  key: string;
+  value: string;
+}
+
+/**
+ * The two 服务依赖声明 kinds of ADR 0002, spelled exactly as the stored revision
+ * spells them. `call` is a runtime call dependency (the callee must listen
+ * first), `prestart` a start precondition (the target must be ready first); the
+ * two stay distinct all the way into the plan.
+ */
+export type ServiceDependencyKind = "call" | "prestart";
+
+/** One declared dependency of a revision: the target's own catalog service id and the kind. */
+export interface ServiceDependencyView {
+  to: string;
+  kind: ServiceDependencyKind;
+}
+
 export interface ServiceTemplateView {
   projectId: string;
+  /** Environment this revision belongs to; the editor only ever edits one environment's revisions. */
+  environmentId: string;
   serviceId: string;
   version: number;
-  descriptor: { name: string; program: string; args: string[]; ports: number[]; runType: "long-lived" | "prepare" | "one-shot" };
-  sharedKeys: string[];
+  descriptor: {
+    name: string;
+    program: string;
+    args: string[];
+    ports: number[];
+    runType: ServiceRunType;
+    healthCheck?: { kind: ServiceHealthKind; target?: string };
+    /** Repo-relative working directory default; the task binding's own work directory is what a launch resolves. */
+    workdir?: string;
+  };
+  shared: ServiceTemplateSharedRow[];
+  /** The revision's 服务依赖声明; ABSENT when it declares none (no declaration = no edge). */
+  dependencies?: ServiceDependencyView[];
 }
 
 function object(value: unknown): value is Record<string, unknown> {
@@ -13,6 +52,10 @@ function object(value: unknown): value is Record<string, unknown> {
 export interface ServiceBindingView {
   taskId: string;
   serviceId: string;
+  /** Environment this task selected for this service, as main's own store answered it. */
+  environmentId: string;
+  /** The environment's name at read time, so the page names it instead of guessing one. */
+  environmentName: string;
   templateVersion: number;
   rootId: string;
   subdir: string;
@@ -22,37 +65,334 @@ export function serviceBindingsFromMain(value: unknown, taskId: string): Service
   if (!Array.isArray(value) || value.length > 500) return null;
   const result: ServiceBindingView[] = [];
   for (const row of value) {
-    if (!object(row) || Object.keys(row).sort().join(",") !== "privateKeys,rootId,serviceId,subdir,taskId,templateVersion" ||
+    if (!object(row) || Object.keys(row).sort().join(",") !== "environmentId,environmentName,privateKeys,rootId,serviceId,subdir,taskId,templateVersion" ||
         row["taskId"] !== taskId || typeof row["serviceId"] !== "string" || !/^s-[0-9a-f-]{36}$/i.test(row["serviceId"]) ||
+        typeof row["environmentId"] !== "string" || !/^e-[0-9a-f-]{36}$/i.test(row["environmentId"]) ||
+        typeof row["environmentName"] !== "string" || row["environmentName"].length === 0 ||
         !Number.isSafeInteger(row["templateVersion"]) || (row["templateVersion"] as number) < 1 ||
         typeof row["rootId"] !== "string" || typeof row["subdir"] !== "string" || !Array.isArray(row["privateKeys"]) ||
         row["privateKeys"].some((key) => typeof key !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key))) return null;
-    result.push({ taskId, serviceId: row["serviceId"], templateVersion: row["templateVersion"] as number,
+    result.push({ taskId, serviceId: row["serviceId"], environmentId: row["environmentId"], environmentName: row["environmentName"],
+      templateVersion: row["templateVersion"] as number,
       rootId: row["rootId"], subdir: row["subdir"], privateKeys: [...row["privateKeys"]] as string[] });
   }
   return new Set(result.map((row) => row.serviceId)).size === result.length ? result : null;
 }
 
-/** Public projection only: machine paths, reference names and values do not enter the page model. */
-export function serviceTemplatesFromMain(value: unknown, projectId: string): ServiceTemplateView[] | null {
+/** One named, project-scoped environment as main stores it ([PiDock 04] #7 box 1, GLOSSARY:23-24). */
+export interface ServiceEnvironmentView {
+  projectId: string;
+  environmentId: string;
+  name: string;
+}
+
+/**
+ * Strict parse of main's `{op:"listEnvironments"}` answer. An empty list is the
+ * honest answer for a project nobody has named an environment in: the page must
+ * then show no selection instead of inventing one.
+ */
+export function serviceEnvironmentsFromMain(value: unknown, projectId: string): ServiceEnvironmentView[] | null {
+  if (!Array.isArray(value) || value.length > 200) return null;
+  const result: ServiceEnvironmentView[] = [];
+  for (const entry of value) {
+    if (!object(entry) || Object.keys(entry).sort().join(",") !== "environmentId,name,projectId" ||
+        entry["projectId"] !== projectId || typeof entry["environmentId"] !== "string" ||
+        !/^e-[0-9a-f-]{36}$/i.test(entry["environmentId"]) ||
+        typeof entry["name"] !== "string" || entry["name"].length === 0 || entry["name"].length > 64) return null;
+    result.push({ projectId, environmentId: entry["environmentId"], name: entry["name"] });
+  }
+  return new Set(result.map((row) => row.environmentId)).size === result.length ? result : null;
+}
+
+function descriptorFromMain(value: unknown): ServiceTemplateView["descriptor"] | null {
+  if (!object(value)) return null;
+  const keys = Object.keys(value);
+  if (!["name", "program", "args", "ports", "runType"].every((key) => keys.includes(key)) ||
+      keys.some((key) => !["name", "program", "args", "ports", "runType", "healthCheck", "workdir"].includes(key))) return null;
+  const name = value["name"];
+  const program = value["program"];
+  const args = value["args"];
+  const ports = value["ports"];
+  if (typeof name !== "string" || !name || typeof program !== "string" || !program || !Array.isArray(args) ||
+      args.some((arg) => typeof arg !== "string") || !Array.isArray(ports) ||
+      ports.some((port) => !Number.isInteger(port) || port < 1 || port > 65535) ||
+      !["long-lived", "prepare", "one-shot"].includes(value["runType"] as string)) return null;
+  let healthCheck: ServiceTemplateView["descriptor"]["healthCheck"];
+  if (value["healthCheck"] !== undefined) {
+    const health = value["healthCheck"];
+    if (!object(health) || Object.keys(health).sort().join(",") !== (health["target"] === undefined ? "kind" : "kind,target") ||
+        !["http", "tcp", "grpc"].includes(health["kind"] as string) ||
+        (health["target"] !== undefined && (typeof health["target"] !== "string" || health["target"].length > 512))) return null;
+    healthCheck = { kind: health["kind"] as ServiceHealthKind, ...(health["target"] === undefined ? {} : { target: health["target"] as string }) };
+  }
+  let workdir: string | undefined;
+  if (value["workdir"] !== undefined) {
+    const parsed = serviceWorkdirFromMain(value["workdir"]);
+    if (parsed === null) return null;
+    workdir = parsed;
+  }
+  return { name, program, args: [...args] as string[], ports: [...ports] as number[], runType: value["runType"] as ServiceRunType,
+    ...(healthCheck === undefined ? {} : { healthCheck }), ...(workdir === undefined ? {} : { workdir }) };
+}
+
+function sharedFromMain(value: unknown): ServiceTemplateSharedRow[] | null {
+  if (!Array.isArray(value) || value.length > 80) return null;
+  const rows: ServiceTemplateSharedRow[] = [];
+  for (const entry of value) {
+    if (!object(entry) || Object.keys(entry).sort().join(",") !== "key,value" ||
+        typeof entry["key"] !== "string" || typeof entry["value"] !== "string" ||
+        !/^[A-Za-z_][A-Za-z0-9_]*$/.test(entry["key"]) || entry["value"].length > 2048) return null;
+    rows.push({ key: entry["key"], value: entry["value"] });
+  }
+  return new Set(rows.map((row) => row.key)).size === rows.length ? rows : null;
+}
+
+/**
+ * Main's `dependencies` rows, as a page may read them: the target's catalog
+ * service id and one of the two kinds, nothing else. `undefined` is the honest
+ * "this revision declares nothing"; a malformed row - including a self-edge or
+ * an exact duplicate - is refused (null) instead of being rendered as a graph a
+ * main process did not write.
+ */
+function dependenciesFromMain(value: unknown, serviceId: string): ServiceDependencyView[] | undefined | null {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length === 0 || value.length > 40) return null;
+  const rows: ServiceDependencyView[] = [];
+  for (const entry of value) {
+    if (!object(entry) || Object.keys(entry).sort().join(",") !== "kind,to" || typeof entry["to"] !== "string" ||
+        !/^s-[0-9a-f-]{36}$/i.test(entry["to"]) || (entry["kind"] !== "call" && entry["kind"] !== "prestart") ||
+        entry["to"] === serviceId) return null;
+    rows.push({ to: entry["to"], kind: entry["kind"] });
+  }
+  return new Set(rows.map((row) => `${row.to}/${row.kind}`)).size === rows.length ? rows : null;
+}
+
+/**
+ * Public projection only: machine paths, program paths, reference names and
+ * reference values do not enter the page model. Shared rows do, because main
+ * stores them fail-closed (credential-free keys and values, no machine path)
+ * and the editor has to prefill an existing revision to edit it. The 服务依赖声明
+ * rows come along for the same reason: they are this revision's own declaration
+ * and the editor has to show and re-send them.
+ */
+export function serviceTemplatesFromMain(value: unknown, projectId: string, environmentId: string): ServiceTemplateView[] | null {
   if (!Array.isArray(value) || value.length > 500) return null;
   const result: ServiceTemplateView[] = [];
   for (const entry of value) {
-    if (!object(entry) || !object(entry["descriptor"]) || !Array.isArray(entry["sharedKeys"]) ||
-        Object.keys(entry).sort().join(",") !== "descriptor,projectId,serviceId,sharedKeys,version" ||
-        entry["projectId"] !== projectId || typeof entry["serviceId"] !== "string" ||
+    const declared = object(entry) ? dependenciesFromMain(entry["dependencies"], typeof entry["serviceId"] === "string" ? entry["serviceId"] : "") : null;
+    if (!object(entry) ||
+        !["descriptor,environmentId,projectId,serviceId,shared,version",
+          "dependencies,descriptor,environmentId,projectId,serviceId,shared,version"].includes(Object.keys(entry).sort().join(",")) ||
+        entry["projectId"] !== projectId || entry["environmentId"] !== environmentId || typeof entry["serviceId"] !== "string" ||
         !/^s-[0-9a-f-]{36}$/i.test(entry["serviceId"]) || !Number.isSafeInteger(entry["version"]) || (entry["version"] as number) < 1) return null;
-    const descriptor = entry["descriptor"];
-    if (typeof descriptor["name"] !== "string" || !descriptor["name"] || typeof descriptor["program"] !== "string" ||
-        !descriptor["program"] || !Array.isArray(descriptor["args"]) || descriptor["args"].some((arg) => typeof arg !== "string") ||
-        !Array.isArray(descriptor["ports"]) || descriptor["ports"].some((port) => !Number.isInteger(port) || port < 1 || port > 65535) ||
-        !["long-lived", "prepare", "one-shot"].includes(descriptor["runType"] as string) ||
-        entry["sharedKeys"].some((key: unknown) => typeof key !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key))) return null;
-    result.push({ projectId, serviceId: entry["serviceId"], version: entry["version"] as number,
-      descriptor: { name: descriptor["name"], program: descriptor["program"], args: [...descriptor["args"]] as string[],
-        ports: [...descriptor["ports"]] as number[], runType: descriptor["runType"] as ServiceTemplateView["descriptor"]["runType"] },
-      sharedKeys: [...entry["sharedKeys"]] as string[] });
+    const descriptor = descriptorFromMain(entry["descriptor"]);
+    const shared = sharedFromMain(entry["shared"]);
+    if (!descriptor || !shared || declared === null) return null;
+    result.push({ projectId, environmentId, serviceId: entry["serviceId"], version: entry["version"] as number, descriptor, shared,
+      ...(declared === undefined ? {} : { dependencies: declared }) });
   }
   if (new Set(result.map((row) => row.serviceId)).size !== result.length) return null;
   return result;
+}
+
+/** The honest restart consequence of one shared-template write, computed and observed by main. */
+export interface ServiceRestartConsequenceView {
+  /** Whether the write changed the launch material of any binding at all. */
+  changed: boolean;
+  /** A shared-template save or a binding adoption never starts, stops or restarts a process. */
+  processRestarted: false;
+  /** Task ids whose forked service-control channel this write revoked; empty for a read-only review, and always empty for a shared-template save (it moves no binding's pin). */
+  fencedTaskIds: string[];
+}
+
+function restartConsequenceFromMain(value: unknown): ServiceRestartConsequenceView | null {
+  if (!object(value) || Object.keys(value).sort().join(",") !== "changed,fencedTaskIds,processRestarted") return null;
+  const ids = value["fencedTaskIds"];
+  if (typeof value["changed"] !== "boolean" || value["processRestarted"] !== false ||
+      !textList(ids, 500) || new Set(ids).size !== ids.length) return null;
+  return { changed: value["changed"], processRestarted: false, fencedTaskIds: [...ids] };
+}
+
+/** One pinned task binding whose service must be restarted before the new template takes effect. */
+export interface ServiceTemplateRestartRow {
+  taskId: string;
+  serviceId: string;
+  name: string;
+  from: number;
+  to: number;
+}
+
+export interface ServiceTemplateUpdateReviewView {
+  projectId: string;
+  environmentId: string;
+  serviceId: string;
+  version: number;
+  versionLabel: string;
+  /** False for a review, true only once main reports the revision written. */
+  saved: boolean;
+  descriptorChanged: boolean;
+  /**
+   * True when the revision's 服务依赖声明 differ from the current one. A separate
+   * fact on purpose: a declaration is no launch field, so a declaration-only save
+   * changes which edges a LATER adopter's plan reads without restarting anything.
+   */
+  dependenciesChanged: boolean;
+  /** True only when the minted revision differs from the current one in any launched field. */
+  contentChanged: boolean;
+  diff: { added: string[]; changed: { key: string; before: string; after: string }[]; removed: string[] };
+  restartNeeded: ServiceTemplateRestartRow[];
+  restart: ServiceRestartConsequenceView;
+}
+
+function textList(value: unknown, max: number): value is string[] {
+  return Array.isArray(value) && value.length <= max && value.every((entry) => typeof entry === "string");
+}
+
+/**
+ * Strict parse of main's `{op:"update"}` answer. A review (`saved:false`) and a
+ * written revision (`saved:true`) share one shape, so the page can never read a
+ * review as a completed save; a mismatched identity, version or confirmation
+ * fails closed instead of rendering a partial result.
+ */
+export function serviceTemplateUpdateFromMain(
+  value: unknown, expected: { projectId: string; environmentId: string; serviceId: string; version: number },
+): ServiceTemplateUpdateReviewView | null {
+  if (!object(value) || Object.keys(value).sort().join(",") !=
+      "contentChanged,dependenciesChanged,descriptorChanged,diff,environmentId,projectId,restart,restartNeeded,saved,serviceId,version,versionLabel") return null;
+  if (value["projectId"] !== expected.projectId || value["environmentId"] !== expected.environmentId ||
+      value["serviceId"] !== expected.serviceId ||
+      value["version"] !== expected.version || typeof value["versionLabel"] !== "string" ||
+      !/^v[1-9][0-9]*$/.test(value["versionLabel"]) || typeof value["saved"] !== "boolean" ||
+      typeof value["descriptorChanged"] !== "boolean" || typeof value["contentChanged"] !== "boolean" ||
+      // Main always reports whether the 服务依赖声明 moved: a review that omits
+      // the fact is refused rather than read as "nothing changed".
+      typeof value["dependenciesChanged"] !== "boolean") return null;
+  const restart = restartConsequenceFromMain(value["restart"]);
+  if (!restart) return null;
+  const diff = value["diff"];
+  if (!object(diff) || Object.keys(diff).sort().join(",") !== "added,changed,removed" ||
+      !textList(diff["added"], 80) || !textList(diff["removed"], 80) || !Array.isArray(diff["changed"]) || diff["changed"].length > 80) return null;
+  const changed: { key: string; before: string; after: string }[] = [];
+  for (const entry of diff["changed"]) {
+    if (!object(entry) || Object.keys(entry).sort().join(",") !== "after,before,key" ||
+        typeof entry["key"] !== "string" || typeof entry["before"] !== "string" || typeof entry["after"] !== "string") return null;
+    changed.push({ key: entry["key"], before: entry["before"], after: entry["after"] });
+  }
+  const restartNeeded = value["restartNeeded"];
+  if (!Array.isArray(restartNeeded) || restartNeeded.length > 500) return null;
+  const restarts: ServiceTemplateRestartRow[] = [];
+  for (const entry of restartNeeded) {
+    if (!object(entry) || Object.keys(entry).sort().join(",") !== "from,name,serviceId,taskId,to" ||
+        typeof entry["taskId"] !== "string" || entry["serviceId"] !== expected.serviceId || typeof entry["name"] !== "string" ||
+        !Number.isSafeInteger(entry["from"]) || !Number.isSafeInteger(entry["to"]) ||
+        (entry["from"] as number) < 1 || entry["to"] !== expected.version) return null;
+    restarts.push({ taskId: entry["taskId"], serviceId: expected.serviceId, name: entry["name"],
+      from: entry["from"] as number, to: entry["to"] as number });
+  }
+  return { projectId: expected.projectId, environmentId: expected.environmentId, serviceId: expected.serviceId, version: expected.version,
+    versionLabel: value["versionLabel"], saved: value["saved"], descriptorChanged: value["descriptorChanged"],
+    dependenciesChanged: value["dependenciesChanged"], contentChanged: value["contentChanged"],
+    diff: { added: [...diff["added"]], changed, removed: [...diff["removed"]] }, restartNeeded: restarts, restart };
+}
+
+/**
+ * Strict parse of main's `{op:"adoptBinding"}` answer. A review (`adopted:false`)
+ * and a written re-pin (`adopted:true`) share one shape, so the page can never
+ * read a review as an adopted binding; a moved identity, a different version
+ * pair or a malformed restart row fails closed instead of rendering a partial
+ * result.
+ */
+export function serviceBindingAdoptionFromMain(
+  value: unknown, expected: { taskId: string; serviceId: string; environmentId: string; from: number; to: number },
+): ServiceBindingAdoptionView | null {
+  if (!object(value) || Object.keys(value).sort().join(",") !== "adopted,environmentId,from,restart,restartNeeded,serviceId,taskId,to") return null;
+  if (value["taskId"] !== expected.taskId || value["serviceId"] !== expected.serviceId ||
+      value["environmentId"] !== expected.environmentId ||
+      value["from"] !== expected.from || value["to"] !== expected.to || value["from"] === value["to"] ||
+      typeof value["adopted"] !== "boolean") return null;
+  const restart = restartConsequenceFromMain(value["restart"]);
+  if (!restart) return null;
+  const rows = value["restartNeeded"];
+  if (!Array.isArray(rows) || rows.length > 500) return null;
+  const restarts: ServiceTemplateRestartRow[] = [];
+  for (const entry of rows) {
+    if (!object(entry) || Object.keys(entry).sort().join(",") !== "from,name,serviceId,taskId,to" ||
+        typeof entry["taskId"] !== "string" || entry["serviceId"] !== expected.serviceId || typeof entry["name"] !== "string" ||
+        !Number.isSafeInteger(entry["from"]) || (entry["from"] as number) < 1 || entry["from"] === entry["to"] ||
+        !Number.isSafeInteger(entry["to"]) || entry["to"] !== expected.to) return null;
+    if (restarts.some((row) => row.taskId === entry["taskId"])) return null;
+    restarts.push({ taskId: entry["taskId"], serviceId: expected.serviceId, name: entry["name"],
+      from: entry["from"] as number, to: entry["to"] as number });
+  }
+  return { taskId: expected.taskId, serviceId: expected.serviceId, environmentId: expected.environmentId,
+    from: expected.from, to: expected.to, adopted: value["adopted"], restartNeeded: restarts, restart };
+}
+
+/** One explicit re-bind of a task's service owner ([PiDock 04] #7 slice): main's real observation, what it changes and whether the confirmed replacement ran. */
+export interface ServiceOwnerRebindView {
+  taskId: string;
+  projectId: string;
+  state: "absent" | "current" | "fenced";
+  confirmed: boolean;
+  rebound: boolean;
+  /** Named services whose resolved owner contract differs between the replaced owner and the catalog now. */
+  changes: { serviceId: string; name: string; was: number | null; now: number | null; configChanged: boolean }[];
+  /** Copy facts: the re-bind replaces only the ownership binding. */
+  stopsProcesses: false;
+  restartsProcesses: false;
+}
+
+/**
+ * Strict parse of main's `{op:"rebindServiceOwner"}` answer. The identity, the
+ * three real states and the two copy facts are required, and every change row
+ * must name a service on this task, so the page can never render a re-bind main
+ * did not report; an unparseable answer leaves the panel on its previous state
+ * instead of claiming control came back. A row whose pinned version did not move
+ * is only meaningful when main also reports a moved owner contract
+ * (`configChanged`), which is what a binding/program/environment change produces
+ * without a version bump; a row that names no difference at all is still
+ * rejected.
+ */
+export function serviceOwnerRebindFromMain(value: unknown, expected: { taskId: string; projectId: string }): ServiceOwnerRebindView | null {
+  if (!object(value) || Object.keys(value).sort().join(",") !==
+      "changes,confirmed,projectId,rebound,restartsProcesses,state,stopsProcesses,taskId") return null;
+  if (value["taskId"] !== expected.taskId || value["projectId"] !== expected.projectId ||
+      !["absent", "current", "fenced"].includes(value["state"] as string) ||
+      typeof value["confirmed"] !== "boolean" || typeof value["rebound"] !== "boolean" ||
+      value["stopsProcesses"] !== false || value["restartsProcesses"] !== false ||
+      (value["rebound"] === true && value["confirmed"] !== true)) return null;
+  const rows = value["changes"];
+  if (!Array.isArray(rows) || rows.length > 500) return null;
+  const changes: ServiceOwnerRebindView["changes"] = [];
+  for (const entry of rows) {
+    if (!object(entry) || Object.keys(entry).sort().join(",") !== "configChanged,name,now,serviceId,was" ||
+        typeof entry["serviceId"] !== "string" || !/^s-[0-9a-f-]{36}$/i.test(entry["serviceId"]) ||
+        typeof entry["name"] !== "string" || entry["name"].length === 0 || typeof entry["configChanged"] !== "boolean") return null;
+    const version = (item: unknown) => item === null || Number.isSafeInteger(item) && (item as number) >= 1;
+    if (!version(entry["was"]) || !version(entry["now"]) || entry["was"] === null && entry["now"] === null ||
+        entry["was"] === entry["now"] && entry["configChanged"] !== true ||
+        changes.some((row) => row.serviceId === entry["serviceId"])) return null;
+    changes.push({ serviceId: entry["serviceId"], name: entry["name"], configChanged: entry["configChanged"],
+      was: entry["was"] === null ? null : entry["was"] as number, now: entry["now"] === null ? null : entry["now"] as number });
+  }
+  return { taskId: expected.taskId, projectId: expected.projectId, state: value["state"] as ServiceOwnerRebindView["state"],
+    confirmed: value["confirmed"], rebound: value["rebound"], changes, stopsProcesses: false, restartsProcesses: false };
+}
+
+/** One explicit adoption of an existing revision by one task binding: the moved pin plus the bindings that still need an explicit restart. */
+export interface ServiceBindingAdoptionView {
+  taskId: string;
+  serviceId: string;
+  /** The binding's own environment: an adoption only ever re-pins inside it. */
+  environmentId: string;
+  from: number;
+  to: number;
+  adopted: boolean;
+  restartNeeded: ServiceTemplateRestartRow[];
+  restart: ServiceRestartConsequenceView;
+}
+
+/** Shared rows as main stores them: the shared layer is fail-closed on secrets, so `secret` is always false. */
+export function sharedRowsForCatalog(rows: readonly ServiceTemplateSharedRow[]): { key: string; value: string; secret: false }[] {
+  return rows.map((row) => ({ key: row.key.trim(), value: row.value, secret: false }));
 }

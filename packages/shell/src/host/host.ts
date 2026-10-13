@@ -35,6 +35,7 @@ const hostPort = getParentPort();
 let started = false;
 
 import {
+  authorizeCodeObservation,
   authorizeServiceRegistration,
   boundWorkspaceId,
   classifyControlCaller,
@@ -44,8 +45,10 @@ import {
   validateHostTaskOp,
 } from "./host-guards.js";
 import { ServiceOwnerInventory } from "./service-owner-inventory.js";
-import { TaskServiceProcesses } from "./service-processes.js";
-import { serviceOwnerBootstrap, type ServiceOwnerBootstrap, type ServiceOwnerCompletion } from "../rpc/service-host-binding.js";
+import { SERVICE_STOP_CONFIRM_MS, SERVICE_STOP_GRACE_MS, TaskServiceProcesses } from "./service-processes.js";
+import { diskServiceOwnershipLog } from "./service-ownership.js";
+import { diskLaunchVerificationLog } from "./service-launch-verification.js";
+import { serviceOwnerBootstrap, serviceOwnerRebind, type ServiceOwnerBootstrap, type ServiceOwnerCompletion } from "../rpc/service-host-binding.js";
 import { TaskWorkspaceHost, diskTaskStore } from "./task-host.js";
 import { SdkTurnTransport } from "./sdk-turn-transport.js";
 import { validateExplicitTextProvider } from "./explicit-text-provider.js";
@@ -54,20 +57,29 @@ import type { ServiceRunObservation } from "../main/execution-ledger.js";
 import { SharedPathCoordinator } from "./path-coordination.js";
 import { TaskServiceRuntime } from "./service-runtime.js";
 import { runAgentServiceControl, runHumanServiceControl, type ServiceExecutionDriver } from "./service-control.js";
+import { runServiceGroupStart, type GroupUnitStartResult, type ServiceGroupRunResult } from "./service-group-run.js";
+import { tcpObservation } from "./service-linkage.js";
+import type { SdkAgentServiceHost } from "./sdk-agent-tool-broker.js";
 import { scanTaskServiceImportHints } from "./service-import.js";
 import { publicServiceStartPreview, publicServiceStatus } from "./service-public.js";
-import { TaskServiceTopology } from "./service-topology.js";
+import { probeServiceHealth } from "./service-health-probe.js";
+import { declaredServicePorts } from "../main/service-config.js";
+import { TaskServiceTopology, attemptRunBookkeeping } from "./service-topology.js";
 import { TaskProtocolBinding } from "./protocol-binding.js";
 import { shutdownDeadline } from "./shutdown-deadline.js";
 import { HostTaskAdmission } from "./host-task-admission.js";
 import { protectApplicationProfile, type TaskPathProtection } from "./protected-application-path.js";
 import { TaskWorkspaceFiles } from "./workspace-files.js";
+import { openExternalEditor } from "./open-editor.js";
 import { TaskTerminalRegistry, planTerminal, type TerminalPlan } from "../main/terminal-config.js";
 import { TaskLifecycleHost } from "./task-lifecycle.js";
 import { createLifecycleResources } from "./lifecycle-resources.js";
 import { runAgentTerminalControl } from "./terminal-control.js";
+import { ptySpawnerAvailable, TerminalPtyDriver, resolvePtyRuntime } from "./terminal-pty-driver.js";
+import { TaskTerminalSessions } from "./terminal-sessions.js";
 import { writeClaimError } from "./write-coordination.js";
 import { runAgentBrowserAction, runHumanBrowserAction, type BrowserGatewayPort } from "./browser-control.js";import { HostBrowserClient } from "../rpc/browser-client.js";
+import { ServiceTemplateRequestClient, type ServiceTemplateEditPort } from "../rpc/service-template-request.js";
 import { isBrowserAction } from "../main/browser-rules.js";
 import type { RemoteEntryMode, RemotePendingRequest } from "../main/remote-rules.js";
 import {
@@ -144,7 +156,7 @@ function ownerInventoryFor(host: TaskWorkspaceHost): ServiceOwnerInventory {
 async function handleServiceOwnerMessage(value: unknown): Promise<boolean> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const row = value as Record<string, unknown>;
-  if (!["service-owner-bootstrap", "service-owner-ack", "service-owner-fenced"].includes(String(row.kind))) return false;
+  if (!["service-owner-bootstrap", "service-owner-rebind", "service-owner-ack", "service-owner-fenced"].includes(String(row.kind))) return false;
   try {
     const taskId = process.env["PIDOCK_TASK_ID"] ?? "";
     const host = taskHostFor(taskId); if ("error" in host) throw Error();
@@ -154,6 +166,27 @@ async function handleServiceOwnerMessage(value: unknown): Promise<boolean> {
       if (serviceScope) throw Error();
       serviceScope = scope;
       await inventory.bootstrap(scope);
+      hostPort.postMessage({ kind: "service-owner-ready", workspaceId: scope.workspaceId, taskId: scope.taskId,
+        instanceId: scope.instanceId, epoch: scope.epoch, catalogRevision: scope.catalogRevision });
+    } else if (row.kind === "service-owner-rebind") {
+      // [PiDock 04] (#7 slice) one explicit in-place replacement of this Host's
+      // owner scope. Main may only name the instance this Host holds; the
+      // replacement instance differs, so this cannot replay the scope it
+      // replaces. The replaced inventory is sealed and its transport released
+      // before the replacement subscribes - it owns no admissible child (the
+      // managed binding is closed), so nothing running is killed or orphaned -
+      // and a failure leaves this Host's owner state fenced and diagnosable.
+      const previous = serviceScope;
+      if (!previous) throw Error();
+      const scope = serviceOwnerRebind(value, boundWorkspaceId(), taskId, previous.instanceId);
+      const replaced = inventory;
+      replaced.seal();
+      fenceServiceInventory();
+      for (const subscriber of [...serviceSubscribers.values()]) subscriber.disconnected();
+      serviceSubscribers.clear();
+      serviceOwnerInventory = null;
+      serviceScope = scope;
+      await ownerInventoryFor(host).bootstrap(scope);
       hostPort.postMessage({ kind: "service-owner-ready", workspaceId: scope.workspaceId, taskId: scope.taskId,
         instanceId: scope.instanceId, epoch: scope.epoch, catalogRevision: scope.catalogRevision });
     } else if (row.kind === "service-owner-fenced") {
@@ -238,6 +271,27 @@ function terminalRegistryFor(taskId: string): TaskTerminalRegistry | { error: st
     terminalRegistry = new TaskTerminalRegistry(host.taskId);
   }
   return terminalRegistry;
+}
+
+// [PiDock 10] (#15) the real PTY spawner. One driver per Host process holds the
+// forked helpers (the native node-pty addon never loads in the Host), and one
+// sessions object writes the registry above. Both bind to the same task as the
+// registry they serve, so an output frame or a stop can only ever address this
+// task's own instances.
+let terminalDriver: TerminalPtyDriver | null = null;
+let terminalSessions: TaskTerminalSessions | null = null;
+function terminalSessionsFor(taskId: string): TaskTerminalSessions | { error: string } {
+  const registry = terminalRegistryFor(taskId);
+  if ("error" in registry) return registry;
+  if (!terminalSessions || terminalSessions.registry !== registry) {
+    terminalDriver ??= new TerminalPtyDriver({
+      workspaceId: registry.taskId,
+      runtime: resolvePtyRuntime,
+      onOutput: (identity, sequence, data) => terminalSessions?.ingest(identity, sequence, data),
+    });
+    terminalSessions = new TaskTerminalSessions(registry, terminalDriver, () => [...privateSecretValues]);
+  }
+  return terminalSessions;
 }
 
 // [PiDock 14] (#17) per-task lifecycle state (archive/restore/cleanup records +
@@ -356,7 +410,10 @@ function serviceRuntimeFor(taskId: string): TaskServiceRuntime | { error: string
   const host = taskHostFor(taskId);
   if ("error" in host) return host;
   if (!serviceRuntime || serviceRuntime.taskDir !== host.taskDir) {
-    serviceRuntime = new TaskServiceRuntime(host.taskDir);
+    // The task workspace's own launch-verification document ([PiDock 04] #7 box
+    // 7): without it a verification would live only in this Host's memory and
+    // the platform would read as unverified again after every restart.
+    serviceRuntime = new TaskServiceRuntime(host.taskDir, undefined, diskLaunchVerificationLog(host.taskDir));
   }
   return serviceRuntime;
 }
@@ -401,20 +458,249 @@ async function stopRegisteredServiceProcesses(): Promise<{ serviceId: string; st
   await processes.stopAll();
   return ids.map((serviceId) => ({ serviceId, state: "stopped" as const }));
 }
-function serviceDriverFor(services: TaskServiceRuntime): ServiceExecutionDriver {
+function serviceDriverFor(taskId: string, services: TaskServiceRuntime): ServiceExecutionDriver {
   if (!serviceProcesses || serviceProcessesFor !== services) {
     serviceProcesses = new TaskServiceProcesses(
       services.taskDir,
       (serviceId, line) => services.recordOutput(serviceId, line),
-      (serviceId, reason) => services.markExited(serviceId, reason),
+      (serviceId, reason) => {
+        // A child that ended on its own is no longer a running instance: close
+        // its run record before the runtime flips the lifecycle, so the
+        // registered tree ([PiDock 05] #10 box 8) never keeps a dead pid. The
+        // record is always written before this handler can run - `start`
+        // resolves on the spawn event and its caller's continuation drains as a
+        // microtask, while the close event is a later macrotask - so a live
+        // child cannot be missed here without also being missed by `stop`.
+        closeServiceRun(taskId, services, serviceId, reason);
+        services.markExited(serviceId, reason);
+      },
       (line) => services.redactLine(line),
+      SERVICE_STOP_GRACE_MS,
+      SERVICE_STOP_CONFIRM_MS,
+      // The durable launch identity of this task folder ([PiDock 04] #48).
+      // Without it the driver is in-memory only: a detached child that
+      // survives an abnormal Host/main exit would be invisible to the
+      // durable layer, the next Host would answer `unknown-service` for it,
+      // and the following start would spawn a second instance that no PiDock
+      // path can stop. With it, a real start persists `(pid, nonce)` before
+      // it resolves, a duplicate start is refused while that record
+      // verifies, and a surviving recorded launch can be re-verified and
+      // stopped by a later Host.
+      diskServiceOwnershipLog({ taskId, taskDir: services.taskDir }),
     );
     serviceProcessesFor = services;
   }
   const processes = serviceProcesses;
   return {
-    start: async (serviceId) => ({ pid: await processes.start(services.planRegisteredStart(serviceId)) }),
-    stop: async (serviceId) => { await processes.stop(serviceId); },
+    start: async (serviceId, owner) => {
+      const plan = services.planRegisteredStart(serviceId);
+      const pid = await processes.start(plan);
+      // Only a start that really resolved with a child pid reaches this line,
+      // and the pid is the driver's own return value - never a caller claim.
+      recordServiceRun(taskId, services, plan.serviceId, pid, owner);
+      return { pid };
+    },
+    stop: async (serviceId) => {
+      await processes.stop(serviceId);
+      closeServiceRun(taskId, services, serviceId, "stopped");
+    },
+  };
+}
+
+/**
+ * Start the task's planned group ([PiDock 05] #10 box 4) — the production
+ * caller `planStartGroups`/`verifyStepsFor` never had.
+ *
+ * Group start is a SEQUENCE OVER the existing gated dispatch, not a second
+ * gate: every unit's start goes through the same `runHumanServiceControl` /
+ * `runAgentServiceControl` the single `task/controlService` path uses, with the
+ * same tier rules (a `read` session refuses, `default` parks on a one-shot
+ * approval). No unit is spawned, signalled or re-planned here.
+ *
+ * Observation is real and separate from the plan: a unit's listening state comes
+ * from a bounded TCP connect to the address its REGISTRATION declares (never the
+ * plan's allocated port, which the launch does not use — see `planRegisteredStart`),
+ * and each observation is attached to the unit's own run record through the
+ * existing `verifyRun` shape.
+ *
+ * `start-failed` vs `refused`: the wrapped driver records whether the launch was
+ * actually reached, so a gate refusal (before the driver) is `refused` and a
+ * driver/launch failure is `start-failed`. The runner never guesses a state from
+ * an error string.
+ *
+ * Reachability: this is the Host's `task/controlService {group:true}` capability,
+ * and it has a shipped caller - main's `runTaskServiceGroup`
+ * (`../main/runtime.ts`), reached from the dock's 整组启动 through
+ * `shell/serviceCatalogOp {op:"runTaskServiceGroup"}`. See `docs/task-graph.md`
+ * 「整组启动与真实互验」 for the named boundary (no dependency edge on that
+ * route, so 已互验 stays unreachable there).
+ */
+async function runGroupServiceStart(input: {
+  taskId: string;
+  services: TaskServiceRuntime;
+  topology: TaskServiceTopology;
+  host: TaskWorkspaceHost;
+  caller: { kind: "human"; label: string } | { kind: "agent"; sessionId: string };
+  approvalId: unknown;
+}): Promise<{ ok: true; value: ServiceGroupRunResult } | { ok: false; error: string }> {
+  const { services, topology, host, caller } = input;
+  const channel = caller.kind === "agent" ? host.openSession(caller.sessionId) : undefined;
+  const baseDriver = serviceDriverFor(input.taskId, services);
+  const startUnit = async ({ serviceId }: { unitId: string; serviceId: string }): Promise<GroupUnitStartResult> => {
+    // The SAME precondition the single path applies, from the one shared helper.
+    const precondition = catalogControlPrecondition(services, serviceId);
+    if (precondition.kind !== "ok") {
+      return {
+        ok: false,
+        kind: "refused",
+        error: precondition.kind === "uncertain"
+          ? precondition.error
+          : `service-execution-unavailable: ${serviceId} 未由可信服务目录登记，无法执行`,
+      };
+    }
+    let driverReached = false;
+    let producedPid: number | undefined;
+    const driver: ServiceExecutionDriver = {
+      start: async (id, owner) => {
+        driverReached = true;
+        const result = await baseDriver.start(id, owner);
+        producedPid = result.pid;
+        return result;
+      },
+      stop: (id, owner) => baseDriver.stop(id, owner),
+    };
+    const acted = caller.kind === "human"
+      ? await runHumanServiceControl({ services, driver, serviceId, action: "start", label: caller.label })
+      : await runAgentServiceControl({
+          services,
+          driver,
+          channel: channel as NonNullable<typeof channel>,
+          sessionId: caller.sessionId,
+          serviceId,
+          action: "start",
+          ...(input.approvalId !== undefined ? { approvalId: input.approvalId } : {}),
+          write: host,
+          persist: () => host.store.writeSession(host.taskDir, (channel as NonNullable<typeof channel>).snapshot()),
+          executions: host.controlExecutions,
+        });
+    // The real pid the dispatch produced travels back, so the runner credits the
+    // run record this start wrote instead of an older open record for the service.
+    if (acted.ok) return producedPid === undefined ? { ok: true } : { ok: true, pid: producedPid };
+    if (acted.error.startsWith("approval-required:")) return { ok: false, kind: "approval-required", error: acted.error };
+    return { ok: false, kind: driverReached ? "start-failed" : "refused", error: acted.error };
+  };
+  const value = await runServiceGroupStart({
+    topology,
+    startUnit,
+    observation: tcpObservation,
+    // The address the launch is SET UP to bind, from this task's own
+    // registration. A unit with no declared socket stays `not-probed`.
+    registeredAddress: (serviceId) => {
+      const record = services.get(serviceId);
+      if (!record) return undefined;
+      const [port] = declaredServicePorts(record.descriptor.ports, record.resolved);
+      return port === undefined ? undefined : { host: "127.0.0.1", port };
+    },
+  });
+  return { ok: true, value };
+}
+
+/**
+ * Register the process identity a real start just produced in this task's
+ * topology ([PiDock 05] #10 boxes 6/8). Until this slice `task/serviceRunRecords`
+ * and `task/serviceStopScope` had no production writer: nothing ever called
+ * `recordRun`, so the box-8 read answered empty while real children ran.
+ *
+ * What is written is deliberately split:
+ * - OBSERVED BY MAIN: the code state — the worktree HEAD commit and whether the
+ *   working tree is dirty — read by main's own bounded git read of the launch's
+ *   verified cwd (`main/service-code-observation.ts`) and carried here by the
+ *   trusted-catalog registration. Absent stays `unknown` by name: this Host
+ *   cannot read a working tree, so it never fills the field in from a guess.
+ * - OBSERVED HERE: the pid and the start time the `TaskServiceProcesses` start
+ *   resolved with, and the actor the gate decided for.
+ * - DECLARED: the port list, taken from the registration's own descriptor plus
+ *   its own `PORT`-like resolved rows (`declaredServicePorts`). This Host owns
+ *   no port probe, so the record says `portsSource: "declared"`.
+ * - NOT READ: build freshness has no observation behind it — nothing in the
+ *   service model names a build artifact or its commit — so `buildCommit` is
+ *   never claimed and a clean tree reads 无法判断构建状态. A dirty tree reads
+ *   `uncommitted-code` from the same observation, never `fresh`.
+ * A registration whose read failed puts its named reason in this service's
+ * bounded log instead of a code state, so `task/serviceRunRecords` showing
+ * `unknown` while the failure is invisible cannot happen.
+ * `recordRun` builds its own `startedAt`/`runId` so the record cannot be
+ * back-dated by this caller.
+ */
+function recordServiceRun(
+  taskId: string,
+  services: TaskServiceRuntime,
+  serviceId: string,
+  pid: number,
+  owner: "agent" | "human",
+): void {
+  const topology = serviceTopologyFor(taskId);
+  if ("error" in topology) return;
+  const registered = services.get(serviceId);
+  // The failure to read the worktree is named in this service's own bounded log
+  // (`task/serviceLog`), exactly like a refused bookkeeping write below: the run
+  // record then says `unknown` and the reader can see WHY instead of reading an
+  // absent observation as a clean tree.
+  if (registered?.codeObservationFailure !== undefined) {
+    services.recordOutput(serviceId, `代码状态未观测：${registered.codeObservationFailure}；本次运行记录按 unknown 记录`);
+  }
+  // The topology record is a read model, never the launch's authority: a refused
+  // record must not turn a child that really started into a failure. It is NOT
+  // swallowed either - the named refusal lands in this service's own bounded log
+  // (`task/serviceLog`), so `task/serviceRunRecords` answering empty while a
+  // child runs is visible instead of silent.
+  const outcome = attemptRunBookkeeping(() =>
+    topology.recordRun({
+      serviceId,
+      templateVersion: registered?.templateVersion ?? "unknown",
+      ports: declaredServicePorts(registered?.descriptor.ports ?? [], registered?.resolved ?? []),
+      portsSource: "declared",
+      ...(registered?.code !== undefined ? { code: registered.code } : {}),
+      pid,
+      owner,
+    }),
+  );
+  if (!outcome.ok) services.recordOutput(serviceId, `运行记录写入被拒绝：${outcome.reason}`);
+}
+
+/** Close the newest still-open run of one service; `false` when none was open. */
+function closeServiceRun(taskId: string, services: TaskServiceRuntime, serviceId: string, reason: string): boolean {
+  const topology = serviceTopologyFor(taskId);
+  if ("error" in topology) return false;
+  const open = [...topology.runs()].reverse().find((record) => record.serviceId === serviceId && record.endedAt === undefined);
+  if (!open) return false;
+  // Same boundary as `recordServiceRun`: a bookkeeping refusal never changes the
+  // action that really happened, but it is named and logged, not swallowed.
+  const outcome = attemptRunBookkeeping(() => topology.exitRun(open.runId, reason));
+  if (!outcome.ok) services.recordOutput(serviceId, `运行记录关闭被拒绝：${outcome.reason}`);
+  return outcome.ok;
+}
+
+/**
+ * [PiDock 04] (#7 box 5) the Agent's service surface for one task: the SAME
+ * `TaskServiceRuntime` the `task/registerService|serviceStatus|serviceLog` ops
+ * answer from, the SAME `TaskServiceProcesses` driver `task/controlService`
+ * uses (one registered-child map, so an Agent stop reaches the child a human
+ * start spawned and never a second instance), the same durable-owner
+ * uncertainty check, and this task's execution ledger. `taskHostFor` hands it
+ * to `TaskWorkspaceHost`, which passes it to the Agent tool broker; exported so
+ * the production wiring is what tests and callers drive, never a copy.
+ */
+export function agentServiceHostFor(taskId: string): SdkAgentServiceHost | undefined {
+  const host = taskHostFor(taskId);
+  if ("error" in host) return undefined;
+  const services = serviceRuntimeFor(taskId);
+  if ("error" in services) return undefined;
+  return {
+    services,
+    driver: () => serviceDriverFor(taskId, services),
+    refusal: (serviceId) => serviceOwnerStateRefusal(serviceId),
+    executions: host.controlExecutions,
   };
 }
 
@@ -455,6 +741,24 @@ function serviceOwnerStateRefusal(serviceId: string): string | null {
   return `service-execution-uncertain: 服务已登记状态为 ${String(state)}，请先处理该状态后再启停`;
 }
 
+/**
+ * The precondition BOTH service-control paths share before a catalog service may
+ * be launched: it must come from the trusted catalog, and its durable owner
+ * state must not be uncertain. `kind` says which rule failed so each caller can
+ * keep its own refusal wording - the single `task/controlService` path falls back
+ * to the owner inventory for an unregistered id, the group path refuses it by
+ * name; both fail closed, and neither re-implements the rule.
+ */
+function catalogControlPrecondition(
+  services: TaskServiceRuntime,
+  serviceId: string,
+): { kind: "ok" } | { kind: "unregistered" } | { kind: "uncertain"; error: string } {
+  const registered = services.get(serviceId);
+  if (!registered || registered.launchSource !== "catalog") return { kind: "unregistered" };
+  const uncertain = serviceOwnerStateRefusal(serviceId);
+  return uncertain === null ? { kind: "ok" } : { kind: "uncertain", error: uncertain };
+}
+
 function taskHostFor(taskId: string): TaskWorkspaceHost | { error: string } {
   const boundTaskId = process.env["PIDOCK_TASK_ID"];
   const taskDir = process.env["PIDOCK_TASK_DIR"];
@@ -484,13 +788,25 @@ function taskHostFor(taskId: string): TaskWorkspaceHost | { error: string } {
         const owners = serviceOwnerInventory?.resources() ?? (process.env["PIDOCK_SERVICE_OWNER_REQUIRED"] === "1"
           ? [{ resourceId: "service-owner-inventory", kind: "service" as const, ownerSessionId: null, verificationRequired: true }] : []);
         const runtime = serviceRuntime;
-        if (!runtime || runtime.taskDir !== taskDir) return owners;
+        // [PiDock 10] (#15) a running terminal is an agent-owned resource too:
+        // its owner session keeps the write right and another session sees it
+        // as a leftover while it verifies it. A human-started terminal has no
+        // session to coordinate with and is not an orphan.
+        const terminals = terminalRegistry && terminalRegistry.taskId === boundTaskId
+          ? terminalRegistry.list().filter((instance) => instance.lifecycle === "running").map((instance) => ({
+            resourceId: instance.instanceId,
+            kind: "process" as const,
+            ownerSessionId: instance.owner.sessionId,
+            label: `终端 ${instance.instanceId}`,
+          }))
+          : [];
+        if (!runtime || runtime.taskDir !== taskDir) return [...owners, ...terminals];
         return [...owners, ...runtime.runningAgentOwned().map((service) => ({
           resourceId: service.serviceId,
           kind: "service" as const,
           ownerSessionId: service.ownerSessionId,
           label: service.serviceId,
-        }))];
+        })), ...terminals];
       },
       sharedPaths,
       undefined,
@@ -498,6 +814,14 @@ function taskHostFor(taskId: string): TaskWorkspaceHost | { error: string } {
       sdkKernelFactory,
       undefined,
       protectedPaths(),
+      // [PiDock 04] (#7 box 5): the Agent's service tools get this task's own
+      // runtime + driver + owner check lazily, so the model can start/stop a
+      // task-bound service only through the one gate and the one driver.
+      () => agentServiceHostFor(boundTaskId),
+      // [PiDock 04] (#7 box 6): the shared-template edit is main's write, so the
+      // Agent's tool asks main for the review and for the save; a Host without
+      // this port refuses the tool by name.
+      () => serviceTemplateEditPortFor(boundTaskId),
     );
   }
   return workspaceHost;
@@ -586,6 +910,24 @@ function browserGatewayFor(taskId: string): BrowserGatewayPort {
   };
 }
 
+// [PiDock 04] (#7 box 6) the shared-template channel: the Agent Host holds
+// catalog-derived facts, not the catalog store, so an Agent edit of a SHARED
+// template becomes one request to main over the same parent port. main is the
+// only writer; `main/service-catalog-ipc.ts` binds the handler to this child's
+// own task id, and a Host whose main did not mount the handler is refused BY
+// NAME (never a local fallback write).
+let serviceTemplateClient: ServiceTemplateRequestClient | null = null;
+
+/** Exported so tests and callers drive the production wiring itself, never a copy (`agentServiceHostFor`'s rule). */
+export function serviceTemplateEditPortFor(taskId: string): ServiceTemplateEditPort {
+  // Utility parent-port events wrap messages; the client consumes bare envelopes.
+  serviceTemplateClient ??= new ServiceTemplateRequestClient({
+    postMessage: (message) => hostPort.postMessage(message),
+    on: (_event, listener) => { hostPort.on("message", (event: { data: unknown }) => listener(event.data)); },
+  }, boundWorkspaceId(), taskId);
+  return serviceTemplateClient;
+}
+
 /**
  * Session a browser action is logged into when the caller does not name
  * one: the task's persisted sessions are the only ones that exist, so the
@@ -669,15 +1011,10 @@ async function performTaskOp(
       case "task/provision": {
         const name = record["name"];
         const dirId = record["dirId"];
-        const remoteBranch = record["remoteBranch"];
-        const fetchedCommit = record["fetchedCommit"];
-        if (
-          typeof name !== "string" ||
-          typeof dirId !== "string" ||
-          typeof remoteBranch !== "string" ||
-          typeof fetchedCommit !== "string"
-        ) {
-          return { ok: false, error: "invalid-payload: task/provision requires name/dirId/remoteBranch/fetchedCommit" };
+        const remoteBranch = typeof record["remoteBranch"] === "string" ? (record["remoteBranch"] as string) : "";
+        const fetchedCommit = typeof record["fetchedCommit"] === "string" ? (record["fetchedCommit"] as string) : "";
+        if (typeof name !== "string" || typeof dirId !== "string") {
+          return { ok: false, error: "invalid-payload: task/provision requires name/dirId" };
         }
         const branch = typeof record["branch"] === "string" ? (record["branch"] as string) : undefined;
         const rootOverride = typeof record["rootOverride"] === "string" ? (record["rootOverride"] as string) : undefined;
@@ -748,6 +1085,13 @@ async function performTaskOp(
         if (dirs === null) {
           return { ok: false, error: "invalid-payload: task/provision.plainDirs must be an array of {directoryId, sourcePath}" };
         }
+        const hasRepos = (selections !== undefined && selections.length > 0) || (repos !== undefined && repos.length > 0);
+        const hasPlainDirs = dirs !== undefined && dirs.length > 0;
+        if (hasRepos || !hasPlainDirs) {
+          if (!remoteBranch || !fetchedCommit) {
+            return { ok: false, error: "invalid-payload: task/provision requires name/dirId/remoteBranch/fetchedCommit" };
+          }
+        }
         // `host.provision` returns the persisted record AND the executable
         // plan (real cwds; empty only in the sense of zero ops). Both ride
         // the `host/task` result payload so a caller can persist-then-execute
@@ -807,15 +1151,110 @@ async function performTaskOp(
           return { ok: false, error: error instanceof Error ? error.message : String(error) };
         }
       }
-      // #6 link probe: Host-side fs check whether a plain-dir source still
-      // exists (report only — never creates, follows, or takes over).
+      case "task/appendDirs": {
+        const plainDirs = record["plainDirs"];
+        if (!Array.isArray(plainDirs)) {
+          return { ok: false, error: "invalid-payload: task/appendDirs requires plainDirs" };
+        }
+        try {
+          const appended = host.appendDirs({
+            plainDirs: plainDirs as { directoryId: string; sourcePath: string }[],
+          });
+          return { ok: true, payload: { ...appended.record, appended: appended.appended, skipped: appended.skipped } };
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : String(error) };
+        }
+      }
+      // #6 resume: classify each selected repo from the REAL worktree on
+      // disk and retry only the unfinished ones. Created worktrees are
+      // never re-created/reset/refetched; a present path that is not this
+      // task's worktree is held and reported, never overwritten. The
+      // caller-scanned conflict gate stays REQUIRED (Host-side fail-closed);
+      // on the renderer route main derives and overwrites it.
+      case "task/resumeAppend": {
+        const resumeCheckouts = record["mainCheckouts"];
+        const resumeCheckoutMap =
+          resumeCheckouts === undefined
+            ? undefined
+            : isMainCheckouts(resumeCheckouts)
+              ? (resumeCheckouts as Record<string, string>)
+              : null;
+        if (resumeCheckoutMap === null) {
+          return { ok: false, error: "invalid-payload: task/resumeAppend.mainCheckouts must map repo names to path strings" };
+        }
+        const resumeFetched = record["fetchedCommits"];
+        const resumeFetchedMap =
+          resumeFetched === undefined ? undefined : isMainCheckouts(resumeFetched) ? (resumeFetched as Record<string, string>) : null;
+        if (resumeFetchedMap === null) {
+          return { ok: false, error: "invalid-payload: task/resumeAppend.fetchedCommits must map repo names to commit strings" };
+        }
+        const resumePrepareErrors = record["prepareErrors"];
+        const resumePrepareMap =
+          resumePrepareErrors === undefined
+            ? undefined
+            : typeof resumePrepareErrors === "object" &&
+                resumePrepareErrors !== null &&
+                !Array.isArray(resumePrepareErrors)
+              ? (resumePrepareErrors as Record<string, { code: string; message: string }>)
+              : null;
+        if (resumePrepareMap === null) {
+          return { ok: false, error: "invalid-payload: task/resumeAppend.prepareErrors must map repo names to {code, message}" };
+        }
+        const resumeTaken = Array.isArray(record["takenPaths"]) ? (record["takenPaths"] as string[]) : undefined;
+        const resumeInUse = Array.isArray(record["branchesInUse"]) ? (record["branchesInUse"] as string[]) : undefined;
+        const resumeBranch = typeof record["branch"] === "string" ? (record["branch"] as string) : undefined;
+        try {
+          const resumed = host.resumeAppend({
+            branch: resumeBranch,
+            mainCheckouts: resumeCheckoutMap,
+            fetchedCommits: resumeFetchedMap,
+            takenPaths: resumeTaken,
+            branchesInUse: resumeInUse,
+            prepareErrors: resumePrepareMap,
+          });
+          return {
+            ok: true,
+            payload: {
+              ...resumed.record,
+              plan: resumed.plan,
+              outcomes: resumed.outcomes,
+              created: resumed.created,
+              pending: resumed.pending,
+              failed: resumed.failed,
+              retry: resumed.retry,
+              hold: resumed.hold,
+              resumed: resumed.resumed,
+            },
+          };
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : String(error) };
+        }
+      }
+      // #6 prepare read: read-only per-repo classification (created /
+      // pending / failed with the real reason). No plan and no write, so the
+      // caller-scanned conflict gate is not involved; the resume WRITE still
+      // requires it.
+      case "task/prepareStatus": {
+        try {
+          return { ok: true, payload: { ...host.prepareStatus() } };
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : String(error) };
+        }
+      }
+      // #6 link probe: Host-side, real-fs report of a plain-directory link's
+      // TARGET shape (真实目录 / 失效 / 嵌套 / 循环 / 具名 unknown) plus the
+      // per-platform link capability. Report only — never creates, repairs,
+      // follows through or deletes a link. The caller-named path must be one of
+      // THIS task's own recorded link sources (`probeDeclaredLinkSource`);
+      // anything else is refused by name, before any filesystem read.
       case "task/probeLink": {
         const sourcePath = record["sourcePath"];
         if (typeof sourcePath !== "string" || sourcePath.length === 0) {
           return { ok: false, error: "invalid-payload: task/probeLink requires sourcePath" };
         }
-        const probed = host.probeLinkTarget(sourcePath);
-        return { ok: true, payload: { ...probed } };
+        const probed = host.probeDeclaredLinkSource(sourcePath);
+        if (!probed.ok) return { ok: false, error: probed.error };
+        return { ok: true, payload: { ...probed.report } };
       }
       case "task/cancel": {
         const sessionId = record["sessionId"];
@@ -905,9 +1344,11 @@ async function performTaskOp(
         return { ok: true, payload: { approval } };
       }
       // [PiDock 04] (#7) service ops share the fork-time task binding.
-      // Registration currently accepts only main-attested human UI callers;
-      // Agent template edits await diff approval. Execution remains disabled
-      // until real process ownership, cleanup and cross-platform stop pass.
+      // Registration currently accepts only main-attested human UI callers; the
+      // Agent's shared-template edit has its own path ([PiDock 04] #7 box 6,
+      // `main/service-catalog-ipc.ts`) and never registers a service. Execution
+      // remains disabled until real process ownership, cleanup and cross-platform
+      // stop pass.
       // Reads return allowlisted display projections, never raw launch env.
       case "task/registerService": {
         const services = serviceRuntimeFor(taskId);
@@ -930,6 +1371,13 @@ async function performTaskOp(
         }
         const authorization = authorizeServiceRegistration({ sessionId: record["sessionId"], origin });
         if (!authorization.ok) return { ok: false, error: authorization.error };
+        // [PiDock 05] (#10 box 6) the worktree observation is main's own read, so
+        // only main's `service-catalog` registration may carry it: a `shell-ui`
+        // registration (the renderer's own `shell/taskOp` path) is refused by
+        // name, and a contradictory payload is refused too. Nothing is stored
+        // before both checks pass.
+        const observation = authorizeCodeObservation({ origin, code: record["code"], codeObservationFailure: record["codeObservationFailure"] });
+        if (!observation.ok) return { ok: false, error: observation.error };
         try {
           const saved = services.register({
             serviceId,
@@ -937,6 +1385,8 @@ async function performTaskOp(
             layers: serviceLayers as never,
             templateVersion,
             launchSource: serviceLaunchSource(origin),
+            ...(record["code"] !== undefined ? { code: record["code"] as { commit?: string; dirty: boolean } } : {}),
+            ...(typeof record["codeObservationFailure"] === "string" ? { codeObservationFailure: record["codeObservationFailure"] as string } : {}),
           });
           return { ok: true, payload: { service: { serviceId: saved.serviceId, templateVersion: saved.templateVersion, lifecycle: saved.lifecycle, launchSource: saved.launchSource } } };
         } catch (error) {
@@ -970,8 +1420,8 @@ async function performTaskOp(
         // with main's sender-bound `shell-ui` attestation — so a caller
         // can neither spoof `actor` nor drop its session to reach the
         // ungated human path.
-        if (typeof serviceId !== "string" || (action !== "start" && action !== "stop")) {
-          return { ok: false, error: "invalid-payload: task/controlService requires serviceId/action" };
+        if (action !== "start" && action !== "stop") {
+          return { ok: false, error: "invalid-payload: task/controlService requires action" };
         }
         const caller = classifyControlCaller({
           sessionId: record["sessionId"],
@@ -979,20 +1429,35 @@ async function performTaskOp(
           origin,
         });
         if (!caller.ok) return { ok: false, error: caller.error };
+        // [PiDock 05] (#10 box 4) group start: the SAME op, the SAME gate, run
+        // in the plan's order with a real listening/linkage observation per
+        // unit. No new op is added — `HOST_TASK_OPS` stays exactly as it was —
+        // and every unit still goes through the one gated dispatch below.
+        if (record["group"] === true) {
+          if (action !== "start") return { ok: false, error: "invalid-payload: task/controlService.group 仅支持 action=start" };
+          const topology = serviceTopologyFor(taskId);
+          if ("error" in topology) return { ok: false, error: topology.error };
+          const host = taskHostFor(taskId);
+          if ("error" in host) return { ok: false, error: host.error };
+          const started = await runGroupServiceStart({ taskId, services, topology, host, caller, approvalId: record["approvalId"] });
+          return started.ok ? { ok: true, payload: { group: started.value } } : { ok: false, error: started.error };
+        }
+        if (typeof serviceId !== "string" || serviceId.trim().length === 0) {
+          return { ok: false, error: "invalid-payload: task/controlService requires serviceId" };
+        }
         // A service registered on this task is executed by the Host's own
         // registered process identity; only a `catalog` registration carries
         // an executable launch (see `serviceLaunchSource`). Everything else - 
         // unregistered ids, `ui`-only registrations, an unconfirmed durable
         // owner state - keeps the previous fail-closed answer and never
         // flips a lifecycle flag as if a process had run.
-        const registered = services.get(serviceId);
-        if (!registered || registered.launchSource !== "catalog") {
+        const precondition = catalogControlPrecondition(services, serviceId);
+        if (precondition.kind === "unregistered") {
           return serviceOwnerInventory ? serviceOwnerInventory.control()
             : { ok: false, error: "service-execution-unavailable: 真实服务进程启停尚未接线" };
         }
-        const uncertain = serviceOwnerStateRefusal(serviceId);
-        if (uncertain) return { ok: false, error: uncertain };
-        const driver = serviceDriverFor(services);
+        if (precondition.kind === "uncertain") return { ok: false, error: precondition.error };
+        const driver = serviceDriverFor(taskId, services);
         if (caller.kind === "human") {
           const result = await runHumanServiceControl({ services, driver, serviceId, action, label: caller.label });
           return result.ok ? { ok: true, payload: result.payload } : { ok: false, error: result.error };
@@ -1026,7 +1491,17 @@ async function performTaskOp(
             // reports the same uncertainty instead of a bare `stopped`.
             const uncertain = serviceOwnerStateRefusal(serviceRecord.serviceId);
             if (uncertain) return { ok: false, error: uncertain };
-            return { ok: true, payload: { service: publicServiceStatus(serviceRecord) } };
+            // [PiDock 04] (#7 box 5) the declared 健康检查 is really probed on
+            // this read: one bounded attempt against the PINNED revision's own
+            // target, only while the service's process is alive. A read cannot
+            // start/stop anything, and the probe's outcome never touches
+            // `lifecycle` - a dead process is still the only thing that makes
+            // `lifecycle` `stopped`.
+            const health = await probeServiceHealth({
+              healthCheck: serviceRecord.descriptor.healthCheck,
+              running: serviceRecord.lifecycle === "running",
+            });
+            return { ok: true, payload: { service: publicServiceStatus(serviceRecord, undefined, undefined, health) } };
           }
         }
         if (serviceOwnerInventory || process.env["PIDOCK_SERVICE_OWNER_REQUIRED"] === "1") {
@@ -1068,6 +1543,19 @@ async function performTaskOp(
       // session-less caller from rewriting the task plan, and the actor is
       // recorded on the plan for audit.
       case "task/planServiceGroup": {
+        // GUARD, stated at the seam: this op WRITES the task's plan, and the units
+        // it accepts come from its caller — the dock's own topology read sends the
+        // visible projection, which carries no declaration-derived edge and no
+        // rules/layers. That is acceptable for exactly one reason: a page plan
+        // cannot decide a start. Main writes the plan from its own catalog on EVERY
+        // group start (`runtime.ts runTaskServiceGroup` → `planBoundServiceGroup`,
+        // immediately before the single `task/controlService {group:true}`), so
+        // what `runServiceGroupStart` reads here is always main's freshly derived
+        // plan — never a renderer-shaped one. A future reader must not mistake the
+        // `units` below for trusted input: the trusted inputs are the ones main's
+        // `shell/taskOp` route refuses a page for naming (`dependencies`/`rules`/
+        // `layers`), and `main/service-group-caller.test.ts` pins the plan-before-
+        // start order that keeps this seam harmless.
         const topology = serviceTopologyFor(taskId);
         if ("error" in topology) return { ok: false, error: topology.error };
         const caller = classifyControlCaller({
@@ -1368,7 +1856,11 @@ async function performTaskOp(
         const files = workspaceFilesFor(taskId);
         if ("error" in files) return { ok: false, error: files.error };
         try {
-          return { ok: true, payload: { roots: files.roots(), taskDir: files.taskDir } };
+          // [PiDock 03] (#6 box 6) the roots readout observes each worktree's OWN
+          // branch and uncommitted state (`observedRoots`) and keeps the pinned
+          // baseline branch as a separate declared field, so two tasks sharing
+          // one repo can never read as the same branch.
+          return { ok: true, payload: { roots: files.observedRoots(), taskDir: files.taskDir } };
         } catch (error) {
           return { ok: false, error: error instanceof Error ? error.message : String(error) };
         }
@@ -1414,6 +1906,17 @@ async function performTaskOp(
         const result = files.delivery({ rootId: record["rootId"] });
         return result.ok ? { ok: true, payload: { target: result.target } } : { ok: false, error: result.error };
       }
+      // [PiDock 10] (#15 box 28) 从任务打开外部编辑器. The Host is the actor: it
+      // resolves the same root the file tree shows, re-probes the user's
+      // configured program immediately before the spawn, and spawns it with
+      // argv (never a shell). The program comes from main's own settings
+      // read; page code cannot reach this op. The launch writes nothing.
+      case "task/openEditor": {
+        const files = workspaceFilesFor(taskId);
+        if ("error" in files) return { ok: false, error: files.error };
+        const opened = await openExternalEditor({ files, payload: record, origin });
+        return opened.ok ? { ok: true, payload: { launch: opened.launch } } : { ok: false, error: opened.error };
+      }
       // [PiDock 10] (#15) built-in terminal. Planning resolves the selected
       // root's cwd + the #7 environment and returns only masked rows: the real
       // child env never crosses the boundary, and the plan is not an execution.
@@ -1430,10 +1933,43 @@ async function performTaskOp(
         if ("error" in files) return { ok: false, error: files.error };
         const terminals = terminalRegistryFor(taskId);
         if ("error" in terminals) return { ok: false, error: terminals.error };
+        const sessions = terminalSessionsFor(taskId);
+        if ("error" in sessions) return { ok: false, error: sessions.error };
         const action = record["action"];
         const instanceId = String(record["instanceId"]);
         const caller = classifyControlCaller({ sessionId: record["sessionId"], label: record["label"], origin });
         if (!caller.ok) return { ok: false, error: caller.error };
+        if (action === "input" || action === "resize") {
+          // Raw terminal input/window control is the human takeover surface
+          // ([PiDock 10] #15 box 4). An Agent session is refused rather than
+          // handed an un-reviewed write channel into a running process; its
+          // approved start/stop path is unchanged.
+          if (caller.kind === "agent") {
+            return { ok: false, error: "permission-denied: 终端输入与窗口调整只允许界面显式操作，不能由 Agent 会话发起" };
+          }
+          const claim = host.claimWrite("human-ui", "auto", { kind: "terminal-control", label: `终端${action === "input" ? "输入" : "调整窗口"} ${instanceId}（用户显式操作）` });
+          if (!claim.ok) return { ok: false, error: writeClaimError(claim) };
+          try {
+            if (action === "input") {
+              const data = record["data"];
+              if (typeof data !== "string" || data.length === 0) {
+                return { ok: false, error: "invalid-payload: task/terminalControl.data must be a non-empty string when typing" };
+              }
+              const typed = await sessions.input(instanceId, data);
+              return typed.ok ? { ok: true, payload: { instanceId, action, actor: "human" } } : { ok: false, error: typed.error };
+            }
+            const cols = record["cols"], rows = record["rows"];
+            if (typeof cols !== "number" || typeof rows !== "number") {
+              return { ok: false, error: "invalid-payload: task/terminalControl.cols/rows must be integers when resizing" };
+            }
+            const resized = await sessions.resize(instanceId, cols, rows);
+            return resized.ok
+              ? { ok: true, payload: { instanceId, action, actor: "human", instance: resized.instance } }
+              : { ok: false, error: resized.error };
+          } finally {
+            host.releaseWrite(claim.claimId);
+          }
+        }
         if (action === "start") {
           const planned = terminalPlanFor(host, files, record, caller);
           if (!planned.ok) return { ok: false, error: planned.error };
@@ -1444,8 +1980,11 @@ async function performTaskOp(
             const claim = host.claimWrite("human-ui", "auto", { kind: "terminal-control", label: `终端启动 ${instanceId}（用户显式操作）` });
             if (!claim.ok) return { ok: false, error: writeClaimError(claim) };
             try {
-              const instance = terminals.register(plan);
-              return { ok: true, payload: { instanceId, action, actor: "human", instance } };
+              terminals.register(plan);
+              const started = await sessions.start({ plan, sessionId: null });
+              return started.ok
+                ? { ok: true, payload: { instanceId, action, actor: "human", instance: started.instance } }
+                : { ok: false, error: started.error };
             } catch (error) {
               return { ok: false, error: error instanceof Error ? error.message : String(error) };
             } finally {
@@ -1453,67 +1992,99 @@ async function performTaskOp(
             }
           }
           const channel = host.openSession(caller.sessionId);
-          return runAgentTerminalControl({
-            registry: terminals,
-            channel,
-            taskDir: host.taskDir,
-            sessionId: caller.sessionId,
-            instanceId,
-            action: "start",
-            approvalId: record["approvalId"],
-            write: host,
-            persist: () => host.store.writeSession(host.taskDir, channel.snapshot()),
-            act: () => terminals.register(plan),
-            // [PiDock 14] (#17) the terminal control opens its own execution
-            // record, so the gate's outcome is what `task/executionState` reads.
-            executions: host.controlExecutions,
-          });
+          const tier = host.permissionOf(caller.sessionId) ?? "default";
+          // The real fork is the side effect the write right covers: the outer
+          // claim is held across the gated start *and* the spawn, so another
+          // session cannot write beside a terminal that is being created. The
+          // sequence's own same-session claim nests inside this one.
+          const claim = tier === "read" ? { ok: true as const, claimId: "" } : host.claimWrite(caller.sessionId, tier, { kind: "terminal-control", label: `终端启动 ${instanceId}（Agent 会话）` });
+          if (!claim.ok) return { ok: false, error: writeClaimError(claim) };
+          try {
+            const result = runAgentTerminalControl({
+              registry: terminals,
+              channel,
+              taskDir: host.taskDir,
+              sessionId: caller.sessionId,
+              instanceId,
+              action: "start",
+              approvalId: record["approvalId"],
+              write: host,
+              persist: () => host.store.writeSession(host.taskDir, channel.snapshot()),
+              act: () => terminals.register(plan),
+              // [PiDock 14] (#17) the terminal control opens its own execution
+              // record, so the gate's outcome is what `task/executionState` reads.
+              executions: host.controlExecutions,
+            });
+            if (!result.ok) return result;
+            const started = await sessions.start({ plan, sessionId: caller.sessionId });
+            return started.ok
+              ? { ok: true, payload: { ...result.payload, instance: started.instance } }
+              : { ok: false, error: started.error };
+          } finally {
+            if (claim.claimId) host.releaseWrite(claim.claimId);
+          }
         }
-        // Stop: prove the exact process identity first (never by port), then
-        // flip the state. The real kill belongs to the spawner slice; until it
-        // lands an unspawned terminal has no pid and stop fails closed.
+        // Stop: the spawner signals only the group this Host recorded. A
+        // terminal with no recorded pid/pgid, no matching live session, or a
+        // driver that cannot prove the tree drained fails closed and keeps
+        // running - stop never pretends the process is gone.
         if (caller.kind === "human") {
           const claim = host.claimWrite("human-ui", "auto", { kind: "terminal-control", label: `终端停止 ${instanceId}（用户显式操作）` });
           if (!claim.ok) return { ok: false, error: writeClaimError(claim) };
           try {
-            const scope = terminals.stopScope(instanceId);
-            if (!scope.ok) return { ok: false, error: scope.error };
-            const instance = terminals.markExited(instanceId, { reason: "user-request" });
-            return { ok: true, payload: { instanceId, action, actor: "human", scope: scope.scope, instance } };
-          } catch (error) {
-            return { ok: false, error: error instanceof Error ? error.message : String(error) };
+            const stopped = await sessions.stop(instanceId, "user-request");
+            return stopped.ok
+              ? { ok: true, payload: { instanceId, action, actor: "human", instance: stopped.instance } }
+              : { ok: false, error: stopped.error };
           } finally {
             host.releaseWrite(claim.claimId);
           }
         }
         const channel = host.openSession(caller.sessionId);
-        return runAgentTerminalControl({
-          registry: terminals,
-          channel,
-          taskDir: host.taskDir,
-          sessionId: caller.sessionId,
-          instanceId,
-          action: "stop",
-          approvalId: record["approvalId"],
-          write: host,
-          persist: () => host.store.writeSession(host.taskDir, channel.snapshot()),
-          act: () => {
-            const scope = terminals.stopScope(instanceId);
-            if (!scope.ok) throw new Error(scope.error);
-            return terminals.markExited(instanceId, { reason: "agent-request" });
-          },
-          executions: host.controlExecutions,
-        });
+        const tier = host.permissionOf(caller.sessionId) ?? "default";
+        const claim = tier === "read" ? { ok: true as const, claimId: "" } : host.claimWrite(caller.sessionId, tier, { kind: "terminal-control", label: `终端停止 ${instanceId}（Agent 会话）` });
+        if (!claim.ok) return { ok: false, error: writeClaimError(claim) };
+        try {
+          const result = runAgentTerminalControl({
+            registry: terminals,
+            channel,
+            taskDir: host.taskDir,
+            sessionId: caller.sessionId,
+            instanceId,
+            action: "stop",
+            approvalId: record["approvalId"],
+            write: host,
+            persist: () => host.store.writeSession(host.taskDir, channel.snapshot()),
+            act: () => {
+              const scope = terminals.stopScope(instanceId);
+              if (!scope.ok) throw new Error(scope.error);
+              return terminals.get(instanceId)!;
+            },
+            executions: host.controlExecutions,
+          });
+          if (!result.ok) return result;
+          const stopped = await sessions.stop(instanceId, "agent-request");
+          return stopped.ok
+            ? { ok: true, payload: { ...result.payload, instance: stopped.instance } }
+            : { ok: false, error: stopped.error };
+        } finally {
+          if (claim.claimId) host.releaseWrite(claim.claimId);
+        }
       }
       case "task/terminalState": {
         const terminals = terminalRegistryFor(taskId);
         if ("error" in terminals) return { ok: false, error: terminals.error };
-        // `spawnImplemented: false` is the honest disclosure that this slice
-        // plans and tracks terminals but owns no real pty yet.
+        // The spawner is wired: the state now reports the real pid/pgid this
+        // task's Host spawned, and `processKnown` is the honest per-instance
+        // disclosure of whether a process identity was recorded at all.
+        // `spawnImplemented` reports whether this Host can really fork the helper
+        // (the worker's own platform gate): a Host that cannot spawn must not
+        // claim a capability it fails on, so the renderer keeps its residual
+        // warning instead of losing it while every start fails.
         return {
           ok: true,
           payload: {
-            spawnImplemented: false,
+            spawnImplemented: ptySpawnerAvailable(),
             instances: terminals.list().map((instance) => ({ ...instance, processKnown: instance.processId !== undefined })),
           },
         };
@@ -1585,6 +2156,11 @@ async function performTaskOp(
             // bounds each stop and stops every service in parallel.
             const stoppedServices = await shutdownDeadline(stopRegisteredServiceProcesses(), 15_000, "service-processes-shutdown-unconfirmed");
             if (stoppedServices.length > 0) serviceStopReport = stoppedServices;
+            // [PiDock 10] (#15) the real PTY helper and its session leader have
+            // no other stop path once the Host exits (they are not in the Host's
+            // process group), so every running terminal is contained before the
+            // Agent/SDK stages. Failing to prove one keeps the quit failed.
+            await shutdownDeadline(terminalSessions ? terminalSessions.stopAll("host-quit") : Promise.resolve(), 15_000, "terminal-processes-shutdown-unconfirmed");
             await workspaceHost?.shutdownSdk();
             await shutdownDeadline(Promise.resolve(sdkTurns?.waitForTerminal()), 15_000, "sdk-turns-shutdown-unconfirmed");
             sdkTurns = null;

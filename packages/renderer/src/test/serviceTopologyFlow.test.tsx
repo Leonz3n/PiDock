@@ -1,6 +1,10 @@
-import { screen, within } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { renderApp } from "./helpers";
+import { vi } from "vitest";
+import { RuntimePanel } from "../components/ToolPanels";
+import { createMemoryHost } from "../data/memoryHost";
+import { resolveHostAdapter } from "../data/shellHost";
+import { renderApp, resetRenderer } from "./helpers";
 
 /**
  * [PiDock 05] (#10) task-view topology flows: the runtime panel shows the
@@ -67,7 +71,10 @@ describe("runtime panel topology", () => {
     const record = await screen.findByTestId("service-run-record");
     expect(record).toHaveTextContent("构建与当前提交一致");
     expect(record).toHaveTextContent("已提交且干净");
-    expect(record).toHaveTextContent("5173");
+    // Box 3/6 honesty: the port a service row shows is a DECLARED one - nothing
+    // probed the socket - so the record says so instead of reading as observed.
+    expect(record).toHaveTextContent("5173（声明端口，未实测监听）");
+    expect(record).not.toHaveTextContent("5173（实测监听）");
     expect(record).toHaveTextContent("pid 4100");
     expect(record).toHaveTextContent("/tasks/release/services/saas-web/run-1.log");
     expect(record).toHaveTextContent("内存模拟记录（未接入真实进程）");
@@ -119,5 +126,63 @@ describe("runtime panel topology", () => {
     expect(instances).toHaveTextContent("saas-web · release/release-service-1@5173");
     expect(instances).toHaveTextContent("/tasks/release/services/saas-web/run-1.log");
     expect(within(await screen.findByTestId("runtime-logs")).getByText(/saas-web/)).toBeInTheDocument();
+  });
+
+  it("renders a real Host run record's declared ports and observed pid instead of the fixture", async () => {
+    /**
+     * [PiDock 05] (#10 review P1) reachability of the declared-port field: the
+     * bridge answers `task/serviceRunRecords` with the SAME shape the real Host
+     * returns after a catalog start (`packages/shell/src/host/
+     * service-two-task-isolation.test.ts` reads it back from the Host) - the pid
+     * is OBSERVED, the port list is DECLARED (`portsSource: "declared"`) and the
+     * code/build state is `unknown`. The panel must show THAT record, not the
+     * memory fixture (`release-service-1@5173`, pid 4100, 内存模拟记录). A rename
+     * of the Host's fields turns this red instead of silently falling back.
+     */
+    const taskOp = vi.fn(async (_taskId: string, op: string) => {
+      if (op === "task/serviceRunRecords") {
+        return {
+          ok: true,
+          payload: {
+            records: [
+              {
+                runId: "run-1",
+                taskId: "release",
+                serviceId: "release-service-1",
+                instanceId: "release/release-service-1@53101",
+                templateVersion: "v1",
+                codeState: { kind: "unknown", note: "缺少提交信息，无法判断代码状态" },
+                buildFreshness: "unknown",
+                ports: [53101],
+                portsSource: "declared",
+                processIdentity: { owner: "human", pid: 4242, startedAt: "2026-10-07T01:00:00.000Z" },
+                logRef: "/tasks/release/services/release-service-1/run-run-1.log",
+                startedAt: "2026-10-07T01:00:00.000Z",
+                verifications: [],
+              },
+            ],
+            registered: [],
+          },
+        };
+      }
+      return { ok: false, error: "no plan in this test" };
+    });
+    window.pidock = { taskOp };
+    try {
+      resetRenderer();
+      const host = createMemoryHost();
+      const view = await resolveHostAdapter(host).serviceTopology("release");
+      const task = await createMemoryHost().getTask("release");
+      if (!task) throw Error("release task missing");
+      render(<RuntimePanel task={task} topology={view} onToggleService={() => {}} />);
+
+      const record = await screen.findByTestId("service-run-record");
+      expect(record).toHaveTextContent("53101（声明端口，未实测监听）");
+      expect(record).not.toHaveTextContent("5173（声明端口，未实测监听）");
+      expect(record).toHaveTextContent("pid 4242");
+      expect(record).not.toHaveTextContent("内存模拟记录");
+    } finally {
+      delete window.pidock;
+    }
   });
 });

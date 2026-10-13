@@ -13,7 +13,15 @@
  *   below only record where each row came from (`仓库默认配置` first,
  *   then 共享模板 / 本机私有配置 / 任务覆盖, then runtime bindings).
  * - Credentials and local paths live in the private layer and NEVER in
- *   the shared template: `validateNoSecretsInShared` enforces it.
+ *   the shared template: `validateNoSecretsInShared` enforces it for keys,
+ *   and `validateSharedServiceProgram` / `validateSharedServiceArgument` /
+ *   `validateSharedServiceHealthTarget` / `validateSharedServiceValue` extend
+ *   the same fail-closed policy to a program name, an argument, a health
+ *   target and a shared value (machine paths and credential spellings are
+ *   refused wherever they appear in one field).
+ * - A shared template's working directory is repo-relative and portable
+ *   (`validateSharedServiceWorkdir`); the absolute cwd of one machine is
+ *   the task binding's job.
  * - Desktop launch uses an explicit program + argv array, never Unix-only
  *   inline env assignment (`FOO=bar cmd`); `validateServiceDescriptor`
  *   rejects programs carrying assignments or shell chaining.
@@ -78,9 +86,16 @@ export function isServiceSecretKey(key: string): boolean {
   return /PASSWORD|SECRET|TOKEN|API_KEY|PRIVATE_KEY/i.test(key);
 }
 
+/**
+ * The one masked spelling a value takes wherever it leaves the Host: the page's
+ * effective-config table, the Agent's service status and an import draft all
+ * show this form instead of a private value.
+ */
+export const SERVICE_VALUE_MASK = "••••••••";
+
 /** Display form: secrets are masked, everything else verbatim. */
 export function maskServiceValue(entry: ServiceConfigEntry): string {
-  return entry.secret || isServiceSecretKey(entry.key) ? "••••••••" : entry.value;
+  return entry.secret || isServiceSecretKey(entry.key) ? SERVICE_VALUE_MASK : entry.value;
 }
 
 /**
@@ -126,6 +141,159 @@ export function validateServiceDescriptor(descriptor: ServiceDescriptor): Servic
     if (!absolute) {
       return { code: "invalid-service", message: "工作目录必须是本机绝对路径" };
     }
+  }
+  return null;
+}
+
+/**
+ * Shared-template working directory: the portable, repo-relative default the
+ * task binding pre-fills. A shared revision never carries a machine path, so
+ * absolute forms (POSIX `/…`, `~/…`, Windows drive, UNC), `\`, control
+ * characters, `.`/`..` segments, empty segments and credential-looking
+ * segments are rejected fail-closed; the concrete absolute cwd stays in the
+ * task binding (`rootId` + `subdir`) and is what a launch resolves.
+ */
+export function validateSharedServiceWorkdir(workdir: string): ServiceConfigError | null {
+  const value = workdir.trim();
+  if (value.length === 0) {
+    return { code: "invalid-service", message: "工作目录不能为空；不填写表示使用仓库根目录" };
+  }
+  if (value.length > 512) {
+    return { code: "invalid-service", message: "工作目录过长，请使用仓库内的简短相对目录" };
+  }
+  if (value.startsWith("/") || value.startsWith("~") || value.startsWith("\\") || /^[A-Za-z]:/.test(value)) {
+    return { code: "invalid-service", message: "工作目录必须是仓库内相对目录，不能是本机绝对路径" };
+  }
+  if (/[\\\0\r\n]/.test(value)) {
+    return { code: "invalid-service", message: "工作目录不能包含反斜杠或控制字符" };
+  }
+  const parts = value.split("/");
+  if (parts.some((part) => part.length === 0)) {
+    return { code: "invalid-service", message: "工作目录不能以斜杠开头、结尾或包含空目录名" };
+  }
+  if (parts.some((part) => part === "." || part === "..")) {
+    return { code: "invalid-service", message: "工作目录不能包含 . 或 .. 片段，不能跳出仓库" };
+  }
+  if (isServiceSecretKey(value)) {
+    return { code: "secret-in-shared", message: "工作目录不能包含疑似凭据片段，请改用中性目录名" };
+  }
+  return null;
+}
+
+/** One path root at the start of a token: POSIX absolute, home, Windows drive/UNC, or an escape segment. */
+function pathRootOf(value: string): boolean {
+  return value.startsWith("/") || value.startsWith("~") || value.startsWith("\\") || /^[A-Za-z]:[\\/]/.test(value) ||
+    value === ".." || value.startsWith("../") || value.startsWith("..\\");
+}
+
+/**
+ * True when one command token, health target or value carries a machine path
+ * *anywhere* in the token: at the start, after `=` or a short flag cluster
+ * (`-I/Users/name` is as private as `/Users/name`), or as a `file://` URL. A
+ * repo-relative token (`src/main.ts`) stays portable, so a shared revision
+ * does not lose legitimate relative arguments.
+ */
+export function carriesMachinePath(value: string): boolean {
+  if (/^file:\/\//i.test(value)) return true;
+  const flagStripped = value.replace(/^--?[A-Za-z0-9]+/, "");
+  return pathRootOf(value) || (flagStripped !== value && pathRootOf(flagStripped)) ||
+    /(?:^|=)(?:[/\\~]|[A-Za-z]:[\\/]|\.\.[\\/])/.test(value);
+}
+
+/** Credential word; in an argument it counts even without `=` (`--token`). */
+const SHARED_CREDENTIAL_WORD = /(?:password|passwd|secret|token|api[_-]?key|access[_-]?token|private[_-]?key)/i;
+/** Credential assignment or URL userinfo anywhere: `apikey=`, `api_key=`, `x-key=`, `https://user:pass@…`. */
+const SHARED_CREDENTIAL_ASSIGNMENT =
+  /:\/\/[^/\s]+@|(?:password|passwd|secret|token|api[_-]?key|apikey|access[_-]?token|private[_-]?key)\s*=|(?:^|[?&])[^=&\s]{0,40}(?:key|secret|token|password|passwd|auth)\s*=/i;
+/** One shared argument: the value/target spellings plus a bare credential word. */
+const SHARED_ARGUMENT_CREDENTIAL = new RegExp(`(?:${SHARED_CREDENTIAL_WORD.source})|(?:${SHARED_CREDENTIAL_ASSIGNMENT.source})`, "i");
+
+/**
+ * Shared-revision portability policy for the non-key fields (command
+ * arguments, health-check targets, shared values): a shared revision never
+ * carries a machine path or a credential, and the matcher is deliberately
+ * wider than one leading-path or `[?&]`-prefixed spelling. Only the class is
+ * returned, so a refused credential is never echoed back into a page.
+ */
+function sharedFieldRefusal(value: string, credential: RegExp): "path" | "credential" | null {
+  if (credential.test(value)) return "credential";
+  return carriesMachinePath(value) ? "path" : null;
+}
+
+/** One shared command argument: bounded, single-line, and never a machine path or credential. */
+export function validateSharedServiceArgument(argument: string): ServiceConfigError | null {
+  if (argument.length > 512) {
+    return { code: "invalid-service", message: "共享模板参数过长，请改用简短的可移植参数" };
+  }
+  if (/[\r\n\0]/.test(argument)) {
+    return { code: "invalid-service", message: "共享模板参数不能包含控制字符，请改用单行参数" };
+  }
+  const refusal = sharedFieldRefusal(argument, SHARED_ARGUMENT_CREDENTIAL);
+  if (refusal === "path") {
+    return { code: "invalid-service", message: "共享模板参数不能携带本机路径；请改用仓库内相对参数" };
+  }
+  if (refusal === "credential") {
+    return { code: "secret-in-shared", message: "共享模板参数不能携带凭据；请移入本机私有配置" };
+  }
+  return null;
+}
+
+/** One shared health-check target: bounded, single-line, and never a local socket/file path or credential. */
+export function validateSharedServiceHealthTarget(target: string): ServiceConfigError | null {
+  if (target.length > 512) {
+    return { code: "invalid-service", message: "健康检查目标过长，请填写简短的服务地址" };
+  }
+  if (/[\r\n\0]/.test(target)) {
+    return { code: "invalid-service", message: "健康检查目标不能包含控制字符，请填写单行地址" };
+  }
+  const refusal = sharedFieldRefusal(target, SHARED_CREDENTIAL_ASSIGNMENT);
+  if (refusal === "path") {
+    return { code: "invalid-service", message: "健康检查目标不能是本机文件路径；请填写服务地址，如 http://127.0.0.1:3000/health" };
+  }
+  if (refusal === "credential") {
+    return { code: "secret-in-shared", message: "健康检查目标不能携带凭据或令牌；请移入本机私有配置" };
+  }
+  return null;
+}
+
+/** One shared value: bounded, single-line, and never a machine path or credential. */
+export function validateSharedServiceValue(value: string): ServiceConfigError | null {
+  if (value.length > 2048) {
+    return { code: "invalid-service", message: "共享模板的值过长，请改用简短的可提交值" };
+  }
+  if (/[\0\r\n]/.test(value)) {
+    return { code: "invalid-service", message: "共享模板的值不能包含控制字符" };
+  }
+  const refusal = sharedFieldRefusal(value, SHARED_CREDENTIAL_ASSIGNMENT);
+  if (refusal === "path") {
+    return { code: "invalid-service", message: "共享模板的值不能携带本机路径；请移入本机私有配置" };
+  }
+  if (refusal === "credential") {
+    return { code: "secret-in-shared", message: "共享模板的值不能携带凭据；请移入本机私有配置" };
+  }
+  return null;
+}
+
+/**
+ * Class of one value that must not become a shared value, reusing
+ * `validateSharedServiceValue` ([PiDock 04] #7 box 3): a credential or a
+ * machine path belongs to the local private layer, `unportable` covers the
+ * remaining refusals (control characters, over-long text). Only the class is
+ * returned, so an import draft can name the key that needs review without ever
+ * echoing the value it refused.
+ */
+export function sharedValueRefusalClass(value: string): "credential" | "path" | "unportable" | null {
+  if (value.length === 0) return null;
+  const refusal = validateSharedServiceValue(value);
+  if (refusal === null) return null;
+  if (refusal.code === "secret-in-shared") return "credential";
+  return carriesMachinePath(value) ? "path" : "unportable";
+}
+
+/** One shared program name: portable only (no machine path, no other special character). */
+export function validateSharedServiceProgram(program: string): ServiceConfigError | null {
+  if (!/^[A-Za-z0-9_.+-]+$/.test(program)) {
+    return { code: "invalid-service", message: "共享模板的启动程序必须是可移植的程序名（如 node、pnpm），不能是本机路径或其他特殊字符" };
   }
   return null;
 }
@@ -281,6 +449,30 @@ export function autoAdjustPorts(
   return { rows: next, adjusted };
 }
 
+/**
+ * The ports one service's launch *declares*, never the ports a probe observed:
+ * the descriptor's own list (the recipe/shared-template declaration) plus every
+ * resolved row whose key ends in `PORT` and whose value is a usable port number
+ * - the same key rule `autoAdjustPorts` uses. A task's own port binding lands in
+ * `rows`, which is how two tasks bound to one template can declare different
+ * ports. No socket is inspected here: `RunRecord.portsSource` carries that
+ * distinction into the payload instead of letting a declared port read as an
+ * observed one.
+ */
+export function declaredServicePorts(
+  descriptorPorts: readonly number[],
+  rows: readonly ServiceConfigEntry[],
+): number[] {
+  const ports = new Set<number>();
+  for (const port of descriptorPorts) if (Number.isInteger(port) && port >= 1 && port <= 65535) ports.add(port);
+  for (const row of rows) {
+    if (!/PORT$/.test(row.key)) continue;
+    const value = Number(row.value);
+    if (Number.isInteger(value) && value >= 1 && value <= 65535) ports.add(value);
+  }
+  return [...ports].sort((a, b) => a - b);
+}
+
 export interface ImportDraftInput {
   /** Service/recipe display name guess (e.g. package.json name, compose service). */
   name?: string;
@@ -295,6 +487,15 @@ export interface ImportDraft {
   program: string;
   args: string[];
   runType: ServiceRunType;
+  /** The signal in the candidate that chose `runType`; always shown beside the label. */
+  runTypeBasis: string;
+  /**
+   * True when the candidate names no runnable command, so nothing distinguishes
+   * a resident service from a one-shot command or a prepare step. The caller
+   * must ask the human; the draft keeps the conservative `one-shot` and never
+   * reports the candidate as a resident service.
+   */
+  runTypeUncertain: boolean;
   /** KEYs that are syntactically invalid and need fixing before save. */
   invalidVars: string[];
   /** Items needing human confirmation (empty values, unresolvable refs, secret-looking values in a shared draft). */
@@ -302,30 +503,48 @@ export interface ImportDraft {
   origin: string;
 }
 
+const RESIDENT_RUN_SIGNAL = /(^|[\s:"'])(dev|start|serve|watch)([\s:"']|$)/;
+const PREPARE_RUN_SIGNAL = /(prepare|postinstall|preinstall|install|setup|migrate|seed)/;
+/** A resident word beside one of these starts a prepare step, not a long-running server. */
+const RESIDENT_RUN_SIGNAL_VETO = /(migrate|seed|prepare|install)/;
+
 /**
  * Classify one imported start command into a service draft. Splits the
  * command line on whitespace (no shell evaluation — chaining operators stay
  * inside the last arg so `validateServiceDescriptor` can reject them later).
- * runType guess: `dev|start|serve|watch` → long-lived; `prepare|install|
- * setup|migrate|seed|postinstall` → prepare; everything else → one-shot
- * (caller confirms; the dialog always shows the guess for correction).
+ *
+ * The run type is a *guess with a named basis*, never a silent promotion:
+ * `dev|start|serve|watch` → long-lived, `prepare|install|setup|migrate|seed` →
+ * prepare (a prepare word beside a resident word wins), everything else →
+ * one-shot. The candidate name counts as a signal because that is where a
+ * package script carries its own convention, and `runTypeBasis` says which of
+ * the two matched. A candidate that names **no command at all** cannot be
+ * classified: `runTypeUncertain` is true and `runType` stays `one-shot`, so a
+ * caller can never turn an unknown candidate into a resident service by
+ * accident.
  */
 export function classifyImportDraft(input: ImportDraftInput): ImportDraft {
   const tokens = input.command.trim().split(/\s+/).filter((token) => token.length > 0);
   const [program = "", ...args] = tokens;
-  const lowered = input.command.toLowerCase();
-  const runType: ServiceRunType =
-    /(^|[\s:"'])(dev|start|serve|watch)([\s:"']|$)/.test(lowered) &&
-    !/(migrate|seed|prepare|install)/.test(lowered)
-      ? "long-lived"
-      : /(prepare|postinstall|preinstall|install|setup|migrate|seed)/.test(lowered)
-        ? "prepare"
-        : "one-shot";
+  const name = input.name?.trim() ?? "";
+  const lowered = `${name} ${input.command}`.toLowerCase();
+  const uncertain = program.length === 0;
+  const resident = RESIDENT_RUN_SIGNAL.test(lowered) && !RESIDENT_RUN_SIGNAL_VETO.test(lowered);
+  const prepare = !resident && PREPARE_RUN_SIGNAL.test(lowered);
+  const runTypeBasis = uncertain
+    ? "配置未给出启动命令，无法判定运行类型"
+    : resident
+      ? (RESIDENT_RUN_SIGNAL.test(input.command.toLowerCase()) ? "命令含常驻关键字 dev/start/serve/watch" : "名称含常驻关键字 dev/start/serve/watch")
+      : prepare
+        ? (PREPARE_RUN_SIGNAL.test(input.command.toLowerCase()) ? "命令含准备关键字 prepare/install/setup/migrate/seed" : "名称含准备关键字 prepare/install/setup/migrate/seed")
+        : "未匹配常驻或准备关键字，按一次性命令处理";
   return {
-    name: input.name?.trim() || program,
+    name: name || program,
     program,
     args,
-    runType,
+    runType: uncertain ? "one-shot" : resident ? "long-lived" : prepare ? "prepare" : "one-shot",
+    runTypeBasis,
+    runTypeUncertain: uncertain,
     invalidVars: [],
     toVerify: [],
     origin: input.origin ?? "unknown",
@@ -408,6 +627,26 @@ export function restartNeededForTemplateAdopt(
     .map((service) => ({ id: service.id, name: service.name, from: service.templateVersion, to: adoptedVersion }));
 }
 
+/**
+ * The one spelling of "which platform is this process running on":
+ * `<process.platform>-<process.arch>` (e.g. `darwin-arm64`, `win32-x64`).
+ * Both the launch-verification record the Host writes and the platform rows it
+ * projects use this label, so a row can only ever name the platform it was
+ * really observed on — never a caller-supplied one.
+ */
+export function hostPlatformLabel(platform: string = process.platform, arch: string = process.arch): string {
+  return `${platform}-${arch}`;
+}
+
+/**
+ * Platforms the project's release/validation matrix names
+ * (`docs/mvp-validation-plan.md`: macOS arm64 + Windows x64, "只有实际测试通过
+ * 的平台可以标记已验证"). They exist here so the surface can show a platform
+ * that has NO real verification BY NAME instead of leaving it out — an absent
+ * row is exactly the state that could be misread as a pass.
+ */
+export const LAUNCH_VERIFICATION_TARGETS = ["darwin-arm64", "win32-x64"] as const;
+
 export interface PlatformLaunchRecord {
   program: string;
   args: string[];
@@ -415,9 +654,18 @@ export interface PlatformLaunchRecord {
   nodeVersion: string;
   ok: boolean;
   note: string;
+  /** When the real child of this launch was confirmed alive (ISO), when observed. */
+  startedAt?: string;
+  /** True once a real stop of that launch was confirmed, when observed. */
+  stopped?: boolean;
+  stoppedAt?: string;
 }
 
-/** Record one per-platform desktop-launch verification (explicit program+args). */
+/**
+ * Build one per-platform desktop-launch verification (explicit program+args).
+ * Pure: it stamps nothing and observes nothing, so only a caller that really
+ * watched a child start or stop may use its result as a verification record.
+ */
 export function recordPlatformLaunch(input: {
   program: string;
   args: string[];
@@ -425,6 +673,9 @@ export function recordPlatformLaunch(input: {
   nodeVersion: string;
   ok: boolean;
   note?: string;
+  startedAt?: string;
+  stopped?: boolean;
+  stoppedAt?: string;
 }): PlatformLaunchRecord {
   return {
     program: input.program,
@@ -433,5 +684,8 @@ export function recordPlatformLaunch(input: {
     nodeVersion: input.nodeVersion,
     ok: input.ok,
     note: input.note ?? "",
+    ...(input.startedAt !== undefined ? { startedAt: input.startedAt } : {}),
+    ...(input.stopped !== undefined ? { stopped: input.stopped } : {}),
+    ...(input.stoppedAt !== undefined ? { stoppedAt: input.stoppedAt } : {}),
   };
 }

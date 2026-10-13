@@ -35,6 +35,10 @@ interface OwnedProcess {
 /** Poll cadence for confirming that a recovered launch's identity is gone. */
 const STOP_POLL_MS = 25;
 
+/** Default stop budget: SIGTERM grace window, then the SIGKILL confirmation window. */
+export const SERVICE_STOP_GRACE_MS = 3000;
+export const SERVICE_STOP_CONFIRM_MS = 1000;
+
 /** Device+inode of a directory: the identity the cwd check and spawn must agree on. */
 interface DirectoryIdentity { dev: number; ino: number }
 
@@ -110,8 +114,8 @@ export class TaskServiceProcesses {
   constructor(taskDir: string, private readonly onLine: (serviceId: string, line: string) => void,
     private readonly onExit: (serviceId: string, reason: string) => void,
     private readonly redact: (line: string) => string,
-    private readonly stopGraceMs = 3000,
-    private readonly stopConfirmMs = 1000,
+    private readonly stopGraceMs = SERVICE_STOP_GRACE_MS,
+    private readonly stopConfirmMs = SERVICE_STOP_CONFIRM_MS,
     /** Durable per-launch ownership records; absent keeps the driver in-memory only. */
     private readonly ownership: ServiceOwnershipLog | undefined = undefined) {
     this.taskDir = realpathSync(taskDir);

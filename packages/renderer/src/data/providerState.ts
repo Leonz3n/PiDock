@@ -26,6 +26,21 @@ import type {
 /** Canonical reasoning-level order (the edit form's `REASONING_LABELS`). */
 export const REASONING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
+/**
+ * Chinese tier labels, prototype A's `reasoningLevels` (`prototypes/pidock-ui/app.js:13`).
+ * One map for every surface that names a level (the reasoning picker, the provider
+ * edit form, the production composer readout) so a level never shows under two names.
+ */
+export const REASONING_LABELS: Record<string, string> = {
+  off: "关闭",
+  minimal: "极低",
+  low: "低",
+  medium: "中",
+  high: "高",
+  xhigh: "极高",
+  max: "最高",
+};
+
 /** Model-list fixtures used by the in-memory adapter (no real request is sent). */
 export const PROTOCOL_MODEL_FIXTURES: Record<string, string[]> = {
   "anthropic-messages": ["claude-sonnet-4-5", "claude-haiku-4-5", "claude-opus-4-1"],

@@ -38,8 +38,9 @@ function syntheticChild(kill = vi.fn()) {
 function fakeTransport(result: HostTaskResult) {
   return {
     task: vi.fn(async () => result),
-    // The registry binds the per-task browser handler on every spawn.
+    // The registry binds the per-task browser and shared-template handlers on every spawn.
     onBrowserRequest: vi.fn(),
+    onServiceTemplateRequest: vi.fn(),
     dispose: vi.fn(),
   };
 }
@@ -378,6 +379,7 @@ describe("PerTaskHostRegistry main shutdown admission", () => {
           : { ...TASK_RESULT, taskId: params.taskId, op: params.op };
       }),
       onBrowserRequest: vi.fn(),
+      onServiceTemplateRequest: vi.fn(),
       dispose: vi.fn(),
     };
     const registry = new PerTaskHostRegistry("workspace-a", async () => ({
@@ -427,6 +429,7 @@ describe("PerTaskHostRegistry main shutdown admission", () => {
             : { ...TASK_RESULT, taskId: params.taskId };
         }),
         onBrowserRequest: vi.fn(),
+        onServiceTemplateRequest: vi.fn(),
         dispose,
       };
       const registry = new PerTaskHostRegistry("workspace-a", async () => ({
@@ -1043,6 +1046,7 @@ describe("browser request binding", () => {
         onBrowserRequest: vi.fn((handler: (params: unknown) => Promise<unknown>) => {
           handlers.push(handler);
         }),
+        onServiceTemplateRequest: vi.fn(),
         dispose: vi.fn(),
       } as never,
       child: syntheticChild() as never,
@@ -1070,6 +1074,58 @@ describe("browser request binding", () => {
     await registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
     const result = await handlers[0]?.({ workspaceId: "workspace-a", taskId: "task-a", action: "page/state", actor: { kind: "human", label: "用户" } });
     expect(result).toMatchObject({ ok: false, error: expect.stringContaining("browser-unavailable") });
+  });
+});
+
+// [PiDock 04] (#7 box 6): every forked Host client gets the shared-template
+// handler bound to THIS spawn's task id, so a payload that names another task
+// reaches a handler that refuses it by name; without a mounted handler the
+// request fails closed instead of a local fallback write.
+describe("shared-template request binding", () => {
+  function spawnCapturing(handlers: Array<(params: never) => Promise<unknown>>) {
+    return vi.fn(async () => ({
+      client: {
+        task: vi.fn(async () => TASK_RESULT),
+        onBrowserRequest: vi.fn(),
+        onServiceTemplateRequest: vi.fn((handler: (params: never) => Promise<unknown>) => {
+          handlers.push(handler);
+        }),
+        dispose: vi.fn(),
+      } as never,
+      child: syntheticChild() as never,
+    }));
+  }
+
+  it("binds the handler to the spawn's own task id and routes the request through it", async () => {
+    const handlers: Array<(params: never) => Promise<unknown>> = [];
+    const derived: string[] = [];
+    const registry = new PerTaskHostRegistry("workspace-a", spawnCapturing(handlers) as never, () => "/tasks/task-a");
+    // The real shape of main's binding: the factory receives main's own task id
+    // for the child it just forked, and answers only for that id.
+    registry.configureServiceTemplates((taskId) => {
+      derived.push(taskId);
+      return async (params: { taskId: string; edit: { serviceId: string } }) => params.taskId === taskId
+        ? { ok: true as const, payload: { serviceId: params.edit.serviceId } }
+        : { ok: false as const, error: `task-identity-mismatch: ${params.taskId}` };
+    });
+    await registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
+    expect(handlers).toHaveLength(1);
+    expect(await handlers[0]?.({ taskId: "task-a", edit: { serviceId: "s-1" } } as never))
+      .toEqual({ ok: true, payload: { serviceId: "s-1" } });
+    // The factory was asked for THIS child's task id (the spawn's, not the
+    // payload's), so main's derivation is bound to the process it forked.
+    expect(derived).toEqual(["task-a"]);
+    // A payload naming another task is refused by the handler main bound here.
+    expect(await handlers[0]?.({ taskId: "task-b", edit: { serviceId: "s-1" } } as never))
+      .toEqual({ ok: false, error: "task-identity-mismatch: task-b" });
+  });
+
+  it("fails closed when no shared-template handler is mounted", async () => {
+    const handlers: Array<(params: never) => Promise<unknown>> = [];
+    const registry = new PerTaskHostRegistry("workspace-a", spawnCapturing(handlers) as never, () => "/tasks/task-a");
+    await registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
+    expect(await handlers[0]?.({ taskId: "task-a", edit: { serviceId: "s-1" } } as never))
+      .toMatchObject({ ok: false, error: expect.stringContaining("template-unavailable") });
   });
 });
 
@@ -1151,6 +1207,7 @@ describe("task browser origins", () => {
           };
         }),
         onBrowserRequest: vi.fn(),
+        onServiceTemplateRequest: vi.fn(),
         dispose: vi.fn(),
       };
       return { client: transport as never, child: syntheticChild() as never };
@@ -1177,7 +1234,7 @@ describe("task browser origins", () => {
     const kill = vi.fn(), dispose = vi.fn();
     const registry = new PerTaskHostRegistry("workspace-a", async () => ({ child: syntheticChild(kill) as never, client: {
       task: vi.fn(async (params) => ({ workspaceId: "workspace-a", taskId: params.taskId, op: params.op, payload: params.op === "task/quit" ? { quit: { applied: [], plan: { failures: [{ code: "unconfirmed" }], retainedTasks: [] } } } : {} })),
-      onBrowserRequest: vi.fn(), dispose,
+      onBrowserRequest: vi.fn(), onServiceTemplateRequest: vi.fn(), dispose,
     } as never }), () => "/tasks/a");
     await registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
     const stop = createHostStopper(registry, { kind: "shell-ui", senderWebContentsId: 7 }, () => registry.disposeAll());
@@ -1198,7 +1255,7 @@ describe("task browser origins", () => {
       const index = new TaskRootIndex(join(home, "profile"), root);
       const registry = new PerTaskHostRegistry("workspace-a", async () => ({ child: syntheticChild(kill) as never, client: {
         task: vi.fn(async (params) => ({ workspaceId: "workspace-a", taskId: params.taskId, op: params.op, payload: params.op === "task/quit" ? { quit: lifecycle.quit() } : {} })),
-        onBrowserRequest: vi.fn(), dispose,
+        onBrowserRequest: vi.fn(), onServiceTemplateRequest: vi.fn(), dispose,
       } as never }), (taskId) => index.resolve(taskId));
       await registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
       if (change === "moved-root") renameSync(root, moved);
@@ -1230,6 +1287,7 @@ describe("task browser origins", () => {
           return { workspaceId: "workspace-a", taskId: params.taskId, op: params.op, payload: {} };
         }),
         onBrowserRequest: vi.fn(),
+        onServiceTemplateRequest: vi.fn(),
         dispose: vi.fn(),
       } as never,
       child: syntheticChild() as never,
@@ -1243,5 +1301,56 @@ describe("task browser origins", () => {
     expect(report.tasks).toEqual([
       { taskId: "task-a", ok: false, applied: [], failures: [], retainedTasks: ["task-a"], error: "host-unreachable" },
     ]);
+  });
+});
+describe("PerTaskHostRegistry service-owner re-bind admission ([PiDock 04] #7 slice)", () => {
+  it("refuses by name without an owner authority, and is an idempotent no-op for a task without a forked Host", async () => {
+    const { registry } = registryWith(() => "/tasks/task-a", [], TASK_RESULT);
+    // No `configureServices` wiring: the way back is unavailable by name, not silently skipped.
+    expect(() => registry.rebindServiceOwner("task-a")).toThrow("service-owner-authority-unavailable");
+    const wired = registryWith(() => "/tasks/task-a", [], TASK_RESULT).registry;
+    const rebind = vi.fn(async () => "current" as const);
+    wired.configureServices(() => ({ rebind } as never));
+    // No Host forked for this task: the next fork binds the current revision itself,
+    // so nothing is replaced and no authority call is made.
+    expect(await wired.rebindServiceOwner("task-a")).toBe("absent");
+    expect(rebind).not.toHaveBeenCalled();
+    expect(wired.size).toBe(0);
+  });
+
+  it("refuses a same-task re-bind while one is already in flight, and replaces exactly once", async () => {
+    const { registry, spawn } = registryWith(() => "/tasks/task-a", [], TASK_RESULT);
+    const gate = deferred<"rebound">();
+    const rebind = vi.fn(() => gate.promise);
+    registry.configureServices(() => ({ rebind } as never));
+    await registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
+    const first = registry.rebindServiceOwner("task-a");
+    expect(() => registry.rebindServiceOwner("task-a")).toThrow("service-owner-rebind-busy");
+    expect(rebind).toHaveBeenCalledTimes(1);
+    gate.resolve("rebound");
+    expect(await first).toBe("rebound");
+    // The guard holds one swap at a time, not the task: afterwards it can be replaced again.
+    rebind.mockResolvedValue("current");
+    expect(await registry.rebindServiceOwner("task-a")).toBe("current");
+    expect(rebind).toHaveBeenCalledTimes(2);
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a re-bind while a routed op of the same task is still in flight", async () => {
+    const gate = deferred<HostTaskResult>();
+    let calls = 0;
+    const transport = { task: vi.fn(() => (++calls === 1 ? Promise.resolve(TASK_RESULT) : gate.promise)), onBrowserRequest: vi.fn(), onServiceTemplateRequest: vi.fn(), dispose: vi.fn() };
+    const registry = new PerTaskHostRegistry("workspace-a", async () => ({ client: transport as never, child: syntheticChild() as never }), () => "/tasks/task-a");
+    const rebind = vi.fn(async () => "rebound" as const);
+    registry.configureServices(() => ({ rebind } as never));
+    await registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
+    const inFlight = registry.routeTaskOp({ taskId: "task-a", op: "task/cancel", payload: {} });
+    expect(() => registry.rebindServiceOwner("task-a")).toThrow("service-owner-rebind-busy");
+    expect(rebind).not.toHaveBeenCalled();
+    gate.resolve(TASK_RESULT);
+    expect(await inFlight).toEqual(TASK_RESULT);
+    // Once the op settled, the same call is admitted.
+    expect(await registry.rebindServiceOwner("task-a")).toBe("rebound");
+    expect(rebind).toHaveBeenCalledTimes(1);
   });
 });

@@ -42,6 +42,42 @@ describe("Desktop task creation", () => {
     await waitFor(() => expect(onCreated).toHaveBeenCalledWith(project.id));
     expect(createTask.mock.calls.filter(([request]) => request.op === "commit")).toHaveLength(1);
   });
+  it("names a blank field in the path preview instead of printing an empty path segment", async () => {
+    // `parse` in `desktopCreation.ts` requires the intent's own `name` to be
+    // non-empty and type-checks (only) a repo's `commit`/`repoDir`/`name` and a
+    // directory's `name`/`path`/`linkName`, so those blanks ARE reachable; the
+    // preview used to print them as a bare `/` or a dangling `·`.
+    const blank = { ...intent, state: "pending", repos: [{ ...intent.repos[0]!, name: "", remote: "", remoteBranch: "", commit: "", repoDir: "" }],
+      directories: [{ ...intent.directories[0]!, name: "", path: "", linkName: "" }] };
+    const createTask = vi.fn(async () => ({ ok: true, payload: blank }));
+    render(<DesktopTaskCreation project={project} bridge={bridge(createTask)} onCreated={async () => {}} />);
+    const preview = await screen.findByRole("region", { name: "创建任务" });
+    // The intent's own name is validated non-empty by the reader, so it still
+    // renders verbatim.
+    expect(preview).toHaveTextContent(`任务路径预览 · ${intent.name}`);
+    expect(preview).toHaveTextContent("Host 未上报仓库名称 · Host 未上报远程名/Host 未上报远程分支 · Host 未上报提交");
+    expect(preview).toHaveTextContent("Host 未上报目录名");
+    expect(preview).toHaveTextContent("Host 未上报目录名称 · Host 未上报目录路径 → " + blank.taskDir + "/Host 未上报链接名（共享可写）");
+  });
+
+  it("names a blank project source in the source list instead of an empty label or a bare separator", async () => {
+    // `source()` (`data/desktopProjects.ts:38`) type-checks a source's `name` and
+    // `path`, so this `DesktopProject` (the same reader DesktopInventory and
+    // append surface read) can carry blanks; the picker used to render an empty
+    // repo label and a ` · `-shaped directory label.
+    const blankProject: DesktopProject = {
+      ...project,
+      repositories: [{ ...project.repositories[0]!, name: "", path: "" }],
+      directories: [{ ...project.directories[0]!, name: "", path: "" }],
+    };
+    render(<DesktopTaskCreation project={blankProject} bridge={bridge(vi.fn(async () => ({ ok: true, payload: null })))} onCreated={async () => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: "任务" }));
+    const [repo, dir] = screen.getAllByRole("checkbox");
+    expect(repo!.closest("label")).toHaveTextContent("Host 未上报来源名称");
+    expect(repo!.closest("div")!.querySelector("span")).toHaveTextContent("Host 未上报来源路径");
+    expect(dir!.closest("label")).toHaveTextContent("Host 未上报来源名称 · Host 未上报来源路径");
+  });
+
   it.each(["cancel", "error"] as const)("retains selected inputs after picker/prepare %s and previews the same request on retry", async (outcome) => {
     let attempts = 0;
     const createTask = vi.fn(async (request: { op: string; input?: unknown; id?: string }) => {
@@ -128,5 +164,39 @@ describe("Desktop task creation", () => {
     expect(screen.getByText(/项目选择已变化/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "固定基线并预览路径" })).toBeDisabled();
     expect(createTask.mock.calls.filter(([request]) => request.op === "prepare")).toHaveLength(0);
+  });
+  it("creates a PURE-directory task: zero repositories, one directory, no Git baseline required", async () => {
+    const noRepoProject: DesktopProject = {
+      id: "c1de0000-0000-4000-8000-000000000001", name: "Docs only", description: "",
+      repositories: [], directories: [{ id: "e2eb192a-108b-4f9b-89a4-cd1fd8fb1fd0", name: "Documents", path: "/local/documents" }],
+    };
+    const pureIntent = { id: "b01fe61e-d112-487e-a7e8-113943b91072", taskId: "task-pure", name: "Docs work", projectId: noRepoProject.id,
+      root: "/local/tasks", taskDir: "/local/tasks/task-pure", branch: "task/pure", state: "pending", sharedWriteConfirmed: true,
+      repos: [], directories: [{ id: noRepoProject.directories[0]!.id, name: "Documents", path: "/local/documents", linkName: "dir-e2eb192a" }] };
+    const createTask = vi.fn(async (request: { op: string; input?: unknown; id?: string }) => {
+      if (request.op === "current") return { ok: true, payload: null };
+      if (request.op === "prepare") return { ok: true, payload: { canceled: false, intent: pureIntent } };
+      return { ok: true, payload: { taskId: pureIntent.taskId, projectId: noRepoProject.id } };
+    });
+    const onCreated = vi.fn(async () => {});
+    render(<DesktopTaskCreation project={noRepoProject} bridge={bridge(createTask)} onCreated={onCreated} />);
+    // No Git repository in the project, but the create entry is still available.
+    const open = screen.getByRole("button", { name: "任务" });
+    expect(open).toBeEnabled();
+    fireEvent.click(open);
+    fireEvent.change(screen.getByLabelText("任务名称"), { target: { value: "Docs work" } });
+    const submit = screen.getByRole("button", { name: "预览路径" });
+    // Selecting only a directory is not enough until the shared write is confirmed.
+    fireEvent.click(screen.getByRole("checkbox", { name: /Documents/ }));
+    expect(submit).toBeDisabled();
+    fireEvent.click(screen.getByRole("checkbox", { name: /我确认普通目录/ }));
+    expect(submit).toBeEnabled();
+    fireEvent.click(submit);
+    await waitFor(() => expect(createTask).toHaveBeenCalledWith({ op: "prepare", input: { projectId: noRepoProject.id, name: "Docs work",
+      repositories: [], directoryIds: [noRepoProject.directories[0]!.id], sharedWriteConfirmed: true, override: false } }));
+    expect(await screen.findByText(pureIntent.taskDir)).toBeInTheDocument();
+    expect(screen.getByText(/dir-e2eb192a/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "确认创建 / 恢复" }));
+    await waitFor(() => expect(onCreated).toHaveBeenCalledWith(noRepoProject.id));
   });
 });

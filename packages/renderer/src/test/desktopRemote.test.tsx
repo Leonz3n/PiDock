@@ -40,6 +40,23 @@ it("reads the selected task only; switching tasks does not display stale access 
   expect(taskOp).toHaveBeenCalledWith("task-b", "task/remoteState", {});
 });
 
+it("names every blank Host string it renders instead of a blank heading or row", async () => {
+  // `remoteStateFromHost` reads `label`, `hint` and a device's `name` by value
+  // (`typeof === "string"`), so all three can be `""`; without a named absence
+  // the page loses the entry's own heading and the device's own row identity.
+  window.pidock = { taskOp: vi.fn(async () => ({ ok: true, payload: {
+    ...payload(),
+    entry: { ...payload().entry, label: "", hint: "" },
+    devices: [{ ...payload().devices[0], name: "" }],
+  } })) as never };
+  render(<DesktopRemotePage tasks={tasks.slice(0, 1)} lifecyclePending={false} lifecycleErrors={[]} />);
+  expect(await screen.findByText("Host 未上报入口名称")).toBeInTheDocument();
+  expect(screen.getByText("Host 未上报该入口的说明")).toBeInTheDocument();
+  expect(screen.getByText("Host 未上报设备名称")).toBeInTheDocument();
+  // The refused direction is unchanged: a real value still renders as itself.
+  expect(remoteStateFromHost(payload())?.label).toBe("自建 Gateway");
+});
+
 it("does not turn refused reads into offline or no-device claims", async () => {
   window.pidock = { taskOp: vi.fn(async () => ({ ok: false, error: "remote-unavailable" })) as never };
   render(<DesktopRemotePage tasks={tasks.slice(0, 1)} lifecyclePending={false} lifecycleErrors={["未知归档任务"]} />);

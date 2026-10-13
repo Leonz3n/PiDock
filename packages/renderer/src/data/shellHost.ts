@@ -7,8 +7,12 @@
  * main allowlists). The adapter wraps a full `HostAdapter` fallback
  * (the in-memory model) for every read/local op that has no shell RPC yet;
  * task turns (`sendMessage`/`stopRun`/approvals/provision) and the service
- * lifecycle of Host-registered services (`setServiceRunning`) ride the real
- * `task/*` ops when the shell is connected and fail closed otherwise.
+ * lifecycle of task-bound services (`setServiceRunning`) ride the real ops
+ * when the shell is connected and fail closed otherwise. Service start/stop
+ * goes through main's trusted catalog path
+ * (`shell/serviceCatalogOp {op:"runTaskService"}`: main resolves the launch,
+ * registers it on the task Host and controls it), never through fixture data,
+ * whenever the shell is connected.
  *
  * Selection helper `resolveHostAdapter` picks the shell-backed adapter when
  * `window.pidock.taskOp` exists, the memory adapter otherwise. `stores/host`
@@ -44,7 +48,6 @@ import {
   cleanupPreviewThroughShell,
   clearUsageThroughShell,
   compactSessionThroughShell,
-  controlServiceThroughShell,
   controlTerminalThroughShell,
   deliveryInfoThroughShell,
   executionStateThroughShell,
@@ -69,6 +72,7 @@ import {
   usageRecordsThroughShell,
   type ShellTaskOpResult,
 } from "./shellBridge";
+import { runBoundTaskServiceThroughShell, taskProjectIdThroughShell } from "./taskServices";
 import {
   terminalHistoryFromHost,
   terminalPlanFromHost,
@@ -418,6 +422,8 @@ type HostApprovalRecord = {
   /** Real payload version the Host minted ([PiDock 17] #19 box 3). */
   contentVersion?: string;
   permissionAtRequest?: string;
+  /** The real operation when `tool`+`target` cannot state it (an `exec.run` command). */
+  operation?: string;
 };
 
 function asHostApprovalRecord(value: unknown): HostApprovalRecord | undefined {
@@ -437,6 +443,9 @@ function asHostApprovalRecord(value: unknown): HostApprovalRecord | undefined {
       : {}),
     ...(typeof record["permissionAtRequest"] === "string" && record["permissionAtRequest"].length > 0
       ? { permissionAtRequest: record["permissionAtRequest"] as string }
+      : {}),
+    ...(typeof record["operation"] === "string" && record["operation"].length > 0
+      ? { operation: record["operation"] as string }
       : {}),
   };
 }
@@ -466,6 +475,7 @@ function toApprovalFromHostRecord(taskId: string, record: HostApprovalRecord): A
     title,
     command: title,
     cwd: "",
+    ...(record.operation !== undefined && record.operation.length > 0 ? { operation: record.operation } : {}),
     impact: approvalImpact({ tool: record.tool, target: record.target, permission: record.permissionAtRequest ?? "" }),
     payloadVersion: record.contentVersion ?? "v1",
     status: record.status as Approval["status"],
@@ -879,22 +889,26 @@ export function createShellHostAdapter(fallback: HostAdapter): HostAdapter {
       if (property === "setServiceRunning") {
         return async (taskId: string, serviceId: string, running: boolean) => {
           if (!isShellConnected()) return (target as HostAdapter).setServiceRunning(taskId, serviceId, running);
-          // Shell Host owns the lifecycle of the services it knows.
-          // Probe registration first (`task/serviceStatus`): a service the
-          // Host has not registered (renderer has no registration path yet)
-          // keeps the memory fallback instead of failing closed on
-          // `unknown-service`. A Host-known service is controlled by the
-          // Host — no `sessionId`, so the Host classifies it as the
-          // attested human-UI path and labels it.
-          let probe: ShellTaskOpResult;
-          try {
-            probe = await shellTaskOp(taskId, "task/serviceStatus", { serviceId });
-          } catch {
-            probe = { ok: false };
+          // Production path for a *bound* service ([PiDock 04] #7): the
+          // Host's own project association names the catalog the binding
+          // lives in, and main then resolves the trusted persisted launch
+          // (program + pinned argv + cwd + private values), registers it on
+          // the task Host and starts/stops it. The renderer names only
+          // project/task/service/action, so a page-supplied program or env
+          // value cannot reach the launch, and a Host-side refusal is shown
+          // instead of a fabricated state. The memory mirror is used only
+          // when the shell is genuinely not connected.
+          const association = await taskProjectIdThroughShell(taskId);
+          if (!association.ok) throw new Error(association.error);
+          if (association.projectId === null) {
+            throw new Error(association.state === "unavailable"
+              ? "Host 报告任务归属状态暂不可用，无法启停服务"
+              : "该任务尚未归属项目，Host 不保存服务绑定，无法启停服务");
           }
-          if (!probe.ok) return (target as HostAdapter).setServiceRunning(taskId, serviceId, running);
-          const result = await controlServiceThroughShell({ taskId, serviceId, action: running ? "start" : "stop" });
-          if (!result.ok) throw shellResultError(result, "服务启停失败，请重试");
+          const result = await runBoundTaskServiceThroughShell({
+            projectId: association.projectId, taskId, serviceId, action: running ? "start" : "stop",
+          });
+          if (!result.ok) throw new Error(result.error);
         };
       }
       if (property === "protocolBinding") {
@@ -940,10 +954,12 @@ export function createShellHostAdapter(fallback: HostAdapter): HostAdapter {
           const plan = await planServiceGroupThroughShell({
             taskId,
             units,
-            dependencies: local.units.flatMap((unit) =>
-              unit.dependencies.map((dependency) => ({ from: unit.unitId, to: dependency.to, kind: dependency.kind })),
-            ),
             requests,
+            // No `dependencies`: the plan's call/prestart edges are TRUSTED data.
+            // They come from the environment's shared templates through main
+            // (`runTaskServiceGroup` → `planBoundServiceGroup`), and main's
+            // `shell/taskOp` refuses a page that names them. This read asks the
+            // Host only for its ports, groups and diagnostics.
             // The environment label the memory projection uses
             // (`environment?.name ?? task.environmentId`) is carried on its
             // remote routing target; reuse it instead of sending the task id
@@ -995,7 +1011,12 @@ export function createShellHostAdapter(fallback: HostAdapter): HostAdapter {
               });
             }
             const knownLimits = planRecord["knownLimits"];
-            if (Array.isArray(knownLimits)) merged.knownLimits = knownLimits.map(String);
+            // A plan carries its OWN external-resource limits only when the
+            // caller sent `externalResources`; this adapter does not (box 2's
+            // rules/layers wiring is still open), so an empty list here is
+            // "nothing said", not "no limits". Replacing the visible projection
+            // with it would erase the real 已知配置限制 rows.
+            if (Array.isArray(knownLimits) && knownLimits.length > 0) merged.knownLimits = knownLimits.map(String);
             // Assignments the Host decided are authoritative even when a unit
             // has no endpoint variable yet.
             for (const assignment of assignments.map(asRecord)) {
@@ -1016,6 +1037,7 @@ export function createShellHostAdapter(fallback: HostAdapter): HostAdapter {
             merged.records = local.records.map((entry) => {
               const run = byService.get(entry.serviceId);
               if (!run) return entry;
+              const portsSource = run["portsSource"] === "declared" || run["portsSource"] === "observed" ? run["portsSource"] : undefined;
               return {
                 ...entry,
                 run: {
@@ -1024,6 +1046,9 @@ export function createShellHostAdapter(fallback: HostAdapter): HostAdapter {
                   codeState: (asRecord(run["codeState"])["kind"] ?? "unknown") as "committed-clean" | "uncommitted" | "unknown",
                   buildFreshness: (run["buildFreshness"] ?? "unknown") as "fresh" | "stale-build" | "uncommitted-code" | "unknown",
                   ports: Array.isArray(run["ports"]) ? run["ports"].map(Number) : [],
+                  // The Host's own declaration: a port list nobody probed is
+                  // carried through as declared, never promoted to observed.
+                  ...(portsSource !== undefined ? { portsSource } : {}),
                   processIdentity: {
                     owner: asRecord(run["processIdentity"])["owner"] === "agent" ? "agent" : "human",
                     pid: Number(asRecord(run["processIdentity"])["pid"] ?? 0),
@@ -1031,7 +1056,15 @@ export function createShellHostAdapter(fallback: HostAdapter): HostAdapter {
                   },
                   logRef: String(run["logRef"] ?? ""),
                   startedAt: String(run["startedAt"] ?? ""),
-                  verifications: [],
+                  // The Host's own verification entries (linkage / readiness /
+                  // remote reachability). They are Host-reported facts, so a
+                  // merge that hardcodes `[]` would silently drop them.
+                  verifications: (Array.isArray(run["verifications"]) ? run["verifications"] : [])
+                    .map(asRecord)
+                    .filter((entry) =>
+                      typeof entry["kind"] === "string" && typeof entry["detail"] === "string" && typeof entry["ok"] === "boolean",
+                    )
+                    .map((entry) => ({ kind: entry["kind"] as string, detail: entry["detail"] as string, ok: entry["ok"] as boolean })),
                 },
               };
             });
@@ -1286,6 +1319,8 @@ export function createShellHostAdapter(fallback: HostAdapter): HostAdapter {
  * Adapter selection: shell-backed when `window.pidock.taskOp` exists
  * (Electron shell), the memory fallback otherwise (Vite dev, tests).
  * Renderer-no-Node holds: this module only reads `window.pidock`.
+ *
+ * 规则（`docs/task-graph.md:92`）：Host 的拒绝按原文呈现，**只有壳确实未连接时才回落 memory 镜像**。
  */
 export function resolveHostAdapter(fallback: HostAdapter): HostAdapter {
   if (!isShellConnected()) return fallback;
