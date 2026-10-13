@@ -1472,7 +1472,7 @@ describe("[PiDock 10] (#15 盒子 2/7/9) 交付目标与每视图归属 on the s
     expect(await screen.findByTestId("dock-working-branch")).toHaveTextContent("Host 未上报工作分支名（实测）");
   });
 
-  it("renders a real root label and a real observed branch as themselves", async () => {
+  it("names a real root label and a real observed branch as themselves", async () => {
     // The unchanged direction of the rule above: naming an absence must never
     // subsume a value the Host really gave, in the chip or in the row beside it.
     const namedRoots = twoRepoRoots().map((root, index) =>
@@ -1484,6 +1484,19 @@ describe("[PiDock 10] (#15 盒子 2/7/9) 交付目标与每视图归属 on the s
     expect(chip.querySelector("span")?.textContent).toBe("repo-a");
     expect(chip.textContent).toBe("repo-a· task/task-aaaaaaaa");
     expect(await screen.findByTestId("dock-working-branch")).toHaveTextContent("task/task-aaaaaaaa（实测）");
+  });
+
+  it("names an unread branch and an unread uncommitted state whose reason the Host left empty", async () => {
+    // `observation()` keeps a NAMED `unknown` whose `reason` is `""`; both rows
+    // below go through `observedText`, so an unguarded reason would render
+    // `未实测：` on its own and claim an unread fact while naming nothing.
+    const roots = twoRepoRoots().map((root, index) =>
+      index === 0 ? { ...root, workingBranch: { state: "unknown" as const, reason: "" }, dirty: { state: "unknown" as const, reason: "" } } : root,
+    );
+    bridge(hostReads(roots));
+    render(<DesktopToolDock taskId={TASK_ID} tool="files" onClose={() => {}} />);
+    expect(await screen.findByTestId("dock-working-branch")).toHaveTextContent("未实测：Host 未给出未读原因");
+    expect(await screen.findByTestId("dock-uncommitted")).toHaveTextContent("未实测：Host 未给出未读原因");
   });
 
   it("names an empty editor receipt field instead of leaving a blank", async () => {

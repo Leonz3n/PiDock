@@ -105,7 +105,11 @@ function linkShapeSummary(link: LinkRead | undefined): string {
   if (link === undefined) return "未实测：尚未读取";
   if (link.state === "unknown") return `未确定：${link.reason}`;
   const { shape, detail } = link.link;
-  const label = shape === "unknown" ? unknownShapeLabel(detail) : `${LINK_SHAPE_LABEL[shape]} · Host 观测：${detail}`;
+  // `str()` keeps `""`, so the Host's own empty `detail` is named ONCE here and
+  // both branches below carry the named absence: a bare `Host 观测：` would read
+  // as a detail that was dropped rather than one the Host never gave.
+  const detailText = hostText(detail, "Host 未给出观测细节");
+  const label = shape === "unknown" ? unknownShapeLabel(detailText) : `${LINK_SHAPE_LABEL[shape]} · Host 观测：${detailText}`;
   return `${label} · 词法预检：${LINK_LEXICAL_LABEL[link.link.lexical]}`;
 }
 
@@ -145,7 +149,7 @@ export function changeSummary(root: WorkspaceRootView, change: ChangeRead | unde
         ? dirty.value
           ? "有未提交或未跟踪文件（实测）"
           : "无未提交或未跟踪文件（实测）"
-        : `未提交或未跟踪状态未实测（${dirty.reason}）`;
+        : `未提交或未跟踪状态未实测（${hostText(dirty.reason, "Host 未给出未读原因")}）`;
   if (change === undefined) return `未实测：尚未读取；${uncommitted}`;
   if (change.state === "unknown") return `未实测：${baseline}未读取（${change.reason}）；${uncommitted}`;
   if (change.diff.length > 0) {
