@@ -13,8 +13,8 @@ interface FileEvidence { path: string; dev: number; ino: number; nlink: number; 
 export function nodePtyRepositoryRoot(): string { return fileURLToPath(new URL("../../../../", import.meta.url)).replace(/\/$/, ""); }
 
 /** The physical package directory the audit runs against, plus the app.asar
- * spelling of it that `require.resolve` reports inside a packed app. */
-interface NodePtyLayout { directory: string; archiveDirectory?: string }
+ * spellings of its entry that `require.resolve` can report inside a packed app. */
+interface NodePtyLayout { directory: string; archiveDirectories?: string[] }
 
 /**
  * Where the pinned package must live, chosen by the anchored layout this process
@@ -25,14 +25,30 @@ interface NodePtyLayout { directory: string; archiveDirectory?: string }
  *   real file on disk and not only an archive member;
  * - a dev checkout has no archive and uses the pnpm virtual store under the
  *   repository root.
+ *
+ * The app prefix is canonicalized here and the payload deliberately is not. The
+ * prefix only says *where this process runs from*: a bundle reached through a
+ * symlinked directory is a legitimate app (macOS `/var/folders/...` is
+ * `/private/var`), so a symlinked prefix must not disable the terminal the
+ * preflight exists to enable. The payload is what the audit claims identity for,
+ * so canonicalizing it would defeat the audit: a symlinked package directory,
+ * entry or prebuild file could point the pinned size/sha256/mode checks at bytes
+ * nobody pinned, which is why `packageDirectory`/`withFile` keep requiring
+ * `realpathSync(x) === x`. Both archive spellings are accepted because the
+ * resolver inside the app reports whichever prefix the archive was loaded
+ * through; they name one member of one archive, and no other path is accepted.
  */
 function nodePtyLayout(repositoryRoot: string, resourcesPath: string | undefined): NodePtyLayout {
   if (process.platform !== "darwin" || process.arch !== "arm64") throw Error("node-pty-preflight-unavailable");
   const resources = typeof resourcesPath === "string" && isAbsolute(resourcesPath) ? resourcesPath : undefined;
   if (resources !== undefined && existsSync(join(resources, "app.asar"))) {
+    const anchor = realpathSync(resources);
     return {
-      directory: join(resources, "app.asar.unpacked/node_modules/node-pty"),
-      archiveDirectory: join(resources, "app.asar/node_modules/node-pty"),
+      directory: join(anchor, "app.asar.unpacked/node_modules/node-pty"),
+      archiveDirectories: [...new Set([
+        join(resources, "app.asar/node_modules/node-pty"),
+        join(anchor, "app.asar/node_modules/node-pty"),
+      ])],
     };
   }
   if (!isAbsolute(repositoryRoot) || realpathSync(repositoryRoot) !== repositoryRoot) throw Error("node-pty-preflight-unavailable");
@@ -90,8 +106,9 @@ function resolveNodePtyEntry(): string {
 /** Read-only preflight, before native addon loading/spawn. No implicit chmod.
  * resolveEntry is the trusted package-resolution boundary for filesystem tests:
  * inside a packed app it reports the app.asar member whose extraction the
- * `asarUnpack` pin makes the audited file, so both spellings of this package's
- * entry are accepted and no other path is.
+ * `asarUnpack` pin makes the audited file, so the unpacked path and the
+ * app.asar spelling of this entry (under either prefix that names the app) are
+ * accepted and no other path is.
  * Later path-based loading still has a TOCTOU boundary; this is not a sandbox.
  */
 export function inspectNodePtyPrebuild(repositoryRoot = nodePtyRepositoryRoot(), resolveEntry = resolveNodePtyEntry, resourcesPath = process.resourcesPath) {
@@ -100,7 +117,8 @@ export function inspectNodePtyPrebuild(repositoryRoot = nodePtyRepositoryRoot(),
   const entry = lstatSync(entryPath);
   if (!entry.isFile() || entry.nlink !== 1 || realpathSync(entryPath) !== entryPath) throw Error("node-pty-preflight-unavailable");
   const resolution = resolveEntry();
-  if (resolution !== entryPath && (layout.archiveDirectory === undefined || resolution !== join(layout.archiveDirectory, "lib/index.js"))) throw Error("node-pty-preflight-unavailable");
+  const archiveEntryPaths = (layout.archiveDirectories ?? []).map((archive) => join(archive, "lib/index.js"));
+  if (resolution !== entryPath && !archiveEntryPaths.includes(resolution)) throw Error("node-pty-preflight-unavailable");
   const addon = withFile(directory, "addon", (_fd, evidence) => evidence);
   const helper = withFile(directory, "helper", (_fd, evidence) => evidence);
   return { ready: helper.mode === 0o755, version: NODE_PTY_VERSION, entryPath, helper, addon };
