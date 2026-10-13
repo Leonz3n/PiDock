@@ -1080,12 +1080,48 @@ function GroupStartControl({ taskId, projectId, onStarted }: {
  * [PiDock 05] (#10 box 1) 本地/远程位置 of one bound service, read from main's
  * trusted 依赖去向 answer. An absent unit is a NAMED unknown - this row never
  * defaults a unit to 本机实例, and it never renders a shared environment as one.
+ *
+ * `location` is the BINDING's semantics (main plans every bound unit as a local
+ * run unit), which this read does not observe as a running process and skips the
+ * platform gate for. The label therefore names ownership, never 运行: a unit that
+ * is not started - or cannot be started on this platform - must not read as if
+ * the task were running it.
  */
 function serviceLocationText(dependencies: TaskDependencyRoutingView | undefined, serviceId: string): string {
   const unit = dependencies?.units.find((entry) => entry.serviceId === serviceId);
   if (unit === undefined) return "位置未读取";
-  return unit.location === "local" ? "本机实例 · 本任务运行" : "共享环境 · 本任务不运行该单元";
+  return unit.location === "local" ? "本机实例 · 本任务自有（未启动不代表运行中）" : "共享环境 · 本任务不运行该单元";
 }
+
+/**
+ * Why a derived 依赖去向 list is empty. An empty list is an ALL-CLEAR only when
+ * the read resolved every binding (`diagnostics` empty - any unhandled one means
+ * the plan failed closed and the list carries NO destination at all) AND there is
+ * a bound service it could speak about. Otherwise the row names the absence of a
+ * conclusion instead of asserting "no shared-environment variable", because a
+ * variable no declaration binds really does keep the shared environment address.
+ */
+type DependencyListState = "all-local" | "unconcluded" | "no-service" | "unread";
+
+function dependencyEmptyState(dependencies: TaskDependencyRoutingView | undefined): DependencyListState {
+  if (dependencies === undefined) return "unread";
+  if (dependencies.units.length === 0) return "no-service";
+  return dependencies.diagnostics.length === 0 ? "all-local" : "unconcluded";
+}
+
+const REMOTE_DEPS_EMPTY_TEXT: Record<DependencyListState, string> = {
+  "all-local": "本任务服务的地址变量都指向本任务实例，没有指向共享环境的变量；不列不存在的共享资源。",
+  "unconcluded": "依赖去向仍有未处理的诊断（见「请求去向」），此清单不足以得出「都指向本任务实例」的结论。",
+  "no-service": "本任务还没有绑定服务，没有指向共享环境的地址变量可列举。",
+  "unread": "依赖去向未读取，无法判断本任务的地址变量是否指向共享环境。",
+};
+
+const DEPENDENCY_EMPTY_TEXT: Record<DependencyListState, string> = {
+  "all-local": "本任务服务的配置里没有可展示的地址变量（未声明、也无读取点）。",
+  "unconcluded": "依赖去向仍有未处理的诊断（见下），此处不足以得出「本任务没有地址变量」的结论。",
+  "no-service": "本任务还没有绑定服务，没有可展示的地址变量。",
+  "unread": "依赖去向未读取，没有可展示的地址变量。",
+};
 
 /** One read point ("共享模板=…" / "本机私有配置（已遮蔽）"), never a private value. */
 function readPointValueText(point: TaskDependencyReadPointView): string {
@@ -1102,8 +1138,9 @@ function readPointValueText(point: TaskDependencyReadPointView): string {
  */
 function DependencyTargets({ dependencies }: { dependencies: TaskDependencyRoutingView }) {
   if (dependencies.destinations.length === 0) {
-    return <li className="px-1 py-1 text-[11px] text-muted" data-testid="dock-dependency-empty">
-      本任务服务的配置里没有可展示的地址变量（未声明、也无读取点）。
+    const state = dependencyEmptyState(dependencies);
+    return <li className="px-1 py-1 text-[11px] text-muted" data-testid="dock-dependency-empty" data-dependency-empty-state={state}>
+      {DEPENDENCY_EMPTY_TEXT[state]}
     </li>;
   }
   return <>
@@ -1151,6 +1188,9 @@ function RunTool({ taskId }: { taskId: string }) {
   const remoteDependencies = (dependencies?.destinations ?? []).filter(
     (entry): entry is typeof entry & { target: { kind: "remote"; environment: string } } => entry.target.kind === "remote",
   );
+  // An empty 远程依赖 list is only an all-clear when the read derived it fully
+  // (see `dependencyEmptyState`); otherwise the row names the unhandled state.
+  const remoteDepsEmptyState = dependencyEmptyState(dependencies);
 
   return (
     <div className="flex min-h-0 flex-col gap-2">
@@ -1218,8 +1258,8 @@ function RunTool({ taskId }: { taskId: string }) {
               ? <p role="alert" className="mt-1 min-w-0 break-words text-[10px] text-[#ad4545]" data-testid="dock-remote-deps-error">{load.dependenciesError}</p>
               : <ul className="mt-1 flex flex-col gap-1" data-testid="dock-remote-deps">
                   {remoteDependencies.length === 0
-                    ? <li className="px-1 py-1 text-[10px] text-muted" data-testid="dock-remote-deps-none">
-                        本任务服务的地址变量都指向本任务实例，没有指向共享环境的变量；不列不存在的共享资源。
+                    ? <li className="px-1 py-1 text-[10px] text-muted" data-testid="dock-remote-deps-empty" data-remote-deps-state={remoteDepsEmptyState}>
+                        {REMOTE_DEPS_EMPTY_TEXT[remoteDepsEmptyState]}
                       </li>
                     : remoteDependencies.map((entry) => (
                         <li key={`remote/${entry.unitId}/${entry.key}`} className="px-1 text-[10px] text-muted" data-remote-key={entry.key}>

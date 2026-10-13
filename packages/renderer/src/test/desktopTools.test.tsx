@@ -442,7 +442,7 @@ describe("[UI 对齐] S8d 运行 panel (real Host bindings and status)", () => {
     for (const id of ["service-mode", "remote-deps", "routing"]) {
       expect(screen.getByTestId("desktop-tool-dock").querySelector(`[data-unwired="${id}"]`)).toBeNull();
     }
-    expect(screen.getByTestId("desktop-tool-dock").querySelector(`[data-testid="dock-service-location-${SERVICE_ID}"]`)).toHaveTextContent("位置：本机实例 · 本任务运行");
+    expect(screen.getByTestId("desktop-tool-dock").querySelector(`[data-testid="dock-service-location-${SERVICE_ID}"]`)).toHaveTextContent("位置：本机实例 · 本任务自有（未启动不代表运行中）");
     expect(screen.getByTestId("dock-linkage-none")).toHaveTextContent("无依赖边（未做互验）");
   });
 
