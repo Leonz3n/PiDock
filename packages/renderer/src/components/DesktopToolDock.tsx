@@ -36,7 +36,10 @@ import {
   type TaskServicesLoad,
 } from "../data/taskServices";
 import { buildFreshnessLabel, codeStateLabel, failureLabel, linkageStateLabel } from "../data/serviceTopology";
-import { ProtocolPanel, TerminalTakeoverPanel } from "./ToolPanels";
+// The two panels the packaged dock mounts live in a module that reads no
+// fixture state ([UI 对齐 S8a] #47): importing them from `./ToolPanels` would
+// pull `stores/host` → `data/memoryHost` into the production graph.
+import { ProtocolPanel, TerminalTakeoverPanel } from "./ProtocolTerminalPanels";
 import { ServiceOwnerRebind } from "./ServiceOwnerRebind";
 import {
   externalEditorLaunchFromHost,
