@@ -148,7 +148,10 @@ async function productionRoute(): Promise<Route> {
   mkdirSync(taskDir, { recursive: true });
   mkdirSync(userData, { recursive: true });
   state.userData = userData;
-  const worktreePath = join(taskDir, REPO_DIR);
+  // The reported root is the product's own spelling: `task/fileRoots`
+  // (`joinRoot`, `main/workspace-files.ts`) keeps the native taskDir and appends
+  // the repo dir with `/`, so the launch arg compared against is this mixed form.
+  const worktreePath = `${taskDir}/${REPO_DIR}`;
   mkdirSync(worktreePath, { recursive: true });
   writeFileSync(join(worktreePath, "app.ts"), "export const app = 1;\n");
   diskTaskStore.writeTask(

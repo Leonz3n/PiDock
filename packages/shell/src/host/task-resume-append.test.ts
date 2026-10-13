@@ -426,10 +426,12 @@ describe("#6 resumeAppend over real worktrees (S6)", () => {
       branchesInUse: [],
     });
     expect(resumed.retry).toEqual(["frontend"]);
+    // The plan spells the worktree as `<taskDir>/<repoDir>` (the same
+    // `previewMixedTaskPaths` form the Host compares against), not `join`.
     expect(resumed.plan.ops.filter((op) => op.kind === "worktree")[0]!.args).toEqual([
       "worktree",
       "add",
-      join(taskDir, "frontend"),
+      `${taskDir}/frontend`,
       branch,
     ]);
   });
@@ -446,10 +448,12 @@ describe("#6 resumeAppend over real worktrees (S6)", () => {
     const before = readFileSync(taskFilePath(taskDir), "utf8");
 
     // The caller-scanned path scan flags the wanted path: refused.
+    // The scanner (`task-prep-scan.ts`) spells taken paths exactly like the
+    // wanted worktree dirs (`<base>/<name>`), so the fixture uses that form.
     expect(() =>
       hostAt(taskId, taskDir).resumeAppend({
         mainCheckouts: { frontend: frontend.checkout },
-        takenPaths: [join(taskDir, "frontend")],
+        takenPaths: [`${taskDir}/frontend`],
         branchesInUse: [],
       }),
     ).toThrow("path-taken");
