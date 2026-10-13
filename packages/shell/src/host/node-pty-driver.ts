@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import { MAX_TERMINAL_INSTANCES } from "../main/terminal-config.js";
+import { nodePtyPlatformAdmitted } from "./node-pty-preflight.js";
 import { MAX_PTY_ENVELOPE_BYTES, operationKey, parsePtyEvent, parsePtyRequest, sameEnvelope, type PtyEnvelope, type PtyEvent, type PtyRequest, type PtyPhase, type PtyReason } from "./node-pty-protocol.js";
 import type { TerminalDriver, TerminalDriverReceipt, TerminalIdentity, TerminalLaunch } from "./terminal-execution.js";
 
@@ -40,7 +41,7 @@ interface Operation {
   workerExit?: { code: number | null; signal: string | null };
 }
 
-/** Phase B experiment only: Darwin arm64, explicit Node runtime, no Host/RPC/UI caller.
+/** Phase B experiment only: the platforms the pin record admits, explicit Node runtime, no Host/RPC/UI caller.
  * Native synchronous calls run in a separate process so parent deadlines can fire.
  * node-pty does not prove descendant containment. Exit and stop always retain unknown
  * ownership; no numeric PID signal or process-list scan is used by this adapter.
@@ -56,7 +57,7 @@ export class NodePtyDriver implements TerminalDriver {
   }
   private available(): boolean {
     try {
-      return process.platform === "darwin" && process.arch === "arm64" && !process.versions.electron && process.versions.node === "24.21.0" &&
+      return nodePtyPlatformAdmitted() && !process.versions.electron && process.versions.node === "24.21.0" &&
         isAbsolute(this.options.nodeExecutable) && realpathSync(this.options.nodeExecutable) === this.options.nodeExecutable &&
         this.options.nodeExecutable === realpathSync(process.execPath);
     } catch { return false; }

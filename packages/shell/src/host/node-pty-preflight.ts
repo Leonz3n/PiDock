@@ -84,6 +84,13 @@ export function nodePtyRepositoryRoot(): string {
   return normalize(fileURLToPath(new URL("../../../../", import.meta.url)).replace(/[\\/]+$/, ""));
 }
 
+/** The one spelling of "is this platform/arch admitted by the pin record": the
+ * pin record is the admission list, so every platform gate asks it here rather
+ * than repeating a platform list. Same meaning as `platformPin` (which throws). */
+export function nodePtyPlatformAdmitted(): boolean {
+  return pins[`${process.platform}-${process.arch}`] !== undefined;
+}
+
 function platformPin(): PlatformPin {
   const pin = pins[`${process.platform}-${process.arch}`];
   if (pin === undefined) throw Error("node-pty-preflight-unavailable");
