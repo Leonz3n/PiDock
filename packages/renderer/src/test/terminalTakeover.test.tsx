@@ -223,6 +223,40 @@ describe("#15 terminal panel on the real channel", () => {
     expect(await screen.findByTestId("terminal-instance")).toHaveTextContent("运行中");
   });
 
+  it("names a blank env row key and source in the plan instead of an unnamed `=value`", async () => {
+    // `terminalPlanFromHost` reads `resolved[].key/value/source` with `str()`
+    // (`data/workspaceFiles.ts:589-599`), so all three can be blank; the row used
+    // to render `=value （）` — an env entry whose name and origin are both
+    // missing. A blank VALUE stays the value the Host sent: it is the variable's
+    // content, not a missing name.
+    const calls: Call[] = [];
+    const taskOp = hostStub(calls, {
+      "task/terminalState": () => ({ ok: true, payload: { spawnImplemented: true, instances: [] } }),
+      "task/fileRoots": () => ({ ok: true, payload: ROOTS }),
+      "task/planTerminal": () => ({
+        ok: true,
+        payload: {
+          plan: {
+            ...HOST_PLAN.plan,
+            resolved: [
+              { key: "", value: "x", secret: false, source: "仓库默认配置" },
+              { key: "PATH", value: "/usr/bin", secret: false, source: "" },
+              { key: "EMPTY", value: "", secret: false, source: "任务覆盖" },
+            ],
+          },
+        },
+      }),
+    });
+    const user = await openTerminalPanel(taskOp);
+
+    await user.click(await screen.findByRole("button", { name: "按计划启动终端" }));
+
+    const rows = within(await screen.findByTestId("terminal-plan")).getAllByTestId("terminal-plan-env");
+    expect(rows[0]?.textContent).toBe("Host 未上报变量名=x （仓库默认配置）");
+    expect(rows[1]?.textContent).toBe("PATH=/usr/bin （Host 未上报变量来源）");
+    expect(rows[2]?.textContent).toBe("EMPTY= （任务覆盖）");
+  });
+
   it("names an empty root label in the terminal repo choice instead of a blank option", async () => {
     // `workspaceRootsFromHost` keeps a label the Host sent as `""` (`str()`),
     // and this choice renders only while the task has more than one root — the

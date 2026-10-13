@@ -44,6 +44,14 @@ function exact(value: Record<string, unknown>, fields: string[]): boolean {
  */
 export const sourceName = (source: ProjectSource): string => hostText(source.name, "Host 未上报来源名称");
 export const sourcePath = (source: ProjectSource): string => hostText(source.path, "Host 未上报来源路径");
+/**
+ * The name a Project is shown under: `parseDesktopProject` below type-checks
+ * `name` (only `id` must be non-empty), so a blank name IS a reachable Host
+ * payload. The shell renders that one name in the breadcrumb, in the bottom
+ * strip, in the workspace card and in the 环境与服务 project choice, so it is
+ * named once here instead of at each of those surfaces.
+ */
+export const projectName = (project: { name: string }): string => hostText(project.name, "Host 未上报项目名称");
 function source(value: unknown): ProjectSource {
   if (!object(value) || !exact(value, ["id", "name", "path"]) ||
       typeof value.id !== "string" || !value.id || typeof value.name !== "string" ||

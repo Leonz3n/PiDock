@@ -827,6 +827,35 @@ describe("[UI 对齐] S8d 浏览器 panel (real task/browserAction)", () => {
     expect(actions).toEqual(["page/open", "page/state", "evidence", "takeover/pause"]);
   });
 
+  it("names the blank page strings the Host sends instead of a trailing blank or an empty row", async () => {
+    // `browserPageFromHost` / `pageStateFromHost` / `pageEvidenceFromHost`
+    // (`components/DesktopToolDock.tsx:1738-1767`) only type-check these
+    // strings, so a blank `url`/`text`/`errorText` is a reachable Host answer:
+    // the state row ended in a dangling ` · `, an empty console error was an
+    // empty `<p>`, and the notice ended in a trailing blank.
+    panelBridge({
+      browser: (request) => {
+        if (request["action"] === "page/open") return { ok: true, payload: { pageId: "page-1", url: "" } };
+        if (request["action"] === "page/state") return { ok: true, payload: { state: { epoch: 3, url: "", title: "" }, pageId: "page-1" } };
+        if (request["action"] === "evidence") return { ok: true, payload: { evidence: { consoleErrors: [{ kind: "console", text: "" }], failedRequests: [{ requestId: "1", url: "", errorText: "" }] } } };
+        return { ok: false, error: `unexpected ${String(request["action"])}` };
+      },
+    });
+    render(<DesktopToolDock taskId="task-1" tool="browser" onClose={() => {}} />);
+    fireEvent.change(screen.getByRole("textbox", { name: "任务页面地址" }), { target: { value: "http://127.0.0.1:5173/" } });
+    fireEvent.click(screen.getByRole("button", { name: "打开任务页面" }));
+    expect((await screen.findByTestId("dock-browser-notice")).textContent).toBe("主进程窗口已打开 Host 未上报页面地址");
+    expect(within(await screen.findByTestId("dock-browser-page")).getByText("Host 未上报页面地址")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "读取状态" }));
+    // A blank title already had its own wording; the blank url beside it used to
+    // leave the row ending in ` · `.
+    expect((await screen.findByTestId("dock-browser-state")).textContent).toBe("epoch 3 · （无标题） · Host 未上报页面地址");
+    fireEvent.click(screen.getByRole("button", { name: "读取证据" }));
+    const evidence = await screen.findByTestId("dock-browser-evidence");
+    expect(within(evidence).getByText("Host 未上报控制台错误")).toBeInTheDocument();
+    expect(within(evidence).getByText("Host 未上报请求地址 · Host 未上报请求错误")).toBeInTheDocument();
+  });
+
   it("shows the Host's navigation refusal and keeps page discovery/embedding 未接线", async () => {
     panelBridge({ browser: () => ({ ok: false, error: "navigation-denied: 该任务没有配置前端地址" }) });
     render(<DesktopToolDock taskId="task-1" tool="browser" onClose={() => {}} />);

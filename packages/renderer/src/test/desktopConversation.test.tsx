@@ -633,6 +633,22 @@ describe("Desktop SDK conversation", () => {
     expect(context.getAttribute("title")).toBe("Anthropic 官方 · Claude Sonnet · 已用 24.8k Tokens（来源 estimated）· 窗口 200k Tokens · 占用比例 12.4%；数字即 Host 会话读数，未做推断");
   });
 
+  it("names a blank Host provider identity in the context hover instead of a bare separator", async () => {
+    // `data/sessionContext.ts:68-75` type-checks `providerId`/`providerName`/
+    // `model`/`modelName` and keeps `""` for all four, so the hover line used to
+    // read ` ·  · 已用 24.8k Tokens…` — the same identity the visible composer
+    // label names.
+    const f = setup();
+    f.bridge.taskOp = vi.fn(async (_taskId: string, op: string) => op === "task/sessionContext"
+      ? { ok: true, payload: { context: hostContext({ providerId: "", providerName: "", model: "", modelName: "" }) } }
+      : { ok: true, payload: {} }) as never;
+    mount(f);
+    const context = await screen.findByTestId("composer-context");
+    await waitFor(() => expect(context).toHaveTextContent("上下文 24.8k / 200k · 12.4% · 估算"));
+    expect(context.getAttribute("title")).toContain("Host 未上报配置名称 · Host 未上报模型标识 · 已用 24.8k Tokens（来源 estimated）");
+    expect(context.getAttribute("title")).not.toContain(" ·  · ");
+  });
+
   it("shows the Host's own occupancy percent when a ratio recomputed here would differ", async () => {
     const f = setup();
     // The Host's payload is the authoritative source, so this fixture is the one

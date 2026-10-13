@@ -1,7 +1,7 @@
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { SharedRepoIsolation } from "./SharedRepoIsolation";
-import type { DesktopProject, TaskAssociation } from "../data/desktopProjects";
+import { projectName, type DesktopProject, type TaskAssociation } from "../data/desktopProjects";
 import type { DesktopShellTask } from "./DesktopShell";
 import { hostText } from "../data/workspaceFiles";
 
@@ -51,7 +51,7 @@ export function DesktopProjectOverview({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-[10px] tracking-[1.8px] text-[#95979c] uppercase">Project</p>
-          <h1 className="mt-1.5 truncate text-[26px] font-semibold tracking-[-0.6px] text-ink">{project ? hostText(project.name, "Host 未上报项目名称") : projectsInitialized ? "未归属任务" : "项目映射未建立"}</h1>
+          <h1 className="mt-1.5 truncate text-[26px] font-semibold tracking-[-0.6px] text-ink">{project ? projectName(project) : projectsInitialized ? "未归属任务" : "项目映射未建立"}</h1>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button type="button" onClick={onManage}>项目管理</Button>
