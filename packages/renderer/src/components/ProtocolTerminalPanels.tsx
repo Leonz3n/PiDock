@@ -60,7 +60,11 @@ export function ProtocolPanel({ view }: { view: ProtocolBindingView }) {
           </span>
         </li>
         <li className="rounded-md border border-line px-2 py-1.5" data-testid="protocol-generated-version">
-          <span className="text-ink">实际生成版本：{view.generatedVersion ?? "尚未生成"}</span>
+          {/* `generatedVersion` is `string | null`: `null` is the Host's "nothing
+              generated yet", while a BLANK version is a string it did report
+              (`data/protocolBinding.ts:183` keeps `""`), so the two are named
+              differently instead of both printing `尚未生成`. */}
+          <span className="text-ink">实际生成版本：{view.generatedVersion === null ? "尚未生成" : hostText(view.generatedVersion, "Host 未上报生成版本")}</span>
           {view.generatedAt ? <span className="block text-[10px] text-muted">生成时间：{view.generatedAt}</span> : null}
           <span className="block text-[10px] text-muted">{hostText(view.generationReason, "Host 未上报生成说明")}</span>
         </li>
@@ -414,8 +418,8 @@ export function TerminalTakeoverPanel({
           {plan.attribution.sharedNote ? <span className="text-warn">{plan.attribution.sharedNote}</span> : null}
           <ul className="flex flex-col gap-0.5">
             {plan.resolved.map((row) => (
-              <li key={row.key} className="font-mono text-[10px]">
-                {row.key}={row.value} <span className="text-muted">（{row.source}）</span>
+              <li key={row.key} className="font-mono text-[10px]" data-testid="terminal-plan-env">
+                {hostText(row.key, "Host 未上报变量名")}={row.value} <span className="text-muted">（{hostText(row.source, "Host 未上报变量来源")}）</span>
               </li>
             ))}
           </ul>

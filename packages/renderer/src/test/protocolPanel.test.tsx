@@ -1,7 +1,7 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ProtocolPanel } from "../components/ToolPanels";
-import type { ProtocolBindingView } from "../data/protocolBinding";
+import { protocolBindingFromHost, type ProtocolBindingView } from "../data/protocolBinding";
 import { renderApp } from "./helpers";
 
 /**
@@ -79,58 +79,52 @@ const LOCAL_VIEW: ProtocolBindingView = {
 };
 
 /**
- * The same panel with every Host string left blank. `protocolBindingFromHost`
- * reads every string by value (`String(x ?? "")`), so this view is exactly what
- * the shipped parser hands the panel for a payload whose fields are blank; the
- * test below pins the panel's own boundary.
+ * A Host `task/protocolState` payload with every string field left blank, as the
+ * Host sends it. The panel's blank case below runs this through the SHIPPED
+ * parser (`protocolBindingFromHost`) instead of hand-building a view, so the
+ * fixture proves its own claim that `String(x ?? "")` keeps `""` for each of
+ * these fields — a hand-built view can drift from the parser and hide one
+ * (`generatedVersion` was exactly that).
  */
-const BLANK_VIEW: ProtocolBindingView = {
-  taskId: "task-blank",
-  mode: "local",
-  simulated: false,
-  protocol: { repoDir: "", goGenDir: "", tsGenDir: "" },
-  runsGeneration: true,
-  generationSteps: [{ kind: "generate", program: "", args: [], cwd: "", note: "" }],
-  generationReason: "",
-  generatedVersion: null,
-  consumers: [
-    {
-      consumerId: "blank-go",
-      name: "",
-      language: "go",
-      repoDir: "",
-      releaseDependency: "",
-      binding: { kind: "go-workspace", path: "", useDirectories: [], excludedConsumers: [], releaseManifestsUntouched: [] },
-      state: "needs-binding",
-      stateDetail: "",
-      resolution: { ok: false, message: "" },
-    },
-    {
-      consumerId: "blank-ts",
-      name: "ts-consumer",
-      language: "ts",
-      repoDir: "",
-      releaseDependency: "",
-      binding: { kind: "ts-link", linkPath: "", artifact: "", marker: "", restore: { program: "", args: [] } },
-      state: "ready",
-      stateDetail: "已使用本任务产物 gen-4",
-    },
-    {
-      consumerId: "blank-release",
-      name: "release-consumer",
-      language: "go",
-      repoDir: "",
-      releaseDependency: "",
-      binding: { kind: "release", dependency: "" },
-      state: "ready",
-      stateDetail: "已使用本任务产物 gen-4",
-    },
-  ],
-  prepare: [{ state: "code-ready", label: "", ok: false, detail: "" }],
-  toolchain: { platform: "", ok: false, note: "", desktopLaunchImpliesGeneration: false, entries: [{ toolId: "blank-tool", label: "", status: "unverified", detail: "" }] },
-  blockers: [{ consumerId: "blank-go", code: "", message: "" }],
-  diagnostics: [{ code: "", message: "" }],
+const BLANK_PAYLOAD = {
+  state: {
+    taskId: "task-blank",
+    mode: "local",
+    protocol: { repoDir: "", goGenDir: "", tsGenDir: "" },
+    generatedVersion: "",
+    consumers: [
+      {
+        consumerId: "blank-go", name: "", language: "go", repoDir: "", releaseDependency: "",
+        staleness: { state: "needs-binding", detail: "" },
+        resolution: { ok: false, message: "" },
+        binding: { kind: "go-workspace", path: "", useDirectories: [], excludedConsumers: [], releaseManifestsUntouched: [] },
+      },
+      {
+        consumerId: "blank-ts", name: "ts-consumer", language: "ts", repoDir: "", releaseDependency: "",
+        staleness: { state: "ready", detail: "已使用本任务产物 gen-4" },
+        binding: { kind: "ts-link", linkPath: "", artifact: "", marker: "", restore: { program: "", args: [] } },
+      },
+      {
+        consumerId: "blank-release", name: "release-consumer", language: "go", repoDir: "", releaseDependency: "",
+        staleness: { state: "ready", detail: "已使用本任务产物 gen-4" },
+        binding: { kind: "release", dependency: "" },
+      },
+    ],
+    generation: { reason: "", runsGeneration: true, steps: [{ kind: "generate", program: "", args: [], cwd: "", note: "" }] },
+    prepare: [{ state: "code-ready", label: "", ok: false, detail: "" }],
+    toolchain: { platform: "", ok: false, note: "", entries: [{ toolId: "blank-tool", label: "", status: "unverified", detail: "" }] },
+    switchAssessment: { blockers: [{ consumerId: "blank-go", code: "", message: "" }] },
+    diagnostics: [{ code: "", message: "" }],
+  },
 };
+
+const blankView = (overrides: Record<string, unknown> = {}): ProtocolBindingView => {
+  const view = protocolBindingFromHost("task-blank", { state: { ...BLANK_PAYLOAD.state, ...overrides } });
+  if (view === undefined) throw new Error("blank payload must parse");
+  return view;
+};
+
+const BLANK_VIEW = blankView();
 
 describe("protocol panel", () => {
   it("shows the protocol repository, the actual generated version and the generation steps", () => {
@@ -186,6 +180,9 @@ describe("protocol panel", () => {
     // a bare `受管链接：` or `· [`.
     render(<ProtocolPanel view={BLANK_VIEW} />);
     expect(screen.getByTestId("protocol-generated-version")).toHaveTextContent("Host 未上报生成说明");
+    // A blank version is a string the Host DID report (`protocolBindingFromHost`
+    // keeps `""`), so it is named; only the absent `null` is 尚未生成.
+    expect(screen.getByTestId("protocol-generated-version")).toHaveTextContent("实际生成版本：Host 未上报生成版本");
     expect(screen.getByTestId("protocol-steps")).toHaveTextContent("生成 Host 未上报步骤程序");
     expect(screen.getByTestId("protocol-prepare")).toHaveTextContent("Host 未上报准备项名称：Host 未上报准备项说明");
     const consumers = screen.getByTestId("protocol-consumers");
@@ -205,6 +202,12 @@ describe("protocol panel", () => {
     cleanup();
     render(<ProtocolPanel view={{ ...BLANK_VIEW, toolchain: { ...BLANK_VIEW.toolchain, entries: [] } }} />);
     expect(screen.getByTestId("protocol-toolchain")).toHaveTextContent("Host 未上报工具链说明");
+
+    // `null` is the Host's own "nothing generated yet" and keeps its own wording:
+    // the two absences are not the same state.
+    cleanup();
+    render(<ProtocolPanel view={blankView({ generatedVersion: null })} />);
+    expect(screen.getByTestId("protocol-generated-version")).toHaveTextContent("实际生成版本：尚未生成");
   });
 });
 

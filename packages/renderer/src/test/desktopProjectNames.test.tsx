@@ -127,6 +127,26 @@ describe("[PiDock 03] (#6 box 12) blank Project and source names", () => {
     expect(await inventory.findByRole("option", { name: "Host 未上报项目名称" })).toBeInTheDocument();
   });
 
+  it("names a blank project name in the shell chrome instead of an empty breadcrumb, strip or avatar", async () => {
+    // `parseDesktopProject` (`data/desktopProjects.ts:53-56`) keeps a blank
+    // `name`, and the shell's Project list, its breadcrumb and the bottom strip
+    // are all built from that same name: the breadcrumb segment rendered as an
+    // empty span, the scope segment's hover read `当前项目 · ` and the 29px
+    // workspace avatar was an empty coloured square.
+    window.pidock = bridge(projectWith("", "", { name: "Web", path: "/private/work/web" }));
+    render(<App />);
+    await screen.findByTestId("desktop-project-overview");
+    expect(within(screen.getByTestId("desktop-breadcrumb")).getByText("Host 未上报项目名称")).toBeInTheDocument();
+    const scope = document.querySelector('[data-summary-segment="scope"]') as HTMLElement;
+    // The exact segment text and hover, so a present-but-empty segment cannot pass.
+    expect(scope.textContent).toBe("Host 未上报项目名称");
+    expect(scope.getAttribute("title")).toBe("当前项目 · Host 未上报项目名称");
+    // The avatar shows the first character of the identity it is given; a blank
+    // name left the box empty.
+    const avatar = screen.getByTestId("desktop-workspace-card").querySelector("span[aria-hidden]");
+    expect(avatar?.textContent).toBe("Host 未上报项目名称".slice(0, 1));
+  });
+
   it("still renders the real project and source names this payload carried", async () => {
     window.pidock = bridge(projectWith("真实项目", "系统 A", { name: "Web", path: "/private/work/web" }));
     render(<App />);

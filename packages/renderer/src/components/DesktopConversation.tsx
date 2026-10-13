@@ -410,11 +410,14 @@ function TaskConversation({ taskId, name, roots, association, onBack, onOpenProv
   const contextLabel = readout === null
     ? `上下文 ${contextRead.phase === "reading" ? "未读取" : "读取失败"}`
     : `上下文 ${readout.used.toFixed(1)}k / ${readout.window > 0 ? `${readout.window}k` : "窗口未知"}${readout.percent === null ? " · 占比未知" : ` · ${readout.percent.toFixed(1)}%`}${contextMarker.length > 0 ? ` · ${contextMarker}` : ""}`;
+  // The hover names the same Host identity the visible composer line shows, so a
+  // blank `providerName`/`providerId`/`modelName`/`model` (`data/sessionContext.ts:68-75`
+  // type-checks all four) is named here too instead of ending in a bare ` · `.
   const contextTitle = contextRead.phase === "reading"
     ? "正在读取 Host 会话占用读数；读取完成前不显示数字"
     : contextRead.phase === "failed" ? `Host 会话占用读数读取失败：${contextRead.error}`
     : readout === null ? "Host 未返回会话读数"
-      : `${readout.providerName ?? readout.providerId} · ${readout.modelName ?? readout.model} · 已用 ${readout.used}k Tokens（来源 ${readout.source}）· 窗口 ${readout.window > 0 ? `${readout.window}k Tokens` : "未知"} · 占用比例 ${readout.percent === null ? "未知" : `${readout.percent.toFixed(1)}%`}；数字即 Host 会话读数，未做推断`;
+      : `${hostText(readout.providerName ?? readout.providerId, "Host 未上报配置名称")} · ${hostText(readout.modelName ?? readout.model, "Host 未上报模型标识")} · 已用 ${readout.used}k Tokens（来源 ${readout.source}）· 窗口 ${readout.window > 0 ? `${readout.window}k Tokens` : "未知"} · 占用比例 ${readout.percent === null ? "未知" : `${readout.percent.toFixed(1)}%`}；数字即 Host 会话读数，未做推断`;
   // The Token line keeps its bounded-window LABEL. Its hover names the Host's own
   // session total as read, and — when the two reads disagree in the one direction
   // that matters (Host total 0 while this window reports usage) — reports what

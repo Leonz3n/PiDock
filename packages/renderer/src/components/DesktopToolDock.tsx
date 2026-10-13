@@ -1799,7 +1799,7 @@ function BrowserTool({ taskId }: { taskId: string }) {
     const opened = browserPageFromHost(result.payload);
     if (!opened) { setPage(null); setNotice({ kind: "refused", text: "Host 页面响应无法解析" }); return; }
     setPage(opened);
-    setNotice({ kind: "ok", text: `主进程窗口已打开 ${opened.url}` });
+    setNotice({ kind: "ok", text: `主进程窗口已打开 ${hostText(opened.url, "Host 未上报页面地址")}` });
   };
 
   const readState = async () => {
@@ -1848,7 +1848,7 @@ function BrowserTool({ taskId }: { taskId: string }) {
       {page && (
         <section className="border border-line bg-paper px-2 py-1.5 text-[11px]" data-testid="dock-browser-page">
           <p className="truncate">页面句柄 <span className="font-mono">{page.pageId}</span>{page.webContentsId !== undefined ? <span className="text-muted"> · webContents {page.webContentsId}</span> : null}</p>
-          <p className="mt-0.5 truncate font-mono text-[10px] text-muted">{page.url}</p>
+          <p className="mt-0.5 truncate font-mono text-[10px] text-muted">{hostText(page.url, "Host 未上报页面地址")}</p>
           <div className="mt-1 flex flex-wrap gap-1.5">
             <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void readState()}>读取状态</Button>
             <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void readEvidence()}>读取证据</Button>
@@ -1856,12 +1856,12 @@ function BrowserTool({ taskId }: { taskId: string }) {
               ? <Button type="button" size="sm" disabled={busy} onClick={() => void takeOver(false)}>交还 Agent</Button>
               : <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void takeOver(true)}>接管浏览器</Button>}
           </div>
-          {state && <p className="mt-1 text-[10px] text-muted" data-testid="dock-browser-state">epoch {state.epoch} · {state.title || "（无标题）"} · {state.url}</p>}
+          {state && <p className="mt-1 text-[10px] text-muted" data-testid="dock-browser-state">epoch {state.epoch} · {state.title || "（无标题）"} · {hostText(state.url, "Host 未上报页面地址")}</p>}
           {evidence && (
             <div className="mt-1 text-[10px] text-muted" data-testid="dock-browser-evidence">
               <p>控制台错误 {evidence.consoleErrors.length} · 失败请求 {evidence.failedRequests.length}</p>
-              {evidence.consoleErrors.slice(-3).map((text, index) => <p key={index} className="break-all font-mono">{text}</p>)}
-              {evidence.failedRequests.slice(-3).map((row, index) => <p key={index} className="break-all font-mono">{row.url} · {row.errorText}</p>)}
+              {evidence.consoleErrors.slice(-3).map((text, index) => <p key={index} className="break-all font-mono">{hostText(text, "Host 未上报控制台错误")}</p>)}
+              {evidence.failedRequests.slice(-3).map((row, index) => <p key={index} className="break-all font-mono">{hostText(row.url, "Host 未上报请求地址")} · {hostText(row.errorText, "Host 未上报请求错误")}</p>)}
             </div>
           )}
         </section>
