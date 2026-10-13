@@ -568,6 +568,14 @@ function FilesTool({ taskId }: { taskId: string }) {
    * response arrives.
    */
   const selectedRootRef = useRef<string | undefined>(undefined);
+  /**
+   * A monotonic token for tree reads. The identity drop above compares ROOT
+   * identity, which cannot tell two directory navigations within ONE root apart:
+   * the header (`relative`) is the renderer's own state, while the entries come
+   * from whichever answer lands last. The token makes the NEWEST read the only
+   * one allowed to write the tree.
+   */
+  const treeReadRef = useRef(0);
 
   /**
    * Drop one answer that is not this panel's, and NAME the drop. Stable across
@@ -589,14 +597,22 @@ function FilesTool({ taskId }: { taskId: string }) {
 
   const loadTree = useCallback(
     async (nextRootId: string, nextRelative: string) => {
+      const treeRead = ++treeReadRef.current;
       setBusy(true);
       const result = await fileTreeThroughShell({ taskId, rootId: nextRootId, relative: nextRelative || undefined });
-      setBusy(false);
       const view = result.ok ? workspaceTreeFromHost(result.payload) : undefined;
       // An answer for another root — or for a root the user has already left —
       // is not this panel's data: it is dropped BY NAME, so the tree region is
       // never left empty with nothing said about it.
-      if (dropAnswer("文件树响应", nextRootId, view?.attribution.rootId)) return;
+      const dropped = dropAnswer("文件树响应", nextRootId, view?.attribution.rootId);
+      // Only the NEWEST read owns the in-flight state: an older answer must not
+      // clear the `读取中…` of the read that replaced it.
+      if (treeRead === treeReadRef.current) setBusy(false);
+      if (dropped) return;
+      // A newer tree read has started since this one — same root, another
+      // directory. The header now describes a directory this answer is not
+      // about, so it must not overwrite the newest directory's entries.
+      if (treeRead !== treeReadRef.current) return;
       clearDroppedAnswer("文件树响应");
       if (!result.ok) {
         setTree(null);
@@ -762,17 +778,24 @@ function FilesTool({ taskId }: { taskId: string }) {
    * and not "响应无法解析" — the payload parsed fine, the panel simply may not
    * show a target where none can exist.
    */
-  const selectedRootKindText = selectedRoot?.kind === "worktree"
-    ? "工作树"
-    : selectedRoot?.kind === "shared-dir"
-      ? "普通目录链接"
-      : "尚未选定的根";
+  /**
+   * The name of a root kind, in the renderer's own vocabulary.
+   */
+  const rootKindText = (kind: WorkspaceRootView["kind"] | undefined) =>
+    kind === "worktree" ? "工作树" : kind === "shared-dir" ? "普通目录链接" : "尚未选定的根";
   const deliveryTargetIsShown = delivery !== null && selectedRoot?.kind === "worktree" && delivery.attribution.rootKind === "worktree";
+  /**
+   * The refusal NAMES the side the panel believes, as a three-way on the
+   * payload's self-declared kind and the renderer's own knowledge. When both
+   * AGREE the panel states that kind; when they DISAGREE the renderer's kind is
+   * named, and the payload's claim is only ever quoted as the payload's own —
+   * never repeated back as the panel's conclusion about the selected root.
+   */
   const linkDeliveryRefusal = delivery === null || deliveryTargetIsShown
     ? null
-    : delivery.attribution.rootKind !== "worktree"
-      ? "Host 交付目标与根类型不符：普通目录链接没有 Git 交付，本面板不显示"
-      : `Host 交付目标自述为工作树，与所选根（${selectedRootKindText}）不符：本面板只按所选根的类型判定，不显示 Git 交付目标`;
+    : delivery.attribution.rootKind === selectedRoot?.kind
+      ? `Host 交付目标与根类型不符：${rootKindText(selectedRoot?.kind)}没有 Git 交付，本面板不显示`
+      : `Host 交付目标自述为${rootKindText(delivery.attribution.rootKind)}，与所选根（${rootKindText(selectedRoot?.kind)}）不符：本面板只按所选根的类型判定，不显示 Git 交付目标`;
   const deliveryNoticeText = deliveryNotice ?? linkDeliveryRefusal;
 
   /**
