@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { join } from "node:path";
 import { TaskRemoteDevices } from "./remote-devices.js";
 import { TaskWorkspaceHost, memoryTaskStore } from "./task-host.js";
-import { parseRemoteDeviceRecord, serializeRemoteDeviceRecord } from "./task-store.js";
+import { parseRemoteDeviceRecord, remoteDeviceFilePath, serializeRemoteDeviceRecord } from "./task-store.js";
 import { emptyRemoteDeviceRecord, GATEWAY_RATE_LIMIT, type RemoteDeviceDiskRecord } from "../main/remote-rules.js";
 
 const TASK_ID = "task-a";
@@ -262,6 +262,8 @@ describe("[PiDock 19] remote device manager", () => {
   });
 
   it("keeps the persisted file under the task folder", () => {
-    expect(join(TASK_DIR, "remote-devices.json")).toBe("/tmp/pidock-s21/task-abcdef12/remote-devices.json");
+    // The store builds it with `join`, so the expectation is host-shaped: a POSIX
+    // literal here would only hold on a POSIX host (`/tmp/…` vs `\tmp\…`).
+    expect(remoteDeviceFilePath(TASK_DIR)).toBe(join(TASK_DIR, "remote-devices.json"));
   });
 });
