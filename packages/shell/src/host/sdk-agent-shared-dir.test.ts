@@ -100,10 +100,11 @@ function fixture(): Fixture {
   const externalDir = mkdtempSync(join(tmpdir(), "pidock-agent-external-"));
   roots.push(externalDir);
   writeFileSync(join(externalDir, "outside.txt"), "outside the shared original\n");
-  symlinkSync(externalDir, join(docsDir, "escape-out"));
+  // win32: a plain directory symlink needs SeCreateSymbolicLinkPrivilege; a junction is the directory link this platform can create without it (#57).
+  symlinkSync(externalDir, join(docsDir, "escape-out"), process.platform === "win32" ? "junction" : "dir");
 
   const linkPath = join(taskDir, LINK_NAME);
-  symlinkSync(docsDir, linkPath, "dir");
+  symlinkSync(docsDir, linkPath, process.platform === "win32" ? "junction" : "dir");
 
   writeFileSync(join(taskDir, "task.json"), serializeTaskRecord(buildTaskDiskRecord({
     taskId, name: taskId, dirId: taskId, branch: "task-branch", root, taskDir,

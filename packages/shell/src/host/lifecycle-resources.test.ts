@@ -34,7 +34,8 @@ describe("createLifecycleResources link removal", () => {
     const taskDir = join(root, "task-abcdef12");
     mkdirSync(taskDir);
     const link = join(taskDir, "dir-invoice-docs");
-    symlinkSync(source, link);
+    // win32: a plain directory symlink needs SeCreateSymbolicLinkPrivilege; a junction is the directory link this platform can create without it (#57).
+    symlinkSync(source, link, process.platform === "win32" ? "junction" : "dir");
 
     const lifecycle = resources();
     expect(lifecycle.observeInTaskPath(link)).toMatchObject({ isSymlink: true, isDirectory: false, currentTarget: source });
@@ -56,10 +57,10 @@ describe("createLifecycleResources link removal", () => {
     const taskDir = join(root, "task-abcdef12");
     mkdirSync(taskDir);
     const link = join(taskDir, "dir-docs");
-    symlinkSync(original, link);
+    symlinkSync(original, link, process.platform === "win32" ? "junction" : "dir");
     // The user (or another tool) points the link at a different directory.
     rmSync(link);
-    symlinkSync(elsewhere, link);
+    symlinkSync(elsewhere, link, process.platform === "win32" ? "junction" : "dir");
 
     const lifecycle = resources();
     expect(lifecycle.observeInTaskPath(link)).toMatchObject({ isSymlink: true, currentTarget: elsewhere });
@@ -79,7 +80,7 @@ describe("createLifecycleResources link removal", () => {
     const taskDir = join(root, "task-abcdef12");
     mkdirSync(taskDir);
     const link = join(taskDir, "dir-invoice-docs");
-    symlinkSync(source, link);
+    symlinkSync(source, link, process.platform === "win32" ? "junction" : "dir");
     // The link was replaced by a real directory that is NOT this task's link:
     // `verifyLinkRemoval` refuses it, and the removal call itself must never
     // recurse into it.
@@ -103,9 +104,9 @@ describe("createLifecycleResources link removal", () => {
     const taskDir = join(root, "task-abcdef12");
     mkdirSync(taskDir);
     const dangling = join(taskDir, "dir-missing");
-    symlinkSync(join(root, "missing-source"), dangling);
+    symlinkSync(join(root, "missing-source"), dangling, process.platform === "win32" ? "junction" : "dir");
     const loop = join(taskDir, "dir-loop");
-    symlinkSync(loop, loop);
+    symlinkSync(loop, loop, process.platform === "win32" ? "junction" : "dir");
 
     const lifecycle = resources();
     expect(lifecycle.observeInTaskPath(dangling)).toMatchObject({ isSymlink: true, isDirectory: false });
