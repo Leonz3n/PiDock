@@ -20,9 +20,9 @@
  */
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, normalize } from "node:path";
+import { isAbsolute, join, normalize } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
@@ -155,8 +155,14 @@ function killPid(pid: number | undefined): void {
 const unitLaunch: TerminalLaunch = { program: "/bin/sh", args: [], cwd: normalize(tmpdir()), env: {}, envRevision: "fixture-unit", cols: 80, rows: 24 };
 const unitIdentity = { taskId: "task-unit", sessionId: "human-ui", instanceId: "term-1", generation: 1 };
 
+/** Real directories holding the exact file names a `resolveProgram` case probes
+ * for: the resolve only ever stats a candidate, so existence and the exact
+ * spelling are the whole fixture. */
+const programDirs: string[] = [];
+
 const fixtures: Fixture[] = [];
 afterEach(async () => {
+  for (const dir of programDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
   for (const fixture of fixtures.splice(0)) {
     await fixture.cleanup();
     for (const pid of fixture.pids.filter(alive)) {
@@ -663,10 +669,83 @@ it("derives the descendant set from one process-table snapshot", () => {
   expect(descendantPids(table, 999)).toEqual([]);
 });
 
+function programDir(tag: string, names: string[]): string {
+  const dir = mkdtempSync(join(tmpdir(), `pidock-programs-${tag}-`));
+  for (const name of names) writeFileSync(join(dir, name), "", { mode: 0o755 });
+  programDirs.push(dir);
+  return dir;
+}
+
 it("resolves a bare planned program against the launch PATH without rewriting the plan", () => {
   expect(resolveProgram("/bin/sh", {})).toBe("/bin/sh");
-  expect(resolveProgram("sh", { PATH: "/usr/bin:/bin" })).toBe("/bin/sh");
+  // The launch PATH's delimiter and completion rules are the platform's own, so
+  // the win32 claim is the same one - the bare name resolves to the real image
+  // and the plan keeps its own name - measured on this host's Windows PATH.
+  if (process.platform === "win32") {
+    const resolved = resolveProgram("node", { PATH: process.env.PATH ?? "" });
+    expect(resolved).not.toBe("node");
+    expect(resolved.toUpperCase().endsWith("NODE.EXE")).toBe(true);
+    expect(statSync(resolved).isFile()).toBe(true);
+  } else {
+    expect(resolveProgram("sh", { PATH: "/usr/bin:/bin" })).toBe("/bin/sh");
+  }
   expect(resolveProgram("definitely-not-a-planned-program", { PATH: "/bin" })).toBe("definitely-not-a-planned-program");
+});
+
+it("completes a bare win32 planned name with its PATHEXT suffix", () => {
+  const first = programDir("pathext", ["probe.COM", "probe.EXE"]);
+  const second = programDir("pathext-second", ["probe.EXE"]);
+  const resolved = resolveProgram("probe", { PATH: first, PATHEXT: ".COM;.EXE" }, "win32");
+  // The name resolves to the absolute image carrying the first listed suffix.
+  expect(resolved).toBe(join(first, "probe.COM"));
+  expect(isAbsolute(resolved)).toBe(true);
+  // `;` is the win32 entry delimiter and the entries keep their own order.
+  expect(resolveProgram("probe", { PATH: `${first};${second}`, PATHEXT: ".EXE" }, "win32")).toBe(join(first, "probe.EXE"));
+});
+
+it("returns the planned win32 name when no candidate carries a listed suffix", () => {
+  const dir = programDir("no-candidate", ["other.EXE"]);
+  expect(resolveProgram("probe", { PATH: dir, PATHEXT: ".EXE" }, "win32")).toBe("probe");
+  // A PATHEXT without `.EXE` completes nothing else: `.exe` is not assumed, and
+  // the planned name travels on for the driver to refuse.
+  expect(resolveProgram("other", { PATH: dir, PATHEXT: ".BAT;.CMD" }, "win32")).toBe("other");
+});
+
+it("completes a bare win32 name with the documented default list when PATHEXT is absent", () => {
+  const dir = programDir("default-pathext", ["probe.EXE"]);
+  expect(resolveProgram("probe", { PATH: dir }, "win32")).toBe(join(dir, "probe.EXE"));
+  expect(resolveProgram("probe", { PATH: dir, PATHEXT: "" }, "win32")).toBe(join(dir, "probe.EXE"));
+});
+
+it("reads the win32 PATH and PATHEXT names case-insensitively", () => {
+  const dir = programDir("env-spelling", ["probe.XYZ", "probe.exe"]);
+  // Windows names a variable in whatever case it is spelled.
+  expect(resolveProgram("probe", { Path: dir, pathext: ".XYZ" }, "win32")).toBe(join(dir, "probe.XYZ"));
+  // A name that already carries a listed suffix is complete, whatever case either
+  // side is spelled in, so it is not completed twice.
+  expect(resolveProgram("probe.exe", { PATH: dir, PATHEXT: ".EXE" }, "win32")).toBe(join(dir, "probe.exe"));
+});
+
+it("leaves a win32 planned name that carries a separator to the launch cwd", () => {
+  const dir = programDir("separator", ["probe.EXE"]);
+  mkdirSync(join(dir, "sub"), { recursive: true });
+  writeFileSync(join(dir, "sub", "probe.EXE"), "", { mode: 0o755 });
+  const env = { PATH: dir, PATHEXT: ".EXE" };
+  // Completing these inside the PATH entry would find a real file, but a relative
+  // path is the launch cwd's to resolve: PATH is never consulted for it.
+  expect(resolveProgram("sub/probe", env, "win32")).toBe("sub/probe");
+  expect(resolveProgram("sub\\probe", env, "win32")).toBe("sub\\probe");
+});
+
+it("keeps the POSIX PATH rule for an entry that carries the win32 delimiter or suffix list", () => {
+  const dir = programDir("posix-reverse", ["probe.EXE"]);
+  const win32Env = { PATH: `${dir};/opt/bin`, PATHEXT: ".EXE" };
+  // One launch env, two rules: win32 splits the entry at `;` and completes the
+  // name, POSIX reads `;` as an ordinary character of one `:`-separated entry and
+  // completes nothing - the win32 rule cannot leak into it.
+  expect(resolveProgram("probe", win32Env, "win32")).toBe(join(dir, "probe.EXE"));
+  expect(resolveProgram("probe", win32Env, "linux")).toBe("probe");
+  expect(resolveProgram("probe", { PATH: dir, PATHEXT: ".EXE" }, "linux")).toBe("probe");
 });
 
 it.each([
