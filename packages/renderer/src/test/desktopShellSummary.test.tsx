@@ -97,6 +97,9 @@ describe("[UI 对齐 S8a] production bottom summary bar", () => {
     expect(text).not.toMatch(/浏览器|未打开|接管/);
     expect(text).not.toMatch(/\d+\s*服务/);
     expect(text).not.toContain("—");
+    // …and the demo bar's own fallback wording (`ShellSummaryBar` says 未选择工作区
+    // when its store holds no task) is not production state either.
+    expect(text).not.toContain("未选择工作区");
     // The one count the shell does read is a verified number, not a zero-filler.
     await waitFor(() => expect(text).toContain("进行中的任务 1"));
   });
@@ -121,6 +124,8 @@ describe("[UI 对齐 S8a] production bottom summary bar", () => {
     await openRealTask();
     await waitFor(() => expect(within(strip()).getByText("进行中的任务 1")).toBeInTheDocument());
 
+    // The demo bar itself is not mounted on this route either.
+    expect(screen.queryByTestId("shell-summary")).toBeNull();
     expect(demoRead).not.toHaveBeenCalled();
     expect(demoCreate).not.toHaveBeenCalled();
     expect(demoSend).not.toHaveBeenCalled();
