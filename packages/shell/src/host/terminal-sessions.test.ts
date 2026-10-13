@@ -22,7 +22,7 @@ import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, normalize } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
@@ -135,9 +135,11 @@ class DriverWorker extends EventEmitter {
 /**
  * A real process that leads its own process group, so the driver's `pgid === pid`
  * identity check accepts it without a real pty. The caller always kills it.
+ * `process.execPath` runs the same long-lived child on either platform; a
+ * `/bin/sleep` helper only exists on POSIX.
  */
 function detachedGroupLeader(): ChildProcess {
-  const child = spawn("/bin/sleep", ["600"], { detached: true, stdio: "ignore" });
+  const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 600000)"], { detached: true, stdio: "ignore" });
   child.unref();
   return child;
 }
@@ -147,8 +149,10 @@ function killPid(pid: number | undefined): void {
   try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
 }
 
-/** A hand-built launch for driver-level tests: absolute, normalized and bounded. */
-const unitLaunch: TerminalLaunch = { program: "/bin/sh", args: [], cwd: "/tmp", env: {}, envRevision: "fixture-unit", cols: 80, rows: 24 };
+/** A hand-built launch for driver-level tests: absolute, normalized and bounded.
+ * The cwd is the host's temp directory because the protocol rejects a
+ * non-normalized absolute path and `/tmp` is not normalized on win32. */
+const unitLaunch: TerminalLaunch = { program: "/bin/sh", args: [], cwd: normalize(tmpdir()), env: {}, envRevision: "fixture-unit", cols: 80, rows: 24 };
 const unitIdentity = { taskId: "task-unit", sessionId: "human-ui", instanceId: "term-1", generation: 1 };
 
 const fixtures: Fixture[] = [];
