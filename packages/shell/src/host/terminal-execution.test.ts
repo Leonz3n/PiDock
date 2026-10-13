@@ -1,15 +1,21 @@
 import { expect, it } from "vitest";
+import { join, resolve, sep } from "node:path";
 import { PiSessionChannel } from "../main/pi-session.js";
 import { TaskWriteCoordinator } from "./write-coordination.js";
 import { SharedPathCoordinator } from "./path-coordination.js";
 import { TerminalExecution, type TerminalDriver, type TerminalDriverReceipt, type TerminalLaunch, type TerminalRequest } from "./terminal-execution.js";
 
-const taskId = "task-aaaaaaaa", taskDir = "/tasks/task-aaaaaaaa";
+// The task folder is a host path: on win32 `\tasks\…`, on a POSIX host `/tasks/…`
+// (`resolve(sep, …)` roots it at the host's root instead of a drive-relative dir).
+const taskId = "task-aaaaaaaa", taskRoot = resolve(sep, "tasks"), taskDir = join(taskRoot, taskId);
 function fixture(options: Partial<ConstructorParameters<typeof TerminalExecution>[0]> = {}) {
-  const fixtureTask = options.taskId ?? taskId, fixtureDir = `/tasks/${fixtureTask}`;
+  const fixtureTask = options.taskId ?? taskId, fixtureDir = join(taskRoot, fixtureTask);
   const write = new TaskWriteCoordinator();
   const channel = new PiSessionChannel({ taskId: fixtureTask, taskDir: fixtureDir, sessionId: "main", providerId: "local", model: "fixture", permission: "auto" });
-  const launch: TerminalLaunch = { program: "fixture", args: [], cwd: `${fixtureDir}/repo`, env: { FIXTURE: "one" }, envRevision: "env-1", cols: 80, rows: 24 };
+  // `launchCopy` (host/terminal-execution.ts:102) admits only a launch whose cwd is
+  // already normalized (`normalize(cwd) === cwd`), so the fixture path is joined, not
+  // spelled with a literal `/` separator.
+  const launch: TerminalLaunch = { program: "fixture", args: [], cwd: join(fixtureDir, "repo"), env: { FIXTURE: "one" }, envRevision: "env-1", cols: 80, rows: 24 };
   let completion: ((receipt: TerminalDriverReceipt) => void) | undefined;
   const delivered: string[] = [];
   const driver: TerminalDriver = {
@@ -69,7 +75,7 @@ it("ignores an old generation's delayed receipt after a new terminal starts", as
 it("asks for the exact command before default execution and never spends it on changed arguments", async () => {
   const f = fixture(); f.channel.setPermission("default");
   const asked = await f.control();
-  expect(asked).toMatchObject({ ok: false, error: "approval-required", review: { action: "start", program: "fixture", args: [], cwd: `${taskDir}/repo`, envRevision: "env-1", generation: 1 } });
+  expect(asked).toMatchObject({ ok: false, error: "approval-required", review: { action: "start", program: "fixture", args: [], cwd: join(taskDir, "repo"), envRevision: "env-1", generation: 1 } });
   const approvalId = f.channel.snapshot().approvals[0]!.id;
   expect(f.write.owner).toBeNull();
   expect(await f.control("start", approvalId)).toMatchObject({ ok: false });
@@ -241,9 +247,9 @@ it("refuses read-only commands and auto commands without a trusted automation sc
 it("refuses changed cwd, changed private env at the same revision, rejected and expired confirmations", async () => {
   const f = fixture(); f.channel.setPermission("default"); await f.control();
   const id = f.channel.snapshot().approvals.at(-1)!.id; f.channel.approve(id);
-  f.launch.cwd = `${taskDir}/other`;
+  f.launch.cwd = join(taskDir, "other");
   expect(await f.control("start", id)).toMatchObject({ error: "invalid-terminal-approval" });
-  f.launch.cwd = `${taskDir}/repo`; f.launch.env["FIXTURE"] = "new-private-value";
+  f.launch.cwd = join(taskDir, "repo"); f.launch.env["FIXTURE"] = "new-private-value";
   expect(await f.control("start", id)).toMatchObject({ error: "invalid-terminal-approval" });
   f.launch.env["FIXTURE"] = "one"; f.channel.setPermission("auto");
   expect(await f.control("start", id)).toMatchObject({ error: "invalid-terminal-approval" });
@@ -274,7 +280,7 @@ it("rejects a different task/session and a revoked lease before spawn", async ()
   const f = fixture({ acquireLease: () => ({ revalidate: () => { throw Error("revoked"); }, release: () => {} }) });
   expect(await f.control()).toMatchObject({ ok: false });
   expect(f.execution.snapshot().identity).toBeNull(); expect(f.write.owner).toBeNull();
-  const foreign = new PiSessionChannel({ taskId: "task-bbbbbbbb", taskDir: "/tasks/task-bbbbbbbb", sessionId: "other", providerId: "local", model: "fixture", permission: "auto" });
+  const foreign = new PiSessionChannel({ taskId: "task-bbbbbbbb", taskDir: join(taskRoot, "task-bbbbbbbb"), sessionId: "other", providerId: "local", model: "fixture", permission: "auto" });
   expect(await f.execution.control({ channel: foreign, sessionId: "main", request: { action: "start" }, persistApproval: async () => {} })).toEqual({ ok: false, error: "terminal-caller-mismatch" });
 });
 
