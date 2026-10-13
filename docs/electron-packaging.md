@@ -79,7 +79,7 @@ Windows 安装资产为 **MSI**（[ADR 0004](adr/0004-windows-installer-msi-inst
 
 ## Windows MSI 人工验收（在 Windows 机器上执行）
 
-**本机（darwin-arm64）没有构建、安装或签名任何 MSI。** 下面每一步都必须在另一台 Windows x64 机器上由人工执行；在此机器上跑 `package:win` 只会卡在下载 WiX 与 x86_64 Wine 上（见上一节），证明不了任何 Windows 结论。在人工回报结果之前，任何文档或结论都不得声称 Windows 资产可用或已签名。
+**本机（darwin-arm64）没有构建、安装或签名任何 MSI。** 下面每一步都必须在另一台 Windows x64 机器上由人工执行；在此机器上跑 `package:win` **预计**会先下载 WiX，随后在 x86_64 版 Wine 上以同类架构错误失败（同 2026-09-22 记录的 `-86`；**本节未实测**，属预期而非观察结果），证明不了任何 Windows 结论。在人工回报结果之前，任何文档或结论都不得声称 Windows 资产可用或已签名。
 
 ### 构建
 

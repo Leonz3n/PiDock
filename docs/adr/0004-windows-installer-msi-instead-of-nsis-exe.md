@@ -2,7 +2,7 @@
 
 Status: accepted (2026-10-13; 人工决定)
 
-MVP 规格与发布门禁把 Windows 首发资产写成**单一 x64 `.exe` 安装包（NSIS）**（`.scratch/pidock-mvp/spec.md:113,303,306,327,401-402`、`docs/mvp-validation-plan.md:95,116`、`docs/design-notes.md:210`、`docs/product-design-closure.md:50`）。本决策**取代**该资产格式，其余（x64 架构、签名门禁、发布一致性要求）不变。
+MVP 规格与发布门禁把 Windows 首发资产写成**单一 x64 `.exe` 安装包（NSIS）**（`.scratch/pidock-mvp/spec.md:113`（US-70）、同文件「安装包与 GitHub Release」节（锚点 `#安装包与-github-release`）与验收用例表中「安装包构建与发布」「安装与升级」两行；本 ADR 不引用这些位置的行号，因为该节随后被插入的取代说明改动了行号。另见 `docs/mvp-validation-plan.md:95,116`、`docs/design-notes.md:210`、`docs/product-design-closure.md:50`）。本决策**取代**该资产格式，其余（x64 架构、签名门禁、发布一致性要求）不变。
 
 ## 决定
 
