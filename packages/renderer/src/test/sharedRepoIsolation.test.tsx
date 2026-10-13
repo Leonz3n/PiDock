@@ -329,17 +329,26 @@ describe("[PiDock 03] (#6 盒子 6) two tasks sharing one project repository", (
       // No branch may claim nothing was measured: three of the four read the fs.
       expect(row).not.toHaveTextContent("形状未实测");
       expect(row).not.toHaveTextContent("真实目录");
+      // ...and the one clause that keeps the label honest is pinned by its own
+      // words, so a later edit cannot drop or re-vague it silently.
+      expect(row).toHaveTextContent("未确定：探测没有给出已命名的形状");
     }
     // The lexical pre-check still rides beside the reading, as for every shape.
     expect(budget).toHaveTextContent("词法预检：路径不嵌套、不在任务目录内");
   });
 
   it("names an empty Host path, root identity, platform or boundary on a row", async () => {
+    // Two task roots and TWO link roots, so the shape read's own two branches are
+    // both covered by this one read: a name the Host DID give (`directory`) and
+    // its own `unknown`. The Host left `detail` empty in both, so each branch has
+    // to name the missing observation rather than ending at a bare `Host 观测：`.
+    const BLANK_SHAPE_LINK = "dir-77aa00bb";
     window.pidock = {
-      taskOp: async (taskId: string, op: string) => {
+      taskOp: async (taskId: string, op: string, payload: Record<string, unknown>) => {
         if (op === "task/fileRoots") return { ok: true, payload: { taskDir: "/tasks/blank", roots: [
           { id: "", kind: "worktree", label: "", path: "", repo: "", baselineBranch: "" },
           { id: LINK_ROOT, kind: "shared-dir", label: "", path: "", directoryId: "", sourcePath: "" },
+          { id: BLANK_SHAPE_LINK, kind: "shared-dir", label: "", path: "/tasks/blank/dir-77aa00bb", sourcePath: "/work/blank-docs-2" },
         ] } };
         if (op === "task/fileDiff") {
           if (String(taskId) === "task-blank-row") {
@@ -347,7 +356,8 @@ describe("[PiDock 03] (#6 盒子 6) two tasks sharing one project repository", (
           }
         }
         if (op === "task/probeLink") {
-          return { ok: true, payload: { shape: "directory", detail: "来源是真实目录: /work/blank-docs", lexical: "ok", platforms: [{ platform: "", exercised: false, note: "" }], modelBoundary: "" } };
+          const shape = String(payload["sourcePath"]) === "/work/blank-docs-2" ? "unknown" : "directory";
+          return { ok: true, payload: { shape, detail: "", lexical: "ok", platforms: [{ platform: "", exercised: false, note: "" }], modelBoundary: "" } };
         }
         return { ok: false, error: "plain-dir-no-diff: 普通目录链接不提供 Git 差异" };
       },
@@ -361,15 +371,66 @@ describe("[PiDock 03] (#6 盒子 6) two tasks sharing one project repository", (
     expect(worktree).toHaveTextContent("Host 未上报工作副本路径");
     expect(worktree).toHaveTextContent("Host 未提供（固定）");
 
-    const linkRow = await screen.findByTestId("shared-dir-row");
+    const linkRows = await screen.findAllByTestId("shared-dir-row");
+    const linkRow = linkRows.find((row) => row.getAttribute("data-root") === LINK_ROOT)!;
     expect(linkRow).toHaveTextContent("Host 未上报任务内链接路径");
     expect(linkRow).toHaveTextContent("Host 未提供");
     const platforms = within(linkRow).getByTestId("row-link-platforms-task-blank-row");
     expect(platforms).toHaveTextContent("Host 未上报平台标识");
     expect(platforms).toHaveTextContent("Host 未上报该平台的说明");
     expect(within(linkRow).getByTestId("row-link-model-boundary-task-blank-row")).toHaveTextContent("Host 未上报记录边界");
-    // The shape row itself was read fine, so it stays a named reading.
-    expect(within(linkRow).getByTestId("row-link-shape-task-blank-row")).toHaveTextContent("真实目录（Host 实测）");
+    // The shape row itself was read fine, so the named shape stays a reading -
+    // and the Host's own empty `detail` is named instead of vanishing behind a
+    // bare `Host 观测：`.
+    const namedShape = within(linkRow).getByTestId("row-link-shape-task-blank-row");
+    expect(namedShape).toHaveTextContent("真实目录（Host 实测）");
+    expect(namedShape).toHaveTextContent("Host 观测：Host 未给出观测细节");
+    // The OTHER branch of the same read: the unknown shape, whose per-branch
+    // `Host 读到的情况：` clause carries the same empty detail.
+    const unknownLinkRow = linkRows.find((row) => row.getAttribute("data-root") === BLANK_SHAPE_LINK)!;
+    expect(within(unknownLinkRow).getByTestId("row-link-shape-task-blank-row")).toHaveTextContent(
+      "未确定：探测没有给出已命名的形状；Host 读到的情况：Host 未给出观测细节",
+    );
+  });
+
+  it("names an unread branch and an unread change whose reason the Host left empty", async () => {
+    // The other side of the same parse contract: `observation()` keeps a NAMED
+    // `unknown` whose `reason` is `""`, so the row must name the absence rather
+    // than render `未实测：` or a bare `（）`.
+    window.pidock = {
+      taskOp: async (taskId: string, op: string, payload: Record<string, unknown>) =>
+        op === "task/fileRoots"
+          ? {
+              ok: true,
+              payload: {
+                taskDir: `/tasks/${taskId}`,
+                roots: [
+                  {
+                    id: REPO_ROOT,
+                    kind: "worktree",
+                    label: REPO_ROOT,
+                    path: `/tasks/${taskId}/${REPO_ROOT}`,
+                    baselineBranch: "main",
+                    workingBranch: { state: "unknown", reason: "" },
+                    dirty: { state: "unknown", reason: "" },
+                  },
+                ],
+              },
+            }
+          : { ok: false, error: (payload["rootId"] === REPO_ROOT ? "读取 Git 状态超时" : "unexpected") },
+    } as unknown as typeof window.pidock;
+    render(<SharedRepoIsolation tasks={[tasks[0]!]} />);
+    const row = await screen.findByTestId("worktree-row");
+    const branch = within(row).getByTestId(`row-working-branch-${tasks[0]!.taskId}`);
+    expect(branch).toHaveTextContent("未实测：Host 未给出未读原因");
+    expect(branch).not.toHaveTextContent("未实测：·");
+    // ...and the SAME rule on the row's own uncommitted clause, which is not
+    // routed through `observedText`.
+    const change = within(row).getByTestId(`row-change-${tasks[0]!.taskId}`);
+    expect(change).toHaveTextContent("未提交或未跟踪状态未实测（Host 未给出未读原因）");
+    // The real, named direction still reads as itself (the sibling test above
+    // pins a non-empty reason at both of these same two places).
+    expect(change).not.toHaveTextContent("无改动");
   });
 
   it("names an unread branch and an unread change instead of showing the baseline or 干净", async () => {

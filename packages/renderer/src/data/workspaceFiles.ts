@@ -306,7 +306,9 @@ export function observedText<T>(
 ): string {
   if (observation === undefined) return `未实测：${absent}`;
   if (observation.state === "observed") return `${format(observation.value)}（实测）`;
-  return `未实测：${observation.reason}`;
+  // `observation()` keeps a NAMED `unknown` whose `reason` is `""`, so the
+  // absence of a reason is named here rather than rendering a bare `未实测：`.
+  return `未实测：${hostText(observation.reason, "Host 未给出未读原因")}`;
 }
 
 /**
