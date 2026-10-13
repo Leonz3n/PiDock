@@ -174,7 +174,12 @@ describe("TaskWorkspaceFiles", () => {
     expect(result.tree.entries.map((entry) => entry.path)).toEqual(["api.ts", "same.txt"]);
   });
 
-  it("refuses a symlinked entry via the real filesystem reader", () => {
+  // win32: this case plants a link to a FILE, which needs SeCreateSymbolicLinkPrivilege
+  // (measured: EPERM under `runas /trustlevel:0x20000`) and a junction cannot stand in
+  // for a file link (it is a directory reparse point). The containment outcome for a link
+  // out of the root stays covered on win32 by the injected-reader cases above; the real
+  // on-disk file link itself is unobserved here.
+  it.skipIf(process.platform === "win32")("refuses a symlinked entry via the real filesystem reader", () => {
     const dir = mkdtempSync(join(tmpdir(), "pidock-files-"));
     const outside = join(dir, "outside.txt");
     writeFileSync(outside, "root:x:0:0\n");
