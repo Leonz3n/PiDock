@@ -806,6 +806,31 @@ describe("Desktop production data", () => {
     await waitFor(() => expect(sdkTurn).toHaveBeenCalledWith({ action: "unsubscribe", taskId: "real-1", sessionId: "main" }));
   });
 
+  it("reads the composer's reasoning tier and occupancy from the Host on the production route", async () => {
+    const sdkTurn = vi.fn(async (request: Record<string, unknown>) => ({ ok: true, payload: request.action === "subscribe" ?
+      { taskId: "real-1", sessionId: "main", snapshot: { source: "sdk-jsonl", sessionId: "main", messages: [], pending: false, interrupted: false }, turn: null } :
+      { unsubscribed: true } }));
+    const shell = bridge({ assigned: true });
+    // The Host answers with its own session readout; the composer must show THAT
+    // tier and THAT occupancy — `xhigh` is nobody's default here.
+    const taskOp = vi.fn(async (_taskId: string, op: string) => op === "task/sessionContext"
+      ? { ok: true, payload: { context: { providerId: "provider-loopback", providerName: "Loopback", model: "issue47-model", modelName: null, availability: { status: "available" }, window: 200, used: 24.8, source: "estimated", tokens: 4321, percent: 12.4, thinking: "xhigh", thinkingCatalog: "declared" } } }
+      : { ok: true, payload: { lifecycle: { taskId: "real-1", archived: false, archivedAt: null } } });
+    window.pidock = { ...shell, taskOp, sdkTurn, onSdkTurnEvent: vi.fn(() => vi.fn()) };
+    render(<App />);
+    await openManagement();
+    fireEvent.click(await screen.findByRole("button", { name: "真实项目" }));
+    fireEvent.click(screen.getByRole("button", { name: "进入工作区" }));
+    const conversation = await screen.findByTestId("desktop-conversation");
+
+    const reasoning = await within(conversation).findByTestId("composer-thinking");
+    await waitFor(() => expect(reasoning).toHaveTextContent("推理 · 极高（xhigh）"));
+    expect(reasoning).not.toBeDisabled();
+    expect(within(conversation).queryByText("推理（未接线）")).toBeNull();
+    await waitFor(() => expect(within(conversation).getByTestId("composer-context")).toHaveTextContent("上下文 24.8k / 200k · 12.4% · 估算"));
+    expect(taskOp).toHaveBeenCalledWith("real-1", "task/sessionContext", { sessionId: "main" });
+  });
+
   it("fails visibly without bridge and retains native task root import", async () => {
     const original = Object.getOwnPropertyDescriptor(window.navigator, "userAgent");
     Object.defineProperty(window.navigator, "userAgent", { configurable: true, value: "Electron/44" });

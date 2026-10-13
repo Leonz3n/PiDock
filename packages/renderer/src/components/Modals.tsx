@@ -26,6 +26,7 @@ import { TaskPrepareRecovery } from "./TaskPrepareRecovery";
 import {
   CONTEXT_WINDOW_SOURCE_LABEL,
   DEFAULT_MODEL_CONTEXT_WINDOW,
+  REASONING_LABELS,
   REASONING_LEVELS,
   buildModelPickerGroups,
   connectionFingerprint,
@@ -1642,16 +1643,6 @@ function ModelPickerModal({ taskId, sessionId, onClose }: { taskId: string; sess
     </Modal>
   );
 }
-
-const REASONING_LABELS: Record<string, string> = {
-  off: "关闭",
-  minimal: "极低",
-  low: "低",
-  medium: "中",
-  high: "高",
-  xhigh: "极高",
-  max: "最高",
-};
 
 function ThinkingPickerModal({ taskId, sessionId, onClose }: { taskId: string; sessionId: string; onClose: () => void }) {
   const workspace = useHostStore((state) => state.workspace);

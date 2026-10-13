@@ -193,6 +193,36 @@ describe("[UI 对齐 S8a] production bottom summary bar", () => {
     // not hold a fixed width (`shrink-0`) while its column shrinks.
     expect(tiers(bar.className)).toEqual(expect.arrayContaining(["min-w-0", "max-w-full", "overflow-hidden", "whitespace-nowrap"]));
     expect(tiers(bar.className)).not.toContain("shrink-0");
+    // This view has a `scope` segment, so the pill itself stays at the mid tier.
+    expect(tiers(bar.className)).not.toContain("below-mid:hidden");
+  });
+
+  it("keeps no empty pill at the mid tier on a view that names neither a task nor a Project", () => {
+    render(
+      <DesktopShell
+        view={{ view: "usage" }}
+        onNavigate={vi.fn()}
+        projects={[{ id: project.id, name: project.name, description: project.description }]}
+        tasks={tasks.map((task) => ({ ...task, projectId: project.id }))}
+        allTaskCount={tasks.length}
+        lifecyclePending={false}
+        lifecycleErrors={[]}
+        roots={roots}
+        rootRetry={{ busy: false, pending: false, error: null, run: vi.fn() }}
+        breadcrumb={{ project: project.name }}
+      >
+        <p>内容</p>
+      </DesktopShell>,
+    );
+
+    // 用量/已归档/需要处理 name neither a task nor a Project, so the strip produces
+    // no `scope` segment and its remaining segments are `below-mid:hidden`. At 960
+    // the section then painted only its own border and background as an empty
+    // ~22×14px pill (S8a review P2), so the pill hides with them while the wide
+    // tier keeps showing the segment it really read.
+    const bar = strip();
+    expect(bar.className.split(/\s+/)).toContain("below-mid:hidden");
+    expect(within(bar).getByText("进行中的任务 1")).toBeInTheDocument();
   });
 });
 

@@ -2,6 +2,12 @@ import { useEffect, useState } from "react";
 import { DesktopInventory } from "./components/DesktopInventory";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { desktopMode } from "./data/desktopInventory";
+// [UI 对齐 S8c] #47 carried fix: these three imports are the DEMO path, and they
+// are static, so `data/memoryHost.ts`'s module-level fixture workspace is still
+// constructed into the packaged renderer bundle even though the desktop edge no
+// longer reaches it. Keeping the imports is deliberate in this slice (see the
+// report); no measurement may claim the fixture module is out of the bundle until
+// the demo path is lazy-loaded.
 import { Modals } from "./components/Modals";
 import { Shell } from "./components/Shell";
 import { ToastStack } from "./components/ui";
