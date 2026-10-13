@@ -81,12 +81,12 @@ const TEMPLATES = [
     descriptor: { name: "Callee API", program: "node", args: ["server.js"], ports: [9102], runType: "long-lived" } },
 ];
 
-function dock(options: { routing?: () => unknown } = {}) {
+function dock(options: { routing?: () => unknown; bindings?: unknown } = {}) {
   const serviceCatalogOp = vi.fn(async (request: Record<string, unknown>) => {
     if (request["op"] === "taskDependencyRouting") {
       return options.routing ? options.routing() : { ok: true, payload: routingPayload({ declared: true }) };
     }
-    if (request["op"] === "taskBindings") return { ok: true, payload: BINDINGS };
+    if (request["op"] === "taskBindings") return { ok: true, payload: options.bindings ?? BINDINGS };
     if (request["op"] === "list") return { ok: true, payload: TEMPLATES.filter((row) => row.environmentId === request["environmentId"]) };
     return { ok: false, error: `unexpected serviceCatalogOp ${String(request["op"])}` };
   });
@@ -114,9 +114,12 @@ describe("[PiDock 05] #10 box 1 运行面板 显示 本地/远程位置 与 实�
 
     const panel = screen.getByTestId("desktop-tool-dock");
 
-    // 位置: 本机实例 for BOTH bound services, derived from the trusted read.
-    await waitFor(() => expect(within(panel).getByTestId(`dock-service-location-${CALLER}`)).toHaveTextContent("位置：本机实例 · 本任务运行"));
-    expect(within(panel).getByTestId(`dock-service-location-${CALLEE}`)).toHaveTextContent("位置：本机实例 · 本任务运行");
+    // 位置: 本机实例 for BOTH bound services, derived from the trusted read. The
+    // label states the BINDING (this task owns the unit), never a runtime fact:
+    // the read does not observe a process, so it must not claim 本任务运行.
+    await waitFor(() => expect(within(panel).getByTestId(`dock-service-location-${CALLER}`)).toHaveTextContent("位置：本机实例 · 本任务自有（未启动不代表运行中）"));
+    expect(within(panel).getByTestId(`dock-service-location-${CALLEE}`)).toHaveTextContent("位置：本机实例 · 本任务自有（未启动不代表运行中）");
+    expect(within(panel).getByTestId(`dock-service-location-${CALLER}`)).not.toHaveTextContent("本任务运行");
 
     // 请求去向: the declared target is THIS task's instance address + port; the
     // variable no declaration binds keeps the shared environment address.
@@ -176,6 +179,59 @@ describe("[PiDock 05] #10 box 1 运行面板 显示 本地/远程位置 与 实�
     // note still states that no shared-resource list is being claimed.
     expect(within(panel).getByTestId("dock-remote-deps").querySelectorAll("[data-remote-key]")).toHaveLength(2);
     expect(within(panel).getByTestId("dock-remote-deps-note")).toHaveTextContent("共享外部资源在哪声明尚未决定");
+  });
+
+  it("never renders an all-clear when the plan failed closed: an empty 去向 list names the unhandled diagnostics", async () => {
+    // One bound long-lived service whose PINNED revision declares no port makes
+    // `resolveTaskBindings` fail closed, so the read returns NO destination at all
+    // (a partial view is never sent) while the OTHER unit's unbound address
+    // variable really keeps the shared environment value. An empty list therefore
+    // must NOT be rendered as "no shared-environment variable".
+    dock({ routing: () => ({ ok: true, payload: {
+      taskId: TASK_ID,
+      units: [
+        { unitId: `repo-a:${CALLER}`, serviceId: CALLER, name: "Caller API", repoDir: "repo-a", subdir: "caller",
+          templateVersion: 1, environment: "开发环境", location: "local", declaredPorts: [9101] },
+        { unitId: `repo-a:${CALLEE}`, serviceId: CALLEE, name: "Callee API", repoDir: "repo-a", subdir: "callee",
+          templateVersion: 1, environment: "开发环境", location: "local", declaredPorts: [] },
+      ],
+      repoGroups: [{ repoDir: "repo-a", unitIds: [`repo-a:${CALLER}`, `repo-a:${CALLEE}`] }],
+      destinations: [],
+      linkage: { state: "declared", edges: [{ from: `repo-a:${CALLER}`, to: `repo-a:${CALLEE}`, fromName: "Caller API", toName: "Callee API", kind: "call" }] },
+      diagnostics: [{ code: "missing-port", message: "变量「CALLEE_API_URL」指向的本地服务「Callee API」还没有端口", hint: "请先完成端口分配" }],
+    } }) });
+    render(<DesktopToolDock taskId={TASK_ID} tool="runtime" onClose={() => {}} />);
+    const panel = screen.getByTestId("desktop-tool-dock");
+
+    const remoteDeps = await within(panel).findByTestId("dock-remote-deps");
+    // The all-clear clause is GONE, and the named state says WHY it is withheld.
+    expect(remoteDeps).not.toHaveTextContent("地址变量都指向本任务实例");
+    const empty = within(panel).getByTestId("dock-remote-deps-empty");
+    expect(empty).toHaveAttribute("data-remote-deps-state", "unconcluded");
+    expect(empty).toHaveTextContent("依赖去向仍有未处理的诊断");
+    // The 请求去向 empty state makes the same honest claim, never "no address
+    // variable" - the list is empty because the plan could not resolve it.
+    const routingEmpty = within(panel).getByTestId("dock-dependency-empty");
+    expect(routingEmpty).toHaveAttribute("data-dependency-empty-state", "unconcluded");
+    expect(routingEmpty).not.toHaveTextContent("没有可展示的地址变量");
+    expect(within(panel).getByTestId("dock-routing-diagnostics")).toHaveTextContent("missing-port");
+  });
+
+  it("names an empty 去向 list as no bound service instead of an all-clear", async () => {
+    // A real empty task: main stores no binding, so its read returns the empty
+    // view (`units: []`) rather than a list of units it could not derive.
+    dock({ bindings: [], routing: () => ({ ok: true, payload: {
+      taskId: TASK_ID, units: [], repoGroups: [], destinations: [],
+      linkage: { state: "no-declaration", edges: [] }, diagnostics: [],
+    } }) });
+    render(<DesktopToolDock taskId={TASK_ID} tool="runtime" onClose={() => {}} />);
+    const panel = screen.getByTestId("desktop-tool-dock");
+
+    const empty = await within(panel).findByTestId("dock-remote-deps-empty");
+    expect(empty).toHaveAttribute("data-remote-deps-state", "no-service");
+    expect(empty).toHaveTextContent("本任务还没有绑定服务");
+    expect(within(panel).getByTestId("dock-remote-deps")).not.toHaveTextContent("地址变量都指向本任务实例");
+    expect(within(panel).getByTestId("dock-dependency-empty")).toHaveAttribute("data-dependency-empty-state", "no-service");
   });
 
   it("shows main's named refusal for this read instead of an empty or optimistic 去向 list", async () => {

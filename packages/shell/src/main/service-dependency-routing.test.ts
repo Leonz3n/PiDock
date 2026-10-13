@@ -266,6 +266,29 @@ describe("[PiDock 05] #10 box 1 the trusted 本地/远程位置 + 实际依赖�
     );
   });
 
+  it("fails the WHOLE destination list closed when a bound local unit has no port, and names the diagnostic", async () => {
+    // A pinned revision that declares no port (the row's own 「配方未声明端口」 state)
+    // makes `resolveTaskBindings` fail closed. The read must then return NO
+    // destination at all - the other unit's unbound address variable really keeps
+    // the shared environment value, so an empty list here is NOT "nothing shared".
+    const f = await fixture();
+    const callee = f.template({ name: "Callee API", ports: [],
+      shared: [{ key: "CALLEE_API_URL", value: "https://shared.example/callee" }] });
+    const caller = f.template({ name: "Caller API", ports: [9101],
+      shared: [{ key: "PORT", value: "9101" }, { key: "CALLER_API_URL", value: "https://shared.example/caller" }],
+      dependencies: [{ to: callee.serviceId, kind: "call" }] });
+    f.bind(caller.serviceId, "caller");
+    f.bind(callee.serviceId, "callee");
+
+    const result = await f.read();
+    expect(result.ok).toBe(true);
+    const view = result.payload as Record<string, unknown>;
+    expect(view["units"]).toHaveLength(2);
+    expect(view["destinations"]).toEqual([]);
+    const diagnostics = view["diagnostics"] as { code: string }[];
+    expect(diagnostics.map((entry) => entry.code)).toContain("missing-port");
+  });
+
   it("names a launch main cannot resolve instead of showing a partial routing", async () => {
     const f = await fixture();
     const { caller } = f.pair({ declaration: true });
