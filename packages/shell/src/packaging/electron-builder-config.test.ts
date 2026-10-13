@@ -191,10 +191,14 @@ describe("#15 Windows x64 installer asset is MSI (ADR 0004)", () => {
     const shellPackage = JSON.parse(readFileSync(join(SHELL_ROOT, "package.json"), "utf8")) as {
       scripts: Record<string, string>;
     };
-    expect(shellPackage.scripts["package:win"]).toContain("--win msi");
+    // The `pnpm build &&` prefix is #58: packaging only consumes `dist/`, so a
+    // script without the prefix would silently ship a stale bundle.
+    expect(shellPackage.scripts["package:win"]).toBe(
+      "pnpm build && electron-builder --config electron-builder.config.cjs --win msi --x64",
+    );
     expect(shellPackage.scripts["package:win"]).not.toContain("nsis");
     expect(shellPackage.scripts["package:mac"]).toBe(
-      "electron-builder --config electron-builder.config.cjs --mac dmg --arm64",
+      "pnpm build && electron-builder --config electron-builder.config.cjs --mac dmg --arm64",
     );
   });
 
