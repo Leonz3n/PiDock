@@ -224,7 +224,10 @@ export function DesktopProvidersPage({
 
       {open && (
         <form onSubmit={submit} className="mt-6 min-w-0 rounded-[9px] border border-line bg-paper p-5" data-testid="provider-form">
-          <h3 className="text-[13px] font-semibold text-ink">{draft.id === undefined ? "添加 Provider" : `编辑 ${draft.name}`}</h3>
+          {/* `parseProviderStatus` reads `name` with `typeof === "string"`, so a
+              blank name reaches this title; it is named like the card's own
+              heading instead of rendering a dangling `编辑 `. */}
+          <h3 className="text-[13px] font-semibold text-ink">{draft.id === undefined ? "添加 Provider" : `编辑 ${hostText(draft.name, "Host 未上报配置名称")}`}</h3>
           <div className="mt-3 grid grid-cols-2 gap-2 text-xs below-narrow:grid-cols-1">
             <label className="min-w-0 col-span-2 below-narrow:col-span-1">
               名称

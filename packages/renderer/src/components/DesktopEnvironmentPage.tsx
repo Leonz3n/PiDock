@@ -82,9 +82,16 @@ function RepositoryImportDrafts({ tasks, pending, filled, onFillForm }: {
       {scan.truncated && <p role="status" className="border-b border-line py-2 text-[#9a6032]">草案数量已截断，请缩小仓库配置范围后核对。</p>}
       {scan.errors.map((item) => <p key={item.source} role="alert" className="border-b border-line py-2 text-[#ad4545]">{item.source}：{hostText(item.reason, "Host 未给出原因")}</p>)}
       {!scan.hints.length && <p className="py-4 text-muted">{scan.errors.length ? "部分配置读取失败，无法确认是否存在草案" : "未发现可核对的启动草案"}</p>}
-      {scan.hints.map((hint, index) => <div key={`${hint.source}-${hint.name}-${index}`} className="grid min-w-0 gap-2 border-b border-line py-3 sm:grid-cols-[minmax(0,1fr)_110px]">
+      {scan.hints.map((hint, index) => {
+        // `serviceImportScanFromHost` keeps `program: ""` (the scanner found no
+        // command: dropped or absent) and keeps `""` elements in `args`
+        // (`shortTexts`), so the joined candidate can itself be blank; that is the
+        // "no command" state, and the line is skipped rather than rendering a
+        // bare `命令候选：` for a command the Host never reported.
+        const candidate = [hint.program, ...hint.args].join(" ").trim();
+        return <div key={`${hint.source}-${hint.name}-${index}`} className="grid min-w-0 gap-2 border-b border-line py-3 sm:grid-cols-[minmax(0,1fr)_110px]">
         <div className="min-w-0"><strong className="block break-words font-medium text-ink">{hostText(hint.name, "Host 未上报候选名称")}</strong><span className="break-all text-muted">{hint.source}</span>
-          {(hint.program !== "" || hint.args.length > 0) && <p className="mt-1 break-all text-muted">命令候选：{[hint.program, ...hint.args].join(" ")}</p>}
+          {candidate !== "" && <p className="mt-1 break-all text-muted">命令候选：{candidate}</p>}
           {hint.workdir !== undefined && <p className="mt-1 break-all text-muted">工作目录候选：{hint.workdir}</p>}
           {!!hint.variables.length && <p className="mt-1 break-all text-muted">变量：{hint.variables.map((row) => `${row.key}（来源 ${row.source} · 值 ${row.maskedValue}）`).join("、")}</p>}
           {hint.invalidVars.map((key, at) => <p key={at} className="mt-1 break-all text-[#ad4545]">无效变量：{hostText(key, "Host 未上报变量名")}</p>)}
@@ -97,7 +104,8 @@ function RepositoryImportDrafts({ tasks, pending, filled, onFillForm }: {
             ? <Button type="button" size="sm" variant="outline" disabled title="配置来源草案不能作为运行单元填入服务模板">仅配置来源</Button>
             : <Button type="button" size="sm" variant="outline" onClick={() => onFillForm(hint)}>填入新建模板</Button>}
         </div>
-      </div>)}
+      </div>;
+      })}
     </div>}
   </section>;
 }

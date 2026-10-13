@@ -107,13 +107,18 @@ export function ProtocolPanel({ view }: { view: ProtocolBindingView }) {
                       ? `任务工作区：${hostText(consumer.binding.path, "Host 未上报工作区文件")}`
                       : `受管链接：${hostText(consumer.binding.linkPath, "Host 未上报受管链接路径")}`}
                 </span>
+                {/* `asStringArray` (`data/protocolBinding.ts:299`) keeps `""`
+                    elements and turns a missing list into `[]`, so each element is
+                    named and an empty list renders no line at all: a bare label
+                    would claim a binding (or a release-config) fact the Host never
+                    reported. */}
                 {consumer.binding.kind === "go-workspace" && consumer.binding.excludedConsumers.length > 0 ? (
                   <span className="block text-[10px] text-muted">
-                    未并入（避免合并依赖选择）：{consumer.binding.excludedConsumers.join("、")}
+                    未并入（避免合并依赖选择）：{consumer.binding.excludedConsumers.map((name) => hostText(name, "Host 未上报未并入消费者名")).join("、")}
                   </span>
                 ) : null}
-                {consumer.binding.kind === "go-workspace" ? (
-                  <span className="block text-[10px] text-muted">不改写发布配置：{consumer.binding.releaseManifestsUntouched.join("、")}</span>
+                {consumer.binding.kind === "go-workspace" && consumer.binding.releaseManifestsUntouched.length > 0 ? (
+                  <span className="block text-[10px] text-muted">不改写发布配置：{consumer.binding.releaseManifestsUntouched.map((path) => hostText(path, "Host 未上报发布配置路径")).join("、")}</span>
                 ) : null}
                 {consumer.binding.kind === "ts-link" ? (
                   <span className="block text-[10px] text-muted">

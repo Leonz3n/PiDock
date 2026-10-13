@@ -91,6 +91,11 @@ it("names a blank profile field instead of an empty heading, address or badge", 
   expect(screen.getByText("Host 未上报服务地址")).toBeInTheDocument();
   expect(screen.getByText("Host 未上报模型标识")).toBeInTheDocument();
   expect(screen.getByText("Host 未上报凭据引用名")).toBeInTheDocument();
+  // The edit form's own title is built from the same `name`, so opening it must
+  // name the absence too instead of rendering a dangling `编辑 `.
+  await userEvent.click(screen.getByRole("button", { name: "编辑" }));
+  expect(screen.getByTestId("provider-form")).toHaveTextContent("编辑 Host 未上报配置名称");
+  expect(screen.queryByRole("heading", { name: "编辑" })).toBeNull();
 });
 
 it("reports a missing credential and a refused install instead of claiming success", async () => {
