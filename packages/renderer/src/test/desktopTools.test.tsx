@@ -172,6 +172,60 @@ describe("[UI 对齐] S8d production tool dock", () => {
     expect(screen.getByText("bash -l")).toBeInTheDocument();
   });
 
+  it("names an empty Host value in the plan-only terminal instead of a bare separator", async () => {
+    // `str()` keeps `""` for every field below (`workspaceFiles.ts:228`), so an
+    // empty root label reaches the plan line's `·`-joined sentence and would
+    // render a leading bare `· ` - the same parser boundary and the same shape
+    // the root chip was fixed at (`:363`).
+    const blankAttribution = { taskId: "", rootId: "", rootKind: "worktree" as const, rootLabel: "", piWorkDir: "" };
+    const taskOp = vi.fn(async (_taskId: string, op: string) => {
+      if (op === "task/terminalState") {
+        return {
+          ok: true,
+          payload: {
+            spawnImplemented: false,
+            instances: [{
+              instanceId: "", rootId: "", attribution: blankAttribution, program: "", args: [], cwd: "",
+              owner: { taskId: "", sessionId: null, label: "" }, cols: 80, rows: 24, envKeys: [],
+              lifecycle: "exited", processKnown: false, startedAt: "2026-10-10T00:00:00.000Z", exitReason: "",
+            }],
+          },
+        };
+      }
+      if (op === "task/fileRoots") {
+        return { ok: true, payload: { taskDir: "", roots: [{ id: "", kind: "worktree", label: "", path: "", repo: "" }] } };
+      }
+      if (op === "task/planTerminal") {
+        return {
+          ok: true,
+          payload: {
+            plan: {
+              instanceId: "", rootId: "", attribution: blankAttribution, program: "", args: ["-l"], cwd: "",
+              cols: 80, rows: 24, resolved: [], historyLimit: 200,
+              owner: { taskId: "", sessionId: null, label: "" },
+            },
+          },
+        };
+      }
+      return { ok: false, error: `unexpected ${op}` };
+    });
+    bridge(taskOp);
+    render(<DesktopToolDock taskId="task-1" tool="terminal" onClose={() => {}} />);
+    fireEvent.click(await screen.findByText("Host 未上报根名称"));
+
+    const plan = await screen.findByTestId("dock-terminal-plan");
+    expect(plan).toHaveTextContent("Host 未上报根名称 · 0 项环境变量（密钥已打码）· 历史上限 200");
+    expect(plan).toHaveTextContent("Host 未上报终端程序");
+    expect(plan).toHaveTextContent("Host 未上报终端工作目录");
+
+    const instances = screen.getByTestId("dock-terminal-instances");
+    expect(instances).toHaveTextContent("Host 未上报实例标识");
+    expect(instances).toHaveTextContent("Host 未上报终端工作目录");
+    // An empty exit reason is not a reason: the row omits the segment by name
+    // instead of printing `退出：` with nothing behind it (already guarded here).
+    expect(instances).not.toHaveTextContent("退出：");
+  });
+
   it("surfaces a failed terminal plan and keeps 未接线 tools out of the Host path", async () => {
     const taskOp = vi.fn(async (_taskId: string, op: string) => {
       if (op === "task/terminalState") return { ok: true, payload: { spawnImplemented: false, instances: [] } };
@@ -1215,6 +1269,20 @@ describe("[PiDock 10] (#15 盒子 2/7/9) 交付目标与每视图归属 on the s
     expect(screen.queryByTestId("dock-tree-attribution")).not.toBeInTheDocument();
     // The panel is not blank: the selected root's own delivery readout is there.
     expect(within(await screen.findByTestId("dock-delivery")).getByTestId("dock-delivery-repo")).toHaveTextContent("repo-a");
+  });
+
+  it("names an empty root identity in a dropped answer instead of a blank one", async () => {
+    // `str()` keeps an empty `attribution.rootId`, so the drop sentence - which
+    // exists to say WHICH root answered - has to name that absence: a blank one
+    // would read as a root the panel simply did not print.
+    const roots = twoRepoRoots();
+    bridge(hostReads(roots, { treeAttribution: { ...workspaceAttribution(roots[1]!, TASK_ID, TASK_DIR), rootId: "" } }));
+    render(<DesktopToolDock taskId={TASK_ID} tool="files" onClose={() => {}} />);
+
+    expect(await screen.findByTestId("dock-stale-answer")).toHaveTextContent(
+      "Host 文件树响应自述根 Host 未上报根标识 与所请求的根 repo-a 不符：本面板不显示",
+    );
+    expect(screen.queryByTestId("dock-tree")).not.toBeInTheDocument();
   });
 
   it("drops a preview answer from the root the user left, by name", async () => {

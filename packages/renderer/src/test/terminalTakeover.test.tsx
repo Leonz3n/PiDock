@@ -332,6 +332,61 @@ describe("#15 terminal panel on the real channel", () => {
     expect(within(instance).queryByRole("button", { name: "停止终端" })).toBeNull();
   });
 
+  it("names an empty Host value on the plan and instance rows instead of a blank one", async () => {
+    // `str()` keeps `""` for the cwd, the program, the instance id and both
+    // owner fields (`workspaceFiles.ts:228`), so none of them may render as a
+    // blank span or a `·`-joined segment with nothing behind it.
+    const calls: Call[] = [];
+    const taskOp = hostStub(calls, {
+      "task/terminalState": () => ({
+        ok: true,
+        payload: {
+          spawnImplemented: true,
+          instances: [hostInstance({ instanceId: "", cwd: "", lifecycle: "exited", owner: { taskId: "", sessionId: "", label: "" } })],
+        },
+      }),
+      "task/fileRoots": () => ({ ok: true, payload: ROOTS }),
+      "task/planTerminal": () => ({
+        ok: true,
+        payload: { plan: { ...HOST_PLAN.plan, cwd: "", program: "", owner: { taskId: "", sessionId: null, label: "" } } },
+      }),
+      "task/terminalHistory": () => ({ ok: true, payload: { history: [{ at: "t1", line: "line" }] } }),
+    });
+    const user = await openTerminalPanel(taskOp);
+
+    await user.click(await screen.findByRole("button", { name: "按计划启动终端" }));
+    const plan = await screen.findByTestId("terminal-plan");
+    expect(plan).toHaveTextContent("Host 未上报终端工作目录");
+    expect(plan).toHaveTextContent("Host 未上报终端程序");
+    // A named human caller with no label is named as unrecorded, not `人工 · `.
+    expect(plan).toHaveTextContent("人工 · Host 未上报操作者名称");
+
+    const instance = await screen.findByTestId("terminal-instance");
+    expect(instance).toHaveTextContent("Host 未上报实例标识");
+    // An Agent-owned instance whose session id is empty says so instead of
+    // ending the sentence at `Agent 会话 `.
+    expect(instance).toHaveTextContent("Agent 会话 Host 未上报会话标识");
+  });
+
+  it("names an unrecorded exit reason instead of a bare segment in the state line", async () => {
+    // The state line is `已退出 · <reason> · <code>`: an exit reason the Host left
+    // empty is not a reason, and `已退出 ·  · 退出码…` claims one was recorded.
+    const calls: Call[] = [];
+    const taskOp = hostStub(calls, {
+      "task/terminalState": () => ({
+        ok: true,
+        payload: { spawnImplemented: true, instances: [hostInstance({ lifecycle: "exited", exitReason: "" })] },
+      }),
+      "task/fileRoots": () => ({ ok: true, payload: ROOTS }),
+      "task/terminalHistory": () => ({ ok: true, payload: { history: [] } }),
+    });
+    await openTerminalPanel(taskOp);
+
+    const instance = await screen.findByTestId("terminal-instance");
+    expect(instance).toHaveTextContent("退出原因未报告");
+    expect(instance).not.toHaveTextContent("已退出 ·  ·");
+  });
+
   it("keeps an instance running when the Host could not prove the end (unknown receipt)", async () => {
     const calls: Call[] = [];
     let stopAttempts = 0;

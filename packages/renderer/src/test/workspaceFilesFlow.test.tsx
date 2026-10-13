@@ -2,7 +2,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderApp } from "./helpers";
 import { FilesPanel } from "../components/ToolPanels";
-import { memoryWorkspaceBrowser, workspaceRootsFromHost, workspaceTreeFromHost, terminalPlanFromHost, terminalStateFromHost } from "../data/workspaceFiles";
+import { memoryWorkspaceBrowser, workspaceDeliveryFromHost, workspaceDiffFromHost, workspacePreviewFromHost, workspaceRootsFromHost, workspaceTreeFromHost, terminalPlanFromHost, terminalStateFromHost } from "../data/workspaceFiles";
 import type { WorkspaceBrowserView } from "../data/workspaceFiles";
 
 // [PiDock 10] (#15) file browsing + built-in terminal. The rule layer (path
@@ -61,6 +61,42 @@ describe("payload parsers", () => {
     // A shared link has no Git diff or delivery entry point.
     expect(view.selected?.diff).toBeUndefined();
     expect(view.selected?.delivery).toBeUndefined();
+  });
+
+  it("names an empty Host value in the browser panel instead of a blank one", async () => {
+    // The shell-connected route builds this view from the Host payloads
+    // (`shellHost.ts:1112-1137`), and every `str()` field below keeps `""`, so
+    // each row must name the absence: a blank identity or path would read as a
+    // value the Host had stated.
+    const roots = workspaceRootsFromHost({ taskDir: "", roots: [
+      { id: "", kind: "worktree", label: "", path: "", repo: "" },
+    ] })!;
+    const attribution = {
+      taskId: "", rootId: "", rootKind: "shared-dir" as const, rootLabel: "", repo: "",
+      directoryId: "", piWorkDir: "", sourcePath: "", sharedNote: "共享说明（Host 原文）",
+    };
+    const tree = workspaceTreeFromHost({ tree: {
+      attribution, path: "", entries: [{ name: "", path: "", kind: "file" }], truncated: false,
+    } })!;
+    const preview = workspacePreviewFromHost({ preview: { attribution, path: "", language: "text", source: "body", truncated: false } })!;
+    const diff = workspaceDiffFromHost({ attribution, path: "", diff: "", truncated: false })!;
+    const delivery = workspaceDeliveryFromHost({ target: { attribution, repo: "", branch: "", autoCommit: false, autoPush: false, autoMerge: false } })!;
+    const view: WorkspaceBrowserView = {
+      taskId: "", taskDir: "", roots: roots.roots, selected: { rootId: "", relative: "", tree, preview, diff, delivery },
+    };
+    render(<FilesPanel files={[]} browser={view} />);
+
+    // Every identity the roots carry is named, not left blank.
+    const rootButton = within(screen.getByTestId("file-roots")).getByRole("button");
+    expect(rootButton).toHaveTextContent("Host 未上报根名称");
+    expect(rootButton).toHaveTextContent("Host 未上报根身份");
+    expect(screen.getByText(/任务 Host 未上报任务身份 · 仓库 Host 未上报仓库身份 · 工作目录/)).toBeInTheDocument();
+    expect(screen.getByText("Host 未上报统一工作目录")).toBeInTheDocument();
+    expect(screen.getByTestId("shared-dir-note")).toHaveTextContent("共享说明（Host 原文） · 原始目标 Host 未记录原始目标");
+    expect(within(screen.getByTestId("file-tree")).getByRole("button", { name: "Host 未上报条目路径" })).toBeInTheDocument();
+    expect(screen.getByText("Host 未上报预览路径")).toBeInTheDocument();
+    expect(screen.getByTestId("file-diff")).toHaveTextContent("Git 差异 · Host 未上报仓库身份");
+    expect(screen.getByTestId("delivery-target")).toHaveTextContent("交付入口：Host 未上报交付仓库身份 · 远程基线分支 未记录");
   });
 
   it("hands a Host-shaped tree entry back as the root-relative path", async () => {

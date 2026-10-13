@@ -28,11 +28,12 @@ import {
   setBrowserTakeover,
 } from "../data/browserSurface";
 import { isShellConnected } from "../data/shellBridge";
-import type {
-  TerminalHistoryEntryView,
-  TerminalPlanView,
-  TerminalStateView,
-  WorkspaceBrowserView,
+import {
+  hostText,
+  type TerminalHistoryEntryView,
+  type TerminalPlanView,
+  type TerminalStateView,
+  type WorkspaceBrowserView,
 } from "../data/workspaceFiles";
 
 // 协议 and the 终端 takeover read no fixture state, so they live in their own
@@ -692,20 +693,20 @@ export function FilesPanel({
               onClick={() => onSelectRoot?.(root.id)}
               className={`rounded border px-2 py-1 text-[11px] ${selected?.rootId === root.id ? "border-accent text-ink" : "border-line text-muted"}`}
             >
-              {root.label}
-              <span className="ml-1 text-[10px] text-muted">{root.kind === "shared-dir" ? "普通目录" : root.repo ?? root.id}</span>
+              {hostText(root.label, "Host 未上报根名称")}
+              <span className="ml-1 text-[10px] text-muted">{root.kind === "shared-dir" ? "普通目录" : hostText(root.repo ?? root.id, "Host 未上报根身份")}</span>
             </button>
           ))}
         </div>
         {selected ? (
           <p className="text-[11px] text-muted">
-            任务 {selected.tree?.attribution.taskId ?? browser.taskId} · 仓库 {selected.tree?.attribution.repo ?? selected.tree?.attribution.directoryId ?? "-"} · 工作目录 {""}
-            <span className="font-mono">{selected.tree?.attribution.piWorkDir ?? browser.taskDir}</span>
+            任务 {hostText(selected.tree?.attribution.taskId ?? browser.taskId, "Host 未上报任务身份")} · 仓库 {hostText(selected.tree?.attribution.repo ?? selected.tree?.attribution.directoryId, "Host 未上报仓库身份")} · 工作目录{" "}
+            <span className="font-mono">{hostText(selected.tree?.attribution.piWorkDir ?? browser.taskDir, "Host 未上报统一工作目录")}</span>
           </p>
         ) : null}
         {selected?.tree?.attribution.sharedNote ? (
           <p className="rounded border border-warn/40 px-2 py-1 text-[11px] text-warn" data-testid="shared-dir-note">
-            {selected.tree.attribution.sharedNote} · 原始目标 <span className="font-mono">{selected.tree.attribution.sourcePath}</span>
+            {selected.tree.attribution.sharedNote} · 原始目标 <span className="font-mono">{hostText(selected.tree.attribution.sourcePath, "Host 未记录原始目标")}</span>
           </p>
         ) : null}
         {selected?.tree ? (
@@ -719,7 +720,7 @@ export function FilesPanel({
                   className="w-full truncate text-left font-mono text-[11px] text-ink disabled:text-muted"
                 >
                   {entry.kind === "dir" ? "📁 " : ""}
-                  {entry.path}
+                  {hostText(entry.path, "Host 未上报条目路径")}
                 </button>
               </li>
             ))}
@@ -727,16 +728,16 @@ export function FilesPanel({
             {selected.tree.truncated ? <li className="text-[11px] text-muted">条目过多，仅显示前 {selected.tree.entries.length} 条。</li> : null}
           </ul>
         ) : null}
-        {selected?.preview ? <CodeBlock label={selected.preview.path} language={selected.preview.language} code={selected.preview.source} /> : null}
+        {selected?.preview ? <CodeBlock label={hostText(selected.preview.path, "Host 未上报预览路径")} language={selected.preview.language} code={selected.preview.source} /> : null}
         {selected?.diff ? (
           <div className="flex flex-col gap-1" data-testid="file-diff">
-            <span className="text-[11px] text-muted">Git 差异 · {selected.diff.attribution.repo ?? "-"}</span>
+            <span className="text-[11px] text-muted">Git 差异 · {hostText(selected.diff.attribution.repo, "Host 未上报仓库身份")}</span>
             <pre className="max-h-52 overflow-auto rounded border border-line p-2 font-mono text-[10px] text-ink">{selected.diff.diff}</pre>
           </div>
         ) : null}
         {selected?.delivery ? (
           <p className="text-[11px] text-muted" data-testid="delivery-target">
-            交付入口：{selected.delivery.repo} · 远程基线分支 {selected.delivery.branch || "未记录"} · 不自动提交/推送/合并
+            交付入口：{hostText(selected.delivery.repo, "Host 未上报交付仓库身份")} · 远程基线分支 {selected.delivery.branch || "未记录"} · 不自动提交/推送/合并
           </p>
         ) : null}
         <ul className="flex flex-col gap-1 text-xs">

@@ -168,6 +168,18 @@ export function ProtocolPanel({ view }: { view: ProtocolBindingView }) {
 type TerminalTaskState = { taskId: string; spawnImplemented: boolean; instances: TerminalInstanceView[] };
 
 /**
+ * Who owns a terminal, as the plan row and the instance row both state it. The
+ * Host may send an empty label or session id (`str()` keeps `""`), so each
+ * branch NAMES the value it did not get instead of ending at `Agent 会话 ` or
+ * `人工 · `.
+ */
+function ownerText(owner: { sessionId: string | null; label: string }): string {
+  return owner.sessionId === null
+    ? `人工 · ${hostText(owner.label, "Host 未上报操作者名称")}`
+    : `Agent 会话 ${hostText(owner.sessionId, "Host 未上报会话标识")}`;
+}
+
+/**
  * [PiDock 10] (#15) the real terminal tool: the human takeover surface for one
  * task's Host-spawned PTY.
  *
@@ -393,9 +405,9 @@ export function TerminalTakeoverPanel({
       {plan ? (
         <div className="flex flex-col gap-1 text-[11px] text-muted" data-testid="terminal-plan">
           <span>
-            工作目录 <span className="font-mono text-ink">{plan.cwd}</span> · 程序 {plan.program} {plan.args.join(" ")}
+            工作目录 <span className="font-mono text-ink">{hostText(plan.cwd, "Host 未上报终端工作目录")}</span> · 程序 {hostText(plan.program, "Host 未上报终端程序")} {plan.args.join(" ")}
           </span>
-          <span>终端归属：{plan.owner.sessionId === null ? `人工 · ${plan.owner.label}` : `Agent 会话 ${plan.owner.sessionId}`}</span>
+          <span>终端归属：{ownerText(plan.owner)}</span>
           <span>
             窗口 {plan.cols}×{plan.rows} · 历史上限 {plan.historyLimit}
           </span>
@@ -412,12 +424,12 @@ export function TerminalTakeoverPanel({
       {watched ? (
         <div className="flex flex-col gap-1 text-[11px] text-muted" data-testid="terminal-instance">
           <span>
-            {watched.instanceId} · {terminalInstanceStateText(watched)}
+            {hostText(watched.instanceId, "Host 未上报实例标识")} · {terminalInstanceStateText(watched)}
           </span>
           {/* Who owns the instance being driven: a human may type into an
               Agent-owned terminal, and the row must say so (the plan row only
               describes this panel's own human plan). */}
-          <span>终端归属：{watched.owner.sessionId === null ? `人工 · ${watched.owner.label}` : `Agent 会话 ${watched.owner.sessionId}`}</span>
+          <span>终端归属：{ownerText(watched.owner)}</span>
           {terminalExitScopeNote(watched) ? <span data-testid="terminal-exit-scope">{terminalExitScopeNote(watched)}</span> : null}
           <div className="flex gap-2">
             {watched.lifecycle === "running" ? (
