@@ -189,8 +189,18 @@ afterEach(() => {
   for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true });
 });
 
+/**
+ * Every case below drives `setup()`: three real temp Git remotes, a real create
+ * flow and real clones/worktrees/fetches. Under parallel gate load that work
+ * exceeded Vitest's 5000ms default twice this session (the branch-in-use and the
+ * non-worktree-leftover refusals), while each case passes in about a second in
+ * isolation. The budget is raised here; NO assertion is weakened or skipped.
+ */
+const GIT_CASE_TIMEOUT_MS = 30_000;
+const gitCase = (name: string, body: () => Promise<void>) => it(name, body, GIT_CASE_TIMEOUT_MS);
+
 describe("production task-source append", () => {
-  it("fetches the selected remote branch in its own checkout and creates the worktree at the pinned commit, leaving the existing repo untouched", async () => {
+  gitCase("fetches the selected remote branch in its own checkout and creates the worktree at the pinned commit, leaving the existing repo untouched", async () => {
     const env = await setup();
     const firstWorktree = env.worktreeOf(env.first);
     const firstHead = git(firstWorktree, "rev-parse", "HEAD");
@@ -266,7 +276,7 @@ describe("production task-source append", () => {
     expect(git(firstWorktree, "status", "--porcelain")).toBe("");
   });
 
-  it("creates nothing and keeps the record byte-identical when one selected repository cannot be fetched, then succeeds on retry", async () => {
+  gitCase("creates nothing and keeps the record byte-identical when one selected repository cannot be fetched, then succeeds on retry", async () => {
     const env = await setup();
     const before = env.recordBytes();
     const secondWorktrees = git(env.second.repo, "worktree", "list", "--porcelain");
@@ -301,7 +311,7 @@ describe("production task-source append", () => {
     expect(readTaskRecordOnDisk(env.taskDir)!.repoSources?.length).toBe(3);
   });
 
-  it("refuses a foreign worktree that already uses the task branch as branch-in-use, creating nothing", async () => {
+  gitCase("refuses a foreign worktree that already uses the task branch as branch-in-use, creating nothing", async () => {
     const env = await setup();
     const before = env.recordBytes();
     const foreign = join(env.home, "foreign-second");
@@ -315,7 +325,7 @@ describe("production task-source append", () => {
     expect(env.payloads.at(-1)?.["branchesInUse"]).toEqual(expect.arrayContaining(["main", env.branch]));
   });
 
-  it("refuses an occupied target path as path-taken, leaving the occupancy untouched", async () => {
+  gitCase("refuses an occupied target path as path-taken, leaving the occupancy untouched", async () => {
     const env = await setup();
     const before = env.recordBytes();
     const occupied = env.worktreeOf(env.second);
@@ -330,7 +340,7 @@ describe("production task-source append", () => {
     expect(env.payloads.at(-1)?.["takenPaths"]).toContain(occupied);
   });
 
-  it("refuses an unusable source checkout by name before any fetch", async () => {
+  gitCase("refuses an unusable source checkout by name before any fetch", async () => {
     const env = await setup();
     const before = env.recordBytes();
     const notACheckout = join(env.home, "plain-dir");
@@ -350,7 +360,7 @@ describe("production task-source append", () => {
     expect(existsSync(env.worktreeOf(env.second))).toBe(false);
   });
 
-  it("skips a repository the task already has without a second worktree or a duplicated repoSource", async () => {
+  gitCase("skips a repository the task already has without a second worktree or a duplicated repoSource", async () => {
     const env = await setup();
     const firstWorktree = env.worktreeOf(env.first);
     const firstWorktrees = git(env.first.repo, "worktree", "list", "--porcelain");
@@ -375,7 +385,7 @@ describe("production task-source append", () => {
     expect(git(firstWorktree, "status", "--porcelain")).toBe("");
   });
 
-  it("refuses a recorded repo whose path holds a non-worktree leftover instead of reporting an idempotent skip", async () => {
+  gitCase("refuses a recorded repo whose path holds a non-worktree leftover instead of reporting an idempotent skip", async () => {
     const env = await setup();
     const repoDir = buildRepoChildName(repoIdOf(env.project, env.second));
     const worktree = join(env.taskDir, repoDir);
@@ -399,7 +409,7 @@ describe("production task-source append", () => {
     expect(env.payloads).toHaveLength(payloadCount);
   });
 
-  it("refuses a recorded repo whose path holds a foreign checkout, not this task's linked worktree", async () => {
+  gitCase("refuses a recorded repo whose path holds a foreign checkout, not this task's linked worktree", async () => {
     const env = await setup();
     const repoDir = buildRepoChildName(repoIdOf(env.project, env.second));
     const worktree = join(env.taskDir, repoDir);
@@ -418,7 +428,7 @@ describe("production task-source append", () => {
     expect(env.payloads).toHaveLength(payloadCount);
   });
 
-  it("refuses a task branch that exists without a worktree with the create flow's manual-recovery reason", async () => {
+  gitCase("refuses a task branch that exists without a worktree with the create flow's manual-recovery reason", async () => {
     const env = await setup();
     const before = env.recordBytes();
     git(env.second.repo, "branch", env.branch);
@@ -430,7 +440,7 @@ describe("production task-source append", () => {
     expect(existsSync(env.worktreeOf(env.second))).toBe(false);
   });
 
-  it("resolves repositories from the project registry and never from the request, and takes no caller-supplied scan", async () => {
+  gitCase("resolves repositories from the project registry and never from the request, and takes no caller-supplied scan", async () => {
     const env = await setup();
     // The append channel accepts project repository ids + remote/branch only:
     // a page-supplied path, repo folder name or scan is rejected outright.
@@ -455,7 +465,7 @@ describe("production task-source append", () => {
     expect(env.payloads.at(-1)?.["branchesInUse"]).toEqual(["main"]);
   });
 
-  it("keeps the create-flow refusals and the existing prepare read coherent for an unfinished append", async () => {
+  gitCase("keeps the create-flow refusals and the existing prepare read coherent for an unfinished append", async () => {
     const env = await setup();
     // A record that names the second repo but whose worktree is absent reads
     // as `pending` and is resumable — the append never re-creates it silently
@@ -471,7 +481,7 @@ describe("production task-source append", () => {
     expect(status.created).toEqual([buildRepoChildName(repoIdOf(env.project, env.first))]);
   });
 
-  it("never reports a recorded-but-worktree-absent repo as an idempotent skip, and completes it through the resume plan", async () => {
+  gitCase("never reports a recorded-but-worktree-absent repo as an idempotent skip, and completes it through the resume plan", async () => {
     const env = await setup();
     const repoDir = buildRepoChildName(repoIdOf(env.project, env.second));
     const worktree = join(env.taskDir, repoDir);
@@ -515,7 +525,7 @@ describe("production task-source append", () => {
     expect(readFileSync(join(worktree, "README.md"), "utf8")).toBe("second baseline\n");
   });
 
-  it("runs a resume through the same instance queue as an in-flight append, never interleaved with it", async () => {
+  gitCase("runs a resume through the same instance queue as an in-flight append, never interleaved with it", async () => {
     const env = await setup();
     const repoDir = buildRepoChildName(repoIdOf(env.project, env.second));
     const worktree = join(env.taskDir, repoDir);
@@ -574,7 +584,7 @@ describe("production task-source append", () => {
     expect(existsSync(worktree)).toBe(true);
   });
 
-  it("refuses a worktree whose directory was deleted but is still registered, instead of reporting a false success", async () => {
+  gitCase("refuses a worktree whose directory was deleted but is still registered, instead of reporting a false success", async () => {
     const env = await setup();
     const repoDir = buildRepoChildName(repoIdOf(env.project, env.second));
     const worktree = join(env.taskDir, repoDir);
@@ -601,7 +611,7 @@ describe("production task-source append", () => {
     expect(existsSync(worktree)).toBe(false);
   });
 
-  it("wraps a plan-execution failure in a named refusal naming the repo, never raw git stderr", async () => {
+  gitCase("wraps a plan-execution failure in a named refusal naming the repo, never raw git stderr", async () => {
     const env = await setup();
     // A git seam whose plan execution fails with a raw git message that
     // contains a machine path: it must not reach the caller verbatim.
@@ -631,7 +641,7 @@ describe("production task-source append", () => {
     expect(message).not.toContain("/secret/path");
   });
 
-  it("never echoes raw git stderr through the append git seam", async () => {
+  gitCase("never echoes raw git stderr through the append git seam", async () => {
     const env = await setup();
     // `rev-parse` on a non-existent ref fails with real git stderr; the seam
     // must not carry it (the caller wraps with a named refusal instead).
