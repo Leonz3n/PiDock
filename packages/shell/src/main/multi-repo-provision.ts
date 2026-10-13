@@ -653,6 +653,12 @@ export const LINK_MODEL_VERIFICATION_BOUNDARY =
  * exercised. The row set is the project's release targets plus that platform,
  * so a platform the link path was never really run on is named instead of being
  * left out.
+ *
+ * The observed row claims exactly one thing: a link-TARGET probe
+ * (`lstat`/`readlink`) ran on this platform. It never claims a real link was in
+ * the chain, and it never claims link creation was exercised — on a `win32` host
+ * it therefore also carries the named 「win32 链接方式未验证」 sentence, so the row
+ * that exists to name the gap can never be absorbed by it.
  */
 export function linkCapabilityRows(observedPlatform: string | null): LinkCapabilityRow[] {
   const rows: LinkCapabilityRow[] = [];
@@ -662,7 +668,8 @@ export function linkCapabilityRows(observedPlatform: string | null): LinkCapabil
       rows.push({
         platform: name,
         exercised: true,
-        note: `本平台（${name}）：本次真的在本平台执行了链接目标探测（lstat/readlink 链）；未在其它平台做过同类运行`,
+        note: `本平台（${name}）：本次在本平台执行了链接目标探测（lstat/readlink 链；链中可能没有真实链接，本行不表示已在本平台创建或读写过链接）`
+          + (name.startsWith("win32") ? "；win32 链接方式未验证：未在 Windows 上创建过链接，本记录不冒充已验证" : "；未在其它平台做过同类运行"),
       });
       continue;
     }

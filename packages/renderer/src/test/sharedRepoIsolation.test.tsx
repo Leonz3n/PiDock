@@ -164,7 +164,7 @@ describe("[PiDock 03] (#6 盒子 6) two tasks sharing one project repository", (
     ];
     const shapes: Record<string, { shape: string; detail: string }> = {
       "/work/gone-docs": { shape: "dangling", detail: "链接目标不存在（跟随 1 跳后缺 /work/missing）" },
-      "/work/nested-docs": { shape: "nested-link", detail: "来源本身是软链接（跟随 2 跳后到达目录 /work/real）" },
+      "/work/nested-docs": { shape: "nested-link", detail: "来源是软链接，它的目标是另一条软链接（共跟随 2 跳后到达目录 /work/real）" },
       "/work/cycle-docs": { shape: "cyclic-link", detail: "链接链回到已跟随过的链接（已跟随 1 跳后回到）: /work/cycle-b" },
     };
     window.pidock = {
@@ -196,7 +196,7 @@ describe("[PiDock 03] (#6 盒子 6) two tasks sharing one project repository", (
     const cycle = await shapeOf("task-cycl0003");
     expect(dead).toHaveTextContent("失效：链接目标已不存在");
     expect(dead).toHaveAttribute("data-shape", "dangling");
-    expect(nested).toHaveTextContent("嵌套：来源本身是软链接");
+    expect(nested).toHaveTextContent("嵌套：来源是软链接，指向的不是原目录本身");
     expect(nested).toHaveAttribute("data-shape", "nested-link");
     expect(cycle).toHaveTextContent("循环：链接链回到已跟随过的链接");
     expect(cycle).toHaveAttribute("data-shape", "cyclic-link");
