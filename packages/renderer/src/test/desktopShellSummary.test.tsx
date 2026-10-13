@@ -84,6 +84,18 @@ describe("[UI 对齐 S8a] production bottom summary bar", () => {
     expect(within(strip()).getByText("任务根 1/1 就绪")).toBeInTheDocument();
   });
 
+  it("names the Project the shell opens on, without a task and without inventing one", async () => {
+    window.pidock = bridge(verifiedLifecycle);
+    render(<StrictMode><App /></StrictMode>);
+    await screen.findByTestId("desktop-project-overview");
+
+    // Prototype A opens on the first Project; the strip names it by its real
+    // name. It is not a task name and no task is fabricated to fill the slot.
+    await waitFor(() => expect(within(strip()).getByText(project.name)).toBeInTheDocument());
+    expect(within(strip()).getByText("进行中的任务 1")).toBeInTheDocument();
+    expect(within(strip()).queryByText("真实任务")).toBeNull();
+  });
+
   it("renders no segment for a readout the shell does not have — no fabricated 0 服务", async () => {
     window.pidock = bridge(verifiedLifecycle);
     render(<StrictMode><App /></StrictMode>);
