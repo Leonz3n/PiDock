@@ -6,6 +6,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { MAX_TERMINAL_INSTANCES } from "../main/terminal-config.js";
 import { readProcessPgid, readProcessTable, type ProcessTableRow } from "./service-ownership.js";
+import { nodePtyPlatformAdmitted } from "./node-pty-preflight.js";
 import { MAX_PTY_ENVELOPE_BYTES, operationKey, parsePtyEvent, parsePtyRequest, sameEnvelope, type PtyEnvelope, type PtyEvent, type PtyRequest } from "./node-pty-protocol.js";
 import type { NodePtyWorker } from "./node-pty-driver.js";
 import type { TerminalDriver, TerminalDriverReceipt, TerminalIdentity, TerminalLaunch, TerminalProcessIdentity } from "./terminal-execution.js";
@@ -42,15 +43,15 @@ export function resolvePtyRuntime(): PtyRuntime {
 }
 
 /**
- * Whether this Host can really fork the PTY helper. The worker admits only
- * darwin/arm64 (the platform the pinned prebuild ships for), so a Host that can
+ * Whether this Host can really fork the PTY helper. The worker admits only the
+ * platforms the pin record admits (`nodePtyPlatformAdmitted`), so a Host that can
  * never spawn reports `spawnImplemented: false` and the renderer keeps its
  * residual warning instead of only failing every start with a per-attempt
  * `terminal-not-started` error. Whether the prebuild itself is prepared is
  * checked per spawn by the worker's preflight, not here.
  */
 export function ptySpawnerAvailable(): boolean {
-  return process.platform === "darwin" && process.arch === "arm64";
+  return nodePtyPlatformAdmitted();
 }
 
 /** Poll cadence while proving a PTY group and its observed descendants drained. */

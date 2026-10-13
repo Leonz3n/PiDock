@@ -35,6 +35,7 @@ import type { ProcessTableRow } from "./service-ownership.js";
 import type { TerminalDriver, TerminalDriverReceipt, TerminalLaunch } from "./terminal-execution.js";
 import { resolveProgram, TaskTerminalSessions } from "./terminal-sessions.js";
 
+// Stays POSIX-gated although the product now admits win32-x64: this suite's descendantPids path needs a POSIX process table (recorded coverage gap, not solved here).
 const supported = process.platform === "darwin" && process.arch === "arm64" && existsSync(fileURLToPath(workerEntryUrl())) && (() => {
   try {
     // Explicit dev-environment preparation of the pinned helper; never an
@@ -668,11 +669,12 @@ it.each([
   ["darwin", "arm64", true],
   ["darwin", "x64", false],
   ["linux", "arm64", false],
-  ["win32", "x64", false],
+  ["win32", "x64", true],
 ] as const)("reports real PTY spawn availability on %s/%s as %s", (platform, arch, expected) => {
-  // The reported capability is the worker's own platform gate: a Host that can
-  // never fork the helper must report `spawnImplemented: false` so the renderer
-  // keeps its residual warning instead of losing it while every start fails.
+  // The reported capability is the worker's own platform gate: the pin record's
+  // admitted set. A Host outside it can never fork the helper and must report
+  // `spawnImplemented: false` so the renderer keeps its residual warning instead
+  // of losing it while every start fails; win32/x64 is true once admitted.
   vi.stubGlobal("process", { ...process, platform, arch });
   try {
     expect(ptySpawnerAvailable()).toBe(expected);
