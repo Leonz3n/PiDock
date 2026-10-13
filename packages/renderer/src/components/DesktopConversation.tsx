@@ -389,14 +389,22 @@ function TaskConversation({ taskId, name, roots, association, onBack, onOpenProv
       : contextRead.phase === "failed" ? `Host 会话推理档位读取失败：${contextRead.error}`
       : readout?.thinkingCatalog === "unsupported" ? "Host 报告该模型不支持推理档位"
       : "本会话推理档位（来自 Host 会话读数）";
-  const contextDisplay = readout === null ? null : describeContextDisplay({ used: readout.used, window: readout.window, source: readout.source });
+  // The one occupancy number this control shows is the Host's own `percent`
+  // (`shell/src/main/pi-session.ts:727`, parsed in `data/sessionContext.ts:99`),
+  // and every other number on the line is the Host's own field too. The ratio is
+  // never recomputed here: a locally derived ratio printed as the Host's reading
+  // drifts silently the day the Host changes what `percent` means, which is
+  // exactly the one-number-two-sources claim this engagement forbids. The helper
+  // stays for the 估算/待更新 marker, which labels the Host's `source` and is not
+  // a number.
+  const contextMarker = readout === null ? "" : describeContextDisplay({ used: readout.used, window: readout.window, source: readout.source }).marker;
   // The prototype's meta line (`prototypes/pidock-ui/app.js:56`) and the demo
-  // composer's own readout (`pages/TaskPage.tsx`) share this wording. `percent`
-  // stays `null` while the window is unknown, so the line says 占比未知 instead of
-  // printing a `0%` nobody measured.
-  const contextLabel = contextDisplay === null
+  // composer's own readout (`pages/TaskPage.tsx`) share this wording. The Host
+  // sends `percent: null` while the window is unknown, so the line says 占比未知
+  // instead of printing a `0%` nobody measured.
+  const contextLabel = readout === null
     ? `上下文 ${contextRead.phase === "reading" ? "未读取" : "读取失败"}`
-    : `上下文 ${contextDisplay.used.toFixed(1)}k / ${contextDisplay.window > 0 ? `${contextDisplay.window}k` : "窗口未知"}${contextDisplay.percent === null ? " · 占比未知" : ` · ${contextDisplay.percent.toFixed(1)}%`}${contextDisplay.marker.length > 0 ? ` · ${contextDisplay.marker}` : ""}`;
+    : `上下文 ${readout.used.toFixed(1)}k / ${readout.window > 0 ? `${readout.window}k` : "窗口未知"}${readout.percent === null ? " · 占比未知" : ` · ${readout.percent.toFixed(1)}%`}${contextMarker.length > 0 ? ` · ${contextMarker}` : ""}`;
   const contextTitle = contextRead.phase === "reading"
     ? "正在读取 Host 会话占用读数；读取完成前不显示数字"
     : contextRead.phase === "failed" ? `Host 会话占用读数读取失败：${contextRead.error}`
@@ -404,13 +412,14 @@ function TaskConversation({ taskId, name, roots, association, onBack, onOpenProv
       : `${readout.providerName ?? readout.providerId} · ${readout.modelName ?? readout.model} · 已用 ${readout.used}k Tokens（来源 ${readout.source}）· 窗口 ${readout.window > 0 ? `${readout.window}k Tokens` : "未知"} · 占用比例 ${readout.percent === null ? "未知" : `${readout.percent.toFixed(1)}%`}；数字即 Host 会话读数，未做推断`;
   // The Token line keeps its bounded-window LABEL. Its hover names the Host's own
   // session total as read, and — when the two reads disagree in the one direction
-  // that matters (Host total 0 while this window reports usage) — states that the
-  // SDK turns of THIS route are not in the Host's session ledger. Scoped to this
-  // route because that is all that was read: a store that accumulates would show
-  // its own number instead.
+  // that matters (Host total 0 while this window reports usage) — reports what
+  // these two numbers show. The Host returned two numbers, not a cause, so the
+  // clause says so instead of reading as a statement the Host made; it stays
+  // scoped to this route because that is all that was read (a store that
+  // accumulated would show its own number instead).
   const hostLedgerNote = readout === null ? ""
     : readout.tokens === 0 && recentTokens > 0
-      ? ` Host 会话账本本次读数 0 tokens，而本窗口已报告 ${recentTokens} tokens；本路由的 SDK 回合用量未计入 Host 会话账本。`
+      ? ` Host 会话账本本次读数 0 tokens，而本窗口已报告 ${recentTokens} tokens；对照这两项读数，本路由的 SDK 回合用量未计入 Host 会话账本（此为本页两项读数的对照结论，并非 Host 返回的说明）。`
       : ` Host 会话账本读数 ${readout.tokens} tokens。`;
   return <TooltipProvider><main data-testid="desktop-conversation" className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-bg text-ink">
     <div className="shrink-0 border-b border-line bg-paper px-4 pt-3 below-mid:px-3">
