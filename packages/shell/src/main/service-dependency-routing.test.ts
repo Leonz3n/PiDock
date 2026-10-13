@@ -123,7 +123,7 @@ async function fixture() {
     bind(callee.serviceId, "callee");
     return { caller, callee };
   };
-  return { home, profile, taskId, taskDir, projectId, environmentId, catalog, op, read, pair, template, bind, shell, senderWebContentsId: SENDER };
+  return { home, profile, taskId, taskDir, projectId, environmentId, catalog, op, read, pair, template, bind, shell, senderWebContentsId: SENDER, taskRegistryWired: false };
 }
 
 describe("[PiDock 05] #10 box 1 the trusted 本地/远程位置 + 实际依赖去向 read", () => {
@@ -182,9 +182,13 @@ describe("[PiDock 05] #10 box 1 the trusted 本地/远程位置 + 实际依赖�
       message: "共享模板读取「CALLER_API_URL」，但本任务没有把该变量绑定到本地实例「Caller API」",
       hint: "请在运行面板把该变量绑定到当前任务的本地服务，否则消费者会继续使用共享环境地址",
     }]);
-    // NOTHING WAS STARTED: no run record, no registration and no Host exists on
-    // this path at all (the handler has no task registry wired).
-    expect(JSON.stringify(view)).not.toContain("pid");
+    // NOTHING WAS STARTED, and this path cannot start anything: the handler was
+    // registered with NO task registry, so there is no Host to fork, dispatch to or
+    // register a child on - the read answered from the catalog alone. Reading twice
+    // returns the identical view, so the read wrote no state either (it is a pure
+    // derivation, not a Host plan write).
+    expect(f.taskRegistryWired).toBe(false);
+    expect(await f.read()).toEqual(result);
   });
 
   it("names 无依赖边（未做互验） when no pinned revision declares an edge, and invents none", async () => {
