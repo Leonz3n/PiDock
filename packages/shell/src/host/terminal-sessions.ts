@@ -25,13 +25,77 @@ function stripControl(line: string): string {
 
 /**
  * Turn the planned program into the executable image the PTY will exec. A bare
- * name (`bash`) is resolved against the launch's own `PATH` and then a fixed
- * system path; an unresolvable name is returned unchanged so the driver refuses
- * it as `not-started` instead of guessing. The plan's displayed program is not
- * rewritten, so the panel still shows what the user chose.
+ * name (`bash`) is resolved against the launch's own `PATH` and, on POSIX, then
+ * a fixed system path; an unresolvable name is returned unchanged so the driver
+ * refuses it as `not-started` instead of guessing. Each platform resolves with
+ * its own rules: win32 splits the launch `PATH` at `;` and completes a bare name
+ * with `PATHEXT`, a name that carries a separator is a path the launch cwd
+ * resolves and never a PATH lookup. The plan's displayed program is not
+ * rewritten, so the panel still shows what the user chose. `platform` is the seam
+ * those rules are measured through, with the same default as `buildHostEnv`.
  */
-export function resolveProgram(program: string, env: Record<string, string>): string {
+export function resolveProgram(program: string, env: Record<string, string>, platform: NodeJS.Platform = process.platform): string {
   if (isAbsolute(program)) return program;
+  return platform === "win32" ? resolveWindowsProgram(program, env) : resolvePosixProgram(program, env);
+}
+
+/**
+ * The suffixes a bare win32 name is completed with when `PATHEXT` is absent or
+ * blank: the program kinds Windows' own documented default `PATHEXT` names
+ * first, in that documented order. A plan env built from config rows (never
+ * `process.env`) may carry no `PATHEXT` at all, and completing nothing there
+ * would leave every bare name unresolved on win32.
+ */
+const DEFAULT_WINDOWS_PROGRAM_SUFFIXES = [".COM", ".EXE", ".BAT", ".CMD"] as const;
+
+/** Windows environment names are case-insensitive, so a plan spelling `Path` or
+ * `pathext` names the same variable; POSIX reads the exact name only. Same shape
+ * as `buildHostEnv`. */
+function envValue(env: Record<string, string>, name: string, platform: NodeJS.Platform): string | undefined {
+  if (platform !== "win32") return env[name];
+  const named = env[name];
+  if (named !== undefined) return named;
+  const key = Object.keys(env).find((candidate) => candidate.toUpperCase() === name.toUpperCase());
+  return key === undefined ? undefined : env[key];
+}
+
+/** The candidates one bare win32 name is completed with, per PATH directory: the
+ * name itself when it already carries a `PATHEXT` suffix, else the name plus each
+ * suffix in `PATHEXT`'s own order. The suffix match is case-insensitive because
+ * that is how Windows compares the name. */
+function windowsProgramCandidates(program: string, pathext: string | undefined): string[] {
+  const listed = (pathext ?? "").split(";").filter((suffix) => suffix.length > 0);
+  const suffixes: readonly string[] = listed.length > 0 ? listed : DEFAULT_WINDOWS_PROGRAM_SUFFIXES;
+  const upper = program.toUpperCase();
+  return suffixes.some((suffix) => upper.endsWith(suffix.toUpperCase())) ? [program] : suffixes.map((suffix) => program + suffix);
+}
+
+/**
+ * win32 resolution: a `;`-separated launch `PATH`, `PATHEXT` completion and the
+ * `PATH`/`PATHEXT` names read case-insensitively. Candidate paths are only
+ * stat'ed - remaining case differences are the Windows filesystem's to decide, and
+ * win32 has no executable bit to check. A name that names nothing is returned
+ * unchanged, so no other program is ever substituted for the planned one.
+ */
+function resolveWindowsProgram(program: string, env: Record<string, string>): string {
+  if (program.includes("/") || program.includes("\\")) return program;
+  const searchPath = (envValue(env, "PATH", "win32") ?? "").split(";").filter((entry) => entry.length > 0);
+  for (const directory of searchPath) {
+    for (const candidate of windowsProgramCandidates(program, envValue(env, "PATHEXT", "win32"))) {
+      const path = join(directory, candidate);
+      try {
+        if (statSync(path).isFile()) return path;
+      } catch {
+        // Try the next candidate.
+      }
+    }
+  }
+  return program;
+}
+
+/** POSIX resolution, unchanged: `:`-separated `PATH` entries in their own order,
+ * then the fixed system paths, compared ordinally and case-sensitively. */
+function resolvePosixProgram(program: string, env: Record<string, string>): string {
   const searchPath = (env["PATH"] ?? "").split(":").filter((entry) => entry.length > 0);
   for (const directory of [...searchPath, "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"]) {
     const candidate = join(directory, program);
