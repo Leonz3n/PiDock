@@ -33,7 +33,14 @@ describe("#10 task-bound dotenv configuration hints", () => {
     expect(JSON.stringify(scan)).not.toMatch(/synthetic-|synthetic_private_reference|4100|IGNORED_KEY/);
     expect(process.env["MULTILINE"]).not.toBe("synthetic-line-one\nsynthetic-line-two");
   });
-  it.each(["existing", "missing"])("refuses a %s external .env symlink without disclosing its target", (targetState) => {
+  // win32 (#57): this case needs a real FILE link, which needs SeCreateSymbolicLinkPrivilege
+  // (Developer Mode or an elevated session) and cannot be built with a junction, which is
+  // directory-only - so a normal user cannot exercise it. NOT actually covered on win32 by a
+  // sibling: "refuses a %s .env without echoing content" reaches the not-a-regular-file branch,
+  // and "does not scan a .env through a worktree escaping the bound task" (a junction) reaches
+  // path-out-of-scope from TaskPathProtection; neither reaches the linked-config-file refusal
+  // at service-import.ts:137. Unobserved on win32.
+  it.skipIf(process.platform === "win32").each(["existing", "missing"])("refuses a %s external .env symlink without disclosing its target", (targetState) => {
     const task = root(); const repo = join(task, "api"); const outside = root();
     mkdirSync(repo);
     const target = join(outside, "private.env");
@@ -80,7 +87,8 @@ describe("#10 task-bound dotenv configuration hints", () => {
   it("does not scan a .env through a worktree escaping the bound task", () => {
     const task = root(); const outside = root(); const escaped = join(task, "api");
     writeFileSync(join(outside, ".env"), "API_TOKEN=synthetic-escaped-secret");
-    symlinkSync(outside, escaped);
+    // win32: a plain directory symlink needs SeCreateSymbolicLinkPrivilege; a junction is the directory link this platform can create without it (#57).
+    symlinkSync(outside, escaped, process.platform === "win32" ? "junction" : "dir");
     expect(() => scanTaskServiceImportHints({ taskDir: task, roots: [
       { id: "api", kind: "worktree", label: "api", path: escaped },
     ] }, "api")).toThrow("path-out-of-scope");
@@ -231,12 +239,17 @@ describe("#7 real repository service-import hints", () => {
     const repo = root(); const outside = root();
     mkdirSync(join(repo, ".vscode"));
     writeFileSync(join(outside, "secret.json"), '{"SECRET":"secret-token"}');
-    symlinkSync(join(outside, "secret.json"), join(repo, ".vscode", "launch.json"));
+    // win32 (#57): a link to a FILE needs SeCreateSymbolicLinkPrivilege and a junction cannot stand
+    // in for a file, so a normal user cannot build this case. NOT actually covered on win32 by a
+    // sibling: the oversize and malformed sources below keep running, but no other case reaches the
+    // linked-config-file refusal at service-import.ts:137. Unobserved on win32.
+    if (process.platform !== "win32") symlinkSync(join(outside, "secret.json"), join(repo, ".vscode", "launch.json"));
     writeFileSync(join(repo, "package.json"), "x".repeat(128 * 1024 + 1));
     writeFileSync(join(repo, "compose.yaml"), "services:\n  a: 1\n  a: 2\n");
     const scan = scanServiceImportHints(repo);
     expect(scan.hints).toEqual([]);
-    expect(scan.errors).toHaveLength(3);
+    // win32: the linked source above is absent, so only the oversize and malformed sources error.
+    expect(scan.errors).toHaveLength(process.platform === "win32" ? 2 : 3);
     expect(JSON.stringify(scan)).not.toContain(outside);
     expect(JSON.stringify(scan)).not.toContain("secret-token");
   });

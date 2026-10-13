@@ -71,8 +71,15 @@ describe("main-owned project registry", () => {
     writeFileSync(file, JSON.stringify({ version: 2, projects: [], memberships: [] }));
     expect(() => store.list()).toThrow(/fields/);
     rmSync(file);
-    symlinkSync(join(root, "absent"), file);
-    expect(() => store.list()).toThrow();
+    // win32 (#57): a dangling FILE link needs SeCreateSymbolicLinkPrivilege and a junction cannot
+    // stand in for a file, so a normal user cannot build this case. NOT actually covered on win32 by
+    // a sibling: the corrupt, version and fields cases above reach other refusals, so nothing
+    // reaches the invalid-project-registry-file refusal at project-registry.ts:208. Unobserved on
+    // win32.
+    if (process.platform !== "win32") {
+      symlinkSync(join(root, "absent"), file);
+      expect(() => store.list()).toThrow();
+    }
   });
 
   it("keeps prior snapshot and backup after a failed atomic commit", async () => {

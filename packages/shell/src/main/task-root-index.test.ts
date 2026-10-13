@@ -49,7 +49,8 @@ describe("main-owned override task root index", () => {
     if (kind === "empty-link") {
       const outside = join(home, "outside-empty");
       mkdirSync(outside);
-      symlinkSync(outside, defaultRoot);
+      // win32: a plain directory symlink needs SeCreateSymbolicLinkPrivilege; a junction is the directory link this platform can create without it (#57).
+      symlinkSync(outside, defaultRoot, process.platform === "win32" ? "junction" : "dir");
     }
     expect(index.inventory()).toEqual({ tasks: [], roots: [{ label: "默认任务根", state: "error", message: expect.stringContaining("移走") }] });
     expect(index.resolve("task-abcdef12")).toBeNull();
@@ -113,7 +114,7 @@ describe("main-owned override task root index", () => {
     const replacement = join(home, "replacement");
     mkdirSync(replacement);
     task(replacement);
-    symlinkSync(replacement, override);
+    symlinkSync(replacement, override, process.platform === "win32" ? "junction" : "dir");
     expect(index.inventory().roots[1]).toMatchObject({ state: "error" });
     rmSync(override);
     mkdirSync(override);
@@ -163,7 +164,7 @@ describe("main-owned override task root index", () => {
     const other = join(home, "outside");
     mkdirSync(other);
     task(other);
-    symlinkSync(join(other, "task-abcdef12"), dir);
+    symlinkSync(join(other, "task-abcdef12"), dir, process.platform === "win32" ? "junction" : "dir");
     expect(index.inventory().roots[1]?.state).toBe("error");
   });
 
@@ -207,7 +208,13 @@ describe("main-owned override task root index", () => {
     expect(index.inventory().roots[1]?.state).toBe("error");
   });
 
-  it("rejects a linked index file instead of following it or recreating an empty index", async () => {
+  // win32 (#57): this case needs a real FILE link at the index path, which needs
+  // SeCreateSymbolicLinkPrivilege (Developer Mode or an elevated session) and cannot be built with a
+  // junction, which is directory-only - so a normal user cannot exercise it. NOT actually covered on
+  // win32 by a sibling: "fails closed when primary is removed, corrupt, versioned wrong or
+  // interrupted after first backup" removes or overwrites the index file, so it never reaches the
+  // invalid-task-root-index-file refusal at task-root-index.ts:25. Unobserved on win32.
+  it.skipIf(process.platform === "win32")("rejects a linked index file instead of following it or recreating an empty index", async () => {
     const { home, override, userData, index } = setup();
     const dir = task(override);
     const file = taskRootIndexPath(userData);
