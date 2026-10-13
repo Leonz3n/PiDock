@@ -177,7 +177,15 @@ export function authorizeServiceRegistration(input: {
 }): { ok: true } | { ok: false; error: string } {
   const caller = classifyControlCaller(input);
   if (!caller.ok) return caller;
-  if (caller.kind === "agent") return { ok: false, error: "permission-denied: Agent 服务配方变更尚未接入差异确认" };
+  // This op registers launch material, which only main's trusted catalog and a
+  // main-attested human UI may do. The Agent's shared-template change is a
+  // different op and has its own diff-confirmation path (`service.template.update`
+  // -> `main/service-catalog-ipc.ts` `performTaskBoundTemplateEdit`
+  // review/confirm, asked by `main/pi-session.ts` `previewGate`), and that path
+  // registers no service - so the refusal names this op instead of claiming the
+  // Agent's recipe change has no confirmation.
+  if (caller.kind === "agent")
+    return { ok: false, error: "permission-denied: Agent 不能登记服务启动材料；Agent 的共享模板改动走 service.template.update 的差异确认通道" };
   return { ok: true };
 }
 

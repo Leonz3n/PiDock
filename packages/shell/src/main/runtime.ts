@@ -1261,8 +1261,11 @@ export async function runTaskServiceGroup(
  * What this function owns is the PAYLOAD convention: a key is present only when
  * the trusted side really derived something. An absent `dependencies` is the
  * honest "no declaration, no edge" plan (ADR 0002), never an empty set that could
- * read as a checked edge list, and likewise an absent `rules`/`layers` means "no
- * row was read" instead of a read-point audit over nothing.
+ * read as a checked edge list. The other two keys are omitted for INDEPENDENT
+ * reasons: an absent `rules` says no pinned revision declared a dependency into a
+ * unit of this group (so no binding rule was derived), and an absent `layers` says
+ * no config row was read at all - so neither can read as a read-point audit that
+ * checked those rows and found them clean.
  *
  * Returns the plan's own task-override rows (`bindingsToTaskRows`), because the
  * resolved address overrides are what the children must really run with - the

@@ -297,6 +297,32 @@ describe("[PiDock 05] #10 main's group plan feeds the DECLARED edges and nothing
     expect(planned?.payload).not.toHaveProperty("dependencies");
   });
 
+  it("omits `rules` without claiming no row was read: the rows it read arrive as `layers`", async () => {
+    // The two keys are omitted for INDEPENDENT reasons, and this case separates
+    // them: no pinned revision declares a dependency, so no binding rule is derived
+    // and `rules` is absent - while the launches' own config rows really were read
+    // and travel as `layers`. An absent `rules` is therefore "no binding rule was
+    // derived", never "no row was read".
+    const { tasks, calls } = registry((call) => call.op === "task/controlService" ? { group: { state: "not-planned" } } : { ok: true });
+    const layers: ServiceLaunch["layers"] = {
+      repoDefaults: [{ key: "PORT", value: "53100", secret: false }],
+      shared: [], privateEntries: [], task: [],
+    };
+    const catalog = {
+      taskBindings: () => [boundService(CALLER), boundService(CALLEE)],
+      launchFor: (_taskId: string, _projectId: string, serviceId: string) => launchOf(serviceId, layers),
+    } satisfies Pick<ServiceCatalog, "launchFor" | "taskBindings">;
+
+    await runTaskServiceGroup(tasks, catalog, REQUEST, 7);
+
+    const planned = calls.find((call) => call.op === "task/planServiceGroup");
+    expect(planned?.payload).not.toHaveProperty("rules");
+    expect(planned?.payload).not.toHaveProperty("dependencies");
+    // The read really happened: the rows are in the same payload beside the omitted
+    // key, so `rules`' absence can never be read as an audit over nothing.
+    expect(planned?.payload["layers"]).toMatchObject({ repoDefaults: [{ key: "PORT", value: "53100", secret: false }] });
+  });
+
   it("refuses by name when a declared target is not bound to this task, and plans nothing", async () => {
     const { tasks, calls } = registry((call) => call.op === "task/controlService" ? { group: { state: "not-planned" } } : { ok: true });
     const catalog = {
