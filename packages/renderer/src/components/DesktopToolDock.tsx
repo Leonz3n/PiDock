@@ -499,7 +499,9 @@ function DeliveryTargetReadout({ target }: { target: WorkspaceDeliveryView }) {
  * on a refusal, where the request is the only evidence there is). A tree,
  * preview, diff or delivery answer for a root the user already left is DROPPED —
  * never rendered under the current root's chip, because one repository must
- * never be shown as another's.
+ * never be shown as another's. Only the DATA is dropped: the caller's in-flight
+ * flag is cleared as soon as the response arrives, so a dropped answer can never
+ * leave the panel stuck in a loading state.
  */
 function answerIsForRoot(askedRoot: string, currentRoot: string | undefined, declaredRoot: string | undefined): boolean {
   return currentRoot === askedRoot && (declaredRoot === undefined || declaredRoot === askedRoot);
@@ -534,12 +536,11 @@ function FilesTool({ taskId }: { taskId: string }) {
     async (nextRootId: string, nextRelative: string) => {
       setBusy(true);
       const result = await fileTreeThroughShell({ taskId, rootId: nextRootId, relative: nextRelative || undefined });
+      setBusy(false);
       const view = result.ok ? workspaceTreeFromHost(result.payload) : undefined;
       // An answer for another root — or for a root the user has already left —
-      // is not this panel's data: drop it (the reading label stays up until the
-      // current root's own answer arrives).
+      // is not this panel's data: drop it instead of rendering it here.
       if (!answerIsForRoot(nextRootId, selectedRootRef.current, view?.attribution.rootId)) return;
-      setBusy(false);
       if (!result.ok) {
         setTree(null);
         setError(shellFailure(result, "读取目录失败"));
@@ -642,9 +643,9 @@ function FilesTool({ taskId }: { taskId: string }) {
     const askedRoot = rootId;
     setBusy(true);
     const result = await filePreviewThroughShell({ taskId, rootId: askedRoot, relative: path });
+    setBusy(false);
     const view = result.ok ? workspacePreviewFromHost(result.payload) : undefined;
     if (!answerIsForRoot(askedRoot, selectedRootRef.current, view?.attribution.rootId)) return;
-    setBusy(false);
     if (!result.ok) {
       setPreview(null);
       setDiff(null);
@@ -666,9 +667,9 @@ function FilesTool({ taskId }: { taskId: string }) {
     const askedRoot = rootId;
     setBusy(true);
     const result = await fileDiffThroughShell({ taskId, rootId: askedRoot, relative: preview.path });
+    setBusy(false);
     const view = result.ok ? workspaceDiffFromHost(result.payload) : undefined;
     if (!answerIsForRoot(askedRoot, selectedRootRef.current, view?.attribution.rootId)) return;
-    setBusy(false);
     if (!result.ok) {
       setDiff(null);
       setError(shellFailure(result, "读取改动失败"));
@@ -707,11 +708,11 @@ function FilesTool({ taskId }: { taskId: string }) {
     const askedRoot = rootId;
     setEditorBusy(true);
     const result = await openTaskEditorThroughShell({ taskId, rootId: askedRoot });
+    setEditorBusy(false);
     const view = result.ok ? externalEditorLaunchFromHost(result.payload) : undefined;
     // The receipt names the root it opened: a launch for a root the user has
     // left is dropped too, so this panel never shows another root's path.
     if (!answerIsForRoot(askedRoot, selectedRootRef.current, view?.attribution.rootId)) return;
-    setEditorBusy(false);
     if (!result.ok) {
       setEditor(null);
       setEditorError(shellFailure(result, "打开外部编辑器失败"));
