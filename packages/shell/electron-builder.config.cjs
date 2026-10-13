@@ -14,10 +14,18 @@ const localElectronDist = path.join(
 /**
  * Packaging candidate config for PiDock (S6).
  *
- * - macOS arm64 DMG and Windows x64 NSIS EXE candidates.
+ * - macOS arm64 DMG and Windows x64 MSI candidates.
  * - Reuses the already-installed Electron runtime so packaging works offline.
  * - Signing/notarisation run through `scripts/notarize.cjs`; they are no-ops
  *   unless the Apple credentials are present in the environment.
+ *
+ * The Windows installer asset is MSI, not the NSIS single EXE: see
+ * docs/adr/0004-windows-installer-msi-instead-of-nsis-exe.md. `msi` therefore
+ * declares only keys from `definitions.MsiOptions` of the installed builder's
+ * scheme.json (the builder sets `additionalProperties: false`, so NSIS-only keys
+ * such as `allowToChangeInstallationDirectory` would be rejected), and no MSI
+ * has been produced on this darwin-arm64 host — the Windows acceptance is
+ * manual (docs/electron-packaging.md).
  *
  * @type {import('electron-builder').Configuration}
  */
@@ -44,13 +52,16 @@ module.exports = {
     title: "${productName} ${version} ${arch}",
   },
   win: {
-    target: [{ target: "nsis", arch: ["x64"] }],
+    target: [{ target: "msi", arch: ["x64"] }],
   },
-  nsis: {
+  // Same intent as the previous NSIS block: assisted (not one-click) install,
+  // per-user scope. `${ext}` keeps the artifact name honest as `msi`, and
+  // `upgradeCode` stays unset because the builder derives it from `appId`
+  // (ADR 0004): changing `appId` changes the upgrade identity.
+  msi: {
     oneClick: false,
     perMachine: false,
-    allowToChangeInstallationDirectory: true,
-    artifactName: "${productName}-${version}-${arch}-setup.${ext}",
+    artifactName: "${productName}-${version}-${arch}.${ext}",
   },
   afterSign: "scripts/notarize.cjs",
 };
