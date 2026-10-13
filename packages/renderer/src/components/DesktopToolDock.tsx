@@ -526,9 +526,13 @@ function droppedAnswerText(
   currentRoot: string | undefined,
   declaredRoot: string | undefined,
 ): string {
+  // Every root id in these sentences comes from the Host (`str()` keeps `""`),
+  // and a drop sentence is only useful if it NAMES the roots it says were
+  // involved: an absent id is named, never left blank.
+  const asked = hostText(askedRoot, "Host 未上报根标识");
   return reason === "过期"
-    ? `已丢弃过期根 ${askedRoot} 的${what} · 当前根 ${currentRoot ?? "本面板尚未选定根"}`
-    : `Host ${what}自述根 ${declaredRoot} 与所请求的根 ${askedRoot} 不符：本面板不显示`;
+    ? `已丢弃过期根 ${asked} 的${what} · 当前根 ${hostText(currentRoot, "本面板尚未选定根")}`
+    : `Host ${what}自述根 ${hostText(declaredRoot, "Host 未上报根标识")} 与所请求的根 ${asked} 不符：本面板不显示`;
 }
 
 function FilesTool({ taskId }: { taskId: string }) {
@@ -1080,12 +1084,15 @@ function TerminalTool({ taskId }: { taskId: string }) {
         <ul className="mt-1 flex flex-col gap-1" data-testid="dock-terminal-instances">
           {state.instances.map((instance) => (
             <li key={instance.instanceId} className="border border-line bg-paper px-2 py-1.5 text-[11px]">
-              <span className="font-mono">{instance.instanceId}</span>
+              {/* Every string here is `str()`-parsed, so the Host may have sent
+                  `""`: the instance's identity and its cwd are NAMED when they
+                  are absent instead of rendering as an anonymous row. */}
+              <span className="font-mono">{hostText(instance.instanceId, "Host 未上报实例标识")}</span>
               <span className="ml-1.5 text-muted">
                 {instance.lifecycle === "running" ? "运行中" : "已退出"}
                 {instance.processKnown ? "" : " · 进程未知"}
               </span>
-              <span className="block truncate font-mono text-[10px] text-muted">{instance.cwd}</span>
+              <span className="block truncate font-mono text-[10px] text-muted">{hostText(instance.cwd, "Host 未上报终端工作目录")}</span>
               {instance.exitReason && <span className="block text-[10px] text-muted">退出：{instance.exitReason}</span>}
             </li>
           ))}
@@ -1106,11 +1113,11 @@ function TerminalTool({ taskId }: { taskId: string }) {
           {plan && (
             <div className="mt-2 border border-line bg-paper px-2 py-1.5 text-[11px]" data-testid="dock-terminal-plan">
               <p className="font-mono">
-                {plan.program} {plan.args.join(" ")}
+                {hostText(plan.program, "Host 未上报终端程序")} {plan.args.join(" ")}
               </p>
-              <p className="mt-0.5 truncate font-mono text-[10px] text-muted">{plan.cwd}</p>
+              <p className="mt-0.5 truncate font-mono text-[10px] text-muted">{hostText(plan.cwd, "Host 未上报终端工作目录")}</p>
               <p className="mt-0.5 text-[10px] text-muted">
-                {attribution(plan.attribution)} · {plan.resolved.length} 项环境变量（密钥已打码）· 历史上限 {plan.historyLimit}
+                {hostText(attribution(plan.attribution), "Host 未上报根名称")} · {plan.resolved.length} 项环境变量（密钥已打码）· 历史上限 {plan.historyLimit}
               </p>
             </div>
           )}

@@ -20,6 +20,9 @@ import { DesktopProjectOverview } from "../components/DesktopProjectOverview";
 import { SharedRepoIsolation } from "../components/SharedRepoIsolation";
 import { hostPlatformLabel } from "../../../shell/src/main/service-config.js";
 import { LINK_MODEL_VERIFICATION_BOUNDARY, linkCapabilityRows } from "../../../shell/src/main/multi-repo-provision.js";
+// The Host's own link walk, so this suite's `unknown` rows carry the REAL
+// per-branch details instead of a hand-copied fixture.
+import { observeLinkChain } from "../../../shell/src/host/task-host.js";
 
 /**
  * The `task/probeLink` payload the Host really answers with, built from the
@@ -239,6 +242,134 @@ describe("[PiDock 03] (#6 盒子 6) two tasks sharing one project repository", (
     // No probe record means no platform record and no boundary claim either.
     expect(within(row).getByTestId("row-link-platforms-task-task0001")).toHaveTextContent("未取得 Host 链接探测记录");
     expect(within(row).queryByTestId("row-link-model-boundary-task-task0001")).not.toBeInTheDocument();
+  });
+
+  /**
+   * [PiDock 03] (#6 box 12) the Host's `unknown` shape is not ONE shape. The four
+   * walks below are the real branches of `observeLinkChain`
+   * (`host/task-host.ts:279-316`), driven here through that shipped function so
+   * the details are the Host's own words: the 16-hop budget stopped following, an
+   * `lstat` failed, a `readlink` failed, and the chain ended at something that is
+   * not a directory. Three of them DID read the filesystem, so a row may not
+   * claim 形状未实测 ("the shape was never measured") - each row must keep the
+   * Host's own per-branch statement of what was and was not read.
+   */
+  it("says per branch what an unknown link shape did and did not measure", async () => {
+    const symlink = { isSymbolicLink: () => true, isDirectory: () => false };
+    const plainFile = { isSymbolicLink: () => false, isDirectory: () => false };
+    const denied = () => {
+      const error = new Error("EACCES: permission denied") as Error & { code: string };
+      error.code = "EACCES";
+      return error;
+    };
+    let hop = 0;
+    const walks: Record<string, { shape: string; detail: string }> = {
+      "/work/budget-docs": observeLinkChain("/work/budget-docs", {
+        lstat: () => symlink, readlink: () => String((hop += 1)), resolveTarget: (_current, target) => target,
+      }),
+      "/work/denied-docs": observeLinkChain("/work/denied-docs", {
+        lstat: () => { throw denied(); }, readlink: () => "/b", resolveTarget: (_current, target) => target,
+      }),
+      "/work/file-docs": observeLinkChain("/work/file-docs", {
+        lstat: () => plainFile, readlink: () => "/b", resolveTarget: (_current, target) => target,
+      }),
+      "/work/unreadable-docs": observeLinkChain("/work/unreadable-docs", {
+        lstat: () => symlink, readlink: () => { throw denied(); }, resolveTarget: (_current, target) => target,
+      }),
+    };
+    for (const walk of Object.values(walks)) expect(walk.shape).toBe("unknown");
+    const fourTasks = [
+      { taskId: "task-budget01", name: "跳数预算", sourcePath: "/work/budget-docs" },
+      { taskId: "task-denied02", name: "读不到", sourcePath: "/work/denied-docs" },
+      { taskId: "task-file0003", name: "不是目录", sourcePath: "/work/file-docs" },
+      { taskId: "task-unread04", name: "链接不可读", sourcePath: "/work/unreadable-docs" },
+    ];
+    window.pidock = {
+      taskOp: async (taskId: string, op: string, payload: Record<string, unknown>) => {
+        if (op === "task/fileRoots") {
+          const task = fourTasks.find((row) => row.taskId === taskId)!;
+          return { ok: true, payload: { taskDir: `/tasks/${taskId}`, roots: [
+            { id: LINK_ROOT, kind: "shared-dir", label: task.name, path: `/tasks/${taskId}/${LINK_ROOT}`, sourcePath: task.sourcePath },
+          ] } };
+        }
+        if (op === "task/probeLink") {
+          const walk = walks[String(payload["sourcePath"])]!;
+          return { ok: true, payload: probePayload(walk.shape, walk.detail) };
+        }
+        if (op === "task/fileDiff") return { ok: false, error: "plain-dir-no-diff: 普通目录链接不提供 Git 差异" };
+        return { ok: true, payload: {} };
+      },
+    } as unknown as typeof window.pidock;
+    render(<SharedRepoIsolation tasks={fourTasks} />);
+    const rows = await screen.findAllByTestId("shared-dir-row");
+    const shapeOf = (taskId: string) => {
+      const row = rows.find((entry) => entry.getAttribute("data-task") === taskId)!;
+      return within(row).getByTestId(`row-link-shape-${taskId}`);
+    };
+
+    // Branch 1: the hop budget stopped the crawl AFTER following links.
+    const budget = shapeOf("task-budget01");
+    expect(budget).toHaveTextContent("未确定");
+    expect(budget).toHaveTextContent("链接链超过 16 跳，未继续跟随");
+    expect(budget).toHaveAttribute("data-shape", "unknown");
+    // Branch 2: a real `lstat` was made and failed.
+    const deniedRow = shapeOf("task-denied02");
+    expect(deniedRow).toHaveTextContent("未确定");
+    expect(deniedRow).toHaveTextContent("链接目标形状无法读取（EACCES");
+    // Branch 3: a reading WAS taken - the chain ends at something not a directory.
+    const fileRow = shapeOf("task-file0003");
+    expect(fileRow).toHaveTextContent("未确定");
+    expect(fileRow).toHaveTextContent("链接目标不是目录");
+    // Branch 4: `readlink` was called and failed.
+    const unreadable = shapeOf("task-unread04");
+    expect(unreadable).toHaveTextContent("未确定");
+    expect(unreadable).toHaveTextContent("链接目标不可读取（EACCES");
+
+    for (const row of [budget, deniedRow, fileRow, unreadable]) {
+      // No branch may claim nothing was measured: three of the four read the fs.
+      expect(row).not.toHaveTextContent("形状未实测");
+      expect(row).not.toHaveTextContent("真实目录");
+    }
+    // The lexical pre-check still rides beside the reading, as for every shape.
+    expect(budget).toHaveTextContent("词法预检：路径不嵌套、不在任务目录内");
+  });
+
+  it("names an empty Host path, root identity, platform or boundary on a row", async () => {
+    window.pidock = {
+      taskOp: async (taskId: string, op: string) => {
+        if (op === "task/fileRoots") return { ok: true, payload: { taskDir: "/tasks/blank", roots: [
+          { id: "", kind: "worktree", label: "", path: "", repo: "", baselineBranch: "" },
+          { id: LINK_ROOT, kind: "shared-dir", label: "", path: "", directoryId: "", sourcePath: "" },
+        ] } };
+        if (op === "task/fileDiff") {
+          if (String(taskId) === "task-blank-row") {
+            return { ok: true, payload: { path: "", diff: "", truncated: false, attribution: { taskId, rootId: "", rootKind: "worktree", rootLabel: "", piWorkDir: "" } } };
+          }
+        }
+        if (op === "task/probeLink") {
+          return { ok: true, payload: { shape: "directory", detail: "来源是真实目录: /work/blank-docs", lexical: "ok", platforms: [{ platform: "", exercised: false, note: "" }], modelBoundary: "" } };
+        }
+        return { ok: false, error: "plain-dir-no-diff: 普通目录链接不提供 Git 差异" };
+      },
+    } as unknown as typeof window.pidock;
+    render(<SharedRepoIsolation tasks={[{ taskId: "task-blank-row", name: "空值检查" }]} />);
+
+    const group = await screen.findByTestId("worktree-group");
+    // The group heading names the root id it groups by; an empty one is named.
+    expect(within(group).getByRole("heading")).toHaveTextContent("仓库 Host 未上报根标识");
+    const worktree = await within(group).findByTestId("worktree-row");
+    expect(worktree).toHaveTextContent("Host 未上报工作副本路径");
+    expect(worktree).toHaveTextContent("Host 未提供（固定）");
+
+    const linkRow = await screen.findByTestId("shared-dir-row");
+    expect(linkRow).toHaveTextContent("Host 未上报任务内链接路径");
+    expect(linkRow).toHaveTextContent("Host 未提供");
+    const platforms = within(linkRow).getByTestId("row-link-platforms-task-blank-row");
+    expect(platforms).toHaveTextContent("Host 未上报平台标识");
+    expect(platforms).toHaveTextContent("Host 未上报该平台的说明");
+    expect(within(linkRow).getByTestId("row-link-model-boundary-task-blank-row")).toHaveTextContent("Host 未上报记录边界");
+    // The shape row itself was read fine, so it stays a named reading.
+    expect(within(linkRow).getByTestId("row-link-shape-task-blank-row")).toHaveTextContent("真实目录（Host 实测）");
   });
 
   it("names an unread branch and an unread change instead of showing the baseline or 干净", async () => {

@@ -219,8 +219,11 @@ export function terminalInstanceStateText(instance: TerminalInstanceView): strin
   if (instance.lifecycle === "running") {
     return instance.processKnown ? `运行中 · pid ${instance.processId ?? "?"}` : "运行中 · Host 未报告进程号";
   }
+  // `str()` keeps an empty exit reason, so an empty one is the same fact as an
+  // absent one: the state line is `已退出 · <reason> · <code>` and a bare segment
+  // would claim a reason was recorded.
   const reason =
-    instance.exitReason === undefined
+    instance.exitReason === undefined || instance.exitReason.length === 0
       ? "退出原因未报告"
       : (EXIT_REASON_TEXT[instance.exitReason] ?? instance.exitReason);
   const code =

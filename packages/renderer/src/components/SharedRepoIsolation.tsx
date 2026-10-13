@@ -60,21 +60,38 @@ type ChangeRead = { state: "observed"; diff: string; truncated: boolean } | { st
 type LinkRead = { state: "observed"; link: WorkspaceLinkTargetView } | { state: "unknown"; reason: string };
 
 /**
- * The Host's observed shape as words. Each shape keeps its OWN name, so 失效
+ * The Host's observed shape as words. Each NAMED shape keeps its OWN name, so 失效
  * (目标不存在), 嵌套 (来源是软链接，不是原目录) and 循环 (链回到已跟随过的链接) can never
  * be read as the same "a directory", and `unknown` never silently becomes healthy.
  *
  * The 嵌套 label is deliberately not broader than the observation: a one-hop link
  * to a directory and a link→link chain are both 嵌套, and the Host's own detail
  * (shown beside this label) says which of the two was seen.
+ *
+ * Only the four NAMED shapes live in this map: `unknown` is not a fifth shape but
+ * the Host's own "none of the four named" answer, produced by four different
+ * walks (see `unknownShapeLabel`).
  */
-const LINK_SHAPE_LABEL: Record<WorkspaceLinkTargetView["shape"], string> = {
+const LINK_SHAPE_LABEL: Record<Exclude<WorkspaceLinkTargetView["shape"], "unknown">, string> = {
   directory: "真实目录（Host 实测）",
   dangling: "失效：链接目标已不存在（Host 实测）",
   "nested-link": "嵌套：来源是软链接，指向的不是原目录本身（Host 实测）",
   "cyclic-link": "循环：链接链回到已跟随过的链接（Host 实测）",
-  unknown: "未确定：形状未实测",
 };
+
+/**
+ * The Host's `unknown` shape, as words. It is NOT one branch: `observeLinkChain`
+ * (`host/task-host.ts:279-316`) yields it when the 16-hop budget stopped the
+ * crawl (links had been followed), when an `lstat` failed, when a `readlink`
+ * failed, and when the chain ended at something that is not a directory - a real
+ * probe ran in every one of them. So a row may not claim 形状未实测 ("the shape was
+ * never measured"): this label names the one fact all four branches share (the
+ * probe named none of the four shapes) and carries the Host's own per-branch
+ * detail verbatim, which is the only per-branch evidence this surface has.
+ */
+function unknownShapeLabel(detail: string): string {
+  return `未确定：探测没有给出已命名的形状；Host 读到的情况：${detail}`;
+}
 
 /** The plan-time lexical pre-check, labelled apart from the observation. */
 const LINK_LEXICAL_LABEL: Record<WorkspaceLinkTargetView["lexical"], string> = {
@@ -87,7 +104,9 @@ const LINK_LEXICAL_LABEL: Record<WorkspaceLinkTargetView["lexical"], string> = {
 function linkShapeSummary(link: LinkRead | undefined): string {
   if (link === undefined) return "未实测：尚未读取";
   if (link.state === "unknown") return `未确定：${link.reason}`;
-  return `${LINK_SHAPE_LABEL[link.link.shape]} · Host 观测：${link.link.detail} · 词法预检：${LINK_LEXICAL_LABEL[link.link.lexical]}`;
+  const { shape, detail } = link.link;
+  const label = shape === "unknown" ? unknownShapeLabel(detail) : `${LINK_SHAPE_LABEL[shape]} · Host 观测：${detail}`;
+  return `${label} · 词法预检：${LINK_LEXICAL_LABEL[link.link.lexical]}`;
 }
 
 /** One task whose roots could not be read at all; named, so it is never dropped silently. */
@@ -159,7 +178,7 @@ function WorktreeRow({ row, change }: { row: RootRow; change: ChangeRead | undef
       <p className="text-xs font-semibold text-ink">任务 {row.taskName}</p>
       <dl className="mt-1 grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-0.5 text-[11px]">
         <dt className="text-muted">工作副本路径</dt>
-        <dd className="min-w-0 break-all font-mono">{root.path}</dd>
+        <dd className="min-w-0 break-all font-mono">{hostText(root.path, "Host 未上报工作副本路径")}</dd>
         <dt className="text-muted">工作分支</dt>
         <dd className="min-w-0 break-all font-mono" data-testid={`row-working-branch-${row.taskId}`}>
           {observedText(root.workingBranch, (name) => hostText(name, "Host 未上报工作分支名"), "Host 未上报工作分支观察")}
@@ -187,7 +206,7 @@ function LinkRow({ row, change, link }: { row: RootRow; change: ChangeRead | und
       <p className="text-xs font-semibold text-ink">任务 {row.taskName}</p>
       <dl className="mt-1 grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-0.5 text-[11px]">
         <dt className="text-muted">任务内链接</dt>
-        <dd className="min-w-0 break-all font-mono">{root.path}</dd>
+        <dd className="min-w-0 break-all font-mono">{hostText(root.path, "Host 未上报任务内链接路径")}</dd>
         <dt className="text-muted">指向原目录</dt>
         <dd className="min-w-0 break-all font-mono">{root.sourcePath || "Host 未提供"}</dd>
         <dt className="text-muted">文件隔离</dt>
@@ -207,7 +226,7 @@ function LinkRow({ row, change, link }: { row: RootRow; change: ChangeRead | und
             <ul className="flex flex-col gap-y-0.5">
               {link.link.platforms.map((platform) => (
                 <li key={platform.platform} data-platform={platform.platform} data-exercised={platform.exercised ? "true" : "false"}>
-                  <span className="font-mono">{platform.platform}</span>：{platform.exercised ? "已实测" : "未实测"} · {platform.note}
+                  <span className="font-mono">{hostText(platform.platform, "Host 未上报平台标识")}</span>：{platform.exercised ? "已实测" : "未实测"} · {hostText(platform.note, "Host 未上报该平台的说明")}
                 </li>
               ))}
             </ul>
@@ -221,7 +240,7 @@ function LinkRow({ row, change, link }: { row: RootRow; change: ChangeRead | und
         {link?.state === "observed" && (
           <>
             <dt className="text-muted">记录边界</dt>
-            <dd className="min-w-0 break-words" data-testid={`row-link-model-boundary-${row.taskId}`}>{link.link.modelBoundary}</dd>
+            <dd className="min-w-0 break-words" data-testid={`row-link-model-boundary-${row.taskId}`}>{hostText(link.link.modelBoundary, "Host 未上报记录边界")}</dd>
           </>
         )}
         <dt className="text-muted">Git 视图</dt>
@@ -242,7 +261,7 @@ function RootGroup({ rootId, rows, changes, links }: { rootId: string; rows: rea
   return (
     <div className="mt-3" data-testid={root.kind === "shared-dir" ? "shared-dir-group" : "worktree-group"} data-root={rootId}>
       <h3 className="text-[12px] font-semibold text-ink">
-        {root.kind === "shared-dir" ? "普通目录链接" : "仓库"} <span className="font-mono">{rootId}</span>
+        {root.kind === "shared-dir" ? "普通目录链接" : "仓库"} <span className="font-mono">{hostText(rootId, "Host 未上报根标识")}</span>
       </h3>
       {shared && root.kind === "worktree" && (
         <p className="mt-1 text-[11px] text-muted" data-testid={`worktree-group-note-${rootId}`}>
