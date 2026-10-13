@@ -288,7 +288,7 @@ describe("Desktop SDK conversation", () => {
     expect(f.calls.filter((call) => call.action === "start")).toHaveLength(0);
   });
 
-  it("names, in the window line's hover only, that this route's SDK turns are not in the Host session ledger", async () => {
+  it("reports, in the window line's hover only, what this route's two reads show without making it the Host's statement", async () => {
     const f = setup();
     f.setMessages([{ role: "assistant", text: "reply", usage: { input: 100, output: 20, cacheRead: 0, cacheWrite: 0 } }]);
     f.bridge.taskOp = vi.fn(async (_taskId: string, op: string) => op === "task/sessionContext"
@@ -297,9 +297,12 @@ describe("Desktop SDK conversation", () => {
     mount(f);
     const usage = await screen.findByTestId("composer-usage");
     // Two reads disagree: the Host's session total is 0 while this SDK window has
-    // reported 120. The hover says exactly that, scoped to this route.
-    await waitFor(() => expect(usage.getAttribute("title")).toContain("Host 会话账本本次读数 0 tokens，而本窗口已报告 120 tokens；本路由的 SDK 回合用量未计入 Host 会话账本。"));
+    // reported 120. The hover reports the comparison of those two numbers and
+    // names it as this page's conclusion, scoped to this route: the Host returned
+    // two numbers, not a cause, so the clause may not read as its statement.
+    await waitFor(() => expect(usage.getAttribute("title")).toContain("Host 会话账本本次读数 0 tokens，而本窗口已报告 120 tokens；对照这两项读数，本路由的 SDK 回合用量未计入 Host 会话账本（此为本页两项读数的对照结论，并非 Host 返回的说明）。"));
     expect(usage.getAttribute("title")).toContain("最近最多 80 条 SDK 消息；不是会话累计，可能不含更早用量。");
+    expect(usage.getAttribute("title")).not.toContain("Host 报告");
     // The label itself is unchanged: it counts the bounded window, never a session total.
     expect(usage).toHaveTextContent("近期已报告输入+输出 120 tokens");
     expect(usage).not.toHaveTextContent(/本会话/);
@@ -315,6 +318,7 @@ describe("Desktop SDK conversation", () => {
     const usage = await screen.findByTestId("composer-usage");
     await waitFor(() => expect(usage.getAttribute("title")).toContain("Host 会话账本读数 4321 tokens。"));
     expect(usage.getAttribute("title")).not.toContain("未计入 Host 会话账本");
+    expect(usage.getAttribute("title")).not.toContain("对照这两项读数");
     expect(usage).toHaveTextContent("近期已报告输入+输出 120 tokens");
     expect(usage).not.toHaveTextContent(/本会话/);
   });
@@ -604,6 +608,24 @@ describe("Desktop SDK conversation", () => {
     const context = await screen.findByTestId("composer-context");
     await waitFor(() => expect(context).toHaveTextContent("上下文 24.8k / 200k · 12.4% · 估算"));
     expect(context.getAttribute("title")).toBe("Anthropic 官方 · Claude Sonnet · 已用 24.8k Tokens（来源 estimated）· 窗口 200k Tokens · 占用比例 12.4%；数字即 Host 会话读数，未做推断");
+  });
+
+  it("shows the Host's own occupancy percent when a ratio recomputed here would differ", async () => {
+    const f = setup();
+    // The Host's payload is the authoritative source, so this fixture is the one
+    // case the fix must survive: a Host whose `percent` is no longer `used/window`
+    // (`shell/src/main/pi-session.ts:727` defines it today). used 24.8 / window 200
+    // recomputes to 12.4%, so only reading the Host's `percent` can produce 31.5%.
+    f.bridge.taskOp = vi.fn(async (_taskId: string, op: string) => op === "task/sessionContext"
+      ? { ok: true, payload: { context: hostContext({ used: 24.8, window: 200, percent: 31.5 }) } }
+      : { ok: true, payload: {} }) as never;
+    mount(f);
+    const context = await screen.findByTestId("composer-context");
+    await waitFor(() => expect(context).toHaveTextContent("上下文 24.8k / 200k · 31.5% · 估算"));
+    // The locally recomputed ratio never reaches the DOM, and the hover prints
+    // the same authoritative number as the visible line.
+    expect(context).not.toHaveTextContent("12.4%");
+    expect(context.getAttribute("title")).toContain("占用比例 31.5%");
   });
 
   it("names an unknown window instead of rendering a 0% nobody measured", async () => {
