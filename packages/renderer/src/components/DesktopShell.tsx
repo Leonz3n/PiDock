@@ -12,6 +12,9 @@
  *   renderer never falls back to the demo `memoryHost` fixtures in desktop mode.
  * - Counts come from the loaded inventory (`tasks`, `projects`, `roots`); a count that
  *   has no real source is not shown at all instead of being invented.
+ * - The bottom strip carries only segments `data/desktopShellSummary.ts` can build
+ *   from that same inventory: prototype A's running-service count and browser owner
+ *   are readable only inside a task's own tool dock, so they stay absent here.
  * - The window width tiers match prototype A (1180/960/850/720 via `below-*` variants).
  */
 
@@ -20,6 +23,7 @@ import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Icon, type IconName } from "./Icon";
 import { BrandMark, LocalUserAvatar } from "./ui";
+import { desktopSummarySegments, type DesktopSummarySegment } from "../data/desktopShellSummary";
 
 export interface DesktopShellTask {
   taskId: string;
@@ -129,6 +133,45 @@ function TaskNavCard({ task, selected, onSelect }: { task: DesktopShellTask; sel
 
 type DesktopRoot = { label: string; state: "ready" | "error"; message?: string };
 
+/**
+ * The strip at the foot of the shell column ([UI 对齐 S8a] #47).
+ *
+ * It reuses the demo bar's visual vocabulary — prototype A's dark `.switcher`
+ * strip (`components/ShellSummaryBar.tsx`) — but is not that component: the
+ * demo bar reads `stores/host`, so mounting it here would pull the fixture
+ * graph into the production shell. Prototype A's tier rule is kept: at/below
+ * 960px the strip keeps only the current task/Project name
+ * (`prototypes/pidock-ui/style.css`: `.switcher .state{display:none}`), and a
+ * long name truncates instead of widening the column.
+ */
+function DesktopSummaryBar({ segments }: { segments: DesktopSummarySegment[] }) {
+  return (
+    <div className="shrink-0 bg-bg px-4 py-2 below-mid:px-3 below-stack:px-2">
+      <section
+        aria-label="当前任务摘要"
+        data-testid="desktop-summary"
+        className="mx-auto flex w-fit min-w-0 max-w-full items-center gap-2 overflow-hidden rounded-[10px] border border-[#3b465c] bg-[#293142] px-[10px] py-1.5 text-[10px] whitespace-nowrap text-[#b5bfd4] shadow-[0_4px_15px_#151a2522] below-stack:gap-1 below-stack:px-1.5"
+      >
+        {segments.map((segment, index) => (
+          <span
+            key={segment.key}
+            data-summary-segment={segment.key}
+            title={segment.title}
+            className={`flex items-center gap-2 ${segment.key === "scope" ? "min-w-0 truncate" : "below-mid:hidden"}`}
+          >
+            {index > 0 ? (
+              <span aria-hidden className="text-[#5b657c]">
+                ·
+              </span>
+            ) : null}
+            {segment.label}
+          </span>
+        ))}
+      </section>
+    </div>
+  );
+}
+
 export function DesktopRootErrors({ roots, busy, retryPending, retryError, onRetry, className }: {
   roots: DesktopRoot[];
   busy: boolean;
@@ -178,6 +221,9 @@ export function DesktopShell({
 }) {
   const activeTaskId = view.view === "task" ? view.taskId : undefined;
   const brokenRoots = roots.filter((root) => root.state === "error");
+  // One condition for "the lifecycle was verified": the sidebar count, the
+  // alert below and the strip must never disagree about it.
+  const lifecycleUnverified = lifecyclePending || lifecycleErrors.length > 0;
   return (
     <div className="flex h-screen min-h-0 w-full bg-bg text-ink" data-testid="desktop-shell">
       <aside data-testid="desktop-sidebar" className="flex min-h-0 w-[226px] shrink-0 flex-col border-r border-line bg-sidebar px-[13px] below-wide:w-[192px] below-mid:w-16 below-mid:px-2">
@@ -208,10 +254,10 @@ export function DesktopShell({
           <div data-nav-group="tasks" role="group" aria-label="进行中的任务" className="flex min-h-0 flex-col">
             <div className={HEADING_CLASS}>
               <span>进行中的任务</span>
-              <span className="text-[10px] normal-case">{lifecyclePending || lifecycleErrors.length ? "未核验" : tasks.length}</span>
+              <span className="text-[10px] normal-case">{lifecycleUnverified ? "未核验" : tasks.length}</span>
             </div>
             <div className="flex min-h-0 flex-col overflow-y-auto below-mid:hidden">
-              {tasks.length === 0 ? <p className="px-[10px] pb-2 text-[10px] text-muted">{lifecyclePending || lifecycleErrors.length ? "任务归档状态未核验完整。" : "已检查的任务根暂无进行中任务。"}</p> : null}
+              {tasks.length === 0 ? <p className="px-[10px] pb-2 text-[10px] text-muted">{lifecycleUnverified ? "任务归档状态未核验完整。" : "已检查的任务根暂无进行中任务。"}</p> : null}
               {tasks.map((task) => (
                 <TaskNavCard key={task.taskId} task={task} selected={task.taskId === activeTaskId} onSelect={() => onNavigate({ view: "task", taskId: task.taskId })} />
               ))}
@@ -259,9 +305,37 @@ export function DesktopShell({
         <DesktopRootErrors roots={roots} busy={rootRetry.busy} retryPending={rootRetry.pending} retryError={rootRetry.error} onRetry={rootRetry.run} className="shrink-0 border-b border-line bg-paper px-4 empty:hidden" />
         {lifecycleErrors.length > 0 && <p role="alert" className="shrink-0 border-b border-line bg-paper px-4 py-2 text-[11px] text-[#ad4545]">任务归档状态未核验：{lifecycleErrors.join("；")}</p>}
         <main className="min-h-0 min-w-0 flex-1 overflow-y-auto" data-testid="desktop-shell-content">{children}</main>
+        <DesktopSummaryBar
+          segments={desktopSummarySegments({
+            scope: shellSummaryScope(view, tasks, projects),
+            activeTaskCount: lifecycleUnverified ? null : tasks.length,
+            roots,
+          })}
+        />
       </div>
     </div>
   );
+}
+
+/**
+ * The name the strip may show for the current view, taken from the real
+ * inventory the shell already holds; a view that names neither a task nor a
+ * Project yields no scope segment (the breadcrumb still names the page).
+ */
+function shellSummaryScope(
+  view: DesktopView,
+  tasks: readonly DesktopShellTask[],
+  projects: readonly DesktopShellProject[],
+): { kind: "task" | "project"; name: string } | undefined {
+  if (view.view === "task") {
+    const name = tasks.find((task) => task.taskId === view.taskId)?.name;
+    return name === undefined ? undefined : { kind: "task", name };
+  }
+  if (view.view === "project") {
+    const name = projects.find((project) => project.id === view.projectId)?.name;
+    return name === undefined ? undefined : { kind: "project", name };
+  }
+  return undefined;
 }
 
 /** Nav wording, shared so pages and the shell cannot drift apart. */
