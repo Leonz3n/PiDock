@@ -149,6 +149,17 @@ describe("#15 Windows x64 installer asset is MSI (ADR 0004)", () => {
     // is why the previous block's intent cannot be carried over verbatim.
     expect(MSI_OPTION_KEYS).not.toContain("allowToChangeInstallationDirectory");
     expect(illegalMsiOptionKeys(Object.keys(config.msi))).toEqual([]);
+    // The allow-list check above is one-directional: it only proves that every key
+    // the config *does* carry is legal, so deleting a key that carries the intent
+    // keeps it green while the MSI silently falls back to the builder's default
+    // (`oneClick: true` — a one-click installer).
+    // ADR 0004 preserves the previous NSIS block's intent, so pin that intent here:
+    // assisted (not one-click) install and per-user scope. Delete either key and this
+    // assertion fails.
+    expect(config.msi).toMatchObject({ oneClick: false, perMachine: false });
+    // The artifact name may be renamed freely; what the handoff depends on is that it
+    // follows the real target extension instead of a hard-coded one.
+    expect(config.msi.artifactName).toMatch(/\$\{ext\}$/);
   });
 
   it("rejects an MSI block that carries an NSIS-only key, naming it", () => {

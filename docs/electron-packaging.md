@@ -100,7 +100,7 @@ pnpm --filter @pidock/shell package:win          # = electron-builder --config e
    `Get-FileHash .\PiDock-<version>-x64.msi -Algorithm SHA256`。
 2. 签名：`Get-AuthenticodeSignature .\PiDock-<version>-x64.msi | Format-List Status, SignerCertificate`。
    未配置代码签名证书时它必然报 `NotSigned`——这是当前状态、不是失败；只有正式发布才要求有效的 Authenticode 签名。
-3. 安装：双击 MSI。预期：出现交互式向导（`oneClick:false`）、安装范围为**当前用户**（`perMachine:false`）、无需管理员提升。安装后从开始菜单／桌面快捷方式启动 PiDock，确认主窗口正常打开并可退出。
+3. 安装：双击 MSI。预期：出现交互式向导（`oneClick:false`），并显示**安装范围选择页**——`oneClick:false` 时 WiX UI 同时启用 `WixUISupportPerUser` 与 `WixUISupportPerMachine`（已安装 builder 的 `templates/msi/template.xml:46-51,61-74`）。**默认**是安装范围为**当前用户**（`perMachine:false`）、无需管理员提升；若在向导中选择“为所有用户安装”，则按 per-machine 安装并出现 UAC 提升提示（这是正常路径，不是失败）。安装后从开始菜单／桌面快捷方式启动 PiDock，确认主窗口正常打开并可退出。
 4. 卸载：设置 → 应用 → 已安装的应用 → PiDock → 卸载；确认应用目录与快捷方式消失，且用户数据（工作区、配置、会话）按规格保留。
 5. 升级：先安装**同一 `appId`（`com.pidock.desktop`）的旧版本 MSI**，再安装新版本 MSI。预期：覆盖升级成功、应用内版本更新、用户数据保留、不出现并列安装。`upgradeCode` 由 `appId` 推导、没有写死（见 ADR 0004），所以 `appId` 一变升级身份就变。
 
