@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Separator } from "./ui/separator";
@@ -403,6 +403,15 @@ function TreeList({
 }
 
 /**
+ * A Host string that is absent or blank is NAMED, never substituted — and in
+ * particular never by the root's label, which is a root's own identity and not
+ * a repository's or a linked directory's.
+ */
+function hostText(value: string | undefined, absent: string): string {
+  return value !== undefined && value.length > 0 ? value : absent;
+}
+
+/**
  * [PiDock 10] (#15 盒子 2/9) 每视图归属. The task and the repository — or a
  * linked directory's own identity — exactly as the Host stated them in THIS
  * view's `attribution`, repeated beside the tree, the preview and the diff, so
@@ -410,12 +419,14 @@ function TreeList({
  * follows `rootKind`, so a link root is never presented as a worktree; a
  * shared-directory view additionally discloses the unified pi working
  * directory, where the link lives and the original target it writes through to.
- * Every value comes from the payload; nothing here is derived or defaulted.
+ * Every value comes from the payload; nothing here is derived or defaulted, and
+ * an identity the Host did not state is named as absent instead of being filled
+ * in with the root label.
  */
 function ViewAttribution({ label, attribution, testId }: { label: string; attribution: WorkspaceAttributionView; testId: string }) {
   const identity = attribution.rootKind === "worktree"
-    ? `仓库 ${attribution.repo ?? attribution.rootLabel}`
-    : `普通目录链接 ${attribution.directoryId ?? attribution.rootLabel}`;
+    ? `仓库 ${hostText(attribution.repo, "Host 未上报仓库身份")}`
+    : `普通目录链接 ${hostText(attribution.directoryId, "Host 未上报链接目录身份")}`;
   return (
     <div className="text-[10px] text-muted" data-testid={testId} data-root-kind={attribution.rootKind}>
       <p>
@@ -427,15 +438,15 @@ function ViewAttribution({ label, attribution, testId }: { label: string; attrib
           <dd className="min-w-0 break-all font-mono" data-testid="dock-shared-pi-work-dir">{attribution.piWorkDir}</dd>
           <dt>链接位置</dt>
           <dd className="min-w-0 break-all font-mono" data-testid="dock-shared-link-path">
-            {attribution.linkPath && attribution.linkPath.length > 0 ? attribution.linkPath : "Host 未上报链接位置"}
+            {hostText(attribution.linkPath, "Host 未上报链接位置")}
           </dd>
           <dt>原始目标</dt>
           <dd className="min-w-0 break-all font-mono" data-testid="dock-shared-source-path">
-            {attribution.sourcePath && attribution.sourcePath.length > 0 ? attribution.sourcePath : "Host 未记录原始目标"}
+            {hostText(attribution.sourcePath, "Host 未记录原始目标")}
           </dd>
           <dt>写入影响</dt>
           <dd className="min-w-0 break-all" data-testid="dock-shared-note">
-            {attribution.sharedNote && attribution.sharedNote.length > 0 ? attribution.sharedNote : "Host 未上报共享目录说明"}
+            {hostText(attribution.sharedNote, "Host 未上报共享目录说明")}
           </dd>
         </dl>
       )}
@@ -480,6 +491,20 @@ function DeliveryTargetReadout({ target }: { target: WorkspaceDeliveryView }) {
   );
 }
 
+/**
+ * [PiDock 10] (#15 盒子 2) 过期的根不许冒充当前根. One answer may be shown only
+ * when BOTH the request it answers and the payload it carries name the root the
+ * user has selected NOW; `askedRoot` is the root the read was made for and
+ * `declaredRoot` is the `attribution.rootId` the payload itself states (absent
+ * on a refusal, where the request is the only evidence there is). A tree,
+ * preview, diff or delivery answer for a root the user already left is DROPPED —
+ * never rendered under the current root's chip, because one repository must
+ * never be shown as another's.
+ */
+function answerIsForRoot(askedRoot: string, currentRoot: string | undefined, declaredRoot: string | undefined): boolean {
+  return currentRoot === askedRoot && (declaredRoot === undefined || declaredRoot === askedRoot);
+}
+
 function FilesTool({ taskId }: { taskId: string }) {
   const [roots, setRoots] = useState<WorkspaceRootView[] | null>(null);
   const [rootId, setRootId] = useState<string | undefined>(undefined);
@@ -497,18 +522,29 @@ function FilesTool({ taskId }: { taskId: string }) {
   const [editorError, setEditorError] = useState<string | null>(null);
   /** The launch is its own in-flight state: it is not a file read. */
   const [editorBusy, setEditorBusy] = useState(false);
+  /**
+   * The root the panel last ASKED for, written synchronously in `selectRoot`.
+   * `rootId` is state (applied asynchronously), so an answer is checked against
+   * this ref instead: it is the only value that is already current when a late
+   * response arrives.
+   */
+  const selectedRootRef = useRef<string | undefined>(undefined);
 
   const loadTree = useCallback(
     async (nextRootId: string, nextRelative: string) => {
       setBusy(true);
       const result = await fileTreeThroughShell({ taskId, rootId: nextRootId, relative: nextRelative || undefined });
+      const view = result.ok ? workspaceTreeFromHost(result.payload) : undefined;
+      // An answer for another root — or for a root the user has already left —
+      // is not this panel's data: drop it (the reading label stays up until the
+      // current root's own answer arrives).
+      if (!answerIsForRoot(nextRootId, selectedRootRef.current, view?.attribution.rootId)) return;
       setBusy(false);
       if (!result.ok) {
         setTree(null);
         setError(shellFailure(result, "读取目录失败"));
         return;
       }
-      const view = workspaceTreeFromHost(result.payload);
       if (!view) {
         setTree(null);
         setError("Host 目录响应无法解析");
@@ -531,12 +567,15 @@ function FilesTool({ taskId }: { taskId: string }) {
   const loadDelivery = useCallback(
     async (nextRootId: string) => {
       const result = await deliveryInfoThroughShell({ taskId, rootId: nextRootId });
+      const view = result.ok ? workspaceDeliveryFromHost(result.payload) : undefined;
+      // Same rule as the tree: a target that belongs to another root (or to a
+      // root the user has left) is never shown under the current chip.
+      if (!answerIsForRoot(nextRootId, selectedRootRef.current, view?.attribution.rootId)) return;
       if (!result.ok) {
         setDelivery(null);
         setDeliveryNotice(shellFailure(result, "读取交付目标失败"));
         return;
       }
-      const view = workspaceDeliveryFromHost(result.payload);
       if (!view) {
         setDelivery(null);
         setDeliveryNotice("Host 交付目标响应无法解析");
@@ -551,6 +590,9 @@ function FilesTool({ taskId }: { taskId: string }) {
   /** Select one root: its tree and its delivery target are this root's own reads. */
   const selectRoot = useCallback(
     async (nextRootId: string) => {
+      // Written FIRST and synchronously, before the awaits below: from here on
+      // every answer of the previous root is refused as stale.
+      selectedRootRef.current = nextRootId;
       setRootId(nextRootId);
       setRelative("");
       setPreview(null);
@@ -597,8 +639,11 @@ function FilesTool({ taskId }: { taskId: string }) {
 
   const openFile = async (path: string) => {
     if (!rootId) return;
+    const askedRoot = rootId;
     setBusy(true);
-    const result = await filePreviewThroughShell({ taskId, rootId, relative: path });
+    const result = await filePreviewThroughShell({ taskId, rootId: askedRoot, relative: path });
+    const view = result.ok ? workspacePreviewFromHost(result.payload) : undefined;
+    if (!answerIsForRoot(askedRoot, selectedRootRef.current, view?.attribution.rootId)) return;
     setBusy(false);
     if (!result.ok) {
       setPreview(null);
@@ -606,7 +651,6 @@ function FilesTool({ taskId }: { taskId: string }) {
       setError(shellFailure(result, "读取文件失败"));
       return;
     }
-    const view = workspacePreviewFromHost(result.payload);
     if (!view) {
       setPreview(null);
       setError("Host 文件响应无法解析");
@@ -619,15 +663,17 @@ function FilesTool({ taskId }: { taskId: string }) {
 
   const openDiff = async () => {
     if (!rootId || !preview) return;
+    const askedRoot = rootId;
     setBusy(true);
-    const result = await fileDiffThroughShell({ taskId, rootId, relative: preview.path });
+    const result = await fileDiffThroughShell({ taskId, rootId: askedRoot, relative: preview.path });
+    const view = result.ok ? workspaceDiffFromHost(result.payload) : undefined;
+    if (!answerIsForRoot(askedRoot, selectedRootRef.current, view?.attribution.rootId)) return;
     setBusy(false);
     if (!result.ok) {
       setDiff(null);
       setError(shellFailure(result, "读取改动失败"));
       return;
     }
-    const view = workspaceDiffFromHost(result.payload);
     if (!view) {
       setDiff(null);
       setError("Host 改动响应无法解析");
@@ -638,6 +684,17 @@ function FilesTool({ taskId }: { taskId: string }) {
   };
 
   const selectedRoot = roots?.find((root) => root.id === rootId);
+  /**
+   * [PiDock 10] (#15 盒子 9) "a link/plain directory has no Git delivery target"
+   * is enforced HERE, not only by the Host rule: a target the Host sent for a
+   * root that is not a worktree is refused BY NAME. It is not a blank and not
+   * "响应无法解析" — the payload parsed fine, the panel simply may not show a
+   * target where none can exist.
+   */
+  const linkDeliveryRefusal = delivery !== null && delivery.attribution.rootKind !== "worktree"
+    ? "Host 交付目标与根类型不符：普通目录链接没有 Git 交付，本面板不显示"
+    : null;
+  const deliveryNoticeText = deliveryNotice ?? linkDeliveryRefusal;
 
   /**
    * [PiDock 10] (#15 box 28) 从任务打开外部编辑器. The page names the task and the
@@ -647,15 +704,19 @@ function FilesTool({ taskId }: { taskId: string }) {
    */
   const openEditor = async () => {
     if (!rootId) return;
+    const askedRoot = rootId;
     setEditorBusy(true);
-    const result = await openTaskEditorThroughShell({ taskId, rootId });
+    const result = await openTaskEditorThroughShell({ taskId, rootId: askedRoot });
+    const view = result.ok ? externalEditorLaunchFromHost(result.payload) : undefined;
+    // The receipt names the root it opened: a launch for a root the user has
+    // left is dropped too, so this panel never shows another root's path.
+    if (!answerIsForRoot(askedRoot, selectedRootRef.current, view?.attribution.rootId)) return;
     setEditorBusy(false);
     if (!result.ok) {
       setEditor(null);
       setEditorError(shellFailure(result, "打开外部编辑器失败"));
       return;
     }
-    const view = externalEditorLaunchFromHost(result.payload);
     if (!view) {
       setEditor(null);
       setEditorError("Host 外部编辑器响应无法解析");
@@ -709,17 +770,18 @@ function FilesTool({ taskId }: { taskId: string }) {
             selectedId={rootId}
             onSelect={(next) => void selectRoot(next)}
           />
-          {/* [PiDock 10] (#15 盒子 7) the Host's delivery target for the selected
+          {/* [PiDock 10] (#15 盒子 7/9) the Host's delivery target for the selected
               root, or the Host's own refusal. A link root gets the refusal and
-              NO Git affordance; a worktree root gets the disclosed target. */}
-          {delivery && <DeliveryTargetReadout target={delivery} />}
-          {deliveryNotice && (
+              NO Git affordance; a worktree root gets the disclosed target — a
+              target that names any other root kind is refused by name below. */}
+          {delivery && delivery.attribution.rootKind === "worktree" && <DeliveryTargetReadout target={delivery} />}
+          {deliveryNoticeText && (
             <p
               role="status"
               className="border border-[#e5d9b0] bg-[#fdfbf3] px-2 py-1.5 text-[11px] text-[#7a5c1f]"
               data-testid="dock-delivery-notice"
             >
-              {deliveryNotice}
+              {deliveryNoticeText}
             </p>
           )}
           <div className="flex items-center gap-2">
