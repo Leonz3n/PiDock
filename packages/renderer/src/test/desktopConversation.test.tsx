@@ -538,6 +538,29 @@ describe("Desktop SDK conversation", () => {
     expect(await screen.findByText(/已取消/)).toBeInTheDocument();
   });
 
+  it("names a selected profile whose own name and model the Host left blank instead of a bare separator", async () => {
+    // `parseProviderStatus` (`data/providerProfile.ts:37`) checks only
+    // `typeof === "string" && length <= 2048` for `name`/`modelId`, so a SELECTED
+    // profile can carry two blanks; the composer label used to be exactly ` · `.
+    const profileStatus = (name: string, modelId: string) => ({
+      state: "configured",
+      profileId: "p-11111111-2222-3333-4444-555555555555",
+      generation: 1,
+      profiles: [{ id: "p-11111111-2222-3333-4444-555555555555", name, baseUrl: "https://models.example.test/v1", modelId, contextWindow: 128000, maxTokens: 8192, authRef: "PIDOCK_PROVIDER_EXAMPLE", generation: 1, credentialAvailable: true }],
+    });
+    const blank = setup();
+    blank.bridge.providerOp = vi.fn(async () => ({ ok: true, payload: profileStatus("", "") }));
+    const first = mount(blank);
+    // The exact text, so a dangling ` · ` cannot hide behind a substring match.
+    await waitFor(() => expect(screen.getByTestId("composer-model").textContent).toBe("Host 未上报配置名称 · Host 未上报模型标识"));
+    first.unmount();
+    const real = setup();
+    real.bridge.providerOp = vi.fn(async () => ({ ok: true, payload: profileStatus("Local gateway", "gpt-5-mini") }));
+    mount(real);
+    await waitFor(() => expect(screen.getByTestId("composer-model").textContent).toBe("Local gateway · gpt-5-mini"));
+    expect(screen.queryByText(/Host 未上报/)).toBeNull();
+  });
+
   it("shows the reasoning tier the Host reports and names the read as 未读取 until it answers", async () => {
     const f = setup();
     let release: ((value: { ok: true; payload: unknown }) => void) | undefined;

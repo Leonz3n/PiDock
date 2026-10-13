@@ -14,6 +14,7 @@ import { parseLifecycle } from "./DesktopArchivePage";
 import { DesktopToolDock, DESKTOP_TOOLS_UNWIRED, type DesktopTool } from "./DesktopToolDock";
 import { DesktopTaskSources } from "./DesktopTaskSources";
 import { BrandMark, LocalUserAvatar } from "./ui";
+import { hostText } from "../data/workspaceFiles";
 
 const sessionId = SDK_SESSION_ID;
 type Turn = { taskId: string; sessionId: string; requestId: string; turnId: string; state: "accepted" | "done" | "cancelled" | "failed" | "interrupted"; error?: string; needsResync: boolean };
@@ -345,7 +346,11 @@ function TaskConversation({ taskId, name, roots, association, onBack, onOpenProv
     return () => { live = false; };
   }, [taskId]);
   const selectedProfile = provider?.state === "configured" ? provider.profiles.find((entry) => entry.id === provider.profileId) : undefined;
-  const modelLabel = selectedProfile ? `${selectedProfile.name} · ${selectedProfile.modelId}` : provider ? "未配置模型" : "正在读取模型";
+  const modelLabel = selectedProfile
+    // The profile's OWN name and model identity: a blank one is named here, so a
+    // selected profile never renders as a bare ` · `.
+    ? `${hostText(selectedProfile.name, "Host 未上报配置名称")} · ${hostText(selectedProfile.modelId, "Host 未上报模型标识")}`
+    : provider ? "未配置模型" : "正在读取模型";
   // [UI 对齐 S8c] #47: 推理 and 上下文 are read from the Host's own session state
   // (`task/sessionContext`), which the demo path has used since [PiDock 11] #9 and
   // which the shipped composer wrongly called 未接线. The attempt counter makes a

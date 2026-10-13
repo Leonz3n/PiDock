@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { DesktopTaskSources } from "../components/DesktopTaskSources";
 import type { PidockBridge } from "../data/shellBridge";
 
@@ -314,6 +314,38 @@ describe("Desktop append surface", () => {
     fireEvent.click(await screen.findByRole("checkbox", { name: "Documents" }));
     expect(screen.getByRole("button", { name: /追加目录/ })).toBeDisabled();
     expect(appendTaskRepos).not.toHaveBeenCalled();
+  });
+
+  it("names a blank source name and path instead of an unnamed row and an empty label", async () => {
+    // `loadDesktopProjects` → `source()` (`data/desktopProjects.ts:38-41`)
+    // type-checks `name`/`path` (only `id` must be non-empty), so a blank pair is
+    // a reachable Host payload for both a repository and a plain directory.
+    const blankRepo = { id: "dad5fcb4-c91f-4ab0-bc33-fbb82053f871", name: "", path: "" };
+    const blankDir = { id: "e2eb192a-108b-4f9b-89a4-cd1fd8fb1fd0", name: "", path: "" };
+    const projectOp = vi.fn(async (request: { op: string }) => request.op === "list"
+      ? { ok: true, payload: { initialized: true, projects: [{ id: projectId, name: "Real", description: "", repositories: [blankRepo], directories: [blankDir] }] } }
+      : { ok: true, payload: { roots, tasks: [{ taskId, projectId, state: "assigned" }] } });
+    const blankView = render(<DesktopTaskSources taskId={taskId} bridge={withBridge(bridge({ projectOp: projectOp as unknown as PidockBridge["projectOp"] }))} onClose={vi.fn()} />);
+    const repositories = await screen.findByRole("group", { name: /选择要追加的仓库/ });
+    const repoRow = within(repositories).getByRole("checkbox").closest("label")!;
+    expect(repoRow.querySelector("strong")!.textContent).toBe("Host 未上报来源名称");
+    expect(repoRow.querySelector("small")!.textContent).toBe("Host 未上报来源路径");
+    const directories = screen.getByRole("group", { name: /选择要追加的普通目录/ });
+    const dirRow = within(directories).getByRole("checkbox").closest("label")!;
+    expect(dirRow.querySelector("strong")!.textContent).toBe("Host 未上报来源名称");
+    expect(dirRow.querySelector("small")!.textContent).toBe("Host 未上报来源路径");
+    // The control that selects a source is named by the same read, so a blank
+    // row is not an unnamed checkbox either.
+    expect(within(repositories).getByRole("checkbox", { name: /Host 未上报来源名称/ })).toBeInTheDocument();
+    // A real name still renders as itself (the two sources above are the only
+    // ones this payload carried).
+    blankView.unmount();
+    const namedProject = vi.fn(async (request: { op: string }) => request.op === "list"
+      ? { ok: true, payload: { initialized: true, projects: [{ id: projectId, name: "Real", description: "", repositories: [first], directories: [] }] } }
+      : { ok: true, payload: { roots, tasks: [{ taskId, projectId, state: "assigned" }] } });
+    render(<DesktopTaskSources taskId={taskId} bridge={withBridge(bridge({ projectOp: namedProject as unknown as PidockBridge["projectOp"] }))} onClose={vi.fn()} />);
+    const web = await screen.findByRole("checkbox", { name: "Web" });
+    expect(web.closest("label")).toHaveTextContent("/local/web");
   });
 
   it("states the real ordering instead of claiming one all-or-nothing append step", async () => {

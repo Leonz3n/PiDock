@@ -1,3 +1,4 @@
+import { hostText } from "./workspaceFiles";
 import type { PidockBridge } from "./shellBridge";
 import { listDesktopTasks, type DesktopTaskInventory } from "./desktopInventory";
 
@@ -34,6 +35,15 @@ function object(value: unknown): value is Record<string, unknown> {
 function exact(value: Record<string, unknown>, fields: string[]): boolean {
   return Object.keys(value).sort().join(",") === fields.sort().join(",");
 }
+
+/**
+ * The name and the path one registered source is identified by: `source()` below
+ * type-checks both (only `id` must be non-empty), so a blank one IS a reachable
+ * Host payload. Naming it here is what keeps an empty label, an empty row and an
+ * empty 「」 pair out of every surface that lists project sources.
+ */
+export const sourceName = (source: ProjectSource): string => hostText(source.name, "Host 未上报来源名称");
+export const sourcePath = (source: ProjectSource): string => hostText(source.path, "Host 未上报来源路径");
 function source(value: unknown): ProjectSource {
   if (!object(value) || !exact(value, ["id", "name", "path"]) ||
       typeof value.id !== "string" || !value.id || typeof value.name !== "string" ||

@@ -94,6 +94,39 @@ describe("[PiDock 03] (#6 box 12) blank Project and source names", () => {
     expect(card).toHaveTextContent("Host 未上报更新时间");
   });
 
+  it("names a blank project name in the delete confirmation instead of an empty 「」 pair", async () => {
+    window.pidock = bridge(projectWith("", "", { name: "Web", path: "/private/work/web" }));
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    render(<App />);
+    await screen.findByTestId("desktop-project-overview");
+    fireEvent.click(screen.getByRole("button", { name: "项目管理" }));
+    const inventory = within(await screen.findByTestId("desktop-inventory"));
+    fireEvent.click(inventory.getByRole("button", { name: "Host 未上报项目名称" }));
+    fireEvent.click(inventory.getByRole("button", { name: "删除" }));
+    // The confirmation names the project it deletes; `project.name` alone is a
+    // blank, so guessing which project is being removed was the reader's job.
+    expect(confirm).toHaveBeenCalledWith("删除项目「Host 未上报项目名称」？关联任务必须先解绑或转移。");
+  });
+
+  it("names the blank project a reassignment list offers instead of an empty choice", async () => {
+    const named = projectWith("真实项目", "系统 A", { name: "Web", path: "/private/work/web" });
+    const blank = { ...projectWith("", "", { name: "Web", path: "/private/work/web" }), id: "3f8e1c02-77aa-4d1e-8b60-2a9c9d0f1b23" };
+    window.pidock = {
+      ...bridge(named),
+      projectOp: vi.fn(async (request: { op: string }) => request.op === "list"
+        ? { ok: true, payload: { initialized: true, projects: [named, blank] } }
+        : { ok: true, payload: { roots, tasks: [{ taskId: TASK_ID, projectId: named.id, state: "assigned" }] } }),
+    } as unknown as PidockBridge;
+    render(<App />);
+    await screen.findByTestId("desktop-project-overview");
+    fireEvent.click(screen.getByRole("button", { name: "项目管理" }));
+    const inventory = within(await screen.findByTestId("desktop-inventory"));
+    fireEvent.click(inventory.getByRole("button", { name: "真实项目" }));
+    // The task row's 目标项目 list offers the OTHER project; a blank name used to
+    // be an empty, unreadable choice in that list.
+    expect(await inventory.findByRole("option", { name: "Host 未上报项目名称" })).toBeInTheDocument();
+  });
+
   it("still renders the real project and source names this payload carried", async () => {
     window.pidock = bridge(projectWith("真实项目", "系统 A", { name: "Web", path: "/private/work/web" }));
     render(<App />);

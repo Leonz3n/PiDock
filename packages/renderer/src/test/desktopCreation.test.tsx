@@ -60,6 +60,24 @@ describe("Desktop task creation", () => {
     expect(preview).toHaveTextContent("Host 未上报目录名称 · Host 未上报目录路径 → " + blank.taskDir + "/Host 未上报链接名（共享可写）");
   });
 
+  it("names a blank project source in the source list instead of an empty label or a bare separator", async () => {
+    // `source()` (`data/desktopProjects.ts:38`) type-checks a source's `name` and
+    // `path`, so this `DesktopProject` (the same reader DesktopInventory and
+    // append surface read) can carry blanks; the picker used to render an empty
+    // repo label and a ` · `-shaped directory label.
+    const blankProject: DesktopProject = {
+      ...project,
+      repositories: [{ ...project.repositories[0]!, name: "", path: "" }],
+      directories: [{ ...project.directories[0]!, name: "", path: "" }],
+    };
+    render(<DesktopTaskCreation project={blankProject} bridge={bridge(vi.fn(async () => ({ ok: true, payload: null })))} onCreated={async () => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: "任务" }));
+    const [repo, dir] = screen.getAllByRole("checkbox");
+    expect(repo!.closest("label")).toHaveTextContent("Host 未上报来源名称");
+    expect(repo!.closest("div")!.querySelector("span")).toHaveTextContent("Host 未上报来源路径");
+    expect(dir!.closest("label")).toHaveTextContent("Host 未上报来源名称 · Host 未上报来源路径");
+  });
+
   it.each(["cancel", "error"] as const)("retains selected inputs after picker/prepare %s and previews the same request on retry", async (outcome) => {
     let attempts = 0;
     const createTask = vi.fn(async (request: { op: string; input?: unknown; id?: string }) => {
