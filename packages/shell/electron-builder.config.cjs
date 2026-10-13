@@ -40,6 +40,23 @@ module.exports = {
   // inside app.asar; production forks dist/host/host-entry.js. Test-only
   // Provider harnesses under scripts/ are excluded from packaged files.
   files: ["dist/**/*", "package.json"],
+  // The pinned node-pty payload must be a real file on disk: the Host preflight
+  // opens it with O_NOFOLLOW, re-checks fstat, and pins size + sha256 + mode
+  // (src/host/node-pty-preflight.ts). This pins the extraction of that payload
+  // explicitly instead of relying on builder's smart-unpack heuristic
+  // (app-builder-lib/out/asar/unpackDetector.js unpacks a module wholesale once
+  // any file in it is a `.node` carrier).
+  asarUnpack: ["node_modules/node-pty/**"],
+  // Nothing may rebuild the native payload. `@electron/rebuild` compiles node-pty
+  // from source into `<package>/build/Release/{pty.node,spawn-helper}` - which
+  // node-pty's own loader prefers over `prebuilds/<platform>-<arch>`
+  // (node-pty/lib/utils.js) and which the preflight refuses as a competing loader
+  // directory - so a rebuilt package ships an unpinned addon the terminal then
+  // refuses to load. node-pty 1.1.0 is N-API (node-addon-api ^7.1.0) and ships the
+  // pinned darwin-arm64 prebuild; @earendil-works/pi-tui resolves N-API through
+  // dlsym (native/napi.h) and ships its own prebuilds, so neither needs an
+  // Electron-ABI rebuild. Re-enabling this silently breaks the built-in terminal.
+  npmRebuild: false,
   electronDist: wantsWindows ? undefined : localElectronDist,
   mac: {
     target: [{ target: "dmg", arch: ["arm64"] }],

@@ -57,7 +57,7 @@ export GLOBAL_AGENT_HTTP_PROXY=http://127.0.0.1:10808
 | pnpm store | v11 | `~/Library/pnpm/store/v11` | 459M | 全部 |
 | npm cache | — | `~/.npm` | 529M | 全部（备用） |
 | Electron 头文件 | 44.4.3 | `~/.electron-gyp/44.4.3` | 2M | 原生模块 |
-| node-pty（已针对 Electron 44 ABI 重编译） | 1.1.0 | `~/Library/pnpm/store/v11` | — | 10 |
+| node-pty（自带全平台 prebuild；**不针对 Electron ABI 重编译**） | 1.1.0 | `~/Library/pnpm/store/v11` | — | 10 |
 | pi SDK 及 6 个子包 | 0.87.0 | pnpm store / npm cache | — | 02、11、12、13 |
 | better-sqlite3（tarball 自带全平台 prebuild） | 13.0.3 | pnpm store / npm cache | — | 持久化 |
 | electron-builder / @electron/rebuild / electron-vite / vite / TypeScript / Playwright 测试库 | 见下表 | pnpm store / npm cache | — | 01、15 |
@@ -82,14 +82,14 @@ export GLOBAL_AGENT_HTTP_PROXY=http://127.0.0.1:10808
 }
 ```
 
-`electron --version`、`tsc --version`、`electron-builder --version`、`playwright --version`、pi SDK 导入与 `electron-rebuild -w node-pty` 均已实测通过。
+`electron --version`、`tsc --version`、`electron-builder --version`、`playwright --version`、pi SDK 导入与 `electron-rebuild -w node-pty`（仅预热实测能力；产品不启用，见「关键发现」第 4 条）均已实测通过。
 
 ## 关键发现
 
 1. **Electron 44 移除了 `postinstall`**，改为提供 `install-electron` bin。包管理器安装后不会自动下载二进制，必须显式执行 `node node_modules/electron/install.js`，否则要到首次启动才暴露缺失。
 2. **pnpm 11 不再读取 `package.json` 的 `pnpm.onlyBuiltDependencies`**，构建脚本白名单要写在 `pnpm-workspace.yaml` 的 `allowBuilds`。默认情况下 electron、esbuild、node-pty、`@swc/core` 的构建脚本会被跳过。
 3. **electron-vite 5.0.0 的 peer 是 `vite@^5||^6||^7`，而 Vite 最新为 8.3.0**。使用 npm 会直接 ERESOLVE 失败。实现时应固定 `vite@7.3.6`。
-4. **better-sqlite3 13.0.3 与 node-pty 1.1.0 都在 npm tarball 内自带多平台 prebuild**（含 `win32-x64`、`win32-arm64`），不需要从 GitHub 下载预编译产物。但 node-pty 需要针对 Electron ABI 重编译，已用 `@electron/rebuild` 验证可行。
+4. **better-sqlite3 13.0.3 与 node-pty 1.1.0 都在 npm tarball 内自带多平台 prebuild**（含 `win32-x64`、`win32-arm64`），不需要从 GitHub 下载预编译产物。**但 node-pty 不能针对 Electron ABI 重编译**：它是 N-API（`node-addon-api` ^7.1.0，已实测 darwin-arm64 `pty.node` 引用 38 个 `napi_*` 符号），打包用的就是 tarball 自带的 prebuild。`@electron/rebuild` 会把源码编译进 `<package>/build/Release/`，而 node-pty 的加载顺序（`lib/utils.js`）把 `build/Release` 排在 `prebuilds/<platform>-<arch>` 之前，终端预检（`packages/shell/src/host/node-pty-preflight.ts`）正是为此拒绝任何带竞争加载目录的包目录。所以 `packages/shell/electron-builder.config.cjs` 显式设 `npmRebuild: false`；重新打开它会让终端静默失效（ref #15）。
 5. **当前 Node 22.23.2 无需升级**：Electron 44 要求 `>=22.12`，pi SDK 要求 `>=22.19`，两者同时满足。
 6. 在无 GUI 权限的上下文中直接执行 Electron 二进制会 `SIGABRT`，这与缓存无关；校验版本需在允许启动 GUI 的环境执行。
 
@@ -99,7 +99,7 @@ export GLOBAL_AGENT_HTTP_PROXY=http://127.0.0.1:10808
 - electron-builder 首次打包所需的外部产物（Windows WiX、macOS dmg 组件、以及配置签名证书后才会用到的 winCodeSign），均从 GitHub 下载，经代理可用，待工单 15 需要时再拉取。
   - Windows 资产格式已按 [ADR 0004](adr/0004-windows-installer-msi-instead-of-nsis-exe.md)（2026-10-13）由 NSIS 单一 EXE 改为 MSI，所以首次 Windows 构建拉取的是 **WiX**（`4.0.0.5512.2`，`MsiTarget.js:73`），**不是 NSIS**。
   - **winCodeSign 不是无条件的**：MSI 目标在 `MsiTarget.js:84` 调 `signIf`，而未配置证书（也无自定义 `sign` 钩子）时 `codeSign/windowsSignToolManager.js:32,156` 会记 `no signing info identified, signing is skipped` 并直接返回 `false`，**不会**去取 signtool，因此也不会下载 winCodeSign。只有配置了签名证书时它才被拉取。
-  - 该 Windows 机器还需满足下面两项**期望，本机未验证**，首次 `package:win` 时逐项确认：① 能访问网络（WiX 与 win32-x64 的 Electron 二进制靠下载；配置签名证书时才是 WiX＋winCodeSign＋win32-x64 Electron）；② 若 electron-builder 默认的 rebuild 步骤执行，则需要可把 node-pty 重编译到 Electron ABI 的 Windows 构建工具链。
+  - 该 Windows 机器还需满足下面两项**期望，本机未验证**，首次 `package:win` 时逐项确认：① 能访问网络（WiX 与 win32-x64 的 Electron 二进制靠下载；配置签名证书时才是 WiX＋winCodeSign＋win32-x64 Electron）；② 不需要能重编译原生依赖的工具链：`packages/shell/electron-builder.config.cjs` 已设 `npmRebuild: false`（Node-API prebuild + 预检 pin，见「关键发现」第 4 条，ref #15），默认的 rebuild 步骤在 macOS 与 Windows 都不执行。若将来某个原生依赖确实需要 Electron ABI 重编译，它与预检的 pin 设计冲突（同类冲突还有代码签名改写原生字节，见 #15），需先决策再改。
 - Playwright Firefox / WebKit：产品只用 Electron 内嵌 Chromium，暂不需要。
 - 试点业务仓库自身的工具链（Go 服务、front-monorepo 的 pnpm 依赖）不属于本仓库预热范围。
 
