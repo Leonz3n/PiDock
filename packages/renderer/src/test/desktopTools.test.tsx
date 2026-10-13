@@ -1,6 +1,10 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DesktopToolDock } from "../components/DesktopToolDock";
+// The SHIPPED Host rules build this suite's stub payloads, so the assertions
+// pin the Host's own words/shapes instead of a hand-copied fixture
+// (`main/workspace-files.ts` is pure: no fs, no git, no Electron).
+import { deliveryTarget, workspaceAttribution, workspaceRoots } from "../../../shell/src/main/workspace-files.js";
 
 const attribution = {
   taskId: "task-1",
@@ -795,5 +799,182 @@ describe("[UI 对齐] S8d panel read inventory", () => {
         .filter((op) => ["task/controlService", "task/quit", "task/archive", "task/restore", "task/terminalControl", "task/runCleanup", "task/registerService"].includes(op));
       expect(writes).toEqual([]);
     }
+  });
+});
+
+/**
+ * [PiDock 10] (#15 盒子 2/7/9) the SHIPPED `FilesTool` must read the delivery
+ * target the Host already returns and render the per-view attribution it used
+ * to discard.
+ *
+ * The bridge stub answers with payloads built by the SHIPPED Host rules
+ * (`main/workspace-files.ts` `workspaceRoots` / `workspaceAttribution` /
+ * `deliveryTarget`), so the assertions below pin the Host's own words and
+ * shapes instead of a hand-copied fixture that could drift from them. The dock
+ * is mounted directly (the production component), never the demo shell.
+ */
+describe("[PiDock 10] (#15 盒子 2/7/9) 交付目标与每视图归属 on the shipped dock", () => {
+  const TASK_ID = "task-1";
+  const TASK_DIR = "/tmp/task-1";
+  const SHARED_LINK = "invoice-docs";
+  const SHARED_SOURCE = "/work/invoice-docs";
+
+  const readOnlyOps = ["task/fileRoots", "task/fileTree", "task/filePreview", "task/fileDiff", "task/deliveryInfo"];
+
+  /** The roots payload the Host really produces for a two-repo task with one link. */
+  const twoRepoRoots = () => workspaceRoots({
+    taskId: TASK_ID,
+    taskDir: TASK_DIR,
+    repos: ["repo-a", "repo-b"],
+    repoSources: [
+      { repoDir: "repo-a", remoteBranch: "release/v2", baseCommit: "aaaa1111" },
+      { repoDir: "repo-b", remoteBranch: "main", baseCommit: "bbbb2222" },
+    ],
+    dirLinks: [{ linkName: SHARED_LINK, directoryId: "dir-9f2a", sourcePath: SHARED_SOURCE }],
+  });
+
+  /** A task whose only root is the plain-directory link. */
+  const sharedOnlyRoots = () => workspaceRoots({
+    taskId: TASK_ID,
+    taskDir: TASK_DIR,
+    repos: [],
+    dirLinks: [{ linkName: SHARED_LINK, directoryId: "dir-9f2a", sourcePath: SHARED_SOURCE }],
+  });
+
+  /**
+   * The Host's answers for one set of roots: every read is scoped to the asked
+   * `rootId` and every attribution comes from the shipped rule function.
+   */
+  const hostReads = (roots: ReturnType<typeof workspaceRoots>, override?: { delivery?: unknown }) =>
+    async (_taskId: string, op: string, payload: Record<string, unknown>) => {
+      const root = roots.find((entry) => entry.id === payload["rootId"]) ?? roots[0]!;
+      const attribution = workspaceAttribution(root, TASK_ID, TASK_DIR);
+      const identity = attribution.repo ?? attribution.directoryId ?? attribution.rootLabel;
+      if (op === "task/fileRoots") return { ok: true, payload: { taskDir: TASK_DIR, roots } };
+      if (op === "task/fileTree") {
+        return { ok: true, payload: { tree: { attribution, path: "", entries: [{ name: "a.md", path: "a.md", kind: "file", size: 3 }], truncated: false } } };
+      }
+      if (op === "task/filePreview") {
+        return { ok: true, payload: { preview: { attribution, path: "a.md", language: "markdown", source: `# ${identity} 内容`, truncated: false, lineCount: 1 } } };
+      }
+      if (op === "task/fileDiff") {
+        return { ok: true, payload: { attribution, path: "a.md", diff: `- ${identity} 旧行\n+ 新行`, truncated: false } };
+      }
+      if (op === "task/deliveryInfo") {
+        if (override?.delivery !== undefined) return override.delivery as { ok: boolean; payload?: unknown; error?: string };
+        const target = deliveryTarget({ root, taskId: TASK_ID, taskDir: TASK_DIR });
+        return target.ok ? { ok: true, payload: { target: target.target } } : { ok: false, error: target.error };
+      }
+      return { ok: false, error: `unexpected ${op}` };
+    };
+
+  it("shows the Host's delivery repo, recorded branch and three false automation flags for a worktree root", async () => {
+    const roots = twoRepoRoots();
+    const taskOp = vi.fn(hostReads(roots));
+    bridge(taskOp);
+    render(<DesktopToolDock taskId={TASK_ID} tool="files" onClose={() => {}} />);
+
+    const readout = await screen.findByTestId("dock-delivery");
+    // The three fields the sentence is built from — the Host's own values, not
+    // a hard-coded claim.
+    expect(readout).toHaveAttribute("data-auto-commit", "false");
+    expect(readout).toHaveAttribute("data-auto-push", "false");
+    expect(readout).toHaveAttribute("data-auto-merge", "false");
+    expect(within(readout).getByTestId("dock-delivery-repo")).toHaveTextContent("repo-a");
+    expect(within(readout).getByTestId("dock-delivery-branch")).toHaveTextContent("release/v2");
+    expect(within(readout).getByTestId("dock-delivery-auto")).toHaveTextContent("不自动提交、不自动推送、不自动合并");
+
+    // Every value traces to a real read on the real route: one read per fact,
+    // all of them the #15 file ops, none of them a write.
+    expect(taskOp.mock.calls.map((call) => call[1])).toEqual(["task/fileRoots", "task/fileTree", "task/deliveryInfo"]);
+    expect(taskOp).toHaveBeenCalledWith(TASK_ID, "task/deliveryInfo", { rootId: "repo-a" });
+    expect(taskOp.mock.calls.map((call) => call[1]).every((op) => readOnlyOps.includes(op))).toBe(true);
+  });
+
+  it("names an unrecorded delivery branch instead of inventing one", async () => {
+    // No `repoSources` → the record has no baseline branch for this worktree.
+    const roots = workspaceRoots({ taskId: TASK_ID, taskDir: TASK_DIR, repos: ["repo-a"] });
+    bridge(hostReads(roots));
+    render(<DesktopToolDock taskId={TASK_ID} tool="files" onClose={() => {}} />);
+
+    const readout = await screen.findByTestId("dock-delivery");
+    expect(within(readout).getByTestId("dock-delivery-repo")).toHaveTextContent("repo-a");
+    expect(within(readout).getByTestId("dock-delivery-branch")).toHaveTextContent("Host 未记录远程基线分支");
+  });
+
+  it("shows the Host's plain-directory refusal, the write-through note and the original target, with no Git affordance", async () => {
+    const roots = sharedOnlyRoots();
+    const refusal = deliveryTarget({ root: roots[0]!, taskId: TASK_ID, taskDir: TASK_DIR });
+    expect(refusal.ok).toBe(false);
+    const taskOp = vi.fn(hostReads(roots));
+    bridge(taskOp);
+    render(<DesktopToolDock taskId={TASK_ID} tool="files" onClose={() => {}} />);
+
+    // The Host's refusal, verbatim.
+    expect(await screen.findByTestId("dock-delivery-notice")).toHaveTextContent(refusal.ok ? "" : refusal.error);
+    expect(screen.getByTestId("dock-delivery-notice")).toHaveTextContent("plain-dir-no-delivery");
+    expect(screen.queryByTestId("dock-delivery")).not.toBeInTheDocument();
+
+    // The link's own attribution: the write-through warning and the original target.
+    const tree = await screen.findByTestId("dock-tree-attribution");
+    expect(tree).toHaveAttribute("data-root-kind", "shared-dir");
+    expect(within(tree).getByTestId("dock-shared-note")).toHaveTextContent("修改影响原文件");
+    expect(within(tree).getByTestId("dock-shared-source-path")).toHaveTextContent(SHARED_SOURCE);
+    expect(within(tree).getByTestId("dock-shared-link-path")).toHaveTextContent(`${TASK_DIR}/${SHARED_LINK}`);
+    expect(within(tree).getByTestId("dock-shared-pi-work-dir")).toHaveTextContent(TASK_DIR);
+    // The DEMO panel's test ids (`ToolPanels.tsx` `shared-dir-note` /
+    // `delivery-target`) are not the shipped surface: this render must never
+    // show them, because that would mean the demo renderer was mounted here.
+    expect(screen.queryByTestId("shared-dir-note")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("delivery-target")).not.toBeInTheDocument();
+
+    // Opening a file shows the preview, but the Git diff affordance is not offered.
+    fireEvent.click(await screen.findByText("a.md"));
+    const preview = await screen.findByTestId("dock-preview-attribution");
+    expect(preview).toHaveAttribute("data-root-kind", "shared-dir");
+    expect(preview).toHaveTextContent("普通目录链接");
+    expect(screen.queryByRole("button", { name: "改动" })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("dock-diff")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("dock-diff-attribution")).not.toBeInTheDocument();
+  });
+
+  it("repeats each view's own repo attribution, so a two-repo task shows two different repos", async () => {
+    const roots = twoRepoRoots();
+    bridge(hostReads(roots));
+    render(<DesktopToolDock taskId={TASK_ID} tool="files" onClose={() => {}} />);
+
+    expect(within(await screen.findByTestId("dock-tree-attribution")).getByText(/仓库 repo-a/)).toBeInTheDocument();
+    fireEvent.click(await screen.findByText("a.md"));
+    expect(await screen.findByTestId("dock-preview-attribution")).toHaveTextContent("仓库 repo-a");
+    expect(screen.getByText("# repo-a 内容")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "改动" }));
+    expect(await screen.findByTestId("dock-diff-attribution")).toHaveTextContent("仓库 repo-a");
+    expect(screen.getByTestId("dock-diff")).toHaveTextContent("repo-a 旧行");
+
+    // Switch to the second repository: every view follows ITS payload.
+    fireEvent.click(screen.getByRole("button", { name: "repo-b" }));
+    fireEvent.click(await screen.findByText("a.md"));
+    expect(await screen.findByTestId("dock-preview-attribution")).toHaveTextContent("仓库 repo-b");
+    expect(screen.getByText("# repo-b 内容")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "改动" }));
+    expect(await screen.findByTestId("dock-diff-attribution")).toHaveTextContent("仓库 repo-b");
+    expect(screen.getByTestId("dock-diff")).toHaveTextContent("repo-b 旧行");
+    expect(within(screen.getByTestId("dock-diff-attribution")).queryByText(/repo-a/)).not.toBeInTheDocument();
+  });
+
+  it("names a malformed delivery payload instead of falling back to a sample target", async () => {
+    const roots = twoRepoRoots();
+    // The Host answered `ok` with a shape the renderer cannot use: no
+    // attribution and no automation flags. Nothing from it may be shown.
+    bridge(hostReads(roots, { delivery: { ok: true, payload: { target: { repo: "sample-repo", branch: "sample-branch" } } } }));
+    render(<DesktopToolDock taskId={TASK_ID} tool="files" onClose={() => {}} />);
+
+    expect(await screen.findByTestId("dock-delivery-notice")).toHaveTextContent("Host 交付目标响应无法解析");
+    expect(screen.queryByTestId("dock-delivery")).not.toBeInTheDocument();
+    expect(screen.queryByText(/sample-repo/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/sample-branch/)).not.toBeInTheDocument();
+    // The panel is not blank: the tree still renders beside the named error.
+    expect(screen.getByTestId("desktop-tool-dock")).toBeInTheDocument();
+    await screen.findByTestId("dock-tree-attribution");
   });
 });
