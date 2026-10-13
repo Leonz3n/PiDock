@@ -14,7 +14,7 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import {
@@ -22,6 +22,7 @@ import {
   WORKTREE_LOCK_STALE_TAKEOVER,
   WORKTREE_LOCK_TAKEOVER_SUFFIX,
   WorktreeMetadataLock,
+  sourceRepoLockKeys,
   type WorktreeLockAcquisition,
 } from "./worktree-metadata-lock.js";
 
@@ -48,6 +49,19 @@ function readRecord(file: string): Record<string, unknown> {
 
 function staleReceipts(directory: string): string[] {
   return existsSync(directory) ? readdirSync(directory).filter((name) => name.includes(".stale-")) : [];
+}
+
+/**
+ * The production lock KEY of one source checkout, derived through the exported
+ * production helper rather than hand-rolled. Production keys on
+ * `normalizeScopePath(realpathSync(checkout))`, which lowercases a drive letter
+ * and unifies separators, so a fixture hashing the raw real path would address a
+ * DIFFERENT `.lock` file on win32 (and the same one only by accident on POSIX).
+ */
+function sourceLockKey(repo: string): string {
+  const derived = sourceRepoLockKeys([repo]);
+  if (!derived.ok) throw new Error(derived.error);
+  return derived.keys[0]!;
 }
 
 /** A pid that is provably gone: a real child process that has already exited. */
@@ -87,7 +101,7 @@ describe("[PiDock 03] (#6 盒子 9) the repository-level worktree lock", () => {
     // Bounded: a held lock is refused in the same tick, never after a spin.
     expect(Date.now() - started).toBeLessThan(1_000);
     // The refusal changed nothing: the holder's record is still exactly there.
-    const file = held.fileFor(realpathSync(source));
+    const file = held.fileFor(sourceLockKey(source));
     expect(readRecord(file)["taskId"]).toBe("task-aaaaaaaa");
     expect(staleReceipts(join(profile, WORKTREE_LOCK_DIRECTORY))).toEqual([]);
 
@@ -102,12 +116,13 @@ describe("[PiDock 03] (#6 盒子 9) the repository-level worktree lock", () => {
   it("keys on the REAL path: a symlinked spelling of one repo contends, another repo does not", () => {
     const { home, source, other, profile } = setup();
     const alias = join(home, "alias");
-    symlinkSync(source, alias, "dir");
+    // win32: a plain directory symlink needs SeCreateSymbolicLinkPrivilege; a junction is the directory link this platform can create without it (#57).
+    symlinkSync(source, alias, process.platform === "win32" ? "junction" : "dir");
 
     const holder = new WorktreeMetadataLock(profile);
     const viaAlias = holder.acquireFor([alias], { taskId: "task-aaaaaaaa", label: "创建任务" });
     expect(viaAlias.ok).toBe(true);
-    expect(viaAlias.ok && viaAlias.keys).toEqual([realpathSync(source)]);
+    expect(viaAlias.ok && viaAlias.keys).toEqual([sourceLockKey(source)]);
     // Same repository through the other spelling: the same key, so it contends.
     const competing = new WorktreeMetadataLock(profile).acquireFor([source], { taskId: "task-bbbbbbbb", label: "创建任务" });
     expect(competing.ok).toBe(false);
@@ -129,7 +144,7 @@ describe("[PiDock 03] (#6 盒子 9) the repository-level worktree lock", () => {
     const lock = new WorktreeMetadataLock(profile);
     const acquisition = lock.acquireFor([source], { taskId: "task-aaaaaaaa", label: "创建任务" });
     expect(acquisition.ok).toBe(true);
-    const file = lock.fileFor(realpathSync(source));
+    const file = lock.fileFor(sourceLockKey(source));
     expect(file.startsWith(join(profile, WORKTREE_LOCK_DIRECTORY))).toBe(true);
     expect(existsSync(file)).toBe(true);
     // The key is hashed, so the app data directory does not even spell a path…
@@ -161,7 +176,7 @@ describe("[PiDock 03] (#6 盒子 9) the repository-level worktree lock", () => {
   it("releases on success, on a throwing critical section and twice", () => {
     const { source, profile } = setup();
     const lock = new WorktreeMetadataLock(profile);
-    const key = realpathSync(source);
+    const key = sourceLockKey(source);
     const file = lock.fileFor(key);
 
     const success = lock.acquireFor([source], { taskId: "task-aaaaaaaa", label: "创建任务" });
@@ -199,7 +214,7 @@ describe("[PiDock 03] (#6 盒子 9) the repository-level worktree lock", () => {
   it("names the stale policy: only a provably-gone owner is taken over, with a durable receipt and a notice", () => {
     const { source, profile } = setup();
     const directory = join(profile, WORKTREE_LOCK_DIRECTORY);
-    const key = realpathSync(source);
+    const key = sourceLockKey(source);
     const file = new WorktreeMetadataLock(profile).fileFor(key);
 
     // A live owner (a real, running process) is never stolen from: this test
@@ -245,7 +260,7 @@ describe("[PiDock 03] (#6 盒子 9) the repository-level worktree lock", () => {
     expect(both.ok).toBe(true);
     // Worktree metadata is PER REPOSITORY, so the key set never collapses the
     // nested repository into the outer one.
-    expect(both.ok && both.keys).toEqual([realpathSync(source), realpathSync(nested)]);
+    expect(both.ok && both.keys).toEqual([sourceLockKey(source), sourceLockKey(nested)]);
 
     // A task selecting ONLY the nested repository writes that repository's
     // `.git` (the `FETCH_HEAD` pin of the wrong baseline): it must contend.
@@ -273,7 +288,7 @@ describe("[PiDock 03] (#6 盒子 9) the repository-level worktree lock", () => {
   it("never evicts a live lock: a contender that already replaced the stale record keeps holding it", () => {
     const { source, profile } = setup();
     const directory = join(profile, WORKTREE_LOCK_DIRECTORY);
-    const key = realpathSync(source);
+    const key = sourceLockKey(source);
     const file = new WorktreeMetadataLock(profile).fileFor(key);
     mkdirSync(directory, { recursive: true });
     const stalePid = deadPid();
@@ -327,7 +342,7 @@ describe("[PiDock 03] (#6 盒子 9) the repository-level worktree lock", () => {
   it("refuses by name while another contender is already taking the stale lock over, and never steals its marker", () => {
     const { source, profile } = setup();
     const directory = join(profile, WORKTREE_LOCK_DIRECTORY);
-    const key = realpathSync(source);
+    const key = sourceLockKey(source);
     const file = new WorktreeMetadataLock(profile).fileFor(key);
     mkdirSync(directory, { recursive: true });
     const at = new Date(Date.now() - 3_000).toISOString();
@@ -360,7 +375,7 @@ describe("[PiDock 03] (#6 盒子 9) the repository-level worktree lock", () => {
   it("recovers a takeover marker whose owner is provably gone, so a crash during recovery cannot block the repository", () => {
     const { source, profile } = setup();
     const directory = join(profile, WORKTREE_LOCK_DIRECTORY);
-    const key = realpathSync(source);
+    const key = sourceLockKey(source);
     const file = new WorktreeMetadataLock(profile).fileFor(key);
     mkdirSync(directory, { recursive: true });
     writeFileSync(file, JSON.stringify({ version: 1, key, taskId: "task-deadbeef", label: "追加仓库", pid: deadPid(), at: new Date(Date.now() - 9_000).toISOString() }));
@@ -388,7 +403,7 @@ describe("[PiDock 03] (#6 盒子 9) the repository-level worktree lock", () => {
   it("refuses a takeover marker it cannot read instead of taking the stale lock over", () => {
     const { source, profile } = setup();
     const directory = join(profile, WORKTREE_LOCK_DIRECTORY);
-    const key = realpathSync(source);
+    const key = sourceLockKey(source);
     const file = new WorktreeMetadataLock(profile).fileFor(key);
     mkdirSync(directory, { recursive: true });
     writeFileSync(file, JSON.stringify({ version: 1, key, taskId: "task-deadbeef", label: "追加仓库", pid: deadPid(), at: new Date(Date.now() - 5_000).toISOString() }));
@@ -409,7 +424,7 @@ describe("[PiDock 03] (#6 盒子 9) the repository-level worktree lock", () => {
   it("refuses an unreadable lock record by name and never takes it over", () => {
     const { source, profile } = setup();
     const directory = join(profile, WORKTREE_LOCK_DIRECTORY);
-    const key = realpathSync(source);
+    const key = sourceLockKey(source);
     const file = new WorktreeMetadataLock(profile).fileFor(key);
     mkdirSync(directory, { recursive: true });
     writeFileSync(file, "{ this is not a lock record");
