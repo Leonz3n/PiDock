@@ -1,5 +1,5 @@
 import { expect, it, beforeEach, afterEach, vi } from "vitest";
-import { copyFileSync, chmodSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, chmodSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -255,5 +255,38 @@ posixIt.each(["unpinned-mode", "symlink"] as const)("refuses the packaged helper
     const before = statSync(f.helper).mode & 0o7777;
     expect(() => prepareNodePtyPrebuild(f.root, () => f.archiveEntryPath, f.resources)).toThrow("node-pty-preflight-unavailable");
     expect(statSync(f.helper).mode & 0o7777).toBe(before);
+  } finally { f.clean(); }
+});
+
+posixIt("Darwin arm64 symlinks: audits a packed app whose resources prefix is a symlink", () => {
+  const f = fixture("packed");
+  try {
+    // Only the app prefix is symlinked (/var/folders/... -> /private/var on
+    // macOS, or any bundle reached through a symlinked directory); the payload
+    // behind it is a real directory with the pinned bytes.
+    symlinkSync(f.root, join(f.root, "through-symlink"));
+    const resources = join(f.root, "through-symlink/PiDock.app/Contents/Resources");
+    expect(realpathSync(resources)).not.toBe(resources);
+    chmodSync(f.helper, 0o755);
+    // Both spellings of the archive member are the one audited file, so both are
+    // accepted: a packed app's resolver reports whichever prefix the archive was
+    // loaded through. A symlinked prefix must not re-create the refusal this
+    // layout was added to remove.
+    for (const entry of [f.archiveEntryPath, join(resources, "app.asar/node_modules/node-pty/lib/index.js")]) {
+      expect(inspectNodePtyPrebuild(f.root, () => entry, resources)).toMatchObject({ ready: true, entryPath: f.entryPath });
+    }
+  } finally { f.clean(); }
+});
+
+posixIt("Darwin arm64 symlinks: still refuses a symlinked payload directory under a resolved app prefix", () => {
+  const f = fixture("packed");
+  try {
+    chmodSync(f.helper, 0o755);
+    // Positive control: only the payload's path identity changes between the calls.
+    expect(inspectNodePtyPrebuild(f.root, () => f.archiveEntryPath, f.resources).entryPath).toBe(f.entryPath);
+    const moved = join(f.root, "moved-payload");
+    renameSync(f.path, moved); symlinkSync(moved, f.path);
+    expect(realpathSync(f.path)).toBe(moved);
+    expect(() => inspectNodePtyPrebuild(f.root, () => f.archiveEntryPath, f.resources)).toThrow("node-pty-preflight-unavailable");
   } finally { f.clean(); }
 });
