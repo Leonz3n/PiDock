@@ -359,7 +359,10 @@ export function ProjectServiceTemplates({ projectId, environmentId, environmentN
     setUncertain(false);
   };
 
-  const taskName = (taskId: string) => tasks.find((task) => task.taskId === taskId)?.name ?? taskId;
+  // `serviceTemplateUpdateFromMain` reads `restartNeeded[].taskId` by value and
+  // `restart.fencedTaskIds[]` through `textList`, so a blank id is a reachable
+  // Host payload: the name is NAMED here instead of rendering a bare `任务  的`.
+  const taskName = (taskId: string) => hostText(tasks.find((task) => task.taskId === taskId)?.name ?? taskId, "Host 未上报任务名称");
   const workdirLabel = (row: ServiceTemplateView) => row.descriptor.workdir ? `工作目录 ${row.descriptor.workdir}` : "工作目录 仓库根目录";
 
   return <section className="mt-8" aria-label="服务启动配方">

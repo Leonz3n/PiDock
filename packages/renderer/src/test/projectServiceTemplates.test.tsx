@@ -222,6 +222,24 @@ it("names a blank 共享变量差异 row and a blank restart-needed service inst
   expect(screen.getByText(/受影响：任务 任务甲 的 Host 未上报服务名称（v1 → v2）/)).toBeInTheDocument();
 });
 
+it("names a blank task id in the restart-needed row and in the revoked-control list", async () => {
+  // `serviceTemplateUpdateFromMain` reads `restartNeeded[].taskId` by value
+  // (`typeof === "string"`) and `restart.fencedTaskIds[]` through `textList`, so
+  // `""` is a reachable Host payload; both rows name the absence instead of
+  // printing `任务  的 API（v1 → v2）` or `服务控制：（…`.
+  const blank = { ...review,
+    restartNeeded: [{ taskId: "", serviceId, name: "API", from: 1, to: 2 }],
+    restart: { changed: true, processRestarted: false as const, fencedTaskIds: [""] } };
+  stub((request) => request["op"] === "list" ? { ok: true, payload: [saved] } : { ok: true, payload: blank });
+  render(<ProjectServiceTemplates projectId={projectId} environmentId={environmentId} tasks={[{ taskId: "task-1", name: "任务甲" }]} />);
+  await screen.findByText("共享变量：PORT");
+  fireEvent.click(screen.getByRole("button", { name: "编辑" }));
+  fireEvent.click(screen.getByRole("button", { name: "核对新版本" }));
+  expect(await screen.findByText(/受影响：任务 Host 未上报任务名称 的 API（v1 → v2）仍固定 v1/)).toBeInTheDocument();
+  expect(screen.getByText(/本次保存撤回了这些任务的服务控制：Host 未上报任务名称（启停会被拒绝为 service-owner-inventory-unconfirmed/)).toBeInTheDocument();
+  expect(screen.queryByText(/受影响：任务 {2}的 API/)).toBeNull();
+});
+
 it("refuses a confirmed write whose listed revision is not the one the page reviewed", async () => {
   let calls = 0;
   const serviceCatalogOp = stub((request) => {
