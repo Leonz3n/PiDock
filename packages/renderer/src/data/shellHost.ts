@@ -1319,6 +1319,8 @@ export function createShellHostAdapter(fallback: HostAdapter): HostAdapter {
  * Adapter selection: shell-backed when `window.pidock.taskOp` exists
  * (Electron shell), the memory fallback otherwise (Vite dev, tests).
  * Renderer-no-Node holds: this module only reads `window.pidock`.
+ *
+ * 规则（`docs/task-graph.md:92`）：Host 的拒绝按原文呈现，**只有壳确实未连接时才回落 memory 镜像**。
  */
 export function resolveHostAdapter(fallback: HostAdapter): HostAdapter {
   if (!isShellConnected()) return fallback;
