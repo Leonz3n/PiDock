@@ -1543,6 +1543,19 @@ async function performTaskOp(
       // session-less caller from rewriting the task plan, and the actor is
       // recorded on the plan for audit.
       case "task/planServiceGroup": {
+        // GUARD, stated at the seam: this op WRITES the task's plan, and the units
+        // it accepts come from its caller — the dock's own topology read sends the
+        // visible projection, which carries no declaration-derived edge and no
+        // rules/layers. That is acceptable for exactly one reason: a page plan
+        // cannot decide a start. Main writes the plan from its own catalog on EVERY
+        // group start (`runtime.ts runTaskServiceGroup` → `planBoundServiceGroup`,
+        // immediately before the single `task/controlService {group:true}`), so
+        // what `runServiceGroupStart` reads here is always main's freshly derived
+        // plan — never a renderer-shaped one. A future reader must not mistake the
+        // `units` below for trusted input: the trusted inputs are the ones main's
+        // `shell/taskOp` route refuses a page for naming (`dependencies`/`rules`/
+        // `layers`), and `main/service-group-caller.test.ts` pins the plan-before-
+        // start order that keeps this seam harmless.
         const topology = serviceTopologyFor(taskId);
         if ("error" in topology) return { ok: false, error: topology.error };
         const caller = classifyControlCaller({

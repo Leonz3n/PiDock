@@ -272,7 +272,11 @@ describe("#6 link capability record (box 12 platforms)", () => {
     const rows = linkCapabilityRows("darwin-arm64");
     expect(rows.map((row) => row.platform)).toEqual(["darwin-arm64", "win32-x64"]);
     expect(rows[0]).toMatchObject({ platform: "darwin-arm64", exercised: true });
-    expect(rows[0]!.note).toContain("真的在本平台执行了链接目标探测");
+    // What the observed row claims is NARROW: a link-TARGET probe ran here. It may
+    // not read as "a real link was in the chain" nor as "link creation verified".
+    expect(rows[0]!.note).toContain("在本平台执行了链接目标探测");
+    expect(rows[0]!.note).toContain("链中可能没有真实链接");
+    expect(rows[0]!.note).not.toContain("真的在本平台");
     expect(rows[1]).toMatchObject({ platform: "win32-x64", exercised: false });
     expect(rows[1]!.note).toContain("win32 链接方式未验证");
     // No row claims Windows behaviour: the win32 row only names what is missing.
@@ -289,5 +293,19 @@ describe("#6 link capability record (box 12 platforms)", () => {
     // The 真实 pi clause is a NAMED boundary, never a pass.
     expect(LINK_MODEL_VERIFICATION_BOUNDARY).toContain("不是真实 pi/模型运行");
     expect(LINK_MODEL_VERIFICATION_BOUNDARY).toContain("仍未完成");
+  });
+
+  it("keeps the named 「win32 链接方式未验证」 sentence on a win32 host instead of absorbing it", () => {
+    // A win32 host really ran the probe there, so `exercised` is true - but link
+    // CREATION was never exercised on Windows, and the row that names that gap must
+    // survive. Before this case existed, the observed row replaced it.
+    const rows = linkCapabilityRows("win32-x64");
+    const windows = rows.find((row) => row.platform === "win32-x64")!;
+    expect(windows.exercised).toBe(true);
+    expect(windows.note).toContain("win32 链接方式未验证");
+    expect(windows.note).toContain("链中可能没有真实链接");
+    expect(windows.note).not.toContain("真的在本平台");
+    // And the unobserved release target is still listed, by name.
+    expect(rows.find((row) => row.platform === "darwin-arm64")).toMatchObject({ exercised: false });
   });
 });

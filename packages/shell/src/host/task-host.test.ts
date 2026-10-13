@@ -1106,7 +1106,12 @@ describe("#6 multi-repo provision + append (S2)", () => {
     const report = host().probeLinkTarget("/definitely/missing/pidock-notes");
     const exercised = report.platforms.filter((row) => row.exercised);
     expect(exercised.map((row) => row.platform)).toEqual([hostPlatformLabel()]);
-    expect(exercised[0]!.note).toContain("真的在本平台执行了链接目标探测");
+    // What the exercised row claims is NARROW: a link-TARGET probe ran on this
+    // platform. It does not claim a real link was in the chain, nor that link
+    // creation was exercised here.
+    expect(exercised[0]!.note).toContain("在本平台执行了链接目标探测");
+    expect(exercised[0]!.note).toContain("链中可能没有真实链接");
+    expect(exercised[0]!.note).not.toContain("真的在本平台");
     const windows = report.platforms.find((row) => row.platform === "win32-x64");
     expect(windows).toMatchObject({ platform: "win32-x64", exercised: false });
     expect(windows!.note).toContain("win32 链接方式未验证");

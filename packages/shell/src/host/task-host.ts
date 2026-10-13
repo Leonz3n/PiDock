@@ -265,11 +265,16 @@ export interface LinkChainReaders {
  * through or delete a link — it only reports what it found.
  *
  * A missing path is `dangling` (失效), a chain that revisits a link it already
- * followed is `cyclic-link` (循环), a chain that ends at a real directory after
- * at least one hop is `nested-link` (嵌套: the source is itself a link), and
+ * followed is `cyclic-link` (循环), a chain that ends at a directory after at
+ * least one hop is `nested-link` (嵌套: the source is itself a link), and
  * `unknown` covers everything not established — a read error other than
  * "missing", a chain that ends at something which is not a directory, or a
  * chain longer than the hop budget.
+ *
+ * `nested-link`'s DETAIL may not claim more than was observed: one hop is a link
+ * that directly points at a directory, two or more hops is a link whose target is
+ * itself a link. Both are 嵌套 and neither is 失效/循环, but the two are named
+ * apart so 「来源本身是软链接」 is never stretched over a link→link chain.
  */
 export function observeLinkChain(sourcePath: string, readers: LinkChainReaders): { shape: LinkTargetObservation; detail: string } {
   const walked = new Set<string>();
@@ -295,7 +300,9 @@ export function observeLinkChain(sourcePath: string, readers: LinkChainReaders):
         return { shape: "unknown", detail: `链接目标不是目录（${current}）` };
       return hops === 0
         ? { shape: "directory", detail: `来源是真实目录: ${current}` }
-        : { shape: "nested-link", detail: `来源本身是软链接（跟随 ${hops} 跳后到达目录 ${current}）` };
+        : hops === 1
+          ? { shape: "nested-link", detail: `来源本身是软链接，直接指向目录: ${current}（未经过第二跳链接）` }
+          : { shape: "nested-link", detail: `来源是软链接，它的目标是另一条软链接（共跟随 ${hops} 跳后到达目录 ${current}）` };
     }
     walked.add(current);
     let target: string;

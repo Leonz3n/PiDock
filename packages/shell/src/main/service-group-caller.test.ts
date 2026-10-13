@@ -195,6 +195,32 @@ describe("[PiDock 05] #10 main's group plan reads the SAME declared-port rule as
     expect(calls.filter((call) => call.op === "task/registerService")).toHaveLength(1);
   });
 
+  it("writes the plan from the catalog immediately before the single group start, so a page plan cannot decide it", async () => {
+    // The condition invariant "a read may not decide a start" rests on: the plan the
+    // Host holds is a projection that a page can also write (the dock's topology
+    // read sends its visible units), so EVERY group start re-writes it from main's
+    // catalog first - units, ports and run types included - and only then sends the
+    // one gated group start. `host.ts`'s `task/planServiceGroup` comment points here.
+    const { tasks, calls } = registry((call) => call.op === "task/controlService" ? { group: { state: "not-planned" } } : { ok: true });
+    const catalog = {
+      taskBindings: () => [boundService(CALLER), boundService(CALLEE)],
+      launchFor: (_taskId: string, _projectId: string, serviceId: string) => launchOf(serviceId, EMPTY_LAYERS),
+    } satisfies Pick<ServiceCatalog, "launchFor" | "taskBindings">;
+
+    await runTaskServiceGroup(tasks, catalog, REQUEST, 7);
+
+    // The plan is written AFTER both registrations and BEFORE the one group start.
+    expect(calls.map((call) => call.op)).toEqual(["task/registerService", "task/registerService", "task/planServiceGroup", "task/controlService"]);
+    const planned = calls.find((call) => call.op === "task/planServiceGroup");
+    // The units are the CATALOG's - one per bound service, named from the trusted
+    // launch - and the payload carries no page-shaped key at all.
+    expect(planned?.payload["units"]).toEqual([
+      { unitId: `repo-a:${CALLER}`, serviceId: CALLER, name: "API", repoDir: "repo-a", location: "local", runType: "long-lived" },
+      { unitId: `repo-a:${CALLEE}`, serviceId: CALLEE, name: "API", repoDir: "repo-a", location: "local", runType: "long-lived" },
+    ]);
+    expect(Object.keys(planned?.payload ?? {}).sort()).toEqual(["requests", "runTypes", "selectedRepoDirs", "units"]);
+  });
+
   it("keeps a portless long-lived unit in the plan as a named refusal source instead of dropping it", async () => {
     // The counterpart of the case above, so this rule is never "fixed" by
     // omitting a unit: with no declared port the requests row is absent, which

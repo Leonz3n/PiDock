@@ -454,6 +454,14 @@ export async function registerServiceThroughShell(input: {
  * are the plan's TRUSTED inputs — main derives them from the service catalog, so
  * a page has no API here to name them at all; and if such a payload ever reaches
  * main's `shell/taskOp`, that route refuses it by name.
+ *
+ * What this caller DOES send is `units`, and that is display-only by construction:
+ * the plan the Host keeps is a projection the dock reads back, never the plan a
+ * group start runs. Main re-derives the plan from its own catalog on EVERY group
+ * start (`runtime.ts runTaskServiceGroup` → `planBoundServiceGroup`, which writes
+ * `task/planServiceGroup` immediately before the single `task/controlService
+ * {group:true}`), so a page-shaped, edge-less plan left here can never decide
+ * what a start executes. `main/service-group-caller.test.ts` pins that order.
  */
 export async function planServiceGroupThroughShell(input: {
   taskId: string;

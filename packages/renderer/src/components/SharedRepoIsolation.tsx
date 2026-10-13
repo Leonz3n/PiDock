@@ -60,13 +60,17 @@ type LinkRead = { state: "observed"; link: WorkspaceLinkTargetView } | { state: 
 
 /**
  * The Host's observed shape as words. Each shape keeps its OWN name, so 失效
- * (目标不存在), 嵌套 (来源本身是软链接) and 循环 (链回到已跟随过的链接) can never be
- * read as the same "a directory", and `unknown` never silently becomes healthy.
+ * (目标不存在), 嵌套 (来源是软链接，不是原目录) and 循环 (链回到已跟随过的链接) can never
+ * be read as the same "a directory", and `unknown` never silently becomes healthy.
+ *
+ * The 嵌套 label is deliberately not broader than the observation: a one-hop link
+ * to a directory and a link→link chain are both 嵌套, and the Host's own detail
+ * (shown beside this label) says which of the two was seen.
  */
 const LINK_SHAPE_LABEL: Record<WorkspaceLinkTargetView["shape"], string> = {
   directory: "真实目录（Host 实测）",
   dangling: "失效：链接目标已不存在（Host 实测）",
-  "nested-link": "嵌套：来源本身是软链接，不是原目录（Host 实测）",
+  "nested-link": "嵌套：来源是软链接，指向的不是原目录本身（Host 实测）",
   "cyclic-link": "循环：链接链回到已跟随过的链接（Host 实测）",
   unknown: "未确定：形状未实测",
 };
