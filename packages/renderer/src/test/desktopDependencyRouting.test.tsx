@@ -154,7 +154,7 @@ describe("[PiDock 05] #10 box 1 运行面板 显示 本地/远程位置 与 实�
   });
 
   it("keeps 无依赖边（未做互验） as a NAMED state and never lights up 已互验", async () => {
-    const wired = dock({ routing: () => ({ ok: true, payload: routingPayload({ declared: false }) }) });
+    dock({ routing: () => ({ ok: true, payload: routingPayload({ declared: false }) }) });
     render(<DesktopToolDock taskId={TASK_ID} tool="runtime" onClose={() => {}} />);
     const panel = screen.getByTestId("desktop-tool-dock");
 
@@ -180,7 +180,7 @@ describe("[PiDock 05] #10 box 1 运行面板 显示 本地/远程位置 与 实�
 
   it("shows main's named refusal for this read instead of an empty or optimistic 去向 list", async () => {
     const refusal = "服务依赖声明无法满足，未生成整组计划：「Caller API」（s-1111）声明的依赖目标 s-9999 未在本任务的服务绑定中，请先绑定该服务或从共享模板移除该声明";
-    const wired = dock({ routing: () => ({ ok: false, error: refusal }) });
+    dock({ routing: () => ({ ok: false, error: refusal }) });
     render(<DesktopToolDock taskId={TASK_ID} tool="runtime" onClose={() => {}} />);
     const panel = screen.getByTestId("desktop-tool-dock");
 
