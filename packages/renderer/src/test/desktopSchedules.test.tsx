@@ -46,6 +46,13 @@ it("names a blank schedule field instead of an empty rule, name or table cell", 
   expect(runRow.getByText("Host 未上报开始时间")).toBeInTheDocument();
   // `??` used to miss a real `""`; the em dash is the named absence for this column.
   expect(runRow.getByText("—")).toBeInTheDocument();
+  // The run table's 定时任务 cell names the same blank schedule name instead of
+  // rendering a blank cell under a column header (the card above is not the only
+  // render path of `parseSchedules.name`).
+  expect(runRow.getByText("Host 未上报定时任务名称")).toBeInTheDocument();
+  // ...and a run whose schedule really is gone keeps its own wording, so the two
+  // cases stay distinguishable instead of collapsing into one string.
+  expect(runRow.queryByText("已删除的定时任务")).toBeNull();
 });
 
 it("shows partial failure without presenting a global empty result", async () => {
