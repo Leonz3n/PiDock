@@ -505,7 +505,7 @@ function DeliveryTargetReadout({ target }: { target: WorkspaceDeliveryView }) {
  * caller's in-flight flag is cleared as soon as the response arrives, so a
  * dropped answer can never leave the panel stuck in a loading state.
  */
-type FilesPanelAnswer = "文件树响应" | "交付目标响应" | "预览响应" | "Git 差异响应" | "外部编辑器回执";
+type FilesPanelAnswer = "文件树响应" | "交付目标响应" | "预览响应" | "改动响应" | "外部编辑器回执";
 
 /** Why one answer may not be shown here: the user left that root, or the
  *  payload names another root than the one the read was made for. */
@@ -736,8 +736,8 @@ function FilesTool({ taskId }: { taskId: string }) {
     const result = await fileDiffThroughShell({ taskId, rootId: askedRoot, relative: preview.path });
     setBusy(false);
     const view = result.ok ? workspaceDiffFromHost(result.payload) : undefined;
-    if (dropAnswer("Git 差异响应", askedRoot, view?.attribution.rootId)) return;
-    clearDroppedAnswer("Git 差异响应");
+    if (dropAnswer("改动响应", askedRoot, view?.attribution.rootId)) return;
+    clearDroppedAnswer("改动响应");
     if (!result.ok) {
       setDiff(null);
       setError(shellFailure(result, "读取改动失败"));
