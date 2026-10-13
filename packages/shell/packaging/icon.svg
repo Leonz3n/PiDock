@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>PiDock</title>
+  <!--
+    PiDock brand mark (primary / shipping variant for win.icon).
+
+    Badge: rounded-square ("squircle"), radius 318/1024 = 31.1%, which is the
+    prototype's own ratio (prototypes/pidock-ui/style.css:1
+    ".brandmark{width:29px;height:29px;...;border-radius:9px}", 9/29 = 31.0%),
+    filled with the recorded brand navy #233c78 = rgb(35,60,120)
+    (packages/renderer/src/styles/tokens.css:22, custom property color-accent).
+
+    Glyph: the pi mark from the prototype's own hand-authored icon path
+    (prototypes/pidock-ui/style.css:9, the data-URI SVG in
+    ".brandmark::before"), re-centred and scaled to a 542.5 x 418.5 px ink box
+    (53.0% x 40.9% of the canvas). Vector only: no text element, no font, no CSS.
+    transform="translate(140 140) scale(31)": (12,12) [= ink centre of that
+    path] maps to (512,512); stroke-width 2.5 becomes 77.5 px.
+  -->
+  <rect x="0" y="0" width="1024" height="1024" rx="318" fill="#233c78"/>
+  <g transform="translate(140 140) scale(31)" fill="none" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M4.5 6.5h15"/>
+    <path d="M8.5 6.5v7.75q0 3.25-2 3.25"/>
+    <path d="M16 6.5v8.5q0 2.5 2.5 2.5"/>
+  </g>
+</svg>
