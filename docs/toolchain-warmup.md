@@ -1,6 +1,6 @@
 # 工具链预热记录
 
-状态：2026-09-22 在 macOS 开发机完成首轮预热。预热产物都在本机缓存中，不进入仓库，也不构成技术选型决定。
+状态：2026-09-22 在 macOS 开发机完成首轮预热，2026-10-14 补录 Windows 侧（win32-x64）复现清单与仓库 `allowBuilds` 现状。预热产物都在本机缓存中，不进入仓库，也不构成技术选型决定。
 
 ## 目的
 
@@ -86,8 +86,10 @@ export GLOBAL_AGENT_HTTP_PROXY=http://127.0.0.1:10808
 
 ## 关键发现
 
-1. **Electron 44 移除了 `postinstall`**，改为提供 `install-electron` bin。包管理器安装后不会自动下载二进制，必须显式执行 `node node_modules/electron/install.js`，否则要到首次启动才暴露缺失。
+1. **Electron 44 移除了 `postinstall`**，改为提供 `install-electron` bin。包管理器安装后不会自动下载二进制，必须显式执行 `node node_modules/electron/install.js`，否则要到首次启动才暴露缺失。实测（win32-x64 干净 clone，`packages/shell` 下执行，见 #22 评论 6151131544 commandsRun #3）：在此之前 `packages/renderer/src/test/desktopEnvironment.test.tsx` 整文件失败，报 `Electron failed to install correctly`；执行后才得到 `node_modules/electron/dist/electron.exe`。
 2. **pnpm 11 不再读取 `package.json` 的 `pnpm.onlyBuiltDependencies`**，构建脚本白名单要写在 `pnpm-workspace.yaml` 的 `allowBuilds`。默认情况下 electron、esbuild、node-pty、`@swc/core` 的构建脚本会被跳过。
+   - **仓库侧显式声明 `node-pty: false`**（`pnpm-workspace.yaml` 的 `allowBuilds`，2026-10-14 入库）：产品**永不从源码构建 node-pty**，与 `packages/shell/electron-builder.config.cjs:59` 的 `npmRebuild: false` 是同一条「只用 tarball 自带 prebuild」的口径（理由见第 4 条）。反过来，一旦开启 node-pty 的构建脚本，源码构建会在包内落下 `build/Release/{pty.node,spawn-helper}`，那正是终端预检拒绝的「竞争加载目录」（`packages/shell/src/host/node-pty-preflight.ts`）。显式写 `false` 还有一个直接效果：不写时 `pnpm install --frozen-lockfile` 会 **exit 1**（`[ERR_PNPM_IGNORED_BUILDS] Ignored build scripts: node-pty@1.1.0`）并把占位值 `node-pty: set this to true or false` 写进 `pnpm-workspace.yaml`。
+   - **临时 warmup 夹具 `scripts/warm-toolchain.sh:57-60` 反过来写 `node-pty: true`，是有意为之，与产品仓库口径不同**：它要在一次性工程里演练 `electron-rebuild -w node-pty`，证明「能力仍在」（见第 4 条），因此必须打开构建脚本。**这只是预热夹具，不是仓库现状**——不要照抄进产品仓库；产品仓库的 `pnpm-workspace.yaml` 保持 `node-pty: false`。
 3. **electron-vite 5.0.0 的 peer 是 `vite@^5||^6||^7`，而 Vite 最新为 8.3.0**。使用 npm 会直接 ERESOLVE 失败。实现时应固定 `vite@7.3.6`。
 4. **better-sqlite3 13.0.3 与 node-pty 1.1.0 都在 npm tarball 内自带多平台 prebuild**（含 `win32-x64`、`win32-arm64`），不需要从 GitHub 下载预编译产物。**node-pty 可以针对 Electron ABI 重编译，但产品不重编译（不启用 rebuild）**：它是 N-API（`node-addon-api` ^7.1.0，已实测 darwin-arm64 `pty.node` 引用 38 个 `napi_*` 符号），打包用的就是 tarball 自带的 prebuild，技术上不需要重编译；预热已实测 `electron-rebuild -w node-pty` 成功（见上「已验证的版本集合」后的实测清单，标注为「仅预热实测能力；产品不启用」），能力仍在，只是产品不启用。产品不启用的原因不是工具链限制，而是预检按 size + sha256 + mode 钉住预编译件：`@electron/rebuild` 会把源码编译进 `<package>/build/Release/`，而 node-pty 的加载顺序（`lib/utils.js`）把 `build/Release` 排在 `prebuilds/<platform>-<arch>` 之前，终端预检（`packages/shell/src/host/node-pty-preflight.ts`）正是为此拒绝任何带竞争加载目录的包目录。所以 `packages/shell/electron-builder.config.cjs` 显式设 `npmRebuild: false`；重新打开它会让终端静默失效（ref #15）。
 5. **当前 Node 22.23.2 无需升级**：Electron 44 要求 `>=22.12`，pi SDK 要求 `>=22.19`，两者同时满足。
@@ -102,6 +104,16 @@ export GLOBAL_AGENT_HTTP_PROXY=http://127.0.0.1:10808
   - 该 Windows 机器还需满足下面两项**期望，本机未验证**，首次 `package:win` 时逐项确认：① 能访问网络（WiX 与 win32-x64 的 Electron 二进制靠下载；配置签名证书时才是 WiX＋winCodeSign＋win32-x64 Electron）；② 不需要能重编译原生依赖的工具链：`packages/shell/electron-builder.config.cjs` 已设 `npmRebuild: false`（Node-API prebuild + 预检 pin，见「关键发现」第 4 条，ref #15），默认的 rebuild 步骤在 macOS 与 Windows 都不执行。若将来某个原生依赖确实需要 Electron ABI 重编译，它与预检的 pin 设计冲突（同类冲突还有代码签名改写原生字节，见 #15），需先决策再改。
 - Playwright Firefox / WebKit：产品只用 Electron 内嵌 Chromium，暂不需要。
 - 试点业务仓库自身的工具链（Go 服务、front-monorepo 的 pnpm 依赖）不属于本仓库预热范围。
+
+## Windows 复现清单
+
+本仓库的 Windows 侧开发机复现步骤（2026-10-14 实测，win32-x64；证据见 #22 评论 6151131544 与 6151478597）。依赖集合与 macOS 预热相同，差别只在包管理器 shim、代理地址与首次打包的外部下载。
+
+1. **启用 pnpm**：本机 Node `v24.21.0`（`C:\nvm4w\nodejs`）不自带 pnpm，需 `corepack enable` 生成 shim；实测得到 pnpm `11.22.0`。
+2. **代理环境变量**：`HTTPS_PROXY`/`HTTP_PROXY` 指向本机代理 `http://127.0.0.1:1080`（实测 `github.com` 直连超时，经代理可用；`registry.npmmirror.com` 本机可直连）；Electron 二进制的 `@electron/get` 还需 `ELECTRON_GET_USE_PROXY=true` 才会走代理（与上文 macOS 的三链路约定同因）。代理地址只作本机约定，不写入可提交配置。
+3. **依赖安装**：`pnpm install --frozen-lockfile` 在干净 clone 上 **exit 0**，且 `pnpm-workspace.yaml` **不被 install 改写**（仓库已声明 `node-pty: false`，见「关键发现」第 2 条；未声明时会 exit 1 并写入占位值）。
+4. **Electron 二进制**：安装后仍需 `node node_modules/electron/install.js`（Electron 44 无 `postinstall`，见「关键发现」第 1 条），才会得到 `node_modules/electron/dist/electron.exe`。
+5. **首次 Windows 打包**（`pnpm --filter @pidock/shell package:win`）另需下载：electron-builder 的 **WiX `4.0.0.5512.2`**（MSI 目标，经代理拉取）与其自带的 7zip win-x64，以及 win32-x64 的 **Electron zip**。未配置签名证书时**不会**拉取 winCodeSign（见「尚未预热」）。
 
 ## 复现方式
 
