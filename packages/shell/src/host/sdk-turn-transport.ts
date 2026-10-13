@@ -27,6 +27,12 @@ function durableWrite(file: string, value: TurnRecord, exclusive: boolean): void
 }
 
 function syncDirectory(dir: string): void {
+  // Windows has no directory-fsync equivalent reachable from Node: fsync on a directory
+  // fd fails with EPERM, and FlushFileBuffers on a directory handle would need
+  // FILE_FLAG_BACKUP_SEMANTICS, which Node cannot request. On win32 the durability of
+  // the published record therefore rests on the file-level fsync durableWrite already
+  // performed; POSIX keeps persisting the directory entry itself.
+  if (process.platform === "win32") return;
   const descriptor = openSync(dir, "r");
   try { fsyncSync(descriptor); } finally { closeSync(descriptor); }
 }
