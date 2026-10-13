@@ -42,6 +42,24 @@ describe("Desktop task creation", () => {
     await waitFor(() => expect(onCreated).toHaveBeenCalledWith(project.id));
     expect(createTask.mock.calls.filter(([request]) => request.op === "commit")).toHaveLength(1);
   });
+  it("names a blank field in the path preview instead of printing an empty path segment", async () => {
+    // `parse` in `desktopCreation.ts` requires the intent's own `name` to be
+    // non-empty and type-checks (only) a repo's `commit`/`repoDir`/`name` and a
+    // directory's `name`/`path`/`linkName`, so those blanks ARE reachable; the
+    // preview used to print them as a bare `/` or a dangling `·`.
+    const blank = { ...intent, state: "pending", repos: [{ ...intent.repos[0]!, name: "", remote: "", remoteBranch: "", commit: "", repoDir: "" }],
+      directories: [{ ...intent.directories[0]!, name: "", path: "", linkName: "" }] };
+    const createTask = vi.fn(async () => ({ ok: true, payload: blank }));
+    render(<DesktopTaskCreation project={project} bridge={bridge(createTask)} onCreated={async () => {}} />);
+    const preview = await screen.findByRole("region", { name: "创建任务" });
+    // The intent's own name is validated non-empty by the reader, so it still
+    // renders verbatim.
+    expect(preview).toHaveTextContent(`任务路径预览 · ${intent.name}`);
+    expect(preview).toHaveTextContent("Host 未上报仓库名称 · Host 未上报远程名/Host 未上报远程分支 · Host 未上报提交");
+    expect(preview).toHaveTextContent("Host 未上报目录名");
+    expect(preview).toHaveTextContent("Host 未上报目录名称 · Host 未上报目录路径 → " + blank.taskDir + "/Host 未上报链接名（共享可写）");
+  });
+
   it.each(["cancel", "error"] as const)("retains selected inputs after picker/prepare %s and previews the same request on retry", async (outcome) => {
     let attempts = 0;
     const createTask = vi.fn(async (request: { op: string; input?: unknown; id?: string }) => {

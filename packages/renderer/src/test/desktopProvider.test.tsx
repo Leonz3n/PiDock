@@ -80,6 +80,19 @@ it("renders the saved profile as a card with the real reference state", async ()
   expect(screen.getByText("切换只影响当前会话")).toBeInTheDocument();
 });
 
+it("names a blank profile field instead of an empty heading, address or badge", async () => {
+  // `parseProviderStatus` reads `name`/`baseUrl`/`modelId`/`authRef` with
+  // `typeof === "string"` (it only caps the length), so a blank profile really
+  // reaches this page; each fact names its own absence instead of rendering a
+  // nameless card.
+  bridge(async () => ({ state: "configured", profileId: profile.id, generation: 1, profiles: [{ ...profile, name: "", baseUrl: "", modelId: "", authRef: "" }] }));
+  page();
+  expect(await screen.findByText("Host 未上报配置名称")).toBeInTheDocument();
+  expect(screen.getByText("Host 未上报服务地址")).toBeInTheDocument();
+  expect(screen.getByText("Host 未上报模型标识")).toBeInTheDocument();
+  expect(screen.getByText("Host 未上报凭据引用名")).toBeInTheDocument();
+});
+
 it("reports a missing credential and a refused install instead of claiming success", async () => {
   bridge(async (request) => request.op === "list"
     ? { state: "credential-missing", profileId: profile.id, generation: 1, profiles: [{ ...profile, credentialAvailable: false }] }

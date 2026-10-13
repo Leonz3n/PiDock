@@ -80,19 +80,19 @@ function RepositoryImportDrafts({ tasks, pending, filled, onFillForm }: {
     {!error && !scan && <p role="status" className="py-4 text-xs text-muted">{pending || loadingRoots ? "正在读取任务仓库" : loadingScan ? "正在扫描仓库配置" : !tasks.length ? "当前项目无可用任务" : !roots.length ? "该任务无仓库工作副本" : "尚未扫描"}</p>}
     {scan && <div className="text-xs">
       {scan.truncated && <p role="status" className="border-b border-line py-2 text-[#9a6032]">草案数量已截断，请缩小仓库配置范围后核对。</p>}
-      {scan.errors.map((item) => <p key={item.source} role="alert" className="border-b border-line py-2 text-[#ad4545]">{item.source}：{item.reason}</p>)}
+      {scan.errors.map((item) => <p key={item.source} role="alert" className="border-b border-line py-2 text-[#ad4545]">{item.source}：{hostText(item.reason, "Host 未给出原因")}</p>)}
       {!scan.hints.length && <p className="py-4 text-muted">{scan.errors.length ? "部分配置读取失败，无法确认是否存在草案" : "未发现可核对的启动草案"}</p>}
       {scan.hints.map((hint, index) => <div key={`${hint.source}-${hint.name}-${index}`} className="grid min-w-0 gap-2 border-b border-line py-3 sm:grid-cols-[minmax(0,1fr)_110px]">
-        <div className="min-w-0"><strong className="block break-words font-medium text-ink">{hint.name}</strong><span className="break-all text-muted">{hint.source}</span>
+        <div className="min-w-0"><strong className="block break-words font-medium text-ink">{hostText(hint.name, "Host 未上报候选名称")}</strong><span className="break-all text-muted">{hint.source}</span>
           {(hint.program !== "" || hint.args.length > 0) && <p className="mt-1 break-all text-muted">命令候选：{[hint.program, ...hint.args].join(" ")}</p>}
           {hint.workdir !== undefined && <p className="mt-1 break-all text-muted">工作目录候选：{hint.workdir}</p>}
           {!!hint.variables.length && <p className="mt-1 break-all text-muted">变量：{hint.variables.map((row) => `${row.key}（来源 ${row.source} · 值 ${row.maskedValue}）`).join("、")}</p>}
-          {hint.invalidVars.map((key, at) => <p key={at} className="mt-1 break-all text-[#ad4545]">无效变量：{key}</p>)}
-          {hint.toVerify.map((note, at) => <p key={at} className="mt-1 break-words text-muted">{note}</p>)}
+          {hint.invalidVars.map((key, at) => <p key={at} className="mt-1 break-all text-[#ad4545]">无效变量：{hostText(key, "Host 未上报变量名")}</p>)}
+          {hint.toVerify.map((note, at) => <p key={at} className="mt-1 break-words text-muted">{hostText(note, "Host 未上报待核对项")}</p>)}
         </div><div className="flex flex-col items-start gap-2 sm:items-end"><span className={hint.runTypeUncertain ? "text-[#9a6032]" : "text-muted"}>{hint.runType === null
           ? "配置来源"
           : hint.runTypeUncertain ? `${runTypeLabel[hint.runType]}（待确认）` : runTypeLabel[hint.runType]}</span>
-          <span className="break-words text-right text-muted">{hint.runTypeBasis}</span>
+          <span className="break-words text-right text-muted">{hostText(hint.runTypeBasis, "Host 未上报判定依据")}</span>
           {hint.runType === null
             ? <Button type="button" size="sm" variant="outline" disabled title="配置来源草案不能作为运行单元填入服务模板">仅配置来源</Button>
             : <Button type="button" size="sm" variant="outline" onClick={() => onFillForm(hint)}>填入新建模板</Button>}

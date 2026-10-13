@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { shellTaskOp } from "../data/shellBridge";
+import { hostText } from "../data/workspaceFiles";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 
@@ -77,14 +78,14 @@ export function DesktopSchedulesPage({ tasks, onOpenTask }: { tasks: readonly Ta
       <div className="mt-6 flex gap-1" role="group" aria-label="定时任务筛选">{([ ["all", "全部"], ["active", "已启用"], ["paused", "已暂停"] ] as const).map(([key, label]) => <Button key={key} size="sm" variant={filter === key ? "secondary" : "ghost"} aria-pressed={filter === key} onClick={() => setFilter(key)}>{label}</Button>)}</div>
       <div className="mt-3 divide-y divide-line border-y border-line">
         {shown.map((row) => <article key={`${row.taskId}:${row.scheduleId}`} className="grid grid-cols-[minmax(130px,0.8fr)_minmax(0,2fr)_auto] items-center gap-4 py-4 below-mid:grid-cols-1" data-schedule-row={row.scheduleId}>
-          <div className="min-w-0"><strong className="block break-words text-xs">{row.ruleText}</strong><span className="text-[11px] text-muted">{row.timezone}</span></div>
-          <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><strong className="text-sm">{row.name}</strong><Badge variant="soft">{row.repairIssue ? "配置待修复" : row.enabled ? "已启用" : "已暂停"}</Badge></div><p className="mt-1 text-xs text-muted">{taskNames.get(row.taskId) ?? row.taskId} · {row.providerId} / {row.model}</p><p className="mt-1 line-clamp-2 break-words text-xs text-muted">{row.repairIssue || row.prompt}</p></div>
+          <div className="min-w-0"><strong className="block break-words text-xs">{hostText(row.ruleText, "Host 未上报规则")}</strong><span className="text-[11px] text-muted">{hostText(row.timezone, "Host 未上报时区")}</span></div>
+          <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><strong className="text-sm">{hostText(row.name, "Host 未上报定时任务名称")}</strong><Badge variant="soft">{row.repairIssue ? "配置待修复" : row.enabled ? "已启用" : "已暂停"}</Badge></div><p className="mt-1 text-xs text-muted">{taskNames.get(row.taskId) ?? row.taskId} · {hostText(row.providerId, "Host 未上报 Provider")} / {hostText(row.model, "Host 未上报模型")}</p><p className="mt-1 line-clamp-2 break-words text-xs text-muted">{row.repairIssue || row.prompt}</p></div>
           <Button size="sm" variant="outline" onClick={() => onOpenTask(row.taskId)}>查看任务</Button>
         </article>)}
         {shown.length === 0 && <p className="py-7 text-center text-xs text-muted">{result.errors.length ? "成功读取的任务中没有符合筛选的定时配置。" : "当前筛选下没有定时任务。"}</p>}
       </div>
       <div className="mt-7 flex items-center justify-between gap-2"><h2 className="text-sm font-semibold">执行记录</h2><span className="text-xs text-muted">{result.runs.length} 条{result.errors.length ? "（部分）" : ""}</span></div>
-      <div className="mt-3 overflow-x-auto"><table className="w-full min-w-[550px] text-left text-xs"><thead className="border-b border-line text-muted"><tr><th className="py-2 font-medium">开始时间</th><th className="font-medium">定时任务</th><th className="font-medium">结果</th><th className="font-medium">详情</th></tr></thead><tbody>{result.runs.map((run) => <tr key={`${run.taskId}:${run.runId}`} className="border-b border-line" data-schedule-run={run.runId}><td className="py-2">{run.startedAt}</td><td>{scheduleNames.get(run.scheduleId) ?? "已删除的定时任务"}</td><td>{runLabels[run.result]}</td><td className="break-words">{run.reason ?? "—"}</td></tr>)}</tbody></table>{result.runs.length === 0 && <p className="py-4 text-xs text-muted">{result.errors.length ? "成功读取的任务中没有执行记录。" : "暂无执行记录。"}</p>}</div>
+      <div className="mt-3 overflow-x-auto"><table className="w-full min-w-[550px] text-left text-xs"><thead className="border-b border-line text-muted"><tr><th className="py-2 font-medium">开始时间</th><th className="font-medium">定时任务</th><th className="font-medium">结果</th><th className="font-medium">详情</th></tr></thead><tbody>{result.runs.map((run) => <tr key={`${run.taskId}:${run.runId}`} className="border-b border-line" data-schedule-run={run.runId}><td className="py-2">{hostText(run.startedAt, "Host 未上报开始时间")}</td><td>{scheduleNames.get(run.scheduleId) ?? "已删除的定时任务"}</td><td>{runLabels[run.result]}</td><td className="break-words">{hostText(run.reason, "—")}</td></tr>)}</tbody></table>{result.runs.length === 0 && <p className="py-4 text-xs text-muted">{result.errors.length ? "成功读取的任务中没有执行记录。" : "暂无执行记录。"}</p>}</div>
     </>}
   </div>;
 }

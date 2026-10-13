@@ -253,6 +253,22 @@ describe("[UI 对齐] S8d production 运行 panel reads the Host run record", ()
     expect(note).not.toHaveTextContent("已监听");
   });
 
+  it("names a blank 模板版本 and a blank 核验细节 instead of an empty cell or a bare separator", async () => {
+    // `runRecordFromHost` reads `templateVersion` with a length CAP only
+    // (`typeof === "string" && length > 200`) and a verification `detail` with
+    // `typeof === "string"`, so both can be `""`; the row then read
+    // `模板版本 ` and `联通核验：已监听 · `.
+    const payload = realRunRecordsPayload({ portsSource: "declared" });
+    bridgeWithRunRecords({ ok: true, payload: { ...payload, records: [{
+      ...(payload.records[0] as unknown as Record<string, unknown>),
+      templateVersion: "",
+      verifications: [{ kind: "readiness", detail: "", ok: true, at: STARTED_AT }],
+    }] } });
+    render(<DesktopToolDock taskId="task-1" tool="runtime" onClose={() => {}} />);
+    expect(await screen.findByTestId("dock-run-record")).toHaveTextContent("Host 未上报模板版本");
+    expect(await screen.findByTestId("dock-run-verification")).toHaveTextContent("联通核验：已监听 · Host 未上报核验细节");
+  });
+
   it("names the absent state for a service with no run record instead of implying a run", async () => {
     bridgeWithRunRecords({ ok: true, payload: { records: [], registered: [] } });
     render(<DesktopToolDock taskId="task-1" tool="runtime" onClose={() => {}} />);

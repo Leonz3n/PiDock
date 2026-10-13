@@ -157,7 +157,7 @@ function statusText(row: BoundServiceRow): string {
   // state rides beside it ([PiDock 04] #7 box 5): the row states the named
   // result of the Host's bounded probe, so a failed probe never reads as a
   // dead process (nor a live one as healthy).
-  return `${SERVICE_STATE_TEXT.registry[status.lifecycle] ?? status.lifecycle} · 配方 v${status.templateVersion} · ${status.resolvedKeys.length} 项环境变量${healthText(status)}${controlText(status)}`;
+  return `${SERVICE_STATE_TEXT.registry[status.lifecycle] ?? status.lifecycle} · 配方 v${hostText(status.templateVersion, "Host 未上报配方版本")} · ${status.resolvedKeys.length} 项环境变量${healthText(status)}${controlText(status)}`;
 }
 
 /** One Chinese name per health state; the Agent's `service.status` text repeats them verbatim. */
@@ -279,7 +279,7 @@ function RunRecordFacts({ record }: { record: ServiceRunRecordView }) {
     <div className="mt-0.5 min-w-0 text-[10px] text-muted" data-testid="dock-run-record">
       <dl className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-0.5">
         <RunFact label="运行标识" value={record.runId} mono />
-        <RunFact label="模板版本" value={record.templateVersion} />
+        <RunFact label="模板版本" value={hostText(record.templateVersion, "Host 未上报模板版本")} />
         <RunFact label="代码状态" value={`${codeStateLabel(record.codeState)}${record.codeCommit !== undefined ? ` · ${record.codeCommit}` : ""}`} />
         <RunFact label="构建状态" value={buildFreshnessLabel(record.buildFreshness)} />
         <RunFact label="端口" value={runPortText(record)} />
@@ -307,7 +307,7 @@ function RunVerification({ record }: { record: ServiceRunRecordView }) {
     <ul className="mt-0.5 flex flex-col text-[10px] text-muted" data-testid="dock-run-verification">
       {record.verifications.map((entry, index) => (
         <li key={`${entry.kind}:${index}`} data-verification-state={linkageStateLabel(entry)}>
-          联通核验：{linkageStateLabel(entry)} · {entry.detail}
+          联通核验：{linkageStateLabel(entry)} · {hostText(entry.detail, "Host 未上报核验细节")}
         </li>
       ))}
     </ul>
@@ -1488,22 +1488,22 @@ function DependencyTargets({ dependencies }: { dependencies: TaskDependencyRouti
       <li key={`${entry.unitId}/${entry.key}`} className="border border-line bg-paper px-2 py-1 text-[11px]"
         data-destination-key={entry.key} data-destination-unit={entry.unitId} data-destination-kind={entry.target.kind}>
         <div className="flex min-w-0 items-baseline gap-1.5">
-          <span className="truncate font-mono text-[10px]">{entry.key}</span>
+          <span className="truncate font-mono text-[10px]">{hostText(entry.key, "Host 未上报变量名")}</span>
           <span className="ml-auto shrink-0 text-muted" data-destination-label>
             {entry.target.kind === "local-instance" ? "本任务实例地址" : "共享环境"}
           </span>
         </div>
         <p className="mt-0.5 min-w-0 break-words text-[10px] text-muted" data-destination-value>
           {entry.target.kind === "local-instance"
-            ? <>{entry.value ?? "（无地址值）"} · {entry.target.address}
+            ? <>{hostText(entry.value, "（无地址值）")} · {hostText(entry.target.address, "Host 未上报实例地址")}
                 {entry.target.port === undefined ? "（无端口）" : `（端口 ${entry.target.port}）`}</>
-            : <>共享环境 {entry.target.environment.length > 0 ? entry.target.environment : "名称未提供"}
-                {entry.readPoints.map((point) => ` · ${point.source}${readPointValueText(point)}`).join("")}</>}
+            : <>共享环境 {hostText(entry.target.environment, "名称未提供")}
+                {entry.readPoints.map((point) => ` · ${hostText(point.source, "Host 未上报读取点来源")}${readPointValueText(point)}`).join("")}</>}
         </p>
         <p className="mt-0.5 min-w-0 break-words text-[10px] text-muted">
-          读取点：{entry.readPoints.map((point) => point.source).join("、") || "无"}
+          读取点：{entry.readPoints.map((point) => hostText(point.source, "Host 未上报读取点来源")).join("、") || "无"}
         </p>
-        {entry.reason !== undefined && <p className="mt-0.5 min-w-0 break-words text-[10px] text-muted" data-destination-reason>{entry.reason}</p>}
+        {entry.reason !== undefined && <p className="mt-0.5 min-w-0 break-words text-[10px] text-muted" data-destination-reason>{hostText(entry.reason, "Host 未给出该去向的原因")}</p>}
       </li>
     ))}
   </>;
@@ -1574,7 +1574,7 @@ function RunTool({ taskId }: { taskId: string }) {
                         : "Host 未提供配方描述"}
                     </p>
                     <p className="mt-0.5 truncate text-[10px] text-muted">
-                      绑定 v{row.binding.templateVersion} · {row.binding.rootId}{row.binding.subdir ? `/${row.binding.subdir}` : ""}
+                      绑定 v{row.binding.templateVersion} · {hostText(row.binding.rootId, "Host 未上报绑定根")}{row.binding.subdir ? `/${row.binding.subdir}` : ""}
                       {row.binding.privateKeys.length > 0 ? ` · 私有引用 ${row.binding.privateKeys.length} 项` : ""}
                     </p>
                     <ServiceRunRecord row={row} />
@@ -1603,8 +1603,8 @@ function RunTool({ taskId }: { taskId: string }) {
                       </li>
                     : remoteDependencies.map((entry) => (
                         <li key={`remote/${entry.unitId}/${entry.key}`} className="px-1 text-[10px] text-muted" data-remote-key={entry.key}>
-                          {entry.key} → 共享环境 {entry.target.environment.length > 0 ? entry.target.environment : "名称未提供"}
-                          （读取点：{entry.readPoints.map((point) => point.source).join("、") || "无"}）
+                          {hostText(entry.key, "Host 未上报变量名")} → 共享环境 {hostText(entry.target.environment, "名称未提供")}
+                          （读取点：{entry.readPoints.map((point) => hostText(point.source, "Host 未上报读取点来源")).join("、") || "无"}）
                         </li>
                       ))}
                 </ul>}
@@ -1621,7 +1621,7 @@ function RunTool({ taskId }: { taskId: string }) {
               <ul className="mt-1 flex flex-col gap-0.5" data-testid="dock-routing-diagnostics">
                 {dependencies.diagnostics.map((entry) => (
                   <li key={`${entry.code}:${entry.message}`} className="min-w-0 break-words text-[10px] text-muted">
-                    {entry.code}：{entry.message}{entry.hint !== undefined ? `（${entry.hint}）` : ""}
+                    {hostText(entry.code, "Host 未上报诊断代码")}：{hostText(entry.message, "Host 未上报诊断说明")}{entry.hint && `（${entry.hint}）`}
                   </li>
                 ))}
               </ul>
@@ -1636,7 +1636,7 @@ function RunTool({ taskId }: { taskId: string }) {
                     ? <li className="px-1 text-[10px] text-muted" data-testid="dock-linkage-none">无依赖边（未做互验）</li>
                     : dependencies.linkage.edges.map((edge) => (
                         <li key={`${edge.from}->${edge.to}`} className="px-1 text-[10px] text-muted" data-edge-to={edge.to}>
-                          {edge.fromName} → {edge.toName}（{edge.kind === "call" ? "调用" : "前置"}）· 已声明 · 未互验（本读不启动任何单元）
+                          {hostText(edge.fromName, "Host 未上报来源单元")} → {hostText(edge.toName, "Host 未上报目标单元")}（{edge.kind === "call" ? "调用" : "前置"}）· 已声明 · 未互验（本读不启动任何单元）
                         </li>
                       ))}
                 </ul>}

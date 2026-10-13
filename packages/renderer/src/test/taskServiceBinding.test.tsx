@@ -16,6 +16,19 @@ const tasks = [{ taskId: "task-a", name: "任务甲" }];
 function roots() { return { ok: true, payload: { taskDir: "/task", roots: [{ id: "repo", kind: "worktree", label: "Repo", path: "/task/repo" }] } }; }
 afterEach(() => { cleanup(); delete window.pidock; });
 
+it("names a blank bound 绑定根 instead of ending the 已绑定 line at a separator", async () => {
+  // `serviceBindingsFromMain` reads `rootId` by value (`typeof === "string"`),
+  // so the answered binding may carry `""`; the line then read
+  // `已绑定 · 环境 本地开发 · v1 · `.
+  window.pidock = {
+    taskOp: vi.fn(async () => roots()),
+    serviceCatalogOp: vi.fn(async (request: Record<string, unknown>) => request["op"] === "taskBindings"
+      ? { ok: true, payload: [{ ...bound, rootId: "" }] } : { ok: true, payload: { cancelled: true } }),
+  };
+  render(<TaskServiceBinding environmentName={environmentName} template={template} tasks={tasks} />);
+  expect(await screen.findByText("已绑定 · 环境 本地开发 · v1 · Host 未上报绑定根")).toBeInTheDocument();
+});
+
 it("names an empty root label in the worktree choice instead of a blank option", async () => {
   // A label the Host sent as `""` survives `workspaceRootsFromHost` (`str()`
   // keeps it), so the worktree choice names the absence instead of offering a

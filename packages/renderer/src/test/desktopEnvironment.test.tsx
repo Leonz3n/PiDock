@@ -70,6 +70,27 @@ it("shows only Host-scanned drafts for the selected task and worktree", async ()
   expect(screen.getByRole("button", { name: "添加服务" })).toBeDisabled();
 });
 
+it("names a blank scan field instead of an empty draft heading, basis or note", async () => {
+  // `serviceImportScanFromHost` reads `name`, `runTypeBasis`, `invalidVars[]`,
+  // `toVerify[]` and an error `reason` with `shortText` (a length cap only), so
+  // all of them can be `""`; each names its own absence instead of rendering a
+  // nameless draft, an empty right-hand column or a blank paragraph.
+  const taskOp = vi.fn(async (_taskId: string, op: string) => op === "task/fileRoots"
+    ? { ok: true, payload: { taskDir: "/task", roots: [{ id: "repo", kind: "worktree", label: "invoice", path: "/task/repo" }] } }
+    : { ok: true, payload: { scan: { hints: [
+      { source: "package.json", name: "", runType: "long-lived", runTypeBasis: "", runTypeUncertain: false, variables: [], program: "node", args: ["server.js"], invalidVars: [""], toVerify: [""] },
+    ], errors: [{ source: "compose.yaml", reason: "" }], truncated: false } } });
+  window.pidock = { taskOp };
+  render(<DesktopEnvironmentPage projects={[{ id: "p1", name: "真实项目" }]} projectId="p1" taskCount={1} tasks={[{ taskId: "task-1", name: "真实任务" }]} onSelectProject={() => {}} />);
+  await screen.findByRole("option", { name: "invoice" });
+  fireEvent.click(screen.getByRole("button", { name: "扫描仓库" }));
+  expect(await screen.findByText("Host 未上报候选名称")).toBeInTheDocument();
+  expect(screen.getByText("Host 未上报判定依据")).toBeInTheDocument();
+  expect(screen.getByText("无效变量：Host 未上报变量名")).toBeInTheDocument();
+  expect(screen.getByText("Host 未上报待核对项")).toBeInTheDocument();
+  expect(screen.getByRole("alert")).toHaveTextContent("compose.yaml：Host 未给出原因");
+});
+
 it("names an empty root label in the repository choice instead of a blank option", async () => {
   // A label the Host sent as `""` survives `workspaceRootsFromHost` (`str()`
   // keeps it), so the repo choice is where it must be named, not offered blank.

@@ -249,4 +249,52 @@ describe("[PiDock 05] #10 box 1 运行面板 显示 本地/远程位置 与 实�
     expect(within(panel).getByTestId("dock-service-rows")).toHaveTextContent("Caller API");
     expect(panel.querySelector('[data-linkage-state]')).toBeNull();
   });
+
+  it("names every blank Host string in the 去向 / 依赖边 / 绑定 rows instead of leaving a blank", async () => {
+    // Every string below is read by value on the renderer side
+    // (`dependencyUnit`/`dependencyDestination`/`taskDependencyRoutingFromMain`
+    // and `serviceBindingsFromMain` all keep `""`), so a blank answer really
+    // reaches these rows; each fact has to name its own absence.
+    dock({
+      bindings: [{ taskId: TASK_ID, serviceId: CALLER, environmentId: ENVIRONMENT_ID, environmentName: "开发环境", templateVersion: 1, rootId: "", subdir: "", privateKeys: [] }],
+      routing: () => ({ ok: true, payload: {
+        taskId: TASK_ID,
+        units: [{ unitId: `repo-a:${CALLER}`, serviceId: CALLER, name: "", repoDir: "", subdir: "", templateVersion: 1, environment: "", location: "local", declaredPorts: [] }],
+        repoGroups: [{ repoDir: "", unitIds: [`repo-a:${CALLER}`] }],
+        destinations: [
+          { unitId: `repo-a:${CALLER}`, serviceId: CALLER, key: "BLANK_LOCAL",
+            target: { kind: "local-instance", instanceId: `${TASK_ID}/${CALLER}`, address: "" },
+            value: "", readPoints: [{ source: "", masked: false }] },
+          { unitId: `repo-a:${CALLER}`, serviceId: CALLER, key: "BLANK_REMOTE",
+            target: { kind: "remote", environment: "" },
+            readPoints: [{ source: "", masked: false }], reason: "" },
+        ],
+        linkage: { state: "declared", edges: [{ from: "a", to: "b", fromName: "", toName: "", kind: "call" }] },
+        diagnostics: [{ code: "", message: "", hint: "" }],
+      } }),
+    });
+    render(<DesktopToolDock taskId={TASK_ID} tool="runtime" onClose={() => {}} />);
+    const panel = screen.getByTestId("desktop-tool-dock");
+
+    // The binding row's own identity: `服务绑定 · v… · <rootId>` never ends at a blank.
+    await waitFor(() => expect(within(panel).getByTestId("dock-service-rows")).toHaveTextContent("绑定 v1 · Host 未上报绑定根"));
+
+    const routing = await within(panel).findByTestId("dock-routing");
+    const local = routing.querySelector('[data-destination-key="BLANK_LOCAL"]') as HTMLElement;
+    expect(local).toHaveTextContent("（无地址值）");
+    expect(local).toHaveTextContent("Host 未上报实例地址");
+    expect(local).toHaveTextContent("读取点：Host 未上报读取点来源");
+    const remoteRow = routing.querySelector('[data-destination-key="BLANK_REMOTE"]') as HTMLElement;
+    expect(remoteRow).toHaveTextContent("共享环境 名称未提供");
+    expect(remoteRow).toHaveTextContent("Host 未给出该去向的原因");
+
+    const remoteDeps = within(panel).getByTestId("dock-remote-deps");
+    expect(remoteDeps).toHaveTextContent("共享环境 名称未提供");
+
+    const diagnostics = within(panel).getByTestId("dock-routing-diagnostics");
+    expect(diagnostics).toHaveTextContent("Host 未上报诊断代码：Host 未上报诊断说明");
+
+    const linkage = within(panel).getByTestId("dock-linkage");
+    expect(linkage).toHaveTextContent("Host 未上报来源单元 → Host 未上报目标单元（调用）");
+  });
 });
