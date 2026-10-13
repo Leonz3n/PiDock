@@ -843,19 +843,30 @@ describe("[PiDock 10] (#15 盒子 2/7/9) 交付目标与每视图归属 on the s
 
   /**
    * The Host's answers for one set of roots: every read is scoped to the asked
-   * `rootId` and every attribution comes from the shipped rule function.
+   * `rootId` and every attribution comes from the shipped rule function. The
+   * overrides let one test hand back a payload the shipped Host would not
+   * produce (an empty string, a contradicting root) without a second stub.
    */
-  const hostReads = (roots: ReturnType<typeof workspaceRoots>, override?: { delivery?: unknown; treeAttribution?: unknown }) =>
+  const hostReads = (
+    roots: ReturnType<typeof workspaceRoots>,
+    override?: {
+      delivery?: unknown;
+      treeAttribution?: unknown;
+      treeEntries?: unknown;
+      preview?: { path: string; language: string };
+    },
+  ) =>
     async (_taskId: string, op: string, payload: Record<string, unknown>) => {
       const root = roots.find((entry) => entry.id === payload["rootId"]) ?? roots[0]!;
       const attribution = workspaceAttribution(root, TASK_ID, TASK_DIR);
       const identity = attribution.repo ?? attribution.directoryId ?? attribution.rootLabel;
       if (op === "task/fileRoots") return { ok: true, payload: { taskDir: TASK_DIR, roots } };
       if (op === "task/fileTree") {
-        return { ok: true, payload: { tree: { attribution: override?.treeAttribution ?? attribution, path: "", entries: [{ name: "a.md", path: "a.md", kind: "file", size: 3 }], truncated: false } } };
+        return { ok: true, payload: { tree: { attribution: override?.treeAttribution ?? attribution, path: "", entries: override?.treeEntries ?? [{ name: "a.md", path: "a.md", kind: "file", size: 3 }], truncated: false } } };
       }
       if (op === "task/filePreview") {
-        return { ok: true, payload: { preview: { attribution, path: "a.md", language: "markdown", source: `# ${identity} 内容`, truncated: false, lineCount: 1 } } };
+        const shape = override?.preview ?? { path: "a.md", language: "markdown" };
+        return { ok: true, payload: { preview: { attribution, path: shape.path, language: shape.language, source: `# ${identity} 内容`, truncated: false, lineCount: 1 } } };
       }
       if (op === "task/fileDiff") {
         return { ok: true, payload: { attribution, path: "a.md", diff: `- ${identity} 旧行\n+ 新行`, truncated: false } };
@@ -867,6 +878,31 @@ describe("[PiDock 10] (#15 盒子 2/7/9) 交付目标与每视图归属 on the s
       }
       return { ok: false, error: `unexpected ${op}` };
     };
+
+  /**
+   * The Host's launch receipt for one root, built through the same shipped
+   * attribution rule as every other payload here.
+   */
+  const launchFor = (root: ReturnType<typeof workspaceRoots>[number]) => ({
+    rootId: root.id,
+    rootKind: root.kind,
+    program: "/usr/local/bin/fake-editor",
+    args: ["--new-window", root.path],
+    cwd: root.path,
+    openedPath: root.path,
+    attribution: workspaceAttribution(root, TASK_ID, TASK_DIR),
+    disclosure: `外部编辑器在任务工作副本打开：${root.path}`,
+    note: "未读取、未写入也未复制任何编辑器配置",
+    actor: "human" as const,
+    label: `外部编辑器 ${root.label}（用户显式操作）`,
+    started: true as const,
+    windowObserved: false as const,
+  });
+
+  /** The editor launch is its own bridge entry, so a receipt is its own payload. */
+  const editorBridge = (taskOp: unknown, openTaskEditor: unknown) => {
+    window.pidock = { taskOp, openTaskEditor } as unknown as typeof window.pidock;
+  };
 
   it("shows the Host's delivery repo, recorded branch and three false automation flags for a worktree root", async () => {
     const roots = twoRepoRoots();
@@ -1070,5 +1106,288 @@ describe("[PiDock 10] (#15 盒子 2/7/9) 交付目标与每视图归属 on the s
     expect(screen.getByTestId("dock-tree-attribution")).toHaveTextContent("仓库 repo-b");
     expect(screen.getByTestId("dock-tree-attribution")).not.toHaveTextContent("repo-a");
     expect(screen.queryByText(/release\/v2/)).not.toBeInTheDocument();
+  });
+
+  it("refuses by name a delivery target whose own rootKind contradicts the selected root", async () => {
+    const roots = sharedOnlyRoots();
+    const link = roots[0]!;
+    // A payload that TALKS ITS WAY PAST the panel: it answers the link root's own
+    // id (so the identity check passes) and claims to be a worktree's target. The
+    // renderer's own knowledge of the selected root is the only authority left.
+    bridge(hostReads(roots, { delivery: { ok: true, payload: { target: {
+      attribution: { ...workspaceAttribution(link, TASK_ID, TASK_DIR), rootKind: "worktree", repo: "sample-repo" },
+      repo: "sample-repo",
+      branch: "sample-branch",
+      autoCommit: false,
+      autoPush: false,
+      autoMerge: false,
+    } } } }));
+    render(<DesktopToolDock taskId={TASK_ID} tool="files" onClose={() => {}} />);
+
+    // No target, and a NAMED state that says which side the panel believes.
+    expect(await screen.findByTestId("dock-delivery-notice")).toHaveTextContent(
+      "Host 交付目标自述为工作树，与所选根（普通目录链接）不符：本面板只按所选根的类型判定，不显示 Git 交付目标",
+    );
+    expect(screen.queryByTestId("dock-delivery")).not.toBeInTheDocument();
+    expect(screen.queryByText(/sample-repo/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/sample-branch/)).not.toBeInTheDocument();
+    // Not a blank panel: the selected root's own tree attribution is beside it.
+    expect(await screen.findByTestId("dock-tree-attribution")).toHaveAttribute("data-root-kind", "shared-dir");
+  });
+
+  it("names an absent delivery repo instead of leaving the delivery readout blank", async () => {
+    const roots = twoRepoRoots();
+    const root = roots.find((entry) => entry.id === "repo-a")!;
+    // A Host contract violation the parser keeps (`str()` keeps `""`): a worktree
+    // target with no repository identity. The sibling branch field is already
+    // named; this one must be too.
+    bridge(hostReads(roots, { delivery: { ok: true, payload: { target: {
+      attribution: workspaceAttribution(root, TASK_ID, TASK_DIR),
+      repo: "",
+      branch: "release/v2",
+      autoCommit: false,
+      autoPush: false,
+      autoMerge: false,
+    } } } }));
+    render(<DesktopToolDock taskId={TASK_ID} tool="files" onClose={() => {}} />);
+
+    const readout = await screen.findByTestId("dock-delivery");
+    const repo = within(readout).getByTestId("dock-delivery-repo");
+    expect(repo).toHaveTextContent("Host 未上报交付仓库身份");
+    expect(repo.textContent).not.toBe("");
+    expect(within(readout).getByTestId("dock-delivery-branch")).toHaveTextContent("release/v2");
+  });
+
+  it("names a dropped stale answer instead of leaving the tree area empty", async () => {
+    const roots = twoRepoRoots();
+    const rootA = roots.find((root) => root.id === "repo-a")!;
+    const answers = hostReads(roots);
+    const held: Array<{ op: string; resolve: (value: unknown) => void }> = [];
+    const taskOp = vi.fn((taskId: string, op: string, payload: Record<string, unknown>) => {
+      if ((op === "task/fileTree" || op === "task/deliveryInfo") && payload["rootId"] === rootA.id) {
+        return new Promise<unknown>((resolve) => { held.push({ op, resolve }); });
+      }
+      return answers(taskId, op, payload);
+    });
+    bridge(taskOp);
+    render(<DesktopToolDock taskId={TASK_ID} tool="files" onClose={() => {}} />);
+
+    // The user leaves root A for root B while A's own answers are still in flight.
+    fireEvent.click(await screen.findByRole("button", { name: "repo-b" }));
+    expect(await screen.findByTestId("dock-tree-attribution")).toHaveTextContent("仓库 repo-b");
+    expect(held.map((entry) => entry.op)).toEqual(["task/fileTree"]);
+
+    // A's tree answer lands last: it is dropped, and the DROP ITSELF is named.
+    await act(async () => {
+      held.shift()!.resolve(await answers(TASK_ID, "task/fileTree", { rootId: rootA.id }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(screen.getByTestId("dock-stale-answer")).toHaveTextContent("已丢弃过期根 repo-a 的文件树响应 · 当前根 repo-b");
+    // …and the tree area is not empty: root B's own tree is what is on screen.
+    expect(screen.getByTestId("dock-tree-attribution")).toHaveTextContent("仓库 repo-b");
+
+    // A's delivery answer lands even later: also dropped, also named.
+    await act(async () => {
+      const answer = held.shift()!;
+      expect(answer.op).toBe("task/deliveryInfo");
+      answer.resolve(await answers(TASK_ID, answer.op, { rootId: rootA.id }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(screen.getByTestId("dock-stale-answer")).toHaveTextContent("已丢弃过期根 repo-a 的交付目标响应 · 当前根 repo-b");
+    expect(within(screen.getByTestId("dock-delivery")).getByTestId("dock-delivery-repo")).toHaveTextContent("repo-b");
+    expect(screen.queryByText(/release\/v2/)).not.toBeInTheDocument();
+  });
+
+  it("names a tree answer that describes another root instead of leaving an unnamed empty area", async () => {
+    const roots = twoRepoRoots();
+    const rootB = roots.find((root) => root.id === "repo-b")!;
+    // The answer to root A's own read claims to belong to root B. It is dropped,
+    // and the region it would have filled says so by name instead of going quiet.
+    bridge(hostReads(roots, { treeAttribution: workspaceAttribution(rootB, TASK_ID, TASK_DIR) }));
+    render(<DesktopToolDock taskId={TASK_ID} tool="files" onClose={() => {}} />);
+
+    expect(await screen.findByTestId("dock-stale-answer")).toHaveTextContent(
+      "Host 文件树响应自述根 repo-b 与所请求的根 repo-a 不符：本面板不显示",
+    );
+    expect(screen.queryByTestId("dock-tree")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("dock-tree-attribution")).not.toBeInTheDocument();
+    // The panel is not blank: the selected root's own delivery readout is there.
+    expect(within(await screen.findByTestId("dock-delivery")).getByTestId("dock-delivery-repo")).toHaveTextContent("repo-a");
+  });
+
+  it("drops a preview answer from the root the user left, by name", async () => {
+    const roots = twoRepoRoots();
+    const rootA = roots.find((root) => root.id === "repo-a")!;
+    const answers = hostReads(roots);
+    let releasePreview: (value: unknown) => void = () => {};
+    const taskOp = vi.fn((taskId: string, op: string, payload: Record<string, unknown>) => {
+      if (op === "task/filePreview" && payload["rootId"] === rootA.id) {
+        return new Promise<unknown>((resolve) => { releasePreview = resolve; });
+      }
+      return answers(taskId, op, payload);
+    });
+    bridge(taskOp);
+    render(<DesktopToolDock taskId={TASK_ID} tool="files" onClose={() => {}} />);
+
+    fireEvent.click(await screen.findByText("a.md"));
+    fireEvent.click(screen.getByRole("button", { name: "repo-b" }));
+    expect(within(await screen.findByTestId("dock-delivery")).getByTestId("dock-delivery-repo")).toHaveTextContent("repo-b");
+
+    await act(async () => {
+      releasePreview(await answers(TASK_ID, "task/filePreview", { rootId: rootA.id }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(screen.getByTestId("dock-stale-answer")).toHaveTextContent("已丢弃过期根 repo-a 的预览响应 · 当前根 repo-b");
+    expect(screen.queryByTestId("dock-preview-attribution")).not.toBeInTheDocument();
+    expect(screen.queryByText("# repo-a 内容")).not.toBeInTheDocument();
+  });
+
+  it("drops a diff answer from the root the user left, by name", async () => {
+    const roots = twoRepoRoots();
+    const rootA = roots.find((root) => root.id === "repo-a")!;
+    const answers = hostReads(roots);
+    let releaseDiff: (value: unknown) => void = () => {};
+    const taskOp = vi.fn((taskId: string, op: string, payload: Record<string, unknown>) => {
+      if (op === "task/fileDiff" && payload["rootId"] === rootA.id) {
+        return new Promise<unknown>((resolve) => { releaseDiff = resolve; });
+      }
+      return answers(taskId, op, payload);
+    });
+    bridge(taskOp);
+    render(<DesktopToolDock taskId={TASK_ID} tool="files" onClose={() => {}} />);
+
+    fireEvent.click(await screen.findByText("a.md"));
+    expect(await screen.findByTestId("dock-preview-attribution")).toHaveTextContent("仓库 repo-a");
+    fireEvent.click(screen.getByRole("button", { name: "改动" }));
+    fireEvent.click(screen.getByRole("button", { name: "repo-b" }));
+    expect(within(await screen.findByTestId("dock-delivery")).getByTestId("dock-delivery-repo")).toHaveTextContent("repo-b");
+
+    await act(async () => {
+      releaseDiff(await answers(TASK_ID, "task/fileDiff", { rootId: rootA.id }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(screen.getByTestId("dock-stale-answer")).toHaveTextContent("已丢弃过期根 repo-a 的改动响应 · 当前根 repo-b");
+    expect(screen.queryByTestId("dock-diff")).not.toBeInTheDocument();
+    expect(screen.queryByText("repo-a 旧行")).not.toBeInTheDocument();
+  });
+
+  it("refuses by name an editor receipt from the root the user has left", async () => {
+    const roots = twoRepoRoots();
+    const rootA = roots.find((root) => root.id === "repo-a")!;
+    const taskOp = vi.fn(hostReads(roots));
+    let releaseLaunch: (value: unknown) => void = () => {};
+    const openTaskEditor = vi.fn(() => new Promise<unknown>((resolve) => { releaseLaunch = resolve; }));
+    editorBridge(taskOp, openTaskEditor);
+    render(<DesktopToolDock taskId={TASK_ID} tool="files" onClose={() => {}} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "用外部编辑器打开" }));
+    expect(openTaskEditor).toHaveBeenCalledWith({ taskId: TASK_ID, rootId: rootA.id });
+    fireEvent.click(screen.getByRole("button", { name: "repo-b" }));
+    expect(within(await screen.findByTestId("dock-delivery")).getByTestId("dock-delivery-repo")).toHaveTextContent("repo-b");
+
+    // The receipt of the root the user left must not stand in as root B's launch.
+    await act(async () => {
+      releaseLaunch({ ok: true, payload: { workspaceId: "w", taskId: TASK_ID, op: "task/openEditor", payload: { launch: launchFor(rootA) } } });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(screen.getByTestId("dock-stale-answer")).toHaveTextContent("已丢弃过期根 repo-a 的外部编辑器回执 · 当前根 repo-b");
+    expect(screen.queryByText("外部编辑器已启动（用户显式操作）")).not.toBeInTheDocument();
+    expect(screen.queryByText(launchFor(rootA).program)).not.toBeInTheDocument();
+    expect(screen.queryByText(launchFor(rootA).openedPath)).not.toBeInTheDocument();
+  });
+
+  it("clears the previous root's tree while the next root's own tree is in flight", async () => {
+    const roots = twoRepoRoots();
+    const rootB = roots.find((root) => root.id === "repo-b")!;
+    const answers = hostReads(roots);
+    let releaseTree: (value: unknown) => void = () => {};
+    const taskOp = vi.fn((taskId: string, op: string, payload: Record<string, unknown>) => {
+      if (op === "task/fileTree" && payload["rootId"] === rootB.id) {
+        return new Promise<unknown>((resolve) => { releaseTree = resolve; });
+      }
+      return answers(taskId, op, payload);
+    });
+    bridge(taskOp);
+    render(<DesktopToolDock taskId={TASK_ID} tool="files" onClose={() => {}} />);
+
+    expect(within(await screen.findByTestId("dock-tree-attribution")).getByText(/仓库 repo-a/)).toBeInTheDocument();
+    expect(await screen.findByText("a.md")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "repo-b" }));
+    // Root A's entries must not stand in for root B's tree while it is in flight.
+    await waitFor(() => expect(screen.queryByTestId("dock-tree")).not.toBeInTheDocument());
+    expect(screen.getByText("读取中…")).toBeInTheDocument();
+    expect(screen.queryByText("a.md")).not.toBeInTheDocument();
+
+    await act(async () => {
+      releaseTree(await answers(TASK_ID, "task/fileTree", { rootId: rootB.id }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(within(await screen.findByTestId("dock-tree-attribution")).getByText(/仓库 repo-b/)).toBeInTheDocument();
+    expect(await screen.findByText("a.md")).toBeInTheDocument();
+  });
+
+  it("names an empty directory the Host answered as empty, and stays apart from a dropped answer", async () => {
+    const roots = twoRepoRoots();
+    bridge(hostReads(roots, { treeEntries: [] }));
+    render(<DesktopToolDock taskId={TASK_ID} tool="files" onClose={() => {}} />);
+
+    // The Host's own answer: this directory IS empty. It is a NAMED state inside
+    // the tree it answered for — which is how the user tells it apart from a
+    // tree that never arrived (no `dock-tree`) and from a dropped answer.
+    const tree = await screen.findByTestId("dock-tree");
+    expect(within(tree).getByTestId("dock-tree-empty")).toHaveTextContent("目录为空");
+    expect(screen.queryByTestId("dock-stale-answer")).not.toBeInTheDocument();
+  });
+
+  it("names every empty Host string it renders instead of leaving a blank", async () => {
+    const roots = twoRepoRoots();
+    // Parseable-but-empty strings (`str()` keeps `""`) reach the DOM in three
+    // shapes: a tree entry's own name, the preview header, and the two shared-dir
+    // attribution fields that are not the identity line.
+    bridge(hostReads(roots, {
+      treeEntries: [{ name: "", path: "blank.md", kind: "file", size: 0 }],
+      preview: { path: "", language: "" },
+    }));
+    render(<DesktopToolDock taskId={TASK_ID} tool="files" onClose={() => {}} />);
+
+    const tree = await screen.findByTestId("dock-tree");
+    expect(within(tree).getByText("Host 未上报条目名称")).toBeInTheDocument();
+    expect(within(tree).queryByText("目录为空")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("Host 未上报条目名称"));
+    expect(await screen.findByTestId("dock-preview-attribution")).toBeInTheDocument();
+    expect(screen.getByText("Host 未上报预览路径")).toBeInTheDocument();
+    expect(screen.getByText("Host 未上报语言")).toBeInTheDocument();
+
+    // The same rule on a link root's attribution: the task identity and the
+    // unified pi working directory are never blank.
+    const linkRoots = sharedOnlyRoots();
+    bridge(hostReads(linkRoots, {
+      treeAttribution: { ...workspaceAttribution(linkRoots[0]!, TASK_ID, TASK_DIR), taskId: "", piWorkDir: "" },
+    }));
+    cleanup();
+    render(<DesktopToolDock taskId={TASK_ID} tool="files" onClose={() => {}} />);
+    const linkTree = await screen.findByTestId("dock-tree-attribution");
+    expect(linkTree).toHaveTextContent("任务 Host 未上报任务身份");
+    expect(within(linkTree).getByTestId("dock-shared-pi-work-dir")).toHaveTextContent("Host 未上报统一工作目录");
+  });
+
+  it("names an empty editor receipt field instead of leaving a blank", async () => {
+    const roots = twoRepoRoots();
+    const root = roots.find((entry) => entry.id === "repo-a")!;
+    const openTaskEditor = vi.fn(async () => ({ ok: true, payload: { workspaceId: "w", taskId: TASK_ID, op: "task/openEditor", payload: {
+      launch: { ...launchFor(root), program: "", openedPath: "", cwd: "", disclosure: "", note: "" },
+    } } }));
+    editorBridge(vi.fn(hostReads(roots)), openTaskEditor);
+    render(<DesktopToolDock taskId={TASK_ID} tool="files" onClose={() => {}} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "用外部编辑器打开" }));
+    expect(await screen.findByText("外部编辑器已启动（用户显式操作）")).toBeInTheDocument();
+    expect(screen.getByText("Host 未上报编辑器程序")).toBeInTheDocument();
+    expect(screen.getByText("Host 未上报打开路径")).toBeInTheDocument();
+    expect(screen.getByText("Host 未上报编辑器工作目录")).toBeInTheDocument();
+    expect(screen.getByText("Host 未上报外部编辑器说明")).toBeInTheDocument();
+    expect(screen.getByText("Host 未上报外部编辑器边界说明")).toBeInTheDocument();
   });
 });
