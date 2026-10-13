@@ -288,6 +288,37 @@ describe("Desktop SDK conversation", () => {
     expect(f.calls.filter((call) => call.action === "start")).toHaveLength(0);
   });
 
+  it("names, in the window line's hover only, that this route's SDK turns are not in the Host session ledger", async () => {
+    const f = setup();
+    f.setMessages([{ role: "assistant", text: "reply", usage: { input: 100, output: 20, cacheRead: 0, cacheWrite: 0 } }]);
+    f.bridge.taskOp = vi.fn(async (_taskId: string, op: string) => op === "task/sessionContext"
+      ? { ok: true, payload: { context: hostContext({ tokens: 0 }) } }
+      : { ok: true, payload: {} }) as never;
+    mount(f);
+    const usage = await screen.findByTestId("composer-usage");
+    // Two reads disagree: the Host's session total is 0 while this SDK window has
+    // reported 120. The hover says exactly that, scoped to this route.
+    await waitFor(() => expect(usage.getAttribute("title")).toContain("Host 会话账本本次读数 0 tokens，而本窗口已报告 120 tokens；本路由的 SDK 回合用量未计入 Host 会话账本。"));
+    expect(usage.getAttribute("title")).toContain("最近最多 80 条 SDK 消息；不是会话累计，可能不含更早用量。");
+    // The label itself is unchanged: it counts the bounded window, never a session total.
+    expect(usage).toHaveTextContent("近期已报告输入+输出 120 tokens");
+    expect(usage).not.toHaveTextContent(/本会话/);
+  });
+
+  it("shows the Host's own session total in the hover when it has one, without the gap sentence", async () => {
+    const f = setup();
+    f.setMessages([{ role: "assistant", text: "reply", usage: { input: 100, output: 20, cacheRead: 0, cacheWrite: 0 } }]);
+    f.bridge.taskOp = vi.fn(async (_taskId: string, op: string) => op === "task/sessionContext"
+      ? { ok: true, payload: { context: hostContext({ tokens: 4321 }) } }
+      : { ok: true, payload: {} }) as never;
+    mount(f);
+    const usage = await screen.findByTestId("composer-usage");
+    await waitFor(() => expect(usage.getAttribute("title")).toContain("Host 会话账本读数 4321 tokens。"));
+    expect(usage.getAttribute("title")).not.toContain("未计入 Host 会话账本");
+    expect(usage).toHaveTextContent("近期已报告输入+输出 120 tokens");
+    expect(usage).not.toHaveTextContent(/本会话/);
+  });
+
   it("labels composer usage as recent reported input and output, not session cumulative usage", async () => {
     const f = setup();
     f.setMessages([
