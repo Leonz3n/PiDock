@@ -15,7 +15,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -278,12 +278,21 @@ it("refuses every escape vector by name and changes nothing on disk", async () =
   await h.host.setPermission("main", "auto");
   // A symlink inside the worktree, one of them dangling, are real escape
   // vectors: a write through the dangling one would create the file outside.
-  const outsideDir = join("/tmp", `pidock-agent-tools-escape-${process.pid}`);
-  const glued = join("/tmp", `pidock-agent-tools-glued-${process.pid}.txt`);
-  const glued2 = join("/tmp", `pidock-agent-tools-glued2-${process.pid}.txt`);
-  execFileSync("ln", ["-s", "/etc", join(h.fixture.worktree, "link-etc")]);
-  execFileSync("ln", ["-s", join(outsideDir, "planted.txt"), join(h.fixture.worktree, "link-dangling.txt")]);
-  execFileSync("ln", ["-s", join(outsideDir, "planted"), join(h.fixture.worktree, "link-dangling-dir")]);
+  const outsideDir = join(tmpdir(), `pidock-agent-tools-escape-${process.pid}`);
+  const glued = join(tmpdir(), `pidock-agent-tools-glued-${process.pid}.txt`);
+  const glued2 = join(tmpdir(), `pidock-agent-tools-glued2-${process.pid}.txt`);
+  // `ln -s` as a program does not exist on win32 (and `/tmp` is not a real path
+  // there), so the links are created with Node's own API. `type` is ignored on
+  // POSIX; on win32 a DIR-shaped link needs it, and a junction is NOT usable
+  // here because all three targets are dangling (a junction must point at an
+  // existing absolute directory).
+  const link = (target: string, linkPath: string, shape: "file" | "dir"): void => {
+    if (process.platform === "win32") symlinkSync(target, linkPath, shape);
+    else symlinkSync(target, linkPath);
+  };
+  link("/etc", join(h.fixture.worktree, "link-etc"), "dir");
+  link(join(outsideDir, "planted.txt"), join(h.fixture.worktree, "link-dangling.txt"), "file");
+  link(join(outsideDir, "planted"), join(h.fixture.worktree, "link-dangling-dir"), "dir");
   const before = snapshot(h.fixture.root);
   const gitPointerBefore = readFileSync(join(h.fixture.worktree, ".git"), "utf8");
 
