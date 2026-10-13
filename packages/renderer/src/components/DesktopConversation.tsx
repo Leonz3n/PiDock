@@ -402,6 +402,16 @@ function TaskConversation({ taskId, name, roots, association, onBack, onOpenProv
     : contextRead.phase === "failed" ? `Host 会话占用读数读取失败：${contextRead.error}`
     : readout === null ? "Host 未返回会话读数"
       : `${readout.providerName ?? readout.providerId} · ${readout.modelName ?? readout.model} · 已用 ${readout.used}k Tokens（来源 ${readout.source}）· 窗口 ${readout.window > 0 ? `${readout.window}k Tokens` : "未知"} · 占用比例 ${readout.percent === null ? "未知" : `${readout.percent.toFixed(1)}%`}；数字即 Host 会话读数，未做推断`;
+  // The Token line keeps its bounded-window LABEL. Its hover names the Host's own
+  // session total as read, and — when the two reads disagree in the one direction
+  // that matters (Host total 0 while this window reports usage) — states that the
+  // SDK turns of THIS route are not in the Host's session ledger. Scoped to this
+  // route because that is all that was read: a store that accumulates would show
+  // its own number instead.
+  const hostLedgerNote = readout === null ? ""
+    : readout.tokens === 0 && recentTokens > 0
+      ? ` Host 会话账本本次读数 0 tokens，而本窗口已报告 ${recentTokens} tokens；本路由的 SDK 回合用量未计入 Host 会话账本。`
+      : ` Host 会话账本读数 ${readout.tokens} tokens。`;
   return <TooltipProvider><main data-testid="desktop-conversation" className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-bg text-ink">
     <div className="shrink-0 border-b border-line bg-paper px-4 pt-3 below-mid:px-3">
       {/* #49: the shell column is 280-380px when a task page is open, and the
@@ -539,7 +549,7 @@ function TaskConversation({ taskId, name, roots, association, onBack, onOpenProv
             <Button type="button" size="sm" onClick={onOpenProviders} title={provider ? PROVIDER_STATE_TEXT[provider.state] : "正在读取 Provider 配置"} data-testid="composer-model">{modelLabel}<Icon name="down" className="h-3 w-3" /></Button>
           </TooltipTrigger><TooltipContent>{provider ? PROVIDER_STATE_TEXT[provider.state] : "正在读取 Provider 配置"}</TooltipContent></Tooltip>
           <span data-testid="composer-context" title={contextTitle} className="min-w-0 break-words">{contextLabel}</span>
-          <span title={usageDetail} className="ml-auto min-w-0 break-words">{!usageSnapshot ? "近期用量未核验" : reportedMessages.length ? `近期已报告输入+输出 ${recentTokens} tokens` : "近期用量未报告"}</span>
+          <span data-testid="composer-usage" title={`${usageDetail}${hostLedgerNote}`} className="ml-auto min-w-0 break-words">{!usageSnapshot ? "近期用量未核验" : reportedMessages.length ? `近期已报告输入+输出 ${recentTokens} tokens` : "近期用量未报告"}</span>
           <Button type="submit" variant="default" size="icon" disabled={blocked || !draft.trim()} aria-label="发送" title="发送"><Icon name="arrow" /></Button>
         </div>
       </form>
