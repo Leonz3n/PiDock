@@ -705,19 +705,15 @@ function FilesTool({ taskId }: { taskId: string }) {
    */
   const openEditor = async () => {
     if (!rootId) return;
-    const askedRoot = rootId;
     setEditorBusy(true);
-    const result = await openTaskEditorThroughShell({ taskId, rootId: askedRoot });
+    const result = await openTaskEditorThroughShell({ taskId, rootId });
     setEditorBusy(false);
-    const view = result.ok ? externalEditorLaunchFromHost(result.payload) : undefined;
-    // The receipt names the root it opened: a launch for a root the user has
-    // left is dropped too, so this panel never shows another root's path.
-    if (!answerIsForRoot(askedRoot, selectedRootRef.current, view?.attribution.rootId)) return;
     if (!result.ok) {
       setEditor(null);
       setEditorError(shellFailure(result, "打开外部编辑器失败"));
       return;
     }
+    const view = externalEditorLaunchFromHost(result.payload);
     if (!view) {
       setEditor(null);
       setEditorError("Host 外部编辑器响应无法解析");

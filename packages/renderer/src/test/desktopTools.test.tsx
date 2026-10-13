@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DesktopToolDock } from "../components/DesktopToolDock";
 // The SHIPPED Host rules build this suite's stub payloads, so the assertions
@@ -845,14 +845,14 @@ describe("[PiDock 10] (#15 盒子 2/7/9) 交付目标与每视图归属 on the s
    * The Host's answers for one set of roots: every read is scoped to the asked
    * `rootId` and every attribution comes from the shipped rule function.
    */
-  const hostReads = (roots: ReturnType<typeof workspaceRoots>, override?: { delivery?: unknown }) =>
+  const hostReads = (roots: ReturnType<typeof workspaceRoots>, override?: { delivery?: unknown; treeAttribution?: unknown }) =>
     async (_taskId: string, op: string, payload: Record<string, unknown>) => {
       const root = roots.find((entry) => entry.id === payload["rootId"]) ?? roots[0]!;
       const attribution = workspaceAttribution(root, TASK_ID, TASK_DIR);
       const identity = attribution.repo ?? attribution.directoryId ?? attribution.rootLabel;
       if (op === "task/fileRoots") return { ok: true, payload: { taskDir: TASK_DIR, roots } };
       if (op === "task/fileTree") {
-        return { ok: true, payload: { tree: { attribution, path: "", entries: [{ name: "a.md", path: "a.md", kind: "file", size: 3 }], truncated: false } } };
+        return { ok: true, payload: { tree: { attribution: override?.treeAttribution ?? attribution, path: "", entries: [{ name: "a.md", path: "a.md", kind: "file", size: 3 }], truncated: false } } };
       }
       if (op === "task/filePreview") {
         return { ok: true, payload: { preview: { attribution, path: "a.md", language: "markdown", source: `# ${identity} 内容`, truncated: false, lineCount: 1 } } };
@@ -976,5 +976,99 @@ describe("[PiDock 10] (#15 盒子 2/7/9) 交付目标与每视图归属 on the s
     // The panel is not blank: the tree still renders beside the named error.
     expect(screen.getByTestId("desktop-tool-dock")).toBeInTheDocument();
     await screen.findByTestId("dock-tree-attribution");
+  });
+
+  it("names an absent worktree repo identity instead of presenting the root label as a repository", async () => {
+    const roots = twoRepoRoots();
+    // A Host contract violation: a worktree attribution that carries no `repo`.
+    // The root label is the ROOT's own identity; it must never stand in for a
+    // repository identity, in the one place this panel used to default.
+    const withoutRepo: Record<string, unknown> = { ...workspaceAttribution(roots[0]!, TASK_ID, TASK_DIR) };
+    delete withoutRepo["repo"];
+    bridge(hostReads(roots, { treeAttribution: withoutRepo }));
+    render(<DesktopToolDock taskId={TASK_ID} tool="files" onClose={() => {}} />);
+
+    const tree = await screen.findByTestId("dock-tree-attribution");
+    expect(tree).toHaveAttribute("data-root-kind", "worktree");
+    // The absence is NAMED…
+    expect(tree).toHaveTextContent("Host 未上报仓库身份");
+    // …and the root label (`repo-a`) is not smuggled in as the repo identity.
+    expect(tree).not.toHaveTextContent("仓库 repo-a");
+  });
+
+  it("refuses by name a delivery target that names a link root, instead of rendering a target that cannot exist", async () => {
+    const roots = sharedOnlyRoots();
+    const link = roots[0]!;
+    // A Host contract violation: `deliveryTarget` refuses a link root
+    // (`plain-dir-no-delivery`), so this target must not be rendered even
+    // though it parses. The renderer keeps the invariant locally.
+    bridge(hostReads(roots, { delivery: { ok: true, payload: { target: {
+      attribution: workspaceAttribution(link, TASK_ID, TASK_DIR),
+      repo: "sample-repo",
+      branch: "sample-branch",
+      autoCommit: false,
+      autoPush: false,
+      autoMerge: false,
+    } } } }));
+    render(<DesktopToolDock taskId={TASK_ID} tool="files" onClose={() => {}} />);
+
+    // The refusal is a NAMED state, not a blank and not a target.
+    expect(await screen.findByTestId("dock-delivery-notice")).toHaveTextContent(
+      "Host 交付目标与根类型不符：普通目录链接没有 Git 交付，本面板不显示",
+    );
+    expect(screen.queryByTestId("dock-delivery")).not.toBeInTheDocument();
+    expect(screen.queryByText(/sample-repo/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/sample-branch/)).not.toBeInTheDocument();
+    // Not blank: the link's own attribution renders beside the refusal.
+    const tree = await screen.findByTestId("dock-tree-attribution");
+    expect(tree).toHaveAttribute("data-root-kind", "shared-dir");
+  });
+
+  it("drops a late answer from the root the user already left, so one repo is never shown under another's chip", async () => {
+    const roots = twoRepoRoots();
+    const rootA = roots.find((root) => root.id === "repo-a")!;
+    const rootB = roots.find((root) => root.id === "repo-b")!;
+    const answers = hostReads(roots);
+    // Root A's own tree and delivery answers are held back and released only
+    // after root B is fully on screen (two quick chip clicks, reverse order).
+    const held: Array<{ op: string; resolve: (value: unknown) => void }> = [];
+    const taskOp = vi.fn((taskId: string, op: string, payload: Record<string, unknown>) => {
+      if ((op === "task/fileTree" || op === "task/deliveryInfo") && payload["rootId"] === rootA.id) {
+        return new Promise<unknown>((resolve) => { held.push({ op, resolve }); });
+      }
+      return answers(taskId, op, payload);
+    });
+    bridge(taskOp);
+    render(<DesktopToolDock taskId={TASK_ID} tool="files" onClose={() => {}} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: rootB.label }));
+    const readout = await screen.findByTestId("dock-delivery");
+    expect(within(readout).getByTestId("dock-delivery-repo")).toHaveTextContent("repo-b");
+    expect(within(readout).getByTestId("dock-delivery-branch")).toHaveTextContent("main");
+    expect(await screen.findByTestId("dock-tree-attribution")).toHaveTextContent("仓库 repo-b");
+    // `selectRoot` awaits the tree before it asks for the delivery, so only A's
+    // tree is outstanding at this point; A's delivery is not even requested yet.
+    expect(held.map((entry) => entry.op)).toEqual(["task/fileTree"]);
+
+    // Now root A's own answers arrive LAST — they belong to a root the user left.
+    await act(async () => {
+      const treeAnswer = held.shift()!;
+      treeAnswer.resolve(await answers(TASK_ID, treeAnswer.op, { rootId: rootA.id }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      // Answering A's tree is what makes the panel ask for A's delivery, which
+      // is held too and arrives even later.
+      const deliveryAnswer = held.shift()!;
+      expect(deliveryAnswer.op).toBe("task/deliveryInfo");
+      deliveryAnswer.resolve(await answers(TASK_ID, deliveryAnswer.op, { rootId: rootA.id }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    // The panel still shows root B's identity and data, and none of root A's.
+    const current = screen.getByTestId("dock-delivery");
+    expect(within(current).getByTestId("dock-delivery-repo")).toHaveTextContent("repo-b");
+    expect(within(current).getByTestId("dock-delivery-branch")).toHaveTextContent("main");
+    expect(screen.getByTestId("dock-tree-attribution")).toHaveTextContent("仓库 repo-b");
+    expect(screen.getByTestId("dock-tree-attribution")).not.toHaveTextContent("repo-a");
+    expect(screen.queryByText(/release\/v2/)).not.toBeInTheDocument();
   });
 });
