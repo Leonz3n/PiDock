@@ -390,14 +390,16 @@ function TreeList({
             className="flex h-auto w-full justify-start gap-2 rounded-none px-1 py-1 text-left text-xs"
           >
             <span className="w-3 text-[10px] text-muted">{entry.kind === "dir" ? "▸" : "·"}</span>
-            <span className="truncate font-mono">{entry.name}</span>
+            {/* A name the Host left empty is NAMED: an entry that renders as a
+                bare bullet would be an identity claim the panel cannot make. */}
+            <span className="truncate font-mono">{hostText(entry.name, "Host 未上报条目名称")}</span>
             {entry.kind === "file" && entry.size !== undefined && (
               <span className="ml-auto shrink-0 text-[10px] text-muted">{entry.size} B</span>
             )}
           </Button>
         </li>
       ))}
-      {!entries.length && <li className="px-1 py-2 text-xs text-muted">目录为空</li>}
+      {!entries.length && <li className="px-1 py-2 text-xs text-muted" data-testid="dock-tree-empty">目录为空</li>}
     </ul>
   );
 }
@@ -430,12 +432,12 @@ function ViewAttribution({ label, attribution, testId }: { label: string; attrib
   return (
     <div className="text-[10px] text-muted" data-testid={testId} data-root-kind={attribution.rootKind}>
       <p>
-        {label}归属：任务 {attribution.taskId} · {identity}
+        {label}归属：任务 {hostText(attribution.taskId, "Host 未上报任务身份")} · {identity}
       </p>
       {attribution.rootKind === "shared-dir" && (
         <dl className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-0.5">
           <dt>统一 pi 工作目录</dt>
-          <dd className="min-w-0 break-all font-mono" data-testid="dock-shared-pi-work-dir">{attribution.piWorkDir}</dd>
+          <dd className="min-w-0 break-all font-mono" data-testid="dock-shared-pi-work-dir">{hostText(attribution.piWorkDir, "Host 未上报统一工作目录")}</dd>
           <dt>链接位置</dt>
           <dd className="min-w-0 break-all font-mono" data-testid="dock-shared-link-path">
             {hostText(attribution.linkPath, "Host 未上报链接位置")}
@@ -478,7 +480,7 @@ function DeliveryTargetReadout({ target }: { target: WorkspaceDeliveryView }) {
     >
       <dl className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-1 text-[11px]">
         <dt className="text-muted">交付仓库</dt>
-        <dd className="min-w-0 break-all font-mono" data-testid="dock-delivery-repo">{target.repo}</dd>
+        <dd className="min-w-0 break-all font-mono" data-testid="dock-delivery-repo">{hostText(target.repo, "Host 未上报交付仓库身份")}</dd>
         <dt className="text-muted">交付分支（Host 记录的远程基线）</dt>
         <dd className="min-w-0 break-all font-mono" data-testid="dock-delivery-branch">
           {target.branch.length > 0 ? target.branch : "Host 未记录远程基线分支"}
@@ -497,14 +499,41 @@ function DeliveryTargetReadout({ target }: { target: WorkspaceDeliveryView }) {
  * user has selected NOW; `askedRoot` is the root the read was made for and
  * `declaredRoot` is the `attribution.rootId` the payload itself states (absent
  * on a refusal, where the request is the only evidence there is). A tree,
- * preview, diff or delivery answer for a root the user already left is DROPPED —
- * never rendered under the current root's chip, because one repository must
- * never be shown as another's. Only the DATA is dropped: the caller's in-flight
- * flag is cleared as soon as the response arrives, so a dropped answer can never
- * leave the panel stuck in a loading state.
+ * preview, diff, delivery or editor-receipt answer for a root the user already
+ * left is DROPPED — never rendered under the current root's chip, because one
+ * repository must never be shown as another's. Only the DATA is dropped: the
+ * caller's in-flight flag is cleared as soon as the response arrives, so a
+ * dropped answer can never leave the panel stuck in a loading state.
  */
-function answerIsForRoot(askedRoot: string, currentRoot: string | undefined, declaredRoot: string | undefined): boolean {
-  return currentRoot === askedRoot && (declaredRoot === undefined || declaredRoot === askedRoot);
+type FilesPanelAnswer = "文件树响应" | "交付目标响应" | "预览响应" | "Git 差异响应" | "外部编辑器回执";
+
+/** Why one answer may not be shown here: the user left that root, or the
+ *  payload names another root than the one the read was made for. */
+type AnswerDropReason = "过期" | "自述不符";
+
+function answerDropReason(askedRoot: string, currentRoot: string | undefined, declaredRoot: string | undefined): AnswerDropReason | null {
+  if (currentRoot !== askedRoot) return "过期";
+  if (declaredRoot !== undefined && declaredRoot !== askedRoot) return "自述不符";
+  return null;
+}
+
+/**
+ * The NAME of a dropped answer: a drop is never silent, because silence is the
+ * same lie by omission as showing the data (盒子 2). Both root identities in the
+ * sentence come from the renderer's OWN records — `askedRoot` is the root this
+ * read was made for, `currentRoot` the root the user has selected — so the
+ * sentence can never be built from the payload's own claim about itself.
+ */
+function droppedAnswerText(
+  what: FilesPanelAnswer,
+  reason: AnswerDropReason,
+  askedRoot: string,
+  currentRoot: string | undefined,
+  declaredRoot: string | undefined,
+): string {
+  return reason === "过期"
+    ? `已丢弃过期根 ${askedRoot} 的${what} · 当前根 ${currentRoot ?? "本面板尚未选定根"}`
+    : `Host ${what}自述根 ${declaredRoot} 与所请求的根 ${askedRoot} 不符：本面板不显示`;
 }
 
 function FilesTool({ taskId }: { taskId: string }) {
@@ -525,12 +554,38 @@ function FilesTool({ taskId }: { taskId: string }) {
   /** The launch is its own in-flight state: it is not a file read. */
   const [editorBusy, setEditorBusy] = useState(false);
   /**
+   * The NAMED state a dropped answer leaves behind, with the region it explains:
+   * a response that is discarded must not leave an empty area with nothing said
+   * about it. It is cleared when a fresh answer for that same region is
+   * accepted, or when the user selects another root (which is also the only
+   * thing that can make "当前根 …" in its sentence stale).
+   */
+  const [droppedAnswer, setDroppedAnswer] = useState<{ what: FilesPanelAnswer; text: string } | null>(null);
+  /**
    * The root the panel last ASKED for, written synchronously in `selectRoot`.
    * `rootId` is state (applied asynchronously), so an answer is checked against
    * this ref instead: it is the only value that is already current when a late
    * response arrives.
    */
   const selectedRootRef = useRef<string | undefined>(undefined);
+
+  /**
+   * Drop one answer that is not this panel's, and NAME the drop. Stable across
+   * renders, so the read callbacks it is called from keep a stable dependency
+   * list and the roots effect cannot loop.
+   */
+  const dropAnswer = useCallback((what: FilesPanelAnswer, askedRoot: string, declaredRoot: string | undefined): boolean => {
+    const reason = answerDropReason(askedRoot, selectedRootRef.current, declaredRoot);
+    if (reason === null) return false;
+    setDroppedAnswer({ what, text: droppedAnswerText(what, reason, askedRoot, selectedRootRef.current, declaredRoot) });
+    return true;
+  }, []);
+
+  /** The region that dropped an answer is freshly on screen again: its naming
+   *  has done its job. Another region's naming is left alone. */
+  const clearDroppedAnswer = useCallback((what: FilesPanelAnswer) => {
+    setDroppedAnswer((previous) => (previous?.what === what ? null : previous));
+  }, []);
 
   const loadTree = useCallback(
     async (nextRootId: string, nextRelative: string) => {
@@ -539,8 +594,10 @@ function FilesTool({ taskId }: { taskId: string }) {
       setBusy(false);
       const view = result.ok ? workspaceTreeFromHost(result.payload) : undefined;
       // An answer for another root — or for a root the user has already left —
-      // is not this panel's data: drop it instead of rendering it here.
-      if (!answerIsForRoot(nextRootId, selectedRootRef.current, view?.attribution.rootId)) return;
+      // is not this panel's data: it is dropped BY NAME, so the tree region is
+      // never left empty with nothing said about it.
+      if (dropAnswer("文件树响应", nextRootId, view?.attribution.rootId)) return;
+      clearDroppedAnswer("文件树响应");
       if (!result.ok) {
         setTree(null);
         setError(shellFailure(result, "读取目录失败"));
@@ -554,7 +611,7 @@ function FilesTool({ taskId }: { taskId: string }) {
       setTree(view);
       setError(null);
     },
-    [taskId],
+    [taskId, dropAnswer, clearDroppedAnswer],
   );
 
   /**
@@ -570,8 +627,10 @@ function FilesTool({ taskId }: { taskId: string }) {
       const result = await deliveryInfoThroughShell({ taskId, rootId: nextRootId });
       const view = result.ok ? workspaceDeliveryFromHost(result.payload) : undefined;
       // Same rule as the tree: a target that belongs to another root (or to a
-      // root the user has left) is never shown under the current chip.
-      if (!answerIsForRoot(nextRootId, selectedRootRef.current, view?.attribution.rootId)) return;
+      // root the user has left) is never shown under the current chip, and the
+      // drop is named.
+      if (dropAnswer("交付目标响应", nextRootId, view?.attribution.rootId)) return;
+      clearDroppedAnswer("交付目标响应");
       if (!result.ok) {
         setDelivery(null);
         setDeliveryNotice(shellFailure(result, "读取交付目标失败"));
@@ -585,7 +644,7 @@ function FilesTool({ taskId }: { taskId: string }) {
       setDelivery(view);
       setDeliveryNotice(null);
     },
-    [taskId],
+    [taskId, dropAnswer, clearDroppedAnswer],
   );
 
   /** Select one root: its tree and its delivery target are this root's own reads. */
@@ -596,12 +655,19 @@ function FilesTool({ taskId }: { taskId: string }) {
       selectedRootRef.current = nextRootId;
       setRootId(nextRootId);
       setRelative("");
+      // Every region is cleared, the TREE included: while the new root's own
+      // answer is in flight the panel must not keep showing the previous
+      // root's entries under the new root's chip. `读取中…` is the named state
+      // for that gap.
+      setTree(null);
       setPreview(null);
       setDiff(null);
       setEditor(null);
       setEditorError(null);
       setDelivery(null);
       setDeliveryNotice(null);
+      // A drop naming the root the user just left would be a stale claim itself.
+      setDroppedAnswer(null);
       await loadTree(nextRootId, "");
       await loadDelivery(nextRootId);
     },
@@ -645,7 +711,8 @@ function FilesTool({ taskId }: { taskId: string }) {
     const result = await filePreviewThroughShell({ taskId, rootId: askedRoot, relative: path });
     setBusy(false);
     const view = result.ok ? workspacePreviewFromHost(result.payload) : undefined;
-    if (!answerIsForRoot(askedRoot, selectedRootRef.current, view?.attribution.rootId)) return;
+    if (dropAnswer("预览响应", askedRoot, view?.attribution.rootId)) return;
+    clearDroppedAnswer("预览响应");
     if (!result.ok) {
       setPreview(null);
       setDiff(null);
@@ -669,7 +736,8 @@ function FilesTool({ taskId }: { taskId: string }) {
     const result = await fileDiffThroughShell({ taskId, rootId: askedRoot, relative: preview.path });
     setBusy(false);
     const view = result.ok ? workspaceDiffFromHost(result.payload) : undefined;
-    if (!answerIsForRoot(askedRoot, selectedRootRef.current, view?.attribution.rootId)) return;
+    if (dropAnswer("Git 差异响应", askedRoot, view?.attribution.rootId)) return;
+    clearDroppedAnswer("Git 差异响应");
     if (!result.ok) {
       setDiff(null);
       setError(shellFailure(result, "读取改动失败"));
@@ -687,33 +755,50 @@ function FilesTool({ taskId }: { taskId: string }) {
   const selectedRoot = roots?.find((root) => root.id === rootId);
   /**
    * [PiDock 10] (#15 盒子 9) "a link/plain directory has no Git delivery target"
-   * is enforced HERE, not only by the Host rule: a target the Host sent for a
-   * root that is not a worktree is refused BY NAME. It is not a blank and not
-   * "响应无法解析" — the payload parsed fine, the panel simply may not show a
-   * target where none can exist.
+   * is enforced HERE from the RENDERER's own knowledge of the selected root —
+   * never from the payload's self-declared `rootKind`, which is the very value
+   * under suspicion: a target that mis-describes itself must not be able to talk
+   * its way past this invariant. A refusal is always BY NAME. It is not a blank
+   * and not "响应无法解析" — the payload parsed fine, the panel simply may not
+   * show a target where none can exist.
    */
-  const linkDeliveryRefusal = delivery !== null && delivery.attribution.rootKind !== "worktree"
-    ? "Host 交付目标与根类型不符：普通目录链接没有 Git 交付，本面板不显示"
-    : null;
+  const selectedRootKindText = selectedRoot?.kind === "worktree"
+    ? "工作树"
+    : selectedRoot?.kind === "shared-dir"
+      ? "普通目录链接"
+      : "尚未选定的根";
+  const deliveryTargetIsShown = delivery !== null && selectedRoot?.kind === "worktree" && delivery.attribution.rootKind === "worktree";
+  const linkDeliveryRefusal = delivery === null || deliveryTargetIsShown
+    ? null
+    : delivery.attribution.rootKind !== "worktree"
+      ? "Host 交付目标与根类型不符：普通目录链接没有 Git 交付，本面板不显示"
+      : `Host 交付目标自述为工作树，与所选根（${selectedRootKindText}）不符：本面板只按所选根的类型判定，不显示 Git 交付目标`;
   const deliveryNoticeText = deliveryNotice ?? linkDeliveryRefusal;
 
   /**
    * [PiDock 10] (#15 box 28) 从任务打开外部编辑器. The page names the task and the
    * selected root only: main reads the editor program from the user's own
    * settings and launches it at the resolved root. The receipt (or the Host's
-   * named refusal) is what is shown — never an invented success.
+   * named refusal) is what is shown — never an invented success, and never a
+   * receipt for a root the user has left.
    */
   const openEditor = async () => {
     if (!rootId) return;
+    const askedRoot = rootId;
     setEditorBusy(true);
-    const result = await openTaskEditorThroughShell({ taskId, rootId });
+    const result = await openTaskEditorThroughShell({ taskId, rootId: askedRoot });
     setEditorBusy(false);
+    const view = result.ok ? externalEditorLaunchFromHost(result.payload) : undefined;
+    // The receipt is a payload like the others: one for another root — or for a
+    // root the user has left — is refused BY NAME instead of being rendered as
+    // this root's launch.
+    if (dropAnswer("外部编辑器回执", askedRoot, view?.attribution.rootId)) return;
+    clearDroppedAnswer("外部编辑器回执");
     if (!result.ok) {
       setEditor(null);
       setEditorError(shellFailure(result, "打开外部编辑器失败"));
       return;
     }
-    const view = externalEditorLaunchFromHost(result.payload);
     if (!view) {
       setEditor(null);
       setEditorError("Host 外部编辑器响应无法解析");
@@ -734,10 +819,10 @@ function FilesTool({ taskId }: { taskId: string }) {
       {taskDir !== null && (
         <dl className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-1 text-[11px]">
           <dt className="text-muted">任务目录</dt>
-          <dd className="min-w-0 break-all font-mono">{taskDir}</dd>
+          <dd className="min-w-0 break-all font-mono">{hostText(taskDir, "Host 未上报任务目录")}</dd>
           {selectedRoot && <>
             <dt className="text-muted">实际目录</dt>
-            <dd className="min-w-0 break-all font-mono">{selectedRoot.path}</dd>
+            <dd className="min-w-0 break-all font-mono">{hostText(selectedRoot.path, "Host 未上报根目录路径")}</dd>
             {selectedRoot.kind === "worktree" && <>
               {/* [PiDock 03] (#6 盒子 6) 工作分支 is an OBSERVATION of this worktree
                   (`task/fileRoots` → `observedRoots()`); the pinned baseline is a
@@ -771,7 +856,7 @@ function FilesTool({ taskId }: { taskId: string }) {
               root, or the Host's own refusal. A link root gets the refusal and
               NO Git affordance; a worktree root gets the disclosed target — a
               target that names any other root kind is refused by name below. */}
-          {delivery && delivery.attribution.rootKind === "worktree" && <DeliveryTargetReadout target={delivery} />}
+          {deliveryTargetIsShown && delivery && <DeliveryTargetReadout target={delivery} />}
           {deliveryNoticeText && (
             <p
               role="status"
@@ -779,6 +864,17 @@ function FilesTool({ taskId }: { taskId: string }) {
               data-testid="dock-delivery-notice"
             >
               {deliveryNoticeText}
+            </p>
+          )}
+          {/* [PiDock 10] (#15 盒子 2) a discarded answer is NAMED here: the region
+              it belonged to says what happened instead of going quietly empty. */}
+          {droppedAnswer && (
+            <p
+              role="status"
+              className="border border-[#e5d9b0] bg-[#fdfbf3] px-2 py-1.5 text-[11px] text-[#7a5c1f]"
+              data-testid="dock-stale-answer"
+            >
+              {droppedAnswer.text}
             </p>
           )}
           <div className="flex items-center gap-2">
@@ -805,18 +901,18 @@ function FilesTool({ taskId }: { taskId: string }) {
               <p className="text-muted">外部编辑器已启动（用户显式操作）</p>
               <dl className="mt-1 grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-1">
                 <dt className="text-muted">程序</dt>
-                <dd className="min-w-0 break-all font-mono">{editor.program}</dd>
+                <dd className="min-w-0 break-all font-mono">{hostText(editor.program, "Host 未上报编辑器程序")}</dd>
                 <dt className="text-muted">已打开</dt>
-                <dd className="min-w-0 break-all font-mono">{editor.openedPath}</dd>
+                <dd className="min-w-0 break-all font-mono">{hostText(editor.openedPath, "Host 未上报打开路径")}</dd>
                 <dt className="text-muted">工作目录</dt>
-                <dd className="min-w-0 break-all font-mono">{editor.cwd}</dd>
+                <dd className="min-w-0 break-all font-mono">{hostText(editor.cwd, "Host 未上报编辑器工作目录")}</dd>
                 {editor.pid !== undefined && <>
                   <dt className="text-muted">进程号</dt>
                   <dd className="min-w-0 break-all font-mono">{editor.pid}</dd>
                 </>}
               </dl>
-              <p className="mt-1 text-[10px] text-muted">{editor.disclosure}</p>
-              <p className="mt-1 text-[10px] text-muted">{editor.note}</p>
+              <p className="mt-1 text-[10px] text-muted">{hostText(editor.disclosure, "Host 未上报外部编辑器说明")}</p>
+              <p className="mt-1 text-[10px] text-muted">{hostText(editor.note, "Host 未上报外部编辑器边界说明")}</p>
             </section>
           )}
           {busy && <p className="text-[11px] text-muted">读取中…</p>}
@@ -839,13 +935,15 @@ function FilesTool({ taskId }: { taskId: string }) {
           {preview && (
             <section className="min-h-0 border-t border-line pt-2">
               <div className="flex items-center gap-2 text-[11px] text-muted">
-                <span className="truncate font-mono">{preview.path}</span>
-                <Badge className="shrink-0">{preview.language}</Badge>
+                <span className="truncate font-mono">{hostText(preview.path, "Host 未上报预览路径")}</span>
+                <Badge className="shrink-0">{hostText(preview.language, "Host 未上报语言")}</Badge>
                 {preview.lineCount !== undefined && <Badge className="shrink-0">{preview.lineCount} 行</Badge>}
                 {/* A plain-directory link has no Git view (the Host refuses
-                    `plain-dir-no-diff`): the affordance follows the view's own
-                    attribution instead of offering a button that must fail. */}
-                {preview.attribution.rootKind === "worktree" && (
+                    `plain-dir-no-diff`): the affordance follows the renderer's
+                    own knowledge of the selected root's kind as well as the
+                    view's own attribution — a preview that mis-describes its
+                    root must not put a Git button on a link. */}
+                {preview.attribution.rootKind === "worktree" && selectedRoot?.kind === "worktree" && (
                   <Button type="button" variant="link" size="sm" onClick={() => void openDiff()} className="ml-auto h-auto shrink-0 px-0">
                     改动
                   </Button>
