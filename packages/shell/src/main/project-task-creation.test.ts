@@ -383,7 +383,14 @@ describe("persistent Project task creation with local Git", () => {
     expect(existsSync(preview.taskDir)).toBe(false);
     expect(JSON.stringify(env.storage.read())).not.toContain(env.remote);
   });
-  it("rejects a file URL whose symlink-then-dotdot path reaches a different repository with the same commit", async () => {
+  // win32 (#57): the fixture builds a `file://${home}/link/../remote.git` URL and runs a real
+  // `git ls-remote` on it, which is POSIX URL/path shape: it needs the kernel to resolve `..` after
+  // following the link, while win32 collapses `..` lexically first, so both URLs would name the same
+  // repository and the premise cannot be built - not a junction candidate. Covered by the sibling
+  // "pins a credential-free remote transport digest across prepare and commit", verified by reading
+  // it: it drives the same 传输地址已改变 refusal at commit from a plain path change. The link-shaped
+  // URL resolution itself is unobserved on win32.
+  it.skipIf(process.platform === "win32")("rejects a file URL whose symlink-then-dotdot path reaches a different repository with the same commit", async () => {
     const env = await setup();
     const alternate = join(env.home, "alternate");
     mkdirSync(join(alternate, "child"), { recursive: true });
