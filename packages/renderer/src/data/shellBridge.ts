@@ -505,6 +505,26 @@ export async function serviceStopScopeThroughShell(input: {
 }
 
 /**
+ * [PiDock 05] (#10 box 1) read the task's 本地/远程位置 and REAL 实际依赖去向
+ * (`shell/serviceCatalogOp {op:"taskDependencyRouting"}`). A READ on the op set
+ * the dock already uses for 整组启动: it adds no channel and no `HOST_TASK_OPS`
+ * entry, and the page names only the project and the task. Main derives every
+ * value from the trusted catalog and the task's PINNED bindings, so this caller
+ * cannot supply a unit, an edge, a rule or a config layer - and main refuses such
+ * a payload by name if one ever arrives.
+ */
+export async function taskDependencyRoutingThroughShell(input: {
+  taskId: string;
+  projectId: string;
+}): Promise<ShellTaskOpResult> {
+  try {
+    return await serviceCatalogThroughShell({ op: "taskDependencyRouting", projectId: input.projectId, taskId: input.taskId });
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
  * [PiDock 08] (#14) plan the task's protocol binding on the Host
  * (`task/planProtocol`): the protocol repository, the mode (release
  * dependencies vs. this task's artifact), the repository's own generation

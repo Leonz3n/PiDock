@@ -22,7 +22,7 @@
  * the response as unreadable instead of rendering a partial or invented row.
  */
 import { serviceBindingsFromMain, serviceOwnerRebindFromMain, serviceTemplatesFromMain, type ServiceBindingView, type ServiceOwnerRebindView, type ServiceTemplateView } from "./serviceCatalog";
-import { serviceCatalogThroughShell, serviceRunRecordsThroughShell, serviceStatusThroughShell, shellBridge } from "./shellBridge";
+import { serviceCatalogThroughShell, serviceRunRecordsThroughShell, serviceStatusThroughShell, shellBridge, taskDependencyRoutingThroughShell } from "./shellBridge";
 import type { ServiceBuildFreshness, ServiceCodeState } from "./types";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -506,6 +506,145 @@ export function serviceLogFromHost(payload: unknown): ServiceLogLine[] | null {
 
 export interface TaskAssociationView { taskId: string; projectId: string | null; state: string }
 
+/** One bound service's 位置 and identity, as main's trusted read reports it ([PiDock 05] #10 box 1). */
+export interface TaskDependencyUnitView {
+  unitId: string;
+  serviceId: string;
+  name: string;
+  repoDir: string;
+  subdir: string;
+  templateVersion: number;
+  /** The environment the PINNED revision belongs to; a display label, never a value. */
+  environment: string;
+  /** `local` = 本任务在本机运行的实例；`remote` = 共享环境。No path in this build selects `remote`. */
+  location: "local" | "remote";
+  declaredPorts: number[];
+}
+
+/** Where one variable's value really goes: THIS task's instance address, or the shared environment. */
+export type TaskDependencyTargetView =
+  | { kind: "local-instance"; instanceId: string; address: string; port?: number }
+  | { kind: "remote"; environment: string };
+
+/** One config layer that really reads one key. A masked row NEVER carries its value. */
+export interface TaskDependencyReadPointView { source: string; value?: string; masked: boolean }
+
+export interface TaskDependencyDestinationView {
+  unitId: string;
+  serviceId: string;
+  key: string;
+  target: TaskDependencyTargetView;
+  /** The address THIS task's instance serves for the key, when a declaration bound it. */
+  value?: string;
+  readPoints: TaskDependencyReadPointView[];
+  reason?: string;
+}
+
+/**
+ * What the pinned revisions DECLARE: `no-declaration` is the named 「无依赖边（未做互验）」
+ * state, and a `declared` edge here is a declaration - this read verifies nothing,
+ * so it can never report 已互验.
+ */
+export interface TaskDependencyLinkageView {
+  state: "no-declaration" | "declared";
+  edges: { from: string; to: string; fromName: string; toName: string; kind: string }[];
+}
+
+export interface TaskDependencyRoutingView {
+  units: TaskDependencyUnitView[];
+  repoGroups: { repoDir: string; unitIds: string[] }[];
+  destinations: TaskDependencyDestinationView[];
+  linkage: TaskDependencyLinkageView;
+  diagnostics: { code: string; message: string; hint?: string }[];
+}
+
+function dependencyUnit(row: unknown): TaskDependencyUnitView | null {
+  if (!isRecord(row)) return null;
+  const { unitId, serviceId, name, repoDir, subdir, templateVersion, environment, location, declaredPorts } = row;
+  if (typeof unitId !== "string" || typeof serviceId !== "string" || typeof name !== "string" ||
+      typeof repoDir !== "string" || typeof subdir !== "string" || typeof templateVersion !== "number" ||
+      typeof environment !== "string" || (location !== "local" && location !== "remote") || !Array.isArray(declaredPorts)) return null;
+  if (!declaredPorts.every((port) => typeof port === "number" && Number.isInteger(port))) return null;
+  return { unitId, serviceId, name, repoDir, subdir, templateVersion, environment, location, declaredPorts: declaredPorts as number[] };
+}
+
+function dependencyDestination(row: unknown): TaskDependencyDestinationView | null {
+  if (!isRecord(row)) return null;
+  const { unitId, serviceId, key, target, value, readPoints, reason } = row;
+  if (typeof unitId !== "string" || typeof serviceId !== "string" || typeof key !== "string" || !isRecord(target)) return null;
+  let parsedTarget: TaskDependencyTargetView;
+  if (target["kind"] === "local-instance") {
+    if (typeof target["instanceId"] !== "string" || typeof target["address"] !== "string") return null;
+    if (target["port"] !== undefined && (typeof target["port"] !== "number" || !Number.isInteger(target["port"]))) return null;
+    parsedTarget = { kind: "local-instance", instanceId: target["instanceId"], address: target["address"],
+      ...(target["port"] === undefined ? {} : { port: target["port"] as number }) };
+  } else if (target["kind"] === "remote") {
+    if (typeof target["environment"] !== "string") return null;
+    parsedTarget = { kind: "remote", environment: target["environment"] };
+  } else return null;
+  if (value !== undefined && typeof value !== "string") return null;
+  if (reason !== undefined && typeof reason !== "string") return null;
+  if (!Array.isArray(readPoints) || readPoints.length > 40) return null;
+  const points: TaskDependencyReadPointView[] = [];
+  for (const entry of readPoints) {
+    if (!isRecord(entry) || typeof entry["source"] !== "string" || typeof entry["masked"] !== "boolean") return null;
+    // A masked row must NOT carry a value (main never sends one, and a payload that
+    // does is unreadable instead of being shown as if it were the real value). A
+    // NON-masked row may omit it: main sends the layer's own value only where the
+    // destination itself does not already carry one.
+    if (entry["masked"] === true && entry["value"] !== undefined) return null;
+    if (entry["value"] !== undefined && typeof entry["value"] !== "string") return null;
+    points.push({ source: entry["source"], masked: entry["masked"], ...(entry["value"] === undefined ? {} : { value: entry["value"] as string }) });
+  }
+  return { unitId, serviceId, key, target: parsedTarget, readPoints: points,
+    ...(value === undefined ? {} : { value }), ...(reason === undefined ? {} : { reason }) };
+}
+
+/**
+ * The trusted 依赖去向 read from main ([PiDock 05] #10 box 1). Strict: one
+ * malformed row makes the WHOLE read unreadable (`null`) rather than being
+ * skipped, because a partially rendered 去向 list would read as a complete one.
+ * `undefined` in `payload` is main's own "this task has no bound service": the
+ * panel then shows no destinations instead of inventing rows.
+ */
+export function taskDependencyRoutingFromMain(payload: unknown, taskId: string): TaskDependencyRoutingView | null {
+  if (!isRecord(payload) || payload["taskId"] !== taskId) return null;
+  if (!Array.isArray(payload["units"]) || !Array.isArray(payload["repoGroups"]) ||
+      !Array.isArray(payload["destinations"]) || !Array.isArray(payload["diagnostics"])) return null;
+  const units: TaskDependencyUnitView[] = [];
+  for (const row of payload["units"]) {
+    const parsed = dependencyUnit(row);
+    if (parsed === null) return null;
+    units.push(parsed);
+  }
+  const repoGroups: { repoDir: string; unitIds: string[] }[] = [];
+  for (const row of payload["repoGroups"]) {
+    if (!isRecord(row) || typeof row["repoDir"] !== "string" || !Array.isArray(row["unitIds"]) ||
+        !row["unitIds"].every((id) => typeof id === "string")) return null;
+    repoGroups.push({ repoDir: row["repoDir"], unitIds: row["unitIds"] as string[] });
+  }
+  const destinations: TaskDependencyDestinationView[] = [];
+  for (const row of payload["destinations"]) {
+    const parsed = dependencyDestination(row);
+    if (parsed === null) return null;
+    destinations.push(parsed);
+  }
+  const linkage = payload["linkage"];
+  if (!isRecord(linkage) || (linkage["state"] !== "no-declaration" && linkage["state"] !== "declared") || !Array.isArray(linkage["edges"])) return null;
+  const edges: TaskDependencyLinkageView["edges"] = [];
+  for (const row of linkage["edges"]) {
+    if (!isRecord(row) || typeof row["from"] !== "string" || typeof row["to"] !== "string" ||
+        typeof row["fromName"] !== "string" || typeof row["toName"] !== "string" || typeof row["kind"] !== "string") return null;
+    edges.push({ from: row["from"], to: row["to"], fromName: row["fromName"], toName: row["toName"], kind: row["kind"] });
+  }
+  const diagnostics: TaskDependencyRoutingView["diagnostics"] = [];
+  for (const row of payload["diagnostics"]) {
+    if (!isRecord(row) || typeof row["code"] !== "string" || typeof row["message"] !== "string" ||
+        (row["hint"] !== undefined && typeof row["hint"] !== "string")) return null;
+    diagnostics.push({ code: row["code"], message: row["message"], ...(row["hint"] === undefined ? {} : { hint: row["hint"] as string }) });
+  }
+  return { units, repoGroups, destinations, linkage: { state: linkage["state"], edges }, diagnostics };
+}
 /** The task's row in `shell/projectOp {op:"associations"}`; `null` when it is absent or malformed. */
 export function taskAssociationFromMain(payload: unknown, taskId: string): TaskAssociationView | null {
   if (!isRecord(payload) || !Array.isArray(payload["tasks"])) return null;
@@ -561,7 +700,11 @@ export interface BoundServiceRow {
 }
 
 export type TaskServicesLoad =
-  | { ok: true; projectId: string | null; associationState: string; rows: BoundServiceRow[]; templatesError: string | undefined }
+  | { ok: true; projectId: string | null; associationState: string; rows: BoundServiceRow[]; templatesError: string | undefined;
+      /** The trusted 依赖去向 read of [PiDock 05] #10 box 1; `undefined` means the task has no bound service, not "no dependencies". */
+      dependencies: TaskDependencyRoutingView | undefined;
+      /** Why the 依赖去向 read could not be shown (a named refusal / an unreadable answer). */
+      dependenciesError: string | undefined }
   | { ok: false; error: string };
 
 /**
@@ -580,11 +723,15 @@ export type TaskServicesLoad =
 export async function loadTaskServices(taskId: string): Promise<TaskServicesLoad> {
   const association = await taskProjectIdThroughShell(taskId);
   if (!association.ok) return { ok: false, error: association.error };
-  if (association.projectId === null) return { ok: true, projectId: null, associationState: association.state, rows: [], templatesError: undefined };
+  if (association.projectId === null) return { ok: true, projectId: null, associationState: association.state, rows: [], templatesError: undefined, dependencies: undefined, dependenciesError: undefined };
   const projectId = association.projectId;
-  const [bindingsResult, runRecordsResult] = await Promise.all([
+  const [bindingsResult, runRecordsResult, routingResult] = await Promise.all([
     serviceCatalogThroughShell({ op: "taskBindings", projectId, taskId }),
     serviceRunRecordsThroughShell(taskId),
+    // The 依赖去向 read asks main for a derivation of the task's PINNED bindings;
+    // it is a read on the same op set, and a failure here never hides the service
+    // rows below (each failure is named on its own row/section).
+    taskDependencyRoutingThroughShell({ projectId, taskId }),
   ]);
   if (!bindingsResult.ok) return { ok: false, error: shellFailure(bindingsResult, "读取任务服务绑定失败") };
   const bindings = serviceBindingsFromMain(bindingsResult.payload, taskId);
@@ -624,7 +771,17 @@ export async function loadTaskServices(taskId: string): Promise<TaskServicesLoad
       runRecordError: runRecordsError,
     };
   }));
-  return { ok: true, projectId, associationState: association.state, rows, templatesError };
+  // The 依赖去向 view: main's own answer, or the named reason it could not be
+  // shown (a refused read or an unreadable payload - never an empty one that would
+  // read as "no dependencies").
+  const dependencies = routingResult.ok ? taskDependencyRoutingFromMain(routingResult.payload, taskId) : null;
+  const dependenciesError = routingResult.ok === false
+    ? shellFailure(routingResult, "读取依赖去向失败")
+    : dependencies === null
+      ? "依赖去向响应无法解析"
+      : undefined;
+  return { ok: true, projectId, associationState: association.state, rows, templatesError,
+    dependencies: dependencies ?? undefined, dependenciesError };
 }
 
 /** Result of one start/stop of a task-bound service through the production path. */

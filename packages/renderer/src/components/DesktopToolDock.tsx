@@ -31,6 +31,8 @@ import {
   type ServiceRunRecordView,
   type ServiceStatusView,
   type ServiceRegistryStatusView,
+  type TaskDependencyReadPointView,
+  type TaskDependencyRoutingView,
   type TaskServicesLoad,
 } from "../data/taskServices";
 import { buildFreshnessLabel, codeStateLabel, failureLabel, linkageStateLabel } from "../data/serviceTopology";
@@ -106,9 +108,11 @@ export const DESKTOP_TOOLS_UNWIRED: { id: string; label: string; reason: string 
  * never replaced by sample data.
  */
 export const DESKTOP_TOOL_CONTROLS_UNWIRED: Record<string, string> = {
-  "service-mode": "本地/远程切换需要任务覆盖写入，Host 无对应读写能力",
-  "remote-deps": "Host 无本任务远程依赖清单读取 op",
-  routing: "Host 无生效路由/请求去向读取 op",
+  // (#10 box 1) 本地/远程位置, 远程依赖 and 请求去向 LEFT this registry: main now
+  // derives them from the trusted catalog and the task's PINNED bindings, and the
+  // rows below render what it answers. A reason string that says the Host has no
+  // read op would be false next to a working row, so it is gone - the same rule
+  // this registry exists for.
   "runtime-config": "原型在此提供「配置」入口跳转环境与服务；此面板未接线跳转，共享模板在「环境与服务」页维护",
   "runtime-worktrees": "原型在本面板列出代码工作副本；生产由「文件」面板读取真实 task/fileRoots，本面板不重复列举",
   "log-stream": "Host 无日志订阅推送 op：只能按需读取一次日志尾部",
@@ -1072,6 +1076,62 @@ function GroupStartControl({ taskId, projectId, onStarted }: {
   );
 }
 
+/**
+ * [PiDock 05] (#10 box 1) 本地/远程位置 of one bound service, read from main's
+ * trusted 依赖去向 answer. An absent unit is a NAMED unknown - this row never
+ * defaults a unit to 本机实例, and it never renders a shared environment as one.
+ */
+function serviceLocationText(dependencies: TaskDependencyRoutingView | undefined, serviceId: string): string {
+  const unit = dependencies?.units.find((entry) => entry.serviceId === serviceId);
+  if (unit === undefined) return "位置未读取";
+  return unit.location === "local" ? "本机实例 · 本任务运行" : "共享环境 · 本任务不运行该单元";
+}
+
+/** One read point ("共享模板=…" / "本机私有配置（已遮蔽）"), never a private value. */
+function readPointValueText(point: TaskDependencyReadPointView): string {
+  if (point.masked) return "（已遮蔽）";
+  return point.value === undefined ? "" : `=${point.value}`;
+}
+
+/**
+ * The per-variable 实际依赖去向 ([PiDock 05] #10 box 1): every row is a value main
+ * derived from the catalog plus the task's PINNED bindings. 本任务实例地址 (its
+ * address + port) and 共享环境 are separate rows on purpose, and a variable no
+ * 服务依赖声明 binds keeps the shared environment address instead of being
+ * rewritten into a local one.
+ */
+function DependencyTargets({ dependencies }: { dependencies: TaskDependencyRoutingView }) {
+  if (dependencies.destinations.length === 0) {
+    return <li className="px-1 py-1 text-[11px] text-muted" data-testid="dock-dependency-empty">
+      本任务服务的配置里没有可展示的地址变量（未声明、也无读取点）。
+    </li>;
+  }
+  return <>
+    {dependencies.destinations.map((entry) => (
+      <li key={`${entry.unitId}/${entry.key}`} className="border border-line bg-paper px-2 py-1 text-[11px]"
+        data-destination-key={entry.key} data-destination-unit={entry.unitId} data-destination-kind={entry.target.kind}>
+        <div className="flex min-w-0 items-baseline gap-1.5">
+          <span className="truncate font-mono text-[10px]">{entry.key}</span>
+          <span className="ml-auto shrink-0 text-muted" data-destination-label>
+            {entry.target.kind === "local-instance" ? "本任务实例地址" : "共享环境"}
+          </span>
+        </div>
+        <p className="mt-0.5 min-w-0 break-words text-[10px] text-muted" data-destination-value>
+          {entry.target.kind === "local-instance"
+            ? <>{entry.value ?? "（无地址值）"} · {entry.target.address}
+                {entry.target.port === undefined ? "（无端口）" : `（端口 ${entry.target.port}）`}</>
+            : <>共享环境 {entry.target.environment.length > 0 ? entry.target.environment : "名称未提供"}
+                {entry.readPoints.map((point) => ` · ${point.source}${readPointValueText(point)}`).join("")}</>}
+        </p>
+        <p className="mt-0.5 min-w-0 break-words text-[10px] text-muted">
+          读取点：{entry.readPoints.map((point) => point.source).join("、") || "无"}
+        </p>
+        {entry.reason !== undefined && <p className="mt-0.5 min-w-0 break-words text-[10px] text-muted" data-destination-reason>{entry.reason}</p>}
+      </li>
+    ))}
+  </>;
+}
+
 function RunTool({ taskId }: { taskId: string }) {
   const [load, setLoad] = useState<TaskServicesLoad | null>(null);
   const [revision, setRevision] = useState(0);
@@ -1085,6 +1145,12 @@ function RunTool({ taskId }: { taskId: string }) {
   if (load === null) return <p className="text-xs text-muted">正在读取任务服务…</p>;
   if (!load.ok) return <p role="alert" className="break-words border border-[#e0b4b4] bg-[#fdf3f3] p-2 text-xs text-[#ad4545]">{load.error}</p>;
   const boundProjectId = load.projectId;
+  // main's trusted 依赖去向 answer ([PiDock 05] #10 box 1), `undefined` when the
+  // task has no bound service at all.
+  const dependencies = load.dependencies;
+  const remoteDependencies = (dependencies?.destinations ?? []).filter(
+    (entry): entry is typeof entry & { target: { kind: "remote"; environment: string } } => entry.target.kind === "remote",
+  );
 
   return (
     <div className="flex min-h-0 flex-col gap-2">
@@ -1134,7 +1200,12 @@ function RunTool({ taskId }: { taskId: string }) {
                     <ServiceRunRecord row={row} />
                     <ServiceControl taskId={taskId} projectId={boundProjectId} row={row} onChanged={() => setRevision((value) => value + 1)} />
                     {row.status?.kind === "registry" && <LaunchVerification view={row.status.launchVerification} />}
-                    <UnwiredControls id="service-mode" label="本地 / 远程" />
+                    {/* (#10 box 1) 本地/远程位置, read from main's trusted derivation:
+                        the row no longer carries a 未接线 badge for a control whose
+                        values are now shown. */}
+                    <p className="mt-0.5 truncate text-[10px] text-muted" data-testid={`dock-service-location-${row.binding.serviceId}`}>
+                      位置：{serviceLocationText(dependencies, row.binding.serviceId)}
+                    </p>
                   </li>
                 );
               })}
@@ -1143,11 +1214,55 @@ function RunTool({ taskId }: { taskId: string }) {
           </section>
           <section className="border-t border-line pt-2">
             <p className="text-[11px] text-muted">远程依赖</p>
-            <ul className="mt-1 flex flex-col gap-1"><UnwiredRow id="remote-deps" /></ul>
+            {load.dependenciesError !== undefined
+              ? <p role="alert" className="mt-1 min-w-0 break-words text-[10px] text-[#ad4545]" data-testid="dock-remote-deps-error">{load.dependenciesError}</p>
+              : <ul className="mt-1 flex flex-col gap-1" data-testid="dock-remote-deps">
+                  {remoteDependencies.length === 0
+                    ? <li className="px-1 py-1 text-[10px] text-muted" data-testid="dock-remote-deps-none">
+                        本任务服务的地址变量都指向本任务实例，没有指向共享环境的变量；不列不存在的共享资源。
+                      </li>
+                    : remoteDependencies.map((entry) => (
+                        <li key={`remote/${entry.unitId}/${entry.key}`} className="px-1 text-[10px] text-muted" data-remote-key={entry.key}>
+                          {entry.key} → 共享环境 {entry.target.environment.length > 0 ? entry.target.environment : "名称未提供"}
+                          （读取点：{entry.readPoints.map((point) => point.source).join("、") || "无"}）
+                        </li>
+                      ))}
+                </ul>}
+            <p className="mt-1 text-[10px] text-muted" data-testid="dock-remote-deps-note">
+              此清单只列本任务服务的配置里指向共享环境的地址变量。共享外部资源在哪声明尚未决定（box 5/7），本面板不冒充一份完整清单。
+            </p>
           </section>
           <section className="border-t border-line pt-2">
             <p className="text-[11px] text-muted">请求去向</p>
-            <ul className="mt-1 flex flex-col gap-1"><UnwiredRow id="routing" /></ul>
+            {load.dependenciesError !== undefined
+              ? <p role="alert" className="mt-1 min-w-0 break-words text-[10px] text-[#ad4545]" data-testid="dock-routing-error">{load.dependenciesError}</p>
+              : <ul className="mt-1 flex flex-col gap-1" data-testid="dock-routing">{dependencies !== undefined && <DependencyTargets dependencies={dependencies} />}</ul>}
+            {dependencies !== undefined && dependencies.diagnostics.length > 0 && (
+              <ul className="mt-1 flex flex-col gap-0.5" data-testid="dock-routing-diagnostics">
+                {dependencies.diagnostics.map((entry) => (
+                  <li key={`${entry.code}:${entry.message}`} className="min-w-0 break-words text-[10px] text-muted">
+                    {entry.code}：{entry.message}{entry.hint !== undefined ? `（${entry.hint}）` : ""}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+          <section className="border-t border-line pt-2">
+            <p className="text-[11px] text-muted">依赖边（声明）</p>
+            {load.dependenciesError !== undefined
+              ? <p role="alert" className="mt-1 min-w-0 break-words text-[10px] text-[#ad4545]" data-testid="dock-linkage-error">{load.dependenciesError}</p>
+              : <ul className="mt-1 flex flex-col gap-1" data-testid="dock-linkage" data-linkage-state={dependencies?.linkage.state}>
+                  {dependencies === undefined || dependencies.linkage.state === "no-declaration"
+                    ? <li className="px-1 text-[10px] text-muted" data-testid="dock-linkage-none">无依赖边（未做互验）</li>
+                    : dependencies.linkage.edges.map((edge) => (
+                        <li key={`${edge.from}->${edge.to}`} className="px-1 text-[10px] text-muted" data-edge-to={edge.to}>
+                          {edge.fromName} → {edge.toName}（{edge.kind === "call" ? "调用" : "前置"}）· 已声明 · 未互验（本读不启动任何单元）
+                        </li>
+                      ))}
+                </ul>}
+            <p className="mt-1 text-[10px] text-muted">
+              这里只有声明：已互验只由整组启动的互验步骤产生，该读从不代替它。
+            </p>
           </section>
         </>
       )}

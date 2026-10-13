@@ -351,6 +351,8 @@ type PanelBridgeOptions = {
   run?: (request: Record<string, unknown>) => unknown;
   rebind?: (request: Record<string, unknown>) => unknown;
   runRecords?: () => unknown;
+  /** The trusted 依赖去向 read ([PiDock 05] #10 box 1); default = one local unit, no declaration, no destination. */
+  dependencyRouting?: () => unknown;
 };
 
 function panelBridge(options: PanelBridgeOptions = {}) {
@@ -370,6 +372,15 @@ function panelBridge(options: PanelBridgeOptions = {}) {
   const serviceCatalogOp = vi.fn(async (request: Record<string, unknown>) => {
     if (request["op"] === "runTaskService") return options.run ? options.run(request) : { ok: true, payload: { serviceId: request["serviceId"], action: request["action"], actor: "human" } };
     if (request["op"] === "rebindServiceOwner") return options.rebind ? options.rebind(request) : { ok: false, error: "unexpected rebindServiceOwner" };
+    if (request["op"] === "taskDependencyRouting") return options.dependencyRouting ? options.dependencyRouting() : { ok: true, payload: {
+      taskId: "task-1",
+      units: [{ unitId: `invoice-service/${SERVICE_ID}`, serviceId: SERVICE_ID, name: "invoice-local", repoDir: "invoice-service", subdir: "apps/svc",
+        templateVersion: 2, environment: "本地开发", location: "local", declaredPorts: [4100] }],
+      repoGroups: [{ repoDir: "invoice-service", unitIds: [`invoice-service/${SERVICE_ID}`] }],
+      destinations: [],
+      linkage: { state: "no-declaration", edges: [] },
+      diagnostics: [],
+    } };
     if (request["op"] === "taskBindings") return { ok: true, payload: options.bindings ?? [{
       taskId: "task-1", serviceId: SERVICE_ID, environmentId: ENVIRONMENT_ID, environmentName: "本地开发",
       templateVersion: 2, rootId: "invoice-service", subdir: "apps/svc", privateKeys: ["API_TOKEN"],
@@ -425,9 +436,14 @@ describe("[UI 对齐] S8d 运行 panel (real Host bindings and status)", () => {
     expect(request["approvalId"]).toBeUndefined();
     // The page never reaches the Host's control op itself for this action.
     expect(fixture.taskOp.mock.calls.map(([, op]) => op)).not.toContain("task/controlService");
-    expect(screen.getByTestId("desktop-tool-dock").querySelector('[data-unwired="service-mode"]')).toHaveTextContent("未接线");
-    expect(screen.getByTestId("desktop-tool-dock").querySelector('[data-unwired="remote-deps"]')).toHaveTextContent("未接线");
-    expect(screen.getByTestId("desktop-tool-dock").querySelector('[data-unwired="routing"]')).toHaveTextContent("未接线");
+    // (#10 box 1) 本地/远程位置, 远程依赖 and 请求去向 are WIRED now: their rows
+    // render main's trusted derivation, so no 未接线 badge (and no stale
+    // 「Host 无…读取 op」 reason) may remain for them.
+    for (const id of ["service-mode", "remote-deps", "routing"]) {
+      expect(screen.getByTestId("desktop-tool-dock").querySelector(`[data-unwired="${id}"]`)).toBeNull();
+    }
+    expect(screen.getByTestId("desktop-tool-dock").querySelector(`[data-testid="dock-service-location-${SERVICE_ID}"]`)).toHaveTextContent("位置：本机实例 · 本任务运行");
+    expect(screen.getByTestId("dock-linkage-none")).toHaveTextContent("无依赖边（未做互验）");
   });
 
   it("shows the Host's runTaskService refusal instead of falling back to fixture data", async () => {
