@@ -550,8 +550,9 @@ describe("Desktop SDK conversation", () => {
     expect(screen.getByTestId("composer-context")).toHaveTextContent("上下文 未读取");
     await act(async () => release!({ ok: true, payload: { context: hostContext({ thinking: "xhigh" }) } }));
     // `xhigh` is a tier no default in this engagement produces (the seeded demo
-    // model defaults to `high`, the prototype to `medium`), so only the Host read
-    // can account for this label.
+    // model `本地 Qwen` declares `default: "medium"`, `data/memoryHost.ts:929`, and
+    // the prototype falls back to `medium` too, `prototypes/pidock-ui/app.js:123`),
+    // so only the Host read can account for this label.
     await waitFor(() => expect(reasoning).toHaveTextContent("推理 · 极高（xhigh）"));
     expect(reasoning).not.toBeDisabled();
     expect(taskOp).toHaveBeenCalledWith("task-a", "task/sessionContext", { sessionId: "main" });
@@ -615,6 +616,33 @@ describe("Desktop SDK conversation", () => {
     await waitFor(() => expect(context).toHaveTextContent("上下文 0.0k / 窗口未知 · 占比未知 · 待更新"));
     expect(context).not.toHaveTextContent("0%");
     expect(context.getAttribute("title")).toContain("窗口 未知 · 占用比例 未知");
+  });
+
+  it("names a model the Host reports as unable to reason instead of offering tiers", async () => {
+    const f = setup();
+    f.bridge.taskOp = vi.fn(async (_taskId: string, op: string) => op === "task/sessionContext"
+      ? { ok: true, payload: { context: hostContext({ thinking: "", thinkingCatalog: "unsupported" }) } }
+      : { ok: true, payload: {} }) as never;
+    mount(f);
+    const reasoning = await screen.findByTestId("composer-thinking");
+    await waitFor(() => expect(reasoning).toHaveTextContent("推理 · 不支持"));
+    fireEvent.click(reasoning);
+    expect(screen.getByRole("dialog", { name: "推理档位" })).toHaveTextContent("Host 报告该模型不支持推理档位，本会话无可选档位。");
+    expect(within(screen.getByRole("dialog", { name: "推理档位" })).queryAllByRole("button")).toEqual([]);
+  });
+
+  it("follows the model catalog instead of naming a tier when the Host has no session preference", async () => {
+    const f = setup();
+    f.bridge.taskOp = vi.fn(async (_taskId: string, op: string) => op === "task/sessionContext"
+      ? { ok: true, payload: { context: hostContext({ thinking: "", thinkingCatalog: "catalog-unknown" }) } }
+      : { ok: true, payload: {} }) as never;
+    mount(f);
+    const reasoning = await screen.findByTestId("composer-thinking");
+    // An empty level is the Host saying "no session preference", not a tier to guess.
+    await waitFor(() => expect(reasoning).toHaveTextContent("推理 · 跟随模型"));
+    expect(reasoning).not.toHaveTextContent(/高|中|低/);
+    fireEvent.click(reasoning);
+    expect(screen.getByRole("dialog", { name: "推理档位" })).toHaveTextContent("Host 尚未声明该模型的可用档位，选中档位按模型目录执行");
   });
 
   it("shows the SDK zero-tool boundary without offering permission changes", async () => {
