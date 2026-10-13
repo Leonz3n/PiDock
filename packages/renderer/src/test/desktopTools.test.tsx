@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DesktopToolDock } from "../components/DesktopToolDock";
+import { workspaceRootsFromHost } from "../data/workspaceFiles";
 // The SHIPPED Host rules build this suite's stub payloads, so the assertions
 // pin the Host's own words/shapes instead of a hand-copied fixture
 // (`main/workspace-files.ts` is pure: no fs, no git, no Electron).
@@ -1343,9 +1344,10 @@ describe("[PiDock 10] (#15 盒子 2/7/9) 交付目标与每视图归属 on the s
 
   it("names every empty Host string it renders instead of leaving a blank", async () => {
     const roots = twoRepoRoots();
-    // Parseable-but-empty strings (`str()` keeps `""`) reach the DOM in three
-    // shapes: a tree entry's own name, the preview header, and the two shared-dir
-    // attribution fields that are not the identity line.
+    // Parseable-but-empty strings (`str()` keeps `""`) reach the DOM in five
+    // shapes: a tree entry's own name, the preview header, the two shared-dir
+    // attribution fields that are not the identity line, and the root chip's own
+    // label plus the OBSERVED branch value beside it.
     bridge(hostReads(roots, {
       treeEntries: [{ name: "", path: "blank.md", kind: "file", size: 0 }],
       preview: { path: "", language: "" },
@@ -1372,6 +1374,48 @@ describe("[PiDock 10] (#15 盒子 2/7/9) 交付目标与每视图归属 on the s
     const linkTree = await screen.findByTestId("dock-tree-attribution");
     expect(linkTree).toHaveTextContent("任务 Host 未上报任务身份");
     expect(within(linkTree).getByTestId("dock-shared-pi-work-dir")).toHaveTextContent("Host 未上报统一工作目录");
+
+    // The same rule on the root chip itself, where the two values the Host can
+    // leave empty are the chip's whole content: a blank chip label says nothing
+    // about which root was selected, and a bare `· ` (an observed branch whose
+    // value is empty) claims a branch exists whose name the Host never gave.
+    // `str()` keeps `""` for the label and `observation()` keeps `""` as an
+    // OBSERVED value, so the chip is the boundary that must not pass either on.
+    const blankChipRoots = twoRepoRoots().map((root, index) =>
+      index === 0 ? { ...root, label: "", workingBranch: { state: "observed" as const, value: "" } } : root,
+    );
+    // Reachability at the renderer's own boundary, not assumed: the shipped
+    // parser keeps both values as-is (`str()` keeps `""`; `observation()` keeps
+    // an OBSERVED `""`), so exactly this payload reaches the chip.
+    expect(workspaceRootsFromHost({ taskDir: TASK_DIR, roots: [blankChipRoots[0]!] })?.roots[0]).toMatchObject({
+      label: "",
+      workingBranch: { state: "observed", value: "" },
+    });
+    bridge(hostReads(blankChipRoots));
+    cleanup();
+    render(<DesktopToolDock taskId={TASK_ID} tool="files" onClose={() => {}} />);
+    // The chip for the blanked root is the first one; the chip carries exactly
+    // the label span and (for an observed branch) the branch span, nothing else.
+    const chip = within(await screen.findByTestId("dock-roots")).getAllByRole("button")[0]!;
+    expect(chip.querySelector("span")?.textContent).toBe("Host 未上报根名称");
+    expect(chip.textContent).toBe("Host 未上报根名称· Host 未上报工作分支名");
+    // The metadata row renders the SAME observed value, and the chip's witness
+    // has to agree with it: an observed-but-empty branch is named there too.
+    expect(await screen.findByTestId("dock-working-branch")).toHaveTextContent("Host 未上报工作分支名（实测）");
+  });
+
+  it("renders a real root label and a real observed branch as themselves", async () => {
+    // The unchanged direction of the rule above: naming an absence must never
+    // subsume a value the Host really gave, in the chip or in the row beside it.
+    const namedRoots = twoRepoRoots().map((root, index) =>
+      index === 0 ? { ...root, workingBranch: { state: "observed" as const, value: "task/task-aaaaaaaa" } } : root,
+    );
+    bridge(hostReads(namedRoots));
+    render(<DesktopToolDock taskId={TASK_ID} tool="files" onClose={() => {}} />);
+    const chip = within(await screen.findByTestId("dock-roots")).getAllByRole("button")[0]!;
+    expect(chip.querySelector("span")?.textContent).toBe("repo-a");
+    expect(chip.textContent).toBe("repo-a· task/task-aaaaaaaa");
+    expect(await screen.findByTestId("dock-working-branch")).toHaveTextContent("task/task-aaaaaaaa（实测）");
   });
 
   it("names an empty editor receipt field instead of leaving a blank", async () => {

@@ -277,6 +277,27 @@ describe("[PiDock 03] (#6 盒子 6) two tasks sharing one project repository", (
     expect(change).not.toHaveTextContent("干净");
   });
 
+  it("names an observed branch whose value is empty instead of a bare （实测）", async () => {
+    // `observation()` keeps an OBSERVED `""`, so the strongest claim the row may
+    // make is that a reading happened AND that it named no branch — not a
+    // reading with the name silently dropped.
+    const withBlankBranch = (taskId: string) => {
+      const payload = rootsPayload(taskId);
+      const [worktree, ...rest] = payload.roots;
+      return { ...payload, roots: [{ ...worktree!, workingBranch: { state: "observed", value: "" } }, ...rest] };
+    };
+    window.pidock = {
+      taskOp: async (taskId: string, op: string, payload: Record<string, unknown>) =>
+        op === "task/fileRoots" ? { ok: true, payload: withBlankBranch(taskId) } : diffPayload(taskId, String(payload["rootId"]), op),
+    } as unknown as typeof window.pidock;
+    render(<SharedRepoIsolation tasks={[tasks[0]!]} />);
+    const row = await screen.findByTestId("worktree-row");
+    const branch = within(row).getByTestId(`row-working-branch-${tasks[0]!.taskId}`);
+    expect(branch).toHaveTextContent("Host 未上报工作分支名（实测）");
+    // The pinned baseline stays a separate, declared fact.
+    expect(within(row).getByTestId(`row-baseline-branch-${tasks[0]!.taskId}`)).toHaveTextContent("main（固定）");
+  });
+
   it("is reached from the desktop Project page, not from a fixture path", async () => {
     bridge();
     render(

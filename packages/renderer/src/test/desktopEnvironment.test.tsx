@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -68,6 +68,18 @@ it("shows only Host-scanned drafts for the selected task and worktree", async ()
   expect(screen.getByText("命令候选：node server.js")).toBeInTheDocument();
   expect(taskOp).toHaveBeenCalledWith("task-1", "task/serviceImportHints", { rootId: "repo" });
   expect(screen.getByRole("button", { name: "添加服务" })).toBeDisabled();
+});
+
+it("names an empty root label in the repository choice instead of a blank option", async () => {
+  // A label the Host sent as `""` survives `workspaceRootsFromHost` (`str()`
+  // keeps it), so the repo choice is where it must be named, not offered blank.
+  const taskOp = vi.fn(async (_taskId: string, op: string) => op === "task/fileRoots"
+    ? { ok: true, payload: { taskDir: "/task", roots: [{ id: "repo", kind: "worktree", label: "", path: "/task/repo" }] } }
+    : { ok: true, payload: { scan: { hints: [], errors: [], truncated: false } } });
+  window.pidock = { taskOp };
+  render(<DesktopEnvironmentPage projects={projects} projectId="p1" taskCount={1} tasks={[{ taskId: "task-1", name: "真实任务" }]} onSelectProject={() => {}} />);
+  const choice = await screen.findByLabelText("扫描仓库来源");
+  expect(within(choice).getByRole("option", { name: "Host 未上报根名称" })).toBeInTheDocument();
 });
 
 it("fills the new-template form only after the explicit draft action and never for a config-only hint", async () => {

@@ -32,11 +32,12 @@ import {
   terminalExitScopeNote,
   terminalInstanceStateText,
 } from "../data/terminalSurface";
-import type {
-  TerminalHistoryEntryView,
-  TerminalInstanceView,
-  TerminalPlanView,
-  WorkspaceRootView,
+import {
+  hostText,
+  type TerminalHistoryEntryView,
+  type TerminalInstanceView,
+  type TerminalPlanView,
+  type WorkspaceRootView,
 } from "../data/workspaceFiles";
 
 /**
@@ -378,7 +379,7 @@ export function TerminalTakeoverPanel({
           >
             {roots.map((root) => (
               <option key={root.id} value={root.id}>
-                {root.label}
+                {hostText(root.label, "Host 未上报根名称")}
               </option>
             ))}
           </select>
