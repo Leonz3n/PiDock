@@ -5,19 +5,20 @@
  * The configured "editor" is a throwaway Node script that records its own
  * `process.argv` and `process.cwd()` before exiting; every assertion about the
  * launch reads that recording, never a returned boolean. The task folder is a
- * real task record under a path containing a space, a quote, `;` and `$HOME`,
- * so a shell string (or a split argument) would show up as extra arguments or
- * a `PWNED` file created by the injected `touch`.
+ * real task record under a path spelled with a space, a quote, `;` and `$HOME`
+ * on POSIX (on win32: space, `%VAR%`, `;` and CMD's own `&`/`^`), so a shell
+ * string (or a split argument) would show up as extra arguments or a `PWNED`
+ * file/directory created by the injected command.
  *
  * A real `git worktree` is NOT required here: the editor launch reads the same
  * task record the file panel reads and never runs Git, so a plain directory
  * stands in for the worktree root (the record's identity is what is under
- * test). Plain-directory links are real symlinks to a real original directory.
+ * test). Plain-directory links are real links (a symlink; a junction on win32)
+ * to a real original directory.
  */
 
-import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -28,8 +29,16 @@ import { protectApplicationProfile } from "./protected-application-path.js";
 import { externalEditorPlan, probeEditorDirectory, probeEditorProgram } from "../main/external-editor.js";
 import { nodeExternalEditorLauncher, openExternalEditor, type ExternalEditorLauncher } from "./open-editor.js";
 
-/** A path segment that would split or run something if it were a shell string. */
-const WEIRD_SEGMENT = 'editor $HOME; touch PWNED "quoted"';
+/**
+ * A path segment that would split or run something if it were put into a shell
+ * string. win32: NTFS forbids `"` `<` `>` `|` `?` `*` in a file name, so the
+ * Windows spelling uses the CMD metacharacters that ARE legal (`&`, `^`, `%`,
+ * `;`, spaces) plus a payload a shell would really execute (`& mkdir PWNED`
+ * creates a directory named PWNED in the child's cwd).
+ */
+const WEIRD_SEGMENT = process.platform === "win32"
+  ? "editor %USERPROFILE% & mkdir PWNED & 'quoted' ^^ ^& mid"
+  : 'editor $HOME; touch PWNED "quoted"';
 
 const TASK_ID = "task-abcdef12";
 const REPO_DIR = "repo-aaaaaaaa";
@@ -63,14 +72,22 @@ function fixture(): Fixture {
   const profileDir = join(home, "userData");
   mkdirSync(taskDir, { recursive: true });
   mkdirSync(profileDir, { recursive: true });
-  const worktreePath = join(taskDir, REPO_DIR);
+  // An in-task root is spelled the way the product spells it: `joinRoot`
+  // (main/workspace-files.ts:121) appends the root name after a FORWARD slash on
+  // every platform. On win32 the product's own worktree path is therefore
+  // `<taskDir>/repo-aaaaaaaa`, and the fixture must create and expect exactly
+  // that string (Windows APIs accept both separators; POSIX is unchanged).
+  const inTaskRoot = (name: string): string => `${taskDir}/${name}`;
+  const worktreePath = inTaskRoot(REPO_DIR);
   mkdirSync(worktreePath, { recursive: true });
   writeFileSync(join(worktreePath, "README.md"), "worktree file\n");
   const sharedSourcePath = join(home, "shared dir; touch PWNED");
   mkdirSync(sharedSourcePath, { recursive: true });
   writeFileSync(join(sharedSourcePath, "original.txt"), "original\n");
-  const linkPath = join(taskDir, LINK_NAME);
-  symlinkSync(sharedSourcePath, linkPath);
+  const linkPath = inTaskRoot(LINK_NAME);
+  // A plain-directory link: on win32 a junction is the link kind this platform
+  // can really create (and is what `lstat`/`readlink` report as a link).
+  symlinkSync(sharedSourcePath, linkPath, process.platform === "win32" ? "junction" : "dir");
   diskTaskStore.writeTask(
     taskDir,
     buildTaskDiskRecord({
@@ -132,7 +149,9 @@ function snapshot(dir: string): string[] {
       const key = relative(dir, full);
       if (entry.isSymbolicLink()) {
         // A plain-directory link is a symlink: record its target, never follow it.
-        lines.push(`${key}->${execFileSync("readlink", [full], { encoding: "utf8" }).trim()}`);
+        // `readlinkSync` (not the POSIX `readlink` program, whose output on
+        // Windows is an MSYS path) and non-recursive by construction.
+        lines.push(`${key}->${readlinkSync(full)}`);
         continue;
       }
       if (entry.isDirectory()) {
@@ -213,6 +232,8 @@ describe("#15 box 28 external editor launch (real process)", () => {
     expect(existsSync(join(f.taskDir, ".vscode"))).toBe(false);
     expect(existsSync(join(f.worktreePath, "PWNED"))).toBe(false);
     expect(existsSync(join(f.taskDir, "PWNED"))).toBe(false);
+    // win32: the CMD payload is `& mkdir PWNED`, whose cwd is the opened path.
+    expect(existsSync(join(f.sharedSourcePath, "PWNED"))).toBe(false);
     expect(fsFind(f.taskDir, "launch.json")).toEqual([]);
     expect(fsFind(f.taskDir, "tasks.json")).toEqual([]);
     expect(fsFind(f.taskDir, "settings.json")).toEqual([]);
@@ -247,7 +268,7 @@ describe("#15 box 28 external editor launch (real process)", () => {
 
     expect(snapshot(f.taskDir)).toEqual(before);
     expect(existsSync(f.linkPath)).toBe(true);
-    expect(execFileSync("readlink", [f.linkPath], { encoding: "utf8" }).trim()).toBe(f.sharedSourcePath);
+    expect(readlinkSync(f.linkPath)).toBe(f.sharedSourcePath);
   });
 
   it("reports an OS spawn failure by name instead of letting its deferred 'error' event take the Host down", async () => {

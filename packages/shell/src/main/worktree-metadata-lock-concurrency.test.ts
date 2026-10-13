@@ -24,15 +24,17 @@
  *   policy, and the crash does not block the app.
  *
  * FIXTURE: no Electron GUI, no Provider turn, no network git (remotes are bare
- * directories under the test's own temp home), macOS/POSIX. Every spawned
- * process is killed on every path, and every home is removed.
+ * directories under the test's own temp home), host-platform native (the lock
+ * KEY is derived through the production helper, so the fixture addresses the
+ * same lock file production does on any platform). Every spawned process is
+ * killed on every path, and every home is removed.
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { TaskWorkspaceHost } from "../host/task-host.js";
 import { diskTaskStore, readTaskRecordOnDisk } from "../host/task-store.js";
 import type { HostTaskOp, HostTaskResult } from "../rpc/protocol.js";
@@ -48,6 +50,7 @@ import {
   WORKTREE_LOCK_STALE_TAKEOVER,
   WORKTREE_LOCK_TAKEOVER_SUFFIX,
   WorktreeMetadataLock,
+  sourceRepoLockKeys,
 } from "./worktree-metadata-lock.js";
 
 /** Real repositories and real processes: a loaded machine must not look like a failure. */
@@ -59,6 +62,20 @@ const children: ChildProcess[] = [];
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+}
+
+/**
+ * The production lock KEY of one source checkout, derived through the production
+ * helper rather than hand-rolled. Production keys on
+ * `normalizeScopePath(realpathSync(checkout))`, which lowercases a drive letter
+ * and unifies separators, so a fixture that hashed the raw real path would
+ * address a DIFFERENT `.lock` file on win32 (and the same one only by accident
+ * on POSIX).
+ */
+function sourceLockKey(repo: string): string {
+  const derived = sourceRepoLockKeys([repo]);
+  if (!derived.ok) throw new Error(derived.error);
+  return derived.keys[0]!;
 }
 
 interface RepoFixture {
@@ -227,7 +244,7 @@ async function setup() {
   };
   const worktreeOf = (task: TaskFixture, fixture: RepoFixture): string =>
     join(task.taskDir, buildRepoChildName(repoIdOf(project, fixture)));
-  const lockFile = (fixture: RepoFixture): string => new WorktreeMetadataLock(profile).fileFor(realpathSync(fixture.repo));
+  const lockFile = (fixture: RepoFixture): string => new WorktreeMetadataLock(profile).fileFor(sourceLockKey(fixture.repo));
   const receipts = (): string[] => {
     const directory = join(profile, WORKTREE_LOCK_DIRECTORY);
     return existsSync(directory) ? readdirSync(directory).filter((name) => name.includes(".stale-")) : [];
@@ -275,7 +292,7 @@ registerHooks({
  * without racing the process exit.
  */
 const holderSource = (modulePath: string): string => `
-import { WorktreeMetadataLock } from ${JSON.stringify(modulePath)};
+import { WorktreeMetadataLock } from ${JSON.stringify(pathToFileURL(modulePath).href)};
 
 const [userData, source, taskId, label] = process.argv.slice(2);
 const lock = new WorktreeMetadataLock(userData);
@@ -336,7 +353,10 @@ async function launchHolder(
   const script = join(env.home, `holder-${taskId}.ts`);
   writeFileSync(hook, RESOLVER_HOOK);
   writeFileSync(script, holderSource(join(here, "worktree-metadata-lock.ts")));
-  const child = spawn(process.execPath, ["--import", hook, script, env.profile, sourcePath, taskId, label], {
+  // `--import` resolves its specifier as a URL: a bare Windows path becomes the
+  // scheme `c:`. The ENTRY script stays a native path (`node` accepts that), and
+  // the holder's own import specifier is URL'd for the same reason.
+  const child = spawn(process.execPath, ["--import", pathToFileURL(hook).href, script, env.profile, sourcePath, taskId, label], {
     stdio: ["pipe", "pipe", "pipe"],
   });
   children.push(child);
@@ -387,9 +407,9 @@ describe("[PiDock 03] (#6 盒子 9) repository-level worktree creation is mutual
     const env = await setup();
     const holder = await startHolder(env, env.first.repo, "task-child001", "追加仓库");
     try {
-      // The key the second process holds IS the real path of the shared source
-      // repository — resolved by the production module in that process.
-      expect(holder.keys).toEqual([realpathSync(env.first.repo)]);
+      // The key the second process holds IS the production key of the shared
+      // source repository — derived by the production module in that process.
+      expect(holder.keys).toEqual([sourceLockKey(env.first.repo)]);
       expect(holder.pid).not.toBe(process.pid);
       expect(existsSync(env.lockFile(env.first))).toBe(true);
 
@@ -580,7 +600,7 @@ describe("[PiDock 03] (#6 盒子 9) repository-level worktree creation is mutual
   it("refuses BY NAME while a REAL second process is recovering the source repo's stale lock, and steals nothing from it", { timeout: EVIDENCE_TEST_TIMEOUT_MS }, async () => {
     const env = await setup();
     const file = env.lockFile(env.first);
-    const key = realpathSync(env.first.repo);
+    const key = sourceLockKey(env.first.repo);
     const directory = join(env.profile, WORKTREE_LOCK_DIRECTORY);
     mkdirSync(directory, { recursive: true });
     // A stale lock (its owner is a REAL, already-exited process) plus a LIVE
@@ -648,7 +668,10 @@ describe("[PiDock 03] (#6 盒子 9) repository-level worktree creation is mutual
   it("production wired: main.ts injects the app-private lock into BOTH services", async () => {
     // Behavioural coverage is above; this guards the production injection point
     // only, because a capability nothing in production reaches is not a fix.
-    const source = readFileSync(join(here, "main.ts"), "utf8");
+    // The claim is about the injection wiring, not about the checkout's line
+    // endings: git's `core.autocrlf` makes this file CRLF on Windows (i.lf
+    // w.crlf), so the compared text is normalised to LF first. A no-op on POSIX.
+    const source = readFileSync(join(here, "main.ts"), "utf8").replace(/\r\n/g, "\n");
     expect(source).toContain("new WorktreeMetadataLock(app.getPath(\"userData\")");
     expect(source).toContain("defaultTasksRoot(), undefined, worktreeLock)");
     expect(source).toContain("createNodeAppendGit(),\n    worktreeLock,");
