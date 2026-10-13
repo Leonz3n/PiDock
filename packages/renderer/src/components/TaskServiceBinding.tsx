@@ -41,7 +41,10 @@ export function TaskServiceBinding({ template, environmentName, tasks }: {
   const bound = existing?.environmentId === template.environmentId ? existing : undefined;
   const foreignBinding = existing !== undefined && bound === undefined ? existing : undefined;
   const adoptable = bound !== undefined && template.version > bound.templateVersion;
-  const taskName = (id: string) => tasks.find((task) => task.taskId === id)?.name ?? id;
+  // A `""` taskId or task name is a reachable Host payload (`serviceBindingAdoptionFromMain`
+  // reads `restartNeeded[].taskId` by value), so the name is NAMED here rather
+  // than rendering a bare `任务  的`.
+  const taskName = (id: string) => hostText(tasks.find((task) => task.taskId === id)?.name ?? id, "Host 未上报任务名称");
 
   useEffect(() => {
     const token = epoch;
@@ -137,8 +140,8 @@ export function TaskServiceBinding({ template, environmentName, tasks }: {
         <p>待采用：{template.descriptor.name} · v{adoption.from} → v{adoption.to}（仅该绑定的模板版本）</p>
         <p className="mt-1">本次只重指固定的模板版本，未启动、停止或重启任何进程；若该服务当前正在运行，它仍运行 v{adoption.from}。采用会改变该任务的执行快照：主进程据此撤销该任务的运行面板启停通道，之后的启停会遭到拒绝（service-owner-inventory-unconfirmed）；确认后可用本面板的「重新绑定服务所有者」恢复启停（只替换所有者绑定，不重启任何进程），在那之前 v{adoption.to} 不会在运行面板生效。</p>
         {adoption.restartNeeded.length > 0 && <p className="mt-1">重启影响：{adoption.restartNeeded.map((entry) => entry.taskId === taskId
-          ? `本次采用的任务 ${taskName(entry.taskId)} 的 ${entry.name}（v${entry.from} → v${entry.to}）`
-          : `任务 ${taskName(entry.taskId)} 的 ${entry.name} 仍固定 v${entry.from}，需显式采用 v${entry.to} 并重新绑定该任务的服务所有者`).join("；")}</p>}
+          ? `本次采用的任务 ${taskName(entry.taskId)} 的 ${hostText(entry.name, "Host 未上报服务名称")}（v${entry.from} → v${entry.to}）`
+          : `任务 ${taskName(entry.taskId)} 的 ${hostText(entry.name, "Host 未上报服务名称")} 仍固定 v${entry.from}，需显式采用 v${entry.to} 并重新绑定该任务的服务所有者`).join("；")}</p>}
       </div>
       <div className="mt-2 flex justify-end gap-2"><Button type="button" size="sm" variant="ghost" disabled={adopting} onClick={() => setAdoption(null)}>取消</Button><Button type="button" size="sm" disabled={adopting} onClick={() => void adopt(true)}>确认采用 v{adoption.to}</Button></div>
     </div>}

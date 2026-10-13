@@ -126,7 +126,9 @@ export function DesktopEnvironmentPage({ projects, projectId, taskCount, tasks, 
   const [pendingFill, setPendingFill] = useState<ServiceImportHintView | null>(null);
   const [filledName, setFilledName] = useState<string | null>(null);
   const appliedFill = useCallback((applied: ServiceImportHintView) => {
-    setFilledName(`${applied.source} · ${applied.name}`);
+    // `serviceImportScanFromHost` reads `name` with `shortText` (a length cap
+    // only), so the banner names the blank name instead of ending at `· `.
+    setFilledName(`${applied.source} · ${hostText(applied.name, "Host 未上报候选名称")}`);
     setPendingFill(null);
   }, []);
   const connected = typeof shellBridge()?.serviceCatalogOp === "function";

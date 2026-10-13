@@ -91,6 +91,27 @@ it("names a blank scan field instead of an empty draft heading, basis or note", 
   expect(screen.getByRole("alert")).toHaveTextContent("compose.yaml：Host 未给出原因");
 });
 
+it("names a blank draft name in the fill-success banner instead of a dangling separator", async () => {
+  // `serviceImportScanFromHost` reads `name` with `shortText` (a length cap
+  // only), so `""` reaches the page; the banner is built from that same value,
+  // so it names the absence instead of `已把草案「package.json · 」填入…`.
+  const serviceCatalogOp = catalog();
+  const taskOp = vi.fn(async (_taskId: string, op: string) => op === "task/fileRoots"
+    ? { ok: true, payload: { taskDir: "/task", roots: [{ id: "repo", kind: "worktree", label: "invoice", path: "/task/repo" }] } }
+    : { ok: true, payload: { scan: { hints: [
+      { source: "package.json", name: "", runType: "long-lived", runTypeBasis: "名称含常驻关键字 dev/start/serve/watch", runTypeUncertain: false, variables: [], program: "node", args: ["server.js"], invalidVars: [], toVerify: [] },
+    ], errors: [], truncated: false } } });
+  window.pidock = { taskOp, serviceCatalogOp };
+  render(<DesktopEnvironmentPage projects={[{ id: "p1", name: "真实项目" }]} projectId="p1" taskCount={1} tasks={[{ taskId: "task-1", name: "真实任务" }]} onSelectProject={() => {}} />);
+  await selectEnvironment();
+  await screen.findByRole("option", { name: "invoice" });
+  fireEvent.click(screen.getByRole("button", { name: "扫描仓库" }));
+  await screen.findByText("Host 未上报候选名称");
+  fireEvent.click(screen.getByRole("button", { name: "填入新建模板" }));
+  expect(await screen.findByText("已把草案「package.json · Host 未上报候选名称」填入上方新建模板表单；尚未保存。")).toBeInTheDocument();
+  expect(screen.queryByText("已把草案「package.json · 」填入上方新建模板表单；尚未保存。")).toBeNull();
+});
+
 it("names an empty root label in the repository choice instead of a blank option", async () => {
   // A label the Host sent as `""` survives `workspaceRootsFromHost` (`str()`
   // keeps it), so the repo choice is where it must be named, not offered blank.

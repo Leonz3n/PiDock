@@ -186,6 +186,25 @@ it("calls a sibling still-pinned binding a candidate, and keeps the confirm butt
   expect(screen.getByRole("button", { name: "取消" })).toBeInTheDocument();
 });
 
+it("names a blank service name and a blank sibling task id in the restart-impact line", async () => {
+  // `serviceBindingAdoptionFromMain` reads `restartNeeded[].name` and `[].taskId`
+  // by value (`typeof === "string"`), so the Host may answer `""` for either;
+  // each names its own absence instead of printing `的 （v1 → v2）`.
+  const serviceCatalogOp = vi.fn(async (request: Record<string, unknown>) => request["op"] === "taskBindings"
+    ? { ok: true, payload: [bound] }
+    : { ok: true, payload: { ...adoptReview, restartNeeded: [
+      { taskId: "task-a", serviceId: template.serviceId, name: "", from: 1, to: 2 },
+      { taskId: "", serviceId: template.serviceId, name: "API", from: 1, to: 2 },
+    ] } });
+  window.pidock = { taskOp: vi.fn(async () => roots()), serviceCatalogOp };
+  render(<TaskServiceBinding environmentName={environmentName} template={newerTemplate} tasks={tasks} />);
+  await screen.findByText("已绑定 · 环境 本地开发 · v1 · repo");
+  fireEvent.click(screen.getByRole("button", { name: /核对采用 v2/ }));
+  expect(await screen.findByText(/本次采用的任务 任务甲 的 Host 未上报服务名称（v1 → v2）/)).toBeInTheDocument();
+  expect(screen.getByText(/任务 Host 未上报任务名称 的 API 仍固定 v1，需显式采用 v2/)).toBeInTheDocument();
+  expect(screen.queryByText(/任务 {2}的 API 仍固定/)).toBeNull();
+});
+
 it("surfaces the real refusal and leaves the shown version unchanged", async () => {
   const serviceCatalogOp = vi.fn(async (request: Record<string, unknown>) => request["op"] === "taskBindings"
     ? { ok: true, payload: [bound] }
