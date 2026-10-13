@@ -91,6 +91,26 @@ it("names a blank scan field instead of an empty draft heading, basis or note", 
   expect(screen.getByRole("alert")).toHaveTextContent("compose.yaml：Host 未给出原因");
 });
 
+it("skips the command-candidate line when the scan reports no command at all", async () => {
+  // `serviceImportScanFromHost` accepts `program: ""` (its own comment: the
+  // command was dropped or the source carries none) and accepts `""` elements in
+  // `args` (`shortTexts` is a length cap), so `[program, ...args].join(" ")` can be
+  // blank while the old gate (`program !== "" || args.length > 0`) was satisfied by
+  // `args.length`. The line then reads `命令候选：` with nothing after it.
+  const taskOp = vi.fn(async (_taskId: string, op: string) => op === "task/fileRoots"
+    ? { ok: true, payload: { taskDir: "/task", roots: [{ id: "repo", kind: "worktree", label: "invoice", path: "/task/repo" }] } }
+    : { ok: true, payload: { scan: { hints: [
+      { source: "package.json", name: "无命令草案", runType: "long-lived", runTypeBasis: "名称含常驻关键字 dev/start/serve/watch", runTypeUncertain: false, variables: [], program: "", args: [""], invalidVars: [], toVerify: [] },
+    ], errors: [], truncated: false } } });
+  window.pidock = { taskOp };
+  const { container } = render(<DesktopEnvironmentPage projects={[{ id: "p1", name: "真实项目" }]} projectId="p1" taskCount={1} tasks={[{ taskId: "task-1", name: "真实任务" }]} onSelectProject={() => {}} />);
+  await screen.findByRole("option", { name: "invoice" });
+  fireEvent.click(screen.getByRole("button", { name: "扫描仓库" }));
+  expect(await screen.findByText("无命令草案")).toBeInTheDocument();
+  expect(container.textContent).not.toContain("命令候选：");
+  expect(screen.queryByText(/命令候选/)).toBeNull();
+});
+
 it("names a blank draft name in the fill-success banner instead of a dangling separator", async () => {
   // `serviceImportScanFromHost` reads `name` with `shortText` (a length cap
   // only), so `""` reaches the page; the banner is built from that same value,

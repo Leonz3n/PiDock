@@ -197,6 +197,32 @@ describe("protocol panel", () => {
     expect(diagnostics).toHaveTextContent("[Host 未上报停止原因代码] Host 未上报停止原因");
     expect(diagnostics).toHaveTextContent("[Host 未上报诊断代码] Host 未上报诊断说明");
     expect(screen.getByTestId("protocol-toolchain")).toHaveTextContent("Host 未上报工具名称：未检查");
+    // `asStringArray` (`data/protocolBinding.ts:299`) turns a missing list into
+    // `[]` and keeps `""` elements, so both shapes have to be named: `[]` renders
+    // no line at all (the Host listed nothing) and `[""]` names the blank element
+    // instead of a bare `未并入（避免合并依赖选择）：` / `不改写发布配置：`.
+    expect(consumers.textContent).not.toContain("未并入（避免合并依赖选择）：");
+    expect(consumers.textContent).not.toContain("不改写发布配置：");
+
+    cleanup();
+    const blankGo = BLANK_PAYLOAD.state.consumers[0];
+    render(<ProtocolPanel view={blankView({ consumers: [
+      { ...blankGo, binding: { ...blankGo.binding, excludedConsumers: [""], releaseManifestsUntouched: ["", ""] } },
+      BLANK_PAYLOAD.state.consumers[1],
+      BLANK_PAYLOAD.state.consumers[2],
+    ] })} />);
+    const listed = screen.getByTestId("protocol-consumers");
+    expect(listed).toHaveTextContent("未并入（避免合并依赖选择）：Host 未上报未并入消费者名");
+    expect(listed).toHaveTextContent("不改写发布配置：Host 未上报发布配置路径、Host 未上报发布配置路径");
+
+    cleanup();
+    render(<ProtocolPanel view={blankView({ consumers: [
+      { ...blankGo, binding: { ...blankGo.binding, excludedConsumers: ["shipment", ""] } },
+      BLANK_PAYLOAD.state.consumers[1],
+      BLANK_PAYLOAD.state.consumers[2],
+    ] })} />);
+    // A real element next to a blank one keeps its own name; only the blank is named.
+    expect(screen.getByTestId("protocol-consumers")).toHaveTextContent("未并入（避免合并依赖选择）：shipment、Host 未上报未并入消费者名");
 
     // The toolchain note is the whole list only when there is no entry at all.
     cleanup();
