@@ -127,7 +127,7 @@ export function TaskServiceBinding({ template, environmentName, tasks }: {
     </div>
     {error && <p role="alert" className="mt-2 text-[#ad4545]">{error}</p>}
     {pending && <p role="status" className="mt-2 text-muted">正在核对本机绑定</p>}
-    {bound && <div className="mt-2 break-words text-muted"><p>已绑定 · 环境 {bound.environmentName} · v{bound.templateVersion} · {bound.rootId}{bound.subdir ? `/${bound.subdir}` : ""}</p>{!!bound.privateKeys.length && <p>私有变量：{bound.privateKeys.join("、")}</p>}<p>启停入口在任务运行面板（POSIX 启用，其他平台具名拒绝）；绑定工作子目录即启动时的工作目录。</p></div>}
+    {bound && <div className="mt-2 break-words text-muted"><p>已绑定 · 环境 {bound.environmentName} · v{bound.templateVersion} · {hostText(bound.rootId, "Host 未上报绑定根")}{bound.subdir ? `/${bound.subdir}` : ""}</p>{!!bound.privateKeys.length && <p>私有变量：{bound.privateKeys.join("、")}</p>}<p>启停入口在任务运行面板（POSIX 启用，其他平台具名拒绝）；绑定工作子目录即启动时的工作目录。</p></div>}
     {adoptable && !adoption && <div className="mt-2 flex flex-wrap items-center gap-2">
       <Button type="button" size="sm" variant="outline" disabled={pending || adopting} onClick={() => void adopt(false)}><Icon name="arrow" />核对采用 v{template.version}</Button>
       <span className="break-words text-muted">当前绑定固定 v{bound.templateVersion}；采用只重指该绑定的模板版本，不会启动、停止或重启进程。</span>

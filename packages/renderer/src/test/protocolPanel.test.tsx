@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ProtocolPanel } from "../components/ToolPanels";
 import type { ProtocolBindingView } from "../data/protocolBinding";
@@ -78,6 +78,60 @@ const LOCAL_VIEW: ProtocolBindingView = {
   diagnostics: [{ code: "not-generated", message: "本地联调还没有生成产物版本" }],
 };
 
+/**
+ * The same panel with every Host string left blank. `protocolBindingFromHost`
+ * reads every string by value (`String(x ?? "")`), so this view is exactly what
+ * the shipped parser hands the panel for a payload whose fields are blank; the
+ * test below pins the panel's own boundary.
+ */
+const BLANK_VIEW: ProtocolBindingView = {
+  taskId: "task-blank",
+  mode: "local",
+  simulated: false,
+  protocol: { repoDir: "", goGenDir: "", tsGenDir: "" },
+  runsGeneration: true,
+  generationSteps: [{ kind: "generate", program: "", args: [], cwd: "", note: "" }],
+  generationReason: "",
+  generatedVersion: null,
+  consumers: [
+    {
+      consumerId: "blank-go",
+      name: "",
+      language: "go",
+      repoDir: "",
+      releaseDependency: "",
+      binding: { kind: "go-workspace", path: "", useDirectories: [], excludedConsumers: [], releaseManifestsUntouched: [] },
+      state: "needs-binding",
+      stateDetail: "",
+      resolution: { ok: false, message: "" },
+    },
+    {
+      consumerId: "blank-ts",
+      name: "ts-consumer",
+      language: "ts",
+      repoDir: "",
+      releaseDependency: "",
+      binding: { kind: "ts-link", linkPath: "", artifact: "", marker: "", restore: { program: "", args: [] } },
+      state: "ready",
+      stateDetail: "已使用本任务产物 gen-4",
+    },
+    {
+      consumerId: "blank-release",
+      name: "release-consumer",
+      language: "go",
+      repoDir: "",
+      releaseDependency: "",
+      binding: { kind: "release", dependency: "" },
+      state: "ready",
+      stateDetail: "已使用本任务产物 gen-4",
+    },
+  ],
+  prepare: [{ state: "code-ready", label: "", ok: false, detail: "" }],
+  toolchain: { platform: "", ok: false, note: "", desktopLaunchImpliesGeneration: false, entries: [{ toolId: "blank-tool", label: "", status: "unverified", detail: "" }] },
+  blockers: [{ consumerId: "blank-go", code: "", message: "" }],
+  diagnostics: [{ code: "", message: "" }],
+};
+
 describe("protocol panel", () => {
   it("shows the protocol repository, the actual generated version and the generation steps", () => {
     render(<ProtocolPanel view={LOCAL_VIEW} />);
@@ -122,6 +176,35 @@ describe("protocol panel", () => {
     expect(toolchain).toHaveTextContent("buf：平台不支持");
     expect(screen.getByText(/桌面可启动不等同于生成支持/)).toBeInTheDocument();
     expect(screen.getByTestId("protocol-stale-note")).toHaveTextContent("1 个消费者需要重新生成/编译/重启");
+  });
+
+  it("names every blank Host string it renders instead of leaving a blank", () => {
+    // Reachability at the panel's own boundary: `protocolBindingFromHost` keeps
+    // `""` for each of these fields, and `validProtocolState` accepts it too
+    // (its own `text` is `typeof === "string"`), so a blank payload really does
+    // arrive here. Every one of them has to name the absence rather than print
+    // a bare `受管链接：` or `· [`.
+    render(<ProtocolPanel view={BLANK_VIEW} />);
+    expect(screen.getByTestId("protocol-generated-version")).toHaveTextContent("Host 未上报生成说明");
+    expect(screen.getByTestId("protocol-steps")).toHaveTextContent("生成 Host 未上报步骤程序");
+    expect(screen.getByTestId("protocol-prepare")).toHaveTextContent("Host 未上报准备项名称：Host 未上报准备项说明");
+    const consumers = screen.getByTestId("protocol-consumers");
+    expect(consumers).toHaveTextContent("Host 未上报消费者名称 · Go · 需绑定");
+    expect(consumers).toHaveTextContent("任务工作区：Host 未上报工作区文件");
+    expect(consumers).toHaveTextContent("受管链接：Host 未上报受管链接路径");
+    expect(consumers).toHaveTextContent("发布依赖：Host 未上报发布依赖");
+    expect(consumers).toHaveTextContent("恢复绑定：Host 未上报恢复程序");
+    expect(consumers).toHaveTextContent("Host 未上报状态说明");
+    expect(consumers).toHaveTextContent("解析路径：未通过 Host 未给出解析说明");
+    const diagnostics = screen.getByTestId("protocol-diagnostics");
+    expect(diagnostics).toHaveTextContent("[Host 未上报停止原因代码] Host 未上报停止原因");
+    expect(diagnostics).toHaveTextContent("[Host 未上报诊断代码] Host 未上报诊断说明");
+    expect(screen.getByTestId("protocol-toolchain")).toHaveTextContent("Host 未上报工具名称：未检查");
+
+    // The toolchain note is the whole list only when there is no entry at all.
+    cleanup();
+    render(<ProtocolPanel view={{ ...BLANK_VIEW, toolchain: { ...BLANK_VIEW.toolchain, entries: [] } }} />);
+    expect(screen.getByTestId("protocol-toolchain")).toHaveTextContent("Host 未上报工具链说明");
   });
 });
 

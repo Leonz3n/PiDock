@@ -11,6 +11,7 @@ import {
   type ProviderStatus,
   type ProviderView,
 } from "../data/providerProfile";
+import { hostText } from "../data/workspaceFiles";
 
 const field = "min-w-0 w-full border border-line bg-bg px-2 py-1 text-xs";
 
@@ -172,21 +173,21 @@ export function DesktopProvidersPage({
                 <span aria-hidden className="grid h-8 w-8 place-items-center rounded-[7px] bg-soft text-sm text-[#61788d]">✳</span>
                 <Badge variant={selected ? "accent" : "outline"}>{selected ? "当前任务已选用" : profile.credentialAvailable ? "可用" : "凭据缺失"}</Badge>
               </div>
-              <h3 className="mt-3 text-[15px] font-semibold text-ink">{profile.name}</h3>
+              <h3 className="mt-3 text-[15px] font-semibold text-ink">{hostText(profile.name, "Host 未上报配置名称")}</h3>
               <div className="mt-2 flex flex-wrap gap-1.5">
                 <Badge>openai-chat-completions</Badge>
                 <Badge>第 {profile.generation} 代</Badge>
               </div>
               <p className="mt-2.5 font-mono text-[11px] break-words text-muted" style={{ overflowWrap: "anywhere" }}>
-                {profile.baseUrl}
+                {hostText(profile.baseUrl, "Host 未上报服务地址")}
               </p>
               <div className="mt-2 flex flex-wrap gap-1.5">
-                <Badge>{profile.modelId}</Badge>
+                <Badge>{hostText(profile.modelId, "Host 未上报模型标识")}</Badge>
                 <Badge>{(profile.contextWindow / 1000).toFixed(0)}k 上下文</Badge>
                 <Badge>最大输出 {profile.maxTokens}</Badge>
               </div>
               <p className="mt-2.5 text-[11px] text-muted">
-                凭据引用 <span className="font-mono">{profile.authRef}</span> · {profile.credentialAvailable ? "该环境变量有取值" : "该环境变量没有取值"}
+                凭据引用 <span className="font-mono">{hostText(profile.authRef, "Host 未上报凭据引用名")}</span> · {profile.credentialAvailable ? "该环境变量有取值" : "该环境变量没有取值"}
               </p>
               <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
                 <Button type="button" size="sm" onClick={() => edit(profile)}>

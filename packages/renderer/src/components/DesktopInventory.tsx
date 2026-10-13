@@ -16,6 +16,7 @@ import { DesktopCapabilitiesPage } from "./DesktopCapabilitiesPage";
 import { DesktopSettingsPage } from "./DesktopSettingsPage";
 import { lifecycleStateThroughShell } from "../data/shellBridge";
 import { loadDesktopProjects, parseDesktopProject, projectOperation, type DesktopProject, type DesktopProjects, type ProjectInput, type ProjectSource, type TaskAssociation } from "../data/desktopProjects";
+import { hostText } from "../data/workspaceFiles";
 
 export { desktopMode };
 
@@ -64,7 +65,7 @@ function ProjectForm({ current, input, onChange, busy, saveDisabled, onCancel, o
 
 function Sources({ title, rows }: { title: string; rows: ProjectSource[] }) {
   return <section className="mt-5"><h3 className="text-xs font-semibold text-muted">{title} · {rows.length}</h3>
-    {rows.length ? <ul className="mt-2 divide-y divide-line border-y border-line">{rows.map((row) => <li key={row.id} className="min-w-0 py-2 text-xs"><strong className="block font-medium">{row.name}</strong><span className="block break-all text-muted">{row.path}</span></li>)}</ul> : <p className="mt-2 text-xs text-muted">暂无{title}</p>}
+    {rows.length ? <ul className="mt-2 divide-y divide-line border-y border-line">{rows.map((row) => <li key={row.id} className="min-w-0 py-2 text-xs"><strong className="block font-medium">{hostText(row.name, "Host 未上报来源名称")}</strong><span className="block break-all text-muted">{hostText(row.path, "Host 未上报来源路径")}</span></li>)}</ul> : <p className="mt-2 text-xs text-muted">暂无{title}</p>}
   </section>;
 }
 
@@ -414,13 +415,13 @@ export function DesktopInventory() {
       <div className="grid gap-5 md:grid-cols-[220px_minmax(0,1fr)]">
         <nav aria-label="项目导航" className="min-w-0 border-b border-line pb-3 md:border-b-0 md:border-r md:pr-4">
           <h2 className="mb-2 text-xs font-semibold text-muted">项目 · {data.projects.length}</h2>
-          <div className="flex gap-1 overflow-x-auto md:block md:space-y-1">{data.projects.map((item) => <button type="button" key={item.id} onClick={() => { pinned.current = true; setSelection({ kind: "project", id: item.id }); setForm(null); setDraft(null); setActionError(null); }} className={`block min-w-0 shrink-0 px-2 py-2 text-left text-sm md:w-full md:truncate ${project?.id === item.id ? "bg-paper font-semibold" : "hover:bg-paper"}`}>{item.name}</button>)}</div>
+          <div className="flex gap-1 overflow-x-auto md:block md:space-y-1">{data.projects.map((item) => <button type="button" key={item.id} onClick={() => { pinned.current = true; setSelection({ kind: "project", id: item.id }); setForm(null); setDraft(null); setActionError(null); }} className={`block min-w-0 shrink-0 px-2 py-2 text-left text-sm md:w-full md:truncate ${project?.id === item.id ? "bg-paper font-semibold" : "hover:bg-paper"}`}>{hostText(item.name, "Host 未上报项目名称")}</button>)}</div>
           {!data.projects.length && <p className="text-xs text-muted">{data.projectsInitialized ? "暂无项目" : "项目映射未建立"}</p>}
           <button type="button" className={`mt-3 block px-2 py-2 text-left text-sm ${!project ? "bg-paper font-semibold" : "hover:bg-paper"}`} onClick={() => { pinned.current = true; setSelection({ kind: "unassigned" }); setForm(null); setDraft(null); setActionError(null); }}>{data.projectsInitialized ? "未归属任务" : "项目映射未建立"} · {data.associations.filter((row) => row.projectId === null).length}</button>
         </nav>
         <div className="min-w-0">
           {form === "create" && draft && <ProjectForm input={draft} onChange={setDraft} busy={busy} saveDisabled={pendingCreate !== null} onCancel={() => { setForm(null); setDraft(null); }} onSubmit={submit} />}
-          {project ? <><div className="flex flex-wrap items-start justify-between gap-2"><div className="min-w-0"><h2 className="text-base font-semibold">{project.name}</h2><p className="mt-1 text-xs text-muted">{project.description}</p></div>
+          {project ? <><div className="flex flex-wrap items-start justify-between gap-2"><div className="min-w-0"><h2 className="text-base font-semibold">{hostText(project.name, "Host 未上报项目名称")}</h2><p className="mt-1 text-xs text-muted">{hostText(project.description, "Host 未上报项目说明")}</p></div>
             <div className="flex gap-2"><button className={button} type="button" disabled={busy} onClick={() => { setForm("edit"); setEditNeedsReview(false); setDraft({ name: project.name, description: project.description, repositories: project.repositories, directories: project.directories }); }}><Icon name="settings" />编辑</button><button className={button} type="button" disabled={busy} onClick={() => { if (window.confirm(`删除项目「${project.name}」？关联任务必须先解绑或转移。`)) void operate({ op: "delete", projectId: project.id }); }}><Icon name="archive" />删除</button></div></div>
             {form === "edit" && draft && <ProjectForm key={project.id} current={project} input={draft} onChange={setDraft} busy={busy} saveDisabled={editNeedsReview} onCancel={() => { setForm(null); setDraft(null); setEditNeedsReview(false); }} onSubmit={submit} />}
             <Sources title="仓库" rows={project.repositories} /><Sources title="普通目录" rows={project.directories} /></> : <h2 className="text-base font-semibold">{data.projectsInitialized ? "未归属任务" : "项目映射未建立"}</h2>}

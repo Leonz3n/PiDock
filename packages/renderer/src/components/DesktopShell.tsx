@@ -24,6 +24,7 @@ import { Button } from "./ui/button";
 import { Icon, type IconName } from "./Icon";
 import { BrandMark, LocalUserAvatar } from "./ui";
 import { desktopSummarySegments, type DesktopSummarySegment } from "../data/desktopShellSummary";
+import { hostText } from "../data/workspaceFiles";
 
 export interface DesktopShellTask {
   taskId: string;
@@ -124,8 +125,8 @@ function TaskNavCard({ task, selected, onSelect }: { task: DesktopShellTask; sel
         <span className="truncate text-ink">{task.name}</span>
       </span>
       <span className="mt-1 ml-[14px] flex justify-between gap-2 text-[10px] text-[#959da2]">
-        <span className="truncate">{task.repoCount > 0 ? `${task.repoCount} 仓库 · ${task.branch}` : task.branch}</span>
-        <span className="shrink-0">{task.updatedAt.slice(0, 10)}</span>
+        <span className="truncate">{task.repoCount > 0 ? `${task.repoCount} 仓库 · ${hostText(task.branch, "Host 未上报分支")}` : hostText(task.branch, "Host 未上报分支")}</span>
+        <span className="shrink-0">{hostText(task.updatedAt.slice(0, 10), "Host 未上报更新时间")}</span>
       </span>
     </Button>
   );

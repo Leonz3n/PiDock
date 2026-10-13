@@ -3,6 +3,7 @@ import { Icon } from "./Icon";
 import { abandonCreation, commitCreation, currentCreation, prepareCreation, type CreationInput, type CreationIntentView } from "../data/desktopCreation";
 import type { DesktopProject } from "../data/desktopProjects";
 import type { PidockBridge } from "../data/shellBridge";
+import { hostText } from "../data/workspaceFiles";
 
 const button = "inline-flex min-h-8 items-center justify-center gap-1.5 border border-line bg-paper px-2.5 py-1 text-xs hover:bg-bg disabled:cursor-not-allowed disabled:opacity-50";
 const field = "w-full min-w-0 border border-line bg-paper px-2 py-1.5 text-sm text-ink";
@@ -72,8 +73,8 @@ export function DesktopTaskCreation({ project, bridge, onCreated }: { project?: 
         <h2 className="font-semibold">任务路径预览 · {intent.name}</h2>
         <p className="break-all text-xs">{intent.taskDir}</p>
         <p className="text-xs">任务分支：{intent.branch}</p>
-        {intent.repos.map((repo) => <p className="break-all text-xs" key={repo.id}>{repo.name} · {repo.remote}/{repo.remoteBranch} · {repo.commit} → {intent.taskDir}/{repo.repoDir}</p>)}
-        {intent.directories.map((dir) => <p className="break-all text-xs" key={dir.id}>{dir.name} · {dir.path} → {intent.taskDir}/{dir.linkName}（共享可写）</p>)}
+        {intent.repos.map((repo) => <p className="break-all text-xs" key={repo.id}>{hostText(repo.name, "Host 未上报仓库名称")} · {hostText(repo.remote, "Host 未上报远程名")}/{hostText(repo.remoteBranch, "Host 未上报远程分支")} · {hostText(repo.commit, "Host 未上报提交")} → {intent.taskDir}/{hostText(repo.repoDir, "Host 未上报目录名")}</p>)}
+        {intent.directories.map((dir) => <p className="break-all text-xs" key={dir.id}>{hostText(dir.name, "Host 未上报目录名称")} · {hostText(dir.path, "Host 未上报目录路径")} → {intent.taskDir}/{hostText(dir.linkName, "Host 未上报链接名")}（共享可写）</p>)}
         <p className="text-xs text-muted">创建中断后会保留固定任务身份与提交；重试不会更新基线。未完成的工作区可能出现在未归属任务中。</p>
         <div className="flex flex-wrap gap-2">
           <button className={button} type="button" disabled={busy} onClick={() => void commit()}>{busy ? "正在创建" : "确认创建 / 恢复"}</button>

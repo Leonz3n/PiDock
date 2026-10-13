@@ -476,6 +476,26 @@ describe("[UI 对齐] S8d 运行 panel (real Host bindings and status)", () => {
     expect(fixture.serviceCatalogOp).toHaveBeenCalledWith({ op: "list", projectId: "project-1", environmentId: ENVIRONMENT_ID });
   });
 
+  it("names a blank registry 配方版本 and a blank 绑定根 instead of leaving a bare separator", async () => {
+    // `registryStatus` reads `templateVersion` by value (`typeof === "string"`)
+    // and `serviceBindingsFromMain` reads `rootId` by value, so both can be `""`;
+    // the row then read `配方 v · …` and `绑定 v2 · /apps/svc`.
+    const fixture = panelBridge({
+      statuses: () => ({ ok: true, payload: { service: {
+        serviceId: SERVICE_ID, lifecycle: "stopped", templateVersion: "", health: "not-probed", launchSource: "catalog", resolved: [],
+      } } }),
+      bindings: [{
+        taskId: "task-1", serviceId: SERVICE_ID, environmentId: ENVIRONMENT_ID, environmentName: "本地开发",
+        templateVersion: 2, rootId: "", subdir: "", privateKeys: [],
+      }],
+    });
+    render(<DesktopToolDock taskId="task-1" tool="runtime" onClose={() => {}} />);
+    const row = await screen.findByText(/绑定 v2 · Host 未上报绑定根/);
+    expect(row).toBeInTheDocument();
+    expect(screen.getByText(/配方 vHost 未上报配方版本 · 0 项环境变量/)).toBeInTheDocument();
+    expect(fixture.serviceCatalogOp).toHaveBeenCalledWith({ op: "taskBindings", projectId: "project-1", taskId: "task-1" });
+  });
+
   it("drives the real bound-service start/stop through runTaskService and keeps the rest 未接线", async () => {
     const fixture = panelBridge({ statuses: () => ({ ok: true, payload: { service: {
       serviceId: SERVICE_ID, state: "running", ownerSessionId: null, busy: false, closing: false, retainedRights: null, executionAvailable: false,

@@ -201,6 +201,27 @@ it("reviews an existing shared template row by row, then writes one new version 
   expect(screen.queryByText("已绑定")).toBeNull();
 });
 
+it("names a blank 共享变量差异 row and a blank restart-needed service instead of a bare separator", async () => {
+  // `serviceTemplateUpdateFromMain` reads the diff rows and the restart-needed
+  // name by value (`typeof === "string"`, `textList`), so a blank entry really
+  // reaches this panel; each one names its own absence instead of printing
+  // `修改：： → 4000` or `的 （v1 → v2）`.
+  const blankReview = {
+    ...review,
+    diff: { added: [""], changed: [{ key: "", before: "", after: "4000" }], removed: [""] },
+    restartNeeded: [{ taskId: "task-1", serviceId, name: "", from: 1, to: 2 }],
+  };
+  stub((request) => request["op"] === "list" ? { ok: true, payload: [saved] } : { ok: true, payload: blankReview });
+  render(<ProjectServiceTemplates projectId={projectId} environmentId={environmentId} tasks={[{ taskId: "task-1", name: "任务甲" }]} />);
+  await screen.findByText("共享变量：PORT");
+  fireEvent.click(screen.getByRole("button", { name: "编辑" }));
+  fireEvent.click(screen.getByRole("button", { name: "核对新版本" }));
+  expect(await screen.findByText("新增：Host 未上报共享变量名")).toBeInTheDocument();
+  expect(screen.getByText("移除：Host 未上报共享变量名")).toBeInTheDocument();
+  expect(screen.getByText("修改：Host 未上报共享变量名：（空值） → 4000")).toBeInTheDocument();
+  expect(screen.getByText(/受影响：任务 任务甲 的 Host 未上报服务名称（v1 → v2）/)).toBeInTheDocument();
+});
+
 it("refuses a confirmed write whose listed revision is not the one the page reviewed", async () => {
   let calls = 0;
   const serviceCatalogOp = stub((request) => {
@@ -340,6 +361,23 @@ const scannedHint: ServiceImportHintView = {
   program: "node", args: ["server.js"], workdir: "apps/api",
   invalidVars: ["1BAD"], toVerify: ["API_TOKEN：疑似凭据，请移入本机私有配置"],
 };
+
+it("names a blank draft field in the fill notes instead of an empty candidate or basis", async () => {
+  // `serviceImportHints.ts`'s `shortText` (`:50`) is `typeof === "string"` plus a
+  // length cap, so every field it guards can be `""`; the notes used to read
+  // `运行类型为草案判断：… （依据：）` and `无效变量：`.
+  stub(() => ({ ok: true, payload: [] }));
+  render(<ProjectServiceTemplates projectId={projectId} environmentId={environmentId} fillFrom={{
+    ...scannedHint, name: "", runTypeBasis: "", invalidVars: [""], toVerify: [""],
+  }} onFillApplied={() => {}} />);
+  await screen.findByLabelText("服务名称");
+  expect(screen.getByText(/已从草案填入（package\.json · Host 未上报候选名称）/)).toBeInTheDocument();
+  expect(screen.getByText(/（依据：Host 未上报判定依据）/)).toBeInTheDocument();
+  expect(screen.getByText(/无效变量：Host 未上报变量名/)).toBeInTheDocument();
+  expect(screen.getByText("Host 未上报待核对项")).toBeInTheDocument();
+  // The draft this payload DID carry still renders as itself.
+  expect(screen.getByText(/变量 API_TOKEN（来源 package\.json）：••••••••/)).toBeInTheDocument();
+});
 
 it("fills the new-template form from one explicit scanned draft and saves nothing", async () => {
   const serviceCatalogOp = stub(() => ({ ok: true, payload: [] }));
