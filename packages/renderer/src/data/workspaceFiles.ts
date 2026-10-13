@@ -309,6 +309,17 @@ export function observedText<T>(
   return `未实测：${observation.reason}`;
 }
 
+/**
+ * Display text for one Host string. A value the Host left absent OR blank is
+ * NAMED, never substituted — and in particular never by the root's label, which
+ * is a root's own identity and not a repository's or a linked directory's. This
+ * is the shared rule for every view that renders a Host string, so a blank fact
+ * reads the same way wherever it is shown.
+ */
+export function hostText(value: string | undefined, absent: string): string {
+  return value !== undefined && value.length > 0 ? value : absent;
+}
+
 /** Parse the `task/fileRoots` payload; `undefined` when the shape is unusable. */
 export function workspaceRootsFromHost(payload: unknown): { roots: WorkspaceRootView[]; taskDir: string } | undefined {
   const source = record(payload);

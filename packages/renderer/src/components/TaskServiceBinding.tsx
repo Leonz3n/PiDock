@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { fileRootsThroughShell, serviceCatalogThroughShell } from "../data/shellBridge";
 import { serviceBindingAdoptionFromMain, serviceBindingsFromMain, type ServiceBindingAdoptionView, type ServiceBindingView, type ServiceTemplateView } from "../data/serviceCatalog";
 import { shellFailure } from "../data/taskServices";
-import { workspaceRootsFromHost, type WorkspaceRootView } from "../data/workspaceFiles";
+import { hostText, workspaceRootsFromHost, type WorkspaceRootView } from "../data/workspaceFiles";
 import { Icon } from "./Icon";
 import { Button } from "./ui/button";
 import { SavedServiceConfigPreview } from "./SavedServiceConfigPreview";
@@ -147,7 +147,7 @@ export function TaskServiceBinding({ template, environmentName, tasks }: {
     {foreignBinding && <p role="status" className="mt-2 break-words text-[#9a6032]">该任务在此服务上绑定的是环境「{foreignBinding.environmentName}」的 v{foreignBinding.templateVersion}，不是当前环境的模板；本面板不会把它当成当前环境的绑定，也不会改写它（同一任务同一服务只能有一个绑定）。</p>}
     {!bound && !foreignBinding && state?.taskId === taskId && <fieldset disabled={pending} className="mt-3 min-w-0">
       <div className="grid gap-3 sm:grid-cols-2">
-        <label className="grid gap-1">工作副本<select aria-label="绑定工作副本" value={selectedRoot} disabled={!roots.length} onChange={(event) => { setRootId(event.target.value); setReview(false); }} className="min-h-8 min-w-0 rounded-[4px] border border-line bg-paper px-2"><option value="" hidden>选择工作副本</option>{roots.map((root) => <option key={root.id} value={root.id}>{root.label}</option>)}</select></label>
+        <label className="grid gap-1">工作副本<select aria-label="绑定工作副本" value={selectedRoot} disabled={!roots.length} onChange={(event) => { setRootId(event.target.value); setReview(false); }} className="min-h-8 min-w-0 rounded-[4px] border border-line bg-paper px-2"><option value="" hidden>选择工作副本</option>{roots.map((root) => <option key={root.id} value={root.id}>{hostText(root.label, "Host 未上报根名称")}</option>)}</select></label>
         <label className="grid gap-1">工作子目录<input aria-label="绑定工作子目录" value={subdir} maxLength={512} placeholder={template.descriptor.workdir ?? "仓库根目录"} className="min-h-8 min-w-0 rounded-[4px] border border-line bg-paper px-2" onChange={(event) => { setSubdir(event.target.value); setSubdirTouched(true); setReview(false); }} /></label>
       </div>
       <div className="mt-2 flex items-center justify-between"><span>本机凭据引用</span><Button type="button" size="icon" variant="ghost" aria-label="添加私有引用" title="添加私有引用" disabled={refs.length >= 80} onClick={() => { setRefs([...refs, { key: "", envRef: "" }]); setReview(false); }}><Icon name="plus" /></Button></div>

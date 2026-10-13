@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { fileRootsThroughShell, serviceCatalogThroughShell, serviceImportHintsThroughShell, shellBridge } from "../data/shellBridge";
 import { serviceEnvironmentsFromMain, type ServiceEnvironmentView } from "../data/serviceCatalog";
 import { serviceImportScanFromHost, type ServiceImportHintView, type ServiceImportScanView } from "../data/serviceImportHints";
-import { workspaceRootsFromHost, type WorkspaceRootView } from "../data/workspaceFiles";
+import { hostText, workspaceRootsFromHost, type WorkspaceRootView } from "../data/workspaceFiles";
 import { Icon } from "./Icon";
 import { ProjectServiceTemplates } from "./ProjectServiceTemplates";
 import { Badge } from "./ui/badge";
@@ -74,7 +74,7 @@ function RepositoryImportDrafts({ tasks, pending, filled, onFillForm }: {
     {filled && <p role="status" className="mt-2 text-xs text-muted">已把草案「{filled}」填入上方新建模板表单；尚未保存。</p>}
     <div className="mt-3 flex flex-wrap gap-3 border-y border-line py-3 text-xs">
       <label className="flex min-w-0 items-center gap-2">任务<select aria-label="扫描任务" value={taskId} disabled={!tasks.length || pending} onChange={(event) => setRequestedTaskId(event.target.value)} className="min-h-8 max-w-[240px] min-w-0 rounded-[4px] border border-line bg-paper px-2 text-ink"><option value="" hidden>选择任务</option>{tasks.map((task) => <option key={task.taskId} value={task.taskId}>{task.name}</option>)}</select></label>
-      <label className="flex min-w-0 items-center gap-2">仓库<select aria-label="扫描仓库来源" value={selectedRoot} disabled={!roots.length || loadingRoots} onChange={(event) => { epoch.current++; setLoadingScan(false); setScanState(null); setRootId(event.target.value); setError(null); }} className="min-h-8 max-w-[240px] min-w-0 rounded-[4px] border border-line bg-paper px-2 text-ink"><option value="" hidden>选择仓库</option>{roots.map((root) => <option key={root.id} value={root.id}>{root.label}</option>)}</select></label>
+      <label className="flex min-w-0 items-center gap-2">仓库<select aria-label="扫描仓库来源" value={selectedRoot} disabled={!roots.length || loadingRoots} onChange={(event) => { epoch.current++; setLoadingScan(false); setScanState(null); setRootId(event.target.value); setError(null); }} className="min-h-8 max-w-[240px] min-w-0 rounded-[4px] border border-line bg-paper px-2 text-ink"><option value="" hidden>选择仓库</option>{roots.map((root) => <option key={root.id} value={root.id}>{hostText(root.label, "Host 未上报根名称")}</option>)}</select></label>
     </div>
     {error && <p role="alert" className="py-3 text-xs text-[#ad4545]">{error}</p>}
     {!error && !scan && <p role="status" className="py-4 text-xs text-muted">{pending || loadingRoots ? "正在读取任务仓库" : loadingScan ? "正在扫描仓库配置" : !tasks.length ? "当前项目无可用任务" : !roots.length ? "该任务无仓库工作副本" : "尚未扫描"}</p>}

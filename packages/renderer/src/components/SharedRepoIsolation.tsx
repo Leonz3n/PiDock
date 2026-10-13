@@ -39,6 +39,7 @@ import { useEffect, useRef, useState } from "react";
 import { fileDiffThroughShell, fileRootsThroughShell, probeLinkThroughShell } from "../data/shellBridge";
 import { shellFailure } from "../data/taskServices";
 import {
+  hostText,
   observedText,
   workspaceDiffFromHost,
   workspaceLinkTargetFromHost,
@@ -161,7 +162,7 @@ function WorktreeRow({ row, change }: { row: RootRow; change: ChangeRead | undef
         <dd className="min-w-0 break-all font-mono">{root.path}</dd>
         <dt className="text-muted">工作分支</dt>
         <dd className="min-w-0 break-all font-mono" data-testid={`row-working-branch-${row.taskId}`}>
-          {observedText(root.workingBranch, (name) => name, "Host 未上报工作分支观察")}
+          {observedText(root.workingBranch, (name) => hostText(name, "Host 未上报工作分支名"), "Host 未上报工作分支观察")}
         </dd>
         <dt className="text-muted">远程基线分支</dt>
         <dd className="min-w-0 break-all font-mono" data-testid={`row-baseline-branch-${row.taskId}`}>

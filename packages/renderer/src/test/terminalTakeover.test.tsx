@@ -223,6 +223,32 @@ describe("#15 terminal panel on the real channel", () => {
     expect(await screen.findByTestId("terminal-instance")).toHaveTextContent("运行中");
   });
 
+  it("names an empty root label in the terminal repo choice instead of a blank option", async () => {
+    // `workspaceRootsFromHost` keeps a label the Host sent as `""` (`str()`),
+    // and this choice renders only while the task has more than one root — the
+    // shape that would otherwise offer a nameless option.
+    const calls: Call[] = [];
+    const taskOp = hostStub(calls, {
+      "task/terminalState": () => ({ ok: true, payload: { spawnImplemented: true, instances: [hostInstance()] } }),
+      "task/fileRoots": () => ({
+        ok: true,
+        payload: {
+          taskDir: ROOTS.taskDir,
+          roots: [
+            ROOTS.roots[0]!,
+            { id: "blank-root", kind: "worktree", label: "", path: "/w/tasks/release/blank-root", repo: "blank-root" },
+          ],
+        },
+      }),
+    });
+    await openTerminalPanel(taskOp);
+
+    const choice = await screen.findByLabelText("终端仓库");
+    expect(within(choice).getByRole("option", { name: "Host 未上报根名称" })).toBeInTheDocument();
+    // The real root beside it still reads as the Host's own name.
+    expect(within(choice).getByRole("option", { name: "front-monorepo" })).toBeInTheDocument();
+  });
+
   it("plans the human action with the same label the start carries, so plan and start agree", async () => {
     // The Host labels an unlabelled human caller `用户显式操作` itself
     // (host-guards.ts:166), so a plan sent without a label renders

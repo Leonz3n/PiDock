@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { TaskServiceBinding } from "../components/TaskServiceBinding";
 import type { ServiceTemplateView } from "../data/serviceCatalog";
@@ -15,6 +15,20 @@ const bound = { taskId: "task-a", serviceId: template.serviceId, environmentId, 
 const tasks = [{ taskId: "task-a", name: "任务甲" }];
 function roots() { return { ok: true, payload: { taskDir: "/task", roots: [{ id: "repo", kind: "worktree", label: "Repo", path: "/task/repo" }] } }; }
 afterEach(() => { cleanup(); delete window.pidock; });
+
+it("names an empty root label in the worktree choice instead of a blank option", async () => {
+  // A label the Host sent as `""` survives `workspaceRootsFromHost` (`str()`
+  // keeps it), so the worktree choice names the absence instead of offering a
+  // nameless option a binding could be made against.
+  window.pidock = {
+    taskOp: vi.fn(async () => ({ ok: true, payload: { taskDir: "/task", roots: [{ id: "repo", kind: "worktree", label: "", path: "/task/repo" }] } })),
+    serviceCatalogOp: vi.fn(async (request: Record<string, unknown>) => request["op"] === "taskBindings"
+      ? { ok: true, payload: [] } : { ok: true, payload: { cancelled: true } }),
+  };
+  render(<TaskServiceBinding environmentName={environmentName} template={template} tasks={tasks} />);
+  const choice = await screen.findByLabelText("绑定工作副本");
+  expect(within(choice).getByRole("option", { name: "Host 未上报根名称" })).toBeInTheDocument();
+});
 
 it("submits no page program path and only binds after explicit review", async () => {
   const serviceCatalogOp = vi.fn(async (request: Record<string, unknown>) => request["op"] === "taskBindings"

@@ -44,6 +44,7 @@ import { ProtocolPanel, TerminalTakeoverPanel } from "./ProtocolTerminalPanels";
 import { ServiceOwnerRebind } from "./ServiceOwnerRebind";
 import {
   externalEditorLaunchFromHost,
+  hostText,
   observedText,
   terminalPlanFromHost,
   terminalStateFromHost,
@@ -352,12 +353,15 @@ function RootChips({
           aria-pressed={root.id === selectedId}
           className={root.id === selectedId ? "border-primary" : "text-muted-foreground"}
         >
-          <span>{root.label}</span>
+          <span>{hostText(root.label, "Host 未上报根名称")}</span>
           {/* The chip carries the OBSERVED working branch, never the root's
               pinned baseline: a worktree the Host could not read shows no
-              branch here, and the metadata block below names the unknown. */}
+              branch here, and the metadata block below names the unknown. An
+              OBSERVED value the Host left empty is an observed fact with no
+              name in it, so the name it does not give is named instead of a
+              bare `· ` that would read as a branch neither empty nor unread. */}
           {root.workingBranch?.state === "observed" && (
-            <span className="text-[10px] text-muted">· {root.workingBranch.value}</span>
+            <span className="text-[10px] text-muted">· {hostText(root.workingBranch.value, "Host 未上报工作分支名")}</span>
           )}
         </Button>
       ))}
@@ -402,15 +406,6 @@ function TreeList({
       {!entries.length && <li className="px-1 py-2 text-xs text-muted" data-testid="dock-tree-empty">目录为空</li>}
     </ul>
   );
-}
-
-/**
- * A Host string that is absent or blank is NAMED, never substituted — and in
- * particular never by the root's label, which is a root's own identity and not
- * a repository's or a linked directory's.
- */
-function hostText(value: string | undefined, absent: string): string {
-  return value !== undefined && value.length > 0 ? value : absent;
 }
 
 /**
@@ -853,7 +848,7 @@ function FilesTool({ taskId }: { taskId: string }) {
                   branch. An unread branch says so by name. */}
               <dt className="text-muted">工作分支</dt>
               <dd className="min-w-0 break-all font-mono" data-testid="dock-working-branch">
-                {observedText(selectedRoot.workingBranch, (name) => name, "Host 未上报工作分支观察")}
+                {observedText(selectedRoot.workingBranch, (name) => hostText(name, "Host 未上报工作分支名"), "Host 未上报工作分支观察")}
               </dd>
               <dt className="text-muted">未提交改动</dt>
               <dd className="min-w-0 break-all font-mono" data-testid="dock-uncommitted">
