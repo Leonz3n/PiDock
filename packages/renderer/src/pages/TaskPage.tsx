@@ -305,7 +305,9 @@ export function TaskPage({ task, sessionId }: { task: Task; sessionId: string })
       return;
     }
     for (const service of localServices) {
-      void useHostStore.getState().setServiceRunning(task.id, service.id, !allRunning);
+      void useHostStore.getState().setServiceRunning(task.id, service.id, !allRunning).catch((error: unknown) => {
+        pushToast(error instanceof Error ? error.message : "服务启停失败，请重试");
+      });
     }
     pushToast(allRunning ? "已请求停止本地服务" : "已请求启动本地服务");
   };
@@ -488,7 +490,9 @@ export function TaskPage({ task, sessionId }: { task: Task; sessionId: string })
                   readonly={session.permission === "read"}
                   onReadonlyAttempt={() => pushToast("当前是只读会话，请先调整会话权限")}
                   onToggleService={(serviceId, running) => {
-                    void useHostStore.getState().setServiceRunning(task.id, serviceId, running);
+                    void useHostStore.getState().setServiceRunning(task.id, serviceId, running).catch((error: unknown) => {
+                      pushToast(error instanceof Error ? error.message : "服务启停失败，请重试");
+                    });
                   }}
                   onSetServiceMode={(serviceId, mode) => {
                     void useHostStore.getState().setServiceMode(task.id, serviceId, mode);
@@ -1184,6 +1188,11 @@ function RunStateCard({ taskId, sessionId }: { taskId: string; sessionId: string
             {approval.cwd ? ` · ${approval.cwd}` : ""}
             {approval.recipient ? ` · 接收人：${approval.recipient}` : ""}
           </p>
+          {approval.operation ? (
+            <p className="mt-0.5 text-[11px] text-muted" data-testid="execution-approval-operation">
+              操作：{approval.operation}
+            </p>
+          ) : null}
           {/* 原型 `closure.js` 把授权说明挂在审批正文同一段落里，不单占一行。 */}
           <p className="mt-0.5 text-[11px] text-muted">
             影响：{approval.impact}。批准仅授权这一次操作，不自动授权未来执行。

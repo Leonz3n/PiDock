@@ -207,7 +207,7 @@ Gateway 负责登录、一次性配对交换、设备凭据、在线主机路由
 
 ## 安装与发布（2026-09-21 已确认）
 
-首版使用 GitHub Actions 构建和发布安装包。GitHub Release 必须同时提供 macOS arm64 的 DMG 与 Windows x64 的 EXE；只有两个目标的构建、架构、安装冒烟及签名门禁均通过后才视为完整发布。正式 DMG 需要代码签名与公证，正式 EXE 需要 Authenticode 签名；资产携带版本、平台、架构和 SHA-256 校验信息，发布凭据只进入受保护的工作流环境。具体要求与验证见[规格](../.scratch/pidock-mvp/spec.md#安装包与-github-release)和[验收计划](mvp-validation-plan.md#安装包与发布)。
+首版使用 GitHub Actions 构建和发布安装包。GitHub Release 必须同时提供 macOS arm64 的 DMG 与 Windows x64 的 MSI（安装资产格式于 2026-10-13 改按 [ADR 0004](adr/0004-windows-installer-msi-instead-of-nsis-exe.md)，取代 NSIS 单一 EXE）；只有两个目标的构建、架构、安装冒烟及签名门禁均通过后才视为完整发布。正式 DMG 需要代码签名与公证，正式 MSI 需要 Authenticode 签名；资产携带版本、平台、架构和 SHA-256 校验信息，发布凭据只进入受保护的工作流环境。具体要求与验证见[规格](../.scratch/pidock-mvp/spec.md#安装包与-github-release)和[验收计划](mvp-validation-plan.md#安装包与发布)。
 
 ## 当前待补充的信息
 

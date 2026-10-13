@@ -15,7 +15,8 @@ import { DesktopRemotePage } from "./DesktopRemotePage";
 import { DesktopCapabilitiesPage } from "./DesktopCapabilitiesPage";
 import { DesktopSettingsPage } from "./DesktopSettingsPage";
 import { lifecycleStateThroughShell } from "../data/shellBridge";
-import { loadDesktopProjects, parseDesktopProject, projectOperation, type DesktopProject, type DesktopProjects, type ProjectInput, type ProjectSource, type TaskAssociation } from "../data/desktopProjects";
+import { loadDesktopProjects, parseDesktopProject, projectName, projectOperation, sourceName, sourcePath, type DesktopProject, type DesktopProjects, type ProjectInput, type ProjectSource, type TaskAssociation } from "../data/desktopProjects";
+import { hostText } from "../data/workspaceFiles";
 
 export { desktopMode };
 
@@ -64,7 +65,7 @@ function ProjectForm({ current, input, onChange, busy, saveDisabled, onCancel, o
 
 function Sources({ title, rows }: { title: string; rows: ProjectSource[] }) {
   return <section className="mt-5"><h3 className="text-xs font-semibold text-muted">{title} · {rows.length}</h3>
-    {rows.length ? <ul className="mt-2 divide-y divide-line border-y border-line">{rows.map((row) => <li key={row.id} className="min-w-0 py-2 text-xs"><strong className="block font-medium">{row.name}</strong><span className="block break-all text-muted">{row.path}</span></li>)}</ul> : <p className="mt-2 text-xs text-muted">暂无{title}</p>}
+    {rows.length ? <ul className="mt-2 divide-y divide-line border-y border-line">{rows.map((row) => <li key={row.id} className="min-w-0 py-2 text-xs"><strong className="block font-medium">{sourceName(row)}</strong><span className="block break-all text-muted">{sourcePath(row)}</span></li>)}</ul> : <p className="mt-2 text-xs text-muted">暂无{title}</p>}
   </section>;
 }
 
@@ -252,7 +253,11 @@ export function DesktopInventory() {
     ...task,
     projectId: ready?.associations.find((row) => row.taskId === task.taskId)?.projectId ?? null,
   })), [ready]);
-  const shellProjects = useMemo(() => (ready?.projects ?? []).map((project) => ({ id: project.id, name: project.name, description: project.description })), [ready]);
+  // Every Project name the shell shows comes from here, so a blank one is named
+  // once at this producer instead of at each surface (`data/desktopProjects.ts`
+  // `projectName`). The breadcrumb, the bottom strip, the workspace card's avatar
+  // and the 环境与服务 project choice all read this list.
+  const shellProjects = useMemo(() => (ready?.projects ?? []).map((project) => ({ id: project.id, name: projectName(project), description: project.description })), [ready]);
   const lifecycleReady = lifecycleIndex?.data === ready && lifecycleIndex !== null;
   const activeTasks = lifecycleReady ? shellTasks.filter((task) => lifecycleIndex?.activeIds.has(task.taskId)) : [];
   const selectedProject = selection.kind === "project" ? shellProjects.find((project) => project.id === selection.id) : undefined;
@@ -369,7 +374,7 @@ export function DesktopInventory() {
     availableTasks={shellTasks}
     onOpenTask={(taskId) => navigate({ view: "task", taskId })}
   />);
-  if (activeTask) return shell(<DesktopConversation key={activeTask.id} taskId={activeTask.id} name={activeTask.name} roots={activeTask.roots} association={activeTask.association} onBack={() => { entryEpoch.current++; setActiveTask(null); void load(); }} onOpenProviders={() => navigate({ view: "providers" })} onArchived={() => { navigate({ view: "archive" }); void load(); }} />);
+  if (activeTask) return shell(<DesktopConversation key={activeTask.id} taskId={activeTask.id} name={activeTask.name} roots={activeTask.roots} association={activeTask.association} onBack={() => { entryEpoch.current++; setActiveTask(null); void load(); }} onOpenProviders={() => navigate({ view: "providers" })} onArchived={() => { navigate({ view: "archive" }); void load(); }} onSourcesChanged={() => { void load(true); }} />);
   if (unwired === "capabilities") return shell(<DesktopCapabilitiesPage />);
   if (unwired === "settings") return shell(<DesktopSettingsPage />);
   if (unwired) return shell(<DesktopUnwired name={DESKTOP_LABELS[unwired]} onBack={() => navigate({ view: "unassigned" })} />);
@@ -414,14 +419,14 @@ export function DesktopInventory() {
       <div className="grid gap-5 md:grid-cols-[220px_minmax(0,1fr)]">
         <nav aria-label="项目导航" className="min-w-0 border-b border-line pb-3 md:border-b-0 md:border-r md:pr-4">
           <h2 className="mb-2 text-xs font-semibold text-muted">项目 · {data.projects.length}</h2>
-          <div className="flex gap-1 overflow-x-auto md:block md:space-y-1">{data.projects.map((item) => <button type="button" key={item.id} onClick={() => { pinned.current = true; setSelection({ kind: "project", id: item.id }); setForm(null); setDraft(null); setActionError(null); }} className={`block min-w-0 shrink-0 px-2 py-2 text-left text-sm md:w-full md:truncate ${project?.id === item.id ? "bg-paper font-semibold" : "hover:bg-paper"}`}>{item.name}</button>)}</div>
+          <div className="flex gap-1 overflow-x-auto md:block md:space-y-1">{data.projects.map((item) => <button type="button" key={item.id} onClick={() => { pinned.current = true; setSelection({ kind: "project", id: item.id }); setForm(null); setDraft(null); setActionError(null); }} className={`block min-w-0 shrink-0 px-2 py-2 text-left text-sm md:w-full md:truncate ${project?.id === item.id ? "bg-paper font-semibold" : "hover:bg-paper"}`}>{projectName(item)}</button>)}</div>
           {!data.projects.length && <p className="text-xs text-muted">{data.projectsInitialized ? "暂无项目" : "项目映射未建立"}</p>}
           <button type="button" className={`mt-3 block px-2 py-2 text-left text-sm ${!project ? "bg-paper font-semibold" : "hover:bg-paper"}`} onClick={() => { pinned.current = true; setSelection({ kind: "unassigned" }); setForm(null); setDraft(null); setActionError(null); }}>{data.projectsInitialized ? "未归属任务" : "项目映射未建立"} · {data.associations.filter((row) => row.projectId === null).length}</button>
         </nav>
         <div className="min-w-0">
           {form === "create" && draft && <ProjectForm input={draft} onChange={setDraft} busy={busy} saveDisabled={pendingCreate !== null} onCancel={() => { setForm(null); setDraft(null); }} onSubmit={submit} />}
-          {project ? <><div className="flex flex-wrap items-start justify-between gap-2"><div className="min-w-0"><h2 className="text-base font-semibold">{project.name}</h2><p className="mt-1 text-xs text-muted">{project.description}</p></div>
-            <div className="flex gap-2"><button className={button} type="button" disabled={busy} onClick={() => { setForm("edit"); setEditNeedsReview(false); setDraft({ name: project.name, description: project.description, repositories: project.repositories, directories: project.directories }); }}><Icon name="settings" />编辑</button><button className={button} type="button" disabled={busy} onClick={() => { if (window.confirm(`删除项目「${project.name}」？关联任务必须先解绑或转移。`)) void operate({ op: "delete", projectId: project.id }); }}><Icon name="archive" />删除</button></div></div>
+          {project ? <><div className="flex flex-wrap items-start justify-between gap-2"><div className="min-w-0"><h2 className="text-base font-semibold">{projectName(project)}</h2><p className="mt-1 text-xs text-muted">{hostText(project.description, "Host 未上报项目说明")}</p></div>
+            <div className="flex gap-2"><button className={button} type="button" disabled={busy} onClick={() => { setForm("edit"); setEditNeedsReview(false); setDraft({ name: project.name, description: project.description, repositories: project.repositories, directories: project.directories }); }}><Icon name="settings" />编辑</button><button className={button} type="button" disabled={busy} onClick={() => { if (window.confirm(`删除项目「${projectName(project)}」？关联任务必须先解绑或转移。`)) void operate({ op: "delete", projectId: project.id }); }}><Icon name="archive" />删除</button></div></div>
             {form === "edit" && draft && <ProjectForm key={project.id} current={project} input={draft} onChange={setDraft} busy={busy} saveDisabled={editNeedsReview} onCancel={() => { setForm(null); setDraft(null); setEditNeedsReview(false); }} onSubmit={submit} />}
             <Sources title="仓库" rows={project.repositories} /><Sources title="普通目录" rows={project.directories} /></> : <h2 className="text-base font-semibold">{data.projectsInitialized ? "未归属任务" : "项目映射未建立"}</h2>}
           <section className="mt-6"><h3 className="border-b border-line pb-2 text-xs font-semibold text-muted">任务 · {shown?.length ?? 0}</h3>
@@ -438,7 +443,7 @@ export function DesktopInventory() {
 function TaskRow({ row, name, projects, choice, setChoice, busy, open, act }: { row: TaskAssociation; name: string; projects: DesktopProject[]; choice: string; setChoice: (value: string) => void; busy: boolean; open: () => void; act: (request: Parameters<NonNullable<NonNullable<typeof window.pidock>["projectOp"]>>[0]) => Promise<void> }) {
   const options = projects.filter((project) => project.id !== row.projectId);
   return <li className="min-w-0 py-3 text-sm"><div className="flex flex-wrap items-center justify-between gap-2"><div className="min-w-0"><strong className="block truncate font-medium">{name}</strong><span className="text-xs text-muted">{row.taskId}{row.state === "needs-repair" ? " · 关联待修复" : row.state === "unavailable" ? " · 任务不可用，请检查任务根" : ""}</span></div>
-    <div className="flex flex-wrap gap-1"><button type="button" className={button} disabled={busy || row.state === "needs-repair" || row.state === "unavailable"} onClick={open}>进入工作区</button><select className={`${field} max-w-[145px]`} aria-label={`${name} 目标项目`} value={choice} disabled={busy || row.state === "needs-repair" || row.state === "unavailable"} onChange={(event) => setChoice(event.target.value)}><option value="">选择项目</option>{options.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select>
+    <div className="flex flex-wrap gap-1"><button type="button" className={button} disabled={busy || row.state === "needs-repair" || row.state === "unavailable"} onClick={open}>进入工作区</button><select className={`${field} max-w-[145px]`} aria-label={`${name} 目标项目`} value={choice} disabled={busy || row.state === "needs-repair" || row.state === "unavailable"} onChange={(event) => setChoice(event.target.value)}><option value="">选择项目</option>{options.map((project) => <option key={project.id} value={project.id}>{projectName(project)}</option>)}</select>
       <button type="button" className={button} disabled={busy || !choice || row.state === "needs-repair" || row.state === "unavailable"} onClick={() => void act(row.projectId ? { op: "transfer", taskId: row.taskId, fromProjectId: row.projectId, toProjectId: choice } : { op: "claim", taskId: row.taskId, projectId: choice })}>{row.projectId ? "转移" : "认领"}</button>
       {row.projectId && <button type="button" className={button} disabled={busy} onClick={() => void act({ op: "unlink", taskId: row.taskId, expectedProjectId: row.projectId! })}>解绑</button>}</div></div></li>;
 }

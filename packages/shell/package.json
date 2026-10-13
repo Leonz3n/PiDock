@@ -34,7 +34,7 @@
     "startup": "electron . -- --print-startup",
     "package:dir": "electron-builder --config electron-builder.config.cjs --dir",
     "package:mac": "electron-builder --config electron-builder.config.cjs --mac dmg --arm64",
-    "package:win": "electron-builder --config electron-builder.config.cjs --win nsis --x64"
+    "package:win": "electron-builder --config electron-builder.config.cjs --win msi --x64"
   },
   "devDependencies": {
     "@pidock/renderer": "workspace:*",

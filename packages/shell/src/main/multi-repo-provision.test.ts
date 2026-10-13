@@ -1,13 +1,19 @@
 import { describe, expect, it } from "vitest";
 import {
   buildLinkName,
+  buildRepoChildName,
   checkLinkNameCollisions,
   checkRepoConflicts,
   classifyLinkTarget,
+  classifyRepoPrepareState,
   filterAppendRepos,
+  isMultiRepoErrorCode,
+  LINK_MODEL_VERIFICATION_BOUNDARY,
+  linkCapabilityRows,
   pinRepoBaselines,
   planMultiRepoWorktrees,
   previewMixedTaskPaths,
+  resumeRepoSet,
   segmentPrepareOutcomes,
   snapshotPlainDirLink,
   validateRepoSelections,
@@ -17,6 +23,11 @@ import {
 // cannot drift apart. Time-boxed S1: rules only, no git execution.
 
 describe("multi-repo selections", () => {
+  it("spells an in-task repo folder as repo- plus the first 8 id hex characters", () => {
+    expect(buildRepoChildName("11111111-2222-3333-4444-555555555555")).toBe("repo-11111111");
+    expect(buildRepoChildName("abcdef12-3456-7890-abcd-ef1234567890")).toBe("repo-abcdef12");
+  });
+
   it("accepts per-repo remote + baseline branches", () => {
     const result = validateRepoSelections([
       { repoDir: "frontend", remote: "origin", remoteBranch: "main", mainCheckoutDir: "/src/frontend" },
@@ -153,6 +164,77 @@ describe("conflicts and append", () => {
       ]),
     ).toMatchObject({ created: ["frontend"], pending: ["invoice"] });
   });
+
+  it("classifies created only from a verified worktree and keeps failed reasons", () => {
+    // created: the real worktree was present AND matched the pinned commit.
+    expect(
+      classifyRepoPrepareState({ repoDir: "frontend", worktreePresent: true, worktreeMatchesPinnedCommit: true }),
+    ).toEqual({ repoDir: "frontend", status: "created" });
+    // A present path that is NOT this task's pinned worktree is failed, never
+    // silently pending or created: the real reason is kept for the form.
+    const mismatch = classifyRepoPrepareState({
+      repoDir: "invoice",
+      worktreePresent: true,
+      worktreeMatchesPinnedCommit: false,
+      mismatchReason: "工作副本未包含固定提交 abc",
+    });
+    expect(mismatch.status).toBe("failed");
+    expect(mismatch.error?.message).toBe("工作副本未包含固定提交 abc");
+    // An unverified present path (no probe answer) is also not `created`.
+    expect(
+      classifyRepoPrepareState({ repoDir: "x", worktreePresent: true, worktreeMatchesPinnedCommit: null }).status,
+    ).toBe("failed");
+    // Absent with a previously reported error: failed, reason kept.
+    const reported = classifyRepoPrepareState({
+      repoDir: "shipment",
+      worktreePresent: false,
+      previousError: { code: "fetch-failed", repoDir: "shipment", message: "远程不可用" },
+    });
+    expect(reported).toEqual({
+      repoDir: "shipment",
+      status: "failed",
+      error: { code: "fetch-failed", repoDir: "shipment", message: "远程不可用" },
+    });
+    // Absent, never attempted: pending.
+    expect(classifyRepoPrepareState({ repoDir: "later", worktreePresent: false })).toEqual({
+      repoDir: "later",
+      status: "pending",
+    });
+    // Absent but the record names no remote baseline for the repo: failed,
+    // never a resumable `pending` (the resume would refuse to plan it).
+    const orphan = classifyRepoPrepareState({
+      repoDir: "orphan",
+      worktreePresent: false,
+      recordedBaselineMissing: true,
+    });
+    expect(orphan.status).toBe("failed");
+    expect(orphan.error?.message).toContain("缺少记录的远程基线");
+  });
+
+  it("accepts only the known per-repo error codes across the record/RPC boundary", () => {
+    for (const code of ["empty-selection", "duplicate-repo", "invalid-repo", "fetch-failed", "path-taken", "branch-in-use", "repo-unusable"]) {
+      expect(isMultiRepoErrorCode(code), code).toBe(true);
+    }
+    for (const bad of ["", "not-a-real-code", "FETCH-FAILED", undefined, 1, null, {}]) {
+      expect(isMultiRepoErrorCode(bad), String(bad)).toBe(false);
+    }
+  });
+
+  it("resumes only absent unfinished repos and holds present unknown paths", () => {
+    const outcomes = [
+      { repoDir: "frontend", status: "created" as const },
+      { repoDir: "invoice", status: "pending" as const },
+      {
+        repoDir: "shipment",
+        status: "failed" as const,
+        error: { code: "repo-unusable" as const, repoDir: "shipment", message: "占用" },
+      },
+    ];
+    expect(resumeRepoSet(outcomes, new Set(["frontend", "shipment"]))).toEqual({
+      retry: ["invoice"],
+      hold: ["shipment"],
+    });
+  });
 });
 
 describe("plain-dir links", () => {
@@ -179,5 +261,69 @@ describe("plain-dir links", () => {
     expect(classifyLinkTarget("/data/a", "/tasks/t1", ["/data/b"])).toBe("ok");
     expect(classifyLinkTarget("/data/shared/sub", "/tasks/t1", ["/data/shared"])).toBe("nested");
     expect(classifyLinkTarget("/tasks/t1/docs", "/tasks/t1", [])).toBe("loop-risk");
+  });
+});
+
+// Seam: #6 box 12's platform half. The link capability is recorded PER
+// PLATFORM and by NAME: a row may only read as exercised for the platform the
+// probe really ran on, and win32 exists to name the gap, never to claim it.
+describe("#6 link capability record (box 12 platforms)", () => {
+  it("marks the platform a probe really ran on and leaves the other targets named-unverified", () => {
+    const rows = linkCapabilityRows("darwin-arm64");
+    expect(rows.map((row) => row.platform)).toEqual(["darwin-arm64", "win32-x64"]);
+    expect(rows[0]).toMatchObject({ platform: "darwin-arm64", exercised: true });
+    // What the observed row claims is NARROW: a link-TARGET probe ran here. It may
+    // not read as "a real link was in the chain" nor as "link creation verified".
+    expect(rows[0]!.note).toContain("在本平台执行了链接目标探测");
+    expect(rows[0]!.note).toContain("链中可能没有真实链接");
+    expect(rows[0]!.note).not.toContain("真的在本平台");
+    expect(rows[1]).toMatchObject({ platform: "win32-x64", exercised: false });
+    expect(rows[1]!.note).toContain("win32 链接方式未验证");
+    // No row claims Windows behaviour: the win32 row only names what is missing.
+    expect(rows[1]!.note).not.toMatch(/Windows 上(创建|探测)过链接$/);
+  });
+
+  it("never marks any platform exercised without a real probe on it, and always keeps the win32 row", () => {
+    for (const row of linkCapabilityRows(null)) expect(row.exercised).toBe(false);
+    const linux = linkCapabilityRows("linux-x64");
+    expect(linux.map((row) => row.platform)).toEqual(["darwin-arm64", "win32-x64", "linux-x64"]);
+    expect(linux.filter((row) => row.exercised).map((row) => row.platform)).toEqual(["linux-x64"]);
+    expect(linux.find((row) => row.platform === "darwin-arm64")!.note).toContain("本机未运行该平台");
+    expect(linux.find((row) => row.platform === "win32-x64")!.note).toContain("win32 链接方式未验证");
+    // The 真实 pi clause is a NAMED boundary, never a pass.
+    expect(LINK_MODEL_VERIFICATION_BOUNDARY).toContain("不是真实 pi/模型运行");
+    expect(LINK_MODEL_VERIFICATION_BOUNDARY).toContain("仍未完成");
+  });
+
+  it("keeps the named 「win32 链接方式未验证」 sentence on a win32 host instead of absorbing it", () => {    // A win32 host really ran the probe there, so `exercised` is true - but link
+    // CREATION was never exercised on Windows, and the row that names that gap must
+    // survive. Before this case existed, the observed row replaced it.
+    const rows = linkCapabilityRows("win32-x64");
+    const windows = rows.find((row) => row.platform === "win32-x64")!;
+    expect(windows.exercised).toBe(true);
+    expect(windows.note).toContain("win32 链接方式未验证");
+    expect(windows.note).toContain("链中可能没有真实链接");
+    expect(windows.note).not.toContain("真的在本平台");
+    // And the unobserved release target is still listed, by name.
+    expect(rows.find((row) => row.platform === "darwin-arm64")).toMatchObject({ exercised: false });
+  });
+
+  it("narrows an unexercised win32 row to its own platform when another win32 variant was probed", () => {
+    // A Windows-on-ARM host really ran the probe on `win32-arm64`, so the release
+    // target's row may claim only what it knows: THAT platform was not run, and no
+    // Windows link was created. "No link was probed on Windows" would be
+    // contradicted by the arm64 row of the same record.
+    const rows = linkCapabilityRows("win32-arm64");
+    expect(rows.map((row) => row.platform)).toEqual(["darwin-arm64", "win32-x64", "win32-arm64"]);
+    const release = rows.find((row) => row.platform === "win32-x64")!;
+    expect(release.exercised).toBe(false);
+    expect(release.note).toContain("本机未运行该平台（win32-x64）");
+    expect(release.note).toContain("win32 链接方式未验证");
+    expect(release.note).not.toContain("未在 Windows 上创建或探测过链接");
+    // The row that DOES prove a Windows probe ran still names the unverified half.
+    const observed = rows.find((row) => row.platform === "win32-arm64")!;
+    expect(observed.exercised).toBe(true);
+    expect(observed.note).toContain("win32 链接方式未验证");
+    expect(observed.note).toContain("未在 Windows 上创建过链接");
   });
 });

@@ -80,6 +80,24 @@ it("renders the saved profile as a card with the real reference state", async ()
   expect(screen.getByText("切换只影响当前会话")).toBeInTheDocument();
 });
 
+it("names a blank profile field instead of an empty heading, address or badge", async () => {
+  // `parseProviderStatus` reads `name`/`baseUrl`/`modelId`/`authRef` with
+  // `typeof === "string"` (it only caps the length), so a blank profile really
+  // reaches this page; each fact names its own absence instead of rendering a
+  // nameless card.
+  bridge(async () => ({ state: "configured", profileId: profile.id, generation: 1, profiles: [{ ...profile, name: "", baseUrl: "", modelId: "", authRef: "" }] }));
+  page();
+  expect(await screen.findByText("Host 未上报配置名称")).toBeInTheDocument();
+  expect(screen.getByText("Host 未上报服务地址")).toBeInTheDocument();
+  expect(screen.getByText("Host 未上报模型标识")).toBeInTheDocument();
+  expect(screen.getByText("Host 未上报凭据引用名")).toBeInTheDocument();
+  // The edit form's own title is built from the same `name`, so opening it must
+  // name the absence too instead of rendering a dangling `编辑 `.
+  await userEvent.click(screen.getByRole("button", { name: "编辑" }));
+  expect(screen.getByTestId("provider-form")).toHaveTextContent("编辑 Host 未上报配置名称");
+  expect(screen.queryByRole("heading", { name: "编辑" })).toBeNull();
+});
+
 it("reports a missing credential and a refused install instead of claiming success", async () => {
   bridge(async (request) => request.op === "list"
     ? { state: "credential-missing", profileId: profile.id, generation: 1, profiles: [{ ...profile, credentialAvailable: false }] }

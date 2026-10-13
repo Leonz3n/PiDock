@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { TaskServiceTopology } from "./service-topology.js";
+import { TaskServiceTopology, attemptRunBookkeeping } from "./service-topology.js";
 import type { BindingLayers, RunUnit } from "../main/service-topology.js";
 
 // Seam: #10 Host-side topology registry. Transport-free, so `host.ts` keeps
@@ -99,6 +99,20 @@ describe("TaskServiceTopology planning", () => {
     expect(plan.groups.map((group) => group.members).flat().indexOf("invoice:db-migrate")).toBe(0);
   });
 
+  it("exposes the current plan's declared dependency edges as a read-only copy", () => {
+    const host = topology();
+    host.setPlan(planInput());
+    const deps = host.plannedDependencies();
+    // The group runner derives its verify steps from exactly these edges.
+    expect(deps).toEqual([
+      { from: "front:saas-web", to: "front:saas-bff", kind: "call" },
+      { from: "front:saas-bff", to: "invoice:invoice-service", kind: "prestart" },
+    ]);
+    // A read-only copy: mutating the returned list cannot change the plan.
+    deps.push({ from: "x", to: "y", kind: "call" });
+    expect(host.plannedDependencies()).toHaveLength(2);
+  });
+
   it("allocates a different port for the second task's same-name instance", () => {
     const first = topology().setPlan(planInput());
     const second = new TaskServiceTopology("task-bbbbbbbb", "/tasks/task-bbbbbbbb", () => "2026-09-22T10:00:00.000Z").setPlan({
@@ -185,6 +199,18 @@ describe("TaskServiceTopology planning", () => {
     expect(remote?.target).toEqual({ kind: "remote", environment: "testing" });
   });
 
+  it("keeps the plan's layers across a location toggle instead of auditing over nothing", () => {
+    const host = topology();
+    host.setPlan(planInput());
+    // A toggle re-plans the SAME task, and the surviving binding's read point has
+    // to survive with it: dropping the layers here would make the read-point audit
+    // silent about a binding it can no longer check (and report `unused-binding`
+    // for a variable whose read point is still in the project).
+    const plan = host.setLocation("invoice:invoice-service", "remote");
+    expect(plan.bindings[0]?.readPoints).toEqual(["共享模板"]);
+    expect(plan.diagnostics.filter((entry) => entry.code === "unused-binding")).toEqual([]);
+  });
+
   it("a rule pointing at a remote unit writes no task row", () => {
     const plan = topology().setPlan({
       ...planInput(),
@@ -202,7 +228,8 @@ describe("TaskServiceTopology run records and stop scope", () => {
     const record = host.recordRun({
       serviceId: "invoice-service",
       templateVersion: "v13",
-      ports: [],
+      ports: [9001],
+      portsSource: "declared",
       code: { commit: "abc1234", dirty: true },
       pid: 4321,
       owner: "human",
@@ -235,15 +262,48 @@ describe("TaskServiceTopology run records and stop scope", () => {
     const host = topology();
     host.setPlan(planInput());
     expect(() =>
-      host.recordRun({ serviceId: "invoice-service", templateVersion: "v13", ports: [], code: { dirty: false }, pid: 0, owner: "human" }),
+      host.recordRun({ serviceId: "invoice-service", templateVersion: "v13", ports: [], portsSource: "declared", code: { dirty: false }, pid: 0, owner: "human" }),
     ).toThrow(/pid must be a positive integer/);
     expect(host.runs()).toEqual([]);
+  });
+
+  it("never promotes the renderer-supplied plan port to a declared one", () => {
+    // The plan's assignment (9001) is the renderer's request, not a port the
+    // registration's resolved env ever carried. `portsSource: "declared"` means
+    // "the launch declared these", so an unclaimed plan port must stay out.
+    const host = topology();
+    host.setPlan(planInput());
+    const record = host.recordRun({
+      serviceId: "invoice-service",
+      templateVersion: "v13",
+      ports: [],
+      portsSource: "declared",
+      code: { dirty: false },
+      pid: 55,
+      owner: "human",
+    });
+    expect(record.ports).toEqual([]);
+  });
+
+  it("names a refused bookkeeping write instead of a silent empty catch", () => {
+    // The Host's process driver only calls the record/close helpers after a real
+    // start/stop, so a refusal must not throw (fail-open); but it must not be
+    // swallowed either, or `task/serviceRunRecords` could answer empty while a
+    // child runs. The refusal carries a named reason.
+    expect(attemptRunBookkeeping(() => 7)).toEqual({ ok: true, value: 7 });
+    const refused = attemptRunBookkeeping(() => {
+      throw new Error("invalid-payload: recordServiceRun.pid must be a positive integer from the real process");
+    });
+    expect(refused).toEqual({
+      ok: false,
+      reason: "run-record-refused: invalid-payload: recordServiceRun.pid must be a positive integer from the real process",
+    });
   });
 
   it("attaches linkage verification and closes the run with an exit reason", () => {
     const host = topology();
     host.setPlan(planInput());
-    host.recordRun({ serviceId: "saas-bff", templateVersion: "v13", ports: [3001], code: { commit: "abc1234", dirty: false }, pid: 77, owner: "agent" });
+    host.recordRun({ serviceId: "saas-bff", templateVersion: "v13", ports: [3001], portsSource: "declared", code: { commit: "abc1234", dirty: false }, pid: 77, owner: "agent" });
     const verified = host.verifyRun("run-1", { kind: "readiness", detail: "前置条件就绪检查 invoice-service", ok: true });
     expect(verified.verifications).toEqual([{ kind: "readiness", detail: "前置条件就绪检查 invoice-service", ok: true, at: "2026-09-22T10:00:00.000Z" }]);
     const closed = host.exitRun("run-1", "user-request");
@@ -256,8 +316,8 @@ describe("TaskServiceTopology run records and stop scope", () => {
   it("computes the stop scope from registered identities only", () => {
     const host = topology();
     host.setPlan(planInput());
-    host.recordRun({ serviceId: "saas-bff", templateVersion: "v13", ports: [3001], code: { dirty: false }, pid: 11, owner: "human" });
-    host.recordRun({ serviceId: "invoice-service", templateVersion: "v13", ports: [9001], code: { dirty: false }, pid: 22, owner: "human" });
+    host.recordRun({ serviceId: "saas-bff", templateVersion: "v13", ports: [3001], portsSource: "declared", code: { dirty: false }, pid: 11, owner: "human" });
+    host.recordRun({ serviceId: "invoice-service", templateVersion: "v13", ports: [9001], portsSource: "declared", code: { dirty: false }, pid: 22, owner: "human" });
     expect(host.stopScope().stop.map((entry) => entry.pid).sort()).toEqual([11, 22]);
     expect(host.stopScope("task-aaaaaaaa/invoice-service").stop.map((entry) => entry.pid)).toEqual([22]);
     expect(() => host.stopScope("task-aaaaaaaa/ghost")).toThrow(/unknown-instance/);

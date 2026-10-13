@@ -28,20 +28,34 @@ import {
   resolveTaskRoot,
 } from "./task-provision.js";
 import { readTaskRecordOnDisk } from "../host/task-store.js";
+import {
+  createNodePrepScanDeps,
+  createPrepScanAuthority,
+  deriveRendererPrepPayload,
+  needsPrepScan,
+  type PrepScanAuthority,
+} from "./task-prep-scan.js";
 import { defaultTasksRoot } from "./task-resolver.js";
 import { TaskRootIndex, type VerifiedTaskIdentity } from "./task-root-index.js";
 import { HostTaskAdmission } from "../host/host-task-admission.js";
 import { shutdownDeadline } from "../host/shutdown-deadline.js";
 import { ProjectRegistry } from "./project-registry.js";
 import { ServiceCatalog, serviceCatalogAuthority } from "./service-catalog.js";
-import { InstalledServiceHostAuthority } from "./service-host-binding.js";
-import { performServiceBindingOperation, performServiceCatalogOperation, performServiceConfigPreview, parseServiceRunRequest } from "./service-catalog-ipc.js";
+import { InstalledServiceHostAuthority, type ServiceOwnerChange, type ServiceOwnerDurableRecord } from "./service-host-binding.js";
+import { createServiceTemplateHandler, parseServiceOwnerRebindRequest, parseTaskDependencyRoutingRequest, performServiceBindingOperation, performServiceCatalogOperation, performServiceConfigPreview, parseServiceRunGroupRequest, parseServiceRunRequest } from "./service-catalog-ipc.js";
+import { deriveBoundServiceGroupPlan, readTaskDependencyRouting, unsatisfiedDeclarationMessage, type BoundServiceEntry } from "./service-dependency-routing.js";
+import { codeObservationFields } from "./service-code-observation.js";
+import { loadExternalEditorSettings, type ExternalEditorSettingsResult } from "./external-editor.js";
+import { performEditorSettingsOperation } from "./external-editor-settings.js";
 import { performProjectOperation } from "./project-ipc.js";
 import type { ProviderWiring } from "./provider-ipc.js";
 import { ProjectTaskCreation } from "./project-task-creation.js";
 import { performCreationOperation } from "./project-task-ipc.js";
+import type { ProjectTaskAppend } from "./task-append.js";
+import { performAppendOperation } from "./project-append-ipc.js";
 import type { BrowserPerformResult, BrowserRequestParams, HostTaskOp, HostTaskResult, TaskOpOrigin } from "../rpc/protocol.js";
 import { isHostTaskOp } from "../rpc/protocol.js";
+import type { ServiceTemplateRequestHandler } from "../rpc/service-template-request.js";
 import { TaskBrowser } from "./task-browser.js";
 import { TaskBrowserSurface } from "./task-browser-surface.js";
 import { DesktopLayout, splitTaskBounds } from "./desktop-layout.js";
@@ -325,6 +339,21 @@ function trustFailureEnvelope(
 }
 
 /**
+ * A named refusal main resolved for one service operation - the Host's own
+ * control fence, an unsettled durable owner record, a catalog that cannot be
+ * resolved - is the page's only honest explanation for a refused start/stop or
+ * re-bind, so the `shell/serviceCatalogOp` branches that drive real child
+ * processes answer with it verbatim ([PiDock 04] #7 slice). A thrown
+ * non-refusal would otherwise collapse into the generic catalog-save message or
+ * the renderer's "request failed" fallback, which is exactly the untruthful
+ * copy this slice removes. A trust domain violation keeps its own envelope.
+ */
+function namedServiceRefusal(error: unknown): { ok: false; error: string } {
+  if (error instanceof TrustDomainViolation) throw error;
+  return { ok: false, error: error instanceof Error ? error.message : String(error) };
+}
+
+/**
  * Per-task Host registry for main ([PiDock 02] #5, S3a slice).
  *
  * One utilityProcess serves one task folder: the first `shell/taskOp` for
@@ -363,6 +392,7 @@ export class PerTaskHostRegistry {
   private readonly pendingHosts = new Map<string, PendingTaskHost>();
   private readonly spawnFailures = new Map<string, { taskId: string; error: string }>();
   private readonly activeTaskOps = new Map<string, number>();
+  private readonly rebindings = new Set<string>();
   private readonly admission = new HostTaskAdmission();
   private closing = false;
   private quitConfirmed = false;
@@ -370,9 +400,21 @@ export class PerTaskHostRegistry {
   private disposalReceipt?: Promise<void>;
   private readonly hostExits = new Map<UtilityProcess, { exited: boolean; receipt: Promise<void> }>();
   private services?: InstalledServiceHostAuthority;
+  /** Per-task shared-template handler bound by `registerIpc` once the catalog exists ([PiDock 04] #7 box 6). */
+  private serviceTemplates?: (taskId: string) => ServiceTemplateRequestHandler;
   configureServices(create: (workspaceId: string) => InstalledServiceHostAuthority): void {
     if (this.services || this.closing || this.byTaskDir.size || this.pendingHosts.size) throw Error("service-owner-authority-already-bound");
     this.services = create(this.workspaceId);
+  }
+  /**
+   * The per-task handler for the Host -> main shared-template requests
+   * ([PiDock 04] #7 box 6). Bound late because the catalog exists after this
+   * registry does, exactly like the owner authority above. Absent means every
+   * request is refused by name and nothing is written.
+   */
+  configureServiceTemplates(create: (taskId: string) => ServiceTemplateRequestHandler): void {
+    if (this.serviceTemplates) throw Error("service-template-handler-already-bound");
+    this.serviceTemplates = create;
   }
   private async prepareServices(entry: PerTaskHostEntry): Promise<void> {
     if (!this.services) return;
@@ -399,11 +441,20 @@ export class PerTaskHostRegistry {
     private readonly taskRoots?: TaskRootIndex,
   ) {}
 
-  private bindHostRequests(client: HostClient): HostClient {
+  private bindHostRequests(entry: PerTaskHostEntry): HostClient {
+    const client = entry.client;
     client.onBrowserRequest(async (params) =>
       this.browsers
         ? this.browsers.handleRequest(params)
         : { ok: false, error: "browser-unavailable: 主进程未挂载任务浏览器能力" },
+    );
+    // The task identity is THIS child's own binding (`entry.taskId`, fixed when
+    // main forked it), never a payload field: the handler refuses a request that
+    // names another task.
+    client.onServiceTemplateRequest(async (params) =>
+      this.serviceTemplates
+        ? await this.serviceTemplates(entry.taskId)(params)
+        : { ok: false, error: "template-unavailable: 主进程未挂载共享模板通道" },
     );
     return client;
   }
@@ -432,6 +483,57 @@ export class PerTaskHostRegistry {
     const [first] = [...dirs];
     if (first === undefined) return undefined;
     return this.byTaskDir.get(first);
+  }
+
+  /**
+   * Non-throwing owner-binding state of one task's forked Host ([PiDock 04] #7
+   * slice): `absent` when no Host is forked (the next fork binds the current
+   * revision), `current` when the forked Host's owner binding still matches the
+   * authoritative catalog revision, `fenced` when it does not - which is the
+   * real state in which the Host refuses start/stop with
+   * `service-owner-inventory-unconfirmed`.
+   */
+  serviceOwnerState(taskId: string): "absent" | "current" | "fenced" {
+    if (!this.services) return "absent";
+    const entry = this.entryForTaskId(taskId);
+    return entry ? this.services.state(entry.child, entry.taskId) : "absent";
+  }
+
+  /** Per-service owner-contract difference of the task's forked Host against the current catalog; `null` when unresolvable. */
+  serviceOwnerChanges(taskId: string): ServiceOwnerChange[] | null {
+    const entry = this.entryForTaskId(taskId);
+    return entry && this.services ? this.services.changes(entry.child, entry.taskId) : null;
+  }
+
+  /** Durable owner records main can still read for a fenced binding; `null` when main holds no usable lease. */
+  serviceOwnerOwners(taskId: string): ServiceOwnerDurableRecord[] | null {
+    const entry = this.entryForTaskId(taskId);
+    return entry && this.services ? this.services.owners(entry.child, entry.taskId) : null;
+  }
+
+  /**
+   * Replace one task's owner binding at the current catalog revision ([PiDock 04]
+   * #7 slice): the forked Host keeps running and only its owner binding and
+   * durable lease are replaced, so a fenced start/stop channel is restored
+   * without stopping anything. Idempotent when the task has no forked Host
+   * (`absent`) or is already current; refuses by name while an op of the same
+   * task is already in flight. A start/stop still admitted during the swap
+   * cannot observe a half-replaced owner: the replaced inventory is sealed and
+   * fenced before the replacement subscribes, so the Host refuses it by name
+   * instead of starting anything (`HostTaskAdmission` tracks in-flight ops; it
+   * is not a mutex).
+   */
+  rebindServiceOwner(taskId: string): Promise<"absent" | "current" | "rebound"> {
+    this.assertRoutingOpen();
+    if (!this.services) throw Error("service-owner-authority-unavailable");
+    const entry = this.entryForTaskId(taskId);
+    if (!entry) return Promise.resolve("absent" as const);
+    if (this.activeTaskOps.get(taskId) || this.rebindings.has(taskId)) throw Error("service-owner-rebind-busy");
+    const services = this.services;
+    this.rebindings.add(taskId);
+    return this.admission.run(() => services.rebind(entry.child, entry.taskId))
+      .then((result) => (result === "current" ? "current" as const : "rebound" as const))
+      .finally(() => { this.rebindings.delete(taskId); });
   }
 
   /** Route one op to the bound per-task Host, forking it on first use.
@@ -589,7 +691,7 @@ export class PerTaskHostRegistry {
       const dirs = this.byTaskId.get(taskId) ?? new Set<string>();
       dirs.add(key); this.byTaskId.set(taskId, dirs);
       if (identity) this.identities.set(key, identity);
-      this.bindHostRequests(entry.client);
+      this.bindHostRequests(entry);
       return entry;
     });
     this.pendingHosts.set(key, { taskId, taskDir, identity, promise });
@@ -936,28 +1038,42 @@ export function createTaskBrowserCapability(input: {
 }
 
 /**
- * The production refusal for catalog-driven service execution ([PiDock 04]
- * #7). Ticket #7's final review still blocks production wiring: a task-bound
- * service may run only once process-tree ownership/exit reclaim and task-path
- * identity are redesigned and covered by descendant and cross-platform real
- * tests, before which main must not register/control a service or open the UI.
- * The prior slice preserved the capability (and fixed task-path identity) but
- * re-opened this production entry; this error names the unmet preconditions so
- * the block stays visible in the tree instead of being rediscovered.
+ * The named production refusal for catalog-driven service execution on a
+ * platform where ownership cannot be verified ([PiDock 04] #7, [PiDock 04]
+ * #48). #48 delivered the prerequisite the previous block waited for: the
+ * durable `(pid, 128-bit nonce)` launch identity, tri-state verification
+ * (verified / mismatch / unobservable), "no signal without verified evidence
+ * in the same call", descendant reclaim only from positive process-group
+ * evidence, and an explicit `unsupported-platform` refusal on win32. The
+ * remaining platform boundary is exactly the one #48 chose: POSIX (darwin,
+ * linux) can verify and terminate a launch; every other platform is refused
+ * fail-closed under the same wording, so production re-opens only where the
+ * ownership module can actually answer "is this pid our launch?".
  */
-export const SERVICE_EXECUTION_BLOCKED =
-  "service-execution-blocked: 进程树所有权与跨平台终止前置条件未满足（见 #7）";
+export const SERVICE_EXECUTION_UNSUPPORTED_PLATFORM =
+  "unsupported-platform: 服务启动身份核验与终止仅在 POSIX（darwin/linux）实现，本平台按 #48 拒绝执行（见 #48/#7）";
+
+/**
+ * The audit label main stamps on every catalog-driven service control
+ * ([PiDock 04] #7). `runTaskService` has exactly one main-side entry
+ * (`shell/serviceCatalogOp {op:"runTaskService"}`), which now serves both the
+ * environment settings page and the task dock's run panel, so the label names
+ * that entry instead of a specific page that would be wrong for one of the
+ * two callers. It is main-built and never page-supplied: `parseServiceRunRequest`
+ * rejects any key outside `{op,projectId,taskId,serviceId,action}`.
+ */
+export const SERVICE_RUN_HUMAN_LABEL = "主进程服务目录入口";
 
 /**
  * The pure production gate for catalog-driven service execution: `null` when
- * execution is authorized, the named refusal string when it is blocked. It
- * takes no caller input on purpose - no page- or caller-supplied value may
- * unlock execution while the #7 preconditions are unmet - and the production
- * trigger checks it before resolving a launch or reaching any spawn-capable
- * call, so the capability and its tests can keep running through the seam.
+ * execution is authorized, the named `/^unsupported-platform/` refusal when it
+ * is not. It takes no caller input on purpose - no page- or caller-supplied
+ * value may unlock execution on a platform whose ownership evidence cannot be
+ * read - and the production trigger checks it before resolving a launch or
+ * reaching any spawn-capable call.
  */
 export function serviceExecutionRefusal(): string | null {
-  return SERVICE_EXECUTION_BLOCKED;
+  return process.platform === "darwin" || process.platform === "linux" ? null : SERVICE_EXECUTION_UNSUPPORTED_PLATFORM;
 }
 
 /**
@@ -970,9 +1086,9 @@ export function serviceExecutionRefusal(): string | null {
  *
  * Exported so the sequence can be driven end to end against a real Host and a
  * real child process without an Electron `IpcMainInvokeEvent`. The production
- * IPC trigger refuses it by default through `serviceExecutionRefusal`; this
- * seam stays callable so the capability and its real-subprocess tests survive
- * while production wiring is blocked.
+ * IPC trigger (`shell/serviceCatalogOp {op:"runTaskService"}`) calls it after
+ * `serviceExecutionRefusal`, so the authorized platform and this seam run the
+ * same sequence.
  */
 export async function runTaskService(
   tasks: Pick<PerTaskHostRegistry, "routeTaskOp">,
@@ -986,7 +1102,17 @@ export async function runTaskService(
     await tasks.routeTaskOp({
       taskId: request.taskId,
       op: "task/registerService",
-      payload: { serviceId: launch.serviceId, descriptor: launch.descriptor, layers: launch.layers, templateVersion: String(launch.templateVersion) },
+      payload: {
+        serviceId: launch.serviceId, descriptor: launch.descriptor, layers: launch.layers, templateVersion: String(launch.templateVersion),
+        // Box 6: main reads the worktree the verified launch cwd lives in, right
+        // before the start, and the registration carries either that observation
+        // or the named reason it could not be made. The Host never fills the code
+        // state in from a claim of its own. A `stop` records no run, so its code
+        // state is not a fact the record needs: observing it would be pure cost
+        // (two blocking git reads on main's event loop), so it is a start-only
+        // read.
+        ...(request.action === "start" ? codeObservationFields(launch.descriptor.cwd) : {}),
+      },
       origin,
     });
   } catch (error) {
@@ -996,10 +1122,305 @@ export async function runTaskService(
   const controlled = await tasks.routeTaskOp({
     taskId: request.taskId,
     op: "task/controlService",
-    payload: { serviceId: launch.serviceId, action: request.action, label: "环境配置页" },
+    payload: { serviceId: launch.serviceId, action: request.action, label: SERVICE_RUN_HUMAN_LABEL },
     origin,
   });
   return controlled.payload;
+}
+
+/**
+ * Start the task's planned run unit group ([PiDock 05] #10 box 4) - the
+ * production caller `task/controlService {group:true}` never had.
+ *
+ * Main owns the group's MEMBERSHIP: it resolves the task's bound services from
+ * the trusted persisted catalog, registers each trusted launch on the task Host
+ * (the same `task/registerService` the single path uses, so the Host never
+ * executes a launch it cannot describe) and then forwards ONE group start
+ * through the SAME gated `task/controlService` every unit already goes through.
+ * Nothing here spawns, signals or re-plans a unit, and the page supplies no unit
+ * list - `parseServiceRunGroupRequest` accepts `{op,projectId,taskId}` only.
+ *
+ * Plan source, stated instead of implied: main is the ONLY writer of the plan a
+ * group start runs. It writes the task's group from its own trusted catalog
+ * BEFORE every start (units = the task's bound services, ports = the ports their
+ * registrations declare, run type = the template's own, edges = the pinned
+ * revisions' 服务依赖声明, binding rules + config layers = the same trusted read),
+ * so a plan the dock's own topology read left on the Host - which carries no
+ * declaration-derived edge and no rules/layers - can never decide what this start
+ * runs. The plan's resolved task-override rows are then re-registered as the
+ * registrations' `task` layer, so the address the plan resolved is the address
+ * the children really run with (the layer order of `resolveServiceEnv` is
+ * untouched; a plan that binds nothing re-registers nothing).
+ *
+ * The edges of that plan are the 服务依赖声明 of the revisions the task pins
+ * (ADR 0002), mapped onto the plan's own unit ids: a declared `call`/`prestart`
+ * edge is what makes the Host's real linkage step run for it, so 已互验 is
+ * reachable in the shipped app WITHOUT anybody synthesising an edge. A revision
+ * that declares nothing contributes none - the group then starts and listens but
+ * has nothing to 互验, which the panel names instead of implying a linkage nobody
+ * observed.
+ *
+ * Fail-closed: an unresolvable launch, an unbound task, a declared dependency
+ * whose target is not bound to this task or a plan whose ports conflict refuses
+ * the whole request by name BEFORE any unit is dispatched (a unit dropped from
+ * the group could otherwise leave a green group missing a bound service).
+ */
+export async function runTaskServiceGroup(
+  tasks: Pick<PerTaskHostRegistry, "routeTaskOp">,
+  catalog: Pick<ServiceCatalog, "launchFor" | "taskBindings">,
+  request: ReturnType<typeof parseServiceRunGroupRequest>,
+  senderWebContentsId: number,
+): Promise<Record<string, unknown>> {
+  const origin = { kind: "service-catalog", senderWebContentsId } as const;
+  const bindings = catalog.taskBindings(request.projectId, request.taskId);
+  if (bindings.length === 0) {
+    throw new Error("service-group-empty: 该任务在可信服务目录中没有已绑定的服务，未发起整组启动");
+  }
+  const bound = bindings.map(({ binding, template }) => {
+    try {
+      // The revision the binding PINS carries the launch material AND the
+      // declaration the plan's edges come from; both are read from main's own
+      // store, never from a page or a Host answer.
+      return { binding, template, launch: catalog.launchFor(request.taskId, request.projectId, binding.serviceId, process.env) };
+    } catch (error) {
+      // `service-launch-unavailable` is main's fixed code and carries no path or
+      // value, so it is safe to name verbatim beside the offending service. A
+      // failed registration never becomes a control request.
+      throw new Error(`服务登记失败，未发起整组启动：${binding.serviceId} 的启动材料无法从可信服务目录解析（${error instanceof Error ? error.message : String(error)}）`);
+    }
+  });
+  // Box 6: the SAME per-unit worktree observation the single-service path makes,
+  // read by main once per launch and carried by BOTH registrations below, so the
+  // two cannot disagree about the code state a start really ran from.
+  const observationOf = new Map(
+    bound.map(({ launch }) => [launch.serviceId, codeObservationFields(launch.descriptor.cwd)] as const),
+  );
+  for (const { launch } of bound) {
+    try {
+      await tasks.routeTaskOp({
+        taskId: request.taskId,
+        op: "task/registerService",
+        payload: {
+          serviceId: launch.serviceId, descriptor: launch.descriptor, layers: launch.layers, templateVersion: String(launch.templateVersion),
+          ...(observationOf.get(launch.serviceId) ?? {}),
+        },
+        origin,
+      });
+    } catch (error) {
+      throw new Error(`服务登记失败，未发起整组启动：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  // The plan is written from the catalog on EVERY group start, not only when the
+  // Host happens to hold none. The Host's plan is also written by the dock's own
+  // topology read (`task/planServiceGroup` over the visible projection), so the
+  // old "start an existing plan as-is" branch would let a renderer-shaped,
+  // edge-less plan decide what a group start runs - and the declared edges,
+  // binding rules and config layers main derives here would never reach it.
+  const taskRows = await planBoundServiceGroup(tasks, bound, request, origin);
+  // The plan's resolved address overrides ARE the task's 任务覆盖, so they have to
+  // reach the children: re-registering each trusted launch with them as the
+  // `task` layer is what makes the resolved winner real (the child env is built
+  // from `resolveServiceEnv`'s own precedence, order untouched). No rows means no
+  // re-registration: a plan that binds nothing must not touch the registration.
+  if (taskRows.length > 0) {
+    for (const { launch } of bound) {
+      try {
+        await tasks.routeTaskOp({
+          taskId: request.taskId,
+          op: "task/registerService",
+          payload: {
+            serviceId: launch.serviceId, descriptor: launch.descriptor,
+            layers: { ...launch.layers, task: taskRows },
+            templateVersion: String(launch.templateVersion),
+            ...(observationOf.get(launch.serviceId) ?? {}),
+          },
+          origin,
+        });
+      } catch (error) {
+        throw new Error(`服务登记失败，未发起整组启动：${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  }
+  const controlled = await tasks.routeTaskOp({
+    taskId: request.taskId,
+    op: "task/controlService",
+    payload: { group: true, action: "start", label: SERVICE_RUN_HUMAN_LABEL },
+    origin,
+  });
+  return controlled.payload;
+}
+
+/**
+ * The task's own group plan, sent from main's trusted catalog to the Host: the
+ * units, ports, run types, declaration-derived edges and the plan's binding rules
+ * + config layers all come from `deriveBoundServiceGroupPlan`
+ * (`./service-dependency-routing.js`), the SAME function main's read-only 依赖去向
+ * read resolves without a Host - so the plan a group start runs and the values the
+ * dock shows can never come from two derivations.
+ *
+ * What this function owns is the PAYLOAD convention for the three DERIVED
+ * collections: `dependencies`, `rules` and `layers` are each omitted when the
+ * trusted side derived no rows for it, while the plan's own spec keys (`units`,
+ * `selectedRepoDirs`, `requests`, `runTypes`) are always sent as derived. An
+ * absent `dependencies` is the honest "no declaration, no edge" plan (ADR 0002),
+ * never an empty set that could read as a checked edge list. The other two keys
+ * are omitted for INDEPENDENT reasons: an absent `rules` says no pinned revision
+ * declared a dependency into a unit of this group (so no binding rule was
+ * derived), and an absent `layers` says no config row was read at all - so
+ * neither can read as a read-point audit that checked those rows and found them
+ * clean.
+ *
+ * Returns the plan's own task-override rows (`bindingsToTaskRows`), because the
+ * resolved address overrides are what the children must really run with - the
+ * caller applies them as the `task` layer of the trusted registrations.
+ */
+async function planBoundServiceGroup(
+  tasks: Pick<PerTaskHostRegistry, "routeTaskOp">,
+  bound: BoundServiceEntry[],
+  request: ReturnType<typeof parseServiceRunGroupRequest>,
+  origin: { kind: "service-catalog"; senderWebContentsId: number },
+): Promise<{ key: string; value: string; secret: boolean }[]> {
+  const derivation = deriveBoundServiceGroupPlan(bound);
+  if (!derivation.ok) throw new Error(unsatisfiedDeclarationMessage(derivation.unsatisfied));
+  const { units, dependencies, rules, layers, requests, runTypes, selectedRepoDirs } = derivation.plan;
+  const layerRowCount = layers.repoDefaults.length + layers.shared.length + layers.privateEntries.length + layers.task.length;
+  const answer = await tasks.routeTaskOp({
+    taskId: request.taskId,
+    op: "task/planServiceGroup",
+    payload: {
+      units,
+      selectedRepoDirs,
+      requests,
+      runTypes,
+      // Sent ONLY when the pinned revisions really declare an edge: an empty or
+      // absent key is the honest "no declaration, no edge" plan.
+      ...(dependencies.length === 0 ? {} : { dependencies }),
+      // The same convention: a key is present only when the trusted side really
+      // derived rows/rules, so an absent `layers` reads as "no config row was read"
+      // and never as a completed read-point audit over nothing.
+      ...(rules.length === 0 ? {} : { rules }),
+      ...(layerRowCount === 0 ? {} : { layers }),
+    },
+    origin,
+  });
+  return plannedTaskRowsOf(answer.payload);
+}
+
+/**
+ * The plan's own task-override rows, read back from the Host's plan answer.
+ * Absent or malformed answers yield no rows instead of a fabricated override:
+ * the plan's resolved addresses are the Host's allocation, so main never
+ * derives them itself.
+ */
+function plannedTaskRowsOf(payload: Record<string, unknown>): { key: string; value: string; secret: boolean }[] {
+  const plan = payload["plan"];
+  if (typeof plan !== "object" || plan === null || Array.isArray(plan)) return [];
+  const rows = (plan as Record<string, unknown>)["taskRows"];
+  if (!Array.isArray(rows)) return [];
+  return rows.flatMap((entry) => {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return [];
+    const row = entry as Record<string, unknown>;
+    const key = row["key"];
+    const value = row["value"];
+    const secret = row["secret"];
+    if (typeof key !== "string" || key.trim().length === 0 || typeof value !== "string" || typeof secret !== "boolean") return [];
+    return [{ key, value, secret }];
+  });
+}
+
+/**
+ * One explicit re-bind of a task's service owner ([PiDock 04] #7 slice), as
+ * main resolves and performs it. `state` is main's real observation of the
+ * forked Host's owner binding: `absent` (no Host forked; the next start forks at
+ * the current revision), `current` (the binding already matches, so this is an
+ * idempotent no-op) or `fenced` (the write changed the task's owner snapshot, so
+ * the Host refuses start/stop). `changes` is the named per-service difference
+ * between the replaced owner and the authoritative catalog. `confirmed`/
+ * `rebound` say whether the human-confirmed replacement ran. The copy facts are
+ * explicit: the re-bind replaces only the ownership binding, so it never stops
+ * or restarts a process, and a currently running service keeps running the
+ * revision it was started with. Each change row names the pinned template
+ * versions the re-bind moves (`was`/`now`) and says explicitly whether the
+ * resolved owner contract's config digest also moved (`configChanged`): a
+ * binding change that keeps the pinned version (another work subdirectory, a
+ * changed local program, a private environment value) changes the owner
+ * contract without changing the version, and such a row must stay renderable
+ * instead of looking like no difference at all.
+ */
+export interface ServiceOwnerRebindProjection {
+  taskId: string;
+  projectId: string;
+  state: "absent" | "current" | "fenced";
+  confirmed: boolean;
+  rebound: boolean;
+  changes: { serviceId: string; name: string; was: number | null; now: number | null; configChanged: boolean }[];
+  stopsProcesses: false;
+  restartsProcesses: false;
+}
+
+/**
+ * Re-bind one task's service owner at the current catalog revision ([PiDock 04]
+ * #7 slice). The two-step contract matches the catalog ops: a request without
+ * `confirm` only reports (real state, named changes); a confirmed request
+ * replaces the fenced owner binding and its durable lease, so start/stop works
+ * again at the new revision while the task's Host, its sessions, its terminals
+ * and any running service process keep running. It refuses, by name, rather than
+ * silently dropping an owner whose durable record is not settled - that record
+ * may still stand for a live process. Exported so the sequence can be driven end
+ * to end against a real Host without an Electron `IpcMainInvokeEvent`.
+ */
+export async function rebindTaskServiceOwner(
+  tasks: Pick<PerTaskHostRegistry, "serviceOwnerState" | "serviceOwnerChanges" | "serviceOwnerOwners" | "rebindServiceOwner">,
+  catalog: Pick<ServiceCatalog, "taskBindings">,
+  request: ReturnType<typeof parseServiceOwnerRebindRequest>,
+): Promise<ServiceOwnerRebindProjection> {
+  // Main resolves the task's own bindings: an unknown task, a foreign project or
+  // a missing pinned revision refuses here with the catalog's named error, and
+  // no page-supplied identity is involved. Resolved after the state probe so the
+  // idempotent `absent`/`current` answer never depends on a catalog read.
+  const state = tasks.serviceOwnerState(request.taskId);
+  const base: ServiceOwnerRebindProjection = { taskId: request.taskId, projectId: request.projectId, state,
+    confirmed: false, rebound: false, changes: [], stopsProcesses: false, restartsProcesses: false };
+  if (state !== "fenced") return base;
+  const names = new Map(catalog.taskBindings(request.projectId, request.taskId)
+    .map(({ binding, template }) => [binding.serviceId, template.descriptor.name]));
+  const changes = tasks.serviceOwnerChanges(request.taskId);
+  if (!changes) throw new Error("service-owner-catalog-unavailable");
+  const review: ServiceOwnerRebindProjection = { ...base, changes: changes.map((row) => ({ serviceId: row.serviceId,
+    name: names.get(row.serviceId) ?? row.serviceId, was: row.was?.templateVersion ?? null, now: row.now?.templateVersion ?? null,
+    // `changes()` compares the whole resolved owner contract, so a row can be real
+    // while both pinned versions are equal; `configChanged` is what makes that
+    // difference visible instead of leaving the page with an unexplained row.
+    configChanged: row.was === null || row.now === null || row.was.configRevision !== row.now.configRevision })) };
+  if (!request.confirm) return review;
+  // Refuse instead of tearing down an uncertain owner: a durable record that is
+  // not stopped/exited (or still names an owner session) can still stand for a
+  // live process, and replacing its owner would orphan that process.
+  const live = (tasks.serviceOwnerOwners(request.taskId) ?? [])
+    .filter((owner) => owner.ownerSessionId !== null || (owner.state !== "stopped" && owner.state !== "exited"));
+  if (live.length > 0) throw new Error(`service-owner-rebind-blocked: ${live.map((owner) => owner.serviceId).join(",")}`);
+  const rebound = await tasks.rebindServiceOwner(request.taskId);
+  // The reported state is re-observed after the operation, so a caller never sees
+  // a stale `fenced` for a task whose control actually came back.
+  return { ...review, state: tasks.serviceOwnerState(request.taskId), confirmed: true, rebound: rebound === "rebound" };
+}
+
+/**
+ * The honest restart consequence of one shared-template write ([PiDock 04] #7
+ * slice), attached to the `update`/`adoptBinding` answer: whether the write
+ * changed launch material at all (`changed`), the explicit fact that a config
+ * write never restarts a process (`processRestarted: false`), and - recomputed
+ * from the real forked Hosts after a confirmed write - the task ids whose
+ * service-control channel it revoked (empty for a read-only review, because
+ * nothing was written yet, and always empty for `update`: minting a shared
+ * revision moves no binding's pin, so it revokes no task's control).
+ */
+export function serviceRestartConsequence(
+  op: "update" | "adoptBinding", payload: Record<string, unknown>, tasks?: PerTaskHostRegistry,
+): { changed: boolean; processRestarted: false; fencedTaskIds: string[] } {
+  const repinned = op === "adoptBinding" && typeof payload["taskId"] === "string" ? [payload["taskId"]] : [];
+  return { changed: op === "adoptBinding" ? payload["from"] !== payload["to"] : payload["contentChanged"] === true,
+    processRestarted: false, fencedTaskIds: repinned.filter((taskId) => tasks?.serviceOwnerState(taskId) === "fenced") };
 }
 
 export function registerIpc(
@@ -1024,12 +1445,47 @@ export function registerIpc(
     // Metadata selection only; execution must recheck the file and its identity.
     return selected;
   },
+  /**
+   * [PiDock 03] (#6) production append for an existing task. Kept last so every
+   * existing `registerIpc` caller keeps its positional arguments; without it
+   * `shell/appendTaskRepos` fails closed with "尚未接入".
+   */
+  append?: ProjectTaskAppend,
 ): void {
   if (tasks && catalog && taskRoots && projects) tasks.configureServices((workspaceId) => new InstalledServiceHostAuthority(
     app.getPath("userData"), catalog, serviceCatalogAuthority(taskRoots, projects), workspaceId, process.env));
+  // [PiDock 04] (#7 box 6) the Agent's shared-template edit reaches main here:
+  // one handler per forked task, bound to that child's own task id, using the
+  // same catalog the page's edit path uses (main stays the only writer).
+  if (tasks && catalog) tasks.configureServiceTemplates((taskId) => createServiceTemplateHandler(catalog, taskId));
   type TurnMessage = Parameters<Parameters<HostClient["onTurnEvent"]>[0]>[0];
   type PendingStart = { requestId: string; buffered: TurnMessage[]; bytes: number; overflow: boolean };
   type Subscription = { taskId: string; sessionId: string; frame: { processId: number; routingId: number }; webContents: WebContents; detach: () => void; deliver: (message: TurnMessage) => void; onNavigation: () => void; onInPageNavigation: () => void; onDestroyed: () => void; turns: Map<string, { sequence: number; resync: boolean; terminal: boolean }>; evictedTurns: boolean; pendingStart: PendingStart | null };
+  /**
+   * Live-sender guard for main's child-owning service entries
+   * (`runTaskService`, `bind`, `rebindServiceOwner`). `requireShellSender`
+   * proves which webContents may call at all; this additionally proves the
+   * same, un-navigated document is still the caller when the operation commits
+   * a real child process or replaces a live ownership binding. It re-proves the
+   * actual invoke event, so the frame check sees the frame the caller really
+   * sent instead of a frame main synthesized itself.
+   */
+  const liveServiceSender = (event: IpcMainInvokeEvent, reason: string): { require: () => void; release: () => void } => {
+    const sender = event.sender;
+    const url = sender.getURL();
+    const frame = { processId: sender.mainFrame.processId, routingId: sender.mainFrame.routingId };
+    let navigated = false;
+    const onNavigation = () => { navigated = true; };
+    sender.on("did-start-navigation", onNavigation);
+    return {
+      require: () => {
+        registry.requireShellSender(event);
+        if (navigated || sender.isDestroyed() || url !== sender.getURL() ||
+            frame.processId !== sender.mainFrame.processId || frame.routingId !== sender.mainFrame.routingId) throw new Error(reason);
+      },
+      release: () => sender.removeListener("did-start-navigation", onNavigation),
+    };
+  };
   const subscriptions = new Map<number, Subscription>();
   const pendingNavigation = new Map<number, { webContents: WebContents; listener: () => void }>();
   const revisions = new Map<number, number>();
@@ -1339,6 +1795,102 @@ export function registerIpc(
     }
   });
 
+  // [PiDock 03] (#6) production append for an EXISTING task: main fetches and
+  // pins every selected repository's remote branch in its OWN source checkout
+  // (all-success gate), derives the conflict scan itself, routes
+  // `task/appendRepos` and executes the returned plan with real git. The same
+  // sender-scoped trust pattern as `shell/createTask`: the page names project
+  // repository ids/remote/branches only, and `reattest` re-proves the attested
+  // shell sender right before the plan creates real resources.
+  ipcMain.handle("shell/appendTaskRepos", async (event, payload?: unknown) => {
+    try {
+      registry.requireShellSender(event);
+      if (!append) return { ok: false as const, error: "真实任务追加尚未接入" };
+      const result = await performAppendOperation(append, payload, () => { registry.requireShellSender(event); });
+      return { ok: true as const, payload: result };
+    } catch (error) {
+      if (error instanceof TrustDomainViolation) return trustFailureEnvelope(error);
+      return { ok: false as const, error: errorMessage(error) };
+    }
+  });
+
+  // [PiDock 10] (#15 box 28) 从任务打开外部编辑器: the production entry. The page
+  // names a task and one of that task's own file roots — nothing else. The
+  // editor program is read by main from its own machine-private settings
+  // document (never from the payload, and never from page-supplied code), and
+  // main stamps the attested `shell-ui` origin itself, so the Host's launch is
+  // an explicit human action whose program the caller cannot choose. The op is
+  // NOT part of the renderer task-op set: `shell/taskOp` refuses
+  // `task/openEditor` by name (the same closure as `task/appendRepos`).
+  ipcMain.handle("shell/openTaskEditor", async (event, payload?: unknown) => {
+    try {
+      const sender = registry.requireShellSender(event);
+      const record = typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>) : {};
+      // A page may name the task and one of its roots; every other key — a
+      // program, args, a path — is refused instead of ignored, so a
+      // caller-supplied program cannot reach the Host even as an extra field.
+      const extra = Object.keys(record).filter((key) => key !== "taskId" && key !== "rootId");
+      if (extra.length > 0) {
+        throw new TrustDomainViolation(
+          "invalid-payload",
+          `shell/openTaskEditor 只接受 taskId 与 rootId，不接受 ${extra.sort().join(",")}`,
+        );
+      }
+      const taskId = record["taskId"];
+      const rootId = record["rootId"];
+      if (typeof taskId !== "string" || taskId.length === 0) {
+        throw new TrustDomainViolation("invalid-payload", "shell/openTaskEditor requires a taskId");
+      }
+      if (typeof rootId !== "string" || rootId.trim().length === 0) {
+        throw new TrustDomainViolation("invalid-payload", "shell/openTaskEditor requires a rootId");
+      }
+      if (!tasks) return { ok: false as const, error: "外部编辑器尚未接入（任务 Host 未接线）" };
+      // Main reads the user's own editor setting from its machine-private
+      // document and refuses by name (nothing spawned, no Host call) when the
+      // program is unconfigured or the document is unusable.
+      const settings: ExternalEditorSettingsResult = loadExternalEditorSettings(app.getPath("userData"));
+      if (!settings.ok) return { ok: false as const, error: settings.error };
+      const origin: TaskOpOrigin = {
+        kind: "shell-ui",
+        senderWebContentsId: sender.webContentsId,
+      };
+      const result = await tasks.routeTaskOp({
+        taskId,
+        op: "task/openEditor",
+        payload: { rootId, editor: settings.settings },
+        origin,
+      });
+      return { ok: true as const, payload: result };
+    } catch (error) {
+      if (error instanceof TrustDomainViolation) return trustFailureEnvelope(error);
+      return { ok: false as const, error: errorMessage(error) };
+    }
+  });
+
+  // [PiDock 10] (#15 box 28) 外部编辑器的本机设置：the WRITE path for the very
+  // program `shell/openTaskEditor` launches. Until this entry existed the
+  // launch read a document nothing in the app could write, so the box was only
+  // reachable by hand-editing an app-private file; the save now writes the SAME
+  // document, atomically, after validating the program with the launch's own
+  // rules (a refused save writes nothing, so a valid setting is never replaced
+  // by something that cannot launch).
+  //
+  // Same boundary as `shell/providerOp`: the sender must be the attested shell
+  // webContents, the operation set is fixed, extra keys are refused, and the
+  // document path is main's own — page code names a program, never a file. It
+  // is deliberately NOT a task op: nothing is added to the renderer task-op set
+  // (`HOST_TASK_OPS`), so `shell/taskOp` cannot carry this write at all.
+  ipcMain.handle("shell/editorSettingsOp", async (event, payload?: unknown) => {
+    try {
+      registry.requireShellSender(event);
+      const result = performEditorSettingsOperation(payload, app.getPath("userData"));
+      return result.ok ? { ok: true as const, payload: result.status } : { ok: false as const, error: result.error };
+    } catch (error) {
+      if (error instanceof TrustDomainViolation) return trustFailureEnvelope(error);
+      return { ok: false as const, error: errorMessage(error) };
+    }
+  });
+
   ipcMain.handle("shell/providerOp", async (event, payload?: unknown) => {
     try {
       const sender = registry.requireShellSender(event);
@@ -1379,58 +1931,134 @@ export function registerIpc(
       if (payload && typeof payload === "object" && (payload as Record<string, unknown>)["op"] === "runTaskService") {
         if (!tasks) return { ok: false as const, error: "任务 Host 尚未接入" };
         const request = parseServiceRunRequest(payload);
-        // Production refuses before resolving a launch or reaching any
-        // spawn-capable call: ticket #7 deliberately keeps this entry point
-        // unwired until the process-tree preconditions are met. See
-        // `serviceExecutionRefusal` for the documented decision.
+        // Production gate: authorized on POSIX (the ownership module can
+        // verify a launch identity there), a named `unsupported-platform`
+        // refusal everywhere else (#48's decision). It is checked before
+        // resolving a launch, so an unsupported platform never reaches a
+        // spawn-capable call. See `serviceExecutionRefusal`.
         const refusal = serviceExecutionRefusal();
         if (refusal !== null) return { ok: false as const, error: refusal };
         // Execution takes the same live-sender guard as the sibling binding
         // branch: `requireShellSender` proves which webContents may call, not
         // that the same, un-navigated document is still the one calling when
         // the operation commits a real child process.
-        const url = event.sender.getURL();
-        const frame = { processId: event.sender.mainFrame.processId, routingId: event.sender.mainFrame.routingId };
-        let navigated = false;
-        const onNavigation = () => { navigated = true; };
-        event.sender.on("did-start-navigation", onNavigation);
+        const live = liveServiceSender(event, "service execution sender changed");
         try {
-          const requireLive = () => {
-            registry.requireShellSender(event);
-            if (navigated || event.sender.isDestroyed() || url !== event.sender.getURL() ||
-                frame.processId !== event.sender.mainFrame.processId || frame.routingId !== event.sender.mainFrame.routingId) {
-              throw new Error("service execution sender changed");
-            }
-          };
-          requireLive();
+          live.require();
           const result = await runTaskService(tasks, catalog, request, event.sender.id);
-          requireLive();
+          live.require();
           return { ok: true as const, payload: result };
-        } finally { event.sender.removeListener("did-start-navigation", onNavigation); }
+        } catch (error) {
+          // The Host's own refusal (the owner fence, an uncertain durable
+          // owner, an operation already in flight) is the page's only honest
+          // explanation for a refused start/stop, so it reaches the page
+          // verbatim instead of the generic catalog-save message below.
+          return namedServiceRefusal(error);
+        } finally { live.release(); }
+      }
+      // [PiDock 05] (#10 box 4) 整组启动: the task's own run unit group, started
+      // through the SAME op and the SAME gate as one service. Main owns the
+      // membership (it resolves the task's bound services from the trusted
+      // catalog and registers each launch), the page names only project/task, and
+      // the Host's `runGroupServiceStart` still dispatches every unit through the
+      // one gated `task/controlService` path. No `HOST_TASK_OPS` entry is added.
+      if (payload && typeof payload === "object" && (payload as Record<string, unknown>)["op"] === "runTaskServiceGroup") {
+        if (!tasks) return { ok: false as const, error: "任务 Host 尚未接入" };
+        const request = parseServiceRunGroupRequest(payload);
+        // Same production platform gate as the single path, checked before a
+        // launch is resolved or a group is planned.
+        const refusal = serviceExecutionRefusal();
+        if (refusal !== null) return { ok: false as const, error: refusal };
+        const live = liveServiceSender(event, "service group execution sender changed");
+        try {
+          live.require();
+          const result = await runTaskServiceGroup(tasks, catalog, request, event.sender.id);
+          live.require();
+          return { ok: true as const, payload: result };
+        } catch (error) {
+          // The group runner's named negatives (`refused`, `start-failed`, the
+          // port plan's own `missing-port`) and main's registration refusals are
+          // the page's only honest explanation, so they reach the page verbatim.
+          return namedServiceRefusal(error);
+        } finally { live.release(); }
+      }
+      if (payload && typeof payload === "object" && (payload as Record<string, unknown>)["op"] === "taskDependencyRouting") {
+        const request = parseTaskDependencyRoutingRequest(payload);
+        // A pure read of main's own catalog + the task's PINNED bindings: it
+        // writes no plan, forks no Host and creates no child, so it takes neither
+        // the platform gate nor the live-sender guard those child-owning entries
+        // need. `requireShellSender` above still proves which webContents may
+        // call. A named refusal (an unresolvable launch, a declaration whose
+        // target is not bound) reaches the page verbatim instead of collapsing
+        // into the generic catalog message.
+        try {
+          return { ok: true as const, payload: readTaskDependencyRouting(catalog, request) };
+        } catch (error) {
+          return namedServiceRefusal(error);
+        }
+      }
+      // [PiDock 04] (#7 slice) the way back from a fenced task: after a write
+      // moved the task's owner snapshot (a shared-template adoption, a binding
+      // change, a project re-association), the Host refuses start/stop with
+      // `service-owner-inventory-unconfirmed`. This is the privileged,
+      // sender-attested entry that re-binds that task's service owner at the new
+      // revision. It is a two-step like the catalog writes - `confirm:false` only
+      // reports real state and the named changes, `confirm:true` replaces the
+      // fenced binding and its lease - and it takes the same live-sender guard as
+      // the sibling child-owning entries.
+      if (payload && typeof payload === "object" && (payload as Record<string, unknown>)["op"] === "rebindServiceOwner") {
+        if (!tasks) return { ok: false as const, error: "任务 Host 尚未接入" };
+        const request = parseServiceOwnerRebindRequest(payload);
+        const live = liveServiceSender(event, "service owner rebind sender changed");
+        try {
+          live.require();
+          const result = await rebindTaskServiceOwner(tasks, catalog, request);
+          live.require();
+          return { ok: true as const, payload: result };
+        } catch (error) {
+          // `service-owner-rebind-blocked: <serviceId>` (an unsettled durable
+          // owner) and `service-owner-catalog-unavailable` are the named
+          // refusals the page must show verbatim - a silent drop is exactly
+          // what this operation exists to prevent.
+          return namedServiceRefusal(error);
+        } finally { live.release(); }
       }
       if (payload && typeof payload === "object" && ["bind", "taskBindings"].includes(String((payload as Record<string, unknown>)["op"]))) {
-        const url = event.sender.getURL();
-        const frame = { processId: event.sender.mainFrame.processId, routingId: event.sender.mainFrame.routingId };
-        let navigated = false;
-        const onNavigation = () => { navigated = true; };
-        event.sender.on("did-start-navigation", onNavigation);
+        const live = liveServiceSender(event, "service binding sender changed");
         try {
-          const requireLive = () => {
-            registry.requireShellSender(event);
-            if (navigated || event.sender.isDestroyed() || url !== event.sender.getURL() ||
-                frame.processId !== event.sender.mainFrame.processId || frame.routingId !== event.sender.mainFrame.routingId) {
-              throw new Error("service binding sender changed");
-            }
-          };
-          return { ok: true as const, payload: await performServiceBindingOperation(catalog, payload, pickProgram, requireLive) };
-        } finally { event.sender.removeListener("did-start-navigation", onNavigation); }
+          return { ok: true as const, payload: await performServiceBindingOperation(catalog, payload, pickProgram, live.require) };
+        } finally { live.release(); }
       }
-      return { ok: true as const, payload: performServiceCatalogOperation(catalog, payload) };
+      // A shared-template `update` and a binding `adoptBinding` (like `create`)
+      // are inert data: neither writes a child process, a program path or a task
+      // binding's local identity, and the catalog re-validates every field
+      // fail-closed and re-checks the version, so they do not take the sibling
+      // `bind`/`runTaskService` live-sender guard. `requireShellSender` above
+      // still proves which webContents may call at all. Their answer carries the
+      // honest restart consequence - what changed, that a config write never
+      // restarts a process, and which forked task Hosts this write revoked.
+      const result = performServiceCatalogOperation(catalog, payload);
+      const op = (payload as Record<string, unknown>)["op"];
+      if (op === "update" || op === "adoptBinding") {
+        const written = result as unknown as Record<string, unknown>;
+        return { ok: true as const, payload: { ...written, restart: serviceRestartConsequence(op, written, tasks) } };
+      }
+      return { ok: true as const, payload: result };
     } catch (error) {
       if (error instanceof TrustDomainViolation) return trustFailureEnvelope(error);
       return { ok: false as const, error: "服务配方保存或读取失败，请核对项目及配置后重试" };
     }
   });
+
+  /**
+   * Project repositories of a task's confirmed association. Main-owned
+   * authority for turning a recorded `repo-xxxxxxxx` folder into the source
+   * checkout the scan and the plan must use; a task without a confirmed
+   * association has no authoritative checkout source, so the scan refuses.
+   * `shell/taskOp` and main's own production append both build it through
+   * `createPrepScanAuthority`.
+   */
+  const prepScanAuthority: PrepScanAuthority = createPrepScanAuthority(projects, taskRoots);
 
   // Task-scoped op from the sandboxed renderer: main binds the workspace
   // from the trusted sender (never from the payload) and forwards the
@@ -1459,16 +2087,110 @@ export function registerIpc(
       if (!isHostTaskOp(op) || op.startsWith("task/sdk") || op === "task/sendMessage") {
         throw new TrustDomainViolation("invalid-payload", `unknown task op: ${String(op)}`);
       }
+      // [PiDock 03] (#6) legacy-route refusal: `shell/taskOp` used to accept
+      // `task/appendRepos` from page code, letting the renderer supply the
+      // `fetchedCommits` baseline the Host then persisted — with NO executor
+      // in main. `shell/appendTaskRepos` is the production entry (registry-only
+      // paths, main-derived scan, fetch/pin, plan execution), so the legacy op
+      // is refused here; no production caller remains.
+      if (op === "task/appendRepos") {
+        throw new TrustDomainViolation(
+          "invalid-payload",
+          "shell/taskOp 不再接受 task/appendRepos，请使用 shell/appendTaskRepos（ref #6）",
+        );
+      }
+      // [PiDock 03] (#6) the same legacy-route refusal for the plain-directory
+      // twin: `task/appendDirs` records `{directoryId, sourcePath}` into the
+      // task record. Reached from page code it would let the sandboxed
+      // renderer write a RENDERER-CHOSEN `sourcePath` into `dirLinks` while
+      // skipping every guard this slice relies on — registry resolution of the
+      // directory id, the workspace-overlap check, the recorded source
+      // identity check and the user's `sharedWriteConfirmed`. Those entries
+      // then feed the Agent broker's shared scope. `shell/appendTaskRepos` is
+      // the production entry (registry-only ids, main-derived source identity,
+      // confirmation required), so refuse the legacy op here; no production
+      // caller remains. `task/appendDirs` stays in `HOST_TASK_OPS` because
+      // main→Host routing of the production append still needs it.
+      if (op === "task/appendDirs") {
+        throw new TrustDomainViolation(
+          "invalid-payload",
+          "shell/taskOp 不再接受 task/appendDirs，请使用 shell/appendTaskRepos（ref #6）",
+        );
+      }
+      // [PiDock 10] (#15 box 28) the same legacy-route refusal for the external
+      // editor: `task/openEditor` carries the user-configured editor program
+      // and a launch authorization. Reached from page code it would let the
+      // sandboxed renderer name the program (or the args) that main then hands
+      // to the Host, and it would mint the attested human origin for a caller
+      // that is not an explicit human action route. `shell/openTaskEditor` is
+      // the only entry: main reads the program from its own settings document,
+      // accepts `taskId` + `rootId` only, and stamps the origin itself. Keep
+      // this op out of the renderer op set — no production caller remains here.
+      if (op === "task/openEditor") {
+        throw new TrustDomainViolation(
+          "invalid-payload",
+          "shell/taskOp 不接受 task/openEditor，外部编辑器只允许从文件面板经 shell/openTaskEditor 打开（ref #15）",
+        );
+      }
+      // [PiDock 05] (#10 box 1/4 + ADR 0002) the plan's own inputs are TRUSTED
+      // data, so this route refuses the three keys a page could otherwise name:
+      // `dependencies` (the group's call/prestart edges), `rules` (which variable
+      // a task override binds) and `layers` (the read points the audit checks). A
+      // page that could send them would decide what a group start really runs and
+      // what the read-point audit gets to look at - measured against rows it
+      // supplied itself. Main derives all three from the trusted service catalog
+      // (`runTaskServiceGroup` -> `planBoundServiceGroup`) and reaches the Host
+      // through `PerTaskHostRegistry.routeTaskOp`, never through this handler, so
+      // no production caller is lost here. Refused BY NAME per key, before the
+      // Host is asked anything.
+      if (op === "task/planServiceGroup") {
+        const planPayload = typeof record["payload"] === "object" && record["payload"] !== null
+          ? (record["payload"] as Record<string, unknown>)
+          : {};
+        for (const key of ["dependencies", "rules", "layers"] as const) {
+          if (planPayload[key] === undefined) continue;
+          throw new TrustDomainViolation(
+            "invalid-payload",
+            `shell/taskOp 不接受 task/planServiceGroup.${key}：计划的依赖边、变量绑定规则与配置层只从可信服务目录读取（ref #7）`,
+          );
+        }
+      }
+      // [PiDock 03] (#6) a resume needs its executor BEFORE the Host op runs:
+      // `task/resumeAppend` writes the record, so checking after the route
+      // would leave a record update with no executor in main to run the plan
+      // it returns. Refuse first; the scan below then only runs for a resume
+      // main can actually complete.
+      if (op === "task/resumeAppend" && !append) {
+        return { ok: false as const, error: "真实任务准备恢复尚未接入" };
+      }
       if (pendingNavigation.has(sender.webContentsId) || subscriptions.get(sender.webContentsId)?.taskId !== taskId) revoke(sender.webContentsId);
       // A persisted Provider selection is reinstalled on first contact with the
       // task, before any turn op can run against an unconfigured context. The
       // status route reports failures, so an install failure never turns an
       // unrelated op into an error.
       if (providers) { try { await providers.ensure(taskId, sender.webContentsId); } catch { /* surfaced by shell/providerOp list */ } }
-      const opPayload =
+      let opPayload =
         typeof record["payload"] === "object" && record["payload"] !== null
           ? (record["payload"] as Record<string, unknown>)
           : {};
+      // #6 boundary B: the sandboxed renderer cannot list the task folder or
+      // run `git worktree list`, so main produces the scan `resumeAppend`
+      // requires (the Host keeps requiring it) and OVERWRITES any
+      // page-supplied `takenPaths`/`branchesInUse`/`mainCheckouts`, so a
+      // forged or emptied scan can neither disable nor steer the gate. Every
+      // scan failure refuses by name and plans nothing (never a `[]` default).
+      // `task/appendRepos` no longer reaches this route (refused above); its
+      // scan is derived by `prepareAppendHostPayload` inside
+      // `ProjectTaskAppend` on the `shell/appendTaskRepos` channel.
+      if (needsPrepScan(op)) {
+        const derived = deriveRendererPrepPayload(
+          { op, taskId, payload: opPayload },
+          prepScanAuthority,
+          createNodePrepScanDeps(),
+        );
+        if (!derived.ok) return { ok: false as const, error: derived.error };
+        opPayload = derived.payload;
+      }
       const perOp = validateHostTaskOp(op, opPayload);
       if (!perOp.ok) {
         throw new TrustDomainViolation("invalid-payload", perOp.error);
@@ -1483,6 +2205,21 @@ export function registerIpc(
       };
       if (tasks) {
         const result = await tasks.routeTaskOp({ taskId, op, payload: opPayload, origin });
+        // [PiDock 03] (#6) a resume that only PLANNED is not a recovery: main
+        // executes the returned plan through the same validated
+        // `executeAppendPlan` rules the append uses and answers with the Host's
+        // freshly re-read per-repo status. A recorded-but-worktree-absent repo
+        // is therefore actually completed, never reported as success by plan.
+        if (op === "task/resumeAppend") {
+          const mainCheckouts = (opPayload["mainCheckouts"] ?? {}) as Record<string, string>;
+          // The executor's presence was proven before routing (see the
+          // `task/resumeAppend` guard above), so it exists here.
+          const payload = await append!.executeResumePlan(
+            { taskId, planResult: result, mainCheckouts },
+            () => { registry.requireShellSender(event); },
+          );
+          return { ok: true as const, payload };
+        }
         return { ok: true as const, payload: result };
       }
       const result = await client.task({ workspaceId, taskId, op, payload: opPayload, origin });

@@ -3,16 +3,24 @@ import {
   auditImportVars,
   autoAdjustPorts,
   buildChildEnv,
+  declaredServicePorts,
   classifyImportDraft,
   diffServiceTemplate,
   isServiceSecretKey,
   maskServiceValue,
   nextServiceTemplateVersion,
   recordPlatformLaunch,
+  SERVICE_VALUE_MASK,
+  sharedValueRefusalClass,
   resolveServiceEnv,
   restartNeededForTemplateAdopt,
   validateNoSecretsInShared,
   validateServiceDescriptor,
+  validateSharedServiceArgument,
+  validateSharedServiceHealthTarget,
+  validateSharedServiceProgram,
+  validateSharedServiceValue,
+  validateSharedServiceWorkdir,
   type ResolvedServiceRow,
   type ServiceDescriptor,
 } from "./service-config.js";
@@ -52,6 +60,75 @@ describe("validateServiceDescriptor", () => {
   it("rejects relative cwd", () => {
     expect(validateServiceDescriptor({ ...base, cwd: "relative/dir" })?.code).toBe("invalid-service");
     expect(validateServiceDescriptor({ ...base, cwd: "/Users/name/tasks/task-a1f92c3d/front" })).toBeNull();
+  });
+});
+
+describe("shared-template working directory", () => {
+  it("accepts a repo-relative directory and rejects machine paths", () => {
+    expect(validateSharedServiceWorkdir("apps/web")).toBeNull();
+    expect(validateSharedServiceWorkdir("apps/api")).toBeNull();
+    for (const value of ["", "   ", "/srv/app", "~/app", "C:\\app", "\\\\host\\share", "app\\sub"]) {
+      expect(validateSharedServiceWorkdir(value)?.code).toBe("invalid-service");
+    }
+    expect(validateSharedServiceWorkdir("/srv/app")?.message).toContain("不能是本机绝对路径");
+  });
+  it("rejects escapes, empty segments, control characters, over-long values and credential-looking segments", () => {
+    expect(validateSharedServiceWorkdir("../outside")?.message).toContain("..");
+    expect(validateSharedServiceWorkdir("apps/../api")?.code).toBe("invalid-service");
+    expect(validateSharedServiceWorkdir("apps//api")?.code).toBe("invalid-service");
+    expect(validateSharedServiceWorkdir(`apps/a${String.fromCharCode(0)}b`)?.message).toContain("控制字符");
+    expect(validateSharedServiceWorkdir("a".repeat(513))?.code).toBe("invalid-service");
+    expect(validateSharedServiceWorkdir("apps/api-token")?.code).toBe("secret-in-shared");
+  });
+});
+
+describe("shared-revision path and credential policy", () => {
+  it("accepts portable arguments, targets, values and program names", () => {
+    for (const value of ["server.js", "src/main.ts", "--host", "127.0.0.1", "--filter", "saas-web", "--port=3000"]) {
+      expect(validateSharedServiceArgument(value)).toBeNull();
+    }
+    for (const value of ["http://127.0.0.1:3000/health", "tcp://127.0.0.1:5432", "127.0.0.1:3000"]) {
+      expect(validateSharedServiceHealthTarget(value)).toBeNull();
+    }
+    expect(validateSharedServiceValue("3000")).toBeNull();
+    expect(validateSharedServiceValue("http://localhost:4100")).toBeNull();
+    expect(validateSharedServiceProgram("pnpm")).toBeNull();
+    expect(validateSharedServiceProgram("node")).toBeNull();
+  });
+
+  it("refuses a machine path wherever it appears in one token", () => {
+    for (const value of ["/Users/name/private/healthz", "file:///Users/name/private/app.sock", "-I/Users/name/private/include",
+      "--prefix=/srv/app", "~/bin/node", "C:\\app", "\\\\host\\share", "../outside", "-I../outside"]) {
+      expect(validateSharedServiceArgument(value)?.message).toContain("本机路径");
+    }
+    for (const value of ["/Users/name/private/app.sock", "file:///Users/name/private/app.sock", "../outside"]) {
+      expect(validateSharedServiceHealthTarget(value)?.message).toContain("本机文件路径");
+    }
+    expect(validateSharedServiceValue("/Users/name/private/app.sock")?.message).toContain("本机路径");
+  });
+
+  it("refuses credential spellings the narrow [\u0026] form missed, without echoing them", () => {
+    for (const value of ["http://127.0.0.1:3000/health?api_key=SECRET", "http://127.0.0.1:3000/health?apikey=SECRET",
+      "http://127.0.0.1:3000/health?x-key=SECRET", "https://user:pass@example.test/health"]) {
+      expect(validateSharedServiceHealthTarget(value)?.code).toBe("secret-in-shared");
+    }
+    expect(validateSharedServiceValue("apikey=SECRET")?.code).toBe("secret-in-shared");
+    expect(validateSharedServiceValue("https://user:pass@example.test")?.code).toBe("secret-in-shared");
+    expect(validateSharedServiceArgument("--token")?.code).toBe("secret-in-shared");
+    expect(validateSharedServiceArgument("--x-key=SECRET")?.code).toBe("secret-in-shared");
+  });
+
+  it("refuses a machine path or credential in a program name instead of a portable name", () => {
+    for (const value of ["/usr/bin/node", "./bin/dev", "~/bin/node", "bin/dev"]) {
+      expect(validateSharedServiceProgram(value)?.message).toContain("可移植的程序名");
+    }
+  });
+
+  it("bounds the fields exactly like the catalog parser does", () => {
+    expect(validateSharedServiceArgument("x".repeat(513))?.message).toContain("过长");
+    expect(validateSharedServiceArgument("a\nb")?.message).toContain("控制字符");
+    expect(validateSharedServiceHealthTarget("a\nb")?.message).toContain("控制字符");
+    expect(validateSharedServiceValue("x".repeat(2049))?.code).toBe("invalid-service");
   });
 });
 
@@ -193,16 +270,45 @@ describe("masking + child env isolation", () => {
     expect(rows.find((entry) => entry.key === "PORT")?.value).toBe("5173");
     expect(adjusted).toEqual([]);
   });
+  it("declaredServicePorts takes the recipe list plus the task's own PORT binding, never a probe", () => {
+    // The recipe's own list and this task's binding are both DECLARED facts; a
+    // PORT-like key holding a URL or a non-port is not a port, and an unrelated
+    // key that merely contains a number is ignored.
+    expect(declaredServicePorts([9001], [])).toEqual([9001]);
+    expect(declaredServicePorts([], [row("PORT", "53101", "本机私有配置")])).toEqual([53101]);
+    expect(declaredServicePorts([9001], [
+      row("PORT", "53101", "本机私有配置"),
+      row("API_BASE_URL", "http://127.0.0.1:53102", "任务覆盖"),
+      row("TIMEOUT", "3000", "共享模板"),
+      row("PORT", "not-a-port", "任务覆盖"),
+      row("PORT", "99999", "任务覆盖"),
+    ])).toEqual([9001, 53101]);
+  });
   it("diffServiceTemplate trims both sides for removed keys", () => {
     expect(diffServiceTemplate([{ key: " A ", value: "1", secret: false }], [])).toEqual({ added: [], changed: [], removed: ["A"] });
   });
 });
 
 describe("import drafts", () => {
-  it("classifies long-lived vs prepare vs one-shot", () => {
-    expect(classifyImportDraft({ command: "pnpm --filter saas-web dev" }).runType).toBe("long-lived");
-    expect(classifyImportDraft({ command: "bun run db:migrate" }).runType).toBe("prepare");
-    expect(classifyImportDraft({ command: "node scripts/report.mjs --once" }).runType).toBe("one-shot");
+  it("classifies long-lived vs prepare vs one-shot, naming the signal that decided it", () => {
+    expect(classifyImportDraft({ command: "pnpm --filter saas-web dev" })).toMatchObject({ runType: "long-lived", runTypeUncertain: false,
+      runTypeBasis: "命令含常驻关键字 dev/start/serve/watch" });
+    expect(classifyImportDraft({ command: "bun run db:migrate" })).toMatchObject({ runType: "prepare", runTypeUncertain: false,
+      runTypeBasis: "命令含准备关键字 prepare/install/setup/migrate/seed" });
+    expect(classifyImportDraft({ command: "node scripts/report.mjs --once" })).toMatchObject({ runType: "one-shot", runTypeUncertain: false,
+      runTypeBasis: "未匹配常驻或准备关键字，按一次性命令处理" });
+    // A package script's convention lives in its name, and the basis says so.
+    expect(classifyImportDraft({ name: "dev", command: "node server.js" })).toMatchObject({ runType: "long-lived",
+      runTypeBasis: "名称含常驻关键字 dev/start/serve/watch" });
+  });
+  it("refuses to guess a run type when the candidate names no command", () => {
+    const empty = classifyImportDraft({ name: "database", command: "" });
+    expect(empty).toMatchObject({ runType: "one-shot", runTypeUncertain: true,
+      runTypeBasis: "配置未给出启动命令，无法判定运行类型" });
+    expect(empty.runType).not.toBe("long-lived");
+    // Whitespace is not a command either, and a resident-looking name cannot
+    // turn an unclassifiable candidate into a resident service.
+    expect(classifyImportDraft({ name: "dev", command: "   " })).toMatchObject({ runType: "one-shot", runTypeUncertain: true });
   });
   it("keeps chaining tokens in args so the descriptor validator can reject them", () => {
     const draft = classifyImportDraft({ command: "pnpm dev && pnpm build" });
@@ -225,6 +331,21 @@ describe("import drafts", () => {
     expect(toVerify.join("\n")).toContain("EMPTY");
     expect(toVerify.join("\n")).toContain("API_TOKEN");
     expect(toVerify.join("\n")).toContain("ELSEWHERE");
+  });
+  it("classes the values a shared template must not take, without echoing them", () => {
+    expect(sharedValueRefusalClass("")).toBeNull();
+    expect(sharedValueRefusalClass("4100")).toBeNull();
+    expect(sharedValueRefusalClass("postgres://user:pass@host/db")).toBe("credential");
+    expect(sharedValueRefusalClass("API_TOKEN=abc")).toBe("credential");
+    expect(sharedValueRefusalClass("/Users/name/private/api.yaml")).toBe("path");
+    expect(sharedValueRefusalClass("~/private/key.pem")).toBe("path");
+    expect(sharedValueRefusalClass("line-one\nline-two")).toBe("unportable");
+    expect(sharedValueRefusalClass("x".repeat(2049))).toBe("unportable");
+  });
+  it("masks every value form that leaves the Host with one spelling", () => {
+    expect(maskServiceValue({ key: "API_TOKEN", value: "abc", secret: false })).toBe(SERVICE_VALUE_MASK);
+    expect(maskServiceValue({ key: "PORT", value: "4100", secret: false })).toBe("4100");
+    expect(SERVICE_VALUE_MASK).toBe("••••••••");
   });
 });
 

@@ -205,7 +205,7 @@ describe("shell host adapter selection", () => {
           ok: true,
           payload: {
             approvals: [
-              { id: "approval-7", sessionId: "main", tool: "exec.run", target: "/tmp/task-abcdef12/run.sh", status: "pending", executed: false },
+              { id: "approval-7", sessionId: "main", tool: "exec.run", target: "/tmp/task-abcdef12/run.sh", operation: "echo hi > out.txt", status: "pending", executed: false },
             ],
           },
         };
@@ -214,7 +214,7 @@ describe("shell host adapter selection", () => {
         return {
           ok: true,
           payload: {
-            approval: { id: "approval-7", sessionId: "main", tool: "exec.run", target: "/tmp/task-abcdef12/run.sh", status: "pending", executed: false },
+            approval: { id: "approval-7", sessionId: "main", tool: "exec.run", target: "/tmp/task-abcdef12/run.sh", operation: "echo hi > out.txt", status: "pending", executed: false },
           },
         };
       }
@@ -224,7 +224,9 @@ describe("shell host adapter selection", () => {
     const listed = await adapter.listApprovals("task-a");
     expect(listed).toHaveLength(1);
     expect(listed[0]).toMatchObject({ id: "approval-7", taskId: "task-a", sessionId: "main", title: "exec.run /tmp/task-abcdef12/run.sh" });
-    expect(await adapter.getApproval("approval-7")).toMatchObject({ id: "approval-7", taskId: "task-a" });
+    // [PiDock 02m] #5: the real command reaches the card, not only tool+target.
+    expect(listed[0]?.operation).toBe("echo hi > out.txt");
+    expect(await adapter.getApproval("approval-7")).toMatchObject({ id: "approval-7", taskId: "task-a", operation: "echo hi > out.txt" });
     expect(seen.map((entry) => entry.op)).toEqual(["task/listApprovals", "task/getApproval"]);
     vi.unstubAllGlobals();
   });
@@ -236,54 +238,71 @@ describe("shell host adapter selection", () => {
     vi.unstubAllGlobals();
   });
 
-  it("routes Host-known service start/stop through task/controlService (human path)", async () => {
-    const seen: Array<{ taskId: string; op: string; payload?: Record<string, unknown> }> = [];
-    stubBridge(async (taskId, op, payload) => {
-      seen.push({ taskId, op, payload });
-      if (op === "task/serviceStatus") return { ok: true, payload: { service: { serviceId: "saas-web" } } };
-      return { ok: true, payload: {} };
-    });
-    const adapter = resolveHostAdapter(createMemoryHost());
-    await adapter.setServiceRunning("task-a", "saas-web", true);
-    await adapter.setServiceRunning("task-a", "saas-web", false);
-    expect(seen.map((entry) => entry.op)).toEqual([
-      "task/serviceStatus",
-      "task/controlService",
-      "task/serviceStatus",
-      "task/controlService",
+  it("routes a bound service start/stop through runTaskService, never fixture data", async () => {
+    const taskId = "task-11111111-1111-1111-1111-111111111111";
+    const serviceId = "s-22222222-2222-2222-2222-222222222222";
+    const catalogOps: Record<string, unknown>[] = [];
+    const taskOps: string[] = [];
+    const memoryCalls: string[] = [];
+    const bridge = (run: () => unknown) => {
+      vi.stubGlobal("window", { pidock: {
+        taskOp: async (_taskId: string, op: string) => { taskOps.push(op); return { ok: false, error: "unexpected task op" }; },
+        projectOp: async () => ({ ok: true, payload: { roots: [], tasks: [{ taskId, projectId: "project-1", state: "assigned" }] } }),
+        serviceCatalogOp: async (request: Record<string, unknown>) => { catalogOps.push(request); return run(); },
+      } });
+    };
+    bridge(() => ({ ok: true, payload: { serviceId, action: "start", actor: "human" } }));
+    const fallback = {
+      setServiceRunning: async (task: string, service: string, running: boolean) => { memoryCalls.push(`${task}:${service}:${running}`); },
+    } as unknown as HostAdapter;
+    const adapter = createShellHostAdapter(fallback);
+    await adapter.setServiceRunning(taskId, serviceId, true);
+    await adapter.setServiceRunning(taskId, serviceId, false);
+    // Main resolves the trusted launch, registers it on the task Host and
+    // controls it; the page names only project/task/service/action.
+    expect(catalogOps).toEqual([
+      { op: "runTaskService", projectId: "project-1", taskId, serviceId, action: "start" },
+      { op: "runTaskService", projectId: "project-1", taskId, serviceId, action: "stop" },
     ]);
-    // No sessionId: the Host classifies this as the attested human-UI path.
-    expect(seen[1].payload).toMatchObject({ serviceId: "saas-web", action: "start" });
-    expect(seen[1].payload?.["sessionId"]).toBeUndefined();
-    expect(seen[3].payload).toMatchObject({ serviceId: "saas-web", action: "stop" });
+    expect(Object.keys(catalogOps[0]!).sort()).toEqual(["action", "op", "projectId", "serviceId", "taskId"]);
+    // No session/approval id: this is the attested human-UI path, not the
+    // Agent gate path, and it never reaches `task/controlService` itself.
+    expect(catalogOps[0]!["sessionId"]).toBeUndefined();
+    expect(catalogOps[0]!["approvalId"]).toBeUndefined();
+    expect(taskOps).toEqual([]);
+    expect(memoryCalls).toEqual([]);
     vi.unstubAllGlobals();
 
-    // A failed Host control surfaces instead of silently succeeding.
-    stubBridge(async (_taskId, op) => {
-      if (op === "task/serviceStatus") return { ok: true, payload: { service: { serviceId: "saas-web" } } };
-      return { ok: false, error: "permission-denied: 无会话的界面操作需要受信任来源，已拒绝" };
-    });
-    await expect(resolveHostAdapter(createMemoryHost()).setServiceRunning("task-a", "saas-web", true)).rejects.toThrow("permission-denied");
+    // A Host refusal surfaces instead of silently succeeding or falling back.
+    bridge(() => ({ ok: false, error: "unsupported-platform: 服务启动身份核验与终止仅在 POSIX 实现" }));
+    await expect(createShellHostAdapter(fallback).setServiceRunning(taskId, serviceId, true)).rejects.toThrow("unsupported-platform");
+    expect(memoryCalls).toEqual([]);
     vi.unstubAllGlobals();
   });
 
-  it("keeps unregistered services on the memory fallback", async () => {
-    const ops: string[] = [];
-    stubBridge(async (_taskId, op) => {
-      ops.push(op as string);
-      return { ok: false, error: "unknown-service: saas-web is not registered on this task" };
-    });
+  it("keeps the memory mirror only when the shell is not connected", async () => {
+    vi.stubGlobal("window", {});
     const memoryCalls: string[] = [];
     const fallback = {
-      setServiceRunning: async (taskId: string, serviceId: string, running: boolean) => {
-        memoryCalls.push(`${taskId}:${serviceId}:${running}`);
-      },
+      setServiceRunning: async (task: string, service: string, running: boolean) => { memoryCalls.push(`${task}:${service}:${running}`); },
     } as unknown as HostAdapter;
     await createShellHostAdapter(fallback).setServiceRunning("task-a", "saas-web", true);
-    // Only the probe ran; the renderer has no service-registration path yet,
-    // so the memory mirror keeps the dev/demo service toggles working.
-    expect(ops).toEqual(["task/serviceStatus"]);
     expect(memoryCalls).toEqual(["task-a:saas-web:true"]);
+    vi.unstubAllGlobals();
+  });
+
+  it("refuses a task with no bound project instead of falling back to the fixture mirror", async () => {
+    const memoryCalls: string[] = [];
+    vi.stubGlobal("window", { pidock: {
+      taskOp: async () => ({ ok: false, error: "unexpected task op" }),
+      projectOp: async () => ({ ok: true, payload: { roots: [], tasks: [{ taskId: "task-a", projectId: null, state: "unassigned" }] } }),
+      serviceCatalogOp: async () => ({ ok: false, error: "unexpected service catalog op" }),
+    } });
+    const fallback = {
+      setServiceRunning: async (task: string, service: string, running: boolean) => { memoryCalls.push(`${task}:${service}:${running}`); },
+    } as unknown as HostAdapter;
+    await expect(createShellHostAdapter(fallback).setServiceRunning("task-a", "saas-web", true)).rejects.toThrow("尚未归属项目");
+    expect(memoryCalls).toEqual([]);
     vi.unstubAllGlobals();
   });
 
@@ -354,6 +373,119 @@ describe("shell host adapter selection", () => {
       const fallbackView = await resolveHostAdapter(createMemoryHost()).serviceTopology("release");
       expect(fallbackView.groups.length).toBeGreaterThan(0);
       expect(fallbackView.records.some((entry) => entry.run?.simulated === true)).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps a Host run record's ports labelled as declared and never as observed", async () => {
+    /**
+     * The exact shape the real Host answers `task/serviceRunRecords` with after
+     * a catalog start (`service-two-task-isolation.test.ts` reads it back from
+     * the Host): the pid/startedAt are OBSERVED by the process driver, the port
+     * list is DECLARED (`portsSource`) because the Host owns no port probe, and
+     * the code/build state is `unknown` because this slice reads no working
+     * tree. A rename of any of these fields has to fail here, not silently
+     * degrade to the memory projection.
+     */
+    stubBridge(async (_taskId, op) => {
+      if (op === "task/serviceRunRecords") {
+        return {
+          ok: true,
+          payload: {
+            records: [
+              {
+                runId: "run-1",
+                taskId: "release",
+                serviceId: "release-service-1",
+                instanceId: "release/release-service-1@53101",
+                templateVersion: "v1",
+                codeState: { kind: "unknown", note: "缺少提交信息，无法判断代码状态" },
+                buildFreshness: "unknown",
+                ports: [53101],
+                portsSource: "declared",
+                processIdentity: { owner: "human", pid: 4242, startedAt: "2026-10-07T01:00:00.000Z" },
+                logRef: "/tasks/release/services/release-service-1/run-run-1.log",
+                startedAt: "2026-10-07T01:00:00.000Z",
+                verifications: [],
+              },
+            ],
+            registered: [{ instanceId: "release/release-service-1", taskId: "release", serviceId: "release-service-1", pid: 4242, startedAt: "2026-10-07T01:00:00.000Z", owner: "human" }],
+          },
+        };
+      }
+      return { ok: false, error: "no plan in this test" };
+    });
+    try {
+      const view = await resolveHostAdapter(createMemoryHost()).serviceTopology("release");
+      const run = view.records.find((entry) => entry.serviceId === "release-service-1")?.run;
+      expect(run).toMatchObject({
+        runId: "run-1",
+        ports: [53101],
+        portsSource: "declared",
+        processIdentity: { owner: "human", pid: 4242 },
+      });
+      // A real Host record is NOT the fixture: the panel must not print the
+      // "内存模拟记录" row for it.
+      expect(run?.simulated).toBeUndefined();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps the projection's 已知配置限制 when the Host plan carries none", async () => {
+    // This adapter sends no `externalResources`, so the Host plan's own list is
+    // always empty - replacing the visible projection with it would erase the
+    // real 已知配置限制 rows. The empty Host list must mean "nothing said".
+    const projectedLimits = (await createMemoryHost().serviceTopology("release")).knownLimits;
+    expect(projectedLimits.length).toBeGreaterThan(0);
+    stubBridge(async (_taskId, op) => {
+      if (op === "task/planServiceGroup") return { ok: true, payload: { plan: { assignments: [], reallocated: [], diagnostics: [], knownLimits: [] } } };
+      if (op === "task/serviceRunRecords") return { ok: true, payload: { records: [], registered: [] } };
+      return { ok: true, payload: {} };
+    });
+    try {
+      const view = await resolveHostAdapter(createMemoryHost()).serviceTopology("release");
+      expect(view.knownLimits).toEqual(projectedLimits);
+      // The non-empty Host case still wins over the projection.
+      stubBridge(async (_taskId, op) => {
+        if (op === "task/planServiceGroup") return { ok: true, payload: { plan: { assignments: [], reallocated: [], diagnostics: [], knownLimits: ["共享队列"] } } };
+        if (op === "task/serviceRunRecords") return { ok: true, payload: { records: [], registered: [] } };
+        return { ok: true, payload: {} };
+      });
+      const hostLimits = await resolveHostAdapter(createMemoryHost()).serviceTopology("release");
+      expect(hostLimits.knownLimits).toEqual(["共享队列"]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps the Host's run-record verifications instead of discarding them", async () => {
+    stubBridge(async (_taskId, op) => {
+      if (op === "task/serviceRunRecords") {
+        return { ok: true, payload: { records: [{
+          runId: "run-9", taskId: "release", serviceId: "release-service-1", instanceId: "release/release-service-1@6100",
+          templateVersion: "v13", codeState: { kind: "uncommitted", note: "工作副本有未提交修改" }, buildFreshness: "uncommitted-code",
+          ports: [6100], portsSource: "declared",
+          processIdentity: { owner: "human", pid: 777, startedAt: "2026-09-22T10:00:00.000Z" },
+          logRef: "/tasks/release/services/release-service-1/run-run-9.log", startedAt: "2026-09-22T10:00:00.000Z",
+          // Host-reported verification entries (linkage / readiness): a merge
+          // that hardcodes `verifications: []` silently drops these.
+          verifications: [
+            { kind: "linkage", detail: "联通检查 shipment-service", ok: true, at: "2026-09-22T10:00:05.000Z" },
+            { kind: "readiness", detail: "前置条件就绪检查 db-migrate", ok: false, at: "2026-09-22T10:00:06.000Z" },
+          ],
+        }], registered: [] } };
+      }
+      return { ok: false, error: "no plan in this test" };
+    });
+    try {
+      const view = await resolveHostAdapter(createMemoryHost()).serviceTopology("release");
+      const run = view.records.find((entry) => entry.serviceId === "release-service-1")?.run;
+      expect(run?.verifications).toEqual([
+        { kind: "linkage", detail: "联通检查 shipment-service", ok: true },
+        { kind: "readiness", detail: "前置条件就绪检查 db-migrate", ok: false },
+      ]);
     } finally {
       vi.unstubAllGlobals();
     }

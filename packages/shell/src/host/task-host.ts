@@ -53,29 +53,45 @@ import {
 import { validateProviderProfile, type ProviderProfileRow } from "../main/provider-config.js";
 import {
   buildTaskBranch,
+  isAbsoluteTaskRoot,
   isTaskDirId,
   pinBaseline,
   planWorktreeCreation,
   previewTaskPaths,
   assertProvisionPlanSafe,
+  isSafeTaskBranchRef,
+  planResumeBranch,
   resolveTaskRoot,
   validateTaskName,
   type ProvisionPlan,
 } from "../main/task-provision.js";
+import { hostPlatformLabel } from "../main/service-config.js";
 import {
   checkLinkNameCollisions,
   checkRepoConflicts,
   classifyLinkTarget,
+  LINK_MODEL_VERIFICATION_BOUNDARY,
+  linkCapabilityRows,
+  type LinkCapabilityRow,
+  type LinkTargetObservation,
+  classifyRepoPrepareState,
   filterAppendRepos,
+  isMultiRepoErrorCode,
+  buildLinkName,
   pinRepoBaselines,
   previewMixedTaskPaths,
+  resumeRepoSet,
+  segmentPrepareOutcomes,
   snapshotPlainDirLink,
   validateRepoSelections,
   type MultiRepoError,
   type PlainDirLinkSnapshot,
   type PinnedRepoBaseline,
+  type RepoPrepareEvidence,
+  type RepoPrepareOutcome,
   type RepoSelection,
 } from "../main/multi-repo-provision.js";
+import { createNodeRepoProbe, observeBranchRef, observeRecordedRepo } from "./repo-identity.js";
 import {
   buildTaskDiskRecord,
   deleteSessionOnDisk,
@@ -102,6 +118,7 @@ import {
   writeTaskRecordOnDisk,
   writeUsageOnDisk,
   type LifecycleRecord,
+  type RepoPrepareErrorRecord,
   type TaskDiskRecord,
 } from "./task-store.js";
 import { emptyExecutionLedger, type ExecutionLedgerRecord } from "../main/execution-ledger.js";
@@ -123,6 +140,8 @@ import { TaskSchedules, type SaveScheduleInput, type SaveScheduleResult, type Sc
 import { PiSdkTextKernel } from "./sdk-text-kernel.js";
 import { SdkTextKernelRouter } from "./sdk-kernel-router.js";
 import { SdkContextClient } from "./sdk-context-client.js";
+import { SdkAgentToolBroker, derivedPrimaryCheckouts, type SdkAgentServiceHost, type SdkAgentToolScope } from "./sdk-agent-tool-broker.js";
+import type { ServiceTemplateEditPort } from "../rpc/service-template-request.js";
 import type { ExplicitTextProvider } from "./explicit-text-provider.js";
 import {
   PI_USAGE_GROUP_LABELS,
@@ -197,6 +216,116 @@ export function isPathInsideTask(target: string | null, taskDir: string): boolea
   const resolved = (absolute.startsWith("/") ? "/" : "") + parts.join("/");
   const task = normalize(taskDir);
   return resolved === task || resolved.startsWith(`${task}/`);
+}
+
+/**
+ * Hop budget for one link-chain observation. A real task link is one hop; the
+ * budget only exists so a pathological chain cannot turn a report into
+ * unbounded syscalls, and exceeding it is named (`unknown`), never guessed.
+ */
+export const MAX_LINK_HOPS = 16;
+
+/** The observed link-target report `probeLinkTarget` answers with. */
+export interface LinkTargetProbe {
+  shape: LinkTargetObservation;
+  /** Named reason / what was really seen; the surface shows this verbatim. */
+  detail: string;
+  /** Plan-time lexical pre-check on path strings (no fs): `ok`/`nested`/`loop-risk`. */
+  lexical: "ok" | "nested" | "loop-risk";
+  /** One-hop readlink target when `sourcePath` itself is a symlink (null otherwise). */
+  linkTarget: string | null;
+  /**
+   * True when the one-hop readlink target resolves inside this task folder:
+   * callers MUST treat it as loop-risk (a link pointing back into the task
+   * would recurse on creation). Report-only.
+   */
+  linkTargetInTask: boolean;
+  /** Per-platform link-capability record: one row per release target + this Host. */
+  platforms: LinkCapabilityRow[];
+  /** The named boundary: this is a Host observation, not a real pi/model run. */
+  modelBoundary: string;
+}
+
+/**
+ * The filesystem reads one link-chain observation needs, injected so the
+ * walk's decisions (including the branches a real filesystem cannot be asked
+ * for on demand) are unit-testable; `probeLinkTarget` passes the real Node fs.
+ * `lstat` must NOT follow the last component (that is what a link is).
+ */
+export interface LinkChainReaders {
+  lstat(path: string): { isSymbolicLink(): boolean; isDirectory(): boolean };
+  readlink(path: string): string;
+  resolveTarget(current: string, target: string): string;
+}
+
+/**
+ * Walk at most `MAX_LINK_HOPS` links from `sourcePath` and NAME the shape.
+ * Read-only by construction: the readers expose `lstat`/`readlink` and nothing
+ * else, so no implementation of this function can create, repair, follow
+ * through or delete a link — it only reports what it found.
+ *
+ * A missing path is `dangling` (失效), a chain that revisits a link it already
+ * followed is `cyclic-link` (循环), a chain that ends at a directory after at
+ * least one hop is `nested-link` (嵌套: the source is itself a link), and
+ * `unknown` covers everything not established — a read error other than
+ * "missing", a chain that ends at something which is not a directory, or a
+ * chain longer than the hop budget.
+ *
+ * `nested-link`'s DETAIL may not claim more than was observed: one hop is a link
+ * that directly points at a directory, two or more hops is a link whose target is
+ * itself a link. Both are 嵌套 and neither is 失效/循环, but the two are named
+ * apart so 「来源本身是软链接」 is never stretched over a link→link chain.
+ */
+export function observeLinkChain(sourcePath: string, readers: LinkChainReaders): { shape: LinkTargetObservation; detail: string } {
+  const walked = new Set<string>();
+  let current = sourcePath;
+  for (let hops = 0; ; hops += 1) {
+    if (hops > MAX_LINK_HOPS)
+      return { shape: "unknown", detail: `链接链超过 ${MAX_LINK_HOPS} 跳，未继续跟随，形状未确定: ${current}` };
+    if (walked.has(current))
+      return { shape: "cyclic-link", detail: `链接链回到已跟随过的链接（已跟随 ${hops} 跳后回到）: ${current}` };
+    let stat: { isSymbolicLink(): boolean; isDirectory(): boolean };
+    try {
+      stat = readers.lstat(current);
+    } catch (error) {
+      const reason = describeFailure(error);
+      if (isMissingPath(error))
+        return hops === 0
+          ? { shape: "dangling", detail: `普通目录来源不存在: ${sourcePath}` }
+          : { shape: "dangling", detail: `链接目标不存在（跟随 ${hops} 跳后缺 ${current}）` };
+      return { shape: "unknown", detail: `链接目标形状无法读取（${reason}）: ${current}` };
+    }
+    if (!stat.isSymbolicLink()) {
+      if (!stat.isDirectory())
+        return { shape: "unknown", detail: `链接目标不是目录（${current}）` };
+      return hops === 0
+        ? { shape: "directory", detail: `来源是真实目录: ${current}` }
+        : hops === 1
+          ? { shape: "nested-link", detail: `来源本身是软链接，直接指向目录: ${current}（未经过第二跳链接）` }
+          : { shape: "nested-link", detail: `来源是软链接，它的目标是另一条软链接（共跟随 ${hops} 跳后到达目录 ${current}）` };
+    }
+    walked.add(current);
+    let target: string;
+    try {
+      target = readers.readlink(current);
+    } catch (error) {
+      return { shape: "unknown", detail: `链接目标不可读取（${describeFailure(error)}）: ${current}` };
+    }
+    current = readers.resolveTarget(current, target);
+  }
+}
+
+/** `EACCES: ...`: the filesystem error's named code (when it has one) plus its message. */
+function describeFailure(error: unknown): string {
+  const code = error instanceof Error ? (error as { code?: unknown }).code : undefined;
+  const message = error instanceof Error ? error.message : String(error);
+  return `${typeof code === "string" ? code : ""} ${message}`.trim();
+}
+
+/** A filesystem error that means "this path does not exist" (never "unreadable"). */
+function isMissingPath(error: unknown): boolean {
+  const code = typeof error === "object" && error !== null ? (error as { code?: unknown }).code : undefined;
+  return code === "ENOENT" || code === "ENOTDIR";
 }
 
 /**
@@ -397,6 +526,92 @@ export interface ProvisionTaskResult {
   plan: ProvisionPlan;
 }
 
+/**
+ * [PiDock 03] (#6) resume input for a partial multi-repo prepare. Selections
+ * come from the task record, not the request: resume never adds a repo the
+ * task did not already select.
+ */
+export interface ResumeAppendInput {
+  /** Source checkout per repoDir for the fetch/branch/worktree ops. Required
+   *  for every retry repo (a relative/empty cwd fails closed). */
+  mainCheckouts?: Readonly<Record<string, string>>;
+  /**
+   * Task branch override; it must equal the recorded task branch. A
+   * differing branch is refused: the classification compares the worktree
+   * against the RECORDED branch, so resuming on another branch could only
+   * produce a worktree the next read calls `failed`/held. An unsafe value
+   * (leading `-` / invalid ref characters) is refused as `invalid-payload`.
+   */
+  branch?: string;
+  /**
+   * Optional freshly fetched commit per repoDir (caller scan). Only used to
+   * detect a moved/deleted remote branch: a value that differs from the
+   * repo's recorded fixed baseline fails closed. A resume does NOT require
+   * fetch evidence — it plans from the recorded fixed commit (a resume never
+   * re-pins a baseline), unlike `appendRepos` which fails closed on a missing
+   * `fetchedCommits` entry. The plan still emits a real `git fetch` per repo,
+   * so a deleted remote fails at that op.
+   */
+  fetchedCommits?: Readonly<Record<string, string>>;
+  /**
+   * Caller-scanned conflict inputs (REQUIRED, never defaulted): the task-dir
+   * listing + `git worktree list` scan runs caller-side; omitting them would
+   * silently disable `checkRepoConflicts`, so an omitted list fails closed.
+   * On the renderer route main derives and overwrites them (takenPaths,
+   * branchesInUse and the source checkouts) — see `task-prep-scan.ts` — while
+   * the requirement itself is unchanged.
+   */
+  takenPaths?: readonly string[];
+  branchesInUse?: readonly string[];
+  /**
+   * Per-repo errors the caller observed on its previous execution attempt,
+   * keyed by repoDir. Persisted on the task record so an app restart still
+   * tells `pending` from `failed` with the real per-repo reason.
+   */
+  prepareErrors?: Readonly<Record<string, { code: string; message: string }>>;
+}
+
+export interface ResumeAppendResult {
+  record: TaskDiskRecord;
+  /** Ops for the retry set only; an empty plan means nothing was unfinished. */
+  plan: ProvisionPlan;
+  /** Per-repo classification with the real evidence and reason. */
+  outcomes: RepoPrepareOutcome[];
+  created: string[];
+  pending: string[];
+  failed: { repoDir: string; error: MultiRepoError }[];
+  /** Unfinished repos with no worktree on disk and a recorded baseline: safe
+   *  to create, so planned. */
+  retry: string[];
+  /** Repos a resume must not plan: a path already exists at the wanted
+   *  worktree dir (never taken over) or the record has no remote baseline for
+   *  the repo (nothing to plan from). Human handling. */
+  hold: string[];
+  /** True when at least one unfinished repo entered the plan. */
+  resumed: boolean;
+}
+
+/**
+ * Read-only per-repo prepare readout for the recovery UI: the same
+ * evidence-based classification `resumeAppend` uses, but nothing is planned
+ * or written and the caller-scanned conflict gate is not needed (there is no
+ * write). `canResume` means at least one unfinished repo has no worktree on
+ * disk AND a recorded remote baseline, so a resume write can create it
+ * without taking anything over — the read never offers a resume the write
+ * would refuse.
+ */
+export interface TaskPrepareStatusResult {
+  outcomes: RepoPrepareOutcome[];
+  created: string[];
+  pending: string[];
+  failed: { repoDir: string; error: MultiRepoError }[];
+  /** Same set `resumeAppend` would plan (see `ResumeAppendResult.retry`). */
+  retry: string[];
+  /** Same set `resumeAppend` must not plan (see `ResumeAppendResult.hold`). */
+  hold: string[];
+  canResume: boolean;
+}
+
 export interface HostTurnResult {
   state: string;
   callId: string;
@@ -483,6 +698,8 @@ export interface HostApprovalListing {
   contentVersion: string;
   status: string;
   executed: boolean;
+  /** The concrete operation when `target` cannot state it (an `exec.run` command). */
+  operation?: string;
 }
 
 /**
@@ -510,6 +727,62 @@ export class TaskWorkspaceHost {
   private sdkShutdown: Promise<void> | undefined;
   private sdkConfiguring: Promise<{ generation: number }> | undefined;
   private sdkDisposalFailed = false;
+  /**
+   * [PiDock 02m] #5: the only code that executes an Agent tool. Created lazily
+   * so it reads the constructor-assigned task identity, and handed to the
+   * isolated model context, so every tool call the Agent makes is decided and
+   * performed here (see the module comment of `sdk-agent-tool-broker.ts`).
+   */
+  private sdkToolBroker: SdkAgentToolBroker | undefined;
+  private get sdkTools(): SdkAgentToolBroker {
+    return (this.sdkToolBroker ??= new SdkAgentToolBroker({
+      sessionKnown: (sessionId) => this.channels.has(sessionId) || this.store.readSession(this.taskDir, sessionId) !== null,
+      channel: (sessionId) => this.openSession(sessionId),
+      persist: (sessionId) => { this.store.writeSession(this.taskDir, this.openSession(sessionId).snapshot()); },
+      write: {
+        claimWrite: (sessionId, permission, intent) => this.claimWrite(sessionId, permission, intent),
+        releaseWrite: (claimId) => this.releaseWrite(claimId),
+      },
+      scope: () => this.sdkToolScope(),
+      resolveRealPath: (path) => this.resolveRealPath(path),
+      // [PiDock 04] #7 box 5: the Agent's service tools read and control this
+      // task's REAL services through the Host-owned runtime and driver (`host.ts`
+      // hands the same pair to `task/serviceStatus`/`task/controlService`). A
+      // Host constructed without that surface refuses every service tool.
+      services: () => this.agentServices(),
+      templates: () => this.templateEdits(),
+      closing: () => this.executionClosing || this.sdkDisposalFailed,
+    }));
+  }
+
+  /**
+   * The tool boundary of this task ([PiDock 02m] #5): one worktree per repo of
+   * the task record, never the original checkout. The primary checkout is not
+   * persisted on the record, so it is derived from each worktree's own
+   * `gitdir:` pointer (`derivedPrimaryCheckouts`) instead of assumed.
+   */
+  private sdkToolScope(): SdkAgentToolScope {
+    const record = this.store.readTask(this.taskDir);
+    const taskDir = this.taskDir.replace(/[\\/]+$/, "");
+    const worktrees = (record?.repos ?? []).map((repoDir) => ({ repoDir, path: `${taskDir}/${repoDir}` }));
+    // [PiDock 03] #6: a plain-directory link is a shared, non-isolated view of
+    // its original, reachable only through its stable in-task link name. The
+    // broker confines every read/write to the recorded original under that
+    // name, so the Agent sees the same files the user confirmed for sharing.
+    const sharedDirs = (record?.dirLinks ?? []).map((link) => ({
+      linkName: link.linkName,
+      path: `${taskDir}/${link.linkName}`,
+      sourcePath: link.sourcePath,
+    }));
+    return {
+      taskDir: this.taskDir,
+      taskRoot: parentDirOf(this.taskDir),
+      worktrees,
+      sharedDirs,
+      primaryCheckouts: derivedPrimaryCheckouts(worktrees.map((worktree) => worktree.path)),
+      assertProtected: (path) => { this.protection?.assert(path); },
+    };
+  }
 
   /**
    * #43/#44 Host-internal seam. Until #46 configures an explicit Provider the
@@ -518,7 +791,16 @@ export class TaskWorkspaceHost {
    */
   sdkTextKernel(): SdkTextKernelRouter {
     this.sdkText ??= this.sdkKernelFactory(this.taskId, this.taskDir);
-    return this.sdkRouter ??= new SdkTextKernelRouter(this.sdkText, this.sdkShutdown || this.sdkDisposalFailed ? undefined : this.sdkContext ?? undefined, this.executions);
+    return this.sdkRouter ??= new SdkTextKernelRouter(
+      this.sdkText,
+      this.sdkShutdown || this.sdkDisposalFailed ? undefined : this.sdkContext ?? undefined,
+      this.executions,
+      (sessionId) => this.adoptModelSession(sessionId),
+      // [PiDock 02m] #5: a turn cancel (SDK abort) must also withdraw a tool
+      // call parked on the Host broker; the abort alone cannot unblock it and a
+      // later approve must not run a command for a turn that was stopped.
+      (sessionId) => { this.sdkToolBroker?.cancelSession(sessionId); },
+    );
   }
 
   /**
@@ -554,6 +836,9 @@ export class TaskWorkspaceHost {
         task: { taskId: this.taskId, taskDir: this.taskDir },
         config: provider.config,
         credential: provider.credential,
+        // [PiDock 02m] #5: the Agent's tool calls are executed and decided by
+        // this Host, never inside the isolated model context.
+        toolHost: this.sdkTools,
         ...(provider.workspaceId === undefined ? {} : { workspaceId: provider.workspaceId }),
       });
       try { await context.open("main"); }
@@ -565,6 +850,17 @@ export class TaskWorkspaceHost {
       this.sdkContext = context;
     }
     return { generation: this.sdkProviderGeneration };
+  }
+
+  /**
+   * [PiDock 02m] #5: the Host adopts the session a model turn belongs to before
+   * the turn starts, so its permission tier (persisted, `default` for a new
+   * session) is real before the Agent's first tool runs and the session is
+   * addressable by the tool broker.
+   */
+  adoptModelSession(sessionId: string): void {
+    if (this.executionClosing) throw Error("task-host-closing");
+    this.openSession(sessionId);
   }
 
   /** True when this task currently has an isolated model context. */
@@ -657,6 +953,20 @@ export class TaskWorkspaceHost {
     /** Injectable so the Host's Provider lifecycle is testable without spawning a worker. */
     private readonly sdkContextFactory: (options: ConstructorParameters<typeof SdkContextClient>[0]) => SdkContextClient = (options) => new SdkContextClient(options),
     private readonly protection?: TaskPathProtection,
+    /**
+     * The task's real service surface for the Agent tools ([PiDock 04] #7 box
+     * 5). `host.ts` hands in the same runtime/driver/owner check the
+     * `task/registerService|serviceStatus|controlService` ops use; absent
+     * keeps every Agent service tool fail-closed.
+     */
+    private readonly agentServices: () => SdkAgentServiceHost | undefined = () => undefined,
+    /**
+     * The shared-template channel for the Agent's template tool ([PiDock 04] #7
+     * box 6). `host.ts` hands in the parent-port client that asks MAIN (the
+     * catalog store's owner) for the review and for the write; absent keeps the
+     * template tool refused by name with nothing read or written.
+     */
+    private readonly templateEdits: () => ServiceTemplateEditPort | undefined = () => undefined,
   ) {
     if (taskId.trim().length === 0) throw new Error("taskId must be non-empty");
     if (taskDir.trim().length === 0) throw new Error("taskDir must be non-empty");
@@ -1073,9 +1383,13 @@ export class TaskWorkspaceHost {
   private executionClosing = false;
   private disposal: Promise<void> | undefined;
 
-  /** Freeze new execution/claims, while allowing admitted work to settle. */
+  /**
+   * Freeze new execution/claims, while allowing admitted work to settle.
+   */
   sealExecution(): void {
     this.executionClosing = true;
+    // No tool call may stay parked on an approval or start an effect after this.
+    this.sdkToolBroker?.close();
     this.sdkContext?.seal();
     for (const channel of this.channels.values()) channel.sealExecution();
   }
@@ -1196,8 +1510,16 @@ export class TaskWorkspaceHost {
     if (!resolved.ok) throw new Error(`${resolved.error.code}: ${resolved.error.message}`);
     const branched = buildTaskBranch(input.dirId, input.branch);
     if (!branched.ok) throw new Error(`${branched.error.code}: ${branched.error.message}`);
-    const pinned = pinBaseline(input.remoteBranch, input.fetchedCommit);
-    if (!pinned.ok) throw new Error(`${pinned.error.code}: ${pinned.error.message} (form kept, retry fetch)`);
+    const hasRepos = (input.repoSelections && input.repoSelections.length > 0) || (input.repos && input.repos.length > 0);
+    const hasPlainDirs = input.plainDirs && input.plainDirs.length > 0;
+    let pinned: { ok: true; remoteBranch: string; commit: string };
+    if (hasRepos || !hasPlainDirs || (input.remoteBranch && input.remoteBranch.length > 0) || (input.fetchedCommit && input.fetchedCommit.length > 0)) {
+      const pinResult = pinBaseline(input.remoteBranch ?? "", input.fetchedCommit ?? "");
+      if (!pinResult.ok) throw new Error(`${pinResult.error.code}: ${pinResult.error.message} (form kept, retry fetch)`);
+      pinned = pinResult;
+    } else {
+      pinned = { ok: true, remoteBranch: "", commit: "" };
+    }
     // #6 per-repo sources (optional): validate selections, pin every repo
     // (all-success gate), persist `repoSources`. The pinned commits ride
     // `fetchedCommits` only; a missing per-repo entry is `fetch-failed`
@@ -1243,7 +1565,12 @@ export class TaskWorkspaceHost {
       }
       linkSnapshots = [];
       for (const entry of input.plainDirs) {
-        const snap = snapshotPlainDirLink({ directoryId: entry.directoryId, sourcePath: entry.sourcePath, now: input.now ?? this.now() });
+        const snap = snapshotPlainDirLink({
+          directoryId: entry.directoryId,
+          sourcePath: entry.sourcePath,
+          now: input.now ?? this.now(),
+          identity: this.plainDirSourceIdentity(entry.sourcePath),
+        });
         if (!snap.ok) {
           const error: MultiRepoError = snap.error;
           throw new Error(`${error.code}: ${error.message} (form kept)`);
@@ -1284,6 +1611,9 @@ export class TaskWorkspaceHost {
               directoryId: link.directoryId,
               sourcePath: link.sourcePath,
               snapshotAt: link.snapshotAt,
+              ...(link.sourceDevice !== undefined && link.sourceInode !== undefined
+                ? { sourceDevice: link.sourceDevice, sourceInode: link.sourceInode }
+                : {}),
             }))
           : undefined,
       now: at,
@@ -1307,6 +1637,9 @@ export class TaskWorkspaceHost {
       }
       if (pinnedRepos === null && previous.repoSources !== undefined) record.repoSources = previous.repoSources;
       if (linkSnapshots === null && previous.dirLinks !== undefined) record.dirLinks = previous.dirLinks;
+      // #6 recovery: a re-provision must not erase a still-unresolved
+      // per-repo prepare error (resume is the only flow that clears it).
+      if (previous.repoPrepareErrors !== undefined) record.repoPrepareErrors = [...previous.repoPrepareErrors];
     }
     this.store.writeTask(this.taskDir, record);
     // Plan with real cwds via `planWorktreeCreation` (never ""): one
@@ -1365,6 +1698,8 @@ export class TaskWorkspaceHost {
      * task-dir listing + `git worktree list` scan runs caller-side;
      * omitting them would silently disable `checkRepoConflicts`, so an
      * omitted list fails closed here instead of planning against `[]`.
+     * On the renderer route main derives and overwrites them (see
+     * `task-prep-scan.ts`); the requirement itself is unchanged.
      */
     takenPaths?: readonly string[];
     branchesInUse?: readonly string[];
@@ -1394,6 +1729,13 @@ export class TaskWorkspaceHost {
     if (!batch.ok) {
       const error: MultiRepoError = batch.error;
       throw new Error(`${error.code}: ${error.message} (form kept, retry fetch)`);
+    }
+    // The branch lands in `git branch <branch> <commit>` argv; reject an
+    // unsafe override by name (a leading `-` is parsed as a git option).
+    if (input.branch !== undefined && !isSafeTaskBranchRef(input.branch)) {
+      throw new Error(
+        `invalid-payload: appendRepos 分支名不安全（不得以 - 开头或含 git 保留字符）: ${String(input.branch)}`,
+      );
     }
     const branch = input.branch ?? stored.branch;
     // Fail closed when the caller omits the conflict scan: defaulting to
@@ -1455,6 +1797,8 @@ export class TaskWorkspaceHost {
         })),
       ],
       dirLinks: stored.dirLinks !== undefined ? [...stored.dirLinks] : undefined,
+      repoPrepareErrors:
+        stored.repoPrepareErrors !== undefined ? [...stored.repoPrepareErrors] : undefined,
       now: at,
     });
     record.createdAt = stored.createdAt;
@@ -1463,33 +1807,509 @@ export class TaskWorkspaceHost {
   }
 
   /**
+   * Record-time identity of a plain-directory source: device + inode read
+   * from the REAL filesystem, never from the caller's payload, so no caller
+   * can forge the identity the append later re-verifies. Best effort: when
+   * the path cannot be read as a directory the entry stays path-only, exactly
+   * like a record written before this field existed (main already refuses an
+   * absent/non-directory source before asking the Host to record it).
+   */
+  private plainDirSourceIdentity(path: string): { device: string; inode: string } | undefined {
+    try {
+      const { lstatSync } = process.getBuiltinModule("node:fs") as typeof import("node:fs");
+      const stat = lstatSync(path, { bigint: true });
+      if (!stat.isDirectory() || stat.dev <= 0n || stat.ino <= 0n) return undefined;
+      return { device: String(stat.dev), inode: String(stat.ino) };
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * [PiDock 03] (#6) append plain directories: only directories not already in
+   * the task are snapshotted and added. Existing repos, baselines, root/dirId,
+   * and previous dirLinks are untouched and never mutated. Fail-closed against
+   * link name collisions with existing links or repo folders.
+   *
+   * The link name is always derived from the directory id here
+   * (`buildLinkName`), never taken from the caller: the stable spelling is the
+   * identity that makes a recorded link resolvable again, so a second link
+   * name could only fake an isolation the product does not provide.
+   */
+  appendDirs(input: {
+    plainDirs: readonly { directoryId: string; sourcePath: string }[];
+    now?: string;
+  }): { record: TaskDiskRecord; appended: string[]; skipped: string[] } {
+    this.protection?.assert(this.taskDir);
+    for (const entry of input.plainDirs) this.protection?.assert(entry.sourcePath);
+    const stored = this.store.readTask(this.taskDir);
+    if (!stored) throw new Error("unknown task: no task record; provision the task before appending");
+    if (stored.taskId !== this.taskId) throw new Error("task-unknown: this Host serves a different task");
+
+    const collision = checkLinkNameCollisions(input.plainDirs.map((entry) => entry.directoryId));
+    if (!collision.ok) {
+      const error: MultiRepoError = collision.error;
+      throw new Error(`${error.code}: ${error.message} (form kept)`);
+    }
+
+    const existingLinks = stored.dirLinks ?? [];
+    const existingById = new Map(existingLinks.map((link) => [link.directoryId, link]));
+    const existingByName = new Map(existingLinks.map((link) => [link.linkName, link]));
+    const existingRepos = new Set<string>(stored.repos);
+
+    const appended: PlainDirLinkSnapshot[] = [];
+    const skipped: string[] = [];
+
+    for (const entry of input.plainDirs) {
+      const linkName = buildLinkName(entry.directoryId);
+      if (existingRepos.has(linkName)) {
+        throw new Error(`duplicate-repo: 普通目录链接名 ${linkName} 与现有仓库文件夹冲突`);
+      }
+      const byName = existingByName.get(linkName);
+      if (byName && byName.directoryId !== entry.directoryId) {
+        throw new Error(`duplicate-repo: 普通目录链接名冲突: ${entry.directoryId} 与 ${byName.directoryId} 均映射到 ${linkName} (form kept)`);
+      }
+      const existing = existingById.get(entry.directoryId);
+      if (existing) {
+        if (existing.sourcePath !== entry.sourcePath) {
+          throw new Error(`duplicate-repo: 普通目录 ${entry.directoryId} 已存在但指向不同路径`);
+        }
+        skipped.push(entry.directoryId);
+        continue;
+      }
+      const snap = snapshotPlainDirLink({
+        directoryId: entry.directoryId,
+        sourcePath: entry.sourcePath,
+        now: input.now ?? this.now(),
+        identity: this.plainDirSourceIdentity(entry.sourcePath),
+      });
+      if (!snap.ok) {
+        const error: MultiRepoError = snap.error;
+        throw new Error(`${error.code}: ${error.message} (form kept)`);
+      }
+      appended.push(snap.snapshot);
+    }
+
+    const at = input.now ?? this.now();
+    const record = buildTaskDiskRecord({
+      taskId: this.taskId,
+      name: stored.name,
+      dirId: stored.dirId,
+      branch: stored.branch,
+      root: stored.root,
+      taskDir: this.taskDir,
+      remoteBranch: stored.remoteBranch,
+      baseCommit: stored.baseCommit,
+      repos: stored.repos,
+      repoSources: stored.repoSources,
+      dirLinks: [...existingLinks, ...appended],
+      repoPrepareErrors: stored.repoPrepareErrors,
+      now: at,
+    });
+    record.createdAt = stored.createdAt;
+    this.store.writeTask(this.taskDir, record);
+    return {
+      record,
+      appended: appended.map((link) => link.directoryId),
+      skipped,
+    };
+  }
+
+  /** Selected repo dirs of a stored record; fail closed when none exist. */
+  private selectedRepoDirs(stored: TaskDiskRecord): string[] {
+    const selected = [...stored.repos];
+    if (selected.length === 0) throw new Error("unknown repo: 任务记录中没有已选仓库，无法恢复多仓库准备");
+    return selected;
+  }
+
+  /** The fixed per-repo baselines recorded at plan time, keyed by repoDir. */
+  private recordedRepoSources(
+    stored: TaskDiskRecord,
+  ): Map<string, NonNullable<TaskDiskRecord["repoSources"]>[number]> {
+    const recorded = new Map<string, NonNullable<TaskDiskRecord["repoSources"]>[number]>();
+    for (const source of stored.repoSources ?? []) recorded.set(source.repoDir, source);
+    return recorded;
+  }
+
+  /**
+   * Persisted per-repo errors (they keep a repo `failed` across a restart)
+   * merged with the caller's latest observation, which wins for this attempt.
+   * A caller-supplied repo the task never selected fails closed.
+   */
+  private reportedRepoErrors(
+    stored: TaskDiskRecord,
+    extra?: Readonly<Record<string, { code: string; message: string }>>,
+  ): Map<string, MultiRepoError> {
+    const reported = new Map<string, MultiRepoError>();
+    for (const error of stored.repoPrepareErrors ?? []) {
+      // A persisted record can only carry a code this Host wrote, but fail
+      // closed by name on a corrupt/foreign code instead of trusting a cast.
+      if (!isMultiRepoErrorCode(error.code)) {
+        throw new Error(`invalid-payload: task record carries an unknown repo error code: ${error.code}`);
+      }
+      reported.set(error.repoDir, {
+        code: error.code,
+        repoDir: error.repoDir,
+        message: error.message,
+      });
+    }
+    for (const [repoDir, error] of Object.entries(extra ?? {})) {
+      if (!stored.repos.includes(repoDir)) throw new Error(`unknown repo: ${repoDir} 不在任务已选仓库中`);
+      if (
+        typeof error !== "object" ||
+        error === null ||
+        typeof error.code !== "string" ||
+        error.code.length === 0 ||
+        typeof error.message !== "string" ||
+        error.message.length === 0
+      ) {
+        throw new Error("invalid-payload: prepareErrors entries must be {code, message} strings");
+      }
+      if (!isMultiRepoErrorCode(error.code)) {
+        throw new Error(`invalid-payload: prepareErrors code is not a known repo error code: ${error.code}`);
+      }
+      reported.set(repoDir, { code: error.code, repoDir, message: error.message });
+    }
+    return reported;
+  }
+
+  /**
+   * Classify every selected repo from the REAL worktree on disk. Read-only:
+   * the conflict gate is not needed here because nothing is planned or
+   * written (the resume write carries the gate).
+   */
+  private classifyRepoPrepare(input: {
+    stored: TaskDiskRecord;
+    selected: readonly string[];
+    recorded: ReadonlyMap<string, NonNullable<TaskDiskRecord["repoSources"]>[number]>;
+    reportedErrors: ReadonlyMap<string, MultiRepoError>;
+  }): {
+    dirs: Record<string, string>;
+    present: Set<string>;
+    outcomes: RepoPrepareOutcome[];
+    segmented: ReturnType<typeof segmentPrepareOutcomes>;
+    retry: string[];
+    hold: string[];
+  } {
+    const { stored, selected, recorded, reportedErrors } = input;
+    const dirs = previewMixedTaskPaths(this.taskDir, selected, []).worktrees;
+    const { lstatSync } = process.getBuiltinModule("node:fs") as typeof import("node:fs");
+    const probe = createNodeRepoProbe();
+    const present = new Set<string>();
+    const outcomes: RepoPrepareOutcome[] = [];
+    for (const repoDir of selected) {
+      const worktreeDir = dirs[repoDir]!;
+      let presentOnDisk = false;
+      try {
+        lstatSync(worktreeDir);
+        presentOnDisk = true;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      if (presentOnDisk) present.add(repoDir);
+      const baseCommit = recorded.get(repoDir)?.baseCommit ?? (selected.length === 1 ? stored.baseCommit : "");
+      const evidence: RepoPrepareEvidence = {
+        repoDir,
+        worktreePresent: presentOnDisk,
+        // A repo the record lists without a recorded remote baseline cannot
+        // be planned by a resume (`resumeAppend` refuses it), so the READ
+        // must report it needs human handling instead of offering a resume.
+        recordedBaselineMissing: !recorded.has(repoDir),
+      };
+      if (presentOnDisk) {
+        const observed = observeRecordedRepo({ repoDir: worktreeDir, baseCommit }, probe);
+        if (observed === undefined) {
+          evidence.worktreeMatchesPinnedCommit = false;
+          evidence.mismatchReason = `路径已存在但不是可验证的 Git 工作副本: ${worktreeDir}`;
+        } else if (observed.isWorktree !== true) {
+          evidence.worktreeMatchesPinnedCommit = false;
+          evidence.mismatchReason = `路径 ${worktreeDir} 存在但不是本任务的 linked worktree，不会自动接管`;
+        } else if (observed.branch !== stored.branch) {
+          evidence.worktreeMatchesPinnedCommit = false;
+          evidence.mismatchReason = `工作副本 HEAD 不在任务分支 ${stored.branch}（实际 ${observed.branch ?? "detached"}）`;
+        } else if (observed.baseCommitReachable !== true) {
+          evidence.worktreeMatchesPinnedCommit = false;
+          evidence.mismatchReason =
+            baseCommit.length > 0
+              ? `工作副本未包含固定提交 ${baseCommit}`
+              : "工作副本缺少已记录的固定提交，无法确认来源";
+        } else {
+          evidence.worktreeMatchesPinnedCommit = true;
+        }
+      } else {
+        const previousError = reportedErrors.get(repoDir);
+        if (previousError) evidence.previousError = previousError;
+      }
+      outcomes.push(classifyRepoPrepareState(evidence));
+    }
+    // `segmentPrepareOutcomes` picks created vs pending vs failed from the
+    // real evidence; the must-hold set separates what a resume may create
+    // (worktree absent AND the record has its remote baseline) from what it
+    // must leave alone: a present path (never ours to take over) or a repo
+    // with no recorded baseline (nothing to plan from).
+    const segmented = segmentPrepareOutcomes(outcomes);
+    const mustHold = new Set([...present, ...selected.filter((repoDir) => !recorded.has(repoDir))]);
+    const { retry, hold } = resumeRepoSet(outcomes, mustHold);
+    return { dirs, present, outcomes, segmented, retry, hold };
+  }
+
+  /**
+   * [PiDock 03] (#6) read-only per-repo prepare readout. Same evidence as
+   * `resumeAppend` but writes nothing and needs no conflict scan, so the
+   * renderer can show created / pending / failed with the real reason
+   * without being able to supply gate inputs it cannot scan.
+   */
+  prepareStatus(): TaskPrepareStatusResult {
+    this.protection?.assert(this.taskDir);
+    const stored = this.store.readTask(this.taskDir);
+    if (!stored) throw new Error("unknown task: no task record; provision the task before reading prepare state");
+    if (stored.taskId !== this.taskId) throw new Error("task-unknown: this Host serves a different task");
+    const selected = this.selectedRepoDirs(stored);
+    const classified = this.classifyRepoPrepare({
+      stored,
+      selected,
+      recorded: this.recordedRepoSources(stored),
+      reportedErrors: this.reportedRepoErrors(stored),
+    });
+    return {
+      outcomes: classified.outcomes,
+      created: classified.segmented.created,
+      pending: classified.segmented.pending,
+      failed: classified.segmented.failed,
+      retry: classified.retry,
+      hold: classified.hold,
+      canResume: classified.retry.length > 0,
+    };
+  }
+
+  /**
+   * [PiDock 03] (#6) resume a partial multi-repo prepare. `appendRepos`
+   * filters against the stored `repos` list and cannot tell `pending` from
+   * `failed` inside the unfinished set; this entry point classifies each
+   * selected repo from the REAL worktree on disk and retries only the
+   * unfinished ones.
+   *
+   * Evidence per state (`classifyRepoPrepareState`): `created` needs the
+   * worktree dir present AND a read-only git probe confirming a linked
+   * worktree on the task branch with the pinned commit reachable — never
+   * claimed from the record alone; `pending` is a recorded selection WITH a
+   * recorded remote baseline, no worktree and no reported error (which git
+   * op ran, if any, is unknown); `failed` is a present-but-not-ours path
+   * (held, never overwritten), an absent worktree with a previously reported
+   * per-repo error (kept with its real reason), or a repo the record names
+   * without a remote baseline (held: nothing to plan from, so a resume
+   * degrades to human handling rather than a refusal).
+   *
+   * Reuses the existing gates rather than duplicating them:
+   * `validateRepoSelections` + `pinRepoBaselines` (all-success, no stale
+   * refs) and the caller-scanned `takenPaths`/`branchesInUse` conflict gate
+   * (REQUIRED, fail-closed when omitted) with `checkRepoConflicts`
+   * reporting. Precedence: on the renderer route MAIN is the authoritative
+   * producer of that scan (it derives it from the resolved task folder and
+   * each recorded repo's source checkout and overwrites a page-supplied
+   * value); a caller reaching the Host directly still supplies its own.
+   * Only the retry set enters the plan, so a created worktree is
+   * never re-created, reset, refetched or overwritten: its user edits are
+   * byte-identical afterwards.
+   *
+   * Baseline rule (deliberate relaxation): a resume plans from each repo's
+   * RECORDED fixed baseline and does NOT require fresh-fetch evidence (unlike
+   * `appendRepos`, which fails closed on a missing `fetchedCommits` entry).
+   * A decomposed caller MAY supply `fetchedCommits[repoDir]`; a value that
+   * disagrees with the recorded baseline is refused (`fetch-failed`), so a
+   * moved remote cannot silently re-pin. The plan still emits a real
+   * `git fetch` per repo, so a deleted remote fails at that op. Recovery
+   * preserves recorded baselines even when the remote branch has since
+   * disappeared, matching the existing fetch-gate precedent.
+   *
+   * Partial-state safety: a prepare interrupted BETWEEN its git ops can
+   * leave the task branch created but the worktree absent. A resume probes
+   * the target ref per checkout (`observeBranchRef`, fixed argv) after the
+   * checkout is validated: an absent ref keeps the 3-op plan; a ref present
+   * at the recorded baseline emits only `fetch` + `worktree add` (no
+   * redundant `git branch`, which fails hard on an existing ref); a ref
+   * present at a DIFFERENT commit, or an uncontrollable probe, refuses with
+   * the named manual-recovery reason instead of returning a doomed plan.
+   */
+  resumeAppend(input: ResumeAppendInput = {}): ResumeAppendResult {
+    this.protection?.assert(this.taskDir);
+    for (const source of Object.values(input.mainCheckouts ?? {})) this.protection?.assert(source);
+    const stored = this.store.readTask(this.taskDir);
+    if (!stored) throw new Error("unknown task: no task record; provision the task before resuming");
+    if (stored.taskId !== this.taskId) throw new Error("task-unknown: this Host serves a different task");
+    // The branch lands in `git branch <branch> <commit>` argv; reject an
+    // unsafe override by name before the equality check (a leading `-` is
+    // parsed as a git option).
+    if (input.branch !== undefined && !isSafeTaskBranchRef(input.branch)) {
+      throw new Error(
+        `invalid-payload: resumeAppend 分支名不安全（不得以 - 开头或含 git 保留字符）: ${String(input.branch)}`,
+      );
+    }
+    if (input.branch !== undefined && input.branch !== stored.branch) {
+      throw new Error(
+        `invalid-payload: resumeAppend 分支覆盖 ${input.branch} 与任务记录的分支 ${stored.branch} 不一致，` +
+          "拒绝在非任务分支上恢复",
+      );
+    }
+    const selected = this.selectedRepoDirs(stored);
+    const recorded = this.recordedRepoSources(stored);
+    const reportedErrors = this.reportedRepoErrors(stored, input.prepareErrors);
+    const { dirs, outcomes, segmented, retry, hold } = this.classifyRepoPrepare({
+      stored,
+      selected,
+      recorded,
+      reportedErrors,
+    });
+    const branch = input.branch ?? stored.branch;
+    const checkouts: Record<string, string> = {};
+    const selections: RepoSelection[] = [];
+    const pinnedFetched: Record<string, string> = {};
+    for (const repoDir of retry) {
+      const source = recorded.get(repoDir);
+      if (!source) throw new Error(`unknown repo: 仓库 ${repoDir} 缺少记录的远程基线，无法恢复，请人工处理`);
+      const mainCheckoutDir = input.mainCheckouts?.[repoDir];
+      if (typeof mainCheckoutDir !== "string" || !isAbsoluteTaskRoot(mainCheckoutDir)) {
+        throw new Error(`repo-unusable: 仓库 ${repoDir} 的来源检出不可用: ${String(mainCheckoutDir)}`);
+      }
+      checkouts[repoDir] = mainCheckoutDir.trim();
+      selections.push({ repoDir, remote: source.remote, remoteBranch: source.remoteBranch, mainCheckoutDir });
+      // The baseline is already fixed on the record: a resume never re-pins
+      // it. A supplied fresh fetch must equal it, so a moved/deleted remote
+      // branch fails closed instead of creating from a different baseline.
+      const fetched = input.fetchedCommits?.[repoDir];
+      if (fetched !== undefined && fetched.trim().toLowerCase() !== source.baseCommit.trim().toLowerCase()) {
+        throw new Error(
+          `fetch-failed: 仓库 ${repoDir} 远程基线已变化（${fetched.trim()} ≠ ${source.baseCommit}），不使用与记录不一致的基线 (form kept, retry fetch)`,
+        );
+      }
+      pinnedFetched[repoDir] = source.baseCommit;
+    }
+    const validated = validateRepoSelections(selections);
+    if (!validated.ok) {
+      const error: MultiRepoError = validated.error;
+      throw new Error(`${error.code}: ${error.message} (form kept, retry fetch)`);
+    }
+    const batch = pinRepoBaselines(validated.selections, pinnedFetched);
+    if (!batch.ok) {
+      const error: MultiRepoError = batch.error;
+      throw new Error(`${error.code}: ${error.message} (form kept, retry fetch)`);
+    }
+    // Fail closed when the caller omits the conflict scan: defaulting to
+    // `[]` here would plan worktrees without any path/branch check.
+    if (input.takenPaths === undefined || input.branchesInUse === undefined) {
+      throw new Error(
+        "invalid-payload: resumeAppend requires caller-scanned takenPaths + branchesInUse " +
+          "(task-dir listing + `git worktree list`); refusing to plan without the conflict gate",
+      );
+    }
+    const conflict = checkRepoConflicts({
+      wantedWorktreeDirs: retry.map((repoDir) => dirs[repoDir]!),
+      takenPaths: input.takenPaths,
+      branchesInUse: input.branchesInUse,
+      wantedBranch: branch,
+    });
+    if (!conflict.ok) {
+      const error: MultiRepoError = conflict.error;
+      throw new Error(`${error.code}: ${error.message}`);
+    }
+    // P1: a prepare interrupted BETWEEN its git ops can leave the task branch
+    // created but the worktree absent. Probe each target checkout's ref
+    // (fixed argv, after the checkout was validated): absent -> create it;
+    // present at the recorded baseline -> reuse it (omit the redundant
+    // `git branch` op, which fails hard on an existing ref); present at a
+    // different commit, or uncontrollable -> refuse by name instead of
+    // emitting a doomed plan.
+    const probe = createNodeRepoProbe();
+    const reuseBranch: Record<string, boolean> = {};
+    for (const repoDir of retry) {
+      const source = recorded.get(repoDir);
+      if (!source) throw new Error(`unknown repo: 仓库 ${repoDir} 缺少记录的远程基线，无法恢复，请人工处理`);
+      const decision = planResumeBranch({
+        observed: observeBranchRef(checkouts[repoDir]!, branch, probe),
+        recordedCommit: source.baseCommit,
+      });
+      if (!decision.ok) {
+        throw new Error(`repo-unusable: 仓库 ${repoDir} ${decision.reason}`);
+      }
+      reuseBranch[repoDir] = decision.reuseExistingBranch;
+    }
+    const plan: ProvisionPlan = { mainCheckoutDir: stored.root, ops: [] };
+    for (const repo of batch.pinned) {
+      const repoPlan = planWorktreeCreation({
+        taskDir: this.taskDir,
+        mainCheckoutDir: checkouts[repo.repoDir] ?? stored.root,
+        repoDir: repo.repoDir,
+        remote: repo.remote,
+        remoteBranch: repo.remoteBranch,
+        commit: repo.commit,
+        branch,
+        reuseExistingBranch: reuseBranch[repo.repoDir] === true,
+      });
+      plan.ops.push(...repoPlan.ops);
+    }
+    assertProvisionPlanSafe(plan);
+    // Persist only the still-unresolved per-repo errors: a `created` repo
+    // clears its stale entry, a `pending` one has none. This is what makes a
+    // later resume (after a restart) tell `failed` from `pending`.
+    const nextErrors: RepoPrepareErrorRecord[] = [];
+    for (const outcome of outcomes) {
+      if (outcome.status === "failed" && outcome.error) {
+        nextErrors.push({ repoDir: outcome.repoDir, code: outcome.error.code, message: outcome.error.message });
+      }
+    }
+    const record = buildTaskDiskRecord({
+      taskId: stored.taskId,
+      name: stored.name,
+      dirId: stored.dirId,
+      branch: stored.branch,
+      root: stored.root,
+      taskDir: stored.taskDir,
+      remoteBranch: stored.remoteBranch,
+      baseCommit: stored.baseCommit,
+      repos: [...stored.repos],
+      repoSources: stored.repoSources !== undefined ? [...stored.repoSources] : undefined,
+      dirLinks: stored.dirLinks !== undefined ? [...stored.dirLinks] : undefined,
+      repoPrepareErrors: nextErrors.length > 0 ? nextErrors : undefined,
+      now: this.now(),
+    });
+    record.createdAt = stored.createdAt;
+    this.store.writeTask(this.taskDir, record);
+    return {
+      record,
+      plan,
+      outcomes,
+      created: segmented.created,
+      pending: segmented.pending,
+      failed: segmented.failed,
+      retry,
+      hold,
+      resumed: retry.length > 0,
+    };
+  }
+
+  /**
    * [PiDock 03] (#6) plain-dir link target probe (Host-side, needs fs).
    * Lexical `loop-risk`/`nested` classification lives in
    * `classifyLinkTarget` (unit-tested without fs); this probe answers the
-   * remaining question: does the source still exist, and is it a symlink
-   * loop back into the task? Never creates or follows links beyond one
-   * `readlink` — report only, no takeover.
+   * question that needs the real filesystem: which shape does the link's
+   * target have — a real directory, 失效 (dangling), 嵌套 (the source is
+   * itself a link), 循环 (the chain returns to a link it already followed),
+   * or a NAMED unknown when the shape could not be read. Bounded and
+   * read-only: `lstat`/`readlink` metadata only, at most `MAX_LINK_HOPS`
+   * hops, and the probe never creates, repairs, follows-through or deletes
+   * anything (a `cyclic-link` or `dangling` source is REPORTED, never fixed).
+   *
+   * This is the raw observation; the op reaches it only through
+   * `probeDeclaredLinkSource` below, which first checks the caller-named path
+   * against this task's OWN recorded plain-directory sources.
    */
-  probeLinkTarget(sourcePath: string): {
-    shape: "ok" | "dead";
-    detail: string;
-    /** Lexical classification (no fs): `ok`/`nested`/`loop-risk`. */
-    lexical: "ok" | "nested" | "loop-risk";
-    /** One-hop readlink target when `sourcePath` itself is a symlink (null otherwise). */
-    linkTarget: string | null;
-    /**
-     * True when the one-hop readlink target resolves inside this task
-     * folder: callers MUST treat it as loop-risk (a link pointing back
-     * into the task would recurse on creation). Report-only, never
-     * followed beyond the single `readlink` hop above.
-     */
-    linkTargetInTask: boolean;
-  } {
+  probeLinkTarget(sourcePath: string): LinkTargetProbe {
     // Lazy Node fs import keeps the class transport-free for tests that
-    // never probe; dynamic require is avoided (ESM) via createRequire.
-    const { existsSync, lstatSync, readlinkSync } = process.getBuiltinModule("node:fs") as typeof import("node:fs");
-    // Report-only: lexical shape rides the payload alongside the fs
-    // answer (one `readlink` hop max, never followed beyond it).
+    // never probe.
+    const { lstatSync, readlinkSync } = process.getBuiltinModule("node:fs") as typeof import("node:fs");
+    const { dirname, isAbsolute, resolve } = process.getBuiltinModule("node:path") as typeof import("node:path");
+    // Report-only: the plan-time lexical pre-check rides the payload beside
+    // the observation, so the two can never be confused for each other.
     const lexical = classifyLinkTarget(sourcePath, this.taskDir, []);
     let linkTarget: string | null = null;
     try {
@@ -1500,9 +2320,39 @@ export class TaskWorkspaceHost {
       linkTarget = null;
     }
     const linkTargetInTask = isPathInsideTask(linkTarget, this.taskDir);
-    if (!existsSync(sourcePath))
-      return { shape: "dead", detail: `普通目录来源不存在: ${sourcePath}`, lexical, linkTarget, linkTargetInTask };
-    return { shape: "ok", detail: "来源可用", lexical, linkTarget, linkTargetInTask };
+    const walk = observeLinkChain(sourcePath, {
+      lstat: (path) => lstatSync(path),
+      readlink: (path) => readlinkSync(path),
+      resolveTarget: (current, target) => (isAbsolute(target) ? target : resolve(dirname(current), target)),
+    });
+    return {
+      ...walk,
+      lexical,
+      linkTarget,
+      linkTargetInTask,
+      platforms: linkCapabilityRows(hostPlatformLabel()),
+      modelBoundary: LINK_MODEL_VERIFICATION_BOUNDARY,
+    };
+  }
+
+  /**
+   * [PiDock 03] (#6) the probe a caller may actually ask for: only a source
+   * path this task itself recorded as a plain-directory link may be observed.
+   * A path the caller names from anywhere else is refused BY NAME with no
+   * filesystem read at all, so the probe cannot be used to fingerprint paths
+   * outside the task's own declared roots. Fails closed: a task with no
+   * recorded link sources has nothing probeable.
+   */
+  probeDeclaredLinkSource(sourcePath: string):
+    | { ok: true; report: LinkTargetProbe }
+    | { ok: false; error: string } {
+    const declared = (this.store.readTask(this.taskDir)?.dirLinks ?? []).map((link) => link.sourcePath);
+    if (!declared.includes(sourcePath))
+      return {
+        ok: false,
+        error: `path-out-of-scope: 只探测本任务记录的普通目录来源（${this.taskDir} 的 dirLinks），收到的是其他路径`,
+      };
+    return { ok: true, report: this.probeLinkTarget(sourcePath) };
   }
 
   taskRecord(): TaskDiskRecord | null {
@@ -2016,6 +2866,9 @@ export class TaskWorkspaceHost {
       this.refuseSettledApproval(sessionId, approvalId);
     }
     const call = channel.approve(approvalId);
+    // [PiDock 02m] #5: a real Agent tool call is parked on this confirmation; it
+    // re-checks the approval itself immediately before its effect.
+    this.sdkToolBroker?.settleApproval(approvalId, "approved");
     this.settleApprovalClaim(sessionId);
     this.store.writeSession(this.taskDir, channel.snapshot());
     this.syncUsageLedger();
@@ -2045,6 +2898,7 @@ export class TaskWorkspaceHost {
   reject(sessionId: string, approvalId: string): void {
     const channel = this.openSession(sessionId);
     channel.reject(approvalId);
+    this.sdkToolBroker?.settleApproval(approvalId, "rejected");
     this.executions.rejectApproval(sessionId, approvalId);
     this.settleApprovalClaim(sessionId);
     this.store.writeSession(this.taskDir, channel.snapshot());
@@ -2093,6 +2947,8 @@ export class TaskWorkspaceHost {
     if (this.executionClosing && this.unconfirmedWriteClaims(sessionId)) throw Error("task-write-claims-unconfirmed");
     const channel = this.openSession(sessionId);
     channel.cancel();
+    // A tool call parked on this session's confirmation stops with a refusal.
+    this.sdkToolBroker?.cancelSession(sessionId);
     this.approvalClaims.delete(sessionId);
     // 盒子 6：停止覆盖派生执行（子进程/子 Agent），但不回滚已完成的步骤与尝试。
     const derived = this.write.snapshot().derived.filter((entry) => entry.sessionId === sessionId).map((entry) => entry.resourceId);

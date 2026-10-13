@@ -1,13 +1,55 @@
 import { describe, expect, it } from "vitest";
-import { authorizeServiceRegistration, boundWorkspaceId, resolveBrowserLogSession, buildHostEnv, buildToolPlannerSpec, classifyControlCaller, DEFAULT_WORKSPACE_ID, routeHostTask, routeTaskBinding, serviceLaunchSource, toolPlannerSpecForHostDispatch, toolPlannerSpecForOp, validateHostTaskOp } from "./host-guards.js";
+import { authorizeCodeObservation, authorizeServiceRegistration, boundWorkspaceId, resolveBrowserLogSession, buildHostEnv, buildToolPlannerSpec, classifyControlCaller, DEFAULT_WORKSPACE_ID, routeHostTask, routeTaskBinding, serviceLaunchSource, toolPlannerSpecForHostDispatch, toolPlannerSpecForOp, validateHostTaskOp } from "./host-guards.js";
+
+// [PiDock 05] (#10 box 6) the worktree observation a registration may carry.
+// The read belongs to main, so only main's `service-catalog` registration may
+// carry it: the renderer's own `shell/taskOp` route arrives with main's
+// `shell-ui` attestation and must be REFUSED rather than have its claim stored.
+describe("code-state observation authorization", () => {
+  const catalog = { kind: "service-catalog", senderWebContentsId: 7 } as const;
+  const shellUi = { kind: "shell-ui", senderWebContentsId: 7 } as const;
+
+  it("accepts main's own observation only from the trusted catalog registration", () => {
+    expect(authorizeCodeObservation({ origin: catalog, code: { commit: "abc1234", dirty: false } })).toEqual({ ok: true });
+    expect(authorizeCodeObservation({ origin: catalog, codeObservationFailure: "该目录不是 Git 工作树" })).toEqual({ ok: true });
+    // A registration that observed nothing stays legal: `unknown` by name.
+    expect(authorizeCodeObservation({ origin: shellUi })).toEqual({ ok: true });
+    expect(authorizeCodeObservation({})).toEqual({ ok: true });
+  });
+
+  it("refuses a renderer attestation that tries to self-attest the code state", () => {
+    expect(authorizeCodeObservation({ origin: shellUi, code: { commit: "abc1234", dirty: false } }))
+      .toEqual({ ok: false, error: "permission-denied: 代码状态只能来自主进程对真实工作树的观测，界面登记不能自证" });
+    // The failure reason is a claim too (it can spell 不是工作树 for a real
+    // worktree to make a dirty run read as unobserved), so it is refused alike.
+    expect(authorizeCodeObservation({ origin: shellUi, codeObservationFailure: "没有工作树" }).ok).toBe(false);
+    expect(authorizeCodeObservation({ code: { commit: "abc1234", dirty: false } }).ok).toBe(false);
+    expect(authorizeCodeObservation({ origin: { kind: "service-catalog", senderWebContentsId: 0 }, code: { commit: "abc1234", dirty: false } }).ok).toBe(false);
+  });
+
+  it("refuses an observation and a failure reason in the same registration", () => {
+    expect(authorizeCodeObservation({ origin: catalog, code: { dirty: false }, codeObservationFailure: "读取失败" }))
+      .toEqual({ ok: false, error: "invalid-payload: task/registerService 不能同时携带 code 与 codeObservationFailure" });
+  });
+});
 
 describe("service registration authorization", () => {
-  it("allows only main-attested human registration until Agent diff approval is wired", () => {
+  it("allows only main-attested human registration, and says which op the Agent is refused", () => {
     const origin = { kind: "shell-ui", senderWebContentsId: 42 };
     expect(authorizeServiceRegistration({ origin })).toEqual({ ok: true });
     expect(authorizeServiceRegistration({})).toMatchObject({ ok: false });
     expect(authorizeServiceRegistration({ sessionId: "main", origin })).toMatchObject({ ok: false });
     expect(authorizeServiceRegistration({ origin: { kind: "shell-ui", senderWebContentsId: "42" } })).toMatchObject({ ok: false });
+    // `task/registerService` registers launch material; the Agent's shared-template
+    // change is a different op with its own diff-confirmation path
+    // (`service.template.update` -> `main/service-catalog-ipc.ts`
+    // `performTaskBoundTemplateEdit` review/confirm, gated at `main/pi-session.ts`
+    // `previewGate`), and it registers no service. So the refusal names what is
+    // really refused instead of claiming that path is unwired.
+    expect(authorizeServiceRegistration({ sessionId: "main" })).toEqual({
+      ok: false,
+      error: "permission-denied: Agent 不能登记服务启动材料；Agent 的共享模板改动走 service.template.update 的差异确认通道",
+    });
   });
 });
 
@@ -82,6 +124,25 @@ describe("service ops", () => {
     expect(validateHostTaskOp("task/serviceStatus", { serviceId: "saas-web" }).ok).toBe(true);
     expect(validateHostTaskOp("task/serviceLog", { serviceId: "saas-web" }).ok).toBe(true);
     expect(validateHostTaskOp("task/serviceStatus", {}).ok).toBe(false);
+  });
+
+  it("shape-checks the worktree observation instead of storing a half-observed one", () => {
+    const registration = { serviceId: "saas-web", descriptor: { name: "saas-web" }, layers: {}, templateVersion: "v12" };
+    expect(validateHostTaskOp("task/registerService", { ...registration, code: { commit: "abc1234", dirty: false } })).toEqual({ ok: true });
+    // A read that produced a dirty tree but no commit is still an observation.
+    expect(validateHostTaskOp("task/registerService", { ...registration, code: { dirty: true } })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/registerService", { ...registration, codeObservationFailure: "该目录不是 Git 工作树" })).toEqual({ ok: true });
+    // A malformed field is refused, never coerced into a code state.
+    expect(validateHostTaskOp("task/registerService", { ...registration, code: "abc1234" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/registerService", { ...registration, code: { commit: "abc1234" } }).ok).toBe(false);
+    expect(validateHostTaskOp("task/registerService", { ...registration, code: { commit: "not-a-commit", dirty: false } }).ok).toBe(false);
+    expect(validateHostTaskOp("task/registerService", { ...registration, code: { commit: "abc1234", dirty: "no" } }).ok).toBe(false);
+    // The reason is echoed into the service's bounded log, so it stays a single
+    // bounded line instead of a multi-line dump.
+    expect(validateHostTaskOp("task/registerService", { ...registration, codeObservationFailure: "" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/registerService", { ...registration, codeObservationFailure: "two\nlines" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/registerService", { ...registration, codeObservationFailure: "x".repeat(201) }).ok).toBe(false);
+    expect(validateHostTaskOp("task/registerService", { ...registration, codeObservationFailure: 42 }).ok).toBe(false);
   });
 });
 
@@ -698,6 +759,38 @@ describe("#6 append + probe guards (S2)", () => {
     ).toBe(false);
   });
 
+  it("allows a pure-directory provision with no Git baseline and still requires it once a repo is selected", () => {
+    // A pure-directory task needs no Git repository: no remoteBranch/fetchedCommit.
+    expect(
+      validateHostTaskOp("task/provision", {
+        name: "纯目录",
+        dirId: "task-abcdef12",
+        plainDirs: [{ directoryId: "notes-1", sourcePath: "/data/notes" }],
+      }),
+    ).toEqual({ ok: true });
+    // With a repo selected the baseline is required again (fail closed).
+    expect(
+      validateHostTaskOp("task/provision", {
+        name: "多仓",
+        dirId: "task-abcdef12",
+        plainDirs: [{ directoryId: "notes-1", sourcePath: "/data/notes" }],
+        repoSelections: [{ repoDir: "frontend", remote: "origin", remoteBranch: "main", mainCheckoutDir: "/src/frontend" }],
+      }).ok,
+    ).toBe(false);
+    // Neither a repo nor a directory is still refused.
+    expect(validateHostTaskOp("task/provision", { name: "空", dirId: "task-abcdef12" }).ok).toBe(false);
+    // A non-string remoteBranch with repos is refused by shape, not coerced.
+    expect(
+      validateHostTaskOp("task/provision", {
+        name: "多仓",
+        dirId: "task-abcdef12",
+        remoteBranch: 1,
+        fetchedCommit: "a5a4a0d1234",
+        repoSelections: [{ repoDir: "frontend", remote: "origin", remoteBranch: "main", mainCheckoutDir: "/src/frontend" }],
+      }).ok,
+    ).toBe(false);
+  });
+
   it("gates appendRepos and probeLink payloads", () => {
     expect(
       validateHostTaskOp("task/appendRepos", {
@@ -713,8 +806,63 @@ describe("#6 append + probe guards (S2)", () => {
     expect(
       validateHostTaskOp("task/appendRepos", { repoSelections: [], fetchedCommits: {} }).ok,
     ).toBe(false);
+    // #6 resume: selections come from the record, but the caller-scanned
+    // conflict gate is still required and shape-checked here.
+    expect(validateHostTaskOp("task/resumeAppend", { takenPaths: [], branchesInUse: [] })).toEqual({ ok: true });
+    expect(
+      validateHostTaskOp("task/resumeAppend", {
+        takenPaths: [],
+        branchesInUse: [],
+        mainCheckouts: { frontend: "/src/frontend" },
+        fetchedCommits: { frontend: "a5a4a0d1234" },
+        prepareErrors: { frontend: { code: "fetch-failed", message: "no" } },
+      }),
+    ).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/resumeAppend", {}).ok).toBe(false);
+    expect(validateHostTaskOp("task/resumeAppend", { takenPaths: [] }).ok).toBe(false);
+    expect(
+      validateHostTaskOp("task/resumeAppend", { takenPaths: [], branchesInUse: [], mainCheckouts: { frontend: 1 } }).ok,
+    ).toBe(false);
+    expect(
+      validateHostTaskOp("task/resumeAppend", { takenPaths: [], branchesInUse: [], prepareErrors: { frontend: {} } }).ok,
+    ).toBe(false);
+    // `branch` lands in `git branch <branch> <commit>` argv: a leading `-`
+    // (or an unsafe ref) is refused on both append and resume.
+    expect(
+      validateHostTaskOp("task/resumeAppend", { takenPaths: [], branchesInUse: [], branch: "-m" }).ok,
+    ).toBe(false);
+    expect(validateHostTaskOp("task/resumeAppend", { takenPaths: [], branchesInUse: [], branch: "bad branch" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/resumeAppend", { takenPaths: [], branchesInUse: [], branch: "task/task-abcdef12" }).ok).toBe(true);
+    // `prepareErrors[].code` is constrained to the known MultiRepoErrorCode union.
+    expect(
+      validateHostTaskOp("task/resumeAppend", {
+        takenPaths: [],
+        branchesInUse: [],
+        prepareErrors: { frontend: { code: "not-a-real-code", message: "x" } },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateHostTaskOp("task/appendRepos", {
+        repoSelections: [],
+        fetchedCommits: {},
+        takenPaths: [],
+        branchesInUse: [],
+        branch: "-m",
+      }).ok,
+    ).toBe(false);
     expect(validateHostTaskOp("task/probeLink", { sourcePath: "/data/notes" })).toEqual({ ok: true });
     expect(validateHostTaskOp("task/probeLink", {}).ok).toBe(false);
+  });
+
+  it("gates the plain-dir append op on a non-empty {directoryId, sourcePath} array", () => {
+    expect(
+      validateHostTaskOp("task/appendDirs", {
+        plainDirs: [{ directoryId: "e2eb192a-108b-4f9b-89a4-cd1fd8fb1fd0", sourcePath: "/data/docs" }],
+      }),
+    ).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/appendDirs", { plainDirs: [] }).ok).toBe(false);
+    expect(validateHostTaskOp("task/appendDirs", {}).ok).toBe(false);
+    expect(validateHostTaskOp("task/appendDirs", { plainDirs: [{ directoryId: "x" }] }).ok).toBe(false);
   });
 });
 
@@ -844,6 +992,19 @@ describe("file and terminal ops", () => {
     expect(validateHostTaskOp("task/terminalControl", { instanceId: "term-1", action: "start" }).ok).toBe(false);
     expect(validateHostTaskOp("task/terminalControl", { instanceId: "term-1", action: "start", rootId: "r", program: "bash" }).ok).toBe(false);
     expect(validateHostTaskOp("task/terminalControl", { instanceId: "term-1", action: "stop", sessionId: " " }).ok).toBe(false);
+  });
+
+  it("bounds a terminal resize with the same window the protocol and registry enforce", () => {
+    const resize = (cols: unknown, rows: unknown) => validateHostTaskOp("task/terminalControl", { instanceId: "term-1", action: "resize", cols, rows });
+    expect(resize(120, 30)).toEqual({ ok: true });
+    expect(resize(20, 5)).toEqual({ ok: true });
+    expect(resize(500, 200)).toEqual({ ok: true });
+    expect(resize(501, 24).ok).toBe(false);
+    expect(resize(19, 24).ok).toBe(false);
+    expect(resize(120, 4).ok).toBe(false);
+    expect(resize(120, 201).ok).toBe(false);
+    expect(resize(120.5, 30).ok).toBe(false);
+    expect(resize("120", 30).ok).toBe(false);
   });
 
   it("requires an instance id for terminal history and bounds the limit", () => {

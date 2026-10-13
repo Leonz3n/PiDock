@@ -24,6 +24,32 @@ import {
   webPreferencesEvidence,
 } from "./runtime.js";
 
+/**
+ * The exact `window.pidock` method set the native preload exposes, in the order
+ * the probe sorts it (`Object.keys(window.pidock).sort()`); the smoke run
+ * refuses every other surface. `src/preload/preload.cjs` is the source of
+ * truth and `smoke.test.ts` derives this set from that file, so the mirror
+ * cannot drift silently the way it did before (#15).
+ */
+export const SHELL_BRIDGE_SURFACE = [
+  "appendTaskRepos",
+  "createTask",
+  "editorSettingsOp",
+  "getSecurityState",
+  "getVersions",
+  "hostPing",
+  "importTaskRoot",
+  "listTasks",
+  "onHostStatus",
+  "onSdkTurnEvent",
+  "openTaskEditor",
+  "projectOp",
+  "providerOp",
+  "sdkTurn",
+  "serviceCatalogOp",
+  "taskOp",
+] as const;
+
 export interface SmokeEvidence {
   window: WebPreferencesEvidence;
   rendererUrl: string;
@@ -292,22 +318,7 @@ function validateShellProbe(
   if (
     !Array.isArray(bridgeKeys) ||
     bridgeKeys.some((key) => typeof key !== "string") ||
-    JSON.stringify(bridgeKeys) !==
-      JSON.stringify([
-        "createTask",
-        "getSecurityState",
-        "getVersions",
-        "hostPing",
-        "importTaskRoot",
-        "listTasks",
-        "onHostStatus",
-        "onSdkTurnEvent",
-        "projectOp",
-        "providerOp",
-        "sdkTurn",
-        "serviceCatalogOp",
-        "taskOp",
-      ])
+    JSON.stringify(bridgeKeys) !== JSON.stringify(SHELL_BRIDGE_SURFACE)
   ) {
     throw new Error(`shell bridge surface mismatch: ${JSON.stringify(bridgeKeys)}`);
   }

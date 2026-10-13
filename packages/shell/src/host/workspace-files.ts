@@ -17,14 +17,23 @@
  *   worktree cannot point the reader at another task or an out-of-task file.
  * - Every body is masked with the task's private values (`secrets`) using the
  *   shared scrubber, so a credential in a diff cannot leak through this path.
- * - Git runs with a fixed argv (`git diff --no-color [<base>] -- <path>`) in
- *   the root's cwd and never through a shell; the real terminal *spawn* stays
- *   a recorded residual, this is a bounded read-only diff read.
+ * - Git runs with a fixed argv (`git diff --no-color [<base>] -- <path>`, plus
+ *   the two observation reads below) in the root's cwd and never through a
+ *   shell; the real terminal *spawn* stays a recorded residual, this is a
+ *   bounded read-only read.
+ * - `observedRoots()` is the one readout that reads the worktree itself: it
+ *   reports each worktree's OWN working branch and uncommitted state, observed
+ *   in a bounded, non-interactive, index-neutral child (the #10 box 6
+ *   discipline in `main/service-code-observation.ts`), and leaves a NAMED
+ *   unknown when a read fails: the record's pinned baseline branch is never
+ *   filled in for an unread branch, and "no uncommitted change" is never
+ *   assumed from an unread `git status`.
  */
 
 import type { TaskPathProtection } from "./protected-application-path.js";
 import { execFileSync } from "node:child_process";
-import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { describeReadFailure } from "../main/service-code-observation.js";
 import {
   MAX_PREVIEW_CHARS,
   boundDiff,
@@ -38,6 +47,7 @@ import {
   type WorkspaceAttribution,
   type WorkspaceDeliveryResult,
   type WorkspaceDiffResult,
+  type WorkspaceObservation,
   type WorkspacePreview,
   type WorkspaceRoot,
   type WorkspaceTree,
@@ -60,6 +70,62 @@ export interface WorkspaceFileReaders {
 
 /** Read cap: a file bigger than this is refused rather than loaded. */
 export const MAX_PREVIEW_BYTES = 1_000_000;
+
+/**
+ * Bound on one read-only git read in a root. A `rev-parse`/`status --porcelain`
+ * on a task worktree completes in tens of milliseconds, so 5 s is already ~100x
+ * the observed cost; a diff needs the larger cap below. Mirrors
+ * `main/service-code-observation.ts` `GIT_READ_TIMEOUT_MS`/`GIT_READ_MAX_BUFFER`.
+ */
+const GIT_READ_TIMEOUT_MS = 5_000;
+const GIT_READ_MAX_BUFFER = 1024 * 1024;
+/** A whole-worktree diff against the pinned baseline needs the larger cap. */
+const GIT_DIFF_TIMEOUT_MS = 10_000;
+const GIT_DIFF_MAX_BUFFER = 4 * 1024 * 1024;
+
+/**
+ * Fixed, named reason for a root whose directory is not there. A spawn with a
+ * missing cwd fails with the same `ENOENT` a missing git binary produces, so
+ * reading the failure code alone would report a machine-wide "this machine has
+ * no git" for a path-local fact — the reason `main/service-code-observation.ts`
+ * checks `readableDirectory` before spawning (its lines 108-116, mirrored here).
+ */
+const ROOT_DIR_UNREADABLE = "工作副本目录不可读：该工作副本可能已被移除";
+
+/**
+ * True when `path` is a real directory, checked BEFORE spawning git (see
+ * `ROOT_DIR_UNREADABLE`).
+ */
+function readableDirectory(path: string): boolean {
+  try {
+    return lstatSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The branch the worktree is really on, or the NAMED reason it was not read.
+ * A detached worktree answers the literal `HEAD`, which is not a branch name:
+ * that is a named unknown, never the record's declared task branch.
+ */
+function observeBranch(read: ReturnType<WorkspaceFileReaders["runGit"]>): WorkspaceObservation<string> {
+  if (!read.ok) return { state: "unknown", reason: read.error };
+  const name = read.stdout.trim();
+  if (name.length === 0 || name === "HEAD") return { state: "unknown", reason: "工作副本不在任何分支上（分离头指针）" };
+  return { state: "observed", value: name };
+}
+
+/**
+ * Whether `git status --porcelain` reported anything in the worktree: any line
+ * is uncommitted work, including UNTRACKED files, which a diff against the
+ * baseline cannot show. A failed read is a named unknown — `false` here means
+ * "read, and there was nothing", never "could not tell".
+ */
+function observeDirty(read: ReturnType<WorkspaceFileReaders["runGit"]>): WorkspaceObservation<boolean> {
+  if (!read.ok) return { state: "unknown", reason: read.error };
+  return { state: "observed", value: read.stdout.trim().length > 0 };
+}
 
 /** Windows separators/case apply only to a Windows task, never a POSIX target. */
 function comparisonKey(path: string, windowsPaths: boolean): string {
@@ -96,12 +162,41 @@ export const realWorkspaceFileReaders: WorkspaceFileReaders = {
     }
   },
   runGit(args, cwd) {
+    // Mirrors `main/service-code-observation.ts` `readGit` (its lines 66-85): the
+    // read is INDEX-NEUTRAL and pinned to `cwd`, so it can never refresh, lock or
+    // write a repository it only reads. Without `GIT_OPTIONAL_LOCKS=0` a
+    // `status --porcelain` refreshes and may rewrite the user's worktree index
+    // (and can collide with the user's own git on `index.lock`); an inherited
+    // `GIT_DIR`/`GIT_WORK_TREE`/`GIT_INDEX_FILE` (PiDock started from a git hook
+    // or an exporting shell) would make every read answer about a DIFFERENT
+    // repository, so a dirty worktree could read "clean" about the wrong repo.
+    if (!readableDirectory(cwd)) return { ok: false, error: ROOT_DIR_UNREADABLE };
+    // A diff needs the larger bound; every other read here (branch, status) is
+    // tiny and gets the tighter one. Both stay bounded, non-interactive and
+    // index-neutral.
+    const diff = args[0] === "diff";
     try {
-      const stdout = execFileSync("git", [...args], { cwd, encoding: "utf8", timeout: 10_000, maxBuffer: 4 * 1024 * 1024 });
+      const stdout = execFileSync("git", [...args], {
+        cwd,
+        encoding: "utf8",
+        timeout: diff ? GIT_DIFF_TIMEOUT_MS : GIT_READ_TIMEOUT_MS,
+        maxBuffer: diff ? GIT_DIFF_MAX_BUFFER : GIT_READ_MAX_BUFFER,
+        env: {
+          ...process.env,
+          GIT_TERMINAL_PROMPT: "0",
+          GCM_INTERACTIVE: "never",
+          GIT_OPTIONAL_LOCKS: "0",
+          GIT_DIR: undefined,
+          GIT_WORK_TREE: undefined,
+          GIT_INDEX_FILE: undefined,
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
       return { ok: true, stdout };
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return { ok: false, error: `git-failed: ${message}` };
+      // A fixed, named classification (the same taxonomy #10's launch-time code
+      // observation uses) instead of raw git stderr, which can name machine paths.
+      return { ok: false, error: describeReadFailure(error) };
     }
   },
   realPath(path) {
@@ -139,11 +234,44 @@ export class TaskWorkspaceFiles {
       repos: record.repos,
       ...(record.repoSources ? { repoSources: record.repoSources } : {}),
       ...(record.dirLinks ? { dirLinks: record.dirLinks } : {}),
-      branch: record.remoteBranch,
+      baselineBranch: record.remoteBranch,
+      // The record's own task branch (`task/<dirId>`) is the DECLARED
+      // expectation, kept apart from `record.remoteBranch` (the pinned
+      // baseline) and from whatever the worktree is really on.
+      taskBranch: record.branch,
       baseCommit: record.baseCommit,
     });
     for (const root of roots) this.protection?.assert(root.path);
     return roots;
+  }
+
+  /**
+   * The roots as `task/fileRoots` reports them: every worktree root carries the
+   * branch it is really on and whether it really has uncommitted changes,
+   * observed in that worktree. Kept separate from `roots()` so the tree /
+   * preview / diff reads — which never ask about the branch — do not spawn a
+   * git child per root, and so one root that cannot be read cannot make any of
+   * them fail.
+   */
+  observedRoots(): WorkspaceRoot[] {
+    return this.roots().map((root) =>
+      root.kind === "worktree" ? { ...root, ...this.observeWorktree(root) } : root,
+    );
+  }
+
+  /**
+   * The two observation reads for one worktree, each with its own outcome.
+   * `rev-parse --abbrev-ref HEAD` names the branch (or literally `HEAD` on a
+   * detached worktree, which is NOT a branch name), and `status --porcelain`
+   * reports uncommitted work including UNTRACKED files — which a diff against
+   * the baseline cannot see, so a new file would otherwise read as no change.
+   * A failed read keeps its own named reason; the two never borrow each other's
+   * answer.
+   */
+  private observeWorktree(root: WorkspaceRoot): { workingBranch: WorkspaceObservation<string>; dirty: WorkspaceObservation<boolean> } {
+    const head = this.readers.runGit(["rev-parse", "--abbrev-ref", "HEAD"], root.path);
+    const status = this.readers.runGit(["status", "--porcelain"], root.path);
+    return { workingBranch: observeBranch(head), dirty: observeDirty(status) };
   }
 
   /** Attribution of one root (`null` when the id is not one of this task's roots). */

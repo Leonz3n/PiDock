@@ -18,6 +18,9 @@
  *   Electron UI, no packaged build, no Windows run.
  */
 import { EventEmitter } from "node:events";
+import { execFileSync } from "node:child_process";
+import { createServer as createHttpServer } from "node:http";
+import type { Socket } from "node:net";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -27,8 +30,11 @@ import { HostClient } from "../rpc/host-client.js";
 import { InstalledServiceHostAuthority } from "../main/service-host-binding.js";
 import { PerTaskHostRegistry, runTaskService } from "../main/runtime.js";
 import { ServiceCatalog, type ServiceCatalogAuthority } from "../main/service-catalog.js";
+import type { ServiceDescriptor } from "../main/service-config.js";
 import { diskTaskStore } from "./task-host.js";
-import { buildTaskDiskRecord } from "./task-store.js";
+import { buildTaskDiskRecord, readServiceOwnershipOnDisk } from "./task-store.js";
+import { SERVICE_STOP_CONFIRM_MS, SERVICE_STOP_GRACE_MS, TaskServiceProcesses } from "./service-processes.js";
+import { diskServiceOwnershipLog, verifyServiceOwnershipIdentity } from "./service-ownership.js";
 
 const cleanups: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
@@ -48,6 +54,40 @@ console.log("ambient:" + (process.env.PIDOCK_TEST_AMBIENT ?? "absent"));
 process.stdout.write("x".repeat(2500) + "\\n");
 setInterval(() => {}, 1000);
 `;
+
+/**
+ * A real HTTP health listener on 127.0.0.1 for the declared 健康检查 of one
+ * test. It answers 200, counts the connections it really accepted (so "nothing
+ * was dialled" and "exactly one attempt" are observable facts), and is closed
+ * by every exit path - internally when the test wants a refused target, and by
+ * the suite's own cleanup otherwise.
+ */
+interface HealthListener {
+  readonly port: number;
+  readonly connections: number;
+  close(): Promise<void>;
+}
+
+async function httpHealthListener(): Promise<HealthListener> {
+  const server = createHttpServer((_request, response) => { response.writeHead(200, { "content-type": "text/plain" }); response.end("health"); });
+  const sockets = new Set<Socket>();
+  let connections = 0;
+  server.on("connection", (socket) => { connections += 1; sockets.add(socket); socket.on("close", () => sockets.delete(socket)); });
+  server.on("clientError", () => {});
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (address === null || typeof address === "string") throw Error("no-bound-port");
+  const listener: HealthListener = {
+    port: address.port,
+    get connections() { return connections; },
+    close: async () => {
+      for (const socket of sockets) socket.destroy();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    },
+  };
+  cleanups.push(() => listener.close());
+  return listener;
+}
 
 /**
  * `TaskServiceProcesses.stop` sends SIGTERM, waits `stopGraceMs` (3000ms),
@@ -92,6 +132,12 @@ interface FixtureOptions {
   nonCanonicalTaskDir?: boolean;
   /** Main cannot produce a trusted owner snapshot, so it never bootstraps the Host. */
   ownerAuthorityUnavailable?: boolean;
+  /**
+   * Make the task folder a REAL git worktree (one commit) instead of a plain
+   * directory, so main's own worktree read ([PiDock 05] #10 box 6) has something
+   * real to observe. The two `git` calls are test fixtures on a TEMP repository.
+   */
+  gitWorktree?: boolean;
 }
 
 async function installed(options: FixtureOptions = {}) {
@@ -111,10 +157,16 @@ async function installed(options: FixtureOptions = {}) {
     mkdirSync(join(taskDir, dir), { recursive: true });
     writeFileSync(join(taskDir, dir, "service.cjs"), SERVICE_SCRIPT);
   }
-  // The record spells the folder the way the Host is bound to it, exactly like
-  // a provisioned task whose configured root is reached through a symlink.
   diskTaskStore.writeTask(taskDir, buildTaskDiskRecord({ taskId, name: "Wiring", dirId: taskId, branch: "task/main", root: hostRoot, taskDir: hostTaskDir,
     remoteBranch: "main", baseCommit: "source-fixture", repos: ["repo-a"], now: "2026-01-01T00:00:00.000Z" }));
+  if (options.gitWorktree) {
+    // A real worktree for the task folder, committed AFTER the task record is
+    // written so the folder really starts out clean: `repo-a/svc-a` (the launch
+    // cwd) is a subdirectory of it, exactly like a provisioned task.
+    fixtureGit(taskDir, ["init", "-q", "-b", "main", "."]);
+    fixtureGit(taskDir, ["add", "-A"]);
+    fixtureGit(taskDir, ["commit", "-q", "-m", "fixture"]);
+  }
   const taskStat = statSync(taskDir, { bigint: true });
   const identity = { taskId, createdAt: "2026-01-01T00:00:00.000Z", root, realRoot: root, dirId: taskId,
     directoryDevice: taskStat.dev.toString(), directoryInode: taskStat.ino.toString() };
@@ -127,6 +179,7 @@ async function installed(options: FixtureOptions = {}) {
     ...(options.ownerAuthorityUnavailable ? {} : { verifiedTask: (id: string) => owner(id) }),
   };
   const catalog = new ServiceCatalog(profile, authority);
+  const environmentId = catalog.createEnvironment({ projectId, name: "开发环境" }).environmentId;
 
   // Fake utilityProcess pair: `child` is main's handle, `parent` the Host's parentPort.
   const child = new EventEmitter() as EventEmitter & { postMessage(value: unknown): void; kill(): void };
@@ -169,10 +222,11 @@ async function installed(options: FixtureOptions = {}) {
       origin: { kind: "service-catalog", senderWebContentsId: 7 } });
     return result.payload;
   };
-  const bind = (subdir: string, tag: string) => {
-    const template = catalog.saveTemplate({ projectId, descriptor: { name: `API ${tag}`, program: "node", args: ["service.cjs"], ports: [], runType: "long-lived" },
+  const bind = (subdir: string, tag: string, healthCheck?: ServiceDescriptor["healthCheck"]) => {
+    const template = catalog.saveTemplate({ projectId, environmentId, descriptor: { name: `API ${tag}`, program: "node", args: ["service.cjs"], ports: [], runType: "long-lived",
+      ...(healthCheck === undefined ? {} : { healthCheck }) },
       shared: [{ key: "SERVICE_GREETING", value: `hello-${tag}`, secret: false }, { key: "SERVICE_TAG", value: tag, secret: false }] });
-    catalog.bindTask({ taskId, serviceId: template.serviceId, templateVersion: 1, rootId: "repo-a", subdir,
+    catalog.bindTask({ taskId, serviceId: template.serviceId, environmentId, templateVersion: 1, rootId: "repo-a", subdir,
       programPath: realpathSync(process.execPath), privateRefs: [{ key: "SERVICE_TOKEN", envRef: "LOCAL_TEST_TOKEN" }] });
     return template.serviceId;
   };
@@ -186,7 +240,7 @@ async function installed(options: FixtureOptions = {}) {
     const payload = await request("task/serviceLog", { serviceId, limit: 200 });
     return Array.isArray(payload["log"]) ? (payload["log"] as { line: string }[]).map((entry) => entry.line) : [];
   };
-  return { profile, taskId, taskDir, hostTaskDir, projectId, catalog, authority, child, parent, client, main, registry,
+  return { profile, taskId, taskDir, hostTaskDir, projectId, environmentId, catalog, authority, child, parent, client, main, registry,
     task, request, bind, register, run, status, log };
 }
 
@@ -195,6 +249,20 @@ function linkedHome(home: string): string {
   const link = join(home, "linked-home");
   symlinkSync(home, link);
   return link;
+}
+
+/**
+ * The fixture's OWN git calls, on a TEMP repository only: hermetic (no system or
+ * global config, no prompts, no inherited identity) and never run in the PiDock
+ * checkout. Main's own reads are the code under test, not these.
+ */
+function fixtureGit(cwd: string, args: readonly string[]): string {
+  return execFileSync("git", [...args], {
+    cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_AUTHOR_NAME: "pidock-test", GIT_AUTHOR_EMAIL: "pidock@test.invalid",
+      GIT_COMMITTER_NAME: "pidock-test", GIT_COMMITTER_EMAIL: "pidock@test.invalid" },
+  }).trim();
 }
 
 /** A child pid the fixture script reported; used to observe the real OS process. */
@@ -255,7 +323,9 @@ describe.skipIf(process.platform === "win32")("#7 catalog-driven service executi
     expect(await f.run(second, "start")).toMatchObject({ serviceId: second, action: "start", actor: "human" });
 
     // (a) real process state, reported by the Host from the real children.
-    expect(await f.status(first)).toMatchObject({ serviceId: first, lifecycle: "running", launchSource: "catalog", health: "not-probed" });
+    // The bound template declares no 健康检查, so the health half of the row is
+    // `未声明` by name - never a pass, and never a probe of an invented target.
+    expect(await f.status(first)).toMatchObject({ serviceId: first, lifecycle: "running", launchSource: "catalog", health: "undeclared" });
     expect(await f.status(second)).toMatchObject({ lifecycle: "running" });
 
     // (b) real, bounded, redacted output of the running children.
@@ -306,10 +376,97 @@ describe.skipIf(process.platform === "win32")("#7 catalog-driven service executi
     expect(report).toMatchObject({ ok: true, tasks: [{ taskId: f.taskId, failures: [], retainedTasks: [] }] });
   }, 30_000);
 
+  it("probes the pinned revision's declared 健康检查 for real, and a failed probe never reads as a dead process", async () => {
+    const f = await installed();
+    const listener = await httpHealthListener();
+    const target = `http://127.0.0.1:${String(listener.port)}/health`;
+    const serviceId = f.bind("svc-a", "a", { kind: "http", target });
+
+    // (1) 未探测 for a STOPPED service: the declared target is a live socket, and
+    // it is never dialled because the process is not running.
+    await f.register(serviceId);
+    const stopped = await f.status(serviceId);
+    expect(stopped).toMatchObject({ lifecycle: "stopped", health: "not-probed", healthDetail: { kind: "http", target } });
+    expect((stopped["healthDetail"] as { reason: string }).reason).toContain("服务未运行");
+    expect(listener.connections).toBe(0);
+
+    // (2) A REAL pass: a real HTTP listener declared by the pinned revision, a
+    // real child, and the listener's real status code in the read.
+    expect(await f.run(serviceId, "start")).toMatchObject({ serviceId, action: "start", actor: "human" });
+    const pid = await untilMarkerPid(f.taskDir, "a");
+    expect(alive(pid)).toBe(true);
+    const healthy = await f.status(serviceId);
+    expect(healthy).toMatchObject({ lifecycle: "running", health: "healthy", healthDetail: { kind: "http", target, statusCode: 200 } });
+    const runningStartedAt = healthy["startedAt"];
+    expect(listener.connections).toBeGreaterThanOrEqual(1);
+
+    // (3) The declared target closes while the REAL child keeps running: the
+    // probe fails by name and `lifecycle`/`startedAt`/`exitReason` do not move.
+    await listener.close();
+    const unhealthy = await f.status(serviceId);
+    expect(unhealthy).toMatchObject({ lifecycle: "running", health: "unhealthy", healthDetail: { kind: "http", reason: "连接被拒" } });
+    expect(unhealthy["startedAt"]).toBe(runningStartedAt);
+    expect(unhealthy["exitReason"]).toBeUndefined();
+    expect(alive(pid)).toBe(true);
+    // (4) Nothing was started, stopped or restarted by the probe: the same real
+    // child is still the one of this service.
+    expect(await untilMarkerPid(f.taskDir, "a")).toBe(pid);
+    expect((await f.status(serviceId)).lifecycle).toBe("running");
+
+    // (5) A stopped service goes back to a named 未探测 without dialling.
+    expect(await f.run(serviceId, "stop")).toMatchObject({ serviceId, action: "stop", actor: "human" });
+    await until(() => !alive(pid), "the service child to exit");
+    expect(await f.status(serviceId)).toMatchObject({ lifecycle: "stopped", health: "not-probed", healthDetail: { reason: "服务未运行，不发起探测" } });
+  }, 30_000);
+
+  it("records the durable launch identity of a real Host start and refuses a duplicate start beside that survivor", async () => {
+    const f = await installed();
+    const serviceId = f.bind("svc-a", "a");
+    const ownershipFile = join(f.taskDir, "service-ownership.json");
+    expect(existsSync(ownershipFile)).toBe(false);
+
+    expect(await f.run(serviceId, "start")).toMatchObject({ serviceId, action: "start", actor: "human" });
+    const pid = await untilMarkerPid(f.taskDir, "a");
+    expect(alive(pid)).toBe(true);
+
+    // The production Host driver persisted this launch's identity before the
+    // start resolved, and the recorded nonce really is the child's own marker
+    // (read back from the OS), not a pid guess.
+    const [entry] = readServiceOwnershipOnDisk(f.taskDir).entries;
+    expect(entry).toMatchObject({ taskId: f.taskId, serviceId, pid });
+    expect(entry!.ownershipNonce).toMatch(/^[0-9a-f]{32}$/);
+    expect(verifyServiceOwnershipIdentity(entry!)).toBe("verified");
+
+    // A second Host reconciling the same task folder holds no child handle for
+    // this launch, so the durable record is its only evidence - and the same
+    // production factory the Host uses (`diskServiceOwnershipLog`) refuses to
+    // spawn a second instance beside the survivor instead of adopting or
+    // overwriting it. (The Host-independent driver contract this exercises is
+    // covered in `service-ownership.test.ts`; what this leg adds is that the
+    // record it reconciles was written through the real Host path above.)
+    const follower = new TaskServiceProcesses(f.taskDir, () => {}, () => {}, (line) => line,
+      SERVICE_STOP_GRACE_MS, SERVICE_STOP_CONFIRM_MS, diskServiceOwnershipLog({ taskId: f.taskId, taskDir: f.taskDir }));
+    expect(follower.ids()).toEqual([]);
+    await expect(follower.start({ serviceId, cwd: join(f.taskDir, "repo-a/svc-a"), program: realpathSync(process.execPath),
+      args: ["service.cjs"], env: {}, runType: "long-lived" })).rejects.toThrow("service-ownership-own-verified");
+    expect(alive(pid)).toBe(true);
+
+    // A verified record may be reclaimed: the survivor really dies and only
+    // then does the record go.
+    await follower.stop(serviceId);
+    await until(() => !alive(pid), "the recorded launch to stop");
+    expect(readServiceOwnershipOnDisk(f.taskDir).entries).toEqual([]);
+  }, 30_000);
+
   it("refuses a read-only session, asks first on the default tier, and starts nothing on refusal or rejection", async () => {
     const f = await installed();
     const serviceId = f.bind("svc-a", "a");
     const startedMarker = join(f.taskDir, "repo-a/svc-a", "started-a.txt");
+    // A refused or unanswered control must leave no durable launch identity
+    // behind either. These absences are meaningful - they can fail: the
+    // sibling test above proves a start that really ran does write the record
+    // through this same production path.
+    const ownershipRecord = join(f.taskDir, "service-ownership.json");
     // Main registers the trusted launch for the task-bound service; the page
     // never supplies the descriptor (it only names project/task/service).
     expect(await f.register(serviceId)).toMatchObject({ service: { launchSource: "catalog" } });
@@ -319,6 +476,7 @@ describe.skipIf(process.platform === "win32")("#7 catalog-driven service executi
     // Read-only tier: refused, and no child ever ran.
     expect(await control({ sessionId: "main", action: "start" })).toMatchObject({ error: expect.stringContaining("只读") });
     expect(existsSync(startedMarker)).toBe(false);
+    expect(existsSync(ownershipRecord)).toBe(false);
     expect((await f.status(serviceId)).lifecycle).toBe("stopped");
 
     // Default tier: the first call only asks.
@@ -329,10 +487,19 @@ describe.skipIf(process.platform === "win32")("#7 catalog-driven service executi
     expect(existsSync(startedMarker)).toBe(false);
     expect((await f.status(serviceId)).lifecycle).toBe("stopped");
 
+    // A pending (unanswered/cancelled) confirmation starts nothing either: the
+    // approval exists but was never approved, so the Host refuses before the
+    // driver is reached.
+    expect((await control({ sessionId: "main", action: "start", approvalId }))["error"]).toBeDefined();
+    expect(existsSync(startedMarker)).toBe(false);
+    expect(existsSync(ownershipRecord)).toBe(false);
+    expect((await f.status(serviceId)).lifecycle).toBe("stopped");
+
     // A rejected confirmation does not start the process either.
     await f.task("task/reject", { sessionId: "main", approvalId });
     expect((await control({ sessionId: "main", action: "start", approvalId }))["error"]).toBeDefined();
     expect(existsSync(startedMarker)).toBe(false);
+    expect(existsSync(ownershipRecord)).toBe(false);
     expect((await f.status(serviceId)).lifecycle).toBe("stopped");
 
     // A fresh confirmation, approved, really starts the child.
@@ -470,4 +637,94 @@ describe("#7 catalog-driven service execution refusals", () => {
     expect((await f.status(serviceId))["error"]).toContain("service-execution-uncertain");
     expect(existsSync(join(f.taskDir, "repo-a/svc-a", "started-a.txt"))).toBe(false);
   }, 30_000);
+});
+
+/**
+ * [PiDock 05] (#10 box 6) main's REAL worktree read, end to end on the shipped
+ * `runTaskService` route: `shell/serviceCatalogOp {op:"runTaskService"}` → main
+ * resolves the launch and reads the worktree its verified cwd lives in → the
+ * registration carries that read to the Host → the Host writes it on the run
+ * record a real start produced.
+ *
+ * The child processes are REAL (the same driver as the suite above); the task
+ * folder is either a REAL temporary git worktree (one commit) or a plain
+ * directory, which is exactly the difference the box is about.
+ */
+describe.skipIf(process.platform === "win32")("#10 box 6 the run record carries the code state main really read", () => {
+  type WiringFixture = Awaited<ReturnType<typeof installed>>;
+
+  /** The newest run record this task's Host wrote for one service. */
+  async function latestRun(f: WiringFixture, serviceId: string): Promise<Record<string, unknown>> {
+    const payload = await f.request("task/serviceRunRecords", {});
+    const records = (payload["records"] ?? []) as Record<string, unknown>[];
+    const mine = records.filter((record) => record["serviceId"] === serviceId);
+    expect(mine.length).toBeGreaterThan(0);
+    return mine[mine.length - 1] as Record<string, unknown>;
+  }
+
+  it("records the launch worktree's REAL clean commit, then the real uncommitted state of a later start", { timeout: 60_000 }, async () => {
+    const f = await installed({ gitWorktree: true });
+    const serviceId = f.bind("svc-a", "a");
+    const head = fixtureGit(f.taskDir, ["rev-parse", "HEAD"]);
+
+    expect(await f.run(serviceId, "start")).toMatchObject({ serviceId, action: "start", actor: "human" });
+    const firstPid = await untilMarkerPid(f.taskDir, "a");
+    expect(alive(firstPid)).toBe(true);
+
+    // THE assertion the box needs: a real run record names the real commit,
+    // read by main from the worktree the launch's own cwd lives in.
+    const clean = await latestRun(f, serviceId);
+    expect(clean["codeState"]).toMatchObject({ kind: "committed-clean", commit: head });
+    expect((clean["codeState"] as { note?: string }).note).toBe("工作副本与记录提交一致");
+    // Nobody observed a build commit (nothing in the model names a build
+    // artifact), so this stays 无法判断构建状态 instead of claiming `fresh`.
+    expect(clean["buildFreshness"]).toBe("unknown");
+    expect(clean["buildFreshness"]).not.toBe("fresh");
+    // The read succeeded, so no observation-failure line was logged.
+    expect((await f.log(serviceId)).some((line) => line.startsWith("代码状态未观测"))).toBe(false);
+
+    // Stop, edit the worktree, start again: uncommitted code is DISTINGUISHABLE
+    // from a clean commit, and never reads as `fresh`.
+    expect(await f.run(serviceId, "stop")).toMatchObject({ serviceId, action: "stop" });
+    await until(() => !alive(firstPid), "the first child to exit");
+    writeFileSync(join(f.taskDir, "repo-a/svc-a", "service.cjs"), `${SERVICE_SCRIPT}\n// edited by the box-6 test\n`);
+    expect(await f.run(serviceId, "start")).toMatchObject({ serviceId, action: "start" });
+    const secondPid = await untilMarkerPid(f.taskDir, "a", firstPid);
+    expect(alive(secondPid)).toBe(true);
+
+    const dirty = await latestRun(f, serviceId);
+    expect(dirty["codeState"]).toMatchObject({ kind: "uncommitted", commit: head });
+    expect(dirty["buildFreshness"]).toBe("uncommitted-code");
+    expect(dirty["runId"]).not.toBe(clean["runId"]);
+
+    expect(await f.run(serviceId, "stop")).toMatchObject({ serviceId, action: "stop" });
+    await until(() => !alive(secondPid), "the second child to exit");
+  });
+
+  it("leaves the code state unknown BY NAME with the reason in the bounded log when nothing could be read", { timeout: 30_000 }, async () => {
+    // A task folder that is not a worktree: the read fails, so the run record
+    // must not name a code state and must not read as a clean tree.
+    const f = await installed();
+    const serviceId = f.bind("svc-a", "a");
+
+    expect(await f.run(serviceId, "start")).toMatchObject({ serviceId, action: "start", actor: "human" });
+    const pid = await untilMarkerPid(f.taskDir, "a");
+    expect(alive(pid)).toBe(true);
+
+    const run = await latestRun(f, serviceId);
+    expect(run["codeState"]).toMatchObject({ kind: "unknown" });
+    expect(run["codeState"]).not.toMatchObject({ kind: "committed-clean" });
+    expect((run["codeState"] as { commit?: string }).commit).toBeUndefined();
+    expect(run["buildFreshness"]).toBe("unknown");
+
+    // The reason is visible where the user reads the run: the service's own
+    // bounded log, carrying no machine path and no raw tool output.
+    const lines = await f.log(serviceId);
+    expect(lines).toContain(`代码状态未观测：该目录不是 Git 工作树；本次运行记录按 unknown 记录`);
+    expect(lines.every((line) => line.length <= 2000)).toBe(true);
+    expect(lines.join("\n")).not.toContain(f.taskDir);
+
+    expect(await f.run(serviceId, "stop")).toMatchObject({ serviceId, action: "stop" });
+    await until(() => !alive(pid), "the child to exit");
+  });
 });

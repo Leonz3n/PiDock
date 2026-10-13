@@ -68,10 +68,8 @@ describe("#10 service group bridge (S3)", () => {
             taskId: "task-a",
             units,
             selectedRepoDirs: ["front"],
-            dependencies: [{ from: "front:saas-web", to: "front:saas-bff", kind: "prestart" }],
             requests: [{ unitId: "front:saas-web", port: 5173 }],
             reservations: [{ port: 5173, owner: "task", taskId: "task-b" }],
-            rules: [{ key: "SAAS_WEB_URL", unitId: "front:saas-web", kind: "url" }],
             environment: "testing",
             externalResources: [{ resourceId: "res-q", name: "events", kind: "queue" }],
           })
@@ -90,6 +88,12 @@ describe("#10 service group bridge (S3)", () => {
         requests: [{ unitId: "front:saas-web", port: 5173 }],
         environment: "testing",
       });
+      // The plan's TRUSTED inputs are not part of this bridge at all: a panel plan
+      // can name no dependency edge, no binding rule and no config layer. Main's
+      // `shell/taskOp` refuses a payload that carries any of them by name.
+      expect(seen[0].payload).not.toHaveProperty("dependencies");
+      expect(seen[0].payload).not.toHaveProperty("rules");
+      expect(seen[0].payload).not.toHaveProperty("layers");
       // Human-UI path: no sessionId is ever sent by the panel plan.
       expect(seen[0].payload?.["sessionId"]).toBeUndefined();
       expect(seen[2].payload).toEqual({ instanceId: "task-a/saas-web" });
@@ -171,29 +175,68 @@ describe("#14 protocol bridge (S3)", () => {
 });
 
 describe("#6 append + probe bridge (S3)", () => {
-  it("forwards appendRepos and probeLink payloads without Node access", async () => {
-    const { appendReposThroughShell, probeLinkThroughShell } = await import("../data/shellBridge");
+  it("forwards the production append channel and probeLink payloads without Node access", async () => {
+    const { appendTaskReposThroughShell, probeLinkThroughShell } = await import("../data/shellBridge");
+    const appendTaskRepos = vi.fn(async () => ({
+      ok: true,
+      payload: { taskId: "task-abcdef12", appended: [], skipped: [] },
+    }));
     const taskOp = vi.fn(async () => ({ ok: true, payload: {} }));
-    vi.stubGlobal("window", { pidock: { taskOp } });
+    vi.stubGlobal("window", { pidock: { appendTaskRepos, taskOp } });
     try {
-      const appended = await appendReposThroughShell({
+      const appended = await appendTaskReposThroughShell({
         taskId: "task-abcdef12",
-        repoSelections: [
-          { repoDir: "shipment", remote: "origin", remoteBranch: "main", mainCheckoutDir: "/src/shipment" },
-        ],
-        fetchedCommits: { shipment: "c0ffee1234" },
-        takenPaths: [],
-        branchesInUse: [],
+        repositories: [{ sourceId: "shipment", remote: "origin", remoteBranch: "main" }],
       });
       expect(appended.ok).toBe(true);
-      expect(taskOp).toHaveBeenCalledWith(
-        "task-abcdef12",
-        "task/appendRepos",
-        expect.objectContaining({ fetchedCommits: { shipment: "c0ffee1234" } }),
-      );
+      // The live path is main's `shell/appendTaskRepos`, not the refused legacy
+      // `task/appendRepos` op: the page names ids and refs only.
+      expect(appendTaskRepos).toHaveBeenCalledWith({
+        taskId: "task-abcdef12",
+        repositories: [{ sourceId: "shipment", remote: "origin", remoteBranch: "main" }],
+      });
       const probed = await probeLinkThroughShell({ taskId: "task-abcdef12", sourcePath: "/data/notes" });
       expect(probed.ok).toBe(true);
       expect(taskOp).toHaveBeenCalledWith("task-abcdef12", "task/probeLink", { sourcePath: "/data/notes" });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("reads prepare status and forwards a resume without fabricating a conflict scan", async () => {
+    const { prepareStatusThroughShell, resumeAppendThroughShell } = await import("../data/shellBridge");
+    const taskOp = vi.fn(async (_taskId: string, _op: string, _payload: Record<string, unknown>) => ({ ok: true, payload: {} }));
+    vi.stubGlobal("window", { pidock: { taskOp } });
+    try {
+      expect((await prepareStatusThroughShell({ taskId: "task-abcdef12" })).ok).toBe(true);
+      expect(taskOp).toHaveBeenCalledWith("task-abcdef12", "task/prepareStatus", {});
+
+      // The renderer cannot scan: omitted inputs must be ABSENT from the
+      // payload, never an empty `[]` that silently disables the gate.
+      taskOp.mockClear();
+      expect((await resumeAppendThroughShell({ taskId: "task-abcdef12" })).ok).toBe(true);
+      const [, op, payload] = taskOp.mock.calls[0]!;
+      expect(op).toBe("task/resumeAppend");
+      expect(payload).not.toHaveProperty("takenPaths");
+      expect(payload).not.toHaveProperty("branchesInUse");
+
+      // Caller-supplied scans and checkouts ride through unchanged when given.
+      taskOp.mockClear();
+      await resumeAppendThroughShell({
+        taskId: "task-abcdef12",
+        mainCheckouts: { frontend: "/src/frontend" },
+        takenPaths: ["/tasks/task-abcdef12/frontend"],
+        branchesInUse: ["task/task-abcdef12"],
+      });
+      expect(taskOp).toHaveBeenCalledWith(
+        "task-abcdef12",
+        "task/resumeAppend",
+        expect.objectContaining({
+          mainCheckouts: { frontend: "/src/frontend" },
+          takenPaths: ["/tasks/task-abcdef12/frontend"],
+          branchesInUse: ["task/task-abcdef12"],
+        }),
+      );
     } finally {
       vi.unstubAllGlobals();
     }
@@ -244,6 +287,186 @@ describe("#7 service bridge (S4)", () => {
       expect(taskOp).toHaveBeenCalledWith("task-abcdef12", "task/serviceLog", { serviceId: "saas-web", limit: 10 });
     } finally {
       vitestVi.unstubAllGlobals();
+    }
+  });
+});
+
+// #6 boundary B: main derives the conflict scan on the shell route, so a
+// renderer that cannot scan omits the keys instead of fabricating `[]`.
+describe("#6 privileged prep scan precedence", () => {
+  it("omits the scan keys the page cannot produce for append and resume", async () => {
+    const { appendTaskReposThroughShell, resumeAppendThroughShell } = await import("../data/shellBridge");
+    const appendTaskRepos = vi.fn(async (_request: { taskId: string; repositories: { sourceId: string; remote: string; remoteBranch: string }[] }) => ({ ok: true, payload: {} }));
+    const taskOp = vi.fn(async (_taskId: string, _op: string, _payload: Record<string, unknown>) => ({ ok: true, payload: {} }));
+    vi.stubGlobal("window", { pidock: { appendTaskRepos, taskOp } });
+    try {
+      await appendTaskReposThroughShell({
+        taskId: "task-abcdef12",
+        repositories: [{ sourceId: "shipment", remote: "origin", remoteBranch: "main" }],
+      });
+      const appendRequest = appendTaskRepos.mock.calls.at(-1)![0] as Record<string, unknown>;
+      expect(appendRequest).not.toHaveProperty("takenPaths");
+      expect(appendRequest).not.toHaveProperty("branchesInUse");
+      expect(appendRequest).not.toHaveProperty("mainCheckouts");
+
+      await resumeAppendThroughShell({ taskId: "task-abcdef12" });
+      const resumePayload = taskOp.mock.calls.at(-1)![2] as Record<string, unknown>;
+      expect(resumePayload).not.toHaveProperty("takenPaths");
+      expect(resumePayload).not.toHaveProperty("branchesInUse");
+      expect(resumePayload).not.toHaveProperty("mainCheckouts");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+// [PiDock 10] (#15) the terminal control bridge: the Host accepts
+// start/stop/input/resize, and the raw-input/window actions are the human
+// takeover surface - no session is named for them and no boolean stands in for
+// the caller class the Host reads from the session channel itself.
+describe("#15 terminal control bridge", () => {
+  it("forwards raw input as its own action without naming a session", async () => {
+    const { controlTerminalThroughShell } = await import("../data/shellBridge");
+    const taskOp = vi.fn(async (_taskId: string, _op: string, _payload: Record<string, unknown>) => ({ ok: true, payload: {} }));
+    vi.stubGlobal("window", { pidock: { taskOp } });
+    try {
+      const typed = await controlTerminalThroughShell({
+        taskId: "task-abcdef12",
+        instanceId: "term-task-abcdef12-1",
+        action: "input",
+        data: "echo MARK-11\n",
+      });
+      expect(typed.ok).toBe(true);
+      expect(taskOp).toHaveBeenCalledWith("task-abcdef12", "task/terminalControl", {
+        instanceId: "term-task-abcdef12-1",
+        action: "input",
+        data: "echo MARK-11\n",
+      });
+      const payload = taskOp.mock.calls.at(-1)![2] as Record<string, unknown>;
+      expect(payload).not.toHaveProperty("sessionId");
+      expect(payload).not.toHaveProperty("layers");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("forwards a window change as its own action", async () => {
+    const { controlTerminalThroughShell } = await import("../data/shellBridge");
+    const taskOp = vi.fn(async (_taskId: string, _op: string, _payload: Record<string, unknown>) => ({ ok: true, payload: {} }));
+    vi.stubGlobal("window", { pidock: { taskOp } });
+    try {
+      const resized = await controlTerminalThroughShell({
+        taskId: "task-abcdef12",
+        instanceId: "term-task-abcdef12-1",
+        action: "resize",
+        cols: 132,
+        rows: 43,
+      });
+      expect(resized.ok).toBe(true);
+      expect(taskOp).toHaveBeenCalledWith("task-abcdef12", "task/terminalControl", {
+        instanceId: "term-task-abcdef12-1",
+        action: "resize",
+        cols: 132,
+        rows: 43,
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("refuses an empty input or a non-integer window before asking the Host", async () => {
+    const { controlTerminalThroughShell } = await import("../data/shellBridge");
+    const taskOp = vi.fn(async (_taskId: string, _op: string, _payload: Record<string, unknown>) => ({ ok: true, payload: {} }));
+    vi.stubGlobal("window", { pidock: { taskOp } });
+    try {
+      const empty = await controlTerminalThroughShell({
+        taskId: "task-abcdef12",
+        instanceId: "term-1",
+        action: "input",
+        data: "",
+      });
+      expect(empty.ok).toBe(false);
+      expect(empty.error).toContain("data must be a non-empty string");
+      const fractional = await controlTerminalThroughShell({
+        taskId: "task-abcdef12",
+        instanceId: "term-1",
+        action: "resize",
+        cols: 80.5,
+        rows: 24,
+      });
+      expect(fractional.ok).toBe(false);
+      expect(fractional.error).toContain("cols/rows must be integers when resizing");
+      expect(taskOp).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("refuses a session named on a raw-input or window action instead of laundering it into the human path", async () => {
+    // `input`/`resize` are the labelled human takeover surface. The Host refuses
+    // an Agent session for them (host.ts:1573), so a caller-supplied session id
+    // must never be dropped and turned into the attested human action the Host
+    // would have refused: fail closed instead.
+    const { controlTerminalThroughShell } = await import("../data/shellBridge");
+    const taskOp = vi.fn(async (_taskId: string, _op: string, _payload: Record<string, unknown>) => ({ ok: true, payload: {} }));
+    vi.stubGlobal("window", { pidock: { taskOp } });
+    try {
+      const typed = await controlTerminalThroughShell({
+        taskId: "task-abcdef12",
+        instanceId: "term-1",
+        action: "input",
+        data: "ls\n",
+        sessionId: "sess-main",
+      });
+      expect(typed.ok).toBe(false);
+      expect(typed.error).toContain("must not name a session");
+      const resized = await controlTerminalThroughShell({
+        taskId: "task-abcdef12",
+        instanceId: "term-1",
+        action: "resize",
+        cols: 80,
+        rows: 24,
+        sessionId: "sess-main",
+      });
+      expect(resized.ok).toBe(false);
+      expect(resized.error).toContain("must not name a session");
+      expect(taskOp).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("still starts with explicit empty env layers and stops with the same payload shape", async () => {
+    const { controlTerminalThroughShell } = await import("../data/shellBridge");
+    const taskOp = vi.fn(async (_taskId: string, _op: string, _payload: Record<string, unknown>) => ({ ok: true, payload: {} }));
+    vi.stubGlobal("window", { pidock: { taskOp } });
+    try {
+      await controlTerminalThroughShell({
+        taskId: "task-abcdef12",
+        instanceId: "term-1",
+        action: "start",
+        rootId: "shipment",
+        program: "bash",
+        args: ["-l"],
+        label: "终端面板（用户显式操作）",
+      });
+      expect(taskOp).toHaveBeenCalledWith("task-abcdef12", "task/terminalControl", {
+        instanceId: "term-1",
+        action: "start",
+        rootId: "shipment",
+        program: "bash",
+        args: ["-l"],
+        layers: { repoDefaults: [], shared: [], privateEntries: [], task: [] },
+        label: "终端面板（用户显式操作）",
+      });
+      await controlTerminalThroughShell({ taskId: "task-abcdef12", instanceId: "term-1", action: "stop", label: "终端面板（用户显式操作）" });
+      expect(taskOp.mock.calls.at(-1)![2]).toEqual({
+        instanceId: "term-1",
+        action: "stop",
+        label: "终端面板（用户显式操作）",
+      });
+    } finally {
+      vi.unstubAllGlobals();
     }
   });
 });

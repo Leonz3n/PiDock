@@ -21,10 +21,12 @@ import {
   validateTaskFormName,
   workspacePath,
 } from "../data/directories";
-import { isShellConnected, provisionTaskThroughShell } from "../data/shellBridge";
+import { isShellConnected, prepareStatusThroughShell, provisionTaskThroughShell, shellTaskPrepareResume } from "../data/shellBridge";
+import { TaskPrepareRecovery } from "./TaskPrepareRecovery";
 import {
   CONTEXT_WINDOW_SOURCE_LABEL,
   DEFAULT_MODEL_CONTEXT_WINDOW,
+  REASONING_LABELS,
   REASONING_LEVELS,
   buildModelPickerGroups,
   connectionFingerprint,
@@ -793,6 +795,17 @@ function TaskSourcesModal({ taskId, onClose }: { taskId: string; onClose: () => 
           })}
         </div>
       </fieldset>
+      {isShellConnected() ? (
+        // [PiDock 03] (#6) recovery surface: the Host classifies the real
+        // worktree state and retries only the unfinished repos. Main derives
+        // the required conflict scan (task folder listing + per-repo
+        // `git worktree list`) on the privileged route, so the page neither
+        // scans nor can forge/disable the gate.
+        <TaskPrepareRecovery
+          load={() => prepareStatusThroughShell({ taskId })}
+          resume={shellTaskPrepareResume(taskId)}
+        />
+      ) : null}
       <p className="mt-3 text-[11px] text-muted">
         任务中自动生成英文数字链接名，中文名称只用于显示。同一目录被多个任务引用时共享文件，不承诺隔离。
       </p>
@@ -1630,16 +1643,6 @@ function ModelPickerModal({ taskId, sessionId, onClose }: { taskId: string; sess
     </Modal>
   );
 }
-
-const REASONING_LABELS: Record<string, string> = {
-  off: "关闭",
-  minimal: "极低",
-  low: "低",
-  medium: "中",
-  high: "高",
-  xhigh: "极高",
-  max: "最高",
-};
 
 function ThinkingPickerModal({ taskId, sessionId, onClose }: { taskId: string; sessionId: string; onClose: () => void }) {
   const workspace = useHostStore((state) => state.workspace);

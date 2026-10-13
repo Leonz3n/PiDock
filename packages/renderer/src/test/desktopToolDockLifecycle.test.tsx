@@ -16,6 +16,7 @@ import type { PidockBridge } from "../data/shellBridge";
 const roots = [{ label: "默认任务根", state: "ready" }];
 const association = { taskId: "task-a", projectId: "project-1", state: "assigned" };
 const SERVICE_ID = "s-33333333-3333-3333-3333-333333333333";
+const ENVIRONMENT_ID = "e-33333333-3333-3333-3333-333333333333";
 const WRITE_OPS = ["task/controlService", "task/quit", "task/archive", "task/restore", "task/terminalControl", "task/runCleanup"];
 
 function setup() {
@@ -26,14 +27,15 @@ function setup() {
     listTasks: vi.fn(async () => ({ ok: true, payload: { tasks: [{ taskId: "task-a", name: "Task", branch: "main", repoCount: 0, updatedAt: "now" }], roots } })),
     projectOp: vi.fn(async (request) => ({ ok: true, payload: request.op === "list" ? { initialized: true, projects: [{ id: "project-1", name: "Adder", description: "", repositories: [], directories: [] }] } : { roots, tasks: [association] } })),
     serviceCatalogOp: vi.fn(async (request: Record<string, unknown>) => {
-      if (request["op"] === "taskBindings") return { ok: true, payload: [{ taskId: "task-a", serviceId: SERVICE_ID, templateVersion: 1, rootId: "invoice-service", subdir: "", privateKeys: [] }] };
-      if (request["op"] === "list") return { ok: true, payload: [{ projectId: "project-1", serviceId: SERVICE_ID, version: 1, sharedKeys: [], descriptor: { name: "invoice-local", program: "node", args: [], ports: [4100], runType: "long-lived" } }] };
+      if (request["op"] === "taskBindings") return { ok: true, payload: [{ taskId: "task-a", serviceId: SERVICE_ID, environmentId: ENVIRONMENT_ID, environmentName: "本地开发", templateVersion: 1, rootId: "invoice-service", subdir: "", privateKeys: [] }] };
+      if (request["op"] === "list") return { ok: true, payload: [{ projectId: "project-1", environmentId: ENVIRONMENT_ID, serviceId: SERVICE_ID, version: 1, shared: [], descriptor: { name: "invoice-local", program: "node", args: [], ports: [4100], runType: "long-lived" } }] };
       return { ok: false, error: `unexpected ${String(request["op"])}` };
     }),
     taskOp: vi.fn(async (taskId: string, op: string) => {
       taskOpCalls.push({ taskId, op });
       if (op === "task/serviceStatus") return { ok: true, payload: { service: { serviceId: SERVICE_ID, state: "running", ownerSessionId: null, busy: false, closing: false, retainedRights: null, executionAvailable: false } } };
       if (op === "task/serviceLog") return { ok: true, payload: { log: [{ at: "2026-10-08T00:00:01.000Z", line: "listening at :4100" }] } };
+      if (op === "task/serviceRunRecords") return { ok: true, payload: { records: [], registered: [] } };
       return { ok: false, error: `unexpected ${op}` };
     }),
     providerOp: vi.fn(async () => ({ ok: true, payload: { state: "not-configured", profileId: null, generation: null, profiles: [] } })),
@@ -70,7 +72,10 @@ describe("[UI 对齐] S8d tool panels are on-demand and close-only", () => {
     await screen.findByText(/仅 main 会话/);
     await waitFor(() => expect(fixture.subscribed()).toBe(true));
     expect(screen.queryByTestId("desktop-tool-dock")).not.toBeInTheDocument();
-    expect(fixture.taskOpCalls).toEqual([]);
+    // Mounting the conversation issues exactly one Host read — the composer's own
+    // 推理/上下文 readout (`task/sessionContext`) — and no panel op: opening a tool
+    // panel is still on demand.
+    expect(fixture.taskOpCalls.map((call) => call.op)).toEqual(["task/sessionContext"]);
 
     fireEvent.click(screen.getByRole("button", { name: "运行" }));
     expect(await screen.findByTestId("desktop-tool-dock")).toHaveAttribute("data-tool", "runtime");

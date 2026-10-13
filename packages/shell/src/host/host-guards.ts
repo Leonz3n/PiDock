@@ -7,14 +7,18 @@
  * `validateHostTaskOp` for backward-compatible imports.
  */
 import { isHostTaskOp, isTaskOpOrigin, type HostTaskOp } from "../rpc/protocol.js";
-import { isAbsoluteTaskRoot } from "../main/task-provision.js";
+import { isAbsoluteTaskRoot, isSafeTaskBranchRef } from "../main/task-provision.js";
+import { isMultiRepoErrorCode } from "../main/multi-repo-provision.js";
 import { PI_GATED_TOOL_NAMES } from "../main/pi-session.js";
+import { MAX_TERMINAL_COLS, MAX_TERMINAL_LINE, MAX_TERMINAL_ROWS, MIN_TERMINAL_COLS, MIN_TERMINAL_ROWS } from "../main/terminal-config.js";
+import { validDimensions } from "./node-pty-protocol.js";
 import { PI_USAGE_GROUP_BY, PI_USAGE_KINDS, type PiUsageGroupBy } from "../main/usage-ledger.js";
 import { isUsageKindName } from "./task-store.js";
 import { isBrowserAction, isPageRef } from "../main/browser-rules.js";
 import { isExternalResourceKind } from "../main/service-runs.js";
 import { checkReferencePayload } from "../main/composer-references.js";
 import { REMOTE_ENTRY_MODES } from "../main/remote-rules.js";
+import { MAX_EDITOR_ARGS, MAX_EDITOR_ARG_CHARS } from "../main/external-editor.js";
 
 export const DEFAULT_WORKSPACE_ID = "s1-default-workspace";
 
@@ -52,6 +56,9 @@ export function boundWorkspaceId(): string {
 function isNonEmptyRootId(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
+
+/** The editor program/arg bound the [PiDock 10] (#15 box 28) settings enforce. */
+const MAX_EDITOR_PROGRAM_CHARS = MAX_EDITOR_ARG_CHARS;
 
 function isUsageGroupBy(value: unknown): value is PiUsageGroupBy {
   return typeof value === "string" && (PI_USAGE_GROUP_BY as readonly string[]).includes(value);
@@ -170,7 +177,15 @@ export function authorizeServiceRegistration(input: {
 }): { ok: true } | { ok: false; error: string } {
   const caller = classifyControlCaller(input);
   if (!caller.ok) return caller;
-  if (caller.kind === "agent") return { ok: false, error: "permission-denied: Agent 服务配方变更尚未接入差异确认" };
+  // This op registers launch material, which only main's trusted catalog and a
+  // main-attested human UI may do. The Agent's shared-template change is a
+  // different op and has its own diff-confirmation path (`service.template.update`
+  // -> `main/service-catalog-ipc.ts` `performTaskBoundTemplateEdit`
+  // review/confirm, asked by `main/pi-session.ts` `previewGate`), and that path
+  // registers no service - so the refusal names this op instead of claiming the
+  // Agent's recipe change has no confirmation.
+  if (caller.kind === "agent")
+    return { ok: false, error: "permission-denied: Agent 不能登记服务启动材料；Agent 的共享模板改动走 service.template.update 的差异确认通道" };
   return { ok: true };
 }
 
@@ -184,6 +199,35 @@ export function authorizeServiceRegistration(input: {
  */
 export function serviceLaunchSource(origin: unknown): "catalog" | "ui" {
   return isTaskOpOrigin(origin) && origin.kind === "service-catalog" ? "catalog" : "ui";
+}
+
+/**
+ * The code-state observation a registration may carry ([PiDock 05] #10 box 6).
+ *
+ * The observation has to come from main's own read of the task's real worktree,
+ * so only main's `service-catalog` registration (the value `serviceLaunchSource`
+ * already computes) may carry it. The renderer's own registration path reaches
+ * `task/registerService` over `shell/taskOp` with main's `shell-ui` attestation,
+ * so a `shell-ui` registration that carries an observation is refused BY NAME
+ * instead of having its claim stored: a page cannot self-attest the code state.
+ *
+ * `code` and `codeObservationFailure` are mutually exclusive by construction (a
+ * read that failed is not an observation); sending both is a contradiction and
+ * is refused rather than resolved by precedence.
+ */
+export function authorizeCodeObservation(input: {
+  origin?: unknown;
+  code?: unknown;
+  codeObservationFailure?: unknown;
+}): { ok: true } | { ok: false; error: string } {
+  if (input.code === undefined && input.codeObservationFailure === undefined) return { ok: true };
+  if (serviceLaunchSource(input.origin) !== "catalog") {
+    return { ok: false, error: "permission-denied: 代码状态只能来自主进程对真实工作树的观测，界面登记不能自证" };
+  }
+  if (input.code !== undefined && input.codeObservationFailure !== undefined) {
+    return { ok: false, error: "invalid-payload: task/registerService 不能同时携带 code 与 codeObservationFailure" };
+  }
+  return { ok: true };
 }
 
 /**
@@ -297,6 +341,11 @@ export function buildHostEnv(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** A plain string->string map (rejects arrays and nested values). */
+function isStringMap(value: unknown): value is Record<string, string> {
+  return isRecord(value) && Object.values(value).every((entry) => typeof entry === "string");
 }
 
 /**
@@ -418,14 +467,64 @@ export function validateHostTaskOp(
       }
       return { ok: true };
     }
-    for (const key of ["name", "remoteBranch", "fetchedCommit"] as const) {
-      const value = payload[key];
-      if (typeof value !== "string" || value.trim().length === 0) {
-        return {
-          ok: false,
-          error: `invalid-payload: task/provision.${key} must be a non-empty string`,
-        };
+    const hasRepos = (Array.isArray(payload["repoSelections"]) && payload["repoSelections"].length > 0) ||
+      (Array.isArray(payload["repos"]) && payload["repos"].length > 0);
+    const hasPlainDirs = Array.isArray(payload["plainDirs"]) && payload["plainDirs"].length > 0;
+    const name = payload["name"];
+    if (typeof name !== "string" || name.trim().length === 0) {
+      return {
+        ok: false,
+        error: "invalid-payload: task/provision.name must be a non-empty string",
+      };
+    }
+    if (hasRepos || !hasPlainDirs) {
+      for (const key of ["remoteBranch", "fetchedCommit"] as const) {
+        const value = payload[key];
+        if (typeof value !== "string" || value.trim().length === 0) {
+          return {
+            ok: false,
+            error: `invalid-payload: task/provision.${key} must be a non-empty string`,
+          };
+        }
       }
+    } else {
+      for (const key of ["remoteBranch", "fetchedCommit"] as const) {
+        const value = payload[key];
+        if (value !== undefined && typeof value !== "string") {
+          return {
+            ok: false,
+            error: `invalid-payload: task/provision.${key} must be a string`,
+          };
+        }
+      }
+    }
+    return { ok: true };
+  }
+  // #6 plain-dir append op: guarded payload shape
+  if (op === "task/appendDirs") {
+    if (!isRecord(payload)) return { ok: false, error: "invalid-payload: task/appendDirs requires a payload object" };
+    const plainDirs = payload["plainDirs"];
+    if (
+      !Array.isArray(plainDirs) ||
+      plainDirs.length === 0 ||
+      !plainDirs.every(
+        (entry) =>
+          typeof entry === "object" &&
+          entry !== null &&
+          !Array.isArray(entry) &&
+          typeof (entry as Record<string, unknown>)["directoryId"] === "string" &&
+          typeof (entry as Record<string, unknown>)["sourcePath"] === "string",
+      )
+    ) {
+      return { ok: false, error: "invalid-payload: task/appendDirs.plainDirs must be an array of {directoryId, sourcePath}" };
+    }
+    return { ok: true };
+  }
+  // #6 prepare read: read-only, no caller input, so only the envelope shape
+  // is checked here (the write path `task/resumeAppend` keeps its own gate).
+  if (op === "task/prepareStatus") {
+    if (payload !== undefined && !isRecord(payload)) {
+      return { ok: false, error: "invalid-payload: task/prepareStatus payload must be an object" };
     }
     return { ok: true };
   }
@@ -442,9 +541,70 @@ export function validateHostTaskOp(
     }
     // Caller-scanned conflict inputs are REQUIRED (never silently `[]`):
     // `appendRepos` fails closed without them so the path/branch gate
-    // cannot be skipped by omitting the scan.
+    // cannot be skipped by omitting the scan. Precedence: on the RENDERER
+    // route main is the authoritative producer (it overwrites whatever the
+    // page sent with the scan it derives from the resolved task folder +
+    // each target repo's source checkout), while a caller that invokes the
+    // Host directly (main-internal executor, tests) still supplies its own.
     if (!Array.isArray(payload["takenPaths"]) || !Array.isArray(payload["branchesInUse"])) {
       return { ok: false, error: "invalid-payload: task/appendRepos requires caller-scanned takenPaths + branchesInUse" };
+    }
+    // `branch` lands in `git branch <branch> <commit>` argv: reject a leading
+    // `-` (git would parse it as an option) and invalid ref characters.
+    if (payload["branch"] !== undefined && !isSafeTaskBranchRef(payload["branch"])) {
+      return { ok: false, error: "invalid-payload: task/appendRepos.branch must be a safe task branch ref" };
+    }
+    return { ok: true };
+  }
+  // #6 resume: shape-checked here; the real classification + gates run
+  // Host-side. Selections come from the task record, so only the
+  // caller-scanned conflict inputs are required from the payload.
+  // `fetchedCommits` is optional by contract: a resume plans from each
+  // repo's RECORDED fixed baseline (recovery preserves it even when the
+  // remote branch has moved/vanished); a supplied value that differs from
+  // the record is refused Host-side, and the plan still emits a real
+  // `git fetch`, so a deleted remote fails at that op.
+  if (op === "task/resumeAppend") {
+    if (!isRecord(payload))
+      return { ok: false, error: "invalid-payload: task/resumeAppend requires a payload object" };
+    // Caller-scanned conflict inputs are REQUIRED (never silently `[]`):
+    // `resumeAppend` fails closed without them so the path/branch gate
+    // cannot be skipped by omitting the scan. Precedence: on the RENDERER
+    // route main is the authoritative producer (it overwrites whatever the
+    // page sent — including `mainCheckouts` — with the scan it derives from
+    // the resolved task folder + each recorded repo's source checkout),
+    // while a caller that invokes the Host directly still supplies its own.
+    if (!Array.isArray(payload["takenPaths"]) || !Array.isArray(payload["branchesInUse"])) {
+      return { ok: false, error: "invalid-payload: task/resumeAppend requires caller-scanned takenPaths + branchesInUse" };
+    }
+    if (payload["branch"] !== undefined && !isSafeTaskBranchRef(payload["branch"])) {
+      return { ok: false, error: "invalid-payload: task/resumeAppend.branch must be a safe task branch ref" };
+    }
+    const resumeCheckouts = payload["mainCheckouts"];
+    if (resumeCheckouts !== undefined && !isStringMap(resumeCheckouts)) {
+      return { ok: false, error: "invalid-payload: task/resumeAppend.mainCheckouts must map repo names to path strings" };
+    }
+    const resumeFetched = payload["fetchedCommits"];
+    if (resumeFetched !== undefined && !isStringMap(resumeFetched)) {
+      return { ok: false, error: "invalid-payload: task/resumeAppend.fetchedCommits must map repo names to commit strings" };
+    }
+    const resumeErrors = payload["prepareErrors"];
+    if (resumeErrors !== undefined) {
+      if (!isRecord(resumeErrors)) {
+        return { ok: false, error: "invalid-payload: task/resumeAppend.prepareErrors must map repo names to {code, message}" };
+      }
+      for (const entry of Object.values(resumeErrors)) {
+        if (
+          typeof entry !== "object" ||
+          entry === null ||
+          Array.isArray(entry) ||
+          typeof (entry as Record<string, unknown>)["code"] !== "string" ||
+          !isMultiRepoErrorCode((entry as Record<string, unknown>)["code"]) ||
+          typeof (entry as Record<string, unknown>)["message"] !== "string"
+        ) {
+          return { ok: false, error: "invalid-payload: task/resumeAppend.prepareErrors must map repo names to {code, message} with a known code" };
+        }
+      }
     }
     return { ok: true };
   }
@@ -620,6 +780,29 @@ export function validateHostTaskOp(
     if (typeof templateVersion !== "string" || templateVersion.trim().length === 0) {
       return { ok: false, error: "invalid-payload: task/registerService.templateVersion must be a non-empty string" };
     }
+    // [PiDock 05] (#10 box 6) the worktree observation: shape here, caller class in
+    // `authorizeCodeObservation`. A malformed field is refused instead of stored
+    // (the record must never hold a half-observed code state), and the failure
+    // reason is bounded single-line text because it is echoed into the service's
+    // renderer-readable bounded log.
+    const code = payload["code"];
+    if (code !== undefined) {
+      if (!isRecord(code)) return { ok: false, error: "invalid-payload: task/registerService.code must be an object" };
+      const commit = code["commit"];
+      if (commit !== undefined && (typeof commit !== "string" || !/^[0-9a-f]{7,64}$/i.test(commit))) {
+        return { ok: false, error: "invalid-payload: task/registerService.code.commit must be a git commit id" };
+      }
+      if (typeof code["dirty"] !== "boolean") {
+        return { ok: false, error: "invalid-payload: task/registerService.code.dirty must be a boolean" };
+      }
+    }
+    const codeObservationFailure = payload["codeObservationFailure"];
+    if (codeObservationFailure !== undefined) {
+      if (typeof codeObservationFailure !== "string" || codeObservationFailure.trim().length === 0 ||
+          codeObservationFailure.length > 200 || /[\r\n\0]/.test(codeObservationFailure)) {
+        return { ok: false, error: "invalid-payload: task/registerService.codeObservationFailure must be a single-line non-empty reason" };
+      }
+    }
     return { ok: true };
   }
   if (op === "task/planServiceStart" || op === "task/serviceStatus" || op === "task/serviceLog") {
@@ -636,11 +819,20 @@ export function validateHostTaskOp(
       return { ok: false, error: "invalid-payload: task/controlService requires a payload object" };
     const serviceId = payload["serviceId"];
     const action = payload["action"];
-    if (typeof serviceId !== "string" || serviceId.trim().length === 0) {
-      return { ok: false, error: "invalid-payload: task/controlService.serviceId must be a non-empty string" };
-    }
     if (action !== "start" && action !== "stop") {
       return { ok: false, error: "invalid-payload: task/controlService.action must be start/stop" };
+    }
+    // [PiDock 05] (#10 box 4) the group form of the SAME op: it names the task's
+    // planned group instead of one serviceId, so no `serviceId` is required.
+    // Shape only — every unit still goes through the one gate in
+    // `host/service-control.ts`, and `HOST_TASK_OPS` is unchanged.
+    if (payload["group"] === true) {
+      return action === "start"
+        ? { ok: true }
+        : { ok: false, error: "invalid-payload: task/controlService.group 仅支持 action=start" };
+    }
+    if (typeof serviceId !== "string" || serviceId.trim().length === 0) {
+      return { ok: false, error: "invalid-payload: task/controlService.serviceId must be a non-empty string" };
     }
     return { ok: true };
   }
@@ -1044,6 +1236,52 @@ export function validateHostTaskOp(
     }
     return { ok: true };
   }
+  if (op === "task/openEditor") {
+    // [PiDock 10] (#15 box 28) Only main's attested entry builds this payload
+    // (`shell/openTaskEditor`); `shell/taskOp` refuses the op by name. The
+    // schema is exactly `{rootId, editor:{program, args?}}` and the program is
+    // the user's configured one, read by main from its own settings document:
+    // any other key — a page-supplied `program`/`args`/`path` included — is
+    // refused here rather than ignored.
+    if (!isRecord(payload)) return { ok: false, error: "invalid-payload: task/openEditor requires a payload object" };
+    if (!isNonEmptyRootId(payload["rootId"])) {
+      return { ok: false, error: "invalid-payload: task/openEditor.rootId must be a non-empty string" };
+    }
+    const extra = Object.keys(payload).filter((key) => key !== "rootId" && key !== "editor");
+    if (extra.length > 0) {
+      return {
+        ok: false,
+        error: `invalid-payload: task/openEditor 只接受 rootId 与用户配置的 editor，不接受 ${extra.sort().join(",")}`,
+      };
+    }
+    const editor = payload["editor"];
+    if (!isRecord(editor)) return { ok: false, error: "invalid-payload: task/openEditor.editor must be the user-configured program object" };
+    const editorKeys = Object.keys(editor).filter((key) => key !== "program" && key !== "args");
+    if (editorKeys.length > 0) {
+      return { ok: false, error: `invalid-payload: task/openEditor.editor 不接受 ${editorKeys.sort().join(",")}` };
+    }
+    const program = editor["program"];
+    if (
+      typeof program !== "string" ||
+      program.length === 0 ||
+      program.length > MAX_EDITOR_PROGRAM_CHARS ||
+      program.includes("\0")
+    ) {
+      return { ok: false, error: "invalid-payload: task/openEditor.editor.program must be a non-empty absolute path string" };
+    }
+    // Absolute-path semantics are enforced by the rule layer (which also probes
+    // the file); the envelope only bounds the value.
+    const args = editor["args"];
+    if (
+      args !== undefined &&
+      (!Array.isArray(args) ||
+        args.length > MAX_EDITOR_ARGS ||
+        !args.every((entry) => typeof entry === "string" && !entry.includes("\0") && entry.length <= MAX_EDITOR_PROGRAM_CHARS))
+    ) {
+      return { ok: false, error: `invalid-payload: task/openEditor.editor.args must be at most ${MAX_EDITOR_ARGS} strings` };
+    }
+    return { ok: true };
+  }
   if (op === "task/terminalHistory") {
     if (!isRecord(payload)) return { ok: false, error: "invalid-payload: task/terminalHistory requires a payload object" };
     const instanceId = payload["instanceId"];
@@ -1091,12 +1329,31 @@ export function validateHostTaskOp(
     if (typeof instanceId !== "string" || instanceId.trim().length === 0) {
       return { ok: false, error: "invalid-payload: task/terminalControl.instanceId must be a non-empty string" };
     }
-    if (action !== "start" && action !== "stop") {
-      return { ok: false, error: "invalid-payload: task/terminalControl.action must be start/stop" };
+    if (action !== "start" && action !== "stop" && action !== "input" && action !== "resize") {
+      return { ok: false, error: "invalid-payload: task/terminalControl.action must be start/stop/input/resize" };
     }
     const sessionId = payload["sessionId"];
     if (sessionId !== undefined && (typeof sessionId !== "string" || sessionId.trim().length === 0)) {
       return { ok: false, error: "invalid-payload: task/terminalControl.sessionId must be a non-empty string" };
+    }
+    if (action === "input") {
+      const data = payload["data"];
+      if (typeof data !== "string" || data.length === 0 || Buffer.byteLength(data) > MAX_TERMINAL_LINE) {
+        return { ok: false, error: `invalid-payload: task/terminalControl.data must be a non-empty string of at most ${MAX_TERMINAL_LINE} bytes` };
+      }
+      return { ok: true };
+    }
+    if (action === "resize") {
+      // The same bounds the worker protocol and the registry enforce, so an
+      // out-of-range window is refused as an invalid payload at the boundary
+      // instead of only when it reaches the pty.
+      if (!validDimensions(payload["cols"], payload["rows"])) {
+        return {
+          ok: false,
+          error: `invalid-payload: task/terminalControl.cols/rows must be integers within ${MIN_TERMINAL_COLS}x${MIN_TERMINAL_ROWS}–${MAX_TERMINAL_COLS}x${MAX_TERMINAL_ROWS}`,
+        };
+      }
+      return { ok: true };
     }
     if (action === "start") {
       if (typeof payload["program"] !== "string") {

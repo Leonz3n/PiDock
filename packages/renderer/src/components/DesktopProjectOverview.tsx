@@ -1,7 +1,9 @@
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
-import type { DesktopProject, TaskAssociation } from "../data/desktopProjects";
+import { SharedRepoIsolation } from "./SharedRepoIsolation";
+import { projectName, type DesktopProject, type TaskAssociation } from "../data/desktopProjects";
 import type { DesktopShellTask } from "./DesktopShell";
+import { hostText } from "../data/workspaceFiles";
 
 /**
  * [UI 对齐 S8e] #47 `项目总览`，结构照 `prototypes/pidock-ui/management.js` 的
@@ -49,7 +51,7 @@ export function DesktopProjectOverview({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-[10px] tracking-[1.8px] text-[#95979c] uppercase">Project</p>
-          <h1 className="mt-1.5 truncate text-[26px] font-semibold tracking-[-0.6px] text-ink">{project ? project.name : projectsInitialized ? "未归属任务" : "项目映射未建立"}</h1>
+          <h1 className="mt-1.5 truncate text-[26px] font-semibold tracking-[-0.6px] text-ink">{project ? projectName(project) : projectsInitialized ? "未归属任务" : "项目映射未建立"}</h1>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button type="button" onClick={onManage}>项目管理</Button>
@@ -89,9 +91,9 @@ export function DesktopProjectOverview({
           >
             <h3 className="truncate text-[13px] font-semibold text-ink">{task.name}</h3>
             <p className="mt-1.5 truncate text-[11px] text-muted">
-              {task.repoCount > 0 ? `${task.repoCount} 仓库 · ${task.branch}` : "普通目录"}
+              {task.repoCount > 0 ? `${task.repoCount} 仓库 · ${hostText(task.branch, "Host 未上报分支")}` : "普通目录"}
             </p>
-            <span className="mt-2 inline-flex"><Badge>{task.updatedAt.slice(0, 10)}</Badge></span>
+            <span className="mt-2 inline-flex"><Badge>{hostText(task.updatedAt.slice(0, 10), "Host 未上报更新时间")}</Badge></span>
           </button>
         ))}
         {scoped.length === 0 && (
@@ -101,6 +103,11 @@ export function DesktopProjectOverview({
         )}
       </div>
 
+      {/* [PiDock 03] (#6 盒子 6) the tasks above are already shown together; this
+          is the readout that keeps their shared repositories apart, and the
+          plain-directory link that is NOT isolated. */}
+      <SharedRepoIsolation tasks={scoped.map((task) => ({ taskId: task.taskId, name: task.name }))} />
+
       <div className="mt-7 flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-[13px] font-semibold text-ink">项目仓库与目录</h2>
         <Button type="button" size="sm" onClick={onManageDirectories}>管理仓库</Button>
@@ -109,16 +116,16 @@ export function DesktopProjectOverview({
         {(project?.repositories ?? []).map((source) => (
           <div key={source.id} className="flex items-center gap-3 rounded-[7px] border border-line bg-paper px-3 py-2 text-xs">
             <span aria-hidden className="text-muted">▸</span>
-            <strong className="truncate font-semibold text-ink">{source.name}</strong>
-            <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-muted">{source.path}</span>
+            <strong className="truncate font-semibold text-ink">{hostText(source.name, "Host 未上报来源名称")}</strong>
+            <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-muted">{hostText(source.path, "Host 未上报来源路径")}</span>
           </div>
         ))}
         {(project?.directories ?? []).map((source) => (
           <div key={source.id} className="flex items-center gap-3 rounded-[7px] border border-line bg-paper px-3 py-2 text-xs">
             <span aria-hidden className="text-muted">▸</span>
-            <strong className="truncate font-semibold text-ink">{source.name}</strong>
+            <strong className="truncate font-semibold text-ink">{hostText(source.name, "Host 未上报来源名称")}</strong>
             <Badge variant="soft">普通目录</Badge>
-            <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-muted">{source.path}</span>
+            <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-muted">{hostText(source.path, "Host 未上报来源路径")}</span>
           </div>
         ))}
         {project !== null && project.repositories.length === 0 && project.directories.length === 0 && (

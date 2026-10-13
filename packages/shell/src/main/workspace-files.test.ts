@@ -36,8 +36,23 @@ describe("workspaceRoots", () => {
   it("lists each repo as its own worktree root with its baseline branch, never merging them", () => {
     const list = roots();
     expect(list.map((root) => root.id)).toEqual(["front-monorepo", "invoice-service", "dir-51cd20bb"]);
-    expect(list[0]).toMatchObject({ kind: "worktree", repoDir: "front-monorepo", branch: "main", path: `${TASK_DIR}/front-monorepo` });
-    expect(list[1]).toMatchObject({ kind: "worktree", repoDir: "invoice-service", branch: "release/v2" });
+    expect(list[0]).toMatchObject({ kind: "worktree", repoDir: "front-monorepo", baselineBranch: "main", path: `${TASK_DIR}/front-monorepo` });
+    expect(list[1]).toMatchObject({ kind: "worktree", repoDir: "invoice-service", baselineBranch: "release/v2" });
+  });
+
+  it("keeps the task's own declared branch apart from the pinned baseline, and carries no observation", () => {
+    const list = workspaceRoots({
+      taskId: "task-aaaaaaaa",
+      taskDir: TASK_DIR,
+      repos: ["repo-51cd20bb"],
+      baselineBranch: "main",
+      taskBranch: "task/task-aaaaaaaa",
+    });
+    expect(list[0]).toMatchObject({ baselineBranch: "main", expectedBranch: "task/task-aaaaaaaa" });
+    // The rules layer never reads a worktree: no branch and no change state may
+    // exist here until the Host fills them with a real read.
+    expect(list[0]!.workingBranch).toBeUndefined();
+    expect(list[0]!.dirty).toBeUndefined();
   });
 
   it("keeps a plain-directory link as a shared root with its recorded original target", () => {

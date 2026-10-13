@@ -3,6 +3,7 @@ import { Badge, Button, EmptyState, IconButton, Panel } from "./ui";
 import { Icon, type IconName } from "./Icon";
 import { CodeBlock } from "./CodeBlock";
 import { ConfigTable } from "./ConfigTable";
+import { ProtocolPanel, TerminalTakeoverPanel } from "./ProtocolTerminalPanels";
 import type { BrowserPage, Environment, Permission, Service, Subagent, Task, TaskDirectory, WorkspaceFile } from "../data/types";
 import type { ToolPanel } from "../stores/ui";
 import { environmentLabel } from "../data/shellNav";
@@ -26,18 +27,19 @@ import {
   readBrowserPageState,
   setBrowserTakeover,
 } from "../data/browserSurface";
+import { isShellConnected } from "../data/shellBridge";
 import {
-  protocolConsumerStateLabel,
-  protocolModeLabel,
-  toolchainStatusLabel,
-  type ProtocolBindingView,
-} from "../data/protocolBinding";
-import type {
-  TerminalHistoryEntryView,
-  TerminalPlanView,
-  TerminalStateView,
-  WorkspaceBrowserView,
+  hostText,
+  type TerminalHistoryEntryView,
+  type TerminalPlanView,
+  type TerminalStateView,
+  type WorkspaceBrowserView,
 } from "../data/workspaceFiles";
+
+// 协议 and the 终端 takeover read no fixture state, so they live in their own
+// module ([UI 对齐 S8a] #47) that the packaged dock imports directly; this file
+// keeps exporting them for the demo path (`pages/TaskPage.tsx`) and its tests.
+export { ProtocolPanel, TerminalTakeoverPanel };
 
 export function panelName(panel: ToolPanel) {
   return { runtime: "运行", protocol: "协议", browser: "浏览器", files: "文件", terminal: "终端", logs: "日志" }[panel];
@@ -221,6 +223,14 @@ export function RuntimePanel({
   // listener group), the run record and the shared-resource limits.
   const topology = provided ?? projectServiceTopology(task, environment);
   const selectedUnit = service ? topology.units.find((unit) => unit.serviceId === service.id) : undefined;
+  // The Host's own run record, when one exists for this service, wins over the
+  // task's `runRecord`: `shellHost` merges the real `task/serviceRunRecords`
+  // payload into `topology.records`, and this is the only component that reads
+  // it. Without this read a Host-recorded declared port / observed pid could
+  // never reach the UI (the board would keep showing the memory fixture).
+  const runRecord = service
+    ? topology.records.find((entry) => entry.serviceId === service.id)?.run ?? service.runRecord
+    : undefined;
   const selectedRouting = selectedUnit ? topology.routing.filter((entry) => entry.unitId === selectedUnit.unitId) : [];
   const selectedGroups = selectedUnit
     ? topology.groups.filter((group) => group.members.includes(selectedUnit.unitId))
@@ -412,25 +422,36 @@ export function RuntimePanel({
           </ul>
         </Panel>
       ) : null}
-      {service?.runRecord ? (
+      {runRecord ? (
         <Panel title="运行记录">
           <dl className="flex flex-col gap-1 text-[11px] text-muted" data-testid="service-run-record">
-            <Row label="运行标识" value={service.runRecord.runId} mono />
-            <Row label="模板版本" value={service.runRecord.templateVersion} />
-            <Row label="代码状态" value={`${codeStateLabel(service.runRecord.codeState)}${service.runRecord.codeCommit ? ` · ${service.runRecord.codeCommit}` : ""}`} />
-            <Row label="构建状态" value={buildFreshnessLabel(service.runRecord.buildFreshness)} />
-            <Row label="端口" value={service.runRecord.ports.length > 0 ? service.runRecord.ports.join(", ") : "无端口绑定"} />
+            <Row label="运行标识" value={runRecord.runId} mono />
+            <Row label="模板版本" value={runRecord.templateVersion} />
+            <Row label="代码状态" value={`${codeStateLabel(runRecord.codeState)}${runRecord.codeCommit ? ` · ${runRecord.codeCommit}` : ""}`} />
+            <Row label="构建状态" value={buildFreshnessLabel(runRecord.buildFreshness)} />
+            <Row
+              label="端口"
+              value={
+                runRecord.ports.length === 0
+                  ? "无端口绑定"
+                  : runRecord.portsSource === "observed"
+                    ? `${runRecord.ports.join(", ")}（实测监听）`
+                    : runRecord.portsSource === "declared"
+                      ? `${runRecord.ports.join(", ")}（声明端口，未实测监听）`
+                      : `${runRecord.ports.join(", ")}（来源未标注）`
+              }
+            />
             <Row
               label="进程身份"
-              value={`${service.runRecord.processIdentity.owner === "human" ? "用户操作" : "Agent"} · pid ${service.runRecord.processIdentity.pid} · ${service.runRecord.processIdentity.startedAt}`}
+              value={`${runRecord.processIdentity.owner === "human" ? "用户操作" : "Agent"} · pid ${runRecord.processIdentity.pid} · ${runRecord.processIdentity.startedAt}`}
             />
-            <Row label="日志" value={service.runRecord.logRef} mono />
-            {service.runRecord.exitReason ? <Row label="结束原因" value={service.runRecord.exitReason} /> : null}
-            {service.runRecord.simulated ? <Row label="数据来源" value="内存模拟记录（未接入真实进程）" /> : null}
+            <Row label="日志" value={runRecord.logRef} mono />
+            {runRecord.exitReason ? <Row label="结束原因" value={runRecord.exitReason} /> : null}
+            {runRecord.simulated ? <Row label="数据来源" value="内存模拟记录（未接入真实进程）" /> : null}
           </dl>
-          {service.runRecord.verifications.length > 0 ? (
+          {runRecord.verifications.length > 0 ? (
             <ul className="mt-2 flex flex-col gap-0.5 text-[11px] text-muted">
-              {service.runRecord.verifications.map((verification) => (
+              {runRecord.verifications.map((verification) => (
                 <li key={verification.detail}>
                   · {verification.ok ? "通过" : "未通过"} {verification.detail}
                 </li>
@@ -468,131 +489,6 @@ function Row({ label, value, mono = false }: { label: string; value: string; mon
     <div className="flex items-start justify-between gap-3">
       <dt className="shrink-0">{label}</dt>
       <dd className={`text-right text-ink ${mono ? "font-mono text-[10px]" : ""}`}>{value}</dd>
-    </div>
-  );
-}
-
-/**
- * [PiDock 08] (#14) protocol preparation panel: the protocol repository, the
- * generation steps, the *actual* generated version, each consumer's binding
- * and staleness, the platform toolchain result and the reasons a switch is
- * stopped. Display only — the Host owns the decisions; the panel never shows a
- * generated version it was not given.
- */
-export function ProtocolPanel({ view }: { view: ProtocolBindingView }) {
-  const staleConsumers = view.consumers.filter((consumer) => consumer.state !== "ready");
-  return (
-    <div className="flex flex-col gap-3">
-      <ul className="flex flex-col gap-1.5 text-xs" data-testid="protocol-summary">
-        <li className="rounded-md border border-line px-2 py-1.5">
-          <span className="text-ink">协议仓库 {view.protocol.repoDir || "未配置"}</span>
-          <span className="block text-[10px] text-muted">
-            绑定方式：{protocolModeLabel(view.mode)}
-            {view.simulated ? " · 内存投影（非 Host 结果）" : ""}
-          </span>
-        </li>
-        <li className="rounded-md border border-line px-2 py-1.5" data-testid="protocol-generated-version">
-          <span className="text-ink">实际生成版本：{view.generatedVersion ?? "尚未生成"}</span>
-          {view.generatedAt ? <span className="block text-[10px] text-muted">生成时间：{view.generatedAt}</span> : null}
-          <span className="block text-[10px] text-muted">{view.generationReason}</span>
-        </li>
-        {view.runsGeneration ? (
-          <li className="rounded-md border border-line px-2 py-1.5" data-testid="protocol-steps">
-            <span className="text-ink">生成步骤</span>
-            <ul className="mt-1 flex flex-col gap-0.5 text-[11px] text-muted">
-              {view.generationSteps.map((step) => (
-                <li key={`${step.kind}-${step.program}`}>
-                  · {step.kind === "postprocess" ? "后处理" : "生成"} {step.program} {step.args.join(" ")}
-                </li>
-              ))}
-            </ul>
-          </li>
-        ) : null}
-      </ul>
-
-      <Panel title="准备状态">
-        <ul className="flex flex-col gap-1 text-[11px] text-muted" data-testid="protocol-prepare">
-          {view.prepare.map((entry) => (
-            <li key={entry.state}>
-              {entry.ok ? "✓" : "○"} {entry.label}：{entry.detail}
-            </li>
-          ))}
-        </ul>
-      </Panel>
-
-      {view.consumers.length > 0 ? (
-        <Panel title="消费者绑定">
-          <ul className="flex flex-col gap-1.5 text-xs" data-testid="protocol-consumers">
-            {view.consumers.map((consumer) => (
-              <li key={consumer.consumerId} className="rounded-md border border-line px-2 py-1.5">
-                <div className="text-ink">
-                  {consumer.name} · {consumer.language === "go" ? "Go" : "TS"} · {protocolConsumerStateLabel(consumer.state)}
-                </div>
-                <span className="block text-[10px] text-muted">
-                  {consumer.binding.kind === "release"
-                    ? `发布依赖：${consumer.binding.dependency}`
-                    : consumer.binding.kind === "go-workspace"
-                      ? `任务工作区：${consumer.binding.path}`
-                      : `受管链接：${consumer.binding.linkPath}`}
-                </span>
-                {consumer.binding.kind === "go-workspace" && consumer.binding.excludedConsumers.length > 0 ? (
-                  <span className="block text-[10px] text-muted">
-                    未并入（避免合并依赖选择）：{consumer.binding.excludedConsumers.join("、")}
-                  </span>
-                ) : null}
-                {consumer.binding.kind === "go-workspace" ? (
-                  <span className="block text-[10px] text-muted">不改写发布配置：{consumer.binding.releaseManifestsUntouched.join("、")}</span>
-                ) : null}
-                {consumer.binding.kind === "ts-link" ? (
-                  <span className="block text-[10px] text-muted">
-                    恢复绑定：{consumer.binding.restore.program} {consumer.binding.restore.args.join(" ")}
-                  </span>
-                ) : null}
-                <span className="block text-[10px] text-muted">{consumer.stateDetail}</span>
-                {consumer.resolution ? (
-                  <span className="block text-[10px] text-muted">
-                    解析路径：{consumer.resolution.ok ? "已确认" : "未通过"} {consumer.resolution.message}
-                  </span>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-          {staleConsumers.length > 0 ? (
-            <p className="mt-2 text-[10px] text-muted" data-testid="protocol-stale-note">
-              {staleConsumers.length} 个消费者需要重新生成/编译/重启后才算使用新协议
-            </p>
-          ) : null}
-        </Panel>
-      ) : null}
-
-      {view.blockers.length > 0 || view.diagnostics.length > 0 ? (
-        <Panel title="停止原因与诊断">
-          <ul className="flex flex-col gap-1 text-[11px] text-muted" data-testid="protocol-diagnostics">
-            {view.blockers.map((blocker) => (
-              <li key={`${blocker.code}-${blocker.consumerId}`}>· [{blocker.code}] {blocker.message}</li>
-            ))}
-            {view.diagnostics.map((diagnostic) => (
-              <li key={`${diagnostic.code}-${diagnostic.message}`}>· [{diagnostic.code}] {diagnostic.message}</li>
-            ))}
-          </ul>
-        </Panel>
-      ) : null}
-
-      <Panel title="生成工具链">
-        <p className="text-[11px] text-muted">
-          平台：{view.toolchain.platform || "未探测"} · {view.toolchain.ok ? "就绪" : "未就绪"}；桌面可启动不等同于生成支持。
-        </p>
-        <ul className="mt-1 flex flex-col gap-0.5 text-[11px] text-muted" data-testid="protocol-toolchain">
-          {view.toolchain.entries.map((entry) => (
-            <li key={entry.toolId}>
-              · {entry.label}：{toolchainStatusLabel(entry.status)}
-
-              {entry.version ? ` (${entry.version})` : ""}
-            </li>
-          ))}
-          {view.toolchain.entries.length === 0 ? <li>· {view.toolchain.note}</li> : null}
-        </ul>
-      </Panel>
     </div>
   );
 }
@@ -797,20 +693,20 @@ export function FilesPanel({
               onClick={() => onSelectRoot?.(root.id)}
               className={`rounded border px-2 py-1 text-[11px] ${selected?.rootId === root.id ? "border-accent text-ink" : "border-line text-muted"}`}
             >
-              {root.label}
-              <span className="ml-1 text-[10px] text-muted">{root.kind === "shared-dir" ? "普通目录" : root.repo ?? root.id}</span>
+              {hostText(root.label, "Host 未上报根名称")}
+              <span className="ml-1 text-[10px] text-muted">{root.kind === "shared-dir" ? "普通目录" : hostText(root.repo ?? root.id, "Host 未上报根身份")}</span>
             </button>
           ))}
         </div>
         {selected ? (
           <p className="text-[11px] text-muted">
-            任务 {selected.tree?.attribution.taskId ?? browser.taskId} · 仓库 {selected.tree?.attribution.repo ?? selected.tree?.attribution.directoryId ?? "-"} · 工作目录 {""}
-            <span className="font-mono">{selected.tree?.attribution.piWorkDir ?? browser.taskDir}</span>
+            任务 {hostText(selected.tree?.attribution.taskId ?? browser.taskId, "Host 未上报任务身份")} · 仓库 {hostText(selected.tree?.attribution.repo ?? selected.tree?.attribution.directoryId, "Host 未上报仓库身份")} · 工作目录{" "}
+            <span className="font-mono">{hostText(selected.tree?.attribution.piWorkDir ?? browser.taskDir, "Host 未上报统一工作目录")}</span>
           </p>
         ) : null}
         {selected?.tree?.attribution.sharedNote ? (
           <p className="rounded border border-warn/40 px-2 py-1 text-[11px] text-warn" data-testid="shared-dir-note">
-            {selected.tree.attribution.sharedNote} · 原始目标 <span className="font-mono">{selected.tree.attribution.sourcePath}</span>
+            {selected.tree.attribution.sharedNote} · 原始目标 <span className="font-mono">{hostText(selected.tree.attribution.sourcePath, "Host 未记录原始目标")}</span>
           </p>
         ) : null}
         {selected?.tree ? (
@@ -824,7 +720,7 @@ export function FilesPanel({
                   className="w-full truncate text-left font-mono text-[11px] text-ink disabled:text-muted"
                 >
                   {entry.kind === "dir" ? "📁 " : ""}
-                  {entry.path}
+                  {hostText(entry.path, "Host 未上报条目路径")}
                 </button>
               </li>
             ))}
@@ -832,16 +728,16 @@ export function FilesPanel({
             {selected.tree.truncated ? <li className="text-[11px] text-muted">条目过多，仅显示前 {selected.tree.entries.length} 条。</li> : null}
           </ul>
         ) : null}
-        {selected?.preview ? <CodeBlock label={selected.preview.path} language={selected.preview.language} code={selected.preview.source} /> : null}
+        {selected?.preview ? <CodeBlock label={hostText(selected.preview.path, "Host 未上报预览路径")} language={selected.preview.language} code={selected.preview.source} /> : null}
         {selected?.diff ? (
           <div className="flex flex-col gap-1" data-testid="file-diff">
-            <span className="text-[11px] text-muted">Git 差异 · {selected.diff.attribution.repo ?? "-"}</span>
+            <span className="text-[11px] text-muted">Git 差异 · {hostText(selected.diff.attribution.repo, "Host 未上报仓库身份")}</span>
             <pre className="max-h-52 overflow-auto rounded border border-line p-2 font-mono text-[10px] text-ink">{selected.diff.diff}</pre>
           </div>
         ) : null}
         {selected?.delivery ? (
           <p className="text-[11px] text-muted" data-testid="delivery-target">
-            交付入口：{selected.delivery.repo} · 分支 {selected.delivery.branch || "未记录"} · 不自动提交/推送/合并
+            交付入口：{hostText(selected.delivery.repo, "Host 未上报交付仓库身份")} · 远程基线分支 {selected.delivery.branch || "未记录"} · 不自动提交/推送/合并
           </p>
         ) : null}
         <ul className="flex flex-col gap-1 text-xs">
@@ -874,27 +770,52 @@ export function FilesPanel({
   );
 }
 
-export function TerminalPanel({
+/**
+ * [PiDock 10] (#15) the terminal tool.
+ *
+ * Inside the sandboxed shell the tool is the human takeover surface for a real
+ * Host PTY (`TerminalTakeoverPanel`): plan, instance list, bounded history and
+ * labelled human start/stop/input/resize through the typed bridge. The packaged
+ * desktop app renders the same takeover surface from `DesktopToolDock` once the
+ * Host reports it can spawn a pty. Outside the shell (Vite dev, tests) it keeps
+ * the prototype's in-memory echo and says so rather than implying a process.
+ */
+export function TerminalPanel(props: {
+  taskId: string;
+  seed: string[];
+  terminal?: MemoryTerminalView;
+}) {
+  return isShellConnected() ? <TerminalTakeoverPanel taskId={props.taskId} /> : <MemoryTerminalPanel {...props} />;
+}
+
+/**
+ * [PiDock 10] (#15) Host/memory terminal view: the planned cwd + resolved env
+ * rows, this task's instances and their real state. `spawnImplemented: false`
+ * means no real pty can be started on this Host, and the panel says so rather
+ * than showing a fake pid.
+ */
+export interface MemoryTerminalView {
+  plan?: TerminalPlanView;
+  state?: TerminalStateView;
+  history?: TerminalHistoryEntryView[];
+  onStart?: () => void;
+  onStop?: (instanceId: string) => void;
+  onResize?: (instanceId: string, cols: number, rows: number) => void;
+}
+
+/**
+ * The in-memory prototype panel (no shell connected): it renders the adapter's
+ * plan/instance rows and echoes what the user types, and it never claims a
+ * process. Rendered only while `isShellConnected()` is false.
+ */
+export function MemoryTerminalPanel({
   taskId,
   seed,
   terminal,
 }: {
   taskId: string;
   seed: string[];
-  /**
-   * [PiDock 10] (#15) Host/memory terminal view: the planned cwd + resolved env
-   * rows, this task's instances and their real state. `spawnImplemented: false`
-   * means the plan/tracking exists but no real pty is running yet, and the
-   * panel says so rather than showing a fake pid.
-   */
-  terminal?: {
-    plan?: TerminalPlanView;
-    state?: TerminalStateView;
-    history?: TerminalHistoryEntryView[];
-    onStart?: () => void;
-    onStop?: (instanceId: string) => void;
-    onResize?: (instanceId: string, cols: number, rows: number) => void;
-  };
+  terminal?: MemoryTerminalView;
 }) {
   const runTerminalCommand = useHostStore((state) => state.runTerminalCommand);
   // Scrollback and the pending input survive a tab swap, so they live in the ui
@@ -927,7 +848,7 @@ export function TerminalPanel({
       ) : null}
       {terminal?.state && !terminal.state.spawnImplemented ? (
         <p className="rounded border border-warn/40 px-2 py-1 text-[11px] text-warn" data-testid="terminal-spawn-residual">
-          终端计划、环境与归属已由 Host 管理；本机 PTY 进程启动属未实现范围，面板不会显示进程号。
+          终端计划、环境与归属来自内存模拟；本机 PTY 进程启动属未实现范围，面板不会显示进程号。
         </p>
       ) : null}
       {instance ? (
@@ -944,7 +865,13 @@ export function TerminalPanel({
                 停止终端
               </Button>
             ) : null}
-            <Button size="sm" variant="ghost" onClick={() => terminal?.onResize?.(instance.instanceId, instance.cols + 20, instance.rows)}>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={terminal?.onResize === undefined}
+              title={terminal?.onResize === undefined ? "内存模拟没有可调整窗口的真实进程" : undefined}
+              onClick={() => terminal?.onResize?.(instance.instanceId, instance.cols + 20, instance.rows)}
+            >
               加宽（{instance.cols}×{instance.rows}）
             </Button>
           </div>
@@ -954,7 +881,9 @@ export function TerminalPanel({
           按计划启动终端
         </Button>
       ) : null}
-      <p className="text-[11px] text-muted">终端输出与输入由本面板渲染；当前为模拟输入，真实 PTY 属未实现范围。</p>
+      <p className="text-[11px] text-muted">
+        未连接桌面壳：这里是内存模拟（原型回显），输入不会执行，也不会发送给 Host；桌面壳的「终端」工具由 Host 启动真实终端。
+      </p>
       <div className="h-56 overflow-auto rounded-md border border-line bg-ink/95 p-3 font-mono text-[11px] leading-5 text-white/90">
         {lines.map((line, index) => (
           <div key={`${line}-${index}`}>{line}</div>
@@ -985,6 +914,7 @@ export function TerminalPanel({
     </div>
   );
 }
+
 
 const SUBAGENT_STATUS_LABEL: Record<Subagent["status"], string> = {
   running: "运行中",
@@ -1330,7 +1260,9 @@ export function DirectoryTerminalPanel({
         {cwd}
       </p>
       <p className="font-mono text-[11px] text-muted">指向原目录：{directory.path}</p>
-      <p className="text-[11px] text-muted">原型终端：拟从以上链接位置打开，仅回显，不执行命令。</p>
+      <p className="text-[11px] text-muted">
+        此变体只回显，不执行命令：普通目录终端尚未接线到真实通道，这里的输入不会发送给 Host。
+      </p>
       <div className="h-48 overflow-auto rounded-md border border-line bg-ink/95 p-3 font-mono text-[11px] leading-5 text-white/90">
         {lines.map((line, index) => (
           <div key={`${line}-${index}`}>{line}</div>

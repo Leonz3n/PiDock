@@ -15,6 +15,15 @@ export interface ShellTaskOpResult {
   error?: string;
 }
 
+/**
+ * [PiDock 10] (#15 box 28) the exact editor-setting requests main accepts: the
+ * page names a program and its own args, never a file or a task op.
+ */
+export type EditorSettingsRequest =
+  | { op: "read" }
+  | { op: "clear" }
+  | { op: "save"; program: string; args?: string[] };
+
 export interface PidockBridge {
   getSecurityState?: () => { sandboxed: boolean; contextIsolated: boolean };
   getVersions?: () => Promise<unknown>;
@@ -25,11 +34,39 @@ export interface PidockBridge {
   serviceCatalogOp?: (request: Record<string, unknown>) => Promise<ShellTaskOpResult>;
   createTask?: (request: { op: "current" | "prepare" | "commit" | "abandon"; input?: unknown; id?: string }) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
   /**
+   * [PiDock 03] (#6) production append for an existing task. The page names
+   * project repository ids, remote names and baseline branches only: main
+   * resolves every checkout from the project registry, fetches and pins the
+   * exact commits, derives the conflict scan and executes the returned plan.
+   */
+  appendTaskRepos?: (request: {
+    taskId: string;
+    repositories?: { sourceId: string; remote: string; remoteBranch: string }[];
+    directoryIds?: string[];
+    sharedWriteConfirmed?: boolean;
+  }) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
+  /**
    * [PiDock 02m] (#46) Provider metadata operations. The renderer names a task,
    * a profile, and profile metadata only: the credential value is resolved in
    * main from the profile's environment reference and never crosses this bridge.
    */
   providerOp?: (request: { op: "list" | "save" | "remove" | "select" | "clear" | "ensure"; taskId: string; profileId?: string; profile?: unknown }) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
+  /**
+   * [PiDock 10] (#15 box 28) 从任务打开外部编辑器. The page names a task and one
+   * of that task's own file roots — nothing else: main reads the editor program
+   * from its own user settings and launches it at the resolved root. There is no
+   * `program`/`args`/`path` field by design, and the op is not part of the
+   * task-op set (`shell/taskOp` refuses `task/openEditor` by name).
+   */
+  openTaskEditor?: (request: { taskId: string; rootId: string }) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
+  /**
+   * [PiDock 10] (#15 box 28) the user's external-editor setting. The page names
+   * a program (and its own args) and nothing else: main validates it with the
+   * launch's own rules, probes it on disk, and writes its OWN machine-private
+   * document atomically. It is not a task op, so this write cannot travel on
+   * `taskOp`.
+   */
+  editorSettingsOp?: (request: EditorSettingsRequest) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
   taskOp?: (taskId: string, op: string, payload?: Record<string, unknown>) => Promise<ShellTaskOpResult>;
   sdkTurn?: (request: Record<string, unknown>) => Promise<ShellTaskOpResult>;
   onSdkTurnEvent?: (listener: (event: unknown) => void) => () => void;
@@ -71,6 +108,8 @@ export function isShellConnected(): boolean {
 export type ShellTaskOp =
   | "task/provision"
   | "task/appendRepos"
+  | "task/resumeAppend"
+  | "task/prepareStatus"
   | "task/probeLink"
   | "task/sendMessage"
   | "task/cancel"
@@ -251,43 +290,120 @@ export async function provisionTaskThroughShell(input: {
 }
 
 /**
- * [PiDock 03] (#6) append repos to a task through the shell (`host/task` +
- * `task/appendRepos`). Only repos not already in the task are
- * fetched/planned; the form stays on failure with a per-repo retry entry.
+ * [PiDock 03] (#6) append repositories to an EXISTING task through the shell
+ * (`shell/appendTaskRepos`). The page supplies project repository ids, remote
+ * names and baseline branches; main resolves each repository's source checkout
+ * from the project registry, fetches and pins the exact remote commit in that
+ * checkout, derives the conflict scan (`takenPaths`/`branchesInUse`) itself,
+ * routes `task/appendRepos` and executes the returned plan with real git.
+ *
+ * `{ok:false,error}` envelopes are returned, never thrown, so the form keeps
+ * its selection and offers retry; the error is the real named refusal
+ * (`fetch-failed` / `path-taken` / `branch-in-use` / `repo-unusable`).
  */
-export async function appendReposThroughShell(input: {
+export async function appendTaskReposThroughShell(input: {
   taskId: string;
-  repoSelections: { repoDir: string; remote: string; remoteBranch: string; mainCheckoutDir: string }[];
-  fetchedCommits: Record<string, string>;
-  branch?: string;
-  mainCheckouts?: Record<string, string>;
-  /**
-   * Caller-scanned conflict inputs (REQUIRED, never defaulted): the
-   * renderer scans the task folder + `git worktree list` first; the
-   * Host and the RPC guard fail closed without them.
-   */
-  takenPaths: string[];
-  branchesInUse: string[];
+  repositories?: { sourceId: string; remote: string; remoteBranch: string }[];
+  directoryIds?: string[];
+  sharedWriteConfirmed?: boolean;
 }): Promise<ShellTaskOpResult> {
-  const payload: Record<string, unknown> = {
-    repoSelections: input.repoSelections,
-    fetchedCommits: input.fetchedCommits,
-    takenPaths: input.takenPaths,
-    branchesInUse: input.branchesInUse,
-  };
-  if (input.branch !== undefined) payload["branch"] = input.branch;
-  if (input.mainCheckouts !== undefined) payload["mainCheckouts"] = input.mainCheckouts;
+  const bridge = shellBridge();
+  if (typeof bridge?.appendTaskRepos !== "function") {
+    return { ok: false, error: "桌面壳真实任务追加接口不可用，请重启应用" };
+  }
   try {
-    return await shellTaskOp(input.taskId, "task/appendRepos", payload);
+    const result = await bridge.appendTaskRepos({
+      taskId: input.taskId,
+      ...(input.repositories !== undefined ? { repositories: input.repositories } : {}),
+      ...(input.directoryIds !== undefined ? { directoryIds: input.directoryIds } : {}),
+      ...(input.sharedWriteConfirmed !== undefined ? { sharedWriteConfirmed: input.sharedWriteConfirmed } : {}),
+    });
+    if (!result || typeof result !== "object" || typeof result.ok !== "boolean") {
+      return { ok: false, error: "invalid-payload: 任务追加返回异常，请重试" };
+    }
+    return result;
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
 }
 
 /**
- * [PiDock 03] (#6) probe a plain-dir link source through the shell
- * (`host/task` + `task/probeLink`). Report only: `{shape: ok/dead}` —
- * never creates, follows, or takes over the target.
+ * [PiDock 03] (#6) read-only per-repo prepare readout for the recovery UI
+ * (`host/task` + `task/prepareStatus`). Needs no conflict scan (it plans and
+ * writes nothing), so the sandboxed renderer can read created / pending /
+ * failed with the real per-repo reason without holding git capability.
+ */
+export async function prepareStatusThroughShell(input: { taskId: string }): Promise<ShellTaskOpResult> {
+  try {
+    return await shellTaskOp(input.taskId, "task/prepareStatus", {});
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * [PiDock 03] (#6) resume a partial multi-repo prepare through the shell
+ * (`host/task` + `task/resumeAppend`). Selections come from the stored task
+ * record; the Host classifies the REAL worktree state and plans only the
+ * unfinished repos, and MAIN then EXECUTES the returned plan through the same
+ * validated append-plan rules and re-reads the Host's per-repo status, so a
+ * recorded-but-worktree-absent repo is actually completed (not reported as a
+ * "planned, not executed" success).
+ *
+ * `takenPaths`/`branchesInUse`/`mainCheckouts` are derived by MAIN on the
+ * shell route (the resolved task folder listing + each recorded repo's own
+ * `git worktree list`): this helper forwards them only when a caller already
+ * holds them, and a page-supplied value is overwritten before the op reaches
+ * the Host. Keys that are `undefined` are omitted from the payload, so a
+ * caller that cannot scan never fabricates an empty scan (`[]` would silently
+ * disable the gate). The renderer passes no scan; main produces it.
+ */
+export async function resumeAppendThroughShell(input: {
+  taskId: string;
+  mainCheckouts?: Record<string, string>;
+  branch?: string;
+  fetchedCommits?: Record<string, string>;
+  takenPaths?: string[];
+  branchesInUse?: string[];
+  prepareErrors?: Record<string, { code: string; message: string }>;
+}): Promise<ShellTaskOpResult> {
+  const payload: Record<string, unknown> = {};
+  if (input.mainCheckouts !== undefined) payload["mainCheckouts"] = input.mainCheckouts;
+  if (input.branch !== undefined) payload["branch"] = input.branch;
+  if (input.fetchedCommits !== undefined) payload["fetchedCommits"] = input.fetchedCommits;
+  if (input.takenPaths !== undefined) payload["takenPaths"] = input.takenPaths;
+  if (input.branchesInUse !== undefined) payload["branchesInUse"] = input.branchesInUse;
+  if (input.prepareErrors !== undefined) payload["prepareErrors"] = input.prepareErrors;
+  try {
+    return await shellTaskOp(input.taskId, "task/resumeAppend", payload);
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * Production resume action for a shell surface component. The sandboxed
+ * renderer cannot scan, so it supplies NO conflict inputs: main derives
+ * `takenPaths`/`branchesInUse` (and the target source checkouts) from the task
+ * folder and the task's target repos, keeps requiring both lists Host-side,
+ * EXECUTES the returned plan and answers with the Host's re-read per-repo
+ * status. Returns the callback shape the recovery panel expects; nothing is
+ * resumed until the callback is invoked by an explicit human action.
+ */
+export function shellTaskPrepareResume(
+  taskId: string,
+): (input: { repoDirs: string[] }) => Promise<ShellTaskOpResult> {
+  return () => resumeAppendThroughShell({ taskId });
+}
+
+/**
+ * [PiDock 03] (#6) probe one plain-dir link source through the shell
+ * (`host/task` + `task/probeLink`). Report only: the Host's observed shape of
+ * the link's TARGET (真实目录 / 失效 / 嵌套 / 循环 / 具名 unknown), its plan-time
+ * lexical pre-check, the per-platform link-capability record and the named
+ * boundary — never creates, follows through, or takes over the target. Main
+ * refuses a source path this task did not record (`path-out-of-scope`), so the
+ * page can only name a source the Host itself reported.
  */
 export async function probeLinkThroughShell(input: {
   taskId: string;
@@ -328,30 +444,38 @@ export async function registerServiceThroughShell(input: {
 
 /**
  * [PiDock 05] (#10) plan the task's multi-service topology on the Host
- * (`task/planServiceGroup`): units, final ports, variable bindings, routing,
- * start groups and diagnostics. Sending no `sessionId` keeps the attested
- * human-UI path (the plan is labelled with the actor). The response carries
- * no env layers and no secret values — only masked/derived task addresses.
+ * (`task/planServiceGroup`): units, final ports and start groups. Sending no
+ * `sessionId` keeps the attested human-UI path (the plan is labelled with the
+ * actor). The response carries no env layers and no secret values — only
+ * masked/derived task addresses.
+ *
+ * Deliberately NOT parameters: `dependencies` (the group's call/prestart edges),
+ * `rules` (variable binding rules) and `layers` (the config read points). Those
+ * are the plan's TRUSTED inputs — main derives them from the service catalog, so
+ * a page has no API here to name them at all; and if such a payload ever reaches
+ * main's `shell/taskOp`, that route refuses it by name.
+ *
+ * What this caller DOES send is `units`, and that is display-only by construction:
+ * the plan the Host keeps is a projection the dock reads back, never the plan a
+ * group start runs. Main re-derives the plan from its own catalog on EVERY group
+ * start (`runtime.ts runTaskServiceGroup` → `planBoundServiceGroup`, which writes
+ * `task/planServiceGroup` immediately before the single `task/controlService
+ * {group:true}`), so a page-shaped, edge-less plan left here can never decide
+ * what a start executes. `main/service-group-caller.test.ts` pins that order.
  */
 export async function planServiceGroupThroughShell(input: {
   taskId: string;
   units: Record<string, unknown>[];
   selectedRepoDirs?: string[];
-  dependencies?: { from: string; to: string; kind: "call" | "prestart" }[];
   requests?: { unitId: string; port: number }[];
   reservations?: { port: number; owner: "external" | "task"; taskId?: string; unitId?: string; serviceId?: string; note?: string }[];
-  rules?: { key: string; unitId: string; kind: "url" | "host-port"; template?: string }[];
-  layers?: Record<string, unknown>;
   environment?: string;
   externalResources?: { resourceId: string; name: string; kind: string; isolatedByTask?: boolean }[];
 }): Promise<ShellTaskOpResult> {
   const payload: Record<string, unknown> = { units: input.units };
   if (input.selectedRepoDirs !== undefined) payload["selectedRepoDirs"] = input.selectedRepoDirs;
-  if (input.dependencies !== undefined) payload["dependencies"] = input.dependencies;
   if (input.requests !== undefined) payload["requests"] = input.requests;
   if (input.reservations !== undefined) payload["reservations"] = input.reservations;
-  if (input.rules !== undefined) payload["rules"] = input.rules;
-  if (input.layers !== undefined) payload["layers"] = input.layers;
   if (input.environment !== undefined) payload["environment"] = input.environment;
   if (input.externalResources !== undefined) payload["externalResources"] = input.externalResources;
   try {
@@ -383,6 +507,26 @@ export async function serviceStopScopeThroughShell(input: {
   if (input.instanceId !== undefined) payload["instanceId"] = input.instanceId;
   try {
     return await shellTaskOp(input.taskId, "task/serviceStopScope", payload);
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * [PiDock 05] (#10 box 1) read the task's 本地/远程位置 and REAL 实际依赖去向
+ * (`shell/serviceCatalogOp {op:"taskDependencyRouting"}`). A READ on the op set
+ * the dock already uses for 整组启动: it adds no channel and no `HOST_TASK_OPS`
+ * entry, and the page names only the project and the task. Main derives every
+ * value from the trusted catalog and the task's PINNED bindings, so this caller
+ * cannot supply a unit, an edge, a rule or a config layer - and main refuses such
+ * a payload by name if one ever arrives.
+ */
+export async function taskDependencyRoutingThroughShell(input: {
+  taskId: string;
+  projectId: string;
+}): Promise<ShellTaskOpResult> {
+  try {
+    return await serviceCatalogThroughShell({ op: "taskDependencyRouting", projectId: input.projectId, taskId: input.taskId });
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
@@ -475,6 +619,20 @@ export async function recordProtocolRunThroughShell(input: {
   }
 }
 
+/**
+ * Direct `task/controlService` bridge over a task Host - an explicitly
+ * NON-PRODUCTION seam for this renderer.
+ *
+ * No production renderer module imports it: the bound-service start/stop UI
+ * goes through `runTaskService` via `runBoundTaskServiceThroughShell`
+ * (`data/taskServices.ts`), where main resolves the trusted catalog launch
+ * itself. This helper sends a descriptor-less control straight to
+ * `task/controlService`, so it can only ever drive services another path
+ * already registered, and a session-less call still needs main's own
+ * `shell-ui` attestation to be classified as human control. It is kept for
+ * the Host-side control contract only (its own test) and must not be wired
+ * into a production renderer path without the catalog launch resolution.
+ */
 export async function controlServiceThroughShell(input: {
   taskId: string;
   serviceId: string;
@@ -796,6 +954,41 @@ export async function deliveryInfoThroughShell(input: { taskId: string; rootId: 
 }
 
 /**
+ * [PiDock 10] (#15 box 28) open the user's configured external editor at one of
+ * this task's file roots. It travels on its own attested channel
+ * (`shell/openTaskEditor`), not on `taskOp`: the page names `taskId` + `rootId`
+ * only, and main resolves the editor program from its own settings document.
+ * The result is the Host's own receipt or its named refusal, never a boolean.
+ */
+export async function openTaskEditorThroughShell(input: {
+  taskId: string;
+  rootId: string;
+}): Promise<ShellTaskOpResult> {
+  const bridge = shellBridge();
+  if (!bridge?.openTaskEditor) return { ok: false, error: "当前不在桌面壳内，无法打开外部编辑器" };
+  try {
+    const result = await bridge.openTaskEditor({ taskId: input.taskId, rootId: input.rootId });
+    if (!result || typeof result !== "object" || typeof result.ok !== "boolean") {
+      return { ok: false, error: "invalid-payload: 打开外部编辑器返回异常，请重试" };
+    }
+    if (!result.ok) return result;
+    // Same envelope unwrap as `taskOp`: main wraps the Host's own answer, so the
+    // launch payload lives one level deeper.
+    const host = result.payload as Record<string, unknown> | undefined;
+    const isHostEnvelope =
+      host !== undefined &&
+      typeof host === "object" &&
+      typeof host["workspaceId"] === "string" &&
+      typeof host["taskId"] === "string" &&
+      typeof host["op"] === "string" &&
+      "payload" in host;
+    return { ok: true, payload: isHostEnvelope ? host["payload"] : result.payload };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
  * [PiDock 10] (#15) plan one built-in terminal (`task/planTerminal`). Planning
  * only: the reply carries masked env rows, and the real child env never leaves
  * the Host. A `read` agent session is refused Host-side (box 8).
@@ -830,29 +1023,66 @@ export async function planTerminalThroughShell(input: {
 }
 
 /**
- * [PiDock 10] (#15) start/stop one terminal (`task/terminalControl`). An agent
- * call names its session and (for the default tier) the live `approvalId`; a
- * human call is labelled and attested by main. Booleans are never sent: the
- * Host reads the tier and the approval from the session channel itself.
+ * [PiDock 10] (#15) start/stop/input/resize one terminal
+ * (`task/terminalControl`). An agent call names its session and (for the
+ * default tier) the live `approvalId`; a human call is labelled and attested by
+ * main. Booleans are never sent: the Host reads the tier and the approval from
+ * the session channel itself. A start always carries the #7 env layers (empty
+ * layers = an explicit empty resolve), because the Host guard refuses a start
+ * without them.
+ *
+ * `input` and `resize` are the human takeover surface: the Host refuses an
+ * Agent session for raw input and window changes, so neither action names a
+ * session (and no flag stands in for one) — main attests the labelled human
+ * origin itself. A caller that does name a session for them is refused here
+ * rather than having the session dropped and the call laundered into the
+ * trusted human path the Host would have rejected. The types the Host guard
+ * documents are checked here first, so an obviously wrong payload never becomes
+ * a confusing op-level refusal; the bounds that need Host knowledge (line bytes,
+ * window range) stay Host-side and are reported verbatim when refused.
  */
 export async function controlTerminalThroughShell(input: {
   taskId: string;
   instanceId: string;
-  action: "start" | "stop";
+  action: "start" | "stop" | "input" | "resize";
   rootId?: string;
   program?: string;
   args?: string[];
   cols?: number;
   rows?: number;
+  /** Keystrokes for `input`; the Host bounds them per line and lifetime. */
+  data?: string;
   layers?: Record<string, unknown>;
   sessionId?: string;
   label?: string;
   approvalId?: string;
 }): Promise<ShellTaskOpResult> {
   const payload: Record<string, unknown> = { instanceId: input.instanceId, action: input.action };
-  for (const key of ["rootId", "program", "args", "cols", "rows", "layers", "sessionId", "label", "approvalId"] as const) {
-    const value = input[key];
-    if (value !== undefined) payload[key] = value;
+  if (input.action === "input" || input.action === "resize") {
+    if (input.sessionId !== undefined) {
+      return {
+        ok: false,
+        error: "invalid-payload: task/terminalControl.input/resize is the labelled human action and must not name a session",
+      };
+    }
+  }
+  if (input.action === "input") {
+    if (typeof input.data !== "string" || input.data.length === 0) {
+      return { ok: false, error: "invalid-payload: task/terminalControl.data must be a non-empty string" };
+    }
+    payload["data"] = input.data;
+  } else if (input.action === "resize") {
+    if (!Number.isInteger(input.cols) || !Number.isInteger(input.rows)) {
+      return { ok: false, error: "invalid-payload: task/terminalControl.cols/rows must be integers when resizing" };
+    }
+    payload["cols"] = input.cols;
+    payload["rows"] = input.rows;
+  } else {
+    for (const key of ["rootId", "program", "args", "cols", "rows", "layers", "sessionId", "label", "approvalId"] as const) {
+      const value = input[key];
+      if (value !== undefined) payload[key] = value;
+    }
+    if (input.action === "start") payload["layers"] ??= { repoDefaults: [], shared: [], privateEntries: [], task: [] };
   }
   try {
     return await shellTaskOp(input.taskId, "task/terminalControl", payload);

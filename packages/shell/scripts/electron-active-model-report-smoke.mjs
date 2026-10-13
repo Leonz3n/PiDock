@@ -81,7 +81,7 @@ async function run() {
       const running = await wait(() => h.messages.find((m) => m.event === "control-result"), "service-running"); assert.equal(running.result.ok, true); await wait(() => pids.size === 3, "native-fixture-tree");
       child.postMessage({ op: "sdk-start" }); const accepted = await wait(() => h.messages.find((m) => m.event === "sdk-accepted"), "sdk-accepted");
       await wait(() => h.messages.find((m) => m.event === "sdk-event" && m.type === "delta"), "active-delta");
-      const hit = hits[index - 1]; assert.equal(hit.authorized, true); assert.equal(hit.modelMatched, true); assert.equal(hit.tools, 0); assert.equal(hit.closed, false);
+      const hit = hits[index - 1]; assert.equal(hit.authorized, true); assert.equal(hit.modelMatched, true); assert.equal(hit.tools, 4); assert.equal(hit.closed, false); // #5: four task-scoped tools are declared.
       const journalDir = join(taskDir, ".pidock-sdk-turns", "main"), turnFile = join(journalDir, "active-model.json"); journalDirs.push(journalDir);
       if (mode === "worker-death") { child.postMessage({ op: "sdk-kill" }); await wait(() => h.messages.find((m) => m.event === "sdk-killed"), "worker-killed"); }
       if (mode === "protocol-fault") { child.postMessage({ op: "sdk-poison" }); await wait(() => h.messages.find((m) => m.event === "sdk-native-exit"), "poison-native-exit"); }
@@ -120,7 +120,7 @@ async function run() {
       const sessionDir = join(taskDir, ".pidock-sdk-sessions", "main"), jsonl = readdirSync(sessionDir).filter((name) => name.endsWith(".jsonl")).map((name) => readFileSync(join(sessionDir, name), "utf8")).join("\n");
       for (const value of [credential, secret]) for (const text of [JSON.stringify(document), JSON.stringify(turn), witness, jsonl, JSON.stringify(h.messages), h.output]) assert.ok(!text.includes(value));
       assert.equal(hits.length, index); if (h.published !== null) assert.equal(readFileSync(file, "utf8"), h.published);
-      reports.push({ mode, versions: boot.versions, sdkNativeExitObserved: true, tools: 0, nativeFixtureGone: true, reportPublished: mayPublish, mainConfirmed: h.confirmed, authorizedWriterDisposal: disposed, turnState: turn.state, repeatedReceiptStable: true });
+      reports.push({ mode, versions: boot.versions, sdkNativeExitObserved: true, tools: hit.tools, nativeFixtureGone: true, reportPublished: mayPublish, mainConfirmed: h.confirmed, authorizedWriterDisposal: disposed, turnState: turn.state, repeatedReceiptStable: true });
     }
     console.log("ACTIVE_MODEL_REPORT_OK", JSON.stringify(reports));
   } catch (error) { console.error("ACTIVE_MODEL_REPORT_FAILED", stage, String(error).replaceAll(credential, "[redacted]").replaceAll(secret, "[redacted]").replaceAll(home, "[test-home]").slice(0, 300)); process.exitCode = 1; }
