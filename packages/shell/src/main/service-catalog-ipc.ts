@@ -247,6 +247,58 @@ export function parseServiceOwnerRebindRequest(request: unknown): ServiceOwnerRe
   return { taskId: input["taskId"], projectId: input["projectId"], confirm: input["confirm"] };
 }
 
+/**
+ * The READ-ONLY 依赖去向 read of [PiDock 05] (#10 box 1). Adding a read to the
+ * existing `shell/serviceCatalogOp` set adds no channel and no `HOST_TASK_OPS`
+ * entry, and it grants the page nothing: the accepted keys are exactly
+ * `{op,projectId,taskId}`, and the plan's trusted inputs (`units`, `rules`,
+ * `layers`, `dependencies`) are refused BY NAME below.
+ */
+export interface TaskDependencyRoutingRequest {
+  taskId: string;
+  projectId: string;
+}
+
+const DEPENDENCY_ROUTING_KEYS = ["op", "projectId", "taskId"] as const;
+
+/**
+ * The plan's four trusted inputs, refused BY NAME (the same vocabulary and the
+ * same reason `runtime.ts`'s `task/planServiceGroup` route refuses): a page that
+ * could name the units or the declaration-derived edges would decide what the
+ * read shows, measured against rows it supplied itself.
+ */
+const DEPENDENCY_ROUTING_TRUSTED_KEYS = ["units", "rules", "layers", "dependencies"] as const;
+
+/** Key-exact like `parseServiceRunGroupRequest`: identity only, never plan content. */
+export function parseTaskDependencyRoutingRequest(request: unknown): TaskDependencyRoutingRequest {
+  if (!record(request) || Buffer.byteLength(JSON.stringify(request)) > 4096) {
+    throw new TrustDomainViolation("invalid-payload", "invalid task dependency routing request");
+  }
+  const input = request as Record<string, unknown>;
+  for (const key of DEPENDENCY_ROUTING_TRUSTED_KEYS) {
+    if (input[key] === undefined) continue;
+    throw new TrustDomainViolation(
+      "invalid-payload",
+      `invalid task dependency routing request: 不接受 ${key}：运行单元、依赖边、变量绑定规则与配置层只从可信服务目录与任务固定的绑定派生（ref #10）`,
+    );
+  }
+  if (Object.keys(input).sort().join(",") !== [...DEPENDENCY_ROUTING_KEYS].sort().join(",")) {
+    throw new TrustDomainViolation(
+      "invalid-payload",
+      `invalid task dependency routing request: 只接受 ${DEPENDENCY_ROUTING_KEYS.join("/")}（依赖去向由主进程按可信服务目录派生，页面不能提供计划）`,
+    );
+  }
+  if (
+    input["op"] !== "taskDependencyRouting" ||
+    typeof input["projectId"] !== "string" ||
+    typeof input["taskId"] !== "string" ||
+    input["taskId"].length === 0
+  ) {
+    throw new TrustDomainViolation("invalid-payload", "invalid task dependency routing request");
+  }
+  return { taskId: input["taskId"], projectId: input["projectId"] };
+}
+
 /** One binding adoption as main reviews and writes it: identity, the moved pin and the restart-needed consequence. */
 export interface ServiceBindingAdoptionProjection {
   taskId: string;

@@ -40,11 +40,10 @@ import { TaskRootIndex, type VerifiedTaskIdentity } from "./task-root-index.js";
 import { HostTaskAdmission } from "../host/host-task-admission.js";
 import { shutdownDeadline } from "../host/shutdown-deadline.js";
 import { ProjectRegistry } from "./project-registry.js";
-import { ServiceCatalog, serviceCatalogAuthority, type ServiceLaunch, type ServiceTemplate } from "./service-catalog.js";
+import { ServiceCatalog, serviceCatalogAuthority } from "./service-catalog.js";
 import { InstalledServiceHostAuthority, type ServiceOwnerChange, type ServiceOwnerDurableRecord } from "./service-host-binding.js";
-import { createServiceTemplateHandler, parseServiceOwnerRebindRequest, performServiceBindingOperation, performServiceCatalogOperation, performServiceConfigPreview, parseServiceRunGroupRequest, parseServiceRunRequest } from "./service-catalog-ipc.js";
-import { declaredServicePorts, resolveServiceEnv } from "./service-config.js";
-import { deriveBindingRules, planBindingLayers, type RunUnit } from "./service-topology.js";
+import { createServiceTemplateHandler, parseServiceOwnerRebindRequest, parseTaskDependencyRoutingRequest, performServiceBindingOperation, performServiceCatalogOperation, performServiceConfigPreview, parseServiceRunGroupRequest, parseServiceRunRequest } from "./service-catalog-ipc.js";
+import { deriveBoundServiceGroupPlan, readTaskDependencyRouting, unsatisfiedDeclarationMessage, type BoundServiceEntry } from "./service-dependency-routing.js";
 import { codeObservationFields } from "./service-code-observation.js";
 import { loadExternalEditorSettings, type ExternalEditorSettingsResult } from "./external-editor.js";
 import { performEditorSettingsOperation } from "./external-editor-settings.js";
@@ -1252,38 +1251,18 @@ export async function runTaskServiceGroup(
 }
 
 /**
- * The plan's own unit id for one task-bound service: `<rootId>:<serviceId>`, the
- * id the Host's plan units (and therefore its start groups and verify steps)
- * carry. Main reads the plan back by this id, so the edge mapping and the unit
- * list can never name two different units for one service.
- */
-function groupUnitId(rootId: string, serviceId: string): string {
-  return `${rootId}:${serviceId}`;
-}
-
-/**
- * The task's own group plan as main derives it from the trusted catalog: every
- * bound service is one LOCAL run unit (a binding is exactly what the dock's
- * single-service start button may execute), with the run type and the declared
- * ports its registration carries, the 服务依赖声明 of the pinned revisions as the
- * plan's dependency edges, and the plan's variable-binding rules and config
- * layers - the two inputs `auditBindingReadPoints` (box 2's 读取点核对) needs and
- * which production never sent.
+ * The task's own group plan, sent from main's trusted catalog to the Host: the
+ * units, ports, run types, declaration-derived edges and the plan's binding rules
+ * + config layers all come from `deriveBoundServiceGroupPlan`
+ * (`./service-dependency-routing.js`), the SAME function main's read-only 依赖去向
+ * read resolves without a Host - so the plan a group start runs and the values the
+ * dock shows can never come from two derivations.
  *
- * The edge is the DECLARATION, address for address: each declared target is
- * resolved to the unit id of the SAME service inside this plan (`<rootId>:<serviceId>`, 
- * the id the plan's units carry), and no other edge is added. A target the task
- * has not bound has no unit here, and inventing one would be exactly the
- * synthesised edge ADR 0002 forbids - so the group is refused by name instead.
- * A revision that declares nothing contributes no edge at all and the
- * `dependencies` key stays OUT of the payload, which is how the plan keeps
- * today's honest "no declaration, no edge" behaviour.
- *
- * `rules`/`layers` come from the SAME trusted read (`launch.layers`) main already
- * resolves the declared ports from, so the page cannot name a binding destination
- * or a read point. They are sent only when the trusted side really derived
- * something: an absent key is the honest "nothing was read", never an empty set
- * that would let the audit pass as if it had checked the read points.
+ * What this function owns is the PAYLOAD convention: a key is present only when
+ * the trusted side really derived something. An absent `dependencies` is the
+ * honest "no declaration, no edge" plan (ADR 0002), never an empty set that could
+ * read as a checked edge list, and likewise an absent `rules`/`layers` means "no
+ * row was read" instead of a read-point audit over nothing.
  *
  * Returns the plan's own task-override rows (`bindingsToTaskRows`), because the
  * resolved address overrides are what the children must really run with - the
@@ -1291,70 +1270,22 @@ function groupUnitId(rootId: string, serviceId: string): string {
  */
 async function planBoundServiceGroup(
   tasks: Pick<PerTaskHostRegistry, "routeTaskOp">,
-  bound: { binding: { rootId: string }; template: ServiceTemplate; launch: ServiceLaunch }[],
+  bound: BoundServiceEntry[],
   request: ReturnType<typeof parseServiceRunGroupRequest>,
   origin: { kind: "service-catalog"; senderWebContentsId: number },
 ): Promise<{ key: string; value: string; secret: boolean }[]> {
-  const planned = bound.map(({ binding, launch }) => {
-    // The ports this service's launch DECLARES (never a probe): the descriptor's
-    // own list plus its `*PORT` RESOLVED rows - the SAME two inputs the Host's
-    // declared-address rule reads (`declaredServicePorts(descriptor.ports,
-    // record.resolved)`), so main cannot drift from what the registration will
-    // declare. Re-deriving a subset of the layers here would drop a port that
-    // lives in `repoDefaults`/`task` and fail the plan closed as a FALSE
-    // `missing-port`. A long-lived unit with none fails the port-first plan
-    // closed by name - it is never dropped from the group.
-    const resolved = resolveServiceEnv(launch.layers);
-    if (!resolved.ok) {
-      // The registration of this same launch already resolved these layers, so
-      // this is defence in depth: it refuses by the same name rather than
-      // planning against rows main could not read.
-      throw new Error(`服务登记失败，未发起整组启动：${launch.serviceId} 的启动材料无法从可信服务目录解析（${resolved.error.code}: ${resolved.error.message}）`);
-    }
-    return {
-      unitId: groupUnitId(binding.rootId, launch.serviceId),
-      serviceId: launch.serviceId,
-      name: launch.descriptor.name,
-      repoDir: binding.rootId,
-      runType: launch.descriptor.runType,
-      declared: declaredServicePorts(launch.descriptor.ports, resolved.rows),
-    };
-  });
-  const unitIdOf = new Map(planned.map((entry) => [entry.serviceId, entry.unitId]));
-  const declaredTargets: string[] = [];
-  const dependencies = bound.flatMap(({ binding, launch, template }) => {
-    const from = groupUnitId(binding.rootId, launch.serviceId);
-    return (template.dependencies ?? []).map((dependency) => {
-      const to = unitIdOf.get(dependency.to);
-      if (to === undefined) {
-        // The declaration names a service of this environment that this task has
-        // not bound, so the plan has no unit for it. Dropping the edge silently
-        // would report a group as complete while the declared prerequisite is
-        // missing - refused by name instead.
-        throw new Error(`服务依赖声明无法满足，未生成整组计划：「${launch.descriptor.name}」（${launch.serviceId}）声明的依赖目标 ${dependency.to} 未在本任务的服务绑定中，请先绑定该服务或从共享模板移除该声明`);
-      }
-      declaredTargets.push(dependency.to);
-      return { from, to, kind: dependency.kind };
-    });
-  });
-  const units: RunUnit[] = planned.map((entry) => ({
-    unitId: entry.unitId, serviceId: entry.serviceId, name: entry.name,
-    repoDir: entry.repoDir, location: "local", runType: entry.runType,
-  }));
-  const layers = planBindingLayers(bound.map(({ launch }) => launch.layers));
+  const derivation = deriveBoundServiceGroupPlan(bound);
+  if (!derivation.ok) throw new Error(unsatisfiedDeclarationMessage(derivation.unsatisfied));
+  const { units, dependencies, rules, layers, requests, runTypes, selectedRepoDirs } = derivation.plan;
   const layerRowCount = layers.repoDefaults.length + layers.shared.length + layers.privateEntries.length + layers.task.length;
-  const rules = deriveBindingRules({ units, layers, declaredTargets });
   const answer = await tasks.routeTaskOp({
     taskId: request.taskId,
     op: "task/planServiceGroup",
     payload: {
       units,
-      selectedRepoDirs: [...new Set(planned.map((entry) => entry.repoDir))],
-      requests: planned.flatMap((entry) => {
-        const [port] = entry.declared;
-        return port === undefined ? [] : [{ unitId: entry.unitId, port }];
-      }),
-      runTypes: Object.fromEntries(planned.map((entry) => [entry.unitId, entry.runType])),
+      selectedRepoDirs,
+      requests,
+      runTypes,
       // Sent ONLY when the pinned revisions really declare an edge: an empty or
       // absent key is the honest "no declaration, no edge" plan.
       ...(dependencies.length === 0 ? {} : { dependencies }),
@@ -2044,6 +1975,21 @@ export function registerIpc(
           // the page's only honest explanation, so they reach the page verbatim.
           return namedServiceRefusal(error);
         } finally { live.release(); }
+      }
+      if (payload && typeof payload === "object" && (payload as Record<string, unknown>)["op"] === "taskDependencyRouting") {
+        const request = parseTaskDependencyRoutingRequest(payload);
+        // A pure read of main's own catalog + the task's PINNED bindings: it
+        // writes no plan, forks no Host and creates no child, so it takes neither
+        // the platform gate nor the live-sender guard those child-owning entries
+        // need. `requireShellSender` above still proves which webContents may
+        // call. A named refusal (an unresolvable launch, a declaration whose
+        // target is not bound) reaches the page verbatim instead of collapsing
+        // into the generic catalog message.
+        try {
+          return { ok: true as const, payload: readTaskDependencyRouting(catalog, request) };
+        } catch (error) {
+          return namedServiceRefusal(error);
+        }
       }
       // [PiDock 04] (#7 slice) the way back from a fenced task: after a write
       // moved the task's owner snapshot (a shared-template adoption, a binding
