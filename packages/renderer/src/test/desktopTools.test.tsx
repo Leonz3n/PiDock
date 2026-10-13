@@ -107,6 +107,9 @@ describe("[UI 对齐] S8d production tool dock", () => {
       if (op === "task/filePreview") {
         return { ok: true, payload: { preview: { attribution, path: "README.md", language: "markdown", source: "# 真实内容", truncated: false, lineCount: 1 } } };
       }
+      if (op === "task/deliveryInfo") {
+        return { ok: true, payload: { target: { attribution, repo: "repo-primary", branch: "main", autoCommit: false, autoPush: false, autoMerge: false } } };
+      }
       return { ok: false, error: `unexpected ${op}` };
     });
     bridge(taskOp);
@@ -114,7 +117,7 @@ describe("[UI 对齐] S8d production tool dock", () => {
     expect(await screen.findByText("primary")).toBeInTheDocument();
     fireEvent.click(await screen.findByText("README.md"));
     expect(await screen.findByText("# 真实内容")).toBeInTheDocument();
-    expect(calls).toEqual(["task/fileRoots", "task/fileTree", "task/filePreview"]);
+    expect(calls).toEqual(["task/fileRoots", "task/fileTree", "task/deliveryInfo", "task/filePreview"]);
   });
 
   it("shows the Host refusal instead of sample rows when an op fails", async () => {

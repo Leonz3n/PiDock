@@ -5,6 +5,7 @@ import { Separator } from "./ui/separator";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import {
   browserActionThroughShell,
+  deliveryInfoThroughShell,
   fileDiffThroughShell,
   filePreviewThroughShell,
   fileRootsThroughShell,
@@ -46,6 +47,7 @@ import {
   observedText,
   terminalPlanFromHost,
   terminalStateFromHost,
+  workspaceDeliveryFromHost,
   workspaceDiffFromHost,
   workspacePreviewFromHost,
   workspaceRootsFromHost,
@@ -54,9 +56,12 @@ import {
   type TerminalPlanView,
   type TerminalStateView,
   type WorkspaceAttributionView,
+  type WorkspaceDeliveryView,
+  type WorkspaceDiffView,
   type WorkspacePreviewView,
   type WorkspaceRootView,
   type WorkspaceTreeEntryView,
+  type WorkspaceTreeView,
 } from "../data/workspaceFiles";
 
 /**
@@ -397,13 +402,94 @@ function TreeList({
   );
 }
 
+/**
+ * [PiDock 10] (#15 盒子 2/9) 每视图归属. The task and the repository — or a
+ * linked directory's own identity — exactly as the Host stated them in THIS
+ * view's `attribution`, repeated beside the tree, the preview and the diff, so
+ * a two-repo task can never read as one Git repository. The identity string
+ * follows `rootKind`, so a link root is never presented as a worktree; a
+ * shared-directory view additionally discloses the unified pi working
+ * directory, where the link lives and the original target it writes through to.
+ * Every value comes from the payload; nothing here is derived or defaulted.
+ */
+function ViewAttribution({ label, attribution, testId }: { label: string; attribution: WorkspaceAttributionView; testId: string }) {
+  const identity = attribution.rootKind === "worktree"
+    ? `仓库 ${attribution.repo ?? attribution.rootLabel}`
+    : `普通目录链接 ${attribution.directoryId ?? attribution.rootLabel}`;
+  return (
+    <div className="text-[10px] text-muted" data-testid={testId} data-root-kind={attribution.rootKind}>
+      <p>
+        {label}归属：任务 {attribution.taskId} · {identity}
+      </p>
+      {attribution.rootKind === "shared-dir" && (
+        <dl className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-0.5">
+          <dt>统一 pi 工作目录</dt>
+          <dd className="min-w-0 break-all font-mono" data-testid="dock-shared-pi-work-dir">{attribution.piWorkDir}</dd>
+          <dt>链接位置</dt>
+          <dd className="min-w-0 break-all font-mono" data-testid="dock-shared-link-path">
+            {attribution.linkPath && attribution.linkPath.length > 0 ? attribution.linkPath : "Host 未上报链接位置"}
+          </dd>
+          <dt>原始目标</dt>
+          <dd className="min-w-0 break-all font-mono" data-testid="dock-shared-source-path">
+            {attribution.sourcePath && attribution.sourcePath.length > 0 ? attribution.sourcePath : "Host 未记录原始目标"}
+          </dd>
+          <dt>写入影响</dt>
+          <dd className="min-w-0 break-all" data-testid="dock-shared-note">
+            {attribution.sharedNote && attribution.sharedNote.length > 0 ? attribution.sharedNote : "Host 未上报共享目录说明"}
+          </dd>
+        </dl>
+      )}
+    </div>
+  );
+}
+
+/**
+ * [PiDock 10] (#15 盒子 7) the Git delivery target the Host resolved for the
+ * selected worktree root, disclosed BEFORE anything is executed. Every value is
+ * the Host's own: the repo, the DECLARED pinned remote baseline it names as the
+ * delivery branch, and the three automation flags the sentence is built from —
+ * the panel never writes its own branch name and never claims "nothing is
+ * automatic" out of its own head. The panel runs no Git command at all.
+ */
+function DeliveryTargetReadout({ target }: { target: WorkspaceDeliveryView }) {
+  const automation = [
+    target.autoCommit ? "自动提交" : "不自动提交",
+    target.autoPush ? "自动推送" : "不自动推送",
+    target.autoMerge ? "自动合并" : "不自动合并",
+  ].join("、");
+  return (
+    <section
+      className="border border-line bg-paper px-2 py-1.5"
+      data-testid="dock-delivery"
+      data-auto-commit={target.autoCommit}
+      data-auto-push={target.autoPush}
+      data-auto-merge={target.autoMerge}
+    >
+      <dl className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-1 text-[11px]">
+        <dt className="text-muted">交付仓库</dt>
+        <dd className="min-w-0 break-all font-mono" data-testid="dock-delivery-repo">{target.repo}</dd>
+        <dt className="text-muted">交付分支（Host 记录的远程基线）</dt>
+        <dd className="min-w-0 break-all font-mono" data-testid="dock-delivery-branch">
+          {target.branch.length > 0 ? target.branch : "Host 未记录远程基线分支"}
+        </dd>
+        <dt className="text-muted">自动化</dt>
+        <dd className="min-w-0 break-all" data-testid="dock-delivery-auto">{automation}</dd>
+      </dl>
+      <p className="mt-1 text-[10px] text-muted">执行前显示目标；本面板自身不执行任何 Git 操作。</p>
+    </section>
+  );
+}
+
 function FilesTool({ taskId }: { taskId: string }) {
   const [roots, setRoots] = useState<WorkspaceRootView[] | null>(null);
   const [rootId, setRootId] = useState<string | undefined>(undefined);
   const [relative, setRelative] = useState("");
-  const [tree, setTree] = useState<WorkspaceTreeEntryView[] | null>(null);
+  /** The whole tree view, so the per-view `attribution` is not dropped here. */
+  const [tree, setTree] = useState<WorkspaceTreeView | null>(null);
   const [preview, setPreview] = useState<WorkspacePreviewView | null>(null);
-  const [diff, setDiff] = useState<string | null>(null);
+  const [diff, setDiff] = useState<WorkspaceDiffView | null>(null);
+  const [delivery, setDelivery] = useState<WorkspaceDeliveryView | null>(null);
+  const [deliveryNotice, setDeliveryNotice] = useState<string | null>(null);
   const [taskDir, setTaskDir] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -428,10 +514,55 @@ function FilesTool({ taskId }: { taskId: string }) {
         setError("Host 目录响应无法解析");
         return;
       }
-      setTree(view.entries);
+      setTree(view);
       setError(null);
     },
     [taskId],
+  );
+
+  /**
+   * [PiDock 10] (#15 盒子 7) the delivery target of the selected root, read on
+   * its own so a refusal cannot blank the file view. The Host answers a
+   * worktree root with the repo + pinned baseline + three automation flags, and
+   * refuses a plain-directory link with its own wording — both are rendered as
+   * they arrived. A payload that does not parse is a NAMED error, never a
+   * synthesized branch and never a sample target.
+   */
+  const loadDelivery = useCallback(
+    async (nextRootId: string) => {
+      const result = await deliveryInfoThroughShell({ taskId, rootId: nextRootId });
+      if (!result.ok) {
+        setDelivery(null);
+        setDeliveryNotice(shellFailure(result, "读取交付目标失败"));
+        return;
+      }
+      const view = workspaceDeliveryFromHost(result.payload);
+      if (!view) {
+        setDelivery(null);
+        setDeliveryNotice("Host 交付目标响应无法解析");
+        return;
+      }
+      setDelivery(view);
+      setDeliveryNotice(null);
+    },
+    [taskId],
+  );
+
+  /** Select one root: its tree and its delivery target are this root's own reads. */
+  const selectRoot = useCallback(
+    async (nextRootId: string) => {
+      setRootId(nextRootId);
+      setRelative("");
+      setPreview(null);
+      setDiff(null);
+      setEditor(null);
+      setEditorError(null);
+      setDelivery(null);
+      setDeliveryNotice(null);
+      await loadTree(nextRootId, "");
+      await loadDelivery(nextRootId);
+    },
+    [loadDelivery, loadTree],
   );
 
   useEffect(() => {
@@ -457,13 +588,12 @@ function FilesTool({ taskId }: { taskId: string }) {
         setError(null);
         return;
       }
-      setRootId(first.id);
-      await loadTree(first.id, "");
+      await selectRoot(first.id);
     })();
     return () => {
       live = false;
     };
-  }, [taskId, loadTree]);
+  }, [taskId, selectRoot]);
 
   const openFile = async (path: string) => {
     if (!rootId) return;
@@ -503,7 +633,7 @@ function FilesTool({ taskId }: { taskId: string }) {
       setError("Host 改动响应无法解析");
       return;
     }
-    setDiff(view.diff.length > 0 ? view.diff : "该文件没有未提交改动");
+    setDiff(view);
     setError(null);
   };
 
@@ -577,16 +707,21 @@ function FilesTool({ taskId }: { taskId: string }) {
           <RootChips
             roots={roots}
             selectedId={rootId}
-            onSelect={(next) => {
-              setRootId(next);
-              setRelative("");
-              setPreview(null);
-              setDiff(null);
-              setEditor(null);
-              setEditorError(null);
-              void loadTree(next, "");
-            }}
+            onSelect={(next) => void selectRoot(next)}
           />
+          {/* [PiDock 10] (#15 盒子 7) the Host's delivery target for the selected
+              root, or the Host's own refusal. A link root gets the refusal and
+              NO Git affordance; a worktree root gets the disclosed target. */}
+          {delivery && <DeliveryTargetReadout target={delivery} />}
+          {deliveryNotice && (
+            <p
+              role="status"
+              className="border border-[#e5d9b0] bg-[#fdfbf3] px-2 py-1.5 text-[11px] text-[#7a5c1f]"
+              data-testid="dock-delivery-notice"
+            >
+              {deliveryNotice}
+            </p>
+          )}
           <div className="flex items-center gap-2">
             <Button
               type="button"
@@ -627,17 +762,20 @@ function FilesTool({ taskId }: { taskId: string }) {
           )}
           {busy && <p className="text-[11px] text-muted">读取中…</p>}
           {tree && rootId && (
-            <TreeList
-              entries={tree}
-              relative={relative}
-              onOpenDirectory={(path) => {
-                setRelative(path);
-                setPreview(null);
-                setDiff(null);
-                void loadTree(rootId, path);
-              }}
-              onOpenFile={(path) => void openFile(path)}
-            />
+            <>
+              <ViewAttribution label="文件树" attribution={tree.attribution} testId="dock-tree-attribution" />
+              <TreeList
+                entries={tree.entries}
+                relative={relative}
+                onOpenDirectory={(path) => {
+                  setRelative(path);
+                  setPreview(null);
+                  setDiff(null);
+                  void loadTree(rootId, path);
+                }}
+                onOpenFile={(path) => void openFile(path)}
+              />
+            </>
           )}
           {preview && (
             <section className="min-h-0 border-t border-line pt-2">
@@ -645,14 +783,31 @@ function FilesTool({ taskId }: { taskId: string }) {
                 <span className="truncate font-mono">{preview.path}</span>
                 <Badge className="shrink-0">{preview.language}</Badge>
                 {preview.lineCount !== undefined && <Badge className="shrink-0">{preview.lineCount} 行</Badge>}
-                <Button type="button" variant="link" size="sm" onClick={() => void openDiff()} className="ml-auto h-auto shrink-0 px-0">
-                  改动
-                </Button>
+                {/* A plain-directory link has no Git view (the Host refuses
+                    `plain-dir-no-diff`): the affordance follows the view's own
+                    attribution instead of offering a button that must fail. */}
+                {preview.attribution.rootKind === "worktree" && (
+                  <Button type="button" variant="link" size="sm" onClick={() => void openDiff()} className="ml-auto h-auto shrink-0 px-0">
+                    改动
+                  </Button>
+                )}
               </div>
+              <ViewAttribution label="预览" attribution={preview.attribution} testId="dock-preview-attribution" />
               <pre className="mt-1.5 max-h-[320px] overflow-auto border border-line bg-paper p-2 text-[11px] leading-relaxed">
-                {diff ?? preview.source}
+                {preview.source}
               </pre>
               {preview.truncated && <p className="mt-1 text-[10px] text-muted">Host 已按上限截断内容</p>}
+            </section>
+          )}
+          {diff && (
+            <section className="min-h-0 border-t border-line pt-2">
+              {/* The diff carries its OWN attribution: a two-repo task shows two
+                  different repos, one beside each view. */}
+              <ViewAttribution label="Git 差异" attribution={diff.attribution} testId="dock-diff-attribution" />
+              <pre className="mt-1.5 max-h-[320px] overflow-auto border border-line bg-paper p-2 text-[11px] leading-relaxed" data-testid="dock-diff">
+                {diff.diff.length > 0 ? diff.diff : "该文件没有未提交改动"}
+              </pre>
+              {diff.truncated && <p className="mt-1 text-[10px] text-muted">Host 已按上限截断差异</p>}
             </section>
           )}
         </>
