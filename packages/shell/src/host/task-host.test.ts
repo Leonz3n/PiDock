@@ -1112,9 +1112,17 @@ describe("#6 multi-repo provision + append (S2)", () => {
     expect(exercised[0]!.note).toContain("在本平台执行了链接目标探测");
     expect(exercised[0]!.note).toContain("链中可能没有真实链接");
     expect(exercised[0]!.note).not.toContain("真的在本平台");
-    const windows = report.platforms.find((row) => row.platform === "win32-x64");
-    expect(windows).toMatchObject({ platform: "win32-x64", exercised: false });
-    expect(windows!.note).toContain("win32 链接方式未验证");
+    // The matrix row this Host did NOT run. It is selected by DIFFERENCE from
+    // this Host's own label: on win32 the host platform IS `win32-x64`, so a
+    // hardcoded name would select the exercised row instead.
+    const otherName = hostPlatformLabel() === "win32-x64" ? "darwin-arm64" : "win32-x64";
+    const other = report.platforms.find((row) => row.platform === otherName);
+    expect(other).toMatchObject({ platform: otherName, exercised: false });
+    // 「win32 链接方式未验证」 is a property of every win32 ROW - linkCapabilityRows
+    // appends it to the exercised row too. On win32 the only win32 row IS the
+    // exercised one, so this reads the win32 row; on darwin/linux that is the
+    // same row the assertion above reads.
+    expect(report.platforms.find((row) => row.platform === "win32-x64")!.note).toContain("win32 链接方式未验证");
     // The 真实 pi clause is a NAMED boundary of this record, not a claim.
     expect(report.modelBoundary).toContain("不是真实 pi/模型运行");
   });
