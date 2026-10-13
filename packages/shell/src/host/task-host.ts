@@ -60,6 +60,7 @@ import {
   previewTaskPaths,
   assertProvisionPlanSafe,
   isSafeTaskBranchRef,
+  normalizeTaskPath,
   planResumeBranch,
   resolveTaskRoot,
   validateTaskName,
@@ -1580,7 +1581,12 @@ export class TaskWorkspaceHost {
     }
     const repos = pinnedRepos !== null ? pinnedRepos.map((repo) => repo.repoDir) : [...(input.repos ?? [])];
     const paths = previewTaskPaths(resolved.root, input.dirId, repos, []);
-    if (paths.taskDir !== this.taskDir) {
+    // #52: two code paths build this same path with different separators on
+    // Windows — `previewTaskPaths` spells the child with `/` while a task dir
+    // resolved from the root index uses the native `\` — so the guard must
+    // compare the normalised form. The refusal boundary is unchanged: a path
+    // that really differs still normalises to a different string.
+    if (normalizeTaskPath(paths.taskDir) !== normalizeTaskPath(this.taskDir)) {
       throw new Error(`invalid-payload: provision paths ${paths.taskDir} do not match this Host's task dir ${this.taskDir}`);
     }
     const at = input.now ?? this.now();
