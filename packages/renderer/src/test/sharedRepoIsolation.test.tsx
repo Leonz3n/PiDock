@@ -211,12 +211,16 @@ describe("[PiDock 03] (#6 盒子 6) two tasks sharing one project repository", (
       expect(row).not.toHaveTextContent("未确定");
     }
     // The Host's platform record rides the same read: this machine's platform is
-    // the exercised row and win32 is an explicitly unverified row, by name.
+    // the exercised row and the OTHER released platform is an explicitly
+    // unverified row, by name. The other row is picked by DIFFERENCE from this
+    // machine's own label - on win32 both names are `win32-x64`, so a hardcoded
+    // name would select the exercised row.
     const platforms = within(rows[0]!).getByTestId("row-link-platforms-task-dead0001");
     expect(platforms.querySelector(`li[data-platform="${hostPlatformLabel()}"]`)).toHaveAttribute("data-exercised", "true");
-    const windows = platforms.querySelector('li[data-platform="win32-x64"]');
-    expect(windows).toHaveAttribute("data-exercised", "false");
-    expect(windows).toHaveTextContent("win32 链接方式未验证");
+    const otherName = hostPlatformLabel() === "win32-x64" ? "darwin-arm64" : "win32-x64";
+    const other = platforms.querySelector(`li[data-platform="${otherName}"]`);
+    expect(other).toHaveAttribute("data-exercised", "false");
+    expect(platforms.querySelector('li[data-platform="win32-x64"]')).toHaveTextContent("win32 链接方式未验证");
     expect(within(rows[0]!).getByTestId("row-link-model-boundary-task-dead0001")).toHaveTextContent("不是真实 pi/模型运行");
   });
 
