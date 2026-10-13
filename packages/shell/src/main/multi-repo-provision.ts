@@ -676,8 +676,12 @@ export function linkCapabilityRows(observedPlatform: string | null): LinkCapabil
     rows.push({
       platform: name,
       exercised: false,
+      // The row may claim only what it knows: THIS platform was not run, and no
+      // Windows link was created. It may not claim "no link was probed on
+      // Windows" - another `win32*` variant (Windows on ARM) can be the observed
+      // platform of this same record.
       note: name.startsWith("win32")
-        ? "win32 链接方式未验证：未在 Windows 上创建或探测过链接，本记录不冒充已验证"
+        ? `本机未运行该平台（${name}），链接方式未实测；win32 链接方式未验证：未在 Windows 上创建过链接，本记录不冒充已验证`
         : `本机未运行该平台（${name}），链接方式未实测`,
     });
   }

@@ -295,8 +295,7 @@ describe("#6 link capability record (box 12 platforms)", () => {
     expect(LINK_MODEL_VERIFICATION_BOUNDARY).toContain("仍未完成");
   });
 
-  it("keeps the named 「win32 链接方式未验证」 sentence on a win32 host instead of absorbing it", () => {
-    // A win32 host really ran the probe there, so `exercised` is true - but link
+  it("keeps the named 「win32 链接方式未验证」 sentence on a win32 host instead of absorbing it", () => {    // A win32 host really ran the probe there, so `exercised` is true - but link
     // CREATION was never exercised on Windows, and the row that names that gap must
     // survive. Before this case existed, the observed row replaced it.
     const rows = linkCapabilityRows("win32-x64");
@@ -307,5 +306,24 @@ describe("#6 link capability record (box 12 platforms)", () => {
     expect(windows.note).not.toContain("真的在本平台");
     // And the unobserved release target is still listed, by name.
     expect(rows.find((row) => row.platform === "darwin-arm64")).toMatchObject({ exercised: false });
+  });
+
+  it("narrows an unexercised win32 row to its own platform when another win32 variant was probed", () => {
+    // A Windows-on-ARM host really ran the probe on `win32-arm64`, so the release
+    // target's row may claim only what it knows: THAT platform was not run, and no
+    // Windows link was created. "No link was probed on Windows" would be
+    // contradicted by the arm64 row of the same record.
+    const rows = linkCapabilityRows("win32-arm64");
+    expect(rows.map((row) => row.platform)).toEqual(["darwin-arm64", "win32-x64", "win32-arm64"]);
+    const release = rows.find((row) => row.platform === "win32-x64")!;
+    expect(release.exercised).toBe(false);
+    expect(release.note).toContain("本机未运行该平台（win32-x64）");
+    expect(release.note).toContain("win32 链接方式未验证");
+    expect(release.note).not.toContain("未在 Windows 上创建或探测过链接");
+    // The row that DOES prove a Windows probe ran still names the unverified half.
+    const observed = rows.find((row) => row.platform === "win32-arm64")!;
+    expect(observed.exercised).toBe(true);
+    expect(observed.note).toContain("win32 链接方式未验证");
+    expect(observed.note).toContain("未在 Windows 上创建过链接");
   });
 });

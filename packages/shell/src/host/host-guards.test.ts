@@ -34,12 +34,22 @@ describe("code-state observation authorization", () => {
 });
 
 describe("service registration authorization", () => {
-  it("allows only main-attested human registration until Agent diff approval is wired", () => {
+  it("allows only main-attested human registration, and says which op the Agent is refused", () => {
     const origin = { kind: "shell-ui", senderWebContentsId: 42 };
     expect(authorizeServiceRegistration({ origin })).toEqual({ ok: true });
     expect(authorizeServiceRegistration({})).toMatchObject({ ok: false });
     expect(authorizeServiceRegistration({ sessionId: "main", origin })).toMatchObject({ ok: false });
     expect(authorizeServiceRegistration({ origin: { kind: "shell-ui", senderWebContentsId: "42" } })).toMatchObject({ ok: false });
+    // `task/registerService` registers launch material; the Agent's shared-template
+    // change is a different op with its own diff-confirmation path
+    // (`service.template.update` -> `main/service-catalog-ipc.ts`
+    // `performTaskBoundTemplateEdit` review/confirm, gated at `main/pi-session.ts`
+    // `previewGate`), and it registers no service. So the refusal names what is
+    // really refused instead of claiming that path is unwired.
+    expect(authorizeServiceRegistration({ sessionId: "main" })).toEqual({
+      ok: false,
+      error: "permission-denied: Agent 不能登记服务启动材料；Agent 的共享模板改动走 service.template.update 的差异确认通道",
+    });
   });
 });
 
