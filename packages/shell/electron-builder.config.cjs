@@ -39,6 +39,10 @@ module.exports = {
   // The whole compiled shell (main + utilityProcess host + preload + rpc) ships
   // inside app.asar; production forks dist/host/host-entry.js. Test-only
   // Provider harnesses under scripts/ are excluded from packaged files.
+  // Packaging therefore consumes whatever `dist/` happens to hold, so the
+  // package:* scripts must guarantee freshness: each one runs `pnpm build`
+  // before `electron-builder` (packages/shell/package.json). Without that
+  // prerequisite an installer silently ships a stale host bundle.
   files: ["dist/**/*", "package.json"],
   // The pinned node-pty payload must be a real file on disk: the Host preflight
   // opens it with O_NOFOLLOW, re-checks fstat, and pins size + sha256 + mode

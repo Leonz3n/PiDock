@@ -25,6 +25,8 @@ CSC_IDENTITY_AUTO_DISCOVERY=false pnpm package:win    # Windows x64 MSI
 
 `electronDist` 在 macOS 目标下复用已安装的 `node_modules/electron/dist`，因此 macOS 打包可离线完成；Windows 目标必须下载 win32-x64 Electron 发行包。
 
+`package:dir` / `package:mac` / `package:win` 各自前置 `pnpm build`（`packages/shell/package.json`）。打包只消耗 `dist/`（`files: ["dist/**/*", "package.json"]`），**不再需要人工先跑一遍 build**：不前置 build 的话，`electron-builder` 会静默把当时磁盘上的 `dist/` 打成包，安装器随之发出过期的 host bundle。
+
 ## macOS arm64 实测
 
 - 产物：`packages/shell/release/PiDock-0.1.0-arm64.dmg`
@@ -94,7 +96,7 @@ Windows 安装资产为 **MSI**（[ADR 0004](adr/0004-windows-installer-msi-inst
 
 主机：Windows 11 `10.0.26200` x64、Node `v24.21.0`、pnpm `11.22.0`、**已提升会话**。本轮改动 = `win.icon` 指向 `packages/shell/packaging/icon.svg` + 新增该图标源（见「应用图标」）。逐条命令与原始日志记在 #58 的评论；这里只记录观测。
 
-- **构建**：`CSC_IDENTITY_AUTO_DISCOVERY=false pnpm --filter @pidock/shell package:win`（**仓库配置，无 `-c.win.icon` 覆盖**）→ exit 0；产物 `packages/shell/release/PiDock-0.1.0-x64.msi`，`145801336` bytes，sha256 `e36bc66f80a41868d4c36a302f8968c035c3191f592b7269f1997424d25adc6e`。构建日志首次出现 `• downloaded label=icons-bundle.tar.gz`（落到 `%LOCALAPPDATA%\electron-builder\Cache\icons@1.1.0`）。
+- **构建**：`CSC_IDENTITY_AUTO_DISCOVERY=false pnpm --filter @pidock/shell package:win`（**仓库配置，无 `-c.win.icon` 覆盖**）→ exit 0；产物 `packages/shell/release/PiDock-0.1.0-x64.msi`，`145801336` bytes，sha256 `e36bc66f80a41868d4c36a302f8968c035c3191f592b7269f1997424d25adc6e`。构建日志首次出现 `• downloaded label=icons-bundle.tar.gz`（落到 `%LOCALAPPDATA%\electron-builder\Cache\icons@1.1.0`）。**这一枚已被 #58 的后续修复取代**：打包脚本先前没有 `build` 前置，因此它可能装的是过期的 `dist/`；修好后用同一命令重建，产物改为 `145801336` bytes、sha256 `78a5c6b22e70b19c5b1707334d7b4706ccfb34f3acaf08075bee0f208d7b3490`（逐条证据见 #58 的最新评论）。
 - **安装**：`msiexec /i PiDock-0.1.0-x64.msi /qn /l*v` → exit 0；`APPLICATIONFOLDER = C:\Users\<user>\AppData\Local\Programs\PiDock\`、`MSIINSTALLPERUSER = 1`，全程无 UAC 提升。
 - **启动**（已安装副本）：`PIDOCK_PRINT_STARTUP=1 PiDock.exe --print-startup` → exit 0，`PIDOCK_STARTUP_RESULT={"electron":"44.4.3","processUptimeMs":1245,"readyToLoadedMs":255,"shellUrl":"file:///C:/Users/<user>/AppData/Local/Programs/PiDock/resources/app.asar/dist/renderer/smoke.html"}`。
 - **覆盖升级**：把 `packages/shell/package.json` 临时升到 `0.1.1`（**不入库**，复核后 `git checkout --` 复原）再构建第二枚 MSI `PiDock-0.1.1-x64.msi`（`145797240` bytes，sha256 `0545439715d2eb9c2e97a3a97aa7e40527c01fad6962eb3c955ccbf6b35f70a7`）。两枚 MSI 的 `UpgradeCode` 相同（`{CDB945E1-46B2-5696-A0EE-65A2309F5245}`，由 `appId` 推导），`ProductCode` 不同（`{6BD892FC-A9D5-48AF-949C-7CFE17FAB3FB}` → `{5320C5E9-99DD-4647-82DD-2F97447FCB2A}`）。在 0.1.0 之上装 0.1.1 → exit 0；日志 `FindRelatedProducts` 报 `Adding WIX_UPGRADE_DETECTED property. Its value is '{6BD892FC-…}'` 并执行 `RemoveExistingProducts`；ARP 只剩一条 `0.1.1.0`（无并列安装）；`%APPDATA%\@pidock\shell` 下的标记文件仍在；升级后的 `PiDock.exe` 启动 exit 0（`readyToLoadedMs` 273），包内 `app.asar` 的 `package.json` 版本为 `0.1.1`。
