@@ -96,7 +96,9 @@ export GLOBAL_AGENT_HTTP_PROXY=http://127.0.0.1:10808
 ## 尚未预热
 
 - Windows 与 Intel（darwin-x64）Electron 二进制：本机为 arm64，只拉取了 darwin-arm64。Windows 机器需各自执行一次。
-- electron-builder 首次打包所需的外部产物（Windows NSIS、winCodeSign、macOS dmg 组件），均从 GitHub 下载，经代理可用，待工单 15 需要时再拉取。
+- electron-builder 首次打包所需的外部产物（Windows MSI、winCodeSign、macOS dmg 组件），均从 GitHub 下载，经代理可用，待工单 15 需要时再拉取。
+  - Windows 资产格式已按 [ADR 0004](adr/0004-windows-installer-msi-instead-of-nsis-exe.md)（2026-10-13）由 NSIS 单一 EXE 改为 MSI，所以首次 Windows 构建拉取的是 WiX（`4.0.0.5512.2`，`MsiTarget.js:73`）与 winCodeSign，**不是 NSIS**。
+  - 该 Windows 机器还需满足下面两项**期望，本机未验证**，首次 `package:win` 时逐项确认：① 能访问网络（WiX、winCodeSign、win32-x64 的 Electron 二进制都靠下载）；② 若 electron-builder 默认的 rebuild 步骤执行，则需要可把 node-pty 重编译到 Electron ABI 的 Windows 构建工具链。
 - Playwright Firefox / WebKit：产品只用 Electron 内嵌 Chromium，暂不需要。
 - 试点业务仓库自身的工具链（Go 服务、front-monorepo 的 pnpm 依赖）不属于本仓库预热范围。
 
