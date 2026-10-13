@@ -779,6 +779,21 @@ describe("[UI 对齐] S8d 日志 panel (real task/serviceLog)", () => {
     expect(screen.queryByTestId("dock-log-lines")).not.toBeInTheDocument();
   });
 
+  it("names a log line whose stamp the Host left blank instead of printing a bare prefix", async () => {
+    // `serviceLogFromHost` (`data/taskServices.ts:496-503`) type-checks `at` and
+    // `line`, so a blank stamp is a reachable Host payload; the row used to
+    // start with an empty `<span>` plus a stray space.
+    panelBridge({ bindings, templates, logs: () => ({ ok: true, payload: { log: [
+      { at: "", line: "listening at :4100" },
+      { at: "2026-10-08T00:00:02.000Z", line: "shipment ready" },
+    ] } }) });
+    render(<DesktopToolDock taskId="task-1" tool="logs" onClose={() => {}} />);
+    const rows = within(await screen.findByTestId("dock-log-lines")).getAllByRole("listitem");
+    expect(rows[0]).toHaveTextContent("Host 未上报日志时间 listening at :4100");
+    // A real stamp is still printed verbatim, in front of its own line.
+    expect(rows[1]).toHaveTextContent("2026-10-08T00:00:02.000Z shipment ready");
+  });
+
   it("reports a real empty tail as zero lines rather than an error", async () => {
     panelBridge({ logs: () => ({ ok: true, payload: { log: [] } }) });
     render(<DesktopToolDock taskId="task-1" tool="logs" onClose={() => {}} />);

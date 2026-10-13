@@ -1716,7 +1716,7 @@ function LogsTool({ taskId }: { taskId: string }) {
           {log === null && serviceId !== undefined && <p className="text-xs text-muted">正在读取日志…</p>}
           {log?.ok && log.lines.length > 0 && (
             <ol className="flex flex-col gap-0.5 border-t border-line pt-2 font-mono text-[10px]" data-testid="dock-log-lines">
-              {log.lines.map((line, index) => <li key={index} className="break-all"><span className="text-muted">{line.at}</span> {line.line}</li>)}
+              {log.lines.map((line, index) => <li key={index} className="break-all"><span className="text-muted">{hostText(line.at, "Host 未上报日志时间")}</span> {line.line}</li>)}
             </ol>
           )}
           {log?.ok && !log.lines.length && <p role="status" className="text-xs text-muted" data-testid="dock-log-empty">Host 返回 0 行日志</p>}

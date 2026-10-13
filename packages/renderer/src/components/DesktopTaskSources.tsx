@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Icon } from "./Icon";
 import { Button } from "./ui/button";
-import { loadDesktopProjects, type DesktopProject } from "../data/desktopProjects";
+import { loadDesktopProjects, sourceName, sourcePath, type DesktopProject } from "../data/desktopProjects";
 import { readAppendReposView, type AppendReposView } from "../data/taskAppend";
 import { appendTaskReposThroughShell, prepareStatusThroughShell, shellTaskPrepareResume, type PidockBridge } from "../data/shellBridge";
 import { TaskPrepareRecovery } from "./TaskPrepareRecovery";
@@ -169,12 +169,13 @@ export function DesktopTaskSources({
           <div className="mt-1.5 flex flex-col gap-2">
             {project.repositories.map((repo) => {
               const row = repos[repo.id];
+              const name = sourceName(repo);
               return (
                 <div key={repo.id} className="grid gap-2 border-b border-line py-2">
                   <label className="flex items-start gap-2 text-xs">
                     <input
                       type="checkbox"
-                      aria-label={repo.name}
+                      aria-label={name}
                       checked={row?.selected ?? false}
                       disabled={busy}
                       onChange={(event) =>
@@ -185,8 +186,8 @@ export function DesktopTaskSources({
                       }
                     />
                     <span>
-                      <strong className="block text-ink">{repo.name}</strong>
-                      <small className="font-mono text-[11px] text-muted">{repo.path}</small>
+                      <strong className="block text-ink">{name}</strong>
+                      <small className="font-mono text-[11px] text-muted">{sourcePath(repo)}</small>
                     </span>
                   </label>
                   {row?.selected ? (
@@ -194,7 +195,7 @@ export function DesktopTaskSources({
                       <label className="text-[11px] text-muted">
                         远程名称
                         <input
-                          aria-label={`远程名称 ${repo.name}`}
+                          aria-label={`远程名称 ${name}`}
                           placeholder="origin"
                           required
                           value={row.remote}
@@ -206,7 +207,7 @@ export function DesktopTaskSources({
                       <label className="text-[11px] text-muted">
                         远程分支
                         <input
-                          aria-label={`远程分支 ${repo.name}`}
+                          aria-label={`远程分支 ${name}`}
                           placeholder="main"
                           required
                           value={row.branch}
@@ -231,7 +232,7 @@ export function DesktopTaskSources({
               <label key={dir.id} className="flex items-start gap-2 text-xs">
                 <input
                   type="checkbox"
-                  aria-label={dir.name}
+                  aria-label={sourceName(dir)}
                   checked={directories.includes(dir.id)}
                   disabled={busy}
                   onChange={(event) =>
@@ -241,8 +242,8 @@ export function DesktopTaskSources({
                   }
                 />
                 <span>
-                  <strong className="block text-ink">{dir.name}</strong>
-                  <small className="font-mono text-[11px] text-muted">{dir.path}</small>
+                  <strong className="block text-ink">{sourceName(dir)}</strong>
+                  <small className="font-mono text-[11px] text-muted">{sourcePath(dir)}</small>
                 </span>
               </label>
             ))}

@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Icon } from "./Icon";
 import { abandonCreation, commitCreation, currentCreation, prepareCreation, type CreationInput, type CreationIntentView } from "../data/desktopCreation";
-import type { DesktopProject } from "../data/desktopProjects";
+import { sourceName, sourcePath, type DesktopProject } from "../data/desktopProjects";
 import type { PidockBridge } from "../data/shellBridge";
 import { hostText } from "../data/workspaceFiles";
 
@@ -85,14 +85,14 @@ export function DesktopTaskCreation({ project, bridge, onCreated }: { project?: 
         <label className="block text-xs">任务名称<input className={`${field} mt-1`} required maxLength={256} value={name} onChange={(event) => setName(event.target.value)} /></label>
         <fieldset className="space-y-2"><legend className="font-semibold">仓库与远程基线</legend>
           {project?.repositories.map((repo) => <div className="grid gap-2 border-b border-line py-2" key={repo.id}>
-            <label className="flex gap-2"><input type="checkbox" checked={repos[repo.id]?.selected ?? false} onChange={(event) => setRepos((old) => ({ ...old, [repo.id]: { selected: event.target.checked, remote: old[repo.id]?.remote ?? "", branch: old[repo.id]?.branch ?? "" } }))} />{repo.name}</label>
-            <span className="break-all text-xs text-muted">{repo.path}</span>
+            <label className="flex gap-2"><input type="checkbox" checked={repos[repo.id]?.selected ?? false} onChange={(event) => setRepos((old) => ({ ...old, [repo.id]: { selected: event.target.checked, remote: old[repo.id]?.remote ?? "", branch: old[repo.id]?.branch ?? "" } }))} />{sourceName(repo)}</label>
+            <span className="break-all text-xs text-muted">{sourcePath(repo)}</span>
             {repos[repo.id]?.selected && <div className="grid grid-cols-2 gap-2"><label className="text-xs">远程名称<input className={field} required placeholder="origin" value={repos[repo.id]?.remote ?? ""} onChange={(event) => setRepos((old) => ({ ...old, [repo.id]: { ...old[repo.id]!, remote: event.target.value } }))} /></label>
               <label className="text-xs">远程分支<input className={field} required placeholder="main" value={repos[repo.id]?.branch ?? ""} onChange={(event) => setRepos((old) => ({ ...old, [repo.id]: { ...old[repo.id]!, branch: event.target.value } }))} /></label></div>}
           </div>)}
         </fieldset>
         <fieldset className="space-y-1"><legend className="font-semibold">普通目录</legend>
-          {project?.directories.map((dir) => <label className="flex gap-2 text-xs" key={dir.id}><input type="checkbox" checked={directories.includes(dir.id)} onChange={(event) => setDirectories((old) => event.target.checked ? [...old, dir.id] : old.filter((id) => id !== dir.id))} />{dir.name} · {dir.path}</label>)}
+          {project?.directories.map((dir) => <label className="flex gap-2 text-xs" key={dir.id}><input type="checkbox" checked={directories.includes(dir.id)} onChange={(event) => setDirectories((old) => event.target.checked ? [...old, dir.id] : old.filter((id) => id !== dir.id))} />{sourceName(dir)} · {sourcePath(dir)}</label>)}
         </fieldset>
         {directories.length > 0 && <label className="flex items-start gap-2 text-xs"><input type="checkbox" required checked={sharedWriteConfirmed} onChange={(event) => setSharedWriteConfirmed(event.target.checked)} />我确认普通目录通过共享可写链接接入任务，后续写入会直接修改原始目录</label>}
         <label className="flex gap-2 text-xs"><input type="checkbox" checked={override} onChange={(event) => setOverride(event.target.checked)} />单次选择其他任务根（系统目录选择器）</label>
