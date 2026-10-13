@@ -11,12 +11,19 @@ const posixIt = it.skipIf(!actualDarwinArm64);
 beforeEach(() => { vi.stubGlobal("process", { ...process, platform: "darwin", arch: "arm64" }); });
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
-function fixture() {
+/** `dev` is the pnpm virtual store under a repository root; `packed` is the flat
+ * production layout a packed app extracts under `app.asar.unpacked`, with the
+ * archive that requires it present next to it. */
+function fixture(layout: "dev" | "packed" = "dev") {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "pidock-pty-preflight-")));
-  const path = join(root, "node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty");
+  const resources = join(root, "PiDock.app/Contents/Resources");
+  const path = layout === "packed"
+    ? join(resources, "app.asar.unpacked/node_modules/node-pty")
+    : join(root, "node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty");
   const installed = fileURLToPath(new URL("../../node_modules/node-pty/", import.meta.url));
   mkdirSync(join(path, "prebuilds/darwin-arm64"), { recursive: true });
   mkdirSync(join(path, "lib"));
+  if (layout === "packed") writeFileSync(join(resources, "app.asar"), "packed-applications-archive\n");
   const entryPath = join(path, "lib/index.js");
   writeFileSync(entryPath, "// Never imported by filesystem tests.\n");
   writeFileSync(join(path, "package.json"), '{"name":"node-pty","version":"1.1.0"}');
@@ -24,7 +31,13 @@ function fixture() {
   copyFileSync(join(installed, "prebuilds/darwin-arm64/spawn-helper"), helper);
   copyFileSync(join(installed, "prebuilds/darwin-arm64/pty.node"), addon);
   chmodSync(helper, 0o644); chmodSync(addon, 0o644);
-  return { root, path, helper, addon, entryPath, resolveEntry: () => entryPath, clean: () => rmSync(root, { recursive: true, force: true }) };
+  return {
+    root, path, helper, addon, entryPath,
+    resources: layout === "packed" ? resources : undefined,
+    archiveEntryPath: join(resources, "app.asar/node_modules/node-pty/lib/index.js"),
+    resolveEntry: () => entryPath,
+    clean: () => rmSync(root, { recursive: true, force: true }),
+  };
 }
 
 posixIt("Darwin arm64 POSIX modes: refuses a competing release addon before granting audited helper execution permission", () => {
@@ -162,5 +175,85 @@ posixIt("Darwin arm64 symlinks: refuses an entry redirected outside the pinned p
     const outside = join(f.root, "other-index.js"); writeFileSync(outside, "// Must not load.\n");
     rmSync(f.entryPath); symlinkSync(outside, f.entryPath);
     expect(() => inspectNodePtyPrebuild(f.root, f.resolveEntry)).toThrow("node-pty-preflight-unavailable");
+  } finally { f.clean(); }
+});
+
+it("resolves the flat packaged package under app.asar.unpacked and accepts the app.asar spelling of its pinned entry", () => {
+  const f = fixture("packed");
+  try {
+    // require.resolve reports the archive member; asarUnpack pins that member's
+    // extraction to the unpacked file the audit below really reads.
+    expect(inspectNodePtyPrebuild(f.root, () => f.archiveEntryPath, f.resources)).toMatchObject({ entryPath: f.entryPath });
+    // The unpacked spelling names the same audited file and is accepted too.
+    expect(inspectNodePtyPrebuild(f.root, () => f.entryPath, f.resources).entryPath).toBe(f.entryPath);
+  } finally { f.clean(); }
+});
+
+it("keeps the pnpm virtual-store layout when the resources root holds no archive", () => {
+  const f = fixture();
+  try {
+    // A dev Electron has a `process.resourcesPath` but no app.asar: the packaged
+    // candidate must not hijack the dev layout.
+    const resources = join(f.root, "Electron.app/Contents/Resources");
+    mkdirSync(resources, { recursive: true });
+    expect(inspectNodePtyPrebuild(f.root, f.resolveEntry, resources).entryPath).toBe(f.entryPath);
+  } finally { f.clean(); }
+});
+
+it("refuses a packed app that has an archive but no extracted package", () => {
+  const f = fixture("packed");
+  try {
+    rmSync(join(f.resources!, "app.asar.unpacked"), { recursive: true, force: true });
+    expect(() => inspectNodePtyPrebuild(f.root, () => f.archiveEntryPath, f.resources)).toThrow("node-pty-preflight-unavailable");
+  } finally { f.clean(); }
+});
+
+it("refuses a packaged package resolution to an entry outside the packaged package", () => {
+  const f = fixture("packed");
+  try {
+    expect(() => inspectNodePtyPrebuild(f.root, () => join(f.root, "other/lib/index.js"), f.resources)).toThrow("node-pty-preflight-unavailable");
+  } finally { f.clean(); }
+});
+
+it("refuses a competing loader directory inside the packaged package", () => {
+  const f = fixture("packed");
+  try {
+    // Positive control: only the competitor is added between the two calls.
+    expect(inspectNodePtyPrebuild(f.root, f.resolveEntry, f.resources).entryPath).toBe(f.entryPath);
+    mkdirSync(join(f.path, "build/Release"), { recursive: true });
+    writeFileSync(join(f.path, "build/Release/pty.node"), "untrusted-native-candidate");
+    expect(() => inspectNodePtyPrebuild(f.root, f.resolveEntry, f.resources)).toThrow("node-pty-preflight-unavailable");
+  } finally { f.clean(); }
+});
+
+it.each(["helper", "addon"] as const)("refuses changed %s bytes inside the packaged package", (kind) => {
+  const f = fixture("packed");
+  try {
+    const path = f[kind], bytes = readFileSync(path); bytes[0] ^= 1; writeFileSync(path, bytes);
+    expect(() => inspectNodePtyPrebuild(f.root, () => f.archiveEntryPath, f.resources)).toThrow("node-pty-preflight-unavailable");
+  } finally { f.clean(); }
+});
+
+posixIt("Darwin arm64 POSIX modes: reports the pinned packaged helper unready and prepares only it", () => {
+  const f = fixture("packed");
+  try {
+    const helper = readFileSync(f.helper), addon = readFileSync(f.addon);
+    const result = prepareNodePtyPrebuild(f.root, () => f.archiveEntryPath, f.resources);
+    expect(result.before.ready).toBe(false); expect(result.after.ready).toBe(true);
+    expect(statSync(f.helper).mode & 0o7777).toBe(0o755);
+    expect(statSync(f.addon).mode & 0o7777).toBe(0o644);
+    expect(readFileSync(f.helper)).toEqual(helper); expect(readFileSync(f.addon)).toEqual(addon);
+  } finally { f.clean(); }
+});
+
+posixIt.each(["unpinned-mode", "symlink"] as const)("refuses the packaged helper as %s without mutating an unaudited resource", (condition) => {
+  const f = fixture("packed");
+  try {
+    if (condition === "symlink") {
+      const outside = join(f.root, "outside-helper"); copyFileSync(f.helper, outside); rmSync(f.helper); symlinkSync(outside, f.helper);
+    } else chmodSync(f.helper, 0o600);
+    const before = statSync(f.helper).mode & 0o7777;
+    expect(() => prepareNodePtyPrebuild(f.root, () => f.archiveEntryPath, f.resources)).toThrow("node-pty-preflight-unavailable");
+    expect(statSync(f.helper).mode & 0o7777).toBe(before);
   } finally { f.clean(); }
 });
