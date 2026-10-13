@@ -854,6 +854,7 @@ describe("[PiDock 10] (#15 盒子 2/7/9) 交付目标与每视图归属 on the s
       treeAttribution?: unknown;
       treeEntries?: unknown;
       preview?: { path: string; language: string };
+      previewAttribution?: unknown;
     },
   ) =>
     async (_taskId: string, op: string, payload: Record<string, unknown>) => {
@@ -866,7 +867,7 @@ describe("[PiDock 10] (#15 盒子 2/7/9) 交付目标与每视图归属 on the s
       }
       if (op === "task/filePreview") {
         const shape = override?.preview ?? { path: "a.md", language: "markdown" };
-        return { ok: true, payload: { preview: { attribution, path: shape.path, language: shape.language, source: `# ${identity} 内容`, truncated: false, lineCount: 1 } } };
+        return { ok: true, payload: { preview: { attribution: override?.previewAttribution ?? attribution, path: shape.path, language: shape.language, source: `# ${identity} 内容`, truncated: false, lineCount: 1 } } };
       }
       if (op === "task/fileDiff") {
         return { ok: true, payload: { attribution, path: "a.md", diff: `- ${identity} 旧行\n+ 新行`, truncated: false } };
@@ -1389,5 +1390,179 @@ describe("[PiDock 10] (#15 盒子 2/7/9) 交付目标与每视图归属 on the s
     expect(screen.getByText("Host 未上报编辑器工作目录")).toBeInTheDocument();
     expect(screen.getByText("Host 未上报外部编辑器说明")).toBeInTheDocument();
     expect(screen.getByText("Host 未上报外部编辑器边界说明")).toBeInTheDocument();
+  });
+
+  it("refuses by name a delivery target that self-declares a link while the selected root is a worktree", async () => {
+    const roots = twoRepoRoots();
+    const worktree = roots.find((entry) => entry.id === "repo-a")!;
+    // The mirror of the case above: the payload answers the worktree root's OWN
+    // id (so the identity check passes) but declares itself a plain-directory
+    // link. `deliveryTargetIsShown` is false either way, but the refusal text
+    // must name the RENDERER's own kind — repeating the payload's self-
+    // description back as the panel's conclusion is the very pattern this
+    // slice exists to kill.
+    bridge(hostReads(roots, { delivery: { ok: true, payload: { target: {
+      attribution: { ...workspaceAttribution(worktree, TASK_ID, TASK_DIR), rootKind: "shared-dir" },
+      repo: "sample-repo",
+      branch: "sample-branch",
+      autoCommit: false,
+      autoPush: false,
+      autoMerge: false,
+    } } } }));
+    render(<DesktopToolDock taskId={TASK_ID} tool="files" onClose={() => {}} />);
+
+    const notice = await screen.findByTestId("dock-delivery-notice");
+    // The renderer's kind is named, not the payload's claim.
+    expect(notice).toHaveTextContent(
+      "Host 交付目标自述为普通目录链接，与所选根（工作树）不符：本面板只按所选根的类型判定，不显示 Git 交付目标",
+    );
+    // It must NOT assert the panel's own conclusion that the selected root is a
+    // plain-directory link.
+    expect(notice).not.toHaveTextContent("Host 交付目标与根类型不符：普通目录链接没有 Git 交付");
+    expect(screen.queryByTestId("dock-delivery")).not.toBeInTheDocument();
+    expect(screen.queryByText(/sample-repo/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/sample-branch/)).not.toBeInTheDocument();
+    // The worktree-only metadata block is on the SAME screen as the refusal, so
+    // the panel cannot be calling the selected root a plain-directory link.
+    expect(await screen.findByTestId("dock-working-branch")).toBeInTheDocument();
+  });
+
+  it("does not offer the Git diff affordance on a link root whose own preview claims to be a worktree", async () => {
+    const roots = sharedOnlyRoots();
+    const link = roots[0]!;
+    // The preview answers the link root's own id but self-declares a worktree.
+    // The renderer's own knowledge of the selected root's kind is what keeps
+    // the Git button off a plain-directory link.
+    bridge(hostReads(roots, {
+      previewAttribution: { ...workspaceAttribution(link, TASK_ID, TASK_DIR), rootKind: "worktree", repo: "sample-repo" },
+    }));
+    render(<DesktopToolDock taskId={TASK_ID} tool="files" onClose={() => {}} />);
+
+    fireEvent.click(await screen.findByText("a.md"));
+    const preview = await screen.findByTestId("dock-preview-attribution");
+    // The payload parsed and its own claim is rendered…
+    expect(preview).toHaveAttribute("data-root-kind", "worktree");
+    // …but no Git affordance is offered on the link root.
+    expect(screen.queryByRole("button", { name: "改动" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the newest directory's entries when two same-root tree answers land out of order", async () => {
+    const roots = twoRepoRoots();
+    const rootA = roots.find((entry) => entry.id === "repo-a")!;
+    const answers = hostReads(roots, { treeEntries: [
+      { name: "d1", path: "d1", kind: "dir" },
+      { name: "d2", path: "d2", kind: "dir" },
+    ] });
+    const held: Array<{ relative: string; resolve: (value: unknown) => void }> = [];
+    const taskOp = vi.fn((taskId: string, op: string, payload: Record<string, unknown>) => {
+      // Only the two directory navigations (a `relative`) are held; the root
+      // read is answered normally.
+      if (op === "task/fileTree" && payload["relative"] !== undefined) {
+        return new Promise<unknown>((resolve) => { held.push({ relative: String(payload["relative"]), resolve }); });
+      }
+      return answers(taskId, op, payload);
+    });
+    const treeFor = (relative: string, name: string) => ({
+      ok: true,
+      payload: { tree: {
+        attribution: workspaceAttribution(rootA, TASK_ID, TASK_DIR),
+        path: relative,
+        entries: [{ name, path: `${relative}/${name}`, kind: "file", size: 1 }],
+        truncated: false,
+      } },
+    });
+    bridge(taskOp);
+    render(<DesktopToolDock taskId={TASK_ID} tool="files" onClose={() => {}} />);
+
+    // Two directory clicks while the first answer is still in flight.
+    fireEvent.click(await screen.findByText("d1"));
+    fireEvent.click(screen.getByText("d2"));
+    expect(held.map((entry) => entry.relative)).toEqual(["d1", "d2"]);
+    const release = (relative: string, value: unknown) => {
+      const index = held.findIndex((entry) => entry.relative === relative);
+      held.splice(index, 1)[0]!.resolve(value);
+    };
+
+    // The NEWEST answer (d2) lands first…
+    await act(async () => {
+      release("d2", treeFor("d2", "second.md"));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(await screen.findByText("second.md")).toBeInTheDocument();
+
+    // …then the older one (d1) lands LAST: it belongs to a directory the user
+    // has left, so it must not replace the newest directory's entries.
+    await act(async () => {
+      release("d1", treeFor("d1", "first.md"));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(screen.getByText("second.md")).toBeInTheDocument();
+    expect(screen.queryByText("first.md")).not.toBeInTheDocument();
+  });
+
+  it("clears the drop notice once a fresh answer for the same region is accepted", async () => {
+    const roots = twoRepoRoots();
+    const rootA = roots.find((entry) => entry.id === "repo-a")!;
+    const rootB = roots.find((entry) => entry.id === "repo-b")!;
+    const answers = hostReads(roots);
+    let previewCalls = 0;
+    const taskOp = vi.fn((taskId: string, op: string, payload: Record<string, unknown>) => {
+      if (op === "task/filePreview") {
+        previewCalls += 1;
+        // The FIRST preview answer is misattributed (names root B though it
+        // answers root A's read); the second is the real one.
+        return Promise.resolve({ ok: true, payload: { preview: {
+          attribution: workspaceAttribution(previewCalls === 1 ? rootB : rootA, TASK_ID, TASK_DIR),
+          path: "a.md", language: "markdown", source: "# x", truncated: false,
+        } } });
+      }
+      return answers(taskId, op, payload);
+    });
+    bridge(taskOp);
+    render(<DesktopToolDock taskId={TASK_ID} tool="files" onClose={() => {}} />);
+
+    fireEvent.click(await screen.findByText("a.md"));
+    expect(await screen.findByTestId("dock-stale-answer")).toHaveTextContent(
+      "Host 预览响应自述根 repo-b 与所请求的根 repo-a 不符：本面板不显示",
+    );
+    expect(screen.queryByTestId("dock-preview-attribution")).not.toBeInTheDocument();
+
+    // A fresh, accepted answer for the SAME region: the notice has done its job.
+    fireEvent.click(screen.getByText("a.md"));
+    expect(await screen.findByTestId("dock-preview-attribution")).toHaveTextContent("仓库 repo-a");
+    expect(screen.queryByTestId("dock-stale-answer")).not.toBeInTheDocument();
+  });
+
+  it("clears a drop notice for a region the new root does not re-read when another root is selected", async () => {
+    const roots = twoRepoRoots();
+    const rootA = roots.find((entry) => entry.id === "repo-a")!;
+    const rootB = roots.find((entry) => entry.id === "repo-b")!;
+    const answers = hostReads(roots);
+    let previewCalls = 0;
+    const taskOp = vi.fn((taskId: string, op: string, payload: Record<string, unknown>) => {
+      if (op === "task/filePreview") {
+        previewCalls += 1;
+        return Promise.resolve({ ok: true, payload: { preview: {
+          attribution: workspaceAttribution(previewCalls === 1 ? rootB : rootA, TASK_ID, TASK_DIR),
+          path: "a.md", language: "markdown", source: "# x", truncated: false,
+        } } });
+      }
+      return answers(taskId, op, payload);
+    });
+    bridge(taskOp);
+    render(<DesktopToolDock taskId={TASK_ID} tool="files" onClose={() => {}} />);
+
+    // A preview drop on root A lands and is named…
+    fireEvent.click(await screen.findByText("a.md"));
+    expect(await screen.findByTestId("dock-stale-answer")).toHaveTextContent(
+      "Host 预览响应自述根 repo-b 与所请求的根 repo-a 不符：本面板不显示",
+    );
+
+    // …and selecting another root is the one event that can make its "当前根 …"
+    // stale, so it is cleared. The 预览响应 region is NOT re-read by the chip
+    // switch, so only the selectRoot clearing can remove it.
+    fireEvent.click(screen.getByRole("button", { name: "repo-b" }));
+    expect(await screen.findByTestId("dock-tree-attribution")).toHaveTextContent("仓库 repo-b");
+    expect(screen.queryByTestId("dock-stale-answer")).not.toBeInTheDocument();
   });
 });
