@@ -127,14 +127,21 @@ describe("disk lifecycle ownership", () => {
       expect(existsSync(taskFilePath(taskDir)) ? readFileSync(taskFilePath(taskDir), "utf8") : null).toBe(taskBefore);
     });
   });
-  it.each(["root", "task", "record", "lifecycle"] as const)("refuses a linked %s without modifying the link or original target bytes", (kind) => {
+  // win32: the `record` and `lifecycle` kinds plant a link to a FILE, which needs
+  // SeCreateSymbolicLinkPrivilege (measured: EPERM under `runas /trustlevel:0x20000`) and a
+  // junction cannot stand in for a file (it is a directory reparse point) and a plain directory
+  // symlink needs the same privilege; a junction is the directory link win32 can create without
+  // it. Only the directory kinds are created here, using that junction; POSIX still runs all four.
+  const linkedKinds: ("root" | "task" | "record" | "lifecycle")[] = ["root", "task", "record", "lifecycle"];
+  const creatableLinkedKinds = process.platform === "win32" ? linkedKinds.filter((kind) => kind === "root" || kind === "task") : linkedKinds;
+  it.each(creatableLinkedKinds)("refuses a linked %s without modifying the link or original target bytes", (kind) => {
     withLifecycleTask(({ home, root, taskDir, lifecycle }) => {
       diskTaskStore.writeLifecycle(taskDir, lifecycle);
       const taskBefore = readFileSync(taskFilePath(taskDir), "utf8"), before = readFileSync(lifecycleFilePath(taskDir), "utf8");
       const path = kind === "root" ? root : kind === "task" ? taskDir : kind === "record" ? taskFilePath(taskDir) : lifecycleFilePath(taskDir);
       const target = join(home, `external-${kind}`);
       renameSync(path, target);
-      symlinkSync(target, path, kind === "root" || kind === "task" ? "dir" : "file");
+      symlinkSync(target, path, kind === "root" || kind === "task" ? (process.platform === "win32" ? "junction" : "dir") : "file");
       const entries = readdirSync(taskDir);
       expect(() => diskTaskStore.writeLifecycle(taskDir, { ...lifecycle, archived: true })).toThrow();
       expect(lstatSync(path).isSymbolicLink()).toBe(true);
@@ -1007,17 +1014,18 @@ describe("#6 multi-repo provision + append (S2)", () => {
       mkdirSync(real);
       // 失效: a link whose target does not exist.
       const dangling = join(home, "gone-notes");
-      symlinkSync(join(home, "never-created"), dangling);
+      // win32: a plain directory symlink needs SeCreateSymbolicLinkPrivilege; a junction is the directory link this platform can create without it (#57).
+      symlinkSync(join(home, "never-created"), dangling, process.platform === "win32" ? "junction" : "dir");
       // 嵌套: the source is itself a link (here a link to a link).
       const firstHop = join(home, "first-hop");
-      symlinkSync(real, firstHop);
+      symlinkSync(real, firstHop, process.platform === "win32" ? "junction" : "dir");
       const nested = join(home, "nested-notes");
-      symlinkSync(firstHop, nested);
+      symlinkSync(firstHop, nested, process.platform === "win32" ? "junction" : "dir");
       // 循环: two links pointing at each other.
       const cycleA = join(home, "cycle-a");
       const cycleB = join(home, "cycle-b");
-      symlinkSync(cycleB, cycleA);
-      symlinkSync(cycleA, cycleB);
+      symlinkSync(cycleB, cycleA, process.platform === "win32" ? "junction" : "dir");
+      symlinkSync(cycleA, cycleB, process.platform === "win32" ? "junction" : "dir");
       // 形状未确定: the chain ends at something that is not a directory.
       const file = join(home, "notes.txt");
       writeFileSync(file, "not a directory\n");
@@ -1136,9 +1144,9 @@ describe("#6 multi-repo provision + append (S2)", () => {
       mkdirSync(original);
       writeFileSync(join(original, "spec.md"), "原目录内容\n");
       const linkPath = join(taskDir, "dir-notesa");
-      symlinkSync(original, linkPath);
+      symlinkSync(original, linkPath, process.platform === "win32" ? "junction" : "dir");
       const danglingSource = join(home, "gone-notes");
-      symlinkSync(join(home, "never-created"), danglingSource);
+      symlinkSync(join(home, "never-created"), danglingSource, process.platform === "win32" ? "junction" : "dir");
       const taskHost = new TaskWorkspaceHost("task-a", taskDir, memoryTaskStore(), () => "2026-09-22T10:00:00+08:00");
       taskHost.provision({
         name: "普通目录任务",
@@ -1398,7 +1406,7 @@ describe("[PiDock 09] real-path write coordination across tasks", () => {
     mkdirSync(taskDir);
     const linkPath = join(taskDir, "dir-invoiced");
     // The link first points at the recorded shared directory.
-    symlinkSync(sharedDir, linkPath);
+    symlinkSync(sharedDir, linkPath, process.platform === "win32" ? "junction" : "dir");
     const store = memoryTaskStore();
     store.writeTask(
       taskDir,
@@ -1422,7 +1430,7 @@ describe("[PiDock 09] real-path write coordination across tasks", () => {
     expect(host.sendMessage("main", "改 spec", writeTurn(`${linkPath}/spec.md`)).state).toBe("done");
     // Retarget the link outside the recorded root: the lexical path is still
     // inside the task folder, the real path is not, so the write is refused.
-    symlinkSync(otherDir, `${linkPath}-next`);
+    symlinkSync(otherDir, `${linkPath}-next`, process.platform === "win32" ? "junction" : "dir");
     expect(host.pathScopeOf(`${taskDir}/dir-invoiced-next/spec.md`).kind).toBe("outside");
     expect(() => host.sendMessage("main", "越界", writeTurn(`${taskDir}/dir-invoiced-next/spec.md`))).toThrow("path-out-of-scope");
   });
