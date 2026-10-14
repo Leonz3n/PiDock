@@ -327,6 +327,21 @@ describe("trusted Electron view modes", () => {
 
     it("authorizes the production trigger on POSIX and drives register + control with main's own catalog origin", async () => {
       const g = await gate();
+      // win32 (#7/#48): the authorization below resolves the trusted launch and
+      // asks the Host to register and control a service, and the capability behind
+      // it - verifying and terminating a Host-owned service process - is not
+      // implemented on win32, where main's own gate answers by NAME and resolves
+      // nothing. Win32 pins that refusal here; the POSIX legs that drive the two
+      // ops stay byte-intact below it.
+      if (process.platform === "win32") {
+        expect(await g.handler(g.shell, request)).toEqual({ ok: false, error: SERVICE_EXECUTION_UNSUPPORTED_PLATFORM });
+        expect(SERVICE_EXECUTION_UNSUPPORTED_PLATFORM).toContain("unsupported-platform");
+        // Refused before anything was resolved or asked for: no launch, no
+        // register, no control, so nothing was started either.
+        expect(g.launchFor).not.toHaveBeenCalled();
+        expect(g.routeTaskOp).not.toHaveBeenCalled();
+        return;
+      }
       expect(await g.handler(g.shell, request)).toEqual({ ok: true, payload: { op: "task/controlService", action: "start" } });
       // Main resolved the trusted launch itself and asked the Host to register
       // the descriptor, then to control the service. Both ops carry the

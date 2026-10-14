@@ -578,7 +578,16 @@ describe("#48 service ownership records", () => {
     for (const corruptContent of corruptCases) {
       writeFileSync(file, corruptContent);
       const corruptProcesses = driver(dir);
-      await expect(corruptProcesses.start(plan("one", dir))).rejects.toThrow(/invalid-payload/);
+      // win32 (#7/#48): `start` is read off a launch attempt, and Host-owned
+      // service processes are not implemented on win32 - the platform gate there
+      // answers FIRST and by name, so the corrupt record is never reached on that
+      // path. `stop` does reach the record before any signalling and refuses
+      // exactly as POSIX does, so that assertion stays shared and byte-intact.
+      if (process.platform === "win32") {
+        await expect(corruptProcesses.start(plan("one", dir))).rejects.toThrow(/unsupported-platform/);
+      } else {
+        await expect(corruptProcesses.start(plan("one", dir))).rejects.toThrow(/invalid-payload/);
+      }
       await expect(corruptProcesses.stop("one")).rejects.toThrow(/invalid-payload/);
       expect(corruptProcesses.ids()).toEqual([]);
       expect(readFileSync(file, "utf8")).toBe(corruptContent);
@@ -603,6 +612,19 @@ describe("#48 service ownership records", () => {
     expect(verifyServiceOwnershipIdentity({ pid: -1, ownershipNonce: "f".repeat(32) })).toBe("unobservable");
     const dead = spawn(process.execPath, ["-e", "process.exit(0)"], { stdio: "ignore" });
     return new Promise<void>((resolve) => dead.once("exit", () => {
+      // win32 (#7/#48): the `gone` answer below is produced by a liveness probe
+      // taken after the launch-identity readback, and that readback (a live
+      // process's own environment block) is not implemented on win32 - the
+      // verifier answers before probing. That is a capability gap, not an
+      // impossible observation: POSIX really answers `gone` for this exited child.
+      // What win32 pins is the tri-state degradation itself, for a dead pid and
+      // for a live one alike, so no caller can read "unobservable" as "alive".
+      if (process.platform === "win32") {
+        expect(verifyServiceOwnershipIdentity({ pid: dead.pid!, ownershipNonce: "f".repeat(32) })).toBe("unobservable");
+        expect(verifyServiceOwnershipIdentity({ pid: process.pid, ownershipNonce: "f".repeat(32) })).toBe("unobservable");
+        resolve();
+        return;
+      }
       expect(verifyServiceOwnershipIdentity({ pid: dead.pid!, ownershipNonce: "f".repeat(32) })).toBe("gone");
       resolve();
     }));
@@ -613,6 +635,17 @@ describe("#48 service ownership records", () => {
     const lines: string[] = [];
     const processes = new TaskServiceProcesses(dir, (_, line) => lines.push(line), () => {}, (line) => line,
       3000, 1000, undefined);
+    // win32 (#7/#48): the marker below is read back out of a REAL child's own
+    // environment block, and Host-owned service processes are not implemented on
+    // win32, where `start` refuses by name - so no child carries the marker and no
+    // OS readback runs. Win32 pins that named refusal plus the one direction that
+    // needs no child at all: the Host's own environment never gains the marker.
+    if (process.platform === "win32") {
+      await expect(processes.start(plan("env", dir, ["-e", "0"]))).rejects.toThrow(/unsupported-platform/);
+      expect(lines).toEqual([]);
+      expect(process.env[SERVICE_OWNERSHIP_NONCE_ENV]).toBeUndefined();
+      return;
+    }
     const pid = await processes.start(plan("env", dir, ["-e", `console.log('env:' + (process.env.${SERVICE_OWNERSHIP_NONCE_ENV} ? 'present' : 'absent')); setInterval(() => {}, 1000)`]));
     await until(() => lines.includes("env:present"), "the child to report its own environment");
     // The marker the verification reads back really is the child's own, and the
@@ -676,6 +709,15 @@ describe("#48 service ownership records", () => {
       expect(killTargets).toEqual([]);
 
       // Non-vacuous proof: assert the real stop path still works and signals the real negative pid
+      // win32 (#7/#48): that proof needs a REAL child to stop, and Host-owned
+      // service processes are not implemented on win32, where `start` refuses by
+      // name. Win32 pins that named refusal instead, and that the refusal itself
+      // signalled nothing.
+      if (process.platform === "win32") {
+        await expect(processes.start(plan("real-launch", dir))).rejects.toThrow(/unsupported-platform/);
+        expect(killTargets).toEqual([]);
+        return;
+      }
       const realPid = await processes.start(plan("real-launch", dir));
       await processes.stop("real-launch");
       expect(alive(realPid)).toBe(false);
@@ -755,6 +797,16 @@ describe("#48 ownership fixtures", () => {
     const dir = taskDir();
     mkdirSync(dir, { recursive: true });
     const processes = driver(dir);
+    // win32 (#7/#48): the guard below watches a REAL child it created really exit,
+    // and Host-owned service processes are not implemented on win32, where `start`
+    // refuses by name. Win32 pins that refusal and the fail-closed fact behind the
+    // guard: the refusal created nothing, so this suite still cannot leave a child
+    // of its own behind there.
+    if (process.platform === "win32") {
+      await expect(processes.start(plan("cleanup", dir))).rejects.toThrow(/unsupported-platform/);
+      expect(processes.ids()).toEqual([]);
+      return;
+    }
     const pid = await processes.start(plan("cleanup", dir));
     await processes.stop("cleanup");
     expect(alive(pid)).toBe(false);
