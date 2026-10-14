@@ -80,8 +80,12 @@ import { createTrustedWindow, registerIpc } from "./runtime.js";
 import { TaskRootIndex } from "./task-root-index.js";
 
 const homes: string[] = [];
+// The launch under test spawns a DETACHED child (`open-editor.ts`) whose cwd is
+// inside this home; win32 cannot remove a directory that is a live process's
+// cwd, so the delete retries while that child (a shim that exits right after
+// recording its evidence) terminates.
 afterEach(() => {
-  for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true });
+  for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   delete process.env["EDITOR_EVIDENCE"];
   state.userData = "";
 });
