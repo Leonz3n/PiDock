@@ -139,6 +139,8 @@ Windows 安装资产为 **MSI**（[ADR 0004](adr/0004-windows-installer-msi-inst
 
 **darwin-arm64 主机没有构建、安装或签名任何 MSI**；在这台机器上跑 `package:win` **预计**会先下载 WiX，随后在 x86_64 版 Wine 上以同类架构错误失败（同 2026-09-22 记录的 `-86`；**本节未实测**，属预期而非观察结果）。win32-x64 主机上的构建/安装/启动/卸载/覆盖升级已按下列步骤（的静默等价命令）执行过，结果见「Windows x64 MSI 实测」；下面保留的是**仍需人工完成**的部分：在干净 Windows 机器与第二个用户账户上重跑，以及签名。在人工回报结果之前，任何文档或结论都不得声称 Windows 资产可用或已签名。
 
+**交互向导（#76）：** 上面这些人工步骤已串成可执行向导 `scripts/windows-release-wizard.sh`（运行 `bash scripts/windows-release-wizard.sh`）：选择并采集 Authenticode 签名方式（凭据只写进被 gitignore 的 `.env.signing`）、如实说明 CI 里没有消费签名密钥的工作流、按精确文件与行指路（但不改动）electron-builder 的签名接线、用 `Get-AuthenticodeSignature` 与 `signtool verify` 采集签名与时间戳的原始输出、干净机器安装（含在已安装的 MSI 内跑内置终端）、第二账户与升级矩阵，最后把观测回记到 #22。它只引导与采集证据，**不代任何人勾选验收项**。
+
 ### 构建
 
 ```powershell
