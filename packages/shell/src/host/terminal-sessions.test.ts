@@ -858,6 +858,34 @@ it("refuses a descendant whose creation time says it predates the pid its ppid n
     .toEqual([foreign, real]);
 });
 
+it("refuses a process created before this terminal started when the root row is gone", () => {
+  // #69: the session-start bound is a second, independent piece of evidence. It
+  // is the instant taken before the helper fork, so it is provably earlier than
+  // every real descendant - and it needs no row of its own, which is exactly the
+  // residual #68 left: here the root's row is ABSENT (the root already exited),
+  // so the parent-chain evidence has nothing to date the first level against and
+  // the recycled number adopts the whole foreign family again.
+  const hour = 3_600_000, floor = Date.now();
+  const root = 900, foreign = 700, foreignChild = 800, real = 950;
+  const rootGone = [
+    { pid: foreign, ppid: root, createdAt: floor - 18 * hour },
+    { pid: foreignChild, ppid: foreign, createdAt: floor - 18 * hour },
+    { pid: real, ppid: root, createdAt: floor + 1_000 },
+  ];
+  // Without the bound this is #68's residual, measured: the whole foreign family
+  // (and its own child) is adopted through the recycled number.
+  expect(descendantPids(rootGone, root)).toEqual([foreign, foreignChild, real]);
+  expect(descendantPids(rootGone, root, floor)).toEqual([real]);
+  // Refuse-only, exactly as #68: an undated row and a row dated in the bound's own
+  // millisecond are not proven early and stay, and an unknown bound refuses nothing.
+  expect(descendantPids([{ pid: foreign, ppid: root }, { pid: real, ppid: root, createdAt: floor }], root, floor))
+    .toEqual([foreign, real]);
+  expect(descendantPids([{ pid: foreign, ppid: root, createdAt: floor - 18 * hour }], root)).toEqual([foreign]);
+  // POSIX is inert: no row carries a creation time, so a bound changes nothing.
+  const posix = [{ pid: 11, ppid: 10 }, { pid: 12, ppid: 11 }];
+  expect(descendantPids(posix, 10, floor)).toEqual(descendantPids(posix, 10));
+});
+
 function programDir(tag: string, names: string[]): string {
   const dir = mkdtempSync(join(tmpdir(), `pidock-programs-${tag}-`));
   for (const name of names) writeFileSync(join(dir, name), "", { mode: 0o755 });
@@ -1417,16 +1445,46 @@ win32It("does not adopt a recycled pid's foreign family when it stops a win32 te
   expect(foreign.filter((pid) => alivePids.has(pid))).toEqual(foreign);
 });
 
+win32It("refuses a family created before the terminal started when the root row is already gone", async () => {
+  // #69, #68's residual shape: the root's own row is NOT in the table (it already
+  // exited), so the parent-chain evidence has nothing to date the first level
+  // against and the recycled pid's foreign family is adopted again. The session
+  // start bound refuses them instead, so the stop still verifies the tree it owns
+  // while the foreign family is left running.
+  const hour = 3_600_000, started = Date.now(), root = 5800, child = 5801;
+  const foreign = [5900, 5901, 5902];
+  const alivePids = new Set([child, ...foreign]);
+  const worker = new HelperHandle(() => alivePids.delete(child));
+  const driver = new TerminalPtyDriver({
+    workspaceId: "workspace-unit", runtime: resolvePtyRuntime, spawnWorker: () => worker, onOutput: () => {},
+    win32ProcessTable: () => [
+      { pid: child, ppid: root, createdAt: started + 1000 },
+      { pid: foreign[0]!, ppid: root, createdAt: started - 18 * hour },
+      { pid: foreign[1]!, ppid: foreign[0]!, createdAt: started - 18 * hour },
+      { pid: foreign[2]!, ppid: foreign[1]!, createdAt: started - 18 * hour },
+    ],
+    win32ProcessAlive: (pid) => alivePids.has(pid), stopGraceMs: 50, stopConfirmMs: 50,
+  });
+  const starting = driver.spawn(unitIdentity, unitLaunch, () => {});
+  worker.reply({ status: "started", rootPid: root });
+  expect(await starting).toEqual({ status: "started", process: { processId: root } });
+  expect(await driver.stop(unitIdentity)).toEqual({ ...unitIdentity, status: "tree-drained" });
+  expect(worker.killed).toBe(true);
+  // The unrelated family is still running, and nothing waited on it.
+  expect(foreign.filter((pid) => alivePids.has(pid))).toEqual(foreign);
+});
+
 win32It("never claims a win32 stop while the tree survives the helper kill", async () => {
   // A helper the Host terminated, but a tree that is still there: the receipt
   // stays the named `unknown` and the operation is retained for a later stop. Both
-  // rows are dated AFTER the root on purpose: the creation-time rule keeps a real
-  // descendant, so this refusal is not that rule refusing a survivor it should
-  // have kept.
+  // rows are dated AFTER the session start on purpose: the creation-time rules
+  // keep a real descendant, so this refusal is not one of them refusing a survivor
+  // it should have kept.
   const worker = new HelperHandle();
+  const started = Date.now();
   const driver = new TerminalPtyDriver({
     workspaceId: "workspace-unit", runtime: resolvePtyRuntime, spawnWorker: () => worker, onOutput: () => {},
-    win32ProcessTable: () => [{ pid: 5300, ppid: 1, createdAt: 1_700_000_000_000 }, { pid: 5301, ppid: 5300, createdAt: 1_700_000_000_500 }],
+    win32ProcessTable: () => [{ pid: 5300, ppid: 1, createdAt: started }, { pid: 5301, ppid: 5300, createdAt: started + 5_000 }],
     win32ProcessAlive: () => true, stopGraceMs: 50, stopConfirmMs: 50,
   });
   const starting = driver.spawn(unitIdentity, unitLaunch, () => {});

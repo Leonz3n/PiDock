@@ -167,6 +167,15 @@ interface Operation {
   requestId: number;
   inputBytes: number;
   rootPid?: number;
+  /**
+   * Lower bound on the creation time of anything this terminal started: the
+   * instant taken immediately BEFORE the helper `fork`, so it is provably
+   * earlier than the helper and therefore than the pty child that helper forks
+   * and every descendant of it (a bound taken AFTER the fork could already be
+   * later than a real child, and would refuse it). Used only to refuse
+   * (`descendantPids`), so it can only shrink the attributed tree.
+   */
+  createdAtFloor?: number;
   processGroupId?: number;
   /**
    * The controlling terminal recorded from the first snapshot that showed it
@@ -223,8 +232,20 @@ interface Operation {
  * and any win32 row the OS would not date) refuses nothing, so the darwin/linux
  * walk and every undated table behave exactly as before. This rule can only ever
  * shrink the attributed tree.
+ *
+ * That evidence needs the root's own row, so it is gone the moment the root has
+ * already exited while its recycled pid still hangs a foreign family off the
+ * table (#69). `createdAtFloor` is a second, independent bound that needs no row
+ * at all: the caller records the instant just before it forks the helper, and
+ * every real descendant of that terminal is created after the helper, hence
+ * after that instant - so ANY process dated strictly before the floor cannot be
+ * a descendant. It is refuse-only in the same way and for the same reason (a
+ * missing creation time or a missing floor refuses nothing), and it too can only
+ * shrink the tree: a real descendant is dated after the floor and is still
+ * named. On darwin/linux no row carries `createdAt`, so the floor changes
+ * nothing there.
  */
-export function descendantPids(table: readonly { pid: number; ppid: number; createdAt?: number }[], rootPid: number): number[] {
+export function descendantPids(table: readonly { pid: number; ppid: number; createdAt?: number }[], rootPid: number, createdAtFloor?: number): number[] {
   const createdAt = new Map<number, number | undefined>();
   const children = new Map<number, number[]>();
   for (const row of table) {
@@ -243,7 +264,10 @@ export function descendantPids(table: readonly { pid: number; ppid: number; crea
     for (const child of children.get(pid) ?? []) {
       if (seen.has(child)) continue;
       const childCreatedAt = createdAt.get(child);
+      // Evidence 1 (#68): the child predates the process its `ppid` names.
       if (parentCreatedAt !== undefined && childCreatedAt !== undefined && childCreatedAt < parentCreatedAt) continue;
+      // Evidence 2 (#69): the child was created before this terminal started.
+      if (createdAtFloor !== undefined && childCreatedAt !== undefined && childCreatedAt < createdAtFloor) continue;
       seen.add(child);
       found.push(child);
       queue.push(child);
@@ -512,6 +536,10 @@ export class TerminalPtyDriver implements TerminalDriver {
       return { status: "not-started" as const };
     }
     try {
+      // Taken here, before the fork: a true lower bound on the creation time of
+      // every process of this terminal, and independent of the snapshot (the
+      // root's own row may already be gone - #69).
+      operation.createdAtFloor = Date.now();
       operation.worker = this.options.spawnWorker?.() ?? fork(workerEntryUrl(), [], {
         execPath: runtime.executable, execArgv: [], env: { ...runtime.env }, cwd: request.launch.cwd,
         stdio: ["ignore", "ignore", "ignore", "ipc"], serialization: "json",
@@ -690,7 +718,7 @@ export class TerminalPtyDriver implements TerminalDriver {
     }
     // Name the tree before the handle is terminated: the parent chain is the
     // only handle on these descendants, and it is read while they are alive.
-    const tree = this.win32Tree(operation.rootPid);
+    const tree = this.win32Tree(operation);
     this.terminateHelper(operation, worker);
     // An unconfirmed helper exit means the reap did not happen; the identity is
     // retained so a later stop can still try, and no end is claimed.
@@ -735,13 +763,17 @@ export class TerminalPtyDriver implements TerminalDriver {
   /** The win32 tree under one root: the root plus every descendant the OS's
    * fixed parent chain links to it, or null when the probe is unavailable. The
    * chain alone over-attributes on this platform - a recycled pid hands us the
-   * dead owner's family - so a candidate the table proves was created before the
-   * process its `ppid` names is refused (`descendantPids`), which can only ever
-   * remove a foreign pid and never hide a real descendant. */
-  private win32Tree(rootPid: number | undefined): number[] | null {
+   * dead owner's family - so a candidate is refused when the table proves it was
+   * created before the process its `ppid` names, or when it was created before
+   * this terminal started (`descendantPids`). Either piece of evidence suffices,
+   * both can only ever remove a foreign pid, and neither can hide a real
+   * descendant; the second also holds when the root's own row is already gone.
+   */
+  private win32Tree(operation: Operation): number[] | null {
+    const rootPid = operation.rootPid;
     if (rootPid === undefined || rootPid <= 1) return null;
     const table = this.options.win32ProcessTable ? this.options.win32ProcessTable() : readWin32ProcessTable();
-    return table === null ? null : [rootPid, ...descendantPids(table, rootPid)];
+    return table === null ? null : [rootPid, ...descendantPids(table, rootPid, operation.createdAtFloor)];
   }
 
   private win32Alive(pid: number): boolean {
@@ -987,14 +1019,16 @@ export class TerminalPtyDriver implements TerminalDriver {
    * reported. A tree that cannot be named or verified stays the named `unknown`,
    * so a stop is never claimed on evidence this platform does not have. The tree
    * is narrower than the bare chain: a pid the chain links to us only through a
-   * recycled number - a process created before the parent its `ppid` names - is
-   * not this terminal's and is not adopted (`descendantPids`), so a foreign
-   * family cannot keep the drain unverified forever.
+   * recycled number - a process created before the parent its `ppid` names, or
+   * one created before this terminal started, which is the only evidence left
+   * once the root's own row is gone - is not this terminal's and is not adopted
+   * (`descendantPids`), so a foreign family cannot keep the drain unverified
+   * forever.
    */
   private async stopByHelper(operation: Operation, identity: TerminalIdentity): Promise<TerminalDriverReceipt> {
     const worker = this.killableHelper(operation);
     if (worker === undefined) return { ...identity, status: "unknown" };
-    const tree = this.win32Tree(operation.rootPid);
+    const tree = this.win32Tree(operation);
     this.terminateHelper(operation, worker);
     // Without a completed helper exit the handle's termination is unconfirmed,
     // so nothing may be claimed even before the tree is checked.
