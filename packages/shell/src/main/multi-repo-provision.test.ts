@@ -144,6 +144,53 @@ describe("conflicts and append", () => {
     if (!inUse.ok) expect(inUse.error.code).toBe("branch-in-use");
   });
 
+  // #72: the gate answers "is this the same directory?", so it compares
+  // canonical path forms instead of raw strings. Each line pairs two
+  // spellings of ONE folder that the raw compare judged free.
+  it("refuses separator, trailing-separator and `.`-step variants of a taken path", () => {
+    const conflict = (wanted: string, taken: string, platform: "posix" | "win32" = "win32") =>
+      checkRepoConflicts({
+        wantedWorktreeDirs: [wanted],
+        takenPaths: [taken],
+        branchesInUse: [],
+        wantedBranch: "task/task-abcdef12",
+        platform,
+      });
+    expect(conflict("C:\\tasks\\dir-1\\repo-11111111", "C:/tasks/dir-1/repo-11111111")).toMatchObject({ ok: false });
+    expect(conflict("C:/tasks/dir-1/repo-11111111", "C:\\tasks\\dir-1\\repo-11111111\\", "posix")).toMatchObject({ ok: false });
+    expect(conflict("c:/tasks/dir-1/repo-11111111", "C:\\tasks\\dir-1\\repo-11111111")).toMatchObject({ ok: false });
+    expect(conflict("C:/tasks/./dir-1/repo-11111111", "C:/tasks/dir-1/repo-11111111", "posix")).toMatchObject({ ok: false });
+    // Control: a genuinely other path in the same folder stays free.
+    expect(conflict("C:\\tasks\\dir-1\\repo-11111111", "C:\\tasks\\dir-1\\repo-22222222")).toMatchObject({ ok: true });
+  });
+
+  it("folds path case on win32 and keeps POSIX directories case-sensitive", () => {
+    const conflict = (platform: "posix" | "win32", wanted: string, taken: string) =>
+      checkRepoConflicts({
+        wantedWorktreeDirs: [wanted],
+        takenPaths: [taken],
+        branchesInUse: [],
+        wantedBranch: "task/task-abcdef12",
+        platform,
+      });
+    expect(conflict("win32", "C:\\Tasks\\Dir-1\\Repo-1", "c:\\tasks\\dir-1\\repo-1")).toMatchObject({ ok: false });
+    expect(conflict("posix", "/Tasks/Dir-1/Repo-1", "/tasks/dir-1/repo-1")).toMatchObject({ ok: true });
+  });
+
+  it("keeps a substring prefix, another parent's same leaf and a drive-relative path free", () => {
+    const conflict = (wanted: string, taken: string) =>
+      checkRepoConflicts({
+        wantedWorktreeDirs: [wanted],
+        takenPaths: [taken],
+        branchesInUse: [],
+        wantedBranch: "task/task-abcdef12",
+      });
+    expect(conflict("/tasks/t1/repo-11111111", "/tasks/t1/repo-11111111-old")).toMatchObject({ ok: true });
+    expect(conflict("/tasks/t1/frontend", "/tasks/t2/frontend")).toMatchObject({ ok: true });
+    // `C:foo` (relative to the CWD on drive C) is not `C:\foo`.
+    expect(conflict("C:foo", "C:\\foo")).toMatchObject({ ok: true });
+  });
+
   it("appends only new repos, keeping existing baselines", () => {
     expect(filterAppendRepos(["frontend"], ["frontend", "invoice"])).toEqual({
       appended: ["invoice"],
