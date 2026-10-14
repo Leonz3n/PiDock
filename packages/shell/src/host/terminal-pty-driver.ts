@@ -98,9 +98,14 @@ export function ptyProcessGroupOwnershipAvailable(): boolean {
  * used: it trusts a number that may name a recycled process by the time it runs,
  * which is exactly the guarantee the POSIX path buys by re-reading the group
  * before every signal.
+ *
+ * Not exported, and derived from `ptyProcessGroupOwnershipAvailable` instead of
+ * a second platform test: the two are exact negations of one bit (#66), so a
+ * second spelling could only drift and leave a platform where both or neither
+ * hold with no defined meaning.
  */
-export function ptyHelperHandleStopAvailable(): boolean {
-  return process.platform === "win32";
+function ptyHelperHandleStopAvailable(): boolean {
+  return !ptyProcessGroupOwnershipAvailable();
 }
 
 /** Poll cadence while proving a PTY group and its observed descendants drained. */
