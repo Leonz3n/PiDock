@@ -261,14 +261,51 @@ it("lists and searches inside the task and runs a command in the worktree", asyn
   expect(searched.text).toContain("notes.txt:1: original");
 
   const command = await h.prompt("exec.run", { command: "pwd && cat notes.txt" });
-  expect(command.text).toContain(h.fixture.worktreeReal);
-  expect(command.text).toContain("original");
-  expect(command.text).toContain("exit 0");
-  // `.gitignore` is a legitimate token, not a `.git` control path: the escape
-  // hardening must not refuse it.
   const gitignore = await h.prompt("exec.run", { command: "echo node_modules > .gitignore" });
-  expect(gitignore.text).toContain("exit 0");
-  expect(readFileSync(join(h.fixture.worktree, ".gitignore"), "utf8")).toBe("node_modules\n");
+  // win32 (#53): `exec.run` executes through POSIX `/bin/sh -c` only and the Host
+  // refuses by name there (no `cmd.exe` fallback, and none of "use `sh.exe` when
+  // one is installed"), so the byte-level shell output below is unobserved on
+  // win32: the named refusal is asserted instead, by the platform test that
+  // follows this one.
+  if (process.platform === "win32") {
+    for (const result of [command, gitignore]) expect(result.text).toContain("tool-refused:exec-unsupported-platform");
+    // A refused command has no effect, and `.gitignore` was going to be the
+    // second command's whole effect.
+    expect(existsSync(join(h.fixture.worktree, ".gitignore"))).toBe(false);
+  } else {
+    expect(command.text).toContain(h.fixture.worktreeReal);
+    expect(command.text).toContain("original");
+    expect(command.text).toContain("exit 0");
+    // `.gitignore` is a legitimate token, not a `.git` control path: the escape
+    // hardening must not refuse it.
+    expect(gitignore.text).toContain("exit 0");
+    expect(readFileSync(join(h.fixture.worktree, ".gitignore"), "utf8")).toBe("node_modules\n");
+  }
+  await h.host.shutdownSdk();
+});
+
+// win32 (#53): the platform refusal has to reach the caller as a NAME, because the failure it
+// replaces is unnamed at the surface the Agent calls - `spawn("/bin/sh", …)` reports `ENOENT`,
+// which the exec tool renders as `command-spawn-failed: spawn /bin/sh ENOENT` with `exit unknown`,
+// leaving the model nothing to act on. This test is win32-only: off-win32 the very same call really
+// executes the command (asserted above), so there is no refusal path to exercise - a named platform
+// skip, not a silent one.
+it.skipIf(process.platform !== "win32")("refuses exec.run by its own platform code instead of leaking an unnamed /bin/sh ENOENT", async () => {
+  const h = await harness();
+  await h.host.configureSdkProvider({ config: PROVIDER_CONFIG, credential: "synthetic-key" });
+  await h.host.setPermission("main", "auto");
+
+  const result = await h.prompt("exec.run", { command: "echo named > named.txt" });
+  // The stable code the caller can act on, spelled as the tool result carries it.
+  expect(result.text).toContain("tool-refused:exec-unsupported-platform");
+  // Actionable: the refusal names what is missing and that nothing was started.
+  expect(result.text).toContain("未启动任何进程");
+  // The unnamed failure it replaces is not merely reformatted, it is gone.
+  expect(result.text).not.toContain("command-spawn-failed");
+  expect(result.text).not.toContain("ENOENT");
+  expect(result.text).not.toContain("exit unknown");
+  // Fail closed: the refusal ran nothing.
+  expect(existsSync(join(h.fixture.worktree, "named.txt"))).toBe(false);
   await h.host.shutdownSdk();
 });
 
@@ -482,8 +519,16 @@ it("executes an approved command exactly once and refuses to settle the same con
   h.host.approve("main", approval.id);
 
   const result = await running;
-  expect(result.text).toContain("exit 0");
-  expect(readFileSync(join(h.fixture.worktree, "command.txt"), "utf8")).toBe("approved\n");
+  // win32 (#53): the confirmation is still minted and spent (the one-shot assert
+  // below is platform-independent), and the approved command then meets the named
+  // platform refusal instead of running - the POSIX output is unobserved there.
+  if (process.platform === "win32") {
+    expect(result.text).toContain("tool-refused:exec-unsupported-platform");
+    expect(existsSync(join(h.fixture.worktree, "command.txt"))).toBe(false);
+  } else {
+    expect(result.text).toContain("exit 0");
+    expect(readFileSync(join(h.fixture.worktree, "command.txt"), "utf8")).toBe("approved\n");
+  }
   expect(() => h.host.approve("main", approval.id)).toThrow(/不可重放|已处理|已消费/);
   await h.host.shutdownSdk();
 });
@@ -562,8 +607,16 @@ it("a permission change never retroactively authorizes a parked request, and lat
 
   // The new tier applies to the next request: no confirmation is minted at all.
   const later = await h.prompt("exec.run", { command: "echo later > later.txt" });
-  expect(later.text).toContain("exit 0");
-  expect(readFileSync(join(h.fixture.worktree, "later.txt"), "utf8")).toBe("later\n");
+  // win32 (#53): under `auto` the call really executes on POSIX and meets the named
+  // platform refusal on win32, so the POSIX output is unobserved there (see the
+  // win32-only platform test above); that no confirmation is minted holds either way.
+  if (process.platform === "win32") {
+    expect(later.text).toContain("tool-refused:exec-unsupported-platform");
+    expect(existsSync(join(h.fixture.worktree, "later.txt"))).toBe(false);
+  } else {
+    expect(later.text).toContain("exit 0");
+    expect(readFileSync(join(h.fixture.worktree, "later.txt"), "utf8")).toBe("later\n");
+  }
   expect(h.host.listApprovals("main").filter((item) => item.status === "pending")).toEqual([]);
   await h.host.shutdownSdk();
 });
