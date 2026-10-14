@@ -173,6 +173,8 @@ export interface TerminalInstanceRecord {
    * a session/group leader (`pgid === pid`), so a stop signals `-processGroupId`
    * and can name exactly one group. It is recorded beside the pid because a
    * group id that does not match the recorded pid is not this terminal's group.
+   * Absent where the platform has no group (win32), where the stop instead
+   * terminates the Host-owned helper handle.
    */
   processGroupId?: number;
   startedAt: string;
@@ -337,9 +339,17 @@ export class TaskTerminalRegistry {
   }
 
   /**
-   * Prove what a stop request may act on: same task, known instance, recorded
-   * process identity (pid and the process-group id the spawner observed).
-   * Anything else fails closed with a reason the UI shows.
+   * Prove what a stop request may act on: same task, known instance, and a
+   * recorded process identity (the pid the spawner observed). Anything else
+   * fails closed with a reason the UI shows.
+   *
+   * The recorded pid is the whole identity this registry can name. What a stop
+   * may then act on is platform-specific and belongs to the driver that owns the
+   * session: a process group that has to still belong to that pid where the
+   * platform owns groups, and the Host-owned helper handle on win32 where none
+   * exists. This method therefore never invents or requires a group - a record
+   * the spawner gave no group (win32) is a start the Host can still stop, not a
+   * reason to refuse.
    */
   stopScope(instanceId: string): TerminalStopResult {
     const record = this.instances.get(instanceId);
@@ -349,13 +359,6 @@ export class TaskTerminalRegistry {
     }
     if (record.processId === undefined) {
       return { ok: false, error: `unknown-process: 终端 ${instanceId} 尚未报告进程号，无法安全停止` };
-    }
-    // The group is the half of the identity a signal can be checked against. On a
-    // platform whose spawner reports none (win32: no process group exists) this
-    // refuses BY NAME instead of signalling a bare pid that may already name a
-    // recycled process.
-    if (record.processGroupId === undefined) {
-      return { ok: false, error: `unknown-process: 终端 ${instanceId} 没有进程组身份（本平台的 PTY 不提供进程组），仅凭进程号发送信号不安全，拒绝停止` };
     }
     return { ok: true, scope: { taskId: record.taskId, instanceId: record.instanceId, processId: record.processId, startedAt: record.startedAt } };
   }

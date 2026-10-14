@@ -31,6 +31,7 @@ import { workspaceRoots } from "../main/workspace-files.js";
 import { inspectNodePtyPrebuild, prepareNodePtyPrebuild } from "./node-pty-preflight.js";
 import { MAX_PTY_ENVELOPE_BYTES } from "./node-pty-protocol.js";
 import { descendantPids, PTY_INPUT_BUDGET_ERROR, ptyProcessGroupOwnershipAvailable, ptySpawnerAvailable, resolvePtyRuntime, TerminalPtyDriver, workerEntryUrl, type PtyHelper } from "./terminal-pty-driver.js";
+import { readWin32ProcessTable, win32ProcessAlive } from "./win32-process-probe.js";
 import type { ProcessTableRow } from "./service-ownership.js";
 import type { TerminalDriver, TerminalDriverReceipt, TerminalLaunch } from "./terminal-execution.js";
 import { resolveProgram, TaskTerminalSessions } from "./terminal-sessions.js";
@@ -46,6 +47,22 @@ const supported = process.platform === "darwin" && process.arch === "arm64" && e
   }
 })();
 const realIt = it.skipIf(!supported);
+
+/**
+ * The win32 real-process gate: this host, the helper-handle stop path, and the
+ * pinned ConPTY prebuild (`ready`). win32-x64 is admitted for STARTING a real
+ * terminal (#55), so the win32 stop/reap paths are driven against a REAL ConPTY
+ * terminal here instead of being recorded as unobserved.
+ */
+const win32HelperStop = process.platform === "win32";
+const win32It = it.skipIf(!win32HelperStop);
+const win32RealIt = it.skipIf(!win32HelperStop || !(() => {
+  try {
+    return existsSync(fileURLToPath(workerEntryUrl())) && inspectNodePtyPrebuild().ready;
+  } catch {
+    return false;
+  }
+})());
 
 /**
  * POSIX process-group ownership, named by the production predicate so the tests
@@ -65,7 +82,14 @@ function recordedIdentity(pid: number): { processId: number; processGroupId?: nu
   return groupOwnership ? { processId: pid, processGroupId: pid } : { processId: pid };
 }
 
+/**
+ * Whether `pid` currently names a process, on the platform running this suite.
+ * POSIX reads it from `ps`; win32 has no `/bin/ps`, so the OS existence probe is
+ * used there (`win32ProcessAlive`, the same spelling the driver uses) - which is
+ * what makes the win32 real tests' cleanup assertion real rather than vacuous.
+ */
 function alive(pid: number): boolean {
+  if (process.platform === "win32") return win32ProcessAlive(pid);
   try {
     return execFileSync("/bin/ps", ["-o", "pid=", "-p", String(pid)], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim().length > 0;
   } catch {
@@ -131,6 +155,52 @@ function markerPids(marker: number): number[] {
 }
 
 /**
+ * The `node-pty-worker` helpers this test process currently hosts, read from the
+ * OS. A helper is a `node.exe` the Host forks itself, so by the parent link it is
+ * a direct child of this process; a leaked helper keeps its pid in this list
+ * after the terminal it belonged to is stopped. The query's own PowerShell is not
+ * a `node.exe` child, so it never appears here.
+ */
+function win32HelperPids(): number[] {
+  const printed = execFileSync("powershell", ["-NoProfile", "-NonInteractive", "-Command",
+    `(Get-CimInstance Win32_Process -Filter "ParentProcessId=${process.pid} AND Name='node.exe'" | ForEach-Object { $_.ProcessId }) -join ','`],
+    { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+  return printed.trim().split(",").filter(Boolean).map(Number).filter(Number.isInteger).sort((left, right) => left - right);
+}
+
+/**
+ * The helpers a test's own terminal forked: the `node.exe` children that appeared
+ * since its baseline. Keying the leak assertion on the delta - and on that one
+ * pid afterwards - keeps it about THIS terminal instead of every child the
+ * worker process happens to hold while the whole suite runs in parallel.
+ */
+function forkedHelperPids(baseline: readonly number[]): number[] {
+  return win32HelperPids().filter((pid) => !baseline.includes(pid));
+}
+
+/** A System32 executable path, so a win32 launch never has to resolve a bare name. */
+function win32System32(name: string): string {
+  return join(process.env.SystemRoot ?? "C:\\Windows", "System32", name);
+}
+
+/**
+ * A real win32 launch: `ComSpec` plus this host's own environment, because the
+ * POSIX `sh` the darwin real tests drive does not exist here. `envRevision` is a
+ * fixture tag - the pty is driven directly, so nothing else binds it.
+ */
+function win32Launch(args: string[]): TerminalLaunch {
+  return {
+    program: process.env.ComSpec ?? win32System32("cmd.exe"),
+    args,
+    cwd: normalize(tmpdir()),
+    env: Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)),
+    envRevision: "fixture-win32",
+    cols: 80,
+    rows: 24,
+  };
+}
+
+/**
  * The forked-helper stand-in for the protocol tests that need no real pty: the
  * test drives every reply itself, so no binary is ever forked.
  */
@@ -147,6 +217,22 @@ class DriverWorker extends EventEmitter {
       workspaceId: request["workspaceId"], identity: request["identity"], operationId: request["operationId"],
       kind: "reply", requestId: request["requestId"], status: "started", ...fields,
     });
+  }
+}
+
+/**
+ * The win32 stop/reap unit seam: a `DriverWorker` that also carries the
+ * Host-owned handle. `kill` terminates the helper the way the real
+ * `ChildProcess` does - the exit is reported back to the driver - and the
+ * injected tree probe lets a test decide whether the tree really died with it.
+ */
+class HelperHandle extends DriverWorker {
+  killed = false;
+  constructor(private readonly onKill: () => void = () => {}) { super(); }
+  kill(): void {
+    this.killed = true;
+    this.onKill();
+    this.emit("exit", 0, null);
   }
 }
 
@@ -954,6 +1040,97 @@ realIt("bounds the driver at eight terminals and lets a ninth start once one dra
   for (const identity of [...live, ninth]) await f.driver.stop(identity);
 });
 
+win32RealIt("stops a real win32 terminal through its helper handle, verifies the tree gone, and reaps the helper", { timeout: 90_000 }, async () => {
+  // The win32 stop is the Host terminating the ChildProcess it forked itself;
+  // this drives that against a REAL ConPTY terminal with a real child, so the
+  // tree-gone and helper-reaped claims are measured, not asserted about a stub.
+  const baseline = win32HelperPids();
+  const f = new Fixture("win32-stop");
+  const identity = { taskId: f.taskId, sessionId: "human-ui", instanceId: "term-1", generation: 1 };
+  const launch = win32Launch(["/c", `${win32System32("ping.exe")} -n 60 127.0.0.1 >nul`]);
+  const spawned = await f.driver.spawn(identity, launch, () => {});
+  expect(spawned.status).toBe("started");
+  const root = spawned.process!.processId;
+  f.track(root);
+  // No process group is invented on win32: the pid is the whole recorded identity.
+  expect(spawned.process).toEqual({ processId: root });
+  // A real two-process tree: the shell plus PING.EXE, linked by the OS's own parent chain.
+  const tree = await untilValue(() => {
+    const rows = readWin32ProcessTable();
+    if (rows === null) return undefined;
+    const descendants = descendantPids(rows, root);
+    return descendants.length > 0 ? [root, ...descendants] : undefined;
+  }, 15_000, "the win32 terminal's child process");
+  expect(tree.every(alive), `live tree ${tree.join(",")}`).toBe(true);
+  const helpers = forkedHelperPids(baseline);
+  expect(helpers, `helpers forked by this terminal: ${helpers.join(",")}`).toHaveLength(1);
+
+  const stopped = await f.driver.stop(identity);
+  expect(stopped).toEqual({ ...identity, status: "tree-drained" });
+  for (const pid of tree) expect(alive(pid), `stopped win32 tree pid ${pid} still alive`).toBe(false);
+  // The leak this test exists for: the forked helper is reaped with the stop.
+  expect(win32HelperPids()).not.toContain(helpers[0]);
+  // And the slot really is free: the same identity starts a fresh terminal instead
+  // of resolving against the retained operation of the one just stopped.
+  const fresh = await f.driver.spawn(identity, launch, () => {});
+  expect(fresh.status).toBe("started");
+  f.track(fresh.process?.processId);
+  expect((await f.driver.stop(identity)).status).toBe("tree-drained");
+  expect(win32HelperPids()).not.toContain(helpers[0]);
+});
+
+win32RealIt("frees a real win32 instance slot when a started terminal is stopped", { timeout: 120_000 }, async () => {
+  // The instance cap is a driver-wide bound, so a stopped win32 terminal that
+  // did not release its slot would refuse the ninth start forever.
+  const f = new Fixture("win32-cap");
+  const identityFor = (index: number) => ({ taskId: f.taskId, sessionId: "human-ui", instanceId: `term-${index}`, generation: 1 });
+  const launch = win32Launch(["/c", `${win32System32("ping.exe")} -n 60 127.0.0.1 >nul`]);
+  const live = Array.from({ length: MAX_TERMINAL_INSTANCES }, (_, index) => identityFor(index + 1));
+  try {
+    for (const identity of live) {
+      const spawned = await f.driver.spawn(identity, launch, () => {});
+      expect(spawned.status).toBe("started");
+      f.track(spawned.process?.processId);
+    }
+    const ninth = identityFor(MAX_TERMINAL_INSTANCES + 1);
+    expect(await f.driver.spawn(ninth, launch, () => {})).toEqual({ status: "not-started" });
+    expect((await f.driver.stop(live[0]!)).status).toBe("tree-drained");
+    const retried = await f.driver.spawn(ninth, launch, () => {});
+    expect(retried.status).toBe("started");
+    f.track(retried.process?.processId);
+    for (const identity of live.slice(1)) await f.driver.stop(identity);
+    expect((await f.driver.stop(ninth)).status).toBe("tree-drained");
+  } finally {
+    // Nothing may outlive the test: an unstoppable win32 terminal would keep a
+    // live helper handle and hang the worker instead of failing.
+    for (const identity of [...live, identityFor(MAX_TERMINAL_INSTANCES + 1)]) await f.driver.stop(identity).catch(() => undefined);
+  }
+});
+
+win32RealIt("reaps the Host-owned helper when a real win32 terminal ends on its own", { timeout: 90_000 }, async () => {
+  // The pty child can exit without any stop call, and the forked helper does not
+  // follow it on win32: without the reap this leaks one helper per ended terminal
+  // and keeps its slot.
+  const baseline = win32HelperPids();
+  const f = new Fixture("win32-exit");
+  const identity = { taskId: f.taskId, sessionId: "human-ui", instanceId: "term-1", generation: 1 };
+  const receipts: TerminalDriverReceipt[] = [];
+  const spawned = await f.driver.spawn(identity, win32Launch(["/c", "exit 7"]), (receipt) => receipts.push(receipt));
+  expect(spawned.status).toBe("started");
+  f.track(spawned.process?.processId);
+  await until(() => receipts.length > 0, 20_000, "win32 natural-exit receipt");
+  // The real receipt with the code the pty really reported - never `unknown` for
+  // an end whose tree this Host verified gone, and never a fabricated one.
+  expect(receipts).toEqual([{ ...identity, status: "tree-drained", exitCode: 7 }]);
+  // The reap: the terminal that just ended forked one helper, and no helper is
+  // left among this process's children once its receipt is in.
+  expect(forkedHelperPids(baseline), `helpers left over: ${win32HelperPids().join(",")}`).toEqual([]);
+  // The slot is free again: the same identity really starts once more.
+  const fresh = await f.driver.spawn(identity, win32Launch(["/c", "exit 0"]), () => {});
+  expect(fresh.status).toBe("started");
+  f.track(fresh.process?.processId);
+});
+
 it("forgets a not-started spawn so the same identity really starts afterwards", async () => {
   // P2-2: the retained `not-started` entry answered every later start for that
   // identity with the same stale error (even after the cause was fixed) and
@@ -973,9 +1150,10 @@ it("forgets a not-started spawn so the same identity really starts afterwards", 
     expect(second.requests).toHaveLength(1);
     second.reply({ status: "started", rootPid: leader.pid });
     expect(await retrying).toEqual({ status: "started", process: recordedIdentity(leader.pid!) });
-    // The stop that proves the identity is not wedged signals the recorded group;
-    // on win32 no group is recorded, so the honest receipt is the named `unknown`
-    // (POSIX `tree-drained` is unobserved on win32).
+    // The stop that proves the identity is not wedged signals the recorded group
+    // on POSIX; on win32 containment is the Host-owned helper handle, and this
+    // stand-in carries none, so the honest receipt is the named `unknown` (POSIX
+    // `tree-drained` is unobserved on win32).
     expect((await driver.stop(unitIdentity)).status).toBe(groupOwnership ? "tree-drained" : "unknown");
   } finally {
     killPid(leader.pid);
@@ -1002,6 +1180,62 @@ it("forgets an unconfirmed spawn that recorded no root identity so the identity 
   expect(await retrying).toEqual({ status: "unknown" });
 });
 
+win32It("stops a win32 terminal by terminating the Host-owned helper handle, once the tree is verified gone", async () => {
+  // The handle, not a pid: the helper this Host forked is terminated and the tree
+  // the OS's fixed parent chain named is verified gone before a stop is claimed.
+  const alivePids = new Set([5200, 5201]);
+  const worker = new HelperHandle(() => alivePids.clear());
+  const driver = new TerminalPtyDriver({
+    workspaceId: "workspace-unit", runtime: resolvePtyRuntime, spawnWorker: () => worker, onOutput: () => {},
+    win32ProcessTable: () => [{ pid: 5200, ppid: 1 }, { pid: 5201, ppid: 5200 }],
+    win32ProcessAlive: (pid) => alivePids.has(pid), stopGraceMs: 50, stopConfirmMs: 50,
+  });
+  const starting = driver.spawn(unitIdentity, unitLaunch, () => {});
+  worker.reply({ status: "started", rootPid: 5200 });
+  expect(await starting).toEqual({ status: "started", process: { processId: 5200 } });
+  expect(await driver.stop(unitIdentity)).toEqual({ ...unitIdentity, status: "tree-drained" });
+  expect(worker.killed).toBe(true);
+});
+
+win32It("never claims a win32 stop while the tree survives the helper kill", async () => {
+  // A helper the Host terminated, but a tree that is still there: the receipt
+  // stays the named `unknown` and the operation is retained for a later stop.
+  const worker = new HelperHandle();
+  const driver = new TerminalPtyDriver({
+    workspaceId: "workspace-unit", runtime: resolvePtyRuntime, spawnWorker: () => worker, onOutput: () => {},
+    win32ProcessTable: () => [{ pid: 5300, ppid: 1 }, { pid: 5301, ppid: 5300 }],
+    win32ProcessAlive: () => true, stopGraceMs: 50, stopConfirmMs: 50,
+  });
+  const starting = driver.spawn(unitIdentity, unitLaunch, () => {});
+  worker.reply({ status: "started", rootPid: 5300 });
+  expect(await starting).toEqual({ status: "started", process: { processId: 5300 } });
+  expect(await driver.stop(unitIdentity)).toEqual({ ...unitIdentity, status: "unknown" });
+  expect(worker.killed).toBe(true);
+  // The retained identity keeps answering: a stop claims no tree it could not verify.
+  expect(await driver.stop(unitIdentity)).toEqual({ ...unitIdentity, status: "unknown" });
+});
+
+win32It("reaps the win32 helper and reports the real receipt when the terminal ends on its own", async () => {
+  // The pty child exits without a stop call: the helper must still be terminated
+  // and the verified end reported with the code the pty really gave.
+  const alivePids = new Set([5400]);
+  const worker = new HelperHandle(() => alivePids.clear());
+  const driver = new TerminalPtyDriver({
+    workspaceId: "workspace-unit", runtime: resolvePtyRuntime, spawnWorker: () => worker, onOutput: () => {},
+    win32ProcessTable: () => [], win32ProcessAlive: (pid) => alivePids.has(pid), stopGraceMs: 50, stopConfirmMs: 50,
+  });
+  const receipts: TerminalDriverReceipt[] = [];
+  const starting = driver.spawn(unitIdentity, unitLaunch, (receipt) => receipts.push(receipt));
+  worker.reply({ status: "started", rootPid: 5400 });
+  expect(await starting).toEqual({ status: "started", process: { processId: 5400 } });
+  const spawnRequest = worker.requests[0]!;
+  worker.emit("message", { workspaceId: spawnRequest["workspaceId"], identity: spawnRequest["identity"],
+    operationId: spawnRequest["operationId"], kind: "exit", exitCode: 0, signal: 0 });
+  await until(() => receipts.length > 0, 3000, "win32 natural-exit receipt");
+  expect(receipts).toEqual([{ ...unitIdentity, status: "tree-drained", exitCode: 0 }]);
+  expect(worker.killed).toBe(true);
+});
+
 it("never reports a fabricated exit code for a stop with no observed child exit", async () => {
   // P2-5: node-pty prints `exitCode: 0` for a signalled child, so a stop that
   // killed the terminal must carry no code at all instead of a clean `0`.
@@ -1016,9 +1250,10 @@ it("never reports a fabricated exit code for a stop with no observed child exit"
     worker.reply({ status: "started", rootPid: leader.pid });
     expect(await starting).toEqual({ status: "started", process: recordedIdentity(leader.pid!) });
     const stopped = await driver.stop(unitIdentity);
-    // `tree-drained` needs the recorded group to signal and re-verify, which win32
-    // has not (POSIX assertion unobserved there): a stop that really drained the
-    // group says so, a win32 stop reports the named `unknown` instead.
+    // `tree-drained` needs the recorded group to signal and re-verify on POSIX
+    // (assertion unobserved on win32), where this stand-in helper carries no
+    // Host-owned handle: a stop that really drained the group says so, a win32
+    // stop without a killable handle reports the named `unknown` instead.
     expect(stopped).toEqual({ ...unitIdentity, status: groupOwnership ? "tree-drained" : "unknown" });
     // `toEqual` already fails on a fabricated `0`; assert the absence directly so
     // the claim this test makes is unambiguous.
@@ -1064,8 +1299,9 @@ it("reports root-exited for a natural exit the last dispatched request did not c
       operationId: inputRequest["operationId"], kind: "exit", exitCode: 0, signal: 0 });
     await until(() => receipts.length > 0, 3000, "natural-exit receipt");
     // The covered/uncovered distinction is a claim about a drained recorded group,
-    // so on win32 it cannot be expressed and the exit is the named `unknown` of a
-    // platform with no drain evidence (POSIX `root-exited` is unobserved there).
+    // so on POSIX it cannot be expressed without one (assertion unobserved on
+    // win32); a win32 stand-in helper with no Host-owned handle cannot be reaped
+    // or verified, so the exit is the named `unknown` there.
     expect(receipts).toEqual(groupOwnership
       ? [{ ...unitIdentity, status: "root-exited", exitCode: 0 }]
       : [{ ...unitIdentity, status: "unknown" }]);
@@ -1102,10 +1338,11 @@ it("never reports a fabricated exit code for a natural exit the OS reported as s
     const spawnRequest = worker.requests[0]!;
     worker.emit("message", { workspaceId: spawnRequest["workspaceId"], identity: spawnRequest["identity"], operationId: spawnRequest["operationId"], kind: "exit", exitCode: 0, signal: 9 });
     await until(() => receipts.length > 0, 3000, "natural-exit receipt");
-    // A verified drain of the recorded identity is `tree-drained`; win32 records no
-    // group and so has no drain evidence at all, which is the named `unknown`
-    // (POSIX `tree-drained` is unobserved there). The assertion this test exists
-    // for - no fabricated `0` for a signalled child - holds on both.
+    // A verified drain of the recorded identity is `tree-drained` on POSIX; the
+    // win32 stand-in helper carries no Host-owned handle to terminate or verify,
+    // so the exit is the named `unknown` there (POSIX `tree-drained` is unobserved
+    // on win32). The assertion this test exists for - no fabricated `0` for a
+    // signalled child - holds on both.
     expect(receipts).toEqual(groupOwnership
       ? [{ ...unitIdentity, status: "tree-drained" }]
       : [{ ...unitIdentity, status: "unknown" }]);

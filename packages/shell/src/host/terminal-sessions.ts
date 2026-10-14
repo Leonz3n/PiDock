@@ -3,8 +3,8 @@ import { accessSync, constants, statSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import type { TaskTerminalRegistry, TerminalInstanceRecord, TerminalPlan } from "../main/terminal-config.js";
 import { MAX_PTY_ENVELOPE_BYTES, operationKey } from "./node-pty-protocol.js";
-import { PTY_INPUT_BUDGET_ERROR } from "./terminal-pty-driver.js";
-import type { TerminalDriver, TerminalDriverReceipt, TerminalIdentity, TerminalLaunch } from "./terminal-execution.js";
+import { PTY_INPUT_BUDGET_ERROR, ptyProcessGroupOwnershipAvailable } from "./terminal-pty-driver.js";
+import type { TerminalDriver, TerminalDriverReceipt, TerminalIdentity, TerminalLaunch, TerminalProcessIdentity } from "./terminal-execution.js";
 
 /** One live real-process session of one registered terminal instance. */
 interface ActiveSession {
@@ -175,6 +175,25 @@ export class TaskTerminalSessions {
   }
 
   /**
+   * The recorded identity against what the live session really holds. Where the
+   * platform owns process groups, the group the spawner read is the identity a
+   * signal is checked against, so a recorded pid that no longer leads exactly
+   * that group - recycled or moved - refuses; a record without a group refuses
+   * there too, because that is the evidence the signal would need. On win32 there
+   * is no group and no signal by pid: containment is the Host-owned helper
+   * handle, whose identity cannot be recycled, so the live session plus the
+   * matching recorded pid is the whole identity.
+   */
+  private identityMatches(record: TerminalInstanceRecord, processId: number, observed: TerminalProcessIdentity | undefined): boolean {
+    if (observed?.processId !== processId) return false;
+    // win32: no pid is ever signalled - containment is the Host-owned helper
+    // handle - so the group the POSIX path checks against is not part of the
+    // identity here, and the matching recorded pid is the whole check.
+    if (!ptyProcessGroupOwnershipAvailable()) return true;
+    return observed.processGroupId !== undefined && observed.processGroupId === record.processGroupId;
+  }
+
+  /**
    * Spawn the real PTY for one planned terminal. The plan is registered first
    * (the Host does that before the permission gate resolves); this method
    * records the real process identity on it. A proven `not-started` removes the
@@ -240,12 +259,14 @@ export class TaskTerminalSessions {
 
   /**
    * Stop exactly this instance's session. Fail-closed order: the registry must
-   * have a recorded pid + pgid, this Host must hold the matching live session,
-   * and the driver's observed identity must equal the recorded one - only then
-   * is any signal sent. A driver `unknown` keeps the instance running. On a
-   * platform whose spawner records no process group (win32) the registry refuses
-   * by name before any signal is considered: `stop` there is a named degradation,
-   * never a tree this Host pretends to have ended.
+   * have a recorded pid, this Host must hold the matching live session, and the
+   * driver's observed identity must equal the recorded one - only then is the
+   * driver asked to terminate it. A driver `unknown` keeps the instance running.
+   * The identity that has to match is the platform's own: a process group that
+   * has to still belong to the recorded pid where the platform owns groups, and
+   * the live session plus the recorded pid on win32, where containment is the
+   * Host-owned helper handle and no pass is made by a recyclable pid alone (see
+   * `identityMatches`).
    */
   async stop(instanceId: string, reason: string): Promise<TerminalSessionResult<{ instance: TerminalInstanceRecord }>> {
     const record = this.registry.get(instanceId);
@@ -260,9 +281,7 @@ export class TaskTerminalSessions {
     if (!session) {
       return { ok: false, error: `unknown-process: 终端 ${instanceId} 没有本 Host 记录的运行会话，拒绝按记录进程号发送信号` };
     }
-    const observed = this.driver.snapshot(session.identity);
-    if (record.processGroupId === undefined || observed.process?.processId !== scope.scope.processId ||
-        observed.process.processGroupId !== record.processGroupId) {
+    if (!this.identityMatches(record, scope.scope.processId, this.driver.snapshot(session.identity).process)) {
       return { ok: false, error: `unknown-process: 终端 ${instanceId} 的记录身份与运行会话不一致，拒绝发送信号` };
     }
     const receipt = await this.driver.stop(session.identity);
