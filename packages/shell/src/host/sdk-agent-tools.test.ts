@@ -607,11 +607,22 @@ it("keeps the fail-closed provider-not-configured path and declares no tools wit
   await bare.dispose();
 });
 
-it("resolves a symlink chain (including a dangling link) to the path it really names", () => {
+// win32 (#57): both links below are FILE-shaped - the second is a link to the first, whose own
+// target never exists - and a file symlink needs SeCreateSymbolicLinkPrivilege, which a normal user
+// does not hold (measured under a restricted token, `runas /trustlevel:0x20000`: every
+// `symlinkSync(..., "file")` fails `EPERM` there while a junction succeeds). A junction is the only
+// link win32 creates without that privilege and it is directory-only, so it cannot stand in for a
+// dangling file link; the external `ln -s` this fixture used cannot build it either (observed:
+// `ln: failed to create symbolic link './dangling': No such file or directory`, with the target
+// spelled `\tmp\...` - `join("/tmp", ...)` is not a real win32 path). Named skip: the
+// link-chain-then-dangling-target proposition is unobserved on win32, not dropped silently.
+it.skipIf(process.platform === "win32")("resolves a symlink chain (including a dangling link) to the path it really names", () => {
   const parts = fixture();
   const target = join("/tmp", `pidock-agent-tools-dangling-${process.pid}`, "planted.txt");
-  execFileSync("ln", ["-s", target, join(parts.worktree, "dangling")]);
-  execFileSync("ln", ["-s", "dangling", join(parts.worktree, "dangling-alias")]);
+  // The external `ln -s` program is gone: Node's own API makes the very same link on POSIX, and on
+  // win32 a file link has no shape a normal user can create (see the skip above).
+  symlinkSync(target, join(parts.worktree, "dangling"));
+  symlinkSync("dangling", join(parts.worktree, "dangling-alias"));
   const scope = {
     taskDir: parts.taskDir,
     taskRoot: parts.root,
