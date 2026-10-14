@@ -247,101 +247,156 @@ ENV_FILE="$REPO_ROOT/.env.signing"
 EVIDENCE_DIR="${PIDOCK_RELEASE_EVIDENCE_DIR:-$HOME/pidock-windows-release-evidence}"
 mkdir -p "$EVIDENCE_DIR"
 
-banner "PiDock Windows 发布路径（签名 / 时间戳 / MSI 验收）"
+banner "PiDock Windows 发布路径（不签名 / 签名，MSI 验收）"
 
 # ── 1 ─────────────────────────────────────────────────────────────────────
-stage "选择签名方式（Authenticode，不是公证）"
-say "Windows 没有「公证」——那是 Apple 的概念。这边要的是 Authenticode 代码签名 + 时间戳，"
-say "外加一条已知限制：新证书在建立起 SmartScreen 声誉之前，仍可能触发警告。"
-say "本仓库当前没有任何签名配置；electron-builder 26.15.3 支持两条路："
-step "OV/EV 代码签名证书（.pfx/.p12）→ signtool 路径，凭据走 CSC_LINK / CSC_KEY_PASSWORD。"
-step "Azure Trusted Signing → win.azureSignOptions + Azure 凭据环境变量（builder 会在 Windows 上自装 TrustedSigning 模块）。"
+stage "选择发布路线：跳过签名 / 自购 OV-EV / Azure Artifact Signing"
+say "Windows 没有「公证」——那是 Apple 的概念。这边要的是 Authenticode 代码签名 + 时间戳；"
+say "先看清三条路各自的前提与代价，再选。**直接回车 = 跳过签名**，是内部/自用分发的默认。"
+say "【1】跳过签名（默认）"
+note "  前提：什么都不需要。"
+note "  代价：Windows 会显示「未知发布者」，可能触发 SmartScreen 警告。"
+note "  这是本仓库已实测能走通的状态：MSI 可构建、安装、启动、覆盖升级、卸载，"
+note "  Get-AuthenticodeSignature 为 NotSigned（docs/electron-packaging.md 的 Windows x64 MSI 实测）。"
+say "【2】自购 OV/EV 代码签名证书"
+note "  前提：向 CA 购买并通过 CA 的身份核验（组织/个人核验，通常数天）。"
+note "  代价：自 2023 年 CA/Browser Forum 规则起，OV/EV 私钥须存放在硬件 token 或云 HSM 中，"
+note "  多数 CA 已不再给可复制的 .pfx —— 这条**需向你的 CA 确认**，别假定它可行。"
+say "【3】Azure Artifact Signing（旧名 Azure Trusted Signing，同一个服务）"
+note "  前提（缺一不可）：Azure 订阅；订阅内注册 Microsoft.CodeSigning 资源提供程序；一个签名账户；"
+note "  **身份验证（identity validation）**——个人身份的账单账户法定名称与「售达地址」须与"
+note "  政府证件一致，通常数天；一个证书配置文件；以及给服务主体授「Certificate Profile Signer」角色。"
+note "  代价：免硬件（私钥由服务持有，本机没有 token）。"
+say "共同事实：**没有哪条路能立刻消除 SmartScreen 警告** —— 新证书也要先积累声誉，警告随时间与"
+say "下载量减少。本仓库当前没有任何签名配置；electron-builder 26.15.3 对后两条路的接线是："
+step "OV/EV 证书（.pfx/.p12）→ signtool 路径，凭据走 CSC_LINK / CSC_KEY_PASSWORD。"
+step "Azure Artifact Signing → win.azureSignOptions + Azure 凭据环境变量（builder 会在 Windows 上自装 TrustedSigning 模块）。"
 open_url "https://www.electron.build/win"
 note "上面这页是 electron-builder 的 Windows 配置文档（cscLink / signtoolOptions / azureSignOptions）。"
-note "证书机构或 Azure 门户里的具体点击路径，本仓库未建立，向导不编造——需要时按当前界面确认。"
-note "Azure Trusted Signing 文档入口：https://learn.microsoft.com/en-us/azure/trusted-signing/"
-if confirm "用 Azure Trusted Signing？（答 N = 用 OV/EV 证书 .pfx/.p12）"; then
-  SIGN_METHOD=azure
-else
-  SIGN_METHOD=pfx
-fi
+note "CA 与 Azure 门户里的具体点击路径，本仓库未建立，向导不编造——需要时按当前界面确认。"
+note "Azure Artifact Signing 文档入口：https://learn.microsoft.com/en-us/azure/trusted-signing/"
+while true; do
+  printf '  %s? 选哪条路 [1=跳过签名（默认）/ 2=自购 OV-EV .pfx / 3=Azure]: %s' "$YELLOW" "$RESET"
+  ROUTE_CHOICE=""
+  read -r ROUTE_CHOICE || true
+  case "$ROUTE_CHOICE" in
+    ""|1) SIGN_METHOD=skip;  break ;;
+    2)    SIGN_METHOD=pfx;   break ;;
+    3)    SIGN_METHOD=azure; break ;;
+    *)    warn "只认 1 / 2 / 3（回车 = 1 跳过签名）；收到的是「$ROUTE_CHOICE」" ;;
+  esac
+done
 say "已选：$SIGN_METHOD"
-evidence "signing method chosen: $SIGN_METHOD (portal click-path unverified)"
+evidence "signing route chosen: $SIGN_METHOD (input \"$ROUTE_CHOICE\"; portal click-path unverified)"
 pause
 
 # ── 2 ─────────────────────────────────────────────────────────────────────
-stage "采集签名凭据（只进被 gitignore 的本地文件）"
-say "凭据只写 $ENV_FILE（.gitignore 的 .env.* 覆盖它），不回显、不进仓库、不进普通日志。"
-if [[ "$SIGN_METHOD" == "azure" ]]; then
-  say "Azure Trusted Signing 走 EnvironmentCredential，读这三个环境变量："
-  ask AZURE_TENANT_ID "Azure tenant id:"
-  ask AZURE_CLIENT_ID "Azure client id:"
-  ask_secret AZURE_CLIENT_SECRET "Azure client secret:"
-  say "下面三项写进 electron-builder 配置（非秘密），先采下来给第 4 阶段："
-  ask PIDOCK_AZURE_ENDPOINT "Trusted Signing endpoint（如 https://eus.codesigning.azure.net/）:"
-  ask PIDOCK_AZURE_ACCOUNT "code signing account name:"
-  ask PIDOCK_AZURE_PROFILE "certificate profile name:"
-  write_env AZURE_TENANT_ID "$AZURE_TENANT_ID"
-  write_env AZURE_CLIENT_ID "$AZURE_CLIENT_ID"
-  write_env AZURE_CLIENT_SECRET "$AZURE_CLIENT_SECRET"
+stage "按路线采集签名凭据（跳过路线不采集任何值）"
+if [[ "$SIGN_METHOD" == "skip" ]]; then
+  say "这条路线**不采集任何凭据**：没有证书路径、没有密码、没有 Azure 变量，所以这里一个值都不问，"
+  say "也没有任何「必须填」的项能把你卡住。"
+  note "为什么不用采集：不签名就没有秘密需要保管，构建也不读 CSC_* / AZURE_* 任何变量。"
+  note "凭据文件不会被这条路线创建或改写；它只在签名路线里出现，且始终命中 .gitignore 的 .env.*"
+  note "（git check-ignore .env.signing 返回该文件）——所以上一轮因签名路线建过的它同样不会被提交。"
+  evidence "credentials captured: none (route skip; no CSC_* / AZURE_* asked)"
 else
-  say "证书文件路径不是秘密，密码是秘密；证书文件本身同样必须留在仓库外。"
-  ask CSC_LINK "代码签名证书文件路径（.pfx/.p12）:"
-  ask_secret CSC_KEY_PASSWORD "证书密码:"
-  write_env CSC_LINK "$CSC_LINK"
-  write_env CSC_KEY_PASSWORD "$CSC_KEY_PASSWORD"
+  say "凭据只写 $ENV_FILE（.gitignore 的 .env.* 覆盖它），不回显、不进仓库、不进普通日志。"
+  if [[ "$SIGN_METHOD" == "azure" ]]; then
+    say "Azure Artifact Signing 走 EnvironmentCredential，读这三个环境变量："
+    say "tenant id 是 Entra ID 租户（目录）GUID，**只有 Azure 这条路需要它**；在哪找："
+    step "Azure 门户 → Microsoft Entra ID → 概览 → 租户 ID；"
+    step "或命令行：az account show --query tenantId -o tsv（需已 az login）"
+    open_url "https://portal.azure.com/"
+    ask AZURE_TENANT_ID "Azure tenant id（Entra ID 租户 GUID）:"
+    ask AZURE_CLIENT_ID "Azure client id:"
+    ask_secret AZURE_CLIENT_SECRET "Azure client secret:"
+    say "下面三项写进 electron-builder 配置（非秘密），先采下来给第 4 阶段："
+    ask PIDOCK_AZURE_ENDPOINT "Trusted Signing endpoint（如 https://eus.codesigning.azure.net/）:"
+    ask PIDOCK_AZURE_ACCOUNT "code signing account name:"
+    ask PIDOCK_AZURE_PROFILE "certificate profile name:"
+    write_env AZURE_TENANT_ID "$AZURE_TENANT_ID"
+    write_env AZURE_CLIENT_ID "$AZURE_CLIENT_ID"
+    write_env AZURE_CLIENT_SECRET "$AZURE_CLIENT_SECRET"
+  else
+    say "证书文件路径不是秘密，密码是秘密；证书文件本身同样必须留在仓库外。"
+    say "若 CA 只给硬件 token / 云 HSM（2023 年后的常态），这条路走不通——这也是第 1 阶段要你先确认的原因。"
+    ask CSC_LINK "代码签名证书文件路径（.pfx/.p12）:"
+    ask_secret CSC_KEY_PASSWORD "证书密码:"
+    write_env CSC_LINK "$CSC_LINK"
+    write_env CSC_KEY_PASSWORD "$CSC_KEY_PASSWORD"
+  fi
+  say "用之前先 source 它，把变量导出给构建："
+  say "  set -a; source \"$ENV_FILE\"; set +a"
+  evidence "credentials captured to $ENV_FILE (route $SIGN_METHOD)"
 fi
-say "用之前先 source 它，把变量导出给构建："
-say "  set -a; source \"$ENV_FILE\"; set +a"
-evidence "credentials captured to $ENV_FILE (method $SIGN_METHOD)"
 pause
 
 # ── 3 ─────────────────────────────────────────────────────────────────────
 stage "CI 密钥（可选，默认不做）"
 say "事实：本仓库没有任何 .github/workflows（目录都不存在），所以当前没有任何工作流消费签名密钥。"
-say "把凭据写进 GitHub secrets 不会让它生效——先得有一个逐字引用这些名字的工作流。"
-if confirm "现在就把凭据写进 GitHub secrets 吗？（默认 N）"; then
-  say "提醒：在你自己的消费工作流就位之前，这些 secret 是死数据。"
-  if [[ "$SIGN_METHOD" == "azure" ]]; then
-    set_var AZURE_TENANT_ID "$AZURE_TENANT_ID"
-    set_var AZURE_CLIENT_ID "$AZURE_CLIENT_ID"
-    set_secret AZURE_CLIENT_SECRET "$AZURE_CLIENT_SECRET"
-  else
-    if [[ -f "$CSC_LINK" ]]; then
-      set_secret CSC_LINK "$(base64 -w0 "$CSC_LINK" 2>/dev/null || printf '%s' "$CSC_LINK")"
-    else
-      set_secret CSC_LINK "$CSC_LINK"
-    fi
-    set_secret CSC_KEY_PASSWORD "$CSC_KEY_PASSWORD"
-  fi
-  evidence "GitHub secrets set ($SIGN_METHOD); NOTE no workflow consumes them (repo has no .github/workflows)"
+if [[ "$SIGN_METHOD" == "skip" ]]; then
+  say "跳过签名路线没有凭据可写，这一阶段固定什么都不做——不是「CI 里少了什么」，"
+  say "而是这条路线本来就没有秘密要分发。以后要用别人的签名，再回到第 1 阶段重选。"
+  evidence "GitHub secrets: none (route skip)"
 else
-  say "跳过。等消费密钥的工作流就位后再回来跑这一阶段。"
+  say "把凭据写进 GitHub secrets 不会让它生效——先得有一个逐字引用这些名字的工作流。"
+  if confirm "现在就把凭据写进 GitHub secrets 吗？（默认 N）"; then
+    say "提醒：在你自己的消费工作流就位之前，这些 secret 是死数据。"
+    if [[ "$SIGN_METHOD" == "azure" ]]; then
+      set_var AZURE_TENANT_ID "$AZURE_TENANT_ID"
+      set_var AZURE_CLIENT_ID "$AZURE_CLIENT_ID"
+      set_secret AZURE_CLIENT_SECRET "$AZURE_CLIENT_SECRET"
+    else
+      if [[ -f "$CSC_LINK" ]]; then
+        set_secret CSC_LINK "$(base64 -w0 "$CSC_LINK" 2>/dev/null || printf '%s' "$CSC_LINK")"
+      else
+        set_secret CSC_LINK "$CSC_LINK"
+      fi
+      set_secret CSC_KEY_PASSWORD "$CSC_KEY_PASSWORD"
+    fi
+    evidence "GitHub secrets set ($SIGN_METHOD); NOTE no workflow consumes them (repo has no .github/workflows)"
+  else
+    say "跳过。等消费密钥的工作流就位后再回来跑这一阶段。"
+  fi
 fi
 pause
 
 # ── 4 ─────────────────────────────────────────────────────────────────────
 stage "接线 electron-builder（只指路，不改产品配置）"
-if [[ "$SIGN_METHOD" == "azure" ]]; then
-  say "Azure 路径确实需要改一处产品配置。向导不替你改，只给精确位置与文本。"
-  say "文件：packages/shell/electron-builder.config.cjs"
-  say "位置：已有的 win: { ... } 内，与 target 并列（当前约 68-79 行）："
-  note "    azureSignOptions: {"
-  note "      endpoint: \"$PIDOCK_AZURE_ENDPOINT\","
-  note "      codeSigningAccountName: \"$PIDOCK_AZURE_ACCOUNT\","
-  note "      certificateProfileName: \"$PIDOCK_AZURE_PROFILE\","
-  note "    },"
-  say "凭据仍由环境变量提供（AZURE_TENANT_ID / AZURE_CLIENT_ID / AZURE_CLIENT_SECRET）。"
+if [[ "$SIGN_METHOD" == "skip" ]]; then
+  say "跳过签名路线**无需改动 electron-builder 的签名配置**：仓库里确实没有这样的配置。"
+  note "已核实 packages/shell/electron-builder.config.cjs：win 块只有 icon 与 msi/x64 target，"
+  note "cscLink / cscKeyPassword / signtoolOptions / azureSignOptions 一个都没有。"
+  note "构建时也不要导出 CSC_* / AZURE_*：本机没有证书，导出也不会产生签名"
+  note "（docs/electron-packaging.md 记过：无证书时构建日志照常打印 signing 行，实际未签名）。"
 else
-  say "证书路径不需要改产品配置：electron-builder 直接从环境变量读。"
-  note "  CSC_LINK           证书路径，或 .pfx 的 base64"
-  note "  CSC_KEY_PASSWORD   证书密码（Windows 上 WIN_CSC_KEY_PASSWORD 优先）"
-  say "（已核实于安装的 builder：platformPackager.js:78-88、winPackager.js:104）"
-  say "若要在配置里固定时间戳服务器，可在 win: { ... } 内加："
-  note "  signtoolOptions: { rfc3161TimeStampServer: 'http://timestamp.digicert.com' },"
+  if [[ "$SIGN_METHOD" == "azure" ]]; then
+    say "Azure 路径确实需要改一处产品配置。向导不替你改，只给精确位置与文本。"
+    say "文件：packages/shell/electron-builder.config.cjs"
+    say "位置：已有的 win: { ... } 内，与 target 并列（当前约 68-79 行）："
+    note "    azureSignOptions: {"
+    note "      endpoint: \"$PIDOCK_AZURE_ENDPOINT\","
+    note "      codeSigningAccountName: \"$PIDOCK_AZURE_ACCOUNT\","
+    note "      certificateProfileName: \"$PIDOCK_AZURE_PROFILE\","
+    note "    },"
+    say "凭据仍由环境变量提供（AZURE_TENANT_ID / AZURE_CLIENT_ID / AZURE_CLIENT_SECRET）。"
+  else
+    say "证书路径不需要改产品配置：electron-builder 直接从环境变量读。"
+    note "  CSC_LINK           证书路径，或 .pfx 的 base64"
+    note "  CSC_KEY_PASSWORD   证书密码（Windows 上 WIN_CSC_KEY_PASSWORD 优先）"
+    say "（已核实于安装的 builder：platformPackager.js:78-88、winPackager.js:104）"
+    say "若要在配置里固定时间戳服务器，可在 win: { ... } 内加："
+    note "  signtoolOptions: { rfc3161TimeStampServer: 'http://timestamp.digicert.com' },"
+  fi
 fi
 pause "改完（或确认无需改）后按回车，我读文件核对"
-if [[ "$SIGN_METHOD" == "azure" ]]; then
+if [[ "$SIGN_METHOD" == "skip" ]]; then
+  if grep -qE 'cscLink|cscKeyPassword|signtoolOptions|azureSignOptions' packages/shell/electron-builder.config.cjs 2>/dev/null; then
+    warn "配置里出现了签名键，跳过路线不该有；读一下再继续。"
+  else
+    say "✓ 产品配置里没有任何签名键，与跳过路线一致"
+  fi
+elif [[ "$SIGN_METHOD" == "azure" ]]; then
   if grep -q "azureSignOptions" packages/shell/electron-builder.config.cjs 2>/dev/null; then
     say "✓ 配置里已出现 azureSignOptions"
   else
@@ -354,32 +409,32 @@ else
     warn "$ENV_FILE 里缺 CSC_LINK/CSC_KEY_PASSWORD"
   fi
 fi
-evidence "electron-builder wiring checked (method $SIGN_METHOD); product config not auto-edited"
+evidence "electron-builder wiring checked (route $SIGN_METHOD); product config not auto-edited"
 
 # ── 5 ─────────────────────────────────────────────────────────────────────
-stage "构建签名 MSI 并验证（signtool / Get-AuthenticodeSignature）"
+stage "构建 MSI 并验状态（签名路线验签名与时戳；跳过路线验「确实未签名」）"
 VERSION="$(sed -n 's/^  "version": "\([^"]*\)".*/\1/p' packages/shell/package.json)"
 [[ -n "$VERSION" ]] || VERSION="<read-the-version-above>"
 MSI_NAME="PiDock-${VERSION}-x64.msi"
 say "预期产物：packages/shell/release/$MSI_NAME"
-say "在另一个 shell 里构建（向导不跑构建：要几分钟并拉取网络资源）："
-note "  set -a; source \"$ENV_FILE\"; set +a"
-note "  pnpm --filter @pidock/shell package:win"
-pause "构建结束后按回车，我来验签与时戳"
+say "在另一个 shell 里构建（向导不跑构建：要几分钟并拉取网络资源），并把构建输出留档："
+if [[ "$SIGN_METHOD" == "skip" ]]; then
+  note "  pnpm --filter @pidock/shell package:win 2>&1 | tee \"$EVIDENCE_DIR/stage5-build-output.txt\""
+  note "（不要导出 CSC_* / AZURE_*：这条路线不签名，本机也没有证书）"
+else
+  note "  set -a; source \"$ENV_FILE\"; set +a"
+  note "  pnpm --filter @pidock/shell package:win 2>&1 | tee \"$EVIDENCE_DIR/stage5-build-output.txt\""
+fi
+pause "构建结束后按回车，我来采证据"
 if [[ ! -f "packages/shell/release/$MSI_NAME" ]]; then
   warn "没找到 packages/shell/release/$MSI_NAME：构建失败（先看构建日志），或版本号与文件名不符。"
   evidence "stage5: MSI not found at packages/shell/release/$MSI_NAME"
 else
   say "产物在。原始证据逐个落到 $EVIDENCE_DIR/："
   run_ps "stage5-sha256.txt" "Get-FileHash -Path '.\\$MSI_NAME' -Algorithm SHA256 | Format-List"
+  run_ps "stage5-fileinfo.txt" "Get-Item -Path '.\\$MSI_NAME' | Format-List Name,Length,LastWriteTime"
   run_ps "stage5-authenticode-msi.txt" "Get-AuthenticodeSignature -FilePath '.\\$MSI_NAME' | Format-List Status,StatusMessage,SignerCertificate,TimeStamperCertificate"
   run_ps "stage5-authenticode-exe.txt" "Get-AuthenticodeSignature -FilePath '.\\win-unpacked\\PiDock.exe' | Format-List Status,SignerCertificate,TimeStamperCertificate"
-  if command -v signtool >/dev/null 2>&1 || command -v signtool.exe >/dev/null 2>&1; then
-    run_ps "stage5-signtool-verify.txt" "signtool verify /pa /all /v '.\\$MSI_NAME'"
-  else
-    warn "PATH 上没有 signtool（它随 Windows SDK 安装）。手工跑下面这条并保存输出："
-    note "  signtool verify /pa /all /v .\\$MSI_NAME"
-  fi
   EXPECTED_SHA="$(grep -m1 -oiE '[0-9a-f]{64}' "$EVIDENCE_DIR/stage5-sha256.txt" 2>/dev/null || true)"
   if [[ -n "$EXPECTED_SHA" ]]; then
     printf '%s\n' "$EXPECTED_SHA" > "$EVIDENCE_DIR/expected-msi-sha256.txt"
@@ -387,17 +442,52 @@ else
   else
     warn "没能从 $EVIDENCE_DIR/stage5-sha256.txt 解析出 sha256，稍后人工比对。"
   fi
-  if grep -qE 'Status[[:space:]]*: Valid' "$EVIDENCE_DIR/stage5-authenticode-msi.txt" 2>/dev/null; then
-    say "✓ MSI 的 Get-AuthenticodeSignature Status = Valid"
+  MSI_BYTES="$(sed -n 's/^Length[[:space:]]*:[[:space:]]*//p' "$EVIDENCE_DIR/stage5-fileinfo.txt" 2>/dev/null | tr -d '\r' | head -n1)"
+  AUTHENTICODE_STATUS="$(sed -n 's/^Status[[:space:]]*:[[:space:]]*//p' "$EVIDENCE_DIR/stage5-authenticode-msi.txt" 2>/dev/null | tr -d '\r' | head -n1)"
+  if [[ "$SIGN_METHOD" == "skip" ]]; then
+    if grep -qE 'Status[[:space:]]*: NotSigned' "$EVIDENCE_DIR/stage5-authenticode-msi.txt" 2>/dev/null; then
+      say "✓ MSI 的 Authenticode 状态 = NotSigned —— 这正是跳过路线的预期状态"
+    else
+      warn "预期 NotSigned，但原始输出不是；读原始输出确认，别当成通过。"
+    fi
+    if grep -qE 'Status[[:space:]]*: NotSigned' "$EVIDENCE_DIR/stage5-authenticode-exe.txt" 2>/dev/null; then
+      say "✓ win-unpacked/PiDock.exe 同样是 NotSigned"
+    else
+      warn "已解包 exe 的签名状态不是 NotSigned，读原始输出。"
+    fi
+    note "跳过路线没有签名就没有时戳可验，所以这里不跑 signtool verify。"
+    {
+      printf 'route=skip\n'
+      printf 'artifact=%s\n' "$MSI_NAME"
+      printf 'sha256=%s\n' "${EXPECTED_SHA:-<unparsed>}"
+      printf 'size_bytes=%s\n' "${MSI_BYTES:-<unparsed>}"
+      printf 'authenticode_status=%s\n' "${AUTHENTICODE_STATUS:-<unparsed>}"
+      printf 'accepted_state=%s\n' "NotSigned"
+      printf 'why=%s\n' "内部/自用分发：本仓库已实测未签名 MSI 可构建、安装、启动、覆盖升级、卸载；未知发布者与可能的 SmartScreen 警告是已知代价"
+      printf 'not_claimed=%s\n' "已签名；已验证安全；SmartScreen 警告已消除"
+      printf 'build_output=%s\n' "$EVIDENCE_DIR/stage5-build-output.txt（如构建时按上面的 tee 保存）"
+    } > "$EVIDENCE_DIR/stage5-unsigned-acceptance.txt"
+    say "已把「未签名 = 已接受状态」连同 hash 与大小写进 $EVIDENCE_DIR/stage5-unsigned-acceptance.txt"
+    note "只记事实：状态是 NotSigned；不得读作「已验证安全」或「签名已完成」。"
   else
-    warn "MSI 的 Authenticode 状态不是 Valid（未签名 / 链不受信任都可能）——读原始输出，别当成通过。"
+    if command -v signtool >/dev/null 2>&1 || command -v signtool.exe >/dev/null 2>&1; then
+      run_ps "stage5-signtool-verify.txt" "signtool verify /pa /all /v '.\\$MSI_NAME'"
+    else
+      warn "PATH 上没有 signtool（它随 Windows SDK 安装）。手工跑下面这条并保存输出："
+      note "  signtool verify /pa /all /v .\\$MSI_NAME"
+    fi
+    if grep -qE 'Status[[:space:]]*: Valid' "$EVIDENCE_DIR/stage5-authenticode-msi.txt" 2>/dev/null; then
+      say "✓ MSI 的 Get-AuthenticodeSignature Status = Valid"
+    else
+      warn "MSI 的 Authenticode 状态不是 Valid（未签名 / 链不受信任都可能）——读原始输出，别当成通过。"
+    fi
+    if grep -qE 'TimeStamperCertificate[[:space:]]*:' "$EVIDENCE_DIR/stage5-authenticode-msi.txt" 2>/dev/null; then
+      say "✓ TimeStamperCertificate 有值（时间戳存在）"
+    else
+      warn "没看到 TimeStamperCertificate —— 时间戳可能缺失，读原始输出确认。"
+    fi
   fi
-  if grep -qE 'TimeStamperCertificate[[:space:]]*:' "$EVIDENCE_DIR/stage5-authenticode-msi.txt" 2>/dev/null; then
-    say "✓ TimeStamperCertificate 有值（时间戳存在）"
-  else
-    warn "没看到 TimeStamperCertificate —— 时间戳可能缺失，读原始输出确认。"
-  fi
-  evidence "stage5: MSI=$MSI_NAME sha256=${EXPECTED_SHA:-<unparsed>} (raw output in $EVIDENCE_DIR)"
+  evidence "stage5: route=$SIGN_METHOD MSI=$MSI_NAME sha256=${EXPECTED_SHA:-<unparsed>} bytes=${MSI_BYTES:-<unparsed>} authenticode=${AUTHENTICODE_STATUS:-<unparsed>} (raw output + build output in $EVIDENCE_DIR)"
 fi
 pause
 
@@ -455,10 +545,20 @@ say "我把本轮观测写成一条评论草稿。勾选是人的动作——向
 REPORT="$EVIDENCE_DIR/issue-22-report.md"
 {
   printf '## Windows 发布路径向导观测（%s）\n\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  printf -- '- 签名方式：`%s`\n' "$SIGN_METHOD"
-  printf -- '- 凭据文件（未提交，命中 .gitignore 的 `.env.*`）：`%s`\n' "$ENV_FILE"
+  printf -- '- 发布路线：`%s`（skip / pfx / azure）\n' "$SIGN_METHOD"
+  if [[ "$SIGN_METHOD" == "skip" ]]; then
+    printf -- '- 凭据：本轮**未采集任何凭据**（跳过签名路线，无 CSC_* / AZURE_*）\n'
+  else
+    printf -- '- 凭据文件（未提交，命中 .gitignore 的 `.env.*`）：`%s`\n' "$ENV_FILE"
+  fi
   printf -- '- 产物：`%s`\n' "${MSI_NAME:-<未构建>}"
   printf -- '- sha256：`%s`\n' "${EXPECTED_SHA:-<未采集>}"
+  printf -- '- 产物大小（bytes）：`%s`\n' "${MSI_BYTES:-<未采集>}"
+  printf -- '- Authenticode 状态（MSI，原始输出见证据目录）：`%s`\n' "${AUTHENTICODE_STATUS:-<未采集>}"
+  if [[ "$SIGN_METHOD" == "skip" ]]; then
+    printf -- '- 未签名（`NotSigned`）是内部/自用分发的**已接受状态**，不是「未完成」；\n'
+    printf -- '  这里只陈述事实，**不等于**「已验证安全」，也不等于 SmartScreen 警告已消除。\n'
+  fi
   printf -- '- 干净机器安装 + MSI 内终端：%s\n' "${CLEAN_RESULT:-not-run}"
   printf -- '- 第二账户：%s\n' "${ACCOUNT2_RESULT:-not-run}"
   for i in 1 2 3 4; do
