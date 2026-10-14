@@ -149,7 +149,19 @@ afterEach(() => {
   for (const home of homes.splice(0)) fs.rmSync(home, { recursive: true, force: true });
 });
 
-describe("Production plain-directory append for an existing task", () => {
+/**
+ * Every case below drives real git through `execFileSync` (bare remote, init, commit, push, worktree,
+ * plus the junction link that Windows needs), so per-case cost is git process startup, not compute.
+ * Measured on Windows 11 x64 / Node 24.21.0: the slowest of these 15 cases is 1.50s running this file
+ * alone, 3.40s when the whole shell suite shares the pool, and 4.00s while one more full suite runs
+ * alongside - that last number is why Vitest's 5000ms default produced the load-dependent reds of
+ * #73. 30s is ~7x the worst case measured, and the same budget #63 (dbc997e) set for
+ * project-task-creation.test.ts. No assertion is weakened, reordered or skipped, and a real hang
+ * still fails.
+ */
+const GIT_CASE_TIMEOUT_MS = 30_000;
+
+describe("Production plain-directory append for an existing task", { timeout: GIT_CASE_TIMEOUT_MS }, () => {
   it("appends a plain directory preserving existing links, task roots, and Git baselines", async () => {
     const env = await setup();
     const existingDirLinkName = buildLinkName(env.project.directories[0]!.id);

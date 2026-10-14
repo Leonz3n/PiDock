@@ -98,7 +98,18 @@ function recordSelection(input: {
   return { root, taskDir, taskId: input.taskId, branch };
 }
 
-describe("#6 resumeAppend over real worktrees (S6)", () => {
+/**
+ * Every case below drives real git through `execFileSync`: bare remotes, clones, commits and
+ * worktrees, so per-case cost is git process startup, not compute. Measured on Windows 11 x64 /
+ * Node 24.21.0: the slowest of these 13 cases is 1.41s running this file alone, 3.17s when the whole
+ * shell suite shares the pool, and 4.73s while one more full suite runs alongside - that last number
+ * is why Vitest's 5000ms default produced the load-dependent reds of #73. 30s is ~6x the worst case
+ * measured, and the same budget #63 (dbc997e) set for project-task-creation.test.ts. No assertion is
+ * weakened, reordered or skipped, and a real hang still fails.
+ */
+const GIT_CASE_TIMEOUT_MS = 30_000;
+
+describe("#6 resumeAppend over real worktrees (S6)", { timeout: GIT_CASE_TIMEOUT_MS }, () => {
   it("resumes only the unfinished repo and leaves the created worktree and its user edits byte-identical", () => {
     const home = mkdtempSync(join(tmpdir(), "pidock-resume-"));
     homes.push(home);
