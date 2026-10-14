@@ -31,6 +31,11 @@ export function nodeDirectoryLinkOps(): DirectoryLinkOps {
  *
  * POSIX keeps the single `"dir"` attempt: the `type` argument is ignored there,
  * so the Windows-gated fallback is never reached off win32.
+ *
+ * The return value names which kind of link really exists (`"junction"` on the
+ * win32 fallback, `"symlink"` everywhere else). All three production call sites
+ * discard it - the link exists or the call threw - so it is kept as the observable
+ * the junction tests assert.
  */
 export function createDirectoryLink(target: string, path: string, ops: DirectoryLinkOps = nodeDirectoryLinkOps()): DirectoryLinkKind {
   if (ops.platform !== "win32") {
@@ -68,11 +73,15 @@ function stripExtendedPathPrefix(value: string): string {
  * The compare-side canonical form of a link target.
  *
  * Only Windows-shaped values (drive-absolute or UNC) go through
- * `normalizeTaskPath` (separator unification, drive-letter fold). A POSIX value
- * keeps its exact bytes apart from a stripped trailing separator, so a backslash
- * in a POSIX filename is never folded into a separator: this compare is the sole
- * guard that a recorded link is not retargeted, and it must not be loosened on
- * darwin/linux by a Windows-shaped normalisation.
+ * `normalizeTaskPath` (separator unification, drive-letter fold). Every platform
+ * first drops a leading `\\?\` extended prefix, `trim()`s the value and strips a
+ * trailing separator; a POSIX value therefore keeps its exact bytes apart from
+ * those three, so a backslash in a POSIX filename is never folded into a
+ * separator: this compare is the sole guard that a recorded link is not
+ * retargeted, and it must not be loosened on darwin/linux by a Windows-shaped
+ * normalisation. The whitespace folding is deliberately on both sides and stays
+ * there (#66): moving the `trim()` into the Windows-shaped branch would change
+ * POSIX compare bytes.
  *
  * Deliberately NOT applied: path case below the drive letter, `realpath`, `..`
  * collapsing and 8.3 shortening. Windows per-directory case sensitivity is real,

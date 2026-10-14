@@ -26,11 +26,12 @@ type PayloadKind = "helper" | "addon" | "worker";
  * `O_RDONLY | O_NOFOLLOW`.
  *
  * `modeAudit` records the second measurement: on win32 `fchmodSync` succeeds
- * silently while `mode & 0o7777` stays `0o666` (`0o444` for the addon), so a
- * `mode === 0o644` check is unreachable there and POSIX bits can never prove
- * identity or readiness. darwin readiness is the audited helper's `0o755`; win32
- * readiness is exactly "the bytes of every file listed below verified", i.e.
- * existence + size + sha256.
+ * silently while `mode & 0o7777` stays `0o666`, so a `mode === 0o644` check is
+ * unreachable there and POSIX bits can never prove identity or readiness. (#66
+ * re-measured `0o666` on every pinned payload, in the pnpm store and in
+ * `release/win-unpacked/resources/app.asar.unpacked`.) darwin readiness is the
+ * audited helper's `0o755`; win32 readiness is exactly "the bytes of every file
+ * listed below verified", i.e. existence + size + sha256.
  */
 interface PlatformPin {
   /** node-pty 1.1.0 `lib/utils.js` searches `build/Release`, `build/Debug` and
@@ -61,10 +62,16 @@ const pins: Record<string, PlatformPin> = {
     openFlags: constants.O_RDONLY,
     modeAudit: false,
     files: {
-      // The ConPTY pair only. `prebuilds/win32-x64/pty.node`, `winpty.dll`,
-      // `winpty-agent.exe` and `conpty_console_list.node` are deliberately absent
-      // and unreachable by construction: the audit only opens the relative paths
-      // named here, so the unpinned winpty fallback is never read by it.
+      // The ConPTY pair only, and this is a statement about what is PINNED,
+      // not about what ships: the package really contains
+      // `prebuilds/win32-x64/pty.node` (measured 303104 B in
+      // `release/win-unpacked/…`, #66), `winpty.dll`, `winpty-agent.exe` and
+      // `conpty_console_list.node` - all four deliberately NOT pinned. An
+      // unpinned file is never opened by the audit, which only reads the
+      // relative paths named here. That node-pty does not fall back to the
+      // winpty addon is a runtime guarantee, not an audit one:
+      // `requireWindowsConptyBuild` plus node-pty choosing ConPTY from the OS
+      // build (`lib/windowsPtyAgent.js:42-47`) decide it.
       addon: { relative: "prebuilds/win32-x64/conpty.node", size: 312320, sha256: "ee8f4e6f4dad71939eecfda11de249400e34bfefe4c8b48af13f3b5476f4035b" },
       // Required, not a nicety: node-pty's conout socket worker. Its absence is a
       // measured silent hang of the terminal rather than an error, so only its

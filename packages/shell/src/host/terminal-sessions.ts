@@ -24,15 +24,24 @@ function stripControl(line: string): string {
 }
 
 /**
- * Turn the planned program into the executable image the PTY will exec. A bare
- * name (`bash`) is resolved against the launch's own `PATH` and, on POSIX, then
- * a fixed system path; an unresolvable name is returned unchanged so the driver
- * refuses it as `not-started` instead of guessing. Each platform resolves with
- * its own rules: win32 splits the launch `PATH` at `;` and completes a bare name
- * with `PATHEXT`, a name that carries a separator is a path the launch cwd
- * resolves and never a PATH lookup. The plan's displayed program is not
- * rewritten, so the panel still shows what the user chose. `platform` is the seam
- * those rules are measured through, with the same default as `buildHostEnv`.
+ * Turn the planned program into the executable image the PTY will exec.
+ *
+ * POSIX: a bare name (`bash`) is resolved against the launch's own `PATH` and then
+ * the fixed system paths; an unresolvable name is returned unchanged so no other
+ * program is ever substituted for the planned one. win32: the launch `PATH` is
+ * split at `;` and a bare name is completed with `PATHEXT`.
+ *
+ * On win32 this function is a PRE-resolution, not the resolution boundary: what it
+ * returns (a bare name, or a name that carries a separator) is handed to the OS,
+ * whose own search order decides. Measured on this host (#66):
+ * `pty.spawn(".\\probe-cmd.exe", …, { cwd: <the dir holding probe-cmd.exe> })`
+ * fails with `File not found`, while `cmd.exe` and `ping.exe` both START from an
+ * env carrying no `PATH` at all. So a win32 name this function cannot resolve may
+ * still start, and one it resolves may still be refused by the OS.
+ *
+ * The plan's displayed program is not rewritten, so the panel still shows what the
+ * user chose. `platform` is the seam those rules are measured through, with the
+ * same default as `buildHostEnv`.
  */
 export function resolveProgram(program: string, env: Record<string, string>, platform: NodeJS.Platform = process.platform): string {
   if (isAbsolute(program)) return program;
@@ -71,11 +80,12 @@ function windowsProgramCandidates(program: string, pathext: string | undefined):
 }
 
 /**
- * win32 resolution: a `;`-separated launch `PATH`, `PATHEXT` completion and the
- * `PATH`/`PATHEXT` names read case-insensitively. Candidate paths are only
+ * win32 pre-resolution: a `;`-separated launch `PATH`, `PATHEXT` completion and
+ * the `PATH`/`PATHEXT` names read case-insensitively. Candidate paths are only
  * stat'ed - remaining case differences are the Windows filesystem's to decide, and
  * win32 has no executable bit to check. A name that names nothing is returned
- * unchanged, so no other program is ever substituted for the planned one.
+ * unchanged, so no other program is ever substituted for the planned one; the OS
+ * search order resolves what this cannot (see `resolveProgram`).
  */
 function resolveWindowsProgram(program: string, env: Record<string, string>): string {
   if (program.includes("/") || program.includes("\\")) return program;
@@ -272,8 +282,9 @@ export class TaskTerminalSessions {
    * The identity that has to match is the platform's own: a process group that
    * has to still belong to the recorded pid where the platform owns groups, and
    * the live session plus the recorded pid on win32, where containment is the
-   * Host-owned helper handle and no pass is made by a recyclable pid alone (see
-   * `identityMatches`).
+   * Host-owned helper handle rather than a pid: the recorded pid is only compared,
+   * never signalled, so a recycled pid cannot make this stop name a foreign
+   * process (see `identityMatches`).
    */
   async stop(instanceId: string, reason: string): Promise<TerminalSessionResult<{ instance: TerminalInstanceRecord }>> {
     const record = this.registry.get(instanceId);
@@ -286,10 +297,10 @@ export class TaskTerminalSessions {
     const scope = this.registry.stopScope(instanceId);
     if (!scope.ok) return { ok: false, error: scope.error };
     if (!session) {
-      return { ok: false, error: `unknown-process: 终端 ${instanceId} 没有本 Host 记录的运行会话，拒绝按记录进程号发送信号` };
+      return { ok: false, error: `unknown-process: 终端 ${instanceId} 没有本 Host 记录的运行会话，拒绝据此终止会话` };
     }
     if (!this.identityMatches(record, scope.scope.processId, this.driver.snapshot(session.identity).process)) {
-      return { ok: false, error: `unknown-process: 终端 ${instanceId} 的记录身份与运行会话不一致，拒绝发送信号` };
+      return { ok: false, error: `unknown-process: 终端 ${instanceId} 的记录身份与运行会话不一致，拒绝据此终止会话` };
     }
     const receipt = await this.driver.stop(session.identity);
     if (receipt.status !== "tree-drained") {
