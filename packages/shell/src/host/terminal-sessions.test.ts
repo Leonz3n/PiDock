@@ -38,6 +38,7 @@ import { inspectNodePtyPrebuild, prepareNodePtyPrebuild } from "./node-pty-prefl
 import { MAX_PTY_ENVELOPE_BYTES } from "./node-pty-protocol.js";
 import { memoryTaskStore } from "./task-host.js";
 import { descendantPids, PTY_INPUT_BUDGET_ERROR, ptyProcessGroupOwnershipAvailable, ptySpawnerAvailable, resolvePtyRuntime, TerminalPtyDriver, workerEntryUrl, type PtyHelper } from "./terminal-pty-driver.js";
+import { resolveHostShellProfiles, terminalLaunchFromRecord } from "./terminal-profiles.js";
 import { readWin32ProcessTable, win32ProcessAlive } from "./win32-process-probe.js";
 import { TaskWorkspaceFiles } from "./workspace-files.js";
 import type { ProcessTableRow } from "./service-ownership.js";
@@ -1802,4 +1803,103 @@ it("names the lifetime input budget when input is refused", async () => {
   } finally {
     rmSync(taskDir, { recursive: true, force: true });
   }
+});
+
+win32RealIt("opens the shell main resolves by default on win32 and round-trips a command, a resize and a stop", { timeout: 120_000 }, async () => {
+  // (#85) The clause this covers, on a REAL ConPTY terminal: Windows must open
+  // PowerShell - not the `bash -l` the renderer used to hardcode - and the whole
+  // human loop must work against the resolved profile: the shell starts, a typed
+  // command's output comes back through the bounded history, the window resizes,
+  // and the stop leaves neither the shell, a descendant nor the Host-owned helper
+  // behind (#84: a leftover PiDock process blocks a reinstall).
+  //
+  // The resolution itself is main's (`resolveHostShellProfiles`, the same call
+  // `host.ts` makes), so this test fails if the table stops selecting PowerShell
+  // on this machine - not merely if the pty breaks.
+  const f = new Fixture("win32-default-profile");
+  const profiles = resolveHostShellProfiles();
+  expect(profiles.defaultProfileId).toBe("powershell");
+  // The Host's own launch path, exactly as `host.ts` uses it: the record names a
+  // profile id, main resolves it and re-probes the file on disk. That provenance
+  // (`programSource: "profile"`) is what makes the documented
+  // `%ProgramFiles%\PowerShell\7\pwsh.exe` path legal for the plan - the caller
+  // channel still refuses it byte for byte.
+  const launch = terminalLaunchFromRecord({ profileId: profiles.defaultProfileId });
+  expect(launch.ok, launch.ok ? "" : launch.error).toBe(true);
+  if (!launch.ok) return;
+  expect(launch.programSource).toBe("profile");
+  const program = String(launch.program);
+  expect(program.toLowerCase()).toMatch(/pwsh\.exe$|powershell\.exe$/);
+  // The default profile runs the user's own profile: no `-NoProfile`, no `/c`
+  // chaining, no argv at all.
+  expect(launch.args).toEqual([]);
+
+  mkdirSync(join(f.taskDir, "work"), { recursive: true });
+  const systemRoot = process.env.SystemRoot ?? "C:/Windows";
+  const planned = planTerminal({
+    roots: workspaceRoots({ taskId: f.taskId, taskDir: f.taskDir, repos: ["work"] }),
+    taskId: f.taskId,
+    taskDir: f.taskDir,
+    rootId: "work",
+    program: launch.program,
+    args: launch.args,
+    programSource: launch.programSource,
+    layers: {
+      repoDefaults: [
+        { key: "PATH", value: `${join(systemRoot, "System32")};${systemRoot}`, secret: false },
+        { key: "SystemRoot", value: systemRoot, secret: false },
+        { key: "TERM", value: "xterm-256color", secret: false },
+      ],
+      shared: [], privateEntries: [], task: [],
+    },
+    owner: { taskId: f.taskId, sessionId: null, label: "用户显式操作" },
+    instanceId: "term-1",
+  });
+  expect(planned.ok, planned.ok ? "" : planned.error).toBe(true);
+  if (!planned.ok) return;
+  const baselineHelpers = win32HelperPids();
+  f.registry.register(planned.plan);
+  const started = await f.sessions.start({ plan: planned.plan, sessionId: null });
+  expect(started.ok, started.ok ? "" : started.error).toBe(true);
+  const root = f.registry.get("term-1")!.processId!;
+  f.track(root);
+  expect(root).toBeGreaterThan(1);
+  expect(alive(root)).toBe(true);
+
+  // The resolved shell really runs: its own banner/prompt arrives as output.
+  await until(() => f.history().length > 0, 60_000, "the resolved shell's own output");
+
+  // A typed command's output comes back through the same bounded history the
+  // panel reads. The command is typed in two pieces and the marker only exists in
+  // its OUTPUT (`Write-Output ('pidock-85-' + 'marker')`), so the echoed command
+  // line cannot satisfy this assertion - only a really executed PowerShell can
+  // (a `bash -l` has no such command).
+  const typed = await f.sessions.input("term-1", "Write-Output ('pidock-85-' + 'marker')\r");
+  expect(typed.ok, typed.ok ? "" : typed.error).toBe(true);
+  await until(() => f.history().includes("pidock-85-marker"), 60_000, "the typed command's output");
+
+  // Resize reaches the real ConPTY and is recorded with the same window.
+  const resized = await f.sessions.resize("term-1", 100, 30);
+  expect(resized.ok, resized.ok ? "" : resized.error).toBe(true);
+  if (resized.ok) expect(resized.instance).toMatchObject({ cols: 100, rows: 30 });
+
+  // Ctrl+C reaches the real console: the interrupt byte aborts a 30-second
+  // command, and the shell answers again well inside the timeout below (an
+  // interrupt that did not work would leave the shell sleeping past it).
+  const sleeping = await f.sessions.input("term-1", "Start-Sleep -Seconds 30\r");
+  expect(sleeping.ok, sleeping.ok ? "" : sleeping.error).toBe(true);
+  await delay(800);
+  const interrupt = await f.sessions.input("term-1", "\u0003");
+  expect(interrupt.ok, interrupt.ok ? "" : interrupt.error).toBe(true);
+  await delay(1200);
+  const afterInterrupt = await f.sessions.input("term-1", "Write-Output ('pidock-85-' + 'after')\r");
+  expect(afterInterrupt.ok, afterInterrupt.ok ? "" : afterInterrupt.error).toBe(true);
+  await until(() => f.history().includes("pidock-85-after"), 20_000, "the shell to answer again after Ctrl+C");
+
+  // Stop: the shell and every descendant it owns are proven gone, and the
+  // Host-owned helper the driver forked is reaped with it.
+  const stopped = await f.sessions.stop("term-1", "user-request");
+  expect(stopped).toMatchObject({ ok: true });
+  await until(() => !alive(root), 30_000, "the resolved shell to be gone");
+  await until(() => forkedHelperPids(baselineHelpers).length === 0, 30_000, "the Host-owned helper to be reaped");
 });

@@ -85,6 +85,8 @@ import {
   type TerminalInstanceView,
   type TerminalPlanRequest,
   type TerminalPlanView,
+  type TerminalProfileView,
+  type TerminalProfilesView,
   type TerminalStateView,
   type WorkspaceBrowserRequest,
   type WorkspaceBrowserView,
@@ -483,6 +485,38 @@ function seedRepositories(): Repository[] {
 
 const agentGreeting = "任务工作区已就绪，我可以开始检查构建与配置。";
 
+/**
+ * [PiDock 10] (#85) the in-memory projection's own shell profile.
+ *
+ * This adapter owns no process, reads no filesystem and is not a platform, so it
+ * cannot resolve the real table (that one is main's, probed by
+ * `packages/shell/src/host/terminal-profiles.ts`). It therefore offers exactly
+ * one profile and labels where that came from. What the (#85) contract needs is
+ * the direction: the panel names a `profileId` and the adapter answers with
+ * `program` + `args`, never the other way round - and an unknown `profileId` is
+ * refused by name instead of being replaced by this one.
+ */
+const MEMORY_TERMINAL_PLATFORM = "memory";
+const MEMORY_TERMINAL_PROFILE: TerminalProfileView = {
+  id: "memory-shell",
+  label: "内存模拟 shell",
+  source: "内存模拟（不启动进程）",
+  program: "memory-shell",
+  args: [],
+};
+
+/** The explicit launch a memory plan reports: the named profile, or the caller's own program/args. */
+function memoryTerminalLaunch(request: TerminalPlanRequest): { program: string; args: string[] } {
+  if (request.profileId !== undefined) {
+    if (request.profileId !== MEMORY_TERMINAL_PROFILE.id) {
+      throw new Error(
+        `terminal-profile-unknown: 内存模拟只提供「${MEMORY_TERMINAL_PROFILE.id}」这一项 shell 配置，不接受「${request.profileId}」`,
+      );
+    }
+    return { program: MEMORY_TERMINAL_PROFILE.program, args: [...MEMORY_TERMINAL_PROFILE.args] };
+  }
+  return { program: request.program ?? MEMORY_TERMINAL_PROFILE.program, args: request.args ?? [] };
+}
 /**
  * Seeded service startup recipes, mirroring the prototype's `environmentEditor()`
  * cards for an atlas environment (first two Node.js project scripts, the rest Go
@@ -1810,6 +1844,7 @@ class MemoryHost implements HostAdapter {
   async planTerminal(taskId: string, request: TerminalPlanRequest): Promise<TerminalPlanView> {
     const task = this.task(taskId);
     if (!task) throw new Error("任务不存在");
+    const launch = memoryTerminalLaunch(request);
     const browser = await this.workspaceBrowser(taskId, { rootId: request.rootId });
     const root = browser.roots.find((entry) => entry.id === request.rootId) ?? browser.roots[0];
     if (!root) throw new Error("本任务没有可用的文件根");
@@ -1834,8 +1869,8 @@ class MemoryHost implements HostAdapter {
       instanceId: request.instanceId,
       rootId: root.id,
       attribution: attributionView,
-      program: request.program,
-      args: request.args ?? [],
+      program: launch.program,
+      args: launch.args,
       cwd: root.path,
       cols: request.cols ?? 80,
       rows: request.rows ?? 24,
@@ -1845,6 +1880,23 @@ class MemoryHost implements HostAdapter {
         request.sessionId !== undefined
           ? { taskId, sessionId: request.sessionId, label: `会话 ${request.sessionId}` }
           : { taskId, sessionId: null, label: request.label ?? "用户显式操作" },
+    };
+  }
+
+  /**
+   * [PiDock 10] (#85) the profiles this projection offers. It owns no process and
+   * reads no filesystem, so it offers exactly one profile and says so in
+   * `source`/`label`; the real table is main's. A `profileId` it does not know is
+   * refused by name (in `planTerminal`), never silently replaced.
+   */
+  async terminalProfiles(taskId: string): Promise<TerminalProfilesView> {
+    const task = this.task(taskId);
+    if (!task) throw new Error("任务不存在");
+    return {
+      platform: MEMORY_TERMINAL_PLATFORM,
+      profiles: [{ ...MEMORY_TERMINAL_PROFILE, args: [...MEMORY_TERMINAL_PROFILE.args] }],
+      defaultProfileId: MEMORY_TERMINAL_PROFILE.id,
+      unavailable: [],
     };
   }
 
@@ -1863,7 +1915,8 @@ class MemoryHost implements HostAdapter {
     const plan = await this.planTerminal(taskId, {
       instanceId: request.instanceId,
       rootId: request.rootId ?? (await this.workspaceBrowser(taskId)).roots[0]?.id ?? "",
-      program: request.program ?? "bash",
+      ...(request.profileId !== undefined ? { profileId: request.profileId } : {}),
+      ...(request.program !== undefined ? { program: request.program } : {}),
       ...(request.args !== undefined ? { args: request.args } : {}),
       ...(request.cols !== undefined ? { cols: request.cols } : {}),
       ...(request.rows !== undefined ? { rows: request.rows } : {}),

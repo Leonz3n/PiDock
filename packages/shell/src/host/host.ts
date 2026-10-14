@@ -72,6 +72,7 @@ import { protectApplicationProfile, type TaskPathProtection } from "./protected-
 import { TaskWorkspaceFiles } from "./workspace-files.js";
 import { openExternalEditor } from "./open-editor.js";
 import { TaskTerminalRegistry, planTerminal, type TerminalPlan } from "../main/terminal-config.js";
+import { resolveHostShellProfiles, terminalLaunchFromRecord, terminalProfilesPayload } from "./terminal-profiles.js";
 import { TaskLifecycleHost } from "./task-lifecycle.js";
 import { createLifecycleResources } from "./lifecycle-resources.js";
 import { runAgentTerminalControl } from "./terminal-control.js";
@@ -350,14 +351,23 @@ function terminalPlanFor(
     owner = { taskId: host.taskId, sessionId: null, label: caller.label };
   }
   const layers = record["layers"];
+  // (#85) The caller names a shell PROFILE, never a shell string: main resolves
+  // the profile's own program + argv from the platform table
+  // (`main/terminal-config.ts`, probed by `./terminal-profiles.ts`). A record
+  // that names neither a profile nor an explicit program is refused here rather
+  // than defaulted, and a profile this host cannot run is refused by name with
+  // the executable that was probed - never replaced by another shell.
+  const launch = terminalLaunchOf(record);
+  if (!launch.ok) return { ok: false, error: launch.error };
   const planned = planTerminal({
     roots: files.roots(),
     taskId: host.taskId,
     taskDir: host.taskDir,
     rootId: record["rootId"],
     relative: record["relative"],
-    program: record["program"],
-    args: record["args"],
+    program: launch.program,
+    args: launch.args,
+    programSource: launch.programSource,
     layers: (layers as never) ?? { repoDefaults: [], shared: [], privateEntries: [], task: [] },
     cols: record["cols"],
     rows: record["rows"],
@@ -369,6 +379,20 @@ function terminalPlanFor(
   const { env, ...display } = planned.plan;
   void env;
   return { ok: true, plan: display, raw: planned.plan };
+}
+
+/**
+ * Resolve the terminal launch a plan or start record asks for, and hand
+ * `planTerminal` the provenance of its program.
+ *
+ * All of it lives in `./terminal-profiles.ts`: a record names a shell PROFILE id
+ * (the renderer never names a shell), and main resolves that profile's own
+ * program + argv, re-probing it on disk. The explicit `program`/`args` channel
+ * stays exactly what #7 defined it as (an argv array whose blank/inline-env/
+ * chaining/whitespace forms `planTerminal` refuses).
+ */
+function terminalLaunchOf(record: Record<string, unknown>): ReturnType<typeof terminalLaunchFromRecord> {
+  return terminalLaunchFromRecord(record);
 }
 
 function protocolBindingFor(taskId: string): TaskProtocolBinding | { error: string } {
@@ -1916,6 +1940,12 @@ async function performTaskOp(
         if ("error" in files) return { ok: false, error: files.error };
         const opened = await openExternalEditor({ files, payload: record, origin });
         return opened.ok ? { ok: true, payload: { launch: opened.launch } } : { ok: false, error: opened.error };
+      }
+      // [PiDock 10] (#15, #85) the platform's selectable shell profiles: the
+      // renderer asks main what this machine offers and which one is the default
+      // instead of naming a shell itself. A read: nothing is spawned or written.
+      case "task/terminalProfiles": {
+        return { ok: true, payload: terminalProfilesPayload(resolveHostShellProfiles()) };
       }
       // [PiDock 10] (#15) built-in terminal. Planning resolves the selected
       // root's cwd + the #7 environment and returns only masked rows: the real

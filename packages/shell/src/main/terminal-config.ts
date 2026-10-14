@@ -23,6 +23,7 @@
  *   pty/streaming/exit observation remains a recorded residual (no spawn here).
  */
 
+import { posix as posixPath, win32 as win32Path } from "node:path";
 import { resolveServiceEnv, validateServiceDescriptor, buildChildEnv, type ResolvedServiceRow, type ServiceEnvLayers } from "./service-config.js";
 import { appendBounded, truncateText } from "./bounded-buffer.js";
 import { scrubSecretText } from "./browser-rules.js";
@@ -74,6 +75,29 @@ function isPositiveInt(value: unknown): value is number {
 }
 
 /**
+ * The checks a program from this module's own profile table still has to pass.
+ *
+ * It is deliberately not `validateServiceDescriptor` minus a rule: the caller
+ * rule's whitespace test exists to make a caller-authored command line
+ * impossible (`FOO=bar cmd`, `bash -c …`), and a table path is not a caller
+ * string. What is checked here is the precise property instead - the whole value
+ * must be ONE absolute path, and it may not carry the two other smuggles the #7
+ * rule names (`=` inline assignment, and shell chaining) - while the host seam
+ * additionally proves that this entire string names an existing executable file,
+ * which no command line can. Caller programs are untouched: they still go
+ * through `validateServiceDescriptor` exactly as before.
+ */
+function validateProfileProgram(program: string): string | null {
+  if (program.length === 0) return "启动程序不能为空";
+  const absolute =
+    program.startsWith("/") || /^[A-Za-z]:[\\/]/.test(program) || /^\\\\[^\\]+\\[^\\]+/.test(program);
+  if (!absolute) return `终端 shell 配置必须是本机绝对路径：${program}`;
+  if (program.includes("=")) return `终端 shell 配置不能携带内联环境赋值：${program}`;
+  if (/(&&|\|\||[;|`]|\$\()/.test(program)) return `终端 shell 配置不能使用 shell 连接符：${program}`;
+  return null;
+}
+
+/**
  * Plan one terminal for a task root. Fail-closed at every step: an unknown
  * root, a root-less selection, an invalid program/argv, an out-of-range window
  * or a broken env layer (duplicate keys, secrets in the shared template,
@@ -88,6 +112,18 @@ export function planTerminal(input: {
   relative?: unknown;
   program: unknown;
   args?: unknown;
+  /**
+   * Where `program` came from. "caller" (the default) is a program a caller
+   * named, and it faces every #7 refusal exactly as before. "profile" means main
+   * itself resolved it from the platform profile table (`resolveTerminalProfile`)
+   * and re-verified at plan time that the whole string is an existing executable
+   * file (`host/terminal-profiles.ts`), so it is validated as an absolute path
+   * instead of being run through the caller-string proxy - see
+   * `validateProfileProgram`. No op payload can set this: the Host's own launch
+   * path derives it from `profileId`, and the record's `program`/`profileId` are
+   * the only two fields read.
+   */
+  programSource?: "caller" | "profile";
   layers: ServiceEnvLayers;
   cols?: unknown;
   rows?: unknown;
@@ -112,14 +148,26 @@ export function planTerminal(input: {
   // Reuse the #7 launch rule instead of restating it: blank program, inline env
   // assignment and shell chaining are all refused the same way a service launch
   // refuses them, so a terminal cannot become the un-gated exec path.
-  const invalid = validateServiceDescriptor({
-    name: "终端",
-    program: input.program,
-    args,
-    ports: [],
-    runType: "long-lived",
-  });
-  if (invalid) return { ok: false, error: `invalid-terminal: ${invalid.message}` };
+  //
+  // A program MAIN resolved from its own profile table takes `validateProfileProgram`
+  // instead: the #7 whitespace rule is a proxy for "this is one executable, not a
+  // caller-authored command line", and the documented PowerShell profile -
+  // `%ProgramFiles%\PowerShell\7\pwsh.exe`, which is what VS Code starts - is an
+  // absolute path WITH a space. That proxy is not needed for a table path, whose
+  // precision comes from the host-side check that the entire string names an
+  // existing executable file (a command line cannot). Caller programs keep the
+  // rule byte for byte; see `validateProfileProgram`.
+  const invalid =
+    input.programSource === "profile"
+      ? validateProfileProgram(input.program)
+      : validateServiceDescriptor({
+          name: "终端",
+          program: input.program,
+          args,
+          ports: [],
+          runType: "long-lived",
+        })?.message ?? null;
+  if (invalid) return { ok: false, error: `invalid-terminal: ${invalid}` };
   const cols = input.cols === undefined ? 80 : input.cols;
   const rows = input.rows === undefined ? 24 : input.rows;
   if (!isPositiveInt(cols) || cols < MIN_TERMINAL_COLS || cols > MAX_TERMINAL_COLS) {
@@ -148,6 +196,242 @@ export function planTerminal(input: {
       owner: input.owner,
       historyLimit: MAX_TERMINAL_HISTORY,
     },
+  };
+}
+
+/**
+ * One selectable shell profile, the shape VS Code's own profile table has: an
+ * id, the label and `source` the picker shows, and the explicit program + argv
+ * the pty is started with. `program` is always an absolute path main resolved.
+ */
+export interface TerminalShellProfile {
+  id: string;
+  label: string;
+  /** Where the profile comes from, as VS Code spells it (`PowerShell`, `/bin/zsh`). */
+  source: string;
+  program: string;
+  args: string[];
+}
+
+/** The OS seam the table is decided through, injected so every platform branch is testable. */
+export interface TerminalProfileProbe {
+  /** Whether this absolute path names an existing regular file. */
+  exists(path: string): boolean;
+  /** Whether it also runs: POSIX `X_OK`; win32 has no execute bit, so it repeats `exists`. */
+  isExecutable(path: string): boolean;
+}
+
+export interface TerminalProfileResolution {
+  platform: NodeJS.Platform;
+  /** The selectable profiles this host really has, the default first. */
+  profiles: TerminalShellProfile[];
+  /**
+   * The platform default's id: PowerShell on win32, the `$SHELL` login shell on
+   * macOS/Linux. `null` means the default itself is missing - which is a named
+   * fact (see `unavailable`), never a reason to open a different shell.
+   */
+  defaultProfileId: string | null;
+  /** Profiles this platform names but this host cannot run, with every path that was probed. */
+  unavailable: { id: string; label: string; missing: string[] }[];
+}
+
+/** One entry of the built-in table: the ids it can resolve to and the argv it runs with. */
+interface ProfileCandidate {
+  id: string;
+  label: string;
+  source: string;
+  paths: string[];
+  args: string[];
+}
+
+/** Windows environment names are case-insensitive; POSIX reads the exact name. */
+function profileEnvValue(env: Record<string, string | undefined>, name: string, platform: NodeJS.Platform): string | undefined {
+  const named = env[name];
+  if (named !== undefined && named.length > 0) return named;
+  if (platform !== "win32") return undefined;
+  const key = Object.keys(env).find((candidate) => candidate.toUpperCase() === name.toUpperCase());
+  const value = key === undefined ? undefined : env[key];
+  return value !== undefined && value.length > 0 ? value : undefined;
+}
+
+/**
+ * The Windows table, in VS Code's own order of preference.
+ *
+ * - `PowerShell` is the win32 default. VS Code's PowerShell source starts the
+ *   installed PowerShell 7 (`%ProgramFiles%\PowerShell\7\pwsh.exe`) when there
+ *   is one and the inbox `%windir%\System32\WindowsPowerShell\v1.0\powershell.exe`
+ *   otherwise. `Sysnative` comes first for the same reason VS Code puts it
+ *   there: it is the un-redirected view a 32-bit process needs, and it simply
+ *   does not exist for a 64-bit one, so the fallback is the documented path.
+ * - `Command Prompt` is `${env:windir}\System32\cmd.exe` with an EMPTY argv
+ *   (VS Code's own entry), never `/c <something>`.
+ * - `Git Bash` is only offered when Git for Windows is really installed, and
+ *   runs as a LOGIN shell with `--login -i` (VS Code #119427), so
+ *   `~/.bash_profile` is sourced instead of swallowed.
+ * - `WSL` is offered when `wsl.exe` exists (VS Code's auto-detected entry).
+ *
+ * No profile carries `-NoProfile` or any other argument that would skip the
+ * user's own profile: that is the whole point of opening their shell.
+ */
+function win32Candidates(env: Record<string, string | undefined>): ProfileCandidate[] {
+  const windowsDir = profileEnvValue(env, "windir", "win32") ?? profileEnvValue(env, "SystemRoot", "win32") ?? "C:\\Windows";
+  const programFiles = profileEnvValue(env, "ProgramFiles", "win32");
+  const programFilesX86 = profileEnvValue(env, "ProgramFiles(x86)", "win32");
+  const localAppData = profileEnvValue(env, "LOCALAPPDATA", "win32");
+  return [
+    {
+      id: "powershell",
+      label: "PowerShell",
+      source: "PowerShell",
+      paths: [
+        ...(programFiles === undefined
+          ? []
+          : [win32Path.join(programFiles, "PowerShell", "7", "pwsh.exe"), win32Path.join(programFiles, "PowerShell", "7-preview", "pwsh.exe")]),
+        win32Path.join(windowsDir, "Sysnative", "WindowsPowerShell", "v1.0", "powershell.exe"),
+        win32Path.join(windowsDir, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+      ],
+      args: [],
+    },
+    {
+      id: "command-prompt",
+      label: "Command Prompt",
+      source: "Command Prompt",
+      paths: [win32Path.join(windowsDir, "Sysnative", "cmd.exe"), win32Path.join(windowsDir, "System32", "cmd.exe")],
+      args: [],
+    },
+    {
+      id: "git-bash",
+      label: "Git Bash",
+      source: "Git Bash",
+      paths: [
+        ...(programFiles === undefined ? [] : [win32Path.join(programFiles, "Git", "bin", "bash.exe")]),
+        ...(programFilesX86 === undefined ? [] : [win32Path.join(programFilesX86, "Git", "bin", "bash.exe")]),
+        ...(localAppData === undefined ? [] : [win32Path.join(localAppData, "Programs", "Git", "bin", "bash.exe")]),
+      ],
+      args: ["--login", "-i"],
+    },
+    { id: "wsl", label: "WSL", source: "WSL", paths: [win32Path.join(windowsDir, "System32", "wsl.exe")], args: [] },
+  ];
+}
+
+/**
+ * The macOS/Linux table. Every entry is a LOGIN shell (`-l`).
+ *
+ * VS Code resolves the terminal's environment by starting a login shell once and
+ * merging what it prints, which is how a PATH addition in `~/.zprofile` reaches
+ * the terminal. This Host's child environment comes from the #7 layer resolution
+ * and never reads the user's login environment, so the equivalent available here
+ * is to replace the shell itself so the user's own profile really runs: `-l` is
+ * the same mechanism VS Code gives Git Bash for exactly this reason. It is a
+ * recorded divergence from VS Code's exact argv (`args: []` on its zsh/bash
+ * entries), not a claim to have inherited the login environment.
+ */
+function posixCandidates(): ProfileCandidate[] {
+  return [
+    { id: "zsh", label: "zsh", source: "/bin/zsh", paths: ["/bin/zsh"], args: ["-l"] },
+    { id: "bash", label: "bash", source: "/bin/bash", paths: ["/bin/bash", "/usr/local/bin/bash", "/opt/homebrew/bin/bash"], args: ["-l"] },
+    { id: "sh", label: "sh", source: "/bin/sh", paths: ["/bin/sh"], args: ["-l"] },
+    { id: "fish", label: "fish", source: "fish", paths: ["/opt/homebrew/bin/fish", "/usr/local/bin/fish", "/usr/bin/fish"], args: ["-l"] },
+  ];
+}
+
+/**
+ * Resolve the platform's shell profiles against an injected environment and file
+ * probe.
+ *
+ * Rules, all decided here (never by the renderer):
+ * - win32 offers PowerShell/Command Prompt/Git Bash/WSL in that order and its
+ *   default is PowerShell; the first profiled path that exists and is executable
+ *   wins, so an absent PowerShell 7 falls through to the inbox 5.1.
+ * - macOS/Linux default to the login shell `$SHELL` names, but only after it is
+ *   validated as an existing absolute executable; `SHELL` that fails that check
+ *   is ignored and the documented fallback is `zsh` (`/bin/zsh`). A `$SHELL`
+ *   outside the table is added to it under its own basename.
+ * - A profile this host cannot run is omitted and reported in `unavailable` with
+ *   every path that was probed, so a failure can name the executable it looked
+ *   for instead of silently opening some other shell.
+ * - The default is listed first, as VS Code documents its own list ("the first
+ *   profile is the default").
+ */
+export function resolveShellProfiles(input: {
+  platform?: NodeJS.Platform;
+  env: Record<string, string | undefined>;
+  probe: TerminalProfileProbe;
+}): TerminalProfileResolution {
+  const platform = input.platform ?? process.platform;
+  const candidates = platform === "win32" ? win32Candidates(input.env) : withLoginShell(posixCandidates(), input.env);
+  const defaultProfileId = platform === "win32" ? "powershell" : loginShellProfileId(input.env);
+  const profiles: TerminalShellProfile[] = [];
+  const unavailable: TerminalProfileResolution["unavailable"] = [];
+  for (const candidate of candidates) {
+    const program = candidate.paths.find((path) => input.probe.exists(path) && input.probe.isExecutable(path));
+    if (program === undefined) {
+      unavailable.push({ id: candidate.id, label: candidate.label, missing: [...candidate.paths] });
+      continue;
+    }
+    profiles.push({ id: candidate.id, label: candidate.label, source: candidate.source, program, args: [...candidate.args] });
+  }
+  // A default that is not installed is `null`, not a different shell: the caller
+  // then names the missing executable and lets the user pick another profile.
+  const resolvedDefault = profiles.some((profile) => profile.id === defaultProfileId) ? defaultProfileId : null;
+  // The default is listed first, as VS Code documents its own list.
+  const ordered =
+    resolvedDefault === null
+      ? profiles
+      : [profiles.find((profile) => profile.id === resolvedDefault)!, ...profiles.filter((profile) => profile.id !== resolvedDefault)];
+  return { platform, profiles: ordered, defaultProfileId: resolvedDefault, unavailable };
+}
+
+/**
+ * The id `$SHELL` selects on macOS/Linux, before it is known to be installed:
+ * the basename of an absolute, existing, executable `$SHELL`, else `zsh` (the
+ * documented fallback `/bin/zsh`). A non-absolute or missing `$SHELL` - a Git
+ * Bash `SHELL=/usr/bin/bash` typo is the same shape - never names a profile.
+ */
+function loginShellProfileId(env: Record<string, string | undefined>): string {
+  const shell = env["SHELL"];
+  if (shell !== undefined && posixPath.isAbsolute(shell)) return posixPath.basename(shell);
+  return "zsh";
+}
+
+/**
+ * Fold an absolute `$SHELL` into the table: it selects one of the table entries
+ * when it matches, and is added under its own basename when it does not (an
+ * `$SHELL` this table has never heard of is still the user's own login shell).
+ */
+function withLoginShell(candidates: ProfileCandidate[], env: Record<string, string | undefined>): ProfileCandidate[] {
+  const shell = env["SHELL"];
+  if (shell === undefined || !posixPath.isAbsolute(shell)) return candidates;
+  if (candidates.some((candidate) => candidate.paths.includes(shell))) return candidates;
+  return [...candidates, { id: posixPath.basename(shell), label: posixPath.basename(shell), source: shell, paths: [shell], args: ["-l"] }];
+}
+
+export type TerminalProfileSelection = { ok: true; profile: TerminalShellProfile } | { ok: false; error: string };
+
+/**
+ * Select one profile by the id a caller named. A known-but-uninstalled profile
+ * and an unknown one are both refused BY NAME, with the paths that were probed
+ * or the ids that are available, so nothing is silently replaced by another
+ * shell.
+ */
+export function resolveTerminalProfile(resolution: TerminalProfileResolution, profileId: unknown): TerminalProfileSelection {
+  if (typeof profileId !== "string" || profileId.trim().length === 0) {
+    return { ok: false, error: "invalid-payload: 终端 shell 配置标识必须是非空字符串" };
+  }
+  const id = profileId.trim();
+  const profile = resolution.profiles.find((candidate) => candidate.id === id);
+  if (profile) return { ok: true, profile };
+  const named = resolution.unavailable.find((candidate) => candidate.id === id);
+  if (named) {
+    return { ok: false, error: `terminal-profile-unavailable: 终端 shell 配置「${named.label}」在本机不可用：未找到 ${named.missing.join("、")}` };
+  }
+  const available = resolution.profiles.map((candidate) => candidate.id);
+  return {
+    ok: false,
+    error:
+      available.length === 0
+        ? `terminal-profile-unknown: 本机没有终端 shell 配置「${id}」，且未解析出任何可用配置`
+        : `terminal-profile-unknown: 本机没有终端 shell 配置「${id}」；可用：${available.join("、")}`,
   };
 }
 
