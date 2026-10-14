@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, normalize } from "node:path";
 import { readTaskRecordOnDisk } from "../host/task-store.js";
-import { isSafeTaskChildName, isTaskDirId } from "./task-provision.js";
+import { isSafeTaskChildName, isTaskDirId, normalizeTaskPath } from "./task-provision.js";
 import { listPersistedTasks, type PersistedTaskSummary } from "./task-inventory.js";
 import { createDiskTaskDirResolver } from "./task-resolver.js";
 
@@ -94,8 +94,14 @@ function verifyTask(root: string, task: IndexedTask): PersistedTaskSummary {
   if (!lstatSync(dir).isDirectory() || realpathSync(dir) !== join(realpathSync(root), task.dirId)) throw new Error("task directory moved or linked");
   if (!lstatSync(join(dir, "task.json")).isFile()) throw new Error("task record linked or invalid");
   const record = readTaskRecordOnDisk(dir);
+  // #82: the Host persists its spawn dir as `record.taskDir`, and production
+  // bootstraps that dir with `previewTaskPaths` (`<native root>/task-…`), so the
+  // record and `join(root, dirId)` can differ only in separators. Identity is
+  // compared through the canonical key (`normalizeTaskPath`, the same rule
+  // `listPersistedTasks` uses); a record naming another folder still differs and
+  // stays refused by name below.
   if (!record || record.taskId !== task.taskId || record.dirId !== task.dirId || record.createdAt !== task.createdAt ||
-      record.root !== root || record.taskDir !== dir) throw new Error("task record identity changed");
+      record.root !== root || normalizeTaskPath(record.taskDir) !== normalizeTaskPath(dir)) throw new Error("task record identity changed");
   return { taskId: record.taskId, name: record.name, branch: record.branch, repoCount: record.repos.length, updatedAt: record.updatedAt };
 }
 
