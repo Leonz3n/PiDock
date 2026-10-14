@@ -563,6 +563,46 @@ it("reopens an exited instance when a start records a fresh process identity", a
   }
 });
 
+it("hands the driver a canonical launch cwd while the plan keeps its own spelling", async () => {
+  // A workspace root is joined as `${taskDir}/${name}`, so the plan's cwd is the
+  // platform's display spelling and on win32 mixes `\` and `/`. The driver's
+  // launch contract is a canonical absolute path (`normalize(cwd) === cwd` in
+  // `parsePtyRequest`), so a start canonicalizes ONLY the value it hands the
+  // driver and never rewrites the plan or the registered record.
+  const taskDir = realpathSync(mkdtempSync(join(tmpdir(), "pidock-term-launch-cwd-")));
+  try {
+    const plan = planFor("task-launch-cwd", taskDir, "term-1", "sh");
+    let delivered: TerminalLaunch | undefined;
+    const driver: TerminalDriver = {
+      spawn: async (_identity, launch) => { delivered = launch; return { status: "started", process: { processId: 4500, processGroupId: 4500 } }; },
+      input: async () => {}, resize: async () => {},
+      stop: async (identity) => ({ ...identity, status: "tree-drained" }),
+      snapshot: () => ({ status: "running", process: { processId: 4500, processGroupId: 4500 } }),
+    };
+    const registry = new TaskTerminalRegistry("task-launch-cwd");
+    const sessions = new TaskTerminalSessions(registry, driver);
+    registry.register(plan);
+    expect(await sessions.start({ plan, sessionId: null })).toMatchObject({ ok: true });
+    expect(delivered!.cwd).toBe(normalize(plan.cwd));
+    expect(plan.cwd).toBe(`${taskDir.replace(/[\\/]+$/, "")}/work`);
+    expect(registry.get("term-1")!.cwd).toBe(plan.cwd);
+    if (process.platform === "win32") {
+      // The mixed-separator plan path is exactly what the launch contract would
+      // refuse, and the canonical form differs from it only in separators.
+      expect(normalize(plan.cwd)).not.toBe(plan.cwd);
+      expect(normalize(plan.cwd)).toBe(plan.cwd.replace(/\//g, "\\"));
+    } else {
+      // POSIX no-op, proven rather than argued: `joinRoot`'s path is already
+      // canonical - no `..`, no duplicate separator and no `\` to normalize - so
+      // the cwd handed to the driver is byte-identical to `plan.cwd`.
+      expect(normalize(plan.cwd)).toBe(plan.cwd);
+      expect(delivered!.cwd).toBe(plan.cwd);
+    }
+  } finally {
+    rmSync(taskDir, { recursive: true, force: true });
+  }
+});
+
 it("stops every session at once so a slow stop cannot turn the quit deadline into a false failure", { timeout: 15_000 }, async () => {
   // Quit finding: `stopAll` awaited one terminal after another, up to
   // grace+confirm each, while the quitting Host has a single 15s deadline - four
@@ -1105,6 +1145,39 @@ win32RealIt("frees a real win32 instance slot when a started terminal is stopped
     // live helper handle and hang the worker instead of failing.
     for (const identity of [...live, identityFor(MAX_TERMINAL_INSTANCES + 1)]) await f.driver.stop(identity).catch(() => undefined);
   }
+});
+
+win32RealIt("stops a real win32 terminal through the session layer and keeps the instance addressable again", { timeout: 90_000 }, async () => {
+  // The user-visible half: the whole chain (registry -> session -> driver) must
+  // really stop a win32 terminal, mark the instance exited, and leave the slot
+  // usable - not refuse because the platform has no process group.
+  const f = new Fixture("win32-session");
+  const shell = process.env.ComSpec ?? win32System32("cmd.exe");
+  const args = ["/c", `${win32System32("ping.exe")} -n 60 127.0.0.1 >nul`];
+  const { started } = await f.start("term-1", shell, args);
+  expect(started).toMatchObject({ ok: true });
+  const root = f.registry.get("term-1")!.processId!;
+  f.track(root);
+  // The recorded identity is the pid alone: no group is invented for a platform
+  // that has none.
+  expect(f.registry.get("term-1")).toMatchObject({ processId: root });
+  expect(f.registry.get("term-1")!.processGroupId).toBeUndefined();
+
+  const stopped = await f.sessions.stop("term-1", "user-request");
+  expect(stopped).toMatchObject({ ok: true });
+  if (!stopped.ok) return;
+  expect(stopped.instance.lifecycle).toBe("exited");
+  expect(stopped.instance.exitReason).toBe("user-request");
+  await until(() => !alive(root), 10_000, "stopped win32 shell to exit");
+  // A stop of an already-exited instance is idempotent, never a fake restart.
+  expect(await f.sessions.stop("term-1", "user-request")).toMatchObject({ ok: true });
+
+  // The instance is addressable again: a fresh terminal really starts and is
+  // really contained, instead of resolving against the stopped run.
+  const restarted = await f.restart("term-1", shell, args);
+  expect(restarted.started).toMatchObject({ ok: true });
+  expect(f.registry.get("term-1")!.lifecycle).toBe("running");
+  expect((await f.sessions.stop("term-1", "user-request")).ok).toBe(true);
 });
 
 win32RealIt("reaps the Host-owned helper when a real win32 terminal ends on its own", { timeout: 90_000 }, async () => {
