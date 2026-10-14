@@ -828,6 +828,36 @@ it("derives the descendant set from one process-table snapshot", () => {
   expect(descendantPids(table, 999)).toEqual([]);
 });
 
+it("refuses a descendant whose creation time says it predates the pid its ppid names", () => {
+  // #68's measured shape: our fresh root is handed a pid a long-dead process used
+  // to own, so the OS's never-rewritten `ppid` hangs that dead owner's whole
+  // still-living family (created 18 h earlier) off our root. Creation time is the
+  // evidence that refuses it, and a real child created after the root stays.
+  const root = 900, foreign = 700, foreignChild = 800, real = 950, realChild = 960, foreignGrandchild = 770;
+  const measured = [
+    { pid: root, ppid: 8, createdAt: 3_600_000 },
+    { pid: foreign, ppid: root, createdAt: 1_000 },
+    { pid: foreignChild, ppid: foreign, createdAt: 1_100 },
+    { pid: real, ppid: root, createdAt: 3_600_500 },
+  ];
+  expect(descendantPids(measured, root)).toEqual([real]);
+  // A refused candidate takes its own descendants with it, a kept one keeps its own.
+  const nested = [...measured, { pid: realChild, ppid: real, createdAt: 3_601_000 }, { pid: foreignGrandchild, ppid: foreignChild, createdAt: 1_200 }];
+  expect(descendantPids(nested, root)).toEqual([real, realChild]);
+  // A tie is not evidence: a child dated in the same millisecond as its parent stays.
+  const tied = [{ pid: root, ppid: 8, createdAt: 3_600_000 }, { pid: real, ppid: root, createdAt: 3_600_000 }];
+  expect(descendantPids(tied, root)).toEqual([real]);
+  // No creation-time evidence refuses nothing - the POSIX table and a win32 row the
+  // OS would not date walk exactly as they did before, so no real descendant can
+  // be hidden by this rule.
+  expect(descendantPids([{ pid: root, ppid: 8 }, { pid: foreign, ppid: root }, { pid: foreignChild, ppid: foreign }, { pid: real, ppid: root }], root))
+    .toEqual([foreign, foreignChild, real]);
+  // The root's own row is the first-level evidence: with the root already gone the
+  // walk has none, which is what keeps an unverifiable tree at the named `unknown`.
+  expect(descendantPids([{ pid: foreign, ppid: root, createdAt: 1_000 }, { pid: real, ppid: root, createdAt: 3_600_500 }], root))
+    .toEqual([foreign, real]);
+});
+
 function programDir(tag: string, names: string[]): string {
   const dir = mkdtempSync(join(tmpdir(), `pidock-programs-${tag}-`));
   for (const name of names) writeFileSync(join(dir, name), "", { mode: 0o755 });
@@ -1357,13 +1387,46 @@ win32It("stops a win32 terminal by terminating the Host-owned helper handle, onc
   expect(worker.killed).toBe(true);
 });
 
+win32It("does not adopt a recycled pid's foreign family when it stops a win32 terminal", async () => {
+  // #68, the measured shape: the root this Host spawned was handed a pid a dead
+  // process used to own, so the OS's historical `ppid` hung three still-living
+  // processes of ANOTHER application (dated 18 h earlier) off it. Today's walk waits
+  // on them, can never verify the drain, and the user's stop fails; creation time is
+  // what refuses them here, so the stop verifies the tree it really owns.
+  const hour = 3_600_000, started = Date.now(), root = 5600, child = 5601;
+  const foreign = [5700, 5701, 5702];
+  const alivePids = new Set([root, child, ...foreign]);
+  const worker = new HelperHandle(() => { for (const pid of [root, child]) alivePids.delete(pid); });
+  const driver = new TerminalPtyDriver({
+    workspaceId: "workspace-unit", runtime: resolvePtyRuntime, spawnWorker: () => worker, onOutput: () => {},
+    win32ProcessTable: () => [
+      { pid: root, ppid: 1, createdAt: started },
+      { pid: child, ppid: root, createdAt: started + 1000 },
+      { pid: foreign[0]!, ppid: root, createdAt: started - 18 * hour },
+      { pid: foreign[1]!, ppid: foreign[0]!, createdAt: started - 18 * hour },
+      { pid: foreign[2]!, ppid: foreign[1]!, createdAt: started - 18 * hour },
+    ],
+    win32ProcessAlive: (pid) => alivePids.has(pid), stopGraceMs: 50, stopConfirmMs: 50,
+  });
+  const starting = driver.spawn(unitIdentity, unitLaunch, () => {});
+  worker.reply({ status: "started", rootPid: root });
+  expect(await starting).toEqual({ status: "started", process: { processId: root } });
+  expect(await driver.stop(unitIdentity)).toEqual({ ...unitIdentity, status: "tree-drained" });
+  expect(worker.killed).toBe(true);
+  // The unrelated family is still running, and nothing waited on it.
+  expect(foreign.filter((pid) => alivePids.has(pid))).toEqual(foreign);
+});
+
 win32It("never claims a win32 stop while the tree survives the helper kill", async () => {
   // A helper the Host terminated, but a tree that is still there: the receipt
-  // stays the named `unknown` and the operation is retained for a later stop.
+  // stays the named `unknown` and the operation is retained for a later stop. Both
+  // rows are dated AFTER the root on purpose: the creation-time rule keeps a real
+  // descendant, so this refusal is not that rule refusing a survivor it should
+  // have kept.
   const worker = new HelperHandle();
   const driver = new TerminalPtyDriver({
     workspaceId: "workspace-unit", runtime: resolvePtyRuntime, spawnWorker: () => worker, onOutput: () => {},
-    win32ProcessTable: () => [{ pid: 5300, ppid: 1 }, { pid: 5301, ppid: 5300 }],
+    win32ProcessTable: () => [{ pid: 5300, ppid: 1, createdAt: 1_700_000_000_000 }, { pid: 5301, ppid: 5300, createdAt: 1_700_000_000_500 }],
     win32ProcessAlive: () => true, stopGraceMs: 50, stopConfirmMs: 50,
   });
   const starting = driver.spawn(unitIdentity, unitLaunch, () => {});

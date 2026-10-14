@@ -205,26 +205,47 @@ interface Operation {
 
 /**
  * Every pid whose parent chain reaches `rootPid` in one process-table snapshot.
- * Takes only the two fields the walk needs, so the same walk serves both the
- * POSIX table and the independent win32 parent-chain source.
+ * Takes only the fields the walk needs, so the same walk serves both the POSIX
+ * table and the independent win32 parent-chain source.
+ *
+ * `createdAt` (Unix epoch ms where the platform reports one) is creation-time
+ * evidence, and it is used only to REFUSE an edge - never to add one. On win32
+ * `ParentProcessId` is a snapshot taken at creation and never rewritten, so when
+ * our fresh root is handed a recycled pid the dead owner's still-living family
+ * reads as our own descendant chain (measured for #68: eight live processes of
+ * another application, created ~18 h earlier, adopted by a terminal root that
+ * had just started). A candidate whose creation time is strictly before the
+ * process its `ppid` names - the parent of a first-level candidate being the
+ * root itself - was therefore not created by that parent: the ppid is a recycled
+ * number and the candidate is foreign. A real descendant is created after its
+ * parent, so it is still named and a genuine leaked descendant is still caught;
+ * a tie is not evidence and is kept; a missing creation time (every POSIX row,
+ * and any win32 row the OS would not date) refuses nothing, so the darwin/linux
+ * walk and every undated table behave exactly as before. This rule can only ever
+ * shrink the attributed tree.
  */
-export function descendantPids(table: readonly { pid: number; ppid: number }[], rootPid: number): number[] {
+export function descendantPids(table: readonly { pid: number; ppid: number; createdAt?: number }[], rootPid: number): number[] {
+  const createdAt = new Map<number, number | undefined>();
   const children = new Map<number, number[]>();
   for (const row of table) {
+    createdAt.set(row.pid, row.createdAt);
     if (row.pid <= 1 || row.pid === rootPid) continue;
     const list = children.get(row.ppid);
     if (list) list.push(row.pid);
     else children.set(row.ppid, [row.pid]);
   }
   const found: number[] = [];
-  const queue = [...(children.get(rootPid) ?? [])];
-  const seen = new Set<number>(queue);
+  const seen = new Set<number>([rootPid]);
+  const queue = [rootPid];
   while (queue.length > 0) {
     const pid = queue.shift()!;
-    found.push(pid);
+    const parentCreatedAt = createdAt.get(pid);
     for (const child of children.get(pid) ?? []) {
       if (seen.has(child)) continue;
+      const childCreatedAt = createdAt.get(child);
+      if (parentCreatedAt !== undefined && childCreatedAt !== undefined && childCreatedAt < parentCreatedAt) continue;
       seen.add(child);
+      found.push(child);
       queue.push(child);
     }
   }
@@ -305,7 +326,9 @@ export function descendantPids(table: readonly { pid: number; ppid: number }[], 
  *   recycled, unlike the bare pid `taskkill /T` would trust. The tree the OS's
  *   fixed parent chain names is read from an independent bounded source
  *   (`readWin32ProcessTable`) and verified gone before the real `tree-drained` is
- *   reported; where that cannot be established (probe unavailable, a survivor, a
+ *   reported, with each descendant attributed only where the table's creation
+ *   times do not contradict the chain (a recycled pid cannot adopt a family that
+ *   already existed when the root started); where that cannot be established (probe unavailable, a survivor, a
  *   helper with no killable handle) the receipt stays the named `unknown`. The
  *   helper is reaped on both paths - a stop and an end the terminal reached on
  *   its own - because on win32 it does not follow its pty child, which would
@@ -710,7 +733,11 @@ export class TerminalPtyDriver implements TerminalDriver {
   }
 
   /** The win32 tree under one root: the root plus every descendant the OS's
-   * fixed parent chain links to it, or null when the probe is unavailable. */
+   * fixed parent chain links to it, or null when the probe is unavailable. The
+   * chain alone over-attributes on this platform - a recycled pid hands us the
+   * dead owner's family - so a candidate the table proves was created before the
+   * process its `ppid` names is refused (`descendantPids`), which can only ever
+   * remove a foreign pid and never hide a real descendant. */
   private win32Tree(rootPid: number | undefined): number[] | null {
     if (rootPid === undefined || rootPid <= 1) return null;
     const table = this.options.win32ProcessTable ? this.options.win32ProcessTable() : readWin32ProcessTable();
@@ -958,7 +985,11 @@ export class TerminalPtyDriver implements TerminalDriver {
    * The tree the OS's fixed parent chain names is read before the handle is
    * terminated and verified gone after, and only then is a real `tree-drained`
    * reported. A tree that cannot be named or verified stays the named `unknown`,
-   * so a stop is never claimed on evidence this platform does not have.
+   * so a stop is never claimed on evidence this platform does not have. The tree
+   * is narrower than the bare chain: a pid the chain links to us only through a
+   * recycled number - a process created before the parent its `ppid` names - is
+   * not this terminal's and is not adopted (`descendantPids`), so a foreign
+   * family cannot keep the drain unverified forever.
    */
   private async stopByHelper(operation: Operation, identity: TerminalIdentity): Promise<TerminalDriverReceipt> {
     const worker = this.killableHelper(operation);
