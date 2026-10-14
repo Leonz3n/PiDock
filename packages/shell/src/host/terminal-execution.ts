@@ -40,10 +40,14 @@ export type TerminalDriverReceipt = TerminalIdentity & (
   | { status: "not-started" }
   | { status: "unknown" }
 );
-/** The two OS handles a spawner observed for one live terminal. */
+/** The OS handles a spawner observed for one live terminal. `processGroupId` is
+ * absent where the platform exposes no process group to read or signal (win32:
+ * `readProcessPgid` returns null there by design and `kill(-pgid)` does not
+ * exist), so the pid is the whole identity this Host can name there - it is
+ * never back-filled with the pid, which would claim a group nobody observed. */
 export interface TerminalProcessIdentity {
   processId: number;
-  processGroupId: number;
+  processGroupId?: number;
 }
 /** OS boundary. PTY exit alone must never produce a tree-drained receipt.
  * Unknown spawn (including rejection) remains addressable by the supplied identity.

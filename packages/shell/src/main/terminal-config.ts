@@ -253,18 +253,21 @@ export class TaskTerminalRegistry {
   }
 
   /**
-   * Record the OS process identity the spawner observed. `processGroupId`
-   * defaults to the pid because a forkpty child leads its own group; a caller
-   * that observed a different group must pass it (and a mismatch is refused at
-   * stop time, never guessed).
+   * Record the OS process identity the spawner observed. `processGroupId` is
+   * recorded exactly when the spawner observed one: a forkpty child leads its own
+   * group, so a POSIX caller passes the group it read, and a platform that has no
+   * process group (win32) passes none and gets none recorded - it is NEVER
+   * defaulted to the pid, which would store a group nobody observed and make the
+   * record claim an ownership the platform cannot have. A mismatch is refused at
+   * stop time, never guessed.
    */
   markProcess(instanceId: string, input: { processId: unknown; processGroupId?: unknown; startedAt?: unknown }): TerminalInstanceRecord {
     const record = this.require(instanceId);
     if (!isPositiveInt(input.processId)) throw new Error("invalid-process: 终端进程号必须是正整数");
-    const processGroupId = input.processGroupId === undefined ? input.processId : input.processGroupId;
-    if (!isPositiveInt(processGroupId)) throw new Error("invalid-process: 终端进程组号必须是正整数");
+    if (input.processGroupId !== undefined && !isPositiveInt(input.processGroupId)) throw new Error("invalid-process: 终端进程组号必须是正整数");
     record.processId = input.processId;
-    record.processGroupId = processGroupId;
+    if (input.processGroupId === undefined) delete record.processGroupId;
+    else record.processGroupId = input.processGroupId;
     if (typeof input.startedAt === "string" && input.startedAt.trim().length > 0) record.startedAt = input.startedAt.trim();
     return this.copy(record);
   }
@@ -344,8 +347,15 @@ export class TaskTerminalRegistry {
     if (record.taskId !== this.taskId) {
       return { ok: false, error: `task-mismatch: 终端 ${instanceId} 属于任务 ${record.taskId}，不会停止其他任务的进程` };
     }
-    if (record.processId === undefined || record.processGroupId === undefined) {
-      return { ok: false, error: `unknown-process: 终端 ${instanceId} 尚未报告进程号与进程组号，无法安全停止` };
+    if (record.processId === undefined) {
+      return { ok: false, error: `unknown-process: 终端 ${instanceId} 尚未报告进程号，无法安全停止` };
+    }
+    // The group is the half of the identity a signal can be checked against. On a
+    // platform whose spawner reports none (win32: no process group exists) this
+    // refuses BY NAME instead of signalling a bare pid that may already name a
+    // recycled process.
+    if (record.processGroupId === undefined) {
+      return { ok: false, error: `unknown-process: 终端 ${instanceId} 没有进程组身份（本平台的 PTY 不提供进程组），仅凭进程号发送信号不安全，拒绝停止` };
     }
     return { ok: true, scope: { taskId: record.taskId, instanceId: record.instanceId, processId: record.processId, startedAt: record.startedAt } };
   }

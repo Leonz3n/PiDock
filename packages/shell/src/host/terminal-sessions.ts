@@ -242,7 +242,10 @@ export class TaskTerminalSessions {
    * Stop exactly this instance's session. Fail-closed order: the registry must
    * have a recorded pid + pgid, this Host must hold the matching live session,
    * and the driver's observed identity must equal the recorded one - only then
-   * is any signal sent. A driver `unknown` keeps the instance running.
+   * is any signal sent. A driver `unknown` keeps the instance running. On a
+   * platform whose spawner records no process group (win32) the registry refuses
+   * by name before any signal is considered: `stop` there is a named degradation,
+   * never a tree this Host pretends to have ended.
    */
   async stop(instanceId: string, reason: string): Promise<TerminalSessionResult<{ instance: TerminalInstanceRecord }>> {
     const record = this.registry.get(instanceId);

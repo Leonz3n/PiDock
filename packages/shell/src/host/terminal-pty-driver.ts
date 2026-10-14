@@ -49,9 +49,38 @@ export function resolvePtyRuntime(): PtyRuntime {
  * residual warning instead of only failing every start with a per-attempt
  * `terminal-not-started` error. Whether the prebuild itself is prepared is
  * checked per spawn by the worker's preflight, not here.
+ *
+ * This is a claim about STARTING a terminal and nothing more: win32-x64 is
+ * admitted because a real ConPTY terminal really starts there (#55), which is
+ * why the flag is true on a platform whose ownership/stop stays degraded by name
+ * (`ptyProcessGroupOwnershipAvailable`, and `stop`). The flag never promised
+ * containment and is not stretched into one.
  */
 export function ptySpawnerAvailable(): boolean {
   return nodePtyPlatformAdmitted();
+}
+
+/**
+ * Whether this platform exposes the POSIX process-group ownership every
+ * containment path here is expressed in: a readable per-pid `pgid`
+ * (`readProcessPgid`) plus a group signal (`kill(-pgid)`).
+ *
+ * - What win32 CAN do (measured under #55): start a real ConPTY terminal - the
+ *   win32-x64 prebuild is pinned by the preflight, the worker spawns a real
+ *   process with a real window size, and `ptySpawnerAvailable()` is true there.
+ * - What win32 CANNOT do: name, re-verify or signal a process group. There is no
+ *   group to read (`readProcessPgid` returns null there by design) and no
+ *   `kill(-pgid)`, and a bare pid may name a recycled process by the time a
+ *   signal could be sent - the group re-read is the only identity check this
+ *   driver has before signalling. So on win32: `spawn` records the pid alone and
+ *   no group (`processGroupId` stays absent - never the pid, never 0), every
+ *   group path is skipped here BY NAME through this one predicate, and `stop`
+ *   reports `unknown` instead of claiming a tree it cannot contain. Ownership and
+ *   stop on win32 are a NAMED degradation; a real win32 tree stop is not
+ *   implemented (see the class comment).
+ */
+export function ptyProcessGroupOwnershipAvailable(): boolean {
+  return process.platform !== "win32";
 }
 
 /** Poll cadence while proving a PTY group and its observed descendants drained. */
@@ -172,13 +201,15 @@ export function descendantPids(table: readonly ProcessTableRow[], rootPid: numbe
  *   the explicit program/argv/cwd/env/cols/rows. The native addon lives in the
  *   forked helper, never in the Host process. Output is forwarded to the caller's
  *   bounded sink; the driver itself keeps no history.
- * - The recorded identity is the pty child's pid plus its process-group id. A
- *   forkpty child is a session/group leader, so this driver reads the OS pgid
- *   and refuses to treat the group as its own unless `pgid === pid`. That check
- *   is re-read before every group signal, so a recycled pid cannot make this
- *   driver signal a foreign group through the group path. Individual members are
- *   signalled with the group they were captured in as their identity: a pid that
- *   is no longer in that group (recycled, or moved) is left alone, and the
+ * - The recorded identity is the pty child's pid plus, where the platform
+ *   exposes one, its process-group id. A forkpty child is a session/group leader,
+ *   so this driver reads the OS pgid and refuses to treat the group as its own
+ *   unless `pgid === pid`. That check is re-read before every group signal, so a
+ *   recycled pid cannot make this driver signal a foreign group through the group
+ *   path. Where there is no group to read (win32) the pid alone is recorded, no
+ *   group is invented and the group paths are skipped by name. Individual members
+ *   are signalled with the group they were captured in as their identity: a pid
+ *   that is no longer in that group (recycled, or moved) is left alone, and the
  *   unproven drain is reported as `unknown` instead.
  * - `stop` signals only the recorded group (`-pgid`), then reclaims the
  *   descendant tree that was observed *before* the signal (an interactive shell
@@ -227,8 +258,13 @@ export function descendantPids(table: readonly ProcessTableRow[], rootPid: numbe
  * - There is no `kill`/`destroy` request to the helper: termination is a Host
  *   signal to the group it recorded. The helper is reaped after the group
  *   drained so a stopped terminal leaves no helper behind.
- * - Windows process-group signalling is UNTESTED (`ps` backends are unavailable);
- *   the worker refuses non-darwin-arm64 prebuilds via its preflight.
+ * - win32 is admitted for STARTING a terminal (ConPTY, #55) and degraded for
+ *   owning one: no process group exists to read or signal, so no group identity
+ *   is recorded, `drained` can prove nothing and `stop` reports `unknown` instead
+ *   of a stopped tree (see `ptyProcessGroupOwnershipAvailable`). A real win32 tree
+ *   stop - the platform's own tree tooling plus a drain probe to verify it with -
+ *   is NOT implemented; until it is, a win32 terminal cannot be stopped by this
+ *   Host and that is reported, not hidden.
  */
 export class TerminalPtyDriver implements TerminalDriver {
   private readonly operations = new Map<string, Operation>();
@@ -348,8 +384,8 @@ export class TerminalPtyDriver implements TerminalDriver {
   private result(operation: Operation): { status: Operation["status"]; process?: TerminalProcessIdentity } {
     return {
       status: operation.status,
-      ...(operation.rootPid !== undefined && operation.processGroupId !== undefined
-        ? { process: { processId: operation.rootPid, processGroupId: operation.processGroupId } }
+      ...(operation.rootPid !== undefined
+        ? { process: { processId: operation.rootPid, ...(operation.processGroupId !== undefined ? { processGroupId: operation.processGroupId } : {}) } }
         : {}),
     };
   }
@@ -431,14 +467,18 @@ export class TerminalPtyDriver implements TerminalDriver {
     if (!reply || operation.fenced) return this.result(operation);
     if (reply.status === "started" && reply.rootPid !== undefined) {
       operation.rootPid = reply.rootPid;
-      operation.processGroupId = reply.rootPid;
       // A forkpty child leads its own group. If the OS disagrees the group is
       // not ours to signal, so the spawn stays unknown and the single child we
       // did create is terminated directly instead of through a guessed group.
-      if (readProcessPgid(reply.rootPid) !== reply.rootPid) {
-        this.unknown(operation);
-        try { process.kill(reply.rootPid, "SIGKILL"); } catch { /* already gone */ }
-        return this.result(operation);
+      // Where the platform has no group at all (win32) the check is not skipped
+      // but inapplicable: the pid is recorded, a group is not.
+      if (ptyProcessGroupOwnershipAvailable()) {
+        operation.processGroupId = reply.rootPid;
+        if (readProcessPgid(reply.rootPid) !== reply.rootPid) {
+          this.unknown(operation);
+          try { process.kill(reply.rootPid, "SIGKILL"); } catch { /* already gone */ }
+          return this.result(operation);
+        }
       }
       operation.status = "started";
       this.syncObserver();
@@ -632,6 +672,9 @@ export class TerminalPtyDriver implements TerminalDriver {
 
   private signalGroup(operation: Operation, kind: NodeJS.Signals): void {
     const rootPid = operation.rootPid, pgid = operation.processGroupId;
+    // A group signal is `kill(-pgid)`, which does not exist on win32: named as
+    // one path so no caller can reach it with a group this platform cannot have.
+    if (!ptyProcessGroupOwnershipAvailable()) return;
     if (rootPid === undefined || pgid === undefined || pgid <= 1 || rootPid <= 1) return;
     // Re-read the identity immediately before the signal: a pid that no longer
     // leads exactly this group is not ours to signal.
@@ -663,8 +706,15 @@ export class TerminalPtyDriver implements TerminalDriver {
     }
   }
 
-  /** Positive evidence: the recorded group and the captured subtree are gone. */
+  /** Positive evidence: the recorded group and the captured subtree are gone.
+   * On win32 there is no recorded group, so the group half of the claim cannot be
+   * made at all: no drain is provable there and every end receipt is the
+   * documented `unknown` of an unavailable probe, never a stopped tree. */
   private drained(operation: Operation, captured: readonly number[]): boolean | null {
+    // win32 has no recorded group, so the group half of the claim cannot be made
+    // there at all: no drain is provable and every end receipt is the documented
+    // `unknown` of an unavailable probe, never a stopped tree.
+    if (!ptyProcessGroupOwnershipAvailable()) return null;
     const rootPid = operation.rootPid;
     if (rootPid === undefined || operation.processGroupId === undefined) return null;
     // A saturated observation set cannot prove the tree ended: fail closed.
@@ -715,6 +765,11 @@ export class TerminalPtyDriver implements TerminalDriver {
   async stop(identity: TerminalIdentity): Promise<TerminalDriverReceipt> {
     const key = operationKey(identity), operation = this.operations.get(key);
     if (!operation || operation.status === "not-started") return { ...identity, status: operation ? "not-started" : "unknown" };
+    // win32: there is no process group to signal and no re-read that could prove a
+    // bare pid is still this terminal's before a signal, so NOTHING is signalled
+    // and no stop is claimed. The caller gets `unknown`, which its own layer names
+    // as `terminal-termination-unconfirmed`.
+    if (!ptyProcessGroupOwnershipAvailable()) return { ...identity, status: "unknown" };
     const rootPid = operation.rootPid, pgid = operation.processGroupId;
     if (rootPid === undefined || pgid === undefined || rootPid <= 1 || pgid <= 1) return { ...identity, status: "unknown" };
     const identityAlive = readProcessPgid(rootPid) === pgid;
@@ -771,8 +826,8 @@ export class TerminalPtyDriver implements TerminalDriver {
     const operation = this.operations.get(operationKey(identity));
     return {
       status: operation?.status === "started" && !operation.fenced ? "running" as const : "unknown" as const,
-      ...(operation?.rootPid !== undefined && operation.processGroupId !== undefined
-        ? { process: { processId: operation.rootPid, processGroupId: operation.processGroupId } }
+      ...(operation?.rootPid !== undefined
+        ? { process: { processId: operation.rootPid, ...(operation.processGroupId !== undefined ? { processGroupId: operation.processGroupId } : {}) } }
         : {}),
     };
   }
