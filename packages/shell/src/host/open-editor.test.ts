@@ -332,8 +332,18 @@ describe("#15 box 28 external editor launch (real process)", () => {
 
     const cases: { editor: { program: string; args?: string[] }; expected: string }[] = [
       { editor: { program: join(f.home, "missing-editor") }, expected: "editor-program-not-found" },
-      { editor: { program: f.shimPath, args: [] }, expected: "editor-program-not-executable" },
-      { editor: { program: notExecutable }, expected: "editor-program-not-executable" },
+      // win32 (#57): the shipped probe is existence-only there (`accessSync(program, F_OK)`,
+      // main/external-editor.ts:197), so both regular files below ARE executable and cannot be
+      // refused as not-executable - and they must not reach the launch loop either, because a
+      // passing probe would really spawn the .cjs shim. Observed on win32 before this change: the
+      // 0o644 file came back as `editor-spawn-failed: spawn EFTYPE`, i.e. the OS error reached the
+      // user instead of the named refusal. The directory entry below still reaches the same
+      // `editor-program-not-executable` branch on every platform; the X_OK dimension is unobserved
+      // on win32, so the platform's real criterion is pinned after the loop instead.
+      ...(process.platform === "win32" ? [] : [
+        { editor: { program: f.shimPath, args: [] }, expected: "editor-program-not-executable" },
+        { editor: { program: notExecutable }, expected: "editor-program-not-executable" },
+      ]),
       { editor: { program: f.home }, expected: "editor-program-not-executable" },
       { editor: { program: "relative-editor" }, expected: "editor-program-invalid" },
     ];
@@ -350,6 +360,13 @@ describe("#15 box 28 external editor launch (real process)", () => {
       // The rule layer probes the real filesystem for these instead of trusting
       // a payload: the named refusal is what the disk says.
       expect(probeEditorProgram(entry.editor.program)).not.toBe("executable");
+    }
+    if (process.platform === "win32") {
+      // The win32 rule the shipped probe really applies: an existing regular file IS executable, so
+      // the two files the POSIX entries above refuse are accepted here. Probed only - really
+      // launching a file program would take this case down the spawn path, which is not its subject.
+      expect(probeEditorProgram(f.shimPath)).toBe("executable");
+      expect(probeEditorProgram(notExecutable)).toBe("executable");
     }
     // Nothing was spawned for any refusal, and no refusal wrote the workspace.
     expect(inner.calls).toEqual([]);

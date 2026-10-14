@@ -319,7 +319,12 @@ describe("#15 box 28 the editor setting is reachable through the app's own save 
     const cases: { request: Record<string, unknown>; name: string }[] = [
       { request: { op: "save", program: "vim" }, name: "editor-program-invalid" },
       { request: { op: "save", program: "/usr/../etc/passwd" }, name: "editor-program-invalid" },
-      { request: { op: "save", program: route.notExecutablePath }, name: "editor-program-not-executable" },
+      // win32 (#57): the save path's own probe is existence-only there (`accessSync(program, F_OK)`,
+      // main/external-editor.ts:197), so this 0o644 regular file IS executable and the named refusal
+      // cannot be produced for it (observed: win32 saves it instead). The directory entry below
+      // reaches the same `editor-program-not-executable` branch on every platform; the X_OK dimension
+      // is unobserved on win32.
+      ...(process.platform === "win32" ? [] : [{ request: { op: "save", program: route.notExecutablePath }, name: "editor-program-not-executable" }]),
       { request: { op: "save", program: route.bundlePath }, name: "editor-program-not-executable" },
       { request: { op: "save", program: join(route.home, "no-such-editor") }, name: "editor-program-not-found" },
       { request: { op: "save", program: NODE, args: [1] }, name: "editor-settings-invalid" },
