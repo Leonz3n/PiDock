@@ -574,9 +574,12 @@ describe("[UI 对齐] S8d 运行 panel (real Host bindings and status)", () => {
     // is gone: the panel no longer says this task's control is revoked.
     expect(screen.getByTestId("service-owner-rebind")).not.toHaveTextContent("该任务的启停通道已被撤销");
     // The re-bind replaced ownership only: it never asks main to start or stop
-    // a process, and the panel re-reads the Host's own status instead.
+    // a process, and the panel re-reads the Host's own status instead. That
+    // re-read is the `revision`-keyed effect of `RunTool`
+    // (`DesktopToolDock.tsx`), which `onRebound` bumps after the confirmation,
+    // so it completes on a later tick: same predicate, same threshold, awaited.
     expect(fixture.serviceCatalogOp.mock.calls.filter(([entry]) => entry["op"] === "runTaskService")).toHaveLength(1);
-    expect(fixture.taskOp.mock.calls.filter(([, op]) => op === "task/serviceStatus").length).toBeGreaterThan(1);
+    await waitFor(() => expect(fixture.taskOp.mock.calls.filter(([, op]) => op === "task/serviceStatus").length).toBeGreaterThan(1));
     fireEvent.click(screen.getByRole("button", { name: "关闭" }));
     expect(screen.queryByTestId("service-owner-rebind")).toBeNull();
   });
