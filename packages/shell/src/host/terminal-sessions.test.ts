@@ -14,9 +14,15 @@
  * then terminates the stray, so a containment failure fails the test instead of
  * outliving the run.
  *
- * Environment: Darwin arm64 with node-pty 1.1.0's `spawn-helper` prepared
- * (`pnpm --filter @pidock/shell prepare:pty:darwin`). On any other host the
- * real-process tests skip: the preflight only ships darwin-arm64 binaries.
+ * Environment: two real-process gates. The POSIX group-ownership suite
+ * (`realIt`) needs Darwin arm64 with node-pty 1.1.0's `spawn-helper` prepared
+ * (`pnpm --filter @pidock/shell prepare:pty:darwin`); its `descendantPids` path
+ * reads a POSIX process table, so it skips everywhere else - the `supported`
+ * note below says why it stays POSIX-only even though the product now admits
+ * win32-x64. The win32 stop/reap suite (`win32RealIt`) runs where
+ * `readWin32ProcessTable` works and the pinned ConPTY prebuild verifies
+ * (`inspectNodePtyPrebuild().ready`), i.e. on a win32-x64 host - those tests
+ * drive a REAL ConPTY terminal, not a mock.
  */
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
@@ -30,8 +36,10 @@ import { MAX_TERMINAL_INSTANCES, TaskTerminalRegistry, planTerminal, type Termin
 import { workspaceRoots } from "../main/workspace-files.js";
 import { inspectNodePtyPrebuild, prepareNodePtyPrebuild } from "./node-pty-preflight.js";
 import { MAX_PTY_ENVELOPE_BYTES } from "./node-pty-protocol.js";
+import { memoryTaskStore } from "./task-host.js";
 import { descendantPids, PTY_INPUT_BUDGET_ERROR, ptyProcessGroupOwnershipAvailable, ptySpawnerAvailable, resolvePtyRuntime, TerminalPtyDriver, workerEntryUrl, type PtyHelper } from "./terminal-pty-driver.js";
 import { readWin32ProcessTable, win32ProcessAlive } from "./win32-process-probe.js";
+import { TaskWorkspaceFiles } from "./workspace-files.js";
 import type { ProcessTableRow } from "./service-ownership.js";
 import type { TerminalDriver, TerminalDriverReceipt, TerminalLaunch } from "./terminal-execution.js";
 import { resolveProgram, TaskTerminalSessions } from "./terminal-sessions.js";
@@ -1202,6 +1210,78 @@ win32RealIt("reaps the Host-owned helper when a real win32 terminal ends on its 
   const fresh = await f.driver.spawn(identity, win32Launch(["/c", "exit 0"]), () => {});
   expect(fresh.status).toBe("started");
   f.track(fresh.process?.processId);
+});
+
+win32RealIt("starts a real ConPTY terminal from the Host's own task record through plan, session and driver", { timeout: 90_000 }, async () => {
+  // The residual gap the two-axis review named (spec check 2): the win32 tests
+  // above build their plan with this file's `planFor` helper. This one climbs one
+  // step up the real path - a task record in the store, read by the Host's own
+  // `TaskWorkspaceFiles` (exactly the `roots` `host.ts` hands to `planTerminal`),
+  // whose `joinRoot` is what produces the mixed-separator `plan.cwd` #61 had to
+  // canonicalise. Nothing is mocked: the plan really starts a ConPTY terminal and
+  // the stop really contains it.
+  const f = new Fixture("win32-host-plan");
+  const shell = process.env.ComSpec ?? win32System32("cmd.exe");
+  const args = ["/c", `${win32System32("ping.exe")} -n 60 127.0.0.1 >nul`];
+  mkdirSync(join(f.taskDir, "work"), { recursive: true });
+  const store = memoryTaskStore();
+  store.writeTask(f.taskDir, {
+    taskId: f.taskId,
+    name: "host-plan",
+    dirId: f.taskId,
+    branch: "work/host-plan",
+    root: f.taskDir,
+    taskDir: f.taskDir,
+    remoteBranch: "main",
+    baseCommit: "base-sha",
+    repos: ["work"],
+    createdAt: "2026-10-14T00:00:00.000Z",
+    updatedAt: "2026-10-14T00:00:00.000Z",
+  });
+  const files = new TaskWorkspaceFiles(f.taskId, f.taskDir, store);
+  const planned = planTerminal({
+    roots: files.roots(),
+    taskId: f.taskId,
+    taskDir: f.taskDir,
+    rootId: "work",
+    program: shell,
+    args,
+    layers: {
+      repoDefaults: [
+        { key: "PATH", value: `${process.env.SystemRoot ?? "C:\\Windows"}\\System32`, secret: false },
+        { key: "TERM", value: "xterm-256color", secret: false },
+      ],
+      shared: [], privateEntries: [], task: [],
+    },
+    owner: { taskId: f.taskId, sessionId: null, label: "用户显式操作" },
+    instanceId: "term-1",
+  });
+  expect(planned.ok, planned.ok ? "" : planned.error).toBe(true);
+  if (!planned.ok) return;
+  // The Host's own producer really yields the display spelling (`joinRoot`'s `/`),
+  // which on win32 is NOT the driver's canonical cwd contract - so this test fails
+  // on the pre-#61 code for the same real reason the product path did.
+  expect(planned.plan.cwd).toBe(`${f.taskDir.replace(/[\\/]+$/, "")}/work`);
+  expect(normalize(planned.plan.cwd)).not.toBe(planned.plan.cwd);
+  f.registry.register(planned.plan);
+  const started = await f.sessions.start({ plan: planned.plan, sessionId: null });
+  expect(started).toMatchObject({ ok: true });
+  const root = f.registry.get("term-1")!.processId!;
+  f.track(root);
+  // A real process, not a recorded intent.
+  expect(root).toBeGreaterThan(1);
+  expect(alive(root)).toBe(true);
+  // The registered record keeps the plan's own spelling (only the launch cwd was
+  // canonicalised, the #61 fix) and no process group is invented on win32.
+  expect(f.registry.get("term-1")).toMatchObject({ cwd: planned.plan.cwd, processId: root });
+  expect(f.registry.get("term-1")!.processGroupId).toBeUndefined();
+  // Honest stop: the session layer reports only what the helper-handle stop
+  // proved, and the real process is gone afterwards.
+  const stopped = await f.sessions.stop("term-1", "user-request");
+  expect(stopped).toMatchObject({ ok: true });
+  if (!stopped.ok) return;
+  expect(stopped.instance.lifecycle).toBe("exited");
+  await until(() => !alive(root), 15_000, "host-plan win32 terminal to exit");
 });
 
 it("forgets a not-started spawn so the same identity really starts afterwards", async () => {
