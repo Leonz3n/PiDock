@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { accessSync, constants, statSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, normalize } from "node:path";
 import type { TaskTerminalRegistry, TerminalInstanceRecord, TerminalPlan } from "../main/terminal-config.js";
 import { MAX_PTY_ENVELOPE_BYTES, operationKey } from "./node-pty-protocol.js";
 import { PTY_INPUT_BUDGET_ERROR, ptyProcessGroupOwnershipAvailable } from "./terminal-pty-driver.js";
@@ -208,7 +208,14 @@ export class TaskTerminalSessions {
     const launch: TerminalLaunch = {
       program: resolveProgram(input.plan.program, input.plan.env),
       args: [...input.plan.args],
-      cwd: input.plan.cwd,
+      // The plan's cwd keeps the platform's own display spelling - the roots are
+      // joined as `${taskDir}/${name}`, so on win32 the plan path mixes `\` and
+      // `/` - while the driver's launch contract is a canonical absolute path
+      // (`normalize(cwd) === cwd`). Canonicalize ONLY the value handed to the
+      // driver: the plan is never rewritten, so what the panel shows and what
+      // the record carries stay exactly as planned. On POSIX the joined path is
+      // already canonical, so this is byte-identical there.
+      cwd: normalize(input.plan.cwd),
       env: { ...input.plan.env },
       envRevision: revisionOf(input.plan),
       cols: input.plan.cols,
