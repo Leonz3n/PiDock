@@ -48,6 +48,7 @@ import type {
   TerminalHistoryEntryView,
   TerminalPlanRequest,
   TerminalPlanView,
+  TerminalProfilesView,
   TerminalStateView,
   WorkspaceBrowserRequest,
   WorkspaceBrowserView,
@@ -374,6 +375,12 @@ export interface HostAdapter {
   planTerminal(taskId: string, request: TerminalPlanRequest): Promise<TerminalPlanView>;
   controlTerminal(taskId: string, request: TerminalControlRequest): Promise<TerminalControlResultView>;
   terminalState(taskId: string): Promise<TerminalStateView>;
+  /**
+   * [PiDock 10] (#85) the shell profiles main resolved for this machine: which
+   * shells may be opened, which one is the platform default, and what is missing
+   * (named by executable). The renderer names one of these ids and never a shell.
+   */
+  terminalProfiles(taskId: string): Promise<TerminalProfilesView>;
   terminalHistory(taskId: string, instanceId: string, limit?: number): Promise<TerminalHistoryEntryView[]>;
   getSchedules(): Promise<Schedule[]>;
   setScheduleEnabled(scheduleId: string, enabled: boolean): Promise<void>;

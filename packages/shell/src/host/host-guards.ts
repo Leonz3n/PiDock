@@ -1294,13 +1294,31 @@ export function validateHostTaskOp(
     }
     return { ok: true };
   }
+  // [PiDock 10] (#85) the platform shell profiles. A read of what main resolved
+  // on this machine (ids, programs, argv, the default and what is missing); it
+  // takes no caller input at all, so no caller can steer the table.
+  if (op === "task/terminalProfiles") {
+    if (payload !== undefined && !isRecord(payload)) {
+      return { ok: false, error: "invalid-payload: task/terminalProfiles payload must be an object" };
+    }
+    return { ok: true };
+  }
   if (op === "task/planTerminal") {
     if (!isRecord(payload)) return { ok: false, error: "invalid-payload: task/planTerminal requires a payload object" };
     const instanceId = payload["instanceId"];
     if (typeof instanceId !== "string" || instanceId.trim().length === 0) {
       return { ok: false, error: "invalid-payload: task/planTerminal.instanceId must be a non-empty string" };
     }
-    if (typeof payload["program"] !== "string") {
+    // [PiDock 10] (#85) a plan names a shell PROFILE which main resolves, or the
+    // explicit program/args channel #7 defined; neither is refused...
+    const profileId = payload["profileId"];
+    if (profileId !== undefined && (typeof profileId !== "string" || profileId.trim().length === 0)) {
+      return { ok: false, error: "invalid-payload: task/planTerminal.profileId must be a non-empty string" };
+    }
+    if (payload["program"] === undefined && profileId === undefined) {
+      return { ok: false, error: "invalid-payload: task/planTerminal requires profileId or program" };
+    }
+    if (payload["program"] !== undefined && typeof payload["program"] !== "string") {
       return { ok: false, error: "invalid-payload: task/planTerminal.program must be a string" };
     }
     const terminalLayers = payload["layers"];
@@ -1356,7 +1374,17 @@ export function validateHostTaskOp(
       return { ok: true };
     }
     if (action === "start") {
-      if (typeof payload["program"] !== "string") {
+      // [PiDock 10] (#85) a start names a shell PROFILE main resolves (the
+      // renderer never names a shell) or the explicit program/args channel #7
+      // defined; one of the two is required.
+      const startProfileId = payload["profileId"];
+      if (startProfileId !== undefined && (typeof startProfileId !== "string" || startProfileId.trim().length === 0)) {
+        return { ok: false, error: "invalid-payload: task/terminalControl.profileId must be a non-empty string when starting" };
+      }
+      if (payload["program"] === undefined && startProfileId === undefined) {
+        return { ok: false, error: "invalid-payload: task/terminalControl requires profileId or program when starting" };
+      }
+      if (payload["program"] !== undefined && typeof payload["program"] !== "string") {
         return { ok: false, error: "invalid-payload: task/terminalControl.program must be a string when starting" };
       }
       if (!isNonEmptyRootId(payload["rootId"])) {

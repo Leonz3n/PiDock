@@ -56,6 +56,7 @@ import type {
   TerminalControlResultView,
   TerminalPlanRequest,
   TerminalPlanView,
+  TerminalProfilesView,
   TerminalStateView,
   WorkspaceBrowserRequest,
   WorkspaceBrowserView,
@@ -128,6 +129,12 @@ type HostState = {
   controlTerminal: (taskId: string, request: TerminalControlRequest) => Promise<TerminalControlResultView>;
   /** [PiDock 10] (#15) this task's terminal instances and their real process state. */
   terminalState: (taskId: string) => Promise<TerminalStateView>;
+  /**
+   * [PiDock 10] (#85) the shell profiles main resolved for this machine (the
+   * default first). The renderer names one of these ids when it opens a
+   * terminal; it never names a shell itself.
+   */
+  terminalProfiles: (taskId: string) => Promise<TerminalProfilesView>;
   setScheduleEnabled: (scheduleId: string, enabled: boolean) => Promise<void>;
   runScheduleNow: (scheduleId: string) => Promise<ScheduledRun>;
   setCapabilityEnabled: (capabilityId: string, enabled: boolean) => Promise<void>;
@@ -331,6 +338,7 @@ export const useHostStore = create<HostState>((set, get) => ({
   planTerminal: async (taskId, request) => get().adapter.planTerminal(taskId, request),
   controlTerminal: async (taskId, request) => get().adapter.controlTerminal(taskId, request),
   terminalState: async (taskId) => get().adapter.terminalState(taskId),
+  terminalProfiles: async (taskId) => get().adapter.terminalProfiles(taskId),
 
   protocolBinding: async (taskId) => get().adapter.protocolBinding(taskId),
 

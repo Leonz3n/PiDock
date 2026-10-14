@@ -31,17 +31,20 @@ import {
   fileRootsThroughShell,
   planTerminalThroughShell,
   terminalHistoryThroughShell,
+  terminalProfilesThroughShell,
   terminalStateThroughShell,
   type ShellTaskOpResult,
 } from "./shellBridge";
 import {
   terminalHistoryFromHost,
   terminalPlanFromHost,
+  terminalProfilesFromHost,
   terminalStateFromHost,
   workspaceRootsFromHost,
   type TerminalHistoryEntryView,
   type TerminalInstanceView,
   type TerminalPlanView,
+  type TerminalProfilesView,
   type TerminalStateView,
   type WorkspaceRootView,
 } from "./workspaceFiles";
@@ -106,13 +109,29 @@ export async function readTerminalHistory(input: {
   return { ok: true, value: parsed };
 }
 
+/**
+ * [PiDock 10] (#85) the shell profiles main resolved for this machine.
+ *
+ * This is the call that replaced the panel's hardcoded `bash -l`: the renderer
+ * asks which shells may be opened and which one is the platform default, and
+ * then names one of the returned ids. A Host that cannot resolve anything answers
+ * with the executables it probed, and that refusal is shown verbatim.
+ */
+export async function readTerminalProfiles(taskId: string): Promise<TerminalRead<TerminalProfilesView>> {
+  const result = await terminalProfilesThroughShell({ taskId });
+  if (!result.ok) return { ok: false, error: terminalRefusalText(result.error, "终端 shell 配置读取失败") };
+  const parsed = terminalProfilesFromHost(result.payload);
+  if (!parsed) return { ok: false, error: "Host 终端 shell 配置响应无法解析" };
+  return { ok: true, value: parsed };
+}
+
 /** Plan one terminal for a selected root: the cwd, masked env rows and owner the user sees before starting. */
 export async function planTerminalForRoot(input: {
   taskId: string;
   instanceId: string;
   rootId: string;
-  program: string;
-  args?: string[];
+  /** The shell profile main resolves; the panel never names a shell itself. */
+  profileId: string;
   /** The caller's own label; defaults to the human takeover label the start uses. */
   label?: string;
 }): Promise<TerminalRead<TerminalPlanView>> {
@@ -120,8 +139,7 @@ export async function planTerminalForRoot(input: {
     taskId: input.taskId,
     instanceId: input.instanceId,
     rootId: input.rootId,
-    program: input.program,
-    ...(input.args !== undefined ? { args: input.args } : {}),
+    profileId: input.profileId,
     label: input.label ?? TERMINAL_HUMAN_LABEL,
   });
   if (!result.ok) return { ok: false, error: terminalRefusalText(result.error, "终端计划失败") };
@@ -135,16 +153,15 @@ export async function startTerminal(input: {
   taskId: string;
   instanceId: string;
   rootId: string;
-  program: string;
-  args?: string[];
+  /** The shell profile main resolves for this start. */
+  profileId: string;
 }): Promise<TerminalAck> {
   const result = await controlTerminalThroughShell({
     taskId: input.taskId,
     instanceId: input.instanceId,
     action: "start",
     rootId: input.rootId,
-    program: input.program,
-    ...(input.args !== undefined ? { args: input.args } : {}),
+    profileId: input.profileId,
     label: TERMINAL_HUMAN_LABEL,
   });
   return ack(result, "终端启动失败");

@@ -14,6 +14,7 @@ import {
   planTerminalThroughShell,
   protocolStateThroughShell,
   serviceLogThroughShell,
+  terminalProfilesThroughShell,
   terminalStateThroughShell,
 } from "../data/shellBridge";
 import { protocolBindingFromHost } from "../data/protocolBinding";
@@ -52,9 +53,11 @@ import {
   workspaceDiffFromHost,
   workspacePreviewFromHost,
   workspaceRootsFromHost,
+  terminalProfilesFromHost,
   workspaceTreeFromHost,
   type ExternalEditorLaunchView,
   type TerminalPlanView,
+  type TerminalProfilesView,
   type TerminalStateView,
   type WorkspaceAttributionView,
   type WorkspaceDeliveryView,
@@ -1000,6 +1003,9 @@ function TerminalTool({ taskId }: { taskId: string }) {
   const [roots, setRoots] = useState<WorkspaceRootView[]>([]);
   const [rootId, setRootId] = useState<string | undefined>(undefined);
   const [plan, setPlan] = useState<TerminalPlanView | null>(null);
+  // (#85) The shells main resolved for this machine; the dock names the default's
+  // id instead of a shell string of its own.
+  const [profiles, setProfiles] = useState<TerminalProfilesView | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -1030,6 +1036,12 @@ function TerminalTool({ taskId }: { taskId: string }) {
       const list = rootsParsed?.roots ?? [];
       setRoots(list);
       if (list[0]) setRootId(list[0].id);
+      // The shell profiles are a Host answer like the roots: the plan view names
+      // one of main's ids, and a machine with no resolvable shell says so by name
+      // instead of planning some other shell.
+      const profilesResult = await terminalProfilesThroughShell({ taskId });
+      if (!live) return;
+      if (profilesResult.ok) setProfiles(terminalProfilesFromHost(profilesResult.payload) ?? null);
     })();
     return () => {
       live = false;
@@ -1037,12 +1049,21 @@ function TerminalTool({ taskId }: { taskId: string }) {
   }, [taskId]);
 
   const planTerminal = async (nextRootId: string) => {
+    const profileId = profiles?.defaultProfileId;
+    if (profileId === null || profileId === undefined) {
+      setPlan(null);
+      setError(
+        profiles === null
+          ? "终端 shell 配置尚未读取"
+          : `本机未解析出默认 shell：${profiles.unavailable.flatMap((entry) => entry.missing).join("、") || "Host 未报告缺失的可执行文件"}`,
+      );
+      return;
+    }
     const result = await planTerminalThroughShell({
       taskId,
       instanceId: `term-${taskId}-1`,
       rootId: nextRootId,
-      program: "bash",
-      args: ["-l"],
+      profileId,
     });
     if (!result.ok) {
       setPlan(null);
@@ -1101,7 +1122,9 @@ function TerminalTool({ taskId }: { taskId: string }) {
       </section>
       {roots.length > 0 && (
         <section className="border-t border-line pt-2">
-          <p className="text-[11px] text-muted">计划终端（bash -l）</p>
+          <p className="text-[11px] text-muted">
+            计划终端（{profiles?.profiles.find((entry) => entry.id === profiles.defaultProfileId)?.label ?? "shell 未解析"}）
+          </p>
           <RootChips
             roots={roots}
             selectedId={rootId}
