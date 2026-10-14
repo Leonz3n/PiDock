@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHost, createHostStopper, createLastWindowShutdown, PerTaskHostRegistry, taskBrowserOriginsFromEnv } from "./runtime.js";
 import { createDiskTaskDirResolver, defaultTasksRoot } from "./task-resolver.js";
+import { previewTaskPaths } from "./task-provision.js";
 import { TaskRootIndex } from "./task-root-index.js";
 import type { HostTaskResult } from "../rpc/protocol.js";
 import { TaskWorkspaceHost, diskTaskStore } from "../host/task-host.js";
@@ -743,6 +744,45 @@ describe("PerTaskHostRegistry", () => {
       expect(index.resolve(taskId)).toBe(taskDir);
       expect(spawn).toHaveBeenCalledTimes(1);
       expect(new TaskRootIndex(join(home, "userData"), defaultRoot).inventory().tasks).toHaveLength(1);
+    } finally {
+      if (oldDefault === undefined) delete process.env["PIDOCK_DEFAULT_ROOT"];
+      else process.env["PIDOCK_DEFAULT_ROOT"] = oldDefault;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the default-root bootstrap routable when the Host wrote the production task-dir spelling", async () => {
+    const { mkdirSync, writeFileSync } = await import("node:fs");
+    const home = mkdtempSync(join(tmpdir(), "pidock-bootstrap-separator-"));
+    const defaultRoot = join(home, "default");
+    mkdirSync(defaultRoot);
+    const oldDefault = process.env["PIDOCK_DEFAULT_ROOT"];
+    process.env["PIDOCK_DEFAULT_ROOT"] = defaultRoot;
+    try {
+      const index = new TaskRootIndex(join(home, "userData"), defaultRoot);
+      const taskId = "task-abcdef12";
+      // `resolveProvisionTaskDir` bootstraps at `previewTaskPaths(...).taskDir`, and
+      // `TaskWorkspaceHost.provision` persists that same string as `record.taskDir`:
+      // the native root plus `/` before the dirId child.
+      const bootstrapDir = previewTaskPaths(defaultRoot, taskId, [], []).taskDir;
+      const result = { ...TASK_RESULT, taskId };
+      const transport = fakeTransport(result);
+      transport.task.mockImplementation(async () => {
+        mkdirSync(bootstrapDir, { recursive: true });
+        writeFileSync(join(bootstrapDir, "task.json"), JSON.stringify({ taskId, name: "Recovered", dirId: taskId,
+          root: defaultRoot, taskDir: bootstrapDir, branch: "task/main", remoteBranch: "main", baseCommit: "abc123",
+          repos: [], createdAt: "2026-09-22T10:00:00Z", updatedAt: "2026-09-22T10:00:00Z" }));
+        return result;
+      });
+      const spawn = vi.fn(async () => ({ client: transport as never, child: syntheticChild() as never }));
+      const registry = new PerTaskHostRegistry("workspace-a", spawn, (id) => index.resolve(id), undefined, index);
+      const payload = { name: "Recovered", dirId: taskId, rootOverride: defaultRoot, remoteBranch: "main", fetchedCommit: "abc123" };
+      await registry.routeTaskOp({ taskId, op: "task/provision", payload });
+      expect(index.resolve(taskId)).toBe(join(defaultRoot, taskId));
+      expect(index.verifiedIdentity(taskId)).not.toBeNull();
+      // The verified identity also keeps the next op routable to the same fork.
+      await expect(registry.routeTaskOp({ taskId, op: "task/cancel", payload: {} })).resolves.toMatchObject({ taskId });
+      expect(spawn).toHaveBeenCalledTimes(1);
     } finally {
       if (oldDefault === undefined) delete process.env["PIDOCK_DEFAULT_ROOT"];
       else process.env["PIDOCK_DEFAULT_ROOT"] = oldDefault;

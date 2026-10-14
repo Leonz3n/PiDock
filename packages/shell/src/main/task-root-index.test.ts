@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { buildTaskDiskRecord, writeTaskRecordOnDisk } from "../host/task-store.js";
 import { TaskRootIndex, taskRootIndexPath } from "./task-root-index.js";
+import { previewTaskPaths } from "./task-provision.js";
 
 const dirs: string[] = [];
 function setup() {
@@ -166,6 +168,29 @@ describe("main-owned override task root index", () => {
     task(other);
     symlinkSync(join(other, "task-abcdef12"), dir, process.platform === "win32" ? "junction" : "dir");
     expect(index.inventory().roots[1]?.state).toBe("error");
+  });
+
+  it("resolves an identity whose disk record spells the folder like the provisioning bootstrap", async () => {
+    const { override, index } = setup();
+    const taskId = "task-abcdef12";
+    // The Host writes `record.taskDir` from the folder `runtime.ts`
+    // `resolveProvisionTaskDir` derived with `previewTaskPaths`, i.e. the native
+    // root plus a `/` before the dirId child; the folder itself is `join(root, id)`.
+    // Identity must resolve from the canonical key, not from the raw characters.
+    const bootstrapDir = previewTaskPaths(override, taskId, [], []).taskDir;
+    const record = buildTaskDiskRecord({ taskId, name: "Real", dirId: taskId, branch: "task/main", root: override,
+      taskDir: bootstrapDir, remoteBranch: "main", baseCommit: "abc123", repos: [], now: "2026-09-22T10:00:00Z" });
+    writeTaskRecordOnDisk(bootstrapDir, record);
+    await index.register(bootstrapDir);
+    expect(existsSync(join(override, taskId))).toBe(true);
+    expect(index.resolve(taskId)).toBe(join(override, taskId));
+    expect(index.verifiedIdentity(taskId)).not.toBeNull();
+    // Fail-closed is unchanged: a record whose taskDir names a different folder is
+    // still refused by name, not accepted because of a spelling difference.
+    writeTaskRecordOnDisk(bootstrapDir, { ...record, taskDir: join(override, "task-00000000") });
+    await expect(index.register(bootstrapDir)).rejects.toThrow("task record identity changed");
+    expect(index.inventory().roots[1]).toMatchObject({ state: "error", message: expect.stringContaining("身份已改变") });
+    expect(index.verifiedIdentity(taskId)).toBeNull();
   });
 
   it("keeps an unaffected registered root visible when another root fails", async () => {
