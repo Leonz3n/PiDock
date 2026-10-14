@@ -8,7 +8,7 @@ import type { HostTaskResult } from "../rpc/protocol.js";
 import { createDirectoryLink, linkTargetMatches } from "./directory-link.js";
 import { buildLinkName, buildRepoChildName, checkLinkNameCollisions, REMOTE_NAME } from "./multi-repo-provision.js";
 import type { ProjectRegistry } from "./project-registry.js";
-import { buildTaskBranch, TASK_BRANCH_EXISTS_NO_WORKTREE } from "./task-provision.js";
+import { buildTaskBranch, normalizeTaskPath, TASK_BRANCH_EXISTS_NO_WORKTREE } from "./task-provision.js";
 import { TaskRootIndex } from "./task-root-index.js";
 import { WorktreeMetadataLock, type WorktreeLockAcquisition, type WorktreeLockOwner } from "./worktree-metadata-lock.js";
 
@@ -439,7 +439,12 @@ export class ProjectTaskCreation {
         if (result.taskId !== intent.taskId) throw new Error("Host 任务身份不符");
       }
       const record = readTaskRecordOnDisk(intent.taskDir);
-      if (!record || record.taskId !== intent.taskId || record.dirId !== intent.taskId || record.root !== intent.root || record.taskDir !== intent.taskDir ||
+      // #82: the record's `taskDir` is written by the forked Host from its spawn dir,
+      // which production derives with `previewTaskPaths` (`<native root>/task-…`), so
+      // the intent and the record spell the same folder with different separators.
+      // Compare the canonical key; a record naming another folder still differs.
+      if (!record || record.taskId !== intent.taskId || record.dirId !== intent.taskId || record.root !== intent.root ||
+          normalizeTaskPath(record.taskDir) !== normalizeTaskPath(intent.taskDir) ||
           record.branch !== intent.branch || record.name !== intent.name || record.repos.length !== intent.repos.length ||
           intent.repos.some((repo) => !record.repoSources?.some((entry) => entry.repoDir === repo.repoDir && entry.remote === repo.remote && entry.remoteBranch === repo.remoteBranch && entry.baseCommit === repo.commit)) ||
           (record.dirLinks?.length ?? 0) !== intent.directories.length || intent.directories.some((dir) => !record.dirLinks?.some((entry) => entry.directoryId === dir.id && entry.linkName === dir.linkName && entry.sourcePath === dir.path))) {
