@@ -30,7 +30,7 @@ import { MAX_TERMINAL_INSTANCES, TaskTerminalRegistry, planTerminal, type Termin
 import { workspaceRoots } from "../main/workspace-files.js";
 import { inspectNodePtyPrebuild, prepareNodePtyPrebuild } from "./node-pty-preflight.js";
 import { MAX_PTY_ENVELOPE_BYTES } from "./node-pty-protocol.js";
-import { descendantPids, PTY_INPUT_BUDGET_ERROR, ptySpawnerAvailable, resolvePtyRuntime, TerminalPtyDriver, workerEntryUrl, type PtyHelper } from "./terminal-pty-driver.js";
+import { descendantPids, PTY_INPUT_BUDGET_ERROR, ptyProcessGroupOwnershipAvailable, ptySpawnerAvailable, resolvePtyRuntime, TerminalPtyDriver, workerEntryUrl, type PtyHelper } from "./terminal-pty-driver.js";
 import type { ProcessTableRow } from "./service-ownership.js";
 import type { TerminalDriver, TerminalDriverReceipt, TerminalLaunch } from "./terminal-execution.js";
 import { resolveProgram, TaskTerminalSessions } from "./terminal-sessions.js";
@@ -46,6 +46,24 @@ const supported = process.platform === "darwin" && process.arch === "arm64" && e
   }
 })();
 const realIt = it.skipIf(!supported);
+
+/**
+ * POSIX process-group ownership, named by the production predicate so the tests
+ * branch on the same spelling the driver does. The group tests below assert what
+ * this Host really records and what `stop` really contains, so where the platform
+ * has no group to read (`readProcessPgid` returns null on win32 by design) or to
+ * signal (`kill(-pgid)` has no equivalent) each one branches by name, asserts the
+ * degradation the driver really reports (pid recorded without a group, `stop`
+ * `unknown`) and records its POSIX assertion as UNOBSERVED on win32 - never as a
+ * pass, and never by deleting the assertion.
+ */
+const groupOwnership = ptyProcessGroupOwnershipAvailable();
+
+/** The identity the spawner records on this platform: the pid always, the group
+ * only where the platform exposes one (see `groupOwnership`). */
+function recordedIdentity(pid: number): { processId: number; processGroupId?: number } {
+  return groupOwnership ? { processId: pid, processGroupId: pid } : { processId: pid };
+}
 
 function alive(pid: number): boolean {
   try {
@@ -757,7 +775,10 @@ it.each([
   // The reported capability is the worker's own platform gate: the pin record's
   // admitted set. A Host outside it can never fork the helper and must report
   // `spawnImplemented: false` so the renderer keeps its residual warning instead
-  // of losing it while every start fails; win32/x64 is true once admitted.
+  // of losing it while every start fails; win32/x64 is true once admitted, and
+  // that stays honest because a ConPTY terminal really starts there (#55) - the
+  // flag claims a START and never containment, which win32 does not have
+  // (`ptyProcessGroupOwnershipAvailable`).
   vi.stubGlobal("process", { ...process, platform, arch });
   try {
     expect(ptySpawnerAvailable()).toBe(expected);
@@ -951,8 +972,11 @@ it("forgets a not-started spawn so the same identity really starts afterwards", 
     const retrying = driver.spawn(unitIdentity, unitLaunch, () => {});
     expect(second.requests).toHaveLength(1);
     second.reply({ status: "started", rootPid: leader.pid });
-    expect(await retrying).toEqual({ status: "started", process: { processId: leader.pid, processGroupId: leader.pid } });
-    expect((await driver.stop(unitIdentity)).status).toBe("tree-drained");
+    expect(await retrying).toEqual({ status: "started", process: recordedIdentity(leader.pid!) });
+    // The stop that proves the identity is not wedged signals the recorded group;
+    // on win32 no group is recorded, so the honest receipt is the named `unknown`
+    // (POSIX `tree-drained` is unobserved on win32).
+    expect((await driver.stop(unitIdentity)).status).toBe(groupOwnership ? "tree-drained" : "unknown");
   } finally {
     killPid(leader.pid);
   }
@@ -990,9 +1014,12 @@ it("never reports a fabricated exit code for a stop with no observed child exit"
   try {
     const starting = driver.spawn(unitIdentity, unitLaunch, () => {});
     worker.reply({ status: "started", rootPid: leader.pid });
-    expect(await starting).toEqual({ status: "started", process: { processId: leader.pid, processGroupId: leader.pid } });
+    expect(await starting).toEqual({ status: "started", process: recordedIdentity(leader.pid!) });
     const stopped = await driver.stop(unitIdentity);
-    expect(stopped).toEqual({ ...unitIdentity, status: "tree-drained" });
+    // `tree-drained` needs the recorded group to signal and re-verify, which win32
+    // has not (POSIX assertion unobserved there): a stop that really drained the
+    // group says so, a win32 stop reports the named `unknown` instead.
+    expect(stopped).toEqual({ ...unitIdentity, status: groupOwnership ? "tree-drained" : "unknown" });
     // `toEqual` already fails on a fabricated `0`; assert the absence directly so
     // the claim this test makes is unambiguous.
     expect(stopped).not.toHaveProperty("exitCode");
@@ -1025,7 +1052,7 @@ it("reports root-exited for a natural exit the last dispatched request did not c
   try {
     const starting = driver.spawn(unitIdentity, unitLaunch, (receipt) => receipts.push(receipt));
     worker.reply({ status: "started", rootPid: leader.pid });
-    expect(await starting).toEqual({ status: "started", process: { processId: leader.pid, processGroupId: leader.pid } });
+    expect(await starting).toEqual({ status: "started", process: recordedIdentity(leader.pid!) });
     // Land one completed observation, then clear the root so the exit below is
     // not covered by any observation after this dispatched request.
     const inputting = driver.input(unitIdentity, "echo covered\r");
@@ -1036,7 +1063,12 @@ it("reports root-exited for a natural exit the last dispatched request did not c
     worker.emit("message", { workspaceId: inputRequest["workspaceId"], identity: inputRequest["identity"],
       operationId: inputRequest["operationId"], kind: "exit", exitCode: 0, signal: 0 });
     await until(() => receipts.length > 0, 3000, "natural-exit receipt");
-    expect(receipts).toEqual([{ ...unitIdentity, status: "root-exited", exitCode: 0 }]);
+    // The covered/uncovered distinction is a claim about a drained recorded group,
+    // so on win32 it cannot be expressed and the exit is the named `unknown` of a
+    // platform with no drain evidence (POSIX `root-exited` is unobserved there).
+    expect(receipts).toEqual(groupOwnership
+      ? [{ ...unitIdentity, status: "root-exited", exitCode: 0 }]
+      : [{ ...unitIdentity, status: "unknown" }]);
   } finally {
     killPid(leader.pid);
   }
@@ -1065,12 +1097,18 @@ it("never reports a fabricated exit code for a natural exit the OS reported as s
   try {
     const starting = driver.spawn(unitIdentity, unitLaunch, (receipt) => receipts.push(receipt));
     worker.reply({ status: "started", rootPid: leader.pid });
-    expect(await starting).toEqual({ status: "started", process: { processId: leader.pid, processGroupId: leader.pid } });
+    expect(await starting).toEqual({ status: "started", process: recordedIdentity(leader.pid!) });
     await until(() => observed, 3000, "one snapshot of the live root");
     const spawnRequest = worker.requests[0]!;
     worker.emit("message", { workspaceId: spawnRequest["workspaceId"], identity: spawnRequest["identity"], operationId: spawnRequest["operationId"], kind: "exit", exitCode: 0, signal: 9 });
     await until(() => receipts.length > 0, 3000, "natural-exit receipt");
-    expect(receipts).toEqual([{ ...unitIdentity, status: "tree-drained" }]);
+    // A verified drain of the recorded identity is `tree-drained`; win32 records no
+    // group and so has no drain evidence at all, which is the named `unknown`
+    // (POSIX `tree-drained` is unobserved there). The assertion this test exists
+    // for - no fabricated `0` for a signalled child - holds on both.
+    expect(receipts).toEqual(groupOwnership
+      ? [{ ...unitIdentity, status: "tree-drained" }]
+      : [{ ...unitIdentity, status: "unknown" }]);
     expect(receipts[0]).not.toHaveProperty("exitCode");
   } finally {
     killPid(leader.pid);

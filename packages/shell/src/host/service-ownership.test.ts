@@ -687,6 +687,20 @@ describe("#48 service ownership records", () => {
   });
 
   it("proves readProcessPgid reads pgid for real processes and returns null for invalid pids", () => {
+    if (process.platform === "win32") {
+      // win32 exposes no process group at all - `readProcessPgid` returns null
+      // there by design (no `ps`, no `/proc`, no `kill(-pgid)`), so the POSIX
+      // assertion that a live pid has a readable, positive pgid is UNOBSERVED on
+      // win32. What is asserted instead is the named degradation plus the same
+      // invalid-pid refusals, which are platform-independent.
+      expect(readProcessPgid(process.pid)).toBeNull();
+      expect(readProcessPgid(0)).toBeNull();
+      expect(readProcessPgid(1)).toBeNull();
+      expect(readProcessPgid(-1)).toBeNull();
+      expect(readProcessPgid(1.5)).toBeNull();
+      expect(readProcessPgid(9999999)).toBeNull();
+      return;
+    }
     // Current process PGID is a positive integer
     const selfPgid = readProcessPgid(process.pid);
     expect(selfPgid).toBeTypeOf("number");
