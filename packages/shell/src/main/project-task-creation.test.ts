@@ -51,7 +51,19 @@ async function setupTwoRepositories() {
 }
 afterEach(() => { for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true }); });
 
-describe("persistent Project task creation with local Git", () => {
+/**
+ * Every case below drives the real fixture: temp bare remotes, real clones, pushes, fetches and
+ * worktrees. One run of this file alone really starts 943 git processes (1,375 including the
+ * transport helpers they spawn; `GIT_TRACE2_EVENT`), and the heaviest cases cost ~2.1s alone but
+ * 4.9-5.6s under the full-suite pool - over Vitest's 5000ms default, which is what turned them into
+ * load-dependent reds. Nothing here waits on a network: every remote is a local path, the one SSH
+ * case is served by a local `GIT_SSH` shim, and the slowest command measured was a 314ms local
+ * `git push`. The budget is raised for the whole suite; NO assertion is weakened, reordered or
+ * skipped, and a real hang still fails.
+ */
+const GIT_CASE_TIMEOUT_MS = 30_000;
+
+describe("persistent Project task creation with local Git", { timeout: GIT_CASE_TIMEOUT_MS }, () => {
   it("pins an actual remote commit, preserves dirty checkout, links only chosen directory and associates after Host record", async () => {
     const env = await setup();
     const preview = await env.service.prepare(env.request);
