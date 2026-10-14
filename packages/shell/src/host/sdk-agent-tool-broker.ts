@@ -555,6 +555,20 @@ function commandEnvironment(): Record<string, string> {
   return env;
 }
 
+/**
+ * The platform boundary of `exec.run`. `defaultRunCommand` executes through POSIX
+ * `/bin/sh -c` and this module ships no fallback shell, so on win32 a command the
+ * path filter and the permission gate both allowed is refused by name (see
+ * `executeCommand`) instead of surfacing the unnamed `ENOENT` that
+ * `spawn("/bin/sh", …)` turns into `exit unknown`. `cmd.exe` is deliberately NOT a
+ * fallback (its CRLF/`;`/quoting semantics would silently invalidate commands
+ * written for `/bin/sh` while nothing failed to start), and neither is "use
+ * `sh.exe` when one is installed" (the tool's behaviour would then depend on the
+ * machine). A native win32 shell is an unimplemented capability, not a smuggled-in
+ * fallback.
+ */
+const EXEC_UNSUPPORTED_PLATFORM = "tool-refused:exec-unsupported-platform";
+
 function defaultRunCommand(input: { command: string; cwd: string; timeoutMs: number }): Promise<SdkAgentCommandResult> {
   return new Promise((settle) => {
     const child = spawn("/bin/sh", ["-c", input.command], {
@@ -1485,6 +1499,13 @@ export class SdkAgentToolBroker {
   }
 
   private async executeCommand(command: string, cwd: string): Promise<SdkAgentToolOutcome> {
+    // Only a command that reached this point would really run: the path filter has
+    // already refused an escaping command by its own name and the permission gate /
+    // write right has already refused a disallowed one, so the platform boundary
+    // below never shadows either of those refusals with a less specific one.
+    if (process.platform === "win32") {
+      return refuse(EXEC_UNSUPPORTED_PLATFORM, "exec.run 只通过 POSIX `/bin/sh -c` 执行：本平台没有该 shell，且不回退到别的 shell，本次调用未启动任何进程");
+    }
     const result = await this.runCommand({ command, cwd, timeoutMs: COMMAND_TIMEOUT_MS });
     const exit = result.timedOut ? "timed out" : `exit ${result.exitCode ?? "unknown"}`;
     const output = result.output.trim();
