@@ -395,7 +395,14 @@ class Fixture {
     } catch {
       // A failed containment is reported by the pid assertions below.
     }
-    rmSync(this.taskDir, { recursive: true, force: true });
+    // The terminal's launch cwd is `<taskDir>/work`, and the pty the driver
+    // starts with it (helper forked with that cwd, `terminal-pty-driver.ts`) can
+    // still hold the directory for a few tens of milliseconds after the stop
+    // verified the tree gone - measured EPERM on a `tree-drained` stop of the
+    // session-layer case, clearing 66 ms later. The delete retries that short
+    // window only: a process that really leaked keeps the handle, so the delete
+    // still throws after the last retry and the stray-pid assertions stay real.
+    rmSync(this.taskDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 }
 
