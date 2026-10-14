@@ -116,7 +116,7 @@ describe("TaskTerminalRegistry", () => {
     const planned = plan();
     if (!planned.ok) throw new Error("plan failed");
     registry.register(planned.plan);
-    registry.markProcess("term-1", { processId: 4321, startedAt: "2026-09-22T10:00:01.000Z" });
+    registry.markProcess("term-1", { processId: 4321, processGroupId: 4321, startedAt: "2026-09-22T10:00:01.000Z" });
     return registry;
   }
 
