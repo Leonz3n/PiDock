@@ -26,7 +26,9 @@ export interface TerminalLaunch {
  * What the OS boundary observed for one terminal. The exit receipts are
  * deliberately scoped to what the driver can really prove (see
  * `terminal-pty-driver.ts`): `tree-drained` means the exit was covered by an
- * observation of the live root and every recorded identity is gone;
+ * observation of the live root and every recorded identity is gone (on win32:
+ * the Host terminated its own PTY helper handle and the tree the OS's fixed
+ * parent chain names is verified gone);
  * `root-exited` means the same verified drain for an exit that was NOT covered
  * (the last control request was never observed), so a descendant created inside
  * that window is explicitly not denied; `unknown` means no observation ever saw
