@@ -1,6 +1,6 @@
 import type { IPty } from "node-pty";
 import { pathToFileURL } from "node:url";
-import { inspectNodePtyPrebuild } from "./node-pty-preflight.js";
+import { inspectNodePtyPrebuild, nodePtyPlatformAdmitted } from "./node-pty-preflight.js";
 import { MAX_PTY_OUTPUT_BYTES, MAX_PTY_ENVELOPE_BYTES, parsePtyRequest, sameEnvelope, type PtyEnvelope, type PtyEvent, type PtyRequest, type PtyReason } from "./node-pty-protocol.js";
 
 /** Experiment entry only. This process owns one PTY, never a descendant-drain receipt. */
@@ -89,7 +89,7 @@ async function start(request: PtyRequest & { action: "spawn" }): Promise<void> {
  * reaches this helper because it cannot be the forked runtime.
  */
 function runtimeAdmitted(): boolean {
-  return process.platform === "darwin" && process.arch === "arm64" &&
+  return nodePtyPlatformAdmitted() &&
     (process.env.ELECTRON_RUN_AS_NODE === "1" || !process.versions.electron);
 }
 process.on("message", (raw: unknown) => {

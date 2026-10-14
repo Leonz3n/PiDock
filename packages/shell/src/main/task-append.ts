@@ -52,11 +52,12 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { lstatSync, readlinkSync, realpathSync, statSync, symlinkSync } from "node:fs";
+import { lstatSync, readlinkSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join, normalize, relative } from "node:path";
 import { createNodeRepoProbe, observeRecordedRepo } from "../host/repo-identity.js";
 import { readTaskRecordOnDisk, type TaskDiskRecord } from "../host/task-store.js";
 import type { HostTaskResult } from "../rpc/protocol.js";
+import { createDirectoryLink, linkTargetMatches } from "./directory-link.js";
 import {
   buildLinkName,
   checkLinkNameCollisions,
@@ -761,7 +762,7 @@ export class ProjectTaskAppend {
             throw new Error(`link-missing: 普通目录 ${dir.linkName}（${dir.name}）已记录但软链接不存在，请恢复后再追加`);
           }
           const stat = lstatSync(target);
-          if (!stat.isSymbolicLink() || readlinkSync(target) !== dir.path) {
+          if (!stat.isSymbolicLink() || !linkTargetMatches(readlinkSync(target), dir.path)) {
             throw new Error(`link-mismatch: 普通目录 ${dir.linkName}（${dir.name}）已记录但软链接指向不符，请人工处理后再追加`);
           }
           // A matching `readlink` is NOT identity: a DIFFERENT directory
@@ -806,7 +807,7 @@ export class ProjectTaskAppend {
           }
           if (targetExists) {
             const stat = lstatSync(target);
-            if (!stat.isSymbolicLink() || readlinkSync(target) !== dir.path) {
+            if (!stat.isSymbolicLink() || !linkTargetMatches(readlinkSync(target), dir.path)) {
               throw new Error("path-taken: 目标路径已占用");
             }
           }
@@ -1010,7 +1011,7 @@ export class ProjectTaskAppend {
       // absent on disk, which only manual repair could clear.
       for (const dir of freshDirs) {
         const target = join(taskDir, dir.linkName);
-        if (!pathPresent(target)) symlinkSync(dir.path, target, "dir");
+        if (!pathPresent(target)) createDirectoryLink(dir.path, target);
       }
       const recorded = await this.host.routeTaskOp({
         taskId,
@@ -1030,7 +1031,7 @@ export class ProjectTaskAppend {
           throw new Error(`link-missing: 普通目录 ${dir.linkName}（${dir.name}）创建后未记录到任务，请重试追加`);
         }
         const stat = lstatSync(target);
-        if (!stat.isSymbolicLink() || readlinkSync(target) !== dir.path) {
+        if (!stat.isSymbolicLink() || !linkTargetMatches(readlinkSync(target), dir.path)) {
           throw new Error(`link-mismatch: 普通目录 ${dir.linkName}（${dir.name}）已创建但指向不符，请人工处理后重试`);
         }
       }

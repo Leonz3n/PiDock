@@ -574,9 +574,12 @@ describe("[UI 对齐] S8d 运行 panel (real Host bindings and status)", () => {
     // is gone: the panel no longer says this task's control is revoked.
     expect(screen.getByTestId("service-owner-rebind")).not.toHaveTextContent("该任务的启停通道已被撤销");
     // The re-bind replaced ownership only: it never asks main to start or stop
-    // a process, and the panel re-reads the Host's own status instead.
+    // a process, and the panel re-reads the Host's own status instead. That
+    // re-read is the `revision`-keyed effect of `RunTool`
+    // (`DesktopToolDock.tsx`), which `onRebound` bumps after the confirmation,
+    // so it completes on a later tick: same predicate, same threshold, awaited.
     expect(fixture.serviceCatalogOp.mock.calls.filter(([entry]) => entry["op"] === "runTaskService")).toHaveLength(1);
-    expect(fixture.taskOp.mock.calls.filter(([, op]) => op === "task/serviceStatus").length).toBeGreaterThan(1);
+    await waitFor(() => expect(fixture.taskOp.mock.calls.filter(([, op]) => op === "task/serviceStatus").length).toBeGreaterThan(1));
     fireEvent.click(screen.getByRole("button", { name: "关闭" }));
     expect(screen.queryByTestId("service-owner-rebind")).toBeNull();
   });
@@ -659,13 +662,18 @@ describe("[UI 对齐] S8d 运行 panel (real Host bindings and status)", () => {
     expect(screen.queryByText(/最近停止：Agent/)).not.toBeInTheDocument();
   });
 
-  it("shows which platform was really verified and names Windows as unverified", async () => {
+  it("shows which platform was really verified and names the other platform as unverified", async () => {
     const here = `${process.platform}-${process.arch}`;
+    // The OTHER released platform, picked by DIFFERENCE from this machine's own
+    // label: on win32 both labels are `win32-x64`, so a hardcoded row would be
+    // this Host's own, duplicate row and the panel would render nothing (the
+    // same idiom as `desktopLinkShape.test.tsx`).
+    const other = here === "win32-x64" ? "darwin-arm64" : "win32-x64";
     panelBridge({ statuses: () => ({ ok: true, payload: { service: {
       serviceId: SERVICE_ID, lifecycle: "stopped", templateVersion: "2", health: "not-probed", launchSource: "catalog", resolved: [],
       launchVerification: { platform: here, rows: [
         { platform: here, verified: true, nodeVersion: "24.21.0", program: "node", startedAt: "2026-10-08T00:00:00.000Z", stopped: true, stoppedAt: "2026-10-08T00:01:00.000Z" },
-        { platform: "win32-x64", verified: false, reason: "本机未运行该平台，未实测" },
+        { platform: other, verified: false, reason: "本机未运行该平台，未实测" },
       ] },
     } } }) });
     render(<DesktopToolDock taskId="task-1" tool="runtime" onClose={() => {}} />);
@@ -675,10 +683,11 @@ describe("[UI 对齐] S8d 运行 panel (real Host bindings and status)", () => {
     // What was verified, on WHICH platform: a real start and a confirmed stop.
     expect(line.querySelector(`[data-platform-row="${here}"]`)).toHaveAttribute("data-verified", "true");
     expect(line.querySelector(`[data-platform-row="${here}"]`)).toHaveTextContent(`本机 ${here} 实测：已启动（node） · 已停止 · Node 24.21.0`);
-    // Windows is named and NOT verified; nothing in the row reads as a pass.
-    const windows = line.querySelector('[data-platform-row="win32-x64"]');
-    expect(windows).toHaveAttribute("data-verified", "false");
-    expect(windows).toHaveTextContent("win32-x64 未验证（本机未运行该平台，未实测）");
+    // The other released platform is named and NOT verified; nothing in the row
+    // reads as a pass.
+    const unverified = line.querySelector(`[data-platform-row="${other}"]`);
+    expect(unverified).toHaveAttribute("data-verified", "false");
+    expect(unverified).toHaveTextContent(`${other} 未验证（本机未运行该平台，未实测）`);
     expect(line.querySelectorAll('[data-verified="true"]')).toHaveLength(1);
   });
 

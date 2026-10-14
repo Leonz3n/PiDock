@@ -78,7 +78,16 @@ describe("#15 box 28 the external-editor setting save path", () => {
     // Exactly the documented shape, and the write left no temporary file.
     expect(JSON.parse(documentOf(dir))).toEqual({ program: NODE, args: ["--new-window", "--"] });
     expect(readdirSync(dir)).toEqual([EXTERNAL_EDITOR_SETTINGS_FILE]);
-    // Machine-private: no group/other access on the document.
+  });
+
+  // win32 (#57): POSIX mode bits are the only place "machine-private" is observable at all, and on
+  // win32 `statSync().mode & 0o077` reads a synthesized 0o066 whatever `mkdirSync({mode: 0o700})` /
+  // `openSync(temporary, "wx", 0o600)` asked for (measured on this host). The save path sets no ACL
+  // there, so group/other access is unenforced on win32 - unobserved, not asserted against a number
+  // that carries no information.
+  it.skipIf(process.platform === "win32")("writes the document with no group or other access (POSIX mode bits)", () => {
+    const dir = profile();
+    expect(saveExternalEditorSetting(dir, { program: NODE, args: undefined }).ok).toBe(true);
     expect(statSync(externalEditorSettingsPath(dir)).mode & 0o077).toBe(0);
   });
 
@@ -108,7 +117,12 @@ describe("#15 box 28 the external-editor setting save path", () => {
       { program: "/usr/../etc/passwd", args: undefined, name: "editor-program-invalid" },
       { program: `${dir}/./editor`, args: undefined, name: "editor-program-invalid" },
       { program: join(dir, "missing-editor"), args: undefined, name: "editor-program-not-found" },
-      { program: notExecutable, args: undefined, name: "editor-program-not-executable" },
+      // win32 (#57): the save path's own probe is existence-only there (`accessSync(program, F_OK)`,
+      // main/external-editor.ts:197), so this 0o644 regular file IS executable and the named refusal
+      // cannot be produced for it (observed: win32 saves it instead). The directory entry below
+      // reaches the same `editor-program-not-executable` branch on every platform, so the refusal
+      // stays covered; the X_OK dimension is unobserved on win32.
+      ...(process.platform === "win32" ? [] : [{ program: notExecutable, args: undefined, name: "editor-program-not-executable" }]),
       { program: bundle, args: undefined, name: "editor-program-not-executable" },
       { program: "", args: undefined, name: "editor-settings-invalid" },
       { program: 7, args: undefined, name: "editor-settings-invalid" },

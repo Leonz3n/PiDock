@@ -39,6 +39,10 @@ module.exports = {
   // The whole compiled shell (main + utilityProcess host + preload + rpc) ships
   // inside app.asar; production forks dist/host/host-entry.js. Test-only
   // Provider harnesses under scripts/ are excluded from packaged files.
+  // Packaging therefore consumes whatever `dist/` happens to hold, so the
+  // package:* scripts must guarantee freshness: each one runs `pnpm build`
+  // before `electron-builder` (packages/shell/package.json). Without that
+  // prerequisite an installer silently ships a stale host bundle.
   files: ["dist/**/*", "package.json"],
   // The pinned node-pty payload must be a real file on disk: the Host preflight
   // opens it with O_NOFOLLOW, re-checks fstat, and pins size + sha256 + mode
@@ -69,6 +73,15 @@ module.exports = {
     title: "${productName} ${version} ${arch}",
   },
   win: {
+    // The msi target cannot be built without an icon: templates/msi/template.xml
+    // emits `<Icon Id="${iconId}"/>` only when `iconPath` is set, while
+    // out/targets/MsiTarget.js references `Icon="${iconId}"` unconditionally for
+    // the shortcuts and the ProgId, so a missing icon fails the build with
+    // light.exe LGHT0094. `win.icon` (not `msi.icon`, which does not exist in
+    // MsiOptions) is the only key that reaches getOrConvertIcon("ico"). The path
+    // is relative to this package, and it lives in packaging/ rather than the
+    // builder's default build/ because .gitignore ignores build/.
+    icon: "packaging/icon.svg",
     target: [{ target: "msi", arch: ["x64"] }],
   },
   // Same intent as the previous NSIS block: assisted (not one-click) install,

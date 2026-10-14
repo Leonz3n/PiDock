@@ -1,0 +1,7 @@
+# Audited bytes only: `SERVICE_LEAF_SOURCE_SHA256` pins this file's exact bytes and
+# `ReviewedServiceLeafDriver` refuses any other content, so the checkout must never
+# rewrite its line endings (with `core.autocrlf=true` an LF file lands as CRLF and
+# the audit reads content no reviewer ever approved). `-text` keeps git from
+# translating it on either side, so POSIX and Windows checkouts both receive the
+# committed bytes verbatim.
+packages/shell/scripts/fixtures/service-owned-leaf.mjs -text

@@ -6,8 +6,10 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { MAX_TERMINAL_INSTANCES } from "../main/terminal-config.js";
 import { readProcessPgid, readProcessTable, type ProcessTableRow } from "./service-ownership.js";
+import { nodePtyPlatformAdmitted } from "./node-pty-preflight.js";
 import { MAX_PTY_ENVELOPE_BYTES, operationKey, parsePtyEvent, parsePtyRequest, sameEnvelope, type PtyEnvelope, type PtyEvent, type PtyRequest } from "./node-pty-protocol.js";
 import type { NodePtyWorker } from "./node-pty-driver.js";
+import { readWin32ProcessTable, win32ProcessAlive, type Win32ProcessRow } from "./win32-process-probe.js";
 import type { TerminalDriver, TerminalDriverReceipt, TerminalIdentity, TerminalLaunch, TerminalProcessIdentity } from "./terminal-execution.js";
 
 /** The forked helper handle. `kill` reaps the helper itself, never the PTY group. */
@@ -42,15 +44,68 @@ export function resolvePtyRuntime(): PtyRuntime {
 }
 
 /**
- * Whether this Host can really fork the PTY helper. The worker admits only
- * darwin/arm64 (the platform the pinned prebuild ships for), so a Host that can
+ * Whether this Host can really fork the PTY helper. The worker admits only the
+ * platforms the pin record admits (`nodePtyPlatformAdmitted`), so a Host that can
  * never spawn reports `spawnImplemented: false` and the renderer keeps its
  * residual warning instead of only failing every start with a per-attempt
  * `terminal-not-started` error. Whether the prebuild itself is prepared is
  * checked per spawn by the worker's preflight, not here.
+ *
+ * This is a claim about STARTING a terminal and nothing more: win32-x64 is
+ * admitted because a real ConPTY terminal really starts there (#55), which is
+ * why the flag is true on a platform whose ownership is expressed through the
+ * helper handle rather than a process group (`ptyProcessGroupOwnershipAvailable`,
+ * `ptyHelperHandleStopAvailable`). The flag never promised a process group and
+ * is not stretched into one.
  */
 export function ptySpawnerAvailable(): boolean {
-  return process.platform === "darwin" && process.arch === "arm64";
+  return nodePtyPlatformAdmitted();
+}
+
+/**
+ * Whether this platform exposes the POSIX process-group ownership every
+ * containment path here is expressed in: a readable per-pid `pgid`
+ * (`readProcessPgid`) plus a group signal (`kill(-pgid)`).
+ *
+ * - What win32 CAN do (measured under #55): start a real ConPTY terminal - the
+ *   win32-x64 prebuild is pinned by the preflight, the worker spawns a real
+ *   process with a real window size, and `ptySpawnerAvailable()` is true there.
+ * - What win32 CANNOT do: name, re-verify or signal a process group. There is no
+ *   group to read (`readProcessPgid` returns null there by design) and no
+ *   `kill(-pgid)`, and a bare pid may name a recycled process by the time a
+ *   signal could be sent - the group re-read is the only identity check the
+ *   POSIX path has before signalling. So on win32: `spawn` records the pid alone
+ *   and no group (`processGroupId` stays absent - never the pid, never 0), every
+ *   group path is skipped here BY NAME through this one predicate, and ownership
+ *   is expressed through the helper handle instead (see
+ *   `ptyHelperHandleStopAvailable`). A group is never invented to make a
+ *   group-shaped path look applicable.
+ */
+export function ptyProcessGroupOwnershipAvailable(): boolean {
+  return process.platform !== "win32";
+}
+
+/**
+ * Whether this platform stops a terminal by terminating the Host-owned PTY
+ * helper handle instead of signalling a process group (win32).
+ *
+ * The helper is the `ChildProcess` this Host itself forked, so its identity is
+ * a live handle the Host already holds - it cannot be recycled between two reads
+ * the way a pid can. Terminating it closes the pseudo console the terminal runs
+ * on, which takes the real tree with it (measured under #61: helper killed ->
+ * root and its child gone). That is why the handle, and never a bare pid, is the
+ * win32 containment primitive - and why `taskkill /T` by pid is deliberately NOT
+ * used: it trusts a number that may name a recycled process by the time it runs,
+ * which is exactly the guarantee the POSIX path buys by re-reading the group
+ * before every signal.
+ *
+ * Not exported, and derived from `ptyProcessGroupOwnershipAvailable` instead of
+ * a second platform test: the two are exact negations of one bit (#66), so a
+ * second spelling could only drift and leave a platform where both or neither
+ * hold with no defined meaning.
+ */
+function ptyHelperHandleStopAvailable(): boolean {
+  return !ptyProcessGroupOwnershipAvailable();
 }
 
 /** Poll cadence while proving a PTY group and its observed descendants drained. */
@@ -87,6 +142,10 @@ interface Options {
   observeCadenceMs?: number;
   /** OS snapshot reader; injected so a test can prove the no-snapshot fail-closed path. */
   processTable?: () => ProcessTableRow[] | null;
+  /** win32 process-tree source; injected so a win32 test never spawns PowerShell. */
+  win32ProcessTable?: () => Win32ProcessRow[] | null;
+  /** win32 pid-liveness probe; injected with `win32ProcessTable`. */
+  win32ProcessAlive?: (pid: number) => boolean;
 }
 
 /**
@@ -108,6 +167,15 @@ interface Operation {
   requestId: number;
   inputBytes: number;
   rootPid?: number;
+  /**
+   * Lower bound on the creation time of anything this terminal started: the
+   * instant taken immediately BEFORE the helper `fork`, so it is provably
+   * earlier than the helper and therefore than the pty child that helper forks
+   * and every descendant of it (a bound taken AFTER the fork could already be
+   * later than a real child, and would refuse it). Used only to refuse
+   * (`descendantPids`), so it can only shrink the attributed tree.
+   */
+  createdAtFloor?: number;
   processGroupId?: number;
   /**
    * The controlling terminal recorded from the first snapshot that showed it
@@ -117,6 +185,11 @@ interface Operation {
   tty?: string;
   ptyExit?: { exitCode: number; signal: number };
   workerExit?: { code: number | null; signal: string | null };
+  /**
+   * The Host itself terminated this helper (the win32 stop/reap path), so its
+   * exit is expected and must not be read as an uncontrollable helper loss.
+   */
+  helperKilled?: boolean;
   /**
    * Descendants observed alive under this operation's root while it ran, with
    * the process group each was in at that moment. This is the only handle the
@@ -139,24 +212,64 @@ interface Operation {
   pending?: { action: PtyRequest["action"]; resolve(event: PtyEvent & { kind: "reply" }): void };
 }
 
-/** Every pid whose parent chain reaches `rootPid` in one process-table snapshot. */
-export function descendantPids(table: readonly ProcessTableRow[], rootPid: number): number[] {
+/**
+ * Every pid whose parent chain reaches `rootPid` in one process-table snapshot.
+ * Takes only the fields the walk needs, so the same walk serves both the POSIX
+ * table and the independent win32 parent-chain source.
+ *
+ * `createdAt` (Unix epoch ms where the platform reports one) is creation-time
+ * evidence, and it is used only to REFUSE an edge - never to add one. On win32
+ * `ParentProcessId` is a snapshot taken at creation and never rewritten, so when
+ * our fresh root is handed a recycled pid the dead owner's still-living family
+ * reads as our own descendant chain (measured for #68: eight live processes of
+ * another application, created ~18 h earlier, adopted by a terminal root that
+ * had just started). A candidate whose creation time is strictly before the
+ * process its `ppid` names - the parent of a first-level candidate being the
+ * root itself - was therefore not created by that parent: the ppid is a recycled
+ * number and the candidate is foreign. A real descendant is created after its
+ * parent, so it is still named and a genuine leaked descendant is still caught;
+ * a tie is not evidence and is kept; a missing creation time (every POSIX row,
+ * and any win32 row the OS would not date) refuses nothing, so the darwin/linux
+ * walk and every undated table behave exactly as before. This rule can only ever
+ * shrink the attributed tree.
+ *
+ * That evidence needs the root's own row, so it is gone the moment the root has
+ * already exited while its recycled pid still hangs a foreign family off the
+ * table (#69). `createdAtFloor` is a second, independent bound that needs no row
+ * at all: the caller records the instant just before it forks the helper, and
+ * every real descendant of that terminal is created after the helper, hence
+ * after that instant - so ANY process dated strictly before the floor cannot be
+ * a descendant. It is refuse-only in the same way and for the same reason (a
+ * missing creation time or a missing floor refuses nothing), and it too can only
+ * shrink the tree: a real descendant is dated after the floor and is still
+ * named. On darwin/linux no row carries `createdAt`, so the floor changes
+ * nothing there.
+ */
+export function descendantPids(table: readonly { pid: number; ppid: number; createdAt?: number }[], rootPid: number, createdAtFloor?: number): number[] {
+  const createdAt = new Map<number, number | undefined>();
   const children = new Map<number, number[]>();
   for (const row of table) {
+    createdAt.set(row.pid, row.createdAt);
     if (row.pid <= 1 || row.pid === rootPid) continue;
     const list = children.get(row.ppid);
     if (list) list.push(row.pid);
     else children.set(row.ppid, [row.pid]);
   }
   const found: number[] = [];
-  const queue = [...(children.get(rootPid) ?? [])];
-  const seen = new Set<number>(queue);
+  const seen = new Set<number>([rootPid]);
+  const queue = [rootPid];
   while (queue.length > 0) {
     const pid = queue.shift()!;
-    found.push(pid);
+    const parentCreatedAt = createdAt.get(pid);
     for (const child of children.get(pid) ?? []) {
       if (seen.has(child)) continue;
+      const childCreatedAt = createdAt.get(child);
+      // Evidence 1 (#68): the child predates the process its `ppid` names.
+      if (parentCreatedAt !== undefined && childCreatedAt !== undefined && childCreatedAt < parentCreatedAt) continue;
+      // Evidence 2 (#69): the child was created before this terminal started.
+      if (createdAtFloor !== undefined && childCreatedAt !== undefined && childCreatedAt < createdAtFloor) continue;
       seen.add(child);
+      found.push(child);
       queue.push(child);
     }
   }
@@ -171,13 +284,15 @@ export function descendantPids(table: readonly ProcessTableRow[], rootPid: numbe
  *   the explicit program/argv/cwd/env/cols/rows. The native addon lives in the
  *   forked helper, never in the Host process. Output is forwarded to the caller's
  *   bounded sink; the driver itself keeps no history.
- * - The recorded identity is the pty child's pid plus its process-group id. A
- *   forkpty child is a session/group leader, so this driver reads the OS pgid
- *   and refuses to treat the group as its own unless `pgid === pid`. That check
- *   is re-read before every group signal, so a recycled pid cannot make this
- *   driver signal a foreign group through the group path. Individual members are
- *   signalled with the group they were captured in as their identity: a pid that
- *   is no longer in that group (recycled, or moved) is left alone, and the
+ * - The recorded identity is the pty child's pid plus, where the platform
+ *   exposes one, its process-group id. A forkpty child is a session/group leader,
+ *   so this driver reads the OS pgid and refuses to treat the group as its own
+ *   unless `pgid === pid`. That check is re-read before every group signal, so a
+ *   recycled pid cannot make this driver signal a foreign group through the group
+ *   path. Where there is no group to read (win32) the pid alone is recorded, no
+ *   group is invented and the group paths are skipped by name. Individual members
+ *   are signalled with the group they were captured in as their identity: a pid
+ *   that is no longer in that group (recycled, or moved) is left alone, and the
  *   unproven drain is reported as `unknown` instead.
  * - `stop` signals only the recorded group (`-pgid`), then reclaims the
  *   descendant tree that was observed *before* the signal (an interactive shell
@@ -223,11 +338,25 @@ export function descendantPids(table: readonly ProcessTableRow[], rootPid: numbe
  *   OS reports as signalled (`signal !== 0`, for which node-pty prints
  *   `exitCode: 0`) and a stop that completed before any exit event arrived carry
  *   no code at all instead of a fabricated successful `0`.
- * - There is no `kill`/`destroy` request to the helper: termination is a Host
- *   signal to the group it recorded. The helper is reaped after the group
- *   drained so a stopped terminal leaves no helper behind.
- * - Windows process-group signalling is UNTESTED (`ps` backends are unavailable);
- *   the worker refuses non-darwin-arm64 prebuilds via its preflight.
+ * - There is no `kill`/`destroy` request to the helper: on POSIX termination is
+ *   a Host signal to the group it recorded, and on win32 it is the Host
+ *   terminating its own helper handle. Either way the helper is reaped after the
+ *   terminal drained, so a stopped terminal leaves no helper behind.
+ * - win32 is admitted for STARTING a terminal (ConPTY, #55) and owns one through
+ *   the forked helper handle rather than a process group: no group exists to read
+ *   or signal, so no group identity is recorded (`ptyProcessGroupOwnershipAvailable`)
+ *   and a stop terminates the helper this Host forked
+ *   (`ptyHelperHandleStopAvailable`) - a live handle whose identity cannot be
+ *   recycled, unlike the bare pid `taskkill /T` would trust. The tree the OS's
+ *   fixed parent chain names is read from an independent bounded source
+ *   (`readWin32ProcessTable`) and verified gone before the real `tree-drained` is
+ *   reported, with each descendant attributed only where the table's creation
+ *   times do not contradict the chain (a recycled pid cannot adopt a family that
+ *   already existed when the root started); where that cannot be established (probe unavailable, a survivor, a
+ *   helper with no killable handle) the receipt stays the named `unknown`. The
+ *   helper is reaped on both paths - a stop and an end the terminal reached on
+ *   its own - because on win32 it does not follow its pty child, which would
+ *   otherwise leak one child handle and one of the eight slots per terminal.
  */
 export class TerminalPtyDriver implements TerminalDriver {
   private readonly operations = new Map<string, Operation>();
@@ -347,8 +476,8 @@ export class TerminalPtyDriver implements TerminalDriver {
   private result(operation: Operation): { status: Operation["status"]; process?: TerminalProcessIdentity } {
     return {
       status: operation.status,
-      ...(operation.rootPid !== undefined && operation.processGroupId !== undefined
-        ? { process: { processId: operation.rootPid, processGroupId: operation.processGroupId } }
+      ...(operation.rootPid !== undefined
+        ? { process: { processId: operation.rootPid, ...(operation.processGroupId !== undefined ? { processGroupId: operation.processGroupId } : {}) } }
         : {}),
     };
   }
@@ -407,6 +536,10 @@ export class TerminalPtyDriver implements TerminalDriver {
       return { status: "not-started" as const };
     }
     try {
+      // Taken here, before the fork: a true lower bound on the creation time of
+      // every process of this terminal, and independent of the snapshot (the
+      // root's own row may already be gone - #69).
+      operation.createdAtFloor = Date.now();
       operation.worker = this.options.spawnWorker?.() ?? fork(workerEntryUrl(), [], {
         execPath: runtime.executable, execArgv: [], env: { ...runtime.env }, cwd: request.launch.cwd,
         stdio: ["ignore", "ignore", "ignore", "ipc"], serialization: "json",
@@ -421,8 +554,10 @@ export class TerminalPtyDriver implements TerminalDriver {
     // A helper that goes away while its PTY child is still alive makes the
     // operation uncontrollable (`unknown`). After the child's own exit event the
     // helper's shutdown is expected, so it must not clobber the pending
-    // natural-exit receipt (the group may still need reclaiming).
-    const workerGone = () => { if (operation.ptyExit === undefined) this.unknown(operation); };
+    // natural-exit receipt (the group may still need reclaiming) - and a helper
+    // the Host itself terminated (the win32 stop/reap path) is expected to go
+    // away here, because its exit is exactly what that path waits for.
+    const workerGone = () => { if (operation.ptyExit === undefined && !operation.helperKilled) this.unknown(operation); };
     operation.worker.on("error", workerGone);
     operation.worker.on("disconnect", workerGone);
     operation.worker.on("exit", (code, signal) => { operation.workerExit = { code, signal }; workerGone(); });
@@ -430,14 +565,18 @@ export class TerminalPtyDriver implements TerminalDriver {
     if (!reply || operation.fenced) return this.result(operation);
     if (reply.status === "started" && reply.rootPid !== undefined) {
       operation.rootPid = reply.rootPid;
-      operation.processGroupId = reply.rootPid;
       // A forkpty child leads its own group. If the OS disagrees the group is
       // not ours to signal, so the spawn stays unknown and the single child we
       // did create is terminated directly instead of through a guessed group.
-      if (readProcessPgid(reply.rootPid) !== reply.rootPid) {
-        this.unknown(operation);
-        try { process.kill(reply.rootPid, "SIGKILL"); } catch { /* already gone */ }
-        return this.result(operation);
+      // Where the platform has no group at all (win32) the check is not skipped
+      // but inapplicable: the pid is recorded, a group is not.
+      if (ptyProcessGroupOwnershipAvailable()) {
+        operation.processGroupId = reply.rootPid;
+        if (readProcessPgid(reply.rootPid) !== reply.rootPid) {
+          this.unknown(operation);
+          try { process.kill(reply.rootPid, "SIGKILL"); } catch { /* already gone */ }
+          return this.result(operation);
+        }
       }
       operation.status = "started";
       this.syncObserver();
@@ -510,6 +649,7 @@ export class TerminalPtyDriver implements TerminalDriver {
    */
   private async settle(operation: Operation): Promise<void> {
     if (operation.fenced || operation.observed) return;
+    if (ptyHelperHandleStopAvailable()) { await this.settleByHelper(operation); return; }
     // Decided once, from the state as the exit event arrives: a cadence tick
     // that lands while this exit is being verified must not turn an unobserved
     // window into observed evidence.
@@ -554,6 +694,109 @@ export class TerminalPtyDriver implements TerminalDriver {
       ...(exitCode !== undefined ? { exitCode } : {}),
     });
     await this.reap(operation);
+  }
+
+  /**
+   * win32 end the terminal reached on its own. The pty child exited, but the
+   * forked helper does NOT follow it on this platform (measured: it outlives its
+   * root and only dies with its own parent), so it must be terminated and reaped
+   * here - otherwise every ended win32 terminal leaks the helper process, its
+   * child handle and one of the eight slots. The helper handle is the containment
+   * primitive (see `ptyHelperHandleStopAvailable`), so terminating it also
+   * contains any descendant the exiting root left behind; the tree the OS's fixed
+   * parent chain still names is verified gone before the real `tree-drained` is
+   * reported, and an end whose drain cannot be established stays the named
+   * `unknown` with the identity retained.
+   */
+  private async settleByHelper(operation: Operation): Promise<void> {
+    const worker = this.killableHelper(operation);
+    if (worker === undefined) {
+      // A helper with no Host-owned handle to kill cannot be reaped and nothing
+      // here can contain what it holds: the named `unknown`, never a stop.
+      this.report(operation, { ...operation.envelope.identity, status: "unknown" });
+      return;
+    }
+    // Name the tree before the handle is terminated: the parent chain is the
+    // only handle on these descendants, and it is read while they are alive.
+    const tree = this.win32Tree(operation);
+    this.terminateHelper(operation, worker);
+    // An unconfirmed helper exit means the reap did not happen; the identity is
+    // retained so a later stop can still try, and no end is claimed.
+    if (!(await this.awaitHelperExit(operation, this.confirm)) || operation.fenced || operation.observed) {
+      this.fence(operation);
+      this.report(operation, { ...operation.envelope.identity, status: "unknown" });
+      this.syncObserver();
+      return;
+    }
+    if (tree === null || !(await this.win32TreeGone(tree, this.confirm))) {
+      this.fence(operation);
+      this.report(operation, { ...operation.envelope.identity, status: "unknown" });
+      this.syncObserver();
+      return;
+    }
+    this.forget(operation);
+    const exitCode = this.observedExitCode(operation);
+    this.report(operation, {
+      ...operation.envelope.identity,
+      status: "tree-drained",
+      ...(exitCode !== undefined ? { exitCode } : {}),
+    });
+    await this.reap(operation);
+  }
+
+  /** The Host-owned helper handle of one operation, when it can be terminated. */
+  private killableHelper(operation: Operation): PtyHelper | undefined {
+    const worker = operation.worker;
+    return worker !== undefined && typeof worker.kill === "function" ? worker : undefined;
+  }
+
+  /**
+   * Terminate the helper through the handle this Host holds. `helperKilled`
+   * records that the exit is the expected result of this call, so it is not read
+   * as an uncontrollable helper loss by the exit listener.
+   */
+  private terminateHelper(operation: Operation, worker: PtyHelper): void {
+    operation.helperKilled = true;
+    try { worker.kill!(); } catch { /* helper already gone */ }
+  }
+
+  /** The win32 tree under one root: the root plus every descendant the OS's
+   * fixed parent chain links to it, or null when the probe is unavailable. The
+   * chain alone over-attributes on this platform - a recycled pid hands us the
+   * dead owner's family - so a candidate is refused when the table proves it was
+   * created before the process its `ppid` names, or when it was created before
+   * this terminal started (`descendantPids`). Either piece of evidence suffices,
+   * both can only ever remove a foreign pid, and neither can hide a real
+   * descendant; the second also holds when the root's own row is already gone.
+   */
+  private win32Tree(operation: Operation): number[] | null {
+    const rootPid = operation.rootPid;
+    if (rootPid === undefined || rootPid <= 1) return null;
+    const table = this.options.win32ProcessTable ? this.options.win32ProcessTable() : readWin32ProcessTable();
+    return table === null ? null : [rootPid, ...descendantPids(table, rootPid, operation.createdAtFloor)];
+  }
+
+  private win32Alive(pid: number): boolean {
+    return this.options.win32ProcessAlive ? this.options.win32ProcessAlive(pid) : win32ProcessAlive(pid);
+  }
+
+  /** Bounded wait for the helper handle to report its exit. */
+  private async awaitHelperExit(operation: Operation, timeoutMs: number): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    while (operation.workerExit === undefined && Date.now() < deadline) await delay(STOP_POLL_MS);
+    return operation.workerExit !== undefined;
+  }
+
+  /** Positive evidence: every named piece of the win32 tree is gone. A pid the
+   * OS recycled reads as alive, which keeps the drain unproven rather than
+   * turning into a stopped-tree claim. */
+  private async win32TreeGone(pids: readonly number[], timeoutMs: number): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      if (pids.every((pid) => !this.win32Alive(pid))) return true;
+      if (Date.now() >= deadline) return false;
+      await delay(STOP_POLL_MS);
+    }
   }
 
   /** Pids still in the recorded group (excluding the root), keyed by that group. */
@@ -631,6 +874,9 @@ export class TerminalPtyDriver implements TerminalDriver {
 
   private signalGroup(operation: Operation, kind: NodeJS.Signals): void {
     const rootPid = operation.rootPid, pgid = operation.processGroupId;
+    // A group signal is `kill(-pgid)`, which does not exist on win32: named as
+    // one path so no caller can reach it with a group this platform cannot have.
+    if (!ptyProcessGroupOwnershipAvailable()) return;
     if (rootPid === undefined || pgid === undefined || pgid <= 1 || rootPid <= 1) return;
     // Re-read the identity immediately before the signal: a pid that no longer
     // leads exactly this group is not ours to signal.
@@ -662,8 +908,12 @@ export class TerminalPtyDriver implements TerminalDriver {
     }
   }
 
-  /** Positive evidence: the recorded group and the captured subtree are gone. */
+  /** Positive evidence: the recorded group and the captured subtree are gone.
+   * This is the POSIX group half of the claim - a group this platform recorded;
+   * win32 never reaches it, because it has no group and its own helper-handle
+   * path (`stopByHelper` / `settleByHelper`) carries its own verified tree. */
   private drained(operation: Operation, captured: readonly number[]): boolean | null {
+    if (!ptyProcessGroupOwnershipAvailable()) return null;
     const rootPid = operation.rootPid;
     if (rootPid === undefined || operation.processGroupId === undefined) return null;
     // A saturated observation set cannot prove the tree ended: fail closed.
@@ -706,14 +956,16 @@ export class TerminalPtyDriver implements TerminalDriver {
   }
 
   /**
-   * Kill exactly the terminal this driver spawned: the recorded group, plus the
-   * descendant set observed before the signal. A missing or mismatching
-   * recorded identity refuses (no signal), and a confirmed stop removes the
-   * retained operation so a later generation starts cleanly.
+   * Kill exactly the terminal this driver spawned: on POSIX the recorded group
+   * plus the descendant set observed before the signal, and on win32 the
+   * Host-owned helper handle (which takes the real tree with it). A missing or
+   * mismatching recorded identity refuses (no signal), and a confirmed stop
+   * removes the retained operation so a later generation starts cleanly.
    */
   async stop(identity: TerminalIdentity): Promise<TerminalDriverReceipt> {
     const key = operationKey(identity), operation = this.operations.get(key);
     if (!operation || operation.status === "not-started") return { ...identity, status: operation ? "not-started" : "unknown" };
+    if (ptyHelperHandleStopAvailable()) return this.stopByHelper(operation, identity);
     const rootPid = operation.rootPid, pgid = operation.processGroupId;
     if (rootPid === undefined || pgid === undefined || rootPid <= 1 || pgid <= 1) return { ...identity, status: "unknown" };
     const identityAlive = readProcessPgid(rootPid) === pgid;
@@ -756,6 +1008,38 @@ export class TerminalPtyDriver implements TerminalDriver {
     return { ...identity, status: "unknown" };
   }
 
+  /**
+   * win32 stop. There is no process group here to signal or re-read, so the
+   * containment primitive is the Host-owned helper handle - the `ChildProcess`
+   * this Host itself forked. Its identity is a live handle, not a number the OS
+   * can recycle, so terminating it can never hit a foreign process; that is the
+   * guarantee `taskkill /T` by bare pid cannot give, which is why it is not used.
+   * The tree the OS's fixed parent chain names is read before the handle is
+   * terminated and verified gone after, and only then is a real `tree-drained`
+   * reported. A tree that cannot be named or verified stays the named `unknown`,
+   * so a stop is never claimed on evidence this platform does not have. The tree
+   * is narrower than the bare chain: a pid the chain links to us only through a
+   * recycled number - a process created before the parent its `ppid` names, or
+   * one created before this terminal started, which is the only evidence left
+   * once the root's own row is gone - is not this terminal's and is not adopted
+   * (`descendantPids`), so a foreign family cannot keep the drain unverified
+   * forever.
+   */
+  private async stopByHelper(operation: Operation, identity: TerminalIdentity): Promise<TerminalDriverReceipt> {
+    const worker = this.killableHelper(operation);
+    if (worker === undefined) return { ...identity, status: "unknown" };
+    const tree = this.win32Tree(operation);
+    this.terminateHelper(operation, worker);
+    // Without a completed helper exit the handle's termination is unconfirmed,
+    // so nothing may be claimed even before the tree is checked.
+    if (!(await this.awaitHelperExit(operation, this.grace + this.confirm))) return { ...identity, status: "unknown" };
+    // A stop is still real when the tree could not be named (the helper is gone
+    // and so is the pseudo console it owned), but that is not verifiable here
+    // and is therefore reported as the named `unknown`, never as drained.
+    if (tree === null || !(await this.win32TreeGone(tree, this.confirm))) return { ...identity, status: "unknown" };
+    return this.finish(operation, identity);
+  }
+
   private finish(operation: Operation, identity: TerminalIdentity): TerminalDriverReceipt {
     this.fence(operation);
     const exitCode = this.observedExitCode(operation);
@@ -770,8 +1054,8 @@ export class TerminalPtyDriver implements TerminalDriver {
     const operation = this.operations.get(operationKey(identity));
     return {
       status: operation?.status === "started" && !operation.fenced ? "running" as const : "unknown" as const,
-      ...(operation?.rootPid !== undefined && operation.processGroupId !== undefined
-        ? { process: { processId: operation.rootPid, processGroupId: operation.processGroupId } }
+      ...(operation?.rootPid !== undefined
+        ? { process: { processId: operation.rootPid, ...(operation.processGroupId !== undefined ? { processGroupId: operation.processGroupId } : {}) } }
         : {}),
     };
   }

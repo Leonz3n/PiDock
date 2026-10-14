@@ -274,10 +274,41 @@ function brokerWithOptions(f: Harness, options: { approvalTimeoutMs?: number; se
   });
 }
 
+/**
+ * win32 (#7/#48): Host-owned service processes - a launch whose identity can be
+ * verified and a process tree that can be terminated - are NOT implemented on
+ * win32, and the production entry deliberately keeps refusing there
+ * (`service-processes.ts` throws `unsupported-platform` before anything is
+ * spawned, and #48 kept that entry closed). The capability is unbuilt (#7), not
+ * impossible for the platform: so the POSIX legs that observe a real child stay
+ * byte-intact, while win32 pins the NAMED refusal through this same broker the
+ * Agent calls, plus the fail-closed fact that nothing was created. A win32
+ * branch never polls for a child a refused start cannot create.
+ */
+function expectNamedServicePlatformRefusal(outcome: SdkAgentToolOutcome): void {
+  expect(outcome).toMatchObject({ outcome: "refused", code: "tool-refused:unsupported-platform" });
+  expect(outcome.text).toContain("unsupported-platform");
+}
+
 it("starts the task's bound service through the gate with a real child, reads its bounded status and log, and stops it", { timeout: 30_000 }, async () => {
   const f = await harness();
   await f.host.setPermission("main", "auto");
   vi.stubEnv("PIDOCK_TEST_AMBIENT", "must-not-reach-a-service");
+
+  // win32 (#7/#48): every assertion below observes a REAL service child - the
+  // pid it reports, its effective env, its bounded logs, its exit on stop - and
+  // that capability is unbuilt on win32, where the production entry refuses by
+  // name. Asserted here instead: the refusal reaches the Agent as a NAME, and a
+  // refused start creates no child and no launch record.
+  if (process.platform === "win32") {
+    expectNamedServicePlatformRefusal(await f.call("service.start", { serviceId: f.serviceId }));
+    expect(marker(f.taskDir, "a")).toBeUndefined();
+    expect(existsSync(join(f.taskDir, "service-ownership.json"))).toBe(false);
+    // With no child there is nothing to report as running: the read must not
+    // invent a lifecycle the refused start never produced.
+    expect((await f.call("service.status", { serviceId: f.serviceId })).text).not.toContain("lifecycle: running");
+    return;
+  }
 
   const started = await f.call("service.start", { serviceId: f.serviceId });
   expect(started.outcome).toBe("ok");
@@ -334,6 +365,31 @@ it("starts the task's bound service through the gate with a real child, reads it
 
 it("refuses start and stop in a read-only session and leaves the running human-started child untouched", { timeout: 30_000 }, async () => {
   const f = await harness();
+  // win32 (#7/#48): this case protects a child started by the explicit human
+  // click, and that capability is unbuilt on win32, where the human path is
+  // refused by name instead of spawning anything. So the POSIX legs that hold a
+  // real pid stay byte-intact, and win32 asserts the named refusal on the
+  // production human path plus the same read-only gate refusals, which are
+  // platform-independent.
+  if (process.platform === "win32") {
+    const refusedHuman = await runHumanServiceControl({ services: f.surface.services, driver: f.surface.driver(), serviceId: f.serviceId, action: "start", label: SERVICE_RUN_HUMAN_LABEL });
+    expect(refusedHuman).toMatchObject({ ok: false, error: expect.stringContaining("unsupported-platform") });
+    expect(marker(f.taskDir, "a")).toBeUndefined();
+    expect(existsSync(join(f.taskDir, "service-ownership.json"))).toBe(false);
+
+    await f.host.setPermission("main", "read");
+    const startRefused = await f.call("service.start", { serviceId: f.serviceId });
+    expect(startRefused.outcome).toBe("refused");
+    expect(startRefused.code).toBe("tool-refused:gate-denied");
+    expect(startRefused.text).toContain("只读");
+    const stopRefused = await f.call("service.stop", { serviceId: f.serviceId });
+    expect(stopRefused).toMatchObject({ outcome: "refused", code: "tool-refused:gate-denied" });
+    // Nothing was started and nothing was signalled - there is no child to leave
+    // untouched, and the reads still settle on a real answer.
+    expect(marker(f.taskDir, "a")).toBeUndefined();
+    expect((await f.call("service.status", { serviceId: f.serviceId })).text).toContain("lifecycle: stopped");
+    return;
+  }
   // The explicit human click is the production human path; its label is main's own.
   const human = await runHumanServiceControl({ services: f.surface.services, driver: f.surface.driver(), serviceId: f.serviceId, action: "start", label: SERVICE_RUN_HUMAN_LABEL });
   expect(human).toMatchObject({ ok: true, payload: { actor: "human" } });
@@ -398,6 +454,19 @@ it("asks first under default, performs no action on a rejection, and spends the 
   expect(granted.id).not.toBe(asked.id);
   expect(marker(f.taskDir, "a")).toBeUndefined();
   f.host.approve("main", granted.id);
+  // win32 (#7/#48): the granted confirmation below is spent on a real child,
+  // and that capability is unbuilt on win32, where the approved start is refused
+  // by name. The confirmation is still spent exactly once - the fact this case
+  // exists for - so win32 asserts that plus the named refusal and no child.
+  if (process.platform === "win32") {
+    expectNamedServicePlatformRefusal(await second);
+    expect(marker(f.taskDir, "a")).toBeUndefined();
+    expect(existsSync(ownership)).toBe(false);
+    const spentOnWin32 = f.host.openSession("main").snapshot().approvals.find((row) => row.id === granted.id);
+    expect(spentOnWin32?.status).toBe("approved");
+    expect(spentOnWin32?.consumedAt).toBeDefined();
+    return;
+  }
   expect(await second).toMatchObject({ outcome: "ok" });
   await until(() => markerPid(f.taskDir, "a") !== undefined, "the approved start to run the child");
   const pid = markerPid(f.taskDir, "a")!;
@@ -439,6 +508,15 @@ it("performs no action when the confirmation expires without a decision", { time
 it("reports process liveness and dependency reachability as two separate facts", { timeout: 30_000 }, async () => {
   const f = await harness();
   await f.host.setPermission("main", "auto");
+  // win32 (#7/#48): both facts below are read off a REAL child (its pid, its
+  // exit), and that capability is unbuilt on win32, where the start is refused
+  // by name. Win32 pins the refusal and stops there rather than polling 30s for a
+  // child the refusal cannot create; the POSIX legs stay byte-intact.
+  if (process.platform === "win32") {
+    expectNamedServicePlatformRefusal(await f.call("service.start", { serviceId: f.serviceId }));
+    expect(marker(f.taskDir, "a")).toBeUndefined();
+    return;
+  }
   await f.call("service.start", { serviceId: f.serviceId });
   await until(() => markerPid(f.taskDir, "a") !== undefined, "the service child");
   const pid = markerPid(f.taskDir, "a")!;
@@ -467,6 +545,20 @@ it("tells the Agent the declared 健康检查's real state, and a failed probe n
   const target = `http://127.0.0.1:${String(listener.port)}/health`;
   const f = await harness({ healthCheck: { kind: "http", target } });
   await f.host.setPermission("main", "auto");
+  // win32 (#7/#48): every health state below is the declared target's answer for
+  // a real running child, and that capability is unbuilt on win32, where the
+  // start is refused by name. Win32 pins the refusal plus the fail-closed fact
+  // that a refused start never dialled the declared target; the POSIX legs stay
+  // byte-intact.
+  if (process.platform === "win32") {
+    expectNamedServicePlatformRefusal(await f.call("service.start", { serviceId: f.serviceId }));
+    expect(marker(f.taskDir, "a")).toBeUndefined();
+    expect((await f.call("service.status", { serviceId: f.serviceId })).text).not.toContain("lifecycle: running");
+    // Nothing was started, so nothing was probed: "no health answer" here is a
+    // refused start, never a passing check and never an invented dial.
+    expect(listener.connections).toBe(0);
+    return;
+  }
   await f.call("service.start", { serviceId: f.serviceId });
   await until(() => markerPid(f.taskDir, "a") !== undefined, "the service child");
   const pid = markerPid(f.taskDir, "a")!;
@@ -515,6 +607,16 @@ it("tells the Agent the declared 健康检查's real state, and a failed probe n
 it("tells the Agent a declared gRPC check is not implemented here, never that it is healthy", { timeout: 30_000 }, async () => {
   const f = await harness({ healthCheck: { kind: "grpc", target: "127.0.0.1:9" } });
   await f.host.setPermission("main", "auto");
+  // win32 (#7/#48): the named 未探测 below is read off a REAL running child, and
+  // that capability is unbuilt on win32, where the start is refused by name.
+  // Win32 pins that refusal - and never a health claim - instead of polling for
+  // a child the refusal cannot create; the POSIX legs stay byte-intact.
+  if (process.platform === "win32") {
+    expectNamedServicePlatformRefusal(await f.call("service.start", { serviceId: f.serviceId }));
+    expect(marker(f.taskDir, "a")).toBeUndefined();
+    expect((await f.call("service.status", { serviceId: f.serviceId })).text).not.toContain("health: healthy");
+    return;
+  }
   await f.call("service.start", { serviceId: f.serviceId });
   await until(() => markerPid(f.taskDir, "a") !== undefined, "the service child");
   const pid = markerPid(f.taskDir, "a")!;
@@ -602,6 +704,17 @@ it("declares only gated service tools, so no service tool is reachable outside t
 it("records THIS platform's real launch in the task workspace and projects it with Windows unverified", { timeout: 30_000 }, async () => {
   const f = await harness();
   await f.host.setPermission("main", "auto");
+  // win32 (#7/#48): the record below is written by a REAL launch, and that
+  // capability is unbuilt on win32, where the start is refused by name. So this
+  // host's own platform row is unobservable here - and inventing one would be
+  // exactly the fabrication this case forbids. Win32 pins the named refusal plus
+  // the fail-closed fact that a refused start records no launch at all.
+  if (process.platform === "win32") {
+    expectNamedServicePlatformRefusal(await f.call("service.start", { serviceId: f.serviceId }));
+    expect(markerPid(f.taskDir, "a")).toBeUndefined();
+    expect(readLaunchVerificationOnDisk(f.taskDir).entries).toEqual([]);
+    return;
+  }
   expect((await f.call("service.start", { serviceId: f.serviceId })).outcome).toBe("ok");
   await until(() => markerPid(f.taskDir, "a") !== undefined, "the service child to report its pid");
 

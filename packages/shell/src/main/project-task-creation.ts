@@ -1,10 +1,11 @@
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { protectApplicationProfile, type TaskPathProtection } from "../host/protected-application-path.js";
-import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, normalize, relative, resolve } from "node:path";
 import { readTaskRecordOnDisk } from "../host/task-store.js";
 import type { HostTaskResult } from "../rpc/protocol.js";
+import { createDirectoryLink, linkTargetMatches } from "./directory-link.js";
 import { buildLinkName, buildRepoChildName, checkLinkNameCollisions, REMOTE_NAME } from "./multi-repo-provision.js";
 import type { ProjectRegistry } from "./project-registry.js";
 import { buildTaskBranch, TASK_BRANCH_EXISTS_NO_WORKTREE } from "./task-provision.js";
@@ -418,8 +419,8 @@ export class ProjectTaskCreation {
         let exists = false;
         try { lstatSync(target); exists = true; } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
         if (exists) {
-          if (!lstatSync(target).isSymbolicLink() || readlinkSync(target) !== dir.path) throw new Error("普通目录链接已改变");
-        } else symlinkSync(dir.path, target, "dir");
+          if (!lstatSync(target).isSymbolicLink() || !linkTargetMatches(readlinkSync(target), dir.path)) throw new Error("普通目录链接已改变");
+        } else createDirectoryLink(dir.path, target);
       }
       let previous: ReturnType<typeof readTaskRecordOnDisk>;
       try { previous = readTaskRecordOnDisk(intent.taskDir); }

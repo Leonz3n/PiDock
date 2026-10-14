@@ -20,8 +20,10 @@ Windows x64 的安装资产改为 **MSI**：
 
 ## 后果与边界（必须如实记录）
 
-- **MSI 不是纯配置改动就能验证的**：构建需要 WiX `4.0.0.5512.2`（构建时下载，`MsiTarget.js:73`），非 Windows 宿主还要跑 x86_64 版 Wine（`toolsets/wine.js:8-14`）。本机（darwin-arm64）**未构建、未安装、未升级验证过任何 MSI**；此前连 NSIS 交叉构建都已记录为失败（`docs/electron-packaging.md:57-59`）。
-- **安装/卸载/升级与 Authenticode 签名验收必须在 Windows 上完成**，由人工在另一台 Windows 机器执行；在这些结果出现前，**任何文档或报告都不得声称 Windows 资产可用或签名通过**。
+- **MSI 不是纯配置改动就能验证的**：构建需要 WiX `4.0.0.5512.2`（构建时下载，`MsiTarget.js:73`），非 Windows 宿主还要跑 x86_64 版 Wine（`toolsets/wine.js:8-14`）。**darwin-arm64 主机**（本 ADR 的决策环境）**未构建、未安装、未升级验证过任何 MSI**；此前连 NSIS 交叉构建都已记录为失败（`docs/electron-packaging.md` 的「Windows x64 候选状态」节）。
+  - **更新（2026-10-14，#58，win32-x64 主机）：**在 Windows 主机上 MSI 确实构建成功，且安装/启动/覆盖升级/卸载均已实测（逐条证据见 `docs/electron-packaging.md` 的「Windows x64 MSI 实测」节）。同时暴露一条本 ADR 未预见的必需条件：**msi 目标必须有 `win.icon`**——MSI 模板只在 `iconPath` 存在时才发 `<Icon>`，而 `MsiTarget` 无条件引用它，缺图标即 `light.exe` LGHT0094；产物未签名。
+- **安装/卸载/升级与 Authenticode 签名验收必须在 Windows 上完成**；在这些结果出现前，**任何文档或报告都不得声称 Windows 资产可用或签名通过**。
+  - **更新（2026-10-14，#58）：**代码签名仍未验收（该主机 0 张证书，MSI 与 `PiDock.exe` 的 `Get-AuthenticodeSignature` 均为 `NotSigned`）；干净系统安装、多用户账户、>1 版本升级矩阵也仍未验证。不得据上述实测声明 Windows 资产已签名或可在干净系统上发布。
 - 纯配置层可在任意平台验证的部分（配置可加载、`win.target` 为 `msi`、无 NSIS 专有键残留、MSI 块键均在 `MsiOptions` 允许集内、mac 路径未变）由自动化检查守住；这类检查**不证明** MSI 产物存在。
 - **历史研究记录不改写**：`docs/desktop-runtime-research.md`、`docs/browser-automation-validation.md`、`docs/design-notes.md:158,169,238` 等属于当时的选项空间调研（`docs/design-notes.md:238` 已声明其保留为历史），保持原样；只有**现行要求类文档**（规格、验证计划、打包状态、设计结论）按本决策更新为 MSI。
 - 本决策**不**关闭任何工单，也不勾选任何验收格；`#15` 的 Windows 侧验收仍为未验证状态。

@@ -26,6 +26,21 @@ const homes: string[] = [];
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
+/**
+ * The product spells an in-task child as `<native task dir>/<child>`: a FORWARD
+ * slash after the native directory, never `path.join` (`previewTaskPaths` in
+ * `task-provision.ts`, `previewMixedTaskPaths` in `multi-repo-provision.ts`,
+ * `joinRoot` in `workspace-files.ts`, and the conflict scan's `takenPaths` in
+ * `task-prep-scan.ts`). The fixture builds the same spelling, so a product path
+ * and its expectation are one string form on every host.
+ */
+const taskChildPath = (taskDir: string, child: string): string => `${taskDir.replace(/[\\/]+$/, "")}/${child}`;
+/** Git prints worktree paths with forward slashes in `worktree list --porcelain`, on every host. */
+const porcelainPath = (path: string): string => path.replace(/\\/g, "/");
+/** A hand-built `RegExp` needs the literal text escaped, or a Windows backslash becomes an escape. */
+const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** A checkout's text, line endings normalized: a Windows `core.autocrlf` checkout carries CRLF. */
+const lfText = (text: string): string => text.replace(/\r\n/g, "\n");
 interface RepoFixture {
   repo: string;
   remote: string;
@@ -172,7 +187,7 @@ async function setup() {
     taskDir: intent.taskDir,
     branch: intent.branch,
     recordBytes: () => readFileSync(join(intent.taskDir, "task.json")),
-    worktreeOf: (fixture: RepoFixture) => join(intent.taskDir, buildRepoChildName(repoIdOf(project, fixture))),
+    worktreeOf: (fixture: RepoFixture) => taskChildPath(intent.taskDir, buildRepoChildName(repoIdOf(project, fixture))),
     selection: (fixture: RepoFixture, remote = "origin", remoteBranch = "main") => ({
       sourceId: repoIdOf(project, fixture),
       remote,
@@ -229,7 +244,7 @@ describe("production task-source append", () => {
       remote: "origin",
       remoteBranch: "main",
       commit: fresh,
-      worktree: join(env.taskDir, repoDir),
+      worktree: taskChildPath(env.taskDir, repoDir),
     });
     // The fetch happened in the second repo's OWN checkout and pinned the
     // exact fresh commit (not the stale local branch, not another repo's).
@@ -241,12 +256,12 @@ describe("production task-source append", () => {
     // The worktree exists at the pinned commit on the task branch.
     expect(git(appended.worktree, "rev-parse", "HEAD")).toBe(fresh);
     expect(git(appended.worktree, "rev-parse", "--abbrev-ref", "HEAD")).toBe(env.branch);
-    expect(readFileSync(join(appended.worktree, "README.md"), "utf8")).toBe("second moved on\n");
+    expect(lfText(readFileSync(join(appended.worktree, "README.md"), "utf8"))).toBe("second moved on\n");
     // Main-derived scan + checkouts rode the Host payload.
     const payload = env.payloads.at(-1)!;
     // `takenPaths` is the REAL task-folder listing (the existing worktree and
     // the task record), not anything the page supplied.
-    expect(payload["takenPaths"]).toEqual(expect.arrayContaining([`${env.taskDir}/task.json`, firstWorktree]));
+    expect(payload["takenPaths"]).toEqual(expect.arrayContaining([taskChildPath(env.taskDir, "task.json"), firstWorktree]));
     // The scan lists the source checkout's own worktree branch too (`main`);
     // the task branch it gates on is absent, so the append is planned.
     expect(payload["branchesInUse"]).toEqual(["main"]);
@@ -320,7 +335,7 @@ describe("production task-source append", () => {
       env.append.append({ taskId: env.taskId, repositories: [env.selection(env.second)] }),
     ).rejects.toThrow(/^branch-in-use: 分支已在其他 worktree 使用/);
     expect(env.recordBytes()).toEqual(before);
-    expect(git(env.second.repo, "worktree", "list", "--porcelain")).toContain(foreign);
+    expect(git(env.second.repo, "worktree", "list", "--porcelain")).toContain(porcelainPath(foreign));
     expect(existsSync(env.worktreeOf(env.second))).toBe(false);
     expect(env.payloads.at(-1)?.["branchesInUse"]).toEqual(expect.arrayContaining(["main", env.branch]));
   });
@@ -336,7 +351,7 @@ describe("production task-source append", () => {
     ).rejects.toThrow(/^path-taken: 路径已被占用/);
     expect(env.recordBytes()).toEqual(before);
     expect(readFileSync(join(occupied, "keep.txt"), "utf8")).toBe("not ours\n");
-    expect(git(env.second.repo, "worktree", "list", "--porcelain")).not.toContain(occupied);
+    expect(git(env.second.repo, "worktree", "list", "--porcelain")).not.toContain(porcelainPath(occupied));
     expect(env.payloads.at(-1)?.["takenPaths"]).toContain(occupied);
   });
 
@@ -354,7 +369,7 @@ describe("production task-source append", () => {
     });
     await expect(
       env.append.append({ taskId: env.taskId, repositories: [env.selection(env.second)] }),
-    ).rejects.toThrow(new RegExp(`^repo-unusable: 仓库 repo-[0-9a-f]{8}（second）的来源检出不可用: ${notACheckout}$`));
+    ).rejects.toThrow(new RegExp(`^repo-unusable: 仓库 repo-[0-9a-f]{8}（second）的来源检出不可用: ${escapeRegExp(notACheckout)}$`));
     expect(env.recordBytes()).toEqual(before);
     expect(env.payloads).toHaveLength(0);
     expect(existsSync(env.worktreeOf(env.second))).toBe(false);
@@ -522,7 +537,7 @@ describe("production task-source append", () => {
     expect(existsSync(worktree)).toBe(true);
     expect(git(worktree, "rev-parse", "HEAD")).toBe(pinned);
     expect(git(worktree, "rev-parse", "--abbrev-ref", "HEAD")).toBe(env.branch);
-    expect(readFileSync(join(worktree, "README.md"), "utf8")).toBe("second baseline\n");
+    expect(lfText(readFileSync(join(worktree, "README.md"), "utf8"))).toBe("second baseline\n");
   });
 
   gitCase("runs a resume through the same instance queue as an in-flight append, never interleaved with it", async () => {

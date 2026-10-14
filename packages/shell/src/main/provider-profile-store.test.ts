@@ -28,6 +28,17 @@ it("persists metadata and the credential reference only, with private file modes
   expect(raw).toContain("PIDOCK_PROVIDER_EXAMPLE");
   expect(raw).not.toContain(SECRET);
   expect(raw).not.toContain("sk-");
+});
+
+// win32 (#57): POSIX mode bits are the only place "owner-only" is observable at all, and on win32
+// `statSync().mode & 0o777` reads a synthesized 0o666 for files AND directories whatever the store
+// asked for (`mkdirSync(..., {mode: 0o700})` / `openSync(temporary, "wx", 0o600)`) or `chmodSync`
+// set (measured on this host). The store writes no ACL there, so "machine-private" is unenforced on
+// win32 - mitigated in practice only by the per-user profile directory, which nothing here verifies.
+// Named skip: this dimension is unobservable on win32, never a pass.
+it.skipIf(process.platform === "win32")("keeps the profile document and its directory owner-only (POSIX mode bits)", () => {
+  const { dir, store: profiles } = store();
+  profiles.save(input);
   expect(statSync(join(dir, "provider-profiles.json")).mode & 0o777).toBe(0o600);
   expect(statSync(dir).mode & 0o777).toBe(0o700);
 });

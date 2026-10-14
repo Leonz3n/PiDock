@@ -173,6 +173,8 @@ export interface TerminalInstanceRecord {
    * a session/group leader (`pgid === pid`), so a stop signals `-processGroupId`
    * and can name exactly one group. It is recorded beside the pid because a
    * group id that does not match the recorded pid is not this terminal's group.
+   * Absent where the platform has no group (win32), where the stop instead
+   * terminates the Host-owned helper handle.
    */
   processGroupId?: number;
   startedAt: string;
@@ -253,18 +255,21 @@ export class TaskTerminalRegistry {
   }
 
   /**
-   * Record the OS process identity the spawner observed. `processGroupId`
-   * defaults to the pid because a forkpty child leads its own group; a caller
-   * that observed a different group must pass it (and a mismatch is refused at
-   * stop time, never guessed).
+   * Record the OS process identity the spawner observed. `processGroupId` is
+   * recorded exactly when the spawner observed one: a forkpty child leads its own
+   * group, so a POSIX caller passes the group it read, and a platform that has no
+   * process group (win32) passes none and gets none recorded - it is NEVER
+   * defaulted to the pid, which would store a group nobody observed and make the
+   * record claim an ownership the platform cannot have. A mismatch is refused at
+   * stop time, never guessed.
    */
   markProcess(instanceId: string, input: { processId: unknown; processGroupId?: unknown; startedAt?: unknown }): TerminalInstanceRecord {
     const record = this.require(instanceId);
     if (!isPositiveInt(input.processId)) throw new Error("invalid-process: 终端进程号必须是正整数");
-    const processGroupId = input.processGroupId === undefined ? input.processId : input.processGroupId;
-    if (!isPositiveInt(processGroupId)) throw new Error("invalid-process: 终端进程组号必须是正整数");
+    if (input.processGroupId !== undefined && !isPositiveInt(input.processGroupId)) throw new Error("invalid-process: 终端进程组号必须是正整数");
     record.processId = input.processId;
-    record.processGroupId = processGroupId;
+    if (input.processGroupId === undefined) delete record.processGroupId;
+    else record.processGroupId = input.processGroupId;
     if (typeof input.startedAt === "string" && input.startedAt.trim().length > 0) record.startedAt = input.startedAt.trim();
     return this.copy(record);
   }
@@ -334,9 +339,17 @@ export class TaskTerminalRegistry {
   }
 
   /**
-   * Prove what a stop request may act on: same task, known instance, recorded
-   * process identity (pid and the process-group id the spawner observed).
-   * Anything else fails closed with a reason the UI shows.
+   * Prove what a stop request may act on: same task, known instance, and a
+   * recorded process identity (the pid the spawner observed). Anything else
+   * fails closed with a reason the UI shows.
+   *
+   * The recorded pid is the whole identity this registry can name. What a stop
+   * may then act on is platform-specific and belongs to the driver that owns the
+   * session: a process group that has to still belong to that pid where the
+   * platform owns groups, and the Host-owned helper handle on win32 where none
+   * exists. This method therefore never invents or requires a group - a record
+   * the spawner gave no group (win32) is a start the Host can still stop, not a
+   * reason to refuse.
    */
   stopScope(instanceId: string): TerminalStopResult {
     const record = this.instances.get(instanceId);
@@ -344,8 +357,8 @@ export class TaskTerminalRegistry {
     if (record.taskId !== this.taskId) {
       return { ok: false, error: `task-mismatch: 终端 ${instanceId} 属于任务 ${record.taskId}，不会停止其他任务的进程` };
     }
-    if (record.processId === undefined || record.processGroupId === undefined) {
-      return { ok: false, error: `unknown-process: 终端 ${instanceId} 尚未报告进程号与进程组号，无法安全停止` };
+    if (record.processId === undefined) {
+      return { ok: false, error: `unknown-process: 终端 ${instanceId} 尚未报告进程号，无法安全停止` };
     }
     return { ok: true, scope: { taskId: record.taskId, instanceId: record.instanceId, processId: record.processId, startedAt: record.startedAt } };
   }

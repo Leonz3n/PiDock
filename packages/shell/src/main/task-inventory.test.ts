@@ -64,15 +64,22 @@ describe("persisted task inventory", () => {
     const dir = root();
     const outside = root();
     task(join(outside, "task-abcdef12"));
-    symlinkSync(join(outside, "task-abcdef12"), join(dir, "task-abcdef12"));
+    // win32: a plain directory symlink needs SeCreateSymbolicLinkPrivilege; a junction is the directory link this platform can create without it (#57).
+    symlinkSync(join(outside, "task-abcdef12"), join(dir, "task-abcdef12"), process.platform === "win32" ? "junction" : "dir");
     expect(() => listPersistedTasks(dir)).toThrow();
     const recordRoot = root();
     const recordDir = join(recordRoot, "task-abcdef12");
     mkdirSync(recordDir);
-    symlinkSync(join(outside, "task-abcdef12", "task.json"), join(recordDir, "task.json"));
-    expect(() => listPersistedTasks(recordRoot)).toThrow();
+    // win32 (#57): a link to a record FILE needs SeCreateSymbolicLinkPrivilege and a junction cannot
+    // stand in for a file, so a normal user cannot build this case. NOT actually covered on win32 by
+    // a sibling: the junctions above and below reach the root and folder refusals
+    // (task-inventory.ts:23/:30), not the invalid-record-file refusal at :39. Unobserved on win32.
+    if (process.platform !== "win32") {
+      symlinkSync(join(outside, "task-abcdef12", "task.json"), join(recordDir, "task.json"));
+      expect(() => listPersistedTasks(recordRoot)).toThrow();
+    }
     const linkedRoot = join(root(), "link");
-    symlinkSync(outside, linkedRoot);
+    symlinkSync(outside, linkedRoot, process.platform === "win32" ? "junction" : "dir");
     expect(() => listPersistedTasks(linkedRoot)).toThrow();
   });
 });

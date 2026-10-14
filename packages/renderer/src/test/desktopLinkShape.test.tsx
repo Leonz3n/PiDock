@@ -90,15 +90,22 @@ describe("[PiDock 03] (#6 box 12) link-shape report on the desktop project page"
     expect(shape).toHaveTextContent("/work/missing");
     expect(shape).not.toHaveTextContent("真实目录");
 
-    // The platform record: this machine's platform exercised, win32 unverified by name.
+    // The platform record: this machine's platform exercised, the OTHER
+    // released platform named as unverified.
     const platforms = within(row).getByTestId(`row-link-platforms-${TASK_ID}`);
     const here = platforms.querySelector(`li[data-platform="${hostPlatformLabel()}"]`);
     expect(here).toHaveAttribute("data-exercised", "true");
     expect(here).toHaveTextContent("已实测");
-    const windows = platforms.querySelector('li[data-platform="win32-x64"]');
-    expect(windows).toHaveAttribute("data-exercised", "false");
-    expect(windows).toHaveTextContent("未实测");
-    expect(windows).toHaveTextContent("win32 链接方式未验证");
+    // The matrix row this Host did NOT run, picked by DIFFERENCE from this
+    // machine's own label: on win32 both names are `win32-x64`, so the row must
+    // never be selected by a hardcoded name.
+    const otherName = hostPlatformLabel() === "win32-x64" ? "darwin-arm64" : "win32-x64";
+    const other = platforms.querySelector(`li[data-platform="${otherName}"]`);
+    expect(other).toHaveAttribute("data-exercised", "false");
+    expect(other).toHaveTextContent("未实测");
+    // 「win32 链接方式未验证」 lives on every win32 row; on win32 that row is the
+    // EXERCISED one, which carries the sentence too, so read the win32 row.
+    expect(platforms.querySelector('li[data-platform="win32-x64"]')).toHaveTextContent("win32 链接方式未验证");
 
     // The 真实 pi clause is stated as a boundary, never as a pass.
     expect(within(row).getByTestId(`row-link-model-boundary-${TASK_ID}`)).toHaveTextContent("不是真实 pi/模型运行");

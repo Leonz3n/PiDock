@@ -11,33 +11,142 @@ const posixIt = it.skipIf(!actualDarwinArm64);
 beforeEach(() => { vi.stubGlobal("process", { ...process, platform: "darwin", arch: "arm64" }); });
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
+/** node-pty 1.1.0's darwin-arm64 prebuilds, copied at the real pinned bytes with
+ * their mode cleared, so a case can measure readiness as the audited `0o644`. */
+function writeDarwinPayload(path: string) {
+  const installed = fileURLToPath(new URL("../../node_modules/node-pty/", import.meta.url));
+  mkdirSync(join(path, "prebuilds/darwin-arm64"), { recursive: true });
+  const helper = join(path, "prebuilds/darwin-arm64/spawn-helper"), addon = join(path, "prebuilds/darwin-arm64/pty.node");
+  copyFileSync(join(installed, "prebuilds/darwin-arm64/spawn-helper"), helper);
+  copyFileSync(join(installed, "prebuilds/darwin-arm64/pty.node"), addon);
+  chmodSync(helper, 0o644); chmodSync(addon, 0o644);
+  return { helper, addon };
+}
+
+/** The win32-x64 ConPTY pair. `conoutSocketWorker.js` is part of the win32 pin, so
+ * the fixture always writes it and the cases remove or damage it explicitly. */
+function writeWin32Payload(path: string) {
+  const installed = fileURLToPath(new URL("../../node_modules/node-pty/", import.meta.url));
+  mkdirSync(join(path, "prebuilds/win32-x64"), { recursive: true });
+  mkdirSync(join(path, "lib/worker"), { recursive: true });
+  const addon = join(path, "prebuilds/win32-x64/conpty.node"), worker = join(path, "lib/worker/conoutSocketWorker.js");
+  copyFileSync(join(installed, "prebuilds/win32-x64/conpty.node"), addon);
+  copyFileSync(join(installed, "lib/worker/conoutSocketWorker.js"), worker);
+  return { addon, worker };
+}
+
 /** `dev` is the pnpm virtual store under a repository root; `packed` is the flat
  * production layout a packed app extracts under `app.asar.unpacked`, with the
- * archive that requires it present next to it. */
-function fixture(layout: "dev" | "packed" = "dev") {
+ * archive that requires it present next to it. The payload is written separately
+ * because the pin that audits it differs per platform while the layout does not. */
+function layoutRoot(layout: "dev" | "packed") {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "pidock-pty-preflight-")));
   const resources = join(root, "PiDock.app/Contents/Resources");
   const path = layout === "packed"
     ? join(resources, "app.asar.unpacked/node_modules/node-pty")
     : join(root, "node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty");
-  const installed = fileURLToPath(new URL("../../node_modules/node-pty/", import.meta.url));
-  mkdirSync(join(path, "prebuilds/darwin-arm64"), { recursive: true });
-  mkdirSync(join(path, "lib"));
+  mkdirSync(join(path, "lib"), { recursive: true });
   if (layout === "packed") writeFileSync(join(resources, "app.asar"), "packed-applications-archive\n");
   const entryPath = join(path, "lib/index.js");
   writeFileSync(entryPath, "// Never imported by filesystem tests.\n");
   writeFileSync(join(path, "package.json"), '{"name":"node-pty","version":"1.1.0"}');
-  const helper = join(path, "prebuilds/darwin-arm64/spawn-helper"), addon = join(path, "prebuilds/darwin-arm64/pty.node");
-  copyFileSync(join(installed, "prebuilds/darwin-arm64/spawn-helper"), helper);
-  copyFileSync(join(installed, "prebuilds/darwin-arm64/pty.node"), addon);
-  chmodSync(helper, 0o644); chmodSync(addon, 0o644);
   return {
-    root, path, helper, addon, entryPath,
+    root, path, entryPath,
     resources: layout === "packed" ? resources : undefined,
     archiveEntryPath: join(resources, "app.asar/node_modules/node-pty/lib/index.js"),
+  };
+}
+
+function fixture(layout: "dev" | "packed" = "dev") {
+  const { root, path, entryPath, resources, archiveEntryPath } = layoutRoot(layout);
+  const { helper, addon } = writeDarwinPayload(path);
+  return {
+    root, path, helper, addon, entryPath, resources, archiveEntryPath,
     resolveEntry: () => entryPath,
     clean: () => rmSync(root, { recursive: true, force: true }),
   };
+}
+
+/** The payload files `hostFixture` wrote, by the pin's own payload kind. The two
+ * pins pin different kinds, so the record is partial by construction. */
+interface HostPayload { helper?: string; addon?: string; worker?: string }
+
+/** The same layouts as `fixture()`, carrying the payload of the pin this host
+ * really admits (`hostPin`). A layout or payload case uses it because the darwin
+ * pin's `0o644` mode audit cannot be satisfied on a win32 filesystem:
+ * `chmodSync` only clears the read-only attribute, so the audit there reads
+ * `0o666` and refuses a darwin-shaped payload. Which directory and which entry
+ * spellings resolve, and which changed bytes are refused, are the same
+ * propositions under either pin. */
+function hostFixture(layout: "dev" | "packed" = "dev") {
+  const { root, path, entryPath, resources, archiveEntryPath } = layoutRoot(layout);
+  const payloads: HostPayload = hostPin === "win32-x64" ? writeWin32Payload(path) : writeDarwinPayload(path);
+  return {
+    root, path, entryPath, resources, archiveEntryPath, payloads,
+    resolveEntry: () => entryPath,
+    clean: () => rmSync(root, { recursive: true, force: true }),
+  };
+}
+
+/** The measured Windows build of this host and the last build before ConPTY. */
+const WINDOWS_BUILD = 26200, LEGACY_WINDOWS_BUILD = 18308;
+
+/** The refusal is one exact string everywhere; a substring match would still
+ * accept a renamed one, so the win32 cases compare the message itself. */
+function expectNodePtyRefusal(run: () => unknown): void {
+  try { run(); }
+  catch (error) { expect((error as Error).message).toBe("node-pty-preflight-unavailable"); return; }
+  throw Error("expected a node-pty-preflight-unavailable refusal");
+}
+
+function stubWin32(): void { vi.stubGlobal("process", { ...process, platform: "win32", arch: "x64" }); }
+
+/** The pin this host really admits, keyed exactly as `pins` in
+ * node-pty-preflight.ts. */
+const hostPin: "darwin-arm64" | "win32-x64" = process.platform === "win32" ? "win32-x64" : "darwin-arm64";
+
+/** The win32 pin sits behind the ConPTY build gate and the darwin pin reads no
+ * build at all, so only a win32 host passes the measured build; `undefined`
+ * leaves production's `os.release()` seam in place. */
+const hostPinWindowsBuild = hostPin === "win32-x64" ? WINDOWS_BUILD : undefined;
+
+/** `beforeEach` already stubs the darwin pin, so only a win32 host restubs - and
+ * it must, or the fixture payload and the audited pin would be different
+ * records. */
+function stubHostPin(): void { if (hostPin === "win32-x64") stubWin32(); }
+
+/** The payload kinds the two pins name, spelled as `pins` in
+ * node-pty-preflight.ts spells them. */
+type HostPayloadKind = "helper" | "addon" | "worker";
+
+/** The kinds `hostPin` pins: darwin pins `spawn-helper` + `pty.node`, win32 the
+ * ConPTY `conpty.node` + `conoutSocketWorker.js`. A payload case takes these, so
+ * it changes the bytes of a file the pin this host audits really names. */
+const hostPayloadKinds: HostPayloadKind[] = hostPin === "win32-x64" ? ["addon", "worker"] : ["helper", "addon"];
+
+/** The pinned file `hostFixture` wrote for `kind`. */
+function hostPayloadFile(fixture: ReturnType<typeof hostFixture>, kind: HostPayloadKind): string {
+  const file = fixture.payloads[kind];
+  if (file === undefined) throw Error(`host pin ${hostPin} pins no ${kind} payload`);
+  return file;
+}
+
+/** The mode half of a changed-bytes case: refusing must not grant execution
+ * permission, i.e. the audited helper's POSIX mode is exactly what the fixture
+ * left. Only darwin audits a mode; win32 pins no helper and a win32 file carries
+ * no observable POSIX mode at all (`chmodSync` only clears the read-only
+ * attribute, so the audit reads `0o666`). That half is #57's mode-bit class:
+ * named here and reported on #56 as "unobserved on win32", never a pass. */
+function expectAuditedModeUnchanged(helper: string | undefined, before: number | undefined): void {
+  if (helper === undefined || before === undefined) return;
+  expect(statSync(helper).mode & 0o7777).toBe(before);
+}
+
+/** A win32-x64 dev layout. */
+function fixtureWin32() {
+  const { root, path, entryPath } = layoutRoot("dev");
+  const { addon, worker } = writeWin32Payload(path);
+  return { root, addon, worker, entryPath, resolveEntry: () => entryPath, clean: () => rmSync(root, { recursive: true, force: true }) };
 }
 
 posixIt("Darwin arm64 POSIX modes: refuses a competing release addon before granting audited helper execution permission", () => {
@@ -72,13 +181,14 @@ posixIt("Darwin arm64 POSIX fchmod: explicitly prepares only the audited helper 
   } finally { f.clean(); }
 });
 
-it.each(["helper", "addon"] as const)("refuses changed %s bytes before granting execution permission", (kind) => {
-  const f = fixture();
+it.each(hostPayloadKinds)("refuses changed %s bytes before granting execution permission", (kind) => {
+  stubHostPin();
+  const f = hostFixture();
   try {
-    const before = statSync(f.helper).mode & 0o7777;
-    const path = f[kind], bytes = readFileSync(path); bytes[0] ^= 1; writeFileSync(path, bytes);
-    expect(() => prepareNodePtyPrebuild(f.root, f.resolveEntry)).toThrow("node-pty-preflight-unavailable");
-    expect(statSync(f.helper).mode & 0o7777).toBe(before);
+    const helper = f.payloads.helper, before = helper === undefined ? undefined : statSync(helper).mode & 0o7777;
+    const path = hostPayloadFile(f, kind), bytes = readFileSync(path); bytes[0] ^= 1; writeFileSync(path, bytes);
+    expect(() => prepareNodePtyPrebuild(f.root, f.resolveEntry, undefined, hostPinWindowsBuild)).toThrow("node-pty-preflight-unavailable");
+    expectAuditedModeUnchanged(helper, before);
   } finally { f.clean(); }
 });
 
@@ -136,10 +246,10 @@ it("refuses a wrong pinned package version without needing native files", () => 
   } finally { f.clean(); }
 });
 
-it.each(["win32", "linux"])("refuses unsupported %s before resolving a package or touching native files", (platform) => {
-  vi.stubGlobal("process", { ...process, platform });
+it.each([["win32", "arm64"], ["linux", "x64"], ["darwin", "x64"]] as const)("refuses unsupported %s-%s before resolving a package or touching native files", (platform, arch) => {
+  vi.stubGlobal("process", { ...process, platform, arch });
   const resolveEntry = vi.fn(() => "never-resolved");
-  expect(() => inspectNodePtyPrebuild(join(tmpdir(), "unused-pty-repo"), resolveEntry)).toThrow("node-pty-preflight-unavailable");
+  expectNodePtyRefusal(() => inspectNodePtyPrebuild(join(tmpdir(), "unused-pty-repo"), resolveEntry, undefined, WINDOWS_BUILD));
   expect(resolveEntry).not.toHaveBeenCalled();
 });
 
@@ -179,24 +289,26 @@ posixIt("Darwin arm64 symlinks: refuses an entry redirected outside the pinned p
 });
 
 it("resolves the flat packaged package under app.asar.unpacked and accepts the app.asar spelling of its pinned entry", () => {
-  const f = fixture("packed");
+  stubHostPin();
+  const f = hostFixture("packed");
   try {
     // require.resolve reports the archive member; asarUnpack pins that member's
     // extraction to the unpacked file the audit below really reads.
-    expect(inspectNodePtyPrebuild(f.root, () => f.archiveEntryPath, f.resources)).toMatchObject({ entryPath: f.entryPath });
+    expect(inspectNodePtyPrebuild(f.root, () => f.archiveEntryPath, f.resources, hostPinWindowsBuild)).toMatchObject({ entryPath: f.entryPath });
     // The unpacked spelling names the same audited file and is accepted too.
-    expect(inspectNodePtyPrebuild(f.root, () => f.entryPath, f.resources).entryPath).toBe(f.entryPath);
+    expect(inspectNodePtyPrebuild(f.root, () => f.entryPath, f.resources, hostPinWindowsBuild).entryPath).toBe(f.entryPath);
   } finally { f.clean(); }
 });
 
 it("keeps the pnpm virtual-store layout when the resources root holds no archive", () => {
-  const f = fixture();
+  stubHostPin();
+  const f = hostFixture();
   try {
     // A dev Electron has a `process.resourcesPath` but no app.asar: the packaged
     // candidate must not hijack the dev layout.
     const resources = join(f.root, "Electron.app/Contents/Resources");
     mkdirSync(resources, { recursive: true });
-    expect(inspectNodePtyPrebuild(f.root, f.resolveEntry, resources).entryPath).toBe(f.entryPath);
+    expect(inspectNodePtyPrebuild(f.root, f.resolveEntry, resources, hostPinWindowsBuild).entryPath).toBe(f.entryPath);
   } finally { f.clean(); }
 });
 
@@ -216,21 +328,23 @@ it("refuses a packaged package resolution to an entry outside the packaged packa
 });
 
 it("refuses a competing loader directory inside the packaged package", () => {
-  const f = fixture("packed");
+  stubHostPin();
+  const f = hostFixture("packed");
   try {
     // Positive control: only the competitor is added between the two calls.
-    expect(inspectNodePtyPrebuild(f.root, f.resolveEntry, f.resources).entryPath).toBe(f.entryPath);
+    expect(inspectNodePtyPrebuild(f.root, f.resolveEntry, f.resources, hostPinWindowsBuild).entryPath).toBe(f.entryPath);
     mkdirSync(join(f.path, "build/Release"), { recursive: true });
     writeFileSync(join(f.path, "build/Release/pty.node"), "untrusted-native-candidate");
-    expect(() => inspectNodePtyPrebuild(f.root, f.resolveEntry, f.resources)).toThrow("node-pty-preflight-unavailable");
+    expect(() => inspectNodePtyPrebuild(f.root, f.resolveEntry, f.resources, hostPinWindowsBuild)).toThrow("node-pty-preflight-unavailable");
   } finally { f.clean(); }
 });
 
-it.each(["helper", "addon"] as const)("refuses changed %s bytes inside the packaged package", (kind) => {
-  const f = fixture("packed");
+it.each(hostPayloadKinds)("refuses changed %s bytes inside the packaged package", (kind) => {
+  stubHostPin();
+  const f = hostFixture("packed");
   try {
-    const path = f[kind], bytes = readFileSync(path); bytes[0] ^= 1; writeFileSync(path, bytes);
-    expect(() => inspectNodePtyPrebuild(f.root, () => f.archiveEntryPath, f.resources)).toThrow("node-pty-preflight-unavailable");
+    const path = hostPayloadFile(f, kind), bytes = readFileSync(path); bytes[0] ^= 1; writeFileSync(path, bytes);
+    expect(() => inspectNodePtyPrebuild(f.root, () => f.archiveEntryPath, f.resources, hostPinWindowsBuild)).toThrow("node-pty-preflight-unavailable");
   } finally { f.clean(); }
 });
 
@@ -289,4 +403,65 @@ posixIt("Darwin arm64 symlinks: still refuses a symlinked payload directory unde
     expect(realpathSync(f.path)).toBe(moved);
     expect(() => inspectNodePtyPrebuild(f.root, () => f.archiveEntryPath, f.resources)).toThrow("node-pty-preflight-unavailable");
   } finally { f.clean(); }
+});
+
+/** win32-x64: readiness is pinned bytes (existence + size + sha256) over the
+ * ConPTY payload, because no POSIX mode bit is measurable on win32. */
+it("admits the pinned win32-x64 ConPTY payload", () => {
+  stubWin32();
+  const f = fixtureWin32();
+  try {
+    expect(inspectNodePtyPrebuild(f.root, f.resolveEntry, undefined, WINDOWS_BUILD)).toMatchObject({ ready: true, entryPath: f.entryPath });
+  } finally { f.clean(); }
+});
+
+it("admits win32-x64 on the ConPTY minimum build", () => {
+  stubWin32();
+  const f = fixtureWin32();
+  try {
+    expect(inspectNodePtyPrebuild(f.root, f.resolveEntry, undefined, 18309).ready).toBe(true);
+  } finally { f.clean(); }
+});
+
+it.each(["addon", "worker"] as const)("refuses a win32-x64 payload whose pinned %s bytes changed", (kind) => {
+  stubWin32();
+  const f = fixtureWin32();
+  try {
+    const path = f[kind], bytes = readFileSync(path); bytes[0] ^= 1; writeFileSync(path, bytes);
+    expectNodePtyRefusal(() => inspectNodePtyPrebuild(f.root, f.resolveEntry, undefined, WINDOWS_BUILD));
+  } finally { f.clean(); }
+});
+
+it.each(["addon", "worker"] as const)("refuses a win32-x64 payload missing its pinned %s", (kind) => {
+  stubWin32();
+  const f = fixtureWin32();
+  try {
+    rmSync(f[kind]);
+    expectNodePtyRefusal(() => inspectNodePtyPrebuild(f.root, f.resolveEntry, undefined, WINDOWS_BUILD));
+  } finally { f.clean(); }
+});
+
+it("refuses a win32-x64 payload truncated below its pinned size", () => {
+  stubWin32();
+  const f = fixtureWin32();
+  try {
+    writeFileSync(f.addon, readFileSync(f.addon).subarray(0, 1024));
+    expectNodePtyRefusal(() => inspectNodePtyPrebuild(f.root, f.resolveEntry, undefined, WINDOWS_BUILD));
+  } finally { f.clean(); }
+});
+
+it("refuses a win32-x64 payload grown past its pinned size", () => {
+  stubWin32();
+  const f = fixtureWin32();
+  try {
+    writeFileSync(f.addon, Buffer.concat([readFileSync(f.addon), Buffer.from([0])]));
+    expectNodePtyRefusal(() => inspectNodePtyPrebuild(f.root, f.resolveEntry, undefined, WINDOWS_BUILD));
+  } finally { f.clean(); }
+});
+
+it("refuses a win32 build older than the pinned ConPTY payload covers, before resolving a package", () => {
+  stubWin32();
+  const resolveEntry = vi.fn(() => "never-resolved");
+  expectNodePtyRefusal(() => inspectNodePtyPrebuild(join(tmpdir(), "unused-pty-repo"), resolveEntry, undefined, LEGACY_WINDOWS_BUILD));
+  expect(resolveEntry).not.toHaveBeenCalled();
 });
