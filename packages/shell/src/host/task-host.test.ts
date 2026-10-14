@@ -960,6 +960,27 @@ describe("#6 multi-repo provision + append (S2)", () => {
     expect(taskHost.taskRecord()?.repos).toEqual(["frontend", "invoice"]);
   });
 
+  it("takes the other separator spelling of one taken folder as the same path (#72)", () => {
+    const taskHost = host();
+    taskHost.provision(multiProvisionInput());
+    // The Host spells the wanted dir `<taskDir>/shipment` from its own bound
+    // task dir, while main's scan reports the task folder as the resolver
+    // found it on disk; the two can differ only by separator spelling (they
+    // coincide on POSIX, so this case bites on win32). Both name one folder.
+    const otherSpelling = TASK_DIR.replace(/\\/g, "/");
+    expect(() =>
+      taskHost.appendRepos({
+        repoSelections: [
+          { repoDir: "shipment", remote: "origin", remoteBranch: "main", mainCheckoutDir: "/src/shipment" },
+        ],
+        fetchedCommits: { shipment: "c0ffee1234" },
+        takenPaths: [`${otherSpelling}/shipment`],
+        branchesInUse: [],
+      }),
+    ).toThrow("path-taken");
+    expect(taskHost.taskRecord()?.repos).toEqual(["frontend", "invoice"]);
+  });
+
   it("fetches per-repo remotes in provision plans (never hardcoded origin)", () => {
     const taskHost = host();
     const { plan } = taskHost.provision(multiProvisionInput());

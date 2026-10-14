@@ -169,7 +169,19 @@ async function route() {
   };
 }
 
-describe("shell/appendTaskRepos through the real main handler", () => {
+/**
+ * Every case below drives real git through `execFileSync` (bare remote, clone, commit) and then the
+ * production handler's fetch, pin and worktree creation, so per-case cost is git process startup,
+ * not compute. Measured on Windows 11 x64 / Node 24.21.0: the slowest of these 3 cases is 1.26s
+ * running this file alone, 2.92s when the whole shell suite shares the pool, and 4.29s while one more
+ * full suite runs alongside - that last number is why Vitest's 5000ms default produced the
+ * load-dependent reds of #73. 30s is ~7x the worst case measured, and the same budget #63 (dbc997e)
+ * set for project-task-creation.test.ts. No assertion is weakened, reordered or skipped, and a real
+ * hang still fails.
+ */
+const GIT_CASE_TIMEOUT_MS = 30_000;
+
+describe("shell/appendTaskRepos through the real main handler", { timeout: GIT_CASE_TIMEOUT_MS }, () => {
   it("creates the second repository's worktree at its pinned commit and records the source", async () => {
     const env = await route();
     const before = env.recordText();
