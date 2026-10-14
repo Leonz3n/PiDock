@@ -391,7 +391,14 @@ it("fails closed on copied session bindings, missing JSONL, empty and provider e
   const foreignSession = await foreign.instance.open("main");
   await foreign.instance.dispose();
   const fileContent = readFileSync(foreignSession.file, "utf8");
-  writeFileSync(foreignSession.file, fileContent.replace(`"cwd":"${foreignDir}"`, '"cwd":"/foreign-task"'));
+  // The session file is JSONL: the recorded cwd is a JSON *string*, so on win32
+  // its separators are escaped (`C:\\…`). Search for the escaped spelling, and
+  // prove the fixture really rewrote the line - a silent miss would leave the
+  // assertion below passing for the wrong reason.
+  const recordedCwd = JSON.stringify(foreignDir).slice(1, -1);
+  const rewritten = fileContent.replace(`"cwd":"${recordedCwd}"`, '"cwd":"/foreign-task"');
+  expect(rewritten).not.toBe(fileContent);
+  writeFileSync(foreignSession.file, rewritten);
   const foreignRestart = await kernel(foreignDir);
   await expect(foreignRestart.instance.open("main")).rejects.toThrow("sdk-binding-invalid");
   await foreignRestart.instance.dispose();

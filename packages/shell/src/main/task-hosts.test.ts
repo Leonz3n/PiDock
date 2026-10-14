@@ -752,7 +752,7 @@ describe("PerTaskHostRegistry", () => {
 
   it("bootstraps a never-recorded id via task/provision from its dirId", async () => {
     const home = process.env["HOME"] ?? "/tmp";
-    const defaultRoot = `${home}/PiDockTasks`;
+    const defaultRoot = join(home, "PiDockTasks");
     const spawns: Array<{ taskId: string; taskDir: string }> = [];
     // Null resolver: no task.json exists yet — the provision bootstrap
     // must still fork the bound Host at the derived folder.
@@ -766,6 +766,9 @@ describe("PerTaskHostRegistry", () => {
     const routed = await registry.routeTaskOp({ taskId: "task-abcdef12", op: "task/provision", payload });
     expect(routed).toEqual(TASK_RESULT);
     expect(spawn).toHaveBeenCalledTimes(1);
+    // `previewTaskPaths` — the production bootstrap derivation — keeps the resolved
+    // root in the host's spelling but appends the `dirId` child with `/`, so on
+    // win32 the folder is `<native root>/task-…`, not `join(root, "task-…")`.
     expect(spawns[0]).toEqual({ taskId: "task-abcdef12", taskDir: `${defaultRoot}/task-abcdef12` });
     // A provision payload whose dirId does not match the task id cannot
     // bootstrap another task's folder.
@@ -785,7 +788,7 @@ describe("PerTaskHostRegistry", () => {
     // (`taskId === dirId`), so the bootstrap's exact-match coupling holds
     // and bridged provision forks instead of failing `unknown task`.
     const home = process.env["HOME"] ?? "/tmp";
-    const defaultRoot = `${home}/PiDockTasks`;
+    const defaultRoot = join(home, "PiDockTasks");
     const spawns: Array<{ taskId: string; taskDir: string }> = [];
     const { registry, spawn } = registryWith(() => null, spawns, TASK_RESULT);
     const payload = {
@@ -819,7 +822,7 @@ describe("PerTaskHostRegistry", () => {
     };
     await registry.routeTaskOp({ taskId: "task-abcdef12", op: "task/provision", payload });
     expect(spawn).toHaveBeenCalledTimes(1);
-    const overrideTaskDir = join(override, "task-abcdef12");
+    const overrideTaskDir = `${override}/task-abcdef12`;
     expect(spawns[0]).toEqual({ taskId: "task-abcdef12", taskDir: overrideTaskDir });
     // Host writes the task record on provision; reuse must ride the same
     // fork, not throw `task-moved` and not fork again.

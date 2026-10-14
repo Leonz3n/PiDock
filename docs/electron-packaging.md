@@ -1,7 +1,7 @@
 # Electron 打包（S6 候选产出）
 
 日期：2026-09-22（Asia/Shanghai）
-状态：macOS arm64 **已实测产出未签名 DMG 候选**；macOS 侧 node-pty 原生载荷随包分发已实测（2026-10-13，见「macOS：node-pty 原生载荷随包分发」）；Windows x64 **仅 `win-unpacked` 载荷已产出；安装资产为 MSI（[ADR 0004](adr/0004-windows-installer-msi-instead-of-nsis-exe.md)，2026-10-13），本机未构建、未安装、未签名**。
+状态：macOS arm64 **已实测产出未签名 DMG 候选**；macOS 侧 node-pty 原生载荷随包分发已实测（2026-10-13，见「macOS：node-pty 原生载荷随包分发」）；Windows x64 安装资产为 MSI（[ADR 0004](adr/0004-windows-installer-msi-instead-of-nsis-exe.md)，2026-10-13），**已在 win32-x64 主机上实测产出未签名 MSI，并完成安装/启动/覆盖升级/卸载复核**（2026-10-14，见「Windows x64 MSI 实测」）；该主机的代码签名、公证、干净系统安装、多用户账户与 >1 版本升级矩阵**仍未验证**。
 实际发布验收归 #15；本文件只记录候选工具链与实测边界。
 
 ## 工具链
@@ -9,6 +9,7 @@
 - Electron `44.4.3`（`packages/shell` devDependency）
 - electron-builder `26.15.3`（devDependency）
 - 配置：`packages/shell/electron-builder.config.cjs`
+- 应用图标（`win.icon`，msi 目标硬必需）：`packages/shell/packaging/icon.svg`
 - macOS 授权文件：`packages/shell/packaging/entitlements.mac.plist`
 - 签名/公证钩子：`packages/shell/scripts/notarize.cjs`（无 Apple 凭据时空跑）
 
@@ -23,6 +24,8 @@ CSC_IDENTITY_AUTO_DISCOVERY=false pnpm package:win    # Windows x64 MSI
 ```
 
 `electronDist` 在 macOS 目标下复用已安装的 `node_modules/electron/dist`，因此 macOS 打包可离线完成；Windows 目标必须下载 win32-x64 Electron 发行包。
+
+`package:dir` / `package:mac` / `package:win` 各自前置 `pnpm build`（`packages/shell/package.json`）。打包只消耗 `dist/`（`files: ["dist/**/*", "package.json"]`），**不再需要人工先跑一遍 build**：不前置 build 的话，`electron-builder` 会静默把当时磁盘上的 `dist/` 打成包，安装器随之发出过期的 host bundle。
 
 ## macOS arm64 实测
 
@@ -60,7 +63,9 @@ CSC_IDENTITY_AUTO_DISCOVERY=false pnpm package:win    # Windows x64 MSI
 - `app.asar.unpacked/node_modules/` = `node-pty`、`@earendil-works/pi-tui`、`@esbuild/*`、`esbuild`（`ls`）；`node-pty/` 下没有 `build/`、`lib/build/`、`lib/prebuilds/`——即终端预检拒绝的全部 5 个竞争加载目录都不在包里。
 - 被钉住的预编译件（`stat -f '%N %Lp %z'` + `shasum -a 256`）：`prebuilds/darwin-arm64/pty.node` **85496** B、mode **644**、sha256 `e6457d66f45af3facd02920a5b212164e80fe0bb758afe6e6eab1eceeba3fc9a`；`prebuilds/darwin-arm64/spawn-helper` **50480** B、mode **755**、sha256 `21c589109bca43e287df884f3c34ab888033a83927ea7d273949ac5030583f26`。这组值与 `packages/shell/src/host/node-pty-preflight.ts:9-10` 的常量逐位一致。
 
-也就是说「pi 依赖与原生模块的随包分发尚未验证」这句话在 **macOS** 上已被上述实测取代：载荷确实被收集、被解包成磁盘上的真实文件，并且正是预检钉死的那两份字节。**Windows 侧仍未验证**（见下面「未完成 / 边界」与 Windows 各节）。
+也就是说「pi 依赖与原生模块的随包分发尚未验证」这句话在 **macOS** 上已被上述实测取代：载荷确实被收集、被解包成磁盘上的真实文件，并且正是预检钉死的那两份字节。**Windows 侧的打包载荷已在 win32-x64 主机上观测到同样形态**（见「Windows x64 MSI 实测」）。
+
+> **更新（2026-10-14，#55 / #61）**：本节末尾原先写的「**产品内**那一次 spawn 仍不通过」**已被 #55/#61 取代**。#55 让预检 pin 记录接纳 `win32-x64` 且 `ptySpawnerAvailable()` 在该平台为 true；#61（`9ec1a25`）修掉了让产品路径根本起不来终端的根因（`plan.cwd` 在 win32 上混用分隔符，与驱动的 `normalize(cwd) === cwd` 契约冲突）。win32-x64 上现在有自动化的真实 PTY 用例覆盖 Host 记录 → plan → 会话层 → 驱动 → 真实 ConPTY（`packages/shell/src/host/terminal-sessions.test.ts` 的 `win32RealIt`）。**仍未验证**的边界保留在下面「未完成 / 边界」：没有在**已安装的 MSI 应用内**跑过终端（打包 app 的产品路径在 `9ec1a25` 之后未复测）。本行只记录事实，不代 `#22` 勾选 T4。
 
 ### 为什么固定 `asarUnpack` 与 `npmRebuild: false`
 
@@ -77,16 +82,43 @@ CSC_IDENTITY_AUTO_DISCOVERY=false pnpm package:win    # Windows x64 MSI
 - **Electron 自己的 asar resolver 未执行**：预检接受 app.asar 拼写的前提是「打包 app 里 `require.resolve` 报告 archive 成员」这个文档行为，它由测试注入验证，未经应用实测；若它报告别的路径，预检会按名拒绝（fail-closed）。
 - **签名未解决**：`hardenedRuntime` / `entitlements` / `afterSign` 已就位但未执行（无证书），而签名会改写被 pin 的原生 Mach-O 字节，与 `pty.node` / `spawn-helper` 的 sha256/大小 pin 冲突，必须在 #15 的发布路径上先决策（见「签名与公证路径（未执行）」）。
 
-## Windows x64 候选状态（待测，不声称通过）
+## Windows x64 候选状态
 
-Windows 安装资产为 **MSI**（[ADR 0004](adr/0004-windows-installer-msi-instead-of-nsis-exe.md)，2026-10-13 人工决定），不再是 NSIS 单一 EXE。本机（darwin-arm64）**没有构建、安装或签名过任何 MSI**。
+Windows 安装资产为 **MSI**（[ADR 0004](adr/0004-windows-installer-msi-instead-of-nsis-exe.md)，2026-10-13 人工决定），不再是 NSIS 单一 EXE。MSI 已在 **win32-x64 主机**上实测产出并完成安装/启动/覆盖升级/卸载复核（2026-10-14，见「Windows x64 MSI 实测」）；产物未签名。
+
+以下三条是 **darwin-arm64 主机**（2026-09-22）的记录，只说明「这台机器为什么不构建 MSI」，不代表 Windows 主机的状态：
 
 - `release/win-unpacked/` 已产出：`PiDock.exe` 与 `resources/app.asar`（41 条目，含 `dist/host/host.js`）；`du -sh` 约 `374M`。
 - 2026-09-22 的 **NSIS 单一 EXE 安装器构建失败**（当时目标为 NSIS，该目标已被 ADR 0004 取代）：
   `Cannot spawn …/nsis-3.0.4.1/mac/makensis: Error: spawn Unknown system error -86`。
   原因：该 `makensis` 是 **Mach-O x86_64** 可执行文件，而主机为 **arm64 且无 Rosetta**，因此 `EBADARCH (-86)`。
-- 改成 MSI 并不解除该阻塞：MSI 目标需要 WiX `4.0.0.5512.2`（构建时下载，`app-builder-lib/out/targets/MsiTarget.js:73`），非 Windows 宿主还要跑 x86_64 版 Wine（`app-builder-lib/out/toolsets/wine.js`），与本机 arm64 无 Rosetta 属同一类架构问题。因此 MSI 不在本机构建，改由人工在 Windows 机器上验收（见下节）。
-- 结论：Windows 运行时、安装、升级与签名**完全未测**；不得据此声明跨平台通过。
+- 改成 MSI 并不解除该主机的阻塞：MSI 目标需要 WiX `4.0.0.5512.2`（构建时下载，`app-builder-lib/out/targets/MsiTarget.js:73`），非 Windows 宿主还要跑 x86_64 版 Wine（`app-builder-lib/out/toolsets/wine.js`），与本机 arm64 无 Rosetta 属同一类架构问题。因此 MSI 不在 darwin-arm64 主机上构建。
+
+## Windows x64 MSI 实测（2026-10-14，win32-x64 主机）
+
+主机：Windows 11 `10.0.26200` x64、Node `v24.21.0`、pnpm `11.22.0`、**已提升会话**。本轮改动 = `win.icon` 指向 `packages/shell/packaging/icon.svg` + 新增该图标源（见「应用图标」）。逐条命令与原始日志记在 #58 的评论；这里只记录观测。
+
+- **构建**：`CSC_IDENTITY_AUTO_DISCOVERY=false pnpm --filter @pidock/shell package:win`（**仓库配置，无 `-c.win.icon` 覆盖**）→ exit 0；产物 `packages/shell/release/PiDock-0.1.0-x64.msi`，`145801336` bytes，sha256 `e36bc66f80a41868d4c36a302f8968c035c3191f592b7269f1997424d25adc6e`。构建日志首次出现 `• downloaded label=icons-bundle.tar.gz`（落到 `%LOCALAPPDATA%\electron-builder\Cache\icons@1.1.0`）。**这一枚已被 #58 的后续修复取代**：打包脚本先前没有 `build` 前置，因此它可能装的是过期的 `dist/`；修好后用同一命令重建，产物改为 `145801336` bytes、sha256 `78a5c6b22e70b19c5b1707334d7b4706ccfb34f3acaf08075bee0f208d7b3490`（逐条证据见 #58 的最新评论）。
+- **安装**：`msiexec /i PiDock-0.1.0-x64.msi /qn /l*v` → exit 0；`APPLICATIONFOLDER = C:\Users\<user>\AppData\Local\Programs\PiDock\`、`MSIINSTALLPERUSER = 1`，全程无 UAC 提升。
+- **启动**（已安装副本）：`PIDOCK_PRINT_STARTUP=1 PiDock.exe --print-startup` → exit 0，`PIDOCK_STARTUP_RESULT={"electron":"44.4.3","processUptimeMs":1245,"readyToLoadedMs":255,"shellUrl":"file:///C:/Users/<user>/AppData/Local/Programs/PiDock/resources/app.asar/dist/renderer/smoke.html"}`。
+- **覆盖升级**：把 `packages/shell/package.json` 临时升到 `0.1.1`（**不入库**，复核后 `git checkout --` 复原）再构建第二枚 MSI `PiDock-0.1.1-x64.msi`（`145797240` bytes，sha256 `0545439715d2eb9c2e97a3a97aa7e40527c01fad6962eb3c955ccbf6b35f70a7`）。两枚 MSI 的 `UpgradeCode` 相同（`{CDB945E1-46B2-5696-A0EE-65A2309F5245}`，由 `appId` 推导），`ProductCode` 不同（`{6BD892FC-A9D5-48AF-949C-7CFE17FAB3FB}` → `{5320C5E9-99DD-4647-82DD-2F97447FCB2A}`）。在 0.1.0 之上装 0.1.1 → exit 0；日志 `FindRelatedProducts` 报 `Adding WIX_UPGRADE_DETECTED property. Its value is '{6BD892FC-…}'` 并执行 `RemoveExistingProducts`；ARP 只剩一条 `0.1.1.0`（无并列安装）；`%APPDATA%\@pidock\shell` 下的标记文件仍在；升级后的 `PiDock.exe` 启动 exit 0（`readyToLoadedMs` 273），包内 `app.asar` 的 `package.json` 版本为 `0.1.1`。
+- **卸载**：`msiexec /x {ProductCode} /qn /l*v` → exit 0（`Removal completed successfully` / `MainEngineThread is returning 0`）；安装目录、开始菜单与桌面快捷方式、ARP 键全部消失，`%APPDATA%\@pidock\shell` 保留。
+- **ARP 落 HKLM（观测，不是决策）**：按用户安装（`MSIINSTALLPERUSER=1`，文件与快捷方式都在用户级、无 UAC）却把 ARP 键写在 `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{ProductCode}`；`HKLM\SOFTWARE\WOW6432Node\…` 与 `HKCU\…` 都查不到该条，卸载后也从 HKLM 消失。仓库里没有可改这个 hive 的选项（MSI 模板不写注册表，`perMachine:false` 只发 `ALLUSERS=2` + `MSIINSTALLPERUSER=1`），因此如实记录现象，不解释语义。
+- **签名**：`Get-AuthenticodeSignature` 对两枚 MSI 与已安装 `PiDock.exe` 都是 `NotSigned`（`SignerCertificate = <null>`）；构建日志里的 `• signing with signtool.exe path=…` 行照常打印，但本机无证书，实际未签名。
+
+### 应用图标
+
+- `win.icon = "packaging/icon.svg"`（1024×1024 矢量源，纯 `rect`/`path`/`transform`，无 `<text>`）。builder 用 icons 工具集把它栅格化成 `packages/shell/release/.icon-ico/icon.ico`（`21897` B，sha256 `bbe8e68c57ea847624f0e4760b27807e5e4580428f52ae4413277c3a3c46e1f3`）：**7 帧**（16/24/32/48/64/128/256），7 帧都是 PNG 压缩帧。
+- **msi 目标没有图标就构建不出来**：MSI 模板只在 `iconPath` 存在时才发 `<Icon Id="${iconId}"/>`，而 `MsiTarget` 无条件用 `Icon="${iconId}"`（快捷方式与 ProgId）⇒ 缺图标必然 `light.exe` LGHT0094。`msi.icon` 这个键不存在，唯一入口是 `win.icon`/顶层 `icon`；图标源放在 `packaging/`（已跟踪）而不是 electron-builder 默认的 `build/`（被 `.gitignore` 忽略）。
+- 图标确实进了产物：MSI `Icon` 表一行 `PiDockIcon.exe`（stream `21897` B），Windows Installer 抽到 `%APPDATA%\Microsoft\Installer\{ProductCode}\PiDockIcon.exe` 后 sha256 与 `release/.icon-ico/icon.ico` 相同；已安装 `PiDock.exe` 的 `RT_GROUP_ICON`（id 1、lang 1033）有 7 帧，7 帧字节与 `icon.ico` 对应帧 sha256 逐一相同；开始菜单与桌面快捷方式的 `IconLocation` 指向 `…\Installer\{ProductCode}\PiDockIcon.exe,0`。
+
+### 本节仍未验证（不得据本节推断通过）
+
+- **代码签名与公证**：本机 0 张代码签名证书 ⇒ MSI 与 `PiDock.exe` 均 `NotSigned`；签名未执行。
+- **干净系统安装**：只在同一台已装 dev 工具链与 builder 缓存的机器上做过；未在干净 Windows 上安装。
+- **多用户账户**：只在本机单一账户下安装/卸载；未验证第二账户下按用户安装的行为。
+- **>1 版本升级矩阵**：只做了 `0.1.0 → 0.1.1` 一次覆盖升级；没有跳版本、降级、per-machine 与 per-user 混装的证据。
+- **产品内终端**（更新 2026-10-14）：`#22` 的 T4 原先的两条阻断原因（平台门/钉、cwd 规范化）已由 #55 与 #61（`9ec1a25`）消除；win32-x64 上有自动化真实 PTY 用例覆盖 Host 记录 → plan → 会话层 → 驱动 → 真实 ConPTY。**仍未验证**：没有在已安装的 MSI 应用里跑过终端（打包 app 的产品路径在 `9ec1a25` 之后未复测），因此本行不代 `#22` 勾选。
 
 ## 签名与公证路径（未执行）
 
@@ -99,19 +131,19 @@ Windows 安装资产为 **MSI**（[ADR 0004](adr/0004-windows-installer-msi-inst
 
 ## 未完成 / 边界
 
-- 未设置应用图标（仍用 Electron 默认图标）。
-- Windows 侧尚无 pi / 原生资源依赖随包分发的证据：Windows 上只确认了 **utilityProcess 入口**随包分发，**pi 依赖与原生模块的随包分发尚未验证**（macOS 侧已实测，见「macOS：node-pty 原生载荷随包分发」）。
-- Windows 运行时、MSI 安装、升级与签名均未验证；不得据此声明跨平台通过。
+- 应用图标已设置：`win.icon` 指向 `packages/shell/packaging/icon.svg`（msi 目标缺它就无法构建），MSI 的 `Icon` 表与 `PiDock.exe` 的图标资源都实际用了它（见「Windows x64 MSI 实测 · 应用图标」）；macOS 与 Linux 仍未设置图标。
+- Windows 侧的**打包载荷**已观测：`release/win-unpacked/resources/app.asar.unpacked/node_modules/node-pty/prebuilds/win32-x64/` 下有 `conpty.node`（`ee8f4e6f…`）、`pty.node`（`ae323edd…`）等真实文件，sha256 与 #22 第二轮记录逐位一致；`app.asar` 内 `dist/host/` 与 `@earendil-works/pi-*` 条目均在。但这不代表「**产品内**那一次 PTY spawn 仍被平台门/钉具名拒绝」——该说法**已不成立**（更新 2026-10-14）：#55 的 pin 记录接纳 `win32-x64` 且 `ptySpawnerAvailable()` 在该平台为 true，#61（`9ec1a25`）修掉了产品路径无法启动终端的根因；win32-x64 上已有自动化真实 PTY 用例覆盖这条产品路径。**仍未在已安装的 MSI 应用内运行过终端**，打包 app 的产品路径也未在 `9ec1a25` 之后复测。
+- Windows 的 **MSI 构建、安装、启动、覆盖升级与卸载已实测**（见「Windows x64 MSI 实测」，2026-10-14）；**代码签名、公证、干净系统安装、多用户账户与 >1 版本升级矩阵仍未验证**；不得据此声明 Windows 资产已签名或可在干净系统上发布。
 
 ## Windows MSI 人工验收（在 Windows 机器上执行）
 
-**本机（darwin-arm64）没有构建、安装或签名任何 MSI。** 下面每一步都必须在另一台 Windows x64 机器上由人工执行；在此机器上跑 `package:win` **预计**会先下载 WiX，随后在 x86_64 版 Wine 上以同类架构错误失败（同 2026-09-22 记录的 `-86`；**本节未实测**，属预期而非观察结果），证明不了任何 Windows 结论。在人工回报结果之前，任何文档或结论都不得声称 Windows 资产可用或已签名。
+**darwin-arm64 主机没有构建、安装或签名任何 MSI**；在这台机器上跑 `package:win` **预计**会先下载 WiX，随后在 x86_64 版 Wine 上以同类架构错误失败（同 2026-09-22 记录的 `-86`；**本节未实测**，属预期而非观察结果）。win32-x64 主机上的构建/安装/启动/卸载/覆盖升级已按下列步骤（的静默等价命令）执行过，结果见「Windows x64 MSI 实测」；下面保留的是**仍需人工完成**的部分：在干净 Windows 机器与第二个用户账户上重跑，以及签名。在人工回报结果之前，任何文档或结论都不得声称 Windows 资产可用或已签名。
 
 ### 构建
 
 ```powershell
 corepack enable                                 # 提供 pnpm（仓库固定 pnpm@11.22.0）
-cd <包含本次改动的检出>                          # 本分支 issue-10-impl 尚未推送，需人工同步到该机器
+cd <包含本次改动的检出>                          # 本分支尚未推送，需人工同步到该机器
 pnpm install --frozen-lockfile
 pnpm --filter @pidock/shell package:win          # = electron-builder --config electron-builder.config.cjs --win msi --x64
 # 等价写法：cd packages/shell ; pnpm package:win

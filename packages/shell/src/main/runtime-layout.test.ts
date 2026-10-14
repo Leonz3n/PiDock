@@ -68,6 +68,16 @@ afterEach(() => {
   else process.env["PIDOCK_TASK_URL"] = originalTaskUrl;
 });
 
+/**
+ * The renderer file the production code passes to `loadFile`, in THIS
+ * platform's own separators (`path.join` on win32 yields `renderer\smoke.html`),
+ * anchored at the end of the string. The tail is pinned exactly as spelled - a
+ * mixed-separator path does not match.
+ */
+function rendererFilePattern(file: string): RegExp {
+  return new RegExp(`${join("renderer", file).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`);
+}
+
 describe("trusted Electron view modes", () => {
   it("refuses SDK start after credential removal while preserving projection, status and cancel", async () => {
     const root = mkdtempSync(join(tmpdir(), "pidock-provider-start-gate-"));
@@ -317,6 +327,21 @@ describe("trusted Electron view modes", () => {
 
     it("authorizes the production trigger on POSIX and drives register + control with main's own catalog origin", async () => {
       const g = await gate();
+      // win32 (#7/#48): the authorization below resolves the trusted launch and
+      // asks the Host to register and control a service, and the capability behind
+      // it - verifying and terminating a Host-owned service process - is not
+      // implemented on win32, where main's own gate answers by NAME and resolves
+      // nothing. Win32 pins that refusal here; the POSIX legs that drive the two
+      // ops stay byte-intact below it.
+      if (process.platform === "win32") {
+        expect(await g.handler(g.shell, request)).toEqual({ ok: false, error: SERVICE_EXECUTION_UNSUPPORTED_PLATFORM });
+        expect(SERVICE_EXECUTION_UNSUPPORTED_PLATFORM).toContain("unsupported-platform");
+        // Refused before anything was resolved or asked for: no launch, no
+        // register, no control, so nothing was started either.
+        expect(g.launchFor).not.toHaveBeenCalled();
+        expect(g.routeTaskOp).not.toHaveBeenCalled();
+        return;
+      }
       expect(await g.handler(g.shell, request)).toEqual({ ok: true, payload: { op: "task/controlService", action: "start" } });
       // Main resolved the trusted launch itself and asked the Host to register
       // the descriptor, then to control the service. Both ops carry the
@@ -474,7 +499,7 @@ describe("trusted Electron view modes", () => {
     const smoke = await createTrustedWindow("workspace-a");
     const smokeLoaded = await loadTrustedViews(smoke);
     expect(smokeLoaded.shellUrl).toMatch(/\/renderer\/smoke\.html$/);
-    expect(smoke.shellView.webContents.loadFile).toHaveBeenCalledWith(expect.stringMatching(/\/renderer\/smoke\.html$/));
+    expect(smoke.shellView.webContents.loadFile).toHaveBeenCalledWith(expect.stringMatching(rendererFilePattern("smoke.html")));
     assertTrustedWindowEvidence(trustedWindowEvidence(smoke));
     process.env["PIDOCK_TASK_URL"] = "http://127.0.0.1:4319/task";
     const explicit = await createTrustedWindow("workspace-b", "dual");
@@ -565,7 +590,7 @@ describe("trusted Electron view modes", () => {
     const views = await createTrustedWindow("workspace-c", "production");
     const loaded = await loadTrustedViews(views);
     expect(loaded.shellUrl).toMatch(/\/renderer\/index\.html$/);
-    expect(views.shellView.webContents.loadFile).toHaveBeenCalledWith(expect.stringMatching(/\/renderer\/index\.html$/));
+    expect(views.shellView.webContents.loadFile).toHaveBeenCalledWith(expect.stringMatching(rendererFilePattern("index.html")));
     expect(loaded.taskUrl).toBe("about:blank");
     expect(views.taskView.webContents.loadFile).not.toHaveBeenCalled();
     expect(views.taskView.getVisible()).toBe(false);

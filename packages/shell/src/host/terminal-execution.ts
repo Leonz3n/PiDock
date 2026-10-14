@@ -26,7 +26,9 @@ export interface TerminalLaunch {
  * What the OS boundary observed for one terminal. The exit receipts are
  * deliberately scoped to what the driver can really prove (see
  * `terminal-pty-driver.ts`): `tree-drained` means the exit was covered by an
- * observation of the live root and every recorded identity is gone;
+ * observation of the live root and every recorded identity is gone (on win32:
+ * the Host terminated its own PTY helper handle and the tree the OS's fixed
+ * parent chain names is verified gone);
  * `root-exited` means the same verified drain for an exit that was NOT covered
  * (the last control request was never observed), so a descendant created inside
  * that window is explicitly not denied; `unknown` means no observation ever saw
@@ -40,10 +42,14 @@ export type TerminalDriverReceipt = TerminalIdentity & (
   | { status: "not-started" }
   | { status: "unknown" }
 );
-/** The two OS handles a spawner observed for one live terminal. */
+/** The OS handles a spawner observed for one live terminal. `processGroupId` is
+ * absent where the platform exposes no process group to read or signal (win32:
+ * `readProcessPgid` returns null there by design and `kill(-pgid)` does not
+ * exist), so the pid is the whole identity this Host can name there - it is
+ * never back-filled with the pid, which would claim a group nobody observed. */
 export interface TerminalProcessIdentity {
   processId: number;
-  processGroupId: number;
+  processGroupId?: number;
 }
 /** OS boundary. PTY exit alone must never produce a tree-drained receipt.
  * Unknown spawn (including rejection) remains addressable by the supplied identity.

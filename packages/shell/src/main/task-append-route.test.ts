@@ -180,8 +180,10 @@ describe("shell/appendTaskRepos through the real main handler", () => {
     expect(result.error).toBeUndefined();
     expect(result.ok).toBe(true);
     const appended = result.payload!.appended;
+    // The appended record spells the worktree as `<taskDir>/<repoDir>`
+    // (`previewMixedTaskPaths`), so the fixture must not use `join` here.
     expect(appended).toEqual([
-      { repoDir: env.secondDir, name: "second", remote: "origin", remoteBranch: "main", commit: env.second.commit, worktree: join(env.taskDir, env.secondDir) },
+      { repoDir: env.secondDir, name: "second", remote: "origin", remoteBranch: "main", commit: env.second.commit, worktree: `${env.taskDir}/${env.secondDir}` },
     ]);
     expect(git(appended[0]!.worktree, "rev-parse", "HEAD")).toBe(env.second.commit);
     expect(git(appended[0]!.worktree, "rev-parse", "--abbrev-ref", "HEAD")).toBe(env.branch);

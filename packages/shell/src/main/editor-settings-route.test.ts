@@ -80,8 +80,12 @@ import { createTrustedWindow, registerIpc } from "./runtime.js";
 import { TaskRootIndex } from "./task-root-index.js";
 
 const homes: string[] = [];
+// The launch under test spawns a DETACHED child (`open-editor.ts`) whose cwd is
+// inside this home; win32 cannot remove a directory that is a live process's
+// cwd, so the delete retries while that child (a shim that exits right after
+// recording its evidence) terminates.
 afterEach(() => {
-  for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true });
+  for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   delete process.env["EDITOR_EVIDENCE"];
   state.userData = "";
 });
@@ -148,7 +152,10 @@ async function productionRoute(): Promise<Route> {
   mkdirSync(taskDir, { recursive: true });
   mkdirSync(userData, { recursive: true });
   state.userData = userData;
-  const worktreePath = join(taskDir, REPO_DIR);
+  // The reported root is the product's own spelling: `task/fileRoots`
+  // (`joinRoot`, `main/workspace-files.ts`) keeps the native taskDir and appends
+  // the repo dir with `/`, so the launch arg compared against is this mixed form.
+  const worktreePath = `${taskDir}/${REPO_DIR}`;
   mkdirSync(worktreePath, { recursive: true });
   writeFileSync(join(worktreePath, "app.ts"), "export const app = 1;\n");
   diskTaskStore.writeTask(
@@ -316,7 +323,12 @@ describe("#15 box 28 the editor setting is reachable through the app's own save 
     const cases: { request: Record<string, unknown>; name: string }[] = [
       { request: { op: "save", program: "vim" }, name: "editor-program-invalid" },
       { request: { op: "save", program: "/usr/../etc/passwd" }, name: "editor-program-invalid" },
-      { request: { op: "save", program: route.notExecutablePath }, name: "editor-program-not-executable" },
+      // win32 (#57): the save path's own probe is existence-only there (`accessSync(program, F_OK)`,
+      // main/external-editor.ts:197), so this 0o644 regular file IS executable and the named refusal
+      // cannot be produced for it (observed: win32 saves it instead). The directory entry below
+      // reaches the same `editor-program-not-executable` branch on every platform; the X_OK dimension
+      // is unobserved on win32.
+      ...(process.platform === "win32" ? [] : [{ request: { op: "save", program: route.notExecutablePath }, name: "editor-program-not-executable" }]),
       { request: { op: "save", program: route.bundlePath }, name: "editor-program-not-executable" },
       { request: { op: "save", program: join(route.home, "no-such-editor") }, name: "editor-program-not-found" },
       { request: { op: "save", program: NODE, args: [1] }, name: "editor-settings-invalid" },

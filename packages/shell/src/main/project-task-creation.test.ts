@@ -51,7 +51,19 @@ async function setupTwoRepositories() {
 }
 afterEach(() => { for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true }); });
 
-describe("persistent Project task creation with local Git", () => {
+/**
+ * Every case below drives the real fixture: temp bare remotes, real clones, pushes, fetches and
+ * worktrees. One run of this file alone really starts 943 git processes (1,375 including the
+ * transport helpers they spawn; `GIT_TRACE2_EVENT`), and the heaviest cases cost ~2.1s alone but
+ * 4.9-5.6s under the full-suite pool - over Vitest's 5000ms default, which is what turned them into
+ * load-dependent reds. Nothing here waits on a network: every remote is a local path, the one SSH
+ * case is served by a local `GIT_SSH` shim, and the slowest command measured was a 314ms local
+ * `git push`. The budget is raised for the whole suite; NO assertion is weakened, reordered or
+ * skipped, and a real hang still fails.
+ */
+const GIT_CASE_TIMEOUT_MS = 30_000;
+
+describe("persistent Project task creation with local Git", { timeout: GIT_CASE_TIMEOUT_MS }, () => {
   it("pins an actual remote commit, preserves dirty checkout, links only chosen directory and associates after Host record", async () => {
     const env = await setup();
     const preview = await env.service.prepare(env.request);
@@ -383,7 +395,14 @@ describe("persistent Project task creation with local Git", () => {
     expect(existsSync(preview.taskDir)).toBe(false);
     expect(JSON.stringify(env.storage.read())).not.toContain(env.remote);
   });
-  it("rejects a file URL whose symlink-then-dotdot path reaches a different repository with the same commit", async () => {
+  // win32 (#57): the fixture builds a `file://${home}/link/../remote.git` URL and runs a real
+  // `git ls-remote` on it, which is POSIX URL/path shape: it needs the kernel to resolve `..` after
+  // following the link, while win32 collapses `..` lexically first, so both URLs would name the same
+  // repository and the premise cannot be built - not a junction candidate. Covered by the sibling
+  // "pins a credential-free remote transport digest across prepare and commit", verified by reading
+  // it: it drives the same 传输地址已改变 refusal at commit from a plain path change. The link-shaped
+  // URL resolution itself is unobserved on win32.
+  it.skipIf(process.platform === "win32")("rejects a file URL whose symlink-then-dotdot path reaches a different repository with the same commit", async () => {
     const env = await setup();
     const alternate = join(env.home, "alternate");
     mkdirSync(join(alternate, "child"), { recursive: true });
@@ -412,10 +431,25 @@ describe("persistent Project task creation with local Git", () => {
     writeFileSync(helper, "#!/bin/sh\nshift\nexec sh -c \"$*\"\n", { mode: 0o700 });
     const previous = { ssh: process.env.GIT_SSH, variant: process.env.GIT_SSH_VARIANT };
     process.env.GIT_SSH = helper; process.env.GIT_SSH_VARIANT = "simple";
+    // win32 (#57): the URL arm puts the host and the path on either side of one slash
+    // (`ssh://user@local` + path). Off win32 the path is already absolute POSIX
+    // (`/tmp/.../remote.git`) and supplies that slash; a win32 drive path does not, so the separator
+    // is spelled out and the separators are converted. The host stays exactly `local`: appending the
+    // native path gives `ssh://user-a@localC:\...`, which `new URL` rejects outright (a bare `C:` is
+    // read as a scheme/authority colon), and its slashed form `ssh://user-a@localC:/...` silently
+    // parses with host `localC`, which would destroy this case's proposition.
+    const urlPath = (remote: string): string => (process.platform === "win32" ? `/${remote.replace(/\\/g, "/")}` : remote);
     try {
       for (const scp of [false, true]) {
         const current = await setup();
-        const url = (user: string) => scp ? `${user}@local:${current.remote}` : `ssh://${user}@local${current.remote}`;
+        const url = (user: string) => scp ? `${user}@local:${current.remote}` : `ssh://${user}@local${urlPath(current.remote)}`;
+        // The URL arm's shape is part of the proposition - the account is pinned for a remote whose
+        // host and path are unchanged - so it is asserted instead of trusted, on every platform.
+        if (!scp) {
+          const parsed = new URL(url("user-a"));
+          expect(parsed.host).toBe("local");
+          expect(parsed.pathname).toBe(urlPath(current.remote));
+        }
         git(current.repo, "remote", "set-url", "origin", url("user-a"));
         const preview = await current.service.prepare(current.request);
         expect(preview.repos[0]?.commit).toBe(git(current.repo, "rev-parse", "HEAD"));

@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
 import { accessSync, constants, statSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, normalize } from "node:path";
 import type { TaskTerminalRegistry, TerminalInstanceRecord, TerminalPlan } from "../main/terminal-config.js";
 import { MAX_PTY_ENVELOPE_BYTES, operationKey } from "./node-pty-protocol.js";
-import { PTY_INPUT_BUDGET_ERROR } from "./terminal-pty-driver.js";
-import type { TerminalDriver, TerminalDriverReceipt, TerminalIdentity, TerminalLaunch } from "./terminal-execution.js";
+import { PTY_INPUT_BUDGET_ERROR, ptyProcessGroupOwnershipAvailable } from "./terminal-pty-driver.js";
+import type { TerminalDriver, TerminalDriverReceipt, TerminalIdentity, TerminalLaunch, TerminalProcessIdentity } from "./terminal-execution.js";
 
 /** One live real-process session of one registered terminal instance. */
 interface ActiveSession {
@@ -24,14 +24,88 @@ function stripControl(line: string): string {
 }
 
 /**
- * Turn the planned program into the executable image the PTY will exec. A bare
- * name (`bash`) is resolved against the launch's own `PATH` and then a fixed
- * system path; an unresolvable name is returned unchanged so the driver refuses
- * it as `not-started` instead of guessing. The plan's displayed program is not
- * rewritten, so the panel still shows what the user chose.
+ * Turn the planned program into the executable image the PTY will exec.
+ *
+ * POSIX: a bare name (`bash`) is resolved against the launch's own `PATH` and then
+ * the fixed system paths; an unresolvable name is returned unchanged so no other
+ * program is ever substituted for the planned one. win32: the launch `PATH` is
+ * split at `;` and a bare name is completed with `PATHEXT`.
+ *
+ * On win32 this function is a PRE-resolution, not the resolution boundary: what it
+ * returns (a bare name, or a name that carries a separator) is handed to the OS,
+ * whose own search order decides. Measured on this host (#66):
+ * `pty.spawn(".\\probe-cmd.exe", …, { cwd: <the dir holding probe-cmd.exe> })`
+ * fails with `File not found`, while `cmd.exe` and `ping.exe` both START from an
+ * env carrying no `PATH` at all. So a win32 name this function cannot resolve may
+ * still start, and one it resolves may still be refused by the OS.
+ *
+ * The plan's displayed program is not rewritten, so the panel still shows what the
+ * user chose. `platform` is the seam those rules are measured through, with the
+ * same default as `buildHostEnv`.
  */
-export function resolveProgram(program: string, env: Record<string, string>): string {
+export function resolveProgram(program: string, env: Record<string, string>, platform: NodeJS.Platform = process.platform): string {
   if (isAbsolute(program)) return program;
+  return platform === "win32" ? resolveWindowsProgram(program, env) : resolvePosixProgram(program, env);
+}
+
+/**
+ * The suffixes a bare win32 name is completed with when `PATHEXT` is absent or
+ * blank: the program kinds Windows' own documented default `PATHEXT` names
+ * first, in that documented order. A plan env built from config rows (never
+ * `process.env`) may carry no `PATHEXT` at all, and completing nothing there
+ * would leave every bare name unresolved on win32.
+ */
+const DEFAULT_WINDOWS_PROGRAM_SUFFIXES = [".COM", ".EXE", ".BAT", ".CMD"] as const;
+
+/** Windows environment names are case-insensitive, so a plan spelling `Path` or
+ * `pathext` names the same variable; POSIX reads the exact name only. Same shape
+ * as `buildHostEnv`. */
+function envValue(env: Record<string, string>, name: string, platform: NodeJS.Platform): string | undefined {
+  if (platform !== "win32") return env[name];
+  const named = env[name];
+  if (named !== undefined) return named;
+  const key = Object.keys(env).find((candidate) => candidate.toUpperCase() === name.toUpperCase());
+  return key === undefined ? undefined : env[key];
+}
+
+/** The candidates one bare win32 name is completed with, per PATH directory: the
+ * name itself when it already carries a `PATHEXT` suffix, else the name plus each
+ * suffix in `PATHEXT`'s own order. The suffix match is case-insensitive because
+ * that is how Windows compares the name. */
+function windowsProgramCandidates(program: string, pathext: string | undefined): string[] {
+  const listed = (pathext ?? "").split(";").filter((suffix) => suffix.length > 0);
+  const suffixes: readonly string[] = listed.length > 0 ? listed : DEFAULT_WINDOWS_PROGRAM_SUFFIXES;
+  const upper = program.toUpperCase();
+  return suffixes.some((suffix) => upper.endsWith(suffix.toUpperCase())) ? [program] : suffixes.map((suffix) => program + suffix);
+}
+
+/**
+ * win32 pre-resolution: a `;`-separated launch `PATH`, `PATHEXT` completion and
+ * the `PATH`/`PATHEXT` names read case-insensitively. Candidate paths are only
+ * stat'ed - remaining case differences are the Windows filesystem's to decide, and
+ * win32 has no executable bit to check. A name that names nothing is returned
+ * unchanged, so no other program is ever substituted for the planned one; the OS
+ * search order resolves what this cannot (see `resolveProgram`).
+ */
+function resolveWindowsProgram(program: string, env: Record<string, string>): string {
+  if (program.includes("/") || program.includes("\\")) return program;
+  const searchPath = (envValue(env, "PATH", "win32") ?? "").split(";").filter((entry) => entry.length > 0);
+  for (const directory of searchPath) {
+    for (const candidate of windowsProgramCandidates(program, envValue(env, "PATHEXT", "win32"))) {
+      const path = join(directory, candidate);
+      try {
+        if (statSync(path).isFile()) return path;
+      } catch {
+        // Try the next candidate.
+      }
+    }
+  }
+  return program;
+}
+
+/** POSIX resolution, unchanged: `:`-separated `PATH` entries in their own order,
+ * then the fixed system paths, compared ordinally and case-sensitively. */
+function resolvePosixProgram(program: string, env: Record<string, string>): string {
   const searchPath = (env["PATH"] ?? "").split(":").filter((entry) => entry.length > 0);
   for (const directory of [...searchPath, "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"]) {
     const candidate = join(directory, program);
@@ -111,6 +185,25 @@ export class TaskTerminalSessions {
   }
 
   /**
+   * The recorded identity against what the live session really holds. Where the
+   * platform owns process groups, the group the spawner read is the identity a
+   * signal is checked against, so a recorded pid that no longer leads exactly
+   * that group - recycled or moved - refuses; a record without a group refuses
+   * there too, because that is the evidence the signal would need. On win32 there
+   * is no group and no signal by pid: containment is the Host-owned helper
+   * handle, whose identity cannot be recycled, so the live session plus the
+   * matching recorded pid is the whole identity.
+   */
+  private identityMatches(record: TerminalInstanceRecord, processId: number, observed: TerminalProcessIdentity | undefined): boolean {
+    if (observed?.processId !== processId) return false;
+    // win32: no pid is ever signalled - containment is the Host-owned helper
+    // handle - so the group the POSIX path checks against is not part of the
+    // identity here, and the matching recorded pid is the whole check.
+    if (!ptyProcessGroupOwnershipAvailable()) return true;
+    return observed.processGroupId !== undefined && observed.processGroupId === record.processGroupId;
+  }
+
+  /**
    * Spawn the real PTY for one planned terminal. The plan is registered first
    * (the Host does that before the permission gate resolves); this method
    * records the real process identity on it. A proven `not-started` removes the
@@ -125,7 +218,14 @@ export class TaskTerminalSessions {
     const launch: TerminalLaunch = {
       program: resolveProgram(input.plan.program, input.plan.env),
       args: [...input.plan.args],
-      cwd: input.plan.cwd,
+      // The plan's cwd keeps the platform's own display spelling - the roots are
+      // joined as `${taskDir}/${name}`, so on win32 the plan path mixes `\` and
+      // `/` - while the driver's launch contract is a canonical absolute path
+      // (`normalize(cwd) === cwd`). Canonicalize ONLY the value handed to the
+      // driver: the plan is never rewritten, so what the panel shows and what
+      // the record carries stay exactly as planned. On POSIX the joined path is
+      // already canonical, so this is byte-identical there.
+      cwd: normalize(input.plan.cwd),
       env: { ...input.plan.env },
       envRevision: revisionOf(input.plan),
       cols: input.plan.cols,
@@ -176,9 +276,15 @@ export class TaskTerminalSessions {
 
   /**
    * Stop exactly this instance's session. Fail-closed order: the registry must
-   * have a recorded pid + pgid, this Host must hold the matching live session,
-   * and the driver's observed identity must equal the recorded one - only then
-   * is any signal sent. A driver `unknown` keeps the instance running.
+   * have a recorded pid, this Host must hold the matching live session, and the
+   * driver's observed identity must equal the recorded one - only then is the
+   * driver asked to terminate it. A driver `unknown` keeps the instance running.
+   * The identity that has to match is the platform's own: a process group that
+   * has to still belong to the recorded pid where the platform owns groups, and
+   * the live session plus the recorded pid on win32, where containment is the
+   * Host-owned helper handle rather than a pid: the recorded pid is only compared,
+   * never signalled, so a recycled pid cannot make this stop name a foreign
+   * process (see `identityMatches`).
    */
   async stop(instanceId: string, reason: string): Promise<TerminalSessionResult<{ instance: TerminalInstanceRecord }>> {
     const record = this.registry.get(instanceId);
@@ -191,12 +297,10 @@ export class TaskTerminalSessions {
     const scope = this.registry.stopScope(instanceId);
     if (!scope.ok) return { ok: false, error: scope.error };
     if (!session) {
-      return { ok: false, error: `unknown-process: 终端 ${instanceId} 没有本 Host 记录的运行会话，拒绝按记录进程号发送信号` };
+      return { ok: false, error: `unknown-process: 终端 ${instanceId} 没有本 Host 记录的运行会话，拒绝据此终止会话` };
     }
-    const observed = this.driver.snapshot(session.identity);
-    if (record.processGroupId === undefined || observed.process?.processId !== scope.scope.processId ||
-        observed.process.processGroupId !== record.processGroupId) {
-      return { ok: false, error: `unknown-process: 终端 ${instanceId} 的记录身份与运行会话不一致，拒绝发送信号` };
+    if (!this.identityMatches(record, scope.scope.processId, this.driver.snapshot(session.identity).process)) {
+      return { ok: false, error: `unknown-process: 终端 ${instanceId} 的记录身份与运行会话不一致，拒绝据此终止会话` };
     }
     const receipt = await this.driver.stop(session.identity);
     if (receipt.status !== "tree-drained") {

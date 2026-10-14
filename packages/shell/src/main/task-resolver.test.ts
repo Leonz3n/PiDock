@@ -100,9 +100,13 @@ describe("disk task-id resolver", () => {
     const { fileURLToPath } = await import("node:url");
     const here = dirname(fileURLToPath(import.meta.url));
     const source = readFileSync(joinPath(here, "main.ts"), "utf8");
-    expect(source).toContain("new TaskRootIndex(app.getPath(\"userData\"), defaultTasksRoot())");
-    expect(source).toContain("(taskId) => taskRoots.resolve(taskId)");
-    expect(source).toContain("browsers.registry,\n    taskRoots,");
-    expect(source).not.toMatch(/new PerTaskHostRegistry\(workspaceId\)(?!\s*,)/);
+    // The assertion is about the source's structure, not the checkout's line
+    // endings: a win32 checkout with `core.autocrlf` hands us CRLF, so normalize
+    // before matching the multi-line fragments below.
+    const normalized = source.replace(/\r\n/g, "\n");
+    expect(normalized).toContain("new TaskRootIndex(app.getPath(\"userData\"), defaultTasksRoot())");
+    expect(normalized).toContain("(taskId) => taskRoots.resolve(taskId)");
+    expect(normalized).toContain("browsers.registry,\n    taskRoots,");
+    expect(normalized).not.toMatch(/new PerTaskHostRegistry\(workspaceId\)(?!\s*,)/);
   });
 });

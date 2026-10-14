@@ -32,9 +32,9 @@
     "smoke:main-death": "node scripts/main-death-recovery-smoke.mjs",
     "smoke:recovery-presence": "node scripts/recovery-presence-smoke.mjs",
     "startup": "electron . -- --print-startup",
-    "package:dir": "electron-builder --config electron-builder.config.cjs --dir",
-    "package:mac": "electron-builder --config electron-builder.config.cjs --mac dmg --arm64",
-    "package:win": "electron-builder --config electron-builder.config.cjs --win msi --x64"
+    "package:dir": "pnpm build && electron-builder --config electron-builder.config.cjs --dir",
+    "package:mac": "pnpm build && electron-builder --config electron-builder.config.cjs --mac dmg --arm64",
+    "package:win": "pnpm build && electron-builder --config electron-builder.config.cjs --win msi --x64"
   },
   "devDependencies": {
     "@pidock/renderer": "workspace:*",

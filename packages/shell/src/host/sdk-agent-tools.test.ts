@@ -15,7 +15,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -217,7 +217,12 @@ function snapshot(root: string): Record<string, string> {
     for (const entry of readdirSync(path, { withFileTypes: true })) {
       const child = join(path, entry.name);
       const relative = child.slice(root.length + 1);
-      if (relative.includes("/.pidock-") || relative.startsWith(".pidock-")) continue;
+      // Skip any path a `.pidock-*` segment takes part in. The check is on path
+      // segments, not on a `/`-spelled substring: on win32 the same session
+      // journal is `task-...\.pidock-sdk-sessions\...`, so a `/`-only predicate
+      // fails to exclude it and the helper suddenly asserts on the journal it
+      // exists to ignore.
+      if (relative.split(/[\\/]/).some((segment) => segment.startsWith(".pidock-"))) continue;
       const stat = lstatSync(child);
       if (stat.isDirectory()) walk(child);
       else if (stat.isFile()) out[relative] = readFileSync(child).toString("base64");
@@ -261,14 +266,51 @@ it("lists and searches inside the task and runs a command in the worktree", asyn
   expect(searched.text).toContain("notes.txt:1: original");
 
   const command = await h.prompt("exec.run", { command: "pwd && cat notes.txt" });
-  expect(command.text).toContain(h.fixture.worktreeReal);
-  expect(command.text).toContain("original");
-  expect(command.text).toContain("exit 0");
-  // `.gitignore` is a legitimate token, not a `.git` control path: the escape
-  // hardening must not refuse it.
   const gitignore = await h.prompt("exec.run", { command: "echo node_modules > .gitignore" });
-  expect(gitignore.text).toContain("exit 0");
-  expect(readFileSync(join(h.fixture.worktree, ".gitignore"), "utf8")).toBe("node_modules\n");
+  // win32 (#53): `exec.run` executes through POSIX `/bin/sh -c` only and the Host
+  // refuses by name there (no `cmd.exe` fallback, and none of "use `sh.exe` when
+  // one is installed"), so the byte-level shell output below is unobserved on
+  // win32: the named refusal is asserted instead, by the platform test that
+  // follows this one.
+  if (process.platform === "win32") {
+    for (const result of [command, gitignore]) expect(result.text).toContain("tool-refused:exec-unsupported-platform");
+    // A refused command has no effect, and `.gitignore` was going to be the
+    // second command's whole effect.
+    expect(existsSync(join(h.fixture.worktree, ".gitignore"))).toBe(false);
+  } else {
+    expect(command.text).toContain(h.fixture.worktreeReal);
+    expect(command.text).toContain("original");
+    expect(command.text).toContain("exit 0");
+    // `.gitignore` is a legitimate token, not a `.git` control path: the escape
+    // hardening must not refuse it.
+    expect(gitignore.text).toContain("exit 0");
+    expect(readFileSync(join(h.fixture.worktree, ".gitignore"), "utf8")).toBe("node_modules\n");
+  }
+  await h.host.shutdownSdk();
+});
+
+// win32 (#53): the platform refusal has to reach the caller as a NAME, because the failure it
+// replaces is unnamed at the surface the Agent calls - `spawn("/bin/sh", …)` reports `ENOENT`,
+// which the exec tool renders as `command-spawn-failed: spawn /bin/sh ENOENT` with `exit unknown`,
+// leaving the model nothing to act on. This test is win32-only: off-win32 the very same call really
+// executes the command (asserted above), so there is no refusal path to exercise - a named platform
+// skip, not a silent one.
+it.skipIf(process.platform !== "win32")("refuses exec.run by its own platform code instead of leaking an unnamed /bin/sh ENOENT", async () => {
+  const h = await harness();
+  await h.host.configureSdkProvider({ config: PROVIDER_CONFIG, credential: "synthetic-key" });
+  await h.host.setPermission("main", "auto");
+
+  const result = await h.prompt("exec.run", { command: "echo named > named.txt" });
+  // The stable code the caller can act on, spelled as the tool result carries it.
+  expect(result.text).toContain("tool-refused:exec-unsupported-platform");
+  // Actionable: the refusal names what is missing and that nothing was started.
+  expect(result.text).toContain("未启动任何进程");
+  // The unnamed failure it replaces is not merely reformatted, it is gone.
+  expect(result.text).not.toContain("command-spawn-failed");
+  expect(result.text).not.toContain("ENOENT");
+  expect(result.text).not.toContain("exit unknown");
+  // Fail closed: the refusal ran nothing.
+  expect(existsSync(join(h.fixture.worktree, "named.txt"))).toBe(false);
   await h.host.shutdownSdk();
 });
 
@@ -276,14 +318,39 @@ it("refuses every escape vector by name and changes nothing on disk", async () =
   const h = await harness();
   await h.host.configureSdkProvider({ config: PROVIDER_CONFIG, credential: "synthetic-key" });
   await h.host.setPermission("main", "auto");
-  // A symlink inside the worktree, one of them dangling, are real escape
-  // vectors: a write through the dangling one would create the file outside.
-  const outsideDir = join("/tmp", `pidock-agent-tools-escape-${process.pid}`);
-  const glued = join("/tmp", `pidock-agent-tools-glued-${process.pid}.txt`);
-  const glued2 = join("/tmp", `pidock-agent-tools-glued2-${process.pid}.txt`);
-  execFileSync("ln", ["-s", "/etc", join(h.fixture.worktree, "link-etc")]);
-  execFileSync("ln", ["-s", join(outsideDir, "planted.txt"), join(h.fixture.worktree, "link-dangling.txt")]);
-  execFileSync("ln", ["-s", join(outsideDir, "planted"), join(h.fixture.worktree, "link-dangling-dir")]);
+  // Symlinks inside the worktree are real escape vectors: one resolves to an
+  // existing directory outside the task (a read through it escapes), the other
+  // two are dangling (a write through one would create the file outside).
+  const outsideDir = join(tmpdir(), `pidock-agent-tools-escape-${process.pid}`);
+  // The escaping link must resolve to a REAL outside target; through a missing
+  // one the same request is refused as an unreadable/dangling target instead of
+  // as the escape it is. `/etc` was the POSIX-only spelling of this target —
+  // win32 has no `/etc`, so there the link dangled and the verdict changed.
+  const escapeOutsideDir = join(tmpdir(), `pidock-agent-tools-escape-outside-${process.pid}`);
+  mkdirSync(escapeOutsideDir, { recursive: true });
+  writeFileSync(join(escapeOutsideDir, "outside.txt"), "outside the task\n");
+  roots.push(escapeOutsideDir);
+  // The glued escape vectors are spelled as POSIX absolute paths, not
+  // `join(tmpdir(), …)`: the command-path filter examines only POSIX-shaped
+  // tokens (a token must contain `/`, start with `~`, be exactly `..`, or name a
+  // `.git` path), so a native `C:\…` token is not a shape it can classify and
+  // the platform gate refuses it instead (pinned by the win32 tripwire test
+  // below). `/tmp/…` is still an absolute path outside the task on both
+  // platforms, so the same `out-of-scope` refusal is exercised everywhere.
+  const glued = `/tmp/pidock-agent-tools-glued-${process.pid}.txt`;
+  const glued2 = `/tmp/pidock-agent-tools-glued2-${process.pid}.txt`;
+  // `ln -s` as a program does not exist on win32 (and `/tmp` is not a real path
+  // there), so the links are created with Node's own API. `type` is ignored on
+  // POSIX; on win32 a DIR-shaped link needs it, and a junction is NOT usable
+  // for the two dangling targets (a junction must point at an existing absolute
+  // directory).
+  const link = (target: string, linkPath: string, shape: "file" | "dir"): void => {
+    if (process.platform === "win32") symlinkSync(target, linkPath, shape);
+    else symlinkSync(target, linkPath);
+  };
+  link(escapeOutsideDir, join(h.fixture.worktree, "link-outside"), "dir");
+  link(join(outsideDir, "planted.txt"), join(h.fixture.worktree, "link-dangling.txt"), "file");
+  link(join(outsideDir, "planted"), join(h.fixture.worktree, "link-dangling-dir"), "dir");
   const before = snapshot(h.fixture.root);
   const gitPointerBefore = readFileSync(join(h.fixture.worktree, ".git"), "utf8");
 
@@ -295,7 +362,7 @@ it("refuses every escape vector by name and changes nothing on disk", async () =
     { tool: "fs.write", args: { path: `${h.fixture.otherTaskDir}/secret.txt`, content: "escape" }, code: "tool-refused:other-task" },
     { tool: "fs.read", args: { path: `${h.fixture.profileDir}/app.json` }, code: "tool-refused:protected-path" },
     { tool: "fs.write", args: { path: "task.json", content: "escape" }, code: "tool-refused:not-a-worktree" },
-    { tool: "fs.read", args: { path: "repo/link-etc/hosts" }, code: "tool-refused:out-of-scope" },
+    { tool: "fs.read", args: { path: "repo/link-outside/outside.txt" }, code: "tool-refused:out-of-scope" },
     // A dangling link is refused by the application-profile assert (it never
     // treats a link whose target is missing as a valid lexical path) — see the
     // resolver unit test below for the link-chain rule itself.
@@ -367,6 +434,32 @@ it("refuses every escape vector by name and changes nothing on disk", async () =
   await h.host.shutdownSdk();
 });
 
+// win32 (#64): a tripwire, not a completeness claim. The command-path filter
+// recognises POSIX-shaped tokens only (`commandPathTokens` in
+// `sdk-agent-tool-broker.ts`): a token must contain `/`, start with `~`, be
+// exactly `..`, or name a `.git` path. The platform guard sits AFTER that
+// filter, so a native absolute token glued to a shell operator is not examined
+// by the filter at all and the platform gate is the refusal that reaches the
+// caller. Nothing runs either way today (win32 has no `/bin/sh`), so this is
+// safe now — but a POSIX-only filter placed in front of a future native win32
+// shell (#53 capability) would examine nothing and pass what it means to
+// catch. If such a shell is added, extend the filter to native absolute/UNC
+// shapes and update this assertion.
+it.skipIf(process.platform !== "win32")("leaves a native absolute command token to the platform gate (filter shapes are POSIX-only)", async () => {
+  const h = await harness();
+  await h.host.configureSdkProvider({ config: PROVIDER_CONFIG, credential: "synthetic-key" });
+  await h.host.setPermission("main", "auto");
+  const nativeTarget = join(tmpdir(), `pidock-agent-tools-native-token-${process.pid}.txt`);
+  const result = await h.prompt("exec.run", { command: `echo x>${nativeTarget}` });
+  // A POSIX-shaped glue is refused `out-of-scope` by the filter (the escape test
+  // above); this native-shaped one is not a shape the filter examines, so the
+  // platform guard is the only refusal between it and a real spawn.
+  expect(result.text).toContain("tool-refused:exec-unsupported-platform");
+  expect(result.text).not.toContain("out-of-scope");
+  expect(existsSync(nativeTarget)).toBe(false);
+  await h.host.shutdownSdk();
+});
+
 it("never returns the task host's own bookkeeping from a search rooted at the task folder", async () => {
   const h = await harness();
   await h.host.configureSdkProvider({ config: PROVIDER_CONFIG, credential: "synthetic-key" });
@@ -376,7 +469,9 @@ it("never returns the task host's own bookkeeping from a search rooted at the ta
   // its pattern) is echoed into the session JSONL under `.pidock-sdk-sessions`:
   // a traversal that walked the Host's state would report a match there.
   const worktree = await h.prompt("fs.search", { path: ".", pattern: "original" });
-  expect(worktree.text).toContain("repo/notes.txt:1: original");
+  // The product reports the platform-native relative path, so the expected
+  // string is built with the platform separator (POSIX stays byte-identical).
+  expect(worktree.text).toContain(`${join("repo", "notes.txt")}:1: original`);
   expect(worktree.text).not.toContain(".pidock-");
 
   // `task-aaaaaaaa` is the id in the task record itself: a traversal of the task
@@ -402,7 +497,7 @@ it("never returns the .pidock-creation marker or any .pidock-* file, but still r
 
   // The skip narrows Host state only: a normal repository file is still found.
   const repo = await h.prompt("fs.search", { path: ".", pattern: "original" });
-  expect(repo.text).toContain("repo/notes.txt:1: original");
+  expect(repo.text).toContain(`${join("repo", "notes.txt")}:1: original`);
   await h.host.shutdownSdk();
 });
 
@@ -473,8 +568,16 @@ it("executes an approved command exactly once and refuses to settle the same con
   h.host.approve("main", approval.id);
 
   const result = await running;
-  expect(result.text).toContain("exit 0");
-  expect(readFileSync(join(h.fixture.worktree, "command.txt"), "utf8")).toBe("approved\n");
+  // win32 (#53): the confirmation is still minted and spent (the one-shot assert
+  // below is platform-independent), and the approved command then meets the named
+  // platform refusal instead of running - the POSIX output is unobserved there.
+  if (process.platform === "win32") {
+    expect(result.text).toContain("tool-refused:exec-unsupported-platform");
+    expect(existsSync(join(h.fixture.worktree, "command.txt"))).toBe(false);
+  } else {
+    expect(result.text).toContain("exit 0");
+    expect(readFileSync(join(h.fixture.worktree, "command.txt"), "utf8")).toBe("approved\n");
+  }
   expect(() => h.host.approve("main", approval.id)).toThrow(/不可重放|已处理|已消费/);
   await h.host.shutdownSdk();
 });
@@ -553,8 +656,16 @@ it("a permission change never retroactively authorizes a parked request, and lat
 
   // The new tier applies to the next request: no confirmation is minted at all.
   const later = await h.prompt("exec.run", { command: "echo later > later.txt" });
-  expect(later.text).toContain("exit 0");
-  expect(readFileSync(join(h.fixture.worktree, "later.txt"), "utf8")).toBe("later\n");
+  // win32 (#53): under `auto` the call really executes on POSIX and meets the named
+  // platform refusal on win32, so the POSIX output is unobserved there (see the
+  // win32-only platform test above); that no confirmation is minted holds either way.
+  if (process.platform === "win32") {
+    expect(later.text).toContain("tool-refused:exec-unsupported-platform");
+    expect(existsSync(join(h.fixture.worktree, "later.txt"))).toBe(false);
+  } else {
+    expect(later.text).toContain("exit 0");
+    expect(readFileSync(join(h.fixture.worktree, "later.txt"), "utf8")).toBe("later\n");
+  }
   expect(h.host.listApprovals("main").filter((item) => item.status === "pending")).toEqual([]);
   await h.host.shutdownSdk();
 });
@@ -598,11 +709,22 @@ it("keeps the fail-closed provider-not-configured path and declares no tools wit
   await bare.dispose();
 });
 
-it("resolves a symlink chain (including a dangling link) to the path it really names", () => {
+// win32 (#57): both links below are FILE-shaped - the second is a link to the first, whose own
+// target never exists - and a file symlink needs SeCreateSymbolicLinkPrivilege, which a normal user
+// does not hold (measured under a restricted token, `runas /trustlevel:0x20000`: every
+// `symlinkSync(..., "file")` fails `EPERM` there while a junction succeeds). A junction is the only
+// link win32 creates without that privilege and it is directory-only, so it cannot stand in for a
+// dangling file link; the external `ln -s` this fixture used cannot build it either (observed:
+// `ln: failed to create symbolic link './dangling': No such file or directory`, with the target
+// spelled `\tmp\...` - `join("/tmp", ...)` is not a real win32 path). Named skip: the
+// link-chain-then-dangling-target proposition is unobserved on win32, not dropped silently.
+it.skipIf(process.platform === "win32")("resolves a symlink chain (including a dangling link) to the path it really names", () => {
   const parts = fixture();
   const target = join("/tmp", `pidock-agent-tools-dangling-${process.pid}`, "planted.txt");
-  execFileSync("ln", ["-s", target, join(parts.worktree, "dangling")]);
-  execFileSync("ln", ["-s", "dangling", join(parts.worktree, "dangling-alias")]);
+  // The external `ln -s` program is gone: Node's own API makes the very same link on POSIX, and on
+  // win32 a file link has no shape a normal user can create (see the skip above).
+  symlinkSync(target, join(parts.worktree, "dangling"));
+  symlinkSync("dangling", join(parts.worktree, "dangling-alias"));
   const scope = {
     taskDir: parts.taskDir,
     taskRoot: parts.root,

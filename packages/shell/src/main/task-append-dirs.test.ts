@@ -304,7 +304,8 @@ describe("Production plain-directory append for an existing task", () => {
     fs.unlinkSync(dir1LinkPath);
     const bogusDir = join(env.home, "bogus");
     fs.mkdirSync(bogusDir);
-    fs.symlinkSync(bogusDir, dir1LinkPath);
+    // win32: a plain directory symlink needs SeCreateSymbolicLinkPrivilege; a junction is the directory link this platform can create without it (#57).
+    fs.symlinkSync(bogusDir, dir1LinkPath, process.platform === "win32" ? "junction" : "dir");
 
     await expect(
       env.appendService.append({
@@ -491,7 +492,7 @@ describe("Production plain-directory append for an existing task", () => {
     const linkPath = join(env.taskDir, linkName);
     // Simulate a crash after link creation but before the record write: the
     // link exists at the correct stable name, the record does not name it.
-    fs.symlinkSync(env.dir2, linkPath, "dir");
+    fs.symlinkSync(env.dir2, linkPath, process.platform === "win32" ? "junction" : "dir");
     const inodeBefore = fs.lstatSync(linkPath).ino;
     expect(readTaskRecordOnDisk(env.taskDir)?.dirLinks?.some((link) => link.directoryId === dir2Id)).not.toBe(true);
 

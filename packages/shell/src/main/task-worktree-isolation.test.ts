@@ -202,7 +202,11 @@ describe("[PiDock 03] (#6 盒子 6) two tasks sharing one project repository", (
     expect(rootsA.map((root) => root.id)).toEqual([a.repos[0], a.dirLinks![0]!.linkName]);
     expect(wtA).toMatchObject({
       kind: "worktree",
-      path: pathA,
+      // `observedRoots` spells the child with `/` (`joinRoot`,
+      // `main/workspace-files.ts`: `<native taskDir>/<repoDir>`), so the fixture
+      // must not use `join` for the repo dir on win32; `pathA` stays native for
+      // git/fs calls.
+      path: `${a.taskDir}/${a.repos[0]!}`,
       baselineBranch: "main",
       expectedBranch: a.branch,
       workingBranch: { state: "observed", value: branchA },
@@ -210,7 +214,8 @@ describe("[PiDock 03] (#6 盒子 6) two tasks sharing one project repository", (
     });
     expect(wtB).toMatchObject({
       kind: "worktree",
-      path: pathB,
+      // Same mixed form as `wtA` above (`pathB` stays native for git/fs calls).
+      path: `${b.taskDir}/${b.repos[0]!}`,
       baselineBranch: "main",
       expectedBranch: b.branch,
       workingBranch: { state: "observed", value: branchB },
@@ -240,7 +245,10 @@ describe("[PiDock 03] (#6 盒子 6) two tasks sharing one project repository", (
     if (!diffB.ok) return;
     expect(diffB.diff).toBe("");
     expect(git(pathB, "status", "--porcelain")).toBe("");
-    expect(readFileSync(join(pathB, "README.md"), "utf8")).toBe("base\n");
+    // The worktree file went through the host's checkout settings
+    // (`core.autocrlf` on win32 hands back `base\r\n`), so the assertion is
+    // about the content: line endings are the checkout's, not the write's.
+    expect(readFileSync(join(pathB, "README.md"), "utf8").replace(/\r\n/g, "\n")).toBe("base\n");
     expect(existsSync(join(pathB, "isolated.txt"))).toBe(false);
 
     // (6) the shared SOURCE checkout is untouched on disk, in git's own reading
