@@ -21,6 +21,14 @@ import { TaskServiceRuntime } from "../../../shell/src/host/service-runtime.js";
 import { LAUNCH_VERIFICATION_SCHEMA_VERSION, type LaunchVerificationEntry } from "../../../shell/src/host/task-store.js";
 
 const HERE = `${process.platform}-${process.arch}`;
+/**
+ * The OTHER released platform, picked by DIFFERENCE from this machine's own
+ * label: on win32 both labels are `win32-x64`, so a record hardcoded to
+ * `win32-x64` would be this Host's OWN platform and count as a real
+ * verification instead of the foreign-platform case (the same idiom as
+ * `desktopLinkShape.test.tsx`).
+ */
+const OTHER = HERE === "win32-x64" ? "darwin-arm64" : "win32-x64";
 const NODE = process.versions.node;
 const THIS_INSTALLATION = "11111111-1111-1111-1111-111111111111";
 const OTHER_INSTALLATION = "22222222-2222-2222-2222-222222222222";
@@ -71,7 +79,7 @@ describe("[PiDock 04] #7 the real Host projection parses in the real renderer", 
   const runtime = new TaskServiceRuntime("/tmp/seam-task", undefined, memoryLaunchVerificationLog([
     entry({ serviceId: "svc-verified" }),
     entry({ serviceId: "svc-foreign", installationId: OTHER_INSTALLATION }),
-    entry({ serviceId: "svc-other-platform", platform: "win32-x64" }),
+    entry({ serviceId: "svc-other-platform", platform: OTHER }),
     entry({ serviceId: "svc-stale", templateVersion: "v0" }),
     // The malformed single row that used to blank the WHOLE status: an observed
     // launch with no program token.
@@ -92,8 +100,8 @@ describe("[PiDock 04] #7 the real Host projection parses in the real renderer", 
   });
 
   it("keeps another platform's record unverified, by name", () => {
-    const other = rowsOf(projected(runtime, "svc-other-platform")).find((row) => row.platform === "win32-x64");
-    expect(other).toEqual({ platform: "win32-x64", verified: false, reason: `记录来自其他平台（win32-x64），本机 ${HERE} 未实测` });
+    const other = rowsOf(projected(runtime, "svc-other-platform")).find((row) => row.platform === OTHER);
+    expect(other).toEqual({ platform: OTHER, verified: false, reason: `记录来自其他平台（${OTHER}），本机 ${HERE} 未实测` });
   });
 
   it("keeps a superseded template's record unverified, by name", () => {
@@ -113,7 +121,7 @@ describe("[PiDock 04] #7 the real Host projection parses in the real renderer", 
     // survive with that row unverified instead.
     const rows = rowsOf(projected(runtime, "svc-unusable"));
     expect(rows.find((row) => row.platform === HERE)).toEqual({ platform: HERE, verified: false, reason: "该平台的记录缺少启动事实，未算已验证" });
-    expect(rows.map((row) => row.platform)).toEqual(expect.arrayContaining(["win32-x64"]));
+    expect(rows.map((row) => row.platform)).toEqual(expect.arrayContaining([OTHER]));
   });
 
   it("pins the projection's row keys to the parser's own allowlist", () => {

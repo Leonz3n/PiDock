@@ -8,13 +8,21 @@
  * renderer parses, so the two ends cannot drift apart"). Only the platform
  * label is machine-dependent, and these tests use this machine's real
  * platform/arch, so a payload claiming a pass for any other platform is the
- * contradictory input the parser must refuse.
+ * contradictory input the parser must refuse. The "other" platform is selected
+ * by difference from this machine's label, never by a hardcoded name.
  */
 import { describe, expect, it } from "vitest";
 import { serviceStatusFromHost } from "../data/taskServices";
 
 const SERVICE_ID = "s-11111111-1111-1111-1111-111111111111";
 const HERE = `${process.platform}-${process.arch}`;
+/**
+ * The OTHER released platform, picked by DIFFERENCE from this machine's own
+ * label: on win32 both labels are `win32-x64`, so a hardcoded `win32-x64` row
+ * would collide with this Host's own row and be refused as a duplicate (the
+ * same idiom as `desktopLinkShape.test.tsx`).
+ */
+const OTHER = HERE === "win32-x64" ? "darwin-arm64" : "win32-x64";
 
 const status = (launchVerification: unknown) => ({
   service: { serviceId: SERVICE_ID, lifecycle: "stopped", templateVersion: "2", resolved: [], launchVerification },
@@ -30,10 +38,10 @@ const verifiedRow = {
 };
 
 describe("[PiDock 04] #7 the platform launch verification the panel reads", () => {
-  it("keeps this machine's real verification and names Windows as unverified", () => {
+  it("keeps this machine's real verification and names the other platform as unverified", () => {
     const payload = status({
       platform: HERE,
-      rows: [verifiedRow, { platform: "win32-x64", verified: false, reason: "本机未运行该平台，未实测" }],
+      rows: [verifiedRow, { platform: OTHER, verified: false, reason: "本机未运行该平台，未实测" }],
     });
     const view = serviceStatusFromHost(payload, SERVICE_ID);
     expect(view).toMatchObject({ kind: "registry", launchVerification: { platform: HERE } });
@@ -42,9 +50,9 @@ describe("[PiDock 04] #7 the platform launch verification the panel reads", () =
       { platform: HERE, verified: true, nodeVersion: process.versions.node, program: "pnpm",
         startedAt: "2026-10-08T00:00:00.000Z", stopped: true, stoppedAt: "2026-10-08T00:01:00.000Z" },
     ]);
-    // Windows is present and NOT a pass: the platform this build cannot run in
-    // this environment is named, with the Host's own reason.
-    expect(rows.find((row) => row.platform === "win32-x64")).toEqual({ platform: "win32-x64", verified: false, reason: "本机未运行该平台，未实测" });
+    // The other released platform is present and NOT a pass: the platform this
+    // build cannot run in this environment is named, with the Host's own reason.
+    expect(rows.find((row) => row.platform === OTHER)).toEqual({ platform: OTHER, verified: false, reason: "本机未运行该平台，未实测" });
   });
 
   it("never turns an unverified platform into a pass: no record, another platform's record, or an observation-free one", () => {
@@ -58,7 +66,7 @@ describe("[PiDock 04] #7 the platform launch verification the panel reads", () =
     // (b) The mutation this slice exists to prevent: a payload that claims a
     // pass on a platform this Host is not running on is contradictory, so the
     // whole read is refused instead of rendering a green row.
-    expect(serviceStatusFromHost(status({ platform: HERE, rows: [{ ...verifiedRow, platform: "win32-x64" }] }), SERVICE_ID)).toBeNull();
+    expect(serviceStatusFromHost(status({ platform: HERE, rows: [{ ...verifiedRow, platform: OTHER }] }), SERVICE_ID)).toBeNull();
     // A pass with no observed launch fact attached is refused too (a record
     // that named no observation is not evidence).
     for (const row of [{ platform: HERE, verified: true }, { platform: HERE, verified: true, program: "pnpm", nodeVersion: "24.21.0" },
@@ -67,11 +75,11 @@ describe("[PiDock 04] #7 the platform launch verification the panel reads", () =
     }
     // (c) A not-verified row that names no reason, and a duplicate platform row
     // (the only way a `false` could be replaced by a `true`), are refused.
-    expect(serviceStatusFromHost(status({ platform: HERE, rows: [{ platform: "win32-x64", verified: false }] }), SERVICE_ID)).toBeNull();
-    expect(serviceStatusFromHost(status({ platform: HERE, rows: [{ platform: "win32-x64", verified: false, reason: "x" }, { platform: "win32-x64", verified: false, reason: "y" }] }), SERVICE_ID)).toBeNull();
+    expect(serviceStatusFromHost(status({ platform: HERE, rows: [{ platform: OTHER, verified: false }] }), SERVICE_ID)).toBeNull();
+    expect(serviceStatusFromHost(status({ platform: HERE, rows: [{ platform: OTHER, verified: false, reason: "x" }, { platform: OTHER, verified: false, reason: "y" }] }), SERVICE_ID)).toBeNull();
     // An observation made on another platform stays readable, and stays NOT
     // verified for this machine.
-    const other = serviceStatusFromHost(status({ platform: HERE, rows: [{ ...verifiedRow, platform: "win32-x64", verified: false, reason: "记录来自其他平台（win32-x64），本机未实测" }] }), SERVICE_ID);
+    const other = serviceStatusFromHost(status({ platform: HERE, rows: [{ ...verifiedRow, platform: OTHER, verified: false, reason: `记录来自其他平台（${OTHER}），本机 ${HERE} 未实测` }] }), SERVICE_ID);
     expect(other?.kind === "registry" ? other.launchVerification?.rows.filter((row) => row.verified) : "unreadable").toEqual([]);
   });
 
@@ -80,7 +88,7 @@ describe("[PiDock 04] #7 the platform launch verification the panel reads", () =
       { platform: HERE }, { rows: [] }, { platform: ODD_ARCH_LABEL, rows: [{ platform: HERE, verified: false, reason: "x" }] },
       { platform: "darwin", rows: [{ platform: HERE, verified: false, reason: "x" }] },
       { platform: HERE, rows: [] }, { platform: HERE, rows: [{ platform: HERE, verified: "yes", reason: "x" }] },
-      { platform: HERE, rows: [{ platform: "win32-x64", verified: false, reason: "x", extra: 1 }] },
+      { platform: HERE, rows: [{ platform: OTHER, verified: false, reason: "x", extra: 1 }] },
       { platform: HERE, rows: [{ platform: HERE, verified: false, reason: "" }] }, "verified",
     ]) {
       expect(serviceStatusFromHost(status(value), SERVICE_ID)).toBeNull();
