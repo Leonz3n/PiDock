@@ -25,7 +25,7 @@ import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { TaskWorkspaceHost, memoryTaskStore } from "./task-host.js";
 import { buildTaskDiskRecord, readTaskRecordOnDisk, serializeTaskRecord } from "./task-store.js";
 import { PiSdkTextKernel } from "./sdk-text-kernel.js";
-import { derivedPrimaryCheckouts, resolveSdkAgentToolPath } from "./sdk-agent-tool-broker.js";
+import { commandPathTokens, derivedPrimaryCheckouts, resolveSdkAgentToolPath } from "./sdk-agent-tool-broker.js";
 import { SDK_AGENT_TOOL_NAMES } from "./sdk-agent-tool-contract.js";
 import { protectApplicationProfile } from "./protected-application-path.js";
 import type { SdkContextClient, SdkContextOptions } from "./sdk-context-client.js";
@@ -398,6 +398,12 @@ it("refuses every escape vector by name and changes nothing on disk", async () =
     // operator-glued token is refused the same way.
     { tool: "exec.run", args: { command: "dd of=.git" }, code: "tool-refused:invalid-target" },
     { tool: "exec.run", args: { command: "GIT_DIR=.GIT git status" }, code: "tool-refused:invalid-target" },
+    // A native win32 spelling of the control path (#70): the token carries no
+    // `/`, so before the filter knew the shape it was not examined at all and
+    // an eventual native shell would have written a `.git` control file. The
+    // refusal is by name and platform-independent — the segment split is
+    // separator-agnostic.
+    { tool: "exec.run", args: { command: String.raw`echo x > C:\repo\.git\config` }, code: "tool-refused:invalid-target" },
     // A quoting/escaping spelling is the same control file to `/bin/sh`: POSIX
     // quote removal turns `.g\it`, `.gi\t` and `.g"i"t` into `.git`, but the raw
     // token carries no `/`, so a raw-token-only test drops it before any check.
@@ -434,31 +440,146 @@ it("refuses every escape vector by name and changes nothing on disk", async () =
   await h.host.shutdownSdk();
 });
 
-// win32 (#64): a tripwire, not a completeness claim. The command-path filter
-// recognises POSIX-shaped tokens only (`commandPathTokens` in
-// `sdk-agent-tool-broker.ts`): a token must contain `/`, start with `~`, be
-// exactly `..`, or name a `.git` path. The platform guard sits AFTER that
-// filter, so a native absolute token glued to a shell operator is not examined
-// by the filter at all and the platform gate is the refusal that reaches the
-// caller. Nothing runs either way today (win32 has no `/bin/sh`), so this is
-// safe now — but a POSIX-only filter placed in front of a future native win32
-// shell (#53 capability) would examine nothing and pass what it means to
-// catch. If such a shell is added, extend the filter to native absolute/UNC
-// shapes and update this assertion.
-it.skipIf(process.platform !== "win32")("leaves a native absolute command token to the platform gate (filter shapes are POSIX-only)", async () => {
+// win32 (#70): the same proposition #64's tripwire pinned, now with the outcome
+// the rewrite of the filter is supposed to produce. #64 pinned that a native
+// absolute token was NOT a shape `commandPathTokens` examined, so the platform
+// gate was the only refusal between it and a real spawn (safe only because
+// win32 has no `/bin/sh`, #53). Rewriting it is not a weakening:
+// - retained: the platform gate's own behaviour, with a command whose tokens are
+//   all in scope, so the filter correctly finds nothing and the named platform
+//   refusal is still what reaches the caller;
+// - additionally pinned: the same shape of command with a native absolute target
+//   is refused BY THE FILTER (`out-of-scope`, the token resolved outside the
+//   task), i.e. the token was extracted and handed to the permission layer
+//   instead of passing through unrecognised.
+// Either way nothing runs: the target does not exist afterwards.
+it.skipIf(process.platform !== "win32")("refuses a native absolute command token in the filter, before the platform gate sees the command", async () => {
   const h = await harness();
   await h.host.configureSdkProvider({ config: PROVIDER_CONFIG, credential: "synthetic-key" });
   await h.host.setPermission("main", "auto");
   const nativeTarget = join(tmpdir(), `pidock-agent-tools-native-token-${process.pid}.txt`);
   const result = await h.prompt("exec.run", { command: `echo x>${nativeTarget}` });
   // A POSIX-shaped glue is refused `out-of-scope` by the filter (the escape test
-  // above); this native-shaped one is not a shape the filter examines, so the
-  // platform guard is the only refusal between it and a real spawn.
-  expect(result.text).toContain("tool-refused:exec-unsupported-platform");
-  expect(result.text).not.toContain("out-of-scope");
+  // above); this native-shaped one now is too, which is what proves the filter
+  // saw it. The platform gate is a different refusal, so its absence here is the
+  // evidence that the filter refuses first.
+  expect(result.text).toContain("tool-refused:out-of-scope");
+  expect(result.text).not.toContain("tool-refused:exec-unsupported-platform");
   expect(existsSync(nativeTarget)).toBe(false);
+  // The retained half: no path-shaped token at all, so nothing for the filter to
+  // refuse, and the named platform refusal is unchanged.
+  const plain = await h.prompt("exec.run", { command: "echo named > named.txt" });
+  expect(plain.text).toContain("tool-refused:exec-unsupported-platform");
+  expect(existsSync(join(h.fixture.worktree, "named.txt"))).toBe(false);
   await h.host.shutdownSdk();
 });
+
+/**
+ * The command-path filter's token set itself (#70) — the filter is the unit under
+ * test here, so it is called directly.
+ *
+ * Two directions are pinned. The POSIX shapes that existed before #70 are pinned
+ * token for token: the native shapes are an addition, and a filter that dropped
+ * or reshaped one of the old tokens while adding them would be a regression, not
+ * a fix. The native win32 shapes are pinned to arrive in that same set — this is
+ * the collection the permission loop in `perform` walks, so "present here" is
+ * "handed to the permission layer", not merely "recognised as a string".
+ */
+const POSIX_SHAPED_COMMANDS: { command: string; tokens: string[] }[] = [
+  { command: "cat /etc/hosts", tokens: ["/etc/hosts"] },
+  { command: "cat</etc/hosts", tokens: ["/etc/hosts"] },
+  { command: "echo escape > /tmp/pidock-agent-tools-escape.txt", tokens: ["/tmp/pidock-agent-tools-escape.txt"] },
+  { command: "cat ~/.zshrc", tokens: ["~/.zshrc"] },
+  { command: "cd ..", tokens: [".."] },
+  { command: "cd ../..", tokens: ["../.."] },
+  { command: "echo x > .git", tokens: [".git"] },
+  { command: "echo x > ./.GIT", tokens: ["./.GIT"] },
+  // The `NAME=value` spelling is kept whole (only a `--flag=value` is split), so
+  // the guard sees it through its `=` segment boundary.
+  { command: "dd of=.git", tokens: ["of=.git"] },
+  { command: "GIT_DIR=.GIT git status", tokens: ["GIT_DIR=.GIT"] },
+  // The quoting/escaping spelling: the raw token is kept, no `/` needed, because
+  // the `.git` guard decodes it too.
+  { command: "echo x > .g\\it", tokens: [".g\\it"] },
+  { command: "cat --file=/etc/passwd", tokens: ["/etc/passwd"] },
+  { command: "sh -c 'echo x>/tmp/y'", tokens: ["/tmp/y"] },
+  // No path-shaped token, so no token: adding native shapes must not invent one.
+  { command: "pwd && cat notes.txt", tokens: [] },
+  { command: "echo node_modules > .gitignore", tokens: [] },
+  { command: "git add -A", tokens: [] },
+];
+
+it("keeps every pre-existing POSIX-shaped token, token for token (#70)", () => {
+  for (const { command, tokens } of POSIX_SHAPED_COMMANDS) {
+    expect(commandPathTokens(command), command).toEqual({ tokens, unresolvable: false });
+  }
+});
+
+const NATIVE_SHAPED_COMMANDS: { command: string; tokens: string[]; note: string }[] = [
+  { command: String.raw`echo x>C:\Windows\System32\x.exe`, tokens: [String.raw`C:\Windows\System32\x.exe`], note: "drive-absolute, backslash" },
+  { command: "echo x>C:/Windows/System32/x.exe", tokens: ["C:/Windows/System32/x.exe"], note: "drive-absolute, forward slash" },
+  { command: String.raw`echo x>C:\Windows/System32\x.exe`, tokens: [String.raw`C:\Windows/System32\x.exe`], note: "drive-absolute, mixed separators" },
+  { command: String.raw`echo x>\\server\share\x.exe`, tokens: [String.raw`\\server\share\x.exe`], note: "UNC, backslash" },
+  { command: String.raw`echo x>\\server/share\x.exe`, tokens: [String.raw`\\server/share\x.exe`], note: "UNC, mixed separators" },
+  { command: "echo x>//server/share/x.exe", tokens: ["//server/share/x.exe"], note: "UNC, forward slash (already a `/` token before #70)" },
+  { command: "cp notes.txt C:foo", tokens: ["C:foo"], note: "drive-relative" },
+  { command: "cp notes.txt D:relative", tokens: ["D:relative"], note: "drive-relative, foreign drive" },
+  { command: "cp notes.txt x:", tokens: ["x:"], note: "drive-relative, bare drive" },
+  { command: String.raw`FOO=C:\x cmd`, tokens: [String.raw`FOO=C:\x`], note: "assignment value" },
+  { command: String.raw`dd of=D:\x`, tokens: [String.raw`of=D:\x`], note: "`NAME=value` payload" },
+  { command: String.raw`cat --file=C:\x`, tokens: [String.raw`C:\x`], note: "flag payload" },
+  { command: String.raw`echo x > C:\repo\.git\config`, tokens: [String.raw`C:\repo\.git\config`], note: "native spelling of a .git control path" },
+];
+
+it("extracts native win32 absolute and drive-relative tokens into the checked set (#70)", () => {
+  for (const { command, tokens, note } of NATIVE_SHAPED_COMMANDS) {
+    expect(commandPathTokens(command), `${note}: ${command}`).toEqual({ tokens, unresolvable: false });
+  }
+  // The set, not the string: a native token and a POSIX token in one command both
+  // reach the permission loop, in command order.
+  expect(commandPathTokens(String.raw`cp /etc/hosts C:\Windows\x.txt`)).toEqual({
+    tokens: ["/etc/hosts", String.raw`C:\Windows\x.txt`],
+    unresolvable: false,
+  });
+});
+
+/**
+ * The over-refusal measurement that drove the rule's boundaries (#70): a false
+ * token means a legitimate command is refused, and the permission layer is the
+ * only thing between a token and a refusal.
+ *
+ * Measured against the repo's own command strings (all `command:` literals of
+ * its tests) and its commit-message prose: the only new prose class the native
+ * rules capture is a single letter followed by `:` (`a:`), while the shapes that
+ * ordinary prose and shells are full of — `docs:`, `Host:`, `12:30`, a URL,
+ * `%h:%s`, an escaped-space grep — are not tokens at all, before or after. That
+ * is why the drive-relative rule is anchored at a token/value boundary
+ * (`(?:^|=)[A-Za-z]:`) instead of matching any `letter:` anywhere.
+ *
+ * The `a:` case is pinned as a TOKEN on purpose: it is the accepted, measured
+ * cost of covering drive-relative at all (`D:relative` resolves to `D:\relative`
+ * on win32, outside the worktree — see the rule's comment in the broker), not an
+ * oversight. It only becomes a refusal when a single-letter argument is used,
+ * and on win32 the permission layer then reports it as out-of-scope.
+ */
+const PROSE_COMMANDS: { command: string; tokens: string[] }[] = [
+  { command: 'git commit -m "docs: note the trade"', tokens: [] },
+  { command: "curl -H 'Host: example.test'", tokens: [] },
+  { command: "git log --format=%h:%s", tokens: [] },
+  { command: "echo ratio 3:1", tokens: [] },
+  { command: "grep '\\w' notes.txt", tokens: [] },
+  { command: "grep -e a: notes.txt", tokens: ["a:"] },
+];
+
+it("adds no token to ordinary prose and shell arguments (#70)", () => {
+  for (const { command, tokens } of PROSE_COMMANDS) {
+    expect(commandPathTokens(command), command).toEqual({ tokens, unresolvable: false });
+  }
+  // A command the filter cannot decode is still refused whole, not tokenised.
+  expect(commandPathTokens("cat $HOME/.zshrc")).toEqual({ tokens: [], unresolvable: true });
+  expect(commandPathTokens("echo `date` > C:\\x")).toEqual({ tokens: [], unresolvable: true });
+});
+
 
 it("never returns the task host's own bookkeeping from a search rooted at the task folder", async () => {
   const h = await harness();
