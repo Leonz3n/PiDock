@@ -330,7 +330,9 @@ describe("#6 privileged prep scan (boundary B)", () => {
       createNodePrepScanDeps(),
     );
     // Slash spelling shared with `previewMixedTaskPaths` (the Host's wanted
-    // dirs), so `checkRepoConflicts` compares one string form.
+    // dirs). Since #72 the gate compares normalized forms, so this shared
+    // spelling is no longer what makes the compare work; it stays the scan's
+    // own output form.
     expect(scan.takenPaths).toEqual(readdirSync(taskDir).map((name) => `${taskDir}/${name}`));
   });
 });

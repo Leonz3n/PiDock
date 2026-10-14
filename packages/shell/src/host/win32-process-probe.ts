@@ -26,8 +26,20 @@ export interface Win32ProcessRow {
  * Bound on one whole-table read. PowerShell start-up dominates the cost (a full
  * `Get-CimInstance` read measured at ~350 ms on Windows 11 x64); the bound is
  * generous for a loaded host while still refusing a probe that never returns.
+ *
+ * Sized from the measured cost of a loaded host rather than from the idle one
+ * (#74): one read costs 0.58-0.64 s with ten concurrent CPU loops on a 12-CPU
+ * host, 1.05-4.84 s while two full shell suites run concurrently (the #74
+ * reproduction condition, 44 stops) and up to 29.5 s under two suites plus ten
+ * loops (49 stops). A read cut off by this bound is NOT a probe that failed: it
+ * is a stop that can no longer name its tree (`win32Tree` returns null and the
+ * stop ends as the named `unknown`), measured in 16 of 54 stops at the previous
+ * 10 s bound. The bound therefore sits above the worst read a loaded host was
+ * measured to complete. It stays bounded: a PowerShell that never returns is
+ * still refused, and a stop whose tree cannot be named within the bound still
+ * ends as the named `unknown` - never as a drained tree.
  */
-const SNAPSHOT_TIMEOUT_MS = 10_000;
+const SNAPSHOT_TIMEOUT_MS = 30_000;
 const SNAPSHOT_MAX_BUFFER = 16 * 1024 * 1024;
 
 /**

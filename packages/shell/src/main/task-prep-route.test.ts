@@ -240,7 +240,19 @@ function scanOf(route: Route): Record<string, unknown> {
   return route.forwarded.filter((entry) => entry.op === "task/resumeAppend").at(-1)!.payload;
 }
 
-describe("#6 privileged prep scan through the real shell/taskOp handler", () => {
+/**
+ * Every case below drives real git through `execFileSync` (bare remote, clone, commit) and then the
+ * production scan and prep path, so per-case cost is git process startup, not compute. Measured on
+ * Windows 11 x64 / Node 24.21.0: the slowest of these 8 cases is 1.68s running this file alone,
+ * 3.81s when the whole shell suite shares the pool, and 5.53s while one more full suite runs
+ * alongside - that case really failed on Vitest's 5000ms default, which is exactly the load-dependent
+ * red of #73. 30s is ~5x the worst case measured, and the same budget #63 (dbc997e) set for
+ * project-task-creation.test.ts. No assertion is weakened, reordered or skipped, and a real hang
+ * still fails.
+ */
+const GIT_CASE_TIMEOUT_MS = 30_000;
+
+describe("#6 privileged prep scan through the real shell/taskOp handler", { timeout: GIT_CASE_TIMEOUT_MS }, () => {
   it("resumes the unfinished repo with no caller-supplied scan and no self-refusal", async () => {
     const route = await productionRoute({ recorded: ["frontend", "invoice"], created: ["frontend"] });
     const result = await route.invoke("task/resumeAppend", {

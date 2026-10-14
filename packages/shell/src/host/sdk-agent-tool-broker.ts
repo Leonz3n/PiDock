@@ -604,6 +604,54 @@ function defaultRunCommand(input: { command: string; cwd: string; timeoutMs: num
 }
 
 /**
+ * A native win32 path root: a drive-absolute `C:\…` / `C:/…` (separators mixed
+ * freely, `C:\a/b` included) or a UNC root `\\server\share…`. Both are matched
+ * anywhere in the token, exactly as `includes("/")` matches a POSIX absolute
+ * path anywhere: an assignment or flag payload (`FOO=C:\x`, `--file=C:\x`,
+ * `dd of=C:\x`) carries the same path as a bare argument, so the permission layer
+ * has to see it too — what that spelling then resolves to is the resolver's
+ * question, not the filter's. The UNC alternative also accepts the doubled
+ * backslash a POSIX shell keeps inside quotes (`"C:\\Windows"`), which is one
+ * native separator.
+ */
+const NATIVE_WINDOWS_ABSOLUTE = /[A-Za-z]:[\\/]|\\\\/;
+
+/**
+ * A drive-relative path (`C:foo`, `C:`, `x:`), recognised only where a token or
+ * a `NAME=`/`--flag=` value starts — the same `(?:^|=)` boundary
+ * `hasGitControlSegment` already uses. It is extracted deliberately: drive
+ * relative does NOT mean "inside the worktree". `path.win32.resolve` of
+ * `D:relative` against a `C:` base is `D:\relative` (a foreign drive lands on
+ * its root outright), and the same-drive case resolves under the base only
+ * because the per-drive current directory happens to be the worktree — a
+ * per-drive cwd the filter cannot prove, so it over-approximates instead of
+ * assuming. The boundary is what keeps the cost of that choice bounded: only a
+ * single letter followed by `:` is a drive, so `docs:`, `fix:`, `Host:`, `12:30`
+ * and `https://…` are not new tokens (measured against the repo's own command
+ * strings and commit-message prose; the negative cases are pinned in the test).
+ */
+const NATIVE_WINDOWS_DRIVE_RELATIVE = /(?:^|=)[A-Za-z]:/;
+
+/**
+ * True when a token carries a native win32 path shape (see the two regexes
+ * above).
+ *
+ * A single leading backslash (`\Windows\x`, drive-rooted for native tooling) is
+ * deliberately NOT a shape here: in the command language this filter reads —
+ * the POSIX-shaped one the product accepts at all (#53) — `\<char>` is an
+ * escape, so extracting it would refuse ordinary `grep '\w'`-style idioms for
+ * no coverage the drive-absolute and UNC spellings do not already give. Names
+ * left out are recorded in #70 rather than silently assumed handled: the second
+ * is a backslash-only relative spelling (`..\..`, `a\b`), which carries no
+ * drive or UNC root to recognise it by, so the token-start forms of it are the
+ * same `\<char>` escape. Both omissions bite only once a native win32 shell
+ * exists — today win32 has no shell to run either command (#53).
+ */
+function hasNativeWindowsPathShape(token: string): boolean {
+  return NATIVE_WINDOWS_ABSOLUTE.test(token) || NATIVE_WINDOWS_DRIVE_RELATIVE.test(token);
+}
+
+/**
  * Recognise the tokens of a command that must be confined. The command is
  * split on shell word/operator boundaries, so a path glued to a redirect or a
  * pipe (`echo x>/tmp/y`, `cat</etc/hosts`) yields the path token on its own
@@ -619,8 +667,21 @@ function defaultRunCommand(input: { command: string; cwd: string; timeoutMs: num
  * A token that names a `.git` control entry is kept even though it carries no
  * `/` (`echo x > .git`), because a bare `.git` token is exactly how the
  * worktree's git pointer gets rewritten.
+ *
+ * Native win32 shapes are kept too (#70): a drive-absolute `C:\Windows\x.exe`,
+ * a UNC `\\server\share\x.exe`, and a drive-relative `C:foo` carry no `/`, so a
+ * POSIX-shaped filter passed them through unexamined and the permission layer
+ * never saw the target it is there to judge. The direction here is
+ * over-approximation — more tokens are handed to the permission layer, none of
+ * the pre-existing ones is dropped or reshaped — so a shape the filter cannot
+ * prove stays inside the worktree is extracted rather than assumed safe.
+ *
+ * Exported for the token-set tests (`sdk-agent-tools.test.ts`), which pin both
+ * directions of that claim: the pre-existing token set is unchanged token for
+ * token, and the native shapes really arrive in the set the permission loop
+ * walks. Nothing else calls it; production reaches it through `perform`.
  */
-function commandPathTokens(command: string): { tokens: string[]; unresolvable: boolean } {
+export function commandPathTokens(command: string): { tokens: string[]; unresolvable: boolean } {
   if (/[`$]/.test(command)) return { tokens: [], unresolvable: true };
   const tokens = command
     .split(/[\s;|&<>(){}]+/)
@@ -635,6 +696,7 @@ function commandPathTokens(command: string): { tokens: string[]; unresolvable: b
       token.startsWith("~/") ||
       token.startsWith("~") ||
       token.includes("/") ||
+      hasNativeWindowsPathShape(token) ||
       hasGitControlSegment(token) ||
       hasGitControlSegment(unquoteShellToken(token)),
     );

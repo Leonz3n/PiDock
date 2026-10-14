@@ -397,7 +397,14 @@ async function killHolder(holder: Holder): Promise<void> {
 
 afterEach(async () => {
   for (const child of children.splice(0)) {
-    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    if (child.exitCode !== null || child.signalCode !== null) continue;
+    // This fixture spawns a real second process that opens files under `home`
+    // (the lock it holds). Terminate it and AWAIT that exit before removing the
+    // home, so the recursive delete never races a still-live child's handles.
+    // The listener is attached before the signal so the exit cannot be missed.
+    const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+    child.kill("SIGKILL");
+    await exited;
   }
   for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true });
 });

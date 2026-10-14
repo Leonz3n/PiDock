@@ -138,7 +138,19 @@ afterEach(() => {
   for (const home of homes.splice(0)) fs.rmSync(home, { recursive: true, force: true });
 });
 
-describe("Append falls back to a junction on EPERM", () => {
+/**
+ * Both cases drive real git through `execFileSync` (bare remote, init, commit, push) and then the
+ * production append path, so the cost is git process startup, not compute. Measured on Windows 11
+ * x64 / Node 24.21.0: the slowest case is 0.83s running this file alone, 1.99s when the whole shell
+ * suite shares the pool, and 2.76s while one more full suite runs alongside - the 5000ms default
+ * leaves under 2x headroom there, which is what turned these into load-dependent reds in #73. 30s is
+ * ~11x the worst case measured, and the same budget #63 (dbc997e) set for
+ * project-task-creation.test.ts. No assertion is weakened, reordered or skipped, and a real hang
+ * still fails.
+ */
+const GIT_CASE_TIMEOUT_MS = 30_000;
+
+describe("Append falls back to a junction on EPERM", { timeout: GIT_CASE_TIMEOUT_MS }, () => {
   win32It("appends a fresh directory as a junction and keeps the recorded junction link passing the compare", async () => {
     const env = await setup();
     const dir1Id = env.project.directories[0]!.id;

@@ -31,6 +31,7 @@ import {
   assertProvisionPlanSafe,
   isAbsoluteTaskRoot,
   isSafeTaskChildName,
+  normalizeTaskPath,
   planWorktreeCreation,
   type ProvisionPlan,
 } from "./task-provision.js";
@@ -243,18 +244,70 @@ export interface RepoConflictInput {
   branchesInUse: readonly string[];
   /** The branch this creation/append wants to create per repo. */
   wantedBranch: string;
+  /**
+   * Path-comparison platform (test seam; defaults to the running host).
+   * win32 filesystems are case-insensitive by default, so a case-only
+   * difference names the same folder there; POSIX spellings stay
+   * case-sensitive.
+   */
+  platform?: ConflictPathPlatform;
+}
+
+/** The platforms whose path-comparison rules this gate distinguishes. */
+export type ConflictPathPlatform = "posix" | "win32";
+
+function hostConflictPlatform(): ConflictPathPlatform {
+  return process.platform === "win32" ? "win32" : "posix";
+}
+
+/**
+ * The compare form of a worktree path for the "this path is already taken"
+ * gate (#72). The gate asks "is this the SAME directory?", and two spellings
+ * of one folder must answer yes: separator (`\` vs `/`), a trailing
+ * separator, a `./` step, drive-letter case (all via `normalizeTaskPath`) and
+ * — on win32, where filesystems are case-insensitive by default — path case
+ * below the drive letter. Raw string equality missed those, i.e. it reported
+ * "free" for a folder an earlier task already owns, and the create/append
+ * would then plan into occupied space.
+ *
+ * The direction stays fail-closed: an over-reported conflict only refuses a
+ * creation, while an under-reported one points a worktree at a foreign
+ * folder. Deliberately NOT folded, so obviously unrelated paths stay free: a
+ * path that merely CONTAINS another (`…/app` vs `…/app-old` — this is exact
+ * equality, never a substring test), a different parent with the same leaf
+ * (`…/t1/frontend` vs `…/t2/frontend`), a drive-relative `C:foo` (a folder
+ * relative to the CWD on drive C, not `C:\foo`), and case on POSIX (where
+ * `/Tasks/a` and `/tasks/a` really are two directories).
+ */
+export function conflictPathKey(value: string, platform: ConflictPathPlatform = hostConflictPlatform()): string {
+  const unified = normalizeTaskPath(value);
+  // `normalizeTaskPath` drops a `.` step but leaves the joining separator
+  // behind (`…/./x` -> `…//x`), so collapse interior repeats here. No
+  // platform reads `a//b` as a different directory than `a/b`; a LEADING
+  // `//` is kept because POSIX leaves it implementation-defined and Windows
+  // reads it as a UNC prefix.
+  const prefix = unified.startsWith("//") ? "//" : "";
+  const collapsed = prefix + unified.slice(prefix.length).replace(/\/{2,}/g, "/");
+  return platform === "win32" ? collapsed.toLowerCase() : collapsed;
 }
 
 /**
  * Fail-closed conflict check before creating anything: reports the exact
  * taken path / in-use branch and creates nothing. Never takes over an
  * unknown resource (no `--force`, no re-pointing чужой worktrees).
+ *
+ * Paths are compared through `conflictPathKey` (#72), not as raw strings, so
+ * the two producers of these lists — the Host's `previewMixedTaskPaths`
+ * spelling and main's disk scan — cannot disagree about one folder by
+ * separator or case alone.
  */
 export function checkRepoConflicts(
   input: RepoConflictInput,
 ): { ok: true } | { ok: false; error: MultiRepoError } {
+  const platform = input.platform ?? hostConflictPlatform();
+  const taken = new Set(input.takenPaths.map((path) => conflictPathKey(path, platform)));
   for (const wanted of input.wantedWorktreeDirs) {
-    if (input.takenPaths.includes(wanted)) {
+    if (taken.has(conflictPathKey(wanted, platform))) {
       return {
         ok: false,
         error: {

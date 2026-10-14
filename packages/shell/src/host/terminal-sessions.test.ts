@@ -245,6 +245,18 @@ class HelperHandle extends DriverWorker {
 }
 
 /**
+ * A Host-owned handle whose termination is never reported back - the shape a
+ * starved event loop leaves behind (#74): the helper process is gone, but the
+ * Host's `exit` event for it has not been delivered yet. It keeps the real handle
+ * identity (`pid`) so the stop path can ask the OS instead of the event.
+ */
+class SilentHandle extends DriverWorker {
+  killed = false;
+  constructor(readonly pid: number) { super(); }
+  kill(): void { this.killed = true; }
+}
+
+/**
  * A real process that leads its own process group, so the driver's `pgid === pid`
  * identity check accepts it without a real pty. The caller always kills it.
  * `process.execPath` runs the same long-lived child on either platform; a
@@ -1494,6 +1506,84 @@ win32It("never claims a win32 stop while the tree survives the helper kill", asy
   expect(worker.killed).toBe(true);
   // The retained identity keeps answering: a stop claims no tree it could not verify.
   expect(await driver.stop(unitIdentity)).toEqual({ ...unitIdentity, status: "unknown" });
+});
+
+win32It("verifies the stop when only the read taken after the termination can name the tree", async () => {
+  // #74: the read before the termination is the only thing that names the tree,
+  // and under load that read is what fails - measured 16 of 54 stops once it was
+  // cut off by its own bound, every one of them reported `unknown` although the
+  // helper handle had already been terminated. The handle is terminated either
+  // way, and the OS never rewrites `ParentProcessId`, so one bounded re-read after
+  // the termination (with the root row already gone - what `createdAtFloor` is
+  // for) must still verify this stop instead of reporting the terminal un-stopped.
+  const reads: Array<Array<{ pid: number; ppid: number }> | null> = [
+    null, [{ pid: 5200, ppid: 1 }, { pid: 5201, ppid: 5200 }],
+  ];
+  const worker = new HelperHandle();
+  const driver = new TerminalPtyDriver({
+    workspaceId: "workspace-unit", runtime: resolvePtyRuntime, spawnWorker: () => worker, onOutput: () => {},
+    win32ProcessTable: () => reads.shift() ?? null,
+    win32ProcessAlive: () => false, stopGraceMs: 50, stopConfirmMs: 50,
+  });
+  const starting = driver.spawn(unitIdentity, unitLaunch, () => {});
+  worker.reply({ status: "started", rootPid: 5200 });
+  expect(await starting).toEqual({ status: "started", process: { processId: 5200 } });
+  expect(await driver.stop(unitIdentity)).toEqual({ ...unitIdentity, status: "tree-drained" });
+  expect(worker.killed).toBe(true);
+  expect(reads).toHaveLength(0);
+});
+
+win32It("keeps the named unknown when neither tree read can name the tree", async () => {
+  // The fail-closed twin of the re-read: a probe that fails twice names nothing,
+  // so the terminated handle is still not evidence of a drained tree and the
+  // receipt stays `unknown` - the action completed, the verification did not.
+  const worker = new HelperHandle();
+  const driver = new TerminalPtyDriver({
+    workspaceId: "workspace-unit", runtime: resolvePtyRuntime, spawnWorker: () => worker, onOutput: () => {},
+    win32ProcessTable: () => null,
+    win32ProcessAlive: () => false, stopGraceMs: 50, stopConfirmMs: 50,
+  });
+  const starting = driver.spawn(unitIdentity, unitLaunch, () => {});
+  worker.reply({ status: "started", rootPid: 5200 });
+  expect(await starting).toEqual({ status: "started", process: { processId: 5200 } });
+  expect(await driver.stop(unitIdentity)).toEqual({ ...unitIdentity, status: "unknown" });
+  expect(worker.killed).toBe(true);
+});
+
+win32It("reads a helper the OS reports gone as exited when its exit event never arrives", async () => {
+  // #74, the second mechanism: a starved event loop delivers the handle's own
+  // `exit` event long after the process is gone (measured: a 4 s wait returned
+  // `false` 9.2-10.2 s late, with the helper already dead and its tree verified
+  // gone), so the deadline alone must not decide the helper is still running.
+  const worker = new SilentHandle(5401);
+  const driver = new TerminalPtyDriver({
+    workspaceId: "workspace-unit", runtime: resolvePtyRuntime, spawnWorker: () => worker, onOutput: () => {},
+    win32ProcessTable: () => [{ pid: 5400, ppid: 1 }],
+    win32ProcessAlive: () => false, stopGraceMs: 50, stopConfirmMs: 50,
+  });
+  const starting = driver.spawn(unitIdentity, unitLaunch, () => {});
+  worker.reply({ status: "started", rootPid: 5400 });
+  expect(await starting).toEqual({ status: "started", process: { processId: 5400 } });
+  expect(await driver.stop(unitIdentity)).toEqual({ ...unitIdentity, status: "tree-drained" });
+  expect(worker.killed).toBe(true);
+});
+
+win32It("keeps the named unknown when the OS says the helper survives the deadline", async () => {
+  // The fail-closed twin of the OS check, and the pair that pins it: this handle
+  // reports no exit event either, so the only difference from the case above is
+  // what the OS answers about the helper pid - and a helper that really survives
+  // the bound must still end as `unknown`, never as drained.
+  const worker = new SilentHandle(5401);
+  const driver = new TerminalPtyDriver({
+    workspaceId: "workspace-unit", runtime: resolvePtyRuntime, spawnWorker: () => worker, onOutput: () => {},
+    win32ProcessTable: () => [{ pid: 5400, ppid: 1 }],
+    win32ProcessAlive: (pid) => pid === worker.pid, stopGraceMs: 50, stopConfirmMs: 50,
+  });
+  const starting = driver.spawn(unitIdentity, unitLaunch, () => {});
+  worker.reply({ status: "started", rootPid: 5400 });
+  expect(await starting).toEqual({ status: "started", process: { processId: 5400 } });
+  expect(await driver.stop(unitIdentity)).toEqual({ ...unitIdentity, status: "unknown" });
+  expect(worker.killed).toBe(true);
 });
 
 win32It("reaps the win32 helper and reports the real receipt when the terminal ends on its own", async () => {
