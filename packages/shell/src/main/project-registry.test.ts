@@ -12,7 +12,11 @@ function registry() {
 }
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
-const input = { name: "Billing", description: "Invoices", repositories: [{ name: "api", path: "/workspace/api" }], directories: [{ name: "notes", path: "/workspace/notes" }] };
+// `sourcePath` (project-registry.ts:68) defaults to the host platform and admits only a host-shaped
+// absolute path: drive-qualified on win32 (`^[a-zA-Z]:\\`), POSIX-rooted off win32. The same
+// platform rule governs a persisted membership root (`taskRoot`, project-registry.ts:106).
+const workspaceRoot = process.platform === "win32" ? "C:\\workspace" : "/workspace";
+const input = { name: "Billing", description: "Invoices", repositories: [{ name: "api", path: join(workspaceRoot, "api") }], directories: [{ name: "notes", path: join(workspaceRoot, "notes") }] };
 
 describe("main-owned project registry", () => {
   it("distinguishes absent from an empty saved registry and preserves generated identities on restart", async () => {
@@ -105,11 +109,11 @@ describe("main-owned project registry", () => {
     expect(store.list().projects).toHaveLength(2);
     await expect(store.create(input)).rejects.toThrow(/name/);
     await store.rename(a.id, "Billing 2");
-    const changed = await store.update(a.id, { description: "New", repositories: [{ id: a.repositories[0]!.id, name: "api", path: "/new/api" }], directories: [] });
+    const changed = await store.update(a.id, { description: "New", repositories: [{ id: a.repositories[0]!.id, name: "api", path: join(workspaceRoot, "new", "api") }], directories: [] });
     expect(changed.id).toBe(a.id);
     expect(changed.repositories[0]?.id).toBe(a.repositories[0]?.id);
     expect(store.get(b.id)).toEqual(b);
-    await expect(store.update(a.id, { description: "", repositories: [{ id: b.repositories[0]!.id, name: "api", path: "/workspace/api" }], directories: [] })).rejects.toThrow(/unknown source ID/);
+    await expect(store.update(a.id, { description: "", repositories: [{ id: b.repositories[0]!.id, name: "api", path: join(workspaceRoot, "api") }], directories: [] })).rejects.toThrow(/unknown source ID/);
     await expect(store.rename(b.id, "Billing 2")).rejects.toThrow(/name/);
   });
 
@@ -117,7 +121,7 @@ describe("main-owned project registry", () => {
     const { file, store } = registry();
     const project = await store.create(input);
     const document = JSON.parse(readFileSync(file, "utf8"));
-    document.memberships.push({ taskId: "task-1", projectId: project.id, createdAt: "2026-01-01T00:00:00Z", root: "/gone", dirId: "task-11111111" });
+    document.memberships.push({ taskId: "task-1", projectId: project.id, createdAt: "2026-01-01T00:00:00Z", root: join(workspaceRoot, "gone"), dirId: "task-11111111" });
     writeFileSync(file, JSON.stringify(document));
     await expect(store.delete(project.id)).rejects.toThrow(/associated/);
     expect(store.get(project.id)).toBeDefined();
@@ -128,6 +132,8 @@ describe("main-owned project registry", () => {
     const path = "/workspace/client#2?/notes ";
     expect(sourcePath(path, "posix")).toBe(path);
     expect(sourcePath("/workspace/a\\b", "posix")).toBe("/workspace/a\\b");
+    // win32 (#57): that path's trailing space and `?` component are win32-invalid, so no win32
+    // create can hold this proposition. Unobserved on win32.
     if (process.platform !== "win32") {
       expect((await store.create({ ...input, repositories: [{ name: "api", path }] })).repositories[0]?.path).toBe(path);
     }
@@ -158,11 +164,18 @@ describe("main-owned project registry", () => {
 
   it("rejects relative, traversal, URL, and credential-like metadata without touching the source", async () => {
     const { store } = registry();
-    for (const path of ["relative", "/workspace/../secret", "https://example.com", "/workspace/./repo", "/workspace/\u0000bad"]) {
-      await expect(store.create({ ...input, repositories: [{ name: "api", path }] })).rejects.toThrow();
+    const refused: [string, RegExp][] = [
+      ["relative", /^invalid absolute source path$/],
+      ["/workspace/../secret", /^invalid absolute source path$/],
+      ["https://example.com", /^invalid absolute source path$/],
+      ["/workspace/./repo", /^invalid absolute source path$/],
+      ["/workspace/\u0000bad", /^invalid source path$/],
+    ];
+    for (const [path, message] of refused) {
+      await expect(store.create({ ...input, repositories: [{ name: "api", path }] })).rejects.toThrow(message);
     }
-    await expect(store.create({ ...input, token: "secret" } as never)).rejects.toThrow();
-    await expect(store.create({ ...input, repositories: [{ id: "01234567-0123-4123-8123-012345678901", name: "api", path: "/workspace/api" }] } as never)).rejects.toThrow(/generated/);
-    await expect(store.create({ ...input, repositories: [{ name: "api", path: "/workspace/api", password: "secret" }] } as never)).rejects.toThrow();
+    await expect(store.create({ ...input, token: "secret" } as never)).rejects.toThrow(/^invalid project registry fields$/);
+    await expect(store.create({ ...input, repositories: [{ id: "01234567-0123-4123-8123-012345678901", name: "api", path: join(workspaceRoot, "api") }] } as never)).rejects.toThrow(/^source ID is generated by main$/);
+    await expect(store.create({ ...input, repositories: [{ name: "api", path: join(workspaceRoot, "api"), password: "secret" }] } as never)).rejects.toThrow(/^invalid project registry fields$/);
   });
 });
