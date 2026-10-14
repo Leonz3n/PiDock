@@ -6,7 +6,8 @@ import { join } from "node:path";
 import { TaskWorkspaceHost } from "../host/task-host.js";
 import { diskTaskStore, readTaskRecordOnDisk } from "../host/task-store.js";
 import { ProjectRegistry } from "./project-registry.js";
-import { CreationIntentStore, ProjectTaskCreation } from "./project-task-creation.js";
+import { ProjectTaskCreation, CreationIntentStore } from "./project-task-creation.js";
+import { previewTaskPaths } from "./task-provision.js";
 import { performCreationOperation } from "./project-task-ipc.js";
 import { TaskRootIndex } from "./task-root-index.js";
 
@@ -83,6 +84,25 @@ describe("persistent Project task creation with local Git", { timeout: GIT_CASE_
     const reopened = new ProjectTaskCreation(new CreationIntentStore(env.profile), new ProjectRegistry(env.profile), new TaskRootIndex(env.profile, env.root), { routeTaskOp: () => { throw new Error("Host should not reprovision"); } }, env.root);
     expect(await reopened.commit(preview.id)).toEqual({ taskId: preview.taskId, projectId: env.project.id });
   });
+  it("commits when the Host writes the production bootstrap spelling of the task dir", async () => {
+    const env = await setup();
+    // Production `resolveProvisionTaskDir` hands the Host
+    // `previewTaskPaths(root, dirId, ...).taskDir`, so a real Host persists
+    // `<native root>/task-…` as `record.taskDir`; the fixture above builds the
+    // folder with `join`, which is why only this case sees the mixed spelling.
+    const host = { routeTaskOp: async ({ taskId, payload }: { taskId: string; op: "task/provision"; payload: Record<string, unknown> }) => {
+      const instance = new TaskWorkspaceHost(taskId, previewTaskPaths(payload.rootOverride as string, taskId, [], []).taskDir, diskTaskStore);
+      instance.provision(payload as never);
+      return { workspaceId: "test", taskId, op: "task/provision" as const, payload: {} };
+    } };
+    const service = new ProjectTaskCreation(env.storage, env.projects, env.roots, host, env.root);
+    const preview = await service.prepare(env.request);
+    expect(await service.commit(preview.id)).toEqual({ taskId: preview.taskId, projectId: env.project.id });
+    expect(env.storage.read()?.state).toBe("complete");
+    expect(readTaskRecordOnDisk(preview.taskDir)?.taskDir).toBe(`${env.root}/${preview.taskId}`);
+    expect(env.roots.verifiedIdentity(preview.taskId)).not.toBeNull();
+  });
+
   it("creates no new worktrees or links when the second repository fetch fails, then retries the same intent", async () => {
     const env = await setupTwoRepositories();
     const preview = await env.service.prepare(env.request);
