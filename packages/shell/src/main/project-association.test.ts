@@ -55,6 +55,19 @@ describe("explicit Project task association", () => {
     expect(JSON.parse(readFileSync(projectRegistryPath(f.data), "utf8")).receipts).toHaveLength(1);
   });
 
+  it("reports every root this profile associated a task with as a used root, including after an unlink", async () => {
+    const f = fixture();
+    f.task();
+    const target = await f.project("Billing");
+    expect(f.registry.usedTaskRoot(f.defaultRoot)).toBe(false);
+    await f.registry.claim(id, target.id, f.roots);
+    expect(new ProjectRegistry(f.data).usedTaskRoot(f.defaultRoot)).toBe(true);
+    await f.registry.unlink(id, target.id);
+    // The membership is gone; the durable receipt still names the root (#81).
+    expect(f.registry.usedTaskRoot(f.defaultRoot)).toBe(true);
+    expect(f.registry.usedTaskRoot(f.override)).toBe(false);
+  });
+
   it("does not reassign a replaced directory with the same path and forged record identity", async () => {
     const f = fixture();
     const dir = f.task();

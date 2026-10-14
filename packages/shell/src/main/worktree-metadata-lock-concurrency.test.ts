@@ -680,7 +680,7 @@ describe("[PiDock 03] (#6 盒子 9) repository-level worktree creation is mutual
     // w.crlf), so the compared text is normalised to LF first. A no-op on POSIX.
     const source = readFileSync(join(here, "main.ts"), "utf8").replace(/\r\n/g, "\n");
     expect(source).toContain("new WorktreeMetadataLock(app.getPath(\"userData\")");
-    expect(source).toContain("defaultTasksRoot(), undefined, worktreeLock)");
+    expect(source).toContain("defaultRoot, undefined, worktreeLock)");
     expect(source).toContain("createNodeAppendGit(),\n    worktreeLock,");
   });
 });

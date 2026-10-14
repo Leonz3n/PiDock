@@ -243,6 +243,19 @@ export class ProjectRegistry {
     return { initialized, projects: value.projects };
   }
   get(projectId: string): LocalProject | undefined { return this.load().value.projects.find((item) => item.id === id(projectId)); }
+  /**
+   * Whether this profile ever associated a task with `root`: live memberships plus
+   * the durable claim/unlink/transfer receipts, which keep a root after its task was
+   * unlinked. `root` is compared verbatim — startup passes the same default root it
+   * hands to the task-root index, which is what a claim of a task under that root
+   * persists. Startup reads this as the only persisted evidence that a root was
+   * established before it may treat a missing default root as a first run (#81).
+   */
+  usedTaskRoot(root: string): boolean {
+    const { value } = this.load();
+    return value.memberships.some((row) => row.root === root) ||
+      (value.receipts ?? []).some((row) => row.action !== "delete" && row.root === root);
+  }
 
   private save(next: Document, previous: boolean): void {
     const file = projectRegistryPath(this.userData);

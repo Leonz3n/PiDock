@@ -104,7 +104,10 @@ describe("disk task-id resolver", () => {
     // endings: a win32 checkout with `core.autocrlf` hands us CRLF, so normalize
     // before matching the multi-line fragments below.
     const normalized = source.replace(/\r\n/g, "\n");
-    expect(normalized).toContain("new TaskRootIndex(app.getPath(\"userData\"), defaultTasksRoot())");
+    expect(normalized).toContain("new TaskRootIndex(userData, defaultRoot)");
+    // #81: startup establishes and then resolves the default root once; a second
+    // call site could initialize one path while the index owns another.
+    expect(normalized.match(/defaultTasksRoot\(\)/g)).toHaveLength(1);
     expect(normalized).toContain("(taskId) => taskRoots.resolve(taskId)");
     expect(normalized).toContain("browsers.registry,\n    taskRoots,");
     expect(normalized).not.toMatch(/new PerTaskHostRegistry\(workspaceId\)(?!\s*,)/);
