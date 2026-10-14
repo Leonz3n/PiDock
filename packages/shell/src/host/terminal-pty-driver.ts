@@ -780,11 +780,22 @@ export class TerminalPtyDriver implements TerminalDriver {
     return this.options.win32ProcessAlive ? this.options.win32ProcessAlive(pid) : win32ProcessAlive(pid);
   }
 
-  /** Bounded wait for the helper handle to report its exit. */
+  /**
+   * Bounded wait for the helper handle to report its exit. Reaching the deadline
+   * is NOT by itself evidence that the helper is still running: a starved event
+   * loop delivers the handle's own `exit` event long after the process is really
+   * gone (measured under #74: a 4 s bound on `stopByHelper` returned `false`
+   * 9.2-10.2 s late, with the helper already dead and its tree verified gone), so
+   * the handle's real state is asked of the OS before "unconfirmed" is concluded.
+   * A helper that really survives the bound is still unconfirmed, and a pid the OS
+   * recycled reads alive, which keeps that answer on the fail-closed side.
+   */
   private async awaitHelperExit(operation: Operation, timeoutMs: number): Promise<boolean> {
     const deadline = Date.now() + timeoutMs;
     while (operation.workerExit === undefined && Date.now() < deadline) await delay(STOP_POLL_MS);
-    return operation.workerExit !== undefined;
+    if (operation.workerExit !== undefined) return true;
+    const pid = operation.worker?.pid;
+    return pid !== undefined && !this.win32Alive(pid);
   }
 
   /** Positive evidence: every named piece of the win32 tree is gone. A pid the
@@ -1033,10 +1044,20 @@ export class TerminalPtyDriver implements TerminalDriver {
     // Without a completed helper exit the handle's termination is unconfirmed,
     // so nothing may be claimed even before the tree is checked.
     if (!(await this.awaitHelperExit(operation, this.grace + this.confirm))) return { ...identity, status: "unknown" };
+    // A tree read that failed under load must not end this stop as `unknown`
+    // while the handle it was meant to contain is already terminated (#74: 16 of
+    // 54 stops under two suites plus load). win32 never rewrites
+    // `ParentProcessId`, so the chain outlives its root and the same walk still
+    // names the same tree with the root row already gone - which is what #69's
+    // `createdAtFloor` is for - so ONE more bounded read is taken before the stop
+    // is refused. It costs one whole-table read (bounded by the probe's own
+    // bound, 30 s) and only on this failure path; a re-read that fails too, and a
+    // tree still named alive after the window, stay the named `unknown`.
+    const named = tree ?? this.win32Tree(operation);
     // A stop is still real when the tree could not be named (the helper is gone
     // and so is the pseudo console it owned), but that is not verifiable here
     // and is therefore reported as the named `unknown`, never as drained.
-    if (tree === null || !(await this.win32TreeGone(tree, this.confirm))) return { ...identity, status: "unknown" };
+    if (named === null || !(await this.win32TreeGone(named, this.confirm))) return { ...identity, status: "unknown" };
     return this.finish(operation, identity);
   }
 
