@@ -480,6 +480,30 @@ it("keeps the other task's pin and leaves the running child untouched", { timeou
   const f = await harness();
   f.host.setPermission("main", "auto");
   const started = await f.callTool("service.start", { serviceId: f.serviceId });
+  // win32 (#7/#48): the "running child" this case protects comes from the
+  // capability that is unbuilt on win32, where `service.start` is refused by its
+  // own NAME because no Host-owned process tree exists to own, verify or stop.
+  // So win32 pins that refusal, then runs the edit flow the case is really
+  // about: an edit that neither started nor signalled anything is exactly what
+  // it must prove on a platform that has no child to leave untouched. The POSIX
+  // legs observing that same child before and after the edit stay byte-intact.
+  if (process.platform === "win32") {
+    expect(started).toMatchObject({ outcome: "refused", code: "tool-refused:unsupported-platform" });
+    expect(markerPid(f.taskDir)).toBeUndefined();
+    const beforeWin32 = f.document();
+    const callWin32 = f.call(editArgs(f.serviceId, "hello-running"));
+    await until(() => f.host.listApprovals("main").some((row) => row.status === "pending"), "the confirmation");
+    expect(f.document()).toBe(beforeWin32);
+    f.host.approve("main", pending(f).id);
+    expect((await callWin32).outcome).toBe("ok");
+    // Nothing was started or signalled by the edit either: the process the
+    // refused start never created is still not there, so the running-instance
+    // facts below (its pid, its `launchSource`, its restart-needed list) have no
+    // subject on win32 and are left to the POSIX legs that can observe one.
+    expect(markerPid(f.taskDir)).toBeUndefined();
+    expect(f.versions()).toEqual({ pinned: 1, latest: 2, otherPinned: 1 });
+    return;
+  }
   expect(started.outcome).toBe("ok");
   await until(() => markerPid(f.taskDir) !== undefined, "the service child to report its pid");
   const pid = markerPid(f.taskDir)!;
