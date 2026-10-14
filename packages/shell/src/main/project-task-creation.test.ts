@@ -419,10 +419,25 @@ describe("persistent Project task creation with local Git", () => {
     writeFileSync(helper, "#!/bin/sh\nshift\nexec sh -c \"$*\"\n", { mode: 0o700 });
     const previous = { ssh: process.env.GIT_SSH, variant: process.env.GIT_SSH_VARIANT };
     process.env.GIT_SSH = helper; process.env.GIT_SSH_VARIANT = "simple";
+    // win32 (#57): the URL arm puts the host and the path on either side of one slash
+    // (`ssh://user@local` + path). Off win32 the path is already absolute POSIX
+    // (`/tmp/.../remote.git`) and supplies that slash; a win32 drive path does not, so the separator
+    // is spelled out and the separators are converted. The host stays exactly `local`: appending the
+    // native path gives `ssh://user-a@localC:\...`, which `new URL` rejects outright (a bare `C:` is
+    // read as a scheme/authority colon), and its slashed form `ssh://user-a@localC:/...` silently
+    // parses with host `localC`, which would destroy this case's proposition.
+    const urlPath = (remote: string): string => (process.platform === "win32" ? `/${remote.replace(/\\/g, "/")}` : remote);
     try {
       for (const scp of [false, true]) {
         const current = await setup();
-        const url = (user: string) => scp ? `${user}@local:${current.remote}` : `ssh://${user}@local${current.remote}`;
+        const url = (user: string) => scp ? `${user}@local:${current.remote}` : `ssh://${user}@local${urlPath(current.remote)}`;
+        // The URL arm's shape is part of the proposition - the account is pinned for a remote whose
+        // host and path are unchanged - so it is asserted instead of trusted, on every platform.
+        if (!scp) {
+          const parsed = new URL(url("user-a"));
+          expect(parsed.host).toBe("local");
+          expect(parsed.pathname).toBe(urlPath(current.remote));
+        }
         git(current.repo, "remote", "set-url", "origin", url("user-a"));
         const preview = await current.service.prepare(current.request);
         expect(preview.repos[0]?.commit).toBe(git(current.repo, "rev-parse", "HEAD"));
