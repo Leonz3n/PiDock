@@ -63,7 +63,9 @@ CSC_IDENTITY_AUTO_DISCOVERY=false pnpm package:win    # Windows x64 MSI
 - `app.asar.unpacked/node_modules/` = `node-pty`、`@earendil-works/pi-tui`、`@esbuild/*`、`esbuild`（`ls`）；`node-pty/` 下没有 `build/`、`lib/build/`、`lib/prebuilds/`——即终端预检拒绝的全部 5 个竞争加载目录都不在包里。
 - 被钉住的预编译件（`stat -f '%N %Lp %z'` + `shasum -a 256`）：`prebuilds/darwin-arm64/pty.node` **85496** B、mode **644**、sha256 `e6457d66f45af3facd02920a5b212164e80fe0bb758afe6e6eab1eceeba3fc9a`；`prebuilds/darwin-arm64/spawn-helper` **50480** B、mode **755**、sha256 `21c589109bca43e287df884f3c34ab888033a83927ea7d273949ac5030583f26`。这组值与 `packages/shell/src/host/node-pty-preflight.ts:9-10` 的常量逐位一致。
 
-也就是说「pi 依赖与原生模块的随包分发尚未验证」这句话在 **macOS** 上已被上述实测取代：载荷确实被收集、被解包成磁盘上的真实文件，并且正是预检钉死的那两份字节。**Windows 侧的打包载荷已在 win32-x64 主机上观测到同样形态**（见「Windows x64 MSI 实测」），但**产品内**那一次 spawn 仍不通过（见下面「未完成 / 边界」与 Windows 各节）。
+也就是说「pi 依赖与原生模块的随包分发尚未验证」这句话在 **macOS** 上已被上述实测取代：载荷确实被收集、被解包成磁盘上的真实文件，并且正是预检钉死的那两份字节。**Windows 侧的打包载荷已在 win32-x64 主机上观测到同样形态**（见「Windows x64 MSI 实测」）。
+
+> **更新（2026-10-14，#55 / #61）**：本节末尾原先写的「**产品内**那一次 spawn 仍不通过」**已被 #55/#61 取代**。#55 让预检 pin 记录接纳 `win32-x64` 且 `ptySpawnerAvailable()` 在该平台为 true；#61（`9ec1a25`）修掉了让产品路径根本起不来终端的根因（`plan.cwd` 在 win32 上混用分隔符，与驱动的 `normalize(cwd) === cwd` 契约冲突）。win32-x64 上现在有自动化的真实 PTY 用例覆盖 Host 记录 → plan → 会话层 → 驱动 → 真实 ConPTY（`packages/shell/src/host/terminal-sessions.test.ts` 的 `win32RealIt`）。**仍未验证**的边界保留在下面「未完成 / 边界」：没有在**已安装的 MSI 应用内**跑过终端（打包 app 的产品路径在 `9ec1a25` 之后未复测）。本行只记录事实，不代 `#22` 勾选 T4。
 
 ### 为什么固定 `asarUnpack` 与 `npmRebuild: false`
 
@@ -116,7 +118,7 @@ Windows 安装资产为 **MSI**（[ADR 0004](adr/0004-windows-installer-msi-inst
 - **干净系统安装**：只在同一台已装 dev 工具链与 builder 缓存的机器上做过；未在干净 Windows 上安装。
 - **多用户账户**：只在本机单一账户下安装/卸载；未验证第二账户下按用户安装的行为。
 - **>1 版本升级矩阵**：只做了 `0.1.0 → 0.1.1` 一次覆盖升级；没有跳版本、降级、per-machine 与 per-user 混装的证据。
-- **产品内终端**：本轮没有改平台门/钉，`#22` 的 T4（产品内那一次 PTY spawn）仍不通过。
+- **产品内终端**（更新 2026-10-14）：`#22` 的 T4 原先的两条阻断原因（平台门/钉、cwd 规范化）已由 #55 与 #61（`9ec1a25`）消除；win32-x64 上有自动化真实 PTY 用例覆盖 Host 记录 → plan → 会话层 → 驱动 → 真实 ConPTY。**仍未验证**：没有在已安装的 MSI 应用里跑过终端（打包 app 的产品路径在 `9ec1a25` 之后未复测），因此本行不代 `#22` 勾选。
 
 ## 签名与公证路径（未执行）
 
@@ -130,7 +132,7 @@ Windows 安装资产为 **MSI**（[ADR 0004](adr/0004-windows-installer-msi-inst
 ## 未完成 / 边界
 
 - 应用图标已设置：`win.icon` 指向 `packages/shell/packaging/icon.svg`（msi 目标缺它就无法构建），MSI 的 `Icon` 表与 `PiDock.exe` 的图标资源都实际用了它（见「Windows x64 MSI 实测 · 应用图标」）；macOS 与 Linux 仍未设置图标。
-- Windows 侧的**打包载荷**已观测：`release/win-unpacked/resources/app.asar.unpacked/node_modules/node-pty/prebuilds/win32-x64/` 下有 `conpty.node`（`ee8f4e6f…`）、`pty.node`（`ae323edd…`）等真实文件，sha256 与 #22 第二轮记录逐位一致；`app.asar` 内 `dist/host/` 与 `@earendil-works/pi-*` 条目均在。但这不改变「**产品内**那一次 PTY spawn 仍被平台门/钉具名拒绝」（#22 的 T4）。
+- Windows 侧的**打包载荷**已观测：`release/win-unpacked/resources/app.asar.unpacked/node_modules/node-pty/prebuilds/win32-x64/` 下有 `conpty.node`（`ee8f4e6f…`）、`pty.node`（`ae323edd…`）等真实文件，sha256 与 #22 第二轮记录逐位一致；`app.asar` 内 `dist/host/` 与 `@earendil-works/pi-*` 条目均在。但这不代表「**产品内**那一次 PTY spawn 仍被平台门/钉具名拒绝」——该说法**已不成立**（更新 2026-10-14）：#55 的 pin 记录接纳 `win32-x64` 且 `ptySpawnerAvailable()` 在该平台为 true，#61（`9ec1a25`）修掉了产品路径无法启动终端的根因；win32-x64 上已有自动化真实 PTY 用例覆盖这条产品路径。**仍未在已安装的 MSI 应用内运行过终端**，打包 app 的产品路径也未在 `9ec1a25` 之后复测。
 - Windows 的 **MSI 构建、安装、启动、覆盖升级与卸载已实测**（见「Windows x64 MSI 实测」，2026-10-14）；**代码签名、公证、干净系统安装、多用户账户与 >1 版本升级矩阵仍未验证**；不得据此声明 Windows 资产已签名或可在干净系统上发布。
 
 ## Windows MSI 人工验收（在 Windows 机器上执行）

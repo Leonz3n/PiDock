@@ -1584,8 +1584,12 @@ export class TaskWorkspaceHost {
     // #52: two code paths build this same path with different separators on
     // Windows — `previewTaskPaths` spells the child with `/` while a task dir
     // resolved from the root index uses the native `\` — so the guard must
-    // compare the normalised form. The refusal boundary is unchanged: a path
-    // that really differs still normalises to a different string.
+    // compare the repo's canonical task-path form (`normalizeTaskPath`, the same
+    // spelling `runtime.ts`/`task-inventory.ts` use). That compare is strictly
+    // looser than byte equality on BOTH platforms: it also trims, collapses `./`,
+    // strips trailing separators and folds `\` to `/`, so a pair differing only by
+    // a literal separator or a trailing separator no longer refuses. A path that
+    // differs in its segments still normalises to a different string and refuses.
     if (normalizeTaskPath(paths.taskDir) !== normalizeTaskPath(this.taskDir)) {
       throw new Error(`invalid-payload: provision paths ${paths.taskDir} do not match this Host's task dir ${this.taskDir}`);
     }
