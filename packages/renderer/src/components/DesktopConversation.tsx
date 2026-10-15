@@ -319,14 +319,13 @@ function TaskConversation({ taskId, name, roots, association, onBack, onOpenProv
   const recentTokens = reportedMessages.reduce((sum, message) => sum + message.usage!.input + message.usage!.output, 0);
   const unreportedReplies = usageSnapshot?.messages.filter((message) => message.role === "assistant" && message.usage === null).length ?? 0;
   const usageDetail = `最近最多 80 条 SDK 消息；不是会话累计，可能不含更早用量。${unreportedReplies ? `${unreportedReplies} 条助手消息未报告用量。` : ""}`;
-  // S8d: all six prototype-A tools open a real Host panel (文件/终端/协议/运行/日志/浏览器).
+  // Desktop tools follow the current product scope; built-in terminal is retired.
   // `DESKTOP_TOOLS_UNWIRED` remains the registry for any tool that loses its
   // Host path; a listed tool stays visible but opens the explicit 未接线 state.
-  const toolIcons: { icon: "file" | "terminal" | "server" | "globe" | "chart" | "link"; tool: DesktopTool; label: string }[] = [
+  const toolIcons: { icon: "file" | "server" | "globe" | "chart" | "link"; tool: DesktopTool; label: string }[] = [
     { icon: "server", tool: "runtime", label: "运行" },
     { icon: "globe", tool: "browser", label: "浏览器" },
     { icon: "file", tool: "files", label: "文件" },
-    { icon: "terminal", tool: "terminal", label: "终端" },
     { icon: "chart", tool: "logs", label: "日志" },
     { icon: "link", tool: "protocol", label: "协议" },
   ];

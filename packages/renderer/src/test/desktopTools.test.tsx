@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { DesktopToolDock } from "../components/DesktopToolDock";
+import { DesktopToolDock, TerminalTool, DESKTOP_TOOL_LABELS, type DesktopTool } from "../components/DesktopToolDock";
 import { workspaceRootsFromHost } from "../data/workspaceFiles";
 // The SHIPPED Host rules build this suite's stub payloads, so the assertions
 // pin the Host's own words/shapes instead of a hand-copied fixture
@@ -37,6 +37,15 @@ afterEach(() => {
 });
 
 describe("[UI 对齐] S8d production tool dock", () => {
+  it("rejects a retired terminal value without mounting a panel or invoking the Host", () => {
+    const taskOp = vi.fn();
+    bridge(taskOp);
+    render(<DesktopToolDock taskId="task-1" tool={"terminal" as DesktopTool} onClose={() => {}} />);
+    expect(screen.queryByTestId("desktop-tool-dock")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("终端输入")).not.toBeInTheDocument();
+    expect(taskOp).not.toHaveBeenCalled();
+    expect(Object.keys(DESKTOP_TOOL_LABELS).sort()).toEqual(["browser", "files", "logs", "protocol", "runtime"]);
+  });
   it("shows the Host task directory and selected worktree baseline without shortening their identities", async () => {
     const taskDir = "/tmp/" + "long-task-path/".repeat(20) + "task-1";
     const worktreePath = `${taskDir}/worktrees/primary`;
@@ -178,7 +187,7 @@ describe("[UI 对齐] S8d production tool dock", () => {
       return { ok: false, error: `unexpected ${op}` };
     });
     bridge(taskOp);
-    render(<DesktopToolDock taskId="task-1" tool="terminal" onClose={() => {}} />);
+    render(<TerminalTool taskId="task-1" />);
     expect(await screen.findByTestId("dock-terminal-plan-only")).toBeInTheDocument();
     fireEvent.click(await screen.findByText("primary"));
     expect(await screen.findByTestId("dock-terminal-plan")).toBeInTheDocument();
@@ -224,7 +233,7 @@ describe("[UI 对齐] S8d production tool dock", () => {
       return { ok: false, error: `unexpected ${op}` };
     });
     bridge(taskOp);
-    render(<DesktopToolDock taskId="task-1" tool="terminal" onClose={() => {}} />);
+    render(<TerminalTool taskId="task-1" />);
     fireEvent.click(await screen.findByText("Host 未上报根名称"));
 
     const plan = await screen.findByTestId("dock-terminal-plan");
@@ -248,16 +257,14 @@ describe("[UI 对齐] S8d production tool dock", () => {
       return { ok: false, error: "read-only-session: 只读会话不能申请终端" };
     });
     bridge(taskOp);
-    render(<DesktopToolDock taskId="task-1" tool="terminal" onClose={() => {}} />);
+    render(<TerminalTool taskId="task-1" />);
     fireEvent.click(await screen.findByText("primary"));
     await waitFor(() => expect(screen.getByText("read-only-session: 只读会话不能申请终端")).toBeInTheDocument());
     expect(screen.queryByTestId("dock-terminal-plan")).not.toBeInTheDocument();
   });
 
-  it("drives a real terminal from the dock once the Host can spawn one", async () => {
-    // The dock is the terminal tool a packaged app renders, so it must be the
-    // human takeover surface - not a plan-only read - or the panel is dead code
-    // in the shipped build.
+  it("retains the legacy terminal component's Host protocol without exposing it in the desktop dock", async () => {
+    // Compatibility coverage only: the desktop no longer mounts this component (#95).
     const instance = {
       instanceId: "term-task-1-1",
       rootId: "root-1",
@@ -290,7 +297,7 @@ describe("[UI 对齐] S8d production tool dock", () => {
       return { ok: true, payload: {} };
     });
     bridge(taskOp);
-    render(<DesktopToolDock taskId="task-1" tool="terminal" onClose={() => {}} />);
+    render(<TerminalTool taskId="task-1" />);
 
     // The takeover surface, not the read-only plan view.
     expect(await screen.findByTestId("terminal-output")).toBeInTheDocument();
@@ -925,7 +932,7 @@ describe("[UI 对齐] S8d panel read inventory", () => {
     expect(fixture.taskOp).not.toHaveBeenCalled();
     expect(fixture.serviceCatalogOp).not.toHaveBeenCalled();
     expect(fixture.projectOp).not.toHaveBeenCalled();
-    for (const tool of ["runtime", "browser", "files", "terminal", "logs", "protocol"] as const) {
+    for (const tool of ["runtime", "browser", "files", "logs", "protocol"] as const) {
       cleanup();
       fixture.taskOp.mockClear(); fixture.serviceCatalogOp.mockClear(); fixture.projectOp.mockClear();
       render(<DesktopToolDock taskId="task-1" tool={tool} onClose={() => {}} />);

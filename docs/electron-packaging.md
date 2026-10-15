@@ -1,5 +1,13 @@
 # Electron 打包（S6 候选产出）
 
+## 当前需求与候选（#95）
+
+桌面内置终端已按业主要求撤销：正式桌面工具栏/面板不再挂载终端，主进程拒绝旧终端 IPC。内存演示与兼容组件测试保留，不能作为当前桌面功能或发布验收。Agent SDK 的命令执行及任务进程归属/退出回收继续保留。
+
+当前版本候选为 **0.1.5**，用于 Windows x64 **内部/自用、未签名 MSI**。本轮构建/安装证据归 #92/#95；当前机器仍安装 0.1.4，不能把源码改动视为已经升级。0.1.2 的服务归属拒绝、0.1.3 的 `8009001d` 和 0.1.4 尚未确认的 GUI 终端行为均保留为历史，不因撤销需求改记为通过。
+
+当前安装验收检查应用启动、任务/会话、文件浏览/预览/差异/外部编辑器及退出收敛；不再要求在 MSI 内运行内置终端。#80 对外签名/macOS 仍暂停，#88 中断任务不在本次处理。下列按日期记录的终端载荷与旧版终端观察均属历史。
+
 日期：2026-09-22（Asia/Shanghai）
 状态：macOS arm64 **已实测产出未签名 DMG 候选**；macOS 侧 node-pty 原生载荷随包分发已实测（2026-10-13，见「macOS：node-pty 原生载荷随包分发」）；Windows x64 安装资产为 MSI（[ADR 0004](adr/0004-windows-installer-msi-instead-of-nsis-exe.md)，2026-10-13），**已在 win32-x64 主机上实测产出未签名 MSI，并完成安装/启动/覆盖升级/卸载复核**（2026-10-14，见「Windows x64 MSI 实测」）；该主机的代码签名、公证、干净系统安装、多用户账户与 >1 版本升级矩阵**仍未验证**。
 实际发布验收归 #15；本文件只记录候选工具链与实测边界。
@@ -23,7 +31,7 @@ CSC_IDENTITY_AUTO_DISCOVERY=false pnpm package:mac    # macOS arm64 DMG
 CSC_IDENTITY_AUTO_DISCOVERY=false pnpm package:win    # Windows x64 MSI
 ```
 
-`electronDist` 在 macOS 目标下复用已安装的 `node_modules/electron/dist`，因此 macOS 打包可离线完成；Windows 目标必须下载 win32-x64 Electron 发行包。
+`electronDist` 在 macOS 目标下复用已安装的 `node_modules/electron/dist`。Windows 默认下载 win32-x64 Electron；若下载失败，可在 Windows x64 主机显式指定已安装且版本匹配的运行时，例如 `CSC_IDENTITY_AUTO_DISCOVERY=false pnpm --filter @pidock/shell package:win -c.electronDist=E:/Workspace/Leonz3n/PiDock/packages/shell/node_modules/electron/dist`。该路径是本机示例；须记录实际命令和 Electron 版本，不更改 MSI 身份或跳过前置 build。
 
 `package:dir` / `package:mac` / `package:win` 各自前置 `pnpm build`（`packages/shell/package.json`）。打包只消耗 `dist/`（`files: ["dist/**/*", "package.json"]`），**不再需要人工先跑一遍 build**：不前置 build 的话，`electron-builder` 会静默把当时磁盘上的 `dist/` 打成包，安装器随之发出过期的 host bundle。
 
@@ -140,26 +148,26 @@ Windows 安装资产为 **MSI**（[ADR 0004](adr/0004-windows-installer-msi-inst
 
 **darwin-arm64 主机没有构建、安装或签名任何 MSI**；在这台机器上跑 `package:win` **预计**会先下载 WiX，随后在 x86_64 版 Wine 上以同类架构错误失败（同 2026-09-22 记录的 `-86`；**本节未实测**，属预期而非观察结果）。win32-x64 主机上的构建/安装/启动/卸载/覆盖升级已按下列步骤（的静默等价命令）执行过，结果见「Windows x64 MSI 实测」；下面保留的是**仍需人工完成**的部分：在干净 Windows 机器与第二个用户账户上重跑，以及签名。在人工回报结果之前，任何文档或结论都不得声称 Windows 资产可用或已签名。
 
-**交互向导（#76）：** 上面这些人工步骤已串成可执行向导 `scripts/windows-release-wizard.sh`（运行 `bash scripts/windows-release-wizard.sh`）：选择并采集 Authenticode 签名方式（凭据只写进被 gitignore 的 `.env.signing`）、如实说明 CI 里没有消费签名密钥的工作流、按精确文件与行指路（但不改动）electron-builder 的签名接线、用 `Get-AuthenticodeSignature` 与 `signtool verify` 采集签名与时间戳的原始输出、干净机器安装（含在已安装的 MSI 内跑内置终端）、第二账户与升级矩阵，最后把观测回记到 #22。它只引导与采集证据，**不代任何人勾选验收项**。
+**交互向导（#76）：** 上面这些人工步骤已串成可执行向导 `scripts/windows-release-wizard.sh`（运行 `bash scripts/windows-release-wizard.sh`）：选择并采集 Authenticode 签名方式（凭据只写进被 gitignore 的 `.env.signing`）、如实说明 CI 里没有消费签名密钥的工作流、按精确文件与行指路（但不改动）electron-builder 的签名接线、用 `Get-AuthenticodeSignature` 与 `signtool verify` 采集签名与时间戳的原始输出、干净机器安装与任务文件面板、第二账户与升级矩阵，最后把观测回记到 #22。它只引导与采集证据，**不代任何人勾选验收项**。
 
 ### 构建
 
 ```powershell
 corepack enable                                 # 提供 pnpm（仓库固定 pnpm@11.22.0）
-cd <包含本次改动的检出>                          # 本分支尚未推送，需人工同步到该机器
+cd <包含本次改动的检出>                          # 核对本次候选的已提交源码身份
 pnpm install --frozen-lockfile
 pnpm --filter @pidock/shell package:win          # = electron-builder --config electron-builder.config.cjs --win msi --x64
 # 等价写法：cd packages/shell ; pnpm package:win
 ```
 
 产物路径：`directories.output` 是 `release`，`msi.artifactName` 是 `${productName}-${version}-${arch}.${ext}`（`packages/shell/electron-builder.config.cjs`），所以预期文件名为
-`packages/shell/release/PiDock-<version>-x64.msi`（本仓库当前版本 `0.1.4` → `PiDock-0.1.4-x64.msi`）。这里写的是表达式而不是写死的名字，是为了让 `.${ext}` 继续跟随实际目标格式；如果目录里出现别的名字，以实际文件名为准并在回报中写明。
+`packages/shell/release/PiDock-<version>-x64.msi`（本仓库当前版本 `0.1.5` → `PiDock-0.1.5-x64.msi`）。这里写的是表达式而不是写死的名字，是为了让 `.${ext}` 继续跟随实际目标格式；如果目录里出现别的名字，以实际文件名为准并在回报中写明。
 
 ### 内部/自用分发的版本与产物身份
 
-不同内容的新分发包先递增 `packages/shell/package.json` 的三段版本号并提交，再运行 `package:win`；本轮候选为 `0.1.4`（`0.1.1` 已用于历史升级实验，`0.1.2` 候选因服务归属门禁验收失败，见 #90；`0.1.3` 安装后 Windows PowerShell 报 `8009001d`，本轮补齐终端 OS 启动环境及 Host 的 PowerShell 7 探测输入，见 #85）。正式分发不使用临时修改版本后复原的方式。仅重复构建同一候选时也须重算哈希；字节变化就重新核验，旧产物的验收结论不能沿用。
+不同内容的新分发包先递增 `packages/shell/package.json` 的三段版本号并提交，再运行 `package:win`；本轮候选为 `0.1.5`（#95 移除桌面内置终端；`0.1.1` 是历史升级实验，`0.1.2` 候选服务归属门禁失败见 #90，`0.1.3` 安装后 Windows PowerShell 报 `8009001d`，`0.1.4` 补齐 OS 启动环境见 #85，安装身份已核验但 GUI 终端成功未确认）。正式分发不使用临时修改版本后复原的方式。仅重复构建同一候选时也须重算哈希；字节变化就重新核验，旧产物的验收结论不能沿用。
 
-每枚候选记录源码提交、应用版本、文件名、大小、SHA-256、MSI 的 `ProductCode` / `UpgradeCode` / `ProductVersion`、包内 `package.json` 版本及签名观测。安装后核对注册版本和 `app.asar` 的哈希与构建候选一致，再做应用内终端和退出检查；文件时间只作旁证。
+每枚候选记录源码提交、应用版本、文件名、大小、SHA-256、MSI 的 `ProductCode` / `UpgradeCode` / `ProductVersion`、包内 `package.json` 版本及签名观测。安装后核对注册版本和 `app.asar` 的哈希与构建候选一致，再做任务文件面板、会话与退出检查；文件时间只作旁证。
 
 electron-builder `26.15.3` 的 `templates/msi/template.xml` 使用 `<Product Id="*">`，并明确设置 `<MajorUpgrade AllowSameVersionUpgrades="yes" …/>`；`MsiTarget.js` 从 `appId` 推导稳定的 `UpgradeCode`。因此每次构建的随机 `ProductCode` **不表示**不支持同版本升级；递增分发版本是为了识别不同候选，不需要固定 `ProductCode` 或更改 `appId`。模板支持升级不等于本次安装已验证，实际结果仍需 MSI 日志、安装后版本与载荷哈希证明。
 

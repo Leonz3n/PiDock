@@ -74,7 +74,8 @@ import {
  * Every row here comes from a real Host op and is parsed strictly; a failed op
  * shows the Host's own refusal instead of falling back to sample data.
  *
- * - 文件/终端: `task/fileRoots|fileTree|filePreview|fileDiff`, `task/planTerminal|terminalState`
+ * - 文件: `task/fileRoots|fileTree|filePreview|fileDiff`
+ * - 内置终端已撤销（#95）；桌面 IPC 同时拒绝旧终端请求。
  * - 协议: `task/protocolState`
  * - 运行/日志: `shell/projectOp associations` + `serviceCatalogOp taskBindings|list`
  *   (the task's real bound services), `task/serviceStatus` (the Host's own
@@ -95,13 +96,12 @@ import {
  * 未接线 for a control that is wired, and no wire is claimed for a control that
  * is not.
  */
-export type DesktopTool = "runtime" | "browser" | "files" | "terminal" | "logs" | "protocol";
+export type DesktopTool = "runtime" | "browser" | "files" | "logs" | "protocol";
 
 export const DESKTOP_TOOL_LABELS: Record<DesktopTool, string> = {
   runtime: "运行",
   browser: "浏览器",
   files: "文件",
-  terminal: "终端",
   logs: "日志",
   protocol: "协议",
 };
@@ -998,7 +998,8 @@ function FilesTool({ taskId }: { taskId: string }) {
   );
 }
 
-function TerminalTool({ taskId }: { taskId: string }) {
+/** Compatibility component for retained Host/renderer tests; never mounted by the desktop dock (#95). */
+export function TerminalTool({ taskId }: { taskId: string }) {
   const [state, setState] = useState<TerminalStateView | null>(null);
   const [roots, setRoots] = useState<WorkspaceRootView[]>([]);
   const [rootId, setRootId] = useState<string | undefined>(undefined);
@@ -1909,7 +1910,7 @@ export function DesktopToolDock({
   tool: DesktopTool | null;
   onClose: () => void;
 }) {
-  if (!tool) return null;
+  if (!tool || !Object.hasOwn(DESKTOP_TOOL_LABELS, tool)) return null;
   return (
     <TooltipProvider>
     <aside
@@ -1934,7 +1935,6 @@ export function DesktopToolDock({
         {tool === "runtime" ? <RunTool key={taskId} taskId={taskId} />
           : tool === "browser" ? <BrowserTool key={taskId} taskId={taskId} />
           : tool === "files" ? <FilesTool key={taskId} taskId={taskId} />
-          : tool === "terminal" ? <TerminalTool taskId={taskId} />
           : tool === "logs" ? <LogsTool key={taskId} taskId={taskId} />
           : <ProtocolTool key={taskId} taskId={taskId} />}
       </div>
