@@ -117,6 +117,7 @@ Windows 安装资产为 **MSI**（[ADR 0004](adr/0004-windows-installer-msi-inst
 - **代码签名与公证**：本机 0 张代码签名证书 ⇒ MSI 与 `PiDock.exe` 均 `NotSigned`；签名未执行。
 - **干净系统安装**：只在同一台已装 dev 工具链与 builder 缓存的机器上做过；未在干净 Windows 上安装。
 - **多用户账户**：只在本机单一账户下安装/卸载；未验证第二账户下按用户安装的行为。
+- **MSI 侧「安装前先关掉正在运行的应用」**（#84 box D，2026-10-15 静态核对，**未构建**）：本仓库能配的 MSI 面上没有这一步。`app-builder-lib@26.15.3` 的 `templates/msi/template.xml` 里没有 `util:CloseApplication`（模板中没有任何 `util:` 元素，`grep -rl CloseApplication out templates` 为空），`MsiOptions` 只允许 `additionalWixArgs` / `additionalLightArgs`，而单独 `-ext WixUtilExtension` 没有元素可指就加不上什么；所以覆盖安装/卸载碰到仍在运行的 PiDock 时，Windows Installer 的 FilesInUse 提示仍是唯一出口（1602 的来源）。可达的一半在应用侧：关掉最后一个窗口现在有界收敛并真正退出（#84）。
 - **>1 版本升级矩阵**：只做了 `0.1.0 → 0.1.1` 一次覆盖升级；没有跳版本、降级、per-machine 与 per-user 混装的证据。
 - **产品内终端**（更新 2026-10-14）：`#22` 的 T4 原先的两条阻断原因（平台门/钉、cwd 规范化）已由 #55 与 #61（`9ec1a25`）消除；win32-x64 上有自动化真实 PTY 用例覆盖 Host 记录 → plan → 会话层 → 驱动 → 真实 ConPTY。**仍未验证**：没有在已安装的 MSI 应用里跑过终端（打包 app 的产品路径在 `9ec1a25` 之后未复测），因此本行不代 `#22` 勾选。
 

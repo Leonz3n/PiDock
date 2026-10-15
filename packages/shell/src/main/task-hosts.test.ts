@@ -358,7 +358,7 @@ describe("PerTaskHostRegistry main shutdown admission", () => {
     } finally { rmSync(home, { recursive: true, force: true }); }
   });
 
-  it("fails closed on quit when a bootstrap Host has no cached indexed identity", async () => {
+  it("fails closed on quit for a bootstrap Host with no cached indexed identity and terminates that Host", async () => {
     const { mkdirSync } = await import("node:fs");
     const home = realpathSync(mkdtempSync(join(tmpdir(), "pidock-quit-missing-identity-")));
     const root = join(home, "tasks");
@@ -372,6 +372,7 @@ describe("PerTaskHostRegistry main shutdown admission", () => {
       register: vi.fn(() => Promise.reject(new Error("index unavailable"))),
     } as unknown as TaskRootIndex;
     const calls: Array<{ taskId: string; op: string }> = [];
+    const kill = vi.fn(), dispose = vi.fn();
     const transport = {
       task: vi.fn(async (params: { taskId: string; op: string }) => {
         calls.push({ taskId: params.taskId, op: params.op });
@@ -381,10 +382,10 @@ describe("PerTaskHostRegistry main shutdown admission", () => {
       }),
       onBrowserRequest: vi.fn(),
       onServiceTemplateRequest: vi.fn(),
-      dispose: vi.fn(),
+      dispose,
     };
     const registry = new PerTaskHostRegistry("workspace-a", async () => ({
-      client: transport as never, child: syntheticChild() as never,
+      client: transport as never, child: syntheticChild(kill) as never,
     }), () => resolved, undefined, taskRoots);
     try {
       await expect(registry.routeTaskOp({
@@ -394,11 +395,21 @@ describe("PerTaskHostRegistry main shutdown admission", () => {
       resolved = taskDir;
 
       const report = await registry.quitAll({ origin: QUIT_ORIGIN });
+      // #84 (B): no lifecycle write may reach a Host main holds no verified
+      // identity for - but retaining the process is what left a failed
+      // creation's Host alive for the whole session and made `stopHosts()`
+      // false forever. The quit path terminates it and still names it as not
+      // cleanly stopped, so nothing is silently swallowed.
       expect(report).toMatchObject({ ok: false, tasks: [{
-        taskId, ok: false, applied: [], failures: [], retainedTasks: [taskId],
+        taskId, ok: false, applied: [], failures: [], retainedTasks: [],
         error: expect.stringContaining("task-moved"),
       }] });
+      expect(report.tasks[0].error).toContain("terminated");
       expect(calls).toEqual([{ taskId, op: "task/provision" }]);
+      expect(kill).toHaveBeenCalledTimes(1);
+      expect(dispose).toHaveBeenCalledTimes(1);
+      expect(registry.entryForTaskId(taskId)).toBeUndefined();
+      expect(registry.size).toBe(0);
       expect(() => registry.disposeAll()).toThrow("main-task-shutdown-unconfirmed");
     } finally { rmSync(home, { recursive: true, force: true }); }
   });
@@ -1217,7 +1228,10 @@ describe("task browser origins", () => {
       const dispose = vi.fn();
       const quitApp = vi.fn();
       const stop = createHostStopper({ quitAll }, { kind: "shell-ui", senderWebContentsId: 7 }, dispose);
-      const lastWindowClosed = createLastWindowShutdown(stop, quitApp, 5_000);
+      const lastWindowClosed = createLastWindowShutdown(stop, quitApp, {
+        retryMs: 5_000, maxAttempts: 3, timeoutMs: 30_000, unsatisfiedHosts: stop.unsatisfiedHosts,
+        onExhausted: vi.fn(),
+      });
       await lastWindowClosed();
       expect(dispose).not.toHaveBeenCalled();
       expect(quitApp).not.toHaveBeenCalled();
@@ -1227,6 +1241,32 @@ describe("task browser origins", () => {
       expect(quitApp).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(10_000);
       expect(quitAll).toHaveBeenCalledTimes(2);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("bounds last-window shutdown after a failed Host report and names the Hosts that did not stop", async () => {
+    vi.useFakeTimers();
+    try {
+      const quitAll = vi.fn().mockResolvedValue({ ok: false, tasks: [{ taskId: "task-a", ok: false, retainedTasks: ["task-a"] }] });
+      const dispose = vi.fn(), quitApp = vi.fn(), onExhausted = vi.fn();
+      const stop = createHostStopper({ quitAll }, { kind: "shell-ui", senderWebContentsId: 7 }, dispose);
+      const lastWindowClosed = createLastWindowShutdown(stop, quitApp, {
+        retryMs: 5_000, maxAttempts: 3, timeoutMs: 30_000, unsatisfiedHosts: stop.unsatisfiedHosts, onExhausted,
+      });
+      await lastWindowClosed();
+      expect(quitAll).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(quitAll).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(quitAll).toHaveBeenCalledTimes(3);
+      expect(onExhausted).toHaveBeenCalledTimes(1);
+      expect(onExhausted).toHaveBeenCalledWith({ attempts: 3, unsatisfied: ["task-a"] });
+      expect(dispose).not.toHaveBeenCalled();
+      expect(quitApp).not.toHaveBeenCalled();
+      // The bound is a bound: no silent retry survives the escalation.
+      await vi.advanceTimersByTimeAsync(600_000);
+      expect(quitAll).toHaveBeenCalledTimes(3);
+      expect(onExhausted).toHaveBeenCalledTimes(1);
     } finally { vi.useRealTimers(); }
   });
 
