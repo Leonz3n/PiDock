@@ -23,6 +23,7 @@ import { registerApplicationLifecycle } from "./application-lifecycle.js";
 import { ScheduleDriver } from "./schedule-driver.js";
 import { runSmoke } from "./smoke.js";
 import { defaultTasksRoot } from "./task-resolver.js";
+import { initializeDefaultTaskRoot } from "./default-root-init.js";
 import { TaskRootIndex } from "./task-root-index.js";
 import { ProjectRegistry } from "./project-registry.js";
 import { ServiceCatalog, serviceCatalogAuthority } from "./service-catalog.js";
@@ -157,7 +158,18 @@ async function run(): Promise<void> {
   // Production resolver: main owns the default root plus a versioned index of
   // explicitly registered override roots. Every lookup checks disk identity;
   // unknown or conflicting tasks cannot pick a folder by ID alone.
-  const taskRoots = new TaskRootIndex(app.getPath("userData"), defaultTasksRoot());
+  const userData = app.getPath("userData");
+  const defaultRoot = defaultTasksRoot();
+  const projects = new ProjectRegistry(userData);
+  // [PiDock #81] Establish the machine-local default root on a first run. The
+  // creation flow refuses by name while any root is in the 待修复 state, and no
+  // in-app affordance can create the default root, so a clean machine would be a
+  // dead end; a root this profile already used stays in that state (ADR 0001).
+  const defaultRootInit = initializeDefaultTaskRoot(defaultRoot, () => projects.usedTaskRoot(defaultRoot));
+  if (defaultRootInit.state === "unavailable") {
+    console.error(`[main] 默认任务根保持待修复状态（${defaultRootInit.reason}）：${defaultRootInit.root}`);
+  }
+  const taskRoots = new TaskRootIndex(userData, defaultRoot);
   const tasks = new PerTaskHostRegistry(
     workspaceId,
     (ws, task) => createHost(ws, true, task),
@@ -165,8 +177,7 @@ async function run(): Promise<void> {
     browsers.registry,
     taskRoots,
   );
-  const projects = new ProjectRegistry(app.getPath("userData"));
-  const catalog = new ServiceCatalog(app.getPath("userData"), serviceCatalogAuthority(taskRoots, projects));
+  const catalog = new ServiceCatalog(userData, serviceCatalogAuthority(taskRoots, projects));
   // [PiDock 03] (#6 盒子 9) repository-level mutual exclusion: ONE app-private
   // lock, keyed by the REAL path of the shared source repository, shared by the
   // creation flow and the append flow. It lives in `userData` (never inside a
@@ -176,7 +187,7 @@ async function run(): Promise<void> {
   const worktreeLock = new WorktreeMetadataLock(app.getPath("userData"), {
     notify: (message) => console.error(`[main] ${message}`),
   });
-  const creation = new ProjectTaskCreation(new CreationIntentStore(app.getPath("userData")), projects, taskRoots, tasks, defaultTasksRoot(), undefined, worktreeLock);
+  const creation = new ProjectTaskCreation(new CreationIntentStore(app.getPath("userData")), projects, taskRoots, tasks, defaultRoot, undefined, worktreeLock);
   // [PiDock 03] (#6) production append: fetch/pin each selected repository in
   // its own source checkout, derive the conflict scan, route `task/appendRepos`
   // and execute the returned plan with real git. The registry is the only

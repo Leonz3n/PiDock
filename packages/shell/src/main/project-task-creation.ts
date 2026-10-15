@@ -69,8 +69,14 @@ function matchesMarker(dir: string, marker: string, id: string): boolean {
   try { return lstatSync(dir).isDirectory() && lstatSync(join(dir, marker)).isFile() && readFileSync(join(dir, marker), "utf8") === id; }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
 }
-type CreationBoundary = "root-before-mkdir" | "root-mkdir" | "root-marked" | "task-before-mkdir" | "task-mkdir" | "task-marked";
-function createOwnedDirectory(target: string, marker: string, id: string, kind: "root" | "task",
+/**
+ * Ownership marker of a root this app created itself. It is written only into a
+ * directory the app has just created, never into a folder it did not create, and
+ * is what lets a later commit refuse a root that appeared after `prepare`.
+ */
+export const CREATED_ROOT_MARKER = ".pidock-created-root";
+export type CreationBoundary = "root-before-mkdir" | "root-mkdir" | "root-marked" | "task-before-mkdir" | "task-mkdir" | "task-marked";
+export function createOwnedDirectory(target: string, marker: string, id: string, kind: "root" | "task",
   afterBoundary?: (boundary: CreationBoundary) => void): void {
   afterBoundary?.(`${kind}-before-mkdir`);
   mkdirSync(target, { mode: 0o700 });
@@ -369,8 +375,8 @@ export class ProjectTaskCreation {
         if (intent.rootDevice === null) {
           if (!pathPresent(intent.root)) {
             diskIdentity(dirname(intent.root));
-            createOwnedDirectory(intent.root, ".pidock-created-root", intent.id, "root", this.afterBoundary);
-          } else if (!matchesMarker(intent.root, ".pidock-created-root", intent.id)) {
+            createOwnedDirectory(intent.root, CREATED_ROOT_MARKER, intent.id, "root", this.afterBoundary);
+          } else if (!matchesMarker(intent.root, CREATED_ROOT_MARKER, intent.id)) {
             throw new Error("任务根在准备后被建立，不能接管；需要显式恢复");
           }
           const fresh = diskIdentity(intent.root);
