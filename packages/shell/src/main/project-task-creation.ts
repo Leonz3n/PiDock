@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { protectApplicationProfile, type TaskPathProtection } from "../host/protected-application-path.js";
-import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, normalize, relative, resolve } from "node:path";
 import { readTaskRecordOnDisk } from "../host/task-store.js";
 import type { HostTaskResult } from "../rpc/protocol.js";
@@ -212,7 +212,24 @@ export class CreationIntentStore {
     }
     return true;
   }
-  abandon(intent: CreationIntent): void {
+  /**
+   * The `.pidock-creation` marker this intent may remove: present only when the
+   * task path really is this creation's own directory and the marker is a regular
+   * file whose content is this intent's id. Anything else (another creation's
+   * marker, a symlink, a file where the directory should be) is not this
+   * creation's to touch and is left exactly as it is: a pending intent that
+   * cannot be committed must still be terminal, so this never refuses.
+   */
+  private ownedCreationMarker(intent: CreationIntent): string | null {
+    if (!pathPresent(intent.taskDir)) return null;
+    if (!lstatSync(intent.taskDir).isDirectory()) return null;
+    const marker = join(intent.taskDir, ".pidock-creation");
+    if (!pathPresent(marker)) return null;
+    const stat = lstatSync(marker);
+    if (!stat.isFile() || stat.isSymbolicLink() || readFileSync(marker, "utf8") !== intent.id) return null;
+    return marker;
+  }
+  async abandon(intent: CreationIntent): Promise<void> {
     if (intent.state !== "pending" && intent.state !== "abandoned") throw new Error("不能放弃已完成的任务");
     const file = join(this.userData, `task-creation-abandon-${intent.id}.json`);
     if (!this.hasAbandonReceipt(intent)) {
@@ -222,7 +239,14 @@ export class CreationIntentStore {
       try { writeFileSync(fd, JSON.stringify(receipt)); fsyncSync(fd); } finally { closeSync(fd); }
       syncDirectory(this.userData);
     }
-    if (intent.state === "pending") this.write({ ...intent, state: "abandoned" });
+    if (intent.state === "pending") {
+      const marker = this.ownedCreationMarker(intent);
+      if (marker) {
+        unlinkSync(marker);
+        syncDirectory(intent.taskDir);
+      }
+      this.write({ ...intent, state: "abandoned" });
+    }
   }
 }
 
@@ -258,21 +282,34 @@ export class ProjectTaskCreation {
     }
     return intent;
   }
-  abandon(id: string): Promise<{ taskId: string; abandoned: true }> {
+  abandon(id: string, confirmed: boolean): Promise<{ taskId: string; abandoned: true; message: string }> {
     return this.run(async () => {
+      if (confirmed !== true) throw new Error("放弃本次创建需要显式确认");
       const intent = this.store.read();
       if (!intent || intent.id !== id) throw new Error("创建意图已改变，请重新读取");
       if (intent.state === "complete") throw new Error("已完成任务不能放弃");
       if (intent.state === "abandoned" && !this.store.hasAbandonReceipt(intent)) throw new Error("放弃创建凭据丢失，需要显式恢复");
+      this.store.assertTaskPath(intent.taskDir);
+      // #88: every reason this creation may not abandon its own intent is checked
+      // BEFORE the durable abandon receipt is written. The receipt forecloses
+      // `commit` ("放弃创建凭据已写入，只能继续放弃"), so refusing after writing it
+      // would leave a task that can neither be committed nor abandoned.
       if (intent.state === "pending") {
-        if (this.roots.inventory().roots.some((row) => row.state === "error") ||
-            this.projects.association(intent.taskId, this.roots).state !== "unavailable" ||
-            pathPresent(join(intent.taskDir, "task.json")) || matchesMarker(intent.taskDir, ".pidock-creation", intent.id)) {
-          throw new Error("任务记录、工作区或关联已存在，不能放弃；请恢复原任务");
+        const association = this.projects.association(intent.taskId, this.roots);
+        if (association.state === "assigned") {
+          // This creation did not make the association, so it does not undo it:
+          // the codebase never re-associates (or de-associates) a task on its own
+          // (`commit` refuses with "不自动重新归属" for the same reason). The user
+          // has the real control, so the refusal names it instead of acting.
+          throw new Error(`该任务已关联到项目 ${association.projectId}，放弃本次创建不会替你解除关联；请先在「项目管理」里解绑该任务，再放弃本次创建`);
+        }
+        if (association.state !== "unassigned" && association.state !== "unavailable") {
+          throw new Error("任务归属身份需要人工修复，未能放弃本次创建");
         }
       }
-      this.store.abandon(intent);
-      return { taskId: intent.taskId, abandoned: true };
+      await this.store.abandon(intent);
+      return { taskId: intent.taskId, abandoned: true,
+        message: "本次创建已放弃。已产生的任务目录、工作区、链接与会话均已保留；如任务记录已存在，该任务现为未归属任务。" };
     });
   }
   prepare(input: CreationRequest, selectedRoot?: string): Promise<CreationIntent> {
@@ -347,10 +384,10 @@ export class ProjectTaskCreation {
     return this.run(async () => {
       const intent = this.store.read();
       if (!intent || intent.id !== id) throw new Error("创建意图已改变，请重新读取");
-      if (intent.state === "abandoned") throw new Error("创建意图已放弃，请重新创建任务");
+      if (intent.state === "abandoned") throw new Error("创建意图已放弃；本次没有删除任务目录、工作区、链接或会话，已有任务记录现为未归属任务。请重新创建任务");
       this.store.assertTaskPath(intent.taskDir);
       for (const source of [...intent.repos, ...intent.directories]) this.store.assertTaskPath(source.path);
-      if (this.store.hasAbandonReceipt(intent)) throw new Error("放弃创建凭据已写入，只能继续放弃，不能提交原任务");
+      if (this.store.hasAbandonReceipt(intent)) throw new Error("放弃创建凭据已写入，只能继续放弃，不能提交原任务；继续放弃会保留已产生的任务内容，并将已有任务记录置为未归属。");
       if (intent.state === "complete") {
         const association = this.projects.association(intent.taskId, this.roots);
         if (association.state !== "assigned" || association.projectId !== intent.projectId) throw new Error("任务归属需要修复");
@@ -358,7 +395,10 @@ export class ProjectTaskCreation {
       }
       const checkProject = () => {
         const current = this.projects.get(intent.projectId);
-        if (!current || JSON.stringify(current) !== intent.projectSnapshot) throw new Error("项目或来源已变更，保留待恢复任务，不自动重新归属");
+        if (!current) throw new Error("项目在准备后已删除或不可读取，无法按原意图续跑；可显式放弃本次创建（不清理已产生的任务内容；已有任务记录将保留为未归属任务），恢复或重新建立项目后再创建。");
+        if (JSON.stringify(current) !== intent.projectSnapshot) {
+          throw new Error("项目或其来源在准备后被改动，无法按原快照续跑；可先恢复到准备时状态后重试，或显式放弃本次创建（不清理已产生的任务目录、工作区、链接与会话；已有任务记录将成为未归属任务），再用该项目重新创建。");
+        }
       };
       checkProject();
       // [PiDock 03] (#6 盒子 9) the repository-level critical section: every

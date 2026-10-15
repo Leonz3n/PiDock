@@ -40,9 +40,18 @@ export async function prepareCreation(bridge: PidockBridge, input: CreationInput
   if (!("intent" in value)) throw new Error("本机任务创建预览返回异常");
   return parse(value.intent);
 }
-export async function abandonCreation(bridge: PidockBridge, id: string): Promise<void> {
-  const value = await request(bridge, { op: "abandon", id });
-  if (!value || typeof value !== "object" || !("abandoned" in value) || value.abandoned !== true) throw new Error("放弃创建结果返回异常，请重读确认");
+/**
+ * #88: main only abandons a creation on explicit operator confirmation, and the
+ * answer states what it did **not** delete (the task folder, worktrees, links
+ * and sessions stay). The caller shows that sentence: the user has to know the
+ * half-made workspace is still there before creating a replacement.
+ */
+export async function abandonCreation(bridge: PidockBridge, id: string): Promise<string> {
+  const value = await request(bridge, { op: "abandon", id, confirmed: true });
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("放弃创建结果返回异常，请重读确认");
+  const row = value as Record<string, unknown>;
+  if (row.abandoned !== true || typeof row.message !== "string" || !row.message) throw new Error("放弃创建结果返回异常，请重读确认");
+  return row.message;
 }
 export async function commitCreation(bridge: PidockBridge, id: string): Promise<string> {
   const value = await request(bridge, { op: "commit", id });
