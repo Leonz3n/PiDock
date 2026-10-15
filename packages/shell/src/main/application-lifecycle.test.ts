@@ -10,7 +10,10 @@ import type { RpcRequest } from "../rpc/protocol.js";
 // These boundary doubles do not establish native browser or SDK continuity.
 function fixture(platform = "darwin", stopHosts = vi.fn(async () => true), destroyed = false) {
   const appEvents = new EventEmitter(), windowEvents = new EventEmitter();
-  const state = { visible: true, minimized: false, destroyed, focused: false, quits: 0 };
+  const state = { visible: true, minimized: false, destroyed, focused: false, quits: 0, exits: 0 };
+  // Task ids the last quit report could not stop cleanly; the escalation must
+  // name them instead of exiting with a silent failure.
+  const unsatisfied: string[] = [];
   const window = Object.assign(windowEvents, {
     isDestroyed: () => state.destroyed,
     isMinimized: () => state.minimized,
@@ -34,9 +37,12 @@ function fixture(platform = "darwin", stopHosts = vi.fn(async () => true), destr
     if (!event.preventDefault.mock.calls.length) { state.quits++; close(); }
     return event;
   }
-  const app = Object.assign(appEvents, { quit });
-  registerApplicationLifecycle({ app: app as unknown as App, window: window as unknown as BrowserWindow, platform, stopHosts });
-  return { appEvents, windowEvents, state, stopHosts, close, quit };
+  const app = Object.assign(appEvents, { quit, exit: () => { state.exits += 1; } });
+  registerApplicationLifecycle({
+    app: app as unknown as App, window: window as unknown as BrowserWindow, platform, stopHosts,
+    unsatisfiedHosts: () => [...unsatisfied],
+  });
+  return { appEvents, windowEvents, state, stopHosts, unsatisfied, close, quit };
 }
 
 function deferred<T>() {
@@ -222,6 +228,64 @@ describe("application window lifecycle", () => {
     f.appEvents.emit("activate"); f.quit(); await settled();
     expect(f.state).toMatchObject({ destroyed: true, visible: false, minimized: true, focused: false, quits: 0 });
     expect(f.stopHosts).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds a win32 last-window close that never stops its Hosts and exits while naming them", async () => {
+    const logged: string[] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      logged.push(args.map((arg) => String(arg)).join(" "));
+    });
+    vi.useFakeTimers();
+    try {
+      const stop = vi.fn(async () => false), f = fixture("win32", stop);
+      f.unsatisfied.push("task-a", "task-b");
+      f.close(); await settled();
+      // The window is already destroyed here, so "no window, still running" can
+      // only be escaped by exiting: retries are counted, never unbounded.
+      expect(f.state).toMatchObject({ destroyed: true, quits: 0, exits: 0 });
+      expect(stop).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(stop).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(stop).toHaveBeenCalledTimes(3);
+      expect(f.state).toMatchObject({ quits: 0, exits: 1 });
+      expect(logged.join("\n")).toContain("task-a, task-b");
+      expect(logged.join("\n")).toContain("did not converge");
+      await vi.advanceTimersByTimeAsync(600_000);
+      expect(stop).toHaveBeenCalledTimes(3);
+      expect(f.state).toMatchObject({ quits: 0, exits: 1 });
+    } finally { spy.mockRestore(); vi.useRealTimers(); }
+  });
+
+  it("escalates a win32 last-window close on the wall-clock budget when one stop attempt never settles", async () => {
+    const logged: string[] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      logged.push(args.map((arg) => String(arg)).join(" "));
+    });
+    vi.useFakeTimers();
+    try {
+      const stop = vi.fn(() => new Promise<boolean>(() => {})), f = fixture("win32", stop);
+      f.close(); await settled();
+      expect(stop).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(f.state).toMatchObject({ destroyed: true, quits: 0, exits: 1 });
+      expect(logged.join("\n")).toContain("did not converge");
+      await vi.advanceTimersByTimeAsync(600_000);
+      expect(stop).toHaveBeenCalledTimes(1);
+      expect(f.state).toMatchObject({ quits: 0, exits: 1 });
+    } finally { spy.mockRestore(); vi.useRealTimers(); }
+  });
+
+  it("leaves the win32 last-window close budget silent once the shutdown converges", async () => {
+    vi.useFakeTimers();
+    try {
+      const receipt = deferred<boolean>(), f = fixture("win32", vi.fn(() => receipt.promise));
+      f.close(); await settled();
+      receipt.resolve(true); await settled();
+      expect(f.state).toMatchObject({ destroyed: true, quits: 1, exits: 0 });
+      await vi.advanceTimersByTimeAsync(600_000);
+      expect(f.state).toMatchObject({ quits: 1, exits: 0 });
+    } finally { vi.useRealTimers(); }
   });
 
   it("waits for one owned shutdown before final quit and prevents close or Dock reentry while pending", async () => {
