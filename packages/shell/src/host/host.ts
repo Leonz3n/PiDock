@@ -38,6 +38,7 @@ import {
   authorizeCodeObservation,
   authorizeServiceRegistration,
   boundWorkspaceId,
+  buildTerminalEnv,
   classifyControlCaller,
   resolveBrowserLogSession,
   routeHostTask,
@@ -377,6 +378,7 @@ function terminalPlanFor(
     secrets: [...privateSecretValues],
   });
   if (!planned.ok) return { ok: false, error: planned.error };
+  planned.plan.env = buildTerminalEnv(process.env, planned.plan.env);
   const { env, ...display } = planned.plan;
   void env;
   return { ok: true, plan: display, raw: planned.plan };
