@@ -151,6 +151,31 @@ export type TerminalControlResultView = {
   instance?: TerminalInstanceView;
 };
 
+/**
+ * [PiDock 10] (#85) one selectable shell profile, exactly as main resolved it:
+ * `program` is an absolute executable main probed on THIS machine, `args` is the
+ * argv the profile is started with (Git Bash's `--login -i`, Command Prompt's
+ * empty list) and `source` is the origin VS Code's own picker shows. The
+ * renderer displays this row and sends back only `id` - it never names a shell.
+ */
+export type TerminalProfileView = {
+  id: string;
+  label: string;
+  source: string;
+  program: string;
+  args: string[];
+};
+
+export type TerminalProfilesView = {
+  platform: string;
+  /** The profiles this machine has, the platform default first. */
+  profiles: TerminalProfileView[];
+  /** The default's id, or `null` when the default itself is missing (see `unavailable`). */
+  defaultProfileId: string | null;
+  /** Profiles main knows by name but could not resolve, with every executable it probed. */
+  unavailable: { id: string; label: string; missing: string[] }[];
+};
+
 /** What the file panel renders for one task: roots plus the current selection. */
 export type WorkspaceBrowserView = {
   taskId: string;
@@ -196,7 +221,13 @@ export type ExternalEditorLaunchView = {
 export type TerminalPlanRequest = {
   instanceId: string;
   rootId: string;
-  program: string;
+  /**
+   * [PiDock 10] (#85) the shell PROFILE main resolves (its own program + argv).
+   * The renderer never names a shell; it names one of the profiles main
+   * reported. `program`/`args` remain the explicit argv channel #15 defined.
+   */
+  profileId?: string;
+  program?: string;
   args?: string[];
   cols?: number;
   rows?: number;
@@ -208,8 +239,9 @@ export type TerminalPlanRequest = {
 export type TerminalControlRequest = {
   instanceId: string;
   action: "start" | "stop";
-  /** Start only: the root/program/args the Host re-plans and registers. */
+  /** Start only: the root and the shell profile (or explicit program/args) the Host re-plans and registers. */
   rootId?: string;
+  profileId?: string;
   program?: string;
   args?: string[];
   cols?: number;
@@ -610,6 +642,51 @@ export function terminalPlanFromHost(payload: unknown): TerminalPlanView | undef
     historyLimit,
     owner: { taskId: ownerTaskId, sessionId: ownerSession, label: ownerLabel },
   };
+}
+
+/**
+ * [PiDock 10] (#85) the shell profiles main resolved for this machine.
+ *
+ * Strict, like the sibling parsers: a malformed row (a non-string id/label/
+ * source/program, a non-string argv element) makes the whole answer unparseable
+ * rather than being shown as a profile with invented fields, and a `null`
+ * default is kept as `null` - it is the Host's own "the default is missing"
+ * answer, which the panel shows by naming what was probed.
+ */
+export function terminalProfilesFromHost(payload: unknown): TerminalProfilesView | undefined {
+  const source = record(payload);
+  const platform = source ? str(source["platform"]) : undefined;
+  const profilesRaw = source ? source["profiles"] : undefined;
+  if (platform === undefined || !Array.isArray(profilesRaw)) return undefined;
+  const profiles: TerminalProfileView[] = [];
+  for (const entry of profilesRaw) {
+    const item = record(entry);
+    if (!item) return undefined;
+    const id = str(item["id"]);
+    const label = str(item["label"]);
+    const origin = str(item["source"]);
+    const program = str(item["program"]);
+    const args = strings(item["args"]);
+    if (id === undefined || label === undefined || origin === undefined || program === undefined || args === undefined) {
+      return undefined;
+    }
+    profiles.push({ id, label, source: origin, program, args });
+  }
+  const defaultRaw = source ? source["defaultProfileId"] : undefined;
+  if (defaultRaw !== null && typeof defaultRaw !== "string") return undefined;
+  const unavailableRaw = source ? source["unavailable"] : undefined;
+  if (!Array.isArray(unavailableRaw)) return undefined;
+  const unavailable: TerminalProfilesView["unavailable"] = [];
+  for (const entry of unavailableRaw) {
+    const item = record(entry);
+    if (!item) return undefined;
+    const id = str(item["id"]);
+    const label = str(item["label"]);
+    const missing = strings(item["missing"]);
+    if (id === undefined || label === undefined || missing === undefined) return undefined;
+    unavailable.push({ id, label, missing });
+  }
+  return { platform, profiles, defaultProfileId: defaultRaw, unavailable };
 }
 
 export function terminalStateFromHost(payload: unknown): TerminalStateView | undefined {

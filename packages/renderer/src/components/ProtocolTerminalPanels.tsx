@@ -23,6 +23,7 @@ import {
   TERMINAL_HISTORY_POLL_MS,
   planTerminalForRoot,
   readTerminalHistory,
+  readTerminalProfiles,
   readTerminalRoots,
   readTerminalState,
   resizeTerminal,
@@ -37,6 +38,7 @@ import {
   type TerminalHistoryEntryView,
   type TerminalInstanceView,
   type TerminalPlanView,
+  type TerminalProfilesView,
   type WorkspaceRootView,
 } from "../data/workspaceFiles";
 
@@ -203,17 +205,18 @@ function ownerText(owner: { sessionId: string | null; label: string }): string {
  * never observed reads 未观测 instead of `0`; a refusal is shown with the Host's
  * reason verbatim; and no exit is presented as a whole-tree drain - the Host's
  * `root-exited` receipt means exactly that the containment claim is not made,
- * while an `unknown` receipt leaves the instance running.
+ * while an `unknown` receipt leaves the instance continues to run.
+ *
+ * (#85) The panel names no shell: the shells this machine can open, and which one
+ * is the platform default, are main's own answer (`task/terminalProfiles`), and
+ * the picker sends back one of the returned ids. A profile main could not resolve
+ * is listed with the executables it probed, and a start without any usable
+ * profile is refused instead of silently opening another shell.
  */
 export function TerminalTakeoverPanel({
   taskId,
-  program = "bash",
-  args = ["-l"],
 }: {
   taskId: string;
-  /** Program the plan asks the Host to run; the Host resolves a bare name itself. */
-  program?: string;
-  args?: string[];
 }) {
   // The draft survives a tab swap in the ui store: the rail unmounts the panel.
   const panelState = useUiStore((state) => state.toolPanelState[taskId]);
@@ -222,6 +225,12 @@ export function TerminalTakeoverPanel({
   const [sandbox, setSandbox] = useState<TerminalTaskState | null>(null);
   const [rootState, setRootState] = useState<{ taskId: string; roots: WorkspaceRootView[] } | null>(null);
   const [rootId, setRootId] = useState("");
+  // (#85) The shells this machine offers, as main resolved them. The panel used
+  // to hardcode `bash -l`; it now names one of these ids, and the profile list
+  // (with the platform default) is a Host answer like every other row here.
+  const [profileState, setProfileState] = useState<{ taskId: string; profiles: TerminalProfilesView } | null>(null);
+  const [profileNoticeState, setProfileNoticeState] = useState<{ taskId: string; text: string } | null>(null);
+  const [profileId, setProfileId] = useState("");
   const [planState, setPlanState] = useState<{ taskId: string; plan: TerminalPlanView } | null>(null);
   const [historyState, setHistoryState] = useState<{ taskId: string; entries: TerminalHistoryEntryView[] } | null>(null);
   const [noticeState, setNoticeState] = useState<{ taskId: string; text: string } | null>(null);
@@ -247,6 +256,14 @@ export function TerminalTakeoverPanel({
   // previous task's lines even for the frame before the mount effect clears them.
   const history = historyState !== null && historyState.taskId === taskId ? historyState.entries : [];
   const notice = noticeState !== null && noticeState.taskId === taskId ? noticeState.text : undefined;
+  // The profile list is a Host answer like every other row: a previous task's
+  // answer is never shown as this task's, and an unparsed answer leaves no list
+  // (so no start) instead of a guessed shell.
+  const profiles = profileState !== null && profileState.taskId === taskId ? profileState.profiles.profiles : [];
+  const unavailable = profileState !== null && profileState.taskId === taskId ? profileState.profiles.unavailable : [];
+  const profileNotice = profileNoticeState !== null && profileNoticeState.taskId === taskId ? profileNoticeState.text : undefined;
+  // The user's pick, or the platform default main reported (listed first).
+  const selectedProfile = profiles.find((profile) => profile.id === profileId) ?? profiles[0];
   const running = instances.filter((instance) => instance.lifecycle === "running");
   const watched = running[running.length - 1] ?? instances[instances.length - 1];
   const watchId = watched?.instanceId;
@@ -283,10 +300,31 @@ export function TerminalTakeoverPanel({
     setHistoryState(null);
     setPlanState(null);
     setNoticeState(null);
+    setProfileState(null);
+    setProfileNoticeState(null);
     setRootId("");
+    setProfileId("");
     void (async () => {
-      const [state, rootList] = await Promise.all([readTerminalState(taskId), readTerminalRoots(taskId)]);
+      const [state, rootList, profileList] = await Promise.all([
+        readTerminalState(taskId),
+        readTerminalRoots(taskId),
+        readTerminalProfiles(taskId),
+      ]);
       if (stateEpoch.current !== request) return;
+      if (!profileList.ok) {
+        // No profile list means no start: the panel says what the Host answered
+        // instead of falling back to some other shell.
+        setProfileNoticeState({ taskId, text: profileList.error });
+      } else {
+        setProfileState({ taskId, profiles: profileList.value });
+        if (profileList.value.defaultProfileId === null) {
+          const missing = profileList.value.unavailable.flatMap((entry) => entry.missing).join("、");
+          setProfileNoticeState({
+            taskId,
+            text: `终端未解析出默认 shell（${missing.length > 0 ? `未找到 ${missing}` : "本机未报告缺失的可执行文件"}），请从下方选择其它 shell 配置`,
+          });
+        }
+      }
       if (!state.ok) {
         setNoticeState({ taskId, text: state.error });
         return;
@@ -333,13 +371,17 @@ export function TerminalTakeoverPanel({
       setNoticeState({ taskId, text: "本任务没有可用的文件根，无法打开终端" });
       return;
     }
+    if (!selectedProfile) {
+      setNoticeState({ taskId, text: "还没有可用的 shell 配置，无法启动终端（Host 未解析出可选的 shell）" });
+      return;
+    }
     // Same instance id as the memory flow, so restarting reopens the instance the
     // Host already recorded instead of leaking one of its bounded slots.
     const instanceId = `term-${taskId}-1`;
     setBusy(true);
-    const planned = await planTerminalForRoot({ taskId, instanceId, rootId: selectedRoot.id, program, args });
+    const planned = await planTerminalForRoot({ taskId, instanceId, rootId: selectedRoot.id, profileId: selectedProfile.id });
     if (planned.ok) setPlanState({ taskId, plan: planned.value });
-    const started = planned.ok ? await startTerminal({ taskId, instanceId, rootId: selectedRoot.id, program, args }) : planned;
+    const started = planned.ok ? await startTerminal({ taskId, instanceId, rootId: selectedRoot.id, profileId: selectedProfile.id }) : planned;
     await readState();
     setBusy(false);
     setNoticeState(started.ok ? null : { taskId, text: started.error });
@@ -387,6 +429,38 @@ export function TerminalTakeoverPanel({
       {notice ? (
         <p role="status" data-testid="terminal-notice" className="rounded border border-warn/40 px-2 py-1 text-[11px] text-warn">
           {notice}
+        </p>
+      ) : null}
+      {profileNotice ? (
+        <p role="status" data-testid="terminal-profile-notice" className="rounded border border-warn/40 px-2 py-1 text-[11px] text-warn">
+          {profileNotice}
+        </p>
+      ) : null}
+      {profiles.length > 0 ? (
+        <label className="flex items-center gap-2 text-[11px] text-muted">
+          终端 shell
+          <select
+            aria-label="终端 shell 配置"
+            value={selectedProfile?.id ?? ""}
+            onChange={(event) => setProfileId(event.target.value)}
+            className="rounded-md border border-line bg-paper px-2 py-1 text-xs"
+          >
+            {profiles.map((profile) => (
+              <option key={profile.id} value={profile.id}>
+                {hostText(profile.label, "Host 未上报配置名称")}（{hostText(profile.source, "Host 未上报配置来源")}）
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
+      {known && unavailable.length > 0 ? (
+        // Named, not repaired: a profile this machine cannot run is listed with
+        // every executable main probed, so a user can install it or pick another.
+        <p data-testid="terminal-profile-missing" className="text-[10px] text-muted">
+          以下 shell 配置本机不可用（不会静默改用它）：
+          {unavailable
+            .map((entry) => `${hostText(entry.label, "Host 未上报配置名称")}（未找到 ${entry.missing.join("、")}）`)
+            .join("；")}
         </p>
       ) : null}
       {roots.length > 1 ? (
@@ -459,7 +533,7 @@ export function TerminalTakeoverPanel({
         </div>
       ) : null}
       {known && sandbox.spawnImplemented && running.length === 0 ? (
-        <Button size="sm" disabled={busy || selectedRoot === undefined} onClick={() => void start()}>
+        <Button size="sm" disabled={busy || selectedRoot === undefined || selectedProfile === undefined} onClick={() => void start()}>
           按计划启动终端
         </Button>
       ) : null}

@@ -980,6 +980,13 @@ describe("file and terminal ops", () => {
     expect(validateHostTaskOp("task/planTerminal", { instanceId: "term-1", rootId: " ", program: "bash", layers }).ok).toBe(false);
     expect(validateHostTaskOp("task/planTerminal", { instanceId: "term-1", rootId: "r", program: "bash", layers, args: [1] }).ok).toBe(false);
     expect(validateHostTaskOp("task/planTerminal", { instanceId: "term-1", rootId: "r", program: "bash", layers, cols: 1.5 }).ok).toBe(false);
+    // [PiDock 10] (#85) the renderer names a shell PROFILE main resolves instead
+    // of a shell string: a profileId alone is a valid plan, an empty one is not,
+    // and a payload with neither answer is still refused.
+    expect(validateHostTaskOp("task/planTerminal", { instanceId: "term-1", rootId: "r", profileId: "powershell", layers })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/planTerminal", { instanceId: "term-1", rootId: "r", profileId: " ", layers }).ok).toBe(false);
+    expect(validateHostTaskOp("task/planTerminal", { instanceId: "term-1", rootId: "r", profileId: 7, layers }).ok).toBe(false);
+    expect(validateHostTaskOp("task/planTerminal", { instanceId: "term-1", rootId: "r", layers, args: ["-l"] }).ok).toBe(false);
   });
 
   it("requires an action/instance for terminal control and a start payload when starting", () => {
@@ -992,6 +999,20 @@ describe("file and terminal ops", () => {
     expect(validateHostTaskOp("task/terminalControl", { instanceId: "term-1", action: "start" }).ok).toBe(false);
     expect(validateHostTaskOp("task/terminalControl", { instanceId: "term-1", action: "start", rootId: "r", program: "bash" }).ok).toBe(false);
     expect(validateHostTaskOp("task/terminalControl", { instanceId: "term-1", action: "stop", sessionId: " " }).ok).toBe(false);
+    // (#85) a start may name a profile instead of a program, and still may not
+    // name neither.
+    expect(validateHostTaskOp("task/terminalControl", { instanceId: "term-1", action: "start", rootId: "r", profileId: "powershell", layers })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/terminalControl", { instanceId: "term-1", action: "start", rootId: "r", layers }).ok).toBe(false);
+    expect(validateHostTaskOp("task/terminalControl", { instanceId: "term-1", action: "start", rootId: "r", profileId: "", layers }).ok).toBe(false);
+  });
+
+  it("accepts the platform shell-profile read with no caller input at all", () => {
+    // [PiDock 10] (#85) the profiles are resolved by main: the op carries no
+    // field a caller could use to steer the table.
+    expect(validateHostTaskOp("task/terminalProfiles", undefined)).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/terminalProfiles", {})).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/terminalProfiles", { profileId: "powershell" })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/terminalProfiles", "powershell").ok).toBe(false);
   });
 
   it("bounds a terminal resize with the same window the protocol and registry enforce", () => {

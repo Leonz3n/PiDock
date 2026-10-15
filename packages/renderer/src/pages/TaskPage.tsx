@@ -72,7 +72,7 @@ import {
 import { describeContextDisplay, describeHistoryAttribution, formatTokens, resolveSessionThinking } from "../data/providerState";
 import type { ServiceTopologyView } from "../data/serviceTopology";
 import { projectProtocolBinding, type ProtocolBindingView } from "../data/protocolBinding";
-import type { TerminalPlanView, TerminalStateView, WorkspaceBrowserView } from "../data/workspaceFiles";
+import type { TerminalPlanView, TerminalProfilesView, TerminalStateView, WorkspaceBrowserView } from "../data/workspaceFiles";
 import { useDraftStore } from "../stores/drafts";
 import { useEventsStore } from "../stores/events";
 import { useHostStore } from "../stores/host";
@@ -171,6 +171,9 @@ export function TaskPage({ task, sessionId }: { task: Task; sessionId: string })
   const [terminalPlan, setTerminalPlan] = useState<TerminalPlanView | undefined>(undefined);
   const [terminalState, setTerminalState] = useState<TerminalStateView | undefined>(undefined);
   const [terminalError, setTerminalError] = useState<string | undefined>(undefined);
+  // (#85) The shells main resolved for this machine; the page names the default's
+  // id instead of a shell of its own.
+  const [terminalProfiles, setTerminalProfiles] = useState<TerminalProfilesView | undefined>(undefined);
   const panelsOpen = useUiStore((state) => state.panels[task.id] ?? EMPTY_PANELS);
   const filesPanelOpen = panelsOpen.includes("files");
   const terminalPanelOpen = panelsOpen.includes("terminal");
@@ -198,6 +201,20 @@ export function TaskPage({ task, sessionId }: { task: Task; sessionId: string })
     let cancelled = false;
     void useHostStore
       .getState()
+      .terminalProfiles(task.id)
+      .then((profiles) => {
+        if (!cancelled) setTerminalProfiles(profiles);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [terminalPanelOpen, task.id]);
+  useEffect(() => {
+    if (!terminalPanelOpen) return;
+    let cancelled = false;
+    void useHostStore
+      .getState()
       .terminalState(task.id)
       .then((state) => {
         if (!cancelled) setTerminalState(state);
@@ -216,18 +233,24 @@ export function TaskPage({ task, sessionId }: { task: Task; sessionId: string })
       pushToast("本任务没有可用的文件根，无法打开终端");
       return;
     }
+    // (#85) Without a resolved default there is no shell to open: say so instead
+    // of picking one (the platform default is main's answer, not this page's).
+    const profileId = terminalProfiles?.defaultProfileId;
+    if (profileId === null || profileId === undefined) {
+      pushToast(terminalProfiles === undefined ? "终端 shell 配置尚未读取，请稍候重试" : "本机未解析出默认 shell，请在终端面板选择其它 shell 配置");
+      return;
+    }
     const instanceId = `term-${task.id}-1`;
     void useHostStore
       .getState()
-      .planTerminal(task.id, { instanceId, rootId, program: "bash", args: ["-l"], sessionId: session.id })
+      .planTerminal(task.id, { instanceId, rootId, profileId, sessionId: session.id })
       .then(async (plan) => {
         setTerminalPlan(plan);
         await useHostStore.getState().controlTerminal(task.id, {
           instanceId: plan.instanceId,
           action: "start",
           rootId: plan.rootId,
-          program: plan.program,
-          args: plan.args,
+          profileId,
           sessionId: session.id,
         });
         setTerminalState(await useHostStore.getState().terminalState(task.id));
@@ -239,14 +262,15 @@ export function TaskPage({ task, sessionId }: { task: Task; sessionId: string })
     const target = instanceId ?? terminalPlan?.instanceId;
     if (target === undefined) return;
     const rootId = terminalPlan?.rootId ?? workspaceBrowser?.roots[0]?.id;
+    const profileId = terminalProfiles?.defaultProfileId;
     void useHostStore
       .getState()
       .controlTerminal(task.id, {
         instanceId: target,
         action,
         ...(rootId !== undefined ? { rootId } : {}),
-        program: terminalPlan?.program ?? "bash",
-        ...(terminalPlan ? { args: terminalPlan.args } : {}),
+        // A restart re-plans, so it names the same shell profile a start does.
+        ...(action === "start" && profileId !== null && profileId !== undefined ? { profileId } : {}),
         sessionId: session.id,
       })
       .then(() => useHostStore.getState().terminalState(task.id))

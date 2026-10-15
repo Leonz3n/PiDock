@@ -3,6 +3,7 @@ import {
   TERMINAL_HISTORY_LIMIT,
   planTerminalForRoot,
   readTerminalHistory,
+  readTerminalProfiles,
   readTerminalRoots,
   readTerminalState,
   terminalExitScopeNote,
@@ -169,20 +170,74 @@ describe("#15 terminal surface reads", () => {
         taskId: "task-abcdef12",
         instanceId: "term-1",
         rootId: "shipment",
-        program: "bash",
-        args: ["-l"],
+        // (#85) the panel names a shell PROFILE main resolved, never a shell.
+        profileId: "powershell",
       });
       expect(planned.ok).toBe(true);
       expect(taskOp).toHaveBeenCalledWith(
         "task-abcdef12",
         "task/planTerminal",
-        expect.objectContaining({ instanceId: "term-1", rootId: "shipment", program: "bash", args: ["-l"] }),
+        expect.objectContaining({ instanceId: "term-1", rootId: "shipment", profileId: "powershell" }),
       );
       const payload = taskOp.mock.calls.at(-1)![2] as Record<string, unknown>;
       expect(payload).not.toHaveProperty("sessionId");
+      // The renderer never names a shell: no `program`/`args` travel with the plan.
+      expect(payload).not.toHaveProperty("program");
+      expect(payload).not.toHaveProperty("args");
       // The plan carries the same human label the start does, so the Host labels
       // the owner `终端面板（用户显式操作）` instead of its own bare default.
       expect(payload["label"]).toBe("终端面板（用户显式操作）");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe("terminal shell profiles (#85)", () => {
+  const PROFILES = {
+    platform: "win32",
+    profiles: [
+      { id: "powershell", label: "PowerShell", source: "PowerShell", program: "C:/Program Files/PowerShell/7/pwsh.exe", args: [] },
+      { id: "command-prompt", label: "Command Prompt", source: "Command Prompt", program: "C:/Windows/System32/cmd.exe", args: [] },
+    ],
+    defaultProfileId: "powershell",
+    unavailable: [{ id: "git-bash", label: "Git Bash", missing: ["C:/Program Files/Git/bin/bash.exe"] }],
+  };
+
+  it("reads the profiles main resolved and keeps the default and the named gaps", async () => {
+    const taskOp = vi.fn(async () => ({ ok: true, payload: PROFILES }));
+    vi.stubGlobal("window", { pidock: { taskOp } });
+    try {
+      const read = await readTerminalProfiles("task-abcdef12");
+      expect(taskOp).toHaveBeenCalledWith("task-abcdef12", "task/terminalProfiles", {});
+      expect(read).toEqual({ ok: true, value: PROFILES });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("shows the Host's own reason when the profile read is refused", async () => {
+    const taskOp = vi.fn(async () => ({ ok: false, error: "terminal-profile-unavailable: 未找到 C:/Windows/System32/wsl.exe" }));
+    vi.stubGlobal("window", { pidock: { taskOp } });
+    try {
+      const read = await readTerminalProfiles("task-abcdef12");
+      expect(read).toEqual({ ok: false, error: "terminal-profile-unavailable: 未找到 C:/Windows/System32/wsl.exe" });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("treats an unparseable profile answer as unparseable instead of inventing a shell", async () => {
+    // `terminalProfilesFromHost` is strict: a row without a program is not a
+    // profile the panel may offer, so the whole answer reads as unparseable.
+    const taskOp = vi.fn(async () => ({
+      ok: true,
+      payload: { ...PROFILES, profiles: [{ id: "powershell", label: "PowerShell", source: "PowerShell", args: [] }] },
+    }));
+    vi.stubGlobal("window", { pidock: { taskOp } });
+    try {
+      const read = await readTerminalProfiles("task-abcdef12");
+      expect(read).toEqual({ ok: false, error: "Host 终端 shell 配置响应无法解析" });
     } finally {
       vi.unstubAllGlobals();
     }

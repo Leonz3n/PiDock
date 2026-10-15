@@ -92,6 +92,7 @@ export type HostTaskOp =
   | "task/deliveryInfo"
   | "task/openEditor"
   | "task/planTerminal"
+  | "task/terminalProfiles"
   | "task/terminalControl"
   | "task/terminalState"
   | "task/terminalHistory"
@@ -274,6 +275,8 @@ const HOST_TASK_OPS: readonly string[] = [
   // origin cannot come from page code.
   "task/openEditor",
   "task/planTerminal",
+  // (#85) the platform's selectable shell profiles, resolved by main; a read.
+  "task/terminalProfiles",
   "task/terminalControl",
   "task/terminalState",
   "task/terminalHistory",
