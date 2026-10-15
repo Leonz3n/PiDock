@@ -835,7 +835,17 @@ export class PerTaskHostRegistry {
           if (this.services && quit.plan.failures.length === 0 && quit.plan.retainedTasks.length === 0) this.services.confirm(entry.child, (result.payload as Record<string, unknown>).serviceOwner);
           task = { taskId: entry.taskId, ok: true, applied: [...quit.applied], failures: [...quit.plan.failures], retainedTasks: [...quit.plan.retainedTasks] };
         } catch (error) {
-          task = { taskId: entry.taskId, ok: false, applied: [], failures: [], retainedTasks: [entry.taskId], error: errorMessage(error) };
+          // #84 (B): with the task-root index, a Host whose verified identity
+          // main never cached is one forked by a `task/provision` that failed at
+          // or after the index step - every later op, the quit write included, is
+          // refused by name for it. Retaining that process is what left a failed
+          // creation's Host alive for the whole session and kept `stopHosts()`
+          // false forever; main terminates what it can no longer address instead.
+          // A Host whose cached identity merely moved keeps the retain-without-
+          // write behaviour above, so its state folder is never written twice.
+          task = this.taskRoots && !this.identities.has(normalizeTaskPath(entry.taskDir))
+            ? await this.terminateUnverifiedHost(entry, error)
+            : { taskId: entry.taskId, ok: false, applied: [], failures: [], retainedTasks: [entry.taskId], error: errorMessage(error) };
         }
         completed.set(entry.taskId, task);
       }));
@@ -873,6 +883,42 @@ export class PerTaskHostRegistry {
     return this.quitReceipt;
   }
 
+  /**
+   * Terminate the Host main forked for a creation that never established a
+   * verified task identity, and drop the ownership of it (#84 box B).
+   *
+   * Main refuses every op for such a Host - the quit write included, because a
+   * task whose disk identity was never verified must not be handed a lifecycle
+   * write - so the only stop left is termination. The exit is observed before
+   * the report may claim the Host is gone, and the task is still reported as not
+   * stopped cleanly, because no lifecycle write reached it. An unkillable child
+   * stays owned so the sealed registry still names the process it did not stop.
+   */
+  private async terminateUnverifiedHost(entry: PerTaskHostEntry, refusal: unknown): Promise<TaskHostQuitResult> {
+    const refusalMessage = errorMessage(refusal);
+    const exit = this.hostExits.get(entry.child);
+    entry.client.dispose();
+    if (exit && !exit.exited) entry.child.kill();
+    let exited = exit?.exited ?? false;
+    if (exit && !exited) {
+      try { await shutdownDeadline(exit.receipt, 5_000, "unverified-host-exit-unconfirmed"); exited = true; }
+      catch { exited = false; }
+    }
+    if (exited) {
+      const key = normalizeTaskPath(entry.taskDir);
+      this.byTaskDir.delete(key);
+      const dirs = this.byTaskId.get(entry.taskId);
+      if (dirs) { dirs.delete(key); if (!dirs.size) this.byTaskId.delete(entry.taskId); }
+      this.identities.delete(key);
+      this.hostExits.delete(entry.child);
+    }
+    return {
+      taskId: entry.taskId, ok: false, applied: [], failures: [],
+      retainedTasks: exited ? [] : [entry.taskId],
+      error: `${refusalMessage}; main ${exited ? "terminated" : "could not terminate"} the Host forked for this task (no verified task identity, so no lifecycle write was sent)`,
+    };
+  }
+
   /** Success requires observed exits and durable writer disposal; failure retains the sealed registry. */
   disposeAll(): Promise<void> {
     if (this.disposalReceipt) return this.disposalReceipt;
@@ -907,12 +953,14 @@ export class PerTaskHostRegistry {
   }
 }
 
-export function createHostStopper(tasks: Pick<PerTaskHostRegistry, "quitAll">, origin: TaskOpOrigin, onStopped: () => void | Promise<void>): () => Promise<boolean> {
+export function createHostStopper(tasks: Pick<PerTaskHostRegistry, "quitAll">, origin: TaskOpOrigin, onStopped: () => void | Promise<void>): HostStopper {
   let pending: Promise<boolean> | undefined;
   let disposalRequested = false;
-  return () => {
+  let unsatisfied: string[] = [];
+  const stop = (() => {
     if (pending) return pending;
     pending = tasks.quitAll({ origin, label: "应用退出" }).then(async (report) => {
+      unsatisfied = report.tasks.filter((task) => !task.ok || task.retainedTasks.length).map((task) => task.taskId);
       console.log(`[main] quit report: ${JSON.stringify(report)}`);
       if (!report.ok) {
         console.error(`[main] unresolved Host shutdown; retaining processes: ${JSON.stringify(report.tasks.filter((task) => !task.ok || task.retainedTasks.length))}`);
@@ -929,27 +977,85 @@ export function createHostStopper(tasks: Pick<PerTaskHostRegistry, "quitAll">, o
       return stopped;
     });
     return pending;
-  };
+  }) as HostStopper;
+  stop.unsatisfiedHosts = () => [...unsatisfied];
+  return stop;
 }
 
-export function createLastWindowShutdown(stopHosts: () => Promise<boolean>, onStopped: () => void, retryMs = 5_000): () => Promise<void> {
+/**
+ * Ordered quit of every forked Host, plus the last attempt's named refusals.
+ *
+ * The window-close path destroys the only window a windowless platform can
+ * show, so its escalation has to name what did not stop by itself (#84 box A).
+ */
+export interface HostStopper {
+  (): Promise<boolean>;
+  /** Task ids the last quit report stopped neither cleanly nor at all; empty before the first attempt. */
+  unsatisfiedHosts(): string[];
+}
+
+/**
+ * Bounded last-window shutdown.
+ *
+ * `window-all-closed` on a platform without background continuation leaves no
+ * window to report from, so an unstopped Host must not be retried silently
+ * forever (#84: an unbounded 5 s retry left a windowless main process alive for
+ * 11 hours and blocked a covering install). The attempts are bounded by count
+ * and by wall clock - whichever trips first - and the exhausted path names every
+ * task whose Host was not stopped cleanly before handing the exit to
+ * `onExhausted`, which owns leaving the app without a window.
+ */
+export interface LastWindowShutdownPolicy {
+  /** Delay between attempts. The bound is the attempt count, never this delay. */
+  retryMs: number;
+  /** Attempts allowed before escalation; 1 means no retry (the first attempt only). */
+  maxAttempts: number;
+  /** Wall-clock budget for the whole sequence, so one hanging attempt cannot retry forever. */
+  timeoutMs: number;
+  /** Task ids the last quit report did not stop cleanly, for the escalation message. */
+  unsatisfiedHosts: () => string[];
+  /** Escalation after exhaustion: the only remaining convergence is leaving the app. */
+  onExhausted: (evidence: { attempts: number; unsatisfied: string[] }) => void;
+}
+
+export function createLastWindowShutdown(stopHosts: () => Promise<boolean>, onStopped: () => void, policy: LastWindowShutdownPolicy): () => Promise<void> {
   let pending: Promise<void> | undefined;
   let retry: ReturnType<typeof setTimeout> | undefined;
+  let budget: ReturnType<typeof setTimeout> | undefined;
+  let attempts = 0;
   let finished = false;
+  const exhaust = (): void => {
+    if (finished) return;
+    finished = true;
+    if (retry) { clearTimeout(retry); retry = undefined; }
+    if (budget) { clearTimeout(budget); budget = undefined; }
+    const unsatisfied = policy.unsatisfiedHosts();
+    console.error(
+      `[main] last-window shutdown did not converge after ${attempts} attempt(s) (retry ${policy.retryMs} ms, budget ${policy.timeoutMs} ms); Hosts that did not stop cleanly: ${unsatisfied.length ? unsatisfied.join(", ") : "none named by the quit report"}`,
+    );
+    policy.onExhausted({ attempts, unsatisfied });
+  };
   const attempt = (): Promise<void> => {
     if (finished) return Promise.resolve();
     if (pending) return pending;
+    if (attempts === 0) budget = setTimeout(exhaust, policy.timeoutMs);
+    attempts += 1;
     pending = Promise.resolve().then(stopHosts).catch((error: unknown) => {
       console.error(`[main] last-window shutdown failed: ${errorMessage(error)}`);
       return false;
     }).then((stopped) => {
+      // A budget that ran out while this attempt was in flight owns the exit.
+      if (finished) return;
       if (stopped) {
         finished = true;
         if (retry) clearTimeout(retry);
+        if (budget) clearTimeout(budget);
         onStopped();
+      } else if (attempts >= policy.maxAttempts) {
+        exhaust();
       } else if (!retry) {
-        console.error(`[main] Host shutdown remains pending; retrying in ${retryMs} ms`);
-        retry = setTimeout(() => { retry = undefined; void attempt(); }, retryMs);
+        console.error(`[main] Host shutdown remains pending; retrying in ${policy.retryMs} ms`);
+        retry = setTimeout(() => { retry = undefined; void attempt(); }, policy.retryMs);
       }
     }).finally(() => { pending = undefined; });
     return pending;
