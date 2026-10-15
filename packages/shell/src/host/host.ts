@@ -46,7 +46,7 @@ import {
   serviceLaunchSource,
   validateHostTaskOp,
 } from "./host-guards.js";
-import { ServiceOwnerInventory } from "./service-owner-inventory.js";
+import { ServiceOwnerInventory, unverifiedServiceOwnerInventoryResource } from "./service-owner-inventory.js";
 import { SERVICE_STOP_CONFIRM_MS, SERVICE_STOP_GRACE_MS, TaskServiceProcesses } from "./service-processes.js";
 import { diskServiceOwnershipLog } from "./service-ownership.js";
 import { diskLaunchVerificationLog } from "./service-launch-verification.js";
@@ -818,7 +818,7 @@ function taskHostFor(taskId: string): TaskWorkspaceHost | { error: string } {
         // reading gated every write on win32. Where execution is admitted the
         // unverified orphan below is still injected, fail-closed as before.
         const owners = serviceOwnerInventory?.resources() ?? (serviceExecutionAdmitted() && process.env["PIDOCK_SERVICE_OWNER_REQUIRED"] === "1"
-          ? [{ resourceId: "service-owner-inventory", kind: "service" as const, ownerSessionId: null, verificationRequired: true }] : []);
+          ? [unverifiedServiceOwnerInventoryResource()] : []);
         const runtime = serviceRuntime;
         // [PiDock 10] (#15) a running terminal is an agent-owned resource too:
         // its owner session keeps the write right and another session sees it

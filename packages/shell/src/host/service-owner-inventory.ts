@@ -4,6 +4,13 @@ import { experimentalShutdownClient } from "./host-shutdown-client-experiment.js
 import type { AgentOwnedResource, WriteCoordinatorPort } from "./write-coordination.js";
 import { serviceOwnerBootstrap, type ServiceOwnerBootstrap, type ServiceOwnerCompletion } from "../rpc/service-host-binding.js";
 
+const SERVICE_OWNER_INVENTORY_RECOVERY_ACTION = "请通过 shell/serviceCatalogOp 的 rebindServiceOwner（confirm=true）重新绑定本任务服务归属，再重试写入";
+
+export function unverifiedServiceOwnerInventoryResource(): AgentOwnedResource {
+  return { resourceId: "service-owner-inventory", kind: "service", ownerSessionId: null,
+    verificationRequired: true, recoveryAction: SERVICE_OWNER_INVENTORY_RECOVERY_ACTION };
+}
+
 /** Installed inventory delegates state/terminal durability to the delivered owner.
  * No production descendant driver has been admitted. A future driver must satisfy ManagedServiceBinding. */
 export class ServiceOwnerInventory {
@@ -22,7 +29,7 @@ export class ServiceOwnerInventory {
   resources(): AgentOwnedResource[] {
     if (this.scope) { try { this.verify(); } catch { this.fence(); } }
     const owners = [...this.owners.values()].flatMap((owner) => owner.resources());
-    return this.failed || !this.initialized ? [...owners, { resourceId: "service-owner-inventory", kind: "service", ownerSessionId: null, verificationRequired: true }] : owners;
+    return this.failed || !this.initialized ? [...owners, unverifiedServiceOwnerInventoryResource()] : owners;
   }
   bootstrap(value: unknown): Promise<void> {
     if (this.pending || this.closing || this.failed) { this.fence(); return Promise.reject(Error("service-owner-inventory-unconfirmed")); }
