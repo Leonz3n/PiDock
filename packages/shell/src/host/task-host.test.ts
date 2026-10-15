@@ -64,6 +64,24 @@ function withLifecycleTask(check: (task: { home: string; root: string; taskDir: 
 }
 
 describe("disk lifecycle ownership", () => {
+  it.each(["mixed", "forward"] as const)("quits a reopened task with %s separators without changing task.json", (spelling) => {
+    withLifecycleTask(({ root, taskDir, record }) => {
+      const recordedRoot = spelling === "forward" ? root.replace(/\\/g, "/") : root;
+      diskTaskStore.writeTask(taskDir, { ...record, root: recordedRoot, taskDir: `${recordedRoot}/${record.dirId}` });
+      const before = readFileSync(taskFilePath(taskDir), "utf8");
+      const host = new TaskWorkspaceHost(TASK_ID, taskDir, diskTaskStore);
+      const owner = new TaskLifecycleHost(TASK_ID, taskDir, diskTaskStore,
+        createLifecycleResources({ host, services: () => null, terminals: () => null, sessionIds: () => [], liveProcesses: () => [] }),
+        () => "2026-10-15T12:00:00Z");
+      const quit = owner.quit();
+      expect(quit.plan.failures).toEqual([]);
+      expect(quit.plan.retainedTasks).toEqual([]);
+      expect(diskTaskStore.readLifecycle(taskDir)).toMatchObject({ taskId: TASK_ID, updatedAt: "2026-10-15T12:00:00Z" });
+      expect(readFileSync(taskFilePath(taskDir), "utf8")).toBe(before);
+      expect(readdirSync(taskDir)).toEqual(["lifecycle.json", "task.json"]);
+      expect(owner.quit().record).toEqual(quit.record);
+    });
+  });
   it("persists healthy first and replacement writes for the same task without changing task.json", () => {
     withLifecycleTask(({ taskDir, lifecycle }) => {
       const before = readFileSync(taskFilePath(taskDir), "utf8");
