@@ -153,11 +153,11 @@ pnpm --filter @pidock/shell package:win          # = electron-builder --config e
 ```
 
 产物路径：`directories.output` 是 `release`，`msi.artifactName` 是 `${productName}-${version}-${arch}.${ext}`（`packages/shell/electron-builder.config.cjs`），所以预期文件名为
-`packages/shell/release/PiDock-<version>-x64.msi`（本仓库当前版本 `0.1.3` → `PiDock-0.1.3-x64.msi`）。这里写的是表达式而不是写死的名字，是为了让 `.${ext}` 继续跟随实际目标格式；如果目录里出现别的名字，以实际文件名为准并在回报中写明。
+`packages/shell/release/PiDock-<version>-x64.msi`（本仓库当前版本 `0.1.4` → `PiDock-0.1.4-x64.msi`）。这里写的是表达式而不是写死的名字，是为了让 `.${ext}` 继续跟随实际目标格式；如果目录里出现别的名字，以实际文件名为准并在回报中写明。
 
 ### 内部/自用分发的版本与产物身份
 
-不同内容的新分发包先递增 `packages/shell/package.json` 的三段版本号并提交，再运行 `package:win`；本轮候选为 `0.1.3`（`0.1.1` 已用于历史升级实验，`0.1.2` 候选的安装后终端验收失败，见 #90）。正式分发不使用临时修改版本后复原的方式。仅重复构建同一候选时也须重算哈希；字节变化就重新核验，旧产物的验收结论不能沿用。
+不同内容的新分发包先递增 `packages/shell/package.json` 的三段版本号并提交，再运行 `package:win`；本轮候选为 `0.1.4`（`0.1.1` 已用于历史升级实验，`0.1.2` 候选因服务归属门禁验收失败，见 #90；`0.1.3` 安装后 Windows PowerShell 报 `8009001d`，本轮补齐终端 OS 启动环境及 Host 的 PowerShell 7 探测输入，见 #85）。正式分发不使用临时修改版本后复原的方式。仅重复构建同一候选时也须重算哈希；字节变化就重新核验，旧产物的验收结论不能沿用。
 
 每枚候选记录源码提交、应用版本、文件名、大小、SHA-256、MSI 的 `ProductCode` / `UpgradeCode` / `ProductVersion`、包内 `package.json` 版本及签名观测。安装后核对注册版本和 `app.asar` 的哈希与构建候选一致，再做应用内终端和退出检查；文件时间只作旁证。
 
