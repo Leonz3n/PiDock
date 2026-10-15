@@ -19,7 +19,7 @@ import type {
 } from "electron";
 import { isAllowedInvokeChannel } from "../preload/allowlist.js";
 import { HostClient } from "../rpc/host-client.js";
-import { buildHostEnv, classifyControlCaller, validateHostTaskOp } from "../host/host-guards.js";
+import { buildHostEnv, classifyControlCaller, serviceExecutionAdmitted, validateHostTaskOp } from "../host/host-guards.js";
 import {
   isAbsoluteTaskRoot,
   isTaskDirId,
@@ -219,7 +219,10 @@ export async function createHost(
   const child = utilityProcess.fork(entry, [], {
     serviceName: task ? `pidock-node-host-${task.taskId}` : "pidock-node-host",
     env: { ...buildHostEnv(process.env, workspaceId, task, app.getPath("userData"), normalizeTaskPath(defaultTasksRoot())),
-      ...(task ? { PIDOCK_SERVICE_OWNER_REQUIRED: "1" } : {}) },
+      // Only where service execution is admitted: a platform that cannot own a
+      // service must not be told to verify one (see `serviceExecutionAdmitted`),
+      // or its Host injects an orphan that no bootstrap can ever clear.
+      ...(task && serviceExecutionAdmitted() ? { PIDOCK_SERVICE_OWNER_REQUIRED: "1" } : {}) },
     stdio: "pipe",
   });
   const disposal = createHostDisposer(child);
@@ -1179,7 +1182,7 @@ export const SERVICE_RUN_HUMAN_LABEL = "主进程服务目录入口";
  * reaching any spawn-capable call.
  */
 export function serviceExecutionRefusal(): string | null {
-  return process.platform === "darwin" || process.platform === "linux" ? null : SERVICE_EXECUTION_UNSUPPORTED_PLATFORM;
+  return serviceExecutionAdmitted() ? null : SERVICE_EXECUTION_UNSUPPORTED_PLATFORM;
 }
 
 /**
