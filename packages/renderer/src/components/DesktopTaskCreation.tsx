@@ -19,6 +19,7 @@ export function DesktopTaskCreation({ project, bridge, onCreated }: { project?: 
   const [override, setOverride] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   useEffect(() => {
     if (typeof bridge.createTask !== "function") { setError("桌面壳真实任务创建接口不可用，请重启应用"); return; }
     void currentCreation(bridge).then((current) => {
@@ -49,10 +50,12 @@ export function DesktopTaskCreation({ project, bridge, onCreated }: { project?: 
     finally { setBusy(false); }
   };
   const abandon = async () => {
-    if (!intent || !window.confirm("放弃本次创建并生成新任务身份？磁盘上现有目录将原样保留；已有任务记录或关联时不能放弃。")) return;
-    setBusy(true); setError(null);
+    if (!intent || !window.confirm("放弃本次创建并生成新任务身份？磁盘上的任务目录、工作区、链接与会话都会保留（不会替你删除）；已关联到项目的任务需要先在「项目管理」里解绑，才能放弃。")) return;
+    setBusy(true); setError(null); setNotice(null);
     try {
-      await abandonCreation(bridge, intent.id);
+      // #88: main answers with what it did **not** delete; the user needs that
+      // sentence before creating a replacement, so it is not dropped.
+      setNotice(await abandonCreation(bridge, intent.id));
       setIntent(null); setOpen(false); setName(""); setRepos({}); setDirectories([]); setSharedWriteConfirmed(false); setOverride(false);
     } catch (failure) { setError(failure instanceof Error ? failure.message : "放弃创建失败，请恢复原任务"); }
     finally { setBusy(false); }
@@ -67,6 +70,7 @@ export function DesktopTaskCreation({ project, bridge, onCreated }: { project?: 
     <button className={button} type="button" disabled={busy || !project || !hasSourcesInProject || typeof bridge.createTask !== "function"} title={!project ? "请先选择项目" : !hasSourcesInProject ? "当前创建流程至少需要一个仓库或目录" : "创建真实任务"}
       onClick={() => { setFormProjectId(project?.id ?? null); setName(""); setRepos({}); setDirectories([]); setSharedWriteConfirmed(false); setOverride(false); setOpen(true); setError(null); }}><Icon name="plus" />任务</button>
     {error && <p role={typeof bridge.createTask === "function" ? "alert" : undefined} className="w-full text-xs text-[#ad4545]">{error}</p>}
+    {notice && <p role="status" className="w-full text-xs text-muted">{notice}</p>}
     {open && <section className="w-full border-t border-line py-4 text-sm" aria-label="创建任务">
       {!intent && formProjectId && project?.id !== formProjectId && <p role="status" className="mb-2 text-xs text-[#ad4545]">项目选择已变化，请选择原项目或取消后重新创建。</p>}
       {intent ? <div className="space-y-2">

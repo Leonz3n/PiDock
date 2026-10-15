@@ -141,17 +141,33 @@ describe("Desktop task creation", () => {
   });
   it("explicitly abandons a pending intent without deleting anything and permits a new form", async () => {
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    // #88: main only abandons on explicit confirmation and answers with what it did
+    // NOT delete; the page has to show that sentence, so the fake returns it too.
     const createTask = vi.fn(async (request: { op: string; id?: string }) => request.op === "current"
       ? { ok: true, payload: intent }
-      : { ok: true, payload: { taskId: intent.taskId, abandoned: true } });
+      : { ok: true, payload: { taskId: intent.taskId, abandoned: true,
+        message: "本次创建已放弃。已产生的任务目录、工作区、链接与会话均已保留；如任务记录已存在，该任务现为未归属任务。" } });
     render(<DesktopTaskCreation project={project} bridge={bridge(createTask)} onCreated={vi.fn(async () => {})} />);
     expect(await screen.findByText(intent.taskDir)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "放弃并重新创建" }));
-    await waitFor(() => expect(createTask).toHaveBeenCalledWith({ op: "abandon", id: intent.id }));
+    await waitFor(() => expect(createTask).toHaveBeenCalledWith({ op: "abandon", id: intent.id, confirmed: true }));
     expect(confirm).toHaveBeenCalledOnce();
     await waitFor(() => expect(screen.queryByText(intent.taskDir)).not.toBeInTheDocument());
+    expect(screen.getByRole("status")).toHaveTextContent("已产生的任务目录、工作区、链接与会话均已保留");
     fireEvent.click(screen.getByRole("button", { name: "任务" }));
     expect(screen.getByLabelText("任务名称")).toHaveValue("");
+    confirm.mockRestore();
+  });
+  it("reports a refusal to abandon without dropping the pending intent or the disk statement", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const createTask = vi.fn(async (request: { op: string }) => request.op === "current"
+      ? { ok: true, payload: intent }
+      : { ok: false, error: "该任务已关联到项目 abc，放弃本次创建不会替你解除关联；请先在「项目管理」里解绑该任务，再放弃本次创建" });
+    render(<DesktopTaskCreation project={project} bridge={bridge(createTask)} onCreated={vi.fn(async () => {})} />);
+    expect(await screen.findByText(intent.taskDir)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "放弃并重新创建" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("请先在「项目管理」里解绑该任务");
+    expect(screen.getByText(intent.taskDir)).toBeInTheDocument();
     confirm.mockRestore();
   });
   it("refuses to submit stale source IDs when Project selection changes", async () => {
