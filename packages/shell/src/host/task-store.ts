@@ -18,7 +18,7 @@
 import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { basename, dirname, join } from "node:path";
-import { isAbsoluteTaskRoot, isTaskDirId } from "../main/task-provision.js";
+import { isAbsoluteTaskRoot, isTaskDirId, normalizeTaskPath } from "../main/task-provision.js";
 import type { PiSessionSnapshot } from "../main/pi-session.js";
 import {
   EXECUTION_KINDS,
@@ -695,7 +695,11 @@ export function writeLifecycleOnDisk(taskDir: string, record: LifecycleRecord): 
   }
   if (!lstatSync(taskFilePath(taskDir)).isFile()) throw new Error("invalid lifecycle task record file");
   const task = readTaskRecordOnDisk(taskDir);
-  if (!task || task.taskId !== record.taskId || task.root !== root || task.taskDir !== taskDir || task.dirId !== dirId) {
+  // A cold Host is bound with path.join while creation records may retain
+  // forward or mixed separators. Compare the same task-path identity as the
+  // provision/index boundary; task ids and the real-directory guards stay exact.
+  if (!task || task.taskId !== record.taskId || normalizeTaskPath(task.root) !== normalizeTaskPath(root) ||
+      normalizeTaskPath(task.taskDir) !== normalizeTaskPath(taskDir) || task.dirId !== dirId) {
     throw new Error("lifecycle task ownership mismatch");
   }
   const file = lifecycleFilePath(taskDir);
