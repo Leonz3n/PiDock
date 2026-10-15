@@ -1,5 +1,7 @@
 import type { PidockBridge } from "./shellBridge";
 
+export const CREATION_RETENTION_NOTICE = "磁盘上的任务目录、工作区、链接与会话都会保留（不会替你删除）";
+
 export interface CreationIntentView {
   id: string; taskId: string; name: string; projectId: string; taskDir: string; root: string; branch: string;
   state: "pending" | "complete";

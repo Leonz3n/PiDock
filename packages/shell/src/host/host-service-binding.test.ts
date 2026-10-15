@@ -128,7 +128,8 @@ describe.skipIf(process.platform === "win32")("installed Host parent RPC service
   it("names the unverified inventory and directs the caller to the existing rebind path", async () => {
     const f = await installed();
     const write = () => f.task("task/terminalControl", { instanceId: "term-absent", action: "input", data: "\\r" });
-    const refusal = "task-locked: 执行资源尚未核验（service-owner-inventory），不能依据旧会话归属继续写入；请通过 shell/serviceCatalogOp 的 rebindServiceOwner（confirm=true）重新绑定本任务服务归属，再重试写入";
+    // 这条是 A1 新加的逐字断言，因文案修正同步更新；仍完整比对拒绝串。
+    const refusal = "task-locked: 执行资源尚未核验（service-owner-inventory），不能依据旧会话归属继续写入；下一步：在本任务的运行面板点一次该服务的「启动」；若出现「重新绑定服务所有者」，用它重新核验服务归属（只替换归属绑定，不重启任何进程），然后重试写入。若该控件没有出现、或重新绑定同样被拒绝，请把拒绝原文交给维护者——本机缺少可执行的绑定出口（维护动作：shell/serviceCatalogOp 的 rebindServiceOwner，confirm=true）";
 
     // The recovery instruction is an internal write-coordination detail, not a new RPC field.
     expect((await f.task("task/sessionStates")).payload["orphans"]).toEqual([
@@ -156,7 +157,8 @@ describe.skipIf(process.platform === "win32")("installed Host parent RPC service
       postMessage(value);
     };
     const write = () => f.task("task/terminalControl", { instanceId: "term-absent", action: "input", data: "\\r" });
-    const refusal = "task-locked: 执行资源尚未核验（service-owner-inventory），不能依据旧会话归属继续写入；请通过 shell/serviceCatalogOp 的 rebindServiceOwner（confirm=true）重新绑定本任务服务归属，再重试写入";
+    // 这条是 A1 新加的逐字断言，因文案修正同步更新；仍完整比对拒绝串。
+    const refusal = "task-locked: 执行资源尚未核验（service-owner-inventory），不能依据旧会话归属继续写入；下一步：在本任务的运行面板点一次该服务的「启动」；若出现「重新绑定服务所有者」，用它重新核验服务归属（只替换归属绑定，不重启任何进程），然后重试写入。若该控件没有出现、或重新绑定同样被拒绝，请把拒绝原文交给维护者——本机缺少可执行的绑定出口（维护动作：shell/serviceCatalogOp 的 rebindServiceOwner，confirm=true）";
 
     await f.main.prepare(f.child as never, f.taskId);
     const firstEpoch = scopes[0]?.["epoch"];

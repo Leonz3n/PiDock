@@ -359,18 +359,19 @@ export function forgetSession(snapshot: WriteLockSnapshot, sessionId: string): W
   };
 }
 
-/**
- * Coordination view for the session navigation: holder + claim label, the queue
- * with positions, read-only sessions, live derived executions and leftover
- * resources. Sessions are the union of the coordinator's own sessions and the
- * caller's list, sorted by id so the view is stable while a turn changes state.
- */
+/** Drops the internal recovery instruction: the lock view keeps the RPC shape it had before #88. */
 function resourceForWriteLockView(resource: AgentOwnedResource): AgentOwnedResource {
   const view = { ...resource };
   delete view.recoveryAction;
   return view;
 }
 
+/**
+ * Coordination view for the session navigation: holder + claim label, the queue
+ * with positions, read-only sessions, live derived executions and leftover
+ * resources. Sessions are the union of the coordinator's own sessions and the
+ * caller's list, sorted by id so the view is stable while a turn changes state.
+ */
 export function writeLockView(input: {
   snapshot: WriteLockSnapshot;
   sessions: readonly { sessionId: string; permission: PiPermission; runState: string }[];

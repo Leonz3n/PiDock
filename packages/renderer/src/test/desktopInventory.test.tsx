@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { DesktopInventory } from "../components/DesktopInventory";
+import { CREATION_RETENTION_NOTICE } from "../data/desktopCreation";
 import type { PidockBridge } from "../data/shellBridge";
 
 const taskId = "interrupted-task";
@@ -50,6 +51,7 @@ describe("Desktop inventory pending creation recovery", () => {
     const row = screen.getByText("中断任务", { selector: "strong" }).closest("li")!;
     expect(within(row).getByText("创建未完成")).toBeInTheDocument();
     expect(within(row).getByText(/恢复完成；也可以放弃/)).toBeInTheDocument();
+    expect(within(row).getByText(`这项任务的创建尚未完成。你可以恢复完成；也可以放弃（${CREATION_RETENTION_NOTICE}）。`)).toBeInTheDocument();
     expect(within(row).getByRole("button", { name: "恢复完成" })).toBeInTheDocument();
     expect(within(row).getByRole("button", { name: "放弃创建" })).toBeInTheDocument();
     expect(within(screen.getByText("普通任务", { selector: "strong" }).closest("li")!).queryByText("创建未完成")).not.toBeInTheDocument();

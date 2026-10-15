@@ -221,13 +221,9 @@ export class CreationIntentStore {
    * cannot be committed must still be terminal, so this never refuses.
    */
   private ownedCreationMarker(intent: CreationIntent): string | null {
-    if (!pathPresent(intent.taskDir)) return null;
-    if (!lstatSync(intent.taskDir).isDirectory()) return null;
     const marker = join(intent.taskDir, ".pidock-creation");
-    if (!pathPresent(marker)) return null;
-    const stat = lstatSync(marker);
-    if (!stat.isFile() || stat.isSymbolicLink() || readFileSync(marker, "utf8") !== intent.id) return null;
-    return marker;
+    try { return matchesMarker(intent.taskDir, ".pidock-creation", intent.id) ? marker : null; }
+    catch { return null; }
   }
   async abandon(intent: CreationIntent): Promise<void> {
     if (intent.state !== "pending" && intent.state !== "abandoned") throw new Error("不能放弃已完成的任务");

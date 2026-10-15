@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Icon } from "./Icon";
-import { abandonCreation, commitCreation, currentCreation, prepareCreation, type CreationInput, type CreationIntentView } from "../data/desktopCreation";
+import { abandonCreation, commitCreation, currentCreation, prepareCreation, CREATION_RETENTION_NOTICE, type CreationInput, type CreationIntentView } from "../data/desktopCreation";
 import { sourceName, sourcePath, type DesktopProject } from "../data/desktopProjects";
 import type { PidockBridge } from "../data/shellBridge";
 import { hostText } from "../data/workspaceFiles";
@@ -50,7 +50,7 @@ export function DesktopTaskCreation({ project, bridge, onCreated }: { project?: 
     finally { setBusy(false); }
   };
   const abandon = async () => {
-    if (!intent || !window.confirm("放弃本次创建并生成新任务身份？磁盘上的任务目录、工作区、链接与会话都会保留（不会替你删除）；已关联到项目的任务需要先在「项目管理」里解绑，才能放弃。")) return;
+    if (!intent || !window.confirm(`放弃本次创建并生成新任务身份？${CREATION_RETENTION_NOTICE}；已关联到项目的任务需要先在「项目管理」里解绑，才能放弃。`)) return;
     setBusy(true); setError(null); setNotice(null);
     try {
       // #88: main answers with what it did **not** delete; the user needs that
