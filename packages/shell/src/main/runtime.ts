@@ -407,7 +407,11 @@ export class PerTaskHostRegistry {
   private serviceTemplates?: (taskId: string) => ServiceTemplateRequestHandler;
   configureServices(create: (workspaceId: string) => InstalledServiceHostAuthority): void {
     if (this.services || this.closing || this.byTaskDir.size || this.pendingHosts.size) throw Error("service-owner-authority-already-bound");
-    this.services = create(this.workspaceId);
+    // #90: omitting the fork-time marker alone does not disable the parent
+    // channel. A failed prepare sends service-owner-fenced, which creates an
+    // unverified inventory in Host and gates terminal writes again. Keep the
+    // entire authority lifecycle absent where service execution is not admitted.
+    if (serviceExecutionAdmitted()) this.services = create(this.workspaceId);
   }
   /**
    * The per-task handler for the Host -> main shared-template requests

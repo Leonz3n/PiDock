@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { existsSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1387,6 +1387,15 @@ describe("task browser origins", () => {
   });
 });
 describe("PerTaskHostRegistry service-owner re-bind admission ([PiDock 04] #7 slice)", () => {
+  // These tests provide a synthetic service authority and exercise its POSIX
+  // rebind contract. #90 no longer installs that authority on Windows; select
+  // an admitted platform explicitly while keeping every rebind assertion.
+  let savedPlatform: PropertyDescriptor;
+  beforeEach(() => {
+    savedPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+  });
+  afterEach(() => { Object.defineProperty(process, "platform", savedPlatform); });
   it("refuses by name without an owner authority, and is an idempotent no-op for a task without a forked Host", async () => {
     const { registry } = registryWith(() => "/tasks/task-a", [], TASK_RESULT);
     // No `configureServices` wiring: the way back is unavailable by name, not silently skipped.
