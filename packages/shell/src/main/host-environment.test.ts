@@ -75,4 +75,33 @@ describe("createHost startup environment", () => {
       PIDOCK_PROTECTED_PROFILE: "/synthetic-profile", PIDOCK_DEFAULT_ROOT: root,
     });
   });
+
+  /**
+   * [PiDock 01] #90. The owner requirement is what makes a bound task's Host
+   * demand an owner inventory before it serves anything, and a platform with no
+   * service execution can never satisfy it: the durable recovery store refuses
+   * win32 on its first line (`service-recovery-unavailable`, measured on this
+   * machine), so main's bootstrap is always fenced and the binding deadlocks
+   * every write behind 「执行资源尚未核验（service-owner-inventory）」. Main
+   * therefore sets the marker only where service execution is admitted - the
+   * same predicate the Host reads before it injects the unverified orphan. The
+   * fork is doubled here, so this measures main's decision, not a real child.
+   */
+  it("keeps the task-only service-owner marker off a bound task where service execution is not admitted", async () => {
+    const root = mkdtempSync(join(tmpdir(), "pidock-host-env-owner-"));
+    roots.push(root);
+    vi.stubGlobal("process", { ...process, env: { PATH: "/usr/bin:/bin", HOME: root, TMPDIR: root }, platform: "win32" as NodeJS.Platform });
+    const { client } = await createHost("workspace", false, { taskId: "task-a", taskDir: join(root, "task-a") });
+    client.dispose();
+    expect(state.forks[0]).not.toHaveProperty("PIDOCK_SERVICE_OWNER_REQUIRED");
+  });
+
+  it("keeps setting the task-only service-owner marker for a bound task where service execution is admitted", async () => {
+    const root = mkdtempSync(join(tmpdir(), "pidock-host-env-owner-admitted-"));
+    roots.push(root);
+    vi.stubGlobal("process", { ...process, env: { PATH: "/usr/bin:/bin", HOME: root, TMPDIR: root }, platform: "darwin" as NodeJS.Platform });
+    const { client } = await createHost("workspace", false, { taskId: "task-a", taskDir: join(root, "task-a") });
+    client.dispose();
+    expect(state.forks[0]).toMatchObject({ PIDOCK_SERVICE_OWNER_REQUIRED: "1" });
+  });
 });

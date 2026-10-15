@@ -278,6 +278,31 @@ export function routeTaskBinding(
 }
 
 /**
+ * Whether this platform has a service-execution model at all ([PiDock 01] #90).
+ * POSIX (darwin/linux) is where a launch identity can be verified from uid and
+ * permission bits and where a process the Host does not own can be signalled;
+ * win32 has neither - the durable recovery store's constructor refuses win32 on
+ * its first line (measured `service-recovery-unavailable`, see #90) and the
+ * process-ownership module answers `unobservable`/`null` there. A platform
+ * outside this set therefore cannot own a service, so the service-owner
+ * inventory has no possible subject and must not be demanded: `runtime.ts`
+ * `createHost` does not set `PIDOCK_SERVICE_OWNER_REQUIRED` for a bound task
+ * there, and the Host does not inject the unverified `service-owner-inventory`
+ * orphan. That deadlock (every write refused with 「执行资源尚未核验
+ * （service-owner-inventory）」 on a platform that could never satisfy it) is the
+ * ONLY thing relaxed: where execution is admitted the variable keeps its full
+ * fail-closed meaning, and no other coordination rule changes (session write
+ * mutual exclusion, leftover session-owned terminal resources).
+ *
+ * Pure and platform-injected like `buildHostEnv` below; this predicate is
+ * `serviceExecutionRefusal`'s positive form, so the refusal main stamps on a
+ * catalog-driven start and these two admission decisions cannot drift apart.
+ */
+export function serviceExecutionAdmitted(platform: NodeJS.Platform = process.platform): boolean {
+  return platform === "darwin" || platform === "linux";
+}
+
+/**
  * OS path, temporary-directory and locale inputs used by Node and local Git.
  * All are optional: the absolute Electron entry starts without them and OS
  * APIs/executable lookup have defaults. Present invalid values fail closed.

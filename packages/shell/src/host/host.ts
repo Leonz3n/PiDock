@@ -41,6 +41,7 @@ import {
   classifyControlCaller,
   resolveBrowserLogSession,
   routeHostTask,
+  serviceExecutionAdmitted,
   serviceLaunchSource,
   validateHostTaskOp,
 } from "./host-guards.js";
@@ -809,7 +810,12 @@ function taskHostFor(taskId: string): TaskWorkspaceHost | { error: string } {
       diskTaskStore,
       undefined,
       () => {
-        const owners = serviceOwnerInventory?.resources() ?? (process.env["PIDOCK_SERVICE_OWNER_REQUIRED"] === "1"
+        // #90: a platform with no service execution cannot own a service-owner
+        // inventory, so the requirement has no subject there and is treated as
+        // the empty set instead of "required but never verifiable" - that
+        // reading gated every write on win32. Where execution is admitted the
+        // unverified orphan below is still injected, fail-closed as before.
+        const owners = serviceOwnerInventory?.resources() ?? (serviceExecutionAdmitted() && process.env["PIDOCK_SERVICE_OWNER_REQUIRED"] === "1"
           ? [{ resourceId: "service-owner-inventory", kind: "service" as const, ownerSessionId: null, verificationRequired: true }] : []);
         const runtime = serviceRuntime;
         // [PiDock 10] (#15) a running terminal is an agent-owned resource too:
