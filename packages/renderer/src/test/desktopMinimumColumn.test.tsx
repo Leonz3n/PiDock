@@ -87,9 +87,10 @@ describe("Desktop shell column at the production minimum (#49)", () => {
     expect(tiers(toolbar.className)).toContain("flex-wrap");
     expect(tiers(toolbar.className)).not.toContain("shrink-0");
     // Every real control stays reachable in the compact form.
-    for (const label of ["运行", "浏览器", "文件", "终端", "日志", "协议", "任务操作", "返回任务列表"]) {
+    for (const label of ["运行", "浏览器", "文件", "日志", "协议", "任务操作", "返回任务列表"]) {
       expect(within(toolbar).getByRole("button", { name: label })).toBeInTheDocument();
     }
+    expect(within(toolbar).queryByRole("button", { name: "终端" })).not.toBeInTheDocument();
     expect(screen.getByTestId("desktop-conversation-eyebrow")).toHaveTextContent("Task workspace");
   });
 
