@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { TaskWorkspaceHost } from "../host/task-host.js";
 import { diskTaskStore, readTaskRecordOnDisk } from "../host/task-store.js";
 import { ProjectRegistry } from "./project-registry.js";
+import { initializeDefaultTaskRoot } from "./default-root-init.js";
 import { ProjectTaskCreation, CreationIntentStore } from "./project-task-creation.js";
 import { previewTaskPaths } from "./task-provision.js";
 import { performCreationOperation } from "./project-task-ipc.js";
@@ -13,10 +14,13 @@ import { TaskRootIndex } from "./task-root-index.js";
 
 const homes: string[] = [];
 function git(cwd: string, ...args: string[]) { return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim(); }
-async function setup() {
+async function setup(options: { rootAbsent?: boolean } = {}) {
   const home = mkdtempSync(join(tmpdir(), "pidock-42-")); homes.push(home);
   const remote = join(home, "remote.git"), repo = join(home, "repo"), root = join(home, "tasks"), profile = join(home, "profile"), shared = join(home, "shared");
-  mkdirSync(root); mkdirSync(shared); mkdirSync(repo);
+  // A first-run profile has no `tasks` directory yet: the default root is what
+  // the app must establish before any creation can be prepared (#81).
+  if (!options.rootAbsent) mkdirSync(root);
+  mkdirSync(shared); mkdirSync(repo);
   git(home, "init", "--bare", remote); git(repo, "init", "-b", "main");
   git(repo, "config", "user.email", "test@localhost"); git(repo, "config", "user.name", "Test");
   git(repo, "remote", "add", "origin", remote);
@@ -83,6 +87,20 @@ describe("persistent Project task creation with local Git", { timeout: GIT_CASE_
     expect(env.getCalls()).toBe(1);
     const reopened = new ProjectTaskCreation(new CreationIntentStore(env.profile), new ProjectRegistry(env.profile), new TaskRootIndex(env.profile, env.root), { routeTaskOp: () => { throw new Error("Host should not reprovision"); } }, env.root);
     expect(await reopened.commit(preview.id)).toEqual({ taskId: preview.taskId, projectId: env.project.id });
+  });
+  it("establishes a never-used default root at startup so the first task can be prepared and committed", async () => {
+    const env = await setup({ rootAbsent: true });
+    expect(existsSync(env.root)).toBe(false);
+    expect(initializeDefaultTaskRoot(env.root, () => env.projects.usedTaskRoot(env.root))).toEqual({ state: "created", root: env.root });
+    const preview = await env.service.prepare(env.request);
+    expect(await env.service.commit(preview.id)).toEqual({ taskId: preview.taskId, projectId: env.project.id });
+    expect(env.storage.read()?.state).toBe("complete");
+    expect(readTaskRecordOnDisk(preview.taskDir)).not.toBeNull();
+    expect(env.projects.association(preview.taskId, env.roots).state).toBe("assigned");
+    expect(env.roots.inventory().roots).toEqual([{ label: "默认任务根", state: "ready" }]);
+    // Startup owns the marker, not this intent: a root that appeared between prepare
+    // and commit is still refused (`refuses an unmarked user-created root`).
+    expect(readFileSync(join(env.root, ".pidock-created-root"), "utf8")).not.toBe(preview.id);
   });
   it("commits when the Host writes the production bootstrap spelling of the task dir", async () => {
     const env = await setup();
