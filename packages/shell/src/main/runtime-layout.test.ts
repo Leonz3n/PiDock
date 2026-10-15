@@ -276,6 +276,22 @@ describe("trusted Electron view modes", () => {
   // [PiDock 02i] (#42) box 4: the successor tickets moved production turns to
   // `shell/sdkTurn`, so the legacy DemoApp `shellHost.sendMessage` path has to
   // stay refused at the shell bridge instead of reaching any task Host.
+  it("refuses retired desktop terminal ops before reaching any task Host", async () => {
+    const views = await createTrustedWindow("workspace-terminal-removed", "production");
+    const routeTaskOp = vi.fn(async () => ({ payload: {} }));
+    registerIpc({} as never, views.registry, { routeTaskOp } as never);
+    const taskOp = vi.mocked(ipcMain.handle).mock.calls.findLast(([channel]) => channel === "shell/taskOp")?.[1];
+    expect(taskOp).toBeDefined();
+    const shell = { sender: views.shellView.webContents, senderFrame: views.shellView.webContents.mainFrame } as never;
+    for (const op of ["task/planTerminal", "task/terminalProfiles", "task/terminalState", "task/terminalHistory", "task/terminalControl"]) {
+      expect(await taskOp!(shell, { taskId: "task-a", op, payload: { instanceId: "legacy", action: "start", sessionId: "main" } }))
+        .toEqual({ ok: false, error: "invalid-payload: 内置终端已从桌面应用移除（#95）" });
+    }
+    expect(routeTaskOp).not.toHaveBeenCalled();
+    expect(await taskOp!(shell, { taskId: "task-a", op: "task/sessionStates", payload: {} })).toMatchObject({ ok: true });
+    expect(routeTaskOp).toHaveBeenCalledTimes(1);
+  });
+
   it("refuses legacy DemoApp conversation ops as unknown at the shell bridge", async () => {
     const views = await createTrustedWindow("workspace-legacy", "production");
     const routeTaskOp = vi.fn(async () => ({ payload: {} }));
