@@ -133,3 +133,25 @@ it.skipIf(process.platform !== "win32")("round-trips default PowerShell and drai
   await f.registry.disposeAll();
   expect(f.child.kill).toHaveBeenCalledTimes(1);
 });
+
+// The renderer adapter supplies empty env layers. Force the Windows PowerShell fallback,
+// which fails with 8009001d under ConPTY when SystemRoot is absent; PS7 does not.
+it.skipIf(process.platform !== "win32")("starts Windows PowerShell from a renderer-shaped request with empty env layers", { timeout: 40_000 }, async () => {
+  vi.stubEnv("ProgramFiles", undefined);
+  const f = await installed();
+  f.registry.configureServices(f.factory);
+  const profiles = (await f.task("task/terminalProfiles")).payload;
+  const offered = profiles["profiles"] as { program: string; args: string[] }[];
+  expect(offered[0]!.program.toLowerCase()).toMatch(/windowspowershell.*powershell\.exe$/);
+  expect(offered[0]!.args).toEqual([]);
+  const instanceId = "inbox-powershell-no-layers";
+  cleanups.push(async () => { await f.registry.quitAll({ origin: { kind: "shell-ui", senderWebContentsId: 7 } }); await f.registry.disposeAll(); });
+  const start = await f.task("task/terminalControl", { instanceId, action: "start", rootId: "work", profileId: "powershell",
+    layers: { repoDefaults: [], shared: [], privateEntries: [], task: [] } });
+  expect(start.payload).toMatchObject({ actor: "human", instance: { lifecycle: "running" } });
+  await f.task("task/terminalControl", { instanceId, action: "input", data: "if ($env:SystemRoot -and $env:PATH) { Write-Output ('pidock-' + 'inbox-ok') }\r" });
+  const history = async () => JSON.stringify((await f.task("task/terminalHistory", { instanceId, limit: 200 })).payload);
+  await expect.poll(history, { timeout: 12_000 }).toContain("pidock-inbox-ok");
+  expect(await history()).not.toMatch(/8009001d/i);
+  expect(await f.registry.quitAll({ origin: { kind: "shell-ui", senderWebContentsId: 7 } })).toMatchObject({ ok: true });
+});
