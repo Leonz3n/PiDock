@@ -12,7 +12,9 @@
  * - The child env comes from the #7 resolution order (仓库默认配置 → 共享模板 →
  *   本机私有配置 → 任务覆盖 → 运行时绑定) and is a fresh object per terminal;
  *   `process.env` is never read or written, so one terminal cannot leak into
- *   another and the app's global environment stays untouched.
+ *   another and the app's global environment stays untouched. The Host adds
+ *   its explicit OS startup allowlist before spawning an interactive terminal;
+ *   that baseline is not applied to service launches.
  * - Program and argv are explicit: inline `FOO=bar cmd` and shell chaining are
  *   refused, because a terminal that is a shell string cannot be attributed or
  *   permission-gated per command.

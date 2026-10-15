@@ -309,7 +309,45 @@ export function serviceExecutionAdmitted(platform: NodeJS.Platform = process.pla
  * Provider keys, loader/config overrides and task claims never come from here.
  */
 const HOST_ENV_POSIX = ["PATH", "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL", "LC_CTYPE", "HOME"] as const;
-const HOST_ENV_WINDOWS = ["PATH", "TEMP", "TMP", "SystemRoot", "ComSpec", "PATHEXT", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "ProgramData"] as const;
+const HOST_ENV_WINDOWS = ["PATH", "TEMP", "TMP", "SystemRoot", "ComSpec", "PATHEXT", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "ProgramData", "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"] as const;
+
+/** Only OS startup inputs; no task claims, provider keys or loader overrides. */
+function osStartupEnv(baseEnv: Record<string, string | undefined>, platform: NodeJS.Platform): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const key of platform === "win32" ? HOST_ENV_WINDOWS : HOST_ENV_POSIX) {
+    const sourceKeys = platform === "win32" ? Object.keys(baseEnv).filter((name) => name.toUpperCase() === key.toUpperCase()) : [key];
+    const values = sourceKeys.map((name) => baseEnv[name]).filter((value) => value !== undefined);
+    if (new Set(values).size > 1) throw new Error(`host-env-conflict: ${key}`);
+    const value = values[0];
+    if (value === undefined) continue;
+    if (typeof value !== "string" || value.length === 0 || value.includes("\0")) throw new Error(`host-env-invalid: ${key}`);
+    env[key] = value;
+  }
+  return env;
+}
+
+/**
+ * Interactive shells need the Host's OS startup environment even with no task
+ * env rows. In particular ConPTY + Windows PowerShell fails with 8009001d
+ * without SystemRoot. Apply resolved task rows last, respecting Windows case.
+ * Services retain their separate buildChildEnv rules and inherit nothing here.
+ */
+export function buildTerminalEnv(
+  baseEnv: Record<string, string | undefined>,
+  resolved: Record<string, string>,
+  platform: NodeJS.Platform = process.platform,
+): Record<string, string> {
+  const env = osStartupEnv(baseEnv, platform);
+  for (const [key, value] of Object.entries(resolved)) {
+    if (platform === "win32") {
+      for (const inherited of Object.keys(env)) {
+        if (inherited.toUpperCase() === key.toUpperCase()) delete env[inherited];
+      }
+    }
+    env[key] = value;
+  }
+  return env;
+}
 
 /**
  * Fork-time env for `utilityProcess.fork`: admits only OS startup inputs and
@@ -328,16 +366,7 @@ export function buildHostEnv(
   if (typeof workspaceId !== "string" || workspaceId.length === 0 || workspaceId.includes("\0")) {
     throw new Error("invalid-payload: workspaceId must be a non-empty string");
   }
-  const env: Record<string, string> = {};
-  for (const key of platform === "win32" ? HOST_ENV_WINDOWS : HOST_ENV_POSIX) {
-    const sourceKeys = platform === "win32" ? Object.keys(baseEnv).filter((name) => name.toUpperCase() === key.toUpperCase()) : [key];
-    const values = sourceKeys.map((name) => baseEnv[name]).filter((value) => value !== undefined);
-    if (new Set(values).size > 1) throw new Error(`host-env-conflict: ${key}`);
-    const value = values[0];
-    if (value === undefined) continue;
-    if (typeof value !== "string" || value.length === 0 || value.includes("\0")) throw new Error(`host-env-invalid: ${key}`);
-    env[key] = value;
-  }
+  const env = osStartupEnv(baseEnv, platform);
   env["PIDOCK_WORKSPACE_ID"] = workspaceId;
   if (defaultRoot !== undefined) {
     if (!isAbsoluteTaskRoot(defaultRoot) || defaultRoot.startsWith("~/") || defaultRoot.includes("\0") || defaultRoot.length > 4096) {
