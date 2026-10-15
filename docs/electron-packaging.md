@@ -11,7 +11,7 @@
 当前安装验收检查应用启动、任务/会话、文件浏览/预览/差异/外部编辑器及退出收敛；不再要求在 MSI 内运行内置终端。#80 对外签名/macOS 仍暂停，#88 中断任务不在本次处理。下列按日期记录的终端载荷与旧版终端观察均属历史。
 
 日期：2026-09-22（Asia/Shanghai）
-状态：macOS arm64 **已实测产出未签名 DMG 候选**；macOS 侧 node-pty 原生载荷随包分发已实测（2026-10-13，见「macOS：node-pty 原生载荷随包分发」）；Windows x64 安装资产为 MSI（[ADR 0004](adr/0004-windows-installer-msi-instead-of-nsis-exe.md)，2026-10-13），**已在 win32-x64 主机上实测产出未签名 MSI，并完成安装/启动/覆盖升级/卸载复核**（2026-10-14，见「Windows x64 MSI 实测」）；该主机的代码签名、公证、干净系统安装、多用户账户与 >1 版本升级矩阵**仍未验证**。
+状态：macOS arm64 **已实测产出未签名 DMG 候选**；macOS 侧 node-pty 原生载荷随包分发已实测（2026-10-13，见「macOS：node-pty 原生载荷随包分发」）；Windows x64 安装资产为 MSI（[ADR 0004](adr/0004-windows-installer-msi-instead-of-nsis-exe.md)，2026-10-13），**已在 win32-x64 主机上实测产出未签名 MSI**（2026-10-14 起，见「Windows x64 MSI 实测」）；**2026-10-15 在 0.1.6 上补齐安装矩阵（覆盖/跳版本/降级被拒/卸载）、上一兼容版本升级、第二账户（标准非管理员）、首次运行与启动耗时**（见「Windows x64 MSI 实测（2026-10-15，…）」）。**仍未验证**：该主机的代码签名与公证、干净系统（无 dev 工具链）安装、安装版真实 Provider 模型往返与运行工具/服务中的退出、外部编辑器真实启动、多会话 UI（产线 UI 目前只有 `main`）。
 实际发布验收归 #15；本文件只记录候选工具链与实测边界。
 
 ## 工具链
@@ -125,11 +125,31 @@ Windows 安装资产为 **MSI**（[ADR 0004](adr/0004-windows-installer-msi-inst
 ### 本节仍未验证（不得据本节推断通过）
 
 - **代码签名与公证**：本机 0 张代码签名证书 ⇒ MSI 与 `PiDock.exe` 均 `NotSigned`；签名未执行。
-- **干净系统安装**：只在同一台已装 dev 工具链与 builder 缓存的机器上做过；未在干净 Windows 上安装。
-- **多用户账户**：只在本机单一账户下安装/卸载；未验证第二账户下按用户安装的行为。
+- **干净系统安装**：只在同一台已装 dev 工具链与 builder 缓存的机器上做过；未在干净 Windows 上安装。**（2026-10-15：仍未在无 dev 工具链的机器上验证；但"全新用户 profile + 全新默认任务根"的首次运行已在安装版 0.1.6 上验收通过，见下节）**
+- **多用户账户**：只在本机单一账户下安装/卸载；未验证第二账户下按用户安装的行为。**（已被 2026-10-15 的第二账户实测取代，见下节）**
 - **MSI 侧「安装前先关掉正在运行的应用」**（#84 box D，2026-10-15 静态核对，**未构建**）：本仓库能配的 MSI 面上没有这一步。`app-builder-lib@26.15.3` 的 `templates/msi/template.xml` 里没有 `util:CloseApplication`（模板中没有任何 `util:` 元素，`grep -rl CloseApplication out templates` 为空），`MsiOptions` 只允许 `additionalWixArgs` / `additionalLightArgs`，而单独 `-ext WixUtilExtension` 没有元素可指就加不上什么；所以覆盖安装/卸载碰到仍在运行的 PiDock 时，Windows Installer 的 FilesInUse 提示仍是唯一出口（1602 的来源）。可达的一半在应用侧：关掉最后一个窗口现在有界收敛并真正退出（#84）。
-- **>1 版本升级矩阵**：只做了 `0.1.0 → 0.1.1` 一次覆盖升级；没有跳版本、降级、per-machine 与 per-user 混装的证据。
-- **产品内终端**（更新 2026-10-14）：`#22` 的 T4 原先的两条阻断原因（平台门/钉、cwd 规范化）已由 #55 与 #61（`9ec1a25`）消除；win32-x64 上有自动化真实 PTY 用例覆盖 Host 记录 → plan → 会话层 → 驱动 → 真实 ConPTY。**仍未验证**：没有在已安装的 MSI 应用里跑过终端（打包 app 的产品路径在 `9ec1a25` 之后未复测），因此本行不代 `#22` 勾选。
+- **>1 版本升级矩阵**：只做了 `0.1.0 → 0.1.1` 一次覆盖升级；没有跳版本、降级、per-machine 与 per-user 混装的证据。**（已被 2026-10-15 的安装矩阵取代，见下节）**
+- **产品内终端**（更新 2026-10-14）：`#22` 的 T4 原先的两条阻断原因（平台门/钉、cwd 规范化）已由 #55 与 #61（`9ec1a25`）消除；win32-x64 上有自动化真实 PTY 用例覆盖 Host 记录 → plan → 会话层 → 驱动 → 真实 ConPTY。**仍未验证**：没有在已安装的 MSI 应用里跑过终端（打包 app 的产品路径在 `9ec1a25` 之后未复测），因此本行不代 `#22` 勾选。**（2026-10-15：该要求已由 #95 撤销——桌面内置终端从产品中移除，本行作为历史保留，不再作为验收项）**
+
+## Windows x64 MSI 实测（2026-10-15，0.1.6 安装矩阵 / 第二账户 / 首次运行 / 启动耗时）
+
+主机同上（Windows 11 `10.0.26200` x64、已提升会话）。被测产物 = **0.1.6 候选**：MSI `145907856` bytes、sha256 `afffaf63bf30fd4d08768824dbeaf983993bfa04022d3a126302477dfeaed2ad`、ProductVersion `0.1.6.0`、ProductCode `{DCBA0EF1-D237-4655-ACED-9B0BB5A283AB}`、`UpgradeCode` 同前（`{CDB945E1-46B2-5696-A0EE-65A2309F5245}`）、MSI 与 `PiDock.exe` 均 `NotSigned`；安装载荷 `PiDock.exe` `246236672` bytes / sha256 `617c91ff83ee8445bdde0230d15eb6884084e98c08bb45b37b1d53030ab4ebf1`、`resources/app.asar` `101312001` bytes / sha256 `c9d6aa2658396a00af11847e25a54ea3a5f62003ee6e59628de993554e196c82`。逐条原始日志与报告在 `%TEMP%/pidock-win2/diag/`（`msi-matrix-report.json`、`prev-version-upgrade-report.json`、`startup-016/startup-report.json`、`second-account-summary.json`、`fresh-root-016/fresh-root-report.json`），票面证据见 #22 / #84 / #81 / #90 的评论。
+
+- **安装矩阵**（`spawnSync(msiexec)` 同步执行，逐条断言）：退出后覆盖安装（先删掉已安装 `app.asar`）msiexec exit 0 / 引擎 `MainEngineThread is returning 0`，载荷恢复为候选哈希，**无 files-in-use 中断、未使用强杀**；卸载 exit 0，ARP/快捷方式/载荷全清而 `%APPDATA%\@pidock\shell` 逐字节保留（140 文件）；`0.1.0 → 0.1.1`、`0.1.1 → 0.1.6`（跳版本）均 exit 0 且载荷=对应候选；`0.1.6 → 0.1.5` 降级 exit **1603**（`A newer version is already installed`）且载荷未破坏；非提升上下文安装 exit 0（per-user 双模重配置）。
+- **上一兼容版本升级**：卸载后装 `0.1.5`（exit 0，载荷=0.1.5 候选 `c9d8fb2b…` / `4e541850…`），再升到 `0.1.6`（exit 0，载荷=候选）。同一条既有任务在 **0.1.5 上重开退出 exit 1**（`lifecycle task ownership mismatch`，即 #97 在旧版本上真实可复现），升级后同流程 **exit 0、草稿保留**。
+- **第二账户**（标准非管理员，`CreateProcessWithLogonW` + 裸账户名/空域）：`msiexec /i … /qn` exit 0 **无需提升**，载荷落该账户自己的 `%LOCALAPPDATA%\Programs\PiDock` 且哈希与候选逐字节一致，1 个开始菜单快捷方式，`--print-startup` 探针 exit 0（从该账户自己的 `app.asar` 加载，Electron 44.4.3）；`/x` exit 0 后安装根/载荷/快捷方式全消失。环境限制（非产品结论）：MSI 在 session 0 / 无交互会话下失败 **1601**；`CreateProcessWithLogonW` 传 domain 失败 **1326**。
+- **首次运行（安装版 GUI，CDP 驱动）**：隔离目录启动前断言 `tasks/`（`PIDOCK_DEFAULT_ROOT`）与 `profile/` 均**不存在** → 应用自动建立默认任务根，首屏就绪 **896 ms**（三轮 898/896/893），不含 `执行资源尚未核验`；随后**注册真实项目 + 创建真实 Git 任务**（worktree 在基线提交）、任务出现在目录中（reload 后）；退出 exit 0，8 个观察进程 **139.87 ms** 全退、主进程最后、`forcedCleanup=false`。
+- **启动耗时**（`spawn(PiDock.exe)` → 生产渲染器报出 `window.pidock` 与"项目管理"外壳）：cold **1271 / 877 ms**、warm **858 / 850 ms**；同轮关窗后 7 个观察进程 **72.56 – 103.06 ms** 全退、exit 0。注意 `--print-startup` 探针加载的是 smoke 布局，与真实窗口路径不同，故启动耗时以真实窗口路径为准。
+- **注册形态（观测，仍不作语义解释）**：静默安装落**按用户**（`HKCU\SOFTWARE\Microsoft\Installer\Products\1FE0ABCD732D5564CADEB9B05B2A38BA`、载荷在 `%LOCALAPPDATA%`），**同时**写 `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{DCBA0EF1-…}`（与 2026-10-14 的 ARP 观测同源）。该按用户形态卸载只清 HKCU 侧与载荷，**HKLM ARP 项会残留为孤儿项**（`MsiExec /X{ProductCode}` 报 1605）；本轮实验曾交错执行 `msiexec` 造成过注册形态脏化，已手工清理并恢复到干净 0.1.6。**该孤儿项需在干净机器上复现后才能定性**，已记入 #22，不在本节宣布为产品缺陷。
+
+### 本节仍未验证（不得据本节推断通过）
+
+- **干净系统安装**：仍在已装 dev 工具链与 builder 缓存的机器上；未在无 Node/pnpm/turbo 的干净 Windows 上安装。
+- **安装版真实 Provider 模型往返**与"运行工具/服务过程中退出"：本轮无 Provider 凭据，只验证了 `provider-not-configured` 具名拒绝与草稿保留。
+- **多会话 UI**：当前产线 UI 只有 `main` 会话，未验收会话创建/切换。
+- **外部编辑器真实启动**：未验证外部编辑器进程真被拉起。
+- **per-machine 与 per-user 两形态并存**：只观察到双模包的单形态（`perMachine: false` ⇒ `ALLUSERS=2` + `MSIINSTALLPERUSER=1`），未测 `ALLUSERS=1` 装到 `Program Files` 与按用户副本并存。
+- **Windows 上服务真实执行**：`ExperimentalServiceRecoveryStore` 依赖 POSIX uid/权限位，win32 按设计无服务执行能力（门禁在具备服务能力的平台仍 fail-closed，#90）。
 
 ## 签名与公证路径（未执行）
 
