@@ -67,6 +67,19 @@ const send = async (text: string) => {
 afterEach(() => { cleanup(); localStorage.clear(); delete window.pidock; vi.restoreAllMocks(); });
 
 describe("Desktop SDK conversation", () => {
+  it("offers the remaining desktop tools without a terminal launcher or terminal IPC", async () => {
+    const fixture = setup();
+    const taskOp = vi.fn(async (_taskId: string, _op: string) => ({ ok: false as const, error: "fixture" }));
+    fixture.bridge.taskOp = taskOp;
+    mount(fixture);
+    await screen.findByText(/尚未开始/);
+    expect(screen.queryByRole("button", { name: "终端" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("终端输入")).not.toBeInTheDocument();
+    for (const name of ["运行", "浏览器", "文件", "日志", "协议"]) {
+      expect(screen.getByRole("button", { name })).toBeInTheDocument();
+    }
+    expect(taskOp.mock.calls.some(([, op]) => op === "task/planTerminal" || String(op).startsWith("task/terminal"))).toBe(false);
+  });
   it("restores literal main drafts separately for two tasks without sending or replaying markers", async () => {
     const a = setup("task-a"); const first = mount(a);
     await screen.findByText(/尚未开始/);

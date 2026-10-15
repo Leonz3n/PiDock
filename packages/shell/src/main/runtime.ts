@@ -2200,6 +2200,11 @@ export function registerIpc(
       if (!isHostTaskOp(op) || op.startsWith("task/sdk") || op === "task/sendMessage") {
         throw new TrustDomainViolation("invalid-payload", `unknown task op: ${String(op)}`);
       }
+      // #95: desktop terminal is retired. Keep internal Host execution and
+      // cleanup available, but stale renderers cannot read or start terminals.
+      if (op === "task/planTerminal" || op.startsWith("task/terminal")) {
+        throw new TrustDomainViolation("invalid-payload", "内置终端已从桌面应用移除（#95）");
+      }
       // [PiDock 03] (#6) legacy-route refusal: `shell/taskOp` used to accept
       // `task/appendRepos` from page code, letting the renderer supply the
       // `fetchedCommits` baseline the Host then persisted — with NO executor

@@ -492,7 +492,7 @@ fi
 pause
 
 # ── 6 ─────────────────────────────────────────────────────────────────────
-stage "干净机器安装验收（含在 MSI 内跑内置终端）"
+stage "干净机器安装与工作区验收"
 say "换一台全新的 Windows 来做；先确认搬运后哈希没变。"
 if [[ -n "${EXPECTED_SHA:-}" ]]; then
   say "应等于上一阶段记录的值：$EXPECTED_SHA"
@@ -505,19 +505,19 @@ if [[ -n "${EXPECTED_SHA:-}" && -n "$CLEAN_SHA" && "${CLEAN_SHA,,}" != "${EXPECT
 fi
 step "双击 MSI，按交互向导安装（默认按当前用户，正常不弹 UAC）。"
 step "从开始菜单启动 PiDock，确认主窗口打开、能正常退出。"
-step "在应用内打开内置终端，运行一条命令（如 ver / Get-Date），确认终端真的起来了。"
-note "应用内哪个控件打开终端，本仓库没有可照抄的路径 → 需要确认，向导不编造。"
-ask CLEAN_TERMINAL "把终端里实际看到的关键输出粘一行:"
+step "打开一个任务，确认文件面板可读取任务目录、预览文件，并可关闭面板继续对话。"
+note "内置终端已按需求 #95 从桌面应用移除，不再作为安装验收项目。"
+ask CLEAN_WORKSPACE "把文件面板与任务工作区的实际观测记一行:"
 ask CLEAN_RESULT "这一项记为 (pass/fail/not-run):"
-evidence "clean-machine: sha=${CLEAN_SHA} terminal=\"${CLEAN_TERMINAL}\" result=${CLEAN_RESULT}"
-note "这是 #22 里 T4 一直未验证的那一项；只记你实际观测到的。"
+evidence "clean-machine: sha=${CLEAN_SHA} workspace=\"${CLEAN_WORKSPACE}\" result=${CLEAN_RESULT}"
+note "只记录实际观测；旧版终端失败记录保留，不改记为通过。"
 pause
 
 # ── 7 ─────────────────────────────────────────────────────────────────────
 stage "第二账户验收（per-user 安装）"
 say "换一个 Windows 用户账户，重复安装同一枚 MSI。"
 step "登录第二账户，安装同一枚 MSI，确认文件与快捷方式落在该用户下（按用户安装）。"
-step "启动 PiDock 并可正常退出（有条件再开一次内置终端）。"
+step "启动 PiDock，打开任务文件面板并确认可正常退出。"
 note "已知待裁决项：按用户安装却把 ARP 键写进 HKLM（#22 T2 的观测），记现象即可，不下结论。"
 ask ACCOUNT2_RESULT "这一项记为 (pass/fail/not-run):"
 ask ACCOUNT2_NOTE "关键事实一行（安装路径 / 快捷方式 / ARP 位置等）:"
@@ -559,14 +559,14 @@ REPORT="$EVIDENCE_DIR/issue-22-report.md"
     printf -- '- 未签名（`NotSigned`）是内部/自用分发的**已接受状态**，不是「未完成」；\n'
     printf -- '  这里只陈述事实，**不等于**「已验证安全」，也不等于 SmartScreen 警告已消除。\n'
   fi
-  printf -- '- 干净机器安装 + MSI 内终端：%s\n' "${CLEAN_RESULT:-not-run}"
+  printf -- '- 干净机器安装与工作区：%s\n' "${CLEAN_RESULT:-not-run}"
   printf -- '- 第二账户：%s\n' "${ACCOUNT2_RESULT:-not-run}"
   for i in 1 2 3 4; do
     name="UPGRADE_RESULT_$i"
     printf -- '- 升级用例 %s：%s\n' "$i" "${!name:-not-run}"
   done
   printf '\n原始证据目录：`%s`（命令与输出；评论不附全部原始文本）\n' "$EVIDENCE_DIR"
-  printf '\n**未勾选任何验收格。** 签名、干净系统安装、多用户、>1 版本升级矩阵、MSI 内终端是否通过，以实际观测为准。\n'
+  printf '\n**未勾选任何验收格。** 干净系统安装、多用户、>1 版本升级矩阵与工作区功能以实际观测为准；内置终端验收已由需求 #95 撤销。\n'
 } > "$REPORT"
 say "草稿：$REPORT"
 pause "看一眼草稿，然后按回车"
