@@ -3,6 +3,7 @@ import { Icon } from "./Icon";
 import { DesktopTaskCreation } from "./DesktopTaskCreation";
 import { DesktopConversation } from "./DesktopConversation";
 import { desktopMode, importDesktopTaskRoot } from "../data/desktopInventory";
+import { abandonCreation, commitCreation, currentCreation, type CreationIntentView } from "../data/desktopCreation";
 import { DESKTOP_LABELS, DesktopRootErrors, DesktopShell, DesktopUnwired, type DesktopUnwiredKey, type DesktopView } from "./DesktopShell";
 import { DesktopProvidersPage } from "./DesktopProvidersPage";
 import { DesktopProjectOverview } from "./DesktopProjectOverview";
@@ -84,6 +85,8 @@ export function DesktopInventory() {
   const [rootRetryError, setRootRetryError] = useState<string | null>(null);
   const rootRetryRef = useRef(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [pendingCreation, setPendingCreation] = useState<CreationIntentView | null>(null);
+  const [creationNotice, setCreationNotice] = useState<{ taskId: string; message: string } | null>(null);
   const [choice, setChoice] = useState<Record<string, string>>({});
   const [activeTask, setActiveTask] = useState<{ id: string; name: string; roots: string; association: string } | null>(null);
   /** Non-task nav entries whose real Host data does not exist yet (#47). */
@@ -130,9 +133,21 @@ export function DesktopInventory() {
   };
   const load = useCallback(async (inPlace = false): Promise<boolean> => {
     if (!inPlace) setView({ kind: "loading" });
+    setPendingCreation(null);
     setRootRetryError(null);
     try {
-      const data = await loadDesktopProjects(window.pidock ?? {});
+      const bridge = window.pidock ?? {};
+      const data = await loadDesktopProjects(bridge);
+      let current: CreationIntentView | null = null;
+      if (typeof bridge.createTask === "function") {
+        try {
+          const intent = await currentCreation(bridge);
+          if (intent?.state === "pending") current = intent;
+        } catch {
+          // An unreadable intent is not evidence that any task is unfinished.
+        }
+      }
+      setPendingCreation(current);
       const pending = pendingCreateRef.current;
       if (pending) {
         if (pending.id && data.projects.some((project) => project.id === pending.id)) {
@@ -215,6 +230,27 @@ export function DesktopInventory() {
   };
   const operate = (request: Parameters<NonNullable<NonNullable<typeof window.pidock>["projectOp"]>>[0]) => run(() => projectOperation(window.pidock ?? {}, request));
   const importRoot = () => run(async () => { await importDesktopTaskRoot(window.pidock ?? {}); });
+  const finishPendingCreation = async (intent: CreationIntentView, action: "commit" | "abandon") => {
+    if (rootRetryRef.current) return;
+    if (action === "abandon" && !window.confirm("放弃本次创建？这不会删除磁盘上的任务目录、工作区、链接或会话。")) return;
+    setBusy(true);
+    setActionError(null);
+    setCreationNotice(null);
+    let message: string | null = null;
+    let failure: string | null = null;
+    try {
+      const bridge = window.pidock ?? emptyBridge;
+      if (action === "commit") await commitCreation(bridge, intent.id);
+      else message = await abandonCreation(bridge, intent.id);
+    } catch (error) {
+      failure = errorMessage(error);
+    }
+    const refreshed = await load();
+    if (message) setCreationNotice({ taskId: intent.taskId, message });
+    if (failure) setActionError(refreshed ? failure : `${failure}；当前本机状态无法核验`);
+    else if (!refreshed) setActionError("操作结果无法核验，请重试读取本机数据");
+    setBusy(false);
+  };
   const data = view.data;
   const selected = selection.kind === "project" ? data?.projects.find((item) => item.id === selection.id) : undefined;
   const project = selected;
@@ -383,6 +419,7 @@ export function DesktopInventory() {
       {/* A submitted write whose authoritative reread failed must stay visible: dropping
           it here would let the user retry a create that already committed. */}
       {actionError && <p role="alert" className="mb-3 text-sm text-[#ad4545]">{actionError}</p>}
+      {creationNotice && <p role="status" className="mb-3 text-sm text-muted">{creationNotice.message}</p>}
       {view.kind === "loading"
         ? <p role="status" className="text-sm text-muted">正在读取本机项目与任务</p>
         : <div role="alert" className="border border-line bg-paper p-4 text-sm"><p>{view.error}</p><button className={`${button} mt-3`} type="button" onClick={() => void load()}>重试</button></div>}
@@ -401,6 +438,7 @@ export function DesktopInventory() {
     onOpenTask={(taskId) => void openTask(taskId)}
     onManage={() => setManage(true)}
     onManageDirectories={() => setManage(true)}
+    creationIncompleteTaskId={typeof window.pidock?.createTask === "function" ? pendingCreation?.taskId ?? null : null}
     onCreateTask={() => { setManage(true); setForm("create"); setDraft({ name: "", description: "", repositories: [], directories: [] }); setActionError(null); }}
   /></>);
   return shell(<div className="mx-auto w-full max-w-[1100px] px-4 py-5" data-testid="desktop-inventory">
@@ -431,7 +469,7 @@ export function DesktopInventory() {
             <Sources title="仓库" rows={project.repositories} /><Sources title="普通目录" rows={project.directories} /></> : <h2 className="text-base font-semibold">{data.projectsInitialized ? "未归属任务" : "项目映射未建立"}</h2>}
           <section className="mt-6"><h3 className="border-b border-line pb-2 text-xs font-semibold text-muted">任务 · {shown?.length ?? 0}</h3>
             {!shown?.length && <p className="py-5 text-sm text-muted">{project ? "此项目暂无任务" : "已检查的任务根暂无未归属任务"}</p>}
-            <ul className="divide-y divide-line">{shown?.map((row) => <TaskRow key={row.taskId} row={row} name={taskMap.get(row.taskId)?.name ?? row.taskId} projects={data.projects} choice={choice[row.taskId] ?? ""} setChoice={(value) => setChoice((prev) => ({ ...prev, [row.taskId]: value }))} busy={busy} open={() => void openTask(row.taskId)} act={operate} />)}</ul>
+            <ul className="divide-y divide-line">{shown?.map((row) => <TaskRow key={row.taskId} row={row} name={taskMap.get(row.taskId)?.name ?? row.taskId} projects={data.projects} choice={choice[row.taskId] ?? ""} setChoice={(value) => setChoice((prev) => ({ ...prev, [row.taskId]: value }))} busy={busy} open={() => void openTask(row.taskId)} act={operate} creation={typeof window.pidock?.createTask === "function" && pendingCreation?.taskId === row.taskId ? pendingCreation : null} creationNotice={creationNotice?.taskId === row.taskId ? creationNotice.message : null} onFinishCreation={(intent, action) => void finishPendingCreation(intent, action)} />)}</ul>
           </section>
           <DesktopRootErrors roots={data.inventory.roots} busy={busy} retryPending={rootRetryPending} retryError={rootRetryError} onRetry={() => void retryRoots()} className="mt-3 empty:hidden" />
           <p className="mt-5 text-xs text-muted">仅显示默认及已登记任务根；其他位置需明确找回。</p>
@@ -440,9 +478,14 @@ export function DesktopInventory() {
     </div>);
 }
 
-function TaskRow({ row, name, projects, choice, setChoice, busy, open, act }: { row: TaskAssociation; name: string; projects: DesktopProject[]; choice: string; setChoice: (value: string) => void; busy: boolean; open: () => void; act: (request: Parameters<NonNullable<NonNullable<typeof window.pidock>["projectOp"]>>[0]) => Promise<void> }) {
+function TaskRow({ row, name, projects, choice, setChoice, busy, open, act, creation, creationNotice, onFinishCreation }: { row: TaskAssociation; name: string; projects: DesktopProject[]; choice: string; setChoice: (value: string) => void; busy: boolean; open: () => void; act: (request: Parameters<NonNullable<NonNullable<typeof window.pidock>["projectOp"]>>[0]) => Promise<void>; creation: CreationIntentView | null; creationNotice: string | null; onFinishCreation: (intent: CreationIntentView, action: "commit" | "abandon") => void }) {
   const options = projects.filter((project) => project.id !== row.projectId);
-  return <li className="min-w-0 py-3 text-sm"><div className="flex flex-wrap items-center justify-between gap-2"><div className="min-w-0"><strong className="block truncate font-medium">{name}</strong><span className="text-xs text-muted">{row.taskId}{row.state === "needs-repair" ? " · 关联待修复" : row.state === "unavailable" ? " · 任务不可用，请检查任务根" : ""}</span></div>
+  return <li className="min-w-0 py-3 text-sm"><div className="flex flex-wrap items-center justify-between gap-2"><div className="min-w-0"><strong className="block truncate font-medium">{name}</strong><span className="text-xs text-muted">{row.taskId}{row.state === "needs-repair" ? " · 关联待修复" : row.state === "unavailable" ? " · 任务不可用，请检查任务根" : ""}</span>
+      {creation && <div className="mt-2 max-w-2xl border-l-2 border-[#dfc99f] pl-2"><strong className="text-xs font-semibold text-[#9a6032]">创建未完成</strong><p className="mt-1 text-xs text-muted">这项任务的创建尚未完成。你可以恢复完成；也可以放弃（不会删除磁盘上的任务目录、工作区、链接或会话）。</p>
+        <div className="mt-2 flex flex-wrap gap-1"><button type="button" className={button} disabled={busy} onClick={() => onFinishCreation(creation, "commit")}>恢复完成</button><button type="button" className={button} disabled={busy} onClick={() => onFinishCreation(creation, "abandon")}>放弃创建</button></div>
+      </div>}
+      {creationNotice && <p role="status" className="mt-2 text-xs text-muted">{creationNotice}</p>}
+    </div>
     <div className="flex flex-wrap gap-1"><button type="button" className={button} disabled={busy || row.state === "needs-repair" || row.state === "unavailable"} onClick={open}>进入工作区</button><select className={`${field} max-w-[145px]`} aria-label={`${name} 目标项目`} value={choice} disabled={busy || row.state === "needs-repair" || row.state === "unavailable"} onChange={(event) => setChoice(event.target.value)}><option value="">选择项目</option>{options.map((project) => <option key={project.id} value={project.id}>{projectName(project)}</option>)}</select>
       <button type="button" className={button} disabled={busy || !choice || row.state === "needs-repair" || row.state === "unavailable"} onClick={() => void act(row.projectId ? { op: "transfer", taskId: row.taskId, fromProjectId: row.projectId, toProjectId: choice } : { op: "claim", taskId: row.taskId, projectId: choice })}>{row.projectId ? "转移" : "认领"}</button>
       {row.projectId && <button type="button" className={button} disabled={busy} onClick={() => void act({ op: "unlink", taskId: row.taskId, expectedProjectId: row.projectId! })}>解绑</button>}</div></div></li>;
