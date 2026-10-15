@@ -19,6 +19,18 @@ const bridge = (taskOp: (taskId: string, op: string, payload: Record<string, unk
   window.pidock = { taskOp } as unknown as typeof window.pidock;
 };
 
+/**
+ * (#85) The shell profiles main resolved for this machine. The dock names the
+ * default's id when it plans, so every terminal stub needs this answer; the
+ * plan shown is still the Host's own (the stubbed `task/planTerminal` payload).
+ */
+const PLAN_ONLY_PROFILES = {
+  platform: "win32",
+  profiles: [{ id: "powershell", label: "PowerShell", source: "PowerShell", program: "C:/Program Files/PowerShell/7/pwsh.exe", args: [] }],
+  defaultProfileId: "powershell",
+  unavailable: [],
+};
+
 afterEach(() => {
   cleanup();
   delete (window as { pidock?: unknown }).pidock;
@@ -141,6 +153,7 @@ describe("[UI 对齐] S8d production tool dock", () => {
   it("states that the Host owns no real pty yet and still shows the real plan", async () => {
     const taskOp = vi.fn(async (_taskId: string, op: string) => {
       if (op === "task/terminalState") return { ok: true, payload: { spawnImplemented: false, instances: [] } };
+      if (op === "task/terminalProfiles") return { ok: true, payload: PLAN_ONLY_PROFILES };
       if (op === "task/fileRoots") return { ok: true, payload: { taskDir: "/tmp/task-1", roots: [{ id: "root-1", kind: "worktree", label: "primary", path: "/tmp/task-1" }] } };
       if (op === "task/planTerminal") {
         return {
@@ -195,6 +208,7 @@ describe("[UI 对齐] S8d production tool dock", () => {
       if (op === "task/fileRoots") {
         return { ok: true, payload: { taskDir: "", roots: [{ id: "", kind: "worktree", label: "", path: "", repo: "" }] } };
       }
+      if (op === "task/terminalProfiles") return { ok: true, payload: PLAN_ONLY_PROFILES };
       if (op === "task/planTerminal") {
         return {
           ok: true,
@@ -229,6 +243,7 @@ describe("[UI 对齐] S8d production tool dock", () => {
   it("surfaces a failed terminal plan and keeps 未接线 tools out of the Host path", async () => {
     const taskOp = vi.fn(async (_taskId: string, op: string) => {
       if (op === "task/terminalState") return { ok: true, payload: { spawnImplemented: false, instances: [] } };
+      if (op === "task/terminalProfiles") return { ok: true, payload: PLAN_ONLY_PROFILES };
       if (op === "task/fileRoots") return { ok: true, payload: { taskDir: "/tmp/task-1", roots: [{ id: "root-1", kind: "worktree", label: "primary", path: "/tmp/task-1" }] } };
       return { ok: false, error: "read-only-session: 只读会话不能申请终端" };
     });
@@ -264,6 +279,7 @@ describe("[UI 对齐] S8d production tool dock", () => {
     const taskOp = vi.fn(async (_taskId: string, op: string, payload: Record<string, unknown> = {}) => {
       calls.push({ op, payload });
       if (op === "task/terminalState") return { ok: true, payload: { spawnImplemented: true, instances: started ? [instance] : [] } };
+      if (op === "task/terminalProfiles") return { ok: true, payload: PLAN_ONLY_PROFILES };
       if (op === "task/fileRoots") return { ok: true, payload: { taskDir: "/tmp/task-1", roots: [{ id: "root-1", kind: "worktree", label: "primary", path: "/tmp/task-1" }] } };
       if (op === "task/planTerminal") return { ok: true, payload: { plan: { ...instance, resolved: [{ key: "PATH", value: "/usr/bin", source: "base", secret: false }], historyLimit: 200, owner: { taskId: "task-1", sessionId: null, label: payload["label"] ?? "用户显式操作" } } } };
       if (op === "task/terminalControl") {

@@ -147,6 +147,7 @@ export type ShellTaskOp =
   | "task/fileDiff"
   | "task/deliveryInfo"
   | "task/planTerminal"
+  | "task/terminalProfiles"
   | "task/terminalControl"
   | "task/terminalState"
   | "task/terminalHistory"
@@ -997,7 +998,9 @@ export async function planTerminalThroughShell(input: {
   taskId: string;
   instanceId: string;
   rootId: string;
-  program: string;
+  /** (#85) the shell PROFILE main resolves; the renderer never names a shell. */
+  profileId?: string;
+  program?: string;
   args?: string[];
   cols?: number;
   rows?: number;
@@ -1008,15 +1011,27 @@ export async function planTerminalThroughShell(input: {
   const payload: Record<string, unknown> = {
     instanceId: input.instanceId,
     rootId: input.rootId,
-    program: input.program,
     layers: input.layers ?? { repoDefaults: [], shared: [], privateEntries: [], task: [] },
   };
-  for (const key of ["args", "cols", "rows", "sessionId", "label"] as const) {
+  for (const key of ["profileId", "program", "args", "cols", "rows", "sessionId", "label"] as const) {
     const value = input[key];
     if (value !== undefined) payload[key] = value;
   }
   try {
     return await shellTaskOp(input.taskId, "task/planTerminal", payload);
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * [PiDock 10] (#85) the shell profiles main resolved for this machine
+ * (`task/terminalProfiles`). A read: the renderer asks which shells it may open
+ * and which one is the default instead of naming a shell itself.
+ */
+export async function terminalProfilesThroughShell(input: { taskId: string }): Promise<ShellTaskOpResult> {
+  try {
+    return await shellTaskOp(input.taskId, "task/terminalProfiles", {});
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
@@ -1046,6 +1061,8 @@ export async function controlTerminalThroughShell(input: {
   instanceId: string;
   action: "start" | "stop" | "input" | "resize";
   rootId?: string;
+  /** (#85) the shell PROFILE main resolves, named instead of a program. */
+  profileId?: string;
   program?: string;
   args?: string[];
   cols?: number;
@@ -1078,7 +1095,7 @@ export async function controlTerminalThroughShell(input: {
     payload["cols"] = input.cols;
     payload["rows"] = input.rows;
   } else {
-    for (const key of ["rootId", "program", "args", "cols", "rows", "layers", "sessionId", "label", "approvalId"] as const) {
+    for (const key of ["rootId", "profileId", "program", "args", "cols", "rows", "layers", "sessionId", "label", "approvalId"] as const) {
       const value = input[key];
       if (value !== undefined) payload[key] = value;
     }

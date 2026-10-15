@@ -85,6 +85,21 @@ const HOST_PLAN = {
   },
 };
 
+/**
+ * (#85) The shell profiles main resolved for this machine. The panel names one of
+ * these ids (`powershell` by default) and never a shell of its own, so every stub
+ * that drives the panel needs this answer.
+ */
+const HOST_PROFILES = {
+  platform: "win32",
+  profiles: [
+    { id: "powershell", label: "PowerShell", source: "PowerShell", program: "C:/Program Files/PowerShell/7/pwsh.exe", args: [] },
+    { id: "git-bash", label: "Git Bash", source: "Git Bash", program: "C:/Program Files/Git/bin/bash.exe", args: ["--login", "-i"] },
+  ],
+  defaultProfileId: "powershell",
+  unavailable: [{ id: "wsl", label: "WSL", missing: ["C:/Windows/System32/wsl.exe"] }],
+};
+
 type Call = { taskId: string; op: string; payload: Record<string, unknown> };
 
 /**
@@ -104,6 +119,9 @@ function hostStub(
 ) {
   return vi.fn(async (taskId: string, op: string, payload: Record<string, unknown> = {}) => {
     calls.push({ taskId, op, payload });
+    // (#85) The profile read is what lets the panel offer a start at all; a test
+    // that does not script it still needs this machine's own answer.
+    if (op === "task/terminalProfiles" && handlers[op] === undefined) return { ok: true, payload: HOST_PROFILES };
     const handler = handlers[op];
     return handler ? handler(payload) : { ok: true, payload: {} };
   });
@@ -210,8 +228,9 @@ describe("#15 terminal panel on the real channel", () => {
       instanceId: "term-release-1",
       action: "start",
       rootId: "front-monorepo",
-      program: "bash",
-      args: ["-l"],
+      // (#85) The panel names the shell PROFILE main resolved; no shell string
+      // and no argv travel from the renderer.
+      profileId: "powershell",
       // The Host guard refuses a start without the #7 env layers: a human start
       // resolves them explicitly (empty layers = an explicit empty resolve).
       layers: { repoDefaults: [], shared: [], privateEntries: [], task: [] },
@@ -611,5 +630,79 @@ describe("#15 terminal panel without a shell", () => {
     // Today's behaviour stays: the memory adapter echoes, no Host is asked.
     expect(await screen.findByText("命令已加入模拟队列")).toBeInTheDocument();
     expect(screen.getByText(/这里是内存模拟/)).toBeInTheDocument();
+  });
+});
+
+describe("#85 terminal shell profiles in the panel", () => {
+  it("offers the profiles main resolved, starts the chosen one and names the gap", async () => {
+    const calls: Call[] = [];
+    const taskOp = hostStub(calls, {
+      "task/terminalState": () => ({ ok: true, payload: { spawnImplemented: true, instances: [] } }),
+      "task/fileRoots": () => ({ ok: true, payload: ROOTS }),
+      "task/planTerminal": () => ({ ok: true, payload: HOST_PLAN }),
+      "task/terminalControl": (payload) => ({ ok: true, payload: { instanceId: "term-release-1", action: payload["action"], actor: "human" } }),
+      "task/terminalHistory": () => ({ ok: true, payload: { history: [] } }),
+    });
+    const user = await openTerminalPanel(taskOp);
+
+    // The picker is main's own list, and the platform default is preselected.
+    const picker = await screen.findByLabelText("终端 shell 配置");
+    expect(picker).toHaveValue("powershell");
+    expect(within(picker).getByRole("option", { name: /Git Bash/ })).toBeInTheDocument();
+    // A profile this machine cannot run is named with the executable that was
+    // probed - never silently replaced by one that happens to exist.
+    const gap = screen.getByTestId("terminal-profile-missing");
+    expect(gap).toHaveTextContent("WSL");
+    expect(gap).toHaveTextContent("C:/Windows/System32/wsl.exe");
+
+    await user.selectOptions(picker, "git-bash");
+    await user.click(await screen.findByRole("button", { name: "按计划启动终端" }));
+
+    const start = calls.find((call) => call.payload["action"] === "start");
+    expect(start?.payload["profileId"]).toBe("git-bash");
+    // The renderer names no shell and no argv: main resolves both.
+    expect(start?.payload["program"]).toBeUndefined();
+    expect(start?.payload["args"]).toBeUndefined();
+    const plan = calls.find((call) => call.op === "task/planTerminal");
+    expect(plan?.payload["profileId"]).toBe("git-bash");
+  });
+
+  it("refuses to start when main resolved no shell and names every executable it probed", async () => {
+    const calls: Call[] = [];
+    const taskOp = hostStub(calls, {
+      "task/terminalProfiles": () => ({
+        ok: true,
+        payload: {
+          platform: "win32",
+          profiles: [],
+          defaultProfileId: null,
+          unavailable: [{ id: "powershell", label: "PowerShell", missing: ["C:/Program Files/PowerShell/7/pwsh.exe"] }],
+        },
+      }),
+      "task/terminalState": () => ({ ok: true, payload: { spawnImplemented: true, instances: [] } }),
+      "task/fileRoots": () => ({ ok: true, payload: ROOTS }),
+    });
+    const user = await openTerminalPanel(taskOp);
+
+    expect(await screen.findByTestId("terminal-profile-notice")).toHaveTextContent("C:/Program Files/PowerShell/7/pwsh.exe");
+    const start = screen.getByRole("button", { name: "按计划启动终端" });
+    expect(start).toBeDisabled();
+    await user.click(start);
+    expect(calls.some((call) => call.payload["action"] === "start")).toBe(false);
+    expect(calls.some((call) => call.op === "task/planTerminal")).toBe(false);
+  });
+
+  it("shows the Host's own refusal when the profile read fails and offers no start", async () => {
+    const calls: Call[] = [];
+    const taskOp = hostStub(calls, {
+      "task/terminalProfiles": () => ({ ok: false, error: "terminal-profile-unknown: 本机没有终端 shell 配置「cmder」" }),
+      "task/terminalState": () => ({ ok: true, payload: { spawnImplemented: true, instances: [] } }),
+      "task/fileRoots": () => ({ ok: true, payload: ROOTS }),
+    });
+    await openTerminalPanel(taskOp);
+
+    expect(await screen.findByTestId("terminal-profile-notice")).toHaveTextContent("terminal-profile-unknown: 本机没有终端 shell 配置「cmder」");
+    expect(screen.queryByLabelText("终端 shell 配置")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "按计划启动终端" })).toBeDisabled();
   });
 });

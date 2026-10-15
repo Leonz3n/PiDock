@@ -68,6 +68,7 @@ import {
   shellTaskOp,
   sendMessageThroughShell,
   terminalHistoryThroughShell,
+  terminalProfilesThroughShell,
   terminalStateThroughShell,
   usageRecordsThroughShell,
   type ShellTaskOpResult,
@@ -76,6 +77,7 @@ import { runBoundTaskServiceThroughShell, taskProjectIdThroughShell } from "./ta
 import {
   terminalHistoryFromHost,
   terminalPlanFromHost,
+  terminalProfilesFromHost,
   terminalStateFromHost,
   workspaceDeliveryFromHost,
   workspaceDiffFromHost,
@@ -89,6 +91,7 @@ import type {
   TerminalHistoryEntryView,
   TerminalPlanRequest,
   TerminalPlanView,
+  TerminalProfilesView,
   TerminalStateView,
   WorkspaceBrowserRequest,
   WorkspaceBrowserView,
@@ -1144,7 +1147,8 @@ export function createShellHostAdapter(fallback: HostAdapter): HostAdapter {
             taskId,
             instanceId: request.instanceId,
             rootId: request.rootId,
-            program: request.program,
+            ...(request.profileId !== undefined ? { profileId: request.profileId } : {}),
+            ...(request.program !== undefined ? { program: request.program } : {}),
             ...(request.args !== undefined ? { args: request.args } : {}),
             ...(request.cols !== undefined ? { cols: request.cols } : {}),
             ...(request.rows !== undefined ? { rows: request.rows } : {}),
@@ -1157,6 +1161,19 @@ export function createShellHostAdapter(fallback: HostAdapter): HostAdapter {
           return plan;
         };
       }
+      // [PiDock 10] (#85) the platform shell profiles main resolved: the shell
+      // PROFILE list and the default. Outside the shell the in-memory projection
+      // answers instead, so the picker stays demonstrable without a Host.
+      if (property === "terminalProfiles") {
+        return async (taskId: string): Promise<TerminalProfilesView> => {
+          if (!isShellConnected()) return (target as HostAdapter).terminalProfiles(taskId);
+          const result = await terminalProfilesThroughShell({ taskId });
+          if (!result.ok) throw shellResultError(result, "终端 shell 配置读取失败，请重试");
+          const profiles = terminalProfilesFromHost(result.payload);
+          if (!profiles) throw shellResultError(result, "终端 shell 配置读取失败，请重试");
+          return profiles;
+        };
+      }
       if (property === "controlTerminal") {
         return async (taskId: string, request: TerminalControlRequest): Promise<TerminalControlResultView> => {
           if (!isShellConnected()) return (target as HostAdapter).controlTerminal(taskId, request);
@@ -1165,6 +1182,7 @@ export function createShellHostAdapter(fallback: HostAdapter): HostAdapter {
             instanceId: request.instanceId,
             action: request.action,
             ...(request.rootId !== undefined ? { rootId: request.rootId } : {}),
+            ...(request.profileId !== undefined ? { profileId: request.profileId } : {}),
             ...(request.program !== undefined ? { program: request.program } : {}),
             ...(request.args !== undefined ? { args: request.args } : {}),
             ...(request.cols !== undefined ? { cols: request.cols } : {}),
