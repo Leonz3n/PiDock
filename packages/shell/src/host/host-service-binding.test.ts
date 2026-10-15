@@ -73,7 +73,7 @@ describe.skipIf(process.platform === "win32")("installed Host parent RPC service
     const stop = createHostStopper(registry, { kind: "shell-ui", senderWebContentsId: 7 }, () => registry.disposeAll());
     const app = Object.assign(new EventEmitter(), { quit: vi.fn() });
     const window = Object.assign(new EventEmitter(), { isDestroyed: () => false, isMinimized: () => false, hide: vi.fn(), show: vi.fn(), focus: vi.fn(), restore: vi.fn() });
-    registerApplicationLifecycle({ app: app as never, window: window as never, platform: "darwin", stopHosts: stop });
+    registerApplicationLifecycle({ app: app as never, window: window as never, platform: "darwin", stopHosts: stop, unsatisfiedHosts: () => [] });
     app.emit("before-quit", { preventDefault: vi.fn() });
     const pending = stop();
     await new Promise<void>((done) => setImmediate(done));
@@ -102,7 +102,7 @@ describe.skipIf(process.platform === "win32")("installed Host parent RPC service
       () => disposal.disposeAfterTasks(registry, workspaceClient, stopSchedules));
     const app = Object.assign(new EventEmitter(), { quit: vi.fn() });
     const window = Object.assign(new EventEmitter(), { isDestroyed: () => false, isMinimized: () => false, hide: vi.fn(), show: vi.fn(), focus: vi.fn(), restore: vi.fn() });
-    registerApplicationLifecycle({ app: app as never, window: window as never, platform: "darwin", stopHosts: stop });
+    registerApplicationLifecycle({ app: app as never, window: window as never, platform: "darwin", stopHosts: stop, unsatisfiedHosts: () => [] });
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       if (timing === "before quit") workspace.emit("exit", 0);

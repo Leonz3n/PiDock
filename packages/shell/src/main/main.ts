@@ -230,7 +230,8 @@ async function run(): Promise<void> {
   // Initial createTrustedWindow construction still precedes these listeners.
   const stopHosts = createHostStopper(tasks, { kind: "shell-ui", senderWebContentsId: views.shellView.webContents.id },
     () => disposal.disposeAfterTasks(tasks, client, () => schedules.stop()));
-  registerApplicationLifecycle({ app, window: views.window, platform: process.platform, stopHosts });
+  registerApplicationLifecycle({ app, window: views.window, platform: process.platform, stopHosts,
+    unsatisfiedHosts: stopHosts.unsatisfiedHosts });
   schedules.start();
   const loaded = await loadTrustedViews(views);
   console.log(
