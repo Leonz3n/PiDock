@@ -4,7 +4,7 @@ import { experimentalShutdownClient } from "./host-shutdown-client-experiment.js
 import type { AgentOwnedResource, WriteCoordinatorPort } from "./write-coordination.js";
 import { serviceOwnerBootstrap, type ServiceOwnerBootstrap, type ServiceOwnerCompletion } from "../rpc/service-host-binding.js";
 
-const SERVICE_OWNER_INVENTORY_RECOVERY_ACTION = "请通过 shell/serviceCatalogOp 的 rebindServiceOwner（confirm=true）重新绑定本任务服务归属，再重试写入";
+const SERVICE_OWNER_INVENTORY_RECOVERY_ACTION = "下一步：在本任务的运行面板点一次该服务的「启动」；若出现「重新绑定服务所有者」，用它重新核验服务归属（只替换归属绑定，不重启任何进程），然后重试写入。若该控件没有出现、或重新绑定同样被拒绝，请把拒绝原文交给维护者——本机缺少可执行的绑定出口（维护动作：shell/serviceCatalogOp 的 rebindServiceOwner，confirm=true）";
 
 export function unverifiedServiceOwnerInventoryResource(): AgentOwnedResource {
   return { resourceId: "service-owner-inventory", kind: "service", ownerSessionId: null,

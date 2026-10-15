@@ -90,6 +90,17 @@ describe("persistent Project task creation with local Git", { timeout: GIT_CASE_
     await expect(reopened.abandon(preview.id, true)).rejects.toThrow("已完成任务不能放弃");
     expect(existsSync(join(preview.taskDir, ".pidock-creation"))).toBe(true);
   });
+  it("refuses to continue when the project used to prepare an intent no longer exists", async () => {
+    const env = await setup();
+    const preview = await env.service.prepare(env.request);
+    await env.projects.delete(env.project.id);
+
+    await expect(env.service.commit(preview.id)).rejects.toThrow(
+      "项目在准备后已删除或不可读取，无法按原意图续跑；可显式放弃本次创建（不清理已产生的任务内容；已有任务记录将保留为未归属任务），恢复或重新建立项目后再创建。",
+    );
+    expect(existsSync(preview.taskDir)).toBe(false);
+    expect(env.getCalls()).toBe(0);
+  });
   it("establishes a never-used default root at startup so the first task can be prepared and committed", async () => {
     const env = await setup({ rootAbsent: true });
     expect(existsSync(env.root)).toBe(false);
@@ -409,6 +420,9 @@ describe("persistent Project task creation with local Git", { timeout: GIT_CASE_
       if (!override) {
         // #88 changes the old marker-based rejection: lack of confirmation must still fail closed, while confirmed abandonment is covered separately.
         await expect(reopened.abandon(preview.id, false)).rejects.toThrow(/显式确认/);
+        expect(readFileSync(join(preview.taskDir, ".pidock-creation"), "utf8")).toBe(preview.id);
+        expect(existsSync(join(env.profile, `task-creation-abandon-${preview.id}.json`))).toBe(false);
+        expect(reopened.current()?.state).toBe("pending");
       }
       expect(await reopened.commit(preview.id)).toEqual({ taskId: preview.taskId, projectId: env.project.id });
       expect(readTaskRecordOnDisk(preview.taskDir)?.taskId).toBe(preview.taskId);
