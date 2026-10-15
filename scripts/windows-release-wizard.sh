@@ -528,7 +528,7 @@ pause
 stage "升级矩阵"
 say "逐条记结果：0.1.0→0.1.1、跳版本、降级、per-machine 与 per-user 混装。"
 note "升级身份由 appId 推导的 upgradeCode 决定（ADR 0004）：appId 一变，升级身份就变。"
-note "造第二个版本要临时改 packages/shell/package.json 的 version 再构建；改完 git checkout -- 复原（#58 的做法）。"
+note "新分发包先递增并提交 packages/shell/package.json 的三段 version，再构建并记录提交与 SHA-256；旧版 MSI 保留供升级验收。正式分发不要沿用 #58 实验中临时改版本后复原的做法。"
 UPGRADE_CASES=("0.1.0 → 0.1.1" "跳版本（如 0.1.0 → 0.1.2）" "降级（如 0.1.1 → 0.1.0）" "per-machine 与 per-user 混装")
 i=0
 for c in "${UPGRADE_CASES[@]}"; do

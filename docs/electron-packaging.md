@@ -153,7 +153,17 @@ pnpm --filter @pidock/shell package:win          # = electron-builder --config e
 ```
 
 产物路径：`directories.output` 是 `release`，`msi.artifactName` 是 `${productName}-${version}-${arch}.${ext}`（`packages/shell/electron-builder.config.cjs`），所以预期文件名为
-`packages/shell/release/PiDock-<version>-x64.msi`（本仓库当前版本 `0.1.0` → `PiDock-0.1.0-x64.msi`）。这里写的是表达式而不是写死的名字，是为了让 `.${ext}` 继续跟随实际目标格式；如果目录里出现别的名字，以实际文件名为准并在回报中写明。
+`packages/shell/release/PiDock-<version>-x64.msi`（本仓库当前版本 `0.1.2` → `PiDock-0.1.2-x64.msi`）。这里写的是表达式而不是写死的名字，是为了让 `.${ext}` 继续跟随实际目标格式；如果目录里出现别的名字，以实际文件名为准并在回报中写明。
+
+### 内部/自用分发的版本与产物身份
+
+不同内容的新分发包先递增 `packages/shell/package.json` 的三段版本号并提交，再运行 `package:win`；本次从 `0.1.0` 升为 `0.1.2`（`0.1.1` 已用于历史升级实验）。正式分发不使用临时修改版本后复原的方式。仅重复构建同一候选时也须重算哈希；字节变化就重新核验，旧产物的验收结论不能沿用。
+
+每枚候选记录源码提交、应用版本、文件名、大小、SHA-256、MSI 的 `ProductCode` / `UpgradeCode` / `ProductVersion`、包内 `package.json` 版本及签名观测。安装后核对注册版本和 `app.asar` 的哈希与构建候选一致，再做应用内终端和退出检查；文件时间只作旁证。
+
+electron-builder `26.15.3` 的 `templates/msi/template.xml` 使用 `<Product Id="*">`，并明确设置 `<MajorUpgrade AllowSameVersionUpgrades="yes" …/>`；`MsiTarget.js` 从 `appId` 推导稳定的 `UpgradeCode`。因此每次构建的随机 `ProductCode` **不表示**不支持同版本升级；递增分发版本是为了识别不同候选，不需要固定 `ProductCode` 或更改 `appId`。模板支持升级不等于本次安装已验证，实际结果仍需 MSI 日志、安装后版本与载荷哈希证明。
+
+升级前退出应用并确认受管进程已结束；保留旧 MSI 和证据，按相同安装范围验证旧版 → 新版。若调用 `msiexec` 自动测量，须使用能保留 Windows 参数的方式（例如 PowerShell `Start-Process -Wait -PassThru`），记录真实退出码与详细日志；不能用管道末端命令的退出码代替安装器结果。
 
 ### 验收步骤
 
