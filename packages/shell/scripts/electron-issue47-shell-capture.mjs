@@ -71,11 +71,12 @@ async function run() {
     const repoDir = join(taskDir, "invoice-service");
     mkdirSync(join(repoDir, "src"), { recursive: true });
     writeFileSync(join(repoDir, "README.md"), "# invoice-service\n\n对账单详情服务的本地工作副本。\n");
-    writeFileSync(join(repoDir, "package.json"), JSON.stringify({ scripts: { dev: "PORT=4100 API_TOKEN=synthetic-secret-import-guard node private-command-marker" } }));
+    // This marker contains `secret`, so the scanner drops it under its declared credential-token rule; arbitrary `private-*` arguments are not redacted.
+    writeFileSync(join(repoDir, "package.json"), JSON.stringify({ scripts: { dev: "PORT=4100 API_TOKEN=synthetic-secret-import-guard node synthetic-secret-command-marker" } }));
     writeFileSync(join(repoDir, "src", "billing.ts"), "export function invoiceTotal(lines: number[]) {\n  return lines.reduce((sum, value) => sum + value, 0);\n}\n");
     mkdirSync(join(repoDir, ".vscode"));
     writeFileSync(join(repoDir, ".vscode", "launch.json"), JSON.stringify({ configurations: [
-      { name: "invoice-dev", program: "node", args: ["private-command-marker"], env: { API_TOKEN: "synthetic-secret-import-guard" } },
+      { name: "invoice-dev", program: "node", args: ["synthetic-secret-command-marker"], env: { API_TOKEN: "synthetic-secret-import-guard" } },
     ] }));
     writeFileSync(join(taskDir, "task.json"), serializeTaskRecord(buildTaskDiskRecord({ taskId, name: "对账单详情·本地联调", dirId: taskId, branch: "main", root: taskRoot, taskDir, remoteBranch: "main", baseCommit: "test", repos: ["invoice-service"], now: new Date().toISOString() })));
     const index = new TaskRootIndex(profile, taskRoot);
@@ -119,8 +120,11 @@ async function run() {
     // any task op forks the utilityProcess. The missing-reference preview is
     // checked from trusted main with an empty environment, then the synthetic
     // value is installed and kept unchanged through shutdown.
-    const serviceTemplate = catalog.saveTemplate({ projectId: project.id, descriptor: { name: "invoice-local", program: "node", args: ["server.js"], ports: [4100], runType: "long-lived" }, shared: [{ key: "PORT", value: "4100", secret: false }] });
-    catalog.bindTask({ taskId, serviceId: serviceTemplate.serviceId, templateVersion: 1, rootId: "invoice-service", subdir: "", programPath: process.execPath, privateRefs: [{ key: "API_TOKEN", envRef: "PIDOCK_SERVICE_CAPTURE_TOKEN" }] });
+    // #7 made a template belong to a named project-scoped environment; the capture
+    // must create one before it can save a template or bind a task to it.
+    const captureEnvironment = catalog.createEnvironment({ projectId: project.id, name: "capture" });
+    const serviceTemplate = catalog.saveTemplate({ projectId: project.id, environmentId: captureEnvironment.environmentId, descriptor: { name: "invoice-local", program: "node", args: ["server.js"], ports: [4100], runType: "long-lived" }, shared: [{ key: "PORT", value: "4100", secret: false }] });
+    catalog.bindTask({ taskId, environmentId: captureEnvironment.environmentId, serviceId: serviceTemplate.serviceId, templateVersion: 1, rootId: "invoice-service", subdir: "", programPath: process.execPath, privateRefs: [{ key: "API_TOKEN", envRef: "PIDOCK_SERVICE_CAPTURE_TOKEN" }] });
     const blockedPreview = catalog.previewSavedConfig(project.id, taskId, serviceTemplate.serviceId, {});
     if (blockedPreview.state !== "blocked" || blockedPreview.error !== "private-reference-unavailable") throw Error("missing private reference preview unavailable before bootstrap");
     process.env["PIDOCK_SERVICE_CAPTURE_TOKEN"] = PRIVATE_VALUE;
@@ -288,8 +292,11 @@ async function run() {
       rows: await evalJs("document.querySelectorAll('[data-usage-row]').length"),
     };
     await clickSelector('[data-testid=desktop-shell] button[title="环境与服务"]');
-    await until((body) => body.includes("环境清单未接线") && body.includes("Host 尚未提供项目环境") && body.includes("invoice-local") && body.includes("任务绑定"), "environment page");
-    const serviceTemplates = catalog.listTemplates(project.id);
+    await until((body) => body.includes("环境清单已接线 · 1 个环境") && body.includes("Host 尚未提供项目环境"), "environment page");
+    if (!(await evalJs("[...document.querySelector('select[aria-label=环境]').options].some(option => option.textContent.trim() === 'capture')"))) throw Error("capture environment missing from real list");
+    await evalJs("(() => { const select = document.querySelector('select[aria-label=环境]'); const option = [...select.options].find(row => row.textContent.trim() === 'capture'); const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set; setter.call(select, option.value); select.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+    await until((body) => body.includes("invoice-local") && body.includes("任务绑定"), "environment template");
+    const serviceTemplates = catalog.listTemplates(project.id, captureEnvironment.environmentId);
     if (serviceTemplates.length !== 1 || serviceTemplates[0]?.descriptor.name !== "invoice-local") throw Error("service template not persisted");
     // Exercise the real creation form and review state, then cancel it: the
     // saved binding above is the catalog revision the Host owns, so this run
@@ -307,7 +314,7 @@ async function run() {
     await click("取消");
     await until((body) => body.includes("invoice-local") && body.includes("任务绑定"), "saved service template");
     await click("任务绑定");
-    await until((body) => body.includes("已绑定 · v1 · invoice-service"), "persisted task binding");
+    await until((body) => body.includes("已绑定 · 环境 capture · v1 · invoice-service"), "persisted task binding");
     const serviceBindings = new ServiceCatalog(profile, serviceCatalogAuthority(index, projects)).listTask(taskId);
     if (serviceBindings.length !== 1 || serviceBindings[0]?.binding.rootId !== "invoice-service" ||
         serviceBindings[0]?.binding.privateRefs[0]?.envRef !== "PIDOCK_SERVICE_CAPTURE_TOKEN") throw Error("task binding not persisted");
@@ -330,7 +337,7 @@ async function run() {
     await until((body) => body.includes("invoice-service") && body.includes("尚未扫描"), "import source");
     await click("扫描仓库");
     await until((body) => body.includes("invoice-dev") && body.includes("API_TOKEN：疑似凭据") && body.includes("脚本开头使用内联环境赋值"), "service import hints");
-    if ((await text()).includes("synthetic-secret-import-guard") || (await text()).includes("private-command-marker")) throw Error("service import leaked private config");
+    if ((await text()).includes("synthetic-secret-import-guard") || (await text()).includes("synthetic-secret-command-marker")) throw Error("service import leaked private config");
     shots.push(await capture("environment-import", 1440, 900, 'section[aria-label="仓库配置草案"]'));
     shots.push(await capture("environment-import", 720, 560, 'section[aria-label="仓库配置草案"]'));
     views.window.setContentSize(1440, 900);
