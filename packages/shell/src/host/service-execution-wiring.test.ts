@@ -542,8 +542,9 @@ describe.skipIf(process.platform === "win32")("#7 catalog-driven service executi
       templateVersion: "v1",
     });
     expect(pageOnly).toMatchObject({ service: { serviceId: "s-page-only", launchSource: "ui" } });
-    expect((await f.request("task/controlService", { serviceId: "s-page-only", action: "start" }))["error"])
-      .toContain("service-execution-unavailable");
+    const refusal = (await f.request("task/controlService", { serviceId: "s-page-only", action: "start" }))["error"];
+    expect(refusal).toContain("service-execution-unavailable");
+    expect(refusal).toBe("service-execution-unavailable: 仅可信服务目录登记的服务可执行；该服务由界面登记。请改用可信服务目录登记的服务");
     expect(existsSync(join(f.taskDir, "repo-a/svc-a", "pwned.txt"))).toBe(false);
   }, 30_000);
 

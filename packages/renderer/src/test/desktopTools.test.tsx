@@ -519,6 +519,19 @@ describe("[UI 对齐] S8d 运行 panel (real Host bindings and status)", () => {
     expect(fixture.serviceCatalogOp).toHaveBeenCalledWith({ op: "taskBindings", projectId: "project-1", taskId: "task-1" });
   });
 
+  it("names the UI registration limit before start and disables the non-executable control", async () => {
+    const fixture = panelBridge({ statuses: () => ({ ok: true, payload: { service: {
+      serviceId: SERVICE_ID, lifecycle: "stopped", templateVersion: "2", health: "not-probed", launchSource: "ui", resolved: [],
+    } } }) });
+    render(<DesktopToolDock taskId="task-1" tool="runtime" onClose={() => {}} />);
+    await screen.findByText("invoice-local");
+
+    const control = screen.getByTestId("desktop-tool-dock").querySelector(`[data-service-control="${SERVICE_ID}"]`)!;
+    expect(within(control as HTMLElement).getByRole("button", { name: "启动" })).toBeDisabled();
+    expect(control).toHaveTextContent("本机不会执行：此服务由界面登记；本机仅执行可信服务目录登记的服务。请改用可信服务目录登记的服务。");
+    expect(fixture.serviceCatalogOp.mock.calls.filter(([entry]) => entry["op"] === "runTaskService")).toHaveLength(0);
+  });
+
   it("drives the real bound-service start/stop through runTaskService and keeps the rest 未接线", async () => {
     const fixture = panelBridge({ statuses: () => ({ ok: true, payload: { service: {
       serviceId: SERVICE_ID, state: "running", ownerSessionId: null, busy: false, closing: false, retainedRights: null, executionAvailable: false,
