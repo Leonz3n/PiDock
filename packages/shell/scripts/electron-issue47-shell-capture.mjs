@@ -426,6 +426,11 @@ async function run() {
     if (await evalJs(`Boolean(document.querySelector('[data-task-nav="${taskId}"]'))`)) throw Error("archived task remained in active navigation");
     shots.push(await capture("archive-with-task", 1440, 900));
     shots.push(await capture("archive-with-task", 720, 560));
+    await click("清理…");
+    await click("生成清单");
+    await until((body) => body.includes("将删除") && body.includes("将保留") && body.includes("Host 保留位置："), "Host cleanup preview");
+    shots.push(await capture("archive-cleanup-preview", 1440, 900, '[aria-label="对账单详情·本地联调清理预览"]'));
+    shots.push(await capture("archive-cleanup-preview", 720, 560, '[aria-label="对账单详情·本地联调清理预览"]'));
     views.window.setContentSize(1440, 900);
     await wait(250);
     await click("恢复");
@@ -469,6 +474,32 @@ async function run() {
     // `desktop-shell-content` was absent, which is also a failure.
     const overflowing = shots.filter((shot) => shot.overflow > 0 || shot.overflowClient !== 0 || shot.overflowContent !== 0);
     if (overflowing.length) throw Error("horizontal overflow " + JSON.stringify(overflowing));
+
+    // Real cleanup is the final UI operation against this synthetic task. The
+    // isolated root is removed in `finally`, and registry shutdown is the only
+    // later step, so the destructive operation cannot affect subsequent probes.
+    await clickSelector(`[data-task-nav="${taskId}"]`);
+    await until((body) => /task workspace/i.test(body) && body.includes("已连接"), "cleanup task workspace");
+    await click("任务操作");
+    await click("归档当前任务");
+    await until((body) => body.includes("归档会停止所属执行"), "cleanup rearchive confirmation");
+    await click("确认归档");
+    await until(async () => await evalJs(`Boolean(document.querySelector('[data-archived-task="${taskId}"]'))`), "cleanup archived task row");
+    await click("清理…");
+    await click("生成清单");
+    await until((body) => body.includes("将删除") && body.includes("Host 保留位置："), "cleanup run preview");
+    await evalJs("window.confirm = (message) => { window.__issue47CleanupConfirmation = message; return true; }");
+    await click("确认清理");
+    await until((body) => body.includes("Host 清理项目结果"), "real cleanup result");
+    const confirmation = await evalJs("window.__issue47CleanupConfirmation");
+    if (typeof confirmation !== "string" || !confirmation.includes("Host 预览将删除")) throw Error("cleanup confirmation did not name Host deletion details");
+    const cleanupShots = [];
+    cleanupShots.push(await capture("archive-cleanup-result", 1440, 900, '[aria-label="对账单详情·本地联调清理预览"]'));
+    cleanupShots.push(await capture("archive-cleanup-result", 720, 560, '[aria-label="对账单详情·本地联调清理预览"]'));
+    const cleanupResultText = await evalJs("document.querySelector('[aria-label=\"对账单详情·本地联调清理预览\"]')?.innerText");
+    console.log("ISSUE47_CLEANUP_CAPTURE=" + JSON.stringify({ confirmation, result: cleanupResultText, shots: cleanupShots }));
+    const cleanupOverflow = cleanupShots.filter((shot) => shot.overflow > 0 || shot.overflowClient !== 0 || shot.overflowContent !== 0);
+    if (cleanupOverflow.length) throw Error("cleanup horizontal overflow " + JSON.stringify(cleanupOverflow));
   } catch (error) { console.error("ISSUE47_CAPTURE_FAILED", captureStage, error); process.exitCode = 1; }
   finally {
     clearTimeout(watchdog);
