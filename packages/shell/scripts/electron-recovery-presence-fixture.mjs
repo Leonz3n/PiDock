@@ -24,8 +24,9 @@ async function run() {
       createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" }));
     const project = await projects.create({ name: "Presence", description: "", repositories: [], directories: [] });
     await projects.claim(taskId, project.id, roots);
-    const template = catalog.saveTemplate({ projectId: project.id, descriptor: { name: "Metadata only", program: "node", args: [], ports: [], runType: "long-lived" }, shared: [] });
-    catalog.bindTask({ taskId, serviceId: template.serviceId, templateVersion: 1, rootId: "repo-a", subdir: "", programPath: process.execPath, privateRefs: [] });
+    const environment = catalog.createEnvironment({ projectId: project.id, name: "recovery-presence" });
+    const template = catalog.saveTemplate({ projectId: project.id, environmentId: environment.environmentId, descriptor: { name: "Metadata only", program: "node", args: [], ports: [], runType: "long-lived" }, shared: [] });
+    catalog.bindTask({ taskId, environmentId: environment.environmentId, serviceId: template.serviceId, templateVersion: 1, rootId: "repo-a", subdir: "", programPath: process.execPath, privateRefs: [] });
   }
   const bindings = catalog.listTask(taskId); assert.equal(bindings.length, 1);
   const serviceId = bindings[0].binding.serviceId;

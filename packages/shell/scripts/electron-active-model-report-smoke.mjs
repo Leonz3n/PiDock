@@ -28,6 +28,7 @@ async function run() {
   try {
     await app.whenReady(); const roots = new TaskRootIndex(profile, root), projects = new ProjectRegistry(profile), authority = serviceCatalogAuthority(roots, projects);
     const project = await projects.create({ name: "Active report", description: "", repositories: [], directories: [] }), catalog = new ServiceCatalog(profile, authority);
+    const environment = catalog.createEnvironment({ projectId: project.id, name: "active-model-report-smoke" });
     const artifact = inspectDevelopmentSupervisor(join(import.meta.dirname, "..", "build", "service-supervisor", "darwin-arm64")); assert.equal(artifact.state, "available-for-experiment");
     const binary = join(home, "fixture"); execFileSync("go", ["build", "-trimpath", "-o", binary, "./testdata/fixture"], { cwd: join(import.meta.dirname, "..", "native", "service-supervisor"), timeout: 30000, stdio: "pipe" });
     const hits = [];
@@ -51,8 +52,8 @@ async function run() {
       stage = mode; const taskId = `task-0000000${++index}`, taskDir = join(root, taskId); mkdirSync(join(taskDir, "repo-a"), { recursive: true }); execFileSync("git", ["init", "-q", taskDir]);
       writeFileSync(join(taskDir, "task.json"), JSON.stringify({ taskId, name: mode, dirId: taskId, root, taskDir, branch: "task/main", remoteBranch: "main", baseCommit: "fixture", repos: ["repo-a"], createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" }));
       await projects.claim(taskId, project.id, roots);
-      const template = catalog.saveTemplate({ projectId: project.id, descriptor: { name: mode, program: "fixture", args: ["host-parent"], ports: [], runType: "long-lived" }, shared: [] }), serviceId = template.serviceId;
-      catalog.bindTask({ taskId, serviceId, templateVersion: 1, rootId: "repo-a", subdir: "", programPath: binary, privateRefs: [{ key: "FIXTURE_VALUE", envRef: "LOCAL_FIXTURE_VALUE" }] });
+      const template = catalog.saveTemplate({ projectId: project.id, environmentId: environment.environmentId, descriptor: { name: mode, program: "fixture", args: ["host-parent"], ports: [], runType: "long-lived" }, shared: [] }), serviceId = template.serviceId;
+      catalog.bindTask({ taskId, environmentId: environment.environmentId, serviceId, templateVersion: 1, rootId: "repo-a", subdir: "", programPath: binary, privateRefs: [{ key: "FIXTURE_VALUE", envRef: "LOCAL_FIXTURE_VALUE" }] });
       const identity = JSON.stringify(authority.task(taskId)), inventory = JSON.stringify(catalog.listTask(taskId));
       store = new ExperimentalServiceRecoveryStore(profile, authority, (id) => catalog.listTask(id).map((row) => row.binding.serviceId));
       const child = utilityProcess.fork(join(import.meta.dirname, "service-supervisor-utility-fixture.mjs"), [], { env: {}, stdio: "pipe", serviceName: "active-report-experiment" });
