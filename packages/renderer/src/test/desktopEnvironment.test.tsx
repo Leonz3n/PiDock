@@ -46,6 +46,12 @@ it("preserves the prototype environment layout while refusing invented configura
   expect(screen.getByRole("columnheader", { name: "KEY" })).toBeInTheDocument();
   expect(screen.getByRole("columnheader", { name: "VALUE" })).toBeInTheDocument();
   expect(screen.getByText(/这里不展示示例 KEY 或 VALUE/)).toBeInTheDocument();
+  expect(screen.getByTestId("desktop-environment-unwired-scopes")).toBeVisible();
+  expect(screen.getByTestId("desktop-environment-unwired-scopes")).toHaveTextContent("任务覆盖未接线：Host 无项目环境变量与任务覆盖操作");
+  expect(screen.getByTestId("desktop-environment-unwired-scopes")).toHaveTextContent("共享服务模板已接线于下方「服务启动配方」；作用域切换未接线");
+  expect(screen.getByTestId("desktop-environment-unwired-scopes")).toHaveTextContent("通用本机私有环境变量未接线：Host 无该变量表操作");
+  expect(screen.getByText("环境列表与创建已接线；重命名和删除不可用：Host 环境目录操作仅支持列出与创建。")).toBeInTheDocument();
+  expect(screen.getByText(/这不是「从 \.vscode 导入」：Host 尚无环境变量导入与自动写入操作。/)).toBeVisible();
   // The environment model is real now; the configuration half below is still not wired.
   expect(screen.getAllByText("服务配方目录未接线")).toHaveLength(2);
   expect(screen.queryByText(/环境模型未接线/)).toBeNull();

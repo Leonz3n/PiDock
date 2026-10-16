@@ -54,6 +54,7 @@ async function run() {
     const project = await projects.create({ name: "Supervisor experiment", description: "", repositories: [], directories: [] });
     await projects.claim(taskId, project.id, roots);
     const catalog = new ServiceCatalog(profile, serviceCatalogAuthority(roots, projects));
+    const environment = catalog.createEnvironment({ projectId: project.id, name: "supervisor-smoke" });
     const fixture = join(home, "service-fixture");
     execFileSync("go", ["build", "-trimpath", "-o", fixture, "./testdata/fixture"],
       { cwd: join(import.meta.dirname, "..", "native", "service-supervisor"), timeout: 30000, stdio: "pipe" });
@@ -62,10 +63,10 @@ async function run() {
     for (const mode of modes) {
       stage = `${mode}:template`;
       const args = mode === "parent-exit" ? ["host-parent", "exit"] : ["host-parent"];
-      const template = catalog.saveTemplate({ projectId: project.id, descriptor: {
+      const template = catalog.saveTemplate({ projectId: project.id, environmentId: environment.environmentId, descriptor: {
         name: mode, program: "service-fixture", args, ports: [], runType: "long-lived",
       }, shared: [] });
-      catalog.bindTask({ taskId, serviceId: template.serviceId, templateVersion: 1, rootId: "repo-a", subdir: "",
+      catalog.bindTask({ taskId, environmentId: environment.environmentId, serviceId: template.serviceId, templateVersion: 1, rootId: "repo-a", subdir: "",
         programPath: fixture, privateRefs: [{ key: "FIXTURE_VALUE", envRef: "LOCAL_FIXTURE_VALUE" }] });
       stage = `${mode}:prepare`;
       const prepared = prepareServiceSupervisorExperiment(catalog, { projectId: project.id, taskId, serviceId: template.serviceId },
@@ -135,7 +136,7 @@ async function run() {
       if (mode === "lifecycle-close" || mode === "lifecycle-cancel") {
         const closed = await waitFor((message) => message.event === "close-result");
         assert.deepEqual(closed.result, { ok: true, state: "stopped" });
-        assert.deepEqual(closed.snapshot, { state: "stopped", ownerSessionId: null, busy: false, closing: true });
+        assert.deepEqual(closed.snapshot, { state: "stopped", ownerSessionId: null, busy: false, closing: true, retainedRights: null });
         assert.deepEqual(JSON.parse(readFileSync(lifecycle.file, "utf8")), { schemaVersion: 1, taskId, serviceId: template.serviceId, state: "stopped", ownerSessionId: null });
       }
       stage = `${mode}:gone`;
@@ -171,7 +172,7 @@ async function run() {
         assert.equal(recovery.launchAttempted, false);
         assert.deepEqual(recovery.control, { ok: false, error: "service-termination-unconfirmed" });
         assert.deepEqual(recovery.close, { ok: false, error: "service-termination-unconfirmed" });
-        assert.deepEqual(recovery.snapshot, { state: "unconfirmed", ownerSessionId: "main", busy: false, closing: true });
+        assert.deepEqual(recovery.snapshot, { state: "unconfirmed", ownerSessionId: "main", busy: false, closing: true, retainedRights: null });
         assert.deepEqual(recovery.resources, [{ resourceId: template.serviceId, kind: "service", ownerSessionId: "main", verificationRequired: true }]);
         assert.equal(recoveryMessages.some((message) => message.event === "started"), false);
         assert.equal((JSON.stringify(recoveryMessages) + recoveryOutput).includes(secret), false);

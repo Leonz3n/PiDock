@@ -31,9 +31,9 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { TaskWorkspaceHost } from "../host/task-host.js";
 import { diskTaskStore, readTaskRecordOnDisk } from "../host/task-store.js";
@@ -538,6 +538,92 @@ describe("[PiDock 03] (#6 盒子 9) repository-level worktree creation is mutual
     } finally {
       await stopHolder(holder);
     }
+  });
+
+  it("keeps two tasks' worktree creation for one source repository disjoint under a deterministic concurrent attempt", { timeout: EVIDENCE_TEST_TIMEOUT_MS }, async () => {
+    const env = await setup();
+    const taskA = await env.createTask(env.first, "Task A");
+    const taskB = await env.createTask(env.first, "Task B");
+
+    // Hold task A after its real fetch and Host conflict scan, immediately before
+    // the real `git worktree add`. Task B then races through a separate service
+    // instance against the same source-repository key.
+    let entered!: () => void;
+    const insideCriticalSection = new Promise<void>((resolve) => { entered = resolve; });
+    let leave!: () => void;
+    const gate = new Promise<void>((resolve) => { leave = resolve; });
+    const pendingA = env.append(async (op, taskId) => {
+      if (op === "task/appendRepos" && taskId === taskA.taskId) {
+        entered();
+        await gate;
+      }
+    }).append({ taskId: taskA.taskId, repositories: [env.selection(env.second)] });
+    await insideCriticalSection;
+
+    const taskBRecordBefore = env.recordOf(taskB);
+    const taskBFilesBefore = readdirSync(taskB.taskDir).sort();
+    const worktreesBefore = git(env.second.repo, "worktree", "list", "--porcelain");
+    try {
+      await expect(env.append().append({ taskId: taskB.taskId, repositories: [env.selection(env.second)] }))
+        .rejects.toThrow(/^worktree-locked: /);
+      // The losing task is unchanged in both its record and the real Git state.
+      expect(env.recordOf(taskB)).toEqual(taskBRecordBefore);
+      expect(readdirSync(taskB.taskDir).sort()).toEqual(taskBFilesBefore);
+      expect(existsSync(env.worktreeOf(taskB, env.second))).toBe(false);
+      expect(git(env.second.repo, "branch", "--list", taskB.branch)).toBe("");
+      expect(git(env.second.repo, "worktree", "list", "--porcelain")).toBe(worktreesBefore);
+    } finally {
+      leave();
+      await pendingA.catch(() => undefined);
+    }
+
+    // A lock refusal is not a permanent block: retry after A commits, so both
+    // tasks end up with their own distinct worktree path and branch.
+    const resultA = await pendingA;
+    const retryB = await env.append().append({ taskId: taskB.taskId, repositories: [env.selection(env.second)] });
+    expect(resultA.appended).toHaveLength(1);
+    expect(retryB.appended).toHaveLength(1);
+
+    const worktreeA = env.worktreeOf(taskA, env.second);
+    const worktreeB = env.worktreeOf(taskB, env.second);
+    expect(resultA.appended[0]?.worktree).toBe(worktreeA);
+    expect(retryB.appended[0]?.worktree).toBe(worktreeB);
+    expect(worktreeA).not.toBe(worktreeB);
+    expect(taskA.branch).not.toBe(taskB.branch);
+    expect(git(worktreeA, "rev-parse", "--abbrev-ref", "HEAD")).toBe(taskA.branch);
+    expect(git(worktreeB, "rev-parse", "--abbrev-ref", "HEAD")).toBe(taskB.branch);
+    const remoteCommit = git(env.home, `--git-dir=${env.second.remote}`, "rev-parse", "refs/heads/main");
+    for (const task of [taskA, taskB]) {
+      const record = readTaskRecordOnDisk(task.taskDir)!;
+      expect(record.taskId).toBe(task.taskId);
+      expect(record.branch).toBe(task.branch);
+      expect(record.repoSources).toContainEqual({
+        repoDir: buildRepoChildName(repoIdOf(env.project, env.second)),
+        remote: "origin",
+        remoteBranch: "main",
+        baseCommit: remoteCommit,
+      });
+      expect(git(env.worktreeOf(task, env.second), "rev-parse", "HEAD")).toBe(remoteCommit);
+      expect(realpathSync(resolve(env.worktreeOf(task, env.second), git(env.worktreeOf(task, env.second), "rev-parse", "--git-common-dir"))))
+        .toBe(realpathSync(resolve(env.second.repo, git(env.second.repo, "rev-parse", "--git-common-dir"))));
+    }
+
+    // Inspect Git's actual per-worktree administration records, not only the
+    // porcelain summary: both metadata entries must name their own .git file
+    // and branch, with no entry pointing at the other task's worktree.
+    const metadataRoot = join(env.second.repo, ".git", "worktrees");
+    const metadata = readdirSync(metadataRoot).map((name) => ({
+      gitdir: readFileSync(join(metadataRoot, name, "gitdir"), "utf8").trim(),
+      head: readFileSync(join(metadataRoot, name, "HEAD"), "utf8").trim(),
+    }));
+    expect(metadata).toHaveLength(2);
+    expect(metadata.map((entry) => realpathSync(entry.gitdir)).sort()).toEqual(
+      [realpathSync(join(worktreeA, ".git")), realpathSync(join(worktreeB, ".git"))].sort(),
+    );
+    expect(metadata.map((entry) => entry.head).sort()).toEqual([`ref: refs/heads/${taskA.branch}`, `ref: refs/heads/${taskB.branch}`].sort());
+    expect(git(env.second.repo, "worktree", "list", "--porcelain").split("\n").filter((line) => line.startsWith("worktree ")))
+      .toHaveLength(3);
+    expect(existsSync(env.lockFile(env.second))).toBe(false);
   });
 
   it("lets two tasks of one source repository create their worktrees one after the other", { timeout: EVIDENCE_TEST_TIMEOUT_MS }, async () => {

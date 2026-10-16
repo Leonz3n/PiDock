@@ -69,7 +69,8 @@ export function DesktopAttentionPage({ tasks, projects, lifecyclePending, lifecy
   </li>);
   return <div data-testid="desktop-attention-page" className="px-[34px] py-[30px] below-narrow:px-5">
     <div className="flex items-start justify-between gap-3"><div><p className="text-[10px] uppercase tracking-[1.8px] text-[#95979c]">Attention</p><h1 className="mt-1.5 text-[26px] font-semibold text-ink">需要处理</h1></div><Button type="button" size="sm" variant="outline" onClick={() => { setActionError(""); setRevision((value) => value + 1); }}>刷新</Button></div>
-    <p className="mt-1.5 text-xs text-muted">所有项目的任务执行账本：待确认、失败、确认过期和完成未读。SDK main 回合的执行结果已接入；main 项可打开对应任务的 main 会话，其他原会话定位未接线。查看不会自动标记已读。</p>
+    <p className="mt-1.5 text-xs text-muted">所有项目的任务执行账本：待确认、失败、确认过期和完成未读。SDK main 回合的执行结果已接入；main 项可打开对应任务的 main 会话，非 main 原会话定位未接线。查看不会自动标记已读。</p>
+    <p className="mt-1 text-[11px] text-muted">非 main 原会话无 Host 恢复或定位操作，因此只能查看记录，不能跳回该会话。</p>
     {actionError && <p role="alert" className="mt-4 border border-[#e0b4b4] bg-[#fdf3f3] p-3 text-xs text-[#ad4545]">{actionError}</p>}
     {lifecyclePending || !result ? <p role="status" className="mt-6 text-xs text-muted">正在核验任务与关注记录…</p> : <>
       {(lifecycleErrors.length > 0 || result.errors.length > 0) && <div role="alert" className="mt-5 border border-[#e0b4b4] bg-[#fdf3f3] p-3 text-xs text-[#ad4545]">部分任务读取失败，结果可能不完整。<ul className="mt-1 list-inside list-disc">{[...lifecycleErrors, ...result.errors].map((error) => <li key={error}>{error}</li>)}</ul></div>}

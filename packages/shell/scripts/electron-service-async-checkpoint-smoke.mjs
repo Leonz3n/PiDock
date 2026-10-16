@@ -65,6 +65,7 @@ async function run() {
     const roots = new TaskRootIndex(profile, root), projects = new ProjectRegistry(profile);
     const project = await projects.create({ name: "Async recovery", description: "", repositories: [], directories: [] }); await projects.claim(taskId, project.id, roots);
     const authority = serviceCatalogAuthority(roots, projects), catalog = new ServiceCatalog(profile, authority);
+    const environment = catalog.createEnvironment({ projectId: project.id, name: "async-checkpoint-smoke" });
     const artifact = inspectDevelopmentSupervisor(join(import.meta.dirname, "..", "build", "service-supervisor", "darwin-arm64")); assert.equal(artifact.state, "available-for-experiment");
     const fixture = join(home, "fixture"); execFileSync("go", ["build", "-trimpath", "-o", fixture, "./testdata/fixture"], { cwd: join(import.meta.dirname, "..", "native", "service-supervisor"), timeout: 30000, stdio: "pipe" });
     store = new ExperimentalServiceRecoveryStore(profile, authority, (id) => catalog.listTask(id).map((row) => row.binding.serviceId));
@@ -72,9 +73,9 @@ async function run() {
     const read = (serviceId) => JSON.parse(readFileSync(journal, "utf8")).entries.find((entry) => entry.serviceId === serviceId);
     for (const mode of ["close", "cancel", "recovery", "lost-start-ack"]) {
       stage = `${mode}:prepare`;
-      const template = catalog.saveTemplate({ projectId: project.id, descriptor: { name: mode, program: "fixture", args: ["host-parent"], ports: [], runType: "long-lived" }, shared: [] });
+      const template = catalog.saveTemplate({ projectId: project.id, environmentId: environment.environmentId, descriptor: { name: mode, program: "fixture", args: ["host-parent"], ports: [], runType: "long-lived" }, shared: [] });
       const serviceId = template.serviceId;
-      catalog.bindTask({ taskId, serviceId, templateVersion: 1, rootId: "repo-a", subdir: "", programPath: fixture, privateRefs: [{ key: "FIXTURE_VALUE", envRef: "LOCAL_FIXTURE_VALUE" }] });
+      catalog.bindTask({ taskId, environmentId: environment.environmentId, serviceId, templateVersion: 1, rootId: "repo-a", subdir: "", programPath: fixture, privateRefs: [{ key: "FIXTURE_VALUE", envRef: "LOCAL_FIXTURE_VALUE" }] });
       const prepared = prepareServiceSupervisorExperiment(catalog, { projectId: project.id, taskId, serviceId }, { LOCAL_FIXTURE_VALUE: secret }, artifact.artifact);
       const h = fork(serviceId, mode === "close" ? "stopped" : mode === "lost-start-ack" ? "starting" : undefined);
       const boot = await h.receipt("boot");

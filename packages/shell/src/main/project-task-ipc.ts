@@ -39,11 +39,16 @@ export async function performCreationOperation(
       if (root === null) return { canceled: true };
       return { canceled: false, intent: await service.prepare(selected, root) };
     }
-    case "commit":
-    case "abandon": {
+    case "commit": {
       exact(request, ["op", "id"]);
       if (typeof request.id !== "string" || !/^[0-9a-f-]{36}$/i.test(request.id)) throw new TrustDomainViolation("invalid-payload", "invalid creation ID");
-      return request.op === "commit" ? service.commit(request.id) : service.abandon(request.id);
+      return service.commit(request.id);
+    }
+    case "abandon": {
+      exact(request, ["op", "id", "confirmed"]);
+      if (typeof request.id !== "string" || !/^[0-9a-f-]{36}$/i.test(request.id)) throw new TrustDomainViolation("invalid-payload", "invalid creation ID");
+      if (request.confirmed !== true) throw new TrustDomainViolation("invalid-payload", "abandon requires explicit confirmation");
+      return service.abandon(request.id, true);
     }
     default: throw new TrustDomainViolation("invalid-payload", "unknown creation operation");
   }

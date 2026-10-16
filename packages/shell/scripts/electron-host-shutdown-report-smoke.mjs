@@ -57,6 +57,7 @@ async function run() {
   try {
     await app.whenReady(); const roots = new TaskRootIndex(profile, root), projects = new ProjectRegistry(profile), project = await projects.create({ name: "Shutdown report", description: "", repositories: [], directories: [] });
     const catalog = new ServiceCatalog(profile, serviceCatalogAuthority(roots, projects));
+    const environment = catalog.createEnvironment({ projectId: project.id, name: "shutdown-report-smoke" });
     store = new ExperimentalServiceRecoveryStore(profile, serviceCatalogAuthority(roots, projects), (id) => catalog.listTask(id).map((row) => row.binding.serviceId));
     const artifact = inspectDevelopmentSupervisor(join(import.meta.dirname, "..", "build", "service-supervisor", "darwin-arm64")); assert.equal(artifact.state, "available-for-experiment");
     const binary = join(home, "fixture"); execFileSync("go", ["build", "-trimpath", "-o", binary, "./testdata/fixture"], { cwd: join(import.meta.dirname, "..", "native", "service-supervisor"), timeout: 30000, stdio: "pipe" });
@@ -65,8 +66,8 @@ async function run() {
       stage = mode; const taskId = `task-0000000${++index}`, taskDir = join(root, taskId); mkdirSync(join(taskDir, "repo-a"), { recursive: true }); execFileSync("git", ["init", "-q", taskDir]);
       writeFileSync(join(taskDir, "task.json"), JSON.stringify({ taskId, name: mode, dirId: taskId, root, taskDir, branch: "task/main", remoteBranch: "main", baseCommit: "test", repos: ["repo-a"], createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" }));
       await projects.claim(taskId, project.id, roots);
-      const template = catalog.saveTemplate({ projectId: project.id, descriptor: { name: mode, program: "fixture", args: ["host-parent"], ports: [], runType: "long-lived" }, shared: [] }), serviceId = template.serviceId;
-      catalog.bindTask({ taskId, serviceId, templateVersion: 1, rootId: "repo-a", subdir: "", programPath: binary, privateRefs: [{ key: "FIXTURE_VALUE", envRef: "LOCAL_FIXTURE_VALUE" }] });
+      const template = catalog.saveTemplate({ projectId: project.id, environmentId: environment.environmentId, descriptor: { name: mode, program: "fixture", args: ["host-parent"], ports: [], runType: "long-lived" }, shared: [] }), serviceId = template.serviceId;
+      catalog.bindTask({ taskId, environmentId: environment.environmentId, serviceId, templateVersion: 1, rootId: "repo-a", subdir: "", programPath: binary, privateRefs: [{ key: "FIXTURE_VALUE", envRef: "LOCAL_FIXTURE_VALUE" }] });
       const prepared = prepareServiceSupervisorExperiment(catalog, { taskId, projectId: project.id, serviceId }, { LOCAL_FIXTURE_VALUE: secret }, artifact.artifact), h = fork(taskId);
       const boot = await h.receipt("boot"); prepared.use((program, request) => h.child.postMessage({ op: "launch", binary: program, request, lifecycle: { taskId, taskDir, serviceId, epoch: h.lease.epoch, closeReport: true } }));
       assert.equal((await h.receipt("control-result")).result.ok, true); h.child.postMessage({ op: "close" }); await wait(() => h.release, "held-report-ack");
@@ -81,8 +82,8 @@ async function run() {
         if (mode === "lost-ack") { assert.equal((await h.receipt("close-result")).result.ok, false); h.release(); }
         else {
           if (mode === "catalog-revoked") {
-            const added = catalog.saveTemplate({ projectId: project.id, descriptor: { name: "added", program: "fixture", args: [], ports: [], runType: "long-lived" }, shared: [] });
-            catalog.bindTask({ taskId, serviceId: added.serviceId, templateVersion: 1, rootId: "repo-a", subdir: "", programPath: binary, privateRefs: [] });
+            const added = catalog.saveTemplate({ projectId: project.id, environmentId: environment.environmentId, descriptor: { name: "added", program: "fixture", args: [], ports: [], runType: "long-lived" }, shared: [] });
+            catalog.bindTask({ taskId, environmentId: environment.environmentId, serviceId: added.serviceId, templateVersion: 1, rootId: "repo-a", subdir: "", programPath: binary, privateRefs: [] });
           }
           h.release(); assert.equal((await h.receipt("close-result")).result.ok, mode === "close");
         }

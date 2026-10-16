@@ -71,11 +71,12 @@ async function run() {
     const repoDir = join(taskDir, "invoice-service");
     mkdirSync(join(repoDir, "src"), { recursive: true });
     writeFileSync(join(repoDir, "README.md"), "# invoice-service\n\n对账单详情服务的本地工作副本。\n");
-    writeFileSync(join(repoDir, "package.json"), JSON.stringify({ scripts: { dev: "PORT=4100 API_TOKEN=synthetic-secret-import-guard node private-command-marker" } }));
+    // This marker contains `secret`, so the scanner drops it under its declared credential-token rule; arbitrary `private-*` arguments are not redacted.
+    writeFileSync(join(repoDir, "package.json"), JSON.stringify({ scripts: { dev: "PORT=4100 API_TOKEN=synthetic-secret-import-guard node synthetic-secret-command-marker" } }));
     writeFileSync(join(repoDir, "src", "billing.ts"), "export function invoiceTotal(lines: number[]) {\n  return lines.reduce((sum, value) => sum + value, 0);\n}\n");
     mkdirSync(join(repoDir, ".vscode"));
     writeFileSync(join(repoDir, ".vscode", "launch.json"), JSON.stringify({ configurations: [
-      { name: "invoice-dev", program: "node", args: ["private-command-marker"], env: { API_TOKEN: "synthetic-secret-import-guard" } },
+      { name: "invoice-dev", program: "node", args: ["synthetic-secret-command-marker"], env: { API_TOKEN: "synthetic-secret-import-guard" } },
     ] }));
     writeFileSync(join(taskDir, "task.json"), serializeTaskRecord(buildTaskDiskRecord({ taskId, name: "对账单详情·本地联调", dirId: taskId, branch: "main", root: taskRoot, taskDir, remoteBranch: "main", baseCommit: "test", repos: ["invoice-service"], now: new Date().toISOString() })));
     const index = new TaskRootIndex(profile, taskRoot);
@@ -119,8 +120,11 @@ async function run() {
     // any task op forks the utilityProcess. The missing-reference preview is
     // checked from trusted main with an empty environment, then the synthetic
     // value is installed and kept unchanged through shutdown.
-    const serviceTemplate = catalog.saveTemplate({ projectId: project.id, descriptor: { name: "invoice-local", program: "node", args: ["server.js"], ports: [4100], runType: "long-lived" }, shared: [{ key: "PORT", value: "4100", secret: false }] });
-    catalog.bindTask({ taskId, serviceId: serviceTemplate.serviceId, templateVersion: 1, rootId: "invoice-service", subdir: "", programPath: process.execPath, privateRefs: [{ key: "API_TOKEN", envRef: "PIDOCK_SERVICE_CAPTURE_TOKEN" }] });
+    // #7 made a template belong to a named project-scoped environment; the capture
+    // must create one before it can save a template or bind a task to it.
+    const captureEnvironment = catalog.createEnvironment({ projectId: project.id, name: "capture" });
+    const serviceTemplate = catalog.saveTemplate({ projectId: project.id, environmentId: captureEnvironment.environmentId, descriptor: { name: "invoice-local", program: "node", args: ["server.js"], ports: [4100], runType: "long-lived" }, shared: [{ key: "PORT", value: "4100", secret: false }] });
+    catalog.bindTask({ taskId, environmentId: captureEnvironment.environmentId, serviceId: serviceTemplate.serviceId, templateVersion: 1, rootId: "invoice-service", subdir: "", programPath: process.execPath, privateRefs: [{ key: "API_TOKEN", envRef: "PIDOCK_SERVICE_CAPTURE_TOKEN" }] });
     const blockedPreview = catalog.previewSavedConfig(project.id, taskId, serviceTemplate.serviceId, {});
     if (blockedPreview.state !== "blocked" || blockedPreview.error !== "private-reference-unavailable") throw Error("missing private reference preview unavailable before bootstrap");
     process.env["PIDOCK_SERVICE_CAPTURE_TOKEN"] = PRIVATE_VALUE;
@@ -288,8 +292,16 @@ async function run() {
       rows: await evalJs("document.querySelectorAll('[data-usage-row]').length"),
     };
     await clickSelector('[data-testid=desktop-shell] button[title="环境与服务"]');
-    await until((body) => body.includes("环境清单未接线") && body.includes("Host 尚未提供项目环境") && body.includes("invoice-local") && body.includes("任务绑定"), "environment page");
-    const serviceTemplates = catalog.listTemplates(project.id);
+    await until((body) => body.includes("环境清单已接线 · 1 个环境") && body.includes("Host 尚未提供项目环境变量表、任务覆盖、敏感值遮蔽后的生效配置读取操作"), "environment page");
+    const environmentPageText = await text();
+    if (!environmentPageText.includes("环境列表与创建已接线；重命名和删除不可用：Host 环境目录操作仅支持列出与创建。") ||
+        !environmentPageText.includes("共享服务模板已接线于下方「服务启动配方」；作用域切换未接线") ||
+        !environmentPageText.includes("通用本机私有环境变量未接线：Host 无该变量表操作") ||
+        !environmentPageText.includes("这不是「从 .vscode 导入」：Host 尚无环境变量导入与自动写入操作。")) throw Error("environment page wiring/unwired register is incomplete");
+    if (!(await evalJs("[...document.querySelector('select[aria-label=环境]').options].some(option => option.textContent.trim() === 'capture')"))) throw Error("capture environment missing from real list");
+    await evalJs("(() => { const select = document.querySelector('select[aria-label=环境]'); const option = [...select.options].find(row => row.textContent.trim() === 'capture'); const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set; setter.call(select, option.value); select.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+    await until((body) => body.includes("invoice-local") && body.includes("任务绑定"), "environment template");
+    const serviceTemplates = catalog.listTemplates(project.id, captureEnvironment.environmentId);
     if (serviceTemplates.length !== 1 || serviceTemplates[0]?.descriptor.name !== "invoice-local") throw Error("service template not persisted");
     // Exercise the real creation form and review state, then cancel it: the
     // saved binding above is the catalog revision the Host owns, so this run
@@ -307,7 +319,7 @@ async function run() {
     await click("取消");
     await until((body) => body.includes("invoice-local") && body.includes("任务绑定"), "saved service template");
     await click("任务绑定");
-    await until((body) => body.includes("已绑定 · v1 · invoice-service"), "persisted task binding");
+    await until((body) => body.includes("已绑定 · 环境 capture · v1 · invoice-service"), "persisted task binding");
     const serviceBindings = new ServiceCatalog(profile, serviceCatalogAuthority(index, projects)).listTask(taskId);
     if (serviceBindings.length !== 1 || serviceBindings[0]?.binding.rootId !== "invoice-service" ||
         serviceBindings[0]?.binding.privateRefs[0]?.envRef !== "PIDOCK_SERVICE_CAPTURE_TOKEN") throw Error("task binding not persisted");
@@ -330,7 +342,7 @@ async function run() {
     await until((body) => body.includes("invoice-service") && body.includes("尚未扫描"), "import source");
     await click("扫描仓库");
     await until((body) => body.includes("invoice-dev") && body.includes("API_TOKEN：疑似凭据") && body.includes("脚本开头使用内联环境赋值"), "service import hints");
-    if ((await text()).includes("synthetic-secret-import-guard") || (await text()).includes("private-command-marker")) throw Error("service import leaked private config");
+    if ((await text()).includes("synthetic-secret-import-guard") || (await text()).includes("synthetic-secret-command-marker")) throw Error("service import leaked private config");
     shots.push(await capture("environment-import", 1440, 900, 'section[aria-label="仓库配置草案"]'));
     shots.push(await capture("environment-import", 720, 560, 'section[aria-label="仓库配置草案"]'));
     views.window.setContentSize(1440, 900);
@@ -341,23 +353,35 @@ async function run() {
       placeholders: await evalJs("document.querySelectorAll('[data-testid=desktop-environment-page] button:disabled').length"),
     };
     await clickSelector('[data-testid=desktop-shell] button[title="能力管理"]');
-    await until((body) => body.includes("Host 尚未提供 Skills 的真实清单"), "capabilities page");
+    await until((body) => body.includes("Host 尚未提供 Skills 的真实清单") && body.includes("也未提供该类别的添加、安装或启停操作"), "capabilities page");
     shots.push(await capture("capabilities-page", 1440, 900));
     shots.push(await capture("capabilities-page", 720, 560));
     const capabilities = {
       unwiredSummaries: await evalJs("document.querySelectorAll('[aria-label=能力汇总] strong').length"),
       addDisabled: await evalJs("document.querySelector('[data-testid=desktop-capabilities-page] button[title]')?.disabled"),
+      skillsReason: await evalJs("document.querySelector('[data-testid=desktop-capabilities-page] [role=tabpanel]')?.innerText"),
     };
     await clickSelector('[data-testid=desktop-capabilities-page] [role=tab][aria-selected=false]');
-    await until((body) => body.includes("Host 尚未提供 MCP Servers 的真实清单"), "MCP capability tab");
+    await until((body) => body.includes("Host 尚未提供 MCP Servers 的真实清单") && body.includes("也未提供该类别的添加、安装或启停操作"), "MCP capability tab");
+    await clickText("Extensions", "document.querySelector('[data-testid=desktop-capabilities-page]')");
+    await until((body) => body.includes("Host 尚未提供 Extensions 的真实清单") && body.includes("也未提供该类别的添加、安装或启停操作"), "Extensions capability tab");
+    await clickText("Packages", "document.querySelector('[data-testid=desktop-capabilities-page]')");
+    await until((body) => body.includes("Host 尚未提供 Packages 的真实清单") && body.includes("也未提供该类别的添加、安装或启停操作"), "Packages capability tab");
     await clickSelector('[data-testid=desktop-shell] button[title="本机设置"]');
-    await until((body) => body.includes("默认任务根目录") && body.includes("权威配置路径"), "settings page");
+    await until((body) => body.includes("默认任务根目录") && body.includes("权威配置路径") && body.includes("Host 尚无默认任务根目录读取、目录校验或保存操作"), "settings page");
+    const settingsPageText = await text();
+    if (!settingsPageText.includes("未接线原因：Host 尚无应用配置目录读取操作。") ||
+        !settingsPageText.includes("Host 尚无应用配置目录或默认任务根目录保存操作，因此本机设置不能保存。") ||
+        !settingsPageText.includes("外部编辑器已接线")) throw Error("settings page wiring/unwired register is incomplete");
     shots.push(await capture("settings-page", 1440, 900));
     shots.push(await capture("settings-page", 720, 560));
     const settings = {
       saveDisabled: await evalJs("[...document.querySelectorAll('[data-testid=desktop-settings-page] button')].find(el => el.textContent.includes('保存设置'))?.disabled"),
-      rootDisabled: await evalJs("document.querySelector('[data-testid=desktop-settings-page] input')?.disabled"),
+      rootDisabled: await evalJs("document.querySelector('[data-testid=desktop-settings-page] input[aria-label=\\\"默认任务根目录\\\"]')?.disabled"),
+      configDirectoryReason: await evalJs("document.querySelector('[aria-label=应用配置目录]')?.innerText"),
+      externalEditorWired: await evalJs("document.querySelector('[data-testid=desktop-settings-page]')?.innerText.includes('外部编辑器已接线')"),
     };
+    if (settings.saveDisabled !== true || settings.rootDisabled !== true || settings.externalEditorWired !== true) throw Error("settings page wired/unwired controls do not match the Host status " + JSON.stringify(settings));
     views.window.setContentSize(1440, 900);
     await wait(250);
     await clickSelector('[data-testid=desktop-shell] button[title="定时任务"]');
@@ -372,19 +396,92 @@ async function run() {
       error: await evalJs("document.querySelector('[data-testid=desktop-schedules-page] [role=alert]')?.innerText"),
     };
     await clickSelector('[data-testid=desktop-shell] button[title="需要处理"]');
-    await until((body) => body.includes("完成未读 · 1") && body.includes("查看 main 会话"), "attention page");
+    await until((body) => body.includes("完成未读 · 1") && body.includes("查看 main 会话") && body.includes("非 main 原会话无 Host 恢复或定位操作"), "attention page");
     shots.push(await capture("attention-page", 1440, 900));
     shots.push(await capture("attention-page", 720, 560));
     views.window.setContentSize(1440, 900);
     await wait(250);
-    const attention = { rows: await evalJs("document.querySelectorAll('[data-attention-item]').length"), error: await evalJs("document.querySelector('[data-testid=desktop-attention-page] [role=alert]')?.innerText") };
+    const attention = {
+      rows: await evalJs("document.querySelectorAll('[data-attention-item]').length"),
+      error: await evalJs("document.querySelector('[data-testid=desktop-attention-page] [role=alert]')?.innerText"),
+      unwiredReason: await evalJs("document.querySelector('[data-testid=desktop-attention-page]')?.innerText.includes('非 main 原会话无 Host 恢复或定位操作，因此只能查看记录，不能跳回该会话。')"),
+      mainSessionWired: await evalJs("document.querySelector('[data-testid=desktop-attention-page]')?.innerText.includes('SDK main 回合的执行结果已接入')"),
+    };
+    // Seed one synthetic Host device through the real pairing ops so this capture
+    // can prove the production revoke button reaches the real Host. The pairing
+    // control itself remains disabled/unwired in the rendered page; this setup is
+    // confined to the isolated task root removed in `finally`.
+    const remoteOrigin = { kind: "shell-ui", senderWebContentsId: views.shellView.webContents.id };
+    const mintedRemote = await registry.routeTaskOp({ workspaceId: "issue47", taskId, op: "task/remotePairMint", payload: { label: "Issue47 evidence setup" }, origin: remoteOrigin });
+    if (typeof mintedRemote.payload?.credentialId !== "string" || typeof mintedRemote.payload?.secret !== "string") throw Error("could not seed isolated remote evidence device");
+    const exchangedRemote = await registry.routeTaskOp({ workspaceId: "issue47", taskId, op: "task/remotePairExchange", payload: { credentialId: mintedRemote.payload.credentialId, secret: mintedRemote.payload.secret, deviceName: "Issue47 capture device", permissions: ["overview"] }, origin: remoteOrigin });
+    if (exchangedRemote.payload?.device?.name !== "Issue47 capture device" || exchangedRemote.payload.device.status !== "pending-confirmation") throw Error("real Host did not create the isolated pending evidence device");
     await clickSelector('[data-testid=desktop-shell] button[title="远程访问"]');
-    await until((body) => body.includes("该任务尚无已登记设备。"), "remote page state");
+    await until((body) => body.includes("Issue47 capture device"), "remote page state");
+    const remoteControls = await evalJs(`(() => {
+      const page = document.querySelector('[data-testid=desktop-remote-page]');
+      const mode = [...page.querySelectorAll('button')].filter(button => button.textContent.trim().startsWith('切换到'));
+      const revoke = [...page.querySelectorAll('button')].filter(button => button.textContent.trim() === '撤销');
+      const pair = page.querySelector('button[title="配对流程尚未接线"]');
+      return { modeButtons: mode.map(button => ({ label: button.textContent.trim(), disabled: button.disabled })), revokeButtons: revoke.map(button => ({ label: button.textContent.trim(), disabled: button.disabled })), pairDisabled: pair?.disabled ?? null, unwired: ['配对尚未接线。', '授权、凭据轮换与审计尚未接线。'].map(text => page.innerText.includes(text)) };
+    })()`);
+    if (remoteControls.modeButtons.length !== 2 || remoteControls.modeButtons.some(button => button.disabled) || remoteControls.revokeButtons.length !== 1 || remoteControls.revokeButtons[0].disabled || remoteControls.pairDisabled !== true || remoteControls.unwired.some(value => !value)) throw Error("remote page control/wiring contract " + JSON.stringify(remoteControls));
     shots.push(await capture("remote-page", 1440, 900));
     shots.push(await capture("remote-page", 720, 560));
     views.window.setContentSize(1440, 900);
     await wait(250);
-    const remote = { task: await evalJs("document.querySelector('#desktop-remote-task')?.selectedOptions[0]?.textContent"), devices: await evalJs("document.querySelectorAll('[data-remote-device]').length"), error: await evalJs("document.querySelector('[data-testid=desktop-remote-page] [role=alert]')?.innerText") };
+
+    // Switching between private Tailscale and the isolated Gateway mode is safe
+    // here: the real Host reports its Gateway connection offline, this capture
+    // starts no listener, and the temporary root is removed. Refuse to switch if
+    // the starting mode is not one of those private routes.
+    const initialRemote = await registry.routeTaskOp({ workspaceId: "issue47", taskId, op: "task/remoteState", payload: {}, origin: remoteOrigin });
+    const initialMode = initialRemote.payload?.entry?.mode;
+    if ((initialMode !== "tailscale" && initialMode !== "gateway") || initialRemote.payload?.gateway?.status !== "offline") throw Error("remote mode evidence requires a private route with offline Gateway state " + JSON.stringify(initialRemote));
+    const activeEntryLabel = await evalJs(`(() => {
+      const page = document.querySelector('[data-testid=desktop-remote-page]');
+      const card = [...page.querySelectorAll('div.mt-6.grid > div')].find(item => item.innerText.includes('当前任务入口'));
+      return card?.querySelector('.flex.items-center')?.innerText.trim() ?? '';
+    })()`);
+    const expectedActiveLabel = initialMode === "gateway" ? "自建 Gateway" : "Tailscale 私有访问";
+    if (activeEntryLabel !== expectedActiveLabel) throw Error("remote page does not display Host's real entry mode");
+    const targetEntryLabel = initialMode === "gateway" ? "Tailscale 私有访问" : "自建 Gateway";
+    const targetEntryMode = targetEntryLabel === "自建 Gateway" ? "gateway" : "tailscale";
+    await evalJs("window.confirm = (message) => { window.__issue47RemoteModeConfirmation = message; return true; }");
+    await click(`切换到 ${targetEntryLabel}`);
+    for (let i = 0; i < 150; i++) {
+      const active = await evalJs(`(() => { const page = document.querySelector('[data-testid=desktop-remote-page]'); const card = [...page.querySelectorAll('div.mt-6.grid > div')].find(item => item.innerText.includes('当前任务入口')); return card?.querySelector('.flex.items-center')?.innerText.trim() ?? ''; })()`);
+      if (active === targetEntryLabel) break;
+      if (i === 149) throw Error("remote entry switch did not render Host response");
+      await wait(100);
+    }
+    const modeConfirmation = await evalJs("window.__issue47RemoteModeConfirmation");
+    if (typeof modeConfirmation !== "string" || !modeConfirmation.includes(targetEntryLabel) || !modeConfirmation.includes("旧连接断开")) throw Error("remote entry confirmation did not name mode and consequence");
+    const switchedRemote = await registry.routeTaskOp({ workspaceId: "issue47", taskId, op: "task/remoteState", payload: {}, origin: remoteOrigin });
+    if (switchedRemote.payload?.entry?.mode !== targetEntryMode) throw Error("real Host remote mode did not change " + JSON.stringify(switchedRemote));
+    shots.push(await capture("remote-entry-switched", 1440, 900));
+    shots.push(await capture("remote-entry-switched", 720, 560));
+
+    await evalJs("window.confirm = (message) => { window.__issue47RemoteRevokeConfirmation = message; return true; }");
+    await click("撤销");
+    await until((body) => body.includes("已撤销"), "remote device revoked");
+    const revokeConfirmation = await evalJs("window.__issue47RemoteRevokeConfirmation");
+    const revokedRemote = await registry.routeTaskOp({ workspaceId: "issue47", taskId, op: "task/remoteState", payload: {}, origin: remoteOrigin });
+    if (typeof revokeConfirmation !== "string" || !revokeConfirmation.includes("Issue47 capture device") || revokedRemote.payload?.devices?.[0]?.status !== "revoked") throw Error("real Host device revoke did not complete " + JSON.stringify({ revokeConfirmation, revokedRemote }));
+    shots.push(await capture("remote-device-revoked", 1440, 900));
+    shots.push(await capture("remote-device-revoked", 720, 560));
+    views.window.setContentSize(1440, 900);
+    await wait(250);
+    const remote = {
+      task: await evalJs("document.querySelector('#desktop-remote-task')?.selectedOptions[0]?.textContent"),
+      devices: await evalJs("document.querySelectorAll('[data-remote-device]').length"),
+      mode: targetEntryMode,
+      modeConfirmation,
+      revokeConfirmation,
+      revokedStatus: revokedRemote.payload?.devices?.[0]?.status,
+      controls: remoteControls,
+      error: await evalJs("document.querySelector('[data-testid=desktop-remote-page] [role=alert]')?.innerText"),
+    };
     await clickSelector('[data-testid=desktop-shell] button[title="已归档"]');
     await until((body) => body.includes("还没有归档任务。"), "archive page");
     shots.push(await capture("archive-page", 1440, 900));
@@ -419,6 +516,11 @@ async function run() {
     if (await evalJs(`Boolean(document.querySelector('[data-task-nav="${taskId}"]'))`)) throw Error("archived task remained in active navigation");
     shots.push(await capture("archive-with-task", 1440, 900));
     shots.push(await capture("archive-with-task", 720, 560));
+    await click("清理…");
+    await click("生成清单");
+    await until((body) => body.includes("将删除") && body.includes("将保留") && body.includes("Host 保留位置："), "Host cleanup preview");
+    shots.push(await capture("archive-cleanup-preview", 1440, 900, '[aria-label="对账单详情·本地联调清理预览"]'));
+    shots.push(await capture("archive-cleanup-preview", 720, 560, '[aria-label="对账单详情·本地联调清理预览"]'));
     views.window.setContentSize(1440, 900);
     await wait(250);
     await click("恢复");
@@ -462,6 +564,32 @@ async function run() {
     // `desktop-shell-content` was absent, which is also a failure.
     const overflowing = shots.filter((shot) => shot.overflow > 0 || shot.overflowClient !== 0 || shot.overflowContent !== 0);
     if (overflowing.length) throw Error("horizontal overflow " + JSON.stringify(overflowing));
+
+    // Real cleanup is the final UI operation against this synthetic task. The
+    // isolated root is removed in `finally`, and registry shutdown is the only
+    // later step, so the destructive operation cannot affect subsequent probes.
+    await clickSelector(`[data-task-nav="${taskId}"]`);
+    await until((body) => /task workspace/i.test(body) && body.includes("已连接"), "cleanup task workspace");
+    await click("任务操作");
+    await click("归档当前任务");
+    await until((body) => body.includes("归档会停止所属执行"), "cleanup rearchive confirmation");
+    await click("确认归档");
+    await until(async () => await evalJs(`Boolean(document.querySelector('[data-archived-task="${taskId}"]'))`), "cleanup archived task row");
+    await click("清理…");
+    await click("生成清单");
+    await until((body) => body.includes("将删除") && body.includes("Host 保留位置："), "cleanup run preview");
+    await evalJs("window.confirm = (message) => { window.__issue47CleanupConfirmation = message; return true; }");
+    await click("确认清理");
+    await until((body) => body.includes("Host 清理项目结果"), "real cleanup result");
+    const confirmation = await evalJs("window.__issue47CleanupConfirmation");
+    if (typeof confirmation !== "string" || !confirmation.includes("Host 预览将删除")) throw Error("cleanup confirmation did not name Host deletion details");
+    const cleanupShots = [];
+    cleanupShots.push(await capture("archive-cleanup-result", 1440, 900, '[aria-label="对账单详情·本地联调清理预览"]'));
+    cleanupShots.push(await capture("archive-cleanup-result", 720, 560, '[aria-label="对账单详情·本地联调清理预览"]'));
+    const cleanupResultText = await evalJs("document.querySelector('[aria-label=\"对账单详情·本地联调清理预览\"]')?.innerText");
+    console.log("ISSUE47_CLEANUP_CAPTURE=" + JSON.stringify({ confirmation, result: cleanupResultText, shots: cleanupShots }));
+    const cleanupOverflow = cleanupShots.filter((shot) => shot.overflow > 0 || shot.overflowClient !== 0 || shot.overflowContent !== 0);
+    if (cleanupOverflow.length) throw Error("cleanup horizontal overflow " + JSON.stringify(cleanupOverflow));
   } catch (error) { console.error("ISSUE47_CAPTURE_FAILED", captureStage, error); process.exitCode = 1; }
   finally {
     clearTimeout(watchdog);

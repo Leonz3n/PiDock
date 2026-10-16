@@ -67,9 +67,10 @@ async function run() {
     const project = await projects.create({ name: "Recovery probe", description: "", repositories: [], directories: [] });
     await projects.claim(taskId, project.id, roots);
     const authority = serviceCatalogAuthority(roots, projects), catalog = new ServiceCatalog(profile, authority);
-    const template = catalog.saveTemplate({ projectId: project.id, descriptor: { name: "Metadata only", program: "node", args: [], ports: [], runType: "long-lived" }, shared: [] });
+    const environment = catalog.createEnvironment({ projectId: project.id, name: "recovery-smoke" });
+    const template = catalog.saveTemplate({ projectId: project.id, environmentId: environment.environmentId, descriptor: { name: "Metadata only", program: "node", args: [], ports: [], runType: "long-lived" }, shared: [] });
     const serviceId = template.serviceId;
-    catalog.bindTask({ taskId, serviceId, templateVersion: 1, rootId: "repo-a", subdir: "", programPath: process.execPath, privateRefs: [] });
+    catalog.bindTask({ taskId, environmentId: environment.environmentId, serviceId, templateVersion: 1, rootId: "repo-a", subdir: "", programPath: process.execPath, privateRefs: [] });
     store = new ExperimentalServiceRecoveryStore(profile, authority, (id) => catalog.listTask(id).map((row) => row.binding.serviceId));
     const first = fork(), second = fork();
     stage = "utility-bootstrap";
