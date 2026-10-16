@@ -171,14 +171,15 @@ export function DesktopSettingsPage() {
         <h2 className="text-sm font-semibold text-ink">应用配置目录</h2>
         <p className="mt-2 text-xs text-muted">Host 尚未提供权威配置路径。这里不展示原型中的示意路径。</p>
         <div className="mt-3 flex min-h-10 items-center border border-line bg-paper px-3 text-xs text-muted">未接线</div>
+        <p className="mt-2 text-[11px] text-muted">未接线原因：Host 尚无应用配置目录读取操作。</p>
       </section>
       <ExternalEditorSection />
       <section className="border-t border-line pt-5" aria-label="默认任务根目录">
         <h2 className="text-sm font-semibold text-ink">默认任务根目录</h2>
-        <p className="mt-2 text-xs text-muted">此设置仅影响后续创建的任务；已有任务不会迁移。当前 Host 尚未提供该设置的读取、目录校验或保存操作。</p>
+        <p className="mt-2 text-xs text-muted">此设置仅影响后续创建的任务；已有任务不会迁移。当前 Host 尚无默认任务根目录读取、目录校验或保存操作。</p>
         <div className="mt-3 flex flex-wrap gap-2"><input aria-label="默认任务根目录" disabled placeholder="默认任务根目录未接线" className="min-h-9 min-w-0 flex-1 rounded-[4px] border border-line bg-paper px-3 text-xs text-muted disabled:opacity-70" /><Button type="button" variant="outline" disabled title="Host 尚无默认任务根选择接口"><Icon name="folder" />选择目录</Button></div>
       </section>
-      <div className="flex justify-end border-t border-line pt-5"><Button type="button" disabled title="Host 尚无本机设置保存接口">保存设置</Button></div>
+      <div className="border-t border-line pt-5"><p className="mb-3 text-[11px] text-muted">Host 尚无应用配置目录或默认任务根目录保存操作，因此本机设置不能保存。</p><div className="flex justify-end"><Button type="button" disabled title="Host 尚无本机设置保存接口">保存设置</Button></div></div>
     </div>
   </div>;
 }

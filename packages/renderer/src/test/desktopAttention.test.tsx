@@ -33,6 +33,7 @@ it("groups real cross-project records while refusing to substitute main for lega
   expect(screen.getByText("待处理 · 2")).toBeInTheDocument();
   expect(screen.getAllByText("会话 · session-1")).toHaveLength(2);
   const destinations = screen.getAllByRole("button", { name: "原会话定位未接线" });
+  expect(screen.getByText("非 main 原会话无 Host 恢复或定位操作，因此只能查看记录，不能跳回该会话。")).toBeVisible();
   for (const destination of destinations) {
     expect(destination).toBeDisabled();
     fireEvent.click(destination);

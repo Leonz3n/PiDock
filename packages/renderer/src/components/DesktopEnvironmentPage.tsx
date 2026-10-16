@@ -70,7 +70,7 @@ function RepositoryImportDrafts({ tasks, pending, filled, onFillForm }: {
 
   return <section className="mt-8" aria-label="仓库配置草案">
     <div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-sm font-semibold">仓库配置草案</h2><Button type="button" size="sm" variant="outline" disabled={!selectedRoot || loadingRoots || loadingScan} onClick={() => void scanRepository()}><Icon name="file" />扫描仓库</Button></div>
-    <p className="mt-1 text-xs text-muted">扫描只读取仓库配置并给出候选：变量只保留键名与来源（值一律遮蔽），命令已按去敏规则过滤。草案不会自动保存、绑定或启动，需由你显式填入上方「服务启动配方」的表单后逐项核对。</p>
+    <p className="mt-1 text-xs text-muted">扫描只读取仓库配置并给出候选。这不是「从 .vscode 导入」：Host 尚无环境变量导入与自动写入操作。变量只保留键名与来源（值一律遮蔽），命令已按去敏规则过滤。草案不会自动保存、绑定或启动，需由你显式填入上方「服务启动配方」的表单后逐项核对。</p>
     {filled && <p role="status" className="mt-2 text-xs text-muted">已把草案「{filled}」填入上方新建模板表单；尚未保存。</p>}
     <div className="mt-3 flex flex-wrap gap-3 border-y border-line py-3 text-xs">
       <label className="flex min-w-0 items-center gap-2">任务<select aria-label="扫描任务" value={taskId} disabled={!tasks.length || pending} onChange={(event) => setRequestedTaskId(event.target.value)} className="min-h-8 max-w-[240px] min-w-0 rounded-[4px] border border-line bg-paper px-2 text-ink"><option value="" hidden>选择任务</option>{tasks.map((task) => <option key={task.taskId} value={task.taskId}>{task.name}</option>)}</select></label>
@@ -212,11 +212,12 @@ export function DesktopEnvironmentPage({ projects, projectId, taskCount, tasks, 
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div className="min-w-0"><p className="text-[10px] uppercase tracking-[1.8px] text-[#95979c]">Environments</p><h1 className="mt-1.5 text-[26px] font-semibold text-ink">环境与服务</h1></div>
       <div className="flex flex-wrap gap-2">
-        <Button type="button" variant="outline" disabled title="重命名与删除环境尚未接线（主进程仅有创建与列出）">管理环境</Button>
+        <Button type="button" variant="outline" disabled title="Host 环境目录操作仅支持列出与创建，不支持重命名或删除">管理环境</Button>
         <Button type="button" variant="outline" disabled={!projectId || !connected || environmentPending || creatingEnvironment} title={!connected ? "服务配方目录未接线" : !projectId ? "尚无项目上下文" : "创建一个有名称的项目环境"} onClick={() => { setCreatingEnvironment((open) => !open); setEnvironmentError(null); }}><Icon name="plus" />新增环境</Button>
       </div>
     </div>
     <p className="mt-1.5 text-xs text-muted">继续使用仓库默认配置，通过环境变量调整服务运行方式。配置与服务状态必须以真实 Host 为准。</p>
+    <p className="mt-2 text-[11px] text-muted">环境列表与创建已接线；重命名和删除不可用：Host 环境目录操作仅支持列出与创建。</p>
     <div className="mt-6 flex flex-wrap items-center gap-2">
       <label htmlFor="desktop-env-project" className="text-xs text-muted">项目</label>
       <select id="desktop-env-project" className="min-h-8 max-w-full rounded-[4px] border border-line bg-paper px-2 text-xs text-ink" value={projectId ?? ""} disabled={!projects.length} onChange={(event) => onSelectProject(event.target.value)}>
@@ -243,13 +244,14 @@ export function DesktopEnvironmentPage({ projects, projectId, taskCount, tasks, 
       <span className="text-[11px] text-muted">名称由你填写，主进程保存并分配 ID；同名环境会被具名拒绝。</span>
     </div>}
     <div className="mt-5 flex flex-wrap gap-1 border-b border-line pb-2" role="group" aria-label="配置作用范围">
-      {(["任务覆盖", "共享模板", "本机私有配置"] as const).map((scope) => <Button key={scope} type="button" variant="ghost" size="sm" disabled title={scope === "共享模板"
-        ? "共享模板在下方按版本维护；此作用域切换开关未接线"
-        : `${scope}的生产数据未接线`}>{scope}</Button>)}
+      {["任务覆盖", "共享模板", "本机私有配置"].map((scope) => <Button key={scope} type="button" variant="ghost" size="sm" disabled title={scope === "共享模板"
+        ? "共享服务模板已在下方接线；环境变量作用域切换未接线"
+        : `${scope}的通用项目环境变量操作未接线`}>{scope}</Button>)}
     </div>
+    <p data-testid="desktop-environment-unwired-scopes" className="mt-2 text-[11px] text-muted">任务覆盖未接线：Host 无项目环境变量与任务覆盖操作。共享服务模板已接线于下方「服务启动配方」；作用域切换未接线。通用本机私有环境变量未接线：Host 无该变量表操作。</p>
     <section className="mt-5" aria-label="环境变量">
-      <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="text-sm font-semibold">环境变量 <Badge variant="soft" className="ml-1">未接线</Badge></h2><Button type="button" size="sm" disabled title="缺少真实配置及变更预览">保存更改</Button></div>
-      <div className="mt-3 overflow-x-auto"><table className="w-full min-w-[320px] text-left text-xs"><thead className="border-b border-line text-muted"><tr><th className="py-2 font-medium">KEY</th><th className="py-2 font-medium">VALUE</th><th className="py-2 font-medium">生效来源</th></tr></thead><tbody><tr className="border-b border-line"><td colSpan={3} className="py-5 text-muted">Host 尚未提供项目环境、任务覆盖与敏感值遮蔽后的生效配置。这里不展示示例 KEY 或 VALUE。</td></tr></tbody></table></div>
+      <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="text-sm font-semibold">环境变量 <Badge variant="soft" className="ml-1">未接线</Badge></h2><Button type="button" size="sm" disabled title="Host 尚无项目环境变量读取与变更预览操作">保存更改</Button></div>
+      <div className="mt-3 overflow-x-auto"><table className="w-full min-w-[320px] text-left text-xs"><thead className="border-b border-line text-muted"><tr><th className="py-2 font-medium">KEY</th><th className="py-2 font-medium">VALUE</th><th className="py-2 font-medium">生效来源</th></tr></thead><tbody><tr className="border-b border-line"><td colSpan={3} className="py-5 text-muted">Host 尚未提供项目环境变量表、任务覆盖、敏感值遮蔽后的生效配置读取操作。这里不展示示例 KEY 或 VALUE。</td></tr></tbody></table></div>
     </section>
     <ProjectServiceTemplates projectId={projectId} environmentId={selectedEnvironment?.environmentId ?? null} environmentName={selectedEnvironment?.name}
       tasks={tasksPending ? [] : tasks} fillFrom={pendingFill} onFillApplied={appliedFill} />
