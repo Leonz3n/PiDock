@@ -71,6 +71,8 @@ export interface AgentOwnedResource {
   label?: string;
   /** Trusted recovery/uncertainty fence: no new write claim, even by the owner. */
   verificationRequired?: boolean;
+  /** Executable recovery guidance for this specific unverified resource. */
+  recoveryAction?: string;
 }
 
 export type WriteClaimResult =
@@ -254,14 +256,18 @@ export function claimWrite(snapshot: WriteLockSnapshot, input: WriteClaimInput):
   }
   const orphans = orphanResourcesFor({ resources: input.orphans ?? [], requester: input.sessionId, snapshot });
   if (orphans.length > 0) {
+    const verificationRequired = orphans.some((resource) => resource.verificationRequired === true);
+    const recoveryActions = [...new Set(orphans
+      .filter((resource) => resource.verificationRequired === true && resource.recoveryAction)
+      .map((resource) => resource.recoveryAction!))];
     return {
       snapshot,
       result: {
         ok: false,
         verdict: "locked",
         owner: orphans[0]?.ownerSessionId ?? null,
-        reason: orphans.some((resource) => resource.verificationRequired === true)
-          ? `执行资源尚未核验（${orphans.map((resource) => resource.label ?? resource.resourceId).join("、")}），不能依据旧会话归属继续写入`
+        reason: verificationRequired
+          ? `执行资源尚未核验（${orphans.map((resource) => resource.label ?? resource.resourceId).join("、")}），不能依据旧会话归属继续写入${recoveryActions.length > 0 ? `；${recoveryActions.join("；")}` : ""}`
           : `会话 ${orphans[0]?.ownerSessionId ?? "未知"} 的遗留执行资源仍在运行（${orphans
           .map((resource) => resource.label ?? resource.resourceId)
           .join("、")}），请先核验并停止后再写入`,
@@ -353,6 +359,13 @@ export function forgetSession(snapshot: WriteLockSnapshot, sessionId: string): W
   };
 }
 
+/** Drops the internal recovery instruction: the lock view keeps the RPC shape it had before #88. */
+function resourceForWriteLockView(resource: AgentOwnedResource): AgentOwnedResource {
+  const view = { ...resource };
+  delete view.recoveryAction;
+  return view;
+}
+
 /**
  * Coordination view for the session navigation: holder + claim label, the queue
  * with positions, read-only sessions, live derived executions and leftover
@@ -405,7 +418,7 @@ export function writeLockView(input: {
     waiting: input.snapshot.waiting.map((entry) => entry.sessionId),
     readonly: sessions.filter((session) => session.role === "readonly").map((session) => session.sessionId),
     derived: input.snapshot.derived.map((item) => ({ ...item })),
-    orphans: (input.orphans ?? []).map((resource) => ({ ...resource })),
+    orphans: (input.orphans ?? []).map(resourceForWriteLockView),
     sessions,
   };
 }

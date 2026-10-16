@@ -514,6 +514,7 @@ describe("[PiDock 03] (#6 盒子 6) two tasks sharing one project repository", (
         onManage={() => {}}
         onCreateTask={() => {}}
         onManageDirectories={() => {}}
+        creationIncompleteTaskId={null}
       />,
     );
     expect(await screen.findByTestId("desktop-project-overview")).toBeInTheDocument();

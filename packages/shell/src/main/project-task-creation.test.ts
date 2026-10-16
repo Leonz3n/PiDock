@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync, existsSync, renameSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync, existsSync, renameSync, readlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TaskWorkspaceHost } from "../host/task-host.js";
@@ -87,6 +87,19 @@ describe("persistent Project task creation with local Git", { timeout: GIT_CASE_
     expect(env.getCalls()).toBe(1);
     const reopened = new ProjectTaskCreation(new CreationIntentStore(env.profile), new ProjectRegistry(env.profile), new TaskRootIndex(env.profile, env.root), { routeTaskOp: () => { throw new Error("Host should not reprovision"); } }, env.root);
     expect(await reopened.commit(preview.id)).toEqual({ taskId: preview.taskId, projectId: env.project.id });
+    await expect(reopened.abandon(preview.id, true)).rejects.toThrow("已完成任务不能放弃");
+    expect(existsSync(join(preview.taskDir, ".pidock-creation"))).toBe(true);
+  });
+  it("refuses to continue when the project used to prepare an intent no longer exists", async () => {
+    const env = await setup();
+    const preview = await env.service.prepare(env.request);
+    await env.projects.delete(env.project.id);
+
+    await expect(env.service.commit(preview.id)).rejects.toThrow(
+      "项目在准备后已删除或不可读取，无法按原意图续跑；可显式放弃本次创建（不清理已产生的任务内容；已有任务记录将保留为未归属任务），恢复或重新建立项目后再创建。",
+    );
+    expect(existsSync(preview.taskDir)).toBe(false);
+    expect(env.getCalls()).toBe(0);
   });
   it("establishes a never-used default root at startup so the first task can be prepared and committed", async () => {
     const env = await setup({ rootAbsent: true });
@@ -185,7 +198,10 @@ describe("persistent Project task creation with local Git", { timeout: GIT_CASE_
     expect(env.storage.read()).toBeNull();
     const preview = await env.service.prepare(env.request);
     await env.projects.rename(env.project.id, "Changed");
-    await expect(env.service.commit(preview.id)).rejects.toThrow(/变更/);
+    // #88 changes the old generic refusal assertion: it must name the changed snapshot and offer a non-destructive next step.
+    await expect(env.service.commit(preview.id)).rejects.toThrow(
+      "项目或其来源在准备后被改动，无法按原快照续跑；可先恢复到准备时状态后重试，或显式放弃本次创建（不清理已产生的任务目录、工作区、链接与会话；已有任务记录将成为未归属任务），再用该项目重新创建。",
+    );
     expect(existsSync(preview.taskDir)).toBe(false);
   });
   it("retries an indexed but unassociated Host record without reprovisioning", async () => {
@@ -194,7 +210,8 @@ describe("persistent Project task creation with local Git", { timeout: GIT_CASE_
     const realClaim = env.projects.claim.bind(env.projects);
     env.projects.claim = (() => { throw new Error("injected write failure"); }) as typeof env.projects.claim;
     await expect(env.service.commit(preview.id)).rejects.toThrow(/injected/);
-    await expect(env.service.abandon(preview.id)).rejects.toThrow(/不能放弃/);
+    // #88 changes the old line-197 refusal: without explicit confirmation, abandon remains fail-closed.
+    await expect(env.service.abandon(preview.id, false)).rejects.toThrow(/显式确认/);
     expect(existsSync(join(env.profile, `task-creation-abandon-${preview.id}.json`))).toBe(false);
     expect(readTaskRecordOnDisk(preview.taskDir)).not.toBeNull();
     expect(env.roots.inventory().tasks.map((task) => task.taskId)).toContain(preview.taskId);
@@ -202,6 +219,91 @@ describe("persistent Project task creation with local Git", { timeout: GIT_CASE_
     await env.service.commit(preview.id);
     expect(env.getCalls()).toBe(1);
     expect(env.projects.association(preview.taskId, env.roots).state).toBe("assigned");
+  });
+  // #88 changes the old line-197 refusal: an interrupted task record/workspace is now abandonable only by explicit confirmation, without deleting it.
+  it("abandons an interrupted task only after explicit confirmation and retains its work", async () => {
+    const env = await setup();
+    const preview = await env.service.prepare(env.request);
+    const claim = env.projects.claim.bind(env.projects);
+    env.projects.claim = (() => { throw new Error("injected write failure"); }) as typeof env.projects.claim;
+    await expect(env.service.commit(preview.id)).rejects.toThrow(/injected/);
+    env.projects.claim = claim;
+
+    const marker = join(preview.taskDir, ".pidock-creation");
+    const taskRecord = readFileSync(join(preview.taskDir, "task.json"), "utf8");
+    const worktree = join(preview.taskDir, preview.repos[0]!.repoDir);
+    const worktreeHead = git(worktree, "rev-parse", "HEAD");
+    const link = join(preview.taskDir, preview.directories[0]!.linkName);
+    const linkTarget = readlinkSync(link);
+    mkdirSync(join(preview.taskDir, "sessions"));
+    writeFileSync(join(preview.taskDir, "sessions", "main.json"), "unfinished session\n");
+    await expect(performCreationOperation(env.service, { op: "abandon", id: preview.id }, async () => null, () => undefined))
+      .rejects.toThrow(/invalid creation operation/);
+    expect(env.service.current()?.state).toBe("pending");
+    expect(existsSync(join(env.profile, `task-creation-abandon-${preview.id}.json`))).toBe(false);
+
+    expect(await performCreationOperation(env.service, { op: "abandon", id: preview.id, confirmed: true }, async () => null, () => undefined))
+      .toEqual({ taskId: preview.taskId, abandoned: true,
+        message: "本次创建已放弃。已产生的任务目录、工作区、链接与会话均已保留；如任务记录已存在，该任务现为未归属任务。" });
+    expect(existsSync(marker)).toBe(false);
+    expect(readFileSync(join(preview.taskDir, "task.json"), "utf8")).toBe(taskRecord);
+    expect(existsSync(worktree)).toBe(true);
+    expect(git(worktree, "rev-parse", "HEAD")).toBe(worktreeHead);
+    expect(existsSync(link)).toBe(true);
+    expect(readlinkSync(link)).toBe(linkTarget);
+    expect(readFileSync(join(preview.taskDir, "sessions", "main.json"), "utf8")).toBe("unfinished session\n");
+    expect(env.roots.inventory().tasks.map((task) => task.taskId)).toContain(preview.taskId);
+    expect(env.projects.association(preview.taskId, env.roots).state).toBe("unassigned");
+    expect(env.service.current()).toBeNull();
+    await expect(env.service.commit(preview.id)).rejects.toThrow("创建意图已放弃；本次没有删除任务目录、工作区、链接或会话，已有任务记录现为未归属任务。请重新创建任务");
+
+    const replacement = await env.service.prepare(env.request);
+    expect(replacement.taskId).not.toBe(preview.taskId);
+  });
+  // #88: the exit must not depend on owning the target directory. A task folder this
+  // intent did not mark (another creation's marker, or a file in its place) is left
+  // exactly as it is, and the pending intent is still terminal instead of becoming
+  // an intent that can neither be committed nor abandoned.
+  it("abandons a pending intent whose task path is not this creation's directory, touching nothing there", async () => {
+    const foreign = await setup();
+    const marked = await foreign.service.prepare(foreign.request);
+    mkdirSync(marked.taskDir);
+    const foreignMarker = join(marked.taskDir, ".pidock-creation");
+    writeFileSync(foreignMarker, "another-creation");
+    expect(await foreign.service.abandon(marked.id, true)).toMatchObject({ taskId: marked.taskId, abandoned: true });
+    expect(readFileSync(foreignMarker, "utf8")).toBe("another-creation");
+    expect(foreign.service.current()).toBeNull();
+
+    const replaced = await setup();
+    const file = await replaced.service.prepare(replaced.request);
+    writeFileSync(file.taskDir, "not a directory\n");
+    expect(await replaced.service.abandon(file.id, true)).toMatchObject({ taskId: file.taskId, abandoned: true });
+    expect(readFileSync(file.taskDir, "utf8")).toBe("not a directory\n");
+    expect(replaced.service.current()).toBeNull();
+  });
+  // #88: this creation must not undo an association it did not make. The refusal
+  // names the control the user already has instead of unlinking behind their back.
+  it("refuses to abandon a creation whose task is associated with its project, naming the unbind control", async () => {
+    const env = await setup();
+    const preview = await env.service.prepare(env.request);
+    const claim = env.projects.claim.bind(env.projects);
+    env.projects.claim = (() => { throw new Error("injected write failure"); }) as typeof env.projects.claim;
+    await expect(env.service.commit(preview.id)).rejects.toThrow(/injected/);
+    env.projects.claim = claim;
+    await env.projects.claim(preview.taskId, env.project.id, env.roots);
+
+    await expect(env.service.abandon(preview.id, true)).rejects.toThrow(
+      `该任务已关联到项目 ${env.project.id}，放弃本次创建不会替你解除关联；请先在「项目管理」里解绑该任务，再放弃本次创建`,
+    );
+    // Nothing was abandoned or deleted: the operator still owns the decision.
+    expect(env.service.current()?.state).toBe("pending");
+    expect(existsSync(join(env.profile, `task-creation-abandon-${preview.id}.json`))).toBe(false);
+    expect(existsSync(join(preview.taskDir, ".pidock-creation"))).toBe(true);
+    expect(env.projects.association(preview.taskId, env.roots).state).toBe("assigned");
+
+    await env.projects.unlink(preview.taskId, env.project.id);
+    expect(await env.service.abandon(preview.id, true)).toMatchObject({ taskId: preview.taskId, abandoned: true });
+    expect(env.service.current()).toBeNull();
   });
   it("recovers an explicitly selected override root from the same intent", async () => {
     const env = await setup();
@@ -290,7 +392,9 @@ describe("persistent Project task creation with local Git", { timeout: GIT_CASE_
       const reopened = new ProjectTaskCreation(new CreationIntentStore(env.profile), new ProjectRegistry(env.profile), new TaskRootIndex(env.profile, env.root), env.host, env.root);
       await expect(reopened.commit(preview.id)).rejects.toThrow(/不能接管|标记不匹配/);
       expect(reopened.current()?.id).toBe(preview.id);
-      expect(await reopened.abandon(preview.id)).toEqual({ taskId: preview.taskId, abandoned: true });
+      // #88 requires the operator's explicit confirmation for this non-destructive exit.
+      expect(await reopened.abandon(preview.id, true)).toEqual({ taskId: preview.taskId, abandoned: true,
+        message: "本次创建已放弃。已产生的任务目录、工作区、链接与会话均已保留；如任务记录已存在，该任务现为未归属任务。" });
       expect(reopened.current()).toBeNull();
       const receipt = JSON.parse(readFileSync(join(env.profile, `task-creation-abandon-${preview.id}.json`), "utf8"));
       expect(receipt).toMatchObject({ reason: "operator-abandon", intentId: preview.id, taskId: preview.taskId, taskDir: preview.taskDir });
@@ -313,7 +417,13 @@ describe("persistent Project task creation with local Git", { timeout: GIT_CASE_
       await expect(interrupted.commit(preview.id)).rejects.toThrow(`interrupted ${phase}`);
       expect(readFileSync(join(override ? root : preview.taskDir, override ? ".pidock-created-root" : ".pidock-creation"), "utf8")).toBe(preview.id);
       const reopened = new ProjectTaskCreation(new CreationIntentStore(env.profile), new ProjectRegistry(env.profile), new TaskRootIndex(env.profile, env.root), env.host, env.root);
-      if (!override) await expect(reopened.abandon(preview.id)).rejects.toThrow(/不能放弃/);
+      if (!override) {
+        // #88 changes the old marker-based rejection: lack of confirmation must still fail closed, while confirmed abandonment is covered separately.
+        await expect(reopened.abandon(preview.id, false)).rejects.toThrow(/显式确认/);
+        expect(readFileSync(join(preview.taskDir, ".pidock-creation"), "utf8")).toBe(preview.id);
+        expect(existsSync(join(env.profile, `task-creation-abandon-${preview.id}.json`))).toBe(false);
+        expect(reopened.current()?.state).toBe("pending");
+      }
       expect(await reopened.commit(preview.id)).toEqual({ taskId: preview.taskId, projectId: env.project.id });
       expect(readTaskRecordOnDisk(preview.taskDir)?.taskId).toBe(preview.taskId);
     }
@@ -321,12 +431,14 @@ describe("persistent Project task creation with local Git", { timeout: GIT_CASE_
   it("cannot commit an intent after its abandon receipt is durable but state transition was interrupted", async () => {
     const env = await setup();
     const preview = await env.service.prepare(env.request);
-    await env.service.abandon(preview.id);
+    // #88 keeps receipt-based retries idempotent; abandonment now requires explicit confirmation.
+    await env.service.abandon(preview.id, true);
     env.storage.write({ ...preview, state: "pending" });
     const reopened = new ProjectTaskCreation(new CreationIntentStore(env.profile), new ProjectRegistry(env.profile), new TaskRootIndex(env.profile, env.root), env.host, env.root);
     await expect(reopened.commit(preview.id)).rejects.toThrow(/凭据已写入/);
     expect(existsSync(preview.taskDir)).toBe(false);
-    expect(await reopened.abandon(preview.id)).toEqual({ taskId: preview.taskId, abandoned: true });
+    expect(await reopened.abandon(preview.id, true)).toEqual({ taskId: preview.taskId, abandoned: true,
+      message: "本次创建已放弃。已产生的任务目录、工作区、链接与会话均已保留；如任务记录已存在，该任务现为未归属任务。" });
     expect(reopened.current()).toBeNull();
     expect(env.getCalls()).toBe(0);
   });
@@ -344,7 +456,9 @@ describe("persistent Project task creation with local Git", { timeout: GIT_CASE_
       expect(readdirSync(target)).toEqual([]);
       expect(readTaskRecordOnDisk(preview.taskDir)).toBeNull();
       await expect(competing.commit(preview.id)).rejects.toThrow(/不能接管|标记不匹配/);
-      expect(await competing.abandon(preview.id)).toEqual({ taskId: preview.taskId, abandoned: true });
+      // #88 requires confirmation while preserving the competing empty directory unchanged.
+      expect(await competing.abandon(preview.id, true)).toEqual({ taskId: preview.taskId, abandoned: true,
+        message: "本次创建已放弃。已产生的任务目录、工作区、链接与会话均已保留；如任务记录已存在，该任务现为未归属任务。" });
       expect(readdirSync(target)).toEqual([]);
     }
   });

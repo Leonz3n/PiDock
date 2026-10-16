@@ -46,7 +46,7 @@ import {
   serviceLaunchSource,
   validateHostTaskOp,
 } from "./host-guards.js";
-import { ServiceOwnerInventory } from "./service-owner-inventory.js";
+import { ServiceOwnerInventory, unverifiedServiceOwnerInventoryResource } from "./service-owner-inventory.js";
 import { SERVICE_STOP_CONFIRM_MS, SERVICE_STOP_GRACE_MS, TaskServiceProcesses } from "./service-processes.js";
 import { diskServiceOwnershipLog } from "./service-ownership.js";
 import { diskLaunchVerificationLog } from "./service-launch-verification.js";
@@ -818,7 +818,7 @@ function taskHostFor(taskId: string): TaskWorkspaceHost | { error: string } {
         // reading gated every write on win32. Where execution is admitted the
         // unverified orphan below is still injected, fail-closed as before.
         const owners = serviceOwnerInventory?.resources() ?? (serviceExecutionAdmitted() && process.env["PIDOCK_SERVICE_OWNER_REQUIRED"] === "1"
-          ? [{ resourceId: "service-owner-inventory", kind: "service" as const, ownerSessionId: null, verificationRequired: true }] : []);
+          ? [unverifiedServiceOwnerInventoryResource()] : []);
         const runtime = serviceRuntime;
         // [PiDock 10] (#15) a running terminal is an agent-owned resource too:
         // its owner session keeps the write right and another session sees it
@@ -1485,8 +1485,11 @@ async function performTaskOp(
         // flips a lifecycle flag as if a process had run.
         const precondition = catalogControlPrecondition(services, serviceId);
         if (precondition.kind === "unregistered") {
+          if (services.get(serviceId)?.launchSource === "ui") {
+            return { ok: false, error: "service-execution-unavailable: 仅可信服务目录登记的服务可执行；该服务由界面登记。请改用可信服务目录登记的服务" };
+          }
           return serviceOwnerInventory ? serviceOwnerInventory.control()
-            : { ok: false, error: "service-execution-unavailable: 真实服务进程启停尚未接线" };
+            : { ok: false, error: "service-execution-unavailable: 仅可信服务目录登记的服务可执行；该服务未由可信服务目录登记。请通过可信服务目录登记后再执行" };
         }
         if (precondition.kind === "uncertain") return { ok: false, error: precondition.error };
         const driver = serviceDriverFor(taskId, services);

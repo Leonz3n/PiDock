@@ -125,6 +125,58 @@ describe.skipIf(process.platform === "win32")("installed Host parent RPC service
       expect(stop()).toBe(pending); expect(await stop()).toBe(true);
     } finally { workspace.emit("exit", 0); vi.useRealTimers(); }
   });
+  it("names the unverified inventory and directs the caller to the existing rebind path", async () => {
+    const f = await installed();
+    const write = () => f.task("task/terminalControl", { instanceId: "term-absent", action: "input", data: "\\r" });
+    // 这条是 A1 新加的逐字断言，因文案修正同步更新；仍完整比对拒绝串。
+    const refusal = "task-locked: 执行资源尚未核验（service-owner-inventory），不能依据旧会话归属继续写入；下一步：在本任务的运行面板点一次该服务的「启动」；若出现「重新绑定服务所有者」，用它重新核验服务归属（只替换归属绑定，不重启任何进程），然后重试写入。若该控件没有出现、或重新绑定同样被拒绝，请把拒绝原文交给维护者——本机缺少可执行的绑定出口（维护动作：shell/serviceCatalogOp 的 rebindServiceOwner，confirm=true）";
+
+    // The recovery instruction is an internal write-coordination detail, not a new RPC field.
+    expect((await f.task("task/sessionStates")).payload["orphans"]).toEqual([
+      { resourceId: "service-owner-inventory", kind: "service", ownerSessionId: null, verificationRequired: true },
+    ]);
+    // Before the first bootstrap, the synthetic inventory is the write fence.
+    await expect(write()).rejects.toThrow(refusal);
+    await f.main.prepare(f.child as never, f.taskId);
+
+    // A main-side authority failure fences the installed binding and its Host inventory.
+    vi.spyOn(f.catalog, "ownerSnapshot").mockImplementationOnce(() => { throw Error("catalog-unavailable"); });
+    expect(f.main.state(f.child as never, f.taskId)).toBe("fenced");
+    vi.restoreAllMocks();
+    await expect(write()).rejects.toThrow(refusal);
+  });
+
+  it("restores writes in the same Host after the existing owner rebind creates a new epoch", async () => {
+    const f = await installed();
+    const hostProcess = f.child, hostClient = f.client;
+    const scopes: Record<string, unknown>[] = [];
+    const postMessage = f.child.postMessage;
+    f.child.postMessage = (value) => {
+      const row = value as Record<string, unknown>;
+      if (row.kind === "service-owner-bootstrap" || row.kind === "service-owner-rebind") scopes.push(row);
+      postMessage(value);
+    };
+    const write = () => f.task("task/terminalControl", { instanceId: "term-absent", action: "input", data: "\\r" });
+    // 这条是 A1 新加的逐字断言，因文案修正同步更新；仍完整比对拒绝串。
+    const refusal = "task-locked: 执行资源尚未核验（service-owner-inventory），不能依据旧会话归属继续写入；下一步：在本任务的运行面板点一次该服务的「启动」；若出现「重新绑定服务所有者」，用它重新核验服务归属（只替换归属绑定，不重启任何进程），然后重试写入。若该控件没有出现、或重新绑定同样被拒绝，请把拒绝原文交给维护者——本机缺少可执行的绑定出口（维护动作：shell/serviceCatalogOp 的 rebindServiceOwner，confirm=true）";
+
+    await f.main.prepare(f.child as never, f.taskId);
+    const firstEpoch = scopes[0]?.["epoch"];
+    expect(firstEpoch).toEqual(expect.any(String));
+    vi.spyOn(f.catalog, "ownerSnapshot").mockImplementationOnce(() => { throw Error("catalog-unavailable"); });
+    expect(f.main.state(f.child as never, f.taskId)).toBe("fenced");
+    vi.restoreAllMocks();
+    await expect(write()).rejects.toThrow(refusal);
+
+    expect(await f.main.rebind(f.child as never, f.taskId)).toBe("rebound");
+    expect(scopes.map((scope) => scope["kind"])).toEqual(["service-owner-bootstrap", "service-owner-rebind"]);
+    expect(scopes[1]?.["epoch"]).not.toBe(firstEpoch);
+    // The same child/Host and RPC client now get past the inventory gate.
+    await expect(write()).rejects.toThrow("terminal-not-running");
+    expect(f.child).toBe(hostProcess);
+    expect(f.client).toBe(hostClient);
+  });
+
   it("fences failed catalog authority, preserves read RPC, and refuses a fabricated successful quit", async () => {
     const f = await installed();
     f.child.postMessage({ kind: "service-owner-fenced", workspaceId: "workspace-a", taskId: f.taskId });

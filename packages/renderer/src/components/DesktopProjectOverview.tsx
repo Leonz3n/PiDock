@@ -25,6 +25,7 @@ export function DesktopProjectOverview({
   onManage,
   onCreateTask,
   onManageDirectories,
+  creationIncompleteTaskId,
 }: {
   project: DesktopProject | null;
   tasks: readonly DesktopShellTask[];
@@ -37,6 +38,13 @@ export function DesktopProjectOverview({
   onManage: () => void;
   onCreateTask: () => void;
   onManageDirectories: () => void;
+  /**
+   * The task whose creation is still unfinished, from main's real pending
+   * creation intent (#88); `null` whenever main reports none. The card then says
+   * so and points at the management page, where the two exits live — a task that
+   * cannot be finished should not look like an ordinary one.
+   */
+  creationIncompleteTaskId: string | null;
 }) {
   const projectId = project?.id;
   const scoped = tasks.filter((task) => (projectId === undefined ? task.projectId === null : task.projectId === projectId));
@@ -93,6 +101,7 @@ export function DesktopProjectOverview({
             <p className="mt-1.5 truncate text-[11px] text-muted">
               {task.repoCount > 0 ? `${task.repoCount} 仓库 · ${hostText(task.branch, "Host 未上报分支")}` : "普通目录"}
             </p>
+            {task.taskId === creationIncompleteTaskId && <p className="mt-1.5 text-[11px] font-semibold text-[#9a6032]">创建未完成 · 到「项目管理」恢复完成或放弃</p>}
             <span className="mt-2 inline-flex"><Badge>{hostText(task.updatedAt.slice(0, 10), "Host 未上报更新时间")}</Badge></span>
           </button>
         ))}
