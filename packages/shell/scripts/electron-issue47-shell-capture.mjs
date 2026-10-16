@@ -292,7 +292,12 @@ async function run() {
       rows: await evalJs("document.querySelectorAll('[data-usage-row]').length"),
     };
     await clickSelector('[data-testid=desktop-shell] button[title="环境与服务"]');
-    await until((body) => body.includes("环境清单已接线 · 1 个环境") && body.includes("Host 尚未提供项目环境"), "environment page");
+    await until((body) => body.includes("环境清单已接线 · 1 个环境") && body.includes("Host 尚未提供项目环境变量表、任务覆盖、敏感值遮蔽后的生效配置读取操作"), "environment page");
+    const environmentPageText = await text();
+    if (!environmentPageText.includes("环境列表与创建已接线；重命名和删除不可用：Host 环境目录操作仅支持列出与创建。") ||
+        !environmentPageText.includes("共享服务模板已接线于下方「服务启动配方」；作用域切换未接线") ||
+        !environmentPageText.includes("通用本机私有环境变量未接线：Host 无该变量表操作") ||
+        !environmentPageText.includes("这不是「从 .vscode 导入」：Host 尚无环境变量导入与自动写入操作。")) throw Error("environment page wiring/unwired register is incomplete");
     if (!(await evalJs("[...document.querySelector('select[aria-label=环境]').options].some(option => option.textContent.trim() === 'capture')"))) throw Error("capture environment missing from real list");
     await evalJs("(() => { const select = document.querySelector('select[aria-label=环境]'); const option = [...select.options].find(row => row.textContent.trim() === 'capture'); const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set; setter.call(select, option.value); select.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
     await until((body) => body.includes("invoice-local") && body.includes("任务绑定"), "environment template");
@@ -348,23 +353,35 @@ async function run() {
       placeholders: await evalJs("document.querySelectorAll('[data-testid=desktop-environment-page] button:disabled').length"),
     };
     await clickSelector('[data-testid=desktop-shell] button[title="能力管理"]');
-    await until((body) => body.includes("Host 尚未提供 Skills 的真实清单"), "capabilities page");
+    await until((body) => body.includes("Host 尚未提供 Skills 的真实清单") && body.includes("也未提供该类别的添加、安装或启停操作"), "capabilities page");
     shots.push(await capture("capabilities-page", 1440, 900));
     shots.push(await capture("capabilities-page", 720, 560));
     const capabilities = {
       unwiredSummaries: await evalJs("document.querySelectorAll('[aria-label=能力汇总] strong').length"),
       addDisabled: await evalJs("document.querySelector('[data-testid=desktop-capabilities-page] button[title]')?.disabled"),
+      skillsReason: await evalJs("document.querySelector('[data-testid=desktop-capabilities-page] [role=tabpanel]')?.innerText"),
     };
     await clickSelector('[data-testid=desktop-capabilities-page] [role=tab][aria-selected=false]');
-    await until((body) => body.includes("Host 尚未提供 MCP Servers 的真实清单"), "MCP capability tab");
+    await until((body) => body.includes("Host 尚未提供 MCP Servers 的真实清单") && body.includes("也未提供该类别的添加、安装或启停操作"), "MCP capability tab");
+    await clickText("Extensions", "document.querySelector('[data-testid=desktop-capabilities-page]')");
+    await until((body) => body.includes("Host 尚未提供 Extensions 的真实清单") && body.includes("也未提供该类别的添加、安装或启停操作"), "Extensions capability tab");
+    await clickText("Packages", "document.querySelector('[data-testid=desktop-capabilities-page]')");
+    await until((body) => body.includes("Host 尚未提供 Packages 的真实清单") && body.includes("也未提供该类别的添加、安装或启停操作"), "Packages capability tab");
     await clickSelector('[data-testid=desktop-shell] button[title="本机设置"]');
-    await until((body) => body.includes("默认任务根目录") && body.includes("权威配置路径"), "settings page");
+    await until((body) => body.includes("默认任务根目录") && body.includes("权威配置路径") && body.includes("Host 尚无默认任务根目录读取、目录校验或保存操作"), "settings page");
+    const settingsPageText = await text();
+    if (!settingsPageText.includes("未接线原因：Host 尚无应用配置目录读取操作。") ||
+        !settingsPageText.includes("Host 尚无应用配置目录或默认任务根目录保存操作，因此本机设置不能保存。") ||
+        !settingsPageText.includes("外部编辑器已接线")) throw Error("settings page wiring/unwired register is incomplete");
     shots.push(await capture("settings-page", 1440, 900));
     shots.push(await capture("settings-page", 720, 560));
     const settings = {
       saveDisabled: await evalJs("[...document.querySelectorAll('[data-testid=desktop-settings-page] button')].find(el => el.textContent.includes('保存设置'))?.disabled"),
-      rootDisabled: await evalJs("document.querySelector('[data-testid=desktop-settings-page] input')?.disabled"),
+      rootDisabled: await evalJs("document.querySelector('[data-testid=desktop-settings-page] input[aria-label=\\\"默认任务根目录\\\"]')?.disabled"),
+      configDirectoryReason: await evalJs("document.querySelector('[aria-label=应用配置目录]')?.innerText"),
+      externalEditorWired: await evalJs("document.querySelector('[data-testid=desktop-settings-page]')?.innerText.includes('外部编辑器已接线')"),
     };
+    if (settings.saveDisabled !== true || settings.rootDisabled !== true || settings.externalEditorWired !== true) throw Error("settings page wired/unwired controls do not match the Host status " + JSON.stringify(settings));
     views.window.setContentSize(1440, 900);
     await wait(250);
     await clickSelector('[data-testid=desktop-shell] button[title="定时任务"]');
@@ -379,12 +396,17 @@ async function run() {
       error: await evalJs("document.querySelector('[data-testid=desktop-schedules-page] [role=alert]')?.innerText"),
     };
     await clickSelector('[data-testid=desktop-shell] button[title="需要处理"]');
-    await until((body) => body.includes("完成未读 · 1") && body.includes("查看 main 会话"), "attention page");
+    await until((body) => body.includes("完成未读 · 1") && body.includes("查看 main 会话") && body.includes("非 main 原会话无 Host 恢复或定位操作"), "attention page");
     shots.push(await capture("attention-page", 1440, 900));
     shots.push(await capture("attention-page", 720, 560));
     views.window.setContentSize(1440, 900);
     await wait(250);
-    const attention = { rows: await evalJs("document.querySelectorAll('[data-attention-item]').length"), error: await evalJs("document.querySelector('[data-testid=desktop-attention-page] [role=alert]')?.innerText") };
+    const attention = {
+      rows: await evalJs("document.querySelectorAll('[data-attention-item]').length"),
+      error: await evalJs("document.querySelector('[data-testid=desktop-attention-page] [role=alert]')?.innerText"),
+      unwiredReason: await evalJs("document.querySelector('[data-testid=desktop-attention-page]')?.innerText.includes('非 main 原会话无 Host 恢复或定位操作，因此只能查看记录，不能跳回该会话。')"),
+      mainSessionWired: await evalJs("document.querySelector('[data-testid=desktop-attention-page]')?.innerText.includes('SDK main 回合的执行结果已接入')"),
+    };
     // Seed one synthetic Host device through the real pairing ops so this capture
     // can prove the production revoke button reaches the real Host. The pairing
     // control itself remains disabled/unwired in the rendered page; this setup is
