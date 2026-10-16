@@ -162,7 +162,9 @@ export type ShellTaskOp =
   | "task/markAttentionRead"
   | "task/scheduleList"
   | "task/scheduleRuns"
-  | "task/remoteState";
+  | "task/remoteState"
+  | "task/remoteEntryMode"
+  | "task/remoteDeviceRevoke";
 
 /**
  * Task-scoped op through main into the per-workspace Host. Rejects outside

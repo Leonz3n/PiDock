@@ -385,13 +385,81 @@ async function run() {
     views.window.setContentSize(1440, 900);
     await wait(250);
     const attention = { rows: await evalJs("document.querySelectorAll('[data-attention-item]').length"), error: await evalJs("document.querySelector('[data-testid=desktop-attention-page] [role=alert]')?.innerText") };
+    // Seed one synthetic Host device through the real pairing ops so this capture
+    // can prove the production revoke button reaches the real Host. The pairing
+    // control itself remains disabled/unwired in the rendered page; this setup is
+    // confined to the isolated task root removed in `finally`.
+    const remoteOrigin = { kind: "shell-ui", senderWebContentsId: views.shellView.webContents.id };
+    const mintedRemote = await registry.routeTaskOp({ workspaceId: "issue47", taskId, op: "task/remotePairMint", payload: { label: "Issue47 evidence setup" }, origin: remoteOrigin });
+    if (typeof mintedRemote.payload?.credentialId !== "string" || typeof mintedRemote.payload?.secret !== "string") throw Error("could not seed isolated remote evidence device");
+    const exchangedRemote = await registry.routeTaskOp({ workspaceId: "issue47", taskId, op: "task/remotePairExchange", payload: { credentialId: mintedRemote.payload.credentialId, secret: mintedRemote.payload.secret, deviceName: "Issue47 capture device", permissions: ["overview"] }, origin: remoteOrigin });
+    if (exchangedRemote.payload?.device?.name !== "Issue47 capture device" || exchangedRemote.payload.device.status !== "pending-confirmation") throw Error("real Host did not create the isolated pending evidence device");
     await clickSelector('[data-testid=desktop-shell] button[title="远程访问"]');
-    await until((body) => body.includes("该任务尚无已登记设备。"), "remote page state");
+    await until((body) => body.includes("Issue47 capture device"), "remote page state");
+    const remoteControls = await evalJs(`(() => {
+      const page = document.querySelector('[data-testid=desktop-remote-page]');
+      const mode = [...page.querySelectorAll('button')].filter(button => button.textContent.trim().startsWith('切换到'));
+      const revoke = [...page.querySelectorAll('button')].filter(button => button.textContent.trim() === '撤销');
+      const pair = page.querySelector('button[title="配对流程尚未接线"]');
+      return { modeButtons: mode.map(button => ({ label: button.textContent.trim(), disabled: button.disabled })), revokeButtons: revoke.map(button => ({ label: button.textContent.trim(), disabled: button.disabled })), pairDisabled: pair?.disabled ?? null, unwired: ['配对尚未接线。', '授权、凭据轮换与审计尚未接线。'].map(text => page.innerText.includes(text)) };
+    })()`);
+    if (remoteControls.modeButtons.length !== 2 || remoteControls.modeButtons.some(button => button.disabled) || remoteControls.revokeButtons.length !== 1 || remoteControls.revokeButtons[0].disabled || remoteControls.pairDisabled !== true || remoteControls.unwired.some(value => !value)) throw Error("remote page control/wiring contract " + JSON.stringify(remoteControls));
     shots.push(await capture("remote-page", 1440, 900));
     shots.push(await capture("remote-page", 720, 560));
     views.window.setContentSize(1440, 900);
     await wait(250);
-    const remote = { task: await evalJs("document.querySelector('#desktop-remote-task')?.selectedOptions[0]?.textContent"), devices: await evalJs("document.querySelectorAll('[data-remote-device]').length"), error: await evalJs("document.querySelector('[data-testid=desktop-remote-page] [role=alert]')?.innerText") };
+
+    // Switching between private Tailscale and the isolated Gateway mode is safe
+    // here: the real Host reports its Gateway connection offline, this capture
+    // starts no listener, and the temporary root is removed. Refuse to switch if
+    // the starting mode is not one of those private routes.
+    const initialRemote = await registry.routeTaskOp({ workspaceId: "issue47", taskId, op: "task/remoteState", payload: {}, origin: remoteOrigin });
+    const initialMode = initialRemote.payload?.entry?.mode;
+    if ((initialMode !== "tailscale" && initialMode !== "gateway") || initialRemote.payload?.gateway?.status !== "offline") throw Error("remote mode evidence requires a private route with offline Gateway state " + JSON.stringify(initialRemote));
+    const activeEntryLabel = await evalJs(`(() => {
+      const page = document.querySelector('[data-testid=desktop-remote-page]');
+      const card = [...page.querySelectorAll('div.mt-6.grid > div')].find(item => item.innerText.includes('当前任务入口'));
+      return card?.querySelector('.flex.items-center')?.innerText.trim() ?? '';
+    })()`);
+    const expectedActiveLabel = initialMode === "gateway" ? "自建 Gateway" : "Tailscale 私有访问";
+    if (activeEntryLabel !== expectedActiveLabel) throw Error("remote page does not display Host's real entry mode");
+    const targetEntryLabel = initialMode === "gateway" ? "Tailscale 私有访问" : "自建 Gateway";
+    const targetEntryMode = targetEntryLabel === "自建 Gateway" ? "gateway" : "tailscale";
+    await evalJs("window.confirm = (message) => { window.__issue47RemoteModeConfirmation = message; return true; }");
+    await click(`切换到 ${targetEntryLabel}`);
+    for (let i = 0; i < 150; i++) {
+      const active = await evalJs(`(() => { const page = document.querySelector('[data-testid=desktop-remote-page]'); const card = [...page.querySelectorAll('div.mt-6.grid > div')].find(item => item.innerText.includes('当前任务入口')); return card?.querySelector('.flex.items-center')?.innerText.trim() ?? ''; })()`);
+      if (active === targetEntryLabel) break;
+      if (i === 149) throw Error("remote entry switch did not render Host response");
+      await wait(100);
+    }
+    const modeConfirmation = await evalJs("window.__issue47RemoteModeConfirmation");
+    if (typeof modeConfirmation !== "string" || !modeConfirmation.includes(targetEntryLabel) || !modeConfirmation.includes("旧连接断开")) throw Error("remote entry confirmation did not name mode and consequence");
+    const switchedRemote = await registry.routeTaskOp({ workspaceId: "issue47", taskId, op: "task/remoteState", payload: {}, origin: remoteOrigin });
+    if (switchedRemote.payload?.entry?.mode !== targetEntryMode) throw Error("real Host remote mode did not change " + JSON.stringify(switchedRemote));
+    shots.push(await capture("remote-entry-switched", 1440, 900));
+    shots.push(await capture("remote-entry-switched", 720, 560));
+
+    await evalJs("window.confirm = (message) => { window.__issue47RemoteRevokeConfirmation = message; return true; }");
+    await click("撤销");
+    await until((body) => body.includes("已撤销"), "remote device revoked");
+    const revokeConfirmation = await evalJs("window.__issue47RemoteRevokeConfirmation");
+    const revokedRemote = await registry.routeTaskOp({ workspaceId: "issue47", taskId, op: "task/remoteState", payload: {}, origin: remoteOrigin });
+    if (typeof revokeConfirmation !== "string" || !revokeConfirmation.includes("Issue47 capture device") || revokedRemote.payload?.devices?.[0]?.status !== "revoked") throw Error("real Host device revoke did not complete " + JSON.stringify({ revokeConfirmation, revokedRemote }));
+    shots.push(await capture("remote-device-revoked", 1440, 900));
+    shots.push(await capture("remote-device-revoked", 720, 560));
+    views.window.setContentSize(1440, 900);
+    await wait(250);
+    const remote = {
+      task: await evalJs("document.querySelector('#desktop-remote-task')?.selectedOptions[0]?.textContent"),
+      devices: await evalJs("document.querySelectorAll('[data-remote-device]').length"),
+      mode: targetEntryMode,
+      modeConfirmation,
+      revokeConfirmation,
+      revokedStatus: revokedRemote.payload?.devices?.[0]?.status,
+      controls: remoteControls,
+      error: await evalJs("document.querySelector('[data-testid=desktop-remote-page] [role=alert]')?.innerText"),
+    };
     await clickSelector('[data-testid=desktop-shell] button[title="已归档"]');
     await until((body) => body.includes("还没有归档任务。"), "archive page");
     shots.push(await capture("archive-page", 1440, 900));

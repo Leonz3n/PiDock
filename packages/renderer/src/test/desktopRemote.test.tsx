@@ -72,3 +72,113 @@ it("waits for lifecycle verification before reading a task", () => {
   expect(screen.getByRole("status")).toHaveTextContent("正在核验任务");
   expect(taskOp).not.toHaveBeenCalled();
 });
+
+it("confirms an entry mode with its named reachability consequence, then displays and refreshes Host state", async () => {
+  let current = payload("gateway");
+  let reads = 0;
+  const taskOp = vi.fn(async (_taskId: string, op: string, input: Record<string, unknown> = {}) => {
+    if (op === "task/remoteState") { reads++; return { ok: true, payload: current }; }
+    if (op === "task/remoteEntryMode") {
+      current = payload(input["mode"] as "gateway" | "tailscale");
+      current.entry.label = "Host 返回的 Tailscale 状态";
+      return { ok: true, payload: current };
+    }
+    throw new Error(`unexpected op ${op}`);
+  });
+  window.pidock = { taskOp: taskOp as never };
+  const confirmation = vi.spyOn(window, "confirm").mockReturnValue(true);
+  render(<DesktopRemotePage tasks={tasks.slice(0, 1)} lifecyclePending={false} lifecycleErrors={[]} />);
+
+  await screen.findByText("真实手机");
+  fireEvent.click(screen.getByRole("button", { name: "切换到 Tailscale 私有访问" }));
+  expect(confirmation).toHaveBeenCalledTimes(1);
+  expect(confirmation.mock.calls[0]?.[0]).toContain("Tailscale 私有访问");
+  expect(confirmation.mock.calls[0]?.[0]).toContain("切换后旧连接断开");
+  await waitFor(() => expect(taskOp).toHaveBeenCalledWith("task-a", "task/remoteEntryMode", { label: "远程访问页", mode: "tailscale" }));
+  expect(await screen.findByRole("heading", { name: "Host 返回的 Tailscale 状态" })).toBeInTheDocument();
+  await waitFor(() => expect(reads).toBeGreaterThanOrEqual(2));
+});
+
+it("does not call the entry-mode op when its confirmation is cancelled", async () => {
+  const taskOp = vi.fn(async (_taskId: string, _op: string, _input?: Record<string, unknown>) => ({ ok: true, payload: payload() }));
+  window.pidock = { taskOp: taskOp as never };
+  vi.spyOn(window, "confirm").mockReturnValue(false);
+  render(<DesktopRemotePage tasks={tasks.slice(0, 1)} lifecyclePending={false} lifecycleErrors={[]} />);
+  await screen.findByText("真实手机");
+
+  fireEvent.click(screen.getByRole("button", { name: "切换到 Funnel" }));
+  expect(taskOp.mock.calls.some((call) => call[1] === "task/remoteEntryMode")).toBe(false);
+});
+
+it("refreshes the device list after a successful Host revocation", async () => {
+  let devices = [payload().devices[0]];
+  let reads = 0;
+  const taskOp = vi.fn(async (_taskId: string, op: string) => {
+    if (op === "task/remoteState") { reads++; return { ok: true, payload: { ...payload(), devices } }; }
+    if (op === "task/remoteDeviceRevoke") { devices = [{ ...devices[0]!, status: "revoked", permissions: [], online: false }]; return { ok: true, payload: { device: { deviceId: "device-1" } } }; }
+    throw new Error(`unexpected op ${op}`);
+  });
+  window.pidock = { taskOp: taskOp as never };
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  render(<DesktopRemotePage tasks={tasks.slice(0, 1)} lifecyclePending={false} lifecycleErrors={[]} />);
+
+  await screen.findByText("真实手机");
+  fireEvent.click(screen.getByRole("button", { name: "撤销" }));
+  await waitFor(() => expect(taskOp).toHaveBeenCalledWith("task-a", "task/remoteDeviceRevoke", { label: "远程访问页", deviceId: "device-1" }));
+  expect(await screen.findByText("已撤销")).toBeInTheDocument();
+  await waitFor(() => expect(reads).toBeGreaterThanOrEqual(2));
+  expect(screen.getByText("真实手机")).toBeInTheDocument();
+});
+
+it("names the device and its consequence in the revoke confirmation", async () => {
+  const taskOp = vi.fn(async (_taskId: string, op: string) => op === "task/remoteState"
+    ? { ok: true, payload: payload() }
+    : { ok: true, payload: { device: { deviceId: "device-1" } } });
+  window.pidock = { taskOp: taskOp as never };
+  const confirmation = vi.spyOn(window, "confirm").mockReturnValue(true);
+  render(<DesktopRemotePage tasks={tasks.slice(0, 1)} lifecyclePending={false} lifecycleErrors={[]} />);
+  await screen.findByText("真实手机");
+
+  fireEvent.click(screen.getByRole("button", { name: "撤销" }));
+  expect(confirmation.mock.calls[0]?.[0]).toContain("真实手机");
+  expect(confirmation.mock.calls[0]?.[0]).toContain("device-1");
+  expect(confirmation.mock.calls[0]?.[0]).toContain("现有连接与后续请求均失效");
+  await waitFor(() => expect(taskOp).toHaveBeenCalledWith("task-a", "task/remoteDeviceRevoke", { label: "远程访问页", deviceId: "device-1" }));
+});
+
+it("does not call the device-revoke op when its confirmation is cancelled", async () => {
+  const taskOp = vi.fn(async (_taskId: string, _op: string, _input?: Record<string, unknown>) => ({ ok: true, payload: payload() }));
+  window.pidock = { taskOp: taskOp as never };
+  vi.spyOn(window, "confirm").mockReturnValue(false);
+  render(<DesktopRemotePage tasks={tasks.slice(0, 1)} lifecyclePending={false} lifecycleErrors={[]} />);
+  await screen.findByText("真实手机");
+
+  fireEvent.click(screen.getByRole("button", { name: "撤销" }));
+  expect(taskOp.mock.calls.some((call) => call[1] === "task/remoteDeviceRevoke")).toBe(false);
+});
+
+it("renders Host revocation refusal verbatim without claiming success", async () => {
+  const refusal = "permission-denied: 设备管理只允许桌面显式操作";
+  const taskOp = vi.fn(async (_taskId: string, op: string) => op === "task/remoteState"
+    ? { ok: true, payload: payload() }
+    : { ok: false, error: refusal });
+  window.pidock = { taskOp: taskOp as never };
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  render(<DesktopRemotePage tasks={tasks.slice(0, 1)} lifecyclePending={false} lifecycleErrors={[]} />);
+  await screen.findByText("真实手机");
+
+  fireEvent.click(screen.getByRole("button", { name: "撤销" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent(refusal);
+  expect(screen.queryByText(/撤销成功/)).toBeNull();
+  expect(taskOp.mock.calls.some((call) => call[1] === "task/remoteState")).toBe(true);
+});
+
+it("keeps pairing, authorization, credential rotation and audit explicitly marked as unwired", async () => {
+  window.pidock = { taskOp: vi.fn(async () => ({ ok: true, payload: payload() })) as never };
+  render(<DesktopRemotePage tasks={tasks.slice(0, 1)} lifecyclePending={false} lifecycleErrors={[]} />);
+
+  await screen.findByText("真实手机");
+  expect(screen.getByRole("button", { name: "扫码添加" })).toBeDisabled();
+  expect(screen.getByText(/配对尚未接线/)).toBeInTheDocument();
+  expect(screen.getByTestId("desktop-remote-page")).toHaveTextContent("授权、凭据轮换与审计尚未接线");
+});
