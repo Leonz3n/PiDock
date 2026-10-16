@@ -1485,8 +1485,11 @@ async function performTaskOp(
         // flips a lifecycle flag as if a process had run.
         const precondition = catalogControlPrecondition(services, serviceId);
         if (precondition.kind === "unregistered") {
+          if (services.get(serviceId)?.launchSource === "ui") {
+            return { ok: false, error: "service-execution-unavailable: 仅可信服务目录登记的服务可执行；该服务由界面登记。请改用可信服务目录登记的服务" };
+          }
           return serviceOwnerInventory ? serviceOwnerInventory.control()
-            : { ok: false, error: "service-execution-unavailable: 真实服务进程启停尚未接线" };
+            : { ok: false, error: "service-execution-unavailable: 仅可信服务目录登记的服务可执行；该服务未由可信服务目录登记。请通过可信服务目录登记后再执行" };
         }
         if (precondition.kind === "uncertain") return { ok: false, error: precondition.error };
         const driver = serviceDriverFor(taskId, services);
