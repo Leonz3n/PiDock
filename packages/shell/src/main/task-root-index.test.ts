@@ -209,13 +209,18 @@ describe("main-owned override task root index", () => {
     expect(index.resolve("task-abcdef12")).toBeNull();
   });
 
-  it("discloses unindexed legacy tasks in an otherwise registered root until explicit import", async () => {
+  it("keeps indexed tasks readable and names unindexed tasks until explicit import", async () => {
     const { override, index } = setup();
-    task(override);
+    const indexedDir = task(override);
     await index.importRoot(override);
-    task(override, "task-00000002");
-    expect(index.inventory().roots[1]).toMatchObject({ state: "error", message: expect.stringContaining("未登记") });
-    expect(index.inventory().tasks).toEqual([]);
+    task(override, "task-00000003", "task-00000002");
+    const inventory = index.inventory();
+    expect(inventory.roots[1]).toMatchObject({ state: "ready", message: expect.stringContaining("task-00000002") });
+    expect(inventory.roots[1]?.message).toContain("发现 1 个未登记任务（目录 task-00000003 / ID task-00000002）");
+    expect(inventory.roots[1]?.message).toContain("请在「项目管理」使用「找回任务根」明确导入");
+    expect(inventory.tasks.map((row) => row.taskId)).toEqual(["task-abcdef12"]);
+    expect(index.resolve("task-abcdef12")).toBe(indexedDir);
+    expect(index.resolve("task-00000002")).toBeNull();
     await index.importRoot(override);
     expect(index.inventory().tasks).toHaveLength(2);
   });

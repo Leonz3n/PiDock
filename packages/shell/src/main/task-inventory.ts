@@ -10,9 +10,10 @@ export interface PersistedTaskSummary {
   repoCount: number;
   updatedAt: string;
 }
+export interface PersistedTaskLocation { dirId: string; summary: PersistedTaskSummary }
 
 /** Main-owned inventory of immediate children of the configured tasks root. */
-export function listPersistedTasks(root: string): PersistedTaskSummary[] {
+export function listPersistedTaskLocations(root: string): PersistedTaskLocation[] {
   let rootStat;
   try {
     rootStat = lstatSync(root);
@@ -22,7 +23,7 @@ export function listPersistedTasks(root: string): PersistedTaskSummary[] {
   }
   if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new Error("invalid task root");
   const seen = new Set<string>();
-  const tasks: PersistedTaskSummary[] = [];
+  const tasks: PersistedTaskLocation[] = [];
   for (const entry of readdirSync(root).sort()) {
     if (entry.startsWith(".") || !isSafeTaskChildName(entry)) continue;
     const dir = join(root, entry);
@@ -44,7 +45,11 @@ export function listPersistedTasks(root: string): PersistedTaskSummary[] {
       throw new Error("invalid task record identity");
     }
     seen.add(record.taskId);
-    tasks.push({ taskId: record.taskId, name: record.name, branch: record.branch, repoCount: record.repos.length, updatedAt: record.updatedAt });
+    tasks.push({ dirId: entry, summary: { taskId: record.taskId, name: record.name, branch: record.branch, repoCount: record.repos.length, updatedAt: record.updatedAt } });
   }
   return tasks;
+}
+
+export function listPersistedTasks(root: string): PersistedTaskSummary[] {
+  return listPersistedTaskLocations(root).map(({ summary }) => summary);
 }
