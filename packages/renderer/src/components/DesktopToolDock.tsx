@@ -1255,7 +1255,6 @@ function ServiceControl({ taskId, projectId, row, onChanged }: {
   const [error, setError] = useState<string | undefined>(undefined);
   const [fenced, setFenced] = useState<string | undefined>(undefined);
   const running = serviceRunning(row);
-  const uiRegistered = row.status?.kind === "registry" && row.status.launchSource === "ui";
   const action = running ? "stop" : "start";
   const submit = async () => {
     setBusy(true);
@@ -1277,15 +1276,12 @@ function ServiceControl({ taskId, projectId, row, onChanged }: {
   return (
     <div className="mt-1 min-w-0" data-service-control={row.binding.serviceId}>
       <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-        <Button type="button" size="sm" variant="outline" disabled={busy || uiRegistered} onClick={() => { void submit(); }}>
+        <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => { void submit(); }}>
           {running ? "停止" : "启动"}
         </Button>
-        {!uiRegistered && <span className="text-[10px] text-muted">{running ? "停止本任务已登记的服务进程" : "按项目配方启动本服务"}</span>}
+        <span className="text-[10px] text-muted">{running ? "停止本任务已登记的服务进程" : "按项目配方启动本服务"}</span>
         {error !== undefined && <span role="alert" className="min-w-0 break-words text-[10px] text-[#ad4545]">{error}</span>}
       </div>
-      {uiRegistered && <p className="mt-1 border border-[#dfc99f] px-2 py-1 text-[10px] text-[#9a6032]" data-testid="dock-service-ui-launch-source">
-        本机不会执行：此服务由界面登记；本机仅执行可信服务目录登记的服务。请改用可信服务目录登记的服务。
-      </p>}
       {fenced !== undefined && <ServiceOwnerRebind projectId={projectId} taskId={taskId} surfacedBy={fenced}
         onRebound={() => { setError(undefined); onChanged(); }} onDismiss={() => setFenced(undefined)} />}
     </div>
