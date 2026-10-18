@@ -600,6 +600,14 @@ export class ServiceCatalog {
     if (!owner || owner.identity.taskId !== taskId || !this.authority.projectExists(owner.projectId)) throw new Error("task identity unavailable");
     return owner;
   }
+  /** The trusted project association needed to resolve this task's own bindings. */
+  projectForTask(taskId: string): string | null {
+    const owner = this.authority.verifiedTask ? this.authority.verifiedTask(taskId) : this.authority.task(taskId);
+    if (!owner || owner.identity.taskId !== taskId || owner.projectId !== null && !this.authority.projectExists(owner.projectId)) {
+      throw new Error("task identity unavailable");
+    }
+    return owner.projectId;
+  }
   /**
    * Verified physical launch paths of one binding: every component under the
    * task root must be a real directory (no symlinked level) and the program

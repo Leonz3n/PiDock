@@ -51,7 +51,9 @@ import { InstalledServiceHostAuthority } from "./service-host-binding.js";
 import { ExperimentalServiceRecoveryStore } from "./service-recovery-store-experiment.js";
 import { PerTaskHostRegistry, registerIpc } from "./runtime.js";
 import { ServiceCatalog, type ServiceCatalogAuthority } from "./service-catalog.js";
-import { diskTaskStore } from "../host/task-host.js";
+import { diskTaskStore, TaskWorkspaceHost } from "../host/task-host.js";
+import { SDK_AGENT_TOOL_NAMES } from "../host/sdk-agent-tool-contract.js";
+import { protectApplicationProfile } from "../host/protected-application-path.js";
 import { buildTaskDiskRecord } from "../host/task-store.js";
 
 const STOP_WAIT_MS = 30_000;
@@ -203,7 +205,7 @@ async function production(options: { serviceOwnerRequired?: boolean } = {}) {
   const trust = new TrustDomainRegistry();
   trust.registerShell({ webContentsId: senderWebContentsId, viewId: "shell-view", workspaceId });
   vi.mocked(ipcMain.handle).mockClear();
-  registerIpc({} as never, trust, tasks, undefined, undefined, undefined, undefined, undefined, catalog);
+  registerIpc({} as never, trust, tasks, undefined, undefined, undefined, undefined, undefined, catalog, async () => realpathSync(process.execPath));
   const handler = vi.mocked(ipcMain.handle).mock.calls.findLast(([channel]) => channel === "shell/serviceCatalogOp")?.[1];
   expect(handler).toBeDefined();
   const shell = {
@@ -267,7 +269,7 @@ async function production(options: { serviceOwnerRequired?: boolean } = {}) {
     const payload = await read("task/serviceLog", { serviceId, limit: 200 });
     return Array.isArray(payload["log"]) ? (payload["log"] as { line: string }[]).map((entry) => entry.line) : [];
   };
-  return { taskId, taskDir, projectId, environmentId, catalog, tasks, client, main, handler: handler!, shell, trust, run, read, status, log, bind, saveRevision, seedOwner, op, ownerScopes,
+  return { taskId, taskDir, profile, projectId, environmentId, catalog, tasks, client, main, handler: handler!, shell, trust, run, read, status, log, bind, saveRevision, seedOwner, op, ownerScopes,
     adopt: (serviceId: string, templateVersion: number, confirm: boolean) => op({ op: "adoptBinding", projectId, taskId, serviceId, templateVersion, confirm }),
     rebind: (confirm: boolean) => op({ op: "rebindServiceOwner", projectId, taskId, confirm }),
     marker: (tag: string) => join(taskDir, `repo-a/svc-${tag}`, `started-${tag}.txt`),
@@ -275,6 +277,142 @@ async function production(options: { serviceOwnerRequired?: boolean } = {}) {
 }
 
 describe.skipIf(process.platform === "win32")("#7 production shell/serviceCatalogOp service run", () => {
+  it("registers a catalog binding created after the task Host was already opened", { timeout: 60_000 }, async () => {
+    const f = await production();
+    // The first route opens the per-task Host while no confirmed binding exists.
+    await f.read("task/serviceStatus", { serviceId: "svc-a" });
+    const serviceId = f.bind("svc-a", "a");
+
+    // A binding written after the Host was opened must still reach it: a task
+    // opened before the user bound the service is the ordinary UI order.
+    const routed = vi.spyOn(f.client, "task");
+    await f.read("task/serviceStatus", { serviceId });
+    const registration = routed.mock.calls.map(([params]) => params)
+      .find((params) => params.op === "task/registerService" && (params.payload as { serviceId?: string }).serviceId === serviceId);
+    expect(registration).toMatchObject({ op: "task/registerService", origin: { kind: "service-catalog", senderWebContentsId: 7 } });
+  });
+
+  it("registers confirmed bindings before the first task route so the Agent can start without a human launch", { timeout: 60_000 }, async () => {
+    const f = await production();
+    const serviceId = f.bind("svc-a", "a");
+
+    // A normal task read is the first route and creates the per-task Host. No
+    // human service start has happened: the Agent must see the catalog binding
+    // that main registered as part of opening/routing this task.
+    const routed = vi.spyOn(f.client, "task");
+    await f.read("task/serviceStatus", { serviceId });
+    const registration = routed.mock.calls.map(([params]) => params).find((params) => params.op === "task/registerService");
+    expect(registration).toMatchObject({ op: "task/registerService", origin: { kind: "service-catalog", senderWebContentsId: 7 } });
+    expect(registration?.payload).not.toHaveProperty("code");
+    expect(registration?.payload).not.toHaveProperty("codeObservationFailure");
+    const { agentServiceHostFor } = await import("../host/host.js");
+    let broker: { call(sessionId: string, request: { tool: string; args: Record<string, unknown> }): Promise<{ outcome: string; code?: string; text: string }> } | undefined;
+    const agentHost = new TaskWorkspaceHost(f.taskId, f.taskDir, diskTaskStore, () => "2026-09-22T10:00:00+08:00", () => [], undefined, undefined, undefined, undefined,
+      (contextOptions) => {
+        if (!contextOptions.toolHost) throw Error("agent tool broker unavailable");
+        broker = contextOptions.toolHost;
+        return { open: async () => ({ tools: [...SDK_AGENT_TOOL_NAMES] }), prompt: async () => { throw Error("no model turn expected"); },
+          cancel: async () => {}, seal: () => {}, dispose: async () => {} } as never;
+      }, protectApplicationProfile(f.profile), () => agentServiceHostFor(f.taskId));
+    cleanups.push(() => agentHost.shutdownSdk().catch(() => {}));
+    await agentHost.configureSdkProvider({ config: { profileId: "p-11111111-2222-3333-4444-555555555555", baseUrl: "https://models.example.test/v1", modelId: "gpt-5-mini",
+      contextWindow: 128000, maxTokens: 8192, authRef: "PIDOCK_PROVIDER_EXAMPLE", generation: 1 }, credential: "synthetic-key" });
+    if (!broker) throw Error("agent tool broker not captured");
+    const call = (tool: string) => broker!.call("main", { tool, args: { serviceId } });
+
+    await agentHost.setPermission("main", "read");
+    expect(await call("service.start")).toMatchObject({ outcome: "refused", code: "tool-refused:gate-denied" });
+    expect(existsSync(f.marker("a"))).toBe(false);
+
+    await agentHost.setPermission("main", "default");
+    const waiting = call("service.start");
+    await until(() => agentHost.listApprovals("main").some((row) => row.status === "pending"), "Agent service-start approval");
+    const approval = agentHost.listApprovals("main").find((row) => row.status === "pending")!;
+    expect(approval.id).toMatch(/^approval-\d+$/);
+    expect(existsSync(f.marker("a"))).toBe(false);
+    agentHost.approve("main", approval.id);
+    expect(await waiting).toMatchObject({ outcome: "ok" });
+    const defaultPid = await untilMarkerPid(f.taskDir, "a");
+    expect(alive(defaultPid)).toBe(true);
+    expect(await f.status(serviceId)).toMatchObject({ lifecycle: "running", launchSource: "catalog" });
+    expect(agentHost.openSession("main").snapshot().approvals.find((row) => row.id === approval.id)?.consumedAt).toBeDefined();
+
+    await agentHost.setPermission("main", "auto");
+    expect(await call("service.stop")).toMatchObject({ outcome: "ok" });
+    await until(() => !alive(defaultPid), "the Agent-stopped service child");
+    rmSync(f.marker("a"), { force: true });
+    expect(await call("service.start")).toMatchObject({ outcome: "ok" });
+    const autoPid = await untilMarkerPid(f.taskDir, "a");
+    expect(autoPid).not.toBe(defaultPid);
+    expect(alive(autoPid)).toBe(true);
+    expect(await f.run(serviceId, "stop")).toMatchObject({ ok: true, payload: { action: "stop" } });
+    await until(() => !alive(autoPid), "the final service child to exit");
+    await agentHost.shutdownSdk();
+  });
+
+  it("keeps task opening available and names a failed binding while registering the remaining services", async () => {
+    const f = await production();
+    const failedService = f.bind("svc-a", "a");
+    const goodService = f.bind("svc-b", "b");
+    const originalLaunchFor = f.catalog.launchFor.bind(f.catalog);
+    vi.spyOn(f.catalog, "launchFor").mockImplementation((taskId, projectId, serviceId, env) => {
+      if (serviceId === failedService) throw new Error("service-launch-unavailable");
+      return originalLaunchFor(taskId, projectId, serviceId, env);
+    });
+    const diagnostic = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const read = await f.read("task/serviceStatus", { serviceId: goodService });
+    expect(read).not.toHaveProperty("error");
+    expect(await f.status(goodService)).toMatchObject({ serviceId: goodService, launchSource: "catalog" });
+    expect(f.tasks.size).toBe(1);
+    const messages = diagnostic.mock.calls.flat().join("\n");
+    expect(messages).toContain(`service ${failedService} could not be resolved from its confirmed catalog binding`);
+    expect(messages).toContain("service-launch-unavailable");
+  });
+
+  it("leaves task routing available without executable registrations on unsupported platforms", async () => {
+    const f = await production();
+    const serviceId = f.bind("svc-a", "a");
+    const routed = vi.spyOn(f.client, "task");
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+
+    const result = await f.read("task/serviceStatus", { serviceId });
+    expect(f.tasks.size).toBe(1);
+    expect(JSON.stringify(result)).not.toContain("unsupported-platform");
+    expect(routed.mock.calls.filter(([params]) => params.op === "task/registerService")).toHaveLength(0);
+  });
+
+  it("creates a template, binds with the real fixture executable picker, then starts and stops the real child", { timeout: 60_000 }, async () => {
+    const f = await production();
+    const subdir = "svc-picker";
+    mkdirSync(join(f.taskDir, "repo-a", subdir), { recursive: true });
+    writeFileSync(join(f.taskDir, "repo-a", subdir, "service.cjs"), SERVICE_SCRIPT);
+    const created = await f.op({ op: "create", projectId: f.projectId, environmentId: f.environmentId,
+      descriptor: { name: "API picker", program: "node", args: ["service.cjs"], ports: [], runType: "long-lived" },
+      shared: [{ key: "SERVICE_TAG", value: "picker", secret: false }] }) as { ok: boolean; payload?: { serviceId: string } };
+    expect(created.ok).toBe(true);
+    const serviceId = created.payload!.serviceId;
+    const bound = await f.op({ op: "bind", projectId: f.projectId, environmentId: f.environmentId, taskId: f.taskId,
+      serviceId, templateVersion: 1, rootId: "repo-a", subdir,
+      privateRefs: [{ key: "SERVICE_TOKEN", envRef: "LOCAL_TEST_TOKEN" }] }) as { ok: boolean; payload?: { cancelled: boolean; binding?: Record<string, unknown> } };
+    expect(bound).toMatchObject({ ok: true, payload: { cancelled: false, binding: { serviceId, taskId: f.taskId, templateVersion: 1, rootId: "repo-a", subdir } } });
+
+    const routed = vi.spyOn(f.client, "task");
+    expect(await f.run(serviceId, "start")).toMatchObject({ ok: true, payload: { serviceId, action: "start", actor: "human" } });
+    const registrations = routed.mock.calls.map(([params]) => params).filter((params) => params.op === "task/registerService");
+    expect(registrations).toHaveLength(2);
+    expect(registrations[0]?.origin).toEqual({ kind: "service-catalog", senderWebContentsId: 7 });
+    expect(registrations[0]?.payload).not.toHaveProperty("code");
+    expect(registrations[0]?.payload).not.toHaveProperty("codeObservationFailure");
+    expect(registrations[1]?.origin).toEqual({ kind: "service-catalog", senderWebContentsId: 7 });
+    const pid = await untilMarkerPid(f.taskDir, "picker");
+    expect(alive(pid)).toBe(true);
+    expect(await f.status(serviceId)).toMatchObject({ serviceId, lifecycle: "running", launchSource: "catalog" });
+    expect(await f.run(serviceId, "stop")).toMatchObject({ ok: true, payload: { serviceId, action: "stop" } });
+    await until(() => !alive(pid), "the picker-bound service child to exit");
+    expect(await f.status(serviceId)).toMatchObject({ lifecycle: "stopped", launchSource: "catalog" });
+  });
+
   it("starts, reports, logs and stops a real bound service through the registered IPC handler", async () => {
     const f = await production();
     const first = f.bind("svc-a", "a");
