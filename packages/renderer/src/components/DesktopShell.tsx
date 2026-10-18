@@ -195,6 +195,9 @@ export function DesktopRootErrors({ roots, busy, retryPending, retryError, onRet
         <Icon name="refresh" className={retryPending ? "animate-spin" : undefined} />
       </Button>
     </div>)}
+    {roots.filter((root) => root.state !== "error" && root.message).map((root) => <p role="status" key={root.label} className="border-b border-[#dfc99f] py-2 text-[11px] text-[#9a6032]">
+      {root.label}：{root.message}
+    </p>)}
     {retryPending && <p role="status" className="pb-2 text-[11px] text-muted">正在重读任务根</p>}
     {retryError && <p role="alert" className="pb-2 text-[11px] text-[#ad4545]">{retryError}</p>}
   </div>;

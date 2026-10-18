@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TaskWorkspaceHost } from "../host/task-host.js";
-import { diskTaskStore, readTaskRecordOnDisk } from "../host/task-store.js";
+import { buildTaskDiskRecord, diskTaskStore, readTaskRecordOnDisk, writeTaskRecordOnDisk } from "../host/task-store.js";
 import { ProjectRegistry } from "./project-registry.js";
 import { initializeDefaultTaskRoot } from "./default-root-init.js";
 import { ProjectTaskCreation, CreationIntentStore } from "./project-task-creation.js";
@@ -101,6 +101,30 @@ describe("persistent Project task creation with local Git", { timeout: GIT_CASE_
     expect(existsSync(preview.taskDir)).toBe(false);
     expect(env.getCalls()).toBe(0);
   });
+  it.skipIf(process.platform === "win32")("creates in the healthy default root when an unrelated registered root is symlinked", async () => {
+    const env = await setup();
+    const override = join(env.home, "broken-override"), taskId = "task-00000002";
+    mkdirSync(override);
+    const taskDir = join(override, taskId);
+    mkdirSync(taskDir);
+    writeTaskRecordOnDisk(taskDir, buildTaskDiskRecord({ taskId, name: "Broken root task", dirId: taskId, branch: "task/main",
+      root: override, taskDir, remoteBranch: "main", baseCommit: "abc123", repos: [], now: "2026-09-22T10:00:00Z" }));
+    await env.roots.register(taskDir);
+    const target = join(env.home, "outside-task");
+    mkdirSync(target);
+    rmSync(taskDir, { recursive: true });
+    symlinkSync(target, taskDir, "dir");
+    expect(env.roots.inventory().roots[1]).toMatchObject({ state: "error" });
+    expect(env.roots.isRootAvailable(env.root)).toBe(true);
+    expect(env.roots.isRootAvailable(override)).toBe(false);
+
+    const intent = await env.service.prepare(env.request);
+    expect(intent.root).toBe(env.root);
+    expect(await env.service.commit(intent.id)).toEqual({ taskId: intent.taskId, projectId: env.project.id });
+    expect(readTaskRecordOnDisk(intent.taskDir)?.taskId).toBe(intent.taskId);
+    await expect(env.service.prepare({ ...env.request, override: true }, override)).rejects.toThrow("任务根身份不可读取，请先修复后创建");
+  });
+
   it("establishes a never-used default root at startup so the first task can be prepared and committed", async () => {
     const env = await setup({ rootAbsent: true });
     expect(existsSync(env.root)).toBe(false);

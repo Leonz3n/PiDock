@@ -3,7 +3,7 @@ import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, rea
 import { basename, dirname, isAbsolute, join, normalize } from "node:path";
 import { readTaskRecordOnDisk } from "../host/task-store.js";
 import { isSafeTaskChildName, isTaskDirId, normalizeTaskPath } from "./task-provision.js";
-import { listPersistedTasks, type PersistedTaskSummary } from "./task-inventory.js";
+import { listPersistedTaskLocations, listPersistedTasks, type PersistedTaskSummary } from "./task-inventory.js";
 import { createDiskTaskDirResolver } from "./task-resolver.js";
 
 interface IndexedTask { taskId: string; dirId: string; createdAt: string }
@@ -120,7 +120,7 @@ function sameSummary(a: PersistedTaskSummary, b: PersistedTaskSummary): boolean 
 }
 
 interface ValidatedTask { summary: PersistedTaskSummary; root: string; realPath: string; identity: IndexedTask }
-interface RootGroup { label: string; rows: ValidatedTask[]; message?: string }
+interface RootGroup { label: string; path: string; rows: ValidatedTask[]; taskIds: string[]; error?: boolean; message?: string }
 
 /** Main owns one instance. A missing primary with backup requires explicit recovery. */
 export class TaskRootIndex {
@@ -224,23 +224,24 @@ export class TaskRootIndex {
       return found.length;
     });
   }
-  private scan(): { inventory: TaskInventory; locations: Map<string, ValidatedTask> } {
+  private scan(): { inventory: TaskInventory; locations: Map<string, ValidatedTask>; rootAvailability: Map<string, boolean>; indexAvailable: boolean } {
     let doc: IndexDocument;
     try { doc = this.load().value; }
     catch {
       return { inventory: { tasks: [], roots: [
         { label: "默认任务根", state: "error", message: "覆盖根索引不可读取，无法确认任务身份" },
         { label: "覆盖根索引", state: "error", message: "覆盖根索引不可读取，请检查本机数据后重试" },
-      ] }, locations: new Map() };
+      ] }, locations: new Map(), rootAvailability: new Map([[this.defaultRoot, false]]), indexAvailable: false };
     }
     const groups: RootGroup[] = [];
-    const add = (label: string, read: () => ValidatedTask[]) => {
-      try { groups.push({ label, rows: read() }); }
-      catch (error) { groups.push({ label, rows: [], message: rootFailure(error) }); }
+    const add = (label: string, root: string, read: () => { rows: ValidatedTask[]; taskIds: string[]; message?: string }) => {
+      try { groups.push({ label, path: root, ...read() }); }
+      catch (error) { groups.push({ label, path: root, rows: [], taskIds: [], error: true, message: rootFailure(error) }); }
     };
-    add("默认任务根", () => {
+    add("默认任务根", this.defaultRoot, () => {
       const realPath = verifiedRoot(this.defaultRoot);
-      return listPersistedTasks(this.defaultRoot).map((summary) => {
+      const summaries = listPersistedTasks(this.defaultRoot);
+      const rows = summaries.map((summary) => {
         const dir = createDiskTaskDirResolver(this.defaultRoot)(summary.taskId);
         const record = dir && readTaskRecordOnDisk(dir);
         if (!dir || !record || dirname(dir) !== this.defaultRoot) throw new Error("task record identity changed");
@@ -248,13 +249,17 @@ export class TaskRootIndex {
         if (!sameSummary(verifyTask(this.defaultRoot, identity), summary)) throw new Error("task record identity changed");
         return { summary, root: this.defaultRoot, realPath, identity };
       });
+      return { rows, taskIds: summaries.map((summary) => summary.taskId) };
     });
-    doc.roots.forEach((entry, index) => add(`已登记任务根 ${index + 1}`, () => {
+    doc.roots.forEach((entry, index) => add(`已登记任务根 ${index + 1}`, entry.path, () => {
       verifiedRoot(entry.path, entry.realPath);
       const rows = entry.tasks.map((identity) => ({ summary: verifyTask(entry.path, identity), root: entry.path, realPath: entry.realPath, identity }));
-      const scanned = listPersistedTasks(entry.path);
-      if (scanned.length !== entry.tasks.length) throw new Error("unindexed tasks in registered root");
-      return rows;
+      const scanned = listPersistedTaskLocations(entry.path);
+      const indexedIds = new Set(entry.tasks.map((task) => task.taskId));
+      const unindexed = scanned.filter((task) => !indexedIds.has(task.summary.taskId));
+      const names = unindexed.map((task) => `目录 ${task.dirId} / ID ${task.summary.taskId}`);
+      return { rows, taskIds: scanned.map((task) => task.summary.taskId),
+        message: unindexed.length ? `发现 ${unindexed.length} 个未登记任务（${names.join("、")}），请在「项目管理」使用「找回任务根」明确导入` : undefined };
     }));
     // A failed root still owns every persisted ID. Never let a new default-root
     // record with that ID be displayed or routed as a different task.
@@ -262,31 +267,52 @@ export class TaskRootIndex {
     for (const row of groups[0]!.rows) {
       const owner = indexedIds.get(row.summary.taskId);
       if (owner !== undefined) {
+        groups[0]!.error = true;
         groups[0]!.message = "任务身份与另一任务根冲突，请检查后重试";
+        groups[owner]!.error = true;
         groups[owner]!.message = "任务身份与另一任务根冲突，请检查后重试";
       }
     }
     const seen = new Map<string, number>();
     for (const [index, group] of groups.entries()) {
-      for (const row of group.rows) {
-        const other = seen.get(row.summary.taskId);
+      for (const taskId of group.taskIds) {
+        const other = seen.get(taskId);
         if (other !== undefined) {
+          groups[other]!.error = true;
           groups[other]!.message = "任务身份与另一任务根冲突，请检查后重试";
+          group.error = true;
           group.message = "任务身份与另一任务根冲突，请检查后重试";
-        } else seen.set(row.summary.taskId, index);
+        } else seen.set(taskId, index);
       }
     }
-    const healthy = groups.filter((group) => !group.message);
+    const healthy = groups.filter((group) => !group.error);
     const visible = healthy.flatMap((group) => group.rows);
     return {
       inventory: {
         tasks: visible.map((row) => row.summary),
-        roots: groups.map((group) => group.message ? { label: group.label, state: "error", message: group.message } : { label: group.label, state: "ready" }),
+        roots: groups.map((group) => group.error
+          ? { label: group.label, state: "error", message: group.message }
+          : group.message ? { label: group.label, state: "ready", message: group.message } : { label: group.label, state: "ready" }),
       },
       locations: new Map(visible.map((row) => [row.summary.taskId, row])),
+      rootAvailability: new Map(groups.flatMap((group) => [[group.path, !group.error], [normalizeTaskPath(group.path), !group.error]] as const)),
+      indexAvailable: true,
     };
   }
   inventory(): TaskInventory { return this.scan().inventory; }
+  /** Checks only the selected destination; failures elsewhere do not fence a healthy root. */
+  isRootAvailable(root: string): boolean {
+    const scan = this.scan();
+    if (!scan.indexAvailable) return false;
+    const known = scan.rootAvailability.get(root) ?? scan.rootAvailability.get(normalizeTaskPath(root));
+    if (known !== undefined) return known;
+    try { return lstatSync(root).isDirectory(); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") return false;
+      try { verifiedRoot(dirname(root)); return true; }
+      catch { return false; }
+    }
+  }
   verifiedIdentity(taskId: string): VerifiedTaskIdentity | null {
     if (!isSafeTaskChildName(taskId)) return null;
     const row = this.scan().locations.get(taskId);
