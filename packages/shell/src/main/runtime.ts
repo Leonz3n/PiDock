@@ -40,7 +40,7 @@ import { TaskRootIndex, type VerifiedTaskIdentity } from "./task-root-index.js";
 import { HostTaskAdmission } from "../host/host-task-admission.js";
 import { shutdownDeadline } from "../host/shutdown-deadline.js";
 import { ProjectRegistry } from "./project-registry.js";
-import { ServiceCatalog, serviceCatalogAuthority } from "./service-catalog.js";
+import { ServiceCatalog, serviceCatalogAuthority, type ServiceLaunch } from "./service-catalog.js";
 import { InstalledServiceHostAuthority, type ServiceOwnerChange, type ServiceOwnerDurableRecord } from "./service-host-binding.js";
 import { createServiceTemplateHandler, parseServiceOwnerRebindRequest, parseTaskDependencyRoutingRequest, performServiceBindingOperation, performServiceCatalogOperation, performServiceConfigPreview, parseServiceRunGroupRequest, parseServiceRunRequest } from "./service-catalog-ipc.js";
 import { deriveBoundServiceGroupPlan, readTaskDependencyRouting, unsatisfiedDeclarationMessage, type BoundServiceEntry } from "./service-dependency-routing.js";
@@ -377,6 +377,10 @@ export interface PerTaskHostEntry {
   taskDir: string;
   client: HostClient;
   child: UtilityProcess;
+  /** Fingerprint of the confirmed catalog bindings already registered into this Host. */
+  catalogServicesKey?: string;
+  /** In-flight registration of those bindings, so concurrent routes register once. */
+  catalogServicesPending?: Promise<void>;
 }
 
 type TaskHostQuitResult = { taskId: string; ok: boolean; applied: string[]; failures: unknown[]; retainedTasks: string[]; error?: string };
@@ -402,6 +406,7 @@ export class PerTaskHostRegistry {
   private quitReceipt?: Promise<TaskHostsQuitReport>;
   private disposalReceipt?: Promise<void>;
   private readonly hostExits = new Map<UtilityProcess, { exited: boolean; receipt: Promise<void> }>();
+  private catalogServiceLaunches?: (taskId: string, previousKey: string | undefined) => { key: string; launches: ServiceLaunch[] };
   private services?: InstalledServiceHostAuthority;
   /** Per-task shared-template handler bound by `registerIpc` once the catalog exists ([PiDock 04] #7 box 6). */
   private serviceTemplates?: (taskId: string) => ServiceTemplateRequestHandler;
@@ -423,10 +428,61 @@ export class PerTaskHostRegistry {
     if (this.serviceTemplates) throw Error("service-template-handler-already-bound");
     this.serviceTemplates = create;
   }
+  /** Main's task-open resolver for trusted catalog launches, bound after the catalog exists. */
+  configureCatalogServiceLaunches(resolve: (taskId: string, previousKey: string | undefined) => { key: string; launches: ServiceLaunch[] }): void {
+    if (this.catalogServiceLaunches || this.closing || this.byTaskDir.size || this.pendingHosts.size) {
+      throw Error("service-catalog-launch-resolver-already-bound");
+    }
+    this.catalogServiceLaunches = resolve;
+  }
   private async prepareServices(entry: PerTaskHostEntry): Promise<void> {
     if (!this.services) return;
     try { await this.services.prepare(entry.child, entry.taskId); this.services.verify(entry.child); }
     catch { /* The actual parent transport installs a sticky Host write/quit fence; reads keep their existing admission. */ }
+  }
+  private registerCatalogServices(entry: PerTaskHostEntry, senderWebContentsId: number | undefined): Promise<void> {
+    const resolveLaunches = this.catalogServiceLaunches;
+    if (!resolveLaunches) return Promise.resolve();
+    if (entry.catalogServicesPending) return entry.catalogServicesPending;
+    // Service processes are intentionally unavailable on unsupported platforms;
+    // registering executable catalog rows there would imply a capability Host
+    // cannot provide. The normal task route remains available.
+    if (serviceExecutionRefusal() !== null) return Promise.resolve();
+    if (senderWebContentsId === undefined) {
+      console.error(`[main] task ${entry.taskId} catalog services were not registered: no main-attested sender webContents id`);
+      return Promise.resolve();
+    }
+    const bootstrap = Promise.resolve().then(async () => {
+      // The key covers the bindings, not one launch: a binding written after this
+      // Host was opened (the ordinary UI order), a template version change, or a
+      // rebuilt Host all produce a different key and are registered then.
+      let resolved: { key: string; launches: ServiceLaunch[] };
+      try { resolved = resolveLaunches(entry.taskId, entry.catalogServicesKey); }
+      catch (error) {
+        console.error(`[main] task ${entry.taskId} catalog service bindings could not be read: ${errorMessage(error)}`);
+        return;
+      }
+      if (resolved.key === entry.catalogServicesKey) return;
+      const origin = { kind: "service-catalog", senderWebContentsId } as const;
+      for (const launch of resolved.launches) {
+        try {
+          await entry.client.task({
+            workspaceId: this.workspaceId,
+            taskId: entry.taskId,
+            op: "task/registerService",
+            payload: { serviceId: launch.serviceId, descriptor: launch.descriptor, layers: launch.layers, templateVersion: String(launch.templateVersion) },
+            origin,
+          });
+        } catch (error) {
+          console.error(`[main] task ${entry.taskId} service ${launch.serviceId} could not be registered from its confirmed catalog binding: ${errorMessage(error)}`);
+        }
+      }
+      // Recorded even when a launch failed: that binding's own failure is named
+      // above, and any change to it (or a rebuilt Host) retries.
+      entry.catalogServicesKey = resolved.key;
+    }).finally(() => { entry.catalogServicesPending = undefined; });
+    entry.catalogServicesPending = bootstrap;
+    return bootstrap;
   }
 
   constructor(
@@ -593,7 +649,10 @@ export class PerTaskHostRegistry {
       }
       this.assertRoutingOpen();
       this.verifyTaskClaim(existing);
-      if (op !== "task/provision") await this.prepareServices(existing);
+      if (op !== "task/provision") {
+        await this.prepareServices(existing);
+        await this.registerCatalogServices(existing, origin?.senderWebContentsId);
+      }
       this.assertRoutingOpen();
       const result = await existing.client.task({ workspaceId: this.workspaceId, taskId, op, payload, origin },
         op === "task/sdkCancel" || op === "task/quit" ? { timeoutMs: 120_000 } : undefined);
@@ -625,7 +684,10 @@ export class PerTaskHostRegistry {
     const entry = await this.claimTaskHost(taskId, taskDir, false);
     this.assertRoutingOpen();
     this.verifyTaskClaim(entry);
-    if (op !== "task/provision") await this.prepareServices(entry);
+    if (op !== "task/provision") {
+      await this.prepareServices(entry);
+      await this.registerCatalogServices(entry, origin?.senderWebContentsId);
+    }
     this.assertRoutingOpen();
     return entry.client.task({ workspaceId: this.workspaceId, taskId, op, payload, origin },
       op === "task/sdkCancel" || op === "task/quit" ? { timeoutMs: 120_000 } : undefined);
@@ -1571,6 +1633,38 @@ export function registerIpc(
   // one handler per forked task, bound to that child's own task id, using the
   // same catalog the page's edit path uses (main stays the only writer).
   if (tasks && catalog) tasks.configureServiceTemplates((taskId) => createServiceTemplateHandler(catalog, taskId));
+  // The first non-provision route to a task Host registers every confirmed
+  // binding from main's persisted catalog before that route reaches the Host.
+  // `projectForTask` is the catalog's verified association; launch material is
+  // still resolved only by the same `taskBindings` + `launchFor` path as a human
+  // start, and each failed binding is named without preventing the others.
+  if (tasks && catalog && typeof tasks.configureCatalogServiceLaunches === "function") tasks.configureCatalogServiceLaunches((taskId, previousKey) => {
+    let projectId: string | null;
+    try { projectId = catalog.projectForTask(taskId); }
+    catch (error) {
+      console.error(`[main] task ${taskId} catalog bindings could not be resolved: ${errorMessage(error)}`);
+      return { key: previousKey ?? "", launches: [] };
+    }
+    if (projectId === null) return { key: "", launches: [] };
+    let bindings: ReturnType<ServiceCatalog["taskBindings"]>;
+    try { bindings = catalog.taskBindings(projectId, taskId); }
+    catch (error) {
+      console.error(`[main] task ${taskId} confirmed catalog bindings could not be read: ${errorMessage(error)}`);
+      return { key: previousKey ?? "", launches: [] };
+    }
+    // Cheap fingerprint of the bound material, so a steady task does not re-read
+    // every launch on every route: resolving is only paid when it changed.
+    const key = bindings.map(({ binding }) => [binding.serviceId, binding.templateVersion, binding.environmentId, binding.rootId, binding.subdir, binding.programPath].join("\u0000")).sort().join("\u0001");
+    if (previousKey !== undefined && key === previousKey) return { key, launches: [] };
+    const launches: ServiceLaunch[] = [];
+    for (const { binding } of bindings) {
+      try { launches.push(catalog.launchFor(taskId, projectId, binding.serviceId, process.env)); }
+      catch (error) {
+        console.error(`[main] task ${taskId} service ${binding.serviceId} could not be resolved from its confirmed catalog binding: ${errorMessage(error)}`);
+      }
+    }
+    return { key, launches };
+  });
   type TurnMessage = Parameters<Parameters<HostClient["onTurnEvent"]>[0]>[0];
   type PendingStart = { requestId: string; buffered: TurnMessage[]; bytes: number; overflow: boolean };
   type Subscription = { taskId: string; sessionId: string; frame: { processId: number; routingId: number }; webContents: WebContents; detach: () => void; deliver: (message: TurnMessage) => void; onNavigation: () => void; onInPageNavigation: () => void; onDestroyed: () => void; turns: Map<string, { sequence: number; resync: boolean; terminal: boolean }>; evictedTurns: boolean; pendingStart: PendingStart | null };
