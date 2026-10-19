@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { existsSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHost, createHostStopper, createLastWindowShutdown, PerTaskHostRegistry, taskBrowserOriginsFromEnv } from "./runtime.js";
@@ -368,6 +368,7 @@ describe("PerTaskHostRegistry main shutdown admission", () => {
     let resolved: string | null = null;
     const taskRoots = {
       inventory: () => ({ tasks: [], roots: [] }),
+      isRootAvailable: vi.fn(() => true),
       verifiedIdentity: vi.fn(() => null),
       register: vi.fn(() => Promise.reject(new Error("index unavailable"))),
     } as unknown as TaskRootIndex;
@@ -755,6 +756,53 @@ describe("PerTaskHostRegistry", () => {
       expect(index.resolve(taskId)).toBe(taskDir);
       expect(spawn).toHaveBeenCalledTimes(1);
       expect(new TaskRootIndex(join(home, "userData"), defaultRoot).inventory().tasks).toHaveLength(1);
+    } finally {
+      if (oldDefault === undefined) delete process.env["PIDOCK_DEFAULT_ROOT"];
+      else process.env["PIDOCK_DEFAULT_ROOT"] = oldDefault;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("provisions to a healthy root while an unrelated registered root is unavailable", async () => {
+    const home = mkdtempSync(join(tmpdir(), "pidock-root-scoped-provision-"));
+    const defaultRoot = join(home, "default"), brokenRoot = join(home, "broken"), healthyRoot = join(home, "healthy");
+    mkdirSync(defaultRoot); mkdirSync(brokenRoot); mkdirSync(healthyRoot);
+    const oldDefault = process.env["PIDOCK_DEFAULT_ROOT"];
+    process.env["PIDOCK_DEFAULT_ROOT"] = defaultRoot;
+    try {
+      const index = new TaskRootIndex(join(home, "userData"), defaultRoot);
+      const brokenId = "task-00000002", brokenDir = join(brokenRoot, brokenId);
+      mkdirSync(brokenDir);
+      const brokenRecord = buildTaskDiskRecord({ taskId: brokenId, name: "Broken", dirId: brokenId, branch: "task/main",
+        root: brokenRoot, taskDir: brokenDir, remoteBranch: "main", baseCommit: "abc123", repos: [], now: "2026-09-22T10:00:00Z" });
+      writeFileSync(join(brokenDir, "task.json"), JSON.stringify(brokenRecord));
+      await index.register(brokenDir);
+      const target = join(home, "outside"); mkdirSync(target);
+      rmSync(brokenDir, { recursive: true });
+      symlinkSync(target, brokenDir, process.platform === "win32" ? "junction" : "dir");
+      expect(index.inventory().roots[1]).toMatchObject({ state: "error" });
+
+      const taskId = "task-abcdef12", taskDir = join(healthyRoot, taskId);
+      const result = { ...TASK_RESULT, taskId, op: "task/provision" as const };
+      const transport = fakeTransport(result);
+      transport.task.mockImplementation(async () => {
+        mkdirSync(taskDir);
+        const record = buildTaskDiskRecord({ taskId, name: "Healthy", dirId: taskId, branch: "task/main",
+          root: healthyRoot, taskDir, remoteBranch: "main", baseCommit: "abc123", repos: [], now: "2026-09-22T10:00:00Z" });
+        writeFileSync(join(taskDir, "task.json"), JSON.stringify(record));
+        return result;
+      });
+      const spawn = vi.fn(async () => ({ client: transport as never, child: syntheticChild() as never }));
+      const registry = new PerTaskHostRegistry("workspace-a", spawn, (id) => index.resolve(id), undefined, index);
+      await expect(registry.routeTaskOp({ taskId, op: "task/provision", payload: {
+        name: "Healthy", dirId: taskId, rootOverride: healthyRoot, remoteBranch: "main", fetchedCommit: "abc123",
+      } })).resolves.toMatchObject({ taskId, op: "task/provision" });
+      expect(index.resolve(taskId)).toBe(taskDir);
+      expect(spawn).toHaveBeenCalledOnce();
+      await expect(registry.routeTaskOp({ taskId: "task-00000003", op: "task/provision", payload: {
+        name: "Unavailable", dirId: "task-00000003", rootOverride: brokenRoot, remoteBranch: "main", fetchedCommit: "abc123",
+      } })).rejects.toThrow("task root index unavailable");
+      expect(spawn).toHaveBeenCalledOnce();
     } finally {
       if (oldDefault === undefined) delete process.env["PIDOCK_DEFAULT_ROOT"];
       else process.env["PIDOCK_DEFAULT_ROOT"] = oldDefault;

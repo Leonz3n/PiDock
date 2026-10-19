@@ -29,6 +29,26 @@ const bridge = (settings: { projectPresent?: boolean; assigned?: boolean; fail?:
 afterEach(() => { cleanup(); delete window.pidock; vi.restoreAllMocks(); });
 
 describe("Desktop production data", () => {
+  it("shows a named unindexed-root diagnostic and keeps the existing root-import action reachable", async () => {
+    const rootBridge = bridge();
+    const diagnosticRoots = [{ label: "默认任务根", state: "ready" as const }, { label: "已登记任务根 1", state: "ready" as const,
+      message: "发现 1 个未登记任务（目录 task-00000003 / ID task-00000002），请在「项目管理」使用「找回任务根」明确导入" }];
+    rootBridge.listTasks = vi.fn(async () => ({ ok: true, payload: { tasks, roots: diagnosticRoots } }));
+    rootBridge.projectOp = vi.fn(async (request) => request.op === "list"
+      ? { ok: true, payload: { initialized: true, projects: [project] } }
+      : request.op === "associations"
+        ? { ok: true, payload: { roots: diagnosticRoots, tasks: [{ taskId: "real-1", projectId: null, state: "unassigned" }] } }
+        : { ok: true, payload: { id: project.id } });
+    window.pidock = rootBridge;
+    render(<App />);
+    expect(await screen.findByText(/发现 1 个未登记任务（目录 task-00000003 \/ ID task-00000002）.*找回任务根.*明确导入/)).toBeVisible();
+    await openManagement();
+    const recover = await screen.findByRole("button", { name: "找回任务根" });
+    expect(recover).toBeVisible();
+    fireEvent.click(recover);
+    await waitFor(() => expect(rootBridge.importTaskRoot).toHaveBeenCalledTimes(1));
+  });
+
   it("keeps Desktop authority after the preload disappears on rerender", async () => {
     const demoRead = vi.spyOn(memoryHost, "getWorkspace");
     const demoCreate = vi.spyOn(memoryHost, "createTask");

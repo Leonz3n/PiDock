@@ -330,8 +330,7 @@ export class ProjectTaskCreation {
         const source = project.directories.find((row) => row.id === id);
         if (source) this.store.assertTaskPath(source.path);
       }
-      const inventory = this.roots.inventory();
-      if (inventory.roots.some((entry) => entry.state === "error")) throw new Error("任务根身份不可读取，请先修复后创建");
+      if (!this.roots.isRootAvailable(root)) throw new Error("任务根身份不可读取，请先修复后创建");
       const rootIdentity = existsSync(root) ? diskIdentity(root) : null;
       if (!rootIdentity) diskIdentity(dirname(root));
       const repoIds = new Set<string>(), dirIds = new Set<string>(), commonDirs = new Set<string>();
