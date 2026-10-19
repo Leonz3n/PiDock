@@ -7,14 +7,17 @@ import { startHost } from "../dist/host/host.js";
 
 const dir = process.env.PIDOCK_TASK_DIR;
 if (!dir) throw new Error("test task binding missing");
+/** @type {import("@earendil-works/pi-ai").Model<"pidock-local-test">} */
 const model = {
   id: "fixture", name: "Fixture", api: "pidock-local-test", provider: "local-test",
   baseUrl: "http://127.0.0.1/unused", reasoning: false, input: ["text"],
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 2048, maxTokens: 128,
 };
+/** @type {import("@earendil-works/pi-ai").Usage} */
 const usage = { input: 4, output: 2, cacheRead: 1, cacheWrite: 0, totalTokens: 7,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
 const runtime = await ModelRuntime.create({ authPath: join(dir, ".test-auth.json"), modelsPath: join(dir, ".test-models.json"), refreshOnCreate: false });
+/** @type {import("@earendil-works/pi-ai").Provider<"pidock-local-test">} */
 const provider = {
   id: model.provider, name: "Isolated local test", auth: { apiKey: { name: "Local", resolve: async () => ({ auth: {} }) } },
   getModels: () => [model],
@@ -23,6 +26,7 @@ const provider = {
     const prompt = context.messages.at(-1)?.content;
     const text = typeof prompt === "string" ? prompt : prompt?.filter((part) => part.type === "text").map((part) => part.text).join("");
     const stream = createAssistantMessageEventStream();
+    /** @type {import("@earendil-works/pi-ai").AssistantMessage} */
     const partial = { role: "assistant", api: model.api, provider: model.provider, model: model.id,
       content: [], usage, stopReason: "pending", timestamp: Date.now() };
     queueMicrotask(() => {
