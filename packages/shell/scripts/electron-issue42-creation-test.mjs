@@ -32,6 +32,7 @@ import { ProjectRegistry } from "../dist/main/project-registry.js";
 import { TaskRootIndex } from "../dist/main/task-root-index.js";
 import { createTrustedWindow, loadTrustedViews, PerTaskHostRegistry, registerIpc } from "../dist/main/runtime.js";
 import { HostClient } from "../dist/rpc/host-client.js";
+import { createUnavailableHostClient } from "./unavailable-host-client.mjs";
 import { shutdownTestRegistry } from "./shutdown-test-registry.mjs";
 
 const phase = process.argv.find((value) => value.startsWith("--phase="))?.slice("--phase=".length) ?? "create";
@@ -97,7 +98,7 @@ async function main() {
   }, (taskId) => index.resolve(taskId), undefined, index);
   const creation = new ProjectTaskCreation(new CreationIntentStore(profile), projects, index, registry, taskRoot);
   views = await createTrustedWindow("issue42", "production");
-  registerIpc({}, views.registry, registry, projects, index, undefined, creation);
+  registerIpc(createUnavailableHostClient(), views.registry, registry, projects, index, undefined, creation);
   await loadTrustedViews(views);
   views.shellView.webContents.debugger.attach();
   const evaluate = async (expression) => {

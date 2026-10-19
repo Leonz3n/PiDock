@@ -38,7 +38,8 @@ try {
     } }));
   host.openSession("main", { permission: "auto" });
   const legacy = host.openSession("legacy", { permission: "auto" }), lateMarker = join(taskDir, "late-legacy-marker.txt");
-  await host.configureSdkProvider({ config: { profileId: "fixture", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, modelId: "fixture", contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_FIXTURE", generation: 1 }, credential });
+  const address = /** @type {import("node:net").AddressInfo} */ (server.address());
+  await host.configureSdkProvider({ config: { profileId: "fixture", baseUrl: `http://127.0.0.1:${address.port}/v1`, modelId: "fixture", contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_FIXTURE", generation: 1 }, credential });
   const kernel = host.sdkTextKernel(); assert.equal((await kernel.open("main")).tools.length, 4); // #5: the production AgentSession now declares the four task-scoped tools behind the Host broker.
   let delta = false; const prompt = kernel.prompt("main", "direct seal fixture", (event) => { if (event.type === "delta") delta = true; });
   void prompt.catch(() => {});
@@ -61,7 +62,7 @@ try {
 } catch (error) { console.error("DIRECT_EXECUTION_SEAL_FAILED", String(error).replaceAll(credential, "[redacted]").replaceAll(home, "[test-home]").slice(0, 300)); process.exitCode = 1; }
 finally {
   clearTimeout(watchdog); await worker?.terminate(); server?.closeAllConnections(); await new Promise((resolve) => server ? server.close(resolve) : resolve());
-  rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }); app.exit(process.exitCode ?? 0);
+  rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }); app.exit(/** @type {number} */ (process.exitCode ?? 0));
 }
 }
 void run();

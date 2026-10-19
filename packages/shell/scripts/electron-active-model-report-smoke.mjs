@@ -130,7 +130,7 @@ async function run() {
     for (const h of children) if (!h.exited) h.child.kill(); for (const pid of pids) try { process.kill(pid, "SIGKILL"); } catch { /* Exact test fixture PID only. */ }
     server?.closeAllConnections(); await new Promise((resolve) => server ? server.close(resolve) : resolve());
     await Promise.all(children.map((h) => h.exited ? undefined : wait(() => h.exited, "cleanup-exit").catch(() => undefined)));
-    rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }); app.exit(process.exitCode ?? 0);
+    rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }); app.exit(/** @type {number} */ (process.exitCode ?? 0));
   }
 }
 void run();

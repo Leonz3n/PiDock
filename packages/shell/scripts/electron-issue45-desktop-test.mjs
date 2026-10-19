@@ -11,6 +11,7 @@ import { TaskRootIndex } from "../dist/main/task-root-index.js";
 import { ProjectRegistry } from "../dist/main/project-registry.js";
 import { createTrustedWindow, loadTrustedViews, PerTaskHostRegistry, registerIpc } from "../dist/main/runtime.js";
 import { HostClient } from "../dist/rpc/host-client.js";
+import { createUnavailableHostClient } from "./unavailable-host-client.mjs";
 import { shutdownTestRegistry } from "./shutdown-test-registry.mjs";
 
 const fixture = process.argv.includes("--test-provider");
@@ -42,7 +43,7 @@ async function run() {
       return { child, client: new HostClient(child) };
     }, (id) => index.resolve(id), undefined, index);
     views = await createTrustedWindow("issue45", "production");
-    registerIpc({}, views.registry, registry, projects, index);
+    registerIpc(createUnavailableHostClient(), views.registry, registry, projects, index);
     await loadTrustedViews(views);
     views.shellView.webContents.debugger.attach();
     const evalJs = async (expression) => {
@@ -122,7 +123,7 @@ async function run() {
     views?.window.destroy();
     rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     if (cleanupFailures.length) { console.error("ISSUE45_GUI_CLEANUP_FAILED " + JSON.stringify(cleanupFailures)); process.exitCode = process.exitCode ?? 1; }
-    app.exit(process.exitCode ?? 0);
+    app.exit(/** @type {number} */ (process.exitCode ?? 0));
   }
 }
 void run();

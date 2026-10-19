@@ -22,6 +22,7 @@ import { createTaskBrowserCapability, createTrustedWindow, loadTrustedViews, Per
 import { ProviderProfileStore } from "../dist/main/provider-profile-store.js";
 import { ProviderWiring } from "../dist/main/provider-ipc.js";
 import { HostClient } from "../dist/rpc/host-client.js";
+import { createUnavailableHostClient } from "./unavailable-host-client.mjs";
 import { shutdownTestRegistry } from "./shutdown-test-registry.mjs";
 
 const CREDENTIAL = "issue47-synthetic-credential-0123456789";
@@ -131,11 +132,12 @@ async function run() {
     // The service-owner snapshot main bootstraps into each task Host. Record it
     // (or its real failure) so the 运行 panel's state column can be traced back
     // to the inventory the Host was actually given.
+    /** @type {{ ok: false; error: string } | { ok: true; serviceIds: string[] }} */
     let serviceOwnerSnapshot = { ok: false, error: "not-probed" };
     try { serviceOwnerSnapshot = { ok: true, serviceIds: catalog.ownerSnapshot(taskId, "issue47", process.env).entries.map((entry) => entry.serviceId) }; }
     catch (error) { serviceOwnerSnapshot = { ok: false, error: error instanceof Error ? error.message : String(error) }; }
     // The capture injects a trusted test picker result; native dialog interaction is manual acceptance.
-    registerIpc({}, views.registry, registry, projects, index, undefined, undefined, providers, catalog, async () => process.execPath);
+    registerIpc(createUnavailableHostClient(), views.registry, registry, projects, index, undefined, undefined, providers, catalog, async () => process.execPath);
     await loadTrustedViews(views);
     views.shellView.webContents.debugger.attach();
     const evalJs = async (expression) => {
@@ -411,11 +413,13 @@ async function run() {
     // can prove the production revoke button reaches the real Host. The pairing
     // control itself remains disabled/unwired in the rendered page; this setup is
     // confined to the isolated task root removed in `finally`.
+    /** @type {import("../dist/rpc/protocol.js").TaskOpOrigin} */
     const remoteOrigin = { kind: "shell-ui", senderWebContentsId: views.shellView.webContents.id };
-    const mintedRemote = await registry.routeTaskOp({ workspaceId: "issue47", taskId, op: "task/remotePairMint", payload: { label: "Issue47 evidence setup" }, origin: remoteOrigin });
+    const mintedRemote = await registry.routeTaskOp({ taskId, op: "task/remotePairMint", payload: { label: "Issue47 evidence setup" }, origin: remoteOrigin });
     if (typeof mintedRemote.payload?.credentialId !== "string" || typeof mintedRemote.payload?.secret !== "string") throw Error("could not seed isolated remote evidence device");
-    const exchangedRemote = await registry.routeTaskOp({ workspaceId: "issue47", taskId, op: "task/remotePairExchange", payload: { credentialId: mintedRemote.payload.credentialId, secret: mintedRemote.payload.secret, deviceName: "Issue47 capture device", permissions: ["overview"] }, origin: remoteOrigin });
-    if (exchangedRemote.payload?.device?.name !== "Issue47 capture device" || exchangedRemote.payload.device.status !== "pending-confirmation") throw Error("real Host did not create the isolated pending evidence device");
+    const exchangedRemote = await registry.routeTaskOp({ taskId, op: "task/remotePairExchange", payload: { credentialId: mintedRemote.payload.credentialId, secret: mintedRemote.payload.secret, deviceName: "Issue47 capture device", permissions: ["overview"] }, origin: remoteOrigin });
+    const exchangedDevice = exchangedRemote.payload?.device;
+    if (!exchangedDevice || typeof exchangedDevice !== "object" || !("name" in exchangedDevice) || !("status" in exchangedDevice) || exchangedDevice.name !== "Issue47 capture device" || exchangedDevice.status !== "pending-confirmation") throw Error("real Host did not create the isolated pending evidence device");
     await clickSelector('[data-testid=desktop-shell] button[title="远程访问"]');
     await until((body) => body.includes("Issue47 capture device"), "remote page state");
     const remoteControls = await evalJs(`(() => {
@@ -435,9 +439,12 @@ async function run() {
     // here: the real Host reports its Gateway connection offline, this capture
     // starts no listener, and the temporary root is removed. Refuse to switch if
     // the starting mode is not one of those private routes.
-    const initialRemote = await registry.routeTaskOp({ workspaceId: "issue47", taskId, op: "task/remoteState", payload: {}, origin: remoteOrigin });
-    const initialMode = initialRemote.payload?.entry?.mode;
-    if ((initialMode !== "tailscale" && initialMode !== "gateway") || initialRemote.payload?.gateway?.status !== "offline") throw Error("remote mode evidence requires a private route with offline Gateway state " + JSON.stringify(initialRemote));
+    const initialRemote = await registry.routeTaskOp({ taskId, op: "task/remoteState", payload: {}, origin: remoteOrigin });
+    const initialEntry = initialRemote.payload?.entry;
+    const initialGateway = initialRemote.payload?.gateway;
+    const initialMode = initialEntry && typeof initialEntry === "object" && "mode" in initialEntry ? initialEntry.mode : undefined;
+    const gatewayStatus = initialGateway && typeof initialGateway === "object" && "status" in initialGateway ? initialGateway.status : undefined;
+    if ((initialMode !== "tailscale" && initialMode !== "gateway") || gatewayStatus !== "offline") throw Error("remote mode evidence requires a private route with offline Gateway state " + JSON.stringify(initialRemote));
     const activeEntryLabel = await evalJs(`(() => {
       const page = document.querySelector('[data-testid=desktop-remote-page]');
       const card = [...page.querySelectorAll('div.mt-6.grid > div')].find(item => item.innerText.includes('当前任务入口'));
@@ -457,8 +464,10 @@ async function run() {
     }
     const modeConfirmation = await evalJs("window.__issue47RemoteModeConfirmation");
     if (typeof modeConfirmation !== "string" || !modeConfirmation.includes(targetEntryLabel) || !modeConfirmation.includes("旧连接断开")) throw Error("remote entry confirmation did not name mode and consequence");
-    const switchedRemote = await registry.routeTaskOp({ workspaceId: "issue47", taskId, op: "task/remoteState", payload: {}, origin: remoteOrigin });
-    if (switchedRemote.payload?.entry?.mode !== targetEntryMode) throw Error("real Host remote mode did not change " + JSON.stringify(switchedRemote));
+    const switchedRemote = await registry.routeTaskOp({ taskId, op: "task/remoteState", payload: {}, origin: remoteOrigin });
+    const switchedEntry = switchedRemote.payload?.entry;
+    const switchedMode = switchedEntry && typeof switchedEntry === "object" && "mode" in switchedEntry ? switchedEntry.mode : undefined;
+    if (switchedMode !== targetEntryMode) throw Error("real Host remote mode did not change " + JSON.stringify(switchedRemote));
     shots.push(await capture("remote-entry-switched", 1440, 900));
     shots.push(await capture("remote-entry-switched", 720, 560));
 
@@ -466,8 +475,11 @@ async function run() {
     await click("撤销");
     await until((body) => body.includes("已撤销"), "remote device revoked");
     const revokeConfirmation = await evalJs("window.__issue47RemoteRevokeConfirmation");
-    const revokedRemote = await registry.routeTaskOp({ workspaceId: "issue47", taskId, op: "task/remoteState", payload: {}, origin: remoteOrigin });
-    if (typeof revokeConfirmation !== "string" || !revokeConfirmation.includes("Issue47 capture device") || revokedRemote.payload?.devices?.[0]?.status !== "revoked") throw Error("real Host device revoke did not complete " + JSON.stringify({ revokeConfirmation, revokedRemote }));
+    const revokedRemote = await registry.routeTaskOp({ taskId, op: "task/remoteState", payload: {}, origin: remoteOrigin });
+    const revokedDevices = revokedRemote.payload?.devices;
+    const revokedDevice = Array.isArray(revokedDevices) ? revokedDevices[0] : undefined;
+    const revokedStatus = revokedDevice && typeof revokedDevice === "object" && "status" in revokedDevice ? revokedDevice.status : undefined;
+    if (typeof revokeConfirmation !== "string" || !revokeConfirmation.includes("Issue47 capture device") || revokedStatus !== "revoked") throw Error("real Host device revoke did not complete " + JSON.stringify({ revokeConfirmation, revokedRemote }));
     shots.push(await capture("remote-device-revoked", 1440, 900));
     shots.push(await capture("remote-device-revoked", 720, 560));
     views.window.setContentSize(1440, 900);
@@ -604,7 +616,7 @@ async function run() {
     views?.window.destroy();
     rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
     if (cleanupFailures.length) { console.error("ISSUE47_CAPTURE_CLEANUP_FAILED " + JSON.stringify(cleanupFailures)); process.exitCode = process.exitCode ?? 1; }
-    app.exit(process.exitCode ?? 0);
+    app.exit(/** @type {number} */ (process.exitCode ?? 0));
   }
 }
 void run();

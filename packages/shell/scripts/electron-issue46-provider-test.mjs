@@ -25,6 +25,7 @@ import { createTrustedWindow, loadTrustedViews, PerTaskHostRegistry, registerIpc
 import { ProviderProfileStore } from "../dist/main/provider-profile-store.js";
 import { ProviderWiring } from "../dist/main/provider-ipc.js";
 import { HostClient } from "../dist/rpc/host-client.js";
+import { createUnavailableHostClient } from "./unavailable-host-client.mjs";
 import { shutdownTestRegistry } from "./shutdown-test-registry.mjs";
 
 const CREDENTIAL = "sk-issue46-synthetic-0123456789abcdef";
@@ -99,7 +100,7 @@ async function run() {
       await registry.routeTaskOp({ workspaceId: "issue46", taskId: id, op: "task/sdkProvider", payload, origin: { kind: "shell-ui", senderWebContentsId } });
     });
     views = await createTrustedWindow("issue46", "production");
-    registerIpc({}, views.registry, registry, projects, index, undefined, undefined, providers);
+    registerIpc(createUnavailableHostClient(), views.registry, registry, projects, index, undefined, undefined, providers);
     await loadTrustedViews(views);
     views.shellView.webContents.debugger.attach();
     const evalJs = async (expression) => {
@@ -212,7 +213,8 @@ async function run() {
       // The staged "delta-holding" text was visible in the live stream before
       // the stop, but stays 暂存-only: it must never reach the SDK JSONL.
       if (cancelLog.includes("delta-holding")) throw Error("staged partial text persisted to SDK JSONL");
-      if (received.length !== 2 || received[1].authorization !== `Bearer ${CREDENTIAL}`) throw Error(`cancel leg did not reach the loopback: ${JSON.stringify(received.map((row) => row.url))}`);
+      const cancellationRequests = [...received];
+      if (cancellationRequests.length !== 2 || cancellationRequests[1].authorization !== `Bearer ${CREDENTIAL}`) throw Error(`cancel leg did not reach the loopback: ${JSON.stringify(cancellationRequests.map((row) => row.url))}`);
       console.log("ISSUE46_E2E_CANCEL=" + JSON.stringify({ cancelled: true, terminalPersisted: true, credentialVisible: false, credentialInJsonl: false, providerHits: received.length }));
     }
     const quitRequest = `window.pidock.taskOp(${JSON.stringify(taskId)}, "task/quit", {label:"Provider shutdown check"})`;
@@ -238,7 +240,7 @@ async function run() {
     views?.window.destroy();
     if (!resumeRoot) { /* keep the root for the --resume pass */ }
     if (cleanupFailures.length) { console.error("ISSUE46_E2E_CLEANUP_FAILED " + JSON.stringify(cleanupFailures)); process.exitCode = process.exitCode ?? 1; }
-    app.exit(process.exitCode ?? 0);
+    app.exit(/** @type {number} */ (process.exitCode ?? 0));
   }
 }
 void run();
