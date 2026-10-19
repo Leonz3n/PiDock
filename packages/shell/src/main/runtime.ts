@@ -665,7 +665,7 @@ export class PerTaskHostRegistry {
         ? this.resolveProvisionTaskDir(taskId, payload ?? {})
         : null;
     if (op === "task/provision" && taskDir === null && provisionDir !== null) {
-      if (this.taskRoots?.inventory().roots.some((root) => root.state === "error")) {
+      if (this.taskRoots && !this.taskRoots.isRootAvailable(path.dirname(provisionDir))) {
         throw new TrustDomainViolation("invalid-payload", "task root index unavailable; repair before provisioning");
       }
       const entry = await this.claimTaskHost(taskId, provisionDir, true);
