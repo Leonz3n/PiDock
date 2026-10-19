@@ -52,7 +52,8 @@ async function run() {
       stage = mode; registry = makeRegistry(); const taskId = `task-0000000${++index}`, taskDir = join(root, taskId); mkdirSync(taskDir); execFileSync("git", ["init", "-q", taskDir]);
       writeFileSync(join(taskDir, "task.json"), serializeTaskRecord(buildTaskDiskRecord({ taskId, name: mode, dirId: taskId, branch: "main", root, taskDir, remoteBranch: "main", baseCommit: "fixture", repos: [], now: new Date().toISOString() })));
       const op = (name, payload) => registry.routeTaskOp({ workspaceId: "active-turn-quit", taskId, op: name, payload, origin: { kind: "shell-ui", senderWebContentsId: 1 } });
-      await op("task/sdkProvider", { provider: { config: { profileId: "fixture", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, modelId: "fixture", contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_FIXTURE", generation: 1 }, credential } });
+      const address = /** @type {import("node:net").AddressInfo} */ (server.address());
+      await op("task/sdkProvider", { provider: { config: { profileId: "fixture", baseUrl: `http://127.0.0.1:${address.port}/v1`, modelId: "fixture", contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_FIXTURE", generation: 1 }, credential } });
       const started = await op("task/sdkStart", { sessionId: "main", requestId: "request-a", text: "active shutdown fixture" }); assert.equal(started.payload.turn.state, "accepted");
       const hit = await wait(() => requests.find((r) => r.mode === mode), "model-request"); assert.equal(hit.authorized, true); assert.equal(hit.expectedPath, true); assert.equal(hit.modelMatched, true); assert.equal(hit.tools, 4); // #5: four task-scoped tools are declared.
       if (mode === "active-stream") await wait(() => events.find((e) => e.event?.taskId === taskId && e.event.type === "delta"), "first-delta");
@@ -92,7 +93,7 @@ async function run() {
     for (const h of children) if (!h.exited) h.child.kill();
     server?.closeAllConnections(); await new Promise((resolve) => server ? server.close(resolve) : resolve());
     await Promise.all(children.map((h) => h.exited ? undefined : wait(() => h.exited, "cleanup-exit").catch(() => undefined)));
-    rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }); app.exit(process.exitCode ?? 0);
+    rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }); app.exit(/** @type {number} */ (process.exitCode ?? 0));
   }
 }
 void run();

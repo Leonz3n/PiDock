@@ -11,6 +11,7 @@ import { TaskRootIndex } from "../dist/main/task-root-index.js";
 import { createTrustedWindow, loadTrustedViews, PerTaskHostRegistry, registerIpc } from "../dist/main/runtime.js";
 import { HostClient } from "../dist/rpc/host-client.js";
 import { shutdownTestRegistry } from "./shutdown-test-registry.mjs";
+import { createUnavailableHostClient } from "./unavailable-host-client.mjs";
 
 const root = mkdtempSync(join(tmpdir(), "pidock-electron-sdk-"));
 const profile = join(root, "profile"), taskRoot = join(root, "tasks"), taskDir = join(taskRoot, "task-abcdef12");
@@ -20,7 +21,9 @@ const taskId = "task-abcdef12", sessionId = "main", workspaceId = "sdk-integrati
 const identity = { taskId, sessionId };
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const entry = join(import.meta.dirname, "host-sdk-test-entry.mjs");
-let views, current, spawned = [];
+let views, spawned = [];
+/** @type {PerTaskHostRegistry} */
+let current;
 const watchdog = setTimeout(() => { console.error("ELECTRON_SDK_BRIDGE_TIMEOUT"); process.exit(1); }, 30_000);
 // Test-only guard: prevent Electron's default quit racing the explicit
 // app.exit(process.exitCode) with a false-pass exit 0.
@@ -41,10 +44,13 @@ try {
   }, (id) => index.resolve(id), undefined, index);
   views = await createTrustedWindow(workspaceId, "production");
   current = makeRegistry();
-  registerIpc({} , views.registry, {
-    routeTaskOp: (...args) => current.routeTaskOp(...args),
-    entryForTaskId: (...args) => current.entryForTaskId(...args),
+  const taskRegistry = new Proxy(current, {
+    get(_target, property) {
+      const value = Reflect.get(current, property, current);
+      return typeof value === "function" ? value.bind(current) : value;
+    },
   });
+  registerIpc(createUnavailableHostClient(), views.registry, taskRegistry);
   await loadTrustedViews(views);
   views.shellView.webContents.debugger.attach();
   const evaluate = async (expression) => {
@@ -116,7 +122,7 @@ try {
     console.error("ELECTRON_SDK_BRIDGE_CLEANUP_FAILED " + JSON.stringify(cleanupFailures));
     process.exitCode = process.exitCode ?? 1;
   }
-  app.exit(process.exitCode ?? 0);
+  app.exit(/** @type {number} */ (process.exitCode ?? 0));
 }
 }
 void run();

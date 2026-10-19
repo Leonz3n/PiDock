@@ -12,7 +12,7 @@
     "build:supervisor:mac": "node scripts/build-service-supervisor.mjs darwin-arm64",
     "build:supervisor:win": "node scripts/build-service-supervisor.mjs win32-x64",
     "prepare:pty:darwin": "node scripts/prepare-node-pty.mjs",
-    "typecheck": "tsc -p tsconfig.build.json --noEmit",
+    "typecheck": "tsc -p tsconfig.build.json --noEmit && tsc -p scripts/tsconfig.json",
     "test": "vitest run",
     "lint": "eslint . --max-warnings 0",
     "versions": "electron . -- --print-versions",

@@ -53,6 +53,7 @@ try {
     descriptor: { name: "invoice", program: process.execPath, args: ["-e", "console.log('command-secret')"], ports: [], runType: "long-lived" },
     layers: { repoDefaults: [], shared: [], privateEntries: [{ key: "PRIVATE_KEY", value: secret, secret: true }], task: [] },
   };
+  /** @type {import("../dist/rpc/protocol.js").TaskOpOrigin} */
   const origin = { kind: "shell-ui", senderWebContentsId: 42 };
   const scan = await call("task/serviceImportHints", { rootId: "invoice" }, origin);
   assert.equal(scan.ok, true);
@@ -122,7 +123,7 @@ try {
   for (const child of children) child.kill();
   rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   if (cleanupFailures.length) { console.error("SERVICE_GUARD_CLEANUP_FAILED " + JSON.stringify(cleanupFailures)); process.exitCode = process.exitCode ?? 1; }
-  app.exit(process.exitCode ?? 0);
+  app.exit(/** @type {number} */ (process.exitCode ?? 0));
 }
 }
 void run();

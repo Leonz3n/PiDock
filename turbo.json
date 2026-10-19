@@ -19,6 +19,11 @@
       "inputs": ["src/**", "vite.config.ts", "tsconfig.json", "tsconfig.build.json", "package.json"],
       "outputs": []
     },
+    "@pidock/shell#typecheck": {
+      "dependsOn": ["@pidock/shell#build", "^typecheck"],
+      "inputs": ["src/**", "scripts/**", "vite.config.ts", "tsconfig.json", "tsconfig.build.json", "scripts/tsconfig.json", "package.json"],
+      "outputs": []
+    },
     "test": {
       "dependsOn": ["^build"],
       "inputs": ["src/**", "vite.config.ts", "tsconfig.json", "tsconfig.build.json", "package.json"],
