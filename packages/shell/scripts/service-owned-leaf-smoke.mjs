@@ -19,9 +19,12 @@ assert.equal(hash(program), "e4b5a3af0e05c75de2eae013904145f40fe7fc2a6e6f1751012
 const home = realpathSync(mkdtempSync(join(tmpdir(), "pidock-service-owner-")));
 const taskId = "task-service-owner", serviceId = "s-11111111-1111-4111-8111-111111111111", taskDir = join(home, taskId), cwd = join(taskDir, "worktree");
 mkdirSync(cwd, { recursive: true, mode: 0o700 });
+/** @type {import("../dist/host/service-execution-experiment.js").ServiceOwnerLaunch} */
 const launch = { capability: "reviewed-no-child-fixture", program, args: [source], cwd, env: { FIXTURE_VALUE: "synthetic-service-value" }, envRevision: "fixed-env-v1", programSha256: hash(program), sourceSha256: hash(source) };
 const driver = new ReviewedServiceLeafDriver(launch), write = new TaskWriteCoordinator();
-let released = false, saved, acknowledge;
+let released = false, saved;
+/** @type {(() => void) | undefined} */
+let acknowledge;
 const order = [], checkpoints = [], file = join(home, "checkpoint.json");
 const directoryIdentity = (path) => { const stat = statSync(path, { bigint: true }); return { device: String(stat.dev), inode: String(stat.ino) }; };
 const taskIdentity = directoryIdentity(taskDir), cwdIdentity = directoryIdentity(cwd);
@@ -49,9 +52,10 @@ try {
   // Driver bounds the OS wait to 10s. A failed run never launches a second fixture.
   const until = Date.now() + 10_500;
   while (!acknowledge && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, 10));
-  assert.equal(typeof acknowledge, "function"); assert.deepEqual(driver.observation().close, { code: 0, signal: null });
+  assert.equal(typeof acknowledge, "function");
+  assert.deepEqual(driver.observation().close, { code: 0, signal: null });
   assert.equal(driver.observation().fixtureMatched, true); assert.equal(write.owner, "main"); assert.equal(released, false); order.push("native-close-ack-held-rights-retained");
-  acknowledge();
+  /** @type {() => void} */ (acknowledge)();
   await execution.close(); assert.equal(execution.snapshot().state, "exited"); assert.equal(write.owner, null); assert.equal(released, true); assert.deepEqual(execution.resources(), []);
   const result = { ok: true, plan, observation: driver.observation(), order, checkpoints, final: execution.snapshot(), write: write.snapshot(), evidenceKind: "Darwin Node fixed no-child fixture with filesystem checkpoint; no utilityProcess/installed/catalog epoch/report evidence" };
   writeFileSync(join(evidence, "native-result.json"), JSON.stringify(result, null, 2), { mode: 0o600, flush: true }); console.log("SERVICE_OWNED_LEAF_OK");

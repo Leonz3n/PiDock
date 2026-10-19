@@ -89,7 +89,7 @@ function provider() {
   });
   return new Promise((resolve) => server.listen(0, "127.0.0.1", () => {
     cleanups.push(() => server.close());
-    resolve({ port: server.address().port, hits });
+    resolve({ port: /** @type {import("node:net").AddressInfo} */ (server.address()).port, hits });
   }));
 }
 

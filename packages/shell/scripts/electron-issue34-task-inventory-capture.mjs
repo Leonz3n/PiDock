@@ -25,6 +25,7 @@ import { TaskRootIndex } from "../dist/main/task-root-index.js";
 import { ProjectRegistry } from "../dist/main/project-registry.js";
 import { createTrustedWindow, loadTrustedViews, PerTaskHostRegistry, registerIpc } from "../dist/main/runtime.js";
 import { HostClient } from "../dist/rpc/host-client.js";
+import { createUnavailableHostClient } from "./unavailable-host-client.mjs";
 import { shutdownTestRegistry } from "./shutdown-test-registry.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..", "..", "..");
@@ -90,7 +91,7 @@ async function run() {
       child.stderr?.on("data", (data) => process.stderr.write(`[issue34-host] ${data}`));
       return { child, client: new HostClient(child) };
     }, (id) => index.resolve(id), undefined, index);
-    registerIpc({}, views.registry, registry, projects, guardedRoots);
+    registerIpc(createUnavailableHostClient(), views.registry, registry, projects, guardedRoots);
     await loadTrustedViews(views);
     views.shellView.webContents.debugger.attach();
 
@@ -189,7 +190,7 @@ async function run() {
     views?.window.destroy();
     rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
     if (cleanupFailures.length) { console.error("ISSUE34_CAPTURE_CLEANUP_FAILED " + JSON.stringify(cleanupFailures)); process.exitCode = process.exitCode ?? 1; }
-    app.exit(process.exitCode ?? 0);
+    app.exit(/** @type {number} */ (process.exitCode ?? 0));
   }
 }
 void run();

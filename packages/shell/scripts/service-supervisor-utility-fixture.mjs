@@ -26,8 +26,12 @@ async function bindExecution(lifecycle, start) {
     send: (message) => port.postMessage(message),
     subscribe: (receive, disconnected) => {
       const listener = ({ data }) => { if (data?.kind === "checkpoint-ack") receive(data); };
-      port.on("message", listener); port.on("close", disconnected);
-      return () => { port.removeListener("message", listener); port.removeListener("close", disconnected); };
+      port.on("message", listener);
+      /** @type {any} */ (port.on.bind(port))("close", disconnected);
+      return () => {
+        port.removeListener("message", listener);
+        /** @type {any} */ (port.removeListener.bind(port))("close", disconnected);
+      };
     },
   }, { taskId: lifecycle.taskId, serviceId: lifecycle.serviceId, epoch: lifecycle.epoch }) : undefined;
   const dependencies = { taskId: lifecycle.taskId, taskDir: lifecycle.taskDir, serviceId: lifecycle.serviceId,
@@ -46,8 +50,12 @@ async function bindExecution(lifecycle, start) {
   if (lifecycle.closeReport) {
     const reportClient = experimentalShutdownClient({ send: (message) => port.postMessage(message), subscribe: (receive, disconnected) => {
       const listener = ({ data }) => { if (data?.kind === "shutdown-report-ack") receive(data); };
-      port.on("message", listener); port.on("close", disconnected);
-      return () => { port.removeListener("message", listener); port.removeListener("close", disconnected); };
+      port.on("message", listener);
+      /** @type {any} */ (port.on.bind(port))("close", disconnected);
+      return () => {
+        port.removeListener("message", listener);
+        /** @type {any} */ (port.removeListener.bind(port))("close", disconnected);
+      };
     } }, { taskId: lifecycle.taskId, epoch: lifecycle.epoch });
     const active = lifecycle.activeSdk;
     const sdk = new SdkContextClient({ task: { taskId: lifecycle.taskId, taskDir: lifecycle.taskDir }, config: { profileId: "fixture", baseUrl: active?.baseUrl ?? "https://models.example.test/v1", modelId: "fixture", contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_TEST", generation: 1 }, credential: "synthetic-shutdown-credential",

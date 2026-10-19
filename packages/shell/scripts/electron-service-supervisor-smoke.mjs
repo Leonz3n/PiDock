@@ -190,7 +190,7 @@ async function run() {
     for (const child of children) child.kill();
     for (const pid of tracked) { try { process.kill(pid, "SIGKILL"); } catch { /* Test process may have already exited. */ } }
     rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
-    app.exit(process.exitCode ?? 0);
+    app.exit(/** @type {number} */ (process.exitCode ?? 0));
   }
 }
 void run();

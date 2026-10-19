@@ -27,6 +27,7 @@
 // compiled `dist` graph is imported (dynamically, inside the guarded region), so a stuck
 // import cannot outlive the watchdog, and no failure ever leaves Electron running.
 import { app, utilityProcess } from "electron";
+import { createUnavailableHostClient } from "./unavailable-host-client.mjs";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
@@ -67,7 +68,10 @@ const exitNow = (code, why) => {
 };
 const watchdog = setTimeout(() => exitNow(1, "watchdog timeout"), 180000);
 process.on("uncaughtException", (error) => exitNow(1, `uncaughtException ${error?.stack ?? error}`));
-process.on("unhandledRejection", (error) => exitNow(1, `unhandledRejection ${error?.stack ?? error}`));
+process.on("unhandledRejection", (error) => {
+  const stack = /** @type {{ stack?: string } | null | undefined} */ (error)?.stack;
+  exitNow(1, `unhandledRejection ${stack ?? error}`);
+});
 // Test-only guard: a noop listener suppresses Electron's default quit on
 // window-all-closed, which would race the explicit app.exit(process.exitCode).
 app.on("window-all-closed", () => {});
@@ -159,7 +163,7 @@ async function run() {
         : { provider: { config: providerProfiles.config(provider.profileId), credential: provider.credential } };
       await registry.routeTaskOp({ workspaceId: "issue41", taskId, op: "task/sdkProvider", payload, origin: { kind: "shell-ui", senderWebContentsId } });
     });
-    registerIpc({}, views.registry, registry, projects, index, undefined, creation, providers);
+    registerIpc(createUnavailableHostClient(), views.registry, registry, projects, index, undefined, creation, providers);
     await loadTrustedViews(views);
     views.shellView.webContents.debugger.attach();
 

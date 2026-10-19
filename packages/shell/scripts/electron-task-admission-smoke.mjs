@@ -28,7 +28,9 @@ try {
   await assert.rejects(op("task/quit", { sessionId: "main", label: "invalid agent quit" }), /permission-denied/);
   await op("task/saveDraft", { sessionId: "main", text: "kept draft" });
   await op("task/sessionStates", {});
-  let releaseReply, browserReceived = false, browserCalls = 0;
+  /** @type {((reply: { ok: false; error: string }) => void) | undefined} */
+  let releaseReply;
+  let browserReceived = false, browserCalls = 0;
   client.onBrowserRequest(() => { browserReceived = true; browserCalls++; return new Promise((resolve) => { releaseReply = resolve; }); });
   stage = "held-browser";
   const browser = op("task/browserAction", { action: "page/open", label: "Held main reply", params: { url: "https://example.test" } });
@@ -46,7 +48,8 @@ try {
   await assert.rejects(op("task/sdkProjection", { sessionId: "main" }), /sdk-host-closing/);
   await delay(50); assert.equal(quitSettled, false); assert.equal(browserCalls, 1);
   stage = "release-reply";
-  releaseReply({ ok: false, error: "browser-unavailable: deliberate main probe refusal" }); const browserRefusal = await browserResult; assert.equal(browserRefusal.ok, false); assert.match(browserRefusal.error, /browser-unavailable/);
+  /** @type {(reply: { ok: false; error: string }) => void} */ (releaseReply)({ ok: false, error: "browser-unavailable: deliberate main probe refusal" });
+  const browserRefusal = await browserResult; assert.equal(browserRefusal.ok, false); assert.match(browserRefusal.error, /browser-unavailable/);
   const quit = await closing, repeated = await op("task/quit", { label: "Admission probe quit" });
   assert.equal(quit.payload.quit.plan.failures.length, 0); assert.equal(quit.payload.quit.plan.retainedTasks.length, 0); assert.deepEqual(repeated.payload.quit, quit.payload.quit);
   // Read only fixture persistence after sealing; no task RPC is re-admitted.
@@ -56,7 +59,7 @@ try {
 } catch (error) { console.error("TASK_ADMISSION_FAILED", stage, String(error).replaceAll(home, "[test-home]").slice(0, 300)); process.exitCode = 1; }
 finally {
   clearTimeout(watchdog); client?.dispose(); if (child && !exited) child.kill(); if (child) await wait(() => exited, "cleanup-native-exit").catch(() => undefined);
-  rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }); app.exit(process.exitCode ?? 0);
+  rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }); app.exit(/** @type {number} */ (process.exitCode ?? 0));
 }
 }
 void run();

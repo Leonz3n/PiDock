@@ -101,7 +101,7 @@ async function run() {
   finally {
     clearTimeout(watchdog); for (const h of children) if (!h.exited) h.child.kill();
     for (const pid of pids) { try { process.kill(pid, "SIGKILL"); } catch { /* Test emergency cleanup, not production ownership. */ } }
-    rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }); app.exit(process.exitCode ?? 0);
+    rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }); app.exit(/** @type {number} */ (process.exitCode ?? 0));
   }
 }
 void run();
