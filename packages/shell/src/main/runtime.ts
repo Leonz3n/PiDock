@@ -1,4 +1,5 @@
 import path from "node:path";
+import { createServer, type Server } from "node:net";
 import { accessSync, constants, realpathSync, statSync } from "node:fs";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import {
@@ -44,6 +45,8 @@ import { ServiceCatalog, serviceCatalogAuthority, type ServiceLaunch } from "./s
 import { InstalledServiceHostAuthority, type ServiceOwnerChange, type ServiceOwnerDurableRecord } from "./service-host-binding.js";
 import { createServiceTemplateHandler, parseServiceOwnerRebindRequest, parseTaskDependencyRoutingRequest, performServiceBindingOperation, performServiceCatalogOperation, performServiceConfigPreview, parseServiceRunGroupRequest, parseServiceRunRequest } from "./service-catalog-ipc.js";
 import { deriveBoundServiceGroupPlan, readTaskDependencyRouting, unsatisfiedDeclarationMessage, type BoundServiceEntry } from "./service-dependency-routing.js";
+import { resolveServiceEnv, type ServiceConfigEntry } from "./service-config.js";
+import type { PortAssignment, PortReservation, ResolvedBinding, RunDiagnostic, RunUnit, StartGroup } from "./service-topology.js";
 import { codeObservationFields } from "./service-code-observation.js";
 import { loadExternalEditorSettings, type ExternalEditorSettingsResult } from "./external-editor.js";
 import { performEditorSettingsOperation } from "./external-editor-settings.js";
@@ -1323,9 +1326,10 @@ export async function runTaskService(
  * so a plan the dock's own topology read left on the Host - which carries no
  * declaration-derived edge and no rules/layers - can never decide what this start
  * runs. The plan's resolved task-override rows are then re-registered as the
- * registrations' `task` layer, so the address the plan resolved is the address
- * the children really run with (the layer order of `resolveServiceEnv` is
- * untouched; a plan that binds nothing re-registers nothing).
+ * Before the one gated control dispatch, main holds loopback TCP bind
+ * reservations for every assigned port. An occupied port is fed back through the
+ * same Host planner once; its complete task-address rows and the target service's
+ * matching PORT row are re-resolved and re-registered before the single retry.
  *
  * The edges of that plan are the 服务依赖声明 of the revisions the task pins
  * (ADR 0002), mapped onto the plan's own unit ids: a declared `call`/`prestart`
@@ -1391,38 +1395,97 @@ export async function runTaskServiceGroup(
   // old "start an existing plan as-is" branch would let a renderer-shaped,
   // edge-less plan decide what a group start runs - and the declared edges,
   // binding rules and config layers main derives here would never reach it.
-  const taskRows = await planBoundServiceGroup(tasks, bound, request, origin);
+  const initialPlan = await planBoundServiceGroup(tasks, bound, request, origin);
+  const firstReservation = await reserveGroupPorts(initialPlan.assignments);
+  if (firstReservation.failures.length > 0) {
+    await releaseGroupPorts(firstReservation.held);
+    return { group: portReservationFailure(initialPlan, bound, [...firstReservation.failures, ...firstReservation.occupied], []) };
+  }
+
+  let finalPlan = initialPlan;
+  let portChanges: GroupPortChange[] = [];
+  let ownPortRows: { serviceId: string; rows: ServiceConfigEntry[] }[] = [];
+  let heldPorts = firstReservation.held;
+  if (firstReservation.occupied.length > 0) {
+    // The first bind attempt observed a real external occupant. Release every
+    // successful bind, feed only those observed ports to the existing allocator,
+    // then resolve the complete plan and its URL overrides again before retrying
+    // the reservation exactly once.
+    await releaseGroupPorts(heldPorts);
+    heldPorts = [];
+    const reservations: PortReservation[] = firstReservation.occupied.map(({ assignment }) => ({
+      port: assignment.port,
+      owner: "external",
+      note: "启动前 TCP bind 检查返回 EADDRINUSE",
+    }));
+    finalPlan = await planBoundServiceGroup(tasks, bound, request, origin, reservations);
+    portChanges = groupPortChanges(initialPlan, finalPlan, bound);
+    const portRows = movedServicePortRows(finalPlan, bound);
+    if (!portRows.ok) {
+      const failure = {
+        assignment: portRows.assignment,
+        reason: portRows.reason,
+        code: "port-unavailable",
+      };
+      return { group: portReservationFailure(finalPlan, bound, [failure], portChanges) };
+    }
+    ownPortRows = portRows.rows;
+    const retryReservation = await reserveGroupPorts(finalPlan.assignments);
+    if (retryReservation.occupied.length > 0 || retryReservation.failures.length > 0) {
+      await releaseGroupPorts(retryReservation.held);
+      const failures = [...retryReservation.occupied, ...retryReservation.failures];
+      return { group: portReservationFailure(finalPlan, bound, failures, portChanges) };
+    }
+    heldPorts = retryReservation.held;
+  }
+
   // The plan's resolved address overrides ARE the task's 任务覆盖, so they have to
-  // reach the children: re-registering each trusted launch with them as the
-  // `task` layer is what makes the resolved winner real (the child env is built
-  // from `resolveServiceEnv`'s own precedence, order untouched). No rows means no
-  // re-registration: a plan that binds nothing must not touch the registration.
-  if (taskRows.length > 0) {
+  // reach the children. After an occupied-port reallocation, the same final task
+  // rows are re-resolved with service-config's normal precedence; a moved target's
+  // own PORT-like row is added only to that trusted service registration. This
+  // updates its listener and every consumer without changing any launch identity.
+  const serviceRows = new Map(ownPortRows.map(({ serviceId, rows }) => [serviceId, rows]));
+  if (finalPlan.taskRows.length > 0 || serviceRows.size > 0) {
     for (const { launch } of bound) {
+      const rows = mergeTaskConfigRows(finalPlan.taskRows, serviceRows.get(launch.serviceId) ?? []);
+      const layers = { ...launch.layers, task: rows };
+      const resolved = resolveServiceEnv(layers);
+      if (!resolved.ok) {
+        await releaseGroupPorts(heldPorts);
+        throw new Error(`服务登记失败，未发起整组启动：${launch.serviceId} 的改址配置无法重新解析（${resolved.error.code}: ${resolved.error.message}）`);
+      }
       try {
         await tasks.routeTaskOp({
           taskId: request.taskId,
           op: "task/registerService",
           payload: {
             serviceId: launch.serviceId, descriptor: launch.descriptor,
-            layers: { ...launch.layers, task: taskRows },
+            layers,
             templateVersion: String(launch.templateVersion),
             ...(observationOf.get(launch.serviceId) ?? {}),
           },
           origin,
         });
       } catch (error) {
+        await releaseGroupPorts(heldPorts);
         throw new Error(`服务登记失败，未发起整组启动：${error instanceof Error ? error.message : String(error)}`);
       }
     }
   }
+  // Bind-then-release is a best-effort reservation: keep all sockets held until
+  // every trusted registration is refreshed, then release immediately before
+  // the existing gated Host dispatch. Another process can still win this narrow
+  // hand-off race (TOCTOU), which the Host's normal named start failure retains.
+  await releaseGroupPorts(heldPorts);
   const controlled = await tasks.routeTaskOp({
     taskId: request.taskId,
     op: "task/controlService",
     payload: { group: true, action: "start", label: SERVICE_RUN_HUMAN_LABEL },
     origin,
   });
-  return controlled.payload;
+  const group = controlled.payload["group"];
+  if (typeof group !== "object" || group === null || Array.isArray(group)) return controlled.payload;
+  return { ...controlled.payload, group: { ...(group as Record<string, unknown>), portChanges } };
 }
 
 /**
@@ -1445,16 +1508,27 @@ export async function runTaskServiceGroup(
  * neither can read as a read-point audit that checked those rows and found them
  * clean.
  *
- * Returns the plan's own task-override rows (`bindingsToTaskRows`), because the
- * resolved address overrides are what the children must really run with - the
- * caller applies them as the `task` layer of the trusted registrations.
+ * Returns the Host's derived plan collections, including its task-override rows
+ * (`bindingsToTaskRows`), assignments, diagnostics and reallocation facts. The
+ * caller applies those rows as the `task` layer of the trusted registrations.
  */
+interface BoundHostGroupPlan {
+  taskRows: ServiceConfigEntry[];
+  assignments: PortAssignment[];
+  reallocated: { unitId: string; before: number; after: number }[];
+  units: RunUnit[];
+  groups: StartGroup[];
+  diagnostics: RunDiagnostic[];
+  bindings: ResolvedBinding[];
+}
+
 async function planBoundServiceGroup(
   tasks: Pick<PerTaskHostRegistry, "routeTaskOp">,
   bound: BoundServiceEntry[],
   request: ReturnType<typeof parseServiceRunGroupRequest>,
   origin: { kind: "service-catalog"; senderWebContentsId: number },
-): Promise<{ key: string; value: string; secret: boolean }[]> {
+  reservations: readonly PortReservation[] = [],
+): Promise<BoundHostGroupPlan> {
   const derivation = deriveBoundServiceGroupPlan(bound);
   if (!derivation.ok) throw new Error(unsatisfiedDeclarationMessage(derivation.unsatisfied));
   const { units, dependencies, rules, layers, requests, runTypes, selectedRepoDirs } = derivation.plan;
@@ -1467,6 +1541,7 @@ async function planBoundServiceGroup(
       selectedRepoDirs,
       requests,
       runTypes,
+      ...(reservations.length === 0 ? {} : { reservations }),
       // Sent ONLY when the pinned revisions really declare an edge: an empty or
       // absent key is the honest "no declaration, no edge" plan.
       ...(dependencies.length === 0 ? {} : { dependencies }),
@@ -1478,7 +1553,7 @@ async function planBoundServiceGroup(
     },
     origin,
   });
-  return plannedTaskRowsOf(answer.payload);
+  return plannedGroupDataOf(answer.payload);
 }
 
 /**
@@ -1487,20 +1562,214 @@ async function planBoundServiceGroup(
  * the plan's resolved addresses are the Host's allocation, so main never
  * derives them itself.
  */
-function plannedTaskRowsOf(payload: Record<string, unknown>): { key: string; value: string; secret: boolean }[] {
-  const plan = payload["plan"];
-  if (typeof plan !== "object" || plan === null || Array.isArray(plan)) return [];
-  const rows = (plan as Record<string, unknown>)["taskRows"];
+function plannedTaskRowsOf(payload: Record<string, unknown>): ServiceConfigEntry[] {
+  const plan = recordValue(payload["plan"]);
+  const rows = plan?.["taskRows"];
   if (!Array.isArray(rows)) return [];
   return rows.flatMap((entry) => {
-    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return [];
-    const row = entry as Record<string, unknown>;
-    const key = row["key"];
-    const value = row["value"];
-    const secret = row["secret"];
+    const row = recordValue(entry);
+    const key = row?.["key"];
+    const value = row?.["value"];
+    const secret = row?.["secret"];
     if (typeof key !== "string" || key.trim().length === 0 || typeof value !== "string" || typeof secret !== "boolean") return [];
     return [{ key, value, secret }];
   });
+}
+
+function recordValue(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function plannedGroupDataOf(payload: Record<string, unknown>): BoundHostGroupPlan {
+  const plan = recordValue(payload["plan"]);
+  if (!plan) return { taskRows: [], assignments: [], reallocated: [], units: [], groups: [], diagnostics: [], bindings: [] };
+  const assignments = Array.isArray(plan["assignments"]) ? plan["assignments"].flatMap((entry) => {
+    const row = recordValue(entry);
+    if (!row || typeof row["unitId"] !== "string" || typeof row["serviceId"] !== "string" || typeof row["port"] !== "number") return [];
+    return [{ unitId: row["unitId"], serviceId: row["serviceId"], port: row["port"], instanceId: typeof row["instanceId"] === "string" ? row["instanceId"] : "" } satisfies PortAssignment];
+  }) : [];
+  const reallocated = Array.isArray(plan["reallocated"]) ? plan["reallocated"].flatMap((entry) => {
+    const row = recordValue(entry);
+    if (!row || typeof row["unitId"] !== "string" || typeof row["before"] !== "number" || typeof row["after"] !== "number") return [];
+    return [{ unitId: row["unitId"], before: row["before"], after: row["after"] }];
+  }) : [];
+  const units = Array.isArray(plan["units"]) ? plan["units"].flatMap((entry) => {
+    const row = recordValue(entry);
+    if (!row || typeof row["unitId"] !== "string" || typeof row["serviceId"] !== "string" || typeof row["name"] !== "string" || (row["location"] !== "local" && row["location"] !== "remote")) return [];
+    return [row as unknown as RunUnit];
+  }) : [];
+  const groups = Array.isArray(plan["groups"]) ? plan["groups"].flatMap((entry) => {
+    const row = recordValue(entry);
+    if (!row || typeof row["groupId"] !== "string" || !Array.isArray(row["members"])) return [];
+    return [row as unknown as StartGroup];
+  }) : [];
+  const diagnostics = Array.isArray(plan["diagnostics"]) ? plan["diagnostics"].flatMap((entry) => {
+    const row = recordValue(entry);
+    if (!row || typeof row["code"] !== "string" || typeof row["message"] !== "string") return [];
+    return [row as unknown as RunDiagnostic];
+  }) : [];
+  const bindings = Array.isArray(plan["bindings"]) ? plan["bindings"].flatMap((entry) => {
+    const row = recordValue(entry);
+    if (!row || typeof row["key"] !== "string" || typeof row["unitId"] !== "string" || typeof row["value"] !== "string") return [];
+    return [row as unknown as ResolvedBinding];
+  }) : [];
+  return { taskRows: plannedTaskRowsOf(payload), assignments, reallocated, units, groups, diagnostics, bindings };
+}
+
+interface PortReservationIssue {
+  assignment: PortAssignment;
+  code: string;
+  reason: string;
+}
+
+interface GroupPortReservation {
+  held: Server[];
+  occupied: PortReservationIssue[];
+  failures: PortReservationIssue[];
+}
+
+/**
+ * Hold IPv4 loopback TCP binds as a best-effort pre-spawn reservation. The shipped
+ * service observation address is 127.0.0.1, so this matches its address family;
+ * an IPv6-only listener can coexist and is not evidence of a conflicting bind for
+ * this address. The close-before-spawn handoff remains a TOCTOU boundary.
+ */
+async function reserveGroupPorts(assignments: readonly PortAssignment[]): Promise<GroupPortReservation> {
+  const held: Server[] = [];
+  const occupied: PortReservationIssue[] = [];
+  const failures: PortReservationIssue[] = [];
+  for (const assignment of assignments) {
+    const server = createServer((socket) => socket.destroy());
+    const result = await new Promise<{ ok: true } | { ok: false; code: string; message: string }>((resolve) => {
+      const onError = (error: NodeJS.ErrnoException) => {
+        server.removeListener("listening", onListening);
+        resolve({ ok: false, code: error.code ?? "bind-error", message: error.message });
+      };
+      const onListening = () => {
+        server.removeListener("error", onError);
+        resolve({ ok: true });
+      };
+      server.once("error", onError);
+      server.once("listening", onListening);
+      try {
+        server.listen({ port: assignment.port, host: "127.0.0.1", exclusive: true });
+      } catch (error) {
+        server.removeListener("error", onError);
+        server.removeListener("listening", onListening);
+        const failure = error instanceof Error ? error : new Error(String(error));
+        resolve({ ok: false, code: (failure as NodeJS.ErrnoException).code ?? "bind-error", message: failure.message });
+      }
+    });
+    if (result.ok) {
+      held.push(server);
+      continue;
+    }
+    const issue = { assignment, code: result.code, reason: result.message };
+    (result.code === "EADDRINUSE" ? occupied : failures).push(issue);
+  }
+  return { held, occupied, failures };
+}
+
+async function releaseGroupPorts(servers: readonly Server[]): Promise<void> {
+  await Promise.all(servers.map((server) => new Promise<void>((resolve) => {
+    if (!server.listening) return resolve();
+    server.close(() => resolve());
+  })));
+}
+
+interface GroupPortChange {
+  unitId: string;
+  serviceId: string;
+  before: number;
+  after: number;
+  consumers: string[];
+}
+
+function groupPortChanges(previous: BoundHostGroupPlan, next: BoundHostGroupPlan, bound: readonly BoundServiceEntry[]): GroupPortChange[] {
+  const beforeByKey = new Map(previous.taskRows.map((row) => [row.key, row.value]));
+  return next.reallocated.map((change) => {
+    const unit = next.units.find((candidate) => candidate.unitId === change.unitId);
+    const serviceId = unit?.serviceId ?? bound.find(({ binding }) => `${binding.rootId}:${binding.serviceId}` === change.unitId)?.launch.serviceId ?? change.unitId;
+    const changedKeys = new Set(next.bindings
+      .filter((binding) => binding.unitId === change.unitId && beforeByKey.get(binding.key) !== binding.value)
+      .map((binding) => binding.key));
+    const consumers = bound.flatMap(({ launch }) => {
+      if (launch.serviceId === serviceId || changedKeys.size === 0) return [];
+      const resolved = resolveServiceEnv(launch.layers);
+      if (!resolved.ok) return [];
+      return resolved.rows.some((row) => changedKeys.has(row.key)) ? [launch.serviceId] : [];
+    });
+    return { unitId: change.unitId, serviceId, before: change.before, after: change.after, consumers };
+  });
+}
+
+function movedServicePortRows(
+  plan: BoundHostGroupPlan,
+  bound: readonly BoundServiceEntry[],
+): { ok: true; rows: { serviceId: string; rows: ServiceConfigEntry[] }[] } | { ok: false; assignment: PortAssignment; reason: string } {
+  const rows: { serviceId: string; rows: ServiceConfigEntry[] }[] = [];
+  for (const change of plan.reallocated) {
+    const assignment = plan.assignments.find((candidate) => candidate.unitId === change.unitId);
+    const entry = bound.find(({ launch }) => launch.serviceId === assignment?.serviceId);
+    if (!assignment || !entry) return { ok: false, assignment: assignment ?? { unitId: change.unitId, serviceId: change.unitId, port: change.after, instanceId: "" }, reason: "改址目标不在可信服务登记中" };
+    const resolved = resolveServiceEnv(entry.launch.layers);
+    if (!resolved.ok) return { ok: false, assignment, reason: `原启动配置无法解析：${resolved.error.code}: ${resolved.error.message}` };
+    const portRows = resolved.rows.filter((row) => /PORT$/.test(row.key) && Number(row.value) === change.before);
+    if (portRows.length === 0) return { ok: false, assignment, reason: `可信服务「${assignment.serviceId}」没有可改写原端口 ${change.before} 的 PORT 配置` };
+    rows.push({
+      serviceId: assignment.serviceId,
+      rows: portRows.map((row) => ({ key: row.key, value: String(change.after), secret: row.secret })),
+    });
+  }
+  return { ok: true, rows };
+}
+
+function mergeTaskConfigRows(taskRows: readonly ServiceConfigEntry[], ownPortRows: readonly ServiceConfigEntry[]): ServiceConfigEntry[] {
+  const rows = new Map(taskRows.map((row) => [row.key, row]));
+  for (const row of ownPortRows) rows.set(row.key, row);
+  return [...rows.values()];
+}
+
+function portReservationFailure(
+  plan: BoundHostGroupPlan,
+  bound: readonly BoundServiceEntry[],
+  failures: readonly PortReservationIssue[],
+  portChanges: readonly GroupPortChange[],
+): Record<string, unknown> {
+  const diagnostics: RunDiagnostic[] = failures.map((failure) => {
+    const unit = plan.units.find((candidate) => candidate.unitId === failure.assignment.unitId);
+    const move = portChanges.find((candidate) => candidate.serviceId === failure.assignment.serviceId);
+    const attempt = move ? `；改址尝试 ${move.before} → ${move.after}` : "；未进行改址重试";
+    const code: "port-taken" | "port-unavailable" = failure.code === "EADDRINUSE" ? "port-taken" : "port-unavailable";
+    return {
+      code,
+      scope: { unitId: failure.assignment.unitId, port: failure.assignment.port },
+      message: `服务「${unit?.name ?? failure.assignment.serviceId}」（${failure.assignment.serviceId}）启动前端口 ${failure.assignment.port} 预约失败：${failure.reason}${attempt}`,
+      hint: "请释放该端口或检查监听地址后重试整组启动",
+    };
+  });
+  const units = (plan.units.length > 0 ? plan.units : bound.map(({ binding, launch }) => ({
+    unitId: `${binding.rootId}:${launch.serviceId}`, serviceId: launch.serviceId, name: launch.descriptor.name,
+    location: "local" as const,
+  }))).map((unit) => ({
+    unitId: unit.unitId,
+    serviceId: unit.serviceId,
+    start: "not-started",
+    observedRun: false,
+    listening: "not-probed",
+    linked: false,
+    steps: [],
+    diagnostics: [],
+  }));
+  return {
+    state: "start-failed",
+    groups: plan.groups.map((group) => group.groupId),
+    units,
+    restartScope: [],
+    reallocated: plan.reallocated,
+    diagnostics: [...plan.diagnostics, ...diagnostics],
+    portChanges,
+  };
 }
 
 /**

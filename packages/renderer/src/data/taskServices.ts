@@ -860,13 +860,23 @@ export interface ServiceGroupUnitView {
   diagnostics: ServiceGroupDiagnosticView[];
 }
 
-/** The Host's whole group run as `task/controlService {group:true}` returns it. */
+/** Main's group-start envelope: Host observations plus explicit preflight reallocation facts. */
+export interface ServiceGroupPortChangeView {
+  unitId: string;
+  serviceId: string;
+  before: number;
+  after: number;
+  consumers: string[];
+}
+
 export interface ServiceGroupRunView {
   state: ServiceGroupStateView;
   groups: string[];
   units: ServiceGroupUnitView[];
   restartScope: { unitId: string; reason: string }[];
   reallocated: { unitId: string; before: number; after: number }[];
+  /** Main's pre-spawn occupied-port reallocation and the registered consumers it updated. */
+  portChanges: ServiceGroupPortChangeView[];
   diagnostics: ServiceGroupDiagnosticView[];
 }
 
@@ -876,7 +886,7 @@ export interface ServiceGroupRunView {
  * adds must be added here, or a real group run would be refused as unreadable
  * instead of silently losing an observation.
  */
-export const GROUP_RUN_KEYS = ["state", "groups", "units", "restartScope", "reallocated", "diagnostics"] as const;
+export const GROUP_RUN_KEYS = ["state", "groups", "units", "restartScope", "reallocated", "portChanges", "diagnostics"] as const;
 export const GROUP_UNIT_KEYS = ["unitId", "serviceId", "order", "start", "pid", "observedRun", "listening", "address", "linked", "steps", "diagnostics"] as const;
 export const GROUP_STEP_KEYS = ["label", "kind", "targetUnitId", "targetServiceId", "outcome", "detail", "address"] as const;
 export const GROUP_DIAGNOSTIC_KEYS = ["code", "scope", "message", "hint"] as const;
@@ -1002,8 +1012,9 @@ function groupUnit(value: unknown): ServiceGroupUnitView | null {
  *   the UI;
  * - 「已互验」 additionally requires a real `linkage` step whose outcome passed, so
  *   the group can never claim a mutual verification nobody observed;
- * - a plan/declared fact has no way in: `listening`/`outcome` are the Host's own
- *   probe results, and no field of this payload is derived from the plan.
+ * - a plan/declared fact cannot claim an observation: `listening`/`outcome` are
+ *   the Host's own probe results. `portChanges` is separately labeled main-side
+ *   evidence of a real bind failure, allocator move and refreshed consumers.
  */
 export function serviceGroupRunFromHost(payload: unknown): ServiceGroupRunView | null {
   const envelope = isRecord(payload) ? payload["group"] : undefined;
@@ -1042,6 +1053,21 @@ export function serviceGroupRunFromHost(payload: unknown): ServiceGroupRunView |
     if (unitId === null || typeof before !== "number" || typeof after !== "number") return null;
     reallocated.push({ unitId, before, after });
   }
+  const rawPortChanges = envelope["portChanges"] ?? [];
+  if (!Array.isArray(rawPortChanges) || rawPortChanges.length > 500) return null;
+  const portChanges: ServiceGroupPortChangeView[] = [];
+  for (const entry of rawPortChanges) {
+    if (!isRecord(entry) || Object.keys(entry).sort().join(",") !== "after,before,consumers,serviceId,unitId") return null;
+    const unitId = groupText(entry["unitId"], 300);
+    const serviceId = groupText(entry["serviceId"], 300);
+    const before = entry["before"];
+    const after = entry["after"];
+    const consumers = entry["consumers"];
+    if (unitId === null || serviceId === null || typeof before !== "number" || !Number.isInteger(before) || before < 1 || before > 65535
+      || typeof after !== "number" || !Number.isInteger(after) || after < 1 || after > 65535
+      || !Array.isArray(consumers) || consumers.length > 500 || !consumers.every((consumer) => typeof consumer === "string" && consumer.length > 0 && consumer.length <= 300)) return null;
+    portChanges.push({ unitId, serviceId, before, after, consumers: [...consumers] });
+  }
   if (!Array.isArray(envelope["diagnostics"]) || envelope["diagnostics"].length > 500) return null;
   const diagnostics: ServiceGroupDiagnosticView[] = [];
   for (const entry of envelope["diagnostics"]) {
@@ -1063,7 +1089,7 @@ export function serviceGroupRunFromHost(payload: unknown): ServiceGroupRunView |
       if (!linkage.some((step) => step.outcome === "passed")) return null;
     }
   }
-  return { state, groups: [...envelope["groups"]], units, restartScope, reallocated, diagnostics };
+  return { state, groups: [...envelope["groups"]], units, restartScope, reallocated, portChanges, diagnostics };
 }
 
 /** Result of one group start of a task's run units through the production path. */
