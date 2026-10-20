@@ -1288,6 +1288,87 @@ function ServiceControl({ taskId, projectId, row, onChanged }: {
   );
 }
 
+type ServiceStopReceipt =
+  | { serviceId: string; name: string; state: "stopped" }
+  | { serviceId: string; name: string; state: "not-running"; error: string }
+  | { serviceId: string; name: string; state: "failed"; error: string };
+
+/** Stop the catalog-bound service identities one by one through the existing human stop path. */
+function StopAllServicesControl({ taskId, projectId, rows, previousReceipts, onStopped }: {
+  taskId: string;
+  projectId: string;
+  rows: readonly BoundServiceRow[];
+  previousReceipts: ServiceStopReceipt[];
+  onStopped: (receipts: ServiceStopReceipt[]) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [receipts, setReceipts] = useState<ServiceStopReceipt[]>(previousReceipts);
+  const stopAll = async () => {
+    if (busy || rows.length === 0) return;
+    const affected = rows.map((row) => `${serviceName(row)}（${row.binding.serviceId}）`).join("、");
+    if (!window.confirm(`确认停止本任务以下已登记服务的进程树？\n影响范围：本任务的 ${affected}。\n不影响：另一任务的服务、外部服务。\n停止后请查看逐项回执，并按失败原因重试。`)) return;
+
+    setBusy(true);
+    setReceipts([]);
+    const completed: ServiceStopReceipt[] = [];
+    for (const row of rows) {
+      const serviceId = row.binding.serviceId;
+      const name = serviceName(row);
+      // A refused stop on a service this panel already shows as not running is
+      // not a failure. The attempt still happens: a stale lifecycle must never
+      // skip a live process tree, and the Host's own words stay in the receipt.
+      const wasRunning = serviceRunning(row);
+      try {
+        const result = await runBoundTaskServiceThroughShell({ projectId, taskId, serviceId, action: "stop" });
+        completed.push(result.ok ? { serviceId, name, state: "stopped" }
+          : wasRunning ? { serviceId, name, state: "failed", error: result.error }
+            : { serviceId, name, state: "not-running", error: result.error });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        completed.push(wasRunning ? { serviceId, name, state: "failed", error: message } : { serviceId, name, state: "not-running", error: message });
+      }
+      setReceipts([...completed]);
+    }
+    setBusy(false);
+    onStopped(completed);
+  };
+  const failures = receipts.filter((receipt) => receipt.state === "failed").length;
+  const notRunning = receipts.filter((receipt) => receipt.state === "not-running").length;
+  const complete = receipts.length === rows.length && rows.length > 0 &&
+    receipts.every((receipt, index) => receipt.serviceId === rows[index]?.binding.serviceId);
+
+  return (
+    <section className="border-t border-line pt-2" data-testid="dock-stop-all-control">
+      <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+        <Button type="button" size="sm" variant="outline" disabled={busy || rows.length === 0} onClick={() => { void stopAll(); }}>
+          {busy ? "正在逐项停止…" : "停止本任务全部服务"}
+        </Button>
+        <span className="text-[10px] text-muted">逐个停止本任务已登记服务的进程树；失败会列出服务身份和原因，可据此重试。</span>
+      </div>
+      {complete && (
+        <div className="mt-1 min-w-0 text-[10px] text-muted" data-testid="dock-stop-all-receipt">
+          <p role={failures > 0 ? "alert" : "status"}>
+            {failures > 0
+              ? `部分停止未完成：${failures} 项服务失败，请查看失败原因并重试。${notRunning > 0 ? `（另有 ${notRunning} 项原本未在运行。）` : ""}`
+              : notRunning > 0
+                ? `已停止 ${receipts.length - notRunning} 项；${notRunning} 项原本未在运行（Host 回执见下）。`
+                : `已全部停止：${receipts.length} 项本任务服务的停止操作均获 Host 确认。`}
+          </p>
+          <ul className="mt-0.5 flex flex-col gap-0.5">
+            {receipts.map((receipt) => (
+              <li key={receipt.serviceId} data-service-id={receipt.serviceId} data-stop-state={receipt.state}>
+                {receipt.name}（{receipt.serviceId}） · {receipt.state === "stopped" ? "已停止"
+                  : receipt.state === "not-running" ? <span className="text-muted">原本未在运行（Host 回执：{receipt.error}）</span>
+                    : <span className="text-[#ad4545]">停止失败：{receipt.error}</span>}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </section>
+  );
+}
+
 /**
  * 整组启动 ([PiDock 05] #10 box 4): the task's own run unit group, started as a
  * group. The click sends only the project and the task to main's catalog entry
@@ -1536,6 +1617,8 @@ function DependencyTargets({ dependencies }: { dependencies: TaskDependencyRouti
 function RunTool({ taskId }: { taskId: string }) {
   const [load, setLoad] = useState<TaskServicesLoad | null>(null);
   const [revision, setRevision] = useState(0);
+  const [stopReceipts, setStopReceipts] = useState<ServiceStopReceipt[]>([]);
+  useEffect(() => { setStopReceipts([]); }, [taskId]);
   useEffect(() => {
     let live = true;
     setLoad(null);
@@ -1577,6 +1660,8 @@ function RunTool({ taskId }: { taskId: string }) {
         <>
           {load.templatesError && <p role="status" className="break-words border border-line bg-soft px-2 py-1.5 text-[11px] text-muted">{load.templatesError}</p>}
           {load.rows.length > 0 && <GroupStartControl taskId={taskId} projectId={boundProjectId} onStarted={() => setRevision((value) => value + 1)} />}
+          {load.rows.length > 0 && <StopAllServicesControl key={taskId} taskId={taskId} projectId={boundProjectId} rows={load.rows}
+            previousReceipts={stopReceipts} onStopped={(receipts) => { setStopReceipts(receipts); setRevision((value) => value + 1); }} />}
           <section>
             <p className="text-[11px] text-muted">本任务服务 · {load.rows.length}</p>
             <ul className="mt-1 flex flex-col gap-1" data-testid="dock-service-rows">
