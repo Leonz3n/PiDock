@@ -1,6 +1,7 @@
-import { useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Badge, Button, EmptyState, IconButton, Panel } from "./ui";
 import { Icon, type IconName } from "./Icon";
+import { ToolTabBar } from "./ToolTabBar";
 import { CodeBlock } from "./CodeBlock";
 import { ConfigTable } from "./ConfigTable";
 import { ProtocolPanel, TerminalTakeoverPanel } from "./ProtocolTerminalPanels";
@@ -81,101 +82,21 @@ export function ToolWorkbench({
   onCollapse: () => void;
   children: ReactNode;
 }) {
-  // ARIA tabs pattern with roving tab index: the strip is one Tab stop, arrow
-  // keys move the selection (and focus), Home/End jump to the ends.
-  const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
-  const moveSelection = (panel: ToolPanel, step: number | "first" | "last") => {
-    const from = panels.indexOf(panel);
-    const target =
-      step === "first" ? panels[0] : step === "last" ? panels[panels.length - 1] : panels[(from + step + panels.length) % panels.length];
-    if (target === undefined) return;
-    onSelectPanel(target);
-    tabRefs.current[target]?.focus();
-  };
-  const onTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, panel: ToolPanel) => {
-    const keys = {
-      ArrowRight: 1,
-      ArrowLeft: -1,
-    } as const;
-    if (event.key === "ArrowRight" || event.key === "ArrowLeft") {
-      event.preventDefault();
-      moveSelection(panel, keys[event.key]);
-      return;
-    }
-    if (event.key === "Home" || event.key === "End") {
-      event.preventDefault();
-      moveSelection(panel, event.key === "Home" ? "first" : "last");
-      return;
-    }
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      onSelectPanel(panel);
-    }
-  };
   return (
     <section
       data-testid="task-workbench"
       aria-label="任务工具面板"
       className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-panel border border-line bg-[#fafbfb]"
     >
-      <div data-testid="tool-tabs-row" className="flex h-11 min-h-11 items-center gap-1.5 border-b border-line bg-paper px-4">
-        <div
-          role="tablist"
-          aria-label="已打开的工具"
-          data-testid="tool-tabs"
-          className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto"
-        >
-          {panels.map((panel) => {
-            const active = panel === activePanel;
-            return (
-              <div
-                key={panel}
-                data-testid={`tool-tab-item-${panel}`}
-                className={`flex shrink-0 items-center border-b-2 ${active ? "border-accent" : "border-transparent"}`}
-              >
-                <button
-                  type="button"
-                  role="tab"
-                  id={`tool-tab-${panel}`}
-                  aria-selected={active}
-                  aria-controls="tool-panel"
-                  tabIndex={active ? 0 : -1}
-                  ref={(node) => {
-                    tabRefs.current[panel] = node;
-                  }}
-                  onKeyDown={(event) => onTabKeyDown(event, panel)}
-                  data-testid={`tool-tab-${panel}`}
-                  onClick={() => onSelectPanel(panel)}
-                  className={`flex items-center gap-1.5 whitespace-nowrap py-2.5 pl-1.5 pr-0.5 text-[11px] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${active ? "font-medium text-accent" : "text-muted hover:text-ink"}`}
-                >
-                  <Icon name={PANEL_ICONS[panel]} className="h-3.5 w-3.5" />
-                  {panelName(panel)}
-                </button>
-                <button
-                  type="button"
-                  data-testid={`tool-tab-close-${panel}`}
-                  aria-label={`关闭${panelName(panel)}`}
-                  title={`关闭${panelName(panel)}`}
-                  onClick={() => onClosePanel(panel)}
-                  className="mr-1 grid h-5 w-5 place-items-center rounded text-[#9ba4b2] hover:bg-soft hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-                >
-                  <Icon name="close" className="h-3 w-3" />
-                </button>
-              </div>
-            );
-          })}
-        </div>
-        {/* The collapse control sits beside the strip, not inside it: the ARIA
-            tabs pattern expects `tablist` to own only tabs, and the visual row
-            keeps it at the right edge (prototype `.collapse-tools`). */}
-        <IconButton
-          icon="close"
-          label="收起工具区"
-          className="ml-auto shrink-0"
-          data-testid="collapse-tools"
-          onClick={onCollapse}
-        />
-      </div>
+      <ToolTabBar
+        panels={panels}
+        activePanel={activePanel}
+        labelFor={panelName}
+        iconFor={(panel) => PANEL_ICONS[panel]}
+        onSelectPanel={onSelectPanel}
+        onClosePanel={onClosePanel}
+        onCollapse={onCollapse}
+      />
       <div
         id="tool-panel"
         role="tabpanel"
