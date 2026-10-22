@@ -11,7 +11,7 @@ import { setTaskArchivedThroughShell } from "../data/shellBridge";
 import { describeContextDisplay, REASONING_LABELS, REASONING_LEVELS } from "../data/providerState";
 import { readSessionContext, writeSessionThinking, type SessionContextView } from "../data/sessionContext";
 import { parseLifecycle } from "./DesktopArchivePage";
-import { DesktopToolDock, DESKTOP_TOOLS_UNWIRED, type DesktopTool } from "./DesktopToolDock";
+import { DesktopToolDock, DESKTOP_TOOL_ICONS, DESKTOP_TOOL_LABELS, DESKTOP_TOOLS_UNWIRED, type DesktopTool } from "./DesktopToolDock";
 import { DesktopTaskSources } from "./DesktopTaskSources";
 import { BrandMark, LocalUserAvatar } from "./ui";
 import { hostText } from "../data/workspaceFiles";
@@ -132,7 +132,9 @@ function TaskConversation({ taskId, name, roots, association, onBack, onOpenProv
       requestId ? "请求状态未知；可按原 ID 重试，不能发送新消息" : projection.interrupted ? "会话上次执行中断，请核验后继续" : projection.pending ? "会话正在执行，请等待" : "");
   }, [request, taskId]);
   const [connectionKey, setConnectionKey] = useState(0);
-  const [tool, setTool] = useState<DesktopTool | null>(null);
+  const [openTools, setOpenTools] = useState<DesktopTool[]>([]);
+  const [activeTool, setActiveTool] = useState<DesktopTool | null>(null);
+  const [toolDockCollapsed, setToolDockCollapsed] = useState(false);
   const [provider, setProvider] = useState<ProviderStatus | null>(null);
   const [unwired, setUnwired] = useState<string | null>(null);
   const [contextRead, setContextRead] = useState<ContextRead>({ phase: "reading" });
@@ -146,6 +148,29 @@ function TaskConversation({ taskId, name, roots, association, onBack, onOpenProv
   const [archiveBusy, setArchiveBusy] = useState(false);
   const [archiveError, setArchiveError] = useState("");
   const archiveCancelRef = useRef<HTMLButtonElement>(null);
+  const closeTool = (closedTool: DesktopTool) => {
+    const index = openTools.indexOf(closedTool);
+    if (index < 0) return;
+    const remaining = openTools.filter((item) => item !== closedTool);
+    setOpenTools(remaining);
+    if (activeTool === closedTool) {
+      setActiveTool(remaining[Math.min(index, remaining.length - 1)] ?? null);
+      setToolDockCollapsed(false);
+    }
+  };
+  const toggleTool = (nextTool: DesktopTool) => {
+    if (!openTools.includes(nextTool)) {
+      setOpenTools([...openTools, nextTool]);
+      setActiveTool(nextTool);
+      setToolDockCollapsed(false);
+    } else if (activeTool === nextTool) {
+      if (toolDockCollapsed) setToolDockCollapsed(false);
+      else closeTool(nextTool);
+    } else {
+      setActiveTool(nextTool);
+      setToolDockCollapsed(false);
+    }
+  };
   useEffect(() => {
     if (archivePrompt) archiveCancelRef.current?.focus();
   }, [archivePrompt]);
@@ -322,13 +347,11 @@ function TaskConversation({ taskId, name, roots, association, onBack, onOpenProv
   // Desktop tools follow the current product scope; built-in terminal is retired.
   // `DESKTOP_TOOLS_UNWIRED` remains the registry for any tool that loses its
   // Host path; a listed tool stays visible but opens the explicit 未接线 state.
-  const toolIcons: { icon: "file" | "server" | "globe" | "chart" | "link"; tool: DesktopTool; label: string }[] = [
-    { icon: "server", tool: "runtime", label: "运行" },
-    { icon: "globe", tool: "browser", label: "浏览器" },
-    { icon: "file", tool: "files", label: "文件" },
-    { icon: "chart", tool: "logs", label: "日志" },
-    { icon: "link", tool: "protocol", label: "协议" },
-  ];
+  const toolIcons = (Object.keys(DESKTOP_TOOL_LABELS) as DesktopTool[]).map((tool) => ({
+    icon: DESKTOP_TOOL_ICONS[tool],
+    tool,
+    label: DESKTOP_TOOL_LABELS[tool],
+  }));
   // The provider is mounted here as well as at the app root: this component is
   // also rendered standalone (tests, embedded surfaces).
   // Prototype A keeps the model entry in the composer, not in a strip above the
@@ -457,13 +480,14 @@ function TaskConversation({ taskId, name, roots, association, onBack, onOpenProv
           {toolIcons.map((item) => {
             const unwiredReason = DESKTOP_TOOLS_UNWIRED.find((entry) => entry.id === item.tool)?.reason;
             return unwiredReason === undefined
-              ? <Button key={item.icon} type="button" variant={tool === item.tool ? "secondary" : "ghost"} size="icon-sm" onClick={() => setTool(tool === item.tool ? null : item.tool)} aria-pressed={tool === item.tool} title={`${item.label}面板（真实 Host）`} aria-label={item.label}><Icon name={item.icon} /></Button>
+              ? <Button key={item.icon} type="button" variant={activeTool === item.tool && !toolDockCollapsed ? "secondary" : "ghost"} size="icon-sm" onClick={() => toggleTool(item.tool)} aria-pressed={activeTool === item.tool && !toolDockCollapsed} title={`${item.label}面板（真实 Host）`} aria-label={item.label}><Icon name={item.icon} /></Button>
               : <Tooltip key={item.icon}><TooltipTrigger asChild>
                   <Button type="button" variant="ghost" size="icon-sm" onClick={() => setUnwired(item.label)} aria-label={`${item.label}（未接线）`} className="text-[#b3b9be]"><Icon name={item.icon} /></Button>
                 </TooltipTrigger>
                 <TooltipContent>{`${item.label}未接线：${unwiredReason}`}</TooltipContent>
               </Tooltip>;
           })}
+          {openTools.length > 0 && toolDockCollapsed && <Button type="button" variant="outline" size="sm" onClick={() => setToolDockCollapsed(false)} aria-label="展开工具区"><Icon name="plus" />展开工具区</Button>}
           {/* [PiDock 03] (#6) the production append entry: repositories AND
               plain directories. Only a shell that really exposes the append
               channel shows it. */}
@@ -511,7 +535,7 @@ function TaskConversation({ taskId, name, roots, association, onBack, onOpenProv
       {unwired}面板未接线：{DESKTOP_TOOLS_UNWIRED.find((entry) => entry.label === unwired)?.reason ?? "生产读取路径尚未接线"}（不显示样例数据）
     </p>}
     <div className="flex min-h-0 min-w-0 flex-1">
-    <div className={`flex min-h-0 min-w-0 flex-1 flex-col ${tool ? "below-narrow:hidden" : ""}`}>
+    <div className={`flex min-h-0 min-w-0 flex-1 flex-col ${activeTool && !toolDockCollapsed ? "below-narrow:hidden" : ""}`}>
     <section aria-label="SDK 对话历史" className="mx-auto w-full max-w-[820px] min-h-0 min-w-0 flex-1 space-y-3 overflow-y-auto px-3 py-4">
       <p className="text-xs text-muted">SDK JSONL 已确认历史 · 最近最多 80 条</p>
       {snapshot && !snapshot.messages.length && <p className="py-8 text-center text-sm text-muted">尚未开始 · 无 SDK 会话记录</p>}
@@ -571,7 +595,17 @@ function TaskConversation({ taskId, name, roots, association, onBack, onOpenProv
       </form>
     </div></div>
     </div>
-    <DesktopToolDock taskId={taskId} tool={tool} onClose={() => setTool(null)} />
+    <DesktopToolDock
+      taskId={taskId}
+      tool={activeTool}
+      tools={openTools}
+      activeTool={activeTool}
+      collapsed={toolDockCollapsed}
+      onSelectTool={(selected) => { setActiveTool(selected); setToolDockCollapsed(false); }}
+      onCloseTool={closeTool}
+      onCollapse={() => setToolDockCollapsed(true)}
+      onClose={() => { if (activeTool) closeTool(activeTool); }}
+    />
     </div>
   </main></TooltipProvider>;
 }
