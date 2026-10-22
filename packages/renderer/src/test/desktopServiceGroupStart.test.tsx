@@ -212,6 +212,22 @@ describe("[PiDock 05] #10 group start from the shipped 运行 panel", () => {
     expect(caller.getAttribute("data-linkage")).toBe("已互验");
   });
 
+  it("shows occupied-port changes as group reallocation and names their affected consumers", async () => {
+    const observed = await realGroupRun();
+    const group = {
+      ...observed,
+      portChanges: [{ unitId: CALLEE_UNIT, serviceId: CALLEE_ID, before: 4100, after: 4101, consumers: [CALLER_ID] }],
+    };
+    expect(serviceGroupRunFromHost({ group })?.portChanges).toEqual(group.portChanges);
+    groupBridge({ answer: () => ({ ok: true, payload: { group } }) });
+    await clickGroupStart();
+
+    const changes = await screen.findByTestId("dock-group-port-changes");
+    expect(changes).toHaveTextContent("整组启动改址（非服务自行换端口）");
+    expect(changes).toHaveTextContent(`${CALLEE_ID} 4100 → 4101`);
+    expect(changes).toHaveTextContent(`受影响消费者：${CALLER_ID}`);
+  });
+
   it("names the plan's missing dependency edge instead of implying a verification", async () => {
     const group = await realNoEdgeRun();
     expect(group.state).toBe("listening");

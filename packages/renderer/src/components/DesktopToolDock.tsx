@@ -1451,8 +1451,8 @@ function GroupDiagnosticList({ diagnostics, scope }: { diagnostics: readonly Ser
 
 /**
  * The Host's REAL group result ([PiDock 05] #10 box 4), one row per unit plus the
- * group's own named state and diagnostics. Every value rendered here is an
- * observation the Host made or a negative it named; the plan never appears.
+ * group's own named state and diagnostics. Listening/linkage are Host observations;
+ * portChanges separately names main's observed pre-spawn reallocation and updates.
  */
 function GroupRunReceipt({ group }: { group: ServiceGroupRunView }) {
   return (
@@ -1479,7 +1479,17 @@ function GroupRunReceipt({ group }: { group: ServiceGroupRunView }) {
         ))}
         {group.units.length === 0 && <li data-group-unit-empty>Host 未返回任何运行单元的观测结果</li>}
       </ul>
-      <GroupDiagnosticList diagnostics={group.diagnostics} scope="group" />      {group.restartScope.length > 0 && (
+      <GroupDiagnosticList diagnostics={group.diagnostics} scope="group" />
+      {group.portChanges.length > 0 && (
+        <ul className="mt-0.5 flex flex-col gap-0.5" data-testid="dock-group-port-changes">
+          {group.portChanges.map((change) => (
+            <li key={change.unitId}>
+              整组启动改址（非服务自行换端口）：{change.serviceId} {change.before} → {change.after}；受影响消费者：{change.consumers.length > 0 ? change.consumers.join("、") : "无已解析读取点"}
+            </li>
+          ))}
+        </ul>
+      )}
+      {group.restartScope.length > 0 && (
         <p data-testid="dock-group-restart-scope">
           本次整组启动未重启任何单元；计划要求后续重启：
           {group.restartScope.map((row) => `${row.unitId}（${row.reason}）`).join("、")}
