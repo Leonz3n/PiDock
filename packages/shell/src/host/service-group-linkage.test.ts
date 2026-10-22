@@ -50,7 +50,7 @@ const port = Number(process.env.PORT ?? process.env.LISTEN_ON);
 fs.appendFileSync(process.env.ORDER_FILE, tag + ":" + process.pid + "\\n");
 const server = http.createServer((_request, response) => {
   response.setHeader("content-type", "application/json");
-  response.end(JSON.stringify({ tag, pid: process.pid, port, dir: path.basename(process.cwd()) }));
+  response.end(JSON.stringify({ tag, pid: process.pid, port, dir: path.basename(process.cwd()), ...(process.env.CALLEE_API_URL ? { calleeUrl: process.env.CALLEE_API_URL } : {}) }));
 });
 server.listen(port, "127.0.0.1", () => {
   fs.writeFileSync(path.join(process.cwd(), "listening.txt"), String(process.pid));
@@ -76,6 +76,39 @@ async function freePort(): Promise<number> {
   const port = address.port;
   await new Promise<void>((resolve) => server.close(() => resolve()));
   return port;
+}
+
+async function freePortWithSuccessors(count: number): Promise<number> {
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const port = await freePort();
+    const probes = Array.from({ length: count }, () => createServer());
+    try {
+      for (let index = 0; index < probes.length; index += 1) {
+        await new Promise<void>((resolve, reject) => {
+          probes[index]?.once("error", reject);
+          probes[index]?.listen(port + index + 1, "127.0.0.1", resolve);
+        });
+      }
+      await Promise.all(probes.map((server) => new Promise<void>((resolve) => server.close(() => resolve()))));
+      return port;
+    } catch {
+      await Promise.all(probes.map((server) => new Promise<void>((resolve) => {
+        if (!server.listening) return resolve();
+        server.close(() => resolve());
+      })));
+    }
+  }
+  throw Error("no adjacent free ports");
+}
+
+async function occupyPort(port: number): Promise<ReturnType<typeof createServer>> {
+  const server = createServer((socket) => socket.destroy());
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, "127.0.0.1", resolve);
+  });
+  cleanups.push(() => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())));
+  return server;
 }
 
 async function until(check: () => boolean, label: string): Promise<void> {
@@ -120,7 +153,7 @@ function portPair() {
   return { child, parent };
 }
 
-type CalleeMode = "listening" | "declared-mismatch" | "cannot-start" | "no-declared-port";
+type CalleeMode = "listening" | "declared-mismatch" | "cannot-start" | "no-declared-port" | "occupied-reallocation" | "occupied-retry-fails";
 
 /** One op the new catalog caller forwarded to the real Host, with its own attestation. */
 interface RoutedOp {
@@ -175,7 +208,7 @@ async function fixture(mode: CalleeMode): Promise<Fixture> {
     taskId, name: "Group", dirId: taskId, branch: "task/main", root, taskDir,
     remoteBranch: "main", baseCommit: "source-fixture", repos: ["repo-a"], now: "2026-01-01T00:00:00.000Z",
   }));
-  const [portA, portB, wrongPort] = [await freePort(), await freePort(), await freePort()];
+  const [portA, portB, wrongPort] = [await freePort(), await (mode === "occupied-reallocation" || mode === "occupied-retry-fails" ? freePortWithSuccessors(2) : freePort()), await freePort()];
 
   const taskStat = statSync(taskDir, { bigint: true });
   const identity = { taskId, createdAt: "2026-01-01T00:00:00.000Z", root, realRoot: root, dirId: taskId,
@@ -295,6 +328,24 @@ async function fixture(mode: CalleeMode): Promise<Fixture> {
             : [{ key: "PORT", envRef: "PIDOCK_GROUP_PORT_B" }, { key: "ORDER_FILE", envRef: "PIDOCK_GROUP_ORDER_FILE" }],
       });
       fixtureValue.calleeId = calleeTemplate.serviceId;
+      if (options === "occupied-reallocation" || options === "occupied-retry-fails") {
+        const callerRevision = catalog.saveTemplate({
+          projectId,
+          environmentId,
+          serviceId: callerTemplate.serviceId,
+          expectedVersion: 1,
+          descriptor: callerTemplate.descriptor,
+          shared: [
+            { key: "SERVICE_TAG", value: "caller", secret: false },
+            { key: "CALLEE_API_URL", value: `http://127.0.0.1:${portB}`, secret: false },
+          ],
+          dependencies: [{ to: calleeTemplate.serviceId, kind: "call" }],
+        });
+        catalog.bindTask({
+          taskId, serviceId: callerTemplate.serviceId, environmentId, templateVersion: callerRevision.version, rootId: "repo-a", subdir: "svc-a",
+          programPath: realpathSync(process.execPath), privateRefs: [{ key: "PORT", envRef: "PIDOCK_GROUP_PORT_A" }, { key: "ORDER_FILE", envRef: "PIDOCK_GROUP_ORDER_FILE" }],
+        });
+      }
     },
     async planOnly() {
       await fixtureValue.bindServices();
@@ -595,6 +646,60 @@ describe.skipIf(process.platform === "win32")("#10 real group start and linkage 
     // declares a target, so nothing may be overridden.
     expect(Object.keys(planned?.payload["layers"] ?? {}).sort()).toEqual(["privateEntries", "repoDefaults", "shared", "task"]);
     expect(planned?.payload["rules"]).toBeUndefined();
+  });
+
+  it("preflights before spawn, reallocates an occupied port once, and updates the service plus every declared consumer", { timeout: 60_000 }, async () => {
+    const f = await fixture("occupied-reallocation");
+    await f.bindServices();
+    await occupyPort(f.portB);
+
+    const result = await f.startGroupThroughMain();
+    const group = (result["group"] ?? {}) as Record<string, unknown>;
+    expect(group["state"]).toBe("verified");
+    const change = (group["portChanges"] as Record<string, unknown>[])[0];
+    expect(change).toMatchObject({ unitId: `repo-a:${f.calleeId}`, serviceId: f.calleeId, before: f.portB, after: f.portB + 1, consumers: [f.callerId] });
+    expect(f.routed().filter((entry) => entry.op === "task/planServiceGroup")).toHaveLength(2);
+    expect(f.routed().filter((entry) => entry.op === "task/controlService")).toHaveLength(1);
+
+    const caller = await ask(f.portA);
+    expect(caller).toMatchObject({ tag: "caller", calleeUrl: `http://127.0.0.1:${f.portB + 1}` });
+    expect(await ask(f.portB + 1)).toMatchObject({ tag: "callee", port: f.portB + 1 });
+    expect(await ask(f.portB)).toBeNull();
+  });
+
+  it("fails by service and port when the one relocated reservation retry is also occupied", { timeout: 60_000 }, async () => {
+    const f = await fixture("occupied-retry-fails");
+    await f.bindServices();
+    await occupyPort(f.portB);
+    await occupyPort(f.portB + 1);
+
+    const result = await f.startGroupThroughMain();
+    const group = (result["group"] ?? {}) as Record<string, unknown>;
+    expect(group["state"]).toBe("start-failed");
+    expect((group["units"] as Record<string, unknown>[]).every((unit) => unit["start"] === "not-started")).toBe(true);
+    expect(group["portChanges"]).toEqual(expect.arrayContaining([
+      expect.objectContaining({ serviceId: f.calleeId, before: f.portB, after: f.portB + 1 }),
+    ]));
+    const failure = (group["diagnostics"] as Record<string, unknown>[]).find((entry) => entry["code"] === "port-taken");
+    expect(failure).toMatchObject({ scope: { unitId: `repo-a:${f.calleeId}`, port: f.portB + 1 } });
+    expect(String(failure?.["message"])).toContain(f.calleeId);
+    expect(String(failure?.["message"])).toContain(String(f.portB + 1));
+    expect(String(failure?.["message"])).toContain(`${f.portB} → ${f.portB + 1}`);
+    expect(f.routed().filter((entry) => entry.op === "task/planServiceGroup")).toHaveLength(2);
+    expect(f.routed().filter((entry) => entry.op === "task/controlService")).toEqual([]);
+    expect(orderOf(f.orderPath)).toEqual([]);
+  });
+
+  it("does not add port reassignment noise when all planned ports are available", { timeout: 60_000 }, async () => {
+    const f = await fixture("listening");
+    await f.bindServices();
+
+    const result = await f.startGroupThroughMain();
+    const group = (result["group"] ?? {}) as Record<string, unknown>;
+    expect(group["state"]).toBe("listening");
+    expect(group["portChanges"]).toEqual([]);
+    expect(f.routed().filter((entry) => entry.op === "task/planServiceGroup")).toHaveLength(1);
+    expect(f.routed().filter((entry) => entry.op === "task/controlService")).toHaveLength(1);
   });
 
   it("fails a portless bound service CLOSED by name, starting nothing", { timeout: 60_000 }, async () => {
