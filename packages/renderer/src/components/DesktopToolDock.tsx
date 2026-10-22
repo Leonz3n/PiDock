@@ -3,6 +3,8 @@ import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Separator } from "./ui/separator";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
+import type { IconName } from "./Icon";
+import { ToolTabBar } from "./ToolTabBar";
 import {
   browserActionThroughShell,
   deliveryInfoThroughShell,
@@ -104,6 +106,14 @@ export const DESKTOP_TOOL_LABELS: Record<DesktopTool, string> = {
   files: "文件",
   logs: "日志",
   protocol: "协议",
+};
+
+export const DESKTOP_TOOL_ICONS: Record<DesktopTool, IconName> = {
+  runtime: "server",
+  browser: "globe",
+  files: "file",
+  logs: "chart",
+  protocol: "link",
 };
 
 /**
@@ -2000,21 +2010,50 @@ export function DesktopToolDock({
   taskId,
   tool,
   onClose,
+  tools,
+  activeTool,
+  onSelectTool,
+  onCloseTool,
+  onCollapse,
+  collapsed = false,
 }: {
   taskId: string;
   tool: DesktopTool | null;
   onClose: () => void;
+  tools?: readonly DesktopTool[];
+  activeTool?: DesktopTool | null;
+  onSelectTool?: (tool: DesktopTool) => void;
+  onCloseTool?: (tool: DesktopTool) => void;
+  onCollapse?: () => void;
+  collapsed?: boolean;
 }) {
-  if (!tool || !Object.hasOwn(DESKTOP_TOOL_LABELS, tool)) return null;
+  const panels = tools ?? (tool ? [tool] : []);
+  const selectedTool = activeTool ?? tool;
+  if (!selectedTool || !Object.hasOwn(DESKTOP_TOOL_LABELS, selectedTool) || !panels.includes(selectedTool)) return null;
+  const closeTool = onCloseTool ?? (() => onClose());
   return (
     <TooltipProvider>
     <aside
       data-testid="desktop-tool-dock"
-      data-tool={tool}
-      className="flex h-full w-[380px] min-w-0 shrink-0 flex-col overflow-hidden border-l border-line bg-paper below-mid:w-[300px] below-narrow:w-full below-narrow:flex-1 below-narrow:border-l-0"
+      data-tool={selectedTool}
+      hidden={collapsed}
+      className={`${collapsed ? "hidden" : "flex"} h-full w-[380px] min-w-0 shrink-0 flex-col overflow-hidden border-l border-line bg-paper below-mid:w-[300px] below-narrow:w-full below-narrow:flex-1 below-narrow:border-l-0`}
     >
+      <ToolTabBar
+        panels={panels}
+        activePanel={selectedTool}
+        labelFor={(panel) => DESKTOP_TOOL_LABELS[panel]}
+        iconFor={(panel) => DESKTOP_TOOL_ICONS[panel]}
+        onSelectPanel={(panel) => onSelectTool?.(panel)}
+        onClosePanel={closeTool}
+        onCollapse={onCollapse ?? onClose}
+        idPrefix="desktop-tool"
+        rowTestId="desktop-tool-tabs-row"
+        tabsTestId="desktop-tool-tabs"
+        collapseTestId="collapse-tools"
+      />
       <header className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-2.5">
-        <span className="text-xs font-semibold text-ink">{DESKTOP_TOOL_LABELS[tool]}</span>
+        <span className="text-xs font-semibold text-ink">{DESKTOP_TOOL_LABELS[selectedTool]}</span>
         <Badge variant="soft">真实 Host</Badge>
         <Tooltip>
           <TooltipTrigger asChild>
@@ -2026,12 +2065,16 @@ export function DesktopToolDock({
         </Tooltip>
       </header>
       <Separator />
-      <div className="min-h-0 flex-1 overflow-auto p-3">
-        {tool === "runtime" ? <RunTool key={taskId} taskId={taskId} />
-          : tool === "browser" ? <BrowserTool key={taskId} taskId={taskId} />
-          : tool === "files" ? <FilesTool key={taskId} taskId={taskId} />
-          : tool === "logs" ? <LogsTool key={taskId} taskId={taskId} />
-          : <ProtocolTool key={taskId} taskId={taskId} />}
+      <div id="desktop-tool-panel" role="tabpanel" aria-labelledby={`desktop-tool-tab-${selectedTool}`} className="min-h-0 flex-1 overflow-hidden">
+        {panels.map((panel) => (
+          <div key={panel} hidden={panel !== selectedTool} className="h-full min-h-0 overflow-auto p-3">
+            {panel === "runtime" ? <RunTool key={taskId} taskId={taskId} />
+              : panel === "browser" ? <BrowserTool key={taskId} taskId={taskId} />
+              : panel === "files" ? <FilesTool key={taskId} taskId={taskId} />
+              : panel === "logs" ? <LogsTool key={taskId} taskId={taskId} />
+              : <ProtocolTool key={taskId} taskId={taskId} />}
+          </div>
+        ))}
       </div>
     </aside>
     </TooltipProvider>
