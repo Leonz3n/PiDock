@@ -23,8 +23,11 @@ import type { Environment, Message, Reference, Session, Task } from "../data/typ
 import {
   BUILTIN_COMMANDS,
   activeCompletionToken,
+  attachmentRefusal,
+  attachmentSelectionReport,
   attachmentSourceLabel,
   checkDraftReference,
+  classifyComposerAttachment,
   referenceProvenance,
   commandCandidates,
   describeReferenceChip,
@@ -33,6 +36,7 @@ import {
   resolveComposerKey,
   skillCandidates,
   suggestCommand,
+  type AttachmentSelection,
   type CandidateRow,
 } from "../data/composerRules";
 import { isDirectoryOnlyTask } from "../data/directories";
@@ -1679,8 +1683,18 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
     element.setSelectionRange(caretTarget, caretTarget);
   }, [draft.text]);
 
-  const addFiles = (files: readonly File[], pasted: boolean) => {
+  // [PiDock 13] (#16 box 2): every selected/pasted file passes the shell's own
+  // pre-send check (`classifyComposerAttachment`) before it can become a draft
+  // reference. A refused file is named in the returned report instead of being
+  // taken silently; the accepted files still join the draft.
+  const addFiles = (files: readonly File[], pasted: boolean): AttachmentSelection => {
+    const refused: string[] = [];
     files.forEach((file, index) => {
+      const decision = classifyComposerAttachment({ name: file.name, size: file.size, type: file.type });
+      if (!decision.ok) {
+        refused.push(attachmentRefusal(decision, file.name.length > 0 ? file.name : "未命名文件"));
+        return;
+      }
       const isImage = file.type.startsWith("image/");
       // The clipboard carries no file name, so the prototype names the attachment
       // `粘贴图片-<id4>`; the key leads the id so the rule's `slice(0, 4)` yields a
@@ -1699,6 +1713,7 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
         ...(previewUrl !== undefined ? { previewUrl } : {}),
       });
     });
+    return { added: files.length - refused.length, refused };
   };
 
   // [PiDock 13] (#16): one candidate source per symbol — `@` searches the
@@ -2021,9 +2036,9 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
             setText(task.id, sessionId, next);
             setCaret(start + pastedText.length);
             pendingSelection.current = start + pastedText.length;
-            addFiles(images, true);
             setCompletionDismissed(false);
-            pushToast(`已粘贴 ${images.length} 张图片，可附上文字后发送`);
+            const pastedSelection = addFiles(images, true);
+            pushToast(attachmentSelectionReport(pastedSelection) ?? `已粘贴 ${pastedSelection.added} 张图片，可附上文字后发送`);
           }}
           onKeyDown={(event) => {
             // Box 11: the candidate list owns Tab/Enter/Esc/arrows while it is
@@ -2082,7 +2097,9 @@ function Composer({ task, sessionId }: { task: Task; sessionId: string }) {
               disabled={readOnly}
               className="hidden"
               onChange={(event) => {
-                addFiles(Array.from(event.target.files ?? []), false);
+                const selection = addFiles(Array.from(event.target.files ?? []), false);
+                const report = attachmentSelectionReport(selection);
+                if (report !== null) pushToast(report);
                 event.target.value = "";
               }}
             />
