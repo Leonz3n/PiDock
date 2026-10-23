@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   BUILTIN_COMMANDS,
+  MAX_TEXT_ATTACHMENT_BYTES,
   activeCompletionToken,
+  attachmentRefusal,
+  attachmentSelectionReport,
   attachmentSourceLabel,
+  classifyComposerAttachment,
   pastedImageFiles,
   checkDraftReference,
   commandAvailability,
@@ -165,6 +169,8 @@ describe("composer rule mirror", () => {
  * browser keeps its own text paste), names a pasted image after the clipboard
  * id because the clipboard has no file name, and records the provenance plus
  * 仅本页保留 in the attachment detail instead of a separate composer note.
+ * [#16] box 2 extends the same detail with the real scope (no upload, no read)
+ * and adds the pre-send check a file has to pass before it becomes a reference.
  */
 describe("composer attachment rules", () => {
   const item = (type: string, file: File | null, kind = "file") => ({ kind, type, getAsFile: () => file });
@@ -185,14 +191,43 @@ describe("composer attachment rules", () => {
     const shot = new File([new Uint8Array(2048)], "shot.png", { type: "image/png" });
     expect(attachmentSourceLabel({ file: shot, pasted: true, id: "abc123" })).toEqual({
       label: "粘贴图片-abc1.png",
-      detail: "剪贴板图片 · 2 KB · 仅本页保留",
+      // [#16] box 2: 仅本页保留 still leads, and the detail now says what that
+      // means — no upload, no read, and the attachment itself is never sent to
+      // the Agent (references are, so the sentence must not claim "text only").
+      detail: "剪贴板图片 · 2 KB · 仅本页保留：附件内容不上传、不读取（附件不会发给 Agent）",
     });
     expect(attachmentSourceLabel({ file: shot, pasted: false, id: "abc123" })).toEqual({
       label: "shot.png",
-      detail: "本机所选文件 · 2 KB · 仅本页保留",
+      detail: "本机所选文件 · 2 KB · 仅本页保留：附件内容不上传、不读取（附件不会发给 Agent）",
     });
     // An empty file still reports 1 KB rather than 0.
     const empty = new File([], "empty.png", { type: "image/png" });
     expect(attachmentSourceLabel({ file: empty, pasted: true, id: "ffff" }).detail).toContain("1 KB");
+  });
+});
+
+/**
+ * [#16] box 2: the pre-send check the composer finally calls, and the two lines
+ * that carry its refusal to the user instead of dropping the file silently.
+ */
+describe("composer attachment pre-send check", () => {
+  it("refuses an over-limit text file with its name and the rule's own limit", () => {
+    const decision = classifyComposerAttachment({ name: "huge.log", size: MAX_TEXT_ATTACHMENT_BYTES + 1, type: "text/plain" });
+    if (decision.ok) throw new Error("expected a refusal");
+    expect(decision).toMatchObject({ ok: false, code: "too-large" });
+    expect(attachmentRefusal(decision, "huge.log")).toBe("文件 huge.log 超过上限 1MB，未发送");
+  });
+
+  it("names the file when the rule could only name the MIME type", () => {
+    const decision = classifyComposerAttachment({ name: "archive.zip", size: 10, type: "application/zip" });
+    if (decision.ok) throw new Error("expected a refusal");
+    expect(decision).toMatchObject({ ok: false, code: "unsupported-type" });
+    expect(attachmentRefusal(decision, "archive.zip")).toBe("archive.zip：不支持的类型 application/zip：请选择图片或文本文件，或先转换为文本");
+  });
+
+  it("reports N accepted and M refused in one line, and nothing when every file passes", () => {
+    expect(attachmentSelectionReport({ added: 2, refused: ["a.zip：不支持"] })).toBe("已加入 2 个，拒绝 1 个：a.zip：不支持");
+    expect(attachmentSelectionReport({ added: 0, refused: ["a.zip：不支持"] })).toBe("未加入附件，拒绝 1 个：a.zip：不支持");
+    expect(attachmentSelectionReport({ added: 1, refused: [] })).toBeNull();
   });
 });
