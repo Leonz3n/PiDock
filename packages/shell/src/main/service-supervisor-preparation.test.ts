@@ -115,7 +115,12 @@ describe.skipIf(process.platform !== "darwin")("trusted experimental launch prep
     const prepared = prepareServiceSupervisorExperiment(f.catalog, f.ids, { LOCAL_SECRET: "private-preparation-value" }, available.artifact);
     const lines: string[] = [];
     const session = await prepared.use((binary, request, redact) => launchSupervisorExperiment(binary, request,
-      { redact, onLine: (line) => lines.push(line) }));
+      // This test runs a real build and then a real supervisor process, so the
+      // production 3s ready budget races the machine's load, not the code under
+      // test (observed: `supervisor-ready-timeout` under a concurrent full gate).
+      // The budget is widened here only; the assertion still needs the real
+      // ready line and the exact output, so nothing is weakened.
+      { redact, onLine: (line) => lines.push(line), readyMs: 10000 }));
     expect(await session.completion).toEqual({ event: "exit", code: 0 });
     expect(lines).toEqual(["[redacted]", "3100", f.cwd]);
     const stale = prepareServiceSupervisorExperiment(f.catalog, f.ids, { LOCAL_SECRET: "private-preparation-value" }, available.artifact);
@@ -123,7 +128,7 @@ describe.skipIf(process.platform !== "darwin")("trusted experimental launch prep
       // Replace after the main freshness check: the native identity comparison
       // must still refuse launch, without relying on a last path-only check.
       renameSync(f.cwd, f.cwd+"-old"); mkdirSync(f.cwd);
-      return launchSupervisorExperiment(binary, request, { redact, onLine: () => {} });
+      return launchSupervisorExperiment(binary, request, { redact, onLine: () => {}, readyMs: 10000 });
     })).rejects.toThrow("supervisor-launch-unconfirmed");
   }, 30000);
 });
