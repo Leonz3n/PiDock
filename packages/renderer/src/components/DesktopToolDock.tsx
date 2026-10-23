@@ -20,6 +20,7 @@ import {
   terminalStateThroughShell,
 } from "../data/shellBridge";
 import { protocolBindingFromHost } from "../data/protocolBinding";
+import { fileCandidateRow, type CandidateRow, type TaskSourceEntry } from "../data/composerRules";
 import {
   loadTaskServices,
   runBoundTaskServiceGroupThroughShell,
@@ -548,7 +549,7 @@ function droppedAnswerText(
     : `Host ${what}自述根 ${hostText(declaredRoot, "Host 未上报根标识")} 与所请求的根 ${asked} 不符：本面板不显示`;
 }
 
-function FilesTool({ taskId }: { taskId: string }) {
+function FilesTool({ taskId, onReferenceFile }: { taskId: string; onReferenceFile?: (row: CandidateRow) => void }) {
   const [roots, setRoots] = useState<WorkspaceRootView[] | null>(null);
   const [rootId, setRootId] = useState<string | undefined>(undefined);
   const [relative, setRelative] = useState("");
@@ -573,6 +574,10 @@ function FilesTool({ taskId }: { taskId: string }) {
    * thing that can make "当前根 …" in its sentence stale).
    */
   const [droppedAnswer, setDroppedAnswer] = useState<{ what: FilesPanelAnswer; text: string } | null>(null);
+  /** The label of the file this panel last handed to the input area, named so
+   *  the panel itself says the click registered (the dock covers the composer
+   *  below the narrow breakpoint, `DesktopConversation.tsx`). */
+  const [referenced, setReferenced] = useState<string | null>(null);
   /**
    * The root the panel last ASKED for, written synchronously in `selectRoot`.
    * `rootId` is state (applied asynchronously), so an answer is checked against
@@ -694,6 +699,8 @@ function FilesTool({ taskId }: { taskId: string }) {
       setEditorError(null);
       setDelivery(null);
       setDeliveryNotice(null);
+      // A "已引用 …" line naming the root the user just left would be a stale claim itself.
+      setReferenced(null);
       // A drop naming the root the user just left would be a stale claim itself.
       setDroppedAnswer(null);
       await loadTree(nextRootId, "");
@@ -754,6 +761,7 @@ function FilesTool({ taskId }: { taskId: string }) {
     }
     setPreview(view);
     setDiff(null);
+    setReferenced(null);
     setError(null);
   };
 
@@ -781,6 +789,36 @@ function FilesTool({ taskId }: { taskId: string }) {
   };
 
   const selectedRoot = roots?.find((root) => root.id === rootId);
+  /**
+   * [PiDock 15] (#15 盒 3) 引用到对话. The file this panel may hand to the input
+   * area: the PREVIEWED file, and only while its own attribution still names the
+   * root selected here — a preview that names another root is never referenced,
+   * exactly like it is never rendered.
+   */
+  const referenceableFile = preview !== null && rootId !== undefined && selectedRoot !== undefined && preview.attribution.rootId === rootId ? preview : null;
+  /**
+   * Hand the previewed file to the composer. The row is built by
+   * `fileCandidateRow` — the same builder the `@` picker uses — from the root
+   * this panel selected and the file it really previewed, so the reference's
+   * provenance comes from `referenceProvenance()` and never from a second set
+   * of fields. This panel runs no Git command, so a worktree entry carries no
+   * `version`: the chip says 版本未记录 instead of pinning a commit nobody read.
+   * No op is issued here: the reference is composer state.
+   */
+  const referenceFile = () => {
+    if (referenceableFile === null || selectedRoot === undefined || onReferenceFile === undefined) return;
+    const entry: TaskSourceEntry = {
+      sourceId: selectedRoot.id,
+      sourceKind: selectedRoot.kind === "worktree" ? "worktree" : "plain-dir",
+      displayName: hostText(selectedRoot.label, "Host 未上报根名称"),
+      ...(selectedRoot.sourcePath !== undefined ? { target: selectedRoot.sourcePath } : {}),
+      relativePath: referenceableFile.path,
+      kind: "file",
+    };
+    const row = fileCandidateRow(entry);
+    onReferenceFile(row);
+    setReferenced(row.label);
+  };
   /**
    * [PiDock 10] (#15 盒子 9) "a link/plain directory has no Git delivery target"
    * is enforced HERE from the RENDERER's own knowledge of the selected root —
@@ -971,6 +1009,15 @@ function FilesTool({ taskId }: { taskId: string }) {
             <section className="min-h-0 border-t border-line pt-2">
               <div className="flex items-center gap-2 text-[11px] text-muted">
                 <span className="truncate font-mono">{hostText(preview.path, "Host 未上报预览路径")}</span>
+                {/* [PiDock 15] (#15 盒 3) the entry into the desktop input area. It
+                    exists only when a composer is really mounted above/behind this
+                    dock (`onReferenceFile`), so a standalone dock never shows an
+                    affordance that reaches nothing. */}
+                {onReferenceFile !== undefined && (
+                  <Button type="button" variant="link" size="sm" onClick={referenceFile} className="h-auto shrink-0 px-0" title="把这个文件连同来源身份引用到对话输入区">
+                    引用到对话
+                  </Button>
+                )}
                 <Badge className="shrink-0">{hostText(preview.language, "Host 未上报语言")}</Badge>
                 {preview.lineCount !== undefined && <Badge className="shrink-0">{preview.lineCount} 行</Badge>}
                 {/* A plain-directory link has no Git view (the Host refuses
@@ -985,6 +1032,11 @@ function FilesTool({ taskId }: { taskId: string }) {
                 )}
               </div>
               <ViewAttribution label="预览" attribution={preview.attribution} testId="dock-preview-attribution" />
+              {referenced !== null && (
+                <p role="status" className="mt-1 text-[10px] text-muted" data-testid="dock-reference-added">
+                  已引用 {referenced} 到对话输入区（来源身份见输入区的引用标签）
+                </p>
+              )}
               <pre className="mt-1.5 max-h-[320px] overflow-auto border border-line bg-paper p-2 text-[11px] leading-relaxed">
                 {preview.source}
               </pre>
@@ -2015,6 +2067,7 @@ export function DesktopToolDock({
   onSelectTool,
   onCloseTool,
   onCollapse,
+  onReferenceFile,
   collapsed = false,
 }: {
   taskId: string;
@@ -2025,6 +2078,13 @@ export function DesktopToolDock({
   onSelectTool?: (tool: DesktopTool) => void;
   onCloseTool?: (tool: DesktopTool) => void;
   onCollapse?: () => void;
+  /**
+   * [PiDock 15] (#15 盒 3) the composer this dock can reference a file into. The
+   * 文件 panel builds the reference's candidate row from the root it selected
+   * and the file it previewed; the composer records the provenance. Absent when
+   * no composer is mounted, and then the entry is not offered at all.
+   */
+  onReferenceFile?: (row: CandidateRow) => void;
   collapsed?: boolean;
 }) {
   const panels = tools ?? (tool ? [tool] : []);
@@ -2070,7 +2130,7 @@ export function DesktopToolDock({
           <div key={panel} hidden={panel !== selectedTool} className="h-full min-h-0 overflow-auto p-3">
             {panel === "runtime" ? <RunTool key={taskId} taskId={taskId} />
               : panel === "browser" ? <BrowserTool key={taskId} taskId={taskId} />
-              : panel === "files" ? <FilesTool key={taskId} taskId={taskId} />
+              : panel === "files" ? <FilesTool key={taskId} taskId={taskId} onReferenceFile={onReferenceFile} />
               : panel === "logs" ? <LogsTool key={taskId} taskId={taskId} />
               : <ProtocolTool key={taskId} taskId={taskId} />}
           </div>

@@ -211,6 +211,19 @@ export type ComposerCommandView = {
   reason?: string;
 };
 
+/** One file/directory source of a task, with the identity a reference records. */
+export type TaskSourceEntry = {
+  sourceId: string;
+  sourceKind: "worktree" | "plain-dir";
+  displayName: string;
+  /** Plain-directory link's original target; absent when unknown. */
+  target?: string;
+  relativePath: string;
+  /** Pinned worktree commit; absent when the reader knows none. */
+  version?: string;
+  kind: "file" | "directory";
+};
+
 /**
  * Task file/directory entries with their source identity. `task.files`
  * paths are already `<source>/<relative>`; plain-directory links are
@@ -218,8 +231,8 @@ export type ComposerCommandView = {
  * the pinned commit the adapter gave its files, so the reference can record
  * the version it was picked at (absent when the adapter knows no commit).
  */
-export function taskSourceEntries(task: Pick<Task, "files" | "directories">): { sourceId: string; sourceKind: "worktree" | "plain-dir"; displayName: string; target?: string; relativePath: string; version?: string; kind: "file" | "directory" }[] {
-  const entries: { sourceId: string; sourceKind: "worktree" | "plain-dir"; displayName: string; target?: string; relativePath: string; version?: string; kind: "file" | "directory" }[] = [];
+export function taskSourceEntries(task: Pick<Task, "files" | "directories">): TaskSourceEntry[] {
+  const entries: TaskSourceEntry[] = [];
   const split = (path: string) => {
     const separator = path.indexOf("/");
     return separator === -1
@@ -246,30 +259,43 @@ export function taskSourceEntries(task: Pick<Task, "files" | "directories">): { 
   return entries;
 }
 
+/**
+ * One source entry as a composer candidate row. The `@` picker and the
+ * desktop 文件 panel's 「引用到对话」 entry both build their row here, so a file
+ * reference carries the same fields — and therefore, through
+ * `referenceProvenance`, the same provenance — whichever surface it was picked
+ * from. A plain directory always names its original target and the
+ * write-through warning; a worktree entry pins a commit only when one is known.
+ */
+export function fileCandidateRow(entry: TaskSourceEntry): CandidateRow {
+  const label = entry.relativePath.length > 0 ? `${entry.displayName}/${entry.relativePath}` : `${entry.displayName}/`;
+  return {
+    key: `file:${entry.sourceId}:${entry.relativePath}`,
+    kind: entry.kind,
+    value: label,
+    label,
+    detail:
+      entry.sourceKind === "worktree"
+        ? `${entry.displayName} · 任务代码引用`
+        : `${entry.displayName} → ${entry.target ?? "未知目标"} · 普通目录（无 Git 版本，修改影响原文件）`,
+    source: entry.displayName,
+    sourceId: entry.sourceId,
+    sourceKind: entry.sourceKind,
+    relativePath: entry.relativePath,
+    ...(entry.version !== undefined ? { version: entry.version } : {}),
+    availability: "available",
+  };
+}
+
 /** `@` candidates: task worktree files + plain-directory links, bounded. */
 export function fileCandidates(task: Pick<Task, "files" | "directories">, query: string, limit = 20): CandidateRow[] {
   const needle = query.toLowerCase();
   const rows: CandidateRow[] = [];
   for (const entry of taskSourceEntries(task)) {
     if (entry.relativePath.length > 0 && isIgnoredPath(entry.relativePath)) continue;
-    const label = entry.relativePath.length > 0 ? `${entry.displayName}/${entry.relativePath}` : `${entry.displayName}/`;
-    if (needle.length > 0 && !label.toLowerCase().includes(needle)) continue;
-    rows.push({
-      key: `file:${entry.sourceId}:${entry.relativePath}`,
-      kind: entry.kind,
-      value: label,
-      label,
-      detail:
-        entry.sourceKind === "worktree"
-          ? `${entry.displayName} · 任务代码引用`
-          : `${entry.displayName} → ${entry.target ?? "未知目标"} · 普通目录（无 Git 版本，修改影响原文件）`,
-      source: entry.displayName,
-      sourceId: entry.sourceId,
-      sourceKind: entry.sourceKind,
-      relativePath: entry.relativePath,
-      ...(entry.version !== undefined ? { version: entry.version } : {}),
-      availability: "available",
-    });
+    const row = fileCandidateRow(entry);
+    if (needle.length > 0 && !row.label.toLowerCase().includes(needle)) continue;
+    rows.push(row);
   }
   rows.sort((left, right) => left.label.localeCompare(right.label));
   return rows.slice(0, limit);
@@ -361,6 +387,20 @@ export function checkDraftReference(reference: Reference, task: Pick<Task, "id" 
     }
   }
   return { state: "ok" };
+}
+
+/**
+ * The source-kind line of a file reference chip, in the composer's own
+ * vocabulary. The kind is named every time, so a worktree reference and a
+ * plain-directory reference can never read as one another. A worktree whose
+ * commit this surface never read says 版本未记录 instead of printing an empty
+ * pin; a plain-directory link has no Git version at all (its own detail states
+ * 无 Git 版本 and that an edit reaches the original files).
+ */
+export function referenceSourceLabel(reference: Pick<Reference, "sourceKind" | "version">): string {
+  if (reference.sourceKind === "plain-dir") return "普通目录链接";
+  if (reference.sourceKind === "worktree") return reference.version ? `worktree @ ${reference.version}` : "worktree · 版本未记录";
+  return "来源未记录";
 }
 
 /** What the Agent receives for one reference; sizes stay labelled as estimates. */

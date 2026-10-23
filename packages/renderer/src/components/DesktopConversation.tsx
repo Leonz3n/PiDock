@@ -11,6 +11,8 @@ import { setTaskArchivedThroughShell } from "../data/shellBridge";
 import { describeContextDisplay, REASONING_LABELS, REASONING_LEVELS } from "../data/providerState";
 import { readSessionContext, writeSessionThinking, type SessionContextView } from "../data/sessionContext";
 import { parseLifecycle } from "./DesktopArchivePage";
+import { describeReferenceChip, referenceProvenance, referenceSourceLabel, type CandidateRow } from "../data/composerRules";
+import type { Reference } from "../data/types";
 import { DesktopToolDock, DESKTOP_TOOL_ICONS, DESKTOP_TOOL_LABELS, DESKTOP_TOOLS_UNWIRED, type DesktopTool } from "./DesktopToolDock";
 import { DesktopTaskSources } from "./DesktopTaskSources";
 import { BrandMark, LocalUserAvatar } from "./ui";
@@ -86,6 +88,17 @@ function TaskConversation({ taskId, name, roots, association, onBack, onOpenProv
   const recovered = useRef(readReceipt(taskId));
   const [draft, setDraft] = useState(recovered.current.receipt?.text ?? "");
   const [draftError, setDraftError] = useState<string | null>(null);
+  /**
+   * [PiDock 15] (#15 盒 3) file references attached to this draft. The 文件 panel
+   * hands in a candidate row built from the root it selected and the file it
+   * previewed; the reference is completed HERE from `referenceProvenance()`
+   * (`data/composerRules.ts`), the same call the `@` picker and the `/skills`
+   * modal use, so a worktree entry pins the commit it knows and a
+   * plain-directory link pins `null`, names its original target and never fakes
+   * a Git version. Attaching one is page state: no Host op is issued, read or
+   * write.
+   */
+  const [references, setReferences] = useState<Reference[]>([]);
   const draftLoaded = useRef(false);
   const draftRevision = useRef(0);
   const [receiptError, setReceiptError] = useState(recovered.current.error);
@@ -310,6 +323,22 @@ function TaskConversation({ taskId, name, roots, association, onBack, onOpenProv
     catch (error) { if (epoch === generation.current) setNotice(`停止结果未知：${errorText(error)}；请核验`); }
   };
   const submit = (event: FormEvent) => { event.preventDefault(); void start(); };
+  const addFileReference = (row: CandidateRow) => {
+    // The same id spelling and field set `TaskPage.chooseCompletion` records for
+    // a picked candidate (`pages/TaskPage.tsx`), including this task as the
+    // owner, so a reference can never be read as another task's file.
+    const id = `task-${row.key}`;
+    const reference: Reference = {
+      id,
+      kind: row.kind === "directory" ? "directory" : "file",
+      label: row.value,
+      detail: row.detail,
+      taskId,
+      ...referenceProvenance(row),
+    };
+    setReferences((current) => (current.some((entry) => entry.id === id) ? current : [...current, reference]));
+  };
+  const removeFileReference = (id: string) => setReferences((current) => current.filter((entry) => entry.id !== id));
   const blocked = !valid || !connected || !!receiptError || snapshot?.pending || attempt?.phase === "starting" || attempt?.phase === "unknown" || attempt?.phase === "accepted";
   const archive = async () => {
     if (archiveBusy || blocked || busy.current) { setArchiveError("会话执行或请求状态未核验，不能归档；请先核验或停止执行"); return; }
@@ -562,6 +591,19 @@ function TaskConversation({ taskId, name, roots, association, onBack, onOpenProv
         {attempt?.phase === "accepted" && <Button type="button" onClick={() => void stop()}><Icon name="stop" />停止</Button>}
       </div>
       <form onSubmit={submit} className="min-w-0 rounded-[10px] border border-line bg-bg p-2">
+        {references.length > 0 && <div className="mb-2 min-w-0" data-testid="composer-file-references">
+          <ul className="flex min-w-0 flex-wrap gap-1.5">
+            {references.map((reference) => (
+              <li key={reference.id} data-testid={`composer-file-reference-${reference.id}`} data-source-kind={reference.sourceKind ?? "none"} title={describeReferenceChip(reference)} className="flex min-w-0 flex-wrap items-baseline gap-1.5 rounded-full border border-line bg-soft px-2 py-0.5 text-[11px]">
+                <span className="min-w-0 break-all font-mono text-ink">引用 · {reference.label}</span>
+                <span className="shrink-0 text-muted">{referenceSourceLabel(reference)}</span>
+                <span className="min-w-0 break-all text-muted">{reference.detail}</span>
+                <button type="button" aria-label={`移除引用 ${reference.label}`} onClick={() => removeFileReference(reference.id)} className="shrink-0 text-muted">×</button>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-1 text-[11px] text-muted">引用只在本页输入区记录来源身份；当前 SDK 发送路径只发送文本，引用不随消息提交，也不会读取或写入文件。</p>
+        </div>}
         <textarea aria-label="消息" value={draft} onChange={(event) => { const text = event.target.value; draftRevision.current++; setDraft(text); if (valid && connected && !invalidated) setDraftError(saveSdkDraft(taskId, text)); }} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !composing.current && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) { event.preventDefault(); if (!blocked) void start(); } }} rows={2} maxLength={16384} className="w-full min-w-0 resize-y border-0 bg-transparent p-1 text-sm outline-none" placeholder="描述你想做什么（仅支持文本消息）" />
         <div className="mt-1 flex min-w-0 flex-wrap items-center gap-2 text-[11px] text-muted">
           <Tooltip><TooltipTrigger asChild><span tabIndex={0} aria-label="附件说明" className="inline-flex">
@@ -605,6 +647,7 @@ function TaskConversation({ taskId, name, roots, association, onBack, onOpenProv
       onCloseTool={closeTool}
       onCollapse={() => setToolDockCollapsed(true)}
       onClose={() => { if (activeTool) closeTool(activeTool); }}
+      onReferenceFile={addFileReference}
     />
     </div>
   </main></TooltipProvider>;
