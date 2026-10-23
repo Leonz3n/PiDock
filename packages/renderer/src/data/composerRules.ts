@@ -152,6 +152,75 @@ export function pastedImageFiles(items: Iterable<ClipboardImageSource>, files: I
   return [...files].filter((file) => isImageType(file.type));
 }
 
+/**
+ * Renderer mirror of the shell pre-send attachment check and its two size
+ * limits (`packages/shell/src/main/composer-references.ts`). Keep both sides in
+ * step: `test/composerAttachmentRules.parity.test.ts` compares every decision,
+ * code, message and limit against the shell source itself.
+ */
+export const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+export const MAX_TEXT_ATTACHMENT_BYTES = 1024 * 1024;
+
+const ATTACHMENT_IMAGE_TYPES = /^image\/(png|jpeg|jpg|gif|webp|bmp)$/i;
+const ATTACHMENT_TEXT_TYPES = /^text\/|application\/(json|xml|yaml|x-yaml|toml|javascript|typescript)/i;
+const ATTACHMENT_TEXT_EXTENSIONS =
+  /\.(ts|tsx|js|jsx|mjs|cjs|json|md|txt|yml|yaml|toml|go|rs|py|java|kt|rb|sh|css|html|sql|c|h|cpp|hpp)$/i;
+
+export type AttachmentDecision =
+  | { ok: true; kind: "image" | "text" | "other"; scope: string; detail: string }
+  | { ok: false; code: "too-large" | "unsupported-type"; message: string };
+
+export type AttachmentRefusal = Extract<AttachmentDecision, { ok: false }>;
+
+/**
+ * Pre-send check for one selected/pasted file, before it can enter the draft. A
+ * refused file never becomes a reference; an accepted one authorizes itself only.
+ */
+export function classifyComposerAttachment(input: { name: string; size: number; type?: string }): AttachmentDecision {
+  const type = input.type ?? "";
+  const image = ATTACHMENT_IMAGE_TYPES.test(type);
+  const text = image ? false : ATTACHMENT_TEXT_TYPES.test(type) || ATTACHMENT_TEXT_EXTENSIONS.test(input.name);
+  if (!image && !text && type.length > 0) {
+    return {
+      ok: false,
+      code: "unsupported-type",
+      message: `不支持的类型 ${type}：请选择图片或文本文件，或先转换为文本`,
+    };
+  }
+  const limit = text ? MAX_TEXT_ATTACHMENT_BYTES : MAX_ATTACHMENT_BYTES;
+  if (input.size > limit) {
+    return {
+      ok: false,
+      code: "too-large",
+      message: `文件 ${input.name} 超过上限 ${Math.round(limit / (1024 * 1024))}MB，未发送`,
+    };
+  }
+  return {
+    ok: true,
+    kind: image ? "image" : text ? "text" : "other",
+    scope: input.name,
+    detail: `${image ? "图片" : "文本"}附件 · 仅 ${input.name} 本身，未授权访问所在目录`,
+  };
+}
+
+/**
+ * Names one refused file once: `too-large` already names it, while
+ * `unsupported-type` names only the MIME type and needs the file name in front.
+ */
+export function attachmentRefusal(decision: AttachmentRefusal, name: string): string {
+  return decision.message.includes(name) ? decision.message : `${name}：${decision.message}`;
+}
+
+export type AttachmentSelection = { added: number; refused: string[] };
+
+/** One toast line for a selection; `null` when nothing was refused. */
+export function attachmentSelectionReport(selection: { added: number; refused: readonly string[] }): string | null {
+  const refused = selection.refused.length;
+  if (refused === 0) return null;
+  const head = selection.added > 0 ? `已加入 ${selection.added} 个，拒绝 ${refused} 个` : `未加入附件，拒绝 ${refused} 个`;
+  return `${head}：${selection.refused.join("；")}`;
+}
+
 /** Attachment size line used by both attachment paths; never a real upload size. */
 export function attachmentSizeLabel(file: File): string {
   return `${Math.max(1, Math.ceil(file.size / 1024))} KB`;
@@ -160,15 +229,17 @@ export function attachmentSizeLabel(file: File): string {
 /**
  * The prototype names a pasted image `粘贴图片-<id4>.<ext>` because the
  * clipboard gives no file name; a selected file keeps its own name. The detail
- * carries the provenance and the "this page only" limit, which is why the
- * composer no longer needs a separate note line.
+ * carries the provenance, the size and what the attachment actually provides,
+ * which is why the composer no longer needs a separate note line: the file
+ * content stays in this page (nothing is uploaded or read), and the turn runs
+ * on the typed text alone — the reference itself is only recorded.
  */
 export function attachmentSourceLabel(input: { file: File; pasted: boolean; id: string }): { label: string; detail: string } {
   const { file, pasted, id } = input;
   const extension = file.type.split("/")[1] ?? "png";
   return {
     label: pasted ? `粘贴图片-${id.slice(0, 4)}.${extension}` : file.name,
-    detail: `${pasted ? "剪贴板图片" : "本机所选文件"} · ${attachmentSizeLabel(file)} · 仅本页保留`,
+    detail: `${pasted ? "剪贴板图片" : "本机所选文件"} · ${attachmentSizeLabel(file)} · 仅本页保留：附件内容不上传、不读取（附件不会发给 Agent）`,
   };
 }
 

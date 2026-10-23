@@ -99,7 +99,7 @@ describe("composer alignment", () => {
       const chip = within(attachments).getByRole("button", { name: /^预览 粘贴图片-/ });
       expect(chip).toHaveTextContent(/^粘贴图片-\w+\.png$/);
       // The provenance line the composer no longer repeats as a note.
-      expect(chip).toHaveAttribute("title", "剪贴板图片 · 1 KB · 仅本页保留");
+      expect(chip).toHaveAttribute("title", "剪贴板图片 · 1 KB · 仅本页保留：附件内容不上传、不读取（附件不会发给 Agent）");
       // The clipboard's plain text is inserted at the caret.
       expect(input.value).toBe("看这张截图");
       expect(await screen.findByText("已粘贴 1 张图片，可附上文字后发送")).toBeInTheDocument();
@@ -108,7 +108,7 @@ describe("composer alignment", () => {
       // strip: the box keeps its height and the source line moves into the dialog.
       await userEvent.setup().click(chip);
       const lightbox = await screen.findByRole("dialog", { name: /^粘贴图片-/ });
-      expect(within(lightbox).getByTestId("attachment-preview-detail")).toHaveTextContent("仅本页保留");
+      expect(within(lightbox).getByTestId("attachment-preview-detail")).toHaveTextContent("仅本页保留：附件内容不上传、不读取（附件不会发给 Agent）");
       expect(within(lightbox).getByTestId("attachment-preview-image")).toHaveAttribute("src", "blob:mock");
       await userEvent.setup().keyboard("{Escape}");
       await waitFor(() => expect(screen.queryByRole("dialog", { name: /^粘贴图片-/ })).not.toBeInTheDocument());
