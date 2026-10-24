@@ -499,29 +499,33 @@ describe("Desktop SDK conversation", () => {
     expect(f.calls.filter((call) => call.action === "start")[1]?.text).toBe("remounted draft");
   });
 
-  it("explains text-only messaging from the keyboard without enabling attachments or sending the saved draft", async () => {
+  it("explains text-only messaging from the keyboard without sending the saved draft", async () => {
     const f = setup(); mount(f);
     const user = userEvent.setup();
     await screen.findByText(/尚未开始/);
     const input = screen.getByRole("textbox", { name: "消息" });
     expect(input).toHaveAttribute("placeholder", "描述你想做什么（仅支持文本消息）");
-    const attachment = screen.getByRole("button", { name: "附件（未接线）" });
-    expect(attachment).toBeDisabled();
+    // [PiDock 16] (#16 盒 1) the `+` entry is now a real local picker. Its scope
+    // is stated before a file is chosen: page-only, never sent to the Agent.
+    const attachment = screen.getByRole("button", { name: "添加附件" });
+    expect(attachment).toBeEnabled();
     await user.click(input);
     await user.type(input, "saved text draft");
     const draft = localStorage.getItem("pidock-sdk-draft-v1:task-a:main");
     await user.tab();
     const explanation = screen.getByLabelText("附件说明");
     expect(explanation).toHaveFocus();
-    expect(await screen.findByRole("tooltip")).toHaveTextContent("附件未接线；当前会话仅支持文本消息");
-    expect(explanation).toHaveAccessibleDescription("附件未接线；当前会话仅支持文本消息");
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("附件只在本页输入区保留：内容不上传、不读取，附件不会发给 Agent（当前 SDK 发送路径只发送文本）");
+    expect(explanation).toHaveAccessibleDescription("附件只在本页输入区保留：内容不上传、不读取，附件不会发给 Agent（当前 SDK 发送路径只发送文本）");
     await user.keyboard("{Enter} ");
-    expect(attachment).toBeDisabled();
+    expect(attachment).toBeEnabled();
     expect(input).toHaveValue("saved text draft");
     expect(localStorage.getItem("pidock-sdk-draft-v1:task-a:main")).toBe(draft);
     expect(localStorage.getItem("pidock-sdk-main-pending-v1:task-a")).toBeNull();
     expect(f.calls.some((call) => call.action === "start")).toBe(false);
-    expect(document.querySelector('input[type="file"]')).toBeNull();
+    // The picker exists and is multi-select; choosing a file is page state only,
+    // which `desktopAttachments.test.tsx` drives end to end.
+    expect(document.querySelector('input[type="file"]')).toHaveAttribute("multiple");
   });
 
   it("keeps Provider navigation and SDK send/cancel available without offering a reasoning tier it cannot read", async () => {
