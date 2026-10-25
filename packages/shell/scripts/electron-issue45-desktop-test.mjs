@@ -80,7 +80,7 @@ async function run() {
       if (list.scrollWidth > list.innerWidth) throw Error(`list overflow ${JSON.stringify(list)}`);
       const listScreenshot = await capture(`list-${width}x${height}`);
       await openOverviewTask();
-      await until((state) => state.text.includes("尚未开始") && state.text.includes("Agent 工具未接线"));
+      await until((state) => state.text.includes("尚未开始") && state.text.includes("工具由 Host 代执行"));
       const conversation = await read();
       if (conversation.scrollWidth > conversation.innerWidth) throw Error(`conversation overflow ${JSON.stringify(conversation)}`);
       const screenshot = await capture(`conversation-${width}x${height}`);
@@ -89,7 +89,7 @@ async function run() {
       await until((state) => state.text.includes("继续工作") && state.text.includes("SDK Desktop task"));
     }
     await openOverviewTask();
-    await until((state) => state.text.includes("尚未开始") && state.text.includes("Agent 工具未接线"));
+    await until((state) => state.text.includes("尚未开始") && state.text.includes("工具由 Host 代执行"));
     views.layout.addBrowser(views.taskBrowser);
     views.layout.browserChanged(views.taskBrowser);
     await wait(150);

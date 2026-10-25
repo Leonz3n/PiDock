@@ -549,10 +549,19 @@ function TaskConversation({ taskId, name, roots, association, onBack, onOpenProv
           <div className="mt-1.5 mb-2 flex flex-wrap items-center gap-2 text-[11px] text-muted">
             <span className="inline-flex min-w-0 items-center gap-1"><Icon name="branch" /><span className="truncate">{taskId}</span></span>
             <span className="inline-flex items-center gap-1"><Icon name="settings" />SDK · main</span>
-            {/* Real property of this kernel: SDK tool wiring is absent. Keep the
-                read-only summary and make the missing Agent tool path explicit. */}
-            <Badge variant="soft">Agent 工具未接线</Badge>
-            <Badge variant="soft">只读 · 无工具</Badge>
+            {/* [PiDock 02m] #5: this kernel's tool path is real, so the header
+                carries the two facts a reader can check instead of the old
+                claim that it had none. `installSdkProvider` always hands the
+                Host's `SdkAgentToolBroker` to the model context
+                (`task-host.ts`); the kernel offers exactly the declared task
+                tools and refuses to run if the session reports anything else
+                (`sdk-text-kernel.ts`); and every mutating call claims the task
+                write right before its effect, with a read-tier session refused
+                (`sdk-agent-tool-broker.ts` `runWithGate`). What is NOT claimed
+                here is a confirmation per write: under `default` only command
+                and browser tools ask (`pi-session.ts` `previewGate`). */}
+            <Badge variant="soft">工具由 Host 代执行</Badge>
+            <Badge variant="soft">写操作受 Host 写权约束</Badge>
             <Badge>{ready ? "已连接" : invalidated ? "已失效" : "未连接"}</Badge>
           </div>
         </div>
@@ -678,8 +687,8 @@ function TaskConversation({ taskId, name, roots, association, onBack, onOpenProv
           </span></TooltipTrigger><TooltipContent>附件只在本页输入区保留：内容不上传、不读取，附件不会发给 Agent（当前 SDK 发送路径只发送文本）</TooltipContent></Tooltip>
           <input ref={attachmentInput} type="file" multiple aria-label="附件选择" data-testid="desktop-composer-file-input" className="hidden" onChange={(event) => { addAttachments(Array.from(event.target.files ?? [])); event.target.value = ""; }} />
           <Tooltip><TooltipTrigger asChild><span tabIndex={0} aria-label="权限说明" className="inline-flex">
-            <Button type="button" size="sm" disabled aria-label="权限（未接线）：只读 · 无工具"><Icon name="shield" />只读 · 无工具</Button>
-          </span></TooltipTrigger><TooltipContent>权限切换未接线；当前 SDK 回合无工具，不申请写权限</TooltipContent></Tooltip>
+            <Button type="button" size="sm" disabled aria-label="权限（未接线）：本页不能切换档位"><Icon name="shield" />权限（未接线）</Button>
+          </span></TooltipTrigger><TooltipContent>权限切换未接线：本页不能改档位。工具已接线，由 Host 决定并代执行；写操作受 Host 权限档位与任务写权约束 —— 只读档拒绝一切写与命令，默认档下命令类工具先要一次确认，文件写入只在任务工作副本内</TooltipContent></Tooltip>
           <div className="relative">
             <Button type="button" size="sm" data-testid="composer-thinking" aria-haspopup="dialog" aria-expanded={thinkingOpen} title={thinkingTitle} disabled={contextRead.phase === "reading"} onClick={() => { setThinkingError(null); setThinkingOpen((open) => !open); }}>{thinkingLabel}<Icon name="down" className="h-3 w-3" /></Button>
             {thinkingOpen && <div role="dialog" aria-label="推理档位" className="absolute right-0 bottom-full z-30 mb-1 w-[248px] rounded-[7px] border border-line bg-paper p-2 text-left shadow-md">
