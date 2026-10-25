@@ -11,7 +11,7 @@ import { setTaskArchivedThroughShell } from "../data/shellBridge";
 import { describeContextDisplay, REASONING_LABELS, REASONING_LEVELS } from "../data/providerState";
 import { readSessionContext, writeSessionThinking, type SessionContextView } from "../data/sessionContext";
 import { parseLifecycle } from "./DesktopArchivePage";
-import { describeReferenceChip, referenceProvenance, referenceSourceLabel, type CandidateRow } from "../data/composerRules";
+import { attachmentRefusal, attachmentSelectionReport, attachmentSourceLabel, classifyComposerAttachment, describeReferenceChip, referenceProvenance, referenceSourceLabel, type CandidateRow } from "../data/composerRules";
 import type { Reference } from "../data/types";
 import { DesktopToolDock, DESKTOP_TOOL_ICONS, DESKTOP_TOOL_LABELS, DESKTOP_TOOLS_UNWIRED, type DesktopTool } from "./DesktopToolDock";
 import { DesktopTaskSources } from "./DesktopTaskSources";
@@ -78,6 +78,22 @@ function allowed(data: DesktopProjects, taskId: string): boolean {
 }
 
 type ConversationProps = { taskId: string; name: string; roots: string; association: string; onBack: () => void; onOpenProviders: () => void; onArchived: () => void; onSourcesChanged?: () => void };
+/**
+ * [PiDock 16] (#16 盒 1) one attachment of this desktop draft. The production
+ * turn is `window.pidock.sdkTurn` → SDK `session.prompt(text)`: a string-only
+ * payload, so an attachment is page state here and is never part of the sent
+ * text. `detail` is the mirrored rule's own line (size + page-only scope).
+ */
+type DraftAttachment = { id: string; name: string; detail: string };
+
+/** One visible name per attachment row; a repeated file name reads （2）, （3）… */
+function uniqueAttachmentName(name: string, taken: readonly string[]): string {
+  if (!taken.includes(name)) return name;
+  let index = 2;
+  while (taken.includes(`${name}（${index}）`)) index += 1;
+  return `${name}（${index}）`;
+}
+
 export function DesktopConversation(props: ConversationProps) {
   return <TaskConversation key={props.taskId} {...props} />;
 }
@@ -99,6 +115,16 @@ function TaskConversation({ taskId, name, roots, association, onBack, onOpenProv
    * write.
    */
   const [references, setReferences] = useState<Reference[]>([]);
+  /**
+   * [PiDock 16] (#16 盒 1) attachments picked with the composer's `+` entry.
+   * They live in this component only: nothing is read, uploaded, stored, or sent,
+   * and every row repeats that scope from the mirrored rule
+   * (`attachmentSourceLabel`, `data/composerRules.ts`).
+   */
+  const [attachments, setAttachments] = useState<DraftAttachment[]>([]);
+  const [attachmentReport, setAttachmentReport] = useState<string | null>(null);
+  const attachmentInput = useRef<HTMLInputElement | null>(null);
+  const attachmentSequence = useRef(0);
   const draftLoaded = useRef(false);
   const draftRevision = useRef(0);
   const [receiptError, setReceiptError] = useState(recovered.current.error);
@@ -339,6 +365,34 @@ function TaskConversation({ taskId, name, roots, association, onBack, onOpenProv
     setReferences((current) => (current.some((entry) => entry.id === id) ? current : [...current, reference]));
   };
   const removeFileReference = (id: string) => setReferences((current) => current.filter((entry) => entry.id !== id));
+  // [PiDock 16] (#16 盒 1): every picked file passes the mirrored pre-send rule
+  // (`classifyComposerAttachment`) before it becomes a draft attachment, so an
+  // oversized/unsupported file is refused BY NAME in the report instead of being
+  // taken silently. A cancelled selection is an empty list and adds nothing.
+  const addAttachments = (files: readonly File[]) => {
+    const taken = attachments.map((entry) => entry.name);
+    const refused: string[] = [];
+    const accepted: DraftAttachment[] = [];
+    for (const file of files) {
+      const decision = classifyComposerAttachment({ name: file.name, size: file.size, type: file.type });
+      if (!decision.ok) {
+        refused.push(attachmentRefusal(decision, file.name.length > 0 ? file.name : "未命名文件"));
+        continue;
+      }
+      attachmentSequence.current += 1;
+      const id = `desktop-attach-${attachmentSequence.current}`;
+      const { label, detail } = attachmentSourceLabel({ file, pasted: false, id });
+      const name = uniqueAttachmentName(label.length > 0 ? label : "未命名文件", taken);
+      taken.push(name);
+      accepted.push({ id, name, detail });
+    }
+    if (accepted.length > 0) setAttachments((current) => [...current, ...accepted]);
+    setAttachmentReport(attachmentSelectionReport({ added: accepted.length, refused }));
+  };
+  const removeAttachment = (id: string) => {
+    setAttachments((current) => current.filter((entry) => entry.id !== id));
+    setAttachmentReport(null);
+  };
   const blocked = !valid || !connected || !!receiptError || snapshot?.pending || attempt?.phase === "starting" || attempt?.phase === "unknown" || attempt?.phase === "accepted";
   const archive = async () => {
     if (archiveBusy || blocked || busy.current) { setArchiveError("会话执行或请求状态未核验，不能归档；请先核验或停止执行"); return; }
@@ -604,11 +658,25 @@ function TaskConversation({ taskId, name, roots, association, onBack, onOpenProv
           </ul>
           <p className="mt-1 text-[11px] text-muted">引用只在本页输入区记录来源身份；当前 SDK 发送路径只发送文本，引用不随消息提交，也不会读取或写入文件。</p>
         </div>}
+        {attachmentReport && <p role="status" data-testid="desktop-composer-attachment-report" className="mb-2 border-l-2 border-[#dfc99f] pl-2 text-[11px] text-[#9a6032]">{attachmentReport}</p>}
+        {attachments.length > 0 && <div className="mb-2 min-w-0" data-testid="desktop-composer-attachments">
+          <ul className="flex min-w-0 flex-wrap gap-1.5">
+            {attachments.map((attachment) => (
+              <li key={attachment.id} data-testid="desktop-composer-attachment" className="flex min-w-0 flex-wrap items-baseline gap-1.5 rounded-[7px] border border-line bg-soft px-2 py-0.5 text-[11px]">
+                <span data-testid="desktop-composer-attachment-name" className="min-w-0 break-all font-mono text-ink">{attachment.name}</span>
+                <span className="min-w-0 break-all text-muted">{attachment.detail}</span>
+                <button type="button" aria-label={`移除附件 ${attachment.name}`} onClick={() => removeAttachment(attachment.id)} className="shrink-0 text-muted">×</button>
+              </li>
+            ))}
+          </ul>
+          <p data-testid="desktop-composer-attachment-scope" className="mt-1 text-[11px] text-muted">附件只在本页输入区保留：内容不上传、不读取，附件不会发给 Agent（当前 SDK 发送路径只发送文本，附件不随消息提交）。</p>
+        </div>}
         <textarea aria-label="消息" value={draft} onChange={(event) => { const text = event.target.value; draftRevision.current++; setDraft(text); if (valid && connected && !invalidated) setDraftError(saveSdkDraft(taskId, text)); }} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !composing.current && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) { event.preventDefault(); if (!blocked) void start(); } }} rows={2} maxLength={16384} className="w-full min-w-0 resize-y border-0 bg-transparent p-1 text-sm outline-none" placeholder="描述你想做什么（仅支持文本消息）" />
         <div className="mt-1 flex min-w-0 flex-wrap items-center gap-2 text-[11px] text-muted">
           <Tooltip><TooltipTrigger asChild><span tabIndex={0} aria-label="附件说明" className="inline-flex">
-            <Button type="button" size="icon-sm" disabled aria-label="附件（未接线）" className="text-[#b3b9be]"><Icon name="plus" /></Button>
-          </span></TooltipTrigger><TooltipContent>附件未接线；当前会话仅支持文本消息</TooltipContent></Tooltip>
+            <Button type="button" size="icon-sm" data-testid="desktop-composer-attach" aria-label="添加附件" onClick={() => attachmentInput.current?.click()} className="text-muted"><Icon name="plus" /></Button>
+          </span></TooltipTrigger><TooltipContent>附件只在本页输入区保留：内容不上传、不读取，附件不会发给 Agent（当前 SDK 发送路径只发送文本）</TooltipContent></Tooltip>
+          <input ref={attachmentInput} type="file" multiple aria-label="附件选择" data-testid="desktop-composer-file-input" className="hidden" onChange={(event) => { addAttachments(Array.from(event.target.files ?? [])); event.target.value = ""; }} />
           <Tooltip><TooltipTrigger asChild><span tabIndex={0} aria-label="权限说明" className="inline-flex">
             <Button type="button" size="sm" disabled aria-label="权限（未接线）：只读 · 无工具"><Icon name="shield" />只读 · 无工具</Button>
           </span></TooltipTrigger><TooltipContent>权限切换未接线；当前 SDK 回合无工具，不申请写权限</TooltipContent></Tooltip>
