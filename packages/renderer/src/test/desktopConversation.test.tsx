@@ -723,15 +723,41 @@ describe("Desktop SDK conversation", () => {
     expect(screen.getByRole("dialog", { name: "推理档位" })).toHaveTextContent("Host 尚未声明该模型的可用档位，选中档位按模型目录执行");
   });
 
-  it("shows the SDK zero-tool boundary without offering permission changes", async () => {
+  // The header used to claim 「Agent 工具未接线 / 只读 · 无工具」, which the Host's
+  // own wiring contradicts: every model context is built with `toolHost`
+  // (`task-host.ts` `installSdkProvider`) and offered exactly the declared task
+  // tools (`sdk-text-kernel.ts` `expectedTools`), and every call is decided and
+  // performed by the Host broker. What really is unwired on this page is the
+  // permission switch — that, and only that, is what the copy still says.
+  it("states the Host tool and write-gate facts instead of claiming there are no tools", async () => {
     const f = setup(); mount(f);
     await screen.findByText(/尚未开始/);
-    expect(screen.getByText("Agent 工具未接线")).toBeVisible();
-    const permission = screen.getByRole("button", { name: "权限（未接线）：只读 · 无工具" });
+    const page = screen.getByTestId("desktop-conversation");
+    // No copy on the page may repeat the falsehood: not the header badges, not
+    // the permission button, not its tooltip.
+    expect(page).not.toHaveTextContent("无工具");
+    expect(page).not.toHaveTextContent("不申请写权限");
+    expect(page).not.toHaveTextContent("Agent 工具未接线");
+    expect(screen.getByText("工具由 Host 代执行")).toBeVisible();
+    expect(screen.getByText("写操作受 Host 写权约束")).toBeVisible();
+    const permission = screen.getByRole("button", { name: "权限（未接线）：本页不能切换档位" });
     expect(permission).toBeDisabled();
+    // The switch really is unwired here: no tier is offered on this page.
     expect(screen.queryByRole("button", { name: "默认权限" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "自动执行" })).not.toBeInTheDocument();
     fireEvent.focus(screen.getByLabelText("权限说明"));
-    expect(await screen.findByRole("tooltip")).toHaveTextContent("权限切换未接线；当前 SDK 回合无工具，不申请写权限");
+    const tooltip = await screen.findByRole("tooltip");
+    expect(tooltip).toHaveTextContent("权限切换未接线");
+    // Every clause below is a code fact the copy is allowed to name: `read`
+    // denies every non-read tool and `default` asks once for a command tool
+    // (`pi-session.ts` `previewGate`), and a mutating tool claims the task write
+    // right and writes only inside a worktree (`sdk-agent-tool-broker.ts`).
+    expect(tooltip).toHaveTextContent("工具已接线，由 Host 决定并代执行");
+    expect(tooltip).toHaveTextContent("只读档拒绝一切写与命令");
+    expect(tooltip).toHaveTextContent("默认档下命令类工具先要一次确认");
+    expect(tooltip).toHaveTextContent("文件写入只在任务工作副本内");
+    expect(tooltip).not.toHaveTextContent("无工具");
+    expect(tooltip).not.toHaveTextContent("不申请写权限");
     fireEvent.click(permission);
     expect(f.calls.some((call) => call.action === "start")).toBe(false);
   });
