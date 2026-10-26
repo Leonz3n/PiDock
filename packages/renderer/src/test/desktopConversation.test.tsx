@@ -58,7 +58,7 @@ function setup(taskId = "task-a") {
 }
 function mount(fixture: ReturnType<typeof setup>, taskId = "task-a") {
   window.pidock = fixture.bridge;
-  return render(<DesktopConversation taskId={taskId} name="Task" roots={JSON.stringify(roots)} association={JSON.stringify(association(taskId))} onBack={vi.fn()} onOpenProviders={vi.fn()} onArchived={vi.fn()} />);
+  return render(<DesktopConversation taskId={taskId} name="Task" branch="task/main" repoCount={1} roots={JSON.stringify(roots)} association={JSON.stringify(association(taskId))} onBack={vi.fn()} onOpenProviders={vi.fn()} onArchived={vi.fn()} />);
 }
 const send = async (text: string) => {
   fireEvent.change(screen.getByRole("textbox", { name: "消息" }), { target: { value: text } });
@@ -234,7 +234,7 @@ describe("Desktop SDK conversation", () => {
     await waitFor(() => expect(release).toBeDefined());
     fireEvent.change(screen.getByRole("textbox", { name: "消息" }), { target: { value: "task A next" } });
     const b = setup("task-b"); window.pidock = b.bridge;
-    view.rerender(<DesktopConversation taskId="task-b" name="B" roots={JSON.stringify(roots)} association={JSON.stringify(association("task-b"))} onBack={vi.fn()} onOpenProviders={vi.fn()} onArchived={vi.fn()} />);
+    view.rerender(<DesktopConversation taskId="task-b" name="B" branch="task/main" repoCount={1} roots={JSON.stringify(roots)} association={JSON.stringify(association("task-b"))} onBack={vi.fn()} onOpenProviders={vi.fn()} onArchived={vi.fn()} />);
     expect(screen.getByRole("textbox", { name: "消息" })).toHaveValue("");
     await screen.findByText(/尚未开始/);
     fireEvent.change(screen.getByRole("textbox", { name: "消息" }), { target: { value: "task B draft" } });
@@ -531,7 +531,7 @@ describe("Desktop SDK conversation", () => {
   it("keeps Provider navigation and SDK send/cancel available without offering a reasoning tier it cannot read", async () => {
     const f = setup(); window.pidock = f.bridge;
     const onOpenProviders = vi.fn();
-    render(<DesktopConversation taskId="task-a" name="Task" roots={JSON.stringify(roots)} association={JSON.stringify(association("task-a"))} onBack={vi.fn()} onOpenProviders={onOpenProviders} onArchived={vi.fn()} />);
+    render(<DesktopConversation taskId="task-a" name="Task" branch="task/main" repoCount={1} roots={JSON.stringify(roots)} association={JSON.stringify(association("task-a"))} onBack={vi.fn()} onOpenProviders={onOpenProviders} onArchived={vi.fn()} />);
     await screen.findByText(/尚未开始/);
     // `setup`'s bridge has no `taskOp`, so the Host read cannot answer at all.
     // The control says THAT (「推理 · 读取失败」), never 「未接线」: the capability
@@ -776,7 +776,7 @@ describe("Desktop SDK conversation", () => {
     f.bridge.taskOp = taskOp;
     window.pidock = f.bridge;
     const onArchived = vi.fn();
-    render(<DesktopConversation taskId="task-a" name="Task" roots={JSON.stringify(roots)} association={JSON.stringify(association("task-a"))} onBack={vi.fn()} onOpenProviders={vi.fn()} onArchived={onArchived} />);
+    render(<DesktopConversation taskId="task-a" name="Task" branch="task/main" repoCount={1} roots={JSON.stringify(roots)} association={JSON.stringify(association("task-a"))} onBack={vi.fn()} onOpenProviders={vi.fn()} onArchived={onArchived} />);
     await screen.findByText(/尚未开始/);
     fireEvent.click(screen.getByRole("button", { name: "任务操作" }));
     fireEvent.click(screen.getByRole("button", { name: "归档当前任务" }));
@@ -879,7 +879,7 @@ describe("Desktop SDK conversation", () => {
     await screen.findByText(/尚未开始/);
     view.unmount(); expect(a.subscribed()).toBe(false);
     const b = setup("task-b"); window.pidock = b.bridge;
-    render(<DesktopConversation taskId="task-b" name="B" roots={JSON.stringify(roots)} association={JSON.stringify(association("task-b"))} onBack={vi.fn()} onOpenProviders={vi.fn()} onArchived={vi.fn()} />);
+    render(<DesktopConversation taskId="task-b" name="B" branch="task/main" repoCount={1} roots={JSON.stringify(roots)} association={JSON.stringify(association("task-b"))} onBack={vi.fn()} onOpenProviders={vi.fn()} onArchived={vi.fn()} />);
     await screen.findByText(/尚未开始/);
     a.emit({ kind: "sdk-turn-event", event: { taskId: "task-a", sessionId: "main", turnId: "old", sequence: 1, type: "delta", text: "old" } });
     expect(screen.queryByText("old")).not.toBeInTheDocument();
