@@ -57,7 +57,7 @@ function setup() {
 function mount(fixture: ReturnType<typeof setup>) {
   window.pidock = fixture.bridge;
   return render(
-    <DesktopConversation taskId="task-a" name="Task" roots={JSON.stringify(roots)} association={JSON.stringify(association)} onBack={vi.fn()} onOpenProviders={vi.fn()} onArchived={vi.fn()} />,
+    <DesktopConversation taskId="task-a" name="Task" branch="task/main" repoCount={1} roots={JSON.stringify(roots)} association={JSON.stringify(association)} onBack={vi.fn()} onOpenProviders={vi.fn()} onArchived={vi.fn()} />,
   );
 }
 

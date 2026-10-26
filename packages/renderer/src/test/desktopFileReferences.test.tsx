@@ -89,7 +89,7 @@ function setup(read: ReturnType<typeof hostReads>) {
     taskOp,
   };
   window.pidock = bridge;
-  render(<DesktopConversation taskId={TASK_ID} name="Task" roots={JSON.stringify(roots)} association={JSON.stringify(association)} onBack={vi.fn()} onOpenProviders={vi.fn()} onArchived={vi.fn()} />);
+  render(<DesktopConversation taskId={TASK_ID} name="Task" branch="task/main" repoCount={1} roots={JSON.stringify(roots)} association={JSON.stringify(association)} onBack={vi.fn()} onOpenProviders={vi.fn()} onArchived={vi.fn()} />);
   return { bridge, calls, taskOp };
 }
 
