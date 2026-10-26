@@ -77,7 +77,14 @@ function allowed(data: DesktopProjects, taskId: string): boolean {
     data.inventory.roots.every((root) => root.state === "ready");
 }
 
-type ConversationProps = { taskId: string; name: string; roots: string; association: string; onBack: () => void; onOpenProviders: () => void; onArchived: () => void; onSourcesChanged?: () => void };
+/**
+ * #24 the task's own facts from the inventory row the shell already read
+ * (`listTasks` → `DesktopTaskSummary`). They are passed in, never re-read here:
+ * `repoCount: null` and a blank `branch` are the Host's unreported cases and are
+ * named in the header instead of being filled in.
+ */
+type TaskFacts = { branch: string; repoCount: number | null };
+type ConversationProps = TaskFacts & { taskId: string; name: string; roots: string; association: string; onBack: () => void; onOpenProviders: () => void; onArchived: () => void; onSourcesChanged?: () => void };
 /**
  * [PiDock 16] (#16 盒 1) one attachment of this desktop draft. The production
  * turn is `window.pidock.sdkTurn` → SDK `session.prompt(text)`: a string-only
@@ -98,7 +105,7 @@ export function DesktopConversation(props: ConversationProps) {
   return <TaskConversation key={props.taskId} {...props} />;
 }
 
-function TaskConversation({ taskId, name, roots, association, onBack, onOpenProviders, onArchived, onSourcesChanged }: ConversationProps) {
+function TaskConversation({ taskId, name, branch, repoCount, roots, association, onBack, onOpenProviders, onArchived, onSourcesChanged }: ConversationProps) {
   const bridge = window.pidock;
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const recovered = useRef(readReceipt(taskId));
@@ -548,6 +555,18 @@ function TaskConversation({ taskId, name, roots, association, onBack, onOpenProv
           <h1 className="mt-1 truncate text-[19px] font-semibold tracking-[-0.4px]">{name}</h1>
           <div className="mt-1.5 mb-2 flex flex-wrap items-center gap-2 text-[11px] text-muted">
             <span className="inline-flex min-w-0 items-center gap-1"><Icon name="branch" /><span className="truncate">{taskId}</span></span>
+            {/* #24: the branch and repository count the sidebar card already shows
+                (`DesktopShell.tsx` `TaskNavCard`), rendered from the SAME inventory
+                row passed down by `DesktopInventory` — no second `listTasks` read and
+                no locally derived count. A fact the Host did not report is named:
+                a blank chip, an `undefined`, or a guessed `main` would each claim
+                knowledge this read does not have. */}
+            <Badge data-testid="desktop-conversation-branch" variant="soft" title="本任务分支 · 来自 Host 任务清单" className={`max-w-full ${branch.length > 0 ? "" : "border-[#dfc99f] text-[#9a6032]"}`}>
+              <Icon name="branch" /><span className="min-w-0 truncate">{hostText(branch, "Host 未上报分支")}</span>
+            </Badge>
+            <Badge data-testid="desktop-conversation-repo-count" variant="soft" title="本任务仓库数 · 来自 Host 任务清单" className={repoCount === null ? "border-[#dfc99f] text-[#9a6032]" : undefined}>
+              <Icon name="folder" />{repoCount === null ? "Host 未上报仓库数" : `${repoCount} 仓库`}
+            </Badge>
             <span className="inline-flex items-center gap-1"><Icon name="settings" />SDK · main</span>
             {/* [PiDock 02m] #5: this kernel's tool path is real, so the header
                 carries the two facts a reader can check instead of the old
