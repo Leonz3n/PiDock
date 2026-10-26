@@ -1,10 +1,13 @@
 import { useEffect, useState } from "react";
 import { cleanupPreviewThroughShell, lifecycleStateThroughShell, runCleanupThroughShell, setTaskArchivedThroughShell } from "../data/shellBridge";
+import { resourceVerdictConclusion } from "../data/taskLifecycle";
 import type { CleanupSelection } from "../data/types";
 import { Button } from "./ui/button";
 
 type Task = { taskId: string; name: string; repoCount: number };
-type ArchivedTask = Task & { archivedAt: string | null };
+/** One Host resource verdict as the archived row shows it: `ok === null` means the Host judged nothing. */
+type ResourceVerdictView = { subject: string; ok: boolean | null; reason?: string };
+type ArchivedTask = Task & { archivedAt: string | null; verdicts: ResourceVerdictView[] | undefined };
 type CleanupDisposition = "remove" | "keep-copy" | "keep";
 type CleanupItemView = { resource?: string; detail?: string; disposition?: CleanupDisposition };
 type CleanupPreviewView = {
@@ -33,11 +36,58 @@ const defaultSelection: CleanupSelection = { exportSessions: false, exportDrafts
 const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
 const strings = (value: unknown): string[] | undefined => Array.isArray(value) && value.every((entry) => typeof entry === "string") ? value : undefined;
 
-export function parseLifecycle(value: unknown, taskId: string): { archived: boolean; archivedAt: string | null } {
+export function parseLifecycle(value: unknown, taskId: string): { archived: boolean; archivedAt: string | null; verdicts: ResourceVerdictView[] | undefined } {
   if (!object(value) || !object(value.lifecycle) || value.lifecycle.taskId !== taskId || typeof value.lifecycle.archived !== "boolean" ||
     !(value.lifecycle.archivedAt === null || typeof value.lifecycle.archivedAt === "string") ||
     (value.lifecycle.archived && !value.lifecycle.archivedAt)) throw new Error("归档状态返回异常");
-  return { archived: value.lifecycle.archived, archivedAt: value.lifecycle.archivedAt };
+  return { archived: value.lifecycle.archived, archivedAt: value.lifecycle.archivedAt, verdicts: resourceVerdicts(value.lifecycle.resources) };
+}
+
+function processKindLabel(kind: string | undefined): string {
+  if (kind === "service") return "服务";
+  if (kind === "terminal") return "终端";
+  if (kind === "process-tree") return "派生子进程";
+  return "未知资源";
+}
+
+/** `null` when the Host reported no verdict for this resource — never read as clearable. */
+function verdictOk(verdict: Record<string, unknown> | undefined): boolean | null {
+  if (verdict?.["ok"] === true) return true;
+  if (verdict?.["ok"] === false) return false;
+  return null;
+}
+
+/**
+ * Host resource verdicts: each worktree/process entry carries its own `verdict`
+ * (`resources.worktrees[].verdict` / `resources.processes[].verdict`). `undefined`
+ * when the Host reported no resources at all, so the page can tell "未上报"
+ * from "上报了 0 项".
+ */
+function resourceVerdicts(resources: unknown): ResourceVerdictView[] | undefined {
+  if (!object(resources)) return undefined;
+  const worktrees = resources["worktrees"];
+  const processes = resources["processes"];
+  if (worktrees === undefined && processes === undefined) return undefined;
+  const entries: ResourceVerdictView[] = [];
+  for (const entry of Array.isArray(worktrees) ? worktrees : []) {
+    const row = object(entry) ? entry : {};
+    const verdict = object(row["verdict"]) ? row["verdict"] : undefined;
+    entries.push({
+      subject: `工作副本 ${typeof row["repoDir"] === "string" ? row["repoDir"] : "Host 未上报路径"}`,
+      ok: verdictOk(verdict),
+      ...(typeof verdict?.["reason"] === "string" ? { reason: verdict["reason"] } : {}),
+    });
+  }
+  for (const entry of Array.isArray(processes) ? processes : []) {
+    const row = object(entry) ? entry : {};
+    const verdict = object(row["verdict"]) ? row["verdict"] : undefined;
+    entries.push({
+      subject: `${processKindLabel(typeof row["kind"] === "string" ? row["kind"] : undefined)} ${typeof row["id"] === "string" ? row["id"] : "Host 未上报标识"}`,
+      ok: verdictOk(verdict),
+      ...(typeof verdict?.["reason"] === "string" ? { reason: verdict["reason"] } : {}),
+    });
+  }
+  return entries;
 }
 
 function cleanupItems(value: unknown): CleanupItemView[] | undefined {
@@ -116,7 +166,7 @@ async function readArchived(tasks: readonly Task[]): Promise<{ rows: ArchivedTas
       const response = await lifecycleStateThroughShell(task.taskId);
       if (!response.ok) throw new Error(response.error ?? "读取失败");
       const state = parseLifecycle(response.payload, task.taskId);
-      return { row: state.archived ? { ...task, archivedAt: state.archivedAt } : null, error: "" };
+      return { row: state.archived ? { ...task, archivedAt: state.archivedAt, verdicts: state.verdicts } : null, error: "" };
     } catch (error) {
       return { row: null, error: `${task.name}：${error instanceof Error ? error.message : "读取失败"}` };
     }
@@ -203,6 +253,15 @@ export function DesktopArchivePage({ tasks, onRestored }: { tasks: readonly Task
             <div className="min-w-0"><h2 className="break-words text-sm font-semibold">{task.name}</h2><p className="mt-1 text-xs text-muted">{task.repoCount} 个仓库 · 归档于 {task.archivedAt}</p></div>
             <div className="flex items-center gap-2"><Button size="sm" variant="outline" disabled={restoring !== null || cleanup?.running === true} onClick={() => void restore(task.taskId)}>恢复</Button><Button size="sm" variant="outline" disabled={restoring !== null || cleanup?.running === true} onClick={() => openCleanup(task.taskId)}>{cleanup?.taskId === task.taskId ? "收起清理" : "清理…"}</Button></div>
           </div>
+          <section aria-label={`${task.name}资源判定`} className="mt-3 text-xs">
+            <h3 className="font-semibold">Host 资源判定</h3>
+            <p className="mt-1 text-[11px] text-muted">Host 按身份核对工作副本与运行进程，不凭过期进程号或端口定论；这里只读展示判定，不能清理的资源按具名原因处理后重读。</p>
+            {task.verdicts === undefined
+              ? <p className="mt-1 text-[11px] text-muted">Host 未上报资源判定，尚未计算：未判定的资源不能当作可清理。</p>
+              : task.verdicts.length === 0
+                ? <p className="mt-1 text-[11px] text-muted">Host 上报 0 项资源判定，尚无可判定项：这不代表资源可清理。</p>
+                : <ul className="mt-1 list-inside list-disc text-[11px]">{task.verdicts.map((verdict, index) => <li key={`${verdict.subject}-${index}`} className={verdict.ok === false ? "text-[#9a6032]" : "text-muted"}>{verdict.subject}：{resourceVerdictConclusion(verdict)}</li>)}</ul>}
+          </section>
           {cleanup?.taskId === task.taskId && <section aria-label={`${task.name}清理预览`} className="mt-4 border border-line bg-paper p-3">
             <p className="text-xs font-semibold">先预览 Host 清理清单</p>
             <p className="mt-1 text-[11px] text-muted">选择要随清理导出的记录；未选择的记录可能随清理移除。独立导出下载界面未接线。</p>
