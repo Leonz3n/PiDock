@@ -1,9 +1,34 @@
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { SharedRepoIsolation } from "./SharedRepoIsolation";
 import { projectName, type DesktopProject, type TaskAssociation } from "../data/desktopProjects";
 import type { DesktopShellTask } from "./DesktopShell";
 import { hostText } from "../data/workspaceFiles";
+import { serviceCatalogThroughShell, shellBridge } from "../data/shellBridge";
+import { serviceEnvironmentsFromMain, type ServiceEnvironmentView } from "../data/serviceCatalog";
+
+/**
+ * What the 运行环境 card states, from these facts only. It reuses the environment
+ * page's own answer (`listEnvironments` parsed by `serviceEnvironmentsFromMain`),
+ * so the count and the names are main's list, not a derived guess. A refused or
+ * unreadable list is named as such — never rendered as "no environments" — and a
+ * project nobody named an environment in really says it has none.
+ */
+function environmentReadout({ projectId, connected, environments, error }: {
+  projectId: string | undefined;
+  connected: boolean;
+  environments: ServiceEnvironmentView[] | null;
+  error: string | null;
+}): { value: string; detail: string; count: boolean } {
+  if (projectId === undefined) return { value: "无项目上下文", detail: "环境按项目保存；「环境与服务」页可查看全部项目环境。", count: false };
+  if (!connected) return { value: "本机未提供环境清单接口", detail: "环境由主进程保存；没有该接口时本页不显示数量。", count: false };
+  if (environments === null) return error === null
+    ? { value: "正在读取环境清单", detail: "环境由主进程保存，本页只读清单。", count: false }
+    : { value: error, detail: "读取失败不等于没有环境；请在「环境与服务」页重试。", count: false };
+  if (environments.length === 0) return { value: "尚未创建环境", detail: "在「环境与服务」页新增并命名一个环境。", count: false };
+  return { value: String(environments.length), detail: environments.map((row) => row.name).join("、"), count: true };
+}
 
 /**
  * [UI 对齐 S8e] #47 `项目总览`，结构照 `prototypes/pidock-ui/management.js` 的
@@ -12,7 +37,9 @@ import { hostText } from "../data/workspaceFiles";
  * 任务卡网格、「项目仓库」列表。
  *
  * 真实数据边界：任务与仓库计数来自本机 Project 记录与任务清单；**运行环境**
- * 尚无 Host 侧数据来源，因此这一格显示 `未接线` 而不是编一个数字。
+ * 与环境页同源（`shell/serviceCatalogOp {op:"listEnvironments"}` +
+ * `serviceEnvironmentsFromMain`），名称与数量都是主进程的清单原文。读不到时
+ * 说读不到，空清单说空清单：这一格从不编一个数字，也不再声称未接线。
  */
 export function DesktopProjectOverview({
   project,
@@ -47,6 +74,35 @@ export function DesktopProjectOverview({
   creationIncompleteTaskId: string | null;
 }) {
   const projectId = project?.id;
+  const connected = typeof shellBridge()?.serviceCatalogOp === "function";
+  // The same read `DesktopEnvironmentPage` performs: main's own environment list,
+  // parsed by the same adapter. The overview only reads; it never creates,
+  // renames or selects an environment.
+  const [environmentRows, setEnvironmentRows] = useState<{ projectId: string; values: ServiceEnvironmentView[] } | null>(null);
+  const [environmentError, setEnvironmentError] = useState<string | null>(null);
+  const environmentEpoch = useRef(0);
+  const environments = projectId !== undefined && environmentRows !== null && environmentRows.projectId === projectId ? environmentRows.values : null;
+  const loadEnvironments = useCallback(async (targetProjectId: string) => {
+    const request = ++environmentEpoch.current;
+    const response = await serviceCatalogThroughShell({ op: "listEnvironments", projectId: targetProjectId });
+    if (environmentEpoch.current !== request) return;
+    const parsed = response.ok ? serviceEnvironmentsFromMain(response.payload, targetProjectId) : null;
+    if (!parsed) {
+      // A refused or unreadable list is named, never rendered as "no environments".
+      setEnvironmentRows(null);
+      setEnvironmentError(response.ok ? "环境清单响应无法核对" : "环境清单读取失败");
+      return;
+    }
+    setEnvironmentRows({ projectId: targetProjectId, values: parsed });
+  }, []);
+  useEffect(() => {
+    environmentEpoch.current++;
+    setEnvironmentRows(null);
+    setEnvironmentError(null);
+    if (!projectId || !connected) return;
+    void loadEnvironments(projectId);
+  }, [projectId, connected, loadEnvironments]);
+  const environment = environmentReadout({ projectId, connected, environments, error: environmentError });
   const scoped = tasks.filter((task) => (projectId === undefined ? task.projectId === null : task.projectId === projectId));
   // `projectId === null` also covers rows the Host marks `unavailable`; those rows cannot be
   // claimed (DesktopInventory disables their 认领/转移/进入工作区 controls), so counting them
@@ -80,10 +136,10 @@ export function DesktopProjectOverview({
           <p className="mt-1.5 text-[26px] font-semibold text-ink" data-testid="overview-repo-count">{project ? project.repositories.length : 0}</p>
           <p className="mt-1 text-[10px] text-muted">普通目录 {project ? project.directories.length : 0} 个</p>
         </div>
-        <div className="rounded-[9px] border border-line bg-paper p-5">
+        <div className="rounded-[9px] border border-line bg-paper p-5" data-testid="overview-env">
           <p className="text-[11px] text-muted">运行环境</p>
-          <p className="mt-1.5 text-[15px] font-semibold text-[#95979c]" data-testid="overview-env-unwired">未接线</p>
-          <p className="mt-1 text-[10px] text-muted">Host 尚未提供本机环境清单，这里不编造数量。</p>
+          <p className={`mt-1.5 font-semibold ${environment.count ? "text-[26px] text-ink" : "text-[15px] text-[#95979c]"}`}>{environment.value}</p>
+          <p className="mt-1 text-[10px] text-muted">{environment.detail}</p>
         </div>
       </div>
 

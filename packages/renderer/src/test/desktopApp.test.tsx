@@ -870,14 +870,52 @@ describe("Desktop production data", () => {
 });
 
 describe("[UI 对齐 S8e] project overview page", () => {
-  it("counts real tasks/repos and marks 运行环境 as unwired instead of inventing a number", async () => {
-    window.pidock = bridge({ projectPresent: true });
+  const environment = { projectId: project.id, environmentId: "e-2f6f1f1c-4b0e-4a1e-9d4d-51f0d6f0e001", name: "开发环境" };
+  const staging = { projectId: project.id, environmentId: "e-2f6f1f1c-4b0e-4a1e-9d4d-51f0d6f0e002", name: "预发环境" };
+
+  /** The overview may answer `listEnvironments` only; every other catalog op is a failure the page would show. */
+  const environmentRoute = (reply: () => { ok: boolean; payload?: unknown; error?: string }) => {
+    const serviceCatalogOp = vi.fn(async (request: Record<string, unknown>) => request["op"] === "listEnvironments"
+      ? reply()
+      : { ok: false, error: `unexpected ${String(request["op"])}` });
+    return { bridge: { ...bridge({ projectPresent: true }), serviceCatalogOp }, serviceCatalogOp };
+  };
+
+  it("reads the project's real environments into 运行环境 instead of claiming 未接线", async () => {
+    const { bridge: shell, serviceCatalogOp } = environmentRoute(() => ({ ok: true, payload: [environment, staging] }));
+    window.pidock = shell;
     render(<App />);
     expect(await screen.findByTestId("desktop-project-overview")).toBeInTheDocument();
     expect(screen.getByTestId("overview-repo-count")).toHaveTextContent("1");
-    expect(screen.getByTestId("overview-env-unwired")).toHaveTextContent("未接线");
+    const cell = screen.getByTestId("overview-env");
+    await waitFor(() => expect(cell).toHaveTextContent("开发环境、预发环境"));
+    expect(cell).toHaveTextContent("2");
+    expect(cell).not.toHaveTextContent("未接线");
+    expect(screen.getByTestId("desktop-project-overview")).not.toHaveTextContent("未接线");
+    // Reading the list is the ONLY service-catalog traffic this card makes.
+    expect(serviceCatalogOp.mock.calls).toEqual([[{ op: "listEnvironments", projectId: project.id }]]);
     // The project-scoped task is offered as a real 继续工作 card and opens the workspace.
     expect(screen.queryByTestId("overview-no-tasks")).toBeInTheDocument();
+  });
+
+  it("states that the project has no environment yet instead of claiming 未接线", async () => {
+    const { bridge: shell } = environmentRoute(() => ({ ok: true, payload: [] }));
+    window.pidock = shell;
+    render(<App />);
+    const cell = await screen.findByTestId("overview-env");
+    await waitFor(() => expect(cell).toHaveTextContent("尚未创建环境"));
+    expect(cell).toHaveTextContent("在「环境与服务」页新增并命名一个环境");
+    expect(cell).not.toHaveTextContent("未接线");
+  });
+
+  it("names an unreadable environment list instead of rendering it as no environments", async () => {
+    const { bridge: shell } = environmentRoute(() => ({ ok: false, error: "环境清单读取失败" }));
+    window.pidock = shell;
+    render(<App />);
+    const cell = await screen.findByTestId("overview-env");
+    await waitFor(() => expect(cell).toHaveTextContent("环境清单读取失败"));
+    expect(cell).not.toHaveTextContent("尚未创建环境");
+    expect(cell).not.toHaveTextContent("未接线");
   });
 
   it("opens management from the overview instead of showing it by default", async () => {
