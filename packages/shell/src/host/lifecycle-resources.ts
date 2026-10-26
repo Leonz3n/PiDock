@@ -273,7 +273,13 @@ export function createLifecycleResources(input: LifecycleResourceInput): TaskLif
     liveProcesses: () => (input.liveProcesses ?? readLiveProcesses)(),
     keepAndExport: (request) => keepAndExport(input, request),
     deleteSession: (sessionId) => input.host.store.deleteSession(input.host.taskDir, sessionId),
-    clearUsage: () => input.host.store.writeUsage(input.host.taskDir, [], input.host.store.readUsage(input.host.taskDir).exclusions),
+    // Usage removal reuses the Host's recorded cleanup scope (the same op the
+    // statistics page calls): the removed ledger keys are persisted, so a later
+    // sync cannot re-derive them from session records that a failed step left
+    // behind — otherwise the details would be revived after the cleanup.
+    clearUsage: () => {
+      input.host.clearUsage({ kind: "all" });
+    },
     delegateCleanup: (itemId) => {
       if (itemId === "terminals") {
         // Terminal records live in memory only (no spawner yet): quitting drops
