@@ -8,8 +8,9 @@
  *
  * Honesty rules this component keeps:
  *
- * - Every nav entry is either backed by real data or explicitly marked `未接线`; the
- *   renderer never falls back to the demo `memoryHost` fixtures in desktop mode.
+ * - Every nav entry opens its own real page; where the Host has no read op for a part of
+ *   that page, the page says `未接线` with the Host reason — the renderer never falls back
+ *   to the demo `memoryHost` fixtures in desktop mode.
  * - Counts come from the loaded inventory (`tasks`, `projects`, `roots`); a count that
  *   has no real source is not shown at all instead of being invented.
  * - The bottom strip carries only segments `data/desktopShellSummary.ts` can build
@@ -42,7 +43,7 @@ export interface DesktopShellProject {
   description: string;
 }
 
-/** Pages the shell can show. `unwired` names a nav entry with no real Host data yet. */
+/** Pages the shell can show; each nav entry names its own real page. */
 export type DesktopView =
   | { view: "project"; projectId: string }
   | { view: "unassigned" }
@@ -54,36 +55,18 @@ export type DesktopView =
   | { view: "attention" }
   | { view: "env" }
   | { view: "remote" }
-  | { view: "unwired"; key: DesktopUnwiredKey };
+  | { view: DesktopLocalPageKey };
 
-/** Nav entries without a real Host read path yet (each keeps an explicit reason). */
-export type DesktopUnwiredKey = "capabilities" | "settings";
+/** 能力管理 and 本机设置: the 系统 group's two local pages, each routed to a real page (#24). */
+export type DesktopLocalPageKey = "capabilities" | "settings";
 
-const LABELS: Record<DesktopUnwiredKey, string> = {
+const LABELS: Record<DesktopLocalPageKey, string> = {
   capabilities: "能力管理",
   settings: "本机设置",
 };
 
 const NAV_ITEM_CLASS = "flex w-full items-center gap-[10px] rounded-[7px] px-[11px] py-[9px] text-left text-[12px] below-mid:justify-center";
 const HEADING_CLASS = "mt-6 mb-[7px] flex items-center justify-between px-[10px] text-[10px] tracking-[1.4px] text-[#91999f] uppercase below-mid:hidden";
-
-/**
- * A nav entry whose real Host data does not exist yet. The page states that plainly
- * instead of filling the screen with sample data.
- */
-export function DesktopUnwired({ name, onBack }: { name: string; onBack: () => void }) {
-  return (
-    <div data-testid="desktop-unwired" className="mx-auto max-w-[760px] px-6 py-10">
-      <h2 className="text-[15px] font-semibold text-ink">{name} · 未接线</h2>
-      <p className="mt-3 text-[12px] leading-6 text-muted">
-        真实 Host 尚未提供这项数据，界面不会用样例内容填充。此入口保留，接入后在此页展示真实状态。
-      </p>
-      <Button type="button" onClick={onBack} className="mt-5 h-auto rounded-[7px] px-[11px] py-[7px] text-[12px] hover:border-[#bec0c3]">
-        返回任务
-      </Button>
-    </div>
-  );
-}
 
 function SidebarNavButton({ label, icon, active, count, disabled, onSelect }: { label: string; icon: IconName; active: boolean; count?: number; disabled?: boolean; onSelect: () => void }) {
   return (
@@ -288,9 +271,9 @@ export function DesktopShell({
           <div data-nav-group="system" className="mt-auto border-t border-line pt-[11px]">
             <SidebarNavButton label="需要处理" icon="clock" active={view.view === "attention"} onSelect={() => onNavigate({ view: "attention" })} />
             <SidebarNavButton label="定时任务" icon="clock" active={view.view === "schedules"} onSelect={() => onNavigate({ view: "schedules" })} />
-            <SidebarNavButton label={LABELS.capabilities} icon="book" active={view.view === "unwired" && view.key === "capabilities"} onSelect={() => onNavigate({ view: "unwired", key: "capabilities" })} />
+            <SidebarNavButton label={LABELS.capabilities} icon="book" active={view.view === "capabilities"} onSelect={() => onNavigate({ view: "capabilities" })} />
             <SidebarNavButton label="远程访问" icon="globe" active={view.view === "remote"} onSelect={() => onNavigate({ view: "remote" })} />
-            <SidebarNavButton label={LABELS.settings} icon="folder" active={view.view === "unwired" && view.key === "settings"} onSelect={() => onNavigate({ view: "unwired", key: "settings" })} />
+            <SidebarNavButton label={LABELS.settings} icon="folder" active={view.view === "settings"} onSelect={() => onNavigate({ view: "settings" })} />
             <SidebarNavButton label="模型与 Provider" icon="key" active={view.view === "providers"} onSelect={() => onNavigate({ view: "providers" })} />
             <div data-user-chip="local-workspace" title="本机工作区" className="flex items-center gap-[9px] px-2 py-[10px]">
               <LocalUserAvatar />
