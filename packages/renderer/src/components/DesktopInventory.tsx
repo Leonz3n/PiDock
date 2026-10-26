@@ -4,7 +4,7 @@ import { DesktopTaskCreation } from "./DesktopTaskCreation";
 import { DesktopConversation } from "./DesktopConversation";
 import { desktopMode, importDesktopTaskRoot } from "../data/desktopInventory";
 import { abandonCreation, commitCreation, currentCreation, CREATION_RETENTION_NOTICE, type CreationIntentView } from "../data/desktopCreation";
-import { DESKTOP_LABELS, DesktopRootErrors, DesktopShell, DesktopUnwired, type DesktopUnwiredKey, type DesktopView } from "./DesktopShell";
+import { DESKTOP_LABELS, DesktopRootErrors, DesktopShell, type DesktopLocalPageKey, type DesktopView } from "./DesktopShell";
 import { DesktopProvidersPage } from "./DesktopProvidersPage";
 import { DesktopProjectOverview } from "./DesktopProjectOverview";
 import { DesktopUsagePage } from "./DesktopUsagePage";
@@ -89,8 +89,8 @@ export function DesktopInventory() {
   const [creationNotice, setCreationNotice] = useState<{ taskId: string; message: string } | null>(null);
   const [choice, setChoice] = useState<Record<string, string>>({});
   const [activeTask, setActiveTask] = useState<{ id: string; name: string; roots: string; association: string } | null>(null);
-  /** Non-task nav entries whose real Host data does not exist yet (#47). */
-  const [unwired, setUnwired] = useState<DesktopUnwiredKey | null>(null);
+  /** 能力管理 and 本机设置 — the 系统 group's two local pages, each a real page (#24). */
+  const [localPage, setLocalPage] = useState<DesktopLocalPageKey | null>(null);
   // [UI 对齐 S8e] #47: real Model/Provider page. It keeps the active task as its
   // selection context (选用 is recorded per task), like the prototype where the
   // workspace stays selected while another page is shown.
@@ -314,8 +314,8 @@ export function DesktopInventory() {
       ? { view: "usage" }
     : activeTask
       ? { view: "task", taskId: activeTask.id }
-      : unwired
-        ? { view: "unwired", key: unwired }
+      : localPage
+        ? { view: localPage }
         : selection.kind === "project" && selectedProject
           ? { view: "project", projectId: selectedProject.id }
           : { view: "unassigned" };
@@ -325,7 +325,7 @@ export function DesktopInventory() {
     setDraft(null);
     setEditNeedsReview(false);
     if (next.view === "task") {
-      setUnwired(null);
+      setLocalPage(null);
       setUsageOpen(false);
       setSchedulesOpen(false);
       setArchiveOpen(false);
@@ -348,11 +348,11 @@ export function DesktopInventory() {
     if (next.view === "providers") return;
     if (next.view === "project" || next.view === "unassigned") setManage(false);
     if (next.view === "usage") { setUsageTaskId(activeTask?.id ?? (shellTasks[0]?.taskId ?? null)); return; }
-    if (next.view === "schedules" || next.view === "archive" || next.view === "attention" || next.view === "env" || next.view === "remote") { setActiveTask(null); setUnwired(null); return; }
+    if (next.view === "schedules" || next.view === "archive" || next.view === "attention" || next.view === "env" || next.view === "remote") { setActiveTask(null); setLocalPage(null); return; }
     // Any other page leaves the usage view.
     setUsageTaskId(null);
     setActiveTask(null);
-    setUnwired(next.view === "unwired" ? next.key : null);
+    setLocalPage(next.view === "capabilities" || next.view === "settings" ? next.view : null);
     if (next.view === "project") { pinned.current = true; setSelection({ kind: "project", id: next.projectId }); }
     if (next.view === "unassigned") { pinned.current = true; setSelection({ kind: "unassigned" }); }
   };
@@ -381,8 +381,8 @@ export function DesktopInventory() {
     ? { ...(activeProject ? { project: activeProject.name } : selectedProject ? { project: selectedProject.name } : {}), page: "模型与 Provider" }
     : activeTask
     ? { ...(activeProject ? { project: activeProject.name } : {}), task: activeTask.name }
-    : unwired
-    ? { ...(selectedProject ? { project: selectedProject.name } : {}), page: DESKTOP_LABELS[unwired] }
+    : localPage
+    ? { ...(selectedProject ? { project: selectedProject.name } : {}), page: DESKTOP_LABELS[localPage] }
     : selectedProject
       ? { project: selectedProject.name, page: manage ? "项目管理" : "项目总览" }
       : selection.kind === "unassigned"
@@ -417,9 +417,8 @@ export function DesktopInventory() {
     onOpenTask={(taskId) => navigate({ view: "task", taskId })}
   />);
   if (activeTask) return shell(<DesktopConversation key={activeTask.id} taskId={activeTask.id} name={activeTask.name} branch={activeTaskSummary?.branch ?? ""} repoCount={activeTaskSummary?.repoCount ?? null} roots={activeTask.roots} association={activeTask.association} onBack={() => { entryEpoch.current++; setActiveTask(null); void load(); }} onOpenProviders={() => navigate({ view: "providers" })} onArchived={() => { navigate({ view: "archive" }); void load(); }} onSourcesChanged={() => { void load(true); }} />);
-  if (unwired === "capabilities") return shell(<DesktopCapabilitiesPage />);
-  if (unwired === "settings") return shell(<DesktopSettingsPage />);
-  if (unwired) return shell(<DesktopUnwired name={DESKTOP_LABELS[unwired]} onBack={() => navigate({ view: "unassigned" })} />);
+  if (localPage === "capabilities") return shell(<DesktopCapabilitiesPage />);
+  if (localPage === "settings") return shell(<DesktopSettingsPage />);
   if (view.kind !== "ready" || !data) return <main className="grid min-h-screen place-items-center bg-bg px-6 text-ink" data-testid="desktop-inventory">
     <div className="w-full max-w-[560px]">
       {/* A submitted write whose authoritative reread failed must stay visible: dropping

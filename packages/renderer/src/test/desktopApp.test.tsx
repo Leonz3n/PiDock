@@ -288,6 +288,33 @@ describe("Desktop production data", () => {
     expect(screen.queryByTestId("desktop-project-overview")).toBeNull();
   });
 
+  it("routes 能力管理 and 本机设置 to their real pages instead of a 未接线 placeholder", async () => {
+    window.pidock = bridge();
+    render(<App />);
+    expect(await screen.findByTestId("desktop-project-overview")).toBeInTheDocument();
+
+    const capabilities = within(screen.getByTestId("desktop-sidebar")).getByRole("button", { name: "能力管理" });
+    // Both tiers keep the entry usable: the wide sidebar shows the label, the
+    // 64px rail hides it visually (`sr-only`) and keeps the accessible name.
+    expect(within(capabilities).getByText("能力管理").className.split(/\s+/)).toContain("below-mid:sr-only");
+    expect(capabilities.className.split(/\s+/)).toContain("below-mid:justify-center");
+    fireEvent.click(capabilities);
+    expect(await screen.findByTestId("desktop-capabilities-page")).toBeInTheDocument();
+    expect(within(screen.getByTestId("desktop-breadcrumb")).getByText("能力管理")).toBeInTheDocument();
+    // #24: the S8 placeholder page (`能力管理 · 未接线`) was unreachable and is
+    // gone; its wording must never come back in place of the real page.
+    expect(screen.queryByTestId("desktop-unwired")).toBeNull();
+    expect(screen.queryByRole("heading", { name: "能力管理 · 未接线" })).toBeNull();
+    expect(screen.queryByText(/此入口保留，接入后在此页展示真实状态/)).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "本机设置" }));
+    expect(await screen.findByTestId("desktop-settings-page")).toBeInTheDocument();
+    expect(screen.queryByTestId("desktop-capabilities-page")).toBeNull();
+    expect(within(screen.getByTestId("desktop-breadcrumb")).getByText("本机设置")).toBeInTheDocument();
+    expect(screen.queryByTestId("desktop-unwired")).toBeNull();
+    expect(screen.queryByRole("heading", { name: "本机设置 · 未接线" })).toBeNull();
+  });
+
   it("keeps archived tasks out of active navigation until the Host restores them", async () => {
     let archived = true;
     const taskOp = vi.fn(async (taskId: string, op: string) => {
