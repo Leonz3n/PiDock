@@ -39,6 +39,8 @@ function mountConversation(taskId = "task-a") {
     <DesktopConversation
       taskId={taskId}
       name="对账单详情·任务A"
+      branch="task/main"
+      repoCount={1}
       roots={JSON.stringify(roots)}
       association={JSON.stringify(association(taskId))}
       onBack={vi.fn()}

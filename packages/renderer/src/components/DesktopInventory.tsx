@@ -359,6 +359,12 @@ export function DesktopInventory() {
   const activeProject = activeTask
     ? shellProjects.find((project) => project.id === shellTasks.find((task) => task.taskId === activeTask.id)?.projectId)
     : undefined;
+  // #24: the task header's branch / repository-count chips read the SAME
+  // `listTasks` row the sidebar card renders (`shellTasks`), so the two surfaces
+  // cannot disagree and no second read is issued. A row that is absent (or a
+  // Host that reported nothing) stays `undefined`/`null` — the header names that
+  // instead of inventing a branch or a repository count.
+  const activeTaskSummary = activeTask ? shellTasks.find((task) => task.taskId === activeTask.id) : undefined;
   const breadcrumb = remoteOpen
     ? { project: "所有项目", page: "远程访问" }
     : environmentOpen
@@ -410,7 +416,7 @@ export function DesktopInventory() {
     availableTasks={shellTasks}
     onOpenTask={(taskId) => navigate({ view: "task", taskId })}
   />);
-  if (activeTask) return shell(<DesktopConversation key={activeTask.id} taskId={activeTask.id} name={activeTask.name} roots={activeTask.roots} association={activeTask.association} onBack={() => { entryEpoch.current++; setActiveTask(null); void load(); }} onOpenProviders={() => navigate({ view: "providers" })} onArchived={() => { navigate({ view: "archive" }); void load(); }} onSourcesChanged={() => { void load(true); }} />);
+  if (activeTask) return shell(<DesktopConversation key={activeTask.id} taskId={activeTask.id} name={activeTask.name} branch={activeTaskSummary?.branch ?? ""} repoCount={activeTaskSummary?.repoCount ?? null} roots={activeTask.roots} association={activeTask.association} onBack={() => { entryEpoch.current++; setActiveTask(null); void load(); }} onOpenProviders={() => navigate({ view: "providers" })} onArchived={() => { navigate({ view: "archive" }); void load(); }} onSourcesChanged={() => { void load(true); }} />);
   if (unwired === "capabilities") return shell(<DesktopCapabilitiesPage />);
   if (unwired === "settings") return shell(<DesktopSettingsPage />);
   if (unwired) return shell(<DesktopUnwired name={DESKTOP_LABELS[unwired]} onBack={() => navigate({ view: "unassigned" })} />);
