@@ -53,6 +53,50 @@ it("shows an honest empty state with no tasks and does not call Host", async () 
   expect(taskOp).not.toHaveBeenCalled();
 });
 
+// Host resource verdicts as `task/lifecycleState` returns them: the verdicts
+// live on each worktree / process entry, never on a port.
+const verdictResources = {
+  worktrees: [
+    { repoDir: "/task/a/invoice", verdict: { ok: true, repoDir: "/task/a/invoice", head: "deadbeef", branch: "task/a" } },
+    {
+      repoDir: "/task/a/ledger",
+      verdict: { ok: false, repoDir: "/task/a/ledger", code: "branch-mismatch", reason: "工作副本当前分支 release 与记录的任务分支 task/a 不符" },
+    },
+  ],
+  processes: [{ kind: "service", id: "svc-billing", running: true, verdict: null }],
+};
+const withResources = (taskId: string, resources: unknown) => ({
+  lifecycle: { taskId, archived: true, archivedAt: "2026-09-29T09:00:00Z", resources },
+});
+
+it("shows every Host resource verdict with its cleanup conclusion and named reason", async () => {
+  const taskOp = bridge((taskId) => ({ ok: true, payload: withResources(taskId, verdictResources) }));
+  render(<DesktopArchivePage tasks={[tasks[0]!]} onRestored={() => {}} />);
+  const region = await screen.findByRole("region", { name: "任务 A资源判定" });
+  expect(region).toHaveTextContent("工作副本 /task/a/invoice：可清理（Host 已验证身份）");
+  expect(region).toHaveTextContent("工作副本 /task/a/ledger：不可清理：工作副本当前分支 release 与记录的任务分支 task/a 不符");
+  expect(region).toHaveTextContent("服务 svc-billing：尚未判定：Host 未上报身份判定");
+  // Rendering the readout is read-only: no op beyond the existing lifecycle read.
+  expect(taskOp.mock.calls.every(([, op]) => op === "task/lifecycleState")).toBe(true);
+});
+
+it("shows an explicit empty verdict state instead of a clean bill of health", async () => {
+  bridge((taskId) => ({ ok: true, payload: withResources(taskId, { worktrees: [], processes: [] }) }));
+  render(<DesktopArchivePage tasks={[tasks[0]!]} onRestored={() => {}} />);
+  const region = await screen.findByRole("region", { name: "任务 A资源判定" });
+  expect(region).toHaveTextContent("Host 上报 0 项资源判定，尚无可判定项：这不代表资源可清理。");
+  expect(region).not.toHaveTextContent("可清理（Host 已验证身份）");
+  expect(region).not.toHaveTextContent("一切正常");
+});
+
+it("does not claim verdicts were computed when the Host omits resources", async () => {
+  bridge((taskId) => ({ ok: true, payload: lifecycle(taskId, true) }));
+  render(<DesktopArchivePage tasks={[tasks[0]!]} onRestored={() => {}} />);
+  const region = await screen.findByRole("region", { name: "任务 A资源判定" });
+  expect(region).toHaveTextContent("Host 未上报资源判定，尚未计算：未判定的资源不能当作可清理。");
+  expect(region).not.toHaveTextContent("可清理（Host 已验证身份）");
+});
+
 const preview = {
   items: [
     { id: "sessions", resource: "会话记录", disposition: "remove", detail: "Host 将删除 3 个会话" },

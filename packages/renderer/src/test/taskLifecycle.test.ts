@@ -12,6 +12,7 @@ import {
   cleanupSelectionLabels,
   lifecycleSummary,
   resourceIdentityLabel,
+  resourceVerdictConclusion,
 } from "../data/taskLifecycle";
 import type { CleanupItem, TaskLifecycleState } from "../data/types";
 
@@ -92,5 +93,14 @@ describe("lifecycle summary", () => {
     expect(resourceIdentityLabel({ running: true, ok: null })).toBe("无进程身份记录");
     expect(resourceIdentityLabel({ running: true, ok: true })).toBe("身份已验证");
     expect(resourceIdentityLabel({ running: true, ok: false, reason: "端口不是进程身份" })).toBe("未验证：端口不是进程身份");
+  });
+
+  it("turns a Host resource verdict into a cleanup conclusion and keeps a missing verdict undecided", () => {
+    expect(resourceVerdictConclusion({ ok: true })).toBe("可清理（Host 已验证身份）");
+    expect(resourceVerdictConclusion({ ok: false, reason: "工作副本 /task/a 不存在，不能凭记录直接认领" })).toBe(
+      "不可清理：工作副本 /task/a 不存在，不能凭记录直接认领",
+    );
+    expect(resourceVerdictConclusion({ ok: false })).toBe("不可清理：Host 未上报原因");
+    expect(resourceVerdictConclusion({ ok: null })).toBe("尚未判定：Host 未上报身份判定");
   });
 });
