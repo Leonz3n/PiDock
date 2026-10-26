@@ -97,6 +97,19 @@ export function resourceIdentityLabel(input: { running?: boolean; ok?: boolean |
   return input.ok ? "身份已验证" : `未验证：${input.reason ?? "身份不符"}`;
 }
 
+/**
+ * Cleanup conclusion of one Host resource verdict. The Host decides whether a
+ * resource can be acted on and carries the named reason, so this only reads the
+ * verdict back; a resource the Host did not judge stays `尚未判定` and is never
+ * shown as safe to clean.
+ */
+export function resourceVerdictConclusion(input: { ok: boolean | null; reason?: string }): string {
+  if (input.ok === null) return "尚未判定：Host 未上报身份判定";
+  if (input.ok) return "可清理（Host 已验证身份）";
+  const reason = input.reason?.trim() ?? "";
+  return `不可清理：${reason.length > 0 ? reason : "Host 未上报原因"}`;
+}
+
 /** Recovery entries the archive page shows after a partial cleanup. */
 export function cleanupRecoveryLines(recovery: readonly { item: string; reason: string }[]): string[] {
   return recovery.map((entry) => `${entry.item}：${entry.reason}`);
