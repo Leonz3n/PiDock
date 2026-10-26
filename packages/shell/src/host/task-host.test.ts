@@ -1764,3 +1764,55 @@ describe("[PiDock 12] Host usage ledger", () => {
     expect(taskHost.usageReport().details).toHaveLength(0);
   });
 });
+
+describe("[PiDock 14] (#17) cleanup usage goes through the recorded clearUsage scope", () => {
+  it("keeps the removed usage details gone when the session step failed and a later sync runs", () => {
+    const store = memoryTaskStore();
+    // The session step fails on purpose: the session (and its `call-1` record)
+    // stays in the store while the cleanup still removes the usage details.
+    const storeWithFailingDelete = {
+      ...store,
+      deleteSession: (): void => {
+        throw new Error("delete-failed: 会话快照被占用");
+      },
+    };
+    const keepRoot = mkdtempSync(join(tmpdir(), "pidock-cleanup-keep-"));
+    try {
+      const taskHost = new TaskWorkspaceHost(TASK_ID, TASK_DIR, storeWithFailingDelete, () => "2026-09-22T10:00:00+08:00");
+      taskHost.provision(provisionInput());
+      taskHost.sendMessage("main", "检查构建", { usageSource: "actual", usage: { input: 100, output: 40, cacheRead: 0, cacheWrite: 0 } });
+      expect(taskHost.usageReport().details.map((detail) => detail.id)).toEqual(["call-1"]);
+
+      const owner = new TaskLifecycleHost(
+        TASK_ID,
+        TASK_DIR,
+        storeWithFailingDelete,
+        createLifecycleResources({ host: taskHost, services: () => null, terminals: () => null, sessionIds: () => taskHost.sessionIds(), liveProcesses: () => [] }),
+        () => "2026-09-22T12:00:00+08:00",
+        keepRoot,
+      );
+      owner.archive();
+      const result = owner.runCleanup({ selection: { exportSessions: false, exportDrafts: false, exportUsage: false }, keepRoot });
+
+      // The failed step is named with its own reason, and a partial cleanup
+      // never claims the project was released.
+      expect(result.recovery).toEqual([{ item: "sessions", reason: "delete-failed: 会话快照被占用" }]);
+      expect(result.receipt).toMatchObject({ partialFailure: true });
+      expect(result.record.projectReleased).toBe(false);
+      // The failed session step does not skip the usage removal.
+      expect(result.receipt?.removed).toEqual(["usage"]);
+
+      // The session still holds `call-1`, so a sync re-derives it; the recorded
+      // cleanup keys are what keep the removed detail gone instead of reviving.
+      expect(taskHost.usageReport().details).toEqual([]);
+      expect(taskHost.usageReport().details).toEqual([]);
+
+      // A call made after the cleanup has a new key and is recorded normally:
+      // the cleanup is a one-shot removal, not a permanent filter.
+      taskHost.sendMessage("main", "再检查", { usageSource: "actual", usage: { input: 5, output: 1, cacheRead: 0, cacheWrite: 0 } });
+      expect(taskHost.usageReport().details.map((detail) => detail.id)).toEqual(["call-2"]);
+    } finally {
+      rmSync(keepRoot, { recursive: true, force: true });
+    }
+  });
+});
