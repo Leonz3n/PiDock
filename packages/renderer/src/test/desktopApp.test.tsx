@@ -381,7 +381,11 @@ describe("Desktop production data", () => {
     await openManagement();
     fireEvent.click(screen.getByRole("button", { name: /^未归属任务/ }));
     // The sidebar lists the real task as well (prototype A), so both surfaces are checked.
-    expect(await screen.findAllByText("真实任务")).toHaveLength(2);
+    // `findAllByText` resolves as soon as ONE match exists, so asserting the count
+    // on its result raced the second surface (sidebar + unassigned list): under a
+    // concurrent full gate it read 1 instead of 2. Waiting for the full count keeps
+    // the same exact expectation and only retries until both surfaces are rendered.
+    await waitFor(() => expect(screen.getAllByText("真实任务")).toHaveLength(2));
     expect(screen.getByRole("heading", { name: "未归属任务" })).toBeInTheDocument();
     expect(screen.queryByText("/private/work/web")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "真实项目" }));
