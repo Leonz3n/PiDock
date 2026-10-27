@@ -29,8 +29,11 @@ const roots = [{ label: "默认任务根", state: "ready" }];
 const association = { taskId: TASK_ID, projectId: null, state: "unassigned" };
 const emptySnapshot = { source: "sdk-jsonl", sessionId: "main", messages: [], pending: false, interrupted: false };
 
-/** Every op this suite may see: reads only, all of them #15's own file reads. */
-const READ_ONLY_OPS = ["task/fileRoots", "task/fileTree", "task/filePreview", "task/fileDiff", "task/deliveryInfo", "task/sessionContext"];
+/**
+ * Every op this suite may see: reads only — #15's own file reads, the composer's
+ * `task/sessionContext` readout and the #24 execution-status read.
+ */
+const READ_ONLY_OPS = ["task/fileRoots", "task/fileTree", "task/filePreview", "task/fileDiff", "task/deliveryInfo", "task/sessionContext", "task/executionState"];
 /** The write ops a reference must never cause (box 4 of this slice). */
 const WRITE_OPS = ["task/runTaskService", "task/serviceStopScope", "task/controlService", "task/quit", "task/archive", "task/restore", "task/sendMessage", "task/registerService"];
 

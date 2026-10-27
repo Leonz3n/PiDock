@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Icon } from "./Icon";
 import { loadDesktopProjects, type DesktopProjects } from "../data/desktopProjects";
 import { Badge } from "./ui/badge";
@@ -7,7 +7,9 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/t
 import { PROVIDER_STATE_TEXT, parseProviderStatus, providerCall, type ProviderStatus } from "../data/providerProfile";
 import { SDK_SESSION_ID, parseSdkSnapshot, type SdkMessage } from "../data/sdkSession";
 import { readSdkDraft, saveSdkDraft } from "../data/sdkDraft";
-import { setTaskArchivedThroughShell } from "../data/shellBridge";
+import { executionStateThroughShell, setTaskArchivedThroughShell } from "../data/shellBridge";
+import { executionStateFromHost, runRecordFromExecutionState, runStateOfExecution, type SessionExecutionView } from "../data/executionLedger";
+import { executionLabel, executionStepLabel } from "../pages/executionView";
 import { describeContextDisplay, REASONING_LABELS, REASONING_LEVELS } from "../data/providerState";
 import { readSessionContext, writeSessionThinking, type SessionContextView } from "../data/sessionContext";
 import { parseLifecycle } from "./DesktopArchivePage";
@@ -105,6 +107,75 @@ export function DesktopConversation(props: ConversationProps) {
   return <TaskConversation key={props.taskId} {...props} />;
 }
 
+/**
+ * #24 the desktop task page's execution-status read. This route has no live
+ * store and no approvals list, so `task/executionState` is its only source: an
+ * outstanding read, a refused read and a readout the Host left empty are each a
+ * named state, and none of them is rendered as a state nobody reported.
+ */
+type ExecutionRead =
+  | { phase: "reading" }
+  | { phase: "failed"; error: string }
+  | { phase: "read"; view: SessionExecutionView };
+
+/** The Host's answer as text, so a refusal can be quoted instead of paraphrased. */
+function hostAnswerText(value: unknown): string {
+  try {
+    const text = JSON.stringify(value);
+    return text === undefined ? String(value) : text.length > 240 ? `${text.slice(0, 240)}…` : text;
+  } catch { return String(value); }
+}
+
+function ExecutionCardSection({ children }: { children: ReactNode }) {
+  return (
+    <section data-testid="desktop-execution-card" aria-label="会话执行状态" className="shrink-0 border-b border-line bg-soft px-4 py-1.5 below-mid:px-3">
+      {children}
+    </section>
+  );
+}
+
+/**
+ * #24 会话执行状态 card on the desktop task workspace. It repeats the existing
+ * view model instead of re-deriving it: `runStateOfExecution`/`executionLabel`
+ * (the web card's own label table) and `runRecordFromExecutionState` (the same
+ * record shape `TaskPage` renders). The stop entry is NOT duplicated here — the
+ * composer's 停止 button stays the single one.
+ */
+function ExecutionStateCard({ taskId, sessionId: session, read }: { taskId: string; sessionId: string; read: ExecutionRead }) {
+  if (read.phase === "reading") {
+    return <ExecutionCardSection><p role="status" className="text-[11px] text-muted">正在读取 Host 执行状态…</p></ExecutionCardSection>;
+  }
+  if (read.phase === "failed") {
+    return <ExecutionCardSection>
+      <p role="status" data-testid="desktop-execution-error" className="break-words border-l-2 border-[#dfc99f] pl-2 text-[11px] text-[#9a6032]">
+        执行状态读取失败：{read.error || "Host 未说明原因"}。本页不显示未读到的状态；请核验后重试。
+      </p>
+    </ExecutionCardSection>;
+  }
+  const record = runRecordFromExecutionState(taskId, session, read.view);
+  const state = runStateOfExecution(read.view.session) ?? record?.state;
+  if (state === undefined) {
+    return <ExecutionCardSection>
+      <p role="status" data-testid="desktop-execution-unreported" className="break-words text-[11px] text-muted">
+        Host 未上报执行状态：本页不推断未上报的状态；有执行记录时以 Host 执行账本为准。
+      </p>
+    </ExecutionCardSection>;
+  }
+  return <ExecutionCardSection>
+    <strong data-testid="desktop-execution-state" className="text-xs font-semibold text-ink">执行状态 · {executionLabel(state)}</strong>
+    {record?.summary ? <p data-testid="desktop-execution-summary" className="mt-0.5 break-words text-[11px] text-muted">{record.summary}</p> : null}
+    {record && record.steps.length > 0 ? <details data-testid="desktop-execution-steps" className="mt-1 text-[11px] text-muted">
+      <summary className="cursor-pointer">执行步骤（完成 {record.steps.filter((step) => step.state === "done").length} / 共 {record.steps.length}）</summary>
+      <ol className="mt-1 flex flex-wrap gap-1.5">
+        {record.steps.map((step) => <li key={step.label} className="rounded border border-line bg-paper px-1.5 py-0.5">
+          <span className={step.state === "failed" ? "text-[#9a6032]" : step.state === "skipped" ? "text-muted/70" : "text-ink"}>{step.label}</span>
+          <span className="ml-1 text-muted">{executionStepLabel(step.state)}</span>
+        </li>)}
+      </ol>
+    </details> : null}
+  </ExecutionCardSection>;
+}
+
 function TaskConversation({ taskId, name, branch, repoCount, roots, association, onBack, onOpenProviders, onArchived, onSourcesChanged }: ConversationProps) {
   const bridge = window.pidock;
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
@@ -184,10 +255,12 @@ function TaskConversation({ taskId, name, branch, repoCount, roots, association,
   const [provider, setProvider] = useState<ProviderStatus | null>(null);
   const [unwired, setUnwired] = useState<string | null>(null);
   const [contextRead, setContextRead] = useState<ContextRead>({ phase: "reading" });
+  const [executionRead, setExecutionRead] = useState<ExecutionRead>({ phase: "reading" });
   const [thinkingOpen, setThinkingOpen] = useState(false);
   const [thinkingError, setThinkingError] = useState<string | null>(null);
   const [thinkingBusy, setThinkingBusy] = useState(false);
   const contextAttempt = useRef(0);
+  const executionReadAttempt = useRef(0);
   const [taskMenu, setTaskMenu] = useState(false);
   const [archivePrompt, setArchivePrompt] = useState(false);
   const [sourcesOpen, setSourcesOpen] = useState(false);
@@ -457,6 +530,27 @@ function TaskConversation({ taskId, name, branch, repoCount, roots, association,
     })();
     return () => { live = false; };
   }, [taskId]);
+  // #24 the execution-status read. `task/executionState` is a read only — no
+  // write right, no session and no approval — and the page owns no timer for it:
+  // it is re-read once per attempt phase this page already observes
+  // (`starting` → `accepted` → `terminal`), which is the existing SDK-event path.
+  // A late answer from a replaced read is dropped by the attempt counter, and the
+  // cleanup invalidates the in-flight read on unmount or phase change.
+  const attemptPhase = attempt?.phase;
+  useEffect(() => {
+    const attempt = ++executionReadAttempt.current;
+    void executionStateThroughShell({ taskId, sessionId }).then((result) => {
+      if (executionReadAttempt.current !== attempt) return;
+      if (!result.ok) { setExecutionRead({ phase: "failed", error: result.error ?? "" }); return; }
+      const view = executionStateFromHost(result.payload);
+      if (view === null) {
+        setExecutionRead({ phase: "failed", error: `Host 返回的执行状态无法解析：${hostAnswerText(result.payload)}` });
+        return;
+      }
+      setExecutionRead({ phase: "read", view });
+    });
+    return () => { executionReadAttempt.current += 1; };
+  }, [taskId, attemptPhase]);
   const selectedProfile = provider?.state === "configured" ? provider.profiles.find((entry) => entry.id === provider.profileId) : undefined;
   const modelLabel = selectedProfile
     // The profile's OWN name and model identity: a blank one is named here, so a
@@ -621,6 +715,7 @@ function TaskConversation({ taskId, name, branch, repoCount, roots, association,
         <span className="pb-2 pl-1 text-[11px] text-muted">仅 main 会话</span>
       </div>
     </div>
+    <ExecutionStateCard taskId={taskId} sessionId={sessionId} read={executionRead} />
     {archivePrompt && <div className="fixed inset-0 z-50 grid place-items-center bg-black/30 p-4">
       <div role="dialog" aria-modal="true" aria-label="归档当前任务" className="w-full max-w-[440px] rounded-[7px] border border-line bg-paper p-5 shadow-lg">
         <h2 className="text-base font-semibold">归档当前任务</h2>

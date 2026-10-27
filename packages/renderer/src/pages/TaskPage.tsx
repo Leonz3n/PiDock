@@ -59,6 +59,7 @@ import {
   executionCardVisible,
   executionLabel,
   executionStateOf,
+  executionStepLabel,
   otherBusySession,
   outcomeApprovalFor,
   pendingApprovalsFor,
@@ -1268,7 +1269,7 @@ function RunStateCard({ taskId, sessionId }: { taskId: string; sessionId: string
                 >
                   {step.label}
                 </span>
-                <span className="ml-1 text-muted">{stepStateLabel(step.state)}</span>
+                <span className="ml-1 text-muted">{executionStepLabel(step.state)}</span>
               </li>
             ))}
           </ol>
@@ -1276,10 +1277,6 @@ function RunStateCard({ taskId, sessionId }: { taskId: string; sessionId: string
       ) : null}
     </section>
   );
-}
-
-function stepStateLabel(state: "done" | "failed" | "pending" | "skipped") {
-  return { done: "完成", failed: "失败", pending: "等待", skipped: "跳过" }[state];
 }
 
 /**
@@ -1555,7 +1552,7 @@ function ToolResultCard({ taskId, sessionId }: { taskId: string; sessionId: stri
                   className={`h-1.5 w-1.5 shrink-0 rounded-full ${step.live ? "bg-accent ring-[3px] ring-accent/15" : "bg-muted/70"}`}
                 />
                 <span className={step.state === "failed" ? "text-orange" : undefined}>{step.label}</span>
-                <span className="ml-auto text-muted">{stepStateLabel(step.state)}</span>
+                <span className="ml-auto text-muted">{executionStepLabel(step.state)}</span>
               </div>
             ))}
           </div>

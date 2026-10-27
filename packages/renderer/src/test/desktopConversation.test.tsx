@@ -781,9 +781,11 @@ describe("Desktop SDK conversation", () => {
     fireEvent.click(screen.getByRole("button", { name: "任务操作" }));
     fireEvent.click(screen.getByRole("button", { name: "归档当前任务" }));
     expect(screen.getByRole("dialog", { name: "归档当前任务" })).toBeInTheDocument();
-    // The composer's own 推理/上下文 read (`task/sessionContext`) is not the dialog:
-    // confirming is what may write, so every other op is still untouched here.
-    expect(taskOp.mock.calls.filter(([, op]) => op !== "task/sessionContext").map(([, op]) => op)).toEqual([]);
+    // The composer's own 推理/上下文 read (`task/sessionContext`) and the #24
+    // execution-status read (`task/executionState`, read only) are not the dialog:
+    // confirming is what may write, so no other op — and no write op at all — has
+    // left the page here. The exact call set is pinned so a new op cannot slip in.
+    expect(taskOp.mock.calls.map(([, op]) => op).sort()).toEqual(["task/executionState", "task/sessionContext"]);
     fireEvent.click(screen.getByRole("button", { name: "确认归档" }));
     await waitFor(() => expect(onArchived).toHaveBeenCalledOnce());
     expect(taskOp).toHaveBeenCalledWith("task-a", "task/archive", {});
@@ -803,7 +805,9 @@ describe("Desktop SDK conversation", () => {
     fireEvent.click(screen.getByRole("button", { name: "归档当前任务" }));
     expect(screen.getByRole("button", { name: "确认归档" })).toBeDisabled();
     expect(screen.getByText(/会话尚未连接、正在执行或请求状态未核验/)).toBeInTheDocument();
-    expect(ops.filter((op) => op !== "task/sessionContext")).toEqual([]);
+    // The two status reads (推理/上下文 and #24 执行状态) still issue nothing else:
+    // the turn runs on the SDK channel, and no archive/cleanup op left the page.
+    expect(ops.filter((op) => op !== "task/sessionContext" && op !== "task/executionState")).toEqual([]);
   });
 
   it("freezes after a refused Host archive write and offers a status check", async () => {
