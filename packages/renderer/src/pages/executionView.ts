@@ -38,6 +38,11 @@ export function executionLabel(state: RunState): string {
   return runStateLabel(state);
 }
 
+/** 执行步骤状态（`RunRecord.steps` 里 Host 记录的值）的中文标签。 */
+export function executionStepLabel(state: RunRecord["steps"][number]["state"]): string {
+  return { done: "完成", failed: "失败", pending: "等待", skipped: "跳过" }[state];
+}
+
 /** 本会话的待确认请求（同一会话可能同时有多条）。 */
 export function pendingApprovalsFor(
   approvals: readonly Approval[],
