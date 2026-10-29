@@ -360,9 +360,10 @@ describe("Desktop production data", () => {
     // of showing a selectable environment it never read.
     expect(screen.getByRole("option", { name: "尚未选择环境" })).toBeInTheDocument();
     expect(screen.getByLabelText("环境")).toBeDisabled();
-    fireEvent.click(screen.getByRole("button", { name: "远程访问" }));
-    expect(await screen.findByTestId("desktop-remote-page")).toBeInTheDocument();
-    expect(screen.getByText("没有已核验的活动任务；未读取远程状态。")).toBeInTheDocument();
+    // [#126 需求变更] 远程访问移出首版：正式桌面不再有入口、不再路由到远程页。
+    // Host 侧实现与演示页保留为未来功能的基础，但这条路径上不可达。
+    expect(within(screen.getByTestId("desktop-sidebar")).queryByRole("button", { name: "远程访问" })).toBeNull();
+    expect(screen.queryByTestId("desktop-remote-page")).toBeNull();
     expect(taskOp).not.toHaveBeenCalled();
   });
 

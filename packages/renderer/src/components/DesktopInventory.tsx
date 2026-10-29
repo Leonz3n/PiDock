@@ -12,7 +12,6 @@ import { DesktopSchedulesPage } from "./DesktopSchedulesPage";
 import { DesktopArchivePage, parseLifecycle } from "./DesktopArchivePage";
 import { DesktopAttentionPage } from "./DesktopAttentionPage";
 import { DesktopEnvironmentPage } from "./DesktopEnvironmentPage";
-import { DesktopRemotePage } from "./DesktopRemotePage";
 import { DesktopCapabilitiesPage } from "./DesktopCapabilitiesPage";
 import { DesktopSettingsPage } from "./DesktopSettingsPage";
 import { lifecycleStateThroughShell } from "../data/shellBridge";
@@ -106,7 +105,6 @@ export function DesktopInventory() {
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [attentionOpen, setAttentionOpen] = useState(false);
   const [environmentOpen, setEnvironmentOpen] = useState(false);
-  const [remoteOpen, setRemoteOpen] = useState(false);
   const [lifecycleIndex, setLifecycleIndex] = useState<{ data: DesktopProjects; activeIds: Set<string>; errors: string[] } | null>(null);
   // Prototype A opens on the first project. An explicit pick (shell nav or the
   // management list) wins and is never overridden by a later reread.
@@ -308,8 +306,6 @@ export function DesktopInventory() {
       ? { view: "attention" }
     : environmentOpen
       ? { view: "env" }
-    : remoteOpen
-      ? { view: "remote" }
     : usageOpen
       ? { view: "usage" }
     : activeTask
@@ -331,7 +327,6 @@ export function DesktopInventory() {
       setArchiveOpen(false);
       setAttentionOpen(false);
       setEnvironmentOpen(false);
-      setRemoteOpen(false);
       setUsageTaskId(null);
       setProviders(false);
       void openTask(next.taskId);
@@ -344,11 +339,10 @@ export function DesktopInventory() {
     setArchiveOpen(next.view === "archive");
     setAttentionOpen(next.view === "attention");
     setEnvironmentOpen(next.view === "env");
-    setRemoteOpen(next.view === "remote");
     if (next.view === "providers") return;
     if (next.view === "project" || next.view === "unassigned") setManage(false);
     if (next.view === "usage") { setUsageTaskId(activeTask?.id ?? (shellTasks[0]?.taskId ?? null)); return; }
-    if (next.view === "schedules" || next.view === "archive" || next.view === "attention" || next.view === "env" || next.view === "remote") { setActiveTask(null); setLocalPage(null); return; }
+    if (next.view === "schedules" || next.view === "archive" || next.view === "attention" || next.view === "env") { setActiveTask(null); setLocalPage(null); return; }
     // Any other page leaves the usage view.
     setUsageTaskId(null);
     setActiveTask(null);
@@ -365,9 +359,7 @@ export function DesktopInventory() {
   // Host that reported nothing) stays `undefined`/`null` — the header names that
   // instead of inventing a branch or a repository count.
   const activeTaskSummary = activeTask ? shellTasks.find((task) => task.taskId === activeTask.id) : undefined;
-  const breadcrumb = remoteOpen
-    ? { project: "所有项目", page: "远程访问" }
-    : environmentOpen
+  const breadcrumb = environmentOpen
     ? { ...(environmentProject ? { project: environmentProject.name } : { project: "尚无项目" }), page: "环境与服务" }
     : attentionOpen
     ? { project: "所有项目", page: "需要处理" }
@@ -400,7 +392,6 @@ export function DesktopInventory() {
     rootRetry={{ busy, pending: rootRetryPending, error: rootRetryError, run: () => void retryRoots() }}
     breadcrumb={breadcrumb}
   >{children}</DesktopShell>;
-  if (remoteOpen) return shell(<DesktopRemotePage tasks={activeTasks} lifecyclePending={!lifecycleReady} lifecycleErrors={lifecycleIndex?.errors ?? []} />);
   if (environmentOpen) return shell(<DesktopEnvironmentPage projects={shellProjects} projectId={environmentProject?.id ?? null} taskCount={environmentProject ? shellTasks.filter((task) => task.projectId === environmentProject.id).length : 0} tasks={environmentProject ? activeTasks.filter((task) => task.projectId === environmentProject.id) : []} tasksPending={!lifecycleReady} onSelectProject={(id) => { pinned.current = true; setSelection({ kind: "project", id }); }} />);
   if (attentionOpen) return shell(<DesktopAttentionPage tasks={activeTasks} projects={shellProjects} lifecyclePending={!lifecycleReady} lifecycleErrors={lifecycleIndex?.errors ?? []} onOpenTask={(taskId) => navigate({ view: "task", taskId })} />);
   if (archiveOpen) return shell(<DesktopArchivePage tasks={shellTasks} onRestored={() => { void load(); }} />);
