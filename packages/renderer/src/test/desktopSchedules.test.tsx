@@ -3,7 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { DesktopSchedulesPage } from "../components/DesktopSchedulesPage";
 
 const tasks = [{ taskId: "a", name: "任务 A" }, { taskId: "b", name: "任务 B" }];
-const schedule = (taskId: string, enabled: boolean) => ({ scheduleId: `schedule-${taskId}`, taskId, name: `计划 ${taskId}`, ruleText: "0 9 * * *", timezone: "Asia/Shanghai", providerId: "provider-x", model: "model-x", prompt: "整理报告", enabled });
+const schedule = (taskId: string, enabled: boolean) => ({ scheduleId: `schedule-${taskId}`, taskId, name: `计划 ${taskId}`, ruleText: "0 9 * * *", timezone: "Asia/Shanghai", providerId: "provider-x", model: "model-x", prompt: "整理报告", permission: "default", enabled });
 const run = (taskId: string) => ({ runId: `run-${taskId}`, scheduleId: `schedule-${taskId}`, taskId, startedAt: "2026-09-29T09:00:00Z", result: "completed" });
 const bridge = (handler: (taskId: string, op: string, payload: Record<string, unknown>) => unknown) => {
   const taskOp = vi.fn(async (taskId: string, op: string, payload: Record<string, unknown>) => handler(taskId, op, payload));
@@ -11,6 +11,20 @@ const bridge = (handler: (taskId: string, op: string, payload: Record<string, un
   return taskOp;
 };
 afterEach(() => { cleanup(); delete window.pidock; });
+
+const profile = (id: string, name: string, modelId: string) => ({ id, name, baseUrl: "https://127.0.0.1:8443", modelId, contextWindow: 128000, maxTokens: 8192, authRef: "PIDOCK_PROVIDER_TEST", generation: 1, credentialAvailable: true });
+const providerStatus = (profiles: unknown[]) => ({ state: "configured", profileId: null, generation: null, profiles });
+/** `shell/providerOp` is a separate bridge: the editor reads the task's real profiles through it. */
+const withProviders = (payload: unknown) => {
+  const providerOp = vi.fn(async () => ({ ok: true, payload }));
+  window.pidock = { ...window.pidock, providerOp } as never;
+  return providerOp;
+};
+const withProviderFailure = (error: string) => {
+  const providerOp = vi.fn(async () => ({ ok: false, error }));
+  window.pidock = { ...window.pidock, providerOp } as never;
+  return providerOp;
+};
 
 it("lists Host schedules and runs across tasks with working filters and task navigation", async () => {
   const taskOp = bridge((taskId, op) => ({ ok: true, payload: { workspaceId: "local", taskId, op, payload: op === "task/scheduleList"
@@ -156,4 +170,125 @@ it("shows the Host refusal when 立即运行 is refused and never claims a run",
   expect(screen.getByText("暂无执行记录。")).toBeInTheDocument();
   // Nothing was minted, so there is nothing new to read.
   expect(taskOp.mock.calls.filter(([, op]) => op === "task/scheduleRuns")).toHaveLength(1);
+});
+
+it("opens the editor with the Host's own rule text and previews the edit through the Host", async () => {
+  const taskOp = bridge((taskId, op, payload) => {
+    if (op === "task/schedulePreview") {
+      expect(payload).toEqual({ ruleText: "每日 09:15", timezone: "Asia/Shanghai" });
+      return { ok: true, payload: { preview: { ok: true, description: "每天 09:15", nextTriggerAt: "2026-10-28T01:15:00.000Z" } } };
+    }
+    return { ok: true, payload: op === "task/scheduleList" ? { schedules: [schedule(taskId, true)] } : { runs: [] } };
+  });
+  withProviders(providerStatus([profile("p-00000000-0000-0000-0000-000000000001", "主 Provider", "model-a")]));
+  render(<DesktopSchedulesPage tasks={[tasks[0]!]} onOpenTask={() => {}} />);
+  await waitFor(() => expect(document.querySelector('[data-schedule-row="schedule-a"]')).not.toBeNull());
+  fireEvent.click(screen.getByRole("button", { name: "编辑 计划 a" }));
+  const dialog = await screen.findByRole("dialog", { name: "编辑定时任务" });
+  const rule = within(dialog).getByLabelText("规则") as HTMLInputElement;
+  // The editor starts from the stored text, not from a re-derived rule: the Host
+  // owns the rule language, and a round trip through a renderer parser would
+  // rewrite text the Host still accepts.
+  expect(rule.value).toBe("0 9 * * *");
+  fireEvent.change(rule, { target: { value: "每日 09:15" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "校验并预览" }));
+  expect(await within(dialog).findByText("每天 09:15")).toBeInTheDocument();
+  expect(within(dialog).getByText("下次触发 2026-10-28T01:15:00.000Z")).toBeInTheDocument();
+  expect(taskOp).toHaveBeenCalledWith("a", "task/schedulePreview", { ruleText: "每日 09:15", timezone: "Asia/Shanghai" });
+});
+
+it("quotes the Host's rule refusal inside the editor", async () => {
+  bridge((taskId, op) => op === "task/schedulePreview"
+    ? { ok: true, payload: { preview: { ok: false, code: "rule-unrecognized", message: "无法识别的规则：每天九点" } } }
+    : { ok: true, payload: op === "task/scheduleList" ? { schedules: [schedule(taskId, true)] } : { runs: [] } });
+  withProviders(providerStatus([]));
+  render(<DesktopSchedulesPage tasks={[tasks[0]!]} onOpenTask={() => {}} />);
+  await waitFor(() => expect(document.querySelector('[data-schedule-row="schedule-a"]')).not.toBeNull());
+  fireEvent.click(screen.getByRole("button", { name: "编辑 计划 a" }));
+  const dialog = await screen.findByRole("dialog", { name: "编辑定时任务" });
+  fireEvent.change(within(dialog).getByLabelText("规则"), { target: { value: "每天九点" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "校验并预览" }));
+  expect(await within(dialog).findByRole("alert")).toHaveTextContent("无法识别的规则：每天九点");
+  expect(within(dialog).queryByText(/下次触发/)).toBeNull();
+});
+
+it("saves exactly the edited config and closes only after the Host accepts", async () => {
+  let name = "计划 a";
+  const taskOp = bridge((taskId, op, payload) => {
+    if (op === "task/scheduleSave") {
+      expect(payload).toEqual({ scheduleId: "schedule-a", name: "每日站会", ruleText: "每日 09:15", timezone: "Asia/Shanghai", prompt: "整理报告", providerId: "provider-x", model: "model-x", permission: "default" });
+      name = "每日站会";
+      return { ok: true, payload: { schedule: { ...schedule(taskId, true), name } } };
+    }
+    return { ok: true, payload: op === "task/scheduleList" ? { schedules: [{ ...schedule(taskId, true), name }] } : { runs: [] } };
+  });
+  withProviders(providerStatus([]));
+  render(<DesktopSchedulesPage tasks={[tasks[0]!]} onOpenTask={() => {}} />);
+  await waitFor(() => expect(document.querySelector('[data-schedule-row="schedule-a"]')).not.toBeNull());
+  fireEvent.click(screen.getByRole("button", { name: "编辑 计划 a" }));
+  const dialog = await screen.findByRole("dialog", { name: "编辑定时任务" });
+  fireEvent.change(within(dialog).getByLabelText("规则"), { target: { value: "每日 09:15" } });
+  fireEvent.change(within(dialog).getByLabelText("名称"), { target: { value: "每日站会" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "编辑定时任务" })).toBeNull());
+  // The row shows the Host's next list answer, not the text that was typed.
+  await waitFor(() => expect(screen.getByText("每日站会")).toBeInTheDocument());
+  expect(taskOp.mock.calls.filter(([, op]) => op === "task/scheduleList")).toHaveLength(2);
+  expect(taskOp.mock.calls.filter(([, op]) => op === "task/scheduleSave")).toHaveLength(1);
+});
+
+it("keeps the editor open and quotes the Host when the save is refused", async () => {
+  const taskOp = bridge((taskId, op) => op === "task/scheduleSave"
+    ? { ok: false, error: "provider-missing: Provider 配置 provider-x 已不存在" }
+    : { ok: true, payload: op === "task/scheduleList" ? { schedules: [schedule(taskId, true)] } : { runs: [] } });
+  withProviders(providerStatus([]));
+  render(<DesktopSchedulesPage tasks={[tasks[0]!]} onOpenTask={() => {}} />);
+  await waitFor(() => expect(document.querySelector('[data-schedule-row="schedule-a"]')).not.toBeNull());
+  fireEvent.click(screen.getByRole("button", { name: "编辑 计划 a" }));
+  const dialog = await screen.findByRole("dialog", { name: "编辑定时任务" });
+  fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+  expect(await within(dialog).findByRole("alert")).toHaveTextContent("provider-missing: Provider 配置 provider-x 已不存在");
+  expect(screen.getByRole("dialog", { name: "编辑定时任务" })).toBeInTheDocument();
+  // A refusal is not a new list answer: the rows are not re-read.
+  expect(taskOp.mock.calls.filter(([, op]) => op === "task/scheduleList")).toHaveLength(1);
+});
+
+it("offers the task's real Provider profiles and keeps a Provider the list does not name", async () => {
+  bridge((taskId, op, payload) => {
+    if (op === "task/scheduleSave") {
+      expect(payload).toMatchObject({ providerId: "p-00000000-0000-0000-0000-000000000001", model: "model-a" });
+      return { ok: true, payload: { schedule: schedule(taskId, true) } };
+    }
+    return { ok: true, payload: op === "task/scheduleList" ? { schedules: [schedule(taskId, true)] } : { runs: [] } };
+  });
+  withProviders(providerStatus([profile("p-00000000-0000-0000-0000-000000000001", "主 Provider", "model-a")]));
+  render(<DesktopSchedulesPage tasks={[tasks[0]!]} onOpenTask={() => {}} />);
+  await waitFor(() => expect(document.querySelector('[data-schedule-row="schedule-a"]')).not.toBeNull());
+  fireEvent.click(screen.getByRole("button", { name: "编辑 计划 a" }));
+  const dialog = await screen.findByRole("dialog", { name: "编辑定时任务" });
+  const model = within(dialog).getByLabelText("Provider / 模型") as HTMLSelectElement;
+  await waitFor(() => expect(within(model).getByRole("option", { name: "主 Provider / model-a" })).toBeInTheDocument());
+  // The stored identity is not silently replaced by the first listed profile.
+  expect(within(model).getByRole("option", { name: "provider-x / model-x（不在当前 Provider 列表）" })).toBeInTheDocument();
+  expect(model.value).toBe("provider-x\u0000model-x");
+  fireEvent.change(model, { target: { value: "p-00000000-0000-0000-0000-000000000001\u0000model-a" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "编辑定时任务" })).toBeNull());
+});
+
+it("keeps the stored Provider selectable when the Provider list cannot be read", async () => {
+  const taskOp = bridge((taskId, op) => ({ ok: true, payload: op === "task/scheduleList" ? { schedules: [schedule(taskId, true)] } : { runs: [] } }));
+  withProviderFailure("Provider 配置不可用");
+  render(<DesktopSchedulesPage tasks={[tasks[0]!]} onOpenTask={() => {}} />);
+  await waitFor(() => expect(document.querySelector('[data-schedule-row="schedule-a"]')).not.toBeNull());
+  fireEvent.click(screen.getByRole("button", { name: "编辑 计划 a" }));
+  const dialog = await screen.findByRole("dialog", { name: "编辑定时任务" });
+  expect(await within(dialog).findByRole("alert")).toHaveTextContent("Provider 列表读取失败：Provider 配置不可用");
+  const model = within(dialog).getByLabelText("Provider / 模型") as HTMLSelectElement;
+  expect(within(model).getAllByRole("option")).toHaveLength(1);
+  expect(model.value).toBe("provider-x\u0000model-x");
+  fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+  // The stored identity stays the one that is saved: an unreadable list never
+  // turns into a silent switch to another Provider.
+  await waitFor(() => expect(taskOp).toHaveBeenCalledWith("a", "task/scheduleSave", expect.objectContaining({ providerId: "provider-x", model: "model-x" })));
 });
