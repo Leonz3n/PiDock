@@ -2568,6 +2568,11 @@ export function registerIpc(
       if (op === "task/planTerminal" || op.startsWith("task/terminal")) {
         throw new TrustDomainViolation("invalid-payload", "内置终端已从桌面应用移除（#95）");
       }
+      // #126: 远程访问移出首版（未来计划功能）。Host 侧实现与演示页保留，但
+      // 正式桌面通道关闭：旧渲染层或旧脚本不能借遗留 op 读远程状态、配对或授权设备。
+      if (op.startsWith("task/remote")) {
+        throw new TrustDomainViolation("invalid-payload", "远程访问已移出首版（未来计划功能，#126）");
+      }
       // [PiDock 03] (#6) legacy-route refusal: `shell/taskOp` used to accept
       // `task/appendRepos` from page code, letting the renderer supply the
       // `fetchedCommits` baseline the Host then persisted — with NO executor
