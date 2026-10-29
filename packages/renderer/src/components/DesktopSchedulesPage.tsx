@@ -52,6 +52,8 @@ export function DesktopSchedulesPage({ tasks, onOpenTask }: { tasks: readonly Ta
   const [result, setResult] = useState<Result | null>(null);
   const [filter, setFilter] = useState<"all" | "active" | "paused">("all");
   const [revision, setRevision] = useState(0);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [actionError, setActionError] = useState("");
   useEffect(() => {
     let live = true;
     setResult(null);
@@ -62,12 +64,34 @@ export function DesktopSchedulesPage({ tasks, onOpenTask }: { tasks: readonly Ta
   const shown = schedules.filter((row) => filter === "all" || row.enabled === (filter === "active"));
   const taskNames = new Map(tasks.map((task) => [task.taskId, task.name]));
   const scheduleNames = new Map(schedules.map((row) => [row.scheduleId, row.name]));
+  /**
+   * Both row actions are Host decisions, never local edits: an accepted call is
+   * followed by a full re-read (the badge and the run table come from the Host's
+   * next answer), a refused one keeps the previous rows and quotes the reason
+   * verbatim. `scheduleRunNow` is what mints the run record, so nothing is shown
+   * as started until the Host has answered.
+   */
+  const act = async (row: Schedule, op: "task/scheduleSetEnabled" | "task/scheduleRunNow", payload: Record<string, unknown>) => {
+    const key = `${row.taskId}:${row.scheduleId}:${op}`;
+    setBusy(key);
+    setActionError("");
+    try {
+      const answer = await shellTaskOp(row.taskId, op, { ...payload, scheduleId: row.scheduleId });
+      if (!answer.ok) { setActionError(`${hostText(row.name, row.scheduleId)}：${answer.error ?? "Host 未返回原因"}`); return; }
+      setRevision((value) => value + 1);
+    } catch (error) {
+      setActionError(`${hostText(row.name, row.scheduleId)}：${error instanceof Error ? error.message : "Host 调用失败"}`);
+    } finally {
+      setBusy(null);
+    }
+  };
   return <div data-testid="desktop-schedules-page" className="px-[34px] py-[30px] below-narrow:px-5">
     <div className="flex items-start justify-between gap-3">
       <div><p className="text-[10px] uppercase tracking-[1.8px] text-[#95979c]">Scheduled Tasks</p><h1 className="mt-1.5 text-[26px] font-semibold text-ink">定时任务</h1></div>
       <Button type="button" variant="outline" size="sm" onClick={() => setRevision((value) => value + 1)}>刷新</Button>
     </div>
-    <p className="mt-1.5 text-xs text-muted">每项配置属于一个真实任务；执行记录来自任务 Host。创建、编辑与立即运行的生产入口未接线。</p>
+    <p className="mt-1.5 text-xs text-muted">每项配置属于一个真实任务；执行记录来自任务 Host。启用、暂停与立即运行由 Host 决定并回执；创建与编辑的生产入口未接线。</p>
+    {actionError && <p role="alert" data-testid="desktop-schedule-action-error" className="mt-2 break-words text-xs text-[#ad4545]">{actionError}</p>}
     {!result ? <p role="status" className="mt-6 text-xs text-muted">正在读取任务的定时配置…</p> : <>
       {result.errors.length > 0 && <div role="alert" className="mt-5 border border-[#e0b4b4] bg-[#fdf3f3] p-3 text-xs text-[#ad4545]">部分数据读取失败，以下仅展示成功读取的配置与记录。<ul className="mt-1 list-inside list-disc">{result.errors.map((error) => <li key={error}>{error}</li>)}</ul></div>}
       <div className="mt-6 grid grid-cols-3 gap-3 below-mid:grid-cols-1">
@@ -80,7 +104,11 @@ export function DesktopSchedulesPage({ tasks, onOpenTask }: { tasks: readonly Ta
         {shown.map((row) => <article key={`${row.taskId}:${row.scheduleId}`} className="grid grid-cols-[minmax(130px,0.8fr)_minmax(0,2fr)_auto] items-center gap-4 py-4 below-mid:grid-cols-1" data-schedule-row={row.scheduleId}>
           <div className="min-w-0"><strong className="block break-words text-xs">{hostText(row.ruleText, "Host 未上报规则")}</strong><span className="text-[11px] text-muted">{hostText(row.timezone, "Host 未上报时区")}</span></div>
           <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><strong className="text-sm">{hostText(row.name, "Host 未上报定时任务名称")}</strong><Badge variant="soft">{row.repairIssue ? "配置待修复" : row.enabled ? "已启用" : "已暂停"}</Badge></div><p className="mt-1 text-xs text-muted">{taskNames.get(row.taskId) ?? row.taskId} · {hostText(row.providerId, "Host 未上报 Provider")} / {hostText(row.model, "Host 未上报模型")}</p><p className="mt-1 line-clamp-2 break-words text-xs text-muted">{row.repairIssue || row.prompt}</p></div>
-          <Button size="sm" variant="outline" onClick={() => onOpenTask(row.taskId)}>查看任务</Button>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <Button size="sm" variant="outline" disabled={busy !== null} aria-label={`${row.enabled ? "暂停" : "启用"} ${hostText(row.name, "Host 未上报定时任务名称")}`} onClick={() => void act(row, "task/scheduleSetEnabled", { enabled: !row.enabled })}>{row.enabled ? "暂停" : "启用"}</Button>
+            <Button size="sm" variant="outline" disabled={busy !== null} aria-label={`立即运行 ${hostText(row.name, "Host 未上报定时任务名称")}`} onClick={() => void act(row, "task/scheduleRunNow", { label: "定时任务页" })}>立即运行</Button>
+            <Button size="sm" variant="outline" onClick={() => onOpenTask(row.taskId)}>查看任务</Button>
+          </div>
         </article>)}
         {shown.length === 0 && <p className="py-7 text-center text-xs text-muted">{result.errors.length ? "成功读取的任务中没有符合筛选的定时配置。" : "当前筛选下没有定时任务。"}</p>}
       </div>
