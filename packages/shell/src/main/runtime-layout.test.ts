@@ -292,6 +292,30 @@ describe("trusted Electron view modes", () => {
     expect(routeTaskOp).toHaveBeenCalledTimes(1);
   });
 
+  // [#126 需求变更] 远程访问移出首版：Host 实现与演示页保留为未来功能的基础，
+  // 但正式桌面通道关闭——旧渲染层或旧脚本不能借遗留 op 重新启用它。
+  it("refuses retired remote access ops before reaching any task Host", async () => {
+    const views = await createTrustedWindow("workspace-remote-removed", "production");
+    const routeTaskOp = vi.fn(async () => ({ payload: {} }));
+    registerIpc({} as never, views.registry, { routeTaskOp } as never);
+    const taskOp = vi.mocked(ipcMain.handle).mock.calls.findLast(([channel]) => channel === "shell/taskOp")?.[1];
+    expect(taskOp).toBeDefined();
+    const shell = { sender: views.shellView.webContents, senderFrame: views.shellView.webContents.mainFrame } as never;
+    for (const op of [
+      "task/remoteState", "task/remoteEntryMode", "task/remotePairMint", "task/remotePairCancel", "task/remotePairExchange",
+      "task/remoteDeviceConfirm", "task/remoteDeviceReject", "task/remoteDeviceRevoke", "task/remoteDeviceRotate",
+      "task/remoteAuthorize", "task/remoteReconnectPlan", "task/remoteGatewayEvent", "task/remoteAudit",
+    ]) {
+      expect(await taskOp!(shell, { taskId: "task-a", op, payload: { label: "旧入口", mode: "tailscale", deviceId: "d-1", scheduleId: "s-1" } }))
+        .toEqual({ ok: false, error: "invalid-payload: 远程访问已移出首版（未来计划功能，#126）" });
+    }
+    expect(routeTaskOp).not.toHaveBeenCalled();
+    // The refusal is the retirement guard, not sender attestation: a surviving op
+    // still reaches the task Host.
+    expect(await taskOp!(shell, { taskId: "task-a", op: "task/sessionStates", payload: {} })).toMatchObject({ ok: true });
+    expect(routeTaskOp).toHaveBeenCalledTimes(1);
+  });
+
   it("refuses legacy DemoApp conversation ops as unknown at the shell bridge", async () => {
     const views = await createTrustedWindow("workspace-legacy", "production");
     const routeTaskOp = vi.fn(async () => ({ payload: {} }));

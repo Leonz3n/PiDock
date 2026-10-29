@@ -54,7 +54,6 @@ export type DesktopView =
   | { view: "archive" }
   | { view: "attention" }
   | { view: "env" }
-  | { view: "remote" }
   | { view: DesktopLocalPageKey };
 
 /** 能力管理 and 本机设置: the 系统 group's two local pages, each routed to a real page (#24). */
@@ -272,7 +271,6 @@ export function DesktopShell({
             <SidebarNavButton label="需要处理" icon="clock" active={view.view === "attention"} onSelect={() => onNavigate({ view: "attention" })} />
             <SidebarNavButton label="定时任务" icon="clock" active={view.view === "schedules"} onSelect={() => onNavigate({ view: "schedules" })} />
             <SidebarNavButton label={LABELS.capabilities} icon="book" active={view.view === "capabilities"} onSelect={() => onNavigate({ view: "capabilities" })} />
-            <SidebarNavButton label="远程访问" icon="globe" active={view.view === "remote"} onSelect={() => onNavigate({ view: "remote" })} />
             <SidebarNavButton label={LABELS.settings} icon="folder" active={view.view === "settings"} onSelect={() => onNavigate({ view: "settings" })} />
             <SidebarNavButton label="模型与 Provider" icon="key" active={view.view === "providers"} onSelect={() => onNavigate({ view: "providers" })} />
             <div data-user-chip="local-workspace" title="本机工作区" className="flex items-center gap-[9px] px-2 py-[10px]">
