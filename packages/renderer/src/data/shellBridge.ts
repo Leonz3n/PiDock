@@ -162,6 +162,8 @@ export type ShellTaskOp =
   | "task/markAttentionRead"
   | "task/scheduleList"
   | "task/scheduleRuns"
+  | "task/scheduleSetEnabled"
+  | "task/scheduleRunNow"
   | "task/remoteState"
   | "task/remoteEntryMode"
   | "task/remoteDeviceRevoke";

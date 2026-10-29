@@ -5,8 +5,8 @@ import { DesktopSchedulesPage } from "../components/DesktopSchedulesPage";
 const tasks = [{ taskId: "a", name: "任务 A" }, { taskId: "b", name: "任务 B" }];
 const schedule = (taskId: string, enabled: boolean) => ({ scheduleId: `schedule-${taskId}`, taskId, name: `计划 ${taskId}`, ruleText: "0 9 * * *", timezone: "Asia/Shanghai", providerId: "provider-x", model: "model-x", prompt: "整理报告", enabled });
 const run = (taskId: string) => ({ runId: `run-${taskId}`, scheduleId: `schedule-${taskId}`, taskId, startedAt: "2026-09-29T09:00:00Z", result: "completed" });
-const bridge = (handler: (taskId: string, op: string) => unknown) => {
-  const taskOp = vi.fn(async (taskId: string, op: string) => handler(taskId, op));
+const bridge = (handler: (taskId: string, op: string, payload: Record<string, unknown>) => unknown) => {
+  const taskOp = vi.fn(async (taskId: string, op: string, payload: Record<string, unknown>) => handler(taskId, op, payload));
   window.pidock = { taskOp: taskOp as never };
   return taskOp;
 };
@@ -88,4 +88,72 @@ it("does not invent records when no task exists", async () => {
   render(<DesktopSchedulesPage tasks={[]} onOpenTask={() => {}} />);
   expect(await screen.findByText("当前筛选下没有定时任务。")).toBeInTheDocument();
   expect(taskOp).not.toHaveBeenCalled();
+});
+
+it("toggles a schedule through the Host and re-reads its answer instead of flipping the row", async () => {
+  let paused = true;
+  const taskOp = bridge((taskId, op) => {
+    if (op === "task/scheduleSetEnabled") { paused = false; return { ok: true, payload: { schedule: schedule(taskId, true) } }; }
+    return { ok: true, payload: op === "task/scheduleList" ? { schedules: [schedule(taskId, !paused)] } : { runs: [] } };
+  });
+  const listReads = () => taskOp.mock.calls.filter(([, op]) => op === "task/scheduleList").length;
+  render(<DesktopSchedulesPage tasks={[tasks[0]!]} onOpenTask={() => {}} />);
+  await waitFor(() => expect(document.querySelector('[data-schedule-row="schedule-a"')).not.toBeNull());
+  const row = () => document.querySelector('[data-schedule-row="schedule-a"]') as HTMLElement;
+  expect(within(row()).getByText("已暂停")).toBeInTheDocument();
+  expect(listReads()).toBe(1);
+  fireEvent.click(within(row()).getByRole("button", { name: "启用 计划 a" }));
+  await waitFor(() => expect(within(row()).getByText("已启用")).toBeInTheDocument());
+  expect(taskOp).toHaveBeenCalledWith("a", "task/scheduleSetEnabled", { scheduleId: "schedule-a", enabled: true });
+  // The badge comes from the Host's next list answer, not from the click: the row
+  // is re-read after the Host accepts, so no optimistic flip can outlive a refusal.
+  expect(listReads()).toBe(2);
+});
+
+it("keeps the previous state and quotes the Host refusal when a pause is refused", async () => {
+  const taskOp = bridge((taskId, op) => op === "task/scheduleSetEnabled"
+    ? { ok: false, error: "unknown-schedule: 定时任务 schedule-a 不存在" }
+    : { ok: true, payload: op === "task/scheduleList" ? { schedules: [schedule(taskId, true)] } : { runs: [] } });
+  render(<DesktopSchedulesPage tasks={[tasks[0]!]} onOpenTask={() => {}} />);
+  await waitFor(() => expect(document.querySelector('[data-schedule-row="schedule-a"')).not.toBeNull());
+  const row = () => document.querySelector('[data-schedule-row="schedule-a"]') as HTMLElement;
+  fireEvent.click(within(row()).getByRole("button", { name: "暂停 计划 a" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("计划 a：unknown-schedule: 定时任务 schedule-a 不存在");
+  // A refusal is not a new answer about the list: no re-read, no flipped badge.
+  expect(taskOp.mock.calls.filter(([, op]) => op === "task/scheduleList")).toHaveLength(1);
+  expect(within(row()).getByText("已启用")).toBeInTheDocument();
+});
+
+it("runs a schedule now through the Host, then shows the run the Host recorded", async () => {
+  let runs: unknown[] = [];
+  const taskOp = bridge((taskId, op, payload) => {
+    if (op === "task/scheduleRunNow") {
+      expect(payload).toEqual({ scheduleId: "schedule-a", label: "定时任务页" });
+      runs = [{ runId: "run-manual", scheduleId: "schedule-a", taskId, startedAt: "2026-10-27T09:00:00Z", result: "awaiting-approval" }];
+      return { ok: true, payload: { run: runs[0] } };
+    }
+    return { ok: true, payload: op === "task/scheduleList" ? { schedules: [schedule(taskId, true)] } : { runs } };
+  });
+  render(<DesktopSchedulesPage tasks={[tasks[0]!]} onOpenTask={() => {}} />);
+  await waitFor(() => expect(document.querySelector('[data-schedule-row="schedule-a"')).not.toBeNull());
+  expect(screen.getByText("暂无执行记录。")).toBeInTheDocument();
+  fireEvent.click(within(document.querySelector('[data-schedule-row="schedule-a"]') as HTMLElement).getByRole("button", { name: "立即运行 计划 a" }));
+  await waitFor(() => expect(document.querySelector('[data-schedule-run="run-manual"]')).not.toBeNull());
+  expect(within(document.querySelector('[data-schedule-run="run-manual"]') as HTMLElement).getByText("待确认")).toBeInTheDocument();
+  expect(screen.queryByText("暂无执行记录。")).toBeNull();
+  expect(taskOp).toHaveBeenCalledWith("a", "task/scheduleRunNow", { scheduleId: "schedule-a", label: "定时任务页" });
+});
+
+it("shows the Host refusal when 立即运行 is refused and never claims a run", async () => {
+  const taskOp = bridge((taskId, op) => op === "task/scheduleRunNow"
+    ? { ok: false, error: "archived: 已归档任务不能通过「立即运行」绕过恢复" }
+    : { ok: true, payload: op === "task/scheduleList" ? { schedules: [schedule(taskId, true)] } : { runs: [] } });
+  render(<DesktopSchedulesPage tasks={[tasks[0]!]} onOpenTask={() => {}} />);
+  await waitFor(() => expect(document.querySelector('[data-schedule-row="schedule-a"')).not.toBeNull());
+  fireEvent.click(within(document.querySelector('[data-schedule-row="schedule-a"]') as HTMLElement).getByRole("button", { name: "立即运行 计划 a" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("计划 a：archived: 已归档任务不能通过「立即运行」绕过恢复");
+  expect(document.querySelector('[data-schedule-run]')).toBeNull();
+  expect(screen.getByText("暂无执行记录。")).toBeInTheDocument();
+  // Nothing was minted, so there is nothing new to read.
+  expect(taskOp.mock.calls.filter(([, op]) => op === "task/scheduleRuns")).toHaveLength(1);
 });
