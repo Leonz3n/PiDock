@@ -30,7 +30,7 @@ const launch = {
   openedPath: "/tmp/task-1/repo-1",
   attribution,
   disclosure: "外部编辑器在任务工作副本打开：/tmp/task-1/repo-1（仓库 repo-1，分支 task/task-1）",
-  note: "未读取、未写入也未复制任何编辑器配置（不生成 .vscode、launch.json、settings 或 tasks 文件）；编辑器自身窗口状态不在本工作台观察范围内",
+  note: "未读取、未写入也未复制任何编辑器配置（不生成 .vscode、launch.json、settings 或 tasks 文件）；编辑器自身窗口状态不在本工作台观察范围内；编辑器对文件的写入不受 PiDock 写协调约束，PiDock 不会因为它开着而暂停自己的写入",
   actor: "human" as const,
   label: "外部编辑器 repo-1（用户显式操作）",
   started: true as const,
@@ -71,6 +71,11 @@ describe("#15 box 28 external editor from the file panel", () => {
     );
     bridge({ openTaskEditor, taskOp });
     render(<DesktopToolDock taskId="task-1" tool="files" onClose={() => {}} />);
+
+    // [#117 第 6 项 / #108] The boundary is on screen BEFORE the launch, not only
+    // in the receipt: the editor's writes are not coordinated by PiDock.
+    expect(await screen.findByTestId("dock-editor-coordination"))
+      .toHaveTextContent("外部编辑器对文件的写入不受 PiDock 写协调约束；它开着期间 PiDock 不会暂停自己的写入");
 
     fireEvent.click(await screen.findByRole("button", { name: "用外部编辑器打开" }));
 

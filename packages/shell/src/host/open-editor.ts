@@ -28,6 +28,7 @@ import { spawn } from "node:child_process";
 import { isTaskOpOrigin, type TaskOpOrigin } from "../rpc/protocol.js";
 import {
   EDITOR_CONFIG_NOT_COPIED,
+  EDITOR_WRITE_COORDINATION_BOUNDARY,
   externalEditorPlan,
   probeEditorDirectory,
   probeEditorProgram,
@@ -184,7 +185,7 @@ export async function openExternalEditor(input: {
       windowObserved: false,
       // The box-28 rule travels with the receipt; the editor's own window is
       // not observed by this workbench, so nothing about it is claimed.
-      note: `${EDITOR_CONFIG_NOT_COPIED}；编辑器自身窗口状态不在本工作台观察范围内`,
+      note: `${EDITOR_CONFIG_NOT_COPIED}；编辑器自身窗口状态不在本工作台观察范围内；${EDITOR_WRITE_COORDINATION_BOUNDARY}`,
     },
   };
 }

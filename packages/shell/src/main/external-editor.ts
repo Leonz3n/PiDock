@@ -71,6 +71,16 @@ export function externalEditorSettingsPath(profileDir: string): string {
 export const EDITOR_CONFIG_NOT_COPIED =
   "未读取、未写入也未复制任何编辑器配置（不生成 .vscode、launch.json、settings 或 tasks 文件）";
 
+/**
+ * [PiDock 11] (#108, #117 第 6 项 / 业主定 A) The external editor is the user's
+ * own tool: PiDock cannot fence it and does not try. Its writes are explicitly
+ * outside PiDock's write coordination, and PiDock never pauses its own writes
+ * just because an editor is open. Stated where the launch happens so the claim
+ * travels with the receipt instead of living only in an ADR.
+ */
+export const EDITOR_WRITE_COORDINATION_BOUNDARY =
+  "编辑器对文件的写入不受 PiDock 写协调约束，PiDock 不会因为它开着而暂停自己的写入";
+
 function editorNotConfigured(settingsPath: string): { ok: false; error: string } {
   return {
     ok: false,

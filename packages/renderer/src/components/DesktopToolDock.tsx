@@ -963,6 +963,10 @@ function FilesTool({ taskId, onReferenceFile }: { taskId: string; onReferenceFil
             </Button>
             <span className="text-[10px] text-muted">程序来自本机用户配置（可在「本机设置 · 外部编辑器」中配置），未写入或复制任何编辑器配置</span>
           </div>
+          {/* [#117 第 6 项 / #108] The decision is stated where the launch happens:
+              an external editor is the user's own tool, so its writes are outside
+              PiDock's coordination and PiDock never pauses for it. */}
+          <p data-testid="dock-editor-coordination" className="text-[10px] text-muted">外部编辑器对文件的写入不受 PiDock 写协调约束；它开着期间 PiDock 不会暂停自己的写入</p>
           {editorBusy && <p className="text-[11px] text-muted">正在启动外部编辑器…</p>}
           {editorError && (
             <p role="status" className="border border-[#e0b4b4] bg-[#fdf3f3] px-2 py-1.5 text-[11px] text-[#8a3b3b]">
