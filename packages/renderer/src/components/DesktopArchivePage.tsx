@@ -243,7 +243,7 @@ export function DesktopArchivePage({ tasks, onRestored }: { tasks: readonly Task
       <div><p className="text-[10px] uppercase tracking-[1.8px] text-[#95979c]">Archived Tasks</p><h1 className="mt-1.5 text-[26px] font-semibold text-ink">已归档</h1></div>
       <Button type="button" size="sm" variant="outline" onClick={() => setRevision((value) => value + 1)}>刷新</Button>
     </div>
-    <p className="mt-1.5 text-xs text-muted">归档保留任务记录；恢复不会自动重新启动服务或定时任务。独立导出文件浏览与下载界面未接线；清理中的导出由 Host 写入预览所示的保留位置。</p>
+    <p data-testid="desktop-archive-scope" className="mt-1.5 text-xs text-muted">归档只停止正在执行的 Agent 回合；已在运行的服务与终端不会被它停止；恢复不会自动重新启动服务或定时任务。独立导出文件浏览与下载界面未接线；清理中的导出由 Host 写入预览所示的保留位置。</p>
     {actionError && <p role="alert" className="mt-4 border border-[#e0b4b4] bg-[#fdf3f3] p-3 text-xs text-[#ad4545]">{actionError}</p>}
     {!result ? <p role="status" className="mt-6 text-xs text-muted">正在读取任务归档状态…</p> : <>
       {result.errors.length > 0 && <div role="alert" className="mt-5 border border-[#e0b4b4] bg-[#fdf3f3] p-3 text-xs text-[#ad4545]">部分任务读取失败，列表可能不完整。<ul className="mt-1 list-inside list-disc">{result.errors.map((error) => <li key={error}>{error}</li>)}</ul></div>}
