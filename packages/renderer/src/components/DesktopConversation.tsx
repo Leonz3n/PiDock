@@ -6,7 +6,7 @@ import { Button } from "./ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import { PROVIDER_STATE_TEXT, parseProviderStatus, providerCall, type ProviderStatus } from "../data/providerProfile";
 import { SDK_SESSION_ID, parseSdkSnapshot, type SdkMessage } from "../data/sdkSession";
-import { readSdkDraft, saveSdkDraft } from "../data/sdkDraft";
+import { readHostDraft, saveHostDraft } from "../data/draftStore";
 import { executionStateThroughShell, setTaskArchivedThroughShell } from "../data/shellBridge";
 import { executionStateFromHost, runRecordFromExecutionState, runStateOfExecution, type SessionExecutionView } from "../data/executionLedger";
 import { executionLabel, executionStepLabel } from "../pages/executionView";
@@ -214,6 +214,13 @@ function TaskConversation({ taskId, name, branch, repoCount, roots, association,
   const attachmentSequence = useRef(0);
   const draftLoaded = useRef(false);
   const draftRevision = useRef(0);
+  /**
+   * [#117 第 7 项 / 业主定 A] The draft lives in the Host now, so every keystroke
+   * would be an IPC round trip. Writes are serialized behind one slot: the
+   * newest payload wins, an in-flight save finishes first, and nothing is
+   * dropped silently — the last one always reaches the Host.
+   */
+  const draftSave = useRef<{ running: boolean; pending?: { text: string; references: Reference[] } }>({ running: false });
   const [receiptError, setReceiptError] = useState(recovered.current.error);
   const [attempt, setAttempt] = useState<Attempt | null>(recovered.current.receipt ? { ...recovered.current.receipt, phase: "unknown" } : null);
   const attemptRef = useRef<Attempt | null>(recovered.current.receipt ? { ...recovered.current.receipt, phase: "unknown" } : null);
@@ -229,6 +236,25 @@ function TaskConversation({ taskId, name, branch, repoCount, roots, association,
   const composing = useRef(false);
   const rootsRef = useRef(roots);
   const setCurrent = (next: Attempt | null) => { attemptRef.current = next; setAttempt(next); };
+  const queueDraftSave = useCallback((next: { text: string; references: Reference[] }) => {
+    const state = draftSave.current;
+    state.pending = next;
+    if (state.running) return;
+    state.running = true;
+    void (async () => {
+      try {
+        while (state.pending !== undefined) {
+          const payload = state.pending;
+          state.pending = undefined;
+          // An emptied composer is stored as an EMPTY draft, not as "no draft":
+          // the composer tells "cleared" apart from "never saved" (a pending
+          // receipt's text fills the box only when no draft record exists), so
+          // clearing here would revive the text of an already-acknowledged send.
+          setDraftError(await saveHostDraft(taskId, payload));
+        }
+      } finally { state.running = false; }
+    })();
+  }, [taskId]);
   const request = useCallback(async (action: string, fields: Record<string, unknown> = {}) => {
     if (!bridge?.sdkTurn) throw new Error("桌面壳 SDK 接口不可用");
     const result = await bridge.sdkTurn({ action, taskId, sessionId, ...fields });
@@ -368,10 +394,16 @@ function TaskConversation({ taskId, name, branch, repoCount, roots, association,
         await verify();
         if (!active()) return;
         if (!draftLoaded.current) {
-          const saved = readSdkDraft(taskId);
           draftLoaded.current = true;
+          const saved = await readHostDraft(taskId);
+          if (!active()) return;
           setDraftError(saved.error);
-          if (saved.text !== null && draftRevision.current === 0) setDraft(saved.text);
+          // The Host is the source of truth for both halves: the text and the
+          // references the user had attached when the draft was last saved.
+          if (saved.draft && draftRevision.current === 0) {
+            setDraft(saved.draft.text);
+            setReferences(saved.draft.references);
+          }
         }
         if (!bridge?.onSdkTurnEvent) throw new Error("SDK 事件接口不可用");
         off = bridge.onSdkTurnEvent(onEvent);
@@ -387,7 +419,7 @@ function TaskConversation({ taskId, name, branch, repoCount, roots, association,
     };
     void connect();
     return () => { if (generationRef.current === epoch) generationRef.current++; window.clearInterval(poll); off?.(); if (subscribed) void request("unsubscribe").catch(() => {}); };
-  }, [bridge, connectionKey, invalidated, reconcile, request, taskId, verify]);
+  }, [bridge, connectionKey, invalidated, queueDraftSave, reconcile, request, taskId, verify]);
   const refresh = async () => {
     const epoch = generation.current;
     try { await verify(); if (epoch !== generation.current) return; await reconcile(epoch, attemptRef.current?.requestId); if (epoch === generation.current) setValid(true); }
@@ -445,7 +477,7 @@ function TaskConversation({ taskId, name, branch, repoCount, roots, association,
       if (turn.state === "accepted" && !reuse) {
         if (draftRevision.current === submittedRevision) {
           setDraft("");
-          setDraftError(saveSdkDraft(taskId, ""));
+          queueDraftSave({ text: "", references: [] });
         }
         // Only the chips that were part of this turn leave the composer; a
         // reference added while the request was in flight stays.
@@ -478,9 +510,20 @@ function TaskConversation({ taskId, name, branch, repoCount, roots, association,
       taskId,
       ...referenceProvenance(row),
     };
-    setReferences((current) => (current.some((entry) => entry.id === id) ? current : [...current, reference]));
+    setReferences((current) => {
+      if (current.some((entry) => entry.id === id)) return current;
+      const next = [...current, reference];
+      // A reference is part of the draft the Host stores: attaching one without
+      // typing anything must still survive a restart.
+      if (valid && connected && !invalidated) queueDraftSave({ text: draft, references: next });
+      return next;
+    });
   };
-  const removeFileReference = (id: string) => setReferences((current) => current.filter((entry) => entry.id !== id));
+  const removeFileReference = (id: string) => setReferences((current) => {
+    const next = current.filter((entry) => entry.id !== id);
+    if (valid && connected && !invalidated) queueDraftSave({ text: draft, references: next });
+    return next;
+  });
   // [PiDock 16] (#16 盒 1): every picked file passes the mirrored pre-send rule
   // (`classifyComposerAttachment`) before it becomes a draft attachment, so an
   // oversized/unsupported file is refused BY NAME in the report instead of being
@@ -830,7 +873,7 @@ function TaskConversation({ taskId, name, branch, repoCount, roots, association,
           </ul>
           <p data-testid="desktop-composer-attachment-scope" className="mt-1 text-[11px] text-muted">附件随消息提交：Host 只附上名称与来源行，内容不上传、不读取，Agent 拿到的是清单而不是文件。</p>
         </div>}
-        <textarea aria-label="消息" value={draft} onChange={(event) => { const text = event.target.value; draftRevision.current++; setDraft(text); if (valid && connected && !invalidated) setDraftError(saveSdkDraft(taskId, text)); }} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !composing.current && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) { event.preventDefault(); if (!blocked) void start(); } }} rows={2} maxLength={16384} className="w-full min-w-0 resize-y border-0 bg-transparent p-1 text-sm outline-none" placeholder="描述你想做什么（仅支持文本消息）" />
+        <textarea aria-label="消息" value={draft} onChange={(event) => { const text = event.target.value; draftRevision.current++; setDraft(text); if (valid && connected && !invalidated) queueDraftSave({ text, references }); }} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !composing.current && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) { event.preventDefault(); if (!blocked) void start(); } }} rows={2} maxLength={16384} className="w-full min-w-0 resize-y border-0 bg-transparent p-1 text-sm outline-none" placeholder="描述你想做什么（仅支持文本消息）" />
         <div className="mt-1 flex min-w-0 flex-wrap items-center gap-2 text-[11px] text-muted">
           <Tooltip><TooltipTrigger asChild><span tabIndex={0} aria-label="附件说明" className="inline-flex">
             <Button type="button" size="icon-sm" data-testid="desktop-composer-attach" aria-label="添加附件" onClick={() => attachmentInput.current?.click()} className="text-muted"><Icon name="plus" /></Button>

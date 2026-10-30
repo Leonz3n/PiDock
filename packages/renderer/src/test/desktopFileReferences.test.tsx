@@ -33,7 +33,7 @@ const emptySnapshot = { source: "sdk-jsonl", sessionId: "main", messages: [], pe
  * Every op this suite may see: reads only — #15's own file reads, the composer's
  * `task/sessionContext` readout and the #24 execution-status read.
  */
-const READ_ONLY_OPS = ["task/fileRoots", "task/fileTree", "task/filePreview", "task/fileDiff", "task/deliveryInfo", "task/sessionContext", "task/executionState"];
+const READ_ONLY_OPS = ["task/fileRoots", "task/fileTree", "task/filePreview", "task/fileDiff", "task/deliveryInfo", "task/sessionContext", "task/executionState", "task/readDraft"];
 /** The write ops a reference must never cause (box 4 of this slice). */
 const WRITE_OPS = ["task/runTaskService", "task/serviceStopScope", "task/controlService", "task/quit", "task/archive", "task/restore", "task/sendMessage", "task/registerService"];
 
@@ -78,7 +78,17 @@ const hostReads =
 /** The production desktop bridge: the real task reads plus the SDK session. */
 function setup(read: ReturnType<typeof hostReads>) {
   const calls: Array<Record<string, unknown>> = [];
-  const taskOp = vi.fn(read);
+  // [#117 第 7 项] The draft half of `taskOp` is the Host's, exactly like production.
+  const drafts = new Map<string, { text: string; references?: unknown[] }>();
+  const taskOp = vi.fn(async (taskId: string, op: string, payload: Record<string, unknown> = {}) => {
+    if (op === "task/saveDraft") {
+      drafts.set(taskId, { text: String(payload["text"]), ...(payload["references"] !== undefined ? { references: payload["references"] as unknown[] } : {}) });
+      return { ok: true, payload: { workspaceId: "w", taskId, op, payload: { sessionId: "main" } } };
+    }
+    if (op === "task/readDraft") return { ok: true, payload: { workspaceId: "w", taskId, op, payload: { sessionId: "main", draft: drafts.get(taskId) ?? null } } };
+    if (op === "task/clearDraft") { drafts.delete(taskId); return { ok: true, payload: { workspaceId: "w", taskId, op, payload: { sessionId: "main" } } }; }
+    return read(taskId, op, payload);
+  });
   const bridge: PidockBridge = {
     listTasks: vi.fn(async () => ({ ok: true, payload: { tasks: [{ taskId: TASK_ID, name: "Task", branch: "main", repoCount: 1, updatedAt: "now" }], roots } })),
     projectOp: vi.fn(async (request) => ({ ok: true, payload: request.op === "list" ? { initialized: true, projects: [] } : { roots, tasks: [association] } })),
@@ -97,8 +107,10 @@ function setup(read: ReturnType<typeof hostReads>) {
     taskOp,
   };
   window.pidock = bridge;
-  render(<DesktopConversation taskId={TASK_ID} name="Task" branch="task/main" repoCount={1} roots={JSON.stringify(roots)} association={JSON.stringify(association)} onBack={vi.fn()} onOpenProviders={vi.fn()} onArchived={vi.fn()} />);
-  return { bridge, calls, taskOp };
+  const view = render(<DesktopConversation taskId={TASK_ID} name="Task" branch="task/main" repoCount={1} roots={JSON.stringify(roots)} association={JSON.stringify(association)} onBack={vi.fn()} onOpenProviders={vi.fn()} onArchived={vi.fn()} />);
+  /** Mount the same task again against the same Host draft (a real restart). */
+  const remount = () => render(<DesktopConversation taskId={TASK_ID} name="Task" branch="task/main" repoCount={1} roots={JSON.stringify(roots)} association={JSON.stringify(association)} onBack={vi.fn()} onOpenProviders={vi.fn()} onArchived={vi.fn()} />);
+  return { bridge, calls, taskOp, drafts, view, remount };
 }
 
 /** Open the shipped 文件 panel and preview the one file it lists. */
@@ -162,31 +174,62 @@ describe("[PiDock 15] (#15 盒 3) 文件引用在桌面输入区", () => {
     expect(fixture.calls.filter((call) => call.action === "start")).toEqual([]);
   });
 
-  it("attaches and removes the reference without adding a write op", async () => {
+  it("[#117 第 7 项] persists the reference with the Host draft instead of keeping it page-only", async () => {
     const fixture = setup(hostReads(worktreeRoots()));
     await screen.findByText(/尚未开始/);
     await openAndPreview();
-    // The panel's own reads are the baseline: they are the only ops allowed
-    // before and after the reference action.
     const before = fixture.taskOp.mock.calls.length;
 
     clickReference();
     await screen.findByTestId("composer-file-reference-task-file:repo-a:invoice.md");
 
-    // The reference action added NO op of any kind, read or write.
-    expect(fixture.taskOp.mock.calls.length).toBe(before);
-    // Everything this panel ever asked for is a read, and no write op appears.
+    // Attaching is now a DRAFT WRITE and nothing else: one `task/saveDraft`, and
+    // it carries the reference so a restart can show it again.
+    const added = fixture.taskOp.mock.calls.slice(before);
+    await waitFor(() => expect(added.map((call) => String(call[1]))).toEqual(["task/saveDraft"]));
+    const saved = added[0]![2] as Record<string, unknown>;
+    expect(saved["text"]).toBe("");
+    expect(saved["references"]).toMatchObject([{ id: "task-file:repo-a:invoice.md", kind: "file", label: "repo-a/invoice.md", sourceKind: "worktree", taskId: TASK_ID }]);
+
+    // Still no turn, no service/terminal write, and no file is read or written.
     const ops = fixture.taskOp.mock.calls.map((call) => String(call[1]));
-    expect(ops.every((op) => READ_ONLY_OPS.includes(op))).toBe(true);
+    expect(ops.every((op) => READ_ONLY_OPS.includes(op) || op === "task/saveDraft")).toBe(true);
     expect(ops.filter((op) => WRITE_OPS.includes(op))).toEqual([]);
     expect((fixture.bridge as { serviceCatalogOp?: unknown }).serviceCatalogOp).toBeUndefined();
     expect(fixture.calls.filter((call) => call.action === "start")).toEqual([]);
 
-    // Removing it is page state too.
+    // Removing it persists the removal too, so a restart cannot resurrect it.
     const afterReference = fixture.taskOp.mock.calls.length;
     fireEvent.click(screen.getByRole("button", { name: /移除引用 repo-a\/invoice\.md/ }));
     await waitFor(() => expect(screen.queryByTestId("composer-file-reference-task-file:repo-a:invoice.md")).not.toBeInTheDocument());
-    expect(fixture.taskOp.mock.calls.length).toBe(afterReference);
+    const removal = fixture.taskOp.mock.calls.slice(afterReference);
+    await waitFor(() => expect(removal.map((call) => String(call[1]))).toEqual(["task/saveDraft"]));
+    expect((removal[0]![2] as Record<string, unknown>)["references"]).toBeUndefined();
+  });
+
+  it("[#117 第 7 项] shows the saved reference chip again after a restart", async () => {
+    const fixture = setup(hostReads(worktreeRoots()));
+    await screen.findByText(/尚未开始/);
+    await openAndPreview();
+    clickReference();
+    await screen.findByTestId("composer-file-reference-task-file:repo-a:invoice.md");
+    fireEvent.change(screen.getByRole("textbox", { name: "消息" }), { target: { value: "重启前写的草稿" } });
+    await waitFor(() => expect(fixture.drafts.get(TASK_ID)).toMatchObject({ text: "重启前写的草稿" }));
+    await waitFor(() => expect((fixture.drafts.get(TASK_ID) as { references?: unknown[] }).references).toHaveLength(1));
+
+    // The restart: nothing in the page survives, the Host draft does.
+    fixture.view.unmount();
+    fixture.remount();
+    await screen.findByText(/尚未开始/);
+    expect(await screen.findByRole("textbox", { name: "消息" })).toHaveValue("重启前写的草稿");
+    const chip = await screen.findByTestId("composer-file-reference-task-file:repo-a:invoice.md");
+    // The restored chip still names its source, so it is the same reference and
+    // not a bare path that lost its provenance.
+    expect(chip).toHaveAttribute("data-source-kind", "worktree");
+    expect(chip).toHaveTextContent("worktree");
+    expect(chip).toHaveTextContent("任务代码引用");
+    // Restoring a draft never sends anything.
+    expect(fixture.calls.filter((call) => call.action === "start")).toEqual([]);
   });
 
   it("[#117 第 1 项 / #16 盒 3] sends the reference identity with the turn and clears the chip", async () => {
