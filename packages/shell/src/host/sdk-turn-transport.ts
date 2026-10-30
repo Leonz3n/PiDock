@@ -216,6 +216,24 @@ export class SdkTurnTransport {
     if (this.active.size || this.starting || this.uncommitted || this.acceptanceUncertain) throw new Error("sdk-turn-journal-uncommitted");
   }
 
+  /**
+   * [#117 第 3 项 / A] Abort every running turn. The Host calls this BEFORE it
+   * stops services or terminals: a stopping turn must not be able to start one
+   * more tool call (and one more child) while those children are being reaped.
+   *
+   * A cancel that throws is not fatal here - the run below still settles on its
+   * own prompt result, and the journal still records the terminal state, so the
+   * caller can report the aborted turn ids instead of a half-stopped Host.
+   */
+  async abortAll(): Promise<string[]> {
+    const active = [...this.active.values()];
+    await Promise.all(active.map(async ({ record }) => {
+      try { await this.kernel.cancel(record.sessionId); } catch { /* settle below */ }
+    }));
+    await Promise.all(active.map(({ run }) => run));
+    return active.map(({ record }) => record.turnId);
+  }
+
   async cancel(sessionId: string, turnId: string): Promise<TurnRecord> {
     id(sessionId);
     const active = this.active.get(turnId);
