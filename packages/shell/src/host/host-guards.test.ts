@@ -550,6 +550,21 @@ describe("validateHostTaskOp", () => {
     expect(validateHostTaskOp("task/sendMessage", { sessionId: "main", text: "  " }).ok).toBe(false);
   });
 
+  it("[#117 第 1 项] accepts the turn's reference/attachment envelope and refuses malformed entries", () => {
+    const entry = { kind: "file", label: "repo-a/invoice.md", source: "worktree · 版本未记录", detail: "任务代码引用" };
+    expect(validateHostTaskOp("task/sdkStart", { sessionId: "main", requestId: "req-1", text: "hi", references: [entry], attachments: [{ kind: "attachment", label: "报价.pdf" }] }))
+      .toEqual({ ok: true });
+    // The production entry (`shell/sdkTurn {action:"start"}`) rides `task/sendMessage`.
+    expect(validateHostTaskOp("task/sendMessage", { sessionId: "main", requestId: "req-1", text: "hi", references: [entry] })).toEqual({ ok: true });
+    // Unknown kind, a smuggled file body, or an oversized list are refused, never trimmed.
+    expect(validateHostTaskOp("task/sdkStart", { sessionId: "main", requestId: "req-1", text: "hi", references: [{ kind: "web", label: "a" }] }))
+      .toEqual({ ok: false, error: "sdk-prompt-context-invalid: 条目字段不合法" });
+    expect(validateHostTaskOp("task/sdkStart", { sessionId: "main", requestId: "req-1", text: "hi", attachments: [{ kind: "attachment", label: "a", content: "file body" }] }))
+      .toEqual({ ok: false, error: "sdk-prompt-context-invalid: 条目字段不合法" });
+    expect(validateHostTaskOp("task/sdkStart", { sessionId: "main", requestId: "req-1", text: "hi", references: Array.from({ length: 21 }, () => ({ kind: "file", label: "a" })) }))
+      .toEqual({ ok: false, error: "sdk-prompt-context-invalid: 条目过多或不是数组" });
+  });
+
   it("accepts S6 turn options and rejects malformed usage", () => {
     expect(
       validateHostTaskOp("task/sendMessage", {

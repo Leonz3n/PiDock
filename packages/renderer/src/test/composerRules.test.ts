@@ -191,14 +191,14 @@ describe("composer attachment rules", () => {
     const shot = new File([new Uint8Array(2048)], "shot.png", { type: "image/png" });
     expect(attachmentSourceLabel({ file: shot, pasted: true, id: "abc123" })).toEqual({
       label: "粘贴图片-abc1.png",
-      // [#16] box 2: 仅本页保留 still leads, and the detail now says what that
+      // [#16] box 2 / [#117 第 1 项]: the detail now names the one thing the
       // means — no upload, no read, and the attachment itself is never sent to
       // the Agent (references are, so the sentence must not claim "text only").
-      detail: "剪贴板图片 · 2 KB · 仅本页保留：附件内容不上传、不读取（附件不会发给 Agent）",
+      detail: "剪贴板图片 · 2 KB · 随消息提交清单：内容不上传、不读取（Agent 只看到身份）",
     });
     expect(attachmentSourceLabel({ file: shot, pasted: false, id: "abc123" })).toEqual({
       label: "shot.png",
-      detail: "本机所选文件 · 2 KB · 仅本页保留：附件内容不上传、不读取（附件不会发给 Agent）",
+      detail: "本机所选文件 · 2 KB · 随消息提交清单：内容不上传、不读取（Agent 只看到身份）",
     });
     // An empty file still reports 1 KB rather than 0.
     const empty = new File([], "empty.png", { type: "image/png" });
