@@ -579,6 +579,31 @@ describe.skipIf(process.platform === "win32")("#7 catalog-driven service executi
     await until(() => !alive(secondPid), "the child to exit on quit");
   }, 30_000);
 
+  it("[#117 第 4 项] archiving stops the Agent turn only; a running service child keeps running", async () => {
+    const f = await installed();
+    const serviceId = f.bind("svc-a", "a");
+    expect(await f.run(serviceId, "start")).toMatchObject({ action: "start" });
+    const pid = await untilMarkerPid(f.taskDir, "a");
+
+    const archived = await f.task("task/archive", {});
+    expect(archived.payload["lifecycle"]).toMatchObject({ archived: true });
+    // The archive plan only knows Agent and save phases: no phase stops a child.
+    const plan = archived.payload["plan"] as { steps: { phase: string; detail: string }[] };
+    expect(plan.steps.length).toBeGreaterThan(0);
+    expect(plan.steps.every((step) => ["abort-agent", "save-state"].includes(step.phase))).toBe(true);
+    expect(plan.steps.map((step) => step.phase)).toContain("save-state");
+    // ...and its own text promises the code/session state is kept.
+    expect(plan.steps.some((step) => step.detail.includes("保留代码"))).toBe(true);
+
+    // Give a "stop the services anyway" regression the time to show up.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(alive(pid)).toBe(true);
+    expect((await f.status(serviceId)).lifecycle).toBe("running");
+    // Quit (test cleanup) is the op that stops the child, not the archive.
+    await f.task("task/quit");
+    await until(() => !alive(pid), "the service child to be stopped by quit, not by archive");
+  }, 30_000);
+
   it("[#117 第 3 项] aborts the Agent BEFORE stopping service children, and stops them before the SDK host", async () => {
     const f = await installed();
     const serviceId = f.bind("svc-a", "a");

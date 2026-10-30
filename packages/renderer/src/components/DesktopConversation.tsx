@@ -755,7 +755,7 @@ function TaskConversation({ taskId, name, branch, repoCount, roots, association,
     {archivePrompt && <div className="fixed inset-0 z-50 grid place-items-center bg-black/30 p-4">
       <div role="dialog" aria-modal="true" aria-label="归档当前任务" className="w-full max-w-[440px] rounded-[7px] border border-line bg-paper p-5 shadow-lg">
         <h2 className="text-base font-semibold">归档当前任务</h2>
-        <p className="mt-3 text-xs leading-6 text-muted">归档会停止所属执行、使未执行确认失效并暂停定时任务；代码和历史保留。恢复后服务与定时任务不会自动启动。清理需要单独处理。</p>
+        <p className="mt-3 text-xs leading-6 text-muted">归档只停止正在执行的 Agent 回合；已在运行的服务与终端不会被它停止。未执行确认会失效、定时任务暂停，代码和历史保留。恢复后服务与定时任务不会自动启动，清理需要单独处理。</p>
         {blocked && !archiveError && <p role="status" className="mt-3 text-xs text-muted">会话尚未连接、正在执行或请求状态未核验；请先完成核验或停止执行。</p>}
         {archiveError && <p role="alert" className="mt-3 border border-[#e0b4b4] bg-[#fdf3f3] p-2 text-xs text-[#ad4545]">{archiveError}</p>}
         <div className="mt-5 flex justify-end gap-2">
