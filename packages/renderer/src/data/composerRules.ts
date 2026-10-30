@@ -239,7 +239,7 @@ export function attachmentSourceLabel(input: { file: File; pasted: boolean; id: 
   const extension = file.type.split("/")[1] ?? "png";
   return {
     label: pasted ? `粘贴图片-${id.slice(0, 4)}.${extension}` : file.name,
-    detail: `${pasted ? "剪贴板图片" : "本机所选文件"} · ${attachmentSizeLabel(file)} · 仅本页保留：附件内容不上传、不读取（附件不会发给 Agent）`,
+    detail: `${pasted ? "剪贴板图片" : "本机所选文件"} · ${attachmentSizeLabel(file)} · 随消息提交清单：内容不上传、不读取（Agent 只看到身份）`,
   };
 }
 

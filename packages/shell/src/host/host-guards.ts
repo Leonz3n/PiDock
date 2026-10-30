@@ -8,6 +8,7 @@
  */
 import { isHostTaskOp, isTaskOpOrigin, type HostTaskOp } from "../rpc/protocol.js";
 import { isAbsoluteTaskRoot, isSafeTaskBranchRef } from "../main/task-provision.js";
+import { promptContextError } from "./sdk-prompt-context.js";
 import { isMultiRepoErrorCode } from "../main/multi-repo-provision.js";
 import { PI_GATED_TOOL_NAMES } from "../main/pi-session.js";
 import { MAX_TERMINAL_COLS, MAX_TERMINAL_LINE, MAX_TERMINAL_ROWS, MIN_TERMINAL_COLS, MIN_TERMINAL_ROWS } from "../main/terminal-config.js";
@@ -433,9 +434,15 @@ export function validateHostTaskOp(
   }
   if (["task/sdkStart", "task/sdkStatus", "task/sdkProjection", "task/sdkCancel"].includes(op)) {
     if (!isRecord(payload) || typeof payload["sessionId"] !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/.test(payload["sessionId"])) return { ok: false, error: "invalid-sdk-session" };
-    const keys = op === "task/sdkStart" ? ["sessionId", "requestId", "text"] : op === "task/sdkStatus" ? ["sessionId", "requestId"] : op === "task/sdkCancel" ? ["sessionId", "turnId"] : ["sessionId"];
+    const keys = op === "task/sdkStart" ? ["sessionId", "requestId", "text", "references", "attachments"] : op === "task/sdkStatus" ? ["sessionId", "requestId"] : op === "task/sdkCancel" ? ["sessionId", "turnId"] : ["sessionId"];
     if (Object.keys(payload).some((key) => !keys.includes(key))) return { ok: false, error: "invalid-sdk-payload: extra key" };
     if (op === "task/sdkStart" && (typeof payload["text"] !== "string" || !payload["text"].trim() || Buffer.byteLength(payload["text"], "utf8") > 16_384)) return { ok: false, error: "invalid-sdk-prompt" };
+    // #117 第 1 项（A）：引用与附件随回合下发，但只有 Host 能拼成 prompt 段落，
+    // 所以这里按同一条规则集先拒掉形状不合法的条目（不裁剪、不猜测）。
+    if (op === "task/sdkStart") {
+      const contextError = promptContextError({ references: payload["references"], attachments: payload["attachments"] });
+      if (contextError) return { ok: false, error: contextError };
+    }
     if ((op === "task/sdkStart" || op === "task/sdkStatus") && (typeof payload["requestId"] !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/.test(payload["requestId"]))) return { ok: false, error: "invalid-sdk-request" };
     if (op === "task/sdkCancel" && (typeof payload["turnId"] !== "string" || !/^[a-f0-9-]{36}$/.test(payload["turnId"]))) return { ok: false, error: "invalid-sdk-turn" };
     return { ok: true };
@@ -443,7 +450,9 @@ export function validateHostTaskOp(
   // SDK-only send returns a durable async turn ACK. Legacy scripted turn
   // fields and synchronous model replies are not part of this contract.
   if (op === "task/sendMessage") {
-    if (!isRecord(payload) || Object.keys(payload).some((key) => !["sessionId", "requestId", "text"].includes(key))) return { ok: false, error: "invalid-sdk-payload: extra key" };
+    // `shell/sdkTurn {action:"start"}` is the production entry and rides this op;
+    // it may carry the turn's references/attachments (composed by the Host).
+    if (!isRecord(payload) || Object.keys(payload).some((key) => !["sessionId", "requestId", "text", "references", "attachments"].includes(key))) return { ok: false, error: "invalid-sdk-payload: extra key" };
     return validateHostTaskOp("task/sdkStart", payload);
   }
   if (op === "task/provision") {

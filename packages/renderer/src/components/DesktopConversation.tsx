@@ -24,7 +24,16 @@ const sessionId = SDK_SESSION_ID;
 type Turn = { taskId: string; sessionId: string; requestId: string; turnId: string; state: "accepted" | "done" | "cancelled" | "failed" | "interrupted"; error?: string; needsResync: boolean };
 type Message = SdkMessage;
 type Snapshot = { source: "sdk-jsonl"; sessionId: string; messages: Message[]; pending: boolean; interrupted: boolean };
-type Attempt = { requestId: string; text: string; turnId?: string; phase: "starting" | "unknown" | "accepted" | "terminal"; state?: Turn["state"] };
+/**
+ * [#117 第 1 项 / #16 盒 3] 随回合下发的引用与附件**身份**（类型、来源、路径）。
+ * 只有 Host 能把它拼成 prompt 末尾那一段（`host/sdk-prompt-context.ts`）；
+ * 渲染层不拼文本，也不读取文件内容。
+ */
+type TurnContext = {
+  references?: { kind: string; label: string; source?: string; detail?: string }[];
+  attachments?: { kind: "attachment"; label: string; detail?: string }[];
+};
+type Attempt = { requestId: string; text: string; context?: TurnContext; turnId?: string; phase: "starting" | "unknown" | "accepted" | "terminal"; state?: Turn["state"] };
 /**
  * The 推理/上下文 entries read one Host readout (`task/sessionContext`). `reading`
  * is a named state of its own: while it is outstanding the composer shows no
@@ -388,17 +397,38 @@ function TaskConversation({ taskId, name, branch, repoCount, roots, association,
     if (busy.current || !connected || !valid || receiptError || (!reuse && (attemptRef.current?.phase === "unknown" || attemptRef.current?.phase === "accepted" || snapshot?.pending))) return;
     const text = reuse ? attemptRef.current?.text : draft;
     if (!text?.trim()) return;
+    // A reference/attachment is part of what the Host fingerprints: a replay
+    // reuses the exact context it was accepted with, otherwise the Host would
+    // refuse the request id as `idempotency-mismatch`.
+    const submittedReferences = references;
+    const submittedAttachments = attachments;
+    const context: TurnContext = reuse && attemptRef.current?.context
+      ? attemptRef.current.context
+      : {
+          ...(references.length > 0 ? {
+            references: references.map((reference) => {
+              const source = referenceSourceLabel(reference);
+              return { kind: reference.kind, label: reference.label, ...(source ? { source } : {}), ...(reference.detail ? { detail: reference.detail } : {}) };
+            }),
+          } : {}),
+          ...(attachments.length > 0 ? {
+            attachments: attachments.map((attachment) => ({ kind: "attachment" as const, label: attachment.name, ...(attachment.detail ? { detail: attachment.detail } : {}) })),
+          } : {}),
+        };
+    const carriesContext = Object.keys(context).length > 0;
     const submittedRevision = draftRevision.current;
     busy.current = true;
     const epoch = generation.current;
     try {
       await verify();
       if (epoch !== generation.current) return;
-      const current: Attempt = reuse && attemptRef.current ? { ...attemptRef.current, phase: "starting" } : { requestId: crypto.randomUUID(), text, phase: "starting" };
+      const current: Attempt = reuse && attemptRef.current
+        ? { ...attemptRef.current, phase: "starting" }
+        : { requestId: crypto.randomUUID(), text, phase: "starting", ...(carriesContext ? { context } : {}) };
       saveReceipt(taskId, current.requestId, current.text);
       setCurrent(current); setNotice("等待 Host 确认请求"); streamRef.current = ""; setStream(""); sequence.current.clear();
       let result;
-      try { result = await request("start", { requestId: current.requestId, text: current.text }); }
+      try { result = await request("start", { requestId: current.requestId, text: current.text, ...(carriesContext ? context : {}) }); }
       catch (error) {
         if (epoch !== generation.current) return;
         if (errorText(error).includes("provider-not-configured") || errorText(error).includes("invalid-prompt")) {
@@ -412,9 +442,15 @@ function TaskConversation({ taskId, name, branch, repoCount, roots, association,
       if (!turn) throw new Error("SDK ACK 缺少请求身份");
       setCurrent({ ...current, turnId: turn.turnId, phase: turn.state === "accepted" ? "accepted" : "terminal", state: turn.state });
       setNotice(turn.state === "accepted" ? "正在等待模型" : "正在核验 SDK 历史");
-      if (turn.state === "accepted" && !reuse && draftRevision.current === submittedRevision) {
-        setDraft("");
-        setDraftError(saveSdkDraft(taskId, ""));
+      if (turn.state === "accepted" && !reuse) {
+        if (draftRevision.current === submittedRevision) {
+          setDraft("");
+          setDraftError(saveSdkDraft(taskId, ""));
+        }
+        // Only the chips that were part of this turn leave the composer; a
+        // reference added while the request was in flight stays.
+        setReferences((list) => (list === submittedReferences ? [] : list));
+        setAttachments((list) => (list === submittedAttachments ? [] : list));
       }
       await reconcile(epoch, current.requestId);
     } catch (error) {
@@ -779,7 +815,7 @@ function TaskConversation({ taskId, name, branch, repoCount, roots, association,
               </li>
             ))}
           </ul>
-          <p className="mt-1 text-[11px] text-muted">引用只在本页输入区记录来源身份；当前 SDK 发送路径只发送文本，引用不随消息提交，也不会读取或写入文件。</p>
+          <p className="mt-1 text-[11px] text-muted">引用随消息提交：Host 会把类型、来源与路径附在提示词末尾，供 Agent 定位；引用不读取也不写入文件，文件内容不在提示词里。</p>
         </div>}
         {attachmentReport && <p role="status" data-testid="desktop-composer-attachment-report" className="mb-2 border-l-2 border-[#dfc99f] pl-2 text-[11px] text-[#9a6032]">{attachmentReport}</p>}
         {attachments.length > 0 && <div className="mb-2 min-w-0" data-testid="desktop-composer-attachments">
@@ -792,13 +828,13 @@ function TaskConversation({ taskId, name, branch, repoCount, roots, association,
               </li>
             ))}
           </ul>
-          <p data-testid="desktop-composer-attachment-scope" className="mt-1 text-[11px] text-muted">附件只在本页输入区保留：内容不上传、不读取，附件不会发给 Agent（当前 SDK 发送路径只发送文本，附件不随消息提交）。</p>
+          <p data-testid="desktop-composer-attachment-scope" className="mt-1 text-[11px] text-muted">附件随消息提交：Host 只附上名称与来源行，内容不上传、不读取，Agent 拿到的是清单而不是文件。</p>
         </div>}
         <textarea aria-label="消息" value={draft} onChange={(event) => { const text = event.target.value; draftRevision.current++; setDraft(text); if (valid && connected && !invalidated) setDraftError(saveSdkDraft(taskId, text)); }} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !composing.current && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) { event.preventDefault(); if (!blocked) void start(); } }} rows={2} maxLength={16384} className="w-full min-w-0 resize-y border-0 bg-transparent p-1 text-sm outline-none" placeholder="描述你想做什么（仅支持文本消息）" />
         <div className="mt-1 flex min-w-0 flex-wrap items-center gap-2 text-[11px] text-muted">
           <Tooltip><TooltipTrigger asChild><span tabIndex={0} aria-label="附件说明" className="inline-flex">
             <Button type="button" size="icon-sm" data-testid="desktop-composer-attach" aria-label="添加附件" onClick={() => attachmentInput.current?.click()} className="text-muted"><Icon name="plus" /></Button>
-          </span></TooltipTrigger><TooltipContent>附件只在本页输入区保留：内容不上传、不读取，附件不会发给 Agent（当前 SDK 发送路径只发送文本）</TooltipContent></Tooltip>
+          </span></TooltipTrigger><TooltipContent>附件随消息提交：Host 只附上名称与来源行，内容不上传、不读取，Agent 拿到的是清单而不是文件</TooltipContent></Tooltip>
           <input ref={attachmentInput} type="file" multiple aria-label="附件选择" data-testid="desktop-composer-file-input" className="hidden" onChange={(event) => { addAttachments(Array.from(event.target.files ?? [])); event.target.value = ""; }} />
           <Tooltip><TooltipTrigger asChild><span tabIndex={0} aria-label="权限说明" className="inline-flex">
             <Button type="button" size="sm" disabled aria-label="权限（未接线）：本页不能切换档位"><Icon name="shield" />权限（未接线）</Button>

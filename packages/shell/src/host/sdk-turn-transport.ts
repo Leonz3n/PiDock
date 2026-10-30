@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { SdkTextEvent, SdkTextResult } from "./sdk-text-kernel.js";
+import { composePromptContext, type PromptContext } from "./sdk-prompt-context.js";
 import type { SdkTurnKernelPort } from "./sdk-kernel-router.js";
 
 export type TurnRecord = {
@@ -115,14 +116,21 @@ export class SdkTurnTransport {
 
   seal(): void { this.closing = true; }
 
-  async start(sessionId: string, requestId: string, text: string, deliver: (event: SdkTextEvent) => void, settled?: (turn: TurnRecord) => void): Promise<TurnRecord> {
+  async start(sessionId: string, requestId: string, text: string, deliver: (event: SdkTextEvent) => void, settled?: (turn: TurnRecord) => void,
+    context?: PromptContext): Promise<TurnRecord> {
     if (this.closing) throw new Error("sdk-host-closing");
     if (this.acceptanceUncertain) throw new Error("sdk-turn-journal-uncommitted");
     id(sessionId);
     id(requestId);
-    if (typeof text !== "string" || !text.trim() || Buffer.byteLength(text, "utf8") > 16_384) throw new Error("invalid-prompt");
+    if (typeof text !== "string" || !text.trim()) throw new Error("invalid-prompt");
+    // #117 第 1 项（业主定 A）：引用与附件由 Host 拼成 prompt 末尾固定一段，
+    // 指纹覆盖拼好后的全文——同一 request id 只有在引用也相同时才算重放。
+    const composed = composePromptContext(text, context);
+    if (!composed.ok) throw new Error(composed.error);
+    const prompt = composed.prompt;
+    if (Buffer.byteLength(prompt, "utf8") > 16_384) throw new Error("invalid-prompt");
     const previous = this.read(sessionId, requestId);
-    const promptFingerprint = createHash("sha256").update(text, "utf8").digest("hex");
+    const promptFingerprint = createHash("sha256").update(prompt, "utf8").digest("hex");
     // Older records cannot prove their original prompt and cannot be reused.
     if (previous) {
       if (previous.promptFingerprint !== promptFingerprint) throw new Error("idempotency-mismatch");
@@ -158,7 +166,7 @@ export class SdkTurnTransport {
     const run = Promise.resolve().then(async () => {
       let result: SdkTextResult;
       try {
-        result = await this.kernel.prompt(sessionId, text, (event) => {
+        result = await this.kernel.prompt(sessionId, prompt, (event) => {
           if (event.taskId !== this.taskId || event.sessionId !== sessionId || event.turnId !== record.turnId ||
               event.sequence !== record.lastSequence + 1) { record.needsResync = true; return; }
           record.lastSequence = event.sequence;
