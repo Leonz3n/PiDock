@@ -579,6 +579,51 @@ describe.skipIf(process.platform === "win32")("#7 catalog-driven service executi
     await until(() => !alive(secondPid), "the child to exit on quit");
   }, 30_000);
 
+  it("[#117 第 3 项] aborts the Agent BEFORE stopping service children, and stops them before the SDK host", async () => {
+    const f = await installed();
+    const serviceId = f.bind("svc-a", "a");
+    expect(await f.run(serviceId, "start")).toMatchObject({ action: "start" });
+    const pid = await untilMarkerPid(f.taskDir, "a");
+    expect(alive(pid)).toBe(true);
+    // An SDK read is what constructs the turn transport this quit has to abort.
+    await f.task("task/sdkProjection", { sessionId: "main" });
+
+    const { SdkTurnTransport } = await import("./sdk-turn-transport.js");
+    const { TaskWorkspaceHost } = await import("./task-host.js");
+    const order: string[] = [];
+    vi.spyOn(SdkTurnTransport.prototype, "abortAll").mockImplementation(async () => {
+      // Agent first: the service child is still alive when the turn is aborted.
+      order.push(`abort:child-alive=${String(alive(pid))}`);
+      return ["turn-aborted-1"];
+    });
+    vi.spyOn(TaskWorkspaceHost.prototype, "shutdownSdk").mockImplementation(async () => {
+      // SDK last: the child is gone by the time the SDK host is shut down.
+      order.push(`sdk:child-alive=${String(alive(pid))}`);
+    });
+
+    const quit = await f.task("task/quit");
+    expect(order).toEqual(["abort:child-alive=true", "sdk:child-alive=false"]);
+    // The aborted turn is reported as a fact, not swallowed.
+    expect(quit.payload["abortedTurns"]).toEqual(["turn-aborted-1"]);
+    await until(() => !alive(pid), "the service child to be stopped by quit");
+  }, 30_000);
+
+  it("[#117 第 3 项] still stops every child when the Agent abort itself fails, and reports it", async () => {
+    const f = await installed();
+    const serviceId = f.bind("svc-a", "a");
+    expect(await f.run(serviceId, "start")).toMatchObject({ action: "start" });
+    const pid = await untilMarkerPid(f.taskDir, "a");
+    await f.task("task/sdkProjection", { sessionId: "main" });
+
+    const { SdkTurnTransport } = await import("./sdk-turn-transport.js");
+    vi.spyOn(SdkTurnTransport.prototype, "abortAll").mockRejectedValue(new Error("sdk-turns-abort-unconfirmed"));
+    const quit = await f.request("task/quit");
+    // The failed abort still fails the quit...
+    expect(quit["error"]).toContain("sdk-turns-abort-unconfirmed");
+    // ...but never leaves a detached child unstoppable behind it.
+    await until(() => !alive(pid), "the service child to be stopped despite the failed abort");
+  }, 30_000);
+
   it("stops real child processes even when the Agent/SDK shutdown stage fails", async () => {
     const f = await installed();
     const serviceId = f.bind("svc-a", "a");

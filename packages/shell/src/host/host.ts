@@ -468,6 +468,8 @@ let serviceProcesses: TaskServiceProcesses | null = null;
 let serviceProcessesFor: TaskServiceRuntime | null = null;
 /** Real terminal state of this task's service children when the Host quit stopped them. */
 let serviceStopReport: { serviceId: string; state: "stopped" }[] | undefined;
+/** Turn ids the Host aborted before stopping children on quit ([#117] item 3). */
+let abortedTurns: string[] | undefined;
 
 /**
  * Normal Host quit stops every real service child this task owns before any
@@ -2193,6 +2195,17 @@ async function performTaskOp(
         sdkTurns?.seal();
         try {
           quitReceipt ??= (async () => {
+            // [#117 第 3 项 / A] The Agent is aborted FIRST: an in-flight turn is
+            // stopped before any service or terminal child, so it cannot issue
+            // one more tool call (and start one more child) while the Host is
+            // reaping them. A failed abort is remembered, not fatal - the
+            // detached children below have no other stop path, so their
+            // termination must not sit behind the Agent stage.
+            let abortFailure: unknown;
+            try {
+              const aborted = await shutdownDeadline(sdkTurns ? sdkTurns.abortAll() : Promise.resolve<string[]>([]), 15_000, "sdk-turns-abort-unconfirmed");
+              if (aborted.length > 0) abortedTurns = aborted;
+            } catch (error) { abortFailure = error; }
             // Real service children are stopped before the Agent/SDK stages: a
             // detached child (reserved process group, ignored stdin) has no
             // other stop path once this op seals control, so its termination
@@ -2205,6 +2218,9 @@ async function performTaskOp(
             // process group), so every running terminal is contained before the
             // Agent/SDK stages. Failing to prove one keeps the quit failed.
             await shutdownDeadline(terminalSessions ? terminalSessions.stopAll("host-quit") : Promise.resolve(), 15_000, "terminal-processes-shutdown-unconfirmed");
+            // The Agent stage that fails the quit is reported only after every
+            // child above has been stopped: the order is Agent -> children -> SDK.
+            if (abortFailure) throw abortFailure;
             await workspaceHost?.shutdownSdk();
             await shutdownDeadline(Promise.resolve(sdkTurns?.waitForTerminal()), 15_000, "sdk-turns-shutdown-unconfirmed");
             sdkTurns = null;
@@ -2215,6 +2231,7 @@ async function performTaskOp(
           })();
           const quit = await quitReceipt;
           return { ok: true, payload: { quit, ...(serviceCompletion ? { serviceOwner: serviceCompletion } : {}),
+            ...(abortedTurns ? { abortedTurns } : {}),
             ...(serviceStopReport ? { serviceProcesses: serviceStopReport } : {}) } };
         } catch (error) {
           return { ok: false, error: error instanceof Error ? error.message : String(error) };
