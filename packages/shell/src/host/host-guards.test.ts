@@ -550,6 +550,14 @@ describe("validateHostTaskOp", () => {
     expect(validateHostTaskOp("task/sendMessage", { sessionId: "main", text: "  " }).ok).toBe(false);
   });
 
+  it("[#117 第 7 项] validates the draft read op like the draft write op", () => {
+    expect(validateHostTaskOp("task/readDraft", { sessionId: "main" })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/readDraft", {})).toEqual({ ok: false, error: "invalid-payload: task/readDraft requires sessionId" });
+    expect(validateHostTaskOp("task/readDraft", { sessionId: " " }).ok).toBe(false);
+    // A read takes nothing else: no text, no references, no pagination.
+    expect(validateHostTaskOp("task/readDraft", { sessionId: "main", text: "x" })).toEqual({ ok: false, error: "invalid-payload: task/readDraft accepts only sessionId" });
+  });
+
   it("[#117 第 1 项] accepts the turn's reference/attachment envelope and refuses malformed entries", () => {
     const entry = { kind: "file", label: "repo-a/invoice.md", source: "worktree · 版本未记录", detail: "任务代码引用" };
     expect(validateHostTaskOp("task/sdkStart", { sessionId: "main", requestId: "req-1", text: "hi", references: [entry], attachments: [{ kind: "attachment", label: "报价.pdf" }] }))

@@ -1343,6 +1343,13 @@ async function performTaskOp(
         host.saveDraft(sessionId, draft);
         return { ok: true, payload: { sessionId } };
       }
+      case "task/readDraft": {
+        const sessionId = record["sessionId"];
+        if (typeof sessionId !== "string") {
+          return { ok: false, error: "invalid-payload: task/readDraft requires sessionId" };
+        }
+        return { ok: true, payload: { sessionId, draft: host.readDraft(sessionId) } };
+      }
       case "task/clearDraft": {
         const sessionId = record["sessionId"];
         if (typeof sessionId !== "string") {
