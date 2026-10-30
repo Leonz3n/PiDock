@@ -87,6 +87,11 @@ function setup(read: ReturnType<typeof hostReads>) {
     sdkTurn: vi.fn(async (request) => {
       calls.push(request);
       if (request.action === "subscribe") return { ok: true, payload: { taskId: TASK_ID, sessionId: "main", snapshot: emptySnapshot } };
+      // The Host's ACK for an accepted turn, which is what clears the composer.
+      if (request.action === "start") {
+        const requestId = (request as { requestId: string }).requestId;
+        return { ok: true, payload: { turn: { taskId: TASK_ID, sessionId: "main", requestId, turnId: "11111111-1111-1111-1111-111111111111", state: "accepted", needsResync: false } } };
+      }
       return { ok: true, payload: emptySnapshot };
     }),
     taskOp,
@@ -182,5 +187,30 @@ describe("[PiDock 15] (#15 盒 3) 文件引用在桌面输入区", () => {
     fireEvent.click(screen.getByRole("button", { name: /移除引用 repo-a\/invoice\.md/ }));
     await waitFor(() => expect(screen.queryByTestId("composer-file-reference-task-file:repo-a:invoice.md")).not.toBeInTheDocument());
     expect(fixture.taskOp.mock.calls.length).toBe(afterReference);
+  });
+
+  it("[#117 第 1 项 / #16 盒 3] sends the reference identity with the turn and clears the chip", async () => {
+    const fixture = setup(hostReads(worktreeRoots()));
+    await screen.findByText(/尚未开始/);
+    await openAndPreview();
+    clickReference();
+    await screen.findByTestId("composer-file-reference-task-file:repo-a:invoice.md");
+
+    fireEvent.change(screen.getByRole("textbox", { name: "消息" }), { target: { value: "请看这个文件" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    // The accepted ACK is what clears the chip, exactly like the typed draft.
+    await waitFor(() => expect(screen.queryByTestId("composer-file-reference-task-file:repo-a:invoice.md")).not.toBeInTheDocument());
+    await screen.findByRole("button", { name: "停止" });
+
+    const start = fixture.calls.find((call) => call.action === "start");
+    expect(start).toBeDefined();
+    // The typed text is untouched: the Host, not the renderer, appends the section.
+    expect(start!.text).toBe("请看这个文件");
+    expect(start!.references).toEqual([{ kind: "file", label: "repo-a/invoice.md", source: "worktree · 版本未记录", detail: "repo-a · 任务代码引用" }]);
+    // No attachments chip existed, so no empty key is sent.
+    expect("attachments" in start!).toBe(false);
+    // The reference still caused no write op and no file read.
+    const ops = fixture.taskOp.mock.calls.map((call) => String(call[1]));
+    expect(ops.filter((op) => WRITE_OPS.includes(op))).toEqual([]);
   });
 });

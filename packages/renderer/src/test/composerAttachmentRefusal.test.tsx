@@ -70,9 +70,9 @@ describe("composer attachment refusals", () => {
     // Code facts: the preview URL is in-memory only (`data/types.ts`), and the
     // Host runs the turn on the typed text alone — a reference is persisted,
     // never interpreted. The copy has to say that, not "sent"/"uploaded".
-    expect(detail).toContain("仅本页保留");
+    expect(detail).toContain("随消息提交清单");
     expect(detail).toContain("内容不上传、不读取");
-    expect(detail).toContain("附件不会发给 Agent");
+    expect(detail).toContain("Agent 只看到身份");
     expect(detail).not.toMatch(/已上传|已发送给|已进入 Agent 上下文/);
     expect(attachmentReferences()[0]?.detail).toBe(detail);
   });

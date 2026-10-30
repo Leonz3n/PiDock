@@ -2006,7 +2006,7 @@ export function registerIpc(
       const taskId = input["taskId"];
       const sessionId = input["sessionId"];
       if (typeof taskId !== "string" || !taskId || typeof sessionId !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/.test(sessionId)) throw new Error("invalid-sdk-identity");
-      const keys = action === "start" ? ["action", "taskId", "sessionId", "requestId", "text"] :
+      const keys = action === "start" ? ["action", "taskId", "sessionId", "requestId", "text", "references", "attachments"] :
         action === "status" ? ["action", "taskId", "sessionId", "requestId"] :
         action === "subscribe" ? ["action", "taskId", "sessionId", "requestId"] :
         action === "cancel" ? ["action", "taskId", "sessionId", "turnId"] : ["action", "taskId", "sessionId"];
@@ -2154,7 +2154,13 @@ export function registerIpc(
       if (!previous || previous.taskId !== taskId || previous.sessionId !== sessionId || !live(event, previous)) throw new Error("sdk-subscription-required");
       const op = action === "start" ? "task/sendMessage" : action === "status" ? "task/sdkStatus" : action === "cancel" ? "task/sdkCancel" : "task/sdkProjection";
       const payload: Record<string, unknown> = { sessionId };
-      if (action === "start") { payload["requestId"] = input["requestId"]; payload["text"] = input["text"]; }
+      if (action === "start") {
+        payload["requestId"] = input["requestId"];
+        payload["text"] = input["text"];
+        // #117 第 1 项（A）：引用与附件随回合下发，由 Host 拼成 prompt 末尾一段。
+        if (input["references"] !== undefined) payload["references"] = input["references"];
+        if (input["attachments"] !== undefined) payload["attachments"] = input["attachments"];
+      }
       if (action === "status") payload["requestId"] = input["requestId"];
       if (action === "cancel") payload["turnId"] = input["turnId"];
       const pending = action === "start" ? { requestId: input["requestId"] as string, buffered: [] as TurnMessage[], bytes: 0, overflow: false } : null;

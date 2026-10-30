@@ -515,8 +515,8 @@ describe("Desktop SDK conversation", () => {
     await user.tab();
     const explanation = screen.getByLabelText("附件说明");
     expect(explanation).toHaveFocus();
-    expect(await screen.findByRole("tooltip")).toHaveTextContent("附件只在本页输入区保留：内容不上传、不读取，附件不会发给 Agent（当前 SDK 发送路径只发送文本）");
-    expect(explanation).toHaveAccessibleDescription("附件只在本页输入区保留：内容不上传、不读取，附件不会发给 Agent（当前 SDK 发送路径只发送文本）");
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("附件随消息提交：Host 只附上名称与来源行，内容不上传、不读取，Agent 拿到的是清单而不是文件");
+    expect(explanation).toHaveAccessibleDescription("附件随消息提交：Host 只附上名称与来源行，内容不上传、不读取，Agent 拿到的是清单而不是文件");
     await user.keyboard("{Enter} ");
     expect(attachment).toBeEnabled();
     expect(input).toHaveValue("saved text draft");
