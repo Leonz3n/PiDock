@@ -139,7 +139,7 @@ describe("[PiDock 16] (#16 盒 1) 桌面输入区附件入口", () => {
     expect(fixture.calls.filter((call) => call.action === "start")).toEqual([]);
   });
 
-  it("states on every row and on the strip that the attachment is page-only and never reaches the Agent", async () => {
+  it("states on every row and on the strip that the attachment travels as an identity, not as content", async () => {
     const fixture = setup();
     await screen.findByText(/尚未开始/);
 
@@ -148,23 +148,32 @@ describe("[PiDock 16] (#16 盒 1) 桌面输入区附件入口", () => {
     const row = await screen.findByTestId("desktop-composer-attachment");
     const rowText = row.textContent ?? "";
     // `attachmentSourceLabel()` owns this sentence; the row repeats no other claim.
-    expect(rowText).toContain("仅本页保留");
+    expect(rowText).toContain("随消息提交清单");
     expect(rowText).toContain("内容不上传、不读取");
-    expect(rowText).toContain("附件不会发给 Agent");
+    expect(rowText).toContain("Agent 只看到身份");
     const scope = screen.getByTestId("desktop-composer-attachment-scope");
-    expect(scope).toHaveTextContent("附件不会发给 Agent");
-    // No delivered/uploaded wording anywhere in the attachment area.
+    expect(scope).toHaveTextContent("Agent 拿到的是清单而不是文件");
+    // No delivered/uploaded wording anywhere in the attachment area: the file
+    // body is still local, only its name and source line leave the composer.
     const strip = screen.getByTestId("desktop-composer-attachments");
     expect(strip).not.toHaveTextContent(/已上传|已发送给|Agent 会看到/);
 
-    // The turn payload is the typed string and nothing else.
+    // [#117 第 1 项 / #16 盒 3] The turn now carries the attachment identity;
+    // the Host composes it into the prompt (the renderer sends no prompt text).
     fireEvent.change(screen.getByRole("textbox", { name: "消息" }), { target: { value: "请看附件" } });
     fireEvent.click(screen.getByRole("button", { name: "发送" }));
     await screen.findByRole("button", { name: "停止" });
     const start = fixture.calls.find((call) => call.action === "start");
     expect(start).toBeDefined();
-    expect(Object.keys(start!).sort()).toEqual(["action", "requestId", "sessionId", "taskId", "text"]);
+    expect(Object.keys(start!).sort()).toEqual(["action", "attachments", "requestId", "sessionId", "taskId", "text"]);
     expect(start!.text).toBe("请看附件");
+    const sent = start!.attachments as Array<Record<string, unknown>>;
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ kind: "attachment", label: "notes.md" });
+    // The source line is the composer's own, and it still says the body is local.
+    expect(String(sent[0]!.detail)).toContain("随消息提交清单");
+    // The local receipt still records only the typed text: no attachment identity
+    // is written to disk by the renderer.
     const receipt = JSON.parse(localStorage.getItem("pidock-sdk-main-pending-v1:task-attach") ?? "{}") as Record<string, unknown>;
     expect(Object.keys(receipt).sort()).toEqual(["requestId", "schema", "sessionId", "taskId", "text"]);
     expect(receipt.text).toBe("请看附件");
@@ -179,7 +188,7 @@ describe("[PiDock 16] (#16 盒 1) 桌面输入区附件入口", () => {
     await user.tab();
     const explanation = screen.getByLabelText("附件说明");
     expect(explanation).toHaveFocus();
-    expect(await screen.findByRole("tooltip")).toHaveTextContent("附件只在本页输入区保留：内容不上传、不读取，附件不会发给 Agent（当前 SDK 发送路径只发送文本）");
-    expect(explanation).toHaveAccessibleDescription("附件只在本页输入区保留：内容不上传、不读取，附件不会发给 Agent（当前 SDK 发送路径只发送文本）");
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("附件随消息提交：Host 只附上名称与来源行，内容不上传、不读取，Agent 拿到的是清单而不是文件");
+    expect(explanation).toHaveAccessibleDescription("附件随消息提交：Host 只附上名称与来源行，内容不上传、不读取，Agent 拿到的是清单而不是文件");
   });
 });

@@ -180,6 +180,29 @@ describe("trusted Electron view modes", () => {
     expect(routeTaskOp).toHaveBeenCalledTimes(4);
   });
 
+  it("[#117 第 1 项] forwards the turn's references/attachments to the Host instead of dropping them", async () => {
+    const views = await createTrustedWindow("workspace-a", "production");
+    await loadTrustedViews(views);
+    const routeTaskOp = vi.fn(async ({ op }: { op: string }) => ({ payload: op === "task/sendMessage"
+      ? { turn: { taskId: "task-a", sessionId: "main", turnId: "turn-1", state: "accepted", lastSequence: 0 } }
+      : { source: "sdk-jsonl", messages: [] } }));
+    registerIpc({} as never, views.registry, { routeTaskOp, entryForTaskId: () => ({ client: { onTurnEvent: () => () => {} } }) } as never);
+    const sdk = vi.mocked(ipcMain.handle).mock.calls.findLast(([channel]) => channel === "shell/sdkTurn")?.[1];
+    const shell = { sender: views.shellView.webContents, senderFrame: views.shellView.webContents.mainFrame } as never;
+    const identity = { taskId: "task-a", sessionId: "main" };
+    expect(await sdk!(shell, { action: "subscribe", ...identity })).toMatchObject({ ok: true });
+    const references = [{ kind: "file", label: "repo-a/invoice.md", source: "worktree · 版本未记录" }];
+    expect(await sdk!(shell, { action: "start", ...identity, requestId: "r1", text: "hi", references, attachments: [{ kind: "attachment", label: "报价.pdf" }] }))
+      .toMatchObject({ ok: true, payload: { turn: { turnId: "turn-1" } } });
+    const start = routeTaskOp.mock.calls.map(([entry]) => entry as { op: string; payload: Record<string, unknown> }).find((entry) => entry.op === "task/sendMessage");
+    expect(start!.payload).toMatchObject({ sessionId: "main", requestId: "r1", text: "hi", references, attachments: [{ kind: "attachment", label: "报价.pdf" }] });
+    // A text-only turn still carries no empty context keys.
+    expect(await sdk!(shell, { action: "start", ...identity, requestId: "r2", text: "hi" })).toMatchObject({ ok: true });
+    const textOnly = routeTaskOp.mock.calls.map(([entry]) => entry as { op: string; payload: Record<string, unknown> })
+      .filter((entry) => entry.op === "task/sendMessage" && entry.payload["requestId"] === "r2");
+    expect(Object.keys(textOnly[0]!.payload).sort()).toEqual(["requestId", "sessionId", "text"]);
+  });
+
   it("bounds terminal bookkeeping and conservatively resyncs evicted turns", async () => {
     const views = await createTrustedWindow("workspace-a", "production");
     await loadTrustedViews(views);

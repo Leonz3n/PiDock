@@ -53,6 +53,7 @@ import { diskLaunchVerificationLog } from "./service-launch-verification.js";
 import { serviceOwnerBootstrap, serviceOwnerRebind, type ServiceOwnerBootstrap, type ServiceOwnerCompletion } from "../rpc/service-host-binding.js";
 import { TaskWorkspaceHost, diskTaskStore } from "./task-host.js";
 import { SdkTurnTransport } from "./sdk-turn-transport.js";
+import type { PromptContextEntry } from "./sdk-prompt-context.js";
 import { validateExplicitTextProvider } from "./explicit-text-provider.js";
 import { PiSdkTextKernel } from "./sdk-text-kernel.js";
 import type { ServiceRunObservation } from "../main/execution-ledger.js";
@@ -1031,7 +1032,9 @@ async function performTaskOp(
         if (typeof record["requestId"] !== "string" || typeof record["text"] !== "string") throw new Error("invalid-sdk-request");
         const turn = await sdkTurns.start(sessionId, record["requestId"], record["text"], (sdkEvent) => {
           hostPort.postMessage({ kind: "sdk-turn-event", event: sdkEvent });
-        }, (terminal) => hostPort.postMessage({ kind: "sdk-turn-status", turn: terminal }));
+        }, (terminal) => hostPort.postMessage({ kind: "sdk-turn-status", turn: terminal }),
+        { ...(record["references"] !== undefined ? { references: record["references"] as PromptContextEntry[] } : {}),
+          ...(record["attachments"] !== undefined ? { attachments: record["attachments"] as PromptContextEntry[] } : {}) });
         return { ok: true, payload: { turn } };
       }
       if (op === "task/sdkCancel") {
