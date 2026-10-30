@@ -684,6 +684,17 @@ export function validateHostTaskOp(
   // `task/saveDraft` stores an unsent composer draft (never auto-sends);
   // `task/clearDraft` drops it; `task/setPermission` mutates future turns
   // only (forward-only, never rewrites the in-flight approval).
+  if (op === "task/readDraft") {
+    // [#117 第 7 项] Reading an unsent draft takes only the session id.
+    if (!isRecord(payload)) return { ok: false, error: "invalid-payload: task/readDraft requires a payload object" };
+    if (typeof payload["sessionId"] !== "string" || payload["sessionId"].trim().length === 0) {
+      return { ok: false, error: "invalid-payload: task/readDraft requires sessionId" };
+    }
+    if (Object.keys(payload).some((key) => key !== "sessionId")) {
+      return { ok: false, error: "invalid-payload: task/readDraft accepts only sessionId" };
+    }
+    return { ok: true };
+  }
   if (op === "task/saveDraft") {
     if (!isRecord(payload))
       return { ok: false, error: "invalid-payload: task/saveDraft requires a payload object" };
