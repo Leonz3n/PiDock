@@ -780,7 +780,10 @@ describe("Desktop SDK conversation", () => {
     await screen.findByText(/尚未开始/);
     fireEvent.click(screen.getByRole("button", { name: "任务操作" }));
     fireEvent.click(screen.getByRole("button", { name: "归档当前任务" }));
-    expect(screen.getByRole("dialog", { name: "归档当前任务" })).toBeInTheDocument();
+    // [#117 第 4 项] The dialog names the real scope: the Agent turn stops,
+    // running services and terminals do not.
+    expect(screen.getByRole("dialog", { name: "归档当前任务" }))
+      .toHaveTextContent("归档只停止正在执行的 Agent 回合；已在运行的服务与终端不会被它停止");
     // The composer's own 推理/上下文 read (`task/sessionContext`) and the #24
     // execution-status read (`task/executionState`, read only) are not the dialog:
     // confirming is what may write, so no other op — and no write op at all — has

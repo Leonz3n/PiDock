@@ -46,7 +46,7 @@ export function ArchivePage() {
         <PageTitle>已归档</PageTitle>
       </header>
       <PageIntro>
-        归档停止运行并保留代码、会话和浏览器状态；清理是另一个操作。恢复任务不自动启动服务或重新启用调度。
+        归档只停止正在执行的 Agent 回合；已在运行的服务与终端不受影响，代码、会话和浏览器状态保留。清理是另一个操作。恢复任务不自动启动服务或重新启用调度。
       </PageIntro>
 
       {archived.length === 0 ? (

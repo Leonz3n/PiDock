@@ -30,6 +30,16 @@ it("shows only archived Host tasks and restores through the human UI operation",
   expect(taskOp).toHaveBeenCalledWith("a", "task/restore", {});
 });
 
+it("[#117 第 4 项] says archiving stops only the Agent turn and leaves running services/terminals alone", async () => {
+  bridge((taskId) => ({ ok: true, payload: lifecycle(taskId, true) }));
+  render(<DesktopArchivePage tasks={[tasks[0]!]} onRestored={() => {}} />);
+  await screen.findByText("任务 A");
+  const scope = await screen.findByTestId("desktop-archive-scope");
+  expect(scope).toHaveTextContent("归档只停止正在执行的 Agent 回合；已在运行的服务与终端不会被它停止");
+  // The other half of the same sentence: restoring starts nothing by itself.
+  expect(scope).toHaveTextContent("恢复不会自动重新启动服务或定时任务");
+});
+
 it("keeps archived row on a refused restore", async () => {
   bridge((taskId, op) => op === "task/restore" ? { ok: false, error: "task-locked" } : { ok: true, payload: lifecycle(taskId, true) });
   render(<DesktopArchivePage tasks={[tasks[0]!]} onRestored={() => {}} />);
